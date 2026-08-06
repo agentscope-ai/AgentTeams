@@ -93,6 +93,8 @@ class AgentTeamsPluginCliTest(unittest.TestCase):
             "adapters/qwenpaw/README.md",
             "adapters/qwenpaw/plugin.py",
             "adapters/qwenpaw/plugin.json",
+            "adapters/codex-cli/README.md",
+            "adapters/codex-cli/install.sh",
             "scripts/install.sh",
             "scripts/uninstall.sh",
         }
@@ -115,7 +117,7 @@ class AgentTeamsPluginCliTest(unittest.TestCase):
         )
         self.assertEqual(definition["pluginProbe"]["mountType"], "wrapper")
         self.assertIn("qwenpaw", definition["detection"]["commands"])
-        self.assertIn("claude", definition["detection"]["commands"])
+        self.assertIn("codex", definition["detection"]["commands"])
 
     def test_cli_installs_updates_and_uninstalls_same_tarball(self) -> None:
         package = self.package_teamharness()
@@ -158,6 +160,22 @@ class AgentTeamsPluginCliTest(unittest.TestCase):
         self.assertGreaterEqual(events.count("install"), 2)
         self.assertIn("uninstall", events)
         self.assertIn("qwenpaw", [json.loads(line).get("runtime") for line in log_lines])
+
+    def test_cli_dispatches_to_codex_adapter(self) -> None:
+        package = self.package_teamharness()
+        fake_bin = self.write_fake_runtime("codex")
+        env_extra = {"PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}"}
+
+        installed = self.run_agentteams(
+            "plugin", "install", "teamharness", "--package", str(package), env_extra=env_extra
+        )
+
+        self.assertEqual(installed.returncode, 0, installed.stderr + installed.stdout)
+        marker = self.project / ".agentteams" / "codex-cli" / "adapter.json"
+        self.assertTrue(marker.is_file())
+        self.assertFalse(json.loads(marker.read_text(encoding="utf-8"))["credentialsStored"])
+        log_lines = (self.project / "teamharness-install.jsonl").read_text(encoding="utf-8").splitlines()
+        self.assertIn("codex-cli", [json.loads(line).get("runtime") for line in log_lines])
 
     def test_loongsuite_plugin_probe_can_run_same_install_script(self) -> None:
         package = self.package_teamharness()

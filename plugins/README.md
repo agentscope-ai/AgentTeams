@@ -5,13 +5,13 @@ CLI for installing them.
 
 Stage 2 establishes the TeamHarness plugin package contract. The package is
 installed by the AgentTeams `agentteams` CLI by default, and it is also compatible
-with the LoongSuite/Pilot `plugin-probe` convention for local QwenPaw runtime
-deployment.
+with the LoongSuite/Pilot `plugin-probe` convention for local QwenPaw or Codex
+CLI runtime deployment.
 
 Remote-managed local workers use runtime-specific packages under
-`teamharness/remote/`. Claude Code local management assets, worker code, and
-LoongSuite runtime templates live there so they do not mix with the
-runtime-neutral TeamHarness base package.
+`teamharness/remote/`. Codex CLI and future Claude Code local management
+assets, worker code, and runtime templates live there so they do not mix with
+the runtime-neutral TeamHarness base package.
 
 ## Default Path: AgentTeams CLI
 
@@ -25,16 +25,16 @@ agentteams plugin uninstall teamharness
 ```
 
 The CLI stores local state under `.agentteams/`. It does not manage cluster
-worker lifecycle, and it does not hard-code QwenPaw or Claude Code install
+worker lifecycle, and it does not hard-code runtime adapter implementation
 details. It unpacks the TeamHarness tarball, calls the package lifecycle script,
 and records the installed manifest.
 
 ## LoongSuite Compatibility
 
 LoongSuite/Pilot is currently a local deployment integration path. The base
-TeamHarness package keeps only the generic QwenPaw-compatible plugin-probe
-definition. Remote-managed Claude Code runtime templates are packaged from
-`teamharness/remote/claude-code/`.
+TeamHarness package exposes one runtime-neutral plugin-probe definition that
+detects either QwenPaw or Codex CLI. Host-local runtime bridges remain separate
+packages below `teamharness/remote/`.
 
 TeamHarness is compatible with LoongSuite by providing:
 
@@ -52,8 +52,8 @@ loongsuite-pilot/
   "displayName": "TeamHarness",
   "deployMode": "plugin-probe",
   "detection": {
-    "paths": ["~/.qwenpaw"],
-    "commands": ["qwenpaw"]
+    "paths": ["~/.qwenpaw", "~/.codex"],
+    "commands": ["qwenpaw", "codex"]
   },
   "pluginProbe": {
     "source": {
@@ -82,7 +82,8 @@ teamharness.tar.gz
 ├── mcp/
 ├── hooks/
 ├── adapters/
-│   └── qwenpaw/
+│   ├── qwenpaw/
+│   └── codex-cli/
 └── scripts/
     ├── install.sh
     └── uninstall.sh
@@ -104,12 +105,11 @@ scripts. Runtime-specific details stay inside TeamHarness adapters.
   package. It is not this TeamHarness plugin package.
 - Cluster QwenPaw workers do not use LoongSuite. They may later reuse the same
   TeamHarness tarball or bundled assets from the worker image.
-- Remote-managed Claude Code workers use
-  `teamharness/remote/claude-code/` and produce a separate
-  `agentteams-claude-code-local-runtime-0.0.1.tar.gz` bundle.
+- Remote-managed Codex CLI workers use `teamharness/remote/codex-cli/` and
+  produce a separate `agentteams-codex-cli-local-runtime-0.1.0.tar.gz` bundle.
 - Stage 2 only defines package, lifecycle, CLI fallback, and LoongSuite
-  compatibility contracts. TeamHarness business semantics and real QwenPaw /
-  remote-managed Claude Code runtime integration are covered in later phases.
+  compatibility contracts. Host-local Codex execution is provided by the
+  separately packaged Worker bridge rather than by the core Controller runtime.
 
 ## Validation
 

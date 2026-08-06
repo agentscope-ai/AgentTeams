@@ -2,10 +2,9 @@
 
 import asyncio
 import importlib.util
-from pathlib import Path
 import sys
 import types
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[5]
 PLUGIN_PATH = ROOT / "plugins" / "teamharness" / "adapters" / "qwenpaw" / "plugin.py"
@@ -44,7 +43,7 @@ def test_register_uses_qwenpaw_2_public_extension_points(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
         "fastapi",
-        types.SimpleNamespace(APIRouter=Router),
+        types.SimpleNamespace(APIRouter=Router, Request=object),
     )
     monkeypatch.setattr(
         module,
@@ -57,6 +56,7 @@ def test_register_uses_qwenpaw_2_public_extension_points(monkeypatch):
     assert names == [
         "register_prompt_section",
         "register_skill_provider",
+        "register_middleware",
         "register_middleware",
         "trace",
         "register_http_router",
@@ -107,3 +107,127 @@ def test_plugin_does_not_patch_qwenpaw_private_runtime():
     assert "QwenPawAgent._acting" not in source
     assert "legacy_mcp_client_to_driver" not in source
     assert "save_agent_config" not in source
+
+
+def test_codex_manager_middleware_is_opt_in(monkeypatch):
+    module = load_plugin()
+    broker = module._load_codex_broker_module()
+    monkeypatch.delenv("AGENTTEAMS_CODEX_MANAGER_ENABLED", raising=False)
+    monkeypatch.delenv("AGENTTEAMS_CODEX_BROKER_TOKEN", raising=False)
+    assert broker.manager_middleware_factory(None, None) is None
+
+
+def test_codex_manager_middleware_round_trip(monkeypatch):
+    module = load_plugin()
+    broker = module._load_codex_broker_module()
+    broker.BROKER = broker.ExecutionBroker()
+    monkeypatch.setenv("AGENTTEAMS_CODEX_MANAGER_ENABLED", "true")
+    monkeypatch.setenv("AGENTTEAMS_CODEX_BROKER_TOKEN", "capability-token")
+
+    class Event:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class TextBlock(Event):
+        pass
+
+    class Msg(Event):
+        pass
+
+    middleware_module = types.ModuleType("agentscope.middleware")
+    middleware_module.MiddlewareBase = object
+    event_module = types.ModuleType("agentscope.event")
+    event_module.TextBlockStartEvent = Event
+    event_module.TextBlockDeltaEvent = Event
+    event_module.TextBlockEndEvent = Event
+    message_module = types.ModuleType("agentscope.message")
+    message_module.Msg = Msg
+    message_module.TextBlock = TextBlock
+    monkeypatch.setitem(sys.modules, "agentscope.middleware", middleware_module)
+    monkeypatch.setitem(sys.modules, "agentscope.event", event_module)
+    monkeypatch.setitem(sys.modules, "agentscope.message", message_module)
+
+    middleware = broker.manager_middleware_factory(None, None)
+    agent = types.SimpleNamespace(
+        name="manager",
+        state=types.SimpleNamespace(session_id="room-1", reply_id="reply-1", context=[]),
+    )
+
+    async def collect():
+        async def next_handler(**_kwargs):
+            yield "native-model-must-not-run"
+
+        task = asyncio.create_task(
+            _collect_async_generator(
+                middleware.on_reply(
+                    agent=agent,
+                    input_kwargs={
+                        "inputs": Msg(
+                            role="user",
+                            content=[
+                                TextBlock(type="text", text="coordinate this task")
+                            ],
+                        ),
+                    },
+                    next_handler=next_handler,
+                )
+            )
+        )
+        await asyncio.sleep(0.01)
+        execution = broker.BROKER.lease()
+        assert execution["role"] == "manager"
+        assert execution["sandbox"] == "read-only"
+        assert execution["prompt"] == "coordinate this task"
+        broker.BROKER.complete(execution["executionId"], output="delegated by Codex")
+        return await task
+
+    items = asyncio.run(collect())
+    assert len(items) == 4
+    assert items[1].delta == "delegated by Codex"
+    assert items[-1].content[0].text == "delegated by Codex"
+
+
+def test_codex_manager_prompt_accepts_agent_scope_input_list():
+    module = load_plugin()
+    broker = module._load_codex_broker_module()
+
+    class TextBlock:
+        def __init__(self, text):
+            self.text = text
+
+    class Msg:
+        def __init__(self, text):
+            self.content = [TextBlock(text)]
+
+    prompt = broker._manager_prompt(
+        object(),
+        {"inputs": [Msg("first"), Msg("delegate the exact task")]},
+    )
+    assert prompt == "first\ndelegate the exact task"
+
+
+def test_codex_broker_releases_expired_lease(monkeypatch):
+    module = load_plugin()
+    broker_module = module._load_codex_broker_module()
+    broker = broker_module.ExecutionBroker()
+    execution = broker.submit(session_key="room-1", prompt="coordinate")
+    first = broker.lease()
+    assert first["executionId"] == execution.execution_id
+    monkeypatch.setenv("AGENTTEAMS_CODEX_BROKER_LEASE_TIMEOUT", "0")
+    second = broker.lease()
+    assert second["executionId"] == execution.execution_id
+
+
+def test_codex_broker_bounds_prompts_and_results():
+    module = load_plugin()
+    broker_module = module._load_codex_broker_module()
+    broker = broker_module.ExecutionBroker()
+    execution = broker.submit(session_key="room", prompt="p" * 100_100)
+    leased = broker.lease()
+    assert len(leased["prompt"]) == 100_000
+    assert broker.complete(execution.execution_id, output="o" * 20_100)
+    assert len(broker.wait(execution, 0).output) == 20_000
+
+
+async def _collect_async_generator(generator):
+    return [item async for item in generator]

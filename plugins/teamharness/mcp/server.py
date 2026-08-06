@@ -3,9 +3,10 @@
 
 from __future__ import annotations
 
-import html
-import hashlib
 import datetime
+import fnmatch
+import hashlib
+import html
 import json
 import mimetypes
 import os
@@ -1179,10 +1180,32 @@ def _message(arguments: dict[str, Any]) -> dict[str, Any]:
 
 def _matrix_env(tool: str) -> tuple[str, str]:
     homeserver = os.getenv("AGENTTEAMS_MATRIX_URL", "").rstrip("/")
-    token = os.getenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "")
+    token = _matrix_access_token()
     if not homeserver or not token:
-        raise ValueError("AGENTTEAMS_MATRIX_URL and AGENTTEAMS_WORKER_MATRIX_TOKEN are required")
+        raise ValueError(
+            "AGENTTEAMS_MATRIX_URL and a role-appropriate Matrix token are required"
+        )
     return homeserver, token
+
+
+def _matrix_access_token() -> str:
+    """Return the Matrix token for the active TeamHarness role."""
+
+    if _runtime_role() == "manager":
+        names = (
+            "AGENTTEAMS_MANAGER_MATRIX_TOKEN",
+            "AGENTTEAMS_WORKER_MATRIX_TOKEN",
+        )
+    else:
+        names = (
+            "AGENTTEAMS_WORKER_MATRIX_TOKEN",
+            "AGENTTEAMS_MANAGER_MATRIX_TOKEN",
+        )
+    for name in names:
+        token = os.getenv(name, "").strip()
+        if token:
+            return token
+    return ""
 
 
 def _attachment_parent_event_id(*sources: dict[str, Any]) -> str:
@@ -2473,6 +2496,71 @@ def _resolve_filesync(arguments: dict[str, Any]) -> tuple[str, str, Path, str, b
     return action, normalized, local, remote, is_directory
 
 
+def _filesync_directory_pull_command(
+    remote: str,
+    local: Path,
+    *,
+    windows: bool | None = None,
+) -> list[str]:
+    is_windows = os.name == "nt" if windows is None else windows
+    if is_windows:
+        return ["mc", "cp", "--recursive", remote, str(local)]
+    return ["mc", "mirror", remote, str(local), "--overwrite"]
+
+
+def _filesync_directory_push_command(
+    local: Path,
+    remote: str,
+    exclude: list[str],
+    *,
+    windows: bool | None = None,
+) -> list[str]:
+    is_windows = os.name == "nt" if windows is None else windows
+    source = str(local) + ("/" if not str(local).endswith(("/", "\\")) else "")
+    if is_windows:
+        if exclude:
+            raise ValueError("Windows recursive cp does not support exclude filters")
+        # As with pull, recursive cp retains ``local.name``. Target the remote
+        # parent so the resulting object prefix is not duplicated.
+        remote_parent = remote.rstrip("/").rsplit("/", 1)[0] + "/"
+        command = ["mc", "cp", "--recursive", source, remote_parent]
+    else:
+        command = ["mc", "mirror", source, remote, "--overwrite"]
+    for pattern in exclude:
+        command.extend(["--exclude", pattern])
+    return command
+
+
+def _filesync_windows_filtered_push_commands(
+    local: Path,
+    remote: str,
+    exclude: list[str],
+) -> list[list[str]]:
+    """Build file-level copies because ``mc cp`` has no exclude flag."""
+
+    commands: list[list[str]] = []
+    for source in sorted(path for path in local.rglob("*") if path.is_file()):
+        relative = source.relative_to(local).as_posix()
+        excluded = False
+        for pattern in exclude:
+            normalized = pattern.replace("\\", "/").lstrip("/")
+            if normalized.endswith("/"):
+                prefix = normalized.rstrip("/")
+                excluded = relative == prefix or relative.startswith(prefix + "/")
+            else:
+                excluded = fnmatch.fnmatch(relative, normalized) or fnmatch.fnmatch(
+                    source.name,
+                    normalized,
+                )
+            if excluded:
+                break
+        if not excluded:
+            commands.append(
+                ["mc", "cp", str(source), remote.rstrip("/") + "/" + relative]
+            )
+    return commands
+
+
 def _filesync(arguments: dict[str, Any]) -> dict[str, Any]:
     try:
         action, normalized, local, remote, is_directory = _resolve_filesync(arguments)
@@ -2482,21 +2570,38 @@ def _filesync(arguments: dict[str, Any]) -> dict[str, Any]:
 
     kind = normalized.split("/", 1)[0]
     command: list[str]
+    commands: list[list[str]] | None = None
     if action == "list":
         command = ["mc", "ls", "--recursive", remote]
     elif action == "stat":
         command = ["mc", "stat", remote]
     elif action == "pull":
         if is_directory:
-            command = ["mc", "mirror", remote, str(local), "--overwrite"]
+            # Native Windows mc can reject remote-to-local mirror comparisons
+            # with "Object name contains unsupported characters" even though
+            # the same prefix works with cp. Recursive cp preserves the pull
+            # contract and overwrites existing files without the comparison
+            # pass. Keep mirror on POSIX, where it is already well covered.
+            command = _filesync_directory_pull_command(remote, local)
         else:
             command = ["mc", "cp", remote, str(local)]
     else:
         if is_directory:
-            source = str(local) + ("/" if not str(local).endswith("/") else "")
-            command = ["mc", "mirror", source, remote, "--overwrite"]
-            for pattern in exclude:
-                command.extend(["--exclude", pattern])
+            # Native Windows mc rejects drive-letter source directories during
+            # mirror's object-name comparison. Recursive cp accepts the same
+            # path and provides the idempotent upload behavior needed here.
+            if os.name == "nt" and exclude:
+                commands = _filesync_windows_filtered_push_commands(
+                    local,
+                    remote,
+                    exclude,
+                )
+                command = commands[0] if commands else []
+            else:
+                try:
+                    command = _filesync_directory_push_command(local, remote, exclude)
+                except ValueError as exc:
+                    return {"ok": False, "tool": "filesync", "error": str(exc)}
         else:
             command = ["mc", "cp", str(local), remote]
 
@@ -2512,6 +2617,8 @@ def _filesync(arguments: dict[str, Any]) -> dict[str, Any]:
         "exclude": exclude,
     }
     if arguments.get("dryRun"):
+        if commands is not None:
+            base["commands"] = commands
         base["dryRun"] = True
         return base
 
@@ -2526,26 +2633,61 @@ def _filesync(arguments: dict[str, Any]) -> dict[str, Any]:
             "path": normalized,
             "error": env_error,
         }
-    completed = subprocess.run(
-        command,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=120,
-        env=mc_env,
-    )
-    command_error = _filesync_command_error(completed)
-    if command_error:
+    try:
+        completed_commands: list[subprocess.CompletedProcess[str]] = []
+        for current_command in commands if commands is not None else [command]:
+            completed_commands.append(
+                subprocess.run(
+                    current_command,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    env=mc_env,
+                )
+            )
+    except FileNotFoundError:
         return {
             "ok": False,
             "tool": "filesync",
             "action": action,
             "path": normalized,
-            "error": command_error,
-            "returncode": completed.returncode,
+            "error": "mc command not found",
         }
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "tool": "filesync",
+            "action": action,
+            "path": normalized,
+            "error": "mc command timed out after 120 seconds",
+        }
+    except OSError as exc:
+        return {
+            "ok": False,
+            "tool": "filesync",
+            "action": action,
+            "path": normalized,
+            "error": f"mc command failed to start: {exc}",
+        }
+    for completed in completed_commands:
+        command_error = _filesync_command_error(completed)
+        if command_error:
+            return {
+                "ok": False,
+                "tool": "filesync",
+                "action": action,
+                "path": normalized,
+                "error": command_error,
+                "returncode": completed.returncode,
+            }
     if action == "list":
-        base["entries"] = [line for line in completed.stdout.splitlines() if line.strip()]
+        base["entries"] = [
+            line
+            for completed in completed_commands
+            for line in completed.stdout.splitlines()
+            if line.strip()
+        ]
     if action == "stat":
         base["exists"] = True
     return base
@@ -3815,7 +3957,7 @@ def _validate_assignee_membership(room_id: str, assignee: str) -> dict[str, Any]
     display name (there is no mxid to verify).
     """
     homeserver = os.getenv("AGENTTEAMS_MATRIX_URL", "").strip()
-    token = os.getenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "").strip()
+    token = _matrix_access_token()
     if not homeserver or not token:
         return {"ok": True, "skipped": "matrix env unavailable"}
     matrix_room_id = _canonical_room_id(room_id)
@@ -3853,11 +3995,11 @@ def _send_delegate_notification(
     Returns the Matrix ``eventId`` on success.
     """
     homeserver = os.getenv("AGENTTEAMS_MATRIX_URL", "").rstrip("/")
-    token = os.getenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "")
+    token = _matrix_access_token()
     if not homeserver or not token:
         return {
             "sent": False,
-            "error": "AGENTTEAMS_MATRIX_URL and AGENTTEAMS_WORKER_MATRIX_TOKEN are required",
+            "error": "AGENTTEAMS_MATRIX_URL and a role-appropriate Matrix token are required",
         }
 
     matrix_room_id = str(room_id or "").strip()
@@ -3870,8 +4012,7 @@ def _send_delegate_notification(
     if len(spec or "") > 500:
         spec_preview += "..."
     notification_text = (
-        f"{assignee} You are assigned task **{task_id}**: {title}\n\n"
-        f"{spec_preview}"
+        f"{assignee} TASK_ASSIGNED: {task_id} - {title}\n\n{spec_preview}"
     )
     mentions = [assignee]
     content = _matrix_content(notification_text, mentions)
@@ -3916,8 +4057,8 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
     role = _role(arguments)
     try:
         if action == "delegate_task":
-            if role != "leader":
-                raise ValueError("delegate_task requires leader role")
+            if role not in {"leader", "manager"}:
+                raise ValueError("delegate_task requires leader or manager role")
             project_id = _safe_id(payload.get("projectId") or payload.get("project_id"), "projectId")
             task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
             assigned_to = str(payload.get("assignedTo") or payload.get("assigned_to") or "").strip()
@@ -4065,13 +4206,13 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                         break
             has_matrix_env = bool(
                 (os.getenv("AGENTTEAMS_MATRIX_URL", "").strip())
-                and (os.getenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "").strip())
+                and _matrix_access_token()
             )
             notification: dict[str, Any] = {
                 "sent": False,
                 "error": "notification skipped",
             }
-            if assignment_mxid and _role(arguments) == "leader" and has_matrix_env:
+            if assignment_mxid and role in {"leader", "manager"} and has_matrix_env:
                 try:
                     notification = _send_delegate_notification(
                         arguments,
@@ -4228,8 +4369,8 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             }
 
         if action == "cancel_task":
-            if role != "leader":
-                raise ValueError("cancel_task requires leader role")
+            if role not in {"leader", "manager"}:
+                raise ValueError("cancel_task requires leader or manager role")
             task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
             task = _load_task(arguments, task_id)
             project_id = str(task.get("project_id") or "")
@@ -4260,8 +4401,8 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             }
 
         if action == "check_task":
-            if role != "leader":
-                raise ValueError("check_task requires leader role")
+            if role not in {"leader", "manager"}:
+                raise ValueError("check_task requires leader or manager role")
             task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
             pulled = _pull_task(arguments, task_id)
             task = _load_task(arguments, task_id)

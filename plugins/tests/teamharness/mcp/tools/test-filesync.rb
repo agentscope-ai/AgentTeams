@@ -176,6 +176,15 @@ Dir.mktmpdir("teamharness-filesync-") do |dir|
     if stat.get("remotePath") != "mock/shared/tasks/t-001/result.md":
         raise AssertionError(f"stat remote path mismatch: {stat!r}")
 
+    from unittest import mock
+    with mock.patch("server.subprocess.run", side_effect=FileNotFoundError("mc")):
+        missing_mc = payload({
+            "action": "pull",
+            "path": "shared/tasks/t-001/result.md",
+        })
+    if missing_mc.get("ok") is not False or missing_mc.get("error") != "mc command not found":
+        raise AssertionError(f"missing mc did not degrade cleanly: {missing_mc!r}")
+
     runtime_config = pathlib.Path("#{root}") / "runtime.yaml"
     runtime_config.write_text(
         "storage:\\n"

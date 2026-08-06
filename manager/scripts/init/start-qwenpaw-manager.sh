@@ -156,7 +156,8 @@ fi
 MANAGER_MATRIX_TOKEN_VAL=$(jq -r '.channels.matrix.access_token // ""' "${AGENT_JSON}")
 DM_ROOMS_FILE=$(mktemp)
 echo '{}' > "${DM_ROOMS_FILE}"
-MATRIX_API="http://127.0.0.1:6167"
+MATRIX_API="${AGENTTEAMS_MATRIX_URL:-http://127.0.0.1:6167}"
+MATRIX_API="${MATRIX_API%/}"
 if [ -n "${MANAGER_MATRIX_TOKEN_VAL}" ] && [ "${MANAGER_MATRIX_TOKEN_VAL}" != "null" ]; then
     # Retry DM room detection in case Tuwunel is not ready yet
     _max_retries=5

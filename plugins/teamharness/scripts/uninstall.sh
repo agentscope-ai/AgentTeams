@@ -9,6 +9,10 @@ if command -v qwenpaw >/dev/null 2>&1; then
   bash "${PLUGIN_DIR}/adapters/qwenpaw/uninstall.sh"
 fi
 
+if command -v codex >/dev/null 2>&1; then
+  bash "${PLUGIN_DIR}/adapters/codex-cli/uninstall.sh"
+fi
+
 log_file="${TEAMHARNESS_INSTALL_LOG:-}"
 if [ -n "$log_file" ]; then
   mkdir -p "$(dirname "$log_file")"

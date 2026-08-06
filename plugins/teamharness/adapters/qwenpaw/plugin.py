@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import importlib.util
 import os
-from pathlib import Path
 import re
-from typing import Any, AsyncGenerator, Callable
-
+import sys
+from collections.abc import AsyncGenerator, Callable
+from pathlib import Path
+from typing import Any
 
 PLUGIN_DIR = Path(__file__).resolve().parent
 ASSET_DIR = PLUGIN_DIR / "teamharness"
+_TeamHarnessRequest = Any
 if not (ASSET_DIR / "plugin.yaml").exists():
     ASSET_DIR = PLUGIN_DIR.parent.parent
 
@@ -102,6 +104,22 @@ def _load_trace_module() -> Any | None:
     return module
 
 
+def _load_codex_broker_module() -> Any | None:
+    path = PLUGIN_DIR / "codex_broker.py"
+    if not path.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location(
+        "agentteams_teamharness_codex_broker",
+        path,
+    )
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def _room_id(request: Any) -> str:
     if hasattr(request, "model_dump"):
         data = request.model_dump()
@@ -160,6 +178,7 @@ def _register_trace_hooks(api: Any) -> None:
 
 class TeamHarnessPlugin:
     def register(self, api: Any) -> None:
+        codex_broker = _load_codex_broker_module()
         api.register_prompt_section(
             "teamharness_context",
             after="workspace",
@@ -172,14 +191,20 @@ class TeamHarnessPlugin:
             channels=["all"],
         )
         api.register_middleware(_sanitizer_factory, priority=30)
+        if codex_broker is not None:
+            api.register_middleware(
+                codex_broker.manager_middleware_factory,
+                priority=40,
+            )
         _register_trace_hooks(api)
-        self._register_http(api)
+        self._register_http(api, codex_broker)
 
-    def _register_http(self, api: Any) -> None:
+    def _register_http(self, api: Any, codex_broker: Any | None = None) -> None:
         try:
-            from fastapi import APIRouter
+            from fastapi import APIRouter, Request
         except ImportError:
             return
+        globals()["_TeamHarnessRequest"] = Request
         router = APIRouter()
 
         @router.get("/health")
@@ -193,6 +218,29 @@ class TeamHarnessPlugin:
                 "plugin": "teamharness",
                 "managedBy": "qwenpaw-plugin-api",
             }
+
+        if codex_broker is not None:
+            @router.get("/codex/executions/lease")
+            def lease_codex_execution(request: _TeamHarnessRequest) -> dict[str, Any]:
+                if not codex_broker.authorized(request.headers):
+                    return {"ok": False, "error": "unauthorized"}
+                execution = codex_broker.BROKER.lease()
+                return {"ok": True, "execution": execution}
+
+            @router.post("/codex/executions/{execution_id}/complete")
+            async def complete_codex_execution(
+                execution_id: str,
+                request: _TeamHarnessRequest,
+            ) -> dict[str, Any]:
+                if not codex_broker.authorized(request.headers):
+                    return {"ok": False, "error": "unauthorized"}
+                payload = await request.json()
+                accepted = codex_broker.BROKER.complete(
+                    execution_id,
+                    output=str(payload.get("output") or ""),
+                    error=str(payload.get("error") or ""),
+                )
+                return {"ok": accepted}
 
         api.register_http_router(
             router,

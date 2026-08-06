@@ -1,0 +1,16 @@
+apiVersion: agentteams.io/v1beta1
+kind: MemberRuntimeConfig
+team:
+  name: demo-team
+  teamRoomId: "!team:matrix.local"
+  leaderMatrixUserId: "@leader:matrix.local"
+member:
+  name: codex-worker
+  runtimeName: codex-worker
+  role: remote-member
+  runtime: codex-cli
+  matrixUserId: "@codex-worker:matrix.local"
+desired:
+  model: {}
+credentials:
+  matrixTokenEnv: AGENTTEAMS_WORKER_MATRIX_TOKEN

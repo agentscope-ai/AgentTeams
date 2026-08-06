@@ -61,6 +61,8 @@ mcp:
 adapters:
   - id: qwenpaw
     path: adapters/qwenpaw
+  - id: codex-cli
+    path: adapters/codex-cli
 package:
   include:
     - plugin.yaml

@@ -145,6 +145,9 @@ jobs:
           # Worker
           docker pull ${REGISTRY}/${REPO}/agentteams-worker:${VERSION}
 
+          # QwenPaw Worker
+          docker pull ${REGISTRY}/${REPO}/agentteams-qwenpaw-worker:${VERSION}
+
           # Controller (used standalone in k8s; bundled inside agentteams-embedded for docker installs)
           docker pull ${REGISTRY}/${REPO}/agentteams-controller:${VERSION}
           \`\`\`

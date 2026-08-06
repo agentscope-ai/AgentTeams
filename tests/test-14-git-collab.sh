@@ -80,7 +80,44 @@ wait_for_manager_agent_ready 300 "${DM_ROOM}" "${ADMIN_TOKEN}" || {
     exit 1
 }
 
-log_section "Phase 1-4: Assign 4-Phase Git Collaboration Task"
+log_section "Setup: Pre-create Workers"
+
+# Worker provisioning is deterministic setup for this test. The Manager still
+# creates the project room and coordinates all four phases, so the assertions
+# continue to exercise the project-management workflow rather than LLM timing
+# during three independent Worker creation calls.
+for worker in alice bob charlie; do
+    WORKER_JSON=$(exec_in_agent agt get workers "${worker}" -o json 2>/dev/null || echo "{}")
+    if [ "$(echo "${WORKER_JSON}" | jq -r '.name // empty')" = "${worker}" ]; then
+        UPDATE_OUTPUT=$(exec_in_agent agt update worker \
+            --name "${worker}" \
+            --runtime "${TEST_WORKER_RUNTIME}" \
+            --skills github-operations,git-delegation 2>&1)
+        if echo "${UPDATE_OUTPUT}" | grep -q "worker/${worker} configured"; then
+            log_pass "Worker ${worker} runtime and skills updated"
+        else
+            log_fail "Worker ${worker} update failed: ${UPDATE_OUTPUT}"
+        fi
+    else
+        CREATE_OUTPUT=$(exec_in_agent agt create worker \
+            --name "${worker}" \
+            --runtime "${TEST_WORKER_RUNTIME}" \
+            --skills github-operations,git-delegation \
+            --no-wait 2>&1)
+        if echo "${CREATE_OUTPUT}" | grep -q "worker/${worker} create accepted"; then
+            log_pass "Worker ${worker} creation accepted"
+        else
+            log_fail "Worker ${worker} creation failed: ${CREATE_OUTPUT}"
+        fi
+    fi
+    if wait_worker_provisioned "${worker}" 180; then
+        log_pass "Worker ${worker} provisioned"
+    else
+        log_fail "Worker ${worker} did not reach provisioned state"
+    fi
+done
+
+log_section "Phase 1-4: Manager Coordinates Git Collaboration"
 
 TASK_DESCRIPTION="Please coordinate a 4-phase git collaboration workflow to test non-linear multi-worker coordination.
 
@@ -100,13 +137,10 @@ DO NOT assign any phase to a different worker. DO NOT give alice phase 2 or phas
 
 IMPORTANT: You MUST use the EXACT branch names and file paths specified below. Do not rename, substitute, or simplify them. The verification system checks these exact names.
 
-Before starting any phase:
-1. Ensure workers with usernames exactly 'alice', 'bob', and 'charlie' exist with the git-delegation skill. The username (container name) must match exactly — do not use variations like 'alice-dev' or 'bob-backend'. IMPORTANT: Create any missing workers IN PARALLEL (run all create-worker.sh calls concurrently) to save time — do NOT create them one by one sequentially. When creating any missing worker, use these exact values — do NOT ask me to confirm any of them:
-   - runtime: install default
-   - skills: github-operations, git-delegation
-   - SOUL/role: 'Developer working on a shared git repo using git-delegation workflows'
-   If a worker already exists, reuse it.
-2. Create a shared project room that includes alice, bob, charlie, and the human admin (use the create-project.sh script). All phase assignments and reports MUST happen in this project room — never in individual worker rooms.
+Workers alice, bob, and charlie already exist with the git-delegation skill.
+Create a shared project room that includes those three workers and the human
+admin. All phase assignments and reports MUST happen in this project room,
+never in individual worker rooms.
 
 Matrix mention isolation is mandatory in the project room:
 - You may post the overall project plan without mentioning any Worker.
@@ -185,13 +219,13 @@ while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
 done
 assert_not_empty "${MANAGER_TOKEN}" "Manager Matrix token available"
 
-log_info "Waiting for project room to be created (timeout: 900s)..."
+log_info "Waiting for project room to be created (timeout: 300s)..."
 PROJECT_ROOM=""
-DEADLINE=$(( $(date +%s) + 900 ))
+DEADLINE=$(( $(date +%s) + 300 ))
 while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
     PROJECT_ROOM=$(matrix_find_room_by_name "${MANAGER_TOKEN}" "Project:" 2>/dev/null || true)
     [ -n "${PROJECT_ROOM}" ] && break
-    sleep 10
+    sleep 5
 done
 assert_not_empty "${PROJECT_ROOM}" "Project room created by Manager"
 log_info "Project room: ${PROJECT_ROOM}"

@@ -883,11 +883,13 @@ func buildExecutionSandboxResources(
 				ImagePullPolicy: corev1.PullIfNotPresent,
 				Resources:       resources,
 				ReadinessProbe: &corev1.Probe{
-					ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{
-						Path:   "/healthz",
-						Port:   intstr.FromString("http"),
-						Scheme: corev1.URISchemeHTTP,
-					}},
+					// A kubelet-originated HTTP probe may be denied by the
+					// sandbox default-deny NetworkPolicy. Probe loopback from
+					// inside the credential-free Runner without widening ingress.
+					ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{
+						"curl", "--fail", "--silent", "--show-error", "--max-time", "1",
+						"http://127.0.0.1:8080/healthz",
+					}}},
 					PeriodSeconds:    1,
 					TimeoutSeconds:   1,
 					FailureThreshold: 3,

@@ -854,6 +854,15 @@ func TestReconcileTeamTeamReferences_RoleAwareChannelPolicy(t *testing.T) {
 	provisioner.MatrixUserIDFn = func(name string) string {
 		return "@" + name + ":matrix.local"
 	}
+	type roomJoin struct {
+		roomID string
+		token  string
+	}
+	var roomJoins []roomJoin
+	provisioner.JoinRoomAsFn = func(_ context.Context, roomID, token string) error {
+		roomJoins = append(roomJoins, roomJoin{roomID: roomID, token: token})
+		return nil
+	}
 	r := &TeamReconciler{
 		Client:        c,
 		Provisioner:   provisioner,
@@ -880,6 +889,20 @@ func TestReconcileTeamTeamReferences_RoleAwareChannelPolicy(t *testing.T) {
 		}
 		if got := worker.Annotations[v1beta1.AnnotationWorkerTeamName]; got != "team-a" {
 			t.Errorf("worker %q team annotation=%q, want team-a", workerName, got)
+		}
+	}
+
+	if len(roomJoins) != 3 {
+		t.Fatalf("JoinRoomAs calls=%d, want 3", len(roomJoins))
+	}
+	joinedTokens := map[string]string{}
+	for _, join := range roomJoins {
+		joinedTokens[join.token] = join.roomID
+	}
+	for _, workerName := range []string{"lead", "dev", "qa"} {
+		token := "mock-token-" + workerName
+		if got := joinedTokens[token]; got != "!team-team-a:localhost" {
+			t.Errorf("JoinRoomAs room for %q = %q, want !team-team-a:localhost", token, got)
 		}
 	}
 

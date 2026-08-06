@@ -370,9 +370,9 @@ matrix_wait_for_reply_matching() {
 #     callbacks (copaw/src/matrix/channel.py::_sync_loop) so that historical
 #     messages aren't replayed on container restart. Any message that arrives
 #     between "join" and "next_batch persisted" is silently dropped.
-#   - Hermes: hermes-agent's matrix adapter doesn't auto-join invited rooms,
-#     so the controller pre-joins on its behalf — which means the room shows
-#     "join" before the worker container has even booted its sync loop.
+#   - Hermes: invites present before the initial sync are not reliably dispatched
+#     to its invite handler, so the controller pre-joins on its behalf — which
+#     means the room shows "join" before the worker container has even booted.
 #   - OpenClaw: smaller window but not zero — the matrix plugin still needs
 #     to register message handlers after login.
 #

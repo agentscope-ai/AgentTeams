@@ -403,17 +403,26 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 				fmt.Sprintf("record team membership for %s: %v", member.runtimeName, err),
 			)
 		}
-		if _, err := r.Provisioner.RefreshWorkerCredentials(
+		credentials, err := r.Provisioner.RefreshWorkerCredentials(
 			ctx,
 			member.ref.Name,
 			member.runtimeName,
 			teamRuntimeName,
-		); err != nil {
+		)
+		if err != nil {
 			return r.failTeam(
 				ctx,
 				t,
 				patchBase,
 				fmt.Sprintf("refresh team storage access for %s: %v", member.runtimeName, err),
+			)
+		}
+		if err := r.Provisioner.JoinRoomAs(ctx, rooms.TeamRoomID, credentials.MatrixToken); err != nil {
+			return r.failTeam(
+				ctx,
+				t,
+				patchBase,
+				fmt.Sprintf("join %s to team room: %v", member.runtimeName, err),
 			)
 		}
 	}

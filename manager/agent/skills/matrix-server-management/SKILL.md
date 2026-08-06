@@ -11,7 +11,7 @@ Manage the Tuwunel Matrix Homeserver at `${AGENTTEAMS_MATRIX_URL}`. User ID form
 
 - **Workers IGNORE messages without `m.mentions`** — they have `requireMention: true`. You MUST include `m.mentions.user_ids` with the full Matrix user ID for Workers to process the message (MSC3952)
 - **User IDs in body text and `m.mentions.user_ids` must match exactly** — partial or mismatched IDs cause silent failures
-- **`trusted_private_chat` preset auto-joins all invited members** — no invite acceptance needed
+- **`trusted_private_chat` only invites members** — you must ensure each invited user accepts with `POST /join`; Controller-managed Worker and Team flows do this on the user's behalf
 - **Matrix accounts cannot be deleted via API** — reuse the same username on reset
 - **Do NOT use this skill for Worker/project creation** — `create-worker.sh` and `create-project.sh` handle Matrix operations internally
 

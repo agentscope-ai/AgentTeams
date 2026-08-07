@@ -53,5 +53,8 @@ agentteams-controller/agent/
 # Helm dependency artifacts
 helm/agentteams/charts/*.tgz
 
+# ServiceDesk Pilot demo runtime outputs (dashboard/report/trace regenerated per run)
+servicedesk-pilot-demo/out/
+
 # GitNexus
 .gitnexus/

@@ -279,3 +279,9 @@ All technical assumptions have been verified in POC. See [design/poc-tech-verifi
 - MCP Server created via `PUT` (not `POST`)
 - Auth plugin takes ~40s to activate after first configuration
 - OpenClaw Skills auto-load from `workspace/skills/<name>/SKILL.md`
+
+## 当前项目阶段备注
+
+- 当前仓库同时包含 AgentTeams 工程代码和 GOAI Agent Infra 赛道参赛材料；两者不要混用。
+- 参赛相关材料优先参考 [赛题解析.md](赛题解析.md) / [百万奖池_GOAI_宣讲.md](百万奖池_GOAI_宣讲.md)。
+- 初赛方案当前主文件为 [AgentInfra_初赛方案_ServiceDeskPilot_V2.1.pptx](AgentInfra_初赛方案_ServiceDeskPilot_V2.1.pptx)，源工程与旧版已归档清理。

@@ -123,6 +123,10 @@ For an existing Worker, the recommended workflow is to put the complete skill di
 
 The Manager uploads and verifies `SKILL.md` before updating `spec.skills`. QwenPaw Workers consume the resulting runtime assignment, synchronize the selected skill into their native workspace, then refresh and enable it automatically.
 
+The assignment can also be checked through conversation instead of a CLI command:
+
+> Check the skills assigned to Worker `amy-ai` and confirm whether `alert-fusion` is included.
+
 You can also use `spec.package` to provide a Worker package containing a `skills/` directory. Package skills and assigned skills are merged without conflict.
 
 ### Worker with Custom Package

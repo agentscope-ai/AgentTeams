@@ -72,7 +72,11 @@ Manager 会在回复中提供所有具体参数值。
 
 Manager 会先上传并校验文件，再更新 `Worker.spec.skills`，避免 Worker 收到一个缺少实际内容的 Skill 分配。QwenPaw Worker 随后会把已分配 Skill 同步到原生工作空间，并自动刷新、启用。
 
-可使用以下命令检查分配结果：
+可以直接询问 Manager 来检查分配结果：
+
+> 请列出 Worker `amy-ai` 当前分配的 Skill，并确认其中是否包含 `alert-fusion`。
+
+如果需要从运维侧检查或排障，可使用等价的 CLI 查询：
 
 ```bash
 agt get workers amy-ai -o json | jq '.skills'

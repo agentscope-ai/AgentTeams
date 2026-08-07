@@ -71,13 +71,21 @@ Manager 通过安装时设置的环境变量进行配置。安装脚本会生成
 
 Manager 会依次校验 Skill 源文件、将完整目录上传到 Worker 的隔离存储、确认远端 `SKILL.md` 存在，然后才更新 Worker 的 Skill 分配。对于 QwenPaw Worker，运行时会拉取新的分配，将 Skill 复制到原生工作空间，刷新 Skill 列表并启用该 Skill，无需手动重启 QwenPaw。
 
-可在 Manager 或 controller 容器中检查分配结果：
+可以直接通过自然语言对话让 Manager 检查分配结果：
+
+> 请检查 Worker `amy-ai` 当前分配的 Skill，并确认其中是否包含 `alert-fusion`。
+
+如果需要验证的不只是分配记录，而是 Worker 运行时是否已经实际可用，可以继续询问：
+
+> 请让 Worker `amy-ai` 确认它能够发现并使用 `alert-fusion` Skill。
+
+如果需要从运维侧检查或排障，也可以在 Manager 或 controller 容器中执行等价查询：
 
 ```bash
 agt get workers amy-ai -o json | jq '.skills'
 ```
 
-也可以让 Manager 通知 `amy-ai`，由 Worker 确认能够读取并使用 `alert-fusion`。如果 Manager 提示找不到源文件，请确认 `SKILL.md` 位于 `worker-skills/<skill-name>/` 下，而不是直接放在 `worker-skills/` 根目录。
+如果 Manager 提示找不到源文件，请确认 `SKILL.md` 位于 `worker-skills/<skill-name>/` 下，而不是直接放在 `worker-skills/` 根目录。
 
 ### 管理 MCP Server
 

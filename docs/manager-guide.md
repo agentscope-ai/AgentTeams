@@ -71,13 +71,21 @@ Then send the Manager a direct instruction, for example:
 
 The Manager validates the skill source, uploads the complete directory to the Worker's isolated storage, verifies the remote `SKILL.md`, and only then updates the Worker's assigned skills. For a QwenPaw Worker, the runtime pulls the assignment, copies the skill into its native workspace, refreshes skill discovery, and enables the skill. No manual QwenPaw restart is required.
 
-Verify the assignment from the Manager or controller container:
+You can verify the assignment through natural-language conversation with the Manager:
+
+> Check the skills currently assigned to Worker `amy-ai` and confirm whether `alert-fusion` is included.
+
+To verify runtime availability rather than only the assignment record, ask:
+
+> Ask Worker `amy-ai` to confirm that it can discover and use the `alert-fusion` skill.
+
+For operator-side inspection or troubleshooting, run the equivalent query from the Manager or controller container:
 
 ```bash
 agt get workers amy-ai -o json | jq '.skills'
 ```
 
-You can also ask the Manager to have `amy-ai` confirm that it can read and use `alert-fusion`. If the Manager reports that the source is missing, check that `SKILL.md` is under `worker-skills/<skill-name>/`, not directly under `worker-skills/`.
+If the Manager reports that the source is missing, check that `SKILL.md` is under `worker-skills/<skill-name>/`, not directly under `worker-skills/`.
 
 ### Managing MCP Servers
 

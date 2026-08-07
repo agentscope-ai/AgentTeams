@@ -246,7 +246,13 @@ agt delete human john
 
 > 请将 `~/worker-skills/alert-fusion/` 中的 `alert-fusion` Skill 安装给 Worker `amy-ai`。请验证上传结果，并确认 `amy-ai` 的 Skill 分配已经包含它。
 
-Manager 会上传文件、验证远端 `SKILL.md`，然后更新 Worker 的 Skill 分配。QwenPaw Worker 会自动同步并启用新分配的 Skill。可使用以下命令检查最终结果：
+Manager 会上传文件、验证远端 `SKILL.md`，然后更新 Worker 的 Skill 分配。QwenPaw Worker 会自动同步并启用新分配的 Skill。
+
+可以通过自然语言对话检查分配结果：
+
+> 请列出 Worker `amy-ai` 当前分配的 Skill，并确认其中是否包含 `alert-fusion`。
+
+如果需要从运维侧检查或排障，可使用等价的 CLI 查询：
 
 ```bash
 agt get workers amy-ai -o json | jq '.skills'

@@ -72,7 +72,11 @@ For example:
 
 The Manager uploads and verifies the files before updating `Worker.spec.skills`. This ordering prevents a Worker from receiving an assignment that points to missing content. QwenPaw Workers then synchronize the assigned skill into their native workspace and refresh and enable it automatically.
 
-Check the assignment with:
+You can check the assignment by asking the Manager:
+
+> List the skills currently assigned to Worker `amy-ai` and confirm whether `alert-fusion` is included.
+
+For operator-side inspection or troubleshooting, use the equivalent CLI query:
 
 ```bash
 agt get workers amy-ai -o json | jq '.skills'

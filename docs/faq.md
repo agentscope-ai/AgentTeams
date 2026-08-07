@@ -247,7 +247,13 @@ Then tell the Manager:
 
 > Install the `alert-fusion` skill from `~/worker-skills/alert-fusion/` for Worker `amy-ai`. Verify the upload and confirm that `amy-ai`'s assigned skills include it.
 
-The Manager uploads the files, verifies the remote `SKILL.md`, and updates the Worker assignment. QwenPaw Workers synchronize and enable the newly assigned skill automatically. Check the final assignment with:
+The Manager uploads the files, verifies the remote `SKILL.md`, and updates the Worker assignment. QwenPaw Workers synchronize and enable the newly assigned skill automatically.
+
+Check the assignment through natural-language conversation:
+
+> List the skills assigned to Worker `amy-ai` and confirm whether `alert-fusion` is included.
+
+For operator-side inspection or troubleshooting, use the equivalent CLI query:
 
 ```bash
 agt get workers amy-ai -o json | jq '.skills'

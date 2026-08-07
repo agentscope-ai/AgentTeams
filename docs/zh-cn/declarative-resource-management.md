@@ -111,6 +111,10 @@ spec:
 
 Manager 会先上传并验证 `SKILL.md`，再更新 `spec.skills`。QwenPaw Worker 会消费生成的运行时分配，将指定 Skill 同步到原生工作空间，然后自动刷新并启用。
 
+除了使用 CLI，也可以直接通过对话检查分配结果：
+
+> 请检查 Worker `amy-ai` 当前分配的 Skill，并确认其中是否包含 `alert-fusion`。
+
 也可以通过 `spec.package` 引入一个包含 `skills/` 目录的 Worker 包。包内 Skills 与按名称分配的 Skills 会合并，互不冲突。
 
 ### 带自定义包的 Worker

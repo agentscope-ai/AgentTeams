@@ -112,18 +112,41 @@ log_pass "Manager runtime: ${MANAGER_RUNTIME}"
 
 # Runtime-specific config verification (agent container)
 case "${MANAGER_RUNTIME}" in
-    copaw)
-        AGENT_JSON="/root/manager-workspace/.copaw/workspaces/default/agent.json"
-        if docker exec "${_AGENT_CTR}" jq -e '.channels.matrix.enabled == true' "${AGENT_JSON}" >/dev/null 2>&1; then
-            log_pass "CoPaw agent.json valid"
+    copaw|qwenpaw)
+        # Both copaw and qwenpaw runtimes use QwenPaw 2.0 in the same container image.
+        # The legacy "copaw" runtime value is retained as a compatibility alias,
+        # but both values now run QwenPaw 2.0 from ~/.qwenpaw/. The process cmdline
+        # may still show "copaw" (run_copaw_app.py via runpy) or "qwenpaw"
+        # (direct python3 -m qwenpaw app) — both are valid.
+        _working_dir="/root/manager-workspace/.qwenpaw"
+
+        if docker exec "${_AGENT_CTR}" test -d "${_working_dir}" 2>/dev/null; then
+            log_pass "QwenPaw working dir exists: ${_working_dir}"
         else
-            log_fail "CoPaw agent.json valid"
+            log_fail "QwenPaw working dir exists: ${_working_dir}"
         fi
 
-        if docker exec "${_AGENT_CTR}" pgrep -f "copaw(_worker\\.run_copaw_app)? app" >/dev/null 2>&1; then
-            log_pass "CoPaw process running"
+        AGENT_JSON="${_working_dir}/workspaces/default/agent.json"
+        if docker exec "${_AGENT_CTR}" jq -e '.channels.matrix.enabled == true' "${AGENT_JSON}" >/dev/null 2>&1; then
+            log_pass "QwenPaw agent.json valid"
         else
-            log_fail "CoPaw process running"
+            log_fail "QwenPaw agent.json valid"
+        fi
+
+        # pgrep: our CI supports both 'copaw app' and 'qwenpaw app' patterns
+        if docker exec "${_AGENT_CTR}" pgrep -f "copaw(_worker\\.run_copaw_app)? app" >/dev/null 2>&1 || \
+           docker exec "${_AGENT_CTR}" pgrep -f "qwenpaw app" >/dev/null 2>&1; then
+            log_pass "QwenPaw process running"
+        else
+            log_fail "QwenPaw process running"
+        fi
+
+        # Verify QWENPAW_WORKING_DIR is set (required for tool path resolution)
+        _qwenpaw_wd=$(docker exec "${_AGENT_CTR}" printenv QWENPAW_WORKING_DIR 2>/dev/null || echo "")
+        if [ -n "${_qwenpaw_wd}" ]; then
+            log_pass "QWENPAW_WORKING_DIR is set: ${_qwenpaw_wd}"
+        else
+            log_info "QWENPAW_WORKING_DIR not set (may use default ~/.qwenpaw)"
         fi
         ;;
     *)

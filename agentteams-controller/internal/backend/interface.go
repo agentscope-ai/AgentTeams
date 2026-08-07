@@ -44,6 +44,7 @@ const (
 	BuiltinSandboxInstanceName        = "agentteams"
 	DefaultAuthTokenExpirationSeconds = int64(3600)
 	MinAuthTokenExpirationSeconds     = int64(600)
+	DefaultAuthTokenFile              = "/var/run/secrets/agentteams/token"
 )
 
 func NormalizeAuthTokenExpirationSeconds(seconds int64) int64 {
@@ -97,10 +98,10 @@ type ResourceRequirements struct {
 	MemoryLimit   string
 }
 
-// VolumeMount describes a host-to-container bind mount (Docker backend only;
-// K8s backend ignores this — use standard Pod volume specs instead).
+// VolumeMount describes a host path or named volume source mounted into a
+// container (Docker backend only; K8s ignores this).
 type VolumeMount struct {
-	HostPath      string
+	HostPath      string // Docker bind source: host path or named volume.
 	ContainerPath string
 	ReadOnly      bool
 }
@@ -169,10 +170,13 @@ type CreateRequest struct {
 	ControllerURL string `json:"-"`
 
 	// SA-based auth — ServiceAccountName is set on K8s Pods (projected token).
-	// AuthToken is the pre-issued SA token for Docker backend.
+	// AuthToken is the pre-issued SA token for Docker backend. When
+	// AuthTokenFile is set, Docker projects the token into that container path
+	// instead of exposing it through AGENTTEAMS_AUTH_TOKEN.
 	// AuthAudience is the projected token audience (K8s backend only; defaults to "agentteams-controller").
 	ServiceAccountName string `json:"-"`
 	AuthToken          string `json:"-"`
+	AuthTokenFile      string `json:"-"`
 	AuthAudience       string `json:"-"`
 	// AuthExpirationSeconds controls the projected ServiceAccount token TTL.
 	// Zero means DefaultAuthTokenExpirationSeconds; values below
@@ -335,4 +339,10 @@ type WorkerBackend interface {
 
 	// Status returns the current status of a worker.
 	Status(ctx context.Context, name string) (*WorkerResult, error)
+}
+
+// AuthTokenProjector is implemented by backends that can replace a running
+// worker's file-projected ServiceAccount token without recreating it.
+type AuthTokenProjector interface {
+	ProjectAuthToken(ctx context.Context, name, token string) error
 }

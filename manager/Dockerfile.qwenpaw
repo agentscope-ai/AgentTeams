@@ -1,18 +1,18 @@
 # ============================================================
-# AgentTeams Manager Agent - CoPaw Runtime
+# AgentTeams Manager Agent - QwenPaw 2.0 Runtime
 # ============================================================
-# Lightweight Manager container with Python CoPaw runtime.
+# Lightweight Manager container with Python QwenPaw 2.0 runtime.
 # Does NOT include Higress, Tuwunel, MinIO, or Element Web.
 # All infrastructure is provided by the controller (embedded)
 # or K8s Pods (incluster). AGENTTEAMS_RUNTIME env var selects mode.
 #
 # Build from project root:
-#   docker build -f manager/Dockerfile.copaw -t agentteams/manager-copaw:latest .
+#   docker build -f manager/Dockerfile.qwenpaw -t agentteams/manager-qwenpaw:latest .
 #
 # Build args:
 #   HIGRESS_REGISTRY        - base image registry (default: cn-hangzhou)
 #   AGENTTEAMS_CONTROLLER_IMAGE - pre-built controller image for agt CLI
-#   COPAW_VERSION           - CoPaw version to install from PyPI (default: 1.0.0)
+#   QWENPAW_PIP_SPEC        - QwenPaw pip spec (default: qwenpaw==2.0.1)
 #   PIP_INDEX_URL           - PyPI mirror (default: official pypi.org)
 #   APT_MIRROR              - Debian APT mirror (default: empty; set to mirrors.aliyun.com for China)
 # ============================================================
@@ -60,40 +60,15 @@ RUN npm config set registry ${NPM_REGISTRY} && \
     npm install -g mcporter skills @nacos-group/cli && \
     rm -rf /root/.npm
 
-# ---- Python virtual environment ----
-RUN python3 -m venv /opt/copaw-venv
-ENV PATH="/opt/copaw-venv/bin:${PATH}"
-
-# ---- Install CoPaw from PyPI ----
-ARG COPAW_VERSION=1.0.2
-RUN pip install --no-cache-dir \
+# ---- Python virtual environment (single QwenPaw 2.0 venv) ----
+ARG QWENPAW_PIP_SPEC=qwenpaw==2.0.1
+RUN python3 -m venv /opt/venv/qwenpaw \
+    && /opt/venv/qwenpaw/bin/pip install --no-cache-dir \
         -i "${PIP_INDEX_URL}" \
         --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
-        "copaw==${COPAW_VERSION}" \
-        "matrix-nio[e2e]>=0.24.0"
+        "${QWENPAW_PIP_SPEC}"
 
-# ---- CoPaw CMS Plugin (observability) ----
-RUN pip install --no-cache-dir \
-        -i "${PIP_INDEX_URL}" \
-        --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
-        "wrapt<2.0" \
-        loongsuite-site-bootstrap \
-        loongsuite-distro \
-        opentelemetry-exporter-otlp \
-        loongsuite-instrumentation-copaw \
-        loongsuite-instrumentation-agentscope
-
-# ---- Overlay AgentTeams Matrix channel (not yet merged into CoPaw release) ----
-# Replace CoPaw's built-in Matrix channel with AgentTeams-enhanced version
-COPY copaw/src/matrix/ /tmp/matrix-overlay/
-RUN SITE=$(python3 -c "import copaw; import os; print(os.path.dirname(copaw.__file__))") \
-    && rm -rf "$SITE/app/channels/matrix" \
-    && mkdir -p "$SITE/app/channels/matrix" \
-    && cp /tmp/matrix-overlay/channel.py /tmp/matrix-overlay/__init__.py "$SITE/app/channels/matrix/" \
-    && if [ -f /tmp/matrix-overlay/config.py ]; then \
-         cp /tmp/matrix-overlay/config.py "$SITE/config/config.py"; \
-       fi \
-    && rm -rf /tmp/matrix-overlay
+ENV PATH="/opt/venv/qwenpaw/bin:${PATH}"
 
 # ---- CoPaw worker bridge module (for config conversion) ----
 # Stage the copaw-worker package metadata for dependency resolution
@@ -103,17 +78,51 @@ RUN mkdir -p /tmp/copaw-worker/src/copaw_worker \
     && echo '__version__ = "0.0.0"' > /tmp/copaw-worker/src/copaw_worker/__init__.py \
     && echo '__version__ = "0.0.0"' > /tmp/copaw-worker/src/matrix/__init__.py
 
-# Install copaw-worker package (dependencies only, source overlaid later)
-RUN pip install --no-cache-dir \
+# Install copaw-worker package into qwenpaw venv (--no-deps: skip copaw 1.0.2,
+# which is not needed — bridge.py only patches qwenpaw.constant).
+# Install non-copaw dependencies that copaw_worker tools use.
+RUN /opt/venv/qwenpaw/bin/pip install --no-cache-dir \
         -i "${PIP_INDEX_URL}" \
         --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
-        /tmp/copaw-worker/
+        --no-deps \
+        /tmp/copaw-worker/ \
+    && /opt/venv/qwenpaw/bin/pip install --no-cache-dir \
+        -i "${PIP_INDEX_URL}" \
+        --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
+        "markdown-it-py>=3.0" \
+        "linkify-it-py>=2.0"
 
 # Overlay real copaw-worker source
 COPY copaw/src/ /tmp/copaw-worker/src/
-RUN SITE=/opt/copaw-venv/lib/python3.11/site-packages \
+RUN SITE=/opt/venv/qwenpaw/lib/python3.11/site-packages \
     && cp -a /tmp/copaw-worker/src/copaw_worker/* "$SITE/copaw_worker/" \
     && rm -rf /tmp/copaw-worker/
+
+# ---- CMS Observability Plugin (in qwenpaw venv) ----
+# Aligned with qwenpaw Worker Dockerfile: installed into the runtime venv
+# (qwenpaw) so that loongsuite-site-bootstrap is active when the Manager
+# process starts.  instrumentation-qwenpaw (not -copaw) +
+# loongsuite-otel-util-genai for GenAI semantic conventions.
+RUN /opt/venv/qwenpaw/bin/pip install --no-cache-dir \
+        -i "${PIP_INDEX_URL}" \
+        --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
+        "wrapt<2.0" \
+        loongsuite-site-bootstrap \
+        loongsuite-distro \
+        loongsuite-otel-util-genai \
+        opentelemetry-exporter-otlp \
+        loongsuite-instrumentation-qwenpaw \
+        loongsuite-instrumentation-agentscope
+
+# qwenpaw CLI on PATH
+RUN ln -sf /opt/venv/qwenpaw/bin/qwenpaw /usr/local/bin/qwenpaw
+
+# AgentTeams plugins: Matrix channel + Manager tools
+# Stored in image-local path (/opt/agentteams/plugins/). At runtime,
+# start-qwenpaw-manager.sh copies them into the working dir's plugins/
+# directory because /root/manager-workspace is a host-mounted volume.
+COPY plugins/agentteams-matrix-channel/ /opt/agentteams/plugins/agentteams-matrix-channel/
+COPY plugins/agentteams-manager-tools/ /opt/agentteams/plugins/agentteams-manager-tools/
 
 # ---- Copy Manager agent definitions ----
 COPY manager/agent/ /opt/agentteams/agent/

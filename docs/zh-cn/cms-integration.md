@@ -93,7 +93,7 @@ AGENTTEAMS_CMS_ENDPOINT=https://proj-xtrace-xxx.cn-hangzhou.log.aliyuncs.com/apm
 
 | 场景 | 配置位置 |
 |------|----------|
-| **嵌入式 Docker** | 将所有 `AGENTTEAMS_CMS_*` 配在 **`agentteams-manager`**（若使用 QwenPaw Manager 则为 **`agentteams-manager-copaw`**）上，由 `agentteams-manager.env` 注入。**`agentteams-controller`** 一般不需要为 Agent 可观测性单独配置 CMS 环境变量。 |
+| **嵌入式 Docker** | 将所有 `AGENTTEAMS_CMS_*` 配在 **`agentteams-manager`**（若使用 QwenPaw Manager 则为 **`agentteams-manager-qwenpaw`**）上，由 `agentteams-manager.env` 注入。**`agentteams-controller`** 一般不需要为 Agent 可观测性单独配置 CMS 环境变量。 |
 | **Helm / Kubernetes** | 在 **Manager** Deployment 的环境变量中设置（参见 `helm/agentteams/values.yaml` 中 manager 段）。也可在 Worker 默认值中预置，确保每个 Worker Pod 都带上 CMS 相关变量。 |
 
 ## 步骤三:配置 AgentTeams Workers

@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import parse_qs, urlencode, urlparse
 
-from qwenpaw_worker.api import QwenPawApiClient
+from qwenpaw_worker.api import QwenPawApiClient, QwenPawApiError
 
 import yaml
 
@@ -457,12 +457,12 @@ class AgentPackageManager:
         self.workspace_dir = workspace_dir
         self.current_dir = root_dir / "current"
         self.marker_path = root_dir / "current.identity"
-        self.root_dir.mkdir(parents=True, exist_ok=True)
 
     def apply(self, config: MemberRuntimeConfig) -> Optional[Path]:
         identity = config.agent_package_identity
         if not any(identity):
             return None
+        self.root_dir.mkdir(parents=True, exist_ok=True)
         if self._current_identity() == identity and self.current_dir.exists():
             self._apply_to_workspace_atomic(self.current_dir)
             return self.current_dir
@@ -1931,15 +1931,27 @@ class RuntimeUpdater:
         if self.api_client is None:
             raise RuntimeError("QwenPaw API client is required for Matrix ACL configuration")
         current = self.api_client.get_channel("agentteams_matrix")
-        self.api_client.put_channel(
-            "agentteams_matrix",
-            {
-                **current,
-                "access_control_group": group_enabled,
-                "access_control_dm": dm_enabled,
-            },
-            secret_fields={"access_token", "password"},
-        )
+        try:
+            self.api_client.put_channel(
+                "agentteams_matrix",
+                {
+                    **current,
+                    "access_control_group": group_enabled,
+                    "access_control_dm": dm_enabled,
+                },
+                secret_fields={"access_token", "password"},
+            )
+        except QwenPawApiError as exc:
+            # access_control_dm/group are best-effort: on some runtimes the
+            # channel plugin re-initializes channel state concurrently and the
+            # readback does not round-trip them, but the allow-list itself is
+            # applied separately via the ACL endpoint in
+            # _write_matrix_access_control(). A readback mismatch must not take
+            # the whole worker down, so log and continue.
+            logger.warning(
+                "matrix channel access flags not persisted (non-fatal): %s",
+                exc,
+            )
 
     def _write_matrix_access_control(self, whitelist: List[str], blacklist: List[str]) -> None:
         if self.api_client is None:

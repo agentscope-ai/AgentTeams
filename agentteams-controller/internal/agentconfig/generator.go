@@ -182,6 +182,26 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 		defaults["heartbeat"] = hb
 	}
 
+	// Add supports_multimodal based on the selected model's capabilities.
+	// The OpenClaw runtime strictly validates agents.defaults and does not
+	// recognize these keys — only emit them for runtimes that consume them.
+	modelSpec := g.resolveModelSpec(modelName)
+	if req.Runtime != "openclaw" && len(modelSpec.Input) > 0 {
+		supportsImage := false
+		for _, inp := range modelSpec.Input {
+			if inp == "image" {
+				supportsImage = true
+				break
+			}
+		}
+		if supportsImage {
+			agents := config["agents"].(map[string]interface{})
+			defaults := agents["defaults"].(map[string]interface{})
+			defaults["supports_multimodal"] = true
+			defaults["supports_image"] = true
+		}
+	}
+
 	// Add embedding model for memory search if configured
 	if g.config.EmbeddingModel != "" {
 		agents := config["agents"].(map[string]interface{})

@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,7 +52,7 @@ func createWorkerCmd() *cobra.Command {
 
   agt create worker --name alice --model qwen3.6-plus
   agt create worker --name alice --soul-file /path/to/SOUL.md --skills github-operations
-  agt create worker --name charlie --runtime copaw --expose 8080,3000
+  agt create worker --name charlie --runtime qwenpaw --expose 8080,3000
   To configure CPU/memory resources, use a YAML manifest and pass it with 'agt apply -f worker.yaml'.
   To configure mcpServers, use a YAML manifest and pass it with 'agt apply -f worker.yaml'.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -92,7 +93,11 @@ func createWorkerCmd() *cobra.Command {
 				req["skills"] = splitCSV(skills)
 			}
 			if expose != "" {
-				req["expose"] = parseExposePorts(expose)
+				ports, err := parseExposePorts(expose)
+				if err != nil {
+					return err
+				}
+				req["expose"] = ports
 			}
 
 			client := NewAPIClient()
@@ -126,7 +131,7 @@ func createWorkerCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&name, "name", "", "Worker name (required)")
 	cmd.Flags().StringVar(&model, "model", "", "LLM model ID (default: $AGENTTEAMS_DEFAULT_MODEL, else qwen3.6-plus)")
-	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|hermes|openhuman)")
+	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|qwenpaw|hermes|openhuman)")
 	cmd.Flags().StringVar(&image, "image", "", "Container image override")
 	cmd.Flags().StringVar(&identity, "identity", "", "Worker identity description")
 	cmd.Flags().StringVar(&soul, "soul", "", "Worker SOUL.md content (inline)")
@@ -366,7 +371,7 @@ func createManagerCmd() *cobra.Command {
 		Long: `Create a new Manager resource.
 
   agt create manager --name default --model qwen3.6-plus
-  agt create manager --name default --model claude-sonnet-4-6 --runtime copaw
+  agt create manager --name default --model claude-sonnet-4-6 --runtime qwenpaw
   To configure CPU/memory resources, use a YAML manifest and pass it with 'agt apply -f manager.yaml'.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
@@ -396,7 +401,7 @@ func createManagerCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&name, "name", "", "Manager name (required)")
 	cmd.Flags().StringVar(&model, "model", "", "LLM model ID (required)")
-	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|hermes|openhuman)")
+	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|qwenpaw)")
 	cmd.Flags().StringVar(&image, "image", "", "Container image override")
 	cmd.Flags().StringVar(&soul, "soul", "", "Manager SOUL.md content")
 	return cmd
@@ -475,13 +480,31 @@ func splitCSV(s string) []string {
 	return result
 }
 
-func parseExposePorts(s string) []map[string]interface{} {
-	var ports []map[string]interface{}
-	for _, p := range splitCSV(s) {
-		port := map[string]interface{}{"port": p}
+func parseExposePorts(s string) ([]map[string]interface{}, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, fmt.Errorf("--expose requires at least one port")
+	}
+
+	values := strings.Split(s, ",")
+	ports := make([]map[string]interface{}, 0, len(values))
+	seen := make(map[int]struct{}, len(values))
+	for _, raw := range values {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return nil, fmt.Errorf("invalid --expose value %q: port entries must not be empty", s)
+		}
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 1 || value > 65535 {
+			return nil, fmt.Errorf("invalid --expose port %q: must be an integer between 1 and 65535", raw)
+		}
+		if _, exists := seen[value]; exists {
+			return nil, fmt.Errorf("duplicate --expose port %d", value)
+		}
+		seen[value] = struct{}{}
+		port := map[string]interface{}{"port": value}
 		ports = append(ports, port)
 	}
-	return ports
+	return ports, nil
 }
 
 func setIfNotEmpty(m map[string]interface{}, key, value string) {

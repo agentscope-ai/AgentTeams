@@ -70,7 +70,11 @@ func updateWorkerCmd() *cobra.Command {
 				req["skills"] = splitCSV(skills)
 			}
 			if expose != "" {
-				req["expose"] = parseExposePorts(expose)
+				ports, err := parseExposePorts(expose)
+				if err != nil {
+					return err
+				}
+				req["expose"] = ports
 			}
 
 			if len(req) == 0 {
@@ -89,7 +93,7 @@ func updateWorkerCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&name, "name", "", "Worker name (required)")
 	cmd.Flags().StringVar(&model, "model", "", "LLM model ID")
-	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|hermes|openhuman)")
+	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|qwenpaw|hermes|openhuman)")
 	cmd.Flags().StringVar(&image, "image", "", "Container image override")
 	cmd.Flags().StringVar(&identity, "identity", "", "Worker identity description")
 	cmd.Flags().StringVar(&soul, "soul", "", "Worker SOUL.md content")

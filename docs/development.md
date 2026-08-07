@@ -32,7 +32,7 @@ make build-agentteams-controller
 make build-embedded
 
 # Alternate Manager / Worker runtimes
-make build-manager-copaw
+make build-manager-qwenpaw
 make build-copaw-worker
 make build-hermes-worker
 

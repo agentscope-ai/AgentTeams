@@ -193,7 +193,7 @@ func applyWorkerSubCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "Worker name (required)")
 	cmd.Flags().StringVar(&model, "model", "", "LLM model ID (default: $AGENTTEAMS_DEFAULT_MODEL, else qwen3.6-plus)")
 	cmd.Flags().StringVar(&zipFile, "zip", "", "Local ZIP package (manifest.json)")
-	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|hermes|openhuman)")
+	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|qwenpaw|hermes|openhuman)")
 	cmd.Flags().StringVar(&image, "image", "", "Container image override")
 	cmd.Flags().StringVar(&identity, "identity", "", "Worker identity description")
 	cmd.Flags().StringVar(&soul, "soul", "", "Worker SOUL.md content (inline)")
@@ -289,6 +289,14 @@ func applyWorkerParams(name, model, runtime, image, identity, soul, soulFile,
 			return err
 		}
 	}
+	var exposePorts []map[string]interface{}
+	if expose != "" {
+		var err error
+		exposePorts, err = parseExposePorts(expose)
+		if err != nil {
+			return err
+		}
+	}
 
 	client := NewAPIClient()
 
@@ -309,7 +317,7 @@ func applyWorkerParams(name, model, runtime, image, identity, soul, soulFile,
 		req["skills"] = splitCSV(skills)
 	}
 	if expose != "" {
-		req["expose"] = parseExposePorts(expose)
+		req["expose"] = exposePorts
 	}
 
 	var resp map[string]interface{}

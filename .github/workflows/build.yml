@@ -8,7 +8,7 @@ on:
         required: false
         type: string
       targets:
-        description: 'Space-separated list of push targets (default: all). Options: openclaw-base agentteams-controller embedded manager manager-copaw worker copaw-worker hermes-worker qwenpaw-worker'
+        description: 'Space-separated list of push targets (default: all). Options: openclaw-base agentteams-controller embedded manager manager-qwenpaw worker copaw-worker hermes-worker qwenpaw-worker'
         required: false
         type: string
         default: 'all'
@@ -62,9 +62,7 @@ jobs:
           echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             echo "version=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-            # Keep QwenPaw available for explicit workflow_dispatch builds, but
-            # defer publishing it as part of the automatic release set.
-            echo "targets=openclaw-base agentteams-controller embedded manager manager-copaw worker copaw-worker hermes-worker" >> $GITHUB_OUTPUT
+            echo "targets=openclaw-base agentteams-controller embedded manager manager-qwenpaw worker copaw-worker qwenpaw-worker hermes-worker" >> $GITHUB_OUTPUT
           else
             # workflow_dispatch: use inputs
             VERSION="${{ inputs.version }}"
@@ -107,7 +105,7 @@ jobs:
       - name: Build and push manager images
         if: ${{ steps.meta.outputs.targets == 'all' || contains(steps.meta.outputs.targets, 'manager') }}
         run: |
-          make push-manager push-manager-copaw \
+          make push-manager push-manager-qwenpaw \
             VERSION=${{ steps.meta.outputs.version }} \
             OPENCLAW_BASE_VERSION=${{ steps.meta.outputs.version }} \
             REGISTRY=${{ env.REGISTRY }} \
@@ -143,9 +141,10 @@ jobs:
           TARGETS: ${{ steps.meta.outputs.targets }}
           OPENCLAW_BASE_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/openclaw-base
           MANAGER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-manager
-          MANAGER_COPAW_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-manager-copaw
+          MANAGER_QWENPAW_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-manager-qwenpaw
           WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-worker
           COPAW_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-copaw-worker
+          QWENPAW_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-qwenpaw-worker
           HERMES_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-hermes-worker
           CONTROLLER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-controller
           EMBEDDED_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-embedded
@@ -156,9 +155,10 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Images:**" >> $GITHUB_STEP_SUMMARY
           echo "- Manager: \`${MANAGER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Manager CoPaw: \`${MANAGER_COPAW_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Manager CoPaw: \`${MANAGER_QWENPAW_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Worker: \`${WORKER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- CoPaw Worker: \`${COPAW_WORKER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- QwenPaw Worker: \`${QWENPAW_WORKER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Hermes Worker: \`${HERMES_WORKER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Controller: \`${CONTROLLER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Embedded: \`${EMBEDDED_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY

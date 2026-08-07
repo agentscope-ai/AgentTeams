@@ -932,6 +932,19 @@ func (c *TuwunelClient) InviteToRoomWithToken(ctx context.Context, roomID, userI
 		if strings.Contains(lower, "already in") || strings.Contains(lower, "already a member") {
 			return nil
 		}
+		// Tuwunel reports the same error for an already-joined user and a
+		// banned user. Verify the current membership before treating it as an
+		// idempotent success so a real ban is not silently ignored.
+		if strings.Contains(lower, "cannot invite user that is joined or banned") {
+			members, listErr := c.ListRoomMembersWithToken(ctx, roomID, inviterToken)
+			if listErr == nil {
+				for _, member := range members {
+					if member.UserID == userID {
+						return nil
+					}
+				}
+			}
+		}
 	}
 	return fmt.Errorf("invite %s to %s: HTTP %d %s %s: %s",
 		userID, roomID, statusCode, resp.ErrCode, resp.Error, truncate(respBody, 500))

@@ -85,7 +85,7 @@ metadata:
   name: alice
 spec:
   model: claude-sonnet-4-6           # required: LLM model
-  runtime: copaw                     # openclaw | copaw | hermes (default from install / CR)
+  runtime: qwenpaw                     # openclaw | qwenpaw | hermes (default from install / CR)
   skills: [github-operations]        # platform built-in skills
   mcpServers:                        # MCP servers callable via mcporter
     - name: github
@@ -167,7 +167,7 @@ metadata:
   name: default                       # common name for the primary instance in embedded installs
 spec:
   model: claude-sonnet-4-6            # required
-  runtime: openclaw                   # openclaw | copaw
+  runtime: openclaw                   # openclaw | qwenpaw
   # soul: | …                         # optional SOUL.md override
   # agents: | …                       # optional AGENTS.md override
   skills: [worker-management]         # on-demand Manager skills

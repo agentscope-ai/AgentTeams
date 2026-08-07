@@ -5,9 +5,11 @@ on:
     paths:
       - 'helm/**'
       - 'install/agentteams-install.sh'
+      - 'install/agentteams-install.ps1'
       - 'openhuman/scripts/openhuman-worker-entrypoint.sh'
       - 'tests/check-agentteams-rename-defaults.sh'
       - 'tests/check-installer-pre-1.2-env-compat.sh'
+      - 'tests/check-installer-qwenpaw-release-gate.sh'
       - 'tests/check-helm-agentteams.sh'
   workflow_dispatch: ~
 
@@ -23,6 +25,9 @@ jobs:
 
       - name: Check pre-v1.2 installer compatibility
         run: bash tests/check-installer-pre-1.2-env-compat.sh
+
+      - name: Check QwenPaw installer release gate
+        run: bash tests/check-installer-qwenpaw-release-gate.sh
 
       - name: Set up Helm
         uses: azure/setup-helm@v4

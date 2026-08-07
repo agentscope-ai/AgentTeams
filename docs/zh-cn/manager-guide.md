@@ -17,6 +17,10 @@ Manager 通过安装时设置的环境变量进行配置。安装脚本会生成
 | `AGENTTEAMS_LLM_API_KEY` | 是 | - | LLM API Key |
 | `AGENTTEAMS_LLM_PROVIDER` | 否 | `qwen` | LLM 提供商（`qwen` 为阿里云百炼，`openai-compat` 为 OpenAI 兼容 API） |
 | `AGENTTEAMS_DEFAULT_MODEL` | 否 | `qwen3.5-plus` | 默认模型 ID |
+| `AGENTTEAMS_MODEL_CONTEXT_WINDOW` | 否 | (模型默认) | 覆盖自定义模型的上下文窗口大小 |
+| `AGENTTEAMS_MODEL_MAX_TOKENS` | 否 | (模型默认) | 覆盖自定义模型的最大输出 Token 数 |
+| `AGENTTEAMS_MODEL_VISION` | 否 | (模型默认) | 覆盖自定义模型的多模态视觉能力（`true`/`false`）。仅模型不在内置预设表中时需要。 |
+| `AGENTTEAMS_MODEL_REASONING` | 否 | (模型默认) | 覆盖自定义模型的推理能力（`true`/`false`）。仅模型不在内置预设表中时需要。 |
 | `AGENTTEAMS_ADMIN_USER` | 否 | `admin` | 人工管理员的 Matrix 用户名 |
 | `AGENTTEAMS_ADMIN_PASSWORD` | 否 | （自动生成） | 管理员密码（最少 8 位，MinIO 要求） |
 | `AGENTTEAMS_MATRIX_DOMAIN` | 否 | `matrix-local.agentteams.io:18080` | Matrix 服务器域名（容器内使用） |
@@ -32,11 +36,11 @@ Manager 通过安装时设置的环境变量进行配置。安装脚本会生成
 | `AGENTTEAMS_DATA_DIR` | 否 | `agentteams-data` | 持久化数据的 Docker 卷名称 |
 | `AGENTTEAMS_MOUNT_SOCKET` | 否 | `1` | 挂载容器运行时 socket 以支持直接创建 Worker |
 | `AGENTTEAMS_YOLO` | 否 | - | 设为 `1` 启用 YOLO 模式（自主决策，无交互提示） |
-| `AGENTTEAMS_MANAGER_RUNTIME` | 否 | `openclaw` | Manager 引擎：**`openclaw`**（默认，`agentteams-manager` 镜像）或 **`copaw`**（`agentteams-manager-copaw` 镜像）。**Hermes** 仅支持 **Worker**，不能作为 Manager 运行时。 |
+| `AGENTTEAMS_MANAGER_RUNTIME` | 否 | `openclaw` | Manager 引擎：**`openclaw`**（默认，`agentteams-manager` 镜像）或 **`copaw`**（`agentteams-manager-qwenpaw` 镜像）。**Hermes** 仅支持 **Worker**，不能作为 Manager 运行时。 |
 
 ### QwenPaw Manager（原 CoPaw，`AGENTTEAMS_MANAGER_RUNTIME=copaw`）
 
-安装时若选择 QwenPaw Manager，controller 会拉起 **`agentteams-manager-copaw`** 镜像而非基于 OpenClaw 的 **`agentteams-manager`**。职责相同（经 Matrix 协调 Worker/Team、驱动 Higress/MCP），差异在于 Agent 引擎与配置形态（Python QwenPaw vs Node OpenClaw）。多通道与技能遵循 QwenPaw 工作区约定（容器内 **`/root/manager-workspace`**）。
+安装时若选择 QwenPaw Manager，controller 会拉起 **`agentteams-manager-qwenpaw`** 镜像而非基于 OpenClaw 的 **`agentteams-manager`**。职责相同（经 Matrix 协调 Worker/Team、驱动 Higress/MCP），差异在于 Agent 引擎与配置形态（Python QwenPaw vs Node OpenClaw）。多通道与技能遵循 QwenPaw 工作区约定（容器内 **`/root/manager-workspace`**）。
 
 ### 自定义 Manager Agent
 

@@ -1,9 +1,11 @@
 package backend
 
 import (
+	"archive/tar"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -204,6 +206,143 @@ func TestDockerCreate(t *testing.T) {
 	}
 }
 
+func TestDockerCreateProjectsAuthTokenFileBeforeStart(t *testing.T) {
+	var createPayload dockerCreatePayload
+	var projectedName string
+	var projectedToken string
+	var events []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /images/", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"Id": "sha256-worker"})
+	})
+	mux.HandleFunc("POST /containers/create", func(w http.ResponseWriter, r *http.Request) {
+		events = append(events, "create")
+		if err := json.NewDecoder(r.Body).Decode(&createPayload); err != nil {
+			t.Fatalf("decode create payload: %v", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]string{"Id": "worker-id"})
+	})
+	mux.HandleFunc("PUT /containers/{id}/archive", func(w http.ResponseWriter, r *http.Request) {
+		events = append(events, "project")
+		tr := tar.NewReader(r.Body)
+		hdr, err := tr.Next()
+		if err != nil {
+			t.Fatalf("read projected token header: %v", err)
+		}
+		projectedName = hdr.Name
+		content, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatalf("read projected token: %v", err)
+		}
+		projectedToken = string(content)
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("POST /containers/{id}/start", func(w http.ResponseWriter, _ *http.Request) {
+		events = append(events, "start")
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	b := newTestDockerBackend(t, srv.URL)
+
+	_, err := b.Create(context.Background(), CreateRequest{
+		Name:          "alice",
+		Image:         "agentteams/worker-agent:latest",
+		Env:           map[string]string{"AGENTTEAMS_WORKER_NAME": "alice"},
+		AuthToken:     "secret-token",
+		AuthTokenFile: "/var/run/secrets/agentteams/token",
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	if strings.Join(events, ",") != "create,project,start" {
+		t.Fatalf("events=%v, want create, project, start", events)
+	}
+	if projectedName != "token" || projectedToken != "secret-token" {
+		t.Fatalf("projected file=%q content=%q", projectedName, projectedToken)
+	}
+	env := strings.Join(createPayload.Env, "\n")
+	if strings.Contains(env, "AGENTTEAMS_AUTH_TOKEN=secret-token") {
+		t.Fatalf("create env contains plaintext token: %v", createPayload.Env)
+	}
+	if !strings.Contains(env, "AGENTTEAMS_AUTH_TOKEN_FILE=/var/run/secrets/agentteams/token") {
+		t.Fatalf("create env missing token file: %v", createPayload.Env)
+	}
+	if createPayload.HostConfig == nil || !containsString(createPayload.HostConfig.Binds, "agentteams-worker-alice-auth:/var/run/secrets/agentteams") {
+		t.Fatalf("auth volume bind missing: %+v", createPayload.HostConfig)
+	}
+}
+
+func TestDockerProjectAuthTokenAtomicallyReplacesRunningWorkerFile(t *testing.T) {
+	var projectedName string
+	var projectedToken string
+	var execCommand []string
+	var events []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("PUT /containers/{id}/archive", func(w http.ResponseWriter, r *http.Request) {
+		events = append(events, "project-next")
+		tr := tar.NewReader(r.Body)
+		hdr, err := tr.Next()
+		if err != nil {
+			t.Fatalf("read projected token header: %v", err)
+		}
+		projectedName = hdr.Name
+		content, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatalf("read projected token: %v", err)
+		}
+		projectedToken = string(content)
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("POST /containers/{id}/exec", func(w http.ResponseWriter, r *http.Request) {
+		events = append(events, "create-exec")
+		var payload struct {
+			Cmd []string `json:"Cmd"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode exec payload: %v", err)
+		}
+		execCommand = payload.Cmd
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]string{"Id": "exec-id"})
+	})
+	mux.HandleFunc("POST /exec/{id}/start", func(w http.ResponseWriter, _ *http.Request) {
+		events = append(events, "start-exec")
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("GET /exec/{id}/json", func(w http.ResponseWriter, _ *http.Request) {
+		events = append(events, "inspect-exec")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"Running": false, "ExitCode": 0})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	b := newTestDockerBackend(t, srv.URL)
+
+	if err := b.ProjectAuthToken(context.Background(), "alice", "rotated-token"); err != nil {
+		t.Fatalf("ProjectAuthToken failed: %v", err)
+	}
+	if projectedName != "token.next" || projectedToken != "rotated-token" {
+		t.Fatalf("projected file=%q content=%q", projectedName, projectedToken)
+	}
+	if strings.Join(events, ",") != "project-next,create-exec,start-exec,inspect-exec" {
+		t.Fatalf("events=%v", events)
+	}
+	wantCommand := "/bin/sh,-c,mv -f /var/run/secrets/agentteams/token.next /var/run/secrets/agentteams/token"
+	if strings.Join(execCommand, ",") != wantCommand {
+		t.Fatalf("exec command=%v, want %s", execCommand, wantCommand)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestDockerCreateConflict(t *testing.T) {
 	srv := mockDockerAPI(t)
 	defer srv.Close()
@@ -392,6 +531,28 @@ func TestDockerDelete(t *testing.T) {
 	}
 	if result.Status != StatusNotFound {
 		t.Errorf("expected not_found after delete, got %s", result.Status)
+	}
+}
+
+func TestDockerDeleteRemovesWorkerAuthVolume(t *testing.T) {
+	var deletedVolume string
+	mux := http.NewServeMux()
+	mux.HandleFunc("DELETE /containers/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("DELETE /volumes/{name}", func(w http.ResponseWriter, r *http.Request) {
+		deletedVolume = r.PathValue("name")
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	b := newTestDockerBackend(t, srv.URL)
+
+	if err := b.Delete(context.Background(), "alice"); err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+	if deletedVolume != "agentteams-worker-alice-auth" {
+		t.Fatalf("deleted volume=%q", deletedVolume)
 	}
 }
 

@@ -17,6 +17,10 @@ The Manager is configured via environment variables set during installation. The
 | `AGENTTEAMS_LLM_API_KEY` | Yes | - | LLM API key |
 | `AGENTTEAMS_LLM_PROVIDER` | No | `qwen` | LLM provider (`qwen` for Alibaba Cloud, `openai-compat` for OpenAI-compatible APIs) |
 | `AGENTTEAMS_DEFAULT_MODEL` | No | `qwen3.5-plus` | Default model ID |
+| `AGENTTEAMS_MODEL_CONTEXT_WINDOW` | No | (model default) | Override context window size for custom models |
+| `AGENTTEAMS_MODEL_MAX_TOKENS` | No | (model default) | Override max output tokens for custom models |
+| `AGENTTEAMS_MODEL_VISION` | No | (model default) | Override vision capability for custom models (`true`/`false`). Only needed when the model is not in the built-in presets table. |
+| `AGENTTEAMS_MODEL_REASONING` | No | (model default) | Override reasoning capability for custom models (`true`/`false`). Only needed when the model is not in the built-in presets table. |
 | `AGENTTEAMS_ADMIN_USER` | No | `admin` | Human admin Matrix username |
 | `AGENTTEAMS_ADMIN_PASSWORD` | No | (auto-generated) | Human admin password (min 8 chars, MinIO requirement) |
 | `AGENTTEAMS_MATRIX_DOMAIN` | No | `matrix-local.agentteams.io:18080` | Matrix server domain (used inside container) |
@@ -32,11 +36,11 @@ The Manager is configured via environment variables set during installation. The
 | `AGENTTEAMS_DATA_DIR` | No | `agentteams-data` | Docker volume name for persistent data |
 | `AGENTTEAMS_MOUNT_SOCKET` | No | `1` | Mount container runtime socket for direct Worker creation |
 | `AGENTTEAMS_YOLO` | No | - | Set to `1` to enable YOLO mode (autonomous decisions, no interactive prompts) |
-| `AGENTTEAMS_MANAGER_RUNTIME` | No | `openclaw` | Manager engine: **`openclaw`** (default, `agentteams-manager` image) or **`copaw`** (`agentteams-manager-copaw` image). Hermes is supported for **Workers** only, not as a Manager runtime. |
+| `AGENTTEAMS_MANAGER_RUNTIME` | No | `qwenpaw` | Manager engine: **`qwenpaw`** (default, `agentteams-manager-qwenpaw` image) or **`openclaw`** (`agentteams-manager` image). Hermes is supported for **Workers** only, not as a Manager runtime. |
 
-### QwenPaw Manager (formerly CoPaw, `AGENTTEAMS_MANAGER_RUNTIME=copaw`)
+### QwenPaw Manager (`AGENTTEAMS_MANAGER_RUNTIME=qwenpaw`)
 
-When you choose the QwenPaw Manager at install time, the controller runs the **`agentteams-manager-copaw`** image instead of the OpenClaw-based **`agentteams-manager`**. Behavior is the same role (coordinate Workers/Teams over Matrix, drive Higress/MCP flows); only the agent engine and config layout differ (Python QwenPaw vs Node OpenClaw). Multi-channel setup and skills follow the QwenPaw workspace conventions under `/root/manager-workspace`.
+When you choose the QwenPaw Manager at install time, the controller runs the **`agentteams-manager-qwenpaw`** image instead of the OpenClaw-based **`agentteams-manager`**. Behavior is the same role (coordinate Workers/Teams over Matrix, drive Higress/MCP flows); only the agent engine and config layout differ (Python QwenPaw vs Node OpenClaw). Multi-channel setup and skills follow the QwenPaw workspace conventions under `/root/manager-workspace`.
 
 ### Customizing the Manager Agent
 

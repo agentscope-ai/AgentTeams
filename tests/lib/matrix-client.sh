@@ -370,9 +370,9 @@ matrix_wait_for_reply_matching() {
 #     callbacks (copaw/src/matrix/channel.py::_sync_loop) so that historical
 #     messages aren't replayed on container restart. Any message that arrives
 #     between "join" and "next_batch persisted" is silently dropped.
-#   - Hermes: hermes-agent's matrix adapter doesn't auto-join invited rooms,
-#     so the controller pre-joins on its behalf — which means the room shows
-#     "join" before the worker container has even booted its sync loop.
+#   - Hermes: invites present before the initial sync are not reliably dispatched
+#     to its invite handler, so the controller pre-joins on its behalf — which
+#     means the room shows "join" before the worker container has even booted.
 #   - OpenClaw: smaller window but not zero — the matrix plugin still needs
 #     to register message handlers after login.
 #
@@ -444,8 +444,20 @@ matrix_send_and_wait_for_reply() {
     return 1
 }
 
-# Wait for a message containing a specific keyword from a user
-# Usage: matrix_wait_for_message_containing <token> <room_id> <from_user_prefix> <keyword> [timeout_seconds]
+# Return the latest message event ID from a user, or an empty string when absent.
+matrix_latest_message_event_id() {
+    local token="$1"
+    local room_id="$2"
+    local from_user="$3"
+
+    matrix_read_messages "${token}" "${room_id}" 5 2>/dev/null | \
+        jq -r --arg user "${from_user}" \
+        '[.chunk[] | select(.sender | startswith($user)) | select(.type == "m.room.message") | .event_id] | first // ""' 2>/dev/null
+}
+
+# Wait for a message containing a specific keyword from a user.
+# Pass baseline_event when it was captured before the action that triggers the message.
+# Usage: matrix_wait_for_message_containing <token> <room_id> <from_user_prefix> <keyword> [timeout_seconds] [nudge_token] [nudge_room] [nudge_message] [nudge_interval] [baseline_event]
 # Returns: the matching message body, or empty string on timeout
 # <keyword> is passed to grep -qi (supports regex like "done\|完成")
 matrix_wait_for_message_containing() {
@@ -458,13 +470,13 @@ matrix_wait_for_message_containing() {
     local nudge_room="${7:-}"
     local nudge_message="${8:-}"
     local nudge_interval="${9:-600}"
+    local baseline_event="${10:-}"
     local elapsed=0
 
     # Snapshot the latest known event_id to avoid returning stale messages
-    local baseline_event
-    baseline_event=$(matrix_read_messages "${token}" "${room_id}" 5 2>/dev/null | \
-        jq -r --arg user "${from_user}" \
-        '[.chunk[] | select(.sender | startswith($user)) | .event_id] | first // ""' 2>/dev/null)
+    if [ "$#" -lt 10 ]; then
+        baseline_event=$(matrix_latest_message_event_id "${token}" "${room_id}" "${from_user}")
+    fi
 
     while [ "${elapsed}" -lt "${timeout}" ]; do
         sleep 15

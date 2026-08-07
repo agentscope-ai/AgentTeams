@@ -1379,6 +1379,9 @@ completion message.
 EOF
 )
 
+LEADER_TASK_BASELINE=$(matrix_latest_message_event_id "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${LEADER_MXID}")
+WORKER_TASK_BASELINE=$(matrix_latest_message_event_id "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${WORKER_MXID}")
+
 if matrix_send_message "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${TASK_PROMPT}" >/dev/null 2>&1; then
     log_pass "Admin sent real TeamHarness task to QwenPaw leader"
 else
@@ -1389,7 +1392,8 @@ fi
 # the full Matrix identity is carried by the event routing metadata. Match the
 # assignment phrase plus unique task ID so planning narration cannot satisfy it.
 LEADER_ASSIGNMENT=$(matrix_wait_for_message_containing \
-    "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${LEADER_MXID}" "assigned task.*${TASK_ID}" 480 2>/dev/null || true)
+    "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${LEADER_MXID}" "assigned task.*${TASK_ID}" 480 \
+    "" "" "" 600 "${LEADER_TASK_BASELINE}" 2>/dev/null || true)
 if echo "${LEADER_ASSIGNMENT}" | grep -Fq "${TASK_ID}" && echo "${LEADER_ASSIGNMENT}" | grep -Fq "${TEST_WORKER}"; then
     log_pass "Leader assigned TeamHarness task to worker in Team Room"
 else
@@ -1404,7 +1408,8 @@ else
 fi
 
 WORKER_REPLY=$(matrix_wait_for_message_containing \
-    "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${WORKER_MXID}" "${DONE_LINE}" 720 2>/dev/null || true)
+    "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${WORKER_MXID}" "${DONE_LINE}" 720 \
+    "" "" "" 600 "${WORKER_TASK_BASELINE}" 2>/dev/null || true)
 if echo "${WORKER_REPLY}" | grep -q "${DONE_LINE}"; then
     log_pass "Worker completed delegated TeamHarness task in Team Room"
 else

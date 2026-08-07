@@ -455,6 +455,30 @@ container itself, not your Mac or host machine. Use a reachable host address,
 for example `http://host.docker.internal:<port>/v1` on Docker Desktop, or the
 host LAN IP on Linux/Podman when `host.docker.internal` is not available.
 
+### Preflight passes but chat still times out
+
+The installer's API connectivity test sends a very small request. A later chat
+can still time out if the real Manager/Worker container cannot reach the same
+URL, Higress routes to a different upstream, or the local model needs longer
+than the runtime timeout.
+
+For self-hosted services such as Xinference, verify from inside the controller
+or Manager container with the exact base URL and API key:
+
+```bash
+docker exec -it agentteams-controller sh
+curl -sS -m 90 "$BASE_URL/chat/completions" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"<MODEL>","messages":[{"role":"user","content":"ping"}]}'
+```
+
+If logs show `MODEL_TIMEOUT` with `timeout limit: 60 seconds`, confirm you are
+using the official current QwenPaw/CoPaw image; older or manually installed
+CoPaw packages may not include AgentTeams' longer timeout patch. If the container
+curl also times out, fix the upstream model service, LAN route, firewall, or
+provider latency before changing AgentTeams configuration.
+
 ### Multiple providers and task-specific models
 
 Configure separate Higress AI routes with prefix or regex model matching rules,

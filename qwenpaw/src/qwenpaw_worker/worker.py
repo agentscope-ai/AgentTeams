@@ -122,6 +122,7 @@ class Worker:
             remote_prefix=self.config.storage_prefix,
             shared_prefix=self.config.shared_prefix,
         )
+
         try:
             stage_started = self._log_worker_stage_begin("mirror_all")
             self.sync.mirror_all()

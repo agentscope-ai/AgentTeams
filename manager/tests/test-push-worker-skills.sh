@@ -84,12 +84,19 @@ cat > "${CASE_DIR}/bin/mc" <<'EOF'
 set -euo pipefail
 printf 'mc %s\n' "$*" >> "${TEST_EVENTS}"
 if [ "${1:-}" = stat ]; then
-    [ "${TEST_MC_STAT_SUCCESS:-0}" = 1 ]
-    exit
+    if [ "${TEST_MC_STAT_SUCCESS:-0}" = 1 ] || grep -q '^mc mirror ' "${TEST_EVENTS}"; then
+        exit 0
+    fi
+    exit 1
 fi
 exit 0
 EOF
-    chmod +x "${CASE_DIR}/bin/agt" "${CASE_DIR}/bin/mc"
+cat > "${CASE_DIR}/bin/curl" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+printf 'curl %s\n' "$*" >> "${TEST_EVENTS}"
+EOF
+    chmod +x "${CASE_DIR}/bin/agt" "${CASE_DIR}/bin/mc" "${CASE_DIR}/bin/curl"
 }
 
 run_script() {
@@ -99,6 +106,9 @@ run_script() {
     TEST_STATE="${STATE}" \
     TEST_MC_STAT_SUCCESS="${MC_STAT_SUCCESS:-0}" \
     AGENTTEAMS_STORAGE_PREFIX="test/agentteams-storage" \
+    AGENTTEAMS_MANAGER_MATRIX_TOKEN="manager-token" \
+    AGENTTEAMS_MATRIX_URL="http://matrix.example.com" \
+    AGENTTEAMS_MATRIX_DOMAIN="example.com" \
     bash "${SCRIPT}" "$@"
 }
 
@@ -112,8 +122,14 @@ fi
 assert_contains "source is mirrored into amy-ai storage" \
     "mc mirror ${CASE_DIR}/home/worker-skills/competition-skill/ test/agentteams-storage/agents/amy-ai/skills/competition-skill/ --overwrite" \
     "${EVENTS}"
+assert_contains "uploaded SKILL.md is verified before updating the CR" \
+    "mc stat test/agentteams-storage/agents/amy-ai/skills/competition-skill/SKILL.md" \
+    "${EVENTS}"
 assert_contains "Worker.spec.skills is updated" \
     "agt update worker --name amy-ai --skills competition-skill" \
+    "${EVENTS}"
+assert_contains "worker is notified to pull the installed skill" \
+    "http://matrix.example.com/_matrix/client/v3/rooms/!amy:example.com/send/m.room.message/" \
     "${EVENTS}"
 mirror_line=$(grep -n '^mc mirror ' "${EVENTS}" | head -1 | cut -d: -f1)
 update_line=$(grep -n '^agt update worker ' "${EVENTS}" | head -1 | cut -d: -f1)
@@ -124,12 +140,12 @@ else
         "mirror line before update line" "$(cat "${EVENTS}")"
 fi
 
-echo "=== TC2: reconcile mode pushes current skills without recursively updating the CR ==="
+echo "=== TC2: reconcile mode pushes one assigned skill without calling the Controller API ==="
 setup_case "${TMPDIR_ROOT}/reconcile"
 cat > "${STATE}" <<'EOF'
 {"workers":[{"name":"amy-ai","runtime":"openclaw","skills":["competition-skill"],"roomID":"!amy:example.com"}],"total":1}
 EOF
-if run_script --worker amy-ai --no-notify; then
+if run_script --worker amy-ai --skill competition-skill --no-notify; then
     pass "reconcile push exits successfully"
 else
     fail "reconcile push exits successfully" "exit 0" "non-zero"
@@ -139,6 +155,10 @@ assert_contains "reconcile mirrors the assigned skill" \
     "${EVENTS}"
 assert_not_contains "reconcile does not recursively update Worker.spec.skills" \
     "agt update worker" "${EVENTS}"
+assert_not_contains "reconcile does not call the Controller API" \
+    "agt get workers" "${EVENTS}"
+assert_not_contains "reconcile --no-notify does not send Matrix messages" \
+    "curl " "${EVENTS}"
 
 echo "=== TC3: Manager-only skills are not silently exposed to Workers ==="
 setup_case "${TMPDIR_ROOT}/manager-only"
@@ -166,7 +186,7 @@ cat > "${STATE}" <<'EOF'
 {"workers":[{"name":"amy-ai","runtime":"qwenpaw","skills":["competition-skill"],"roomID":"!amy:example.com"}],"total":1}
 EOF
 MC_STAT_SUCCESS=1
-if run_script --worker amy-ai --no-notify; then
+if run_script --worker amy-ai --skill competition-skill --no-notify; then
     pass "reconcile reuses an existing remote custom skill"
 else
     fail "reconcile reuses an existing remote custom skill" "exit 0" "non-zero"

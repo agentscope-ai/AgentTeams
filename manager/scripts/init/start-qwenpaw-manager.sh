@@ -328,5 +328,17 @@ fi
 
 log "Starting QwenPaw 2.0 Manager (app mode)..."
 
+# Keep canonical Manager skills under $HOME/skills synchronized with the
+# QwenPaw native workspace after startup. QwenPaw does not watch the OpenClaw
+# layout itself, so merely adding a SKILL.md there would otherwise require a
+# Manager restart. The sync process waits for the API, refreshes the scanner,
+# and enables newly added or updated skills.
+python3 /opt/agentteams/scripts/init/qwenpaw_manager_skill_sync.py \
+    --source-dir "${OPENCLAW_WORKSPACE}/skills" \
+    --workspace-dir "${WORKSPACE_DIR}" \
+    --state-file "${QWENPAW_WORKING_DIR}/agentteams-manager-skills.json" \
+    --interval "${AGENTTEAMS_QWENPAW_SKILL_SYNC_INTERVAL_SECONDS:-1}" &
+log "QwenPaw Manager skill watcher started (PID: $!)"
+
 # run_copaw_app.py starts qwenpaw app (tools registered via agentteams-manager-tools plugin)
 exec python3 -m copaw_worker.run_copaw_app app --host 0.0.0.0 --port 18799

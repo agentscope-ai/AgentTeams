@@ -883,3 +883,156 @@ func assertAgentResources(t *testing.T, got *v1beta1.AgentResourceRequirements, 
 		t.Fatalf("limits.memory = %q, want %q (resources=%+v)", got.Limits.Memory, memLimit, got)
 	}
 }
+
+// TestUpdateHumanPartialSpecPreservesUnsentFields pins the nil-skip semantic
+// that partial-spec PUTs rely on: a body carrying only accessibleWorkers must
+// replace that list and leave every other spec field untouched.
+func TestUpdateHumanPartialSpecPreservesUnsentFields(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	human := &v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
+		Spec: v1beta1.HumanSpec{
+			DisplayName:       "Alice",
+			Email:             "alice@example.com",
+			PermissionLevel:   2,
+			AccessibleTeams:   []string{"team-one"},
+			AccessibleWorkers: []string{"w-alpha"},
+			Note:              "keep me",
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(human).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	body := []byte(`{"accessibleWorkers":["w-alpha","w-beta"]}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/humans/alice", bytes.NewReader(body))
+	req.SetPathValue("name", "alice")
+	rec := httptest.NewRecorder()
+	handler.UpdateHuman(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var got v1beta1.Human
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "alice", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get human: %v", err)
+	}
+	if !reflect.DeepEqual(got.Spec.AccessibleWorkers, []string{"w-alpha", "w-beta"}) {
+		t.Errorf("accessibleWorkers = %v, want [w-alpha w-beta]", got.Spec.AccessibleWorkers)
+	}
+	if got.Spec.DisplayName != "Alice" {
+		t.Errorf("displayName = %q, want %q (unsent field must be preserved)", got.Spec.DisplayName, "Alice")
+	}
+	if got.Spec.Email != "alice@example.com" {
+		t.Errorf("email = %q, want %q (unsent field must be preserved)", got.Spec.Email, "alice@example.com")
+	}
+	if got.Spec.PermissionLevel != 2 {
+		t.Errorf("permissionLevel = %d, want 2 (unsent field must be preserved)", got.Spec.PermissionLevel)
+	}
+	if !reflect.DeepEqual(got.Spec.AccessibleTeams, []string{"team-one"}) {
+		t.Errorf("accessibleTeams = %v, want [team-one] (unsent field must be preserved)", got.Spec.AccessibleTeams)
+	}
+	if got.Spec.Note != "keep me" {
+		t.Errorf("note = %q, want %q (unsent field must be preserved)", got.Spec.Note, "keep me")
+	}
+}
+
+// TestUpdateHumanReplacesAccessibleTeams pins the other half of the partial
+// update surface: a body carrying only accessibleTeams replaces that list.
+func TestUpdateHumanReplacesAccessibleTeams(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	human := &v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "bob", Namespace: "default"},
+		Spec: v1beta1.HumanSpec{
+			DisplayName:       "Bob",
+			PermissionLevel:   2,
+			AccessibleTeams:   []string{"team-one"},
+			AccessibleWorkers: []string{"w-alpha"},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(human).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	body := []byte(`{"accessibleTeams":["team-one","team-two"]}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/humans/bob", bytes.NewReader(body))
+	req.SetPathValue("name", "bob")
+	rec := httptest.NewRecorder()
+	handler.UpdateHuman(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var got v1beta1.Human
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "bob", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get human: %v", err)
+	}
+	if !reflect.DeepEqual(got.Spec.AccessibleTeams, []string{"team-one", "team-two"}) {
+		t.Errorf("accessibleTeams = %v, want [team-one team-two]", got.Spec.AccessibleTeams)
+	}
+	if !reflect.DeepEqual(got.Spec.AccessibleWorkers, []string{"w-alpha"}) {
+		t.Errorf("accessibleWorkers = %v, want [w-alpha] (unsent field must be preserved)", got.Spec.AccessibleWorkers)
+	}
+}
+
+// TestHumanPutRouteIsRegistered pins the route table itself, not the handler.
+// A registered handler is useless if no PUT pattern matches: net/http's mux
+// answers 405 Method Not Allowed, which is exactly how the missing route
+// surfaced against stock v1.2.0.
+func TestHumanPutRouteIsRegistered(t *testing.T) {
+	srv := NewHTTPServer("127.0.0.1:0", ServerDeps{
+		Namespace: "default",
+		AuthMw:    authpkg.NewMiddleware(nil, nil, nil, nil, "default"),
+	})
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/humans/alice", nil)
+	_, pattern := srv.Mux.Handler(req)
+	if pattern == "" {
+		t.Fatalf("no route matches PUT /api/v1/humans/{name} — mux would answer 405")
+	}
+	if pattern != "PUT /api/v1/humans/{name}" {
+		t.Errorf("matched pattern = %q, want %q", pattern, "PUT /api/v1/humans/{name}")
+	}
+}
+
+// TestUpdateHumanClearsAccessibleSetsWithEmptyArrays pins the revoke path:
+// an explicit empty array must clear the set, as distinct from omitting the
+// field (which preserves it). Revoking the last team or worker grant sends
+// [], so a regression here would silently leave access in place.
+func TestUpdateHumanClearsAccessibleSetsWithEmptyArrays(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	human := &v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "carol", Namespace: "default"},
+		Spec: v1beta1.HumanSpec{
+			DisplayName:       "Carol",
+			PermissionLevel:   2,
+			Note:              "keep me",
+			AccessibleTeams:   []string{"team-one", "team-two"},
+			AccessibleWorkers: []string{"w-alpha", "w-beta"},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(human).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	body := []byte(`{"accessibleTeams":[],"accessibleWorkers":[]}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/humans/carol", bytes.NewReader(body))
+	req.SetPathValue("name", "carol")
+	rec := httptest.NewRecorder()
+	handler.UpdateHuman(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var got v1beta1.Human
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "carol", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get human: %v", err)
+	}
+	if len(got.Spec.AccessibleTeams) != 0 {
+		t.Errorf("accessibleTeams = %v, want empty (explicit [] must revoke)", got.Spec.AccessibleTeams)
+	}
+	if len(got.Spec.AccessibleWorkers) != 0 {
+		t.Errorf("accessibleWorkers = %v, want empty (explicit [] must revoke)", got.Spec.AccessibleWorkers)
+	}
+	if got.Spec.DisplayName != "Carol" || got.Spec.Note != "keep me" || got.Spec.PermissionLevel != 2 {
+		t.Errorf("unsent fields mutated: displayName=%q note=%q permissionLevel=%d",
+			got.Spec.DisplayName, got.Spec.Note, got.Spec.PermissionLevel)
+	}
+}

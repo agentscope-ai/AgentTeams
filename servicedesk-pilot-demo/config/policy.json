@@ -1,0 +1,161 @@
+{
+  "_comment": "风险分级与审批策略配置。这是 Demo 的核心开关：approval.mode 决定 L2 动作是走人工审批还是自动跳过。修改本文件即可切换演示形态，无需改代码。",
+  "policy_version": "v1.0",
+
+  "approval": {
+    "mode": "manual",
+    "_mode_options": {
+      "manual": "人工审批模式：L2 动作生成审批单并等待审批人决策（交互式或脚本化 mock 审批人）",
+      "auto_skip": "自动跳过模式：L2 动作按 auto_skip_rules 免审批直接执行，用于演示『配置驱动的免审批通道』",
+      "auto_approve": "自动批准模式：L2 动作仍生成审批单并留痕，但由策略引擎自动批准（保留审计证据）"
+    },
+    "interactive": false,
+    "_interactive_note": "true 时在终端等待真人输入 y/n；false 时使用 mock_approvers 的脚本化决策，保证无人值守也能跑通",
+    "timeout_seconds": 1800,
+    "on_timeout": "escalate",
+
+    "auto_skip_rules": [
+      {
+        "rule_id": "ASR-001",
+        "description": "身份双因子已核验 + 命中高成功率 Runbook + 系统可直连 → L2 免审批",
+        "conditions": {
+          "max_risk_level": "L2",
+          "require_identity_verified": true,
+          "require_runbook_hit": true,
+          "min_runbook_success_rate": 0.85,
+          "require_system_connectivity": "mcp_direct",
+          "exclude_categories": ["suspected_compromise"]
+        }
+      }
+    ],
+
+    "never_skip_categories": ["suspected_compromise"],
+    "_never_skip_note": "无论 mode 如何配置，这些类别永远不允许跳过人工闭环（对应方案 L3 强制人工）"
+  },
+
+  "risk_levels": {
+    "L0": {
+      "label": "只读/信息类",
+      "description": "状态查询、知识检索、进度通知",
+      "execution": "auto",
+      "requires_approval": false
+    },
+    "L1": {
+      "label": "低风险可回滚",
+      "description": "已有明确 Runbook、无数据变更、影响面小、可回滚",
+      "execution": "auto",
+      "requires_approval": false
+    },
+    "L2": {
+      "label": "中风险需审批",
+      "description": "权限调整、配置修改、对外通知、Legacy 系统人工执行",
+      "execution": "approval_then_execute",
+      "requires_approval": true
+    },
+    "L3": {
+      "label": "高风险强制人工",
+      "description": "账号注销、数据导出、疑似失陷、合规敏感操作",
+      "execution": "human_only",
+      "requires_approval": true,
+      "agent_can_execute": false
+    }
+  },
+
+  "risk_rules": [
+    {
+      "rule_id": "RR-001",
+      "description": "疑似账号失陷一律 L3，Agent 只生成方案不执行",
+      "match": { "category": "suspected_compromise" },
+      "risk_level": "L3"
+    },
+    {
+      "rule_id": "RR-002",
+      "description": "涉及财务/核心系统的账号异常至少 L2",
+      "match": { "department_in": ["财务部"], "or_system_in": ["legacy_erp_u8"] },
+      "min_risk_level": "L2"
+    },
+    {
+      "rule_id": "RR-003",
+      "description": "MFA 解绑属于身份凭据变更，至少 L2",
+      "match": { "category": "mfa_lost" },
+      "min_risk_level": "L2"
+    },
+    {
+      "rule_id": "RR-004",
+      "description": "无接口 Legacy 系统的任何写操作至少 L2（需人工执行 + 留证）",
+      "match": { "system_connectivity": "no_api" },
+      "min_risk_level": "L2"
+    },
+    {
+      "rule_id": "RR-005",
+      "description": "账号锁定且命中有效 Runbook、系统可直连 → L1 自动执行",
+      "match": { "category": "account_locked", "runbook_hit": true, "system_connectivity": "mcp_direct" },
+      "risk_level": "L1"
+    },
+    {
+      "rule_id": "RR-006",
+      "description": "知识库无命中（知识缺口）不得自动执行，降级为升级人工",
+      "match": { "runbook_hit": false },
+      "min_risk_level": "L2",
+      "force_escalate": true
+    },
+    {
+      "rule_id": "RR-007",
+      "description": "持有生产代码仓库/支付系统权限的账号异常升一级",
+      "match": { "holds_sensitive_permission": true },
+      "escalate_by": 1
+    }
+  ],
+
+  "execution_whitelist": {
+    "_comment": "白名单外的动作即使风险等级判定为低，也不允许自动执行",
+    "auto_allowed": [
+      "query_account_status",
+      "query_login_log",
+      "query_sso_log",
+      "list_permissions",
+      "unlock_account",
+      "issue_binding_link"
+    ],
+    "approval_required": [
+      "unbind_mfa",
+      "reset_password",
+      "force_password_reset",
+      "revoke_sessions",
+      "legacy_manual_operation"
+    ],
+    "human_only": [
+      "disable_account",
+      "revoke_tokens",
+      "delete_account",
+      "export_data"
+    ]
+  },
+
+  "identity_verification": {
+    "_comment": "身份核验规则，是 L2 能否走 auto_skip 的前置条件",
+    "required_factors": 2,
+    "available_factors": ["im_real_name", "phone_tail", "manager_confirm", "employee_id"]
+  },
+
+  "sla": {
+    "L0": 300,
+    "L1": 600,
+    "L2": 3600,
+    "L3": 1800
+  },
+
+  "dedup": {
+    "enabled": true,
+    "window_seconds": 900,
+    "_comment": "15 分钟窗口内同类别 + 同系统的报障合并为同一工单，避免重复处理"
+  },
+
+  "knowledge_reflection": {
+    "enabled": true,
+    "write_back_to_kb": true,
+    "_comment": "true 时 KnowledgeReflector 会真实写入 mock/knowledge_base.json，演示知识沉淀闭环",
+    "min_confidence_to_promote_runbook": 0.7,
+    "always_record_badcase": true
+  }
+}

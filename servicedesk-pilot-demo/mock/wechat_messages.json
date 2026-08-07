@@ -1,0 +1,135 @@
+{
+  "_comment": "Mock 企业微信群消息流。每条消息模拟员工在 IT 求助群里的原始发言，是整个 Demo 的唯一输入源。真实环境替换为企业微信/飞书/钉钉的 webhook 事件即可，Schema 保持一致。",
+  "channel": {
+    "type": "wechat_work",
+    "chat_id": "wr_it_helpdesk_001",
+    "chat_name": "XX科技-IT求助群(全员)",
+    "member_count": 186
+  },
+  "messages": [
+    {
+      "msg_id": "msg_20260807_0912_001",
+      "scenario": "S1_vpn_locked",
+      "timestamp": "2026-08-07T09:12:33+08:00",
+      "sender": {
+        "user_id": "u_10241",
+        "name": "张伟",
+        "department": "销售一部",
+        "title": "销售经理",
+        "phone_tail": "8823"
+      },
+      "msg_type": "text",
+      "content": "@IT 求助！我的VPN登不上去了，输密码提示账号已锁定，急着连内网发合同，麻烦看下 🙏",
+      "attachments": [],
+      "mentions": ["IT"]
+    },
+    {
+      "msg_id": "msg_20260807_0914_002",
+      "scenario": "S1_vpn_locked",
+      "timestamp": "2026-08-07T09:14:02+08:00",
+      "sender": {
+        "user_id": "u_10241",
+        "name": "张伟",
+        "department": "销售一部",
+        "title": "销售经理",
+        "phone_tail": "8823"
+      },
+      "msg_type": "image",
+      "content": "[图片] VPN客户端报错截图",
+      "attachments": [
+        {
+          "type": "screenshot",
+          "file_id": "img_vpn_err_8891",
+          "ocr_text": "错误代码 AUTH-429：账户因连续5次密码错误已被锁定，请联系管理员"
+        }
+      ],
+      "mentions": []
+    },
+    {
+      "msg_id": "msg_20260807_0921_003",
+      "scenario": "S2_mfa_lost",
+      "timestamp": "2026-08-07T09:21:47+08:00",
+      "sender": {
+        "user_id": "u_10388",
+        "name": "李娜",
+        "department": "市场部",
+        "title": "市场专员",
+        "phone_tail": "6512"
+      },
+      "msg_type": "text",
+      "content": "各位，我手机昨天换了新的，之前的动态口令验证器没迁移过来，现在OA和邮箱都进不去了，怎么重新绑定？",
+      "attachments": [],
+      "mentions": []
+    },
+    {
+      "msg_id": "msg_20260807_0935_004",
+      "scenario": "S3_legacy_erp",
+      "timestamp": "2026-08-07T09:35:10+08:00",
+      "sender": {
+        "user_id": "u_10077",
+        "name": "王芳",
+        "department": "财务部",
+        "title": "会计主管",
+        "phone_tail": "3301"
+      },
+      "msg_type": "text",
+      "content": "老财务ERP系统（用友U8那个）我的账号登录提示\"用户不存在\"，昨天还好好的，今天要出月度报表，很急",
+      "attachments": [],
+      "mentions": []
+    },
+    {
+      "msg_id": "msg_20260807_1002_005",
+      "scenario": "S4_suspected_compromise",
+      "timestamp": "2026-08-07T10:02:19+08:00",
+      "sender": {
+        "user_id": "u_10015",
+        "name": "陈磊",
+        "department": "研发中心",
+        "title": "技术总监",
+        "phone_tail": "9902"
+      },
+      "msg_type": "text",
+      "content": "我刚收到邮箱安全提醒，说凌晨3点有人从境外IP登录了我的企业邮箱，我人在国内根本没操作过。是不是被盗号了？我账号里有代码仓库权限",
+      "attachments": [
+        {
+          "type": "screenshot",
+          "file_id": "img_login_alert_2210",
+          "ocr_text": "异地登录提醒：2026-08-07 03:14 来自 IP 45.132.xx.xx（境外）设备 Windows/Chrome 登录成功"
+        }
+      ],
+      "mentions": []
+    },
+    {
+      "msg_id": "msg_20260807_1030_006",
+      "scenario": "S5_knowledge_gap",
+      "timestamp": "2026-08-07T10:30:55+08:00",
+      "sender": {
+        "user_id": "u_10502",
+        "name": "刘洋",
+        "department": "供应链部",
+        "title": "采购专员",
+        "phone_tail": "4417"
+      },
+      "msg_type": "text",
+      "content": "我们部门的共享文件服务器（SMB）突然所有人打开\\部门共享盘\\都提示拒绝访问、没权限，昨天还好好的，今天全组都看不了文档了，急用！",
+      "attachments": [],
+      "mentions": []
+    },
+    {
+      "msg_id": "msg_20260807_0916_007",
+      "scenario": "S1_vpn_locked",
+      "timestamp": "2026-08-07T09:16:41+08:00",
+      "sender": {
+        "user_id": "u_10256",
+        "name": "赵敏",
+        "department": "销售一部",
+        "title": "销售代表",
+        "phone_tail": "7734"
+      },
+      "msg_type": "text",
+      "content": "我这边VPN也连不上，是不是又挂了？刚才张经理也说登不上",
+      "attachments": [],
+      "mentions": []
+    }
+  ]
+}

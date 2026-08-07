@@ -1,0 +1,70 @@
+{
+  "_comment": "Mock 审批人与脚本化审批决策。当 approval.interactive = false 时，审批流按本文件的 scripted_decisions 返回结果，保证无人值守可复现；interactive = true 时改为终端真人输入。",
+  "approvers": [
+    {
+      "approver_id": "ap_it_001",
+      "name": "赵工",
+      "role": "兼职IT负责人",
+      "scope": ["L2"],
+      "im_account": "u_10003",
+      "available_hours": "09:00-21:00"
+    },
+    {
+      "approver_id": "ap_mgr_002",
+      "name": "孙总",
+      "role": "行政部负责人",
+      "scope": ["L2", "L3"],
+      "im_account": "u_10001",
+      "available_hours": "09:00-18:00"
+    },
+    {
+      "approver_id": "ap_sec_003",
+      "name": "周工",
+      "role": "安全负责人",
+      "scope": ["L3"],
+      "im_account": "u_10008",
+      "available_hours": "7x24"
+    }
+  ],
+
+  "routing": {
+    "L2": "ap_it_001",
+    "L3": "ap_sec_003",
+    "_fallback": "ap_mgr_002",
+    "_note": "审批人与执行人必须分离；requester 不能批准自己的工单"
+  },
+
+  "scripted_decisions": {
+    "_comment": "按场景预设的审批结果，用于可复现演示。key 为 scenario id。",
+    "S2_mfa_lost": {
+      "decision": "approved",
+      "approver_id": "ap_it_001",
+      "latency_seconds": 42,
+      "comment": "已在群里跟李娜本人和市场部主管确认过身份，同意解绑重新绑定"
+    },
+    "S3_legacy_erp": {
+      "decision": "approved",
+      "approver_id": "ap_it_001",
+      "latency_seconds": 65,
+      "comment": "月结已过，允许人工启用账号，务必操作前后各截图一张回填"
+    },
+    "S4_suspected_compromise": {
+      "decision": "approved",
+      "approver_id": "ap_sec_003",
+      "latency_seconds": 88,
+      "comment": "确认为高风险安全事件，批准冻结会话；但吊销 CI token 必须我本人操作，Agent 不得执行"
+    },
+    "S5_knowledge_gap": {
+      "decision": "escalated",
+      "approver_id": "ap_it_001",
+      "latency_seconds": 30,
+      "comment": "这个 SAML-807 我也没见过，转给供应商协同平台厂商支持，同时记为知识缺口"
+    },
+    "_default": {
+      "decision": "approved",
+      "approver_id": "ap_it_001",
+      "latency_seconds": 50,
+      "comment": "按标准流程批准"
+    }
+  }
+}

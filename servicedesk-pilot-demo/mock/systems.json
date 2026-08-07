@@ -1,0 +1,138 @@
+{
+  "_comment": "Mock 系统台账 + 账号状态。定义每个系统是否可直连（有 API / MCP），以及 mock 的账号实时状态。Resolution Agent 依据 connectivity 决定走『自动执行』还是『Legacy 人工执行』路径。",
+  "systems": [
+    {
+      "system_id": "vpn_gateway",
+      "name": "SangforVPN 网关",
+      "connectivity": "mcp_direct",
+      "mcp_server": "mcp://identity/vpn",
+      "supported_actions": ["query_account_status", "unlock_account", "reset_password", "revoke_sessions"],
+      "auto_executable_actions": ["query_account_status", "unlock_account"],
+      "owner": "IT-兼职(赵工)"
+    },
+    {
+      "system_id": "ad_domain",
+      "name": "Active Directory 域控",
+      "connectivity": "mcp_direct",
+      "mcp_server": "mcp://identity/ad",
+      "supported_actions": ["query_account_status", "unlock_account", "reset_password", "disable_account"],
+      "auto_executable_actions": ["query_account_status", "unlock_account"],
+      "owner": "IT-兼职(赵工)"
+    },
+    {
+      "system_id": "idaas",
+      "name": "企业身份认证平台 (IDaaS)",
+      "connectivity": "mcp_direct",
+      "mcp_server": "mcp://identity/idaas",
+      "supported_actions": ["query_account_status", "unbind_mfa", "issue_binding_link", "revoke_sessions", "force_password_reset"],
+      "auto_executable_actions": ["query_account_status"],
+      "owner": "IT-兼职(赵工)"
+    },
+    {
+      "system_id": "mail_system",
+      "name": "企业邮箱 (Exchange)",
+      "connectivity": "mcp_direct",
+      "mcp_server": "mcp://collab/mail",
+      "supported_actions": ["query_account_status", "query_login_log", "revoke_sessions", "force_password_reset"],
+      "auto_executable_actions": ["query_account_status", "query_login_log"],
+      "owner": "IT-兼职(赵工)"
+    },
+    {
+      "system_id": "oa_system",
+      "name": "泛微 OA",
+      "connectivity": "mcp_direct",
+      "mcp_server": "mcp://biz/oa",
+      "supported_actions": ["query_account_status", "unlock_account"],
+      "auto_executable_actions": ["query_account_status"],
+      "owner": "行政部"
+    },
+    {
+      "system_id": "code_repo",
+      "name": "GitLab 代码仓库",
+      "connectivity": "mcp_direct",
+      "mcp_server": "mcp://dev/gitlab",
+      "supported_actions": ["query_account_status", "revoke_tokens", "list_permissions"],
+      "auto_executable_actions": ["query_account_status", "list_permissions"],
+      "owner": "研发中心"
+    },
+    {
+      "system_id": "legacy_erp_u8",
+      "name": "用友 U8 ERP（老系统）",
+      "connectivity": "no_api",
+      "mcp_server": null,
+      "supported_actions": [],
+      "auto_executable_actions": [],
+      "manual_operator": "财务系统管理员(孙工)",
+      "owner": "财务部",
+      "note": "2013 年部署，无开放接口，仅能通过服务器端管理界面人工操作"
+    },
+    {
+      "system_id": "supplier_portal",
+      "name": "供应商协同平台（新上线）",
+      "connectivity": "mcp_direct",
+      "mcp_server": "mcp://biz/supplier",
+      "supported_actions": ["query_account_status", "query_sso_log"],
+      "auto_executable_actions": ["query_account_status", "query_sso_log"],
+      "owner": "供应链部",
+      "note": "2026-07 新上线，SAML 联邦对接尚未稳定，暂无 Runbook 沉淀"
+    }
+  ],
+  "account_states": {
+    "u_10241": {
+      "name": "张伟",
+      "vpn_gateway": {
+        "status": "locked",
+        "lock_reason": "bad_password_count",
+        "failed_attempts": 5,
+        "locked_at": "2026-08-07T09:08:12+08:00",
+        "last_success_login": "2026-08-06T18:42:03+08:00"
+      },
+      "ad_domain": { "status": "locked", "lock_reason": "bad_password_count", "failed_attempts": 5 }
+    },
+    "u_10388": {
+      "name": "李娜",
+      "idaas": {
+        "status": "active",
+        "mfa_bound": true,
+        "mfa_device": "iPhone13-A8F2(旧设备)",
+        "mfa_bound_at": "2025-09-11T10:02:00+08:00",
+        "last_mfa_success": "2026-08-05T17:20:11+08:00"
+      },
+      "mail_system": { "status": "active", "blocked_by": "mfa_challenge_failed" },
+      "oa_system": { "status": "active", "blocked_by": "mfa_challenge_failed" }
+    },
+    "u_10077": {
+      "name": "王芳",
+      "legacy_erp_u8": {
+        "status": "unknown",
+        "note": "系统无接口，Agent 无法查询实时状态，需人工登录服务器确认"
+      }
+    },
+    "u_10015": {
+      "name": "陈磊",
+      "mail_system": {
+        "status": "active",
+        "suspicious_login": true,
+        "login_log": [
+          { "time": "2026-08-07T03:14:22+08:00", "ip": "45.132.xx.xx", "geo": "境外-荷兰", "device": "Windows/Chrome", "result": "success" },
+          { "time": "2026-08-06T09:01:11+08:00", "ip": "10.20.13.44", "geo": "国内-公司内网", "device": "MacOS/Safari", "result": "success" }
+        ],
+        "active_sessions": 3
+      },
+      "idaas": { "status": "active", "mfa_bound": true },
+      "code_repo": {
+        "status": "active",
+        "permissions": ["group:backend-maintainer", "project:payment-core:write", "token:ci-deploy(未过期)"]
+      }
+    },
+    "u_10502": {
+      "name": "刘洋",
+      "supplier_portal": {
+        "status": "active",
+        "sso_log": [
+          { "time": "2026-08-07T10:28:41+08:00", "result": "fail", "error_code": "SAML-807", "detail": "Assertion signature validation failed: unknown IdP certificate thumbprint" }
+        ]
+      }
+    }
+  }
+}

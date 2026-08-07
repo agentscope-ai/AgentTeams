@@ -1,0 +1,175 @@
+{
+  "_comment": "Mock RAG 专家经验库。包含 Runbook、历史案例、Legacy 人工操作经验三类。KnowledgeReflector Skill 会在流程结束后真实写入本文件，用于演示『知识沉淀』闭环。真实环境替换为 PolarDB pgvector 等向量库。",
+  "schema_version": "1.2",
+  "last_updated": "2026-08-06T18:00:00+08:00",
+  "runbooks": [
+    {
+      "doc_id": "RB-ACC-001",
+      "title": "VPN/域账号连续密码错误锁定的解锁流程",
+      "category": "account_locked",
+      "keywords": ["VPN", "账号锁定", "密码错误", "AUTH-429", "locked", "解锁"],
+      "version": "v3.1",
+      "effective_from": "2026-01-15",
+      "expires_at": "2027-01-15",
+      "permission_tag": "public",
+      "applicable_systems": ["vpn_gateway", "ad_domain"],
+      "risk_level": "L1",
+      "success_rate": 0.94,
+      "steps": [
+        "在 AD/身份源确认账号状态为 locked 且锁定原因为 bad_password_count",
+        "核验申请人身份（工号 + 手机号后四位 + 群内实名）",
+        "执行 unlock_account，不重置密码",
+        "确认锁定计数器已清零",
+        "通知用户重新登录，并提示 5 次错误将再次锁定"
+      ],
+      "verification": "调用 VPN 探针确认账号可认证；用户在 IM 回复确认可登录",
+      "rollback": "解锁为幂等操作，如判断有误可立即重新锁定账号"
+    },
+    {
+      "doc_id": "RB-ACC-002",
+      "title": "MFA/动态口令验证器丢失后的重新绑定流程",
+      "category": "mfa_lost",
+      "keywords": ["MFA", "动态口令", "验证器", "换手机", "二次验证", "重新绑定", "OTP"],
+      "version": "v2.4",
+      "effective_from": "2026-03-01",
+      "expires_at": "2027-03-01",
+      "permission_tag": "public",
+      "applicable_systems": ["idaas", "mail_system", "oa_system"],
+      "risk_level": "L2",
+      "success_rate": 0.89,
+      "steps": [
+        "双因子人工核验：手机号后四位 + 直属主管在 IM 群内确认身份",
+        "在 IdaaS 后台解绑原 MFA 设备（该动作需审批）",
+        "生成一次性绑定链接，有效期 15 分钟",
+        "用户扫码绑定新设备",
+        "解绑动作与新绑定记录写入权限台账"
+      ],
+      "verification": "用户使用新验证器完成一次登录；IdaaS 显示新设备指纹",
+      "rollback": "15 分钟内未绑定则绑定链接自动失效，原状态不变"
+    },
+    {
+      "doc_id": "RB-ACC-003",
+      "title": "疑似账号失陷（异地/境外登录）应急处置",
+      "category": "suspected_compromise",
+      "keywords": ["盗号", "异地登录", "境外IP", "失陷", "安全事件", "compromise"],
+      "version": "v1.8",
+      "effective_from": "2026-02-20",
+      "expires_at": "2027-02-20",
+      "permission_tag": "restricted",
+      "applicable_systems": ["mail_system", "idaas", "code_repo"],
+      "risk_level": "L3",
+      "success_rate": 0.76,
+      "steps": [
+        "立即冻结会话（吊销所有活跃 token），此动作为高风险，必须人工执行",
+        "拉取近 7 天登录日志与操作审计",
+        "评估横向影响：该账号持有的系统权限清单",
+        "强制改密 + 重新绑定 MFA",
+        "如涉及代码仓库/财务系统，同步通知安全负责人并启动事件响应",
+        "24 小时内输出安全事件报告"
+      ],
+      "verification": "境外会话全部失效；新登录仅来自可信 IP 段；用户确认已改密",
+      "rollback": "冻结操作可由安全负责人解除，但需记录解除原因"
+    },
+    {
+      "doc_id": "RB-LEG-001",
+      "title": "用友U8老ERP账号异常的人工处置指引（无开放接口）",
+      "category": "legacy_account",
+      "keywords": ["用友", "U8", "ERP", "老系统", "用户不存在", "财务系统"],
+      "version": "v2.0",
+      "effective_from": "2025-11-10",
+      "expires_at": "2026-11-10",
+      "permission_tag": "internal",
+      "applicable_systems": ["legacy_erp_u8"],
+      "risk_level": "L2",
+      "success_rate": 0.81,
+      "steps": [
+        "U8 无开放 API，必须由持有系统管理员账号的人工在服务器端操作",
+        "远程桌面登录 ERP 应用服务器（跳板机 10.20.x.x）",
+        "打开『系统管理』→『用户管理』，检索该用户工号",
+        "常见根因：月结期间账套被独占锁定，或用户被误设为『停用』",
+        "若为停用状态：勾选启用并保存；若为账套锁定：等待月结任务结束或联系财务系统 Owner 解锁",
+        "操作前后各截图一张，回填到工单"
+      ],
+      "verification": "用户在 IM 确认可正常登录 U8 并进入对应账套",
+      "rollback": "启用操作可撤销，恢复为停用状态即可"
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "CASE-2026-0312",
+      "title": "销售部张某 VPN 连续输错密码被锁",
+      "category": "account_locked",
+      "keywords": ["VPN", "锁定", "销售", "密码错误"],
+      "occurred_at": "2026-03-12",
+      "resolution_path": "auto_execute",
+      "runbook_used": "RB-ACC-001",
+      "outcome": "success",
+      "duration_seconds": 96,
+      "lesson": "此类工单占账户异常的 47%，完全可自动化；建议在锁定第 3 次时主动推送自助解锁提示，减少报障"
+    },
+    {
+      "case_id": "CASE-2026-0428",
+      "title": "市场部员工换手机后 MFA 无法验证",
+      "category": "mfa_lost",
+      "keywords": ["MFA", "换手机", "验证器", "解绑"],
+      "occurred_at": "2026-04-28",
+      "resolution_path": "approval_then_execute",
+      "runbook_used": "RB-ACC-002",
+      "outcome": "success",
+      "duration_seconds": 1840,
+      "lesson": "审批耗时占总时长 85%；建议对『本人 + 主管确认』双因子齐全的场景下放审批权限到兼职 IT"
+    },
+    {
+      "case_id": "CASE-2026-0519",
+      "title": "财务王某 U8 账号被误停用",
+      "category": "legacy_account",
+      "keywords": ["U8", "ERP", "停用", "财务"],
+      "occurred_at": "2026-05-19",
+      "resolution_path": "legacy_manual",
+      "runbook_used": "RB-LEG-001",
+      "outcome": "success",
+      "duration_seconds": 3120,
+      "lesson": "根因是上月离职批量处理时工号前缀匹配错误，误停用在职人员；建议批量操作前增加二次确认清单"
+    },
+    {
+      "case_id": "CASE-2026-0603",
+      "title": "研发人员邮箱境外登录告警（确认为误报）",
+      "category": "suspected_compromise",
+      "keywords": ["境外登录", "邮箱", "误报", "出差"],
+      "occurred_at": "2026-06-03",
+      "resolution_path": "escalate_human",
+      "runbook_used": "RB-ACC-003",
+      "outcome": "false_positive",
+      "duration_seconds": 5400,
+      "lesson": "该员工当时在境外出差但未报备；建议打通差旅系统，登录风控引入出差白名单，降低误报率"
+    }
+  ],
+  "legacy_operator_notes": [
+    {
+      "note_id": "LEG-NOTE-001",
+      "system": "legacy_erp_u8",
+      "operation": "账号启用/停用",
+      "has_api": false,
+      "operator_role": "ERP系统管理员",
+      "evidence_required": ["操作前用户状态截图", "操作后用户状态截图", "操作人工号与时间"],
+      "cautions": [
+        "月结期间（每月1-5日）禁止修改用户状态，会导致账套数据锁冲突",
+        "U8 用户名区分大小写，检索时注意工号前缀 GS/CW 的差异",
+        "严禁直接改数据库 UA_User 表，必须走系统管理界面"
+      ]
+    },
+    {
+      "note_id": "LEG-NOTE-002",
+      "system": "legacy_crm_v6",
+      "operation": "权限重置",
+      "has_api": false,
+      "operator_role": "CRM运维",
+      "evidence_required": ["权限变更前后对比截图", "审批单编号"],
+      "cautions": [
+        "老 CRM 权限继承自角色模板，单点修改会在下次同步时被覆盖，必须改角色模板",
+        "变更后需手动触发一次权限同步任务"
+      ]
+    }
+  ],
+  "badcases": []
+}

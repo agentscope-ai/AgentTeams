@@ -60,15 +60,20 @@ Manager 会在回复中提供所有具体参数值。
 
 ## 通过 Manager 安装 Skill
 
-对于已有 Worker，推荐以 Manager 对话作为安装入口：
+对于已有 Worker，推荐以 Manager 对话作为安装入口。可以通过以下任一方式提供 Skill：
 
-1. 在 Manager 宿主机上，将完整的第三方 Skill 放到 `$AGENTTEAMS_WORKSPACE_DIR/worker-skills/<skill-name>/`。默认路径为 `~/agentteams-manager/worker-skills/<skill-name>/`。
-2. 确认目录中包含 `SKILL.md`，并且其中的 `name` 与 `<skill-name>` 一致。
-3. 让 Manager 为指定 Worker 安装该 Skill，并验证分配结果。
+1. 在 Manager 宿主机上，将完整的第三方 Skill 放到 `$AGENTTEAMS_WORKSPACE_DIR/worker-skills/<skill-name>/`。默认路径为 `~/agentteams-manager/worker-skills/<skill-name>/`；或者
+2. 直接向 Manager 发送 ZIP 附件，压缩包内包含一个完整的 Skill 根目录、`SKILL.md`，以及可选的 `scripts/`、`references/`。
+
+然后让 Manager 为指定 Worker 安装该 Skill，并验证分配结果。如果使用 ZIP 附件，应明确要求 Manager 在分发前安全解压并校验内容。
 
 例如：
 
 > 请将 `~/worker-skills/alert-fusion/` 中的 `alert-fusion` Skill 安装给 Worker `amy-ai`。请确认文件上传成功，并验证 Worker 的 Skill 分配已经更新。
+
+或者在发送 ZIP 附件后说：
+
+> 请将我刚发送的 ZIP 附件中的 Skill 安装给 Worker `amy-ai`。请安全解压和校验，分发完整 Skill，并验证 Worker 的 Skill 分配。
 
 Manager 会先上传并校验文件，再更新 `Worker.spec.skills`，避免 Worker 收到一个缺少实际内容的 Skill 分配。QwenPaw Worker 随后会把已分配 Skill 同步到原生工作空间，并自动刷新、启用。
 

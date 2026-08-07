@@ -237,7 +237,9 @@ For declarative YAML resource definitions, see [Declarative Resource Management]
 
 ## How to install a third-party skill on a Worker through the Manager
 
-Place the complete skill directory under the Manager workspace's `worker-skills/` directory. For example:
+You can either place the complete Skill directory under the Manager workspace's `worker-skills/` directory, or send a ZIP attachment containing one complete Skill root directly to the Manager.
+
+Workspace example:
 
 ```text
 ~/agentteams-manager/worker-skills/alert-fusion/SKILL.md
@@ -246,6 +248,10 @@ Place the complete skill directory under the Manager workspace's `worker-skills/
 Then tell the Manager:
 
 > Install the `alert-fusion` skill from `~/worker-skills/alert-fusion/` for Worker `amy-ai`. Verify the upload and confirm that `amy-ai`'s assigned skills include it.
+
+After sending a ZIP attachment, you can instead say:
+
+> Install the Skill from the ZIP attachment I just sent for Worker `amy-ai`. Safely extract and validate it, then distribute it and verify the assignment.
 
 The Manager uploads the files, verifies the remote `SKILL.md`, and updates the Worker assignment. QwenPaw Workers synchronize and enable the newly assigned skill automatically.
 

@@ -117,9 +117,11 @@ When both are set, inline fields override the corresponding files in the package
 
 `spec.skills` records the skills assigned to a Worker. A referenced skill can come from the AgentTeams Worker skill library or from a third-party skill placed under `$AGENTTEAMS_WORKSPACE_DIR/worker-skills/<skill-name>/`.
 
-For an existing Worker, the recommended workflow is to put the complete skill directory in the Manager workspace and ask the Manager to install it:
+For an existing Worker, either put the complete Skill directory in the Manager workspace or send the Manager a ZIP attachment containing one complete Skill root. Then ask the Manager to install it:
 
 > Install the `alert-fusion` skill from `~/worker-skills/alert-fusion/` for Worker `amy-ai`. Verify the upload and confirm that the Worker assignment includes the skill.
+
+For an attachment, ask the Manager to safely extract and validate the ZIP before it stages the Skill under `~/worker-skills/` and distributes it.
 
 The Manager uploads and verifies `SKILL.md` before updating `spec.skills`. QwenPaw Workers consume the resulting runtime assignment, synchronize the selected skill into their native workspace, then refresh and enable it automatically.
 

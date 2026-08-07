@@ -52,6 +52,12 @@ else
     log_fail "agent.json exists in .qwenpaw workspace"
 fi
 
+if docker exec "${_AGENT_CTR}" test -d "${_qwenpaw_wd}/workspaces/default/media" 2>/dev/null; then
+    log_pass "QwenPaw Manager media directory exists for incoming attachments"
+else
+    log_fail "QwenPaw Manager media directory exists for incoming attachments"
+fi
+
 if docker exec "${_AGENT_CTR}" test -f "${_qwenpaw_wd}/workspaces/default/SOUL.md" 2>/dev/null || \
    docker exec "${_AGENT_CTR}" test -f "/root/manager-workspace/SOUL.md" 2>/dev/null; then
     log_pass "SOUL.md accessible"

@@ -54,7 +54,11 @@ Manager 通过安装时设置的环境变量进行配置。安装脚本会生成
 
 ### 通过 Manager 为 Worker 安装 Skill
 
-要给已有 Worker 增加第三方 Skill，先将完整的 Skill 目录放入 Manager 工作空间的 Worker Skill 库。使用默认工作空间时，宿主机目录结构如下：
+有两种方式可以把 Skill 文件交给 Manager。
+
+#### 使用 Manager 工作空间
+
+将完整的 Skill 目录放入 Manager 工作空间的 Worker Skill 库。使用默认工作空间时，宿主机目录结构如下：
 
 ```text
 ~/agentteams-manager/worker-skills/alert-fusion/
@@ -68,6 +72,14 @@ Manager 通过安装时设置的环境变量进行配置。安装脚本会生成
 然后直接向 Manager 下达指令，例如：
 
 > 请为 Worker `amy-ai` 安装 `alert-fusion` Skill。Skill 文件位于 `~/worker-skills/alert-fusion/`。安装完成后请验证，并确认该 Skill 已加入 Worker 的分配列表。
+
+#### 直接向 Manager 发送 ZIP 附件
+
+将一个完整的 Skill 根目录打包为 ZIP。压缩包必须包含 `SKILL.md`，也可以包含 `scripts/` 和 `references/`。在 Manager 对话中把 ZIP 作为文件附件发送，然后继续发送指令，例如：
+
+> 请将我刚发送的 ZIP 附件中的 Skill 安装给 Worker `amy-ai`。请安全解压并校验 `SKILL.md`，将完整 Skill 放入 `~/worker-skills/`，完成分发后检查最终分配结果。
+
+内置 Matrix 对话支持文件附件。Manager 会下载附件，拒绝存在不安全路径或包含多个 Skill 根目录的压缩包，在临时目录中解压并校验 Skill 元数据，然后才将完整目录放入 Worker Skill 库并开始分发。如果 Skill 还包含脚本或参考资料，应发送完整 ZIP，而不是分别发送多个文件。
 
 Manager 会依次校验 Skill 源文件、将完整目录上传到 Worker 的隔离存储、确认远端 `SKILL.md` 存在，然后才更新 Worker 的 Skill 分配。对于 QwenPaw Worker，运行时会拉取新的分配，将 Skill 复制到原生工作空间，刷新 Skill 列表并启用该 Skill，无需手动重启 QwenPaw。
 

@@ -54,7 +54,11 @@ If your install still exposes MinIO on localhost, use the MinIO Console; otherwi
 
 ### Installing a Skill on a Worker through the Manager
 
-To add a third-party skill to an existing Worker, first put the complete skill directory in the Manager workspace's Worker skill library. With the default workspace location, the host-side layout is:
+There are two supported ways to give the Manager the Skill files.
+
+#### Use the Manager workspace
+
+Put the complete skill directory in the Manager workspace's Worker skill library. With the default workspace location, the host-side layout is:
 
 ```text
 ~/agentteams-manager/worker-skills/alert-fusion/
@@ -68,6 +72,14 @@ If `AGENTTEAMS_WORKSPACE_DIR` uses a custom location, replace `~/agentteams-mana
 Then send the Manager a direct instruction, for example:
 
 > Install the `alert-fusion` skill for Worker `amy-ai`. The skill files are in `~/worker-skills/alert-fusion/`. Verify the installation and confirm that the Worker assignment includes this skill.
+
+#### Send a ZIP attachment to the Manager
+
+Package one complete Skill root as a ZIP. The archive must contain `SKILL.md` and may also contain `scripts/` and `references/`. Send the ZIP as a file attachment in a Manager conversation, then send an instruction such as:
+
+> Install the Skill from the ZIP attachment I just sent for Worker `amy-ai`. Safely extract and validate `SKILL.md`, stage the complete Skill under `~/worker-skills/`, distribute it, and verify the final assignment.
+
+The built-in Matrix conversation supports file attachments. The Manager downloads the attachment, rejects unsafe or ambiguous archives, extracts it into a temporary directory, validates the Skill metadata, and then places the complete directory in the Worker skill library before distribution. Send a ZIP rather than separate files when the Skill includes scripts or references.
 
 The Manager validates the skill source, uploads the complete directory to the Worker's isolated storage, verifies the remote `SKILL.md`, and only then updates the Worker's assigned skills. For a QwenPaw Worker, the runtime pulls the assignment, copies the skill into its native workspace, refreshes skill discovery, and enables the skill. No manual QwenPaw restart is required.
 

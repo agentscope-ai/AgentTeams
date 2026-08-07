@@ -32,6 +32,20 @@ After pushing, the script notifies affected Workers via Matrix @mention to use `
      --worker <name> --add-skill <skill-name>
    ```
 
+### From a chat attachment
+
+When the admin sends a Worker Skill as a ZIP attachment, the attachment is available to you as a local file. Do not search the entire filesystem for it: use the local path in the incoming `FileContent`. If that path is unavailable, report that the attachment could not be read and ask the admin to resend it.
+
+Before assigning the Skill:
+
+1. Inspect the ZIP without extracting it. Reject absolute paths, `..` traversal, symlinks, or archives containing more than one Skill root.
+2. Extract into a temporary directory, never directly into `~/worker-skills/`.
+3. Locate `SKILL.md`, validate its `name`, `description`, and `assign_when` frontmatter, and require the Skill name to match `^[A-Za-z0-9][A-Za-z0-9._-]*$`.
+4. Copy the complete validated Skill root, including optional `scripts/` and `references/`, to `~/worker-skills/<skill-name>/`.
+5. Run `push-worker-skills.sh --worker <name> --add-skill <skill-name>`, then query the Worker and report the final assignment.
+
+Never install an attached archive into the Manager's own `~/skills/` directory.
+
 ## Key facts
 
 - `file-sync`, `task-progress`, `project-participation` are default skills — always included, cannot be removed

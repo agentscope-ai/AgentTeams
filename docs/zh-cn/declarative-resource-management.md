@@ -105,9 +105,11 @@ spec:
 
 `spec.skills` 记录分配给 Worker 的 Skills。被引用的 Skill 可以来自 AgentTeams 的 Worker Skill 库，也可以是放在 `$AGENTTEAMS_WORKSPACE_DIR/worker-skills/<skill-name>/` 下的第三方 Skill。
 
-对于已有 Worker，推荐先将完整 Skill 目录放入 Manager 工作空间，再通过对话让 Manager 安装：
+对于已有 Worker，可以将完整 Skill 目录放入 Manager 工作空间，也可以直接向 Manager 发送一个包含完整 Skill 根目录的 ZIP 附件，然后通过对话让 Manager 安装：
 
 > 请将 `~/worker-skills/alert-fusion/` 中的 `alert-fusion` Skill 安装给 Worker `amy-ai`。请验证上传结果，并确认 Worker 的 Skill 分配已经包含该 Skill。
+
+如果使用附件，应要求 Manager 在将 Skill 放入 `~/worker-skills/` 并分发之前，先安全解压并校验 ZIP 内容。
 
 Manager 会先上传并验证 `SKILL.md`，再更新 `spec.skills`。QwenPaw Worker 会消费生成的运行时分配，将指定 Skill 同步到原生工作空间，然后自动刷新并启用。
 

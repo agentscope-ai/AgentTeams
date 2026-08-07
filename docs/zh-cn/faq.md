@@ -236,7 +236,9 @@ agt delete human john
 
 ## 如何通过 Manager 为 Worker 安装第三方 Skill
 
-将完整 Skill 目录放在 Manager 工作空间的 `worker-skills/` 目录下，例如：
+可以将完整 Skill 目录放在 Manager 工作空间的 `worker-skills/` 目录下，也可以直接向 Manager 发送一个包含完整 Skill 根目录的 ZIP 附件。
+
+工作空间示例：
 
 ```text
 ~/agentteams-manager/worker-skills/alert-fusion/SKILL.md
@@ -245,6 +247,10 @@ agt delete human john
 然后告诉 Manager：
 
 > 请将 `~/worker-skills/alert-fusion/` 中的 `alert-fusion` Skill 安装给 Worker `amy-ai`。请验证上传结果，并确认 `amy-ai` 的 Skill 分配已经包含它。
+
+如果已经发送 ZIP 附件，也可以说：
+
+> 请将我刚发送的 ZIP 附件中的 Skill 安装给 Worker `amy-ai`。请安全解压并校验，然后完成分发并验证分配结果。
 
 Manager 会上传文件、验证远端 `SKILL.md`，然后更新 Worker 的 Skill 分配。QwenPaw Worker 会自动同步并启用新分配的 Skill。
 

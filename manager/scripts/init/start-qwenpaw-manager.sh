@@ -87,6 +87,9 @@ log "Config bridged from openclaw.json"
 # ============================================================
 WORKSPACE_DIR="${QWENPAW_WORKING_DIR}/workspaces/default"
 mkdir -p "${WORKSPACE_DIR}"
+# QwenPaw's Matrix channel writes incoming attachments directly under media/
+# and currently assumes the directory already exists.
+mkdir -p "${WORKSPACE_DIR}/media"
 
 log "Syncing prompt files (cp -u: update only if source is newer)..."
 for _f in AGENTS.md SOUL.md HEARTBEAT.md TOOLS.md; do

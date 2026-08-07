@@ -167,7 +167,7 @@ Helm **`worker.defaultImage`** 会为不同 runtime 提供不同的默认 reposi
 ### CRDs（`agentteams.io/v1beta1`）
 
 1. **Worker**：model、runtime、image、skills、MCP servers、可选 **expose** ports、**channelPolicy**、**state**（`Running` / `Sleeping` / `Stopped`）、**accessEntries**（使用 provider sidecar 时的云凭证作用域）。
-2. **Manager**：model、runtime、image、soul/agents overrides、skills、MCP servers、**config**（heartbeat interval、worker idle timeout、notify channel）、**state**、**accessEntries**。
+2. **Manager**：model、runtime、image、soul/agents overrides、MCP servers、**config**（heartbeat interval、worker idle timeout、notify channel）、**state**、**accessEntries**。
 3. **Team**：**Leader** + **Workers** specs、可选 **admin**、**peerMentions**、team **channelPolicy**；status 聚合成员就绪状态和 rooms（**team room**、**leader DM**、每个成员与 Manager 的 **RoomID**）。
 4. **Human**：display name、email、**permissionLevel**、可访问 teams/workers；status 包含 Matrix user、initial password（一次性）和 rooms。
 
@@ -207,7 +207,7 @@ Skills 是面向 Agent 的 **Markdown**（`SKILL.md`），可带可选的 `scrip
 ### Worker skills
 
 - **按 runtime 内置**：**`manager/agent/worker-agent/`**（OpenClaw）、**`copaw-worker-agent/`** 和 **`hermes-worker-agent/`** 下的模板包含一组小型 **core** skills，例如 **file-sync**、**mcporter**、**find-skills**、**project-participation**、**task-progress**，在 worker provision 时物化到每个 worker workspace。
-- **按需分发**：**`manager/agent/worker-skills/`**（例如 **github-operations**、**git-delegation**）中的包，可由 Manager 在 `spec.skills` 引用时推送给 workers。
+- **按需分发**：**`manager/agent/worker-skills/`**（例如 **github-operations**、**git-delegation**）中的包，由管理员通过对话让 Manager 安装给指定 Worker；Manager 会先校验和上传 Skill，再将其加入 `spec.skills`。
 
 ### Team Leader skills
 

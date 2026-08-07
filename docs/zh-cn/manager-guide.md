@@ -52,16 +52,32 @@ Manager 通过安装时设置的环境变量进行配置。安装脚本会生成
 
 若本地仍暴露 MinIO 端口，可使用 MinIO 控制台；否则在 **`agentteams-controller`** 内使用 `mc`，或编辑宿主机工作区中的镜像文件。
 
-### 添加技能
+### 通过 Manager 为 Worker 安装 Skill
 
-仓库内置 **16** 个 Manager 技能，源码位于 `manager/agent/skills/`，同步到桶内路径 `agents/manager/skills/<name>/SKILL.md`：**channel-management**、**file-sync-management**、**git-delegation-management**、**agentteams-find-worker**、**human-management**、**matrix-server-management**、**mcp-server-management**、**mcporter**、**model-switch**、**project-management**、**service-publishing**、**task-coordination**、**task-management**、**team-management**、**worker-management**、**worker-model-switch**。
+要给已有 Worker 增加第三方 Skill，先将完整的 Skill 目录放入 Manager 工作空间的 Worker Skill 库。使用默认工作空间时，宿主机目录结构如下：
 
-将更多自包含的 `SKILL.md` 放到 `agents/manager/skills/<skill-name>/`。Manager 运行时会自动发现该目录下的技能。
+```text
+~/agentteams-manager/worker-skills/alert-fusion/
+├── SKILL.md
+├── scripts/       # 可选
+└── references/    # 可选
+```
 
-添加新技能的步骤：
-1. 创建目录：`agents/manager/skills/<your-skill-name>/`
-2. 编写 `SKILL.md`，包含完整的 API 参考和示例
-3. Manager Agent 会自动发现它（约 300ms）
+如果通过 `AGENTTEAMS_WORKSPACE_DIR` 配置了其他工作空间，请将 `~/agentteams-manager` 替换为实际目录。在 Manager 容器中，同一个 Skill 的路径为 `~/worker-skills/alert-fusion/`。目录名应与 `SKILL.md` 中的 `name` 保持一致。
+
+然后直接向 Manager 下达指令，例如：
+
+> 请为 Worker `amy-ai` 安装 `alert-fusion` Skill。Skill 文件位于 `~/worker-skills/alert-fusion/`。安装完成后请验证，并确认该 Skill 已加入 Worker 的分配列表。
+
+Manager 会依次校验 Skill 源文件、将完整目录上传到 Worker 的隔离存储、确认远端 `SKILL.md` 存在，然后才更新 Worker 的 Skill 分配。对于 QwenPaw Worker，运行时会拉取新的分配，将 Skill 复制到原生工作空间，刷新 Skill 列表并启用该 Skill，无需手动重启 QwenPaw。
+
+可在 Manager 或 controller 容器中检查分配结果：
+
+```bash
+agt get workers amy-ai -o json | jq '.skills'
+```
+
+也可以让 Manager 通知 `amy-ai`，由 Worker 确认能够读取并使用 `alert-fusion`。如果 Manager 提示找不到源文件，请确认 `SKILL.md` 位于 `worker-skills/<skill-name>/` 下，而不是直接放在 `worker-skills/` 根目录。
 
 ### 管理 MCP Server
 

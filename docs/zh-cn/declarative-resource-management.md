@@ -85,7 +85,7 @@ spec:
 | `spec.identity` | string | 否 | — | Worker 公开身份（OpenClaw：生成 IDENTITY.md；QwenPaw：按实现合并入 SOUL.md） |
 | `spec.soul` | string | 否 | — | Worker 人格与价值观设定，用于生成 SOUL.md |
 | `spec.agents` | string | 否 | — | Agent 行为规则，用于生成 AGENTS.md |
-| `spec.skills` | []string | 否 | — | 内置 skills 列表，由 Manager 统一分发 |
+| `spec.skills` | []string | 否 | — | 分配给 Worker 的 skills，由 Manager 统一校验和分发 |
 | `spec.mcpServers` | []string | 否 | — | 内置 MCP Servers 列表，通过 Higress 网关授权 |
 | `spec.package` | string | 否 | — | 自定义包 URI：`file://`、`http(s)://`、`nacos://`，或上传后由 Controller 解析的 `packages/{name}.zip` |
 | `spec.expose` | []object | 否 | — | 通过 Higress 网关暴露的端口列表（见 [服务发布](#服务发布)） |
@@ -101,11 +101,17 @@ spec:
 
 两者可以同时使用——当同时配置时，内联字段会覆盖包中的对应文件。这允许你使用 package 作为基础模板，同时通过 YAML 定制特定部分。例如，导入一个共享的 Worker 包，但通过 `soul` 字段覆盖角色定义，赋予 Worker 独特的身份。
 
-### 内置 Skills 与自定义 Skills
+### Worker Skills
 
-`spec.skills` 指的是 AgentTeams 平台内置的能力，由 Manager 通过 `push-worker-skills.sh` 分发到 Worker 的 MinIO 空间。
+`spec.skills` 记录分配给 Worker 的 Skills。被引用的 Skill 可以来自 AgentTeams 的 Worker Skill 库，也可以是放在 `$AGENTTEAMS_WORKSPACE_DIR/worker-skills/<skill-name>/` 下的第三方 Skill。
 
-如果需要自定义 Skills，通过 `spec.package` 引入一个包含 `skills/` 目录的 ZIP 包。内置 skills 和自定义 skills 会合并推送，互不冲突。
+对于已有 Worker，推荐先将完整 Skill 目录放入 Manager 工作空间，再通过对话让 Manager 安装：
+
+> 请将 `~/worker-skills/alert-fusion/` 中的 `alert-fusion` Skill 安装给 Worker `amy-ai`。请验证上传结果，并确认 Worker 的 Skill 分配已经包含该 Skill。
+
+Manager 会先上传并验证 `SKILL.md`，再更新 `spec.skills`。QwenPaw Worker 会消费生成的运行时分配，将指定 Skill 同步到原生工作空间，然后自动刷新并启用。
+
+也可以通过 `spec.package` 引入一个包含 `skills/` 目录的 Worker 包。包内 Skills 与按名称分配的 Skills 会合并，互不冲突。
 
 ### 带自定义包的 Worker
 
@@ -303,7 +309,7 @@ spec:
 
 ## Manager
 
-**Manager** 资源描述 AgentTeams 的 Manager Agent：接收 Admin 指令并编排 Worker 与 Team。与其它资源同属 `agentteams.io/v1beta1`，由 `agentteams-controller` 调和（镜像、SOUL/AGENTS、skills、MCP 授权、可选 package、期望 `state` 等）。
+**Manager** 资源描述 AgentTeams 的 Manager Agent：接收 Admin 指令并编排 Worker 与 Team。与其它资源同属 `agentteams.io/v1beta1`，由 `agentteams-controller` 调和（镜像、SOUL/AGENTS、MCP 授权、可选 package、期望 `state` 等）。
 
 ### 基础配置
 
@@ -319,8 +325,6 @@ spec:
     # Manager — 以协调为主
   agents: |
     # 可选 AGENTS.md 覆盖
-  skills:
-    - worker-management
   mcpServers:
     - name: github
       url: https://gateway.example.com/mcp-servers/github/mcp
@@ -341,7 +345,6 @@ spec:
 | `spec.image` | string | 否 | — | 自定义 Manager 镜像；留空则用部署默认值 |
 | `spec.soul` | string | 否 | — | 自定义 SOUL.md |
 | `spec.agents` | string | 否 | — | 自定义 AGENTS.md |
-| `spec.skills` | []string | 否 | — | 启用的按需 skills |
 | `spec.mcpServers` | []string | 否 | — | 经网关授权的 MCP |
 | `spec.package` | string | 否 | — | 包 URI（`file://`、`http(s)://`、`nacos://`） |
 | `spec.state` | string | 否 | `Running` | 期望生命周期：`Running`、`Sleeping`、`Stopped` |
@@ -763,7 +766,7 @@ Reconciler 执行对应脚本（create-worker.sh / create-team.sh / create-human
 | Worker | 创建容器 + Matrix 账号 + MinIO 空间 | model 变更→重新生成配置；skills 变更→重新推送 | 停止容器 + 清理资源 |
 | Team | 校验并关联已有 Worker + 创建 Team Room | `workerMembers` 变化→更新成员关系与协作上下文 | 清理 Team Room 与协作上下文；保留 Worker CR 及运行时 |
 | Human | 注册 Matrix 账号 + 配置权限 + 发邮件 | permissionLevel 变化→重算 groupAllowFrom | 从所有 groupAllowFrom 移除→踢出 Room |
-| Manager | 部署/更新 Manager Agent | model/skills/package/state 等变更→调和 | 按后端实现回收 Manager 相关资源 |
+| Manager | 部署/更新 Manager Agent | model/package/state 等变更→调和 | 按后端实现回收 Manager 相关资源 |
 
 所有资源使用 Kubernetes finalizer 模式，确保删除前完成清理。
 

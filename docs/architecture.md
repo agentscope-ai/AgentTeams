@@ -167,7 +167,7 @@ The shipped **Manager entrypoint** (`start-manager-agent.sh`) selects:
 ### CRDs (`agentteams.io/v1beta1`)
 
 1. **Worker** — model, runtime, image, skills, MCP servers, optional **expose** ports, **channelPolicy**, **state** (`Running` / `Sleeping` / `Stopped`), **accessEntries** (cloud credential scoping when provider sidecar is used).
-2. **Manager** — model, runtime, image, soul/agents overrides, skills, MCP servers, **config** (heartbeat interval, worker idle timeout, notify channel), **state**, **accessEntries**.
+2. **Manager** — model, runtime, image, soul/agents overrides, MCP servers, **config** (heartbeat interval, worker idle timeout, notify channel), **state**, **accessEntries**.
 3. **Team** — **Leader** + **Workers** specs, optional **admin**, **peerMentions**, team **channelPolicy**; status aggregates member readiness and rooms (**team room**, **leader DM**, per-member **RoomID** with Manager).
 4. **Human** — display name, email, **permissionLevel**, accessible teams/workers; status includes Matrix user, initial password (once), rooms.
 
@@ -207,7 +207,7 @@ These are shared by **OpenClaw** and **QwenPaw** Managers (QwenPaw-specific prom
 ### Worker skills
 
 - **Per-runtime builtins** — templates under **`manager/agent/worker-agent/`** (OpenClaw), **`copaw-worker-agent/`**, and **`hermes-worker-agent/`** include a small **core** set (e.g. **file-sync**, **mcporter**, **find-skills**, **project-participation**, **task-progress**) materialized into each worker workspace on provision.
-- **On-demand / distributable** — **`manager/agent/worker-skills/`** (e.g. **github-operations**, **git-delegation**): the Manager can push selected packages to workers when `spec.skills` references them.
+- **On-demand / distributable** — **`manager/agent/worker-skills/`** (e.g. **github-operations**, **git-delegation**): after an administrator asks the Manager to install a named skill for a Worker, the Manager verifies and uploads the skill before adding it to `spec.skills`.
 
 ### Team Leader skills
 

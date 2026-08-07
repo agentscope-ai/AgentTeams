@@ -94,7 +94,7 @@ spec:
 | `spec.identity` | string | No | — | Worker public identity (OpenClaw: generates IDENTITY.md; QwenPaw: merged into SOUL.md per controller) |
 | `spec.soul` | string | No | — | Worker personality and values (generates SOUL.md) |
 | `spec.agents` | string | No | — | Agent behavior rules, used to generate AGENTS.md |
-| `spec.skills` | []string | No | — | Built-in skills, distributed by Manager |
+| `spec.skills` | []string | No | — | Assigned Worker skills, distributed and verified by Manager |
 | `spec.mcpServers` | []object | No | — | MCP servers callable via mcporter. Each item: `name` (required, map key in mcporter-servers.json), `url` (required, full gateway endpoint), `transport` (`http` default or `sse`). The controller injects `Authorization: Bearer <gatewayKey>`; gateway-side authorization is out of scope. |
 | `spec.package` | string | No | — | Custom package URI: `file://`, `http(s)://`, `nacos://`, or controller-resolved `packages/{name}.zip` after upload |
 | `spec.expose` | []object | No | — | Ports to expose via Higress gateway (see [Service Publishing](#service-publishing)) |
@@ -113,11 +113,17 @@ There are two ways to configure a Worker's identity and behavior:
 
 When both are set, inline fields override the corresponding files in the package. This allows you to use a package as a base template while customizing specific aspects via YAML — for example, importing a shared package but overriding `soul` to give the Worker a unique role definition.
 
-### Built-in Skills vs Custom Skills
+### Worker Skills
 
-`spec.skills` refers to AgentTeams platform built-in capabilities, distributed by the Manager via `push-worker-skills.sh` to the Worker's MinIO space.
+`spec.skills` records the skills assigned to a Worker. A referenced skill can come from the AgentTeams Worker skill library or from a third-party skill placed under `$AGENTTEAMS_WORKSPACE_DIR/worker-skills/<skill-name>/`.
 
-For custom skills, use `spec.package` to provide a ZIP containing a `skills/` directory. Built-in and custom skills are merged without conflict.
+For an existing Worker, the recommended workflow is to put the complete skill directory in the Manager workspace and ask the Manager to install it:
+
+> Install the `alert-fusion` skill from `~/worker-skills/alert-fusion/` for Worker `amy-ai`. Verify the upload and confirm that the Worker assignment includes the skill.
+
+The Manager uploads and verifies `SKILL.md` before updating `spec.skills`. QwenPaw Workers consume the resulting runtime assignment, synchronize the selected skill into their native workspace, then refresh and enable it automatically.
+
+You can also use `spec.package` to provide a Worker package containing a `skills/` directory. Package skills and assigned skills are merged without conflict.
 
 ### Worker with Custom Package
 
@@ -316,7 +322,7 @@ spec:
 
 ## Manager
 
-The **Manager** resource describes the AgentTeams Manager Agent — the coordinator that receives instructions from Admin and orchestrates Workers and Teams. It uses the same API group/version as other resources and is reconciled by `agentteams-controller` (update image, SOUL/AGENTS, skills, MCP authorization, optional package, and desired `state`).
+The **Manager** resource describes the AgentTeams Manager Agent — the coordinator that receives instructions from Admin and orchestrates Workers and Teams. It uses the same API group/version as other resources and is reconciled by `agentteams-controller` (update image, SOUL/AGENTS, MCP authorization, optional package, and desired `state`).
 
 ### Basic configuration
 
@@ -332,8 +338,6 @@ spec:
     # Manager — coordination focus
   agents: |
     # Optional AGENTS.md overrides
-  skills:
-    - worker-management
   mcpServers:
     - name: github
       url: https://gateway.example.com/mcp-servers/github/mcp
@@ -361,7 +365,6 @@ spec:
 | `spec.image` | string | No | — | Custom Manager image; empty uses deployment default |
 | `spec.soul` | string | No | — | Custom SOUL.md content |
 | `spec.agents` | string | No | — | Custom AGENTS.md content |
-| `spec.skills` | []string | No | — | On-demand Manager skills to enable |
 | `spec.mcpServers` | []object | No | — | MCP servers callable via mcporter. Each item: `name`, `url`, `transport` (`http`/`sse`). Gateway-side authorization is out of scope. |
 | `spec.package` | string | No | — | Package URI (`file://`, `http(s)://`, `nacos://`) |
 | `spec.state` | string | No | `Running` | Desired lifecycle: `Running`, `Sleeping`, `Stopped` |
@@ -823,7 +826,7 @@ Reconciler executes scripts (create-worker.sh / create-team.sh / create-human.sh
 | Worker | Create container + Matrix account + MinIO space | model change → regenerate config; skills change → re-push | Stop container + clean up resources |
 | Team | Validate and link existing Workers + create Team Room | `workerMembers` change → update membership and coordination context | Remove Team Room and coordination context; preserve Worker CRs and runtimes |
 | Human | Register Matrix account + configure permissions + send email | permissionLevel change → recalculate groupAllowFrom | Remove from all groupAllowFrom → kick from Rooms |
-| Manager | Provision/update Manager Agent config + runtime | model/skills/package/state → reconcile | Tear down managed Manager resources per backend |
+| Manager | Provision/update Manager Agent config + runtime | model/package/state → reconcile | Tear down managed Manager resources per backend |
 
 All resources use the Kubernetes finalizer pattern to ensure cleanup before deletion.
 

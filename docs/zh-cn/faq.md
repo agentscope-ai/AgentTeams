@@ -5,6 +5,7 @@
 - [如何查看当前 AgentTeams 版本](#如何查看当前-agentteams-版本)
 - [新架构说明（v1.1.0+）](#新架构说明v110)
 - [如何使用 agt CLI 管理资源](#如何使用-agt-cli-管理资源)
+- [如何通过 Manager 为 Worker 安装第三方 Skill](#如何通过-manager-为-worker-安装第三方-skill)
 - [如何为 Worker 配置 GitHub 凭据](#如何为-worker-配置-github-凭据)
 - [如何对接飞书/钉钉/企业微信/Discord/Telegram](#如何对接飞书钉钉企业微信discordtelegram)
 - [Windows 下执行安装脚本闪退](#windows-下执行安装脚本闪退)
@@ -230,6 +231,28 @@ agt delete human john
 > **提示：** Manager Agent 的大部分操作（创建 Worker、切换模型、分配任务）底层都调用了同一套 `agt` CLI。直接使用 CLI 适合调试、批量操作或自动化脚本场景。
 
 声明式 YAML 资源定义的完整文档请参阅 [声明式资源管理](declarative-resource-management.md)。
+
+---
+
+## 如何通过 Manager 为 Worker 安装第三方 Skill
+
+将完整 Skill 目录放在 Manager 工作空间的 `worker-skills/` 目录下，例如：
+
+```text
+~/agentteams-manager/worker-skills/alert-fusion/SKILL.md
+```
+
+然后告诉 Manager：
+
+> 请将 `~/worker-skills/alert-fusion/` 中的 `alert-fusion` Skill 安装给 Worker `amy-ai`。请验证上传结果，并确认 `amy-ai` 的 Skill 分配已经包含它。
+
+Manager 会上传文件、验证远端 `SKILL.md`，然后更新 Worker 的 Skill 分配。QwenPaw Worker 会自动同步并启用新分配的 Skill。可使用以下命令检查最终结果：
+
+```bash
+agt get workers amy-ai -o json | jq '.skills'
+```
+
+如果安装失败，请检查目录名是否与 `SKILL.md` 中的 `name` 一致，并确认文件位于 `worker-skills/<skill-name>/` 下。完整流程参见 [通过 Manager 为 Worker 安装 Skill](manager-guide.md#通过-manager-为-worker-安装-skill)。
 
 ---
 

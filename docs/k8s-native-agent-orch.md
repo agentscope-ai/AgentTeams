@@ -170,7 +170,6 @@ spec:
   runtime: openclaw                   # openclaw | qwenpaw
   # soul: | …                         # optional SOUL.md override
   # agents: | …                       # optional AGENTS.md override
-  skills: [worker-management]         # on-demand Manager skills
   mcpServers:
     - name: github
       url: https://gateway.example.com/mcp-servers/github/mcp

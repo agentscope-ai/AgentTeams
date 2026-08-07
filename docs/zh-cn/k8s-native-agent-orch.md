@@ -172,7 +172,6 @@ spec:
   runtime: openclaw                   # openclaw | copaw
   # soul: | …                         # 可选：覆盖 SOUL.md
   # agents: | …                       # 可选：覆盖 AGENTS.md
-  skills: [worker-management]         # 按需启用的 Manager skills
   mcpServers:
     - name: github
       url: https://gateway.example.com/mcp-servers/github/mcp

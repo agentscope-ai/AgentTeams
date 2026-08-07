@@ -52,16 +52,32 @@ The Manager Agent's behavior is defined by three files stored in the **`agenttea
 
 If your install still exposes MinIO on localhost, use the MinIO Console; otherwise use `mc` from inside **`agentteams-controller`** or edit the mirrored files under the workspace directory on the host.
 
-### Adding Skills
+### Installing a Skill on a Worker through the Manager
 
-The repo ships **16** built-in Manager skills under `manager/agent/skills/` (synced into the bucket as `agents/manager/skills/<name>/SKILL.md`): **channel-management**, **file-sync-management**, **git-delegation-management**, **agentteams-find-worker**, **human-management**, **matrix-server-management**, **mcp-server-management**, **mcporter**, **model-switch**, **project-management**, **service-publishing**, **task-coordination**, **task-management**, **team-management**, **worker-management**, **worker-model-switch**.
+To add a third-party skill to an existing Worker, first put the complete skill directory in the Manager workspace's Worker skill library. With the default workspace location, the host-side layout is:
 
-Place additional self-contained `SKILL.md` files under `agents/manager/skills/<skill-name>/`. The Manager runtime auto-discovers skills from that directory.
+```text
+~/agentteams-manager/worker-skills/alert-fusion/
+├── SKILL.md
+├── scripts/       # optional
+└── references/    # optional
+```
 
-To add a new skill:
-1. Create directory: `agents/manager/skills/<your-skill-name>/`
-2. Write `SKILL.md` with complete API reference and examples
-3. The Manager Agent will discover it automatically (~300ms)
+If `AGENTTEAMS_WORKSPACE_DIR` uses a custom location, replace `~/agentteams-manager` with that directory. Inside the Manager container, the same skill is available as `~/worker-skills/alert-fusion/`. The directory name and the `name` in `SKILL.md` should match.
+
+Then send the Manager a direct instruction, for example:
+
+> Install the `alert-fusion` skill for Worker `amy-ai`. The skill files are in `~/worker-skills/alert-fusion/`. Verify the installation and confirm that the Worker assignment includes this skill.
+
+The Manager validates the skill source, uploads the complete directory to the Worker's isolated storage, verifies the remote `SKILL.md`, and only then updates the Worker's assigned skills. For a QwenPaw Worker, the runtime pulls the assignment, copies the skill into its native workspace, refreshes skill discovery, and enables the skill. No manual QwenPaw restart is required.
+
+Verify the assignment from the Manager or controller container:
+
+```bash
+agt get workers amy-ai -o json | jq '.skills'
+```
+
+You can also ask the Manager to have `amy-ai` confirm that it can read and use `alert-fusion`. If the Manager reports that the source is missing, check that `SKILL.md` is under `worker-skills/<skill-name>/`, not directly under `worker-skills/`.
 
 ### Managing MCP Servers
 

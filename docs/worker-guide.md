@@ -58,6 +58,28 @@ docker run -d --name agentteams-worker-alice \
 
 The Manager will provide all the specific values in its reply.
 
+## Installing Skills through the Manager
+
+For an existing Worker, use the Manager conversation as the supported installation entry point:
+
+1. Put the complete third-party skill under `$AGENTTEAMS_WORKSPACE_DIR/worker-skills/<skill-name>/` on the Manager host. The default is `~/agentteams-manager/worker-skills/<skill-name>/`.
+2. Make sure the directory contains `SKILL.md` and that its `name` matches `<skill-name>`.
+3. Ask the Manager to install that skill for a named Worker and verify the assignment.
+
+For example:
+
+> Install the `alert-fusion` skill from `~/worker-skills/alert-fusion/` for Worker `amy-ai`. Verify that the files were uploaded and the Worker assignment was updated.
+
+The Manager uploads and verifies the files before updating `Worker.spec.skills`. This ordering prevents a Worker from receiving an assignment that points to missing content. QwenPaw Workers then synchronize the assigned skill into their native workspace and refresh and enable it automatically.
+
+Check the assignment with:
+
+```bash
+agt get workers amy-ai -o json | jq '.skills'
+```
+
+Copying files into Worker storage without updating the assignment is not a complete installation. The skill name must also appear in `Worker.spec.skills` so managed runtimes know which skills to load.
+
 ## Troubleshooting
 
 ### Worker won't start

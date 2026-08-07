@@ -5,6 +5,7 @@
 - [How to check the current AgentTeams version](#how-to-check-the-current-agentteams-version)
 - [Understanding the new architecture (v1.1.0+)](#understanding-the-new-architecture-v110)
 - [How to use the agt CLI to manage resources](#how-to-use-the-agt-cli-to-manage-resources)
+- [How to install a third-party skill on a Worker through the Manager](#how-to-install-a-third-party-skill-on-a-worker-through-the-manager)
 - [How to configure GitHub credentials for Workers](#how-to-configure-github-credentials-for-workers)
 - [How to connect Feishu/DingTalk/WeCom/Discord/Telegram](#how-to-connect-feishudingtalkwecomdiscordtelegram)
 - [Installation script exits immediately on Windows](#installation-script-exits-immediately-on-windows)
@@ -231,6 +232,28 @@ agt delete human john
 > **Tip:** Most Manager Agent operations (creating workers, switching models, assigning tasks) ultimately call the same `agt` CLI under the hood. Using the CLI directly is useful for debugging, bulk operations, or automation scripts.
 
 For declarative YAML resource definitions, see [Declarative Resource Management](declarative-resource-management.md).
+
+---
+
+## How to install a third-party skill on a Worker through the Manager
+
+Place the complete skill directory under the Manager workspace's `worker-skills/` directory. For example:
+
+```text
+~/agentteams-manager/worker-skills/alert-fusion/SKILL.md
+```
+
+Then tell the Manager:
+
+> Install the `alert-fusion` skill from `~/worker-skills/alert-fusion/` for Worker `amy-ai`. Verify the upload and confirm that `amy-ai`'s assigned skills include it.
+
+The Manager uploads the files, verifies the remote `SKILL.md`, and updates the Worker assignment. QwenPaw Workers synchronize and enable the newly assigned skill automatically. Check the final assignment with:
+
+```bash
+agt get workers amy-ai -o json | jq '.skills'
+```
+
+If installation fails, check that the folder name matches the `name` in `SKILL.md` and that the file is located under `worker-skills/<skill-name>/`. See [Installing a Skill on a Worker through the Manager](manager-guide.md#installing-a-skill-on-a-worker-through-the-manager) for the full workflow.
 
 ---
 

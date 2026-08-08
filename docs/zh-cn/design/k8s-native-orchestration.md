@@ -87,7 +87,7 @@ metadata:
   name: alice
 spec:
   model: claude-sonnet-4-6           # 必填：LLM 模型
-  runtime: copaw                     # openclaw | copaw | hermes（默认随安装/CR）
+  runtime: copaw                     # openclaw | copaw | hermes（Chart 默认镜像映射）
   skills: [github-operations]        # 平台内置技能
   mcpServers:                        # 通过 mcporter 调用的 MCP Server
     - name: github
@@ -169,7 +169,7 @@ metadata:
   name: default                       # 嵌入式部署常见主实例名
 spec:
   model: claude-sonnet-4-6            # 必填
-  runtime: openclaw                   # openclaw | copaw
+  runtime: openclaw                   # openclaw | qwenpaw
   # soul: | …                         # 可选：覆盖 SOUL.md
   # agents: | …                       # 可选：覆盖 AGENTS.md
   mcpServers:

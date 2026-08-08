@@ -21,7 +21,7 @@
 - [How to switch a Worker's model](#how-to-switch-a-workers-model)
 - [How to configure OpenRouter or another model provider with slashes in model names](#how-to-configure-openrouter-or-another-model-provider-with-slashes-in-model-names)
 - [How to switch a Worker's runtime](#how-to-switch-a-workers-runtime)
-- [Why does QwenPaw still use `copaw` in some image names](#why-does-qwenpaw-still-use-copaw-in-some-image-names)
+- [Why do some QwenPaw configurations and image names still use `copaw`](#why-do-some-qwenpaw-configurations-and-image-names-still-use-copaw)
 - [Can I connect my own agent implementation as a Worker](#can-i-connect-my-own-agent-implementation-as-a-worker)
 - [Can AgentTeams connect to an existing Higress instance](#can-agentteams-connect-to-an-existing-higress-instance)
 - [How to use the Worker Template Marketplace](#how-to-use-the-worker-template-marketplace)
@@ -265,7 +265,7 @@ For operator-side inspection or troubleshooting, use the equivalent CLI query:
 agt get workers amy-ai -o json | jq '.skills'
 ```
 
-If installation fails, check that the folder name matches the `name` in `SKILL.md` and that the file is located under `worker-skills/<skill-name>/`. See [Installing a Skill on a Worker through the Manager](manager-guide.md#installing-a-skill-on-a-worker-through-the-manager) for the full workflow.
+If installation fails, check that the folder name matches the `name` in `SKILL.md` and that the file is located under `worker-skills/<skill-name>/`. See [Installing a Skill on a Worker through the Manager](../manager-guide.md#installing-a-skill-on-a-worker-through-the-manager) for the full workflow.
 
 ---
 
@@ -676,15 +676,17 @@ Manager will use the worker-management skill to trigger a container recreation. 
 
 ---
 
-## Why does QwenPaw still use `copaw` in some image names
+## Why do some QwenPaw configurations and image names still use `copaw`
 
-`QwenPaw` is the user-facing name of the Python runtime that was previously
-called `CoPaw`. The runtime value has been unified to `qwenpaw` — the
-installer and controller default to `qwenpaw`, and `copaw` is auto-migrated
-to `qwenpaw` on upgrade. The Worker image name `agentteams-copaw-worker`
-retains the legacy `copaw` prefix for backward compatibility with existing
-installations and image pull paths; the Manager image was renamed to
-`agentteams-manager-qwenpaw`. Both images run QwenPaw 2.0.
+`QwenPaw` is the current Python runtime implementation. Both `qwenpaw` and the
+legacy compatibility value `copaw` are still accepted. The local installer
+currently writes `copaw`, while the Helm Manager configuration uses `qwenpaw`;
+both Manager values start the QwenPaw-based Python implementation.
+
+For Workers, keep the runtime and image paired instead of rewriting the value
+alone: existing deployments may map `copaw` to `agentteams-copaw-worker`, while
+the newer QwenPaw path uses `agentteams-qwenpaw-worker`. The QwenPaw Manager
+image is `agentteams-manager-qwenpaw`.
 
 ---
 

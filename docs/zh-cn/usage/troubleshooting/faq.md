@@ -21,7 +21,7 @@
 - [如何切换 Worker 的模型](#如何切换-worker-的模型)
 - [如何配置 OpenRouter 或模型名带斜杠的供应商](#如何配置-openrouter-或模型名带斜杠的供应商)
 - [如何切换 Worker 的运行时](#如何切换-worker-的运行时)
-- [为什么 QwenPaw 仍然使用 `copaw` 作为 runtime 值或镜像名](#为什么-qwenpaw-仍然使用-copaw-作为-runtime-值或镜像名)
+- [为什么 QwenPaw 的部分配置值和镜像名仍使用 `copaw`](#为什么-qwenpaw-的部分配置值和镜像名仍使用-copaw)
 - [如何接入自己实现的 agent 作为 Worker](#如何接入自己实现的-agent-作为-worker)
 - [AgentTeams 可以连接已有的 Higress 实例吗](#agentteams-可以连接已有的-higress-实例吗)
 - [如何使用 Worker 模板市场](#如何使用-worker-模板市场)
@@ -264,7 +264,7 @@ Manager 会上传文件、验证远端 `SKILL.md`，然后更新 Worker 的 Skil
 agt get workers amy-ai -o json | jq '.skills'
 ```
 
-如果安装失败，请检查目录名是否与 `SKILL.md` 中的 `name` 一致，并确认文件位于 `worker-skills/<skill-name>/` 下。完整流程参见 [通过 Manager 为 Worker 安装 Skill](manager-guide.md#通过-manager-为-worker-安装-skill)。
+如果安装失败，请检查目录名是否与 `SKILL.md` 中的 `name` 一致，并确认文件位于 `worker-skills/<skill-name>/` 下。完整流程参见 [通过 Manager 为 Worker 安装 Skill](../manager-guide.md#通过-manager-为-worker-安装-skill)。
 
 ---
 
@@ -650,21 +650,23 @@ Manager 会通过 worker-management 技能触发容器重建。Worker 的 Matrix
 
 ---
 
-## 为什么 QwenPaw 仍然使用 `copaw` 作为 runtime 值或镜像名
+## 为什么 QwenPaw 的部分配置值和镜像名仍使用 `copaw`
 
-`QwenPaw` 是原 `CoPaw` 运行时的对外展示名称。为了兼容已有安装，部分内部名称会继续保留
-`copaw`，包括 Worker CRD 的 runtime 值、`agentteams-copaw-worker` 这类镜像名，以及
-`AGENTTEAMS_MANAGER_RUNTIME=copaw` 这类环境变量值。
+`QwenPaw` 是当前的 Python 运行时实现。系统仍同时接受 `qwenpaw` 和旧版兼容值
+`copaw`：本地安装器目前写入 `copaw`，Helm 的 Manager 配置使用 `qwenpaw`；对于
+Manager，这两个值都会启动基于 QwenPaw 的 Python 实现。
 
-除非 chart、controller 和镜像已经明确支持新的值，否则不要把这些内部值改成
-`qwenpaw`。保留 `copaw` 是为了避免破坏已有配置、Helm values、镜像拉取和升级路径。
+对于 Worker，不要只改 runtime 值，应保持 runtime 与镜像配套：已有部署可能把
+`copaw` 映射到 `agentteams-copaw-worker`，新的 QwenPaw 路径则使用
+`agentteams-qwenpaw-worker`。QwenPaw Manager 镜像为 `agentteams-manager-qwenpaw`。
 
 ---
 
 ## 如何接入自己实现的 agent 作为 Worker
 
-不能直接通过新增任意 `spec.runtime` 值来接入。当前 Worker CRD 只接受
-`openclaw`、`copaw` 或 `hermes` 三种运行时。
+不能直接通过新增任意 `spec.runtime` 值来接入。当前 Worker CRD 接受
+`openclaw`、`qwenpaw`、`copaw`（旧版兼容值，自动迁移到 `qwenpaw`）、`hermes`
+或 `openhuman`。
 
 大多数自定义 Worker 场景应通过 Worker package 或自定义镜像完成：把角色提示词、
 skills、依赖和可选 Dockerfile 打包，或在保留受支持 runtime 的前提下设置自定义

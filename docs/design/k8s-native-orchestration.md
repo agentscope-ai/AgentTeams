@@ -85,7 +85,7 @@ metadata:
   name: alice
 spec:
   model: claude-sonnet-4-6           # required: LLM model
-  runtime: qwenpaw                     # openclaw | qwenpaw | hermes (default from install / CR)
+  runtime: copaw                     # openclaw | copaw | hermes (defaults with chart image mapping)
   skills: [github-operations]        # platform built-in skills
   mcpServers:                        # MCP servers callable via mcporter
     - name: github

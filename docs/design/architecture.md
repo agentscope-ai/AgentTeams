@@ -235,5 +235,4 @@ The older compatibility aliases `team-project-management`, `team-task-coordinati
 ## Related reading
 
 - **[`docs/quickstart.md`](../quickstart.md)** — end-to-end setup.
-- **[`design/design.md`](../../design/design.md)** — product design (Chinese).
 - **[`AGENTS.md`](../../AGENTS.md)** — repository map for developers and agents.

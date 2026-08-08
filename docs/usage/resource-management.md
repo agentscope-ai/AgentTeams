@@ -367,7 +367,7 @@ spec:
 |-------|------|----------|---------|-------------|
 | `metadata.name` | string | Yes | — | Manager resource name (often `default` for the primary instance) |
 | `spec.model` | string | Yes | — | LLM model ID |
-| `spec.runtime` | string | No | `openclaw` | `openclaw` or `qwenpaw` (Hermes is **not** a supported Manager runtime) |
+| `spec.runtime` | string | No | install/backend default | **OpenClaw** (`openclaw`) or **CoPaw/QwenPaw** (`qwenpaw`; `copaw` is a legacy compatibility alias). Hermes is **not** a supported Manager runtime. |
 | `spec.image` | string | No | — | Custom Manager image; empty uses deployment default |
 | `spec.soul` | string | No | — | Custom SOUL.md content |
 | `spec.agents` | string | No | — | Custom AGENTS.md content |

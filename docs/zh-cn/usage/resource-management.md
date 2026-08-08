@@ -350,6 +350,13 @@ spec:
     heartbeatInterval: 15m
     workerIdleTimeout: 720m
     notifyChannel: admin-dm
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "3"
+      memory: 5Gi
   # state: Running   # 可选：Running | Sleeping | Stopped
 ```
 
@@ -359,13 +366,14 @@ spec:
 |------|------|------|--------|------|
 | `metadata.name` | string | 是 | — | Manager 资源名（主实例常为 `default`） |
 | `spec.model` | string | 是 | — | LLM 模型 ID |
-| `spec.runtime` | string | 否 | `openclaw` | `openclaw` 或 `copaw`（**不支持**将 Hermes 作为 Manager 运行时） |
+| `spec.runtime` | string | 否 | 安装或后端默认值 | **OpenClaw**（`openclaw`）或 **CoPaw/QwenPaw**（`qwenpaw`；`copaw` 是旧版兼容别名）。**不支持**将 Hermes 作为 Manager 运行时。 |
 | `spec.image` | string | 否 | — | 自定义 Manager 镜像；留空则用部署默认值 |
 | `spec.soul` | string | 否 | — | 自定义 SOUL.md |
 | `spec.agents` | string | 否 | — | 自定义 AGENTS.md |
 | `spec.mcpServers` | []object | 否 | — | mcporter 可调用的 MCP Server。每项包含 `name`、`url` 和 `transport`（`http`/`sse`）；网关侧授权不在本字段范围内。 |
 | `spec.package` | string | 否 | — | 包 URI（`file://`、`http(s)://`、`nacos://`） |
 | `spec.state` | string | 否 | `Running` | 期望生命周期：`Running`、`Sleeping`、`Stopped` |
+| `spec.resources` | object | 否 | 安装或后端默认值 | Manager Pod 的 CPU/内存 request 和 limit，字段为 `requests.cpu`、`requests.memory`、`limits.cpu`、`limits.memory`。 |
 | `spec.config.heartbeatInterval` | string | 否 | — | 心跳检查间隔（如 `15m`） |
 | `spec.config.workerIdleTimeout` | string | 否 | — | 空闲自动休眠前等待时间（如 `720m`） |
 | `spec.config.notifyChannel` | string | 否 | — | 通知渠道（如 `admin-dm`） |

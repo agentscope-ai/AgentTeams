@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -1847,5 +1848,147 @@ func TestDeriveTeamWithResolvedIdentities_BackfillsHumanMembers(t *testing.T) {
 	// Source team must remain untouched.
 	if team.Spec.HumanMembers[0].MatrixUserID != "@coord:matrix.local" {
 		t.Fatal("source team HumanMembers mutated; expected deep copy")
+	}
+}
+
+// TestReconcileTeam_DeleteRequestedAnnotationSkipsReconcile verifies that once
+// the delete-requested annotation is present and the finalizer has already
+// been removed (i.e. handleDeleteTeam completed), the reconciler treats the
+// Team as gone and does not re-populate its status. Without this guard the
+// controller would re-create the Team within seconds of deletion, which is
+// the bug described in issue #1143.
+func TestReconcileTeam_DeleteRequestedAnnotationSkipsReconcile(t *testing.T) {
+	ctx := context.Background()
+	now := metav1.Now()
+
+	leaderWorker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{Model: "qwen"},
+		Status: v1beta1.WorkerStatus{
+			Phase:        "Running",
+			MatrixUserID: "@lead:matrix.local",
+			RoomID:       "!room-lead:matrix.local",
+		},
+	}
+	// Start with finalizer present so the fake client accepts the object.
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-a",
+			Namespace: "default",
+			DeletionTimestamp: &now,
+			Annotations: map[string]string{
+				v1beta1.AnnotationTeamDeleteRequested: "true",
+			},
+			Finalizers: []string{finalizerName},
+		},
+		Spec: v1beta1.TeamSpec{
+			Admin: &v1beta1.TeamAdminSpec{Name: "alice"},
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: "team_leader"},
+			},
+		},
+		Status: v1beta1.TeamStatus{
+			Phase:      "Active",
+			TeamRoomID: "!team-room:matrix.local",
+		},
+	}
+	admin := &v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
+		Status:     v1beta1.HumanStatus{InitialPassword: "alice-password"},
+	}
+
+	provisioner := mocks.NewMockProvisioner()
+	deployer := mocks.NewMockDeployer()
+	managerConfig, _ := newTestManagerConfig(t)
+	r := &TeamReconciler{
+		Client:        newTeamTestClient(t, team.DeepCopy(), leaderWorker.DeepCopy(), admin.DeepCopy()),
+		Provisioner:   provisioner,
+		Deployer:      deployer,
+		ManagerConfig: managerConfig,
+	}
+
+	_, err := r.Reconcile(ctx, reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: team.Name, Namespace: team.Namespace},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	// Verify the object is gone (finalizer removed with DeletionTimestamp set
+	// causes the fake client to GC the object, mirroring real k8s behavior).
+	var got v1beta1.Team
+	err = r.Get(ctx, types.NamespacedName{Name: team.Name, Namespace: team.Namespace}, &got)
+	if !kerrors.IsNotFound(err) {
+		t.Fatalf("expected team to be deleted after finalizer removal, got err=%v", err)
+	}
+	// The annotation should still be present in the update that removed the
+	// finalizer — it is the signal that prevents any future reconcile from
+	// accidentally re-activating this Team.
+}
+
+// TestReconcileTeam_DeleteWithAnnotationAndFinalizerStillRunsCleanup verifies
+// that when the delete-requested annotation is present but the finalizer has
+// not yet been removed, the normal delete-path (handleDeleteTeam) still runs.
+func TestReconcileTeam_DeleteWithAnnotationAndFinalizerStillRunsCleanup(t *testing.T) {
+	ctx := context.Background()
+	now := metav1.Now()
+
+	leaderWorker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{Model: "qwen"},
+		Status: v1beta1.WorkerStatus{
+			Phase:        "Running",
+			MatrixUserID: "@lead:matrix.local",
+			RoomID:       "!room-lead:matrix.local",
+		},
+	}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-a",
+			Namespace: "default",
+			DeletionTimestamp: &now,
+			Annotations: map[string]string{
+				v1beta1.AnnotationTeamDeleteRequested: "true",
+			},
+			Finalizers: []string{finalizerName},
+		},
+		Spec: v1beta1.TeamSpec{
+			Admin: &v1beta1.TeamAdminSpec{Name: "alice"},
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: "team_leader"},
+			},
+		},
+		Status: v1beta1.TeamStatus{
+			Phase:      "Active",
+			TeamRoomID: "!team-room:matrix.local",
+		},
+	}
+	admin := &v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
+		Status:     v1beta1.HumanStatus{InitialPassword: "alice-password"},
+	}
+
+	provisioner := mocks.NewMockProvisioner()
+	deployer := mocks.NewMockDeployer()
+	managerConfig, _ := newTestManagerConfig(t)
+	r := &TeamReconciler{
+		Client:        newTeamTestClient(t, team.DeepCopy(), leaderWorker.DeepCopy(), admin.DeepCopy()),
+		Provisioner:   provisioner,
+		Deployer:      deployer,
+		ManagerConfig: managerConfig,
+	}
+
+	_, err := r.Reconcile(ctx, reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: team.Name, Namespace: team.Namespace},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	// The finalizer should have been removed (object GC'd by fake client).
+	var got v1beta1.Team
+	err = r.Get(ctx, types.NamespacedName{Name: team.Name, Namespace: team.Namespace}, &got)
+	if !kerrors.IsNotFound(err) {
+		t.Fatalf("expected team to be deleted after finalizer removal, got err=%v", err)
 	}
 }

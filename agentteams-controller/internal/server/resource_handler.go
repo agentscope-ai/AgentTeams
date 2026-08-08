@@ -446,6 +446,18 @@ func (h *ResourceHandler) DeleteTeam(w http.ResponseWriter, r *http.Request) {
 	team := &v1beta1.Team{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: h.namespace},
 	}
+	if err := h.client.Get(r.Context(), client.ObjectKeyFromObject(team), team); err != nil {
+		writeK8sError(w, "get team", err)
+		return
+	}
+	if team.Annotations == nil {
+		team.Annotations = make(map[string]string)
+	}
+	team.Annotations[v1beta1.AnnotationTeamDeleteRequested] = "true"
+	if err := h.client.Update(r.Context(), team); err != nil {
+		writeK8sError(w, "update team annotation", err)
+		return
+	}
 	if err := h.client.Delete(r.Context(), team); err != nil {
 		writeK8sError(w, "delete team", err)
 		return

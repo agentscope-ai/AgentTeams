@@ -20,6 +20,13 @@ if matches="$(git grep -nIi "${legacy_brand}" -- . "${archive_paths[@]}" 2>/dev/
         case "${match}" in
             install/agentteams-dashboard-tests.sh:*)
                 ;;
+            agentteams-controller/internal/store/kine.go:* | \
+            agentteams-controller/internal/store/kine_migration_test.go:*)
+                # Kine DB migration must reference the retired database
+                # filename to detect and migrate pre-v1.2 data. README
+                # promises in-place upgrades preserve all data; without this
+                # the embedded controller silently loses its full state.
+                ;;
             install/agentteams-install.sh:*"${legacy_brand}-controller"* | \
             install/agentteams-install.sh:*"/var/run/${legacy_brand}/cli-token"* | \
             install/agentteams-install.sh:*"older ${legacy_brand_title} images"* | \

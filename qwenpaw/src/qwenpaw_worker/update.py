@@ -1540,6 +1540,12 @@ class RuntimeUpdater:
         )
         if not api_key and api_key_env:
             api_key = _string(os.getenv(api_key_env))
+        input_modalities = model.get("input") or []
+        if isinstance(input_modalities, str):
+            input_modalities = [input_modalities]
+        supports_image = "image" in input_modalities
+        supports_video = "video" in input_modalities
+        supports_multimodal = bool(supports_image or supports_video)
         self.api_client.configure_active_model(
             provider_id,
             model_name,
@@ -1547,6 +1553,10 @@ class RuntimeUpdater:
             api_key=api_key,
             provider_name=_string(model.get("providerName") or model.get("provider_name") or provider_id),
             chat_model=_string(model.get("chatModel") or model.get("chat_model") or "OpenAIChatModel"),
+            supports_image=supports_image if input_modalities else None,
+            supports_video=supports_video if input_modalities else None,
+            supports_multimodal=supports_multimodal if input_modalities else None,
+            probe_source="manual" if input_modalities else None,
         )
 
     def _openai_compatible_base_url(self, base_url: str) -> str:

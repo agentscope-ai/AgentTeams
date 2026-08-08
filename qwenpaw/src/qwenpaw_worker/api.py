@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -302,12 +302,25 @@ class QwenPawApiClient:
         api_key: str = "",
         provider_name: str = "",
         chat_model: str = "OpenAIChatModel",
+        supports_image: Optional[bool] = None,
+        supports_video: Optional[bool] = None,
+        supports_multimodal: Optional[bool] = None,
+        probe_source: Optional[str] = None,
     ) -> dict[str, Any]:
         providers = self._request("GET", "/api/models")
         provider = next(
             (item for item in providers if item.get("id") == provider_id),
             None,
         )
+        model_payload: dict[str, Any] = {"id": model, "name": model}
+        if supports_image is not None:
+            model_payload["supports_image"] = supports_image
+        if supports_video is not None:
+            model_payload["supports_video"] = supports_video
+        if supports_multimodal is not None:
+            model_payload["supports_multimodal"] = supports_multimodal
+        if probe_source is not None:
+            model_payload["probe_source"] = probe_source
         if provider is None:
             self._request(
                 "POST",
@@ -317,7 +330,7 @@ class QwenPawApiClient:
                     "name": provider_name or provider_id,
                     "default_base_url": base_url,
                     "chat_model": chat_model,
-                    "models": [{"id": model, "name": model}],
+                    "models": [model_payload],
                 },
             )
         else:
@@ -330,7 +343,7 @@ class QwenPawApiClient:
                 self._request(
                     "POST",
                     f"/api/models/{urllib.parse.quote(provider_id, safe='')}/models",
-                    {"id": model, "name": model},
+                    model_payload,
                 )
         config_payload: dict[str, Any] = {"chat_model": chat_model}
         if api_key:

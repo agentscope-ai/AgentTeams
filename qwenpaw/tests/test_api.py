@@ -28,6 +28,8 @@ class _ApiHandler(BaseHTTPRequestHandler):
     mcp = {}
     mcp_tools_unavailable = 0
     toggle_conflicts = 0
+    providers = {}
+    active_llm = None
 
     def log_message(self, _format, *_args):
         return
@@ -80,10 +82,29 @@ class _ApiHandler(BaseHTTPRequestHandler):
         if self.path == "/api/agents":
             self._reply(200, {"agents": type(self).agents})
             return
+        if self.path == "/api/models":
+            self._reply(200, list(type(self).providers.values()))
+            return
+        if self.path == "/api/models/active?scope=agent&agent_id=default":
+            self._reply(200, {"active_llm": type(self).active_llm})
+            return
         self._reply(404, {"detail": "missing"})
 
     def do_PUT(self):
         payload = self._payload()
+        if self.path.startswith("/api/models/") and self.path.endswith("/config"):
+            provider_id = self.path.removeprefix("/api/models/").removesuffix("/config")
+            provider = type(self).providers.get(provider_id)
+            if provider is None:
+                self._reply(404, {"detail": "missing"})
+                return
+            provider.update(payload)
+            self._reply(200, provider)
+            return
+        if self.path == "/api/models/active":
+            type(self).active_llm = payload
+            self._reply(200, payload)
+            return
         if self.path == "/api/config/channels/agentteams_matrix":
             type(self).channel = payload
             self._reply(200, payload)
@@ -101,6 +122,27 @@ class _ApiHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         payload = self._payload()
+        if self.path == "/api/models/custom-providers":
+            pid = payload["id"]
+            provider = {
+                "id": pid,
+                "name": payload.get("name", pid),
+                "base_url": payload.get("default_base_url", ""),
+                "models": payload.get("models", []),
+                "extra_models": [],
+            }
+            type(self).providers[pid] = provider
+            self._reply(201, provider)
+            return
+        if self.path.startswith("/api/models/") and self.path.endswith("/models"):
+            provider_id = self.path.removeprefix("/api/models/").removesuffix("/models")
+            provider = type(self).providers.get(provider_id)
+            if provider is None:
+                self._reply(404, {"detail": "missing"})
+                return
+            provider["extra_models"].append(payload)
+            self._reply(201, provider)
+            return
         actions = {
             "/api/access-control/whitelist/add": ("whitelist", True),
             "/api/access-control/whitelist/remove": ("whitelist", False),
@@ -173,6 +215,8 @@ def api_url():
     _ApiHandler.mcp = {}
     _ApiHandler.mcp_tools_unavailable = 0
     _ApiHandler.toggle_conflicts = 0
+    _ApiHandler.providers = {}
+    _ApiHandler.active_llm = None
     server = ThreadingHTTPServer(("127.0.0.1", 0), _ApiHandler)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -299,3 +343,83 @@ def test_disable_agent_retries_startup_conflict(api_url):
         retry_delay=0,
     ) is True
     assert _ApiHandler.agents[1]["enabled"] is False
+
+
+def test_configure_active_model_creates_provider_with_capabilities(api_url):
+    client = QwenPawApiClient(api_url)
+
+    result = client.configure_active_model(
+        "agentteams-gateway",
+        "qwen3.6-plus",
+        base_url="http://gateway.example.com/v1",
+        api_key="secret",
+        provider_name="AgentTeams Gateway",
+        supports_image=True,
+        supports_video=False,
+        supports_multimodal=True,
+        probe_source="manual",
+    )
+
+    provider = _ApiHandler.providers["agentteams-gateway"]
+    created = provider["models"][0]
+    assert created["id"] == "qwen3.6-plus"
+    assert created["supports_image"] is True
+    assert created["supports_video"] is False
+    assert created["supports_multimodal"] is True
+    assert created["probe_source"] == "manual"
+    assert provider["base_url"] == "http://gateway.example.com/v1"
+    assert _ApiHandler.active_llm == {
+        "provider_id": "agentteams-gateway",
+        "model": "qwen3.6-plus",
+        "scope": "agent",
+        "agent_id": "default",
+    }
+    assert result["active_llm"]["provider_id"] == "agentteams-gateway"
+
+
+def test_configure_active_model_without_capabilities_omits_support_fields(api_url):
+    client = QwenPawApiClient(api_url)
+
+    client.configure_active_model(
+        "agentteams-gateway",
+        "qwen3.6-plus",
+        base_url="http://gateway.example.com/v1",
+        api_key="secret",
+    )
+
+    provider = _ApiHandler.providers["agentteams-gateway"]
+    created = provider["models"][0]
+    assert "supports_image" not in created
+    assert "supports_video" not in created
+    assert "supports_multimodal" not in created
+    assert "probe_source" not in created
+
+
+def test_configure_active_model_existing_provider_appends_model_with_capabilities(
+    api_url,
+):
+    _ApiHandler.providers["agentteams-gateway"] = {
+        "id": "agentteams-gateway",
+        "name": "AgentTeams Gateway",
+        "base_url": "http://gateway.example.com/v1",
+        "models": [],
+        "extra_models": [],
+    }
+    client = QwenPawApiClient(api_url)
+
+    client.configure_active_model(
+        "agentteams-gateway",
+        "qwen3.6-plus",
+        base_url="http://gateway.example.com/v1",
+        api_key="secret",
+        supports_image=True,
+        supports_multimodal=True,
+        probe_source="manual",
+    )
+
+    provider = _ApiHandler.providers["agentteams-gateway"]
+    added = provider["extra_models"][0]
+    assert added["id"] == "qwen3.6-plus"
+    assert added["supports_image"] is True
+    assert added["supports_multimodal"] is True
+    assert added["probe_source"] == "manual"

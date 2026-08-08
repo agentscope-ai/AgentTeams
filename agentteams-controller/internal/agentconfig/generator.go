@@ -366,6 +366,18 @@ func (g *Generator) applyChannelPolicy(config map[string]interface{}, policy *Ch
 	}
 }
 
+// ResolveModelInput returns the input modalities (e.g. ["text", "image"]) for
+// a model, applying the same config overrides as resolveModelSpec. It is the
+// exported capability view used by the runtime-config projector so that
+// managed runtimes (QwenPaw worker) receive model capabilities without having
+// to re-derive them from the model name.
+func (g *Generator) ResolveModelInput(modelName string) []string {
+	if g == nil {
+		return nil
+	}
+	return g.resolveModelSpec(modelName).Input
+}
+
 // resolveModelSpec returns model parameters, applying config overrides.
 func (g *Generator) resolveModelSpec(modelName string) ModelSpec {
 	spec := defaultModelSpec(modelName)

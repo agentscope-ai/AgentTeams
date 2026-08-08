@@ -81,10 +81,11 @@ type memberRuntimeConfigDesired struct {
 }
 
 type memberRuntimeConfigModel struct {
-	ProviderID string `json:"providerId"`
-	Model      string `json:"model"`
-	GatewayURL string `json:"gatewayUrl,omitempty"`
-	GatewayKey string `json:"gatewayKey,omitempty"`
+	ProviderID string   `json:"providerId"`
+	Model      string   `json:"model"`
+	GatewayURL string   `json:"gatewayUrl,omitempty"`
+	GatewayKey string   `json:"gatewayKey,omitempty"`
+	Input      []string `json:"input,omitempty"` // model input modalities, e.g. ["text", "image"]
 }
 
 type memberRuntimeConfigAgentPackage struct {
@@ -269,6 +270,7 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 			Model:      req.Spec.Model,
 			GatewayURL: gatewayURL,
 			GatewayKey: strings.TrimSpace(req.GatewayKey),
+			Input:      d.agentConfig.ResolveModelInput(req.Spec.Model),
 		}
 	}
 	if req.Spec.Package != "" {

@@ -38,7 +38,9 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 - `c15ba378` fix(controller): join Team members to Team Room (#1149)
 - `c2d84b09` fix(skills): complete manager and worker skill loading (#1153)
+- `90f861c0` test(skills): verify Manager-to-Worker distribution (#1156)
 
 **Also in this window / 同期其他变更**
 
 - Archive the v1.2.1 changelog before collecting the v1.2.2 release window. ([#1146](https://github.com/agentscope-ai/AgentTeams/pull/1146))
+- Add integration coverage for Manager-to-Worker Skill distribution through `Worker.spec.skills`, Worker storage, and the QwenPaw Skill API. ([#1156](https://github.com/agentscope-ai/AgentTeams/pull/1156))

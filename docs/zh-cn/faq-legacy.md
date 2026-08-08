@@ -1,7 +1,7 @@
 # 常见问题
 
 > **仅适用于 HiClaw ≤ v1.0.9 的旧版「单容器 hiclaw-manager」架构**  
-> 若你使用 **v1.1.0 及以上**，请阅读 **[faq.md](../faq.md)**（多容器 **`hiclaw-controller` + `hiclaw-manager`**）。本页保留给仍在旧架构或查阅历史安装的用户。
+> 若你使用 **v1.1.0 及以上**，请阅读 **[faq.md](faq.md)**（多容器 **`hiclaw-controller` + `hiclaw-manager`**）。本页保留给仍在旧架构或查阅历史安装的用户。
 
 - [如何查看当前 HiClaw 版本](#如何查看当前-hiclaw-版本)
 - [如何对接飞书/钉钉/企业微信/Discord/Telegram](#如何对接飞书钉钉企业微信discordtelegram)

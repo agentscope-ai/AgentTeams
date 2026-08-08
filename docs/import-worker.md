@@ -310,8 +310,7 @@ Create a Worker directly with a model and optional built-in skills, no ZIP neede
 
 ```bash
 bash agentteams-import.sh worker --name bob --model claude-sonnet-4-6 \
-    --skills github-operations,git-delegation \
-    --mcp-servers github
+    --skills github-operations,git-delegation
 ```
 
 Or via YAML (preferred for repeatable deployments):
@@ -391,7 +390,6 @@ bash agentteams-import.sh -f <resource.yaml>   # forwards to agentteams-apply.sh
 | `--package <uri>` | Remote package URI (`nacos://`, `http://`, `oss://`) | — |
 | `--model <model>` | LLM model ID | `qwen3.5-plus` |
 | `--skills <s1,s2>` | Comma-separated built-in skills | — |
-| `--mcp-servers <m1,m2>` | Comma-separated MCP servers | — |
 | `--runtime <runtime>` | Agent runtime (`openclaw`\|`qwenpaw`\|`copaw`\|`hermes`\|`openhuman`) | `qwenpaw` |
 | `--yes` | Skip interactive confirmations (swallowed by wrapper when unsupported) | off |
 
@@ -400,11 +398,13 @@ bash agentteams-import.sh -f <resource.yaml>   # forwards to agentteams-apply.sh
 ### agentteams-import.ps1 (PowerShell — Windows)
 
 ```powershell
-.\agentteams-import.ps1 worker -Name <name> [-Zip <path-or-url>] [-Package <uri>] [-Model MODEL] [-Skills s1,s2] [-McpServers m1,m2] [-Runtime rt] [-Yes]
+.\agentteams-import.ps1 worker -Name <name> [-Zip <path-or-url>] [-Package <uri>] [-Model MODEL] [-Skills s1,s2] [-Runtime rt] [-Yes]
 .\agentteams-import.ps1 -File <resource.yaml>
 ```
 
-Parameters mirror the Bash version (no `-Prune`/`-DryRun` on YAML path).
+Parameters mirror the Bash version. Configure `mcpServers` through a YAML
+manifest because each entry requires structured `name`, `url`, and `transport`
+fields.
 
 ### agentteams-apply.sh (Bash — macOS/Linux)
 
@@ -416,7 +416,8 @@ bash agentteams-apply.sh -f <resource.yaml> [-- additional args passed to agt ap
 |--------|-------------|---------|
 | `-f <path>` | YAML resource file (required) | — |
 
-The install script header may mention **`--prune` / `--dry-run` / `--watch`** — those are **not** implemented in `agt apply` today; use explicit deletes instead.
+The wrapper advertises only `-f`/`--file`. **`--prune`**, **`--dry-run`**, and
+**`--watch`** are not implemented in `agt apply`; use explicit deletes instead.
 
 ## Troubleshooting
 

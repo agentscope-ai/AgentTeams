@@ -3,8 +3,8 @@
 #
 # Verifies the `--skills` flag on `agt create worker` and
 # `agt update worker` flows through the controller and is reflected in
-# the source-of-truth Worker CR,
-# and that the corresponding skill files land in agents/<name>/skills/.
+# the source-of-truth Worker CR. For QwenPaw, it also verifies the public
+# Manager skill-distribution command reaches the running Worker's skill API.
 #
 # Built-in baseline skills (file-sync, etc.) are always pushed for every
 # Worker regardless of --skills; the flag controls *on-demand* skills
@@ -20,6 +20,7 @@ source "${SCRIPT_DIR}/lib/minio-client.sh"
 test_setup "24-skills-management"
 
 TEST_WORKER="test-skl-$$"
+MANAGER_SKILL="test24-manager-skill"
 STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
 TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
 if [ "${TEST_WORKER_RUNTIME}" = "copaw" ] || [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
@@ -33,6 +34,7 @@ _cleanup() {
     exec_in_agent agt delete worker "${TEST_WORKER}" 2>/dev/null || true
     sleep 5
     remove_worker_container "${TEST_WORKER}"
+    exec_in_agent rm -rf "/root/manager-workspace/worker-skills/${MANAGER_SKILL}" 2>/dev/null || true
     exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${TEST_WORKER}/" 2>/dev/null || true
     exec_in_manager mc rm "${STORAGE_PREFIX}/agentteams-config/workers/${TEST_WORKER}.yaml" 2>/dev/null || true
 }
@@ -127,7 +129,64 @@ fi
 PRE_UPDATE_CONTAINER_ID=$(docker inspect --format '{{.Id}}' "$(worker_container_name "${TEST_WORKER}")" 2>/dev/null | head -c 12 || echo "")
 
 # ============================================================
-# Section 3: Update skills via `agt update worker --skills`
+# Section 3: Manager distributes a custom skill to QwenPaw
+# ============================================================
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    log_section "Manager Distributes a Custom Skill"
+
+    MANAGER_SKILL_DIR="/root/manager-workspace/worker-skills/${MANAGER_SKILL}"
+    exec_in_agent mkdir -p "${MANAGER_SKILL_DIR}"
+    exec_in_agent sh -c "printf '%s\n' \
+        '---' \
+        'name: ${MANAGER_SKILL}' \
+        'description: Verify Manager-to-Worker skill distribution.' \
+        'assign_when: Use for the test24 Manager distribution check.' \
+        '---' \
+        '# Manager-distributed test skill' > '${MANAGER_SKILL_DIR}/SKILL.md'"
+
+    PUSH_OUTPUT=$(exec_in_agent bash \
+        /opt/agentteams/agent/skills/worker-management/scripts/push-worker-skills.sh \
+        --worker "${TEST_WORKER}" --add-skill "${MANAGER_SKILL}" --no-notify 2>&1)
+    PUSH_EXIT=$?
+    if [ "${PUSH_EXIT}" -eq 0 ]; then
+        log_pass "Manager skill-distribution command succeeded"
+    else
+        log_fail "Manager skill-distribution command failed: ${PUSH_OUTPUT}"
+    fi
+
+    DEADLINE=$(( $(date +%s) + 120 ))
+    MANAGER_ASSIGNED_SKILLS=""
+    while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+        MANAGER_ASSIGNED_SKILLS=$(_worker_skills_in_api "${TEST_WORKER}")
+        if echo "${MANAGER_ASSIGNED_SKILLS}" | jq -e --arg skill "${MANAGER_SKILL}" \
+            'index($skill)' >/dev/null 2>&1; then
+            break
+        fi
+        sleep 5
+    done
+    if echo "${MANAGER_ASSIGNED_SKILLS}" | jq -e --arg skill "${MANAGER_SKILL}" \
+        'index($skill)' >/dev/null 2>&1; then
+        log_pass "Manager updated Worker.spec.skills"
+    else
+        log_fail "Worker.spec.skills missing Manager-distributed skill (got: ${MANAGER_ASSIGNED_SKILLS})"
+    fi
+
+    if minio_file_exists "agents/${TEST_WORKER}/skills/${MANAGER_SKILL}/SKILL.md"; then
+        log_pass "Manager uploaded the custom skill to Worker storage"
+    else
+        log_fail "Manager-distributed skill missing from Worker storage"
+    fi
+
+    if wait_qwenpaw_api_matches "${TEST_WORKER}" /api/skills \
+        ".[] | select(.name == \"${MANAGER_SKILL}\" and .enabled == true)" 240; then
+        log_pass "QwenPaw loaded and enabled the Manager-distributed skill"
+    else
+        log_fail "QwenPaw did not load and enable the Manager-distributed skill"
+    fi
+fi
+
+# ============================================================
+# Section 4: Update skills via `agt update worker --skills`
 # ============================================================
 log_section "Update Skills (github-operations → git-delegation)"
 
@@ -156,7 +215,7 @@ done
 log_info "Updated skills in Worker CR: ${UPDATED_SKILLS}"
 
 # ============================================================
-# Section 4: Verify post-update state
+# Section 5: Verify post-update state
 # ============================================================
 log_section "Verify Worker CR After Update"
 

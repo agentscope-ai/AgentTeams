@@ -1,0 +1,13 @@
+# Force LF for all shell scripts regardless of OS checkout settings
+*.sh text eol=lf
+
+# Container and build files — must remain LF
+Dockerfile text eol=lf
+Dockerfile.* text eol=lf
+Makefile text eol=lf
+
+# Config files consumed by Linux containers
+*.yaml text eol=lf
+*.yml text eol=lf
+*.toml text eol=lf
+*.json text eol=lf

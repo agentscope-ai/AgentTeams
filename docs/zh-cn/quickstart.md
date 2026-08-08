@@ -139,7 +139,7 @@ docker ps --filter name=agentteams-worker
 ## 下一步
 
 - 先阅读 [AgentTeams 概览](overview.md)，了解角色、组件和部署方式。
-- 参考 [AgentTeams 使用案例](usage/use-cases.md)，尝试软件交付、研究分析、内容本地化、故障分析、长期项目协作和 Skill 驱动的代码维护。
+- 参考 [AgentTeams 使用案例](usage/use-cases.md)，尝试软件交付、研究分析、内容本地化、故障分析、长期项目协作，以及自定义 Skill 的添加与实际使用。
 - 使用 [本地部署指南](usage/deployment/local.md) 查看模型、端口、域名、存储、运行时和自动化安装选项。
 - 阅读 [Manager 指南](usage/manager-guide.md) 和 [Worker 指南](usage/worker-guide.md)。
 - 使用 [声明式资源管理](usage/resource-management.md) 学习 `agt` CLI 和 YAML。

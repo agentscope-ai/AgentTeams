@@ -289,6 +289,8 @@ The Bash installer enables the Dashboard by default. Manual Setup can configure:
 
 The Dashboard supports only the current embedded controller architecture. The PowerShell installer does not currently install the Dashboard.
 
+When the Dashboard is enabled, you can select a target Worker and upload a Skill ZIP from **技能中心 (Skill Center) → 分发技能 (Distribute Skill)**, or use **Workers → target Worker → 详情 (Details) → 上传技能包 (Upload Skill Package)**. This writes directly to the Worker's persistent Skill directory and attempts to reload the Worker. See [Worker Guide: Distribute through the Dashboard](../worker-guide.md#method-2-distribute-through-the-dashboard) for package rules, reload impact, and verification.
+
 ### 14. Matrix E2EE
 
 `AGENTTEAMS_MATRIX_E2EE` defaults to `0`, or disabled. Before enabling it, confirm that the selected Manager runtime, Worker runtimes, and Matrix clients support the current end-to-end encryption workflow. Quick Start and non-interactive mode keep it disabled by default.

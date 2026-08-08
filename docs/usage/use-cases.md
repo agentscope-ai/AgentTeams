@@ -34,6 +34,8 @@ An acceptance-oriented AgentTeams task normally follows these steps:
 Follow these collaboration rules during execution:
 
 - **The Manager orchestrates only**: the Manager decomposes, registers, and delegates tasks, tracks their state, and consolidates results. It should not use file or command tools to implement work already assigned to a Worker.
+- **Verify the real assignment state**: after the Manager says that a task is assigned, verify `assigned_to`, `status`, the acknowledgement time, and the result path in the task record. A sent message, synchronized files, or task text appearing in a room does not mean that the Worker acknowledged and started the task. If no acknowledgement or artifact appears within the agreed time, mark the task blocked, record the reason, and reassign it to an available Worker.
+- **Use a separate task for each responsibility**: when multiple Workers must confirm the same artifact, create separate tasks and result paths for the primary author and each reviewer. Do not let multiple Workers share one task state or `result.md`; one submission could otherwise hide the fact that another Worker did not execute.
 - **Use one canonical shared directory**: define one exact shared directory for each task and include its full path in assignment and handoff messages. A Worker synchronizes its artifacts before the next Worker pulls from the same path, preventing a review of an outdated duplicate.
 - **Use real Matrix mentions**: when the next role must be triggered automatically, actually @mention the recipient in the correct room. Writing `@name` only in the message body may not include Matrix mention metadata and is not proof that automatic handoff occurred.
 
@@ -62,19 +64,19 @@ Use multiple standalone Workers for a one-time feature. For ongoing maintenance 
 Implement account login for the sample application.
 
 Deliverables:
-1. A backend login API with input validation and unit tests;
+1. A backend login API, one minimal protected endpoint that requires the login token, input validation, and unit tests;
 2. A frontend login page with error handling and API integration;
-3. Integration tests for success, incorrect password, missing fields, and unauthorized access;
+3. Integration tests for successful login, incorrect password, missing fields, and access to the protected endpoint without a token;
 4. A change summary with run instructions, test results, known limitations, and security risks.
 
-Use backend, frontend, and test Workers in parallel, followed by an independent review.
+Ask one Worker to draft the API contract, then create separate confirmation tasks for the frontend and test Workers. After the contract is confirmed, run backend and frontend implementation in parallel while the Test Worker prepares acceptance cases, followed by an independent review.
 All changes must remain in the repository copy under the shared task directory. Do not publish, merge, or modify production.
 Ask me before proceeding if the API contract conflicts. Completion requires passing relevant tests and reporting the file list and test evidence.
 ```
 
 ### Suggested workflow
 
-1. The Manager asks the backend and frontend Workers to agree on an API contract and save it in the shared directory.
+1. The Manager asks one Worker to draft the API contract in the shared directory, then creates separate confirmation tasks for the frontend and test Workers. The contract must define both a successful login response and at least one protected endpoint that requires the token.
 2. Backend and frontend implementation proceed in parallel; the Test Worker prepares acceptance cases from the contract.
 3. The Human reviews implementation progress in Matrix and adds boundary conditions when needed.
 4. After the code is ready, the Test Worker runs integration checks and records failed cases with reproduction steps.
@@ -268,6 +270,8 @@ First return the Team structure, stage plan, shared-directory convention, and ac
 
 ### Suggested workflow
 
+Within a Team Worker, the relative `shared/` path resolves to that Team's dedicated shared space rather than the global shared directory used by standalone Workers. The Manager should receive stage results through the Team Leader. When directly inspecting object storage, use the Team-specific storage prefix; absence from the global shared directory does not mean that a Team member failed to submit the artifact.
+
 1. The Manager creates or selects a Team and delegates the project goal to the Team Leader.
 2. The Team Leader establishes stages and task dependencies, advancing work only after prerequisites are complete.
 3. Workers save plans, progress, and results in the shared task directory and @mention the Leader when a decision is required.
@@ -285,7 +289,147 @@ First return the Team structure, stage plan, shared-directory convention, and ac
 
 See [Declarative Resource Management](resource-management.md) for Teams, Team Leaders, Human permissions, and task flow.
 
-## 8. Reusable task template
+## 8. Use case 6: Add and use a custom Skill
+
+### Goal
+
+Add a `bilingual-doc-review` Skill that does not depend on an external service to an existing Worker, then have that Worker use it to inspect a pair of Chinese and English documents. This case verifies three separate outcomes: the Skill files were distributed, the Worker runtime discovered the Skill, and the Worker actually followed the Skill while completing the task.
+
+Before starting, prepare an existing idle Worker and refer to it as `doc-reviewer` throughout this example. If its actual name differs, replace the name consistently. See the [Worker Guide](worker-guide.md) for Worker creation methods.
+
+### 1. Prepare the Skill package
+
+Create this directory:
+
+```text
+bilingual-doc-review/
+├── SKILL.md
+└── references/
+    └── checklist.md
+```
+
+Use the following content for `SKILL.md`:
+
+```markdown
+---
+name: bilingual-doc-review
+description: Compare paired Chinese and English Markdown documents for structural and factual consistency.
+---
+
+# Bilingual documentation review
+
+Use this Skill when you need to compare paired Chinese and English Markdown documents.
+
+1. Read `references/checklist.md` before reviewing any files.
+2. Report the ruleset ID from that file at the beginning of your result.
+3. Compare heading order, code blocks, links, commands, configuration names, numbers, defaults, and limitations.
+4. Distinguish factual mismatches from acceptable translation differences.
+5. Do not edit source files unless the task explicitly requests changes.
+6. Save a Markdown report containing a summary and a table with severity, location, Chinese value, English value, and recommended resolution.
+```
+
+Use the following content for `references/checklist.md`:
+
+```markdown
+# Review checklist
+
+Ruleset ID: agentteams-bilingual-doc/v1
+
+- Heading order and section coverage match.
+- Code blocks, commands, paths, links, and configuration names match.
+- Versions, ports, timeouts, limits, defaults, and other numeric facts match.
+- Warnings, prerequisites, unsupported cases, and fallback behavior exist in both languages.
+- Stylistic differences are not reported as factual mismatches.
+```
+
+From the directory that contains `bilingual-doc-review/`, run:
+
+```bash
+zip -r bilingual-doc-review.zip bilingual-doc-review/
+```
+
+### 2. Distribute the Skill
+
+Choose either method below. See [Worker Guide: Installing Skills on a Worker](worker-guide.md#installing-skills-on-a-worker) for complete constraints and the state-management differences between the methods.
+
+**Method A: Distribute through the Manager**
+
+Attach `bilingual-doc-review.zip` in a message to the Manager, then send:
+
+```text
+Install the bilingual-doc-review Skill from the attachment on Worker doc-reviewer.
+Extract and validate it safely, distribute the complete Skill, and confirm that the Worker's Skill assignment was updated.
+```
+
+**Method B: Distribute through the Dashboard**
+
+Open **技能中心 (Skill Center) → 分发技能 (Distribute Skill)**, select `doc-reviewer` and `bilingual-doc-review.zip`, then click **分发技能**. Alternatively, use **Workers → doc-reviewer → 详情 (Details) → 上传技能包 (Upload Skill Package)**. Distribute only while the Worker is idle so that the sleep and wake sequence does not interrupt an active task.
+
+After distribution, confirm `bilingual-doc-review` under **已分发技能 (Distributed Skills)** in Worker details. When using the Manager method, you can also inspect `Worker.spec.skills`; direct Dashboard distribution does not update that field.
+
+### 3. Prepare the review inputs
+
+Create `sample.zh-CN.md` in the shared task directory:
+
+```markdown
+# 示例服务安装
+
+## 环境要求
+
+服务监听端口为 `8080`。
+
+## 启动服务
+
+运行 `demo-server --port 8080`。启动失败时，服务将在 30 秒后重试。
+```
+
+Then create `sample.en.md` with two factual differences:
+
+```markdown
+# Sample service installation
+
+## Requirements
+
+The service listens on port `8081`.
+
+## Start the service
+
+Run `demo-server --port 8080`.
+```
+
+### 4. Have the Worker use the Skill
+
+Ask the Manager to delegate the task to `doc-reviewer`:
+
+```text
+Ask Worker doc-reviewer to use the bilingual-doc-review Skill to compare
+sample.zh-CN.md and sample.en.md in the shared task directory.
+
+Requirements:
+1. First confirm that the runtime can discover the Skill;
+2. Follow the Skill to read any required reference files and put the ruleset ID at the beginning of the report;
+3. Do not modify the source files;
+4. Save the result as bilingual-review-report.md;
+5. Reply with the report path, number of differences, and a short conclusion.
+```
+
+Delegate this step through the Manager and confirm that it actually @mentions the Worker in the correct room. Plain text entered directly in a Worker room may not carry Matrix mention metadata, so it can be added only to room history without triggering runtime execution.
+
+Do not include the ruleset ID or expected differences in the task request. Otherwise, the Worker could repeat the prompt without reading the Skill.
+
+### 5. Accept the result
+
+The report should meet these expectations:
+
+- It starts with ruleset ID `agentteams-bilingual-doc/v1`, demonstrating that the Worker read the Skill reference file.
+- It identifies the `8080` versus `8081` mismatch in the port description.
+- It identifies that the Chinese document specifies a retry after 30 seconds while the English document omits that behavior.
+- It does not report natural heading translations as factual mismatches.
+- It leaves both input files unchanged and creates `bilingual-review-report.md`.
+
+If the Skill appears in the Dashboard but the Worker cannot report the ruleset ID, first confirm that the Worker reload completed or wait for periodic synchronization, then retry the task. If it still fails, use [Worker Guide: Troubleshooting](worker-guide.md#troubleshooting) to check the ZIP structure, `SKILL.md` metadata, and runtime logs.
+
+## 9. Reusable task template
 
 Use this template as a starting point when giving a complex goal to the Manager:
 
@@ -319,7 +463,7 @@ First return the task decomposition, role assignment, dependencies, and open que
 
 The constraints and acceptance criteria in this template matter more than the number of roles. Without explicit completion conditions, the Manager cannot reliably decide when to continue, request revision, or finish.
 
-## 9. Usage boundaries
+## 10. Usage boundaries
 
 These situations are usually not suitable for direct autonomous execution by multiple Agents:
 
@@ -331,7 +475,7 @@ These situations are usually not suitable for direct autonomous execution by mul
 
 AgentTeams provides collaboration, isolation, visibility, and human-intervention mechanisms. It does not replace business authorization, data governance, professional review, or production change processes.
 
-## 10. Next steps
+## 11. Next steps
 
 - Complete the smallest Human → Manager → Worker workflow in the [Quickstart](../quickstart.md).
 - Read the [Manager Guide](manager-guide.md) and [Worker Guide](worker-guide.md) for operation and maintenance.

@@ -5,7 +5,7 @@
 - [How to check the current AgentTeams version](#how-to-check-the-current-agentteams-version)
 - [Understanding the new architecture (v1.1.0+)](#understanding-the-new-architecture-v110)
 - [How to use the agt CLI to manage resources](#how-to-use-the-agt-cli-to-manage-resources)
-- [How to install a third-party skill on a Worker through the Manager](#how-to-install-a-third-party-skill-on-a-worker-through-the-manager)
+- [How to install a third-party Skill on a Worker](#how-to-install-a-third-party-skill-on-a-worker)
 - [How to configure GitHub credentials for Workers](#how-to-configure-github-credentials-for-workers)
 - [How to connect Feishu/DingTalk/WeCom/Discord/Telegram](#how-to-connect-feishudingtalkwecomdiscordtelegram)
 - [Installation script exits immediately on Windows](#installation-script-exits-immediately-on-windows)
@@ -235,7 +235,11 @@ For declarative YAML resource definitions, see [Declarative Resource Management]
 
 ---
 
-## How to install a third-party skill on a Worker through the Manager
+## How to install a third-party Skill on a Worker
+
+There are two stable methods: distribute through the Manager, or upload a ZIP directly to a target Worker in the Dashboard.
+
+### Distribute through the Manager
 
 You can either place the complete Skill directory under the Manager workspace's `worker-skills/` directory, or send a ZIP attachment containing one complete Skill root directly to the Manager.
 
@@ -265,7 +269,15 @@ For operator-side inspection or troubleshooting, use the equivalent CLI query:
 agt get workers amy-ai -o json | jq '.skills'
 ```
 
-If installation fails, check that the folder name matches the `name` in `SKILL.md` and that the file is located under `worker-skills/<skill-name>/`. See [Installing a Skill on a Worker through the Manager](../manager-guide.md#installing-a-skill-on-a-worker-through-the-manager) for the full workflow.
+If installation fails, check that the folder name matches the `name` in `SKILL.md` and that the file is located under `worker-skills/<skill-name>/`.
+
+### Distribute through the Dashboard
+
+Open **技能中心 (Skill Center) → 分发技能 (Distribute Skill)**, select a Worker and a Skill ZIP no larger than 64 MB, then click **分发技能**. You can also use **Workers → target Worker → 详情 (Details) → 上传技能包 (Upload Skill Package)**. The ZIP must contain a `SKILL.md` with `name` and `description` frontmatter.
+
+Do not confuse **上传技能 (Upload Skill)** above the Skill Center list with Worker distribution: that action only manages the Dashboard's centralized Skill catalog. After distribution, check **已分发技能 (Distributed Skills)** in Worker details. The Dashboard attempts to sleep and wake the Worker; if that fails, periodic synchronization should discover the new files within about five minutes.
+
+Direct Dashboard distribution does not update `Worker.spec.skills`, so `agt get workers <name> -o json | jq '.skills'` may not list that Skill. See [Worker Guide: Installing Skills on a Worker](../worker-guide.md#installing-skills-on-a-worker) for the complete differences, ZIP constraints, and verification steps. See [Installing a Skill on a Worker through the Manager](../manager-guide.md#installing-a-skill-on-a-worker-through-the-manager) for the complete conversation workflow.
 
 ---
 

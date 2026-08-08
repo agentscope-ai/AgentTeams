@@ -115,7 +115,7 @@ When both are set, inline fields override the corresponding files in the package
 
 ### Worker Skills
 
-`spec.skills` records the skills assigned to a Worker. A referenced skill can come from the AgentTeams Worker skill library or from a third-party skill placed under `$AGENTTEAMS_WORKSPACE_DIR/worker-skills/<skill-name>/`.
+`spec.skills` records Skills assigned to a Worker through the Manager or declarative API. A referenced Skill can come from the AgentTeams Worker skill library or from a third-party Skill placed under `$AGENTTEAMS_WORKSPACE_DIR/worker-skills/<skill-name>/`.
 
 For an existing Worker, either put the complete Skill directory in the Manager workspace or send the Manager a ZIP attachment containing one complete Skill root. Then ask the Manager to install it:
 
@@ -128,6 +128,10 @@ The Manager uploads and verifies `SKILL.md` before updating `spec.skills`. QwenP
 The assignment can also be checked through conversation instead of a CLI command:
 
 > Check the skills assigned to Worker `amy-ai` and confirm whether `alert-fusion` is included.
+
+You can also distribute a Skill ZIP directly to a target Worker through the Dashboard. The Dashboard validates `name` and `description` in `SKILL.md`, writes the complete Skill to `agents/<worker-name>/skills/<skill-name>/`, and attempts to trigger a reload by sleeping and waking the Worker. If that trigger fails, periodic synchronization should discover the new files within about five minutes. See [Worker Guide: Distribute through the Dashboard](worker-guide.md#method-2-distribute-through-the-dashboard) for the complete UI flow and ZIP constraints.
+
+Direct Dashboard distribution manages the actual Skill files in Worker object storage and does not update `spec.skills`. The Dashboard's **已分发技能 (Distributed Skills)** list can therefore contain more entries than `agt get workers <name> -o json | jq '.skills'`; the latter reflects only assignments maintained through the Manager or declarative API.
 
 You can also use `spec.package` to provide a Worker package containing a `skills/` directory. Package skills and assigned skills are merged without conflict.
 

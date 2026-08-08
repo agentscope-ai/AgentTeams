@@ -114,6 +114,7 @@ AgentTeams 使用 `Worker`、`Manager`、`Team` 和 `Human` 四类声明式资�
 | 理解组件与通信关系 | [架构说明](design/architecture.md) |
 | 配置和使用 Manager | [Manager 指南](usage/manager-guide.md) |
 | 创建、部署和维护 Worker | [Worker 指南](usage/worker-guide.md) |
+| 为已有 Worker 安装 Skill | [Worker 指南：安装 Skill](usage/worker-guide.md#为-worker-安装-skill) |
 | 使用 YAML 和 `agt` 管理资源 | [声明式资源管理](usage/resource-management.md) |
 | 在 Windows 上安装 | [Windows 部署](usage/deployment/windows.md) |
 | 排查常见问题 | [FAQ](usage/troubleshooting/faq.md) |

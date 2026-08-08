@@ -58,9 +58,20 @@ docker run -d --name agentteams-worker-alice \
 
 Manager 会在回复中提供所有具体参数值。
 
-## 通过 Manager 安装 Skill
+## 为 Worker 安装 Skill
 
-对于已有 Worker，推荐以 Manager 对话作为安装入口。可以通过以下任一方式提供 Skill：
+对于已有 Worker，目前有两种稳定的 Skill 安装方式：
+
+| 方式 | 适用场景 | 持久化结果 |
+|---|---|---|
+| 通过 Manager 分发 | 希望由 Manager 校验、分发并维护声明式分配记录 | 上传完整 Skill，并更新 `Worker.spec.skills` |
+| 通过 Dashboard 分发 | 已经有 ZIP，希望直接在管理页面选择目标 Worker | 上传到 Worker 的对象存储并触发重新加载；不更新 `Worker.spec.skills` |
+
+两种方式最终都会把 Skill 文件写入 Worker 的持久化存储，Worker runtime 再从该存储同步并加载 Skill。它们的区别主要在操作入口和是否维护 `spec.skills` 分配记录。
+
+### 方式一：通过 Manager 分发
+
+可以通过以下任一方式把 Skill 提供给 Manager：
 
 1. 在 Manager 宿主机上，将完整的第三方 Skill 放到 `$AGENTTEAMS_WORKSPACE_DIR/worker-skills/<skill-name>/`。默认路径为 `~/agentteams-manager/worker-skills/<skill-name>/`；或者
 2. 直接向 Manager 发送 ZIP 附件，压缩包内包含一个完整的 Skill 根目录、`SKILL.md`，以及可选的 `scripts/`、`references/`。
@@ -87,7 +98,46 @@ Manager 会先上传并校验文件，再更新 `Worker.spec.skills`，避免 Wo
 agt get workers amy-ai -o json | jq '.skills'
 ```
 
-仅将文件复制到 Worker 存储并不等于完成安装。Skill 名称还必须出现在 `Worker.spec.skills` 中，受管运行时才能确定需要加载哪些 Skill。
+`agt get workers amy-ai -o json | jq '.skills'` 查询的是由 Manager 或声明式 API 维护的 `spec.skills` 分配记录。若通过 Dashboard 直接分发，应按下一节的方法从 Dashboard 或 Worker runtime 验证。
+
+### 方式二：通过 Dashboard 分发
+
+此方式要求 Dashboard 已启用，并且 Dashboard 已配置可访问 AgentTeams 对象存储的凭证。使用 AgentTeams Bash 安装器部署的 embedded 实例会自动完成这些连接配置。
+
+#### 准备 Skill ZIP
+
+上传包应满足以下要求：
+
+- 文件扩展名为 `.zip`，大小不超过 64 MB。
+- 包内包含一个完整 Skill 根目录；`SKILL.md` 可以位于 ZIP 根目录或该 Skill 根目录下。
+- `SKILL.md` 以 YAML frontmatter 开头，并包含非空的 `name` 和 `description` 字段。
+- `name` 只能包含字母、数字、点、下划线和连字符，并且必须以字母或数字开头。
+- `scripts/`、`references/` 等附属文件应与 `SKILL.md` 一起放入 ZIP；Dashboard 会保留 Skill 根目录下的完整文件结构。
+
+#### 从技能中心分发
+
+1. 打开 Dashboard，进入左侧导航的**技能中心**。
+2. 点击页面标题右侧的**分发技能**。
+3. 在弹窗中选择目标 Worker。
+4. 拖入或选择 Skill ZIP，确认页面已识别文件名和大小。
+5. 点击**分发技能**，等待成功结果和加载提示。
+
+也可以从 **Workers → 目标 Worker → 详情 → 上传技能包** 进入同一个 Worker 定向分发流程。
+
+> **注意：** 技能中心列表上方的**上传技能**用于把 Skill 加入 Dashboard 的集中式技能库，不会自动把它分发给某个 Worker。为 Worker 安装时，应使用页面标题右侧的**分发技能**，或者 Worker 详情中的**上传技能包**。
+
+#### 加载与验证
+
+Dashboard 会校验 ZIP 和 `SKILL.md`，然后把文件写入对象存储的 `agents/<worker-name>/skills/<skill-name>/`。上传完成后，Dashboard 会尝试让 Worker 先休眠再唤醒，以便立即加载新 Skill。因此应在 Worker 空闲时操作，避免中断正在执行的任务。
+
+- 如果重新加载成功，页面显示“已通知 Worker 加载新技能”。
+- 如果休眠或唤醒失败，已经上传的文件不会丢失；页面会提示 Worker 最长约 5 分钟内通过周期同步自动发现。
+
+可以重新打开 **Workers → 目标 Worker → 详情**，在“已分发技能”中确认 Skill 名称。若需要验证 runtime 已经实际加载，而不只是文件已经存在，应让该 Worker 确认它能够发现并使用对应 Skill。
+
+Dashboard 直接分发不会修改 `Worker.spec.skills`，因此该 Skill 不一定出现在 `agt get workers <name> -o json | jq '.skills'` 中。需要声明式分配记录、后续由 Manager 统一重推或审计时，应使用 Manager 分发方式。
+
+如果需要从 Skill 打包开始，完整验证分发、runtime 发现和实际使用，可以按照[案例六：添加并使用自定义 Skill](use-cases.md#8-案例六添加并使用自定义-skill)操作。
 
 ## 故障排查
 

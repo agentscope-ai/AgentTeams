@@ -114,6 +114,7 @@ Production deployments should also use HTTPS, network policies, least-privilege 
 | Understand components and communication | [Architecture](design/architecture.md) |
 | Configure and operate the Manager | [Manager Guide](usage/manager-guide.md) |
 | Create, deploy, and maintain Workers | [Worker Guide](usage/worker-guide.md) |
+| Install Skills on an existing Worker | [Worker Guide: Installing Skills](usage/worker-guide.md#installing-skills-on-a-worker) |
 | Manage resources with YAML and `agt` | [Declarative Resource Management](usage/resource-management.md) |
 | Install on Windows | [Windows Deployment](usage/deployment/windows.md) |
 | Troubleshoot common problems | [FAQ](usage/troubleshooting/faq.md) |

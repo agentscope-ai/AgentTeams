@@ -115,7 +115,7 @@ spec:
 
 ### Worker Skills
 
-`spec.skills` 记录分配给 Worker 的 Skills。被引用的 Skill 可以来自 AgentTeams 的 Worker Skill 库，也可以是放在 `$AGENTTEAMS_WORKSPACE_DIR/worker-skills/<skill-name>/` 下的第三方 Skill。
+`spec.skills` 记录由 Manager 或声明式 API 分配给 Worker 的 Skills。被引用的 Skill 可以来自 AgentTeams 的 Worker Skill 库，也可以是放在 `$AGENTTEAMS_WORKSPACE_DIR/worker-skills/<skill-name>/` 下的第三方 Skill。
 
 对于已有 Worker，可以将完整 Skill 目录放入 Manager 工作空间，也可以直接向 Manager 发送一个包含完整 Skill 根目录的 ZIP 附件，然后通过对话让 Manager 安装：
 
@@ -128,6 +128,10 @@ Manager 会先上传并验证 `SKILL.md`，再更新 `spec.skills`。QwenPaw Wor
 除了使用 CLI，也可以直接通过对话检查分配结果：
 
 > 请检查 Worker `amy-ai` 当前分配的 Skill，并确认其中是否包含 `alert-fusion`。
+
+也可以通过 Dashboard 直接向指定 Worker 分发 Skill ZIP。Dashboard 会校验包内 `SKILL.md` 的 `name` 和 `description`，将完整 Skill 写入 `agents/<worker-name>/skills/<skill-name>/`，并尝试通过休眠、唤醒 Worker 触发重新加载；触发失败时，Worker 最长约 5 分钟内通过周期同步发现新文件。完整操作和 ZIP 约束参见 [Worker 指南：通过 Dashboard 分发](worker-guide.md#方式二通过-dashboard-分发)。
+
+Dashboard 直接分发维护的是 Worker 对象存储中的实际 Skill 文件，不会更新 `spec.skills`。因此 Dashboard 的“已分发技能”可能多于 `agt get workers <name> -o json | jq '.skills'` 的结果；后者只反映 Manager 或声明式 API 维护的分配记录。
 
 也可以通过 `spec.package` 引入一个包含 `skills/` 目录的 Worker 包。包内 Skills 与按名称分配的 Skills 会合并，互不冲突。
 

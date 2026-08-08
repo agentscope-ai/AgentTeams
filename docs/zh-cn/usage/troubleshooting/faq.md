@@ -5,7 +5,7 @@
 - [如何查看当前 AgentTeams 版本](#如何查看当前-agentteams-版本)
 - [新架构说明（v1.1.0+）](#新架构说明v110)
 - [如何使用 agt CLI 管理资源](#如何使用-agt-cli-管理资源)
-- [如何通过 Manager 为 Worker 安装第三方 Skill](#如何通过-manager-为-worker-安装第三方-skill)
+- [如何为 Worker 安装第三方 Skill](#如何为-worker-安装第三方-skill)
 - [如何为 Worker 配置 GitHub 凭据](#如何为-worker-配置-github-凭据)
 - [如何对接飞书/钉钉/企业微信/Discord/Telegram](#如何对接飞书钉钉企业微信discordtelegram)
 - [Windows 下执行安装脚本闪退](#windows-下执行安装脚本闪退)
@@ -234,7 +234,11 @@ agt delete human john
 
 ---
 
-## 如何通过 Manager 为 Worker 安装第三方 Skill
+## 如何为 Worker 安装第三方 Skill
+
+目前有两种稳定方式：通过 Manager 分发，或者在 Dashboard 中直接向指定 Worker 分发 ZIP。
+
+### 通过 Manager 分发
 
 可以将完整 Skill 目录放在 Manager 工作空间的 `worker-skills/` 目录下，也可以直接向 Manager 发送一个包含完整 Skill 根目录的 ZIP 附件。
 
@@ -264,7 +268,15 @@ Manager 会上传文件、验证远端 `SKILL.md`，然后更新 Worker 的 Skil
 agt get workers amy-ai -o json | jq '.skills'
 ```
 
-如果安装失败，请检查目录名是否与 `SKILL.md` 中的 `name` 一致，并确认文件位于 `worker-skills/<skill-name>/` 下。完整流程参见 [通过 Manager 为 Worker 安装 Skill](../manager-guide.md#通过-manager-为-worker-安装-skill)。
+如果安装失败，请检查目录名是否与 `SKILL.md` 中的 `name` 一致，并确认文件位于 `worker-skills/<skill-name>/` 下。
+
+### 通过 Dashboard 分发
+
+进入 **技能中心 → 分发技能**，选择 Worker 和不超过 64 MB 的 Skill ZIP，然后点击**分发技能**。也可以通过 **Workers → 目标 Worker → 详情 → 上传技能包** 操作。ZIP 必须包含带 `name`、`description` frontmatter 的 `SKILL.md`。
+
+不要把技能中心列表上方的**上传技能**当作 Worker 分发入口：该按钮只维护 Dashboard 的集中式技能库。Worker 分发完成后，应在 Worker 详情的“已分发技能”中检查结果；Dashboard 会尝试休眠、唤醒 Worker，失败时新文件最长约 5 分钟内通过周期同步被发现。
+
+Dashboard 直接分发不会更新 `Worker.spec.skills`，所以 `agt get workers <name> -o json | jq '.skills'` 不一定列出该 Skill。完整差异、ZIP 约束和验证方法参见 [Worker 指南：为 Worker 安装 Skill](../worker-guide.md#为-worker-安装-skill)。Manager 方式的完整对话流程参见 [通过 Manager 为 Worker 安装 Skill](../manager-guide.md#通过-manager-为-worker-安装-skill)。
 
 ---
 

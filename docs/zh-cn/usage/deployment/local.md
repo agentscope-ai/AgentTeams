@@ -289,6 +289,8 @@ Bash 安装器默认安装 Dashboard。手动模式可以设置：
 
 Dashboard 仅支持当前 embedded controller 架构。PowerShell 安装器当前不安装 Dashboard。
 
+Dashboard 启用后，可以在**技能中心 → 分发技能**中选择目标 Worker 并上传 Skill ZIP，也可以从 **Workers → 目标 Worker → 详情 → 上传技能包**进入。该操作会直接写入 Worker 的持久化 Skill 目录并尝试重新加载 Worker；详细的包格式、加载影响和验证方式参见 [Worker 指南：通过 Dashboard 分发](../worker-guide.md#方式二通过-dashboard-分发)。
+
 ### 14. Matrix E2EE
 
 `AGENTTEAMS_MATRIX_E2EE` 默认是 `0`，即关闭。启用前应确认所选 Manager、Worker runtime 和 Matrix 客户端都支持当前端到端加密工作流。快速开始和非交互模式默认关闭。

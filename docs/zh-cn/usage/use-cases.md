@@ -34,6 +34,8 @@
 协作过程中还应遵循以下约定：
 
 - **Manager 只负责编排**：Manager 应拆分、登记和委派任务，跟踪状态并汇总结果，不应使用文件或命令工具代替已分配的 Worker 完成实现。
+- **核对真实委派状态**：Manager 回复“已分配”后，还应核对任务记录中的 `assigned_to`、`status`、确认时间和结果路径。消息已经发送、Worker 已同步文件或房间中出现了任务文本，都不等于 Worker 已确认并开始执行；超过约定时间仍无确认或产物时，应将任务标记为阻塞并记录原因，再改派给可用 Worker。
+- **每个责任使用独立任务**：需要多个 Worker 共同确认同一产物时，为主笔、复核者分别创建任务和结果路径。不要让多个 Worker 共用一个任务状态或 `result.md`，否则其中一人提交后可能掩盖其他人没有执行的事实。
 - **共享目录保持唯一**：每个任务约定一个明确的共享目录，并在委派和交接消息中传递完整路径。Worker 完成后先同步产物，后续 Worker 再从同一路径拉取，避免因同名副本而审查错误内容。
 - **使用真实的 Matrix mention**：需要自动触发下一角色时，必须在正确房间中实际 @mention 接收者。只在消息正文中写下 `@name` 不一定包含 Matrix mention 元数据，不能作为自动流转已经生效的依据。
 
@@ -62,19 +64,19 @@
 请完成“为示例应用增加账号登录”功能。
 
 交付内容：
-1. 后端登录 API、输入校验和单元测试；
+1. 后端登录 API、一个需要登录令牌的最小受保护接口、输入校验和单元测试；
 2. 前端登录页面、错误提示和接口接入；
-3. 覆盖成功、密码错误、缺少字段和未授权访问的集成测试；
+3. 覆盖成功登录、密码错误、缺少字段，以及无令牌访问受保护接口的集成测试；
 4. 一份变更说明，包含运行方式、测试结果、已知限制和安全风险。
 
-请使用后端、前端、测试三个 Worker 并行执行，最后安排独立审查。
+请让一个 Worker 起草接口契约，再用独立任务让前端和测试 Worker 确认契约。契约确认后，后端和前端 Worker 并行实现，测试 Worker 提前准备验收用例，最后安排独立审查。
 所有修改只允许发生在共享任务目录中的仓库副本，不要发布、合并或修改生产环境。
 遇到接口契约冲突时先向我确认。完成标准是相关测试通过，并给出文件清单和测试证据。
 ```
 
 ### 建议流程
 
-1. Manager 先让后端和前端 Worker 共同确认接口契约，并把契约写入共享目录。
+1. Manager 先让一个 Worker 起草接口契约并写入共享目录，再为前端和测试 Worker 创建各自的确认任务；契约至少应定义登录成功响应和一个需要令牌的受保护接口。
 2. 后端和前端并行实现；测试 Worker 根据契约提前编写验收用例。
 3. Human 可以在 Matrix 房间中查看实现进度，并补充边界条件。
 4. 测试 Worker 在代码就绪后执行集成验证，记录失败用例和复现步骤。
@@ -268,6 +270,8 @@ Worker 只有在配置搜索、浏览器、数据库或企业知识库工具后�
 
 ### 建议流程
 
+Team Worker 中的相对路径 `shared/` 指向该 Team 的专属共享空间，而不是独立 Worker 使用的全局共享目录。Manager 应通过 Team Leader 接收阶段结果；如果需要直接核对对象存储，应使用 Team 对应的存储前缀，不要把全局共享目录中暂时看不到文件误判为成员未提交。
+
 1. Manager 创建或选择 Team，并把项目目标委派给 Team Leader。
 2. Team Leader 建立阶段和任务依赖，只有前置任务完成后才推进后续工作。
 3. Worker 把计划、进度和结果写入共享任务目录，并在需要决策时 @mention Leader。
@@ -285,7 +289,147 @@ Worker 只有在配置搜索、浏览器、数据库或企业知识库工具后�
 
 Team、Team Leader、Human 权限和任务流转参见[声明式资源管理](resource-management.md)。
 
-## 8. 可复用的任务模板
+## 8. 案例六：添加并使用自定义 Skill
+
+### 目标
+
+为已有 Worker 添加一个不依赖外部服务的 `bilingual-doc-review` Skill，再让 Worker 使用它检查一组中英文文档。该案例同时验证三件事：Skill 文件已经分发、Worker runtime 已经发现 Skill、Worker 确实按照 Skill 中的规则完成了任务。
+
+开始前，准备一个空闲的已有 Worker，并在以下示例中将它记为 `doc-reviewer`；如果实际名称不同，请统一替换。Worker 的创建方式参见 [Worker 指南](worker-guide.md)。
+
+### 1. 准备 Skill 包
+
+创建以下目录：
+
+```text
+bilingual-doc-review/
+├── SKILL.md
+└── references/
+    └── checklist.md
+```
+
+`SKILL.md` 内容如下：
+
+```markdown
+---
+name: bilingual-doc-review
+description: Compare paired Chinese and English Markdown documents for structural and factual consistency.
+---
+
+# Bilingual documentation review
+
+Use this Skill when you need to compare paired Chinese and English Markdown documents.
+
+1. Read `references/checklist.md` before reviewing any files.
+2. Report the ruleset ID from that file at the beginning of your result.
+3. Compare heading order, code blocks, links, commands, configuration names, numbers, defaults, and limitations.
+4. Distinguish factual mismatches from acceptable translation differences.
+5. Do not edit source files unless the task explicitly requests changes.
+6. Save a Markdown report containing a summary and a table with severity, location, Chinese value, English value, and recommended resolution.
+```
+
+`references/checklist.md` 内容如下：
+
+```markdown
+# Review checklist
+
+Ruleset ID: agentteams-bilingual-doc/v1
+
+- Heading order and section coverage match.
+- Code blocks, commands, paths, links, and configuration names match.
+- Versions, ports, timeouts, limits, defaults, and other numeric facts match.
+- Warnings, prerequisites, unsupported cases, and fallback behavior exist in both languages.
+- Stylistic differences are not reported as factual mismatches.
+```
+
+从包含 `bilingual-doc-review/` 的目录执行：
+
+```bash
+zip -r bilingual-doc-review.zip bilingual-doc-review/
+```
+
+### 2. 分发 Skill
+
+选择以下任一方式。完整约束和两种方式的状态差异参见 [Worker 指南：为 Worker 安装 Skill](worker-guide.md#为-worker-安装-skill)。
+
+**方式 A：通过 Manager 分发**
+
+把 `bilingual-doc-review.zip` 作为附件发送给 Manager，然后发送：
+
+```text
+请将附件中的 bilingual-doc-review Skill 安装给 Worker doc-reviewer。
+请安全解压并校验，分发完整 Skill，然后确认 Worker 的 Skill 分配已经更新。
+```
+
+**方式 B：通过 Dashboard 分发**
+
+进入**技能中心 → 分发技能**，选择 `doc-reviewer` 和 `bilingual-doc-review.zip`，再点击**分发技能**。也可以从 **Workers → doc-reviewer → 详情 → 上传技能包**操作。应在 Worker 空闲时分发，避免休眠、唤醒过程打断正在执行的任务。
+
+分发完成后，在 Worker 详情的“已分发技能”中确认 `bilingual-doc-review`。如果使用 Manager 方式，还可以检查 `Worker.spec.skills`；Dashboard 直接分发不会更新该字段。
+
+### 3. 准备检查材料
+
+在共享任务目录中准备 `sample.zh-CN.md`：
+
+```markdown
+# 示例服务安装
+
+## 环境要求
+
+服务监听端口为 `8080`。
+
+## 启动服务
+
+运行 `demo-server --port 8080`。启动失败时，服务将在 30 秒后重试。
+```
+
+再准备存在两处事实差异的 `sample.en.md`：
+
+```markdown
+# Sample service installation
+
+## Requirements
+
+The service listens on port `8081`.
+
+## Start the service
+
+Run `demo-server --port 8080`.
+```
+
+### 4. 让 Worker 使用 Skill
+
+通过 Manager 把任务委派给 `doc-reviewer`：
+
+```text
+请让 Worker doc-reviewer 使用 bilingual-doc-review Skill，比较共享任务目录中的
+sample.zh-CN.md 和 sample.en.md。
+
+要求：
+1. 先确认 runtime 能够发现该 Skill；
+2. 按 Skill 的规则读取所需参考文件，并在报告开头写出规则集 ID；
+3. 不修改原文件；
+4. 将结果保存为 bilingual-review-report.md；
+5. 回复报告路径、差异数量和简要结论。
+```
+
+应通过 Manager 委派这一步，并确认 Manager 在正确房间中真实 @mention 了 Worker。直接在 Worker 房间中输入普通文本不一定携带 Matrix mention 元数据，可能只进入房间历史而不会触发 runtime 执行。
+
+不要在任务指令中直接提供规则集 ID 或预期差异，以免 Worker 只复述提示而没有读取 Skill。
+
+### 5. 验收结果
+
+预期报告应满足：
+
+- 开头包含规则集 ID `agentteams-bilingual-doc/v1`，证明 Worker 读取了 Skill 的参考文件。
+- 识别端口说明中的 `8080` 与 `8081` 不一致。
+- 识别中文包含“30 秒后重试”，而英文缺少该行为说明。
+- 不把标题的自然翻译差异误报为事实不一致。
+- 没有修改两个输入文件，并生成了 `bilingual-review-report.md`。
+
+如果 Worker 只能在 Dashboard 中看到 Skill，却无法报告规则集 ID，应先确认 Worker 已完成重新加载或等待周期同步，再重新发起任务。仍然失败时，按照 [Worker 指南](worker-guide.md#故障排查)检查 ZIP 结构、`SKILL.md` 元数据和 runtime 日志。
+
+## 9. 可复用的任务模板
 
 向 Manager 提交复杂目标时，可以从以下模板开始：
 
@@ -319,7 +463,7 @@ Team、Team Leader、Human 权限和任务流转参见[声明式资源管理](re
 
 模板中的约束和验收标准比角色数量更重要。没有明确完成条件时，Manager 很难判断何时应该继续、返工或结束任务。
 
-## 9. 使用边界
+## 10. 使用边界
 
 以下情况通常不适合直接交给多个 Agent 自主完成：
 
@@ -331,7 +475,7 @@ Team、Team Leader、Human 权限和任务流转参见[声明式资源管理](re
 
 AgentTeams 提供协作、隔离、可见性和人工介入机制，但不会替代业务授权、数据治理、专业审核和生产变更流程。
 
-## 10. 下一步
+## 11. 下一步
 
 - 使用[快速入门](../quickstart.md)完成最小的 Human → Manager → Worker 工作流。
 - 阅读 [Manager 指南](manager-guide.md)和 [Worker 指南](worker-guide.md)了解运行与维护方式。

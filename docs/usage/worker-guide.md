@@ -58,9 +58,20 @@ docker run -d --name agentteams-worker-alice \
 
 The Manager will provide all the specific values in its reply.
 
-## Installing Skills through the Manager
+## Installing Skills on a Worker
 
-For an existing Worker, use the Manager conversation as the supported installation entry point. Provide the Skill in either of these ways:
+There are currently two stable ways to install a Skill on an existing Worker:
+
+| Method | Best for | Persistent result |
+|---|---|---|
+| Distribute through the Manager | Let the Manager validate, distribute, and maintain a declarative assignment record | Uploads the complete Skill and updates `Worker.spec.skills` |
+| Distribute through the Dashboard | Select a target Worker in the UI when you already have a ZIP | Uploads directly to Worker object storage and triggers a reload; does not update `Worker.spec.skills` |
+
+Both methods ultimately write the Skill files to the Worker's persistent storage, from which the Worker runtime synchronizes and loads them. They differ mainly in their entry point and whether they maintain the `spec.skills` assignment record.
+
+### Method 1: Distribute through the Manager
+
+Provide the Skill to the Manager in either of these ways:
 
 1. Put the complete third-party skill under `$AGENTTEAMS_WORKSPACE_DIR/worker-skills/<skill-name>/` on the Manager host. The default is `~/agentteams-manager/worker-skills/<skill-name>/`; or
 2. Send the Manager a ZIP attachment containing one complete Skill root with `SKILL.md` and any optional `scripts/` or `references/`.
@@ -87,7 +98,46 @@ For operator-side inspection or troubleshooting, use the equivalent CLI query:
 agt get workers amy-ai -o json | jq '.skills'
 ```
 
-Copying files into Worker storage without updating the assignment is not a complete installation. The skill name must also appear in `Worker.spec.skills` so managed runtimes know which skills to load.
+`agt get workers amy-ai -o json | jq '.skills'` shows the `spec.skills` assignment record maintained through the Manager or declarative API. For a Skill distributed directly through the Dashboard, verify it through the Dashboard or Worker runtime as described below.
+
+### Method 2: Distribute through the Dashboard
+
+This method requires an enabled Dashboard with credentials for the AgentTeams object store. Embedded installations created by the AgentTeams Bash installer configure this connection automatically.
+
+#### Prepare the Skill ZIP
+
+The upload package must meet these requirements:
+
+- The filename ends in `.zip`, and the archive is no larger than 64 MB.
+- The archive contains one complete Skill root. `SKILL.md` may be at the ZIP root or inside that Skill root directory.
+- `SKILL.md` starts with YAML frontmatter containing non-empty `name` and `description` fields.
+- `name` contains only letters, numbers, dots, underscores, and hyphens, and starts with a letter or number.
+- Include `scripts/`, `references/`, and other supporting files with `SKILL.md`; the Dashboard preserves the complete file structure under the Skill root.
+
+#### Distribute from the Skill Center
+
+1. Open the Dashboard and select **技能中心 (Skill Center)** in the left navigation.
+2. Click **分发技能 (Distribute Skill)** beside the page title.
+3. Select the target Worker in the dialog.
+4. Drop or choose the Skill ZIP and confirm that the filename and size appear.
+5. Click **分发技能 (Distribute Skill)** and wait for the result and reload note.
+
+You can also use **Workers → target Worker → 详情 (Details) → 上传技能包 (Upload Skill Package)** to enter the same Worker-specific distribution flow.
+
+> **Note:** **上传技能 (Upload Skill)** above the Skill Center list adds a Skill to the Dashboard's centralized Skill catalog; it does not distribute that Skill to a Worker. To install a Worker Skill, use **分发技能 (Distribute Skill)** beside the page title or **上传技能包 (Upload Skill Package)** in Worker details.
+
+#### Load and verify
+
+The Dashboard validates the ZIP and `SKILL.md`, then writes the files to `agents/<worker-name>/skills/<skill-name>/` in object storage. After upload, it attempts to put the Worker to sleep and wake it again so the runtime loads the Skill immediately. Distribute only while the Worker is idle to avoid interrupting an active task.
+
+- On a successful reload, the UI reports that the Worker was notified to load the new Skill.
+- If sleep or wake fails, the uploaded files remain available; the UI reports that periodic synchronization should discover them within about five minutes.
+
+Reopen **Workers → target Worker → 详情 (Details)** and confirm the Skill under **已分发技能 (Distributed Skills)**. To verify runtime availability rather than only file presence, ask that Worker to confirm it can discover and use the Skill.
+
+Direct Dashboard distribution does not modify `Worker.spec.skills`, so the Skill may not appear in `agt get workers <name> -o json | jq '.skills'`. Use Manager distribution when you require a declarative assignment record, future Manager-driven redistribution, or assignment auditing.
+
+For an end-to-end example that starts with packaging and verifies distribution, runtime discovery, and actual use, follow [Use case 6: Add and use a custom Skill](use-cases.md#8-use-case-6-add-and-use-a-custom-skill).
 
 ## Troubleshooting
 

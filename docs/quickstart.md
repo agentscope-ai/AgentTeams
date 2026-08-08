@@ -139,7 +139,7 @@ After these checks pass, you have completed the smallest end-to-end AgentTeams w
 ## Next steps
 
 - Read the [AgentTeams Overview](overview.md) for the roles, components, and deployment modes.
-- Try software delivery, research, localization, incident analysis, long-running collaboration, and Skill-driven repository maintenance in [AgentTeams Use Cases](usage/use-cases.md).
+- Try software delivery, research, localization, incident analysis, long-running collaboration, and adding and using a custom Skill in [AgentTeams Use Cases](usage/use-cases.md).
 - Use the [Local Deployment Guide](usage/deployment/local.md) for model, port, domain, storage, runtime, and automated installation options.
 - Continue with the [Manager Guide](usage/manager-guide.md) and [Worker Guide](usage/worker-guide.md).
 - Use [Declarative Resource Management](usage/resource-management.md) to learn the `agt` CLI and YAML workflows.

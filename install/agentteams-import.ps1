@@ -7,8 +7,8 @@
 #   .\agentteams-import.ps1 worker -Name <name> -Zip <path-or-url>
 #   .\agentteams-import.ps1 worker -Name <name> -Package <nacos://...> [-Model MODEL]
 #   .\agentteams-import.ps1 worker -Name <name>                        # auto-imports package <name>
-#   .\agentteams-import.ps1 worker -Name <name> -Model MODEL [-Skills s1,s2] [-McpServers m1,m2]
-#   .\agentteams-import.ps1 -File <resource.yaml> [-Prune] [-DryRun]
+#   .\agentteams-import.ps1 worker -Name <name> -Model MODEL [-Skills s1,s2] [-Runtime RUNTIME]
+#   .\agentteams-import.ps1 -File <resource.yaml>
 
 param(
     [Parameter(Position = 0)]
@@ -19,11 +19,8 @@ param(
     [string]$Zip = "",
     [string]$Package = "",
     [string]$Skills = "",
-    [string]$McpServers = "",
     [string]$Runtime = "",
     [string]$File = "",
-    [switch]$Prune,
-    [switch]$DryRun,
     [switch]$Yes
 )
 
@@ -81,8 +78,6 @@ if ($File) {
     Write-Host "[AgentTeams Import] Copied $FileName -> container:/tmp/import/" -ForegroundColor Cyan
 
     $agentteamsArgs = @("apply", "-f", "/tmp/import/$FileName")
-    if ($Prune) { $agentteamsArgs += "--prune" }
-    if ($DryRun) { $agentteamsArgs += "--dry-run" }
     # Accept -Yes for wrapper compatibility, but do not forward it because the
     # container-internal AgentTeams CLI does not support --yes.
 
@@ -141,9 +136,7 @@ switch ($ResourceType) {
         if ($Model) { $agentteamsArgs += @("--model", $Model) }
         if ($Package) { $agentteamsArgs += @("--package", $Package) }
         if ($Skills) { $agentteamsArgs += @("--skills", $Skills) }
-        if ($McpServers) { $agentteamsArgs += @("--mcp-servers", $McpServers) }
         if ($Runtime) { $agentteamsArgs += @("--runtime", $Runtime) }
-        if ($DryRun) { $agentteamsArgs += "--dry-run" }
 
         & $ContainerCmd exec agentteams-manager agt @agentteamsArgs
         exit $LASTEXITCODE
@@ -154,8 +147,8 @@ switch ($ResourceType) {
         Write-Host "  .\agentteams-import.ps1 worker -Name <name> -Zip <path-or-url>"
         Write-Host "  .\agentteams-import.ps1 worker -Name <name> -Package <nacos://...> [-Model MODEL]"
         Write-Host "  .\agentteams-import.ps1 worker -Name <name>                        # auto-import package <name>"
-        Write-Host "  .\agentteams-import.ps1 worker -Name <name> -Model MODEL [-Skills s1,s2] [-McpServers m1,m2]"
-        Write-Host "  .\agentteams-import.ps1 -File <resource.yaml> [-Prune] [-DryRun]"
+        Write-Host "  .\agentteams-import.ps1 worker -Name <name> -Model MODEL [-Skills s1,s2] [-Runtime RUNTIME]"
+        Write-Host "  .\agentteams-import.ps1 -File <resource.yaml>"
         exit 0
     }
 

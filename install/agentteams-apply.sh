@@ -6,9 +6,9 @@
 #
 # Usage:
 #   ./agentteams-apply.sh -f resource.yaml              # incremental apply
-#   ./agentteams-apply.sh -f resource.yaml --prune      # full sync (delete extras)
-#   ./agentteams-apply.sh -f resource.yaml --dry-run    # show diff only
-#   ./agentteams-apply.sh -f resource.yaml --watch      # watch file changes
+#
+# The current `agt apply` command supports -f/--file only. Delete stale
+# resources explicitly with `agt delete`.
 #
 # Environment:
 #   AGENTTEAMS_CONTAINER_CMD   Override container runtime (docker/podman)

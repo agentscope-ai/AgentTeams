@@ -205,10 +205,10 @@ else
             fail "Makefile missing ${target} target"
         fi
     done
-    if grep -q '^DASHBOARD_VERSION ?= v1\.2\.0-beta\.2$' "${MAKEFILE}"; then
-        pass "Makefile dashboard default version = v1.2.0-beta.2"
+    if grep -q '^DASHBOARD_VERSION ?= v1\.2\.2$' "${MAKEFILE}"; then
+        pass "Makefile dashboard default version = v1.2.2"
     else
-        fail "Makefile dashboard default version is not v1.2.0-beta.2"
+        fail "Makefile dashboard default version is not v1.2.2"
     fi
 fi
 

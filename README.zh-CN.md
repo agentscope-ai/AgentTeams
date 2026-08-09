@@ -471,6 +471,7 @@ python scripts/export-debug-log.py --range 1h
 |---|---|
 | [docs/zh-cn/quickstart.md](docs/zh-cn/quickstart.md) | 端到端快速入门，含验证检查点 |
 | [docs/zh-cn/architecture.md](docs/zh-cn/architecture.md) | 系统架构详解 |
+| [docs/zh-cn/higress-gateway-api.md](docs/zh-cn/higress-gateway-api.md) | Higress 网关对外接口参考（LLM / MCP / 暴露端口 / Console） |
 | [docs/zh-cn/manager-guide.md](docs/zh-cn/manager-guide.md) | Manager 配置与使用 |
 | [docs/zh-cn/worker-guide.md](docs/zh-cn/worker-guide.md) | Worker 部署与故障排查 |
 | [docs/zh-cn/development.md](docs/zh-cn/development.md) | 贡献指南与本地开发 |

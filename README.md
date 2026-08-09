@@ -432,6 +432,7 @@ Worker Alice    Worker Bob              Worker Charlie
 |---|---|
 | [docs/quickstart.md](docs/quickstart.md) | Step-by-step guide |
 | [docs/architecture.md](docs/architecture.md) | System architecture deep dive |
+| [docs/higress-gateway-api.md](docs/higress-gateway-api.md) | Higress gateway external API reference (LLM / MCP / exposed ports / Console) |
 | [docs/manager-guide.md](docs/manager-guide.md) | Manager configuration |
 | [docs/worker-guide.md](docs/worker-guide.md) | Worker deployment |
 | [docs/development.md](docs/development.md) | Contributing and local dev |

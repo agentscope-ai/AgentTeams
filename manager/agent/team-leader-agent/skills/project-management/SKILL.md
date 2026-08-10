@@ -154,7 +154,7 @@ Each node uses:
 For `assignedTo`, use the Worker's **Matrix localpart** (the part between `@` and `:` in `matrixUserID`). Extract it mechanically — never guess, strip, or transform.
 
 **Lookup steps (mandatory before every `plan_dag` / `plan_loop` call):**
-1. Run `hiclaw get workers --team "$TEAM_CR" -o json`
+1. Run `agt get workers --team "$TEAM_CR" -o json`
 2. For each Worker, extract the localpart from `.matrixUserID`: e.g. `@worker-issue-resolver:domain` → `worker-issue-resolver`
 3. Use that localpart verbatim as `assignedTo`
 
@@ -222,7 +222,7 @@ Optional inputs:
 - `status`
 - `tasks`
 
-For every Loop task, `assignedTo` follows the same rule as DAG tasks: extract the Matrix localpart from `hiclaw get workers` output. Never strip or transform.
+For every Loop task, `assignedTo` follows the same rule as DAG tasks: extract the Matrix localpart from `agt get workers` output. Never strip or transform.
 
 Use `ready_loop_nodes` to find pending nodes in the current iteration whose dependencies are satisfied by accepted `[x]` nodes. Delegate returned nodes with `task-management`.
 

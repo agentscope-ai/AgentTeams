@@ -6,9 +6,9 @@
 # create-team.sh backfills permissions for humans that reference the team.
 #
 # Flow:
-#   1. Create Human via hiclaw apply -f (team doesn't exist yet → permissions skipped)
+#   1. Create Human via agt apply -f (team doesn't exist yet → permissions skipped)
 #   2. Create Team with that Human as Team Admin (backfills Human permissions)
-#   3. Verify Human registered, Team Admin in registry
+#   3. Verify Human and Team resources
 #   4. Verify backfill: Human in Leader/Worker groupAllowFrom
 #   5. Verify team-context block mentions Team Admin
 #   6. Verify containers running
@@ -25,6 +25,7 @@ TEST_LEADER="${TEST_TEAM}-lead"
 TEST_W1="${TEST_TEAM}-dev"
 TEST_HUMAN="test-human-$$"
 STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
+TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
 
 _cleanup() {
     if [ "${TESTS_FAILED}" -gt 0 ]; then
@@ -34,29 +35,19 @@ _cleanup() {
         return
     fi
     log_info "All tests passed — cleaning up"
-    exec_in_agent hiclaw delete team "${TEST_TEAM}" 2>/dev/null || true
-    exec_in_agent hiclaw delete human "${TEST_HUMAN}" 2>/dev/null || true
+    exec_in_agent agt delete team "${TEST_TEAM}" 2>/dev/null || true
+    exec_in_agent agt delete human "${TEST_HUMAN}" 2>/dev/null || true
+    exec_in_agent agt delete worker "${TEST_LEADER}" 2>/dev/null || true
+    exec_in_agent agt delete worker "${TEST_W1}" 2>/dev/null || true
     sleep 5
     # Fallback: force-remove containers
     remove_worker_container "${TEST_LEADER}"
     remove_worker_container "${TEST_W1}"
     for w in "${TEST_LEADER}" "${TEST_W1}"; do
         exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${w}/" 2>/dev/null || true
-        exec_in_manager rm -rf "/root/hiclaw-fs/agents/${w}" 2>/dev/null || true
+        exec_in_manager rm -rf "/root/agentteams-fs/agents/${w}" 2>/dev/null || true
     done
     exec_in_agent rm -f "/tmp/agentteams-test-${TEST_HUMAN}.yaml" "/tmp/agentteams-test-${TEST_TEAM}.yaml" 2>/dev/null || true
-    # Fallback: clean registries
-    exec_in_agent bash -c "
-        jq 'del(.workers[\"${TEST_LEADER}\"], .workers[\"${TEST_W1}\"])' \
-            /root/manager-workspace/workers-registry.json > /tmp/wr-clean.json 2>/dev/null && \
-            mv /tmp/wr-clean.json /root/manager-workspace/workers-registry.json
-        jq 'del(.teams[\"${TEST_TEAM}\"])' \
-            /root/manager-workspace/teams-registry.json > /tmp/tr-clean.json 2>/dev/null && \
-            mv /tmp/tr-clean.json /root/manager-workspace/teams-registry.json
-        jq 'del(.humans[\"${TEST_HUMAN}\"])' \
-            /root/manager-workspace/humans-registry.json > /tmp/hr-clean.json 2>/dev/null && \
-            mv /tmp/hr-clean.json /root/manager-workspace/humans-registry.json
-    " 2>/dev/null || true
 }
 trap _cleanup EXIT
 
@@ -82,16 +73,16 @@ spec:
 YAMLEOF
 " 2>/dev/null
 
-APPLY_OUTPUT=$(exec_in_agent hiclaw apply -f "/tmp/agentteams-test-${TEST_HUMAN}.yaml" 2>&1)
+APPLY_OUTPUT=$(exec_in_agent agt apply -f "/tmp/agentteams-test-${TEST_HUMAN}.yaml" 2>&1)
 
 if echo "${APPLY_OUTPUT}" | grep -q "created\|configured"; then
-    log_pass "Human YAML applied via hiclaw CLI"
+    log_pass "Human YAML applied via agt CLI"
 else
     log_fail "Human YAML apply failed: ${APPLY_OUTPUT}"
 fi
 
-HUMAN_CR=$(exec_in_agent hiclaw get humans "${TEST_HUMAN}" -o json 2>/dev/null || echo "")
-assert_not_empty "${HUMAN_CR}" "Human CR exists (hiclaw get humans)"
+HUMAN_CR=$(exec_in_agent agt get humans "${TEST_HUMAN}" -o json 2>/dev/null || echo "")
+assert_not_empty "${HUMAN_CR}" "Human CR exists (agt get humans)"
 HUMAN_NAME_CHK=$(echo "${HUMAN_CR}" | jq -r '.name // empty' 2>/dev/null)
 assert_eq "${TEST_HUMAN}" "${HUMAN_NAME_CHK}" "Human CR has correct name"
 
@@ -102,7 +93,7 @@ HUMAN_CREATED=false
 HUMAN_PHASE=""
 HUMAN_STATUS_MXID=""
 while [ "${HUMAN_ELAPSED}" -lt "${HUMAN_TIMEOUT}" ]; do
-    HUMAN_STATUS=$(exec_in_agent hiclaw get humans "${TEST_HUMAN}" -o json 2>/dev/null || echo "{}")
+    HUMAN_STATUS=$(exec_in_agent agt get humans "${TEST_HUMAN}" -o json 2>/dev/null || echo "{}")
     HUMAN_PHASE=$(echo "${HUMAN_STATUS}" | jq -r '.phase // empty' 2>/dev/null)
     HUMAN_STATUS_MXID=$(echo "${HUMAN_STATUS}" | jq -r '.matrixUserID // empty' 2>/dev/null)
     if [ "${HUMAN_PHASE}" = "Active" ] && [ -n "${HUMAN_STATUS_MXID}" ]; then
@@ -117,7 +108,7 @@ if [ "${HUMAN_CREATED}" = true ]; then
 else
     log_fail "HumanReconciler did not create human within ${HUMAN_TIMEOUT}s"
     log_info "Last Human status: phase='${HUMAN_PHASE}' matrixUserID='${HUMAN_STATUS_MXID}'"
-    exec_in_manager cat /var/log/hiclaw/hiclaw-controller-error.log 2>/dev/null | grep "${TEST_HUMAN}" | tail -5
+    exec_in_manager cat /var/log/agentteams/agentteams-controller-error.log 2>/dev/null | grep "${TEST_HUMAN}" | tail -5
 fi
 
 # ============================================================
@@ -125,11 +116,10 @@ fi
 # ============================================================
 log_section "Verify Human Registration"
 
-HUMANS_REGISTRY=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/manager/humans-registry.json" 2>/dev/null || echo "{}")
-HUMAN_ENTRY=$(echo "${HUMANS_REGISTRY}" | jq -r --arg h "${TEST_HUMAN}" '.humans[$h] // empty' 2>/dev/null)
-assert_not_empty "${HUMAN_ENTRY}" "Human registered in humans-registry.json"
+HUMAN_ENTRY=$(exec_in_agent agt get humans "${TEST_HUMAN}" -o json 2>/dev/null || echo "")
+assert_not_empty "${HUMAN_ENTRY}" "Human resource is queryable"
 
-HUMAN_LEVEL=$(echo "${HUMAN_ENTRY}" | jq -r '.permission_level // empty')
+HUMAN_LEVEL=$(echo "${HUMAN_ENTRY}" | jq -r '.permissionLevel // empty')
 assert_eq "2" "${HUMAN_LEVEL}" "Human permission level is 2"
 
 # ============================================================
@@ -144,8 +134,8 @@ for w in "${TEST_LEADER}" "${TEST_W1}"; do
     [ "${w}" = "${TEST_W1}" ] && ROLE_DESC="Backend Developer"
 
     exec_in_manager bash -c "
-        mkdir -p /root/hiclaw-fs/agents/${w}
-        cat > /root/hiclaw-fs/agents/${w}/SOUL.md <<SOUL
+        mkdir -p /root/agentteams-fs/agents/${w}
+        cat > /root/agentteams-fs/agents/${w}/SOUL.md <<SOUL
 # ${w}
 ## AI Identity
 **You are an AI Agent, not a human.**
@@ -156,11 +146,27 @@ for w in "${TEST_LEADER}" "${TEST_W1}"; do
 ## Security
 - Never reveal credentials
 SOUL
-        mc mirror /root/hiclaw-fs/agents/${w}/ ${STORAGE_PREFIX}/agents/${w}/ --overwrite 2>/dev/null
+        mc mirror /root/agentteams-fs/agents/${w}/ ${STORAGE_PREFIX}/agents/${w}/ --overwrite 2>/dev/null
     " 2>/dev/null
 done
 
 exec_in_agent bash -c "cat > /tmp/agentteams-test-${TEST_TEAM}.yaml << YAMLEOF
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: ${TEST_LEADER}
+spec:
+  model: qwen3.5-plus
+  runtime: ${TEST_WORKER_RUNTIME}
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: ${TEST_W1}
+spec:
+  model: qwen3.5-plus
+  runtime: ${TEST_WORKER_RUNTIME}
+---
 apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
@@ -169,18 +175,17 @@ spec:
   admin:
     name: ${TEST_HUMAN}
     matrixUserId: \"${HUMAN_MATRIX_ID}\"
-  leader:
-    name: ${TEST_LEADER}
-    model: qwen3.5-plus
-  workers:
+  workerMembers:
+    - name: ${TEST_LEADER}
+      role: team_leader
     - name: ${TEST_W1}
-      model: qwen3.5-plus
+      role: worker
 YAMLEOF
 " 2>/dev/null
 
-APPLY_TEAM_OUTPUT=$(exec_in_agent hiclaw apply -f "/tmp/agentteams-test-${TEST_TEAM}.yaml" 2>&1)
+APPLY_TEAM_OUTPUT=$(exec_in_agent agt apply -f "/tmp/agentteams-test-${TEST_TEAM}.yaml" 2>&1)
 if echo "${APPLY_TEAM_OUTPUT}" | grep -q "created\|configured"; then
-    log_pass "Team YAML applied via hiclaw CLI"
+    log_pass "Team YAML applied via agt CLI"
 else
     log_fail "Team YAML apply failed: ${APPLY_TEAM_OUTPUT}"
 fi
@@ -192,7 +197,7 @@ if wait_team_active "${TEST_TEAM}" 180; then
     log_pass "TeamReconciler reconciled team to Active"
 else
     log_fail "TeamReconciler did not reach Active within 180s"
-    exec_in_agent hiclaw get teams "${TEST_TEAM}" -o json 2>/dev/null | jq -r '.phase, .message' | head -5
+    exec_in_agent agt get teams "${TEST_TEAM}" -o json 2>/dev/null | jq -r '.phase, .message' | head -5
 fi
 
 # Wait for each team member to be provisioned (roomID + matrixUserID).
@@ -205,24 +210,23 @@ for w in "${TEST_LEADER}" "${TEST_W1}"; do
 done
 
 # ============================================================
-# Section 4: Verify Team Admin in teams-registry.json
+# Section 4: Verify Team Admin in Team resource
 # ============================================================
-log_section "Verify Team Admin in Registry"
+log_section "Verify Team Admin in Team Resource"
 
-TEAMS_REGISTRY=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/manager/teams-registry.json" 2>/dev/null || echo "{}")
-TEAM_ENTRY=$(echo "${TEAMS_REGISTRY}" | jq -r --arg t "${TEST_TEAM}" '.teams[$t] // empty' 2>/dev/null)
-assert_not_empty "${TEAM_ENTRY}" "Team registered in teams-registry.json"
+TEAM_ENTRY=$(exec_in_agent agt get teams "${TEST_TEAM}" -o json 2>/dev/null || echo "")
+assert_not_empty "${TEAM_ENTRY}" "Team resource is queryable"
 
 TEAM_ADMIN_NAME=$(echo "${TEAM_ENTRY}" | jq -r '.admin.name // empty')
 assert_eq "${TEST_HUMAN}" "${TEAM_ADMIN_NAME}" "Team admin name is ${TEST_HUMAN}"
 
-TEAM_ADMIN_MID=$(echo "${TEAM_ENTRY}" | jq -r '.admin.matrix_user_id // empty')
+TEAM_ADMIN_MID=$(echo "${TEAM_ENTRY}" | jq -r '.admin.matrixUserId // empty')
 assert_eq "${HUMAN_MATRIX_ID}" "${TEAM_ADMIN_MID}" "Team admin matrix_user_id correct"
 
-LEADER_DM_ROOM=$(echo "${TEAM_ENTRY}" | jq -r '.leader_dm_room_id // empty')
+LEADER_DM_ROOM=$(echo "${TEAM_ENTRY}" | jq -r '.leaderDMRoomID // empty')
 assert_not_empty "${LEADER_DM_ROOM}" "Leader DM room ID exists: ${LEADER_DM_ROOM}"
 
-TEAM_ROOM_ID=$(echo "${TEAM_ENTRY}" | jq -r '.team_room_id // empty')
+TEAM_ROOM_ID=$(echo "${TEAM_ENTRY}" | jq -r '.teamRoomID // empty')
 assert_not_empty "${TEAM_ROOM_ID}" "Team Room ID exists: ${TEAM_ROOM_ID}"
 
 # ============================================================
@@ -234,21 +238,25 @@ wait_agent_matrix_allow_contains "${TEST_LEADER}" ".channels.matrix.groupAllowFr
 wait_agent_matrix_allow_contains "${TEST_LEADER}" ".channels.matrix.dm.allowFrom" "${HUMAN_MATRIX_ID}" 120 || true
 wait_agent_matrix_allow_contains "${TEST_W1}" ".channels.matrix.groupAllowFrom" "${HUMAN_MATRIX_ID}" 120 || true
 
-LEADER_GAF=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/openclaw.json" 2>/dev/null | jq -r '.channels.matrix.groupAllowFrom[]' 2>/dev/null)
+LEADER_GAF=$(read_worker_matrix_allowlist "${TEST_LEADER}")
 if echo "${LEADER_GAF}" | grep -q "${HUMAN_MATRIX_ID}"; then
     log_pass "Leader groupAllowFrom includes Team Admin (backfilled)"
 else
     log_fail "Leader groupAllowFrom missing Team Admin after backfill"
 fi
 
-LEADER_DAF=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/openclaw.json" 2>/dev/null | jq -r '.channels.matrix.dm.allowFrom[]' 2>/dev/null)
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    LEADER_DAF="${LEADER_GAF}"
+else
+    LEADER_DAF=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/openclaw.json" 2>/dev/null | jq -r '.channels.matrix.dm.allowFrom[]' 2>/dev/null)
+fi
 if echo "${LEADER_DAF}" | grep -q "${HUMAN_MATRIX_ID}"; then
     log_pass "Leader dm.allowFrom includes Team Admin"
 else
     log_fail "Leader dm.allowFrom missing Team Admin"
 fi
 
-W1_GAF=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_W1}/openclaw.json" 2>/dev/null | jq -r '.channels.matrix.groupAllowFrom[]' 2>/dev/null)
+W1_GAF=$(read_worker_matrix_allowlist "${TEST_W1}")
 if echo "${W1_GAF}" | grep -q "${HUMAN_MATRIX_ID}"; then
     log_pass "Worker groupAllowFrom includes Team Admin (backfilled)"
 else
@@ -266,13 +274,21 @@ fi
 # ============================================================
 log_section "Verify Team Context Block"
 
-W1_AGENTS=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_W1}/AGENTS.md" 2>/dev/null || echo "")
-W1_CTX=$(echo "${W1_AGENTS}" | sed -n '/hiclaw-team-context-start/,/hiclaw-team-context-end/p')
-assert_contains "${W1_CTX}" "Team Admin" "Worker team-context mentions Team Admin"
-
-LEADER_AGENTS=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/AGENTS.md" 2>/dev/null || echo "")
-LEADER_CTX=$(echo "${LEADER_AGENTS}" | sed -n '/hiclaw-team-context-start/,/hiclaw-team-context-end/p')
-assert_contains "${LEADER_CTX}" "Team Admin" "Leader team-context mentions Team Admin"
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    W1_CTX=$(read_worker_runtime_file "${TEST_W1}" "TEAMS.md")
+    LEADER_CTX=$(read_worker_runtime_file "${TEST_LEADER}" "TEAMS.md")
+    assert_contains "${W1_CTX}" "team.admin.name: ${TEST_HUMAN}" "Worker runtime context names Team Admin"
+    assert_contains "${W1_CTX}" "team.admin.matrixUserId: ${HUMAN_MATRIX_ID}" "Worker runtime context has Team Admin Matrix ID"
+    assert_contains "${LEADER_CTX}" "team.admin.name: ${TEST_HUMAN}" "Leader runtime context names Team Admin"
+    assert_contains "${LEADER_CTX}" "team.admin.matrixUserId: ${HUMAN_MATRIX_ID}" "Leader runtime context has Team Admin Matrix ID"
+else
+    W1_AGENTS=$(read_worker_runtime_file "${TEST_W1}" "AGENTS.md")
+    W1_CTX=$(echo "${W1_AGENTS}" | sed -n '/agentteams-team-context-start/,/agentteams-team-context-end/p')
+    assert_contains "${W1_CTX}" "Team Admin" "Worker team-context mentions Team Admin"
+    LEADER_AGENTS=$(read_worker_runtime_file "${TEST_LEADER}" "AGENTS.md")
+    LEADER_CTX=$(echo "${LEADER_AGENTS}" | sed -n '/agentteams-team-context-start/,/agentteams-team-context-end/p')
+    assert_contains "${LEADER_CTX}" "Team Admin" "Leader team-context mentions Team Admin"
+fi
 
 # ============================================================
 # Section 7: Verify admin auto-joined worker rooms
@@ -284,7 +300,7 @@ ADMIN_TOKEN=$(echo "${ADMIN_LOGIN}" | jq -r '.access_token // empty')
 if [ -n "${ADMIN_TOKEN}" ] && [ "${ADMIN_TOKEN}" != "null" ]; then
     ADMIN_MATRIX_ID="@${TEST_ADMIN_USER}:${TEST_MATRIX_DOMAIN}"
     for w in "${TEST_LEADER}" "${TEST_W1}"; do
-        W_ROOM=$(exec_in_agent hiclaw get workers "${w}" -o json 2>/dev/null | jq -r '.roomID // empty')
+        W_ROOM=$(exec_in_agent agt get workers "${w}" -o json 2>/dev/null | jq -r '.roomID // empty')
         if [ -n "${W_ROOM}" ] && [ "${W_ROOM}" != "null" ]; then
             W_ROOM_ENC=$(echo "${W_ROOM}" | sed 's/!/%21/g')
             W_MEMBERS=$(exec_in_manager curl -sf \
@@ -309,14 +325,13 @@ fi
 # ============================================================
 log_section "Verify Containers"
 
-WORKERS_REGISTRY=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/manager/workers-registry.json" 2>/dev/null || echo "{}")
 for w in "${TEST_LEADER}" "${TEST_W1}"; do
     RUNNING=$(docker ps --format '{{.Names}}' 2>/dev/null | grep "$(worker_container_name "${w}")" || echo "")
     if [ -n "${RUNNING}" ]; then
         log_pass "Container running: $(worker_container_name "${w}")"
     else
-        DEPLOY=$(echo "${WORKERS_REGISTRY}" | jq -r --arg w "${w}" '.workers[$w].deployment // empty' 2>/dev/null)
-        if [ "${DEPLOY}" = "remote" ]; then
+        MANAGED=$(exec_in_agent agt get workers "${w}" -o json 2>/dev/null | jq -r '.containerManaged')
+        if [ "${MANAGED}" = "false" ]; then
             log_pass "Agent ${w} registered in remote mode"
         else
             dump_diagnostics worker "${w}"

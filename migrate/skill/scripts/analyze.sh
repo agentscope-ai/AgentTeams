@@ -1,5 +1,5 @@
 #!/bin/bash
-# analyze.sh - Analyze current OpenClaw environment for HiClaw migration
+# analyze.sh - Analyze current OpenClaw environment for AgentTeams migration
 #
 # Scans the OpenClaw state directory, workspace files, skills, cron jobs,
 # and system tool dependencies to produce a tool-analysis.json report.
@@ -13,7 +13,7 @@ set -e
 # Defaults
 # ============================================================
 STATE_DIR="${HOME}/.openclaw"
-OUTPUT_DIR="/tmp/hiclaw-migration"
+OUTPUT_DIR="/tmp/agentteams-migration"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -28,9 +28,9 @@ mkdir -p "${OUTPUT_DIR}"
 # ============================================================
 # Helpers
 # ============================================================
-log() { echo "[hiclaw-import $(date '+%H:%M:%S')] $1"; }
+log() { echo "[agentteams-import $(date '+%H:%M:%S')] $1"; }
 
-# Known commands that are pre-installed in the HiClaw worker base image
+# Known commands that are pre-installed in the AgentTeams worker base image
 # (from openclaw-base Dockerfile: git, python3, make, g++, curl, jq, nginx,
 #  gettext-base, openssh-client, ca-certificates, procps, tzdata, nodejs, pnpm, npm)
 BUILTIN_CMDS="bash sh cat ls cp mv rm mkdir rmdir chmod chown ln touch head tail tee wc sort uniq tr cut paste comm diff grep sed awk find xargs echo printf date sleep test expr env export read source true false cd pwd which whoami hostname uname id groups stat file du df free top ps kill pkill pgrep nohup timeout nice tar gzip gunzip bzip2 xz zip unzip less more strings od xxd base64 md5sum sha256sum openssl ssh ssh-keygen scp git python3 make g++ gcc curl wget jq nginx envsubst node npm npx pnpm mc openclaw mcporter skills"

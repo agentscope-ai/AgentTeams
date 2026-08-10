@@ -1,0 +1,23 @@
+{{- $comp := dict "root" . "component" "controller" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentteams.controller.fullname" . }}
+  namespace: {{ include "agentteams.namespace" . }}
+  labels:
+    {{- include "agentteams.component.labels" $comp | nindent 4 }}
+spec:
+  type: {{ .Values.controller.service.type }}
+  selector:
+    {{- include "agentteams.component.selectorLabels" $comp | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.controller.service.port }}
+      targetPort: http
+      protocol: TCP
+    {{- if .Values.controller.metrics.enabled }}
+    - name: metrics
+      port: {{ .Values.controller.metrics.port }}
+      targetPort: metrics
+      protocol: TCP
+    {{- end }}

@@ -16,7 +16,7 @@ shift
 
 # Resolve local shared dir
 LOCAL_SHARED=""
-for _candidate in "./shared" "../shared" "/root/hiclaw-fs/shared"; do
+for _candidate in "./shared" "../shared" "/root/agentteams-fs/shared"; do
     if [ -d "${_candidate}" ]; then
         LOCAL_SHARED="${_candidate}"
         break

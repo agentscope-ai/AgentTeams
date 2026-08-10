@@ -9,7 +9,7 @@
 #   AGENTTEAMS_CONTROLLER_URL  - controller URL (e.g. http://agentteams-controller:8090)
 #
 # Usage:
-#   source /opt/hiclaw/scripts/lib/container-api.sh
+#   source /opt/agentteams/scripts/lib/container-api.sh
 #   worker_backend_create '{"name":"alice","image":"agentteams/worker-agent:latest"}'
 #   worker_backend_status "alice"
 #   worker_backend_delete "alice"
@@ -29,7 +29,7 @@ _resolve_controller_token() {
 }
 
 _log() {
-    echo "[hiclaw-container $(date '+%Y-%m-%d %H:%M:%S')] $1"
+    echo "[agentteams-container $(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
 # ============================================================

@@ -9,16 +9,16 @@ AgentTeams is an open-source Agent Teams system that uses IM (Matrix protocol) f
 ## Project Structure
 
 ```
-hiclaw/
-├── hiclaw-controller/   # Kubernetes operator (Go): reconciles Worker, Manager, Team, Human CRDs
+AgentTeams/
+├── agentteams-controller/   # Kubernetes operator (Go): reconciles Worker, Manager, Team, Human CRDs
 ├── helm/                # Helm chart (K8s): Higress, Tuwunel, MinIO, controller, Manager CR, defaults
-├── manager/             # Manager images: OpenClaw-based (Dockerfile) and CoPaw-based (Dockerfile.copaw)
+├── manager/             # Manager images: OpenClaw-based (Dockerfile) and CoPaw-based (Dockerfile.qwenpaw)
 ├── worker/              # OpenClaw Worker image (shared base pattern; runtime also selected at deploy time)
 ├── copaw/               # CoPaw Python package source (published as e.g. copaw-worker on PyPI)
 ├── hermes/              # Hermes Python package source (Hermes Matrix worker runtime)
 ├── openhuman/           # OpenHuman Worker image: Rust core + native Matrix (channel-matrix feature)
 ├── openclaw-base/       # Base image: Ubuntu + Node.js + bundled agent assets + mcporter
-├── shared/lib/          # Shared shell libs copied into images (hiclaw-env.sh, render-skills.sh, …)
+├── shared/lib/          # Shared shell libs copied into images (agentteams-env.sh, render-skills.sh, …)
 ├── install/             # Local install scripts (Docker Compose / embedded “all-in-one” stack)
 ├── scripts/             # Project-level utilities (e.g. replay-task.sh)
 ├── tests/               # Automated integration tests
@@ -47,16 +47,16 @@ Logs and local artifacts (for example replay logs) stay out of git via `.gitigno
 
 | Runtime   | Behavior |
 |-----------|-----------|
-| `openclaw` (default) | OpenClaw gateway; primary Matrix channel uses the **message** tool pattern (see upstream OpenClaw / AgentTeams manager config). |
-| `copaw` | Python CoPaw workspace; Matrix traffic uses the **`copaw channels send`** CLI (see `start-copaw-manager.sh`). |
+| `openclaw` | OpenClaw gateway; primary Matrix channel uses the **message** tool pattern (see upstream OpenClaw / AgentTeams manager config). |
+| `qwenpaw` (default) | Python QwenPaw workspace; Matrix traffic uses the **`copaw channels send`** CLI (see `start-qwenpaw-manager.sh`). |
 
-Hermes and OpenHuman are **Worker-only** runtimes in the API and Helm worker defaults; the Manager entrypoint in `start-manager-agent.sh` today starts **openclaw** or **copaw** only.
+Hermes and OpenHuman are **Worker-only** runtimes in the API and Helm worker defaults; the Manager entrypoint in `start-manager-agent.sh` today starts **openclaw** or **qwenpaw** only.
 
 **Deployment runtime** (`AGENTTEAMS_RUNTIME`): local embedded stack vs `aliyun` vs `k8s` changes which bootstrap steps run inside the Manager container (for example Matrix registration and Higress setup are skipped or reduced in `k8s` because the controller owns them).
 
 ## `manager/agent/` layout (built into Manager images)
 
-Agent-facing Markdown and skills under `manager/agent/` are copied to `/opt/hiclaw/agent/` in the image and synced into the Manager workspace by `upgrade-builtins.sh`. This tree is the single source of truth for builtin prompts and skills.
+Agent-facing Markdown and skills under `manager/agent/` are copied to `/opt/agentteams/agent/` in the image and synced into the Manager workspace by `upgrade-builtins.sh`. This tree is the single source of truth for builtin prompts and skills.
 
 ```
 manager/agent/
@@ -95,17 +95,17 @@ manager/agent/
 
 ### Kubernetes deployment
 
-- [helm/hiclaw/](helm/hiclaw/) — primary Helm chart (`Chart.yaml`, `values.yaml`): matrix, gateway, storage, controller, Manager CR, worker defaults, optional Element Web and CMS hooks
+- [helm/agentteams/](helm/agentteams/) — primary Helm chart (`Chart.yaml`, `values.yaml`): matrix, gateway, storage, controller, Manager CR, worker defaults, optional Element Web and CMS hooks
 
 ### Controller (operator) development
 
-- [hiclaw-controller/](hiclaw-controller/) — Go operator: CRD definitions under `api/v1beta1/`, reconcilers, `hiclaw` CLI baked into Manager/Worker images
+- [agentteams-controller/](agentteams-controller/) — Go operator: CRD definitions under `api/v1beta1/`, reconcilers, `agt` CLI baked into Manager/Worker images
 
 ### To build and run
 
 - [Makefile](Makefile) — unified build/test/push/install/replay interface (`make help` for all targets)
 - [docs/quickstart.md](docs/quickstart.md) — end-to-end guide from zero to working team
-- [install/hiclaw-install.sh](install/hiclaw-install.sh) — local installation script
+- [install/agentteams-install.sh](install/agentteams-install.sh) — local installation script
 - [scripts/replay-task.sh](scripts/replay-task.sh) — send tasks to Manager via Matrix CLI
 
 ### Local full build (from source)
@@ -120,11 +120,11 @@ make build-openclaw-base
 
 # Step 2: Build manager, worker, copaw-worker using the LOCAL base
 make build-manager build-worker build-copaw-worker \
-    OPENCLAW_BASE_IMAGE=hiclaw/openclaw-base \
+    OPENCLAW_BASE_IMAGE=agentteams/openclaw-base \
     OPENCLAW_BASE_VERSION=latest
 ```
 
-**Common pitfall**: Running `make build-manager build-worker OPENCLAW_BASE_VERSION=latest` without `OPENCLAW_BASE_IMAGE=hiclaw/openclaw-base` will pull the remote registry's `:latest` tag instead of using the locally-built image. Always set both variables together for local builds.
+**Common pitfall**: Running `make build-manager build-worker OPENCLAW_BASE_VERSION=latest` without `OPENCLAW_BASE_IMAGE=agentteams/openclaw-base` will pull the remote registry's `:latest` tag instead of using the locally-built image. Always set both variables together for local builds.
 
 **Proxy support**: If behind an HTTP proxy, pass proxy build args. This covers APT, PIP, NPM and all other network access — no mirror args needed:
 
@@ -142,10 +142,10 @@ Note: use `host.containers.internal` for Podman on macOS, `host.docker.internal`
 **China build acceleration (without proxy)**: All Dockerfiles default to official sources. For builds in China without proxy, pass mirror args:
 
 ```bash
-# APT mirror (for Ubuntu/Debian-based images: openclaw-base, copaw, manager-copaw, embedded)
+# APT mirror (for Ubuntu/Debian-based images: openclaw-base, copaw, manager-qwenpaw, embedded)
 make build-embedded DOCKER_BUILD_ARGS="--build-arg APT_MIRROR=mirrors.aliyun.com"
 
-# PIP mirror (for Python-based images: copaw, manager-copaw)
+# PIP mirror (for Python-based images: copaw, manager-qwenpaw)
 make build-copaw-worker DOCKER_BUILD_ARGS="--build-arg APT_MIRROR=mirrors.aliyun.com --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/"
 
 # NPM mirror (for Node.js-based images: openclaw-base)
@@ -154,8 +154,8 @@ make build-openclaw-base DOCKER_BUILD_ARGS="--build-arg APT_MIRROR=mirrors.aliyu
 
 ### To modify the Manager container
 
-- [manager/Dockerfile](manager/Dockerfile) — OpenClaw-based Manager (from `openclaw-base`; bundles `hiclaw` CLI from controller image)
-- [manager/Dockerfile.copaw](manager/Dockerfile.copaw) — CoPaw-based Manager (Python venv + CoPaw from PyPI; same agent tree and scripts pattern)
+- [manager/Dockerfile](manager/Dockerfile) — OpenClaw-based Manager (from `openclaw-base`; bundles `agt` CLI from controller image)
+- [manager/Dockerfile.qwenpaw](manager/Dockerfile.qwenpaw) — CoPaw-based Manager (Python venv + CoPaw from PyPI; same agent tree and scripts pattern)
 - [manager/supervisord.conf](manager/supervisord.conf) — process orchestration (local embedded stack)
 - [manager/scripts/init/](manager/scripts/init/) — startup: `start-manager-agent.sh` (runtime + `AGENTTEAMS_RUNTIME`), `upgrade-builtins.sh`, Higress/Matrix bootstrap where applicable
 - [manager/scripts/lib/](manager/scripts/lib/) — shared libraries (`base.sh`, `container-api.sh`, …)
@@ -228,7 +228,7 @@ In `k8s` / `aliyun` modes, Workers are created via the controller API instead of
 
 ## Changelog Policy
 
-Any change that affects the content of a built image — i.e. modifications under `manager/`, `worker/`, `copaw/`, `hermes/`, `openclaw-base/`, or `hiclaw-controller/` — **must** be recorded in [`changelog/current.md`](changelog/current.md) before committing.
+Any change that affects the content of a built image — i.e. modifications under `manager/`, `worker/`, `copaw/`, `hermes/`, `openclaw-base/`, or `agentteams-controller/` — **must** be recorded in [`changelog/current.md`](changelog/current.md) before committing.
 
 Format: one bullet per logical change, with a linked commit hash, e.g.:
 

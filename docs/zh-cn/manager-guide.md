@@ -1,6 +1,6 @@
 # Manager 使用指南
 
-HiClaw Manager 的详细配置和使用指南。
+AgentTeams Manager 的详细配置和使用指南。
 
 ## 安装
 
@@ -14,50 +14,90 @@ Manager 通过安装时设置的环境变量进行配置。安装脚本会生成
 
 | 变量 | 是否必填 | 默认值 | 说明 |
 |------|----------|--------|------|
-| `HICLAW_LLM_API_KEY` | 是 | - | LLM API Key |
-| `HICLAW_LLM_PROVIDER` | 否 | `qwen` | LLM 提供商（`qwen` 为阿里云百炼，`openai-compat` 为 OpenAI 兼容 API） |
-| `HICLAW_DEFAULT_MODEL` | 否 | `qwen3.5-plus` | 默认模型 ID |
-| `HICLAW_ADMIN_USER` | 否 | `admin` | 人工管理员的 Matrix 用户名 |
-| `HICLAW_ADMIN_PASSWORD` | 否 | （自动生成） | 管理员密码（最少 8 位，MinIO 要求） |
-| `HICLAW_MATRIX_DOMAIN` | 否 | `matrix-local.hiclaw.io:18080` | Matrix 服务器域名（容器内使用） |
-| `HICLAW_MATRIX_CLIENT_DOMAIN` | 否 | `matrix-client-local.hiclaw.io` | Element Web 域名 |
-| `HICLAW_AI_GATEWAY_DOMAIN` | 否 | `aigw-local.hiclaw.io` | AI 网关域名（用于 LLM 和 MCP） |
-| `HICLAW_FS_DOMAIN` | 否 | `fs-local.hiclaw.io` | 文件系统域名 |
-| `HICLAW_PORT_GATEWAY` | 否 | `18080` | Higress 网关的宿主机端口 |
-| `HICLAW_PORT_CONSOLE` | 否 | `18001` | Higress 控制台的宿主机端口 |
-| `HICLAW_PORT_ELEMENT_WEB` | 否 | `18088` | Element Web 直接访问的宿主机端口 |
-| `HICLAW_GITHUB_TOKEN` | 否 | - | GitHub PAT，用于 MCP Server |
-| `HICLAW_WORKER_IMAGE` | 否 | `hiclaw/worker-agent:latest` | 直接创建 Worker 时使用的 Docker 镜像 |
-| `HICLAW_WORKSPACE_DIR` | 否 | `~/hiclaw-manager` | Manager 工作空间的宿主机目录（bind mount 到 `/root/manager-workspace`） |
-| `HICLAW_DATA_DIR` | 否 | `hiclaw-data` | 持久化数据的 Docker 卷名称 |
-| `HICLAW_MOUNT_SOCKET` | 否 | `1` | 挂载容器运行时 socket 以支持直接创建 Worker |
-| `HICLAW_YOLO` | 否 | - | 设为 `1` 启用 YOLO 模式（自主决策，无交互提示） |
-| `HICLAW_MANAGER_RUNTIME` | 否 | `openclaw` | Manager 引擎：**`openclaw`**（默认，`hiclaw-manager` 镜像）或 **`copaw`**（`hiclaw-manager-copaw` 镜像）。**Hermes** 仅支持 **Worker**，不能作为 Manager 运行时。 |
+| `AGENTTEAMS_LLM_API_KEY` | 是 | - | LLM API Key |
+| `AGENTTEAMS_LLM_PROVIDER` | 否 | `qwen` | LLM 提供商（`qwen` 为阿里云百炼，`openai-compat` 为 OpenAI 兼容 API） |
+| `AGENTTEAMS_DEFAULT_MODEL` | 否 | `qwen3.5-plus` | 默认模型 ID |
+| `AGENTTEAMS_MODEL_CONTEXT_WINDOW` | 否 | (模型默认) | 覆盖自定义模型的上下文窗口大小 |
+| `AGENTTEAMS_MODEL_MAX_TOKENS` | 否 | (模型默认) | 覆盖自定义模型的最大输出 Token 数 |
+| `AGENTTEAMS_MODEL_VISION` | 否 | (模型默认) | 覆盖自定义模型的多模态视觉能力（`true`/`false`）。仅模型不在内置预设表中时需要。 |
+| `AGENTTEAMS_MODEL_REASONING` | 否 | (模型默认) | 覆盖自定义模型的推理能力（`true`/`false`）。仅模型不在内置预设表中时需要。 |
+| `AGENTTEAMS_ADMIN_USER` | 否 | `admin` | 人工管理员的 Matrix 用户名 |
+| `AGENTTEAMS_ADMIN_PASSWORD` | 否 | （自动生成） | 管理员密码（最少 8 位，MinIO 要求） |
+| `AGENTTEAMS_MATRIX_DOMAIN` | 否 | `matrix-local.agentteams.io:18080` | Matrix 服务器域名（容器内使用） |
+| `AGENTTEAMS_MATRIX_CLIENT_DOMAIN` | 否 | `matrix-client-local.agentteams.io` | Element Web 域名 |
+| `AGENTTEAMS_AI_GATEWAY_DOMAIN` | 否 | `aigw-local.agentteams.io` | AI 网关域名（用于 LLM 和 MCP） |
+| `AGENTTEAMS_FS_DOMAIN` | 否 | `fs-local.agentteams.io` | 文件系统域名 |
+| `AGENTTEAMS_PORT_GATEWAY` | 否 | `18080` | Higress 网关的宿主机端口 |
+| `AGENTTEAMS_PORT_CONSOLE` | 否 | `18001` | Higress 控制台的宿主机端口 |
+| `AGENTTEAMS_PORT_ELEMENT_WEB` | 否 | `18088` | Element Web 直接访问的宿主机端口 |
+| `AGENTTEAMS_GITHUB_TOKEN` | 否 | - | GitHub PAT，用于 MCP Server |
+| `AGENTTEAMS_WORKER_IMAGE` | 否 | `agentteams/worker-agent:latest` | 直接创建 Worker 时使用的 Docker 镜像 |
+| `AGENTTEAMS_WORKSPACE_DIR` | 否 | `~/agentteams-manager` | Manager 工作空间的宿主机目录（bind mount 到 `/root/manager-workspace`） |
+| `AGENTTEAMS_DATA_DIR` | 否 | `agentteams-data` | 持久化数据的 Docker 卷名称 |
+| `AGENTTEAMS_MOUNT_SOCKET` | 否 | `1` | 挂载容器运行时 socket 以支持直接创建 Worker |
+| `AGENTTEAMS_YOLO` | 否 | - | 设为 `1` 启用 YOLO 模式（自主决策，无交互提示） |
+| `AGENTTEAMS_MANAGER_RUNTIME` | 否 | `openclaw` | Manager 引擎：**`openclaw`**（默认，`agentteams-manager` 镜像）或 **`copaw`**（`agentteams-manager-qwenpaw` 镜像）。**Hermes** 仅支持 **Worker**，不能作为 Manager 运行时。 |
 
-### QwenPaw Manager（原 CoPaw，`HICLAW_MANAGER_RUNTIME=copaw`）
+### QwenPaw Manager（原 CoPaw，`AGENTTEAMS_MANAGER_RUNTIME=copaw`）
 
-安装时若选择 QwenPaw Manager，controller 会拉起 **`hiclaw-manager-copaw`** 镜像而非基于 OpenClaw 的 **`hiclaw-manager`**。职责相同（经 Matrix 协调 Worker/Team、驱动 Higress/MCP），差异在于 Agent 引擎与配置形态（Python QwenPaw vs Node OpenClaw）。多通道与技能遵循 QwenPaw 工作区约定（容器内 **`/root/manager-workspace`**）。
+安装时若选择 QwenPaw Manager，controller 会拉起 **`agentteams-manager-qwenpaw`** 镜像而非基于 OpenClaw 的 **`agentteams-manager`**。职责相同（经 Matrix 协调 Worker/Team、驱动 Higress/MCP），差异在于 Agent 引擎与配置形态（Python QwenPaw vs Node OpenClaw）。多通道与技能遵循 QwenPaw 工作区约定（容器内 **`/root/manager-workspace`**）。
 
 ### 自定义 Manager Agent
 
-以下三个文件存放在 MinIO **`hiclaw-storage`** 桶中（对象前缀 `agents/manager/`）。安装脚本将宿主机工作区 bind mount 到 Manager 容器的 **`/root/manager-workspace`**，并与该桶保持同步——既可在 MinIO 控制台/API 中编辑，也可直接编辑宿主机 `HICLAW_WORKSPACE_DIR`（默认 `~/hiclaw-manager`）下的对应文件。
+以下三个文件存放在 MinIO **`agentteams-storage`** 桶中（对象前缀 `agents/manager/`）。安装脚本将宿主机工作区 bind mount 到 Manager 容器的 **`/root/manager-workspace`**，并与该桶保持同步——既可在 MinIO 控制台/API 中编辑，也可直接编辑宿主机 `AGENTTEAMS_WORKSPACE_DIR`（默认 `~/agentteams-manager`）下的对应文件。
 
 1. **SOUL.md** - Agent 身份、安全规则、通信模型
 2. **HEARTBEAT.md** - 定期检查例程（随运行时为 OpenClaw 心跳或 QwenPaw 等价机制）
 3. **AGENTS.md** - 可用技能和任务工作流
 
-若本地仍暴露 MinIO 端口，可使用 MinIO 控制台；否则在 **`hiclaw-controller`** 内使用 `mc`，或编辑宿主机工作区中的镜像文件。
+若本地仍暴露 MinIO 端口，可使用 MinIO 控制台；否则在 **`agentteams-controller`** 内使用 `mc`，或编辑宿主机工作区中的镜像文件。
 
-### 添加技能
+### 通过 Manager 为 Worker 安装 Skill
 
-仓库内置 **16** 个 Manager 技能，源码位于 `manager/agent/skills/`，同步到桶内路径 `agents/manager/skills/<name>/SKILL.md`：**channel-management**、**file-sync-management**、**git-delegation-management**、**hiclaw-find-worker**、**human-management**、**matrix-server-management**、**mcp-server-management**、**mcporter**、**model-switch**、**project-management**、**service-publishing**、**task-coordination**、**task-management**、**team-management**、**worker-management**、**worker-model-switch**。
+有两种方式可以把 Skill 文件交给 Manager。
 
-将更多自包含的 `SKILL.md` 放到 `agents/manager/skills/<skill-name>/`。Manager 运行时会自动发现该目录下的技能。
+#### 使用 Manager 工作空间
 
-添加新技能的步骤：
-1. 创建目录：`agents/manager/skills/<your-skill-name>/`
-2. 编写 `SKILL.md`，包含完整的 API 参考和示例
-3. Manager Agent 会自动发现它（约 300ms）
+将完整的 Skill 目录放入 Manager 工作空间的 Worker Skill 库。使用默认工作空间时，宿主机目录结构如下：
+
+```text
+~/agentteams-manager/worker-skills/alert-fusion/
+├── SKILL.md
+├── scripts/       # 可选
+└── references/    # 可选
+```
+
+如果通过 `AGENTTEAMS_WORKSPACE_DIR` 配置了其他工作空间，请将 `~/agentteams-manager` 替换为实际目录。在 Manager 容器中，同一个 Skill 的路径为 `~/worker-skills/alert-fusion/`。目录名应与 `SKILL.md` 中的 `name` 保持一致。
+
+然后直接向 Manager 下达指令，例如：
+
+> 请为 Worker `amy-ai` 安装 `alert-fusion` Skill。Skill 文件位于 `~/worker-skills/alert-fusion/`。安装完成后请验证，并确认该 Skill 已加入 Worker 的分配列表。
+
+#### 直接向 Manager 发送 ZIP 附件
+
+将一个完整的 Skill 根目录打包为 ZIP。压缩包必须包含 `SKILL.md`，也可以包含 `scripts/` 和 `references/`。在 Manager 对话中把 ZIP 作为文件附件发送，然后继续发送指令，例如：
+
+> 请将我刚发送的 ZIP 附件中的 Skill 安装给 Worker `amy-ai`。请安全解压并校验 `SKILL.md`，将完整 Skill 放入 `~/worker-skills/`，完成分发后检查最终分配结果。
+
+内置 Matrix 对话支持文件附件。Manager 会下载附件，拒绝存在不安全路径或包含多个 Skill 根目录的压缩包，在临时目录中解压并校验 Skill 元数据，然后才将完整目录放入 Worker Skill 库并开始分发。如果 Skill 还包含脚本或参考资料，应发送完整 ZIP，而不是分别发送多个文件。
+
+Manager 会依次校验 Skill 源文件、将完整目录上传到 Worker 的隔离存储、确认远端 `SKILL.md` 存在，然后才更新 Worker 的 Skill 分配。对于 QwenPaw Worker，运行时会拉取新的分配，将 Skill 复制到原生工作空间，刷新 Skill 列表并启用该 Skill，无需手动重启 QwenPaw。
+
+可以直接通过自然语言对话让 Manager 检查分配结果：
+
+> 请检查 Worker `amy-ai` 当前分配的 Skill，并确认其中是否包含 `alert-fusion`。
+
+如果需要验证的不只是分配记录，而是 Worker 运行时是否已经实际可用，可以继续询问：
+
+> 请让 Worker `amy-ai` 确认它能够发现并使用 `alert-fusion` Skill。
+
+如果需要从运维侧检查或排障，也可以在 Manager 或 controller 容器中执行等价查询：
+
+```bash
+agt get workers amy-ai -o json | jq '.skills'
+```
+
+如果 Manager 提示找不到源文件，请确认 `SKILL.md` 位于 `worker-skills/<skill-name>/` 下，而不是直接放在 `worker-skills/` 根目录。
 
 ### 管理 MCP Server
 
@@ -84,7 +124,7 @@ Manager 将主动通知（跨渠道升级等）发送到**主渠道**。默认�
 
 **设置主渠道**：首次从新渠道发送私信时，Manager 会询问是否将其设为主渠道。回复"是"确认。也可以随时切换，例如说"将主渠道切换到 Discord"。
 
-**存储位置**：`~/hiclaw-manager/primary-channel.json`（跨重启持久化）
+**存储位置**：`~/agentteams-manager/primary-channel.json`（跨重启持久化）
 
 **备用方案**：如果主渠道不可用或未配置，Manager 自动回退到 Matrix 私信。
 
@@ -94,7 +134,7 @@ Manager 将主动通知（跨渠道升级等）发送到**主渠道**。默认�
 
 1. 让他们向 Manager 发送消息（通过任何已配置的渠道）。
 2. 告诉 Manager："你可以和刚才给我发消息的人交流"（或类似表述）。
-3. Manager 将其添加到 `~/hiclaw-manager/trusted-contacts.json`。
+3. Manager 将其添加到 `~/agentteams-manager/trusted-contacts.json`。
 
 受信联系人可以获得一般性回复，但 Manager **绝不会**向他们透露敏感信息（API Key、凭据、Worker 配置），也不会代表他们执行任何管理操作。
 
@@ -131,7 +171,7 @@ Manager 和 Worker 的 OpenClaw 实例使用**基于类型的会话策略**：
 任务执行期间，Worker 在每次有意义的操作后追加到每日进度日志：
 
 ```
-~/hiclaw-fs/shared/tasks/{task-id}/progress/YYYY-MM-DD.md
+~/agentteams-fs/shared/tasks/{task-id}/progress/YYYY-MM-DD.md
 ```
 
 这些文件存储在共享 MinIO 存储中，Manager 和其他 Worker 均可读取。它们记录了已完成的步骤、当前状态、遇到的问题和下一步计划——即使会话重置后也能提供完整的审计追踪。
@@ -141,7 +181,7 @@ Manager 和 Worker 的 OpenClaw 实例使用**基于类型的会话策略**：
 每个 Worker 维护一个本地任务历史文件：
 
 ```
-~/hiclaw-fs/agents/{worker-name}/task-history.json
+~/agentteams-fs/agents/{worker-name}/task-history.json
 ```
 
 该文件记录最近 10 个活跃任务（任务 ID、简短描述、状态、任务目录路径、最后操作时间戳）。当新任务使数量超过 10 时，最旧的条目会归档到 `history-tasks/{task-id}.json`。
@@ -159,20 +199,20 @@ Manager 和 Worker 的 OpenClaw 实例使用**基于类型的会话策略**：
 
 ### 日志
 
-**v1.1.0+ 嵌入式安装：** Higress、Tuwunel、MinIO 运行在 **`hiclaw-controller`** 内。**`hiclaw-manager`** 仅运行协调 Agent；基础设施日志在 controller 上查看。
+**v1.1.0+ 嵌入式安装：** Higress、Tuwunel、MinIO 运行在 **`agentteams-controller`** 内。**`agentteams-manager`** 仅运行协调 Agent；基础设施日志在 controller 上查看。
 
 ```bash
 # Manager Agent（stdout/stderr + 启动脚本）
-docker logs hiclaw-manager -f
-docker exec hiclaw-manager cat /var/log/hiclaw/manager-agent.log
+docker logs agentteams-manager -f
+docker exec agentteams-manager cat /var/log/agentteams/manager-agent.log
 
 # OpenClaw 运行时日志（仅 OpenClaw Manager）
-docker exec hiclaw-manager bash -c 'cat /tmp/openclaw/openclaw-*.log' | jq .
+docker exec agentteams-manager bash -c 'cat /tmp/openclaw/openclaw-*.log' | jq .
 
 # 基础设施 + Higress 控制台（嵌入式栈）
-docker logs hiclaw-controller -f
-docker exec hiclaw-controller cat /var/log/hiclaw/higress-console.log
-docker exec hiclaw-controller cat /var/log/hiclaw/tuwunel.log
+docker logs agentteams-controller -f
+docker exec agentteams-controller cat /var/log/agentteams/higress-console.log
+docker exec agentteams-controller cat /var/log/agentteams/tuwunel.log
 ```
 
 ### Replay 对话日志
@@ -190,8 +230,8 @@ make replay-log
 
 ```bash
 # Matrix / MinIO（默认不发布到宿主机 — 在 controller 容器内探测）
-docker exec hiclaw-controller curl -sf http://127.0.0.1:6167/_matrix/client/versions
-docker exec hiclaw-controller curl -sf http://127.0.0.1:9000/minio/health/live
+docker exec agentteams-controller curl -sf http://127.0.0.1:6167/_matrix/client/versions
+docker exec agentteams-controller curl -sf http://127.0.0.1:9000/minio/health/live
 
 # Higress 控制台（宿主机端口）
 curl -s http://127.0.0.1:18001/
@@ -200,15 +240,15 @@ curl -s http://127.0.0.1:18001/
 ### 控制台
 
 - **Higress 控制台**：http://localhost:18001 — 网关路由与 Consumer
-- **Element Web**：http://127.0.0.1:18088 — IM（宿主机直连端口），或经网关 `http://matrix-client-local.hiclaw.io:18080`（需将 `*-local.hiclaw.io` 解析到本机）
-- **MinIO**：嵌入式安装下 MinIO 在 **`hiclaw-controller`** 内，默认不把控制台端口映射到宿主机；请用容器内 `mc`、内部 API，或自行增加访问方式
+- **Element Web**：http://127.0.0.1:18088 — IM（宿主机直连端口），或经网关 `http://matrix-client-local.agentteams.io:18080`（需将 `*-local.agentteams.io` 解析到本机）
+- **MinIO**：嵌入式安装下 MinIO 在 **`agentteams-controller`** 内，默认不把控制台端口映射到宿主机；请用容器内 `mc`、内部 API，或自行增加访问方式
 - **OpenClaw 控制 UI**（仅 OpenClaw Manager）：http://127.0.0.1:18888
 
 ## 备份与恢复
 
 ### 数据卷
 
-所有持久化数据存储在 `hiclaw-data` Docker 卷中：
+所有持久化数据存储在 `agentteams-data` Docker 卷中：
 - Tuwunel 数据库（Matrix 历史记录）
 - MinIO 存储（Agent 配置、任务数据）
 - Higress 配置
@@ -226,15 +266,15 @@ curl -s http://127.0.0.1:18001/
 ### 备份
 
 ```bash
-docker run --rm -v hiclaw-data:/data -v $(pwd):/backup ubuntu \
-  tar czf /backup/hiclaw-backup-$(date +%Y%m%d).tar.gz /data
+docker run --rm -v agentteams-data:/data -v $(pwd):/backup ubuntu \
+  tar czf /backup/agentteams-backup-$(date +%Y%m%d).tar.gz /data
 ```
 
 ### 恢复
 
 ```bash
-docker run --rm -v hiclaw-data:/data -v $(pwd):/backup ubuntu \
-  tar xzf /backup/hiclaw-backup-YYYYMMDD.tar.gz -C /
+docker run --rm -v agentteams-data:/data -v $(pwd):/backup ubuntu \
+  tar xzf /backup/agentteams-backup-YYYYMMDD.tar.gz -C /
 ```
 
 ## YOLO 模式
@@ -247,10 +287,10 @@ YOLO 模式让 Manager 完全自主运行——跳过所有交互式管理员提
 
 ```bash
 # 方式 1：容器启动时通过环境变量
-docker run -e HICLAW_YOLO=1 ... hiclaw/manager-agent:latest
+docker run -e AGENTTEAMS_YOLO=1 ... agentteams/manager:latest
 
 # 方式 2：在工作空间中创建文件（立即生效，无需重启）
-docker exec hiclaw-manager touch /root/manager-workspace/yolo-mode
+docker exec agentteams-manager touch /root/manager-workspace/yolo-mode
 ```
 
 `make test` 和 `make replay` 都会自动启用 YOLO 模式。

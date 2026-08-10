@@ -6,7 +6,7 @@
 
 ```bash
 # List all teams
-bash /opt/hiclaw/agent/skills/team-management/scripts/manage-teams-registry.sh --action list
+agt get teams
 ```
 
 If the task matches a Team's domain/expertise, delegate to the Team Leader instead of an individual Worker. See `team-management/references/team-task-delegation.md`.
@@ -15,13 +15,13 @@ If the task matches a Team's domain/expertise, delegate to the Team Leader inste
 
 ```bash
 # All workers with full availability info
-bash /opt/hiclaw/agent/skills/task-management/scripts/find-worker.sh
+bash /opt/agentteams/agent/skills/task-management/scripts/find-worker.sh
 
 # Filter by required skills
-bash /opt/hiclaw/agent/skills/task-management/scripts/find-worker.sh --skills github-operations,git-delegation
+bash /opt/agentteams/agent/skills/task-management/scripts/find-worker.sh --skills github-operations,git-delegation
 
 # Filter by team membership
-bash /opt/hiclaw/agent/skills/task-management/scripts/find-worker.sh --team alpha-team
+bash /opt/agentteams/agent/skills/task-management/scripts/find-worker.sh --team alpha-team
 ```
 
 Output includes `summary` (idle/busy/stopped/unavailable counts) and `workers` array with: `availability`, `role` (from SOUL.md), `worker_role` (worker/team_leader), `team_id`, `skills`, `finite_tasks`, `infinite_tasks`, `active_tasks`, `container_status`.
@@ -54,14 +54,14 @@ If you already ran `find-worker.sh`, do NOT run a separate container check. Only
 
 ## When Option B means "import a template"
 
-If the admin's requirement sounds reusable, or they explicitly mention templates, import, registry, or a direct package URI such as `nacos://...`, use `hiclaw-find-worker` before hand-creating a Worker:
+If the admin's requirement sounds reusable, or they explicitly mention templates, import, registry, or a direct package URI such as `nacos://...`, use `agentteams-find-worker` before hand-creating a Worker:
 
 ```bash
-bash /opt/hiclaw/agent/skills/hiclaw-find-worker/scripts/hiclaw-find-worker.sh \
+bash /opt/agentteams/agent/skills/agentteams-find-worker/scripts/agentteams-find-worker.sh \
   --query "<admin requirement>" --limit 3 --json
 ```
 
-If the admin already gave you a full package URI, skip the search and install it through `hiclaw-find-worker` after confirmation. Otherwise, recommend the best 1-3 matches, wait for confirmation, then install the chosen template via `hiclaw-find-worker`.
+If the admin already gave you a full package URI, skip the search and install it through `agentteams-find-worker` after confirmation. Otherwise, recommend the best 1-3 matches, wait for confirmation, then install the chosen template via `agentteams-find-worker`.
 
 ## Skills API URL (only when hand-creating a new Worker)
 

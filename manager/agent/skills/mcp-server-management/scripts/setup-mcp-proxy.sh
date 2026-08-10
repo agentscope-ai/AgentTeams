@@ -29,7 +29,7 @@
 #   - AGENTTEAMS_AI_GATEWAY_DOMAIN env var
 
 set -euo pipefail
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh
+source /opt/agentteams/scripts/lib/agentteams-env.sh
 
 # ============================================================
 # Parse arguments
@@ -326,10 +326,8 @@ fi
 # Step 5: Authorize existing Workers and update their configs
 # ============================================================
 log "Step 5: Authorizing existing Workers for ${MCP_SERVER_NAME}..."
-REGISTRY_FILE="${HOME}/workers-registry.json"
-if [ -f "${REGISTRY_FILE}" ]; then
-    CONSUMER_LIST='["manager"'
-    WORKER_NAMES=$(jq -r '.workers | keys[]' "${REGISTRY_FILE}" 2>/dev/null || true)
+CONSUMER_LIST='["manager"'
+WORKER_NAMES=$(agt get workers -o json 2>/dev/null | jq -r '.workers[].name' || true)
     for wname in ${WORKER_NAMES}; do
         CONSUMER_LIST="${CONSUMER_LIST},\"worker-${wname}\""
     done
@@ -339,7 +337,7 @@ if [ -f "${REGISTRY_FILE}" ]; then
         '{"mcpServerName":"'"${MCP_SERVER_NAME}"'","consumers":'"${CONSUMER_LIST}"'}'
 
     for wname in ${WORKER_NAMES}; do
-        WORKER_AGENT_DIR="/root/hiclaw-fs/agents/${wname}"
+        WORKER_AGENT_DIR="/root/agentteams-fs/agents/${wname}"
         MCPORTER_DIR="${WORKER_AGENT_DIR}/config"
         MCPORTER_FILE="${MCPORTER_DIR}/mcporter.json"
         MCPORTER_COMPAT="${WORKER_AGENT_DIR}/mcporter-servers.json"
@@ -382,9 +380,6 @@ if [ -f "${REGISTRY_FILE}" ]; then
             && log "  Pushed config/mcporter.json to MinIO for ${wname}" \
             || log "  WARNING: Failed to push config/mcporter.json to MinIO for ${wname}"
     done
-else
-    log "  No workers-registry.json found, skipping Worker authorization"
-fi
 
 log "${MCP_SERVER_NAME} proxy setup complete"
 log "NOTE: The auth plugin needs ~10s to activate."

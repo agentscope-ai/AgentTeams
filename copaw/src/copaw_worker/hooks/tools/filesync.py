@@ -36,48 +36,46 @@ def _error(message: str, **payload: Any) -> ToolResponse:
     return _response({"ok": False, "error": message, **payload})
 
 
-def _copaw_working_dir() -> Path:
-    configured = os.getenv("COPAW_WORKING_DIR")
+def _working_dir() -> Path:
+    configured = os.getenv("QWENPAW_WORKING_DIR") or os.getenv("COPAW_WORKING_DIR")
     if configured:
-        return Path(configured)
+        return Path(configured).expanduser().resolve()
+    # qwenpaw is the successor of copaw (renamed package).
+    # In the qwenpaw 2.0 venv the copaw package does not exist.
+    try:
+        from qwenpaw.constant import WORKING_DIR  # type: ignore[import-untyped]
+    except ImportError:
+        from copaw.constant import WORKING_DIR  # type: ignore[import-untyped]
+    return Path(WORKING_DIR).expanduser().resolve()
 
-    cwd = Path.cwd()
-    if cwd.name == "default" and cwd.parent.name == "workspaces":
-        return cwd.parent.parent
-    if cwd.name == ".copaw":
-        return cwd
-    return cwd / ".copaw"
+
+def _copaw_working_dir() -> Path:
+    return _working_dir()
 
 
 def create_sync() -> FileSync:
     worker_name = (
         os.getenv("AGENTTEAMS_WORKER_NAME")
-        or os.getenv("AGENTTEAMS_WORKER_NAME")
         or os.getenv("COPAW_WORKER_NAME")
     )
     worker_cr_name = (
         os.getenv("AGENTTEAMS_WORKER_CR_NAME")
-        or os.getenv("AGENTTEAMS_WORKER_CR_NAME")
         or os.getenv("COPAW_WORKER_CR_NAME")
     )
     minio_endpoint = (
         os.getenv("AGENTTEAMS_FS_ENDPOINT")
-        or os.getenv("AGENTTEAMS_FS_ENDPOINT")
         or os.getenv("COPAW_MINIO_ENDPOINT")
     )
     minio_access_key = (
         os.getenv("AGENTTEAMS_FS_ACCESS_KEY")
-        or os.getenv("AGENTTEAMS_FS_ACCESS_KEY")
         or os.getenv("COPAW_MINIO_ACCESS_KEY")
     )
     minio_secret_key = (
         os.getenv("AGENTTEAMS_FS_SECRET_KEY")
-        or os.getenv("AGENTTEAMS_FS_SECRET_KEY")
         or os.getenv("COPAW_MINIO_SECRET_KEY")
     )
     minio_bucket = (
         os.getenv("AGENTTEAMS_FS_BUCKET")
-        or os.getenv("AGENTTEAMS_FS_BUCKET")
         or os.getenv("COPAW_MINIO_BUCKET")
         or "agentteams-storage"
     )

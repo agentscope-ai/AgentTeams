@@ -13,7 +13,7 @@
 # STS tokens expire after 1 hour. Credentials are cached and lazy-refreshed.
 #
 # Usage:
-#   source /opt/hiclaw/scripts/lib/oss-credentials.sh
+#   source /opt/agentteams/scripts/lib/oss-credentials.sh
 #   ensure_mc_credentials   # call before any mc command
 
 _OSS_CRED_FILE="/tmp/mc-oss-credentials.env"
@@ -153,6 +153,14 @@ EOF
 # --------------------------------------------------------------------------
 
 ensure_mc_credentials() {
+    # MinIO (the default provider) uses the static alias configured by the
+    # container entrypoint. Do not mistake the controller URL and bearer token
+    # (which are also present in local/K8s deployments) for proof that STS is
+    # available. Cloud deployments must opt into STS explicitly with "oss".
+    if [ "${AGENTTEAMS_STORAGE_PROVIDER:-minio}" != "oss" ]; then
+        return 0
+    fi
+
     # Cloud mode: Controller URL + any resolvable bearer token → controller-mediated STS
     if _oss_has_controller_url; then
         local bearer

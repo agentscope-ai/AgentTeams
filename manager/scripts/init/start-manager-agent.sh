@@ -5,19 +5,19 @@
 # In cloud/k8s mode (AGENTTEAMS_RUNTIME=aliyun|k8s) this is the container entrypoint.
 #
 # Runtime selection:
-#   AGENTTEAMS_MANAGER_RUNTIME=openclaw (default) - OpenClaw gateway mode
-#   AGENTTEAMS_MANAGER_RUNTIME=copaw              - CoPaw workspace mode
-# (hermes runtime is supported for Workers only; Managers run openclaw or copaw.)
+#   AGENTTEAMS_MANAGER_RUNTIME=qwenpaw           - QwenPaw 2.0 workspace mode (default)
+#   AGENTTEAMS_MANAGER_RUNTIME=copaw              - Legacy alias, auto-routed to QwenPaw
+#   AGENTTEAMS_MANAGER_RUNTIME=openclaw           - OpenClaw gateway mode
 
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh
+source /opt/agentteams/scripts/lib/agentteams-env.sh
 
 # ============================================================
 # Runtime selection
 # ============================================================
-MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-openclaw}"
+MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}"
 case "${MANAGER_RUNTIME}" in
-    copaw)
-        log "Manager runtime: CoPaw (Python workspace)"
+    copaw|qwenpaw)
+        log "Manager runtime: QwenPaw (Python workspace, runtime=${MANAGER_RUNTIME})"
         ;;
     *)
         log "Manager runtime: OpenClaw (Node.js gateway)"
@@ -133,7 +133,7 @@ fi
 # Auto-generate secrets if not provided via environment
 # Persisted to /data so they survive container restart
 # ============================================================
-SECRETS_FILE="/data/hiclaw-secrets.env"
+SECRETS_FILE="/data/agentteams-secrets.env"
 if [ -f "${SECRETS_FILE}" ]; then
     source "${SECRETS_FILE}"
     log "Loaded persisted secrets from ${SECRETS_FILE}"
@@ -158,27 +158,29 @@ chmod 600 "${SECRETS_FILE}"
 
 # Cloud mode: pull workspace from OSS before initialization
 if [ "${AGENTTEAMS_RUNTIME}" = "aliyun" ]; then
-    AGENTTEAMS_FS="/root/hiclaw-fs"
+    AGENTTEAMS_FS="/root/agentteams-fs"
     mkdir -p "${AGENTTEAMS_FS}/shared" "${AGENTTEAMS_FS}/agents"
     log "Pulling workspace from OSS..."
     ensure_mc_credentials
     mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/manager/" /root/manager-workspace/ --overwrite 2>/dev/null || true
     mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/" "${AGENTTEAMS_FS}/shared/" --overwrite 2>/dev/null || true
     mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agents/" "${AGENTTEAMS_FS}/agents/" --overwrite 2>/dev/null || true
-    # Symlink hiclaw-fs into workspace for agent access
-    ln -sfn "${AGENTTEAMS_FS}" /root/manager-workspace/hiclaw-fs
+    # Keep the canonical filesystem link in the Manager workspace.
+    ln -sfn "${AGENTTEAMS_FS}" /root/manager-workspace/agentteams-fs
+    ln -sfn "${AGENTTEAMS_FS}" /root/manager-workspace/agentteams-fs
 fi
 
 # K8s mode: sync workspace from cluster-internal MinIO
 if [ "${AGENTTEAMS_RUNTIME}" = "k8s" ]; then
-    AGENTTEAMS_FS="/root/hiclaw-fs"
+    AGENTTEAMS_FS="/root/agentteams-fs"
     mkdir -p "${AGENTTEAMS_FS}/shared" "${AGENTTEAMS_FS}/agents" "${AGENTTEAMS_FS}/agentteams-config"
     log "Configuring mc alias for cluster MinIO..."
     mc alias set agentteams "${AGENTTEAMS_FS_ENDPOINT}" "${AGENTTEAMS_FS_ACCESS_KEY}" "${AGENTTEAMS_FS_SECRET_KEY}"
     log "Syncing workspace from MinIO..."
     mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/manager/" /root/manager-workspace/ --overwrite 2>/dev/null || true
     mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/" "${AGENTTEAMS_FS}/" --overwrite 2>/dev/null || true
-    ln -sfn "${AGENTTEAMS_FS}" /root/manager-workspace/hiclaw-fs
+    ln -sfn "${AGENTTEAMS_FS}" /root/manager-workspace/agentteams-fs
+    ln -sfn "${AGENTTEAMS_FS}" /root/manager-workspace/agentteams-fs
     touch "${AGENTTEAMS_FS}/.initialized"
 fi
 
@@ -189,27 +191,27 @@ fi
 # ============================================================
 mkdir -p /root/manager-workspace
 
-IMAGE_VERSION=$(cat /opt/hiclaw/agent/.builtin-version 2>/dev/null || echo "unknown")
+IMAGE_VERSION=$(cat /opt/agentteams/agent/.builtin-version 2>/dev/null || echo "unknown")
 INSTALLED_VERSION=$(cat /root/manager-workspace/.builtin-version 2>/dev/null || echo "")
 
 if [ ! -f /root/manager-workspace/.initialized ]; then
     log "First boot: initializing manager workspace..."
-    bash /opt/hiclaw/scripts/init/upgrade-builtins.sh
+    bash /opt/agentteams/scripts/init/upgrade-builtins.sh
     touch /root/manager-workspace/.initialized
     log "Manager workspace initialized (version: ${IMAGE_VERSION})"
 elif [ "${IMAGE_VERSION}" != "${INSTALLED_VERSION}" ] || [ "${IMAGE_VERSION}" = "latest" ]; then
     log "Upgrade detected: ${INSTALLED_VERSION} -> ${IMAGE_VERSION}${IMAGE_VERSION:+ (latest: always upgrade)}"
-    bash /opt/hiclaw/scripts/init/upgrade-builtins.sh
+    bash /opt/agentteams/scripts/init/upgrade-builtins.sh
     log "Manager workspace upgraded to version: ${IMAGE_VERSION}"
 else
     log "Workspace up to date (version: ${IMAGE_VERSION})"
 fi
 
-# Local mode: wait for mc mirror initialization (shared + worker data in /root/hiclaw-fs/)
+# Local mode: wait for mc mirror initialization (shared + worker data in /root/agentteams-fs/)
 if [ "${AGENTTEAMS_RUNTIME}" != "aliyun" ] && [ "${AGENTTEAMS_RUNTIME}" != "k8s" ]; then
     log "Waiting for MinIO storage initialization..."
     _minio_wait=0
-    while [ ! -f /root/hiclaw-fs/.initialized ]; do
+    while [ ! -f /root/agentteams-fs/.initialized ]; do
         sleep 2
         _minio_wait=$(( _minio_wait + 1 ))
         if [ "${_minio_wait}" -ge 60 ]; then
@@ -384,7 +386,7 @@ if [ -n "${_HIGRESS_CONSOLE_URL}" ]; then
 
     if [ "${AGENTTEAMS_RUNTIME}" = "k8s" ]; then
         # K8s mode: lightweight Higress config — only what's needed for LLM access
-        source /opt/hiclaw/scripts/lib/base.sh
+        source /opt/agentteams/scripts/lib/base.sh
         _k8s_higress_api() {
             local method="$1" path="$2" desc="$3"; shift 3; local body="$*"
             local tmpfile; tmpfile=$(mktemp)
@@ -435,10 +437,10 @@ if [ -n "${_HIGRESS_CONSOLE_URL}" ]; then
         case "${_LLM_PROVIDER}" in
             qwen)
                 _k8s_higress_api POST /v1/ai/providers "Creating LLM provider (qwen)" \
-                    '{"type":"qwen","name":"qwen","tokens":["'"${AGENTTEAMS_LLM_API_KEY}"'"],"protocol":"openai/v1","tokenFailoverConfig":{"enabled":false},"rawConfigs":{"qwenEnableSearch":false,"qwenEnableCompatible":true,"qwenFileIds":[],"hiclawMode":true}}'
+                    '{"type":"qwen","name":"qwen","tokens":["'"${AGENTTEAMS_LLM_API_KEY}"'"],"protocol":"openai/v1","tokenFailoverConfig":{"enabled":false},"rawConfigs":{"qwenEnableSearch":false,"qwenEnableCompatible":true,"qwenFileIds":[],"agentteamsMode":true}}'
                 ;;
             *)
-                _BODY='{"name":"'"${_LLM_PROVIDER}"'","type":"openai","tokens":["'"${AGENTTEAMS_LLM_API_KEY}"'"],"modelMapping":{},"protocol":"openai/v1","rawConfigs":{"hiclawMode":true}}'
+                _BODY='{"name":"'"${_LLM_PROVIDER}"'","type":"openai","tokens":["'"${AGENTTEAMS_LLM_API_KEY}"'"],"modelMapping":{},"protocol":"openai/v1","rawConfigs":{"agentteamsMode":true}}'
                 _k8s_higress_api POST /v1/ai/providers "Creating LLM provider (${_LLM_PROVIDER})" "${_BODY}"
                 ;;
         esac
@@ -467,7 +469,7 @@ if [ -n "${_HIGRESS_CONSOLE_URL}" ]; then
         sleep 45
     else
         # Docker mode: full setup with all routes, domains, MCP servers
-        /opt/hiclaw/scripts/init/setup-higress.sh
+        /opt/agentteams/scripts/init/setup-higress.sh
     fi
 fi
 
@@ -539,7 +541,7 @@ else
 
     # Persist admin DM room ID to state.json
     if [ -n "${DM_ROOM_ID}" ]; then
-        STATE_SCRIPT="/opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh"
+        STATE_SCRIPT="/opt/agentteams/agent/skills/task-management/scripts/manage-state.sh"
         if [ -f "${STATE_SCRIPT}" ]; then
             bash "${STATE_SCRIPT}" --action init 2>/dev/null || true
             bash "${STATE_SCRIPT}" --action set-admin-dm --room-id "${DM_ROOM_ID}" 2>/dev/null || true
@@ -648,9 +650,9 @@ case "${MODEL_NAME}" in
         export MODEL_CONTEXT_WINDOW=256000 MODEL_MAX_TOKENS=128000 ;;
     MiniMax-M3)
         export MODEL_CONTEXT_WINDOW=1000000 MODEL_MAX_TOKENS=128000 ;;
-    glm-5|MiniMax-M2.5)
+    glm-5)
         export MODEL_CONTEXT_WINDOW=200000 MODEL_MAX_TOKENS=128000 ;;
-    MiniMax-M2.7|MiniMax-M2.7-highspeed)
+    MiniMax-M2.7)
         export MODEL_CONTEXT_WINDOW=204800 MODEL_MAX_TOKENS=128000 ;;
     *)
         export MODEL_CONTEXT_WINDOW=150000 MODEL_MAX_TOKENS=128000 ;;
@@ -670,9 +672,11 @@ else
 fi
 log "Matrix E2EE: ${MATRIX_E2EE_ENABLED}"
 
-# Resolve input modalities: only vision-capable models get "image"
+# Resolve input modalities for built-in models.
 case "${MODEL_NAME}" in
-    gpt-5.4|gpt-5.3-codex|gpt-5-mini|gpt-5-nano|claude-opus-4-6|claude-sonnet-4-6|claude-haiku-4-5|qwen3.6-plus|qwen3.5-plus|kimi-k2.5|MiniMax-M3)
+    MiniMax-M3)
+        export MODEL_INPUT='["text", "image", "video"]' ;;
+    gpt-5.4|gpt-5.3-codex|gpt-5-mini|gpt-5-nano|claude-opus-4-6|claude-sonnet-4-6|claude-haiku-4-5|qwen3.6-plus|qwen3.5-plus|kimi-k2.5)
         export MODEL_INPUT='["text", "image"]' ;;
     *)
         export MODEL_INPUT='["text"]' ;;
@@ -690,7 +694,7 @@ if [ -f /root/manager-workspace/openclaw.json ]; then
     log "Manager openclaw.json already exists, updating dynamic fields only (preserving user customizations)..."
     # Merge known models into existing config (add missing, preserve user-added)
     # Use known-models.json (valid JSON) instead of template (contains ${VAR} placeholders)
-    KNOWN_MODELS=$(cat /opt/hiclaw/configs/known-models.json 2>/dev/null || echo '[]')
+    KNOWN_MODELS=$(cat /opt/agentteams/configs/known-models.json 2>/dev/null || echo '[]')
     jq --arg token "${MANAGER_TOKEN}" \
        --arg key "${AGENTTEAMS_MANAGER_GATEWAY_KEY}" \
        --arg model "${MODEL_NAME}" \
@@ -754,7 +758,7 @@ if [ -f /root/manager-workspace/openclaw.json ]; then
     fi
 else
     log "Manager openclaw.json not found, generating from template..."
-    envsubst < /opt/hiclaw/configs/manager-openclaw.json.tmpl > /root/manager-workspace/openclaw.json
+    envsubst < /opt/agentteams/configs/manager-openclaw.json.tmpl > /root/manager-workspace/openclaw.json
     # Post-envsubst injection: memorySearch + custom model (single jq pass when possible)
     if ! jq -e --arg model "${MODEL_NAME}" '.models.providers["agentteams-gateway"].models | map(.id) | index($model)' /root/manager-workspace/openclaw.json > /dev/null 2>&1; then
         log "Custom model '${MODEL_NAME}' not in built-in list, injecting into config..."
@@ -834,7 +838,7 @@ if [ "${CMS_TRACES_ENABLED}" = "true" ]; then
                     DIAG_AVAILABLE="1"
                     if [ ! -d "${DIAG_PLUGIN_DIR}/node_modules" ]; then
                         log "diagnostics-otel dependencies missing, installing..."
-                        if (cd "${DIAG_PLUGIN_DIR}" && npm install --omit=dev --ignore-scripts >/tmp/hiclaw-diag-install.log 2>&1); then
+                        if (cd "${DIAG_PLUGIN_DIR}" && npm install --omit=dev --ignore-scripts >/tmp/agentteams-diag-install.log 2>&1); then
                             log "diagnostics-otel dependencies installed"
                         else
                             log "WARNING: diagnostics-otel npm install failed, metrics plugin may not load"
@@ -918,7 +922,7 @@ fi
 # ============================================================
 # Detect container runtime (for Worker creation)
 # ============================================================
-source /opt/hiclaw/scripts/lib/container-api.sh
+source /opt/agentteams/scripts/lib/container-api.sh
 if container_api_available; then
     log "Container runtime socket detected at ${CONTAINER_SOCKET} — direct Worker creation enabled"
     export AGENTTEAMS_CONTAINER_RUNTIME="socket"
@@ -931,97 +935,15 @@ else
 fi
 
 # ============================================================
-# Upgrade Worker openclaw.json: merge known models + E2EE flag into existing configs
-# Existing workers in MinIO may have old single-model configs or missing encryption field.
-# Merge template models so they can hot-switch without restart.
-# ============================================================
-REGISTRY_FILE="/root/manager-workspace/workers-registry.json"
-if [ -f "${REGISTRY_FILE}" ]; then
-    # Use known-models.json (valid JSON) instead of template (contains ${VAR} placeholders)
-    KNOWN_MODELS_FILE="/opt/hiclaw/configs/known-models.json"
-    if [ -f "${KNOWN_MODELS_FILE}" ]; then
-        _KNOWN_MODELS=$(cat "${KNOWN_MODELS_FILE}")
-        for _wname in $(jq -r '.workers | keys[]' "${REGISTRY_FILE}" 2>/dev/null); do
-            [ -z "${_wname}" ] && continue
-            _minio_path="${AGENTTEAMS_STORAGE_PREFIX}/agents/${_wname}/openclaw.json"
-            _tmp_in="/tmp/openclaw-${_wname}-models-upgrade-in.json"
-            if mc cp "${_minio_path}" "${_tmp_in}" 2>/dev/null; then
-                _tmp_out="/tmp/openclaw-${_wname}-models-upgrade-out.json"
-                # Idempotent merge: add missing known models, rebuild aliases, set e2ee.
-                # Always runs — jq deduplicates by model id, so re-runs are safe.
-                jq --argjson known_models "${_KNOWN_MODELS}" \
-                   --argjson e2ee "${MATRIX_E2EE_ENABLED}" '
-                    .models.providers["agentteams-gateway"].models as $existing
-                    | ($existing | map(.id)) as $existing_ids
-                    | ($known_models | map(select(.id as $id | $existing_ids | index($id) | not))) as $new
-                    | .models.providers["agentteams-gateway"].models = ($existing + $new)
-                    | (.models.providers["agentteams-gateway"].models | map({ ("agentteams-gateway/" + .id): { "alias": .id } }) | add // {}) as $aliases
-                    | .agents.defaults.models = ((.agents.defaults.models // {}) + $aliases)
-                    | .channels.matrix.encryption = $e2ee
-                    | .channels.matrix.autoJoin = "always"
-                    | .tools = (.tools // {})
-                    | .tools.exec = ((.tools.exec // {}) + {"host":"gateway","security":"full","ask":"off"})
-                    | .tools.elevated = (.tools.elevated // {})
-                    | .tools.elevated.enabled = true
-                    | .tools.elevated.allowFrom |= ((. // {}) | .matrix = ["*"])
-                    | .agents.defaults.elevatedDefault = "full"
-                ' "${_tmp_in}" > "${_tmp_out}" 2>/dev/null
-                if ! diff -q "${_tmp_in}" "${_tmp_out}" > /dev/null 2>&1; then
-                    if mc cp "${_tmp_out}" "${_minio_path}" 2>/dev/null; then
-                        _new_count=$(jq '.models.providers["agentteams-gateway"].models | length' "${_tmp_out}" 2>/dev/null)
-                        log "Worker ${_wname}: upgraded openclaw.json (models: ${_new_count}, e2ee: ${MATRIX_E2EE_ENABLED})"
-                    fi
-                fi
-                rm -f "${_tmp_in}" "${_tmp_out}"
-            fi
-        done
-    fi
-fi
-
-# ============================================================
-# Ensure Worker Matrix password files exist in MinIO (E2EE fix)
-# Workers need to re-login on restart to get a fresh device_id.
-# Older workers created before this fix won't have the password file.
-# ============================================================
-if [ -f "${REGISTRY_FILE}" ]; then
-    for _wname in $(jq -r '.workers | keys[]' "${REGISTRY_FILE}" 2>/dev/null); do
-        [ -z "${_wname}" ] && continue
-        _creds_file="/data/worker-creds/${_wname}.env"
-        if [ -f "${_creds_file}" ]; then
-            # Check if password file already exists in MinIO
-            if ! mc stat "${AGENTTEAMS_STORAGE_PREFIX}/agents/${_wname}/credentials/matrix/password" > /dev/null 2>&1; then
-                source "${_creds_file}"
-                if [ -n "${WORKER_PASSWORD}" ]; then
-                    _tmp_pw="/tmp/matrix-pw-${_wname}"
-                    echo -n "${WORKER_PASSWORD}" > "${_tmp_pw}"
-                    mc cp "${_tmp_pw}" "${AGENTTEAMS_STORAGE_PREFIX}/agents/${_wname}/credentials/matrix/password" 2>/dev/null \
-                        && log "Worker ${_wname}: wrote Matrix password to MinIO (E2EE re-login fix)" \
-                        || log "Worker ${_wname}: WARNING: failed to write Matrix password to MinIO"
-                    rm -f "${_tmp_pw}"
-                fi
-            fi
-        fi
-    done
-fi
-
-# ============================================================
 # Recreate Worker containers as needed after Manager restart.
 # Workers are on agentteams-net; Docker DNS resolves *-local.agentteams.io via
 # the Manager's network aliases, so IP changes don't require worker recreation.
 # Only recreate stopped/missing workers.
 # ============================================================
 if container_api_available; then
-    REGISTRY_FILE="/root/manager-workspace/workers-registry.json"
-    if [ -f "${REGISTRY_FILE}" ]; then
-        for _worker_name in $(jq -r '.workers | keys[]' "${REGISTRY_FILE}" 2>/dev/null); do
+    _workers_json=$(agt get workers -o json 2>/dev/null || echo '{"workers":[]}')
+    for _worker_name in $(echo "${_workers_json}" | jq -r '.workers[].name'); do
             [ -z "${_worker_name}" ] && continue
-
-            # Skip remote workers — they are not Manager-managed containers.
-            _deployment=$(jq -r --arg w "${_worker_name}" '.workers[$w].deployment // "local"' "${REGISTRY_FILE}" 2>/dev/null)
-            if [ "${_deployment}" = "remote" ]; then
-                log "Worker ${_worker_name} is remote, skipping container recreate"
-                continue
-            fi
 
             _status=$(container_status_worker "${_worker_name}")
             if [ "${_status}" = "running" ]; then
@@ -1033,10 +955,11 @@ if container_api_available; then
             _creds_file="/data/worker-creds/${_worker_name}.env"
             if [ -f "${_creds_file}" ]; then
                 source "${_creds_file}"
-                _runtime=$(jq -r --arg w "${_worker_name}" '.workers[$w].runtime // "openclaw"' "${REGISTRY_FILE}" 2>/dev/null)
+                _runtime=$(echo "${_workers_json}" | jq -r --arg w "${_worker_name}" '.workers[] | select(.name == $w) | .runtime // "openclaw"')
                 _recreated=false
                 for _attempt in 1 2 3; do
-                    local _env_map _create_body
+                    _env_map=""
+                    _create_body=""
                     _env_map=$(jq -cn \
                         --arg name "${_worker_name}" \
                         --arg fak "${_worker_name}" \
@@ -1063,8 +986,7 @@ if container_api_available; then
             else
                 log "  WARNING: No credentials found for ${_worker_name} (${_creds_file} missing), skipping"
             fi
-        done
-    fi
+    done
 fi
 
 # ============================================================
@@ -1089,12 +1011,11 @@ if [ -f /root/manager-workspace/.upgrade-pending-worker-notify ]; then
         rm -f /root/manager-workspace/.upgrade-pending-worker-notify
     else
         log "Notifying workers about builtin updates..."
-        REGISTRY_FILE="/root/manager-workspace/workers-registry.json"
         _notify_ok=false
-        if [ -f "${REGISTRY_FILE}" ]; then
-            for _worker_name in $(jq -r '.workers | keys[]' "${REGISTRY_FILE}" 2>/dev/null); do
+        _workers_json=$(agt get workers -o json 2>/dev/null || echo '{"workers":[]}')
+        for _worker_name in $(echo "${_workers_json}" | jq -r '.workers[].name'); do
                 [ -z "${_worker_name}" ] && continue
-                _room_id=$(jq -r --arg w "${_worker_name}" '.workers[$w].room_id // empty' "${REGISTRY_FILE}" 2>/dev/null)
+                _room_id=$(echo "${_workers_json}" | jq -r --arg w "${_worker_name}" '.workers[] | select(.name == $w) | .roomID // empty')
                 if [ -n "${_room_id}" ]; then
                     _worker_id="@${_worker_name}:${MATRIX_DOMAIN}"
                     _txn_id="upgrade-$(date +%s%N)"
@@ -1113,8 +1034,7 @@ if [ -f /root/manager-workspace/.upgrade-pending-worker-notify ]; then
                         log "  WARNING: Failed to notify ${_worker_name} (HTTP ${_http_code}): ${_notify_resp}"
                     fi
                 fi
-            done
-        fi
+        done
         # Record timestamp only if at least one notification succeeded
         if [ "${_notify_ok}" = true ]; then
             echo "${_now}" > "${NOTIFY_TS_FILE}"
@@ -1142,7 +1062,7 @@ log "HOME=${HOME} (manager-workspace, host-mounted)"
 # Replace ${VAR} placeholders with actual values so the AI agent reads
 # plain text and never needs to resolve environment variables.
 export MANAGER_MATRIX_TOKEN MANAGER_TOKEN HIGRESS_COOKIE_FILE
-RENDER=/opt/hiclaw/scripts/lib/render-skills.sh
+RENDER=/opt/agentteams/scripts/lib/render-skills.sh
 log "Rendering agent doc templates..."
 # Manager-owned docs (workspace)
 bash "$RENDER" /root/manager-workspace/skills
@@ -1154,10 +1074,10 @@ bash "$RENDER" /root/manager-workspace/worker-skills
 bash "$RENDER" /root/manager-workspace/worker-agent
 bash "$RENDER" /root/manager-workspace/copaw-worker-agent
 bash "$RENDER" /root/manager-workspace/hermes-worker-agent
-bash "$RENDER" /opt/hiclaw/agent/worker-skills
-bash "$RENDER" /opt/hiclaw/agent/worker-agent
-bash "$RENDER" /opt/hiclaw/agent/copaw-worker-agent
-bash "$RENDER" /opt/hiclaw/agent/hermes-worker-agent
+bash "$RENDER" /opt/agentteams/agent/worker-skills
+bash "$RENDER" /opt/agentteams/agent/worker-agent
+bash "$RENDER" /opt/agentteams/agent/copaw-worker-agent
+bash "$RENDER" /opt/agentteams/agent/hermes-worker-agent
 log "Agent doc templates rendered"
 
 # Cloud mode: start background file sync (workspace ↔ OSS) and initial push
@@ -1187,8 +1107,8 @@ if [ "${AGENTTEAMS_RUNTIME}" = "aliyun" ]; then
         while true; do
             sleep 60
             ensure_mc_credentials 2>/dev/null || true
-            mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/" /root/hiclaw-fs/shared/ --overwrite --newer-than "1m" 2>/dev/null || true
-            mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agents/" /root/hiclaw-fs/agents/ --overwrite --newer-than "1m" 2>/dev/null || true
+            mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/" /root/agentteams-fs/shared/ --overwrite --newer-than "1m" 2>/dev/null || true
+            mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agents/" /root/agentteams-fs/agents/ --overwrite --newer-than "1m" 2>/dev/null || true
             mc cp "${AGENTTEAMS_STORAGE_PREFIX}/manager/openclaw.json" /root/manager-workspace/openclaw.json 2>/dev/null || true
         done
     ) &
@@ -1219,9 +1139,9 @@ if [ "${AGENTTEAMS_RUNTIME}" = "k8s" ]; then
     (
         while true; do
             sleep 60
-            mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/" /root/hiclaw-fs/shared/ --overwrite --newer-than "1m" 2>/dev/null || true
-            mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agents/" /root/hiclaw-fs/agents/ --overwrite --newer-than "1m" 2>/dev/null || true
-            mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agentteams-config/" /root/hiclaw-fs/agentteams-config/ --overwrite --newer-than "1m" 2>/dev/null || true
+            mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/" /root/agentteams-fs/shared/ --overwrite --newer-than "1m" 2>/dev/null || true
+            mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agents/" /root/agentteams-fs/agents/ --overwrite --newer-than "1m" 2>/dev/null || true
+            mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agentteams-config/" /root/agentteams-fs/agentteams-config/ --overwrite --newer-than "1m" 2>/dev/null || true
             mc cp "${AGENTTEAMS_STORAGE_PREFIX}/manager/openclaw.json" /root/manager-workspace/openclaw.json 2>/dev/null || true
         done
     ) &
@@ -1237,7 +1157,7 @@ fi
 if [ -n "${AGENTTEAMS_GITHUB_TOKEN}" ] && [ "${AGENTTEAMS_RUNTIME}" != "aliyun" ] && [ "${AGENTTEAMS_RUNTIME}" != "k8s" ]; then
     if [ ! -f "${HOME}/config/mcporter.json" ]; then
         log "Auto-generating Manager mcporter config for GitHub MCP (AGENTTEAMS_GITHUB_TOKEN set)..."
-        bash /opt/hiclaw/agent/skills/mcp-server-management/scripts/setup-mcp-server.sh \
+        bash /opt/agentteams/agent/skills/mcp-server-management/scripts/setup-mcp-server.sh \
             github "${AGENTTEAMS_GITHUB_TOKEN}" 2>&1 | while IFS= read -r line; do log "  [setup-mcp] ${line}"; done || \
             log "WARNING: setup-mcp-server.sh failed — Agent may need to configure GitHub MCP manually"
     else
@@ -1248,9 +1168,9 @@ fi
 # ============================================================
 # Runtime-specific startup
 # ============================================================
-if [ "${MANAGER_RUNTIME}" = "copaw" ]; then
-    # Delegate to CoPaw startup script
-    exec /opt/hiclaw/scripts/init/start-copaw-manager.sh
+if [ "${MANAGER_RUNTIME}" = "copaw" ] || [ "${MANAGER_RUNTIME}" = "qwenpaw" ]; then
+    # Delegate to QwenPaw startup script
+    exec /opt/agentteams/scripts/init/start-qwenpaw-manager.sh
 else
     # ── OpenClaw Runtime ─────────────────────────────────────────────────────
     log "Starting OpenClaw Manager..."

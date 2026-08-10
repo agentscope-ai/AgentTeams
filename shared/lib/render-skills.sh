@@ -1,14 +1,14 @@
 #!/bin/bash
 # render-skills.sh - Replace env var placeholders in agent doc files
 # Usage: render-skills.sh <directory> [file1 file2 ...]
-#   render-skills.sh /opt/hiclaw/agent/skills          — render all .md in dir
+#   render-skills.sh /opt/agentteams/agent/skills          — render all .md in dir
 #   render-skills.sh /dir AGENTS.md TOOLS.md            — render specific files in dir
 
 DIR="${1:?Usage: render-skills.sh <directory> [files...]}"
 [ ! -d "$DIR" ] && exit 0
 shift
 
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh 2>/dev/null || true
+source /opt/agentteams/scripts/lib/agentteams-env.sh 2>/dev/null || true
 
 # Defaults for variables that may not be set in all environments
 export AGENTTEAMS_MATRIX_URL="${AGENTTEAMS_MATRIX_URL:-http://127.0.0.1:6167}"

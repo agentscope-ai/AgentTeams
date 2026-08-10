@@ -26,17 +26,17 @@ Example: worker `alice` exposing port `8080` → `worker-alice-8080-local.agentt
 
 ```bash
 # Expose port 8080 for worker alice
-hiclaw apply worker --name alice --model qwen3.5-plus --expose 8080
+agt apply worker --name alice --model qwen3.5-plus --expose 8080
 
 # Expose multiple ports
-hiclaw apply worker --name alice --model qwen3.5-plus --expose 8080,3000
+agt apply worker --name alice --model qwen3.5-plus --expose 8080,3000
 
 # Check exposed ports
-hiclaw get worker alice
+agt get worker alice
 # Look for status.exposedPorts in the output
 
 # Remove exposed ports (update without --expose)
-hiclaw apply worker --name alice --model qwen3.5-plus
+agt apply worker --name alice --model qwen3.5-plus
 ```
 
 ### Via YAML
@@ -55,31 +55,40 @@ spec:
 
 Apply with:
 ```bash
-hiclaw apply -f worker.yaml
+agt apply -f worker.yaml
 ```
 
-### Team Workers
+### Workers referenced by a Team
 
-Team workers also support `expose`:
+Configure `expose` on the Worker CR, then reference that Worker from the Team:
 
 ```yaml
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: lead
+spec:
+  model: qwen3.5-plus
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: backend
+spec:
+  model: qwen3.5-plus
+  expose:
+    - port: 8080
+---
 apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: dev-team
 spec:
-  leader:
-    name: lead
-    model: qwen3.5-plus
-  workers:
+  workerMembers:
+    - name: lead
+      role: team_leader
     - name: backend
-      model: qwen3.5-plus
-      expose:
-        - port: 8080
-    - name: frontend
-      model: qwen3.5-plus
-      expose:
-        - port: 3000
+      role: worker
 ```
 
 ## Important Notes

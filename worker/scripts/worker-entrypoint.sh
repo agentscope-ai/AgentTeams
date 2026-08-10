@@ -3,12 +3,13 @@
 # Pulls config from centralized file system, starts file sync, launches OpenClaw.
 #
 # HOME is set to the Worker workspace so all agent-generated files are synced to MinIO:
-#   ~/ = /root/hiclaw-fs/agents/<WORKER_NAME>/  (SOUL.md, openclaw.json, memory/)
-#   /root/hiclaw-fs/shared/                     = Shared tasks, knowledge, collaboration data
+#   ~/ = /root/agentteams-fs/agents/<WORKER_NAME>/  (SOUL.md, openclaw.json, memory/)
+#   /root/agentteams-fs/shared/                     = Shared tasks, knowledge, collaboration data
 
 set -e
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh
-source /opt/hiclaw/scripts/lib/merge-openclaw-config.sh
+source /opt/agentteams/scripts/lib/agentteams-env.sh
+source /opt/agentteams/scripts/lib/merge-openclaw-config.sh
+source /opt/agentteams/scripts/lib/worker-file-sync.sh
 
 WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"
 FS_ENDPOINT="${AGENTTEAMS_FS_ENDPOINT:-}"
@@ -29,7 +30,7 @@ if [ -n "${TZ}" ] && [ -f "/usr/share/zoneinfo/${TZ}" ]; then
 fi
 
 # Use absolute path because HOME is set to the workspace directory via docker run
-AGENTTEAMS_ROOT="/root/hiclaw-fs"
+AGENTTEAMS_ROOT="/root/agentteams-fs"
 WORKSPACE="${AGENTTEAMS_ROOT}/agents/${WORKER_NAME}"
 
 # ============================================================
@@ -121,10 +122,10 @@ if [ -f "${_diag_plugin_dir}/package.json" ] && \
         "${WORKSPACE}/openclaw.json" > /dev/null 2>&1; then
     if [ ! -d "${_diag_plugin_dir}/node_modules" ]; then
         log "diagnostics-otel: installing npm dependencies (required for metrics)..."
-        if (cd "${_diag_plugin_dir}" && npm install --omit=dev --ignore-scripts >/tmp/hiclaw-diag-install.log 2>&1); then
+        if (cd "${_diag_plugin_dir}" && npm install --omit=dev --ignore-scripts >/tmp/agentteams-diag-install.log 2>&1); then
             log "diagnostics-otel dependencies installed"
         else
-            log "WARNING: diagnostics-otel npm install failed; metrics may not be reported (see /tmp/hiclaw-diag-install.log)"
+            log "WARNING: diagnostics-otel npm install failed; metrics may not be reported (see /tmp/agentteams-diag-install.log)"
         fi
     else
         log "diagnostics-otel dependencies already present"
@@ -138,16 +139,16 @@ if [ -f "${WORKSPACE}/skills-lock.json" ] && [ -z "$(ls -A ${WORKSPACE}/skills 2
     cd "${WORKSPACE}" && skills experimental_install -y 2>/dev/null || log "Warning: skills restore failed, will need to reinstall"
 fi
 
-# Ensure hiclaw-sync wrapper is functional
+# Ensure agentteams-sync is functional
 # Use /bin/sh to invoke the script so it works even without +x permission
 # (MinIO object storage does not preserve Unix permission bits)
-printf '#!/bin/bash\nexec /bin/sh "%s/skills/file-sync/scripts/hiclaw-sync.sh" "$@"\n' \
-    "${WORKSPACE}" > /usr/local/bin/hiclaw-sync
-chmod +x /usr/local/bin/hiclaw-sync
+printf '#!/bin/bash\nexec /bin/sh "%s/skills/file-sync/scripts/agentteams-sync.sh" "$@"\n' \
+    "${WORKSPACE}" > /usr/local/bin/agentteams-sync
+chmod +x /usr/local/bin/agentteams-sync
 
-# Defensive symlink: /opt/hiclaw/agent/skills -> actual skills directory
-mkdir -p /opt/hiclaw/agent
-ln -sfn "${WORKSPACE}/skills" /opt/hiclaw/agent/skills
+# Defensive symlink: /opt/agentteams/agent/skills -> actual skills directory
+mkdir -p /opt/agentteams/agent
+ln -sfn "${WORKSPACE}/skills" /opt/agentteams/agent/skills
 
 log "HOME set to ${HOME} (workspace files will be synced to MinIO)"
 
@@ -162,51 +163,29 @@ log "HOME set to ${HOME} (workspace files will be synced to MinIO)"
 #     2. Notifying the other side via Matrix @mention so they can pull on demand
 #
 #   Local -> Remote: change-triggered push of Worker-managed content
-#     - Uses find to detect files modified after the last pull; only runs mc mirror when needed
-#     - Avoids mc mirror --watch TOCTOU bug (crashes on atomic ops like npm install)
-#     - The bulk mirror excludes openclaw.json (local-first field merge; see merge-openclaw-config.sh),
-#       SOUL.md/AGENTS.md/HEARTBEAT.md (handled by the per-file loop below
-#       with an mtime guard), and various caches.
-#     - The per-file `mc cp`-if-newer loop pushes SOUL.md/AGENTS.md/HEARTBEAT.md
-#       only when the local copy was modified after the last pull. This lets
-#       the agent persist its own self-edits (HEARTBEAT.md checklist tweaks,
-#       SOUL.md "personality evolution") without pushing back the unmodified
-#       package content that was just pulled. mc mirror is run before the
-#       touch ${PULL_MARKER} on every pull path, so package content always
-#       has mtime <= PULL_MARKER and the -nt check stays false until the
-#       agent itself writes.
+#     - Uses an independent successful-push marker; a successful cycle advances
+#       the marker so the same files do not trigger a full comparison every 5s.
+#     - Small change sets are copied by relative path. Large change sets collapse
+#       to one mc mirror operation instead of spawning one process per file.
+#     - The path policy preserves the existing Manager-owned and local-runtime
+#       exclusions, while unknown workspace paths remain synchronizable.
+#     - Avoids mc mirror --watch TOCTOU behavior on atomic file operations.
 #
 #   Remote -> Local: on-demand pull via file-sync skill (triggered by Manager @mention)
 #     + 5-minute fallback pull of Manager-managed paths as safety net
-#       The fallback refreshes ${PULL_MARKER} so the change-triggered loop
-#       does not misinterpret freshly-pulled openclaw.json/skills mtimes as
-#       agent edits and spin forever on no-op pushes.
+#       The fallback refreshes both pull and push markers so freshly-pulled
+#       Manager-managed files do not get pushed back as Worker edits.
 #
 # ────────────────────────────────────────────────────────────────────────────
+WORKER_SYNC_STATE_DIR="/tmp/agentteams-worker-sync"
+worker_sync_init "${WORKER_SYNC_STATE_DIR}" "${PULL_MARKER}"
 (
     while true; do
-        # Only push files modified AFTER the last pull (avoids pushing back freshly-pulled files)
-        CHANGED=$(find "${WORKSPACE}/" -type f -newer "${PULL_MARKER}" 2>/dev/null | head -1)
-        if [ -n "${CHANGED}" ]; then
-            ensure_mc_credentials 2>/dev/null || true
-            if ! mc mirror "${WORKSPACE}/" "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/" --overwrite \
-                --exclude "openclaw.json" \
-                --exclude "config/mcporter.json" --exclude "mcporter-servers.json" --exclude ".agents/**" \
-                --exclude "credentials/**" \
-                --exclude ".cache/**" --exclude ".npm/**" \
-                --exclude ".local/**" --exclude ".mc/**" --exclude "*.lock" \
-                --exclude ".last-pull" \
-                --exclude ".openclaw/matrix/**" --exclude ".openclaw/canvas/**" \
-                --exclude "SOUL.md" --exclude "AGENTS.md" --exclude "HEARTBEAT.md" 2>&1; then
-                log "WARNING: Local->Remote sync failed"
-            fi
-            # Per-file push for agent-self-modifiable files: only when locally
-            # modified after the last pull. See block comment above for design.
-            for _mf in SOUL.md AGENTS.md HEARTBEAT.md; do
-                if [ -f "${WORKSPACE}/${_mf}" ] && [ "${WORKSPACE}/${_mf}" -nt "${PULL_MARKER}" ]; then
-                    mc cp "${WORKSPACE}/${_mf}" "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/${_mf}" 2>/dev/null || true
-                fi
-            done
+        if ! worker_sync_push_once \
+            "${WORKSPACE}" \
+            "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}" \
+            "${WORKER_SYNC_STATE_DIR}"; then
+            log "WARNING: Local->Remote incremental sync failed; changes will be retried"
         fi
         sleep 5
     done
@@ -222,16 +201,18 @@ log "Local->Remote change-triggered sync started (PID: $!)"
         sleep 300
         ensure_mc_credentials 2>/dev/null || true
         mc cp "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/openclaw.json" /tmp/openclaw-remote.json 2>/dev/null || true
-        merge_openclaw_config /tmp/openclaw-remote.json "${WORKSPACE}/openclaw.json"
+        if ! merge_openclaw_config /tmp/openclaw-remote.json "${WORKSPACE}/openclaw.json"; then
+            log "WARNING: failed to merge remote openclaw.json; keeping local config"
+        fi
         rm -f /tmp/openclaw-remote.json
         mc cp "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/config/mcporter.json" "${WORKSPACE}/config/mcporter.json" 2>/dev/null || true
         mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/skills/" "${WORKSPACE}/skills/" --overwrite 2>/dev/null || true
         find "${WORKSPACE}/skills" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
         mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/" "${AGENTTEAMS_ROOT}/shared/" --overwrite --newer-than "5m" 2>/dev/null || true
-        # Refresh PULL_MARKER so the change-triggered push loop doesn't
-        # re-trigger forever on freshly-pulled openclaw.json/skills mtimes,
-        # and so the per-file -nt guard correctly classifies post-pull edits.
+        # Refresh both watermarks so freshly-pulled Manager-managed files are
+        # not classified as Worker edits.
         touch "${PULL_MARKER}"
+        worker_sync_mark_remote_pull "${WORKER_SYNC_STATE_DIR}"
     done
 ) &
 log "Remote->Local fallback sync started (Manager-managed files only, every 5m, PID: $!)"
@@ -340,7 +321,7 @@ fi
 # ============================================================
 # Step 5c: Background readiness reporter
 # ============================================================
-# Wait for local gateway health, then report ready via hiclaw CLI.
+# Wait for local gateway health, then report ready via agt CLI.
 if [ -n "${AGENTTEAMS_CONTROLLER_URL:-}" ]; then
 (
         # Phase 1: Wait for gateway to be healthy (with timeout)
@@ -357,8 +338,8 @@ if [ -n "${AGENTTEAMS_CONTROLLER_URL:-}" ]; then
             exit 1
         fi
 
-        # Report ready to controller via hiclaw CLI
-        hiclaw worker report-ready --name "${AGENTTEAMS_WORKER_CR_NAME:-${WORKER_NAME}}"
+        # Report ready to controller via agt CLI
+        agt worker report-ready --name "${AGENTTEAMS_WORKER_CR_NAME:-${WORKER_NAME}}"
     ) &
     log "Background readiness reporter started (PID: $!)"
 fi

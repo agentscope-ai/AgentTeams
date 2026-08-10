@@ -12,13 +12,13 @@
 
 set -e
 
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh
+source /opt/agentteams/scripts/lib/agentteams-env.sh
 
 WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"
 WORKER_CR_NAME="${AGENTTEAMS_WORKER_CR_NAME:-${WORKER_NAME}}"
 # Align with CoPaw/openclaw/hermes: HOME == workspace == MinIO mirror root.
 # install_dir is its parent so install_dir/<name> == HOME.
-INSTALL_DIR="/root/hiclaw-fs/agents"
+INSTALL_DIR="/root/agentteams-fs/agents"
 WORKER_HOME="${AGENTTEAMS_WORKER_HOME:-${INSTALL_DIR}/${WORKER_NAME}}"
 CONSOLE_PORT="${AGENTTEAMS_CONSOLE_PORT:-8088}"
 

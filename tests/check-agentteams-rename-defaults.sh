@@ -3,31 +3,63 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${ROOT_DIR}"
 
-assert_contains() {
-    local file="$1"
-    local expected="$2"
-    if ! grep -Fq -- "${expected}" "${ROOT_DIR}/${file}"; then
-        echo "FAIL: ${file} does not contain: ${expected}" >&2
-        return 1
+legacy_brand='hi''claw'
+legacy_brand_title='Hi''Claw'
+archive_paths=(
+    ':(exclude)blog/**'
+    ':(exclude)changelog/**'
+    ':(exclude)docs/faq-legacy.md'
+    ':(exclude)docs/zh-cn/faq-legacy.md'
+)
+
+if matches="$(git grep -nIi "${legacy_brand}" -- . "${archive_paths[@]}" 2>/dev/null)"; then
+    unexpected_matches=""
+    while IFS= read -r match; do
+        case "${match}" in
+            install/agentteams-dashboard-tests.sh:*)
+                ;;
+            install/agentteams-install.sh:*"${legacy_brand}-controller"* | \
+            install/agentteams-install.sh:*"/var/run/${legacy_brand}/cli-token"* | \
+            install/agentteams-install.sh:*"older ${legacy_brand_title} images"* | \
+            install/agentteams-install.sh:*"AgentTeams/${legacy_brand_title} images"*)
+                ;;
+            *)
+                unexpected_matches="${unexpected_matches}${unexpected_matches:+$'\n'}${match}"
+                ;;
+        esac
+    done <<< "${matches}"
+
+    if [ -n "${unexpected_matches}" ]; then
+        echo "FAIL: active files still contain the retired brand:" >&2
+        echo "${unexpected_matches}" >&2
+        exit 1
     fi
-}
+fi
 
-assert_contains helm/hiclaw/values.yaml 'bucket: "agentteams-storage"'
-assert_contains helm/hiclaw/values.yaml 'resourcePrefix: "agentteams-"'
-assert_contains helm/hiclaw/templates/controller/deployment.yaml 'default "agentteams-" | quote'
-assert_contains helm/hiclaw/templates/_helpers.infra.tpl 'printf "agentteams/%s"'
+if paths="$(git ls-files | grep -i "${legacy_brand}" || true)" && [ -n "${paths}" ]; then
+    echo "FAIL: tracked paths still use the retired brand:" >&2
+    echo "${paths}" >&2
+    exit 1
+fi
 
-echo "PASS: AgentTeams Helm defaults"
+required_paths=(
+    agentteams-controller/go.mod
+    helm/agentteams/Chart.yaml
+    install/agentteams-install.sh
+    install/agentteams-install.ps1
+    shared/lib/agentteams-env.sh
+)
+for path in "${required_paths[@]}"; do
+    if [ ! -e "${path}" ]; then
+        echo "FAIL: canonical AgentTeams path is missing: ${path}" >&2
+        exit 1
+    fi
+done
 
-OPENHUMAN_ENTRYPOINT="openhuman/scripts/openhuman-worker-entrypoint.sh"
-assert_contains "${OPENHUMAN_ENTRYPOINT}" 'AGENTTEAMS_WORKER_NAME="${AGENTTEAMS_WORKER_NAME:-${HICLAW_WORKER_NAME:-}}"'
-assert_contains "${OPENHUMAN_ENTRYPOINT}" 'WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"'
-assert_contains "${OPENHUMAN_ENTRYPOINT}" 'if [ "${AGENTTEAMS_RUNTIME:-}" = "aliyun" ]; then'
-assert_contains "${OPENHUMAN_ENTRYPOINT}" 'mc alias set "${AGENTTEAMS_STORAGE_ALIAS}"'
-assert_contains "${OPENHUMAN_ENTRYPOINT}" 'mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/"'
-assert_contains "${OPENHUMAN_ENTRYPOINT}" 'AGENTTEAMS_AI_GATEWAY_URL%/}/v1'
-assert_contains "${OPENHUMAN_ENTRYPOINT}" 'if [ -n "${AGENTTEAMS_CONTROLLER_URL:-}" ]; then'
-assert_contains "${OPENHUMAN_ENTRYPOINT}" 'cat ${AGENTTEAMS_AUTH_TOKEN_FILE:-/var/run/secrets/agentteams/token}'
+grep -Fq 'module github.com/agentscope-ai/AgentTeams/agentteams-controller' agentteams-controller/go.mod
+grep -Fq 'name: agentteams' helm/agentteams/Chart.yaml
+grep -Fq 'define "agentteams.name"' helm/agentteams/templates/_helpers.tpl
 
-echo "PASS: OpenHuman AgentTeams environment contract"
+echo "PASS: active source tree uses AgentTeams-only names and contracts"

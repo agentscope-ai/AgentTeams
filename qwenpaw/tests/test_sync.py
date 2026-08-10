@@ -1,8 +1,11 @@
+import asyncio
 import os
 import subprocess
 from pathlib import Path
 
-from qwenpaw_worker.sync import FileSync, push_local
+import pytest
+
+from qwenpaw_worker.sync import FileSync, push_local, push_loop
 
 
 def _sync(tmp_path: Path) -> FileSync:
@@ -182,6 +185,67 @@ def test_push_local_uploads_worker_files_but_skips_controller_owned_state(tmp_pa
     }
 
 
+def test_push_paths_persists_selected_migration_files_in_order(tmp_path: Path, monkeypatch) -> None:
+    sync = _sync(tmp_path)
+    session = sync.local_dir / ".qwenpaw" / "workspaces" / "default" / "chats.json"
+    marker = sync.local_dir / ".qwenpaw" / ".copaw-migrated"
+    session.parent.mkdir(parents=True)
+    session.write_text("legacy-session", encoding="utf-8")
+    marker.write_text("copaw-to-qwenpaw\n", encoding="utf-8")
+    uploads = []
+
+    monkeypatch.setattr(sync, "ensure_alias", lambda: None)
+    monkeypatch.setattr(sync, "_cat_bytes", lambda _key: None)
+
+    def fake_mc(*args, **_kwargs):
+        uploads.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(sync, "_mc", fake_mc)
+
+    assert sync.push_paths([session, marker]) == [
+        ".qwenpaw/workspaces/default/chats.json",
+        ".qwenpaw/.copaw-migrated",
+    ]
+    assert [args[2] for args in uploads] == [
+        "agentteams/agentteams-storage/agents/worker-a/.qwenpaw/workspaces/default/chats.json",
+        "agentteams/agentteams-storage/agents/worker-a/.qwenpaw/.copaw-migrated",
+    ]
+
+
+def test_push_directories_mirrors_migration_roots(tmp_path: Path, monkeypatch) -> None:
+    sync = _sync(tmp_path)
+    working_dir = sync.local_dir / ".qwenpaw"
+    secret_dir = sync.local_dir / ".qwenpaw.secret"
+    working_dir.mkdir(parents=True)
+    secret_dir.mkdir()
+    commands = []
+
+    monkeypatch.setattr(sync, "ensure_alias", lambda: None)
+
+    def fake_mc(*args, **_kwargs):
+        commands.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(sync, "_mc", fake_mc)
+
+    assert sync.push_directories([working_dir, secret_dir]) == [".qwenpaw", ".qwenpaw.secret"]
+    assert commands == [
+        (
+            "mirror",
+            f"{working_dir}/",
+            "agentteams/agentteams-storage/agents/worker-a/.qwenpaw/",
+            "--overwrite",
+        ),
+        (
+            "mirror",
+            f"{secret_dir}/",
+            "agentteams/agentteams-storage/agents/worker-a/.qwenpaw.secret/",
+            "--overwrite",
+        ),
+    ]
+
+
 def test_push_local_does_not_remove_remote_files_missing_from_local_state(tmp_path: Path, monkeypatch) -> None:
     sync = _sync(tmp_path)
     commands = []
@@ -290,3 +354,31 @@ def test_push_local_uploads_large_files_without_remote_content_compare(tmp_path:
 
     assert push_local(sync, since=0) == ["large.zip"]
     assert uploads == ["agentteams/agentteams-storage/agents/worker-a/large.zip"]
+
+
+@pytest.mark.anyio
+async def test_push_loop_starts_from_current_time_instead_of_full_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sync = _sync(tmp_path)
+    since_values: list[float] = []
+    sleeps = 0
+
+    async def fake_sleep(_seconds: float) -> None:
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps > 1:
+            raise asyncio.CancelledError
+
+    async def fake_to_thread(_function, _sync, since):
+        since_values.append(since)
+        return []
+
+    monkeypatch.setattr("qwenpaw_worker.sync.time.time", lambda: 123.0)
+    monkeypatch.setattr("qwenpaw_worker.sync.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("qwenpaw_worker.sync.asyncio.to_thread", fake_to_thread)
+
+    await push_loop(sync, check_interval=0)
+
+    assert since_values == [123.0]

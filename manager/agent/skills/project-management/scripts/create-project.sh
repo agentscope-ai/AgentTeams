@@ -9,7 +9,7 @@
 #   - Environment: AGENTTEAMS_MATRIX_DOMAIN, AGENTTEAMS_ADMIN_USER, MANAGER_MATRIX_TOKEN
 
 set -e
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh
+source /opt/agentteams/scripts/lib/agentteams-env.sh
 
 PROJECT_ID=""
 PROJECT_TITLE=""
@@ -38,7 +38,7 @@ _fail() {
 }
 
 # Ensure Manager Matrix token is available
-SECRETS_FILE="/data/hiclaw-secrets.env"
+SECRETS_FILE="/data/agentteams-secrets.env"
 if [ -f "${SECRETS_FILE}" ]; then
     source "${SECRETS_FILE}"
 fi
@@ -54,7 +54,7 @@ fi
 # Step 1: Create project directories and files
 # ============================================================
 log "Step 1: Creating project directories..."
-PROJECT_DIR="/root/hiclaw-fs/shared/projects/${PROJECT_ID}"
+PROJECT_DIR="/root/agentteams-fs/shared/projects/${PROJECT_ID}"
 mkdir -p "${PROJECT_DIR}"
 
 NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -190,8 +190,8 @@ _worker_auto_join() {
     if [ -z "${WORKER_PASSWORD}" ]; then
         WORKER_PASSWORD=$(mc cat "${AGENTTEAMS_STORAGE_PREFIX}/agents/${worker}/credentials/matrix/password" 2>/dev/null || true)
     fi
-    if [ -z "${WORKER_PASSWORD}" ] && [ -f "/root/hiclaw-fs/agents/${worker}/credentials/matrix/password" ]; then
-        WORKER_PASSWORD=$(cat "/root/hiclaw-fs/agents/${worker}/credentials/matrix/password" 2>/dev/null || true)
+    if [ -z "${WORKER_PASSWORD}" ] && [ -f "/root/agentteams-fs/agents/${worker}/credentials/matrix/password" ]; then
+        WORKER_PASSWORD=$(cat "/root/agentteams-fs/agents/${worker}/credentials/matrix/password" 2>/dev/null || true)
     fi
 
     if [ -n "${WORKER_PASSWORD}" ]; then
@@ -271,7 +271,7 @@ done
 # Step 3: Add Workers to Manager's groupAllowFrom
 # ============================================================
 log "Step 3: Updating Manager groupAllowFrom..."
-MANAGER_CONFIG="/root/hiclaw-fs/agents/manager/openclaw.json"
+MANAGER_CONFIG="/root/agentteams-fs/agents/manager/openclaw.json"
 if [ -f "${MANAGER_CONFIG}" ]; then
     _patch_manager_project_room_config "${MANAGER_CONFIG}"
     # Sync updated Manager config to MinIO

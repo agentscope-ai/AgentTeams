@@ -3,12 +3,12 @@ name: AgentTeams Controller Tests
 on:
   pull_request:
     paths:
-      - 'hiclaw-controller/**'
+      - 'agentteams-controller/**'
       - '.github/workflows/test-controller.yml'
   push:
     branches: [main]
     paths:
-      - 'hiclaw-controller/**'
+      - 'agentteams-controller/**'
   workflow_dispatch:
 
 jobs:
@@ -20,13 +20,13 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: hiclaw-controller/go.mod
-          cache-dependency-path: hiclaw-controller/go.sum
+          go-version-file: agentteams-controller/go.mod
+          cache-dependency-path: agentteams-controller/go.sum
 
       - name: Unit tests
-        working-directory: hiclaw-controller
+        working-directory: agentteams-controller
         run: make test-unit
 
       - name: Integration tests (envtest)
-        working-directory: hiclaw-controller
+        working-directory: agentteams-controller
         run: make test-integration

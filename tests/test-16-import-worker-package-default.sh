@@ -1,7 +1,7 @@
 #!/bin/bash
-# test-16-import-worker-package-default.sh - Case 16: hiclaw-import.sh package defaulting
+# test-16-import-worker-package-default.sh - Case 16: agentteams-import.sh package defaulting
 #
-# Verifies the host-side import wrapper assembles the expected `hiclaw` CLI
+# Verifies the host-side import wrapper assembles the expected `agt` CLI
 # arguments before delegating into the Manager container:
 #   1. --name without --package defaults to --package <name>
 #   2. explicit --package is preserved
@@ -10,7 +10,7 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-TEST_TMP_DIR="$(mktemp -d /tmp/hiclaw-import-default-XXXXXX)"
+TEST_TMP_DIR="$(mktemp -d /tmp/agentteams-import-default-XXXXXX)"
 trap 'rm -rf "${TEST_TMP_DIR}"' EXIT
 
 FAKE_BIN="${TEST_TMP_DIR}/bin"
@@ -29,7 +29,7 @@ case "$1" in
         exit 0
         ;;
     ps)
-        echo "hiclaw-manager"
+        echo "agentteams-manager"
         exit 0
         ;;
     cp)
@@ -37,7 +37,7 @@ case "$1" in
         ;;
     exec)
         shift
-        if [ "${1:-}" = "hiclaw-manager" ]; then
+        if [ "${1:-}" = "agentteams-manager" ]; then
             shift
         fi
         case "${1:-}" in
@@ -47,7 +47,7 @@ case "$1" in
             printenv)
                 exit 0
                 ;;
-            hiclaw)
+            agt)
                 shift
                 printf '%s\n' "$@" > "${capture_file}"
                 exit 0
@@ -70,7 +70,7 @@ test_setup "16-import-worker-package-default"
 
 run_import() {
     : > "${FAKE_DOCKER_CAPTURE}"
-    bash "${PROJECT_ROOT}/install/hiclaw-import.sh" "$@" >/dev/null 2>&1
+    bash "${PROJECT_ROOT}/install/agentteams-import.sh" "$@" >/dev/null 2>&1
 }
 
 captured_cmd() {

@@ -727,3 +727,34 @@ async def test_worker_installs_hooks_before_copaw_runner(tmp_path, monkeypatch):
     await worker._run_copaw()
 
     assert calls == ["hooks", "headless"]
+
+
+@pytest.mark.anyio
+async def test_copaw_worker_keeps_legacy_copaw_working_dir(tmp_path, monkeypatch):
+    """An explicitly configured copaw Worker must keep using .copaw and must
+    NOT migrate it to .qwenpaw before any runtime switch. The .copaw ->
+    .qwenpaw migration is owned exclusively by qwenpaw_worker startup."""
+    monkeypatch.setattr(Worker, "_ensure_mc", lambda _self: None)
+    monkeypatch.setattr("copaw_worker.sync.FileSync.mirror_all", lambda _self: None)
+    monkeypatch.setattr("copaw_worker.sync.FileSync.get_config", lambda _self: {})
+    monkeypatch.setattr("copaw_worker.sync.FileSync.list_skills", lambda _self: [])
+    monkeypatch.setattr(Worker, "_matrix_relogin", lambda _self, cfg: cfg)
+    monkeypatch.setattr(
+        "copaw_worker.worker.bridge_standard_to_runtime",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr("copaw_worker.worker.push_loop", _finished_push_loop)
+    monkeypatch.setattr("copaw_worker.worker.sync_loop", _finished_pull_loop)
+
+    legacy = tmp_path / "alice" / ".copaw"
+    legacy.mkdir(parents=True)
+    (legacy / "state.txt").write_text("legacy", encoding="utf-8")
+
+    worker = Worker(_config(tmp_path))
+
+    assert await worker.start() is True
+    await worker.stop()
+
+    assert worker._copaw_working_dir == tmp_path / "alice" / ".copaw"
+    assert (legacy / "state.txt").read_text(encoding="utf-8") == "legacy"
+    assert not (tmp_path / "alice" / ".qwenpaw").exists()

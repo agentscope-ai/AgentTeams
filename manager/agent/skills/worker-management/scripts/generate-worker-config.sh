@@ -5,13 +5,13 @@
 #   generate-worker-config.sh <WORKER_NAME> <MATRIX_TOKEN> <GATEWAY_KEY> [MODEL_ID] [TEAM_LEADER_NAME]
 #
 # Reads env vars: AGENTTEAMS_MATRIX_URL, AGENTTEAMS_MATRIX_DOMAIN, AGENTTEAMS_AI_GATEWAY_URL, AGENTTEAMS_ADMIN_USER, AGENTTEAMS_DEFAULT_MODEL
-# Output: /root/hiclaw-fs/agents/<WORKER_NAME>/openclaw.json
+# Output: /root/agentteams-fs/agents/<WORKER_NAME>/openclaw.json
 #
 # If TEAM_LEADER_NAME is provided, groupAllowFrom and dm.allowFrom will use
 # [Leader, Admin] instead of [Manager, Admin].
 
 set -e
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh
+source /opt/agentteams/scripts/lib/agentteams-env.sh
 
 WORKER_NAME="$1"
 WORKER_MATRIX_TOKEN="$2"
@@ -49,9 +49,9 @@ case "${MODEL_NAME}" in
         CTX=256000; MAX=128000 ;;
     MiniMax-M3)
         CTX=1000000; MAX=128000 ;;
-    glm-5|MiniMax-M2.5)
+    glm-5)
         CTX=200000; MAX=128000 ;;
-    MiniMax-M2.7|MiniMax-M2.7-highspeed)
+    MiniMax-M2.7)
         CTX=204800; MAX=128000 ;;
     *)
         CTX=150000; MAX=128000 ;;
@@ -61,9 +61,11 @@ esac
 [ -n "${AGENTTEAMS_MODEL_CONTEXT_WINDOW:-}" ] && CTX="${AGENTTEAMS_MODEL_CONTEXT_WINDOW}"
 [ -n "${AGENTTEAMS_MODEL_MAX_TOKENS:-}" ] && MAX="${AGENTTEAMS_MODEL_MAX_TOKENS}"
 
-# Resolve input modalities: only vision-capable models get "image"
+# Resolve input modalities for built-in models.
 case "${MODEL_NAME}" in
-    gpt-5.4|gpt-5.3-codex|gpt-5-mini|gpt-5-nano|claude-opus-4-6|claude-sonnet-4-6|claude-haiku-4-5|qwen3.6-plus|qwen3.5-plus|kimi-k2.5|MiniMax-M3)
+    MiniMax-M3)
+        INPUT='["text", "image", "video"]' ;;
+    gpt-5.4|gpt-5.3-codex|gpt-5-mini|gpt-5-nano|claude-opus-4-6|claude-sonnet-4-6|claude-haiku-4-5|qwen3.6-plus|qwen3.5-plus|kimi-k2.5)
         INPUT='["text", "image"]' ;;
     *)
         INPUT='["text"]' ;;
@@ -116,10 +118,10 @@ else
     export MATRIX_E2EE_ENABLED=false
 fi
 
-OUTPUT_DIR="/root/hiclaw-fs/agents/${WORKER_NAME}"
+OUTPUT_DIR="/root/agentteams-fs/agents/${WORKER_NAME}"
 mkdir -p "${OUTPUT_DIR}"
 
-envsubst < /opt/hiclaw/agent/skills/worker-management/references/worker-openclaw.json.tmpl > "${OUTPUT_DIR}/openclaw.json"
+envsubst < /opt/agentteams/agent/skills/worker-management/references/worker-openclaw.json.tmpl > "${OUTPUT_DIR}/openclaw.json"
 
 # Post-envsubst injection: memorySearch + custom model (single jq pass when possible)
 if ! jq -e --arg model "${MODEL_NAME}" '.models.providers["agentteams-gateway"].models | map(.id) | index($model)' "${OUTPUT_DIR}/openclaw.json" > /dev/null 2>&1; then

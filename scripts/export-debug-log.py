@@ -21,11 +21,14 @@ Output structure:
     ├── summary.txt
     ├── matrix-messages/
     │   └── RoomName_!roomid.jsonl
-    └── agent-sessions/
+    ├── agent-sessions/
         ├── agentteams-manager/
         │   └── {session-id}.jsonl
         └── agentteams-worker-xxx/
             └── {session-key}.jsonl
+    └── container-logs/
+        ├── agentteams-worker-xxx.log
+        └── agentteams-worker-xxx.state.json
 """
 
 import argparse
@@ -145,15 +148,91 @@ def docker_exec(container: str, cmd: str) -> str:
     return result.stdout
 
 
-def list_hiclaw_containers() -> list[str]:
+def list_agentteams_containers() -> list[str]:
     names: list[str] = []
-    for prefix in ("agentteams-", "hiclaw-"):
+    for prefix in ("agentteams-",):
         result = subprocess.run(
             ["docker", "ps", "--format", "{{.Names}}", "--filter", f"name={prefix}"],
             capture_output=True, text=True, timeout=10,
         )
         names.extend(n.strip() for n in result.stdout.splitlines() if n.strip())
     return list(dict.fromkeys(names))
+
+
+# ---------------------------------------------------------------------------
+# Container diagnostics
+# ---------------------------------------------------------------------------
+
+def _docker_run(*args: str) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            ["docker", *args],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return subprocess.CompletedProcess(
+            ["docker", *args],
+            1,
+            "",
+            f"{type(exc).__name__}: {exc}",
+        )
+
+
+def export_container_logs(out_dir: Path, since_epoch: float, redact: bool,
+                          container_filter: str | None) -> int:
+    """Export Docker state and logs for all AgentTeams containers."""
+    result = _docker_run("ps", "-a", "--format", "{{.Names}}", "--filter", "name=agentteams-")
+    containers = [name.strip() for name in result.stdout.splitlines() if name.strip()]
+    if container_filter:
+        containers = [name for name in containers if container_filter in name]
+    if not containers:
+        print("  [containers] No matching AgentTeams containers found")
+        return 0
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    since = datetime.fromtimestamp(since_epoch, tz=timezone.utc).isoformat()
+
+    for container in containers:
+        state_result = _docker_run("inspect", "--format={{json .State}}", container)
+        image_result = _docker_run("inspect", "--format={{json .Config.Image}}", container)
+        restart_result = _docker_run("inspect", "--format={{.RestartCount}}", container)
+        try:
+            state = json.loads(state_result.stdout)
+        except (json.JSONDecodeError, TypeError):
+            state = {"inspect_error": state_result.stderr.strip() or state_result.stdout.strip()}
+        try:
+            image = json.loads(image_result.stdout)
+        except (json.JSONDecodeError, TypeError):
+            image = image_result.stdout.strip()
+        try:
+            restart_count = int(restart_result.stdout.strip())
+        except ValueError:
+            restart_count = None
+
+        diagnostic = {
+            "container": container,
+            "image": image,
+            "restart_count": restart_count,
+            "state": state,
+        }
+        if redact:
+            diagnostic = redact_json_strings(diagnostic)
+        filename = sanitize_filename(container)
+        (out_dir / f"{filename}.state.json").write_text(
+            json.dumps(diagnostic, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        logs_result = _docker_run("logs", "--timestamps", "--since", since, container)
+        logs = logs_result.stdout + logs_result.stderr
+        if redact:
+            logs = redact_pii(logs)
+        (out_dir / f"{filename}.log").write_text(logs, encoding="utf-8")
+        print(f"  {container}: state + {len(logs.splitlines())} log lines")
+
+    return len(containers)
 
 
 # ---------------------------------------------------------------------------
@@ -261,18 +340,18 @@ def export_matrix_messages(out_dir: Path, since_epoch: float, redact: bool,
                            messages_only: bool) -> tuple[int, int]:
     """Export Matrix messages. Returns (rooms_exported, message_count)."""
     env_path = env_file or os.path.expanduser("~/agentteams-manager.env")
-    hiclaw_env = load_env_file(env_path)
+    agentteams_env = load_env_file(env_path)
 
     if not homeserver:
-        if not hiclaw_env:
+        if not agentteams_env:
             print(f"  [matrix] Cannot find {env_path}, skipping Matrix export")
             return 0, 0
-        port = hiclaw_env.get("AGENTTEAMS_PORT_GATEWAY", "18080")
+        port = agentteams_env.get("AGENTTEAMS_PORT_GATEWAY", "18080")
         homeserver = f"http://127.0.0.1:{port}"
 
     if not token:
         # Use Manager token — Manager is in every room (DM, Worker, Project)
-        manager_password = hiclaw_env.get("AGENTTEAMS_MANAGER_PASSWORD", "")
+        manager_password = agentteams_env.get("AGENTTEAMS_MANAGER_PASSWORD", "")
         if manager_password:
             try:
                 token = matrix_login(homeserver, "manager", manager_password)
@@ -281,8 +360,8 @@ def export_matrix_messages(out_dir: Path, since_epoch: float, redact: bool,
 
         # Fallback to admin token if Manager login failed
         if not token:
-            admin_user = hiclaw_env.get("AGENTTEAMS_ADMIN_USER", "admin")
-            admin_password = hiclaw_env.get("AGENTTEAMS_ADMIN_PASSWORD", "")
+            admin_user = agentteams_env.get("AGENTTEAMS_ADMIN_USER", "admin")
+            admin_password = agentteams_env.get("AGENTTEAMS_ADMIN_PASSWORD", "")
             if not admin_password:
                 print(f"  [matrix] No usable credentials found, skipping Matrix export")
                 return 0, 0
@@ -360,14 +439,14 @@ def detect_runtime(container: str) -> tuple[str, str]:
         hermes   -> /root/manager-workspace/.hermes/sessions
         copaw    -> /root/manager-workspace/.copaw/workspaces/default/sessions
 
-      OpenClaw / Hermes Worker (HOME=/root/hiclaw-fs/agents/<name>):
-        openclaw -> /root/hiclaw-fs/agents/<name>/.openclaw/agents/main/sessions
-        hermes   -> /root/hiclaw-fs/agents/<name>/.hermes/sessions
+      OpenClaw / Hermes Worker (HOME=/root/agentteams-fs/agents/<name>):
+        openclaw -> /root/agentteams-fs/agents/<name>/.openclaw/agents/main/sessions
+        hermes   -> /root/agentteams-fs/agents/<name>/.hermes/sessions
 
-      CoPaw Worker (HOME=/root/.hiclaw-worker/<name>, also reachable via
-      /root/hiclaw-fs symlink that points to that same dir):
-        copaw    -> /root/.hiclaw-worker/<name>/.copaw/workspaces/default/sessions
-        copaw    -> /root/hiclaw-fs/.copaw/workspaces/default/sessions  (alt)
+      CoPaw Worker (HOME=/root/.agentteams-worker/<name>, also reachable via
+      /root/agentteams-fs symlink that points to that same dir):
+        copaw    -> /root/.agentteams-worker/<name>/.copaw/workspaces/default/sessions
+        copaw    -> /root/agentteams-fs/.copaw/workspaces/default/sessions  (alt)
     """
     candidates: list[tuple[str, str]] = [
         ("openclaw", "/root/manager-workspace/.openclaw/agents/main/sessions"),
@@ -378,10 +457,10 @@ def detect_runtime(container: str) -> tuple[str, str]:
     worker_name = docker_exec(container, "echo $AGENTTEAMS_WORKER_NAME").strip()
     if worker_name:
         candidates.extend([
-            ("openclaw", f"/root/hiclaw-fs/agents/{worker_name}/.openclaw/agents/main/sessions"),
-            ("hermes",   f"/root/hiclaw-fs/agents/{worker_name}/.hermes/sessions"),
-            ("copaw",    f"/root/.hiclaw-worker/{worker_name}/.copaw/workspaces/default/sessions"),
-            ("copaw",    "/root/hiclaw-fs/.copaw/workspaces/default/sessions"),
+            ("openclaw", f"/root/agentteams-fs/agents/{worker_name}/.openclaw/agents/main/sessions"),
+            ("hermes",   f"/root/agentteams-fs/agents/{worker_name}/.hermes/sessions"),
+            ("copaw",    f"/root/.agentteams-worker/{worker_name}/.copaw/workspaces/default/sessions"),
+            ("copaw",    "/root/agentteams-fs/.copaw/workspaces/default/sessions"),
         ])
 
     for runtime, path in candidates:
@@ -643,7 +722,7 @@ def export_hermes_sessions(container: str, sessions_dir: str, since_epoch: float
 def export_agent_sessions(out_dir: Path, since_epoch: float, redact: bool,
                           container_filter: str | None) -> tuple[int, int]:
     """Export agent sessions from all containers. Returns (session_count, event_count)."""
-    containers = list_hiclaw_containers()
+    containers = list_agentteams_containers()
     if container_filter:
         containers = [c for c in containers if container_filter in c]
 
@@ -751,6 +830,17 @@ def main():
         sessions_dir.rmdir()
     print()
 
+    # --- Container diagnostics ---
+    print("=== Container Diagnostics ===")
+    container_logs_dir = run_dir / "container-logs"
+    containers = export_container_logs(
+        container_logs_dir, since_epoch, redact,
+        container_filter=args.container,
+    )
+    if containers == 0 and container_logs_dir.exists() and not any(container_logs_dir.iterdir()):
+        container_logs_dir.rmdir()
+    print()
+
     # --- Summary ---
     summary = (
         f"AgentTeams Debug Log\n"
@@ -760,10 +850,15 @@ def main():
         f"\n"
         f"Matrix messages: {messages} messages from {rooms} rooms\n"
         f"Agent sessions: {events} events from {sessions} sessions\n"
+        f"Container diagnostics: {containers} containers\n"
     )
     (run_dir / "summary.txt").write_text(summary)
 
-    print(f"Done. {messages} messages from {rooms} rooms, {events} events from {sessions} sessions")
+    print(
+        f"Done. {messages} messages from {rooms} rooms, "
+        f"{events} events from {sessions} sessions, "
+        f"{containers} container diagnostics"
+    )
     print(f"Output: {run_dir.resolve()}")
 
 

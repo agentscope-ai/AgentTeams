@@ -63,7 +63,7 @@ Then send (substitute the real domain — do NOT write `$AGENTTEAMS_MATRIX_DOMAI
 
 ```
 @manager:matrix-local.agentteams.io:18080 task-{task-id} git-request:
-workspace: /root/hiclaw-fs/shared/tasks/{task-id}/workspace/{repo-name}
+workspace: /root/agentteams-fs/shared/tasks/{task-id}/workspace/{repo-name}
 operations:
   - git clone https://github.com/org/repo.git
   - git checkout -b feature-auth
@@ -91,10 +91,10 @@ Before making changes, check if the task directory is being processed:
 ```bash
 # Sync from MinIO
 mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/" \
-  "/root/hiclaw-fs/shared/tasks/{task-id}/"
+  "/root/agentteams-fs/shared/tasks/{task-id}/"
 
 # Check for processing marker
-if [ -f "/root/hiclaw-fs/shared/tasks/{task-id}/.processing" ]; then
+if [ -f "/root/agentteams-fs/shared/tasks/{task-id}/.processing" ]; then
     echo "Task directory is being processed. Wait for manager to complete."
 fi
 ```
@@ -105,10 +105,10 @@ Write out the git commands you want executed:
 
 ```
 @manager:DOMAIN task-20260225 git-request:
-workspace: /root/hiclaw-fs/shared/tasks/task-20260225/workspace
+workspace: /root/agentteams-fs/shared/tasks/task-20260225/workspace
 operations:
-  - git clone https://github.com/higress-group/hiclaw.git
-  - cd hiclaw && git checkout -b feature-xyz
+  - git clone https://github.com/agentscope-ai/AgentTeams.git
+  - cd agentteams && git checkout -b feature-xyz
 ---CONTEXT---
 Starting work on feature XYZ
 ---END---
@@ -120,9 +120,9 @@ Starting work on feature XYZ
 ```
 @alice:DOMAIN task-20260225 git-result:
 Git operations completed successfully.
-Cloned to: /root/hiclaw-fs/shared/tasks/task-20260225/workspace/hiclaw
+Cloned to: /root/agentteams-fs/shared/tasks/task-20260225/workspace/agentteams
 Created branch: feature-xyz
-Run `hiclaw-sync` to sync.
+Run `agentteams-sync` to sync.
 ```
 
 **Failure** — `git-failed:`
@@ -138,17 +138,17 @@ After receiving `git-result:`:
 
 ```bash
 # Sync from MinIO
-hiclaw-sync
+agentteams-sync
 
 # Now you can work locally
-cd /root/hiclaw-fs/shared/tasks/task-20260225/workspace/hiclaw
+cd /root/agentteams-fs/shared/tasks/task-20260225/workspace/agentteams
 
 # Read files, modify files, etc.
 cat src/main.py
 # ... make changes ...
 
 # When ready to commit, sync to MinIO first
-mc mirror "/root/hiclaw-fs/shared/tasks/task-20260225/" \
+mc mirror "/root/agentteams-fs/shared/tasks/task-20260225/" \
   "${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/task-20260225/" --overwrite
 ```
 
@@ -158,7 +158,7 @@ After making local changes:
 
 ```
 @manager:DOMAIN task-20260225 git-request:
-workspace: /root/hiclaw-fs/shared/tasks/task-20260225/workspace/hiclaw
+workspace: /root/agentteams-fs/shared/tasks/task-20260225/workspace/agentteams
 operations:
   - git add .
   - git commit -m "feat: implement feature XYZ"
@@ -197,7 +197,7 @@ git pull
 
 ```
 @manager:DOMAIN task-20260225 git-request:
-workspace: /root/hiclaw-fs/shared/tasks/task-20260225/workspace/hiclaw
+workspace: /root/agentteams-fs/shared/tasks/task-20260225/workspace/agentteams
 operations:
   - git rebase -i HEAD~3
 ---CONTEXT---
@@ -209,7 +209,7 @@ Squashing the last 3 commits into one
 
 ```
 @manager:DOMAIN task-20260225 git-request:
-workspace: /root/hiclaw-fs/shared/tasks/task-20260225/workspace/hiclaw
+workspace: /root/agentteams-fs/shared/tasks/task-20260225/workspace/agentteams
 operations:
   - git cherry-pick abc123def
 ---CONTEXT---
@@ -221,7 +221,7 @@ Cherry-picking fix from main branch
 
 ```
 @manager:DOMAIN task-20260225 git-request:
-workspace: /root/hiclaw-fs/shared/tasks/task-20260225/workspace/hiclaw
+workspace: /root/agentteams-fs/shared/tasks/task-20260225/workspace/agentteams
 operations:
   - git merge feature-xyz --no-ff -m "Merge feature XYZ"
 ---CONTEXT---
@@ -250,11 +250,11 @@ git-request: add, commit, push...
 Good (one complete request):
 ```
 git-request:
-workspace: /root/hiclaw-fs/shared/tasks/{task-id}/workspace
+workspace: /root/agentteams-fs/shared/tasks/{task-id}/workspace
 operations:
   - git clone /path/to/repo.git
   - cd repo && git config user.name "alice"
-  - cd repo && git config user.email "alice@hiclaw.local"
+  - cd repo && git config user.email "alice@agentteams.local"
   - cd repo && git checkout -b feature/my-branch
   - mkdir -p repo/docs
   - 'cat > repo/docs/file.md << "EOF"
@@ -282,7 +282,7 @@ Simply wait for the `git-result:` or `git-failed:` response. The Manager will re
 
 Always use this path pattern:
 ```
-/root/hiclaw-fs/shared/tasks/{task-id}/workspace/{repo-name}
+/root/agentteams-fs/shared/tasks/{task-id}/workspace/{repo-name}
 ```
 
 - For `git clone`: set workspace to the **parent** directory (without repo name)

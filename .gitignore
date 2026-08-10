@@ -1,57 +1,67 @@
-# Environment and secrets
-hiclaw-manager.env
-*.env
+```
+# Logs and temp files
+*.log
+*.tmp
+*.swp
 
-# Replay logs (contain conversation data, may include secrets)
-logs/
+# Environment
+.env
+.env.local
+*.env.*
 
-# Debug log exports
-debug-log/
-
-# IDE / Kiro workspace files
-.kiro/
+# Editors
+.vscode/
 .idea/
 
-# Claude Code IDE
-.claude/
-CLAUDE.md
-
-# OS files
-.DS_Store
-
-# Design docs
-design/
-poc-verification/
-tests/output/
-
-# Python (copaw)
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-dist/
-*.egg-info/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-manager/copaw-agent/
-# Node.js
+# Dependencies
 node_modules/
-package.json
-pnpm-lock.yaml
-.cursor/
+venv/
+.venv/
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+dist/
+build/
+target/
+.gradle/
 
-# Compiled binaries (build outputs of `make build` in hiclaw-controller/);
-# the multi-stage Dockerfiles build from source, so never commit these.
-hiclaw-controller/controller
-hiclaw-controller/hiclaw
-hiclaw-controller/bin/
+# Compiled files
+*.pyc
+*.class
+*.o
+*.exe
+*.dll
+*.so
+*.a
+*.obj
+*.out
 
-# Build-time agent templates (copied from manager/agent/ during docker build)
-hiclaw-controller/agent/
+# System files
+.DS_Store
+Thumbs.db
 
-# Helm dependency artifacts
-helm/hiclaw/charts/*.tgz
+# Coverage
+coverage/
+htmlcov/
+.coverage
 
-# GitNexus
-.gitnexus/
+# Compressed files
+*.zip
+*.gz
+*.tar
+*.tgz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.zst
+*.lz4
+*.lzh
+*.cab
+*.arj
+*.rpm
+*.deb
+*.Z
+*.lz
+*.lzo
+```

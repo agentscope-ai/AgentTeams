@@ -18,7 +18,7 @@ Import real human accounts into AgentTeams with configurable permission levels. 
 ## Quick Create
 
 ```bash
-bash /opt/hiclaw/agent/skills/human-management/scripts/create-human.sh \
+bash /opt/agentteams/agent/skills/human-management/scripts/create-human.sh \
   --matrix-id "@john:domain" --name "John Doe" \
   --level 2 --teams alpha-team --workers standalone-dev \
   --email john@example.com
@@ -40,5 +40,5 @@ bash /opt/hiclaw/agent/skills/human-management/scripts/create-human.sh \
 | Admin wants to... | Read | Key script |
 |---|---|---|
 | Add a human user | `references/create-human.md` | `scripts/create-human.sh` |
-| List/query humans | — | `scripts/manage-humans-registry.sh --action list` |
-| Remove human access | — | `scripts/manage-humans-registry.sh --action remove` |
+| List/query humans | — | `agt get humans` |
+| Remove human access | — | `agt delete human <name>` |

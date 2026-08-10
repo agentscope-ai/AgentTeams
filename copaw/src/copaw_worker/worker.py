@@ -23,7 +23,12 @@ from rich.panel import Panel
 
 from copaw_worker.config import WorkerConfig
 from copaw_worker.sync import FileSync, sync_loop, push_loop
-from copaw_worker.bridge import bridge_openclaw_to_copaw
+from copaw_worker.bridge import (
+    bridge_standard_to_runtime,
+    refresh_standard_to_runtime,
+    sync_mcporter_config_to_runtime,
+    sync_skills_to_runtime,
+)
 from copaw_worker.worker_api import WorkerAPIServer
 from copaw_worker.health import HealthState, check_matrix_service
 
@@ -129,15 +134,13 @@ class Worker:
         openclaw_cfg = self._matrix_relogin(openclaw_cfg)
         self._join_pending_matrix_invites(openclaw_cfg)
 
-        # 4. Set up CoPaw working directory
-        self._copaw_working_dir = self.config.install_dir / self.worker_name / ".copaw"
+        # 4. Set up runtime working directory (.copaw for the legacy CoPaw
+        #    runtime). The .copaw -> .qwenpaw migration is owned exclusively
+        #    by qwenpaw_worker startup, so an explicitly configured
+        #    runtime: copaw Worker restart never migrates before a switch.
+        rt_dir_name = ".copaw"
+        self._copaw_working_dir = self.config.install_dir / self.worker_name / rt_dir_name
         self._copaw_working_dir.mkdir(parents=True, exist_ok=True)
-
-        # Write SOUL.md / AGENTS.md into CoPaw working dir (read from local copies pulled by mirror_all)
-        for name in ("SOUL.md", "AGENTS.md"):
-            src = self.sync.local_dir / name
-            if src.exists():
-                (self._copaw_working_dir / name).write_text(src.read_text())
 
         # 5. Bridge openclaw.json -> CoPaw config.json + providers.json
         #    Infer gateway port from FS endpoint so bridge's _port_remap uses
@@ -150,22 +153,20 @@ class Worker:
 
         console.print("[yellow]Bridging configuration to CoPaw...[/yellow]")
         try:
-            bridge_openclaw_to_copaw(openclaw_cfg, self._copaw_working_dir)
+            bridge_standard_to_runtime(
+                self.sync.local_dir,
+                self._copaw_working_dir,
+                openclaw_cfg,
+                skill_names=self.sync.list_skills(),
+            )
         except Exception as exc:
             console.print(f"[red]Config bridge failed: {exc}[/red]")
             return False
 
-        # 6. Copy mcporter config into CoPaw working dir so mcporter finds
-        #    ./config/mcporter.json when running from COPAW_WORKING_DIR
-        self._copy_mcporter_config()
-
-        # 7. Install MatrixChannel into CoPaw's custom_channels dir
+        # 6. Install MatrixChannel into CoPaw's custom_channels dir
         self._install_matrix_channel()
 
-        # 8. Sync skills from MinIO into CoPaw's active_skills dir
-        self._sync_skills()
-
-        # 9. Start background MinIO sync
+        # 7. Start background MinIO sync
         asyncio.create_task(
             sync_loop(
                 self.sync,
@@ -506,13 +507,15 @@ class Worker:
     # ------------------------------------------------------------------
 
     def _sync_skills(self) -> None:
-        """Pull skills from MinIO and install into CoPaw's active_skills dir.
+        """Pull skills from MinIO and install into CoPaw's default workspace.
 
         First seeds all CoPaw built-in skills (pdf, xlsx, docx, etc.) as a base
         layer, then overlays skills pushed from MinIO by the Manager (which take
         precedence and can override built-ins).
         """
-        active_skills_dir = self._copaw_working_dir / "active_skills"
+        active_skills_dir = (
+            self._copaw_working_dir / "workspaces" / "default" / "skills"
+        )
         active_skills_dir.mkdir(parents=True, exist_ok=True)
 
         # 0. Remove stale customized_skills that duplicate builtins.
@@ -562,7 +565,7 @@ class Worker:
         if skill_names:
             console.print(f"[green]Skills installed: {', '.join(skill_names)}[/green]")
 
-        # 3. Remove stale skills from active_skills/ that are no longer in MinIO
+        # 3. Remove stale skills that are no longer in MinIO
         #    and are not CoPaw builtins.
         try:
             import copaw.agents.skills as _skills_pkg
@@ -645,16 +648,21 @@ class Worker:
     # ------------------------------------------------------------------
 
     def _copy_mcporter_config(self) -> None:
-        """Copy mcporter config from workspace root into CoPaw working dir.
+        """Copy mcporter config into CoPaw's default workspace.
 
         pull_all writes to <local_dir>/config/mcporter.json (workspace root),
-        but mcporter looks for ./config/mcporter.json relative to cwd, which
-        is COPAW_WORKING_DIR (.copaw/). Copy it there so mcporter finds it.
+        while CoPaw runs tools from <working_dir>/workspaces/default.
         """
         src = self.sync.local_dir / "config" / "mcporter.json"
         if not src.exists():
             return
-        dst = self._copaw_working_dir / "config" / "mcporter.json"
+        dst = (
+            self._copaw_working_dir
+            / "workspaces"
+            / "default"
+            / "config"
+            / "mcporter.json"
+        )
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
         logger.info("mcporter config copied to %s", dst)
@@ -668,11 +676,18 @@ class Worker:
         SOUL.md, AGENTS.md are Worker-managed and not pulled; use local copies."""
         # Re-sync skills if any skill file changed
         if any(f.startswith("skills/") for f in pulled_files):
-            self._sync_skills()
+            sync_skills_to_runtime(
+                self.sync.local_dir,
+                self._copaw_working_dir,
+                self.sync.list_skills(),
+            )
 
         # Copy mcporter config into CoPaw working dir when it changes
         if "config/mcporter.json" in pulled_files:
-            self._copy_mcporter_config()
+            sync_mcporter_config_to_runtime(
+                self.sync.local_dir,
+                self._copaw_working_dir,
+            )
 
         needs_rebridge = "openclaw.json" in pulled_files
         if not needs_rebridge:
@@ -681,16 +696,13 @@ class Worker:
         console.print("[yellow]Config changed, re-bridging...[/yellow]")
         try:
             openclaw_cfg = self.sync.get_config()
-            # Use local Worker-managed files; fallback to MinIO for initial bootstrap
-            soul = (self.sync.local_dir / "SOUL.md").read_text() if (self.sync.local_dir / "SOUL.md").exists() else self.sync.get_soul()
-            agents = (self.sync.local_dir / "AGENTS.md").read_text() if (self.sync.local_dir / "AGENTS.md").exists() else self.sync.get_agents_md()
-
-            if soul:
-                (self._copaw_working_dir / "SOUL.md").write_text(soul)
-            if agents:
-                (self._copaw_working_dir / "AGENTS.md").write_text(agents)
-
-            bridge_openclaw_to_copaw(openclaw_cfg, self._copaw_working_dir)
+            refresh_standard_to_runtime(
+                self.sync.local_dir,
+                self._copaw_working_dir,
+                openclaw_cfg,
+                get_soul=self.sync.get_soul,
+                get_agents_md=self.sync.get_agents_md,
+            )
             console.print("[green]Config re-bridged.[/green]")
         except Exception as exc:
             console.print(f"[red]Re-bridge failed: {exc}[/red]")

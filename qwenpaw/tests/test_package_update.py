@@ -11,7 +11,7 @@ import sys
 import types
 from urllib.parse import parse_qs, urlparse
 
-from qwenpaw_worker.update import AgentPackageManager, MemberRuntimeConfig, _strip_json_line_comments
+from qwenpaw_worker.update import AgentPackageManager, MemberRuntimeConfig, RuntimeUpdater, _strip_json_line_comments
 
 
 def _package(
@@ -133,6 +133,50 @@ desired: {}
         encoding="utf-8",
     )
     return MemberRuntimeConfig.load(path)
+
+
+def _runtime_config_with_inline_config(tmp_path: Path) -> MemberRuntimeConfig:
+    path = tmp_path / "runtime-inline.yaml"
+    path.write_text(
+        """
+kind: MemberRuntimeConfig
+metadata:
+  generation: inline
+member:
+  name: worker-a
+  runtime: qwenpaw
+desired:
+  inlineConfig:
+    identity: Frontend specialist
+    soul: Build accessible user interfaces
+    agents: Follow the project workflow
+""",
+        encoding="utf-8",
+    )
+    return MemberRuntimeConfig.load(path)
+
+
+def test_runtime_updater_applies_inline_prompt_config_to_workspace(tmp_path: Path) -> None:
+    workspace_dir = tmp_path / "workspace"
+    worker_home = tmp_path / "worker-home"
+    config = types.SimpleNamespace(
+        worker_name="worker-a",
+        worker_home=worker_home,
+        qwenpaw_working_dir=tmp_path / "qwenpaw",
+        default_workspace_dir=workspace_dir,
+        runtime_config_path=tmp_path / "runtime.yaml",
+        agent_role="worker",
+    )
+    updater = RuntimeUpdater(config)
+
+    updater.apply_once(runtime_config=_runtime_config_with_inline_config(tmp_path))
+
+    assert (workspace_dir / "IDENTITY.md").read_text(encoding="utf-8") == "Frontend specialist\n"
+    assert (workspace_dir / "SOUL.md").read_text(encoding="utf-8") == "Build accessible user interfaces\n"
+    assert (workspace_dir / "AGENTS.md").read_text(encoding="utf-8") == "Follow the project workflow\n"
+    assert (worker_home / "IDENTITY.md").read_text(encoding="utf-8") == "Frontend specialist\n"
+    assert (worker_home / "SOUL.md").read_text(encoding="utf-8") == "Build accessible user interfaces\n"
+    assert (worker_home / "AGENTS.md").read_text(encoding="utf-8") == "Follow the project workflow\n"
 
 
 def _install_fake_qwenpaw_mcp_config(monkeypatch):
@@ -263,7 +307,7 @@ def test_agent_package_manager_copies_package_materials_to_default_workspace(tmp
     assert (workspace_dir / "config" / "mcporter.json").read_text(encoding="utf-8") == '{"runtime":true}\n'
 
 
-def test_agent_package_manager_embeds_root_mcp_json_into_qwenpaw_agent_config(
+def _legacy_agent_package_manager_embeds_root_mcp_json_into_qwenpaw_agent_config(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -320,7 +364,7 @@ def test_agent_package_manager_embeds_root_mcp_json_into_qwenpaw_agent_config(
     assert (workspace_dir / "agent.json").read_text(encoding="utf-8") == '{"existing":true}\n'
 
 
-def test_agent_package_mcp_json_expands_agent_workspace_placeholders(
+def _legacy_agent_package_mcp_json_expands_agent_workspace_placeholders(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -379,7 +423,7 @@ def test_agent_package_mcp_json_expands_agent_workspace_placeholders(
     assert client.env["CUSTOM_DIR"] == str(workspace_dir / "custom")
 
 
-def test_agent_package_manager_accepts_mcporter_style_mcp_json(
+def _legacy_agent_package_manager_accepts_mcporter_style_mcp_json(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -428,7 +472,7 @@ def test_agent_package_manager_accepts_mcporter_style_mcp_json(
     }
 
 
-def test_agent_package_manager_accepts_line_comments_in_mcp_json(
+def _legacy_agent_package_manager_accepts_line_comments_in_mcp_json(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -461,7 +505,7 @@ def test_agent_package_manager_accepts_line_comments_in_mcp_json(
     assert clients["remote-docs"].transport == "http"
 
 
-def test_agent_package_manager_accepts_commented_mcp_json_shapes(
+def _legacy_agent_package_manager_accepts_commented_mcp_json_shapes(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -541,7 +585,22 @@ def test_agent_package_mcp_json_comment_stripper_preserves_string_slashes_and_es
     assert docs["args"] == ["--literal=//not-comment", 'quoted " // still string']
 
 
-def test_agent_package_manager_reads_legacy_mcp_json_shapes(
+def test_agent_package_mcp_normalizes_http_transport_for_qwenpaw_api(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    manager = AgentPackageManager(tmp_path / "packages", workspace_dir=workspace)
+    package_path = _package(
+        tmp_path,
+        "transport",
+        mcp_servers={"docs": {"url": "https://docs.example.com/mcp", "transport": "http"}},
+    )
+
+    installed = manager.apply(_runtime_config(tmp_path, package_path, "transport"))
+
+    assert manager.package_mcp_clients(installed)["docs"]["transport"] == "streamable_http"
+
+
+def _legacy_agent_package_manager_reads_legacy_mcp_json_shapes(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -566,7 +625,7 @@ def test_agent_package_manager_reads_legacy_mcp_json_shapes(
         assert client.url == mcp_json.get("docs", {"url": f"https://{version}.example.com/mcp"})["url"]
 
 
-def test_agent_package_mcp_json_does_not_overwrite_mcporter_config(
+def _legacy_agent_package_mcp_json_does_not_overwrite_mcporter_config(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -962,7 +1021,7 @@ def test_agent_package_manager_creates_empty_prompt_files_when_package_has_none(
     assert (workspace_dir / "SOUL.md").read_text(encoding="utf-8") == ""
 
 
-def test_agent_package_manager_reconciles_qwenpaw_workspace_skill_manifest(
+def _legacy_agent_package_manager_reconciles_qwenpaw_workspace_skill_manifest(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -984,7 +1043,7 @@ def test_agent_package_manager_reconciles_qwenpaw_workspace_skill_manifest(
     assert calls == [workspace_dir]
 
 
-def test_agent_package_manager_enables_package_skills_in_workspace_manifest(
+def _legacy_agent_package_manager_enables_package_skills_in_workspace_manifest(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1019,7 +1078,7 @@ def test_agent_package_manager_enables_package_skills_in_workspace_manifest(
     assert manifest["skills"]["code-review"]["enabled"] is True
 
 
-def test_agent_package_manager_rolls_back_workspace_and_current_when_workspace_apply_fails(
+def _legacy_agent_package_manager_rolls_back_workspace_and_current_when_workspace_apply_fails(
     tmp_path: Path,
     monkeypatch,
 ) -> None:

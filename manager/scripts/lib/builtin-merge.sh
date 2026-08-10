@@ -5,12 +5,12 @@
 # Provides: BUILTIN_START, BUILTIN_END, BUILTIN_HEADER,
 #           update_builtin_section(), update_builtin_section_minio()
 
-BUILTIN_START="<!-- hiclaw-builtin-start -->"
-BUILTIN_END="<!-- hiclaw-builtin-end -->"
-BUILTIN_HEADER='<!-- hiclaw-builtin-start -->
+BUILTIN_START="<!-- agentteams-builtin-start -->"
+BUILTIN_END="<!-- agentteams-builtin-end -->"
+BUILTIN_HEADER='<!-- agentteams-builtin-start -->
 > ⚠️ **DO NOT EDIT** this section. It is managed by AgentTeams and will be automatically
 > replaced on upgrade. To customize, add your content **after** the
-> `<!-- hiclaw-builtin-end -->` marker below.
+> `<!-- agentteams-builtin-end -->` marker below.
 '
 
 # _extract_frontmatter <file>
@@ -73,17 +73,17 @@ update_builtin_section() {
         return 0
     fi
 
-    if grep -q 'hiclaw-builtin-start' "${target}" 2>/dev/null; then
+    if grep -q 'agentteams-builtin-start' "${target}" 2>/dev/null; then
         # Detect corrupted file:
         # 1. markers must be exactly start=1, end=1
         # 2. the builtin heading must not appear after the end marker (leaked builtin content)
         local start_count end_count heading leaked_heading
-        start_count=$(awk '$0 == "<!-- hiclaw-builtin-start -->" {c++} END {print c+0}' "${target}" 2>/dev/null || echo 0)
-        end_count=$(awk '$0 == "<!-- hiclaw-builtin-end -->" {c++} END {print c+0}' "${target}" 2>/dev/null || echo 0)
+        start_count=$(awk '$0 == "<!-- agentteams-builtin-start -->" {c++} END {print c+0}' "${target}" 2>/dev/null || echo 0)
+        end_count=$(awk '$0 == "<!-- agentteams-builtin-end -->" {c++} END {print c+0}' "${target}" 2>/dev/null || echo 0)
         heading=$(grep -m1 '^#' "${source}" 2>/dev/null || true)
         leaked_heading=0
         if [ -n "${heading}" ]; then
-            leaked_heading=$(awk -v h="${heading}" '$0 == "<!-- hiclaw-builtin-end -->" {found=1; next} found && $0 == h {c++} END {print c+0}' "${target}" 2>/dev/null || echo 0)
+            leaked_heading=$(awk -v h="${heading}" '$0 == "<!-- agentteams-builtin-end -->" {found=1; next} found && $0 == h {c++} END {print c+0}' "${target}" 2>/dev/null || echo 0)
         fi
         if [ "${start_count}" -ne 1 ] || [ "${end_count}" -ne 1 ] || [ "${leaked_heading}" -gt 0 ]; then
             log "  Corrupted (start=${start_count}, end=${end_count}, leaked_heading=${leaked_heading}): ${target} — force rewriting"
@@ -95,8 +95,8 @@ update_builtin_section() {
         # Has markers: check if builtin content actually changed
         local current_builtin new_builtin
         current_builtin=$(awk '
-            $0 == "<!-- hiclaw-builtin-start -->" { found=1; skip=1; next }
-            $0 == "<!-- hiclaw-builtin-end -->"   { found=0; skip=0; next }
+            $0 == "<!-- agentteams-builtin-start -->" { found=1; skip=1; next }
+            $0 == "<!-- agentteams-builtin-end -->"   { found=0; skip=0; next }
             !found { next }
             skip && /^[[:space:]]*$/ { next }
             skip && /^>/ { next }
@@ -110,7 +110,7 @@ update_builtin_section() {
 
         # Extract user content after the end marker (|| true: empty user content is fine)
         local user_content
-        user_content=$(awk '$0 == "<!-- hiclaw-builtin-end -->" {found=1; next} found{print}' "${target}" | grep -v 'hiclaw-builtin' || true)
+        user_content=$(awk '$0 == "<!-- agentteams-builtin-end -->" {found=1; next} found{print}' "${target}" | grep -v 'agentteams-builtin' || true)
         _write_builtin_file "${target}" "${source}" "${user_content}"
         log "  Updated builtin section: ${target}"
     else

@@ -1,10 +1,11 @@
 # 常见问题
 
-> **使用 HiClaw v1.0.9 或更早版本？** v1.1.0 架构发生了重大变化。旧版单容器架构的常见问题请参阅 [常见问题（旧架构）](faq-legacy.md)。
+> **使用 AgentTeams v1.0.9 或更早版本？** v1.1.0 架构发生了重大变化。旧版单容器架构的常见问题请参阅 [常见问题（旧架构）](faq-legacy.md)。
 
-- [如何查看当前 HiClaw 版本](#如何查看当前-hiclaw-版本)
+- [如何查看当前 AgentTeams 版本](#如何查看当前-agentteams-版本)
 - [新架构说明（v1.1.0+）](#新架构说明v110)
-- [如何使用 hiclaw CLI 管理资源](#如何使用-hiclaw-cli-管理资源)
+- [如何使用 agt CLI 管理资源](#如何使用-agt-cli-管理资源)
+- [如何通过 Manager 为 Worker 安装第三方 Skill](#如何通过-manager-为-worker-安装第三方-skill)
 - [如何为 Worker 配置 GitHub 凭据](#如何为-worker-配置-github-凭据)
 - [如何对接飞书/钉钉/企业微信/Discord/Telegram](#如何对接飞书钉钉企业微信discordtelegram)
 - [Windows 下执行安装脚本闪退](#windows-下执行安装脚本闪退)
@@ -22,9 +23,9 @@
 - [如何切换 Worker 的运行时](#如何切换-worker-的运行时)
 - [为什么 QwenPaw 仍然使用 `copaw` 作为 runtime 值或镜像名](#为什么-qwenpaw-仍然使用-copaw-作为-runtime-值或镜像名)
 - [如何接入自己实现的 agent 作为 Worker](#如何接入自己实现的-agent-作为-worker)
-- [HiClaw 可以连接已有的 Higress 实例吗](#hiclaw-可以连接已有的-higress-实例吗)
+- [AgentTeams 可以连接已有的 Higress 实例吗](#agentteams-可以连接已有的-higress-实例吗)
 - [如何使用 Worker 模板市场](#如何使用-worker-模板市场)
-- [HiClaw 支持发送和接收文件吗](#hiclaw-支持发送和接收文件吗)
+- [AgentTeams 支持发送和接收文件吗](#agentteams-支持发送和接收文件吗)
 - [为什么 Manager/Worker 一直显示"输入中"](#为什么-managerworker-一直显示输入中)
 - [Manager/Worker 不回复消息怎么办](#managerworker-不回复消息怎么办)
 - [在房间里和 Manager 聊天没有响应或返回错误状态码](#在房间里和-manager-聊天没有响应或返回错误状态码)
@@ -34,41 +35,41 @@
 
 ---
 
-## 如何查看当前 HiClaw 版本
+## 如何查看当前 AgentTeams 版本
 
 执行以下命令查看已安装的版本：
 
 ```bash
-docker exec hiclaw-manager cat /opt/hiclaw/agent/.builtin-version
+docker exec agentteams-manager cat /opt/agentteams/agent/.builtin-version
 ```
 
 v1.1.0+ 架构下，也可以通过 controller 里的 CLI 查询：
 
 ```bash
-docker exec hiclaw-controller hiclaw version
+docker exec agentteams-controller agt version
 ```
 
 早期 `latest` 镜像如果是在版本元数据规范化之前重新构建的，可能会显示 commit hash
 而不是语义化版本号。遇到这种情况，可以用 hash 对照 release 或 commit 历史，或者使用
-明确的 `HICLAW_VERSION` 升级到指定版本。
+明确的 `AGENTTEAMS_VERSION` 升级到指定版本。
 
 安装时指定版本：
 
 ```bash
-HICLAW_VERSION=v1.1.0 bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
+AGENTTEAMS_VERSION=v1.1.0 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 ---
 
 ## 新架构说明（v1.1.0+）
 
-从 v1.1.0 开始，HiClaw 从**单一全包容器**切换为由 `hiclaw-controller` 管理的**多容器架构**：
+从 v1.1.0 开始，AgentTeams 从**单一全包容器**切换为由 `agentteams-controller` 管理的**多容器架构**：
 
 | 组件 | 旧架构（≤v1.0.9） | 新架构（v1.1.0+） |
 |------|-------------------|-------------------|
-| 基础设施（Higress、Tuwunel、MinIO、Element Web） | 打包在 `hiclaw-manager` 内 | 运行在 `hiclaw-controller` 容器中（使用 `hiclaw-embedded` 镜像） |
-| Manager Agent | 在 `hiclaw-manager` 内 | 独立的 `hiclaw-manager` 容器（轻量级，仅 Agent） |
-| Worker 管理 | Shell 脚本（`create-worker.sh`）+ `workers-registry.json` | 声明式 CRD，通过 `hiclaw` CLI（`hiclaw create worker`、`hiclaw apply`） |
+| 基础设施（Higress、Tuwunel、MinIO、Element Web） | 打包在 `agentteams-manager` 内 | 运行在 `agentteams-controller` 容器中（使用 `agentteams-embedded` 镜像） |
+| Manager Agent | 在 `agentteams-manager` 内 | 独立的 `agentteams-manager` 容器（轻量级，仅 Agent） |
+| Worker 管理 | 命令式 Shell 脚本和本地 JSON 状态 | 声明式 CRD，通过 `agt` CLI（`agt create worker`、`agt apply`） |
 | Worker 运行时 | 仅 OpenClaw | OpenClaw、**QwenPaw**（Python；旧称 **CoPaw**）或 Hermes |
 
 **主要优势：**
@@ -82,101 +83,101 @@ HICLAW_VERSION=v1.1.0 bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
 
 ```bash
 docker ps
-# hiclaw-controller    -- Controller + 所有基础设施服务
-# hiclaw-manager       -- Manager Agent（轻量级）
-# hiclaw-worker-alice  -- Worker 容器（按需创建）
+# agentteams-controller    -- Controller + 所有基础设施服务
+# agentteams-manager       -- Manager Agent（轻量级）
+# agentteams-worker-alice  -- Worker 容器（按需创建）
 ```
 
 ---
 
-## 如何使用 hiclaw CLI 管理资源
+## 如何使用 agt CLI 管理资源
 
-`hiclaw` CLI 同时存在于 **`hiclaw-controller`**、**`hiclaw-manager`** 与 Worker 镜像中（同一二进制，通过 controller 的 REST API 操作资源）。**`install/hiclaw-apply.sh`** 在 **`hiclaw-manager`** 内执行 `hiclaw apply`（因 YAML 会拷贝进该容器）。临时运维命令常用：`docker exec hiclaw-controller hiclaw …`。
+`agt` CLI 同时存在于 **`agentteams-controller`**、**`agentteams-manager`** 与 Worker 镜像中（同一二进制，通过 controller 的 REST API 操作资源）。**`install/agentteams-apply.sh`** 在 **`agentteams-manager`** 内执行 `agt apply`（因 YAML 会拷贝进该容器）。临时运维命令常用：`docker exec agentteams-controller agt …`。
 
 **进入 Controller 容器（示例）：**
 
 ```bash
-docker exec -it hiclaw-controller sh
+docker exec -it agentteams-controller sh
 ```
 
 ### 查询资源
 
 ```bash
 # 集群概览
-hiclaw status
+agt status
 
 # 列出所有 Worker（表格格式）
-hiclaw get workers
+agt get workers
 
 # 以 JSON 格式列出 Worker（便于脚本处理）
-hiclaw get workers -o json
+agt get workers -o json
 
 # 查看特定 Worker 的详细信息
-hiclaw get workers alice
-hiclaw get workers alice -o json
+agt get workers alice
+agt get workers alice -o json
 
 # 列出某个团队中的 Worker
-hiclaw get workers --team dev-team
+agt get workers --team dev-team
 
 # 列出所有团队
-hiclaw get teams
+agt get teams
 
 # 列出所有 Human
-hiclaw get humans
+agt get humans
 
 # 列出所有 Manager
-hiclaw get managers
+agt get managers
 
 # 查看 Controller 版本
-hiclaw version
+agt version
 ```
 
 ### 创建资源
 
 ```bash
 # 使用默认模型和运行时创建 Worker
-hiclaw create worker --name alice
+agt create worker --name alice
 
 # 指定模型和运行时创建 Worker
-hiclaw create worker --name bob --model claude-sonnet-4-6 --runtime hermes
+agt create worker --name bob --model claude-sonnet-4-6 --runtime hermes
 
 # 创建带技能的 Worker
-hiclaw create worker --name charlie --skills github-operations
+agt create worker --name charlie --skills github-operations
 
 # 使用自定义 SOUL.md 创建 Worker
-hiclaw create worker --name diana --soul-file /path/to/SOUL.md
+agt create worker --name diana --soul-file /path/to/SOUL.md
 
 # 创建 Worker 但不等待就绪
-hiclaw create worker --name eve --no-wait
+agt create worker --name eve --no-wait
 
 # 创建团队
-hiclaw create team --name dev-team --goal "全栈 Web 开发"
+agt create team --name dev-team --goal "全栈 Web 开发"
 
 # 创建 Human
-hiclaw create human --name john --level 1
+agt create human --name john --level 1
 
 # 创建 Manager
-hiclaw create manager --name default --model qwen3.5-plus
+agt create manager --name default --model qwen3.5-plus
 ```
 
 ### 修改资源
 
 ```bash
 # 切换 Worker 模型
-hiclaw update worker --name alice --model claude-sonnet-4-6
+agt update worker --name alice --model claude-sonnet-4-6
 
 # 切换 Worker 运行时（会触发容器重建）
-hiclaw update worker --name alice --runtime hermes
+agt update worker --name alice --runtime hermes
 
 # 更新 Worker 技能
-hiclaw update worker --name alice --skills github-operations,code-review
+agt update worker --name alice --skills github-operations,code-review
 ```
 
 ### 应用 YAML 定义
 
 ```bash
 # 应用单个 YAML 资源
-hiclaw apply -f worker-alice.yaml
+agt apply -f worker-alice.yaml
 ```
 
 对于直接 CLI 参数未覆盖的字段（例如 `spec.mcpServers`），请使用 YAML：
@@ -198,38 +199,72 @@ spec:
 
 ```bash
 # 从 zip 包导入 Worker
-hiclaw apply worker --name alice --zip worker-package.zip
+agt apply worker --name alice --zip worker-package.zip
 ```
 
 ### Worker 生命周期管理
 
 ```bash
 # 停止（休眠）Worker
-hiclaw worker sleep --name alice
+agt worker sleep --name alice
 
 # 唤醒休眠中的 Worker
-hiclaw worker wake --name alice
+agt worker wake --name alice
 
 # 查看 Worker 状态
-hiclaw worker status --name alice
+agt worker status --name alice
 ```
 
 ### 删除资源
 
 ```bash
 # 删除 Worker（停止容器、清理 Matrix 账号和网关 Consumer）
-hiclaw delete worker alice
+agt delete worker alice
 
 # 删除团队
-hiclaw delete team dev-team
+agt delete team dev-team
 
 # 删除 Human
-hiclaw delete human john
+agt delete human john
 ```
 
-> **提示：** Manager Agent 的大部分操作（创建 Worker、切换模型、分配任务）底层都调用了同一套 `hiclaw` CLI。直接使用 CLI 适合调试、批量操作或自动化脚本场景。
+> **提示：** Manager Agent 的大部分操作（创建 Worker、切换模型、分配任务）底层都调用了同一套 `agt` CLI。直接使用 CLI 适合调试、批量操作或自动化脚本场景。
 
 声明式 YAML 资源定义的完整文档请参阅 [声明式资源管理](declarative-resource-management.md)。
+
+---
+
+## 如何通过 Manager 为 Worker 安装第三方 Skill
+
+可以将完整 Skill 目录放在 Manager 工作空间的 `worker-skills/` 目录下，也可以直接向 Manager 发送一个包含完整 Skill 根目录的 ZIP 附件。
+
+工作空间示例：
+
+```text
+~/agentteams-manager/worker-skills/alert-fusion/SKILL.md
+```
+
+然后告诉 Manager：
+
+> 请将 `~/worker-skills/alert-fusion/` 中的 `alert-fusion` Skill 安装给 Worker `amy-ai`。请验证上传结果，并确认 `amy-ai` 的 Skill 分配已经包含它。
+
+如果已经发送 ZIP 附件，也可以说：
+
+> 请将我刚发送的 ZIP 附件中的 Skill 安装给 Worker `amy-ai`。请安全解压并校验，然后完成分发并验证分配结果。
+
+Manager 会上传文件、验证远端 `SKILL.md`，然后更新 Worker 的 Skill 分配。QwenPaw Worker 会自动同步并启用新分配的 Skill。
+
+可以通过自然语言对话检查分配结果：
+
+> 请列出 Worker `amy-ai` 当前分配的 Skill，并确认其中是否包含 `alert-fusion`。
+
+如果需要从运维侧检查或排障，可使用等价的 CLI 查询：
+
+```bash
+agt get workers amy-ai -o json | jq '.skills'
+```
+
+如果安装失败，请检查目录名是否与 `SKILL.md` 中的 `name` 一致，并确认文件位于 `worker-skills/<skill-name>/` 下。完整流程参见 [通过 Manager 为 Worker 安装 Skill](manager-guide.md#通过-manager-为-worker-安装-skill)。
 
 ---
 
@@ -239,13 +274,13 @@ GitHub 凭据应作为 MCP Server 凭据配置，不要复制到 Worker 容器�
 `mcporter` 和 AI Gateway 调用 GitHub，真实 GitHub PAT 保存在网关侧 MCP 配置中。
 
 安装时，在安装脚本询问可选 GitHub Personal Access Token 时输入，或提前设置
-`HICLAW_GITHUB_TOKEN`：
+`AGENTTEAMS_GITHUB_TOKEN`：
 
 ```bash
-HICLAW_GITHUB_TOKEN=ghp_xxx bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
+AGENTTEAMS_GITHUB_TOKEN=ghp_xxx bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
-该变量存在时，HiClaw 会自动配置 GitHub MCP Server，并生成 Manager 侧
+该变量存在时，AgentTeams 会自动配置 GitHub MCP Server，并生成 Manager 侧
 `mcporter` 配置。之后在 Worker YAML manifest 中声明 GitHub MCP 能力：
 
 ```yaml
@@ -266,11 +301,11 @@ spec:
 通过当前支持的 YAML 路径应用：
 
 ```bash
-hiclaw apply -f worker-alice.yaml
+agt apply -f worker-alice.yaml
 ```
 
 如果已有安装当时跳过了 token，请在原工作目录重新执行安装并提供
-`HICLAW_GITHUB_TOKEN`，或在网关中手动配置 GitHub MCP Server 并授权目标
+`AGENTTEAMS_GITHUB_TOKEN`，或在网关中手动配置 GitHub MCP Server 并授权目标
 Manager/Worker consumer。不要把 PAT 粘贴进 Worker 提示词或容器本地配置。
 
 ---
@@ -286,17 +321,17 @@ Manager/Worker consumer。不要把 PAT 粘贴进 Worker 提示词或容器本�
 如果安装脚本报错类似：
 
 ```
-ERROR: Failed to pull hiclaw-embedded image.
-Attempted: higress/hiclaw-embedded:v1.1.0 and higress/hiclaw-embedded:latest
+ERROR: Failed to pull agentteams-embedded image.
+Attempted: higress/agentteams-embedded:v1.1.0 and higress/agentteams-embedded:latest
 ```
 
 说明注册中心中没有该版本的 embedded 镜像。有三个解决方案：
 
-1. **指定有 embedded 镜像的版本**：查看 [发布页面](https://github.com/higress-group/hiclaw/releases) 确认可用版本。
+1. **指定有 embedded 镜像的版本**：查看 [发布页面](https://github.com/agentscope-ai/AgentTeams/releases) 确认可用版本。
 2. **从源码本地构建**：克隆仓库后执行 `make install-embedded`。
-3. **覆盖镜像**：设置 `HICLAW_INSTALL_EMBEDDED_IMAGE` 为自定义镜像。
+3. **覆盖镜像**：设置 `AGENTTEAMS_INSTALL_EMBEDDED_IMAGE` 为自定义镜像。
 
-> 如果你有意使用旧版单容器架构（v1.0.9 或更早），设置 `HICLAW_FORCE_LEGACY=1`。注意此选项仅适用于打包了基础设施服务的镜像。
+> 如果你有意使用旧版单容器架构（v1.0.9 或更早），设置 `AGENTTEAMS_FORCE_LEGACY=1`。注意此选项仅适用于打包了基础设施服务的镜像。
 
 ---
 
@@ -308,10 +343,10 @@ Attempted: higress/hiclaw-embedded:v1.1.0 and higress/hiclaw-embedded:latest
 
 ```bash
 # Controller（基础设施）日志
-docker logs hiclaw-controller
+docker logs agentteams-controller
 
 # Manager Agent 日志
-docker logs hiclaw-manager
+docker logs agentteams-manager
 ```
 
 **情况一：Controller 正常但 Manager 容器未启动**
@@ -327,7 +362,7 @@ Controller 会自动启动 Manager 容器。如果 `docker ps` 中看不到 Mana
 建议到原安装目录重新执行安装命令，选择**删除重装**：
 
 ```bash
-bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
+bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 安装脚本检测到已有安装时会询问处理方式，选择删除后重装即可清除脏数据。
@@ -376,10 +411,10 @@ http://<局域网IP>:18080
 
 1. 确认安装时选择了允许外部访问。本机模式只绑定到 `127.0.0.1`，局域网其他设备无法访问。
 2. 确认 Manager 所在机器的防火墙放行 `18080`（Matrix/Higress Gateway）和 `18088`（Element Web）。
-3. 不要在其他设备上使用默认的 `matrix-local.hiclaw.io`；该域名会解析到当前设备自己的 loopback 地址。
+3. 不要在其他设备上使用默认的 `matrix-local.agentteams.io`；该域名会解析到当前设备自己的 loopback 地址。
 
 如果通过 Tailscale 使用 FluffyChat 或 Element Mobile，规则相同：homeserver 填
-`http://<tailscale-ip>:18080`，并确认手机和 HiClaw 所在机器在 Tailscale 网络内互通。
+`http://<tailscale-ip>:18080`，并确认手机和 AgentTeams 所在机器在 Tailscale 网络内互通。
 
 ---
 
@@ -396,9 +431,9 @@ Element 要求填写自定义 homeserver 时，不要填写 Element Web UI 的�
 
 ## 本地访问 Matrix 服务器不通
 
-如果在本机也无法连接 Matrix 服务器，请检查浏览器或系统是否开启了代理。`*-local.hiclaw.io` 域名默认解析到 `127.0.0.1`，开启代理后请求会被转发到代理服务器，无法到达本地服务。
+如果在本机也无法连接 Matrix 服务器，请检查浏览器或系统是否开启了代理。`*-local.agentteams.io` 域名默认解析到 `127.0.0.1`，开启代理后请求会被转发到代理服务器，无法到达本地服务。
 
-关闭代理，或将 `*-local.hiclaw.io` / `127.0.0.1` 加入代理的绕过列表即可。
+关闭代理，或将 `*-local.agentteams.io` / `127.0.0.1` 加入代理的绕过列表即可。
 
 ---
 
@@ -414,8 +449,8 @@ Element 要求填写自定义 homeserver 时，不要填写 Element Web UI 的�
 
 ## 如何接入第三方、本地或多供应商模型
 
-HiClaw 不会直接读取你的 `~/.openclaw/openclaw.json` 供应商定义。模型流量会经过
-HiClaw AI Gateway。OpenClaw/QwenPaw 通常只看到一个名为 `hiclaw-gateway` 的
+AgentTeams 不会直接读取你的 `~/.openclaw/openclaw.json` 供应商定义。模型流量会经过
+AgentTeams AI Gateway。OpenClaw/QwenPaw 通常只看到一个名为 `agentteams-gateway` 的
 provider；Higress 再根据请求里的模型名路由到真实上游供应商。
 
 ### 第三方 OpenAI 兼容 API
@@ -432,7 +467,7 @@ Higress 里定义的全部路由。
 
 ### Ollama、LM Studio 等本地模型
 
-本地模型需要暴露 OpenAI 兼容 API，并且 HiClaw 容器必须能访问该地址。在 Docker 容器内，
+本地模型需要暴露 OpenAI 兼容 API，并且 AgentTeams 容器必须能访问该地址。在 Docker 容器内，
 `localhost` 指的是容器自身，不是你的 Mac 或宿主机。请使用容器可达的宿主机地址，例如
 Docker Desktop 下的 `http://host.docker.internal:<port>/v1`，或在 Linux/Podman 下使用
 宿主机局域网 IP。
@@ -440,7 +475,7 @@ Docker Desktop 下的 `http://host.docker.internal:<port>/v1`，或在 Linux/Pod
 ### 多供应商和按任务使用不同模型
 
 在 Higress 中配置多条 AI 路由，每条路由使用不同的前缀或正则匹配规则，例如一条匹配
-`qwen*`，另一条匹配 `claude*`。然后明确给 Manager 或 Worker 指定目标模型。HiClaw
+`qwen*`，另一条匹配 `claude*`。然后明确给 Manager 或 Worker 指定目标模型。AgentTeams
 可以让不同 Worker 使用不同模型，但不会内置按任务类型自动选择模型的策略；这类策略需要
 通过 Worker 角色设计或显式切换模型表达。
 
@@ -448,7 +483,7 @@ Docker Desktop 下的 `http://host.docker.internal:<port>/v1`，或在 Linux/Pod
 
 ## 为什么自定义 Higress AI 路由总是匹配不到
 
-HiClaw 安装时会创建 `default-ai-route`。如果这条路由没有配置
+AgentTeams 安装时会创建 `default-ai-route`。如果这条路由没有配置
 `modelPredicates`，它可能匹配所有模型请求，因此后添加的自定义路由看起来像是优先级更低。
 
 存在多条 AI route 时，需要让模型匹配规则不重叠：
@@ -461,7 +496,7 @@ HiClaw 安装时会创建 `default-ai-route`。如果这条路由没有配置
 
 ## 如何切换 Manager 的模型
 
-HiClaw 支持两种模型切换方式：**切换当前会话模型**（即时生效，不持久化）和**切换主用模型**（持久化，需重启生效）。
+AgentTeams 支持两种模型切换方式：**切换当前会话模型**（即时生效，不持久化）和**切换主用模型**（持久化，需重启生效）。
 
 ### 方式一：切换当前会话模型（即时，不持久化）
 
@@ -481,7 +516,7 @@ HiClaw 支持两种模型切换方式：**切换当前会话模型**（即时生
 
 **为什么让 Manager 切换而不是手动改配置？**
 
-OpenClaw 需要在配置中设置模型的上下文窗口大小（`contextWindow`）。HiClaw 默认使用 qwen3.5-plus 的 200K token 窗口。如果切换到窗口不同的模型但没有更新这个设置，当对话接近窗口上限时，OpenClaw 不知道何时压缩上下文，可能导致 session 无法使用。
+OpenClaw 需要在配置中设置模型的上下文窗口大小（`contextWindow`）。AgentTeams 默认使用 qwen3.5-plus 的 200K token 窗口。如果切换到窗口不同的模型但没有更新这个设置，当对话接近窗口上限时，OpenClaw 不知道何时压缩上下文，可能导致 session 无法使用。
 
 模型切换技能会根据模型名自动修改 OpenClaw 配置中的 `contextWindow` 和 `maxTokens`。
 
@@ -576,7 +611,7 @@ OpenRouter 示例：
 
 ## 如何切换 Worker 的运行时
 
-HiClaw v1.1.0+ 支持三种 Worker 运行时：
+AgentTeams v1.1.0+ 支持三种 Worker 运行时：
 
 | 运行时 | 语言 | 适用场景 |
 |--------|------|----------|
@@ -589,7 +624,7 @@ HiClaw v1.1.0+ 支持三种 Worker 运行时：
 创建 Worker 时指定运行时：
 
 ```
-hiclaw create worker --name alice --runtime hermes
+agt create worker --name alice --runtime hermes
 ```
 
 或通过 YAML：
@@ -604,7 +639,7 @@ spec:
   model: qwen3.5-plus
 ```
 
-如果未指定运行时，使用安装时设定的默认值（`HICLAW_DEFAULT_WORKER_RUNTIME`），最终回退为 `openclaw`。
+如果未指定运行时，使用安装时设定的默认值（`AGENTTEAMS_DEFAULT_WORKER_RUNTIME`），最终回退为 `openclaw`。
 
 ### 创建后切换
 
@@ -618,8 +653,8 @@ Manager 会通过 worker-management 技能触发容器重建。Worker 的 Matrix
 ## 为什么 QwenPaw 仍然使用 `copaw` 作为 runtime 值或镜像名
 
 `QwenPaw` 是原 `CoPaw` 运行时的对外展示名称。为了兼容已有安装，部分内部名称会继续保留
-`copaw`，包括 Worker CRD 的 runtime 值、`hiclaw-copaw-worker` 这类镜像名，以及
-`HICLAW_MANAGER_RUNTIME=copaw` 这类环境变量值。
+`copaw`，包括 Worker CRD 的 runtime 值、`agentteams-copaw-worker` 这类镜像名，以及
+`AGENTTEAMS_MANAGER_RUNTIME=copaw` 这类环境变量值。
 
 除非 chart、controller 和镜像已经明确支持新的值，否则不要把这些内部值改成
 `qwenpaw`。保留 `copaw` 是为了避免破坏已有配置、Helm values、镜像拉取和升级路径。
@@ -642,17 +677,17 @@ agent 模板接线，不是纯配置项。
 
 ---
 
-## HiClaw 可以连接已有的 Higress 实例吗
+## AgentTeams 可以连接已有的 Higress 实例吗
 
 当前不能通过 `gateway.provider=higress` 连接已有 Higress。Helm chart 会校验
-`gateway.provider=higress` 必须搭配 `gateway.mode=managed`，也就是由 HiClaw 部署并管理 Higress。
+`gateway.provider=higress` 必须搭配 `gateway.mode=managed`，也就是由 AgentTeams 部署并管理 Higress。
 
-不建议把已有 Higress 配置目录直接复制到 HiClaw 托管的 Higress 中。HiClaw 会调和它需要的
-AI routes、consumers 和网关资源，复制进去的资源可能和 HiClaw 管理的状态冲突，或在安装/调和流程中被覆盖。
+不建议把已有 Higress 配置目录直接复制到 AgentTeams 托管的 Higress 中。AgentTeams 会调和它需要的
+AI routes、consumers 和网关资源，复制进去的资源可能和 AgentTeams 管理的状态冲突，或在安装/调和流程中被覆盖。
 
 当前支持的路径是：
 
-- 使用 HiClaw 托管的 Higress 承载 HiClaw 流量
+- 使用 AgentTeams 托管的 Higress 承载 AgentTeams 流量
 - 在适用场景下使用外部 `ai-gateway` provider
 
 如果要支持已有的自管 Higress，需要单独设计 external Higress 模式，包括 Gateway/Console URL、
@@ -662,7 +697,7 @@ AI routes、consumers 和网关资源，复制进去的资源可能和 HiClaw �
 
 ## 如何使用 Worker 模板市场
 
-HiClaw v1.1.0+ 包含基于 Nacos 的 Worker 模板市场。无需从零配置 Worker，可以直接导入预构建模板：
+AgentTeams v1.1.0+ 包含基于 Nacos 的 Worker 模板市场。无需从零配置 Worker，可以直接导入预构建模板：
 
 **通过 Manager 对话：**
 
@@ -674,14 +709,14 @@ Manager 会搜索市场、推荐匹配的模板，经你确认后一键导入。
 **通过 CLI：**
 
 ```bash
-hiclaw apply -f my-worker.yaml
+agt apply -f my-worker.yaml
 ```
 
 在 YAML 中通过 `package` 引用市场模板。
 
 ---
 
-## HiClaw 支持发送和接收文件吗
+## AgentTeams 支持发送和接收文件吗
 
 **接收你发送的文件**：支持。在 Element Web 中点击附件按钮上传文件，Manager 或 Worker 会收到 Matrix 媒体消息并可以读取其内容。
 
@@ -694,13 +729,13 @@ Manager 或 Worker 输出的路径通常是容器内部路径。如果你在宿�
 
 ## 为什么 Manager/Worker 一直显示"输入中"
 
-这是正常现象，说明底层的 Agent 引擎正在执行任务。HiClaw 设定的单次任务超时时间为 30 分钟，Agent 最长会持续执行 30 分钟。
+这是正常现象，说明底层的 Agent 引擎正在执行任务。AgentTeams 设定的单次任务超时时间为 30 分钟，Agent 最长会持续执行 30 分钟。
 
 如果想查看 Agent 的执行细节，可以进入 Manager 或 Worker 容器，查看 session 日志：
 
 ```bash
 # Manager
-docker exec -it hiclaw-manager ls .openclaw/agents/main/sessions/
+docker exec -it agentteams-manager ls .openclaw/agents/main/sessions/
 
 # Worker（将 <worker-name> 替换为实际容器名）
 docker exec -it <worker-name> ls .openclaw/agents/main/sessions/
@@ -739,7 +774,7 @@ OpenClaw 限制"输入中"状态最多持续 **2 分钟**，工作超过 2 分�
 
 ```bash
 # Manager
-docker exec -it hiclaw-manager openclaw tui
+docker exec -it agentteams-manager openclaw tui
 
 # Worker（将 <worker-name> 替换为实际容器名）
 docker exec -it <worker-name> openclaw tui
@@ -763,13 +798,13 @@ docker exec -it <worker-name> openclaw tui
 在新架构下，首先确认 Controller 和 Manager 容器都在运行：
 
 ```bash
-docker ps | grep -E "hiclaw-controller|hiclaw-manager"
+docker ps | grep -E "agentteams-controller|agentteams-manager"
 ```
 
-如果 `hiclaw-manager` 未运行，查看 Controller 日志：
+如果 `agentteams-manager` 未运行，查看 Controller 日志：
 
 ```bash
-docker logs hiclaw-controller
+docker logs agentteams-controller
 ```
 
 ### 2. 检查 Session 状态
@@ -777,7 +812,7 @@ docker logs hiclaw-controller
 可能是 session 损坏了。进入 Manager 容器，使用 OpenClaw TUI 查看：
 
 ```bash
-docker exec -it hiclaw-manager openclaw tui
+docker exec -it agentteams-manager openclaw tui
 ```
 
 进入 TUI 后：
@@ -792,7 +827,7 @@ docker exec -it hiclaw-manager openclaw tui
 如果重置 session 后问题仍然存在，查看 Higress AI 网关日志。在新架构下，Higress 运行在 Controller 容器内：
 
 ```bash
-docker exec -it hiclaw-controller cat /var/log/hiclaw/higress-gateway.log
+docker exec -it agentteams-controller cat /var/log/agentteams/higress-gateway.log
 ```
 
 在日志中搜索对应的状态码，常见原因：
@@ -830,19 +865,19 @@ docker exec -it hiclaw-controller cat /var/log/hiclaw/higress-gateway.log
 
 ```bash
 # Manager Agent 日志（stdout/stderr）
-docker logs hiclaw-manager
+docker logs agentteams-manager
 
 # Manager Agent session 日志（详细执行过程）
-docker exec -it hiclaw-manager ls .openclaw/agents/main/sessions/
+docker exec -it agentteams-manager ls .openclaw/agents/main/sessions/
 
 # Controller / 基础设施日志
-docker logs hiclaw-controller
+docker logs agentteams-controller
 
 # Higress 网关日志（在 Controller 容器内）
-docker exec -it hiclaw-controller cat /var/log/hiclaw/higress-gateway.log
+docker exec -it agentteams-controller cat /var/log/agentteams/higress-gateway.log
 
 # Higress Console / 控制台后端日志（v1.1.0+ 嵌入式 — 同样在 Controller）
-docker exec -it hiclaw-controller cat /var/log/hiclaw/higress-console.log
+docker exec -it agentteams-controller cat /var/log/agentteams/higress-console.log
 ```
 
 OpenClaw Control UI（可视化 session 检查），打开：
@@ -855,16 +890,16 @@ http://localhost:18888
 
 ## 如何对接飞书/钉钉/企业微信/Discord/Telegram
 
-HiClaw Manager 基于 OpenClaw 构建，原生支持多种消息渠道。要对接其他渠道：
+AgentTeams Manager 基于 OpenClaw 构建，原生支持多种消息渠道。要对接其他渠道：
 
 **方法一：直接修改配置**
 
-Manager 的工作目录是宿主机上的 `~/hiclaw-manager`，里面的 `openclaw.json` 可以直接编辑。参照 [OpenClaw 渠道文档](https://docs.openclaw.ai) 中各平台的配置格式进行配置。
+Manager 的工作目录是宿主机上的 `~/agentteams-manager`，里面的 `openclaw.json` 可以直接编辑。参照 [OpenClaw 渠道文档](https://docs.openclaw.ai) 中各平台的配置格式进行配置。
 
 修改后重启 Manager 容器使配置生效：
 
 ```bash
-docker restart hiclaw-manager
+docker restart agentteams-manager
 ```
 
 **方法二：让 Manager 学习你现有的 OpenClaw 配置**
@@ -880,7 +915,7 @@ docker restart hiclaw-manager
 
 ## 会话管理（通过 IM 指令）
 
-HiClaw 基于 OpenClaw，通过 Matrix 渠道（Element Web）与 Agent 通信。OpenClaw 支持**斜杠命令**，你可以直接在聊天中以独立消息的形式发送这些指令，由 Gateway 在模型处理前解析执行。
+AgentTeams 基于 OpenClaw，通过 Matrix 渠道（Element Web）与 Agent 通信。OpenClaw 支持**斜杠命令**，你可以直接在聊天中以独立消息的形式发送这些指令，由 Gateway 在模型处理前解析执行。
 
 **注意：** 大多数命令必须以**独立消息**发送，且以 `/` 开头。不要在同一则消息中混入其他文字。
 

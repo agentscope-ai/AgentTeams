@@ -1,319 +1,160 @@
 #!/bin/bash
-# push-worker-skills.sh - Push skills to Worker(s) via MinIO
-#
-# Manages Worker skill distribution from Manager's central worker-skills/ repository.
-# Uses workers-registry.json as the source of truth for which workers have which skills.
-#
-# Usage:
-#   push-worker-skills.sh --worker <name>                              # Push all skills for a worker
-#   push-worker-skills.sh --skill <skill-name>                        # Push skill to all workers that have it
-#   push-worker-skills.sh --worker <name> --add-skill <skill-name>    # Add skill to worker and push
-#   push-worker-skills.sh --worker <name> --remove-skill <skill-name> # Remove skill from worker
-#   [--no-notify]  Skip Matrix notification
+# push-worker-skills.sh - Distribute Worker skills and reconcile Worker CR specs.
 
-set -e
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh
+set -euo pipefail
 
-# ============================================================
-# Parse arguments
-# ============================================================
 WORKER_NAME=""
 SKILL_NAME=""
 ADD_SKILL=""
 REMOVE_SKILL=""
 NOTIFY=true
 
-while [ $# -gt 0 ]; do
-    case "$1" in
-        --worker)       WORKER_NAME="$2"; shift 2 ;;
-        --skill)        SKILL_NAME="$2"; shift 2 ;;
-        --add-skill)    ADD_SKILL="$2"; shift 2 ;;
-        --remove-skill) REMOVE_SKILL="$2"; shift 2 ;;
-        --no-notify)    NOTIFY=false; shift ;;
-        *) echo "Unknown option: $1"; exit 1 ;;
-    esac
-done
-
-# Validate arguments
-if [ -z "${WORKER_NAME}" ] && [ -z "${SKILL_NAME}" ]; then
-    echo "Usage:"
-    echo "  push-worker-skills.sh --worker <name>                    # Push all skills for worker"
-    echo "  push-worker-skills.sh --skill <skill-name>               # Push skill to all workers"
-    echo "  push-worker-skills.sh --worker <name> --add-skill <name> # Add skill to worker"
-    echo "  push-worker-skills.sh --worker <name> --remove-skill <name> # Remove skill"
-    echo "  [--no-notify]"
-    exit 1
+if [ -f /opt/agentteams/scripts/lib/agentteams-env.sh ]; then
+    # shellcheck disable=SC1091
+    source /opt/agentteams/scripts/lib/agentteams-env.sh
 fi
+AGENTTEAMS_STORAGE_PREFIX="${AGENTTEAMS_STORAGE_PREFIX:-agentteams/agentteams-storage}"
 
-if [ -n "${ADD_SKILL}" ] && [ -n "${REMOVE_SKILL}" ]; then
-    echo "Error: --add-skill and --remove-skill cannot be used together"
-    exit 1
-fi
-
-if [ -n "${SKILL_NAME}" ] && ([ -n "${ADD_SKILL}" ] || [ -n "${REMOVE_SKILL}" ]); then
-    echo "Error: --skill cannot be combined with --add-skill or --remove-skill"
-    exit 1
-fi
-
-REGISTRY_FILE="${HOME}/workers-registry.json"
-WORKER_SKILLS_DIR="/opt/hiclaw/agent/worker-skills"
-MATRIX_DOMAIN="${AGENTTEAMS_MATRIX_DOMAIN:-matrix-local.agentteams.io:8080}"
-
-# ============================================================
-# Load or initialize registry
-# ============================================================
-_load_registry() {
-    if [ ! -f "${REGISTRY_FILE}" ]; then
-        log "Registry not found, initializing..."
-        mkdir -p "$(dirname "${REGISTRY_FILE}")"
-        echo '{"version":1,"updated_at":"","workers":{}}' > "${REGISTRY_FILE}"
-    fi
-    cat "${REGISTRY_FILE}"
+find_skill_source() {
+    local skill="$1"
+    local candidate
+    for candidate in \
+        "${HOME}/worker-skills/${skill}" \
+        "/root/manager-workspace/worker-skills/${skill}" \
+        "/root/agentteams-fs/agents/manager/worker-skills/${skill}" \
+        "/opt/agentteams/agent/worker-skills/${skill}"
+    do
+        if [ -f "${candidate}/SKILL.md" ]; then
+            printf '%s\n' "${candidate}"
+            return 0
+        fi
+    done
+    return 1
 }
 
-_save_registry() {
-    local registry="$1"
-    # Update updated_at timestamp
-    registry=$(echo "${registry}" | jq --arg ts "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" '.updated_at = $ts')
-    echo "${registry}" | jq . > "${REGISTRY_FILE}"
-    log "Registry saved"
-}
-
-_get_worker_skills() {
-    local registry="$1"
-    local worker="$2"
-    echo "${registry}" | jq -r --arg w "${worker}" '.workers[$w].skills // [] | .[]'
-}
-
-_get_worker_room_id() {
-    local registry="$1"
-    local worker="$2"
-    echo "${registry}" | jq -r --arg w "${worker}" '.workers[$w].room_id // empty'
-}
-
-_worker_exists() {
-    local registry="$1"
-    local worker="$2"
-    echo "${registry}" | jq -e --arg w "${worker}" '.workers[$w] != null' > /dev/null 2>&1
-}
-
-# ============================================================
-# Push a single skill to a single worker via MinIO
-# ============================================================
-_push_skill_to_worker() {
+mirror_skill() {
     local worker="$1"
     local skill="$2"
-    local skill_dst="${AGENTTEAMS_STORAGE_PREFIX}/agents/${worker}/skills/${skill}/"
-
-    # Runtime-specific skills: check if skill exists in the runtime's agent dir
-    # (worker-agent / copaw-worker-agent / hermes-worker-agent)
-    local worker_runtime
-    worker_runtime=$(echo "${REGISTRY}" | jq -r --arg w "${worker}" '.workers[$w].runtime // "openclaw"')
-    local _rt_src
-    if [ "${worker_runtime}" = "copaw" ]; then
-        _rt_src="/opt/hiclaw/agent/copaw-worker-agent/skills/${skill}"
-    elif [ "${worker_runtime}" = "hermes" ]; then
-        _rt_src="/opt/hiclaw/agent/hermes-worker-agent/skills/${skill}"
-    else
-        _rt_src="/opt/hiclaw/agent/worker-agent/skills/${skill}"
+    local source
+    local destination="${AGENTTEAMS_STORAGE_PREFIX}/agents/${worker}/skills/${skill}"
+    if declare -F ensure_mc_credentials >/dev/null 2>&1; then
+        ensure_mc_credentials
     fi
-    if [ -d "${_rt_src}" ]; then
-        log "  Pushing skill '${skill}' (runtime=${worker_runtime}) to worker '${worker}'..."
-        mc mirror "${_rt_src}/" "${skill_dst}" --overwrite \
-            2>&1 | tail -3 || {
-            log "  WARNING: Failed to push skill '${skill}' to worker '${worker}'"
+    if source=$(find_skill_source "${skill}"); then
+        mc mirror "${source}/" "${destination}/" --overwrite
+        # Some mc releases can print an S3 authorization error yet still exit
+        # zero from `mirror`. Verify the contract file before changing the CR,
+        # otherwise the Manager would report success for a missing skill.
+        if ! mc stat "${destination}/SKILL.md" >/dev/null 2>&1; then
+            echo "Worker skill upload verification failed: ${destination}/SKILL.md" >&2
             return 1
-        }
-        log "  Pushed skill '${skill}' to worker '${worker}'"
-        return 0
+        fi
+        return
     fi
-
-    local skill_src="${WORKER_SKILLS_DIR}/${skill}"
-    if [ ! -d "${skill_src}" ]; then
-        log "  WARNING: Skill source not found: ${skill_src}"
-        return 1
+    # A Manager may have uploaded a custom skill immediately before updating
+    # the CR. Controller reconciliation can reuse that verified remote copy
+    # even when it cannot mount the Manager workspace (for example on K8s).
+    if mc stat "${destination}/SKILL.md" >/dev/null 2>&1; then
+        return
     fi
-
-    log "  Pushing skill '${skill}' to worker '${worker}'..."
-    mc mirror "${skill_src}/" "${skill_dst}" --overwrite \
-        2>&1 | tail -3 || {
-        log "  WARNING: Failed to push skill '${skill}' to worker '${worker}'"
-        return 1
-    }
-    log "  Pushed skill '${skill}' to worker '${worker}'"
+    echo "Worker skill not found: ${HOME}/worker-skills/${skill}/SKILL.md (or built-in /opt/agentteams/agent/worker-skills/${skill}/SKILL.md)" >&2
+    return 1
 }
 
-# ============================================================
-# Send Matrix notification to a worker
-# ============================================================
-_notify_worker() {
+notify_worker() {
     local worker="$1"
     local room_id="$2"
     local skills_list="$3"
+    local token="${AGENTTEAMS_MANAGER_MATRIX_TOKEN:-}"
+    local matrix_url="${AGENTTEAMS_MATRIX_URL:-}"
+    local matrix_domain="${AGENTTEAMS_MATRIX_DOMAIN:-}"
+    local worker_id message payload txn_id
 
-    if [ -z "${room_id}" ]; then
-        log "  WARNING: No room_id for worker '${worker}', skipping notification"
+    if [ -z "${room_id}" ] || [ -z "${token}" ] || [ -z "${matrix_url}" ] || [ -z "${matrix_domain}" ]; then
+        echo "Worker skill files were pushed, but Matrix notification is unavailable for ${worker}" >&2
         return 0
     fi
 
-    # Ensure we have a Manager Matrix token
-    local token="${MANAGER_MATRIX_TOKEN:-}"
-    if [ -z "${token}" ]; then
-        local secrets_file="/data/hiclaw-secrets.env"
-        [ -f "${secrets_file}" ] && source "${secrets_file}"
-        token="${MANAGER_MATRIX_TOKEN:-}"
-    fi
-    if [ -z "${token}" ]; then
-        log "  WARNING: MANAGER_MATRIX_TOKEN not available, skipping notification"
-        return 0
-    fi
+    worker_id="@${worker}:${matrix_domain}"
+    message="${worker_id} Your Manager updated these workspace skills: [${skills_list}]. Use your file-sync skill now to pull the latest files."
+    payload=$(jq -nc \
+        --arg body "${message}" \
+        --arg worker_id "${worker_id}" \
+        '{msgtype:"m.text", body:$body, "m.mentions":{user_ids:[$worker_id]}}')
+    txn_id="worker-skills-$(date +%s)-$$"
 
-    local matrix_url="${AGENTTEAMS_MATRIX_URL}"
-    local msg="@${worker}:${MATRIX_DOMAIN} 我已向你的工作区推送了以下 skills 更新：[${skills_list}]。请使用 file-sync 技能同步最新文件。"
-    local worker_id="@${worker}:${MATRIX_DOMAIN}"
-
-    local txn_id
-    txn_id="pws-$(date +%s%N)"
-
-    curl -sf -X PUT \
-        "${matrix_url}/_matrix/client/v3/rooms/${room_id}/send/m.room.message/${txn_id}" \
+    curl -fsS -X PUT \
+        "${matrix_url%/}/_matrix/client/v3/rooms/${room_id}/send/m.room.message/${txn_id}" \
         -H "Authorization: Bearer ${token}" \
         -H 'Content-Type: application/json' \
-        -d "{\"msgtype\":\"m.text\",\"body\":\"${msg}\",\"m.mentions\":{\"user_ids\":[\"${worker_id}\"]}}" \
-        > /dev/null 2>&1 \
-        || log "  WARNING: Failed to send Matrix notification to ${worker}"
-    log "  Notified worker '${worker}' via Matrix"
+        --data "${payload}" >/dev/null \
+        || echo "Worker skill files were pushed, but Matrix notification failed for ${worker}" >&2
 }
 
-# ============================================================
-# Main logic
-# ============================================================
-REGISTRY=$(_load_registry)
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --worker) WORKER_NAME="$2"; shift 2 ;;
+        --skill) SKILL_NAME="$2"; shift 2 ;;
+        --add-skill) ADD_SKILL="$2"; shift 2 ;;
+        --remove-skill) REMOVE_SKILL="$2"; shift 2 ;;
+        --no-notify) NOTIFY=false; shift ;;
+        *) echo "Unknown option: $1" >&2; exit 2 ;;
+    esac
+done
 
-# Handle --add-skill: update registry first
-if [ -n "${ADD_SKILL}" ] && [ -n "${WORKER_NAME}" ]; then
-    if ! _worker_exists "${REGISTRY}" "${WORKER_NAME}"; then
-        log "ERROR: Worker '${WORKER_NAME}' not found in registry"
-        exit 1
-    fi
-
-    # Verify skill source exists before updating registry
-    _add_skill_src="${WORKER_SKILLS_DIR}/${ADD_SKILL}"
-    if [ ! -d "${_add_skill_src}" ]; then
-        log "ERROR: Skill source not found: ${_add_skill_src}"
-        exit 1
-    fi
-
-    ALREADY=$(echo "${REGISTRY}" | jq -r --arg w "${WORKER_NAME}" --arg s "${ADD_SKILL}" \
-        '.workers[$w].skills // [] | map(select(. == $s)) | length')
-    if [ "${ALREADY}" -gt 0 ]; then
-        log "Skill '${ADD_SKILL}' already assigned to '${WORKER_NAME}', will re-push"
-    else
-        REGISTRY=$(echo "${REGISTRY}" | jq --arg w "${WORKER_NAME}" --arg s "${ADD_SKILL}" \
-            '.workers[$w].skills += [$s]')
-        log "Added skill '${ADD_SKILL}' to worker '${WORKER_NAME}' in registry"
-    fi
-    SKILL_NAME="${ADD_SKILL}"
+if [ -z "${WORKER_NAME}" ] && [ -z "${SKILL_NAME}" ]; then
+    echo "Usage: $0 --worker NAME [--add-skill SKILL|--remove-skill SKILL] | --skill SKILL" >&2
+    exit 2
 fi
+[ -z "${ADD_SKILL}" ] || [ -z "${REMOVE_SKILL}" ] || { echo "--add-skill and --remove-skill are mutually exclusive" >&2; exit 2; }
 
-# Handle --remove-skill: update registry and return (no push needed)
-if [ -n "${REMOVE_SKILL}" ] && [ -n "${WORKER_NAME}" ]; then
-    if ! _worker_exists "${REGISTRY}" "${WORKER_NAME}"; then
-        log "ERROR: Worker '${WORKER_NAME}' not found in registry"
-        exit 1
-    fi
-
-    # Builtin skills are always present (pushed from worker-agent/skills/ or
-    # copaw-worker-agent/skills/) and must not be removed from the registry.
-    BUILTIN_SKILLS=("file-sync" "task-progress" "project-participation" "mcporter" "find-skills")
-    for _bs in "${BUILTIN_SKILLS[@]}"; do
-        if [ "${REMOVE_SKILL}" = "${_bs}" ]; then
-            log "ERROR: Cannot remove builtin skill '${_bs}'"
-            exit 1
-        fi
-    done
-
-    REGISTRY=$(echo "${REGISTRY}" | jq --arg w "${WORKER_NAME}" --arg s "${REMOVE_SKILL}" \
-        '.workers[$w].skills = [.workers[$w].skills // [] | .[] | select(. != $s)]')
-    _save_registry "${REGISTRY}"
-    log "Removed skill '${REMOVE_SKILL}' from worker '${WORKER_NAME}'"
-    # Actually delete skill files from MinIO
-    mc rm --recursive --force \
-        "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/skills/${REMOVE_SKILL}/" \
-        2>&1 || log "WARNING: mc rm failed (files may not exist in MinIO)"
-    # Notify worker so it picks up the deletion promptly
-    if [ "${NOTIFY}" = true ]; then
-        room_id=$(_get_worker_room_id "${REGISTRY}" "${WORKER_NAME}")
-        _notify_worker "${WORKER_NAME}" "${room_id}" "${REMOVE_SKILL} (removed)"
-    fi
+# Controller reconciliation already knows the Worker and assigned Skill. This
+# internal form avoids calling the Controller API from inside its own reconcile
+# loop, which may run before the API bearer token is ready during startup.
+if [ -n "${WORKER_NAME}" ] && [ -n "${SKILL_NAME}" ] \
+    && [ -z "${ADD_SKILL}" ] && [ -z "${REMOVE_SKILL}" ] \
+    && [ "${NOTIFY}" = false ]; then
+    mirror_skill "${WORKER_NAME}" "${SKILL_NAME}"
     exit 0
 fi
 
-# ============================================================
-# Determine target (worker, skill) pairs to push
-# ============================================================
-declare -A WORKER_SKILLS_MAP  # worker -> comma-separated skills pushed
+workers_json=$(agt get workers -o json)
+if [ -n "${WORKER_NAME}" ]; then
+    targets="${WORKER_NAME}"
+else
+    targets=$(echo "${workers_json}" | jq -r --arg skill "${SKILL_NAME}" '.workers[] | select((.skills // []) | index($skill)) | .name')
+fi
 
-if [ -n "${WORKER_NAME}" ] && [ -n "${SKILL_NAME}" ]; then
-    # Push specific skill to specific worker (--worker + --add-skill resolved above)
-    if ! _worker_exists "${REGISTRY}" "${WORKER_NAME}"; then
-        log "ERROR: Worker '${WORKER_NAME}' not found in registry"
-        exit 1
+for worker in ${targets}; do
+    current=$(agt get workers "${worker}" -o json | jq '.skills // []')
+    if [ -n "${ADD_SKILL}" ]; then
+        desired=$(echo "${current}" | jq --arg skill "${ADD_SKILL}" 'if index($skill) then . else . + [$skill] end')
+    elif [ -n "${REMOVE_SKILL}" ]; then
+        desired=$(echo "${current}" | jq --arg skill "${REMOVE_SKILL}" 'map(select(. != $skill))')
+    else
+        desired="${current}"
     fi
-    _push_skill_to_worker "${WORKER_NAME}" "${SKILL_NAME}"
-    WORKER_SKILLS_MAP["${WORKER_NAME}"]="${SKILL_NAME}"
 
-elif [ -n "${WORKER_NAME}" ]; then
-    # Push all skills for a specific worker
-    if ! _worker_exists "${REGISTRY}" "${WORKER_NAME}"; then
-        log "ERROR: Worker '${WORKER_NAME}' not found in registry"
-        exit 1
-    fi
-    pushed_skills=""
     while IFS= read -r skill; do
-        [ -z "${skill}" ] && continue
-        if _push_skill_to_worker "${WORKER_NAME}" "${skill}"; then
-            pushed_skills="${pushed_skills:+${pushed_skills}, }${skill}"
-        fi
-    done < <(_get_worker_skills "${REGISTRY}" "${WORKER_NAME}")
-    [ -n "${pushed_skills}" ] && WORKER_SKILLS_MAP["${WORKER_NAME}"]="${pushed_skills}"
+        [ -z "${skill}" ] || mirror_skill "${worker}" "${skill}"
+    done < <(echo "${desired}" | jq -r '.[]')
 
-elif [ -n "${SKILL_NAME}" ]; then
-    # Push specific skill to all workers that have it
-    WORKER_LIST=$(echo "${REGISTRY}" | jq -r --arg s "${SKILL_NAME}" \
-        '.workers | to_entries[] | select(.value.skills // [] | map(select(. == $s)) | length > 0) | .key')
-    if [ -z "${WORKER_LIST}" ]; then
-        log "No workers found with skill '${SKILL_NAME}'"
-        exit 0
+    # Re-push mode mirrors current assignments without rewriting the same CR.
+    if [ -z "${ADD_SKILL}" ] && [ -z "${REMOVE_SKILL}" ]; then
+        if [ "${NOTIFY}" = true ]; then
+            room_id=$(echo "${workers_json}" | jq -r --arg worker "${worker}" \
+                '.workers[] | select(.name == $worker) | .roomID // empty')
+            notify_skills="${SKILL_NAME:-$(echo "${desired}" | jq -r 'join(", ")')}"
+            notify_worker "${worker}" "${room_id}" "${notify_skills}"
+        fi
+        continue
     fi
-    while IFS= read -r worker; do
-        [ -z "${worker}" ] && continue
-        if _push_skill_to_worker "${worker}" "${SKILL_NAME}"; then
-            WORKER_SKILLS_MAP["${worker}"]="${SKILL_NAME}"
-        fi
-    done <<< "${WORKER_LIST}"
-fi
-
-# ============================================================
-# Update skills_updated_at in registry for affected workers
-# ============================================================
-NOW=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-for worker in "${!WORKER_SKILLS_MAP[@]}"; do
-    REGISTRY=$(echo "${REGISTRY}" | jq --arg w "${worker}" --arg ts "${NOW}" \
-        '.workers[$w].skills_updated_at = $ts')
+    csv=$(echo "${desired}" | jq -r 'join(",")')
+    agt update worker --name "${worker}" --skills "${csv}"
+    if [ "${NOTIFY}" = true ]; then
+        room_id=$(echo "${workers_json}" | jq -r --arg worker "${worker}" \
+            '.workers[] | select(.name == $worker) | .roomID // empty')
+        notify_skills="${ADD_SKILL:-${REMOVE_SKILL:-${csv}}}"
+        notify_worker "${worker}" "${room_id}" "${notify_skills}"
+    fi
 done
-
-_save_registry "${REGISTRY}"
-
-# ============================================================
-# Send Matrix notifications
-# ============================================================
-if [ "${NOTIFY}" = true ] && [ ${#WORKER_SKILLS_MAP[@]} -gt 0 ]; then
-    for worker in "${!WORKER_SKILLS_MAP[@]}"; do
-        skills_pushed="${WORKER_SKILLS_MAP[$worker]}"
-        room_id=$(_get_worker_room_id "${REGISTRY}" "${worker}")
-        _notify_worker "${worker}" "${room_id}" "${skills_pushed}"
-    done
-fi
-
-log "Done. Skills pushed to ${#WORKER_SKILLS_MAP[@]} worker(s)."

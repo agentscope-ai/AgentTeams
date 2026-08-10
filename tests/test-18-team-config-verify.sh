@@ -2,12 +2,12 @@
 # test-18-team-config-verify.sh - Case 18: Verify Team import config artifacts
 #
 # Tests team import (create + update) and verifies MinIO artifacts:
-#   1. Create team via create-team.sh (Leader + 2 Workers)
+#   1. Create 3 Worker CRs, then a Team CR that references them
 #   2. Verify Leader AGENTS.md: builtin markers, coordination context (upstream=Manager, downstream=workers)
 #   3. Verify Team Worker AGENTS.md: coordination context (coordinator=Leader, NOT Manager)
-#   4. Verify Team Room exists in teams-registry.json
+#   4. Verify Team Room exists in Team status
 #   5. Verify groupAllowFrom: Leader has [Manager, Admin, Workers], Workers have [Leader, Admin]
-#   6. Verify worker count and roles in workers-registry.json
+#   6. Verify Worker roles from the Team/Worker APIs
 #   7. Update team (add description change), verify config updated
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,10 +22,14 @@ TEST_LEADER="${TEST_TEAM}-lead"
 TEST_W1="${TEST_TEAM}-dev"
 TEST_W2="${TEST_TEAM}-qa"
 STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
+TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
 
 _cleanup() {
     log_info "Cleaning up team: ${TEST_TEAM}"
-    exec_in_agent hiclaw delete team "${TEST_TEAM}" 2>/dev/null || true
+    exec_in_agent agt delete team "${TEST_TEAM}" 2>/dev/null || true
+    exec_in_agent agt delete worker "${TEST_LEADER}" 2>/dev/null || true
+    exec_in_agent agt delete worker "${TEST_W1}" 2>/dev/null || true
+    exec_in_agent agt delete worker "${TEST_W2}" 2>/dev/null || true
     sleep 5
     # Stop worker containers (fallback if reconciler didn't clean up)
     remove_worker_container "${TEST_LEADER}"
@@ -34,18 +38,9 @@ _cleanup() {
     # Clean MinIO
     for w in "${TEST_LEADER}" "${TEST_W1}" "${TEST_W2}"; do
         exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${w}/" 2>/dev/null || true
-        exec_in_manager rm -rf "/root/hiclaw-fs/agents/${w}" 2>/dev/null || true
+        exec_in_manager rm -rf "/root/agentteams-fs/agents/${w}" 2>/dev/null || true
     done
     exec_in_agent rm -f "/tmp/agentteams-test-${TEST_TEAM}.yaml" 2>/dev/null || true
-    # Clean registries (in agent workspace, fallback)
-    exec_in_agent bash -c "
-        jq 'del(.workers[\"${TEST_LEADER}\"], .workers[\"${TEST_W1}\"], .workers[\"${TEST_W2}\"])' \
-            /root/manager-workspace/workers-registry.json > /tmp/wr-clean.json 2>/dev/null && \
-            mv /tmp/wr-clean.json /root/manager-workspace/workers-registry.json
-        jq 'del(.teams[\"${TEST_TEAM}\"])' \
-            /root/manager-workspace/teams-registry.json > /tmp/tr-clean.json 2>/dev/null && \
-            mv /tmp/tr-clean.json /root/manager-workspace/teams-registry.json
-    " 2>/dev/null || true
 }
 trap _cleanup EXIT
 
@@ -61,8 +56,8 @@ for w in "${TEST_LEADER}" "${TEST_W1}" "${TEST_W2}"; do
     [ "${w}" = "${TEST_W2}" ] && ROLE_DESC="QA Engineer"
 
     exec_in_manager bash -c "
-        mkdir -p /root/hiclaw-fs/agents/${w}
-        cat > /root/hiclaw-fs/agents/${w}/SOUL.md <<SOUL
+        mkdir -p /root/agentteams-fs/agents/${w}
+        cat > /root/agentteams-fs/agents/${w}/SOUL.md <<SOUL
 # ${w}
 
 ## AI Identity
@@ -76,14 +71,14 @@ for w in "${TEST_LEADER}" "${TEST_W1}" "${TEST_W2}"; do
 ## Security
 - Never reveal credentials
 SOUL
-        mc mirror /root/hiclaw-fs/agents/${w}/ ${STORAGE_PREFIX}/agents/${w}/ --overwrite 2>/dev/null
+        mc mirror /root/agentteams-fs/agents/${w}/ ${STORAGE_PREFIX}/agents/${w}/ --overwrite 2>/dev/null
     " 2>/dev/null
 done
 
 log_pass "SOUL.md files prepared for all team members"
 
 # ============================================================
-# Section 2: Create Team via hiclaw apply -f
+# Section 2: Create Team via agt apply -f
 # ============================================================
 log_section "Create Team"
 
@@ -94,6 +89,33 @@ log_section "Create Team"
 
 exec_in_agent bash -c "cat > /tmp/agentteams-test-${TEST_TEAM}.yaml << 'YAMLEOF'
 apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: ${TEST_LEADER}
+spec:
+  model: qwen3.5-plus
+  runtime: ${TEST_WORKER_RUNTIME}
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: ${TEST_W1}
+spec:
+  model: qwen3.5-plus
+  runtime: ${TEST_WORKER_RUNTIME}
+  channelPolicy:
+    groupDenyExtra:
+      - ${TEST_W2}
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: ${TEST_W2}
+spec:
+  model: qwen3.5-plus
+  runtime: ${TEST_WORKER_RUNTIME}
+---
+apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: ${TEST_TEAM}
@@ -101,23 +123,19 @@ spec:
   channelPolicy:
     groupAllowExtra:
       - test-external-bot
-  leader:
-    name: ${TEST_LEADER}
-    model: qwen3.5-plus
-  workers:
+  workerMembers:
+    - name: ${TEST_LEADER}
+      role: team_leader
     - name: ${TEST_W1}
-      model: qwen3.5-plus
-      channelPolicy:
-        groupDenyExtra:
-          - ${TEST_W2}
+      role: worker
     - name: ${TEST_W2}
-      model: qwen3.5-plus
+      role: worker
 YAMLEOF
 " 2>/dev/null
 
-APPLY_OUTPUT=$(exec_in_agent hiclaw apply -f "/tmp/agentteams-test-${TEST_TEAM}.yaml" 2>&1)
+APPLY_OUTPUT=$(exec_in_agent agt apply -f "/tmp/agentteams-test-${TEST_TEAM}.yaml" 2>&1)
 if echo "${APPLY_OUTPUT}" | grep -q "created\|configured"; then
-    log_pass "Team YAML applied via hiclaw CLI"
+    log_pass "Team YAML applied via agt CLI"
 else
     log_fail "Team YAML apply failed: ${APPLY_OUTPUT}"
 fi
@@ -131,7 +149,7 @@ if wait_team_active "${TEST_TEAM}" 180; then
     log_pass "TeamReconciler reconciled team to Active"
 else
     log_fail "TeamReconciler did not reach Active within 180s"
-    exec_in_agent hiclaw get teams "${TEST_TEAM}" -o json 2>/dev/null | jq -r '.phase, .message' | head -5
+    exec_in_agent agt get teams "${TEST_TEAM}" -o json 2>/dev/null | jq -r '.phase, .message' | head -5
 fi
 
 # Wait for each team member to have RoomID + MatrixUserID persisted. This
@@ -147,22 +165,32 @@ for w in "${TEST_LEADER}" "${TEST_W1}" "${TEST_W2}"; do
     fi
 done
 
-# ============================================================
-# Section 3: Verify teams-registry.json
-# ============================================================
-log_section "Verify teams-registry.json"
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    for w in "${TEST_LEADER}" "${TEST_W1}" "${TEST_W2}"; do
+        if wait_qwenpaw_api_matches "${w}" /api/teamharness/health '.ok == true and .adapter == "qwenpaw-2"' 240 && \
+            wait_worker_runtime_file_contains "${w}" "TEAMS.md" "BEGIN AGENTTEAMS RUNTIME TEAM CONTEXT" 240; then
+            log_pass "QwenPaw TeamHarness plugin ready for ${w}"
+        else
+            log_fail "QwenPaw TeamHarness plugin not ready for ${w}"
+        fi
+    done
+fi
 
-TEAMS_REGISTRY=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/manager/teams-registry.json" 2>/dev/null || echo "{}")
-TEAM_ENTRY=$(echo "${TEAMS_REGISTRY}" | jq -r --arg t "${TEST_TEAM}" '.teams[$t] // empty' 2>/dev/null)
-assert_not_empty "${TEAM_ENTRY}" "Team registered in teams-registry.json"
+# ============================================================
+# Section 3: Verify Team resource
+# ============================================================
+log_section "Verify Team Resource"
 
-TEAM_LEADER_REG=$(echo "${TEAM_ENTRY}" | jq -r '.leader // empty')
+TEAM_ENTRY=$(exec_in_agent agt get teams "${TEST_TEAM}" -o json 2>/dev/null || echo "")
+assert_not_empty "${TEAM_ENTRY}" "Team resource is queryable"
+
+TEAM_LEADER_REG=$(echo "${TEAM_ENTRY}" | jq -r '.leaderName // empty')
 assert_eq "${TEST_LEADER}" "${TEAM_LEADER_REG}" "Team leader is ${TEST_LEADER}"
 
-TEAM_WORKERS_REG=$(echo "${TEAM_ENTRY}" | jq -r '.workers | length')
+TEAM_WORKERS_REG=$(echo "${TEAM_ENTRY}" | jq -r '.workerNames | length')
 assert_eq "2" "${TEAM_WORKERS_REG}" "Team has 2 workers"
 
-TEAM_ROOM=$(echo "${TEAM_ENTRY}" | jq -r '.team_room_id // empty')
+TEAM_ROOM=$(echo "${TEAM_ENTRY}" | jq -r '.teamRoomID // empty')
 assert_not_empty "${TEAM_ROOM}" "Team Room ID exists: ${TEAM_ROOM}"
 
 # Verify admin auto-joined the team room
@@ -185,25 +213,25 @@ else
 fi
 
 # ============================================================
-# Section 4: Verify workers-registry.json roles
+# Section 4: Verify Worker roles
 # ============================================================
-log_section "Verify Worker Roles in Registry"
+log_section "Verify Worker Roles"
 
-WORKERS_REGISTRY=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/manager/workers-registry.json" 2>/dev/null || echo "{}")
+WORKERS_RESOURCE=$(exec_in_agent agt get workers --team "${TEST_TEAM}" -o json 2>/dev/null || echo '{"workers":[]}')
 
-LEADER_ROLE=$(echo "${WORKERS_REGISTRY}" | jq -r --arg w "${TEST_LEADER}" '.workers[$w].role // empty' 2>/dev/null)
+LEADER_ROLE=$(echo "${WORKERS_RESOURCE}" | jq -r --arg w "${TEST_LEADER}" '.workers[] | select(.name == $w) | .role // empty')
 assert_eq "team_leader" "${LEADER_ROLE}" "Leader has role=team_leader"
 
-LEADER_TEAM=$(echo "${WORKERS_REGISTRY}" | jq -r --arg w "${TEST_LEADER}" '.workers[$w].team_id // empty' 2>/dev/null)
+LEADER_TEAM=$(echo "${WORKERS_RESOURCE}" | jq -r --arg w "${TEST_LEADER}" '.workers[] | select(.name == $w) | .team // empty')
 assert_eq "${TEST_TEAM}" "${LEADER_TEAM}" "Leader has correct team_id"
 
-W1_ROLE=$(echo "${WORKERS_REGISTRY}" | jq -r --arg w "${TEST_W1}" '.workers[$w].role // empty' 2>/dev/null)
+W1_ROLE=$(echo "${WORKERS_RESOURCE}" | jq -r --arg w "${TEST_W1}" '.workers[] | select(.name == $w) | .role // empty')
 assert_eq "worker" "${W1_ROLE}" "Worker 1 has role=worker"
 
-W1_TEAM=$(echo "${WORKERS_REGISTRY}" | jq -r --arg w "${TEST_W1}" '.workers[$w].team_id // empty' 2>/dev/null)
+W1_TEAM=$(echo "${WORKERS_RESOURCE}" | jq -r --arg w "${TEST_W1}" '.workers[] | select(.name == $w) | .team // empty')
 assert_eq "${TEST_TEAM}" "${W1_TEAM}" "Worker 1 has correct team_id"
 
-W2_ROLE=$(echo "${WORKERS_REGISTRY}" | jq -r --arg w "${TEST_W2}" '.workers[$w].role // empty' 2>/dev/null)
+W2_ROLE=$(echo "${WORKERS_RESOURCE}" | jq -r --arg w "${TEST_W2}" '.workers[] | select(.name == $w) | .role // empty')
 assert_eq "worker" "${W2_ROLE}" "Worker 2 has role=worker"
 
 # ============================================================
@@ -211,44 +239,57 @@ assert_eq "worker" "${W2_ROLE}" "Worker 2 has role=worker"
 # ============================================================
 log_section "Verify Leader AGENTS.md"
 
-LEADER_AGENTS=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/AGENTS.md" 2>/dev/null || echo "")
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    LEADER_AGENTS=$(read_worker_runtime_file "${TEST_LEADER}" "TEAMS.md")
+else
+    wait_worker_runtime_file_contains "${TEST_LEADER}" "AGENTS.md" "agentteams-builtin-start" 180 || true
+    LEADER_AGENTS=$(read_worker_runtime_file "${TEST_LEADER}" "AGENTS.md")
+fi
 assert_not_empty "${LEADER_AGENTS}" "Leader AGENTS.md exists in MinIO"
 
-# Builtin markers
-assert_contains "${LEADER_AGENTS}" "hiclaw-builtin-start" "Leader AGENTS.md has builtin-start"
-assert_contains "${LEADER_AGENTS}" "hiclaw-builtin-end" "Leader AGENTS.md has builtin-end"
-
-# Team-context: upstream = Manager
-assert_contains "${LEADER_AGENTS}" "hiclaw-team-context-start" "Leader has team-context block"
-assert_contains "${LEADER_AGENTS}" "@manager:" "Leader coordination: upstream is Manager"
-assert_contains "${LEADER_AGENTS}" "Upstream" "Leader coordination: has Upstream label"
-assert_contains "${LEADER_AGENTS}" "${TEST_TEAM}" "Leader coordination: references team name"
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    assert_contains "${LEADER_AGENTS}" "BEGIN AGENTTEAMS RUNTIME TEAM CONTEXT" "Leader has runtime team-context block"
+    assert_contains "${LEADER_AGENTS}" "member.role: team_leader" "Leader runtime context has team_leader role"
+    assert_contains "${LEADER_AGENTS}" "${TEST_TEAM}" "Leader runtime context references team name"
+else
+    assert_contains "${LEADER_AGENTS}" "agentteams-builtin-start" "Leader AGENTS.md has builtin-start"
+    assert_contains "${LEADER_AGENTS}" "agentteams-builtin-end" "Leader AGENTS.md has builtin-end"
+    assert_contains "${LEADER_AGENTS}" "agentteams-team-context-start" "Leader has team-context block"
+    assert_contains "${LEADER_AGENTS}" "@manager:" "Leader coordination: upstream is Manager"
+    assert_contains "${LEADER_AGENTS}" "Upstream" "Leader coordination: has Upstream label"
+    assert_contains "${LEADER_AGENTS}" "${TEST_TEAM}" "Leader coordination: references team name"
+fi
 
 # ============================================================
 # Section 6: Verify Team Worker AGENTS.md
 # ============================================================
 log_section "Verify Team Worker AGENTS.md"
 
-W1_AGENTS=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_W1}/AGENTS.md" 2>/dev/null || echo "")
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    W1_AGENTS=$(read_worker_runtime_file "${TEST_W1}" "TEAMS.md")
+else
+    wait_worker_runtime_file_contains "${TEST_W1}" "AGENTS.md" "agentteams-builtin-start" 180 || true
+    W1_AGENTS=$(read_worker_runtime_file "${TEST_W1}" "AGENTS.md")
+fi
 assert_not_empty "${W1_AGENTS}" "Worker 1 AGENTS.md exists in MinIO"
 
-# Builtin markers
-assert_contains "${W1_AGENTS}" "hiclaw-builtin-start" "Worker 1 AGENTS.md has builtin-start"
-assert_contains "${W1_AGENTS}" "hiclaw-builtin-end" "Worker 1 AGENTS.md has builtin-end"
-
-# Team-context: coordinator = Leader (NOT Manager)
-assert_contains "${W1_AGENTS}" "hiclaw-team-context-start" "Worker 1 has team-context block"
-assert_contains "${W1_AGENTS}" "@${TEST_LEADER}:" "Worker 1 coordinator is Team Leader"
-
-# Should NOT reference Manager as coordinator
-W1_CTX=$(echo "${W1_AGENTS}" | sed -n '/hiclaw-team-context-start/,/hiclaw-team-context-end/p')
-if echo "${W1_CTX}" | grep -q "@manager:"; then
-    log_fail "Worker 1 team-context references Manager (should only reference Leader)"
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    assert_contains "${W1_AGENTS}" "BEGIN AGENTTEAMS RUNTIME TEAM CONTEXT" "Worker 1 has runtime team-context block"
+    assert_contains "${W1_AGENTS}" "team.leaderRuntimeName: ${TEST_LEADER}" "Worker 1 runtime context names Team Leader"
+    assert_contains "${W1_AGENTS}" "member.role: worker" "Worker 1 runtime context has worker role"
 else
-    log_pass "Worker 1 team-context does NOT reference Manager"
+    assert_contains "${W1_AGENTS}" "agentteams-builtin-start" "Worker 1 AGENTS.md has builtin-start"
+    assert_contains "${W1_AGENTS}" "agentteams-builtin-end" "Worker 1 AGENTS.md has builtin-end"
+    assert_contains "${W1_AGENTS}" "agentteams-team-context-start" "Worker 1 has team-context block"
+    assert_contains "${W1_AGENTS}" "@${TEST_LEADER}:" "Worker 1 coordinator is Team Leader"
+    W1_CTX=$(echo "${W1_AGENTS}" | sed -n '/agentteams-team-context-start/,/agentteams-team-context-end/p')
+    if echo "${W1_CTX}" | grep -q "@manager:"; then
+        log_fail "Worker 1 team-context references Manager (should only reference Leader)"
+    else
+        log_pass "Worker 1 team-context does NOT reference Manager"
+    fi
+    assert_contains "${W1_AGENTS}" "Do NOT @mention Manager" "Worker 1 told not to @mention Manager"
 fi
-
-assert_contains "${W1_AGENTS}" "Do NOT @mention Manager" "Worker 1 told not to @mention Manager"
 
 # ============================================================
 # Section 7: Verify groupAllowFrom
@@ -264,7 +305,7 @@ wait_agent_matrix_allow_contains "${TEST_W1}" ".channels.matrix.groupAllowFrom" 
 wait_agent_matrix_allow_contains "manager" ".channels.matrix.groupAllowFrom" "@${TEST_LEADER}:" 120 || true
 
 # Leader: should have [Manager, Admin, W1, W2]
-LEADER_GAF=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/openclaw.json" 2>/dev/null | jq -r '.channels.matrix.groupAllowFrom[]' 2>/dev/null)
+LEADER_GAF=$(read_worker_matrix_allowlist "${TEST_LEADER}")
 if echo "${LEADER_GAF}" | grep -q "@manager:"; then
     log_pass "Leader groupAllowFrom includes Manager"
 else
@@ -280,7 +321,7 @@ for w in "${TEST_W1}" "${TEST_W2}"; do
 done
 
 # Workers: should have [Leader, Admin] but NOT Manager
-W1_GAF=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_W1}/openclaw.json" 2>/dev/null | jq -r '.channels.matrix.groupAllowFrom[]' 2>/dev/null)
+W1_GAF=$(read_worker_matrix_allowlist "${TEST_W1}")
 if echo "${W1_GAF}" | grep -q "@${TEST_LEADER}:"; then
     log_pass "Worker 1 groupAllowFrom includes Leader"
 else
@@ -295,7 +336,7 @@ fi
 
 # Peer mentions: Workers should have each other in groupAllowFrom (default peerMentions=true)
 # EXCEPT: W1 has groupDenyExtra for W2, so W1 should NOT have W2
-W2_GAF=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_W2}/openclaw.json" 2>/dev/null | jq -r '.channels.matrix.groupAllowFrom[]' 2>/dev/null)
+W2_GAF=$(read_worker_matrix_allowlist "${TEST_W2}")
 
 if echo "${W1_GAF}" | grep -q "@${TEST_W2}:"; then
     log_fail "Worker 1 groupAllowFrom includes Worker 2 (should be denied by channelPolicy)"
@@ -359,32 +400,48 @@ fi
 # ============================================================
 log_section "Verify Skills by Role"
 
-# Leader should have canonical Team Leader skills
-for skill in team-coordination project-management task-management; do
-    LEADER_SKILL=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/agents/${TEST_LEADER}/skills/${skill}/SKILL.md' >/dev/null 2>&1 && echo yes || echo no")
-    if [ "${LEADER_SKILL}" = "yes" ]; then
-        log_pass "Leader has ${skill} skill"
-    else
-        log_fail "Leader missing ${skill} skill"
-    fi
-done
-
-# Workers should have standard worker skills
-for skill in file-sync task-progress mcporter; do
-    W1_SKILL=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/agents/${TEST_W1}/skills/${skill}/SKILL.md' >/dev/null 2>&1 && echo yes || echo no")
-    if [ "${W1_SKILL}" = "yes" ]; then
-        log_pass "Worker 1 has ${skill} skill"
-    else
-        log_fail "Worker 1 missing ${skill} skill"
-    fi
-done
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    LEADER_SKILLS=$(read_qwenpaw_skills "${TEST_LEADER}")
+    W1_SKILLS=$(read_qwenpaw_skills "${TEST_W1}")
+    for skill in team-coordination project-management task-delegation task-execution; do
+        if echo "${LEADER_SKILLS}" | jq -e --arg skill "${skill}" '.[] | select(.name == $skill and .source == "plugin:teamharness")' >/dev/null 2>&1; then
+            log_pass "Leader has plugin skill ${skill}"
+        else
+            log_fail "Leader missing plugin skill ${skill}"
+        fi
+    done
+    for skill in communication file-sharing mcporter; do
+        if echo "${W1_SKILLS}" | jq -e --arg skill "${skill}" '.[] | select(.name == $skill and .source == "plugin:teamharness")' >/dev/null 2>&1; then
+            log_pass "Worker 1 has plugin skill ${skill}"
+        else
+            log_fail "Worker 1 missing plugin skill ${skill}"
+        fi
+    done
+else
+    for skill in team-coordination project-management task-management; do
+        LEADER_SKILL=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/agents/${TEST_LEADER}/skills/${skill}/SKILL.md' >/dev/null 2>&1 && echo yes || echo no")
+        if [ "${LEADER_SKILL}" = "yes" ]; then
+            log_pass "Leader has ${skill} skill"
+        else
+            log_fail "Leader missing ${skill} skill"
+        fi
+    done
+    for skill in file-sync task-progress mcporter; do
+        W1_SKILL=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/agents/${TEST_W1}/skills/${skill}/SKILL.md' >/dev/null 2>&1 && echo yes || echo no")
+        if [ "${W1_SKILL}" = "yes" ]; then
+            log_pass "Worker 1 has ${skill} skill"
+        else
+            log_fail "Worker 1 missing ${skill} skill"
+        fi
+    done
+fi
 
 # ============================================================
 # Section 9: Verify agent count
 # ============================================================
 log_section "Verify Agent Count"
 
-TEAM_AGENT_COUNT=$(echo "${WORKERS_REGISTRY}" | jq -r --arg t "${TEST_TEAM}" '[.workers | to_entries[] | select(.value.team_id == $t)] | length' 2>/dev/null)
+TEAM_AGENT_COUNT=$(echo "${WORKERS_RESOURCE}" | jq -r '.workers | length')
 assert_eq "3" "${TEAM_AGENT_COUNT}" "Team has 3 agents total (1 leader + 2 workers)"
 
 # ============================================================
@@ -395,7 +452,7 @@ log_section "Verify Admin Auto-Joined Worker Rooms"
 if [ -n "${ADMIN_TOKEN}" ] && [ "${ADMIN_TOKEN}" != "null" ]; then
     ADMIN_MATRIX_ID="@${TEST_ADMIN_USER}:${TEST_MATRIX_DOMAIN}"
     for w in "${TEST_LEADER}" "${TEST_W1}" "${TEST_W2}"; do
-        W_ROOM=$(exec_in_agent hiclaw get workers "${w}" -o json 2>/dev/null | jq -r '.roomID // empty')
+        W_ROOM=$(exec_in_agent agt get workers "${w}" -o json 2>/dev/null | jq -r '.roomID // empty')
         if [ -n "${W_ROOM}" ] && [ "${W_ROOM}" != "null" ]; then
             W_ROOM_ENC=$(echo "${W_ROOM}" | sed 's/!/%21/g')
             W_MEMBERS=$(exec_in_manager curl -sf \
@@ -425,8 +482,8 @@ for w in "${TEST_LEADER}" "${TEST_W1}" "${TEST_W2}"; do
     if [ -n "${RUNNING}" ]; then
         log_pass "Container running: $(worker_container_name "${w}")"
     else
-        DEPLOY=$(echo "${WORKERS_REGISTRY}" | jq -r --arg w "${w}" '.workers[$w].deployment // empty' 2>/dev/null)
-        if [ "${DEPLOY}" = "remote" ]; then
+        MANAGED=$(echo "${WORKERS_RESOURCE}" | jq -r --arg w "${w}" '.workers[] | select(.name == $w) | .containerManaged')
+        if [ "${MANAGED}" = "false" ]; then
             log_pass "Agent ${w} registered in remote mode"
         else
             dump_diagnostics worker "${w}"

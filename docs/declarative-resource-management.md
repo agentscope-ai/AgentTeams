@@ -1,12 +1,12 @@
 # Declarative Resource Management
 
-HiClaw uses Kubernetes CRD-style declarative YAML to manage platform resources — **Worker**, **Team**, **Human**, and **Manager**. You describe the desired state, and the HiClaw Controller handles creation, updates, and deletion automatically.
+AgentTeams uses Kubernetes CRD-style declarative YAML to manage platform resources — **Worker**, **Team**, **Human**, and **Manager**. You describe the desired state, and the AgentTeams Controller handles creation, updates, and deletion automatically.
 
 ## Core Concepts
 
 ### Organization Structure
 
-HiClaw uses a three-tier organization that maps to real enterprise team structures:
+AgentTeams uses a three-tier organization that maps to real enterprise team structures:
 
 ```
 Admin (Human administrator)
@@ -30,7 +30,7 @@ Admin (Human administrator)
 | Resource | Description | Underlying Entity |
 |----------|-------------|-------------------|
 | Worker | AI Agent execution unit | Docker container + Matrix account + MinIO space |
-| Team | Collaboration group with Leader + N Workers | A set of Worker containers + Team Room |
+| Team | Collaboration group referencing one Leader Worker and N member Workers | Worker references + Team Room |
 | Human | Real human user | Matrix account + Room permissions |
 | Manager | Coordinator Agent (task routing, Worker/Team orchestration) | Manager Agent runtime (same stack as Workers; reconciled like other CRs) |
 
@@ -40,7 +40,7 @@ All resources share a unified API version: `apiVersion: agentteams.io/v1beta1`.
 
 ## Worker
 
-A Worker is the basic execution unit in HiClaw — an AI Agent running in a Docker container with its own Matrix communication account and MinIO storage space.
+A Worker is the basic execution unit in AgentTeams — an AI Agent running in a Docker container with its own Matrix communication account and MinIO storage space.
 
 ### Basic Configuration
 
@@ -67,7 +67,7 @@ spec:
     ## Behavior
     - Monitor CI/CD pipelines proactively
     - Alert on failures immediately
-  skills:                          # HiClaw built-in skills
+  skills:                          # AgentTeams built-in skills
     - github-operations
     - git-delegation
   mcpServers:                      # MCP servers callable via mcporter (url = full gateway endpoint)
@@ -89,12 +89,12 @@ spec:
 |-------|------|----------|---------|-------------|
 | `metadata.name` | string | Yes | — | Worker name, globally unique |
 | `spec.model` | string | Yes | — | LLM model ID, e.g. `claude-sonnet-4-6`, `qwen3.5-plus` |
-| `spec.runtime` | string | No | `openclaw` | Agent runtime: `openclaw`, `copaw`, or `hermes` |
-| `spec.image` | string | No | — | Custom Docker image; if empty, the controller uses `HICLAW_WORKER_IMAGE` / `HICLAW_COPAW_WORKER_IMAGE` / `HICLAW_HERMES_WORKER_IMAGE` (defaults `hiclaw/worker-agent:latest` / `hiclaw/copaw-worker:latest` / `hiclaw-hermes-worker:latest`) |
+| `spec.runtime` | string | No | `openclaw` | Agent runtime: `openclaw`, `qwenpaw`, `copaw` (legacy), `hermes`, or `openhuman` |
+| `spec.image` | string | No | — | Custom Docker image; if empty, the controller uses `AGENTTEAMS_WORKER_IMAGE` / `AGENTTEAMS_COPAW_WORKER_IMAGE` / `AGENTTEAMS_HERMES_WORKER_IMAGE` (defaults `agentteams/agentteams-worker:latest` / `agentteams/agentteams-copaw-worker:latest` / `agentteams/agentteams-hermes-worker:latest`) |
 | `spec.identity` | string | No | — | Worker public identity (OpenClaw: generates IDENTITY.md; QwenPaw: merged into SOUL.md per controller) |
 | `spec.soul` | string | No | — | Worker personality and values (generates SOUL.md) |
 | `spec.agents` | string | No | — | Agent behavior rules, used to generate AGENTS.md |
-| `spec.skills` | []string | No | — | Built-in skills, distributed by Manager |
+| `spec.skills` | []string | No | — | Assigned Worker skills, distributed and verified by Manager |
 | `spec.mcpServers` | []object | No | — | MCP servers callable via mcporter. Each item: `name` (required, map key in mcporter-servers.json), `url` (required, full gateway endpoint), `transport` (`http` default or `sse`). The controller injects `Authorization: Bearer <gatewayKey>`; gateway-side authorization is out of scope. |
 | `spec.package` | string | No | — | Custom package URI: `file://`, `http(s)://`, `nacos://`, or controller-resolved `packages/{name}.zip` after upload |
 | `spec.expose` | []object | No | — | Ports to expose via Higress gateway (see [Service Publishing](#service-publishing)) |
@@ -113,11 +113,23 @@ There are two ways to configure a Worker's identity and behavior:
 
 When both are set, inline fields override the corresponding files in the package. This allows you to use a package as a base template while customizing specific aspects via YAML — for example, importing a shared package but overriding `soul` to give the Worker a unique role definition.
 
-### Built-in Skills vs Custom Skills
+### Worker Skills
 
-`spec.skills` refers to HiClaw platform built-in capabilities, distributed by the Manager via `push-worker-skills.sh` to the Worker's MinIO space.
+`spec.skills` records the skills assigned to a Worker. A referenced skill can come from the AgentTeams Worker skill library or from a third-party skill placed under `$AGENTTEAMS_WORKSPACE_DIR/worker-skills/<skill-name>/`.
 
-For custom skills, use `spec.package` to provide a ZIP containing a `skills/` directory. Built-in and custom skills are merged without conflict.
+For an existing Worker, either put the complete Skill directory in the Manager workspace or send the Manager a ZIP attachment containing one complete Skill root. Then ask the Manager to install it:
+
+> Install the `alert-fusion` skill from `~/worker-skills/alert-fusion/` for Worker `amy-ai`. Verify the upload and confirm that the Worker assignment includes the skill.
+
+For an attachment, ask the Manager to safely extract and validate the ZIP before it stages the Skill under `~/worker-skills/` and distributes it.
+
+The Manager uploads and verifies `SKILL.md` before updating `spec.skills`. QwenPaw Workers consume the resulting runtime assignment, synchronize the selected skill into their native workspace, then refresh and enable it automatically.
+
+The assignment can also be checked through conversation instead of a CLI command:
+
+> Check the skills assigned to Worker `amy-ai` and confirm whether `alert-fusion` is included.
+
+You can also use `spec.package` to provide a Worker package containing a `skills/` directory. Package skills and assigned skills are merged without conflict.
 
 ### Worker with Custom Package
 
@@ -145,8 +157,8 @@ When the Controller receives a Worker resource, it executes:
 3. Create a MinIO user and bucket, configure Higress gateway authorization
 4. Generate `openclaw.json` config (including `groupAllowFrom` permission matrix)
 5. Push all config files (SOUL.md, skills, crons, etc.) to MinIO
-6. Update `workers-registry.json`
-7. Start the Worker container
+6. Update Worker status
+7. Reconcile the Worker container
 
 ### Worker Status
 
@@ -163,7 +175,7 @@ When the Controller receives a Worker resource, it executes:
 
 ## Team
 
-A Team is HiClaw's collaboration unit, consisting of one Team Leader and one or more Team Workers. The Manager delegates tasks to the Team Leader, who handles decomposition, assignment, and aggregation — achieving team-level autonomy.
+A Team is AgentTeams's collaboration unit, consisting of one Team Leader and one or more Team Workers. The Manager delegates tasks to the Team Leader, who handles decomposition, assignment, and aggregation — achieving team-level autonomy.
 
 ### Basic Configuration
 
@@ -174,61 +186,17 @@ metadata:
   name: alpha-team
 spec:
   description: Full-stack development team
-  leader:
-    name: alpha-lead
-    model: claude-sonnet-4-6
-    heartbeat:
-      enabled: true
-      every: 30m
-    workerIdleTimeout: 12h
-    resources:
-      requests:
-        cpu: 300m
-        memory: 768Mi
-      limits:
-        cpu: "2"
-        memory: 3Gi
-    soul: |
-      # Alpha Lead - Team Leader
-      ## Personality
-      - Calm and organized, keeps the team focused on priorities
-      - Patient with team members, encourages open communication
-      ## Values
-      - Clarity: every task must have clear acceptance criteria before assignment
-      - Trust: delegate fully, don't micromanage
-  workers:
+  heartbeatEvery: 30m
+  workerMembers:
+    - name: alpha-lead
+      role: team_leader
     - name: alpha-dev
-      model: claude-sonnet-4-6
-      skills: [github-operations]
-      resources:
-        requests:
-          cpu: 200m
-          memory: 512Mi
-        limits:
-          cpu: "1"
-          memory: 2Gi
-      mcpServers:
-        - name: github
-          url: https://gateway.example.com/mcp-servers/github/mcp
-      soul: |
-        # Alpha Dev - Backend Developer
-        ## Personality
-        - Pragmatic problem-solver, favors simple solutions over clever ones
-        - Thorough code reviewer, catches edge cases early
-        ## Values
-        - Code quality: write tests before shipping
-        - Keep it simple: avoid premature abstraction
+      role: worker
     - name: alpha-qa
-      model: claude-sonnet-4-6
-      soul: |
-        # Alpha QA - QA Engineer
-        ## Personality
-        - Skeptical by nature, always asks "what could go wrong?"
-        - Meticulous about reproducing and documenting issues
-        ## Values
-        - User experience first: test from the user's perspective
-        - No silent failures: every bug gets a clear report
+      role: worker
 ```
+
+Create `alpha-lead`, `alpha-dev`, and `alpha-qa` as Worker resources first. Model, runtime, image, resources, identity, skills, MCP servers, package, channel policy, and lifecycle state belong only to each Worker CR.
 
 ### Field Reference
 
@@ -242,46 +210,10 @@ spec:
 | `spec.channelPolicy` | object | No | Team-wide overrides for group/DM allow-deny lists (same shape as Worker `channelPolicy`) |
 | `spec.admin` | object | No | Team-specific human admin (`name` required; `matrixUserId` optional). Defaults to global Admin when omitted |
 | `spec.humanMembers` | []object | No | Additional human Team members. In this version, `role: coordinator` members join the Team Room and can assign work there like the Team Admin |
-| `spec.leader` | object | Yes | Team Leader configuration |
-| `spec.workers` | []object | Yes | Team Worker list |
-
-**Leader fields:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `leader.name` | string | Yes | Leader name |
-| `leader.model` | string | No | LLM model |
-| `leader.identity` | string | No | Leader public identity (generates IDENTITY.md) |
-| `leader.soul` | string | No | Leader personality and values (generates SOUL.md) |
-| `leader.agents` | string | No | Custom behavior rules (appended after builtin AGENTS.md) |
-| `leader.package` | string | No | Custom package URI |
-| `leader.heartbeat.enabled` | bool | No | Whether the Team Leader should use heartbeat turns for periodic checks |
-| `leader.heartbeat.every` | string | No | Heartbeat interval hint injected into the Team Leader workspace |
-| `leader.workerIdleTimeout` | string | No | Idle timeout the Team Leader uses when deciding whether to sleep team workers |
-| `leader.state` | string | No | `Running` (default), `Sleeping`, or `Stopped` — desired lifecycle for the Leader container |
-| `leader.resources` | object | No | CPU/memory requests and limits for the Team Leader Pod |
-| `leader.channelPolicy` | object | No | Per-leader overrides on top of team defaults |
-
-**Worker fields (same as standalone Worker spec):**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `workers[].name` | string | Yes | Worker name |
-| `workers[].model` | string | No | LLM model |
-| `workers[].runtime` | string | No | Agent runtime (`openclaw`, `copaw`, or `hermes`) |
-| `workers[].image` | string | No | Custom Docker image |
-| `workers[].identity` | string | No | Worker public identity (generates IDENTITY.md) |
-| `workers[].soul` | string | No | Worker personality and values (generates SOUL.md) |
-| `workers[].agents` | string | No | Custom behavior rules (appended after builtin AGENTS.md) |
-| `workers[].skills` | []string | No | Built-in skills |
-| `workers[].mcpServers` | []object | No | MCP servers (see Worker's `spec.mcpServers` schema) |
-| `workers[].package` | string | No | Custom package URI |
-| `workers[].expose` | []object | No | Ports to expose via Higress gateway (see [Service Publishing](#service-publishing)) |
-| `workers[].channelPolicy` | object | No | Per-worker communication policy overrides |
-| `workers[].state` | string | No | `Running` (default), `Sleeping`, or `Stopped` — desired lifecycle for this team Worker |
-| `workers[].resources` | object | No | CPU/memory requests and limits for this Team Worker Pod |
-
-Changing Team member `resources` updates the Team spec hash and recreates the affected member container/Pod.
+| `spec.workerMembers` | []object | Yes | References to existing Worker resources; exactly one entry must have `role: team_leader` |
+| `spec.workerMembers[].name` | string | Yes | Referenced Worker resource name |
+| `spec.workerMembers[].role` | string | Yes | `team_leader` or `worker` |
+| `spec.heartbeatEvery` | string | No | Team Leader heartbeat interval hint |
 
 ### What Makes Team Leader Special
 
@@ -291,7 +223,7 @@ A Team Leader is essentially a Worker container, but with key differences:
 - Has canonical Team Leader skills: `team-coordination` for strategy, `project-management` for Project state and ready-node resolution, and `task-management` for Worker task delegation
 - Does not install the older `team-project-management`, `team-task-coordination`, or `team-task-management` compatibility aliases into new Team Leader workspaces; existing workspaces that already copied those aliases keep their local files until explicitly upgraded or recreated
 - Does NOT have Manager-exclusive skills like `worker-management` or `mcp-server-management`
-- Marked as `role: "team_leader"` in `workers-registry.json`
+- Referenced with `role: "team_leader"` in `Team.spec.workerMembers`
 - Follows a delegation-first principle — always assigns tasks to team Workers, never executes domain tasks itself
 
 ### Team Leader AGENTS.md Assembly
@@ -299,22 +231,22 @@ A Team Leader is essentially a Worker container, but with key differences:
 The Team Leader's AGENTS.md is assembled in three layers, each managed independently:
 
 ```
-<!-- hiclaw-builtin-start -->
+<!-- agentteams-builtin-start -->
 [Builtin: Team Leader workspace rules, task flow, skills reference]
-<!-- hiclaw-builtin-end -->
+<!-- agentteams-builtin-end -->
 
-<!-- hiclaw-team-context-start -->
+<!-- agentteams-team-context-start -->
 ## Coordination
 - Upstream coordinator: @manager:{domain}
 - Team Admin: @admin:{domain}
 - Team: alpha-team
 - Team members: alpha-dev, alpha-qa
-<!-- hiclaw-team-context-end -->
+<!-- agentteams-team-context-end -->
 
 [User-provided content from spec.agents (if any)]
 ```
 
-- The builtin section is auto-managed by HiClaw and updated on upgrades
+- The builtin section is auto-managed by AgentTeams and updated on upgrades
 - The team context is auto-injected with the team name, members, coordinator info, heartbeat interval, and worker idle timeout
 - User-provided `spec.agents` content is placed after both sections and preserved across updates
 
@@ -396,7 +328,7 @@ spec:
 
 ## Manager
 
-The **Manager** resource describes the HiClaw Manager Agent — the coordinator that receives instructions from Admin and orchestrates Workers and Teams. It uses the same API group/version as other resources and is reconciled by `hiclaw-controller` (update image, SOUL/AGENTS, skills, MCP authorization, optional package, and desired `state`).
+The **Manager** resource describes the AgentTeams Manager Agent — the coordinator that receives instructions from Admin and orchestrates Workers and Teams. It uses the same API group/version as other resources and is reconciled by `agentteams-controller` (update image, SOUL/AGENTS, MCP authorization, optional package, and desired `state`).
 
 ### Basic configuration
 
@@ -412,8 +344,6 @@ spec:
     # Manager — coordination focus
   agents: |
     # Optional AGENTS.md overrides
-  skills:
-    - worker-management
   mcpServers:
     - name: github
       url: https://gateway.example.com/mcp-servers/github/mcp
@@ -437,11 +367,10 @@ spec:
 |-------|------|----------|---------|-------------|
 | `metadata.name` | string | Yes | — | Manager resource name (often `default` for the primary instance) |
 | `spec.model` | string | Yes | — | LLM model ID |
-| `spec.runtime` | string | No | `openclaw` | `openclaw` or `copaw` (Hermes is **not** a supported Manager runtime) |
+| `spec.runtime` | string | No | `openclaw` | `openclaw` or `qwenpaw` (Hermes is **not** a supported Manager runtime) |
 | `spec.image` | string | No | — | Custom Manager image; empty uses deployment default |
 | `spec.soul` | string | No | — | Custom SOUL.md content |
 | `spec.agents` | string | No | — | Custom AGENTS.md content |
-| `spec.skills` | []string | No | — | On-demand Manager skills to enable |
 | `spec.mcpServers` | []object | No | — | MCP servers callable via mcporter. Each item: `name`, `url`, `transport` (`http`/`sse`). Gateway-side authorization is out of scope. |
 | `spec.package` | string | No | — | Package URI (`file://`, `http(s)://`, `nacos://`) |
 | `spec.state` | string | No | `Running` | Desired lifecycle: `Running`, `Sleeping`, `Stopped` |
@@ -553,8 +482,8 @@ Human permissions are enforced through two mechanisms:
 2. Calculate which Agents need modification based on permissionLevel
 3. Update `groupAllowFrom` in each affected Agent's `openclaw.json`
 4. Invite the Human to the corresponding Rooms
-5. Update `humans-registry.json`
-6. Push updated configs to MinIO, notify Agents to `file-sync`
+5. Update Human status
+6. Push updated configs to MinIO
 7. Send a welcome email (if SMTP and email are configured)
 
 ### Automatic Welcome Email
@@ -562,11 +491,11 @@ Human permissions are enforced through two mechanisms:
 When `spec.email` is set and SMTP is configured, a welcome email is automatically sent after the Human account is created, containing all the information needed to log in:
 
 ```
-Subject: Welcome to HiClaw - Your Account Details
+Subject: Welcome to AgentTeams - Your Account Details
 
 Hi {displayName},
 
-Your HiClaw account has been created:
+Your AgentTeams account has been created:
 
   Username: {matrix_user_id}
   Password: {generated_password}
@@ -574,20 +503,20 @@ Your HiClaw account has been created:
 
 Please log in and change your password immediately.
 
-— HiClaw
+— AgentTeams
 ```
 
 SMTP is configured via environment variables in the Manager container:
 
 | Variable | Description |
 |----------|-------------|
-| `HICLAW_SMTP_HOST` | SMTP server address |
-| `HICLAW_SMTP_PORT` | SMTP port |
-| `HICLAW_SMTP_USER` | SMTP username |
-| `HICLAW_SMTP_PASS` | SMTP password |
-| `HICLAW_SMTP_FROM` | Sender address |
+| `AGENTTEAMS_SMTP_HOST` | SMTP server address |
+| `AGENTTEAMS_SMTP_PORT` | SMTP port |
+| `AGENTTEAMS_SMTP_USER` | SMTP username |
+| `AGENTTEAMS_SMTP_PASS` | SMTP password |
+| `AGENTTEAMS_SMTP_FROM` | Sender address |
 
-If SMTP is not configured or `spec.email` is empty, email sending is skipped without affecting account creation. The initial password is still recorded in `status.initialPassword` and can be retrieved via `hiclaw get human <name>`.
+If SMTP is not configured or `spec.email` is empty, email sending is skipped without affecting account creation. The initial password is still recorded in `status.initialPassword` and can be retrieved via `agt get human <name>`.
 
 ### Notes
 
@@ -644,7 +573,7 @@ Regardless of URI format, the extracted package follows a unified structure:
     "suggested_name": "my-worker",
     "model": "qwen3.5-plus",
     "runtime": "openclaw",
-    "base_image": "hiclaw/worker-agent:latest",
+    "base_image": "agentteams/worker-agent:latest",
     "apt_packages": ["ffmpeg"],
     "pip_packages": [],
     "npm_packages": []
@@ -652,46 +581,46 @@ Regardless of URI format, the extracted package follows a unified structure:
 }
 ```
 
-`worker.runtime` (`openclaw`, `copaw`, or `hermes`) is honored by `hiclaw apply worker --zip`
+`worker.runtime` (`openclaw`, `qwenpaw`, `copaw` (legacy), `hermes`, or `openhuman`) is honored by `agt apply worker --zip`
 and overridden by an explicit `--runtime` flag.
 
 ## Operations
 
-### hiclaw-apply.sh — Declarative Apply (Recommended)
+### agentteams-apply.sh — Declarative Apply (Recommended)
 
-Runs on the host, copying YAML into the Manager container and invoking `hiclaw apply -f …`:
+Runs on the host, copying YAML into the Manager container and invoking `agt apply -f …`:
 
 ```bash
 # Create/update resources (each document is POST or PUT in order)
-bash install/hiclaw-apply.sh -f worker.yaml
+bash install/agentteams-apply.sh -f worker.yaml
 
 # Multi-document file (use --- separators)
-bash install/hiclaw-apply.sh -f company-setup.yaml
+bash install/agentteams-apply.sh -f company-setup.yaml
 ```
 
 | Option | Description |
 |--------|-------------|
 | `-f <path>` | YAML resource file (required); multiple `-f` flags allowed |
 
-`hiclaw apply -f` walks YAML documents **in file order** and calls the REST API per kind (`Worker` → `/api/v1/workers`, `Team` → `/api/v1/teams`, `Human` → `/api/v1/humans`, `Manager` → `/api/v1/managers`). Put dependencies first yourself (e.g. define Teams before Humans that reference `accessibleTeams`). **`--prune` and `--dry-run` are not implemented** in the current CLI — remove extras with `hiclaw delete …` or equivalent APIs.
+`agt apply -f` walks YAML documents **in file order** and calls the REST API per kind (`Worker` → `/api/v1/workers`, `Team` → `/api/v1/teams`, `Human` → `/api/v1/humans`, `Manager` → `/api/v1/managers`). Put dependencies first yourself (e.g. define Teams before Humans that reference `accessibleTeams`). **`--prune` and `--dry-run` are not implemented** in the current CLI — remove extras with `agt delete …` or equivalent APIs.
 
-### hiclaw-import.sh — Imperative Import
+### agentteams-import.sh — Imperative Import
 
 For importing Workers from ZIP packages:
 
 ```bash
 # Import from local ZIP
-bash install/hiclaw-import.sh worker --name alice --zip ./alice.zip
+bash install/agentteams-import.sh worker --name alice --zip ./alice.zip
 
 # Import from URL
-bash install/hiclaw-import.sh worker --name alice --zip https://example.com/alice.zip
+bash install/agentteams-import.sh worker --name alice --zip https://example.com/alice.zip
 
 # Import from Nacos
-bash install/hiclaw-import.sh worker --name alice --package nacos://host:8848/ns/alice/v1
-bash install/hiclaw-import.sh worker --name alice --package nacos://host:8848/ns/alice/label:latest
+bash install/agentteams-import.sh worker --name alice --package nacos://host:8848/ns/alice/v1
+bash install/agentteams-import.sh worker --name alice --package nacos://host:8848/ns/alice/label:latest
 
 # Create without a package
-bash install/hiclaw-import.sh worker --name bob --model claude-sonnet-4-6 \
+bash install/agentteams-import.sh worker --name bob --model claude-sonnet-4-6 \
     --skills github-operations,git-delegation
 
 # Note: mcpServers must be configured via YAML manifest (see Worker spec above).
@@ -699,30 +628,30 @@ bash install/hiclaw-import.sh worker --name bob --model claude-sonnet-4-6 \
 #       {name, url, transport} per server and is not expressible as a CSV string.
 ```
 
-### hiclaw CLI — In-Container Management
+### agt CLI — In-Container Management
 
 Operate directly inside the Manager container (or via `docker exec`):
 
 ```bash
 # List all resources
-docker exec hiclaw-manager hiclaw get workers
-docker exec hiclaw-manager hiclaw get teams
-docker exec hiclaw-manager hiclaw get humans
-docker exec hiclaw-manager hiclaw get managers
+docker exec agentteams-manager agt get workers
+docker exec agentteams-manager agt get teams
+docker exec agentteams-manager agt get humans
+docker exec agentteams-manager agt get managers
 
 # View a single resource
-docker exec hiclaw-manager hiclaw get worker alice
+docker exec agentteams-manager agt get worker alice
 
 # Delete a resource
-docker exec hiclaw-manager hiclaw delete worker alice
-docker exec hiclaw-manager hiclaw delete team alpha-team
-docker exec hiclaw-manager hiclaw delete human john
-docker exec hiclaw-manager hiclaw delete manager default
+docker exec agentteams-manager agt delete worker alice
+docker exec agentteams-manager agt delete team alpha-team
+docker exec agentteams-manager agt delete human john
+docker exec agentteams-manager agt delete manager default
 ```
 
 ### HTTP API — Cloud Management
 
-The `hiclaw-controller` exposes a REST API (default `:8090`) used by the `hiclaw` CLI. Typical resources:
+The `agentteams-controller` exposes a REST API (default `:8090`) used by the `agt` CLI. Typical resources:
 
 ```
 GET    /api/v1/workers
@@ -740,17 +669,72 @@ PUT    /api/v1/managers/{name}
 DELETE /api/v1/managers/{name}
 ```
 
-> **Note:** In typical embedded deployments, port 8090 is reachable from inside the Manager container (`localhost:8090`). In Kubernetes (`HICLAW_KUBE_MODE=incluster`), expose the controller via a Service as needed.
+> **Note:** In typical embedded deployments, port 8090 is reachable from inside the Manager container (`localhost:8090`). In Kubernetes (`AGENTTEAMS_KUBE_MODE=incluster`), expose the controller via a Service as needed.
 
 ## Batch Deployment
 
-Use `---` separators to define multiple resources in one file. **`hiclaw apply -f` applies documents sequentially in the order they appear** — it does not sort by kind. Put Teams before Humans that list `accessibleTeams`, and create standalone Workers before Humans that list `accessibleWorkers`.
+Use `---` separators to define multiple resources in one file. **`agt apply -f` applies documents sequentially in the order they appear** — it does not sort by kind. Create every referenced Worker before its Team, then put Teams before Humans that list `accessibleTeams`.
 
-Deletion order is not automatic: use `hiclaw delete` per resource (respect dependencies: e.g. delete Humans before Teams they reference, if your deployment requires it).
+Deletion order is not automatic: use `agt delete` per resource (respect dependencies: e.g. delete Humans before Teams they reference, if your deployment requires it).
 
 ```yaml
 # company-setup.yaml
 
+# --- Workers ---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: product-lead
+spec:
+  model: claude-sonnet-4-6
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: backend-dev
+spec:
+  model: claude-sonnet-4-6
+  skills: [github-operations, git-delegation]
+  mcpServers:
+    - name: github
+      url: https://gateway.example.com/mcp-servers/github/mcp
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: frontend-dev
+spec:
+  model: claude-sonnet-4-6
+  skills: [github-operations]
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: qa-engineer
+spec:
+  model: claude-sonnet-4-6
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: ops-lead
+spec:
+  model: claude-sonnet-4-6
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: monitor
+spec:
+  model: claude-sonnet-4-6
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: admin-assistant
+spec:
+  model: claude-sonnet-4-6
+---
 # --- Team definitions ---
 apiVersion: agentteams.io/v1beta1
 kind: Team
@@ -758,21 +742,15 @@ metadata:
   name: product-team
 spec:
   description: Product development team
-  leader:
-    name: product-lead
-    model: claude-sonnet-4-6
-  workers:
+  workerMembers:
+    - name: product-lead
+      role: team_leader
     - name: backend-dev
-      model: claude-sonnet-4-6
-      skills: [github-operations, git-delegation]
-      mcpServers:
-        - name: github
-          url: https://gateway.example.com/mcp-servers/github/mcp
+      role: worker
     - name: frontend-dev
-      model: claude-sonnet-4-6
-      skills: [github-operations]
+      role: worker
     - name: qa-engineer
-      model: claude-sonnet-4-6
+      role: worker
 ---
 apiVersion: agentteams.io/v1beta1
 kind: Team
@@ -780,20 +758,11 @@ metadata:
   name: ops-team
 spec:
   description: Operations team
-  leader:
-    name: ops-lead
-    model: claude-sonnet-4-6
-  workers:
+  workerMembers:
+    - name: ops-lead
+      role: team_leader
     - name: monitor
-      model: claude-sonnet-4-6
----
-# --- Standalone Worker ---
-apiVersion: agentteams.io/v1beta1
-kind: Worker
-metadata:
-  name: admin-assistant
-spec:
-  model: claude-sonnet-4-6
+      role: worker
 ---
 # --- Human users ---
 apiVersion: agentteams.io/v1beta1
@@ -833,19 +802,19 @@ spec:
 One-command deployment:
 
 ```bash
-bash install/hiclaw-apply.sh -f company-setup.yaml
+bash install/agentteams-apply.sh -f company-setup.yaml
 ```
 
-For subsequent changes, edit the YAML and re-apply. To remove a resource, use `hiclaw delete <kind> <name>` (or the REST API).
+For subsequent changes, edit the YAML and re-apply. To remove a resource, use `agt delete <kind> <name>` (or the REST API).
 
 ## Controller Architecture
 
 ### Processing Flow
 
 ```
-Entry point (hiclaw-apply.sh / HTTP API / hiclaw CLI)
+Entry point (agentteams-apply.sh / HTTP API / agt CLI)
   ↓
-YAML written to MinIO hiclaw-config/{kind}/{name}.yaml
+YAML written to MinIO agentteams-config/{kind}/{name}.yaml
   ↓
 mc mirror syncs to local filesystem (10-second interval)
   ↓
@@ -861,9 +830,9 @@ Reconciler executes scripts (create-worker.sh / create-team.sh / create-human.sh
 | Reconciler | CREATE | UPDATE | DELETE |
 |-----------|--------|--------|--------|
 | Worker | Create container + Matrix account + MinIO space | model change → regenerate config; skills change → re-push | Stop container + clean up resources |
-| Team | Create Leader + Workers + Team Room | workers list change → add/remove Workers | Delete Workers → Leader → Team Room |
+| Team | Validate and link existing Workers + create Team Room | `workerMembers` change → update membership and coordination context | Remove Team Room and coordination context; preserve Worker CRs and runtimes |
 | Human | Register Matrix account + configure permissions + send email | permissionLevel change → recalculate groupAllowFrom | Remove from all groupAllowFrom → kick from Rooms |
-| Manager | Provision/update Manager Agent config + runtime | model/skills/package/state → reconcile | Tear down managed Manager resources per backend |
+| Manager | Provision/update Manager Agent config + runtime | model/package/state → reconcile | Tear down managed Manager resources per backend |
 
 All resources use the Kubernetes finalizer pattern to ensure cleanup before deletion.
 
@@ -876,13 +845,13 @@ Workers can expose HTTP services running inside their containers to the outside 
 Each exposed port gets an auto-generated domain:
 
 ```
-worker-{name}-{port}-local.hiclaw.io
+worker-{name}-{port}-local.agentteams.io
 ```
 
-For example, worker `alice` exposing port `8080` becomes accessible at `worker-alice-8080-local.hiclaw.io`.
+For example, worker `alice` exposing port `8080` becomes accessible at `worker-alice-8080-local.agentteams.io`.
 
 The Controller creates three Higress resources per exposed port:
-1. **Domain**: `worker-{name}-{port}-local.hiclaw.io`
+1. **Domain**: `worker-{name}-{port}-local.agentteams.io`
 2. **DNS Service Source**: points to the worker container via network alias `{name}.local`
 3. **Route**: forwards all requests on the domain to the worker's port
 
@@ -909,38 +878,47 @@ spec:
 | `expose[].port` | int | Yes | — | Container port to expose |
 | `expose[].protocol` | string | No | `http` | Protocol: `http` or `grpc` |
 
-### Team Workers
+### Workers referenced by a Team
 
-Team Workers also support `expose`:
+`expose` remains Worker-owned. Configure it on the Worker CRs, then reference those Workers from the Team:
 
 ```yaml
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: lead
+spec:
+  model: qwen3.5-plus
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: backend
+spec:
+  model: qwen3.5-plus
+  expose:
+    - port: 8080
+---
 apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: dev-team
 spec:
-  leader:
-    name: lead
-    model: qwen3.5-plus
-  workers:
+  workerMembers:
+    - name: lead
+      role: team_leader
     - name: backend
-      model: qwen3.5-plus
-      expose:
-        - port: 8080
-    - name: frontend
-      model: qwen3.5-plus
-      expose:
-        - port: 3000
+      role: worker
 ```
 
 ### CLI Usage
 
 ```bash
 # Expose ports via CLI flag
-hiclaw apply worker --name alice --model qwen3.5-plus --expose 8080,3000
+agt apply worker --name alice --model qwen3.5-plus --expose 8080,3000
 
 # Remove exposed ports (re-apply without --expose)
-hiclaw apply worker --name alice --model qwen3.5-plus
+agt apply worker --name alice --model qwen3.5-plus
 ```
 
 ### Use Cases
@@ -960,9 +938,9 @@ hiclaw apply worker --name alice --model qwen3.5-plus
 
 | Dimension | embedded (default) | incluster (K8s) |
 |-----------|--------------------|-----------------|
-| Config storage | MinIO `hiclaw-config/` | K8s etcd (CRDs stored directly in K8s) |
+| Config storage | MinIO `agentteams-config/` | K8s etcd (CRDs stored directly in K8s) |
 | Controller detection | fsnotify → kine → informer | controller-runtime watches K8s API directly |
-| Switch via | `HICLAW_KUBE_MODE=embedded` | `HICLAW_KUBE_MODE=incluster` |
+| Switch via | `AGENTTEAMS_KUBE_MODE=embedded` | `AGENTTEAMS_KUBE_MODE=incluster` |
 
 ## Channel policy (Worker and Team)
 
@@ -975,11 +953,11 @@ hiclaw apply worker --name alice --model qwen3.5-plus
 | `dmAllowExtra` | Extra IDs allowed for direct messages |
 | `dmDenyExtra` | Deny list for DMs |
 
-Set `spec.channelPolicy` on a standalone Worker, or `spec.channelPolicy` / `spec.leader.channelPolicy` / `workers[].channelPolicy` on a Team for finer control per member.
+Set `spec.channelPolicy` on a Worker for per-member policy, and `spec.channelPolicy` on a Team for Team-wide policy.
 
 ## Communication Permission Matrix
 
-HiClaw uses the `groupAllowFrom` field in `openclaw.json` to control which @mentions each Agent accepts, enabling fine-grained communication permissions.
+AgentTeams uses the `groupAllowFrom` field in `openclaw.json` to control which @mentions each Agent accepts, enabling fine-grained communication permissions.
 
 | Role | groupAllowFrom includes |
 |------|------------------------|
@@ -998,7 +976,7 @@ Key rules:
 
 **Q: Can Teams and standalone Workers coexist?**
 
-Yes. Teams and standalone Workers coexist in the same HiClaw instance. The Manager decides whether to delegate to a Team Leader or assign directly to a standalone Worker based on the task domain.
+Yes. Teams and standalone Workers coexist in the same AgentTeams instance. The Manager decides whether to delegate to a Team Leader or assign directly to a standalone Worker based on the task domain.
 
 **Q: What happens when a Human's permissionLevel is changed?**
 
@@ -1014,4 +992,4 @@ The Controller marks the Human as Pending and automatically backfills permission
 
 **Q: Is there a `--prune` mode for declarative apply?**
 
-Not in the current `hiclaw apply` CLI. List resources with `hiclaw get …` and delete explicitly, or automate against the REST API.
+Not in the current `agt apply` CLI. List resources with `agt get …` and delete explicitly, or automate against the REST API.

@@ -6,7 +6,7 @@ You are a **Hermes Worker** — a Python-based agent powered by hermes-agent, in
 
 - **Your agent files:** `~/.hermes/` (config.yaml, .env, SOUL.md, AGENTS.md, skills/, sessions/)
 - **Shared space:** `~/shared/` — auto-synced from MinIO every 5 minutes
-- **MinIO alias:** `hiclaw` (pre-configured at startup)
+- **MinIO alias:** `agentteams` (pre-configured at startup)
 
 The `shared/` directory is automatically mirrored from MinIO at startup and every sync cycle. Tasks and projects are available locally without manual `mc mirror` pulls.
 
@@ -213,7 +213,7 @@ Your MinIO credentials are set as environment variables at startup:
 - `AGENTTEAMS_FS_ENDPOINT` — MinIO endpoint
 - `AGENTTEAMS_FS_ACCESS_KEY` / `AGENTTEAMS_FS_SECRET_KEY` — credentials
 
-The `mc` alias `hiclaw` is pre-configured using these credentials.
+The `mc` alias `agentteams` is pre-configured using these credentials.
 
 ## Safety
 

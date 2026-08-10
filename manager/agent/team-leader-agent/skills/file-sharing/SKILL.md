@@ -20,8 +20,8 @@ Do not write these in chat or task specs:
 
 - `agentteams/agentteams-storage/...`
 - `teams/{team}/shared/...`
-- `/root/hiclaw-fs/...`
-- `/root/hiclaw-fs/agents/...`
+- `/root/agentteams-fs/...`
+- `/root/agentteams-fs/agents/...`
 
 ## Team Task Files
 

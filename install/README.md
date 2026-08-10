@@ -12,13 +12,13 @@ One-click installation script for AgentTeams Manager and Worker Agents.
 ### macOS / Linux
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/hiclaw-install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 ### Windows (PowerShell 7+)
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://higress.ai/hiclaw/install.ps1')
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')
 ```
 
 ## Installation Modes
@@ -43,16 +43,16 @@ Customize each option:
 
 **macOS / Linux:**
 ```bash
-./hiclaw-install.sh manager
+./agentteams-install.sh manager
 # or simply
-./hiclaw-install.sh
+./agentteams-install.sh
 ```
 
 **Windows:**
 ```powershell
-.\hiclaw-install.ps1 manager
+.\agentteams-install.ps1 manager
 # or simply
-.\hiclaw-install.ps1
+.\agentteams-install.ps1
 ```
 
 Interactive prompts will ask for:
@@ -67,7 +67,7 @@ Workers are created by the Manager Agent through conversation. The Manager provi
 
 **macOS / Linux:**
 ```bash
-./hiclaw-install.sh worker \
+./agentteams-install.sh worker \
   --name alice \
   --fs http://fs-local.agentteams.io:18080 \
   --fs-key <ACCESS_KEY> \
@@ -76,7 +76,7 @@ Workers are created by the Manager Agent through conversation. The Manager provi
 
 **Windows:**
 ```powershell
-.\hiclaw-install.ps1 worker `
+.\agentteams-install.ps1 worker `
   -Name alice `
   -Fs http://fs-local.agentteams.io:18080 `
   -FsKey <ACCESS_KEY> `
@@ -87,7 +87,7 @@ Workers are created by the Manager Agent through conversation. The Manager provi
 
 **macOS / Linux:**
 ```bash
-./hiclaw-install.sh worker --reset --name alice \
+./agentteams-install.sh worker --reset --name alice \
   --fs http://fs-local.agentteams.io:18080 \
   --fs-key <ACCESS_KEY> \
   --fs-secret <SECRET_KEY>
@@ -95,7 +95,7 @@ Workers are created by the Manager Agent through conversation. The Manager provi
 
 **Windows:**
 ```powershell
-.\hiclaw-install.ps1 worker -Reset `
+.\agentteams-install.ps1 worker -Reset `
   -Name alice `
   -Fs http://fs-local.agentteams.io:18080 `
   -FsKey <ACCESS_KEY> `
@@ -106,12 +106,12 @@ Workers are created by the Manager Agent through conversation. The Manager provi
 
 **macOS / Linux:**
 ```bash
-./hiclaw-install.sh uninstall
+./agentteams-install.sh uninstall
 ```
 
 **Windows:**
 ```powershell
-.\hiclaw-install.ps1 uninstall
+.\agentteams-install.ps1 uninstall
 ```
 
 ## Non-Interactive Mode (Automation)
@@ -122,14 +122,14 @@ Set environment variables to skip prompts:
 ```bash
 export AGENTTEAMS_NON_INTERACTIVE=1
 export AGENTTEAMS_LLM_API_KEY="your-api-key"
-./hiclaw-install.sh
+./agentteams-install.sh
 ```
 
 **Windows:**
 ```powershell
 $env:AGENTTEAMS_NON_INTERACTIVE = "1"
 $env:AGENTTEAMS_LLM_API_KEY = "your-api-key"
-.\hiclaw-install.ps1
+.\agentteams-install.ps1
 ```
 
 ## Environment Variables

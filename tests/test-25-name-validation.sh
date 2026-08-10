@@ -3,7 +3,7 @@
 #
 # Verifies the CLI rejects worker names that violate the
 # `^[a-z0-9][a-z0-9-]*$` regex enforced by validateWorkerName
-# (hiclaw-controller/cmd/hiclaw/create.go).
+# (agentteams-controller/cmd/agt/create.go).
 #
 # This is a controller-cr style test — no LLM required. It runs the
 # CLI directly via exec_in_agent and asserts on exit code + stderr
@@ -23,10 +23,10 @@ _cleanup() {
     log_info "Cleaning up: ${TEST_VALID_NAME}"
     for bad_name in "${ACCEPTED_INVALID_NAMES[@]}"; do
         log_info "Cleaning up mistakenly accepted invalid worker: ${bad_name}"
-        exec_in_agent hiclaw delete worker "${bad_name}" 2>/dev/null || true
+        exec_in_agent agt delete worker "${bad_name}" 2>/dev/null || true
         remove_worker_container "${bad_name}"
     done
-    exec_in_agent hiclaw delete worker "${TEST_VALID_NAME}" 2>/dev/null || true
+    exec_in_agent agt delete worker "${TEST_VALID_NAME}" 2>/dev/null || true
     sleep 3
     remove_worker_container "${TEST_VALID_NAME}"
 }
@@ -89,7 +89,7 @@ for case_entry in "${INVALID_CASES[@]}"; do
 
     # Use --no-wait so a regression (validation accidentally accepting)
     # does not block this test for 3 minutes on the readiness poll.
-    OUTPUT=$(exec_in_agent hiclaw create worker --name "${bad_name}" --no-wait 2>&1)
+    OUTPUT=$(exec_in_agent agt create worker --name "${bad_name}" --no-wait 2>&1)
     EXIT_CODE=$?
 
     if [ "${EXIT_CODE}" -ne 0 ]; then
@@ -98,7 +98,7 @@ for case_entry in "${INVALID_CASES[@]}"; do
         log_fail "CLI accepted invalid ${label} name '${bad_name}' (exit=0)"
         if [ -n "${bad_name}" ]; then
             ACCEPTED_INVALID_NAMES+=("${bad_name}")
-            exec_in_agent hiclaw delete worker "${bad_name}" 2>/dev/null || true
+            exec_in_agent agt delete worker "${bad_name}" 2>/dev/null || true
             remove_worker_container "${bad_name}"
         fi
     fi
@@ -141,7 +141,7 @@ fi
 # ============================================================
 log_section "Accept Valid Name"
 
-OUTPUT=$(exec_in_agent hiclaw create worker --name "${TEST_VALID_NAME}" --no-wait 2>&1)
+OUTPUT=$(exec_in_agent agt create worker --name "${TEST_VALID_NAME}" --no-wait 2>&1)
 EXIT_CODE=$?
 
 if [ "${EXIT_CODE}" -eq 0 ]; then

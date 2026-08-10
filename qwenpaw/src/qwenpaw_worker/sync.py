@@ -9,7 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import time
-from typing import List, Optional
+from typing import Iterable, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +213,52 @@ class FileSync:
             return False
         raise RuntimeError(f"pull runtime config failed: {_mc_error_message(result)}")
 
+    def push_paths(self, paths: Iterable[Path]) -> List[str]:
+        """Persist selected worker files, raising on the first upload failure."""
+
+        self.ensure_alias()
+        pushed = []
+        local_root = self.local_dir.resolve()
+        for path in paths:
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                rel = path.resolve().relative_to(local_root)
+            except ValueError:
+                raise ValueError(f"path is outside worker storage root: {path}") from None
+            key = f"{self.remote_prefix}/{rel.as_posix()}"
+            if path.stat().st_size <= COMPARE_CONTENT_MAX_BYTES:
+                remote = self._cat_bytes(key)
+                if remote == path.read_bytes():
+                    continue
+            try:
+                self._mc("cp", str(path), self._object_path(key), check=True)
+            except subprocess.CalledProcessError as exc:
+                raise RuntimeError(f"persist migrated state failed: {_mc_error_message(exc)}") from None
+            pushed.append(rel.as_posix())
+        return pushed
+
+    def push_directories(self, directories: Iterable[Path]) -> List[str]:
+        """Persist selected worker directories with one mirror per directory."""
+
+        self.ensure_alias()
+        mirrored = []
+        local_root = self.local_dir.resolve()
+        for directory in directories:
+            if not directory.is_dir() or directory.is_symlink():
+                continue
+            try:
+                rel = directory.resolve().relative_to(local_root)
+            except ValueError:
+                raise ValueError(f"directory is outside worker storage root: {directory}") from None
+            remote = self._object_path(f"{self.remote_prefix}/{rel.as_posix()}")
+            try:
+                self._mc("mirror", f"{directory}/", f"{remote}/", "--overwrite")
+            except subprocess.CalledProcessError as exc:
+                raise RuntimeError(f"persist migrated state failed: {_mc_error_message(exc)}") from None
+            mirrored.append(rel.as_posix())
+        return mirrored
+
 
 def _skip_background_push(rel: Path) -> bool:
     rel_path = rel.as_posix()
@@ -275,7 +321,10 @@ def push_local(sync: FileSync, since: float = 0) -> List[str]:
 
 
 async def push_loop(sync: FileSync, check_interval: float = 5) -> None:
-    last_push_time = 0.0
+    # Startup state has just been mirrored from object storage. Only watch
+    # changes made after the loop starts; a since=0 scan can spend minutes
+    # comparing a QwenPaw 2 workdir and starve newly-created files.
+    last_push_time = time.time()
     logger.info(
         "qwenpaw FileSync push loop started component=sync worker=%s interval_seconds=%s",
         sync.worker_name,

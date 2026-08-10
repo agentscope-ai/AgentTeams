@@ -1,0 +1,24 @@
+{{- if eq .Values.storage.provider "minio" }}
+{{- $comp := dict "root" . "component" "minio" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentteams.minio.fullname" . }}
+  namespace: {{ include "agentteams.namespace" . }}
+  labels:
+    {{- include "agentteams.component.labels" $comp | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    {{- include "agentteams.component.selectorLabels" $comp | nindent 4 }}
+  ports:
+    - name: api
+      port: {{ .Values.storage.minio.service.apiPort }}
+      targetPort: api
+      protocol: TCP
+    - name: console
+      port: {{ .Values.storage.minio.service.consolePort }}
+      targetPort: console
+      protocol: TCP
+{{- end }}

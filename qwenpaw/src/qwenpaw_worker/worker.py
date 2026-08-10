@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import filecmp
 import hashlib
-import importlib.util
+import json
 import logging
 import os
 from pathlib import Path
@@ -16,18 +17,19 @@ import tempfile
 import zipfile
 from typing import Optional
 
+from qwenpaw_worker.api import QwenPawApiClient
 from qwenpaw_worker.config import WorkerConfig, _relative_storage_prefix
 from qwenpaw_worker.heartbeat import WorkerHeartbeat, run_worker_heartbeat_loop
+from qwenpaw_worker.log import configure_worker_logging
 from qwenpaw_worker.sync import FileSync, push_loop
 from qwenpaw_worker.update import MemberRuntimeConfig, RuntimeUpdater
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_AGENT_ID = "default"
-BUILTIN_QWENPAW_QA_AGENT_ID = "QwenPaw_QA_Agent_0.2"
 DEFAULT_BUILTIN_QWENPAW_PLUGINS_DIR = Path("/opt/agentteams/qwenpaw-builtin/plugins")
 BUILTIN_QWENPAW_PLUGIN_MARKER = ".agentteams-builtin-plugin.sha256"
-SENSITIVE_FILE_AUTO_DENY_RULE = "SENSITIVE_FILE_BLOCK"
+COPAW_MIGRATION_MARKER = ".copaw-migrated"
 SESSION_FILE_PROMPT_POLICY = """Do not read, list, grep, glob, summarize, copy, or expose files under sessions/.
 Session files are runtime-private state and may contain private conversation history.
 This rule applies to all channels, users, and sessions, not only DingTalk."""
@@ -54,15 +56,28 @@ def _redact_url_userinfo(value: str) -> str:
     return f"{scheme}://<redacted>@{rest.split('@', 1)[1]}"
 
 
+def _safe_error_code(exc: Exception) -> str:
+    message = str(exc).lower()
+    if "access denied" in message:
+        return "storage_access_denied"
+    if "agent package" in message:
+        return "agent_package_failed"
+    return type(exc).__name__
+
+
 class Worker:
     def __init__(self, config: WorkerConfig) -> None:
         self.config = config
         self.sync: Optional[FileSync] = None
         self.heartbeat = WorkerHeartbeat(config.qwenpaw_working_dir / "heartbeat.json")
+        self.api_client = QwenPawApiClient(
+            f"http://127.0.0.1:{config.console_port}",
+        )
         self.updater = RuntimeUpdater(
             config=config,
             adapter_apply=self._apply_runtime_adapter,
-            team_context_renderer=self._render_teamharness_context,
+            api_client=self.api_client,
+            runtime_reconcile=self._reconcile_runtime_storage,
         )
         self._process: Optional[asyncio.subprocess.Process] = None
         self._heartbeat_probe_task: Optional[asyncio.Task] = None
@@ -70,6 +85,7 @@ class Worker:
         self._update_task: Optional[asyncio.Task] = None
         self._stopping = False
         self._workspace_shared_dir: Optional[Path] = None
+        self._initial_runtime_config: Optional[MemberRuntimeConfig] = None
 
     async def run(self) -> None:
         if not await self.start():
@@ -94,8 +110,6 @@ class Worker:
             self.config.console_port,
         )
         self._prepare_env()
-        self.config.default_workspace_dir.mkdir(parents=True, exist_ok=True)
-        self.heartbeat.persist()
 
         self.sync = FileSync(
             endpoint=self.config.fs_endpoint,
@@ -108,7 +122,6 @@ class Worker:
             remote_prefix=self.config.storage_prefix,
             shared_prefix=self.config.shared_prefix,
         )
-        self.updater.runtime_config_pull = lambda: self.sync.pull_runtime_config(self.config.runtime_config_path)
 
         try:
             stage_started = self._log_worker_stage_begin("mirror_all")
@@ -122,6 +135,22 @@ class Worker:
             )
             return False
         self._log_worker_stage_complete("mirror_all", stage_started)
+
+        try:
+            stage_started = self._log_worker_stage_begin("migrate_copaw_state")
+            migrated = self._migrate_legacy_state()
+        except Exception as exc:
+            self._log_worker_stage_failed("migrate_copaw_state", stage_started, exc)
+            return False
+        self._log_worker_stage_complete("migrate_copaw_state", stage_started, migrated=migrated)
+
+        # These operations create .qwenpaw and therefore must happen only
+        # after storage restore and CoPaw state migration.
+        configure_worker_logging(self.config.qwenpaw_working_dir)
+        self.config.default_workspace_dir.mkdir(parents=True, exist_ok=True)
+        self.heartbeat.persist()
+        self.updater.runtime_config_pull = lambda: self.sync.pull_runtime_config(self.config.runtime_config_path)
+        self.updater.skill_sync = self._sync_managed_skills
 
         try:
             stage_started = self._log_worker_stage_begin("load_runtime_config", path=self.config.runtime_config_path)
@@ -141,11 +170,11 @@ class Worker:
 
         self._apply_runtime_identity(runtime_config)
         self._apply_runtime_storage(runtime_config)
+        self._initial_runtime_config = runtime_config
 
         try:
             stage_started = self._log_worker_stage_begin("prepare_qwenpaw_runtime")
             self._link_workspace_shared()
-            self._configure_qwenpaw_runtime()
         except Exception as exc:
             self._log_worker_stage_failed("prepare_qwenpaw_runtime", stage_started, exc)
             self.heartbeat.update("not_ready", str(exc))
@@ -161,54 +190,16 @@ class Worker:
             return False
         self._log_worker_stage_complete("prepare_default_plugins", stage_started)
 
-        try:
-            stage_started = self._log_worker_stage_begin("apply_desired_state")
-            self.updater.apply_once(runtime_config=runtime_config, force=True, reapply_adapter=False)
-            self._ensure_session_file_prompt_policy()
-        except Exception as exc:
-            self._log_worker_stage_failed("apply_desired_state", stage_started, exc)
-            self.heartbeat.update("not_ready", str(exc))
-            return False
-        self._log_worker_stage_complete("apply_desired_state", stage_started)
-
-        try:
-            stage_started = self._log_worker_stage_begin("sync_teamharness_assets")
-            self._apply_teamharness_assets()
-        except Exception as exc:
-            self._log_worker_stage_failed("sync_teamharness_assets", stage_started, exc)
-            self.heartbeat.update("not_ready", str(exc))
-            return False
-        self._log_worker_stage_complete("sync_teamharness_assets", stage_started)
-
-        try:
-            stage_started = self._log_worker_stage_begin("sync_workerflow_assets")
-            self._apply_workerflow_assets()
-        except Exception as exc:
-            self._log_worker_stage_failed("sync_workerflow_assets", stage_started, exc)
-            self.heartbeat.update("not_ready", str(exc))
-            return False
-        self._log_worker_stage_complete("sync_workerflow_assets", stage_started)
-
         stage_started = self._log_worker_stage_begin("start_push_loop", interval_seconds=5)
         self._push_task = asyncio.create_task(
             push_loop(self.sync, check_interval=5),
             name=f"qwenpaw-worker-{self.config.worker_name}-push-loop",
         )
         self._log_worker_stage_complete("start_push_loop", stage_started, interval_seconds=5)
-        stage_started = self._log_worker_stage_begin(
-            "start_update_loop",
-            interval_seconds=self.config.runtime_config_poll_interval,
+        logger.info(
+            "qwenpaw worker preparation complete component=worker worker=%s",
+            self.config.worker_name,
         )
-        self._update_task = asyncio.create_task(
-            self.updater.loop(),
-            name=f"qwenpaw-worker-{self.config.worker_name}-update-loop",
-        )
-        self._log_worker_stage_complete(
-            "start_update_loop",
-            stage_started,
-            interval_seconds=self.config.runtime_config_poll_interval,
-        )
-        logger.info("qwenpaw worker startup complete component=worker worker=%s", self.config.worker_name)
         return True
 
     async def stop(self) -> None:
@@ -273,11 +264,12 @@ class Worker:
 
     def _log_worker_stage_failed(self, stage: str, started_at: float, exc: Exception, **fields: object) -> None:
         logger.warning(
-            "startup component=worker stage=%s event=failed worker=%s duration_ms=%s error_type=%s %s",
+            "startup component=worker stage=%s event=failed worker=%s duration_ms=%s error_type=%s error_code=%s %s",
             stage,
             self.config.worker_name,
             _duration_ms(started_at),
             type(exc).__name__,
+            _safe_error_code(exc),
             _log_fields(**fields),
         )
 
@@ -313,12 +305,206 @@ class Worker:
             _log_fields(**fields),
         )
 
+    def _migrate_legacy_state(self) -> bool:
+        """Copy, verify, and persist legacy CoPaw state after storage restore."""
+
+        if self.sync is None:
+            raise RuntimeError("storage sync is not initialized")
+
+        worker_home = self.config.worker_home
+        legacy_dir = worker_home / ".copaw"
+        legacy_secret_dir = worker_home / ".copaw.secret"
+        target_dir = self.config.qwenpaw_working_dir
+        marker = target_dir / COPAW_MIGRATION_MARKER
+
+        if marker.is_file():
+            self._remove_legacy_state(legacy_dir, legacy_secret_dir)
+            logger.info(
+                "legacy CoPaw state migration already complete component=worker worker=%s marker=%s",
+                self.config.worker_name,
+                marker,
+            )
+            return False
+        if not legacy_dir.exists() and not legacy_secret_dir.exists():
+            return False
+
+        target_secret_dir = self._qwenpaw_secret_dir()
+        if legacy_secret_dir.exists():
+            try:
+                target_secret_dir.relative_to(worker_home.expanduser().resolve())
+            except ValueError:
+                raise ValueError(
+                    f"QWENPAW_SECRET_DIR is outside worker storage root: {target_secret_dir}",
+                ) from None
+
+        copied_paths = []
+        migrated_directories = []
+        if legacy_dir.exists():
+            copied_paths.extend(self._copy_legacy_tree(legacy_dir, target_dir))
+            migrated_directories.append(target_dir)
+        if legacy_secret_dir.exists():
+            copied_paths.extend(self._copy_legacy_tree(legacy_secret_dir, target_secret_dir))
+            migrated_directories.append(target_secret_dir)
+
+        if legacy_dir.exists():
+            self._rebase_migrated_workspace_paths(target_dir)
+
+        # Persist migrated files before the completion marker. If any upload
+        # fails, the marker is not written and the next cold start retries
+        # from the authoritative legacy copy restored from object storage.
+        self.sync.push_directories(migrated_directories)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("copaw-to-qwenpaw\n", encoding="utf-8")
+        try:
+            self.sync.push_paths([marker])
+        except Exception:
+            # A local-only marker would make a same-container retry skip an
+            # incomplete migration. Only retain it after remote persistence.
+            marker.unlink(missing_ok=True)
+            raise
+        self._remove_legacy_state(legacy_dir, legacy_secret_dir)
+        logger.info(
+            "migrated legacy CoPaw state to QwenPaw component=worker worker=%s files=%s marker=%s",
+            self.config.worker_name,
+            len(copied_paths),
+            marker,
+        )
+        return True
+
+    def _qwenpaw_secret_dir(self) -> Path:
+        """Resolve the secret directory as the QwenPaw child process does."""
+
+        configured = os.environ.get(
+            "QWENPAW_SECRET_DIR",
+            f"{self.config.qwenpaw_working_dir}.secret",
+        )
+        secret_dir = Path(configured).expanduser()
+        if not secret_dir.is_absolute():
+            secret_dir = self.config.default_workspace_dir / secret_dir
+        return secret_dir.resolve()
+
+    def _rebase_migrated_workspace_paths(self, target_dir: Path) -> None:
+        """Point migrated CoPaw workspace metadata at the active QwenPaw tree."""
+
+        def rebase(value: object) -> object:
+            if not isinstance(value, str):
+                return value
+            marker = "/.copaw/workspaces/"
+            if marker in value:
+                relative = value.split(marker, 1)[1]
+                return str(target_dir / "workspaces" / relative)
+            if value.endswith("/.copaw/workspaces"):
+                return str(target_dir / "workspaces")
+            return value
+
+        def update_json(path: Path, update) -> None:
+            if not path.is_file():
+                return
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise RuntimeError(f"cannot rebase migrated workspace metadata: {path}") from exc
+            if update(data):
+                path.write_text(
+                    json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+
+        def update_config(data: object) -> bool:
+            if not isinstance(data, dict):
+                return False
+            profiles = data.get("agents", {}).get("profiles", {})
+            if not isinstance(profiles, dict):
+                return False
+            changed = False
+            for profile in profiles.values():
+                if not isinstance(profile, dict) or "workspace_dir" not in profile:
+                    continue
+                rebased = rebase(profile["workspace_dir"])
+                if rebased != profile["workspace_dir"]:
+                    profile["workspace_dir"] = rebased
+                    changed = True
+            return changed
+
+        def update_agent(data: object) -> bool:
+            if not isinstance(data, dict) or "workspace_dir" not in data:
+                return False
+            rebased = rebase(data["workspace_dir"])
+            if rebased == data["workspace_dir"]:
+                return False
+            data["workspace_dir"] = rebased
+            return True
+
+        update_json(target_dir / "config.json", update_config)
+        workspaces_dir = target_dir / "workspaces"
+        if workspaces_dir.is_dir():
+            for agent_config in workspaces_dir.glob("*/agent.json"):
+                update_json(agent_config, update_agent)
+
+    def _copy_legacy_tree(self, source: Path, target: Path) -> list[Path]:
+        """Merge one legacy tree with legacy files authoritative on conflict."""
+
+        copied_paths = []
+
+        def copy_path(source_path: Path, target_path: Path) -> None:
+            if source_path.is_symlink():
+                self._remove_path(target_path)
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                target_path.symlink_to(os.readlink(source_path), target_is_directory=source_path.is_dir())
+                if os.readlink(target_path) != os.readlink(source_path):
+                    raise RuntimeError(f"legacy symlink verification failed: {source_path}")
+                return
+            if source_path.is_dir():
+                if (target_path.exists() or target_path.is_symlink()) and (
+                    not target_path.is_dir() or target_path.is_symlink()
+                ):
+                    self._remove_path(target_path)
+                target_path.mkdir(parents=True, exist_ok=True)
+                for child in source_path.iterdir():
+                    copy_path(child, target_path / child.name)
+                return
+            if source_path.is_file():
+                if (target_path.exists() or target_path.is_symlink()) and (
+                    target_path.is_dir() or target_path.is_symlink()
+                ):
+                    self._remove_path(target_path)
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_path, target_path)
+                if not filecmp.cmp(source_path, target_path, shallow=False):
+                    raise RuntimeError(f"legacy file verification failed: {source_path}")
+                copied_paths.append(target_path)
+                return
+            raise RuntimeError(f"unsupported legacy state entry: {source_path}")
+
+        copy_path(source, target)
+        return copied_paths
+
+    @staticmethod
+    def _remove_path(path: Path) -> None:
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
+
+    def _remove_legacy_state(self, legacy_dir: Path, legacy_secret_dir: Path) -> None:
+        for path in (legacy_dir, legacy_secret_dir):
+            if path.exists() or path.is_symlink():
+                self._remove_path(path)
+
     def _prepare_env(self) -> None:
         os.environ["AGENTTEAMS_AGENT_NAME"] = self.config.agent_name
         os.environ["AGENTTEAMS_AGENT_ROLE"] = self.config.agent_role
         os.environ["AGENTTEAMS_AGENT_HOME"] = str(self.config.worker_home)
         os.environ["AGENTTEAMS_WORKER_HOME"] = str(self.config.worker_home)
         os.environ.setdefault("AGENTTEAMS_WORKER_NAME", self.config.worker_name)
+        os.environ["AGENTTEAMS_FS_ENDPOINT"] = self.config.fs_endpoint
+        os.environ["AGENTTEAMS_FS_ACCESS_KEY"] = self.config.fs_access_key
+        os.environ["AGENTTEAMS_FS_SECRET_KEY"] = self.config.fs_secret_key
+        os.environ["AGENTTEAMS_FS_BUCKET"] = self.config.fs_bucket
+        os.environ.setdefault(
+            "AGENTTEAMS_STORAGE_PREFIX",
+            f"agentteams/{self.config.fs_bucket}",
+        )
         os.environ["QWENPAW_WORKING_DIR"] = str(self.config.qwenpaw_working_dir)
         os.environ["AGENT_WORKSPACE"] = str(self.config.default_workspace_dir)
         os.environ["AGENTTEAMS_SHARED_DIR"] = str(self.config.shared_dir)
@@ -368,6 +554,34 @@ class Worker:
                     shared_dir,
                 )
                 self.sync.mirror_prefix(shared_prefix, shared_dir)
+        else:
+            os.environ.pop("AGENTTEAMS_SHARED_STORAGE_PREFIX", None)
+
+    def _reconcile_runtime_storage(self, runtime_config: MemberRuntimeConfig) -> None:
+        shared_prefix = self._runtime_shared_prefix(runtime_config)
+        shared_dir = self._local_shared_dir_for_prefix(shared_prefix)
+        if self._workspace_shared_dir is None:
+            self._apply_runtime_storage(runtime_config)
+            self._link_workspace_shared()
+            return
+        current_prefix = os.getenv("AGENTTEAMS_SHARED_STORAGE_PREFIX", "").strip() or self.config.shared_prefix
+        if self._workspace_shared_dir == shared_dir and current_prefix == shared_prefix:
+            return
+        self._apply_runtime_storage(runtime_config)
+        self._link_workspace_shared()
+        self._configure_builtin_plugin_mcp_clients()
+        self._configure_builtin_plugin_mcp_policies()
+
+    def _sync_managed_skills(self, skill_names: list[str]) -> None:
+        if self.sync is None:
+            raise RuntimeError("file sync is not initialized")
+        for name in skill_names:
+            if not name or name in {".", ".."} or "/" in name or "\\" in name:
+                raise ValueError(f"invalid assigned skill name: {name!r}")
+            self.sync.mirror_prefix(
+                f"{self.sync.remote_prefix}/skills/{name}",
+                self.config.default_workspace_dir / "skills" / name,
+            )
 
     def _runtime_shared_prefix(self, runtime_config) -> str:
         storage = getattr(runtime_config, "storage", {}) or {}
@@ -401,102 +615,6 @@ class Worker:
         os.environ["AGENTTEAMS_AGENT_ROLE"] = role
         os.environ["AGENTTEAMS_WORKER_ROLE"] = role
 
-    def _configure_qwenpaw_runtime(self) -> None:
-        try:
-            from qwenpaw.config.config import AgentProfileConfig, AgentProfileRef, load_agent_config, save_agent_config
-            from qwenpaw.config.utils import load_config, save_config
-        except ImportError:
-            logger.info("qwenpaw package unavailable component=worker step=configure_qwenpaw_runtime action=skip")
-            return
-
-        root = load_config()
-        self._ensure_session_file_guard(root)
-        root.agents.active_agent = DEFAULT_AGENT_ID
-        root.agents.profiles[DEFAULT_AGENT_ID] = AgentProfileRef(
-            id=DEFAULT_AGENT_ID,
-            workspace_dir=str(self.config.default_workspace_dir),
-            enabled=True,
-        )
-        self._disable_builtin_qwenpaw_qa_agent(root, AgentProfileRef)
-        if DEFAULT_AGENT_ID not in root.agents.agent_order:
-            root.agents.agent_order.insert(0, DEFAULT_AGENT_ID)
-        save_config(root)
-
-        try:
-            agent_config = load_agent_config(DEFAULT_AGENT_ID)
-        except Exception:
-            agent_config = AgentProfileConfig(
-                id=DEFAULT_AGENT_ID,
-                name=self.config.agent_name,
-                description=f"AgentTeams QwenPaw {self.config.agent_role}",
-                workspace_dir=str(self.config.default_workspace_dir),
-            )
-
-        agent_config.name = self.config.agent_name
-        agent_config.workspace_dir = str(self.config.default_workspace_dir)
-        agent_config.approval_level = "AUTO"
-        prompt_files = list(agent_config.system_prompt_files or [])
-        for file_name in ("AGENTS.md", "SOUL.md", "TEAMS.md"):
-            if file_name not in prompt_files:
-                prompt_files.append(file_name)
-        agent_config.system_prompt_files = prompt_files
-        save_agent_config(DEFAULT_AGENT_ID, agent_config)
-
-    def _disable_builtin_qwenpaw_qa_agent(self, root, agent_profile_ref_cls) -> None:
-        qa_workspace = (
-            self.config.qwenpaw_working_dir / "workspaces" / BUILTIN_QWENPAW_QA_AGENT_ID
-        )
-        profiles = root.agents.profiles
-        profile = profiles.get(BUILTIN_QWENPAW_QA_AGENT_ID)
-        if profile is None:
-            profiles[BUILTIN_QWENPAW_QA_AGENT_ID] = agent_profile_ref_cls(
-                id=BUILTIN_QWENPAW_QA_AGENT_ID,
-                workspace_dir=str(qa_workspace),
-                enabled=False,
-            )
-            logger.info(
-                "preseeded disabled builtin QwenPaw QA agent profile component=worker "
-                "step=configure_qwenpaw_runtime agent_id=%s",
-                BUILTIN_QWENPAW_QA_AGENT_ID,
-            )
-            return
-
-        if getattr(profile, "enabled", True):
-            profile.enabled = False
-            logger.info(
-                "disabled builtin QwenPaw QA agent profile component=worker "
-                "step=configure_qwenpaw_runtime agent_id=%s",
-                BUILTIN_QWENPAW_QA_AGENT_ID,
-            )
-
-    def _ensure_session_file_guard(self, root) -> None:
-        security = root.security
-        file_guard = security.file_guard
-        tool_guard = security.tool_guard
-
-        file_guard.enabled = True
-        tool_guard.enabled = True
-        tool_guard.guarded_tools = []
-
-        session_path = f"{self.config.default_workspace_dir / 'sessions'}/"
-        sensitive_files = [
-            str(path)
-            for path in (file_guard.sensitive_files or [])
-            if str(path)
-        ]
-        if session_path not in sensitive_files:
-            sensitive_files.append(session_path)
-        file_guard.sensitive_files = sensitive_files
-
-        auto_denied_rules = [
-            str(rule)
-            for rule in (getattr(tool_guard, "auto_denied_rules", None) or [])
-            if str(rule)
-        ]
-        if SENSITIVE_FILE_AUTO_DENY_RULE not in auto_denied_rules:
-            auto_denied_rules.append(SENSITIVE_FILE_AUTO_DENY_RULE)
-        tool_guard.auto_denied_rules = auto_denied_rules
-
     def _ensure_session_file_prompt_policy(self) -> None:
         self.config.default_workspace_dir.mkdir(parents=True, exist_ok=True)
         for file_name in ("AGENTS.md", "SOUL.md"):
@@ -513,12 +631,16 @@ class Worker:
 
     def _apply_runtime_adapter(self) -> None:
         self._prepare_default_plugins()
-        self._apply_teamharness_assets()
-        self._apply_workerflow_assets()
+        self._configure_builtin_plugin_mcp_clients()
+        self._configure_builtin_plugin_mcp_policies()
         self._ensure_session_file_prompt_policy()
 
     def _prepare_default_plugins(self) -> None:
         builtin_root = self._builtin_qwenpaw_plugins_dir()
+        self._prepare_builtin_plugin(
+            "agentteams-matrix-channel",
+            builtin_root / "agentteams-matrix-channel",
+        )
         self._prepare_builtin_plugin("teamharness", builtin_root / "teamharness")
         self._prepare_builtin_plugin("workerflow", builtin_root / "workerflow")
 
@@ -668,82 +790,6 @@ class Worker:
             raise RuntimeError(f"expected one qwenpaw plugin package in {zip_path}")
         return packages[0]
 
-    def _apply_teamharness_assets(self) -> dict:
-        return self._apply_plugin_assets(
-            plugin_name="teamharness",
-            module_name="agentteams_teamharness_qwenpaw_plugin",
-            entrypoint_name="apply_teamharness",
-        )
-
-    def _render_teamharness_context(self, runtime_config: MemberRuntimeConfig) -> str:
-        plugin_file = self.config.qwenpaw_working_dir / "plugins" / "teamharness" / "plugin.py"
-        if not plugin_file.is_file():
-            return ""
-
-        spec = importlib.util.spec_from_file_location("hiclaw_teamharness_qwenpaw_plugin_renderer", plugin_file)
-        if spec is None or spec.loader is None:
-            return ""
-
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        render = getattr(module, "render_team_context", None)
-        if not callable(render):
-            return ""
-        text = render(runtime_config.raw)
-        return text if isinstance(text, str) else ""
-
-    def _apply_workerflow_assets(self) -> dict:
-        return self._apply_plugin_assets(
-            plugin_name="workerflow",
-            module_name="agentteams_workerflow_qwenpaw_plugin",
-            entrypoint_name="apply_workerflow",
-        )
-
-    def _apply_plugin_assets(self, *, plugin_name: str, module_name: str, entrypoint_name: str) -> dict:
-        plugin_file = self.config.qwenpaw_working_dir / "plugins" / plugin_name / "plugin.py"
-        step_started = self._log_plugin_step_begin(
-            plugin_name,
-            "load",
-            plugin_file=plugin_file,
-            plugin_file_exists=plugin_file.is_file(),
-            entrypoint=entrypoint_name,
-        )
-        try:
-            if not plugin_file.is_file():
-                raise RuntimeError(f"installed {plugin_name} qwenpaw plugin missing: {plugin_file}")
-
-            spec = importlib.util.spec_from_file_location(module_name, plugin_file)
-            if spec is None or spec.loader is None:
-                raise RuntimeError(f"failed to load {plugin_name} qwenpaw plugin: {plugin_file}")
-
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            apply_plugin = getattr(module, entrypoint_name, None)
-            if not callable(apply_plugin):
-                raise RuntimeError(f"installed {plugin_name} qwenpaw plugin has no {entrypoint_name}: {plugin_file}")
-        except Exception as exc:
-            self._log_plugin_step_failed(plugin_name, "load", step_started, exc, entrypoint=entrypoint_name)
-            raise
-        self._log_plugin_step_complete(plugin_name, "load", step_started, entrypoint=entrypoint_name)
-
-        step_started = self._log_plugin_step_begin(plugin_name, "apply", entrypoint=entrypoint_name)
-        try:
-            result = apply_plugin()
-            if not isinstance(result, dict) or result.get("ok") is not True:
-                raise RuntimeError(f"{plugin_name} asset sync failed: {result!r}")
-        except Exception as exc:
-            self._log_plugin_step_failed(plugin_name, "apply", step_started, exc, entrypoint=entrypoint_name)
-            raise
-        self._log_plugin_step_complete(
-            plugin_name,
-            "apply",
-            step_started,
-            entrypoint=entrypoint_name,
-            ok=result.get("ok"),
-            result_key_count=len(result),
-        )
-        return result
-
     async def _run_qwenpaw(self) -> None:
         qwenpaw_bin = shutil.which("qwenpaw") or str(Path(sys.executable).with_name("qwenpaw"))
         host = "0.0.0.0"
@@ -792,6 +838,72 @@ class Worker:
             pid=getattr(self._process, "pid", "-"),
             port=self.config.console_port,
         )
+        try:
+            await self._wait_for_qwenpaw_api()
+            await asyncio.to_thread(
+                self.api_client.configure_agent,
+                DEFAULT_AGENT_ID,
+                {
+                    "name": self.config.agent_name,
+                    "workspace_dir": str(self.config.default_workspace_dir),
+                    "approval_level": "AUTO",
+                    "system_prompt_files": ["AGENTS.md", "SOUL.md", "TEAMS.md"],
+                },
+            )
+            await asyncio.to_thread(
+                self.api_client.disable_agent_if_present,
+                "QwenPaw_QA_Agent_0.2",
+            )
+            await asyncio.to_thread(self._configure_builtin_plugin_mcp_clients)
+            await asyncio.to_thread(self._configure_builtin_plugin_mcp_policies)
+            runtime_config = self._initial_runtime_config or self.updater.load()
+            stage_started = self._log_worker_stage_begin("apply_desired_state")
+            await asyncio.to_thread(
+                self.updater.apply_once,
+                runtime_config,
+                True,
+                False,
+            )
+            self._ensure_session_file_prompt_policy()
+            self._log_worker_stage_complete("apply_desired_state", stage_started)
+        except Exception as exc:
+            if self._process.returncode is not None:
+                returncode = self._process.returncode
+                self.heartbeat.update(
+                    "not_ready",
+                    "qwenpaw app exited unexpectedly",
+                    {"operation": "run_qwenpaw", "returncode": returncode},
+                )
+                logger.warning(
+                    "qwenpaw app exited component=worker stage=start_qwenpaw_app "
+                    "event=exited worker=%s returncode=%s stopping=False duration_ms=0",
+                    self.config.worker_name,
+                    returncode,
+                )
+                return
+            self.heartbeat.update("not_ready", str(exc))
+            if self._process.returncode is None:
+                self._process.terminate()
+                await self._process.wait()
+            raise
+
+        stage_started = self._log_worker_stage_begin(
+            "start_update_loop",
+            interval_seconds=self.config.runtime_config_poll_interval,
+        )
+        self._update_task = asyncio.create_task(
+            self.updater.loop(),
+            name=f"qwenpaw-worker-{self.config.worker_name}-update-loop",
+        )
+        self._log_worker_stage_complete(
+            "start_update_loop",
+            stage_started,
+            interval_seconds=self.config.runtime_config_poll_interval,
+        )
+        logger.info(
+            "qwenpaw worker startup complete component=worker worker=%s",
+            self.config.worker_name,
+        )
         process_started_at = time.monotonic()
         self._heartbeat_probe_task = asyncio.create_task(self._heartbeat_probe_loop())
         returncode = await self._process.wait()
@@ -816,6 +928,73 @@ class Worker:
                 returncode,
                 _duration_ms(process_started_at),
             )
+
+    async def _wait_for_qwenpaw_api(self) -> None:
+        deadline = time.monotonic() + 60
+        last_error: Optional[Exception] = None
+        while time.monotonic() < deadline:
+            if self._process is not None and self._process.returncode is not None:
+                raise RuntimeError(
+                    f"qwenpaw app exited before API readiness: {self._process.returncode}",
+                )
+            try:
+                await asyncio.to_thread(self.api_client.require_version, "2.0.1")
+                return
+            except Exception as exc:
+                last_error = exc
+                await asyncio.sleep(0.5)
+        raise RuntimeError(f"qwenpaw API did not become ready: {last_error}")
+
+    def _configure_builtin_plugin_mcp_clients(self) -> None:
+        existing = {str(item.get("key")) for item in self.api_client.list_mcp()}
+        for plugin_id in ("teamharness", "workerflow"):
+            plugin_dir = self.config.qwenpaw_working_dir / "plugins" / plugin_id
+            asset_dir = plugin_dir / plugin_id
+            payload = {
+                "name": plugin_id,
+                "description": f"AgentTeams {plugin_id} MCP server",
+                "enabled": True,
+                "transport": "stdio",
+                "command": sys.executable,
+                "args": [str(asset_dir / "mcp" / "server.py")],
+                "env": {
+                    name: value
+                    for name in (
+                        "TEAMHARNESS_RUNTIME_CONFIG",
+                        "TEAMHARNESS_SHARED_DIR",
+                        "AGENTTEAMS_MATRIX_URL",
+                        "AGENTTEAMS_WORKER_MATRIX_TOKEN",
+                        "AGENTTEAMS_MATRIX_USER_ID",
+                        "AGENTTEAMS_WORKER_ROLE",
+                        "AGENTTEAMS_AGENT_ROLE",
+                        "AGENTTEAMS_WORKER_NAME",
+                        "AGENTTEAMS_STORAGE_PREFIX",
+                        "AGENTTEAMS_SHARED_STORAGE_PREFIX",
+                        "AGENTTEAMS_FS_BUCKET",
+                        "AGENTTEAMS_FS_ENDPOINT",
+                        "AGENTTEAMS_FS_ACCESS_KEY",
+                        "AGENTTEAMS_FS_SECRET_KEY",
+                        "QWENPAW_WORKING_DIR",
+                    )
+                    if (value := os.getenv(name, "").strip())
+                },
+                "cwd": str(asset_dir),
+            }
+            if plugin_id in existing:
+                self.api_client.update_mcp(plugin_id, payload)
+            else:
+                self.api_client.create_mcp(plugin_id, payload)
+
+    def _configure_builtin_plugin_mcp_policies(self) -> None:
+        allow_policy = {
+            "default_effect": "allow",
+            "client_overrides": [],
+            "tool_defaults": [],
+            "tool_overrides": [],
+        }
+        for plugin_id in ("teamharness", "workerflow"):
+            self.api_client.wait_for_mcp_tools(plugin_id)
+            self.api_client.put_mcp_policy(plugin_id, allow_policy)
 
     async def _heartbeat_probe_loop(self) -> None:
         await run_worker_heartbeat_loop(

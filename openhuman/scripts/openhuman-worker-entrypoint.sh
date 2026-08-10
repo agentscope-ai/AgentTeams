@@ -4,7 +4,7 @@
 # sets up MinIO file sync, launches openhuman-core with native Matrix support.
 #
 # Config bridging (in priority order):
-#   1. openclaw.json  - channels.matrix.* + models.providers.hiclaw-gateway
+#   1. openclaw.json  - channels.matrix.* + models.providers.agentteams-gateway
 #                       (pulled from MinIO, same source as hermes/copaw)
 #   2. AGENTTEAMS_* / MATRIX_* env vars  - controller-injected fallback
 #
@@ -34,25 +34,8 @@
 
 set -e
 
-# Normalize legacy HiClaw variables before loading shared defaults. New
-# deployments inject AGENTTEAMS_*; the fallbacks keep existing manifests usable.
-AGENTTEAMS_WORKER_NAME="${AGENTTEAMS_WORKER_NAME:-${HICLAW_WORKER_NAME:-}}"
-AGENTTEAMS_WORKER_CR_NAME="${AGENTTEAMS_WORKER_CR_NAME:-${HICLAW_WORKER_CR_NAME:-}}"
-AGENTTEAMS_FS_ENDPOINT="${AGENTTEAMS_FS_ENDPOINT:-${HICLAW_FS_ENDPOINT:-}}"
-AGENTTEAMS_FS_ACCESS_KEY="${AGENTTEAMS_FS_ACCESS_KEY:-${HICLAW_FS_ACCESS_KEY:-}}"
-AGENTTEAMS_FS_SECRET_KEY="${AGENTTEAMS_FS_SECRET_KEY:-${HICLAW_FS_SECRET_KEY:-}}"
-AGENTTEAMS_FS_BUCKET="${AGENTTEAMS_FS_BUCKET:-${HICLAW_FS_BUCKET:-}}"
-AGENTTEAMS_STORAGE_ALIAS="${AGENTTEAMS_STORAGE_ALIAS:-${HICLAW_STORAGE_ALIAS:-}}"
-AGENTTEAMS_STORAGE_PREFIX="${AGENTTEAMS_STORAGE_PREFIX:-${HICLAW_STORAGE_PREFIX:-}}"
-AGENTTEAMS_RUNTIME="${AGENTTEAMS_RUNTIME:-${HICLAW_RUNTIME:-}}"
-AGENTTEAMS_AI_GATEWAY_URL="${AGENTTEAMS_AI_GATEWAY_URL:-${HICLAW_AI_GATEWAY_URL:-}}"
-AGENTTEAMS_WORKER_GATEWAY_KEY="${AGENTTEAMS_WORKER_GATEWAY_KEY:-${HICLAW_WORKER_GATEWAY_KEY:-}}"
-AGENTTEAMS_DEFAULT_MODEL="${AGENTTEAMS_DEFAULT_MODEL:-${HICLAW_DEFAULT_MODEL:-}}"
-AGENTTEAMS_CONTROLLER_URL="${AGENTTEAMS_CONTROLLER_URL:-${HICLAW_CONTROLLER_URL:-}}"
-AGENTTEAMS_AUTH_TOKEN_FILE="${AGENTTEAMS_AUTH_TOKEN_FILE:-${HICLAW_AUTH_TOKEN_FILE:-}}"
-
 # Source shared environment bootstrap (provides ensure_mc_credentials in cloud mode)
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh 2>/dev/null || true
+source /opt/agentteams/scripts/lib/agentteams-env.sh 2>/dev/null || true
 
 WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"
 WORKER_CR_NAME="${AGENTTEAMS_WORKER_CR_NAME:-${WORKER_NAME}}"
@@ -184,14 +167,14 @@ if [ -f "${OPENCLAW_JSON}" ] && command -v jq >/dev/null 2>&1; then
     fi
 
     # --- LLM provider config (AgentTeams AI gateway via Higress) ---
-    # Maps openclaw.json's models.providers["hiclaw-gateway"] +
+    # Maps openclaw.json's models.providers["agentteams-gateway"] +
     # agents.defaults.model.primary into OpenHuman's [[cloud_providers]]
     # and [model_routes] sections so that the worker routes LLM traffic
     # through Higress instead of falling back to api.openhuman.ai.
-    BRIDGE_LLM_BASE_URL=$(jq -r '.models.providers["hiclaw-gateway"].baseUrl // empty' "${OPENCLAW_JSON}")
-    BRIDGE_LLM_API_KEY=$(jq -r '.models.providers["hiclaw-gateway"].apiKey // empty' "${OPENCLAW_JSON}")
-    # primary is "hiclaw-gateway/<model>" — strip the provider prefix.
-    BRIDGE_LLM_PRIMARY=$(jq -r '.agents.defaults.model.primary // empty | sub("^hiclaw-gateway/"; "")' "${OPENCLAW_JSON}")
+    BRIDGE_LLM_BASE_URL=$(jq -r '.models.providers["agentteams-gateway"].baseUrl // empty' "${OPENCLAW_JSON}")
+    BRIDGE_LLM_API_KEY=$(jq -r '.models.providers["agentteams-gateway"].apiKey // empty' "${OPENCLAW_JSON}")
+    # primary is "agentteams-gateway/<model>" — strip the provider prefix.
+    BRIDGE_LLM_PRIMARY=$(jq -r '.agents.defaults.model.primary // empty | sub("^agentteams-gateway/"; "")' "${OPENCLAW_JSON}")
 fi
 
 # Apply fallback from env vars when openclaw.json was absent or incomplete.
@@ -355,7 +338,7 @@ CORE_PID=$!
 
     # Report ready to controller
     if [ -n "${AGENTTEAMS_CONTROLLER_URL:-}" ]; then
-        hiclaw worker report-ready --name "${WORKER_CR_NAME}" 2>/dev/null || \
+        agt worker report-ready --name "${WORKER_CR_NAME}" 2>/dev/null || \
             curl -sf -X POST "${AGENTTEAMS_CONTROLLER_URL}/api/v1/workers/${WORKER_CR_NAME}/ready" \
                 -H "Content-Type: application/json" \
                 -H "Authorization: Bearer $(cat ${AGENTTEAMS_AUTH_TOKEN_FILE:-/var/run/secrets/agentteams/token} 2>/dev/null)" 2>/dev/null || \

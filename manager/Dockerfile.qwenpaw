@@ -1,0 +1,151 @@
+# ============================================================
+# AgentTeams Manager Agent - QwenPaw 2.0 Runtime
+# ============================================================
+# Lightweight Manager container with Python QwenPaw 2.0 runtime.
+# Does NOT include Higress, Tuwunel, MinIO, or Element Web.
+# All infrastructure is provided by the controller (embedded)
+# or K8s Pods (incluster). AGENTTEAMS_RUNTIME env var selects mode.
+#
+# Build from project root:
+#   docker build -f manager/Dockerfile.qwenpaw -t agentteams/manager-qwenpaw:latest .
+#
+# Build args:
+#   HIGRESS_REGISTRY        - base image registry (default: cn-hangzhou)
+#   AGENTTEAMS_CONTROLLER_IMAGE - pre-built controller image for agt CLI
+#   QWENPAW_PIP_SPEC        - QwenPaw pip spec (default: qwenpaw==2.0.1)
+#   PIP_INDEX_URL           - PyPI mirror (default: official pypi.org)
+#   APT_MIRROR              - Debian APT mirror (default: empty; set to mirrors.aliyun.com for China)
+# ============================================================
+
+ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
+ARG AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest
+
+# ============ Stage 1: MinIO Client (mc) ============
+FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
+
+# ============ Stage 2: AgentTeams CLI (from controller image) ============
+FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS agentteams-controller
+
+# ============ Final Image: Python 3.11 ============
+FROM ${HIGRESS_REGISTRY}/higress/python:3.11-slim
+
+ARG APT_MIRROR=
+ARG PIP_INDEX_URL=https://pypi.org/simple/
+ARG NPM_REGISTRY=https://registry.npmjs.org/
+
+# ---- System dependencies ----
+RUN if [ -n "${APT_MIRROR}" ]; then \
+        sed -i "s|deb.debian.org|${APT_MIRROR}|g" \
+            /etc/apt/sources.list.d/debian.sources 2>/dev/null || true; \
+    fi && \
+    apt-get update && apt-get install -y --no-install-recommends \
+        libolm-dev \
+        libjemalloc2 \
+        git curl jq tzdata ca-certificates openssh-client gettext-base procps \
+        nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
+
+# jemalloc for memory efficiency
+RUN JEMALLOC=$(find /usr/lib -name 'libjemalloc.so.2' -print -quit) \
+    && echo "LD_PRELOAD=${JEMALLOC}" >> /etc/environment \
+    && echo "${JEMALLOC}" > /etc/ld.so.preload
+
+# ---- Stable binaries from build stages ----
+COPY --from=mc /usr/bin/mc /usr/local/bin/mc
+
+# AgentTeams CLI — for worker/team/human management via controller REST API
+COPY --from=agentteams-controller /usr/local/bin/agt /usr/local/bin/agt
+
+RUN npm config set registry ${NPM_REGISTRY} && \
+    npm install -g mcporter skills @nacos-group/cli && \
+    rm -rf /root/.npm
+
+# ---- Python virtual environment (single QwenPaw 2.0 venv) ----
+ARG QWENPAW_PIP_SPEC=qwenpaw==2.0.1
+RUN python3 -m venv /opt/venv/qwenpaw \
+    && /opt/venv/qwenpaw/bin/pip install --no-cache-dir \
+        -i "${PIP_INDEX_URL}" \
+        --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
+        "${QWENPAW_PIP_SPEC}"
+
+ENV PATH="/opt/venv/qwenpaw/bin:${PATH}"
+
+# ---- CoPaw worker bridge module (for config conversion) ----
+# Stage the copaw-worker package metadata for dependency resolution
+COPY copaw/pyproject.toml copaw/README.md /tmp/copaw-worker/
+RUN mkdir -p /tmp/copaw-worker/src/copaw_worker \
+    && mkdir -p /tmp/copaw-worker/src/matrix \
+    && echo '__version__ = "0.0.0"' > /tmp/copaw-worker/src/copaw_worker/__init__.py \
+    && echo '__version__ = "0.0.0"' > /tmp/copaw-worker/src/matrix/__init__.py
+
+# Install copaw-worker package into qwenpaw venv (--no-deps: skip copaw 1.0.2,
+# which is not needed — bridge.py only patches qwenpaw.constant).
+# Install non-copaw dependencies that copaw_worker tools use.
+RUN /opt/venv/qwenpaw/bin/pip install --no-cache-dir \
+        -i "${PIP_INDEX_URL}" \
+        --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
+        --no-deps \
+        /tmp/copaw-worker/ \
+    && /opt/venv/qwenpaw/bin/pip install --no-cache-dir \
+        -i "${PIP_INDEX_URL}" \
+        --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
+        "markdown-it-py>=3.0" \
+        "linkify-it-py>=2.0"
+
+# Overlay real copaw-worker source
+COPY copaw/src/ /tmp/copaw-worker/src/
+RUN SITE=/opt/venv/qwenpaw/lib/python3.11/site-packages \
+    && cp -a /tmp/copaw-worker/src/copaw_worker/* "$SITE/copaw_worker/" \
+    && rm -rf /tmp/copaw-worker/
+
+# ---- CMS Observability Plugin (in qwenpaw venv) ----
+# Aligned with qwenpaw Worker Dockerfile: installed into the runtime venv
+# (qwenpaw) so that loongsuite-site-bootstrap is active when the Manager
+# process starts.  instrumentation-qwenpaw (not -copaw) +
+# loongsuite-otel-util-genai for GenAI semantic conventions.
+RUN /opt/venv/qwenpaw/bin/pip install --no-cache-dir \
+        -i "${PIP_INDEX_URL}" \
+        --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
+        "wrapt<2.0" \
+        loongsuite-site-bootstrap \
+        loongsuite-distro \
+        loongsuite-otel-util-genai \
+        opentelemetry-exporter-otlp \
+        loongsuite-instrumentation-qwenpaw \
+        loongsuite-instrumentation-agentscope
+
+# qwenpaw CLI on PATH
+RUN ln -sf /opt/venv/qwenpaw/bin/qwenpaw /usr/local/bin/qwenpaw
+
+# AgentTeams plugins: Matrix channel + Manager tools
+# Stored in image-local path (/opt/agentteams/plugins/). At runtime,
+# start-qwenpaw-manager.sh copies them into the working dir's plugins/
+# directory because /root/manager-workspace is a host-mounted volume.
+COPY plugins/agentteams-matrix-channel/ /opt/agentteams/plugins/agentteams-matrix-channel/
+COPY plugins/agentteams-manager-tools/ /opt/agentteams/plugins/agentteams-manager-tools/
+
+# ---- Copy Manager agent definitions ----
+COPY manager/agent/ /opt/agentteams/agent/
+COPY manager/configs/ /opt/agentteams/configs/
+
+# ---- Copy scripts: shared libs first, then manager scripts ----
+COPY shared/lib/ /opt/agentteams/scripts/lib/
+COPY manager/scripts/ /opt/agentteams/scripts/
+
+ARG BUILTIN_VERSION=latest
+RUN echo "${BUILTIN_VERSION}" > /opt/agentteams/agent/.builtin-version
+
+# Make all scripts executable
+RUN find /opt/agentteams/scripts -name '*.sh' -exec chmod +x {} + && \
+    find /opt/agentteams/agent/skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true && \
+    find /opt/agentteams/agent/worker-skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true && \
+    find /opt/agentteams/agent/worker-agent/skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
+
+# Workspace directory
+ENV HOME=/root/manager-workspace
+RUN mkdir -p /root/manager-workspace /root/agentteams-fs /root/.openclaw
+
+WORKDIR /root/manager-workspace
+
+# start-manager-agent.sh branches on AGENTTEAMS_RUNTIME and AGENTTEAMS_MANAGER_RUNTIME
+ENTRYPOINT ["/opt/agentteams/scripts/init/start-manager-agent.sh"]

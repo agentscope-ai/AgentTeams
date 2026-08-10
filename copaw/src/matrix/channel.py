@@ -40,6 +40,11 @@ from nio import (
 )
 from nio.responses import JoinedMembersResponse, WhoamiResponse
 
+from copaw_worker.hooks.message_filter import (
+    canonicalize_team_worker_mentions,
+    resolve_team_leader_assignment_room,
+)
+
 logger = logging.getLogger("copaw.channels.matrix")
 
 # ---------------------------------------------------------------------------
@@ -361,7 +366,7 @@ class MatrixChannelConfig:
         self.enabled: bool = raw.get("enabled", True)
         self.homeserver: str = raw.get("homeserver", "")
         self.access_token: str = raw.get("access_token", "")
-        # username/password fallback (rarely used in hiclaw)
+        # username/password fallback (rarely used in agentteams)
         self.username: str = raw.get("username", "")
         self.password: str = raw.get("password", "")
         self.device_name: str = raw.get("device_name", "qwenpaw-worker")
@@ -2499,10 +2504,8 @@ class MatrixChannel(BaseChannel):
 
         for mxid in targets:
             display = self._resolve_display_name(mxid, room_id) or mxid
-            if mxid in body:
-                body = body.replace(mxid, display, 1)
-            elif display not in body:
-                body = f"{display} {body}" if body else display
+            if mxid not in body:
+                body = f"{mxid} {body}" if body else mxid
             mxid_enc = urllib.parse.quote(mxid, safe="")
             anchor = (
                 f'<a href="https://matrix.to/#/{mxid_enc}">'
@@ -2808,6 +2811,14 @@ class MatrixChannel(BaseChannel):
         root_event_id = send_meta.get(_MATRIX_OWN_THREAD_ROOT_KEY)
         if not root_event_id or not self._client:
             return
+        routed_text = canonicalize_team_worker_mentions(text)
+        routed_room_id = resolve_team_leader_assignment_room(
+            routed_text,
+            to_handle,
+        )
+        if routed_room_id != to_handle:
+            await self.send(routed_room_id, routed_text)
+            return
         if self._should_suppress_team_leader_internal_preamble(to_handle, text):
             logger.info(
                 "MatrixChannel: suppressing Team Leader internal preamble "
@@ -2820,16 +2831,26 @@ class MatrixChannel(BaseChannel):
         if html:
             new_content["format"] = "org.matrix.custom.html"
             new_content["formatted_body"] = html
+        # Apply mentions to m.new_content so that edited messages
+        # retain m.mentions for Matrix notification delivery.
+        self._apply_mention(new_content, to_handle)
         content: dict[str, Any] = {
             "msgtype": msgtype,
-            "body": f"* {text}",
+            "body": f"* {new_content.get('body', text)}",
             "m.new_content": new_content,
             "m.relates_to": {
                 "rel_type": "m.replace",
                 "event_id": root_event_id,
             },
         }
-        if html:
+        # Propagate m.mentions to the outer event — MSC3952 requires
+        # it on the replacement event for notification delivery.
+        if "m.mentions" in new_content:
+            content["m.mentions"] = new_content["m.mentions"]
+        if "formatted_body" in new_content:
+            content["format"] = "org.matrix.custom.html"
+            content["formatted_body"] = f"* {new_content['formatted_body']}"
+        elif html:
             content["format"] = "org.matrix.custom.html"
             content["formatted_body"] = f"* {html}"
         try:
@@ -2925,6 +2946,16 @@ class MatrixChannel(BaseChannel):
             return
 
         room_id = to_handle
+        text = canonicalize_team_worker_mentions(text)
+        routed_room_id = resolve_team_leader_assignment_room(text, room_id)
+        if routed_room_id != room_id:
+            logger.info(
+                "MatrixChannel: rerouting team assignment from room %s "
+                "to Team Room %s",
+                room_id,
+                routed_room_id,
+            )
+            room_id = routed_room_id
 
         # NO_REPLY protocol: agent decided it has nothing to say.
         # Suppress the outgoing message entirely to avoid triggering the

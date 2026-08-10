@@ -63,10 +63,8 @@
           { "id": "deepseek-reasoner", "name": "deepseek-reasoner", "reasoning": true,  "contextWindow": 256000,  "maxTokens": 128000, "input": ["text"] },
           { "id": "kimi-k2.5",         "name": "kimi-k2.5",         "reasoning": true,  "contextWindow": 256000,  "maxTokens": 128000, "input": ["text", "image"] },
           { "id": "glm-5",             "name": "glm-5",             "reasoning": true,  "contextWindow": 200000,  "maxTokens": 128000, "input": ["text"] },
-          { "id": "MiniMax-M2.7",      "name": "MiniMax-M2.7",      "reasoning": true,  "contextWindow": 204800,  "maxTokens": 128000, "input": ["text"] },
-          { "id": "MiniMax-M2.7-highspeed", "name": "MiniMax-M2.7-highspeed", "reasoning": true, "contextWindow": 204800, "maxTokens": 128000, "input": ["text"] },
-          { "id": "MiniMax-M2.5",      "name": "MiniMax-M2.5",      "reasoning": true,  "contextWindow": 200000,  "maxTokens": 128000, "input": ["text"] },
-          { "id": "MiniMax-M3",        "name": "MiniMax-M3",        "reasoning": true,  "contextWindow": 1000000, "maxTokens": 128000, "input": ["text", "image"] }
+          { "id": "MiniMax-M3",        "name": "MiniMax-M3",        "reasoning": true,  "contextWindow": 1000000, "maxTokens": 128000, "input": ["text", "image", "video"] },
+          { "id": "MiniMax-M2.7",      "name": "MiniMax-M2.7",      "reasoning": true,  "contextWindow": 204800,  "maxTokens": 128000, "input": ["text"] }
         ]
       }
     }
@@ -92,10 +90,8 @@
         "agentteams-gateway/deepseek-reasoner": { "alias": "deepseek-reasoner" },
         "agentteams-gateway/kimi-k2.5":         { "alias": "kimi-k2.5" },
         "agentteams-gateway/glm-5":             { "alias": "glm-5" },
-        "agentteams-gateway/MiniMax-M2.7":      { "alias": "MiniMax-M2.7" },
-        "agentteams-gateway/MiniMax-M2.7-highspeed": { "alias": "MiniMax-M2.7-highspeed" },
-        "agentteams-gateway/MiniMax-M2.5":      { "alias": "MiniMax-M2.5" },
-        "agentteams-gateway/MiniMax-M3":        { "alias": "MiniMax-M3" }
+        "agentteams-gateway/MiniMax-M3":        { "alias": "MiniMax-M3" },
+        "agentteams-gateway/MiniMax-M2.7":      { "alias": "MiniMax-M2.7" }
       },
       "maxConcurrent": 8,
       "subagents": {
@@ -104,7 +100,7 @@
       "elevatedDefault": "full",
       "heartbeat": {
         "every": "1h",
-        "prompt": "Read ~/HEARTBEAT.md and follow the checklist. Scan ~/hiclaw-fs/shared/tasks/*/meta.json to find tasks with status=assigned. For each, read assigned_to and room_id, then ask the Worker for progress in their Room (the human admin can see the inquiry). If a Worker confirms completion, update meta.json to status=completed with completed_at. Also scan ~/hiclaw-fs/shared/projects/*/meta.json for active projects — for each, read plan.md and check if any in-progress ([~]) tasks have stalled (no recent @mention from the assigned Worker); if stalled, @mention the Worker in the project room asking for a status update. Assess capacity vs pending tasks. Reply HEARTBEAT_OK if nothing needs attention."
+        "prompt": "Read ~/HEARTBEAT.md and follow the checklist. Scan ~/agentteams-fs/shared/tasks/*/meta.json to find tasks with status=assigned. For each, read assigned_to and room_id, then ask the Worker for progress in their Room (the human admin can see the inquiry). If a Worker confirms completion, update meta.json to status=completed with completed_at. Also scan ~/agentteams-fs/shared/projects/*/meta.json for active projects — for each, read plan.md and check if any in-progress ([~]) tasks have stalled (no recent @mention from the assigned Worker); if stalled, @mention the Worker in the project room asking for a status update. Assess capacity vs pending tasks. Reply HEARTBEAT_OK if nothing needs attention."
       }
     }
   },

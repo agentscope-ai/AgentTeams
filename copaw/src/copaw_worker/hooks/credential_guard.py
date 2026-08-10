@@ -124,7 +124,7 @@ def install_credential_guard_hook() -> None:
         return
 
     original = CoPawAgent._decide_guard_action
-    if getattr(original, "_hiclaw_credential_guard", False):
+    if getattr(original, "_agentteams_credential_guard", False):
         _GUARD_HOOK_INSTALLED = True
         return
 
@@ -150,7 +150,7 @@ def install_credential_guard_hook() -> None:
                 )
         return action
 
-    _decide_with_credential_block._hiclaw_credential_guard = True  # type: ignore[attr-defined]
+    _decide_with_credential_block._agentteams_credential_guard = True  # type: ignore[attr-defined]
     CoPawAgent._decide_guard_action = _decide_with_credential_block  # type: ignore[assignment]
     _GUARD_HOOK_INSTALLED = True
     logger.info("Installed AgentTeams credential guard hook (SENSITIVE_FILE_ACCESS → auto_denied)")

@@ -77,11 +77,11 @@ def install_tool_hooks() -> None:
     from copaw_worker.hooks.tools.taskflow import taskflow
 
     original_create_toolkit = CoPawAgent._create_toolkit
-    if getattr(original_create_toolkit, "_hiclaw_message_hook", False):
+    if getattr(original_create_toolkit, "_agentteams_message_hook", False):
         _TOOL_HOOK_INSTALLED = True
         return
 
-    def create_toolkit_with_hiclaw_tools(self: Any, *args: Any, **kwargs: Any):
+    def create_toolkit_with_agentteams_tools(self: Any, *args: Any, **kwargs: Any):
         toolkit = original_create_toolkit(self, *args, **kwargs)
         try:
             _register_tool_function(
@@ -116,8 +116,8 @@ def install_tool_hooks() -> None:
             logger.exception("Failed to register output sanitizer middleware")
         return toolkit
 
-    create_toolkit_with_hiclaw_tools._hiclaw_message_hook = True  # type: ignore[attr-defined]
-    CoPawAgent._create_toolkit = create_toolkit_with_hiclaw_tools
+    create_toolkit_with_agentteams_tools._agentteams_message_hook = True  # type: ignore[attr-defined]
+    CoPawAgent._create_toolkit = create_toolkit_with_agentteams_tools
     _TOOL_HOOK_INSTALLED = True
     logger.info("Installed AgentTeams CoPaw tool hooks")
 

@@ -24,7 +24,7 @@ Both runtimes share the same skills and workspace structure.
 make build-manager
 
 # Or directly
-docker build -t hiclaw/manager-agent:latest .
+docker build -t agentteams/manager-agent:latest .
 ```
 
 ## Run
@@ -32,7 +32,7 @@ docker build -t hiclaw/manager-agent:latest .
 Use the installation script instead of running directly:
 
 ```bash
-../install/hiclaw-install.sh manager
+../install/agentteams-install.sh manager
 ```
 
 ## Directory Structure

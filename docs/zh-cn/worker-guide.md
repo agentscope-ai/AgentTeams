@@ -1,6 +1,6 @@
 # Worker 使用指南
 
-HiClaw Worker Agent 的部署、管理和故障排查指南。
+AgentTeams Worker Agent 的部署、管理和故障排查指南。
 
 ## 概述
 
@@ -14,8 +14,8 @@ Worker 是轻量级无状态容器，负责：
 
 Worker 由 **CR** 描述。除在 Matrix 里让 Manager 创建外，你还可以：
 
-- 在 **`hiclaw-controller`** 或 **`hiclaw-manager`** 容器内执行 **`hiclaw create worker` / `hiclaw update worker`**（见 [faq.md](../faq.md)）。
-- 使用 **`install/hiclaw-apply.sh`** 应用 YAML（转发到 Manager 容器内的 `hiclaw apply -f`）。
+- 在 **`agentteams-controller`** 或 **`agentteams-manager`** 容器内执行 **`agt create worker` / `agt update worker`**（见 [faq.md](../faq.md)）。
+- 使用 **`install/agentteams-apply.sh`** 应用 YAML（转发到 Manager 容器内的 `agt apply -f`）。
 
 字段说明见 [Declarative Resource Management](../declarative-resource-management.md)。
 
@@ -23,9 +23,9 @@ Worker 由 **CR** 描述。除在 Matrix 里让 Manager 创建外，你还可以
 
 | 运行时 | 主要工作目录 | 说明 |
 |--------|----------------|------|
-| **openclaw** | `/root/hiclaw-fs/agents/<worker-name>/`（`HOME` 指向此处） | `openclaw.json`、`SOUL.md`、`AGENTS.md`、skills、`.openclaw/` 等。共享数据：`/root/hiclaw-fs/shared/`。 |
-| **copaw** | `/root/.hiclaw-worker/<worker-name>/`（QwenPaw 配置在 `.copaw/`） | 兼容性符号链接 **`/root/hiclaw-fs`** 指向该 Worker 树，便于沿用 OpenClaw 风格路径的脚本。 |
-| **hermes** | `/root/hiclaw-fs/agents/<worker-name>/`（`HOME` 即工作区，与 OpenClaw 相同的镜像根） | Hermes 状态在目录内 **`.hermes/`**（如 `.hermes/config.yaml`、`state.db`）。 |
+| **openclaw** | `/root/agentteams-fs/agents/<worker-name>/`（`HOME` 指向此处） | `openclaw.json`、`SOUL.md`、`AGENTS.md`、skills、`.openclaw/` 等。共享数据：`/root/agentteams-fs/shared/`。 |
+| **copaw** | `/root/.agentteams-worker/<worker-name>/`（QwenPaw 配置在 `.copaw/`） | 兼容性符号链接 **`/root/agentteams-fs`** 指向该 Worker 树，便于沿用 OpenClaw 风格路径的脚本。 |
+| **hermes** | `/root/agentteams-fs/agents/<worker-name>/`（`HOME` 即工作区，与 OpenClaw 相同的镜像根） | Hermes 状态在目录内 **`.hermes/`**（如 `.hermes/config.yaml`、`state.db`）。 |
 
 ## 安装
 
@@ -48,15 +48,46 @@ Worker 由 **Manager Agent** 或 **controller 声明式 API** 创建。Manager �
 3. 将命令复制到目标宿主机上执行：
 
 ```bash
-docker run -d --name hiclaw-worker-alice \
-  -e HICLAW_WORKER_NAME=alice \
-  -e HICLAW_FS_ENDPOINT=http://<MANAGER_HOST>:9000 \
-  -e HICLAW_FS_ACCESS_KEY=<ACCESS_KEY> \
-  -e HICLAW_FS_SECRET_KEY=<SECRET_KEY> \
-  hiclaw/worker-agent:latest
+docker run -d --name agentteams-worker-alice \
+  -e AGENTTEAMS_WORKER_NAME=alice \
+  -e AGENTTEAMS_FS_ENDPOINT=http://<MANAGER_HOST>:9000 \
+  -e AGENTTEAMS_FS_ACCESS_KEY=<ACCESS_KEY> \
+  -e AGENTTEAMS_FS_SECRET_KEY=<SECRET_KEY> \
+  agentteams/worker-agent:latest
 ```
 
 Manager 会在回复中提供所有具体参数值。
+
+## 通过 Manager 安装 Skill
+
+对于已有 Worker，推荐以 Manager 对话作为安装入口。可以通过以下任一方式提供 Skill：
+
+1. 在 Manager 宿主机上，将完整的第三方 Skill 放到 `$AGENTTEAMS_WORKSPACE_DIR/worker-skills/<skill-name>/`。默认路径为 `~/agentteams-manager/worker-skills/<skill-name>/`；或者
+2. 直接向 Manager 发送 ZIP 附件，压缩包内包含一个完整的 Skill 根目录、`SKILL.md`，以及可选的 `scripts/`、`references/`。
+
+然后让 Manager 为指定 Worker 安装该 Skill，并验证分配结果。如果使用 ZIP 附件，应明确要求 Manager 在分发前安全解压并校验内容。
+
+例如：
+
+> 请将 `~/worker-skills/alert-fusion/` 中的 `alert-fusion` Skill 安装给 Worker `amy-ai`。请确认文件上传成功，并验证 Worker 的 Skill 分配已经更新。
+
+或者在发送 ZIP 附件后说：
+
+> 请将我刚发送的 ZIP 附件中的 Skill 安装给 Worker `amy-ai`。请安全解压和校验，分发完整 Skill，并验证 Worker 的 Skill 分配。
+
+Manager 会先上传并校验文件，再更新 `Worker.spec.skills`，避免 Worker 收到一个缺少实际内容的 Skill 分配。QwenPaw Worker 随后会把已分配 Skill 同步到原生工作空间，并自动刷新、启用。
+
+可以直接询问 Manager 来检查分配结果：
+
+> 请列出 Worker `amy-ai` 当前分配的 Skill，并确认其中是否包含 `alert-fusion`。
+
+如果需要从运维侧检查或排障，可使用等价的 CLI 查询：
+
+```bash
+agt get workers amy-ai -o json | jq '.skills'
+```
+
+仅将文件复制到 Worker 存储并不等于完成安装。Skill 名称还必须出现在 `Worker.spec.skills` 中，受管运行时才能确定需要加载哪些 Skill。
 
 ## 故障排查
 
@@ -64,7 +95,7 @@ Manager 会在回复中提供所有具体参数值。
 
 ```bash
 # 查看容器日志
-docker logs hiclaw-worker-alice
+docker logs agentteams-worker-alice
 
 # 常见问题：
 # - "openclaw.json not found"：Manager 尚未创建配置文件
@@ -76,10 +107,10 @@ docker logs hiclaw-worker-alice
 
 ```bash
 # 验证 Matrix 服务器是否可从 Worker 访问（通过网关端口）
-docker exec hiclaw-worker-alice curl -sf http://matrix-local.hiclaw.io:18080/_matrix/client/versions
+docker exec agentteams-worker-alice curl -sf http://matrix-local.agentteams.io:18080/_matrix/client/versions
 
 # 检查 Worker 的 openclaw.json 中的 Matrix 配置
-docker exec hiclaw-worker-alice cat /root/hiclaw-fs/agents/alice/openclaw.json | jq '.channels.matrix'
+docker exec agentteams-worker-alice cat /root/agentteams-fs/agents/alice/openclaw.json | jq '.channels.matrix'
 ```
 
 ### Worker 无法访问 LLM
@@ -87,9 +118,9 @@ docker exec hiclaw-worker-alice cat /root/hiclaw-fs/agents/alice/openclaw.json |
 ```bash
 # 使用 Worker 的 key 测试 AI 网关访问
 # 注意：以下命令在 Worker 容器内执行，域名会解析到 Manager 的内部 IP
-docker exec hiclaw-worker-alice curl -sf \
-  -H "Authorization: Bearer $(jq -r '.models.providers."hiclaw-gateway".apiKey' /root/hiclaw-fs/agents/alice/openclaw.json)" \
-  http://aigw-local.hiclaw.io:8080/v1/models
+docker exec agentteams-worker-alice curl -sf \
+  -H "Authorization: Bearer $(jq -r '.models.providers."agentteams-gateway".apiKey' /root/agentteams-fs/agents/alice/openclaw.json)" \
+  http://aigw-local.agentteams.io:8080/v1/models
 
 # 401：检查 openclaw.json 中的 Consumer key 是否与 Higress 中的一致
 # 403：Worker 可能未被授权访问 AI 路由，请让 Manager 添加权限
@@ -99,8 +130,8 @@ docker exec hiclaw-worker-alice curl -sf \
 
 ```bash
 # 测试 mcporter 连通性（在 Worker 容器内执行）
-docker exec hiclaw-worker-alice mcporter --transport http \
-  --server-url "http://aigw-local.hiclaw.io:8080/mcp-servers/mcp-github/mcp" \
+docker exec agentteams-worker-alice mcporter --transport http \
+  --server-url "http://aigw-local.agentteams.io:8080/mcp-servers/mcp-github/mcp" \
   --header "Authorization=Bearer <WORKER_KEY>" \
   call list_repos '{"owner": "test"}'
 
@@ -111,8 +142,8 @@ docker exec hiclaw-worker-alice mcporter --transport http \
 
 ```bash
 # 停止并删除容器
-docker stop hiclaw-worker-alice
-docker rm hiclaw-worker-alice
+docker stop agentteams-worker-alice
+docker rm agentteams-worker-alice
 
 # 然后让 Manager 重新创建 Worker：
 # "请重新创建 alice worker 容器"
@@ -161,24 +192,24 @@ Manager 自动管理 Worker 容器的生命周期：
 
 | 变量 | 说明 | 示例值 |
 |------|------|--------|
-| `HICLAW_WORKER_NAME` | Worker 标识符 | `alice` |
-| `HICLAW_MATRIX_URL` | Matrix Homeserver URL | `http://matrix-local.hiclaw.io:18080` |
-| `HICLAW_AI_GATEWAY_URL` | AI 网关 URL | `http://aigw-local.hiclaw.io:18080` |
-| `HICLAW_FS_ENDPOINT` | MinIO 端点 URL | `http://<MANAGER_HOST>:9000` |
-| `HICLAW_FS_BUCKET` | 非默认存储布局下的 bucket 名称 | `hiclaw-storage` |
-| `HICLAW_FS_ACCESS_KEY` | MinIO 访问密钥（由 Manager 生成，Worker 专用） | - |
-| `HICLAW_FS_SECRET_KEY` | MinIO 密钥（由 Manager 生成，Worker 专用） | - |
+| `AGENTTEAMS_WORKER_NAME` | Worker 标识符 | `alice` |
+| `AGENTTEAMS_MATRIX_URL` | Matrix Homeserver URL | `http://matrix-local.agentteams.io:18080` |
+| `AGENTTEAMS_AI_GATEWAY_URL` | AI 网关 URL | `http://aigw-local.agentteams.io:18080` |
+| `AGENTTEAMS_FS_ENDPOINT` | MinIO 端点 URL | `http://<MANAGER_HOST>:9000` |
+| `AGENTTEAMS_FS_BUCKET` | 非默认存储布局下的 bucket 名称 | `agentteams-storage` |
+| `AGENTTEAMS_FS_ACCESS_KEY` | MinIO 访问密钥（由 Manager 生成，Worker 专用） | - |
+| `AGENTTEAMS_FS_SECRET_KEY` | MinIO 密钥（由 Manager 生成，Worker 专用） | - |
 
 > 所有参数值均由 Manager 生成，并在 `docker run` 命令中提供，或在直接创建时自动设置。通常无需手动配置。
 >
-> 运行时脚本现在直接使用 `HICLAW_MATRIX_URL` 和 `HICLAW_AI_GATEWAY_URL`；旧别名已经不再属于主契约。
+> 运行时脚本现在直接使用 `AGENTTEAMS_MATRIX_URL` 和 `AGENTTEAMS_AI_GATEWAY_URL`；旧别名已经不再属于主契约。
 
 ### 手动同步文件
 
-在 Worker 容器内执行 `hiclaw-sync`，可立即从 MinIO 拉取最新的配置和技能文件：
+在 Worker 容器内执行 `agentteams-sync`，可立即从 MinIO 拉取最新的配置和技能文件：
 
 ```bash
-docker exec hiclaw-worker-alice hiclaw-sync
+docker exec agentteams-worker-alice agentteams-sync
 ```
 
 当 Manager 向 MinIO 推送了更新的技能或配置，而你不想等待下一个同步周期时，这个命令很有用。

@@ -11,7 +11,7 @@ Always reply directly in the current room. Do not use the `message` tool for cro
 
 ## Coordinator Identity
 
-Your coordinator is the sender of the current task assignment message. Use that Matrix ID directly for @mentions. Do not call `organization` or `hiclaw` CLI to look up your coordinator during standard task flows.
+Your coordinator is the sender of the current task assignment message. Use that Matrix ID directly for @mentions. Do not call `organization` or `agt` CLI to look up your coordinator during standard task flows.
 
 ## @Mention Rules
 

@@ -47,11 +47,11 @@ log_section "Trigger Heartbeat"
 
 MANAGER_CONTAINER="${TEST_CONTROLLER_CONTAINER:-agentteams-controller}"
 MANAGER_RUNTIME=$(docker exec "${MANAGER_CONTAINER}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || \
-                  docker exec "${MANAGER_CONTAINER}" printenv HICLAW_MANAGER_RUNTIME 2>/dev/null || echo "openclaw")
+                  docker exec "${MANAGER_CONTAINER}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || echo "openclaw")
 log_info "Triggering heartbeat (runtime=${MANAGER_RUNTIME})..."
 
 case "${MANAGER_RUNTIME}" in
-    copaw)
+    copaw|qwenpaw)
         # CoPaw: the internal _heartbeat APScheduler job has no manual trigger API.
         # Send a heartbeat instruction via Matrix DM to make the Agent execute HEARTBEAT.md.
         matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
@@ -60,7 +60,7 @@ case "${MANAGER_RUNTIME}" in
     *)
         # OpenClaw: trigger via system event
         docker exec "${MANAGER_CONTAINER}" bash -c \
-            "cd ~/hiclaw-fs/agents/manager && openclaw system event --mode now" 2>/dev/null || \
+            "cd ~/agentteams-fs/agents/manager && openclaw system event --mode now" 2>/dev/null || \
             log_info "Could not trigger OpenClaw heartbeat via system event"
         ;;
 esac

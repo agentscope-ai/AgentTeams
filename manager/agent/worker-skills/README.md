@@ -39,22 +39,22 @@ assign_when: <描述：什么样的 Worker 应该拥有此 skill，Manager 据�
 
 ```bash
 # 给指定 Worker 分配新 skill
-bash /opt/hiclaw/agent/skills/worker-management/scripts/push-worker-skills.sh \
+bash /opt/agentteams/agent/skills/worker-management/scripts/push-worker-skills.sh \
   --worker <name> --add-skill <skill-name>
 
 # 推送某个 skill 的更新到所有持有该 skill 的 Worker
-bash /opt/hiclaw/agent/skills/worker-management/scripts/push-worker-skills.sh \
+bash /opt/agentteams/agent/skills/worker-management/scripts/push-worker-skills.sh \
   --skill <skill-name>
 
 # 查看当前 Worker skill 分配情况
-cat ~/workers-registry.json
+agt get workers -o json | jq '.workers[] | {name, skills}'
 ```
 
 ## 注意
 
 - 内置 skills（`file-sync`、`task-progress`、`project-participation`、`mcporter`、`find-skills`）由 Worker 镜像自动分配，无需通过此目录管理
 - 此目录中的 skills 由 Manager 统一维护，Worker 不能修改自己的 skills
-- Worker 的 on-demand skill 分配记录在 `~/workers-registry.json`
+- Worker 的 on-demand skill 分配记录在 Worker CR 的 `spec.skills`
 
 ## 内置 Skills
 

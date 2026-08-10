@@ -7,7 +7,7 @@ git tag `v2026.4.16`).
 It plays the same role as `copaw-worker`:
 
 * Bootstraps a per-worker home directory (`HERMES_HOME`) populated from
-  MinIO (`hiclaw://` workspace).
+  MinIO (`agentteams://` workspace).
 * Translates the AgentTeams common config schema (`openclaw.json`) into
   hermes-agent's native config (`config.yaml` + `.env`) via a *bridge*.
 * Runs hermes-agent's gateway in Matrix-only mode.

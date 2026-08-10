@@ -10,7 +10,7 @@
 #   gateway_authorize_mcp(consumer_name, csv) — authorize MCP servers
 #
 # Prerequisites:
-#   - source hiclaw-env.sh (for AGENTTEAMS_RUNTIME)
+#   - source agentteams-env.sh (for AGENTTEAMS_RUNTIME)
 #   - source container-api.sh (for _orch_api)
 
 # ── Backend detection ─────────────────────────────────────────────────────────

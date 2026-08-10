@@ -267,7 +267,7 @@ def _model_env(cfg: Dict[str, Any]) -> Dict[str, str]:
 
     Hermes uses OPENAI_BASE_URL + OPENAI_API_KEY for any OpenAI-compatible
     endpoint when ``model.provider`` is "custom". This is the standard path
-    for Higress-fronted models in hiclaw.
+    for Higress-fronted models in agentteams.
     """
     m = _resolve_active_model(cfg)
     if not m:

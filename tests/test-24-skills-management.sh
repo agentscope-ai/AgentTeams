@@ -1,10 +1,10 @@
 #!/bin/bash
 # test-24-skills-management.sh - Case 24: Worker skills round-trip via CLI
 #
-# Verifies the `--skills` flag on `hiclaw create worker` and
-# `hiclaw update worker` flows through the controller and is reflected in
-# the source-of-truth registry at agents/manager/workers-registry.json,
-# and that the corresponding skill files land in agents/<name>/skills/.
+# Verifies the `--skills` flag on `agt create worker` and
+# `agt update worker` flows through the controller and is reflected in
+# the source-of-truth Worker CR. For QwenPaw, it also verifies the public
+# Manager skill-distribution command reaches the running Worker's skill API.
 #
 # Built-in baseline skills (file-sync, etc.) are always pushed for every
 # Worker regardless of --skills; the flag controls *on-demand* skills
@@ -20,14 +20,21 @@ source "${SCRIPT_DIR}/lib/minio-client.sh"
 test_setup "24-skills-management"
 
 TEST_WORKER="test-skl-$$"
+MANAGER_SKILL="test24-manager-skill"
 STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
-REGISTRY_KEY="${STORAGE_PREFIX}/agents/manager/workers-registry.json"
+TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
+if [ "${TEST_WORKER_RUNTIME}" = "copaw" ] || [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    BASELINE_SKILL="file-sharing"
+else
+    BASELINE_SKILL="file-sync"
+fi
 
 _cleanup() {
     log_info "Cleaning up: ${TEST_WORKER}"
-    exec_in_agent hiclaw delete worker "${TEST_WORKER}" 2>/dev/null || true
+    exec_in_agent agt delete worker "${TEST_WORKER}" 2>/dev/null || true
     sleep 5
     remove_worker_container "${TEST_WORKER}"
+    exec_in_agent rm -rf "/root/manager-workspace/worker-skills/${MANAGER_SKILL}" 2>/dev/null || true
     exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${TEST_WORKER}/" 2>/dev/null || true
     exec_in_manager mc rm "${STORAGE_PREFIX}/agentteams-config/workers/${TEST_WORKER}.yaml" 2>/dev/null || true
 }
@@ -35,11 +42,10 @@ trap _cleanup EXIT
 
 minio_setup
 
-# Helper: read worker entry from registry and return .skills as JSON array
-_worker_skills_in_registry() {
+# Helper: read Worker CR skills through the Controller API.
+_worker_skills_in_api() {
     local worker="$1"
-    exec_in_manager mc cat "${REGISTRY_KEY}" 2>/dev/null \
-        | jq -c --arg w "${worker}" '.workers[$w].skills // empty' 2>/dev/null
+    exec_in_agent agt get workers "${worker}" -o json 2>/dev/null | jq -c '.skills // []'
 }
 
 # ============================================================
@@ -47,13 +53,14 @@ _worker_skills_in_registry() {
 # ============================================================
 log_section "Create Worker with --skills github-operations"
 
-CREATE_OUTPUT=$(exec_in_agent hiclaw create worker --name "${TEST_WORKER}" \
+CREATE_OUTPUT=$(exec_in_agent agt create worker --name "${TEST_WORKER}" \
+    --runtime "${TEST_WORKER_RUNTIME}" \
     --skills github-operations --no-wait 2>&1)
 CREATE_EXIT=$?
 if [ "${CREATE_EXIT}" -eq 0 ]; then
-    log_pass "hiclaw create worker --skills github-operations accepted"
+    log_pass "agt create worker --skills github-operations accepted"
 else
-    log_fail "hiclaw create failed: ${CREATE_OUTPUT}"
+    log_fail "agt create failed: ${CREATE_OUTPUT}"
     test_teardown "24-skills-management"; test_summary; exit 1
 fi
 
@@ -65,31 +72,47 @@ else
 fi
 
 # ============================================================
-# Section 2: Registry reflects initial skills
+# Section 2: Worker CR reflects initial skills
 # ============================================================
-log_section "Verify Registry After Create"
+log_section "Verify Worker CR After Create"
 
-# Give the controller a moment after provisioning to write the registry entry
+# Give the controller a moment after provisioning to serve the resource.
 DEADLINE=$(( $(date +%s) + 60 ))
 INITIAL_SKILLS=""
 while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-    INITIAL_SKILLS=$(_worker_skills_in_registry "${TEST_WORKER}")
+    INITIAL_SKILLS=$(_worker_skills_in_api "${TEST_WORKER}")
     [ -n "${INITIAL_SKILLS}" ] && [ "${INITIAL_SKILLS}" != "null" ] && break
     sleep 5
 done
 
-log_info "Initial skills in registry: ${INITIAL_SKILLS}"
+log_info "Initial skills in Worker CR: ${INITIAL_SKILLS}"
 if echo "${INITIAL_SKILLS}" | jq -e 'index("github-operations")' >/dev/null 2>&1; then
-    log_pass "Registry contains 'github-operations' for ${TEST_WORKER}"
+    log_pass "Worker CR contains 'github-operations' for ${TEST_WORKER}"
 else
-    log_fail "Registry missing 'github-operations' (got: ${INITIAL_SKILLS})"
+    log_fail "Worker CR missing 'github-operations' (got: ${INITIAL_SKILLS})"
 fi
 
-# Built-in baseline skill should be present in MinIO regardless of --skills
-if minio_file_exists "agents/${TEST_WORKER}/skills/file-sync/SKILL.md"; then
-    log_pass "Built-in skill 'file-sync' present in MinIO"
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    if wait_qwenpaw_api_matches "${TEST_WORKER}" /api/skills ".[] | select(.name == \"${BASELINE_SKILL}\" and .source == \"plugin:teamharness\")" 240; then
+        log_pass "QwenPaw plugin skills reconciled"
+    else
+        log_fail "QwenPaw plugin skills did not reconcile"
+    fi
+fi
+
+# Built-in baseline skill should be present in the runtime that consumes it.
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    QWENPAW_SKILLS=$(read_qwenpaw_skills "${TEST_WORKER}")
+    if echo "${QWENPAW_SKILLS}" | jq -e --arg skill "${BASELINE_SKILL}" \
+        '.[] | select(.name == $skill and .source == "plugin:teamharness")' >/dev/null 2>&1; then
+        log_pass "Built-in plugin skill '${BASELINE_SKILL}' visible through QwenPaw API"
+    else
+        log_fail "Built-in plugin skill '${BASELINE_SKILL}' missing from QwenPaw API"
+    fi
+elif minio_file_exists "agents/${TEST_WORKER}/skills/${BASELINE_SKILL}/SKILL.md"; then
+    log_pass "Built-in skill '${BASELINE_SKILL}' present in MinIO for ${TEST_WORKER_RUNTIME} runtime"
 else
-    log_fail "Built-in skill 'file-sync' missing in MinIO"
+    log_fail "Built-in skill '${BASELINE_SKILL}' missing in MinIO for ${TEST_WORKER_RUNTIME} runtime"
 fi
 
 if minio_file_exists "agents/${TEST_WORKER}/skills/github-operations/SKILL.md"; then
@@ -106,25 +129,82 @@ fi
 PRE_UPDATE_CONTAINER_ID=$(docker inspect --format '{{.Id}}' "$(worker_container_name "${TEST_WORKER}")" 2>/dev/null | head -c 12 || echo "")
 
 # ============================================================
-# Section 3: Update skills via `hiclaw update worker --skills`
+# Section 3: Manager distributes a custom skill to QwenPaw
+# ============================================================
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    log_section "Manager Distributes a Custom Skill"
+
+    MANAGER_SKILL_DIR="/root/manager-workspace/worker-skills/${MANAGER_SKILL}"
+    exec_in_agent mkdir -p "${MANAGER_SKILL_DIR}"
+    exec_in_agent sh -c "printf '%s\n' \
+        '---' \
+        'name: ${MANAGER_SKILL}' \
+        'description: Verify Manager-to-Worker skill distribution.' \
+        'assign_when: Use for the test24 Manager distribution check.' \
+        '---' \
+        '# Manager-distributed test skill' > '${MANAGER_SKILL_DIR}/SKILL.md'"
+
+    PUSH_OUTPUT=$(exec_in_agent bash \
+        /opt/agentteams/agent/skills/worker-management/scripts/push-worker-skills.sh \
+        --worker "${TEST_WORKER}" --add-skill "${MANAGER_SKILL}" --no-notify 2>&1)
+    PUSH_EXIT=$?
+    if [ "${PUSH_EXIT}" -eq 0 ]; then
+        log_pass "Manager skill-distribution command succeeded"
+    else
+        log_fail "Manager skill-distribution command failed: ${PUSH_OUTPUT}"
+    fi
+
+    DEADLINE=$(( $(date +%s) + 120 ))
+    MANAGER_ASSIGNED_SKILLS=""
+    while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+        MANAGER_ASSIGNED_SKILLS=$(_worker_skills_in_api "${TEST_WORKER}")
+        if echo "${MANAGER_ASSIGNED_SKILLS}" | jq -e --arg skill "${MANAGER_SKILL}" \
+            'index($skill)' >/dev/null 2>&1; then
+            break
+        fi
+        sleep 5
+    done
+    if echo "${MANAGER_ASSIGNED_SKILLS}" | jq -e --arg skill "${MANAGER_SKILL}" \
+        'index($skill)' >/dev/null 2>&1; then
+        log_pass "Manager updated Worker.spec.skills"
+    else
+        log_fail "Worker.spec.skills missing Manager-distributed skill (got: ${MANAGER_ASSIGNED_SKILLS})"
+    fi
+
+    if minio_file_exists "agents/${TEST_WORKER}/skills/${MANAGER_SKILL}/SKILL.md"; then
+        log_pass "Manager uploaded the custom skill to Worker storage"
+    else
+        log_fail "Manager-distributed skill missing from Worker storage"
+    fi
+
+    if wait_qwenpaw_api_matches "${TEST_WORKER}" /api/skills \
+        ".[] | select(.name == \"${MANAGER_SKILL}\" and .enabled == true)" 240; then
+        log_pass "QwenPaw loaded and enabled the Manager-distributed skill"
+    else
+        log_fail "QwenPaw did not load and enable the Manager-distributed skill"
+    fi
+fi
+
+# ============================================================
+# Section 4: Update skills via `agt update worker --skills`
 # ============================================================
 log_section "Update Skills (github-operations → git-delegation)"
 
-UPDATE_OUTPUT=$(exec_in_agent hiclaw update worker --name "${TEST_WORKER}" \
+UPDATE_OUTPUT=$(exec_in_agent agt update worker --name "${TEST_WORKER}" \
     --skills git-delegation 2>&1)
 UPDATE_EXIT=$?
 if [ "${UPDATE_EXIT}" -eq 0 ]; then
-    log_pass "hiclaw update worker --skills git-delegation accepted"
+    log_pass "agt update worker --skills git-delegation accepted"
 else
-    log_fail "hiclaw update failed (exit=${UPDATE_EXIT}): ${UPDATE_OUTPUT}"
+    log_fail "agt update failed (exit=${UPDATE_EXIT}): ${UPDATE_OUTPUT}"
 fi
 
-# Wait for the controller to re-reconcile and rewrite the registry
-log_info "Waiting for registry to reflect skill change..."
+# Wait for the Controller API to reflect the update.
+log_info "Waiting for Worker CR to reflect skill change..."
 DEADLINE=$(( $(date +%s) + 120 ))
 UPDATED_SKILLS=""
 while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-    UPDATED_SKILLS=$(_worker_skills_in_registry "${TEST_WORKER}")
+    UPDATED_SKILLS=$(_worker_skills_in_api "${TEST_WORKER}")
     if echo "${UPDATED_SKILLS}" | jq -e 'index("git-delegation")' >/dev/null 2>&1 \
         && ! echo "${UPDATED_SKILLS}" | jq -e 'index("github-operations")' >/dev/null 2>&1; then
         break
@@ -132,23 +212,23 @@ while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
     sleep 5
 done
 
-log_info "Updated skills in registry: ${UPDATED_SKILLS}"
+log_info "Updated skills in Worker CR: ${UPDATED_SKILLS}"
 
 # ============================================================
-# Section 4: Verify post-update state
+# Section 5: Verify post-update state
 # ============================================================
-log_section "Verify Registry After Update"
+log_section "Verify Worker CR After Update"
 
 if echo "${UPDATED_SKILLS}" | jq -e 'index("git-delegation")' >/dev/null 2>&1; then
-    log_pass "Registry contains 'git-delegation' after update"
+    log_pass "Worker CR contains 'git-delegation' after update"
 else
-    log_fail "Registry missing 'git-delegation' after update (got: ${UPDATED_SKILLS})"
+    log_fail "Worker CR missing 'git-delegation' after update (got: ${UPDATED_SKILLS})"
 fi
 
 if echo "${UPDATED_SKILLS}" | jq -e 'index("github-operations")' >/dev/null 2>&1; then
-    log_fail "Registry still contains 'github-operations' after replacement update"
+    log_fail "Worker CR still contains 'github-operations' after replacement update"
 else
-    log_pass "Replaced skill 'github-operations' no longer in registry"
+    log_pass "Replaced skill 'github-operations' no longer in Worker CR"
 fi
 
 if minio_file_exists "agents/${TEST_WORKER}/skills/git-delegation/SKILL.md"; then

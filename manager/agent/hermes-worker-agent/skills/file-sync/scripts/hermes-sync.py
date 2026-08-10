@@ -14,7 +14,7 @@ Environment variables (set by the container at startup):
 - ``AGENTTEAMS_FS_BUCKET``    MinIO bucket    (default: agentteams-storage)
 - ``HERMES_HOME``         hermes-agent workspace
                           (default: $HOME/.hermes, i.e.
-                          /root/hiclaw-fs/agents/<worker_name>/.hermes)
+                          /root/agentteams-fs/agents/<worker_name>/.hermes)
 """
 from __future__ import annotations
 

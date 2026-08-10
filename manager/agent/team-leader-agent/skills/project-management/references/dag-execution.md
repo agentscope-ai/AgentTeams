@@ -39,7 +39,7 @@ Each task node uses:
 
 - `taskId`: stable node ID. Use `{projectId}-{seq}`.
 - `title`: short human-readable work unit.
-- `assignedTo`: Worker's **Matrix localpart** (the part between `@` and `:` in `matrixUserID`). Extract mechanically from `hiclaw get workers --team "$TEAM_CR" -o json` output. Never strip, guess, or transform.
+- `assignedTo`: Worker's **Matrix localpart** (the part between `@` and `:` in `matrixUserID`). Extract mechanically from `agt get workers --team "$TEAM_CR" -o json` output. Never strip, guess, or transform.
   - ❌ Do NOT use CLI `.name` field directly (may include deployment prefixes)
   - ❌ Do NOT strip prefixes yourself
   - Example: `@worker-issue-resolver:domain` → `worker-issue-resolver`

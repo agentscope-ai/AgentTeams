@@ -5,7 +5,7 @@
 ## Setup Script
 
 ```bash
-bash /opt/hiclaw/agent/skills/mcp-server-management/scripts/setup-mcp-proxy.sh \
+bash /opt/agentteams/agent/skills/mcp-server-management/scripts/setup-mcp-proxy.sh \
   <server-name> <url> <transport> [--header "Key: Value"] ...
 ```
 

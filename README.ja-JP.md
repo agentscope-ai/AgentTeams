@@ -6,11 +6,11 @@
 [English](./README.md) | [中文](./README.zh-CN.md) | [日本語](./README.ja-JP.md)
 
 <p align="center">
-  <a href="https://deepwiki.com/higress-group/hiclaw"><img src="https://img.shields.io/badge/DeepWiki-Ask_AI-navy.svg?logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACwAAAAyCAYAAAAnWDnqAAAAAXNSR0IArs4c6QAAA05JREFUaEPtmUtyEzEQhtWTQyQLHNak2AB7ZnyXZMEjXMGeK/AIi+QuHrMnbChYY7MIh8g01fJoopFb0uhhEqqcbWTp06/uv1saEDv4O3n3dV60RfP947Mm9/SQc0ICFQgzfc4CYZoTPAswgSJCCUJUnAAoRHOAUOcATwbmVLWdGoH//PB8mnKqScAhsD0kYP3j/Yt5LPQe2KvcXmGvRHcDnpxfL2zOYJ1mFwrryWTz0advv1Ut4CJgf5uhDuDj5eUcAUoahrdY/56ebRWeraTjMt/00Sh3UDtjgHtQNHwcRGOC98BJEAEymycmYcWwOprTgcB6VZ5JK5TAJ+fXGLBm3FDAmn6oPPjR4rKCAoJCal2eAiQp2x0vxTPB3ALO2CRkwmDy5WohzBDwSEFKRwPbknEggCPB/imwrycgxX2NzoMCHhPkDwqYMr9tRcP5qNrMZHkVnOjRMWwLCcr8ohBVb1OMjxLwGCvjTikrsBOiA6fNyCrm8V1rP93iVPpwaE+gO0SsWmPiXB+jikdf6SizrT5qKasx5j8ABbHpFTx+vFXp9EnYQmLx02h1QTTrl6eDqxLnGjporxl3NL3agEvXdT0WmEost648sQOYAeJS9Q7bfUVoMGnjo4AZdUMQku50McDcMWcBPvr0SzbTAFDfvJqwLzgxwATnCgnp4wDl6Aa+Ax283gghmj+vj7feE2KBBRMW3FzOpLOADl0Isb5587h/U4gGvkt5v60Z1VLG8BhYjbzRwyQZemwAd6cCR5/XFWLYZRIMpX39AR0tjaGGiGzLVyhse5C9RKC6ai42ppWPKiBagOvaYk8lO7DajerabOZP46Lby5wKjw1HCRx7p9sVMOWGzb/vA1hwiWc6jm3MvQDTogQkiqIhJV0nBQBTU+3okKCFDy9WwferkHjtxib7t3xIUQtHxnIwtx4mpg26/HfwVNVDb4oI9RHmx5WGelRVlrtiw43zboCLaxv46AZeB3IlTkwouebTr1y2NjSpHz68WNFjHvupy3q8TFn3Hos2IAk4Ju5dCo8B3wP7VPr/FGaKiG+T+v+TQqIrOqMTL1VdWV1DdmcbO8KXBz6esmYWYKPwDL5b5FA1a0hwapHiom0r/cKaoqr+27/XcrS5UwSMbQAAAABJRU5ErkJggg==" alt="DeepWiki"></a>
+  <a href="https://deepwiki.com/agentscope-ai/AgentTeams"><img src="https://img.shields.io/badge/DeepWiki-Ask_AI-navy.svg?logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACwAAAAyCAYAAAAnWDnqAAAAAXNSR0IArs4c6QAAA05JREFUaEPtmUtyEzEQhtWTQyQLHNak2AB7ZnyXZMEjXMGeK/AIi+QuHrMnbChYY7MIh8g01fJoopFb0uhhEqqcbWTp06/uv1saEDv4O3n3dV60RfP947Mm9/SQc0ICFQgzfc4CYZoTPAswgSJCCUJUnAAoRHOAUOcATwbmVLWdGoH//PB8mnKqScAhsD0kYP3j/Yt5LPQe2KvcXmGvRHcDnpxfL2zOYJ1mFwrryWTz0advv1Ut4CJgf5uhDuDj5eUcAUoahrdY/56ebRWeraTjMt/00Sh3UDtjgHtQNHwcRGOC98BJEAEymycmYcWwOprTgcB6VZ5JK5TAJ+fXGLBm3FDAmn6oPPjR4rKCAoJCal2eAiQp2x0vxTPB3ALO2CRkwmDy5WohzBDwSEFKRwPbknEggCPB/imwrycgxX2NzoMCHhPkDwqYMr9tRcP5qNrMZHkVnOjRMWwLCcr8ohBVb1OMjxLwGCvjTikrsBOiA6fNyCrm8V1rP93iVPpwaE+gO0SsWmPiXB+jikdf6SizrT5qKasx5j8ABbHpFTx+vFXp9EnYQmLx02h1QTTrl6eDqxLnGjporxl3NL3agEvXdT0WmEost648sQOYAeJS9Q7bfUVoMGnjo4AZdUMQku50McDcMWcBPvr0SzbTAFDfvJqwLzgxwATnCgnp4wDl6Aa+Ax283gghmj+vj7feE2KBBRMW3FzOpLOADl0Isb5587h/U4gGvkt5v60Z1VLG8BhYjbzRwyQZemwAd6cCR5/XFWLYZRIMpX39AR0tjaGGiGzLVyhse5C9RKC6ai42ppWPKiBagOvaYk8lO7DajerabOZP46Lby5wKjw1HCRx7p9sVMOWGzb/vA1hwiWc6jm3MvQDTogQkiqIhJV0nBQBTU+3okKCFDy9WwferkHjtxib7t3xIUQtHxnIwtx4mpg26/HfwVNVDb4oI9RHmx5WGelRVlrtiw43zboCLaxv46AZeB3IlTkwouebTr1y2NjSpHz68WNFjHvupy3q8TFn3Hos2IAk4Ju5dCo8B3wP7VPr/FGaKiG+T+v+TQqIrOqMTL1VdWV1DdmcbO8KXBz6esmYWYKPwDL5b5FA1a0hwapHiom0r/cKaoqr+27/XcrS5UwSMbQAAAABJRU5ErkJggg==" alt="DeepWiki"></a>
   <a href="https://discord.com/invite/NVjNA4BAVw"><img src="https://img.shields.io/badge/Discord-Join_Us-blueviolet.svg?logo=discord" alt="Discord"></a>
 </p>
 
-**AgentTeams（旧称 HiClaw）は、透明性の高い Human-in-the-Loop のタスク連携を Matrix ルームで実現する、オープンソースの協調型マルチエージェント OS です。**
+**AgentTeams は、透明性の高い Human-in-the-Loop のタスク連携を Matrix ルームで実現する、オープンソースの協調型マルチエージェント OS です。**
 
 **Manager-Workers アーキテクチャ**により、Manager Agent を通じて複数の Worker Agent を連携させ、複雑なタスクを完了できます。すべての会話は Matrix ルームで可視化され、いつでも介入できます。
 
@@ -30,14 +30,14 @@
 
 ## ニュース
 
-- **2026-05-27**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.1.2) — AgentTeams v1.1.2：インストーラのデフォルト Worker ランタイムを QwenPaw に変更し keep-all アップグレードフローをサポート、Team に人間コーディネーターを追加し Team Leader の協調ツールを刷新、Nacos リモートスキル対応と `sts-hiclaw` / `ai-registry` STS 認証、Worker の CR 名と Runtime 名の分離、コントローラーの reconcile メトリクスと正常終了を追加。
+- **2026-05-27**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.1.2) — AgentTeams v1.1.2：インストーラのデフォルト Worker ランタイムを QwenPaw に変更し keep-all アップグレードフローをサポート、Team に人間コーディネーターを追加し Team Leader の協調ツールを刷新、Nacos リモートスキル対応と `sts-agentteams` / `ai-registry` STS 認証、Worker の CR 名と Runtime 名の分離、コントローラーの reconcile メトリクスと正常終了を追加。
 - **2026-05-07**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.1.1) | [Changelog](changelog/v1.1.1.md) — AgentTeams v1.1.1：Worker/Manager/Team CRD と Team Leader 上の宣言的 MCP（破壊的変更）、CR の `spec.env` カスタム環境変数、Token Plan・Qwen Cloud international・`qwen3.6-plus` モデル、コントローラー RBAC の名前空間スコープ化、Worker パッケージの `SOUL.md` 任意化。
-- **2026-04-24**: [English](blog/hiclaw-1.1.0-release.md) | [中文](blog/zh-cn/hiclaw-1.1.0-release.md) — AgentTeams v1.1.0：Kubernetes ネイティブコントロールプレーン、Hermes 自律コーディング Agent ランタイム、1.7 GB イメージ縮小、hiclaw CLI がシェルスクリプトに代わる。
-- **2026-04-14**: [English](blog/hiclaw-k8s-native-multi-agent-collaboration.md) | [中文](blog/zh-cn/hiclaw-k8s-native-multi-agent-collaboration.zh-CN.md) — Kubernetes ネイティブなマルチ Agent 協調オーケストレーションとしての AgentTeams の解説。
+- **2026-04-24**: [English](blog/agentteams-1.1.0-release.md) | [中文](blog/zh-cn/agentteams-1.1.0-release.md) — AgentTeams v1.1.0：Kubernetes ネイティブコントロールプレーン、Hermes 自律コーディング Agent ランタイム、1.7 GB イメージ縮小、agt CLI がシェルスクリプトに代わる。
+- **2026-04-14**: [English](blog/agentteams-k8s-native-multi-agent-collaboration.md) | [中文](blog/zh-cn/agentteams-k8s-native-multi-agent-collaboration.zh-CN.md) — Kubernetes ネイティブなマルチ Agent 協調オーケストレーションとしての AgentTeams の解説。
 - **2026-04-03**: [English](docs/declarative-resource-management.md) | [中文](docs/zh-cn/declarative-resource-management.md) — AgentTeams 1.0.9：宣言型リソース管理、Worker テンプレートマーケット、Manager QwenPaw、Nacos Skills 登録センターなど。
-- **2026-03-14**: [English](blog/hiclaw-1.0.6-release.md) | [中文](blog/zh-cn/hiclaw-1.0.6-release.md) — AgentTeams 1.0.6：エンタープライズ MCP Server 管理、認証情報ゼロ露出。
-- **2026-03-10**: [English](blog/hiclaw-1.0.4-release.md) | [中文](blog/zh-cn/hiclaw-1.0.4-release.md) — AgentTeams 1.0.4：QwenPaw（旧CoPaw）Worker、メモリ約 80% 削減。
-- **2026-03-04**: [English](blog/hiclaw-announcement.md) | [中文](blog/zh-cn/hiclaw-announcement.md) — AgentTeams（当時の名称は HiClaw）オープンソース化。
+- **2026-03-14**: [English](blog/agentteams-1.0.6-release.md) | [中文](blog/zh-cn/agentteams-1.0.6-release.md) — AgentTeams 1.0.6：エンタープライズ MCP Server 管理、認証情報ゼロ露出。
+- **2026-03-10**: [English](blog/agentteams-1.0.4-release.md) | [中文](blog/zh-cn/agentteams-1.0.4-release.md) — AgentTeams 1.0.4：QwenPaw（旧CoPaw）Worker、メモリ約 80% 削減。
+- **2026-03-04**: [English](blog/agentteams-announcement.md) | [中文](blog/zh-cn/agentteams-announcement.md) — AgentTeams は旧名称でオープンソース化。
 
 ## AgentTeams を選ぶ理由
 
@@ -63,12 +63,12 @@
 
 **macOS / Linux:**
 ```bash
-bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
+bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 **Windows（PowerShell 7+ 推奨）:**
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://higress.ai/hiclaw/install.ps1')
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')
 ```
 
 インストーラーが以下の手順をガイドします：
@@ -89,22 +89,22 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; 
 
 ```bash
 # 最新版にアップグレード（データはすべて保持）
-bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
+bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 
 # 特定バージョンにアップグレード
-AGENTTEAMS_VERSION=v1.0.5 bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
+AGENTTEAMS_VERSION=v1.0.5 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 ## アンインストール
 
 **macOS / Linux:**
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/higress-group/hiclaw/main/install/hiclaw-install.sh) uninstall
+bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh) uninstall
 ```
 
 **Windows (PowerShell):**
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString('https://raw.githubusercontent.com/higress-group/hiclaw/main/install/hiclaw-install.ps1'); & ([scriptblock]::Create($s)) uninstall
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1'); & ([scriptblock]::Create($s)) uninstall
 ```
 
 すべての AgentTeams コンテナ（Manager、Worker、docker-proxy）、Docker ボリューム、ネットワーク、env ファイル、ワークスペースディレクトリ、インストールログが削除されます。
@@ -125,8 +125,8 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; 
 helm repo add higress.io https://higress.io/helm-charts
 helm repo update
 
-helm install hiclaw higress.io/hiclaw \
-  -n hiclaw-system --create-namespace \
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace \
   --render-subchart-notes \
   --set credentials.llmApiKey=<your-api-key> \
   --set credentials.adminPassword=<your-admin-password> \
@@ -136,8 +136,8 @@ helm install hiclaw higress.io/hiclaw \
 OpenAI 互換 API を提供する他のプロバイダーを使用する場合は、`llmBaseUrl` も設定してください：
 
 ```bash
-helm install hiclaw higress.io/hiclaw \
-  -n hiclaw-system --create-namespace \
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace \
   --render-subchart-notes \
   --set credentials.llmApiKey=<your-api-key> \
   --set credentials.llmBaseUrl=https://your-provider.example.com/v1 \
@@ -150,8 +150,8 @@ helm install hiclaw higress.io/hiclaw \
 <summary>Qwen（通義千問）を使用する場合</summary>
 
 ```bash
-helm install hiclaw higress.io/hiclaw \
-  -n hiclaw-system --create-namespace \
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace \
   --render-subchart-notes \
   --set credentials.llmApiKey=<your-qwen-api-key> \
   --set credentials.llmProvider=qwen \
@@ -177,8 +177,8 @@ helm install hiclaw higress.io/hiclaw \
 <summary>代替ランタイムの使用（QwenPaw Manager + Hermes Workers）</summary>
 
 ```bash
-helm install hiclaw higress.io/hiclaw \
-  -n hiclaw-system --create-namespace --devel \
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace --devel \
   --set manager.runtime=copaw \
   --set worker.defaultRuntime=hermes \
   --set credentials.llmApiKey=<your-api-key> \
@@ -188,7 +188,7 @@ helm install hiclaw higress.io/hiclaw \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-各コンポーネントのイメージはランタイムに基づいて自動的に選択されます（Manager: `agentteams-manager` / `agentteams-manager-copaw`、Worker: `agentteams-worker` / `agentteams-copaw-worker` / `agentteams-hermes-worker`）。
+各コンポーネントのイメージはランタイムに基づいて自動的に選択されます（Manager: `agentteams-manager` / `agentteams-manager-qwenpaw`、Worker: `agentteams-worker` / `agentteams-copaw-worker` / `agentteams-hermes-worker`）。
 
 </details>
 
@@ -204,8 +204,8 @@ helm install hiclaw higress.io/hiclaw \
 
 ```bash
 # 例: 北米リージョンのレジストリを使用してデプロイ
-helm install hiclaw higress.io/hiclaw \
-  -n hiclaw-system --create-namespace \
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace \
   --render-subchart-notes \
   --set global.imageRegistry=higress-registry.us-west-1.cr.aliyuncs.com/higress \
   --set credentials.llmApiKey=<your-api-key> \
@@ -213,12 +213,12 @@ helm install hiclaw higress.io/hiclaw \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-設定可能な全パラメータ（ゲートウェイ／ストレージの provider、イメージタグ、リソース、永続化など）は [`helm/hiclaw/values.yaml`](helm/hiclaw/values.yaml) を参照してください。
+設定可能な全パラメータ（ゲートウェイ／ストレージの provider、イメージタグ、リソース、永続化など）は [`helm/agentteams/values.yaml`](helm/agentteams/values.yaml) を参照してください。
 
 **アクセス**
 
 ```bash
-kubectl port-forward -n hiclaw-system svc/higress-gateway 18080:80
+kubectl port-forward -n agentteams-system svc/higress-gateway 18080:80
 ```
 
 ブラウザで http://localhost:18080 を開き Element Web にログインしてください。本番クラスタでは Ingress / LoadBalancer / DNS を `svc/higress-gateway` に向け、それに合わせて `gateway.publicURL` を設定してください。
@@ -227,14 +227,14 @@ kubectl port-forward -n hiclaw-system svc/higress-gateway 18080:80
 
 ```bash
 helm repo update
-helm upgrade hiclaw higress.io/hiclaw -n hiclaw-system --reuse-values
+helm upgrade agentteams higress.io/agentteams -n agentteams-system --reuse-values
 ```
 
 **アンインストール**
 
 ```bash
-helm uninstall hiclaw -n hiclaw-system
-kubectl delete namespace hiclaw-system
+helm uninstall agentteams -n agentteams-system
+kubectl delete namespace agentteams-system
 ```
 
 Kubernetes ネイティブなアーキテクチャ（CRD、Controller、宣言的な `Worker` / `Team` / `Human` リソース）の詳細は [docs/k8s-native-agent-orch.md](docs/k8s-native-agent-orch.md) を参照してください。
@@ -301,7 +301,7 @@ AgentTeams は 3 つの Worker ランタイムをサポートし、**同じ IM �
 
 ```bash
 # 任意の Worker のランタイムをその場で切り替え
-hiclaw update worker --runtime hermes
+agt update worker --runtime hermes
 ```
 
 ## アーキテクチャ
@@ -347,8 +347,8 @@ Worker Alice    Worker Bob              Worker Charlie
 
 ### ✅ リリース済み
 
-- ~~**QwenPaw（旧CoPaw）** — 軽量 Agent ランタイム~~ [1.0.4 でリリース](blog/hiclaw-1.0.4-release.md): メモリ使用量約 150MB（OpenClaw の約 500MB に対して）、さらにブラウザ自動操作用のローカルホストモードに対応。
-- ~~**ユニバーサル MCP サービスサポート** — MCP サーバー統合~~ [1.0.6 でリリース](blog/hiclaw-1.0.6-release.md): 任意の MCP サーバーをゲートウェイ経由で安全に Worker に公開可能。Worker は Higress 発行のトークンのみを使用し、実際の認証情報はゲートウェイの外に出ません。
+- ~~**QwenPaw（旧CoPaw）** — 軽量 Agent ランタイム~~ [1.0.4 でリリース](blog/agentteams-1.0.4-release.md): メモリ使用量約 150MB（OpenClaw の約 500MB に対して）、さらにブラウザ自動操作用のローカルホストモードに対応。
+- ~~**ユニバーサル MCP サービスサポート** — MCP サーバー統合~~ [1.0.6 でリリース](blog/agentteams-1.0.6-release.md): 任意の MCP サーバーをゲートウェイ経由で安全に Worker に公開可能。Worker は Higress 発行のトークンのみを使用し、実際の認証情報はゲートウェイの外に出ません。
 
 ### 進行中
 
@@ -380,7 +380,7 @@ Agent チームを観察・制御するための組み込みダッシュボー�
 ## トラブルシューティング
 
 ```bash
-docker exec -it agentteams-manager cat /var/log/hiclaw/manager-agent.log
+docker exec -it agentteams-manager cat /var/log/agentteams/manager-agent.log
 ```
 
 よくある問題については [docs/zh-cn/faq.md](docs/zh-cn/faq.md) を参照してください。

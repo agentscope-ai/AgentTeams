@@ -24,8 +24,11 @@ Worker 由 **CR** 描述。除在 Matrix 里让 Manager 创建外，你还可以
 | 运行时 | 主要工作目录 | 说明 |
 |--------|----------------|------|
 | **openclaw** | `/root/agentteams-fs/agents/<worker-name>/`（`HOME` 指向此处） | `openclaw.json`、`SOUL.md`、`AGENTS.md`、skills、`.openclaw/` 等。共享数据：`/root/agentteams-fs/shared/`。 |
-| **copaw** | `/root/.agentteams-worker/<worker-name>/`（QwenPaw 配置在 `.copaw/`） | 兼容性符号链接 **`/root/agentteams-fs`** 指向该 Worker 树，便于沿用 OpenClaw 风格路径的脚本。 |
+| **copaw** | `/root/.agentteams-worker/<worker-name>/`（运行时配置在 `.copaw/`） | 旧版兼容路径；符号链接 **`/root/agentteams-fs`** 指向该 Worker 树，便于沿用 OpenClaw 风格路径的脚本。 |
+| **qwenpaw** | `/root/agentteams-fs/agents/<worker-name>/`（QwenPaw 配置在 `.qwenpaw/`） | QwenPaw 2.x 路径；从 `copaw` 切换时会在恢复持久化数据后，将旧 `.copaw/` 状态迁移到 `.qwenpaw/`。共享数据：`/root/agentteams-fs/shared/`。 |
 | **hermes** | `/root/agentteams-fs/agents/<worker-name>/`（`HOME` 即工作区，与 OpenClaw 相同的镜像根） | Hermes 状态在目录内 **`.hermes/`**（如 `.hermes/config.yaml`、`state.db`）。 |
+
+Controller 中已包含 OpenHuman 后端，但当前发布的 Worker CRD enum 尚不接受显式的 `spec.runtime: openhuman`。在业务代码单独修正该契约前，不应按普通 Worker CR 流程创建 OpenHuman Worker。
 
 ## 安装
 
@@ -219,12 +222,15 @@ Manager 自动管理 Worker 容器的生命周期：
 
 ### 启动流程
 
-1. 配置 `mc` 的 MinIO 别名
-2. 从 MinIO 拉取 Worker 配置（`agents/<name>/`）
-3. 复制技能模板
-4. 启动双向 mc mirror 同步
-5. 配置 mcporter 的 MCP 端点
-6. 启动 OpenClaw
+不同 runtime 使用不同入口脚本，但都会完成以下工作：
+
+1. 获取对象存储凭据，并恢复 `agents/<name>/` 下的配置与持久化状态。
+2. 准备 runtime 对应的工作目录、Agent 提示文件和 skills。
+3. 将模型、Matrix channel、MCP Server 与团队上下文转换成 runtime 可读取的配置。
+4. 启动文件同步或运行时配置更新循环。
+5. 启动所选的 OpenClaw、CoPaw、QwenPaw 或 Hermes runtime。
+
+具体目录见上方[按 `spec.runtime` 区分的目录布局](#按-specruntime-区分的目录布局)。排查问题时应使用对应 runtime 的日志和配置路径，不要把 OpenClaw 的 `openclaw.json` 消费方式直接套用到所有 Worker。
 
 ### 文件同步
 

@@ -78,7 +78,8 @@ Worker resources support the following runtimes. Available images depend on the 
 - **CoPaw**
 - **QwenPaw**
 - **Hermes**
-- **OpenHuman**
+
+The Controller and Helm values already contain an OpenHuman backend and image configuration, but the shipped Worker CRD enum does not yet accept an explicit `spec.runtime: openhuman`. Until a separate business-code change aligns that contract, do not treat OpenHuman as a directly declarable Worker runtime.
 
 The runtime selects the agent framework and image, while AgentTeams manages the Worker's identity, Matrix rooms, and persistent data. Switching runtimes normally recreates the Worker environment and should not be done while the Worker is executing a task.
 

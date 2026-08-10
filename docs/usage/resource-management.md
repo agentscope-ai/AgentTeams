@@ -89,8 +89,8 @@ spec:
 |-------|------|----------|---------|-------------|
 | `metadata.name` | string | Yes | — | Worker name, globally unique |
 | `spec.model` | string | Yes | — | LLM model ID, e.g. `claude-sonnet-4-6`, `qwen3.5-plus` |
-| `spec.runtime` | string | No | `openclaw` | Agent runtime: `openclaw`, `qwenpaw`, `copaw` (legacy), `hermes`, or `openhuman` |
-| `spec.image` | string | No | — | Custom Docker image; if empty, the controller uses `AGENTTEAMS_WORKER_IMAGE` / `AGENTTEAMS_COPAW_WORKER_IMAGE` / `AGENTTEAMS_HERMES_WORKER_IMAGE` (defaults `agentteams/agentteams-worker:latest` / `agentteams/agentteams-copaw-worker:latest` / `agentteams/agentteams-hermes-worker:latest`) |
+| `spec.runtime` | string | No | `openclaw` | The current Worker CRD accepts `openclaw`, `qwenpaw`, `copaw` (legacy), or `hermes`. |
+| `spec.image` | string | No | — | Custom image. When empty, the controller selects `AGENTTEAMS_WORKER_IMAGE`, `AGENTTEAMS_COPAW_WORKER_IMAGE`, `AGENTTEAMS_QWENPAW_WORKER_IMAGE`, or `AGENTTEAMS_HERMES_WORKER_IMAGE` by runtime. The current chart has no `worker.defaultImage.qwenpaw`, so set this field explicitly for a QwenPaw Worker on Kubernetes. |
 | `spec.identity` | string | No | — | Worker public identity (OpenClaw: generates IDENTITY.md; QwenPaw: merged into SOUL.md per controller) |
 | `spec.soul` | string | No | — | Worker personality and values (generates SOUL.md) |
 | `spec.agents` | string | No | — | Agent behavior rules, used to generate AGENTS.md |
@@ -103,6 +103,8 @@ spec:
 | `spec.resources` | object | No | install/backend defaults | CPU/memory requests and limits for this Worker Pod. Shape: `requests.cpu`, `requests.memory`, `limits.cpu`, `limits.memory` using Kubernetes quantity strings |
 
 Changing `spec.resources` updates the Worker spec and recreates the managed container/Pod. Avoid resource changes while a Worker is actively processing a task.
+
+The Controller already contains an OpenHuman backend and image configuration, but the shipped Worker CRD enum does not accept `openhuman`. Until a separate business-code change aligns that contract, do not set `spec.runtime: openhuman` in Worker YAML.
 
 ### identity / soul / agents vs package
 
@@ -585,7 +587,7 @@ Regardless of URI format, the extracted package follows a unified structure:
 }
 ```
 
-`worker.runtime` (`openclaw`, `qwenpaw`, `copaw` (legacy), `hermes`, or `openhuman`) is honored by `agt apply worker --zip`
+`worker.runtime` (`openclaw`, `qwenpaw`, `copaw` (legacy), or `hermes`) is honored by `agt apply worker --zip`
 and overridden by an explicit `--runtime` flag.
 
 ## Operations

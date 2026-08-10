@@ -24,8 +24,11 @@ Full field reference: [Declarative Resource Management](resource-management.md).
 | Runtime | Primary workspace | Notes |
 |---------|-------------------|--------|
 | **openclaw** | `/root/agentteams-fs/agents/<worker-name>/` (`HOME` points here) | `openclaw.json`, `SOUL.md`, `AGENTS.md`, skills, `.openclaw/` live under this tree. Shared data: `/root/agentteams-fs/shared/`. |
-| **copaw** | `/root/.agentteams-worker/<worker-name>/` (QwenPaw config in `.copaw/`) | A symlink **`/root/agentteams-fs`** → the per-worker tree keeps scripts that assume OpenClaw-style paths working. |
+| **copaw** | `/root/.agentteams-worker/<worker-name>/` (runtime config in `.copaw/`) | Legacy compatibility path. A symlink **`/root/agentteams-fs`** → the per-worker tree keeps scripts that assume OpenClaw-style paths working. |
+| **qwenpaw** | `/root/agentteams-fs/agents/<worker-name>/` (QwenPaw config in `.qwenpaw/`) | QwenPaw 2.x path. When switching from `copaw`, persisted state is restored before the legacy `.copaw/` state is migrated to `.qwenpaw/`. Shared data: `/root/agentteams-fs/shared/`. |
 | **hermes** | `/root/agentteams-fs/agents/<worker-name>/` (`HOME` equals workspace, same mirror root as OpenClaw) | Hermes policy/state under **`.hermes/`** inside that directory (e.g. `.hermes/config.yaml`, `state.db`). |
+
+The Controller contains an OpenHuman backend, but the shipped Worker CRD enum does not currently accept an explicit `spec.runtime: openhuman`. Until that contract is fixed in a separate business-code change, do not create an OpenHuman Worker through the normal Worker CR flow.
 
 ## Installation
 
@@ -219,12 +222,15 @@ You can also manually control Workers by asking the Manager:
 
 ### Startup Sequence
 
-1. Configure `mc` alias for MinIO access
-2. Pull Worker config from MinIO (`agents/<name>/`)
-3. Copy skill templates
-4. Start bidirectional mc mirror sync
-5. Configure mcporter with MCP endpoints
-6. Launch OpenClaw
+Each runtime has its own entrypoint, but they all perform the following work:
+
+1. Obtain object-storage credentials and restore configuration and persistent state from `agents/<name>/`.
+2. Prepare the runtime-specific workspace, agent prompt files, and skills.
+3. Translate model, Matrix channel, MCP Server, and Team context into the runtime's native configuration.
+4. Start file synchronization or the runtime configuration update loop.
+5. Launch the selected OpenClaw, CoPaw, QwenPaw, or Hermes runtime.
+
+See [Filesystem layout by `spec.runtime`](#filesystem-layout-by-specruntime) above for the concrete paths. When troubleshooting, use the logs and configuration paths for the selected runtime instead of applying OpenClaw's `openclaw.json` consumption model to every Worker.
 
 ### File Sync
 

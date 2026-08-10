@@ -97,7 +97,7 @@ Open http://127.0.0.1:18088 in your browser and log in to Element Web. The Manag
 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 
 # Upgrade to specific version
-AGENTTEAMS_VERSION=v1.0.5 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+AGENTTEAMS_VERSION=v1.2.2 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 ## Uninstall
@@ -184,7 +184,7 @@ helm install agentteams higress.io/agentteams \
 | `preflight.llm.activeDeadlineSeconds` | no | Kubernetes Job active deadline for the preflight hook. Defaults to `120` |
 | `preflight.llm.resources` | no | Optional Kubernetes resource requests/limits for the preflight hook container |
 | `manager.runtime` | no | Manager runtime: OpenClaw uses `openclaw` (default); CoPaw uses `qwenpaw` in the current chart, with `copaw` retained as a compatibility alias. Managers do not support Hermes |
-| `worker.defaultRuntime` | no | Default Worker runtime: `openclaw` (default), `copaw`, `hermes`, or `openhuman`; a QwenPaw Worker requires an explicit image |
+| `worker.defaultRuntime` | no | The chart provides default image values for `openclaw` (default), `copaw`, `hermes`, and `openhuman`, but the current CRD rejects an explicit `spec.runtime: openhuman`; set `spec.image` explicitly for a QwenPaw Worker |
 
 Helm installs run an LLM preflight hook by default. The hook sends a minimal OpenAI-compatible `/chat/completions` request using `credentials.llmApiKey`, `credentials.llmBaseUrl`, and `credentials.defaultModel`; invalid keys, unreachable base URLs, unsupported models, quota errors, and provider outages fail the install before the controller starts. To bypass this check for restricted or offline clusters:
 
@@ -365,13 +365,13 @@ No hidden agent-to-agent calls. Everything is visible and intervenable.
 
 ## Multi-Runtime Collaboration
 
-AgentTeams supports three Worker runtimes that can **coexist in the same IM room**, collaborating on tasks together:
+AgentTeams currently provides three main Worker runtime families that can **coexist in the same IM room**, collaborating on tasks together:
 
 - **OpenClaw** (Node.js) — General-purpose agent with rich skills ecosystem, ideal for task orchestration and tool calling
 - **QwenPaw** (Python) — Lightweight runtime, suited for browser automation and quick tasks
 - **Hermes** ([hermes-agent](https://github.com/NousResearch/hermes-agent)) — Autonomous coding agent with terminal sandbox, self-improving skills, and persistent memory
 
-Each runtime excels at different tasks. A common pattern: use deterministic agents (OpenClaw/QwenPaw) as Leaders to decompose and assign work, and Hermes Workers for autonomous code execution. All runtimes communicate via Matrix `m.mentions` in the same room — fully visible, fully intervenable.
+The `copaw` value remains available for compatibility with existing CoPaw Workers; the current CRD accepts both `copaw` and `qwenpaw`. Each runtime excels at different tasks. A common pattern is to use deterministic agents (OpenClaw/QwenPaw) as Leaders to decompose and assign work, and Hermes Workers for autonomous code execution. All runtimes communicate through Matrix rooms—fully visible and fully intervenable.
 
 ```bash
 # Switch any worker's runtime in place

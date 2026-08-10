@@ -78,7 +78,8 @@ Worker 资源支持以下运行时，实际可用镜像取决于安装方式和�
 - **CoPaw**
 - **QwenPaw**
 - **Hermes**
-- **OpenHuman**
+
+Controller 和 Helm values 中已经包含 OpenHuman 后端与镜像配置，但当前发布的 Worker CRD enum 尚不接受显式的 `spec.runtime: openhuman`。因此在业务代码另行统一该契约前，不应把 OpenHuman 当作可直接声明的 Worker runtime。
 
 运行时决定 Agent 的执行框架和镜像，但 Worker 的身份、Matrix 房间和持久化数据由 AgentTeams 管理。切换运行时通常会重建 Worker 运行环境，不应在 Worker 执行任务时操作。
 

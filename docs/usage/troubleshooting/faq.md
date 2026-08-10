@@ -57,7 +57,7 @@ explicit `AGENTTEAMS_VERSION`.
 To install a specific version, use the `AGENTTEAMS_VERSION` environment variable during installation:
 
 ```bash
-AGENTTEAMS_VERSION=v1.1.0 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+AGENTTEAMS_VERSION=v1.2.2 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 ---
@@ -71,12 +71,12 @@ Starting from v1.1.0, AgentTeams switched from a **single all-in-one container**
 | Infrastructure (Higress, Tuwunel, MinIO, Element Web) | Bundled inside `agentteams-manager` | Runs in `agentteams-controller` container (from the `agentteams-embedded` image) |
 | Manager Agent | Inside `agentteams-manager` | Separate `agentteams-manager` container (lightweight, agent only) |
 | Worker management | Imperative shell scripts and local JSON state | Declarative CRDs via `agt` CLI (`agt create worker`, `agt apply`) |
-| Worker runtimes | OpenClaw only | OpenClaw, **QwenPaw** (Python; formerly **CoPaw**), or Hermes |
+| Worker runtimes | OpenClaw only | OpenClaw, the CoPaw compatibility path, **QwenPaw**, or Hermes |
 
 **Key benefits:**
 - The Manager image is ~1.7 GB smaller (no longer ships Higress binaries)
 - Workers are managed declaratively — define YAML, apply, done
-- Three worker runtime choices: OpenClaw (Node.js), QwenPaw (Python; formerly **CoPaw**), Hermes
+- The current Worker CRD accepts OpenClaw, the CoPaw compatibility path, QwenPaw, and Hermes
 - Team support with Team Leader DAG orchestration
 - Worker Template Marketplace for one-click Worker provisioning
 
@@ -649,13 +649,16 @@ Higress select the matching provider route.
 
 ## How to switch a Worker's runtime
 
-AgentTeams v1.1.0+ supports three Worker runtimes:
+The current Worker CR supports the following runtime values:
 
 | Runtime | Language | Best For |
 |---------|----------|----------|
 | OpenClaw | Node.js | General-purpose, mature ecosystem |
-| QwenPaw | Python | Python-native workflows, data science (legacy name **CoPaw**) |
+| CoPaw | Python | Compatibility with existing `copaw` Workers and their persisted `.copaw/` state |
+| QwenPaw | Python | Current QwenPaw 2.x path, Python-native workflows, and data science |
 | Hermes | Python | Autonomous coding, development tasks |
+
+The Controller and CLI contain OpenHuman-related implementation, but the shipped Worker CRD enum does not accept `openhuman`. When creating a Worker through YAML or the Kubernetes API, use the four values in the table above.
 
 ### At creation time
 
@@ -705,8 +708,9 @@ image is `agentteams-manager-qwenpaw`.
 ## Can I connect my own agent implementation as a Worker
 
 Not by adding an arbitrary new `spec.runtime` value. The Worker CRD currently
-accepts `openclaw`, `qwenpaw`, `copaw` (legacy, auto-migrated to `qwenpaw`),
-`hermes`, or `openhuman` as runtimes.
+accepts `openclaw`, `qwenpaw`, `copaw` (legacy), or `hermes`. Although the
+Controller and CLI contain an OpenHuman path, the CRD does not currently accept
+`openhuman`, so it cannot be used directly in Worker YAML.
 
 For most custom Worker needs, package your role prompt, skills, dependencies,
 and optional Dockerfile as a Worker package, or set a custom image while keeping

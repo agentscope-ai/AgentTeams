@@ -89,8 +89,8 @@ spec:
 |------|------|------|--------|------|
 | `metadata.name` | string | 是 | — | Worker 名称，全局唯一 |
 | `spec.model` | string | 是 | — | LLM 模型 ID，如 `claude-sonnet-4-6`、`qwen3.5-plus` |
-| `spec.runtime` | string | 否 | `openclaw` | Agent 运行时：`openclaw`、`qwenpaw`、`copaw`（旧版兼容）、`hermes` 或 `openhuman` |
-| `spec.image` | string | 否 | — | 自定义镜像；留空则使用 `AGENTTEAMS_WORKER_IMAGE` / `AGENTTEAMS_COPAW_WORKER_IMAGE` / `AGENTTEAMS_HERMES_WORKER_IMAGE`（默认 `agentteams/agentteams-worker:latest` / `agentteams/agentteams-copaw-worker:latest` / `agentteams/agentteams-hermes-worker:latest`） |
+| `spec.runtime` | string | 否 | `openclaw` | 当前 Worker CRD 接受 `openclaw`、`qwenpaw`、`copaw`（旧版兼容）或 `hermes` |
+| `spec.image` | string | 否 | — | 自定义镜像；留空时 controller 按 runtime 使用 `AGENTTEAMS_WORKER_IMAGE`、`AGENTTEAMS_COPAW_WORKER_IMAGE`、`AGENTTEAMS_QWENPAW_WORKER_IMAGE` 或 `AGENTTEAMS_HERMES_WORKER_IMAGE`。当前 Chart 未提供 `worker.defaultImage.qwenpaw`，在 Kubernetes 中使用 `qwenpaw` 时应显式设置本字段。 |
 | `spec.identity` | string | 否 | — | Worker 公开身份（OpenClaw：生成 IDENTITY.md；QwenPaw：按实现合并入 SOUL.md） |
 | `spec.soul` | string | 否 | — | Worker 人格与价值观设定，用于生成 SOUL.md |
 | `spec.agents` | string | 否 | — | Agent 行为规则，用于生成 AGENTS.md |
@@ -103,6 +103,8 @@ spec:
 | `spec.resources` | object | 否 | 安装或后端默认值 | Worker Pod 的 CPU/内存 request 和 limit，字段为 `requests.cpu`、`requests.memory`、`limits.cpu`、`limits.memory`，使用 Kubernetes quantity 字符串。 |
 
 修改 `spec.resources` 会更新 Worker 规格并重建受管容器或 Pod。不要在 Worker 正在处理任务时修改资源配置。
+
+Controller 内部已经包含 OpenHuman 后端和镜像配置，但当前发布的 Worker CRD enum 不接受 `openhuman`。在业务代码另行统一该契约前，不要在 Worker YAML 中设置 `spec.runtime: openhuman`。
 
 ### identity / soul / agents 与 package 的关系
 
@@ -584,7 +586,7 @@ Nacos URI 格式：`nacos://[user:pass@]host:port/{namespace}/{agentspec-name}[/
 }
 ```
 
-`worker.runtime`（`openclaw`、`qwenpaw`、`copaw`（旧版兼容）、`hermes` 或 `openhuman`）会被 `agt apply worker --zip` 读取，
+`worker.runtime`（`openclaw`、`qwenpaw`、`copaw`（旧版兼容）或 `hermes`）会被 `agt apply worker --zip` 读取，
 显式 `--runtime` 优先级更高。
 
 ## 操作方式

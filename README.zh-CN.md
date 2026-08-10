@@ -122,7 +122,7 @@ bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main
 若要升级到指定版本，请使用以下命令：
 
 ```bash
-AGENTTEAMS_VERSION=v1.0.5 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+AGENTTEAMS_VERSION=v1.2.2 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 
@@ -210,7 +210,7 @@ helm install agentteams higress.io/agentteams \
 | `preflight.llm.activeDeadlineSeconds` | 可选 | 探测 Job 的最长运行时间；默认 `120` 秒 |
 | `preflight.llm.resources` | 可选 | 探测容器的 Kubernetes requests/limits |
 | `manager.runtime` | 可选 | Manager Agent 运行时：OpenClaw 使用 `openclaw`（默认）；CoPaw 在当前 Chart 中使用 `qwenpaw`，`copaw` 为兼容别名。Manager 不支持 Hermes |
-| `worker.defaultRuntime` | 可选 | Worker 默认运行时：`openclaw`（默认）、`copaw`、`hermes` 或 `openhuman`；QwenPaw Worker 需显式配置镜像 |
+| `worker.defaultRuntime` | 可选 | Chart 提供 `openclaw`（默认）、`copaw`、`hermes` 和 `openhuman` 的默认镜像值，但当前 CRD 不接受显式的 `spec.runtime: openhuman`；QwenPaw Worker 需在 `spec.image` 中显式配置镜像 |
 
 Helm 默认在安装和升级前执行 LLM 探测，使用 `credentials.llmApiKey`、`credentials.llmBaseUrl` 和 `credentials.defaultModel` 发送一个最小的 OpenAI 兼容请求。无效密钥、无法访问的 Base URL、不支持的模型、额度错误或服务商故障会在 Controller 启动前终止安装。受限或离线集群可以临时关闭：
 
@@ -404,13 +404,13 @@ Alice：前端校验也更新了。
 
 ## 多运行时协作
 
-AgentTeams 支持三种 Worker 运行时，可以**在同一个 IM 房间中共存协作**：
+AgentTeams 目前提供三类主要 Worker 运行时，可以**在同一个 IM 房间中共存协作**：
 
 - **OpenClaw**（Node.js）— 通用 Agent 运行时，拥有丰富的 Skills 生态，擅长任务编排和工具调用
 - **QwenPaw**（Python）— 轻量级运行时，适合浏览器自动化和快速任务
 - **Hermes**（[hermes-agent](https://github.com/NousResearch/hermes-agent)）— 自主编程 Agent，具备终端沙箱、自我进化的 Skill 和持久化记忆
 
-每种运行时各有擅长。推荐模式：用确定性更高的 Agent（OpenClaw/QwenPaw）做 Leader 负责任务分解和调度，用 Hermes Worker 执行自主编程任务。所有运行时通过 Matrix `m.mentions` 在同一个房间内通信——完全可见、随时可干预。
+`copaw` 仍作为已有 CoPaw Worker 的兼容 runtime 值保留；当前 CRD 同时接受 `copaw` 和 `qwenpaw`。每种运行时各有擅长。推荐模式：用确定性更高的 Agent（OpenClaw/QwenPaw）做 Leader 负责任务分解和调度，用 Hermes Worker 执行自主编程任务。所有运行时通过 Matrix 房间通信——完全可见、随时可干预。
 
 ```bash
 # 原地切换任意 Worker 的运行时

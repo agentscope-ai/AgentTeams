@@ -195,7 +195,7 @@ worker-package.zip
 }
 ```
 
-`worker.runtime` (`openclaw`, `qwenpaw`, `copaw` (legacy), `hermes`, or `openhuman`) is honored by `agt apply worker --zip`
+`worker.runtime` (`openclaw`, `qwenpaw`, `copaw` (legacy), or `hermes`) is honored by `agt apply worker --zip`
 and overridden by an explicit `--runtime` flag. When neither is set the controller
 falls back to its default runtime (`openclaw`).
 
@@ -392,7 +392,7 @@ bash agentteams-import.sh -f <resource.yaml>   # forwards to agentteams-apply.sh
 | `--model <model>` | LLM model ID | `qwen3.5-plus` |
 | `--skills <s1,s2>` | Comma-separated built-in skills | — |
 | `--mcp-servers <m1,m2>` | Comma-separated MCP servers | — |
-| `--runtime <runtime>` | Agent runtime (`openclaw`\|`qwenpaw`\|`copaw`\|`hermes`\|`openhuman`) | `qwenpaw` |
+| `--runtime <runtime>` | Agent runtime accepted by the current Worker CRD (`openclaw`\|`qwenpaw`\|`copaw`\|`hermes`) | unset; uses the install/server default |
 | `--yes` | Skip interactive confirmations (swallowed by wrapper when unsupported) | off |
 
 **YAML mode** (`-f`): delegates to `agentteams-apply.sh` (only `-f` is required; extra unsupported flags are rejected by `agt apply`).

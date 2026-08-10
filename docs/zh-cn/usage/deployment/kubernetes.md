@@ -110,9 +110,9 @@ manager:
 | `openclaw` | `worker.defaultImage.openclaw` | 默认通用 Worker runtime |
 | `copaw` | `worker.defaultImage.copaw` | Python / CoPaw Worker |
 | `hermes` | `worker.defaultImage.hermes` | Hermes Worker |
-| `openhuman` | `worker.defaultImage.openhuman` | OpenHuman Worker |
+| `openhuman` | `worker.defaultImage.openhuman` | Chart 中已有默认镜像配置，但当前 Worker CRD enum 不接受显式的 `spec.runtime: openhuman` |
 
-Controller 也认识 `qwenpaw` Worker runtime，但当前 Chart 没有为它提供独立的默认镜像配置。使用时应在 `Worker.spec.image` 中显式指定 QwenPaw Worker 镜像。
+Controller 也认识 `qwenpaw` Worker runtime，但当前 Chart 没有为它提供独立的默认镜像配置。使用时应在 `Worker.spec.image` 中显式指定 QwenPaw Worker 镜像。OpenHuman 的后端与 Helm values 已存在，但 CRD 契约尚未对齐；业务代码单独修正前，不应在 Worker YAML 中显式使用 `openhuman`。
 
 ## 4. 配置模型服务
 
@@ -293,7 +293,7 @@ helm upgrade --install agentteams ./helm/agentteams \
   --timeout 15m
 ```
 
-Chart 默认把 `appVersion` 转换成带 `v` 前缀的镜像 tag，例如 `appVersion: 1.1.1` 会解析为 `v1.1.1`。仓库中的 Chart 可能先于同版本镜像更新；如果该 tag 尚未发布，LLM preflight Job 会先因 Controller 镜像拉取失败而终止安装。上面的 `latest` 适合验证当前源码，生产环境应替换为已经确认存在的固定版本 tag，避免使用可变标签。
+Chart 默认把 `appVersion` 转换成带 `v` 前缀的镜像 tag；当前仓库中的 `appVersion: 1.1.1` 会解析为 `v1.1.1`。由于该值可能与 AgentTeams 最新发布版本不同，验证当前源码时应像上面的命令一样显式设置 `global.imageTag=latest`；生产环境则应设置为已经确认存在、且与目标部署版本匹配的固定 tag，避免依赖 Chart 的隐式默认值或使用可变标签。
 
 安装前可以先检查渲染后的实际镜像：
 

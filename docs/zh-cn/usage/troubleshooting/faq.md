@@ -56,7 +56,7 @@ docker exec agentteams-controller agt version
 安装时指定版本：
 
 ```bash
-AGENTTEAMS_VERSION=v1.1.0 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+AGENTTEAMS_VERSION=v1.2.2 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 ---
@@ -70,12 +70,12 @@ AGENTTEAMS_VERSION=v1.1.0 bash <(curl -sSL https://raw.githubusercontent.com/age
 | 基础设施（Higress、Tuwunel、MinIO、Element Web） | 打包在 `agentteams-manager` 内 | 运行在 `agentteams-controller` 容器中（使用 `agentteams-embedded` 镜像） |
 | Manager Agent | 在 `agentteams-manager` 内 | 独立的 `agentteams-manager` 容器（轻量级，仅 Agent） |
 | Worker 管理 | 命令式 Shell 脚本和本地 JSON 状态 | 声明式 CRD，通过 `agt` CLI（`agt create worker`、`agt apply`） |
-| Worker 运行时 | 仅 OpenClaw | OpenClaw、**QwenPaw**（Python；旧称 **CoPaw**）或 Hermes |
+| Worker 运行时 | 仅 OpenClaw | OpenClaw、CoPaw 兼容路径、**QwenPaw** 或 Hermes |
 
 **主要优势：**
 - Manager 镜像体积缩小约 1.7 GB（不再打包 Higress 二进制文件）
 - Worker 声明式管理 —— 定义 YAML，apply 即可
-- 三种 Worker 运行时可选：OpenClaw（Node.js）、QwenPaw（Python；旧称 **CoPaw**）、Hermes
+- 当前 Worker CRD 接受 OpenClaw、CoPaw 兼容路径、QwenPaw 和 Hermes
 - 团队支持：Team Leader DAG 编排
 - Worker 模板市场：一键创建预配置的 Worker
 
@@ -623,13 +623,16 @@ OpenRouter 示例：
 
 ## 如何切换 Worker 的运行时
 
-AgentTeams v1.1.0+ 支持三种 Worker 运行时：
+当前 Worker CR 支持以下 runtime 值：
 
 | 运行时 | 语言 | 适用场景 |
 |--------|------|----------|
 | OpenClaw | Node.js | 通用场景，成熟生态 |
-| QwenPaw | Python | Python 原生工作流、数据科学（旧称 **CoPaw**） |
+| CoPaw | Python | 兼容已有 `copaw` Worker 及其 `.copaw/` 持久化状态 |
+| QwenPaw | Python | 当前 QwenPaw 2.x 路径、Python 原生工作流和数据科学 |
 | Hermes | Python | 自主编程，开发任务 |
+
+Controller 与 CLI 中已经存在 OpenHuman 相关实现，但当前发布的 Worker CRD enum 不接受 `openhuman`。通过 YAML 或 Kubernetes API 创建 Worker 时，应以上表四个值为准。
 
 ### 创建时指定
 
@@ -677,8 +680,9 @@ Manager，这两个值都会启动基于 QwenPaw 的 Python 实现。
 ## 如何接入自己实现的 agent 作为 Worker
 
 不能直接通过新增任意 `spec.runtime` 值来接入。当前 Worker CRD 接受
-`openclaw`、`qwenpaw`、`copaw`（旧版兼容值，自动迁移到 `qwenpaw`）、`hermes`
-或 `openhuman`。
+`openclaw`、`qwenpaw`、`copaw`（旧版兼容值）或 `hermes`。虽然 Controller 与
+CLI 中已有 OpenHuman 路径，但 CRD 目前不接受 `openhuman`，不能在 Worker YAML
+中直接使用该值。
 
 大多数自定义 Worker 场景应通过 Worker package 或自定义镜像完成：把角色提示词、
 skills、依赖和可选 Dockerfile 打包，或在保留受支持 runtime 的前提下设置自定义

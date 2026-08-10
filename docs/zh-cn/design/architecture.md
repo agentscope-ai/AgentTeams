@@ -1,6 +1,6 @@
-# AgentTeams 架构说明（v1.1.0）
+# AgentTeams 架构说明
 
-AgentTeams 是一个 **Agent Teams** 平台：**Manager** 负责协调 **Workers**，也可以通过 **Team Leader** 组织可选的 **Teams**；**Human** 通过 **Matrix** 参与协作。**v1.1.0** 将系统拆分为**多容器**架构：基础设施运行在独立的 **controller stack** 中（本地模式为嵌入式单容器，Kubernetes 模式为独立工作负载），**Manager** 和 **Worker** 镜像保持轻量，只包含 Agent runtime、`agt` CLI 和 skills，不再内置 Higress、Tuwunel、MinIO 或 Element Web。
+AgentTeams 是一个 **Agent Teams** 平台：**Manager** 负责协调 **Workers**，也可以通过 **Team Leader** 组织可选的 **Teams**；**Human** 通过 **Matrix** 参与协作。自 **v1.1.0** 起，系统采用**多容器**架构：基础设施运行在独立的 **controller stack** 中（本地模式为嵌入式单容器，Kubernetes 模式为独立工作负载），**Manager** 和 **Worker** 镜像保持轻量，只包含 Agent runtime、`agt` CLI 和 skills，不再内置 Higress、Tuwunel、MinIO 或 Element Web。本文描述当前架构，不绑定某个历史版本快照。
 
 ---
 
@@ -10,7 +10,7 @@ AgentTeams 是一个 **Agent Teams** 平台：**Manager** 负责协调 **Workers
 |------|------|----------|
 | **agentteams-controller** | Go operator：协调 **Worker**、**Manager**、**Team** 和 **Human** CRD；提供 REST API；管理 worker/manager 生命周期、gateway consumer 配置，以及云厂商能力开启时的凭证流程。 | `agentteams-controller`（Kubernetes）或 **`agentteams-controller-embedded`**（本地）：Higress all-in-one + **Tuwunel** + **MinIO** + **Element Web**（nginx）+ controller binary |
 | **Manager** | 协调型 Agent：通过 Matrix 和 controller API 管理任务、workers、teams、humans、Higress routes/MCP。 | `agentteams-manager`（OpenClaw / Node）或 `agentteams-manager-qwenpaw`（QwenPaw / Python）：基于 **openclaw-base** 或 slim Python，**不包含**完整基础设施栈 |
-| **Worker** | 任务执行容器：每个 worker 一个容器，按需创建；无状态；配置和产物保存在对象存储中。 | `agentteams-worker`、`agentteams-copaw-worker` 或 `agentteams-hermes-worker` |
+| **Worker** | 任务执行容器：每个 worker 一个容器，按需创建；无状态；配置和产物保存在对象存储中。 | `agentteams-worker`、`agentteams-copaw-worker`、`agentteams-qwenpaw-worker` 或 `agentteams-hermes-worker` |
 
 **openclaw-base** 镜像提供 **Ubuntu 24.04**、**Node.js 22**、**OpenClaw** 和 **mcporter**，供 OpenClaw 形态的 Manager/Worker 镜像复用。它不再包含旧的 all-in-one Higress bundle；AI gateway 运行在**嵌入式 controller** 中，或在 Kubernetes 中作为 **Higress Helm subchart** 运行。
 
@@ -144,10 +144,11 @@ flowchart TB
 | Runtime | 技术栈 | 说明 |
 |---------|--------|------|
 | **openclaw**（默认） | Node.js / OpenClaw gateway，基于 **openclaw-base** 派生镜像 | 主 worker 路径；使用 **mcporter** 通过 Higress 调用 MCP 工具 |
-| **copaw** | Python / **QwenPaw**（`copaw-worker` patterns） | 备用 agent loop；通过 QwenPaw channels 接入 Matrix；skills 位于 `copaw-worker-agent/` |
+| **copaw** | Python / CoPaw 兼容路径 | 保留给已有部署；使用 `agentteams-copaw-worker` 及 `.copaw/` 运行时目录 |
+| **qwenpaw** | Python / **QwenPaw 2.x** | 当前 QwenPaw Worker 路径；使用 `agentteams-qwenpaw-worker` 及 `.qwenpaw/` 运行时目录 |
 | **hermes** | Python / **`hermes-worker`** | Matrix worker runtime，Hermes policy/config tree 位于 `hermes-worker-agent/` |
 
-Helm **`worker.defaultImage`** 会为不同 runtime 提供不同的默认 repository。controller 在创建 Pods 或 Docker containers 时解析最终 runtime 和镜像。
+当前发布的 Worker CRD enum 接受上表四个值。Controller 和 Helm values 中已经存在 OpenHuman 的后端及默认镜像配置，但当前 CRD 尚不接受显式的 `spec.runtime: openhuman`，因此本文不把它列为可直接声明的 Worker runtime。当前 Chart 也没有 `worker.defaultImage.qwenpaw`，在 CR 中使用 `qwenpaw` 时需要显式设置 `spec.image`。controller 在创建 Pod 或 Docker container 时解析最终 runtime 和镜像。
 
 ### Manager runtimes
 
@@ -155,10 +156,10 @@ Helm **`worker.defaultImage`** 会为不同 runtime 提供不同的默认 reposi
 
 | Mode | `AGENTTEAMS_MANAGER_RUNTIME` | 行为 |
 |------|---------------------------|------|
-| **OpenClaw** | `openclaw`（默认） | Node/OpenClaw gateway；Matrix “message tool” 风格集成 |
-| **QwenPaw** | `qwenpaw` (default) | Python QwenPaw workspace；通过 **`copaw channels send`** 接入 Matrix（`start-qwenpaw-manager.sh`） |
+| **OpenClaw** | `openclaw` | Node/OpenClaw gateway；Matrix “message tool” 风格集成；当前 Helm Chart 显式使用该默认值 |
+| **QwenPaw** | `qwenpaw` | Python QwenPaw workspace；通过 **`copaw channels send`** 接入 Matrix（`start-qwenpaw-manager.sh`）；Manager 入口与 controller 在未配置时回退到该值 |
 
-**Hermes** 在 API 和 charts 中是 **Worker** runtime；当前 Manager 镜像只启动 **OpenClaw** 或 **QwenPaw**（见 `start-manager-agent.sh` 中的注释）。
+本地安装器仍向用户展示 **CoPaw**，并写入兼容值 `copaw`；Manager 入口会将其路由到 QwenPaw 实现。**Hermes** 是 Worker-only runtime，OpenHuman 的现有实现也仅位于 Worker 侧，但仍受上文 CRD 限制；当前 Manager 镜像只启动 **OpenClaw** 或 **QwenPaw**（见 `start-manager-agent.sh` 中的注释）。
 
 ---
 

@@ -110,9 +110,9 @@ Changing only the runtime while retaining the OpenClaw Manager image can leave t
 | `openclaw` | `worker.defaultImage.openclaw` | Default general-purpose Worker runtime |
 | `copaw` | `worker.defaultImage.copaw` | Python / CoPaw Worker |
 | `hermes` | `worker.defaultImage.hermes` | Hermes Worker |
-| `openhuman` | `worker.defaultImage.openhuman` | OpenHuman Worker |
+| `openhuman` | `worker.defaultImage.openhuman` | The chart has a default image value, but the current Worker CRD enum does not accept an explicit `spec.runtime: openhuman` |
 
-The Controller also recognizes the `qwenpaw` Worker runtime, but the current chart does not provide a separate default image value for it. Set the QwenPaw Worker image explicitly in `Worker.spec.image` when using it.
+The Controller recognizes the `qwenpaw` Worker runtime, but the current chart does not provide a separate default image value for it. Set the QwenPaw Worker image explicitly in `Worker.spec.image` when using it. The OpenHuman backend and Helm value exist, but the CRD contract is not aligned yet; do not use `openhuman` explicitly in Worker YAML until a separate business-code change resolves it.
 
 ## 4. Configure the model service
 
@@ -293,7 +293,7 @@ helm upgrade --install agentteams ./helm/agentteams \
   --timeout 15m
 ```
 
-By default, the chart converts `appVersion` into an image tag with a `v` prefix. For example, `appVersion: 1.1.1` resolves to `v1.1.1`. The chart in the repository can be updated before images with the matching version are published. If that tag does not exist, the LLM preflight Job fails first because it cannot pull the Controller image. The `latest` override above is suitable for validating the current source tree. In production, replace it with a verified, fixed image tag rather than using a mutable tag.
+By default, the chart converts `appVersion` into an image tag with a `v` prefix; the repository's current `appVersion: 1.1.1` resolves to `v1.1.1`. Because that value may differ from the latest AgentTeams release, use an explicit `global.imageTag=latest` as shown above when validating the current source tree. In production, set a verified fixed tag that matches the intended deployment version instead of relying on the chart's implicit default or a mutable tag.
 
 Inspect the resolved images before installing:
 

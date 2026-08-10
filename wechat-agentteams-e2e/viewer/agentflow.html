@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agent 协作对话流 · ServiceDesk Pilot</title>
+<style>
+  :root {
+    --bg: #f5f7fa;
+    --card: #ffffff;
+    --ink: #1f2937;
+    --muted: #6b7280;
+    --line: #e5e7eb;
+    --admin: #6b7280;
+    --manager: #2563eb;
+    --worker: #16a34a;
+    --gateway: #d97706;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    display: flex; height: 100vh;
+  }
+  /* 侧栏：房间列表 */
+  aside {
+    width: 270px; flex: none; background: var(--card); border-right: 1px solid var(--line);
+    overflow-y: auto; padding: 14px 10px;
+  }
+  aside h2 { font-size: 13px; color: var(--muted); margin: 6px 8px 10px; letter-spacing: .5px; }
+  .room {
+    padding: 9px 11px; border-radius: 9px; cursor: pointer; margin-bottom: 4px;
+    font-size: 13.5px; border: 1px solid transparent; display: flex; flex-direction: column; gap: 2px;
+  }
+  .room:hover { background: #f1f5f9; }
+  .room.active { background: var(--manager); color: #fff; border-color: var(--manager); }
+  .room.active small { color: #dbeafe; }
+  .room small { color: var(--muted); font-size: 11px; }
+  .room .k { font-size: 10px; padding: 1px 6px; border-radius: 999px; align-self: flex-start; }
+  .k.gateway { background: #fef3c7; color: var(--gateway); }
+  .k.admin_dm { background: #e0e7ff; color: var(--manager); }
+  .k.worker_room { background: #dcfce7; color: var(--worker); }
+  .k.other { background: #f1f5f9; color: var(--muted); }
+
+  /* 主区：事件流 */
+  main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .topbar {
+    padding: 12px 18px; border-bottom: 1px solid var(--line); background: var(--card);
+    display: flex; align-items: center; gap: 12px;
+  }
+  .topbar .t { font-weight: 600; font-size: 15px; }
+  .topbar .sub { color: var(--muted); font-size: 12.5px; }
+  .topbar .conn { margin-left: auto; font-size: 12px; color: var(--muted); }
+  .topbar .conn.live { color: var(--worker); }
+
+  .stream { flex: 1; overflow-y: auto; padding: 16px 20px; }
+  .ev {
+    display: flex; gap: 12px; margin-bottom: 14px; align-items: flex-start;
+  }
+  .ev .badge {
+    flex: none; width: 92px; text-align: center; padding: 4px 0; border-radius: 8px;
+    font-size: 12px; font-weight: 600; color: #fff;
+  }
+  .ev.role-admin .badge { background: var(--admin); }
+  .ev.role-manager .badge { background: var(--manager); }
+  .ev.role-worker .badge { background: var(--worker); }
+  .ev .body { flex: 1; min-width: 0; }
+  .ev .meta { font-size: 12px; color: var(--muted); margin-bottom: 3px; }
+  .ev .meta b { color: var(--ink); }
+  .ev .txt {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 13px; font-size: 13.5px; line-height: 1.6; white-space: pre-wrap;
+    word-break: break-word; border-left: 3px solid var(--line);
+  }
+  .ev.role-manager .txt { border-left-color: var(--manager); }
+  .ev.role-worker .txt { border-left-color: var(--worker); }
+  .ev.role-admin .txt { border-left-color: var(--admin); }
+  .ev.kind-wechat_inbound .txt { border-left-color: var(--gateway); background: #fffdf5; }
+  .empty { text-align: center; color: var(--muted); font-size: 13px; margin-top: 50px; }
+  .legend { display: flex; gap: 14px; font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+</style>
+</head>
+<body>
+<aside>
+  <h2>房间（Agent Teams）</h2>
+  <div id="rooms"><div class="room active" data-room="__all__">全部房间<small>显示完整协作链路</small></div></div>
+  <h2 style="margin-top:18px">图例</h2>
+  <div class="legend" style="flex-direction:column;gap:6px;padding-left:8px">
+    <span><i style="background:var(--manager)"></i> Manager 主 Agent</span>
+    <span><i style="background:var(--worker)"></i> Worker 子 Agent</span>
+    <span><i style="background:var(--admin)"></i> 系统/admin 身份</span>
+    <span><i style="background:var(--gateway)"></i> 微信群入站/回传</span>
+  </div>
+</aside>
+
+<main>
+  <div class="topbar">
+    <div>
+      <div class="t" id="view-title">容器内 Agent 协作对话流</div>
+      <div class="sub" id="view-sub">视图一：Manager 如何拆解、分派，子 Agent 如何执行</div>
+    </div>
+    <div class="conn" id="conn">连接中…</div>
+  </div>
+  <div class="stream" id="stream">
+    <div class="empty" id="empty">等待容器内的真实 Agent 对话事件……</div>
+  </div>
+</main>
+
+<script>
+  const stream = document.getElementById("stream");
+  const empty = document.getElementById("empty");
+  const connEl = document.getElementById("conn");
+  const roomsEl = document.getElementById("rooms");
+  let cursor = 0;
+  let activeRoom = "__all__";
+  const seen = new Set();
+
+  function escapeHtml(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+  function fmtTs(ts) {
+    if (!ts) return "";
+    return new Date(ts).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  }
+  function roleLabel(r) {
+    return { admin: "系统/admin", manager: "Manager", worker: "Worker" }[r] || r;
+  }
+
+  function renderRoomList(rooms) {
+    // 保留「全部房间」首项，追加其余
+    const existing = new Set([...roomsEl.querySelectorAll(".room")].map(e => e.dataset.room));
+    for (const rm of (rooms || [])) {
+      if (existing.has(rm.room_id)) continue;
+      const div = document.createElement("div");
+      div.className = "room";
+      div.dataset.room = rm.room_id;
+      const k = rm.kind || "other";
+      div.innerHTML = '<span class="k ' + k + '">' + escapeHtml(k) + '</span>' +
+        escapeHtml(rm.label || rm.room_id) +
+        '<small>' + escapeHtml((rm.members || []).join(", ")) + '</small>';
+      div.addEventListener("click", () => selectRoom(rm.room_id, div));
+      roomsEl.appendChild(div);
+    }
+  }
+  function selectRoom(roomId, el) {
+    activeRoom = roomId;
+    [...roomsEl.querySelectorAll(".room")].forEach(r => r.classList.remove("active"));
+    if (el) el.classList.add("active");
+    // 重新按房间过滤渲染
+    [...stream.querySelectorAll(".ev")].forEach(e => {
+      e.style.display = (activeRoom === "__all__" || e.dataset.room === activeRoom) ? "" : "none";
+    });
+    document.getElementById("view-title").textContent =
+      activeRoom === "__all__" ? "容器内 Agent 协作对话流" : ("房间：" + (el ? el.firstChild.nextSibling.textContent : activeRoom));
+  }
+
+  function addEvent(ev) {
+    if (seen.has(ev.event_id)) return;
+    seen.add(ev.event_id);
+    if (empty) empty.remove();
+    const wrap = document.createElement("div");
+    wrap.className = "ev role-" + (ev.role || "admin") + " kind-" + (ev.kind || "");
+    wrap.dataset.room = ev.room_id || "";
+    if (activeRoom !== "__all__" && ev.room_id !== activeRoom) wrap.style.display = "none";
+    const who = ev.kind === "wechat_inbound" && ev.wechat
+      ? ("微信群成员 " + ev.wechat.sender)
+      : (ev.sender_local || ev.role || "?");
+    const text = ev.kind === "wechat_inbound" && ev.wechat
+      ? ev.wechat.text
+      : (ev.display_text || ev.body || "");
+    wrap.innerHTML =
+      '<div class="badge">' + escapeHtml(roleLabel(ev.role)) + '</div>' +
+      '<div class="body">' +
+        '<div class="meta"><b>' + escapeHtml(who) + '</b> · ' +
+          escapeHtml(ev.room_label || ev.room_id || "") + ' · ' + fmtTs(ev.ts) + '</div>' +
+        '<div class="txt">' + escapeHtml(text) + '</div>' +
+      '</div>';
+    stream.appendChild(wrap);
+    stream.scrollTop = stream.scrollHeight;
+  }
+
+  async function poll() {
+    try {
+      const r = await fetch("/api/events?since=" + cursor);
+      const data = await r.json();
+      if (data.status) {
+        if (data.status.connected) { connEl.textContent = "● 实时同步"; connEl.className = "conn live"; }
+        else { connEl.textContent = "未连接"; connEl.className = "conn"; }
+      }
+      renderRoomList(data.rooms);
+      for (const ev of (data.events || [])) addEvent(ev);
+      if (data.cursor) cursor = data.cursor;
+    } catch (e) {
+      connEl.textContent = "桥接未启动"; connEl.className = "conn";
+    }
+  }
+
+  poll();
+  setInterval(poll, 2500);
+</script>
+</body>
+</html>

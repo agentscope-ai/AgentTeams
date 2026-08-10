@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ServiceDesk Pilot · 端到端演示总览</title>
+<style>
+  :root {
+    --bg: #f5f7fa;
+    --card: #ffffff;
+    --ink: #1f2937;
+    --muted: #6b7280;
+    --line: #e5e7eb;
+    --brand: #2563eb;
+    --brand-soft: #eff6ff;
+    --green: #07c160;
+    --green-soft: #e7f8ee;
+    --amber: #d97706;
+    --amber-soft: #fef3c7;
+    --red: #dc2626;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    line-height: 1.6;
+  }
+  header {
+    background: var(--card); border-bottom: 1px solid var(--line);
+    padding: 18px 28px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  }
+  header .logo {
+    width: 40px; height: 40px; border-radius: 10px;
+    background: linear-gradient(135deg, var(--brand), #7c3aed);
+    display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 18px;
+  }
+  header h1 { font-size: 19px; margin: 0; }
+  header p { margin: 0; color: var(--muted); font-size: 13px; }
+  .statusbar {
+    margin-left: auto; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    font-size: 13px;
+  }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 11px; border-radius: 999px; background: var(--brand-soft); color: var(--brand);
+    border: 1px solid #dbeafe; font-variant-numeric: tabular-nums;
+  }
+  .pill.off { background: #fef2f2; color: var(--red); border-color: #fecaca; }
+  .pill .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  main { max-width: 1080px; margin: 28px auto; padding: 0 20px; }
+  .intro {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 20px 24px; margin-bottom: 22px;
+  }
+  .intro h2 { margin: 0 0 8px; font-size: 16px; }
+  .intro p { margin: 6px 0; color: var(--muted); font-size: 14px; }
+  .flow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; font-size: 13px; }
+  .flow .step {
+    background: var(--brand-soft); color: var(--brand); border: 1px solid #dbeafe;
+    padding: 6px 12px; border-radius: 8px;
+  }
+  .flow .arrow { color: var(--muted); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+  .viewcard {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 22px; text-decoration: none; color: inherit; transition: .15s; display: block;
+  }
+  .viewcard:hover { border-color: var(--brand); box-shadow: 0 6px 22px rgba(37,99,235,.10); transform: translateY(-2px); }
+  .viewcard .tag {
+    display: inline-block; font-size: 12px; padding: 3px 10px; border-radius: 999px;
+    background: var(--green-soft); color: var(--green); border: 1px solid #bbf0cf; margin-bottom: 10px;
+  }
+  .viewcard.alt .tag { background: var(--amber-soft); color: var(--amber); border-color: #fde68a; }
+  .viewcard h3 { margin: 0 0 8px; font-size: 17px; }
+  .viewcard p { margin: 0; color: var(--muted); font-size: 13.5px; }
+  .viewcard .cta { margin-top: 14px; color: var(--brand); font-weight: 600; font-size: 14px; }
+  footer { text-align: center; color: var(--muted); font-size: 12px; padding: 26px; }
+  code { background: #f1f5f9; padding: 1px 6px; border-radius: 5px; font-size: 12.5px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">SD</div>
+  <div>
+    <h1>ServiceDesk Pilot · 端到端演示</h1>
+    <p>微信群消息 → Agent Team 处理 → 结果回传</p>
+  </div>
+  <div class="statusbar">
+    <span class="pill" id="st-conn"><span class="dot"></span>连接中…</span>
+    <span class="pill" id="st-events">事件 0</span>
+    <span class="pill" id="st-sync">同步 0</span>
+  </div>
+</header>
+
+<main>
+  <section class="intro">
+    <h2>这条链路是怎么跑起来的</h2>
+    <p>宿主机上的桥接服务（<code>bridge/server.py</code>）以 <b>admin</b> 身份登录容器内 Tuwunel 服务器，
+       通过 Matrix Client-Server API 持续 <code>/sync</code> 真实事件。下面两个视图渲染的全部内容，
+       都来自容器里 Agent Team 实际发出的消息——没有任何 mock 或硬编码。</p>
+    <div class="flow">
+      <span class="step">① 模拟器推送群消息</span>
+      <span class="arrow">→</span>
+      <span class="step">② admin 在网关房发 [微信群消息] 包络</span>
+      <span class="arrow">→</span>
+      <span class="step">③ Manager 拆解这个任务并分派 Worker</span>
+      <span class="arrow">→</span>
+      <span class="step">④ 群内 [群回复] 回传结果</span>
+    </div>
+  </section>
+
+  <div class="grid">
+    <a class="viewcard" href="agentflow.html">
+      <span class="tag">视图一 · 容器内</span>
+      <h3>Agent 协作对话流</h3>
+      <p>看 Manager 如何理解、拆解、分派任务，各子 Agent 如何在独立房间里真实执行、互相对话。</p>
+      <div class="cta">打开视图一 →</div>
+    </a>
+    <a class="viewcard alt" href="wechat.html">
+      <span class="tag">视图二 · 宿主机</span>
+      <h3>模拟微信群</h3>
+      <p>从用户视角看发出的群消息、机器人处理过程与最终回复——数据同样来自容器真实传出。</p>
+      <div class="cta">打开视图二 →</div>
+    </a>
+  </div>
+</main>
+
+<footer>数据通道：宿主机 bridge ↔ 容器内 Matrix 网关（端口 18080）。所有消息均为真实事件。</footer>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  async function refresh() {
+    try {
+      const r = await fetch("/api/status");
+      const s = await r.json();
+      const conn = $("st-conn");
+      if (s.connected) {
+        conn.className = "pill"; conn.innerHTML = '<span class="dot"></span>已连接 ' + (s.user_id || "");
+      } else {
+        conn.className = "pill off"; conn.innerHTML = '<span class="dot"></span>未连接' + (s.error ? "：" + s.error.slice(0,40) : "");
+      }
+      $("st-events").textContent = "事件 " + (s.event_count || 0);
+      $("st-sync").textContent = "同步 " + (s.sync_cycles || 0);
+    } catch (e) {
+      const conn = $("st-conn");
+      conn.className = "pill off"; conn.innerHTML = '<span class="dot"></span>桥接服务未启动';
+    }
+  }
+  refresh();
+  setInterval(refresh, 3000);
+</script>
+</body>
+</html>

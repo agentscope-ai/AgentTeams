@@ -83,6 +83,8 @@ Manager 通过安装时设置的环境变量进行配置。安装脚本会生成
 
 内置 Matrix 对话支持文件附件。Manager 会下载附件，拒绝存在不安全路径或包含多个 Skill 根目录的压缩包，在临时目录中解压并校验 Skill 元数据，然后才将完整目录放入 Worker Skill 库并开始分发。如果 Skill 还包含脚本或参考资料，应发送完整 ZIP，而不是分别发送多个文件。
 
+对于这种明确指定 Worker 的分发，`SKILL.md` frontmatter 中的 `name` 和 `description` 必填，`assign_when` 可选。缺少 `assign_when` 不影响将 Skill 分配给请求中指定的 Worker，但 Manager 在新建 Worker 时不会将该 Skill 纳入基于角色的自动匹配。
+
 Manager 会依次校验 Skill 源文件、将完整目录上传到 Worker 的隔离存储、确认远端 `SKILL.md` 存在，然后才更新 Worker 的 Skill 分配。对于 QwenPaw Worker，运行时会拉取新的分配，将 Skill 复制到原生工作空间，刷新 Skill 列表并启用该 Skill，无需手动重启 QwenPaw。
 
 可以直接通过自然语言对话让 Manager 检查分配结果：

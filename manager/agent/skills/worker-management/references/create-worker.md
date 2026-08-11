@@ -57,8 +57,9 @@ The SOUL content must include these three sections, filled in for the Worker bei
    ```bash
    head -8 ~/worker-skills/<skill-name>/SKILL.md
    ```
-3. Match `assign_when` against the Worker's role. When in doubt, assign more — a missing skill blocks work, an extra skill is harmless.
-4. `file-sync` is auto-included, no need to specify.
+3. Only consider Skills with a non-empty `assign_when` for automatic role matching. Skip Skills without it; they remain valid and can still be assigned when the admin explicitly names them.
+4. Match each available `assign_when` against the Worker's role. When in doubt, assign more — a missing skill blocks work, an extra skill is harmless.
+5. `file-sync` is auto-included, no need to specify.
 
 Quick lookup:
 

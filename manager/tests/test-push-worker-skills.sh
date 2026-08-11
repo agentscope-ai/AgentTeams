@@ -74,6 +74,22 @@ if [ "${1:-}" = get ] && [ "${2:-}" = workers ]; then
     exit 0
 fi
 if [ "${1:-}" = update ] && [ "${2:-}" = worker ]; then
+    worker=""
+    skills=""
+    shift 2
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --name) worker="$2"; shift 2 ;;
+            --skills) skills="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+    if [ "${TEST_SKIP_STATE_UPDATE:-0}" != 1 ]; then
+        jq --arg worker "${worker}" --arg skills "${skills}" \
+            '.workers |= map(if .name == $worker then .skills = (if $skills == "" then [] else ($skills | split(",")) end) else . end)' \
+            "${TEST_STATE}" > "${TEST_STATE}.tmp"
+        mv "${TEST_STATE}.tmp" "${TEST_STATE}"
+    fi
     exit 0
 fi
 exit 2
@@ -105,6 +121,7 @@ run_script() {
     TEST_EVENTS="${EVENTS}" \
     TEST_STATE="${STATE}" \
     TEST_MC_STAT_SUCCESS="${MC_STAT_SUCCESS:-0}" \
+    TEST_SKIP_STATE_UPDATE="${SKIP_STATE_UPDATE:-0}" \
     AGENTTEAMS_STORAGE_PREFIX="test/agentteams-storage" \
     AGENTTEAMS_MANAGER_MATRIX_TOKEN="manager-token" \
     AGENTTEAMS_MATRIX_URL="http://matrix.example.com" \
@@ -197,6 +214,21 @@ assert_contains "reconcile verifies the remote SKILL.md" \
     "${EVENTS}"
 assert_not_contains "remote reuse does not recursively update Worker.spec.skills" \
     "agt update worker" "${EVENTS}"
+
+echo "=== TC5: add-skill fails when the Worker CR does not confirm the assignment ==="
+setup_case "${TMPDIR_ROOT}/assignment-verification"
+SKIP_STATE_UPDATE=1
+if run_script --worker amy-ai --add-skill competition-skill --no-notify \
+    >"${CASE_DIR}/output.log" 2>&1; then
+    fail "unconfirmed assignment exits non-zero" "non-zero" "exit 0"
+else
+    pass "unconfirmed assignment exits non-zero"
+fi
+unset SKIP_STATE_UPDATE
+assert_contains "unconfirmed assignment reports the failed contract" \
+    "Worker Skill assignment verification failed" "${CASE_DIR}/output.log"
+assert_not_contains "failed verification does not notify the Worker" \
+    "curl " "${EVENTS}"
 
 echo
 echo "Results: ${PASS} passed, ${FAIL} failed"

@@ -151,6 +151,18 @@ for worker in ${targets}; do
     fi
     csv=$(echo "${desired}" | jq -r 'join(",")')
     agt update worker --name "${worker}" --skills "${csv}"
+    confirmed=$(agt get workers "${worker}" -o json | jq '.skills // []')
+    if [ -n "${ADD_SKILL}" ]; then
+        if ! echo "${confirmed}" | jq -e --arg skill "${ADD_SKILL}" 'index($skill)' >/dev/null; then
+            echo "Worker Skill assignment verification failed: ${worker} does not list ${ADD_SKILL}" >&2
+            exit 1
+        fi
+    elif [ -n "${REMOVE_SKILL}" ]; then
+        if echo "${confirmed}" | jq -e --arg skill "${REMOVE_SKILL}" 'index($skill)' >/dev/null; then
+            echo "Worker Skill removal verification failed: ${worker} still lists ${REMOVE_SKILL}" >&2
+            exit 1
+        fi
+    fi
     if [ "${NOTIFY}" = true ]; then
         room_id=$(echo "${workers_json}" | jq -r --arg worker "${worker}" \
             '.workers[] | select(.name == $worker) | .roomID // empty')

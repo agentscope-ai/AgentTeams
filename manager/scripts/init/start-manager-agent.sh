@@ -672,10 +672,10 @@ else
 fi
 log "Matrix E2EE: ${MATRIX_E2EE_ENABLED}"
 
-# Resolve input modalities for built-in models.
+# OpenClaw currently supports only text and image input declarations.
 case "${MODEL_NAME}" in
     MiniMax-M3)
-        export MODEL_INPUT='["text", "image", "video"]' ;;
+        export MODEL_INPUT='["text", "image"]' ;;
     gpt-5.4|gpt-5.3-codex|gpt-5-mini|gpt-5-nano|claude-opus-4-6|claude-sonnet-4-6|claude-haiku-4-5|qwen3.6-plus|qwen3.5-plus|kimi-k2.5)
         export MODEL_INPUT='["text", "image"]' ;;
     *)

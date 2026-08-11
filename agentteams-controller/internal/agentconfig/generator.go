@@ -425,9 +425,6 @@ func defaultModelSpec(modelName string) ModelSpec {
 	if p.vision {
 		input = []string{"text", "image"}
 	}
-	if modelName == "MiniMax-M3" {
-		input = append(input, "video")
-	}
 
 	return ModelSpec{
 		ID:            modelName,

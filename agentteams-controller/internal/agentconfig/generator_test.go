@@ -275,8 +275,8 @@ func TestDefaultModelSpec(t *testing.T) {
 	}
 
 	minimaxM3 := defaultModelSpec("MiniMax-M3")
-	if minimaxM3.ContextWindow != 1000000 || len(minimaxM3.Input) != 3 || minimaxM3.Input[1] != "image" || minimaxM3.Input[2] != "video" {
-		t.Errorf("MiniMax-M3 spec = %+v, want 1000000 context and text, image, video input", minimaxM3)
+	if minimaxM3.ContextWindow != 1000000 || len(minimaxM3.Input) != 2 || minimaxM3.Input[0] != "text" || minimaxM3.Input[1] != "image" {
+		t.Errorf("MiniMax-M3 spec = %+v, want 1000000 context and OpenClaw-compatible text and image input", minimaxM3)
 	}
 
 	unknown := defaultModelSpec("unknown-model-xyz")

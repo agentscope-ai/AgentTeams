@@ -61,10 +61,10 @@ esac
 [ -n "${AGENTTEAMS_MODEL_CONTEXT_WINDOW:-}" ] && CTX="${AGENTTEAMS_MODEL_CONTEXT_WINDOW}"
 [ -n "${AGENTTEAMS_MODEL_MAX_TOKENS:-}" ] && MAX="${AGENTTEAMS_MODEL_MAX_TOKENS}"
 
-# Resolve input modalities for built-in models.
+# OpenClaw currently supports only text and image input declarations.
 case "${MODEL_NAME}" in
     MiniMax-M3)
-        INPUT='["text", "image", "video"]' ;;
+        INPUT='["text", "image"]' ;;
     gpt-5.4|gpt-5.3-codex|gpt-5-mini|gpt-5-nano|claude-opus-4-6|claude-sonnet-4-6|claude-haiku-4-5|qwen3.6-plus|qwen3.5-plus|kimi-k2.5)
         INPUT='["text", "image"]' ;;
     *)

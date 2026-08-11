@@ -31,6 +31,24 @@ if [ -z "${TEAM_NAME}" ] || [ -z "${LEADER_NAME}" ]; then
     exit 2
 fi
 
+if ! TEAMS_JSON=$(agt get teams -o json); then
+    echo "ERROR: Failed to list existing teams; refusing to create '${TEAM_NAME}' without a duplicate check." >&2
+    exit 1
+fi
+if ! EXISTING=$(jq -r --arg name "${TEAM_NAME}" '
+    if (.teams | type) != "array" then error("teams must be an array")
+    else .teams[] | select(.name == $name) | .name
+    end
+' <<<"${TEAMS_JSON}"); then
+    echo "ERROR: Failed to parse the existing team list; refusing to create '${TEAM_NAME}'." >&2
+    exit 1
+fi
+if [ -n "${EXISTING}" ]; then
+    echo "ERROR: Team '${TEAM_NAME}' already exists. Skipping creation to avoid duplicate." >&2
+    echo "Use 'agt get teams ${TEAM_NAME} -o json' to inspect the existing team." >&2
+    exit 1
+fi
+
 agt get workers "${LEADER_NAME}" -o json >/dev/null
 IFS=',' read -ra workers <<< "${WORKERS_CSV}"
 for worker in "${workers[@]}"; do

@@ -102,7 +102,7 @@ Both modes share the same reconcile semantics; they differ mainly in state store
 
 HiClaw lifts multi-agent collaboration from scripts and conventions to **CRD-style declarative APIs plus continuous reconcile**: organization, messaging policy, gateway-side LLM/MCP rules, and shared storage can be governed on one operational path. If you already run Kubernetes, the model will feel familiar; if you are sketching next-gen Agent platforms, treat HiClaw as the **collaboration orchestration plane** and leave inference and tooling to pluggable runtimes and gateway implementations.
 
-For full field references, room topology, and operational commands, see `docs/declarative-resource-management.md` and `docs/k8s-native-agent-orch.md` in the repository.
+For full field references, room topology, and operational commands, see `docs/usage/resource-management.md` and `docs/design/k8s-native-orchestration.md` in the repository.
 
 ---
 

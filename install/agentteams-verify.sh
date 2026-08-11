@@ -148,15 +148,15 @@ fi
 MANAGER_RUNTIME=$(echo "$container_env" | grep ^AGENTTEAMS_MANAGER_RUNTIME= | cut -d= -f2-)
 MANAGER_RUNTIME="${MANAGER_RUNTIME:-openclaw}"
 
-if [ "${MANAGER_RUNTIME}" = "copaw" ]; then
-    # CoPaw: check app API health endpoint
+if [ "${MANAGER_RUNTIME}" = "copaw" ] || [ "${MANAGER_RUNTIME}" = "qwenpaw" ]; then
+    # QwenPaw and legacy CoPaw: check app API health endpoint
     agent_status=$("${DOCKER_CMD}" exec "${CONTAINER}" \
         curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
         "http://127.0.0.1:18799/health" 2>/dev/null) || agent_status="000"
     if [ "${agent_status}" = "200" ]; then
-        check_pass "CoPaw Agent healthy"
+        check_pass "${MANAGER_RUNTIME} Agent healthy"
     else
-        check_fail "CoPaw Agent healthy (HTTP ${agent_status})"
+        check_fail "${MANAGER_RUNTIME} Agent healthy (HTTP ${agent_status})"
     fi
 else
     # OpenClaw: check gateway health

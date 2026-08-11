@@ -101,8 +101,8 @@ After choosing Quick Start, the installer still asks you to:
 
 1. Install `latest`, the latest stable release, or a specific version.
 2. Select a model service and model, and enter the LLM API key.
-3. Select the Manager runtime: CoPaw or OpenClaw.
-4. Select the default Worker runtime: CoPaw, OpenClaw, or Hermes in supported versions.
+3. Select the Manager runtime: QwenPaw (recommended), OpenClaw, or legacy CoPaw.
+4. Select the default Worker runtime: QwenPaw (recommended), OpenClaw, Hermes in supported versions, or legacy CoPaw.
 
 The remaining settings use these defaults:
 
@@ -206,8 +206,9 @@ The embedding model can use the default, a custom value, or be disabled. If its 
 
 | Choice | Installer value | Description |
 |---|---|---|
-| CoPaw | `copaw` | Python Manager runtime and the local installer's default choice. |
+| QwenPaw | `qwenpaw` | Recommended Python Manager runtime and the local installer's default choice. |
 | OpenClaw | `openclaw` | Node.js Manager runtime. |
+| CoPaw | `copaw` | Legacy Python runtime. Upgrade to QwenPaw is recommended. |
 
 The Manager runtime selects the Manager image and execution mode. Changing the runtime of an existing Manager recreates its container and should be done only when no task is in progress.
 
@@ -217,9 +218,10 @@ The local installer currently offers:
 
 | Choice | Value | Description |
 |---|---|---|
-| CoPaw | `copaw` | Default choice; Python runtime. |
+| QwenPaw | `qwenpaw` | Recommended default; current Python runtime. |
 | OpenClaw | `openclaw` | Node.js runtime. |
 | Hermes | `hermes` | Displayed starting with versions that support this runtime. |
+| CoPaw | `copaw` | Legacy Python runtime. Upgrade to QwenPaw is recommended. |
 
 This setting only selects the default for Workers created later. You can still explicitly select another runtime supported by the controller when creating a Worker.
 
@@ -344,8 +346,8 @@ Non-interactive mode fails immediately when a required value is missing or an ex
 | `AGENTTEAMS_ADMIN_USER` | `admin` |
 | `AGENTTEAMS_ADMIN_PASSWORD` | Generated when omitted; at least 8 characters when explicitly set |
 | `AGENTTEAMS_LOCAL_ONLY` | `1` |
-| `AGENTTEAMS_MANAGER_RUNTIME` | `copaw`, representing the CoPaw Manager |
-| `AGENTTEAMS_DEFAULT_WORKER_RUNTIME` | `copaw` |
+| `AGENTTEAMS_MANAGER_RUNTIME` | `qwenpaw` |
+| `AGENTTEAMS_DEFAULT_WORKER_RUNTIME` | `qwenpaw` |
 | `AGENTTEAMS_MATRIX_E2EE` | `0` |
 | `AGENTTEAMS_MOUNT_SOCKET` | `1` |
 | `AGENTTEAMS_DOCKER_PROXY` | `1`; enables the restricted container-runtime proxy |
@@ -364,6 +366,7 @@ Local builds, private registries, and prerelease validation can use:
 
 - `AGENTTEAMS_INSTALL_EMBEDDED_IMAGE`
 - `AGENTTEAMS_INSTALL_MANAGER_IMAGE`
+- `AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE`
 - `AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE`
 - `AGENTTEAMS_INSTALL_WORKER_IMAGE`
 - `AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE`

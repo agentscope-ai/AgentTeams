@@ -159,8 +159,8 @@ build-manager: build-agentteams-controller ## Build Manager image (OpenClaw runt
 		-t $(LOCAL_MANAGER) \
 		.
 
-build-manager-qwenpaw: build-agentteams-controller ## Build Manager CoPaw image (Python runtime)
-	@echo "==> Building Manager CoPaw image: $(LOCAL_MANAGER_QWENPAW) (registry: $(HIGRESS_REGISTRY))"
+build-manager-qwenpaw: build-agentteams-controller ## Build Manager QwenPaw image (Python runtime)
+	@echo "==> Building Manager QwenPaw image: $(LOCAL_MANAGER_QWENPAW) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-f manager/Dockerfile.qwenpaw \
@@ -366,8 +366,8 @@ else
 		.
 endif
 
-push-manager-qwenpaw: buildx-setup ## Build + push multi-arch Manager CoPaw image
-	@echo "==> Building + pushing multi-arch Manager CoPaw: $(MANAGER_QWENPAW_TAG) [$(MULTIARCH_PLATFORMS)]"
+push-manager-qwenpaw: buildx-setup ## Build + push multi-arch Manager QwenPaw image
+	@echo "==> Building + pushing multi-arch Manager QwenPaw: $(MANAGER_QWENPAW_TAG) [$(MULTIARCH_PLATFORMS)]"
 ifeq ($(IS_PODMAN),1)
 	-podman manifest rm $(MANAGER_QWENPAW_TAG) 2>/dev/null
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \

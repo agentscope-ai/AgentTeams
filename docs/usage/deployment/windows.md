@@ -291,18 +291,20 @@ The following configurations can be skipped by pressing Enter to use default val
 ```
 --- Default Worker Runtime ---
 
-  1) OpenClaw (Node.js, ~500MB memory typical)
-  2) QwenPaw (Python, ~150MB typical; internal image name: copaw)
+  1) QwenPaw (recommended)
+  2) OpenClaw
   3) Hermes (Python Hermes worker runtime)
+  4) CoPaw (legacy; upgrade to QwenPaw recommended)
 
-Enter choice [1/2/3]:
+Enter choice [1/2/3/4]:
 ```
 
 | Runtime | Memory (typical) | Features |
 |---------|------------------|----------|
-| OpenClaw | ~500MB | Feature-rich, built-in Web console |
 | QwenPaw | ~150MB | Lightweight Python runtime |
+| OpenClaw | ~500MB | Feature-rich, built-in Web console |
 | Hermes | Varies | Hermes policy tree under `.hermes/` in the worker workspace |
+| CoPaw | ~150MB | Legacy Python runtime; upgrade to QwenPaw is recommended |
 
 Choose based on your machine configuration and the kind of tasks you expect Workers to run.
 

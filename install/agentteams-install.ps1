@@ -2533,6 +2533,20 @@ function Install-Manager {
         "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-controller:$($script:AGENTTEAMS_VERSION)"
     }
 
+    # Check the container runtime before resolving images. Resolve-EmbeddedImage
+    # performs docker pull for remote tags, so these actionable errors must win
+    # over a misleading "embedded image unavailable" failure.
+    if (-not (Get-Command "docker" -ErrorAction SilentlyContinue) -and
+        -not (Get-Command "podman" -ErrorAction SilentlyContinue)) {
+        Write-Host "$($script:ESC)[31m[AgentTeams ERROR]$($script:ESC)[0m $(Get-Msg 'error.docker_not_found')" -ForegroundColor Red
+        Exit-Script 1
+    }
+
+    if (-not (Test-DockerRunning)) {
+        Write-Host "$($script:ESC)[31m[AgentTeams ERROR]$($script:ESC)[0m $(Get-Msg 'error.docker_not_running')" -ForegroundColor Red
+        Exit-Script 1
+    }
+
     # Resolve embedded controller image (sets $script:EMBEDDED_IMAGE and
     # $script:AGENTTEAMS_USE_EMBEDDED). Errors out fast if no embedded image is available
     # for the requested version (mirrors the bash installer behavior).
@@ -2544,18 +2558,6 @@ function Install-Manager {
     Write-Log (Get-Msg "install.dir_hint")
     Write-Log (Get-Msg "install.dir_hint2")
     Write-Log ""
-
-    # Check container runtime (docker or podman)
-    if (-not (Get-Command "docker" -ErrorAction SilentlyContinue) -and
-        -not (Get-Command "podman" -ErrorAction SilentlyContinue)) {
-        Write-Host "$($script:ESC)[31m[AgentTeams ERROR]$($script:ESC)[0m $(Get-Msg 'error.docker_not_found')" -ForegroundColor Red
-        Exit-Script 1
-    }
-
-    if (-not (Test-DockerRunning)) {
-        Write-Host "$($script:ESC)[31m[AgentTeams ERROR]$($script:ESC)[0m $(Get-Msg 'error.docker_not_running')" -ForegroundColor Red
-        Exit-Script 1
-    }
 
     # Initialize shared config hashtable
     $script:config = @{}

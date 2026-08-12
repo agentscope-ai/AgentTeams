@@ -54,7 +54,7 @@ spec:
               to inject sysctls / nodeSelector / tolerations / imagePullSecrets
               etc. into every Manager/Worker Pod must create a ConfigMap with
               this exact name. Absent ConfigMap = no overlay (default shape).
-              See docs/agent-pod-template.md.
+              See docs/design/agent-pod-template.md.
             */}}
             - name: AGENTTEAMS_CONTROLLER_NAME
               value: {{ include "agentteams.controller.fullname" . | quote }}

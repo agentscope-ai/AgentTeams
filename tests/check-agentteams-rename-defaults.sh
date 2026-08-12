@@ -10,8 +10,8 @@ legacy_brand_title='Hi''Claw'
 archive_paths=(
     ':(exclude)blog/**'
     ':(exclude)changelog/**'
-    ':(exclude)docs/faq-legacy.md'
-    ':(exclude)docs/zh-cn/faq-legacy.md'
+    ':(exclude)docs/usage/troubleshooting/legacy-faq.md'
+    ':(exclude)docs/zh-cn/usage/troubleshooting/legacy-faq.md'
 )
 
 if matches="$(git grep -nIi "${legacy_brand}" -- . "${archive_paths[@]}" 2>/dev/null)"; then

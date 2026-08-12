@@ -102,7 +102,7 @@ MCP 侧同样走集中暴露的端点，由网关完成鉴权与凭据注入，�
 
 HiClaw 把「多 Agent 协作」从脚本与约定提升为 **CRD 风格的声明式 API + Controller 持续调和**：组织结构、通信权限、网关侧 LLM/MCP 策略与共享存储可以在一条流水线上治理。若你已在 Kubernetes 生态里做过运维，这套心智模型会非常熟悉；若你正在评估下一代 Agent 平台架构，可以把 HiClaw 理解为**协作编排控制平面**，而把具体推理与工具执行留在可选的 Agent 运行时与网关实现之下。
 
-更完整的字段说明、Room 拓扑与运维命令见项目文档（例如 `docs/zh-cn/declarative-resource-management.md` 与 `docs/zh-cn/k8s-native-agent-orch.md`）。
+更完整的字段说明、Room 拓扑与运维命令见项目文档（例如 `docs/zh-cn/usage/resource-management.md` 与 `docs/zh-cn/design/k8s-native-orchestration.md`）。
 
 ---
 

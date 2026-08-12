@@ -344,7 +344,7 @@ func applyWorkerParams(name, model, runtime, image, identity, soul, soulFile,
 // extractWorkerFieldsFromZip reads manifest.json from the ZIP and extracts the
 // model and runtime fields. Both top-level and `worker.<field>` placements are
 // honored; the worker block takes precedence to match the documented schema in
-// docs/import-worker.md.
+// docs/usage/import-worker.md.
 //
 // Either return value may be empty when the manifest does not declare it (or
 // when the ZIP has no manifest at all). Callers are expected to fall back to

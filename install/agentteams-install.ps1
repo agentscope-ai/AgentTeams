@@ -114,6 +114,11 @@ function Write-Warning {
     Write-Host "$($script:ESC)[33m[AgentTeams WARNING]$($script:ESC)[0m $Message"
 }
 
+function ConvertTo-MatrixAppServiceEnabledValue {
+    param([string]$Value)
+    return $Value.ToLowerInvariant()
+}
+
 # Pause before exit on error so user can read the message when running via double-click
 function Exit-Script {
     param([int]$ExitCode = 0)
@@ -2673,7 +2678,8 @@ function Install-Manager {
     $config.MINIO_USER = if ($env:AGENTTEAMS_MINIO_USER) { $env:AGENTTEAMS_MINIO_USER } else { $config.ADMIN_USER }
     $config.MINIO_PASSWORD = if ($env:AGENTTEAMS_MINIO_PASSWORD) { $env:AGENTTEAMS_MINIO_PASSWORD } else { $config.ADMIN_PASSWORD }
     $config.MANAGER_GATEWAY_KEY = if ($env:AGENTTEAMS_MANAGER_GATEWAY_KEY) { $env:AGENTTEAMS_MANAGER_GATEWAY_KEY } else { New-RandomKey }
-    $config.MATRIX_APPSERVICE_ENABLED = if ($env:AGENTTEAMS_MATRIX_APPSERVICE_ENABLED) { $env:AGENTTEAMS_MATRIX_APPSERVICE_ENABLED } else { "true" }
+    $matrixAppServiceEnabled = if ($env:AGENTTEAMS_MATRIX_APPSERVICE_ENABLED) { $env:AGENTTEAMS_MATRIX_APPSERVICE_ENABLED } else { "true" }
+    $config.MATRIX_APPSERVICE_ENABLED = ConvertTo-MatrixAppServiceEnabledValue $matrixAppServiceEnabled
     if ($config.MATRIX_APPSERVICE_ENABLED -ne "false" -and $config.MATRIX_APPSERVICE_ENABLED -ne "0") {
         $config.MATRIX_APPSERVICE_AS_TOKEN = if ($env:AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN) { $env:AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN } else { New-RandomKey }
         $config.MATRIX_APPSERVICE_HS_TOKEN = if ($env:AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN) { $env:AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN } else { New-RandomKey }

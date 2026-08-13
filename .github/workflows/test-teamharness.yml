@@ -45,6 +45,9 @@ jobs:
             'pytest-asyncio>=0.23,<2'
 
       - name: Run durable continuation contract tests
+        env:
+          NO_PROXY: 127.0.0.1,localhost
+          no_proxy: 127.0.0.1,localhost
         run: |
           ruby plugins/tests/teamharness/test-contracts.rb
           python -m pytest plugins/tests/teamharness/mcp/test_continuation.py -q

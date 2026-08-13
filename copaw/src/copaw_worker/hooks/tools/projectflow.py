@@ -11,12 +11,17 @@ from typing import Any
 import urllib.error
 import urllib.request
 
+import yaml
+
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
 
 from copaw_worker.task import (
     FileSystemTaskStore,
+    TaskDecisionPersistenceError,
     TaskflowError,
+    accept_task_result,
+    cancel_task,
     canonical_worker_id,
     complete_project,
     create_project,
@@ -32,6 +37,7 @@ from copaw_worker.task import (
     record_loop_iteration,
     resume_project,
 )
+from copaw_worker.hooks.tools.filesync import create_sync
 
 
 def _response(payload: dict[str, Any]) -> ToolResponse:
@@ -73,6 +79,31 @@ def _workspace_dir() -> Path:
 
 def _store() -> FileSystemTaskStore:
     return FileSystemTaskStore(_workspace_dir())
+
+
+def _current_actor() -> str:
+    actor = (
+        os.getenv("AGENTTEAMS_MATRIX_USER_ID")
+        or os.getenv("COPAW_MATRIX_USER_ID")
+        or ""
+    ).strip()
+    if not actor:
+        raise TaskflowError("current actor identity is required")
+    return actor
+
+
+def _require_team_leader() -> str:
+    actor = _current_actor()
+    runtime_path = _working_dir().parent / "runtime" / "runtime.yaml"
+    try:
+        config = yaml.safe_load(runtime_path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        raise TaskflowError("team leader runtime configuration is required") from exc
+    member = config.get("member") if isinstance(config, dict) else None
+    role = str((member or {}).get("role") or "").strip()
+    if role != "team_leader":
+        raise TaskflowError(f"action requires team_leader role, current role: {role or 'unknown'}")
+    return actor
 
 
 def _coerce_payload(payload: dict[str, Any] | str | None) -> dict[str, Any]:
@@ -550,10 +581,89 @@ async def projectflow(
             meta = complete_project(store, project_id=project_id)
             return _ok(action=action, project=asdict(meta))
 
+        if action in {"accept_task_result", "cancel_task"}:
+            _require_team_leader()
+            project_id = _required_str(payload_data, "projectId")
+            task_id = _required_str(payload_data, "taskId")
+            submission_id = _required_str(payload_data, "submissionId")
+            if action == "accept_task_result":
+                accepted_value = payload_data.get("accepted")
+                if not isinstance(accepted_value, bool):
+                    raise TaskflowError("payload.accepted must be a boolean")
+            else:
+                reason = _required_str(payload_data, "reason")
+                replacement_task_id = _optional_str(payload_data, "replacementTaskId")
+            if dryRun:
+                return _ok(
+                    dryRun=True,
+                    action=action,
+                    projectId=project_id,
+                    taskId=task_id,
+                    submissionId=submission_id,
+                )
+            try:
+                if action == "accept_task_result":
+                    task, reused = accept_task_result(
+                        store,
+                        project_id=project_id,
+                        task_id=task_id,
+                        submission_id=submission_id,
+                        accepted=accepted_value,
+                    )
+                else:
+                    task, reused = cancel_task(
+                        store,
+                        project_id=project_id,
+                        task_id=task_id,
+                        reason=reason,
+                        replacement_task_id=replacement_task_id,
+                        submission_id=submission_id,
+                    )
+            except TaskDecisionPersistenceError as exc:
+                return _error(
+                    f"{action} project state persisted locally but task state write failed: {exc}",
+                    action=action,
+                    projectId=project_id,
+                    taskId=task_id,
+                    task=asdict(exc.task),
+                    reused=False,
+                    synced=False,
+                    retryable=True,
+                    statePersisted=True,
+                )
+            sync = create_sync()
+            try:
+                sync.push_shared_path(f"shared/projects/{project_id}/")
+                sync.push_shared_path(
+                    f"shared/tasks/{task_id}/",
+                    exclude=["spec.md", "base/"],
+                )
+            except Exception as exc:
+                return _error(
+                    f"{action} state persisted locally but shared-storage sync failed: {exc}",
+                    action=action,
+                    projectId=project_id,
+                    taskId=task_id,
+                    task=asdict(task),
+                    reused=reused,
+                    synced=False,
+                    retryable=True,
+                    statePersisted=True,
+                )
+            return _ok(
+                action=action,
+                projectId=project_id,
+                taskId=task_id,
+                task=asdict(task),
+                reused=reused,
+                synced=True,
+            )
+
         raise TaskflowError(
             "action must be one of: create_project, plan_dag, ready_nodes, "
             "plan_loop, ready_loop_nodes, record_loop_iteration, "
-            "check_active_tasks, pause_project, resume_project, complete_project",
+            "check_active_tasks, pause_project, resume_project, complete_project, "
+            "accept_task_result, cancel_task",
         )
     except TaskflowError as exc:
         return _error(

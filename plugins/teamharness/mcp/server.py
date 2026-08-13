@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from typing import Any
@@ -444,7 +445,19 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 },
                 "accepted": {
                     "type": "boolean",
-                    "description": "For accept_task_result, false records a revision state instead of accepting the result.",
+                    "description": (
+                        "For accept_task_result, false records revision for a "
+                        "SUCCESS result. REVISION_NEEDED remains revision, while "
+                        "BLOCKED and INTERRUPTED remain blocked."
+                    ),
+                },
+                "submissionId": {
+                    "type": "string",
+                    "description": (
+                        "Current submit_task identity required by normal "
+                        "accept_task_result requests. Only migration of a "
+                        "persisted legacy submission without an identity may omit it."
+                    ),
                 },
                 "publishArtifacts": {
                     "type": "boolean",
@@ -485,6 +498,13 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "taskId": {
                     "type": "string",
                     "description": "Safe task id used under shared/tasks/{taskId}.",
+                },
+                "submissionId": {
+                    "type": "string",
+                    "description": (
+                        "Current submit_task identity required when cancel_task "
+                        "resolves a normal submitted result."
+                    ),
                 },
                 "payload": {
                     "type": "object",
@@ -2537,14 +2557,24 @@ def _filesync(arguments: dict[str, Any]) -> dict[str, Any]:
             "path": normalized,
             "error": env_error,
         }
-    completed = subprocess.run(
-        command,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=120,
-        env=mc_env,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=mc_env,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {
+            "ok": False,
+            "tool": "filesync",
+            "action": action,
+            "path": normalized,
+            "error": f"filesync process failed: {exc}",
+            "retryable": True,
+        }
     command_error = _filesync_command_error(completed)
     if command_error:
         return {
@@ -2594,6 +2624,7 @@ def _payload(arguments: dict[str, Any]) -> dict[str, Any]:
         "assignedTo": ("assignedTo", "assigned_to"),
         "dependsOn": ("dependsOn", "depends_on"),
         "replacementTaskId": ("replacementTaskId", "replacement_task_id"),
+        "submissionId": ("submissionId", "submission_id"),
     }
     for canonical, keys in aliases.items():
         if any(data.get(key) for key in keys):
@@ -2795,9 +2826,24 @@ def _read_json(path: Path, default: dict[str, Any] | None = None) -> dict[str, A
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _write_json(path: Path, data: dict[str, Any]) -> None:
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Replace one state projection without exposing a partially written file."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    except BaseException:
+        temporary_path.unlink(missing_ok=True)
+        raise
+
+
+def _write_json(path: Path, data: dict[str, Any]) -> None:
+    _atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
 
 
 def _project_dir(arguments: dict[str, Any], project_id: str) -> Path:
@@ -2968,7 +3014,7 @@ def _write_project_plan(project_dir: Path, project: dict[str, Any]) -> None:
                 else:
                     lines.append(f"- {item}")
     project_dir.mkdir(parents=True, exist_ok=True)
-    (project_dir / "plan.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _atomic_write_text(project_dir / "plan.md", "\n".join(lines) + "\n")
 
 
 def _ready_nodes(project: dict[str, Any]) -> list[dict[str, Any]]:
@@ -3040,7 +3086,7 @@ def _resolve_project(arguments: dict[str, Any], payload: dict[str, Any]) -> dict
 
 
 def _accepted_node_status(result_status: Any) -> str:
-    status = str(result_status or "SUCCESS").strip()
+    status = _validate_task_result_status(result_status)
     if status in {"SUCCESS", "SUCCESS_WITH_NOTES"}:
         return "completed"
     if status == "REVISION_NEEDED":
@@ -3048,6 +3094,109 @@ def _accepted_node_status(result_status: Any) -> str:
     if status in {"BLOCKED", "INTERRUPTED"}:
         return "blocked"
     raise ValueError(f"unsupported result status: {status}")
+
+
+def _submission_result(task: dict[str, Any]) -> dict[str, Any]:
+    deliverables = task.get("deliverables")
+    if not isinstance(deliverables, list):
+        deliverables = []
+    return {
+        "status": str(task.get("result_status") or task.get("resultStatus") or ""),
+        "summary": str(task.get("summary") or ""),
+        "deliverables": [str(item) for item in deliverables],
+    }
+
+
+def _task_result_digest(result: dict[str, Any]) -> str:
+    """Return the cross-runtime identity of a structured task result."""
+    deliverables = result.get("deliverables")
+    if not isinstance(deliverables, list):
+        deliverables = []
+    canonical_result = {
+        "status": str(result.get("status") or "").strip(),
+        "summary": re.sub(r"\s+", " ", str(result.get("summary") or "")).strip(),
+        "deliverables": [str(item) for item in deliverables],
+    }
+    canonical_json = json.dumps(
+        canonical_result,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(
+        b"teamharness.task-result.v1\0" + canonical_json,
+    ).hexdigest()
+
+
+def _continuation_delivery_id(project_id: str, task_id: str, submission_id: str) -> str:
+    identity = "\0".join((project_id, task_id, submission_id, "result-submitted:v1"))
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _resolve_task_continuation(task: dict[str, Any], resolution: str) -> None:
+    continuation = task.get("continuation") if isinstance(task.get("continuation"), dict) else {}
+    if not continuation:
+        return
+    continuation["status"] = "resolved"
+    continuation["resolution"] = resolution
+    continuation["resolved_at"] = _utc_timestamp()
+    task["continuation"] = continuation
+
+
+def _project_task_status(project: dict[str, Any], task_id: str) -> str:
+    tasks = project.get("tasks", []) if isinstance(project.get("tasks"), list) else []
+    loop = project.get("loop") if isinstance(project.get("loop"), dict) else {}
+    loop_tasks = loop.get("tasks", []) if isinstance(loop.get("tasks"), list) else []
+    for task in tasks + loop_tasks:
+        if isinstance(task, dict) and task.get("task_id") == task_id:
+            return str(task.get("status") or "")
+    return ""
+
+
+def _sync_failure_result(result: dict[str, Any], operation: str) -> dict[str, Any]:
+    result["ok"] = False
+    result["synced"] = False
+    result["retryable"] = True
+    result["statePersisted"] = True
+    result["error"] = f"{operation} state persisted locally but shared-storage sync failed; retry to complete"
+    result.pop("notificationNeeded", None)
+    return result
+
+
+def _persisted_state_failure_result(
+    *,
+    tool: str,
+    action: str,
+    error: Exception,
+    task: dict[str, Any] | None = None,
+    project: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "ok": False,
+        "tool": tool,
+        "action": action,
+        "retryable": True,
+        "statePersisted": True,
+        "synced": False,
+        "error": f"{action} state persisted locally but follow-up state update failed: {error}; retry to complete",
+    }
+    if task is not None:
+        result["task"] = task
+    if project is not None:
+        result["project"] = project
+    return result
+
+
+def _uncommitted_state_failure_result(*, tool: str, action: str, error: Exception) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "tool": tool,
+        "action": action,
+        "retryable": True,
+        "statePersisted": False,
+        "synced": False,
+        "error": f"{action} could not persist local state: {error}; retry to complete",
+    }
 
 
 def _payload_bool(value: Any, default: bool) -> bool:
@@ -3071,28 +3220,159 @@ def _payload_bool_field(payload: dict[str, Any], names: tuple[str, ...], default
 
 
 def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    if _role(arguments) != "leader":
+        raise ValueError("accept_task_result requires leader role")
     project_id = _safe_id(payload.get("projectId") or payload.get("project_id"), "projectId")
     task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
     project = _read_json(_project_state_path(arguments, project_id))
     if not project:
         raise ValueError("project not found")
+    task_meta = _read_json(_task_state_path(arguments, task_id))
+    task_project_id = _first_text(task_meta.get("project_id"), task_meta.get("projectId"))
+    if task_project_id and task_project_id != project_id:
+        raise ValueError("task does not belong to project")
+    if task_meta:
+        task_status = str(task_meta.get("status") or "")
+        if task_status not in {"submitted", *TERMINAL_TASK_STATUSES}:
+            raise ValueError(f"accept_task_result requires submitted task state, got {task_status or 'missing'}")
+    requested_submission_id = _first_text(payload.get("submissionId"), payload.get("submission_id"))
+    persisted_submission_id = _first_text(task_meta.get("submission_id"), task_meta.get("submissionId"))
+    legacy_identity_persisted = False
+    if persisted_submission_id and not requested_submission_id:
+        raise ValueError("submissionId is required for the current task submission")
+    if task_meta and not persisted_submission_id and requested_submission_id:
+        raise ValueError("accept_task_result requires a submission identity")
+    if requested_submission_id and requested_submission_id != persisted_submission_id:
+        raise ValueError("submissionId does not match the current task submission")
+    if task_meta:
+        persisted_result, validation_errors = _task_result_from_meta(task_meta)
+        if validation_errors:
+            raise ValueError(f"persisted task result is invalid: {'; '.join(validation_errors)}")
+        persisted_result_digest = _first_text(
+            task_meta.get("result_digest"),
+            task_meta.get("resultDigest"),
+        )
+        if persisted_result_digest and persisted_result_digest != _task_result_digest(persisted_result):
+            raise ValueError("persisted task result digest does not match its structured result")
+        if not persisted_submission_id:
+            persisted_submission_id = uuid.uuid4().hex
+            task_meta["submission_id"] = persisted_submission_id
+            task_meta["submitted_at"] = _utc_timestamp()
+            task_meta["result_digest"] = _task_result_digest(persisted_result)
+            task_meta["continuation"] = {
+                "status": "pending",
+                "delivery_id": _continuation_delivery_id(
+                    project_id,
+                    task_id,
+                    persisted_submission_id,
+                ),
+            }
+            try:
+                _write_task(arguments, task_meta)
+            except OSError as exc:
+                return _uncommitted_state_failure_result(
+                    tool="projectflow",
+                    action="accept_task_result",
+                    error=exc,
+                )
+            legacy_identity_persisted = True
     result_status_value = payload.get("resultStatus") or payload.get("result_status")
+    if task_meta:
+        persisted_result_status = str(task_meta.get("result_status") or "")
+        if str(result_status_value or "SUCCESS").strip() != persisted_result_status:
+            raise ValueError("resultStatus does not match the submitted task result")
     accepted = _payload_bool(payload.get("accepted"), True)
     node_status = _accepted_node_status(result_status_value)
     if not accepted and node_status == "completed":
         result_status_value = "REVISION_NEEDED"
         node_status = "revision"
+    current_node_status = _project_task_status(project, task_id)
+    if current_node_status in TERMINAL_TASK_STATUSES:
+        if current_node_status != node_status:
+            raise ValueError(f"task result already decided as {current_node_status}")
+        try:
+            _write_project_plan(_project_dir(arguments, project_id), project)
+        except OSError as exc:
+            return _persisted_state_failure_result(
+                tool="projectflow",
+                action="accept_task_result",
+                error=exc,
+                task=task_meta or None,
+                project=project,
+            )
+        if not _sync_project(arguments, project_id):
+            return _sync_failure_result({
+                "tool": "projectflow",
+                "action": "accept_task_result",
+                "project": project,
+                "task": task_meta or None,
+                "taskId": task_id,
+                "submissionId": persisted_submission_id or None,
+                "nodeStatus": current_node_status,
+                "accepted": current_node_status == "completed",
+                "reused": True,
+                "publishedArtifacts": [],
+                "notificationNeeded": {},
+            }, "accept_task_result project")
+        repaired_task_fence = bool(task_meta) and (
+            str(task_meta.get("status") or "") != current_node_status
+            or (
+                isinstance(task_meta.get("continuation"), dict)
+                and task_meta["continuation"].get("status") != "resolved"
+            )
+        )
+        synced: bool | None = None
+        if repaired_task_fence:
+            task_meta["status"] = current_node_status
+            _resolve_task_continuation(task_meta, current_node_status)
+            try:
+                _write_task(arguments, task_meta)
+            except OSError as exc:
+                return _persisted_state_failure_result(
+                    tool="projectflow",
+                    action="accept_task_result",
+                    error=exc,
+                    task=task_meta,
+                    project=project,
+                )
+        if task_meta:
+            # A previous acceptance may have committed locally while its
+            # shared-storage push failed. Retrying the same decision must
+            # repair that external side effect without rewriting project
+            # state or reopening the requester report.
+            synced = _sync_task(arguments, task_id, exclude=["spec.md", "base/"])
+        reused_result = {
+            "ok": True,
+            "tool": "projectflow",
+            "action": "accept_task_result",
+            "project": project,
+            "taskId": task_id,
+            "submissionId": persisted_submission_id or None,
+            "nodeStatus": current_node_status,
+            "accepted": current_node_status == "completed",
+            "reused": True,
+            "repairedTaskFence": repaired_task_fence,
+            "publishedArtifacts": [],
+            "notificationNeeded": {},
+        }
+        if task_meta:
+            reused_result["task"] = task_meta
+        if synced is not None:
+            reused_result["synced"] = synced
+            if not synced:
+                return _sync_failure_result(reused_result, "accept_task_result")
+        return reused_result
     changed = False
-    for task in project.get("tasks", []):
-        if task.get("task_id") == task_id:
-            task["status"] = node_status
+    for project_task in project.get("tasks", []):
+        if project_task.get("task_id") == task_id:
+            project_task["status"] = node_status
             changed = True
             break
     loop = project.get("loop") if isinstance(project.get("loop"), dict) else {}
     loop_tasks = loop.get("tasks", []) if isinstance(loop.get("tasks"), list) else []
-    for task in loop_tasks:
-        if task.get("task_id") == task_id:
-            task["status"] = node_status
+    for project_task in loop_tasks:
+        if project_task.get("task_id") == task_id:
+            project_task["status"] = node_status
             project["loop"] = loop
             changed = True
             break
@@ -3114,9 +3394,59 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
             requester_report["pending"] = False
             requester_report["reason"] = f"task_result_{node_status}"
             project["requester_report"] = requester_report
-    _write_json(_project_state_path(arguments, project_id), project)
-    _write_project_plan(_project_dir(arguments, project_id), project)
-    _sync_project(arguments, project_id)
+    try:
+        _write_json(_project_state_path(arguments, project_id), project)
+    except OSError as exc:
+        if legacy_identity_persisted:
+            return _persisted_state_failure_result(
+                tool="projectflow",
+                action="accept_task_result",
+                error=exc,
+                task=task_meta,
+            )
+        return _uncommitted_state_failure_result(
+            tool="projectflow",
+            action="accept_task_result",
+            error=exc,
+        )
+    try:
+        _write_project_plan(_project_dir(arguments, project_id), project)
+    except OSError as exc:
+        return _persisted_state_failure_result(
+            tool="projectflow",
+            action="accept_task_result",
+            error=exc,
+            task=task_meta or None,
+            project=project,
+        )
+    if not _sync_project(arguments, project_id):
+        return _sync_failure_result({
+            "tool": "projectflow",
+            "action": "accept_task_result",
+            "project": project,
+            "task": task_meta or None,
+            "taskId": task_id,
+            "submissionId": persisted_submission_id or None,
+            "nodeStatus": node_status,
+            "accepted": node_status == "completed",
+            "publishedArtifacts": [],
+            "notificationNeeded": {},
+        }, "accept_task_result project")
+    synced: bool | None = None
+    if task_meta:
+        task_meta["status"] = node_status
+        _resolve_task_continuation(task_meta, node_status)
+        try:
+            _write_task(arguments, task_meta)
+        except OSError as exc:
+            return _persisted_state_failure_result(
+                tool="projectflow",
+                action="accept_task_result",
+                error=exc,
+                task=task_meta,
+                project=project,
+            )
+        synced = _sync_task(arguments, task_id, exclude=["spec.md", "base/"])
     publish_artifacts = _payload_bool_field(payload, ("publishArtifacts", "publish_artifacts"), False)
     published_artifacts = (
         _publish_project_artifacts(
@@ -3126,16 +3456,18 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
             task_id,
             _attachment_parent_event_id(payload, arguments),
         )
-        if node_status == "completed" and publish_artifacts else []
+        if node_status == "completed" and publish_artifacts and synced is not False else []
     )
     requester_report = project.get("requester_report") if isinstance(project.get("requester_report"), dict) else {}
     requester_report_pending = requester_report.get("pending") is True and requester_report.get("task_id") == task_id
-    return {
+    result = {
         "ok": True,
         "tool": "projectflow",
         "action": "accept_task_result",
         "project": project,
+        "task": task_meta or None,
         "taskId": task_id,
+        "submissionId": persisted_submission_id or None,
         "nodeStatus": node_status,
         "accepted": node_status == "completed",
         "publishedArtifacts": published_artifacts,
@@ -3146,6 +3478,11 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
             include_reply_route=requester_report_pending,
         ),
     }
+    if synced is not None:
+        result["synced"] = synced
+        if not synced:
+            return _sync_failure_result(result, "accept_task_result")
+    return result
 
 
 def _mark_requester_report_sent(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
@@ -3626,10 +3963,10 @@ def _message_tool_blocked_for_runtime_role() -> bool:
 
 
 def _role(arguments: dict[str, Any]) -> str:
-    role = str(arguments.get("role") or "").strip()
-    if not role:
-        return _runtime_role()
-    return _normalize_role(role)
+    runtime_role = _runtime_role()
+    if runtime_role:
+        return runtime_role
+    return _normalize_role(str(arguments.get("role") or "").strip())
 
 
 def _load_task(arguments: dict[str, Any], task_id: str) -> dict[str, Any]:
@@ -3735,8 +4072,11 @@ def _ensure_console_task_meta(arguments: dict[str, Any], task: dict[str, Any]) -
     for snake_key, camel_key in (
         ("acknowledged_by_role", "acknowledgedByRole"),
         ("result_status", "resultStatus"),
+        ("result_digest", "resultDigest"),
         ("result_path", "resultPath"),
         ("submitted_by_role", "submittedByRole"),
+        ("submission_id", "submissionId"),
+        ("submitted_at", "submittedAt"),
     ):
         value = _first_text(task.get(snake_key), task.get(camel_key))
         if value:
@@ -3753,8 +4093,11 @@ def _ensure_console_task_meta(arguments: dict[str, Any], task: dict[str, Any]) -
         "createdAt",
         "acknowledgedByRole",
         "resultStatus",
+        "resultDigest",
         "resultPath",
         "submittedByRole",
+        "submissionId",
+        "submittedAt",
     ):
         task.pop(key, None)
 
@@ -3764,7 +4107,20 @@ def _write_task(arguments: dict[str, Any], task: dict[str, Any]) -> None:
     _write_json(_task_state_path(arguments, task["task_id"]), task)
 
 
-ALLOWED_TASK_RESULT_STATUSES = {"SUCCESS", "SUCCESS_WITH_NOTES", "REVISION_NEEDED", "BLOCKED", "FAILED", "PARTIAL"}
+ALLOWED_TASK_RESULT_STATUSES = {
+    "SUCCESS",
+    "SUCCESS_WITH_NOTES",
+    "REVISION_NEEDED",
+    "BLOCKED",
+    "INTERRUPTED",
+}
+
+
+def _validate_task_result_status(value: Any) -> str:
+    status = str(value or "SUCCESS").strip()
+    if status not in ALLOWED_TASK_RESULT_STATUSES:
+        raise ValueError(f"unsupported result status: {status}")
+    return status
 
 
 def _validate_task_deliverables(task_id: str, deliverables: list[Any]) -> list[str]:
@@ -3808,7 +4164,34 @@ def _task_result_from_meta(task: dict[str, Any]) -> tuple[dict[str, Any], list[s
     return result, errors
 
 
-def _sync_task(arguments: dict[str, Any], task_id: str, exclude: list[str] | None = None) -> bool:
+def _sync_task(
+    arguments: dict[str, Any],
+    task_id: str,
+    exclude: list[str] | None = None,
+    result_paths: list[str] | None = None,
+) -> bool:
+    if result_paths is not None:
+        task_prefix = f"shared/tasks/{task_id}"
+        local_task_dir = _task_dir(arguments, task_id)
+        payload_paths: list[str] = []
+        if (local_task_dir / "result.md").is_file():
+            payload_paths.append(f"{task_prefix}/result.md")
+        for path in result_paths:
+            if path not in payload_paths:
+                payload_paths.append(path)
+        for path in payload_paths:
+            for action in ("push", "stat"):
+                sync_args = dict(arguments)
+                sync_args.update({"action": action, "path": path})
+                if not _filesync(sync_args).get("ok"):
+                    return False
+        commit_path = f"{task_prefix}/meta.json"
+        for action in ("push", "stat"):
+            commit_args = dict(arguments)
+            commit_args.update({"action": action, "path": commit_path})
+            if not _filesync(commit_args).get("ok"):
+                return False
+        return True
     sync_args = dict(arguments)
     sync_args.update({
         "action": "push",
@@ -4340,6 +4723,9 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             if role not in {"worker", "remote-member"}:
                 raise ValueError("ack_task requires worker or remote-member role")
             task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
+            local_task = _read_json(_task_state_path(arguments, task_id))
+            if local_task:
+                _require_task_mutable(arguments, local_task, task_id, action)
             pulled = _pull_task(arguments, task_id)
             task = _load_task(arguments, task_id)
             _require_task_mutable(arguments, task, task_id, action)
@@ -4367,26 +4753,135 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             task = _load_task(arguments, task_id)
             _require_task_mutable(arguments, task, task_id, action)
             summary = str(payload.get("summary") or "")
-            status = str(payload.get("status") or "SUCCESS")
+            status = _validate_task_result_status(payload.get("status"))
             deliverables = payload.get("deliverables") or []
             if not isinstance(deliverables, list):
                 raise ValueError("deliverables must be a list")
             deliverables = _validate_task_deliverables(task_id, deliverables)
+            submitted_result = {
+                "status": status,
+                "summary": summary,
+                "deliverables": deliverables,
+            }
+            submitted_digest = _task_result_digest(submitted_result)
+            if task.get("status") == "submitted":
+                persisted_digest = _first_text(
+                    task.get("result_digest"),
+                    task.get("resultDigest"),
+                )
+                if not persisted_digest:
+                    persisted_digest = _task_result_digest(_submission_result(task))
+                if persisted_digest != submitted_digest:
+                    raise ValueError("submit_task conflicts with existing submission")
+                submission_id = _first_text(
+                    task.get("submission_id"),
+                    task.get("submissionId"),
+                )
+                if not submission_id:
+                    raise ValueError("legacy submitted task has no submission identity and cannot be resubmitted")
+                if not task.get("result_digest") or task.get("resultDigest"):
+                    task["result_digest"] = persisted_digest
+                    try:
+                        _write_task(arguments, task)
+                    except OSError as exc:
+                        return _persisted_state_failure_result(
+                            tool="taskflow",
+                            action=action,
+                            error=exc,
+                            task=task,
+                        )
+                try:
+                    _update_project_task(
+                        arguments,
+                        task.get("project_id", ""),
+                        task_id,
+                        status="submitted",
+                    )
+                except OSError as exc:
+                    return _persisted_state_failure_result(
+                        tool="taskflow",
+                        action=action,
+                        error=exc,
+                        task=task,
+                    )
+                if not _sync_project(arguments, task.get("project_id", "")):
+                    return _sync_failure_result({
+                        "tool": "taskflow",
+                        "action": action,
+                        "task": task,
+                        "reused": True,
+                        "publishedArtifacts": [],
+                    }, "submit_task project")
+                synced = _sync_task(
+                    arguments,
+                    task_id,
+                    exclude=["spec.md", "base/"],
+                    result_paths=deliverables,
+                )
+                result = {
+                    "ok": True,
+                    "tool": "taskflow",
+                    "action": action,
+                    "task": task,
+                    "reused": True,
+                    "publishedArtifacts": [],
+                    "synced": synced,
+                    "notificationNeeded": _notification_needed(
+                        "submit_task",
+                        {"project_id": task.get("project_id", "")},
+                        task,
+                        summary=f"submit_task: {task_id} ({status})",
+                    ),
+                }
+                if not synced:
+                    return _sync_failure_result(result, "submit_task")
+                return result
             task_dir = _task_dir(arguments, task_id)
             task_dir.mkdir(parents=True, exist_ok=True)
+            submission_id = uuid.uuid4().hex
+            submitted_at = _utc_timestamp()
             task.update({
                 "status": "submitted",
                 "result_status": status,
                 "summary": summary,
                 "deliverables": deliverables,
                 "submitted_by_role": role,
+                "submission_id": submission_id,
+                "submitted_at": submitted_at,
+                "result_digest": submitted_digest,
+                "continuation": {
+                    "status": "pending",
+                    "delivery_id": _continuation_delivery_id(
+                        _first_text(task.get("project_id"), task.get("projectId")),
+                        task_id,
+                        submission_id,
+                    ),
+                },
             })
             if (task_dir / "result.md").is_file():
                 task["result_path"] = f"shared/tasks/{task_id}/result.md"
             else:
                 task.pop("result_path", None)
-            _write_task(arguments, task)
-            _update_project_task(arguments, task.get("project_id", ""), task_id, status="submitted")
+            try:
+                _write_task(arguments, task)
+            except OSError as exc:
+                return _uncommitted_state_failure_result(tool="taskflow", action=action, error=exc)
+            try:
+                _update_project_task(arguments, task.get("project_id", ""), task_id, status="submitted")
+            except OSError as exc:
+                return _persisted_state_failure_result(
+                    tool="taskflow",
+                    action=action,
+                    error=exc,
+                    task=task,
+                )
+            if not _sync_project(arguments, task.get("project_id", "")):
+                return _sync_failure_result({
+                    "tool": "taskflow",
+                    "action": action,
+                    "task": task,
+                    "publishedArtifacts": [],
+                }, "submit_task project")
             published_artifacts = _publish_task_artifacts(
                 arguments,
                 task,
@@ -4394,13 +4889,19 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 deliverables,
                 _attachment_parent_event_id(payload, arguments),
             )
-            return {
+            synced = _sync_task(
+                arguments,
+                task_id,
+                exclude=["spec.md", "base/"],
+                result_paths=deliverables,
+            )
+            result = {
                 "ok": True,
                 "tool": "taskflow",
                 "action": action,
                 "task": task,
                 "publishedArtifacts": published_artifacts,
-                "synced": _sync_task(arguments, task_id, exclude=["spec.md", "base/"]),
+                "synced": synced,
                 "notificationNeeded": _notification_needed(
                     "submit_task",
                     {"project_id": task.get("project_id", "")},
@@ -4408,38 +4909,120 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     summary=f"submit_task: {task_id} ({status})",
                 ),
             }
+            if not synced:
+                return _sync_failure_result(result, "submit_task")
+            return result
 
         if action == "cancel_task":
             if role != "leader":
                 raise ValueError("cancel_task requires leader role")
             task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
             task = _load_task(arguments, task_id)
+            requested_submission_id = _first_text(
+                payload.get("submissionId"),
+                payload.get("submission_id"),
+            )
+            persisted_submission_id = _first_text(
+                task.get("submission_id"),
+                task.get("submissionId"),
+            )
+            if persisted_submission_id and not requested_submission_id:
+                raise ValueError("submissionId is required for the current task submission")
+            if requested_submission_id and requested_submission_id != persisted_submission_id:
+                raise ValueError("submissionId does not match the current task submission")
             project_id = str(task.get("project_id") or "")
-            terminal_status = _terminal_task_status(arguments, task, task_id)
-            if terminal_status:
-                raise ValueError(f"cannot cancel terminal task: {terminal_status}")
             reason = str(payload.get("reason") or payload.get("cancelReason") or payload.get("cancel_reason") or "").strip()
             if not reason:
                 raise ValueError("reason is required")
             replacement_task_id = payload.get("replacementTaskId") or payload.get("replacement_task_id")
+            normalized_replacement_task_id = (
+                _safe_id(replacement_task_id, "replacementTaskId") if replacement_task_id else ""
+            )
+            terminal_status = _terminal_task_status(arguments, task, task_id)
+            continuation = task.get("continuation") if isinstance(task.get("continuation"), dict) else {}
+            cancellation_committed = bool(task.get("cancelled_at")) or continuation.get("status") == "resolved"
+            if terminal_status == "cancelled" and cancellation_committed:
+                persisted_reason = str(task.get("cancel_reason") or "").strip()
+                persisted_replacement_task_id = str(task.get("replacement_task_id") or "").strip()
+                if (
+                    persisted_reason != reason
+                    or persisted_replacement_task_id != normalized_replacement_task_id
+                ):
+                    raise ValueError("cancel_task conflicts with existing cancellation")
+                try:
+                    _update_project_task(arguments, project_id, task_id, status="cancelled")
+                except OSError as exc:
+                    return _persisted_state_failure_result(
+                        tool="taskflow",
+                        action=action,
+                        error=exc,
+                        task=task,
+                    )
+                if not _sync_project(arguments, project_id):
+                    return _sync_failure_result({
+                        "tool": "taskflow",
+                        "action": action,
+                        "task": task,
+                        "project": _read_json(_project_state_path(arguments, project_id)) if project_id else {},
+                        "reused": True,
+                    }, "cancel_task project")
+                synced = _sync_task(arguments, task_id, exclude=["spec.md", "base/"])
+                result = {
+                    "ok": True,
+                    "tool": "taskflow",
+                    "action": action,
+                    "task": task,
+                    "project": _read_json(_project_state_path(arguments, project_id)) if project_id else {},
+                    "reused": True,
+                    "synced": synced,
+                }
+                if not synced:
+                    return _sync_failure_result(result, "cancel_task")
+                return result
+            if terminal_status:
+                raise ValueError(f"cannot cancel terminal task: {terminal_status}")
 
             task["status"] = "cancelled"
             task["cancel_reason"] = reason
-            if replacement_task_id:
-                task["replacement_task_id"] = _safe_id(replacement_task_id, "replacementTaskId")
+            task["cancelled_at"] = _utc_timestamp()
+            _resolve_task_continuation(task, "cancelled")
+            if normalized_replacement_task_id:
+                task["replacement_task_id"] = normalized_replacement_task_id
             else:
                 task.pop("replacement_task_id", None)
-            _write_task(arguments, task)
+            try:
+                _write_task(arguments, task)
+            except OSError as exc:
+                return _uncommitted_state_failure_result(tool="taskflow", action=action, error=exc)
 
-            _update_project_task(arguments, project_id, task_id, status="cancelled")
-            return {
+            try:
+                _update_project_task(arguments, project_id, task_id, status="cancelled")
+            except OSError as exc:
+                return _persisted_state_failure_result(
+                    tool="taskflow",
+                    action=action,
+                    error=exc,
+                    task=task,
+                )
+            if not _sync_project(arguments, project_id):
+                return _sync_failure_result({
+                    "tool": "taskflow",
+                    "action": action,
+                    "task": task,
+                    "project": _read_json(_project_state_path(arguments, project_id)) if project_id else {},
+                }, "cancel_task project")
+            synced = _sync_task(arguments, task_id, exclude=["spec.md", "base/"])
+            result = {
                 "ok": True,
                 "tool": "taskflow",
                 "action": action,
                 "task": task,
                 "project": _read_json(_project_state_path(arguments, project_id)) if project_id else {},
-                "synced": _sync_task(arguments, task_id, exclude=["spec.md", "base/"]),
+                "synced": synced,
             }
+            if not synced:
+                return _sync_failure_result(result, "cancel_task")
+            return result
 
         if action == "check_task":
             if role != "leader":

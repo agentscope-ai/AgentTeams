@@ -29,7 +29,7 @@ from copaw_worker.task import (
     commit_task_assignment,
     is_effective_result,
     prepare_task,
-    submit_task,
+    submit_task_with_outcome,
     validate_delegate_task,
     validate_task_result,
 )
@@ -597,17 +597,46 @@ async def taskflow(
                 if result is not None:
                     dry_run_payload["result"] = asdict(result)
                 return _ok(**dry_run_payload)
-            meta = submit_task(store, task_id=task_id, result=result, actor=_current_actor())
-            task_path = f"shared/tasks/{task_id}/"
+            meta, reused = submit_task_with_outcome(
+                store,
+                task_id=task_id,
+                result=result,
+                actor=_current_actor(),
+            )
             result_path = f"shared/tasks/{task_id}/result.md"
+            meta_path = f"shared/tasks/{task_id}/meta.json"
+            persisted_result = store.read_task_result(task_id)
             sync = create_sync()
-            sync.push_shared_path(task_path, exclude=["spec.md", "base/"])
-            sync.stat_shared_path(result_path)
+            try:
+                # Publish every result payload before meta.json, which is the
+                # remote commit point for a submitted task.
+                payload_paths = list(dict.fromkeys(
+                    [result_path, *persisted_result.deliverables],
+                ))
+                for payload_path in payload_paths:
+                    sync.push_shared_path(payload_path)
+                    sync.stat_shared_path(payload_path)
+                sync.push_shared_path(meta_path)
+                sync.stat_shared_path(meta_path)
+            except Exception as exc:
+                return _error(
+                    "submit_task state persisted locally but shared-storage "
+                    f"sync failed: {exc}",
+                    action=action,
+                    taskId=task_id,
+                    task=asdict(meta),
+                    reused=reused,
+                    synced=False,
+                    verified=False,
+                    retryable=True,
+                    statePersisted=True,
+                )
             response_payload: dict[str, Any] = {
                 "action": action,
                 "task": asdict(meta),
                 "synced": True,
                 "verified": True,
+                "reused": reused,
             }
             if result is not None:
                 response_payload["result"] = asdict(result)

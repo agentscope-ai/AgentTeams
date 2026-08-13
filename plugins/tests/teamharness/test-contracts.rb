@@ -8,6 +8,7 @@ repo_root = Pathname.new(__dir__).join("../../..").expand_path
 plugin_root = repo_root / "plugins/teamharness"
 manifest_path = plugin_root / "plugin.yaml"
 boundary_doc = repo_root / "docs/design/teamharness/boundary-and-contracts.md"
+runtime_design_doc = repo_root / "docs/design/teamharness/project-task-runtime-design.md"
 
 def fail!(message)
   warn "ERROR: #{message}"
@@ -49,6 +50,27 @@ doc = read(boundary_doc)
 ].each do |needle|
   assert(doc.include?(needle), "boundary doc must describe #{needle.inspect}")
 end
+
+assert_file(runtime_design_doc)
+runtime_design = read(runtime_design_doc)
+assert(runtime_design.include?("submission_id") && runtime_design.include?("submitted_at") && runtime_design.include?("不透明、不可变提交身份"), "runtime design must define opaque immutable submission identity")
+assert(runtime_design.include?("teamharness.task-result.v1") && runtime_design.include?("canonical_json"), "runtime design must define the cross-runtime result digest domain and canonical payload")
+assert(runtime_design.include?("notes") && runtime_design.include?("不参与摘要") && runtime_design.include?("保持调用方给出的顺序"), "runtime design must define digest exclusions and deliverable ordering")
+assert(runtime_design.include?("result-submitted:v1") && runtime_design.include?("project_id || NUL || task_id || NUL || submission_id"), "runtime design must define the continuation delivery id formula")
+assert(runtime_design.include?('"status": "pending"') && runtime_design.include?('"status": "resolved"') && runtime_design.include?('"resolution": "completed"'), "runtime design must define pending and resolved continuation markers")
+assert(runtime_design.include?("compare-and-swap (CAS)") && runtime_design.include?("single-writer"), "runtime design must state its single-writer and cross-process CAS boundary")
+assert(runtime_design.include?("project projection") && runtime_design.include?("statePersisted: true") && runtime_design.include?("可检测、可重试、可修复"), "runtime design must define retry repair for project and task remote projections")
+assert(runtime_design.include?("同一 submission 与同一决定的重试是幂等的"), "runtime design must define idempotent result acceptance")
+assert(runtime_design.include?("可信 Leader") && runtime_design.include?("Worker runtime") && runtime_design.include?("不得调用 accept、cancel"), "runtime design must reserve continuation decisions for the trusted Leader")
+assert(runtime_design.include?("submissionId") && runtime_design.include?("布尔值 `accepted`") && runtime_design.include?("过期 identity"), "runtime design must fence explicit Leader decisions")
+assert(runtime_design.include?("projectflow(action=cancel_task)") && runtime_design.include?("taskflow(action=cancel_task)"), "runtime design must distinguish CoPaw and standalone cancel routes")
+assert(runtime_design.include?("legacy-adoption:v1") && runtime_design.include?("standalone MCP 的 `submit_task` 不收养"), "runtime design must define evidence-based legacy adoption")
+assert(runtime_design.include?("CoPaw 决策\n入口本身不迁移缺 ID 状态") && runtime_design.include?("plan-only acceptance 不制造 TaskMeta") && runtime_design.include?("没有 identity 的 cancel 可以继续完成取消"), "runtime design must match each runtime's legacy decision compatibility")
+assert(%w[cancel_reason replacement_task_id cancelled_at].all? { |field| runtime_design.include?(field) }, "runtime design must define durable cancellation fields")
+assert(runtime_design.include?("只要 TaskMeta 已有 `submission_id`") && runtime_design.include?("accept 和 cancel 都必须") && runtime_design.include?("无 identity 的 legacy 迁移例外"), "runtime design must require submission fences outside legacy migration")
+assert(runtime_design.include?("standalone MCP 的 `accept_task_result`") && runtime_design.include?("CoPaw 原生 `projectflow`") && runtime_design.include?("不凭空创建 `requester_report`") && runtime_design.include?("不能据此省略"), "runtime design must distinguish requester report projections without dropping report responsibility")
+assert(runtime_design.include?("Controller 周期调度") && runtime_design.include?("Matrix 唤醒") && runtime_design.include?("明确 deferred"), "runtime design must defer Controller scheduling and Matrix wake delivery")
+assert(runtime_design.include?("不能声称任务已恢复") && !runtime_design.include?("TASK_CONTINUE") && !runtime_design.include?("QwenPaw plugin"), "runtime design must not claim that wake scheduling or recovery is implemented")
 
 assert(manifest.dig("metadata", "name") == "teamharness", "metadata.name must be teamharness")
 
@@ -219,6 +241,11 @@ assert(project_skill.include?("ordinary direct replies"), "project skill must ex
 assert(project_skill.include?("meta.json"), "project skill must use CoPaw meta.json state")
 assert(project_skill.include?("resolve_project"), "project skill must document project context resume")
 assert(project_skill.include?("accept_task_result"), "project skill must document explicit task result acceptance")
+assert(project_skill.include?("trusted Leader") && project_skill.include?('"accepted": true') && project_skill.include?("task.submission_id from check_task"), "project skill must document trusted fenced acceptance")
+assert(project_skill.include?('projectflow` with `action: "cancel_task"') && project_skill.include?('taskflow` with `action: "cancel_task"'), "project skill must route cancellation by runtime")
+assert(project_skill.include?("you must pass that exact\nvalue as `submissionId` to both acceptance and cancellation") && normalized(project_skill).include?("persisted legacy submission with no identity"), "project skill must require normal submission fences and preserve the legacy exception")
+assert(project_skill.include?("Native CoPaw decisions do not perform that migration") && project_skill.include?("compatibility for cancelling legacy TaskMeta that has no identity"), "project skill must distinguish CoPaw and standalone legacy decisions")
+assert(project_skill.include?("standalone MCP") && project_skill.include?("Native CoPaw `projectflow`") && project_skill.include?("does not invent a\n`requester_report`") && project_skill.include?("permission to omit the report"), "project skill must preserve requester reporting across runtime projections")
 assert(!project_skill.include?("check_active_tasks"), "project skill must not document cancelled hook recovery checks")
 assert(!project_skill.include?("Hook Recovery Checks"), "project skill must not expose cancelled hook recovery checks")
 assert(project_skill.include?("mark_requester_report_sent"), "project skill must document requester report clearing")
@@ -244,6 +271,9 @@ assert(delegation_skill.include?("normal current-session reply") && delegation_s
 assert(delegation_skill.include?("`teamharness-roomflow` owns task-room creation"), "delegation skill must leave room setup details to roomflow")
 assert(!delegation_skill.include?("roomBindingScope: \"sender\""), "delegation skill must not duplicate roomflow sender binding details")
 assert(delegation_skill_text.include?("Do not fall back to the requester/source session"), "delegation skill must keep Project Work assignment inside the task room")
+assert(delegation_skill.include?("current `task.submission_id`") && delegation_skill.include?("boolean `accepted`") && delegation_skill.include?("trusted Leader runtime"), "delegation skill must preserve the trusted acceptance fence")
+assert(delegation_skill.include?("omitting `submissionId` is an error") && delegation_skill.include?("no-identity legacy migration"), "delegation skill must require a fence for normal accept and cancel decisions")
+assert(delegation_skill.include?("`INTERRUPTED`") && delegation_skill.include?("records the task and plan node as `blocked`") && delegation_skill.include?("`resolution: blocked`"), "delegation skill must map interrupted results to blocked terminal state")
 assert(communication_skill.include?("matrix:!roomid:domain"), "communication skill must support legacy Matrix requester routing")
 assert(communication_skill.include?("Matrix DM requester reports") && communication_skill.include?("targetSession"), "communication skill must document Matrix DM reply routes")
 assert(communication_skill.include?("requester report") && communication_skill.include?("mandatory"), "communication skill must require requester reports after accepted state changes")
@@ -254,6 +284,13 @@ assert(leader_prompt.include?("role names such as `leader`") && leader_prompt.in
 assert(normalized(communication_skill).include?("recorded requester route is exactly"), "communication skill must own requester route exclusion rules")
 assert(execution_skill.include?("Do not use this skill or taskflow"), "execution skill must exclude direct checks")
 assert(execution_skill.include?("meta.json"), "execution skill must use CoPaw meta.json state")
+assert(execution_skill.include?("submission_id") && execution_skill.include?("submitted_at") && execution_skill.include?("result_digest") && execution_skill.include?("continuation"), "execution skill must document the durable submission contract")
+assert(normalized(execution_skill).include?("retry with exactly the same status, summary, and ordered deliverables") && normalized(execution_skill).include?("retry conflicts"), "execution skill must document immutable idempotent submit retries")
+assert(execution_skill.include?("opaque fence") && execution_skill.include?("do not parse it"), "execution skill must treat submission ids as opaque")
+assert(execution_skill.include?("does not mean") && execution_skill.include?("Matrix wake"), "execution skill must not claim a pending continuation was delivered")
+assert(execution_skill.include?("cannot accept, reject, cancel, or resolve") && execution_skill.include?("cannot\noverride your Worker runtime identity"), "execution skill must forbid Worker terminal decisions")
+assert(execution_skill.include?("legacy task") && execution_skill.include?("exactly matches the persisted result") && execution_skill.include?("Do not invent\nan identity"), "execution skill must document fail-closed legacy adoption")
+assert(execution_skill.include?("`INTERRUPTED`") && execution_skill.include?("records the task and plan\nnode as `blocked`") && execution_skill.include?("`resolution: blocked`"), "execution skill must map interrupted results to blocked terminal state")
 
 server = manifest.fetch("mcp").fetch("servers").fetch(0)
 assert(server.fetch("id") == "teamharness", "MCP server id must be teamharness")

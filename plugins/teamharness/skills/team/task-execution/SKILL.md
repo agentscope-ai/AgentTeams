@@ -1,6 +1,6 @@
 ---
 name: teamharness-task-execution
-description: "Use when a Worker receives TASK_ASSIGNED, acknowledges the task, works inside shared/tasks/{task-id}/, submits with taskflow submit_task, publishes deliverables through submit_task, and reports TASK_COMPLETED or blockers in the Task room."
+description: "Use when you act as Worker: receive TASK_ASSIGNED, acknowledge the task, work inside shared/tasks/{task-id}/, submit with taskflow submit_task, publish deliverables through submit_task, and report TASK_COMPLETED or blockers in the Task room."
 ---
 
 # Task Execution
@@ -24,7 +24,7 @@ Your assigned task lives under:
 shared/tasks/{task-id}/
 ```
 
-The Leader owns:
+Your Leader owns:
 
 ```text
 shared/tasks/{task-id}/meta.json
@@ -49,7 +49,7 @@ shared/projects/{project-id}/result.md
 
 If a task spec asks you to write or submit `shared/projects/...`, report that
 boundary conflict to the Leader. Put Worker-owned deliverables under
-`shared/tasks/{task-id}/...`; the Leader owns project-level reports.
+`shared/tasks/{task-id}/...`; your Leader owns project-level reports.
 
 ## Acknowledge
 
@@ -122,6 +122,37 @@ Use one of:
 - `SUCCESS_WITH_NOTES`
 - `REVISION_NEEDED`
 - `BLOCKED`
+- `INTERRUPTED`
+
+Use `INTERRUPTED` when execution stopped before you could finish. If your Leader
+accepts either `INTERRUPTED` or `BLOCKED`, TeamHarness records the task and plan
+node as `blocked` and resolves the continuation with `resolution: blocked`.
+
+Your first persisted submission records `submission_id`, UTC `submitted_at`,
+`result_digest`, and a pending `continuation` marker in TaskMeta. Treat
+`submission_id` as an opaque fence: compare it for equality, but do not parse it
+or assume a UUID format. The digest covers your trimmed status, whitespace-
+collapsed summary, and validated deliverable paths in their persisted order; it does
+not cover notes or the rendered `result.md` text.
+
+If shared-storage sync is interrupted, retry with exactly the same status,
+summary, and ordered deliverables. Your retry reuses the original submission,
+timestamp, digest, and continuation `delivery_id`, and repairs missing project
+or task projections. If you change any digest input, the retry conflicts with
+the submitted task and you must wait for a Leader decision or a new task. A
+pending continuation is durable state for a future Controller; it does not mean
+that a Matrix wake was sent or that your Leader has already resumed the task.
+
+You cannot accept, reject, cancel, or resolve your own submission. Those are
+trusted-Leader-only decisions, and putting `role: leader` in a payload cannot
+override your Worker runtime identity. After submitting, use the returned
+`submissionId` only as an opaque value in reports or exact retries.
+
+For a legacy task already marked `submitted` without a submission identity,
+retry only when TaskMeta has `submitted_at`, and send the complete original
+status, summary, and ordered deliverables. CoPaw adopts it only if that result
+exactly matches the persisted result; otherwise it fails closed. Do not invent
+an identity or try to resolve the legacy task yourself.
 
 Submitting ends the task. Do not keep editing the old task after submission
 unless the Leader assigns a new task.

@@ -82,6 +82,9 @@ printf 'mc %s\n' "$*" >> "${TEST_EVENTS}"
 if [ "${1:-}" = stat ]; then
     grep -q '^mc mirror ' "${TEST_EVENTS}"
 fi
+if [ "${1:-}" = mirror ] && [ "${TEST_MC_MIRROR_FAIL:-0}" = 1 ]; then
+    exit 1
+fi
 EOF
     chmod +x "${CASE_DIR}/bin/agt" "${CASE_DIR}/bin/mc"
 }
@@ -114,6 +117,7 @@ run_script() {
     PATH="${CASE_DIR}/bin:${PATH}" \
     TEST_EVENTS="${EVENTS}" \
     TEST_STATE="${STATE}" \
+    TEST_MC_MIRROR_FAIL="${MC_MIRROR_FAIL:-0}" \
     AGENTTEAMS_STORAGE_PREFIX="test/agentteams-storage" \
     bash "${SCRIPT}" "$@"
 }
@@ -275,6 +279,33 @@ else
 fi
 assert_not_contains "failed distribution does not update Worker CR" \
     "agt update worker" "${EVENTS}"
+
+echo "=== TC9: failed replacement restores the previous canonical Skill ==="
+setup_case "${TMPDIR_ROOT}/replacement-rollback"
+jq '.workers[0].skills = ["replace-skill"]' "${STATE}" > "${STATE}.tmp"
+mv "${STATE}.tmp" "${STATE}"
+mkdir -p "${CASE_DIR}/home/worker-skills/replace-skill"
+cat > "${CASE_DIR}/home/worker-skills/replace-skill/SKILL.md" <<'EOF'
+---
+name: replace-skill
+description: Previous canonical Skill.
+---
+
+# Previous version
+EOF
+create_zip "${CASE_DIR}/skill.zip" "replace-skill" "Replacement canonical Skill."
+MC_MIRROR_FAIL=1
+if run_script --worker amy-ai --archive "${CASE_DIR}/skill.zip" --replace --no-notify \
+    >"${CASE_DIR}/output.log" 2>"${CASE_DIR}/error.log"; then
+    fail "failed replacement is reported" "non-zero" "exit 0"
+else
+    pass "failed replacement is reported"
+fi
+unset MC_MIRROR_FAIL
+assert_contains "failed replacement restores the previous canonical Skill" \
+    "# Previous version" "${CASE_DIR}/home/worker-skills/replace-skill/SKILL.md"
+assert_not_contains "failed replacement does not retain the replacement canonical Skill" \
+    "Replacement canonical Skill." "${CASE_DIR}/home/worker-skills/replace-skill/SKILL.md"
 
 echo
 echo "Results: ${PASS} passed, ${FAIL} failed"

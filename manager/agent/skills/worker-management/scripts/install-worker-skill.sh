@@ -95,9 +95,10 @@ if [ "${NOTIFY}" = false ]; then
     push_args+=(--no-notify)
 fi
 if ! push_output=$(bash "${PUSH_SCRIPT}" "${push_args[@]}" 2>&1); then
-    # Do not leave a canonical Skill behind when distribution failed before
-    # the Worker CR accepted it. If the CR already lists the Skill, preserve
-    # the files so reconciliation never points at a missing definition.
+    # A failed replacement must restore the previous canonical version even
+    # when the Worker CR already lists the Skill. For a first-time install,
+    # preserve the files if the CR accepted the assignment so reconciliation
+    # never points at a missing definition.
     assigned_after_failure=false
     if worker_after_failure=$(agt get workers "${WORKER_NAME}" -o json 2>/dev/null); then
         if echo "${worker_after_failure}" | jq -e --arg skill "${skill_name}" \
@@ -105,12 +106,12 @@ if ! push_output=$(bash "${PUSH_SCRIPT}" "${push_args[@]}" 2>&1); then
             assigned_after_failure=true
         fi
     fi
-    if [ "${assigned_after_failure}" != true ]; then
+    if [ -n "${BACKUP_DIR}" ] && [ -d "${BACKUP_DIR}" ]; then
         rm -rf "${target_dir}"
-        if [ -n "${BACKUP_DIR}" ] && [ -d "${BACKUP_DIR}" ]; then
-            mv "${BACKUP_DIR}" "${target_dir}"
-            BACKUP_DIR=""
-        fi
+        mv "${BACKUP_DIR}" "${target_dir}"
+        BACKUP_DIR=""
+    elif [ "${assigned_after_failure}" != true ]; then
+        rm -rf "${target_dir}"
     fi
     echo "${push_output}" >&2
     exit 1

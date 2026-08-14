@@ -41,7 +41,9 @@ mirror_skill() {
         ensure_mc_credentials
     fi
     if source=$(find_skill_source "${skill}"); then
-        mc mirror "${source}/" "${destination}/" --overwrite
+        # Keep the Worker copy exact so files removed from a replacement Skill
+        # do not survive in object storage.
+        mc mirror "${source}/" "${destination}/" --overwrite --remove
         # Some mc releases can print an S3 authorization error yet still exit
         # zero from `mirror`. Verify the contract file before changing the CR,
         # otherwise the Manager would report success for a missing skill.

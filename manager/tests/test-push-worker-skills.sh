@@ -136,8 +136,8 @@ if run_script --worker amy-ai --add-skill competition-skill; then
 else
     fail "add-skill exits successfully" "exit 0" "non-zero"
 fi
-assert_contains "source is mirrored into amy-ai storage" \
-    "mc mirror ${CASE_DIR}/home/worker-skills/competition-skill/ test/agentteams-storage/agents/amy-ai/skills/competition-skill/ --overwrite" \
+assert_contains "mirror removes destination-only files from amy-ai storage" \
+    "mc mirror ${CASE_DIR}/home/worker-skills/competition-skill/ test/agentteams-storage/agents/amy-ai/skills/competition-skill/ --overwrite --remove" \
     "${EVENTS}"
 assert_contains "uploaded SKILL.md is verified before updating the CR" \
     "mc stat test/agentteams-storage/agents/amy-ai/skills/competition-skill/SKILL.md" \
@@ -168,7 +168,7 @@ else
     fail "reconcile push exits successfully" "exit 0" "non-zero"
 fi
 assert_contains "reconcile mirrors the assigned skill" \
-    "mc mirror ${CASE_DIR}/home/worker-skills/competition-skill/ test/agentteams-storage/agents/amy-ai/skills/competition-skill/ --overwrite" \
+    "mc mirror ${CASE_DIR}/home/worker-skills/competition-skill/ test/agentteams-storage/agents/amy-ai/skills/competition-skill/ --overwrite --remove" \
     "${EVENTS}"
 assert_not_contains "reconcile does not recursively update Worker.spec.skills" \
     "agt update worker" "${EVENTS}"

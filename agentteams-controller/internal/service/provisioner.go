@@ -705,6 +705,17 @@ func (p *Provisioner) RefreshManagerCredentials(ctx context.Context, managerName
 			return nil, fmt.Errorf("persist matrix token: %w", err)
 		}
 	}
+	if p.ossAdmin != nil {
+		if err := p.ossAdmin.EnsureUser(ctx, managerName, creds.MinIOPassword); err != nil {
+			return nil, fmt.Errorf("MinIO Manager user refresh failed: %w", err)
+		}
+		if err := p.ossAdmin.EnsurePolicy(ctx, oss.PolicyRequest{
+			WorkerName: managerName,
+			IsManager:  true,
+		}); err != nil {
+			return nil, fmt.Errorf("MinIO Manager policy refresh failed: %w", err)
+		}
+	}
 
 	return &RefreshResult{
 		MatrixToken:    matrixToken,

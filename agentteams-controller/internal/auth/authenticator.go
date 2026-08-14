@@ -18,6 +18,11 @@ const (
 	RoleManager    = "manager"
 	RoleTeamLeader = "team-leader"
 	RoleWorker     = "worker"
+	// RoleHuman is an L2 human (Human CR permissionLevel=2) authenticated by
+	// Matrix token. It is a read-only viewer scoped to accessibleTeams —
+	// deliberately NOT RoleTeamLeader, which would grant worker management
+	// (create/update/wake) and credential refresh.
+	RoleHuman = "human"
 )
 
 // DefaultAudience is the SA token audience used by TokenReview when a caller
@@ -32,12 +37,31 @@ const (
 
 // CallerIdentity represents the authenticated caller.
 type CallerIdentity struct {
-	Role                    string // admin | manager | team-leader | worker
-	Username                string // canonical name (worker name, "manager", or "admin")
-	Team                    string // team name (filled by Enricher, empty for standalone)
-	WorkerName              string // equals Username when Role is worker or team-leader
-	ServiceAccountNamespace string // namespace parsed from TokenReview username
-	ServiceAccountName      string // service account parsed from TokenReview username
+	Role                    string   // admin | manager | team-leader | worker
+	Username                string   // canonical name (worker name, "manager", or "admin")
+	Team                    string   // team name (filled by Enricher, empty for standalone)
+	Teams                   []string // multi-team set for L2 humans (Human CR accessibleTeams); empty for SA-based callers
+	WorkerName              string   // equals Username when Role is worker or team-leader
+	ServiceAccountNamespace string   // namespace parsed from TokenReview username
+	ServiceAccountName      string   // service account parsed from TokenReview username
+}
+
+// TeamMatches reports whether the caller can access the given team. For L2
+// humans the authoritative set is Teams (Human CR accessibleTeams); for
+// SA-based team leaders the legacy single Team field is consulted.
+func (c *CallerIdentity) TeamMatches(team string) bool {
+	if team == "" {
+		return false
+	}
+	if len(c.Teams) > 0 {
+		for _, t := range c.Teams {
+			if t == team {
+				return true
+			}
+		}
+		return false
+	}
+	return c.Team == team
 }
 
 // Authenticator validates a bearer token against the local Kubernetes API and

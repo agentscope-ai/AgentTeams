@@ -74,7 +74,8 @@ Read the relevant doc **before** executing. Do not load all of them.
 |---|---|---|
 | Create a new worker | `references/create-worker.md` | `agt create worker` |
 | Start/stop/check idle workers | `references/lifecycle.md` | `scripts/lifecycle-worker.sh` |
-| Push/add/remove skills | `references/skills-management.md` | `scripts/push-worker-skills.sh` |
+| Install a new Skill from a ZIP attachment | `references/skills-management.md` | `scripts/install-worker-skill.sh` |
+| Push/add/remove an existing Skill | `references/skills-management.md` | `scripts/push-worker-skills.sh` |
 | Switch a worker's runtime (openclaw ↔ copaw ↔ qwenpaw ↔ hermes ↔ openhuman) | (this file, "Switching Runtime" below) | `scripts/update-worker-config.sh --runtime ...` |
 | Open/close QwenPaw console | `references/console.md` | `scripts/enable-worker-console.sh` |
 | Enable direct @mentions between workers | `references/peer-mentions.md` | `scripts/enable-peer-mentions.sh` |

@@ -7,7 +7,7 @@ require "yaml"
 repo_root = Pathname.new(__dir__).join("../../..").expand_path
 plugin_root = repo_root / "plugins/teamharness"
 manifest_path = plugin_root / "plugin.yaml"
-boundary_doc = repo_root / "docs/teamharness-boundary-and-contracts.md"
+boundary_doc = repo_root / "docs/design/teamharness/boundary-and-contracts.md"
 
 def fail!(message)
   warn "ERROR: #{message}"

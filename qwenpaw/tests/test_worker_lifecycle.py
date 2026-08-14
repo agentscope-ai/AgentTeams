@@ -155,6 +155,23 @@ def test_link_workspace_shared_points_to_canonical_shared(tmp_path: Path) -> Non
     assert (config.shared_dir / "tasks" / "task-1" / "workspace" / "note.txt").read_text(encoding="utf-8") == "ready\n"
 
 
+def test_sync_managed_skills_targets_native_qwenpaw_workspace(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    worker = Worker(config)
+    mirrored: list[tuple[str, Path]] = []
+    worker.sync = types.SimpleNamespace(
+        remote_prefix="agents/worker-a",
+        mirror_prefix=lambda prefix, local_dir: mirrored.append((prefix, local_dir)),
+    )
+
+    worker._sync_managed_skills(["competition-skill"])
+
+    assert mirrored == [(
+        "agents/worker-a/skills/competition-skill",
+        config.default_workspace_dir / "skills" / "competition-skill",
+    )]
+
+
 def test_runtime_storage_change_relinks_shared_and_refreshes_builtin_mcp(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

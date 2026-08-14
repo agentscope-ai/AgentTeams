@@ -2222,6 +2222,17 @@ def _section(data: dict[str, Any], name: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _runtime_team_name() -> str:
+    """Return the runtime team name from TEAMHARNESS_RUNTIME_CONFIG, if any.
+
+    Used to stamp ``team_id`` onto project metadata so the Controller can map
+    a project back to its owning team (``teams/{team}/shared/projects/`` vs the
+    global ``shared/projects/`` prefix). Empty string when no team is configured.
+    """
+    team = _section(_load_runtime_config(), "team")
+    return str(team.get("name") or "").strip()
+
+
 def _runtime_team_admin_user_id() -> str:
     config = _load_runtime_config()
     team = _section(config, "team")
@@ -3105,6 +3116,7 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
             project["requester_report"] = requester_report
     _write_json(_project_state_path(arguments, project_id), project)
     _write_project_plan(_project_dir(arguments, project_id), project)
+    _sync_project(arguments, project_id)
     publish_artifacts = _payload_bool_field(payload, ("publishArtifacts", "publish_artifacts"), False)
     published_artifacts = (
         _publish_project_artifacts(
@@ -3146,6 +3158,7 @@ def _mark_requester_report_sent(arguments: dict[str, Any], payload: dict[str, An
     requester_report["sent_at"] = str(payload.get("sentAt") or payload.get("sent_at") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
     project["requester_report"] = requester_report
     _write_json(_project_state_path(arguments, project_id), project)
+    _sync_project(arguments, project_id)
     return {
         "ok": True,
         "tool": "projectflow",
@@ -3205,6 +3218,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "title": str(payload.get("title") or project_id),
                 "source": str(payload.get("source") or ""),
                 "requester": str(payload.get("requester") or ""),
+                "team_id": str(payload.get("teamId") or payload.get("team_id") or _runtime_team_name()).strip(),
                 "status": "active",
                 "tasks": [],
             }
@@ -3219,6 +3233,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project_dir = _project_dir(arguments, project_id)
             _write_json(_project_state_path(arguments, project_id), project)
             _write_project_plan(project_dir, project)
+            _sync_project(arguments, project_id)
             return {
                 "ok": True,
                 "tool": "projectflow",
@@ -3256,6 +3271,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "title": title,
                 "source": str(payload.get("source") or ""),
                 "requester": str(payload.get("requester") or ""),
+                "team_id": str(payload.get("teamId") or payload.get("team_id") or _runtime_team_name()).strip(),
                 "status": "active",
                 "mode": "quick",
                 "plan_type": "dag",
@@ -3274,6 +3290,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project_dir = _project_dir(arguments, project_id)
             _write_json(_project_state_path(arguments, project_id), project)
             _write_project_plan(project_dir, project)
+            _sync_project(arguments, project_id)
 
             task_dir = _task_dir(arguments, task_id)
             task_dir.mkdir(parents=True, exist_ok=True)
@@ -3327,6 +3344,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project_dir = _project_dir(arguments, project_id)
             _write_json(state_path, project)
             _write_project_plan(project_dir, project)
+            _sync_project(arguments, project_id)
             return {
                 "ok": True,
                 "tool": "projectflow",
@@ -3382,6 +3400,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project_dir = _project_dir(arguments, project_id)
             _write_json(state_path, project)
             _write_project_plan(project_dir, project)
+            _sync_project(arguments, project_id)
             return {
                 "ok": True,
                 "tool": "projectflow",
@@ -3453,6 +3472,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project_dir = _project_dir(arguments, project_id)
             _write_json(_project_state_path(arguments, project_id), project)
             _write_project_plan(project_dir, project)
+            _sync_project(arguments, project_id)
             return {
                 "ok": True,
                 "tool": "projectflow",
@@ -3484,6 +3504,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project_dir = _project_dir(arguments, project_id)
             _write_json(state_path, project)
             _write_project_plan(project_dir, project)
+            _sync_project(arguments, project_id)
             result = {
                 "ok": True,
                 "tool": "projectflow",
@@ -3730,6 +3751,25 @@ def _sync_task(arguments: dict[str, Any], task_id: str, exclude: list[str] | Non
     return bool(result.get("ok"))
 
 
+def _sync_project(arguments: dict[str, Any], project_id: str) -> bool:
+    """Push a project directory (meta.json + plan.md + result.md) to shared
+    storage.
+
+    Project state is written locally by projectflow, and — unlike tasks,
+    which are pushed via _sync_task — was previously only synced to MinIO at
+    worker startup (mirror_all). Without this push, a Controller-level project
+    API (or dashboard) would read a stale startup snapshot. Mirrors the
+    _sync_task pattern.
+    """
+    sync_args = dict(arguments)
+    sync_args.update({
+        "action": "push",
+        "path": f"shared/projects/{project_id}",
+    })
+    result = _filesync(sync_args)
+    return bool(result.get("ok"))
+
+
 def _pull_task(arguments: dict[str, Any], task_id: str) -> bool:
     existing = _read_json(_task_state_path(arguments, task_id))
     sync_args = dict(arguments)
@@ -3802,6 +3842,7 @@ def _update_project_task(arguments: dict[str, Any], project_id: str, task_id: st
     if changed:
         _write_json(path, project)
         _write_project_plan(_project_dir(arguments, project_id), project)
+        _sync_project(arguments, project_id)
 
 
 def _validate_assignee_membership(room_id: str, assignee: str) -> dict[str, Any]:

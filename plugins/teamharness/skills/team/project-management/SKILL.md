@@ -110,6 +110,10 @@ Create the project before planning tasks:
 
 This creates `meta.json` and `plan.md`.
 
+`team_id` is stamped automatically from the runtime team configuration; pass
+`payload.teamId` explicitly only when the project must belong to a different
+team than the calling Worker's own team.
+
 If `projectId` is omitted, TeamHarness derives one from `title` plus timestamp.
 If the generated ID already exists, TeamHarness appends a numeric suffix.
 Explicit `projectId` collisions are rejected.

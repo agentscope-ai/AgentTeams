@@ -146,6 +146,16 @@ func (h *ResourceHandler) GetWorker(w http.ResponseWriter, r *http.Request) {
 		} else if ok {
 			h.applyTeamMember(&resp, team, member)
 		}
+		// Scoped readers (team leaders or L2 humans) may only fetch workers
+		// in the teams they control; standalone workers are hidden. W8: return
+		// 404 (not 403) so scoped callers cannot probe worker existence by
+		// name — consistent with the project enumeration fix (W4).
+		if caller := authpkg.CallerFromContext(r.Context()); caller != nil &&
+			(caller.Role == authpkg.RoleTeamLeader || caller.Role == authpkg.RoleHuman) &&
+			!caller.TeamMatches(resp.Team) {
+			httputil.WriteError(w, http.StatusNotFound, "get worker: not found")
+			return
+		}
 		httputil.WriteJSON(w, http.StatusOK, resp)
 		return
 	case !apierrors.IsNotFound(err):
@@ -157,6 +167,7 @@ func (h *ResourceHandler) GetWorker(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
+	caller := authpkg.CallerFromContext(r.Context())
 	teamFilter := r.URL.Query().Get("team")
 
 	workers := make([]WorkerResponse, 0)
@@ -173,6 +184,11 @@ func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 			return
 		} else if ok {
 			h.applyTeamMember(&resp, team, member)
+		}
+		// Scoped readers (team leaders or L2 humans) only see the workers in
+		// the teams they control; standalone workers are hidden.
+		if caller != nil && (caller.Role == authpkg.RoleTeamLeader || caller.Role == authpkg.RoleHuman) && !caller.TeamMatches(resp.Team) {
+			continue
 		}
 		if teamFilter != "" && resp.Team != teamFilter {
 			continue
@@ -351,7 +367,23 @@ func (h *ResourceHandler) GetTeam(w http.ResponseWriter, r *http.Request) {
 
 	var team v1beta1.Team
 	if err := h.client.Get(r.Context(), client.ObjectKey{Name: name, Namespace: h.namespace}, &team); err != nil {
+		if apierrors.IsNotFound(err) {
+			httputil.WriteError(w, http.StatusNotFound, "get team: not found")
+			return
+		}
 		writeK8sError(w, "get team", err)
+		return
+	}
+
+	// Scoped readers (team leaders or L2 humans) may only fetch the teams
+	// they control. W8: return 404 (not 403) so scoped callers cannot probe
+	// team existence by name — consistent with the project enumeration fix
+	// (W4). The team exists but is out of scope, so it is hidden the same
+	// way a non-existent team is.
+	if caller := authpkg.CallerFromContext(r.Context()); caller != nil &&
+		(caller.Role == authpkg.RoleTeamLeader || caller.Role == authpkg.RoleHuman) &&
+		!caller.TeamMatches(name) {
+		httputil.WriteError(w, http.StatusNotFound, "get team: not found")
 		return
 	}
 
@@ -359,6 +391,7 @@ func (h *ResourceHandler) GetTeam(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ResourceHandler) ListTeams(w http.ResponseWriter, r *http.Request) {
+	caller := authpkg.CallerFromContext(r.Context())
 	var list v1beta1.TeamList
 	if err := h.client.List(r.Context(), &list, client.InNamespace(h.namespace)); err != nil {
 		writeK8sError(w, "list teams", err)
@@ -367,6 +400,11 @@ func (h *ResourceHandler) ListTeams(w http.ResponseWriter, r *http.Request) {
 
 	teams := make([]TeamResponse, 0, len(list.Items))
 	for i := range list.Items {
+		// Scoped readers (team leaders or L2 humans) only see the teams they
+		// control; admin/manager see everything.
+		if caller != nil && (caller.Role == authpkg.RoleTeamLeader || caller.Role == authpkg.RoleHuman) && !caller.TeamMatches(list.Items[i].Name) {
+			continue
+		}
 		teams = append(teams, teamToResponse(&list.Items[i]))
 	}
 

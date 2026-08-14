@@ -14,4 +14,4 @@ pip install copaw-worker
 copaw-worker --name <worker-name> --fs <minio-endpoint> --fs-key <access-key> --fs-secret <secret-key>
 ```
 
-See [AgentTeams worker guide](https://github.com/agentscope-ai/AgentTeams/blob/main/docs/worker-guide.md) for full setup instructions.
+See [AgentTeams worker guide](https://github.com/agentscope-ai/AgentTeams/blob/main/docs/usage/worker-guide.md) for full setup instructions.

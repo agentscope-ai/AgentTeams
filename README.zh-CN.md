@@ -25,13 +25,15 @@ AgentTeams 不再实现 Agent 运行时本身，而是编排和管理多个 Agen
 ![架构](https://img.alicdn.com/imgextra/i4/O1CN01c1VlDE1zYZ46EW3OA_!!6000000006726-49-tps-9895-8231.webp)
 
 ## 动态
+- **2026-08-08:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.2) — AgentTeams v1.2.2：新增 Manager 向 Worker 下发自定义 Skill，支持校验、上传存储、更新 `Worker.spec.skills`，并由 QwenPaw 无需重启即可热刷新和启用；增强 Manager 与 Worker 的 Skill 加载保护；同时确保 Team Leader 和 Worker 在受邀后显式加入 Team Room。
+- **2026-08-06:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.1) — AgentTeams v1.2.1：将 Manager 和 Worker 运行时栈统一到 QwenPaw 2.0.1，正式发布 QwenPaw Worker 多架构镜像，增强 Matrix 与 TeamHarness 任务分配原子性以及 CoPaw 到 QwenPaw 的状态迁移，新增自定义模型视觉与推理能力覆盖，并提升 Worker 生命周期和运行时管理可靠性。
 - **2026-07-30:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.0) — AgentTeams v1.2.0（正式版）：端到端统一 AgentTeams 命名并确立最终的 Team/Worker 资源契约；新增可选的 AgentTeams Dashboard；同时改进 Worker 存储同步、Team 路由与生命周期收敛，安装器可按旧环境变量与存储契约安装 v1.1.2（更早版本仍需使用对应的旧版安装器），并提升 Dashboard 可靠性以及工具和诊断安全性。
 - **2026-07-17:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.0-beta.1) —  AgentTeams v1.2.0-beta.1（预发布版）：完成了从已停用的前代产品的公开更名，覆盖镜像、Kubernetes API、Helm、Matrix、存储和运行时契约；新增插件平台、TeamHarness 与 WorkerFlow 集成、Matrix AppService 与 Human SSO、模型提供方路由与 LLM 预检，以及更丰富的控制器可观测性。Beta 版安装需显式手动启用（opt-in），而稳定版默认仍为 v1.1.2。
 - **2026-05-27:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.1.2) — AgentTeams v1.1.2：安装器默认改为 QwenPaw 运行时并支持 keep-all 升级；Team 支持人类协调员，Team Leader 协作工具刷新；控制器支持 Nacos 远程技能与 `sts-agentteams` / `ai-registry` STS 凭据；Worker 控制器资源名与运行时名称解耦；新增控制器 reconcile 指标与优雅退出。
 - **2026-05-07:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.1.1) | [Changelog](changelog/v1.1.1.md) — AgentTeams v1.1.1：Worker/Manager/Team CRD 上的声明式 MCP（破坏性变更）并扩展至 Team Leader；CR 支持自定义 `spec.env`；新增 Token Plan、Qwen 国际线路与 `qwen3.6-plus` 模型；Helm 控制器 RBAC 收敛到单命名空间；Worker 包可不含 `SOUL.md`。
 - **2026-04-24:** [English](blog/agentteams-1.1.0-release.md) | [中文](blog/zh-cn/agentteams-1.1.0-release.md) — AgentTeams v1.1.0：Kubernetes 原生控制面、Hermes 自主编程 Agent 运行时、镜像体积减少 1.7 GB，`agt` CLI 替代 shell 脚本。
 - **2026-04-14:** [English](blog/agentteams-k8s-native-multi-agent-collaboration.md) | [中文](blog/zh-cn/agentteams-k8s-native-multi-agent-collaboration.zh-CN.md) — 深度解析：AgentTeams 作为基于 Kubernetes 原生的多 Agent 协作编排系统。
-- **2026-04-03:** [English](docs/declarative-resource-management.md) | [中文](docs/zh-cn/declarative-resource-management.md) — AgentTeams 1.0.9 发布：Kubernetes 风格声明式资源管理（YAML 定义 Worker、Team、Human）；上线 Worker 模板市场；支持 Manager QwenPaw 运行时；新增 Nacos Skills 注册中心等。
+- **2026-04-03:** [English](docs/usage/resource-management.md) | [中文](docs/zh-cn/usage/resource-management.md) — AgentTeams 1.0.9 发布：Kubernetes 风格声明式资源管理（YAML 定义 Worker、Team、Human）；上线 Worker 模板市场；支持 Manager QwenPaw 运行时；新增 Nacos Skills 注册中心等。
 - **2026-03-14:** [English](blog/agentteams-1.0.6-release.md) | [中文](blog/zh-cn/agentteams-1.0.6-release.md) — AgentTeams 1.0.6：企业级 MCP Server 管理，凭证零暴露；Worker 经 Higress AI Gateway 安全调用 MCP。
 - **2026-03-10:** [English](blog/agentteams-1.0.4-release.md) | [中文](blog/zh-cn/agentteams-1.0.4-release.md) — AgentTeams 1.0.4：支持 QwenPaw（原 CoPaw）Worker，内存占用降低约 80%，本地模式可操作浏览器。
 - **2026-03-04:** [English](blog/agentteams-announcement.md) | [中文](blog/zh-cn/agentteams-announcement.md) — AgentTeams 以其旧名称开源，引入 Manager Agent 与多 Agent 协同平台能力。
@@ -120,7 +122,7 @@ bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main
 若要升级到指定版本，请使用以下命令：
 
 ```bash
-AGENTTEAMS_VERSION=v1.0.5 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+AGENTTEAMS_VERSION=v1.2.2 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 
@@ -141,6 +143,8 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; 
 ## Kubernetes 部署（Helm）
 
 如果希望在团队内共享或生产环境部署 AgentTeams，可以使用官方 Helm Chart 在任意 Kubernetes 集群上安装。默认配置内置了 Higress AI 网关、Tuwunel（Matrix）、MinIO 与 AgentTeams Controller，无需额外依赖。
+
+以下内容用于快速安装。集群规划、values 文件、模型服务、runtime、持久化、Ingress 和运维选项参见 [Kubernetes 部署指南](docs/zh-cn/usage/deployment/kubernetes.md)。
 
 **前置条件**
 
@@ -199,16 +203,34 @@ helm install agentteams higress.io/agentteams \
 | `credentials.llmProvider` | 可选 | LLM 服务商名，默认 `openai-compat` |
 | `credentials.defaultModel` | 可选 | 默认模型，默认 `gpt-5.4` |
 | `credentials.llmBaseUrl` | 可选 | OpenAI 兼容的 Base URL（例如 `https://api.deepseek.com/v1`）。使用官方 OpenAI API 时留空 |
-| `manager.runtime` | 可选 | Manager Agent 运行时：`openclaw`（默认）、`copaw` 或 `hermes` |
-| `worker.defaultRuntime` | 可选 | Worker 默认运行时：`openclaw`（默认）、`copaw` 或 `hermes` |
+| `preflight.llm.enabled` | 可选 | 安装或升级前通过 hook 验证 LLM API Key、Base URL 和模型；默认 `true` |
+| `preflight.llm.strict` | 可选 | LLM 探测失败时终止安装或升级；默认 `true`，设为 `false` 时仅告警并继续 |
+| `preflight.llm.timeoutSeconds` | 可选 | LLM 探测单次 HTTP 请求的超时时间；默认 `30` 秒 |
+| `preflight.llm.retries` | 可选 | 限流、网络错误和服务商 5xx 等临时错误的重试次数；默认 `2` |
+| `preflight.llm.activeDeadlineSeconds` | 可选 | 探测 Job 的最长运行时间；默认 `120` 秒 |
+| `preflight.llm.resources` | 可选 | 探测容器的 Kubernetes requests/limits |
+| `manager.runtime` | 可选 | Manager Agent 运行时：OpenClaw 使用 `openclaw`（默认）；CoPaw 在当前 Chart 中使用 `qwenpaw`，`copaw` 为兼容别名。Manager 不支持 Hermes |
+| `worker.defaultRuntime` | 可选 | Chart 提供 `openclaw`（默认）、`copaw`、`hermes` 和 `openhuman` 的默认镜像值，但当前 CRD 不接受显式的 `spec.runtime: openhuman`；QwenPaw Worker 需在 `spec.image` 中显式配置镜像 |
+
+Helm 默认在安装和升级前执行 LLM 探测，使用 `credentials.llmApiKey`、`credentials.llmBaseUrl` 和 `credentials.defaultModel` 发送一个最小的 OpenAI 兼容请求。无效密钥、无法访问的 Base URL、不支持的模型、额度错误或服务商故障会在 Controller 启动前终止安装。受限或离线集群可以临时关闭：
+
+```bash
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace \
+  --set credentials.llmApiKey=<你的-API-Key> \
+  --set credentials.adminPassword=<你的-管理员密码> \
+  --set gateway.publicURL=http://localhost:18080 \
+  --set preflight.llm.enabled=false
+```
 
 <details>
-<summary>使用其他运行时（QwenPaw Manager + Hermes Workers）</summary>
+<summary>使用其他运行时（CoPaw Manager + Hermes Workers）</summary>
 
 ```bash
 helm install agentteams higress.io/agentteams \
   -n agentteams-system --create-namespace --devel \
-  --set manager.runtime=copaw \
+  --set manager.runtime=qwenpaw \
+  --set manager.image.repository=higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager-qwenpaw \
   --set worker.defaultRuntime=hermes \
   --set credentials.llmApiKey=<your-api-key> \
   --set credentials.llmBaseUrl=https://your-provider.example.com/v1 \
@@ -217,13 +239,13 @@ helm install agentteams higress.io/agentteams \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-各组件镜像会根据运行时自动选择（Manager: `agentteams-manager` / `agentteams-manager-qwenpaw`；Worker: `agentteams-worker` / `agentteams-copaw-worker` / `agentteams-hermes-worker`）。
+选择 CoPaw Manager 时需要同时设置 `manager.runtime=qwenpaw` 和 `agentteams-manager-qwenpaw` 镜像。Worker 的默认镜像分别通过 `worker.defaultImage.<runtime>` 配置。
 
 </details>
 
 **多地域镜像仓库**
 
-默认 `global.imageRegistry` 指向中国区域（`higress-registry.cn-hangzhou.cr.aliyuncs.com/higress`）。如果在中国大陆以外部署，可切换至就近区域以加速镜像拉取：
+默认镜像指向中国区域。如果在中国大陆以外部署，可以使用以下就近镜像仓库：
 
 | 区域 | Registry |
 |---|---|
@@ -231,18 +253,7 @@ helm install agentteams higress.io/agentteams \
 | 北美 | `higress-registry.us-west-1.cr.aliyuncs.com/higress` |
 | 东南亚 | `higress-registry.ap-southeast-7.cr.aliyuncs.com/higress` |
 
-```bash
-# 示例：使用北美镜像仓库部署
-helm install agentteams higress.io/agentteams \
-  -n agentteams-system --create-namespace \
-  --render-subchart-notes \
-  --set global.imageRegistry=higress-registry.us-west-1.cr.aliyuncs.com/higress \
-  --set credentials.llmApiKey=<你的-API-Key> \
-  --set credentials.adminPassword=<你的-管理员密码> \
-  --set gateway.publicURL=http://localhost:18080
-```
-
-完整可配置项（网关/存储 provider、镜像 tag、资源、持久化等）请参考 [`helm/agentteams/values.yaml`](helm/agentteams/values.yaml)。
+`global.imageRegistry` 只会影响读取该全局值的子 Chart；Controller、Manager、Worker、Tuwunel、MinIO 和 Element Web 使用各自的完整 `image.repository`。切换地域或私有仓库时，请在 values 文件中逐项覆盖相关镜像地址。完整示例和可配置项参见 [Kubernetes 部署指南](docs/zh-cn/usage/deployment/kubernetes.md)与 [`helm/agentteams/values.yaml`](helm/agentteams/values.yaml)。
 
 **访问**
 
@@ -324,7 +335,7 @@ helm uninstall agentteams -n agentteams-system
 kubectl delete namespace agentteams-system
 ```
 
-更深入的 K8s Native 架构说明（CRD、Controller、声明式 `Worker` / `Team` / `Human` 资源）请参考 [docs/zh-cn/k8s-native-agent-orch.md](docs/zh-cn/k8s-native-agent-orch.md)。
+更深入的 K8s Native 架构说明（CRD、Controller、声明式 `Worker` / `Team` / `Human` 资源）请参考 [docs/zh-cn/design/k8s-native-orchestration.md](docs/zh-cn/design/k8s-native-orchestration.md)。
 
 ## 工作方式
 
@@ -393,13 +404,13 @@ Alice：前端校验也更新了。
 
 ## 多运行时协作
 
-AgentTeams 支持三种 Worker 运行时，可以**在同一个 IM 房间中共存协作**：
+AgentTeams 目前提供三类主要 Worker 运行时，可以**在同一个 IM 房间中共存协作**：
 
 - **OpenClaw**（Node.js）— 通用 Agent 运行时，拥有丰富的 Skills 生态，擅长任务编排和工具调用
 - **QwenPaw**（Python）— 轻量级运行时，适合浏览器自动化和快速任务
 - **Hermes**（[hermes-agent](https://github.com/NousResearch/hermes-agent)）— 自主编程 Agent，具备终端沙箱、自我进化的 Skill 和持久化记忆
 
-每种运行时各有擅长。推荐模式：用确定性更高的 Agent（OpenClaw/QwenPaw）做 Leader 负责任务分解和调度，用 Hermes Worker 执行自主编程任务。所有运行时通过 Matrix `m.mentions` 在同一个房间内通信——完全可见、随时可干预。
+`copaw` 仍作为已有 CoPaw Worker 的兼容 runtime 值保留；当前 CRD 同时接受 `copaw` 和 `qwenpaw`。每种运行时各有擅长。推荐模式：用确定性更高的 Agent（OpenClaw/QwenPaw）做 Leader 负责任务分解和调度，用 Hermes Worker 执行自主编程任务。所有运行时通过 Matrix 房间通信——完全可见、随时可干预。
 
 ```bash
 # 原地切换任意 Worker 的运行时
@@ -442,7 +453,7 @@ Worker Alice    Worker Bob              Worker Charlie
 docker exec -it agentteams-manager cat /var/log/agentteams/manager-agent.log
 ```
 
-更多常见问题（启动超时、局域网访问等）参见 [docs/zh-cn/faq.md](docs/zh-cn/faq.md)。
+更多常见问题（启动超时、局域网访问等）参见 [docs/zh-cn/usage/troubleshooting/faq.md](docs/zh-cn/usage/troubleshooting/faq.md)。
 
 ### 提交 Bug
 
@@ -465,14 +476,19 @@ python scripts/export-debug-log.py --range 1h
 
 ## 文档
 
+浏览 [中文文档目录](docs/zh-cn/)，或从概览和快速入门开始：
+
 | | |
 |---|---|
+| [docs/zh-cn/overview.md](docs/zh-cn/overview.md) | 产品概览、核心概念与文档导航 |
 | [docs/zh-cn/quickstart.md](docs/zh-cn/quickstart.md) | 端到端快速入门，含验证检查点 |
-| [docs/zh-cn/architecture.md](docs/zh-cn/architecture.md) | 系统架构详解 |
-| [docs/zh-cn/manager-guide.md](docs/zh-cn/manager-guide.md) | Manager 配置与使用 |
-| [docs/zh-cn/worker-guide.md](docs/zh-cn/worker-guide.md) | Worker 部署与故障排查 |
-| [docs/zh-cn/development.md](docs/zh-cn/development.md) | 贡献指南与本地开发 |
-| [docs/zh-cn/faq.md](docs/zh-cn/faq.md) | 常见问题 |
+| [docs/zh-cn/usage/use-cases.md](docs/zh-cn/usage/use-cases.md) | 软件交付、研究、内容、故障分析和长期项目协作案例 |
+| [docs/zh-cn/usage/deployment/local.md](docs/zh-cn/usage/deployment/local.md) | 本地实例创建、安装选项、升级与卸载 |
+| [docs/zh-cn/design/architecture.md](docs/zh-cn/design/architecture.md) | 系统架构详解 |
+| [docs/zh-cn/usage/manager-guide.md](docs/zh-cn/usage/manager-guide.md) | Manager 配置与使用 |
+| [docs/zh-cn/usage/worker-guide.md](docs/zh-cn/usage/worker-guide.md) | Worker 部署与故障排查 |
+| [docs/zh-cn/usage/development.md](docs/zh-cn/usage/development.md) | 贡献指南与本地开发 |
+| [docs/zh-cn/usage/troubleshooting/faq.md](docs/zh-cn/usage/troubleshooting/faq.md) | 常见问题 |
 
 ## 构建与测试
 

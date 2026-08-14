@@ -129,11 +129,11 @@ jobs:
             {"shard":"llm-interaction","filter_env":"SHARD_A_TESTS","manager_runtime":"copaw","worker_runtime":"copaw","requires_secret":true},
             {"shard":"controller-cr","filter_env":"SHARD_C_TESTS","manager_runtime":"copaw","worker_runtime":"copaw","requires_secret":false},
             {"shard":"controller-cr-2","filter_env":"SHARD_D_TESTS","manager_runtime":"copaw","worker_runtime":"copaw","requires_secret":false},
-            {"shard":"llm-interaction","filter_env":"SHARD_A_TESTS","manager_runtime":"copaw","worker_runtime":"qwenpaw","requires_secret":true},
-            {"shard":"controller-cr","filter_env":"SHARD_C_TESTS","manager_runtime":"copaw","worker_runtime":"qwenpaw","requires_secret":false},
-            {"shard":"qwenpaw-teamharness","filter_env":"SHARD_QWENPAW_TESTS","manager_runtime":"copaw","worker_runtime":"qwenpaw","requires_secret":true},
-            {"shard":"llm-interaction","filter_env":"SHARD_A_TESTS","manager_runtime":"copaw","worker_runtime":"hermes","requires_secret":true},
-            {"shard":"controller-cr","filter_env":"SHARD_C_TESTS","manager_runtime":"copaw","worker_runtime":"hermes","requires_secret":false}
+            {"shard":"llm-interaction","filter_env":"SHARD_A_TESTS","manager_runtime":"qwenpaw","worker_runtime":"qwenpaw","requires_secret":true},
+            {"shard":"controller-cr","filter_env":"SHARD_C_TESTS","manager_runtime":"qwenpaw","worker_runtime":"qwenpaw","requires_secret":false},
+            {"shard":"qwenpaw-teamharness","filter_env":"SHARD_QWENPAW_TESTS","manager_runtime":"qwenpaw","worker_runtime":"qwenpaw","requires_secret":true},
+            {"shard":"llm-interaction","filter_env":"SHARD_A_TESTS","manager_runtime":"qwenpaw","worker_runtime":"hermes","requires_secret":true},
+            {"shard":"controller-cr","filter_env":"SHARD_C_TESTS","manager_runtime":"qwenpaw","worker_runtime":"hermes","requires_secret":false}
           ]'
           if [ "$UNTRUSTED_PR" = "true" ]; then
             MATRIX=$(echo "$MATRIX" | jq -c '[.[] | select(.requires_secret == false)]')
@@ -361,9 +361,9 @@ jobs:
           AGENTTEAMS_LLM_PROVIDER: qwen
           AGENTTEAMS_DEFAULT_MODEL: ${{ inputs.model || 'qwen3.6-plus' }}
           AGENTTEAMS_MANAGER_RUNTIME: ${{ matrix.manager_runtime }}
-          # Keep the public installer on CoPaw until release, while exercising
-          # this PR's QwenPaw Manager through the existing CoPaw compatibility
-          # runtime label in integration CI.
+          # Exercise the PR-built QwenPaw Manager directly and keep the legacy
+          # CoPaw compatibility matrix on the same current Python image.
+          AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE: agentteams/manager-qwenpaw:latest
           AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE: agentteams/manager-qwenpaw:latest
           # Propagate the worker runtime to worker-creating tests too. Without
           # this the apply-zip path (test-15) silently falls back to openclaw

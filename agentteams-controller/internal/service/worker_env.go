@@ -92,13 +92,14 @@ func (b *WorkerEnvBuilder) BuildManager(managerName string, prov *ManagerProvisi
 
 func (b *WorkerEnvBuilder) applyClusterDefaults(env map[string]string) {
 	for k, v := range map[string]string{
-		"AGENTTEAMS_MATRIX_DOMAIN":  b.defaults.MatrixDomain,
-		"AGENTTEAMS_FS_ENDPOINT":    b.defaults.FSEndpoint,
-		"AGENTTEAMS_FS_BUCKET":      b.defaults.FSBucket,
-		"AGENTTEAMS_STORAGE_PREFIX": b.defaults.StoragePrefix,
-		"AGENTTEAMS_CONTROLLER_URL": b.defaults.ControllerURL,
-		"AGENTTEAMS_AI_GATEWAY_URL": b.defaults.AIGatewayURL,
-		"AGENTTEAMS_MATRIX_URL":     b.defaults.MatrixURL,
+		"AGENTTEAMS_MATRIX_DOMAIN":    b.defaults.MatrixDomain,
+		"AGENTTEAMS_FS_ENDPOINT":      b.defaults.FSEndpoint,
+		"AGENTTEAMS_FS_BUCKET":        b.defaults.FSBucket,
+		"AGENTTEAMS_STORAGE_PREFIX":   b.defaults.StoragePrefix,
+		"AGENTTEAMS_STORAGE_PROVIDER": b.defaults.StorageProvider,
+		"AGENTTEAMS_CONTROLLER_URL":   b.defaults.ControllerURL,
+		"AGENTTEAMS_AI_GATEWAY_URL":   b.defaults.AIGatewayURL,
+		"AGENTTEAMS_MATRIX_URL":       b.defaults.MatrixURL,
 	} {
 		if v != "" {
 			env[k] = v

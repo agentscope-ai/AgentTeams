@@ -517,6 +517,9 @@ func TestUpdateTeamMembershipAndHeartbeat(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "alpha-team", Namespace: "default"},
 		Spec: v1beta1.TeamSpec{
 			HeartbeatEvery: "30m",
+			HumanMembers: []v1beta1.TeamMemberSpec{
+				{Name: "alice", Role: "member"},
+			},
 			WorkerMembers: []v1beta1.TeamWorkerRef{
 				{Name: "alpha-lead", Role: "team_leader"},
 				{Name: "alpha-dev", Role: "worker"},
@@ -529,6 +532,7 @@ func TestUpdateTeamMembershipAndHeartbeat(t *testing.T) {
 
 	updateBody := []byte(`{
 		"heartbeatEvery":"45m",
+		"humanMembers":[{"name":"bob","role":"coordinator"}],
 		"workerMembers":[
 			{"name":"alpha-lead","role":"team_leader"},
 			{"name":"alpha-qa","role":"worker"}
@@ -549,6 +553,11 @@ func TestUpdateTeamMembershipAndHeartbeat(t *testing.T) {
 	if updated.Spec.HeartbeatEvery != "45m" {
 		t.Fatalf("heartbeatEvery = %q, want 45m", updated.Spec.HeartbeatEvery)
 	}
+	if got, want := updated.Spec.HumanMembers, []v1beta1.TeamMemberSpec{
+		{Name: "bob", Role: "coordinator"},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("humanMembers = %#v, want %#v", got, want)
+	}
 	if got, want := updated.Spec.WorkerMembers, []v1beta1.TeamWorkerRef{
 		{Name: "alpha-lead", Role: "team_leader"},
 		{Name: "alpha-qa", Role: "worker"},
@@ -565,6 +574,9 @@ func TestUpdateTeamMembershipAndHeartbeat(t *testing.T) {
 	}
 	if !reflect.DeepEqual(resp.WorkerMembers, updated.Spec.WorkerMembers) {
 		t.Fatalf("workerMembers = %#v, want %#v", resp.WorkerMembers, updated.Spec.WorkerMembers)
+	}
+	if !reflect.DeepEqual(resp.HumanMembers, updated.Spec.HumanMembers) {
+		t.Fatalf("humanMembers = %#v, want %#v", resp.HumanMembers, updated.Spec.HumanMembers)
 	}
 }
 

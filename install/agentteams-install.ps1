@@ -1035,6 +1035,9 @@ AGENTTEAMS_MINIO_PASSWORD=$($Config.MINIO_PASSWORD)
 # Internal
 AGENTTEAMS_MANAGER_PASSWORD=$($Config.MANAGER_PASSWORD)
 AGENTTEAMS_REGISTRATION_TOKEN=$($Config.REGISTRATION_TOKEN)
+AGENTTEAMS_MATRIX_APPSERVICE_ENABLED=true
+AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN=$($Config.APPSERVICE_AS_TOKEN)
+AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN=$($Config.APPSERVICE_HS_TOKEN)
 
 # GitHub (optional)
 AGENTTEAMS_GITHUB_TOKEN=$($Config.GITHUB_TOKEN)
@@ -2668,6 +2671,11 @@ function Install-Manager {
     $config.MINIO_USER = if ($env:AGENTTEAMS_MINIO_USER) { $env:AGENTTEAMS_MINIO_USER } else { $config.ADMIN_USER }
     $config.MINIO_PASSWORD = if ($env:AGENTTEAMS_MINIO_PASSWORD) { $env:AGENTTEAMS_MINIO_PASSWORD } else { $config.ADMIN_PASSWORD }
     $config.MANAGER_GATEWAY_KEY = if ($env:AGENTTEAMS_MANAGER_GATEWAY_KEY) { $env:AGENTTEAMS_MANAGER_GATEWAY_KEY } else { New-RandomKey }
+    # Matrix AppService tokens - generate once during install if not provided.
+    # Required by the controller (>= v1.2) when AppService mode is enabled (the default).
+    # Mirrors the "Matrix AppService tokens" block in agentteams-install.sh.
+    $config.APPSERVICE_AS_TOKEN = if ($env:AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN) { $env:AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN } else { Get-AgentTeamsRandomHex 32 }
+    $config.APPSERVICE_HS_TOKEN = if ($env:AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN) { $env:AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN } else { Get-AgentTeamsRandomHex 32 }
 
     # Store additional config
     $config.LANGUAGE = $script:AGENTTEAMS_LANGUAGE
@@ -3070,6 +3078,16 @@ function Install-Manager {
             "-e", "AGENTTEAMS_HOST_SHARE_DIR=$($config.HOST_SHARE_DIR)",
             "-e", "AGENTTEAMS_MANAGER_ENABLED=true",
             "-e", "AGENTTEAMS_PORT_MANAGER_CONSOLE=$($config.PORT_MANAGER_CONSOLE)"
+        )
+
+        # Matrix AppService tokens - required by the embedded controller when
+        # AppService mode is enabled (parity with the bash installer). The
+        # controller env is built from this explicit list, so persisting the
+        # tokens to the env file alone is not enough.
+        $ctrlArgs += @(
+            "-e", "AGENTTEAMS_MATRIX_APPSERVICE_ENABLED=true",
+            "-e", "AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN=$($config.APPSERVICE_AS_TOKEN)",
+            "-e", "AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN=$($config.APPSERVICE_HS_TOKEN)"
         )
 
         if ($script:AGENTTEAMS_TIMEZONE) {

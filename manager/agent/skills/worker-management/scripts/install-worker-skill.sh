@@ -100,6 +100,8 @@ if ! push_output=$(bash "${PUSH_SCRIPT}" "${push_args[@]}" 2>&1); then
     # preserve the files if the CR accepted the assignment so reconciliation
     # never points at a missing definition.
     assigned_after_failure=false
+    rollback_failed=false
+    rollback_output=""
     if worker_after_failure=$(agt get workers "${WORKER_NAME}" -o json 2>/dev/null); then
         if echo "${worker_after_failure}" | jq -e --arg skill "${skill_name}" \
             '(.skills // []) | index($skill)' >/dev/null; then
@@ -110,10 +112,18 @@ if ! push_output=$(bash "${PUSH_SCRIPT}" "${push_args[@]}" 2>&1); then
         rm -rf "${target_dir}"
         mv "${BACKUP_DIR}" "${target_dir}"
         BACKUP_DIR=""
+        if ! rollback_output=$(bash "${PUSH_SCRIPT}" \
+            --worker "${WORKER_NAME}" --skill "${skill_name}" --no-notify 2>&1); then
+            rollback_failed=true
+        fi
     elif [ "${assigned_after_failure}" != true ]; then
         rm -rf "${target_dir}"
     fi
     echo "${push_output}" >&2
+    if [ "${rollback_failed}" = true ]; then
+        echo "Worker Skill remote rollback failed for ${skill_name}; canonical files were restored locally but Worker storage may be inconsistent:" >&2
+        [ -z "${rollback_output}" ] || echo "${rollback_output}" >&2
+    fi
     exit 1
 fi
 if [ -n "${push_output}" ]; then

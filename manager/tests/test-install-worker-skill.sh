@@ -82,8 +82,21 @@ printf 'mc %s\n' "$*" >> "${TEST_EVENTS}"
 if [ "${1:-}" = stat ]; then
     grep -q '^mc mirror ' "${TEST_EVENTS}"
 fi
-if [ "${1:-}" = mirror ] && [ "${TEST_MC_MIRROR_FAIL:-0}" = 1 ]; then
-    exit 1
+if [ "${1:-}" = mirror ]; then
+    if [ -n "${TEST_REMOTE_SKILL_DIR:-}" ]; then
+        rm -rf "${TEST_REMOTE_SKILL_DIR}"
+        mkdir -p "${TEST_REMOTE_SKILL_DIR}"
+        cp -a "${2}/." "${TEST_REMOTE_SKILL_DIR}/"
+    fi
+    if [ "${TEST_MC_MIRROR_FAIL_ALWAYS:-0}" = 1 ]; then
+        echo "simulated mirror failure" >&2
+        exit 1
+    fi
+    if [ "${TEST_MC_MIRROR_FAIL_ONCE:-0}" = 1 ] \
+        && [ ! -e "${TEST_MC_MIRROR_FAILURE_MARKER}" ]; then
+        : > "${TEST_MC_MIRROR_FAILURE_MARKER}"
+        exit 1
+    fi
 fi
 EOF
     chmod +x "${CASE_DIR}/bin/agt" "${CASE_DIR}/bin/mc"
@@ -117,7 +130,10 @@ run_script() {
     PATH="${CASE_DIR}/bin:${PATH}" \
     TEST_EVENTS="${EVENTS}" \
     TEST_STATE="${STATE}" \
-    TEST_MC_MIRROR_FAIL="${MC_MIRROR_FAIL:-0}" \
+    TEST_MC_MIRROR_FAIL_ONCE="${MC_MIRROR_FAIL_ONCE:-0}" \
+    TEST_MC_MIRROR_FAIL_ALWAYS="${MC_MIRROR_FAIL_ALWAYS:-0}" \
+    TEST_MC_MIRROR_FAILURE_MARKER="${CASE_DIR}/mc-mirror-failed" \
+    TEST_REMOTE_SKILL_DIR="${REMOTE_SKILL_DIR:-}" \
     AGENTTEAMS_STORAGE_PREFIX="test/agentteams-storage" \
     bash "${SCRIPT}" "$@"
 }
@@ -284,7 +300,7 @@ echo "=== TC9: failed replacement restores the previous canonical Skill ==="
 setup_case "${TMPDIR_ROOT}/replacement-rollback"
 jq '.workers[0].skills = ["replace-skill"]' "${STATE}" > "${STATE}.tmp"
 mv "${STATE}.tmp" "${STATE}"
-mkdir -p "${CASE_DIR}/home/worker-skills/replace-skill"
+mkdir -p "${CASE_DIR}/home/worker-skills/replace-skill/scripts"
 cat > "${CASE_DIR}/home/worker-skills/replace-skill/SKILL.md" <<'EOF'
 ---
 name: replace-skill
@@ -293,19 +309,46 @@ description: Previous canonical Skill.
 
 # Previous version
 EOF
+printf '%s\n' '# previous helper' \
+    > "${CASE_DIR}/home/worker-skills/replace-skill/scripts/previous.sh"
+mkdir -p "${CASE_DIR}/remote/replace-skill/scripts"
+cp -a "${CASE_DIR}/home/worker-skills/replace-skill/." \
+    "${CASE_DIR}/remote/replace-skill/"
 create_zip "${CASE_DIR}/skill.zip" "replace-skill" "Replacement canonical Skill."
-MC_MIRROR_FAIL=1
+REMOTE_SKILL_DIR="${CASE_DIR}/remote/replace-skill"
+MC_MIRROR_FAIL_ONCE=1
 if run_script --worker amy-ai --archive "${CASE_DIR}/skill.zip" --replace --no-notify \
     >"${CASE_DIR}/output.log" 2>"${CASE_DIR}/error.log"; then
     fail "failed replacement is reported" "non-zero" "exit 0"
 else
     pass "failed replacement is reported"
 fi
-unset MC_MIRROR_FAIL
+unset MC_MIRROR_FAIL_ONCE REMOTE_SKILL_DIR
 assert_contains "failed replacement restores the previous canonical Skill" \
     "# Previous version" "${CASE_DIR}/home/worker-skills/replace-skill/SKILL.md"
 assert_not_contains "failed replacement does not retain the replacement canonical Skill" \
     "Replacement canonical Skill." "${CASE_DIR}/home/worker-skills/replace-skill/SKILL.md"
+assert_contains "failed replacement restores the previous remote Skill" \
+    "# Previous version" "${CASE_DIR}/remote/replace-skill/SKILL.md"
+if [ -f "${CASE_DIR}/remote/replace-skill/scripts/previous.sh" ]; then
+    pass "failed replacement restores remote files removed by the replacement"
+else
+    fail "failed replacement restores remote files removed by the replacement" \
+        "previous.sh exists" "missing"
+fi
+
+echo "=== TC10: failed remote rollback reports both failure phases ==="
+REMOTE_SKILL_DIR="${CASE_DIR}/remote/replace-skill"
+MC_MIRROR_FAIL_ALWAYS=1
+if run_script --worker amy-ai --archive "${CASE_DIR}/skill.zip" --replace --no-notify \
+    >"${CASE_DIR}/output.log" 2>"${CASE_DIR}/error.log"; then
+    fail "failed remote rollback exits non-zero" "non-zero" "exit 0"
+else
+    pass "failed remote rollback exits non-zero"
+fi
+unset MC_MIRROR_FAIL_ALWAYS REMOTE_SKILL_DIR
+assert_contains "failed remote rollback is reported with context" \
+    "Worker Skill remote rollback failed" "${CASE_DIR}/error.log"
 
 echo
 echo "Results: ${PASS} passed, ${FAIL} failed"

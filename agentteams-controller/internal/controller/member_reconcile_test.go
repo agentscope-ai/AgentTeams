@@ -120,6 +120,28 @@ func TestReconcileMemberInfraPreservesTeamStorageAccess(t *testing.T) {
 	}
 }
 
+func TestReconcileMemberDeletePreservesRoomForAdminLeave(t *testing.T) {
+	prov := mocks.NewMockProvisioner()
+
+	if err := ReconcileMemberDelete(context.Background(), MemberDeps{
+		Provisioner: prov,
+		Deployer:    mocks.NewMockDeployer(),
+	}, MemberContext{
+		Name:           "worker-cr",
+		RuntimeName:    "worker-runtime",
+		ExistingRoomID: "!worker-dm:matrix.local",
+	}); err != nil {
+		t.Fatalf("ReconcileMemberDelete: %v", err)
+	}
+
+	if got := prov.Calls.LeaveAllWorkerRooms; len(got) != 1 || got[0] != "worker-runtime" {
+		t.Fatalf("LeaveAllWorkerRooms calls=%v, want [worker-runtime]", got)
+	}
+	if got := prov.Calls.DeleteWorkerRoom; len(got) != 0 {
+		t.Fatalf("DeleteWorkerRoom calls=%v, want none so the admin can leave normally", got)
+	}
+}
+
 func TestResolveBackendForMember_NoBackendAvailable(t *testing.T) {
 	// An empty registry surfaces an error so callers can decide whether
 	// to skip container management or fail loudly.

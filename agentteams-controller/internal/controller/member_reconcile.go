@@ -1957,12 +1957,6 @@ func ReconcileMemberDelete(ctx context.Context, d MemberDeps, m MemberContext) e
 	if err := d.Provisioner.LeaveAllWorkerRooms(ctx, m.RuntimeName); err != nil {
 		logger.Error(err, "member leave-all-rooms failed (non-fatal)", "name", m.Name, "runtimeName", m.RuntimeName)
 	}
-	if m.ExistingRoomID != "" {
-		if err := d.Provisioner.DeleteWorkerRoom(ctx, m.ExistingRoomID); err != nil {
-			logger.Error(err, "member room delete command failed (non-fatal)",
-				"name", m.Name, "runtimeName", m.RuntimeName, "roomID", m.ExistingRoomID)
-		}
-	}
 
 	if err := d.Provisioner.DeprovisionWorker(ctx, service.WorkerDeprovisionRequest{
 		Name:         m.RuntimeName,

@@ -668,7 +668,12 @@ GET    /api/v1/managers
 POST   /api/v1/managers
 PUT    /api/v1/managers/{name}
 DELETE /api/v1/managers/{name}
+
+GET    /api/v1/projects
+GET    /api/v1/projects/{id}/workflow
 ```
+
+项目端点为**只读工作流查询**。`GET /api/v1/projects` 跨团队前缀（`teams/{team}/shared/projects/`）与独立前缀（`shared/projects/`）枚举项目，排序输出并支持可选 `?team=` 过滤；`GET /api/v1/projects/{id}/workflow` 返回对齐 LangGraph 的工作流视图（`nodes` / `edges` / `next` / `interrupts` / `values` / `loop`），数据源自项目 `meta.json`。Admin/Manager 角色可见全部项目；Team Leader 仅可见本团队项目。`agt get projects <id> --mermaid` 将工作流渲染为 Mermaid 流程图。
 
 > **注意：** 常见嵌入式部署中，8090 在 Manager 容器内可用（`localhost:8090`）。Kubernetes（`AGENTTEAMS_KUBE_MODE=incluster`）下可通过 Service 暴露 Controller。
 

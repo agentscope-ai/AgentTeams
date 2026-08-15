@@ -297,18 +297,20 @@ LLM API Key: ****
 ```
 --- 默认 Worker 运行时 ---
 
-  1) OpenClaw（Node.js，约 500MB 内存量级）
-  2) QwenPaw（Python，约 150MB；内部镜像名：copaw）
+  1) QwenPaw（推荐）
+  2) OpenClaw
   3) Hermes（Python Hermes Worker 运行时）
+  4) CoPaw（旧版本，建议升级为 QwenPaw）
 
-请选择 [1/2/3]:
+请选择 [1/2/3/4]:
 ```
 
 | 运行时 | 内存（量级） | 特点 |
 |--------|-------------|------|
-| OpenClaw | ~500MB | 功能丰富，内置 Web 控制台 |
 | QwenPaw | ~150MB | 轻量 Python 运行时 |
+| OpenClaw | ~500MB | 功能丰富，内置 Web 控制台 |
 | Hermes | 视负载 | 工作区内 `.hermes/` 策略与状态 |
+| CoPaw | ~150MB | 旧版 Python runtime，建议升级为 QwenPaw |
 
 请按机器配置与任务类型选择。
 

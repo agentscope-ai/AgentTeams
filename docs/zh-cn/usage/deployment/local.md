@@ -101,8 +101,8 @@ bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main
 
 1. 安装 `latest`、最新稳定版或指定版本。
 2. 选择模型服务和模型，并输入 LLM API Key。
-3. 选择 Manager runtime：CoPaw 或 OpenClaw。
-4. 选择默认 Worker runtime：CoPaw、OpenClaw，或支持版本中的 Hermes。
+3. 选择 Manager runtime：QwenPaw（推荐）、OpenClaw 或旧版 CoPaw。
+4. 选择默认 Worker runtime：QwenPaw（推荐）、OpenClaw、支持版本中的 Hermes 或旧版 CoPaw。
 
 其余配置采用以下默认值：
 
@@ -206,8 +206,9 @@ Embedding 模型可以使用默认值、自定义或关闭。连通性检查失�
 
 | 选项 | 安装器配置值 | 说明 |
 |---|---|---|
-| CoPaw | `copaw` | Python Manager runtime，也是本地安装器的默认选项。 |
+| QwenPaw | `qwenpaw` | 推荐的 Python Manager runtime，也是本地安装器的默认选项。 |
 | OpenClaw | `openclaw` | Node.js Manager runtime。 |
+| CoPaw | `copaw` | 旧版 Python runtime，建议升级为 QwenPaw。 |
 
 Manager runtime 决定 Manager 镜像和运行方式。修改已有 Manager runtime 会重建 Manager 容器，应在没有进行中任务时操作。
 
@@ -217,9 +218,10 @@ Manager runtime 决定 Manager 镜像和运行方式。修改已有 Manager runt
 
 | 选项 | 配置值 | 说明 |
 |---|---|---|
-| CoPaw | `copaw` | 默认选项，Python runtime。 |
+| QwenPaw | `qwenpaw` | 推荐默认项，当前 Python runtime。 |
 | OpenClaw | `openclaw` | Node.js runtime。 |
 | Hermes | `hermes` | 从支持该 runtime 的版本开始显示。 |
+| CoPaw | `copaw` | 旧版 Python runtime，建议升级为 QwenPaw。 |
 
 该选项只设置后续创建 Worker 时的默认 runtime。创建 Worker 时仍可以显式选择 controller 支持的其他 runtime。
 
@@ -344,8 +346,8 @@ bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main
 | `AGENTTEAMS_ADMIN_USER` | `admin` |
 | `AGENTTEAMS_ADMIN_PASSWORD` | 未设置时自动生成；显式设置时至少 8 个字符 |
 | `AGENTTEAMS_LOCAL_ONLY` | `1` |
-| `AGENTTEAMS_MANAGER_RUNTIME` | `copaw`，对应 CoPaw Manager |
-| `AGENTTEAMS_DEFAULT_WORKER_RUNTIME` | `copaw` |
+| `AGENTTEAMS_MANAGER_RUNTIME` | `qwenpaw` |
+| `AGENTTEAMS_DEFAULT_WORKER_RUNTIME` | `qwenpaw` |
 | `AGENTTEAMS_MATRIX_E2EE` | `0` |
 | `AGENTTEAMS_MOUNT_SOCKET` | `1` |
 | `AGENTTEAMS_DOCKER_PROXY` | `1`；启用受限的容器运行时代理 |
@@ -364,6 +366,7 @@ bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main
 
 - `AGENTTEAMS_INSTALL_EMBEDDED_IMAGE`
 - `AGENTTEAMS_INSTALL_MANAGER_IMAGE`
+- `AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE`
 - `AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE`
 - `AGENTTEAMS_INSTALL_WORKER_IMAGE`
 - `AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE`

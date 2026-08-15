@@ -673,7 +673,12 @@ GET    /api/v1/managers
 POST   /api/v1/managers
 PUT    /api/v1/managers/{name}
 DELETE /api/v1/managers/{name}
+
+GET    /api/v1/projects
+GET    /api/v1/projects/{id}/workflow
 ```
+
+The project endpoints are **read-only workflow inspection**. `GET /api/v1/projects` lists projects across team (`teams/{team}/shared/projects/`) and standalone (`shared/projects/`) prefixes, sorted with an optional `?team=` filter; `GET /api/v1/projects/{id}/workflow` returns a LangGraph-aligned workflow view (`nodes` / `edges` / `next` / `interrupts` / `values` / `loop`) derived from the project `meta.json`. Admin/Manager roles see all projects; a Team Leader sees only their own team's projects. `agt get projects <id> --mermaid` renders the workflow as a Mermaid flowchart.
 
 > **Note:** In typical embedded deployments, port 8090 is reachable from inside the Manager container (`localhost:8090`). In Kubernetes (`AGENTTEAMS_KUBE_MODE=incluster`), expose the controller via a Service as needed.
 

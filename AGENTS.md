@@ -24,7 +24,7 @@ AgentTeams/
 ├── tests/               # Automated integration tests
 ├── docs/                # User-facing documentation
 ├── design/              # Internal design notes and API specs
-├── changelog/           # Release notes fragments (current.md rolled into releases)
+├── changelog/           # Archived release notes from earlier releases
 ├── hack/                # Maintenance helpers (e.g. image mirror scripts)
 ├── migrate/             # Optional migration helpers
 ├── blog/                # Announcement / blog source
@@ -226,18 +226,9 @@ In `k8s` / `aliyun` modes, Workers are created via the controller API instead of
 | Agent Framework | OpenHuman (`openhuman-core`) | Alternative Rust Worker runtime with native Matrix |
 | MCP CLI | mcporter | Worker calls MCP Server tools via CLI |
 
-## Changelog Policy
+## Release Notes Policy
 
-Any change that affects the content of a built image — i.e. modifications under `manager/`, `worker/`, `copaw/`, `hermes/`, `openclaw-base/`, or `agentteams-controller/` — **must** be recorded in [`changelog/current.md`](changelog/current.md) before committing.
-
-Format: one bullet per logical change, with a linked commit hash, e.g.:
-
-```
-- feat(manager): add task-management skill extracted from AGENTS.md ([a1b2c3d](https://github.com/agentscope-ai/AgentTeams/commit/a1b2c3d...))
-- fix(manager): fix upgrade-builtins idempotency (duplicate marker insertion) ([e4f5g6h](https://github.com/agentscope-ai/AgentTeams/commit/e4f5g6h...))
-```
-
-On release, the workflow automatically renames `current.md` → `vX.Y.Z.md` and creates a fresh `current.md`.
+Pull requests do not update a shared changelog file. When a release tag is published, the release workflow automatically generates the change list from pull requests merged since the previous release.
 
 ## Key Design Patterns
 

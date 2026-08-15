@@ -51,6 +51,7 @@ jobs:
         run: |
           ruby plugins/tests/teamharness/test-contracts.rb
           python -m pytest plugins/tests/teamharness/mcp/test_continuation.py -q
+          python -m pytest plugins/tests/teamharness/test_pull_project.py -q
           PYTHONPATH="${GITHUB_WORKSPACE}/copaw/src" \
             python -m pytest copaw/tests/test_taskflow_tool.py -q
           ruby plugins/tests/teamharness/mcp/tools/test-taskflow.rb

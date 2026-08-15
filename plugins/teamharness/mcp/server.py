@@ -2222,6 +2222,17 @@ def _section(data: dict[str, Any], name: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _runtime_team_name() -> str:
+    """Return the runtime team name from TEAMHARNESS_RUNTIME_CONFIG, if any.
+
+    Used to stamp ``team_id`` onto project metadata so the Controller can map
+    a project back to its owning team (``teams/{team}/shared/projects/`` vs the
+    global ``shared/projects/`` prefix). Empty string when no team is configured.
+    """
+    team = _section(_load_runtime_config(), "team")
+    return str(team.get("name") or "").strip()
+
+
 def _runtime_team_admin_user_id() -> str:
     config = _load_runtime_config()
     team = _section(config, "team")
@@ -3105,6 +3116,7 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
             project["requester_report"] = requester_report
     _write_json(_project_state_path(arguments, project_id), project)
     _write_project_plan(_project_dir(arguments, project_id), project)
+    _sync_project(arguments, project_id)
     publish_artifacts = _payload_bool_field(payload, ("publishArtifacts", "publish_artifacts"), False)
     published_artifacts = (
         _publish_project_artifacts(
@@ -3146,6 +3158,7 @@ def _mark_requester_report_sent(arguments: dict[str, Any], payload: dict[str, An
     requester_report["sent_at"] = str(payload.get("sentAt") or payload.get("sent_at") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
     project["requester_report"] = requester_report
     _write_json(_project_state_path(arguments, project_id), project)
+    _sync_project(arguments, project_id)
     return {
         "ok": True,
         "tool": "projectflow",
@@ -3194,10 +3207,79 @@ def _notification_needed(
     return result
 
 
+def _project_id_for_pull(arguments: dict[str, Any], payload: dict[str, Any]) -> str:
+    """Resolve the project id for a projectflow/taskflow payload before the
+    read-before-read pull.
+
+    create_project/create_quick_project generate/validate a unique id, so the
+    project does not yet exist — pull is meaningless (and would fail on the
+    remote). Read-type actions carry projectId/project_id directly, except
+    resolve_project which may carry only taskId (the task belongs to a
+    project). Returns "" when the payload does not identify a project.
+    """
+    action = str(payload.get("action") or "").strip()
+    if action in {"create_project", "create_quick_project"}:
+        return ""
+    project_id = _first_text(payload.get("projectId"), payload.get("project_id"))
+    if project_id:
+        return project_id
+    task_id = _first_text(payload.get("taskId"), payload.get("task_id"))
+    if task_id:
+        task = _read_json(_task_state_path(arguments, task_id))
+        if task:
+            return _first_text(task.get("project_id"), task.get("projectId"))
+    return ""
+
+
+# Actions that write project/task state back to shared storage. When the
+# authoritative pull fails, these must NOT continue from stale local state
+# (their _sync would clobber a Controller pause/resume/replan) — they fail
+# with a retryable error instead. Read-only actions tolerate a failed pull
+# and serve local state.
+_PROJECTFLOW_MUTATING_ACTIONS = frozenset({
+    "accept_task_result",
+    "record_loop_iteration",
+    "pause_project",
+    "resume_project",
+    "complete_project",
+    "replan_project",
+})
+_TASKFLOW_MUTATING_ACTIONS = frozenset({
+    "delegate_task",
+    "ack_task",
+    "submit_task",
+    "cancel_task",
+})
+
+
+def _pull_failed_response(tool: str, action: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "tool": tool,
+        "action": action,
+        "error": "cannot pull authoritative project state from shared storage; retry",
+        "retryable": True,
+    }
+
+
 def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
     action = str(arguments.get("action") or "").strip()
     payload = _payload(arguments)
     try:
+        # the lifecycle write API read-before-read: pull the authoritative meta.json from
+        # shared storage before any read-type action so a Controller write
+        # (pause/resume/replan) takes effect on the next read. One call at
+        # the entry covers every read path (resolve_project, ready_nodes,
+        # ready_loop_nodes, accept_task_result, record_loop_iteration,
+        # pause/resume/complete, ...) instead of adding a pull per action.
+        pid = _project_id_for_pull(arguments, payload)
+        if pid and not _pull_project(arguments, pid):
+            # Mutating actions must not continue from stale local state:
+            # their write-back (_sync_project) could clobber a Controller
+            # pause/resume/replan that this worker has not seen. Fail with a
+            # retryable error; read actions tolerate the stale state.
+            if action in _PROJECTFLOW_MUTATING_ACTIONS:
+                return _pull_failed_response("projectflow", action)
         if action == "create_project":
             project_id = _project_id_from_payload(arguments, payload)
             project = {
@@ -3205,6 +3287,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "title": str(payload.get("title") or project_id),
                 "source": str(payload.get("source") or ""),
                 "requester": str(payload.get("requester") or ""),
+                "team_id": str(payload.get("teamId") or payload.get("team_id") or _runtime_team_name()).strip(),
                 "status": "active",
                 "tasks": [],
             }
@@ -3219,6 +3302,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project_dir = _project_dir(arguments, project_id)
             _write_json(_project_state_path(arguments, project_id), project)
             _write_project_plan(project_dir, project)
+            _sync_project(arguments, project_id)
             return {
                 "ok": True,
                 "tool": "projectflow",
@@ -3256,6 +3340,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "title": title,
                 "source": str(payload.get("source") or ""),
                 "requester": str(payload.get("requester") or ""),
+                "team_id": str(payload.get("teamId") or payload.get("team_id") or _runtime_team_name()).strip(),
                 "status": "active",
                 "mode": "quick",
                 "plan_type": "dag",
@@ -3274,6 +3359,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project_dir = _project_dir(arguments, project_id)
             _write_json(_project_state_path(arguments, project_id), project)
             _write_project_plan(project_dir, project)
+            _sync_project(arguments, project_id)
 
             task_dir = _task_dir(arguments, task_id)
             task_dir.mkdir(parents=True, exist_ok=True)
@@ -3327,6 +3413,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project_dir = _project_dir(arguments, project_id)
             _write_json(state_path, project)
             _write_project_plan(project_dir, project)
+            _sync_project(arguments, project_id)
             return {
                 "ok": True,
                 "tool": "projectflow",
@@ -3382,6 +3469,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project_dir = _project_dir(arguments, project_id)
             _write_json(state_path, project)
             _write_project_plan(project_dir, project)
+            _sync_project(arguments, project_id)
             return {
                 "ok": True,
                 "tool": "projectflow",
@@ -3453,6 +3541,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project_dir = _project_dir(arguments, project_id)
             _write_json(_project_state_path(arguments, project_id), project)
             _write_project_plan(project_dir, project)
+            _sync_project(arguments, project_id)
             return {
                 "ok": True,
                 "tool": "projectflow",
@@ -3484,6 +3573,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project_dir = _project_dir(arguments, project_id)
             _write_json(state_path, project)
             _write_project_plan(project_dir, project)
+            _sync_project(arguments, project_id)
             result = {
                 "ok": True,
                 "tool": "projectflow",
@@ -3730,6 +3820,25 @@ def _sync_task(arguments: dict[str, Any], task_id: str, exclude: list[str] | Non
     return bool(result.get("ok"))
 
 
+def _sync_project(arguments: dict[str, Any], project_id: str) -> bool:
+    """Push a project directory (meta.json + plan.md + result.md) to shared
+    storage.
+
+    Project state is written locally by projectflow, and — unlike tasks,
+    which are pushed via _sync_task — was previously only synced to MinIO at
+    worker startup (mirror_all). Without this push, a Controller-level project
+    API (or dashboard) would read a stale startup snapshot. Mirrors the
+    _sync_task pattern.
+    """
+    sync_args = dict(arguments)
+    sync_args.update({
+        "action": "push",
+        "path": f"shared/projects/{project_id}",
+    })
+    result = _filesync(sync_args)
+    return bool(result.get("ok"))
+
+
 def _pull_task(arguments: dict[str, Any], task_id: str) -> bool:
     existing = _read_json(_task_state_path(arguments, task_id))
     sync_args = dict(arguments)
@@ -3754,6 +3863,65 @@ def _pull_task(arguments: dict[str, Any], task_id: str) -> bool:
                 if preserved:
                     task[snake] = preserved
             _write_task(arguments, task)
+    return True
+
+
+def _pull_project(arguments: dict[str, Any], project_id: str) -> bool:
+    """Pull a project's meta.json from shared storage (single file) so a
+    Controller-level write (pause / resume / replan) takes effect on the next
+    read.
+
+    Mirrors _pull_task's field-preservation pattern, but for the single
+    authoritative file (shared/projects/{id}/meta.json) instead of a task
+    directory (E3): plan.md/result.md are derived/data files and the
+    Controller only ever writes meta.json. The pull uses a single-file
+    `mc cp` (the normalized path has 4 segments, so _normalize_shared_path
+    treats it as a file, not a directory), which is an order of magnitude
+    cheaper than a directory mirror.
+
+    After the pull, if the authoritative fields (status / tasks / plan_type)
+    differ from the pre-pull local copy, plan.md is re-rendered from the new
+    meta (D2) so the derived plan document stays consistent with the single
+    source of truth. Fields that the remote copy omits (older versions) are
+    back-filled from the local copy to avoid clobbering them.
+
+    Returns True on a successful pull (even when the remote object does not
+    exist — the pull is best-effort); callers ignore the return value and
+    proceed to read local state, which yields "project not found" naturally
+    when the project does not exist.
+    """
+    existing = _read_json(_project_state_path(arguments, project_id))
+    sync_args = dict(arguments)
+    sync_args.update({
+        "action": "pull",
+        "path": f"shared/projects/{project_id}/meta.json",
+    })
+    result = _filesync(sync_args)
+    if not result.get("ok"):
+        return False
+    pulled = _read_json(_project_state_path(arguments, project_id))
+    if not pulled:
+        return False
+
+    changed = any(pulled.get(key) != existing.get(key) for key in ("status", "tasks", "plan_type"))
+    if existing:
+        # Back-fill fields the remote copy omits (older versions). String
+        # fields use _first_text; reply_route is a dict and must be preserved
+        # as-is when the remote omits it.
+        for snake, camel in (
+            ("source_room_id", "sourceRoomId"),
+            ("team_id", "teamId"),
+        ):
+            if _first_text(pulled.get(snake), pulled.get(camel)):
+                continue
+            preserved = _first_text(existing.get(snake), existing.get(camel))
+            if preserved:
+                pulled[snake] = preserved
+        if not pulled.get("reply_route") and existing.get("reply_route"):
+            pulled["reply_route"] = existing["reply_route"]
+        _write_json(_project_state_path(arguments, project_id), pulled)
+    if changed:
+        _write_project_plan(_project_dir(arguments, project_id), pulled)
     return True
 
 
@@ -3802,6 +3970,7 @@ def _update_project_task(arguments: dict[str, Any], project_id: str, task_id: st
     if changed:
         _write_json(path, project)
         _write_project_plan(_project_dir(arguments, project_id), project)
+        _sync_project(arguments, project_id)
 
 
 def _validate_assignee_membership(room_id: str, assignee: str) -> dict[str, Any]:
@@ -3915,6 +4084,19 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
     payload = _payload(arguments)
     role = _role(arguments)
     try:
+        # the lifecycle write API read-before-read: taskflow has no create action; every
+        # action (delegate/ack/submit/cancel/check) belongs to a project.
+        # Pull the authoritative meta.json first so a Controller pause /
+        # resume / replan is visible before ack/submit/cancel write the
+        # project node status back (otherwise the write-back would clobber
+        # the Controller's paused status with a stale active).
+        pid = _project_id_for_pull(arguments, payload)
+        if pid and not _pull_project(arguments, pid):
+            # Same rationale as _projectflow: ack/submit/cancel write the
+            # project node status back — proceeding on stale local state
+            # could clobber a Controller intervention.
+            if action in _TASKFLOW_MUTATING_ACTIONS:
+                return _pull_failed_response("taskflow", action)
         if action == "delegate_task":
             if role != "leader":
                 raise ValueError("delegate_task requires leader role")

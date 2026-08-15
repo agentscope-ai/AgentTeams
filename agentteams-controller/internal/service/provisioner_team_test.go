@@ -321,6 +321,42 @@ func TestRefreshWorkerCredentialsRestoresMinIOAccess(t *testing.T) {
 	}
 }
 
+func TestRefreshManagerCredentialsRestoresMinIOAccess(t *testing.T) {
+	admin := &fakeStorageAdmin{}
+	creds := fakeCredentialStore{
+		"default": {
+			MatrixToken:   "manager-token",
+			MinIOPassword: "manager-minio-secret",
+			GatewayKey:    "manager-gateway-key",
+		},
+	}
+	p := NewProvisioner(ProvisionerConfig{
+		Matrix:   newFakeTeamMatrix(),
+		Creds:    creds,
+		OSSAdmin: admin,
+	})
+
+	result, err := p.RefreshManagerCredentials(context.Background(), "default")
+	if err != nil {
+		t.Fatalf("RefreshManagerCredentials: %v", err)
+	}
+	if result.MinIOPassword != "manager-minio-secret" {
+		t.Fatalf("MinIOPassword=%q, want manager-minio-secret", result.MinIOPassword)
+	}
+	if len(admin.users) != 1 {
+		t.Fatalf("EnsureUser calls=%d, want 1", len(admin.users))
+	}
+	if got := admin.users[0]; got.name != "default" || got.password != "manager-minio-secret" {
+		t.Fatalf("EnsureUser=%+v, want default/manager-minio-secret", got)
+	}
+	if len(admin.policies) != 1 {
+		t.Fatalf("EnsurePolicy calls=%d, want 1", len(admin.policies))
+	}
+	if got := admin.policies[0]; got.WorkerName != "default" || !got.IsManager {
+		t.Fatalf("EnsurePolicy=%+v, want Manager policy for default", got)
+	}
+}
+
 func TestProvisionWorkerFreshCredentialsRecreatesStaleRoomAlias(t *testing.T) {
 	matrixClient := newFakeTeamMatrix()
 	matrixClient.created = false
@@ -467,6 +503,7 @@ func (f *fakeTeamMatrix) UnregisterAppService(_ context.Context, _ string) error
 func (f *fakeTeamMatrix) AppServiceSmokeTest(_ context.Context) error            { return nil }
 
 func (f *fakeTeamMatrix) VerifyAccessToken(_ context.Context, _ string) error { return nil }
+func (f *fakeTeamMatrix) Whoami(_ context.Context, _ string) (string, error)  { return "", nil }
 
 func TestProvisionTeamRoomsInvitesExplicitTeamAdminAndLeavesNewLeaderDM(t *testing.T) {
 	matrixClient := newFakeTeamMatrix()

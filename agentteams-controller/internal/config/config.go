@@ -169,8 +169,8 @@ type Config struct {
 	Runtime            string
 	ModelContextWindow int
 	ModelMaxTokens     int
-	ModelVision    *bool // nil = use model default; overrides model-level vision capability
-	ModelReasoning *bool // nil = use model default; overrides model-level reasoning capability
+	ModelVision        *bool // nil = use model default; overrides model-level vision capability
+	ModelReasoning     *bool // nil = use model default; overrides model-level reasoning capability
 
 	// LLM provider (for Gateway initialization)
 	LLMProvider                string
@@ -210,6 +210,7 @@ type WorkerEnvDefaults struct {
 	FSEndpoint           string
 	FSBucket             string
 	StoragePrefix        string
+	StorageProvider      string
 	ControllerURL        string
 	AIGatewayURL         string
 	MatrixURL            string
@@ -410,6 +411,7 @@ func LoadConfig() *Config {
 			FSEndpoint:           os.Getenv("AGENTTEAMS_FS_ENDPOINT"),
 			FSBucket:             envOrDefault("AGENTTEAMS_FS_BUCKET", "agentteams-storage"),
 			StoragePrefix:        envOrDefault("AGENTTEAMS_STORAGE_PREFIX", "agentteams/agentteams-storage"),
+			StorageProvider:      envOrDefault("AGENTTEAMS_STORAGE_PROVIDER", "minio"),
 			ControllerURL:        os.Getenv("AGENTTEAMS_CONTROLLER_URL"),
 			AIGatewayURL:         envOrDefault("AGENTTEAMS_AI_GATEWAY_URL", "http://aigw-local.agentteams.io:8080"),
 			MatrixURL:            envOrDefault("AGENTTEAMS_MATRIX_URL", "http://matrix-local.agentteams.io:8080"),

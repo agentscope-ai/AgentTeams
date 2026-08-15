@@ -21,7 +21,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
 
     steps:
       - name: Checkout
@@ -67,17 +66,10 @@ jobs:
           REPO="${{ env.REPO }}"
           REPOSITORY="${{ github.repository }}"
 
-          # Extract entries below the first --- separator
-          if [ -s changelog/current.md ]; then
-            changelog=$(awk '/^---$/{found=1; next} found{print}' changelog/current.md)
-          else
-            changelog="_No changelog entries recorded._"
-          fi
-
-          # Generate auto release notes (PR list + contributors) via GitHub API
+          # Generate release notes from PRs merged since the previous release.
           auto_notes=$(gh api "repos/${REPOSITORY}/releases/generate-notes" \
             -f tag_name="${VERSION}" \
-            --jq '.body' 2>/dev/null || echo "")
+            --jq '.body')
 
           if [[ "${VERSION}" == *-* ]]; then
             STABLE_VERSION=$(gh api "repos/${REPOSITORY}/releases/latest" --jq '.tag_name')
@@ -125,9 +117,7 @@ jobs:
           quick_start=$(cat /tmp/quick-start.md)
 
           cat > /tmp/release-body.md << EOF
-          ## Highlights
-
-          ${changelog}
+          ${auto_notes}
 
           ---
 
@@ -145,6 +135,9 @@ jobs:
           # Worker
           docker pull ${REGISTRY}/${REPO}/agentteams-worker:${VERSION}
 
+          # QwenPaw Worker
+          docker pull ${REGISTRY}/${REPO}/agentteams-qwenpaw-worker:${VERSION}
+
           # Controller (used standalone in k8s; bundled inside agentteams-embedded for docker installs)
           docker pull ${REGISTRY}/${REPO}/agentteams-controller:${VERSION}
           \`\`\`
@@ -158,10 +151,6 @@ jobs:
           ## Documentation
 
           For more details, see the [installation guide](https://github.com/${REPOSITORY}/blob/main/install/README.md).
-
-          ---
-
-          ${auto_notes}
           EOF
 
       - name: Create GitHub Release
@@ -170,30 +159,3 @@ jobs:
           tag_name: ${{ steps.version.outputs.version }}
           body_path: /tmp/release-body.md
           prerelease: ${{ steps.version.outputs.prerelease }}
-
-      - name: Archive changelog and reset
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-
-          # Rename current.md → vX.Y.Z.md and update title
-          cp changelog/current.md "changelog/${VERSION}.md"
-          sed -i "s/^# Changelog (Unreleased)/# Changelog ${VERSION}/" "changelog/${VERSION}.md"
-          cat > changelog/current.md << 'EOF'
-          # Changelog (Unreleased)
-
-          Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `openclaw-base/`, and `agentteams-controller/` here before the next release.
-
-          ---
-
-          EOF
-
-      - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v7
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          branch: chore/archive-changelog-${{ steps.version.outputs.version }}
-          base: main
-          commit-message: "chore: archive changelog for ${{ steps.version.outputs.version }}"
-          title: "chore: archive changelog for ${{ steps.version.outputs.version }}"
-          body: "Automated PR to archive `changelog/current.md` → `changelog/${{ steps.version.outputs.version }}.md` and reset for next release."
-          labels: changelog

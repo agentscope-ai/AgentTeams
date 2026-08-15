@@ -759,8 +759,18 @@ func (d *Deployer) PushOnDemandSkills(ctx context.Context, workerName string, sk
 			"worker", workerName, "skills", skills)
 		return nil
 	}
-	_, err := d.executor.RunSimple(ctx, scriptPath, "--worker", workerName, "--no-notify")
-	return err
+	for _, skill := range skills {
+		if _, err := d.executor.RunSimple(
+			ctx,
+			scriptPath,
+			"--worker", workerName,
+			"--skill", skill,
+			"--no-notify",
+		); err != nil {
+			return fmt.Errorf("push skill %q to worker %q: %w", skill, workerName, err)
+		}
+	}
+	return nil
 }
 
 func (d *Deployer) PrepareWorkerDeps(ctx context.Context, req WorkerDepsPrepareRequest) error {

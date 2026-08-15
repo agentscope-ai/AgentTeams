@@ -14,6 +14,7 @@ dependencies = [
     "matrix-nio[e2e]>=0.24.0",
     "markdown-it-py>=3.0",
     "linkify-it-py>=2.0",
+    "pyyaml>=6.0",
 ]
 
 [project.urls]

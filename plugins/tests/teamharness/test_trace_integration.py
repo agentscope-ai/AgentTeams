@@ -139,6 +139,9 @@ def mcp_server(otel_env):
     # Stub out MinIO sync operations — we only care about local meta.json changes
     server._sync_task = lambda *a, **kw: True
     server._pull_task = lambda *a, **kw: True
+    # The authoritative project pull must succeed so mutating actions do not
+    # take the retryable pull-failure path (this fixture has no real MinIO).
+    server._pull_project = lambda *a, **kw: True
     # The automatic delegate_task notification must succeed (no real Matrix
     # server in this unit-test fixture) so the delegation commits assigned.
     server._send_delegate_notification = lambda *a, **kw: {

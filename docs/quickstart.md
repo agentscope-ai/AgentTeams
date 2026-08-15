@@ -1,356 +1,155 @@
-# AgentTeams Quickstart Guide
+# AgentTeams Quickstart
 
-This guide walks you through installing AgentTeams, creating your first Agent team, and completing your first collaborative task. Each step includes verification checkpoints to confirm everything is working correctly.
+English | [中文](zh-cn/quickstart.md)
+
+This guide follows the recommended local deployment path. You will install AgentTeams, create your first Worker, and complete a task that demonstrates human intervention. Dedicated guides cover detailed configuration and Kubernetes deployment; after this guide, continue with [AgentTeams Use Cases](usage/use-cases.md).
+
+## What you will have
+
+- An AgentTeams instance running on your local machine.
+- A Manager you can talk to through Element Web.
+- A Worker created and managed by the Manager.
+- A visible task history involving a Human, the Manager, and the Worker.
 
 ## Prerequisites
 
-- Docker installed and running
-- An LLM API key. Alibaba Bailian/Qwen is the quick-start default, but any OpenAI-compatible provider can be used by choosing manual setup and entering its Base URL (usually ending in `/v1`), API key, and model id.
-- (Optional) A GitHub Personal Access Token for GitHub collaboration features
+- macOS or Linux. Windows users should follow the [Windows Deployment Guide](usage/deployment/windows.md).
+- Docker Desktop, Docker Engine, or a compatible Podman environment is running.
+- At least 2 CPU cores and 4 GB of available memory. Use 4 CPU cores and 8 GB when running multiple Workers.
+- A working LLM API key. The installer supports Alibaba Cloud Model Studio/Qwen and OpenAI-compatible services.
+- Local ports `18080`, `18001`, and `18088` are available. The Dashboard also uses port `13000` when enabled by default.
 
----
+> For a first evaluation, use the installer's Quick Start mode. Choose Manual Setup when you need a custom model endpoint, external access, ports, persistence, runtimes, or images.
 
-## Step 1: Install Manager and Login to IM
+## Step 1: Install AgentTeams
 
-**POC Case 1: Manager boots, all services healthy, IM login**
-
-### 1.1 Run the installer
-
-**Option A: One-line install**
+Run the installer in a terminal:
 
 ```bash
 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
-Follow the interactive prompts to configure:
-- LLM Provider and API Key
-- For DeepSeek, OpenAI-compatible local models, or other non-default providers, choose manual setup and enter the provider Base URL with `/v1` when required.
-- Admin username and password
-- Domain names (press Enter to accept defaults)
-- GitHub PAT (optional)
+Follow the prompts:
 
-**Option B: Using Make (for developers who cloned the repo)**
+1. Select English.
+2. Choose Quick Start or Manual Setup.
+3. Enter the LLM API key. For another OpenAI-compatible service in Manual Setup, also enter its Base URL and model ID.
+4. Wait for the model connectivity check and container startup to complete.
+
+For OpenAI-compatible services, the Base URL commonly includes `/v1`; follow the requirements of your provider.
+
+After a successful installation, the terminal prints:
+
+- The Element Web login URL.
+- The administrator username and password.
+- The Higress Console URL.
+- The Dashboard URL, when enabled.
+- The locations of the configuration file, data volume, and Manager workspace.
+
+Save the login information before continuing.
+
+## Step 2: Verify and sign in
+
+Check the main containers:
 
 ```bash
-# Minimal install — only LLM key required, all defaults applied
-AGENTTEAMS_LLM_API_KEY="sk-xxx" make install
+docker ps --filter name=agentteams-controller
+docker ps --filter name=agentteams-manager
 ```
 
-This builds images locally, mounts the container runtime socket (for direct Worker creation), and saves config to `./agentteams-manager.env`.
-
-Both methods support environment variable overrides for all settings. See `install/agentteams-install.sh` header for the full list.
-
-### 1.1a Multi-container layout (v1.1.0+ embedded install)
-
-The default **embedded** install starts two main containers (see [architecture.md](architecture.md)):
-
-| Container | Role |
-|-----------|------|
-| **`agentteams-controller`** | Bundles Higress, Tuwunel, MinIO, Element Web, and the Go controller (REST API on port **8090** inside the Docker network). |
-| **`agentteams-manager`** | Lightweight Manager Agent only (OpenClaw **or** QwenPaw when `AGENTTEAMS_MANAGER_RUNTIME=copaw`). |
-
-Worker containers (`agentteams-worker-*`, `agentteams-copaw-worker-*`, `agentteams-hermes-worker-*`) are created when you add Workers.
-
-**Declarative CLI (no chat required):** The `agt` binary is available **inside** `agentteams-controller` and `agentteams-manager`. For quick checks and provisioning from the host:
+You can also check the Manager through `agt`:
 
 ```bash
-docker exec agentteams-controller agt create worker --name alice --model qwen3.5-plus
+docker exec agentteams-controller agt get managers
+```
+
+By default, open this URL in a browser:
+
+```text
+http://127.0.0.1:18088/#/login
+```
+
+Sign in with the administrator username and password printed by the installer. You should see a conversation or room for the Manager.
+
+If the page does not load or the Manager is not ready, inspect the logs:
+
+```bash
+docker logs --tail 200 agentteams-controller
+docker logs --tail 200 agentteams-manager
+```
+
+See the [FAQ](usage/troubleshooting/faq.md) for more troubleshooting steps.
+
+## Step 3: Create your first Worker
+
+Open a direct message with the Manager in Element Web and send:
+
+> Create a Worker named alice for Python development and code testing.
+
+The Manager will ask for or confirm the Worker's role, model, runtime, and Skills based on the current configuration. For a first evaluation, accept the recommended options. If you choose a runtime, prefer one whose default image was prepared during installation.
+
+Provisioning normally takes several dozen seconds. The Manager asks the controller to:
+
+1. Create the Worker resource and Matrix identity.
+2. Prepare gateway permissions and shared storage configuration.
+3. Start a separate Worker container.
+4. Create a Matrix room containing the Human, Manager, and Worker.
+
+Check the status from a terminal:
+
+```bash
 docker exec agentteams-controller agt get workers
+docker ps --filter name=agentteams-worker
 ```
 
-For YAML-driven workflows, use `install/agentteams-apply.sh` (copies files into `agentteams-manager` and runs `agt apply -f`). Details: [Declarative Resource Management](declarative-resource-management.md).
+Wait until `alice` reaches `Running`, and confirm that its room appears in Element Web.
 
-### 1.2 Login to Element Web
+## Step 4: Complete your first task
 
-Open http://127.0.0.1:18088 in your browser (direct access port). Alternatively, access via the gateway at http://matrix-client-local.agentteams.io:18080 if you've added the domain to your `/etc/hosts`.
+Open Alice's Matrix room and send:
 
-Login with your admin credentials.
+> Create a Python command-line program that accepts a name and prints a greeting. Include a README and basic tests. When finished, explain which files you created and how to run the tests.
 
-### Verification Checklist
+You can watch task delegation, progress, and results in the room. When Alice finishes, confirm that the response includes:
 
-- [ ] **`agentteams-controller`** is running (embedded stack): `docker ps | grep agentteams-controller`
-- [ ] **`agentteams-manager`** is running: `docker ps | grep agentteams-manager`
-- [ ] Element Web loads in browser at http://127.0.0.1:18088
-- [ ] Login with admin credentials succeeds
-- [ ] Higress Console at http://localhost:18001 (gateway **host** port defaults to **18080**; Matrix/Element use that gateway for `*-local.agentteams.io` hostnames)
-- [ ] MinIO is reachable **inside** the controller container (embedded install does **not** publish MinIO console on the host by default): `docker exec agentteams-controller curl -sf http://127.0.0.1:9000/minio/health/live`
-- [ ] (OpenClaw Manager only) OpenClaw control UI at http://127.0.0.1:18888
+- The implementation file.
+- A README or usage instructions.
+- Tests and their results.
+- The artifact location or retrieval instructions.
 
----
+## Step 5: Try human intervention
 
-## Step 2: Create Worker Alice
+While the Worker is still running, add another requirement:
 
-**POC Case 2: Create Worker via Matrix conversation**
+> Additional requirement: when no name is provided, default to `World`, and add a test for that branch.
 
-### 2.1 Chat with Manager
+Confirm that the Worker understands the additional requirement and covers both the original task and the new requirement in the final result. This is the Human-in-the-loop workflow in AgentTeams: people can observe collaboration and correct the direction before a task finishes.
 
-**Option A: Via Element Web (GUI)**
+## Completion checklist
 
-In Element Web, start a direct message (DM) with the `manager` user.
+- [ ] `agentteams-controller` and `agentteams-manager` are running.
+- [ ] You can sign in to Element Web and talk to the Manager.
+- [ ] Alice is in the `Running` state.
+- [ ] Alice's Matrix room is visible to the Human.
+- [ ] The Worker returned the implementation, instructions, and test results.
+- [ ] The Worker incorporated a requirement added during execution.
 
-Send:
-> Please create a new Worker named alice for frontend development tasks. She should have access to GitHub MCP.
+After these checks pass, you have completed the smallest end-to-end AgentTeams workflow.
 
-**Option B: Via CLI (make replay)**
+## Next steps
 
-```bash
-make replay TASK="Please create a new Worker named alice for frontend development tasks. She should have access to GitHub MCP."
-```
-
-This sends the message via the Matrix API and waits for the Manager's reply in the terminal.
-
-### 2.2 Wait for Manager Response
-
-The Manager Agent will:
-1. Register an `alice` Matrix account
-2. Create a Higress consumer `worker-alice` with key-auth credentials
-3. Generate Alice's configuration files in MinIO
-4. Create a Matrix Room (you, Manager, and Alice)
-5. Start the Worker (direct creation or install command, depending on your request and whether the container runtime socket is mounted)
-
-### 2.3 Start Worker Alice
-
-There are two ways to start the Worker:
-
-**Option A: Direct Creation (Local Deployment)**
-
-If you asked the Manager to "create it directly", the Manager will automatically create and start the Worker container on the host machine via the mounted container runtime socket. No manual steps needed.
-
-> This requires `make install` (which mounts the socket automatically) or manually mounting the Docker/Podman socket when starting the Manager container.
-
-**Option B: Docker Run Command (Manual or Edge Deployment)**
-
-If the Manager doesn't have access to the container runtime socket, it will reply with a `docker run` command. Copy and run it on the target host:
-
-```bash
-docker run -d --name agentteams-worker-alice \
-  -e AGENTTEAMS_WORKER_NAME=alice \
-  -e AGENTTEAMS_FS_ENDPOINT=http://<MANAGER_HOST>:9000 \
-  -e AGENTTEAMS_FS_ACCESS_KEY=<ACCESS_KEY> \
-  -e AGENTTEAMS_FS_SECRET_KEY=<SECRET_KEY> \
-  agentteams/worker-agent:latest
-```
-
-The Manager will provide all the specific values in its reply.
-
-### Verification Checklist
-
-- [ ] Alice's Room appears in Element Web (3 members: you, manager, alice)
-- [ ] Higress Console shows `worker-alice` consumer (http://localhost:18001)
-- [ ] MinIO has `agents/alice/SOUL.md` file (accessible via MinIO Console or `mc ls`)
-- [ ] Worker container running: `docker ps | grep agentteams-worker-alice`
-
----
-
-## Step 3: Assign Task to Alice
-
-**POC Case 3: Assign task in Room, Worker completes**
-
-### 3.1 Send task in Alice's Room
-
-Open Alice's Room in Element Web and send:
-
-> Alice, please create a simple README.md for a hello-world project. Include the project name, description, and usage instructions. Save the result to the shared task folder.
-
-### 3.2 Observe task execution
-
-Watch the Room as:
-1. Manager receives and relays the task
-2. Task metadata and spec appear in MinIO (`shared/tasks/{task-id}/meta.json` and `spec.md`)
-3. Alice works on the task
-4. Alice writes the result (`shared/tasks/{task-id}/result.md`)
-5. Alice notifies completion in the Room
-6. Manager updates `meta.json` status to `completed`
-
-### Verification Checklist
-
-- [ ] Manager creates task `meta.json` and `spec.md` in MinIO
-- [ ] Alice acknowledges and begins working
-- [ ] Alice posts progress updates in Room
-- [ ] Result file appears in MinIO shared tasks
-- [ ] Alice notifies completion in Room
-- [ ] Task `meta.json` status updated to `completed`
-
----
-
-## Step 4: Human Intervenes Mid-Task
-
-**POC Case 4: Human sends supplementary instructions**
-
-### 4.1 Assign a new task
-
-In Alice's Room, send:
-
-> Alice, write a Python script that prints 'Hello, World!' and save it as hello.py.
-
-### 4.2 Send supplementary instruction
-
-While Alice is working, send an additional instruction:
-
-> Additional requirement: the script should also accept a command line argument for the name, so it prints 'Hello, <name>!' instead.
-
-### 4.3 Observe incorporation
-
-Alice and Manager should incorporate both the original and supplementary requirements.
-
-### Verification Checklist
-
-- [ ] Manager relays both original and supplementary instructions
-- [ ] Alice acknowledges the additional requirement
-- [ ] Final result includes both original and supplementary features
-
----
-
-## Step 5: Observe Heartbeat
-
-**POC Case 5: Heartbeat triggers Manager inquiry**
-
-### 5.1 Assign a longer task
-
-Send a task that takes some time to complete.
-
-### 5.2 Wait for heartbeat cycle
-
-The Manager Agent runs a heartbeat check periodically (triggered by OpenClaw's built-in heartbeat mechanism). During the heartbeat:
-- Manager checks each Worker's Room for recent activity
-- For Workers with assigned tasks, Manager asks for status
-- The inquiry is visible in the Room
-
-### Verification Checklist
-
-- [ ] Manager sends a status inquiry message in Alice's Room
-- [ ] Alice responds with current progress
-- [ ] Human admin can see the entire exchange in the Room
-
----
-
-## Step 6: Create Worker Bob and Collaborate
-
-**POC Case 6: Multi-Worker collaboration**
-
-### 6.1 Create Worker Bob
-
-In your DM with Manager, send:
-
-> Create a new Worker named bob for backend development. He should have access to GitHub MCP.
-
-### 6.2 Install Bob
-
-Follow the same process as Alice (Step 2).
-
-### 6.3 Assign collaborative task
-
-In your DM with Manager, send:
-
-> I need Alice and Bob to collaborate: Alice should create the frontend HTML page, and Bob should create the backend API. They should coordinate via shared files in MinIO.
-
-### Verification Checklist
-
-- [ ] Bob's Room appears in Element Web (3 members)
-- [ ] Higress Console shows `worker-bob` consumer
-- [ ] Manager splits task between Alice and Bob
-- [ ] Both Workers communicate progress in their respective Rooms
-- [ ] Shared coordination files appear in MinIO
-
----
-
-## Step 7: GitHub Operations via MCP
-
-**POC Case 7: GitHub code operations**
-
-> **Note**: This step requires a GitHub PAT to be configured during Manager installation.
-
-### 7.1 Assign GitHub task
-
-In Alice's Room, send:
-
-> Alice, please perform these GitHub operations: 1) Read the README.md of our test repo, 2) Create a branch named 'feature/alice-update', 3) Create a new file docs/quickstart-update.md, 4) Create a Pull Request.
-
-### 7.2 Observe MCP tool calls
-
-Alice uses `mcporter` to call the GitHub MCP Server hosted by Higress. The MCP Server holds the GitHub PAT centrally -- Alice never sees it.
-
-### Verification Checklist
-
-- [ ] Alice reports reading the repo contents
-- [ ] Alice reports creating the branch
-- [ ] Alice reports creating the file
-- [ ] Alice reports creating the PR
-- [ ] Verify the PR exists on GitHub
-
----
-
-## Step 8: Multi-Worker GitHub Collaboration
-
-**POC Case 8: Alice and Bob collaborate on GitHub**
-
-### 8.1 Assign collaborative GitHub task
-
-In your DM with Manager, send:
-
-> Alice and Bob should collaborate on the test repo: Alice creates branch 'feature/alice-docs' and adds docs/alice.md, Bob creates branch 'feature/bob-api' and adds src/bob.py. Both should create separate PRs.
-
-### Verification Checklist
-
-- [ ] Alice creates her branch and file
-- [ ] Bob creates his branch and file
-- [ ] Two separate PRs exist on GitHub
-- [ ] Both Workers report completion in their respective Rooms
-
----
-
-## Step 9: Dynamic MCP Permission Control
-
-**POC Case 9: MCP permission revoke and restore**
-
-### 9.1 Revoke Alice's GitHub access
-
-In your DM with Manager, send:
-
-> Revoke Alice's access to the GitHub MCP Server.
-
-### 9.2 Verify revocation
-
-Ask Alice to perform a GitHub operation. She should get a 403 error.
-
-### 9.3 Restore access
-
-In your DM with Manager, send:
-
-> Restore Alice's access to the GitHub MCP Server.
-
-### 9.4 Verify restoration
-
-Ask Alice to perform a GitHub operation again. It should succeed.
-
-### Verification Checklist
-
-- [ ] Manager confirms revocation
-- [ ] Alice gets 403 when trying GitHub operations
-- [ ] Manager confirms restoration
-- [ ] Alice can perform GitHub operations again
-
----
-
-## Congratulations!
-
-You have successfully completed all 10 verification steps for AgentTeams. Your Agent team is fully operational with:
-
-- IM-based communication (Matrix)
-- Human-in-the-loop oversight
-- Multi-Worker collaboration
-- Centralized credential management
-- MCP-based external tool integration
-- Dynamic permission control
-
---
+- Read the [AgentTeams Overview](overview.md) for the roles, components, and deployment modes.
+- Try software delivery, research, localization, incident analysis, long-running collaboration, and adding and using a custom Skill in [AgentTeams Use Cases](usage/use-cases.md).
+- Use the [Local Deployment Guide](usage/deployment/local.md) for model, port, domain, storage, runtime, and automated installation options.
+- Continue with the [Manager Guide](usage/manager-guide.md) and [Worker Guide](usage/worker-guide.md).
+- Use [Declarative Resource Management](usage/resource-management.md) to learn the `agt` CLI and YAML workflows.
+- Read [Architecture](design/architecture.md) for Matrix, Higress, object storage, and controller details.
+- Use the [Kubernetes Deployment Guide](usage/deployment/kubernetes.md) to create a shared instance in a cluster.
 
 ## Uninstall
 
-To completely remove AgentTeams and all its data:
+The following command removes AgentTeams containers, networks, data volumes, configuration files, and the local workspace. Run it only after confirming that you no longer need the data:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh) uninstall
 ```
-
-This matches `install/agentteams-install.sh uninstall`: it stops and removes **`agentteams-manager`**, all **`agentteams-worker-*`** (and other worker) containers, **`agentteams-controller`** (embedded Higress / Tuwunel / MinIO / Element Web), optional **`agentteams-docker-proxy`**, the **`agentteams-data`** Docker volume, your **`agentteams-manager.env`** file, the workspace directory, the **`agentteams-net`** network, and the install log.

@@ -101,6 +101,38 @@ def _runtime_updater(*args, **kwargs):
     return RuntimeUpdater(*args, **kwargs)
 
 
+def test_runtime_updater_syncs_and_enables_assigned_skills(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    synced = []
+
+    def sync_skills(skill_names):
+        synced.extend(skill_names)
+        for name in skill_names:
+            skill_dir = config.default_workspace_dir / "skills" / name
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            (skill_dir / "SKILL.md").write_text(f"# {name}\n", encoding="utf-8")
+
+    updater = _runtime_updater(
+        config=config,
+        package_manager=_NoopPackageManager(),
+        skill_sync=sync_skills,
+    )
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=config.runtime_config_path,
+            raw={
+                "metadata": {"generation": "1"},
+                "member": {"runtime": "qwenpaw"},
+                "desired": {"skills": ["competition-skill"]},
+            },
+        ),
+    )
+
+    assert synced == ["competition-skill"]
+    assert (config.default_workspace_dir / "skills" / "competition-skill" / "SKILL.md").is_file()
+    assert updater.api_client.enabled_skills == ["competition-skill"]
+
+
 def test_runtime_updater_reconciles_model_mcp_matrix_channel_and_acl_via_api(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -155,6 +155,12 @@ type Client interface {
 	// VerifyAccessToken checks whether a user access token is still valid
 	// by calling GET /_matrix/client/v3/account/whoami. Returns nil if valid.
 	VerifyAccessToken(ctx context.Context, accessToken string) error
+
+	// Whoami validates a user access token via GET /_matrix/client/v3/account/whoami
+	// and returns the owning user id (e.g. "@maizong:matrix.local"). This is
+	// used by Matrix-token authentication (L2 human identities) to map a token
+	// back to the Matrix account.
+	Whoami(ctx context.Context, accessToken string) (string, error)
 }
 
 type MessageEvent struct {
@@ -455,16 +461,33 @@ func (c *TuwunelClient) doJSONWithASToken(ctx context.Context, method, path stri
 
 // VerifyAccessToken checks whether a user access token is still valid
 // by calling GET /_matrix/client/v3/account/whoami.
+// VerifyAccessToken checks whether a user access token is still valid
+// by calling GET /_matrix/client/v3/account/whoami. Returns nil if valid.
 func (c *TuwunelClient) VerifyAccessToken(ctx context.Context, accessToken string) error {
+	_, err := c.Whoami(ctx, accessToken)
+	return err
+}
+
+// Whoami validates a user access token and returns the owning user id.
+func (c *TuwunelClient) Whoami(ctx context.Context, accessToken string) (string, error) {
 	statusCode, respBody, err := c.doJSON(ctx, http.MethodGet,
 		"/_matrix/client/v3/account/whoami", accessToken, nil, nil)
 	if err != nil {
-		return fmt.Errorf("verify access token: %w", err)
+		return "", fmt.Errorf("whoami: %w", err)
 	}
 	if statusCode != http.StatusOK {
-		return fmt.Errorf("verify access token: HTTP %d: %s", statusCode, truncate(respBody, 200))
+		return "", fmt.Errorf("whoami: HTTP %d: %s", statusCode, truncate(respBody, 200))
 	}
-	return nil
+	var resp struct {
+		UserID string `json:"user_id"`
+	}
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		return "", fmt.Errorf("whoami: decode response: %w", err)
+	}
+	if resp.UserID == "" {
+		return "", fmt.Errorf("whoami: empty user_id in response")
+	}
+	return resp.UserID, nil
 }
 func (c *TuwunelClient) SetDisplayName(ctx context.Context, userID, accessToken, displayName string) error {
 	path := fmt.Sprintf("/_matrix/client/v3/profile/%s/displayname", url.PathEscape(userID))
@@ -931,6 +954,19 @@ func (c *TuwunelClient) InviteToRoomWithToken(ctx context.Context, roomID, userI
 		lower := strings.ToLower(resp.Error)
 		if strings.Contains(lower, "already in") || strings.Contains(lower, "already a member") {
 			return nil
+		}
+		// Tuwunel reports the same error for an already-joined user and a
+		// banned user. Verify the current membership before treating it as an
+		// idempotent success so a real ban is not silently ignored.
+		if strings.Contains(lower, "cannot invite user that is joined or banned") {
+			members, listErr := c.ListRoomMembersWithToken(ctx, roomID, inviterToken)
+			if listErr == nil {
+				for _, member := range members {
+					if member.UserID == userID {
+						return nil
+					}
+				}
+			}
 		}
 	}
 	return fmt.Errorf("invite %s to %s: HTTP %d %s %s: %s",

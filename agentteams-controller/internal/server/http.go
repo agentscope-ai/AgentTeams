@@ -30,6 +30,7 @@ type ServerDeps struct {
 	ControllerName string               // AGENTTEAMS_CONTROLLER_NAME; empty in embedded mode
 	SocketPath     string               // Docker proxy (embedded only)
 	MatrixConfig   matrix.Config        // for AppService rotation endpoint
+	MatrixClient   matrix.Client        // for project intervention notifications (SendMessageAsAdmin); nil to skip
 	Provisioner    *service.Provisioner // for Matrix token refresh
 
 	DefaultWorkerRuntime string // install-time default for Worker create requests
@@ -106,6 +107,30 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/workers/{name}/ensure-ready", mw.RequireAuthz(authpkg.ActionEnsureReady, "worker", nameFn)(http.HandlerFunc(lh.EnsureReady)))
 	mux.Handle("POST /api/v1/workers/{name}/ready", mw.RequireAuthz(authpkg.ActionReady, "worker", nameFn)(http.HandlerFunc(lh.Ready)))
 	mux.Handle("GET /api/v1/workers/{name}/status", mw.RequireAuthz(authpkg.ActionStatus, "worker", nameFn)(http.HandlerFunc(lh.GetWorkerRuntimeStatus)))
+
+	// --- Projects (workflow inspection; read from object storage) ---
+	projh := NewProjectHandler(deps.Client, deps.Namespace, deps.OSS, deps.MatrixClient)
+	projectNameFn := func(r *http.Request) string { return r.PathValue("id") }
+	projectTaskNameFn := func(r *http.Request) string { return r.PathValue("id") + "/" + r.PathValue("taskId") }
+	mux.Handle("GET /api/v1/projects", mw.RequireAuthz(authpkg.ActionList, "project", nil)(http.HandlerFunc(projh.ListProjects)))
+	mux.Handle("GET /api/v1/projects/{id}/workflow", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectWorkflow)))
+	mux.Handle("GET /api/v1/projects/{id}/tasks/{taskId}/artifact", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetTaskArtifact)))
+	mux.Handle("GET /api/v1/projects/{id}/spawns", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectSpawns)))
+	mux.Handle("GET /api/v1/projects/{id}/spawns/{sessionId}/messages", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectSpawnMessages)))
+
+	// W-PR-2: human intervention + lifecycle (write endpoints). All writes go
+	// through RequireAuthz ActionUpdate + "project" so the authorizer's
+	// requireSameTeam (TeamLeader / L2) rejects cross-team writes at the code
+	// level before the handler runs. The handler additionally calls
+	// checkProjectAccess after resolving the owning team (middleware cannot
+	// resolve project -> team, so requireSameTeam would otherwise short-circuit
+	// on an empty ResourceTeam).
+	mux.Handle("POST /api/v1/projects", mw.RequireAuthz(authpkg.ActionCreate, "project", nil)(http.HandlerFunc(projh.CreateProject)))
+	mux.Handle("POST /api/v1/projects/{id}/pause", mw.RequireAuthz(authpkg.ActionUpdate, "project", projectNameFn)(http.HandlerFunc(projh.PauseProject)))
+	mux.Handle("POST /api/v1/projects/{id}/resume", mw.RequireAuthz(authpkg.ActionUpdate, "project", projectNameFn)(http.HandlerFunc(projh.ResumeProject)))
+	mux.Handle("POST /api/v1/projects/{id}/replan", mw.RequireAuthz(authpkg.ActionUpdate, "project", projectNameFn)(http.HandlerFunc(projh.ReplanProject)))
+	mux.Handle("POST /api/v1/projects/{id}/tasks/{taskId}/cancel", mw.RequireAuthz(authpkg.ActionUpdate, "project", projectTaskNameFn)(http.HandlerFunc(projh.CancelTask)))
+	mux.Handle("POST /api/v1/projects/{id}/complete", mw.RequireAuthz(authpkg.ActionUpdate, "project", projectNameFn)(http.HandlerFunc(projh.CompleteProject)))
 
 	// --- Gateway ---
 	gh := NewGatewayHandler(deps.Gateway)

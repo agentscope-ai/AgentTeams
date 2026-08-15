@@ -7,12 +7,13 @@ If the admin asks you to import an existing Worker template, search a registry f
 | Admin says | Runtime | Flags |
 |------------|---------|-------|
 | "copaw", "Python worker" | `copaw` | |
+| "qwenpaw", "QwenPaw worker", "QwenPaw 2.0" | `qwenpaw` | |
 | "local worker", "local mode", "container worker", "docker worker", "access my local environment", or "run on my machine" | default (uses `${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}`, normally `openclaw`) | |
 | "hermes", "hermes worker", "hermes-agent" | `hermes` | |
 | "openhuman", "OpenHuman worker", "openhuman framework" | `openhuman` | |
 | "openclaw", or none of the above | default (uses `${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}`, normally `openclaw`) | |
 
-When in doubt, ask: "Should this be a copaw (Python, ~150MB RAM), openclaw (Node.js, ~500MB RAM), hermes (Python, ~200MB RAM), or openhuman (Rust, ~300MB RAM, native Matrix E2EE) worker?"
+When in doubt, ask: "Should this be a copaw (Python, ~150MB RAM), qwenpaw (Python/QwenPaw 2.0, ~150MB RAM), openclaw (Node.js, ~500MB RAM), hermes (Python, ~200MB RAM), or openhuman (Rust, ~300MB RAM, native Matrix E2EE) worker?"
 
 ## Step 0.5: Receive configuration from AGENTS.md
 
@@ -56,8 +57,9 @@ The SOUL content must include these three sections, filled in for the Worker bei
    ```bash
    head -8 ~/worker-skills/<skill-name>/SKILL.md
    ```
-3. Match `assign_when` against the Worker's role. When in doubt, assign more — a missing skill blocks work, an extra skill is harmless.
-4. `file-sync` is auto-included, no need to specify.
+3. Only consider Skills with a non-empty `assign_when` for automatic role matching. Skip Skills without it; they remain valid and can still be assigned when the admin explicitly names them.
+4. Match each available `assign_when` against the Worker's role. When in doubt, assign more — a missing skill blocks work, an extra skill is harmless.
+5. `file-sync` is auto-included, no need to specify.
 
 Quick lookup:
 
@@ -101,7 +103,7 @@ agt create worker \
   [--model <MODEL_ID>] \
   [--mcp-servers s1,s2] \
   [--skills s1,s2] \
-  [--runtime openclaw|copaw|hermes|openhuman] \
+  [--runtime openclaw|copaw|qwenpaw|hermes|openhuman] \
   -o json
 ```
 
@@ -119,7 +121,7 @@ Escape rules inside the `--soul "..."` string:
 | `--model` | Model ID. If not specified, defaults to `$AGENTTEAMS_DEFAULT_MODEL` (set at install time and propagated to your container by the controller); falls back to `qwen3.5-plus` only when that env var is also unset. |
 | `--skills` | Comma-separated built-in skills to assign |
 | `--mcp-servers` | Comma-separated MCP servers to authorize |
-| `--runtime` | Agent runtime: `openclaw` (default), `copaw`, `hermes`, or `openhuman` |
+| `--runtime` | Agent runtime: `openclaw` (default), `copaw`, `qwenpaw`, `hermes`, or `openhuman` |
 | `--no-wait` | **Strongly recommended.** Return as soon as the controller accepts the create request (~1s) instead of blocking up to 3 minutes for `phase=Ready`. Always pair with the Step 2.5 poll. |
 | `-o json` | Output full JSON response from controller |
 

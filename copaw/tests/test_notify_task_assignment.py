@@ -25,6 +25,89 @@ def _mock_sync(monkeypatch):
     return mock
 
 
+def _write_runtime_config(worker_root, content: str) -> None:
+    runtime_dir = worker_root / "runtime"
+    runtime_dir.mkdir(parents=True)
+    (runtime_dir / "runtime.yaml").write_text(content, encoding="utf-8")
+
+
+def _write_agents_roster(worker_root, worker_name: str, matrix_id: str) -> None:
+    (worker_root / "AGENTS.md").write_text(
+        "- **Team Workers**:\n"
+        f"  - {worker_name} ({matrix_id})\n",
+        encoding="utf-8",
+    )
+
+
+def test_resolve_worker_matrix_id_from_runtime_name(tmp_path, monkeypatch):
+    worker_root = tmp_path / "leader"
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(worker_root / ".copaw"))
+    _write_runtime_config(
+        worker_root,
+        "team:\n"
+        "  members:\n"
+        "    - name: Developer\n"
+        "      runtimeName: team-dev\n"
+        "      matrixUserId: '@team-dev:matrix.local'\n",
+    )
+
+    assert taskflow_tool._resolve_worker_matrix_id("team-dev") == (
+        "@team-dev:matrix.local"
+    )
+    assert taskflow_tool._resolve_worker_matrix_id("Developer") == (
+        "@team-dev:matrix.local"
+    )
+
+
+def test_runtime_roster_takes_precedence_over_stale_agents(tmp_path, monkeypatch):
+    worker_root = tmp_path / "leader"
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(worker_root / ".copaw"))
+    _write_runtime_config(
+        worker_root,
+        "team:\n"
+        "  members:\n"
+        "    - runtimeName: team-dev\n"
+        "      matrixUserId: '@team-dev:new.local'\n",
+    )
+    _write_agents_roster(worker_root, "team-dev", "@team-dev:stale.local")
+
+    assert taskflow_tool._resolve_worker_matrix_id("team-dev") == (
+        "@team-dev:new.local"
+    )
+
+
+def test_runtime_roster_does_not_fallback_for_unknown_member(tmp_path, monkeypatch):
+    worker_root = tmp_path / "leader"
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(worker_root / ".copaw"))
+    _write_runtime_config(
+        worker_root,
+        "team:\n"
+        "  members:\n"
+        "    - runtimeName: team-qa\n"
+        "      matrixUserId: '@team-qa:matrix.local'\n",
+    )
+    _write_agents_roster(worker_root, "team-dev", "@team-dev:stale.local")
+
+    assert taskflow_tool._resolve_worker_matrix_id("team-dev") is None
+
+
+def test_resolve_worker_matrix_id_falls_back_to_agents(tmp_path, monkeypatch):
+    worker_root = tmp_path / "leader"
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(worker_root / ".copaw"))
+    _write_runtime_config(
+        worker_root,
+        "member:\n"
+        "  role: team_leader\n"
+        "team:\n"
+        "  teamRoomId: '!team:matrix.local'\n",
+    )
+    _write_agents_roster(worker_root, "team-dev", "@team-dev:legacy.local")
+
+    assert taskflow_tool._resolve_worker_matrix_id("team-dev") == (
+        "@team-dev:legacy.local"
+    )
+
+
 @pytest.mark.asyncio
 async def test_notify_task_assignment_normalizes_room_id_at_matrix_boundary(
     tmp_path, monkeypatch,

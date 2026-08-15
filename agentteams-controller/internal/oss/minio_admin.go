@@ -196,11 +196,13 @@ func (c *MinIOAdminClient) buildWorkerPolicy(workerName, bucket, teamName string
 
 	if isManager {
 		listPrefixes = append(listPrefixes,
+			"agents/*",
 			"manager",
 			"manager/",
 			"manager/*",
 		)
 		rwResources = append(rwResources,
+			fmt.Sprintf("arn:aws:s3:::%s/agents/*", bucket),
 			fmt.Sprintf("arn:aws:s3:::%s/manager", bucket),
 			fmt.Sprintf("arn:aws:s3:::%s/manager/", bucket),
 			fmt.Sprintf("arn:aws:s3:::%s/manager/*", bucket),

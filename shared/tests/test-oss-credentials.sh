@@ -86,11 +86,55 @@ run_refresh() {
     cat "${curl_log}"
 }
 
+run_ensure() {
+    local case_name="$1"
+    local storage_provider="$2"
+    local mockbin="${TMPDIR_ROOT}/${case_name}-bin"
+    local curl_log="${TMPDIR_ROOT}/${case_name}-curl.log"
+    create_mock_tools "${mockbin}"
+    : > "${curl_log}"
+
+    (
+        . "${PROJECT_ROOT}/shared/lib/oss-credentials.sh"
+        _OSS_CRED_FILE="${TMPDIR_ROOT}/${case_name}-mc.env"
+        export PATH="${mockbin}:${PATH}"
+        export TEST_CURL_LOG="${curl_log}"
+        export AGENTTEAMS_STORAGE_PROVIDER="${storage_provider}"
+        export AGENTTEAMS_CONTROLLER_URL="http://controller:8090"
+        export AGENTTEAMS_AUTH_TOKEN="controller-token"
+        ensure_mc_credentials >/dev/null
+    )
+
+    cat "${curl_log}"
+}
+
 echo ""
 echo "=== oss credentials STS controller request ==="
 
 request="$(run_refresh sts-request)"
 assert_not_contains "cluster header should not be sent" "X-AgentTeams-Cluster-ID:" "${request}"
 assert_contains "bearer token should be sent" "Authorization: Bearer controller-token" "${request}"
+
+echo ""
+echo "=== storage provider selects static MinIO or controller STS ==="
+
+request="$(run_ensure minio-provider minio)"
+if [ -z "${request}" ]; then
+    pass "MinIO storage does not request controller STS"
+else
+    echo "  FAIL: MinIO storage unexpectedly requested controller STS: ${request}" >&2
+    exit 1
+fi
+
+request="$(run_ensure default-provider "")"
+if [ -z "${request}" ]; then
+    pass "default storage does not request controller STS"
+else
+    echo "  FAIL: default storage unexpectedly requested controller STS: ${request}" >&2
+    exit 1
+fi
+
+request="$(run_ensure oss-provider oss)"
+assert_contains "OSS storage requests controller STS" "/api/v1/credentials/sts" "${request}"
 
 echo "All oss-credentials tests passed"

@@ -1,0 +1,1001 @@
+# 声明式资源管理
+
+AgentTeams 采用 Kubernetes CRD 风格的声明式 YAML 配置来管理平台资源——**Worker**、**Team**、**Human** 与 **Manager**。你只需要描述期望状态，AgentTeams Controller 会自动完成创建、更新和删除。
+
+## 核心概念
+
+### 组织架构
+
+AgentTeams 采用三层组织架构，映射企业真实团队结构：
+
+```
+Admin (人类管理员)
+  │
+  ├── Manager (AI Agent, 管理入口)
+  │     ├── Team Leader A (特殊 Worker, 团队内任务调度)
+  │     │     ├── Worker A1
+  │     │     └── Worker A2
+  │     ├── Team Leader B
+  │     │     └── Worker B1
+  │     └── Worker C (独立 Worker, 不属于任何 Team)
+  │
+  └── Human Users (真人用户, 按权限级别接入)
+        ├── Level 1: 等同 Admin，可与所有角色对话
+        ├── Level 2: 可与指定 Team 的 Leader + Workers 对话
+        └── Level 3: 只能与指定 Workers 对话
+```
+
+### 四种资源类型
+
+| 资源 | 说明 | 对应实体 |
+|------|------|---------|
+| Worker | AI Agent 工作节点 | Docker 容器 + Matrix 账号 + MinIO 空间 |
+| Team | 引用一个 Leader Worker 与 N 个成员 Worker 的协作组 | Worker 引用 + Team Room |
+| Human | 真人用户 | Matrix 账号 + Room 权限 |
+| Manager | 协调 Agent（任务分发、Worker/Team 编排） | Manager Agent 运行时（与其它 CR 一样由 Controller 调和） |
+
+所有资源共享统一的 API 版本：`apiVersion: agentteams.io/v1beta1`。
+
+**kubectl 短名**（安装 CRD 后）：`wk`（Worker）、`tm`（Team）、`hm`（Human）、`mgr`（Manager）。
+
+## Worker
+
+Worker 是 AgentTeams 中最基本的执行单元——一个运行在 Docker 容器中的 AI Agent，拥有独立的 Matrix 通信账号和 MinIO 存储空间。
+
+### 基础配置
+
+```yaml
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: alice
+spec:
+  model: claude-sonnet-4-6        # LLM 模型
+  identity: |                      # Worker 公开身份信息（生成 IDENTITY.md）
+    - Name: Alice
+    - Specialization: DevOps, CI/CD pipeline management
+  soul: |                          # Worker 人格与价值观设定（生成 SOUL.md）
+    # Alice - DevOps Worker
+    ## 人格
+    - 严谨细致，部署前必定反复确认
+    - 对潜在风险保持敏感，及早提出顾虑
+    - 偏好自动化，尽量避免手动操作
+    ## 价值观
+    - 稳定优先：绝不为速度牺牲可靠性
+    - 透明沟通：始终说明在做什么以及为什么
+  agents: |                        # Agent 行为规则（生成 AGENTS.md）
+    ## Behavior
+    - Monitor CI/CD pipelines proactively
+    - Alert on failures immediately
+  skills:                          # AgentTeams 内置 skills
+    - github-operations
+    - git-delegation
+  mcpServers:                      # mcporter 可调用的 MCP Server（url 为完整网关端点）
+    - name: github
+      url: https://gateway.example.com/mcp-servers/github/mcp
+      transport: http              # `http`（默认，Streamable HTTP）或 `sse`
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+```
+
+### 完整字段说明
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `metadata.name` | string | 是 | — | Worker 名称，全局唯一 |
+| `spec.model` | string | 是 | — | LLM 模型 ID，如 `claude-sonnet-4-6`、`qwen3.5-plus` |
+| `spec.runtime` | string | 否 | `openclaw` | 当前 Worker CRD 接受 `openclaw`、`qwenpaw`、`copaw`（旧版兼容）或 `hermes` |
+| `spec.image` | string | 否 | — | 自定义镜像；留空时 controller 按 runtime 使用 `AGENTTEAMS_WORKER_IMAGE`、`AGENTTEAMS_COPAW_WORKER_IMAGE`、`AGENTTEAMS_QWENPAW_WORKER_IMAGE` 或 `AGENTTEAMS_HERMES_WORKER_IMAGE`。当前 Chart 未提供 `worker.defaultImage.qwenpaw`，在 Kubernetes 中使用 `qwenpaw` 时应显式设置本字段。 |
+| `spec.identity` | string | 否 | — | Worker 公开身份（OpenClaw：生成 IDENTITY.md；QwenPaw：按实现合并入 SOUL.md） |
+| `spec.soul` | string | 否 | — | Worker 人格与价值观设定，用于生成 SOUL.md |
+| `spec.agents` | string | 否 | — | Agent 行为规则，用于生成 AGENTS.md |
+| `spec.skills` | []string | 否 | — | 分配给 Worker 的 skills，由 Manager 统一校验和分发 |
+| `spec.mcpServers` | []object | 否 | — | mcporter 可调用的 MCP Server。每项包含：`name`（必填，作为 mcporter-servers.json 中的映射键）、`url`（必填，完整网关端点）和 `transport`（默认 `http`，也可为 `sse`）。Controller 会注入 `Authorization: Bearer <gatewayKey>`；网关侧授权不在本字段范围内。 |
+| `spec.package` | string | 否 | — | 自定义包 URI：`file://`、`http(s)://`、`nacos://`，或上传后由 Controller 解析的 `packages/{name}.zip` |
+| `spec.expose` | []object | 否 | — | 通过 Higress 网关暴露的端口列表（见 [服务发布](#服务发布)） |
+| `spec.channelPolicy` | object | 否 | — | 在默认策略之上增减群聊 @mention 与 DM 的允许/拒绝列表（详见下文「通信策略（Worker 与 Team）」） |
+| `spec.state` | string | 否 | `Running` | 期望生命周期：`Running`、`Sleeping`、`Stopped`，Controller 将实际容器状态调和到此目标 |
+| `spec.resources` | object | 否 | 安装或后端默认值 | Worker Pod 的 CPU/内存 request 和 limit，字段为 `requests.cpu`、`requests.memory`、`limits.cpu`、`limits.memory`，使用 Kubernetes quantity 字符串。 |
+
+修改 `spec.resources` 会更新 Worker 规格并重建受管容器或 Pod。不要在 Worker 正在处理任务时修改资源配置。
+
+Controller 内部已经包含 OpenHuman 后端和镜像配置，但当前发布的 Worker CRD enum 不接受 `openhuman`。在业务代码另行统一该契约前，不要在 Worker YAML 中设置 `spec.runtime: openhuman`。
+
+### identity / soul / agents 与 package 的关系
+
+配置 Worker 身份和行为有两种方式：
+
+- **内联方式**：通过 `spec.identity`、`spec.soul` 和 `spec.agents` 字段直接在 YAML 中定义，Controller 会据此生成对应的 IDENTITY.md、SOUL.md 和 AGENTS.md。适合轻量配置场景。
+- **包方式**：通过 `spec.package` 引入一个包含完整配置的 ZIP 包（IDENTITY.md、SOUL.md、AGENTS.md、自定义 skills、Dockerfile 等）。适合需要自定义 skills 或系统依赖的复杂场景。
+
+两者可以同时使用——当同时配置时，内联字段会覆盖包中的对应文件。这允许你使用 package 作为基础模板，同时通过 YAML 定制特定部分。例如，导入一个共享的 Worker 包，但通过 `soul` 字段覆盖角色定义，赋予 Worker 独特的身份。
+
+### Worker Skills
+
+`spec.skills` 记录由 Manager 或声明式 API 分配给 Worker 的 Skills。被引用的 Skill 可以来自 AgentTeams 的 Worker Skill 库，也可以是放在 `$AGENTTEAMS_WORKSPACE_DIR/worker-skills/<skill-name>/` 下的第三方 Skill。
+
+对于已有 Worker，可以将完整 Skill 目录放入 Manager 工作空间，也可以直接向 Manager 发送一个包含完整 Skill 根目录的 ZIP 附件，然后通过对话让 Manager 安装：
+
+> 请将 `~/worker-skills/alert-fusion/` 中的 `alert-fusion` Skill 安装给 Worker `amy-ai`。请验证上传结果，并确认 Worker 的 Skill 分配已经包含该 Skill。
+
+如果使用附件，应要求 Manager 在将 Skill 放入 `~/worker-skills/` 并分发之前，先安全解压并校验 ZIP 内容。
+
+Manager 会先上传并验证 `SKILL.md`，再更新 `spec.skills`。QwenPaw Worker 会消费生成的运行时分配，将指定 Skill 同步到原生工作空间，然后自动刷新并启用。
+
+除了使用 CLI，也可以直接通过对话检查分配结果：
+
+> 请检查 Worker `amy-ai` 当前分配的 Skill，并确认其中是否包含 `alert-fusion`。
+
+也可以通过 Dashboard 直接向指定 Worker 分发 Skill ZIP。Dashboard 会校验包内 `SKILL.md` 的 `name` 和 `description`，将完整 Skill 写入 `agents/<worker-name>/skills/<skill-name>/`，并尝试通过休眠、唤醒 Worker 触发重新加载；触发失败时，Worker 最长约 5 分钟内通过周期同步发现新文件。完整操作和 ZIP 约束参见 [Worker 指南：通过 Dashboard 分发](worker-guide.md#方式二通过-dashboard-分发)。
+
+Dashboard 直接分发维护的是 Worker 对象存储中的实际 Skill 文件，不会更新 `spec.skills`。因此 Dashboard 的“已分发技能”可能多于 `agt get workers <name> -o json | jq '.skills'` 的结果；后者只反映 Manager 或声明式 API 维护的分配记录。
+
+也可以通过 `spec.package` 引入一个包含 `skills/` 目录的 Worker 包。包内 Skills 与按名称分配的 Skills 会合并，互不冲突。
+
+### 带自定义包的 Worker
+
+```yaml
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: devops-alice
+spec:
+  model: claude-sonnet-4-6
+  runtime: openclaw
+  skills: [github-operations]
+  mcpServers:
+    - name: github
+      url: https://gateway.example.com/mcp-servers/github/mcp
+  package: file://./devops-alice.zip    # 包含自定义 SOUL.md、skills、Dockerfile 等
+```
+
+### Worker 创建流程
+
+当 Controller 收到一个 Worker 资源后，会依次执行：
+
+1. 解析 `spec.package`（如有），下载并解压到临时目录
+2. 注册 Matrix 账号，创建通信 Room（Manager + Admin + Worker 三方）
+3. 创建 MinIO 用户和 Bucket，配置 Higress 网关授权
+4. 生成 `openclaw.json` 配置（含 `groupAllowFrom` 权限矩阵）
+5. 推送所有配置文件（SOUL.md、skills、crons 等）到 MinIO
+6. 更新 Worker 状态
+7. 协调 Worker 容器
+
+### Worker 状态
+
+| Phase | 含义 |
+|-------|------|
+| Pending | 资源已创建，等待 Controller 处理 |
+| Running | 容器运行中，Agent 在线（健康时与期望 `spec.state` 一致） |
+| Sleeping | 休眠（期望或实际），可唤醒 |
+| Updating | 规格或底层变更处理中 |
+| Stopped | 已调和到停止期望 |
+| Failed | 创建或运行失败，查看 `status.message` |
+
+**状态字段（节选）：** `observedGeneration`、`matrixUserID`、`roomID`、`containerState`、`lastHeartbeat`、`message`、`exposedPorts`（暴露端口及域名）。
+
+## Team
+
+Team 是 AgentTeams 的协作单元，由一个 Team Leader 和若干 Team Worker 组成。Manager 将任务委派给 Team Leader，Leader 负责分解、分配和汇总，实现团队内部自治。
+
+### 基础配置
+
+```yaml
+apiVersion: agentteams.io/v1beta1
+kind: Team
+metadata:
+  name: alpha-team
+spec:
+  description: 全栈开发团队
+  heartbeatEvery: 30m
+  workerMembers:
+    - name: alpha-lead
+      role: team_leader
+    - name: alpha-dev
+      role: worker
+    - name: alpha-qa
+      role: worker
+```
+
+先分别创建 `alpha-lead`、`alpha-dev`、`alpha-qa` 三个 Worker CR。模型、运行时、镜像、资源、身份、skills、MCP Server、package、通信策略和生命周期状态只属于 Worker CR。
+
+### 完整字段说明
+
+**Team 级别：**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `metadata.name` | string | 是 | Team 名称，全局唯一 |
+| `spec.description` | string | 否 | 团队描述 |
+| `spec.peerMentions` | bool | 否 | 为 `true`（默认）时，团队 Worker 可在群房间中互相 @mention |
+| `spec.channelPolicy` | object | 否 | 团队级群聊/DM 允许与拒绝列表覆盖（字段形状与 Worker 的 `channelPolicy` 相同） |
+| `spec.admin` | object | 否 | 团队专属人类管理员（须含 `name`；可选 `matrixUserId`）。省略则使用全局 Admin |
+| `spec.humanMembers` | []object | 否 | 额外的 Team 真人成员。当前版本支持 `role: coordinator`，可进入 Team Room 并像 Team Admin 一样在其中分派任务 |
+| `spec.workerMembers` | []object | 是 | 引用已存在的 Worker CR；必须且只能有一项的 `role` 为 `team_leader` |
+| `spec.workerMembers[].name` | string | 是 | 被引用的 Worker 资源名 |
+| `spec.workerMembers[].role` | string | 是 | `team_leader` 或 `worker` |
+| `spec.heartbeatEvery` | string | 否 | Team Leader heartbeat 周期间隔提示 |
+
+### Team Leader 的特殊性
+
+Team Leader 本质上是一个 Worker 容器，但有以下区别：
+
+- 使用 `team-leader-agent` 模板（SOUL.md.tmpl + AGENTS.md + HEARTBEAT.md）
+- 拥有 canonical Team Leader skills：`team-coordination` 负责协作策略，`project-management` 负责 Project 状态和 ready node 解析，`task-management` 负责委派 Worker 任务
+- 新建 Team Leader workspace 不再安装旧的 `team-project-management`、`team-task-coordination`、`team-task-management` 兼容别名；已经复制过这些别名的旧 workspace 会保留本地文件，直到显式升级或重建
+- 不拥有 `worker-management`、`mcp-server-management` 等 Manager 独占 skill
+- 在 `Team.spec.workerMembers` 中以 `role: "team_leader"` 引用
+- 采用委派优先原则——始终将任务分配给团队 Worker，自己不执行领域任务
+
+### Team Leader 的 AGENTS.md 组装
+
+Team Leader 的 AGENTS.md 由三层内容组装而成，各自独立管理：
+
+```
+<!-- agentteams-builtin-start -->
+[内置：Team Leader 工作空间规则、任务流程、skills 参考]
+<!-- agentteams-builtin-end -->
+
+<!-- agentteams-team-context-start -->
+## Coordination
+- Upstream coordinator: @manager:{domain}
+- Team Admin: @admin:{domain}
+- Team: alpha-team
+- Team members: alpha-dev, alpha-qa
+<!-- agentteams-team-context-end -->
+
+[用户通过 spec.agents 提供的自定义内容（如有）]
+```
+
+- 内置段由 AgentTeams 自动管理，升级时自动更新
+- 团队上下文段自动注入团队名称、成员列表、协调者信息，以及 heartbeat 周期和 worker idle timeout
+- 用户通过 `spec.agents` 提供的内容放在两段之后，更新时不会被覆盖
+
+### Room 拓扑
+
+一个 Team 创建后会产生以下 Matrix Room：
+
+```
+Leader Room:   Manager + Global Admin + Leader        ← Manager 与 Leader 的通信通道
+Team Room:     Leader + Team Admin + W1 + W2 + ...    ← Leader 与团队 Worker 的协作空间
+Worker Room:   Leader + Team Admin + Worker           ← Leader 与单个 Worker 的私聊
+Leader DM:     Team Admin ↔ Leader                    ← 团队管理通道
+```
+
+关键设计：Team Room 不包含 Manager，实现了委派边界。Manager 只通过 Leader Room 与 Leader 沟通，不穿透到团队内部。
+
+### 任务流转
+
+```
+Admin 下发任务 → Manager
+  ↓
+Manager 结合 Team 名称、描述、Leader 与 Worker 列表语义判断匹配的 Team
+  ↓
+Manager 创建任务 spec，@mention Leader
+  ↓
+Leader 分解为子任务，分配给团队 Worker
+  ↓
+Worker 执行完成，@mention Leader
+  ↓
+Leader 汇总结果，@mention Manager
+  ↓
+Manager 通知 Admin
+```
+
+Team 匹配目前没有结构化的团队级 matching/filtering 字段，例如 `domain`、
+`expertise` 或 `capabilities`。Worker 级别的 `skills` 仍可描述单个成员，
+但 Manager 委派不是基于结构化 Team filter，而是结合 Team 名称、
+`spec.description`、Leader 名称和 Worker 名称做语义判断。
+
+### Team 状态
+
+| Phase | 含义 |
+|-------|------|
+| Pending | 资源已创建，等待 Controller 处理 |
+| Active | Leader 与 Worker 已成功调和 |
+| Degraded | 部分 Worker 未就绪或不可用；Leader 可能仍在运行 |
+| Failed | 调和失败，查看 `status.message` |
+
+**状态字段：** `teamRoomID`、`leaderDMRoomID`、`leaderReady`、`readyWorkers`、`totalWorkers`、`workerExposedPorts`（按 Worker 名索引的暴露端口信息）。
+
+### Team Admin
+
+可以为 Team 指定一个独立的管理员（Team Admin），替代全局 Admin 参与团队管理：
+
+```yaml
+spec:
+  admin:
+    name: pm-zhang
+    matrixUserId: "@pm-zhang:domain"
+```
+
+如果不指定，默认使用全局 Admin。Team Admin 会被邀请到 Team Room 和 Leader DM，可以直接与 Leader 沟通团队事务。
+
+### Team Members
+
+使用 `spec.humanMembers` 添加属于 Team 的真人成员，这些成员不是 Worker。第一版支持的成员角色是 `coordinator`：成员会被邀请进入 Team Room，Leader/Worker 会把他们在 Team Room 中的 @mention 当作授权任务分派处理。Leader DM 仍只保留 Team Admin 和 Leader。
+
+```yaml
+spec:
+  admin:
+    name: pm-zhang
+    matrixUserId: "@pm-zhang:domain"
+  humanMembers:
+    - name: tech-lead-li
+      matrixUserId: "@tech-lead-li:domain"
+      role: coordinator
+```
+
+## Manager
+
+**Manager** 资源描述 AgentTeams 的 Manager Agent：接收 Admin 指令并编排 Worker 与 Team。与其它资源同属 `agentteams.io/v1beta1`，由 `agentteams-controller` 调和（镜像、SOUL/AGENTS、MCP 授权、可选 package、期望 `state` 等）。
+
+### 基础配置
+
+```yaml
+apiVersion: agentteams.io/v1beta1
+kind: Manager
+metadata:
+  name: default
+spec:
+  model: qwen3.5-plus
+  runtime: openclaw
+  soul: |
+    # Manager — 以协调为主
+  agents: |
+    # 可选 AGENTS.md 覆盖
+  mcpServers:
+    - name: github
+      url: https://gateway.example.com/mcp-servers/github/mcp
+  config:
+    heartbeatInterval: 15m
+    workerIdleTimeout: 720m
+    notifyChannel: admin-dm
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "3"
+      memory: 5Gi
+  # state: Running   # 可选：Running | Sleeping | Stopped
+```
+
+### 字段说明
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `metadata.name` | string | 是 | — | Manager 资源名（主实例常为 `default`） |
+| `spec.model` | string | 是 | — | LLM 模型 ID |
+| `spec.runtime` | string | 否 | 安装或后端默认值 | **OpenClaw**（`openclaw`）或 **CoPaw/QwenPaw**（`qwenpaw`；`copaw` 是旧版兼容别名）。**不支持**将 Hermes 作为 Manager 运行时。 |
+| `spec.image` | string | 否 | — | 自定义 Manager 镜像；留空则用部署默认值 |
+| `spec.soul` | string | 否 | — | 自定义 SOUL.md |
+| `spec.agents` | string | 否 | — | 自定义 AGENTS.md |
+| `spec.mcpServers` | []object | 否 | — | mcporter 可调用的 MCP Server。每项包含 `name`、`url` 和 `transport`（`http`/`sse`）；网关侧授权不在本字段范围内。 |
+| `spec.package` | string | 否 | — | 包 URI（`file://`、`http(s)://`、`nacos://`） |
+| `spec.state` | string | 否 | `Running` | 期望生命周期：`Running`、`Sleeping`、`Stopped` |
+| `spec.resources` | object | 否 | 安装或后端默认值 | Manager Pod 的 CPU/内存 request 和 limit，字段为 `requests.cpu`、`requests.memory`、`limits.cpu`、`limits.memory`。 |
+| `spec.config.heartbeatInterval` | string | 否 | — | 心跳检查间隔（如 `15m`） |
+| `spec.config.workerIdleTimeout` | string | 否 | — | 空闲自动休眠前等待时间（如 `720m`） |
+| `spec.config.notifyChannel` | string | 否 | — | 通知渠道（如 `admin-dm`） |
+
+### Manager 状态
+
+| Phase | 含义 |
+|-------|------|
+| Pending | 等待首次成功调和 |
+| Running | Manager Agent 正常 |
+| Sleeping / Stopped | 对应期望生命周期 |
+| Updating | 规格或发布中 |
+| Failed | 错误，见 `status.message` |
+
+**其它状态字段：** `observedGeneration`、`matrixUserID`、`roomID`、`containerState`、`version`。
+
+## Human
+
+Human 资源代表真人用户。创建后会自动注册 Matrix 账号，并根据权限级别将用户邀请到对应的 Room，实现人机协作。
+
+### 基础配置
+
+```yaml
+apiVersion: agentteams.io/v1beta1
+kind: Human
+metadata:
+  name: john
+spec:
+  displayName: 张三
+  email: john@example.com
+  permissionLevel: 2
+  accessibleTeams: [alpha-team]
+  accessibleWorkers: []
+  note: 前端负责人
+```
+
+### 完整字段说明
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `metadata.name` | string | 是 | — | 用户标识，全局唯一 |
+| `spec.displayName` | string | 是 | — | 显示名称 |
+| `spec.email` | string | 否 | — | 邮箱，用于发送账号密码 |
+| `spec.permissionLevel` | int | 是 | — | 权限级别：1、2 或 3 |
+| `spec.accessibleTeams` | []string | 否 | — | 可访问的 Team 列表（L2 生效） |
+| `spec.accessibleWorkers` | []string | 否 | — | 可访问的独立 Worker 列表（L2/L3 生效） |
+| `spec.note` | string | 否 | — | 备注 |
+
+### 三级权限模型
+
+权限级别是包含关系——高级别包含低级别的所有权限。
+
+**Level 1 — Admin 等价**
+
+可与系统中所有角色对话，包括 Manager、所有 Team Leader、所有 Worker。`accessibleTeams` 和 `accessibleWorkers` 字段被忽略。
+
+适用场景：CTO、技术总监。
+
+```yaml
+spec:
+  permissionLevel: 1
+```
+
+**Level 2 — Team 级**
+
+可与指定 Team 的 Leader 和所有 Worker 对话，以及指定的独立 Worker。
+
+适用场景：产品经理、团队成员。
+
+```yaml
+spec:
+  permissionLevel: 2
+  accessibleTeams: [alpha-team, beta-team]
+  accessibleWorkers: [standalone-dev]
+```
+
+**Level 3 — Worker 级**
+
+只能与指定的 Worker 对话。`accessibleTeams` 字段被忽略。
+
+适用场景：外部协作者、特定职能人员。
+
+```yaml
+spec:
+  permissionLevel: 3
+  accessibleWorkers: [alice, bob]
+```
+
+### 权限实现机制
+
+Human 的权限通过两个机制实现：
+
+1. **Room 邀请**：将 Human 邀请到对应的 Matrix Room
+2. **groupAllowFrom**：将 Human 的 Matrix ID 添加到对应 Agent 的 `openclaw.json` 配置中，Agent 只响应白名单中的 @mention
+
+| 权限级别 | groupAllowFrom 变更 | Room 邀请 |
+|---------|---------------------|----------|
+| L1 | 添加到 Manager + 所有 Leader + 所有 Worker | 所有 Room |
+| L2 | 添加到指定 Team 的 Leader + Worker + 指定独立 Worker | 指定 Team Room + Worker Room |
+| L3 | 添加到指定 Worker | 指定 Worker Room |
+
+### Human 创建流程
+
+1. 注册 Matrix 账号（自动生成随机密码）
+2. 按 permissionLevel 计算需要修改的 Agent 列表
+3. 更新每个 Agent 的 `openclaw.json` 中的 `groupAllowFrom`
+4. 邀请 Human 进入对应 Room
+5. 更新 Human 状态
+6. 推送更新后的配置到 MinIO
+7. 发送欢迎邮件（如配置了 SMTP 和 email）
+
+### 自动发送欢迎邮件
+
+当 `spec.email` 不为空且系统配置了 SMTP 时，Human 创建完成后会自动发送一封欢迎邮件，包含登录所需的全部信息：
+
+```
+Subject: Welcome to AgentTeams - Your Account Details
+
+Hi {displayName},
+
+Your AgentTeams account has been created:
+
+  Username: {matrix_user_id}
+  Password: {generated_password}
+  Login URL: {element_web_url}
+
+Please log in and change your password immediately.
+
+— AgentTeams
+```
+
+SMTP 通过以下环境变量配置（在 Manager 容器中）：
+
+| 环境变量 | 说明 |
+|---------|------|
+| `AGENTTEAMS_SMTP_HOST` | SMTP 服务器地址 |
+| `AGENTTEAMS_SMTP_PORT` | SMTP 端口 |
+| `AGENTTEAMS_SMTP_USER` | SMTP 用户名 |
+| `AGENTTEAMS_SMTP_PASS` | SMTP 密码 |
+| `AGENTTEAMS_SMTP_FROM` | 发件人地址 |
+
+如果未配置 SMTP 或 `spec.email` 为空，邮件发送会被跳过，不影响 Human 账号的正常创建。初始密码仍会记录在 `status.initialPassword` 中，可通过 `agt get human <name>` 查看。
+
+### 注意事项
+
+- Human 不需要容器、MinIO 空间或 Higress 授权——只需要 Matrix 账号和 Room 权限
+- 创建 L2 Human 前，目标 Team 必须已存在
+- 创建 L3 Human 前，目标 Worker 必须已存在
+- 修改 permissionLevel 会触发全量重算 groupAllowFrom
+
+## Package URI
+
+Worker 和 Team Worker 都支持通过 `spec.package` 引入自定义配置包。支持的 URI 形式包括：
+
+| 格式 | 示例 | 说明 |
+|------|------|------|
+| `file://` | `file://./alice.zip` | 本地文件，通过 `docker cp` 传入容器 |
+| `http(s)://` | `https://example.com/worker.zip` | 远程下载 |
+| `nacos://` | `nacos://host:8848/ns/worker-xxx/v1` | 从 Nacos 拉取 |
+| （上传） | `packages/<name>.zip` | `POST /api/v1/packages` 上传 ZIP 后，Controller 返回可在 `spec.package` 中引用的 `packages/` 路径 |
+
+Nacos URI 格式：`nacos://[user:pass@]host:port/{namespace}/{agentspec-name}[/{version}|/label:{label}]`
+
+### Package 目录结构
+
+无论哪种 URI，解压后都遵循统一结构：
+
+```
+{package}/
+├── manifest.json           # 包元数据（必须）
+├── Dockerfile              # 自定义镜像构建（可选）
+├── config/
+│   ├── SOUL.md             # Worker 身份和角色定义
+│   ├── AGENTS.md           # Agent 行为规则
+│   ├── MEMORY.md           # 长期记忆
+│   └── memory/             # 记忆文件目录
+├── skills/                 # 自定义 skills
+│   └── <skill-name>/
+│       └── SKILL.md
+└── crons/
+    └── jobs.json           # 定时任务
+```
+
+### manifest.json
+
+```json
+{
+  "version": "1.0",
+  "source": {
+    "openclaw_version": "2026.3.x",
+    "hostname": "my-server",
+    "os": "Ubuntu 22.04",
+    "created_at": "2026-03-18T10:00:00Z"
+  },
+  "worker": {
+    "suggested_name": "my-worker",
+    "model": "qwen3.5-plus",
+    "runtime": "openclaw",
+    "base_image": "agentteams/worker-agent:latest",
+    "apt_packages": ["ffmpeg"],
+    "pip_packages": [],
+    "npm_packages": []
+  }
+}
+```
+
+`worker.runtime`（`openclaw`、`qwenpaw`、`copaw`（旧版兼容）或 `hermes`）会被 `agt apply worker --zip` 读取，
+显式 `--runtime` 优先级更高。
+
+## 操作方式
+
+### agentteams-apply.sh — 声明式 Apply（推荐）
+
+在宿主机上将 YAML 复制进 Manager 容器并执行 `agt apply -f …`：
+
+```bash
+# 按文档顺序逐个创建或更新资源
+bash install/agentteams-apply.sh -f worker.yaml
+
+# 多文档 YAML（--- 分隔）
+bash install/agentteams-apply.sh -f company-setup.yaml
+```
+
+| 选项 | 说明 |
+|------|------|
+| `-f <path>` | YAML 文件（必填）；可多次指定 `-f` |
+
+`agt apply -f` **按文件中 YAML 文档顺序**依次调用 REST API（如 `Worker`→`/api/v1/workers`，`Team`→`/api/v1/teams`，`Human`→`/api/v1/humans`，`Manager`→`/api/v1/managers`）。依赖关系需自行排序（例如先定义 Team，再定义引用 `accessibleTeams` 的 Human）。**当前 CLI 未实现 `--prune` 与 `--dry-run`**；删除多余资源请使用 `agt delete …` 或 REST API。
+
+### agentteams-import.sh — 命令式导入
+
+适用于从 ZIP 包导入 Worker 的场景：
+
+```bash
+# 从本地 ZIP 导入
+bash install/agentteams-import.sh worker --name alice --zip ./alice.zip
+
+# 从 URL 导入
+bash install/agentteams-import.sh worker --name alice --zip https://example.com/alice.zip
+
+# 从 Nacos 导入
+bash install/agentteams-import.sh worker --name alice --package nacos://host:8848/ns/alice/v1
+bash install/agentteams-import.sh worker --name alice --package nacos://host:8848/ns/alice/label:latest
+
+# 不带包，直接创建
+bash install/agentteams-import.sh worker --name bob --model claude-sonnet-4-6 \
+    --skills github-operations,git-delegation
+
+# 注意：mcpServers 必须通过 YAML manifest 配置（参见上面的 Worker spec）。
+#       --mcp-servers 参数已经移除；新 schema 要求每个 Server 提供
+#       {name, url, transport}，无法通过 CSV 字符串表达。
+```
+
+### agt CLI — 容器内管理
+
+在 Manager 容器内（或通过 `docker exec`）直接操作：
+
+```bash
+# 查看所有资源
+docker exec agentteams-manager agt get workers
+docker exec agentteams-manager agt get teams
+docker exec agentteams-manager agt get humans
+docker exec agentteams-manager agt get managers
+
+# 查看单个资源
+docker exec agentteams-manager agt get worker alice
+
+# 删除资源
+docker exec agentteams-manager agt delete worker alice
+docker exec agentteams-manager agt delete team alpha-team
+docker exec agentteams-manager agt delete human john
+docker exec agentteams-manager agt delete manager default
+```
+
+### HTTP API — 云上管控
+
+`agentteams-controller` 对外提供 REST API（默认 `:8090`），供 `agt` CLI 与其它自动化使用。示例：
+
+```
+GET    /api/v1/workers
+POST   /api/v1/workers
+PUT    /api/v1/workers/{name}
+DELETE /api/v1/workers/{name}
+
+GET    /api/v1/managers
+POST   /api/v1/managers
+PUT    /api/v1/managers/{name}
+DELETE /api/v1/managers/{name}
+
+GET    /api/v1/projects
+GET    /api/v1/projects/{id}/workflow
+```
+
+项目端点为**只读工作流查询**。`GET /api/v1/projects` 跨团队前缀（`teams/{team}/shared/projects/`）与独立前缀（`shared/projects/`）枚举项目，排序输出并支持可选 `?team=` 过滤；`GET /api/v1/projects/{id}/workflow` 返回对齐 LangGraph 的工作流视图（`nodes` / `edges` / `next` / `interrupts` / `values` / `loop`），数据源自项目 `meta.json`。Admin/Manager 角色可见全部项目；Team Leader 仅可见本团队项目。`agt get projects <id> --mermaid` 将工作流渲染为 Mermaid 流程图。
+
+> **注意：** 常见嵌入式部署中，8090 在 Manager 容器内可用（`localhost:8090`）。Kubernetes（`AGENTTEAMS_KUBE_MODE=incluster`）下可通过 Service 暴露 Controller。
+
+## 批量部署
+
+用 `---` 分隔符在一个 YAML 文件中定义多个资源。**`agt apply -f` 按文档出现顺序依次 apply**，不会按资源类型自动排序。应先创建所有被引用的 Worker，再创建 Team，最后创建引用 `accessibleTeams` 或 `accessibleWorkers` 的 Human。
+
+删除不会自动排序：按需执行 `agt delete`（注意 Human 与 Team 等依赖关系）。
+
+```yaml
+# company-setup.yaml
+
+# --- Worker 定义（必须先于 Team） ---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: product-lead
+spec:
+  model: claude-sonnet-4-6
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: backend-dev
+spec:
+  model: claude-sonnet-4-6
+  skills: [github-operations, git-delegation]
+  mcpServers:
+    - name: github
+      url: https://gateway.example.com/mcp-servers/github/mcp
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: frontend-dev
+spec:
+  model: claude-sonnet-4-6
+  skills: [github-operations]
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: qa-engineer
+spec:
+  model: claude-sonnet-4-6
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: ops-lead
+spec:
+  model: claude-sonnet-4-6
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: monitor
+spec:
+  model: claude-sonnet-4-6
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: admin-assistant
+spec:
+  model: claude-sonnet-4-6
+---
+# --- 团队定义 ---
+apiVersion: agentteams.io/v1beta1
+kind: Team
+metadata:
+  name: product-team
+spec:
+  description: 产品研发组
+  workerMembers:
+    - name: product-lead
+      role: team_leader
+    - name: backend-dev
+      role: worker
+    - name: frontend-dev
+      role: worker
+    - name: qa-engineer
+      role: worker
+---
+apiVersion: agentteams.io/v1beta1
+kind: Team
+metadata:
+  name: ops-team
+spec:
+  description: 运维组
+  workerMembers:
+    - name: ops-lead
+      role: team_leader
+    - name: monitor
+      role: worker
+---
+# --- 人员配置 ---
+apiVersion: agentteams.io/v1beta1
+kind: Human
+metadata:
+  name: zhang-san
+spec:
+  displayName: 张三
+  email: zhangsan@example.com
+  permissionLevel: 2
+  accessibleTeams: [product-team]
+  note: 产品经理
+---
+apiVersion: agentteams.io/v1beta1
+kind: Human
+metadata:
+  name: li-si
+spec:
+  displayName: 李四
+  email: lisi@example.com
+  permissionLevel: 2
+  accessibleTeams: [product-team]
+  note: 后端开发
+---
+apiVersion: agentteams.io/v1beta1
+kind: Human
+metadata:
+  name: wang-wu
+spec:
+  displayName: 王五
+  email: wangwu@example.com
+  permissionLevel: 3
+  accessibleWorkers: [admin-assistant]
+  note: 行政人员
+```
+
+一键部署：
+
+```bash
+bash install/agentteams-apply.sh -f company-setup.yaml
+```
+
+后续变更修改 YAML 后重新 apply。删除资源请使用 `agt delete <kind> <name>`（或 REST API）。
+
+## Controller 架构
+
+### 处理流程
+
+```
+入口（agentteams-apply.sh / HTTP API / agt CLI）
+  ↓
+YAML 写入 MinIO agentteams-config/{kind}/{name}.yaml
+  ↓
+mc mirror 同步到本地文件系统（10 秒间隔）
+  ↓
+fsnotify 监听文件变化 → 解析 YAML → 写入 kine (SQLite)
+  ↓
+controller-runtime informer 感知变化 → 触发 Reconciler
+  ↓
+Reconciler 执行对应脚本（create-worker.sh / create-team.sh / create-human.sh）
+```
+
+### Reconciler 动作
+
+| Reconciler | CREATE | UPDATE | DELETE |
+|-----------|--------|--------|--------|
+| Worker | 创建容器 + Matrix 账号 + MinIO 空间 | model 变更→重新生成配置；skills 变更→重新推送 | 停止容器 + 清理资源 |
+| Team | 校验并关联已有 Worker + 创建 Team Room | `workerMembers` 变化→更新成员关系与协作上下文 | 清理 Team Room 与协作上下文；保留 Worker CR 及运行时 |
+| Human | 注册 Matrix 账号 + 配置权限 + 发邮件 | permissionLevel 变化→重算 groupAllowFrom | 从所有 groupAllowFrom 移除→踢出 Room |
+| Manager | 部署/更新 Manager Agent | model/package/state 等变更→调和 | 按后端实现回收 Manager 相关资源 |
+
+所有资源使用 Kubernetes finalizer 模式，确保删除前完成清理。
+
+## 服务发布
+
+Worker 可以将容器内运行的 HTTP 服务通过 Higress 网关暴露到外部。在 Worker 配置中添加 `spec.expose` 即可发布容器端口——Controller 会自动创建所需的 Higress 域名、DNS 服务来源和路由。
+
+### 工作原理
+
+每个暴露的端口会自动生成一个域名：
+
+```
+worker-{name}-{port}-local.agentteams.io
+```
+
+例如，worker `alice` 暴露 8080 端口后，可通过 `worker-alice-8080-local.agentteams.io` 访问。
+
+Controller 为每个暴露端口创建三个 Higress 资源：
+1. **域名**：`worker-{name}-{port}-local.agentteams.io`
+2. **DNS 服务来源**：通过网络别名 `{name}.local` 指向 worker 容器
+3. **路由**：将该域名的所有请求转发到 worker 的对应端口
+
+当 expose 配置被移除或 Worker 被删除时，所有关联的 Higress 资源会自动清理。
+
+### 配置方式
+
+```yaml
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: alice
+spec:
+  model: qwen3.5-plus
+  expose:
+    - port: 8080
+    - port: 3000
+```
+
+**expose 字段说明：**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `expose[].port` | int | 是 | — | 要暴露的容器端口 |
+| `expose[].protocol` | string | 否 | `http` | 协议：`http` 或 `grpc` |
+
+### Team 引用的 Worker
+
+`expose` 仍由 Worker CR 持有；先配置 Worker，再由 Team 引用：
+
+```yaml
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: lead
+spec:
+  model: qwen3.5-plus
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: backend
+spec:
+  model: qwen3.5-plus
+  expose:
+    - port: 8080
+---
+apiVersion: agentteams.io/v1beta1
+kind: Team
+metadata:
+  name: dev-team
+spec:
+  workerMembers:
+    - name: lead
+      role: team_leader
+    - name: backend
+      role: worker
+```
+
+### CLI 用法
+
+```bash
+# 通过 CLI 参数暴露端口
+agt apply worker --name alice --model qwen3.5-plus --expose 8080,3000
+
+# 取消暴露（不带 --expose 重新 apply）
+agt apply worker --name alice --model qwen3.5-plus
+```
+
+### 使用场景
+
+- **Web 应用预览**：Worker 开发了一个 Web 应用，暴露给 Admin 或其他团队成员预览
+- **API 服务**：Worker 运行后端 API，供其他 Worker 或外部系统调用
+- **开发服务器**：暴露开发服务器，便于开发过程中实时测试
+
+### 注意事项
+
+- Worker 容器必须处于运行状态，且服务已在指定端口监听，才能被访问
+- 域名为自动生成，暂不支持自定义域名
+- 暴露的路由未配置认证（网络内公开访问）
+- 从 `spec.expose` 中移除端口并重新 apply，会自动清理对应的 Higress 资源
+
+### 两种部署模式
+
+| 维度 | embedded（默认） | incluster（K8s） |
+|------|-----------------|-----------------|
+| 配置存储 | MinIO `agentteams-config/` | K8s etcd（CRD 直接落 K8s） |
+| Controller 感知 | fsnotify → kine → informer | controller-runtime 直接监听 K8s API |
+| 切换方式 | `AGENTTEAMS_KUBE_MODE=embedded` | `AGENTTEAMS_KUBE_MODE=incluster` |
+
+## 通信策略（Worker 与 Team）
+
+`channelPolicy` 在生成 Agent 配置时，在**默认允许策略之上**做增减（群聊 @mention 与 DM）。不是替换整套默认策略。
+
+| 字段 | 作用 |
+|------|------|
+| `groupAllowExtra` | 额外允许参与群聊 @mention 的 Matrix 用户 ID（或可由 Controller 解析的短用户名） |
+| `groupDenyExtra` | 群聊 @mention 拒绝列表（拒绝优先于允许） |
+| `dmAllowExtra` | 额外允许 DM 的 ID |
+| `dmDenyExtra` | DM 拒绝列表 |
+
+在 Worker 上设置 `spec.channelPolicy` 实现成员级策略，在 Team 上设置 `spec.channelPolicy` 实现团队级策略。
+
+## 通信权限矩阵
+
+AgentTeams 通过 `openclaw.json` 中的 `groupAllowFrom` 字段控制每个 Agent 接受谁的 @mention，实现精细的通信权限控制。
+
+| 角色 | groupAllowFrom 包含 |
+|------|---------------------|
+| Manager | Admin, 所有 Team Leader, 所有独立 Worker, Human L1 |
+| Team Leader | Manager, Admin, 团队内所有 Worker, Human L1, 该 Team 的 Human L2 |
+| Team Worker | Leader, Admin, Human L1, 该 Team 的 Human L2, 指定的 Human L3 |
+| 独立 Worker | Manager, Admin, Human L1, 指定的 Human L2/L3 |
+
+关键规则：
+- Manager 不穿透 Team——只与 Leader 通信，不直接联系团队 Worker
+- Team Worker 只认 Leader——groupAllowFrom 中没有 Manager
+- 权限包含关系——Human L1 > L2 > L3，高级别包含低级别所有权限
+- 独立 Worker 保持现有模式——直接与 Manager 通信
+
+## 常见问题
+
+**Q: Team 和独立 Worker 可以混用吗？**
+
+可以。Team 和独立 Worker 共存于同一个 AgentTeams 实例中。Manager 根据任务领域判断是委派给 Team Leader 还是直接分配给独立 Worker。
+
+**Q: 修改 Human 的 permissionLevel 会怎样？**
+
+Controller 会重新计算该 Human 在所有 Agent 上的 groupAllowFrom 配置，移除旧权限、添加新权限，并更新 Room 邀请。
+
+**Q: Team Worker 可以同时属于多个 Team 吗？**
+
+不可以。每个 Worker 只能属于一个 Team（或作为独立 Worker）。
+
+**Q: 创建 Human L2 时，目标 Team 还不存在怎么办？**
+
+Controller 会将 Human 标记为 Pending，等目标 Team 创建完成后自动补全权限配置（backfill）。
+
+**Q: 声明式 apply 支持 `--prune` 吗？**
+
+当前 `agt apply` CLI **未实现** `--prune`。请用 `agt get …` 查看后自行 `delete`，或通过 REST API 自动化。

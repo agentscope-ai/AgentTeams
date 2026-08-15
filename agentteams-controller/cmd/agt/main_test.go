@@ -43,6 +43,25 @@ func TestRootCommandUsesInvokedBinaryName(t *testing.T) {
 	}
 }
 
+func TestProjectCommandRegistered(t *testing.T) {
+	root := newRootCommand("agt")
+	proj, _, err := root.Find([]string{"project"})
+	if err != nil {
+		t.Fatalf("find project command: %v", err)
+	}
+	if proj.Use != "project" {
+		t.Fatalf("project command Use = %q", proj.Use)
+	}
+	// All W-PR-2 write subcommands must be registered.
+	want := []string{"pause", "resume", "replan", "create", "cancel", "complete"}
+	for _, sub := range want {
+		_, _, err := proj.Find([]string{sub})
+		if err != nil {
+			t.Errorf("project %s subcommand missing: %v", sub, err)
+		}
+	}
+}
+
 func TestExpandPackageURI(t *testing.T) {
 	t.Setenv("AGENTTEAMS_NACOS_REGISTRY_URI", "nacos://registry.example.com/public")
 

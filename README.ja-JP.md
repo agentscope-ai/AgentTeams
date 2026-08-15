@@ -34,7 +34,7 @@
 - **2026-05-07**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.1.1) | [Changelog](changelog/v1.1.1.md) — AgentTeams v1.1.1：Worker/Manager/Team CRD と Team Leader 上の宣言的 MCP（破壊的変更）、CR の `spec.env` カスタム環境変数、Token Plan・Qwen Cloud international・`qwen3.6-plus` モデル、コントローラー RBAC の名前空間スコープ化、Worker パッケージの `SOUL.md` 任意化。
 - **2026-04-24**: [English](blog/agentteams-1.1.0-release.md) | [中文](blog/zh-cn/agentteams-1.1.0-release.md) — AgentTeams v1.1.0：Kubernetes ネイティブコントロールプレーン、Hermes 自律コーディング Agent ランタイム、1.7 GB イメージ縮小、agt CLI がシェルスクリプトに代わる。
 - **2026-04-14**: [English](blog/agentteams-k8s-native-multi-agent-collaboration.md) | [中文](blog/zh-cn/agentteams-k8s-native-multi-agent-collaboration.zh-CN.md) — Kubernetes ネイティブなマルチ Agent 協調オーケストレーションとしての AgentTeams の解説。
-- **2026-04-03**: [English](docs/declarative-resource-management.md) | [中文](docs/zh-cn/declarative-resource-management.md) — AgentTeams 1.0.9：宣言型リソース管理、Worker テンプレートマーケット、Manager QwenPaw、Nacos Skills 登録センターなど。
+- **2026-04-03**: [English](docs/usage/resource-management.md) | [中文](docs/zh-cn/usage/resource-management.md) — AgentTeams 1.0.9：宣言型リソース管理、Worker テンプレートマーケット、Manager QwenPaw、Nacos Skills 登録センターなど。
 - **2026-03-14**: [English](blog/agentteams-1.0.6-release.md) | [中文](blog/zh-cn/agentteams-1.0.6-release.md) — AgentTeams 1.0.6：エンタープライズ MCP Server 管理、認証情報ゼロ露出。
 - **2026-03-10**: [English](blog/agentteams-1.0.4-release.md) | [中文](blog/zh-cn/agentteams-1.0.4-release.md) — AgentTeams 1.0.4：QwenPaw（旧CoPaw）Worker、メモリ約 80% 削減。
 - **2026-03-04**: [English](blog/agentteams-announcement.md) | [中文](blog/zh-cn/agentteams-announcement.md) — AgentTeams は旧名称でオープンソース化。
@@ -237,7 +237,7 @@ helm uninstall agentteams -n agentteams-system
 kubectl delete namespace agentteams-system
 ```
 
-Kubernetes ネイティブなアーキテクチャ（CRD、Controller、宣言的な `Worker` / `Team` / `Human` リソース）の詳細は [docs/k8s-native-agent-orch.md](docs/k8s-native-agent-orch.md) を参照してください。
+Kubernetes ネイティブなアーキテクチャ（CRD、Controller、宣言的な `Worker` / `Team` / `Human` リソース）の詳細は [docs/design/k8s-native-orchestration.md](docs/design/k8s-native-orchestration.md) を参照してください。
 
 ## 仕組み
 
@@ -369,13 +369,17 @@ Agent チームを観察・制御するための組み込みダッシュボー�
 
 ## ドキュメント
 
+[ドキュメントディレクトリ](docs/)を参照するか、概要とクイックスタートから始めてください。
+
 | | |
 |---|---|
+| [docs/overview.md](docs/overview.md) | 製品概要、主要概念、ドキュメント案内 |
 | [docs/quickstart.md](docs/quickstart.md) | ステップバイステップガイド |
-| [docs/architecture.md](docs/architecture.md) | システムアーキテクチャの詳細 |
-| [docs/manager-guide.md](docs/manager-guide.md) | Manager の設定 |
-| [docs/worker-guide.md](docs/worker-guide.md) | Worker のデプロイ |
-| [docs/development.md](docs/development.md) | コントリビュートとローカル開発 |
+| [docs/usage/deployment/local.md](docs/usage/deployment/local.md) | ローカルインスタンスの作成、設定、アップグレード、アンインストール |
+| [docs/design/architecture.md](docs/design/architecture.md) | システムアーキテクチャの詳細 |
+| [docs/usage/manager-guide.md](docs/usage/manager-guide.md) | Manager の設定 |
+| [docs/usage/worker-guide.md](docs/usage/worker-guide.md) | Worker のデプロイ |
+| [docs/usage/development.md](docs/usage/development.md) | コントリビュートとローカル開発 |
 
 ## トラブルシューティング
 
@@ -383,7 +387,7 @@ Agent チームを観察・制御するための組み込みダッシュボー�
 docker exec -it agentteams-manager cat /var/log/agentteams/manager-agent.log
 ```
 
-よくある問題については [docs/zh-cn/faq.md](docs/zh-cn/faq.md) を参照してください。
+よくある問題については [docs/zh-cn/usage/troubleshooting/faq.md](docs/zh-cn/usage/troubleshooting/faq.md) を参照してください。
 
 ### バグ報告
 

@@ -451,15 +451,9 @@ Runtime pairings:
 
 11. **Upstream CoPaw in this project is a fork**, not the public release (branch `feat/lite-copaw-worker-v1.0.0`). The fork's source tree lives outside this repo — its clone location depends on the developer's local setup (not hardcoded here). Read that repo's `AGENTS.md` before assuming upstream API surfaces.
 
-## Changelog Policy
+## Release Notes Policy
 
-Any change that affects the contents of a built image — i.e. modifications under `copaw/` or `manager/Dockerfile.qwenpaw` (or anything it `COPY`s in) — **must** be recorded in [`changelog/current.md`](../changelog/current.md) before committing. Format:
-
-```
-- type(scope): description ([commit_hash](https://github.com/agentscope-ai/AgentTeams/commit/commit_hash))
-```
-
-This matches the repo-wide policy in the root AGENTS.md.
+Pull requests do not update a shared changelog file. The release workflow generates the change list from merged pull requests, following the repo-wide policy in the root AGENTS.md.
 
 ## Writing Convention
 

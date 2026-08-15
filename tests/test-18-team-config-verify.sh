@@ -242,6 +242,7 @@ log_section "Verify Leader AGENTS.md"
 if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
     LEADER_AGENTS=$(read_worker_runtime_file "${TEST_LEADER}" "TEAMS.md")
 else
+    wait_worker_runtime_file_contains "${TEST_LEADER}" "AGENTS.md" "agentteams-builtin-start" 180 || true
     LEADER_AGENTS=$(read_worker_runtime_file "${TEST_LEADER}" "AGENTS.md")
 fi
 assert_not_empty "${LEADER_AGENTS}" "Leader AGENTS.md exists in MinIO"
@@ -267,6 +268,7 @@ log_section "Verify Team Worker AGENTS.md"
 if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
     W1_AGENTS=$(read_worker_runtime_file "${TEST_W1}" "TEAMS.md")
 else
+    wait_worker_runtime_file_contains "${TEST_W1}" "AGENTS.md" "agentteams-builtin-start" 180 || true
     W1_AGENTS=$(read_worker_runtime_file "${TEST_W1}" "AGENTS.md")
 fi
 assert_not_empty "${W1_AGENTS}" "Worker 1 AGENTS.md exists in MinIO"

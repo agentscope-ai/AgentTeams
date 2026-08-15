@@ -4332,11 +4332,11 @@ def _require_task_mutable(arguments: dict[str, Any], task: dict[str, Any], task_
         raise ValueError(f"{action} cannot update terminal task: {terminal_status}")
 
 
-def _update_project_task(arguments: dict[str, Any], project_id: str, task_id: str, **updates: Any) -> None:
+def _update_project_task(arguments: dict[str, Any], project_id: str, task_id: str, **updates: Any) -> bool:
     path = _project_state_path(arguments, project_id)
     project = _read_json(path)
     if not project:
-        return
+        return False
     changed = False
     for task in project.get("tasks", []):
         if task.get("task_id") == task_id:
@@ -4353,7 +4353,7 @@ def _update_project_task(arguments: dict[str, Any], project_id: str, task_id: st
     if changed:
         _write_json(path, project)
         _write_project_plan(_project_dir(arguments, project_id), project)
-        _sync_project(arguments, project_id)
+    return _sync_project(arguments, project_id)
 
 
 def _validate_assignee_membership(room_id: str, assignee: str) -> dict[str, Any]:
@@ -4791,7 +4791,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                             task=task,
                         )
                 try:
-                    _update_project_task(
+                    project_synced = _update_project_task(
                         arguments,
                         task.get("project_id", ""),
                         task_id,
@@ -4804,7 +4804,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                         error=exc,
                         task=task,
                     )
-                if not _sync_project(arguments, task.get("project_id", "")):
+                if not project_synced:
                     return _sync_failure_result({
                         "tool": "taskflow",
                         "action": action,
@@ -4867,7 +4867,12 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             except OSError as exc:
                 return _uncommitted_state_failure_result(tool="taskflow", action=action, error=exc)
             try:
-                _update_project_task(arguments, task.get("project_id", ""), task_id, status="submitted")
+                project_synced = _update_project_task(
+                    arguments,
+                    task.get("project_id", ""),
+                    task_id,
+                    status="submitted",
+                )
             except OSError as exc:
                 return _persisted_state_failure_result(
                     tool="taskflow",
@@ -4875,7 +4880,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     error=exc,
                     task=task,
                 )
-            if not _sync_project(arguments, task.get("project_id", "")):
+            if not project_synced:
                 return _sync_failure_result({
                     "tool": "taskflow",
                     "action": action,
@@ -4950,7 +4955,12 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 ):
                     raise ValueError("cancel_task conflicts with existing cancellation")
                 try:
-                    _update_project_task(arguments, project_id, task_id, status="cancelled")
+                    project_synced = _update_project_task(
+                        arguments,
+                        project_id,
+                        task_id,
+                        status="cancelled",
+                    )
                 except OSError as exc:
                     return _persisted_state_failure_result(
                         tool="taskflow",
@@ -4958,7 +4968,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                         error=exc,
                         task=task,
                     )
-                if not _sync_project(arguments, project_id):
+                if not project_synced:
                     return _sync_failure_result({
                         "tool": "taskflow",
                         "action": action,
@@ -4996,7 +5006,12 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 return _uncommitted_state_failure_result(tool="taskflow", action=action, error=exc)
 
             try:
-                _update_project_task(arguments, project_id, task_id, status="cancelled")
+                project_synced = _update_project_task(
+                    arguments,
+                    project_id,
+                    task_id,
+                    status="cancelled",
+                )
             except OSError as exc:
                 return _persisted_state_failure_result(
                     tool="taskflow",
@@ -5004,7 +5019,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     error=exc,
                     task=task,
                 )
-            if not _sync_project(arguments, project_id):
+            if not project_synced:
                 return _sync_failure_result({
                     "tool": "taskflow",
                     "action": action,

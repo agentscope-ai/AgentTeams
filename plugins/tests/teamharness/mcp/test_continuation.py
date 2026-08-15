@@ -87,6 +87,17 @@ def _submit(workspace: Path, task_id: str, **overrides: Any) -> dict[str, Any]:
     )
 
 
+@pytest.fixture(autouse=True)
+def authoritative_project_pull(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep continuation tests focused on the post-pull state contract.
+
+    Project pull success/failure semantics are covered by
+    ``test_pull_project.py``. Every mutating TeamHarness action now performs
+    that pull before it reaches the submission and terminal-decision logic.
+    """
+    monkeypatch.setattr(server, "_pull_project", lambda *_args, **_kwargs: True)
+
+
 @pytest.fixture
 def successful_side_effects(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[Any]]:
     calls: dict[str, list[Any]] = {"publish": [], "sync": [], "project_sync": []}
@@ -204,12 +215,12 @@ def test_submission_retry_repairs_project_node_after_partial_write(
     real_update = server._update_project_task
     update_attempts = 0
 
-    def fail_first_project_update(*args: Any, **kwargs: Any) -> None:
+    def fail_first_project_update(*args: Any, **kwargs: Any) -> bool:
         nonlocal update_attempts
         update_attempts += 1
         if update_attempts == 1:
             raise OSError("forced project update failure")
-        real_update(*args, **kwargs)
+        return real_update(*args, **kwargs)
 
     monkeypatch.setattr(server, "_update_project_task", fail_first_project_update)
 
@@ -904,12 +915,12 @@ def test_cancel_retry_repairs_project_node_after_partial_write(
     real_update = server._update_project_task
     update_attempts = 0
 
-    def fail_first_project_update(*args: Any, **kwargs: Any) -> None:
+    def fail_first_project_update(*args: Any, **kwargs: Any) -> bool:
         nonlocal update_attempts
         update_attempts += 1
         if update_attempts == 1:
             raise OSError("forced project update failure")
-        real_update(*args, **kwargs)
+        return real_update(*args, **kwargs)
 
     monkeypatch.setattr(server, "_update_project_task", fail_first_project_update)
     arguments = {

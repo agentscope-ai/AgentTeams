@@ -376,6 +376,13 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 			matrixAccessToken = state.ProvResult.MatrixToken
 			gatewayKey = state.ProvResult.GatewayKey
 		}
+		// Put assigned skill files in member storage before publishing the
+		// desired-state snapshot that tells managed runtimes to load them.
+		if len(m.Spec.Skills) > 0 || len(m.Spec.RemoteSkills) > 0 {
+			if err := d.Deployer.PushOnDemandSkills(ctx, m.RuntimeName, m.Spec.Skills, m.Spec.RemoteSkills); err != nil {
+				return fmt.Errorf("push on-demand skills: %w", err)
+			}
+		}
 		if err := d.Deployer.DeployMemberRuntimeConfig(ctx, service.MemberRuntimeConfigDeployRequest{
 			Name:                  m.Name,
 			RuntimeName:           m.RuntimeName,

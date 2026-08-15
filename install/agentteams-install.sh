@@ -30,8 +30,11 @@
 #   AGENTTEAMS_VERSION            Image tag            (default: latest)
 #   AGENTTEAMS_REGISTRY           Image registry       (default: auto-detected by timezone)
 #   AGENTTEAMS_INSTALL_MANAGER_IMAGE       Override manager image (e.g., local build)
+#   AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE Override QwenPaw manager image (e.g., local build)
+#   AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE  Override legacy CoPaw manager image (e.g., local build)
 #   AGENTTEAMS_INSTALL_WORKER_IMAGE        Override worker image  (e.g., local build)
 #   AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE  Override copaw worker image (e.g., local build)
+#   AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE Override QwenPaw worker image (e.g., local build)
 #   AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE Override hermes worker image (e.g., local build)
 #   AGENTTEAMS_NACOS_REGISTRY_URI          Default Nacos registry URI for Worker market search/import
 #                                      (default: nacos://market.agentteams.io:80/public)
@@ -51,7 +54,7 @@
 #   AGENTTEAMS_PORT_MANAGER_CONSOLE  Host port for Manager console (default: 18888)
 #   AGENTTEAMS_WORKER_IDLE_TIMEOUT  Worker idle timeout in minutes (default: 720, i.e. 12 hours)
 #   AGENTTEAMS_DASHBOARD              Install agentteams-dashboard management UI (default: 1)
-#   AGENTTEAMS_DASHBOARD_VERSION      Dashboard version (default: v1.2.0, independent of AgentTeams version)
+#   AGENTTEAMS_DASHBOARD_VERSION      Dashboard version (default: v1.2.2, independent of AgentTeams version)
 #   AGENTTEAMS_PORT_DASHBOARD         Dashboard host port (default: 13000)
 #   AGENTTEAMS_DASHBOARD_IMAGE        Override dashboard image (default: <registry>/agentteams/agentteams-dashboard:<DASHBOARD_VERSION>)
 #   AGENTTEAMS_AI_GATEWAY_ADMIN_URL   Higress Console URL for shared auth (auto-detected)
@@ -59,7 +62,7 @@
 set -e
 
 AGENTTEAMS_VERSION="${AGENTTEAMS_VERSION:-}"
-AGENTTEAMS_KNOWN_STABLE_VERSION="v1.2.0"   # fallback if GitHub API is unreachable
+AGENTTEAMS_KNOWN_STABLE_VERSION="v1.2.2"   # fallback if GitHub API is unreachable
 
 _normalize_version() {
     local version="$1"
@@ -606,12 +609,16 @@ msg() {
         "worker_runtime.title.en") text="--- Default Worker Runtime ---" ;;
         "worker_runtime.openclaw.zh") text="OpenClaw" ;;
         "worker_runtime.openclaw.en") text="OpenClaw" ;;
-        "worker_runtime.copaw.zh") text="CoPaw" ;;
-        "worker_runtime.copaw.en") text="CoPaw" ;;
+        "worker_runtime.qwenpaw.zh") text="QwenPaw（推荐）" ;;
+        "worker_runtime.qwenpaw.en") text="QwenPaw (recommended)" ;;
+        "worker_runtime.copaw.zh") text="CoPaw（旧版本，建议升级为 QwenPaw）" ;;
+        "worker_runtime.copaw.en") text="CoPaw (legacy; upgrade to QwenPaw recommended)" ;;
         "worker_runtime.hermes.zh") text="Hermes" ;;
         "worker_runtime.hermes.en") text="Hermes" ;;
-        "worker_runtime.choice.zh") text="请选择 [1/2/3]" ;;
-        "worker_runtime.choice.en") text="Enter choice [1/2/3]" ;;
+        "worker_runtime.choice.zh") text="请选择 [1/2/3/4]" ;;
+        "worker_runtime.choice.en") text="Enter choice [1/2/3/4]" ;;
+        "worker_runtime.choice_legacy.zh") text="请选择 [1/2/3]" ;;
+        "worker_runtime.choice_legacy.en") text="Enter choice [1/2/3]" ;;
         "worker_runtime.selected.zh") text="默认 Worker 运行时: %s" ;;
         "worker_runtime.selected.en") text="Default Worker runtime: %s" ;;
         "worker_runtime.title_short.zh") text="默认 Worker 运行时" ;;
@@ -620,10 +627,12 @@ msg() {
         "manager_runtime.title.en") text="--- Manager Runtime ---" ;;
         "manager_runtime.openclaw.zh") text="OpenClaw" ;;
         "manager_runtime.openclaw.en") text="OpenClaw" ;;
-        "manager_runtime.copaw.zh") text="CoPaw" ;;
-        "manager_runtime.copaw.en") text="CoPaw" ;;
-        "manager_runtime.choice.zh") text="请选择 [1/2]" ;;
-        "manager_runtime.choice.en") text="Enter choice [1/2]" ;;
+        "manager_runtime.qwenpaw.zh") text="QwenPaw（推荐）" ;;
+        "manager_runtime.qwenpaw.en") text="QwenPaw (recommended)" ;;
+        "manager_runtime.copaw.zh") text="CoPaw（旧版本，建议升级为 QwenPaw）" ;;
+        "manager_runtime.copaw.en") text="CoPaw (legacy; upgrade to QwenPaw recommended)" ;;
+        "manager_runtime.choice.zh") text="请选择 [1/2/3]" ;;
+        "manager_runtime.choice.en") text="Enter choice [1/2/3]" ;;
         "manager_runtime.selected.zh") text="Manager 运行时: %s" ;;
         "manager_runtime.selected.en") text="Manager runtime: %s" ;;
         "manager_runtime.title_short.zh") text="Manager 运行时" ;;
@@ -753,6 +762,10 @@ msg() {
         "install.image.exists.en") text="Manager image already exists locally: %s" ;;
         "install.image.pulling_manager.zh") text="正在拉取 Manager 镜像: %s" ;;
         "install.image.pulling_manager.en") text="Pulling Manager image: %s" ;;
+        "install.image.embedded_exists.zh") text="Embedded 镜像已存在: %s" ;;
+        "install.image.embedded_exists.en") text="Embedded image already exists locally: %s" ;;
+        "install.image.pulling_embedded.zh") text="正在拉取 Embedded 镜像: %s" ;;
+        "install.image.pulling_embedded.en") text="Pulling Embedded image: %s" ;;
         "install.image.worker_exists.zh") text="Worker 镜像已存在: %s" ;;
         "install.image.worker_exists.en") text="Worker image already exists locally: %s" ;;
         "install.image.pulling_worker.zh") text="正在拉取 Worker 镜像: %s" ;;
@@ -1085,6 +1098,7 @@ AGENTTEAMS_INSTALL_CONTROLLER_IMAGE="${AGENTTEAMS_INSTALL_CONTROLLER_IMAGE:-${AG
 # Image variables are resolved after version selection in step_version().
 # These placeholders allow early code paths to reference them without errors.
 MANAGER_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_IMAGE:-}"
+MANAGER_QWENPAW_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE:-}"
 MANAGER_COPAW_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE:-}"
 WORKER_IMAGE="${AGENTTEAMS_INSTALL_WORKER_IMAGE:-}"
 COPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-}"
@@ -1095,6 +1109,7 @@ CONTROLLER_IMAGE="${AGENTTEAMS_INSTALL_CONTROLLER_IMAGE:-}"
 resolve_image_tags() {
     AGENTTEAMS_VERSION="$(_normalize_version "${AGENTTEAMS_VERSION}")"
     MANAGER_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-manager:${AGENTTEAMS_VERSION}}"
+    MANAGER_QWENPAW_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-manager-qwenpaw:${AGENTTEAMS_VERSION}}"
     MANAGER_COPAW_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-manager-copaw:${AGENTTEAMS_VERSION}}"
     WORKER_IMAGE="${AGENTTEAMS_INSTALL_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-worker:${AGENTTEAMS_VERSION}}"
     COPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-copaw-worker:${AGENTTEAMS_VERSION}}"
@@ -1108,6 +1123,14 @@ resolve_image_tags() {
     if [ -z "${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-}" ] && _ver_lt "${AGENTTEAMS_VERSION}" "v1.1.0"; then
         HERMES_WORKER_IMAGE=""
     fi
+}
+
+manager_image_for_runtime() {
+    case "${1:-qwenpaw}" in
+        qwenpaw) printf '%s' "${MANAGER_QWENPAW_IMAGE}" ;;
+        copaw) printf '%s' "${MANAGER_COPAW_IMAGE}" ;;
+        *) printf '%s' "${MANAGER_IMAGE}" ;;
+    esac
 }
 
 # Resolve the embedded controller image. Embedded mode is the only supported
@@ -1130,31 +1153,33 @@ resolve_embedded_image() {
     local _versioned="${AGENTTEAMS_REGISTRY}/agentteams/agentteams-embedded:${AGENTTEAMS_VERSION}"
     local _latest="${AGENTTEAMS_REGISTRY}/agentteams/agentteams-embedded:latest"
 
-    # Skip probe when AGENTTEAMS_VERSION is "latest" — no point trying the same tag twice.
-    if [ "${AGENTTEAMS_VERSION}" = "latest" ]; then
-        EMBEDDED_IMAGE="${_latest}"
-        return 0
+    # Always pull mutable remote tags, including :latest. Docker otherwise reuses an
+    # existing local tag and can start an embedded controller from an older release.
+    if [ "${AGENTTEAMS_VERSION}" != "latest" ]; then
+        log "$(msg install.image.pulling_embedded "${_versioned}")"
+        if ${DOCKER_CMD} pull "${_versioned}" >/dev/null 2>&1; then
+            EMBEDDED_IMAGE="${_versioned}"
+            return 0
+        fi
+
+        # Versions before v1.1.0 predate agentteams-embedded entirely — their manager image
+        # bundled all infrastructure.  Falling back to agentteams-embedded:latest would
+        # silently swap in the v1.1.0 architecture (embedded kube-apiserver) which
+        # crashes under QEMU on Apple Silicon.  Auto-activate legacy mode instead.
+        if _ver_lt "${AGENTTEAMS_VERSION}" "v1.1.0"; then
+            log "INFO: ${AGENTTEAMS_VERSION} predates agentteams-embedded; switching to legacy all-in-one manager architecture."
+            log "WARNING: Legacy all-in-one mode requires AGENTTEAMS_VERSION <= v1.0.9 (older bundled manager image)."
+            log "WARNING: Newer slim manager images will hang on 'Waiting for Higress Gateway'."
+            AGENTTEAMS_USE_EMBEDDED=0
+            return 0
+        fi
     fi
 
-    if ${DOCKER_CMD} pull "${_versioned}" >/dev/null 2>&1; then
-        EMBEDDED_IMAGE="${_versioned}"
-        return 0
-    fi
-
-    # Versions before v1.1.0 predate agentteams-embedded entirely — their manager image
-    # bundled all infrastructure.  Falling back to agentteams-embedded:latest would
-    # silently swap in the v1.1.0 architecture (embedded kube-apiserver) which
-    # crashes under QEMU on Apple Silicon.  Auto-activate legacy mode instead.
-    if _ver_lt "${AGENTTEAMS_VERSION}" "v1.1.0"; then
-        log "INFO: ${AGENTTEAMS_VERSION} predates agentteams-embedded; switching to legacy all-in-one manager architecture."
-        log "WARNING: Legacy all-in-one mode requires AGENTTEAMS_VERSION <= v1.0.9 (older bundled manager image)."
-        log "WARNING: Newer slim manager images will hang on 'Waiting for Higress Gateway'."
-        AGENTTEAMS_USE_EMBEDDED=0
-        return 0
-    fi
-
+    log "$(msg install.image.pulling_embedded "${_latest}")"
     if ${DOCKER_CMD} pull "${_latest}" >/dev/null 2>&1; then
-        log "embedded ${AGENTTEAMS_VERSION} not found, using latest"
+        if [ "${AGENTTEAMS_VERSION}" != "latest" ]; then
+            log "embedded ${AGENTTEAMS_VERSION} not found, using latest"
+        fi
         EMBEDDED_IMAGE="${_latest}"
         return 0
     fi
@@ -1244,10 +1269,10 @@ wait_manager_ready() {
     log "$(msg install.wait_ready "${timeout}")"
 
     # Wait for Manager agent to be healthy inside the container
-    local runtime="${AGENTTEAMS_MANAGER_RUNTIME:-copaw}"
+    local runtime="${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}"
     while [ "${elapsed}" -lt "${timeout}" ]; do
         case "${runtime}" in
-            copaw)
+            copaw|qwenpaw)
                 if ${DOCKER_CMD} exec "${container}" curl -sf http://127.0.0.1:18799/api/agents 2>/dev/null | grep -q '"agents"'; then
                     log "$(msg install.wait_ready.ok)"
                     return 0
@@ -2514,7 +2539,7 @@ step_workspace() {
 
 step_dashboard() {
     AGENTTEAMS_DASHBOARD="${AGENTTEAMS_DASHBOARD:-1}"
-    AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.2.0}"
+    AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.2.2}"
     AGENTTEAMS_PORT_DASHBOARD="${AGENTTEAMS_PORT_DASHBOARD:-13000}"
     AGENTTEAMS_AI_GATEWAY_ADMIN_URL="${AGENTTEAMS_AI_GATEWAY_ADMIN_URL:-}"
 
@@ -2680,18 +2705,27 @@ step_dashboard() {
 step_runtime() {
     log "$(msg worker_runtime.title)"
     echo ""
-    echo "  1) $(msg worker_runtime.copaw)"
+    echo "  1) $(msg worker_runtime.qwenpaw)"
     echo "  2) $(msg worker_runtime.openclaw)"
     if ! _ver_lt "${AGENTTEAMS_VERSION}" "v1.1.0"; then
         echo "  3) $(msg worker_runtime.hermes)"
+        echo "  4) $(msg worker_runtime.copaw)"
+    else
+        echo "  3) $(msg worker_runtime.copaw)"
     fi
     echo ""
     if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
-        AGENTTEAMS_DEFAULT_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-copaw}"
+        AGENTTEAMS_DEFAULT_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-qwenpaw}"
     elif [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ -n "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}" ]; then
         log "$(msg prompt.upgrade_keep "$(msg worker_runtime.title_short)" "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}")"
         local _runtime_choice
-        read -e -p "$(msg worker_runtime.choice): " _runtime_choice
+        local _runtime_prompt
+        if ! _ver_lt "${AGENTTEAMS_VERSION}" "v1.1.0"; then
+            _runtime_prompt="$(msg worker_runtime.choice)"
+        else
+            _runtime_prompt="$(msg worker_runtime.choice_legacy)"
+        fi
+        read -e -p "${_runtime_prompt}: " _runtime_choice
         if [ "${_runtime_choice}" = "b" ]; then STEP_RESULT="back"; return 0; fi
         if [ -n "${_runtime_choice}" ]; then
             case "${_runtime_choice}" in
@@ -2701,12 +2735,19 @@ step_runtime() {
                    else
                        AGENTTEAMS_DEFAULT_WORKER_RUNTIME="copaw"
                    fi ;;
-                *) AGENTTEAMS_DEFAULT_WORKER_RUNTIME="copaw" ;;
+                4) AGENTTEAMS_DEFAULT_WORKER_RUNTIME="copaw" ;;
+                *) AGENTTEAMS_DEFAULT_WORKER_RUNTIME="qwenpaw" ;;
             esac
         fi
     elif [ -z "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME+x}" ]; then
         local _runtime_choice
-        read -e -p "$(msg worker_runtime.choice): " _runtime_choice
+        local _runtime_prompt
+        if ! _ver_lt "${AGENTTEAMS_VERSION}" "v1.1.0"; then
+            _runtime_prompt="$(msg worker_runtime.choice)"
+        else
+            _runtime_prompt="$(msg worker_runtime.choice_legacy)"
+        fi
+        read -e -p "${_runtime_prompt}: " _runtime_choice
         if [ "${_runtime_choice}" = "b" ]; then STEP_RESULT="back"; return 0; fi
         _runtime_choice="${_runtime_choice:-1}"
         case "${_runtime_choice}" in
@@ -2716,7 +2757,8 @@ step_runtime() {
                else
                    AGENTTEAMS_DEFAULT_WORKER_RUNTIME="copaw"
                fi ;;
-            *) AGENTTEAMS_DEFAULT_WORKER_RUNTIME="copaw" ;;
+            4) AGENTTEAMS_DEFAULT_WORKER_RUNTIME="copaw" ;;
+            *) AGENTTEAMS_DEFAULT_WORKER_RUNTIME="qwenpaw" ;;
         esac
     fi
     export AGENTTEAMS_DEFAULT_WORKER_RUNTIME
@@ -2726,11 +2768,12 @@ step_runtime() {
 step_manager_runtime() {
     log "$(msg manager_runtime.title)"
     echo ""
-    echo "  1) $(msg manager_runtime.copaw)"
+    echo "  1) $(msg manager_runtime.qwenpaw)"
     echo "  2) $(msg manager_runtime.openclaw)"
+    echo "  3) $(msg manager_runtime.copaw)"
     echo ""
     if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
-        AGENTTEAMS_MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-copaw}"
+        AGENTTEAMS_MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}"
     elif [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ -n "${AGENTTEAMS_MANAGER_RUNTIME}" ]; then
         log "$(msg prompt.upgrade_keep "$(msg manager_runtime.title_short)" "${AGENTTEAMS_MANAGER_RUNTIME}")"
         local _runtime_choice
@@ -2739,7 +2782,8 @@ step_manager_runtime() {
         if [ -n "${_runtime_choice}" ]; then
             case "${_runtime_choice}" in
                 2) AGENTTEAMS_MANAGER_RUNTIME="openclaw" ;;
-                *) AGENTTEAMS_MANAGER_RUNTIME="copaw" ;;
+                3) AGENTTEAMS_MANAGER_RUNTIME="copaw" ;;
+                *) AGENTTEAMS_MANAGER_RUNTIME="qwenpaw" ;;
             esac
         fi
     elif [ -z "${AGENTTEAMS_MANAGER_RUNTIME+x}" ]; then
@@ -2749,7 +2793,8 @@ step_manager_runtime() {
         _runtime_choice="${_runtime_choice:-1}"
         case "${_runtime_choice}" in
             2) AGENTTEAMS_MANAGER_RUNTIME="openclaw" ;;
-            *) AGENTTEAMS_MANAGER_RUNTIME="copaw" ;;
+            3) AGENTTEAMS_MANAGER_RUNTIME="copaw" ;;
+            *) AGENTTEAMS_MANAGER_RUNTIME="qwenpaw" ;;
         esac
     fi
     export AGENTTEAMS_MANAGER_RUNTIME
@@ -3102,7 +3147,7 @@ _start_dashboard() {
     fi
 
     AGENTTEAMS_PORT_DASHBOARD="${AGENTTEAMS_PORT_DASHBOARD:-13000}"
-    AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.2.0}"
+    AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.2.2}"
     AGENTTEAMS_DASHBOARD_IMAGE="${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}}"
 
     log ""
@@ -3375,9 +3420,9 @@ install_manager() {
     fi
     AGENTTEAMS_WORKSPACE_DIR="$(cd "${AGENTTEAMS_WORKSPACE_DIR}" 2>/dev/null && pwd || echo "${AGENTTEAMS_WORKSPACE_DIR}")"
     mkdir -p "${AGENTTEAMS_WORKSPACE_DIR}"
-    AGENTTEAMS_MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-copaw}"
+    AGENTTEAMS_MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}"
     export AGENTTEAMS_MANAGER_RUNTIME
-    AGENTTEAMS_DEFAULT_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-copaw}"
+    AGENTTEAMS_DEFAULT_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-qwenpaw}"
     AGENTTEAMS_MATRIX_E2EE="${AGENTTEAMS_MATRIX_E2EE:-0}"
     export AGENTTEAMS_MATRIX_E2EE
     AGENTTEAMS_WORKER_IDLE_TIMEOUT="${AGENTTEAMS_WORKER_IDLE_TIMEOUT:-720}"
@@ -3452,8 +3497,8 @@ AGENTTEAMS_PORT_CONSOLE=${AGENTTEAMS_PORT_CONSOLE}
 AGENTTEAMS_PORT_ELEMENT_WEB=${AGENTTEAMS_PORT_ELEMENT_WEB}
 AGENTTEAMS_PORT_MANAGER_CONSOLE=${AGENTTEAMS_PORT_MANAGER_CONSOLE:-18888}
 
-# Manager runtime (openclaw | copaw)
-AGENTTEAMS_MANAGER_RUNTIME=${AGENTTEAMS_MANAGER_RUNTIME:-copaw}
+# Manager runtime (qwenpaw | openclaw | copaw)
+AGENTTEAMS_MANAGER_RUNTIME=${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}
 
 # Matrix
 AGENTTEAMS_MATRIX_DOMAIN=${AGENTTEAMS_MATRIX_DOMAIN}
@@ -3500,8 +3545,8 @@ AGENTTEAMS_COPAW_WORKER_IMAGE=${COPAW_WORKER_IMAGE}
 AGENTTEAMS_QWENPAW_WORKER_IMAGE=${QWENPAW_WORKER_IMAGE}
 AGENTTEAMS_HERMES_WORKER_IMAGE=${HERMES_WORKER_IMAGE}
 
-# Default Worker runtime (openclaw | copaw | qwenpaw | hermes)
-AGENTTEAMS_DEFAULT_WORKER_RUNTIME=${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-copaw}
+# Default Worker runtime (qwenpaw | openclaw | hermes | copaw)
+AGENTTEAMS_DEFAULT_WORKER_RUNTIME=${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-qwenpaw}
 
 # Matrix E2EE (0=disabled, 1=enabled; default: 0)
 AGENTTEAMS_MATRIX_E2EE=${AGENTTEAMS_MATRIX_E2EE:-0}
@@ -3538,7 +3583,7 @@ AGENTTEAMS_HOST_SHARE_DIR=${AGENTTEAMS_HOST_SHARE_DIR:-}
 
 # agentteams-dashboard (management UI)
 AGENTTEAMS_DASHBOARD=${AGENTTEAMS_DASHBOARD:-1}
-AGENTTEAMS_DASHBOARD_VERSION=${AGENTTEAMS_DASHBOARD_VERSION:-v1.2.0}
+AGENTTEAMS_DASHBOARD_VERSION=${AGENTTEAMS_DASHBOARD_VERSION:-v1.2.2}
 AGENTTEAMS_PORT_DASHBOARD=${AGENTTEAMS_PORT_DASHBOARD:-13000}
 AGENTTEAMS_DASHBOARD_IMAGE=${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}}
 AGENTTEAMS_AI_GATEWAY_ADMIN_URL=${AGENTTEAMS_AI_GATEWAY_ADMIN_URL:-}
@@ -3661,22 +3706,19 @@ EOF
 
     # Embedded controller image (resolve versioned tag, fallback to latest)
     resolve_embedded_image
-    if [ "${AGENTTEAMS_USE_EMBEDDED}" = "1" ]; then
-        _local_image_exists "${EMBEDDED_IMAGE}" || true
+    if [ "${AGENTTEAMS_USE_EMBEDDED}" = "1" ] && [ -n "${AGENTTEAMS_INSTALL_EMBEDDED_IMAGE:-}" ]; then
+        _pull_image "${EMBEDDED_IMAGE}" "install.image.embedded_exists" "install.image.pulling_embedded"
     fi
 
     # Manager image is always required (select based on runtime)
-    if [ "${AGENTTEAMS_MANAGER_RUNTIME}" = "copaw" ]; then
-        _pull_image "${MANAGER_COPAW_IMAGE}" "install.image.exists" "install.image.pulling_manager"
-    else
-        _pull_image "${MANAGER_IMAGE}" "install.image.exists" "install.image.pulling_manager"
-    fi
+    local _selected_manager_image
+    _selected_manager_image="$(manager_image_for_runtime "${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}")"
+    _pull_image "${_selected_manager_image}" "install.image.exists" "install.image.pulling_manager"
 
     # Pull all worker runtime images (workers may use any runtime regardless of the default)
     _pull_image "${WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
     _pull_image "${COPAW_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
-    # Temporarily disabled until the QwenPaw worker image is published.
-    # _pull_image "${QWENPAW_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
+    _pull_image "${QWENPAW_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
     _pull_image "${HERMES_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
 
     # --- Pre-upgrade: extract Matrix passwords from running old containers ---
@@ -3896,9 +3938,9 @@ CREDEOF
             -e "${_ctrl_env_prefix}LLM_API_KEY=${AGENTTEAMS_LLM_API_KEY}"
             -e "${_ctrl_env_prefix}DEFAULT_MODEL=${AGENTTEAMS_DEFAULT_MODEL}"
             -e "${_ctrl_env_prefix}MANAGER_GATEWAY_KEY=${AGENTTEAMS_MANAGER_GATEWAY_KEY}"
-            -e "${_ctrl_env_prefix}MANAGER_RUNTIME=${AGENTTEAMS_MANAGER_RUNTIME:-copaw}"
-            -e "${_ctrl_env_prefix}MANAGER_IMAGE=$([ "${AGENTTEAMS_MANAGER_RUNTIME}" = "copaw" ] && echo "${MANAGER_COPAW_IMAGE}" || echo "${MANAGER_IMAGE}")"
-            -e "${_ctrl_env_prefix}DEFAULT_WORKER_RUNTIME=${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-copaw}"
+            -e "${_ctrl_env_prefix}MANAGER_RUNTIME=${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}"
+            -e "${_ctrl_env_prefix}MANAGER_IMAGE=${_selected_manager_image}"
+            -e "${_ctrl_env_prefix}DEFAULT_WORKER_RUNTIME=${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-qwenpaw}"
             -e "${_ctrl_env_prefix}WORKER_IMAGE=${WORKER_IMAGE}"
             -e "${_ctrl_env_prefix}COPAW_WORKER_IMAGE=${COPAW_WORKER_IMAGE}"
             -e "${_ctrl_env_prefix}QWENPAW_WORKER_IMAGE=${QWENPAW_WORKER_IMAGE}"
@@ -4199,7 +4241,7 @@ CREDEOF
             -e HOME=/root/manager-workspace \
             -w /root/manager-workspace \
             -e HOST_ORIGINAL_HOME="${AGENTTEAMS_HOST_SHARE_DIR}" \
-            -e AGENTTEAMS_MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-copaw}" \
+            -e AGENTTEAMS_MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}" \
             ${JVM_ARGS:+-e JVM_ARGS="${JVM_ARGS}"} \
             ${YOLO_ARGS} \
             ${MATRIX_DEBUG_ARGS} \
@@ -4216,7 +4258,7 @@ CREDEOF
             ${WORKSPACE_MOUNT_ARGS} \
             ${HOST_SHARE_MOUNT_ARGS} \
             --restart unless-stopped \
-            "$([ "${AGENTTEAMS_MANAGER_RUNTIME}" = "copaw" ] && echo "${MANAGER_COPAW_IMAGE}" || echo "${MANAGER_IMAGE}")"
+            "${_selected_manager_image}"
 
         # Wait for Manager agent to be ready
         wait_manager_ready "agentteams-manager"
@@ -4660,7 +4702,7 @@ case "${1:-}" in
         check_container_runtime
         load_current_params_from_env
         AGENTTEAMS_DASHBOARD="${AGENTTEAMS_DASHBOARD:-1}"
-        AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.2.0}"
+        AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.2.2}"
         AGENTTEAMS_PORT_DASHBOARD="${AGENTTEAMS_PORT_DASHBOARD:-13000}"
         AGENTTEAMS_DASHBOARD_IMAGE="${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}}"
         AGENTTEAMS_USE_EMBEDDED=1

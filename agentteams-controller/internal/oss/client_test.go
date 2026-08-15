@@ -253,6 +253,9 @@ func TestMinIOAdminClient_BuildManagerPolicy(t *testing.T) {
 	if !hasManagerDir {
 		t.Errorf("expected manager directory prefix in list conditions: %v", prefixes)
 	}
+	if !stringSliceContains(prefixes, "agents/*") {
+		t.Errorf("expected Manager to list Worker agent prefixes: %v", prefixes)
+	}
 
 	// Verify manager resource in RW statement
 	rwStmt := policy.Statement[2]
@@ -271,6 +274,9 @@ func TestMinIOAdminClient_BuildManagerPolicy(t *testing.T) {
 	}
 	if !hasManagerDirResource {
 		t.Errorf("expected manager directory resource in RW statement: %v", rwStmt.Resource)
+	}
+	if !stringSliceContains(rwStmt.Resource, "arn:aws:s3:::agentteams-storage/agents/*") {
+		t.Errorf("expected Manager to manage Worker agent objects: %v", rwStmt.Resource)
 	}
 }
 

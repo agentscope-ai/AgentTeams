@@ -110,6 +110,10 @@ Create the project before planning tasks:
 
 This creates `meta.json` and `plan.md`.
 
+`team_id` is stamped automatically from the runtime team configuration; pass
+`payload.teamId` explicitly only when the project must belong to a different
+team than the calling Worker's own team.
+
 If `projectId` is omitted, TeamHarness derives one from `title` plus timestamp.
 If the generated ID already exists, TeamHarness appends a numeric suffix.
 Explicit `projectId` collisions are rejected.
@@ -545,6 +549,57 @@ The `notificationNeeded` field contains:
 (for example, a bare `create_project` before any task room exists). In that
 case, skip the notification — the assignment message or requester report will
 carry the project context later.
+
+## Pause / Resume / Complete
+
+Use these when a human asks the Leader to pause, resume, or complete a
+project (or when the Leader decides a project should stop dispatching new
+work). A Controller API also implements these as structured endpoints; this
+skill documents the MCP-native path a Leader uses in conversation.
+
+Call `pause_project` to stop new task dispatch. In-flight tasks are NOT
+cancelled — they keep running and their completion reports still arrive. Do
+not delegate new ready nodes while paused.
+
+```json
+{
+  "action": "pause_project",
+  "payload": {
+    "projectId": "demo-project-001"
+  }
+}
+```
+
+Call `resume_project` to put a paused project back to `active`:
+
+```json
+{
+  "action": "resume_project",
+  "payload": {
+    "projectId": "demo-project-001"
+  }
+}
+```
+
+Call `complete_project` only when every task has reached a terminal status
+(completed / revision / blocked / cancelled) and no work remains — a
+completed project is terminal. Pass `publishArtifacts: true` only when you
+intentionally want an immediate project artifact before the requester report
+(see Accepting Worker Results):
+
+```json
+{
+  "action": "complete_project",
+  "payload": {
+    "projectId": "demo-project-001",
+    "publishArtifacts": false
+  }
+}
+```
+
+`pause_project` / `resume_project` / `complete_project` change project status
+only; they do not cancel in-flight tasks or delete task state. If a task must
+be cancelled, use `taskflow cancel_task` (Leader only) with a reason.
 
 ## Current Boundary
 

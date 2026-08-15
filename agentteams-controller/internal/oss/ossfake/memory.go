@@ -8,6 +8,9 @@
 package ossfake
 
 import (
+	"crypto/md5"
+	"encoding/hex"
+
 	"context"
 	"errors"
 	"fmt"
@@ -15,6 +18,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 )
@@ -24,11 +28,20 @@ import (
 type Memory struct {
 	mu      sync.RWMutex
 	objects map[string][]byte
+	modTime time.Time
+	next    int64
+}
+
+// md5Hex returns the lowercase MD5 hex digest of data (MinIO single-part
+// ETag semantics).
+func md5Hex(data []byte) string {
+	sum := md5.Sum(data)
+	return hex.EncodeToString(sum[:])
 }
 
 // NewMemory constructs an empty in-memory storage client.
 func NewMemory() *Memory {
-	return &Memory{objects: make(map[string][]byte)}
+	return &Memory{objects: make(map[string][]byte), modTime: time.Unix(1700000000, 0)}
 }
 
 // PutObject stores data under key.
@@ -38,6 +51,8 @@ func (m *Memory) PutObject(_ context.Context, key string, data []byte) error {
 	buf := make([]byte, len(data))
 	copy(buf, data)
 	m.objects[key] = buf
+	m.modTime = m.modTime.Add(time.Second)
+	m.next++
 	return nil
 }
 
@@ -72,6 +87,40 @@ func (m *Memory) Stat(_ context.Context, key string) error {
 	if _, ok := m.objects[key]; !ok {
 		return os.ErrNotExist
 	}
+	return nil
+}
+
+// StatMeta returns a monotonic mtime for the object. Writes advance the clock,
+// so a test can verify the optimistic-lock conflict path by writing after a
+// read. The ETag is the content MD5 (mirroring MinIO single-part semantics),
+// so a content-changing concurrent write also changes the ETag. Returns
+// os.ErrNotExist when the key is missing.
+func (m *Memory) StatMeta(_ context.Context, key string) (oss.ObjectMeta, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	data, ok := m.objects[key]
+	if !ok {
+		return oss.ObjectMeta{}, os.ErrNotExist
+	}
+	return oss.ObjectMeta{Size: int64(len(data)), ModTime: m.modTime, ETag: md5Hex(data)}, nil
+}
+
+// PutObjectIfMatch writes only when the current object ETag equals matchETag.
+// Mirrors the MinIO conditional-write semantics: mismatch returns
+// oss.ErrPreconditionFailed and leaves the object untouched.
+func (m *Memory) PutObjectIfMatch(_ context.Context, key string, data []byte, matchETag string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if cur, ok := m.objects[key]; ok {
+		if matchETag == "" || md5Hex(cur) != matchETag {
+			return oss.ErrPreconditionFailed
+		}
+	}
+	buf := make([]byte, len(data))
+	copy(buf, data)
+	m.objects[key] = buf
+	m.modTime = m.modTime.Add(time.Second)
+	m.next++
 	return nil
 }
 

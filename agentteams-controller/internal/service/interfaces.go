@@ -51,6 +51,9 @@ type WorkerProvisioner interface {
 	// InviteToRoom invites userID to roomID using the admin token.
 	// Idempotent: returns nil when the user is already joined/invited.
 	InviteToRoom(ctx context.Context, roomID, userID string) error
+	// JoinRoomAs accepts a room invite using the invited user's token.
+	// Idempotent: returns nil when the user has already joined.
+	JoinRoomAs(ctx context.Context, roomID, userToken string) error
 	// KickFromRoom removes userID from roomID using the admin token.
 	// Idempotent: returns nil when the user is not a member.
 	KickFromRoom(ctx context.Context, roomID, userID, reason string) error

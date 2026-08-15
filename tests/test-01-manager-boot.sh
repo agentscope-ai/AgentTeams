@@ -114,13 +114,11 @@ log_pass "Manager runtime: ${MANAGER_RUNTIME}"
 case "${MANAGER_RUNTIME}" in
     copaw|qwenpaw)
         # Both copaw and qwenpaw runtimes use QwenPaw 2.0 in the same container image.
-        # After migration, the runtime env var is "qwenpaw" and the working dir is
-        # ~/.qwenpaw/.  The process cmdline may still show "copaw" (run_copaw_app.py
-        # via runpy) or "qwenpaw" (direct python3 -m qwenpaw app) — both are valid.
+        # The legacy "copaw" runtime value is retained as a compatibility alias,
+        # but both values now run QwenPaw 2.0 from ~/.qwenpaw/. The process cmdline
+        # may still show "copaw" (run_copaw_app.py via runpy) or "qwenpaw"
+        # (direct python3 -m qwenpaw app) — both are valid.
         _working_dir="/root/manager-workspace/.qwenpaw"
-        if [ "${MANAGER_RUNTIME}" = "copaw" ]; then
-            _working_dir="/root/manager-workspace/.copaw"
-        fi
 
         if docker exec "${_AGENT_CTR}" test -d "${_working_dir}" 2>/dev/null; then
             log_pass "QwenPaw working dir exists: ${_working_dir}"

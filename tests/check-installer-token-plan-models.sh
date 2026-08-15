@@ -5,8 +5,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SHELL_INSTALLER="${ROOT_DIR}/install/agentteams-install.sh"
 POWERSHELL_INSTALLER="${ROOT_DIR}/install/agentteams-install.ps1"
-WINDOWS_DOC="${ROOT_DIR}/docs/windows-deploy.md"
-WINDOWS_DOC_ZH="${ROOT_DIR}/docs/zh-cn/windows-deploy.md"
+WINDOWS_DOC="${ROOT_DIR}/docs/usage/deployment/windows.md"
+WINDOWS_DOC_ZH="${ROOT_DIR}/docs/zh-cn/usage/deployment/windows.md"
 
 require_line() {
     local path="$1"

@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"strings"
 	"testing"
 )
 
@@ -92,5 +93,16 @@ func TestExtractWorkerFieldsFromZip_NotAZip(t *testing.T) {
 	gotModel, gotRuntime := extractWorkerFieldsFromZip([]byte("not a zip"))
 	if gotModel != "" || gotRuntime != "" {
 		t.Errorf("expected empty fields for non-zip input, got model=%q runtime=%q", gotModel, gotRuntime)
+	}
+}
+
+func TestWorkerRuntimeHelpIncludesQwenPaw(t *testing.T) {
+	for name, usage := range map[string]string{
+		"apply":  applyWorkerSubCmd().Flags().Lookup("runtime").Usage,
+		"update": updateWorkerCmd().Flags().Lookup("runtime").Usage,
+	} {
+		if !strings.Contains(usage, "qwenpaw") {
+			t.Errorf("%s worker runtime help %q does not include qwenpaw", name, usage)
+		}
 	}
 }

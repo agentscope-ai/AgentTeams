@@ -3,11 +3,17 @@ package oss
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
+	"time"
 )
 
 // MinIOClient implements StorageClient using the mc (MinIO Client) CLI.
@@ -26,6 +32,9 @@ type MinIOClient struct {
 	config     Config
 	credSource CredentialSource
 	aliasReady bool
+	// sdkPutIfMatch overrides the SDK conditional write for tests; nil uses
+	// the real minio-go path.
+	sdkPutIfMatch func(ctx context.Context, key string, data []byte, matchETag string) error
 }
 
 // NewMinIOClient creates a StorageClient backed by the mc CLI.
@@ -68,6 +77,114 @@ func (c *MinIOClient) ensureAlias(ctx context.Context) error {
 
 func (c *MinIOClient) fullPath(key string) string {
 	return c.config.StoragePrefix + "/" + strings.TrimPrefix(key, "/")
+}
+
+// PutObjectIfMatch performs a conditional write: the object is only replaced
+// when its current ETag equals matchETag. This closes the check-then-act
+// race of the optimistic lock — a Worker write landing between the
+// Controller's read and its write makes the ETag change and the write fails
+// with ErrPreconditionFailed instead of silently overwriting.
+func (c *MinIOClient) PutObjectIfMatch(ctx context.Context, key string, data []byte, matchETag string) error {
+	put := c.sdkPutIfMatch
+	if put == nil {
+		put = c.sdkPutObjectIfMatch
+	}
+	err := put(ctx, key, data, matchETag)
+	if err == nil {
+		return nil
+	}
+
+	// MinIO rejects an If-Match mismatch with a precondition-failed
+	// response; the SDK surfaces it as an ErrorResponse with that code.
+	var resp minio.ErrorResponse
+	if errors.As(err, &resp) && (resp.Code == "PreconditionFailed" || resp.Code == "412") {
+		return ErrPreconditionFailed
+	}
+
+	// Provider fallback: Alibaba Cloud OSS does not support If-Match on
+	// PutObject (returns NotImplemented). Availability beats eliminating the
+	// tiny compare-to-put race there: re-check the read-bound ETag against
+	// the current object and, if unchanged, do a plain PutObject. An
+	// observed conflict is still rejected; only the narrow compare-to-put
+	// window is accepted on OSS.
+	if errors.As(err, &resp) && (resp.Code == "NotImplemented" || resp.Code == "501") {
+		return ossFallbackWrite(ctx, key, data, matchETag, c.StatMeta, c.PutObject)
+	}
+	return err
+}
+
+// ossFallbackWrite is the OSS degradation for providers without If-Match
+// (Alibaba Cloud OSS returns NotImplemented). It re-checks the read-bound
+// ETag immediately before a plain PutObject: an observed conflict is
+// rejected; only the narrow compare-to-put race is accepted. Extracted as a
+// pure function so the contract is testable without a live backend.
+func ossFallbackWrite(ctx context.Context, key string, data []byte, matchETag string,
+	stat func(context.Context, string) (ObjectMeta, error),
+	put func(context.Context, string, []byte) error) error {
+	cur, err := stat(ctx, key)
+	if err != nil {
+		return err
+	}
+	if canonicalizeETag(cur.ETag) != matchETag {
+		return ErrPreconditionFailed
+	}
+	return put(ctx, key, data)
+}
+
+// canonicalizeETag normalizes a provider ETag for comparison: S3-style
+// quotes are stripped and hex is lowercased. OSS commonly returns uppercase
+// and/or quoted MD5 ETags while our read-bound ETag is a lowercase hex MD5,
+// so a verbatim comparison would deterministically reject unchanged content.
+func canonicalizeETag(etag string) string {
+	return strings.ToLower(strings.Trim(etag, "\""))
+}
+
+// sdkPutObjectIfMatch is the MinIO SDK conditional write. It is a separate
+// function so tests can swap the transport via sdkPutIfMatch.
+func (c *MinIOClient) sdkPutObjectIfMatch(ctx context.Context, key string, data []byte, matchETag string) error {
+	sdk, err := c.sdkClient()
+	if err != nil {
+		return err
+	}
+	reader := bytes.NewReader(data)
+	opts := minio.PutObjectOptions{ContentType: "application/json"}
+	opts.SetMatchETag(matchETag)
+	_, err = sdk.PutObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), reader, int64(len(data)), opts)
+	return err
+}
+
+// sdkClient lazily builds a minio-go client for conditional writes. The
+// regular read/write path stays on the mc CLI (mirror semantics, alias
+// handling, dynamic STS credentials); only If-Match writes need the SDK.
+func (c *MinIOClient) sdkClient() (*minio.Client, error) {
+	// Preserve the endpoint scheme for TLS selection: https:// → Secure,
+	// anything else → plain. The endpoint stays intact (host[:port]).
+	endpoint := c.config.Endpoint
+	secure := false
+	if strings.HasPrefix(endpoint, "https://") {
+		secure = true
+	}
+	endpoint = strings.TrimPrefix(endpoint, "https://")
+	endpoint = strings.TrimPrefix(endpoint, "http://")
+
+	// Dynamic STS credentials win over the static pair (external OSS /
+	// refreshable tokens); the static pair is the embedded-MinIO default.
+	// A credential-resolution failure is returned, never silently replaced
+	// by the static pair (which would be the wrong identity for STS-based
+	// deployments).
+	accessKey, secretKey, token := c.config.AccessKey, c.config.SecretKey, ""
+	if c.credSource != nil {
+		creds, err := c.credSource.Resolve(context.Background())
+		if err != nil {
+			return nil, fmt.Errorf("resolve dynamic oss credentials: %w", err)
+		}
+		accessKey, secretKey, token = creds.AccessKeyID, creds.AccessKeySecret, creds.SecurityToken
+	}
+
+	return minio.New(endpoint, &minio.Options{
+		Creds:  credentials.NewStaticV4(accessKey, secretKey, token),
+		Secure: secure,
+	})
 }
 
 func (c *MinIOClient) PutObject(ctx context.Context, key string, data []byte) error {
@@ -125,6 +242,38 @@ func (c *MinIOClient) Stat(ctx context.Context, key string) error {
 		return err
 	}
 	return nil
+}
+
+// StatMeta returns the object's size and last-modified time by invoking
+// `mc stat --json <fullpath>` and parsing the lastModified field. The last
+// modified time is second-precision (MinIO), which is sufficient for the
+// low-frequency human-intervention optimistic lock (W-PR-2): the check
+// catches "Controller read then Worker pushed before the write".
+func (c *MinIOClient) StatMeta(ctx context.Context, key string) (ObjectMeta, error) {
+	if err := c.ensureAlias(ctx); err != nil {
+		return ObjectMeta{}, err
+	}
+	out, err := c.runMC(ctx, "stat", "--json", c.fullPath(key))
+	if err != nil {
+		if strings.Contains(err.Error(), "Object does not exist") ||
+			strings.Contains(err.Error(), "exit status") {
+			return ObjectMeta{}, os.ErrNotExist
+		}
+		return ObjectMeta{}, err
+	}
+	var info struct {
+		LastModified string `json:"lastModified"`
+		Size         int64  `json:"size"`
+		ETag         string `json:"etag"`
+	}
+	if err := json.Unmarshal([]byte(out), &info); err != nil {
+		return ObjectMeta{}, fmt.Errorf("parse mc stat --json: %w", err)
+	}
+	modTime, err := time.Parse(time.RFC3339, info.LastModified)
+	if err != nil {
+		return ObjectMeta{}, fmt.Errorf("parse lastModified %q: %w", info.LastModified, err)
+	}
+	return ObjectMeta{Size: info.Size, ModTime: modTime, ETag: info.ETag}, nil
 }
 
 func (c *MinIOClient) DeleteObject(ctx context.Context, key string) error {

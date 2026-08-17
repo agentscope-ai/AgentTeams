@@ -4,11 +4,19 @@ on:
   pull_request:
     paths:
       - 'agentteams-controller/**'
+      - 'copaw/**'
+      - 'plugins/teamharness/**'
+      - 'plugins/tests/**'
+      - 'docs/design/teamharness/**'
       - '.github/workflows/test-controller.yml'
   push:
     branches: [main]
     paths:
       - 'agentteams-controller/**'
+      - 'copaw/**'
+      - 'plugins/teamharness/**'
+      - 'plugins/tests/**'
+      - 'docs/design/teamharness/**'
   workflow_dispatch:
 
 jobs:
@@ -30,3 +38,37 @@ jobs:
       - name: Integration tests (envtest)
         working-directory: agentteams-controller
         run: make test-integration
+
+  teamharness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+
+      - name: Install focused Python test dependencies
+        run: |
+          python -m pip install \
+            'agentscope==2.0.4.post1' \
+            'PyYAML>=6.0,<7' \
+            'pytest>=8.3,<10' \
+            'pytest-asyncio>=0.23,<2'
+
+      - name: Run durable continuation contract tests
+        env:
+          NO_PROXY: 127.0.0.1,localhost
+          no_proxy: 127.0.0.1,localhost
+        run: |
+          ruby plugins/tests/teamharness/test-contracts.rb
+          python -m pytest plugins/tests/teamharness/mcp/test_continuation.py -q
+          python -m pytest plugins/tests/teamharness/test_pull_project.py -q
+          PYTHONPATH="${GITHUB_WORKSPACE}/copaw/src" \
+            python -m pytest copaw/tests/test_taskflow_tool.py -q
+          ruby plugins/tests/teamharness/mcp/tools/test-taskflow.rb

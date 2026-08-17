@@ -82,11 +82,22 @@ type projectMeta struct {
 }
 
 type projectTaskMeta struct {
-	TaskID     string   `json:"task_id"`
-	Title      string   `json:"title"`
-	AssignedTo string   `json:"assigned_to"`
-	DependsOn  []string `json:"depends_on"`
-	Status     string   `json:"status"`
+	TaskID       string                    `json:"task_id"`
+	Title        string                    `json:"title"`
+	AssignedTo   string                    `json:"assigned_to"`
+	DependsOn    []string                  `json:"depends_on"`
+	Status       string                    `json:"status"`
+	Cancellation *taskCancellationDecision `json:"cancellation,omitempty"`
+}
+
+// taskCancellationDecision is written into the project node before TaskMeta.
+// It lets a retry validate the original human decision when the project write
+// succeeded but the following TaskMeta write failed.
+type taskCancellationDecision struct {
+	SubmissionID      string `json:"submission_id,omitempty"`
+	Reason            string `json:"reason"`
+	ReplacementTaskID string `json:"replacement_task_id,omitempty"`
+	CancelledAt       string `json:"cancelled_at"`
 }
 
 type loopMeta struct {
@@ -188,8 +199,8 @@ type interruptConfig struct {
 // spec path, submission summary/result status, deliverables list and result
 // path. TaskMeta is written by TeamHarness taskflow (delegate_task creates
 // spec.md + meta.json, submit_task adds summary/result_status/deliverables/
-// result_path) and pushed to shared storage via _sync_task, so the same
-// dual-prefix scan used for projects applies here.
+// result_path) and pushed to shared storage via _sync_task. Reads stay in the
+// project's owning scope and never fall back across team/global boundaries.
 type taskDetail struct {
 	TaskID       string `json:"task_id"`
 	ProjectID    string `json:"project_id,omitempty"`
@@ -201,6 +212,7 @@ type taskDetail struct {
 	Deliverables []any  `json:"deliverables,omitempty"`
 	ResultPath   string `json:"result_path,omitempty"`
 	CancelReason string `json:"cancel_reason,omitempty"`
+	SubmissionID string `json:"submission_id,omitempty"`
 }
 
 // normalizeTaskStatus maps ProjectMeta task status to the frontend-friendly
@@ -773,13 +785,11 @@ func (h *ProjectHandler) buildWorkflow(meta *projectMeta, team string, includeTa
 // readTasksDetail reads TaskMeta (shared/tasks/{id}/meta.json) for every task
 // in the project's graph and returns the detail list in node order.
 //
-// TaskMeta is stored under the same dual-prefix layout as projects
-// (teams/{team}/shared/tasks/{id}/meta.json for team members, shared/tasks/
-// {id}/meta.json for standalone workers) — _sync_task pushes the local
-// shared/tasks/{id} directory after delegate/ack/submit/cancel. We probe the
-// task prefix belonging to this project's team first, then the global
-// prefix, mirroring resolveProjectMeta. Reads are concurrent (W7 pattern) so
-// N tasks cost ~ceil(N/8) mc subprocess rounds instead of N serial spawns.
+// TaskMeta is read only from the project's owning scope:
+// teams/{team}/shared/tasks/{id}/meta.json for team projects, or
+// shared/tasks/{id}/meta.json for standalone projects. Reads are concurrent
+// (W7 pattern) so N tasks cost ~ceil(N/8) storage rounds instead of N serial
+// reads.
 func (h *ProjectHandler) readTasksDetail(meta *projectMeta, team string) []taskDetail {
 	// Collect unique task ids from the graph (project tasks, or loop tasks
 	// for loop plans — same set buildWorkflow renders).
@@ -864,6 +874,7 @@ func (h *ProjectHandler) readTasksDetail(meta *projectMeta, team string) []taskD
 			ResultStatus: str(raw["result_status"]),
 			ResultPath:   str(raw["result_path"]),
 			CancelReason: str(raw["cancel_reason"]),
+			SubmissionID: str(raw["submission_id"]),
 		}
 		if raw["project_id"] != nil {
 			detail.ProjectID = str(raw["project_id"])
@@ -2131,6 +2142,7 @@ func (h *ProjectHandler) ReplanProject(w http.ResponseWriter, r *http.Request) {
 // exists.
 func normalizeReplanTasks(raw []json.RawMessage, previous map[string]projectTaskMeta) ([]projectTaskMeta, error) {
 	out := make([]projectTaskMeta, 0, len(raw))
+	included := make(map[string]bool, len(raw))
 	for _, item := range raw {
 		var m map[string]any
 		if err := json.Unmarshal(item, &m); err != nil {
@@ -2140,6 +2152,7 @@ func normalizeReplanTasks(raw []json.RawMessage, previous map[string]projectTask
 		if taskID == "" {
 			return nil, fmt.Errorf("taskId is required")
 		}
+		included[taskID] = true
 		prev, hasPrev := previous[taskID]
 		status := firstString(m["status"])
 		if status == "" && hasPrev {
@@ -2150,6 +2163,9 @@ func normalizeReplanTasks(raw []json.RawMessage, previous map[string]projectTask
 		}
 		if status == "pending" {
 			status = "planned"
+		}
+		if hasPrev && prev.Cancellation != nil && status != prev.Status {
+			return nil, fmt.Errorf("task %s has a committed cancellation and cannot be reopened", taskID)
 		}
 		title := firstString(m["title"])
 		if title == "" && hasPrev {
@@ -2182,12 +2198,18 @@ func normalizeReplanTasks(raw []json.RawMessage, previous map[string]projectTask
 			}
 		}
 		out = append(out, projectTaskMeta{
-			TaskID:     taskID,
-			Title:      title,
-			AssignedTo: assignee,
-			DependsOn:  deps,
-			Status:     status,
+			TaskID:       taskID,
+			Title:        title,
+			AssignedTo:   assignee,
+			DependsOn:    deps,
+			Status:       status,
+			Cancellation: prev.Cancellation,
 		})
+	}
+	for taskID, prev := range previous {
+		if prev.Cancellation != nil && !included[taskID] {
+			return nil, fmt.Errorf("task %s has a committed cancellation and cannot be removed", taskID)
+		}
 	}
 	return out, nil
 }
@@ -2266,7 +2288,8 @@ func firstString(values ...any) string {
 // (shared/tasks/{id}/meta.json) and the project node status is updated to
 // cancelled.
 //
-// POST /api/v1/projects/{id}/tasks/{taskId}/cancel  body: {"reason":"...","replacementTaskId":"..."}
+// POST /api/v1/projects/{id}/tasks/{taskId}/cancel
+// body: {"reason":"...","replacementTaskId":"...","submissionId":"..."}
 func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("id")
 	taskID := r.PathValue("taskId")
@@ -2311,11 +2334,17 @@ func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	var reqBody struct {
 		Reason            string `json:"reason"`
 		ReplacementTaskID string `json:"replacementTaskId"`
+		SubmissionID      string `json:"submissionId"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&reqBody)
 	reason := strings.TrimSpace(reqBody.Reason)
 	if reason == "" {
 		writeError(w, http.StatusBadRequest, "reason is required")
+		return
+	}
+	replacementTaskID := strings.TrimSpace(reqBody.ReplacementTaskID)
+	if replacementTaskID != "" && !isPlainToken(replacementTaskID) {
+		writeError(w, http.StatusBadRequest, "replacementTaskId must be a plain token (letters, digits, '-', '_', '.')")
 		return
 	}
 
@@ -2326,11 +2355,13 @@ func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 		graphTasks = meta.Loop.Tasks
 	}
 	nodeStatus := ""
+	var projectCancellation *taskCancellationDecision
 	found := false
 	for _, t := range graphTasks {
 		if t.TaskID == taskID {
 			found = true
 			nodeStatus = t.Status
+			projectCancellation = t.Cancellation
 			break
 		}
 	}
@@ -2346,8 +2377,8 @@ func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read the task's TaskMeta (dual-prefix) to preserve fields when writing
-	// back, then stamp status=cancelled + cancel_reason.
+	// Read the task's TaskMeta from the project's owning scope to preserve fields
+	// when writing back, then apply the submission fence and cancellation.
 	taskData, err := readTaskMetaFirst(h, r.Context(), taskID, team)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "read task meta: "+err.Error())
@@ -2357,12 +2388,97 @@ func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "task meta not found")
 		return
 	}
+	if str(taskData["task_id"]) != taskID || str(taskData["project_id"]) != projectID {
+		writeError(w, http.StatusNotFound, "task meta not found")
+		return
+	}
+	persistedSubmissionID, _ := taskData["submission_id"].(string)
+	persistedSubmissionID = strings.TrimSpace(persistedSubmissionID)
+	requestedSubmissionID := strings.TrimSpace(reqBody.SubmissionID)
+	if persistedSubmissionID != "" && requestedSubmissionID == "" {
+		writeError(w, http.StatusConflict, "submissionId is required for the current task submission")
+		return
+	}
+	if requestedSubmissionID != "" && requestedSubmissionID != persistedSubmissionID {
+		writeError(w, http.StatusConflict, "submissionId does not match the current task submission")
+		return
+	}
+	if projectCancellation != nil &&
+		(strings.TrimSpace(projectCancellation.SubmissionID) != requestedSubmissionID ||
+			strings.TrimSpace(projectCancellation.Reason) != reason ||
+			strings.TrimSpace(projectCancellation.ReplacementTaskID) != replacementTaskID) {
+		writeError(w, http.StatusConflict, "cancel task conflicts with persisted project cancellation")
+		return
+	}
+	taskStatus, _ := taskData["status"].(string)
+	taskStatus = strings.TrimSpace(taskStatus)
+	if isTerminalTaskStatus(taskStatus) && taskStatus != "cancelled" {
+		writeError(w, http.StatusConflict, "cannot cancel terminal task: "+taskStatus)
+		return
+	}
+	persistedReason, _ := taskData["cancel_reason"].(string)
+	persistedReplacementTaskID, _ := taskData["replacement_task_id"].(string)
+	persistedCancelledAt, _ := taskData["cancelled_at"].(string)
+	continuation, hasContinuation := taskData["continuation"].(map[string]any)
+	continuationStatus, _ := continuation["status"].(string)
+	continuationResolution, _ := continuation["resolution"].(string)
+	continuationStatus = strings.TrimSpace(continuationStatus)
+	continuationResolution = strings.TrimSpace(continuationResolution)
+	if hasContinuation && continuationStatus == "resolved" && continuationResolution != "cancelled" {
+		writeError(w, http.StatusConflict, "task continuation already resolved as a different decision")
+		return
+	}
+	if taskStatus == "cancelled" && (strings.TrimSpace(persistedReason) != reason ||
+		strings.TrimSpace(persistedReplacementTaskID) != replacementTaskID) {
+		writeError(w, http.StatusConflict, "cancel task conflicts with existing cancellation")
+		return
+	}
+	fullyResolved := taskStatus == "cancelled" && nodeStatus == "cancelled" &&
+		strings.TrimSpace(persistedCancelledAt) != "" &&
+		(!hasContinuation || (continuationStatus == "resolved" && continuationResolution == "cancelled"))
+	if fullyResolved {
+		httputil.WriteJSON(w, http.StatusOK, h.buildWorkflow(meta, team, false))
+		return
+	}
 	taskData["status"] = "cancelled"
 	taskData["cancel_reason"] = reason
-	if reqBody.ReplacementTaskID != "" {
-		taskData["replacement_task_id"] = reqBody.ReplacementTaskID
+	cancelledAt := persistedCancelledAt
+	if strings.TrimSpace(cancelledAt) == "" {
+		if projectCancellation != nil {
+			cancelledAt = strings.TrimSpace(projectCancellation.CancelledAt)
+		}
+		if hasContinuation {
+			if cancelledAt == "" {
+				resolvedAt, _ := continuation["resolved_at"].(string)
+				cancelledAt = strings.TrimSpace(resolvedAt)
+			}
+		}
+		if cancelledAt == "" {
+			cancelledAt = utcTimestamp()
+		}
+		taskData["cancelled_at"] = cancelledAt
+	}
+	if hasContinuation && len(continuation) > 0 {
+		continuation["status"] = "resolved"
+		continuation["resolution"] = "cancelled"
+		if resolvedAt, _ := continuation["resolved_at"].(string); strings.TrimSpace(resolvedAt) == "" {
+			continuation["resolved_at"] = cancelledAt
+		}
+		taskData["continuation"] = continuation
+	}
+	if replacementTaskID != "" {
+		taskData["replacement_task_id"] = replacementTaskID
 	} else {
 		delete(taskData, "replacement_task_id")
+	}
+	cancellationDecision := projectCancellation
+	if cancellationDecision == nil {
+		cancellationDecision = &taskCancellationDecision{
+			SubmissionID:      requestedSubmissionID,
+			Reason:            reason,
+			ReplacementTaskID: replacementTaskID,
+			CancelledAt:       cancelledAt,
+		}
 	}
 	taskJSON, err := json.Marshal(taskData)
 	if err != nil {
@@ -2374,12 +2490,14 @@ func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	for i := range meta.Tasks {
 		if meta.Tasks[i].TaskID == taskID {
 			meta.Tasks[i].Status = "cancelled"
+			meta.Tasks[i].Cancellation = cancellationDecision
 		}
 	}
 	if meta.Loop != nil {
 		for i := range meta.Loop.Tasks {
 			if meta.Loop.Tasks[i].TaskID == taskID {
 				meta.Loop.Tasks[i].Status = "cancelled"
+				meta.Loop.Tasks[i].Cancellation = cancellationDecision
 			}
 		}
 	}
@@ -2409,9 +2527,9 @@ func isTerminalTaskStatus(status string) bool {
 	}
 }
 
-// readTaskMetaFirst reads a task's TaskMeta from the dual-prefix layout
-// (team first, then global) and returns it as a mutable map. Returns nil when
-// no readable TaskMeta exists in either prefix.
+// readTaskMetaFirst reads a task's TaskMeta from the project's owning scope
+// and returns it as a mutable map. Returns nil when no readable TaskMeta
+// exists in that scope.
 func readTaskMetaFirst(h *ProjectHandler, ctx context.Context, taskID, team string) (map[string]any, error) {
 	for _, key := range taskMetaKeys(taskID, team) {
 		data, err := h.oss.GetObject(ctx, key)
@@ -2557,18 +2675,25 @@ func (h *ProjectHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// isPlainToken reports whether s is a safe plain token usable in an object
-// key (no path traversal / separators).
+// isPlainToken reports whether s matches TeamHarness's safe-id contract:
+// [A-Za-z0-9][A-Za-z0-9._-]*.
 func isPlainToken(s string) bool {
-	for _, r := range s {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		alphaNumeric := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'
+		if i == 0 && !alphaNumeric {
+			return false
+		}
 		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case alphaNumeric:
 		case r == '-', r == '_', r == '.':
 		default:
 			return false
 		}
 	}
-	return s != ""
+	return true
 }
 
 // CompleteProject marks a project completed. All tasks must be in a terminal

@@ -1744,6 +1744,103 @@ def test_submit_pushes_and_verifies_result_payload_before_the_meta_commit_point(
     ]
 
 
+def test_plan_dag_preserves_a_committed_cancellation_decision(
+    tmp_path: Path,
+    successful_side_effects: dict[str, list[Any]],
+) -> None:
+    project_id, task_id = _write_project_and_task(tmp_path, task_status="cancelled")
+    project_path = tmp_path / "shared" / "projects" / project_id / "meta.json"
+    project = json.loads(project_path.read_text(encoding="utf-8"))
+    project["tasks"][0]["cancellation"] = {
+        "submission_id": "submission-1",
+        "reason": "obsolete",
+        "replacement_task_id": "replacement-1",
+        "cancelled_at": "2026-08-18T00:00:00Z",
+    }
+    server._write_json(project_path, project)
+
+    replanned = _tool_payload(
+        "projectflow",
+        {
+            "role": "leader",
+            "action": "plan_dag",
+            "workspaceDir": str(tmp_path),
+            "payload": {
+                "projectId": project_id,
+                "tasks": [{"taskId": task_id, "title": "Still cancelled"}],
+            },
+        },
+    )
+
+    assert replanned["ok"] is True
+    node = replanned["project"]["tasks"][0]
+    assert node["status"] == "cancelled"
+    assert node["cancellation"] == project["tasks"][0]["cancellation"]
+
+
+def test_plan_dag_cannot_reopen_a_committed_cancellation_decision(
+    tmp_path: Path,
+    successful_side_effects: dict[str, list[Any]],
+) -> None:
+    project_id, task_id = _write_project_and_task(tmp_path, task_status="cancelled")
+    project_path = tmp_path / "shared" / "projects" / project_id / "meta.json"
+    project = json.loads(project_path.read_text(encoding="utf-8"))
+    project["tasks"][0]["cancellation"] = {
+        "submission_id": "submission-1",
+        "reason": "obsolete",
+        "cancelled_at": "2026-08-18T00:00:00Z",
+    }
+    server._write_json(project_path, project)
+    before = project_path.read_bytes()
+
+    rejected = _tool_payload(
+        "projectflow",
+        {
+            "role": "leader",
+            "action": "plan_dag",
+            "workspaceDir": str(tmp_path),
+            "payload": {
+                "projectId": project_id,
+                "tasks": [{"taskId": task_id, "title": "Reopened", "status": "planned"}],
+            },
+        },
+    )
+
+    assert rejected["ok"] is False
+    assert "committed cancellation" in rejected["error"]
+    assert project_path.read_bytes() == before
+
+
+def test_plan_dag_cannot_remove_a_committed_cancellation_decision(
+    tmp_path: Path,
+    successful_side_effects: dict[str, list[Any]],
+) -> None:
+    project_id, _task_id = _write_project_and_task(tmp_path, task_status="cancelled")
+    project_path = tmp_path / "shared" / "projects" / project_id / "meta.json"
+    project = json.loads(project_path.read_text(encoding="utf-8"))
+    project["tasks"][0]["cancellation"] = {
+        "submission_id": "submission-1",
+        "reason": "obsolete",
+        "cancelled_at": "2026-08-18T00:00:00Z",
+    }
+    server._write_json(project_path, project)
+    before = project_path.read_bytes()
+
+    rejected = _tool_payload(
+        "projectflow",
+        {
+            "role": "leader",
+            "action": "plan_dag",
+            "workspaceDir": str(tmp_path),
+            "payload": {"projectId": project_id, "tasks": []},
+        },
+    )
+
+    assert rejected["ok"] is False
+    assert "committed cancellation" in rejected["error"]
+    assert project_path.read_bytes() == before
+
+
 def test_submit_meta_commit_must_be_remotely_verified_before_success(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

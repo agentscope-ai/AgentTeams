@@ -78,7 +78,7 @@ Optional query parameter:
 
 | Parameter | Type | Meaning |
 |:--|:--|:--|
-| `includeTasks` | `bool` | When `true`, also read each task's TaskMeta (`shared/tasks/{id}/meta.json`) and attach a `tasks_detail` array with spec/result/deliverable fields. Default `false` keeps the response lightweight. |
+| `includeTasks` | `bool` | When `true`, also read each task's TaskMeta (`shared/tasks/{id}/meta.json`) and attach a `tasks_detail` array with spec/result/deliverable fields and the opaque `submission_id` fence. Default `false` keeps the response lightweight. |
 
 Response `200 OK`:
 
@@ -124,6 +124,7 @@ Response `200 OK`:
       "assigned_to": "@w1:matrix.local",
       "summary": "Alpha report done",
       "result_status": "SUCCESS",
+      "submission_id": "submission-123",
       "deliverables": [{"type": "file", "path": "shared/tasks/t1/output.pdf"}],
       "result_path": "shared/tasks/t1/result.md"
     }
@@ -134,7 +135,8 @@ Response `200 OK`:
 `tasks_detail` is only present when `?includeTasks=true`. It surfaces the
 TaskMeta fields that the project-level `nodes[]` summary does not carry:
 `spec_path` (task spec file), `summary` / `result_status` / `result_path`
-(submission result), `deliverables` (artifact list) and `cancel_reason`.
+(submission result), `deliverables` (artifact list), `cancel_reason`, and the
+opaque `submission_id` used to fence accept/cancel decisions.
 TaskMeta is read from the project's owning scope only: team projects read
 `teams/{team}/shared/tasks/{id}/meta.json`, standalone projects read
 `shared/tasks/{id}/meta.json`. There is no cross-scope fallback, and a
@@ -495,16 +497,42 @@ unknown dependencies, and dependency cycles are rejected with `400`.
 Preconditions (`409`): `plan_type` must be `dag` (loop replans go through
 `record_loop_iteration`), status must be `active`, and no task may be
 `in_progress`/`submitted`. Response `200` returns the updated workflow.
+Tasks with a persisted cancellation decision keep that decision when retained
+in a replan. They cannot be reopened or removed and then re-added under the
+same task id; create a new task id for replacement work.
 
 ### `POST /api/v1/projects/{id}/tasks/{taskId}/cancel`
 
-Cancel a single task. Body requires `reason` (and optional
-`replacementTaskId`). The task must be mutable — a terminal task
-(completed/revision/blocked/cancelled) is rejected with `409`. The task's
-`TaskMeta` is stamped `status=cancelled` + `cancel_reason` and the project
-node status is updated. Response `200` returns the updated workflow.
-Errors: `400` missing reason; `404` task not in project / task meta
-missing; `409` terminal task.
+Cancel a single task:
+
+```json
+{
+  "reason": "no longer needed",
+  "replacementTaskId": "replacement-01",
+  "submissionId": "submission-123"
+}
+```
+
+`reason` is required and `replacementTaskId` is optional. `submissionId` is
+conditionally required: when TaskMeta already has `submission_id`, callers
+must send that exact opaque value. Missing, invented, or stale identities are
+rejected before either ProjectMeta or TaskMeta is changed.
+
+On success, the project node and TaskMeta become `cancelled`; TaskMeta records
+stable `cancel_reason` / `replacement_task_id` / `cancelled_at` fields and
+resolves an existing pending continuation as `cancelled` without changing its
+`delivery_id`. Repeating the same cancellation is idempotent. A different
+reason, replacement task, or submission identity conflicts with the committed
+decision. Tasks already `completed`, `revision`, or `blocked` cannot be
+cancelled. Response `200` returns the updated workflow.
+
+The Controller writes a small cancellation decision envelope into the project
+node before writing TaskMeta. If the second write fails, an identical retry can
+finish the TaskMeta/continuation update; a retry with a different reason,
+replacement, or submission identity is rejected.
+
+Errors: `400` missing reason or invalid replacement task id; `404` task not in project / task meta missing;
+`409` terminal task, submission fence failure, or conflicting cancellation.
 
 ### `POST /api/v1/projects/{id}/complete`
 
@@ -552,6 +580,7 @@ agt get projects                      # list all
 agt get projects --team biz-team      # filter by team
 agt get projects demo-project-001     # workflow detail
 agt get projects demo-project-001 -o json
+agt get projects demo-project-001 --include-tasks -o json
 agt get projects demo-project-001 --mermaid   # render DAG as mermaid
 ```
 
@@ -559,6 +588,9 @@ The CLI forwards whatever bearer token is configured (`AGENTTEAMS_AUTH_TOKEN`
 or `AGENTTEAMS_AUTH_TOKEN_FILE`) verbatim, so an L2 human can also use it by
 pointing either variable at their own Matrix access token — no separate CLI
 auth mode is needed.
+
+`--include-tasks` requires `-o json`; the default detail view does not render
+raw TaskMeta fields.
 
 ### `agt project` (the lifecycle write API write commands)
 
@@ -570,7 +602,8 @@ agt project create --title "New project" --team biz-team --source matrix
 agt project pause demo-project-001 --reason "customer review"
 agt project resume demo-project-001
 agt project replan demo-project-001 --tasks tasks.json   # JSON array file
-agt project cancel demo-project-001 demo-project-001-01 --reason "no longer needed"
+agt project cancel demo-project-001 demo-project-001-01 \
+  --reason "no longer needed" --submission-id submission-123 --team biz-team
 agt project complete demo-project-001
 ```
 

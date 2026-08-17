@@ -1492,6 +1492,7 @@ func TestGetProjectWorkflow_IncludeTasksDetail(t *testing.T) {
 		"task_id":       "t1",
 		"project_id":    "p1",
 		"status":        "completed",
+		"submission_id": "submission-1",
 		"spec_path":     "shared/tasks/t1/spec.md",
 		"assigned_to":   "@w1",
 		"summary":       "Alpha report done",
@@ -1534,6 +1535,9 @@ func TestGetProjectWorkflow_IncludeTasksDetail(t *testing.T) {
 	d1 := byID["t1"]
 	if d1.Summary != "Alpha report done" || d1.ResultStatus != "SUCCESS" || d1.ResultPath != "shared/tasks/t1/result.md" {
 		t.Fatalf("t1 detail wrong: %+v", d1)
+	}
+	if d1.SubmissionID != "submission-1" {
+		t.Fatalf("t1 submission_id=%q, want submission-1", d1.SubmissionID)
 	}
 	if len(d1.Deliverables) != 1 {
 		t.Fatalf("t1 deliverables=%d, want 1", len(d1.Deliverables))
@@ -3228,6 +3232,95 @@ func TestReplanProject_PreservesPrevious(t *testing.T) {
 	}
 }
 
+func TestReplanProject_PreservesCancellationDecision(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{{
+			"task_id": "t1", "title": "T1", "status": "cancelled", "depends_on": []string{},
+			"cancellation": map[string]any{
+				"submission_id": "submission-1", "reason": "obsolete", "replacement_task_id": "t2", "cancelled_at": "2026-08-18T00:00:00Z",
+			},
+		}},
+	})
+	h := newProjectTestHandler(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/replan",
+		strings.NewReader(`{"tasks":[{"taskId":"t1","title":"Still cancelled"}]}`))
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.ReplanProject(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	projectData, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	var project map[string]any
+	_ = json.Unmarshal(projectData, &project)
+	tasks, _ := project["tasks"].([]any)
+	node, _ := tasks[0].(map[string]any)
+	decision, _ := node["cancellation"].(map[string]any)
+	if node["status"] != "cancelled" || decision["submission_id"] != "submission-1" ||
+		decision["reason"] != "obsolete" || decision["cancelled_at"] != "2026-08-18T00:00:00Z" {
+		t.Fatalf("replanned node=%v, want preserved cancellation decision", node)
+	}
+}
+
+func TestReplanProject_CannotReopenCancellationDecision(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{{
+			"task_id": "t1", "title": "T1", "status": "cancelled", "depends_on": []string{},
+			"cancellation": map[string]any{
+				"submission_id": "submission-1", "reason": "obsolete", "cancelled_at": "2026-08-18T00:00:00Z",
+			},
+		}},
+	})
+	before, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	h := newProjectTestHandler(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/replan",
+		strings.NewReader(`{"tasks":[{"taskId":"t1","title":"Reopened","status":"planned"}]}`))
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.ReplanProject(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+	after, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	if string(after) != string(before) {
+		t.Fatalf("reopen attempt changed project: %s", after)
+	}
+}
+
+func TestReplanProject_CannotRemoveCancellationDecision(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{{
+			"task_id": "t1", "title": "T1", "status": "cancelled", "depends_on": []string{},
+			"cancellation": map[string]any{
+				"submission_id": "submission-1", "reason": "obsolete", "cancelled_at": "2026-08-18T00:00:00Z",
+			},
+		}},
+	})
+	before, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	h := newProjectTestHandler(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/replan", strings.NewReader(`{"tasks":[]}`))
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.ReplanProject(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+	after, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	if string(after) != string(before) {
+		t.Fatalf("remove attempt changed project: %s", after)
+	}
+}
+
 func TestReplanProject_DuplicateID400(t *testing.T) {
 	store := ossfake.NewMemory()
 	putProject(store, "shared/projects/p1/meta.json", map[string]any{
@@ -3427,12 +3520,281 @@ func TestCancelTask_ActiveTask(t *testing.T) {
 	if task["status"] != "cancelled" || task["cancel_reason"] != "no longer needed" || task["replacement_task_id"] != "t9" {
 		t.Fatalf("task=%v, want cancelled/reason/t9", task)
 	}
+	cancelledAt, _ := task["cancelled_at"].(string)
+	if strings.TrimSpace(cancelledAt) == "" {
+		t.Fatalf("task=%v, want cancelled_at", task)
+	}
+	if _, ok := task["continuation"]; ok {
+		t.Fatalf("legacy task=%v, must not invent continuation without delivery identity", task)
+	}
 	projData, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
 	var proj map[string]any
 	_ = json.Unmarshal(projData, &proj)
 	tasks := proj["tasks"].([]any)
 	if tasks[0].(map[string]any)["status"] != "cancelled" {
 		t.Fatalf("project node status=%v, want cancelled", tasks[0].(map[string]any)["status"])
+	}
+}
+
+func TestCancelTask_SubmittedContinuationResolves(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "submitted", "depends_on": []string{}},
+		},
+	})
+	putTask(store, "shared/tasks/t1/meta.json", map[string]any{
+		"task_id":       "t1",
+		"project_id":    "p1",
+		"status":        "submitted",
+		"submission_id": "submission-1",
+		"continuation": map[string]any{
+			"status":      "pending",
+			"delivery_id": "delivery-1",
+		},
+	})
+	h := newProjectTestHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel",
+		strings.NewReader(`{"reason":"no longer needed","submissionId":"submission-1"}`))
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.CancelTask(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	taskData, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	var task map[string]any
+	_ = json.Unmarshal(taskData, &task)
+	cancelledAt, _ := task["cancelled_at"].(string)
+	if task["status"] != "cancelled" || strings.TrimSpace(cancelledAt) == "" {
+		t.Fatalf("task=%v, want cancelled with stable cancelled_at", task)
+	}
+	if task["submission_id"] != "submission-1" {
+		t.Fatalf("task=%v, must preserve submission identity", task)
+	}
+	continuation, _ := task["continuation"].(map[string]any)
+	if continuation["status"] != "resolved" || continuation["resolution"] != "cancelled" {
+		t.Fatalf("continuation=%v, want resolved/cancelled", continuation)
+	}
+	if continuation["delivery_id"] != "delivery-1" || continuation["resolved_at"] != cancelledAt {
+		t.Fatalf("continuation=%v, want original delivery id and resolved_at=%s", continuation, cancelledAt)
+	}
+}
+
+func TestCancelTask_SubmissionFence(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		wantStatus int
+	}{
+		{name: "missing", body: `{"reason":"no longer needed"}`, wantStatus: http.StatusConflict},
+		{name: "stale", body: `{"reason":"no longer needed","submissionId":"submission-old"}`, wantStatus: http.StatusConflict},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := ossfake.NewMemory()
+			putProject(store, "shared/projects/p1/meta.json", map[string]any{
+				"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+				"tasks": []map[string]any{
+					{"task_id": "t1", "title": "T1", "status": "submitted", "depends_on": []string{}},
+				},
+			})
+			putTask(store, "shared/tasks/t1/meta.json", map[string]any{
+				"task_id":       "t1",
+				"project_id":    "p1",
+				"status":        "submitted",
+				"submission_id": "submission-current",
+				"continuation": map[string]any{
+					"status":      "pending",
+					"delivery_id": "delivery-1",
+				},
+			})
+			beforeProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+			beforeTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+			h := newProjectTestHandler(t, store)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel", strings.NewReader(tt.body))
+			req.SetPathValue("id", "p1")
+			req.SetPathValue("taskId", "t1")
+			req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+			rec := httptest.NewRecorder()
+			h.CancelTask(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status=%d body=%s, want %d", rec.Code, rec.Body.String(), tt.wantStatus)
+			}
+			afterProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+			afterTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+			if string(afterProject) != string(beforeProject) || string(afterTask) != string(beforeTask) {
+				t.Fatalf("submission fence changed state: project=%s task=%s", afterProject, afterTask)
+			}
+		})
+	}
+}
+
+func TestCancelTask_LegacyRejectsUnknownSubmissionID(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}}},
+	})
+	putTask(store, "shared/tasks/t1/meta.json", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "in_progress",
+	})
+	beforeProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	beforeTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	h := newProjectTestHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel",
+		strings.NewReader(`{"reason":"obsolete","submissionId":"invented"}`))
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.CancelTask(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s, want 409", rec.Code, rec.Body.String())
+	}
+	afterProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	afterTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	if string(afterProject) != string(beforeProject) || string(afterTask) != string(beforeTask) {
+		t.Fatalf("unknown legacy identity changed state: project=%s task=%s", afterProject, afterTask)
+	}
+}
+
+func TestCancelTask_RepeatedDecisionIsIdempotentAndConflictingPayloadIsRejected(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "submitted", "depends_on": []string{}},
+		},
+	})
+	putTask(store, "shared/tasks/t1/meta.json", map[string]any{
+		"task_id":       "t1",
+		"project_id":    "p1",
+		"status":        "submitted",
+		"submission_id": "submission-1",
+		"continuation": map[string]any{
+			"status":      "pending",
+			"delivery_id": "delivery-1",
+		},
+	})
+	h := newProjectTestHandler(t, store)
+
+	cancel := func(body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel", strings.NewReader(body))
+		req.SetPathValue("id", "p1")
+		req.SetPathValue("taskId", "t1")
+		req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+		rec := httptest.NewRecorder()
+		h.CancelTask(rec, req)
+		return rec
+	}
+
+	body := `{"reason":"superseded","replacementTaskId":"t2","submissionId":"submission-1"}`
+	if rec := cancel(body); rec.Code != http.StatusOK {
+		t.Fatalf("first cancel status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	firstProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	firstTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	if rec := cancel(body); rec.Code != http.StatusOK {
+		t.Fatalf("retry status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	secondProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	secondTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	if string(secondProject) != string(firstProject) || string(secondTask) != string(firstTask) {
+		t.Fatalf("identical retry changed state: project=%s task=%s", secondProject, secondTask)
+	}
+
+	conflicts := []string{
+		`{"reason":"different","replacementTaskId":"t2","submissionId":"submission-1"}`,
+		`{"reason":"superseded","replacementTaskId":"t3","submissionId":"submission-1"}`,
+		`{"reason":"superseded","submissionId":"submission-1"}`,
+	}
+	for _, conflictBody := range conflicts {
+		rec := cancel(conflictBody)
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("conflict body=%s status=%d response=%s", conflictBody, rec.Code, rec.Body.String())
+		}
+		afterProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+		afterTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+		if string(afterProject) != string(firstProject) || string(afterTask) != string(firstTask) {
+			t.Fatalf("conflicting retry changed state: project=%s task=%s", afterProject, afterTask)
+		}
+	}
+}
+
+func TestCancelTask_TaskMetaTerminalDecisionCannotBeOverwritten(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "submitted", "depends_on": []string{}},
+		},
+	})
+	putTask(store, "shared/tasks/t1/meta.json", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "completed",
+		"submission_id": "submission-1",
+	})
+	beforeProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	beforeTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	h := newProjectTestHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel",
+		strings.NewReader(`{"reason":"too late","submissionId":"submission-1"}`))
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.CancelTask(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s, want 409", rec.Code, rec.Body.String())
+	}
+	afterProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	afterTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	if string(afterProject) != string(beforeProject) || string(afterTask) != string(beforeTask) {
+		t.Fatalf("terminal task decision changed: project=%s task=%s", afterProject, afterTask)
+	}
+}
+
+func TestCancelTask_RejectsTaskMetaOwnedByAnotherProject(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{{"task_id": "t1", "title": "T1", "status": "submitted", "depends_on": []string{}}},
+	})
+	putTask(store, "shared/tasks/t1/meta.json", map[string]any{
+		"task_id": "t1", "project_id": "p2", "status": "submitted", "submission_id": "p2-submission",
+		"continuation": map[string]any{"status": "pending", "delivery_id": "p2-delivery"},
+	})
+	beforeProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	beforeTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	h := newProjectTestHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel",
+		strings.NewReader(`{"reason":"wrong project","submissionId":"p2-submission"}`))
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.CancelTask(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s, want 404", rec.Code, rec.Body.String())
+	}
+	afterProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	afterTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	if string(afterProject) != string(beforeProject) || string(afterTask) != string(beforeTask) {
+		t.Fatalf("ownership mismatch changed state: project=%s task=%s", afterProject, afterTask)
 	}
 }
 
@@ -3481,6 +3843,39 @@ func TestCancelTask_NoReason400(t *testing.T) {
 	h.CancelTask(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d, want 400 (reason required)", rec.Code)
+	}
+}
+
+func TestCancelTask_InvalidReplacementID400(t *testing.T) {
+	for _, replacement := range []string{"../t2", "..", ".hidden", "-task", "_task"} {
+		t.Run(replacement, func(t *testing.T) {
+			store := ossfake.NewMemory()
+			putProject(store, "shared/projects/p1/meta.json", map[string]any{
+				"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+				"tasks": []map[string]any{{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}}},
+			})
+			putTask(store, "shared/tasks/t1/meta.json", map[string]any{
+				"task_id": "t1", "project_id": "p1", "status": "in_progress",
+			})
+			beforeProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+			beforeTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+			h := newProjectTestHandler(t, store)
+			body, _ := json.Marshal(map[string]any{"reason": "obsolete", "replacementTaskId": replacement})
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel", strings.NewReader(string(body)))
+			req.SetPathValue("id", "p1")
+			req.SetPathValue("taskId", "t1")
+			req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+			rec := httptest.NewRecorder()
+			h.CancelTask(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+			}
+			afterProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+			afterTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+			if string(afterProject) != string(beforeProject) || string(afterTask) != string(beforeTask) {
+				t.Fatalf("invalid replacement changed state: project=%s task=%s", afterProject, afterTask)
+			}
+		})
 	}
 }
 
@@ -3990,5 +4385,184 @@ func TestCancelTask_RetryConvergesBothObjects(t *testing.T) {
 	_ = json.Unmarshal(taskData2, &task2)
 	if task2["status"] != "cancelled" || task2["cancel_reason"] != "obsolete" {
 		t.Fatalf("task=%v, want cancelled + reason after retry", task2)
+	}
+}
+
+func TestCancelTask_RetryAfterTaskWriteFailureResolvesContinuation(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{{"task_id": "t1", "title": "T1", "status": "submitted", "depends_on": []string{}}},
+	})
+	putTask(store, "shared/tasks/t1/meta.json", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "submitted",
+		"submission_id": "submission-1",
+		"continuation":  map[string]any{"status": "pending", "delivery_id": "delivery-1"},
+	})
+	body := `{"reason":"obsolete","replacementTaskId":"t2","submissionId":"submission-1"}`
+
+	failFirst := &failTaskPutOSS{StorageClient: &mcLikeOSS{Memory: store}, failPrefix: "shared/tasks/t1/", failures: 1}
+	h := newProjectTestHandlerWithOSS(t, failFirst)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel", strings.NewReader(body))
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.CancelTask(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("first attempt status=%d body=%s, want 500", rec.Code, rec.Body.String())
+	}
+
+	taskData, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	var beforeRetry map[string]any
+	_ = json.Unmarshal(taskData, &beforeRetry)
+	continuation, _ := beforeRetry["continuation"].(map[string]any)
+	if beforeRetry["status"] != "submitted" || continuation["status"] != "pending" {
+		t.Fatalf("task after failed write=%v, want original submitted/pending state", beforeRetry)
+	}
+
+	h2 := newProjectTestHandler(t, store)
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel", strings.NewReader(body))
+	req2.SetPathValue("id", "p1")
+	req2.SetPathValue("taskId", "t1")
+	req2 = withCaller(req2, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec2 := httptest.NewRecorder()
+	h2.CancelTask(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("retry status=%d body=%s, want 200", rec2.Code, rec2.Body.String())
+	}
+
+	taskData, _ = store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	var repaired map[string]any
+	_ = json.Unmarshal(taskData, &repaired)
+	repairedContinuation, _ := repaired["continuation"].(map[string]any)
+	if repaired["status"] != "cancelled" || repaired["cancelled_at"] == "" {
+		t.Fatalf("repaired task=%v, want cancelled with cancelled_at", repaired)
+	}
+	if repairedContinuation["status"] != "resolved" || repairedContinuation["resolution"] != "cancelled" ||
+		repairedContinuation["delivery_id"] != "delivery-1" || repairedContinuation["resolved_at"] == "" {
+		t.Fatalf("repaired continuation=%v", repairedContinuation)
+	}
+}
+
+func TestCancelTask_TaskWriteFailureRejectsConflictingRetry(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{{"task_id": "t1", "title": "T1", "status": "submitted", "depends_on": []string{}}},
+	})
+	putTask(store, "shared/tasks/t1/meta.json", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "submitted",
+		"submission_id": "submission-1",
+		"continuation":  map[string]any{"status": "pending", "delivery_id": "delivery-1"},
+	})
+
+	failFirst := &failTaskPutOSS{StorageClient: &mcLikeOSS{Memory: store}, failPrefix: "shared/tasks/t1/", failures: 1}
+	h := newProjectTestHandlerWithOSS(t, failFirst)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel",
+		strings.NewReader(`{"reason":"first decision","replacementTaskId":"t2","submissionId":"submission-1"}`))
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.CancelTask(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("first attempt status=%d body=%s, want 500", rec.Code, rec.Body.String())
+	}
+	projectData, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	var project map[string]any
+	_ = json.Unmarshal(projectData, &project)
+	projectTasks, _ := project["tasks"].([]any)
+	decision, _ := projectTasks[0].(map[string]any)["cancellation"].(map[string]any)
+	if decision["submission_id"] != "submission-1" || decision["reason"] != "first decision" ||
+		decision["replacement_task_id"] != "t2" || decision["cancelled_at"] == "" {
+		t.Fatalf("project cancellation decision=%v", decision)
+	}
+
+	h2 := newProjectTestHandler(t, store)
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel",
+		strings.NewReader(`{"reason":"different decision","replacementTaskId":"t3","submissionId":"submission-1"}`))
+	req2.SetPathValue("id", "p1")
+	req2.SetPathValue("taskId", "t1")
+	req2 = withCaller(req2, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec2 := httptest.NewRecorder()
+	h2.CancelTask(rec2, req2)
+	if rec2.Code != http.StatusConflict {
+		t.Fatalf("conflicting retry status=%d body=%s, want 409", rec2.Code, rec2.Body.String())
+	}
+
+	taskData, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	var task map[string]any
+	_ = json.Unmarshal(taskData, &task)
+	continuation, _ := task["continuation"].(map[string]any)
+	if task["status"] != "submitted" || continuation["status"] != "pending" {
+		t.Fatalf("conflicting retry changed task=%v", task)
+	}
+}
+
+func TestCancelTask_RetryRepairsPreviouslyCancelledPendingContinuation(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{{"task_id": "t1", "title": "T1", "status": "cancelled", "depends_on": []string{}}},
+	})
+	putTask(store, "shared/tasks/t1/meta.json", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "cancelled",
+		"submission_id": "submission-1",
+		"cancel_reason": "obsolete",
+		"continuation":  map[string]any{"status": "pending", "delivery_id": "delivery-1"},
+	})
+	h := newProjectTestHandler(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel",
+		strings.NewReader(`{"reason":"obsolete","submissionId":"submission-1"}`))
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.CancelTask(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	taskData, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	var task map[string]any
+	_ = json.Unmarshal(taskData, &task)
+	continuation, _ := task["continuation"].(map[string]any)
+	if task["cancelled_at"] == "" || continuation["status"] != "resolved" ||
+		continuation["resolution"] != "cancelled" || continuation["delivery_id"] != "delivery-1" {
+		t.Fatalf("repaired task=%v", task)
+	}
+}
+
+func TestCancelTask_RetryRepairsLegacyCancelledTaskWithoutTimestamp(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{{"task_id": "t1", "title": "T1", "status": "cancelled", "depends_on": []string{}}},
+	})
+	putTask(store, "shared/tasks/t1/meta.json", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "cancelled", "cancel_reason": "obsolete",
+	})
+	h := newProjectTestHandler(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel",
+		strings.NewReader(`{"reason":"obsolete"}`))
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.CancelTask(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	taskData, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	var task map[string]any
+	_ = json.Unmarshal(taskData, &task)
+	cancelledAt, _ := task["cancelled_at"].(string)
+	if strings.TrimSpace(cancelledAt) == "" {
+		t.Fatalf("legacy cancelled task=%v, want repaired cancelled_at", task)
+	}
+	if _, ok := task["continuation"]; ok {
+		t.Fatalf("legacy cancelled task=%v, must not invent continuation", task)
 	}
 }

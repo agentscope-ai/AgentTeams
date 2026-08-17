@@ -2868,13 +2868,35 @@ def _normalize_task(raw: dict[str, Any], previous: dict[str, Any] | None = None)
     status = str(raw.get("status") or previous.get("status") or "planned")
     if status == "pending":
         status = "planned"
-    return {
+    cancellation = previous.get("cancellation") if isinstance(previous.get("cancellation"), dict) else None
+    if cancellation and raw.get("status") is not None and status != str(previous.get("status") or ""):
+        raise ValueError(f"task {task_id} has a committed cancellation and cannot be reopened")
+    normalized = {
         "task_id": task_id,
         "title": str(raw.get("title") or previous.get("title") or task_id),
         "assigned_to": str(raw.get("assignedTo") or raw.get("assigned_to") or previous.get("assigned_to") or ""),
         "depends_on": [str(item) for item in (raw.get("dependsOn") or raw.get("depends_on") or previous.get("depends_on") or [])],
         "status": status,
     }
+    if cancellation:
+        normalized["cancellation"] = dict(cancellation)
+    return normalized
+
+
+def _normalize_tasks(
+    raw_tasks: list[Any],
+    previous: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    planned = [
+        _normalize_task(task, previous.get(str(task.get("taskId") or task.get("task_id"))))
+        for task in raw_tasks
+        if isinstance(task, dict)
+    ]
+    included = {str(task.get("task_id") or "") for task in planned}
+    for task_id, old_task in previous.items():
+        if isinstance(old_task.get("cancellation"), dict) and task_id not in included:
+            raise ValueError(f"task {task_id} has a committed cancellation and cannot be removed")
+    return planned
 
 
 def _validate_task_graph(tasks: list[dict[str, Any]]) -> None:
@@ -3739,11 +3761,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             raw_tasks = payload.get("tasks")
             if not isinstance(raw_tasks, list):
                 raise ValueError("tasks must be a list")
-            planned_tasks = [
-                _normalize_task(task, previous.get(str(task.get("taskId") or task.get("task_id"))))
-                for task in raw_tasks
-                if isinstance(task, dict)
-            ]
+            planned_tasks = _normalize_tasks(raw_tasks, previous)
             _validate_task_graph(planned_tasks)
             project["tasks"] = planned_tasks
             project["plan_type"] = "dag"
@@ -3779,11 +3797,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             )
             if current_iteration > max_iterations:
                 raise ValueError("currentIteration cannot exceed maxIterations")
-            planned_tasks = [
-                _normalize_task(task, previous_tasks.get(str(task.get("taskId") or task.get("task_id"))))
-                for task in raw_tasks
-                if isinstance(task, dict)
-            ]
+            planned_tasks = _normalize_tasks(raw_tasks, previous_tasks)
             _validate_task_graph(planned_tasks)
             loop = {
                 "goal": str(payload.get("goal") or previous_loop.get("goal") or "").strip(),

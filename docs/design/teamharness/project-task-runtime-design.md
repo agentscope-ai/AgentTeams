@@ -72,6 +72,7 @@ channel 或后续事件唤醒时，通过持久化 project/task state 恢复上�
 | `reply_route` | 最终 requester report 路由；不得包含 secret。 |
 | `parent_task_id` | 子项目来自上游 task 时记录关联。 |
 | `requester_report` | 是否存在待发送 requester report，以及对应 result/report 路径。 |
+| `tasks[].cancellation` | Controller 取消任务时先写入的决定 envelope，包含 submission identity、reason、replacement 和首次取消时间；用于 ProjectMeta 已写但 TaskMeta 写失败后的重试校验。 |
 
 ### TaskMeta
 
@@ -116,7 +117,7 @@ channel 或后续事件唤醒时，通过持久化 project/task state 恢复上�
 | `submission_id` | 首次 `submit_task` 生成的不透明、不可变提交身份；调用方不得解析或假定 UUID 格式。 |
 | `result_digest` | 结构化 TaskResult 的 canonical SHA-256 摘要，用于判断重试是否仍是同一提交。 |
 | `continuation` | 待处理或已处理的 continuation marker；字段语义见下文。 |
-| `cancel_reason` | Leader 首次取消 task 时持久化的单行原因；相同取消重试必须保持一致。 |
+| `cancel_reason` | 首次有效取消决定持久化的单行原因；相同取消重试必须保持一致。 |
 | `replacement_task_id` | 取消后用于替代原 task 的可选 task id；不同 replacement 表示冲突。 |
 | `cancelled_at` | 首次取消成功的 UTC 时间；幂等重试不得改写。 |
 
@@ -170,7 +171,8 @@ sha256(UTF8(project_id || NUL || task_id || NUL || submission_id || NUL || "resu
 ```
 
 它不是已经发送成功的 Matrix event id。PR1 不扫描 pending marker，也不发送 Matrix
-消息。Leader 验收或取消 task 后，TeamHarness 保留原 `delivery_id`，并把 marker 更新为：
+消息。Leader 验收，或可信 Leader/经 Controller 授权的调用方取消 task 后，状态写入方
+保留原 `delivery_id`，并把 marker 更新为：
 
 ```json
 {
@@ -185,9 +187,12 @@ sha256(UTF8(project_id || NUL || task_id || NUL || submission_id || NUL || "resu
 首次解决 marker 的 UTC 时间。相同终态决定的重试复用已经 resolved 的 marker，不得
 旋转 `delivery_id` 或重新打开 continuation。
 
-只有 runtime 配置识别出的可信 Leader 能写入上述终态。payload 里的 `role` 只是无
-可信 runtime identity 时的兼容输入，不能覆盖一个 Worker runtime 的身份；Worker 只能
-`ack_task` 和 `submit_task`，不得调用 accept、cancel 或以其他方式 resolve continuation。
+只有 runtime 配置识别出的可信 Leader 能验收 result。TeamHarness 的两个 `cancel_task`
+入口同样只允许可信 Leader；此外，现有 Controller 授权层允许 admin、manager、team
+leader 或 L2 human 通过项目 HTTP API 取消 task。无论从哪个入口取消，都必须遵守同一
+submission fence 和 continuation resolution。payload 里的 `role` 只是无可信 runtime
+identity 时的兼容输入，不能覆盖一个 Worker runtime 的身份；Worker 只能 `ack_task` 和
+`submit_task`，不得调用 accept、cancel 或以其他方式 resolve continuation。
 
 ### 状态定义
 
@@ -220,7 +225,11 @@ TaskResult status：
 | `BLOCKED` | Worker 被阻塞。 |
 | `INTERRUPTED` | Worker 执行被中断。 |
 
-Leader 写入 TaskMeta 和 plan node 的状态映射固定如下：
+`FAILED` 和 `PARTIAL` 不属于跨 runtime TaskResult 合同。旧 standalone MCP 会在
+`submit_task` 接受这两个值，但后续没有对应的 acceptance 映射；PR1 改为在任何
+TaskMeta 或 ProjectMeta 写入前返回 `unsupported result status`。
+
+终态决定写入 TaskMeta 和 plan node 的状态映射固定如下：
 
 | TaskResult / decision | TaskMeta 与 plan node 终态 | continuation resolution |
 | --- | --- | --- |
@@ -228,10 +237,11 @@ Leader 写入 TaskMeta 和 plan node 的状态映射固定如下：
 | `SUCCESS` / `SUCCESS_WITH_NOTES`，Leader 要求修订 | `revision` | `revision` |
 | `REVISION_NEEDED` | `revision` | `revision` |
 | `BLOCKED` / `INTERRUPTED` | `blocked` | `blocked` |
-| Leader `cancel_task` | `cancelled` | `cancelled` |
+| Leader 或经 Controller 授权的调用方取消 task | `cancelled` | `cancelled` |
 
-`check_task` 只读取并校验 result，不写终态。只有可信 Leader 调用
-`accept_task_result` 或 `cancel_task` 才能解决 pending continuation。正常验收请求必须
+`check_task` 只读取并校验 result，不写终态。只有可信 Leader 能调用
+`accept_task_result`；取消可以由可信 Leader 的 TeamHarness 工具或经 Controller 授权的
+调用方执行。正常验收请求必须
 把 `check_task` 返回的当前 `task.submission_id` 原样放进请求字段 `submissionId`，并
 携带布尔值 `accepted`。只要 TaskMeta 已有 `submission_id`，accept 和 cancel 都必须
 携带这个 `submissionId`；缺失或过期 identity、不同决定的重试以及 Worker 发起的决定
@@ -368,7 +378,18 @@ CoPaw 返回中没有 pending marker 时，也不能据此省略应发送的 req
 `projectflow(action=cancel_task)`，runtime-neutral standalone MCP 使用
 `taskflow(action=cancel_task)`。两者都只允许可信 Leader；只要 task 已有
 `submission_id`，两者都必须携带当前 `submissionId`。调用方不得因为工具名不同而
-绕过 submission fence。
+绕过 submission fence。经 Controller 授权的调用方还可以使用
+`POST /api/v1/projects/{id}/tasks/{taskId}/cancel`。该入口不是 result acceptance；它
+不得自动验收 Worker 输出，并且在 TaskMeta 已有 identity 时也必须携带当前 `submissionId`，
+保留原 `delivery_id` 并把 pending continuation 解决为 `cancelled`。
+
+Controller 采用 ProjectMeta-first、TaskMeta-second 的写入顺序。首次取消会先把
+`submission_id`、reason、replacement 和 `cancelled_at` 写入对应 plan node 的
+`cancellation` envelope；如果后续 TaskMeta 写入失败，重试必须与该 envelope 完全一致，
+否则返回冲突。相同重试复用首次时间并补齐 TaskMeta/continuation，不创建第二个决定。
+Controller replan 和 TeamHarness `plan_dag` / `plan_loop` 归一化都必须保留该 envelope；
+带有已提交取消决定的节点不能原地改回非终态，也不能从计划删除后再用同一个 task id
+添加回来。需要重新执行时必须创建新的 task id。
 
 升级时仅允许基于已持久化证据收养 legacy `submitted` task。CoPaw 要求 legacy
 TaskMeta 已有 `submitted_at`，且 Worker 显式重试的完整结构化 result 与磁盘
@@ -545,14 +566,23 @@ communication reports through ProjectMeta.reply_route when needed
 PR1 只提供 durable continuation 所需的状态语义和部分写入修复入口，不等于任务已经
 能够自驱恢复。`submit_task` 持久化稳定的 submission identity 与 pending marker；
 可信 Leader 使用当前 `submissionId` 和 `accepted` 调用 `accept_task_result`，拒绝过期
-决定，并使相同决定在部分同步失败后可以安全重试；Worker 无权 resolve marker。
+决定，并使相同决定在部分同步失败后可以安全重试；经 Controller 授权的调用方取消
+task 时遵守同一 submission fence 和 resolution 规则；Worker 无权 resolve marker。
 
 异常 loop 中断后的自驱恢复、Controller 周期调度、Matrix 唤醒、runtime hook、
 active task 扫描和 pending requester report 重投均明确 deferred。PR2 的 Controller
-负责 leader-elected 周期扫描和调度；Matrix channel 负责可靠唤醒。它们应直接消费
-`continuation.status=pending` 与 `delivery_id`，不得在 Controller 或 channel 中重新
-定义 Task 状态映射。直到 PR2 落地，pending marker 只是持久化事实，不会自动触发
-Leader，也不能声称任务已恢复。
+负责 leader-elected 周期扫描和调度；Matrix channel 负责可靠唤醒。候选必须同时满足：
+
+```text
+TaskMeta.status == submitted
+AND continuation.status == pending
+AND submission_id != ""
+AND delivery_id != ""
+AND corresponding project/task node is not terminal
+```
+
+Controller 或 channel 不得自行放宽这些条件，也不得重新定义 Task 状态映射。直到 PR2
+落地，pending marker 只是持久化事实，不会自动触发 Leader，也不能声称任务已恢复。
 
 ## 现有实现差距
 

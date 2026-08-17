@@ -441,10 +441,16 @@ func (a *App) initAuth(ctx context.Context) error {
 		}
 		authenticator := authpkg.NewTokenReviewAuthenticator(a.k8sClient, a.cfg.AuthAudience, authpkg.ResourcePrefix(a.cfg.ResourcePrefix))
 		go authenticator.StartCleanup(ctx)
+		// A2: L2 human identities authenticate with their Matrix access token
+		// (whoami + Human CR accessibleTeams). The composite tries the SA path
+		// first so existing SA-based callers are unaffected; a Matrix token
+		// falls through to the Matrix authenticator.
+		matrixAuth := authpkg.NewMatrixTokenAuthenticator(a.mgr.GetClient(), a.namespace, a.matrix)
+		composite := authpkg.NewCompositeAuthenticator(authenticator, matrixAuth)
 		enricher := authpkg.NewCREnricher(a.mgr.GetClient(), a.namespace)
 		authorizer := authpkg.NewAuthorizer()
-		a.authMw = authpkg.NewMiddleware(authenticator, enricher, authorizer, a.mgr.GetClient(), a.namespace)
-		logger.Info("K8s SA token authentication enabled", "audience", a.cfg.AuthAudience)
+		a.authMw = authpkg.NewMiddleware(composite, enricher, authorizer, a.mgr.GetClient(), a.namespace)
+		logger.Info("K8s SA + Matrix token authentication enabled", "audience", a.cfg.AuthAudience)
 	} else {
 		a.authMw = authpkg.NewMiddleware(nil, nil, authpkg.NewAuthorizer(), nil, a.namespace)
 		logger.Info("authentication disabled (no REST config)")
@@ -642,6 +648,7 @@ func (a *App) initHTTPServer(_ context.Context) error {
 		ControllerName: a.cfg.ControllerName,
 		SocketPath:     a.cfg.SocketPath,
 		MatrixConfig:   a.cfg.MatrixConfig(),
+		MatrixClient:   a.matrix,
 		Provisioner:    a.provisioner,
 
 		DefaultWorkerRuntime: a.cfg.DefaultWorkerRuntime,

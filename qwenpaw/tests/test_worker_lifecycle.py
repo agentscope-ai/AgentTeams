@@ -22,6 +22,7 @@ from qwenpaw_worker.worker import BUILTIN_QWENPAW_PLUGIN_MARKER, Worker
 @pytest.fixture(autouse=True)
 def _clear_agent_workspace_env():
     original = os.environ.pop("AGENT_WORKSPACE", None)
+    original_qwenpaw_secret_dir = os.environ.pop("QWENPAW_SECRET_DIR", None)
     try:
         yield
     finally:
@@ -29,6 +30,10 @@ def _clear_agent_workspace_env():
             os.environ.pop("AGENT_WORKSPACE", None)
         else:
             os.environ["AGENT_WORKSPACE"] = original
+        if original_qwenpaw_secret_dir is None:
+            os.environ.pop("QWENPAW_SECRET_DIR", None)
+        else:
+            os.environ["QWENPAW_SECRET_DIR"] = original_qwenpaw_secret_dir
 
 
 def _runtime_yaml(
@@ -148,6 +153,23 @@ def test_link_workspace_shared_points_to_canonical_shared(tmp_path: Path) -> Non
     task_note.write_text("ready\n", encoding="utf-8")
 
     assert (config.shared_dir / "tasks" / "task-1" / "workspace" / "note.txt").read_text(encoding="utf-8") == "ready\n"
+
+
+def test_sync_managed_skills_targets_native_qwenpaw_workspace(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    worker = Worker(config)
+    mirrored: list[tuple[str, Path]] = []
+    worker.sync = types.SimpleNamespace(
+        remote_prefix="agents/worker-a",
+        mirror_prefix=lambda prefix, local_dir: mirrored.append((prefix, local_dir)),
+    )
+
+    worker._sync_managed_skills(["competition-skill"])
+
+    assert mirrored == [(
+        "agents/worker-a/skills/competition-skill",
+        config.default_workspace_dir / "skills" / "competition-skill",
+    )]
 
 
 def test_runtime_storage_change_relinks_shared_and_refreshes_builtin_mcp(
@@ -546,34 +568,303 @@ def test_migrate_legacy_copaw_working_dir_to_qwenpaw(tmp_path: Path) -> None:
     legacy.mkdir(parents=True)
     (legacy / "workspaces").mkdir()
     (legacy / "workspaces" / "default").write_text("state", encoding="utf-8")
+    legacy_secret = cfg.worker_home / ".copaw.secret"
+    legacy_secret.mkdir()
+    (legacy_secret / "providers.json").write_text("legacy-provider", encoding="utf-8")
     worker = Worker(cfg)
-    worker._migrate_legacy_working_dir()
+    pushed = []
+
+    class Sync:
+        def push_directories(self, _directories):
+            return []
+
+        def push_paths(self, paths):
+            pushed.append([path.relative_to(cfg.worker_home).as_posix() for path in paths])
+            return pushed[-1]
+
+    worker.sync = Sync()
+
+    assert worker._migrate_legacy_state() is True
     assert not legacy.exists()
+    assert not legacy_secret.exists()
     assert cfg.qwenpaw_working_dir.exists()
     assert (cfg.qwenpaw_working_dir / "workspaces" / "default").read_text(encoding="utf-8") == "state"
+    assert (cfg.worker_home / ".qwenpaw.secret" / "providers.json").read_text(encoding="utf-8") == "legacy-provider"
+    assert pushed[-1] == [".qwenpaw/.copaw-migrated"]
 
 
-def test_migrate_legacy_copaw_working_dir_skips_when_qwenpaw_exists(tmp_path: Path) -> None:
+def test_migrate_legacy_copaw_secret_to_configured_absolute_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = _config(tmp_path)
+    legacy_secret = cfg.worker_home / ".copaw.secret"
+    legacy_secret.mkdir(parents=True)
+    (legacy_secret / "providers.json").write_text("legacy-provider", encoding="utf-8")
+    target_secret = cfg.worker_home / "credentials" / "qwenpaw"
+    monkeypatch.setenv("QWENPAW_SECRET_DIR", str(target_secret))
+    worker = Worker(cfg)
+    pushed = []
+
+    class Sync:
+        def push_directories(self, directories):
+            pushed.append(list(directories))
+            return []
+
+        def push_paths(self, paths):
+            pushed.append(list(paths))
+            return []
+
+    worker.sync = Sync()
+
+    assert worker._migrate_legacy_state() is True
+    assert (target_secret / "providers.json").read_text(encoding="utf-8") == "legacy-provider"
+    assert not (cfg.worker_home / ".qwenpaw.secret").exists()
+    assert pushed[0] == [target_secret]
+
+
+def test_migrate_legacy_copaw_secret_to_configured_relative_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = _config(tmp_path)
+    legacy_secret = cfg.worker_home / ".copaw.secret"
+    legacy_secret.mkdir(parents=True)
+    (legacy_secret / "providers.json").write_text("legacy-provider", encoding="utf-8")
+    target_secret = cfg.worker_home / "qwenpaw-secret"
+    monkeypatch.setenv("QWENPAW_SECRET_DIR", "../../../qwenpaw-secret")
+    worker = Worker(cfg)
+    worker._prepare_env()
+    worker.sync = type(
+        "Sync",
+        (),
+        {
+            "push_directories": lambda _self, _directories: [],
+            "push_paths": lambda _self, _paths: [],
+        },
+    )()
+
+    assert os.environ["QWENPAW_SECRET_DIR"] == "../../../qwenpaw-secret"
+    assert worker._migrate_legacy_state() is True
+    assert (target_secret / "providers.json").read_text(encoding="utf-8") == "legacy-provider"
+    assert not (cfg.worker_home / ".qwenpaw.secret").exists()
+
+
+def test_migrate_legacy_copaw_secret_rejects_dir_outside_worker_home(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = _config(tmp_path)
+    legacy_workspace = cfg.worker_home / ".copaw" / "workspaces" / "default"
+    legacy_workspace.mkdir(parents=True)
+    (legacy_workspace / "chats.json").write_text("legacy-session", encoding="utf-8")
+    legacy_secret = cfg.worker_home / ".copaw.secret"
+    legacy_secret.mkdir()
+    (legacy_secret / "providers.json").write_text("legacy-provider", encoding="utf-8")
+    outside_secret = tmp_path / "outside-secret"
+    monkeypatch.setenv("QWENPAW_SECRET_DIR", str(outside_secret))
+    worker = Worker(cfg)
+    worker.sync = type(
+        "Sync",
+        (),
+        {
+            "push_directories": lambda _self, _directories: pytest.fail("must reject before persistence"),
+            "push_paths": lambda _self, _paths: pytest.fail("must not persist a migration marker"),
+        },
+    )()
+
+    with pytest.raises(ValueError, match="QWENPAW_SECRET_DIR is outside worker storage root"):
+        worker._migrate_legacy_state()
+
+    assert (legacy_secret / "providers.json").is_file()
+    assert not outside_secret.exists()
+    assert not cfg.qwenpaw_working_dir.exists()
+
+
+def test_migrate_legacy_copaw_state_recovers_existing_qwenpaw_dir(tmp_path: Path) -> None:
     cfg = _config(tmp_path)
     legacy = cfg.install_dir / "worker-a" / ".copaw"
-    legacy.mkdir(parents=True)
-    (legacy / "legacy-state").write_text("old", encoding="utf-8")
-    cfg.qwenpaw_working_dir.mkdir(parents=True)
-    (cfg.qwenpaw_working_dir / "current-state").write_text("new", encoding="utf-8")
+    legacy_workspace = legacy / "workspaces" / "default"
+    legacy_workspace.mkdir(parents=True)
+    (legacy_workspace / "chats.json").write_text("legacy-session", encoding="utf-8")
+    legacy_root = "/root/.copaw-worker/worker-a/.copaw"
+    (legacy_workspace / "agent.json").write_text(
+        json.dumps({"workspace_dir": f"{legacy_root}/workspaces/default"}),
+        encoding="utf-8",
+    )
+    (legacy / "config.json").write_text(
+        json.dumps(
+            {
+                "agents": {
+                    "profiles": {
+                        "default": {"workspace_dir": f"{legacy_root}/workspaces/default"},
+                    },
+                },
+            },
+        ),
+        encoding="utf-8",
+    )
+    target_workspace = cfg.default_workspace_dir
+    target_workspace.mkdir(parents=True)
+    (target_workspace / "chats.json").write_text("qwenpaw-session", encoding="utf-8")
+    (target_workspace / "qwenpaw-only.txt").write_text("keep", encoding="utf-8")
     worker = Worker(cfg)
-    worker._migrate_legacy_working_dir()
-    assert legacy.exists()
-    assert (cfg.qwenpaw_working_dir / "current-state").read_text(encoding="utf-8") == "new"
+    calls = []
+
+    class Sync:
+        def push_directories(self, directories):
+            calls.append(list(directories))
+            return []
+
+        def push_paths(self, paths):
+            calls.append(list(paths))
+            return []
+
+    worker.sync = Sync()
+
+    assert worker._migrate_legacy_state() is True
+    assert not legacy.exists()
+    assert (target_workspace / "chats.json").read_text(encoding="utf-8") == "legacy-session"
+    assert (target_workspace / "qwenpaw-only.txt").read_text(encoding="utf-8") == "keep"
+    assert json.loads((target_workspace / "agent.json").read_text(encoding="utf-8"))["workspace_dir"] == str(
+        target_workspace,
+    )
+    assert json.loads((cfg.qwenpaw_working_dir / "config.json").read_text(encoding="utf-8"))["agents"][
+        "profiles"
+    ]["default"]["workspace_dir"] == str(target_workspace)
+
+    # Object storage may still contain the legacy prefix. Once the marker is
+    # restored, a later cold start removes that duplicate without clobbering
+    # the active QwenPaw state or uploading anything again.
+    legacy_workspace.mkdir(parents=True)
+    (legacy_workspace / "chats.json").write_text("stale-legacy", encoding="utf-8")
+    assert worker._migrate_legacy_state() is False
+    assert not legacy.exists()
+    assert (target_workspace / "chats.json").read_text(encoding="utf-8") == "legacy-session"
+    assert len(calls) == 2
 
 
 def test_migrate_legacy_copaw_working_dir_noop_without_legacy(tmp_path: Path) -> None:
     cfg = _config(tmp_path)
-    # Skip __init__ (RuntimeUpdater would create .qwenpaw) to prove the
-    # migration itself is a no-op when there is no legacy .copaw dir.
-    worker = Worker.__new__(Worker)
-    worker.config = cfg
-    worker._migrate_legacy_working_dir()
+    worker = Worker(cfg)
+    worker.sync = type(
+        "Sync",
+        (),
+        {
+            "push_directories": lambda _self, _directories: [],
+            "push_paths": lambda _self, _paths: [],
+        },
+    )()
+    assert worker._migrate_legacy_state() is False
     assert not cfg.qwenpaw_working_dir.exists()
+
+
+def test_migrate_legacy_copaw_state_retries_when_persistence_fails(tmp_path: Path) -> None:
+    cfg = _config(tmp_path)
+    legacy = cfg.worker_home / ".copaw" / "workspaces" / "default"
+    legacy.mkdir(parents=True)
+    (legacy / "state.txt").write_text("legacy-state", encoding="utf-8")
+    worker = Worker(cfg)
+
+    class FailingSync:
+        def push_directories(self, _directories):
+            raise RuntimeError("storage unavailable")
+
+        def push_paths(self, _paths):
+            raise AssertionError("marker must not be pushed after directory persistence fails")
+
+    worker.sync = FailingSync()
+    with pytest.raises(RuntimeError, match="storage unavailable"):
+        worker._migrate_legacy_state()
+
+    assert (cfg.worker_home / ".copaw" / "workspaces" / "default" / "state.txt").is_file()
+    assert not (cfg.qwenpaw_working_dir / ".copaw-migrated").exists()
+
+    calls = []
+
+    class SuccessfulSync:
+        def push_directories(self, directories):
+            calls.append(list(directories))
+            return []
+
+        def push_paths(self, paths):
+            calls.append(list(paths))
+            return []
+
+    worker.sync = SuccessfulSync()
+    assert worker._migrate_legacy_state() is True
+    assert not (cfg.worker_home / ".copaw").exists()
+    assert (cfg.qwenpaw_working_dir / ".copaw-migrated").is_file()
+    assert len(calls) == 2
+
+
+def test_migrate_legacy_copaw_state_removes_local_marker_when_marker_upload_fails(
+    tmp_path: Path,
+) -> None:
+    cfg = _config(tmp_path)
+    legacy = cfg.worker_home / ".copaw" / "workspaces" / "default"
+    legacy.mkdir(parents=True)
+    (legacy / "state.txt").write_text("legacy-state", encoding="utf-8")
+    worker = Worker(cfg)
+
+    class FailingMarkerSync:
+        def push_directories(self, _directories):
+            return []
+
+        def push_paths(self, _paths):
+            raise RuntimeError("marker upload failed")
+
+    worker.sync = FailingMarkerSync()
+    with pytest.raises(RuntimeError, match="marker upload failed"):
+        worker._migrate_legacy_state()
+
+    assert (cfg.worker_home / ".copaw" / "workspaces" / "default" / "state.txt").is_file()
+    assert not (cfg.qwenpaw_working_dir / ".copaw-migrated").exists()
+
+
+@pytest.mark.anyio
+async def test_start_migrates_copaw_state_restored_by_mirror_before_qwenpaw_init(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = _config(tmp_path)
+    events = []
+
+    def fake_mirror(_sync):
+        events.append("mirror")
+        assert not cfg.qwenpaw_working_dir.exists()
+        workspace = cfg.worker_home / ".copaw" / "workspaces" / "default"
+        workspace.mkdir(parents=True)
+        (workspace / "chats.json").write_text("restored-session", encoding="utf-8")
+        secret = cfg.worker_home / ".copaw.secret"
+        secret.mkdir()
+        (secret / "providers.json").write_text("restored-provider", encoding="utf-8")
+
+    def fake_push(_sync, paths):
+        rels = [path.relative_to(cfg.worker_home).as_posix() for path in paths]
+        events.append(("push", rels))
+        return rels
+
+    def fake_push_directories(_sync, directories):
+        rels = [directory.relative_to(cfg.worker_home).as_posix() for directory in directories]
+        events.append(("mirror-push", rels))
+        return rels
+
+    monkeypatch.setattr("qwenpaw_worker.sync.FileSync.mirror_all", fake_mirror)
+    monkeypatch.setattr("qwenpaw_worker.sync.FileSync.push_paths", fake_push)
+    monkeypatch.setattr("qwenpaw_worker.sync.FileSync.push_directories", fake_push_directories)
+    monkeypatch.setattr("qwenpaw_worker.sync.FileSync.pull_runtime_config", lambda _self, _path: False)
+
+    worker = Worker(cfg)
+    assert not cfg.qwenpaw_working_dir.exists()
+    assert await worker.start() is False
+
+    assert events[0] == "mirror"
+    assert events[-1] == ("push", [".qwenpaw/.copaw-migrated"])
+    assert (cfg.default_workspace_dir / "chats.json").read_text(encoding="utf-8") == "restored-session"
+    assert (cfg.worker_home / ".qwenpaw.secret" / "providers.json").read_text(encoding="utf-8") == "restored-provider"
+    assert not (cfg.worker_home / ".copaw").exists()
+    assert not (cfg.worker_home / ".copaw.secret").exists()
 
 
 def test_prepare_env_exposes_agent_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

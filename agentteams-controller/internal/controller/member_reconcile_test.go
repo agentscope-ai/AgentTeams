@@ -544,7 +544,7 @@ func TestCreateMemberContainerConflictRequeues(t *testing.T) {
 	}
 }
 
-func TestReconcileMemberConfigQwenPawWritesRuntimeConfigOnly(t *testing.T) {
+func TestReconcileMemberConfigQwenPawDistributesSkillsAndWritesRuntimeConfig(t *testing.T) {
 	deployer := mocks.NewMockDeployer()
 	state := &MemberState{
 		MatrixUserID: "@worker-a:matrix.local",
@@ -591,8 +591,8 @@ func TestReconcileMemberConfigQwenPawWritesRuntimeConfigOnly(t *testing.T) {
 	if req.TeamName != "" || req.TeamRoomID != "" || len(req.TeamMembers) != 0 {
 		t.Fatalf("Worker reconciliation must not inject Team-owned context: %#v", req)
 	}
-	if deployPkg, writeInline, deployConfig, pushSkills, _ := deployer.CallCounts(); deployPkg != 0 || writeInline != 0 || deployConfig != 0 || pushSkills != 0 {
-		t.Fatalf("qwenpaw must skip file-based deploy path, got package=%d inline=%d config=%d skills=%d",
+	if deployPkg, writeInline, deployConfig, pushSkills, _ := deployer.CallCounts(); deployPkg != 0 || writeInline != 0 || deployConfig != 0 || pushSkills != 1 {
+		t.Fatalf("qwenpaw must distribute skills and skip the legacy file-based config path, got package=%d inline=%d config=%d skills=%d",
 			deployPkg, writeInline, deployConfig, pushSkills)
 	}
 }

@@ -10,6 +10,8 @@ from pathlib import Path
 import re
 from typing import Any
 
+import yaml
+
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
 
@@ -270,8 +272,8 @@ def _require_ack_preconditions(meta: TaskMeta, actor: str | None) -> None:
 # ------------------------------------------------------------------
 
 
-def _resolve_worker_matrix_id(worker_name: str) -> str | None:
-    """Resolve a canonical worker name to a full Matrix user ID via AGENTS.md."""
+def _resolve_worker_matrix_id_from_agents(worker_name: str) -> str | None:
+    """Resolve a canonical worker name via the legacy AGENTS.md roster."""
     agents_path = _runtime_root() / "AGENTS.md"
     try:
         lines = agents_path.read_text(encoding="utf-8").splitlines()
@@ -295,6 +297,39 @@ def _resolve_worker_matrix_id(worker_name: str) -> str | None:
         if localpart == worker_name:
             return matrix_id
     return None
+
+
+def _resolve_worker_matrix_id(worker_name: str) -> str | None:
+    """Resolve a Team Worker Matrix ID from runtime.yaml, with legacy fallback."""
+    canonical_name = canonical_worker_id(worker_name)
+    runtime_config_path = _runtime_root() / "runtime" / "runtime.yaml"
+    try:
+        data = yaml.safe_load(runtime_config_path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        logger.debug("Unable to read Team roster from runtime.yaml: %s", exc)
+        data = {}
+
+    team = data.get("team") if isinstance(data, dict) else None
+    if isinstance(team, dict) and "members" in team:
+        members = team.get("members")
+        if not isinstance(members, list):
+            logger.warning("runtime.yaml team.members must be a list")
+            return None
+        for member in members:
+            if not isinstance(member, dict):
+                continue
+            member_names = (member.get("runtimeName"), member.get("name"))
+            if not any(
+                canonical_worker_id(str(name)) == canonical_name
+                for name in member_names
+                if name
+            ):
+                continue
+            matrix_id = str(member.get("matrixUserId") or "").strip()
+            return matrix_id or None
+        return None
+
+    return _resolve_worker_matrix_id_from_agents(canonical_name)
 
 
 async def _check_room_membership(room_id: str, user_id: str) -> bool:

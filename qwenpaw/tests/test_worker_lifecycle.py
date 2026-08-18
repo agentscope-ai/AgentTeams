@@ -968,10 +968,26 @@ def test_builtin_plugin_mcp_skips_update_when_payload_is_unchanged(
 
     assert api.updated == ["teamharness", "workerflow"]
 
+    worker._configure_builtin_plugin_mcp_clients(force=True)
+
+    assert api.updated == [
+        "teamharness",
+        "workerflow",
+        "teamharness",
+        "workerflow",
+    ]
+
     monkeypatch.setenv("AGENTTEAMS_WORKER_ROLE", "team_leader")
     worker._configure_builtin_plugin_mcp_clients()
 
-    assert api.updated == ["teamharness", "workerflow", "teamharness", "workerflow"]
+    assert api.updated == [
+        "teamharness",
+        "workerflow",
+        "teamharness",
+        "workerflow",
+        "teamharness",
+        "workerflow",
+    ]
 
 
 @pytest.mark.anyio

@@ -54,6 +54,7 @@ class _FakeQwenPawApi:
         self.model_events = []
         self.active_model = None
         self.enabled_skills = []
+        self.skill_events = []
 
     def get_channel(self, channel):
         return dict(self.channels.get(channel, {}))
@@ -101,6 +102,7 @@ class _FakeQwenPawApi:
 
     def refresh_and_enable_skills(self, skill_names):
         self.enabled_skills = list(skill_names)
+        self.skill_events.append(list(skill_names))
         return {"results": {name: {"success": True} for name in self.enabled_skills}}
 
 
@@ -139,6 +141,40 @@ def test_runtime_updater_syncs_and_enables_assigned_skills(tmp_path: Path) -> No
     assert synced == ["competition-skill"]
     assert (config.default_workspace_dir / "skills" / "competition-skill" / "SKILL.md").is_file()
     assert updater.api_client.enabled_skills == ["competition-skill"]
+
+
+def test_runtime_updater_treats_managed_skill_order_as_equivalent(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    synced: list[list[str]] = []
+
+    def sync_skills(skill_names: list[str]) -> None:
+        synced.append(list(skill_names))
+        for name in skill_names:
+            skill_dir = config.default_workspace_dir / "skills" / name
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            (skill_dir / "SKILL.md").write_text(f"# {name}\n", encoding="utf-8")
+
+    updater = _runtime_updater(
+        config=config,
+        package_manager=_NoopPackageManager(),
+        skill_sync=sync_skills,
+    )
+
+    def runtime_config(skills: list[str]) -> MemberRuntimeConfig:
+        return MemberRuntimeConfig(
+            path=config.runtime_config_path,
+            raw={
+                "metadata": {"generation": "-".join(skills)},
+                "member": {"runtime": "qwenpaw"},
+                "desired": {"skills": skills},
+            },
+        )
+
+    updater.apply_once(runtime_config=runtime_config(["beta", "alpha"]))
+    updater.apply_once(runtime_config=runtime_config(["alpha", "beta"]))
+
+    assert synced == [["alpha", "beta"]]
+    assert updater.api_client.skill_events == [["alpha", "beta"]]
 
 
 def test_runtime_updater_reconciles_model_mcp_matrix_channel_and_acl_via_api(
@@ -257,6 +293,79 @@ def test_runtime_updater_maps_dingtalk_visibility_and_preserves_empty_secret(
     assert actual["show_tool_calls"] is True
     assert actual["show_tool_results"] is True
     assert updater.api_client.channel_events == ["dingtalk"]
+
+
+def test_runtime_updater_ignores_unused_dingtalk_fields(
+    tmp_path: Path,
+) -> None:
+    updater = _runtime_updater(config=_config(tmp_path), package_manager=_NoopPackageManager())
+
+    def runtime_config(ignored: str) -> MemberRuntimeConfig:
+        return MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw={
+                "metadata": {"generation": ignored},
+                "member": {"runtime": "qwenpaw"},
+                "desired": {
+                    "channels": {
+                        "dingtalk": {
+                            "enabled": True,
+                            "client_id": "client-id",
+                            "client_secret": "secret",
+                            "robot_code": "robot",
+                            "unused": ignored,
+                        },
+                    },
+                },
+            },
+        )
+
+    updater.apply_once(runtime_config=runtime_config("one"))
+    updater.apply_once(runtime_config=runtime_config("two"))
+
+    assert updater.api_client.channel_events == ["dingtalk"]
+
+
+def test_runtime_updater_restores_matrix_policy_after_channel_update(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_URL", "http://matrix.example.com")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "matrix-token")
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_DOMAIN", "matrix.local")
+    updater = _runtime_updater(config=_config(tmp_path), package_manager=_NoopPackageManager())
+
+    def runtime_config(room_id: str) -> MemberRuntimeConfig:
+        return MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw={
+                "metadata": {"generation": room_id},
+                "team": {"teamRoomId": room_id},
+                "member": {
+                    "runtime": "qwenpaw",
+                    "matrixUserId": "@worker:matrix.local",
+                },
+                "desired": {
+                    "channelPolicy": {
+                        "groupAllowExtra": ["@human:matrix.local"],
+                        "dmAllowExtra": ["@human:matrix.local"],
+                    },
+                },
+            },
+        )
+
+    updater.apply_once(runtime_config=runtime_config("!room-one:matrix.local"))
+    updater.apply_once(runtime_config=runtime_config("!room-two:matrix.local"))
+
+    matrix = updater.api_client.channels["agentteams_matrix"]
+    assert matrix["access_control_group"] is True
+    assert matrix["access_control_dm"] is True
+    assert updater.api_client.channel_events == [
+        "agentteams_matrix",
+        "agentteams_matrix",
+        "agentteams_matrix",
+        "agentteams_matrix",
+    ]
 
 
 def test_runtime_updater_preserves_unmanaged_mcp_clients(tmp_path: Path) -> None:
@@ -393,6 +502,39 @@ def test_runtime_updater_reapplies_direct_mcp_when_effective_payload_changes(
     assert "docs" not in updater.api_client.mcp
 
 
+def test_runtime_updater_reconciles_only_changed_direct_mcp_client(
+    tmp_path: Path,
+) -> None:
+    updater = _runtime_updater(config=_config(tmp_path), package_manager=_NoopPackageManager())
+
+    def runtime_config(a_url: str, a_transport: str = "http") -> MemberRuntimeConfig:
+        return MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw={
+                "metadata": {"generation": a_url + a_transport},
+                "member": {"runtime": "qwenpaw"},
+                "desired": {
+                    "mcpServers": {
+                        "a": {"url": a_url, "transport": a_transport},
+                        "b": {"url": "https://b.example/mcp"},
+                    },
+                },
+            },
+        )
+
+    updater.apply_once(runtime_config=runtime_config("https://a-v1.example/mcp"))
+    updater.apply_once(runtime_config=runtime_config("https://a-v2.example/mcp"))
+    updater.apply_once(
+        runtime_config=runtime_config("https://a-v2.example/mcp", "streamable_http")
+    )
+
+    assert updater.api_client.mcp_events == [
+        ("create", "a"),
+        ("create", "b"),
+        ("update", "a"),
+    ]
+
+
 def test_runtime_updater_reapplies_package_mcp_only_when_package_identity_changes(
     tmp_path: Path,
 ) -> None:
@@ -452,7 +594,104 @@ def test_runtime_updater_reapplies_package_mcp_only_when_package_identity_change
     ]
 
 
-def _agent_package(tmp_path: Path, version: str, *, include_teams: bool = False) -> Path:
+def test_runtime_updater_does_not_reapply_unchanged_package_mcp_payload(
+    tmp_path: Path,
+) -> None:
+    class PackageManager:
+        def apply(self, runtime_config: MemberRuntimeConfig) -> Path:
+            return tmp_path / f"package-{runtime_config.agent_package_identity[2]}"
+
+        def package_mcp_clients(self, _package_dir: Path) -> dict[str, dict[str, object]]:
+            return {
+                "docs": {
+                    "name": "docs",
+                    "enabled": True,
+                    "transport": "streamable_http",
+                    "url": "https://package.example/mcp",
+                },
+            }
+
+        def package_skill_names(self, _package_dir: Path) -> list[str]:
+            return []
+
+    updater = _runtime_updater(config=_config(tmp_path), package_manager=PackageManager())
+
+    def runtime_config(version: str) -> MemberRuntimeConfig:
+        return MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw={
+                "metadata": {"generation": version},
+                "member": {"runtime": "qwenpaw"},
+                "desired": {
+                    "agentPackage": {
+                        "ref": f"file:///tmp/package-{version}.tar.gz",
+                        "name": "demo",
+                        "version": version,
+                        "digest": f"sha256:{version}",
+                    },
+                },
+            },
+        )
+
+    updater.apply_once(runtime_config=runtime_config("1"))
+    updater.apply_once(runtime_config=runtime_config("2"))
+
+    assert updater.api_client.mcp_events == [("create", "docs")]
+
+
+def test_runtime_updater_preserves_package_precedence_for_direct_mcp_collision(
+    tmp_path: Path,
+) -> None:
+    class PackageManager:
+        def apply(self, _runtime_config: MemberRuntimeConfig) -> Path:
+            return tmp_path / "package"
+
+        def package_mcp_clients(self, _package_dir: Path) -> dict[str, dict[str, object]]:
+            return {
+                "docs": {
+                    "name": "docs",
+                    "transport": "streamable_http",
+                    "url": "https://package.example/mcp",
+                },
+            }
+
+        def package_skill_names(self, _package_dir: Path) -> list[str]:
+            return []
+
+    updater = _runtime_updater(config=_config(tmp_path), package_manager=PackageManager())
+
+    def runtime_config(url: str) -> MemberRuntimeConfig:
+        return MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw={
+                "metadata": {"generation": url},
+                "member": {"runtime": "qwenpaw"},
+                "desired": {
+                    "agentPackage": {
+                        "ref": "file:///tmp/package.tar.gz",
+                        "name": "demo",
+                        "version": "1",
+                        "digest": "sha256:1",
+                    },
+                    "mcpServers": {"docs": {"url": url}},
+                },
+            },
+        )
+
+    updater.apply_once(runtime_config=runtime_config("https://direct-v1.example/mcp"))
+    updater.apply_once(runtime_config=runtime_config("https://direct-v2.example/mcp"))
+
+    assert updater.api_client.mcp_events == [("create", "docs")]
+    assert updater.api_client.mcp["docs"]["url"] == "https://package.example/mcp"
+
+
+def _agent_package(
+    tmp_path: Path,
+    version: str,
+    *,
+    include_teams: bool = False,
+    skill_name: str = "",
+) -> Path:
     source_dir = tmp_path / f"package-src-{version}"
     config_dir = source_dir / "config"
     config_dir.mkdir(parents=True)
@@ -460,10 +699,119 @@ def _agent_package(tmp_path: Path, version: str, *, include_teams: bool = False)
     (config_dir / "AGENTS.md").write_text(f"agent package {version}\n", encoding="utf-8")
     if include_teams:
         (config_dir / "TEAMS.md").write_text(f"package teams {version}\n", encoding="utf-8")
+    if skill_name:
+        skill_dir = source_dir / "skills" / skill_name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("package skill\n", encoding="utf-8")
     package_path = tmp_path / f"agent-package-{version}.tar.gz"
     with tarfile.open(package_path, "w:gz") as archive:
         archive.add(source_dir, arcname=".")
     return package_path
+
+
+def test_runtime_updater_preserves_inline_prompt_on_unrelated_member_change(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    package = _agent_package(tmp_path, "1")
+    updater = _runtime_updater(config=config)
+
+    def runtime_config(member_name: str) -> MemberRuntimeConfig:
+        return MemberRuntimeConfig(
+            path=config.runtime_config_path,
+            raw={
+                "metadata": {"generation": member_name},
+                "team": {"members": [{"name": member_name, "role": "worker"}]},
+                "member": {"runtime": "qwenpaw"},
+                "desired": {
+                    "agentPackage": {
+                        "ref": f"file://{package}",
+                        "name": "demo",
+                        "version": "1",
+                        "digest": "sha256:1",
+                    },
+                    "inlineConfig": {"agents": "inline agents"},
+                },
+            },
+        )
+
+    updater.apply_once(runtime_config=runtime_config("alice"))
+    updater.apply_once(runtime_config=runtime_config("bob"))
+
+    assert (config.default_workspace_dir / "AGENTS.md").read_text(
+        encoding="utf-8"
+    ) == "inline agents\n"
+
+
+def test_runtime_updater_preserves_managed_skill_over_package_on_member_change(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    package = _agent_package(tmp_path, "1", skill_name="shared-skill")
+
+    def sync_skills(skill_names: list[str]) -> None:
+        for name in skill_names:
+            skill_dir = config.default_workspace_dir / "skills" / name
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            (skill_dir / "SKILL.md").write_text("managed skill\n", encoding="utf-8")
+
+    updater = _runtime_updater(config=config, skill_sync=sync_skills)
+
+    def runtime_config(member_name: str) -> MemberRuntimeConfig:
+        return MemberRuntimeConfig(
+            path=config.runtime_config_path,
+            raw={
+                "metadata": {"generation": member_name},
+                "team": {"members": [{"name": member_name, "role": "worker"}]},
+                "member": {"runtime": "qwenpaw"},
+                "desired": {
+                    "agentPackage": {
+                        "ref": f"file://{package}",
+                        "name": "demo",
+                        "version": "1",
+                        "digest": "sha256:1",
+                    },
+                    "skills": ["shared-skill"],
+                },
+            },
+        )
+
+    updater.apply_once(runtime_config=runtime_config("alice"))
+    updater.apply_once(runtime_config=runtime_config("bob"))
+
+    skill_path = config.default_workspace_dir / "skills" / "shared-skill" / "SKILL.md"
+    assert skill_path.read_text(encoding="utf-8") == "managed skill\n"
+
+
+def test_runtime_updater_skips_package_skill_refresh_when_skill_content_is_unchanged(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    package_v1 = _agent_package(tmp_path, "1", skill_name="shared-skill")
+    package_v2 = _agent_package(tmp_path, "2", skill_name="shared-skill")
+    updater = _runtime_updater(config=config)
+
+    def runtime_config(package: Path, version: str) -> MemberRuntimeConfig:
+        return MemberRuntimeConfig(
+            path=config.runtime_config_path,
+            raw={
+                "metadata": {"generation": version},
+                "member": {"runtime": "qwenpaw"},
+                "desired": {
+                    "agentPackage": {
+                        "ref": f"file://{package}",
+                        "name": "demo",
+                        "version": version,
+                        "digest": f"sha256:{version}",
+                    },
+                },
+            },
+        )
+
+    updater.apply_once(runtime_config=runtime_config(package_v1, "1"))
+    updater.apply_once(runtime_config=runtime_config(package_v2, "2"))
+
+    assert updater.api_client.skill_events == [["shared-skill"]]
 
 
 def test_runtime_updater_applies_changed_config_and_reapplies_adapter(tmp_path: Path) -> None:
@@ -501,10 +849,30 @@ def test_runtime_updater_applies_changed_config_and_reapplies_adapter(tmp_path: 
         )
     )
 
-    assert applied == ["1", "2"]
+    assert applied == ["1"]
     assert adapter_calls == ["adapter", "adapter"]
     assert updater.current_config is not None
     assert updater.current_config.generation == "2"
+
+
+def test_runtime_updater_propagates_force_to_adapter_reconcile(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    adapter_calls: list[str] = []
+    updater = _runtime_updater(
+        config=config,
+        adapter_apply=lambda: adapter_calls.append("normal"),
+        adapter_force_apply=lambda: adapter_calls.append("force"),
+        package_manager=_NoopPackageManager(),
+    )
+    runtime_config = MemberRuntimeConfig(
+        path=config.runtime_config_path,
+        raw={"metadata": {"generation": "1"}, "member": {"runtime": "qwenpaw"}},
+    )
+
+    updater.apply_once(runtime_config=runtime_config)
+    updater.apply_once(runtime_config=runtime_config, force=True)
+
+    assert adapter_calls == ["normal", "force"]
 
 
 def test_runtime_updater_load_and_apply_once_does_not_reapply_adapter(tmp_path: Path) -> None:

@@ -86,6 +86,7 @@ class Worker:
         self._stopping = False
         self._workspace_shared_dir: Optional[Path] = None
         self._initial_runtime_config: Optional[MemberRuntimeConfig] = None
+        self._builtin_mcp_payload_identities: dict[str, str] = {}
 
     async def run(self) -> None:
         if not await self.start():
@@ -980,10 +981,27 @@ class Worker:
                 },
                 "cwd": str(asset_dir),
             }
-            if plugin_id in existing:
-                self.api_client.update_mcp(plugin_id, payload)
-            else:
+            identity = self._builtin_mcp_payload_identity(plugin_dir, payload)
+            if plugin_id not in existing:
                 self.api_client.create_mcp(plugin_id, payload)
+            elif self._builtin_mcp_payload_identities.get(plugin_id) != identity:
+                self.api_client.update_mcp(plugin_id, payload)
+            self._builtin_mcp_payload_identities[plugin_id] = identity
+
+    def _builtin_mcp_payload_identity(
+        self,
+        plugin_dir: Path,
+        payload: dict[str, object],
+    ) -> str:
+        marker = plugin_dir / BUILTIN_QWENPAW_PLUGIN_MARKER
+        plugin_digest = marker.read_text(encoding="utf-8").strip() if marker.is_file() else ""
+        serialized = json.dumps(
+            {"payload": payload, "pluginDigest": plugin_digest},
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
     def _configure_builtin_plugin_mcp_policies(self) -> None:
         allow_policy = {

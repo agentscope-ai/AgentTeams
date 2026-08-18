@@ -1290,6 +1290,15 @@ class RuntimeUpdater:
             workspace_dir=config.default_workspace_dir,
         )
         self.current_config: Optional[MemberRuntimeConfig] = None
+        self._applied_model_identity: Optional[str] = None
+        self._applied_direct_mcp_identity: Optional[str] = None
+        self._applied_matrix_channel_identity: Optional[str] = None
+        self._applied_dingtalk_channel_identity: Optional[str] = None
+        self._applied_channel_policy_identity: Optional[str] = None
+        self._applied_package_mcp_identity: Optional[Tuple[str, str, str, str]] = None
+        self._applied_package_skills_identity: Optional[Tuple[str, str, str, str]] = None
+        self._applied_managed_skills_identity: Optional[str] = None
+        self._applied_inline_config_identity: Optional[str] = None
 
     def load(self) -> MemberRuntimeConfig:
         if self.runtime_config_pull is not None:
@@ -1325,10 +1334,45 @@ class RuntimeUpdater:
             and self.adapter_apply is not None
             and not self._adapter_neutral_change(config)
         )
+        model_identity = self._component_identity(self._model_desired_state(config))
+        model_should_apply = force or model_identity != self._applied_model_identity
+        direct_mcp_identity = self._direct_mcp_identity(config)
+        direct_mcp_should_apply = (
+            force or direct_mcp_identity != self._applied_direct_mcp_identity
+        )
+        matrix_channel_identity = self._component_identity(self._matrix_channel_payload(config))
+        matrix_channel_should_apply = (
+            force or matrix_channel_identity != self._applied_matrix_channel_identity
+        )
+        dingtalk_channel_identity = self._component_identity(config.dingtalk_channel)
+        dingtalk_channel_should_apply = (
+            force or dingtalk_channel_identity != self._applied_dingtalk_channel_identity
+        )
+        channel_policy_identity = self._channel_policy_identity(config)
+        channel_policy_should_apply = (
+            force or channel_policy_identity != self._applied_channel_policy_identity
+        )
+        package_mcp_identity = config.agent_package_identity
+        package_mcp_should_apply = (
+            force or package_mcp_identity != self._applied_package_mcp_identity
+        )
+        package_skills_should_apply = (
+            force or package_mcp_identity != self._applied_package_skills_identity
+        )
+        managed_skills_identity = self._component_identity(config.skills)
+        managed_skills_should_apply = (
+            force or managed_skills_identity != self._applied_managed_skills_identity
+        )
+        inline_config_identity = self._component_identity(config.inline_config)
+        inline_config_should_apply = (
+            force or inline_config_identity != self._applied_inline_config_identity
+        )
         logger.info(
             "runtime config apply begin component=update worker=%s generation=%s team=%s member=%s role=%s "
             "force=%s reapply_adapter=%s adapter_applied=%s mcp_server_count=%s channel_names=%s "
-            "credential_binding_count=%s duration_ms=%s",
+            "credential_binding_count=%s model_reconcile=%s direct_mcp_reconcile=%s "
+            "matrix_channel_reconcile=%s dingtalk_channel_reconcile=%s channel_policy_reconcile=%s "
+            "package_mcp_reconcile=%s duration_ms=%s",
             self.config.worker_name,
             config.generation,
             config.team_name,
@@ -1340,23 +1384,47 @@ class RuntimeUpdater:
             _count_collection(config.mcp_servers),
             _named_keys(config.channels),
             len(config.credential_bindings),
+            model_should_apply,
+            direct_mcp_should_apply,
+            matrix_channel_should_apply,
+            dingtalk_channel_should_apply,
+            channel_policy_should_apply,
+            package_mcp_should_apply,
             _duration_ms(started_at),
         )
         self._apply_member_identity(config)
         if self.runtime_reconcile is not None:
             self.runtime_reconcile(config)
-        self._apply_model(config)
-        self._apply_mcp_servers(config)
-        self._apply_matrix_channel(config)
-        self._apply_dingtalk_channel(config)
-        self._apply_channel_policy(config)
+        if model_should_apply:
+            self._apply_model(config)
+            self._applied_model_identity = model_identity
+        if direct_mcp_should_apply:
+            self._apply_mcp_servers(config)
+            self._applied_direct_mcp_identity = direct_mcp_identity
+        if matrix_channel_should_apply:
+            self._apply_matrix_channel(config)
+            self._applied_matrix_channel_identity = matrix_channel_identity
+        if dingtalk_channel_should_apply:
+            self._apply_dingtalk_channel(config)
+            self._applied_dingtalk_channel_identity = dingtalk_channel_identity
+        if channel_policy_should_apply:
+            self._apply_channel_policy(config)
+            self._applied_channel_policy_identity = channel_policy_identity
         self._apply_team_context_prompt(config)
 
         applied_package = self.package_manager.apply(config)
-        self._apply_package_mcp_servers(applied_package)
-        self._apply_package_skills(applied_package)
-        self._apply_managed_skills(config)
-        self._apply_inline_config(config)
+        if package_mcp_should_apply:
+            self._apply_package_mcp_servers(applied_package)
+            self._applied_package_mcp_identity = package_mcp_identity
+        if package_skills_should_apply:
+            self._apply_package_skills(applied_package)
+            self._applied_package_skills_identity = package_mcp_identity
+        if managed_skills_should_apply:
+            self._apply_managed_skills(config)
+            self._applied_managed_skills_identity = managed_skills_identity
+        if inline_config_should_apply:
+            self._apply_inline_config(config)
+            self._applied_inline_config_identity = inline_config_identity
 
         adapter_applied = False
         if adapter_should_apply:
@@ -1379,6 +1447,25 @@ class RuntimeUpdater:
             _duration_ms(started_at),
         )
         return ApplyResult(runtime_config=config, changed=True, agent_package_dir=applied_package)
+
+    def _direct_mcp_identity(self, config: MemberRuntimeConfig) -> str:
+        return self._component_identity(self._mcporter_servers(config))
+
+    def _component_identity(self, value: Any) -> str:
+        payload = _stable_json(value).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+    def _channel_policy_identity(self, config: MemberRuntimeConfig) -> str:
+        group_allow, dm_allow, group_deny, dm_deny = self._matrix_policy_ids(config)
+        return self._component_identity(
+            {
+                "groupAllow": sorted(set(group_allow)),
+                "dmAllow": sorted(set(dm_allow)),
+                "groupDeny": sorted(set(group_deny)),
+                "dmDeny": sorted(set(dm_deny)),
+                "self": _string(config.member.get("matrixUserId")),
+            }
+        )
 
     def _apply_inline_config(self, config: MemberRuntimeConfig) -> None:
         prompt_files = {
@@ -1514,15 +1601,26 @@ class RuntimeUpdater:
             os.environ["AGENTTEAMS_WORKER_ROLE"] = role
 
     def _apply_model(self, config: MemberRuntimeConfig) -> None:
-        model = config.model
-        if not model:
-            return
-        provider_id = _string(model.get("providerId") or model.get("provider_id") or model.get("provider"))
-        model_name = _string(model.get("model") or model.get("name"))
-        if not provider_id or not model_name:
+        desired = self._model_desired_state(config)
+        if desired is None:
             return
         if self.api_client is None:
             raise RuntimeError("QwenPaw API client is required for model configuration")
+        self.api_client.configure_active_model(
+            desired["provider_id"],
+            desired["model"],
+            base_url=desired["base_url"],
+            api_key=desired["api_key"],
+            provider_name=desired["provider_name"],
+            chat_model=desired["chat_model"],
+        )
+
+    def _model_desired_state(self, config: MemberRuntimeConfig) -> Optional[Dict[str, str]]:
+        model = config.model
+        provider_id = _string(model.get("providerId") or model.get("provider_id") or model.get("provider"))
+        model_name = _string(model.get("model") or model.get("name"))
+        if not provider_id or not model_name:
+            return None
         base_url = _string(
             model.get("baseUrl")
             or model.get("base_url")
@@ -1540,14 +1638,18 @@ class RuntimeUpdater:
         )
         if not api_key and api_key_env:
             api_key = _string(os.getenv(api_key_env))
-        self.api_client.configure_active_model(
-            provider_id,
-            model_name,
-            base_url=self._openai_compatible_base_url(base_url) if base_url else "",
-            api_key=api_key,
-            provider_name=_string(model.get("providerName") or model.get("provider_name") or provider_id),
-            chat_model=_string(model.get("chatModel") or model.get("chat_model") or "OpenAIChatModel"),
-        )
+        return {
+            "provider_id": provider_id,
+            "model": model_name,
+            "base_url": self._openai_compatible_base_url(base_url) if base_url else "",
+            "api_key": api_key,
+            "provider_name": _string(
+                model.get("providerName") or model.get("provider_name") or provider_id
+            ),
+            "chat_model": _string(
+                model.get("chatModel") or model.get("chat_model") or "OpenAIChatModel"
+            ),
+        }
 
     def _openai_compatible_base_url(self, base_url: str) -> str:
         value = base_url.rstrip("/")
@@ -1670,19 +1772,27 @@ class RuntimeUpdater:
         self._write_matrix_access_control(whitelist, blacklist)
 
     def _apply_matrix_channel(self, config: MemberRuntimeConfig) -> None:
-        desired = self._matrix_channel_desired_state(config)
-        if desired is None:
+        payload = self._matrix_channel_payload(config)
+        if payload is None:
             return
         if self.api_client is None:
             raise RuntimeError("QwenPaw API client is required for Matrix configuration")
+        self.api_client.put_channel(
+            "agentteams_matrix",
+            payload,
+            secret_fields={"access_token", "password"},
+        )
+
+    def _matrix_channel_payload(self, config: MemberRuntimeConfig) -> Optional[Dict[str, Any]]:
+        desired = self._matrix_channel_desired_state(config)
+        if desired is None:
+            return None
         groups: Dict[str, Any] = {}
         self._ensure_require_mention_group(groups, "*")
         room_id = desired["room_id"]
         if room_id:
             self._ensure_require_mention_group(groups, room_id)
-        self.api_client.put_channel(
-            "agentteams_matrix",
-            {
+        return {
             "enabled": True,
             "homeserver": desired["homeserver"],
             "user_id": desired["user_id"],
@@ -1695,9 +1805,7 @@ class RuntimeUpdater:
             "show_tool_results": True,
             "show_thinking": True,
             "groups": groups,
-            },
-            secret_fields={"access_token", "password"},
-        )
+        }
 
     def _apply_dingtalk_channel(self, config: MemberRuntimeConfig) -> None:
         desired = config.dingtalk_channel
@@ -1957,6 +2065,11 @@ class RuntimeUpdater:
         if self.api_client is None:
             raise RuntimeError("QwenPaw API client is required for Matrix ACL configuration")
         current = self.api_client.get_channel("agentteams_matrix")
+        if (
+            current.get("access_control_group") is group_enabled
+            and current.get("access_control_dm") is dm_enabled
+        ):
+            return
         try:
             self.api_client.put_channel(
                 "agentteams_matrix",

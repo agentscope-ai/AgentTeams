@@ -49,6 +49,9 @@ class _FakeQwenPawApi:
         }
         self.acls = {"agentteams_matrix": {"whitelist": {}, "blacklist": {}, "pending": []}}
         self.mcp = {}
+        self.mcp_events = []
+        self.channel_events = []
+        self.model_events = []
         self.active_model = None
         self.enabled_skills = []
 
@@ -56,6 +59,7 @@ class _FakeQwenPawApi:
         return dict(self.channels.get(channel, {}))
 
     def put_channel(self, channel, desired, *, secret_fields=()):
+        self.channel_events.append(channel)
         current = self.get_channel(channel)
         payload = dict(desired)
         for field in secret_fields:
@@ -77,17 +81,21 @@ class _FakeQwenPawApi:
         return list(self.mcp.values())
 
     def create_mcp(self, key, payload):
+        self.mcp_events.append(("create", key))
         self.mcp[key] = {"key": key, **payload}
         return self.mcp[key]
 
     def update_mcp(self, key, payload):
+        self.mcp_events.append(("update", key))
         self.mcp[key] = {"key": key, **payload}
         return self.mcp[key]
 
     def delete_mcp(self, key):
+        self.mcp_events.append(("delete", key))
         self.mcp.pop(key, None)
 
     def configure_active_model(self, provider_id, model, **kwargs):
+        self.model_events.append((provider_id, model))
         self.active_model = {"provider_id": provider_id, "model": model, **kwargs}
         return {"active_llm": self.active_model}
 
@@ -220,12 +228,35 @@ def test_runtime_updater_maps_dingtalk_visibility_and_preserves_empty_secret(
             },
         ),
     )
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw={
+                "metadata": {"generation": "1"},
+                "team": {"members": [{"name": "new-member", "role": "coordinator"}]},
+                "member": {"runtime": "qwenpaw"},
+                "desired": {
+                    "channels": {
+                        "dingtalk": {
+                            "enabled": True,
+                            "client_id": "client-id",
+                            "client_secret": "",
+                            "robot_code": "robot",
+                            "filter_thinking": True,
+                            "filter_tool_messages": False,
+                        },
+                    },
+                },
+            },
+        ),
+    )
 
     actual = updater.api_client.channels["dingtalk"]
     assert actual["client_secret"] == "existing-secret"
     assert actual["show_thinking"] is False
     assert actual["show_tool_calls"] is True
     assert actual["show_tool_results"] is True
+    assert updater.api_client.channel_events == ["dingtalk"]
 
 
 def test_runtime_updater_preserves_unmanaged_mcp_clients(tmp_path: Path) -> None:
@@ -240,6 +271,185 @@ def test_runtime_updater_preserves_unmanaged_mcp_clients(tmp_path: Path) -> None
     )
 
     assert "third-party" in updater.api_client.mcp
+
+
+def test_runtime_updater_does_not_reapply_mcp_for_team_member_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENTTEAMS_WORKER_GATEWAY_KEY", "gateway-secret")
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_URL", "http://matrix.example.com")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "matrix-token")
+    updater = _runtime_updater(config=_config(tmp_path), package_manager=_NoopPackageManager())
+
+    def runtime_config(generation: str, members: list[dict[str, str]]) -> MemberRuntimeConfig:
+        return MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw={
+                "metadata": {"generation": generation},
+                "team": {"teamRoomId": "!team:matrix.local", "members": members},
+                "member": {
+                    "runtime": "qwenpaw",
+                    "matrixUserId": "@worker:matrix.local",
+                },
+                "credentials": {
+                    "matrixTokenEnv": "AGENTTEAMS_WORKER_MATRIX_TOKEN",
+                    "gatewayKeyEnv": "AGENTTEAMS_WORKER_GATEWAY_KEY",
+                },
+                "desired": {
+                    "model": {
+                        "providerId": "agentteams-gateway",
+                        "model": "qwen-plus",
+                        "gatewayUrl": "https://gateway.example.com",
+                    },
+                    "mcpServers": [
+                        {"name": "docs", "url": "https://gateway.example.com/mcp"},
+                    ],
+                },
+            },
+        )
+
+    first = runtime_config(
+        "1",
+        [
+            {"name": "alice", "role": "coordinator", "matrixUserId": "@alice:matrix.local"},
+            {"name": "bob", "role": "coordinator", "matrixUserId": "@bob:matrix.local"},
+        ],
+    )
+    reordered = runtime_config(
+        "1",
+        [
+            {"name": "bob", "role": "coordinator", "matrixUserId": "@bob:matrix.local"},
+            {"name": "alice", "role": "coordinator", "matrixUserId": "@alice:matrix.local"},
+        ],
+    )
+    changed = runtime_config(
+        "1",
+        [
+            {"name": "bob", "role": "coordinator", "matrixUserId": "@bob:matrix.local"},
+            {"name": "alice", "role": "coordinator", "matrixUserId": "@alice:matrix.local"},
+            {"name": "carol", "role": "coordinator", "matrixUserId": "@carol:matrix.local"},
+        ],
+    )
+
+    first_result = updater.apply_once(runtime_config=first, reapply_adapter=False)
+    reordered_result = updater.apply_once(runtime_config=reordered, reapply_adapter=False)
+    changed_result = updater.apply_once(runtime_config=changed, reapply_adapter=False)
+
+    assert first_result.changed is True
+    assert reordered_result.changed is True
+    assert changed_result.changed is True
+    assert updater.api_client.mcp_events == [("create", "docs")]
+    assert updater.api_client.model_events == [("agentteams-gateway", "qwen-plus")]
+    assert updater.api_client.channel_events == [
+        "agentteams_matrix",
+        "agentteams_matrix",
+    ]
+
+
+def test_runtime_updater_reapplies_direct_mcp_when_effective_payload_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENTTEAMS_WORKER_GATEWAY_KEY", "gateway-secret")
+    updater = _runtime_updater(config=_config(tmp_path), package_manager=_NoopPackageManager())
+
+    def runtime_config(url: str) -> MemberRuntimeConfig:
+        return MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw={
+                "metadata": {"generation": url},
+                "member": {"runtime": "qwenpaw"},
+                "desired": {"mcpServers": [{"name": "docs", "url": url}]},
+            },
+        )
+
+    first = runtime_config("https://one.example/mcp")
+    second = runtime_config("https://two.example/mcp")
+    updater.apply_once(runtime_config=first, reapply_adapter=False)
+    updater.apply_once(runtime_config=second, reapply_adapter=False)
+    updater.apply_once(runtime_config=second, force=True, reapply_adapter=False)
+    updater.api_client.mcp.pop("docs")
+    updater.apply_once(runtime_config=second, force=True, reapply_adapter=False)
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw={
+                "metadata": {"generation": "removed"},
+                "member": {"runtime": "qwenpaw"},
+                "desired": {"mcpServers": []},
+            },
+        ),
+        reapply_adapter=False,
+    )
+
+    assert updater.api_client.mcp_events == [
+        ("create", "docs"),
+        ("update", "docs"),
+        ("update", "docs"),
+        ("create", "docs"),
+        ("delete", "docs"),
+    ]
+    assert "docs" not in updater.api_client.mcp
+
+
+def test_runtime_updater_reapplies_package_mcp_only_when_package_identity_changes(
+    tmp_path: Path,
+) -> None:
+    class PackageManager:
+        def __init__(self) -> None:
+            self.client_reads: list[str] = []
+
+        def apply(self, runtime_config: MemberRuntimeConfig) -> Path:
+            version = runtime_config.agent_package_identity[2]
+            return tmp_path / f"package-{version}"
+
+        def package_mcp_clients(self, package_dir: Path) -> dict[str, dict[str, str]]:
+            self.client_reads.append(package_dir.name)
+            return {
+                "package-docs": {
+                    "name": "package-docs",
+                    "transport": "streamable_http",
+                    "url": f"https://{package_dir.name}.example/mcp",
+                },
+            }
+
+        def package_skill_names(self, _package_dir: Path) -> list[str]:
+            return []
+
+    package_manager = PackageManager()
+    updater = _runtime_updater(config=_config(tmp_path), package_manager=package_manager)
+
+    def runtime_config(version: str, generation: str) -> MemberRuntimeConfig:
+        return MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw={
+                "metadata": {"generation": generation},
+                "team": {"members": [{"name": generation, "role": "coordinator"}]},
+                "member": {"runtime": "qwenpaw"},
+                "desired": {
+                    "agentPackage": {
+                        "ref": f"file:///tmp/package-{version}.tar.gz",
+                        "name": "demo",
+                        "version": version,
+                        "digest": f"sha256:{version}",
+                    },
+                },
+            },
+        )
+
+    updater.apply_once(runtime_config=runtime_config("1", "1"), reapply_adapter=False)
+    updater.apply_once(runtime_config=runtime_config("1", "2"), reapply_adapter=False)
+    package_v2 = runtime_config("2", "3")
+    updater.apply_once(runtime_config=package_v2, reapply_adapter=False)
+    updater.apply_once(runtime_config=package_v2, force=True, reapply_adapter=False)
+
+    assert package_manager.client_reads == ["package-1", "package-2", "package-2"]
+    assert updater.api_client.mcp_events == [
+        ("create", "package-docs"),
+        ("update", "package-docs"),
+        ("update", "package-docs"),
+    ]
 
 
 def _agent_package(tmp_path: Path, version: str, *, include_teams: bool = False) -> Path:

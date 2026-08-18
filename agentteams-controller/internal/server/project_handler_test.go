@@ -3245,6 +3245,56 @@ func TestReplanProject_DuplicateID400(t *testing.T) {
 	}
 }
 
+// TestReplanProject_UnsafeTaskID400 guards _safe_id parity: the TeamHarness
+// reference rejects task ids outside [A-Za-z0-9][A-Za-z0-9._-]* because ids
+// become TaskMeta object-key segments (shared/tasks/{id}/meta.json).
+func TestReplanProject_UnsafeTaskID400(t *testing.T) {
+	cases := []string{
+		"task with space",
+		"../escape",
+		"t/1",
+		"-leading-dash",
+		".leading-dot",
+		"任务一",
+	}
+	for _, tc := range cases {
+		store := ossfake.NewMemory()
+		putProject(store, "shared/projects/p1/meta.json", map[string]any{
+			"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag", "tasks": []map[string]any{},
+		})
+		h := newProjectTestHandler(t, store)
+		body := `{"tasks":[{"taskId":"` + tc + `","title":"X"}]}`
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/replan", strings.NewReader(body))
+		req.SetPathValue("id", "p1")
+		req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+		rec := httptest.NewRecorder()
+		h.ReplanProject(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("taskId %q: status=%d, want 400 (unsafe id)", tc, rec.Code)
+		}
+	}
+}
+
+// TestReplanProject_SafeTaskIDAccepted guards the positive side of the
+// _safe_id rule: ids mixing letters, digits, dots, dashes and underscores
+// (with a leading alphanumeric) remain valid.
+func TestReplanProject_SafeTaskIDAccepted(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag", "tasks": []map[string]any{},
+	})
+	h := newProjectTestHandler(t, store)
+	body := `{"tasks":[{"taskId":"t-1.x_2","title":"X"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/replan", strings.NewReader(body))
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.ReplanProject(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200 for safe id", rec.Code, rec.Body.String())
+	}
+}
+
 func TestReplanProject_UnknownDependency400(t *testing.T) {
 	store := ossfake.NewMemory()
 	putProject(store, "shared/projects/p1/meta.json", map[string]any{

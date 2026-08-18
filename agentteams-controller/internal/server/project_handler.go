@@ -2123,6 +2123,25 @@ func (h *ProjectHandler) ReplanProject(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, h.buildWorkflow(meta, pwc.team, false))
 }
 
+// isSafeTaskID mirrors TeamHarness _safe_id ([A-Za-z0-9][A-Za-z0-9._-]*).
+// Task ids become segments of TaskMeta object keys
+// (shared/tasks/{id}/meta.json) and are embedded in the GetTaskArtifact
+// path allowlist, so separators and traversal characters must be rejected.
+func isSafeTaskID(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case i > 0 && (r == '.' || r == '_' || r == '-'):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // normalizeReplanTasks converts raw plan tasks into projectTaskMeta with the
 // same field normalization as TeamHarness _normalize_task: it accepts
 // taskId/task_id, assignedTo/assigned_to, dependsOn/depends_on; status
@@ -2136,9 +2155,12 @@ func normalizeReplanTasks(raw []json.RawMessage, previous map[string]projectTask
 		if err := json.Unmarshal(item, &m); err != nil {
 			return nil, fmt.Errorf("invalid task entry: %v", err)
 		}
-		taskID := firstString(m["taskId"], m["task_id"])
+		taskID := strings.TrimSpace(firstString(m["taskId"], m["task_id"]))
 		if taskID == "" {
 			return nil, fmt.Errorf("taskId is required")
+		}
+		if !isSafeTaskID(taskID) {
+			return nil, fmt.Errorf("taskId must be a safe id: %s", taskID)
 		}
 		prev, hasPrev := previous[taskID]
 		status := firstString(m["status"])

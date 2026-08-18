@@ -117,17 +117,17 @@ The upload package must meet these requirements:
 - `name` contains only letters, numbers, dots, underscores, and hyphens, and starts with a letter or number.
 - Include `scripts/`, `references/`, and other supporting files with `SKILL.md`; the Dashboard preserves the complete file structure under the Skill root.
 
-#### Distribute from the Skill Center
+#### Distribute from the Resource Center marketplace
 
-1. Open the Dashboard and select **技能中心 (Skill Center)** in the left navigation.
-2. Click **分发技能 (Distribute Skill)** beside the page title.
-3. Select the target Worker in the dialog.
-4. Drop or choose the Skill ZIP and confirm that the filename and size appear.
-5. Click **分发技能 (Distribute Skill)** and wait for the result and reload note.
+1. Open the Dashboard and select **资源中心 (Resource Center) → 市场 (Marketplace)** in the left navigation.
+2. If the Skill is not yet in the marketplace, click **上传技能 (Upload Skill)** in the upper-right corner, choose the Skill ZIP, click **解析预览 (Parse Preview)** to confirm its name and description, and then click **上传 (Upload)**.
+3. Find the target Skill in the marketplace and click the send icon labeled **分发到 Worker (Distribute to Worker)** in that row's action area.
+4. Select one or more target Workers in the **分发技能到 Worker (Distribute Skill to Worker)** dialog.
+5. Click **分发到 N 个 Worker (Distribute to N Workers)** and wait for each Worker's distribution result and reload note.
 
-You can also use **Workers → target Worker → 详情 (Details) → 上传技能包 (Upload Skill Package)** to enter the same Worker-specific distribution flow.
+You can also upload a Skill ZIP directly to one Worker through **Workers → target Worker → 详情 (Details) → 上传技能包 (Upload Skill Package)**.
 
-> **Note:** **上传技能 (Upload Skill)** above the Skill Center list adds a Skill to the Dashboard's centralized Skill catalog; it does not distribute that Skill to a Worker. To install a Worker Skill, use **分发技能 (Distribute Skill)** beside the page title or **上传技能包 (Upload Skill Package)** in Worker details.
+> **Note:** **上传技能 (Upload Skill)** only adds a Skill to the Dashboard's centralized marketplace; it does not distribute that Skill to a Worker. After uploading, click **分发到 Worker (Distribute to Worker)** in that Skill's row, or use **上传技能包 (Upload Skill Package)** in Worker details for a direct upload.
 
 #### Load and verify
 

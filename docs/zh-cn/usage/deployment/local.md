@@ -291,7 +291,7 @@ Bash 安装器默认安装 Dashboard。手动模式可以设置：
 
 Dashboard 仅支持当前 embedded controller 架构。PowerShell 安装器当前不安装 Dashboard。
 
-Dashboard 启用后，可以在**技能中心 → 分发技能**中选择目标 Worker 并上传 Skill ZIP，也可以从 **Workers → 目标 Worker → 详情 → 上传技能包**进入。该操作会直接写入 Worker 的持久化 Skill 目录并尝试重新加载 Worker；详细的包格式、加载影响和验证方式参见 [Worker 指南：通过 Dashboard 分发](../worker-guide.md#方式二通过-dashboard-分发)。
+Dashboard 启用后，可以进入**资源中心 → 市场**；如果 Skill 尚未入库，先点击**上传技能**完成上传，再从目标 Skill 所在行点击**分发到 Worker**并选择一个或多个 Worker。也可以从 **Workers → 目标 Worker → 详情 → 上传技能包**直接为单个 Worker 上传 Skill ZIP。该操作会直接写入 Worker 的持久化 Skill 目录并尝试重新加载 Worker；详细的包格式、加载影响和验证方式参见 [Worker 指南：通过 Dashboard 分发](../worker-guide.md#方式二通过-dashboard-分发)。
 
 ### 14. Matrix E2EE
 

@@ -363,9 +363,9 @@ zip -r bilingual-doc-review.zip bilingual-doc-review/
 
 **方式 B：通过 Dashboard 分发**
 
-进入**资源中心 → 市场**。如果 `bilingual-doc-review` 尚未入库，先点击**上传技能**并上传 `bilingual-doc-review.zip`；然后在该 Skill 所在行点击**分发到 Worker**，选择 `doc-reviewer`，再点击**分发到 1 个 Worker**。也可以从 **Workers → doc-reviewer → 详情 → 上传技能包**直接上传 ZIP。应在 Worker 空闲时分发，避免休眠、唤醒过程打断正在执行的任务。
+进入**资源中心 → 市场**。如果 `bilingual-doc-review` 尚未入库，先点击**上传技能**并上传 `bilingual-doc-review.zip`；然后在该 Skill 所在行点击**分发到 Worker**，选择 `doc-reviewer`，再点击**分发到 1 个 Worker**。也可以从 **Workers → doc-reviewer → 详情 → 上传技能包**直接上传 ZIP。加载过程可能重启 Worker，因此应在 Worker 空闲时分发。
 
-分发完成后，在 Worker 详情的“已分发技能”中确认 `bilingual-doc-review`。如果使用 Manager 方式，还可以检查 `Worker.spec.skills`；Dashboard 直接分发不会更新该字段。
+分发完成后，在 Worker 详情的“已分发技能”和 `Worker.spec.skills` 中确认 `bilingual-doc-review`。Manager 与 Dashboard 分发都会维护声明式分配记录。
 
 ### 3. 准备检查材料
 

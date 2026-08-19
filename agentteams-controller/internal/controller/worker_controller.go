@@ -125,7 +125,7 @@ func (r *WorkerReconciler) Reconcile(ctx context.Context, req reconcile.Request)
 		}
 		if reterr == nil {
 			worker.Status.ObservedGeneration = worker.Generation
-			worker.Status.Message = state.Message
+			worker.Status.Message = state.statusMessage()
 		} else {
 			worker.Status.Message = reterr.Error()
 		}

@@ -619,6 +619,63 @@ func TestReconcileMemberConfigQwenPawDistributesSkillsAndWritesRuntimeConfig(t *
 	}
 }
 
+func TestReconcileMemberConfigSkillRecoveryFailureIsNonBlocking(t *testing.T) {
+	for _, runtime := range []string{"qwenpaw", "copaw"} {
+		t.Run(runtime, func(t *testing.T) {
+			deployer := mocks.NewMockDeployer()
+			deployer.PushOnDemandSkillsFn = func(context.Context, string, []string, []v1beta1.RemoteSkillSource) error {
+				return errors.New("worker copy missing and source unavailable")
+			}
+			state := &MemberState{ProvResult: &service.WorkerProvisionResult{
+				MatrixToken: "matrix-token",
+				GatewayKey:  "gateway-key",
+			}}
+			member := MemberContext{
+				Name:        "worker-cr-a",
+				RuntimeName: "worker-a",
+				Role:        RoleStandalone,
+				Spec: v1beta1.WorkerSpec{
+					Runtime: runtime,
+					Skills:  []string{"dashboard-skill"},
+				},
+			}
+
+			if err := ReconcileMemberConfig(context.Background(), MemberDeps{Deployer: deployer}, member, state); err != nil {
+				t.Fatalf("Skill recovery failure must not block config reconcile: %v", err)
+			}
+			if len(state.Warnings) != 1 || !strings.Contains(state.Warnings[0], "Skill assignment warning") {
+				t.Fatalf("state.Warnings=%v, want one non-blocking Skill warning", state.Warnings)
+			}
+			if !strings.Contains(state.statusMessage(), "source unavailable") {
+				t.Fatalf("statusMessage=%q, want recovery failure detail", state.statusMessage())
+			}
+
+			deployPkg, writeInline, deployConfig, pushSkills, _ := deployer.CallCounts()
+			if pushSkills != 1 {
+				t.Fatalf("PushOnDemandSkills calls=%d, want 1", pushSkills)
+			}
+			if runtime == "qwenpaw" {
+				if deployPkg != 0 || writeInline != 0 || deployConfig != 0 || len(deployer.Calls.DeployMemberRuntimeConfig) != 1 {
+					t.Fatalf("qwenpaw config path package=%d inline=%d legacyConfig=%d runtimeConfig=%d",
+						deployPkg, writeInline, deployConfig, len(deployer.Calls.DeployMemberRuntimeConfig))
+				}
+			} else if deployPkg != 1 || writeInline != 1 || deployConfig != 1 {
+				t.Fatalf("copaw config path package=%d inline=%d config=%d", deployPkg, writeInline, deployConfig)
+			}
+		})
+	}
+}
+
+func TestMemberStateStatusMessagePreservesBackendDetailAndWarnings(t *testing.T) {
+	state := &MemberState{Message: "container detail"}
+	state.addWarning("Skill assignment warning: recovery failed")
+	state.addWarning("Skill assignment warning: recovery failed")
+
+	if got, want := state.statusMessage(), "container detail; Skill assignment warning: recovery failed"; got != want {
+		t.Fatalf("statusMessage=%q, want %q", got, want)
+	}
+}
+
 func TestReconcileMemberConfigEdgeWritesRemoteManagedRuntimeConfigOnly(t *testing.T) {
 	deployer := mocks.NewMockDeployer()
 	state := &MemberState{

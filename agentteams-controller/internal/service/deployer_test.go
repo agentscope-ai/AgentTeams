@@ -111,6 +111,69 @@ func TestEnsureTeamStorageCreatesPrefixMarkers(t *testing.T) {
 	}
 }
 
+func TestPushOnDemandSkillsWithoutManagerExecutorUsesExistingWorkerCopy(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{OSS: store})
+	key := "agents/alice/skills/dashboard-skill/SKILL.md"
+	if err := store.PutObject(ctx, key, []byte("---\nname: dashboard-skill\n---\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := deployer.PushOnDemandSkills(ctx, "alice", []string{"dashboard-skill"}, nil); err != nil {
+		t.Fatalf("existing Worker copy must satisfy assignment without Manager executor: %v", err)
+	}
+
+	err := deployer.PushOnDemandSkills(ctx, "alice", []string{"missing-skill"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "Worker copies are missing: missing-skill") {
+		t.Fatalf("missing Worker copy should return a recovery error, got %v", err)
+	}
+}
+
+func TestMissingWorkerSkillsChecksCanonicalSkillContract(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{OSS: store})
+	if err := store.PutObject(ctx, "agents/alice/skills/present/SKILL.md", []byte("skill")); err != nil {
+		t.Fatal(err)
+	}
+
+	missing, err := deployer.missingWorkerSkills(ctx, "alice", []string{"present", "missing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missing) != 1 || missing[0] != "missing" {
+		t.Fatalf("missing=%v, want [missing]", missing)
+	}
+}
+
+func TestPushOnDemandSkillsRemoteFailureDependsOnWorkerCopy(t *testing.T) {
+	ctx := context.Background()
+	remote := []v1beta1.RemoteSkillSource{{
+		Source: "https://unsupported.example.com/skills",
+		Skills: []v1beta1.RemoteSkill{{Name: "remote-skill"}},
+	}}
+
+	t.Run("existing copy suppresses recovery failure", func(t *testing.T) {
+		store := ossfake.NewMemory()
+		if err := store.PutObject(ctx, "agents/alice/skills/remote-skill/SKILL.md", []byte("skill")); err != nil {
+			t.Fatal(err)
+		}
+		deployer := NewDeployer(DeployerConfig{OSS: store})
+		if err := deployer.PushOnDemandSkills(ctx, "alice", nil, remote); err != nil {
+			t.Fatalf("existing Worker copy must satisfy remote assignment: %v", err)
+		}
+	})
+
+	t.Run("missing copy reports recovery failure", func(t *testing.T) {
+		deployer := NewDeployer(DeployerConfig{OSS: ossfake.NewMemory()})
+		err := deployer.PushOnDemandSkills(ctx, "alice", nil, remote)
+		if err == nil || !strings.Contains(err.Error(), "Worker copies missing: remote-skill") {
+			t.Fatalf("missing Worker copy should report recovery failure, got %v", err)
+		}
+	})
+}
+
 func TestDeployWorkerConfigInjectsTeamLeaderContext(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()

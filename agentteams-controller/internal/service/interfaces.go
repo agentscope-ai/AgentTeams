@@ -71,6 +71,9 @@ type WorkerDeployer interface {
 	DeployMemberRuntimeConfig(ctx context.Context, req MemberRuntimeConfigDeployRequest) error
 	MergeMemberRuntimeTeamContext(ctx context.Context, req MemberRuntimeConfigDeployRequest) error
 	DeployWorkerConfig(ctx context.Context, req WorkerDeployRequest) error
+	// PushOnDemandSkills restores declared Skill files when possible. It returns
+	// an error only when a required Worker copy is missing (or cannot be
+	// verified) and the configured source cannot restore it.
 	PushOnDemandSkills(ctx context.Context, workerName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error
 	PrepareWorkerDeps(ctx context.Context, req WorkerDepsPrepareRequest) error
 	CleanupOSSData(ctx context.Context, workerName string) error

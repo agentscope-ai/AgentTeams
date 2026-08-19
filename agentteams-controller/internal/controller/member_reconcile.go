@@ -185,9 +185,38 @@ type MemberState struct {
 	// the container is not fully healthy.
 	Message string
 
+	// Warnings holds non-blocking reconcile warnings that must remain visible
+	// even when later phases report their own status message. Warnings do not
+	// change the Worker phase or prevent ObservedGeneration from advancing.
+	Warnings []string
+
 	// RequeueAfter records the next background reconcile needed by member
 	// internals such as sandbox token projection.
 	RequeueAfter time.Duration
+}
+
+func (s *MemberState) addWarning(message string) {
+	if s == nil || message == "" {
+		return
+	}
+	for _, existing := range s.Warnings {
+		if existing == message {
+			return
+		}
+	}
+	s.Warnings = append(s.Warnings, message)
+}
+
+func (s *MemberState) statusMessage() string {
+	if s == nil {
+		return ""
+	}
+	parts := make([]string, 0, len(s.Warnings)+1)
+	if s.Message != "" {
+		parts = append(parts, s.Message)
+	}
+	parts = append(parts, s.Warnings...)
+	return strings.Join(parts, "; ")
 }
 
 // resolveBackendForMember returns the worker backend matching the requested
@@ -360,7 +389,6 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 	if state.ProvResult == nil {
 		return nil
 	}
-	logger := log.FromContext(ctx)
 	effectiveRuntime := backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime)
 	var aiGatewayURL string
 	if m.ModelProviderInfo != nil {
@@ -378,11 +406,7 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 		}
 		// Put assigned skill files in member storage before publishing the
 		// desired-state snapshot that tells managed runtimes to load them.
-		if len(m.Spec.Skills) > 0 || len(m.Spec.RemoteSkills) > 0 {
-			if err := d.Deployer.PushOnDemandSkills(ctx, m.RuntimeName, m.Spec.Skills, m.Spec.RemoteSkills); err != nil {
-				return fmt.Errorf("push on-demand skills: %w", err)
-			}
-		}
+		reconcileMemberSkills(ctx, d, m, state)
 		if err := d.Deployer.DeployMemberRuntimeConfig(ctx, service.MemberRuntimeConfigDeployRequest{
 			Name:                  m.Name,
 			RuntimeName:           m.RuntimeName,
@@ -424,10 +448,26 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 		return fmt.Errorf("deploy worker config: %w", err)
 	}
 
-	if err := d.Deployer.PushOnDemandSkills(ctx, m.RuntimeName, m.Spec.Skills, m.Spec.RemoteSkills); err != nil {
-		logger.Info("skill push failed", "error", err)
-	}
+	reconcileMemberSkills(ctx, d, m, state)
 	return nil
+}
+
+// reconcileMemberSkills restores declared Skill files when they are absent
+// from the Worker's canonical storage. The deployer returns an error only when
+// the target copy is missing (or cannot be verified) and recovery also fails.
+// That condition is visible in status, but it must not block unrelated config
+// or container reconciliation: a running Worker may continue using its current
+// runtime state while an operator repairs the missing Skill source.
+func reconcileMemberSkills(ctx context.Context, d MemberDeps, m MemberContext, state *MemberState) {
+	if len(m.Spec.Skills) == 0 && len(m.Spec.RemoteSkills) == 0 {
+		return
+	}
+	if err := d.Deployer.PushOnDemandSkills(ctx, m.RuntimeName, m.Spec.Skills, m.Spec.RemoteSkills); err != nil {
+		log.FromContext(ctx).Info("declared Skill recovery failed (non-blocking warning)",
+			"worker", m.RuntimeName,
+			"error", err.Error())
+		state.addWarning(fmt.Sprintf("Skill assignment warning: declared Skill files are missing and Manager recovery failed: %v", err))
+	}
 }
 
 func runtimeSkillRegistryConfig(d MemberDeps, m MemberContext, state *MemberState) (string, string) {

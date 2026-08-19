@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/url"
@@ -747,15 +748,46 @@ func (d *Deployer) PushOnDemandSkills(ctx context.Context, workerName string, sk
 
 	agentPrefix := fmt.Sprintf("agents/%s", workerName)
 	if err := d.pushRemoteSkills(ctx, workerName, agentPrefix, remoteSkills); err != nil {
-		return err
+		remoteNames := remoteSkillNames(remoteSkills)
+		if len(remoteNames) == 0 {
+			return fmt.Errorf("push remote skills: %w", err)
+		}
+		missing, verifyErr := d.missingWorkerSkills(ctx, workerName, remoteNames)
+		if verifyErr != nil {
+			return fmt.Errorf("push remote skills: %w (verify existing Worker copies: %v)", err, verifyErr)
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf("push remote skills: %w (Worker copies missing: %s)", err, strings.Join(missing, ", "))
+		}
+		logger.Info("remote Skill recovery failed but existing Worker copies are intact",
+			"worker", workerName,
+			"skills", remoteNames,
+			"error", err.Error())
 	}
 
-	if len(skills) == 0 || d.executor == nil {
+	if len(skills) == 0 {
+		return nil
+	}
+	if d.executor == nil {
+		missing, err := d.missingWorkerSkills(ctx, workerName, skills)
+		if err != nil {
+			return fmt.Errorf("verify declared Worker skills without Manager executor: %w", err)
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf("Manager skill recovery is unavailable and Worker copies are missing: %s", strings.Join(missing, ", "))
+		}
 		return nil
 	}
 	scriptPath := "/opt/agentteams/agent/skills/worker-management/scripts/push-worker-skills.sh"
 	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
-		logger.Info("push-worker-skills.sh not found (incluster mode), skipping on-demand skill push",
+		missing, verifyErr := d.missingWorkerSkills(ctx, workerName, skills)
+		if verifyErr != nil {
+			return fmt.Errorf("verify declared Worker skills without Manager push script: %w", verifyErr)
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf("Manager push script is unavailable and Worker copies are missing: %s", strings.Join(missing, ", "))
+		}
+		logger.Info("push-worker-skills.sh not found; existing Worker copies satisfy the assignments",
 			"worker", workerName, "skills", skills)
 		return nil
 	}
@@ -767,10 +799,61 @@ func (d *Deployer) PushOnDemandSkills(ctx context.Context, workerName string, sk
 			"--skill", skill,
 			"--no-notify",
 		); err != nil {
-			return fmt.Errorf("push skill %q to worker %q: %w", skill, workerName, err)
+			missing, verifyErr := d.missingWorkerSkills(ctx, workerName, []string{skill})
+			if verifyErr != nil {
+				return fmt.Errorf("push skill %q to worker %q: %w (verify existing Worker copy: %v)", skill, workerName, err, verifyErr)
+			}
+			if len(missing) > 0 {
+				return fmt.Errorf("push skill %q to worker %q: %w (Worker copy missing)", skill, workerName, err)
+			}
+			logger.Info("Skill recovery failed but existing Worker copy is intact",
+				"worker", workerName,
+				"skill", skill,
+				"error", err.Error())
 		}
 	}
 	return nil
+}
+
+func remoteSkillNames(sources []v1beta1.RemoteSkillSource) []string {
+	seen := make(map[string]struct{})
+	names := make([]string, 0)
+	for _, source := range sources {
+		for _, skill := range source.Skills {
+			if skill.Name == "" {
+				continue
+			}
+			if _, ok := seen[skill.Name]; ok {
+				continue
+			}
+			seen[skill.Name] = struct{}{}
+			names = append(names, skill.Name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// missingWorkerSkills checks the canonical object-storage contract consumed by
+// every Worker runtime. Runtime-specific workspaces are derived from this
+// prefix by the Worker sync layer and are not authoritative distribution
+// targets.
+func (d *Deployer) missingWorkerSkills(ctx context.Context, workerName string, skills []string) ([]string, error) {
+	if d.oss == nil {
+		return nil, fmt.Errorf("object storage is not configured")
+	}
+	missing := make([]string, 0)
+	for _, skill := range skills {
+		key := fmt.Sprintf("agents/%s/skills/%s/SKILL.md", workerName, skill)
+		if err := d.oss.Stat(ctx, key); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				missing = append(missing, skill)
+				continue
+			}
+			return nil, fmt.Errorf("stat %s: %w", key, err)
+		}
+	}
+	return missing, nil
 }
 
 func (d *Deployer) PrepareWorkerDeps(ctx context.Context, req WorkerDepsPrepareRequest) error {

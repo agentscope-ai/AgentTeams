@@ -62,7 +62,7 @@ Controller 提供两个只读端点，把 TeamHarness 项目状态
 
 | 参数 | 类型 | 含义 |
 |:--|:--|:--|
-| `includeTasks` | `bool` | 为 `true` 时同时读取每个任务的 TaskMeta（`shared/tasks/{id}/meta.json`），在响应中附加 `tasks_detail` 数组（spec/result/交付物字段）。默认 `false` 保持响应轻量。 |
+| `includeTasks` | `bool` | 为 `true` 时同时读取每个任务的 TaskMeta（`shared/tasks/{id}/meta.json`），在响应中附加 `tasks_detail` 数组（spec/result/交付物字段及不透明的 `submission_id` fence）。默认 `false` 保持响应轻量。 |
 
 响应 `200 OK`：
 
@@ -108,6 +108,7 @@ Controller 提供两个只读端点，把 TeamHarness 项目状态
       "assigned_to": "@w1:matrix.local",
       "summary": "Alpha report done",
       "result_status": "SUCCESS",
+      "submission_id": "submission-123",
       "deliverables": [{"type": "file", "path": "shared/tasks/t1/output.pdf"}],
       "result_path": "shared/tasks/t1/result.md"
     }
@@ -115,7 +116,7 @@ Controller 提供两个只读端点，把 TeamHarness 项目状态
 }
 ```
 
-`tasks_detail` 仅在 `?includeTasks=true` 时出现。它透传项目级 `nodes[]` 摘要不包含的 TaskMeta 字段：`spec_path`（任务规格文件）、`summary` / `result_status` / `result_path`（提交结果）、`deliverables`（产物清单）与 `cancel_reason`（取消原因）。TaskMeta 按与项目相同的双前缀布局读取（优先 `teams/{team}/shared/tasks/{id}/meta.json`，其次 `shared/tasks/{id}/`），团队作用域的任务优先于任何全局副本。没有 TaskMeta 文件的任务（如尚未委派）会被跳过；单个任务读取错误也会跳过，避免一个坏任务拖垮整个响应。
+`tasks_detail` 仅在 `?includeTasks=true` 时出现。它透传项目级 `nodes[]` 摘要不包含的 TaskMeta 字段：`spec_path`（任务规格文件）、`summary` / `result_status` / `result_path`（提交结果）、`deliverables`（产物清单）、`cancel_reason`（取消原因）以及用于约束 accept/cancel 决定的不透明 `submission_id`。TaskMeta 只从项目所属作用域读取：团队项目读取 `teams/{team}/shared/tasks/{id}/meta.json`，standalone 项目读取 `shared/tasks/{id}/meta.json`，不跨作用域回退。`task_id` 或 `project_id` 不匹配的 TaskMeta 会被拒绝。没有 TaskMeta 文件的任务（如尚未委派）会被跳过；单个任务读取错误也会跳过，避免一个坏任务拖垮整个响应。
 
 节点状态归一化为前端友好枚举：
 
@@ -247,14 +248,37 @@ Controller 提供两个只读端点，把 TeamHarness 项目状态
 必须是 `dag`（loop 的重规划走 `record_loop_iteration`）、状态必须是
 `active`、不能有 `in_progress`/`submitted` 任务。响应 `200` 返回更新后的
 工作流。
+重规划保留已有的 cancellation decision；同一个 task id 不能从已取消状态原地重开，
+也不能先从计划删除再以同名任务添加。替代工作必须使用新的 task id。
 
 ### `POST /api/v1/projects/{id}/tasks/{taskId}/cancel`
 
-取消单个任务。请求体要求 `reason`（可选 `replacementTaskId`）。任务必须
-可变——终态任务（completed/revision/blocked/cancelled）以 `409` 拒绝。
-任务的 `TaskMeta` 打上 `status=cancelled` + `cancel_reason`，项目节点状态
-同步更新。响应 `200` 返回更新后的工作流。错误：`400` 缺 reason；`404`
-任务不在项目里/任务 meta 缺失；`409` 终态任务。
+取消单个任务：
+
+```json
+{
+  "reason": "不再需要",
+  "replacementTaskId": "replacement-01",
+  "submissionId": "submission-123"
+}
+```
+
+`reason` 必填，`replacementTaskId` 可选。`submissionId` 是条件必填字段：
+TaskMeta 已有 `submission_id` 时，调用方必须传入完全相同的不透明值。缺失、
+凭空构造或过期的 identity 会在 ProjectMeta/TaskMeta 发生任何写入前以 `409`
+拒绝。
+
+成功后，项目节点和 TaskMeta 都变成 `cancelled`；TaskMeta 持久化稳定的
+`cancel_reason` / `replacement_task_id` / `cancelled_at`，并把已有 pending
+continuation 解决为 `cancelled`，原 `delivery_id` 不变。相同取消请求可幂等
+重试；reason、replacement 或 submission identity 不同则与既有决定冲突。
+已经 `completed`、`revision` 或 `blocked` 的任务不能取消。响应 `200` 返回
+更新后的工作流。错误：`400` 缺 reason 或 replacement task id 非法；`404` 任务不在项目里/TaskMeta
+缺失；`409` 终态任务、submission fence 失败或取消决定冲突。
+
+Controller 先把一份最小 cancellation decision envelope 写入项目节点，再写
+TaskMeta。如果第二次写入失败，完全相同的请求可以补齐 TaskMeta/continuation；
+reason、replacement 或 submission identity 不同的重试会被拒绝。
 
 ### `POST /api/v1/projects/{id}/complete`
 
@@ -298,12 +322,15 @@ agt get projects                      # 列出全部
 agt get projects --team biz-team      # 按团队过滤
 agt get projects demo-project-001     # 工作流详情
 agt get projects demo-project-001 -o json
+agt get projects demo-project-001 --include-tasks -o json
 agt get projects demo-project-001 --mermaid   # 渲染 DAG 为 mermaid
 ```
 
 CLI 原样转发配置的 bearer 令牌（`AGENTTEAMS_AUTH_TOKEN` 或
 `AGENTTEAMS_AUTH_TOKEN_FILE`），所以 L2 人类也可以用——把任一变量指向自己的
 Matrix 访问令牌即可，无需单独的 CLI 认证模式。
+
+`--include-tasks` 必须和 `-o json` 一起使用；默认详情视图不渲染原始 TaskMeta 字段。
 
 ### `agt project`（W-PR-2 写命令）
 
@@ -314,7 +341,8 @@ agt project create --title "新项目" --team biz-team --source matrix
 agt project pause demo-project-001 --reason "客户评审"
 agt project resume demo-project-001
 agt project replan demo-project-001 --tasks tasks.json   # JSON 数组文件
-agt project cancel demo-project-001 demo-project-001-01 --reason "不再需要"
+agt project cancel demo-project-001 demo-project-001-01 \
+  --reason "不再需要" --submission-id submission-123 --team biz-team
 agt project complete demo-project-001
 ```
 

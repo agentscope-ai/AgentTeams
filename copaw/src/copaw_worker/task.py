@@ -4,14 +4,27 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import tempfile
+import threading
 from typing import Any, Protocol
+from uuid import uuid4
 
 
 class TaskflowError(ValueError):
     """Expected user-facing taskflow error."""
+
+
+class TaskDecisionPersistenceError(OSError):
+    """A terminal plan marker persisted before its TaskMeta projection failed."""
+
+    def __init__(self, message: str, *, task: "TaskMeta") -> None:
+        super().__init__(message)
+        self.task = task
 
 
 MARKER_TO_STATUS = {
@@ -20,6 +33,7 @@ MARKER_TO_STATUS = {
     "x": "completed",
     "!": "blocked",
     "\u2192": "revision",
+    "-": "cancelled",
 }
 STATUS_TO_MARKER = {value: key for key, value in MARKER_TO_STATUS.items()}
 RESULT_STATUSES = {
@@ -30,6 +44,9 @@ RESULT_STATUSES = {
     "INTERRUPTED",
 }
 EFFECTIVE_RESULT_STATUSES = {"SUCCESS", "SUCCESS_WITH_NOTES"}
+TERMINAL_TASK_STATUSES = {"completed", "revision", "blocked", "cancelled"}
+_TASK_MUTATION_LOCKS: dict[str, threading.RLock] = {}
+_TASK_MUTATION_LOCKS_GUARD = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -77,6 +94,12 @@ class TaskMeta:
     acknowledged_at: str | None = None
     submitted_at: str | None = None
     event_id: str | None = None
+    submission_id: str | None = None
+    result_digest: str | None = None
+    continuation: dict[str, str] | None = None
+    cancel_reason: str | None = None
+    replacement_task_id: str | None = None
+    cancelled_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -140,8 +163,7 @@ class FileSystemTaskStore:
 
     def write_project_plan(self, project_id: str, plan: str) -> None:
         path = self._project_dir(project_id) / "plan.md"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(plan)
+        _atomic_write_text(path, plan)
 
     def read_task_meta(self, task_id: str) -> TaskMeta:
         path = self._task_dir(task_id) / "meta.json"
@@ -157,6 +179,16 @@ class FileSystemTaskStore:
             assigned_at=data.get("assigned_at"),
             acknowledged_at=data.get("acknowledged_at"),
             submitted_at=data.get("submitted_at"),
+            submission_id=data.get("submission_id"),
+            result_digest=data.get("result_digest"),
+            continuation=(
+                dict(data["continuation"])
+                if isinstance(data.get("continuation"), dict)
+                else None
+            ),
+            cancel_reason=data.get("cancel_reason"),
+            replacement_task_id=data.get("replacement_task_id"),
+            cancelled_at=data.get("cancelled_at"),
             event_id=data.get("event_id"),
         )
 
@@ -186,8 +218,7 @@ class FileSystemTaskStore:
     def write_task_result(self, task_id: str, result: TaskResult) -> None:
         validate_task_result(task_id, result)
         path = self._task_dir(task_id) / "result.md"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(render_task_result(result))
+        _atomic_write_text(path, render_task_result(result))
 
 
 def create_project(
@@ -651,13 +682,22 @@ def is_effective_result(result: TaskResult) -> bool:
 
 def ack_task(store: TaskStore, *, task_id: str, actor: str | None = None) -> TaskMeta:
     """Mark a local task as acknowledged/in progress without touching graph."""
-    meta = store.read_task_meta(task_id)
-    _require_assigned_worker(meta, actor)
-    _require_task_room(meta)
-    meta.status = "in_progress"
-    meta.acknowledged_at = meta.acknowledged_at or _now()
-    store.write_task_meta(meta)
-    return meta
+    with _task_mutation_lock(store, task_id):
+        meta = store.read_task_meta(task_id)
+        _require_assigned_worker(meta, actor)
+        _require_task_room(meta)
+        if meta.status in TERMINAL_TASK_STATUSES:
+            raise TaskflowError(
+                f"ack_task cannot update terminal task: {meta.status}",
+            )
+        if meta.status not in {"assigned", "in_progress"}:
+            raise TaskflowError(
+                f"ack_task cannot update task in status: {meta.status}",
+            )
+        meta.status = "in_progress"
+        meta.acknowledged_at = meta.acknowledged_at or _now()
+        store.write_task_meta(meta)
+        return meta
 
 
 def submit_task(
@@ -667,18 +707,454 @@ def submit_task(
     result: TaskResult | None = None,
     actor: str | None = None,
 ) -> TaskMeta:
+    """Submit a task while preserving the original TaskMeta return contract."""
+    meta, _ = submit_task_with_outcome(
+        store,
+        task_id=task_id,
+        result=result,
+        actor=actor,
+    )
+    return meta
+
+
+def submit_task_with_outcome(
+    store: TaskStore,
+    *,
+    task_id: str,
+    result: TaskResult | None = None,
+    actor: str | None = None,
+) -> tuple[TaskMeta, bool]:
     """Mark a local task submitted after result.md exists and is valid."""
+    with _task_mutation_lock(store, task_id):
+        return _submit_task_with_outcome_unlocked(
+            store,
+            task_id=task_id,
+            result=result,
+            actor=actor,
+        )
+
+
+def _submit_task_with_outcome_unlocked(
+    store: TaskStore,
+    *,
+    task_id: str,
+    result: TaskResult | None,
+    actor: str | None,
+) -> tuple[TaskMeta, bool]:
     meta = store.read_task_meta(task_id)
     _require_assigned_worker(meta, actor)
     _require_task_room(meta)
+    if meta.status in TERMINAL_TASK_STATUSES:
+        raise TaskflowError(
+            f"submit_task cannot update terminal task: {meta.status}",
+        )
+    if meta.status == "submitted":
+        if not meta.submission_id:
+            return _adopt_legacy_submission(
+                store,
+                meta=meta,
+                result=result,
+            )
+        normalized_result = (
+            parse_task_result(render_task_result(result))
+            if result is not None
+            else None
+        )
+        submitted_result: TaskResult | None = None
+        try:
+            submitted_result = store.read_task_result(task_id)
+        except TaskflowError as exc:
+            if "task result not found" not in str(exc):
+                raise
+        normalized_digest = (
+            _task_result_digest(normalized_result)
+            if normalized_result is not None
+            else None
+        )
+        if (
+            submitted_result is not None
+            and meta.result_digest
+            and _task_result_digest(submitted_result) != meta.result_digest
+        ):
+            raise TaskflowError(
+                f"task {task_id} persisted result does not match submitted digest",
+            )
+        if normalized_digest is not None and meta.result_digest:
+            conflicts = normalized_digest != meta.result_digest
+        else:
+            conflicts = (
+                normalized_result is not None
+                and submitted_result is not None
+                and normalized_result != submitted_result
+            )
+        if conflicts:
+            raise TaskflowError(
+                f"task {task_id} is already submitted with a different result",
+            )
+        if submitted_result is None:
+            if normalized_result is None:
+                raise TaskflowError(
+                    f"task {task_id} result is missing; retry with the original result",
+                )
+            if not meta.result_digest:
+                raise TaskflowError(
+                    f"task {task_id} result identity is missing; cannot repair safely",
+                )
+            store.write_task_result(task_id, normalized_result)
+            submitted_result = normalized_result
+        backfilled_identity = False
+        if not meta.result_digest:
+            meta.result_digest = _task_result_digest(submitted_result)
+            backfilled_identity = True
+        if not meta.continuation:
+            delivery_key = "\0".join(
+                (
+                    meta.project_id,
+                    meta.task_id,
+                    meta.submission_id,
+                    "result-submitted:v1",
+                ),
+            )
+            meta.continuation = {
+                "status": "pending",
+                "delivery_id": hashlib.sha256(
+                    delivery_key.encode("utf-8"),
+                ).hexdigest(),
+            }
+            backfilled_identity = True
+        if backfilled_identity:
+            store.write_task_meta(meta)
+        return meta, True
+    if meta.status not in {"assigned", "in_progress"}:
+        raise TaskflowError(
+            f"submit_task cannot update task in status: {meta.status}",
+        )
     if result is not None:
         store.write_task_result(task_id, result)
     else:
         store.read_task_result(task_id)
+    persisted_result = store.read_task_result(task_id)
     meta.status = "submitted"
     meta.submitted_at = _now()
+    meta.submission_id = str(uuid4())
+    meta.result_digest = _task_result_digest(persisted_result)
+    delivery_key = "\0".join(
+        (
+            meta.project_id,
+            meta.task_id,
+            meta.submission_id,
+            "result-submitted:v1",
+        ),
+    )
+    meta.continuation = {
+        "status": "pending",
+        "delivery_id": hashlib.sha256(delivery_key.encode("utf-8")).hexdigest(),
+    }
     store.write_task_meta(meta)
+    return meta, False
+
+
+def _adopt_legacy_submission(
+    store: TaskStore,
+    *,
+    meta: TaskMeta,
+    result: TaskResult | None,
+) -> tuple[TaskMeta, bool]:
+    """Adopt one pre-identity submission using matching persisted evidence.
+
+    The generated ``submission_id`` is deterministic for crash-safe retries,
+    but remains an opaque token to callers; its ``legacy-`` prefix is only a
+    diagnostic marker for migrated state.
+    """
+    if not meta.submitted_at or result is None:
+        raise TaskflowError(
+            f"task {meta.task_id} submission identity is missing; "
+            "cannot reuse safely",
+        )
+    normalized_result = parse_task_result(render_task_result(result))
+    persisted_result = store.read_task_result(meta.task_id)
+    if normalized_result != persisted_result:
+        raise TaskflowError(
+            f"task {meta.task_id} submission identity is missing; "
+            "cannot reuse safely",
+        )
+
+    meta.result_digest = _task_result_digest(persisted_result)
+    adoption_key = "\0".join(
+        (
+            meta.project_id,
+            meta.task_id,
+            meta.submitted_at,
+            meta.result_digest,
+            "legacy-adoption:v1",
+        ),
+    )
+    meta.submission_id = "legacy-" + hashlib.sha256(
+        adoption_key.encode("utf-8"),
+    ).hexdigest()
+    delivery_key = "\0".join(
+        (
+            meta.project_id,
+            meta.task_id,
+            meta.submission_id,
+            "result-submitted:v1",
+        ),
+    )
+    meta.continuation = {
+        "status": "pending",
+        "delivery_id": hashlib.sha256(delivery_key.encode("utf-8")).hexdigest(),
+    }
+    store.write_task_meta(meta)
+    return meta, True
+
+
+def _task_result_digest(result: TaskResult) -> str:
+    """Return the cross-runtime digest for one structured task result.
+
+    The digest intentionally excludes runtime-specific rendering and notes.
+    Deliverables retain their validated order because their order can carry
+    meaning for consumers and must not be silently rewritten.
+    """
+    canonical_result = {
+        "status": result.status.strip(),
+        "summary": _single_line(result.summary),
+        "deliverables": list(result.deliverables),
+    }
+    canonical_json = json.dumps(
+        canonical_result,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(
+        b"teamharness.task-result.v1\0" + canonical_json,
+    ).hexdigest()
+
+
+def accept_task_result(
+    store: TaskStore,
+    *,
+    project_id: str,
+    task_id: str,
+    accepted: bool,
+    submission_id: str | None = None,
+) -> tuple[TaskMeta, bool]:
+    """Commit one Leader decision for a durable task submission."""
+    with _task_mutation_lock(store, task_id):
+        meta, result = _validated_submitted_task(
+            store,
+            project_id=project_id,
+            task_id=task_id,
+            submission_id=submission_id,
+        )
+        terminal_status = {
+            "SUCCESS": "completed" if accepted else "revision",
+            "SUCCESS_WITH_NOTES": "completed" if accepted else "revision",
+            "REVISION_NEEDED": "revision",
+            "BLOCKED": "blocked",
+            "INTERRUPTED": "blocked",
+        }[result.status]
+        return _commit_task_decision(
+            store,
+            meta=meta,
+            terminal_status=terminal_status,
+        )
+
+
+def cancel_task(
+    store: TaskStore,
+    *,
+    project_id: str,
+    task_id: str,
+    reason: str,
+    replacement_task_id: str | None = None,
+    submission_id: str | None = None,
+) -> tuple[TaskMeta, bool]:
+    """Cancel one durable submitted task without reopening prior decisions."""
+    normalized_replacement_task_id = (
+        _safe_id(replacement_task_id)
+        if replacement_task_id is not None
+        else None
+    )
+    with _task_mutation_lock(store, task_id):
+        meta = _validated_submission_identity(
+            store,
+            project_id=project_id,
+            task_id=task_id,
+            submission_id=submission_id,
+        )
+        normalized_reason = _single_line(reason)
+        if not normalized_reason:
+            raise TaskflowError("cancel reason is required")
+        if meta.status == "cancelled":
+            if (
+                meta.cancel_reason != normalized_reason
+                or meta.replacement_task_id != normalized_replacement_task_id
+            ):
+                raise TaskflowError(
+                    f"task {task_id} already has conflicting cancellation",
+                )
+        meta.cancel_reason = normalized_reason
+        meta.replacement_task_id = normalized_replacement_task_id
+        meta.cancelled_at = meta.cancelled_at or _now()
+        return _commit_task_decision(
+            store,
+            meta=meta,
+            terminal_status="cancelled",
+        )
+
+
+def _validated_submitted_task(
+    store: TaskStore,
+    *,
+    project_id: str,
+    task_id: str,
+    submission_id: str | None,
+) -> tuple[TaskMeta, TaskResult]:
+    meta = _validated_submission_identity(
+        store,
+        project_id=project_id,
+        task_id=task_id,
+        submission_id=submission_id,
+    )
+    if not meta.result_digest:
+        raise TaskflowError(
+            f"task {task_id} submission result digest is missing",
+        )
+    result = store.read_task_result(task_id)
+    if _task_result_digest(result) != meta.result_digest:
+        raise TaskflowError(
+            f"task {task_id} persisted result does not match submitted digest",
+        )
+    return meta, result
+
+
+def _validated_submission_identity(
+    store: TaskStore,
+    *,
+    project_id: str,
+    task_id: str,
+    submission_id: str | None,
+) -> TaskMeta:
+    """Validate the durable submission fence without reading result.md."""
+    if not isinstance(submission_id, str) or not submission_id.strip():
+        raise TaskflowError(f"submissionId is required for task {task_id}")
+    meta = store.read_task_meta(task_id)
+    if meta.project_id != project_id:
+        raise TaskflowError(
+            f"task {task_id} belongs to project {meta.project_id}, not {project_id}",
+        )
+    plan = store.read_project_plan(project_id)
+    tasks = parse_loop_tasks(plan) if parse_plan_type(plan) == "loop" else parse_dag_tasks(plan)
+    _find_task(tasks, task_id)
+    if meta.status != "submitted" and meta.status not in TERMINAL_TASK_STATUSES:
+        raise TaskflowError(
+            f"task {task_id} has no submitted result: {meta.status}",
+        )
+    if not meta.submission_id:
+        raise TaskflowError(
+            f"task {task_id} submission identity is incomplete",
+        )
+    if submission_id != meta.submission_id:
+        raise TaskflowError(f"stale submissionId for task {task_id}")
     return meta
+
+
+def _commit_task_decision(
+    store: TaskStore,
+    *,
+    meta: TaskMeta,
+    terminal_status: str,
+) -> tuple[TaskMeta, bool]:
+    continuation = dict(meta.continuation or {})
+    if meta.status in TERMINAL_TASK_STATUSES:
+        if (
+            meta.status == terminal_status
+            and continuation.get("status") == "resolved"
+            and continuation.get("resolution") == terminal_status
+        ):
+            return meta, True
+        raise TaskflowError(
+            f"task {meta.task_id} already has conflicting decision: {meta.status}",
+        )
+    if not continuation.get("delivery_id"):
+        raise TaskflowError(
+            f"task {meta.task_id} continuation delivery identity is missing",
+        )
+
+    plan = store.read_project_plan(meta.project_id)
+    plan_type = parse_plan_type(plan)
+    tasks = parse_loop_tasks(plan) if plan_type == "loop" else parse_dag_tasks(plan)
+    current = _find_task(tasks, meta.task_id)
+    if current.status in TERMINAL_TASK_STATUSES and current.status != terminal_status:
+        raise TaskflowError(
+            f"task {meta.task_id} already has conflicting decision: {current.status}",
+        )
+    plan_is_terminal = current.status == terminal_status
+    if not plan_is_terminal:
+        updated = _replace_task_status(tasks, meta.task_id, terminal_status)
+        if plan_type == "loop":
+            loop = parse_loop_plan(plan)
+            if loop is None:
+                raise TaskflowError(f"project has no loop plan: {meta.project_id}")
+            updated_plan = replace_loop_plan(
+                plan,
+                LoopPlan(
+                    goal=loop.goal,
+                    stop_condition=loop.stop_condition,
+                    iteration_template=loop.iteration_template,
+                    max_iterations=loop.max_iterations,
+                    current_iteration=loop.current_iteration,
+                    status=loop.status,
+                    tasks=updated,
+                    history=loop.history,
+                ),
+            )
+        else:
+            updated_plan = replace_dag_tasks(plan, updated)
+        store.write_project_plan(meta.project_id, updated_plan)
+        plan_is_terminal = True
+
+    meta.status = terminal_status
+    continuation.update({
+        "status": "resolved",
+        "resolution": terminal_status,
+        "resolved_at": continuation.get("resolved_at") or _now(),
+    })
+    meta.continuation = continuation
+    try:
+        store.write_task_meta(meta)
+    except OSError as exc:
+        if plan_is_terminal:
+            raise TaskDecisionPersistenceError(
+                str(exc),
+                task=meta,
+            ) from exc
+        raise
+    return meta, False
+
+
+def _task_mutation_lock(store: TaskStore, task_id: str) -> Any:
+    """Serialize one task's mutations inside a CoPaw process.
+
+    Taskflow constructs a new FileSystemTaskStore for each tool call, so the
+    registry is keyed by the resolved meta.json path rather than store object.
+    Shared-storage replicas still need a remote compare-and-swap contract; this
+    lock only closes concurrent calls in one runtime process.
+    """
+    if not isinstance(store, FileSystemTaskStore):
+        return _NoopLock()
+    key = str((store._task_dir(task_id) / "meta.json").resolve())
+    with _TASK_MUTATION_LOCKS_GUARD:
+        return _TASK_MUTATION_LOCKS.setdefault(key, threading.RLock())
+
+
+class _NoopLock:
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(self, *_args: Any) -> None:
+        return None
 
 
 def _require_assigned_worker(meta: TaskMeta, actor: str | None) -> None:
@@ -969,7 +1445,7 @@ def validate_task_result(task_id: str, result: TaskResult) -> None:
 
 def _parse_dag_line(line: str) -> DagTask | None:
     match = re.match(
-        r"^\s*-\s+\[(?P<marker>[ x~!\u2192])\]\s+"
+        r"^\s*-\s+\[(?P<marker>[ x~!\-\u2192])\]\s+"
         r"(?P<id>[A-Za-z0-9_-]+)\s+(?:\u2014|-)\s+"
         r"(?P<title>.*?)(?:\s+\((?P<meta>.*)\))?\s*$",
         line,
@@ -1138,8 +1614,33 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
+    _atomic_write_text(
+        path,
+        json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+    )
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Replace a state file only after its complete content reaches disk."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            temporary_file.write(content)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.replace(temporary_path, path)
+    except BaseException:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise
 
 
 def _drop_none(data: dict[str, Any]) -> dict[str, Any]:

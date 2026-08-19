@@ -1,6 +1,6 @@
 ---
 name: teamharness-project-management
-description: "Use when a Leader maintains durable TeamHarness project state for Quick Task or Project Work: create_quick_project, create_project, plan_dag, plan_loop, ready_nodes, resolve_project, accept_task_result, project completion, and requester report state. Do not use to create Matrix task rooms or send messages."
+description: "Use when you act as Leader and maintain durable TeamHarness project state for Quick Task or Project Work: create_quick_project, create_project, plan_dag, plan_loop, ready_nodes, resolve_project, accept_task_result, project completion, and requester report state. Do not use to create Matrix task rooms or send messages."
 ---
 
 # Project Management
@@ -10,7 +10,8 @@ Use this skill when maintaining durable project state.
 A project owns the plan, context, dependencies, and accepted progress. Keep the
 project plan separate from individual task execution logs.
 
-Only advance a dependency after the Leader accepts the submitted result.
+Only advance a dependency after you accept the submitted result as the trusted
+Leader runtime.
 Do not use this skill for ordinary direct replies or lightweight one-off
 actions.
 
@@ -55,7 +56,7 @@ Write a final project result, when needed, to:
 shared/projects/{project-id}/result.md
 ```
 
-The Leader owns this project result file. Build it from accepted project state
+You own this project result file as Leader. Build it from accepted project state
 and accepted task deliverables; do not ask Workers to write or submit it as a
 task deliverable.
 
@@ -337,9 +338,15 @@ ready nodes that the Leader needs to resume normal project flow.
 
 ## Accepting Worker Results
 
-A Worker `SUCCESS` or `SUCCESS_WITH_NOTES` result is only a candidate result.
+Treat a Worker `SUCCESS` or `SUCCESS_WITH_NOTES` result as only a candidate.
 After `teamharness-task-delegation` checks the task and returns `effective:
-true`, decide whether to accept the result.
+true`, copy its current `task.submission_id` and decide whether to accept the
+result.
+
+You may make this decision only when the runtime configuration identifies you
+as the trusted Leader. Never rely on a payload `role` to override a Worker
+runtime, and never let a Worker accept, reject, cancel, or resolve its own
+continuation.
 
 To accept a result, call `accept_task_result`:
 
@@ -349,6 +356,8 @@ To accept a result, call `accept_task_result`:
   "payload": {
     "projectId": "demo-project-001",
     "taskId": "demo-project-001-01",
+    "submissionId": "<current task.submission_id from check_task>",
+    "accepted": true,
     "resultStatus": "SUCCESS",
     "summary": "Completed the assigned work."
   }
@@ -356,8 +365,29 @@ To accept a result, call `accept_task_result`:
 ```
 
 `accept_task_result` updates the DAG or Loop node and records
-`requester_report.pending` in ProjectMeta. Keep unresolved nodes in their current
-state.
+the terminal task decision. With the runtime-neutral standalone MCP it also
+records `requester_report.pending` in ProjectMeta. Native CoPaw `projectflow`
+commits only the plan and TaskMeta terminal state; it does not invent a
+`requester_report`. In both runtimes you must still follow the existing
+requester-report flow and `replyRoute`; absence of a CoPaw pending marker is not
+permission to omit the report. Keep unresolved nodes in their current state.
+
+For a normal task that already has a `submission_id`, you must pass that exact
+value as `submissionId` to both acceptance and cancellation. Retry only with the
+same `submissionId` and `accepted` decision; a missing or stale identity, or a
+different terminal decision, is a conflict. The only acceptance exception is
+the documented standalone migration of a persisted legacy submission with no
+identity. Native CoPaw decisions do not perform that migration; first complete
+the evidence-based Worker retry adoption, then use its generated identity.
+
+To cancel a task, include a reason and, whenever the task has a submission
+identity, keep the same `submissionId` fence. In the
+CoPaw runtime call `projectflow` with `action: "cancel_task"`; with the
+runtime-neutral standalone MCP call `taskflow` with `action: "cancel_task"`.
+Both routes are trusted-Leader-only and resolve the existing continuation as
+`cancelled` without rotating its `delivery_id`. The standalone MCP retains its
+documented compatibility for cancelling legacy TaskMeta that has no identity;
+do not invent or supply an unknown identity for that path.
 
 Accepting a completed result does not publish the project artifact by default.
 Write or update `shared/projects/{project-id}/result.md` as the Leader when a
@@ -515,7 +545,7 @@ After the requester report is sent, clear the pending flag:
 
 State-mutating `projectflow` and `taskflow` operations return a
 `notificationNeeded` field when they succeed. This field is a hint — the tool
-does not send any message automatically. The Leader must act on it.
+does not send any message automatically. You must act on it as Leader.
 
 When `notificationNeeded` is present in the tool result:
 

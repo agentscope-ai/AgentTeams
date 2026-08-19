@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -101,6 +102,7 @@ func getProjectsCmd() *cobra.Command {
 	var team string
 	var mermaid bool
 	var output string
+	var includeTasks bool
 
 	cmd := &cobra.Command{
 		Use:   "projects [name]",
@@ -111,14 +113,31 @@ func getProjectsCmd() *cobra.Command {
   agt get projects --team alpha-team
   agt get projects demo-project-001
   agt get projects demo-project-001 -o json
+  agt get projects demo-project-001 --include-tasks -o json
   agt get projects demo-project-001 --mermaid`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client := NewAPIClient()
+			if includeTasks && len(args) != 1 {
+				return fmt.Errorf("--include-tasks requires a project name")
+			}
+			if includeTasks && output != "json" {
+				return fmt.Errorf("--include-tasks requires -o json")
+			}
 
 			if len(args) == 1 {
 				var resp map[string]any
 				path := "/api/v1/projects/" + args[0] + "/workflow"
+				query := url.Values{}
+				if team != "" {
+					query.Set("team", team)
+				}
+				if includeTasks {
+					query.Set("includeTasks", "true")
+				}
+				if encoded := query.Encode(); encoded != "" {
+					path += "?" + encoded
+				}
 				if err := client.DoJSON("GET", path, nil, &resp); err != nil {
 					return fmt.Errorf("get project workflow: %w", err)
 				}
@@ -181,6 +200,7 @@ func getProjectsCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&team, "team", "", "Filter by team name")
 	cmd.Flags().BoolVar(&mermaid, "mermaid", false, "Render workflow as a Mermaid flowchart")
+	cmd.Flags().BoolVar(&includeTasks, "include-tasks", false, "Include raw TaskMeta details for a named project")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "Output format (json)")
 	return cmd
 }

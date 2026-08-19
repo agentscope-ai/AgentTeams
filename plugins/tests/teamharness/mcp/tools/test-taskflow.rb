@@ -679,10 +679,12 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
         raise AssertionError(f"check_task deliverables should ignore result body bullets: {checked!r}")
 
     accepted = payload("projectflow", {
+        "role": "leader",
         "action": "accept_task_result",
         "payload": {
             "projectId": project_id,
             "taskId": task_id,
+            "submissionId": checked["task"]["submission_id"],
             "resultStatus": checked["result"]["status"],
             "summary": checked["result"]["summary"],
         },
@@ -906,7 +908,11 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
     completed_cancel = payload("taskflow", {
         "role": "leader",
         "action": "cancel_task",
-        "payload": {"taskId": task_id, "reason": "manual_replan"},
+        "payload": {
+            "taskId": task_id,
+            "submissionId": checked["task"]["submission_id"],
+            "reason": "manual_replan",
+        },
     })
     if completed_cancel.get("ok") or "cannot cancel terminal task" not in completed_cancel.get("error", ""):
         raise AssertionError(f"completed task should not be silently cancelled: {completed_cancel!r}")
@@ -947,21 +953,51 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
                 "spec": f"Prepare {terminal_task_id}.",
             },
         })
+    terminal_submissions = {}
+    for terminal_task_id, result_status, result_summary in [
+        ("terminal-revision", "SUCCESS", "Needs revision."),
+        ("terminal-blocked", "BLOCKED", "Blocked."),
+    ]:
+        payload("taskflow", {
+            "role": "worker",
+            "action": "ack_task",
+            "payload": {"taskId": terminal_task_id},
+        })
+        terminal_result_path = pathlib.Path("#{workspace}") / f"shared/tasks/{terminal_task_id}/result.md"
+        terminal_result_path.write_text(result_summary + "\\n", encoding="utf-8")
+        terminal_submission = payload("taskflow", {
+            "role": "worker",
+            "action": "submit_task",
+            "payload": {
+                "taskId": terminal_task_id,
+                "status": result_status,
+                "summary": result_summary,
+                "deliverables": [],
+            },
+        })
+        if not terminal_submission.get("ok"):
+            raise AssertionError(f"terminal fixture submission failed: {terminal_submission!r}")
+        terminal_submissions[terminal_task_id] = terminal_submission["task"]["submission_id"]
     payload("projectflow", {
+        "role": "leader",
         "action": "accept_task_result",
         "payload": {
             "projectId": terminal_project_id,
             "taskId": "terminal-revision",
+            "submissionId": terminal_submissions["terminal-revision"],
             "accepted": False,
             "resultStatus": "SUCCESS",
             "summary": "Needs revision.",
         },
     })
     payload("projectflow", {
+        "role": "leader",
         "action": "accept_task_result",
         "payload": {
             "projectId": terminal_project_id,
             "taskId": "terminal-blocked",
+            "submissionId": terminal_submissions["terminal-blocked"],
+            "accepted": True,
             "resultStatus": "BLOCKED",
             "summary": "Blocked.",
         },
@@ -971,14 +1007,25 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
         "action": "cancel_task",
         "payload": {"taskId": "terminal-cancelled", "reason": "manual_replan"},
     })
-    for terminal_task_id in ["terminal-revision", "terminal-blocked", "terminal-cancelled"]:
+    for terminal_task_id in ["terminal-revision", "terminal-blocked"]:
         terminal_cancel = payload("taskflow", {
             "role": "leader",
             "action": "cancel_task",
-            "payload": {"taskId": terminal_task_id, "reason": "manual_replan"},
+            "payload": {
+                "taskId": terminal_task_id,
+                "submissionId": terminal_submissions[terminal_task_id],
+                "reason": "manual_replan",
+            },
         })
         if terminal_cancel.get("ok") or "cannot cancel terminal task" not in terminal_cancel.get("error", ""):
             raise AssertionError(f"terminal task should not be silently cancelled: {terminal_task_id} {terminal_cancel!r}")
+    repeated_cancel = payload("taskflow", {
+        "role": "leader",
+        "action": "cancel_task",
+        "payload": {"taskId": "terminal-cancelled", "reason": "manual_replan"},
+    })
+    if not repeated_cancel.get("ok") or not repeated_cancel.get("reused"):
+        raise AssertionError(f"same cancellation should be idempotent: {repeated_cancel!r}")
 
     replanned = payload("projectflow", {
         "action": "plan_dag",
@@ -1043,6 +1090,7 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
         },
     })
     rejected = payload("projectflow", {
+        "role": "leader",
         "action": "accept_task_result",
         "payload": {
             "projectId": revision_project_id,
@@ -1073,7 +1121,7 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
         "action": "check_task",
         "payload": {"taskId": task_id},
     })
-    if not invalid_checked.get("ok") or not invalid_checked.get("effective"):
+    if not invalid_checked.get("ok") or invalid_checked.get("effective"):
         raise AssertionError(f"result body should not override task meta validation: {invalid_checked!r}")
     if invalid_checked.get("validationErrors"):
         raise AssertionError(f"result body should not create validation errors: {invalid_checked!r}")
@@ -1162,9 +1210,17 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
   fail!("delegate_task did not push task dir: #{commands.inspect}") unless commands.include?(
     "mirror #{workspace}/shared/tasks/t-001/ mock/shared/tasks/t-001/ --overwrite"
   )
-  fail!("submit_task did not push only worker-owned files: #{commands.inspect}") unless commands.include?(
-    "mirror #{workspace}/shared/tasks/t-001/ mock/shared/tasks/t-001/ --overwrite --exclude spec.md --exclude base/"
-  )
+  result_push = "cp #{workspace}/shared/tasks/t-001/result.md mock/shared/tasks/t-001/result.md"
+  result_stat = "stat mock/shared/tasks/t-001/result.md"
+  analysis_push = "cp #{workspace}/shared/tasks/t-001/workspace/analysis.md mock/shared/tasks/t-001/workspace/analysis.md"
+  analysis_stat = "stat mock/shared/tasks/t-001/workspace/analysis.md"
+  meta_commit = "cp #{workspace}/shared/tasks/t-001/meta.json mock/shared/tasks/t-001/meta.json"
+  meta_stat = "stat mock/shared/tasks/t-001/meta.json"
+  ordered_submit_commands = [result_push, result_stat, analysis_push, analysis_stat, meta_commit, meta_stat]
+  submit_positions = ordered_submit_commands.map { |command| commands.index(command) }
+  unless submit_positions.all? && submit_positions == submit_positions.sort
+    fail!("submit_task did not publish result payloads before meta commit: #{commands.inspect}")
+  end
   fail!("ack_task did not pull remote task dir: #{commands.inspect}") unless commands.include?(
     "mirror mock/shared/tasks/remote-001/ #{workspace}/shared/tasks/remote-001 --overwrite"
   )

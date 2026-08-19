@@ -169,6 +169,26 @@ helm install agentteams higress.io/agentteams \
 
 </details>
 
+<details>
+<summary>Using OrcaRouter instead</summary>
+
+[OrcaRouter](https://www.orcarouter.ai) is a unified AI gateway that exposes an OpenAI-compatible API at `https://api.orcarouter.ai/v1`. Set the provider name to `orcarouter` to use it with a single API key across models:
+
+```bash
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace \
+  --render-subchart-notes \
+  --set credentials.llmApiKey=<your-orcarouter-api-key> \
+  --set credentials.llmProvider=orcarouter \
+  --set credentials.defaultModel=orcarouter/auto \
+  --set credentials.adminPassword=<your-admin-password> \
+  --set gateway.publicURL=http://localhost:18080
+```
+
+It also runs gateway-level, zero-trust security for AI agents on the same endpoint — screening every prompt/response and governing every tool call on a default-deny basis, with no application code changes.
+
+</details>
+
 | Value | Required | Description |
 |---|---|---|
 | `credentials.llmApiKey` | yes | API key for your LLM provider |
@@ -176,7 +196,7 @@ helm install agentteams higress.io/agentteams \
 | `credentials.adminPassword` | recommended | Matrix admin password; auto-generated if left empty (you'll have to read it back from the Secret) |
 | `credentials.llmProvider` | no | LLM provider name, defaults to `openai-compat` |
 | `credentials.defaultModel` | no | Default model, defaults to `gpt-5.4` |
-| `credentials.llmBaseUrl` | no | OpenAI-compatible base URL (e.g. `https://api.deepseek.com/v1`). Leave empty for official OpenAI API |
+| `credentials.llmBaseUrl` | no | OpenAI-compatible base URL (e.g. `https://api.deepseek.com/v1`). Leave empty for official OpenAI API or the built-in `orcarouter` provider |
 | `preflight.llm.enabled` | no | Run an install/upgrade hook that validates the LLM API key, base URL, and model before the controller starts. Defaults to `true` |
 | `preflight.llm.strict` | no | Fail the Helm install/upgrade when the LLM preflight fails. Defaults to `true`; set to `false` to emit a warning and continue |
 | `preflight.llm.timeoutSeconds` | no | Per-request timeout for the LLM preflight HTTP probe. Defaults to `30` |

@@ -94,7 +94,7 @@ spec:
 | `spec.identity` | string | 否 | — | Worker 公开身份（OpenClaw：生成 IDENTITY.md；QwenPaw：按实现合并入 SOUL.md） |
 | `spec.soul` | string | 否 | — | Worker 人格与价值观设定，用于生成 SOUL.md |
 | `spec.agents` | string | 否 | — | Agent 行为规则，用于生成 AGENTS.md |
-| `spec.skills` | []string | 否 | — | 分配给 Worker 的 skills，由 Manager 统一校验和分发 |
+| `spec.skills` | []string | 否 | — | 由 Manager、Dashboard 或 API 声明式分配给 Worker 的 Skill 名称 |
 | `spec.mcpServers` | []object | 否 | — | mcporter 可调用的 MCP Server。每项包含：`name`（必填，作为 mcporter-servers.json 中的映射键）、`url`（必填，完整网关端点）和 `transport`（默认 `http`，也可为 `sse`）。Controller 会注入 `Authorization: Bearer <gatewayKey>`；网关侧授权不在本字段范围内。 |
 | `spec.package` | string | 否 | — | 自定义包 URI：`file://`、`http(s)://`、`nacos://`，或上传后由 Controller 解析的 `packages/{name}.zip` |
 | `spec.expose` | []object | 否 | — | 通过 Higress 网关暴露的端口列表（见 [服务发布](#服务发布)） |
@@ -131,7 +131,7 @@ Manager 会先上传并验证 `SKILL.md`，再更新 `spec.skills`。QwenPaw Wor
 
 > 请检查 Worker `amy-ai` 当前分配的 Skill，并确认其中是否包含 `alert-fusion`。
 
-也可以通过 Dashboard 直接向一个或多个 Worker 分发 Skill ZIP。Dashboard 会校验包内 `SKILL.md` 的 `name` 和 `description`，将完整 Skill 写入 `agents/<worker-name>/skills/<skill-name>/`，更新 `spec.skills`，并重启 Worker 触发重新加载；重启失败时，Worker 最长约 5 分钟内通过周期同步发现新文件。完整操作和 ZIP 约束参见 [Worker 指南：通过 Dashboard 分发](worker-guide.md#方式二通过-dashboard-分发)。
+也可以通过 Dashboard 直接向一个或多个 Worker 分发 Skill ZIP。Dashboard 会校验包内 `SKILL.md` 的 `name` 和 `description`，将完整 Skill 写入 `agents/<worker-name>/skills/<skill-name>/`，更新 `spec.skills`，并尝试重启 Worker 触发重新加载。若重启未确认，文件和声明式分配仍会保留，页面会报告部分失败；后续 Controller reconcile 可以继续使该分配生效，无需重新上传。完整操作和 ZIP 约束参见 [Worker 指南：通过 Dashboard 分发](worker-guide.md#方式二通过-dashboard-分发)。
 
 所有受支持的 Dashboard 分发路径都会更新 `spec.skills`。Controller 后续可能要求 Manager 恢复丢失的声明式 Skill，但 Dashboard 分发的 Skill 不要求 Manager 侧保留源文件：Worker 副本仍然存在时会忽略 Manager 恢复失败；Worker 副本缺失且 Manager 无法恢复时，reconcile 继续执行，并在 Worker 状态中记录非阻塞告警。
 

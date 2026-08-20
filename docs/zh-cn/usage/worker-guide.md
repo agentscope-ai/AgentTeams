@@ -127,14 +127,16 @@ agt get workers amy-ai -o json | jq '.skills'
 
 也可以从 **Workers → 目标 Worker → 详情 → 上传技能包**直接为单个 Worker 上传 Skill ZIP。
 
-> **注意：** **上传技能**只会把 Skill 加入 Dashboard 的集中式市场，不会自动分发给 Worker。上传完成后，仍需从该 Skill 所在行点击**分发到 Worker**；也可以使用 Worker 详情中的**上传技能包**直接上传。
+创建或编辑 Worker 时，也可以在表单的**技能**字段中选择市场或 Nacos 中已有的 Skill。保存 Worker 后，Dashboard 会将尚未就位的完整 Skill 同步到该 Worker 的规范持久化目录，核对并补齐 `spec.skills`，最后尝试重启 Worker。上传或 `spec.skills` 更新失败会作为部分失败显示，不会被误报为安装成功。
+
+> **注意：** **上传技能**只会把 Skill 加入 Dashboard 的集中式市场，不会自动分发给 Worker。上传完成后，仍需从该 Skill 所在行点击**分发到 Worker**；也可以使用 Worker 详情中的**上传技能包**直接上传，或在创建、编辑 Worker 时选择该 Skill。
 
 #### 加载与验证
 
-Dashboard 会校验 ZIP 和 `SKILL.md`，保留 Skill 根目录下的全部文件，并写入对象存储的 `agents/<worker-name>/skills/<skill-name>/`。只有在完整包写入成功后，Dashboard 才会把 Skill 名称加入 `Worker.spec.skills`，随后重启 Worker 以立即加载新的分配。因此应在 Worker 空闲时操作，避免中断正在执行的任务。
+Dashboard 会校验 ZIP 和 `SKILL.md`，保留 Skill 根目录下的全部文件，并写入对象存储的 `agents/<worker-name>/skills/<skill-name>/`。从市场分发或在 Worker 详情上传时，只有完整包写入成功后才会更新 `Worker.spec.skills`；在创建、编辑 Worker 时选择 Skill，则会在保存 Worker 后同步缺失的包并核对该字段。文件与声明式分配就位后，Dashboard 会尝试重启 Worker 以立即加载新的分配。因此应在 Worker 空闲时操作，避免中断正在执行的任务。
 
-- 如果重新加载成功，页面显示“已通知 Worker 加载新技能”。
-- 如果重启失败，已经上传的文件和分配记录不会丢失；页面会提示 Worker 最长约 5 分钟内通过周期同步自动发现。
+- 如果重新加载成功，页面会显示该 Worker 的安装或重启完成结果。
+- 如果重启未确认，已经上传的文件和分配记录不会丢失；页面会报告部分失败，后续 Controller reconcile 可以继续使该分配生效，无需重新上传。
 
 可以重新打开 **Workers → 目标 Worker → 详情**，在“已分发技能”中确认 Skill 名称。若需要验证 runtime 已经实际加载，而不只是文件已经存在，应让该 Worker 确认它能够发现并使用对应 Skill。
 

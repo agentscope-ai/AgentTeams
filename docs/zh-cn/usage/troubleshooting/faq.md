@@ -272,9 +272,9 @@ agt get workers amy-ai -o json | jq '.skills'
 
 ### 通过 Dashboard 分发
 
-进入**资源中心 → 市场**。如果 Skill 尚未入库，先点击**上传技能**并上传不超过 64 MB 的 Skill ZIP；然后在目标 Skill 所在行点击**分发到 Worker**，选择一个或多个 Worker，再点击**分发到 N 个 Worker**。也可以通过 **Workers → 目标 Worker → 详情 → 上传技能包**直接为单个 Worker 上传 ZIP。ZIP 必须包含带 `name`、`description` frontmatter 的 `SKILL.md`。
+进入**资源中心 → 市场**。如果 Skill 尚未入库，先点击**上传技能**并上传不超过 64 MB 的 Skill ZIP；然后在目标 Skill 所在行点击**分发到 Worker**，选择一个或多个 Worker，再点击**分发到 N 个 Worker**。也可以通过 **Workers → 目标 Worker → 详情 → 上传技能包**直接为单个 Worker 上传 ZIP，或者在创建、编辑 Worker 时通过表单的**技能**字段选择市场或 Nacos 中已有的 Skill。ZIP 必须包含带 `name`、`description` frontmatter 的 `SKILL.md`。
 
-不要把市场右上角的**上传技能**当作 Worker 分发入口：该按钮只维护 Dashboard 的集中式市场。上传后还需从目标 Skill 所在行点击**分发到 Worker**。Worker 分发完成后，应在 Worker 详情的“已分发技能”和 `Worker.spec.skills` 中检查结果；Dashboard 会重启 Worker 触发加载，失败时新文件最长约 5 分钟内通过周期同步被发现。
+不要把市场右上角的**上传技能**当作 Worker 分发入口：该按钮只维护 Dashboard 的集中式市场。上传后还需从目标 Skill 所在行点击**分发到 Worker**。Worker 分发完成后，应在 Worker 详情的“已分发技能”和 `Worker.spec.skills` 中检查结果；Dashboard 会尝试重启 Worker 触发加载。若重启未确认，文件和 `spec.skills` 仍会保留，页面会报告部分失败，后续 Controller reconcile 可以继续使该分配生效。
 
 所有 Dashboard 分发路径都会更新 `Worker.spec.skills`。如果状态中出现 `Skill assignment warning`，说明 Worker 的规范 Skill 副本缺失且 Manager 无法恢复；该告警不会阻塞 Worker reconcile。完整行为、ZIP 约束和验证方法参见 [Worker 指南：为 Worker 安装 Skill](../worker-guide.md#为-worker-安装-skill)。Manager 方式的完整对话流程参见 [通过 Manager 为 Worker 安装 Skill](../manager-guide.md#通过-manager-为-worker-安装-skill)。
 

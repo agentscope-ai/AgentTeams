@@ -143,7 +143,14 @@ func TestWorkerTeamNameUsesPersistedMembershipAnnotation(t *testing.T) {
 }
 
 func TestWorkerReconcileDoesNotOverwriteTeamOwnedRuntimeConfig(t *testing.T) {
-	worker := newWorker("leader", v1beta1.WorkerSpec{Runtime: "qwenpaw"})
+	worker := newWorker("leader", v1beta1.WorkerSpec{
+		Runtime: "qwenpaw",
+		Skills:  []string{"team-skill"},
+		RemoteSkills: []v1beta1.RemoteSkillSource{{
+			Source: "nacos://skills.example.com:8848/public",
+			Skills: []v1beta1.RemoteSkill{{Name: "remote-team-skill", Label: "stable"}},
+		}},
+	})
 	team := &v1beta1.Team{
 		ObjectMeta: metav1.ObjectMeta{Name: "team-cr", Namespace: "default"},
 		Spec: v1beta1.TeamSpec{
@@ -154,12 +161,22 @@ func TestWorkerReconcileDoesNotOverwriteTeamOwnedRuntimeConfig(t *testing.T) {
 		},
 	}
 	rig := newWorkerRig(t, worker, team)
+	rig.deployer.PushOnDemandSkillsFn = func(context.Context, string, []string, []v1beta1.RemoteSkillSource) error {
+		return errors.New("remote Skill refresh failed for remote-team-skill (label=\"stable\"); retained existing Worker copies")
+	}
 
-	if _, _, err := rig.reconcile("leader"); err != nil {
+	got, _, err := rig.reconcile("leader")
+	if err != nil {
 		t.Fatalf("reconcile referenced Worker: %v", err)
 	}
 	if got := len(rig.deployer.Calls.DeployMemberRuntimeConfig); got != 0 {
 		t.Fatalf("DeployMemberRuntimeConfig calls=%d, want 0 for Team-owned QwenPaw Worker", got)
+	}
+	if _, _, _, pushSkills, _ := rig.deployer.CallCounts(); pushSkills != 1 {
+		t.Fatalf("PushOnDemandSkills calls=%d, want 1 for Team-owned QwenPaw Worker", pushSkills)
+	}
+	if !strings.Contains(got.Status.Message, "retained existing Worker copies") {
+		t.Fatalf("status.message=%q, want non-blocking Skill refresh warning", got.Status.Message)
 	}
 }
 

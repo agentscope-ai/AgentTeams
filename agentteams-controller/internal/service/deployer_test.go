@@ -150,28 +150,81 @@ func TestMissingWorkerSkillsChecksCanonicalSkillContract(t *testing.T) {
 func TestPushOnDemandSkillsRemoteFailureDependsOnWorkerCopy(t *testing.T) {
 	ctx := context.Background()
 	remote := []v1beta1.RemoteSkillSource{{
-		Source: "https://unsupported.example.com/skills",
-		Skills: []v1beta1.RemoteSkill{{Name: "remote-skill"}},
+		Source: "https://skill-user:skill-password@unsupported.example.com/skills",
+		Skills: []v1beta1.RemoteSkill{
+			{Name: "remote-version", Version: "2.0.0"},
+			{Name: "remote-label", Label: "stable"},
+		},
 	}}
 
-	t.Run("existing copy suppresses recovery failure", func(t *testing.T) {
+	t.Run("existing copies produce a sanitized non-blocking warning", func(t *testing.T) {
 		store := ossfake.NewMemory()
-		if err := store.PutObject(ctx, "agents/alice/skills/remote-skill/SKILL.md", []byte("skill")); err != nil {
-			t.Fatal(err)
+		for _, name := range []string{"remote-version", "remote-label"} {
+			if err := store.PutObject(ctx, "agents/alice/skills/"+name+"/SKILL.md", []byte("skill")); err != nil {
+				t.Fatal(err)
+			}
 		}
 		deployer := NewDeployer(DeployerConfig{OSS: store})
-		if err := deployer.PushOnDemandSkills(ctx, "alice", nil, remote); err != nil {
-			t.Fatalf("existing Worker copy must satisfy remote assignment: %v", err)
+		err := deployer.PushOnDemandSkills(ctx, "alice", nil, remote)
+		if err == nil {
+			t.Fatal("failed remote refresh must remain visible when existing copies are retained")
+		}
+		message := err.Error()
+		for _, want := range []string{
+			"remote-version (version=\"2.0.0\")",
+			"remote-label (label=\"stable\")",
+			"retained existing Worker copies",
+		} {
+			if !strings.Contains(message, want) {
+				t.Fatalf("warning=%q, want %q", message, want)
+			}
+		}
+		for _, secret := range []string{"skill-user", "skill-password", "unsupported.example.com", remote[0].Source} {
+			if strings.Contains(message, secret) {
+				t.Fatalf("warning leaked remote source detail %q: %s", secret, message)
+			}
 		}
 	})
 
 	t.Run("missing copy reports recovery failure", func(t *testing.T) {
 		deployer := NewDeployer(DeployerConfig{OSS: ossfake.NewMemory()})
 		err := deployer.PushOnDemandSkills(ctx, "alice", nil, remote)
-		if err == nil || !strings.Contains(err.Error(), "Worker copies missing: remote-skill") {
+		if err == nil || !strings.Contains(err.Error(), "Worker copies missing: remote-label, remote-version") {
 			t.Fatalf("missing Worker copy should report recovery failure, got %v", err)
 		}
+		if strings.Contains(err.Error(), "skill-password") || strings.Contains(err.Error(), "unsupported.example.com") {
+			t.Fatalf("missing-copy warning leaked remote source: %v", err)
+		}
 	})
+
+	t.Run("remote warning does not skip local assignment recovery", func(t *testing.T) {
+		store := ossfake.NewMemory()
+		for _, name := range []string{"remote-version", "remote-label"} {
+			if err := store.PutObject(ctx, "agents/alice/skills/"+name+"/SKILL.md", []byte("skill")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		deployer := NewDeployer(DeployerConfig{OSS: store})
+		err := deployer.PushOnDemandSkills(ctx, "alice", []string{"local-missing"}, remote)
+		if err == nil {
+			t.Fatal("remote warning and missing local assignment must both remain visible")
+		}
+		for _, want := range []string{
+			"retained existing Worker copies",
+			"Manager skill recovery is unavailable and Worker copies are missing: local-missing",
+		} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("warning=%q, want %q", err, want)
+			}
+		}
+	})
+}
+
+func TestRedactRemoteSkillSourceRemovesAllUserInfo(t *testing.T) {
+	got := redactRemoteSkillSource("nacos://skill-user:skill-password@nacos.example.com:8848/namespace?access_token=query-secret#fragment-secret")
+	if got != "nacos://nacos.example.com:8848/namespace" {
+		t.Fatalf("redactRemoteSkillSource=%q", got)
+	}
 }
 
 func TestDeployWorkerConfigInjectsTeamLeaderContext(t *testing.T) {

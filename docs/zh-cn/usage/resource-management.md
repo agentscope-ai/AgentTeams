@@ -133,7 +133,7 @@ Manager 会先上传并验证 `SKILL.md`，再更新 `spec.skills`。QwenPaw Wor
 
 也可以通过 Dashboard 直接向一个或多个 Worker 分发 Skill ZIP。Dashboard 会校验包内 `SKILL.md` 的 `name` 和 `description`，将完整 Skill 写入 `agents/<worker-name>/skills/<skill-name>/`，更新 `spec.skills`，并尝试重启 Worker 触发重新加载。若重启未确认，文件和声明式分配仍会保留，页面会报告部分失败；后续 Controller reconcile 可以继续使该分配生效，无需重新上传。完整操作和 ZIP 约束参见 [Worker 指南：通过 Dashboard 分发](worker-guide.md#方式二通过-dashboard-分发)。
 
-所有受支持的 Dashboard 分发路径都会更新 `spec.skills`。Controller 后续可能要求 Manager 恢复丢失的声明式 Skill，但 Dashboard 分发的 Skill 不要求 Manager 侧保留源文件：Worker 副本仍然存在时会忽略 Manager 恢复失败；Worker 副本缺失且 Manager 无法恢复时，reconcile 继续执行，并在 Worker 状态中记录非阻塞告警。
+所有受支持的 Dashboard 分发路径都会更新 `spec.skills`。Controller 后续可能要求 Manager 恢复丢失的声明式 Skill，但 Dashboard 分发的 Skill 不要求 Manager 侧保留源文件：Worker 副本仍然存在时会忽略 Manager 恢复失败；Worker 副本缺失且 Manager 无法恢复时，reconcile 继续执行，并在 Worker 状态中记录非阻塞告警。对于远程 Skill 分配，请求的版本或标签刷新失败时同样不会阻塞 reconcile：已有的规范副本会被保留，Worker 状态会记录经过脱敏的告警，只标明 Skill 及请求的版本或标签，不暴露源地址凭据。
 
 也可以通过 `spec.package` 引入一个包含 `skills/` 目录的 Worker 包。包内 Skills 与按名称分配的 Skills 会合并，互不冲突。
 

@@ -404,9 +404,6 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 			matrixAccessToken = state.ProvResult.MatrixToken
 			gatewayKey = state.ProvResult.GatewayKey
 		}
-		// Put assigned skill files in member storage before publishing the
-		// desired-state snapshot that tells managed runtimes to load them.
-		reconcileMemberSkills(ctx, d, m, state)
 		if err := d.Deployer.DeployMemberRuntimeConfig(ctx, service.MemberRuntimeConfigDeployRequest{
 			Name:                  m.Name,
 			RuntimeName:           m.RuntimeName,
@@ -448,16 +445,18 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 		return fmt.Errorf("deploy worker config: %w", err)
 	}
 
-	reconcileMemberSkills(ctx, d, m, state)
 	return nil
 }
 
 // reconcileMemberSkills restores declared Skill files when they are absent
 // from the Worker's canonical storage. The deployer returns an error only when
-// the target copy is missing (or cannot be verified) and recovery also fails.
-// That condition is visible in status, but it must not block unrelated config
-// or container reconciliation: a running Worker may continue using its current
-// runtime state while an operator repairs the missing Skill source.
+// recovery cannot fully satisfy the requested assignment. That condition is
+// visible in status, but it must not block unrelated config or container
+// reconciliation: a running Worker may continue using its current runtime
+// state while an operator repairs the missing or stale Skill source.
+//
+// WorkerReconciler owns this phase. TeamReconciler may own Team-scoped runtime
+// config for a QwenPaw Worker, but it must not own the Worker's Skill assignment.
 func reconcileMemberSkills(ctx context.Context, d MemberDeps, m MemberContext, state *MemberState) {
 	if len(m.Spec.Skills) == 0 && len(m.Spec.RemoteSkills) == 0 {
 		return
@@ -466,7 +465,7 @@ func reconcileMemberSkills(ctx context.Context, d MemberDeps, m MemberContext, s
 		log.FromContext(ctx).Info("declared Skill recovery failed (non-blocking warning)",
 			"worker", m.RuntimeName,
 			"error", err.Error())
-		state.addWarning(fmt.Sprintf("Skill assignment warning: declared Skill files are missing and Manager recovery failed: %v", err))
+		state.addWarning(fmt.Sprintf("Skill assignment warning: %v", err))
 	}
 }
 

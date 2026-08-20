@@ -140,7 +140,7 @@ The Dashboard validates the ZIP and `SKILL.md`, preserves all files under the Sk
 
 Reopen **Workers → target Worker → 详情 (Details)** and confirm the Skill under **已分发技能 (Distributed Skills)**. To verify runtime availability rather than only file presence, ask that Worker to confirm it can discover and use the Skill.
 
-Dashboard distribution updates `Worker.spec.skills`, so the Skill should appear in `agt get workers <name> -o json | jq '.skills'`. A later Controller reconcile may ask the Manager to restore a declared Skill, but the Manager is not required to keep a source copy for Dashboard-distributed Skills. Recovery failure is non-blocking: the Worker receives a warning only when its canonical Skill files are missing and the Manager cannot restore them.
+Dashboard distribution updates `Worker.spec.skills`, so the Skill should appear in `agt get workers <name> -o json | jq '.skills'`. A later Controller reconcile may ask the Manager to restore a declared Skill, but the Manager is not required to keep a source copy for Dashboard-distributed Skills. Manager recovery failure is ignored while the canonical Worker copy exists; if that copy is missing and the Manager cannot restore it, the Worker receives a non-blocking warning. For a remote Skill assignment, failure to refresh the requested version or label also produces a non-blocking warning while retaining any existing canonical copy. The warning identifies the Skill and requested version or label, but omits remote source credentials.
 
 For an end-to-end example that starts with packaging and verifies distribution, runtime discovery, and actual use, follow [Use case 6: Add and use a custom Skill](use-cases.md#8-use-case-6-add-and-use-a-custom-skill).
 

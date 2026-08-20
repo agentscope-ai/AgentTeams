@@ -140,7 +140,7 @@ Dashboard 会校验 ZIP 和 `SKILL.md`，保留 Skill 根目录下的全部文�
 
 可以重新打开 **Workers → 目标 Worker → 详情**，在“已分发技能”中确认 Skill 名称。若需要验证 runtime 已经实际加载，而不只是文件已经存在，应让该 Worker 确认它能够发现并使用对应 Skill。
 
-Dashboard 分发会更新 `Worker.spec.skills`，因此该 Skill 应出现在 `agt get workers <name> -o json | jq '.skills'` 中。Controller 后续 reconcile 可能要求 Manager 恢复声明式 Skill，但 Dashboard 分发的 Skill 不强制要求 Manager 保留源文件。恢复失败不会阻塞 Worker：只有规范 Skill 文件已经丢失且 Manager 也无法恢复时，Worker 才会记录非阻塞告警。
+Dashboard 分发会更新 `Worker.spec.skills`，因此该 Skill 应出现在 `agt get workers <name> -o json | jq '.skills'` 中。Controller 后续 reconcile 可能要求 Manager 恢复声明式 Skill，但 Dashboard 分发的 Skill 不强制要求 Manager 保留源文件。规范 Worker 副本仍然存在时会忽略 Manager 恢复失败；该副本缺失且 Manager 也无法恢复时，Worker 会记录非阻塞告警。对于远程 Skill 分配，请求的版本或标签刷新失败时也会记录非阻塞告警，并保留已有的规范副本。告警只标明 Skill 及请求的版本或标签，不包含远程源地址中的凭据。
 
 如果需要从 Skill 打包开始，完整验证分发、runtime 发现和实际使用，可以按照[案例六：添加并使用自定义 Skill](use-cases.md#8-案例六添加并使用自定义-skill)操作。
 

@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -364,15 +365,26 @@ func (h *ProjectHandler) resolveProjectMeta(ctx context.Context, projectID strin
 // and writes the corresponding error responses. Returns (meta, team, true)
 // when exactly one match was resolved.
 func (h *ProjectHandler) resolveSingleProject(w http.ResponseWriter, matches []projectMatch) (*projectMeta, string, bool) {
+	match, ok := h.resolveSingleProjectMatch(w, matches)
+	if !ok {
+		return nil, "", false
+	}
+	return match.meta, match.team, true
+}
+
+// resolveSingleProjectMatch applies the same 0/1/many resolution but returns
+// the whole match (including the storage key), so handlers that need to
+// derive sibling paths (e.g. the project history/ directory) can do so.
+func (h *ProjectHandler) resolveSingleProjectMatch(w http.ResponseWriter, matches []projectMatch) (*projectMatch, bool) {
 	switch len(matches) {
 	case 0:
 		httputil.WriteError(w, http.StatusNotFound, "project not found")
-		return nil, "", false
+		return nil, false
 	case 1:
-		return matches[0].meta, matches[0].team, true
+		return &matches[0], true
 	default:
 		httputil.WriteError(w, http.StatusConflict, "project id is ambiguous across teams; retry with ?team=")
-		return nil, "", false
+		return nil, false
 	}
 }
 
@@ -1748,6 +1760,143 @@ func (h *ProjectHandler) GetProjectSpawnMessages(w http.ResponseWriter, r *http.
 // validation, then write back with an mtime optimistic lock (StatMeta
 // compare-before-write → 409 on conflict).
 // ============================================================================
+
+// --- project history (GET /api/v1/projects/{id}/history) ---
+//
+// The write side (snapshotProjectMeta below) stores a meta.json copy into
+// history/{unixNano}.json before every intervention. These endpoints read
+// the timeline back so humans and frontends can inspect the intervention
+// audit trail (who paused/resumed/replanned and why, via the snapshot's
+// updated_by / pause_reason fields).
+
+// historyTimestampPattern accepts exactly 19 digits (a unixNano timestamp) —
+// the snapshot filename. It also doubles as the path-traversal guard: the
+// only characters accepted are digits.
+var historyTimestampPattern = regexp.MustCompile(`^[0-9]{19}$`)
+
+// projectHistoryResponse is the GET /api/v1/projects/{id}/history payload.
+type projectHistoryResponse struct {
+	ProjectID string            `json:"project_id"`
+	Snapshots []projectSnapshot `json:"snapshots"`
+}
+
+// projectSnapshot is one history entry. Timestamp is the unixNano filename,
+// kept as a string because 19-digit nanoseconds exceed the JS Number
+// safe-integer range (clients would silently lose precision as a number).
+type projectSnapshot struct {
+	Timestamp string `json:"timestamp"`
+}
+
+// GetProjectHistory handles GET /api/v1/projects/{id}/history.
+// Auth/RBAC mirrors GetProjectWorkflow: RoleHuman read + team-scope check,
+// cross-team access hidden as 404.
+func (h *ProjectHandler) GetProjectHistory(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	if projectID == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "project id is required")
+		return
+	}
+	caller := authpkg.CallerFromContext(r.Context())
+	teamFilter := r.URL.Query().Get("team")
+
+	prefixes, crToEffective, err := h.teamProjectPrefixes(r.Context())
+	if err != nil {
+		writeK8sError(w, "get project history: resolve prefixes", err)
+		return
+	}
+	matches, err := h.resolveProjectMeta(r.Context(), projectID, prefixes, teamFilter, caller, crToEffective)
+	if err != nil {
+		writeK8sError(w, "get project history", err)
+		return
+	}
+	match, ok := h.resolveSingleProjectMatch(w, matches)
+	if !ok {
+		return
+	}
+	if err := h.checkProjectAccess(caller, match.team, crToEffective); err != nil {
+		if _, ok := err.(*accessDeniedError); ok {
+			httputil.WriteError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		httputil.WriteError(w, http.StatusForbidden, err.Error())
+		return
+	}
+
+	historyPrefix := strings.TrimSuffix(match.key, "meta.json") + "history/"
+	children, err := h.oss.ListObjects(r.Context(), historyPrefix)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "list project history: "+err.Error())
+		return
+	}
+	snapshots := make([]projectSnapshot, 0, len(children))
+	for _, child := range children {
+		base := strings.TrimSuffix(child, ".json")
+		// Defensive filter: the history directory only ever contains
+		// snapshot files, but ignore anything unexpected instead of
+		// surfacing garbage.
+		if base == child || !historyTimestampPattern.MatchString(base) {
+			continue
+		}
+		snapshots = append(snapshots, projectSnapshot{Timestamp: base})
+	}
+	// Newest first. Numeric string sort == chronological order for fixed
+	// 19-digit unixNano names (same reasoning as the write-side gc).
+	sort.Slice(snapshots, func(i, j int) bool {
+		return snapshots[i].Timestamp > snapshots[j].Timestamp
+	})
+	httputil.WriteJSON(w, http.StatusOK, projectHistoryResponse{ProjectID: projectID, Snapshots: snapshots})
+}
+
+// GetProjectHistorySnapshot handles GET /api/v1/projects/{id}/history/{timestamp}.
+// Returns one snapshot's raw meta JSON verbatim — the read side stays
+// decoupled from the meta schema.
+func (h *ProjectHandler) GetProjectHistorySnapshot(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	timestamp := r.PathValue("timestamp")
+	if projectID == "" || !historyTimestampPattern.MatchString(timestamp) {
+		httputil.WriteError(w, http.StatusBadRequest, "project id and a 19-digit nanosecond timestamp are required")
+		return
+	}
+	caller := authpkg.CallerFromContext(r.Context())
+	teamFilter := r.URL.Query().Get("team")
+
+	prefixes, crToEffective, err := h.teamProjectPrefixes(r.Context())
+	if err != nil {
+		writeK8sError(w, "get project history snapshot: resolve prefixes", err)
+		return
+	}
+	matches, err := h.resolveProjectMeta(r.Context(), projectID, prefixes, teamFilter, caller, crToEffective)
+	if err != nil {
+		writeK8sError(w, "get project history snapshot", err)
+		return
+	}
+	match, ok := h.resolveSingleProjectMatch(w, matches)
+	if !ok {
+		return
+	}
+	if err := h.checkProjectAccess(caller, match.team, crToEffective); err != nil {
+		if _, ok := err.(*accessDeniedError); ok {
+			httputil.WriteError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		httputil.WriteError(w, http.StatusForbidden, err.Error())
+		return
+	}
+
+	historyKey := strings.TrimSuffix(match.key, "meta.json") + "history/" + timestamp + ".json"
+	data, err := h.oss.GetObject(r.Context(), historyKey)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			httputil.WriteError(w, http.StatusNotFound, "snapshot not found")
+			return
+		}
+		httputil.WriteError(w, http.StatusInternalServerError, "read project history snapshot: "+err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
 
 // projectHistoryLimit caps the retained meta.json snapshots per project.
 // Snapshots are written on every human intervention (pause/resume/replan/

@@ -347,6 +347,52 @@ Error responses:
 | `404` | Project not found / caller does not own it (existence hidden) / session not owned by any team worker / `history.db` missing or unreadable. |
 | `500` | K8s or object-store failure. |
 
+### `GET /api/v1/projects/{id}/history`
+
+Returns the project's **intervention timeline** — the pre-intervention
+`meta.json` snapshots written by the lifecycle endpoints (see
+`POST /pause`, `POST /resume`, … below; each intervention snapshots the
+previous state into `history/{unixNano}.json`, retaining the most recent 50).
+
+Query parameters:
+
+| Param | Type | Default | Meaning |
+|:--|:--|:--|:--|
+| `team` | string | — | Optional team qualifier, same semantics as the other read endpoints. |
+
+Response:
+
+```json
+{
+  "project_id": "demo-project-001",
+  "snapshots": [
+    { "timestamp": "1723785123456789012" }
+  ]
+}
+```
+
+- `snapshots` is **newest first**. `timestamp` is the snapshot filename
+  (unix nanoseconds) and is kept as a **string** — 19-digit nanosecond
+  values exceed the JavaScript safe-integer range, so numeric transport
+  would silently lose precision.
+- An empty history returns `200` with `"snapshots": []`.
+
+### `GET /api/v1/projects/{id}/history/{timestamp}`
+
+Returns one snapshot's raw `meta.json` content **verbatim** (same schema as
+`GET /workflow`'s source). `timestamp` must be a 19-digit unixNano value;
+anything else is rejected `400` (this doubles as the traversal guard).
+
+Error responses:
+
+| Code | Meaning |
+|:--|:--|
+| `400` | Missing project id / malformed timestamp. |
+| `403` | Authenticated but the role cannot read projects at all (e.g. Worker). |
+| `404` | Project or snapshot not found / caller does not own it (existence hidden). |
+| `409` | Ambiguous project id across teams; retry with `?team=`. |
+| `500` | K8s or object-store failure. |
+
 ## Project identity & disambiguation
 
 Project ids are only unique within a worker workspace upstream: two teams can
@@ -357,8 +403,9 @@ the identity:
   id under two teams appears twice, disambiguated by `team_id` (a scoped
   caller only sees the entries of their accessible teams).
 - The read endpoints (`workflow`, `tasks/{taskId}/artifact`, `spawns`,
-  `spawns/{sessionId}/messages`) accept an optional `?team=` query parameter
-  that narrows resolution to that team's storage prefix.
+  `spawns/{sessionId}/messages`, `history`, `history/{timestamp}`) accept an
+  optional `?team=` query parameter that narrows resolution to that team's
+  storage prefix.
 - Without `?team=`, if the same project id exists under multiple teams the
   endpoint returns `409 Conflict` (`project id is ambiguous across teams;
   retry with ?team=`) instead of silently resolving to the first match.
@@ -381,12 +428,12 @@ Two bearer-token paths are accepted (composite authenticator):
 
 Authorization matrix:
 
-| Caller | List | Get workflow | Get spawns | Get spawn messages |
-|:--|:--|:--|:--|:--|
-| admin / manager | all teams | any project | any project | any project |
-| team-leader (SA) | own team only | own team only | own team only | own team only |
-| L2 human (Matrix) | all `accessibleTeams` | any accessible team | any accessible team | any accessible team |
-| worker | denied | denied | denied | denied |
+| Caller | List | Get workflow | Get spawns | Get spawn messages | Get history |
+|:--|:--|:--|:--|:--|:--|
+| admin / manager | all teams | any project | any project | any project | any project |
+| team-leader (SA) | own team only | own team only | own team only | own team only | own team only |
+| L2 human (Matrix) | all `accessibleTeams` | any accessible team | any accessible team | any accessible team | any accessible team |
+| worker | denied | denied | denied | denied | denied |
 
 ## `agt` CLI
 
@@ -575,3 +622,43 @@ agt project complete demo-project-001
 ```
 
 The same bearer-token forwarding applies (Matrix token for L2 humans).
+
+## Worker checkpoint endpoints
+
+The Controller proxies two read-only endpoints of each worker's QwenPaw app
+(checkpoint system, QwenPaw ≥ 2.1) so humans and frontends can inspect a
+worker's execution timeline — auto snapshots after every response round plus
+manual `/checkpoint snapshot`, stored in the worker's `checkpoints/shadow.git`.
+
+| Endpoint | Meaning |
+|:--|:--|
+| `GET /api/v1/workers/{name}/checkpoints/graph` | Checkpoint graph (nodes with kind/timestamp/query preview, sessions, summary). Optional `?limit=` (1..1000). |
+| `GET /api/v1/workers/{name}/checkpoints/status` | `auto_enabled`, `has_checkpoints`, `workspace_dir`. |
+
+- **Scope**: same worker read authorization as `GET /api/v1/workers/{name}`
+  — team leaders / L2 humans only see workers in their teams; unknown or
+  out-of-scope workers are hidden as `404`.
+- **Embedded mode only**: the endpoints proxy the worker's qwenpaw app inside
+  the shared docker network. The upstream address is resolved from the
+  effective container prefix (`AGENTTEAMS_PROXY_CONTAINER_PREFIX`, or derived
+  from `AGENTTEAMS_RESOURCE_PREFIX` when auto-prefixing is enabled; empty when
+  disabled — the same value the docker backend uses for container naming) and
+  the effective console port resolved through the same system-wins env chain
+  used at container creation (the system env always defines
+  `AGENTTEAMS_CONSOLE_PORT`, so a conflicting `Worker.spec.env` value is
+  discarded and the container always listens on `8088`). In kube mode
+  they return `503`.
+- **Degradation**: a worker running QwenPaw < 2.1 has no checkpoint router,
+  so the upstream `404` is translated to `502` with
+  `checkpoint API unavailable (requires QwenPaw 2.1)`.
+- Forwarding is fixed-path (graph / status) with a strict query whitelist —
+  not a generic reverse proxy.
+
+Error responses:
+
+| Code | Meaning |
+|:--|:--|
+| `400` | Invalid worker name / unsupported subpath or query parameter / invalid `limit`. |
+| `404` | Worker not found / caller does not own it (existence hidden). |
+| `502` | Worker app unreachable, pre-2.1 checkpoint API, or upstream error. |
+| `503` | Kube mode (no stable worker pod DNS to proxy). |

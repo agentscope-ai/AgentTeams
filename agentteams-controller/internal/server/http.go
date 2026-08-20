@@ -19,19 +19,20 @@ import (
 
 // ServerDeps aggregates all dependencies needed by the HTTP API handlers.
 type ServerDeps struct {
-	Client         client.Client
-	Backend        *backend.Registry
-	Gateway        gateway.Client
-	OSS            oss.StorageClient
-	STS            *credentials.STSService
-	AuthMw         *authpkg.Middleware
-	KubeMode       string
-	Namespace      string
-	ControllerName string               // AGENTTEAMS_CONTROLLER_NAME; empty in embedded mode
-	SocketPath     string               // Docker proxy (embedded only)
-	MatrixConfig   matrix.Config        // for AppService rotation endpoint
-	MatrixClient   matrix.Client        // for project intervention notifications (SendMessageAsAdmin); nil to skip
-	Provisioner    *service.Provisioner // for Matrix token refresh
+	Client          client.Client
+	Backend         *backend.Registry
+	Gateway         gateway.Client
+	OSS             oss.StorageClient
+	STS             *credentials.STSService
+	AuthMw          *authpkg.Middleware
+	KubeMode        string
+	Namespace       string
+	ControllerName  string               // AGENTTEAMS_CONTROLLER_NAME; empty in embedded mode
+	SocketPath      string               // Docker proxy (embedded only)
+	ContainerPrefix string               // effective worker container prefix (config.ContainerPrefix); embedded-only address resolution
+	MatrixConfig    matrix.Config        // for AppService rotation endpoint
+	MatrixClient    matrix.Client        // for project intervention notifications (SendMessageAsAdmin); nil to skip
+	Provisioner     *service.Provisioner // for Matrix token refresh
 
 	DefaultWorkerRuntime string // install-time default for Worker create requests
 }
@@ -117,6 +118,12 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/projects/{id}/tasks/{taskId}/artifact", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetTaskArtifact)))
 	mux.Handle("GET /api/v1/projects/{id}/spawns", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectSpawns)))
 	mux.Handle("GET /api/v1/projects/{id}/spawns/{sessionId}/messages", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectSpawnMessages)))
+	mux.Handle("GET /api/v1/projects/{id}/history", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectHistory)))
+	mux.Handle("GET /api/v1/projects/{id}/history/{timestamp}", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectHistorySnapshot)))
+
+	// --- Worker checkpoints (execution timeline; proxy to the worker's qwenpaw app) ---
+	ckh := NewCheckpointHandler(deps.Client, deps.Namespace, deps.KubeMode, deps.ContainerPrefix)
+	mux.Handle("GET /api/v1/workers/{name}/checkpoints/{sub}", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(ckh.proxyCheckpoint)))
 
 	// W-PR-2: human intervention + lifecycle (write endpoints). All writes go
 	// through RequireAuthz ActionUpdate + "project" so the authorizer's

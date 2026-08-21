@@ -40,6 +40,20 @@ func TestResolveLLMPreflightConfigDefaultsQwen(t *testing.T) {
 	}
 }
 
+func TestResolveLLMPreflightConfigDefaultsAtlasCloud(t *testing.T) {
+	cfg, err := resolveLLMPreflightConfig(llmPreflightOptions{
+		Provider: "atlascloud",
+		APIKey:   "atlas-test",
+		Model:    "deepseek-ai/deepseek-v4-pro",
+	})
+	if err != nil {
+		t.Fatalf("resolveLLMPreflightConfig: %v", err)
+	}
+	if cfg.BaseURL != defaultAtlasCloudBaseURL {
+		t.Fatalf("BaseURL=%q, want Atlas Cloud endpoint", cfg.BaseURL)
+	}
+}
+
 func TestResolveLLMPreflightConfigCustomProviderRequiresBaseURL(t *testing.T) {
 	_, err := resolveLLMPreflightConfig(llmPreflightOptions{
 		Provider: "custom-vendor",

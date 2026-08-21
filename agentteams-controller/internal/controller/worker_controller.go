@@ -125,7 +125,7 @@ func (r *WorkerReconciler) Reconcile(ctx context.Context, req reconcile.Request)
 		}
 		if reterr == nil {
 			worker.Status.ObservedGeneration = worker.Generation
-			worker.Status.Message = state.Message
+			worker.Status.Message = state.statusMessage()
 		} else {
 			worker.Status.Message = reterr.Error()
 		}
@@ -206,7 +206,9 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	if err != nil {
 		return reconcile.Result{}, err
 	}
-	configOwnedByTeam := inTeam && backend.ResolveRuntime(effectiveSpec.Runtime, r.DefaultRuntime) == backend.RuntimeQwenPaw
+	effectiveRuntime := backend.ResolveRuntime(effectiveSpec.Runtime, r.DefaultRuntime)
+	configOwnedByTeam := inTeam && effectiveRuntime == backend.RuntimeQwenPaw
+	skillsBeforeConfig := effectiveRuntime == backend.RuntimeQwenPaw
 
 	if effectiveSpec.ModelProvider != "" && r.GatewayClient != nil {
 		info, err := r.GatewayClient.ResolveModelProvider(ctx, effectiveSpec.ModelProvider)
@@ -257,6 +259,9 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 			applyMemberStateToWorker(w, state)
 			return reconcile.Result{}, err
 		}
+		// Skill assignment remains owned by WorkerReconciler even when the
+		// TeamReconciler owns this Worker's Team-scoped runtime config.
+		reconcileMemberSkills(ctx, deps, configContext, state)
 		if !configOwnedByTeam {
 			if err := ReconcileMemberConfig(ctx, deps, configContext, state); err != nil {
 				applyMemberStateToWorker(w, state)
@@ -287,6 +292,13 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 		applyMemberStateToWorker(w, state)
 		return reconcile.Result{}, err
 	}
+	// QwenPaw consumes the desired runtime snapshot immediately, so make its
+	// canonical Skill files available first. File-configured runtimes keep the
+	// historical package/config-before-Skill order so package-provided Skills
+	// can satisfy the same canonical assignment.
+	if skillsBeforeConfig {
+		reconcileMemberSkills(ctx, deps, configContext, state)
+	}
 	if !configOwnedByTeam {
 		if err := ReconcileMemberConfig(ctx, deps, configContext, state); err != nil {
 			applyMemberStateToWorker(w, state)
@@ -294,6 +306,9 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 		}
 	} else {
 		logger.Info("worker runtime config owned by TeamReconciler, skipping standalone config reconcile", "worker", w.Name, "team", mctx.TeamName)
+	}
+	if !skillsBeforeConfig {
+		reconcileMemberSkills(ctx, deps, configContext, state)
 	}
 	if res, err := ReconcileMemberContainer(ctx, deps, mctx, state); err != nil || res.RequeueAfter > 0 {
 		applyMemberStateToWorker(w, state)

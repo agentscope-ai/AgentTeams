@@ -35,6 +35,7 @@ _cleanup() {
     sleep 5
     remove_worker_container "${TEST_WORKER}"
     exec_in_agent rm -rf "/root/manager-workspace/worker-skills/${MANAGER_SKILL}" 2>/dev/null || true
+    exec_in_agent rm -rf "/tmp/${MANAGER_SKILL}-package" "/tmp/${MANAGER_SKILL}.zip" 2>/dev/null || true
     exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${TEST_WORKER}/" 2>/dev/null || true
     exec_in_manager mc rm "${STORAGE_PREFIX}/agentteams-config/workers/${TEST_WORKER}.yaml" 2>/dev/null || true
 }
@@ -134,24 +135,27 @@ PRE_UPDATE_CONTAINER_ID=$(docker inspect --format '{{.Id}}' "$(worker_container_
 if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
     log_section "Manager Distributes a Custom Skill"
 
-    MANAGER_SKILL_DIR="/root/manager-workspace/worker-skills/${MANAGER_SKILL}"
-    exec_in_agent mkdir -p "${MANAGER_SKILL_DIR}"
+    MANAGER_SKILL_PACKAGE_DIR="/tmp/${MANAGER_SKILL}-package/${MANAGER_SKILL}"
+    MANAGER_SKILL_ARCHIVE="/tmp/${MANAGER_SKILL}.zip"
+    exec_in_agent mkdir -p "${MANAGER_SKILL_PACKAGE_DIR}"
     exec_in_agent sh -c "printf '%s\n' \
         '---' \
         'name: ${MANAGER_SKILL}' \
         'description: Verify Manager-to-Worker skill distribution.' \
-        'assign_when: Use for the test24 Manager distribution check.' \
         '---' \
-        '# Manager-distributed test skill' > '${MANAGER_SKILL_DIR}/SKILL.md'"
+        '# Manager-distributed test skill' > '${MANAGER_SKILL_PACKAGE_DIR}/SKILL.md'"
+    exec_in_agent python3 -c \
+        'import pathlib, sys, zipfile; root=pathlib.Path(sys.argv[1]); archive=zipfile.ZipFile(sys.argv[2], "w"); [archive.write(path, path.relative_to(root)) for path in root.rglob("*") if path.is_file()]; archive.close()' \
+        "/tmp/${MANAGER_SKILL}-package" "${MANAGER_SKILL_ARCHIVE}"
 
-    PUSH_OUTPUT=$(exec_in_agent bash \
-        /opt/agentteams/agent/skills/worker-management/scripts/push-worker-skills.sh \
-        --worker "${TEST_WORKER}" --add-skill "${MANAGER_SKILL}" --no-notify 2>&1)
-    PUSH_EXIT=$?
-    if [ "${PUSH_EXIT}" -eq 0 ]; then
-        log_pass "Manager skill-distribution command succeeded"
+    INSTALL_OUTPUT=$(exec_in_agent bash \
+        /opt/agentteams/agent/skills/worker-management/scripts/install-worker-skill.sh \
+        --worker "${TEST_WORKER}" --archive "${MANAGER_SKILL_ARCHIVE}" --no-notify 2>&1)
+    INSTALL_EXIT=$?
+    if [ "${INSTALL_EXIT}" -eq 0 ]; then
+        log_pass "Manager safely installed and distributed a Skill without assign_when"
     else
-        log_fail "Manager skill-distribution command failed: ${PUSH_OUTPUT}"
+        log_fail "Manager Skill installation command failed: ${INSTALL_OUTPUT}"
     fi
 
     DEADLINE=$(( $(date +%s) + 120 ))

@@ -120,6 +120,28 @@ func TestReconcileMemberInfraPreservesTeamStorageAccess(t *testing.T) {
 	}
 }
 
+func TestReconcileMemberDeletePreservesRoomForAdminLeave(t *testing.T) {
+	prov := mocks.NewMockProvisioner()
+
+	if err := ReconcileMemberDelete(context.Background(), MemberDeps{
+		Provisioner: prov,
+		Deployer:    mocks.NewMockDeployer(),
+	}, MemberContext{
+		Name:           "worker-cr",
+		RuntimeName:    "worker-runtime",
+		ExistingRoomID: "!worker-dm:matrix.local",
+	}); err != nil {
+		t.Fatalf("ReconcileMemberDelete: %v", err)
+	}
+
+	if got := prov.Calls.LeaveAllWorkerRooms; len(got) != 1 || got[0] != "worker-runtime" {
+		t.Fatalf("LeaveAllWorkerRooms calls=%v, want [worker-runtime]", got)
+	}
+	if got := prov.Calls.DeleteWorkerRoom; len(got) != 0 {
+		t.Fatalf("DeleteWorkerRoom calls=%v, want none so the admin can leave normally", got)
+	}
+}
+
 func TestResolveBackendForMember_NoBackendAvailable(t *testing.T) {
 	// An empty registry surfaces an error so callers can decide whether
 	// to skip container management or fail loudly.
@@ -544,7 +566,7 @@ func TestCreateMemberContainerConflictRequeues(t *testing.T) {
 	}
 }
 
-func TestReconcileMemberConfigQwenPawDistributesSkillsAndWritesRuntimeConfig(t *testing.T) {
+func TestReconcileMemberConfigQwenPawWritesRuntimeConfigWithoutOwningSkills(t *testing.T) {
 	deployer := mocks.NewMockDeployer()
 	state := &MemberState{
 		MatrixUserID: "@worker-a:matrix.local",
@@ -591,9 +613,51 @@ func TestReconcileMemberConfigQwenPawDistributesSkillsAndWritesRuntimeConfig(t *
 	if req.TeamName != "" || req.TeamRoomID != "" || len(req.TeamMembers) != 0 {
 		t.Fatalf("Worker reconciliation must not inject Team-owned context: %#v", req)
 	}
-	if deployPkg, writeInline, deployConfig, pushSkills, _ := deployer.CallCounts(); deployPkg != 0 || writeInline != 0 || deployConfig != 0 || pushSkills != 1 {
-		t.Fatalf("qwenpaw must distribute skills and skip the legacy file-based config path, got package=%d inline=%d config=%d skills=%d",
+	if deployPkg, writeInline, deployConfig, pushSkills, _ := deployer.CallCounts(); deployPkg != 0 || writeInline != 0 || deployConfig != 0 || pushSkills != 0 {
+		t.Fatalf("runtime config must not own Skill reconciliation or use the legacy file-based config path, got package=%d inline=%d config=%d skills=%d",
 			deployPkg, writeInline, deployConfig, pushSkills)
+	}
+}
+
+func TestReconcileMemberSkillsFailureIsNonBlocking(t *testing.T) {
+	deployer := mocks.NewMockDeployer()
+	deployer.PushOnDemandSkillsFn = func(context.Context, string, []string, []v1beta1.RemoteSkillSource) error {
+		return errors.New("worker copy missing and source unavailable")
+	}
+	state := &MemberState{}
+	member := MemberContext{
+		Name:        "worker-cr-a",
+		RuntimeName: "worker-a",
+		Role:        RoleStandalone,
+		Spec: v1beta1.WorkerSpec{
+			Runtime: "qwenpaw",
+			Skills:  []string{"dashboard-skill"},
+		},
+	}
+
+	reconcileMemberSkills(context.Background(), MemberDeps{Deployer: deployer}, member, state)
+
+	if len(state.Warnings) != 1 || !strings.Contains(state.Warnings[0], "Skill assignment warning") {
+		t.Fatalf("state.Warnings=%v, want one non-blocking Skill warning", state.Warnings)
+	}
+	if !strings.Contains(state.statusMessage(), "source unavailable") {
+		t.Fatalf("statusMessage=%q, want recovery failure detail", state.statusMessage())
+	}
+	if _, _, _, pushSkills, _ := deployer.CallCounts(); pushSkills != 1 {
+		t.Fatalf("PushOnDemandSkills calls=%d, want 1", pushSkills)
+	}
+	if len(deployer.Calls.DeployMemberRuntimeConfig) != 0 {
+		t.Fatalf("Skill reconciliation must not deploy runtime config")
+	}
+}
+
+func TestMemberStateStatusMessagePreservesBackendDetailAndWarnings(t *testing.T) {
+	state := &MemberState{Message: "container detail"}
+	state.addWarning("Skill assignment warning: recovery failed")
+	state.addWarning("Skill assignment warning: recovery failed")
+
+	if got, want := state.statusMessage(), "container detail; Skill assignment warning: recovery failed"; got != want {
+		t.Fatalf("statusMessage=%q, want %q", got, want)
 	}
 }
 
@@ -653,7 +717,7 @@ func TestReconcileMemberConfigEdgeWritesRemoteManagedRuntimeConfigOnly(t *testin
 	}
 }
 
-func TestReconcileMemberConfigNonQwenPawKeepsFileBasedPath(t *testing.T) {
+func TestReconcileMemberConfigNonQwenPawKeepsFileBasedPathWithoutOwningSkills(t *testing.T) {
 	deployer := mocks.NewMockDeployer()
 	state := &MemberState{
 		ProvResult: &service.WorkerProvisionResult{
@@ -680,8 +744,8 @@ func TestReconcileMemberConfigNonQwenPawKeepsFileBasedPath(t *testing.T) {
 	if got := len(deployer.Calls.DeployMemberRuntimeConfig); got != 0 {
 		t.Fatalf("non-qwenpaw must not write runtime config, got %d calls", got)
 	}
-	if deployPkg, writeInline, deployConfig, pushSkills, _ := deployer.CallCounts(); deployPkg != 1 || writeInline != 1 || deployConfig != 1 || pushSkills != 1 {
-		t.Fatalf("file-based deploy path call counts package=%d inline=%d config=%d skills=%d, want all 1",
+	if deployPkg, writeInline, deployConfig, pushSkills, _ := deployer.CallCounts(); deployPkg != 1 || writeInline != 1 || deployConfig != 1 || pushSkills != 0 {
+		t.Fatalf("file-based deploy path call counts package=%d inline=%d config=%d skills=%d, want package/config calls 1 and skills 0",
 			deployPkg, writeInline, deployConfig, pushSkills)
 	}
 }

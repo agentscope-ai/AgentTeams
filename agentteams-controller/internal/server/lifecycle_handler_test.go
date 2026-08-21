@@ -136,6 +136,71 @@ func TestLifecycleEnsureReadyStartsSleepingWorker(t *testing.T) {
 	}
 }
 
+func TestLifecycleWorkerStatusIncludesTeamMemberInfo(t *testing.T) {
+	scheme := newLifecycleTestScheme(t)
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"},
+		Status:     v1beta1.WorkerStatus{Phase: "Running"},
+	}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-team", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "alpha-dev", Role: "worker"},
+			},
+		},
+		Status: v1beta1.TeamStatus{
+			TeamRoomID: "!team:matrix.org",
+			Members: []v1beta1.TeamMemberStatus{{
+				Name:         "alpha-dev",
+				Role:         "worker",
+				RoomID:       "!personal:matrix.org",
+				MatrixUserID: "@alpha-dev:matrix.org",
+			}},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.Worker{}, &v1beta1.Team{}).
+		WithObjects(worker, team).
+		Build()
+	backendStub := &stubWorkerBackend{status: backend.StatusRunning, message: "healthy"}
+	handler := NewLifecycleHandler(k8sClient, backend.NewRegistry([]backend.WorkerBackend{backendStub}), "default")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers/alpha-dev/status", nil)
+	req.SetPathValue("name", "alpha-dev")
+	rec := httptest.NewRecorder()
+
+	handler.GetWorkerRuntimeStatus(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var resp WorkerResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Team != "alpha-team" {
+		t.Errorf("expected Team=alpha-team, got %q", resp.Team)
+	}
+	if resp.Role != "worker" {
+		t.Errorf("expected Role=worker, got %q", resp.Role)
+	}
+	if resp.RoomID != "!personal:matrix.org" {
+		t.Errorf("expected personal RoomID, got %q", resp.RoomID)
+	}
+	if resp.RoomID == team.Status.TeamRoomID {
+		t.Errorf("worker RoomID must not use shared TeamRoomID %q", team.Status.TeamRoomID)
+	}
+	if resp.MatrixUserID != "@alpha-dev:matrix.org" {
+		t.Errorf("expected MatrixUserID=@alpha-dev:matrix.org, got %q", resp.MatrixUserID)
+	}
+	if resp.Message != "backend=stub status=running message=healthy" {
+		t.Errorf("unexpected runtime message %q", resp.Message)
+	}
+}
+
 func newLifecycleTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 
@@ -148,6 +213,7 @@ func newLifecycleTestScheme(t *testing.T) *runtime.Scheme {
 
 type stubWorkerBackend struct {
 	status     backend.WorkerStatus
+	message    string
 	startCalls int
 	stopCalls  int
 }
@@ -169,5 +235,5 @@ func (s *stubWorkerBackend) Stop(_ context.Context, _ string) error {
 	return nil
 }
 func (s *stubWorkerBackend) Status(context.Context, string) (*backend.WorkerResult, error) {
-	return &backend.WorkerResult{Backend: "stub", Status: s.status}, nil
+	return &backend.WorkerResult{Backend: "stub", Status: s.status, Message: s.message}, nil
 }

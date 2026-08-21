@@ -93,7 +93,7 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; 
 
 若测试不成功，您需要检查粘贴的模型 API Key 是否完整或无空格、Base URL 是否包含服务商要求的路径（常见为 `/v1`）、模型 ID 是否正确。再次尝试仍无法通过时，建议向对应模型服务厂商提交服务工单。
 
-第八步：选择网络访问模式。这里我们选择仅本机使用，若允许外部访问，例如和同事建立 Matrix roon，则选择允许外部访问。选择后，按回车键即可，确定端口号、网关主机端口、Higress 控制台主机端口、Maxtrix 域名、Element Web 直接访问的主机端口、文件系统域名等，均采用默认值，无须手动配置。
+第八步：选择网络访问模式。这里我们选择仅本机使用，若允许外部访问，例如和同事建立 Matrix room，则选择允许外部访问。选择后，按回车键即可，确定端口号、网关主机端口、Higress 控制台主机端口、Maxtrix 域名、Element Web 直接访问的主机端口、文件系统域名等，均采用默认值，无须手动配置。
 
 第九步：GitHub 集成、Skills 注册中心、数据持久化、Docker 卷、Manager 工作空间，按回车键即可，均采用默认配置，无须手动配置。
 

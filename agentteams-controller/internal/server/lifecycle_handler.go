@@ -189,6 +189,13 @@ func (h *LifecycleHandler) GetWorkerRuntimeStatus(w http.ResponseWriter, r *http
 
 	resp := workerToResponse(&worker)
 
+	if team, member, ok, terr := findTeamMember(r.Context(), h.k8s, h.namespace, name); terr != nil {
+		writeK8sError(w, "get worker team membership", terr)
+		return
+	} else if ok {
+		applyTeamMember(&resp, team, member)
+	}
+
 	b := h.registry.DetectWorkerBackend(r.Context())
 	if b != nil {
 		result, err := b.Status(r.Context(), name)

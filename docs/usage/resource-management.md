@@ -94,7 +94,7 @@ spec:
 | `spec.identity` | string | No | — | Worker public identity (OpenClaw: generates IDENTITY.md; QwenPaw: merged into SOUL.md per controller) |
 | `spec.soul` | string | No | — | Worker personality and values (generates SOUL.md) |
 | `spec.agents` | string | No | — | Agent behavior rules, used to generate AGENTS.md |
-| `spec.skills` | []string | No | — | Assigned Worker skills, distributed and verified by Manager |
+| `spec.skills` | []string | No | — | Skill names declaratively assigned to the Worker through the Manager, Dashboard, or API |
 | `spec.mcpServers` | []object | No | — | MCP servers callable via mcporter. Each item: `name` (required, map key in mcporter-servers.json), `url` (required, full gateway endpoint), `transport` (`http` default or `sse`). The controller injects `Authorization: Bearer <gatewayKey>`; gateway-side authorization is out of scope. |
 | `spec.package` | string | No | — | Custom package URI: `file://`, `http(s)://`, `nacos://`, or controller-resolved `packages/{name}.zip` after upload |
 | `spec.expose` | []object | No | — | Ports to expose via Higress gateway (see [Service Publishing](#service-publishing)) |
@@ -117,7 +117,7 @@ When both are set, inline fields override the corresponding files in the package
 
 ### Worker Skills
 
-`spec.skills` records Skills assigned to a Worker through the Manager or declarative API. A referenced Skill can come from the AgentTeams Worker skill library or from a third-party Skill placed under `$AGENTTEAMS_WORKSPACE_DIR/worker-skills/<skill-name>/`.
+`spec.skills` records Skills declaratively assigned to a Worker through the Manager, Dashboard, or API. A referenced Skill can come from the AgentTeams Worker skill library, from a third-party Skill placed under `$AGENTTEAMS_WORKSPACE_DIR/worker-skills/<skill-name>/`, or from a complete package distributed by the Dashboard.
 
 For an existing Worker, either put the complete Skill directory in the Manager workspace or send the Manager a ZIP attachment containing one complete Skill root. Then ask the Manager to install it:
 
@@ -131,9 +131,9 @@ The assignment can also be checked through conversation instead of a CLI command
 
 > Check the skills assigned to Worker `amy-ai` and confirm whether `alert-fusion` is included.
 
-You can also distribute a Skill ZIP directly to a target Worker through the Dashboard. The Dashboard validates `name` and `description` in `SKILL.md`, writes the complete Skill to `agents/<worker-name>/skills/<skill-name>/`, and attempts to trigger a reload by sleeping and waking the Worker. If that trigger fails, periodic synchronization should discover the new files within about five minutes. See [Worker Guide: Distribute through the Dashboard](worker-guide.md#method-2-distribute-through-the-dashboard) for the complete UI flow and ZIP constraints.
+You can also distribute a Skill ZIP directly to one or more Workers through the Dashboard. The Dashboard validates `name` and `description` in `SKILL.md`, preserves the complete package under `agents/<worker-name>/skills/<skill-name>/`, updates `spec.skills`, and attempts to restart the Worker to trigger a reload. If the restart is not confirmed, the files and declarative assignment remain in place and the UI reports a partial failure; a subsequent Controller reconcile can still make the assignment effective without another upload. See [Worker Guide: Distribute through the Dashboard](worker-guide.md#method-2-distribute-through-the-dashboard) for the complete UI flow and ZIP constraints.
 
-Direct Dashboard distribution manages the actual Skill files in Worker object storage and does not update `spec.skills`. The Dashboard's **已分发技能 (Distributed Skills)** list can therefore contain more entries than `agt get workers <name> -o json | jq '.skills'`; the latter reflects only assignments maintained through the Manager or declarative API.
+All supported Dashboard distribution paths update `spec.skills`. The Controller may ask the Manager to restore a missing declared Skill later, but a Dashboard-distributed Skill does not need a Manager-side source copy. If the Worker copy still exists, Manager recovery failure is ignored. If the Worker copy is missing and the Manager cannot restore it, reconciliation continues and records a non-blocking warning in Worker status. Remote Skill assignments also keep reconciliation non-blocking when a requested version or label cannot be refreshed: an existing canonical copy is retained, and Worker status records a sanitized warning that identifies the Skill and requested version or label without exposing source credentials.
 
 You can also use `spec.package` to provide a Worker package containing a `skills/` directory. Package skills and assigned skills are merged without conflict.
 
@@ -673,7 +673,12 @@ GET    /api/v1/managers
 POST   /api/v1/managers
 PUT    /api/v1/managers/{name}
 DELETE /api/v1/managers/{name}
+
+GET    /api/v1/projects
+GET    /api/v1/projects/{id}/workflow
 ```
+
+The project endpoints are **read-only workflow inspection**. `GET /api/v1/projects` lists projects across team (`teams/{team}/shared/projects/`) and standalone (`shared/projects/`) prefixes, sorted with an optional `?team=` filter; `GET /api/v1/projects/{id}/workflow` returns a LangGraph-aligned workflow view (`nodes` / `edges` / `next` / `interrupts` / `values` / `loop`) derived from the project `meta.json`. Admin/Manager roles see all projects; a Team Leader sees only their own team's projects. `agt get projects <id> --mermaid` renders the workflow as a Mermaid flowchart.
 
 > **Note:** In typical embedded deployments, port 8090 is reachable from inside the Manager container (`localhost:8090`). In Kubernetes (`AGENTTEAMS_KUBE_MODE=incluster`), expose the controller via a Service as needed.
 

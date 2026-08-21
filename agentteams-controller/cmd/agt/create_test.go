@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -158,6 +159,57 @@ func TestWaitForWorkerReadyTimeout(t *testing.T) {
 	}
 	if !strings.Contains(msg, "phase=Running") {
 		t.Fatalf("expected last phase in error, got %q", msg)
+	}
+}
+
+func TestGetTeamWorkerStatusesMatchesSingleWorkerStatus(t *testing.T) {
+	const statusJSON = `{
+		"name":"alpha-dev",
+		"phase":"Running",
+		"containerState":"running",
+		"runtime":"copaw",
+		"team":"alpha-team",
+		"role":"worker",
+		"roomID":"!personal:matrix.org",
+		"matrixUserID":"@alpha-dev:matrix.org",
+		"message":"backend=stub status=running message=healthy"
+	}`
+	client := &APIClient{
+		BaseURL: "http://controller.test",
+		HTTPClient: &http.Client{
+			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				switch {
+				case r.URL.Path == "/api/v1/workers" && r.URL.Query().Get("team") == "alpha-team":
+					return jsonResponse(http.StatusOK, `{"workers":[{"name":"alpha-dev","phase":"Running","team":"alpha-team","role":"worker"}],"total":1}`), nil
+				case r.URL.Path == "/api/v1/workers/alpha-dev/status":
+					return jsonResponse(http.StatusOK, statusJSON), nil
+				default:
+					return jsonResponse(http.StatusNotFound, `{"error":"not found"}`), nil
+				}
+			}),
+			Timeout: 5 * time.Second,
+		},
+	}
+
+	var byName workerResp
+	if err := client.DoJSON("GET", "/api/v1/workers/alpha-dev/status", nil, &byName); err != nil {
+		t.Fatalf("load --name response: %v", err)
+	}
+	byTeam, err := getTeamWorkerStatuses(client, "alpha-team")
+	if err != nil {
+		t.Fatalf("load --team response: %v", err)
+	}
+	if byTeam.Total != 1 || len(byTeam.Workers) != 1 {
+		t.Fatalf("unexpected --team response: %+v", byTeam)
+	}
+	if !reflect.DeepEqual(byTeam.Workers[0], byName) {
+		t.Fatalf("--team worker differs from --name response:\nteam=%+v\nname=%+v", byTeam.Workers[0], byName)
+	}
+	if byTeam.Workers[0].RoomID != "!personal:matrix.org" {
+		t.Fatalf("roomID=%q, want personal communication room", byTeam.Workers[0].RoomID)
+	}
+	if byTeam.Workers[0].Message == "" {
+		t.Fatal("--team JSON omitted runtime message")
 	}
 }
 

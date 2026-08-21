@@ -27,6 +27,8 @@
 #   AGENTTEAMS_VERSION            Image tag          (default: latest)
 #   AGENTTEAMS_REGISTRY           Image registry     (default: auto-detected by timezone)
 #   AGENTTEAMS_INSTALL_MANAGER_IMAGE       Override manager image (e.g., local build)
+#   AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE Override QwenPaw manager image (e.g., local build)
+#   AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE  Override legacy CoPaw manager image (e.g., local build)
 #   AGENTTEAMS_INSTALL_WORKER_IMAGE        Override worker image  (e.g., local build)
 #   AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE  Override copaw worker image (e.g., local build)
 #   AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE Override qwenpaw worker image (e.g., local build)
@@ -112,6 +114,11 @@ function Write-Error {
 function Write-Warning {
     param([string]$Message)
     Write-Host "$($script:ESC)[33m[AgentTeams WARNING]$($script:ESC)[0m $Message"
+}
+
+function ConvertTo-MatrixAppServiceEnabledValue {
+    param([string]$Value)
+    return $Value.ToLowerInvariant()
 }
 
 # Pause before exit on error so user can read the message when running via double-click
@@ -399,17 +406,19 @@ $script:Messages = @{
     # --- Default worker runtime ---
     "worker_runtime.title" = @{ zh = "--- 默认 Worker 运行时 ---"; en = "--- Default Worker Runtime ---" }
     "worker_runtime.openclaw" = @{ zh = "OpenClaw"; en = "OpenClaw" }
-    "worker_runtime.copaw" = @{ zh = "CoPaw"; en = "CoPaw" }
+    "worker_runtime.qwenpaw" = @{ zh = "QwenPaw（推荐）"; en = "QwenPaw (recommended)" }
+    "worker_runtime.copaw" = @{ zh = "CoPaw（旧版本，建议升级为 QwenPaw）"; en = "CoPaw (legacy; upgrade to QwenPaw recommended)" }
     "worker_runtime.hermes" = @{ zh = "Hermes"; en = "Hermes" }
-    "worker_runtime.choice" = @{ zh = "请选择 [1/2/3]"; en = "Enter choice [1/2/3]" }
+    "worker_runtime.choice" = @{ zh = "请选择 [1/2/3/4]"; en = "Enter choice [1/2/3/4]" }
     "worker_runtime.selected" = @{ zh = "默认 Worker 运行时: {0}"; en = "Default Worker runtime: {0}" }
     "worker_runtime.title_short" = @{ zh = "默认 Worker 运行时"; en = "Default Worker Runtime" }
 
     # --- Manager runtime ---
     "manager_runtime.title" = @{ zh = "--- Manager 运行时 ---"; en = "--- Manager Runtime ---" }
     "manager_runtime.openclaw" = @{ zh = "OpenClaw"; en = "OpenClaw" }
-    "manager_runtime.copaw" = @{ zh = "CoPaw"; en = "CoPaw" }
-    "manager_runtime.choice" = @{ zh = "请选择 [1/2]"; en = "Enter choice [1/2]" }
+    "manager_runtime.qwenpaw" = @{ zh = "QwenPaw（推荐）"; en = "QwenPaw (recommended)" }
+    "manager_runtime.copaw" = @{ zh = "CoPaw（旧版本，建议升级为 QwenPaw）"; en = "CoPaw (legacy; upgrade to QwenPaw recommended)" }
+    "manager_runtime.choice" = @{ zh = "请选择 [1/2/3]"; en = "Enter choice [1/2/3]" }
     "manager_runtime.selected" = @{ zh = "Manager 运行时: {0}"; en = "Manager runtime: {0}" }
     "manager_runtime.title_short" = @{ zh = "Manager 运行时"; en = "Manager Runtime" }
 
@@ -469,6 +478,8 @@ $script:Messages = @{
     # --- Image pulling ---
     "install.image.exists" = @{ zh = "Manager 镜像已存在: {0}"; en = "Manager image already exists locally: {0}" }
     "install.image.pulling_manager" = @{ zh = "正在拉取 Manager 镜像: {0}"; en = "Pulling Manager image: {0}" }
+    "install.image.embedded_exists" = @{ zh = "Embedded 镜像已存在: {0}"; en = "Embedded image already exists locally: {0}" }
+    "install.image.pulling_embedded" = @{ zh = "正在拉取 Embedded 镜像: {0}"; en = "Pulling Embedded image: {0}" }
     "install.image.worker_exists" = @{ zh = "Worker 镜像已存在: {0}"; en = "Worker image already exists locally: {0}" }
     "install.image.pulling_worker" = @{ zh = "正在拉取 Worker 镜像: {0}"; en = "Pulling Worker image: {0}" }
 
@@ -755,19 +766,22 @@ function Resolve-EmbeddedImage {
     $versioned = "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-embedded:$($script:AGENTTEAMS_VERSION)"
     $latestTag = "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-embedded:latest"
 
-    if ($script:AGENTTEAMS_VERSION -eq "latest") {
-        $script:EMBEDDED_IMAGE = $latestTag
-        return
+    # Always pull mutable remote tags, including :latest. Docker otherwise reuses an
+    # existing local tag and can start an embedded controller from an older release.
+    if ($script:AGENTTEAMS_VERSION -ne "latest") {
+        Write-Log (Get-Msg "install.image.pulling_embedded" -f $versioned)
+        docker pull $versioned *>$null
+        if ($LASTEXITCODE -eq 0) {
+            $script:EMBEDDED_IMAGE = $versioned
+            return
+        }
     }
-
-    docker pull $versioned *>$null
-    if ($LASTEXITCODE -eq 0) {
-        $script:EMBEDDED_IMAGE = $versioned
-        return
-    }
+    Write-Log (Get-Msg "install.image.pulling_embedded" -f $latestTag)
     docker pull $latestTag *>$null
     if ($LASTEXITCODE -eq 0) {
-        Write-Log "embedded $($script:AGENTTEAMS_VERSION) not found, using latest"
+        if ($script:AGENTTEAMS_VERSION -ne "latest") {
+            Write-Log "embedded $($script:AGENTTEAMS_VERSION) not found, using latest"
+        }
         $script:EMBEDDED_IMAGE = $latestTag
         return
     }
@@ -806,12 +820,12 @@ function Wait-ManagerReady {
     $elapsed = 0
     Write-Log (Get-Msg "install.wait_ready" -f $Timeout)
 
-    $runtime = if ($script:config.MANAGER_RUNTIME) { $script:config.MANAGER_RUNTIME } else { "copaw" }
+    $runtime = if ($script:config.MANAGER_RUNTIME) { $script:config.MANAGER_RUNTIME } else { "qwenpaw" }
 
     while ($elapsed -lt $Timeout) {
         try {
             switch ($runtime) {
-                "copaw" {
+                { $_ -in @("copaw", "qwenpaw") } {
                     $result = docker exec $Container curl -sf http://127.0.0.1:18799/api/agents 2>$null
                     if ($result -match '"agents"') {
                         Write-Log (Get-Msg "install.wait_ready.ok")
@@ -1022,6 +1036,11 @@ AGENTTEAMS_PORT_MANAGER_CONSOLE=$($Config.PORT_MANAGER_CONSOLE)
 AGENTTEAMS_MATRIX_DOMAIN=$($Config.MATRIX_DOMAIN)
 AGENTTEAMS_MATRIX_CLIENT_DOMAIN=$($Config.MATRIX_CLIENT_DOMAIN)
 
+# Matrix AppService
+AGENTTEAMS_MATRIX_APPSERVICE_ENABLED=$($Config.MATRIX_APPSERVICE_ENABLED)
+AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN=$($Config.MATRIX_APPSERVICE_AS_TOKEN)
+AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN=$($Config.MATRIX_APPSERVICE_HS_TOKEN)
+
 # Gateway
 AGENTTEAMS_AI_GATEWAY_DOMAIN=$($Config.AI_GATEWAY_DOMAIN)
 AGENTTEAMS_MANAGER_GATEWAY_KEY=$($Config.MANAGER_GATEWAY_KEY)
@@ -1063,10 +1082,10 @@ AGENTTEAMS_COPAW_WORKER_IMAGE=$($Config.COPAW_WORKER_IMAGE)
 AGENTTEAMS_QWENPAW_WORKER_IMAGE=$($Config.QWENPAW_WORKER_IMAGE)
 AGENTTEAMS_HERMES_WORKER_IMAGE=$($Config.HERMES_WORKER_IMAGE)
 
-# Manager runtime (openclaw | copaw)
+# Manager runtime (qwenpaw | openclaw | copaw)
 AGENTTEAMS_MANAGER_RUNTIME=$($Config.MANAGER_RUNTIME)
 
-# Default Worker runtime (openclaw | copaw | hermes)
+# Default Worker runtime (qwenpaw | openclaw | hermes | copaw)
 AGENTTEAMS_DEFAULT_WORKER_RUNTIME=$($Config.DEFAULT_WORKER_RUNTIME)
 
 # Matrix E2EE (0=disabled, 1=enabled; default: 0)
@@ -2209,13 +2228,14 @@ function Step-Workspace {
 function Step-Runtime {
     Write-Log (Get-Msg "worker_runtime.title")
     Write-Host ""
-    Write-Host "  1) $(Get-Msg 'worker_runtime.copaw')"
+    Write-Host "  1) $(Get-Msg 'worker_runtime.qwenpaw')"
     Write-Host "  2) $(Get-Msg 'worker_runtime.openclaw')"
     Write-Host "  3) $(Get-Msg 'worker_runtime.hermes')"
+    Write-Host "  4) $(Get-Msg 'worker_runtime.copaw')"
     Write-Host ""
 
     if ($script:AGENTTEAMS_NON_INTERACTIVE) {
-        $script:config.DEFAULT_WORKER_RUNTIME = if ($env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME) { $env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME } else { "copaw" }
+        $script:config.DEFAULT_WORKER_RUNTIME = if ($env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME) { $env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME } else { "qwenpaw" }
     } elseif ($script:AGENTTEAMS_UPGRADE -and $env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME) {
         Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "worker_runtime.title_short"), $env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME)
         $rtChoice = Read-Host (Get-Msg "worker_runtime.choice")
@@ -2224,7 +2244,8 @@ function Step-Runtime {
             $script:config.DEFAULT_WORKER_RUNTIME = switch ($rtChoice) {
                 "2" { "openclaw" }
                 "3" { "hermes" }
-                default { "copaw" }
+                "4" { "copaw" }
+                default { "qwenpaw" }
             }
         } else {
             $script:config.DEFAULT_WORKER_RUNTIME = $env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME
@@ -2238,7 +2259,8 @@ function Step-Runtime {
         $script:config.DEFAULT_WORKER_RUNTIME = switch ($rtChoice) {
             "2" { "openclaw" }
             "3" { "hermes" }
-            default { "copaw" }
+            "4" { "copaw" }
+            default { "qwenpaw" }
         }
     }
     Write-Log (Get-Msg "worker_runtime.selected" -f $script:config.DEFAULT_WORKER_RUNTIME)
@@ -2247,18 +2269,23 @@ function Step-Runtime {
 function Step-ManagerRuntime {
     Write-Log (Get-Msg "manager_runtime.title")
     Write-Host ""
-    Write-Host "  1) $(Get-Msg 'manager_runtime.copaw')"
+    Write-Host "  1) $(Get-Msg 'manager_runtime.qwenpaw')"
     Write-Host "  2) $(Get-Msg 'manager_runtime.openclaw')"
+    Write-Host "  3) $(Get-Msg 'manager_runtime.copaw')"
     Write-Host ""
 
     if ($script:AGENTTEAMS_NON_INTERACTIVE) {
-        $script:config.MANAGER_RUNTIME = if ($env:AGENTTEAMS_MANAGER_RUNTIME) { $env:AGENTTEAMS_MANAGER_RUNTIME } else { "copaw" }
+        $script:config.MANAGER_RUNTIME = if ($env:AGENTTEAMS_MANAGER_RUNTIME) { $env:AGENTTEAMS_MANAGER_RUNTIME } else { "qwenpaw" }
     } elseif ($script:AGENTTEAMS_UPGRADE -and $env:AGENTTEAMS_MANAGER_RUNTIME) {
         Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "manager_runtime.title_short"), $env:AGENTTEAMS_MANAGER_RUNTIME)
         $mrChoice = Read-Host (Get-Msg "manager_runtime.choice")
         if ($mrChoice -eq "b") { $script:StepResult = "back"; return }
         if ($mrChoice) {
-            $script:config.MANAGER_RUNTIME = if ($mrChoice -eq "2") { "openclaw" } else { "copaw" }
+            $script:config.MANAGER_RUNTIME = switch ($mrChoice) {
+                "2" { "openclaw" }
+                "3" { "copaw" }
+                default { "qwenpaw" }
+            }
         } else {
             $script:config.MANAGER_RUNTIME = $env:AGENTTEAMS_MANAGER_RUNTIME
         }
@@ -2268,7 +2295,11 @@ function Step-ManagerRuntime {
         $mrChoice = Read-Host (Get-Msg "manager_runtime.choice")
         if ($mrChoice -eq "b") { $script:StepResult = "back"; return }
         $mrChoice = if ($mrChoice) { $mrChoice } else { "1" }
-        $script:config.MANAGER_RUNTIME = if ($mrChoice -eq "2") { "openclaw" } else { "copaw" }
+        $script:config.MANAGER_RUNTIME = switch ($mrChoice) {
+            "2" { "openclaw" }
+            "3" { "copaw" }
+            default { "qwenpaw" }
+        }
     }
     Write-Log (Get-Msg "manager_runtime.selected" -f $script:config.MANAGER_RUNTIME)
 }
@@ -2470,6 +2501,12 @@ function Install-Manager {
         "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-manager:$($script:AGENTTEAMS_VERSION)"
     }
 
+    $script:MANAGER_QWENPAW_IMAGE = if ($env:AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE) {
+        $env:AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE
+    } else {
+        "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-manager-qwenpaw:$($script:AGENTTEAMS_VERSION)"
+    }
+
     $script:WORKER_IMAGE = if ($env:AGENTTEAMS_INSTALL_WORKER_IMAGE) {
         $env:AGENTTEAMS_INSTALL_WORKER_IMAGE
     } else {
@@ -2506,6 +2543,20 @@ function Install-Manager {
         "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-controller:$($script:AGENTTEAMS_VERSION)"
     }
 
+    # Check the container runtime before resolving images. Resolve-EmbeddedImage
+    # performs docker pull for remote tags, so these actionable errors must win
+    # over a misleading "embedded image unavailable" failure.
+    if (-not (Get-Command "docker" -ErrorAction SilentlyContinue) -and
+        -not (Get-Command "podman" -ErrorAction SilentlyContinue)) {
+        Write-Host "$($script:ESC)[31m[AgentTeams ERROR]$($script:ESC)[0m $(Get-Msg 'error.docker_not_found')" -ForegroundColor Red
+        Exit-Script 1
+    }
+
+    if (-not (Test-DockerRunning)) {
+        Write-Host "$($script:ESC)[31m[AgentTeams ERROR]$($script:ESC)[0m $(Get-Msg 'error.docker_not_running')" -ForegroundColor Red
+        Exit-Script 1
+    }
+
     # Resolve embedded controller image (sets $script:EMBEDDED_IMAGE and
     # $script:AGENTTEAMS_USE_EMBEDDED). Errors out fast if no embedded image is available
     # for the requested version (mirrors the bash installer behavior).
@@ -2517,18 +2568,6 @@ function Install-Manager {
     Write-Log (Get-Msg "install.dir_hint")
     Write-Log (Get-Msg "install.dir_hint2")
     Write-Log ""
-
-    # Check container runtime (docker or podman)
-    if (-not (Get-Command "docker" -ErrorAction SilentlyContinue) -and
-        -not (Get-Command "podman" -ErrorAction SilentlyContinue)) {
-        Write-Host "$($script:ESC)[31m[AgentTeams ERROR]$($script:ESC)[0m $(Get-Msg 'error.docker_not_found')" -ForegroundColor Red
-        Exit-Script 1
-    }
-
-    if (-not (Test-DockerRunning)) {
-        Write-Host "$($script:ESC)[31m[AgentTeams ERROR]$($script:ESC)[0m $(Get-Msg 'error.docker_not_running')" -ForegroundColor Red
-        Exit-Script 1
-    }
 
     # Initialize shared config hashtable
     $script:config = @{}
@@ -2627,7 +2666,7 @@ function Install-Manager {
         Write-Log (Get-Msg "workspace.dir_label" -f $script:config.WORKSPACE_DIR)
     }
     if (-not $script:config.DEFAULT_WORKER_RUNTIME) {
-        $script:config.DEFAULT_WORKER_RUNTIME = if ($env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME) { $env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME } else { "copaw" }
+        $script:config.DEFAULT_WORKER_RUNTIME = if ($env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME) { $env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME } else { "qwenpaw" }
         Write-Log (Get-Msg "worker_runtime.selected" -f $script:config.DEFAULT_WORKER_RUNTIME)
     }
     if (-not $script:config.MATRIX_E2EE) {
@@ -2643,7 +2682,7 @@ function Install-Manager {
         $script:config.LOCAL_ONLY = if ($env:AGENTTEAMS_LOCAL_ONLY) { $env:AGENTTEAMS_LOCAL_ONLY } else { "1" }
     }
     if (-not $script:config.MANAGER_RUNTIME) {
-        $script:config.MANAGER_RUNTIME = if ($env:AGENTTEAMS_MANAGER_RUNTIME) { $env:AGENTTEAMS_MANAGER_RUNTIME } else { "copaw" }
+        $script:config.MANAGER_RUNTIME = if ($env:AGENTTEAMS_MANAGER_RUNTIME) { $env:AGENTTEAMS_MANAGER_RUNTIME } else { "qwenpaw" }
     }
     if (-not $script:config.PORT_GATEWAY) {
         $script:config.PORT_GATEWAY = if ($env:AGENTTEAMS_PORT_GATEWAY) { $env:AGENTTEAMS_PORT_GATEWAY } else { "18080" }
@@ -2668,6 +2707,12 @@ function Install-Manager {
     $config.MINIO_USER = if ($env:AGENTTEAMS_MINIO_USER) { $env:AGENTTEAMS_MINIO_USER } else { $config.ADMIN_USER }
     $config.MINIO_PASSWORD = if ($env:AGENTTEAMS_MINIO_PASSWORD) { $env:AGENTTEAMS_MINIO_PASSWORD } else { $config.ADMIN_PASSWORD }
     $config.MANAGER_GATEWAY_KEY = if ($env:AGENTTEAMS_MANAGER_GATEWAY_KEY) { $env:AGENTTEAMS_MANAGER_GATEWAY_KEY } else { New-RandomKey }
+    $matrixAppServiceEnabled = if ($env:AGENTTEAMS_MATRIX_APPSERVICE_ENABLED) { $env:AGENTTEAMS_MATRIX_APPSERVICE_ENABLED } else { "true" }
+    $config.MATRIX_APPSERVICE_ENABLED = ConvertTo-MatrixAppServiceEnabledValue $matrixAppServiceEnabled
+    if ($config.MATRIX_APPSERVICE_ENABLED -ne "false" -and $config.MATRIX_APPSERVICE_ENABLED -ne "0") {
+        $config.MATRIX_APPSERVICE_AS_TOKEN = if ($env:AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN) { $env:AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN } else { New-RandomKey }
+        $config.MATRIX_APPSERVICE_HS_TOKEN = if ($env:AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN) { $env:AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN } else { New-RandomKey }
+    }
 
     # Store additional config
     $config.LANGUAGE = $script:AGENTTEAMS_LANGUAGE
@@ -2676,6 +2721,7 @@ function Install-Manager {
     $config.COPAW_WORKER_IMAGE = $script:COPAW_WORKER_IMAGE
     $config.QWENPAW_WORKER_IMAGE = $script:QWENPAW_WORKER_IMAGE
     $config.HERMES_WORKER_IMAGE = $script:HERMES_WORKER_IMAGE
+    $config.MANAGER_QWENPAW_IMAGE = $script:MANAGER_QWENPAW_IMAGE
     $config.MANAGER_COPAW_IMAGE = $script:MANAGER_COPAW_IMAGE
 
     # Write env file
@@ -2683,7 +2729,11 @@ function Install-Manager {
 
     # Manager image selection (used by both embedded — passed to controller via env —
     # and legacy — used directly as `docker run` target).
-    $managerImage = if ($config.MANAGER_RUNTIME -eq "copaw") { $script:MANAGER_COPAW_IMAGE } else { $script:MANAGER_IMAGE }
+    $managerImage = switch ($config.MANAGER_RUNTIME) {
+        "qwenpaw" { $script:MANAGER_QWENPAW_IMAGE }
+        "copaw" { $script:MANAGER_COPAW_IMAGE }
+        default { $script:MANAGER_IMAGE }
+    }
     $portPrefix = if ($config.LOCAL_ONLY -eq "1") { "127.0.0.1:" } else { "" }
 
     # Ensure agentteams-net Docker network exists. Used in both modes — the embedded
@@ -2812,13 +2862,17 @@ function Install-Manager {
         # for an explicit override we still need to ensure it is present locally.
         if ($env:AGENTTEAMS_INSTALL_EMBEDDED_IMAGE) {
             if ($script:EMBEDDED_IMAGE -match $LocalImagePattern) {
-                if (-not (Test-LocalImage $script:EMBEDDED_IMAGE)) {
-                    Write-Log "Pulling embedded image: $($script:EMBEDDED_IMAGE)"
+                if (Test-LocalImage $script:EMBEDDED_IMAGE) {
+                    Write-Log (Get-Msg "install.image.embedded_exists" -f $script:EMBEDDED_IMAGE)
+                } else {
+                    Write-Log (Get-Msg "install.image.pulling_embedded" -f $script:EMBEDDED_IMAGE)
                     & docker pull $script:EMBEDDED_IMAGE
+                    if ($LASTEXITCODE -ne 0) { Exit-Script 1 }
                 }
             } else {
-                Write-Log "Pulling embedded image: $($script:EMBEDDED_IMAGE)"
+                Write-Log (Get-Msg "install.image.pulling_embedded" -f $script:EMBEDDED_IMAGE)
                 & docker pull $script:EMBEDDED_IMAGE
+                if ($LASTEXITCODE -ne 0) { Exit-Script 1 }
             }
         }
         # Manager image — controller will spawn it inside; pull here so the spawn doesn't
@@ -2852,8 +2906,7 @@ function Install-Manager {
     $workerImages = @(
         $script:WORKER_IMAGE
         $script:COPAW_WORKER_IMAGE
-        # Temporarily disabled until the QwenPaw worker image is published.
-        # $script:QWENPAW_WORKER_IMAGE
+        $script:QWENPAW_WORKER_IMAGE
         $script:HERMES_WORKER_IMAGE
     )
     foreach ($workerImg in $workerImages) {
@@ -3059,6 +3112,9 @@ function Install-Manager {
             "-e", "AGENTTEAMS_ELEMENT_HOMESERVER_URL=http://127.0.0.1:$($config.PORT_GATEWAY)",
             "-e", "AGENTTEAMS_MATRIX_URL=http://127.0.0.1:6167",
             "-e", "AGENTTEAMS_MATRIX_E2EE=$($config.MATRIX_E2EE)",
+            "-e", "AGENTTEAMS_MATRIX_APPSERVICE_ENABLED=$($config.MATRIX_APPSERVICE_ENABLED)",
+            "-e", "AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN=$($config.MATRIX_APPSERVICE_AS_TOKEN)",
+            "-e", "AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN=$($config.MATRIX_APPSERVICE_HS_TOKEN)",
             "-e", "AGENTTEAMS_MINIO_ENDPOINT=http://127.0.0.1:9000",
             "-e", "AGENTTEAMS_MINIO_BUCKET=agentteams-storage",
             "-e", "AGENTTEAMS_STORAGE_PREFIX=agentteams/agentteams-storage",

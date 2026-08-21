@@ -101,8 +101,8 @@ After choosing Quick Start, the installer still asks you to:
 
 1. Install `latest`, the latest stable release, or a specific version.
 2. Select a model service and model, and enter the LLM API key.
-3. Select the Manager runtime: CoPaw or OpenClaw.
-4. Select the default Worker runtime: CoPaw, OpenClaw, or Hermes in supported versions.
+3. Select the Manager runtime: QwenPaw (recommended), OpenClaw, or legacy CoPaw.
+4. Select the default Worker runtime: QwenPaw (recommended), OpenClaw, Hermes in supported versions, or legacy CoPaw.
 
 The remaining settings use these defaults:
 
@@ -206,8 +206,9 @@ The embedding model can use the default, a custom value, or be disabled. If its 
 
 | Choice | Installer value | Description |
 |---|---|---|
-| CoPaw | `copaw` | Python Manager runtime and the local installer's default choice. |
+| QwenPaw | `qwenpaw` | Recommended Python Manager runtime and the local installer's default choice. |
 | OpenClaw | `openclaw` | Node.js Manager runtime. |
+| CoPaw | `copaw` | Legacy Python runtime. Upgrade to QwenPaw is recommended. |
 
 The Manager runtime selects the Manager image and execution mode. Changing the runtime of an existing Manager recreates its container and should be done only when no task is in progress.
 
@@ -217,9 +218,10 @@ The local installer currently offers:
 
 | Choice | Value | Description |
 |---|---|---|
-| CoPaw | `copaw` | Default choice; Python runtime. |
+| QwenPaw | `qwenpaw` | Recommended default; current Python runtime. |
 | OpenClaw | `openclaw` | Node.js runtime. |
 | Hermes | `hermes` | Displayed starting with versions that support this runtime. |
+| CoPaw | `copaw` | Legacy Python runtime. Upgrade to QwenPaw is recommended. |
 
 This setting only selects the default for Workers created later. You can still explicitly select another runtime supported by the controller when creating a Worker.
 
@@ -289,7 +291,7 @@ The Bash installer enables the Dashboard by default. Manual Setup can configure:
 
 The Dashboard supports only the current embedded controller architecture. The PowerShell installer does not currently install the Dashboard.
 
-When the Dashboard is enabled, you can select a target Worker and upload a Skill ZIP from **技能中心 (Skill Center) → 分发技能 (Distribute Skill)**, or use **Workers → target Worker → 详情 (Details) → 上传技能包 (Upload Skill Package)**. This writes directly to the Worker's persistent Skill directory and attempts to reload the Worker. See [Worker Guide: Distribute through the Dashboard](../worker-guide.md#method-2-distribute-through-the-dashboard) for package rules, reload impact, and verification.
+When the Dashboard is enabled, open **资源中心 (Resource Center) → 市场 (Marketplace)**. If the Skill is not yet in the marketplace, add it with **上传技能 (Upload Skill)**, then click **分发到 Worker (Distribute to Worker)** in the target Skill's row and select one or more Workers. You can also upload a Skill ZIP directly to one Worker through **Workers → target Worker → 详情 (Details) → 上传技能包 (Upload Skill Package)**. Both paths write the complete package to the Worker's persistent Skill directory, update `Worker.spec.skills`, and attempt to reload the Worker. See [Worker Guide: Distribute through the Dashboard](../worker-guide.md#method-2-distribute-through-the-dashboard) for package rules, reload impact, and verification.
 
 ### 14. Matrix E2EE
 
@@ -344,8 +346,8 @@ Non-interactive mode fails immediately when a required value is missing or an ex
 | `AGENTTEAMS_ADMIN_USER` | `admin` |
 | `AGENTTEAMS_ADMIN_PASSWORD` | Generated when omitted; at least 8 characters when explicitly set |
 | `AGENTTEAMS_LOCAL_ONLY` | `1` |
-| `AGENTTEAMS_MANAGER_RUNTIME` | `copaw`, representing the CoPaw Manager |
-| `AGENTTEAMS_DEFAULT_WORKER_RUNTIME` | `copaw` |
+| `AGENTTEAMS_MANAGER_RUNTIME` | `qwenpaw` |
+| `AGENTTEAMS_DEFAULT_WORKER_RUNTIME` | `qwenpaw` |
 | `AGENTTEAMS_MATRIX_E2EE` | `0` |
 | `AGENTTEAMS_MOUNT_SOCKET` | `1` |
 | `AGENTTEAMS_DOCKER_PROXY` | `1`; enables the restricted container-runtime proxy |
@@ -364,6 +366,7 @@ Local builds, private registries, and prerelease validation can use:
 
 - `AGENTTEAMS_INSTALL_EMBEDDED_IMAGE`
 - `AGENTTEAMS_INSTALL_MANAGER_IMAGE`
+- `AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE`
 - `AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE`
 - `AGENTTEAMS_INSTALL_WORKER_IMAGE`
 - `AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE`

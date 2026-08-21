@@ -76,6 +76,7 @@ class Worker:
         self.updater = RuntimeUpdater(
             config=config,
             adapter_apply=self._apply_runtime_adapter,
+            adapter_force_apply=self._force_apply_runtime_adapter,
             api_client=self.api_client,
             runtime_reconcile=self._reconcile_runtime_storage,
         )
@@ -86,6 +87,7 @@ class Worker:
         self._stopping = False
         self._workspace_shared_dir: Optional[Path] = None
         self._initial_runtime_config: Optional[MemberRuntimeConfig] = None
+        self._builtin_mcp_payload_identities: dict[str, str] = {}
 
     async def run(self) -> None:
         if not await self.start():
@@ -629,11 +631,17 @@ class Worker:
                 encoding="utf-8",
             )
 
-    def _apply_runtime_adapter(self) -> None:
+    def _apply_runtime_adapter(self, force: bool = False) -> None:
         self._prepare_default_plugins()
-        self._configure_builtin_plugin_mcp_clients()
+        if force:
+            self._configure_builtin_plugin_mcp_clients(force=True)
+        else:
+            self._configure_builtin_plugin_mcp_clients()
         self._configure_builtin_plugin_mcp_policies()
         self._ensure_session_file_prompt_policy()
+
+    def _force_apply_runtime_adapter(self) -> None:
+        self._apply_runtime_adapter(force=True)
 
     def _prepare_default_plugins(self) -> None:
         builtin_root = self._builtin_qwenpaw_plugins_dir()
@@ -945,7 +953,7 @@ class Worker:
                 await asyncio.sleep(0.5)
         raise RuntimeError(f"qwenpaw API did not become ready: {last_error}")
 
-    def _configure_builtin_plugin_mcp_clients(self) -> None:
+    def _configure_builtin_plugin_mcp_clients(self, force: bool = False) -> None:
         existing = {str(item.get("key")) for item in self.api_client.list_mcp()}
         for plugin_id in ("teamharness", "workerflow"):
             plugin_dir = self.config.qwenpaw_working_dir / "plugins" / plugin_id
@@ -980,10 +988,27 @@ class Worker:
                 },
                 "cwd": str(asset_dir),
             }
-            if plugin_id in existing:
-                self.api_client.update_mcp(plugin_id, payload)
-            else:
+            identity = self._builtin_mcp_payload_identity(plugin_dir, payload)
+            if plugin_id not in existing:
                 self.api_client.create_mcp(plugin_id, payload)
+            elif force or self._builtin_mcp_payload_identities.get(plugin_id) != identity:
+                self.api_client.update_mcp(plugin_id, payload)
+            self._builtin_mcp_payload_identities[plugin_id] = identity
+
+    def _builtin_mcp_payload_identity(
+        self,
+        plugin_dir: Path,
+        payload: dict[str, object],
+    ) -> str:
+        marker = plugin_dir / BUILTIN_QWENPAW_PLUGIN_MARKER
+        plugin_digest = marker.read_text(encoding="utf-8").strip() if marker.is_file() else ""
+        serialized = json.dumps(
+            {"payload": payload, "pluginDigest": plugin_digest},
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
     def _configure_builtin_plugin_mcp_policies(self) -> None:
         allow_policy = {

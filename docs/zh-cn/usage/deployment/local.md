@@ -101,8 +101,8 @@ bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main
 
 1. 安装 `latest`、最新稳定版或指定版本。
 2. 选择模型服务和模型，并输入 LLM API Key。
-3. 选择 Manager runtime：CoPaw 或 OpenClaw。
-4. 选择默认 Worker runtime：CoPaw、OpenClaw，或支持版本中的 Hermes。
+3. 选择 Manager runtime：QwenPaw（推荐）、OpenClaw 或旧版 CoPaw。
+4. 选择默认 Worker runtime：QwenPaw（推荐）、OpenClaw、支持版本中的 Hermes 或旧版 CoPaw。
 
 其余配置采用以下默认值：
 
@@ -206,8 +206,9 @@ Embedding 模型可以使用默认值、自定义或关闭。连通性检查失�
 
 | 选项 | 安装器配置值 | 说明 |
 |---|---|---|
-| CoPaw | `copaw` | Python Manager runtime，也是本地安装器的默认选项。 |
+| QwenPaw | `qwenpaw` | 推荐的 Python Manager runtime，也是本地安装器的默认选项。 |
 | OpenClaw | `openclaw` | Node.js Manager runtime。 |
+| CoPaw | `copaw` | 旧版 Python runtime，建议升级为 QwenPaw。 |
 
 Manager runtime 决定 Manager 镜像和运行方式。修改已有 Manager runtime 会重建 Manager 容器，应在没有进行中任务时操作。
 
@@ -217,9 +218,10 @@ Manager runtime 决定 Manager 镜像和运行方式。修改已有 Manager runt
 
 | 选项 | 配置值 | 说明 |
 |---|---|---|
-| CoPaw | `copaw` | 默认选项，Python runtime。 |
+| QwenPaw | `qwenpaw` | 推荐默认项，当前 Python runtime。 |
 | OpenClaw | `openclaw` | Node.js runtime。 |
 | Hermes | `hermes` | 从支持该 runtime 的版本开始显示。 |
+| CoPaw | `copaw` | 旧版 Python runtime，建议升级为 QwenPaw。 |
 
 该选项只设置后续创建 Worker 时的默认 runtime。创建 Worker 时仍可以显式选择 controller 支持的其他 runtime。
 
@@ -289,7 +291,7 @@ Bash 安装器默认安装 Dashboard。手动模式可以设置：
 
 Dashboard 仅支持当前 embedded controller 架构。PowerShell 安装器当前不安装 Dashboard。
 
-Dashboard 启用后，可以在**技能中心 → 分发技能**中选择目标 Worker 并上传 Skill ZIP，也可以从 **Workers → 目标 Worker → 详情 → 上传技能包**进入。该操作会直接写入 Worker 的持久化 Skill 目录并尝试重新加载 Worker；详细的包格式、加载影响和验证方式参见 [Worker 指南：通过 Dashboard 分发](../worker-guide.md#方式二通过-dashboard-分发)。
+Dashboard 启用后，可以进入**资源中心 → 市场**；如果 Skill 尚未入库，先点击**上传技能**完成上传，再从目标 Skill 所在行点击**分发到 Worker**并选择一个或多个 Worker。也可以从 **Workers → 目标 Worker → 详情 → 上传技能包**直接为单个 Worker 上传 Skill ZIP。两种路径都会把完整包写入 Worker 的持久化 Skill 目录、更新 `Worker.spec.skills` 并尝试重新加载 Worker；详细的包格式、加载影响和验证方式参见 [Worker 指南：通过 Dashboard 分发](../worker-guide.md#方式二通过-dashboard-分发)。
 
 ### 14. Matrix E2EE
 
@@ -344,8 +346,8 @@ bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main
 | `AGENTTEAMS_ADMIN_USER` | `admin` |
 | `AGENTTEAMS_ADMIN_PASSWORD` | 未设置时自动生成；显式设置时至少 8 个字符 |
 | `AGENTTEAMS_LOCAL_ONLY` | `1` |
-| `AGENTTEAMS_MANAGER_RUNTIME` | `copaw`，对应 CoPaw Manager |
-| `AGENTTEAMS_DEFAULT_WORKER_RUNTIME` | `copaw` |
+| `AGENTTEAMS_MANAGER_RUNTIME` | `qwenpaw` |
+| `AGENTTEAMS_DEFAULT_WORKER_RUNTIME` | `qwenpaw` |
 | `AGENTTEAMS_MATRIX_E2EE` | `0` |
 | `AGENTTEAMS_MOUNT_SOCKET` | `1` |
 | `AGENTTEAMS_DOCKER_PROXY` | `1`；启用受限的容器运行时代理 |
@@ -364,6 +366,7 @@ bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main
 
 - `AGENTTEAMS_INSTALL_EMBEDDED_IMAGE`
 - `AGENTTEAMS_INSTALL_MANAGER_IMAGE`
+- `AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE`
 - `AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE`
 - `AGENTTEAMS_INSTALL_WORKER_IMAGE`
 - `AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE`

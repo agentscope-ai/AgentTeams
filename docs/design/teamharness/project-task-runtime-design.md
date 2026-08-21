@@ -38,6 +38,7 @@ channel 或后续事件唤醒时，通过持久化 project/task state 恢复上�
   "status": "active",
   "mode": "project",
   "plan_type": "dag",
+  "team_id": "biz-team",
   "source": "dingtalk",
   "requester": "dingtalk:user:session",
   "reply_route": {
@@ -65,6 +66,7 @@ channel 或后续事件唤醒时，通过持久化 project/task state 恢复上�
 | `status` | `active` / `paused` / `completed` / `blocked`。 |
 | `mode` | `quick` 或 `project`，Direct Reply 不创建 Project。 |
 | `plan_type` | `dag` / `loop`，Quick Task 固定为 `dag`。 |
+| `team_id` | 归属团队名（`teams/{team}/shared/projects/` 前缀）；独立 agent 为空。Controller 用它把 project 映射回团队做 RBAC。 |
 | `source` | 请求来源，例如 `matrix`、`dingtalk`、`api`。 |
 | `requester` | 人类可读的 requester 标识，保留 CoPaw 原字段语义。 |
 | `reply_route` | 最终 requester report 路由；不得包含 secret。 |

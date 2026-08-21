@@ -935,6 +935,61 @@ def test_builtin_plugin_mcp_is_reconciled_through_api(
     assert expected_storage_env.items() <= created["teamharness"]["env"].items()
 
 
+def test_builtin_plugin_mcp_skips_update_when_payload_is_unchanged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = Worker(_config(tmp_path))
+    worker._prepare_env()
+
+    class Api:
+        def __init__(self) -> None:
+            self.mcp = {
+                "teamharness": {"key": "teamharness"},
+                "workerflow": {"key": "workerflow"},
+            }
+            self.updated: list[str] = []
+
+        def list_mcp(self):
+            return list(self.mcp.values())
+
+        def create_mcp(self, key, payload):
+            self.mcp[key] = {"key": key, **payload}
+
+        def update_mcp(self, key, payload):
+            self.updated.append(key)
+            self.mcp[key] = {"key": key, **payload}
+
+    api = Api()
+    worker.api_client = api
+
+    worker._configure_builtin_plugin_mcp_clients()
+    worker._configure_builtin_plugin_mcp_clients()
+
+    assert api.updated == ["teamharness", "workerflow"]
+
+    worker._configure_builtin_plugin_mcp_clients(force=True)
+
+    assert api.updated == [
+        "teamharness",
+        "workerflow",
+        "teamharness",
+        "workerflow",
+    ]
+
+    monkeypatch.setenv("AGENTTEAMS_WORKER_ROLE", "team_leader")
+    worker._configure_builtin_plugin_mcp_clients()
+
+    assert api.updated == [
+        "teamharness",
+        "workerflow",
+        "teamharness",
+        "workerflow",
+        "teamharness",
+        "workerflow",
+    ]
+
+
 @pytest.mark.anyio
 async def test_builtin_mcp_policy_is_persisted_before_desired_state_reload(
     tmp_path: Path,

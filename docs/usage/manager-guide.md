@@ -83,6 +83,8 @@ Package one complete Skill root as a ZIP. The archive must contain `SKILL.md` an
 
 The built-in Matrix conversation supports file attachments. The Manager downloads the attachment, rejects unsafe or ambiguous archives, extracts it into a temporary directory, validates the Skill metadata, and then places the complete directory in the Worker skill library before distribution. Send a ZIP rather than separate files when the Skill includes scripts or references.
 
+For this explicit assignment, `name` and `description` are required in the `SKILL.md` frontmatter. `assign_when` is optional: when omitted, the Skill can still be assigned to the Worker named in the request, but the Manager does not consider it during automatic role-based Skill selection for newly created Workers.
+
 The Manager validates the skill source, uploads the complete directory to the Worker's isolated storage, verifies the remote `SKILL.md`, and only then updates the Worker's assigned skills. For a QwenPaw Worker, the runtime pulls the assignment, copies the skill into its native workspace, refreshes skill discovery, and enables the skill. No manual QwenPaw restart is required.
 
 You can verify the assignment through natural-language conversation with the Manager:

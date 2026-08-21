@@ -64,4 +64,6 @@ htmlcov/
 *.Z
 *.lz
 *.lzo
-```
+
+# Local build artifacts
+/agentteams-controller/agt

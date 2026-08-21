@@ -68,9 +68,9 @@ Manager 会在回复中提供所有具体参数值。
 | 方式 | 适用场景 | 持久化结果 |
 |---|---|---|
 | 通过 Manager 分发 | 希望由 Manager 校验、分发并维护声明式分配记录 | 上传完整 Skill，并更新 `Worker.spec.skills` |
-| 通过 Dashboard 分发 | 已经有 ZIP，希望直接在管理页面选择目标 Worker | 上传到 Worker 的对象存储并触发重新加载；不更新 `Worker.spec.skills` |
+| 通过 Dashboard 分发 | 已经有 ZIP，希望直接在管理页面选择一个或多个目标 Worker | 上传完整 Skill、更新 `Worker.spec.skills` 并触发重新加载 |
 
-两种方式最终都会把 Skill 文件写入 Worker 的持久化存储，Worker runtime 再从该存储同步并加载 Skill。它们的区别主要在操作入口和是否维护 `spec.skills` 分配记录。
+两种方式都会先把完整 Skill 写入 Worker 的规范持久化目录，再将 Skill 名称加入 `spec.skills`，Worker runtime 随后从该存储同步并加载文件。它们的区别主要在操作入口和可分发源的维护位置：Manager 会在 `worker-skills/` 下保留源文件，Dashboard 则可以直接从市场或上传的 ZIP 分发。
 
 ### 方式一：通过 Manager 分发
 
@@ -101,7 +101,7 @@ Manager 会先上传并校验文件，再更新 `Worker.spec.skills`，避免 Wo
 agt get workers amy-ai -o json | jq '.skills'
 ```
 
-`agt get workers amy-ai -o json | jq '.skills'` 查询的是由 Manager 或声明式 API 维护的 `spec.skills` 分配记录。若通过 Dashboard 直接分发，应按下一节的方法从 Dashboard 或 Worker runtime 验证。
+`agt get workers amy-ai -o json | jq '.skills'` 查询声明式 `spec.skills` 分配记录，Manager 和 Dashboard 分发都会更新该字段。实际文件和 runtime 是否可用仍应按下一节的方法单独验证。
 
 ### 方式二：通过 Dashboard 分发
 
@@ -123,22 +123,24 @@ agt get workers amy-ai -o json | jq '.skills'
 2. 如果 Skill 尚未加入市场，点击右上角的**上传技能**，选择 Skill ZIP，点击**解析预览**确认名称和描述，再点击**上传**。
 3. 在市场列表中找到目标 Skill，点击该行操作区的发送图标（**分发到 Worker**）。
 4. 在**分发技能到 Worker**弹窗中选择一个或多个目标 Worker。
-5. 点击**分发到 N 个 Worker**，等待各 Worker 的分发结果和加载提示。
+5. 点击**分发到 N 个 Worker**，等待各 Worker 的上传、分配和加载结果。
 
 也可以从 **Workers → 目标 Worker → 详情 → 上传技能包**直接为单个 Worker 上传 Skill ZIP。
 
-> **注意：** **上传技能**只会把 Skill 加入 Dashboard 的集中式市场，不会自动分发给 Worker。上传完成后，仍需从该 Skill 所在行点击**分发到 Worker**；也可以使用 Worker 详情中的**上传技能包**直接上传。
+创建或编辑 Worker 时，也可以在表单的**技能**字段中选择市场或 Nacos 中已有的 Skill。保存 Worker 后，Dashboard 会将尚未就位的完整 Skill 同步到该 Worker 的规范持久化目录，核对并补齐 `spec.skills`，最后尝试重启 Worker。上传或 `spec.skills` 更新失败会作为部分失败显示，不会被误报为安装成功。
+
+> **注意：** **上传技能**只会把 Skill 加入 Dashboard 的集中式市场，不会自动分发给 Worker。上传完成后，仍需从该 Skill 所在行点击**分发到 Worker**；也可以使用 Worker 详情中的**上传技能包**直接上传，或在创建、编辑 Worker 时选择该 Skill。
 
 #### 加载与验证
 
-Dashboard 会校验 ZIP 和 `SKILL.md`，然后把文件写入对象存储的 `agents/<worker-name>/skills/<skill-name>/`。上传完成后，Dashboard 会尝试让 Worker 先休眠再唤醒，以便立即加载新 Skill。因此应在 Worker 空闲时操作，避免中断正在执行的任务。
+Dashboard 会校验 ZIP 和 `SKILL.md`，保留 Skill 根目录下的全部文件，并写入对象存储的 `agents/<worker-name>/skills/<skill-name>/`。从市场分发或在 Worker 详情上传时，只有完整包写入成功后才会更新 `Worker.spec.skills`；在创建、编辑 Worker 时选择 Skill，则会在保存 Worker 后同步缺失的包并核对该字段。文件与声明式分配就位后，Dashboard 会尝试重启 Worker 以立即加载新的分配。因此应在 Worker 空闲时操作，避免中断正在执行的任务。
 
-- 如果重新加载成功，页面显示“已通知 Worker 加载新技能”。
-- 如果休眠或唤醒失败，已经上传的文件不会丢失；页面会提示 Worker 最长约 5 分钟内通过周期同步自动发现。
+- 如果重新加载成功，页面会显示该 Worker 的安装或重启完成结果。
+- 如果重启未确认，已经上传的文件和分配记录不会丢失；页面会报告部分失败，后续 Controller reconcile 可以继续使该分配生效，无需重新上传。
 
 可以重新打开 **Workers → 目标 Worker → 详情**，在“已分发技能”中确认 Skill 名称。若需要验证 runtime 已经实际加载，而不只是文件已经存在，应让该 Worker 确认它能够发现并使用对应 Skill。
 
-Dashboard 直接分发不会修改 `Worker.spec.skills`，因此该 Skill 不一定出现在 `agt get workers <name> -o json | jq '.skills'` 中。需要声明式分配记录、后续由 Manager 统一重推或审计时，应使用 Manager 分发方式。
+Dashboard 分发会更新 `Worker.spec.skills`，因此该 Skill 应出现在 `agt get workers <name> -o json | jq '.skills'` 中。Controller 后续 reconcile 可能要求 Manager 恢复声明式 Skill，但 Dashboard 分发的 Skill 不强制要求 Manager 保留源文件。规范 Worker 副本仍然存在时会忽略 Manager 恢复失败；该副本缺失且 Manager 也无法恢复时，Worker 会记录非阻塞告警。对于远程 Skill 分配，请求的版本或标签刷新失败时也会记录非阻塞告警，并保留已有的规范副本。告警只标明 Skill 及请求的版本或标签，不包含远程源地址中的凭据。
 
 如果需要从 Skill 打包开始，完整验证分发、runtime 发现和实际使用，可以按照[案例六：添加并使用自定义 Skill](use-cases.md#8-案例六添加并使用自定义-skill)操作。
 

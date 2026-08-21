@@ -68,9 +68,9 @@ There are currently two stable ways to install a Skill on an existing Worker:
 | Method | Best for | Persistent result |
 |---|---|---|
 | Distribute through the Manager | Let the Manager validate, distribute, and maintain a declarative assignment record | Uploads the complete Skill and updates `Worker.spec.skills` |
-| Distribute through the Dashboard | Select a target Worker in the UI when you already have a ZIP | Uploads directly to Worker object storage and triggers a reload; does not update `Worker.spec.skills` |
+| Distribute through the Dashboard | Select one or more target Workers in the UI when you already have a ZIP | Uploads the complete Skill, updates `Worker.spec.skills`, and triggers a reload |
 
-Both methods ultimately write the Skill files to the Worker's persistent storage, from which the Worker runtime synchronizes and loads them. They differ mainly in their entry point and whether they maintain the `spec.skills` assignment record.
+Both methods write the complete Skill to the Worker's canonical persistent storage before adding its name to `spec.skills`. The Worker runtime synchronizes and loads the files from that storage. The methods differ mainly in their entry point and where the distributable source is maintained: the Manager keeps a source copy under `worker-skills/`, while the Dashboard can distribute directly from its catalog or an uploaded ZIP.
 
 ### Method 1: Distribute through the Manager
 
@@ -101,7 +101,7 @@ For operator-side inspection or troubleshooting, use the equivalent CLI query:
 agt get workers amy-ai -o json | jq '.skills'
 ```
 
-`agt get workers amy-ai -o json | jq '.skills'` shows the `spec.skills` assignment record maintained through the Manager or declarative API. For a Skill distributed directly through the Dashboard, verify it through the Dashboard or Worker runtime as described below.
+`agt get workers amy-ai -o json | jq '.skills'` shows the declarative `spec.skills` assignment record. Manager and Dashboard distribution both update it. Verify the actual files and runtime availability separately as described below.
 
 ### Method 2: Distribute through the Dashboard
 
@@ -123,22 +123,24 @@ The upload package must meet these requirements:
 2. If the Skill is not yet in the marketplace, click **上传技能 (Upload Skill)** in the upper-right corner, choose the Skill ZIP, click **解析预览 (Parse Preview)** to confirm its name and description, and then click **上传 (Upload)**.
 3. Find the target Skill in the marketplace and click the send icon labeled **分发到 Worker (Distribute to Worker)** in that row's action area.
 4. Select one or more target Workers in the **分发技能到 Worker (Distribute Skill to Worker)** dialog.
-5. Click **分发到 N 个 Worker (Distribute to N Workers)** and wait for each Worker's distribution result and reload note.
+5. Click **分发到 N 个 Worker (Distribute to N Workers)** and wait for each Worker's upload, assignment, and reload result.
 
 You can also upload a Skill ZIP directly to one Worker through **Workers → target Worker → 详情 (Details) → 上传技能包 (Upload Skill Package)**.
 
-> **Note:** **上传技能 (Upload Skill)** only adds a Skill to the Dashboard's centralized marketplace; it does not distribute that Skill to a Worker. After uploading, click **分发到 Worker (Distribute to Worker)** in that Skill's row, or use **上传技能包 (Upload Skill Package)** in Worker details for a direct upload.
+When creating or editing a Worker, you can also select existing marketplace or Nacos Skills in the form's **技能 (Skills)** field. After saving the Worker, the Dashboard synchronizes any missing complete Skill packages to that Worker's canonical persistent directory, reconciles `spec.skills`, and then attempts to restart the Worker. Upload or `spec.skills` update failures are shown as partial failures rather than reported as successful installations.
+
+> **Note:** **上传技能 (Upload Skill)** only adds a Skill to the Dashboard's centralized marketplace; it does not distribute that Skill to a Worker. After uploading, click **分发到 Worker (Distribute to Worker)** in that Skill's row, use **上传技能包 (Upload Skill Package)** in Worker details for a direct upload, or select the Skill while creating or editing a Worker.
 
 #### Load and verify
 
-The Dashboard validates the ZIP and `SKILL.md`, then writes the files to `agents/<worker-name>/skills/<skill-name>/` in object storage. After upload, it attempts to put the Worker to sleep and wake it again so the runtime loads the Skill immediately. Distribute only while the Worker is idle to avoid interrupting an active task.
+The Dashboard validates the ZIP and `SKILL.md`, preserves all files under the Skill root, and writes them to `agents/<worker-name>/skills/<skill-name>/` in object storage. Marketplace and Worker-details distribution update `Worker.spec.skills` only after the complete package is present. When you select a Skill while creating or editing a Worker, the Dashboard saves the Worker first, then synchronizes any missing package and reconciles that field. Once the files and declarative assignment are in place, it attempts to restart the Worker so the runtime loads the new assignment immediately. Distribute only while the Worker is idle to avoid interrupting an active task.
 
-- On a successful reload, the UI reports that the Worker was notified to load the new Skill.
-- If sleep or wake fails, the uploaded files remain available; the UI reports that periodic synchronization should discover them within about five minutes.
+- On a successful reload, the UI shows the installation or restart result for that Worker.
+- If the restart is not confirmed, the uploaded files and assignment remain available. The UI reports a partial failure, and a subsequent Controller reconcile can still make the assignment effective without another upload.
 
 Reopen **Workers → target Worker → 详情 (Details)** and confirm the Skill under **已分发技能 (Distributed Skills)**. To verify runtime availability rather than only file presence, ask that Worker to confirm it can discover and use the Skill.
 
-Direct Dashboard distribution does not modify `Worker.spec.skills`, so the Skill may not appear in `agt get workers <name> -o json | jq '.skills'`. Use Manager distribution when you require a declarative assignment record, future Manager-driven redistribution, or assignment auditing.
+Dashboard distribution updates `Worker.spec.skills`, so the Skill should appear in `agt get workers <name> -o json | jq '.skills'`. A later Controller reconcile may ask the Manager to restore a declared Skill, but the Manager is not required to keep a source copy for Dashboard-distributed Skills. Manager recovery failure is ignored while the canonical Worker copy exists; if that copy is missing and the Manager cannot restore it, the Worker receives a non-blocking warning. For a remote Skill assignment, failure to refresh the requested version or label also produces a non-blocking warning while retaining any existing canonical copy. The warning identifies the Skill and requested version or label, but omits remote source credentials.
 
 For an end-to-end example that starts with packaging and verifies distribution, runtime discovery, and actual use, follow [Use case 6: Add and use a custom Skill](use-cases.md#8-use-case-6-add-and-use-a-custom-skill).
 

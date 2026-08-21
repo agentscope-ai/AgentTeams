@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/url"
@@ -746,18 +747,50 @@ func (d *Deployer) PushOnDemandSkills(ctx context.Context, workerName string, sk
 	}
 
 	agentPrefix := fmt.Sprintf("agents/%s", workerName)
+	var remoteWarning error
 	if err := d.pushRemoteSkills(ctx, workerName, agentPrefix, remoteSkills); err != nil {
-		return err
+		remoteNames := remoteSkillNames(remoteSkills)
+		refreshFailure := remoteSkillRefreshFailure(remoteSkills)
+		if len(remoteNames) == 0 {
+			remoteWarning = errors.New(refreshFailure)
+		} else {
+			missing, verifyErr := d.missingWorkerSkills(ctx, workerName, remoteNames)
+			switch {
+			case verifyErr != nil:
+				remoteWarning = fmt.Errorf("%s; could not verify existing Worker copies: %v", refreshFailure, verifyErr)
+			case len(missing) > 0:
+				remoteWarning = fmt.Errorf("%s; Worker copies missing: %s", refreshFailure, strings.Join(missing, ", "))
+			default:
+				remoteWarning = fmt.Errorf("%s; retained existing Worker copies", refreshFailure)
+			}
+		}
 	}
 
-	if len(skills) == 0 || d.executor == nil {
-		return nil
+	if len(skills) == 0 {
+		return remoteWarning
+	}
+	if d.executor == nil {
+		missing, err := d.missingWorkerSkills(ctx, workerName, skills)
+		if err != nil {
+			return combineSkillAssignmentErrors(remoteWarning, fmt.Errorf("verify declared Worker skills without Manager executor: %w", err))
+		}
+		if len(missing) > 0 {
+			return combineSkillAssignmentErrors(remoteWarning, fmt.Errorf("Manager skill recovery is unavailable and Worker copies are missing: %s", strings.Join(missing, ", ")))
+		}
+		return remoteWarning
 	}
 	scriptPath := "/opt/agentteams/agent/skills/worker-management/scripts/push-worker-skills.sh"
 	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
-		logger.Info("push-worker-skills.sh not found (incluster mode), skipping on-demand skill push",
+		missing, verifyErr := d.missingWorkerSkills(ctx, workerName, skills)
+		if verifyErr != nil {
+			return combineSkillAssignmentErrors(remoteWarning, fmt.Errorf("verify declared Worker skills without Manager push script: %w", verifyErr))
+		}
+		if len(missing) > 0 {
+			return combineSkillAssignmentErrors(remoteWarning, fmt.Errorf("Manager push script is unavailable and Worker copies are missing: %s", strings.Join(missing, ", ")))
+		}
+		logger.Info("push-worker-skills.sh not found; existing Worker copies satisfy the assignments",
 			"worker", workerName, "skills", skills)
-		return nil
+		return remoteWarning
 	}
 	for _, skill := range skills {
 		if _, err := d.executor.RunSimple(
@@ -767,10 +800,112 @@ func (d *Deployer) PushOnDemandSkills(ctx context.Context, workerName string, sk
 			"--skill", skill,
 			"--no-notify",
 		); err != nil {
-			return fmt.Errorf("push skill %q to worker %q: %w", skill, workerName, err)
+			missing, verifyErr := d.missingWorkerSkills(ctx, workerName, []string{skill})
+			if verifyErr != nil {
+				return combineSkillAssignmentErrors(remoteWarning, fmt.Errorf("push skill %q to worker %q: %w (verify existing Worker copy: %v)", skill, workerName, err, verifyErr))
+			}
+			if len(missing) > 0 {
+				return combineSkillAssignmentErrors(remoteWarning, fmt.Errorf("push skill %q to worker %q: %w (Worker copy missing)", skill, workerName, err))
+			}
+			logger.Info("Skill recovery failed but existing Worker copy is intact",
+				"worker", workerName,
+				"skill", skill,
+				"error", err.Error())
 		}
 	}
-	return nil
+	return remoteWarning
+}
+
+func combineSkillAssignmentErrors(first, second error) error {
+	if first == nil {
+		return second
+	}
+	if second == nil {
+		return first
+	}
+	return fmt.Errorf("%v; %v", first, second)
+}
+
+func remoteSkillNames(sources []v1beta1.RemoteSkillSource) []string {
+	seen := make(map[string]struct{})
+	names := make([]string, 0)
+	for _, source := range sources {
+		for _, skill := range source.Skills {
+			if skill.Name == "" {
+				continue
+			}
+			if _, ok := seen[skill.Name]; ok {
+				continue
+			}
+			seen[skill.Name] = struct{}{}
+			names = append(names, skill.Name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func remoteSkillRefreshFailure(sources []v1beta1.RemoteSkillSource) string {
+	seen := make(map[string]struct{})
+	requests := make([]string, 0)
+	for _, source := range sources {
+		for _, skill := range source.Skills {
+			name := strings.TrimSpace(skill.Name)
+			if name == "" {
+				continue
+			}
+			description := name
+			switch {
+			case skill.Version != "":
+				description += fmt.Sprintf(" (version=%q)", skill.Version)
+			case skill.Label != "":
+				description += fmt.Sprintf(" (label=%q)", skill.Label)
+			}
+			if _, ok := seen[description]; ok {
+				continue
+			}
+			seen[description] = struct{}{}
+			requests = append(requests, description)
+		}
+	}
+	sort.Strings(requests)
+	if len(requests) == 0 {
+		return "remote Skill refresh failed"
+	}
+	return "remote Skill refresh failed for " + strings.Join(requests, ", ")
+}
+
+func redactRemoteSkillSource(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "<invalid remote source>"
+	}
+	u.User = nil
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
+}
+
+// missingWorkerSkills checks the canonical object-storage contract consumed by
+// every Worker runtime. Runtime-specific workspaces are derived from this
+// prefix by the Worker sync layer and are not authoritative distribution
+// targets.
+func (d *Deployer) missingWorkerSkills(ctx context.Context, workerName string, skills []string) ([]string, error) {
+	if d.oss == nil {
+		return nil, fmt.Errorf("object storage is not configured")
+	}
+	missing := make([]string, 0)
+	for _, skill := range skills {
+		key := fmt.Sprintf("agents/%s/skills/%s/SKILL.md", workerName, skill)
+		if err := d.oss.Stat(ctx, key); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				missing = append(missing, skill)
+				continue
+			}
+			return nil, fmt.Errorf("stat %s: %w", key, err)
+		}
+	}
+	return missing, nil
 }
 
 func (d *Deployer) PrepareWorkerDeps(ctx context.Context, req WorkerDepsPrepareRequest) error {
@@ -941,26 +1076,27 @@ func (d *Deployer) pushRemoteSkills(ctx context.Context, workerName, agentPrefix
 	clients := map[nacosClientKey]*executor.NacosAIClient{}
 
 	for _, source := range remoteSkills {
+		safeSource := redactRemoteSkillSource(source.Source)
 		if len(source.Skills) == 0 {
-			return fmt.Errorf("remoteSkills source %q has empty skills list", source.Source)
+			return fmt.Errorf("remoteSkills source %q has empty skills list", safeSource)
 		}
 		for _, skill := range source.Skills {
 			if strings.TrimSpace(skill.Name) == "" {
-				return fmt.Errorf("remoteSkills source %q has an entry with empty name", source.Source)
+				return fmt.Errorf("remoteSkills source %q has an entry with empty name", safeSource)
 			}
 			if skill.Version != "" && skill.Label != "" {
-				return fmt.Errorf("remote skill %q in source %q cannot set both version and label", skill.Name, source.Source)
+				return fmt.Errorf("remote skill %q in source %q cannot set both version and label", skill.Name, safeSource)
 			}
 		}
 
 		nacosAddr, namespace, err := parseNacosRemoteSource(source.Source)
 		if err != nil {
-			return fmt.Errorf("invalid remoteSkills.source %q: %w", source.Source, err)
+			return fmt.Errorf("invalid remoteSkills.source %q: %w", safeSource, err)
 		}
 
 		authType, err := mapRemoteSkillAuthType(source.AuthType)
 		if err != nil {
-			return fmt.Errorf("invalid remoteSkills.authType for source %q: %w", source.Source, err)
+			return fmt.Errorf("invalid remoteSkills.authType for source %q: %w", safeSource, err)
 		}
 
 		stsResources := remoteSkillSTSResources(source.Skills)
@@ -972,10 +1108,10 @@ func (d *Deployer) pushRemoteSkills(ctx context.Context, workerName, agentPrefix
 		}
 		client, ok := clients[key]
 		if !ok {
-			logger.Info("connecting to nacos", "worker", workerName, "source", source.Source, "authType", authType)
+			logger.Info("connecting to nacos", "worker", workerName, "source", safeSource, "authType", authType)
 			client, err = executor.NewNacosAIClient(ctx, nacosAddr, namespace, authType, d.nacosCredClient, opts...)
 			if err != nil {
-				return fmt.Errorf("connect to nacos source %q: %w", source.Source, err)
+				return fmt.Errorf("connect to nacos source %q: %w", safeSource, err)
 			}
 			clients[key] = client
 		}
@@ -988,11 +1124,11 @@ func (d *Deployer) pushRemoteSkills(ctx context.Context, workerName, agentPrefix
 			defer os.RemoveAll(tmpDir)
 
 			if err := client.GetSkill(ctx, skill.Name, tmpDir, skill.Version, skill.Label); err != nil {
-				return fmt.Errorf("fetch remote skill %q from %q: %w", skill.Name, source.Source, err)
+				return fmt.Errorf("fetch remote skill %q from %q: %w", skill.Name, safeSource, err)
 			}
 			logger.Info("remote skill fetched, mirroring to OSS",
 				"worker", workerName,
-				"source", source.Source,
+				"source", safeSource,
 				"skill", skill.Name,
 				"version", skill.Version,
 				"label", skill.Label)
@@ -1000,11 +1136,11 @@ func (d *Deployer) pushRemoteSkills(ctx context.Context, workerName, agentPrefix
 			src := filepath.Join(tmpDir, skill.Name) + "/"
 			dst := agentPrefix + "/skills/" + skill.Name + "/"
 			if err := d.oss.Mirror(ctx, src, dst, oss.MirrorOptions{Overwrite: true}); err != nil {
-				return fmt.Errorf("mirror remote skill %q from %q to OSS: %w", skill.Name, source.Source, err)
+				return fmt.Errorf("mirror remote skill %q from %q to OSS: %w", skill.Name, safeSource, err)
 			}
 			logger.Info("remote skill pushed",
 				"worker", workerName,
-				"source", source.Source,
+				"source", safeSource,
 				"skill", skill.Name,
 				"version", skill.Version,
 				"label", skill.Label)

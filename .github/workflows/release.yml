@@ -48,6 +48,54 @@ jobs:
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Wait for versioned multi-architecture images
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          images=(
+            openclaw-base
+            agentteams-controller
+            agentteams-embedded
+            agentteams-manager
+            agentteams-manager-qwenpaw
+            agentteams-worker
+            agentteams-copaw-worker
+            agentteams-qwenpaw-worker
+            agentteams-hermes-worker
+          )
+          images_ready=0
+          attempt=1
+          max_attempts=80
+
+          while [ "${attempt}" -le "${max_attempts}" ]; do
+            missing=()
+            for image in "${images[@]}"; do
+              ref="${REGISTRY}/${REPO}/${image}:${VERSION}"
+              manifest="$(docker buildx imagetools inspect "${ref}" --raw 2>/dev/null || true)"
+              if ! jq -e '
+                any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "amd64") and
+                any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "arm64")
+              ' >/dev/null 2>&1 <<<"${manifest}"; then
+                missing+=("${image}")
+              fi
+            done
+
+            if [ "${#missing[@]}" -eq 0 ]; then
+              images_ready=1
+              echo "All ${#images[@]} versioned images are ready for ${VERSION}."
+              break
+            fi
+
+            echo "Attempt ${attempt}/${max_attempts}: waiting for ${missing[*]}"
+            attempt=$((attempt + 1))
+            sleep 30
+          done
+
+          if [ "${images_ready}" -ne 1 ]; then
+            echo "ERROR: versioned multi-architecture images are incomplete for ${VERSION}."
+            exit 1
+          fi
+
       - name: Create tag (workflow_dispatch only)
         if: github.event_name == 'workflow_dispatch'
         run: |

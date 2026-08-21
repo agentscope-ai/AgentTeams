@@ -1,7 +1,7 @@
 # ============================================================
-# AgentTeams Manager Agent - QwenPaw 2.0 Runtime
+# AgentTeams Manager Agent - QwenPaw 2.1 Runtime
 # ============================================================
-# Lightweight Manager container with Python QwenPaw 2.0 runtime.
+# Lightweight Manager container with Python QwenPaw 2.1 runtime.
 # Does NOT include Higress, Tuwunel, MinIO, or Element Web.
 # All infrastructure is provided by the controller (embedded)
 # or K8s Pods (incluster). AGENTTEAMS_RUNTIME env var selects mode.
@@ -12,7 +12,7 @@
 # Build args:
 #   HIGRESS_REGISTRY        - base image registry (default: cn-hangzhou)
 #   AGENTTEAMS_CONTROLLER_IMAGE - pre-built controller image for agt CLI
-#   QWENPAW_PIP_SPEC        - QwenPaw pip spec (default: qwenpaw==2.0.1)
+#   QWENPAW_PIP_SPEC        - QwenPaw pip spec (default: qwenpaw==2.1.0)
 #   PIP_INDEX_URL           - PyPI mirror (default: official pypi.org)
 #   APT_MIRROR              - Debian APT mirror (default: empty; set to mirrors.aliyun.com for China)
 # ============================================================
@@ -60,8 +60,8 @@ RUN npm config set registry ${NPM_REGISTRY} && \
     npm install -g mcporter skills @nacos-group/cli && \
     rm -rf /root/.npm
 
-# ---- Python virtual environment (single QwenPaw 2.0 venv) ----
-ARG QWENPAW_PIP_SPEC=qwenpaw==2.0.1
+# ---- Python virtual environment (single QwenPaw 2.1 venv) ----
+ARG QWENPAW_PIP_SPEC=qwenpaw==2.1.0
 RUN python3 -m venv /opt/venv/qwenpaw \
     && /opt/venv/qwenpaw/bin/pip install --no-cache-dir \
         -i "${PIP_INDEX_URL}" \

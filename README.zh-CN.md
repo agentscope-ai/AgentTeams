@@ -195,6 +195,26 @@ helm install agentteams higress.io/agentteams \
 
 </details>
 
+<details>
+<summary>使用 OrcaRouter</summary>
+
+[OrcaRouter](https://www.orcarouter.ai) 是一个统一的 AI 网关，在 `https://api.orcarouter.ai/v1` 提供 OpenAI 兼容 API。将 provider 名设为 `orcarouter` 即可用一个 API Key 接入多种模型：
+
+```bash
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace \
+  --render-subchart-notes \
+  --set credentials.llmApiKey=<你的-OrcaRouter-API-Key> \
+  --set credentials.llmProvider=orcarouter \
+  --set credentials.defaultModel=orcarouter/auto \
+  --set credentials.adminPassword=<你的-管理员密码> \
+  --set gateway.publicURL=http://localhost:18080
+```
+
+It also runs gateway-level, zero-trust security for AI agents on the same endpoint — screening every prompt/response and governing every tool call on a default-deny basis, with no application code changes.
+
+</details>
+
 | 参数 | 是否必填 | 说明 |
 |---|---|---|
 | `credentials.llmApiKey` | 必填 | LLM 服务商 API Key |
@@ -202,7 +222,7 @@ helm install agentteams higress.io/agentteams \
 | `credentials.adminPassword` | 推荐 | Matrix 管理员密码；留空时会自动生成（之后需要从 Secret 中读取） |
 | `credentials.llmProvider` | 可选 | LLM 服务商名，默认 `openai-compat` |
 | `credentials.defaultModel` | 可选 | 默认模型，默认 `gpt-5.4` |
-| `credentials.llmBaseUrl` | 可选 | OpenAI 兼容的 Base URL（例如 `https://api.deepseek.com/v1`）。使用官方 OpenAI API 时留空 |
+| `credentials.llmBaseUrl` | 可选 | OpenAI 兼容的 Base URL（例如 `https://api.deepseek.com/v1`）。使用官方 OpenAI API 或内置的 `orcarouter` provider 时留空 |
 | `preflight.llm.enabled` | 可选 | 安装或升级前通过 hook 验证 LLM API Key、Base URL 和模型；默认 `true` |
 | `preflight.llm.strict` | 可选 | LLM 探测失败时终止安装或升级；默认 `true`，设为 `false` 时仅告警并继续 |
 | `preflight.llm.timeoutSeconds` | 可选 | LLM 探测单次 HTTP 请求的超时时间；默认 `30` 秒 |

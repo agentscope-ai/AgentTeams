@@ -10,6 +10,7 @@ on:
       - 'openhuman/scripts/openhuman-worker-entrypoint.sh'
       - 'tests/check-agentteams-rename-defaults.sh'
       - 'tests/check-installer-pre-1.2-env-compat.sh'
+      - 'tests/check-installer-wasm-registry.sh'
       - 'tests/check-installer-embedded-latest-pull.sh'
       - 'tests/check-installer-qwenpaw-runtime-options.sh'
       - 'tests/check-windows-appservice-normalization.ps1'
@@ -29,6 +30,9 @@ jobs:
 
       - name: Check pre-v1.2 installer compatibility
         run: bash tests/check-installer-pre-1.2-env-compat.sh
+
+      - name: Check installer WASM registry default
+        run: bash tests/check-installer-wasm-registry.sh
 
       - name: Check embedded latest image pulling
         run: bash tests/check-installer-embedded-latest-pull.sh

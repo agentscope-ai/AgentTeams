@@ -149,6 +149,7 @@ $env:AGENTTEAMS_LLM_API_KEY = "your-api-key"
 | `AGENTTEAMS_WORKSPACE_DIR` | Manager workspace | `~/agentteams-manager` |
 | `AGENTTEAMS_VERSION` | Image tag | `latest` |
 | `AGENTTEAMS_REGISTRY` | Image registry | *(auto-detected by timezone)* |
+| `AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY` | Higress WASM plugin registry | `higress-registry.cn-hangzhou.cr.aliyuncs.com` |
 
 ## Platform Notes
 

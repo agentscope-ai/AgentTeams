@@ -607,6 +607,18 @@ def _write_providers_json(
                     "supports_video": "video" in modalities,
                     "supports_multimodal": bool(modalities - {"text"}),
                 })
+            # Map OpenClaw ``reasoning: false`` to CoPaw generate_kwargs so
+            # OpenAI-compatible backends (e.g. DashScope Qwen hybrid models)
+            # receive extra_body.enable_thinking=false. Health preflight
+            # already disables thinking; chat must do the same when
+            # Controller/Manager marks the model non-reasoning.
+            # Model-level only: never set provider generate_kwargs here.
+            # Provider-level flags are shared across every model on the
+            # gateway and would incorrectly disable thinking for siblings.
+            if model_cfg.get("reasoning") is False:
+                model["generate_kwargs"] = {
+                    "extra_body": {"enable_thinking": False},
+                }
             models.append(model)
 
         custom_providers[provider_id] = {

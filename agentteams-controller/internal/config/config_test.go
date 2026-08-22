@@ -59,6 +59,29 @@ func TestLoadConfigMetricsBindAddrPrefersAgentTeamsEnv(t *testing.T) {
 	}
 }
 
+func TestLoadConfigEmbeddedPreservesWorkerAIGatewayURL(t *testing.T) {
+	t.Setenv("AGENTTEAMS_KUBE_MODE", "embedded")
+	t.Setenv("AGENTTEAMS_CONTROLLER_URL", "http://agentteams-controller:8090")
+	t.Setenv("AGENTTEAMS_MATRIX_URL", "http://127.0.0.1:6167")
+	t.Setenv("AGENTTEAMS_FS_ENDPOINT", "http://127.0.0.1:9000")
+	t.Setenv("AGENTTEAMS_AI_GATEWAY_URL", "http://aigw-local.agentteams.io:8080")
+
+	cfg := LoadConfig()
+
+	if got, want := cfg.WorkerEnv.MatrixURL, "http://agentteams-controller:6167"; got != want {
+		t.Fatalf("WorkerEnv.MatrixURL = %q, want %q", got, want)
+	}
+	if got, want := cfg.WorkerEnv.FSEndpoint, "http://agentteams-controller:9000"; got != want {
+		t.Fatalf("WorkerEnv.FSEndpoint = %q, want %q", got, want)
+	}
+	if got, want := cfg.WorkerEnv.AIGatewayURL, "http://aigw-local.agentteams.io:8080"; got != want {
+		t.Fatalf("WorkerEnv.AIGatewayURL = %q, want %q", got, want)
+	}
+	if got, want := cfg.GatewayConfig().DataPlaneURL, "http://aigw-local.agentteams.io:8080"; got != want {
+		t.Fatalf("GatewayConfig().DataPlaneURL = %q, want %q", got, want)
+	}
+}
+
 func TestLoadConfigAppliesManagerSpec(t *testing.T) {
 	t.Setenv("AGENTTEAMS_MANAGER_SPEC", `{
 		"model":"qwen-max",

@@ -308,7 +308,7 @@ for _plugin_src in /opt/agentteams/plugins/*/; do
     _plugin_name=$(basename "${_plugin_src}")
     if [ -f "${_plugin_src}plugin.json" ]; then
         rm -rf "${PLUGINS_TARGET}/${_plugin_name}"
-        cp -a "${_plugin_src}" "${PLUGINS_TARGET}/${_plugin_name}"
+        cp -a --no-preserve=ownership "${_plugin_src}" "${PLUGINS_TARGET}/${_plugin_name}"
         log "Installed plugin: ${_plugin_name}"
     fi
 done

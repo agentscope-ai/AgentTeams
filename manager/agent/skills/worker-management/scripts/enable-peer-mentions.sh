@@ -16,7 +16,7 @@
 #   - Environment: HICLAW_MATRIX_DOMAIN, MANAGER_MATRIX_TOKEN
 
 set -e
-source /opt/hiclaw/scripts/lib/base.sh
+source /opt/hiclaw/scripts/lib/hiclaw-env.sh
 
 # ============================================================
 # Parse arguments
@@ -55,7 +55,7 @@ if [ -z "${MANAGER_MATRIX_TOKEN}" ]; then
     if [ -z "${HICLAW_MANAGER_PASSWORD}" ]; then
         _fail "MANAGER_MATRIX_TOKEN not set and HICLAW_MANAGER_PASSWORD not available"
     fi
-    MANAGER_MATRIX_TOKEN=$(curl -sf -X POST http://127.0.0.1:6167/_matrix/client/v3/login \
+    MANAGER_MATRIX_TOKEN=$(curl -sf -X POST ${HICLAW_MATRIX_SERVER}/_matrix/client/v3/login \
         -H 'Content-Type: application/json' \
         -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"manager"},"password":"'"${HICLAW_MANAGER_PASSWORD}"'"}' \
         | jq -r '.access_token // empty')
@@ -92,7 +92,7 @@ UPDATED_WORKERS=()
 
 for target in "${VALIDATED[@]}"; do
     TARGET_CONFIG="/root/hiclaw-fs/agents/${target}/openclaw.json"
-    TARGET_MINIO="hiclaw/hiclaw-storage/agents/${target}/openclaw.json"
+    TARGET_MINIO="${HICLAW_STORAGE_PREFIX}/agents/${target}/openclaw.json"
 
     # Pull latest config from MinIO
     if ! mc cp "${TARGET_MINIO}" "${TARGET_CONFIG}" 2>/dev/null; then
@@ -145,7 +145,7 @@ for w in "${UPDATED_WORKERS[@]}"; do
         PEERS=$(printf '%s\n' "${VALIDATED[@]}" | grep -v "^${w}$" | sed "s|^|@|; s|$|:${MATRIX_DOMAIN}|" | tr '\n' ' ' | sed 's/ $//')
         TXN_ID=$(openssl rand -hex 8)
         curl -sf -X PUT \
-            "http://127.0.0.1:6167/_matrix/client/v3/rooms/${ROOM_ID}/send/m.room.message/${TXN_ID}" \
+            "${HICLAW_MATRIX_SERVER}/_matrix/client/v3/rooms/${ROOM_ID}/send/m.room.message/${TXN_ID}" \
             -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
             -H 'Content-Type: application/json' \
             -d "{\"msgtype\":\"m.text\",\"body\":\"@${w}:${MATRIX_DOMAIN} Peer mention enabled: you can now be @mentioned by ${PEERS}. Please run: hiclaw-sync\",\"m.mentions\":{\"user_ids\":[\"@${w}:${MATRIX_DOMAIN}\"]}}" \

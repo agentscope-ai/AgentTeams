@@ -61,13 +61,14 @@ bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
 
 安装脚本检测到已有安装时会询问处理方式，选择删除后重装即可清除脏数据。
 
-**情况三：Mac M 系列芯片 + 低版本 Docker**
+**情况三：Mac M 系列芯片 + 低版本 Docker/Podman**
 
 如果你使用的是搭载 Apple M 系列芯片（M1/M2/M3/M4）的 Mac，且 Docker Desktop 版本低于 4.39.0，Manager Agent 可能无法正常启动。
 
-**解决方案：** 升级 Docker Desktop 到 4.39.0 或更高版本。
+**解决方案：**
 
-如果你使用的是 Podman，则不受此问题影响。
+- **Docker Desktop**：升级到 4.39.0 或更高版本
+- **Podman**：确保 Podman Engine **Server 版本 ≥ 5.7.1**（可通过 `podman version` 查看）
 
 ---
 
@@ -189,7 +190,21 @@ Manager 会使用模型切换技能完成配置更新。
 
 **创建后修改**：随时告诉 Manager 切换某个 Worker 的模型，例如"把 alice 的模型切换为 `claude-3-5-sonnet`"，Manager 会自动更新该 Worker 的配置。
 
-切换前请确保 Higress 的 `default-ai-route` 已配置好目标模型名到对应供应商的路由。
+切换前请确保 Higress 已配置好目标模型名到对应供应商的路由，具体配置方式见下文。
+
+---
+
+**Higress 控制台配置**
+
+**单供应商情况**
+
+在 Higress 控制台，将 `default-ai-route` 这个路由配置到你的模型供应商。然后直接告诉 Manager 你想让 Worker 使用的具体模型名（例如 `qwen3.5-plus`）。Manager 会先用该模型名发起一次联通测试，测试通过后自动完成切换。
+
+**多供应商情况**
+
+在 Higress 控制台，创建多条 AI 路由，每条路由配置不同的模型名匹配规则（前缀或正则），分别指向对应的供应商。之后的流程与单供应商完全一致——告诉 Manager 要切换的 Worker 模型名，它会自动完成测试和切换。
+
+参考：[Higress AI 快速开始 — 控制台配置](https://higress.ai/docs/ai/quick-start#%E6%8E%A7%E5%88%B6%E5%8F%B0%E9%85%8D%E7%BD%AE)
 
 ---
 

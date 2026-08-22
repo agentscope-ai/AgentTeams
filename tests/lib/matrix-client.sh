@@ -119,6 +119,10 @@ matrix_wait_for_reply() {
     local room_id="$2"
     local from_user="$3"
     local timeout="${4:-180}"
+    local nudge_token="${5:-}"
+    local nudge_room="${6:-}"
+    local nudge_message="${7:-}"
+    local nudge_interval="${8:-600}"
     local elapsed=0
 
     # Snapshot the latest event_id from the target user before we start waiting
@@ -130,6 +134,13 @@ matrix_wait_for_reply() {
     while [ "${elapsed}" -lt "${timeout}" ]; do
         sleep 10
         elapsed=$((elapsed + 10))
+
+        # Send nudge if configured and interval reached
+        if [ -n "${nudge_token}" ] && [ -n "${nudge_room}" ] && [ -n "${nudge_message}" ] \
+                && [ $((elapsed % nudge_interval)) -eq 0 ]; then
+            log_info "Sending nudge to Manager (elapsed: ${elapsed}s)..."
+            matrix_send_message "${nudge_token}" "${nudge_room}" "${nudge_message}" 2>/dev/null || true
+        fi
 
         local messages
         messages=$(matrix_read_messages "${token}" "${room_id}" 10 2>/dev/null) || continue
@@ -161,6 +172,10 @@ matrix_wait_for_message_containing() {
     local from_user="$3"
     local keyword="$4"
     local timeout="${5:-1800}"
+    local nudge_token="${6:-}"
+    local nudge_room="${7:-}"
+    local nudge_message="${8:-}"
+    local nudge_interval="${9:-600}"
     local elapsed=0
 
     # Snapshot the latest known event_id to avoid returning stale messages
@@ -172,6 +187,13 @@ matrix_wait_for_message_containing() {
     while [ "${elapsed}" -lt "${timeout}" ]; do
         sleep 15
         elapsed=$((elapsed + 15))
+
+        # Send nudge if configured and interval reached
+        if [ -n "${nudge_token}" ] && [ -n "${nudge_room}" ] && [ -n "${nudge_message}" ] \
+                && [ $((elapsed % nudge_interval)) -eq 0 ]; then
+            log_info "Sending nudge to Manager (elapsed: ${elapsed}s)..."
+            matrix_send_message "${nudge_token}" "${nudge_room}" "${nudge_message}" 2>/dev/null || true
+        fi
 
         local messages all_bodies
         messages=$(matrix_read_messages "${token}" "${room_id}" 20 2>/dev/null) || continue
@@ -252,12 +274,14 @@ matrix_find_dm_room() {
     rooms=$(matrix_joined_rooms "${token}" | jq -r '.joined_rooms[]')
 
     for room_id in ${rooms}; do
-        local room_enc members
+        local room_enc members member_count
         room_enc="$(_encode_room_id "${room_id}")"
         members=$(exec_in_manager curl -sf "${TEST_MATRIX_DIRECT_URL}/_matrix/client/v3/rooms/${room_enc}/members" \
             -H "Authorization: Bearer ${token}" 2>/dev/null | jq -r '.chunk[].state_key' 2>/dev/null)
 
-        if echo "${members}" | grep -q "${other_user}"; then
+        # DM rooms have exactly 2 members; skip group rooms (3+ members)
+        member_count=$(echo "${members}" | grep -c '.' 2>/dev/null || echo 0)
+        if [ "${member_count}" -eq 2 ] && echo "${members}" | grep -q "${other_user}"; then
             echo "${room_id}"
             return 0
         fi

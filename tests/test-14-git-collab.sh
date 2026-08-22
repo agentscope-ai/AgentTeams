@@ -99,7 +99,7 @@ DO NOT assign any phase to a different worker. DO NOT give alice phase 2 or phas
 IMPORTANT: You MUST use the EXACT branch names and file paths specified below. Do not rename, substitute, or simplify them. The verification system checks these exact names.
 
 Before starting any phase:
-1. Ensure workers with usernames exactly 'alice', 'bob', and 'charlie' exist with the git-delegation skill. The username (container name) must match exactly — do not use variations like 'alice-dev' or 'bob-backend'.
+1. Ensure workers with usernames exactly 'alice', 'bob', and 'charlie' exist with the git-delegation skill. The username (container name) must match exactly — do not use variations like 'alice-dev' or 'bob-backend'. IMPORTANT: Create any missing workers IN PARALLEL (run all create-worker.sh calls concurrently) to save time — do NOT create them one by one sequentially.
 2. Create a shared project room that includes alice, bob, charlie, and the human admin (use the create-project.sh script). All phase assignments and reports MUST happen in this project room — never in individual worker rooms.
 
 Run the phases strictly in order, waiting for each phase's report before starting the next.
@@ -150,7 +150,8 @@ METRICS_BASELINE=$(snapshot_baseline "alice" "bob" "charlie")
 matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" "${TASK_DESCRIPTION}"
 
 log_info "Waiting for Manager to acknowledge and start coordination..."
-REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 300)
+REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 300 \
+    "${ADMIN_TOKEN}" "${DM_ROOM}" "Please check if the git collaboration task has been processed.")
 
 if [ -n "${REPLY}" ]; then
     log_pass "Manager acknowledged the git collaboration task"
@@ -172,9 +173,9 @@ while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
 done
 assert_not_empty "${MANAGER_TOKEN}" "Manager Matrix token available"
 
-log_info "Waiting for project room to be created (timeout: 600s)..."
+log_info "Waiting for project room to be created (timeout: 900s)..."
 PROJECT_ROOM=""
-DEADLINE=$(( $(date +%s) + 600 ))
+DEADLINE=$(( $(date +%s) + 900 ))
 while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
     PROJECT_ROOM=$(matrix_find_room_by_name "${MANAGER_TOKEN}" "Project:" 2>/dev/null || true)
     [ -n "${PROJECT_ROOM}" ] && break
@@ -191,7 +192,10 @@ COMPLETION_MSG=$(matrix_read_messages "${MANAGER_TOKEN}" "${PROJECT_ROOM}" 50 2>
 
 if [ -z "${COMPLETION_MSG}" ]; then
     COMPLETION_MSG=$(matrix_wait_for_message_containing "${MANAGER_TOKEN}" "${PROJECT_ROOM}" "@manager" \
-        "complete\|done\|finished\|已完成\|完成\|all.*phase\|phase.*4\|PHASE4" 1800 2>/dev/null || true)
+        "complete\|done\|finished\|已完成\|完成\|all.*phase\|phase.*4\|PHASE4" 1800 \
+        "${ADMIN_TOKEN}" "${DM_ROOM}" \
+        "Please check the project room and continue coordinating the git collaboration workflow. If any phase is pending or a worker message was missed, please follow up." \
+        2>/dev/null || true)
 fi
 
 assert_not_empty "${COMPLETION_MSG}" "Manager posted completion message in project room"

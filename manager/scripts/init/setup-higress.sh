@@ -18,6 +18,10 @@ MATRIX_CLIENT_DOMAIN="${HICLAW_MATRIX_CLIENT_DOMAIN:-matrix-client-local.hiclaw.
 AI_GATEWAY_DOMAIN="${HICLAW_AI_GATEWAY_DOMAIN:-aigw-local.hiclaw.io}"
 FS_DOMAIN="${HICLAW_FS_DOMAIN:-fs-local.hiclaw.io}"
 CONSOLE_DOMAIN="${HICLAW_CONSOLE_DOMAIN:-console-local.hiclaw.io}"
+# Fixed internal domains used by workers inside hiclaw-net, regardless of user-configured domains.
+# Higress routes always include these so workers can reach manager services reliably.
+AI_GATEWAY_LOCAL_DOMAIN="aigw-local.hiclaw.io"
+FS_LOCAL_DOMAIN="fs-local.hiclaw.io"
 
 LLM_PROVIDER="${HICLAW_LLM_PROVIDER:-qwen}"
 LLM_API_URL="${HICLAW_LLM_API_URL:-}"
@@ -111,6 +115,11 @@ if [ ! -f "${SETUP_MARKER}" ]; then
         '{"name":"'"${MATRIX_CLIENT_DOMAIN}"'","enableHttps":"off"}'
     higress_api POST /v1/domains "Creating File System domain" \
         '{"name":"'"${FS_DOMAIN}"'","enableHttps":"off"}'
+    # Always register the fixed internal FS domain so workers on hiclaw-net can reach MinIO
+    if [ "${FS_DOMAIN}" != "${FS_LOCAL_DOMAIN}" ]; then
+        higress_api POST /v1/domains "Creating internal File System domain" \
+            '{"name":"'"${FS_LOCAL_DOMAIN}"'","enableHttps":"off"}'
+    fi
     higress_api POST /v1/domains "Creating OpenClaw Console domain" \
         '{"name":"'"${CONSOLE_DOMAIN}"'","enableHttps":"off"}'
 
@@ -126,9 +135,13 @@ if [ ! -f "${SETUP_MARKER}" ]; then
     higress_api POST /v1/routes "Creating Element Web route" \
         '{"name":"matrix-web-client","domains":["'"${MATRIX_CLIENT_DOMAIN}"'"],"path":{"matchType":"PRE","matchValue":"/"},"services":[{"name":"element-web.static","port":8088,"weight":100}]}'
 
-    # 5. HTTP File System Route
+    # 5. HTTP File System Route — always include internal domain for worker access
+    FS_ROUTE_DOMAINS='["'"${FS_DOMAIN}"'"]'
+    if [ "${FS_DOMAIN}" != "${FS_LOCAL_DOMAIN}" ]; then
+        FS_ROUTE_DOMAINS='["'"${FS_DOMAIN}"'","'"${FS_LOCAL_DOMAIN}"'"]'
+    fi
     higress_api POST /v1/routes "Creating HTTP file system route" \
-        '{"name":"http-filesystem","domains":["'"${FS_DOMAIN}"'"],"path":{"matchType":"PRE","matchValue":"/"},"services":[{"name":"minio.static","port":9000,"weight":100}]}'
+        '{"name":"http-filesystem","domains":'"${FS_ROUTE_DOMAINS}"',"path":{"matchType":"PRE","matchValue":"/"},"services":[{"name":"minio.static","port":9000,"weight":100}]}'
 
     # 6. OpenClaw Console Route (reverse-proxied via nginx with auto-token injection)
     higress_api POST /v1/routes "Creating OpenClaw Console route" \
@@ -154,6 +167,17 @@ fi
 # ============================================================
 higress_api POST /v1/domains "Creating AI Gateway domain" \
     '{"name":"'"${AI_GATEWAY_DOMAIN}"'","enableHttps":"off"}'
+# Always register the fixed internal AI Gateway domain for worker access
+if [ "${AI_GATEWAY_DOMAIN}" != "${AI_GATEWAY_LOCAL_DOMAIN}" ]; then
+    higress_api POST /v1/domains "Creating internal AI Gateway domain" \
+        '{"name":"'"${AI_GATEWAY_LOCAL_DOMAIN}"'","enableHttps":"off"}'
+fi
+
+# Build AI Gateway route domains: always include internal domain for worker access
+AI_ROUTE_DOMAINS='["'"${AI_GATEWAY_DOMAIN}"'"]'
+if [ "${AI_GATEWAY_DOMAIN}" != "${AI_GATEWAY_LOCAL_DOMAIN}" ]; then
+    AI_ROUTE_DOMAINS='["'"${AI_GATEWAY_DOMAIN}"'","'"${AI_GATEWAY_LOCAL_DOMAIN}"'"]'
+fi
 
 # ============================================================
 # LLM Provider + AI Gateway Route
@@ -163,7 +187,7 @@ if [ -n "${HICLAW_LLM_API_KEY}" ]; then
     # Create/update LLM provider (GET → PUT if exists, POST if not)
     case "${LLM_PROVIDER}" in
         qwen)
-            PROVIDER_BODY='{"type":"qwen","name":"qwen","tokens":["'"${HICLAW_LLM_API_KEY}"'"],"protocol":"openai/v1","tokenFailoverConfig":{"enabled":false},"rawConfigs":{"qwenEnableSearch":false,"qwenEnableCompatible":true,"qwenFileIds":[]}}'
+            PROVIDER_BODY='{"type":"qwen","name":"qwen","tokens":["'"${HICLAW_LLM_API_KEY}"'"],"protocol":"openai/v1","tokenFailoverConfig":{"enabled":false},"rawConfigs":{"qwenEnableSearch":false,"qwenEnableCompatible":true,"qwenFileIds":[],"hiclawMode":true}}'
             existing_provider=$(higress_get /v1/ai/providers/qwen)
             if [ -n "${existing_provider}" ]; then
                 higress_api PUT /v1/ai/providers/qwen "Updating LLM provider (qwen)" "${PROVIDER_BODY}"
@@ -194,7 +218,7 @@ if [ -n "${HICLAW_LLM_API_KEY}" ]; then
                     higress_api POST /v1/service-sources "Registering openai-compat DNS service source" "${SVC_BODY}"
                 fi
 
-                PROVIDER_BODY='{"type":"openai","name":"openai-compat","tokens":["'"${HICLAW_LLM_API_KEY}"'"],"version":0,"protocol":"openai/v1","tokenFailoverConfig":{"enabled":false},"rawConfigs":{"openaiCustomUrl":"'"${OPENAI_BASE_URL}"'","openaiCustomServiceName":"openai-compat.dns","openaiCustomServicePort":'"${OC_PORT}"'}}'
+                PROVIDER_BODY='{"type":"openai","name":"openai-compat","tokens":["'"${HICLAW_LLM_API_KEY}"'"],"version":0,"protocol":"openai/v1","tokenFailoverConfig":{"enabled":false},"rawConfigs":{"openaiCustomUrl":"'"${OPENAI_BASE_URL}"'","openaiCustomServiceName":"openai-compat.dns","openaiCustomServicePort":'"${OC_PORT}"',"hiclawMode":true}}'
                 existing_provider=$(higress_get /v1/ai/providers/openai-compat)
                 if [ -n "${existing_provider}" ]; then
                     higress_api PUT /v1/ai/providers/openai-compat "Updating LLM provider (openai-compat)" "${PROVIDER_BODY}"
@@ -205,7 +229,11 @@ if [ -n "${HICLAW_LLM_API_KEY}" ]; then
             ;;
         *)
             PROVIDER_BODY='{"name":"'"${LLM_PROVIDER}"'","type":"openai","tokens":["'"${HICLAW_LLM_API_KEY}"'"],"modelMapping":{},"protocol":"openai/v1"'
-            [ -n "${LLM_API_URL}" ] && PROVIDER_BODY="${PROVIDER_BODY}"',"rawConfigs":{"apiUrl":"'"${LLM_API_URL}"'"}'
+            if [ -n "${LLM_API_URL}" ]; then
+                PROVIDER_BODY="${PROVIDER_BODY}"',"rawConfigs":{"apiUrl":"'"${LLM_API_URL}"'","hiclawMode":true}'
+            else
+                PROVIDER_BODY="${PROVIDER_BODY}"',"rawConfigs":{"hiclawMode":true}'
+            fi
             PROVIDER_BODY="${PROVIDER_BODY}"'}'
             existing_provider=$(higress_get /v1/ai/providers/"${LLM_PROVIDER}")
             if [ -n "${existing_provider}" ]; then
@@ -217,7 +245,7 @@ if [ -n "${HICLAW_LLM_API_KEY}" ]; then
     esac
 
     # 5b. Create or update AI Gateway Route (GET → PUT if exists, POST if not)
-    AI_ROUTE_BODY='{"name":"default-ai-route","domains":["'"${AI_GATEWAY_DOMAIN}"'"],"pathPredicate":{"matchType":"PRE","matchValue":"/","caseSensitive":false},"upstreams":[{"provider":"'"${LLM_PROVIDER}"'","weight":100,"modelMapping":{}}],"authConfig":{"enabled":true,"allowedCredentialTypes":["key-auth"],"allowedConsumers":["manager"]}}'
+    AI_ROUTE_BODY='{"name":"default-ai-route","domains":'"${AI_ROUTE_DOMAINS}"',"pathPredicate":{"matchType":"PRE","matchValue":"/","caseSensitive":false},"upstreams":[{"provider":"'"${LLM_PROVIDER}"'","weight":100,"modelMapping":{}}],"authConfig":{"enabled":true,"allowedCredentialTypes":["key-auth"],"allowedConsumers":["manager"]}}'
 
     HICLAW_VERSION=$(cat /opt/hiclaw/agent/.builtin-version 2>/dev/null | tr -d '[:space:]')
     HICLAW_VERSION="${HICLAW_VERSION:-latest}"
@@ -226,11 +254,13 @@ if [ -n "${HICLAW_LLM_API_KEY}" ]; then
     if [ -n "${existing_route_resp}" ]; then
         # Extract the AiRoute object from the response wrapper (.data), then patch:
         #   - upstreams[0].provider: reflect current LLM provider
+        #   - domains: ensure internal local domain is always present
         #   - headerControl.request.add: inject User-Agent header (add = set if absent, don't overwrite)
         # Preserve all other fields (especially authConfig.allowedConsumers and version).
-        patched=$(echo "${existing_route_resp}" | jq '
+        patched=$(echo "${existing_route_resp}" | jq --argjson domains "${AI_ROUTE_DOMAINS}" '
             .data
             | .upstreams[0].provider = "'"${LLM_PROVIDER}"'"
+            | .domains = $domains
             | .headerControl.enabled = true
             | .headerControl.request.add = [{"key":"user-agent","value":"HiClaw/'"${HICLAW_VERSION}"'"}]
             | .headerControl.request.set  //= []
@@ -288,9 +318,9 @@ else
 fi
 
 # ============================================================
-# Wait for AI plugin activation (~40 seconds for first config)
+# Wait for AI plugin activation (~45 seconds for first config)
 # ============================================================
-log "Waiting for AI Gateway plugin activation (40s)..."
+log "Waiting for AI Gateway plugin activation (45s)..."
 sleep 45
 
 log "Higress setup complete"

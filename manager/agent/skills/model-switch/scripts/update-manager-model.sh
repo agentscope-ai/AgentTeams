@@ -13,7 +13,16 @@
 #   update-manager-model.sh deepseek-chat --no-reasoning
 
 set -e
-source /opt/hiclaw/scripts/lib/base.sh
+source /opt/hiclaw/scripts/lib/hiclaw-env.sh
+
+_get_max_tokens_param() {
+    local model="$1"
+    if [[ "${model}" =~ ^gpt-5(\.|-|[0-9]|$) ]]; then
+        echo "max_completion_tokens"
+    else
+        echo "max_tokens"
+    fi
+}
 
 MODEL_NAME="${1:-}"
 if [ -z "${MODEL_NAME}" ]; then
@@ -72,7 +81,7 @@ case "${MODEL_NAME}" in
         CTX=200000; MAX=64000 ;;
     deepseek-chat|deepseek-reasoner|kimi-k2.5)
         CTX=256000; MAX=128000 ;;
-    glm-5|MiniMax-M2.5)
+    glm-5|MiniMax-M2.7|MiniMax-M2.7-highspeed|MiniMax-M2.5)
         CTX=200000; MAX=128000 ;;
     *)
         CTX=150000; MAX=128000 ;;
@@ -94,7 +103,7 @@ esac
 log "Updating Manager model: ${MODEL_NAME} (ctx=${CTX}, max=${MAX}, reasoning=${REASONING}, input=${INPUT})"
 
 # ── Pre-flight: verify the model is reachable via AI Gateway ──────────────────
-GATEWAY_URL="http://${HICLAW_AI_GATEWAY_DOMAIN:-aigw-local.hiclaw.io}:8080/v1/chat/completions"
+GATEWAY_URL="${HICLAW_AI_GATEWAY_SERVER}/v1/chat/completions"
 GATEWAY_KEY="${HICLAW_MANAGER_GATEWAY_KEY:-}"
 if [ -z "${GATEWAY_KEY}" ] && [ -f "/data/hiclaw-secrets.env" ]; then
     source /data/hiclaw-secrets.env
@@ -102,20 +111,38 @@ if [ -z "${GATEWAY_KEY}" ] && [ -f "/data/hiclaw-secrets.env" ]; then
 fi
 
 log "Testing model reachability: ${GATEWAY_URL} (model=${MODEL_NAME})..."
+MAX_TOKENS_PARAM=$(_get_max_tokens_param "${MODEL_NAME}")
 HTTP_CODE=$(curl -s -o /tmp/model-test-resp.json -w '%{http_code}' \
     -X POST "${GATEWAY_URL}" \
     -H "Authorization: Bearer ${GATEWAY_KEY}" \
     -H "Content-Type: application/json" \
-    -d "{\"model\":\"${MODEL_NAME}\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":1}" \
+    -d "{\"model\":\"${MODEL_NAME}\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"${MAX_TOKENS_PARAM}\":1}" \
     --connect-timeout 10 --max-time 30 2>/dev/null) || HTTP_CODE="000"
 
 if [ "${HTTP_CODE}" != "200" ]; then
     RESP_BODY=$(cat /tmp/model-test-resp.json 2>/dev/null | head -c 300 || true)
-    echo "ERROR: Model test failed (HTTP ${HTTP_CODE}): ${RESP_BODY}"
+    echo "ERROR: MODEL_NOT_REACHABLE"
+    echo "Model: ${MODEL_NAME}"
+    echo "HTTP status: ${HTTP_CODE}"
+    echo "Response: ${RESP_BODY}"
     echo ""
     echo "The model '${MODEL_NAME}' is not reachable via the AI Gateway."
-    echo "Please check the Higress Console to confirm the AI route is configured for this model:"
-    echo "  http://<manager-host>:8001  →  AI Routes → verify provider and model mapping"
+    echo "This most likely means the current default AI Provider does not support this model."
+    echo ""
+    if [ "${HICLAW_RUNTIME:-}" = "aliyun" ]; then
+        echo "To fix this, the human admin needs to check the Alibaba Cloud AI Gateway console"
+        echo "to confirm the model route is configured for this model."
+    else
+        echo "To fix this, the human admin needs to open the Higress Console and:"
+        echo "  1. Create a NEW AI Provider for the model vendor (e.g. 'kimi', 'deepseek', 'minimax')"
+        echo "  2. Create a NEW AI Route that matches this model by name prefix"
+        echo "     (e.g. for provider 'kimi', set model name predicate to match 'kimi-*')"
+        echo "     so requests for models with that prefix are routed to the new provider,"
+        echo "     while unmatched models still go through the default AI Route."
+        echo ""
+        echo "WARNING: Do NOT modify the default AI Provider — it is managed by the"
+        echo "initialization config and will be overwritten on restart."
+    fi
     exit 1
 fi
 log "Model test passed (HTTP 200)"

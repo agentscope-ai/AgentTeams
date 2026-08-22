@@ -60,6 +60,29 @@ Iterate over entries in `active_tasks` with `"type": "finite"`:
 
 ---
 
+### 2b. Check Team-Delegated Tasks
+
+Iterate over entries in `active_tasks` that have a `delegated_to_team` field:
+
+- These tasks are managed by Team Leaders, NOT individual workers
+- Read `assigned_to` (the Team Leader name) and `room_id` (the Leader Room)
+- **Ensure the Team Leader's container is running**:
+  ```bash
+  bash /opt/hiclaw/agent/skills/worker-management/scripts/lifecycle-worker.sh \
+    --action ensure-ready --worker {leader}
+  ```
+- **Use the `message` tool** to ask the Team Leader for a status update:
+  ```
+  room_id: <room_id from state.json>
+  user_id: @{leader}:${HICLAW_MATRIX_DOMAIN}
+  message: @{leader}:{domain} How is task {task-id} progressing? Any blockers from your team?
+  ```
+- **Do NOT contact team workers directly** — the Team Leader handles internal coordination
+- If the Team Leader reports completion, process it the same as a regular worker completion
+- If the Team Leader reports a blocker, escalate to admin (Step 7)
+
+---
+
 ### 3. Check Infinite Task Timeouts
 
 Iterate over entries in `active_tasks` with `"type": "infinite"`. For each entry:
@@ -89,11 +112,13 @@ user_id: @{worker}:${HICLAW_MATRIX_DOMAIN}
 message: @{worker}:{domain} It's time to run your scheduled task {task-id} "{task-title}". Please execute it now and report back with the keyword "executed".
 ```
 
-**Note**: Infinite tasks are never removed from active_tasks. After the Worker reports `executed`, update `last_executed_at` and `next_scheduled_at`:
+**Note**: Infinite tasks are never removed from active_tasks. After the Worker reports `executed`, **only** update `last_executed_at` and `next_scheduled_at` — do NOT @mention the Worker again:
 ```bash
 bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh \
   --action executed --task-id {task-id} --next-scheduled-at "{new-ISO-8601}"
 ```
+
+**⚠️ CRITICAL**: Triggering and recording are independent actions. Heartbeat triggers execution when the schedule says it's time. Recording happens when the Worker reports back. Never re-trigger a Worker immediately after recording — the next execution will be triggered by a future heartbeat when `next_scheduled_at` is due.
 
 ---
 

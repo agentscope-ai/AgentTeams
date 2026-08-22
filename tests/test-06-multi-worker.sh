@@ -42,7 +42,8 @@ matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
     "Create a new Worker for backend development. The worker's name (username) must be exactly 'bob'. He should have access to GitHub MCP."
 
 log_info "Waiting for Manager to create Worker Bob..."
-REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 180)
+REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 180 \
+    "${ADMIN_TOKEN}" "${DM_ROOM}" "Please check if the request has been processed.")
 
 assert_not_empty "${REPLY}" "Manager replied to create bob request"
 assert_contains_i "${REPLY}" "bob" "Reply mentions worker name 'bob'"
@@ -63,7 +64,7 @@ log_section "Assign Collaborative Task"
 matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
     "I need Alice and Bob to collaborate on a task: Build a simple REST API. Alice handles the frontend HTML page, Bob handles the backend API endpoint. They should coordinate via shared files."
 
-log_info "Waiting for Manager to split and assign task..."
+log_info "Waiting for Manager to acknowledge task..."
 REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 300)
 
 if [ -z "${REPLY}" ]; then
@@ -83,9 +84,50 @@ fi
 
 assert_not_empty "${REPLY}" "Manager acknowledged collaborative task"
 
-log_section "Verify Shared Coordination"
+log_section "Wait for Task Completion"
 
-sleep 60
+# Get Manager token if not already available
+if [ -z "${MANAGER_TOKEN:-}" ]; then
+    log_info "Waiting for Manager token (timeout: 120s)..."
+    DEADLINE=$(( $(date +%s) + 120 ))
+    while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+        MANAGER_TOKEN=$(docker exec "${TEST_MANAGER_CONTAINER}" \
+            jq -r '.channels.matrix.accessToken // empty' /root/manager-workspace/openclaw.json 2>/dev/null || true)
+        [ -n "${MANAGER_TOKEN}" ] && break
+        sleep 5
+    done
+fi
+
+# Find project room if not already found
+if [ -z "${PROJECT_ROOM:-}" ] && [ -n "${MANAGER_TOKEN:-}" ]; then
+    log_info "Waiting for project room to be created (timeout: 300s)..."
+    DEADLINE=$(( $(date +%s) + 300 ))
+    while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+        PROJECT_ROOM=$(matrix_find_room_by_name "${MANAGER_TOKEN}" "Project:" 2>/dev/null || true)
+        [ -n "${PROJECT_ROOM}" ] && break
+        sleep 10
+    done
+fi
+
+# Wait for completion in project room (with nudge via DM), or fall back to sleep
+if [ -n "${PROJECT_ROOM:-}" ] && [ -n "${MANAGER_TOKEN:-}" ]; then
+    log_info "Waiting for task completion in project room (timeout: 1800s)..."
+    COMPLETION_MSG=$(matrix_wait_for_message_containing "${MANAGER_TOKEN}" "${PROJECT_ROOM}" "@manager" \
+        "complete\|done\|finished\|已完成\|完成" 1800 \
+        "${ADMIN_TOKEN}" "${DM_ROOM}" \
+        "Please check the project room and continue coordinating the collaborative task. If any worker message was missed, please follow up." \
+        2>/dev/null || true)
+    if [ -n "${COMPLETION_MSG}" ]; then
+        log_pass "Task completed — Manager's message: $(echo "${COMPLETION_MSG}" | head -c 200)"
+    else
+        log_info "No completion message detected within timeout, proceeding to verify artifacts"
+    fi
+else
+    log_info "No project room found, waiting 60s for task processing..."
+    sleep 60
+fi
+
+log_section "Verify Shared Coordination"
 TASKS=$(minio_list_dir "shared/tasks/" 2>/dev/null || echo "")
 log_info "Shared tasks directory: ${TASKS}"
 

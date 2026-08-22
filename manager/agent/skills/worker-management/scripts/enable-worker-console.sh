@@ -35,6 +35,12 @@ if [ -z "${WORKER_NAME}" ]; then
     exit 1
 fi
 
+# Cloud mode: CoPaw console is only available for local container deployments
+if [ "${HICLAW_RUNTIME:-}" = "aliyun" ]; then
+    jq -n '{"error": "console_not_supported", "message": "CoPaw console is only available for local container deployments. On cloud (SAE), use SAE console or SLS logs instead."}'
+    exit 1
+fi
+
 log() {
     echo "[enable-console $(date '+%Y-%m-%d %H:%M:%S')] $1"
 }

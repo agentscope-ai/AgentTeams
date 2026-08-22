@@ -1,0 +1,92 @@
+# ============================================================
+# HiClaw Cloud Manager Agent - Lightweight SAE Container
+# ============================================================
+# Based on openclaw-base (same as Worker), but carries Manager
+# agent definitions and the unified start-manager-agent.sh entrypoint.
+#
+# Does NOT include Higress, Tuwunel, MinIO, or Element Web.
+# All infrastructure is external (SAE + AI Gateway + OSS).
+#
+# Build from project root:
+#   docker build -f manager/Dockerfile.aliyun -t hiclaw/cloud-manager:latest .
+# ============================================================
+
+ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
+ARG OPENCLAW_BASE_IMAGE=hiclaw/openclaw-base:latest
+
+# ============ Stage 1: MinIO Client (mc) ============
+FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
+
+# ============ Final Image ============
+FROM ${OPENCLAW_BASE_IMAGE}
+
+# mc (MinIO Client) — real binary; wrapper installed after shared libs are copied
+COPY --from=mc /usr/bin/mc /usr/local/bin/mc.bin
+
+# Install Python packages for cloud Worker management (SAE API via OIDC/AK)
+# python3 is already in openclaw-base; install pip and SDK
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+RUN apt-get update && apt-get install -y --no-install-recommends python3-pip && \
+    rm -rf /var/lib/apt/lists/* && \
+    pip3 install --no-cache-dir \
+        --index-url "${PIP_INDEX_URL}" \
+        --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
+        alibabacloud-sae20190506 \
+        alibabacloud-apig20240327 \
+        alibabacloud-credentials \
+        alibabacloud-tea-openapi
+
+# ---- Built-in observability plugin (bundled unconditionally, enabled at runtime) ----
+# Placed before agent/configs COPY so that code changes do not invalidate this layer.
+ARG OPENCLAW_CMS_PLUGIN_URL=https://arms-apm-cn-hangzhou-pre.oss-cn-hangzhou.aliyuncs.com/openclaw-cms-plugin/0.1.1/openclaw-cms-plugin.tar.gz
+ENV OPENCLAW_CMS_PLUGIN_DIR="/opt/openclaw/extensions/openclaw-cms-plugin"
+RUN tmp_dir="$(mktemp -d)" && \
+    curl -fsSL "${OPENCLAW_CMS_PLUGIN_URL}" -o "${tmp_dir}/plugin.tar.gz" && \
+    mkdir -p "${OPENCLAW_CMS_PLUGIN_DIR}" && \
+    tar -xzf "${tmp_dir}/plugin.tar.gz" -C "${tmp_dir}" && \
+    if [ -d "${tmp_dir}/openclaw-cms-plugin" ]; then \
+      cp -rf "${tmp_dir}/openclaw-cms-plugin/." "${OPENCLAW_CMS_PLUGIN_DIR}/"; \
+    else \
+      cp -rf "${tmp_dir}/." "${OPENCLAW_CMS_PLUGIN_DIR}/"; \
+    fi && \
+    cd "${OPENCLAW_CMS_PLUGIN_DIR}" && \
+    npm install --omit=dev --ignore-scripts && \
+    rm -rf "${tmp_dir}"
+
+# Ensure openclaw binary is on PATH
+ENV PATH="/opt/openclaw/packages/clawdbot/node_modules/.bin:${PATH}"
+
+# ---- Copy Manager agent definitions ----
+COPY manager/agent/ /opt/hiclaw/agent/
+COPY manager/configs/ /opt/hiclaw/configs/
+
+# ---- Copy scripts: shared libs first, then manager scripts ----
+# manager/scripts/ includes lib/cloud/aliyun-api.py and lib/cloud/aliyun-sae.sh
+COPY shared/lib/ /opt/hiclaw/scripts/lib/
+COPY manager/scripts/ /opt/hiclaw/scripts/
+
+ARG BUILTIN_VERSION=latest
+RUN echo "${BUILTIN_VERSION}" > /opt/hiclaw/agent/.builtin-version
+
+# Make all scripts executable (includes mc-wrapper.sh from shared/lib/)
+RUN find /opt/hiclaw/scripts -name '*.sh' -exec chmod +x {} + && \
+    ln -sf /opt/hiclaw/scripts/lib/mc-wrapper.sh /usr/local/bin/mc && \
+    find /opt/hiclaw/agent/skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true && \
+    find /opt/hiclaw/agent/worker-skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true && \
+    find /opt/hiclaw/agent/worker-agent/skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
+
+# Explicitly mark as cloud deployment (don't rely on OIDC file detection)
+ENV HICLAW_RUNTIME=aliyun
+
+# Workspace directory
+ENV HOME=/root/manager-workspace
+RUN mkdir -p /root/manager-workspace /root/hiclaw-fs /root/.openclaw
+
+WORKDIR /root/manager-workspace
+
+# FC custom container listens on this port (OpenClaw gateway)
+EXPOSE 9000
+
+# Cloud mode set via ENV HICLAW_RUNTIME=aliyun above;
+# start-manager-agent.sh branches accordingly (no supervisord needed for cloud)
+ENTRYPOINT ["/opt/hiclaw/scripts/init/start-manager-agent.sh"]

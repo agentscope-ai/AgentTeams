@@ -63,7 +63,7 @@ jobs:
       # also pushes :latest in the same buildx call, so no separate step needed.
       - name: Build and push multi-arch images
         run: |
-          make push-manager push-worker push-copaw-worker \
+          make push-manager push-manager-aliyun push-worker push-copaw-worker push-docker-proxy \
             VERSION=${{ steps.meta.outputs.version }} \
             REGISTRY=${{ env.REGISTRY }} \
             REPO=${{ env.REPO }} \
@@ -74,12 +74,16 @@ jobs:
         env:
           OPENCLAW_BASE_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/openclaw-base
           MANAGER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/hiclaw-manager
+          MANAGER_ALIYUN_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/hiclaw-manager-aliyun
           WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/hiclaw-worker
           COPAW_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/hiclaw-copaw-worker
+          DOCKER_PROXY_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/hiclaw-docker-proxy
         run: |
           echo "### Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "- Manager: \`${MANAGER_IMAGE}:${{ steps.meta.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Manager Aliyun: \`${MANAGER_ALIYUN_IMAGE}:${{ steps.meta.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Worker: \`${WORKER_IMAGE}:${{ steps.meta.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- CoPaw Worker: \`${COPAW_WORKER_IMAGE}:${{ steps.meta.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Docker Proxy: \`${DOCKER_PROXY_IMAGE}:${{ steps.meta.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Base: \`${OPENCLAW_BASE_IMAGE}:latest\` (pre-built, not rebuilt here)" >> $GITHUB_STEP_SUMMARY
           echo "- Platforms: \`linux/amd64, linux/arm64\`" >> $GITHUB_STEP_SUMMARY

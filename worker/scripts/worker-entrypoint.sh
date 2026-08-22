@@ -7,11 +7,12 @@
 #   /root/hiclaw-fs/shared/                     = Shared tasks, knowledge, collaboration data
 
 set -e
+source /opt/hiclaw/scripts/lib/hiclaw-env.sh
 
 WORKER_NAME="${HICLAW_WORKER_NAME:?HICLAW_WORKER_NAME is required}"
-FS_ENDPOINT="${HICLAW_FS_ENDPOINT:?HICLAW_FS_ENDPOINT is required}"
-FS_ACCESS_KEY="${HICLAW_FS_ACCESS_KEY:?HICLAW_FS_ACCESS_KEY is required}"
-FS_SECRET_KEY="${HICLAW_FS_SECRET_KEY:?HICLAW_FS_SECRET_KEY is required}"
+FS_ENDPOINT="${HICLAW_FS_ENDPOINT:-}"
+FS_ACCESS_KEY="${HICLAW_FS_ACCESS_KEY:-}"
+FS_SECRET_KEY="${HICLAW_FS_SECRET_KEY:-}"
 
 log() {
     echo "[hiclaw-worker $(date '+%Y-%m-%d %H:%M:%S')] $1"
@@ -33,8 +34,15 @@ WORKSPACE="${HICLAW_ROOT}/agents/${WORKER_NAME}"
 # ============================================================
 # Step 1: Configure mc alias for centralized file system
 # ============================================================
-log "Configuring mc alias..."
-mc alias set hiclaw "${FS_ENDPOINT}" "${FS_ACCESS_KEY}" "${FS_SECRET_KEY}"
+if [ "${HICLAW_RUNTIME}" = "aliyun" ]; then
+    log "Configuring mc alias for cloud (RRSA OIDC)..."
+    ensure_mc_credentials
+else
+    log "Configuring mc alias for local MinIO..."
+    mc alias set hiclaw "${FS_ENDPOINT:?HICLAW_FS_ENDPOINT is required}" \
+        "${FS_ACCESS_KEY:?HICLAW_FS_ACCESS_KEY is required}" \
+        "${FS_SECRET_KEY:?HICLAW_FS_SECRET_KEY is required}"
+fi
 
 # ============================================================
 # Step 2: Pull Worker config and shared data from centralized storage
@@ -42,9 +50,10 @@ mc alias set hiclaw "${FS_ENDPOINT}" "${FS_ACCESS_KEY}" "${FS_SECRET_KEY}"
 mkdir -p "${WORKSPACE}" "${HICLAW_ROOT}/shared"
 
 log "Pulling Worker config from centralized storage..."
-mc mirror "hiclaw/hiclaw-storage/agents/${WORKER_NAME}/" "${WORKSPACE}/" --overwrite \
+ensure_mc_credentials 2>/dev/null || true
+mc mirror "${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/" "${WORKSPACE}/" --overwrite \
     --exclude ".openclaw/matrix/**" --exclude ".openclaw/canvas/**" --exclude "credentials/**"
-mc mirror "hiclaw/hiclaw-storage/shared/" "${HICLAW_ROOT}/shared/" --overwrite 2>/dev/null || true
+mc mirror "${HICLAW_STORAGE_PREFIX}/shared/" "${HICLAW_ROOT}/shared/" --overwrite 2>/dev/null || true
 
 # Verify essential files exist, retry if sync is still in progress
 RETRY=0
@@ -57,7 +66,7 @@ while [ ! -f "${WORKSPACE}/openclaw.json" ] || [ ! -f "${WORKSPACE}/SOUL.md" ] \
     fi
     log "Waiting for config files to appear in MinIO (attempt ${RETRY}/6)..."
     sleep 5
-    mc mirror "hiclaw/hiclaw-storage/agents/${WORKER_NAME}/" "${WORKSPACE}/" --overwrite \
+    mc mirror "${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/" "${WORKSPACE}/" --overwrite \
         --exclude ".openclaw/matrix/**" --exclude ".openclaw/canvas/**" --exclude "credentials/**" 2>/dev/null || true
 done
 
@@ -80,6 +89,30 @@ ln -sfn "${HOME}/skills" "${HOME}/.agents/skills"
 
 log "Worker config pulled successfully"
 
+# ============================================================
+# Optional: ensure diagnostics-otel npm dependencies are present
+# When CMS metrics are enabled, generate-worker-config.sh injects
+# diagnostics-otel into openclaw.json.  The plugin ships with
+# openclaw-base but node_modules may be absent on first run.
+# ============================================================
+_diag_plugin_dir="/opt/openclaw/extensions/diagnostics-otel"
+if [ -f "${_diag_plugin_dir}/package.json" ] && \
+   jq -e --arg dir "${_diag_plugin_dir}" \
+        '(.plugins.load.paths // []) | index($dir) != null' \
+        "${WORKSPACE}/openclaw.json" > /dev/null 2>&1; then
+    if [ ! -d "${_diag_plugin_dir}/node_modules" ]; then
+        log "diagnostics-otel: installing npm dependencies (required for metrics)..."
+        if (cd "${_diag_plugin_dir}" && npm install --omit=dev --ignore-scripts >/tmp/hiclaw-diag-install.log 2>&1); then
+            log "diagnostics-otel dependencies installed"
+        else
+            log "WARNING: diagnostics-otel npm install failed; metrics may not be reported (see /tmp/hiclaw-diag-install.log)"
+        fi
+    else
+        log "diagnostics-otel dependencies already present"
+    fi
+fi
+unset _diag_plugin_dir
+
 # Restore skills from MinIO if skills directory is empty but skills-lock.json exists
 if [ -f "${WORKSPACE}/skills-lock.json" ] && [ -z "$(ls -A ${WORKSPACE}/skills 2>/dev/null | grep -v file-sync)" ]; then
     log "Found skills-lock.json but skills directory is empty, restoring skills..."
@@ -92,6 +125,10 @@ fi
 printf '#!/bin/bash\nexec /bin/sh "%s/skills/file-sync/scripts/hiclaw-sync.sh" "$@"\n' \
     "${WORKSPACE}" > /usr/local/bin/hiclaw-sync
 chmod +x /usr/local/bin/hiclaw-sync
+
+# Defensive symlink: /opt/hiclaw/agent/skills -> actual skills directory
+mkdir -p /opt/hiclaw/agent
+ln -sfn "${WORKSPACE}/skills" /opt/hiclaw/agent/skills
 
 log "HOME set to ${HOME} (workspace files will be synced to MinIO)"
 
@@ -116,10 +153,10 @@ log "HOME set to ${HOME} (workspace files will be synced to MinIO)"
 # ────────────────────────────────────────────────────────────────────────────
 (
     while true; do
-        # Check for files modified in the last 10 seconds
         CHANGED=$(find "${WORKSPACE}/" -type f -newermt "10 seconds ago" 2>/dev/null | head -1)
         if [ -n "${CHANGED}" ]; then
-            if ! mc mirror "${WORKSPACE}/" "hiclaw/hiclaw-storage/agents/${WORKER_NAME}/" --overwrite \
+            ensure_mc_credentials 2>/dev/null || true
+            if ! mc mirror "${WORKSPACE}/" "${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/" --overwrite \
                 --exclude "openclaw.json" --exclude "config/mcporter.json" --exclude "mcporter-servers.json" --exclude ".agents/**" \
                 --exclude "credentials/**" \
                 --exclude ".cache/**" --exclude ".npm/**" \
@@ -138,11 +175,12 @@ log "Local->Remote change-triggered sync started (PID: $!)"
 (
     while true; do
         sleep 300
-        mc cp "hiclaw/hiclaw-storage/agents/${WORKER_NAME}/openclaw.json" "${WORKSPACE}/openclaw.json" 2>/dev/null || true
-        mc cp "hiclaw/hiclaw-storage/agents/${WORKER_NAME}/config/mcporter.json" "${WORKSPACE}/config/mcporter.json" 2>/dev/null || true
-        mc mirror "hiclaw/hiclaw-storage/agents/${WORKER_NAME}/skills/" "${WORKSPACE}/skills/" --overwrite 2>/dev/null || true
+        ensure_mc_credentials 2>/dev/null || true
+        mc cp "${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/openclaw.json" "${WORKSPACE}/openclaw.json" 2>/dev/null || true
+        mc cp "${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/config/mcporter.json" "${WORKSPACE}/config/mcporter.json" 2>/dev/null || true
+        mc mirror "${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/skills/" "${WORKSPACE}/skills/" --overwrite 2>/dev/null || true
         find "${WORKSPACE}/skills" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
-        mc mirror "hiclaw/hiclaw-storage/shared/" "${HICLAW_ROOT}/shared/" --overwrite --newer-than "5m" 2>/dev/null || true
+        mc mirror "${HICLAW_STORAGE_PREFIX}/shared/" "${HICLAW_ROOT}/shared/" --overwrite --newer-than "5m" 2>/dev/null || true
     done
 ) &
 log "Remote->Local fallback sync started (Manager-managed files only, every 5m, PID: $!)"
@@ -195,7 +233,7 @@ log "Cleaned Matrix crypto storage (will re-establish E2EE sessions)"
 # identity key (crypto storage was just wiped) causes other clients to
 # reject key distribution. Re-login creates a new device_id, matching
 # the Manager's behavior and allowing clean E2EE session establishment.
-MATRIX_PASSWORD_FILE="hiclaw/hiclaw-storage/agents/${WORKER_NAME}/credentials/matrix/password"
+MATRIX_PASSWORD_FILE="${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/credentials/matrix/password"
 MATRIX_PASSWORD=$(mc cat "${MATRIX_PASSWORD_FILE}" 2>/dev/null) || true
 if [ -n "${MATRIX_PASSWORD}" ]; then
     # Read homeserver URL from openclaw.json (already pulled from MinIO)

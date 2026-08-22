@@ -67,7 +67,7 @@ The marker auto-expires after 15 minutes (configurable). This prevents deadlocks
 
 1. **Sync from MinIO first**:
    ```bash
-   mc mirror "hiclaw/hiclaw-storage/shared/tasks/${task_id}/" "/root/hiclaw-fs/shared/tasks/${task_id}/"
+   mc mirror "${HICLAW_STORAGE_PREFIX}/shared/tasks/${task_id}/" "/root/hiclaw-fs/shared/tasks/${task_id}/"
    ```
 
 2. **Check for `.processing`**:
@@ -91,7 +91,7 @@ The marker auto-expires after 15 minutes (configurable). This prevents deadlocks
 
 6. **Sync to MinIO**:
    ```bash
-   mc mirror "/root/hiclaw-fs/shared/tasks/${task_id}/" "hiclaw/hiclaw-storage/shared/tasks/${task_id}/" --overwrite
+   mc mirror "/root/hiclaw-fs/shared/tasks/${task_id}/" "${HICLAW_STORAGE_PREFIX}/shared/tasks/${task_id}/" --overwrite
    ```
 
 ---

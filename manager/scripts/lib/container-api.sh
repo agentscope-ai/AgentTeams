@@ -3,10 +3,9 @@
 # Provides functions to create/manage sibling containers via the host's
 # container runtime socket (Docker or Podman compatible).
 #
-# The Manager container must be started with:
-#   -v /var/run/docker.sock:/var/run/docker.sock --security-opt label=disable
-# or (Podman rootful):
-#   -v /run/podman/podman.sock:/var/run/docker.sock --security-opt label=disable
+# Supports two modes:
+#   1. HTTP proxy mode: set HICLAW_CONTAINER_API=http://hiclaw-docker-proxy:2375
+#   2. Unix socket mode (legacy): mount docker.sock into the container
 #
 # Usage:
 #   source /opt/hiclaw/scripts/lib/container-api.sh
@@ -17,7 +16,10 @@
 #   container_logs_worker "alice"     # get worker container logs
 
 CONTAINER_SOCKET="${HICLAW_CONTAINER_SOCKET:-/var/run/docker.sock}"
-CONTAINER_API_BASE="http://localhost"
+CONTAINER_API_BASE="${HICLAW_CONTAINER_API:-}"
+if [ -z "${CONTAINER_API_BASE}" ]; then
+    CONTAINER_API_BASE="http://localhost"
+fi
 WORKER_IMAGE="${HICLAW_WORKER_IMAGE:-hiclaw/worker-agent:latest}"
 COPAW_WORKER_IMAGE="${HICLAW_COPAW_WORKER_IMAGE:-hiclaw/copaw-worker:latest}"
 WORKER_CONTAINER_PREFIX="hiclaw-worker-"
@@ -30,16 +32,30 @@ _api() {
     local method="$1"
     local path="$2"
     local data="${3:-}"
-    if [ -n "${data}" ]; then
-        curl -s --unix-socket "${CONTAINER_SOCKET}" \
-            -X "${method}" \
-            -H 'Content-Type: application/json' \
-            -d "${data}" \
-            "${CONTAINER_API_BASE}${path}"
+    if [ -n "${HICLAW_CONTAINER_API}" ]; then
+        # HTTP proxy mode
+        if [ -n "${data}" ]; then
+            curl -s -X "${method}" \
+                -H 'Content-Type: application/json' \
+                -d "${data}" \
+                "${CONTAINER_API_BASE}${path}"
+        else
+            curl -s -X "${method}" \
+                "${CONTAINER_API_BASE}${path}"
+        fi
     else
-        curl -s --unix-socket "${CONTAINER_SOCKET}" \
-            -X "${method}" \
-            "${CONTAINER_API_BASE}${path}"
+        # Unix socket mode (legacy)
+        if [ -n "${data}" ]; then
+            curl -s --unix-socket "${CONTAINER_SOCKET}" \
+                -X "${method}" \
+                -H 'Content-Type: application/json' \
+                -d "${data}" \
+                "${CONTAINER_API_BASE}${path}"
+        else
+            curl -s --unix-socket "${CONTAINER_SOCKET}" \
+                -X "${method}" \
+                "${CONTAINER_API_BASE}${path}"
+        fi
     fi
 }
 
@@ -47,23 +63,48 @@ _api_code() {
     local method="$1"
     local path="$2"
     local data="${3:-}"
-    if [ -n "${data}" ]; then
-        curl -s -o /dev/null -w '%{http_code}' --unix-socket "${CONTAINER_SOCKET}" \
-            -X "${method}" \
-            -H 'Content-Type: application/json' \
-            -d "${data}" \
-            "${CONTAINER_API_BASE}${path}"
+    if [ -n "${HICLAW_CONTAINER_API}" ]; then
+        # HTTP proxy mode
+        if [ -n "${data}" ]; then
+            curl -s -o /dev/null -w '%{http_code}' -X "${method}" \
+                -H 'Content-Type: application/json' \
+                -d "${data}" \
+                "${CONTAINER_API_BASE}${path}"
+        else
+            curl -s -o /dev/null -w '%{http_code}' -X "${method}" \
+                "${CONTAINER_API_BASE}${path}"
+        fi
     else
-        curl -s -o /dev/null -w '%{http_code}' --unix-socket "${CONTAINER_SOCKET}" \
-            -X "${method}" \
-            "${CONTAINER_API_BASE}${path}"
+        # Unix socket mode (legacy)
+        if [ -n "${data}" ]; then
+            curl -s -o /dev/null -w '%{http_code}' --unix-socket "${CONTAINER_SOCKET}" \
+                -X "${method}" \
+                -H 'Content-Type: application/json' \
+                -d "${data}" \
+                "${CONTAINER_API_BASE}${path}"
+        else
+            curl -s -o /dev/null -w '%{http_code}' --unix-socket "${CONTAINER_SOCKET}" \
+                -X "${method}" \
+                "${CONTAINER_API_BASE}${path}"
+        fi
     fi
 }
 
-# Check if container runtime socket is available
+# Check if container runtime API is available
+# Supports both HTTP proxy mode (HICLAW_CONTAINER_API) and unix socket mode.
 # This function is designed to work correctly in both strict mode (set -euo pipefail)
 # and non-strict mode. It uses a subshell for the API check to prevent exit on errors.
 container_api_available() {
+    if [ -n "${HICLAW_CONTAINER_API}" ]; then
+        # HTTP proxy mode: check if proxy is reachable
+        local version
+        version=$(curl -s "${CONTAINER_API_BASE}/version" 2>/dev/null) || true
+        if echo "${version}" | grep -q '"ApiVersion"' 2>/dev/null; then
+            return 0
+        fi
+        return 1
+    fi
+    # Unix socket mode (legacy)
     if [ ! -S "${CONTAINER_SOCKET}" ]; then
         return 1
     fi
@@ -99,8 +140,12 @@ _ensure_image() {
     # POST /images/create?fromImage=<ref> streams progress JSON.
     # curl will block until the pull finishes (or fails).
     local pull_output
-    pull_output=$(curl -s --unix-socket "${CONTAINER_SOCKET}" \
-        -X POST "${CONTAINER_API_BASE}/images/create?fromImage=${image}" 2>&1)
+    if [ -n "${HICLAW_CONTAINER_API}" ]; then
+        pull_output=$(curl -s -X POST "${CONTAINER_API_BASE}/images/create?fromImage=${image}" 2>&1)
+    else
+        pull_output=$(curl -s --unix-socket "${CONTAINER_SOCKET}" \
+            -X POST "${CONTAINER_API_BASE}/images/create?fromImage=${image}" 2>&1)
+    fi
 
     # Verify the image is now available
     inspect=$(_api GET "/images/${image}/json" 2>/dev/null)
@@ -115,51 +160,30 @@ _ensure_image() {
 }
 
 # Create and start a Worker container
-# Usage: container_create_worker <worker_name> [fs_access_key] [fs_secret_key] [extra_env_json]
+# Usage: container_create_worker <worker_name> [fs_access_key] [fs_secret_key] [extra_env_json] [custom_image]
 #   extra_env_json: optional JSON array of additional environment variables, e.g. '["SKILLS_API_URL=https://example.com"]'
+#   custom_image: optional custom Docker image to use instead of the default WORKER_IMAGE
 # Returns: container ID on success, empty on failure
 container_create_worker() {
     local worker_name="$1"
     local container_name="${WORKER_CONTAINER_PREFIX}${worker_name}"
-    local manager_ip
-    manager_ip=$(container_get_manager_ip)
-
-    if [ -z "${manager_ip}" ]; then
-        _log "ERROR: Cannot determine Manager container IP"
-        return 1
-    fi
 
     # Build environment variables for the Worker
-    # Use internal port 8080 for Docker network communication
-    local fs_domain="${HICLAW_FS_DOMAIN%%:*}"
-    local fs_endpoint="http://${fs_domain}:8080"
+    # Always use the fixed internal domain so workers on hiclaw-net can reach MinIO
+    # via the manager's network alias, regardless of user-configured FS domain.
+    local fs_endpoint="http://fs-local.hiclaw.io:8080"
     local fs_access_key="${2:-${HICLAW_MINIO_USER:-${HICLAW_ADMIN_USER:-admin}}}"
     local fs_secret_key="${3:-${HICLAW_MINIO_PASSWORD:-${HICLAW_ADMIN_PASSWORD:-admin}}}"
     local extra_env="${4:-[]}"
-
-    # Build ExtraHosts for local domains (*-local.hiclaw.io) that need
-    # in-container resolution back to the Manager. Skip if user provides
-    # real DNS-resolvable domains.
-    local extra_hosts=""
-    local matrix_host="${HICLAW_MATRIX_DOMAIN%%:*}"
-    local matrix_client_host="${HICLAW_MATRIX_CLIENT_DOMAIN:-matrix-client-local.hiclaw.io}"
-    local ai_gw_host="${HICLAW_AI_GATEWAY_DOMAIN:-aigw-local.hiclaw.io}"
-    local fs_host="${HICLAW_FS_DOMAIN:-fs-local.hiclaw.io}"
-
-    for h in "${matrix_host}" "${matrix_client_host}" "${ai_gw_host}" "${fs_host}"; do
-        if [[ "${h}" == *-local.hiclaw.io ]]; then
-            extra_hosts="${extra_hosts}\"${h}:${manager_ip}\","
-        fi
-    done
-    extra_hosts="${extra_hosts%,}"
+    local custom_image="${5:-}"
+    local image="${custom_image:-${WORKER_IMAGE}}"
 
     _log "Creating Worker container: ${container_name}"
-    _log "  Image: ${WORKER_IMAGE}"
+    _log "  Image: ${image}"
     _log "  FS endpoint: ${fs_endpoint}"
-    _log "  Manager IP: ${manager_ip}"
 
     # Pull image if not available locally
-    if ! _ensure_image "${WORKER_IMAGE}"; then
+    if ! _ensure_image "${image}"; then
         return 1
     fi
 
@@ -173,11 +197,8 @@ container_create_worker() {
     fi
 
     # Create the container
-    local host_config="{}"
-    if [ -n "${extra_hosts}" ]; then
-        host_config="{\"ExtraHosts\":[${extra_hosts}]}"
-        _log "  ExtraHosts: ${extra_hosts}"
-    fi
+    # Always use hiclaw-net; Docker DNS resolves *-local.hiclaw.io via manager's network aliases
+    local host_config="{\"NetworkMode\":\"hiclaw-net\"}"
 
     local worker_home="/root/hiclaw-fs/agents/${worker_name}"
 
@@ -195,7 +216,7 @@ container_create_worker() {
     local create_payload
     create_payload=$(cat <<PAYLOAD
 {
-    "Image": "${WORKER_IMAGE}",
+    "Image": "${image}",
     "Env": ${all_env},
     "WorkingDir": "${worker_home}",
     "HostConfig": ${host_config}
@@ -357,45 +378,26 @@ container_wait_worker_ready() {
 
 # Create and start a CoPaw Worker container
 # Uses the CoPaw worker image and sets appropriate working directory.
-# Usage: container_create_copaw_worker <worker_name> [fs_access_key] [fs_secret_key] [extra_env_json]
+# Usage: container_create_copaw_worker <worker_name> [fs_access_key] [fs_secret_key] [extra_env_json] [custom_image]
 container_create_copaw_worker() {
     local worker_name="$1"
     local container_name="${WORKER_CONTAINER_PREFIX}${worker_name}"
-    local manager_ip
-    manager_ip=$(container_get_manager_ip)
 
-    if [ -z "${manager_ip}" ]; then
-        _log "ERROR: Cannot determine Manager container IP"
-        return 1
-    fi
-
-    local fs_domain="${HICLAW_FS_DOMAIN%%:*}"
-    local fs_endpoint="http://${fs_domain}:8080"
+    # Always use the fixed internal domain so workers on hiclaw-net can reach MinIO
+    # via the manager's network alias, regardless of user-configured FS domain.
+    local fs_endpoint="http://fs-local.hiclaw.io:8080"
     local fs_access_key="${2:-${HICLAW_MINIO_USER:-${HICLAW_ADMIN_USER:-admin}}}"
     local fs_secret_key="${3:-${HICLAW_MINIO_PASSWORD:-${HICLAW_ADMIN_PASSWORD:-admin}}}"
     local extra_env="${4:-[]}"
-
-    # Build ExtraHosts (same as openclaw workers)
-    local extra_hosts=""
-    local matrix_host="${HICLAW_MATRIX_DOMAIN%%:*}"
-    local matrix_client_host="${HICLAW_MATRIX_CLIENT_DOMAIN:-matrix-client-local.hiclaw.io}"
-    local ai_gw_host="${HICLAW_AI_GATEWAY_DOMAIN:-aigw-local.hiclaw.io}"
-    local fs_host="${HICLAW_FS_DOMAIN:-fs-local.hiclaw.io}"
-
-    for h in "${matrix_host}" "${matrix_client_host}" "${ai_gw_host}" "${fs_host}"; do
-        if [[ "${h}" == *-local.hiclaw.io ]]; then
-            extra_hosts="${extra_hosts}\"${h}:${manager_ip}\","
-        fi
-    done
-    extra_hosts="${extra_hosts%,}"
+    local custom_image="${5:-}"
+    local image="${custom_image:-${COPAW_WORKER_IMAGE}}"
 
     _log "Creating CoPaw Worker container: ${container_name}"
-    _log "  Image: ${COPAW_WORKER_IMAGE}"
+    _log "  Image: ${image}"
     _log "  FS endpoint: ${fs_endpoint}"
-    _log "  Manager IP: ${manager_ip}"
 
     # Pull image if not available locally
-    if ! _ensure_image "${COPAW_WORKER_IMAGE}"; then
+    if ! _ensure_image "${image}"; then
         return 1
     fi
 
@@ -422,9 +424,6 @@ container_create_copaw_worker() {
     local console_port=""
     console_port=$(echo "${all_env}" | jq -r '.[] | select(startswith("HICLAW_CONSOLE_PORT=")) | split("=")[1]' 2>/dev/null || true)
 
-    if [ -n "${extra_hosts}" ]; then
-        _log "  ExtraHosts: ${extra_hosts}"
-    fi
     if [ -n "${console_port}" ]; then
         _log "  Console port: ${console_port}"
     fi
@@ -445,22 +444,19 @@ container_create_copaw_worker() {
     local port_attempt=0
 
     while true; do
-        # Build HostConfig with ExtraHosts and optional PortBindings
+        # Build HostConfig with NetworkMode (hiclaw-net) and optional PortBindings
+        # Docker DNS resolves *-local.hiclaw.io via manager's network aliases; no ExtraHosts needed
         local host_config
-        if [ -n "${console_port}" ] && [ -n "${extra_hosts}" ]; then
-            host_config="{\"ExtraHosts\":[${extra_hosts}],\"PortBindings\":{\"${console_port}/tcp\":[{\"HostPort\":\"${host_port}\"}]}}"
-        elif [ -n "${console_port}" ]; then
-            host_config="{\"PortBindings\":{\"${console_port}/tcp\":[{\"HostPort\":\"${host_port}\"}]}}"
-        elif [ -n "${extra_hosts}" ]; then
-            host_config="{\"ExtraHosts\":[${extra_hosts}]}"
+        if [ -n "${console_port}" ]; then
+            host_config="{\"NetworkMode\":\"hiclaw-net\",\"PortBindings\":{\"${console_port}/tcp\":[{\"HostPort\":\"${host_port}\"}]}}"
         else
-            host_config="{}"
+            host_config="{\"NetworkMode\":\"hiclaw-net\"}"
         fi
 
         local create_payload
         create_payload=$(cat <<PAYLOAD
 {
-    "Image": "${COPAW_WORKER_IMAGE}",
+    "Image": "${image}",
     "Env": ${all_env},
     "WorkingDir": "/root/.copaw-worker",
     "ExposedPorts": ${exposed_ports},
@@ -483,8 +479,13 @@ PAYLOAD
 
         # Start the container — capture both HTTP status code and response body
         local start_output
-        start_output=$(curl -s -w '\n%{http_code}' --unix-socket "${CONTAINER_SOCKET}" \
-            -X POST "${CONTAINER_API_BASE}/containers/${container_id}/start")
+        if [ -n "${HICLAW_CONTAINER_API}" ]; then
+            start_output=$(curl -s -w '\n%{http_code}' \
+                -X POST "${CONTAINER_API_BASE}/containers/${container_id}/start")
+        else
+            start_output=$(curl -s -w '\n%{http_code}' --unix-socket "${CONTAINER_SOCKET}" \
+                -X POST "${CONTAINER_API_BASE}/containers/${container_id}/start")
+        fi
         local start_code
         start_code=$(echo "${start_output}" | tail -1)
         local start_body
@@ -562,4 +563,108 @@ container_wait_copaw_worker_ready() {
 container_list_workers() {
     _api GET "/containers/json?all=true&filters=%7B%22name%22%3A%5B%22${WORKER_CONTAINER_PREFIX}%22%5D%7D" 2>/dev/null | \
         jq -r '.[] | "\(.Names[0] | ltrimstr("/") | ltrimstr("'"${WORKER_CONTAINER_PREFIX}"'"))\t\(.State)\t\(.Status)"' 2>/dev/null
+}
+
+
+# ============================================================
+# Cloud Provider Extensions
+# ============================================================
+# Load cloud providers (additive — does not modify upstream functions above).
+# Each provider file defines its own *_available() check and lifecycle functions.
+for _provider_file in /opt/hiclaw/scripts/lib/cloud/*.sh; do
+    [ -f "${_provider_file}" ] && source "${_provider_file}"
+done
+unset _provider_file
+
+# ============================================================
+# Unified Worker Backend API
+# ============================================================
+# Auto-detects Docker vs cloud vs none and dispatches to the right backend.
+# All skill scripts should use these instead of calling Docker/SAE directly.
+
+_detect_worker_backend() {
+    if container_api_available 2>/dev/null; then
+        echo "docker"
+    elif [ "${HICLAW_RUNTIME:-}" = "aliyun" ]; then
+        echo "aliyun"
+    elif type cloud_sae_available &>/dev/null && cloud_sae_available; then
+        echo "aliyun"
+    else
+        echo "none"
+    fi
+}
+
+worker_backend_create() {
+    local worker_name="$1"
+    local fs_access_key="${2:-}"
+    local fs_secret_key="${3:-}"
+    local extra_env_json="${4:-[]}"
+    local backend
+    backend=$(_detect_worker_backend)
+
+    case "${backend}" in
+        docker)
+            container_create_worker "${worker_name}" "${fs_access_key}" "${fs_secret_key}" "${extra_env_json}"
+            ;;
+        aliyun)
+            local envs_obj="{}"
+            if [ "${extra_env_json}" != "[]" ] && [ -n "${extra_env_json}" ]; then
+                envs_obj=$(echo "${extra_env_json}" | jq '[.[] | split("=") | {(.[0]): (.[1:] | join("="))}] | add // {}')
+            fi
+            sae_create_worker "${worker_name}" "${envs_obj}"
+            ;;
+        none)
+            _log "No worker backend available (no Docker socket, no cloud config)"
+            echo '{"error": "no_backend"}'
+            return 1
+            ;;
+    esac
+}
+
+worker_backend_status() {
+    local worker_name="$1"
+    local backend
+    backend=$(_detect_worker_backend)
+
+    case "${backend}" in
+        docker)       container_status_worker "${worker_name}" ;;
+        aliyun) sae_status_worker "${worker_name}" ;;
+        none)         echo "unknown" ;;
+    esac
+}
+
+worker_backend_stop() {
+    local worker_name="$1"
+    local backend
+    backend=$(_detect_worker_backend)
+
+    case "${backend}" in
+        docker)       container_stop_worker "${worker_name}" ;;
+        aliyun) sae_stop_worker "${worker_name}" ;;
+        none)         return 1 ;;
+    esac
+}
+
+worker_backend_start() {
+    local worker_name="$1"
+    local backend
+    backend=$(_detect_worker_backend)
+
+    case "${backend}" in
+        docker)       container_start_worker "${worker_name}" ;;
+        aliyun) sae_start_worker "${worker_name}" ;;
+        none)         return 1 ;;
+    esac
+}
+
+worker_backend_delete() {
+    local worker_name="$1"
+    local backend
+    backend=$(_detect_worker_backend)
+
+    case "${backend}" in
+        docker)       container_remove_worker "${worker_name}" ;;
+        aliyun) sae_delete_worker "${worker_name}" ;;
+        none)         return 1 ;;
+    esac
 }

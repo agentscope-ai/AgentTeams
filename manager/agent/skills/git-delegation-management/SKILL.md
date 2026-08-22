@@ -19,7 +19,7 @@ This allows git operations to use the correct author name, email, and authentica
 
 ## Handling `git-request:` Messages
 
-When a Worker sends a message containing `git-request:`:
+When a Worker sends a message containing a **properly formatted** `git-request:` block (with `workspace:` and `operations:` fields), execute the requested operations.
 
 ```
 task-{task-id} git-request:
@@ -52,7 +52,7 @@ task_id="task-YYYYMMDD-HHMMSS"
 workspace="/root/hiclaw-fs/shared/tasks/${task_id}/workspace/{repo-name}"
 
 # Sync from MinIO
-mc mirror "hiclaw/hiclaw-storage/shared/tasks/${task_id}/" \
+mc mirror "${HICLAW_STORAGE_PREFIX}/shared/tasks/${task_id}/" \
   "/root/hiclaw-fs/shared/tasks/${task_id}/"
 
 # Check for processing marker
@@ -91,7 +91,7 @@ bash /opt/hiclaw/agent/skills/task-coordination/scripts/remove-processing-marker
 
 # Sync to MinIO
 mc mirror "/root/hiclaw-fs/shared/tasks/${task_id}/" \
-  "hiclaw/hiclaw-storage/shared/tasks/${task_id}/" --overwrite
+  "${HICLAW_STORAGE_PREFIX}/shared/tasks/${task_id}/" --overwrite
 ```
 
 **On success** — send to Worker:
@@ -99,7 +99,7 @@ mc mirror "/root/hiclaw-fs/shared/tasks/${task_id}/" \
 @{worker}:DOMAIN task-{task-id} git-result:
 Git operations completed successfully.
 {Summary of what was done - commits, pushes, branches created, etc.}
-Run `bash /opt/hiclaw/agent/skills/file-sync/scripts/hiclaw-sync.sh` to sync.
+Run `hiclaw-sync` to sync.
 ```
 
 **On failure** — send to Worker:
@@ -154,3 +154,13 @@ Common issues:
 
 Always use the `.processing` marker to prevent conflicts when both Worker and Manager might modify the workspace.
 
+---
+
+## Gotchas
+
+- **Wait for the actual `git-request:` block** — if a Worker says "Let me prepare the git-request" or "I'll delegate git operations", that is a preview, not a request. Do NOT execute any git operations until you receive a message with the structured `workspace:` + `operations:` fields.
+- **Execute git-request immediately when received** — when a message contains `git-request:` with `workspace:` and `operations:` fields, you MUST execute the git commands yourself and reply with `git-result:`. Workers cannot run git operations — that's why they delegated to you. Never "wait for the Worker to complete" after receiving a git-request; the Worker is waiting for YOUR git-result.
+- **Duplicate git-request after you already executed** — if you already completed the git operations for a task and the Worker sends a `git-request:` for the same operations, reply with `git-result:` confirming the operations were already completed. Do not re-execute or re-verify the repo state.
+- **Ignore superseded requests** — if a Worker sends multiple `git-request:` messages for the same task before you respond, only execute the LAST one (it is the most complete). Earlier requests were likely incomplete or had wrong paths.
+- **Never delete or overwrite the remote repo** — the remote URL (bare repo or GitHub) is shared across phases and Workers. Never `rm -rf` a remote path, never `git init --bare` over an existing repo.
+- **git-result is not task completion** — after sending `git-result:`, the Worker still needs to verify the outcome and report completion (e.g., PHASE_DONE). Do NOT treat a successful git-result as the Worker's task completion signal. Wait for the Worker's explicit completion report before advancing to the next phase.

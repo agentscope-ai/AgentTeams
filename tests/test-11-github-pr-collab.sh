@@ -108,7 +108,8 @@ Please create workers alice (developer), bob (reviewer), and charlie (qa-tester)
 matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" "${TASK_DESCRIPTION}"
 
 log_info "Waiting for Manager to acknowledge and start coordination..."
-REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 300)
+REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 300 \
+    "${ADMIN_TOKEN}" "${DM_ROOM}" "Please check if the PR collaboration task has been processed.")
 
 # Note: Manager may start processing immediately without explicit acknowledgment
 # So we don't fail if no reply is received, as long as workflow completes

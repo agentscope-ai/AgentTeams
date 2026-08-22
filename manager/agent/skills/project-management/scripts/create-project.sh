@@ -9,7 +9,7 @@
 #   - Environment: HICLAW_MATRIX_DOMAIN, HICLAW_ADMIN_USER, MANAGER_MATRIX_TOKEN
 
 set -e
-source /opt/hiclaw/scripts/lib/base.sh
+source /opt/hiclaw/scripts/lib/hiclaw-env.sh
 
 PROJECT_ID=""
 PROJECT_TITLE=""
@@ -43,7 +43,7 @@ if [ -f "${SECRETS_FILE}" ]; then
     source "${SECRETS_FILE}"
 fi
 if [ -z "${MANAGER_MATRIX_TOKEN}" ]; then
-    MANAGER_MATRIX_TOKEN=$(curl -sf -X POST http://127.0.0.1:6167/_matrix/client/v3/login \
+    MANAGER_MATRIX_TOKEN=$(curl -sf -X POST ${HICLAW_MATRIX_SERVER}/_matrix/client/v3/login \
         -H 'Content-Type: application/json' \
         -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"manager"},"password":"'"${HICLAW_MANAGER_PASSWORD}"'"}' \
         2>/dev/null | jq -r '.access_token // empty')
@@ -118,7 +118,7 @@ INVITE_LIST="${INVITE_LIST}]"
 
 MANAGER_MATRIX_ID="@manager:${MATRIX_DOMAIN}"
 ADMIN_MATRIX_ID="@${ADMIN_USER}:${MATRIX_DOMAIN}"
-ROOM_RESP=$(curl -sf -X POST http://127.0.0.1:6167/_matrix/client/v3/createRoom \
+ROOM_RESP=$(curl -sf -X POST ${HICLAW_MATRIX_SERVER}/_matrix/client/v3/createRoom \
     -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
     -H 'Content-Type: application/json' \
     -d '{
@@ -141,7 +141,7 @@ log "  Project room created: ${ROOM_ID}"
 # Update meta.json with room_id
 jq --arg rid "${ROOM_ID}" '.project_room_id = $rid' "${PROJECT_DIR}/meta.json" > /tmp/proj-meta-updated.json
 mv /tmp/proj-meta-updated.json "${PROJECT_DIR}/meta.json"
-curl -sf -X POST "http://127.0.0.1:6167/_matrix/client/v3/rooms/${ROOM_ID}/invite" \
+curl -sf -X POST "${HICLAW_MATRIX_SERVER}/_matrix/client/v3/rooms/${ROOM_ID}/invite" \
     -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
     -H 'Content-Type: application/json' \
     -d "{\"user_id\": \"${ADMIN_MATRIX_ID}\"}" > /dev/null 2>&1 || true
@@ -172,7 +172,7 @@ if [ -f "${MANAGER_CONFIG}" ]; then
         fi
     done
     # Sync updated Manager config to MinIO
-    mc cp "${MANAGER_CONFIG}" hiclaw/hiclaw-storage/agents/manager/openclaw.json 2>/dev/null || true
+    mc cp "${MANAGER_CONFIG}" "${HICLAW_STORAGE_PREFIX}/agents/manager/openclaw.json" 2>/dev/null || true
     log "  Manager config synced to MinIO"
 fi
 
@@ -180,8 +180,8 @@ fi
 # Step 4: Sync project files to MinIO
 # ============================================================
 log "Step 4: Syncing project files to MinIO..."
-mc mirror "${PROJECT_DIR}/" "hiclaw/hiclaw-storage/shared/projects/${PROJECT_ID}/" --overwrite 2>&1 | tail -3
-mc stat "hiclaw/hiclaw-storage/shared/projects/${PROJECT_ID}/meta.json" > /dev/null 2>&1 \
+mc mirror "${PROJECT_DIR}/" "${HICLAW_STORAGE_PREFIX}/shared/projects/${PROJECT_ID}/" --overwrite 2>&1 | tail -3
+mc stat "${HICLAW_STORAGE_PREFIX}/shared/projects/${PROJECT_ID}/meta.json" > /dev/null 2>&1 \
     || _fail "meta.json not found in MinIO after sync"
 log "  MinIO sync verified"
 

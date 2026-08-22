@@ -56,7 +56,8 @@ matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
 log_info "Waiting for Manager to create Worker Alice..."
 
 # Wait for Manager reply (up to 5 minutes — worker creation involves multiple LLM calls)
-REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 300)
+REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 300 \
+    "${ADMIN_TOKEN}" "${DM_ROOM}" "Please check if the worker creation request has been processed.")
 
 log_section "Verify Manager Response"
 

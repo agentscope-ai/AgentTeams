@@ -1,0 +1,40 @@
+ARG BASE_IMAGE=hiclaw/worker-agent:latest
+FROM ${BASE_IMAGE}
+
+ARG APT_MIRROR=mirrors.aliyun.com
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG http_proxy
+ARG https_proxy
+
+# Set proxy for build
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    http_proxy=${http_proxy} \
+    https_proxy=${https_proxy}
+
+# Configure APT mirror (China acceleration)
+RUN if [ -n "${APT_MIRROR}" ]; then \
+        sed -i "s|archive.ubuntu.com|${APT_MIRROR}|g; s|security.ubuntu.com|${APT_MIRROR}|g" \
+            /etc/apt/sources.list 2>/dev/null || true; \
+    fi
+
+# Install migrated system tools
+# {{APT_INSTALL}} placeholder is replaced by generate-zip.sh
+RUN apt-get update && apt-get install -y \
+    {{APT_PACKAGES}} \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install pip packages (if any)
+# {{PIP_INSTALL}} placeholder is replaced by generate-zip.sh
+{{PIP_INSTALL}}
+
+# Install npm global packages (if any)
+# {{NPM_INSTALL}} placeholder is replaced by generate-zip.sh
+{{NPM_INSTALL}}
+
+# Clear proxy env vars (runtime should not use build-time proxy)
+ENV HTTP_PROXY= \
+    HTTPS_PROXY= \
+    http_proxy= \
+    https_proxy=

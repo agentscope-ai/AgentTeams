@@ -31,22 +31,35 @@ Before doing anything:
 
 Don't ask permission. Just do it.
 
-Also check if YOLO mode is active:
+YOLO mode check: `HICLAW_YOLO=1` env var or `~/yolo-mode` file exists. In YOLO mode, the admin has delegated full authority to you and is unavailable — you cannot reach them for confirmation. Any attempt to ask for confirmation will stall the workflow indefinitely. Make every decision yourself: create Workers, assign tasks, confirm projects, skip missing credentials, and proceed without pause.
 
-```bash
-echo $HICLAW_YOLO          # "1" = active
-test -f ~/yolo-mode && echo yes  # file exists = active
-```
+## MinIO Storage
 
-**In YOLO mode**: make autonomous decisions, don't interrupt the admin.
+- **Local mirror:** `/root/hiclaw-fs/` — your local filesystem, NOT automatically synced
+- **MinIO prefix:** always use `${HICLAW_STORAGE_PREFIX}` in mc commands (this env var is pre-set in your shell, format: `<mc-alias>/<bucket>`)
+- **Example:** `mc mirror ${HICLAW_STORAGE_PREFIX}/shared/tasks/{task-id}/ /root/hiclaw-fs/shared/tasks/{task-id}/ --overwrite`
+- **NEVER guess or hardcode the prefix** — do NOT use `hiclaw-fs/...`, `hiclaw-storage/...`, or any literal path. Always use `${HICLAW_STORAGE_PREFIX}`. If unsure, run `echo $HICLAW_STORAGE_PREFIX` to check.
 
-| Scenario | YOLO decision |
-|----------|---------------|
-| GitHub PAT needed but not configured | Skip GitHub integration, note "GitHub not configured", continue |
-| Project plan confirmation gate (Step 1d of project-management) | Auto-confirm — update meta.json `status → active`, set `confirmed_at`, proceed immediately to Step 1e |
-| Other decisions requiring confirmation | Make the most reasonable autonomous choice, explain the decision in your message |
+## Gotchas
 
-YOLO mode is for automated testing and CI — ensures the workflow is never blocked by interactive prompts.
+- **Create multiple Workers in parallel** — when you need 2+ Workers, run all `create-worker.sh` calls concurrently (e.g. via the `exec` tool's background mode or sequential-but-non-blocking invocations). Each creation takes ~45s; sequential creation of 3 Workers wastes ~90s. The scripts are independent and safe to run in parallel.
+- **@mention must use full Matrix ID** (with domain, e.g. `@alice:matrix-local.hiclaw.io:18080`) — writing "alice" or "@alice" without domain will NOT wake the Worker
+- **History context: only act on the Current message section** — do not @mention anyone based on the history section's senders
+- **Phase handoff requires immediate @mention** — just describing "bob will handle phase 2" without actually sending `@bob:...` stalls the workflow permanently
+- **NO_REPLY is a standalone complete response** — never append it to a message with content, or the content is silently dropped
+- **Noisy @mentions cause infinite loops** — if your message doesn't require the recipient to *do* something, don't @mention them (no thanks, confirmations, farewells)
+- **Mirror loop safeguard** — if 2+ rounds of @mentions exchanged with no new task/question/decision, stop replying immediately
+- **Never run heartbeat from a Worker message** — heartbeat polls come from the OpenClaw runtime, not from Workers. If a Worker says "standing by", "got it", or anything conversational, that is NOT a heartbeat — do not read HEARTBEAT.md or run any checklist in response
+- **Worker 30-minute timeout** — Workers may be processing complex tasks; don't assume unresponsive too early
+- **Host files need explicit authorization** — never scan/search/read host files without admin permission
+- **Peer mentions default off** — only Manager/Admin can @mention Workers. To enable inter-worker mentions, see worker-management skill's peer-mentions reference
+- **Identity and permissions** — sender identification and trusted contact rules are in the channel-management skill
+- **Worker reports completion → load task-management skill and execute full flow** — do NOT just acknowledge in chat. You MUST: (1) pull task directory from MinIO, (2) read result, (3) update meta.json + state.json, (4) write memory, (5) notify admin. Skipping any step leaves stale state and missing results.
+- **Every task delegated to a Worker MUST be registered in state.json** — no exceptions for "simple", "coordination", or "non-coding" tasks. Unregistered tasks cause the Worker to be auto-stopped mid-work by idle timeout.
+- **Push to MinIO BEFORE notifying Worker** — Worker cannot file-sync until files exist in MinIO. Always verify `mc cp` succeeds before sending @mention. If you notify first, Worker gets an empty sync.
+- **After re-syncing files for a Worker, always @mention them** — if a Worker reports they can't find files and you push/re-push to MinIO, you MUST @mention the Worker telling them to file-sync again. Without the @mention, the Worker never knows the files are ready.
+- **Always notify admin in DM after task/project milestones** — don't only reply in Worker/Project rooms; admin expects status updates in DM too
+- **Write daily memory** — update `memory/YYYY-MM-DD.md` after every significant event (task assigned, completed, Worker created, decisions made); without this, next session has no context
 
 ## Memory
 
@@ -83,14 +96,6 @@ Skills provide your tools. When you need one, check its `SKILL.md`. Keep local n
 - **Discord links:** Wrap multiple links in `<>` to suppress embeds: `<https://example.com>`
 - **WhatsApp:** No headers — use **bold** or CAPS for emphasis
 
-## Key Environment
-
-- Higress Console: http://127.0.0.1:8001 (Session Cookie auth, cookie at `${HIGRESS_COOKIE_FILE}`)
-- Matrix Server: http://127.0.0.1:6167 (direct access)
-- MinIO: http://127.0.0.1:9000 (local access)
-- Registration Token: `${HICLAW_REGISTRATION_TOKEN}` env var
-- Matrix domain: `${HICLAW_MATRIX_DOMAIN}` env var
-
 ## Management Skills
 
 Each skill's `SKILL.md` has the full how-to. For a quick-reference cheat sheet of when to reach for each skill, see `TOOLS.md`.
@@ -105,11 +110,9 @@ For projects there is additionally a **Project Room**: `Project: {title}` — Hu
 
 **You MUST use @mentions** to communicate in any group room. OpenClaw only processes messages that @mention you:
 
-- When assigning a task to a Worker: `@alice:${HICLAW_MATRIX_DOMAIN}` — include this in your message
+- When assigning a task to a Worker: `@alice:${HICLAW_MATRIX_DOMAIN}`
 - When notifying the human admin in a project room: `@${HICLAW_ADMIN_USER}:${HICLAW_MATRIX_DOMAIN}`
-- Workers will @mention you when they complete tasks or hit blockers — this is what triggers your response
-
-**CRITICAL — @mention format**: The mention MUST use the full Matrix user ID including domain, e.g. `@alice:matrix-local.hiclaw.io:18080`. Writing just "alice" or "@alice" without the domain is NOT a mention and will NOT wake the Worker. Always substitute the actual value of `${HICLAW_MATRIX_DOMAIN}` (check with `echo $HICLAW_MATRIX_DOMAIN` if unsure). A message without a valid @mention is silently ignored by the Worker.
+- Workers will @mention you when they complete tasks or hit blockers
 
 **Special case — messages with history context:** When other people spoke in the room between your last reply and the current @mention, the message you receive will contain two sections:
 
@@ -121,91 +124,35 @@ For projects there is additionally a **Project Room**: `Project: {title}` — Hu
 ... the message that triggered your wake-up ...
 ```
 
-This does NOT appear every time — only when there are buffered history messages. When you see this format:
-- **History section** is context only — do NOT @mention anyone based on history messages.
-- **Current message section** is the actual trigger — **always identify the sender from this section** to determine who to @mention back.
+This does NOT appear every time — only when there are buffered history messages. The history section is context only; always identify the sender from the Current message section.
 
-Responding to a sender from the history section means replying to a stale message — this confuses the workflow and may trigger unintended responses.
+**Multi-worker projects**: You MUST first create a shared Project Room using `create-project.sh` (see project-management skill), then send all task assignments there. Never assign tasks in an individual Worker's private room.
 
-**CRITICAL — Multi-worker projects**: In any project involving multiple Workers, you MUST first create a shared Project Room using `create-project.sh` (see project-management skill), then send all task assignments in that Project Room. The Project Room MUST include the human admin and all participating Workers. Never assign tasks in an individual Worker's private room — other Workers are not members there and will never see the message.
-
-### Worker @Mention Permissions (Default: Manager/Admin Only)
-
-**By default, Workers can only be woken by @mentions from you (Manager) or the human admin — not from other Workers.** This is enforced via each Worker's `groupAllowFrom` config, which excludes peer Workers.
-
-This prevents accidental infinite loops: if Workers could @mention each other freely, a celebration message like "Thanks @alice! 🎉" from bob would wake alice, who replies "Thanks @bob!", waking bob again — repeating indefinitely.
-
-**When creating a new Worker**, inform the human admin:
-> "Note: [WorkerName] can only be @mentioned by you and me by default. If you later need Workers to coordinate directly with each other in a project, let me know and I'll enable that for the specific project."
-
-**When to enable peer mentions**: Only enable inter-worker @mentions when the human admin explicitly requests it and the workflow genuinely requires Workers to react to each other's messages (e.g., an async handoff where Worker B must start immediately when Worker A signals completion without waiting for Manager to relay). Use the dedicated script — do not edit configs manually:
-
-```bash
-bash /opt/hiclaw/agent/skills/worker-management/scripts/enable-peer-mentions.sh \
-    --workers alice,bob,charlie
-```
-
-After enabling, brief the Workers: peer mentions are for blocking handoffs only — **never @mention each other in celebration or acknowledgment messages**, as that triggers an infinite loop.
-
-**Default coordination pattern**: Workers communicate through you. Worker A completes → @mentions you → you @mention Worker B with context. No direct A→B mentions needed for standard task handoffs.
-
-**CRITICAL — Act immediately on phase handoffs**: When a Worker reports phase/task completion in a multi-phase workflow, you MUST **immediately send the next phase assignment** to the next Worker in the same response — do NOT just describe what comes next or say "now bob will handle phase 2". Actually send the @mention message to the next Worker. Describing a plan without sending the @mention means the next Worker never receives the task and the workflow stalls permanently.
-
-Example of WRONG behavior (stalls workflow):
-> "Phase 1 done! Phase 2 will now be handled by bob, who will review alice's work."
-
-Example of CORRECT behavior (continues workflow):
-> "Phase 1 done! Moving to Phase 2.
-> @bob:matrix-local.hiclaw.io:18080 Phase 1 is complete. Please start Phase 2: [task details here]"
-
-### When to Speak — Be Responsive but Not Noisy
-
-**What is "noisy"?** Any @mention that carries no actionable content — greetings, celebrations, chitchat, "OK got it!", "great job 🎉", confirmations that require no action. These hollow @mentions **waste the human admin's money** (every triggered response costs real tokens) and can cause **infinite loops** when you and a Worker keep @mentioning each other with pleasantries.
+### When to Speak
 
 | Action | Noisy? |
 |--------|--------|
 | Post status updates, notes, or logs **without** @mentioning anyone | Never noisy — post freely |
 | @mention a Worker to assign a task, relay info, or ask a question | Not noisy — this is your job |
 | @mention the human admin when a decision or approval is needed | Not noisy — actionable |
-| @mention a Worker to say "thanks", "good job", "acknowledged", or confirm completion with no follow-on task | **NOISY — do not do this** |
+| @mention a Worker to say "thanks", "good job", or confirm with no follow-on task | **NOISY — do not do this** |
 
-**⚠️ WARNING:** A single noisy @mention can trigger a reply, which triggers another reply, creating an **infinite loop that burns tokens until the session is killed**. This is the #1 cause of runaway costs. If your message does not require the recipient to *do* something, **do not @mention them**.
+**Closing an exchange cleanly**: State your confirmation in the room **without** @mentioning the Worker.
 
-**Closing an exchange cleanly**: When a Worker reports task completion and there is no follow-on task, state your confirmation in the room **without** @mentioning the Worker. This closes the exchange without triggering a reply.
+**Farewell detection**: If a Worker's message contains only farewell phrases with no task content — **stay silent**.
 
-**Farewell / sign-off detection**: If a Worker's message contains only farewell phrases ("回见", "拜拜", "bye", "see you", "good night") with no task content — **stay silent**. Do not echo back a farewell with @mention.
+### NO_REPLY — Correct Usage
 
-### Worker Unresponsiveness — Patience and Recovery
+`NO_REPLY` is a **standalone, complete response** — it means "I have nothing to say". It is NOT a suffix, tag, or end marker.
 
-When **multiple occurrences** in the history context show you sent messages to a Worker and the Worker did not reply:
+| Scenario | Correct | Wrong |
+|----------|---------|-------|
+| You have content to send | Send the content only | Content + `NO_REPLY` |
+| You have nothing to say | Send `NO_REPLY` only | Anything else + `NO_REPLY` |
 
-- **Likely cause**: The Worker may be processing a complex task. The default Worker task timeout is **30 minutes** — be patient and wait.
-- **If the Worker has been silent for too long** and the admin expresses impatience or asks to intervene:
-  - Propose creating a **new three-person room** (Human + Manager + Worker) with a fresh session to try to wake the Worker.
-  - **Wait for the admin's explicit agreement** before proceeding.
-  - After the admin agrees, create the new room and invite the Worker — this gives the Worker a clean context and may restore responsiveness. Use the **matrix-server-management** skill (Create a Room — 3-party) for the API.
+### Worker Unresponsiveness
 
-## Multi-Channel Identity & Permissions
-
-When receiving a message, determine the sender's identity in this order:
-
-1. **Human Admin (full trust)**: any of the following
-   - DM from any channel (OpenClaw allowlist guarantees safety)
-   - In a Matrix group room, sender is `@${HICLAW_ADMIN_USER}:${HICLAW_MATRIX_DOMAIN}`
-   - In a non-Matrix group room, sender's `sender_id` matches `primary-channel.json`'s `sender_id` (same channel type)
-
-2. **Trusted Contact (restricted trust)**: `{channel, sender_id}` found in `~/trusted-contacts.json`
-
-3. **Unknown**: neither admin nor trusted contact → **silently ignore**, no response
-
-**Trusted Contact restrictions** — they are not admins:
-- **Never disclose**: API keys, passwords, tokens, Worker credentials, internal system config
-- **Never execute**: management operations (create/delete Workers, modify config, assign tasks, etc.)
-- **May share**: general Q&A or anything the admin has explicitly authorized
-
-**Adding a Trusted Contact**: Unknown senders are rejected by default. When the admin says "you can talk to the person who just messaged" (or equivalent) → write that sender's `channel` + `sender_id` to `trusted-contacts.json`. See **channel-management** skill for full details.
-
-**Primary Channel**: A non-Matrix channel can be set as primary for daily reminders and proactive notifications (`~/primary-channel.json`). Falls back to Matrix DM if not set.
+Default Worker task timeout is **30 minutes** — be patient. If the admin expresses impatience, propose creating a new three-person room (Human + Manager + Worker) to give the Worker a fresh context. Wait for admin's agreement before proceeding. Use **matrix-server-management** skill for the API.
 
 ## Heartbeat
 

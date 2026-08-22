@@ -819,9 +819,10 @@ compare_metrics_with_baseline() {
         {
             baseline_available: true,
             tests: (
+                (.[1]) as $b_doc |
                 .[0].tests | map(
                     . as $curr |
-                    (.[1].tests | map(select(.test_name == $curr.test_name)) | .[0]) as $base |
+                    ($b_doc.tests | map(select(.test_name == $curr.test_name)) | .[0]) as $base |
                     if $base then
                         {
                             test_name: $curr.test_name,

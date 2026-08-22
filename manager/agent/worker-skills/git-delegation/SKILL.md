@@ -90,7 +90,7 @@ Before making changes, check if the task directory is being processed:
 
 ```bash
 # Sync from MinIO
-mc mirror "hiclaw/hiclaw-storage/shared/tasks/{task-id}/" \
+mc mirror "${HICLAW_STORAGE_PREFIX}/shared/tasks/{task-id}/" \
   "/root/hiclaw-fs/shared/tasks/{task-id}/"
 
 # Check for processing marker
@@ -122,7 +122,7 @@ Starting work on feature XYZ
 Git operations completed successfully.
 Cloned to: /root/hiclaw-fs/shared/tasks/task-20260225/workspace/hiclaw
 Created branch: feature-xyz
-Run `bash /opt/hiclaw/agent/skills/file-sync/scripts/hiclaw-sync.sh` to sync.
+Run `hiclaw-sync` to sync.
 ```
 
 **Failure** — `git-failed:`
@@ -138,7 +138,7 @@ After receiving `git-result:`:
 
 ```bash
 # Sync from MinIO
-bash /opt/hiclaw/agent/skills/file-sync/scripts/hiclaw-sync.sh
+hiclaw-sync
 
 # Now you can work locally
 cd /root/hiclaw-fs/shared/tasks/task-20260225/workspace/hiclaw
@@ -149,7 +149,7 @@ cat src/main.py
 
 # When ready to commit, sync to MinIO first
 mc mirror "/root/hiclaw-fs/shared/tasks/task-20260225/" \
-  "hiclaw/hiclaw-storage/shared/tasks/task-20260225/" --overwrite
+  "${HICLAW_STORAGE_PREFIX}/shared/tasks/task-20260225/" --overwrite
 ```
 
 ### 5. Commit and Push
@@ -231,11 +231,88 @@ Merging feature branch with merge commit
 
 ---
 
+## Critical Rules
+
+### Plan First, Send Once
+
+**Before sending a `git-request:`, plan ALL operations in your head first.** Think through the entire workflow — clone, branch, file creation, commit, push — and include everything in a SINGLE request. Do NOT send partial requests and iterate.
+
+Bad (multiple requests, trial-and-error):
+```
+# Request 1: just clone
+git-request: clone repo...
+# Wait... then Request 2: create branch
+git-request: checkout branch...
+# Wait... then Request 3: add files and push
+git-request: add, commit, push...
+```
+
+Good (one complete request):
+```
+git-request:
+workspace: /root/hiclaw-fs/shared/tasks/{task-id}/workspace
+operations:
+  - git clone /path/to/repo.git
+  - cd repo && git config user.name "alice"
+  - cd repo && git config user.email "alice@hiclaw.local"
+  - cd repo && git checkout -b feature/my-branch
+  - mkdir -p repo/docs
+  - 'cat > repo/docs/file.md << "EOF"
+file content here
+EOF'
+  - cd repo && git add docs/file.md
+  - cd repo && git commit -m "feat: add file"
+  - cd repo && git push origin feature/my-branch
+---CONTEXT---
+Complete workflow: clone, branch, create file, commit, push
+---END---
+```
+
+### Wait Silently After Sending
+
+After sending a `git-request:`, the Manager needs time to execute the operations. **Do NOT**:
+- Send follow-up messages asking "is it done?"
+- Send duplicate or revised `git-request:` messages
+- Try alternative approaches while waiting
+- Spawn subagents to work around the wait
+
+Simply wait for the `git-result:` or `git-failed:` response. The Manager will reply when done.
+
+### Workspace Path Convention
+
+Always use this path pattern:
+```
+/root/hiclaw-fs/shared/tasks/{task-id}/workspace/{repo-name}
+```
+
+- For `git clone`: set workspace to the **parent** directory (without repo name)
+- For all other operations: set workspace to the **repo** directory (with repo name)
+- **Never** use `/tmp` or other arbitrary paths — the Manager syncs via MinIO and needs the workspace under the shared tasks directory
+
+### Include Non-Git Commands When Needed
+
+The operations list can include shell commands like `mkdir -p`, `cat > file`, `cd dir &&` prefixes. This lets you do everything in one round-trip:
+
+```
+operations:
+  - git clone https://github.com/org/repo.git
+  - cd repo && git checkout -b feature/xyz
+  - mkdir -p repo/src
+  - 'cat > repo/src/main.py << "EOF"
+print("hello")
+EOF'
+  - cd repo && git add .
+  - cd repo && git commit -m "feat: add main"
+  - cd repo && git push origin feature/xyz
+```
+
+---
+
 ## Tips
 
-1. **Batch commands**: Include all related git commands in one request
+1. **One request, all commands**: Include clone, branch, file creation, commit, and push in a single request
 2. **Provide context**: Help the Manager understand what you're trying to accomplish
-3. **Handle errors**: If something fails, read the error and adjust your approach
+3. **Handle errors**: If `git-failed:` is returned, read the error and send ONE corrected request
 4. **Sync before and after**: Always sync to/from MinIO when exchanging workspace with Manager
 5. **Use github-operations for PRs**: After pushing, use the MCP tools to create/manage PRs
 

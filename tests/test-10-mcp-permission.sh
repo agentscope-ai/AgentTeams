@@ -47,7 +47,8 @@ matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
     "Please revoke Alice's access to the GitHub MCP Server. She should no longer be able to perform GitHub operations."
 
 log_info "Waiting for Manager to revoke access..."
-REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 180)
+REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 180 \
+    "${ADMIN_TOKEN}" "${DM_ROOM}" "Please check if the MCP permission change has been processed.")
 
 assert_not_empty "${REPLY}" "Manager replied to revoke request"
 
@@ -68,7 +69,8 @@ matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
     "Please restore Alice's access to the GitHub MCP Server."
 
 log_info "Waiting for Manager to restore access..."
-REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 180)
+REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 180 \
+    "${ADMIN_TOKEN}" "${DM_ROOM}" "Please check if the MCP permission change has been processed.")
 
 assert_not_empty "${REPLY}" "Manager replied to restore request"
 

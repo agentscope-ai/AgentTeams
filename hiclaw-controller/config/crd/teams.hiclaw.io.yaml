@@ -1,0 +1,117 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: teams.hiclaw.io
+spec:
+  group: hiclaw.io
+  versions:
+    - name: v1beta1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [leader, workers]
+              properties:
+                description:
+                  type: string
+                admin:
+                  type: object
+                  description: "Team-specific admin (human). Has admin authority within this team."
+                  properties:
+                    name:
+                      type: string
+                      description: "Human name (must exist in humans-registry)"
+                    matrixUserId:
+                      type: string
+                      description: "Matrix user ID (e.g. @john:domain)"
+                leader:
+                  type: object
+                  required: [name]
+                  properties:
+                    name:
+                      type: string
+                    model:
+                      type: string
+                    identity:
+                      type: string
+                    soul:
+                      type: string
+                    agents:
+                      type: string
+                    package:
+                      type: string
+                workers:
+                  type: array
+                  items:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        type: string
+                      model:
+                        type: string
+                      runtime:
+                        type: string
+                        enum: [openclaw, copaw]
+                      image:
+                        type: string
+                      identity:
+                        type: string
+                      soul:
+                        type: string
+                      agents:
+                        type: string
+                      skills:
+                        type: array
+                        items:
+                          type: string
+                      mcpServers:
+                        type: array
+                        items:
+                          type: string
+                      package:
+                        type: string
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: [Pending, Active, Degraded, Failed]
+                teamRoomID:
+                  type: string
+                leaderReady:
+                  type: boolean
+                readyWorkers:
+                  type: integer
+                totalWorkers:
+                  type: integer
+                message:
+                  type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Leader
+          type: string
+          jsonPath: .spec.leader.name
+        - name: Workers
+          type: integer
+          jsonPath: .status.totalWorkers
+        - name: Ready
+          type: integer
+          jsonPath: .status.readyWorkers
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+  scope: Namespaced
+  names:
+    plural: teams
+    singular: team
+    kind: Team
+    shortNames: [tm]

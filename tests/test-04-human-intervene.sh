@@ -50,7 +50,8 @@ matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
     "Additional requirement for Alice: the script should also accept a command line argument for the name, so it prints 'Hello, <name>!' instead."
 
 log_info "Waiting for Manager to relay supplement..."
-REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 180)
+REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 180 \
+    "${ADMIN_TOKEN}" "${DM_ROOM}" "Please check if the supplementary instruction has been processed.")
 
 assert_not_empty "${REPLY}" "Manager acknowledged supplementary instruction"
 

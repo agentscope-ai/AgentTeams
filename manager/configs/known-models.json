@@ -11,5 +11,7 @@
   { "id": "deepseek-reasoner", "name": "deepseek-reasoner", "reasoning": true,  "contextWindow": 256000,  "maxTokens": 128000, "input": ["text"] },
   { "id": "kimi-k2.5",         "name": "kimi-k2.5",         "reasoning": true,  "contextWindow": 256000,  "maxTokens": 128000, "input": ["text", "image"] },
   { "id": "glm-5",             "name": "glm-5",             "reasoning": true,  "contextWindow": 200000,  "maxTokens": 128000, "input": ["text"] },
+  { "id": "MiniMax-M2.7",      "name": "MiniMax-M2.7",      "reasoning": true,  "contextWindow": 200000,  "maxTokens": 128000, "input": ["text"] },
+  { "id": "MiniMax-M2.7-highspeed", "name": "MiniMax-M2.7-highspeed", "reasoning": true, "contextWindow": 200000, "maxTokens": 128000, "input": ["text"] },
   { "id": "MiniMax-M2.5",      "name": "MiniMax-M2.5",      "reasoning": true,  "contextWindow": 200000,  "maxTokens": 128000, "input": ["text"] }
 ]

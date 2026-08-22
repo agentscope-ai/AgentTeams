@@ -48,7 +48,8 @@ matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
     "Create a worker named alice if it doesn't exist yet. Give her the github-operations and git-delegation skills."
 
 log_info "Waiting for Worker creation/setup..."
-REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 120)
+REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 120 \
+    "${ADMIN_TOKEN}" "${DM_ROOM}" "Please check if the git delegation task has been processed.")
 assert_not_empty "${REPLY}" "Manager acknowledged worker setup"
 
 sleep 10  # Wait for worker to be ready
@@ -62,7 +63,8 @@ matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
     "Ask Alice to test the git delegation mechanism: 1) Clone the test repo to her workspace, 2) Create a new branch named '${TEST_BRANCH}', 3) Add a file docs/git-delegation-test.md with content 'Git delegation test at $(date)', 4) Use git delegation to commit and push the changes, 5) Report the result."
 
 log_info "Waiting for Manager to relay git delegation task..."
-REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 180)
+REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 180 \
+    "${ADMIN_TOKEN}" "${DM_ROOM}" "Please check if the git delegation task has been processed.")
 
 assert_not_empty "${REPLY}" "Manager acknowledged git delegation task"
 

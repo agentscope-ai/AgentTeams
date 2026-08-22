@@ -6,7 +6,7 @@
 #
 # Usage:
 #   manage-state.sh --action init
-#   manage-state.sh --action add-finite    --task-id T --title TITLE --assigned-to W --room-id R [--project-room-id P]
+#   manage-state.sh --action add-finite    --task-id T --title TITLE --assigned-to W --room-id R [--project-room-id P] [--delegated-to-team TEAM]
 #   manage-state.sh --action add-infinite  --task-id T --title TITLE --assigned-to W --room-id R --schedule CRON --timezone TZ --next-scheduled-at ISO
 #   manage-state.sh --action complete      --task-id T
 #   manage-state.sh --action executed      --task-id T --next-scheduled-at ISO
@@ -67,6 +67,7 @@ action_add_finite() {
        --arg worker "$ASSIGNED_TO" \
        --arg room "$ROOM_ID" \
        --arg proj "${PROJECT_ROOM_ID:-}" \
+       --arg team "${DELEGATED_TO_TEAM:-}" \
        --arg ts "$(_ts)" \
        '.active_tasks += [{
             task_id: $id,
@@ -74,7 +75,8 @@ action_add_finite() {
             type: "finite",
             assigned_to: $worker,
             room_id: $room
-        } + (if $proj != "" then {project_room_id: $proj} else {} end)]
+        } + (if $proj != "" then {project_room_id: $proj} else {} end)
+          + (if $team != "" then {delegated_to_team: $team} else {} end)]
         | .updated_at = $ts' \
        "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
 
@@ -205,6 +207,7 @@ TITLE=""
 ASSIGNED_TO=""
 ROOM_ID=""
 PROJECT_ROOM_ID=""
+DELEGATED_TO_TEAM=""
 SCHEDULE=""
 TIMEZONE=""
 NEXT_SCHEDULED_AT=""
@@ -217,6 +220,7 @@ while [[ $# -gt 0 ]]; do
         --assigned-to)      ASSIGNED_TO="$2";       shift 2 ;;
         --room-id)          ROOM_ID="$2";           shift 2 ;;
         --project-room-id)  PROJECT_ROOM_ID="$2";   shift 2 ;;
+        --delegated-to-team) DELEGATED_TO_TEAM="$2"; shift 2 ;;
         --schedule)         SCHEDULE="$2";          shift 2 ;;
         --timezone)         TIMEZONE="$2";          shift 2 ;;
         --next-scheduled-at) NEXT_SCHEDULED_AT="$2"; shift 2 ;;
@@ -232,7 +236,7 @@ if [ -z "$ACTION" ]; then
     echo "" >&2
     echo "Actions:" >&2
     echo "  init          Ensure state.json exists (no-op if already present)" >&2
-    echo "  add-finite    --task-id T --title TITLE --assigned-to W --room-id R [--project-room-id P]" >&2
+    echo "  add-finite    --task-id T --title TITLE --assigned-to W --room-id R [--project-room-id P] [--delegated-to-team TEAM]" >&2
     echo "  add-infinite  --task-id T --title TITLE --assigned-to W --room-id R --schedule CRON --timezone TZ --next-scheduled-at ISO" >&2
     echo "  complete      --task-id T   (removes finite task from active_tasks)" >&2
     echo "  executed      --task-id T --next-scheduled-at ISO   (updates infinite task after execution)" >&2

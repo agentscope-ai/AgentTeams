@@ -1,6 +1,6 @@
 ---
 name: mcporter
-description: Discover and call MCP Server tools via the mcporter CLI. Use when Manager notifies you about new MCP tools, or when you need to call external APIs. Includes workflow for generating skill documentation for new MCP servers.
+description: Discover and call MCP Server tools via the mcporter CLI. Use when your coordinator notifies you about new MCP tools, or when you need to call external APIs. Includes workflow for generating skill documentation for new MCP servers.
 ---
 
 # mcporter — MCP Tool CLI
@@ -25,16 +25,16 @@ mcporter call <server-name>.<tool-name> --args '{"key":"value","count":5}'
 
 Output is JSON — parse with `jq` when needed.
 
-## When Manager Notifies You About New MCP Tools
+## When Your Coordinator Notifies You About New MCP Tools
 
-When Manager @mentions you saying a new MCP server has been configured, follow this workflow:
+When your coordinator @mentions you saying a new MCP server has been configured, follow this workflow:
 
 ### Step 1: Pull the updated config
 
-Run your file-sync skill to get the latest config:
+Run your file-sync skill to pull the latest files from MinIO:
 
 ```bash
-hiclaw-sync
+# Use the file-sync skill to sync
 ```
 
 ### Step 2: Discover the new server and its tools
@@ -93,9 +93,9 @@ mcporter call mcp-weather.get_weather city=Tokyo units=metric
 | units | string | no | Temperature units (default: metric) |
 ```
 
-### Step 4: Confirm to Manager
+### Step 4: Confirm to your coordinator
 
-After generating the skill, reply to Manager confirming:
+After generating the skill, reply to your coordinator confirming:
 - You pulled the updated config
 - You discovered N tools on the new server
 - You generated a skill at `~/skills/<name>-operations/SKILL.md`
@@ -103,8 +103,8 @@ After generating the skill, reply to Manager confirming:
 
 ## Important Notes
 
-- **mcporter not installed?** CoPaw workers may not have `mcporter` pre-installed. If `mcporter` is not found, tell the user and ask whether to install it. Install command: `pnpm add -g mcporter`
+- **Not installed?** If `mcporter` command is not found, install it: `npm install -g mcporter`
 - **Transport**: MCP Servers use HTTP transport (configured in config/mcporter.json)
 - **Auth**: Authorization header with Bearer token is auto-configured — you don't need to manage credentials
-- **Permissions**: Your MCP access is controlled by Manager. If you get 403 from the MCP Server, ask Manager to re-authorize your access
-- **Config not found**: If `./config/mcporter.json` doesn't exist yet, run `hiclaw-sync` first — Manager pushes the config to MinIO after setting up MCP servers
+- **Permissions**: Your MCP access is controlled by your coordinator. If you get 403 from the MCP Server, ask your coordinator to re-authorize your access
+- **Config not found**: If `./config/mcporter.json` doesn't exist yet, use your file-sync skill first — your coordinator pushes the config to MinIO after setting up MCP servers

@@ -95,7 +95,7 @@ workspace: /root/hiclaw-fs/shared/tasks/{task-id}/workspace
 # 1. Sync workspace from MinIO
 task_id="task-YYYYMMDD-HHMMSS"
 workspace="/root/hiclaw-fs/shared/tasks/${task_id}/workspace"
-mc mirror "hiclaw/hiclaw-storage/shared/tasks/${task_id}/" "/root/hiclaw-fs/shared/tasks/${task_id}/"
+mc mirror "${HICLAW_STORAGE_PREFIX}/shared/tasks/${task_id}/" "/root/hiclaw-fs/shared/tasks/${task_id}/"
 
 # 2. Check for processing marker (task coordination)
 bash /opt/hiclaw/agent/skills/task-coordination/scripts/check-processing-marker.sh "$task_id"
@@ -133,7 +133,7 @@ bash /opt/hiclaw/agent/skills/task-coordination/scripts/remove-processing-marker
 
 # 8. On success (exit 0): push changes to MinIO
 if [ "$exit_code" -eq 0 ]; then
-    mc mirror "/root/hiclaw-fs/shared/tasks/${task_id}/workspace/" "hiclaw/hiclaw-storage/shared/tasks/${task_id}/workspace/" --overwrite
+    mc mirror "/root/hiclaw-fs/shared/tasks/${task_id}/workspace/" "${HICLAW_STORAGE_PREFIX}/shared/tasks/${task_id}/workspace/" --overwrite
 fi
 ```
 
@@ -141,7 +141,7 @@ fi
 ```
 @{worker}:DOMAIN task-{task-id} coding-result:
 CLI 工具已完成编码。请同步工作目录并 review 变更：
-  bash /opt/hiclaw/agent/skills/file-sync/scripts/hiclaw-sync.sh
+  hiclaw-sync
 变更记录：/root/hiclaw-fs/shared/tasks/{task-id}/workspace/coding-cli-logs/
 ```
 
@@ -190,10 +190,10 @@ Append to the end of spec.md when CLI mode is enabled:
 本任务涉及代码修改。请使用 **Coding CLI 委托模式** 完成：
 
 1. 克隆/准备代码到工作目录：`/root/hiclaw-fs/shared/tasks/{task-id}/workspace/`
-2. 推送到 MinIO：`mc mirror /root/hiclaw-fs/shared/tasks/{task-id}/workspace/ hiclaw/hiclaw-storage/shared/tasks/{task-id}/workspace/`
+2. 推送到 MinIO：`mc mirror /root/hiclaw-fs/shared/tasks/{task-id}/workspace/ ${HICLAW_STORAGE_PREFIX}/shared/tasks/{task-id}/workspace/`
 3. 根据你的理解和 `coding-cli` skill 生成编码提示词，发送给我
 4. 等待我执行 CLI 工具并返回结果
-5. Sync 拉取变更：`bash /opt/hiclaw/agent/skills/file-sync/scripts/hiclaw-sync.sh`
+5. Sync 拉取变更：`hiclaw-sync`
 6. Review 变更并报告完成
 
 如收到 `coding-failed:`，请自行完成编码工作。

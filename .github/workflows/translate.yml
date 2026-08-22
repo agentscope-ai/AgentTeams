@@ -2,9 +2,9 @@ name: Translate GitHub Content into English
 
 on:
   issues:
-    types: [opened, edited]
+    types: [opened]
   issue_comment:
-    types: [created, edited]
+    types: [created]
   discussion:
     types: [created, edited]
   discussion_comment:

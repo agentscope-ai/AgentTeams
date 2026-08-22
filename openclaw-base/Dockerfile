@@ -51,14 +51,15 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
 # 1. Clone with single branch to minimize .git size
 # 2. Install dependencies and build
 # 3. Remove unnecessary files (tests, .git, etc.) - keep all node_modules for extensions
-RUN git clone --depth 1 --single-branch \
+RUN git clone --depth 1 --single-branch -b hiclaw-v1 \
         https://github.com/johnlanni/openclaw.git /opt/openclaw && \
     cd /opt/openclaw && \
-    git fetch --depth 1 origin eb6b412b8bf59da7f26566cb1699a54eb7d0bc2f && \
-    git checkout eb6b412b8bf59da7f26566cb1699a54eb7d0bc2f && \
+    git fetch --depth 1 origin 86dad1383c12629ad3aa48575f2dd350fc0775d4 && \
+    git checkout 86dad1383c12629ad3aa48575f2dd350fc0775d4 && \
     pnpm config set registry ${NPM_REGISTRY} && \
     pnpm install && \
     pnpm build && \
+    pnpm ui:build && \
     echo "==> Verifying critical native addons..." && \
     ADDON_DIR=/opt/openclaw/node_modules/.pnpm/@matrix-org+matrix-sdk-crypto-nodejs@0.4.0/node_modules/@matrix-org/matrix-sdk-crypto-nodejs && \
     ls "$ADDON_DIR"/matrix-sdk-crypto.linux-*.node 2>/dev/null | grep -q . \

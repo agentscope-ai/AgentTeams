@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - 'manager/**'
+      - 'docker-proxy/**'
+      - 'hiclaw-controller/**'
       - 'tests/**'
       - '.github/workflows/test-integration.yml'
   push:
@@ -15,6 +17,8 @@ on:
       - 'v*'
     paths:
       - 'manager/**'
+      - 'docker-proxy/**'
+      - 'hiclaw-controller/**'
       - 'tests/**'
   workflow_dispatch:
     inputs:
@@ -43,15 +47,16 @@ env:
   MANAGER_IMAGE: hiclaw/manager-agent:ci-test
   WORKER_IMAGE: hiclaw/worker-agent:ci-test
   COPAW_WORKER_IMAGE: hiclaw/copaw-worker:ci-test
+  DOCKER_PROXY_IMAGE: hiclaw/docker-proxy:ci-test
   # Tests that do not require a GitHub token
-  NON_GITHUB_TESTS: "01 02 03 04 05 06 14"
+  NON_GITHUB_TESTS: "01 02 03 04 05 06 14 15 17 18 19 20"
 
 jobs:
   integration-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
-      contents: read
+      contents: write
       pull-requests: write
       actions: read
 
@@ -82,10 +87,10 @@ jobs:
         run: |
           RUNTIME="${{ inputs.worker_runtime || 'openclaw' }}"
           if [ "$RUNTIME" = "copaw" ]; then
-            make build-manager build-copaw-worker VERSION=ci-test HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
+            make build-manager build-copaw-worker build-docker-proxy VERSION=ci-test HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
               DOCKER_BUILD_ARGS="--build-arg APT_MIRROR= --build-arg PIP_INDEX_URL=https://pypi.org/simple/"
           else
-            make build-manager build-worker VERSION=ci-test HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com
+            make build-manager build-worker build-docker-proxy VERSION=ci-test HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com
           fi
 
       - name: Install dependencies
@@ -105,10 +110,13 @@ jobs:
           HICLAW_NON_INTERACTIVE=1 \
           HICLAW_VERSION=ci-test \
           HICLAW_MOUNT_SOCKET=1 \
+          HICLAW_MATRIX_E2EE=0 \
+          HICLAW_LLM_PROVIDER=qwen \
           HICLAW_DEFAULT_WORKER_RUNTIME="$RUNTIME" \
           HICLAW_DEFAULT_MODEL="$MODEL" \
           HICLAW_INSTALL_MANAGER_IMAGE=${{ env.MANAGER_IMAGE }} \
           HICLAW_INSTALL_WORKER_IMAGE="$WORKER_IMG" \
+          HICLAW_INSTALL_DOCKER_PROXY_IMAGE=${{ env.DOCKER_PROXY_IMAGE }} \
           bash ./install/hiclaw-install.sh manager
 
       - name: Wait for Manager to be ready
@@ -132,6 +140,7 @@ jobs:
         run: docker exec hiclaw-manager touch /root/manager-workspace/yolo-mode
 
       - name: Run integration tests
+        id: tests
         env:
           HICLAW_LLM_API_KEY: ${{ secrets.HICLAW_LLM_API_KEY }}
         run: |
@@ -149,13 +158,15 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p baseline-metrics
-          # Find latest release with a metrics asset
-          LATEST=$(gh release list --limit 20 --json tagName,assets \
-            --jq '[.[] | select(.assets | map(.name) | contains(["metrics-baseline.json"]))] | .[0].tagName' \
+          # Find latest release with a metrics-baseline.json asset
+          # Note: gh release list --json does not support the "assets" field,
+          # so we use the GitHub API directly.
+          LATEST=$(gh api repos/${{ github.repository }}/releases --paginate --jq \
+            '[.[] | select(.assets | map(.name) | any(. == "metrics-baseline.json"))] | .[0].tag_name' \
             2>/dev/null || true)
           if [ -n "$LATEST" ] && [ "$LATEST" != "null" ]; then
             echo "Downloading baseline from release $LATEST"
-            gh release download "$LATEST" --pattern "metrics-baseline.json" --dir baseline-metrics
+            gh release download "$LATEST" --pattern "metrics-baseline.json" --dir baseline-metrics --repo "${{ github.repository }}"
           else
             echo "No release baseline found"
           fi
@@ -187,6 +198,13 @@ jobs:
           COMPARISON=$(compare_metrics_with_baseline "$CURRENT" "$BASELINE")
           REPORT=$(generate_comparison_markdown "$COMPARISON")
 
+          # Append debug log artifact link
+          ARTIFACT_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          REPORT="${REPORT}
+
+          ---
+          📦 [Download debug logs & test artifacts](${ARTIFACT_URL}#artifacts)"
+
           mkdir -p tests/output
           echo "$COMPARISON" > tests/output/metrics-comparison.json
           echo "$REPORT" > tests/output/metrics-report.md
@@ -205,17 +223,83 @@ jobs:
       # Artifacts
       # ============================================================
 
+      - name: Export debug logs
+        if: always()
+        continue-on-error: true
+        run: |
+          python3 scripts/export-debug-log.py --range 2h --no-redact
+          DEBUG_DIR=$(ls -td debug-log/*/ 2>/dev/null | head -1)
+          if [ -n "$DEBUG_DIR" ]; then
+            echo "Debug log exported: $DEBUG_DIR"
+          else
+            echo "No debug logs generated"
+          fi
+
+      - name: Post failure comment to PR
+        if: github.event_name == 'pull_request_target' && failure()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUM="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
+          ARTIFACT_URL="https://github.com/${REPO}/actions/runs/${{ github.run_id }}"
+
+          # Collect test result summary
+          TEST_SUMMARY=""
+          if ls tests/output/result-*.txt 1>/dev/null 2>&1; then
+            TEST_SUMMARY=$(cat tests/output/result-*.txt 2>/dev/null | head -50)
+          fi
+
+          # Collect debug log tail
+          DEBUG_TAIL=""
+          DEBUG_DIR=$(ls -td debug-log/*/ 2>/dev/null | head -1)
+          if [ -n "$DEBUG_DIR" ]; then
+            # Get the last 80 lines from agent logs
+            DEBUG_TAIL=$(find "$DEBUG_DIR" -name "*.log" -exec tail -20 {} + 2>/dev/null | tail -80)
+          fi
+
+          BODY="## ❌ Integration Tests Failed
+
+          **Commit:** ${{ github.event.pull_request.head.sha }}
+          **Workflow run:** [#${{ github.run_number }}](${ARTIFACT_URL})
+
+          <details>
+          <summary>Test Results</summary>
+
+          \`\`\`
+          ${TEST_SUMMARY:-No test output captured.}
+          \`\`\`
+
+          </details>
+
+          <details>
+          <summary>Debug Log (tail)</summary>
+
+          \`\`\`
+          ${DEBUG_TAIL:-No debug logs available.}
+          \`\`\`
+
+          </details>
+
+          ---
+          📦 [Download full debug logs & test artifacts](${ARTIFACT_URL}#artifacts)"
+
+          # Update or create comment
+          EXISTING=$(gh api "repos/$REPO/issues/$PR_NUM/comments" \
+            --jq '.[] | select(.body | startswith("## ❌ Integration Tests Failed")) | .id' | head -1)
+          if [ -n "$EXISTING" ]; then
+            gh api --method PATCH "repos/$REPO/issues/comments/$EXISTING" -f body="$BODY"
+          else
+            gh api --method POST "repos/$REPO/issues/$PR_NUM/comments" -f body="$BODY"
+          fi
+
       - name: Collect test artifacts
         if: always()
         run: |
           mkdir -p test-artifacts
           [ -d "tests/output" ] && cp -r tests/output/* test-artifacts/ 2>/dev/null || true
-          docker logs hiclaw-manager > test-artifacts/manager.log 2>&1 || true
-          docker exec hiclaw-manager cat /var/log/hiclaw/manager-agent.log \
-            > test-artifacts/manager-agent.log 2>&1 || true
-          for c in $(docker ps -a --format '{{.Names}}' | grep hiclaw-worker); do
-            docker logs "$c" > "test-artifacts/${c}.log" 2>&1 || true
-          done
+          [ -d "debug-log" ] && cp -r debug-log test-artifacts/debug-log 2>/dev/null || true
 
       - name: Upload test artifacts
         if: always()
@@ -224,6 +308,44 @@ jobs:
           name: test-artifacts-${{ github.sha }}
           path: test-artifacts/
           retention-days: 7
+
+      # ============================================================
+      # Release baseline: generate and upload on tag push
+      # ============================================================
+
+      - name: Generate release baseline
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          source tests/lib/agent-metrics.sh
+          TEST_NAMES=$(echo "$NON_GITHUB_TESTS" | tr ' ' '\n' | while read n; do
+            f=$(ls tests/output/metrics-*${n}*.json 2>/dev/null | head -1)
+            [ -n "$f" ] && basename "$f" .json | sed 's/^metrics-//'
+          done | tr '\n' ' ')
+          generate_metrics_summary $TEST_NAMES > metrics-baseline.json
+          echo "Baseline generated for ${GITHUB_REF_NAME}"
+          cat metrics-baseline.json | jq '{totals: .totals, by_role: .by_role}'
+
+      - name: Upload baseline to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" metrics-baseline.json \
+            --repo "${{ github.repository }}" --clobber
+          echo "✅ Baseline uploaded to release ${GITHUB_REF_NAME}"
+
+      - name: Upload debug log to release
+        if: startsWith(github.ref, 'refs/tags/v') && always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -d debug-log ]; then
+            cd debug-log && zip -r ../debug-log.zip . && cd ..
+            gh release upload "${GITHUB_REF_NAME}" debug-log.zip \
+              --repo "${{ github.repository }}" --clobber
+            echo "✅ Debug log uploaded to release ${GITHUB_REF_NAME}"
+          fi
 
       - name: Cleanup
         if: always()
@@ -239,11 +361,11 @@ jobs:
           echo "- Model: \`${{ inputs.model || 'qwen3.5-plus' }}\`" >> $GITHUB_STEP_SUMMARY
 
 # ============================================================
-# Release job: run tests and upload baseline to release assets
+# Manual baseline re-generation for a specific release version
 # ============================================================
 
   release-baseline:
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.baseline_version != '')
+    if: github.event_name == 'workflow_dispatch' && inputs.baseline_version != ''
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
@@ -253,18 +375,11 @@ jobs:
       - name: Resolve target version
         id: version
         run: |
-          if [ -n "${{ inputs.baseline_version }}" ]; then
-            echo "version=${{ inputs.baseline_version }}" >> $GITHUB_OUTPUT
-            echo "from_dispatch=true" >> $GITHUB_OUTPUT
-          else
-            echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
-            echo "from_dispatch=false" >> $GITHUB_OUTPUT
-          fi
+          echo "version=${{ inputs.baseline_version }}" >> $GITHUB_OUTPUT
 
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # When re-running a specific version, check out that tag's test scripts
           ref: ${{ steps.version.outputs.version }}
 
       - name: Set up Docker Buildx
@@ -273,21 +388,16 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y jq curl unzip
 
-      - name: Pull published image (manual re-run)
-        if: steps.version.outputs.from_dispatch == 'true'
+      - name: Pull published images
         run: |
           VERSION=${{ steps.version.outputs.version }}
           REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com/higress
           docker pull ${REGISTRY}/hiclaw-manager:${VERSION}
           docker pull ${REGISTRY}/hiclaw-worker:${VERSION}
+          docker pull ${REGISTRY}/hiclaw-docker-proxy:${VERSION}
           docker tag ${REGISTRY}/hiclaw-manager:${VERSION} hiclaw/manager-agent:${VERSION}
           docker tag ${REGISTRY}/hiclaw-worker:${VERSION} hiclaw/worker-agent:${VERSION}
-
-      - name: Build images from source (tag push)
-        if: steps.version.outputs.from_dispatch == 'false'
-        run: |
-          docker pull higress-registry.us-west-1.cr.aliyuncs.com/higress/openclaw-base:latest
-          make build-manager build-worker VERSION=${{ steps.version.outputs.version }} HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com
+          docker tag ${REGISTRY}/hiclaw-docker-proxy:${VERSION} hiclaw/docker-proxy:${VERSION}
 
       - name: Install HiClaw
         env:
@@ -297,8 +407,11 @@ jobs:
           HICLAW_NON_INTERACTIVE=1 \
           HICLAW_VERSION=$VERSION \
           HICLAW_MOUNT_SOCKET=1 \
+          HICLAW_MATRIX_E2EE=0 \
+          HICLAW_LLM_PROVIDER=qwen \
           HICLAW_INSTALL_MANAGER_IMAGE=hiclaw/manager-agent:${VERSION} \
           HICLAW_INSTALL_WORKER_IMAGE=hiclaw/worker-agent:${VERSION} \
+          HICLAW_INSTALL_DOCKER_PROXY_IMAGE=hiclaw/docker-proxy:${VERSION} \
           bash ./install/hiclaw-install.sh manager
 
       - name: Wait for Manager to be ready
@@ -338,6 +451,19 @@ jobs:
           echo "Baseline generated for version ${VERSION}"
           cat metrics-baseline.json | jq '{totals: .totals, by_role: .by_role}'
 
+      - name: Export debug logs
+        if: always()
+        continue-on-error: true
+        run: |
+          python3 scripts/export-debug-log.py --range 2h --no-redact
+          DEBUG_DIR=$(ls -td debug-log/*/ 2>/dev/null | head -1)
+          if [ -n "$DEBUG_DIR" ]; then
+            cd debug-log && zip -r ../debug-log.zip . && cd ..
+            echo "Debug log exported: $(du -sh debug-log.zip | cut -f1)"
+          else
+            echo "No debug logs generated"
+          fi
+
       - name: Upload baseline to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -346,6 +472,21 @@ jobs:
           gh release upload "${VERSION}" metrics-baseline.json \
             --repo "${{ github.repository }}" --clobber
           echo "✅ Baseline uploaded to release ${VERSION}"
+
+      - name: Upload debug log to release
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          if [ -f debug-log.zip ]; then
+            gh release upload "${VERSION}" debug-log.zip \
+              --repo "${{ github.repository }}" --clobber
+            echo "✅ Debug log uploaded to release ${VERSION}"
+          else
+            echo "No debug log to upload"
+          fi
 
       - name: Cleanup
         if: always()

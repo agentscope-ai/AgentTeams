@@ -79,3 +79,5 @@ manager/
 | `HICLAW_MINIO_PASSWORD` | Yes | - | MinIO root password |
 | `HICLAW_MANAGER_GATEWAY_KEY` | Yes | - | Manager's Higress consumer key |
 | `HICLAW_GITHUB_TOKEN` | No | - | GitHub PAT for MCP Server |
+| `HICLAW_NACOS_USERNAME` | No | - | Default Nacos username for `nacos://` package imports when URI omits `user:pass@` |
+| `HICLAW_NACOS_PASSWORD` | No | - | Default Nacos password for `nacos://` package imports when URI omits `user:pass@` |

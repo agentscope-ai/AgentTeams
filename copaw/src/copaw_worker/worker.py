@@ -282,7 +282,10 @@ class Worker:
 
         matrix_password = matrix_password.strip()
         matrix_cfg = openclaw_cfg.get("channels", {}).get("matrix", {})
-        homeserver = matrix_cfg.get("homeserver", "")
+        from .bridge import _port_remap, _is_in_container
+        homeserver = _port_remap(
+            matrix_cfg.get("homeserver", ""), _is_in_container()
+        )
 
         if not homeserver or not matrix_password:
             return openclaw_cfg
@@ -417,7 +420,6 @@ class Worker:
         skill_names = self.sync.list_skills()
         if not skill_names:
             logger.info("No extra skills in MinIO for worker %s", self.worker_name)
-            return
 
         for skill_name in skill_names:
             src_skill_dir = self.sync.local_dir / "skills" / skill_name
@@ -438,7 +440,26 @@ class Worker:
                     dst_file.chmod(dst_file.stat().st_mode | 0o111)
             logger.info("Installed MinIO skill: %s", skill_name)
 
-        console.print(f"[green]Skills installed: {', '.join(skill_names)}[/green]")
+        if skill_names:
+            console.print(f"[green]Skills installed: {', '.join(skill_names)}[/green]")
+
+        # 3. Remove stale skills from active_skills/ that are no longer in MinIO
+        #    and are not CoPaw builtins.
+        try:
+            import copaw.agents.skills as _skills_pkg
+            builtin_skills_root = Path(_skills_pkg.__file__).resolve().parent
+            builtin_names = {
+                c.name for c in builtin_skills_root.iterdir()
+                if c.is_dir() and not c.name.startswith("_")
+            }
+        except (ImportError, AttributeError):
+            builtin_names = set()
+
+        keep_names = builtin_names | set(skill_names) | {"file-sync"}
+        for child in list(active_skills_dir.iterdir()):
+            if child.is_dir() and child.name not in keep_names:
+                shutil.rmtree(child)
+                logger.info("Removed stale active skill: %s", child.name)
 
     def _dedup_customized_skills(self) -> None:
         """Remove customized skills that shadow CoPaw builtins.

@@ -1,7 +1,6 @@
 ---
 name: find-skills
-description: Helps users discover and install agent skills when they ask questions like "how do I do X", "find a skill for X", "is there a skill that can...", or express interest in extending capabilities. This skill should be used when the user is looking for functionality that might exist as an installable skill.
-assign_when: Worker needs to discover and install new skills to complete tasks, or user explicitly requests searching/installing skills
+description: Discover and install agent skills from the open ecosystem. Use when you encounter an unfamiliar domain, framework, or workflow that you lack specialized knowledge about, or when your coordinator suggests searching for skills before starting a task.
 ---
 
 # Find Skills
@@ -26,6 +25,8 @@ Use this skill when the user:
 ## What is the Skills CLI?
 
 The Skills CLI (`skills`) is the package manager for the open agent skills ecosystem. Skills are modular packages that extend agent capabilities with specialized knowledge, workflows, and tools.
+
+If `skills` command is not found, install it: `npm install -g skills`
 
 **Key commands:**
 
@@ -118,7 +119,7 @@ skills add <owner/repo@skill> -g -y
 
 The `-g` flag installs globally (user-level) and `-y` skips confirmation prompts.
 
-Note: Installed skills are automatically synced to MinIO within ~10 seconds. They will persist across container restarts.
+The default install location for `skills add -g` is `~/.agents/skills/`. In container mode this is symlinked to the worker's MinIO-synced skills directory. In host mode (non-container), you need to check `~/.agents/skills/` for installed skills and load them manually.
 
 ## Common Skill Categories
 

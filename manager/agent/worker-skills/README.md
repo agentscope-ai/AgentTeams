@@ -52,25 +52,21 @@ cat ~/workers-registry.json
 
 ## 注意
 
-- `file-sync` 是 bootstrap skill，内置于 Worker 镜像，无需通过此目录管理
-- `find-skills` 是可选的 skill，允许 Worker 从 skills.sh 或私有技能库发现和安装技能
+- 内置 skills（`file-sync`、`task-progress`、`project-participation`、`mcporter`、`find-skills`）由 Worker 镜像自动分配，无需通过此目录管理
 - 此目录中的 skills 由 Manager 统一维护，Worker 不能修改自己的 skills
-- Worker 的 skill 分配记录在 `~/workers-registry.json`
+- Worker 的 on-demand skill 分配记录在 `~/workers-registry.json`
 
 ## 内置 Skills
 
 | Skill | 说明 |
 |-------|------|
-| `file-sync` | Worker 与 MinIO 的文件同步（镜像内置，自动分配） |
-| `find-skills` | 从 Agent Skills 生态系统发现和安装技能（需 admin 启用） |
+| `file-sync` | Worker 与 MinIO 的文件同步 |
+| `task-progress` | 任务执行进度跟踪 |
+| `project-participation` | 多 Worker 项目协作 |
+| `mcporter` | MCP Server 工具调用 |
+| `find-skills` | 从 Agent Skills 生态系统发现和安装技能 |
 
 ### find-skills 配置
-
-在创建 Worker 时，Manager 会询问 admin 是否启用 `find-skills` 功能：
-
-- **启用后**：Worker 可以使用 `skills find` 搜索技能，使用 `skills add` 安装技能
-- **安全性**：Worker 运行在完全隔离的容器中，无法访问 admin 的任何个人敏感数据
-- **自定义技能库**：可以指定私有技能库 URL，默认使用公共 https://skills.sh
 
 环境变量：
 - `SKILLS_API_URL`：自定义技能库 API 端点（可选，默认 https://skills.sh）

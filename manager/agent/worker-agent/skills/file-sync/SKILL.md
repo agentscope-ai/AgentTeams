@@ -1,11 +1,11 @@
 ---
 name: file-sync
-description: Sync files with centralized storage. Use when Manager or another Worker notifies you of file updates (config changes, task files, shared data, collaboration artifacts).
+description: Sync files with centralized storage. Use when your coordinator or another Worker notifies you of file updates (config changes, task files, shared data, collaboration artifacts).
 ---
 
 # File Sync
 
-When the Manager or another Worker notifies you that files have been updated in centralized storage (e.g., config changes, task briefs, shared data, collaboration artifacts), run:
+When your coordinator or another Worker notifies you that files have been updated in centralized storage (e.g., config changes, task briefs, shared data, collaboration artifacts), run:
 
 ```bash
 hiclaw-sync

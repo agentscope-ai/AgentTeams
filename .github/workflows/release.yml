@@ -53,6 +53,8 @@ jobs:
           git push origin "${VERSION}" || echo "Tag already pushed, skipping"
 
       - name: Build release body
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           REGISTRY="${{ env.REGISTRY }}"
@@ -66,10 +68,17 @@ jobs:
             changelog="_No changelog entries recorded._"
           fi
 
+          # Generate auto release notes (PR list + contributors) via GitHub API
+          auto_notes=$(gh api "repos/${REPOSITORY}/releases/generate-notes" \
+            -f tag_name="${VERSION}" \
+            --jq '.body' 2>/dev/null || echo "")
+
           cat > /tmp/release-body.md << EOF
-          ## What's Changed
+          ## Highlights
 
           ${changelog}
+
+          ---
 
           ## Docker Images
 
@@ -81,7 +90,12 @@ jobs:
 
           # Worker
           docker pull ${REGISTRY}/${REPO}/hiclaw-worker:${VERSION}
+
+          # Docker Proxy
+          docker pull ${REGISTRY}/${REPO}/hiclaw-docker-proxy:${VERSION}
           \`\`\`
+
+          ---
 
           ## Quick Start
 
@@ -97,9 +111,15 @@ jobs:
           Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://higress.ai/hiclaw/install.ps1')
           \`\`\`
 
+          ---
+
           ## Documentation
 
           For more details, see the [installation guide](https://github.com/${REPOSITORY}/blob/main/install/README.md).
+
+          ---
+
+          ${auto_notes}
           EOF
 
       - name: Create GitHub Release

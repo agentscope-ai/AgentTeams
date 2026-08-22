@@ -1,0 +1,88 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: workers.hiclaw.io
+spec:
+  group: hiclaw.io
+  versions:
+    - name: v1beta1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [model]
+              properties:
+                model:
+                  type: string
+                  description: LLM model ID (e.g. claude-sonnet-4-6, qwen3.5-plus)
+                runtime:
+                  type: string
+                  enum: [openclaw, copaw]
+                  default: openclaw
+                image:
+                  type: string
+                  description: Custom Docker image for this worker
+                identity:
+                  type: string
+                  description: Worker public identity (generates IDENTITY.md; merged into SOUL.md for copaw)
+                soul:
+                  type: string
+                  description: Worker identity and role definition (generates SOUL.md)
+                agents:
+                  type: string
+                  description: Agent behavior rules (generates AGENTS.md)
+                skills:
+                  type: array
+                  items:
+                    type: string
+                  description: HiClaw built-in skills to enable
+                mcpServers:
+                  type: array
+                  items:
+                    type: string
+                  description: HiClaw built-in MCP Servers to authorize via Higress
+                package:
+                  type: string
+                  description: "Package URI: file://, http(s)://, nacos://, or packages/{name}.zip"
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: [Pending, Running, Updating, Stopped, Failed]
+                matrixUserID:
+                  type: string
+                roomID:
+                  type: string
+                containerState:
+                  type: string
+                lastHeartbeat:
+                  type: string
+                  format: date-time
+                message:
+                  type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Model
+          type: string
+          jsonPath: .spec.model
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Runtime
+          type: string
+          jsonPath: .spec.runtime
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+  scope: Namespaced
+  names:
+    plural: workers
+    singular: worker
+    kind: Worker
+    shortNames: [wk]

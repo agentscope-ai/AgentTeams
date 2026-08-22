@@ -46,7 +46,8 @@ matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
     "Ask Alice to perform these GitHub operations on the test repo: 1) Read the README.md, 2) Create a branch named 'test-alice-feature', 3) Create a new file docs/test.md with content 'Test from Alice', 4) Create a Pull Request."
 
 log_info "Waiting for Manager to relay GitHub task..."
-REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 180)
+REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 180 \
+    "${ADMIN_TOKEN}" "${DM_ROOM}" "Please check if the GitHub MCP task has been processed.")
 
 assert_not_empty "${REPLY}" "Manager acknowledged GitHub task"
 

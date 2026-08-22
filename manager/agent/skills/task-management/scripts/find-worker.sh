@@ -11,6 +11,7 @@
 #   find-worker.sh                          # list all workers with availability
 #   find-worker.sh --skills github-operations,git-delegation   # filter by skills
 #   find-worker.sh --worker alice           # show details for a specific worker
+#   find-worker.sh --team alpha-team        # filter by team membership
 #
 # Output: JSON with worker availability, workload, container status, and role.
 # The output is designed for the Manager Agent's Step 0 decision.
@@ -26,13 +27,15 @@ AGENTS_DIR="/root/hiclaw-fs/agents"
 
 FILTER_SKILLS=""
 FILTER_WORKER=""
+FILTER_TEAM=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --skills)       FILTER_SKILLS="$2"; shift 2 ;;
         --worker)       FILTER_WORKER="$2"; shift 2 ;;
+        --team)         FILTER_TEAM="$2"; shift 2 ;;
         *)
-            echo "Usage: $0 [--skills s1,s2] [--worker <name>]" >&2
+            echo "Usage: $0 [--skills s1,s2] [--worker <name>] [--team <team-name>]" >&2
             exit 1
             ;;
     esac
@@ -90,6 +93,13 @@ for worker in $WORKER_NAMES; do
     RUNTIME=$(echo "$REG_ENTRY" | jq -r '.runtime // "openclaw"')
     DEPLOYMENT=$(echo "$REG_ENTRY" | jq -r '.deployment // "local"')
     ROOM_ID=$(echo "$REG_ENTRY" | jq -r '.room_id // ""')
+    WORKER_ROLE=$(echo "$REG_ENTRY" | jq -r '.role // "worker"')
+    WORKER_TEAM_ID=$(echo "$REG_ENTRY" | jq -r '.team_id // ""')
+
+    # --- Team filter ---
+    if [ -n "$FILTER_TEAM" ] && [ "$WORKER_TEAM_ID" != "$FILTER_TEAM" ]; then
+        continue
+    fi
 
     # --- Skills filter ---
     if [ -n "$FILTER_SKILLS" ]; then
@@ -173,6 +183,8 @@ for worker in $WORKER_NAMES; do
         --arg deployment "$DEPLOYMENT" \
         --arg room_id "$ROOM_ID" \
         --arg role "$ROLE" \
+        --arg worker_role "$WORKER_ROLE" \
+        --arg team_id "$WORKER_TEAM_ID" \
         --arg idle_since "$IDLE_SINCE" \
         --argjson skills "$SKILLS" \
         --argjson finite_tasks "$FINITE_TASKS" \
@@ -182,6 +194,8 @@ for worker in $WORKER_NAMES; do
             name: $name,
             availability: $availability,
             role: (if $role == "" then null else $role end),
+            worker_role: $worker_role,
+            team_id: (if $team_id == "" then null else $team_id end),
             skills: $skills,
             runtime: $runtime,
             deployment: $deployment,

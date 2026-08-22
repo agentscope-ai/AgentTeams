@@ -1,0 +1,83 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: humans.hiclaw.io
+spec:
+  group: hiclaw.io
+  versions:
+    - name: v1beta1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [displayName, permissionLevel]
+              properties:
+                displayName:
+                  type: string
+                email:
+                  type: string
+                  format: email
+                permissionLevel:
+                  type: integer
+                  minimum: 1
+                  maximum: 3
+                  description: "1=Admin equivalent, 2=Team-scoped, 3=Worker-only (inclusive)"
+                accessibleTeams:
+                  type: array
+                  items:
+                    type: string
+                  description: Teams this human can access (L2)
+                accessibleWorkers:
+                  type: array
+                  items:
+                    type: string
+                  description: Standalone workers this human can access (L2/L3)
+                note:
+                  type: string
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: [Pending, Active, Failed]
+                matrixUserID:
+                  type: string
+                initialPassword:
+                  type: string
+                  description: "Generated password, shown once on creation"
+                rooms:
+                  type: array
+                  items:
+                    type: string
+                emailSent:
+                  type: boolean
+                message:
+                  type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Display Name
+          type: string
+          jsonPath: .spec.displayName
+        - name: Level
+          type: integer
+          jsonPath: .spec.permissionLevel
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Email Sent
+          type: boolean
+          jsonPath: .status.emailSent
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+  scope: Namespaced
+  names:
+    plural: humans
+    singular: human
+    kind: Human
+    shortNames: [hm]

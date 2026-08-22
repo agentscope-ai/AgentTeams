@@ -38,7 +38,8 @@ matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
     "I need Alice and Bob to collaborate on the test repo via GitHub. Alice should create a branch 'feature/alice-docs' and add a file docs/alice.md. Bob should create a branch 'feature/bob-api' and add a file src/bob.py. Both should create separate PRs."
 
 log_info "Waiting for Manager to coordinate..."
-REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 180)
+REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 180 \
+    "${ADMIN_TOKEN}" "${DM_ROOM}" "Please check if the GitHub collaboration task has been processed.")
 
 assert_not_empty "${REPLY}" "Manager acknowledged collaborative GitHub task"
 

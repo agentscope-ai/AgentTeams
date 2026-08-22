@@ -1,0 +1,98 @@
+name: Bug Report
+description: Report a bug in HiClaw
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Before submitting
+
+        Please export your Matrix message logs and use an AI tool to analyze them against the HiClaw codebase. This helps us fix bugs much faster.
+
+        ### Step 1: Export debug logs
+
+        ```bash
+        # Export Matrix messages + agent sessions (adjust time range as needed)
+        python scripts/export-debug-log.py --range 1h
+
+        # Or export a longer window if the bug happened earlier
+        python scripts/export-debug-log.py --range 1d
+        ```
+
+        PII is automatically redacted. Output is in `debug-log/{timestamp}/`.
+
+        ### Step 2: AI-assisted analysis
+
+        Open the HiClaw repo in Cursor, Claude Code, or similar AI tool, then ask it to analyze the exported logs:
+
+        > "Read the JSONL files in debug-log/. Analyze the Matrix message logs and agent session logs together. Cross-reference with the HiClaw codebase to identify the root cause of [describe your bug]. Focus on the agent interaction flow, tool call failures, and error patterns."
+
+        Paste the AI's analysis into the "AI Analysis" field below.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: What happened? What did you expect?
+      placeholder: |
+        What happened:
+        What I expected:
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal steps to trigger the bug
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: ai-analysis
+    attributes:
+      label: AI Analysis
+      description: Paste the AI tool's analysis of your exported message logs here. This dramatically speeds up debugging.
+      placeholder: |
+        Tool used: (e.g. Claude Code / Cursor / ...)
+        Analysis:
+        ...
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs
+      description: Paste any error logs, stack traces, or attach the exported zip (with PII redacted)
+      render: shell
+    validations:
+      required: false
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Manager Agent
+        - OpenClaw Worker
+        - CoPaw Worker
+        - Matrix / Synapse
+        - MinIO / File Sync
+        - Install / Setup
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version / Commit
+      description: "Output of: git rev-parse --short HEAD"
+      placeholder: e.g. 2588964
+    validations:
+      required: false

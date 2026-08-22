@@ -37,7 +37,7 @@
 #   - Higress Console running at http://127.0.0.1:8001
 
 set -euo pipefail
-source /opt/hiclaw/scripts/lib/base.sh
+source /opt/hiclaw/scripts/lib/hiclaw-env.sh
 
 # ============================================================
 # Parse arguments
@@ -82,6 +82,14 @@ fi
 MCP_SERVER_NAME="mcp-${SERVER_NAME}"
 REFERENCES_DIR="/opt/hiclaw/agent/skills/mcp-server-management/references"
 BUILTIN_YAML="${REFERENCES_DIR}/mcp-${SERVER_NAME}.yaml"
+
+# Cloud mode: MCP Server management via script is not yet supported
+if [ "${HICLAW_RUNTIME:-}" = "aliyun" ]; then
+    log "ERROR: MCP Server management via this script is not yet supported in cloud mode (HICLAW_RUNTIME=aliyun)."
+    log "Please manage MCP Servers through the Alibaba Cloud AI Gateway console instead."
+    log "Cloud MCP Server support will be added in a future release."
+    exit 1
+fi
 
 if [ -z "${HIGRESS_COOKIE_FILE:-}" ]; then
     log "ERROR: HIGRESS_COOKIE_FILE not set"
@@ -371,7 +379,8 @@ if [ -f "${REGISTRY_FILE}" ]; then
         # Backward-compatible symlink
         ln -sfn "${MCPORTER_FILE}" "${MCPORTER_COMPAT}"
         # Push to MinIO immediately (don't rely on mc mirror --watch)
-        mc cp "${MCPORTER_FILE}" "hiclaw/hiclaw-storage/agents/${wname}/config/mcporter.json" 2>/dev/null \
+        ensure_mc_credentials 2>/dev/null || true
+        mc cp "${MCPORTER_FILE}" "${HICLAW_STORAGE_PREFIX}/agents/${wname}/config/mcporter.json" 2>/dev/null \
             && log "  Pushed config/mcporter.json to MinIO for ${wname}" \
             || log "  WARNING: Failed to push config/mcporter.json to MinIO for ${wname}"
     done

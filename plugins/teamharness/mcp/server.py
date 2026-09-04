@@ -3161,7 +3161,7 @@ def _resolve_task_continuation(task: dict[str, Any], resolution: str) -> None:
         return
     continuation["status"] = "resolved"
     continuation["resolution"] = resolution
-    continuation["resolved_at"] = _utc_timestamp()
+    continuation["resolved_at"] = continuation.get("resolved_at") or _utc_timestamp()
     task["continuation"] = continuation
 
 
@@ -4793,7 +4793,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 )
                 if not submission_id:
                     raise ValueError("legacy submitted task has no submission identity and cannot be resubmitted")
-                if not task.get("result_digest") or task.get("resultDigest"):
+                if not task.get("result_digest"):
                     task["result_digest"] = persisted_digest
                     try:
                         _write_task(arguments, task)

@@ -677,6 +677,15 @@ def test_repeated_accept_repairs_a_missing_task_fence_without_reopening_report(
     stale_task = json.loads(task_path.read_text(encoding="utf-8"))
     assert stale_task["status"] == "submitted"
     assert stale_task["continuation"]["status"] == "pending"
+    original_resolved_at = "2026-08-13T08:59:00Z"
+    stale_task["continuation"].update(
+        {
+            "status": "resolved",
+            "resolution": "completed",
+            "resolved_at": original_resolved_at,
+        }
+    )
+    server._write_json(task_path, stale_task)
 
     repaired = _tool_payload(
         "projectflow",
@@ -700,6 +709,7 @@ def test_repeated_accept_repairs_a_missing_task_fence_without_reopening_report(
     repaired_task = json.loads(task_path.read_text(encoding="utf-8"))
     assert repaired_task["status"] == "completed"
     assert repaired_task["continuation"]["status"] == "resolved"
+    assert repaired_task["continuation"]["resolved_at"] == original_resolved_at
     assert repaired["project"]["requester_report"] == project["requester_report"]
     assert repaired["publishedArtifacts"] == []
 

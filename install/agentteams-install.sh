@@ -30,6 +30,8 @@
 #   AGENTTEAMS_VERSION            Image tag            (default: latest)
 #   AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION DeepSeek Harness runtime image tag (default: v0.1.0; independent of AGENTTEAMS_VERSION)
 #   AGENTTEAMS_REGISTRY           Image registry       (default: auto-detected by timezone)
+#   AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY
+#                                      Higress WASM plugin registry (default: cn-hangzhou primary)
 #   AGENTTEAMS_INSTALL_MANAGER_IMAGE       Override manager image (e.g., local build)
 #   AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE Override QwenPaw manager image (e.g., local build)
 #   AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE  Override legacy CoPaw manager image (e.g., local build)
@@ -1126,6 +1128,7 @@ detect_registry() {
 }
 
 AGENTTEAMS_REGISTRY="${AGENTTEAMS_REGISTRY:-$(detect_registry)}"
+AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY="${AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY:-higress-registry.cn-hangzhou.cr.aliyuncs.com}"
 # Backward compatibility: accept old env var names from previous versions
 AGENTTEAMS_INSTALL_CONTROLLER_IMAGE="${AGENTTEAMS_INSTALL_CONTROLLER_IMAGE:-${AGENTTEAMS_INSTALL_DOCKER_PROXY_IMAGE:-}}"
 # Image variables are resolved after version selection in step_version().
@@ -3617,8 +3620,9 @@ AGENTTEAMS_PODMAN_AUTOSTART=${AGENTTEAMS_PODMAN_AUTOSTART:-0}
 # JVM Args for Higress Console (fixes SIGILL on Apple Silicon)
 JVM_ARGS=${JVM_ARGS:-}
 
-# Higress WASM plugin image registry (auto-selected by timezone)
-HIGRESS_ADMIN_WASM_PLUGIN_IMAGE_REGISTRY=${AGENTTEAMS_REGISTRY}
+# Higress WASM plugin image registry
+AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY=${AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY}
+HIGRESS_ADMIN_WASM_PLUGIN_IMAGE_REGISTRY=${AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY}
 
 # Data persistence
 AGENTTEAMS_DATA_DIR=${AGENTTEAMS_DATA_DIR:-agentteams-data}

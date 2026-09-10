@@ -316,6 +316,28 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 				logger.Error(err, "failed to create LLM provider (non-fatal)")
 			}
 
+		case "orcarouter":
+			// OrcaRouter: OpenAI-compatible gateway (https://www.orcarouter.ai)
+			if err := i.Gateway.EnsureServiceSource(ctx, "orcarouter", "api.orcarouter.ai", 443, "https"); err != nil {
+				logger.Error(err, "failed to register orcarouter service source (non-fatal)")
+			}
+			time.Sleep(2 * time.Second)
+			raw := map[string]interface{}{
+				"agentteamsMode":          true,
+				"openaiCustomUrl":         "https://api.orcarouter.ai/v1",
+				"openaiCustomServiceName": "orcarouter.dns",
+				"openaiCustomServicePort": 443,
+			}
+			if err := i.Gateway.EnsureAIProvider(ctx, gateway.AIProviderRequest{
+				Name:     "orcarouter",
+				Type:     "openai",
+				Tokens:   []string{cfg.LLMAPIKey},
+				Protocol: "openai/v1",
+				Raw:      raw,
+			}); err != nil {
+				logger.Error(err, "failed to create LLM provider (non-fatal)")
+			}
+
 		case "openai-compat":
 			if cfg.OpenAIBaseURL == "" {
 				// No custom base URL — fall back to official OpenAI endpoint

@@ -275,7 +275,7 @@ For each Worker the controller typically:
 3. Adds that Consumer to AI Routes’ `allowedConsumers`.
 
 ```
-POST https://aigw-local.agentteams.io/v1/chat/completions
+POST http://aigw-local.agentteams.io:8080/v1/chat/completions
 Authorization: Bearer {GatewayKey}
 ```
 
@@ -284,11 +284,11 @@ The Worker’s `openclaw.json` points at the Gateway, not raw provider URLs.
 #### MCP path
 
 ```
-POST https://aigw-local.agentteams.io/mcp-servers/github/mcp
+POST http://aigw-local.agentteams.io:8080/mcp-servers/mcp-github/mcp
 Authorization: Bearer {GatewayKey}
 ```
 
-Central MCP registration + per-Consumer `allowedConsumers` + mcporter config pointing at Gateway endpoints.
+Central MCP registration + per-Consumer `allowedConsumers` + mcporter config pointing at Gateway endpoints. See the [Higress Gateway API reference](../usage/higress-gateway-api.md) for the full list of externally callable endpoints and ports.
 
 #### Fine-grained control
 

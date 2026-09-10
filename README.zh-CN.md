@@ -489,6 +489,7 @@ python scripts/export-debug-log.py --range 1h
 | [docs/zh-cn/design/architecture.md](docs/zh-cn/design/architecture.md) | 系统架构详解 |
 | [docs/zh-cn/usage/manager-guide.md](docs/zh-cn/usage/manager-guide.md) | Manager 配置与使用 |
 | [docs/zh-cn/usage/worker-guide.md](docs/zh-cn/usage/worker-guide.md) | Worker 部署与故障排查 |
+| [docs/zh-cn/usage/higress-gateway-api.md](docs/zh-cn/usage/higress-gateway-api.md) | Higress 网关对外接口参考（LLM / MCP / 暴露端口 / Console） |
 | [docs/zh-cn/usage/development.md](docs/zh-cn/usage/development.md) | 贡献指南与本地开发 |
 | [docs/zh-cn/usage/troubleshooting/faq.md](docs/zh-cn/usage/troubleshooting/faq.md) | 常见问题 |
 

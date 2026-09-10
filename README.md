@@ -434,6 +434,7 @@ Browse the [documentation directory](docs/), or start with the overview and quic
 | [docs/usage/manager-guide.md](docs/usage/manager-guide.md) | Manager configuration |
 | [docs/usage/worker-guide.md](docs/usage/worker-guide.md) | Worker deployment |
 | [docs/usage/project-workflow-api.md](docs/usage/project-workflow-api.md) | Project / workflow inspection API (also available in [中文](docs/zh-cn/usage/project-workflow-api.md)) |
+| [docs/usage/higress-gateway-api.md](docs/usage/higress-gateway-api.md) | Higress gateway external API reference (LLM / MCP / exposed ports / Console) (also available in [中文](docs/zh-cn/usage/higress-gateway-api.md)) |
 | [docs/usage/development.md](docs/usage/development.md) | Contributing and local dev |
 
 ## Troubleshooting

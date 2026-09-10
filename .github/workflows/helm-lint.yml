@@ -15,6 +15,7 @@ on:
       - 'openhuman/scripts/openhuman-worker-entrypoint.sh'
       - 'tests/check-agentteams-rename-defaults.sh'
       - 'tests/check-installer-pre-1.2-env-compat.sh'
+      - 'tests/check-installer-token-plan-models.sh'
       - 'tests/check-installer-embedded-latest-pull.sh'
       - 'tests/check-installer-qwenpaw-runtime-options.sh'
       - 'tests/check-installer-deepseek-harness-runtime-options.sh'
@@ -36,6 +37,9 @@ jobs:
 
       - name: Check pre-v1.2 installer compatibility
         run: bash tests/check-installer-pre-1.2-env-compat.sh
+
+      - name: Check installer Token Plan models
+        run: bash tests/check-installer-token-plan-models.sh
 
       - name: Check embedded latest image pulling
         run: bash tests/check-installer-embedded-latest-pull.sh

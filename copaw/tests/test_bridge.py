@@ -754,3 +754,86 @@ def test_providers_json_no_input_field_no_capability_flags():
     providers = _run_bridge_and_read_providers(cfg)
     model = providers["custom_providers"]["gw"]["models"][0]
     assert model == {"id": "plain-model", "name": "plain-model"}
+
+
+def test_providers_json_propagates_reasoning_false_as_generate_kwargs():
+    """OpenClaw ``reasoning: false`` must become CoPaw enable_thinking=false."""
+    cfg = {
+        "channels": {"matrix": {"enabled": True}},
+        "models": {
+            "providers": {
+                "gw": {
+                    "baseUrl": "http://aigw:8080/v1",
+                    "apiKey": "key123",
+                    "models": [
+                        {
+                            "id": "qwen3.6-plus",
+                            "name": "qwen3.6-plus",
+                            "reasoning": False,
+                            "input": ["text", "image"],
+                        },
+                        {
+                            "id": "claude-sonnet-4-6",
+                            "name": "claude-sonnet-4-6",
+                            "reasoning": True,
+                            "input": ["text", "image"],
+                        },
+                    ],
+                }
+            }
+        },
+        "agents": {
+            "defaults": {"model": {"primary": "gw/qwen3.6-plus"}}
+        },
+    }
+    providers = _run_bridge_and_read_providers(cfg)
+    provider = providers["custom_providers"]["gw"]
+    by_id = {m["id"]: m for m in provider["models"]}
+
+    assert by_id["qwen3.6-plus"]["generate_kwargs"] == {
+        "extra_body": {"enable_thinking": False},
+    }
+    assert "generate_kwargs" not in by_id["claude-sonnet-4-6"]
+    # Bridge keeps thinking control on the model entry only.
+    assert "generate_kwargs" not in provider
+
+
+def test_providers_json_sibling_reasoning_false_does_not_force_provider():
+    """A sibling with reasoning:false must not set provider-level generate_kwargs."""
+    cfg = {
+        "channels": {"matrix": {"enabled": True}},
+        "models": {
+            "providers": {
+                "gw": {
+                    "baseUrl": "http://aigw:8080/v1",
+                    "apiKey": "key123",
+                    "models": [
+                        {
+                            "id": "qwen3.6-plus",
+                            "name": "qwen3.6-plus",
+                            "reasoning": False,
+                            "input": ["text", "image"],
+                        },
+                        {
+                            "id": "deepseek-reasoner",
+                            "name": "deepseek-reasoner",
+                            "reasoning": True,
+                            "input": ["text"],
+                        },
+                    ],
+                }
+            }
+        },
+        "agents": {
+            "defaults": {"model": {"primary": "gw/deepseek-reasoner"}}
+        },
+    }
+    providers = _run_bridge_and_read_providers(cfg)
+    provider = providers["custom_providers"]["gw"]
+    by_id = {m["id"]: m for m in provider["models"]}
+
+    assert by_id["qwen3.6-plus"]["generate_kwargs"] == {
+        "extra_body": {"enable_thinking": False},
+    }
+    assert "generate_kwargs" not in by_id["deepseek-reasoner"]
+    assert "generate_kwargs" not in provider

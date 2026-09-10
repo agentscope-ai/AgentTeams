@@ -3,6 +3,7 @@ package initializer
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -340,15 +341,27 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 					if strings.HasPrefix(cfg.OpenAIBaseURL, "http://") {
 						proto = "http"
 					}
-					if err := i.Gateway.EnsureServiceSource(ctx, "openai-compat", host, port, proto); err != nil {
-						logger.Error(err, "failed to register openai-compat service source (non-fatal)")
+					svcName := "openai-compat"
+					svcSuffix := "dns"
+					if net.ParseIP(host) != nil {
+						// Bare IP addresses cannot be registered as DNS-type service sources
+						// (Higress console checkDomain rejects IPs, and Envoy DNS clusters
+						// cannot resolve them); use a static service source instead.
+						svcSuffix = "static"
+						if err := i.Gateway.EnsureStaticServiceSource(ctx, svcName, host, port); err != nil {
+							logger.Error(err, "failed to register openai-compat static service source (non-fatal)")
+						}
+					} else {
+						if err := i.Gateway.EnsureServiceSource(ctx, svcName, host, port, proto); err != nil {
+							logger.Error(err, "failed to register openai-compat service source (non-fatal)")
+						}
 					}
-					// Wait for DNS service source to propagate before creating provider
+					// Wait for service source to propagate before creating provider
 					time.Sleep(2 * time.Second)
 					raw := map[string]interface{}{
 						"agentteamsMode":          true,
 						"openaiCustomUrl":         cfg.OpenAIBaseURL,
-						"openaiCustomServiceName": "openai-compat.dns",
+						"openaiCustomServiceName": svcName + "." + svcSuffix,
 						"openaiCustomServicePort": port,
 					}
 					if err := i.Gateway.EnsureAIProvider(ctx, gateway.AIProviderRequest{
@@ -375,14 +388,24 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 					if strings.HasPrefix(cfg.OpenAIBaseURL, "http://") {
 						proto = "http"
 					}
-					if err := i.Gateway.EnsureServiceSource(ctx, provider, host, port, proto); err != nil {
-						logger.Error(err, "failed to register service source for provider (non-fatal)")
+					svcSuffix := "dns"
+					if net.ParseIP(host) != nil {
+						// Bare IP addresses cannot be registered as DNS-type service sources;
+						// use a static service source instead.
+						svcSuffix = "static"
+						if err := i.Gateway.EnsureStaticServiceSource(ctx, provider, host, port); err != nil {
+							logger.Error(err, "failed to register static service source for provider (non-fatal)")
+						}
+					} else {
+						if err := i.Gateway.EnsureServiceSource(ctx, provider, host, port, proto); err != nil {
+							logger.Error(err, "failed to register service source for provider (non-fatal)")
+						}
 					}
 					time.Sleep(2 * time.Second)
 					raw := map[string]interface{}{
 						"agentteamsMode":          true,
 						"openaiCustomUrl":         cfg.OpenAIBaseURL,
-						"openaiCustomServiceName": provider + ".dns",
+						"openaiCustomServiceName": provider + "." + svcSuffix,
 						"openaiCustomServicePort": port,
 					}
 					if err := i.Gateway.EnsureAIProvider(ctx, gateway.AIProviderRequest{

@@ -365,7 +365,7 @@ $script:Messages = @{
     "llm.codingplan.model.qwen36plus" = @{ zh = "  1) qwen3.6-plus  - 千问 3.6（推荐）"; en = "  1) qwen3.6-plus  - Qwen 3.6 (recommended)" }
     "llm.codingplan.model.glm5" = @{ zh = "  2) glm-5  - 智谱 GLM-5（编程推荐）"; en = "  2) glm-5  - Zhipu GLM-5 (recommended for coding)" }
     "llm.codingplan.model.kimi" = @{ zh = "  3) kimi-k2.5  - Moonshot Kimi K2.5"; en = "  3) kimi-k2.5  - Moonshot Kimi K2.5" }
-    "llm.codingplan.model.minimax" = @{ zh = "  4) MiniMax-M2.5  - MiniMax M2.5"; en = "  4) MiniMax-M2.5  - MiniMax M2.5" }
+    "llm.codingplan.model.minimax" = @{ zh = "  4) MiniMax-M3  - MiniMax M3"; en = "  4) MiniMax-M3  - MiniMax M3" }
     "llm.codingplan.model.select" = @{ zh = "选择模型 [1/2/3/4]"; en = "Select model [1/2/3/4]" }
     "llm.provider.selected_tokenplan" = @{ zh = "  提供商: 阿里云通义 Token 套餐（兼容模式）"; en = "  Provider: Alibaba Cloud Token Plan (compatible mode)" }
     "llm.provider.selected_codingplan" = @{ zh = "  提供商: 阿里云通义 Token 套餐（alibaba-cloud）"; en = "  Provider: Qwen Cloud (international) (alibaba-cloud)" }
@@ -727,7 +727,7 @@ $script:KnownModels = @(
     "gpt-5.4", "gpt-5.3-codex", "gpt-5-mini", "gpt-5-nano",
     "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5",
     "qwen3.6-plus", "qwen3.5-plus", "deepseek-chat", "deepseek-reasoner",
-    "kimi-k2.5", "glm-5", "MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5"
+    "kimi-k2.5", "glm-5", "MiniMax-M3", "MiniMax-M2.7"
 )
 
 function Test-KnownModel {
@@ -1848,7 +1848,7 @@ function Step-Llm {
                         "qwen3.6-plus" { "1" }
                         "glm-5"         { "2" }
                         "kimi-k2.5"     { "3" }
-                        "MiniMax-M2.5"  { "4" }
+                        "MiniMax-M3"    { "4" }
                         default         { "1" }
                     }
                     $codingPlanModelChoice = Read-Host "$(Get-Msg 'llm.codingplan.model.select') [${defaultModel}]"
@@ -1864,7 +1864,7 @@ function Step-Llm {
                     "^(1|qwen3\.6-plus)$"  { $script:config.DEFAULT_MODEL = "qwen3.6-plus" }
                     "^(2|glm-5)$"          { $script:config.DEFAULT_MODEL = "glm-5" }
                     "^(3|kimi-k2\.5)$"     { $script:config.DEFAULT_MODEL = "kimi-k2.5" }
-                    "^(4|MiniMax-M2\.5)$"  { $script:config.DEFAULT_MODEL = "MiniMax-M2.5" }
+                    "^(4|MiniMax-M3)$"      { $script:config.DEFAULT_MODEL = "MiniMax-M3" }
                     default                { $script:config.DEFAULT_MODEL = "qwen3.6-plus" }
                 }
                 Write-Log (Get-Msg "llm.provider.selected_codingplan")
@@ -1900,7 +1900,7 @@ function Step-Llm {
                             "qwen3.6-plus" { "1" }
                             "glm-5"         { "2" }
                             "kimi-k2.5"     { "3" }
-                            "MiniMax-M2.5"  { "4" }
+                            "MiniMax-M3"    { "4" }
                             default         { "1" }
                         }
                         $codingPlanModelChoice = Read-Host "$(Get-Msg 'llm.codingplan.model.select') [${defaultModel}]"
@@ -1916,7 +1916,7 @@ function Step-Llm {
                         "^(1|qwen3\.6-plus)$"  { $script:config.DEFAULT_MODEL = "qwen3.6-plus" }
                         "^(2|glm-5)$"          { $script:config.DEFAULT_MODEL = "glm-5" }
                         "^(3|kimi-k2\.5)$"     { $script:config.DEFAULT_MODEL = "kimi-k2.5" }
-                        "^(4|MiniMax-M2\.5)$"  { $script:config.DEFAULT_MODEL = "MiniMax-M2.5" }
+                        "^(4|MiniMax-M3)$"      { $script:config.DEFAULT_MODEL = "MiniMax-M3" }
                         default                { $script:config.DEFAULT_MODEL = "qwen3.6-plus" }
                     }
                     Write-Log (Get-Msg "llm.provider.selected_tokenplan")

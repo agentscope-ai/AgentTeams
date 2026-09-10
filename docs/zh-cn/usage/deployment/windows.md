@@ -201,7 +201,7 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; 
   1) qwen3.5-plus  - 千问 3.5（速度最快）
   2) glm-5  - 智谱 GLM-5（编程推荐）
   3) kimi-k2.5  - Moonshot Kimi K2.5
-  4) MiniMax-M2.5  - MiniMax M2.5
+  4) MiniMax-M3  - MiniMax M3
 
 选择模型 [1/2/3/4]:
 ```

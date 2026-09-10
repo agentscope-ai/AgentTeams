@@ -412,9 +412,8 @@ func defaultModelSpec(modelName string) ModelSpec {
 		"deepseek-reasoner":      {256000, 128000, false, true},
 		"kimi-k2.5":              {256000, 128000, true, true},
 		"glm-5":                  {200000, 128000, false, true},
-		"MiniMax-M2.7":           {200000, 128000, false, true},
-		"MiniMax-M2.7-highspeed": {200000, 128000, false, true},
-		"MiniMax-M2.5":           {200000, 128000, false, true},
+		"MiniMax-M2.7":           {204800, 128000, false, true},
+		"MiniMax-M3":             {1000000, 128000, true, true},
 	}
 
 	p, found := presets[modelName]
@@ -475,7 +474,7 @@ func (g *Generator) allModelSpecs(selectedModel string) []ModelSpec {
 		"qwen3.6-plus", "qwen3.5-plus",
 		"deepseek-chat", "deepseek-reasoner",
 		"kimi-k2.5", "glm-5",
-		"MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5",
+		"MiniMax-M3", "MiniMax-M2.7",
 	}
 
 	specs := make([]ModelSpec, 0, len(allModels)+1)
@@ -499,7 +498,7 @@ func (g *Generator) allModelAliases(selectedModel string) map[string]interface{}
 		"qwen3.6-plus", "qwen3.5-plus",
 		"deepseek-chat", "deepseek-reasoner",
 		"kimi-k2.5", "glm-5",
-		"MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5",
+		"MiniMax-M3", "MiniMax-M2.7",
 	}
 
 	aliases := make(map[string]interface{})

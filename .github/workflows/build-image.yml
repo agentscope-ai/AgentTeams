@@ -40,15 +40,32 @@ jobs:
           esac
           ref="${REGISTRY}/${REPO}/${image}:${VERSION}"
           ready=false
-          if manifest="$(docker buildx imagetools inspect "$ref" --raw)" &&
-            jq -e '
+          error_file="$(mktemp)"
+          trap 'rm -f "$error_file"' EXIT
+          if manifest="$(docker buildx imagetools inspect "$ref" --raw 2>"$error_file")"; then
+            # A successful command must still return a recognizable manifest.
+            jq -e 'type == "object" and
+              ((.manifests | type) == "array" or
+               ((.config | type) == "object" and (.layers | type) == "array"))
+            ' >/dev/null <<<"$manifest" || {
+              echo "ERROR: invalid manifest returned for $ref"
+              exit 1
+            }
+            if jq -e '
               any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "amd64") and
               any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "arm64")
             ' >/dev/null <<<"$manifest"; then
-            ready=true
-            echo "Reusing $ref: both required architectures exist; skipping build and push."
+              ready=true
+              echo "Reusing $ref: both required architectures exist; skipping build and push."
+            else
+              echo "Required architectures are incomplete for $ref; building."
+            fi
+          elif [[ "$(cat "$error_file")" == "ERROR: ${ref}: not found" ]]; then
+            echo "Image $ref does not exist; building."
           else
-            echo "No complete multi-architecture image verified for $ref; building."
+            cat "$error_file" >&2
+            echo "ERROR: cannot determine whether $ref exists; refusing to rebuild."
+            exit 1
           fi
           echo "ready=$ready" >> "$GITHUB_OUTPUT"
 

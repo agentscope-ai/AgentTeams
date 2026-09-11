@@ -106,10 +106,18 @@ class BuildWorkflowTests(unittest.TestCase):
         single = json.dumps({'manifests': [{'platform': {'os': 'linux', 'architecture': 'amd64'}}]})
         with tempfile.TemporaryDirectory() as directory:
             stub = Path(directory) / 'docker'
-            stub.write_text('#!/bin/bash\nprintf "%s" "$4" > "$IMAGE_LOG"\nprintf "%s" "$MANIFEST"\nexit "$STATUS"\n')
+            stub.write_text('#!/bin/bash\nprintf "%s" "$4" > "$IMAGE_LOG"\nprintf "%s" "$MANIFEST"\nif [[ "$ERROR" == missing ]]; then printf "ERROR: %s: not found\\n" "$4" >&2; else printf "%s" "$ERROR" >&2; fi\nexit "$STATUS"\n')
             stub.chmod(0o755)
             for target in set(BUILD['jobs']) - {'prepare', 'release'}:
-                for manifest, status, ready in [(both, '0', 'true'), (single, '0', 'false'), ('', '1', 'false'), ('not-json', '0', 'false'), ('', '0', 'false')]:
+                for manifest, status, error, ready in [
+                    (both, '0', '', 'true'), (single, '0', '', 'false'),
+                    ('', '1', 'missing', 'false'),
+                    ('', '1', 'ERROR: timeout', None),
+                    ('', '1', 'ERROR: 401 Unauthorized', None),
+                    ('', '1', 'ERROR: 429 Too Many Requests', None),
+                    ('', '1', 'ERROR: proxy: not found', None),
+                    ('not-json', '0', '', None), ('', '0', '', None),
+                ]:
                     with self.subTest(target=target, status=status, manifest=manifest):
                         output = Path(directory) / 'output'
                         output.write_text('')
@@ -117,9 +125,9 @@ class BuildWorkflowTests(unittest.TestCase):
                         result = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', check['run']], capture_output=True, text=True,
                                                 env={**os.environ, 'PATH': directory + ':' + os.environ['PATH'],
                                                      'TARGET': target, 'VERSION': 'v1.2.3', 'REGISTRY': 'example.test', 'REPO': 'agentteams',
-                                                     'MANIFEST': manifest, 'STATUS': status, 'GITHUB_OUTPUT': str(output), 'IMAGE_LOG': str(log)})
-                        self.assertEqual(result.returncode, 0, result.stderr)
-                        self.assertEqual(output.read_text(), 'ready=' + ready + '\n')
+                                                     'MANIFEST': manifest, 'STATUS': status, 'ERROR': error, 'GITHUB_OUTPUT': str(output), 'IMAGE_LOG': str(log)})
+                        self.assertEqual(result.returncode == 0, ready is not None, result.stderr)
+                        self.assertEqual(output.read_text(), 'ready=' + ready + '\n' if ready is not None else '')
                         image = target if target in ['openclaw-base', 'agentteams-controller'] else 'agentteams-' + target
                         self.assertEqual(log.read_text(), f'example.test/agentteams/{image}:v1.2.3')
 

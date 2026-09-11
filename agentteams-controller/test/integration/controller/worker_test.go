@@ -359,6 +359,9 @@ func TestWorkerPodDeleted_Recreates(t *testing.T) {
 
 	workerName := fixtures.UniqueName("test-pod-deleted")
 	worker := fixtures.NewTestWorker(workerName)
+	worker.Spec.Env = map[string]string{
+		"WORKER_SETTING": "preserve-me",
+	}
 
 	if err := k8sClient.Create(ctx, worker); err != nil {
 		t.Fatalf("failed to create Worker CR: %v", err)
@@ -383,6 +386,14 @@ func TestWorkerPodDeleted_Recreates(t *testing.T) {
 
 	// Phase should converge back to Running after recreation.
 	waitForRunning(t, worker)
+
+	recreated, ok := mockBackend.FindCreateReq(workerName)
+	if !ok {
+		t.Fatalf("no backend.Create request recorded for recreated worker %q", workerName)
+	}
+	if got := recreated.Env["WORKER_SETTING"]; got != "preserve-me" {
+		t.Errorf("recreated worker env WORKER_SETTING=%q, want %q", got, "preserve-me")
+	}
 }
 
 // ---------------------------------------------------------------------------

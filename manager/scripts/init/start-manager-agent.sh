@@ -914,11 +914,13 @@ if [ "${CMS_TRACES_ENABLED}" = "true" ]; then
 fi
 
 # ============================================================
-# Detect container runtime (for Worker creation)
+# Detect container runtime for explicit Worker management commands.
+# Worker recovery is owned by the controller reconciliation loop; this
+# startup script must not create Worker resources.
 # ============================================================
 source /opt/agentteams/scripts/lib/container-api.sh
 if container_api_available; then
-    log "Container runtime socket detected at ${CONTAINER_SOCKET} — direct Worker creation enabled"
+    log "Container runtime socket detected at ${CONTAINER_SOCKET} — Worker management enabled"
     export AGENTTEAMS_CONTAINER_RUNTIME="socket"
 elif [ "${AGENTTEAMS_RUNTIME}" = "aliyun" ] || [ "${AGENTTEAMS_RUNTIME}" = "k8s" ]; then
     log "Cloud/K8s mode — Workers created via controller API"
@@ -926,61 +928,6 @@ elif [ "${AGENTTEAMS_RUNTIME}" = "aliyun" ] || [ "${AGENTTEAMS_RUNTIME}" = "k8s"
 else
     log "No container runtime found — Worker creation will output install commands"
     export AGENTTEAMS_CONTAINER_RUNTIME="none"
-fi
-
-# ============================================================
-# Recreate Worker containers as needed after Manager restart.
-# Workers are on agentteams-net; Docker DNS resolves *-local.agentteams.io via
-# the Manager's network aliases, so IP changes don't require worker recreation.
-# Only recreate stopped/missing workers.
-# ============================================================
-if container_api_available; then
-    _workers_json=$(agt get workers -o json 2>/dev/null || echo '{"workers":[]}')
-    for _worker_name in $(echo "${_workers_json}" | jq -r '.workers[].name'); do
-            [ -z "${_worker_name}" ] && continue
-
-            _status=$(container_status_worker "${_worker_name}")
-            if [ "${_status}" = "running" ]; then
-                log "Worker running: ${_worker_name}, skipping"
-                continue
-            fi
-            # Container missing or stopped — recreate.
-            log "Worker container ${_status}: ${_worker_name}, recreating..."
-            _creds_file="/data/worker-creds/${_worker_name}.env"
-            if [ -f "${_creds_file}" ]; then
-                source "${_creds_file}"
-                _runtime=$(echo "${_workers_json}" | jq -r --arg w "${_worker_name}" '.workers[] | select(.name == $w) | .runtime // "openclaw"')
-                _recreated=false
-                for _attempt in 1 2 3; do
-                    _env_map=""
-                    _create_body=""
-                    _env_map=$(jq -cn \
-                        --arg name "${_worker_name}" \
-                        --arg fak "${_worker_name}" \
-                        --arg fsk "${WORKER_MINIO_PASSWORD:-}" \
-                        --arg fs_domain "${AGENTTEAMS_FS_DOMAIN:-fs-local.agentteams.io}" \
-                        --arg controller_url "${AGENTTEAMS_CONTROLLER_URL:-}" \
-                        '{
-                            "AGENTTEAMS_WORKER_NAME": $name,
-                            "AGENTTEAMS_FS_ENDPOINT": ("http://" + ($fs_domain | split(":")[0]) + ":9000"),
-                            "AGENTTEAMS_FS_ACCESS_KEY": $fak,
-                            "AGENTTEAMS_FS_SECRET_KEY": $fsk
-                        }
-                        | if $controller_url != "" then . + {"AGENTTEAMS_CONTROLLER_URL": $controller_url} else . end')
-                    _create_body=$(jq -cn --arg name "${_worker_name}" --arg runtime "${_runtime}" --argjson env "${_env_map}" '{name: $name, runtime: $runtime, env: $env}')
-                    worker_backend_create "${_create_body}" > /dev/null 2>&1 && _recreated=true && break
-                    log "  Attempt ${_attempt}/3 failed for ${_worker_name}, retrying in $((5 * _attempt))s..."
-                    sleep $((5 * _attempt))
-                done
-                if [ "${_recreated}" = true ]; then
-                    log "  Recreated ${_runtime} worker: ${_worker_name}"
-                else
-                    log "  ERROR: Failed to recreate ${_worker_name} after 3 attempts"
-                fi
-            else
-                log "  WARNING: No credentials found for ${_worker_name} (${_creds_file} missing), skipping"
-            fi
-    done
 fi
 
 # ============================================================

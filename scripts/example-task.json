@@ -1,0 +1,12 @@
+{
+  "team": "demo-team",
+  "skill": "analyze_request",
+  "params": {
+    "request": "Analyze this customer request and return a recommendation",
+    "priority": "medium"
+  },
+  "metadata": {
+    "external_job_id": "crm-2026-001",
+    "context": "Customer CRM ticket #4821: Request for quarterly report analysis"
+  }
+}

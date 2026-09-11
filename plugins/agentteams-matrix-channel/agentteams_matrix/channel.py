@@ -86,6 +86,8 @@ TYPING_SERVER_TIMEOUT_MS = 30000
 TYPING_RENEWAL_INTERVAL_S = 25
 TYPING_MAX_DURATION_S = 120
 DM_CACHE_TTL_MS = 30_000
+DM_MEMBERSHIP_TIMEOUT_S = 5.0
+MATRIX_EVENT_CALLBACK_TIMEOUT_S = 120.0
 TASK_ROOM_CACHE_TTL_MS = 30_000
 MATRIX_EVENT_PROTOCOL_LIMIT_BYTES = 64 * 1024
 MATRIX_TEXT_EVENT_SAFE_BYTES = (MATRIX_EVENT_PROTOCOL_LIMIT_BYTES * 3) // 4
@@ -409,7 +411,10 @@ class AgentTeamsMatrixChannel(BaseChannel):
         self._client: Optional[AsyncClient] = None
         self._user_id: Optional[str] = None
         self._sync_task: Optional[asyncio.Task] = None
+        self._callback_tasks: set[asyncio.Task[Any]] = set()
+        self._room_callback_locks: Dict[str, asyncio.Lock] = {}
         self._typing_tasks: Dict[str, asyncio.Task] = {}
+        self._typing_locks: Dict[str, asyncio.Lock] = {}
         self._room_histories: Dict[str, List[HistoryEntry]] = {}
         self._dm_room_cache: Dict[str, Dict[str, Any]] = {}
         self._teamharness_task_room_cache: Dict[str, Dict[str, Any]] = {}
@@ -790,13 +795,106 @@ class AgentTeamsMatrixChannel(BaseChannel):
         logger.error("MatrixChannel: token login failed component=matrix response_type=%s", type(whoami).__name__)
         return False
 
+    def _schedule_event_callback(
+        self,
+        callback: Callable[[MatrixRoom, Any], Any],
+        room: MatrixRoom,
+        event: Any,
+    ) -> None:
+        """Schedule a room callback without blocking matrix-nio sync.
+
+        matrix-nio awaits event callbacks serially while handling a sync
+        response.  Matrix metadata and UX calls in the handlers are allowed
+        to use the network, so run them independently and keep their failures
+        visible instead of letting one callback stall all later events.
+        """
+        task = asyncio.create_task(
+            self._run_event_callback(callback, room, event),
+            name=(
+                "matrix-event-"
+                f"{getattr(callback, '__name__', 'callback')}-"
+                f"{str(getattr(event, 'event_id', ''))[:16]}"
+            ),
+        )
+        self._callback_tasks.add(task)
+        task.add_done_callback(self._callback_tasks.discard)
+
+    def _get_room_callback_lock(self, room_id: str) -> asyncio.Lock:
+        """Return the lock that serializes callbacks for one Matrix room."""
+        locks = getattr(self, "_room_callback_locks", None)
+        if locks is None:
+            locks = {}
+            self._room_callback_locks = locks
+        return locks.setdefault(room_id, asyncio.Lock())
+
+    async def _run_event_callback(
+        self,
+        callback: Callable[[MatrixRoom, Any], Any],
+        room: MatrixRoom,
+        event: Any,
+    ) -> None:
+        event_id = str(getattr(event, "event_id", "") or "")
+        room_id = str(getattr(room, "room_id", "") or "")
+        try:
+            # Keep callbacks for one room ordered because handlers share
+            # room history and typing state.  Callbacks for other rooms can
+            # still make progress while this one waits or performs I/O.
+            async with self._get_room_callback_lock(room_id):
+                await asyncio.wait_for(
+                    callback(room, event),
+                    timeout=MATRIX_EVENT_CALLBACK_TIMEOUT_S,
+                )
+        except asyncio.TimeoutError:
+            logger.error(
+                "MatrixChannel: event callback timed out component=matrix "
+                "callback=%s event_id=%s sender=%s timeout_s=%s",
+                getattr(callback, "__name__", "callback"),
+                event_id,
+                getattr(event, "sender", ""),
+                MATRIX_EVENT_CALLBACK_TIMEOUT_S,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "MatrixChannel: event callback failed component=matrix "
+                "callback=%s event_id=%s sender=%s",
+                getattr(callback, "__name__", "callback"),
+                event_id,
+                getattr(event, "sender", ""),
+            )
+
+    def _schedule_room_event(self, room: MatrixRoom, event: Any) -> None:
+        self._schedule_event_callback(self._on_room_event, room, event)
+
+    def _schedule_room_media_event(
+        self,
+        room: MatrixRoom,
+        event: Any,
+    ) -> None:
+        self._schedule_event_callback(self._on_room_media_event, room, event)
+
+    def _schedule_room_encrypted_media_event(
+        self,
+        room: MatrixRoom,
+        event: Any,
+    ) -> None:
+        self._schedule_event_callback(
+            self._on_room_encrypted_media_event,
+            room,
+            event,
+        )
+
+    def _schedule_megolm_event(self, room: MatrixRoom, event: Any) -> None:
+        self._schedule_event_callback(self._on_megolm_event, room, event)
+
     def _register_plain_room_callbacks(self) -> None:
         self._client.add_event_callback(
-            self._on_room_event,
+            self._schedule_room_event,
             (RoomMessageText,),
         )
         self._client.add_event_callback(
-            self._on_room_media_event,
+            self._schedule_room_media_event,
             (
                 RoomMessageImage,
                 RoomMessageFile,
@@ -820,7 +918,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         # Encrypted media events (decrypted by nio, delivered as
         # RoomEncrypted* types)
         self._client.add_event_callback(
-            self._on_room_encrypted_media_event,
+            self._schedule_room_encrypted_media_event,
             (
                 RoomEncryptedImage,
                 RoomEncryptedAudio,
@@ -830,7 +928,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         )
         # Undecryptable events (missing session key)
         self._client.add_event_callback(
-            self._on_megolm_event,
+            self._schedule_megolm_event,
             (MegolmEvent,),
         )
         self._client.add_to_device_callback(
@@ -908,6 +1006,21 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 await self._sync_task
             except asyncio.CancelledError:
                 logger.debug("MatrixChannel: sync task cancelled during stop component=matrix")
+        if self._callback_tasks:
+            callback_tasks = tuple(self._callback_tasks)
+            for task in callback_tasks:
+                task.cancel()
+            await asyncio.gather(*callback_tasks, return_exceptions=True)
+            self._callback_tasks.clear()
+        self._room_callback_locks.clear()
+        if self._typing_tasks:
+            typing_tasks = tuple(self._typing_tasks.values())
+            for task in typing_tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*typing_tasks, return_exceptions=True)
+            self._typing_tasks.clear()
+        self._typing_locks.clear()
         if self._http_client:
             await self._http_client.aclose()
             self._http_client = None
@@ -2585,7 +2698,10 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
         # Fetch from Matrix API
         try:
-            resp = await self._client.joined_members(room_id)
+            resp = await asyncio.wait_for(
+                self._client.joined_members(room_id),
+                timeout=DM_MEMBERSHIP_TIMEOUT_S,
+            )
             if isinstance(resp, JoinedMembersResponse):
                 members = [m.user_id for m in resp.members]
                 # Update cache
@@ -2714,10 +2830,6 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 )
                 return
 
-        # Mark as read + start typing immediately so the sender sees feedback
-        await self._send_read_receipt(room_id, event.event_id)
-        await self._send_typing(room_id, True)
-
         # Strip leading @mention so slash commands and NO_REPLY are detected
         # regardless of room type (group or DM).
         command_text = text
@@ -2806,6 +2918,11 @@ class AgentTeamsMatrixChannel(BaseChannel):
             self._enqueue(payload)
             if not is_dm and not is_thread_event:
                 self._clear_history(room_id)
+
+        # These are best-effort UX operations.  Enqueue first so a slow
+        # homeserver cannot prevent an accepted message from reaching QwenPaw.
+        await self._send_read_receipt(room_id, event.event_id)
+        await self._send_typing(room_id, True)
 
     # ------------------------------------------------------------------
     # Incoming message handling — media (image / file / audio / video)
@@ -3009,27 +3126,34 @@ class AgentTeamsMatrixChannel(BaseChannel):
         """
         if not self._client:
             return
-        # Cancel any existing renewal task for this room
-        existing = self._typing_tasks.pop(room_id, None)
-        if existing and not existing.done():
-            existing.cancel()
-        try:
-            await self._client.room_typing(
-                room_id,
-                typing_state=typing,
-                timeout=timeout,
-            )
-        except Exception as exc:
-            logger.debug(
-                "MatrixChannel: typing indicator failed for %s: %s",
-                room_id,
-                exc,
-            )
-        # Start renewal loop if turning on
-        if typing:
-            self._typing_tasks[room_id] = asyncio.create_task(
-                self._typing_renewal_loop(room_id, timeout),
-            )
+        locks = getattr(self, "_typing_locks", None)
+        if locks is None:
+            locks = {}
+            self._typing_locks = locks
+        async with locks.setdefault(room_id, asyncio.Lock()):
+            if not self._client:
+                return
+            # Cancel any existing renewal task for this room
+            existing = self._typing_tasks.pop(room_id, None)
+            if existing and not existing.done():
+                existing.cancel()
+            try:
+                await self._client.room_typing(
+                    room_id,
+                    typing_state=typing,
+                    timeout=timeout,
+                )
+            except Exception as exc:
+                logger.debug(
+                    "MatrixChannel: typing indicator failed for %s: %s",
+                    room_id,
+                    exc,
+                )
+            # Start renewal loop if turning on
+            if typing:
+                self._typing_tasks[room_id] = asyncio.create_task(
+                    self._typing_renewal_loop(room_id, timeout),
+                )
 
     async def _typing_renewal_loop(
         self,
@@ -3073,7 +3197,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
                         room_id,
                         exc,
                     )
-            self._typing_tasks.pop(room_id, None)
+            current_task = asyncio.current_task()
+            if self._typing_tasks.get(room_id) is current_task:
+                self._typing_tasks.pop(room_id, None)
 
     # ------------------------------------------------------------------
     # build_agent_request_from_native (BaseChannel protocol)

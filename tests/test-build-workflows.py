@@ -40,6 +40,11 @@ class BuildWorkflowTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(values['version'], 'v1.2.3')
         selected = set(json.loads(values['targets']))
+        self.assertEqual(selected, {
+            'openclaw-base', 'agentteams-controller', 'embedded',
+            'manager', 'manager-qwenpaw', 'worker', 'copaw-worker',
+            'hermes-worker', 'qwenpaw-worker',
+        })
         self.assertEqual(selected, set(BUILD['jobs']) - {'prepare', 'release'})
         self.assertEqual(set(BUILD['jobs']['release']['needs']), selected | {'prepare'})
 

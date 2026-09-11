@@ -97,6 +97,32 @@ class BuildWorkflowTests(unittest.TestCase):
                 self.assertNotIn('Building + pushing agentteams-controller', result.stdout)
                 self.assertIn('AGENTTEAMS_CONTROLLER_IMAGE=example.test/agentteams/agentteams-controller:v1.2.3', result.stdout)
 
+    def test_existing_image_skips_only_when_both_architectures_are_verified(self):
+        steps = IMAGE['jobs']['build']['steps']
+        check = next(s for s in steps if s.get('id') == 'existing')
+        build = next(s for s in steps if s.get('name') == 'Build and push')
+        self.assertEqual(build['if'], "steps.existing.outputs.ready != 'true'")
+        both = json.dumps({'manifests': [{'platform': {'os': 'linux', 'architecture': arch}} for arch in ['amd64', 'arm64']]})
+        single = json.dumps({'manifests': [{'platform': {'os': 'linux', 'architecture': 'amd64'}}]})
+        with tempfile.TemporaryDirectory() as directory:
+            stub = Path(directory) / 'docker'
+            stub.write_text('#!/bin/bash\nprintf "%s" "$4" > "$IMAGE_LOG"\nprintf "%s" "$MANIFEST"\nexit "$STATUS"\n')
+            stub.chmod(0o755)
+            for target in set(BUILD['jobs']) - {'prepare', 'release'}:
+                for manifest, status, ready in [(both, '0', 'true'), (single, '0', 'false'), ('', '1', 'false'), ('not-json', '0', 'false'), ('', '0', 'false')]:
+                    with self.subTest(target=target, status=status, manifest=manifest):
+                        output = Path(directory) / 'output'
+                        output.write_text('')
+                        log = Path(directory) / 'image'
+                        result = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', check['run']], capture_output=True, text=True,
+                                                env={**os.environ, 'PATH': directory + ':' + os.environ['PATH'],
+                                                     'TARGET': target, 'VERSION': 'v1.2.3', 'REGISTRY': 'example.test', 'REPO': 'agentteams',
+                                                     'MANIFEST': manifest, 'STATUS': status, 'GITHUB_OUTPUT': str(output), 'IMAGE_LOG': str(log)})
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(output.read_text(), 'ready=' + ready + '\n')
+                        image = target if target in ['openclaw-base', 'agentteams-controller'] else 'agentteams-' + target
+                        self.assertEqual(log.read_text(), f'example.test/agentteams/{image}:v1.2.3')
+
     def test_release_gate_rejects_missing_or_single_arch_images(self):
         script = next(s['run'] for s in RELEASE['jobs']['release']['steps'] if s.get('name') == 'Verify versioned multi-architecture images')
         both = json.dumps({'manifests': [{'platform': {'os': 'linux', 'architecture': arch}} for arch in ['amd64', 'arm64']]})

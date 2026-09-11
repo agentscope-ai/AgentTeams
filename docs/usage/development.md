@@ -239,6 +239,8 @@ Route, consumer, and MCP server bootstrap for **embedded** stacks is owned by th
 
 `build.yml` runs each image on a separate runner. OpenClaw Base, Controller, and QwenPaw Worker start independently. Embedded, QwenPaw Manager, CoPaw Worker, and Hermes Worker wait for Controller; OpenClaw Manager and Worker wait for both Base and Controller. Each image still builds amd64 and arm64 using QEMU.
 
+Before building, each job inspects its version tag. If both linux/amd64 and linux/arm64 already exist, it succeeds without building or pushing; downstream jobs continue normally. Missing, incomplete, or unverifiable manifests trigger a build. Reuse is based on the tag and architectures, not source commit identity, and also applies to `latest`. Reusing a version does not update the `latest` alias. Use a new version to build changed source.
+
 A version tag starts the full build, then calls `release.yml` only after every image job succeeds. Release verifies all nine versioned multi-architecture manifests before publishing. There is no fixed polling window while images are building.
 
 For manual builds, select **Build Images**, set `version`, and set `targets` to `all` or exact space-separated target names. Required Base/Controller dependencies are built automatically. Manual builds do not publish a GitHub Release. To publish manually, first finish the full build, then run **Release** with the same version and source ref. If publication fails after the images succeed, rerun the failed release job.

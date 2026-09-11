@@ -21,7 +21,39 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Check existing multi-architecture image
+        id: existing
+        env:
+          TARGET: ${{ inputs.target }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          case "$TARGET" in
+            openclaw-base|agentteams-controller) image="$TARGET" ;;
+            *) image="agentteams-${TARGET}" ;;
+          esac
+          ref="${REGISTRY}/${REPO}/${image}:${VERSION}"
+          ready=false
+          if manifest="$(docker buildx imagetools inspect "$ref" --raw)" &&
+            jq -e '
+              any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "amd64") and
+              any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "arm64")
+            ' >/dev/null <<<"$manifest"; then
+            ready=true
+            echo "Reusing $ref: both required architectures exist; skipping build and push."
+          else
+            echo "No complete multi-architecture image verified for $ref; building."
+          fi
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+
       - name: Free Up GitHub Actions Ubuntu Runner Disk Space 🔧
+        if: steps.existing.outputs.ready != 'true'
         uses: jlumbroso/free-disk-space@main
         with:
           tool-cache: false
@@ -32,15 +64,11 @@ jobs:
           swap-storage: true
 
       - uses: actions/checkout@v4
+        if: steps.existing.outputs.ready != 'true'
       - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.REGISTRY_USERNAME }}
-          password: ${{ secrets.REGISTRY_PASSWORD }}
-
+        if: steps.existing.outputs.ready != 'true'
       - name: Build and push
+        if: steps.existing.outputs.ready != 'true'
         env:
           TARGET: ${{ inputs.target }}
           VERSION: ${{ inputs.version }}
@@ -61,7 +89,12 @@ jobs:
 
       - name: Summary
         env:
+          REUSED: ${{ steps.existing.outputs.ready }}
           TARGET: ${{ inputs.target }}
           VERSION: ${{ inputs.version }}
         run: |
-          echo "Built ${TARGET}:${VERSION} for linux/amd64 and linux/arm64" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$REUSED" == true ]]; then
+            echo "Reused ${TARGET}:${VERSION}; build and push skipped (linux/amd64 + linux/arm64)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Built ${TARGET}:${VERSION} for linux/amd64 and linux/arm64" >> "$GITHUB_STEP_SUMMARY"
+          fi

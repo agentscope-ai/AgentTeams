@@ -1,0 +1,79 @@
+- id: skill-filesystem
+  config:
+    includeDefaultRoots: false
+    customSkillDirs:
+      - !!js process.env.TEAMHARNESS_DSH_SKILL_ROOT
+    watch: false
+
+- id: agent-default-model
+  config:
+    provider: deepseek-official
+    model: !!js process.env.TEAMHARNESS_DSH_MODEL || 'deepseek-v4-flash'
+
+- id: headless-runner
+  disabled: true
+
+- insert:
+    - id: agentteams-headless-runner
+      name: 'agentteams-teamharness-dsh/runner'
+      inject: [headlessStartup]
+      config:
+        task: !!js ctx.headlessStartup.task
+        sessionId: !!js process.env.TEAMHARNESS_DSH_SESSION_ID || ''
+        resume: !!js process.env.TEAMHARNESS_DSH_RESUME === 'true'
+        eventId: !!js process.env.TEAMHARNESS_MATRIX_EVENT_ID || ''
+        attempt: !!js Math.max(1, Number.parseInt(process.env.TEAMHARNESS_DSH_ATTEMPT || '1', 10) || 1)
+
+    - id: teamharness-context
+      name: 'agentteams-teamharness-dsh/context'
+      inject: [systemPrompt]
+      config:
+        pluginDir: !!js process.env.AGENTTEAMS_PLUGIN_DIR
+        runtimeConfigPath: !!js process.env.TEAMHARNESS_RUNTIME_CONFIG
+
+    - id: teamharness-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: teamharness
+        transport: stdio
+        command: !!js process.env.TEAMHARNESS_PYTHON || 'python'
+        args: ['mcp/server.py']
+        cwd: !!js process.env.AGENTTEAMS_PLUGIN_DIR
+        env:
+          AGENTTEAMS_PLUGIN_DIR: !!js process.env.AGENTTEAMS_PLUGIN_DIR
+          TEAMHARNESS_RUNTIME_CONFIG: !!js process.env.TEAMHARNESS_RUNTIME_CONFIG
+          TEAMHARNESS_WORKSPACE: !!js process.env.TEAMHARNESS_WORKSPACE
+          AGENTTEAMS_MATRIX_URL: !!js process.env.AGENTTEAMS_MATRIX_URL || ''
+          AGENTTEAMS_MATRIX_DOMAIN: !!js process.env.AGENTTEAMS_MATRIX_DOMAIN || ''
+          AGENTTEAMS_MATRIX_USER_ID: !!js process.env.AGENTTEAMS_MATRIX_USER_ID || ''
+          AGENTTEAMS_WORKER_MATRIX_TOKEN: !!js process.env.AGENTTEAMS_WORKER_MATRIX_TOKEN || ''
+          AGENTTEAMS_FS_ENDPOINT: !!js process.env.AGENTTEAMS_FS_ENDPOINT || ''
+          AGENTTEAMS_FS_ACCESS_KEY: !!js process.env.AGENTTEAMS_FS_ACCESS_KEY || ''
+          AGENTTEAMS_FS_SECRET_KEY: !!js process.env.AGENTTEAMS_FS_SECRET_KEY || ''
+          AGENTTEAMS_FS_BUCKET: !!js process.env.AGENTTEAMS_FS_BUCKET || ''
+          AGENTTEAMS_STORAGE_PREFIX: !!js process.env.AGENTTEAMS_STORAGE_PREFIX || ''
+        failOnStartupError: true
+        reconnect:
+          enabled: false
+
+    - id: teamharness-smoke-probe
+      name: 'agentteams-teamharness-dsh/probe'
+      inject: [systemPrompt, skills, tools, agentDefaultModel]
+      disabled: !!js Boolean(process.env.TEAMHARNESS_DSH_SMOKE_REPORT) === false
+      config:
+        reportPath: !!js process.env.TEAMHARNESS_DSH_SMOKE_REPORT
+        workspace: !!js process.env.TEAMHARNESS_WORKSPACE
+        expectedRuntimeRole: !!js process.env.TEAMHARNESS_DSH_EXPECTED_ROLE || 'worker'
+        expectMessageTool: !!js process.env.TEAMHARNESS_DSH_EXPECT_MESSAGE_TOOL === 'true'
+        expectTeamContract: !!js process.env.TEAMHARNESS_DSH_EXPECT_TEAM_CONTRACT !== 'false'
+        expectedModel: !!js process.env.TEAMHARNESS_DSH_MODEL || 'deepseek-v4-flash'
+
+    - id: teamharness-live-probe
+      name: 'agentteams-teamharness-dsh/live-probe'
+      inject: [tools]
+      disabled: !!js Boolean(process.env.TEAMHARNESS_DSH_LIVE_REPORT) === false
+      config:
+        reportPath: !!js process.env.TEAMHARNESS_DSH_LIVE_REPORT
+        workspace: !!js process.env.TEAMHARNESS_WORKSPACE
+        marker: !!js process.env.TEAMHARNESS_DSH_LIVE_MARKER
+        roomId: !!js process.env.TEAMHARNESS_DSH_LIVE_ROOM_ID

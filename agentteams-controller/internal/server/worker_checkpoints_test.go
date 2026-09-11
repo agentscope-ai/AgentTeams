@@ -236,6 +236,27 @@ func TestCheckpoint_TeamLeaderCrossTeamDenied(t *testing.T) {
 	}
 }
 
+// TestCheckpoint_L2HumanInScopeAllowed locks the scoped-caller fix:
+// findTeamMember's second return value is the member (worker) name, not
+// the team name, so the in-scope check must compare against the Team CR
+// name — an in-scope L2 human must resolve 200.
+func TestCheckpoint_L2HumanInScopeAllowed(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"commit":"abc123","date":"2026-08-31T00:00:00Z","files":[]}`))
+	}))
+	defer upstream.Close()
+
+	h := newTestCheckpointHandler(t, "embedded", upstream, checkpointTeamWithWorkers("market-team", "market-writer")...)
+	req := checkpointRequest(http.MethodGet, "market-writer", "graph", "")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"market-team"}})
+	rec := httptest.NewRecorder()
+	h.proxyCheckpoint(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200 for in-scope L2 human", rec.Code, rec.Body.String())
+	}
+}
+
 func TestCheckpoint_UpstreamErrorBodyBounded(t *testing.T) {
 	big := strings.Repeat("x", 8192)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -35,9 +35,13 @@ make build-embedded
 make build-manager-qwenpaw
 make build-copaw-worker
 make build-hermes-worker
+make build-deepseek-harness-worker
 
 # Build with a specific version tag
 make build VERSION=0.1.0
+
+# DeepSeek Harness releases independently from the core VERSION
+make push-deepseek-harness-worker DEEPSEEK_HARNESS_WORKER_VERSION=v0.1.0
 
 # Build for a specific platform
 make build DOCKER_PLATFORM=linux/amd64
@@ -231,14 +235,23 @@ Route, consumer, and MCP server bootstrap for **embedded** stacks is owned by th
 
 ## CI/CD
 
+### Parallel release images
+
+`build.yml` runs each image on a separate runner. OpenClaw Base, Controller, and QwenPaw Worker start independently. Embedded, QwenPaw Manager, CoPaw Worker, and Hermes Worker wait for Controller; OpenClaw Manager and Worker wait for both Base and Controller. Each image still builds amd64 and arm64 using QEMU.
+
+A version tag starts the full build, then calls `release.yml` only after every image job succeeds. Release verifies all nine versioned multi-architecture manifests before publishing. There is no fixed polling window while images are building.
+
+For manual builds, select **Build Images**, set `version`, and set `targets` to `all` or exact space-separated target names. Required Base/Controller dependencies are built automatically. Manual builds do not publish a GitHub Release. To publish manually, first finish the full build, then run **Release** with the same version and source ref. If publication fails after the images succeed, rerun the failed release job.
+
+Validate workflow changes locally with `actionlint` and `python3 tests/test-build-workflows.py` (requires PyYAML and jq).
+
 ### GitHub Actions Workflows
 
 | Workflow | Trigger | Purpose | Arch |
 |----------|---------|---------|------|
-| `build.yml` | PRs to main | Build only (no push, fast feedback) | amd64 |
-| `build.yml` | Push to main | Multi-arch build + push | amd64 + arm64 |
+| `build.yml` | Version tags / manual | Parallel multi-arch build + push | amd64 + arm64 |
 | `integration-test.yml` | After build succeeds on main | Run full test suite | amd64 (runner native) |
-| `release.yml` | Version tags `v*` | Multi-arch build + push release images | amd64 + arm64 |
+| `release.yml` | After tag build succeeds / manual | Verify images and publish GitHub Release | amd64 + arm64 |
 
 All CI multi-arch builds use `docker/setup-qemu-action` for cross-platform emulation and `docker buildx` via `make push`.
 

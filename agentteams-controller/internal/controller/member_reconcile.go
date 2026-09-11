@@ -395,7 +395,7 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 		aiGatewayURL = m.ModelProviderInfo.IntranetURL
 	}
 
-	if effectiveRuntime == backend.RuntimeQwenPaw || m.DeployMode == v1beta1.DeployModeEdge {
+	if backend.UsesMemberRuntimeConfig(effectiveRuntime) || m.DeployMode == v1beta1.DeployModeEdge {
 		runtime := effectiveRuntime
 		var matrixAccessToken, gatewayKey string
 		skillRegistryURL, skillRegistryAuthType := runtimeSkillRegistryConfig(d, m, state)
@@ -829,7 +829,7 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 
 		configOwner := m.Name
 		configKey := "agents/" + configOwner + "/openclaw.json"
-		if backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime) == backend.RuntimeQwenPaw {
+		if backend.UsesMemberRuntimeConfig(backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime)) {
 			if m.RuntimeName != "" {
 				configOwner = m.RuntimeName
 			}

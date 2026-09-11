@@ -1,0 +1,45 @@
+apiVersion: agentteams.io/v1beta1
+kind: MemberRuntimeConfig
+metadata:
+  generation: 1
+  updatedAt: "2026-08-24T00:00:00Z"
+team:
+  name: dsh-smoke-team
+  storageId: dsh-smoke-team
+  teamRoomId: "!team-smoke:matrix.local"
+  leaderName: leader-a
+  leaderRuntimeName: leader-a
+  leaderDmRoomId: "!leader-dm:matrix.local"
+  members:
+    - name: leader-a
+      runtimeName: leader-a
+      role: team_leader
+      matrixUserId: "@leader-a:matrix.local"
+    - name: dsh-worker-a
+      runtimeName: dsh-worker-a
+      role: worker
+      matrixUserId: "@dsh-worker-a:matrix.local"
+    - name: coordinator-a
+      role: coordinator
+      matrixUserId: "@coordinator-a:matrix.local"
+  admin:
+    name: admin
+    matrixUserId: "@admin:matrix.local"
+member:
+  name: dsh-worker-a
+  runtimeName: dsh-worker-a
+  role: worker
+  runtime: deepseek-harness
+  matrixUserId: "@dsh-worker-a:matrix.local"
+  personalRoomId: "!worker-dm:matrix.local"
+desired:
+  state: Running
+storage:
+  provider: local
+  teamPrefix: teams/dsh-smoke-team
+  sharedPrefix: teams/dsh-smoke-team/shared
+  globalSharedPrefix: shared
+  memberPrefix: agents/dsh-worker-a
+credentials:
+  matrixTokenEnv: AGENTTEAMS_WORKER_MATRIX_TOKEN
+  gatewayKeyEnv: AGENTTEAMS_WORKER_GATEWAY_KEY

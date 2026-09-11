@@ -20,7 +20,7 @@
 
 - 🧬 **Manager-Workers アーキテクチャ**: 個々の Worker Claw を人間が監視する必要がなくなり、Agent が Agent を管理することを実現します。
 
-- 🤝 **マルチランタイム協調**: OpenClaw、QwenPaw、Hermes の Worker が同じ IM ルーム内で共存します。決定論的な Agent（OpenClaw/QwenPaw）をリーダーとしてタスクを編成し、Hermes Worker に自律的なコード実行を担当させる — それぞれのランタイムが得意なことを担当します。
+- 🤝 **マルチランタイム協調**: OpenClaw、QwenPaw、Hermes、および実験的な DeepSeek Harness Worker が同じ IM ルーム内で共存し、Matrix 上で可視性を保ちながら協調します。
 
 - 📦 **MinIO 共有ファイルシステム**: Agent 間の情報共有のための共有ファイルシステムを導入し、マルチエージェント連携シナリオにおけるトークン消費を大幅に削減します。
 
@@ -171,7 +171,7 @@ helm install agentteams higress.io/agentteams \
 | `credentials.defaultModel` | 任意 | デフォルトモデル、デフォルトは `gpt-5.4` |
 | `credentials.llmBaseUrl` | 任意 | OpenAI 互換のベース URL（例: `https://api.deepseek.com/v1`）。公式 OpenAI API を使用する場合は空のまま |
 | `manager.runtime` | 任意 | Manager エージェントランタイム: `openclaw`（デフォルト）、`copaw`、または `hermes` |
-| `worker.defaultRuntime` | 任意 | Worker デフォルトランタイム: `openclaw`（デフォルト）、`copaw`、または `hermes` |
+| `worker.defaultRuntime` | 任意 | Worker デフォルトランタイム: `openclaw`（デフォルト）、`copaw`、`hermes`、または実験的な `deepseek-harness` |
 
 <details>
 <summary>代替ランタイムの使用（QwenPaw Manager + Hermes Workers）</summary>
@@ -291,11 +291,12 @@ Alice: フロントエンドのバリデーションも更新しました。
 
 ## マルチランタイム協調
 
-AgentTeams は 3 つの Worker ランタイムをサポートし、**同じ IM ルーム内で共存・協調**できます：
+AgentTeams は複数の Worker ランタイムをサポートし、**同じ IM ルーム内で共存・協調**できます：
 
 - **OpenClaw**（Node.js）— 豊富なスキルエコシステムを持つ汎用 Agent、タスクオーケストレーションやツール呼び出しに最適
 - **QwenPaw**（Python）— 軽量ランタイム、ブラウザ自動化やクイックタスクに適している
 - **Hermes**（[hermes-agent](https://github.com/NousResearch/hermes-agent)）— ターミナルサンドボックス、自己改善スキル、永続メモリを備えた自律コーディング Agent
+- **DeepSeek Harness**（実験的）— Matrix ルーム単位のセッション継続、ファイル交換、再起動後の復旧を備えたヘッドレスコーディング Agent。現在は検証済みの DSH リリース候補に固定
 
 各ランタイムは異なるタスクに優れています。推奨パターン：決定論的な Agent（OpenClaw/QwenPaw）をリーダーとしてタスク分解と割り当てを行い、Hermes Worker に自律的なコード実行を担当させる。すべてのランタイムは同じルーム内で Matrix `m.mentions` を介して通信し、完全に可視で、いつでも介入可能です。
 

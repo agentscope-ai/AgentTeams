@@ -26,14 +26,15 @@ const defaultK8sNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/n
 
 // K8sConfig holds Kubernetes backend configuration.
 type K8sConfig struct {
-	Namespace            string
-	WorkerImage          string
-	CopawWorkerImage     string
-	HermesWorkerImage    string
-	OpenHumanWorkerImage string
-	QwenPawWorkerImage   string
-	WorkerCPU            string
-	WorkerMemory         string
+	Namespace                  string
+	WorkerImage                string
+	CopawWorkerImage           string
+	HermesWorkerImage          string
+	OpenHumanWorkerImage       string
+	QwenPawWorkerImage         string
+	DeepSeekHarnessWorkerImage string
+	WorkerCPU                  string
+	WorkerMemory               string
 
 	// ControllerName identifies this controller instance. The agent
 	// PodTemplateSpec overlay (see LoadAgentPodTemplate) is looked up as the
@@ -264,6 +265,8 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 			image = k.config.OpenHumanWorkerImage
 		case req.Runtime == RuntimeQwenPaw && k.config.QwenPawWorkerImage != "":
 			image = k.config.QwenPawWorkerImage
+		case req.Runtime == RuntimeDeepSeekHarness && k.config.DeepSeekHarnessWorkerImage != "":
+			image = k.config.DeepSeekHarnessWorkerImage
 		case k.config.WorkerImage != "":
 			image = k.config.WorkerImage
 		}
@@ -746,6 +749,8 @@ func defaultRuntime(runtime string) string {
 		return RuntimeHermes
 	case RuntimeQwenPaw:
 		return RuntimeQwenPaw
+	case RuntimeDeepSeekHarness:
+		return RuntimeDeepSeekHarness
 	default:
 		return RuntimeOpenClaw
 	}

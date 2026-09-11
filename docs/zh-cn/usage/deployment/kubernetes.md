@@ -88,7 +88,7 @@ Manager 对用户呈现的 runtime 选项只有 **OpenClaw** 和 **CoPaw**：
 | OpenClaw | `openclaw` | `agentteams-manager` | 当前 Chart 默认值 |
 | CoPaw | `qwenpaw` | `agentteams-manager-qwenpaw` | 当前 Python Manager 实现；`copaw` 是兼容旧配置的别名 |
 
-Hermes、OpenHuman 等 runtime 仅用于 Worker，不能作为 Manager runtime。
+Hermes、DeepSeek Harness、OpenHuman 等 runtime 仅用于 Worker，不能作为 Manager runtime。
 
 当前 Chart 不会仅根据 `manager.runtime` 自动改写 `manager.image.repository`。选择 CoPaw 时必须同时设置：
 
@@ -110,6 +110,7 @@ manager:
 | `openclaw` | `worker.defaultImage.openclaw` | 默认通用 Worker runtime |
 | `copaw` | `worker.defaultImage.copaw` | Python / CoPaw Worker |
 | `hermes` | `worker.defaultImage.hermes` | Hermes Worker |
+| `deepseek-harness` | `worker.defaultImage.deepseekHarness` | 实验性的 headless DeepSeek Harness Worker，支持 Matrix 文本/文件和对象存储恢复；当前固定在通过测试的 DSH release candidate；Matrix E2EE 配置会在启动时被明确拒绝 |
 | `openhuman` | `worker.defaultImage.openhuman` | Chart 中已有默认镜像配置，但当前 Worker CRD enum 不接受显式的 `spec.runtime: openhuman` |
 
 Controller 也认识 `qwenpaw` Worker runtime，但当前 Chart 没有为它提供独立的默认镜像配置。使用时应在 `Worker.spec.image` 中显式指定 QwenPaw Worker 镜像。OpenHuman 的后端与 Helm values 已存在，但 CRD 契约尚未对齐；业务代码单独修正前，不应在 Worker YAML 中显式使用 `openhuman`。

@@ -94,7 +94,7 @@ powershell_worker_images="$(sed -n '/\$workerImages = @(/,/^    )/p' "${POWERSHE
 grep -F 'QWENPAW_WORKER_IMAGE' <<<"${powershell_worker_images}" | grep -Eqv '^[[:space:]]*#' ||
     fail "PowerShell installer must pull the published QwenPaw Worker image"
 
-grep -F 'echo "targets=' "${BUILD_WORKFLOW}" | grep -Fq 'qwenpaw-worker' ||
+grep -F 'echo "targets=' "${BUILD_WORKFLOW}" | grep -F 'qwenpaw-worker' >/dev/null ||
     fail "Tag-triggered image builds must publish qwenpaw-worker"
 grep -Fq 'docker pull ${REGISTRY}/${REPO}/agentteams-qwenpaw-worker:${VERSION}' \
     "${RELEASE_WORKFLOW}" ||

@@ -431,7 +431,7 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 	teamWorkerEntries := teamWorkerEntries(members, leaderRef.Name)
 	leaderRuntime := r.teamMemberRuntime(leaderMember)
 
-	if leaderRuntime != backend.RuntimeQwenPaw {
+	if !backend.UsesMemberRuntimeConfig(leaderRuntime) {
 		// Overlay Team Leader built-ins onto the team-reference leader Worker before
 		// injecting the team coordination context. The Worker still owns its
 		// lifecycle and credentials; this only restores role-specific prompt and
@@ -477,7 +477,7 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 		if rm.ref.Name == leaderRef.Name {
 			continue
 		}
-		if r.teamMemberRuntime(rm) == backend.RuntimeQwenPaw {
+		if backend.UsesMemberRuntimeConfig(r.teamMemberRuntime(rm)) {
 			continue
 		}
 		if err := r.Deployer.InjectWorkerCoordination(ctx, service.WorkerCoordinationRequest{
@@ -524,7 +524,7 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 		if rm.ref.Name == leaderRef.Name {
 			role = RoleTeamLeader
 		}
-		if r.teamMemberRuntime(rm) != backend.RuntimeQwenPaw {
+		if !backend.UsesMemberRuntimeConfig(r.teamMemberRuntime(rm)) {
 			policy := r.teamChannelPolicy(derivedTeam, members, leaderRef.Name, rm, role)
 			if err := r.Deployer.InjectChannelPolicy(ctx, service.InjectChannelPolicyRequest{
 				WorkerName:     rm.runtimeName,
@@ -650,7 +650,7 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 		if member.worker.Spec.DeployMode != nil {
 			deployMode = *member.worker.Spec.DeployMode
 		}
-		if runtime != backend.RuntimeQwenPaw && runtime != backend.RuntimeCopaw && deployMode != v1beta1.DeployModeEdge {
+		if !backend.UsesMemberRuntimeConfig(runtime) && runtime != backend.RuntimeCopaw && deployMode != v1beta1.DeployModeEdge {
 			continue
 		}
 		role := RoleTeamWorker
@@ -666,7 +666,7 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 			return err
 		}
 		spec := member.worker.Spec
-		if runtime == backend.RuntimeQwenPaw {
+		if backend.UsesMemberRuntimeConfig(runtime) {
 			spec.ChannelPolicy = mergeChannelPolicy(t.Spec.ChannelPolicy, member.worker.Spec.ChannelPolicy)
 		}
 		req := service.MemberRuntimeConfigDeployRequest{
@@ -802,7 +802,7 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 	if _, err := r.Provisioner.RefreshWorkerCredentials(ctx, w.Name, runtimeName, ""); err != nil {
 		return fmt.Errorf("revoke team storage access: %w", err)
 	}
-	if runtime != backend.RuntimeQwenPaw {
+	if !backend.UsesMemberRuntimeConfig(runtime) {
 		if err := r.Deployer.InjectWorkerCoordination(ctx, service.WorkerCoordinationRequest{
 			WorkerName:         runtimeName,
 			TeamName:           "",
@@ -842,7 +842,7 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 			return fmt.Errorf("restore Manager to Worker %q personal room: %w", w.Name, err)
 		}
 	}
-	if runtime == backend.RuntimeQwenPaw {
+	if backend.UsesMemberRuntimeConfig(runtime) {
 		return nil
 	}
 	if err := r.ManagerConfig.UpdateManagerGroupAllowFrom(r.ManagerConfig.MatrixUserID(runtimeName), false); err != nil {
@@ -1028,7 +1028,7 @@ func (r *TeamReconciler) handleDeleteTeam(ctx context.Context, t *v1beta1.Team) 
 		if err := r.Get(ctx, key, &leaderW); err == nil {
 			leaderRN := leaderW.Spec.EffectiveWorkerName(leaderW.Name)
 			runtime := backend.ResolveRuntime(leaderW.Spec.Runtime, r.DefaultRuntime)
-			if runtime != backend.RuntimeQwenPaw {
+			if !backend.UsesMemberRuntimeConfig(runtime) {
 				if err := r.Deployer.InjectHeartbeatConfig(ctx, service.InjectHeartbeatRequest{
 					WorkerName: leaderRN,
 					Enabled:    false,

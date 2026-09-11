@@ -17,150 +17,140 @@ on:
       - 'v[0-9]+.[0-9]+.[0-9]+'
       - 'v[0-9]+.[0-9]+.[0-9]+-*'
 
-env:
-  REGISTRY: higress-registry.cn-hangzhou.cr.aliyuncs.com
-  REPO: agentteams
+permissions:
+  contents: read
 
 jobs:
-  build:
+  prepare:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      targets: ${{ steps.meta.outputs.targets }}
     steps:
-      - name: Free Up GitHub Actions Ubuntu Runner Disk Space 🔧
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          swap-storage: true
-
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # QEMU enables cross-platform emulation (arm64 on amd64 runner)
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.REGISTRY_USERNAME }}
-          password: ${{ secrets.REGISTRY_PASSWORD }}
-
-      - name: Extract metadata
+      - name: Resolve build targets and dependencies
         id: meta
-        run: |
-          SHA_SHORT=$(echo ${{ github.sha }} | cut -c1-7)
-          echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            echo "version=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-            echo "targets=openclaw-base agentteams-controller embedded manager manager-qwenpaw worker copaw-worker qwenpaw-worker hermes-worker" >> $GITHUB_OUTPUT
-          else
-            # workflow_dispatch: use inputs
-            VERSION="${{ inputs.version }}"
-            if [ -z "${VERSION}" ]; then
-              VERSION="latest"
-            fi
-            echo "version=${VERSION}" >> $GITHUB_OUTPUT
-            echo "targets=${{ inputs.targets }}" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Build and push openclaw-base
-        if: ${{ steps.meta.outputs.targets == 'all' || contains(steps.meta.outputs.targets, 'openclaw-base') }}
-        run: |
-          make push-openclaw-base \
-            VERSION=${{ steps.meta.outputs.version }} \
-            REGISTRY=${{ env.REGISTRY }} \
-            REPO=${{ env.REPO }} \
-            HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com
-
-      - name: Build and push agentteams-controller
-        if: ${{ steps.meta.outputs.targets == 'all' || contains(steps.meta.outputs.targets, 'agentteams-controller') }}
-        run: |
-          make push-agentteams-controller \
-            VERSION=${{ steps.meta.outputs.version }} \
-            REGISTRY=${{ env.REGISTRY }} \
-            REPO=${{ env.REPO }} \
-            HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
-            DOCKER_BUILD_ARGS="--build-arg APT_MIRROR= --build-arg PIP_INDEX_URL=https://pypi.org/simple/"
-
-      - name: Build and push embedded
-        if: ${{ steps.meta.outputs.targets == 'all' || contains(steps.meta.outputs.targets, 'embedded') }}
-        run: |
-          make push-embedded \
-            VERSION=${{ steps.meta.outputs.version }} \
-            REGISTRY=${{ env.REGISTRY }} \
-            REPO=${{ env.REPO }} \
-            HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
-            DOCKER_BUILD_ARGS="--build-arg APT_MIRROR= --build-arg PIP_INDEX_URL=https://pypi.org/simple/"
-
-      - name: Build and push manager images
-        if: ${{ steps.meta.outputs.targets == 'all' || contains(steps.meta.outputs.targets, 'manager') }}
-        run: |
-          make push-manager push-manager-qwenpaw \
-            VERSION=${{ steps.meta.outputs.version }} \
-            OPENCLAW_BASE_VERSION=${{ steps.meta.outputs.version }} \
-            REGISTRY=${{ env.REGISTRY }} \
-            REPO=${{ env.REPO }} \
-            HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
-            DOCKER_BUILD_ARGS="--build-arg APT_MIRROR= --build-arg PIP_INDEX_URL=https://pypi.org/simple/"
-
-      - name: Build and push worker images
-        if: |
-          steps.meta.outputs.targets == 'all' ||
-          contains(steps.meta.outputs.targets, 'worker') ||
-          contains(steps.meta.outputs.targets, 'copaw-worker') ||
-          contains(steps.meta.outputs.targets, 'hermes-worker') ||
-          contains(steps.meta.outputs.targets, 'qwenpaw-worker')
-        run: |
-          TARGETS="${{ steps.meta.outputs.targets }}"
-          MAKE_TARGETS=""
-          if [ "${TARGETS}" = "all" ] || echo "${TARGETS}" | grep -qw worker; then MAKE_TARGETS="${MAKE_TARGETS} push-worker"; fi
-          if [ "${TARGETS}" = "all" ] || echo "${TARGETS}" | grep -qw copaw-worker; then MAKE_TARGETS="${MAKE_TARGETS} push-copaw-worker"; fi
-          if [ "${TARGETS}" = "all" ] || echo "${TARGETS}" | grep -qw hermes-worker; then MAKE_TARGETS="${MAKE_TARGETS} push-hermes-worker"; fi
-          if [ "${TARGETS}" = "all" ] || echo "${TARGETS}" | grep -qw qwenpaw-worker; then MAKE_TARGETS="${MAKE_TARGETS} push-qwenpaw-worker"; fi
-          make ${MAKE_TARGETS} \
-            VERSION=${{ steps.meta.outputs.version }} \
-            OPENCLAW_BASE_VERSION=${{ steps.meta.outputs.version }} \
-            REGISTRY=${{ env.REGISTRY }} \
-            REPO=${{ env.REPO }} \
-            HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
-            DOCKER_BUILD_ARGS="--build-arg APT_MIRROR= --build-arg PIP_INDEX_URL=https://pypi.org/simple/"
-
-      - name: Summary
         env:
-          VERSION: ${{ steps.meta.outputs.version }}
-          TARGETS: ${{ steps.meta.outputs.targets }}
-          OPENCLAW_BASE_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/openclaw-base
-          MANAGER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-manager
-          MANAGER_QWENPAW_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-manager-qwenpaw
-          WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-worker
-          COPAW_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-copaw-worker
-          QWENPAW_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-qwenpaw-worker
-          HERMES_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-hermes-worker
-          CONTROLLER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-controller
-          EMBEDDED_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-embedded
+          REQUESTED_VERSION: ${{ inputs.version }}
+          REQUESTED_TARGETS: ${{ inputs.targets }}
         run: |
-          echo "### Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Version:** \`${VERSION}\` | **Targets:** \`${TARGETS}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Images:**" >> $GITHUB_STEP_SUMMARY
-          echo "- Manager: \`${MANAGER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Manager CoPaw: \`${MANAGER_QWENPAW_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Worker: \`${WORKER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- CoPaw Worker: \`${COPAW_WORKER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- QwenPaw Worker: \`${QWENPAW_WORKER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Hermes Worker: \`${HERMES_WORKER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Controller: \`${CONTROLLER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Embedded: \`${EMBEDDED_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Base: \`${OPENCLAW_BASE_IMAGE}:latest\` (pre-built, not rebuilt here)" >> $GITHUB_STEP_SUMMARY
-          echo "- Platforms: \`linux/amd64, linux/arm64\`" >> $GITHUB_STEP_SUMMARY
+          python3 - <<'PYTHON'
+          import json
+          import os
+          import re
+
+          dependencies = {
+              'openclaw-base': [],
+              'agentteams-controller': [],
+              'embedded': ['agentteams-controller'],
+              'manager': ['openclaw-base', 'agentteams-controller'],
+              'manager-qwenpaw': ['agentteams-controller'],
+              'worker': ['openclaw-base', 'agentteams-controller'],
+              'copaw-worker': ['agentteams-controller'],
+              'hermes-worker': ['agentteams-controller'],
+              'qwenpaw-worker': [],
+          }
+          tagged = os.environ['GITHUB_REF'].startswith('refs/tags/')
+          version = os.environ['GITHUB_REF_NAME'] if tagged else os.environ['REQUESTED_VERSION'] or 'latest'
+          if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}', version):
+              raise SystemExit('Invalid image version')
+          requested = 'all' if tagged else os.environ['REQUESTED_TARGETS'] or 'all'
+          selected = set(dependencies) if requested == 'all' else set(requested.split())
+          if not selected or selected - dependencies.keys():
+              raise SystemExit('Unknown or empty build targets: ' + requested)
+          for target in list(selected):
+              selected.update(dependencies[target])
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print('version=' + version, file=output)
+              print('targets=' + json.dumps(sorted(selected)), file=output)
+          PYTHON
+
+  openclaw-base:
+    needs: [prepare]
+    if: contains(fromJSON(needs.prepare.outputs.targets), 'openclaw-base')
+    uses: ./.github/workflows/build-image.yml
+    with:
+      target: openclaw-base
+      version: ${{ needs.prepare.outputs.version }}
+    secrets: inherit
+
+  agentteams-controller:
+    needs: [prepare]
+    if: contains(fromJSON(needs.prepare.outputs.targets), 'agentteams-controller')
+    uses: ./.github/workflows/build-image.yml
+    with:
+      target: agentteams-controller
+      version: ${{ needs.prepare.outputs.version }}
+    secrets: inherit
+
+  embedded:
+    needs: [prepare, agentteams-controller]
+    if: contains(fromJSON(needs.prepare.outputs.targets), 'embedded')
+    uses: ./.github/workflows/build-image.yml
+    with:
+      target: embedded
+      version: ${{ needs.prepare.outputs.version }}
+    secrets: inherit
+
+  manager:
+    needs: [prepare, openclaw-base, agentteams-controller]
+    if: contains(fromJSON(needs.prepare.outputs.targets), 'manager')
+    uses: ./.github/workflows/build-image.yml
+    with:
+      target: manager
+      version: ${{ needs.prepare.outputs.version }}
+    secrets: inherit
+
+  manager-qwenpaw:
+    needs: [prepare, agentteams-controller]
+    if: contains(fromJSON(needs.prepare.outputs.targets), 'manager-qwenpaw')
+    uses: ./.github/workflows/build-image.yml
+    with:
+      target: manager-qwenpaw
+      version: ${{ needs.prepare.outputs.version }}
+    secrets: inherit
+
+  worker:
+    needs: [prepare, openclaw-base, agentteams-controller]
+    if: contains(fromJSON(needs.prepare.outputs.targets), 'worker')
+    uses: ./.github/workflows/build-image.yml
+    with:
+      target: worker
+      version: ${{ needs.prepare.outputs.version }}
+    secrets: inherit
+
+  copaw-worker:
+    needs: [prepare, agentteams-controller]
+    if: contains(fromJSON(needs.prepare.outputs.targets), 'copaw-worker')
+    uses: ./.github/workflows/build-image.yml
+    with:
+      target: copaw-worker
+      version: ${{ needs.prepare.outputs.version }}
+    secrets: inherit
+
+  hermes-worker:
+    needs: [prepare, agentteams-controller]
+    if: contains(fromJSON(needs.prepare.outputs.targets), 'hermes-worker')
+    uses: ./.github/workflows/build-image.yml
+    with:
+      target: hermes-worker
+      version: ${{ needs.prepare.outputs.version }}
+    secrets: inherit
+
+  qwenpaw-worker:
+    needs: [prepare]
+    if: contains(fromJSON(needs.prepare.outputs.targets), 'qwenpaw-worker')
+    uses: ./.github/workflows/build-image.yml
+    with:
+      target: qwenpaw-worker
+      version: ${{ needs.prepare.outputs.version }}
+    secrets: inherit
+
+  release:
+    needs: [prepare, openclaw-base, agentteams-controller, embedded, manager, manager-qwenpaw, worker, copaw-worker, hermes-worker, qwenpaw-worker]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+    secrets: inherit

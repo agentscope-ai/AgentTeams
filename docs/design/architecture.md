@@ -10,7 +10,7 @@ AgentTeams is an **Agent Teams** platform: a **Manager** coordinates **Workers**
 |--------|------|------------------|
 | **agentteams-controller** | Go operator: reconciles **Worker**, **Manager**, **Team**, and **Human** CRDs; REST API; worker/manager lifecycle; gateway consumer setup; credential flows when cloud providers are enabled. | `agentteams-controller` (Kubernetes) or **`agentteams-controller-embedded`** (local): Higress all-in-one + **Tuwunel** + **MinIO** + **Element Web** (nginx) + controller binary |
 | **Manager** | Coordinator agent: tasks, workers, teams, humans, Higress routes/MCP—via Matrix and the controller API. | `agentteams-manager` (OpenClaw / Node) or `agentteams-manager-qwenpaw` (QwenPaw / Python)—based on **openclaw-base** or slim Python, **without** full infra stack |
-| **Worker** | Task executor: one container per worker, created on demand; stateless; config and artifacts on object storage. | `agentteams-worker`, `agentteams-copaw-worker`, `agentteams-qwenpaw-worker`, or `agentteams-hermes-worker` |
+| **Worker** | Task executor: one container per worker, created on demand; stateless; config and artifacts on object storage. | `agentteams-worker`, `agentteams-copaw-worker`, `agentteams-qwenpaw-worker`, `agentteams-hermes-worker`, or experimental `agentteams-deepseek-harness-worker` |
 
 The **openclaw-base** image supplies **Ubuntu 24.04**, **Node.js 22**, **OpenClaw**, and **mcporter** for OpenClaw-based Manager/Worker images. It intentionally **does not** ship the old all-in-one Higress bundle; the AI gateway runs in the **controller** (embedded) or as the **Higress Helm subchart** (Kubernetes).
 
@@ -147,8 +147,9 @@ flowchart TB
 | **copaw** | Python / CoPaw compatibility path | Retained for existing deployments; uses `agentteams-copaw-worker` and the `.copaw/` runtime directory |
 | **qwenpaw** | Python / **QwenPaw 2.x** | Current QwenPaw Worker path; uses `agentteams-qwenpaw-worker` and the `.qwenpaw/` runtime directory |
 | **hermes** | Python / **`hermes-worker`** | Matrix worker runtime with Hermes policy/config tree under `hermes-worker-agent/` |
+| **deepseek-harness** (experimental) | Node.js / **DeepSeek Harness** | Headless DSH Worker; consumes Controller-projected `runtime.yaml`, supports Matrix text/files, and persists room sessions and delivery state to object storage; pinned to a tested DSH release candidate |
 
-The shipped Worker CRD enum accepts the four values above. The Controller and Helm values already contain an OpenHuman backend and default image configuration, but the current CRD does not accept an explicit `spec.runtime: openhuman`, so this document does not list it as a directly declarable Worker runtime. The current chart also has no `worker.defaultImage.qwenpaw`; set `spec.image` explicitly when using `qwenpaw` in a CR. The controller resolves the effective runtime and image when creating Pods or Docker containers.
+The shipped Worker CRD enum accepts the five values above. The Controller and Helm values already contain an OpenHuman backend and default image configuration, but the current CRD does not accept an explicit `spec.runtime: openhuman`, so this document does not list it as a directly declarable Worker runtime. The current chart also has no `worker.defaultImage.qwenpaw`; set `spec.image` explicitly when using `qwenpaw` in a CR. The controller resolves the effective runtime and image when creating Pods or Docker containers.
 
 ### Manager runtimes
 
@@ -159,7 +160,7 @@ The shipped **Manager entrypoint** (`start-manager-agent.sh`) selects:
 | **OpenClaw** | `openclaw` | Node/OpenClaw gateway; Matrix “message tool” style integration; the current Helm chart sets this value explicitly by default |
 | **QwenPaw** | `qwenpaw` | Python QwenPaw workspace; Matrix via **`copaw channels send`** (`start-qwenpaw-manager.sh`); the Manager entrypoint and controller fall back to this value when none is configured |
 
-The local installer still presents **CoPaw** and writes the compatibility value `copaw`; the Manager entrypoint routes it to the QwenPaw implementation. **Hermes** is a Worker-only runtime, and the existing OpenHuman implementation is also Worker-side but remains subject to the CRD limitation above. Manager images today boot **OpenClaw** or **QwenPaw** only (see comments in `start-manager-agent.sh`).
+The local installer still presents **CoPaw** and writes the compatibility value `copaw`; the Manager entrypoint routes it to the QwenPaw implementation. **Hermes** and **DeepSeek Harness** are Worker-only runtimes, and the existing OpenHuman implementation is also Worker-side but remains subject to the CRD limitation above. Manager images today boot **OpenClaw** or **QwenPaw** only (see comments in `start-manager-agent.sh`).
 
 ---
 
@@ -207,7 +208,7 @@ These are shared by **OpenClaw** and **QwenPaw** Managers (QwenPaw-specific prom
 
 ### Worker skills
 
-- **Per-runtime builtins** — templates under **`manager/agent/worker-agent/`** (OpenClaw), **`copaw-worker-agent/`**, and **`hermes-worker-agent/`** include a small **core** set (e.g. **file-sync**, **mcporter**, **find-skills**, **project-participation**, **task-progress**) materialized into each worker workspace on provision.
+- **Per-runtime builtins** — templates under **`manager/agent/worker-agent/`** (OpenClaw), **`copaw-worker-agent/`**, and **`hermes-worker-agent/`** include a small **core** set (e.g. **file-sync**, **mcporter**, **find-skills**, **project-participation**, **task-progress**) materialized into each worker workspace on provision. The DeepSeek Harness adapter materializes the role-allowed subset from `plugins/teamharness/plugin.yaml` into its DSH profile.
 - **On-demand / distributable** — **`manager/agent/worker-skills/`** (e.g. **github-operations**, **git-delegation**): after an administrator asks the Manager to install a named skill for a Worker, the Manager verifies and uploads the skill before adding it to `spec.skills`.
 
 ### Team Leader skills

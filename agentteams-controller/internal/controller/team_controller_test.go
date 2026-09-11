@@ -467,9 +467,9 @@ func TestReconcileTeamTeamReferences_QwenPawProjectsRuntimeRoster(t *testing.T) 
 	team := &v1beta1.Team{
 		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
 		Spec: v1beta1.TeamSpec{
-			Admin:        &v1beta1.TeamAdminSpec{Name: "admin", MatrixUserID: "@admin:localhost"},
+			Admin:         &v1beta1.TeamAdminSpec{Name: "admin", MatrixUserID: "@admin:localhost"},
 			ChannelPolicy: &v1beta1.ChannelPolicySpec{GroupAllowExtra: []string{"team-group-bot"}},
-			HumanMembers: []v1beta1.TeamMemberSpec{{Name: "human-coord", MatrixUserID: "@human:matrix.local"}},
+			HumanMembers:  []v1beta1.TeamMemberSpec{{Name: "human-coord", MatrixUserID: "@human:matrix.local"}},
 			WorkerMembers: []v1beta1.TeamWorkerRef{
 				{Name: "lead", Role: "team_leader"},
 				{Name: "dev"},
@@ -553,6 +553,50 @@ func TestReconcileTeamTeamReferences_QwenPawProjectsRuntimeRoster(t *testing.T) 
 	}
 	if got := len(deployer.Calls.InjectChannelPolicy); got != 0 {
 		t.Fatalf("qwenpaw InjectChannelPolicy calls=%d, want 0", got)
+	}
+}
+
+func TestDeployTeamRuntimeConfigsDeepSeekHarnessUsesProjectedContract(t *testing.T) {
+	deployer := mocks.NewMockDeployer()
+	r := &TeamReconciler{Deployer: deployer}
+	team := &v1beta1.Team{Spec: v1beta1.TeamSpec{
+		ChannelPolicy: &v1beta1.ChannelPolicySpec{GroupAllowExtra: []string{"team-bot"}},
+	}}
+	members := []teamWorkerMember{{
+		ref: v1beta1.TeamWorkerRef{Name: "dsh-lead", Role: "team_leader"},
+		worker: v1beta1.Worker{
+			ObjectMeta: metav1.ObjectMeta{Name: "dsh-lead", Generation: 4},
+			Spec: v1beta1.WorkerSpec{
+				Runtime:       "deepseek-harness",
+				Model:         "deepseek-v4-flash",
+				ChannelPolicy: &v1beta1.ChannelPolicySpec{DmAllowExtra: []string{"admin"}},
+			},
+			Status: v1beta1.WorkerStatus{
+				MatrixUserID: "@dsh-lead:matrix.local",
+				RoomID:       "!personal:matrix.local",
+			},
+		},
+		runtimeName: "dsh-lead",
+	}}
+
+	err := r.deployTeamRuntimeConfigs(context.Background(), team, members, "dsh-lead", "team-a", "dsh-lead", &service.TeamRoomResult{
+		TeamRoomID:     "!team:matrix.local",
+		LeaderDMRoomID: "!leader-dm:matrix.local",
+	})
+	if err != nil {
+		t.Fatalf("deployTeamRuntimeConfigs: %v", err)
+	}
+	if got := len(deployer.Calls.DeployMemberRuntimeConfig); got != 1 {
+		t.Fatalf("DeployMemberRuntimeConfig calls=%d, want 1", got)
+	}
+	req := deployer.Calls.DeployMemberRuntimeConfig[0]
+	if req.Runtime != "deepseek-harness" || req.Role != "team_leader" || req.TeamRoomID != "!team:matrix.local" {
+		t.Fatalf("DeepSeek Harness runtime contract=%+v", req)
+	}
+	if req.Spec.ChannelPolicy == nil ||
+		!stringSliceContains(req.Spec.ChannelPolicy.GroupAllowExtra, "team-bot") ||
+		!stringSliceContains(req.Spec.ChannelPolicy.DmAllowExtra, "admin") {
+		t.Fatalf("DeepSeek Harness merged channel policy=%+v", req.Spec.ChannelPolicy)
 	}
 }
 

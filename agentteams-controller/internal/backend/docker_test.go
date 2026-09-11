@@ -604,6 +604,7 @@ func TestDockerCreateResolvesImageFromRuntime(t *testing.T) {
 		{"explicit_copaw_uses_copaw_image", RuntimeCopaw, "", "agentteams/copaw-worker:latest"},
 		{"explicit_hermes_uses_hermes_image", RuntimeHermes, "", "agentteams/hermes-worker:latest"},
 		{"explicit_qwenpaw_uses_qwenpaw_image", RuntimeQwenPaw, "", "agentteams/qwenpaw-worker:latest"},
+		{"explicit_deepseek_harness_uses_deepseek_harness_image", RuntimeDeepSeekHarness, "", "agentteams/deepseek-harness-worker:latest"},
 		{"explicit_openclaw_uses_worker_image", RuntimeOpenClaw, "", "agentteams/worker-agent:latest"},
 		{"empty_runtime_with_no_fallback_uses_worker_image", "", "", "agentteams/worker-agent:latest"},
 		{"empty_runtime_with_copaw_fallback_uses_copaw_image", "", RuntimeCopaw, "agentteams/copaw-worker:latest"},
@@ -618,11 +619,12 @@ func TestDockerCreateResolvesImageFromRuntime(t *testing.T) {
 
 			b := &DockerBackend{
 				config: DockerConfig{
-					WorkerImage:        "agentteams/worker-agent:latest",
-					CopawWorkerImage:   "agentteams/copaw-worker:latest",
-					HermesWorkerImage:  "agentteams/hermes-worker:latest",
-					QwenPawWorkerImage: "agentteams/qwenpaw-worker:latest",
-					DefaultNetwork:     "agentteams-net",
+					WorkerImage:                "agentteams/worker-agent:latest",
+					CopawWorkerImage:           "agentteams/copaw-worker:latest",
+					HermesWorkerImage:          "agentteams/hermes-worker:latest",
+					QwenPawWorkerImage:         "agentteams/qwenpaw-worker:latest",
+					DeepSeekHarnessWorkerImage: "agentteams/deepseek-harness-worker:latest",
+					DefaultNetwork:             "agentteams-net",
 				},
 				containerPrefix: "agentteams-worker-",
 				client: &http.Client{

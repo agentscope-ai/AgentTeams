@@ -15,7 +15,9 @@ on:
       - 'copaw/**'
       - 'qwenpaw/**'
       - 'hermes/**'
+      - 'deepseek-harness/**'
       - 'plugins/teamharness/adapters/qwenpaw/**'
+      - 'plugins/teamharness/adapters/deepseek-harness/**'
       - 'plugins/workerflow/adapters/qwenpaw/**'
       - 'Makefile'
       - '.github/workflows/test-integration.yml'
@@ -35,7 +37,9 @@ on:
       - 'copaw/**'
       - 'qwenpaw/**'
       - 'hermes/**'
+      - 'deepseek-harness/**'
       - 'plugins/teamharness/adapters/qwenpaw/**'
+      - 'plugins/teamharness/adapters/deepseek-harness/**'
       - 'plugins/workerflow/adapters/qwenpaw/**'
       - 'Makefile'
   workflow_dispatch:
@@ -141,6 +145,18 @@ jobs:
           MATRIX=$(echo "$MATRIX" | jq -c '.')
           echo "matrix={\"include\":$MATRIX}" >> "$GITHUB_OUTPUT"
 
+  deepseek-harness-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run DeepSeek Harness bridge tests
+        run: |
+          python3 -m unittest discover -s deepseek-harness/tests -p 'test_*.py' -v
+          node --test deepseek-harness/tests/*.test.mjs
+
   # Step 1a: Build the shared base image (agentteams-controller)
   build-base:
     runs-on: ubuntu-latest
@@ -235,7 +251,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [embedded, manager, manager-qwenpaw, worker, copaw-worker, qwenpaw-worker, hermes-worker]
+        target: [embedded, manager, manager-qwenpaw, worker, copaw-worker, qwenpaw-worker, hermes-worker, deepseek-harness-worker]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -313,8 +329,8 @@ jobs:
 
   # Step 3: Run test shards in parallel, each on its own runner with isolated cluster
   integration-tests:
-    needs: [detect-changes, build-images]
-    if: always() && needs.detect-changes.result == 'success' && needs.build-images.result == 'success'
+    needs: [detect-changes, deepseek-harness-tests, build-images]
+    if: always() && needs.detect-changes.result == 'success' && needs.deepseek-harness-tests.result == 'success' && needs.build-images.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:

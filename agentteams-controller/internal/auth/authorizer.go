@@ -105,6 +105,15 @@ func (a *Authorizer) authorizeHuman(caller *CallerIdentity, req AuthzRequest) er
 		if req.Action == ActionGet || req.Action == ActionList {
 			return nil // handler filters by accessibleTeams
 		}
+		// L2 humans may update workers within their accessibleTeams scope
+		// (self-service skill / MCP configuration). The middleware cannot
+		// resolve worker -> team, so requireSameTeam short-circuits on an
+		// empty ResourceTeam; the UpdateWorker handler enforces the real
+		// boundary (team scope + field whitelist), matching the W-PR-2
+		// project-write pattern.
+		if req.Action == ActionUpdate {
+			return a.requireSameTeam(caller, req)
+		}
 		return deny(caller, req)
 
 	default:

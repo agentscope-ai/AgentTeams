@@ -1943,6 +1943,34 @@ func TestWorkerMemberContextQwenPawConfigOnlyChangeDoesNotSetSpecChanged(t *test
 	}
 }
 
+func TestWorkerMemberContextDeepSeekHarnessConfigOnlyChangeDoesNotSetSpecChanged(t *testing.T) {
+	r := &WorkerReconciler{ControllerName: "ctl-x"}
+	baseSpec := v1beta1.WorkerSpec{
+		Runtime: "deepseek-harness",
+		Image:   "agentteams/deepseek-harness-worker:v1",
+		Model:   "deepseek-v4-flash",
+		Package: "nacos://registry/ns/dsh-worker?version=1",
+	}
+
+	w := &v1beta1.Worker{}
+	w.Name = "solo-dsh"
+	w.Generation = 2
+	w.Status.ObservedGeneration = 1
+	w.Status.SpecHash = hashAppliedWorkerSpecForRuntime(baseSpec, "deepseek-harness")
+	w.Spec = baseSpec
+	w.Spec.Model = "deepseek-chat"
+	w.Spec.Package = "nacos://registry/ns/dsh-worker?version=2"
+
+	if mctx := r.workerMemberContext(w); mctx.SpecChanged {
+		t.Fatalf("DeepSeek Harness model/package changes should not recreate container")
+	}
+
+	w.Spec.Image = "agentteams/deepseek-harness-worker:v2"
+	if mctx := r.workerMemberContext(w); !mctx.SpecChanged {
+		t.Fatalf("DeepSeek Harness image change should recreate container")
+	}
+}
+
 func TestWorkerReconcileQwenPawConfigOnlyUpdateWritesRuntimeConfigWithoutRecreate(t *testing.T) {
 	worker := newWorker("solo", v1beta1.WorkerSpec{
 		Runtime:    "qwenpaw",

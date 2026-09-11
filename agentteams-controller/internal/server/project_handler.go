@@ -27,6 +27,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/matrix"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/workflow"
 	"github.com/google/uuid"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -202,6 +203,41 @@ type taskDetail struct {
 	Deliverables []any  `json:"deliverables,omitempty"`
 	ResultPath   string `json:"result_path,omitempty"`
 	CancelReason string `json:"cancel_reason,omitempty"`
+	// History is the append-only transition audit for this task, maintained
+	// by TeamHarness taskflow (and the controller's cancel path). Each entry
+	// records one accepted state change; empty until the transition engine
+	// lands (design: agentscope-ai/AgentTeams#1223).
+	History []taskHistoryEntry `json:"history,omitempty"`
+}
+
+// taskHistoryEntry is one append-only task transition record
+// (task meta `history[]`, capped at 50 entries by the writer).
+type taskHistoryEntry struct {
+	TS     string `json:"ts"`
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Actor  string `json:"actor,omitempty"`
+	Action string `json:"action"`
+	Note   string `json:"note,omitempty"`
+}
+
+// taskInspection is the node-level inspection payload: the task's graph node
+// plus its TaskMeta, transition history, and a trace hint for deep-linking
+// into a tracing backend (worker entry spans are tagged with
+// agentteams.project.id / agentteams.task.id).
+type taskInspection struct {
+	taskDetail
+	Dependencies []string      `json:"dependencies,omitempty"`
+	Trace        taskTraceHint `json:"trace,omitempty"`
+}
+
+// taskTraceHint is a tracing-backend filter hint: project_id / task_id are
+// the values to match against the span attributes agentteams.project.id /
+// agentteams.task.id, which worker entry spans already carry. No URL is
+// constructed here: the tracing backend is deployment-specific.
+type taskTraceHint struct {
+	ProjectID string `json:"project_id"`
+	TaskID    string `json:"task_id"`
 }
 
 // normalizeTaskStatus maps ProjectMeta task status to the frontend-friendly
@@ -602,6 +638,7 @@ func (h *ProjectHandler) GetProjectWorkflow(w http.ResponseWriter, r *http.Reque
 	}
 	caller := authpkg.CallerFromContext(r.Context())
 	includeTasks := r.URL.Query().Get("includeTasks") == "true"
+	format := r.URL.Query().Get("format")
 	teamFilter := r.URL.Query().Get("team")
 
 	// Single K8s List for both meta resolution and the access check (O1).
@@ -631,6 +668,29 @@ func (h *ProjectHandler) GetProjectWorkflow(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		httputil.WriteError(w, http.StatusForbidden, err.Error())
+		return
+	}
+
+	if format == "mermaid" {
+		// Pure rendering of the same snapshot (buildWorkflow); per-task
+		// TaskMeta is not needed, so includeTasks is ignored.
+		resp := h.buildWorkflow(meta, team, false)
+		snap := workflow.Snapshot{Next: resp.Next}
+		snap.Nodes = make([]workflow.Node, len(resp.Nodes))
+		for i, n := range resp.Nodes {
+			snap.Nodes[i] = workflow.Node{ID: n.ID, Name: n.Name, Status: n.Status, Assignee: n.Assignee}
+		}
+		snap.Edges = make([]workflow.Edge, len(resp.Edges))
+		for i, e := range resp.Edges {
+			snap.Edges[i] = workflow.Edge{Source: e.Source, Target: e.Target, Conditional: e.Conditional}
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, workflow.RenderMermaid(&snap))
+		return
+	}
+	if format != "" {
+		httputil.WriteError(w, http.StatusBadRequest, fmt.Sprintf("unsupported format %q: allowed: mermaid", format))
 		return
 	}
 
@@ -885,6 +945,11 @@ func (h *ProjectHandler) readTasksDetail(meta *projectMeta, team string) []taskD
 				detail.Deliverables = list
 			}
 		}
+		if raw["history"] != nil {
+			if list, ok := raw["history"].([]any); ok {
+				detail.History = parseTaskHistory(list)
+			}
+		}
 		detailByTask[res.taskID] = detail
 	}
 
@@ -909,6 +974,152 @@ func keyForTaskID(key string, taskIDs []string) string {
 		}
 	}
 	return ""
+}
+
+// parseTaskHistory converts a raw task-meta `history` array into typed
+// entries. Malformed entries are skipped (an audit record must never break
+// the read path).
+func parseTaskHistory(list []any) []taskHistoryEntry {
+	out := make([]taskHistoryEntry, 0, len(list))
+	for _, raw := range list {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		entry := taskHistoryEntry{
+			TS:     str(m["ts"]),
+			From:   str(m["from"]),
+			To:     str(m["to"]),
+			Actor:  str(m["actor"]),
+			Action: str(m["action"]),
+			Note:   str(m["note"]),
+		}
+		if entry.TS == "" && entry.Action == "" {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+// GetTaskInspection serves node-level state for one task.
+//
+// GET /api/v1/projects/{id}/tasks/{taskId}
+//
+// Aggregates the task's graph node (status/assignee/dependencies), its
+// TaskMeta (spec/summary/deliverables/result), the append-only transition
+// history, and a trace hint (worker entry spans carry agentteams.project.id
+// / agentteams.task.id attributes). TaskMeta is read from the project's
+// owning scope only — same no-cross-scope-fallback rule as readTasksDetail.
+func (h *ProjectHandler) GetTaskInspection(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	taskID := r.PathValue("taskId")
+	if projectID == "" || taskID == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "project id and task id are required")
+		return
+	}
+	if !isSafeTaskID(taskID) {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid task id")
+		return
+	}
+	caller := authpkg.CallerFromContext(r.Context())
+	teamFilter := r.URL.Query().Get("team")
+
+	// Single K8s List for both meta resolution and the access check (O1
+	// pattern). Reuse the same dual-prefix layout as GetProjectWorkflow.
+	prefixes, crToEffective, err := h.teamProjectPrefixes(r.Context())
+	if err != nil {
+		writeK8sError(w, "get task inspection: resolve prefixes", err)
+		return
+	}
+	matches, err := h.resolveProjectMeta(r.Context(), projectID, prefixes, teamFilter, caller, crToEffective)
+	if err != nil {
+		writeK8sError(w, "get task inspection", err)
+		return
+	}
+	meta, team, ok := h.resolveSingleProject(w, matches)
+	if !ok {
+		return
+	}
+	// W4: hide project existence from scoped callers who do not own this
+	// project (L2 / team leader). Same 404 semantics as GetProjectWorkflow.
+	if err := h.checkProjectAccess(caller, team, crToEffective); err != nil {
+		if _, ok := err.(*accessDeniedError); ok {
+			httputil.WriteError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		httputil.WriteError(w, http.StatusForbidden, err.Error())
+		return
+	}
+
+	// The task must belong to this project's graph (project.tasks, or
+	// loop.tasks for loop plans) — same membership rule as GetTaskArtifact.
+	graphTasks := meta.Tasks
+	if meta.PlanType == "loop" && meta.Loop != nil {
+		graphTasks = meta.Loop.Tasks
+	}
+	var node *projectTaskMeta
+	for i := range graphTasks {
+		if graphTasks[i].TaskID == taskID {
+			node = &graphTasks[i]
+			break
+		}
+	}
+	if node == nil {
+		httputil.WriteError(w, http.StatusNotFound, "task not found")
+		return
+	}
+
+	// TaskMeta from the owning scope only (team prefix first, then global —
+	// the global prefix is a fallback for standalone projects, mirroring
+	// readTasksDetail; a team project never leaks a global TaskMeta).
+	detail := taskDetail{TaskID: node.TaskID, ProjectID: meta.ProjectID, Status: normalizeTaskStatus(node.Status), AssignedTo: node.AssignedTo}
+	for _, key := range taskMetaKeys(taskID, team) {
+		data, err := h.oss.GetObject(r.Context(), key)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			httputil.WriteError(w, http.StatusInternalServerError, "read task meta: "+err.Error())
+			return
+		}
+		var raw map[string]any
+		if err := json.Unmarshal(data, &raw); err != nil {
+			continue // malformed TaskMeta; keep node summary only
+		}
+		// Ownership check: TaskMeta must name exactly this project's graph
+		// task (same rule as readTasksDetail).
+		if str(raw["task_id"]) != taskID || str(raw["project_id"]) != meta.ProjectID {
+			continue
+		}
+		detail.Status = str(raw["status"])
+		detail.SpecPath = str(raw["spec_path"])
+		if a := str(raw["assigned_to"]); a != "" {
+			detail.AssignedTo = a
+		}
+		detail.Summary = str(raw["summary"])
+		detail.ResultStatus = str(raw["result_status"])
+		detail.ResultPath = str(raw["result_path"])
+		detail.CancelReason = str(raw["cancel_reason"])
+		if raw["deliverables"] != nil {
+			if list, ok := raw["deliverables"].([]any); ok {
+				detail.Deliverables = list
+			}
+		}
+		if raw["history"] != nil {
+			if list, ok := raw["history"].([]any); ok {
+				detail.History = parseTaskHistory(list)
+			}
+		}
+		break // first non-empty match wins (team prefix takes precedence)
+	}
+
+	insp := taskInspection{
+		taskDetail:   detail,
+		Dependencies: node.DependsOn,
+		Trace:        taskTraceHint{ProjectID: meta.ProjectID, TaskID: taskID},
+	}
+	httputil.WriteJSON(w, http.StatusOK, insp)
 }
 
 // GetTaskArtifact serves the result artifact of one task.

@@ -16,6 +16,7 @@ AgentTeams/
 ├── worker/              # OpenClaw Worker image (shared base pattern; runtime also selected at deploy time)
 ├── copaw/               # CoPaw Python package source (published as e.g. copaw-worker on PyPI)
 ├── hermes/              # Hermes Python package source (Hermes Matrix worker runtime)
+├── deepseek-harness/    # Experimental headless DeepSeek Harness Worker image and Matrix bridge
 ├── openhuman/           # OpenHuman Worker image: Rust core + native Matrix (channel-matrix feature)
 ├── openclaw-base/       # Base image: Ubuntu + Node.js + bundled agent assets + mcporter
 ├── shared/lib/          # Shared shell libs copied into images (agentteams-env.sh, render-skills.sh, …)
@@ -42,6 +43,7 @@ Logs and local artifacts (for example replay logs) stay out of git via `.gitigno
 | `openclaw` | Node.js / OpenClaw (default) | Primary worker agent runtime |
 | `copaw`    | Python / AgentScope via CoPaw | Alternative worker runtime |
 | `hermes`   | Python / `hermes-worker` package | Alternative worker runtime (Matrix bridge + policies under `hermes/src/`) |
+| `deepseek-harness` | Node.js / DeepSeek Harness | Experimental headless Worker runtime pinned to a tested DSH release |
 
 **Manager runtimes** (container env `AGENTTEAMS_MANAGER_RUNTIME`, CoPaw Manager CR / Helm `manager.runtime` where applicable):
 
@@ -50,7 +52,7 @@ Logs and local artifacts (for example replay logs) stay out of git via `.gitigno
 | `openclaw` | OpenClaw gateway; primary Matrix channel uses the **message** tool pattern (see upstream OpenClaw / AgentTeams manager config). |
 | `qwenpaw` (default) | Python QwenPaw workspace; Matrix traffic uses the **`copaw channels send`** CLI (see `start-qwenpaw-manager.sh`). |
 
-Hermes and OpenHuman are **Worker-only** runtimes in the API and Helm worker defaults; the Manager entrypoint in `start-manager-agent.sh` today starts **openclaw** or **qwenpaw** only.
+Hermes, DeepSeek Harness, and OpenHuman are **Worker-only** runtimes in the API and Helm worker defaults; the Manager entrypoint in `start-manager-agent.sh` today starts **openclaw** or **qwenpaw** only.
 
 **Deployment runtime** (`AGENTTEAMS_RUNTIME`): local embedded stack vs `aliyun` vs `k8s` changes which bootstrap steps run inside the Manager container (for example Matrix registration and Higress setup are skipped or reduced in `k8s` because the controller owns them).
 
@@ -110,7 +112,7 @@ manager/agent/
 
 ### Local full build (from source)
 
-The image dependency chain is: `openclaw-base` → `manager` / `worker`. CoPaw and Hermes worker images and the controller image are additional build targets; see the `Makefile` for current image names.
+The image dependency chain is: `openclaw-base` → `manager` / `worker`. CoPaw, Hermes, and DeepSeek Harness worker images and the controller image are additional build targets; see the `Makefile` for current image names.
 
 By default, `OPENCLAW_BASE_IMAGE` points to the remote registry (`higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/openclaw-base`). When building locally from a modified `openclaw-base`, you **must** override it to the local image name so that manager/worker actually use your local base:
 
@@ -179,6 +181,11 @@ The Manager **image** is an agent runtime plus scripts; Higress, Tuwunel, MinIO,
 
 - [hermes/](hermes/) — Python package layout under `hermes/src/` (`hermes_worker`, `hermes_matrix`, CLI)
 
+### To modify the DeepSeek Harness worker runtime
+
+- [deepseek-harness/](deepseek-harness/) — managed image, Matrix bridge, persisted room sessions, and runtime tests
+- [plugins/teamharness/adapters/deepseek-harness/](plugins/teamharness/adapters/deepseek-harness/) — DSH-native TeamHarness adapter and compatibility checks
+
 ### To modify the OpenHuman worker runtime
 
 - [openhuman/](openhuman/) — Rust-based Worker runtime with native Matrix support (`channel-matrix` feature flag)
@@ -223,6 +230,7 @@ In `k8s` / `aliyun` modes, Workers are created via the controller API instead of
 | Agent Framework | OpenClaw (fork) | Default Manager/Worker runtime (Node.js gateway + Matrix plugin) |
 | Agent Framework | CoPaw (Python / AgentScope) | Alternative Manager and Worker runtime |
 | Agent Framework | Hermes (`hermes-worker`) | Alternative Python Worker runtime |
+| Agent Framework | DeepSeek Harness (`@deepseek-ai/dsh`) | Experimental headless Worker runtime with room-scoped session continuation |
 | Agent Framework | OpenHuman (`openhuman-core`) | Alternative Rust Worker runtime with native Matrix |
 | MCP CLI | mcporter | Worker calls MCP Server tools via CLI |
 

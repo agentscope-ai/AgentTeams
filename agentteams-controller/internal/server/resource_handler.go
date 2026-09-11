@@ -3,8 +3,10 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
@@ -213,6 +215,12 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	if caller := authpkg.CallerFromContext(ctx); caller != nil && caller.Role == authpkg.RoleHuman {
+		if status, msg := h.checkHumanWorkerUpdate(ctx, caller, name, &req); status != 0 {
+			httputil.WriteError(w, status, msg)
+			return
+		}
+	}
 	for attempt := 0; attempt < k8sUpdateMaxRetries; attempt++ {
 		var worker v1beta1.Worker
 		if err := h.client.Get(ctx, client.ObjectKey{Name: name, Namespace: h.namespace}, &worker); err != nil {
@@ -246,6 +254,9 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Skills != nil {
 			worker.Spec.Skills = req.Skills
+		}
+		if req.RemoteSkills != nil {
+			worker.Spec.RemoteSkills = req.RemoteSkills
 		}
 		if req.McpServers != nil {
 			worker.Spec.McpServers = req.McpServers
@@ -546,6 +557,132 @@ func (h *ResourceHandler) GetHuman(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, humanToResponse(&human))
 }
 
+func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "human name is required")
+		return
+	}
+
+	var req UpdateHumanRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+
+	ctx := r.Context()
+	for attempt := 0; attempt < k8sUpdateMaxRetries; attempt++ {
+		var human v1beta1.Human
+		if err := h.client.Get(ctx, client.ObjectKey{Name: name, Namespace: h.namespace}, &human); err != nil {
+			writeK8sError(w, "get human for update", err)
+			return
+		}
+
+		if req.PermissionLevel != nil && (*req.PermissionLevel < 1 || *req.PermissionLevel > 3) {
+			httputil.WriteError(w, http.StatusBadRequest, "permissionLevel must be 1 (admin), 2 (team), or 3 (worker)")
+			return
+		}
+		if err := h.validateHumanReferences(ctx, req.AccessibleTeams, req.AccessibleWorkers); err != nil {
+			if errors.Is(err, errDanglingReference) {
+				httputil.WriteError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			// Backend lookup failure (K8s API timeout, permission, or
+			// service error): a server problem, not a client error.
+			writeK8sError(w, "validate human references", err)
+			return
+		}
+
+		if req.DisplayName != nil {
+			human.Spec.DisplayName = *req.DisplayName
+		}
+		if req.Email != nil {
+			human.Spec.Email = *req.Email
+		}
+		if req.PermissionLevel != nil {
+			human.Spec.PermissionLevel = *req.PermissionLevel
+		}
+		if req.AccessibleTeams != nil {
+			human.Spec.AccessibleTeams = *req.AccessibleTeams
+		}
+		if req.AccessibleWorkers != nil {
+			human.Spec.AccessibleWorkers = *req.AccessibleWorkers
+		}
+		if req.Note != nil {
+			human.Spec.Note = *req.Note
+		}
+
+		if err := h.client.Update(ctx, &human); err != nil {
+			if apierrors.IsConflict(err) && attempt+1 < k8sUpdateMaxRetries {
+				time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
+				continue
+			}
+			writeK8sError(w, "update human", err)
+			return
+		}
+
+		httputil.WriteJSON(w, http.StatusOK, humanToResponse(&human))
+		return
+	}
+}
+
+// errDanglingReference marks validation errors where a referenced Team or
+// Worker does not exist (a client error, mapped to 400 by the caller).
+// Any other error from validateHumanReferences is a backend lookup
+// failure (mapped to a server error).
+var errDanglingReference = errors.New("dangling reference")
+
+// validateHumanReferences rejects permission grants that point at missing
+// Teams or Workers: a dangling reference silently widens nothing but leaves
+// the human unable to reach a resource they believe they can. Missing
+// references are returned wrapped in errDanglingReference; backend lookup
+// failures (List/Get errors other than NotFound) are returned unwrapped so
+// the caller can surface them as a server error instead of a 400.
+func (h *ResourceHandler) validateHumanReferences(ctx context.Context, teams *[]string, workers *[]string) error {
+	if teams != nil {
+		var teamList v1beta1.TeamList
+		if err := h.client.List(ctx, &teamList, client.InNamespace(h.namespace)); err != nil {
+			return fmt.Errorf("list teams: %w", err)
+		}
+		existing := make(map[string]struct{}, len(teamList.Items))
+		for i := range teamList.Items {
+			existing[teamList.Items[i].Name] = struct{}{}
+		}
+		var missing []string
+		for _, t := range *teams {
+			if t == "" {
+				continue
+			}
+			if _, ok := existing[t]; !ok {
+				missing = append(missing, t)
+			}
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf("%w: accessibleTeams references missing teams: %s", errDanglingReference, strings.Join(missing, ", "))
+		}
+	}
+	if workers != nil {
+		var missing []string
+		for _, wn := range *workers {
+			if wn == "" {
+				continue
+			}
+			var worker v1beta1.Worker
+			if err := h.client.Get(ctx, client.ObjectKey{Name: wn, Namespace: h.namespace}, &worker); err != nil {
+				if apierrors.IsNotFound(err) {
+					missing = append(missing, wn)
+					continue
+				}
+				return fmt.Errorf("get worker %s: %w", wn, err)
+			}
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf("%w: accessibleWorkers references missing workers: %s", errDanglingReference, strings.Join(missing, ", "))
+		}
+	}
+	return nil
+}
+
 func (h *ResourceHandler) ListHumans(w http.ResponseWriter, r *http.Request) {
 	var list v1beta1.HumanList
 	if err := h.client.List(r.Context(), &list, client.InNamespace(h.namespace)); err != nil {
@@ -684,8 +821,8 @@ func (h *ResourceHandler) UpdateManager(w http.ResponseWriter, r *http.Request) 
 		if req.Model != "" {
 			mgr.Spec.Model = req.Model
 		}
-		if req.ModelProvider != "" {
-			mgr.Spec.ModelProvider = req.ModelProvider
+		if req.ModelProvider != nil {
+			mgr.Spec.ModelProvider = *req.ModelProvider
 		}
 		if req.Runtime != "" {
 			mgr.Spec.Runtime = req.Runtime
@@ -874,6 +1011,95 @@ func (h *ResourceHandler) findTeamForMember(ctx context.Context, name string) (s
 		return "", false, err
 	}
 	return team.Name, true, nil
+}
+
+// checkHumanWorkerUpdate enforces the L2 human boundary on worker updates.
+// The worker must be a member of one of the caller's accessibleTeams —
+// standalone workers are hidden from L2 readers (ListWorkers), so they are
+// hidden here as well (404 keeps the endpoint probe-resistant). The request
+// may only touch the public-catalog skill assignment (skills). remoteSkills
+// (arbitrary external registries with credential-bearing source URIs) and
+// mcpServers (the gateway consumer key is injected into every entry, so an
+// L2-controlled URL is a credential-exfiltration path) require an elevated
+// capability pending the L2 permission design; everything else (model,
+// image, identity, resources, ...) is the team owner's domain.
+// TestL2WorkerUpdateFieldPolicyCoversAllRequestFields pins the policy so no
+// field of UpdateWorkerRequest becomes L2-writable by omission.
+// Returns (0, "") when the update is allowed.
+func (h *ResourceHandler) checkHumanWorkerUpdate(ctx context.Context, caller *authpkg.CallerIdentity, name string, req *UpdateWorkerRequest) (int, string) {
+	team, _, ok, err := findTeamMember(ctx, h.client, h.namespace, name)
+	if err != nil {
+		return http.StatusInternalServerError, "lookup worker team: " + err.Error()
+	}
+	if !ok {
+		return http.StatusNotFound, "worker: not found"
+	}
+	// Out-of-scope workers are hidden from L2 readers on the read path
+	// (GET → 404, LIST → filtered). The update path must not reopen that
+	// probe surface: a 403 here would let a scoped human enumerate workers
+	// it cannot see and learn which team owns them (W8).
+	if !caller.TeamMatches(team.Name) {
+		return http.StatusNotFound, "worker: not found"
+	}
+	var forbidden []string
+	if req.WorkerName != "" {
+		forbidden = append(forbidden, "workerName")
+	}
+	if req.Model != "" {
+		forbidden = append(forbidden, "model")
+	}
+	if req.ModelProvider != "" {
+		forbidden = append(forbidden, "modelProvider")
+	}
+	if req.Runtime != "" {
+		forbidden = append(forbidden, "runtime")
+	}
+	if req.Image != "" {
+		forbidden = append(forbidden, "image")
+	}
+	if req.Identity != "" {
+		forbidden = append(forbidden, "identity")
+	}
+	if req.Soul != "" {
+		forbidden = append(forbidden, "soul")
+	}
+	if req.Agents != "" {
+		forbidden = append(forbidden, "agents")
+	}
+	// Credential-bearing surfaces: remoteSkills (registry source URIs may
+	// embed tokens) and mcpServers (GenerateMcporterConfig injects the
+	// gateway bearer key into every entry, URL used verbatim — an
+	// attacker-controlled URL exfiltrates it). Elevated capability pending
+	// the L2 permission design.
+	if req.RemoteSkills != nil {
+		forbidden = append(forbidden, "remoteSkills")
+	}
+	if req.McpServers != nil {
+		forbidden = append(forbidden, "mcpServers")
+	}
+	if req.Package != "" {
+		forbidden = append(forbidden, "package")
+	}
+	if req.Expose != nil {
+		forbidden = append(forbidden, "expose")
+	}
+	if req.ChannelPolicy != nil {
+		forbidden = append(forbidden, "channelPolicy")
+	}
+	if req.Resources != nil {
+		forbidden = append(forbidden, "resources")
+	}
+	if req.ContainerManaged != nil {
+		forbidden = append(forbidden, "containerManaged")
+	}
+	if req.State != nil {
+		forbidden = append(forbidden, "state")
+	}
+	if len(forbidden) > 0 {
+		return http.StatusBadRequest,
+			"L2 humans may only update the skills field (public-catalog assignment); remoteSkills and mcpServers require an elevated capability; not allowed: " + strings.Join(forbidden, ", ")
+	}
+	return 0, ""
 }
 
 func (h *ResourceHandler) validateTeamWorkerMembers(ctx context.Context, teamName string, members []v1beta1.TeamWorkerRef) error {

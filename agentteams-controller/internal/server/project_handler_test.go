@@ -4042,3 +4042,324 @@ func TestCancelTask_RetryConvergesBothObjects(t *testing.T) {
 		t.Fatalf("task=%v, want cancelled + reason after retry", task2)
 	}
 }
+
+// --- workflow ?format=mermaid ---
+
+func TestGetProjectWorkflow_MermaidFormat(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "teams/alpha-team/shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1",
+		"title":      "Alpha Project",
+		"status":     "active",
+		"plan_type":  "dag",
+		"team_id":    "alpha-team",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "Task 1", "assigned_to": "@w1", "depends_on": []string{}, "status": "completed"},
+			{"task_id": "t2", "title": "Task 2", "assigned_to": "@w2", "depends_on": []string{"t1"}, "status": "assigned"},
+			{"task_id": "t3", "title": "Task 3", "assigned_to": "@w3", "depends_on": []string{"t2"}, "status": "planned"},
+		},
+	})
+	h := newProjectTestHandler(t, store, team("alpha-team"))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/workflow?format=mermaid", nil)
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetProjectWorkflow(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Fatalf("content-type=%q, want text/plain", ct)
+	}
+	out := rec.Body.String()
+	if !strings.HasPrefix(out, "flowchart LR") {
+		t.Fatalf("expected flowchart header, got %q", out)
+	}
+	if !strings.Contains(out, `t1["Task 1: completed"]:::completed`) {
+		t.Fatalf("expected t1 with completed class, got %q", out)
+	}
+	// t2 is the only ready node: ready class overrides its delegated class.
+	if !strings.Contains(out, `t2["Task 2: delegated"]:::ready`) {
+		t.Fatalf("expected ready class on t2, got %q", out)
+	}
+	if !strings.Contains(out, `t3["Task 3: pending"]:::pending`) {
+		t.Fatalf("expected t3 with pending class, got %q", out)
+	}
+	if !strings.Contains(out, "t1 --> t2") || !strings.Contains(out, "t2 --> t3") {
+		t.Fatalf("missing edges, got %q", out)
+	}
+	for _, cd := range []string{
+		"classDef ready", "classDef pending", "classDef delegated", "classDef completed", "classDef blocked",
+	} {
+		if !strings.Contains(out, cd) {
+			t.Fatalf("expected %q in output, got %q", cd, out)
+		}
+	}
+}
+
+func TestGetProjectWorkflow_MermaidFormat_Invalid(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P", "status": "active", "plan_type": "dag",
+	})
+	h := newProjectTestHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/workflow?format=bogus", nil)
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetProjectWorkflow(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+}
+
+// --- GET /api/v1/projects/{id}/tasks/{taskId} (node-level inspection) ---
+
+func TestGetTaskInspection(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "teams/alpha-team/shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1",
+		"title":      "Alpha Project",
+		"status":     "active",
+		"plan_type":  "dag",
+		"team_id":    "alpha-team",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "Task 1", "assigned_to": "@w1", "depends_on": []string{}, "status": "completed"},
+			{"task_id": "t2", "title": "Task 2", "assigned_to": "@w2", "depends_on": []string{"t1"}, "status": "assigned"},
+		},
+	})
+	putProject(store, "teams/alpha-team/shared/tasks/t1/meta.json", map[string]any{
+		"task_id":       "t1",
+		"project_id":    "p1",
+		"status":        "completed",
+		"spec_path":     "shared/tasks/t1/spec.md",
+		"assigned_to":   "@w1",
+		"summary":       "Alpha report done",
+		"result_status": "SUCCESS",
+		"result_path":   "shared/tasks/t1/result.md",
+		"history": []any{
+			map[string]any{"ts": "2026-09-05T01:00:00Z", "from": "", "to": "planned", "actor": "manager", "action": "create"},
+			map[string]any{"ts": "2026-09-05T02:00:00Z", "from": "in_progress", "to": "submitted", "actor": "w1", "action": "submit_task"},
+			"malformed entry must be skipped",
+			map[string]any{"note": "no ts and no action — skipped"},
+		},
+	})
+	putProject(store, "teams/alpha-team/shared/tasks/t2/meta.json", map[string]any{
+		"task_id": "t2", "project_id": "p1", "status": "assigned",
+		"spec_path": "shared/tasks/t2/spec.md", "assigned_to": "@w2",
+	})
+	h := newProjectTestHandler(t, store, team("alpha-team"))
+
+	// t1: full detail + parsed history (malformed entries skipped) + trace.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/tasks/t1", nil)
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetTaskInspection(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("t1 status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var insp taskInspection
+	if err := json.Unmarshal(rec.Body.Bytes(), &insp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if insp.TaskID != "t1" || insp.ProjectID != "p1" || insp.Status != "completed" {
+		t.Fatalf("t1 identity wrong: %+v", insp)
+	}
+	if insp.SpecPath != "shared/tasks/t1/spec.md" || insp.Summary != "Alpha report done" ||
+		insp.ResultStatus != "SUCCESS" || insp.ResultPath != "shared/tasks/t1/result.md" {
+		t.Fatalf("t1 detail wrong: %+v", insp)
+	}
+	if len(insp.History) != 2 {
+		t.Fatalf("t1 history=%d, want 2 (malformed entries skipped): %+v", len(insp.History), insp.History)
+	}
+	if insp.History[1].From != "in_progress" || insp.History[1].To != "submitted" ||
+		insp.History[1].Actor != "w1" || insp.History[1].Action != "submit_task" {
+		t.Fatalf("t1 history entry wrong: %+v", insp.History[1])
+	}
+	if len(insp.Dependencies) != 0 {
+		t.Fatalf("t1 dependencies=%v, want empty", insp.Dependencies)
+	}
+	if insp.Trace.ProjectID != "p1" || insp.Trace.TaskID != "t1" {
+		t.Fatalf("t1 trace hint wrong: %+v", insp.Trace)
+	}
+
+	// t2: dependencies exposed from the graph node.
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/tasks/t2", nil)
+	req2.SetPathValue("id", "p1")
+	req2.SetPathValue("taskId", "t2")
+	req2 = withCaller(req2, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec2 := httptest.NewRecorder()
+	h.GetTaskInspection(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("t2 status=%d body=%s", rec2.Code, rec2.Body.String())
+	}
+	var insp2 taskInspection
+	if err := json.Unmarshal(rec2.Body.Bytes(), &insp2); err != nil {
+		t.Fatalf("decode t2: %v", err)
+	}
+	if len(insp2.Dependencies) != 1 || insp2.Dependencies[0] != "t1" {
+		t.Fatalf("t2 dependencies=%v, want [t1]", insp2.Dependencies)
+	}
+	if insp2.Status != "assigned" || insp2.History != nil {
+		t.Fatalf("t2 detail wrong: %+v", insp2)
+	}
+}
+
+func TestGetTaskInspection_MissingMeta(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "assigned_to": "@w1", "depends_on": []string{}, "status": "in_progress"},
+		},
+	})
+	h := newProjectTestHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/tasks/t1", nil)
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetTaskInspection(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var insp taskInspection
+	if err := json.Unmarshal(rec.Body.Bytes(), &insp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// No TaskMeta: node summary only, status normalized from the graph node.
+	if insp.Status != "in-progress" || insp.SpecPath != "" || insp.Summary != "" {
+		t.Fatalf("expected node summary only, got %+v", insp)
+	}
+	if insp.Trace.TaskID != "t1" {
+		t.Fatalf("trace hint missing: %+v", insp.Trace)
+	}
+}
+
+func TestGetTaskInspection_TaskNotInGraph(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "assigned_to": "@w1", "depends_on": []string{}, "status": "planned"},
+		},
+	})
+	h := newProjectTestHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/tasks/t9", nil)
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t9")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetTaskInspection(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s, want 404", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetTaskInspection_InvalidTaskID(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P", "status": "active", "plan_type": "dag",
+	})
+	h := newProjectTestHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/tasks/bad%21id", nil)
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "bad!id")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetTaskInspection(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetTaskInspection_LoopTask(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1",
+		"title":      "Loop Project",
+		"status":     "active",
+		"plan_type":  "loop",
+		"tasks":      []map[string]any{},
+		"loop": map[string]any{
+			"goal": "g", "stop_condition": "s", "current_iteration": 1, "max_iterations": 5, "status": "running",
+			"tasks": []map[string]any{
+				{"task_id": "l1", "title": "Loop Step 1", "assigned_to": "@w1", "depends_on": []string{}, "status": "completed"},
+				{"task_id": "l2", "title": "Loop Step 2", "assigned_to": "@w2", "depends_on": []string{"l1"}, "status": "assigned"},
+			},
+		},
+	})
+	putProject(store, "shared/tasks/l2/meta.json", map[string]any{
+		"task_id": "l2", "project_id": "p1", "status": "assigned",
+		"spec_path": "shared/tasks/l2/spec.md",
+	})
+	h := newProjectTestHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/tasks/l2", nil)
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "l2")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetTaskInspection(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var insp taskInspection
+	if err := json.Unmarshal(rec.Body.Bytes(), &insp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if insp.TaskID != "l2" || insp.SpecPath != "shared/tasks/l2/spec.md" {
+		t.Fatalf("loop task detail wrong: %+v", insp)
+	}
+	if len(insp.Dependencies) != 1 || insp.Dependencies[0] != "l1" {
+		t.Fatalf("loop task dependencies=%v, want [l1]", insp.Dependencies)
+	}
+}
+
+func TestGetTaskInspection_CrossScopeNoFallback(t *testing.T) {
+	store := ossfake.NewMemory()
+	// Team-owned project; its task meta exists ONLY at the global prefix.
+	// A team project must not leak the global TaskMeta (same rule as
+	// readTasksDetail / includeTasks).
+	putProject(store, "teams/alpha-team/shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1",
+		"title":      "Alpha Project",
+		"status":     "active",
+		"plan_type":  "dag",
+		"team_id":    "alpha-team",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "Task 1", "assigned_to": "@w1", "depends_on": []string{}, "status": "planned"},
+		},
+	})
+	putProject(store, "shared/tasks/t1/meta.json", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "completed",
+		"summary": "should not leak",
+	})
+	h := newProjectTestHandler(t, store, team("alpha-team"))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/tasks/t1", nil)
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetTaskInspection(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var insp taskInspection
+	if err := json.Unmarshal(rec.Body.Bytes(), &insp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if insp.Summary != "" || insp.Status != "pending" {
+		t.Fatalf("global TaskMeta leaked into team project: %+v", insp)
+	}
+}

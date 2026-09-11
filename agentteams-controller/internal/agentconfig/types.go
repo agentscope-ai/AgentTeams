@@ -43,7 +43,7 @@ type WorkerConfigRequest struct {
 	TeamLeaderName string           // if non-empty, this is a team worker
 	ChannelPolicy  *ChannelPolicy   // optional communication policy overrides
 	Heartbeat      *HeartbeatConfig // optional: team leader heartbeat settings
-	Runtime        string           // agent runtime (openclaw | copaw | hermes | qwenpaw)
+	Runtime        string           // agent runtime (openclaw | copaw | hermes | qwenpaw | deepseek-harness)
 }
 
 // ChannelPolicy describes additive/subtractive communication rules.

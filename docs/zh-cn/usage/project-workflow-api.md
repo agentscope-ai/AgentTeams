@@ -63,6 +63,9 @@ Controller 提供两个只读端点，把 TeamHarness 项目状态
 | 参数 | 类型 | 含义 |
 |:--|:--|:--|
 | `includeTasks` | `bool` | 为 `true` 时同时读取每个任务的 TaskMeta（`shared/tasks/{id}/meta.json`），在响应中附加 `tasks_detail` 数组（spec/result/交付物字段）。默认 `false` 保持响应轻量。 |
+| `format` | `string` | 响应格式。缺省返回上方 JSON 快照；`format=mermaid` 返回同一快照渲染的 Mermaid 流程图（`text/plain`，不含 `tasks_detail`——渲染只需 nodes/edges/next）。其他值返回 `400`。 |
+
+Mermaid 输出（`?format=mermaid`）对齐 LangGraph 的 `draw_mermaid` 助手：每个节点标签为 `name: status`，next/ready 节点高亮 `ready`，其余节点按状态着色（`pending` / `delegated` / `inProgress` / `completed` / `revision` / `blocked`）。所有 classDef 都会输出，图可独立渲染。任务标题与 ID 为用户可控输入，渲染前做 mermaid 安全归一：换行→`<br>`、双引号→`#quot;`、反斜杠丢弃、其他控制字符→空格；含 `[A-Za-z0-9_-]` 之外字符的 task ID 映射为防冲突节点 ID（标签保留原文）。畸形标题因此不可能改变渲染出的图结构。
 
 响应 `200 OK`：
 
@@ -146,6 +149,46 @@ Controller 提供两个只读端点，把 TeamHarness 项目状态
 | `404` | 项目不存在（所有扫描前缀下都无 meta.json）——**或**调用者是限定读者（团队 leader / L2 人类）且不拥有该项目（隐藏存在性以防 id 枚举）。 |
 | `500` | K8s 或对象存储故障。 |
 
+### `GET /api/v1/projects/{id}/tasks/{taskId}`
+
+单任务节点级检视：聚合该任务的图节点（状态/负责人/依赖）、TaskMeta（spec/摘要/结果/交付物）、append-only 状态迁移历史，以及指向 tracing 后端的 trace 提示。
+
+```text
+GET /api/v1/projects/{id}/tasks/{taskId}?team=alpha-team
+```
+
+响应 `200 OK`：
+
+```json
+{
+  "task_id": "t1",
+  "project_id": "demo-project-001",
+  "status": "in-progress",
+  "spec_path": "shared/tasks/t1/spec.md",
+  "assigned_to": "@w1:matrix.local",
+  "summary": "Alpha report done",
+  "result_status": "SUCCESS",
+  "result_path": "shared/tasks/t1/result.md",
+  "deliverables": [{"type": "file", "path": "shared/tasks/t1/output.pdf"}],
+  "history": [
+    {"ts": "2026-09-05T01:00:00Z", "from": "", "to": "planned", "actor": "manager", "action": "create"},
+    {"ts": "2026-09-05T02:00:00Z", "from": "planned", "to": "in_progress", "actor": "w1", "action": "ack_task"},
+    {"ts": "2026-09-05T03:00:00Z", "from": "in_progress", "to": "submitted", "actor": "w1", "action": "submit_task"}
+  ],
+  "dependencies": [],
+  "trace": {"project_id": "demo-project-001", "task_id": "t1"}
+}
+```
+
+字段说明：
+
+- `status`：TaskMeta 存在时为**原始**状态（与 `?includeTasks=true` 的 `tasks_detail` 同语义）；TaskMeta 缺失时回退到图节点归一化状态（`pending | delegated | in-progress | completed | revision | blocked`）。
+- `history`：由 TeamHarness taskflow（及 controller 的 cancel 路径）append-only 维护的已接受状态迁移审计，上限 50 条；工作流状态机落地（设计：agentscope-ai/AgentTeams#1223）前为空。畸形条目跳过，不报错。
+- `trace` 是 tracing 后端的过滤提示：其 `project_id` / `task_id` 用于匹配 span 属性 `agentteams.project.id` / `agentteams.task.id`（worker entry span 已携带这两个属性）。本端点不构造后端 URL，tracing 后端是部署特定的。
+- TaskMeta 只从项目所属 scope 读取（team 前缀优先，global 前缀仅 standalone 项目兜底）——与 `tasks_detail` 相同的禁止跨 scope 回退规则。
+
+错误：`400`（task id 缺失/非法）、`404`（项目不存在——对限定读者隐藏存在性——或任务不在该项目图中）、`500`（存储读取失败）。
+
 ### `GET /api/v1/projects/{id}/tasks/{taskId}/artifact`
 
 下载一个任务的一个产物，为 dashboard 和 console 插件补全「交付物 → 下载 → 审 → 接受」闭环。
@@ -169,7 +212,7 @@ Controller 提供两个只读端点，把 TeamHarness 项目状态
 | `404` | 项目不存在 / 调用者不拥有它（隐藏存在性）/ 任务不在项目图中 / 任务没有已发布产物 / 请求路径不是已声明产物 / 产物文件缺失 / 产物路径被拒绝。 |
 | `500` | K8s 或对象存储故障。 |
 
-## 人类干预与生命周期端点（W-PR-2）
+## 人类干预与生命周期端点（写 API）
 
 上面的只读端点之外，还有让人类干预 agent 编排工作流的写端点。所有写入都经过
 **代码级授权**：中间件拒绝跨团队写入（authorizer `requireSameTeam`），handler
@@ -298,14 +341,23 @@ agt get projects                      # 列出全部
 agt get projects --team biz-team      # 按团队过滤
 agt get projects demo-project-001     # 工作流详情
 agt get projects demo-project-001 -o json
-agt get projects demo-project-001 --mermaid   # 渲染 DAG 为 mermaid
+agt get projects demo-project-001 --mermaid   # 渲染 DAG 为 mermaid（含状态着色）
+```
+
+`--mermaid` 与 API 的 `?format=mermaid` 使用同一渲染器：next/ready 节点高亮，其余节点按状态着色。
+
+节点级检视暂无专门 CLI 子命令，直接用 API：
+
+```bash
+curl -H "Authorization: Bearer $AGENTTEAMS_AUTH_TOKEN" \
+  "$AGENTTEAMS_API_BASE/api/v1/projects/demo-project-001/tasks/t1"
 ```
 
 CLI 原样转发配置的 bearer 令牌（`AGENTTEAMS_AUTH_TOKEN` 或
 `AGENTTEAMS_AUTH_TOKEN_FILE`），所以 L2 人类也可以用——把任一变量指向自己的
 Matrix 访问令牌即可，无需单独的 CLI 认证模式。
 
-### `agt project`（W-PR-2 写命令）
+### `agt project`（写命令）
 
 `agt project` 包装写端点，人类无需 raw curl 即可干预：
 

@@ -59,6 +59,29 @@ func TestLoadConfigMetricsBindAddrPrefersAgentTeamsEnv(t *testing.T) {
 	}
 }
 
+func TestLoadConfigEmbeddedPreservesWorkerAIGatewayURL(t *testing.T) {
+	t.Setenv("AGENTTEAMS_KUBE_MODE", "embedded")
+	t.Setenv("AGENTTEAMS_CONTROLLER_URL", "http://agentteams-controller:8090")
+	t.Setenv("AGENTTEAMS_MATRIX_URL", "http://127.0.0.1:6167")
+	t.Setenv("AGENTTEAMS_FS_ENDPOINT", "http://127.0.0.1:9000")
+	t.Setenv("AGENTTEAMS_AI_GATEWAY_URL", "http://aigw-local.agentteams.io:8080")
+
+	cfg := LoadConfig()
+
+	if got, want := cfg.WorkerEnv.MatrixURL, "http://agentteams-controller:6167"; got != want {
+		t.Fatalf("WorkerEnv.MatrixURL = %q, want %q", got, want)
+	}
+	if got, want := cfg.WorkerEnv.FSEndpoint, "http://agentteams-controller:9000"; got != want {
+		t.Fatalf("WorkerEnv.FSEndpoint = %q, want %q", got, want)
+	}
+	if got, want := cfg.WorkerEnv.AIGatewayURL, "http://aigw-local.agentteams.io:8080"; got != want {
+		t.Fatalf("WorkerEnv.AIGatewayURL = %q, want %q", got, want)
+	}
+	if got, want := cfg.GatewayConfig().DataPlaneURL, "http://aigw-local.agentteams.io:8080"; got != want {
+		t.Fatalf("GatewayConfig().DataPlaneURL = %q, want %q", got, want)
+	}
+}
+
 func TestLoadConfigAppliesManagerSpec(t *testing.T) {
 	t.Setenv("AGENTTEAMS_MANAGER_SPEC", `{
 		"model":"qwen-max",
@@ -142,6 +165,38 @@ func TestBackendConfigsIncludeQwenPawWorkerImage(t *testing.T) {
 	} {
 		if want := "agentteams/qwenpaw-worker:test"; got != want {
 			t.Fatalf("%s QwenPawWorkerImage = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestBackendConfigsIncludeDeepSeekHarnessWorkerImage(t *testing.T) {
+	t.Setenv("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/deepseek-harness-worker:test")
+
+	cfg := LoadConfig()
+
+	for name, got := range map[string]string{
+		"docker":  cfg.DockerConfig().DeepSeekHarnessWorkerImage,
+		"k8s":     cfg.K8sConfig().DeepSeekHarnessWorkerImage,
+		"sandbox": cfg.SandboxConfig().DeepSeekHarnessWorkerImage,
+	} {
+		if want := "agentteams/deepseek-harness-worker:test"; got != want {
+			t.Fatalf("%s DeepSeekHarnessWorkerImage = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestBackendConfigsDefaultToIndependentDeepSeekHarnessVersion(t *testing.T) {
+	t.Setenv("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "")
+
+	cfg := LoadConfig()
+
+	for name, got := range map[string]string{
+		"docker":  cfg.DockerConfig().DeepSeekHarnessWorkerImage,
+		"k8s":     cfg.K8sConfig().DeepSeekHarnessWorkerImage,
+		"sandbox": cfg.SandboxConfig().DeepSeekHarnessWorkerImage,
+	} {
+		if want := "agentteams/agentteams-deepseek-harness-worker:v0.1.0"; got != want {
+			t.Fatalf("%s DeepSeekHarnessWorkerImage = %q, want %q", name, got, want)
 		}
 	}
 }

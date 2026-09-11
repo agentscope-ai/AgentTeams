@@ -192,3 +192,8 @@ app.kubernetes.io/component: {{ .component }}
 {{- $tag := default (include "agentteams.globalImageTag" .) .Values.worker.defaultImage.openhuman.tag }}
 {{- printf "%s:%s" .Values.worker.defaultImage.openhuman.repository $tag }}
 {{- end }}
+
+{{- define "agentteams.worker.deepseekHarnessImage" -}}
+{{- $tag := required "worker.defaultImage.deepseekHarness.tag is required because DeepSeek Harness releases independently" .Values.worker.defaultImage.deepseekHarness.tag }}
+{{- printf "%s:%s" .Values.worker.defaultImage.deepseekHarness.repository $tag }}
+{{- end }}

@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/workflow"
 )
 
 func getCmd() *cobra.Command {
@@ -123,7 +125,15 @@ func getProjectsCmd() *cobra.Command {
 					return fmt.Errorf("get project workflow: %w", err)
 				}
 				if mermaid {
-					fmt.Println(workflowMermaid(resp))
+					var snap workflow.Snapshot
+					buf, err := json.Marshal(resp)
+					if err != nil {
+						return fmt.Errorf("encode workflow: %w", err)
+					}
+					if err := json.Unmarshal(buf, &snap); err != nil {
+						return fmt.Errorf("decode workflow: %w", err)
+					}
+					fmt.Println(workflow.RenderMermaid(&snap))
 					return nil
 				}
 				if output == "json" {
@@ -203,51 +213,6 @@ func listStr(v any) string {
 		parts = append(parts, toStr(item))
 	}
 	return strings.Join(parts, ", ")
-}
-
-// workflowMermaid renders a workflow response as a Mermaid flowchart
-// (flowchart LR), mirroring LangGraph's draw_mermaid helper. Status is
-// appended to each node label; next/ready nodes are highlighted.
-func workflowMermaid(resp map[string]any) string {
-	var b strings.Builder
-	b.WriteString("flowchart LR\n")
-	nodes, _ := resp["nodes"].([]any)
-	edges, _ := resp["edges"].([]any)
-	nextSet := map[string]bool{}
-	for _, n := range resp["next"].([]any) {
-		if id, ok := n.(string); ok {
-			nextSet[id] = true
-		}
-	}
-	for _, raw := range nodes {
-		m, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		id := toStr(m["id"])
-		name := toStr(m["name"])
-		status := toStr(m["status"])
-		label := name
-		if status != "" {
-			label += ": " + status
-		}
-		style := ""
-		if nextSet[id] {
-			style = ":::ready"
-		}
-		fmt.Fprintf(&b, "    %s[%q]%s\n", id, label, style)
-	}
-	for _, raw := range edges {
-		m, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		src := toStr(m["source"])
-		dst := toStr(m["target"])
-		fmt.Fprintf(&b, "    %s --> %s\n", src, dst)
-	}
-	b.WriteString("    classDef ready fill:#d4edda,stroke:#28a745;\n")
-	return b.String()
 }
 
 // toStr converts a JSON-decoded value to its string form for table output.

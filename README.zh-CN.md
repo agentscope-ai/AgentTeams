@@ -16,7 +16,7 @@
 
 AgentTeams 不再实现 Agent 运行时本身，而是编排和管理多个 Agent 容器（Manager 和众多 Workers）。
 - 🧑‍💻 **设计了 Manger-Workers 架构**：不用真人去管理每个干活的 Worker Claw，实现由 Agent 管理 Agents。
-- 🤝 **多运行时协作**：OpenClaw、QwenPaw 和 Hermes Worker 在同一个 IM 房间中共存协作。用确定性更高的 Agent（OpenClaw/QwenPaw）做 Leader 编排任务，用 Hermes Worker 执行自主编程——各司其职。
+- 🤝 **多运行时协作**：OpenClaw、QwenPaw、Hermes 和实验性的 DeepSeek Harness Worker 可以在同一个 IM 房间中协作，并通过 Matrix 保持过程可见。
 - 📚 **引入 MinIO 共享文件系统**：用于 Agent 之间的信息共享，大幅降低多 Agent 协作带来的 Token 消耗。
 - ⛑️ **引入 Higress AI Gateway**：流量入口和各类凭证风险降低了，减少了用户对原生龙虾在安全上的顾虑。
 - 🎨 **使用 Element IM 客户端+Tuwunel IM 服务器（均基于 Matrix 实时通信协议）**：节省钉钉、飞书 IM 的接入和企业内的审批成本，方便用户快速体验在 IM 的交互环境中体验模型服务的"爽感"，同时支持以 OpenClaw 原生的方式接入 IM。
@@ -25,6 +25,7 @@ AgentTeams 不再实现 Agent 运行时本身，而是编排和管理多个 Agen
 ![架构](https://img.alicdn.com/imgextra/i4/O1CN01c1VlDE1zYZ46EW3OA_!!6000000006726-49-tps-9895-8231.webp)
 
 ## 动态
+- **2026-08-22:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.3) — AgentTeams v1.2.3：通过新增 Controller API、`agt` 命令和 Dashboard v1.2.4，让长时运行的 Project 工作流可见、可控；新增带审计记录的人工干预、Project 历史和 QwenPaw Worker 检查点；将 QwenPaw 提升为本地 Manager 和 Worker 的推荐默认运行时；并增强 Skill 恢复、Windows AppService 启动及运行可靠性。
 - **2026-08-08:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.2) — AgentTeams v1.2.2：新增 Manager 向 Worker 下发自定义 Skill，支持校验、上传存储、更新 `Worker.spec.skills`，并由 QwenPaw 无需重启即可热刷新和启用；增强 Manager 与 Worker 的 Skill 加载保护；同时确保 Team Leader 和 Worker 在受邀后显式加入 Team Room。
 - **2026-08-06:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.1) — AgentTeams v1.2.1：将 Manager 和 Worker 运行时栈统一到 QwenPaw 2.0.1，正式发布 QwenPaw Worker 多架构镜像，增强 Matrix 与 TeamHarness 任务分配原子性以及 CoPaw 到 QwenPaw 的状态迁移，新增自定义模型视觉与推理能力覆盖，并提升 Worker 生命周期和运行时管理可靠性。
 - **2026-07-30:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.0) — AgentTeams v1.2.0（正式版）：端到端统一 AgentTeams 命名并确立最终的 Team/Worker 资源契约；新增可选的 AgentTeams Dashboard；同时改进 Worker 存储同步、Team 路由与生命周期收敛，安装器可按旧环境变量与存储契约安装 v1.1.2（更早版本仍需使用对应的旧版安装器），并提升 Dashboard 可靠性以及工具和诊断安全性。
@@ -209,8 +210,8 @@ helm install agentteams higress.io/agentteams \
 | `preflight.llm.retries` | 可选 | 限流、网络错误和服务商 5xx 等临时错误的重试次数；默认 `2` |
 | `preflight.llm.activeDeadlineSeconds` | 可选 | 探测 Job 的最长运行时间；默认 `120` 秒 |
 | `preflight.llm.resources` | 可选 | 探测容器的 Kubernetes requests/limits |
-| `manager.runtime` | 可选 | Manager Agent 运行时：OpenClaw 使用 `openclaw`（默认）；CoPaw 在当前 Chart 中使用 `qwenpaw`，`copaw` 为兼容别名。Manager 不支持 Hermes |
-| `worker.defaultRuntime` | 可选 | Chart 提供 `openclaw`（默认）、`copaw`、`hermes` 和 `openhuman` 的默认镜像值，但当前 CRD 不接受显式的 `spec.runtime: openhuman`；QwenPaw Worker 需在 `spec.image` 中显式配置镜像 |
+| `manager.runtime` | 可选 | Manager Agent 运行时：OpenClaw 使用 `openclaw`（默认）；CoPaw 在当前 Chart 中使用 `qwenpaw`，`copaw` 为兼容别名。Manager 不支持 Hermes 或 DeepSeek Harness |
+| `worker.defaultRuntime` | 可选 | Chart 提供 `openclaw`（默认）、`copaw`、`hermes`、实验性的 `deepseek-harness` 和 `openhuman` 默认镜像值；当前 CRD 不接受显式的 `spec.runtime: openhuman`，QwenPaw Worker 需在 `spec.image` 中显式配置镜像 |
 
 Helm 默认在安装和升级前执行 LLM 探测，使用 `credentials.llmApiKey`、`credentials.llmBaseUrl` 和 `credentials.defaultModel` 发送一个最小的 OpenAI 兼容请求。无效密钥、无法访问的 Base URL、不支持的模型、额度错误或服务商故障会在 Controller 启动前终止安装。受限或离线集群可以临时关闭：
 
@@ -404,13 +405,14 @@ Alice：前端校验也更新了。
 
 ## 多运行时协作
 
-AgentTeams 目前提供三类主要 Worker 运行时，可以**在同一个 IM 房间中共存协作**：
+AgentTeams 提供多类 Worker 运行时，可以**在同一个 IM 房间中共存协作**：
 
 - **OpenClaw**（Node.js）— 通用 Agent 运行时，拥有丰富的 Skills 生态，擅长任务编排和工具调用
 - **QwenPaw**（Python）— 轻量级运行时，适合浏览器自动化和快速任务
 - **Hermes**（[hermes-agent](https://github.com/NousResearch/hermes-agent)）— 自主编程 Agent，具备终端沙箱、自我进化的 Skill 和持久化记忆
+- **DeepSeek Harness**（实验性）— Headless 编程 Agent，支持按 Matrix 房间续聊、文件往返和重启恢复；当前固定在通过测试的 DSH release candidate
 
-`copaw` 仍作为已有 CoPaw Worker 的兼容 runtime 值保留；当前 CRD 同时接受 `copaw` 和 `qwenpaw`。每种运行时各有擅长。推荐模式：用确定性更高的 Agent（OpenClaw/QwenPaw）做 Leader 负责任务分解和调度，用 Hermes Worker 执行自主编程任务。所有运行时通过 Matrix 房间通信——完全可见、随时可干预。
+`copaw` 仍作为已有 CoPaw Worker 的兼容 runtime 值保留；当前 CRD 同时接受 `copaw` 和 `qwenpaw`。DeepSeek Harness runtime 目前属于实验能力，固定在通过兼容性测试的 DSH release candidate 上，支持按 Matrix 房间续聊、文件往返和重启恢复。所有运行时都通过 Matrix 房间通信——完全可见、随时可干预。
 
 ```bash
 # 原地切换任意 Worker 的运行时

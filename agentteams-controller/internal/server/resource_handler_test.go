@@ -645,6 +645,41 @@ func TestCreateAndUpdateManagerPersistsModelProvider(t *testing.T) {
 	}
 }
 
+func TestUpdateManagerClearsModelProviderWhenExplicitlyEmpty(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	manager := &v1beta1.Manager{
+		ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: "default"},
+		Spec: v1beta1.ManagerSpec{
+			Model:         "custom-model",
+			ModelProvider: "deleted-provider",
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(manager).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/managers/default", bytes.NewReader([]byte(`{
+		"model":"known-good-model",
+		"modelProvider":""
+	}`)))
+	updateReq.SetPathValue("name", "default")
+	updateRec := httptest.NewRecorder()
+	handler.UpdateManager(updateRec, updateReq)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("expected update status %d, got %d: %s", http.StatusOK, updateRec.Code, updateRec.Body.String())
+	}
+
+	var updated v1beta1.Manager
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "default", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get updated manager: %v", err)
+	}
+	if updated.Spec.Model != "known-good-model" {
+		t.Fatalf("updated manager model=%q, want known-good-model", updated.Spec.Model)
+	}
+	if updated.Spec.ModelProvider != "" {
+		t.Fatalf("updated manager modelProvider=%q, want empty", updated.Spec.ModelProvider)
+	}
+}
+
 func TestCreateTeamRequiresExactlyOneLeaderReference(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	leadOne := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "lead-one", Namespace: "default"}}

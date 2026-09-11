@@ -15,6 +15,7 @@ type CreateWorkerRequest struct {
 	Soul          string                             `json:"soul,omitempty"`
 	Agents        string                             `json:"agents,omitempty"`
 	Skills        []string                           `json:"skills,omitempty"`
+	RemoteSkills  []v1beta1.RemoteSkillSource        `json:"remoteSkills,omitempty"`
 	McpServers    []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
 	Package       string                             `json:"package,omitempty"`
 	Expose        []v1beta1.ExposePort               `json:"expose,omitempty"`
@@ -39,6 +40,7 @@ type UpdateWorkerRequest struct {
 	Soul          string                             `json:"soul,omitempty"`
 	Agents        string                             `json:"agents,omitempty"`
 	Skills        []string                           `json:"skills,omitempty"`
+	RemoteSkills  []v1beta1.RemoteSkillSource        `json:"remoteSkills,omitempty"`
 	McpServers    []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
 	Package       string                             `json:"package,omitempty"`
 	Expose        []v1beta1.ExposePort               `json:"expose,omitempty"`
@@ -151,6 +153,19 @@ type CreateHumanRequest struct {
 	Note              string   `json:"note,omitempty"`
 }
 
+// UpdateHumanRequest is the merge-patch body of PUT /api/v1/humans/{name}.
+// Pointer fields: absent = unchanged, present = replace (an empty non-nil
+// slice clears the list). Matrix identity (name / username) is not
+// updatable — changing it re-provisions the account.
+type UpdateHumanRequest struct {
+	DisplayName       *string   `json:"displayName,omitempty"`
+	Email             *string   `json:"email,omitempty"`
+	PermissionLevel   *int      `json:"permissionLevel,omitempty"`
+	AccessibleTeams   *[]string `json:"accessibleTeams,omitempty"`
+	AccessibleWorkers *[]string `json:"accessibleWorkers,omitempty"`
+	Note              *string   `json:"note,omitempty"`
+}
+
 type HumanResponse struct {
 	Name              string   `json:"name"`
 	Phase             string   `json:"phase"`
@@ -182,6 +197,7 @@ type CreateManagerRequest struct {
 	Soul          string                             `json:"soul,omitempty"`
 	Agents        string                             `json:"agents,omitempty"`
 	Skills        []string                           `json:"skills,omitempty"`
+	RemoteSkills  []v1beta1.RemoteSkillSource        `json:"remoteSkills,omitempty"`
 	McpServers    []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
 	Package       string                             `json:"package,omitempty"`
 	Config        *v1beta1.ManagerConfig             `json:"config,omitempty"`
@@ -191,12 +207,13 @@ type CreateManagerRequest struct {
 
 type UpdateManagerRequest struct {
 	Model         string                             `json:"model,omitempty"`
-	ModelProvider string                             `json:"modelProvider,omitempty"`
+	ModelProvider *string                            `json:"modelProvider,omitempty"`
 	Runtime       string                             `json:"runtime,omitempty"`
 	Image         string                             `json:"image,omitempty"`
 	Soul          string                             `json:"soul,omitempty"`
 	Agents        string                             `json:"agents,omitempty"`
 	Skills        []string                           `json:"skills,omitempty"`
+	RemoteSkills  []v1beta1.RemoteSkillSource        `json:"remoteSkills,omitempty"`
 	McpServers    []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
 	Package       string                             `json:"package,omitempty"`
 	Config        *v1beta1.ManagerConfig             `json:"config,omitempty"`

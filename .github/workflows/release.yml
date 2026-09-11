@@ -1,10 +1,11 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
-      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       version:
@@ -15,6 +16,7 @@ on:
 env:
   REGISTRY: higress-registry.cn-hangzhou.cr.aliyuncs.com
   REPO: agentteams
+  DEEPSEEK_HARNESS_WORKER_VERSION: v0.1.0
 
 jobs:
   release:
@@ -30,12 +32,9 @@ jobs:
 
       - name: Resolve version
         id: version
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-          else
-            VERSION="${{ github.ref_name }}"
-          fi
           # Validate stable or pre-release SemVer format.
           if ! echo "${VERSION}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
             echo "ERROR: invalid version format: ${VERSION}"
@@ -48,53 +47,27 @@ jobs:
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Wait for versioned multi-architecture images
+      - name: Verify versioned multi-architecture images
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
+          # Keep this list aligned with the release targets in build.yml.
           images=(
-            openclaw-base
-            agentteams-controller
-            agentteams-embedded
-            agentteams-manager
-            agentteams-manager-qwenpaw
-            agentteams-worker
-            agentteams-copaw-worker
-            agentteams-qwenpaw-worker
-            agentteams-hermes-worker
+            openclaw-base agentteams-controller agentteams-embedded
+            agentteams-manager agentteams-manager-qwenpaw agentteams-worker
+            agentteams-copaw-worker agentteams-qwenpaw-worker agentteams-hermes-worker
           )
-          images_ready=0
-          attempt=1
-          max_attempts=80
-
-          while [ "${attempt}" -le "${max_attempts}" ]; do
-            missing=()
-            for image in "${images[@]}"; do
-              ref="${REGISTRY}/${REPO}/${image}:${VERSION}"
-              manifest="$(docker buildx imagetools inspect "${ref}" --raw 2>/dev/null || true)"
-              if ! jq -e '
-                any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "amd64") and
-                any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "arm64")
-              ' >/dev/null 2>&1 <<<"${manifest}"; then
-                missing+=("${image}")
-              fi
-            done
-
-            if [ "${#missing[@]}" -eq 0 ]; then
-              images_ready=1
-              echo "All ${#images[@]} versioned images are ready for ${VERSION}."
-              break
-            fi
-
-            echo "Attempt ${attempt}/${max_attempts}: waiting for ${missing[*]}"
-            attempt=$((attempt + 1))
-            sleep 30
+          for image in "${images[@]}"; do
+            ref="${REGISTRY}/${REPO}/${image}:${VERSION}"
+            manifest="$(docker buildx imagetools inspect "$ref" --raw)"
+            jq -e '
+              any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "amd64") and
+              any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "arm64")
+            ' >/dev/null <<<"$manifest" || {
+              echo "ERROR: missing required architectures for $ref"
+              exit 1
+            }
           done
-
-          if [ "${images_ready}" -ne 1 ]; then
-            echo "ERROR: versioned multi-architecture images are incomplete for ${VERSION}."
-            exit 1
-          fi
 
       - name: Create tag (workflow_dispatch only)
         if: github.event_name == 'workflow_dispatch'
@@ -186,6 +159,9 @@ jobs:
           # QwenPaw Worker
           docker pull ${REGISTRY}/${REPO}/agentteams-qwenpaw-worker:${VERSION}
 
+          # DeepSeek Harness Worker (experimental)
+          docker pull ${REGISTRY}/${REPO}/agentteams-deepseek-harness-worker:${DEEPSEEK_HARNESS_WORKER_VERSION}
+
           # Controller (used standalone in k8s; bundled inside agentteams-embedded for docker installs)
           docker pull ${REGISTRY}/${REPO}/agentteams-controller:${VERSION}
           \`\`\`
@@ -200,6 +176,32 @@ jobs:
 
           For more details, see the [installation guide](https://github.com/${REPOSITORY}/blob/main/install/README.md).
           EOF
+
+      - name: Verify and smoke-test DeepSeek Harness runtime image
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-deepseek-harness-worker:${{ env.DEEPSEEK_HARNESS_WORKER_VERSION }}"
+          AVAILABLE=false
+          for attempt in 1 2 3 4 5; do
+            if docker buildx imagetools inspect "${IMAGE}" >/dev/null 2>&1; then
+              AVAILABLE=true
+              break
+            fi
+            if [ "${attempt}" -lt 5 ]; then sleep 15; fi
+          done
+          if [ "${AVAILABLE}" != "true" ]; then
+            echo "ERROR: required DeepSeek Harness runtime image is not pullable: ${IMAGE}"
+            exit 1
+          fi
+          docker pull --platform linux/amd64 "${IMAGE}"
+          docker run --rm --platform linux/amd64 --entrypoint sh "${IMAGE}" -ec '
+            command -v dsh >/dev/null
+            test -x /opt/agentteams/scripts/deepseek-harness-worker-entrypoint.sh
+            test -f /opt/agentteams/plugins/teamharness/plugin.yaml
+            python3 -m py_compile \
+              /opt/agentteams/scripts/runtime_env.py \
+              /opt/agentteams/scripts/matrix_channel.py \
+              /opt/agentteams/scripts/matrix_bridge.py
+          '
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

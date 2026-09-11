@@ -179,6 +179,18 @@ spec:
 
 **状态字段（节选）：** `observedGeneration`、`matrixUserID`、`roomID`、`containerState`、`lastHeartbeat`、`message`、`exposedPorts`（暴露端口及域名）。
 
+### Worker 更新权限（按角色）
+
+`PUT /api/v1/workers/{name}` 是合并补丁：body 里出现的字段才会被修改。各角色可更新的范围：
+
+| 角色 | 范围 | 字段 |
+|------|------|------|
+| admin / manager | 任意 Worker | 全部字段 |
+| 团队 Leader | 本团队 Worker | 全部字段 |
+| L2 人类用户（`permissionLevel: 2`） | 仅 `accessibleTeams` 内的 Worker | `skills` |
+
+L2 人类用户可自主管理所协调 Worker 的内置技能分配，无需升级到 admin。`remoteSkills` 与 `mcpServers` 暂不开放给 L2：MCP 路径存在网关消费者密钥泄露风险（生成器会把 `Authorization: Bearer <gatewayKey>` 附加到每个 MCP 条目的 URL 上），因此这两个字段对 L2 调用方返回 `400`，直到提权能力设计落地（见 L2 权限设计 issue #1220）。其余字段——`model`、`image`、`soul`、`agents`、`runtime`、`package`、`expose`、`channelPolicy`、`resources`、`containerManaged`、`state`——仍属团队所有者的权限范围；body 触碰即 `400` 拒绝。越权 Worker（跨团队或独立）对 L2 用户读写均不可见（`404`），端点保持防探测。设计细节见 [L2 Human Worker-Scoped Write](../design/l2-worker-scoped-write.md)。
+
 ## Team
 
 Team 是 AgentTeams 的协作单元，由一个 Team Leader 和若干 Team Worker 组成。Manager 将任务委派给 Team Leader，Leader 负责分解、分配和汇总，实现团队内部自治。
@@ -480,6 +492,17 @@ Human 的权限通过两个机制实现：
 | L1 | 添加到 Manager + 所有 Leader + 所有 Worker | 所有 Room |
 | L2 | 添加到指定 Team 的 Leader + Worker + 指定独立 Worker | 指定 Team Room + Worker Room |
 | L3 | 添加到指定 Worker | 指定 Worker Room |
+
+### Human 更新（API）
+
+`PUT /api/v1/humans/{name}` 更新既有 human 的权限配置。合并补丁语义：body 里出现的字段才变，未出现保持原值，显式空数组清空列表。
+
+- **可更新：** `displayName`、`email`、`permissionLevel`（1/2/3）、`accessibleTeams`、`accessibleWorkers`、`note`。
+- **不可更新：** `name` 与 Matrix 身份（账号重新开通是独立操作）。
+- **校验：** `permissionLevel` 超出 1–3 → `400`；`accessibleTeams` / `accessibleWorkers` 引用不存在的 Team/Worker → `400` 并点名。
+- **鉴权：** 仅 admin / manager。团队 Leader、团队范围人类用户、worker 账号一律拒绝——授权是管理员操作。
+
+更新写入 Human CR，既有的 human reconcile 自动把 Matrix 邀请、房间成员、`groupAllowFrom` 重新同步到新范围。注意：本端点不修改 Matrix 房间 power level——`permissionLevel` 变更立即对 API 鉴权生效，但既有房间的管理权限不因本次更新而改变（房间 power level 的对账是独立的变更，不属于本端点）。
 
 ### Human 创建流程
 

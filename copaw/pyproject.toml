@@ -11,6 +11,12 @@ license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 dependencies = [
     "copaw==1.0.2",
+    # mcp 2.0.0 renamed the client entrypoint
+    # `streamablehttp_client` -> `streamable_http_client` (breaking).
+    # copaw 1.0.2 imports the legacy name at worker startup, so the
+    # copaw worker crashes with ImportError when pip resolves mcp 2.x
+    # (agentscope 1.0.18 only requires mcp>=1.13). Cap at the 1.x line.
+    "mcp>=1.13,<2.0.0",
     "matrix-nio[e2e]>=0.24.0",
     "markdown-it-py>=3.0",
     "linkify-it-py>=2.0",

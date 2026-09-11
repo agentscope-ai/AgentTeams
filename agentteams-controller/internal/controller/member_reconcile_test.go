@@ -619,6 +619,40 @@ func TestReconcileMemberConfigQwenPawWritesRuntimeConfigWithoutOwningSkills(t *t
 	}
 }
 
+func TestReconcileMemberConfigDeepSeekHarnessWritesRuntimeConfigWithoutLegacyFiles(t *testing.T) {
+	deployer := mocks.NewMockDeployer()
+	state := &MemberState{
+		MatrixUserID: "@dsh-a:matrix.local",
+		RoomID:       "!dsh-a:matrix.local",
+		ProvResult:   &service.WorkerProvisionResult{},
+	}
+	member := MemberContext{
+		Name:        "dsh-a",
+		RuntimeName: "dsh-a",
+		Role:        RoleStandalone,
+		Generation:  3,
+		Spec: v1beta1.WorkerSpec{
+			Runtime: "deepseek-harness",
+			Model:   "deepseek-chat",
+			Skills:  []string{"dev-plan"},
+		},
+	}
+
+	if err := ReconcileMemberConfig(context.Background(), MemberDeps{Deployer: deployer}, member, state); err != nil {
+		t.Fatalf("ReconcileMemberConfig failed: %v", err)
+	}
+	if got := len(deployer.Calls.DeployMemberRuntimeConfig); got != 1 {
+		t.Fatalf("DeployMemberRuntimeConfig calls=%d, want 1", got)
+	}
+	if got := deployer.Calls.DeployMemberRuntimeConfig[0].Runtime; got != "deepseek-harness" {
+		t.Fatalf("runtime=%q, want deepseek-harness", got)
+	}
+	if deployPkg, writeInline, deployConfig, pushSkills, _ := deployer.CallCounts(); deployPkg != 0 || writeInline != 0 || deployConfig != 0 || pushSkills != 0 {
+		t.Fatalf("DeepSeek Harness must use runtime.yaml instead of legacy files, got package=%d inline=%d config=%d skills=%d",
+			deployPkg, writeInline, deployConfig, pushSkills)
+	}
+}
+
 func TestReconcileMemberSkillsFailureIsNonBlocking(t *testing.T) {
 	deployer := mocks.NewMockDeployer()
 	deployer.PushOnDemandSkillsFn = func(context.Context, string, []string, []v1beta1.RemoteSkillSource) error {

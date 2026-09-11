@@ -23,11 +23,14 @@ func TestAuthorizer_ManagerAllowsEverything(t *testing.T) {
 	}
 }
 
-// TestAuthorizer_HumanReadOnly guards the L2 security boundary: an L2 human
+// TestAuthorizer_HumanScoped guards the L2 security boundary: an L2 human
 // (RoleHuman) may read projects/teams/workers in scope, may update projects in
-// scope (W-PR-2: pause/resume/replan/lifecycle, code-level requireSameTeam),
-// but must NOT manage workers, refresh credentials, or mutate teams.
-func TestAuthorizer_HumanReadOnly(t *testing.T) {
+// scope (pause/resume/replan/lifecycle, code-level requireSameTeam), and may
+// update workers in scope (self-service skill / MCP config — the middleware
+// cannot resolve worker -> team, so the UpdateWorker handler enforces the real
+// boundary). They must NOT create/delete workers, wake/sleep them, refresh
+// credentials, or mutate teams.
+func TestAuthorizer_HumanScoped(t *testing.T) {
 	az := NewAuthorizer()
 	caller := &CallerIdentity{Role: RoleHuman, Username: "maizong", Teams: []string{"market-team"}}
 
@@ -39,6 +42,8 @@ func TestAuthorizer_HumanReadOnly(t *testing.T) {
 		{Action: ActionGet, ResourceKind: "team"},
 		{Action: ActionList, ResourceKind: "worker"},
 		{Action: ActionGet, ResourceKind: "worker"},
+		{Action: ActionUpdate, ResourceKind: "worker", ResourceTeam: "market-team"},
+		{Action: ActionUpdate, ResourceKind: "worker"},
 		{Action: ActionGet, ResourceKind: "status"},
 	}
 	for _, req := range allowed {
@@ -49,7 +54,8 @@ func TestAuthorizer_HumanReadOnly(t *testing.T) {
 
 	denied := []AuthzRequest{
 		{Action: ActionCreate, ResourceKind: "worker"},
-		{Action: ActionUpdate, ResourceKind: "worker"},
+		{Action: ActionUpdate, ResourceKind: "worker", ResourceTeam: "another-team"},
+		{Action: ActionDelete, ResourceKind: "worker"},
 		{Action: ActionWake, ResourceKind: "worker"},
 		{Action: ActionSleep, ResourceKind: "worker"},
 		{Action: ActionRefreshMatrixToken, ResourceKind: "credentials"},
@@ -61,6 +67,31 @@ func TestAuthorizer_HumanReadOnly(t *testing.T) {
 	for _, req := range denied {
 		if err := az.Authorize(caller, req); err == nil {
 			t.Errorf("L2 human must be denied %s %s, got nil error", req.Action, req.ResourceKind)
+		}
+	}
+}
+
+// TestAuthorizer_HumanUpdateAdminOnly guards the human permission-update
+// boundary: only admin/manager may PUT /api/v1/humans/{name}.
+func TestAuthorizer_HumanUpdateAdminOnly(t *testing.T) {
+	az := NewAuthorizer()
+	allowed := []CallerIdentity{
+		{Role: RoleAdmin, Username: "admin"},
+		{Role: RoleManager, Username: "manager"},
+	}
+	for i := range allowed {
+		if err := az.Authorize(&allowed[i], AuthzRequest{Action: ActionUpdate, ResourceKind: "human", ResourceName: "maizong"}); err != nil {
+			t.Errorf("%s should be allowed to update humans, got: %v", allowed[i].Role, err)
+		}
+	}
+	denied := []CallerIdentity{
+		{Role: RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team"},
+		{Role: RoleHuman, Username: "maizong", Teams: []string{"market-team"}},
+		{Role: RoleWorker, Username: "alpha-dev", Team: "alpha-team"},
+	}
+	for i := range denied {
+		if err := az.Authorize(&denied[i], AuthzRequest{Action: ActionUpdate, ResourceKind: "human", ResourceName: "maizong"}); err == nil {
+			t.Errorf("%s must be denied updating humans", denied[i].Role)
 		}
 	}
 }

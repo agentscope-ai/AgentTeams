@@ -20,7 +20,7 @@ AgentTeams does not compete with other Agent runtimes. Instead of implementing A
 
 - 🧬 **Manager-Workers Architecture**: Eliminates the need for human oversight of individual Worker Claws by enabling Agents to manage other Agents.
 
-- 🤝 **Multi-Runtime Collaboration**: OpenClaw, QwenPaw, and Hermes Workers coexist in the same IM room. Use deterministic agents (OpenClaw/QwenPaw) as Leaders to orchestrate tasks, and Hermes Workers for autonomous code execution — each runtime does what it's best at.
+- 🤝 **Multi-Runtime Collaboration**: OpenClaw, QwenPaw, Hermes, and experimental DeepSeek Harness Workers coexist in the same IM room. Use the runtime that best fits each role while keeping collaboration visible in Matrix.
 
 - 📦 **MinIO Shared File System**: Introduces a shared file system for inter-Agent information exchange, significantly reducing token consumption in multi-Agent collaboration scenarios.
 
@@ -31,6 +31,7 @@ AgentTeams does not compete with other Agent runtimes. Instead of implementing A
 
 ## News
 
+- **2026-08-22**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.3) — AgentTeams v1.2.3: makes long-running Project workflows visible and controllable through new Controller APIs, `agt` commands, and Dashboard v1.2.4; adds audited human interventions, Project history, and QwenPaw Worker checkpoints; promotes QwenPaw as the recommended local Manager and Worker runtime; and improves Skill recovery, Windows AppService startup, and runtime reliability.
 - **2026-08-08**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.2) — AgentTeams v1.2.2: adds Manager-to-Worker custom Skill delivery with validation, storage upload, `Worker.spec.skills` assignment, and QwenPaw hot refresh and enablement without a restart; hardens Manager and Worker Skill loading; and ensures Team Leaders and Workers explicitly join Team Rooms after invitation.
 - **2026-08-06**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.1) — AgentTeams v1.2.1: unifies the Manager and Worker runtime stack on QwenPaw 2.0.1, publishes the QwenPaw Worker multi-architecture image, strengthens atomic Matrix and TeamHarness task assignment and CoPaw-to-QwenPaw state migration, adds custom model vision and reasoning capability overrides, and improves Worker lifecycle and runtime management reliability.
 - **2026-07-30**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.0) — AgentTeams v1.2.0 (stable): establishes AgentTeams naming and the final Team/Worker resource contracts end to end; adds the optional AgentTeams Dashboard; and improves Worker storage sync, Team routing and lifecycle convergence, installer support for deploying v1.1.2 with its legacy environment and storage contract (earlier releases still require the matching legacy installer), Dashboard reliability, and tooling and diagnostic safety.
@@ -183,8 +184,8 @@ helm install agentteams higress.io/agentteams \
 | `preflight.llm.retries` | no | Retry count for transient LLM preflight failures such as rate limits and provider 5xx responses. Defaults to `2` |
 | `preflight.llm.activeDeadlineSeconds` | no | Kubernetes Job active deadline for the preflight hook. Defaults to `120` |
 | `preflight.llm.resources` | no | Optional Kubernetes resource requests/limits for the preflight hook container |
-| `manager.runtime` | no | Manager runtime: OpenClaw uses `openclaw` (default); CoPaw uses `qwenpaw` in the current chart, with `copaw` retained as a compatibility alias. Managers do not support Hermes |
-| `worker.defaultRuntime` | no | The chart provides default image values for `openclaw` (default), `copaw`, `hermes`, and `openhuman`, but the current CRD rejects an explicit `spec.runtime: openhuman`; set `spec.image` explicitly for a QwenPaw Worker |
+| `manager.runtime` | no | Manager runtime: OpenClaw uses `openclaw` (default); CoPaw uses `qwenpaw` in the current chart, with `copaw` retained as a compatibility alias. Managers do not support Hermes or DeepSeek Harness |
+| `worker.defaultRuntime` | no | The chart provides default image values for `openclaw` (default), `copaw`, `hermes`, experimental `deepseek-harness`, and `openhuman`; the current CRD rejects an explicit `spec.runtime: openhuman`, and QwenPaw Workers require an explicit `spec.image` |
 
 Helm installs run an LLM preflight hook by default. The hook sends a minimal OpenAI-compatible `/chat/completions` request using `credentials.llmApiKey`, `credentials.llmBaseUrl`, and `credentials.defaultModel`; invalid keys, unreachable base URLs, unsupported models, quota errors, and provider outages fail the install before the controller starts. To bypass this check for restricted or offline clusters:
 
@@ -365,11 +366,12 @@ No hidden agent-to-agent calls. Everything is visible and intervenable.
 
 ## Multi-Runtime Collaboration
 
-AgentTeams currently provides three main Worker runtime families that can **coexist in the same IM room**, collaborating on tasks together:
+AgentTeams provides multiple Worker runtime families that can **coexist in the same IM room**, collaborating on tasks together:
 
 - **OpenClaw** (Node.js) — General-purpose agent with rich skills ecosystem, ideal for task orchestration and tool calling
 - **QwenPaw** (Python) — Lightweight runtime, suited for browser automation and quick tasks
 - **Hermes** ([hermes-agent](https://github.com/NousResearch/hermes-agent)) — Autonomous coding agent with terminal sandbox, self-improving skills, and persistent memory
+- **DeepSeek Harness** (experimental) — Headless coding agent with room-scoped session continuation, Matrix file exchange, and restart recovery; currently pinned to a tested DSH release candidate
 
 The `copaw` value remains available for compatibility with existing CoPaw Workers; the current CRD accepts both `copaw` and `qwenpaw`. Each runtime excels at different tasks. A common pattern is to use deterministic agents (OpenClaw/QwenPaw) as Leaders to decompose and assign work, and Hermes Workers for autonomous code execution. All runtimes communicate through Matrix rooms—fully visible and fully intervenable.
 

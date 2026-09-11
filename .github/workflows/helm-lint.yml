@@ -7,11 +7,18 @@ on:
       - 'install/agentteams-install.sh'
       - 'install/agentteams-install.ps1'
       - 'install/agentteams-apply.sh'
+      - 'Makefile'
+      - '.github/workflows/build.yml'
+      - '.github/workflows/build-rc.yml'
+      - '.github/workflows/build-deepseek-harness.yml'
+      - '.github/workflows/release.yml'
       - 'openhuman/scripts/openhuman-worker-entrypoint.sh'
       - 'tests/check-agentteams-rename-defaults.sh'
       - 'tests/check-installer-pre-1.2-env-compat.sh'
       - 'tests/check-installer-embedded-latest-pull.sh'
       - 'tests/check-installer-qwenpaw-runtime-options.sh'
+      - 'tests/check-installer-deepseek-harness-runtime-options.sh'
+      - 'tests/check-powershell-deepseek-harness-latest.ps1'
       - 'tests/check-windows-appservice-normalization.ps1'
       - 'tests/check-apply-wrapper-flags.sh'
       - 'tests/check-helm-agentteams.sh'
@@ -35,6 +42,9 @@ jobs:
 
       - name: Check QwenPaw installer runtime options
         run: bash tests/check-installer-qwenpaw-runtime-options.sh
+
+      - name: Check DeepSeek Harness installer runtime options
+        run: bash tests/check-installer-deepseek-harness-runtime-options.sh
 
       - name: Check Windows AppService normalization
         shell: pwsh

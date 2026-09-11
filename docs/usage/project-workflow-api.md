@@ -74,11 +74,23 @@ Response `200 OK`:
 
 Return the LangGraph-aligned workflow for one project.
 
-Optional query parameter:
+Optional query parameters:
 
 | Parameter | Type | Meaning |
 |:--|:--|:--|
 | `includeTasks` | `bool` | When `true`, also read each task's TaskMeta (`shared/tasks/{id}/meta.json`) and attach a `tasks_detail` array with spec/result/deliverable fields. Default `false` keeps the response lightweight. |
+| `format` | `string` | Response format. Default (absent or empty) returns the JSON snapshot above. `format=mermaid` returns the same snapshot rendered as a Mermaid flowchart (`text/plain`, no `tasks_detail` — rendering needs only nodes/edges/next). Any other value returns `400`. |
+
+Mermaid output (`?format=mermaid`) mirrors LangGraph's `draw_mermaid` helper: each node label is `name: status`, next/ready nodes get the `ready` highlight class, and every other node gets a status class (`pending` / `delegated` / `inProgress` / `completed` / `revision` / `blocked`). All classDefs are emitted so the graph renders standalone. Task titles and ids are user-controlled, so they are sanitized for mermaid safety: newlines become `<br>`, double quotes become `#quot;`, backslashes are dropped, and other control characters become spaces; a task id containing characters outside `[A-Za-z0-9_-]` is mapped to a collision-safe node id (labels keep the original text). A malformed title therefore can never alter the rendered graph structure. Example:
+
+```text
+flowchart LR
+    t1["Task 1: completed"]:::completed
+    t2["Task 2: delegated"]:::ready
+    t1 --> t2
+    classDef ready fill:#d4edda,stroke:#28a745;
+    ...
+```
 
 Response `200 OK`:
 
@@ -171,6 +183,63 @@ Error responses:
 | `403` | Authenticated but the role cannot read projects at all (e.g. Worker). |
 | `404` | Project not found (no meta.json under any scanned prefix) — **or** the caller is a scoped reader (team leader / L2 human) who does not own the project (existence is hidden to prevent id enumeration). |
 | `500` | K8s or object-store failure. |
+
+### `GET /api/v1/projects/{id}/tasks/{taskId}`
+
+Node-level inspection for one task: aggregates the task's graph node (status,
+assignee, dependencies), its TaskMeta (spec/summary/result/deliverables), the
+append-only transition history, and a trace hint for deep-linking into a
+tracing backend.
+
+```text
+GET /api/v1/projects/{id}/tasks/{taskId}?team=alpha-team
+```
+
+Response `200 OK`:
+
+```json
+{
+  "task_id": "t1",
+  "project_id": "demo-project-001",
+  "status": "in-progress",
+  "spec_path": "shared/tasks/t1/spec.md",
+  "assigned_to": "@w1:matrix.local",
+  "summary": "Alpha report done",
+  "result_status": "SUCCESS",
+  "result_path": "shared/tasks/t1/result.md",
+  "deliverables": [{"type": "file", "path": "shared/tasks/t1/output.pdf"}],
+  "history": [
+    {"ts": "2026-09-05T01:00:00Z", "from": "", "to": "planned", "actor": "manager", "action": "create"},
+    {"ts": "2026-09-05T02:00:00Z", "from": "planned", "to": "in_progress", "actor": "w1", "action": "ack_task"},
+    {"ts": "2026-09-05T03:00:00Z", "from": "in_progress", "to": "submitted", "actor": "w1", "action": "submit_task"}
+  ],
+  "dependencies": [],
+  "trace": {"project_id": "demo-project-001", "task_id": "t1"}
+}
+```
+
+Field notes:
+
+- `status` is the **raw** TaskMeta status when TaskMeta exists (same
+  semantics as `tasks_detail` with `?includeTasks=true`); when TaskMeta is
+  absent it falls back to the normalized graph-node status
+  (`pending | delegated | in-progress | completed | revision | blocked`).
+- `history` is populated by TeamHarness taskflow (and the controller's
+  cancel path) as an append-only audit of accepted transitions, capped at 50
+  entries; it is empty until the workflow transition engine lands
+  (design: agentscope-ai/AgentTeams#1223). Malformed entries are skipped,
+  never an error.
+- `trace` is a tracing-backend filter hint: its `project_id` / `task_id` are
+  the values to match against the span attributes `agentteams.project.id` /
+  `agentteams.task.id`, which worker entry spans already carry. No backend
+  URL is constructed here; the tracing backend is deployment-specific.
+- TaskMeta is read from the project's owning scope only (team prefix first,
+  global prefix only for standalone projects) — the same no-cross-scope
+  fallback rule as `tasks_detail`.
+
+Errors: `400` (missing/invalid task id), `404` (project not found —
+existence-hidden for scoped callers — or task not in this project's graph),
+`500` (storage read failure).
 
 ### `GET /api/v1/projects/{id}/tasks/{taskId}/artifact`
 
@@ -444,7 +513,18 @@ agt get projects                      # list all
 agt get projects --team biz-team      # filter by team
 agt get projects demo-project-001     # workflow detail
 agt get projects demo-project-001 -o json
-agt get projects demo-project-001 --mermaid   # render DAG as mermaid
+agt get projects demo-project-001 --mermaid   # render DAG as mermaid (status classes)
+```
+
+`--mermaid` uses the same renderer as the API's `?format=mermaid`: next/ready
+nodes are highlighted and every node is colored by status (see the workflow
+endpoint section above).
+
+Node-level inspection has no dedicated CLI verb yet; use the API directly:
+
+```bash
+curl -H "Authorization: Bearer $AGENTTEAMS_AUTH_TOKEN" \
+  "$AGENTTEAMS_API_BASE/api/v1/projects/demo-project-001/tasks/t1"
 ```
 
 The CLI forwards whatever bearer token is configured (`AGENTTEAMS_AUTH_TOKEN`
@@ -599,7 +679,18 @@ agt get projects                      # list all
 agt get projects --team biz-team      # filter by team
 agt get projects demo-project-001     # workflow detail
 agt get projects demo-project-001 -o json
-agt get projects demo-project-001 --mermaid   # render DAG as mermaid
+agt get projects demo-project-001 --mermaid   # render DAG as mermaid (status classes)
+```
+
+`--mermaid` uses the same renderer as the API's `?format=mermaid`: next/ready
+nodes are highlighted and every node is colored by status (see the workflow
+endpoint section above).
+
+Node-level inspection has no dedicated CLI verb yet; use the API directly:
+
+```bash
+curl -H "Authorization: Bearer $AGENTTEAMS_AUTH_TOKEN" \
+  "$AGENTTEAMS_API_BASE/api/v1/projects/demo-project-001/tasks/t1"
 ```
 
 The CLI forwards whatever bearer token is configured (`AGENTTEAMS_AUTH_TOKEN`

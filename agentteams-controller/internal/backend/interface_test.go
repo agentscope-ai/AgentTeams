@@ -18,6 +18,7 @@ func TestResolveRuntime(t *testing.T) {
 		{"explicit_openclaw_preserved", RuntimeOpenClaw, RuntimeHermes, RuntimeOpenClaw},
 		{"explicit_hermes_preserved", RuntimeHermes, RuntimeCopaw, RuntimeHermes},
 		{"explicit_qwenpaw_preserved", RuntimeQwenPaw, RuntimeCopaw, RuntimeQwenPaw},
+		{"explicit_deepseek_harness_preserved", RuntimeDeepSeekHarness, RuntimeQwenPaw, RuntimeDeepSeekHarness},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -39,11 +40,26 @@ func TestValidRuntime(t *testing.T) {
 		{RuntimeCopaw, true},
 		{RuntimeHermes, true},
 		{RuntimeQwenPaw, true},
+		{RuntimeDeepSeekHarness, true},
 		{"unknown", false},
 	}
 	for _, tc := range cases {
 		if got := ValidRuntime(tc.in); got != tc.want {
 			t.Fatalf("ValidRuntime(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestUsesMemberRuntimeConfig(t *testing.T) {
+	for runtime, want := range map[string]bool{
+		RuntimeQwenPaw:         true,
+		RuntimeDeepSeekHarness: true,
+		RuntimeOpenClaw:        false,
+		RuntimeCopaw:           false,
+		RuntimeHermes:          false,
+	} {
+		if got := UsesMemberRuntimeConfig(runtime); got != want {
+			t.Fatalf("UsesMemberRuntimeConfig(%q) = %v, want %v", runtime, got, want)
 		}
 	}
 }

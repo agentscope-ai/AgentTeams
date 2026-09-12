@@ -137,6 +137,15 @@ All supported Dashboard distribution paths update `spec.skills`. The Controller 
 
 You can also use `spec.package` to provide a Worker package containing a `skills/` directory. Package skills and assigned skills are merged without conflict.
 
+### Skill Catalog API
+
+`GET /api/v1/skills` returns the read-only catalog of skills available in the deployment:
+
+- **`source: "builtin"`** — the skills shipped with the agent templates, with the providing templates listed in `agents` and the supporting runtimes in `runtimes` (derived from the deployer's own template selection, so the catalog never drifts from what workers actually receive).
+- **`source: "shared"`** — the skills staged under `agents/global/skills/` by the Dashboard's skill-upload flow, available for distribution to any worker. This prefix is a staging area, not a distribution channel: deleting an entry removes it from the catalog and the Dashboard's global area but never touches already-distributed per-worker copies or existing `spec.skills` assignments (no cascade).
+
+Output is sorted by name; the endpoint is metadata-only — no skill content, no registry calls, no credentials. Entries carry `name`/`description`/`source` plus `version`/`requirements` (builtin) and `updated_at` (shared). Available to **admin (L1) only**; non-admin callers receive `400 team scope required` (the team-scoped read `?team=` follows). See [Skill Catalog API](../design/skill-catalog-api.md).
+
 ### Worker with Custom Package
 
 ```yaml

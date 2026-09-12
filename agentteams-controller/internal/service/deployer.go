@@ -1495,19 +1495,7 @@ func (d *Deployer) pushBuiltinTopLevelFiles(ctx context.Context, workerName, age
 }
 
 func (d *Deployer) builtinAgentDir(role, runtime string) string {
-	baseDir := filepath.Dir(d.workerAgentDir)
-	switch role {
-	case "team_leader":
-		return filepath.Join(baseDir, "team-leader-agent")
-	default:
-		switch runtime {
-		case "copaw":
-			return filepath.Join(baseDir, "copaw-worker-agent")
-		case "hermes":
-			return filepath.Join(baseDir, "hermes-worker-agent")
-		}
-		return d.workerAgentDir
-	}
+	return BuiltinAgentDir(d.workerAgentDir, role, runtime)
 }
 
 // mergeUserPluginConfig preserves user-customized plugin entries from an

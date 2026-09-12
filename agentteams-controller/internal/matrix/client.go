@@ -122,6 +122,10 @@ type Client interface {
 
 	// UserID builds a full Matrix user ID from a localpart.
 	UserID(localpart string) string
+	// SendNotification sends a message to roomID under the admin identity
+	// with explicit Matrix mentions (m.mentions.user_ids). Used for
+	// runtime-config change alerts (loop edits → @leader + changer).
+	SendNotification(ctx context.Context, roomID, body string, mentionUserIDs []string) error
 
 	// EnsureAppServiceUser registers a user via the Application Service API.
 	// Uses as_token authentication instead of registration_token.
@@ -785,6 +789,41 @@ func (c *TuwunelClient) LeaveRoom(ctx context.Context, roomID, userToken string)
 	}
 	if statusCode != http.StatusOK && statusCode != http.StatusCreated {
 		return fmt.Errorf("leave room %s: HTTP %d: %s", roomID, statusCode, truncate(respBody, 500))
+	}
+	return nil
+}
+
+// SendNotification sends a message to roomID under the admin identity with
+// explicit Matrix mentions (m.mentions.user_ids) so the mentioned users are
+// notified even in a quiet room. Used for runtime-config change alerts
+// (loop edits → @leader + changer, per #1206 notification infra). body is
+// plain text; m.mentions is the authoritative notification list, so no
+// formatted_body is required for the notification to fire.
+func (c *TuwunelClient) SendNotification(ctx context.Context, roomID, body string, mentionUserIDs []string) error {
+	if roomID == "" {
+		return fmt.Errorf("send notification: empty roomID")
+	}
+	token, err := c.ensureAdminToken(ctx)
+	if err != nil {
+		return fmt.Errorf("notification token: %w", err)
+	}
+	encodedRoom := encodeRoomID(roomID)
+	txnID := fmt.Sprintf("hc-%d", txnCounter.Add(1))
+	msg := map[string]interface{}{
+		"msgtype": "m.text",
+		"body":    body,
+	}
+	if len(mentionUserIDs) > 0 {
+		msg["m.mentions"] = map[string]interface{}{"user_ids": mentionUserIDs}
+	}
+	statusCode, respBody, err := c.doJSON(ctx, http.MethodPut,
+		fmt.Sprintf("/_matrix/client/v3/rooms/%s/send/m.room.message/%s", encodedRoom, txnID),
+		token, msg, nil)
+	if err != nil {
+		return fmt.Errorf("send notification to %s: %w", roomID, err)
+	}
+	if statusCode != http.StatusOK && statusCode != http.StatusCreated {
+		return fmt.Errorf("send notification to %s: HTTP %d: %s", roomID, statusCode, truncate(respBody, 500))
 	}
 	return nil
 }

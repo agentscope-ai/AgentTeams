@@ -138,6 +138,10 @@ func (f *fakeTeamMatrix) SendMessage(context.Context, string, string, string) er
 
 func (f *fakeTeamMatrix) SendMessageAsAdmin(context.Context, string, string) error { return nil }
 
+func (f *fakeTeamMatrix) SendNotification(context.Context, string, string, []string) error {
+	return nil
+}
+
 func (f *fakeTeamMatrix) Login(context.Context, string, string) (string, error) { return "", nil }
 
 func (f *fakeTeamMatrix) SetDisplayName(context.Context, string, string, string) error { return nil }

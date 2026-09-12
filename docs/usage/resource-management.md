@@ -989,6 +989,40 @@ agt apply worker --name alice --model qwen3.5-plus
 
 Set `spec.channelPolicy` on a Worker for per-member policy, and `spec.channelPolicy` on a Team for Team-wide policy.
 
+## Worker channel configuration (proxy)
+
+Each worker's qwenpaw app exposes a channel-configuration API (QQ / Matrix /
+DingTalk / ...). The Controller proxies it so admins and L2 humans configure
+channels through the API or a graphical frontend (workbench plugin /
+dashboard) instead of opening a shell on the worker container:
+
+```bash
+# List a worker's channel configs
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/channels \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+
+# Save a channel (body = the full channel config; takes effect immediately, no restart)
+curl -s -X PUT http://127.0.0.1:8090/api/v1/workers/{name}/channels/qq \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"enabled":true,"app_id":"...","client_secret":"***"}'
+# → 200, body verbatim, X-AgentTeams-MinIO-Persisted: true|false|skipped
+```
+
+The `schemas` route returns per-channel form definitions (field names,
+types, labels, options) so frontends render the connect form without
+per-channel code. A `conflict-check` route detects another agent holding
+the same credentials (e.g. a second agent on one QQ AppID).
+
+| Role | Read | Write (`PUT` / `restart`) |
+|------|------|---------------------------|
+| L1 (admin / cli token) | any worker | any worker |
+| L2 (Matrix token) | own-team workers | own-team workers |
+| Team Leader | own-team workers | read-only (`403`) |
+
+Cross-team access returns `404` uniformly (existence is not probed).
+`embedded` mode only — `503` in kube mode. Full contract:
+[design/worker-channels-api.md](../design/worker-channels-api.md).
+
 ## Communication Permission Matrix
 
 AgentTeams uses the `groupAllowFrom` field in `openclaw.json` to control which @mentions each Agent accepts, enabling fine-grained communication permissions.

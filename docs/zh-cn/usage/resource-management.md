@@ -984,6 +984,32 @@ agt apply worker --name alice --model qwen3.5-plus
 
 在 Worker 上设置 `spec.channelPolicy` 实现成员级策略，在 Team 上设置 `spec.channelPolicy` 实现团队级策略。
 
+## Worker 频道配置（代理）
+
+每个 Worker 的 qwenpaw app 暴露频道配置接口（QQ / Matrix / 钉钉 / ...）。Controller 将其代理，管理员与 L2 用户可通过 API 或图形化前端（工作台插件 / dashboard）配置频道，无需在 Worker 容器上开 shell：
+
+```bash
+# 列出某 Worker 的频道配置
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/channels \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+
+# 保存频道（body = 完整频道配置；立即生效，无需重启）
+curl -s -X PUT http://127.0.0.1:8090/api/v1/workers/{name}/channels/qq \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"enabled":true,"app_id":"...","client_secret":"***"}'
+# → 200，body 原样返回，X-AgentTeams-MinIO-Persisted: true|false|skipped
+```
+
+`schemas` 路由返回各频道的表单定义（字段名、类型、label、options），前端据此渲染接入表单，无需 per-channel 代码。`conflict-check` 路由检测同一凭据被其他 agent 占用（如同一 QQ AppID 挂两个 agent）。
+
+| 角色 | 读 | 写（`PUT` / `restart`） |
+|------|----|-------------------------|
+| L1（admin / cli token） | 任意 Worker | 任意 Worker |
+| L2（Matrix token） | 本团队 Worker | 本团队 Worker |
+| 团队 Leader | 本团队 Worker | 只读（`403`） |
+
+跨团队访问统一返回 `404`（不泄漏存在性）。仅 `embedded` 模式——kube 模式返回 `503`。完整契约见 [design/worker-channels-api.md](../../design/worker-channels-api.md)。
+
 ## 通信权限矩阵
 
 AgentTeams 通过 `openclaw.json` 中的 `groupAllowFrom` 字段控制每个 Agent 接受谁的 @mention，实现精细的通信权限控制。

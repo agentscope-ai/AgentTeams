@@ -137,6 +137,23 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/workers/{name}/approval", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(ah.getWorkerApproval)))
 	mux.Handle("PUT /api/v1/workers/{name}/approval", mw.RequireAuthz(authpkg.ActionWorkerApproval, "worker", nameFn)(http.HandlerFunc(ah.updateWorkerApproval)))
 
+	// --- Worker channels (channel configuration; proxy to the worker's qwenpaw app) ---
+	// Reads use ActionGet; mutations use ActionUpdate so the authorizer's
+	// worker-scoped policy applies (L2 human writes ride on the
+	// worker-scoped update rule; until it lands the middleware denies them
+	// and only admin reaches the handler). The handler is the real boundary
+	// either way: team leaders are read-only (403 on mutations) and every
+	// scoped caller is team-checked (W8: 404, never 403).
+	chh := NewChannelsHandler(deps.Client, deps.Namespace, deps.KubeMode, deps.ContainerPrefix, deps.OSS)
+	mux.Handle("GET /api/v1/workers/{name}/channels", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(chh.getChannels)))
+	mux.Handle("GET /api/v1/workers/{name}/channels/{sub}", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(chh.getChannelResource)))
+	mux.Handle("PUT /api/v1/workers/{name}/channels/{channel}", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(chh.putChannel)))
+	mux.Handle("GET /api/v1/workers/{name}/channels/{channel}/health", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(chh.getChannelHealth)))
+	mux.Handle("GET /api/v1/workers/{name}/channels/{channel}/qrcode", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(chh.getChannelQrcode)))
+	mux.Handle("GET /api/v1/workers/{name}/channels/{channel}/qrcode/status", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(chh.getQrcodeStatus)))
+	mux.Handle("POST /api/v1/workers/{name}/channels/{channel}/restart", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(chh.restartChannel)))
+	mux.Handle("POST /api/v1/workers/{name}/channels/{channel}/conflict-check", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(chh.checkChannelConflict)))
+
 	// W-PR-2: human intervention + lifecycle (write endpoints). All writes go
 	// through RequireAuthz ActionUpdate + "project" so the authorizer's
 	// requireSameTeam (TeamLeader / L2) rejects cross-team writes at the code

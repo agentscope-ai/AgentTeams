@@ -78,7 +78,7 @@ Optional query parameters:
 
 | Parameter | Type | Meaning |
 |:--|:--|:--|
-| `includeTasks` | `bool` | When `true`, also read each task's TaskMeta (`shared/tasks/{id}/meta.json`) and attach a `tasks_detail` array with spec/result/deliverable fields. Default `false` keeps the response lightweight. |
+| `includeTasks` | `bool` | When `true`, also read each task's TaskMeta (`shared/tasks/{id}/meta.json`) and attach a `tasks_detail` array with spec/result/deliverable fields, the opaque `submission_id` fence, and the transition `history` audit trail (omitted for metas that predate it). Default `false` keeps the response lightweight. |
 | `format` | `string` | Response format. Default (absent or empty) returns the JSON snapshot above. `format=mermaid` returns the same snapshot rendered as a Mermaid flowchart (`text/plain`, no `tasks_detail` — rendering needs only nodes/edges/next). Any other value returns `400`. |
 
 Mermaid output (`?format=mermaid`) mirrors LangGraph's `draw_mermaid` helper: each node label is `name: status`, next/ready nodes get the `ready` highlight class, and every other node gets a status class (`pending` / `delegated` / `inProgress` / `completed` / `revision` / `blocked`). All classDefs are emitted so the graph renders standalone. Task titles and ids are user-controlled, so they are sanitized for mermaid safety: newlines become `<br>`, double quotes become `#quot;`, backslashes are dropped, and other control characters become spaces; a task id containing characters outside `[A-Za-z0-9_-]` is mapped to a collision-safe node id (labels keep the original text). A malformed title therefore can never alter the rendered graph structure. Example:
@@ -91,6 +91,27 @@ flowchart LR
     classDef ready fill:#d4edda,stroke:#28a745;
     ...
 ```
+
+Each `tasks_detail[]` entry carries `history: []` — the task's auditable
+state transitions recorded by the TeamHarness transition engine, oldest
+first. Entry shape:
+
+```json
+{
+  "ts": "2026-09-09T10:00:05Z",
+  "from": "assigned",
+  "to": "in_progress",
+  "action": "ack_task",
+  "actor": "worker:default",
+  "note": ""
+}
+```
+
+`action` is one of `delegate_task`, `ack_task`, `submit_task`,
+`accept_task_result`, `cancel_task`, `progress`; `actor` is `role:account`
+(MCP transitions) or the authorization actor (controller cancellations).
+The allowed transitions are defined by the shared contract
+`plugins/teamharness/contracts/task-transitions.json`.
 
 Response `200 OK`:
 
@@ -136,6 +157,7 @@ Response `200 OK`:
       "assigned_to": "@w1:matrix.local",
       "summary": "Alpha report done",
       "result_status": "SUCCESS",
+      "submission_id": "submission-123",
       "deliverables": [{"type": "file", "path": "shared/tasks/t1/output.pdf"}],
       "result_path": "shared/tasks/t1/result.md"
     }
@@ -146,7 +168,8 @@ Response `200 OK`:
 `tasks_detail` is only present when `?includeTasks=true`. It surfaces the
 TaskMeta fields that the project-level `nodes[]` summary does not carry:
 `spec_path` (task spec file), `summary` / `result_status` / `result_path`
-(submission result), `deliverables` (artifact list) and `cancel_reason`.
+(submission result), `deliverables` (artifact list), `cancel_reason`, and the
+opaque `submission_id` used to fence accept/cancel decisions.
 TaskMeta is read from the project's owning scope only: team projects read
 `teams/{team}/shared/tasks/{id}/meta.json`, standalone projects read
 `shared/tasks/{id}/meta.json`. There is no cross-scope fallback, and a
@@ -462,6 +485,69 @@ Error responses:
 | `409` | Ambiguous project id across teams; retry with `?team=`. |
 | `500` | K8s or object-store failure. |
 
+### `GET /api/v1/projects/{id}/events`
+
+Returns the project's **task transition timeline** — a read-time
+aggregation of every task's `history` array (the same audit trail
+`?includeTasks=true` exposes per task), merged into one **ascending** list.
+No new storage: the endpoint reads the task metas on demand and does not
+add a write-side hook. Project-level intervention events are **not** part
+of this timeline — use `GET /history` for those; the two are
+complementary.
+
+Query parameters:
+
+| Param | Type | Default | Meaning |
+|:--|:--|:--|:--|
+| `team` | string | — | Optional team qualifier, same semantics as the other read endpoints. |
+| `limit` | int | `50` | Page size. Capped at `200`; values `< 1` are rejected `400`. |
+| `cursor` | string | — | Opaque offset from a previous page's `next_cursor`; pass it back to continue. |
+
+Response:
+
+```json
+{
+  "project_id": "demo-project-001",
+  "events": [
+    {
+      "ts": "2026-09-09T10:00:00Z",
+      "task_id": "t1",
+      "from": "planned",
+      "to": "prepared",
+      "action": "delegate_task",
+      "actor": "leader:default"
+    },
+    {
+      "ts": "2026-09-09T10:00:05Z",
+      "task_id": "t1",
+      "from": "assigned",
+      "to": "in_progress",
+      "action": "ack_task",
+      "actor": "worker:default",
+      "note": "starting"
+    }
+  ],
+  "next_cursor": "2"
+}
+```
+
+- `events` is **oldest first**; the shared second-resolution timestamps are
+  tie-broken by `task_id`, then `action`, so paging is deterministic.
+- `next_cursor` is empty when the tail was reached; an empty project
+  returns `200` with `"events": []`.
+- Task metas are read from the project's owning scope only — no
+  cross-scope fallback (same rule as `tasks_detail`).
+
+Error responses:
+
+| Code | Meaning |
+|:--|:--|
+| `400` | Missing project id / invalid `limit` or `cursor`. |
+| `403` | Authenticated but the role cannot read projects at all (e.g. Worker). |
+| `404` | Project not found / caller does not own it (existence hidden). |
+| `409` | Ambiguous project id across teams; retry with `?team=`. |
+| `500` | K8s or object-store failure. |
+
 ## Project identity & disambiguation
 
 Project ids are only unique within a worker workspace upstream: two teams can
@@ -622,16 +708,42 @@ unknown dependencies, and dependency cycles are rejected with `400`.
 Preconditions (`409`): `plan_type` must be `dag` (loop replans go through
 `record_loop_iteration`), status must be `active`, and no task may be
 `in_progress`/`submitted`. Response `200` returns the updated workflow.
+Tasks with a persisted cancellation decision keep that decision when retained
+in a replan. They cannot be reopened or removed and then re-added under the
+same task id; create a new task id for replacement work.
 
 ### `POST /api/v1/projects/{id}/tasks/{taskId}/cancel`
 
-Cancel a single task. Body requires `reason` (and optional
-`replacementTaskId`). The task must be mutable — a terminal task
-(completed/revision/blocked/cancelled) is rejected with `409`. The task's
-`TaskMeta` is stamped `status=cancelled` + `cancel_reason` and the project
-node status is updated. Response `200` returns the updated workflow.
-Errors: `400` missing reason; `404` task not in project / task meta
-missing; `409` terminal task.
+Cancel a single task:
+
+```json
+{
+  "reason": "no longer needed",
+  "replacementTaskId": "replacement-01",
+  "submissionId": "submission-123"
+}
+```
+
+`reason` is required and `replacementTaskId` is optional. `submissionId` is
+conditionally required: when TaskMeta already has `submission_id`, callers
+must send that exact opaque value. Missing, invented, or stale identities are
+rejected before either ProjectMeta or TaskMeta is changed.
+
+On success, the project node and TaskMeta become `cancelled`; TaskMeta records
+stable `cancel_reason` / `replacement_task_id` / `cancelled_at` fields and
+resolves an existing pending continuation as `cancelled` without changing its
+`delivery_id`. Repeating the same cancellation is idempotent. A different
+reason, replacement task, or submission identity conflicts with the committed
+decision. Tasks already `completed`, `revision`, or `blocked` cannot be
+cancelled. Response `200` returns the updated workflow.
+
+The Controller writes a small cancellation decision envelope into the project
+node before writing TaskMeta. If the second write fails, an identical retry can
+finish the TaskMeta/continuation update; a retry with a different reason,
+replacement, or submission identity is rejected.
+
+Errors: `400` missing reason or invalid replacement task id; `404` task not in project / task meta missing;
+`409` terminal task, submission fence failure, or conflicting cancellation.
 
 ### `POST /api/v1/projects/{id}/complete`
 
@@ -679,6 +791,7 @@ agt get projects                      # list all
 agt get projects --team biz-team      # filter by team
 agt get projects demo-project-001     # workflow detail
 agt get projects demo-project-001 -o json
+agt get projects demo-project-001 --include-tasks -o json
 agt get projects demo-project-001 --mermaid   # render DAG as mermaid (status classes)
 ```
 
@@ -698,6 +811,9 @@ or `AGENTTEAMS_AUTH_TOKEN_FILE`) verbatim, so an L2 human can also use it by
 pointing either variable at their own Matrix access token — no separate CLI
 auth mode is needed.
 
+`--include-tasks` requires `-o json`; the default detail view does not render
+raw TaskMeta fields.
+
 ### `agt project` (the lifecycle write API write commands)
 
 `agt project` wraps the write endpoints so a human can intervene without
@@ -708,7 +824,8 @@ agt project create --title "New project" --team biz-team --source matrix
 agt project pause demo-project-001 --reason "customer review"
 agt project resume demo-project-001
 agt project replan demo-project-001 --tasks tasks.json   # JSON array file
-agt project cancel demo-project-001 demo-project-001-01 --reason "no longer needed"
+agt project cancel demo-project-001 demo-project-001-01 \
+  --reason "no longer needed" --submission-id submission-123 --team biz-team
 agt project complete demo-project-001
 ```
 

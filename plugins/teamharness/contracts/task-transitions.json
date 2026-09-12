@@ -1,0 +1,47 @@
+{
+  "states": [
+    "planned",
+    "prepared",
+    "assigned",
+    "in_progress",
+    "submitted",
+    "completed",
+    "revision",
+    "blocked",
+    "cancelled"
+  ],
+  "terminal": [
+    "completed",
+    "revision",
+    "blocked",
+    "cancelled"
+  ],
+  "transitions": {
+    "planned": [
+      "prepared",
+      "assigned",
+      "in_progress",
+      "submitted",
+      "cancelled"
+    ],
+    "prepared": [
+      "assigned",
+      "cancelled"
+    ],
+    "assigned": [
+      "in_progress",
+      "submitted",
+      "cancelled"
+    ],
+    "in_progress": [
+      "submitted",
+      "cancelled"
+    ],
+    "submitted": [
+      "completed",
+      "revision",
+      "blocked",
+      "cancelled"
+    ]
+  }
+}

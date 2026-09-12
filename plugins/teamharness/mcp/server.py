@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from typing import Any
@@ -444,7 +445,19 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 },
                 "accepted": {
                     "type": "boolean",
-                    "description": "For accept_task_result, false records a revision state instead of accepting the result.",
+                    "description": (
+                        "For accept_task_result, false records revision for a "
+                        "SUCCESS result. REVISION_NEEDED remains revision, while "
+                        "BLOCKED and INTERRUPTED remain blocked."
+                    ),
+                },
+                "submissionId": {
+                    "type": "string",
+                    "description": (
+                        "Current submit_task identity required by normal "
+                        "accept_task_result requests. Only migration of a "
+                        "persisted legacy submission without an identity may omit it."
+                    ),
                 },
                 "publishArtifacts": {
                     "type": "boolean",
@@ -462,8 +475,10 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "description": (
             "Coordinate bounded TeamHarness tasks after a project node is ready: "
             "leader delegates and checks tasks; worker or remote-member "
-            "acknowledges and submits results. Do not use for direct questions, "
-            "readiness checks, or ordinary conversation."
+            "acknowledges and submits results; worker or leader raises in-flight "
+            "attention (approval / decision / escalation) with request_attention. "
+            "Do not use for direct questions, readiness checks, or ordinary "
+            "conversation."
         ),
         "inputSchema": {
             "type": "object",
@@ -475,8 +490,23 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 },
                 "action": {
                     "type": "string",
-                    "enum": ["delegate_task", "ack_task", "submit_task", "check_task", "cancel_task"],
-                    "description": "Task lifecycle operation.",
+                    "enum": [
+                        "delegate_task",
+                        "ack_task",
+                        "submit_task",
+                        "check_task",
+                        "cancel_task",
+                        "report_progress",
+                        "request_attention",
+                    ],
+                    "description": (
+                        "Task lifecycle operation. report_progress records a "
+                        "non-terminal progress note on an in-flight task (state "
+                        "unchanged, no leader notification). request_attention "
+                        "pulls a human decision (kind: approval / decision / "
+                        "escalation / other) out of the group chat while the task "
+                        "is still in flight."
+                    ),
                 },
                 "projectId": {
                     "type": "string",
@@ -485,6 +515,13 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "taskId": {
                     "type": "string",
                     "description": "Safe task id used under shared/tasks/{taskId}.",
+                },
+                "submissionId": {
+                    "type": "string",
+                    "description": (
+                        "Current submit_task identity required when cancel_task "
+                        "resolves a normal submitted result."
+                    ),
                 },
                 "payload": {
                     "type": "object",
@@ -2537,14 +2574,24 @@ def _filesync(arguments: dict[str, Any]) -> dict[str, Any]:
             "path": normalized,
             "error": env_error,
         }
-    completed = subprocess.run(
-        command,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=120,
-        env=mc_env,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=mc_env,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {
+            "ok": False,
+            "tool": "filesync",
+            "action": action,
+            "path": normalized,
+            "error": f"filesync process failed: {exc}",
+            "retryable": True,
+        }
     command_error = _filesync_command_error(completed)
     if command_error:
         return {
@@ -2594,6 +2641,7 @@ def _payload(arguments: dict[str, Any]) -> dict[str, Any]:
         "assignedTo": ("assignedTo", "assigned_to"),
         "dependsOn": ("dependsOn", "depends_on"),
         "replacementTaskId": ("replacementTaskId", "replacement_task_id"),
+        "submissionId": ("submissionId", "submission_id"),
     }
     for canonical, keys in aliases.items():
         if any(data.get(key) for key in keys):
@@ -2795,9 +2843,24 @@ def _read_json(path: Path, default: dict[str, Any] | None = None) -> dict[str, A
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _write_json(path: Path, data: dict[str, Any]) -> None:
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Replace one state projection without exposing a partially written file."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    except BaseException:
+        temporary_path.unlink(missing_ok=True)
+        raise
+
+
+def _write_json(path: Path, data: dict[str, Any]) -> None:
+    _atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
 
 
 def _project_dir(arguments: dict[str, Any], project_id: str) -> Path:
@@ -2822,13 +2885,35 @@ def _normalize_task(raw: dict[str, Any], previous: dict[str, Any] | None = None)
     status = str(raw.get("status") or previous.get("status") or "planned")
     if status == "pending":
         status = "planned"
-    return {
+    cancellation = previous.get("cancellation") if isinstance(previous.get("cancellation"), dict) else None
+    if cancellation and raw.get("status") is not None and status != str(previous.get("status") or ""):
+        raise ValueError(f"task {task_id} has a committed cancellation and cannot be reopened")
+    normalized = {
         "task_id": task_id,
         "title": str(raw.get("title") or previous.get("title") or task_id),
         "assigned_to": str(raw.get("assignedTo") or raw.get("assigned_to") or previous.get("assigned_to") or ""),
         "depends_on": [str(item) for item in (raw.get("dependsOn") or raw.get("depends_on") or previous.get("depends_on") or [])],
         "status": status,
     }
+    if cancellation:
+        normalized["cancellation"] = dict(cancellation)
+    return normalized
+
+
+def _normalize_tasks(
+    raw_tasks: list[Any],
+    previous: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    planned = [
+        _normalize_task(task, previous.get(str(task.get("taskId") or task.get("task_id"))))
+        for task in raw_tasks
+        if isinstance(task, dict)
+    ]
+    included = {str(task.get("task_id") or "") for task in planned}
+    for task_id, old_task in previous.items():
+        if isinstance(old_task.get("cancellation"), dict) and task_id not in included:
+            raise ValueError(f"task {task_id} has a committed cancellation and cannot be removed")
+    return planned
 
 
 def _validate_task_graph(tasks: list[dict[str, Any]]) -> None:
@@ -2968,7 +3053,7 @@ def _write_project_plan(project_dir: Path, project: dict[str, Any]) -> None:
                 else:
                     lines.append(f"- {item}")
     project_dir.mkdir(parents=True, exist_ok=True)
-    (project_dir / "plan.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _atomic_write_text(project_dir / "plan.md", "\n".join(lines) + "\n")
 
 
 def _ready_nodes(project: dict[str, Any]) -> list[dict[str, Any]]:
@@ -3040,7 +3125,7 @@ def _resolve_project(arguments: dict[str, Any], payload: dict[str, Any]) -> dict
 
 
 def _accepted_node_status(result_status: Any) -> str:
-    status = str(result_status or "SUCCESS").strip()
+    status = _validate_task_result_status(result_status)
     if status in {"SUCCESS", "SUCCESS_WITH_NOTES"}:
         return "completed"
     if status == "REVISION_NEEDED":
@@ -3048,6 +3133,109 @@ def _accepted_node_status(result_status: Any) -> str:
     if status in {"BLOCKED", "INTERRUPTED"}:
         return "blocked"
     raise ValueError(f"unsupported result status: {status}")
+
+
+def _submission_result(task: dict[str, Any]) -> dict[str, Any]:
+    deliverables = task.get("deliverables")
+    if not isinstance(deliverables, list):
+        deliverables = []
+    return {
+        "status": str(task.get("result_status") or task.get("resultStatus") or ""),
+        "summary": str(task.get("summary") or ""),
+        "deliverables": [str(item) for item in deliverables],
+    }
+
+
+def _task_result_digest(result: dict[str, Any]) -> str:
+    """Return the cross-runtime identity of a structured task result."""
+    deliverables = result.get("deliverables")
+    if not isinstance(deliverables, list):
+        deliverables = []
+    canonical_result = {
+        "status": str(result.get("status") or "").strip(),
+        "summary": re.sub(r"\s+", " ", str(result.get("summary") or "")).strip(),
+        "deliverables": [str(item) for item in deliverables],
+    }
+    canonical_json = json.dumps(
+        canonical_result,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(
+        b"teamharness.task-result.v1\0" + canonical_json,
+    ).hexdigest()
+
+
+def _continuation_delivery_id(project_id: str, task_id: str, submission_id: str) -> str:
+    identity = "\0".join((project_id, task_id, submission_id, "result-submitted:v1"))
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _resolve_task_continuation(task: dict[str, Any], resolution: str) -> None:
+    continuation = task.get("continuation") if isinstance(task.get("continuation"), dict) else {}
+    if not continuation:
+        return
+    continuation["status"] = "resolved"
+    continuation["resolution"] = resolution
+    continuation["resolved_at"] = continuation.get("resolved_at") or _utc_timestamp()
+    task["continuation"] = continuation
+
+
+def _project_task_status(project: dict[str, Any], task_id: str) -> str:
+    tasks = project.get("tasks", []) if isinstance(project.get("tasks"), list) else []
+    loop = project.get("loop") if isinstance(project.get("loop"), dict) else {}
+    loop_tasks = loop.get("tasks", []) if isinstance(loop.get("tasks"), list) else []
+    for task in tasks + loop_tasks:
+        if isinstance(task, dict) and task.get("task_id") == task_id:
+            return str(task.get("status") or "")
+    return ""
+
+
+def _sync_failure_result(result: dict[str, Any], operation: str) -> dict[str, Any]:
+    result["ok"] = False
+    result["synced"] = False
+    result["retryable"] = True
+    result["statePersisted"] = True
+    result["error"] = f"{operation} state persisted locally but shared-storage sync failed; retry to complete"
+    result.pop("notificationNeeded", None)
+    return result
+
+
+def _persisted_state_failure_result(
+    *,
+    tool: str,
+    action: str,
+    error: Exception,
+    task: dict[str, Any] | None = None,
+    project: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "ok": False,
+        "tool": tool,
+        "action": action,
+        "retryable": True,
+        "statePersisted": True,
+        "synced": False,
+        "error": f"{action} state persisted locally but follow-up state update failed: {error}; retry to complete",
+    }
+    if task is not None:
+        result["task"] = task
+    if project is not None:
+        result["project"] = project
+    return result
+
+
+def _uncommitted_state_failure_result(*, tool: str, action: str, error: Exception) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "tool": tool,
+        "action": action,
+        "retryable": True,
+        "statePersisted": False,
+        "synced": False,
+        "error": f"{action} could not persist local state: {error}; retry to complete",
+    }
 
 
 def _payload_bool(value: Any, default: bool) -> bool:
@@ -3071,33 +3259,176 @@ def _payload_bool_field(payload: dict[str, Any], names: tuple[str, ...], default
 
 
 def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    if _role(arguments) != "leader":
+        raise ValueError("accept_task_result requires leader role")
     project_id = _safe_id(payload.get("projectId") or payload.get("project_id"), "projectId")
     task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
     project = _read_json(_project_state_path(arguments, project_id))
     if not project:
         raise ValueError("project not found")
+    task_meta = _read_json(_task_state_path(arguments, task_id))
+    task_project_id = _first_text(task_meta.get("project_id"), task_meta.get("projectId"))
+    if task_project_id and task_project_id != project_id:
+        raise ValueError("task does not belong to project")
+    if task_meta:
+        task_status = str(task_meta.get("status") or "")
+        if task_status not in {"submitted", *TERMINAL_TASK_STATUSES}:
+            raise ValueError(f"accept_task_result requires submitted task state, got {task_status or 'missing'}")
+    requested_submission_id = _first_text(payload.get("submissionId"), payload.get("submission_id"))
+    persisted_submission_id = _first_text(task_meta.get("submission_id"), task_meta.get("submissionId"))
+    legacy_identity_persisted = False
+    if persisted_submission_id and not requested_submission_id:
+        raise ValueError("submissionId is required for the current task submission")
+    if task_meta and not persisted_submission_id and requested_submission_id:
+        raise ValueError("accept_task_result requires a submission identity")
+    if requested_submission_id and requested_submission_id != persisted_submission_id:
+        raise ValueError("submissionId does not match the current task submission")
+    if task_meta:
+        persisted_result, validation_errors = _task_result_from_meta(task_meta)
+        if validation_errors:
+            raise ValueError(f"persisted task result is invalid: {'; '.join(validation_errors)}")
+        persisted_result_digest = _first_text(
+            task_meta.get("result_digest"),
+            task_meta.get("resultDigest"),
+        )
+        if persisted_result_digest and persisted_result_digest != _task_result_digest(persisted_result):
+            raise ValueError("persisted task result digest does not match its structured result")
+        if not persisted_submission_id:
+            persisted_submission_id = uuid.uuid4().hex
+            task_meta["submission_id"] = persisted_submission_id
+            task_meta["submitted_at"] = _utc_timestamp()
+            task_meta["result_digest"] = _task_result_digest(persisted_result)
+            task_meta["continuation"] = {
+                "status": "pending",
+                "delivery_id": _continuation_delivery_id(
+                    project_id,
+                    task_id,
+                    persisted_submission_id,
+                ),
+            }
+            try:
+                _write_task(arguments, task_meta)
+            except OSError as exc:
+                return _uncommitted_state_failure_result(
+                    tool="projectflow",
+                    action="accept_task_result",
+                    error=exc,
+                )
+            legacy_identity_persisted = True
     result_status_value = payload.get("resultStatus") or payload.get("result_status")
+    if task_meta:
+        persisted_result_status = str(task_meta.get("result_status") or "")
+        if str(result_status_value or "SUCCESS").strip() != persisted_result_status:
+            raise ValueError("resultStatus does not match the submitted task result")
     accepted = _payload_bool(payload.get("accepted"), True)
     node_status = _accepted_node_status(result_status_value)
     if not accepted and node_status == "completed":
         result_status_value = "REVISION_NEEDED"
         node_status = "revision"
+    current_node_status = _project_task_status(project, task_id)
+    if current_node_status in TERMINAL_TASK_STATUSES:
+        if current_node_status != node_status:
+            raise ValueError(f"task result already decided as {current_node_status}")
+        try:
+            _write_project_plan(_project_dir(arguments, project_id), project)
+        except OSError as exc:
+            return _persisted_state_failure_result(
+                tool="projectflow",
+                action="accept_task_result",
+                error=exc,
+                task=task_meta or None,
+                project=project,
+            )
+        if not _sync_project(arguments, project_id):
+            return _sync_failure_result({
+                "tool": "projectflow",
+                "action": "accept_task_result",
+                "project": project,
+                "task": task_meta or None,
+                "taskId": task_id,
+                "submissionId": persisted_submission_id or None,
+                "nodeStatus": current_node_status,
+                "accepted": current_node_status == "completed",
+                "reused": True,
+                "publishedArtifacts": [],
+                "notificationNeeded": {},
+            }, "accept_task_result project")
+        repaired_task_fence = bool(task_meta) and (
+            str(task_meta.get("status") or "") != current_node_status
+            or (
+                isinstance(task_meta.get("continuation"), dict)
+                and task_meta["continuation"].get("status") != "resolved"
+            )
+        )
+        synced: bool | None = None
+        if repaired_task_fence:
+            task_meta["status"] = current_node_status
+            _resolve_task_continuation(task_meta, current_node_status)
+            try:
+                _write_task(arguments, task_meta)
+            except OSError as exc:
+                return _persisted_state_failure_result(
+                    tool="projectflow",
+                    action="accept_task_result",
+                    error=exc,
+                    task=task_meta,
+                    project=project,
+                )
+        if task_meta:
+            # A previous acceptance may have committed locally while its
+            # shared-storage push failed. Retrying the same decision must
+            # repair that external side effect without rewriting project
+            # state or reopening the requester report.
+            synced = _sync_task(arguments, task_id, exclude=["spec.md", "base/"])
+        reused_result = {
+            "ok": True,
+            "tool": "projectflow",
+            "action": "accept_task_result",
+            "project": project,
+            "taskId": task_id,
+            "submissionId": persisted_submission_id or None,
+            "nodeStatus": current_node_status,
+            "accepted": current_node_status == "completed",
+            "reused": True,
+            "repairedTaskFence": repaired_task_fence,
+            "publishedArtifacts": [],
+            "notificationNeeded": {},
+        }
+        if task_meta:
+            reused_result["task"] = task_meta
+        if synced is not None:
+            reused_result["synced"] = synced
+            if not synced:
+                return _sync_failure_result(reused_result, "accept_task_result")
+        return reused_result
     changed = False
-    for task in project.get("tasks", []):
-        if task.get("task_id") == task_id:
-            task["status"] = node_status
+    for project_task in project.get("tasks", []):
+        if project_task.get("task_id") == task_id:
+            project_task["status"] = node_status
             changed = True
             break
     loop = project.get("loop") if isinstance(project.get("loop"), dict) else {}
     loop_tasks = loop.get("tasks", []) if isinstance(loop.get("tasks"), list) else []
-    for task in loop_tasks:
-        if task.get("task_id") == task_id:
-            task["status"] = node_status
+    for project_task in loop_tasks:
+        if project_task.get("task_id") == task_id:
+            project_task["status"] = node_status
             project["loop"] = loop
             changed = True
             break
     if not changed:
         raise ValueError("task not found in project plan")
+    # Accepting the result resolves ALL outstanding attention requests
+    # on the task: the leader's decision closed the loop, so no room
+    # ping on this task counts as an open loop anymore.  Resolve in place
+    # on the task_meta dict — the terminal status write below persists it
+    # in the same write (a separate read-modify-write here would be
+    # clobbered by that later write of the older dict).
+    if isinstance(task_meta, dict) and task_meta:
+        attention = task_meta.get("attention")
+        if isinstance(attention, list):
+            for item in attention:
+                if isinstance(item, dict) and not item.get("resolved"):
+                    item["resolved"] = True
     result_status = str(result_status_value or "SUCCESS")
     if node_status == "completed":
         project["requester_report"] = {
@@ -3114,9 +3445,69 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
             requester_report["pending"] = False
             requester_report["reason"] = f"task_result_{node_status}"
             project["requester_report"] = requester_report
-    _write_json(_project_state_path(arguments, project_id), project)
-    _write_project_plan(_project_dir(arguments, project_id), project)
-    _sync_project(arguments, project_id)
+    try:
+        _write_json(_project_state_path(arguments, project_id), project)
+    except OSError as exc:
+        if legacy_identity_persisted:
+            return _persisted_state_failure_result(
+                tool="projectflow",
+                action="accept_task_result",
+                error=exc,
+                task=task_meta,
+            )
+        return _uncommitted_state_failure_result(
+            tool="projectflow",
+            action="accept_task_result",
+            error=exc,
+        )
+    try:
+        _write_project_plan(_project_dir(arguments, project_id), project)
+    except OSError as exc:
+        return _persisted_state_failure_result(
+            tool="projectflow",
+            action="accept_task_result",
+            error=exc,
+            task=task_meta or None,
+            project=project,
+        )
+    if not _sync_project(arguments, project_id):
+        return _sync_failure_result({
+            "tool": "projectflow",
+            "action": "accept_task_result",
+            "project": project,
+            "task": task_meta or None,
+            "taskId": task_id,
+            "submissionId": persisted_submission_id or None,
+            "nodeStatus": node_status,
+            "accepted": node_status == "completed",
+            "publishedArtifacts": [],
+            "notificationNeeded": {},
+        }, "accept_task_result project")
+    synced: bool | None = None
+    if task_meta:
+        # Gap fix (design G2): the task meta moves with the node.
+        # (Idempotent re-accepts returned earlier; from == submitted in the
+        # normal path — #1183's guard rejects anything else known.)
+        _append_transition_history(
+            task_meta,
+            str(task_meta.get("status") or ""),
+            node_status,
+            "accept_task_result",
+            _transition_actor(arguments),
+        )
+        task_meta["status"] = node_status
+        _resolve_task_continuation(task_meta, node_status)
+        try:
+            _write_task(arguments, task_meta)
+        except OSError as exc:
+            return _persisted_state_failure_result(
+                tool="projectflow",
+                action="accept_task_result",
+                error=exc,
+                task=task_meta,
+                project=project,
+            )
+        synced = _sync_task(arguments, task_id, exclude=["spec.md", "base/"])
     publish_artifacts = _payload_bool_field(payload, ("publishArtifacts", "publish_artifacts"), False)
     published_artifacts = (
         _publish_project_artifacts(
@@ -3126,16 +3517,18 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
             task_id,
             _attachment_parent_event_id(payload, arguments),
         )
-        if node_status == "completed" and publish_artifacts else []
+        if node_status == "completed" and publish_artifacts and synced is not False else []
     )
     requester_report = project.get("requester_report") if isinstance(project.get("requester_report"), dict) else {}
     requester_report_pending = requester_report.get("pending") is True and requester_report.get("task_id") == task_id
-    return {
+    result = {
         "ok": True,
         "tool": "projectflow",
         "action": "accept_task_result",
         "project": project,
+        "task": task_meta or None,
         "taskId": task_id,
+        "submissionId": persisted_submission_id or None,
         "nodeStatus": node_status,
         "accepted": node_status == "completed",
         "publishedArtifacts": published_artifacts,
@@ -3146,6 +3539,11 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
             include_reply_route=requester_report_pending,
         ),
     }
+    if synced is not None:
+        result["synced"] = synced
+        if not synced:
+            return _sync_failure_result(result, "accept_task_result")
+    return result
 
 
 def _mark_requester_report_sent(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
@@ -3249,6 +3647,8 @@ _TASKFLOW_MUTATING_ACTIONS = frozenset({
     "ack_task",
     "submit_task",
     "cancel_task",
+    "report_progress",
+    "request_attention",
 })
 
 
@@ -3402,11 +3802,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             raw_tasks = payload.get("tasks")
             if not isinstance(raw_tasks, list):
                 raise ValueError("tasks must be a list")
-            planned_tasks = [
-                _normalize_task(task, previous.get(str(task.get("taskId") or task.get("task_id"))))
-                for task in raw_tasks
-                if isinstance(task, dict)
-            ]
+            planned_tasks = _normalize_tasks(raw_tasks, previous)
             _validate_task_graph(planned_tasks)
             project["tasks"] = planned_tasks
             project["plan_type"] = "dag"
@@ -3442,11 +3838,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             )
             if current_iteration > max_iterations:
                 raise ValueError("currentIteration cannot exceed maxIterations")
-            planned_tasks = [
-                _normalize_task(task, previous_tasks.get(str(task.get("taskId") or task.get("task_id"))))
-                for task in raw_tasks
-                if isinstance(task, dict)
-            ]
+            planned_tasks = _normalize_tasks(raw_tasks, previous_tasks)
             _validate_task_graph(planned_tasks)
             loop = {
                 "goal": str(payload.get("goal") or previous_loop.get("goal") or "").strip(),
@@ -3571,6 +3963,17 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     loop["status"] = "completed"
                     project["loop"] = loop
             project_dir = _project_dir(arguments, project_id)
+            if action == "complete_project":
+                # Code-level PROJECT_COMPLETED attention event (PR review
+                # 2026-09-05): the leader and the human members see a
+                # finished project in the room instead of waiting for the
+                # next incident. Best-effort — it never blocks the
+                # terminal project write. Runs before the state write so
+                # a recorded projectCompletionEventId makes a retried
+                # complete_project idempotent.
+                project["projectNotification"] = _send_project_completion_notification(
+                    arguments, project, project_id
+                )
             _write_json(state_path, project)
             _write_project_plan(project_dir, project)
             _sync_project(arguments, project_id)
@@ -3626,10 +4029,10 @@ def _message_tool_blocked_for_runtime_role() -> bool:
 
 
 def _role(arguments: dict[str, Any]) -> str:
-    role = str(arguments.get("role") or "").strip()
-    if not role:
-        return _runtime_role()
-    return _normalize_role(role)
+    runtime_role = _runtime_role()
+    if runtime_role:
+        return runtime_role
+    return _normalize_role(str(arguments.get("role") or "").strip())
 
 
 def _load_task(arguments: dict[str, Any], task_id: str) -> dict[str, Any]:
@@ -3735,8 +4138,11 @@ def _ensure_console_task_meta(arguments: dict[str, Any], task: dict[str, Any]) -
     for snake_key, camel_key in (
         ("acknowledged_by_role", "acknowledgedByRole"),
         ("result_status", "resultStatus"),
+        ("result_digest", "resultDigest"),
         ("result_path", "resultPath"),
         ("submitted_by_role", "submittedByRole"),
+        ("submission_id", "submissionId"),
+        ("submitted_at", "submittedAt"),
     ):
         value = _first_text(task.get(snake_key), task.get(camel_key))
         if value:
@@ -3753,8 +4159,11 @@ def _ensure_console_task_meta(arguments: dict[str, Any], task: dict[str, Any]) -
         "createdAt",
         "acknowledgedByRole",
         "resultStatus",
+        "resultDigest",
         "resultPath",
         "submittedByRole",
+        "submissionId",
+        "submittedAt",
     ):
         task.pop(key, None)
 
@@ -3764,7 +4173,20 @@ def _write_task(arguments: dict[str, Any], task: dict[str, Any]) -> None:
     _write_json(_task_state_path(arguments, task["task_id"]), task)
 
 
-ALLOWED_TASK_RESULT_STATUSES = {"SUCCESS", "SUCCESS_WITH_NOTES", "REVISION_NEEDED", "BLOCKED", "FAILED", "PARTIAL"}
+ALLOWED_TASK_RESULT_STATUSES = {
+    "SUCCESS",
+    "SUCCESS_WITH_NOTES",
+    "REVISION_NEEDED",
+    "BLOCKED",
+    "INTERRUPTED",
+}
+
+
+def _validate_task_result_status(value: Any) -> str:
+    status = str(value or "SUCCESS").strip()
+    if status not in ALLOWED_TASK_RESULT_STATUSES:
+        raise ValueError(f"unsupported result status: {status}")
+    return status
 
 
 def _validate_task_deliverables(task_id: str, deliverables: list[Any]) -> list[str]:
@@ -3808,7 +4230,34 @@ def _task_result_from_meta(task: dict[str, Any]) -> tuple[dict[str, Any], list[s
     return result, errors
 
 
-def _sync_task(arguments: dict[str, Any], task_id: str, exclude: list[str] | None = None) -> bool:
+def _sync_task(
+    arguments: dict[str, Any],
+    task_id: str,
+    exclude: list[str] | None = None,
+    result_paths: list[str] | None = None,
+) -> bool:
+    if result_paths is not None:
+        task_prefix = f"shared/tasks/{task_id}"
+        local_task_dir = _task_dir(arguments, task_id)
+        payload_paths: list[str] = []
+        if (local_task_dir / "result.md").is_file():
+            payload_paths.append(f"{task_prefix}/result.md")
+        for path in result_paths:
+            if path not in payload_paths:
+                payload_paths.append(path)
+        for path in payload_paths:
+            for action in ("push", "stat"):
+                sync_args = dict(arguments)
+                sync_args.update({"action": action, "path": path})
+                if not _filesync(sync_args).get("ok"):
+                    return False
+        commit_path = f"{task_prefix}/meta.json"
+        for action in ("push", "stat"):
+            commit_args = dict(arguments)
+            commit_args.update({"action": action, "path": commit_path})
+            if not _filesync(commit_args).get("ok"):
+                return False
+        return True
     sync_args = dict(arguments)
     sync_args.update({
         "action": "push",
@@ -3927,6 +4376,20 @@ def _pull_project(arguments: dict[str, Any], project_id: str) -> bool:
 
 TERMINAL_TASK_STATUSES = {"completed", "revision", "blocked", "cancelled"}
 
+# Task transition table — single source of truth:
+# plugins/teamharness/contracts/task-transitions.json (cross-language golden
+# fixture; the MCP contract test asserts this constant equals the file).
+# "prepared" never appears on project nodes; it only exists in task meta.
+TRANSITIONS: dict[str, list[str]] = {
+    "planned": ["prepared", "assigned", "in_progress", "submitted", "cancelled"],
+    "prepared": ["assigned", "cancelled"],
+    "assigned": ["in_progress", "submitted", "cancelled"],
+    "in_progress": ["submitted", "cancelled"],
+    "submitted": ["completed", "revision", "blocked", "cancelled"],
+}
+
+TASK_HISTORY_LIMIT = 50
+
 
 def _terminal_task_status(arguments: dict[str, Any], task: dict[str, Any], task_id: str) -> str:
     project_id = str(task.get("project_id") or "")
@@ -3949,11 +4412,11 @@ def _require_task_mutable(arguments: dict[str, Any], task: dict[str, Any], task_
         raise ValueError(f"{action} cannot update terminal task: {terminal_status}")
 
 
-def _update_project_task(arguments: dict[str, Any], project_id: str, task_id: str, **updates: Any) -> None:
+def _update_project_task(arguments: dict[str, Any], project_id: str, task_id: str, **updates: Any) -> bool:
     path = _project_state_path(arguments, project_id)
     project = _read_json(path)
     if not project:
-        return
+        return False
     changed = False
     for task in project.get("tasks", []):
         if task.get("task_id") == task_id:
@@ -3970,7 +4433,103 @@ def _update_project_task(arguments: dict[str, Any], project_id: str, task_id: st
     if changed:
         _write_json(path, project)
         _write_project_plan(_project_dir(arguments, project_id), project)
-        _sync_project(arguments, project_id)
+    return _sync_project(arguments, project_id)
+
+
+def _transition_actor(arguments: dict[str, Any]) -> str:
+    """history actor: ``role:account_id`` (precedent: ``_ack_`` role stamping)."""
+    role = _role(arguments) or "unknown"
+    account = str(arguments.get("account_id") or "default").strip() or "default"
+    return f"{role}:{account}"
+
+
+def _transition_guidance(action: str, from_status: str) -> str:
+    if action in ("ack_task", "submit_task"):
+        if from_status in ("", "planned", "prepared"):
+            return "delegate_task it first" if action == "ack_task" else "ack_task it first"
+        return "wait for a leader decision (accept_task_result)"
+    if action == "accept_task_result":
+        return "wait for submit_task"
+    if action == "delegate_task":
+        return "cancel_task it first, or wait for the submission to be decided"
+    return "check the task transition table (task-transitions.json)"
+
+
+def _assert_transition(from_status: str, to_status: str, action: str) -> None:
+    """Table check.  Same-state re-entry is a legal no-op (idempotent retry)."""
+    if from_status == to_status:
+        return
+    allowed = TRANSITIONS.get(from_status)
+    if allowed is None:
+        raise ValueError(
+            f"{action}: task is in unexpected state {from_status or 'missing'}; "
+            f"{_transition_guidance(action, from_status)}"
+        )
+    if to_status not in allowed:
+        raise ValueError(
+            f"{action}: task is '{from_status}'; {_transition_guidance(action, from_status)} "
+            f"(allowed transitions from '{from_status}': {', '.join(allowed)})"
+        )
+
+
+def _append_transition_history(
+    task: dict[str, Any],
+    from_status: str,
+    to_status: str,
+    action: str,
+    actor: str,
+    note: str = "",
+    record_noop: bool = False,
+) -> None:
+    """Append a transition entry to task meta ``history`` (cap
+    TASK_HISTORY_LIMIT, dropping the oldest).  Mutates in place; the caller
+    persists.  No-op re-entries are not recorded unless ``record_noop``
+    (report_progress uses from == to on purpose)."""
+    if from_status == to_status and not record_noop:
+        return
+    history = task.get("history")
+    if not isinstance(history, list):
+        history = []
+    entry: dict[str, Any] = {
+        "ts": _utc_timestamp(),
+        "from": from_status,
+        "to": to_status,
+        "actor": actor,
+        "action": action,
+    }
+    if note:
+        entry["note"] = note
+    history.append(entry)
+    if len(history) > TASK_HISTORY_LIMIT:
+        history = history[-TASK_HISTORY_LIMIT:]
+    task["history"] = history
+
+
+def _transition_task(
+    arguments: dict[str, Any],
+    task: dict[str, Any],
+    task_id: str,
+    new_status: str,
+    action: str,
+    note: str = "",
+    from_status: str | None = None,
+    **extra: Any,
+) -> str:
+    """Single entry point for task status changes: table validation ->
+    history append -> status + extra fields merged -> ``_write_task``.
+
+    Project-node mirroring and shared-storage sync stay at the call site
+    (each site has a different sync shape: exclude / result_paths).
+    Returns the previous task-meta status.
+    """
+    old_status = from_status if from_status is not None else str(task.get("status") or "")
+    _assert_transition(old_status, new_status, action)
+    if extra:
+        task.update(extra)
+    _append_transition_history(task, old_status, new_status, action, _transition_actor(arguments), note)
+    task["status"] = new_status
+    _write_task(arguments, task)
+    return old_status
 
 
 def _validate_assignee_membership(room_id: str, assignee: str) -> dict[str, Any]:
@@ -4079,6 +4638,409 @@ def _send_delegate_notification(
         return {"sent": False, "error": f"Matrix API error: {exc}"}
 
 
+def _team_leader_matrix_id() -> str:
+    """Resolve the team leader's Matrix user ID from the runtime config.
+
+    The controller projects the full team roster (with roles and Matrix
+    user IDs) into the worker's runtime config. Returns an empty string
+    when no leader entry exists (standalone runs) so callers can skip
+    the notification instead of failing.
+    """
+    config = _load_runtime_config()
+    team = _section(config, "team")
+    members = team.get("members")
+    if not isinstance(members, list):
+        return ""
+    for member in members:
+        if not isinstance(member, dict):
+            continue
+        role = str(member.get("role") or "").strip().lower().replace("_", "-")
+        if role in {"team-leader", "teamleader", "leader"}:
+            return str(member.get("matrixUserId") or member.get("matrix_user_id") or "").strip()
+    return ""
+
+
+_TASK_COMPLETION_EVENT_TOKENS = {
+    "SUCCESS": "TASK_COMPLETED",
+    "SUCCESS_WITH_NOTES": "TASK_COMPLETED",
+    "PARTIAL": "TASK_PARTIAL",
+    "REVISION_NEEDED": "TASK_REVISION_NEEDED",
+    "BLOCKED": "TASK_BLOCKED",
+    "FAILED": "TASK_FAILED",
+    # Defensive only — not part of the accepted result-status contract.
+    "INTERRUPTED": "TASK_INTERRUPTED",
+}
+
+
+def _team_human_matrix_ids() -> list[str]:
+    """Resolve Matrix IDs of human (non-leader, non-worker) team members.
+
+    Same runtime-config source as ``_team_leader_matrix_id``: the
+    controller projects the full roster (including humans and the team
+    admin) into ``team.members`` with their roles. Humans are every
+    member whose role is neither leader nor worker, plus the
+    ``team.admin`` entry. Returns an empty list on standalone runs so
+    callers skip the extra mentions instead of failing.
+    """
+    config = _load_runtime_config()
+    team = _section(config, "team")
+    ids: list[str] = []
+
+    def _add(user_id: Any) -> None:
+        user_id = str(user_id or "").strip()
+        if user_id.startswith("@") and user_id not in ids:
+            ids.append(user_id)
+
+    admin = _section(team, "admin")
+    _add(admin.get("matrixUserId") or admin.get("matrix_user_id"))
+    members = team.get("members")
+    if not isinstance(members, list):
+        return ids
+    for member in members:
+        if not isinstance(member, dict):
+            continue
+        role = str(member.get("role") or "").strip().lower().replace("_", "-")
+        if role in {"team-leader", "teamleader", "leader", "worker"}:
+            continue
+        _add(member.get("matrixUserId") or member.get("matrix_user_id"))
+    return ids
+
+
+def _send_project_completion_notification(
+    arguments: dict[str, Any],
+    project: dict[str, Any],
+    project_id: str,
+) -> dict[str, Any]:
+    """Send the automatic PROJECT_COMPLETED event for complete_project.
+
+    Best-effort: every guard failure returns a ``skipped`` result and
+    never blocks the terminal project write. The event mentions the team
+    leader and the human members in the task room so the requester sees
+    project completion with the same salience as a task completion. The
+    recorded event id makes a retried complete_project idempotent.
+    """
+    leader = _team_leader_matrix_id()
+    if not leader:
+        return {
+            "sent": False,
+            "skipped": True,
+            "error": "team leader Matrix ID not found in runtime config",
+        }
+    if project.get("projectCompletionEventId"):
+        return {
+            "sent": True,
+            "eventId": str(project["projectCompletionEventId"]),
+            "leader": leader,
+            "reused": True,
+        }
+    room_id = ""
+    tasks = project.get("tasks")
+    if isinstance(tasks, list):
+        for task in tasks:
+            if not isinstance(task, dict):
+                continue
+            room_id = str(task.get("room_id") or "").strip()
+            if not room_id:
+                task_id = str(task.get("task_id") or task.get("taskId") or "").strip()
+                if task_id:
+                    task_state = _read_json(_task_state_path(arguments, task_id), {})
+                    room_id = str(task_state.get("room_id") or "").strip()
+            if room_id:
+                break
+    if not room_id:
+        source_room_id = str(project.get("source_room_id") or "").strip()
+        if MATRIX_ROOM_RE.fullmatch(_canonical_room_id(source_room_id)):
+            room_id = source_room_id
+    if not room_id:
+        return {"sent": False, "skipped": True, "error": "project has no room_id"}
+    membership = _validate_assignee_membership(room_id, leader)
+    if not membership.get("ok"):
+        return {
+            "sent": False,
+            "skipped": True,
+            "error": str(membership.get("error") or "room membership check failed"),
+        }
+    notification = _send_task_completion_notification(
+        arguments,
+        room_id=room_id,
+        task_id=project_id,
+        status="SUCCESS",
+        summary=f"Project completed: {str(project.get('title') or project_id)[:200]}",
+        leader=leader,
+        humans=_team_human_matrix_ids(),
+        event_token="PROJECT_COMPLETED",
+        txn_prefix="project",
+    )
+    if notification.get("sent"):
+        project["projectCompletionEventId"] = notification.get("eventId")
+    return notification
+
+
+def _send_task_completion_notification(
+    arguments: dict[str, Any],
+    *,
+    room_id: str,
+    task_id: str,
+    status: str,
+    summary: str,
+    leader: str,
+    worker: str = "",
+    result_path: str = "",
+    humans: list[str] | None = None,
+    event_token: str = "",
+    txn_prefix: str = "submit",
+) -> dict[str, Any]:
+    """Send the automatic Worker completion notification for submit_task.
+
+    Publishes the completion event to the Task room with ``m.mentions``
+    using the same Matrix HTTP send path as the message tool. Every
+    result status gets its own first-line contract token so leader-side
+    prompts can branch on the line itself (task-execution skill
+    contract):
+        @leader TASK_COMPLETED: <task-id> - Result: shared/tasks/<task-id>/result.md
+        @leader TASK_PARTIAL: <task-id> - <summary>
+        @leader TASK_REVISION_NEEDED: <task-id> - <summary>
+        @leader TASK_BLOCKED: <task-id> - <short blocker summary>
+        @leader TASK_FAILED: <task-id> - <summary>
+    Humans (task initiator and other non-agent members) are mentioned
+    alongside the leader so the requester is routed with the same
+    salience the leader is. The transaction ID is stable per task and
+    status so a retry cannot produce a duplicate event, while a
+    re-submission with a changed status produces a new one.
+    """
+    homeserver = os.getenv("AGENTTEAMS_MATRIX_URL", "").rstrip("/")
+    token = os.getenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "")
+    if not homeserver or not token:
+        return {
+            "sent": False,
+            "error": "AGENTTEAMS_MATRIX_URL and AGENTTEAMS_WORKER_MATRIX_TOKEN are required",
+        }
+
+    matrix_room_id = str(room_id or "").strip()
+    if matrix_room_id.startswith("room:"):
+        matrix_room_id = matrix_room_id[len("room:") :].strip()
+    if not matrix_room_id.startswith("!"):
+        return {"sent": False, "error": f"invalid Matrix room target: {room_id}"}
+
+    summary_preview = (summary or "")[:500]
+    if len(summary or "") > 500:
+        summary_preview += "..."
+    line_token = event_token or _TASK_COMPLETION_EVENT_TOKENS.get(status, f"TASK_{status}")
+    if event_token:
+        notification_text = f"{leader} {event_token}: {task_id} - {summary_preview}".rstrip()
+    elif line_token == "TASK_COMPLETED":
+        if result_path:
+            notification_text = f"{leader} TASK_COMPLETED: {task_id} - Result: {result_path}"
+        elif summary_preview:
+            notification_text = f"{leader} TASK_COMPLETED: {task_id} - {summary_preview}"
+        else:
+            notification_text = f"{leader} TASK_COMPLETED: {task_id}"
+    else:
+        notification_text = f"{leader} {line_token}: {task_id} - {summary_preview}".rstrip()
+    if worker:
+        notification_text += f"\n- Worker: {worker}"
+    if not event_token and line_token != "TASK_COMPLETED":
+        notification_text += f"\n- Status: {status}"
+    elif (
+        line_token == "TASK_COMPLETED"
+        and not event_token
+        and result_path
+        and summary_preview
+    ):
+        # The Result line names the file; keep the short summary preview
+        # as the detail line (legacy contract, leader-side prompts read it).
+        notification_text += f"\n{summary_preview}"
+    mentions = [leader]
+    for human in humans or []:
+        if human and human != leader and human not in mentions:
+            mentions.append(human)
+    content = _matrix_content(notification_text, mentions)
+
+    room_enc = urllib.parse.quote(matrix_room_id, safe="")
+    txn = urllib.parse.quote(f"{txn_prefix}-{task_id}-{status.lower()}", safe="")
+    url = f"{homeserver}/_matrix/client/v3/rooms/{room_enc}/send/m.room.message/{txn}"
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(content).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="PUT",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            data = json.loads(response.read().decode("utf-8") or "{}")
+        event_id = str(data.get("event_id") or "").strip()
+        if not event_id:
+            return {"sent": False, "error": "Matrix send returned no event_id"}
+        return {
+            "sent": True,
+            "eventId": event_id,
+            "roomId": matrix_room_id,
+            "leader": leader,
+            "humans": mentions[1:],
+        }
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")[:200]
+        return {
+            "sent": False,
+            "error": f"Matrix API error: HTTP {exc.code}: {body}",
+        }
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        return {"sent": False, "error": f"Matrix API error: {exc}"}
+
+
+def _send_attention_notification(
+    arguments: dict[str, Any],
+    *,
+    room_id: str,
+    task_id: str,
+    kind: str,
+    question: str,
+    leader: str,
+    worker: str = "",
+    humans: list[str] | None = None,
+    attempt: int = 1,
+) -> dict[str, Any]:
+    """Send an in-flight attention request to the Task room.
+
+    Workers/leaders use this to pull a human decision (approval,
+    decision, escalation) out of the ambient group chat: the event is a
+    status-scoped first-line token (``ATTENTION_APPROVAL`` etc.) that
+    mentions the leader and the human members of the team. The
+    transaction ID is stable per task, kind and attempt so a retry
+    cannot duplicate the event while a new attempt produces a new one.
+    """
+    homeserver = os.getenv("AGENTTEAMS_MATRIX_URL", "").rstrip("/")
+    token = os.getenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "")
+    if not homeserver or not token:
+        return {
+            "sent": False,
+            "error": "AGENTTEAMS_MATRIX_URL and AGENTTEAMS_WORKER_MATRIX_TOKEN are required",
+        }
+
+    matrix_room_id = str(room_id or "").strip()
+    if matrix_room_id.startswith("room:"):
+        matrix_room_id = matrix_room_id[len("room:") :].strip()
+    if not matrix_room_id.startswith("!"):
+        return {"sent": False, "error": f"invalid Matrix room target: {room_id}"}
+
+    question_preview = (question or "")[:500]
+    if len(question or "") > 500:
+        question_preview += "..."
+    notification_text = f"{leader} ATTENTION_{kind.upper()}: {task_id} - {question_preview}".rstrip()
+    if worker:
+        notification_text += f"\n- Worker: {worker}"
+    mentions = [leader]
+    for human in humans or []:
+        if human and human != leader and human not in mentions:
+            mentions.append(human)
+    content = _matrix_content(notification_text, mentions)
+
+    room_enc = urllib.parse.quote(matrix_room_id, safe="")
+    txn = urllib.parse.quote(f"attention-{task_id}-{kind}-{attempt}", safe="")
+    url = f"{homeserver}/_matrix/client/v3/rooms/{room_enc}/send/m.room.message/{txn}"
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(content).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="PUT",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            data = json.loads(response.read().decode("utf-8") or "{}")
+        event_id = str(data.get("event_id") or "").strip()
+        if not event_id:
+            return {"sent": False, "error": "Matrix send returned no event_id"}
+        return {
+            "sent": True,
+            "eventId": event_id,
+            "roomId": matrix_room_id,
+            "leader": leader,
+            "humans": mentions[1:],
+        }
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")[:200]
+        return {
+            "sent": False,
+            "error": f"Matrix API error: HTTP {exc.code}: {body}",
+        }
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        return {"sent": False, "error": f"Matrix API error: {exc}"}
+
+
+def _task_completion_notification(
+    arguments: dict[str, Any],
+    task: dict[str, Any],
+    task_id: str,
+    status: str,
+    summary: str,
+) -> dict[str, Any]:
+    """Best-effort completion notification orchestration for submit_task.
+
+    Mirrors the delegate_task notification lifecycle: resolve the leader
+    from the runtime config, reuse an already-recorded event on retry,
+    validate room membership, send, then persist the event id so the
+    notification cannot be duplicated. Any problem returns a skipped
+    result and never blocks the terminal submission.
+    """
+    room_id = str(task.get("room_id") or "").strip()
+    if not room_id:
+        return {"sent": False, "skipped": True, "error": "task has no room_id"}
+    leader = _team_leader_matrix_id()
+    if not leader:
+        return {
+            "sent": False,
+            "skipped": True,
+            "error": "team leader Matrix ID not found in runtime config",
+        }
+    recorded_status = str(task.get("completionEventStatus") or "")
+    if task.get("completionEventId"):
+        if not recorded_status or recorded_status == status:
+            return {
+                "sent": True,
+                "eventId": str(task["completionEventId"]),
+                "roomId": _canonical_room_id(room_id),
+                "leader": leader,
+                "reused": True,
+                "completionStatus": recorded_status or status,
+            }
+        # A recorded completion exists but the task is being re-submitted
+        # with a changed result status: the recorded event is stale.
+        # Invalidate it so the new status-scoped transaction can send a
+        # fresh event instead of silently reusing the old one.
+        task.pop("completionEventId", None)
+        task.pop("completionEventStatus", None)
+        _write_task(arguments, task)
+    membership = _validate_assignee_membership(room_id, leader)
+    if not membership.get("ok"):
+        return {
+            "sent": False,
+            "skipped": True,
+            "error": str(membership.get("error") or "room membership check failed"),
+        }
+    notification = _send_task_completion_notification(
+        arguments,
+        room_id=room_id,
+        task_id=task_id,
+        status=status,
+        summary=summary,
+        leader=leader,
+        worker=str(task.get("assigned_to") or ""),
+        result_path=str(task.get("result_path") or ""),
+        humans=_team_human_matrix_ids(),
+    )
+    if notification.get("sent"):
+        task["completionEventId"] = notification.get("eventId")
+        task["completionEventStatus"] = status
+        _write_task(arguments, task)
+    return notification
+
+
 def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
     action = str(arguments.get("action") or "").strip()
     payload = _payload(arguments)
@@ -4175,6 +5137,18 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     ),
                 }
 
+            # Transition discipline: an in-flight (in_progress) or submitted
+            # task must not be silently reset to prepared — rebuilding the
+            # meta here would destroy the recorded progress/submission.
+            # (The assigned+eventId retry above already returned; an assigned
+            # task without eventId is a broken state and gets re-prepared.)
+            _delegate_from = str(existing_task.get("status") or "")
+            if _delegate_from in ("in_progress", "submitted"):
+                raise ValueError(
+                    f"delegate_task: task is '{_delegate_from}'; "
+                    f"{_transition_guidance('delegate_task', _delegate_from)}"
+                )
+
             # Atomicity contract: never mark a task assigned until the Worker
             # can actually receive it. Validate room membership first; then
             # prepare (status="prepared", files published); then send the
@@ -4214,6 +5188,17 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 task["assigned_to"] = assigned_to
             if source_room_id:
                 task["source_room_id"] = source_room_id
+            if not _delegate_from:
+                # Creation is recorded with from="planned" (the project-node
+                # view at this moment); prepared -> prepared retries are
+                # no-op re-entries and stay out of the history.
+                _append_transition_history(
+                    task,
+                    "planned",
+                    "prepared",
+                    "delegate_task",
+                    _transition_actor(arguments),
+                )
             _write_task(arguments, task)
             # Publish task files to shared storage FIRST so a Worker that
             # receives the notification can read spec.md/meta.json. If the
@@ -4290,9 +5275,15 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
 
             # Send succeeded - commit the assignment atomically with the
             # recorded event_id, then re-push the assigned state.
-            task["status"] = "assigned"
-            task["eventId"] = notification["eventId"]
-            _write_task(arguments, task)
+            # (prepared -> assigned goes through the transition table.)
+            _transition_task(
+                arguments,
+                task,
+                task_id,
+                "assigned",
+                "delegate_task",
+                eventId=notification["eventId"],
+            )
             project_task_updates: dict[str, Any] = {"status": "assigned"}
             if assigned_to:
                 project_task_updates["assigned_to"] = assigned_to
@@ -4340,13 +5331,27 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             if role not in {"worker", "remote-member"}:
                 raise ValueError("ack_task requires worker or remote-member role")
             task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
+            local_task = _read_json(_task_state_path(arguments, task_id))
+            if local_task:
+                _require_task_mutable(arguments, local_task, task_id, action)
             pulled = _pull_task(arguments, task_id)
             task = _load_task(arguments, task_id)
             _require_task_mutable(arguments, task, task_id, action)
             if task.get("status") != "submitted":
-                task["status"] = "in_progress"
-                task["acknowledged_by_role"] = role
-                _write_task(arguments, task)
+                # Tightening: ack only makes sense after the assignment
+                # (planned/prepared/missing -> structured error, not a
+                # silent state jump).
+                _ack_from = str(task.get("status") or "")
+                if _ack_from not in ("assigned", "in_progress"):
+                    raise ValueError(f"ack_task: task is '{_ack_from}'; delegate_task it first")
+                _transition_task(
+                    arguments,
+                    task,
+                    task_id,
+                    "in_progress",
+                    "ack_task",
+                    acknowledged_by_role=role,
+                )
                 _update_project_task(arguments, task.get("project_id", ""), task_id, status="in_progress")
             spec_path = _task_dir(arguments, task_id) / "spec.md"
             spec = spec_path.read_text(encoding="utf-8") if spec_path.exists() else ""
@@ -4367,26 +5372,162 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             task = _load_task(arguments, task_id)
             _require_task_mutable(arguments, task, task_id, action)
             summary = str(payload.get("summary") or "")
-            status = str(payload.get("status") or "SUCCESS")
+            status = _validate_task_result_status(payload.get("status"))
             deliverables = payload.get("deliverables") or []
             if not isinstance(deliverables, list):
                 raise ValueError("deliverables must be a list")
             deliverables = _validate_task_deliverables(task_id, deliverables)
-            task_dir = _task_dir(arguments, task_id)
-            task_dir.mkdir(parents=True, exist_ok=True)
-            task.update({
-                "status": "submitted",
-                "result_status": status,
+            submitted_result = {
+                "status": status,
                 "summary": summary,
                 "deliverables": deliverables,
-                "submitted_by_role": role,
-            })
+            }
+            submitted_digest = _task_result_digest(submitted_result)
+            if task.get("status") == "submitted":
+                persisted_digest = _first_text(
+                    task.get("result_digest"),
+                    task.get("resultDigest"),
+                )
+                if not persisted_digest:
+                    persisted_digest = _task_result_digest(_submission_result(task))
+                if persisted_digest != submitted_digest:
+                    raise ValueError("submit_task conflicts with existing submission")
+                submission_id = _first_text(
+                    task.get("submission_id"),
+                    task.get("submissionId"),
+                )
+                if not submission_id:
+                    raise ValueError("legacy submitted task has no submission identity and cannot be resubmitted")
+                if not task.get("result_digest"):
+                    task["result_digest"] = persisted_digest
+                    try:
+                        _write_task(arguments, task)
+                    except OSError as exc:
+                        return _persisted_state_failure_result(
+                            tool="taskflow",
+                            action=action,
+                            error=exc,
+                            task=task,
+                        )
+                try:
+                    project_synced = _update_project_task(
+                        arguments,
+                        task.get("project_id", ""),
+                        task_id,
+                        status="submitted",
+                    )
+                except OSError as exc:
+                    return _persisted_state_failure_result(
+                        tool="taskflow",
+                        action=action,
+                        error=exc,
+                        task=task,
+                    )
+                if not project_synced:
+                    return _sync_failure_result({
+                        "tool": "taskflow",
+                        "action": action,
+                        "task": task,
+                        "reused": True,
+                        "publishedArtifacts": [],
+                    }, "submit_task project")
+                synced = _sync_task(
+                    arguments,
+                    task_id,
+                    exclude=["spec.md", "base/"],
+                    result_paths=deliverables,
+                )
+                if not synced:
+                    return _sync_failure_result({
+                        "tool": "taskflow",
+                        "action": action,
+                        "task": task,
+                        "reused": True,
+                        "publishedArtifacts": [],
+                    }, "submit_task")
+                result = {
+                    "ok": True,
+                    "tool": "taskflow",
+                    "action": action,
+                    "task": task,
+                    "reused": True,
+                    "publishedArtifacts": [],
+                    "synced": True,
+                    "notification": _task_completion_notification(
+                        arguments,
+                        task,
+                        task_id,
+                        status,
+                        summary,
+                    ),
+                    "notificationNeeded": _notification_needed(
+                        "submit_task",
+                        {"project_id": task.get("project_id", "")},
+                        task,
+                        summary=f"submit_task: {task_id} ({status})",
+                    ),
+                }
+                return result
+            # Tightening: submission requires an acknowledged assignment.
+            _submit_from = str(task.get("status") or "")
+            if _submit_from not in ("assigned", "in_progress"):
+                raise ValueError(f"submit_task: task is '{_submit_from}'; ack_task it first")
+            task_dir = _task_dir(arguments, task_id)
+            task_dir.mkdir(parents=True, exist_ok=True)
+            submission_id = uuid.uuid4().hex
+            submitted_at = _utc_timestamp()
             if (task_dir / "result.md").is_file():
-                task["result_path"] = f"shared/tasks/{task_id}/result.md"
+                result_path_extra = {"result_path": f"shared/tasks/{task_id}/result.md"}
             else:
+                result_path_extra = {}
                 task.pop("result_path", None)
-            _write_task(arguments, task)
-            _update_project_task(arguments, task.get("project_id", ""), task_id, status="submitted")
+            try:
+                _transition_task(
+                    arguments,
+                    task,
+                    task_id,
+                    "submitted",
+                    "submit_task",
+                    result_status=status,
+                    summary=summary,
+                    deliverables=deliverables,
+                    submitted_by_role=role,
+                    submission_id=submission_id,
+                    submitted_at=submitted_at,
+                    result_digest=submitted_digest,
+                    continuation={
+                        "status": "pending",
+                        "delivery_id": _continuation_delivery_id(
+                            _first_text(task.get("project_id"), task.get("projectId")),
+                            task_id,
+                            submission_id,
+                        ),
+                    },
+                    **result_path_extra,
+                )
+            except OSError as exc:
+                return _uncommitted_state_failure_result(tool="taskflow", action=action, error=exc)
+            try:
+                project_synced = _update_project_task(
+                    arguments,
+                    task.get("project_id", ""),
+                    task_id,
+                    status="submitted",
+                )
+            except OSError as exc:
+                return _persisted_state_failure_result(
+                    tool="taskflow",
+                    action=action,
+                    error=exc,
+                    task=task,
+                )
+            if not project_synced:
+                return _sync_failure_result({
+                    "tool": "taskflow",
+                    "action": action,
+                    "task": task,
+                    "publishedArtifacts": [],
+                }, "submit_task project")
             published_artifacts = _publish_task_artifacts(
                 arguments,
                 task,
@@ -4394,13 +5535,50 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 deliverables,
                 _attachment_parent_event_id(payload, arguments),
             )
+            # P0 ordering (PR review 2026-09-05): the completion event is
+            # an attention signal, not a receipt. Sync shared storage
+            # first so the leader can immediately read result.md /
+            # deliverables, and only then notify. A failed sync withholds
+            # the notification and returns a retryable failure instead of
+            # telling the leader "done" while the artifacts are
+            # unreachable. The retry is idempotent (event reuse is keyed
+            # by task + status).
+            synced = _sync_task(
+                arguments,
+                task_id,
+                exclude=["spec.md", "base/"],
+                result_paths=deliverables,
+            )
+            if not synced:
+                # #1183 contract: retryable failure carries statePersisted;
+                # #1206 v2 contract: the completion notification is withheld
+                # until the retry succeeds (the guard above withholds it).
+                failed = _sync_failure_result({
+                    "tool": "taskflow",
+                    "action": action,
+                    "task": task,
+                    "publishedArtifacts": published_artifacts,
+                }, "submit_task")
+                failed["error"] += (
+                    "; the completion notification was withheld — retry "
+                    "submit_task (idempotent) once storage recovers"
+                )
+                return failed
+            notification = _task_completion_notification(
+                arguments,
+                task,
+                task_id,
+                status,
+                summary,
+            )
             return {
                 "ok": True,
                 "tool": "taskflow",
                 "action": action,
                 "task": task,
                 "publishedArtifacts": published_artifacts,
-                "synced": _sync_task(arguments, task_id, exclude=["spec.md", "base/"]),
+                "synced": True,
+                "notification": notification,
                 "notificationNeeded": _notification_needed(
                     "submit_task",
                     {"project_id": task.get("project_id", "")},
@@ -4409,37 +5587,321 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 ),
             }
 
-        if action == "cancel_task":
-            if role != "leader":
-                raise ValueError("cancel_task requires leader role")
+        if action == "report_progress":
+            if role not in {"worker", "remote-member"}:
+                raise ValueError(
+                    "report_progress requires worker or remote-member role"
+                )
             task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
+            _pull_task(arguments, task_id)
             task = _load_task(arguments, task_id)
-            project_id = str(task.get("project_id") or "")
-            terminal_status = _terminal_task_status(arguments, task, task_id)
-            if terminal_status:
-                raise ValueError(f"cannot cancel terminal task: {terminal_status}")
-            reason = str(payload.get("reason") or payload.get("cancelReason") or payload.get("cancel_reason") or "").strip()
-            if not reason:
-                raise ValueError("reason is required")
-            replacement_task_id = payload.get("replacementTaskId") or payload.get("replacement_task_id")
-
-            task["status"] = "cancelled"
-            task["cancel_reason"] = reason
-            if replacement_task_id:
-                task["replacement_task_id"] = _safe_id(replacement_task_id, "replacementTaskId")
-            else:
-                task.pop("replacement_task_id", None)
+            _require_task_mutable(arguments, task, task_id, action)
+            # Progress notes only exist while the task is actually in flight.
+            _progress_from = str(task.get("status") or "")
+            if _progress_from not in ("assigned", "in_progress"):
+                raise ValueError(
+                    f"report_progress: task is '{_progress_from}'; ack_task it first"
+                )
+            note = str(payload.get("note") or "").strip()
+            if not note:
+                raise ValueError("note is required")
+            truncated = len(note) > 200
+            if truncated:
+                note = note[:200] + "…"
+            # from == to on purpose: progress is a no-op re-entry recorded in
+            # history (cap 50), with no state change and no notification.
+            _append_transition_history(
+                task,
+                _progress_from,
+                _progress_from,
+                "progress",
+                _transition_actor(arguments),
+                note,
+                record_noop=True,
+            )
             _write_task(arguments, task)
-
-            _update_project_task(arguments, project_id, task_id, status="cancelled")
+            synced = _sync_task(arguments, task_id, exclude=["spec.md", "base/"])
             return {
                 "ok": True,
                 "tool": "taskflow",
                 "action": action,
                 "task": task,
-                "project": _read_json(_project_state_path(arguments, project_id)) if project_id else {},
-                "synced": _sync_task(arguments, task_id, exclude=["spec.md", "base/"]),
+                "synced": synced,
+                "truncated": truncated,
             }
+
+        if action == "request_attention":
+            if role not in {"worker", "leader", "remote-member"}:
+                raise ValueError(
+                    "request_attention requires worker, leader, or remote-member role"
+                )
+            task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
+            task = _load_task(arguments, task_id)
+            _require_task_mutable(arguments, task, task_id, action)
+            kind = str(payload.get("kind") or "other").strip().lower()
+            if kind not in {"approval", "decision", "escalation", "other"}:
+                raise ValueError("kind must be one of approval, decision, escalation, other")
+            question = str(payload.get("question") or payload.get("reason") or "").strip()
+            if not question:
+                raise ValueError("question is required")
+            attention = task.get("attention")
+            if not isinstance(attention, list):
+                attention = []
+            # Idempotent per kind while unresolved: re-requesting the same
+            # kind before it was resolved reuses the recorded event instead
+            # of pinging the room again. An explicit resolved=true closes
+            # the open loop early (no new ping).
+            explicit_resolve = bool(payload.get("resolved", False))
+            for existing in reversed(attention):
+                if (
+                    isinstance(existing, dict)
+                    and not existing.get("resolved")
+                    and str(existing.get("kind") or "") == kind
+                    and existing.get("eventId")
+                ):
+                    if explicit_resolve:
+                        existing["resolved"] = True
+                        _write_task(arguments, task)
+                        return {
+                            "ok": True,
+                            "tool": "taskflow",
+                            "action": action,
+                            "task": task,
+                            "attention": {
+                                "kind": kind,
+                                "resolved": True,
+                                "eventId": str(existing["eventId"]),
+                                "notification": {
+                                    "sent": True,
+                                    "eventId": str(existing["eventId"]),
+                                    "reused": True,
+                                    "resolved": True,
+                                },
+                            },
+                            "synced": True,
+                        }
+                    return {
+                        "ok": True,
+                        "tool": "taskflow",
+                        "action": action,
+                        "task": task,
+                        "attention": {
+                            "kind": kind,
+                            "reused": True,
+                            "notification": {
+                                "sent": True,
+                                "eventId": str(existing["eventId"]),
+                                "reused": True,
+                            },
+                        },
+                        "synced": True,
+                    }
+            attempt = sum(
+                1 for item in attention if isinstance(item, dict) and item.get("kind") == kind
+            ) + 1
+            record: dict[str, Any] = {
+                "kind": kind,
+                "question": question[:500],
+                "attempt": attempt,
+                "requestedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "resolved": bool(payload.get("resolved", False)),
+            }
+            attention.append(record)
+            task["attention"] = attention
+            _write_task(arguments, task)
+            synced = _sync_task(arguments, task_id, exclude=["spec.md", "base/"])
+            if not synced:
+                return {
+                    "ok": False,
+                    "retryable": True,
+                    "tool": "taskflow",
+                    "action": action,
+                    "task": task,
+                    "error": (
+                        "shared storage sync failed after request_attention; the "
+                        "attention notification was withheld. Local attention state "
+                        "is recorded — retry request_attention (idempotent)."
+                    ),
+                }
+            room_id = str(task.get("room_id") or "").strip()
+            if not room_id:
+                notification = {
+                    "sent": False,
+                    "skipped": True,
+                    "error": "task has no room_id",
+                }
+            else:
+                leader = _team_leader_matrix_id()
+                if not leader:
+                    notification = {
+                        "sent": False,
+                        "skipped": True,
+                        "error": "team leader Matrix ID not found in runtime config",
+                    }
+                else:
+                    membership = _validate_assignee_membership(room_id, leader)
+                    if not membership.get("ok"):
+                        notification = {
+                            "sent": False,
+                            "skipped": True,
+                            "error": str(membership.get("error") or "room membership check failed"),
+                        }
+                    else:
+                        notification = _send_attention_notification(
+                            arguments,
+                            room_id=room_id,
+                            task_id=task_id,
+                            kind=kind,
+                            question=question,
+                            leader=leader,
+                            worker=str(task.get("assigned_to") or ""),
+                            humans=_team_human_matrix_ids(),
+                            attempt=attempt,
+                        )
+                        if notification.get("sent"):
+                            record["eventId"] = notification.get("eventId")
+                            _write_task(arguments, task)
+            return {
+                "ok": True,
+                "tool": "taskflow",
+                "action": action,
+                "task": task,
+                "attention": {
+                    "kind": kind,
+                    "attempt": attempt,
+                    "notification": notification,
+                },
+                "synced": True,
+            }
+
+        if action == "cancel_task":
+            if role != "leader":
+                raise ValueError("cancel_task requires leader role")
+            task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
+            task = _load_task(arguments, task_id)
+            requested_submission_id = _first_text(
+                payload.get("submissionId"),
+                payload.get("submission_id"),
+            )
+            persisted_submission_id = _first_text(
+                task.get("submission_id"),
+                task.get("submissionId"),
+            )
+            if persisted_submission_id and not requested_submission_id:
+                raise ValueError("submissionId is required for the current task submission")
+            if requested_submission_id and requested_submission_id != persisted_submission_id:
+                raise ValueError("submissionId does not match the current task submission")
+            project_id = str(task.get("project_id") or "")
+            reason = str(payload.get("reason") or payload.get("cancelReason") or payload.get("cancel_reason") or "").strip()
+            if not reason:
+                raise ValueError("reason is required")
+            replacement_task_id = payload.get("replacementTaskId") or payload.get("replacement_task_id")
+            normalized_replacement_task_id = (
+                _safe_id(replacement_task_id, "replacementTaskId") if replacement_task_id else ""
+            )
+            terminal_status = _terminal_task_status(arguments, task, task_id)
+            continuation = task.get("continuation") if isinstance(task.get("continuation"), dict) else {}
+            cancellation_committed = bool(task.get("cancelled_at")) or continuation.get("status") == "resolved"
+            if terminal_status == "cancelled" and cancellation_committed:
+                persisted_reason = str(task.get("cancel_reason") or "").strip()
+                persisted_replacement_task_id = str(task.get("replacement_task_id") or "").strip()
+                if (
+                    persisted_reason != reason
+                    or persisted_replacement_task_id != normalized_replacement_task_id
+                ):
+                    raise ValueError("cancel_task conflicts with existing cancellation")
+                try:
+                    project_synced = _update_project_task(
+                        arguments,
+                        project_id,
+                        task_id,
+                        status="cancelled",
+                    )
+                except OSError as exc:
+                    return _persisted_state_failure_result(
+                        tool="taskflow",
+                        action=action,
+                        error=exc,
+                        task=task,
+                    )
+                if not project_synced:
+                    return _sync_failure_result({
+                        "tool": "taskflow",
+                        "action": action,
+                        "task": task,
+                        "project": _read_json(_project_state_path(arguments, project_id)) if project_id else {},
+                        "reused": True,
+                    }, "cancel_task project")
+                synced = _sync_task(arguments, task_id, exclude=["spec.md", "base/"])
+                result = {
+                    "ok": True,
+                    "tool": "taskflow",
+                    "action": action,
+                    "task": task,
+                    "project": _read_json(_project_state_path(arguments, project_id)) if project_id else {},
+                    "reused": True,
+                    "synced": synced,
+                }
+                if not synced:
+                    return _sync_failure_result(result, "cancel_task")
+                return result
+            if terminal_status:
+                raise ValueError(f"cannot cancel terminal task: {terminal_status}")
+
+            _resolve_task_continuation(task, "cancelled")
+            if normalized_replacement_task_id:
+                replacement_extra = {"replacement_task_id": normalized_replacement_task_id}
+            else:
+                replacement_extra = {}
+                task.pop("replacement_task_id", None)
+            try:
+                _transition_task(
+                    arguments,
+                    task,
+                    task_id,
+                    "cancelled",
+                    "cancel_task",
+                    note=reason,
+                    cancel_reason=reason,
+                    cancelled_at=_utc_timestamp(),
+                    **replacement_extra,
+                )
+            except OSError as exc:
+                return _uncommitted_state_failure_result(tool="taskflow", action=action, error=exc)
+
+            try:
+                project_synced = _update_project_task(
+                    arguments,
+                    project_id,
+                    task_id,
+                    status="cancelled",
+                )
+            except OSError as exc:
+                return _persisted_state_failure_result(
+                    tool="taskflow",
+                    action=action,
+                    error=exc,
+                    task=task,
+                )
+            if not project_synced:
+                return _sync_failure_result({
+                    "tool": "taskflow",
+                    "action": action,
+                    "task": task,
+                    "project": _read_json(_project_state_path(arguments, project_id)) if project_id else {},
+                }, "cancel_task project")
+            synced = _sync_task(arguments, task_id, exclude=["spec.md", "base/"])
+            result = {
+                "ok": True,
+                "tool": "taskflow",
+                "action": action,
+                "task": task,
+                "project": _read_json(_project_state_path(arguments, project_id)) if project_id else {},
+                "synced": synced,
+            }
+            if not synced:
+                return _sync_failure_result(result, "cancel_task")
+            return result
 
         if action == "check_task":
             if role != "leader":

@@ -121,6 +121,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/projects/{id}/spawns", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectSpawns)))
 	mux.Handle("GET /api/v1/projects/{id}/spawns/{sessionId}/messages", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectSpawnMessages)))
 	mux.Handle("GET /api/v1/projects/{id}/history", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectHistory)))
+	mux.Handle("GET /api/v1/projects/{id}/events", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectEvents)))
 	mux.Handle("GET /api/v1/projects/{id}/history/{timestamp}", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectHistorySnapshot)))
 
 	// --- Worker checkpoints (execution timeline; proxy to the worker's qwenpaw app) ---

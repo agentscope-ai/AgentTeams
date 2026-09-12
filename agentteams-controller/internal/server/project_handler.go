@@ -84,11 +84,22 @@ type projectMeta struct {
 }
 
 type projectTaskMeta struct {
-	TaskID     string   `json:"task_id"`
-	Title      string   `json:"title"`
-	AssignedTo string   `json:"assigned_to"`
-	DependsOn  []string `json:"depends_on"`
-	Status     string   `json:"status"`
+	TaskID       string                    `json:"task_id"`
+	Title        string                    `json:"title"`
+	AssignedTo   string                    `json:"assigned_to"`
+	DependsOn    []string                  `json:"depends_on"`
+	Status       string                    `json:"status"`
+	Cancellation *taskCancellationDecision `json:"cancellation,omitempty"`
+}
+
+// taskCancellationDecision is written into the project node before TaskMeta.
+// It lets a retry validate the original human decision when the project write
+// succeeded but the following TaskMeta write failed.
+type taskCancellationDecision struct {
+	SubmissionID      string `json:"submission_id,omitempty"`
+	Reason            string `json:"reason"`
+	ReplacementTaskID string `json:"replacement_task_id,omitempty"`
+	CancelledAt       string `json:"cancelled_at"`
 }
 
 type loopMeta struct {
@@ -190,8 +201,8 @@ type interruptConfig struct {
 // spec path, submission summary/result status, deliverables list and result
 // path. TaskMeta is written by TeamHarness taskflow (delegate_task creates
 // spec.md + meta.json, submit_task adds summary/result_status/deliverables/
-// result_path) and pushed to shared storage via _sync_task, so the same
-// dual-prefix scan used for projects applies here.
+// result_path) and pushed to shared storage via _sync_task. Reads stay in the
+// project's owning scope and never fall back across team/global boundaries.
 type taskDetail struct {
 	TaskID       string `json:"task_id"`
 	ProjectID    string `json:"project_id,omitempty"`
@@ -203,22 +214,58 @@ type taskDetail struct {
 	Deliverables []any  `json:"deliverables,omitempty"`
 	ResultPath   string `json:"result_path,omitempty"`
 	CancelReason string `json:"cancel_reason,omitempty"`
-	// History is the append-only transition audit for this task, maintained
-	// by TeamHarness taskflow (and the controller's cancel path). Each entry
-	// records one accepted state change; empty until the transition engine
-	// lands (design: agentscope-ai/AgentTeams#1223).
-	History []taskHistoryEntry `json:"history,omitempty"`
+	SubmissionID string `json:"submission_id,omitempty"`
+	// History carries the task's transition audit trail, passed through
+	// from the task meta (written by the TeamHarness transition engine).
+	History []taskTransition `json:"history,omitempty"`
 }
 
-// taskHistoryEntry is one append-only task transition record
-// (task meta `history[]`, capped at 50 entries by the writer).
-type taskHistoryEntry struct {
-	TS     string `json:"ts"`
+// taskTransition is one auditable task state change recorded in the task
+// meta `history` array. The allowed transitions are defined by the shared
+// fixture plugins/teamharness/contracts/task-transitions.json, which both
+// the Python write side and these Go tests load as the single source of
+// truth.
+type taskTransition struct {
+	Ts     string `json:"ts"`
 	From   string `json:"from"`
 	To     string `json:"to"`
-	Actor  string `json:"actor,omitempty"`
 	Action string `json:"action"`
+	Actor  string `json:"actor,omitempty"`
 	Note   string `json:"note,omitempty"`
+}
+
+// parseTaskHistory converts the task meta `history` array into the typed
+// audit trail. Malformed entries are skipped, never surfaced as an error:
+// the detail endpoints degrade gracefully (the node summary stays).
+func parseTaskHistory(value any) []taskTransition {
+	list, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	var out []taskTransition
+	for _, entry := range list {
+		m, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		t := taskTransition{
+			Ts:     str(m["ts"]),
+			From:   str(m["from"]),
+			To:     str(m["to"]),
+			Action: str(m["action"]),
+			Actor:  str(m["actor"]),
+			Note:   str(m["note"]),
+		}
+		// A lifecycle record must carry both a timestamp (so it can be
+		// ordered) and an action (so it is a real event). "from" stays
+		// optional: the "create" event has no prior state (from == "") and
+		// must still surface in the history (#1230 inspection contract).
+		if t.Ts == "" || t.Action == "" {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
 }
 
 // taskInspection is the node-level inspection payload: the task's graph node
@@ -845,13 +892,11 @@ func (h *ProjectHandler) buildWorkflow(meta *projectMeta, team string, includeTa
 // readTasksDetail reads TaskMeta (shared/tasks/{id}/meta.json) for every task
 // in the project's graph and returns the detail list in node order.
 //
-// TaskMeta is stored under the same dual-prefix layout as projects
-// (teams/{team}/shared/tasks/{id}/meta.json for team members, shared/tasks/
-// {id}/meta.json for standalone workers) — _sync_task pushes the local
-// shared/tasks/{id} directory after delegate/ack/submit/cancel. We probe the
-// task prefix belonging to this project's team first, then the global
-// prefix, mirroring resolveProjectMeta. Reads are concurrent (W7 pattern) so
-// N tasks cost ~ceil(N/8) mc subprocess rounds instead of N serial spawns.
+// TaskMeta is read only from the project's owning scope:
+// teams/{team}/shared/tasks/{id}/meta.json for team projects, or
+// shared/tasks/{id}/meta.json for standalone projects. Reads are concurrent
+// (W7 pattern) so N tasks cost ~ceil(N/8) storage rounds instead of N serial
+// reads.
 func (h *ProjectHandler) readTasksDetail(meta *projectMeta, team string) []taskDetail {
 	// Collect unique task ids from the graph (project tasks, or loop tasks
 	// for loop plans — same set buildWorkflow renders).
@@ -936,6 +981,7 @@ func (h *ProjectHandler) readTasksDetail(meta *projectMeta, team string) []taskD
 			ResultStatus: str(raw["result_status"]),
 			ResultPath:   str(raw["result_path"]),
 			CancelReason: str(raw["cancel_reason"]),
+			SubmissionID: str(raw["submission_id"]),
 		}
 		if raw["project_id"] != nil {
 			detail.ProjectID = str(raw["project_id"])
@@ -945,11 +991,7 @@ func (h *ProjectHandler) readTasksDetail(meta *projectMeta, team string) []taskD
 				detail.Deliverables = list
 			}
 		}
-		if raw["history"] != nil {
-			if list, ok := raw["history"].([]any); ok {
-				detail.History = parseTaskHistory(list)
-			}
-		}
+		detail.History = parseTaskHistory(raw["history"])
 		detailByTask[res.taskID] = detail
 	}
 
@@ -974,32 +1016,6 @@ func keyForTaskID(key string, taskIDs []string) string {
 		}
 	}
 	return ""
-}
-
-// parseTaskHistory converts a raw task-meta `history` array into typed
-// entries. Malformed entries are skipped (an audit record must never break
-// the read path).
-func parseTaskHistory(list []any) []taskHistoryEntry {
-	out := make([]taskHistoryEntry, 0, len(list))
-	for _, raw := range list {
-		m, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		entry := taskHistoryEntry{
-			TS:     str(m["ts"]),
-			From:   str(m["from"]),
-			To:     str(m["to"]),
-			Actor:  str(m["actor"]),
-			Action: str(m["action"]),
-			Note:   str(m["note"]),
-		}
-		if entry.TS == "" && entry.Action == "" {
-			continue
-		}
-		out = append(out, entry)
-	}
-	return out
 }
 
 // GetTaskInspection serves node-level state for one task.
@@ -2109,6 +2125,210 @@ func (h *ProjectHandler) GetProjectHistorySnapshot(w http.ResponseWriter, r *htt
 	_, _ = w.Write(data)
 }
 
+// projectEvent is one task transition surfaced by the events endpoint.
+type projectEvent struct {
+	Ts     string `json:"ts"`
+	TaskID string `json:"task_id"`
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Actor  string `json:"actor,omitempty"`
+	Action string `json:"action"`
+	Note   string `json:"note,omitempty"`
+}
+
+// projectEventsResponse is the GET /api/v1/projects/{id}/events payload.
+//
+// next_cursor is an opaque offset (decimal string) into the ascending
+// event list: pass it back as cursor to continue. The offset stays valid
+// while the list only grows at the tail, which holds because new
+// transitions carry the newest timestamps. An empty next_cursor means the
+// tail was reached. (A "ts:task_id" cursor cannot be used: timestamps are
+// second-resolution, so several transitions of one task can share both
+// values.)
+type projectEventsResponse struct {
+	ProjectID  string         `json:"project_id"`
+	Events     []projectEvent `json:"events"`
+	NextCursor string         `json:"next_cursor,omitempty"`
+}
+
+const (
+	projectEventsDefaultLimit = 50
+	projectEventsMaxLimit     = 200
+)
+
+// GetProjectEvents handles GET /api/v1/projects/{id}/events?limit=&cursor=.
+//
+// Read-time aggregation of the per-task transition history: every task
+// meta of the project graph is read (same scope rules as readTasksDetail —
+// the project's owning prefix only, no cross-scope fallback) and its
+// `history` entries are merged into one ascending list. No new storage and
+// no write-side hook. Project-level intervention events are out of scope
+// here; the /history snapshot endpoint covers those.
+//
+// Auth mirrors GetProjectHistory: cross-team access is hidden as 404.
+func (h *ProjectHandler) GetProjectEvents(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	if projectID == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "project id is required")
+		return
+	}
+	caller := authpkg.CallerFromContext(r.Context())
+	teamFilter := r.URL.Query().Get("team")
+
+	prefixes, crToEffective, err := h.teamProjectPrefixes(r.Context())
+	if err != nil {
+		writeK8sError(w, "get project events: resolve prefixes", err)
+		return
+	}
+	matches, err := h.resolveProjectMeta(r.Context(), projectID, prefixes, teamFilter, caller, crToEffective)
+	if err != nil {
+		writeK8sError(w, "get project events", err)
+		return
+	}
+	match, ok := h.resolveSingleProjectMatch(w, matches)
+	if !ok {
+		return
+	}
+	if err := h.checkProjectAccess(caller, match.team, crToEffective); err != nil {
+		if _, ok := err.(*accessDeniedError); ok {
+			httputil.WriteError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		httputil.WriteError(w, http.StatusForbidden, err.Error())
+		return
+	}
+
+	limit := projectEventsDefaultLimit
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 {
+			httputil.WriteError(w, http.StatusBadRequest, "limit must be a positive integer")
+			return
+		}
+		limit = n
+	}
+	if limit > projectEventsMaxLimit {
+		limit = projectEventsMaxLimit
+	}
+	offset := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("cursor")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			httputil.WriteError(w, http.StatusBadRequest, "invalid cursor")
+			return
+		}
+		offset = n
+	}
+
+	events := h.collectProjectEvents(r.Context(), match.meta, match.team)
+	resp := projectEventsResponse{ProjectID: projectID, Events: []projectEvent{}}
+	if offset < len(events) {
+		pageEnd := offset + limit
+		if pageEnd > len(events) {
+			pageEnd = len(events)
+		}
+		resp.Events = events[offset:pageEnd]
+		if pageEnd < len(events) {
+			resp.NextCursor = strconv.Itoa(pageEnd)
+		}
+	}
+	httputil.WriteJSON(w, http.StatusOK, resp)
+}
+
+// collectProjectEvents reads every task meta of the project graph and
+// merges their transition histories into one ascending list (ts, then
+// task_id, then action for a stable order within a shared timestamp).
+func (h *ProjectHandler) collectProjectEvents(ctx context.Context, meta *projectMeta, team string) []projectEvent {
+	graphTasks := meta.Tasks
+	if meta.PlanType == "loop" && meta.Loop != nil {
+		graphTasks = meta.Loop.Tasks
+	}
+	taskIDs := make([]string, 0, len(graphTasks))
+	seen := map[string]bool{}
+	for _, t := range graphTasks {
+		if t.TaskID == "" || seen[t.TaskID] {
+			continue
+		}
+		seen[t.TaskID] = true
+		taskIDs = append(taskIDs, t.TaskID)
+	}
+	if len(taskIDs) == 0 {
+		return nil
+	}
+	var keys []string
+	for _, id := range taskIDs {
+		keys = append(keys, taskMetaKeys(id, team)...)
+	}
+	type histResult struct {
+		taskID  string
+		history []taskTransition
+	}
+	results := make([]histResult, len(keys))
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	for i, key := range keys {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, key string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			data, err := h.oss.GetObject(ctx, key)
+			if err != nil || len(data) == 0 {
+				return
+			}
+			var raw map[string]any
+			if json.Unmarshal(data, &raw) != nil {
+				return
+			}
+			// Ownership check, mirroring readTasksDetail: the meta must
+			// name this graph task and this project, or it is not mixed in.
+			taskID := keyForTaskID(key, taskIDs)
+			if str(raw["task_id"]) != taskID || str(raw["project_id"]) != meta.ProjectID {
+				return
+			}
+			results[i] = histResult{taskID: taskID, history: parseTaskHistory(raw["history"])}
+		}(i, key)
+	}
+	wg.Wait()
+
+	// First non-empty match per task id wins (team prefix first, same
+	// precedence as readTasksDetail).
+	byTask := make(map[string][]taskTransition, len(taskIDs))
+	for _, res := range results {
+		if res.taskID == "" || len(res.history) == 0 {
+			continue
+		}
+		if _, ok := byTask[res.taskID]; ok {
+			continue
+		}
+		byTask[res.taskID] = res.history
+	}
+	var events []projectEvent
+	for id, history := range byTask {
+		for _, t := range history {
+			events = append(events, projectEvent{
+				Ts:     t.Ts,
+				TaskID: id,
+				From:   t.From,
+				To:     t.To,
+				Actor:  t.Actor,
+				Action: t.Action,
+				Note:   t.Note,
+			})
+		}
+	}
+	sort.SliceStable(events, func(i, j int) bool {
+		if events[i].Ts != events[j].Ts {
+			return events[i].Ts < events[j].Ts
+		}
+		if events[i].TaskID != events[j].TaskID {
+			return events[i].TaskID < events[j].TaskID
+		}
+		return events[i].Action < events[j].Action
+	})
+	return events
+}
+
 // projectHistoryLimit caps the retained meta.json snapshots per project.
 // Snapshots are written on every human intervention (pause/resume/replan/
 // cancel/complete), so the limit bounds storage growth while keeping a
@@ -2510,6 +2730,7 @@ func isSafeTaskID(s string) bool {
 // exists.
 func normalizeReplanTasks(raw []json.RawMessage, previous map[string]projectTaskMeta) ([]projectTaskMeta, error) {
 	out := make([]projectTaskMeta, 0, len(raw))
+	included := make(map[string]bool, len(raw))
 	for _, item := range raw {
 		var m map[string]any
 		if err := json.Unmarshal(item, &m); err != nil {
@@ -2522,6 +2743,7 @@ func normalizeReplanTasks(raw []json.RawMessage, previous map[string]projectTask
 		if !isSafeTaskID(taskID) {
 			return nil, fmt.Errorf("taskId must be a safe id: %s", taskID)
 		}
+		included[taskID] = true
 		prev, hasPrev := previous[taskID]
 		status := firstString(m["status"])
 		if status == "" && hasPrev {
@@ -2532,6 +2754,9 @@ func normalizeReplanTasks(raw []json.RawMessage, previous map[string]projectTask
 		}
 		if status == "pending" {
 			status = "planned"
+		}
+		if hasPrev && prev.Cancellation != nil && status != prev.Status {
+			return nil, fmt.Errorf("task %s has a committed cancellation and cannot be reopened", taskID)
 		}
 		title := firstString(m["title"])
 		if title == "" && hasPrev {
@@ -2564,12 +2789,18 @@ func normalizeReplanTasks(raw []json.RawMessage, previous map[string]projectTask
 			}
 		}
 		out = append(out, projectTaskMeta{
-			TaskID:     taskID,
-			Title:      title,
-			AssignedTo: assignee,
-			DependsOn:  deps,
-			Status:     status,
+			TaskID:       taskID,
+			Title:        title,
+			AssignedTo:   assignee,
+			DependsOn:    deps,
+			Status:       status,
+			Cancellation: prev.Cancellation,
 		})
+	}
+	for taskID, prev := range previous {
+		if prev.Cancellation != nil && !included[taskID] {
+			return nil, fmt.Errorf("task %s has a committed cancellation and cannot be removed", taskID)
+		}
 	}
 	return out, nil
 }
@@ -2648,7 +2879,8 @@ func firstString(values ...any) string {
 // (shared/tasks/{id}/meta.json) and the project node status is updated to
 // cancelled.
 //
-// POST /api/v1/projects/{id}/tasks/{taskId}/cancel  body: {"reason":"...","replacementTaskId":"..."}
+// POST /api/v1/projects/{id}/tasks/{taskId}/cancel
+// body: {"reason":"...","replacementTaskId":"...","submissionId":"..."}
 func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("id")
 	taskID := r.PathValue("taskId")
@@ -2693,11 +2925,17 @@ func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	var reqBody struct {
 		Reason            string `json:"reason"`
 		ReplacementTaskID string `json:"replacementTaskId"`
+		SubmissionID      string `json:"submissionId"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&reqBody)
 	reason := strings.TrimSpace(reqBody.Reason)
 	if reason == "" {
 		writeError(w, http.StatusBadRequest, "reason is required")
+		return
+	}
+	replacementTaskID := strings.TrimSpace(reqBody.ReplacementTaskID)
+	if replacementTaskID != "" && !isPlainToken(replacementTaskID) {
+		writeError(w, http.StatusBadRequest, "replacementTaskId must be a plain token (letters, digits, '-', '_', '.')")
 		return
 	}
 
@@ -2708,11 +2946,13 @@ func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 		graphTasks = meta.Loop.Tasks
 	}
 	nodeStatus := ""
+	var projectCancellation *taskCancellationDecision
 	found := false
 	for _, t := range graphTasks {
 		if t.TaskID == taskID {
 			found = true
 			nodeStatus = t.Status
+			projectCancellation = t.Cancellation
 			break
 		}
 	}
@@ -2728,8 +2968,8 @@ func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read the task's TaskMeta (dual-prefix) to preserve fields when writing
-	// back, then stamp status=cancelled + cancel_reason.
+	// Read the task's TaskMeta from the project's owning scope to preserve fields
+	// when writing back, then apply the submission fence and cancellation.
 	taskData, err := readTaskMetaFirst(h, r.Context(), taskID, team)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "read task meta: "+err.Error())
@@ -2739,12 +2979,116 @@ func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "task meta not found")
 		return
 	}
+	if str(taskData["task_id"]) != taskID || str(taskData["project_id"]) != projectID {
+		writeError(w, http.StatusNotFound, "task meta not found")
+		return
+	}
+	persistedSubmissionID, _ := taskData["submission_id"].(string)
+	persistedSubmissionID = strings.TrimSpace(persistedSubmissionID)
+	requestedSubmissionID := strings.TrimSpace(reqBody.SubmissionID)
+	if persistedSubmissionID != "" && requestedSubmissionID == "" {
+		writeError(w, http.StatusConflict, "submissionId is required for the current task submission")
+		return
+	}
+	if requestedSubmissionID != "" && requestedSubmissionID != persistedSubmissionID {
+		writeError(w, http.StatusConflict, "submissionId does not match the current task submission")
+		return
+	}
+	if projectCancellation != nil &&
+		(strings.TrimSpace(projectCancellation.SubmissionID) != requestedSubmissionID ||
+			strings.TrimSpace(projectCancellation.Reason) != reason ||
+			strings.TrimSpace(projectCancellation.ReplacementTaskID) != replacementTaskID) {
+		writeError(w, http.StatusConflict, "cancel task conflicts with persisted project cancellation")
+		return
+	}
+	taskStatus, _ := taskData["status"].(string)
+	taskStatus = strings.TrimSpace(taskStatus)
+	if isTerminalTaskStatus(taskStatus) && taskStatus != "cancelled" {
+		writeError(w, http.StatusConflict, "cannot cancel terminal task: "+taskStatus)
+		return
+	}
+	persistedReason, _ := taskData["cancel_reason"].(string)
+	persistedReplacementTaskID, _ := taskData["replacement_task_id"].(string)
+	persistedCancelledAt, _ := taskData["cancelled_at"].(string)
+	continuation, hasContinuation := taskData["continuation"].(map[string]any)
+	continuationStatus, _ := continuation["status"].(string)
+	continuationResolution, _ := continuation["resolution"].(string)
+	continuationStatus = strings.TrimSpace(continuationStatus)
+	continuationResolution = strings.TrimSpace(continuationResolution)
+	if hasContinuation && continuationStatus == "resolved" && continuationResolution != "cancelled" {
+		writeError(w, http.StatusConflict, "task continuation already resolved as a different decision")
+		return
+	}
+	if taskStatus == "cancelled" && (strings.TrimSpace(persistedReason) != reason ||
+		strings.TrimSpace(persistedReplacementTaskID) != replacementTaskID) {
+		writeError(w, http.StatusConflict, "cancel task conflicts with existing cancellation")
+		return
+	}
+	fullyResolved := taskStatus == "cancelled" && nodeStatus == "cancelled" &&
+		strings.TrimSpace(persistedCancelledAt) != "" &&
+		(!hasContinuation || (continuationStatus == "resolved" && continuationResolution == "cancelled"))
+	if fullyResolved {
+		httputil.WriteJSON(w, http.StatusOK, h.buildWorkflow(meta, team, false))
+		return
+	}
 	taskData["status"] = "cancelled"
 	taskData["cancel_reason"] = reason
-	if reqBody.ReplacementTaskID != "" {
-		taskData["replacement_task_id"] = reqBody.ReplacementTaskID
+	cancelledAt := persistedCancelledAt
+	if strings.TrimSpace(cancelledAt) == "" {
+		if projectCancellation != nil {
+			cancelledAt = strings.TrimSpace(projectCancellation.CancelledAt)
+		}
+		if hasContinuation {
+			if cancelledAt == "" {
+				resolvedAt, _ := continuation["resolved_at"].(string)
+				cancelledAt = strings.TrimSpace(resolvedAt)
+			}
+		}
+		if cancelledAt == "" {
+			cancelledAt = utcTimestamp()
+		}
+		taskData["cancelled_at"] = cancelledAt
+	}
+	// Transition audit trail: record the human cancellation in the same
+	// read-modify-write batch (the meta is rewritten anyway — no extra
+	// write amplification). Skipped on the retry-convergence path where
+	// the task meta is already cancelled, so no no-op entry is recorded.
+	if taskStatus != "cancelled" {
+		history := make([]any, 0, 1)
+		if existing, ok := taskData["history"].([]any); ok {
+			history = append(history, existing...)
+		}
+		history = append(history, map[string]any{
+			"ts":     cancelledAt,
+			"from":   taskStatus,
+			"to":     "cancelled",
+			"action": "cancel_task",
+			"actor":  authzActor(caller),
+			"note":   reason,
+		})
+		taskData["history"] = history
+	}
+	if hasContinuation && len(continuation) > 0 {
+		continuation["status"] = "resolved"
+		continuation["resolution"] = "cancelled"
+		if resolvedAt, _ := continuation["resolved_at"].(string); strings.TrimSpace(resolvedAt) == "" {
+			continuation["resolved_at"] = cancelledAt
+		}
+		taskData["continuation"] = continuation
+	}
+	if replacementTaskID != "" {
+		taskData["replacement_task_id"] = replacementTaskID
 	} else {
 		delete(taskData, "replacement_task_id")
+	}
+	cancellationDecision := projectCancellation
+	if cancellationDecision == nil {
+		cancellationDecision = &taskCancellationDecision{
+			SubmissionID:      requestedSubmissionID,
+			Reason:            reason,
+			ReplacementTaskID: replacementTaskID,
+			CancelledAt:       cancelledAt,
+		}
 	}
 	taskJSON, err := json.Marshal(taskData)
 	if err != nil {
@@ -2756,12 +3100,14 @@ func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	for i := range meta.Tasks {
 		if meta.Tasks[i].TaskID == taskID {
 			meta.Tasks[i].Status = "cancelled"
+			meta.Tasks[i].Cancellation = cancellationDecision
 		}
 	}
 	if meta.Loop != nil {
 		for i := range meta.Loop.Tasks {
 			if meta.Loop.Tasks[i].TaskID == taskID {
 				meta.Loop.Tasks[i].Status = "cancelled"
+				meta.Loop.Tasks[i].Cancellation = cancellationDecision
 			}
 		}
 	}
@@ -2791,9 +3137,9 @@ func isTerminalTaskStatus(status string) bool {
 	}
 }
 
-// readTaskMetaFirst reads a task's TaskMeta from the dual-prefix layout
-// (team first, then global) and returns it as a mutable map. Returns nil when
-// no readable TaskMeta exists in either prefix.
+// readTaskMetaFirst reads a task's TaskMeta from the project's owning scope
+// and returns it as a mutable map. Returns nil when no readable TaskMeta
+// exists in that scope.
 func readTaskMetaFirst(h *ProjectHandler, ctx context.Context, taskID, team string) (map[string]any, error) {
 	for _, key := range taskMetaKeys(taskID, team) {
 		data, err := h.oss.GetObject(ctx, key)
@@ -2939,18 +3285,25 @@ func (h *ProjectHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// isPlainToken reports whether s is a safe plain token usable in an object
-// key (no path traversal / separators).
+// isPlainToken reports whether s matches TeamHarness's safe-id contract:
+// [A-Za-z0-9][A-Za-z0-9._-]*.
 func isPlainToken(s string) bool {
-	for _, r := range s {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		alphaNumeric := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'
+		if i == 0 && !alphaNumeric {
+			return false
+		}
 		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case alphaNumeric:
 		case r == '-', r == '_', r == '.':
 		default:
 			return false
 		}
 	}
-	return s != ""
+	return true
 }
 
 // CompleteProject marks a project completed. All tasks must be in a terminal

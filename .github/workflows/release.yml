@@ -1,10 +1,11 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
-      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       version:
@@ -31,12 +32,9 @@ jobs:
 
       - name: Resolve version
         id: version
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-          else
-            VERSION="${{ github.ref_name }}"
-          fi
           # Validate stable or pre-release SemVer format.
           if ! echo "${VERSION}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
             echo "ERROR: invalid version format: ${VERSION}"
@@ -48,6 +46,28 @@ jobs:
           else
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Verify versioned multi-architecture images
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # Keep this list aligned with the release targets in build.yml.
+          images=(
+            openclaw-base agentteams-controller agentteams-embedded
+            agentteams-manager agentteams-manager-qwenpaw agentteams-worker
+            agentteams-copaw-worker agentteams-qwenpaw-worker agentteams-hermes-worker
+          )
+          for image in "${images[@]}"; do
+            ref="${REGISTRY}/${REPO}/${image}:${VERSION}"
+            manifest="$(docker buildx imagetools inspect "$ref" --raw)"
+            jq -e '
+              any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "amd64") and
+              any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "arm64")
+            ' >/dev/null <<<"$manifest" || {
+              echo "ERROR: missing required architectures for $ref"
+              exit 1
+            }
+          done
 
       - name: Create tag (workflow_dispatch only)
         if: github.event_name == 'workflow_dispatch'

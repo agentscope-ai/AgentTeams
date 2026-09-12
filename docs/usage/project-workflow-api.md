@@ -834,6 +834,48 @@ distilled knowledge tree `digest/`.
   proxy. The multipart `file-upload` endpoint and the rest of the
   workspace API surface remain unreachable.
 
+## Worker tool-approval endpoints
+
+Each QwenPaw worker's agent profile carries a tool-execution security level
+(`approval_level` in the worker's `agent.json`) that decides which tool calls
+run automatically and which pause for a human approval. The Controller
+proxies a minimal read/write surface of the worker's
+`/workspace/running-config` API so L2 humans can manage this level for
+workers in their own teams:
+
+| Endpoint | Meaning |
+|:--|:--|
+| `GET /api/v1/workers/{name}/approval` | Current level: `{"approval_level": "AUTO"}`. |
+| `PUT /api/v1/workers/{name}/approval` | Set the level. Body: `{"approval_level": "STRICT"}`. |
+
+- **Levels**: `STRICT` (every tool call needs approval) / `SMART` (low-risk
+  tools auto-allowed) / `AUTO` (only guarded tools — the upstream default) /
+  `OFF` (guard disabled). Any other value is rejected with `400` before the
+  worker is touched (the upstream model does not validate the value — the
+  proxy is the validation boundary).
+- **OFF is elevated**: `approval_level=OFF` disables Tool Guard entirely, so
+  it is a security-policy operation rather than ordinary configuration.
+  Default L2 humans get `403` on `OFF` — they may switch among the guarded
+  levels (`STRICT`/`SMART`/`AUTO`) only. `OFF` requires the elevated
+  tool-approval capability that the L2 permission design (#1220) defines and
+  admins grant explicitly; admin/manager keep the full range until that
+  capability model lands.
+- **Write scope**: `PUT` is allowed for admin/manager (any team); an L2 human
+  may set only workers in their own teams — cross-team workers hide as `404`
+  (existence is not probeable). Team leaders stay read-only (`403` on `PUT`,
+  the same boundary as the knowledge base write API).
+- **Safe write**: the upstream `PUT /workspace/running-config` persists the
+  *full* running-config object, so the proxy performs GET → change only
+  `approval_level` → PUT the whole object back; every other field round trips
+  verbatim. An upstream `409` (concurrent config change) is passed through so
+  clients retry with a fresh `GET`.
+- **Embedded mode only**: same worker addressing as the checkpoint proxy
+  (effective container prefix + system-wins console port). Kube mode returns
+  `503`.
+- **Degradation**: a worker on a QwenPaw version without the running-config
+  router surfaces the upstream `404` verbatim (version gate).
+- Every successful change is audit-logged (worker, new level, caller, role).
+
 Error responses:
 
 | Code | Meaning |
@@ -843,4 +885,10 @@ Error responses:
 | `404` | Worker not found or not in the caller's teams (existence hidden); or (passthrough) the file does not exist — see the version-gate probe above. |
 | `409` / `416` | (passthrough) the file changed while being read / while waiting for the write (ETag mismatch — reload and retry) / offset beyond end of file. |
 | `502` | Worker app unreachable, or an upstream error (status echoed in the body). |
+
+| `400` | Invalid worker name / invalid request body / `approval_level` not in the fixed set. |
+| `403` | Team leader attempting `PUT` (read-only) / L2 human setting `OFF` (elevated capability required, #1220). |
+| `404` | Worker not found / caller does not own it (existence hidden) / pre-2.x worker (version gate, passthrough). |
+| `409` | Concurrent upstream config change (retry with a fresh `GET`). |
+| `502` | Worker app unreachable or upstream error. |
 | `503` | Kube mode (no stable worker pod DNS to proxy). |

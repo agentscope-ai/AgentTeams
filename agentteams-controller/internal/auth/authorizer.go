@@ -15,6 +15,7 @@ const (
 	ActionSleep               Action = "sleep"
 	ActionEnsureReady         Action = "ensure-ready"
 	ActionReady               Action = "ready"
+	ActionWorkerApproval      Action = "worker-approval"
 	ActionSTS                 Action = "sts"
 	ActionStatus              Action = "status"
 	ActionRefreshMatrixToken  Action = "refresh-matrix-token"
@@ -124,6 +125,20 @@ func (a *Authorizer) authorizeHuman(caller *CallerIdentity, req AuthzRequest) er
 			// (W8 anti-probing). The handler is the real boundary — it
 			// hides cross-team workers as 404 and enforces the per-user
 			// workspaceFileAccess flag and the knowledge base allowlist.
+			return nil
+		}
+		if req.Action == ActionWorkerApproval {
+			// L2 humans may change the tool-approval level of workers in
+			// their own teams. Like ActionGet this action is NOT rejected
+			// cross-team at the authorizer level: a 403 here would let a
+			// scoped caller probe which workers exist in other teams
+			// (W8 anti-probing). All real enforcement happens in the
+			// HANDLER, not in this authorizer/middleware:
+			// ApprovalHandler.approvalScope performs the worker→team
+			// resolution, hides cross-team and standalone workers as
+			// 404, and denies team leaders (read-only). The authorizer
+			// deliberately allows so the handler can hide with 404
+			// instead of the authorizer answering 403.
 			return nil
 		}
 		return deny(caller, req)

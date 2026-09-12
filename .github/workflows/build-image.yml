@@ -1,0 +1,117 @@
+name: Build one image
+
+on:
+  workflow_call:
+    inputs:
+      target:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: higress-registry.cn-hangzhou.cr.aliyuncs.com
+  REPO: agentteams
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Check existing multi-architecture image
+        id: existing
+        env:
+          TARGET: ${{ inputs.target }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          case "$TARGET" in
+            openclaw-base|agentteams-controller) image="$TARGET" ;;
+            *) image="agentteams-${TARGET}" ;;
+          esac
+          ref="${REGISTRY}/${REPO}/${image}:${VERSION}"
+          ready=false
+          error_file="$(mktemp)"
+          trap 'rm -f "$error_file"' EXIT
+          if manifest="$(docker buildx imagetools inspect "$ref" --raw 2>"$error_file")"; then
+            # A successful command must still return a recognizable manifest.
+            jq -e 'type == "object" and
+              ((.manifests | type) == "array" or
+               ((.config | type) == "object" and (.layers | type) == "array"))
+            ' >/dev/null <<<"$manifest" || {
+              echo "ERROR: invalid manifest returned for $ref"
+              exit 1
+            }
+            if jq -e '
+              any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "amd64") and
+              any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "arm64")
+            ' >/dev/null <<<"$manifest"; then
+              ready=true
+              echo "Reusing $ref: both required architectures exist; skipping build and push."
+            else
+              echo "Required architectures are incomplete for $ref; building."
+            fi
+          elif [[ "$(cat "$error_file")" == "ERROR: ${ref}: not found" ]]; then
+            echo "Image $ref does not exist; building."
+          else
+            cat "$error_file" >&2
+            echo "ERROR: cannot determine whether $ref exists; refusing to rebuild."
+            exit 1
+          fi
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+
+      - name: Free Up GitHub Actions Ubuntu Runner Disk Space 🔧
+        if: steps.existing.outputs.ready != 'true'
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
+      - uses: actions/checkout@v4
+        if: steps.existing.outputs.ready != 'true'
+      - uses: docker/setup-qemu-action@v3
+        if: steps.existing.outputs.ready != 'true'
+      - name: Build and push
+        if: steps.existing.outputs.ready != 'true'
+        env:
+          TARGET: ${{ inputs.target }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          # The caller has already published the Controller dependency.
+          # Preserve Makefile dependencies for local builds, but do not rebuild it here.
+          args=()
+          if [[ "$TARGET" == embedded || "$TARGET" == manager ]]; then
+            args+=(-o push-agentteams-controller)
+          fi
+          make "${args[@]}" "push-${TARGET}" \
+            VERSION="$VERSION" \
+            OPENCLAW_BASE_VERSION="$VERSION" \
+            REGISTRY="$REGISTRY" \
+            REPO="$REPO" \
+            HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
+            DOCKER_BUILD_ARGS="--build-arg APT_MIRROR= --build-arg PIP_INDEX_URL=https://pypi.org/simple/"
+
+      - name: Summary
+        env:
+          REUSED: ${{ steps.existing.outputs.ready }}
+          TARGET: ${{ inputs.target }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "$REUSED" == true ]]; then
+            echo "Reused ${TARGET}:${VERSION}; build and push skipped (linux/amd64 + linux/arm64)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Built ${TARGET}:${VERSION} for linux/amd64 and linux/arm64" >> "$GITHUB_STEP_SUMMARY"
+          fi

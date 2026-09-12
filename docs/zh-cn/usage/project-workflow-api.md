@@ -441,3 +441,35 @@ Controller 代理每个 worker 的 QwenPaw app（QwenPaw ≥ 2.1）的四个端�
 | `409` / `416` | （透传）读取期间或写入等待期间文件被修改（ETag 不匹配——重载重试）/ offset 超出文件末尾。 |
 | `502` | worker app 不可达，或上游错误（状态码回显在 body 中）。 |
 | `503` | kube 模式（无稳定的 worker pod DNS 可代理）。 |
+
+## Worker 工具审批端点
+
+每个 QwenPaw worker 的 agent profile 带一个工具执行安全级别（`agent.json` 的
+`approval_level`），决定哪些工具调用自动执行、哪些暂停等人工审批。Controller
+代理 worker 的 `/workspace/running-config` API 的最小读写面，L2 人类可管理
+自己团队内 worker 的该级别：
+
+| 端点 | 含义 |
+|:--|:--|
+| `GET /api/v1/workers/{name}/approval` | 当前级别：`{"approval_level": "AUTO"}`。 |
+| `PUT /api/v1/workers/{name}/approval` | 设置级别。Body：`{"approval_level": "STRICT"}`。 |
+
+- **档位**：`STRICT`（所有工具需审批）/ `SMART`（低风险工具自动放行）/
+  `AUTO`（仅受管工具——上游默认）/ `OFF`（关闭守卫）。其他值在触碰 worker
+  之前即被 `400` 拒绝（上游模型不校验取值，代理是校验边界）。
+- **OFF 为提权档**：`approval_level=OFF` 会完全关闭 Tool Guard，属安全策略
+  操作而非普通配置。默认 L2 人类设 `OFF` 得 `403`——只能在受管档位
+  （`STRICT`/`SMART`/`AUTO`）间切换；`OFF` 需 L2 权限设计（#1220）定义的
+  提权工具审批能力、由 admin 显式授予，该能力模型落地前 admin/manager 保留
+  全档位。
+- **写范围**：`PUT` 对 admin/manager 全团队开放；L2 人类仅可设自己团队内
+  worker——跨团队隐藏为 `404`（存在性不可探测）。团队 leader 保持只读
+  （`PUT` 得 `403`，与知识库写 API 同界）。
+- **安全写**：上游 `PUT /workspace/running-config` 持久化*完整*运行配置对象，
+  代理执行 GET→仅改 `approval_level`→PUT 回全量；其余字段原样往返。上游
+  `409`（并发配置变更）透传，客户端以新 `GET` 重试。
+- **仅 embedded 模式**：worker 寻址与 checkpoint 代理相同（有效容器前缀 +
+  系统优先端口）。kube 模式返回 `503`。
+- **降级**：无 running-config 路由的旧版 QwenPaw worker 原样透传上游
+  `404`（版本门）。
+- 每次成功变更记审计日志（worker、新级别、调用者、角色）。

@@ -592,6 +592,12 @@ func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
 			writeK8sError(w, "validate human references", err)
 			return
 		}
+		if req.Capabilities != nil {
+			if err := validateCapabilities(req.Capabilities); err != nil {
+				httputil.WriteError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
 
 		if req.DisplayName != nil {
 			human.Spec.DisplayName = *req.DisplayName
@@ -607,6 +613,11 @@ func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.AccessibleWorkers != nil {
 			human.Spec.AccessibleWorkers = *req.AccessibleWorkers
+		}
+		if req.Capabilities != nil {
+			// Store the canonical form (deduped + sorted); validation above
+			// already rejected values outside the closed set.
+			human.Spec.Capabilities = authpkg.NormalizeCapabilities(*req.Capabilities)
 		}
 		if req.Note != nil {
 			human.Spec.Note = *req.Note
@@ -624,6 +635,24 @@ func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteJSON(w, http.StatusOK, humanToResponse(&human))
 		return
 	}
+}
+
+// validateCapabilities rejects capability values outside the closed set
+// (#1220 §3). The error message lists the valid values so the client can
+// self-correct; the set itself is pinned in internal/auth
+// (TestValidCapabilitiesMatchesDocumentedValueSet).
+func validateCapabilities(caps *[]string) error {
+	var invalid []string
+	for _, c := range *caps {
+		if !authpkg.IsValidCapability(authpkg.Capability(c)) {
+			invalid = append(invalid, c)
+		}
+	}
+	if len(invalid) > 0 {
+		return fmt.Errorf("capabilities contains unknown value(s) %s; valid values: %s",
+			strings.Join(invalid, ", "), strings.Join(authpkg.ValidCapabilityList(), ", "))
+	}
+	return nil
 }
 
 // errDanglingReference marks validation errors where a referenced Team or
@@ -991,6 +1020,7 @@ func humanToResponse(h *v1beta1.Human) HumanResponse {
 		PermissionLevel:   h.Spec.PermissionLevel,
 		AccessibleTeams:   h.Spec.AccessibleTeams,
 		AccessibleWorkers: h.Spec.AccessibleWorkers,
+		Capabilities:      h.Spec.Capabilities,
 		Note:              h.Spec.Note,
 		MatrixUserID:      h.Status.MatrixUserID,
 		InitialPassword:   h.Status.InitialPassword,

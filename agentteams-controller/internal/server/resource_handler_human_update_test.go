@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
@@ -96,6 +97,97 @@ func TestUpdateHuman_ClearsListWithEmptyArray(t *testing.T) {
 	if resp.AccessibleTeams != nil {
 		t.Errorf("expected cleared list, got %v", resp.AccessibleTeams)
 	}
+}
+
+func TestUpdateHuman_CapabilitiesApplied(t *testing.T) {
+	handler := newHumanUpdateRig(t)
+	// Unordered + duplicated input must land deduped and sorted; other
+	// fields untouched.
+	rec := putHuman(t, handler, "maizong", `{"capabilities":["channel_secrets","approval_policy","channel_secrets"]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp HumanResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	want := []string{"approval_policy", "channel_secrets"}
+	if len(resp.Capabilities) != len(want) || resp.Capabilities[0] != want[0] || resp.Capabilities[1] != want[1] {
+		t.Errorf("capabilities = %v, want %v", resp.Capabilities, want)
+	}
+	if len(resp.AccessibleTeams) != 1 || resp.AccessibleTeams[0] != "market-team" {
+		t.Errorf("capabilities grant clobbered accessibleTeams: %v", resp.AccessibleTeams)
+	}
+	if resp.Email != "maizong@example.com" {
+		t.Errorf("capabilities grant clobbered email: %q", resp.Email)
+	}
+}
+
+func TestUpdateHuman_CapabilitiesOmittedPreserved(t *testing.T) {
+	handler := newHumanUpdateRig(t)
+	if rec := putHuman(t, handler, "maizong", `{"capabilities":["secret_reveal"]}`); rec.Code != http.StatusOK {
+		t.Fatalf("prime: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	// A later update that omits capabilities must not clear them.
+	rec := putHuman(t, handler, "maizong", `{"note":"no capability change"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp HumanResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(resp.Capabilities) != 1 || resp.Capabilities[0] != "secret_reveal" {
+		t.Errorf("omitted capabilities cleared the list: %v", resp.Capabilities)
+	}
+}
+
+func TestUpdateHuman_CapabilitiesClearedWithEmptyArray(t *testing.T) {
+	handler := newHumanUpdateRig(t)
+	if rec := putHuman(t, handler, "maizong", `{"capabilities":["full_access"]}`); rec.Code != http.StatusOK {
+		t.Fatalf("prime: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	rec := putHuman(t, handler, "maizong", `{"capabilities":[]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp HumanResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Capabilities != nil {
+		t.Errorf("expected cleared list, got %v", resp.Capabilities)
+	}
+}
+
+func TestUpdateHuman_UnknownCapabilityRejected(t *testing.T) {
+	handler := newHumanUpdateRig(t)
+	rec := putHuman(t, handler, "maizong", `{"capabilities":["skill_publish"]}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !containsAll(body, `skill_publish`, "full_access", "secret_reveal") {
+		t.Errorf("error should name the unknown value and list the valid set: %s", body)
+	}
+	// The rejected update must not persist.
+	rec = putHuman(t, handler, "maizong", `{"note":"noop"}`)
+	var resp HumanResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Capabilities != nil {
+		t.Errorf("rejected capability leaked into the CR: %v", resp.Capabilities)
+	}
+}
+
+func containsAll(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if !strings.Contains(s, sub) {
+			return false
+		}
+	}
+	return true
 }
 
 func TestUpdateHuman_InvalidLevelRejected(t *testing.T) {

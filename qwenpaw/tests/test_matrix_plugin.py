@@ -25,7 +25,7 @@ def test_matrix_plugin_targets_qwenpaw_2_and_does_not_patch_builtin_matrix():
     dockerfile = (ROOT / "qwenpaw" / "Dockerfile").read_text(encoding="utf-8")
 
     assert manifest["type"] == "channel"
-    assert manifest["qwenpaw_version"] == {"min": "2.0.1", "max": "2.1.0"}
+    assert manifest["qwenpaw_version"] == {"min": "2.2.0", "max": "2.3.0"}
     assert "qwenpaw/app/channels/matrix/channel.py" not in dockerfile
     assert "/opt/agentteams/plugins/agentteams-matrix-channel" in dockerfile
 

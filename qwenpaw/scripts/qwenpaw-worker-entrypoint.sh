@@ -61,6 +61,16 @@ export QWENPAW_SECRET_DIR="${QWENPAW_SECRET_DIR:-${QWENPAW_WORKING_DIR}.secret}"
 export QWENPAW_RUNNING_IN_CONTAINER=true
 export QWENPAW_LOG_LEVEL="${QWENPAW_LOG_LEVEL:-info}"
 
+# LLM stream stall detection (QwenPaw 2.2.0 #7150): first-content and idle
+# timeouts are read from these env vars at process startup (upstream default
+# 30s each; 0 disables). Local SGLang can starve a stream under concurrent
+# load (8/26 QwenPaw001 false-kill precedent, lesson #386), so AgentTeams
+# defaults both to 300s. Priority: native QWENPAW_LLM_STREAM_* vars (finer
+# per-phase control) > AGENTTEAMS_LLM_STREAM_TIMEOUT_S (single knob) > 300.
+AGENTTEAMS_LLM_STREAM_TIMEOUT_S="${AGENTTEAMS_LLM_STREAM_TIMEOUT_S:-300}"
+export QWENPAW_LLM_STREAM_FIRST_CONTENT_TIMEOUT="${QWENPAW_LLM_STREAM_FIRST_CONTENT_TIMEOUT:-${AGENTTEAMS_LLM_STREAM_TIMEOUT_S}}"
+export QWENPAW_LLM_STREAM_IDLE_TIMEOUT="${QWENPAW_LLM_STREAM_IDLE_TIMEOUT:-${AGENTTEAMS_LLM_STREAM_TIMEOUT_S}}"
+
 # Configure LoongSuite observability plugin if tracing is enabled.
 CMS_TRACES_ENABLED="$(echo "${AGENTTEAMS_CMS_TRACES_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')"
 if [ "${CMS_TRACES_ENABLED}" = "true" ]; then

@@ -161,7 +161,7 @@ func TestWorkerReconcileDoesNotOverwriteTeamOwnedRuntimeConfig(t *testing.T) {
 		},
 	}
 	rig := newWorkerRig(t, worker, team)
-	rig.deployer.PushOnDemandSkillsFn = func(context.Context, string, []string, []v1beta1.RemoteSkillSource) error {
+	rig.deployer.PushOnDemandSkillsFn = func(context.Context, string, string, []string, []v1beta1.RemoteSkillSource) error {
 		return errors.New("remote Skill refresh failed for remote-team-skill (label=\"stable\"); retained existing Worker copies")
 	}
 

@@ -30,6 +30,7 @@ type ServerDeps struct {
 	Namespace       string
 	ControllerName  string               // AGENTTEAMS_CONTROLLER_NAME; empty in embedded mode
 	SocketPath      string               // Docker proxy (embedded only)
+	SkillScanner    *skillscan.Client    // shared skill content scan (upload ① + assign ②)
 	ContainerPrefix string               // effective worker container prefix (config.ContainerPrefix); embedded-only address resolution
 	ResourcePrefix  string               // resource name prefix ("" = agentteams-); manager container name derivation for skillscan
 	MatrixConfig    matrix.Config        // for AppService rotation endpoint
@@ -141,18 +142,9 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("PUT /api/v1/workers/{name}/approval", mw.RequireAuthz(authpkg.ActionWorkerApproval, "worker", nameFn)(http.HandlerFunc(ah.updateWorkerApproval)))
 
 	// --- Skill catalog (read: builtin per runtime + shared/team layers; write: team-skill upload) ---
-	// Scan backend: the qwenpaw skill scanner runs inside the manager
-	// container (embedded/docker mode, Docker API over the mounted socket);
-	// in k8s mode v1 fails closed (uploads mark scan.status="skipped";
-	// assign-time copy refuses to run).
-	skh := NewSkillsHandler(deps.WorkerAgentDir, deps.OSS, deps.Client, deps.Namespace,
-		skillscan.New(skillscan.Config{
-			KubeMode:       deps.KubeMode,
-			Client:         deps.Client,
-			Namespace:      deps.Namespace,
-			ResourcePrefix: authpkg.ResourcePrefix(deps.ResourcePrefix),
-			SocketPath:     deps.SocketPath,
-		}))
+	// The scanner is shared with the Deployer (one content-hash cache
+	// across upload scan ① and assign-time scan ②).
+	skh := NewSkillsHandler(deps.WorkerAgentDir, deps.OSS, deps.Client, deps.Namespace, deps.SkillScanner)
 	mux.Handle("GET /api/v1/skills", mw.RequireAuthz(authpkg.ActionList, "skills", nil)(http.HandlerFunc(skh.ListSkills)))
 	mux.Handle("POST /api/v1/skills", mw.RequireAuthz(authpkg.ActionSkillPublish, "skills", nil)(http.HandlerFunc(skh.UploadSkill)))
 

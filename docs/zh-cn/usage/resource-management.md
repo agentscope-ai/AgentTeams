@@ -143,8 +143,27 @@ Manager 会先上传并验证 `SKILL.md`，再更新 `spec.skills`。QwenPaw Wor
 
 - **`source: "builtin"`**——agent 模板自带的内置技能（取自各 `SKILL.md` frontmatter 的 name + description，`agents` 列出提供该技能的模板，`runtimes` 列出支持的运行时）。模板→运行时的映射取自 deployer 自身的 `BuiltinAgentDir` 选择逻辑，因此目录永远与 Worker 实际接收的内置技能一致、不会漂移。
 - **`source: "shared"`**——Dashboard 技能上传流程暂存到 `agents/global/skills/` 下的技能，可分发到任意 Worker。该前缀是**暂存区而非分发通道**：删除其中某个条目只会把它从目录和 Dashboard 全局区移除，**不会**触碰已分发的 per-worker 副本或既有的 `spec.skills` 分配（无级联）。
+- **`source: "team"`**（仅 `?team=` 时）——该团队自有的技能，位于 `teams/<team>/skills/`，通过 `POST /api/v1/skills` 发布（见下文）。
 
-输出按名称排序；端点只暴露元数据——不读技能正文、不访问注册表、不泄露凭据。条目含 `name`/`description`/`source` 及 `version`/`requirements`（builtin）与 `updated_at`（shared）。**仅 admin（L1）可访问**；非 admin 调用方收到 `400 team scope required`（团队范围读 `?team=` 后续交付）。设计见 [Skill Catalog API](../design/skill-catalog-api.md)。
+输出按名称排序；端点只暴露元数据——不读技能正文、不访问注册表、不泄露凭据。条目含 `name`/`description`/`source` 及 `version`/`requirements`（builtin）与 `updated_at`（shared）。不带团队参数时目录**仅 admin（L1）可访问**——非 admin 调用方收到 `400 team scope required`。带 `?team=<name>` 时目录按团队范围读：admin 可读任意团队，L2 人类或 team leader 可读自己所在团队；跨团队或不存在的团队读 `404`（与"团队不存在"不可区分）。设计见 [Skill Catalog API](../design/skill-catalog-api.md) 与 [团队技能](../design/team-skills.md)。
+
+### 团队技能
+
+**团队技能**归属单个团队（存储：`teams/<team>/skills/<name>/`）——介于全部署级技能与 per-worker 副本之间的中间层。发布与指派：
+
+1. **发布**（admin 任意团队；或该团队的 L2 人类仅限本团队）：
+
+   ```sh
+   curl -X POST "$CONTROLLER/api/v1/skills" \
+     -H "Authorization: Bearer $TOKEN" \
+     -F "scope=team" -F "team=marketing" \
+     -F "file=@./marketing-briefing.zip"
+   ```
+
+   ZIP 必须只含**一个顶层目录**（技能根目录，目录名即技能名），其根下必须有 `SKILL.md`，且 frontmatter `name` 与目录名一致。上限 64 MB（ZIP 与解压后均计）。上传会做内容扫描（尽力而为）：命中阻断（CRITICAL/HIGH）返回 `422` 并带 findings；扫描不可用则继续并上报 `scan.status: "skipped"`。重复上传同一技能为**精确替换**（新版删掉的旧文件会被删掉）。`scope=deployment`（仅 admin）改发布到 `agents/global/skills/`。
+2. **指派**：更新 Worker 的 `spec.skills`（API、Dashboard，或经 Manager）。下次 reconcile 时 Controller 会**再次、强制地**扫描该技能（扫描被阻断或不可用则不复制，并在 Worker 状态里记为非阻塞 warning），然后把它拷入 `agents/<worker>/skills/<name>/`；Worker 的同步循环会在同步周期内把它物化进原生工作空间。
+
+team leader 可以浏览本团队目录（`GET /api/v1/skills?team=…`）作为指派面，但**不能发布**；manager 与 worker 主体一律不能发布。同名冲突时**团队层优先于 builtin 库**。完整契约、扫描语义与 k8s 模式限制见 [团队技能设计](../design/team-skills.md)。
 
 ### 带自定义包的 Worker
 

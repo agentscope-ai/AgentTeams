@@ -145,6 +145,16 @@ separate (write) concern via `PUT /workers`.
 - Plugin-bundled skills of the qwenpaw worker image (baked into the image,
   not assignable via `spec.skills`; a build-time manifest is a follow-up).
 
+## Follow-up: the team skill layer
+
+The team-scoped read (`?team=`), the upload surface
+(`POST /api/v1/skills`, `scope=team|deployment`), and the assign-time
+materialization with the mandatory content scan (scan ②) are specified in
+the companion design [team-skills.md](team-skills.md). This document stays
+the reference for the L1 read-only catalog half; the team layer reuses its
+response shape (new `source: "team"` entries) and its authorization
+foundation.
+
 ## Tests
 
 - `internal/server/skills_handler_test.go` — golden catalog (builtin

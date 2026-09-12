@@ -36,6 +36,12 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
   (bin_dir / "mc").write(<<~SH)
     #!/usr/bin/env bash
     printf '%s\\n' "$*" >> "#{log_path}"
+    # Test hook: fail the push (mirror <local> <remote>) for the named
+    # task only — pre-action pulls keep working (used to exercise the
+    # submit sync-failure withholding path).
+    if [ "$1" = "mirror" ] && [ -n "${TEAMHARNESS_TEST_FAIL_SYNC_TASK:-}" ] && [ "$3" = "mock/shared/tasks/${TEAMHARNESS_TEST_FAIL_SYNC_TASK}/" ]; then
+      exit 1
+    fi
     if [ "$1" = "mirror" ] && [ "$2" = "mock/shared/tasks/remote-001/" ]; then
       mkdir -p "$3"
       cp -a "#{remote_task}/." "$3"
@@ -78,7 +84,18 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
     }
     runtime_config = pathlib.Path("#{root}") / "runtime.yaml"
     runtime_config.write_text(
-        "team:\\n  teamRoomId: '!team:example.test'\\n",
+        "team:\\n"
+        "  teamRoomId: '!team:example.test'\\n"
+        "  leaderRuntimeName: 'admin'\\n"
+        "  members:\\n"
+        "    - name: 'Admin'\\n"
+        "      runtimeName: 'admin'\\n"
+        "      role: 'team_leader'\\n"
+        "      matrixUserId: '@admin:example.test'\\n"
+        "    - name: 'Worker A'\\n"
+        "      runtimeName: 'worker-a'\\n"
+        "      role: 'worker'\\n"
+        "      matrixUserId: '@worker-a:example.test'\\n",
         encoding="utf-8",
     )
     os.environ["TEAMHARNESS_RUNTIME_CONFIG"] = str(runtime_config)
@@ -120,6 +137,8 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
                     {"state_key": "@worker-invited:example.test", "content": {"membership": "invite"}},
                     {"state_key": "@admin:example.test", "content": {"membership": "join"}},
                 ]
+                if os.environ.get("TEAMHARNESS_TEST_EXCLUDE_LEADER_FROM_ROOM") == "1":
+                    members = [m for m in members if m["state_key"] != "@admin:example.test"]
                 payload = {"chunk": members}
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -138,6 +157,11 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
                 self.end_headers()
                 return
             if "/send/m.room.message/delegate-" in parsed.path and os.environ.get("TEAMHARNESS_TEST_FAIL_NOTIFICATION") == "1":
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(json.dumps({"errcode": "M_UNKNOWN", "error": "forced Matrix failure"}).encode("utf-8"))
+                return
+            if "/send/m.room.message/submit-" in parsed.path and os.environ.get("TEAMHARNESS_TEST_FAIL_SUBMIT_NOTIFICATION") == "1":
                 self.send_response(500)
                 self.end_headers()
                 self.wfile.write(json.dumps({"errcode": "M_UNKNOWN", "error": "forced Matrix failure"}).encode("utf-8"))
@@ -410,6 +434,56 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
     if not all(upload.get("auth") == "Bearer test-token" for upload in matrix["uploads"][:2]):
         raise AssertionError(f"Matrix upload auth mismatch: {matrix['uploads']!r}")
 
+    def completion_events():
+        return [
+            event for event in matrix["events"]
+            if "/send/m.room.message/submit-t-001" in event["path"]
+        ]
+
+    first_completion = completion_events()
+    if len(first_completion) != 1:
+        raise AssertionError(f"submit_task should send exactly one completion notification: {matrix['events']!r}")
+    completion_body = first_completion[0]["content"].get("body", "")
+    if "@admin:example.test" not in (first_completion[0]["content"].get("m.mentions") or {}).get("user_ids", []):
+        raise AssertionError(f"completion notification must mention the leader: {first_completion[0]['content']!r}")
+    if "TASK_COMPLETED: t-001 - Result: shared/tasks/t-001/result.md" not in completion_body:
+        raise AssertionError(f"completion notification must carry the contract line: {completion_body!r}")
+    if "- Worker: @worker-a:example.test" not in completion_body:
+        raise AssertionError(f"completion notification must carry the executor: {completion_body!r}")
+    if "Input collected." not in completion_body:
+        raise AssertionError(f"completion notification must carry the summary: {completion_body!r}")
+    if first_completion[0]["auth"] != "Bearer test-token":
+        raise AssertionError(f"completion notification auth mismatch: {first_completion[0]['auth']!r}")
+    submitted_meta = json.loads((pathlib.Path("#{workspace}") / f"shared/tasks/{task_id}/meta.json").read_text(encoding="utf-8"))
+    if not submitted_meta.get("completionEventId"):
+        raise AssertionError(f"submit_task did not persist completionEventId: {submitted_meta!r}")
+    if submitted_meta.get("completionEventId") != submitted.get("notification", {}).get("eventId"):
+        raise AssertionError(f"persisted completionEventId mismatch: {submitted_meta!r} vs {submitted.get('notification')!r}")
+
+    resubmitted = payload("taskflow", {
+        "role": "worker",
+        "action": "submit_task",
+        "payload": {
+            "taskId": task_id,
+            "status": "SUCCESS",
+            "summary": "Input collected.",
+            "parentEventId": "$task-parent",
+            "deliverables": [
+                "shared/tasks/t-001/result.md",
+                "shared/tasks/t-001/workspace/analysis.md",
+            ],
+        },
+    })
+    if not resubmitted.get("ok") or resubmitted["task"]["status"] != "submitted":
+        raise AssertionError(f"resubmit_task failed: {resubmitted!r}")
+    resubmit_notification = resubmitted.get("notification") or {}
+    if resubmit_notification.get("reused") is not True:
+        raise AssertionError(f"resubmit should reuse the recorded completion notification: {resubmit_notification!r}")
+    if resubmit_notification.get("eventId") != submitted.get("notification", {}).get("eventId"):
+        raise AssertionError(f"resubmit notification event id mismatch: {resubmit_notification!r}")
+    if len(completion_events()) != 1:
+        raise AssertionError(f"resubmit must not duplicate the completion notification: {completion_events()!r}")
+
     context_project_id = "context-parent-project"
     context_task_id = "context-parent-task"
     payload("projectflow", {
@@ -476,9 +550,19 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
         raise AssertionError(f"context submit_task should publish result artifact: {context_submitted!r}")
     if context_published[0].get("parentEventId") != "$context-task-parent":
         raise AssertionError(f"context submit_task did not infer parent event: {context_submitted!r}")
-    context_event = matrix["events"][-1]["content"]
-    if context_event.get("m.relates_to") != {"rel_type": "com.agentteams.attachment", "event_id": "$context-task-parent"}:
-        raise AssertionError(f"context submit_task file event missing attachment relation: {context_event!r}")
+    context_file_event = next(
+        (
+            event["content"]
+            for event in reversed(matrix["events"])
+            if event["content"].get("msgtype") == "m.file"
+            and event["content"].get("url") == context_published[0].get("mxcUri")
+        ),
+        None,
+    )
+    if context_file_event is None:
+        raise AssertionError(f"context submit_task file event not found: {context_published!r}")
+    if context_file_event.get("m.relates_to") != {"rel_type": "com.agentteams.attachment", "event_id": "$context-task-parent"}:
+        raise AssertionError(f"context submit_task file event missing attachment relation: {context_file_event!r}")
 
     secret_task_id = "secret-artifact-01"
     payload("taskflow", {
@@ -523,6 +607,128 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
         raise AssertionError(f"sensitive deliverable should not be uploaded: {matrix['uploads']!r}")
     if any("abcdefghijklmnopqrstuvwxyz1234567890" in upload.get("body", "") for upload in matrix["uploads"]):
         raise AssertionError("sensitive value leaked into Matrix upload")
+
+    # --- Completion notification: BLOCKED status carries the BLOCKED contract line. ---
+    blocked_project_id = "blocked-project"
+    blocked_task_id = "blocked-task"
+    payload("projectflow", {
+        "action": "create_project",
+        "payload": {
+            "projectId": blocked_project_id,
+            "title": "Blocked Project",
+            "replyRoute": {
+                "channel": "matrix",
+                "targetUser": "@admin:example.test",
+                "targetSession": "!team:example.test",
+            },
+        },
+    })
+    payload("projectflow", {
+        "action": "plan_dag",
+        "payload": {
+            "projectId": blocked_project_id,
+            "tasks": [{
+                "taskId": blocked_task_id,
+                "title": "Blocked task",
+                "assignedTo": "@worker-a:example.test",
+                "dependsOn": [],
+            }],
+        },
+    })
+    payload("taskflow", {
+        "role": "leader",
+        "action": "delegate_task",
+        "payload": {
+            "projectId": blocked_project_id,
+            "taskId": blocked_task_id,
+            "roomId": "room:!team:example.test",
+            "spec": "Will be blocked.",
+        },
+    })
+    blocked_submitted = payload("taskflow", {
+        "role": "worker",
+        "action": "submit_task",
+        "payload": {
+            "taskId": blocked_task_id,
+            "status": "BLOCKED",
+            "summary": "GPU OOM on node 2, needs 24G context.",
+        },
+    })
+    if not blocked_submitted.get("ok") or blocked_submitted["task"]["status"] != "submitted":
+        raise AssertionError(f"blocked submit_task failed: {blocked_submitted!r}")
+    blocked_events = [
+        event for event in matrix["events"]
+        if "/send/m.room.message/submit-blocked-task" in event["path"]
+    ]
+    if len(blocked_events) != 1:
+        raise AssertionError(f"blocked submit should send one completion notification: {matrix['events']!r}")
+    blocked_body = blocked_events[0]["content"].get("body", "")
+    if "BLOCKED: blocked-task - GPU OOM on node 2, needs 24G context." not in blocked_body:
+        raise AssertionError(f"blocked notification must carry the BLOCKED contract line: {blocked_body!r}")
+    if "TASK_COMPLETED" in blocked_body:
+        raise AssertionError(f"blocked notification must not claim completion: {blocked_body!r}")
+
+    # --- Failure injection: a completion send failure must NOT block the
+    #     terminal submission (best-effort by contract). ---
+    fail_submit_project_id = "fail-submit-project"
+    fail_submit_task_id = "fail-submit-task"
+    payload("projectflow", {
+        "action": "create_project",
+        "payload": {
+            "projectId": fail_submit_project_id,
+            "title": "Fail Submit Project",
+            "replyRoute": {
+                "channel": "matrix",
+                "targetUser": "@admin:example.test",
+                "targetSession": "!team:example.test",
+            },
+        },
+    })
+    payload("projectflow", {
+        "action": "plan_dag",
+        "payload": {
+            "projectId": fail_submit_project_id,
+            "tasks": [{
+                "taskId": fail_submit_task_id,
+                "title": "Fail submit task",
+                "assignedTo": "@worker-a:example.test",
+                "dependsOn": [],
+            }],
+        },
+    })
+    payload("taskflow", {
+        "role": "leader",
+        "action": "delegate_task",
+        "payload": {
+            "projectId": fail_submit_project_id,
+            "taskId": fail_submit_task_id,
+            "roomId": "room:!team:example.test",
+            "spec": "Matrix is down during submit.",
+        },
+    })
+    os.environ["TEAMHARNESS_TEST_FAIL_SUBMIT_NOTIFICATION"] = "1"
+    try:
+        fail_submit_result = payload("taskflow", {
+            "role": "worker",
+            "action": "submit_task",
+            "payload": {
+                "taskId": fail_submit_task_id,
+                "status": "SUCCESS",
+                "summary": "Result ready but Matrix is down.",
+            },
+        })
+    finally:
+        os.environ.pop("TEAMHARNESS_TEST_FAIL_SUBMIT_NOTIFICATION", None)
+    if not fail_submit_result.get("ok") or fail_submit_result["task"]["status"] != "submitted":
+        raise AssertionError(f"completion notification failure must not block submission: {fail_submit_result!r}")
+    fail_submit_notification = fail_submit_result.get("notification") or {}
+    if fail_submit_notification.get("sent") is not False:
+        raise AssertionError(f"failed completion send must report sent=False: {fail_submit_notification!r}")
+    if "HTTP 500" not in str(fail_submit_notification.get("error", "")):
+        raise AssertionError(f"failed completion send must report the Matrix error: {fail_submit_notification!r}")
+    fail_submit_meta = json.loads((pathlib.Path("#{workspace}") / f"shared/tasks/{fail_submit_task_id}/meta.json").read_text(encoding="utf-8"))
+    if fail_submit_meta.get("completionEventId"):
+        raise AssertionError(f"failed completion send must not persist completionEventId: {fail_submit_meta!r}")
 
     # --- Failure injection: a notification send failure must return a
     #     retryable error and must NOT leave the task assigned. ---
@@ -1138,6 +1344,310 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
         raise AssertionError(f"final task meta missing console fields: {final_meta!r}")
     if final_meta.get("assigned_at") != assigned_at:
         raise AssertionError(f"final task meta should preserve assigned_at: {final_meta!r}")
+
+    # ==================================================================
+    # PR review 2026-09-05 (issue #1229): lifecycle attention events
+    # ==================================================================
+
+    # A human member (task initiator) joins the roster so @initiator
+    # routing can be asserted.
+    runtime_cfg = pathlib.Path("#{root}") / "runtime.yaml"
+    runtime_cfg.write_text(
+        runtime_cfg.read_text(encoding="utf-8").rstrip()
+        + "\\n    - name: 'Luo'\\n"
+        "      runtimeName: 'luo'\\n"
+        "      role: 'human'\\n"
+        "      matrixUserId: '@luo:example.test'\\n",
+        encoding="utf-8",
+    )
+
+    def _lifecycle_setup(tid):
+        pid = f"attn-{tid}"
+        payload("projectflow", {
+            "action": "create_project",
+            "payload": {"projectId": pid, "title": "Attention fixture"},
+        })
+        payload("projectflow", {
+            "action": "plan_dag",
+            "payload": {"projectId": pid, "tasks": [{
+                "taskId": tid,
+                "title": "Attention task",
+                "assignedTo": "@worker-a:example.test",
+                "dependsOn": [],
+            }]},
+        })
+        delegated = payload("taskflow", {
+            "role": "leader",
+            "action": "delegate_task",
+            "payload": {
+                "projectId": pid,
+                "taskId": tid,
+                "roomId": "room:!team:example.test",
+                "spec": "Attention spec.",
+            },
+        })
+        if not delegated.get("ok"):
+            raise AssertionError(f"delegate_task failed for {tid}: {delegated!r}")
+        acked = payload("taskflow", {
+            "role": "worker",
+            "action": "ack_task",
+            "payload": {"taskId": tid},
+        })
+        if not acked.get("ok"):
+            raise AssertionError(f"ack_task failed for {tid}: {acked!r}")
+        tdir = pathlib.Path("#{workspace}") / f"shared/tasks/{tid}"
+        tdir.mkdir(parents=True, exist_ok=True)
+        (tdir / "result.md").write_text("Result body\\n", encoding="utf-8")
+        return pid
+
+    def _lifecycle_submit(tid, status, summary="Done."):
+        return payload("taskflow", {
+            "role": "worker",
+            "action": "submit_task",
+            "payload": {"taskId": tid, "status": status, "summary": summary},
+        })
+
+    # --- P0 ordering: a failed shared-storage sync withholds the
+    #     completion notification and returns a retryable failure; the
+    #     idempotent retry delivers it once storage recovers. ---
+    _lifecycle_setup("order-task")
+    os.environ["TEAMHARNESS_TEST_FAIL_SYNC_TASK"] = "order-task"
+    try:
+        order_result = _lifecycle_submit("order-task", "SUCCESS", "Result ready but storage is down.")
+    finally:
+        os.environ.pop("TEAMHARNESS_TEST_FAIL_SYNC_TASK", None)
+    if order_result.get("ok") is not False:
+        raise AssertionError(f"failed sync must not report ok: {order_result!r}")
+    if order_result.get("retryable") is not True:
+        raise AssertionError(f"failed sync must be retryable: {order_result!r}")
+    if "notification" in order_result:
+        raise AssertionError(f"failed sync must withhold the completion notification: {order_result!r}")
+    if not order_result.get("task") or order_result["task"]["status"] != "submitted":
+        raise AssertionError(f"local task state must still be submitted: {order_result!r}")
+    order_retry = _lifecycle_submit("order-task", "SUCCESS", "Result ready but storage is down.")
+    if not order_retry.get("ok") or order_retry.get("synced") is not True:
+        raise AssertionError(f"retry after storage recovery must succeed: {order_retry!r}")
+    if (order_retry.get("notification") or {}).get("sent") is not True:
+        raise AssertionError(f"retry after storage recovery must send the notification: {order_retry!r}")
+
+    # --- Skip branches: the completion notification is best-effort —
+    #     missing Matrix env, a missing leader, or a leader that is not a
+    #     joined room member each skip the notification without blocking
+    #     the submission itself. ---
+    _lifecycle_setup("skip-env-task")
+    saved_url = os.environ.pop("AGENTTEAMS_MATRIX_URL", None)
+    saved_token = os.environ.pop("AGENTTEAMS_WORKER_MATRIX_TOKEN", None)
+    try:
+        env_res = _lifecycle_submit("skip-env-task", "SUCCESS", "Matrix env unavailable.")
+        if not env_res.get("ok"):
+            raise AssertionError(f"missing matrix env must not block submit_task: {env_res!r}")
+        env_notif = env_res.get("notification") or {}
+        if env_notif.get("sent") is not False or "AGENTTEAMS_MATRIX_URL" not in str(env_notif.get("error", "")):
+            raise AssertionError(f"missing matrix env must skip with a clear error: {env_notif!r}")
+    finally:
+        if saved_url is not None:
+            os.environ["AGENTTEAMS_MATRIX_URL"] = saved_url
+        if saved_token is not None:
+            os.environ["AGENTTEAMS_WORKER_MATRIX_TOKEN"] = saved_token
+
+    _lifecycle_setup("skip-leader-task")
+    rc_path = pathlib.Path(os.environ["TEAMHARNESS_RUNTIME_CONFIG"])
+    saved_rc = rc_path.read_text(encoding="utf-8")
+    try:
+        rc_path.write_text(saved_rc.replace("matrixUserId: '@admin:example.test'", "matrixUserId: ''"), encoding="utf-8")
+        leader_res = _lifecycle_submit("skip-leader-task", "SUCCESS", "No leader configured.")
+        if not leader_res.get("ok"):
+            raise AssertionError(f"missing leader must not block submit_task: {leader_res!r}")
+        leader_notif = leader_res.get("notification") or {}
+        if leader_notif.get("sent") is not False or "leader" not in str(leader_notif.get("error", "")).lower():
+            raise AssertionError(f"missing leader must skip with a clear error: {leader_notif!r}")
+    finally:
+        rc_path.write_text(saved_rc, encoding="utf-8")
+
+    _lifecycle_setup("skip-membership-task")
+    os.environ["TEAMHARNESS_TEST_EXCLUDE_LEADER_FROM_ROOM"] = "1"
+    try:
+        member_res = _lifecycle_submit("skip-membership-task", "SUCCESS", "Leader outside the room.")
+        if not member_res.get("ok"):
+            raise AssertionError(f"leader not in room must not block submit_task: {member_res!r}")
+        member_notif = member_res.get("notification") or {}
+        if member_notif.get("sent") is not False or "not a joined member" not in str(member_notif.get("error", "")):
+            raise AssertionError(f"leader outside the room must skip on membership: {member_notif!r}")
+    finally:
+        os.environ.pop("TEAMHARNESS_TEST_EXCLUDE_LEADER_FROM_ROOM", None)
+
+    # --- Per-status first-line token + @initiator human mention. ---
+    for status, token in (
+        ("PARTIAL", "TASK_PARTIAL"),
+        ("FAILED", "TASK_FAILED"),
+        ("REVISION_NEEDED", "TASK_REVISION_NEEDED"),
+    ):
+        tid = f"tok-{status.lower()}"
+        _lifecycle_setup(tid)
+        res = _lifecycle_submit(tid, status, f"Status {status} case.")
+        if not res.get("ok"):
+            raise AssertionError(f"submit {status} failed: {res!r}")
+        evs = [ev for ev in matrix["events"] if f"submit-{tid}-" in ev["path"]]
+        if len(evs) != 1:
+            raise AssertionError(f"expected exactly one completion event for {tid}: {evs!r}")
+        body = evs[0]["content"].get("body", "")
+        if f"{token}: {tid} -" not in body:
+            raise AssertionError(f"{status} event must carry the {token} first line: {body!r}")
+        if f"- Status: {status}" not in body:
+            raise AssertionError(f"{status} event must carry the Status line: {body!r}")
+        mentions = (evs[0]["content"].get("m.mentions") or {}).get("user_ids", [])
+        if "@admin:example.test" not in mentions or "@luo:example.test" not in mentions:
+            raise AssertionError(f"{status} event must mention leader and human initiator: {mentions!r}")
+    ok_tid = "tok-success"
+    _lifecycle_setup(ok_tid)
+    ok_res = _lifecycle_submit(ok_tid, "SUCCESS", "All good.")
+    ok_ev = [ev for ev in matrix["events"] if f"submit-{ok_tid}-" in ev["path"]]
+    ok_body = ok_ev[0]["content"].get("body", "") if ok_ev else ""
+    if f"TASK_COMPLETED: {ok_tid} - Result: shared/tasks/{ok_tid}/result.md" not in ok_body:
+        raise AssertionError(f"SUCCESS event must keep the Result line: {ok_body!r}")
+    if "- Status:" in ok_body:
+        raise AssertionError(f"SUCCESS event must not carry a Status line: {ok_body!r}")
+
+    # --- Invalid status is rejected at submit. ---
+    bad_tid = "tok-invalid"
+    _lifecycle_setup(bad_tid)
+    bad = payload("taskflow", {
+        "role": "worker",
+        "action": "submit_task",
+        "payload": {"taskId": bad_tid, "status": "MAYBE", "summary": "Not a real status."},
+    })
+    if bad.get("ok") or "invalid status" not in str(bad.get("error", "")):
+        raise AssertionError(f"submit_task must reject unknown statuses: {bad!r}")
+    bad_meta = json.loads(
+        (pathlib.Path("#{workspace}") / f"shared/tasks/{bad_tid}/meta.json").read_text(encoding="utf-8")
+    )
+    if bad_meta.get("result_status") == "MAYBE":
+        raise AssertionError(f"rejected status must not be persisted: {bad_meta!r}")
+
+    # --- Re-submission with a changed status sends a new event. ---
+    ch_tid = "tok-resubmit"
+    _lifecycle_setup(ch_tid)
+    first = _lifecycle_submit(ch_tid, "FAILED", "First pass failed.")
+    n1 = (first.get("notification") or {}).get("eventId")
+    if not first.get("ok") or (first.get("notification") or {}).get("sent") is not True or not n1:
+        raise AssertionError(f"first FAILED submit must notify: {first!r}")
+    second = _lifecycle_submit(ch_tid, "SUCCESS", "Fixed on resubmit.")
+    n2 = (second.get("notification") or {}).get("eventId")
+    if not second.get("ok") or (second.get("notification") or {}).get("sent") is not True or not n2 or n2 == n1:
+        raise AssertionError(f"changed-status resubmit must send a new event: {second!r} (first={n1}, second={n2})")
+    if len([ev for ev in matrix["events"] if f"submit-{ch_tid}-" in ev["path"]]) != 2:
+        raise AssertionError("changed-status resubmit must not reuse the old event")
+    same = _lifecycle_submit(ch_tid, "SUCCESS", "Idempotent same-status resubmit.")
+    if (same.get("notification") or {}).get("reused") is not True:
+        raise AssertionError(f"same-status resubmit must reuse the event: {same!r}")
+    if (same.get("notification") or {}).get("eventId") != n2:
+        raise AssertionError(f"same-status resubmit must reuse the same event id: {same!r}")
+
+    # --- request_attention: in-flight ping, idempotent, terminal guard,
+    #     resolved by accept_task_result. ---
+    att_tid = "att-task"
+    att_pid = _lifecycle_setup(att_tid)
+    att1 = payload("taskflow", {
+        "role": "worker",
+        "action": "request_attention",
+        "payload": {"taskId": att_tid, "kind": "approval", "question": "Ship to production?"},
+    })
+    if not att1.get("ok") or (att1.get("attention") or {}).get("notification", {}).get("sent") is not True:
+        raise AssertionError(f"request_attention must notify the room: {att1!r}")
+    att_ev = [ev for ev in matrix["events"] if f"attention-{att_tid}-approval-" in ev["path"]]
+    if len(att_ev) != 1:
+        raise AssertionError(f"expected one attention event: {att_ev!r}")
+    att_body = att_ev[0]["content"].get("body", "")
+    if f"ATTENTION_APPROVAL: {att_tid} - Ship to production?" not in att_body:
+        raise AssertionError(f"attention event must carry the contract line: {att_body!r}")
+    mentions = (att_ev[0]["content"].get("m.mentions") or {}).get("user_ids", [])
+    if "@admin:example.test" not in mentions or "@luo:example.test" not in mentions:
+        raise AssertionError(f"attention event must mention leader and human: {mentions!r}")
+    att2 = payload("taskflow", {
+        "role": "worker",
+        "action": "request_attention",
+        "payload": {"taskId": att_tid, "kind": "approval", "question": "Ship to production?"},
+    })
+    if not att2.get("ok") or (att2.get("attention") or {}).get("reused") is not True:
+        raise AssertionError(f"unresolved same-kind attention must be idempotent: {att2!r}")
+    if len([ev for ev in matrix["events"] if f"attention-{att_tid}-approval-" in ev["path"]]) != 1:
+        raise AssertionError("idempotent attention must not send a second event")
+    att3 = payload("taskflow", {
+        "role": "worker",
+        "action": "request_attention",
+        "payload": {"taskId": att_tid, "kind": "escalation", "question": "Escalating: storage at capacity."},
+    })
+    if not att3.get("ok") or (att3.get("attention") or {}).get("reused") is True:
+        raise AssertionError(f"different kind must not reuse the pending event: {att3!r}")
+    att_close = payload("taskflow", {
+        "role": "worker",
+        "action": "request_attention",
+        "payload": {"taskId": att_tid, "kind": "escalation", "question": "Closing early.", "resolved": True},
+    })
+    if not att_close.get("ok") or (att_close.get("attention") or {}).get("resolved") is not True:
+        raise AssertionError(f"explicit resolved=true must close the open loop: {att_close!r}")
+    _lifecycle_submit(att_tid, "BLOCKED", "Blocked on storage.")
+    accepted = payload("projectflow", {
+        "role": "leader",
+        "action": "accept_task_result",
+        "payload": {"projectId": att_pid, "taskId": att_tid, "resultStatus": "BLOCKED"},
+    })
+    if not accepted.get("ok"):
+        raise AssertionError(f"accept_task_result failed: {accepted!r}")
+    att_meta = json.loads(
+        (pathlib.Path("#{workspace}") / f"shared/tasks/{att_tid}/meta.json").read_text(encoding="utf-8")
+    )
+    unresolved = [item for item in (att_meta.get("attention") or []) if not item.get("resolved")]
+    if unresolved:
+        raise AssertionError(f"accept_task_result must resolve outstanding attention: {att_meta.get('attention')!r}")
+    can_tid = "att-cancel"
+    can_pid = _lifecycle_setup(can_tid)
+    cancelled = payload("taskflow", {
+        "role": "leader",
+        "action": "cancel_task",
+        "payload": {"projectId": can_pid, "taskId": can_tid, "reason": "Cancelled for attention guard test."},
+    })
+    if not cancelled.get("ok"):
+        raise AssertionError(f"cancel_task failed: {cancelled!r}")
+    att5 = payload("taskflow", {
+        "role": "worker",
+        "action": "request_attention",
+        "payload": {"taskId": can_tid, "kind": "approval", "question": "Too late now."},
+    })
+    if att5.get("ok"):
+        raise AssertionError(f"request_attention must reject a terminal task: {att5!r}")
+
+    # --- complete_project: PROJECT_COMPLETED event + idempotent retry. ---
+    comp_tid = "comp-task"
+    comp_pid = _lifecycle_setup(comp_tid)
+    _lifecycle_submit(comp_tid, "SUCCESS", "Comp work done.")
+    comp = payload("projectflow", {
+        "action": "complete_project",
+        "payload": {"projectId": comp_pid},
+    })
+    if not comp.get("ok"):
+        raise AssertionError(f"complete_project failed: {comp!r}")
+    note = (comp.get("project") or {}).get("projectNotification") or {}
+    if note.get("sent") is not True:
+        raise AssertionError(f"complete_project must send PROJECT_COMPLETED: {note!r}")
+    comp_ev = [ev for ev in matrix["events"] if f"project-{comp_pid}-" in ev["path"]]
+    if len(comp_ev) != 1:
+        raise AssertionError(f"expected one project completion event: {comp_ev!r}")
+    comp_body = comp_ev[0]["content"].get("body", "")
+    if f"PROJECT_COMPLETED: {comp_pid} - Project completed:" not in comp_body:
+        raise AssertionError(f"project event must carry the contract line: {comp_body!r}")
+    mentions = (comp_ev[0]["content"].get("m.mentions") or {}).get("user_ids", [])
+    if "@admin:example.test" not in mentions or "@luo:example.test" not in mentions:
+        raise AssertionError(f"project event must mention leader and human: {mentions!r}")
+    comp2 = payload("projectflow", {
+        "action": "complete_project",
+        "payload": {"projectId": comp_pid},
+    })
+    note2 = (comp2.get("project") or {}).get("projectNotification") or {}
+    if note2.get("reused") is not True or note2.get("eventId") != note.get("eventId"):
+        raise AssertionError(f"retried complete_project must reuse the event: {note2!r}")
+    if len([ev for ev in matrix["events"] if f"project-{comp_pid}-" in ev["path"]]) != 1:
+        raise AssertionError("retried complete_project must not send a second event")
 
     matrix_server.shutdown()
     matrix_server.server_close()

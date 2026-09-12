@@ -120,8 +120,10 @@ Use one of:
 
 - `SUCCESS`
 - `SUCCESS_WITH_NOTES`
+- `PARTIAL`
 - `REVISION_NEEDED`
 - `BLOCKED`
+- `FAILED`
 
 Submitting ends the task. Do not keep editing the old task after submission
 unless the Leader assigns a new task.
@@ -139,21 +141,28 @@ file panel.
 
 ## Completion Message
 
-After `submit_task` returns `ok: true`, send a normal text message in the
-current Task room and mention the Leader with the exact Matrix user id or
-resolvable mention from the task spec:
+`submit_task` automatically publishes the completion event to the Task room:
+the first line is the contract below, and the event @mentions the Leader
+and the human members of the team (the task initiator), so the requester is
+routed with the same salience the leader is. After `submit_task` returns
+`ok: true`, do not send another completion line.
+
+The event first line carries one token per result status (code-generated):
 
 ```text
 @leader-user:matrix.local TASK_COMPLETED: demo-project-001-01 - Result: shared/tasks/demo-project-001-01/result.md
+@leader-user:matrix.local TASK_PARTIAL: demo-project-001-01 - <summary>
+@leader-user:matrix.local TASK_REVISION_NEEDED: demo-project-001-01 - <summary>
+@leader-user:matrix.local TASK_BLOCKED: demo-project-001-01 - <short blocker summary>
+@leader-user:matrix.local TASK_FAILED: demo-project-001-01 - <summary>
 ```
 
-If the task spec gives an exact completion line, preserve that line exactly and
-include one short summary sentence. A tool call, tool-output thread, or
-`result.md` file does not count as the completion message. Do not use
-`NO_REPLY` after successful submission.
+If the task spec gives an exact completion line, the code event keeps that
+line format; a short human-readable summary message may still follow in the
+room but never replaces the event. Do not use `NO_REPLY` after successful
+submission.
 
-For blockers:
-
-```text
-@leader-user:matrix.local BLOCKED: demo-project-001-01 - <short blocker summary>
-```
+While the task is still in flight and you need a human decision (approval /
+decision / escalation) instead of guessing, call `taskflow` with
+`action: request_attention` (payload: `kind`, `question`). Do not rely on
+the human noticing an ambient room message.

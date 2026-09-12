@@ -10,6 +10,7 @@ import (
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	audit "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/audit"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
@@ -39,6 +40,10 @@ type ResourceHandler struct {
 	// controller instance, regardless of what the caller attempts to set.
 	// Empty string means no enforcement (embedded mode).
 	controllerName string
+
+	// audit records sensitive-surface events (#1220 §8); nil disables the
+	// durable layer (tests).
+	audit *audit.Client
 }
 
 // NewResourceHandler creates a handler. backend may be nil, in which case
@@ -46,12 +51,13 @@ type ResourceHandler struct {
 // controllerName, when non-empty, is force-stamped as agentteams.io/controller
 // on every CR this handler creates so HTTP-created resources cannot escape
 // the serving controller instance's cache scope.
-func NewResourceHandler(c client.Client, namespace string, b *backend.Registry, controllerName string) *ResourceHandler {
+func NewResourceHandler(c client.Client, namespace string, b *backend.Registry, controllerName string, a *audit.Client) *ResourceHandler {
 	return &ResourceHandler{
 		client:         c,
 		namespace:      namespace,
 		backend:        b,
 		controllerName: controllerName,
+		audit:          a,
 	}
 }
 
@@ -571,12 +577,14 @@ func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	caller := authpkg.CallerFromContext(ctx)
 	for attempt := 0; attempt < k8sUpdateMaxRetries; attempt++ {
 		var human v1beta1.Human
 		if err := h.client.Get(ctx, client.ObjectKey{Name: name, Namespace: h.namespace}, &human); err != nil {
 			writeK8sError(w, "get human for update", err)
 			return
 		}
+		capsBefore := human.Spec.Capabilities
 
 		if req.PermissionLevel != nil && (*req.PermissionLevel < 1 || *req.PermissionLevel > 3) {
 			httputil.WriteError(w, http.StatusBadRequest, "permissionLevel must be 1 (admin), 2 (team), or 3 (worker)")
@@ -632,9 +640,57 @@ func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Audit wiring point (#1220 §8 event table, line 1): a capability
+		// grant/revoke is a sensitive-surface change and is recorded on
+		// both audit layers.
+		if req.Capabilities != nil {
+			h.auditCapabilityChange(ctx, name, caller, capsBefore, human.Spec.Capabilities)
+		}
+
 		httputil.WriteJSON(w, http.StatusOK, humanToResponse(&human))
 		return
 	}
+}
+
+// auditCapabilityChange emits one event per changed capability value
+// (#1220 §8 event table, line 1: capability grant/revoke). Audit failures
+// never break the update: the audit client logs durable-layer errors
+// internally.
+func (h *ResourceHandler) auditCapabilityChange(ctx context.Context, name string, caller *authpkg.CallerIdentity, before, after []string) {
+	if h.audit == nil || caller == nil {
+		return
+	}
+	beforeN := authpkg.NormalizeCapabilities(before)
+	afterN := authpkg.NormalizeCapabilities(after)
+	for _, cap := range diffStringSlices(beforeN, afterN) {
+		h.audit.Record(ctx, audit.Event{
+			Who: caller.Username, Role: caller.Role, Target: name,
+			Action: "capability_grant", Capability: cap,
+			Before: beforeN, After: afterN,
+		})
+	}
+	for _, cap := range diffStringSlices(afterN, beforeN) {
+		h.audit.Record(ctx, audit.Event{
+			Who: caller.Username, Role: caller.Role, Target: name,
+			Action: "capability_revoke", Capability: cap,
+			Before: beforeN, After: afterN,
+		})
+	}
+}
+
+// diffStringSlices returns the elements present in b but not in a.
+func diffStringSlices(a, b []string) []string {
+	set := make(map[string]struct{}, len(a))
+	for _, s := range a {
+		set[s] = struct{}{}
+	}
+	var out []string
+	for _, s := range b {
+		if _, ok := set[s]; !ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // validateCapabilities rejects capability values outside the closed set

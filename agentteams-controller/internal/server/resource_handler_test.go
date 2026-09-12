@@ -23,7 +23,7 @@ import (
 func TestCreateWorkerRejectsTeamLeaderCaller(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{"name":"alpha-temp","model":"qwen3.5-plus"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", bytes.NewReader(body))
@@ -53,7 +53,7 @@ func TestCreateWorkerAllowsRepairingMissingTeamReference(t *testing.T) {
 		{Name: "alpha-dev", Role: "worker"},
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(team).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{"name":"alpha-dev","model":"qwen3.5-plus"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", bytes.NewReader(body))
@@ -68,7 +68,7 @@ func TestCreateWorkerAllowsRepairingMissingTeamReference(t *testing.T) {
 func TestCreateWorkerPreservesResources(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{"name":"resource-worker","model":"qwen3.5-plus","resources":{"requests":{"cpu":"250m","memory":"512Mi"},"limits":{"cpu":"2","memory":"4Gi"}}}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", bytes.NewReader(body))
@@ -92,7 +92,7 @@ func TestUpdateWorkerPreservesResources(t *testing.T) {
 	worker.Namespace = "default"
 	worker.Spec.Model = "qwen3.5-plus"
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(worker).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{"resources":{"requests":{"cpu":"300m","memory":"768Mi"},"limits":{"cpu":"3","memory":"5Gi"}}}`)
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/workers/resource-worker", bytes.NewReader(body))
@@ -133,7 +133,7 @@ func TestCreateTeamDoesNotOwnWorkerRuntimeConfig(t *testing.T) {
 		},
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(leader, worker).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{
 		"name":"resource-team",
@@ -178,7 +178,7 @@ func TestCreateTeamReferencesExistingWorkerCRs(t *testing.T) {
 		Spec:       v1beta1.WorkerSpec{Model: "qwen3.5-plus"},
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(leader, worker).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{
 		"name":"alpha-team",
@@ -218,7 +218,7 @@ func TestCreateTeamRejectsMissingWorkerReference(t *testing.T) {
 		Spec:       v1beta1.WorkerSpec{Model: "qwen3.5-plus"},
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(leader).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{
 		"name":"alpha-team",
@@ -248,7 +248,7 @@ func TestCreateTeamRejectsEmptyWorkerRole(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"},
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(leader, worker).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{
 		"name":"alpha-team",
@@ -272,7 +272,7 @@ func TestCreateTeamRejectsEmptyWorkerRole(t *testing.T) {
 func TestCreateManagerPreservesResources(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{"name":"default","model":"qwen3.5-plus","resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"3","memory":"5Gi"}}}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/managers", bytes.NewReader(body))
@@ -300,7 +300,7 @@ func TestGetWorkerRequiresWorkerCRForTeamMember(t *testing.T) {
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(team).
 		Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers/alpha-dev", nil)
 	req.SetPathValue("name", "alpha-dev")
@@ -334,7 +334,7 @@ func TestGetWorkerEnrichesTeamReferencesMemberCR(t *testing.T) {
 		WithScheme(scheme).
 		WithObjects(worker, team).
 		Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers/alpha-dev", nil)
 	req.SetPathValue("name", "alpha-dev")
@@ -376,7 +376,7 @@ func TestListWorkersDoesNotSynthesizeMissingTeamMembers(t *testing.T) {
 
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(standalone, team).
 		Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers", nil)
 	rec := httptest.NewRecorder()
@@ -423,7 +423,7 @@ func TestListWorkersTeamFilterIncludesTeamReferencesMembers(t *testing.T) {
 		WithScheme(scheme).
 		WithObjects(solo, lead, dev, team).
 		Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers?team=alpha-team", nil)
 	rec := httptest.NewRecorder()
@@ -466,7 +466,7 @@ func TestUpdateWorkerAllowsTeamMember(t *testing.T) {
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(worker, team).
 		Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/workers/alpha-dev", bytes.NewReader([]byte(`{"model":"new-model"}`)))
 	req.SetPathValue("name", "alpha-dev")
@@ -496,7 +496,7 @@ func TestDeleteWorkerRejectsTeamMember(t *testing.T) {
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(team).
 		Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/workers/alpha-dev", nil)
 	req.SetPathValue("name", "alpha-dev")
@@ -525,7 +525,7 @@ func TestUpdateTeamMembershipAndHeartbeat(t *testing.T) {
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(leader, dev, qa, team).
 		Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	updateBody := []byte(`{
 		"heartbeatEvery":"45m",
@@ -573,7 +573,7 @@ func TestCreateTeamResponseDerivesNamesFromWorkerReferences(t *testing.T) {
 	leader := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "lead-cr", Namespace: "default"}}
 	worker := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "dev-cr", Namespace: "default"}}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(leader, worker).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{
 		"name":"alpha-team",
@@ -609,7 +609,7 @@ func TestCreateTeamResponseDerivesNamesFromWorkerReferences(t *testing.T) {
 func TestCreateAndUpdateManagerPersistsModelProvider(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	createBody := []byte(`{"name":"default","model":"qwen-plus","modelProvider":"qwen"}`)
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/managers", bytes.NewReader(createBody))
@@ -655,7 +655,7 @@ func TestUpdateManagerClearsModelProviderWhenExplicitlyEmpty(t *testing.T) {
 		},
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(manager).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/managers/default", bytes.NewReader([]byte(`{
 		"model":"known-good-model",
@@ -685,7 +685,7 @@ func TestCreateTeamRequiresExactlyOneLeaderReference(t *testing.T) {
 	leadOne := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "lead-one", Namespace: "default"}}
 	leadTwo := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "lead-two", Namespace: "default"}}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(leadOne, leadTwo).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{
 		"name":"invalid-team",
@@ -710,7 +710,7 @@ func TestCreateTeamRequiresExactlyOneLeaderReference(t *testing.T) {
 func TestCreateWorker_StampsControllerLabel(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "ctrl-a")
+	handler := NewResourceHandler(k8sClient, "default", nil, "ctrl-a", nil)
 
 	body := []byte(`{"name":"w1","model":"qwen3.5-plus"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", bytes.NewReader(body))
@@ -733,7 +733,7 @@ func TestCreateWorker_StampsControllerLabel(t *testing.T) {
 func TestCreateWorkerPersistsRuntimeWorkerName(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{"name":"worker-cr","workerName":"worker-runtime"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", bytes.NewReader(body))
@@ -755,7 +755,7 @@ func TestCreateWorkerPersistsRuntimeWorkerName(t *testing.T) {
 func TestCreateWorkerDefaultsRuntime(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{"name":"worker-cr"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", bytes.NewReader(body))
@@ -777,7 +777,7 @@ func TestCreateWorkerDefaultsRuntime(t *testing.T) {
 func TestCreateWorkerUsesConfiguredDefaultRuntime(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 	handler.defaultWorkerRuntime = backend.RuntimeQwenPaw
 
 	body := []byte(`{"name":"worker-cr"}`)
@@ -801,7 +801,7 @@ func TestCreateTeam_StampsControllerLabel(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	leader := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "l1", Namespace: "default"}}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(leader).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "ctrl-a")
+	handler := NewResourceHandler(k8sClient, "default", nil, "ctrl-a", nil)
 
 	body := []byte(`{"name":"t1","workerMembers":[{"name":"l1","role":"team_leader"}]}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/teams", bytes.NewReader(body))
@@ -823,7 +823,7 @@ func TestCreateTeam_StampsControllerLabel(t *testing.T) {
 func TestCreateHuman_StampsControllerLabel(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "ctrl-a")
+	handler := NewResourceHandler(k8sClient, "default", nil, "ctrl-a", nil)
 
 	body := []byte(`{"name":"h1","displayName":"Human One"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/humans", bytes.NewReader(body))
@@ -845,7 +845,7 @@ func TestCreateHuman_StampsControllerLabel(t *testing.T) {
 func TestCreateManager_StampsControllerLabel(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "ctrl-a")
+	handler := NewResourceHandler(k8sClient, "default", nil, "ctrl-a", nil)
 
 	body := []byte(`{"name":"m1","model":"qwen3.5-plus"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/managers", bytes.NewReader(body))
@@ -871,7 +871,7 @@ func TestCreateManager_StampsControllerLabel(t *testing.T) {
 func TestCreate_EmptyControllerName_NoLabel(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{"name":"h2","displayName":"Human Two"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/humans", bytes.NewReader(body))
@@ -933,7 +933,7 @@ func TestListTeams_L2Scoped(t *testing.T) {
 	beta.Namespace = "default"
 
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(alpha, beta).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/teams", nil)
 	req = req.WithContext(context.WithValue(req.Context(), authpkg.CallerKeyForTest(), &authpkg.CallerIdentity{
@@ -988,7 +988,7 @@ func TestListWorkers_L2Scoped(t *testing.T) {
 
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).
 		WithObjects(solo, alphaLead, alphaDev, betaDev, alpha, beta).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers", nil)
 	req = req.WithContext(context.WithValue(req.Context(), authpkg.CallerKeyForTest(), &authpkg.CallerIdentity{
@@ -1025,7 +1025,7 @@ func TestGetTeam_L2Scoped(t *testing.T) {
 	beta.Namespace = "default"
 
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(alpha, beta).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 	l2 := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"alpha-team"}}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/teams/alpha-team", nil)
@@ -1073,7 +1073,7 @@ func TestGetWorker_L2Scoped(t *testing.T) {
 
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).
 		WithObjects(alphaLead, betaDev, solo, alpha, beta).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 	l2 := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"alpha-team"}}
 
 	// Own team worker -> 200.

@@ -38,7 +38,7 @@ func newL2UpdateRig(t *testing.T) (*ResourceHandler, *v1beta1.Worker) {
 		Spec:       v1beta1.WorkerSpec{Model: "qwen3.5-plus"},
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(team, worker, solo).Build()
-	return NewResourceHandler(k8sClient, "default", nil, ""), worker
+	return NewResourceHandler(k8sClient, "default", nil, "", nil), worker
 }
 
 func l2UpdateRequest(t *testing.T, handler *ResourceHandler, name string, body string, caller *authpkg.CallerIdentity) *httptest.ResponseRecorder {

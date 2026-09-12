@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	audit "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/audit"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/credentials"
@@ -66,7 +67,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/version", mw.Authenticate(http.HandlerFunc(sh.Version)))
 
 	// --- Declarative resource CRUD ---
-	rh := NewResourceHandler(deps.Client, deps.Namespace, deps.Backend, deps.ControllerName)
+	rh := NewResourceHandler(deps.Client, deps.Namespace, deps.Backend, deps.ControllerName, audit.NewClient(deps.OSS))
 	rh.defaultWorkerRuntime = deps.DefaultWorkerRuntime
 	nameFn := authpkg.NameFromPath
 

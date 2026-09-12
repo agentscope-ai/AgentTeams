@@ -439,6 +439,7 @@ spec:
 | `spec.permissionLevel` | int | Yes | — | Permission level: 1, 2, or 3 |
 | `spec.accessibleTeams` | []string | No | — | Accessible Team list (effective for L2) |
 | `spec.accessibleWorkers` | []string | No | — | Accessible standalone Worker list (effective for L2/L3) |
+| `spec.capabilities` | []string | No | — | Sensitive-surface privileges beyond the L2 baseline: `full_access`, `channel_secrets`, `external_sources`, `approval_policy`, `secret_reveal` (see [capability-foundation](../design/capability-foundation.md)) |
 | `spec.note` | string | No | — | Notes |
 
 ### Three-Level Permission Model

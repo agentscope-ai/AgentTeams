@@ -653,6 +653,7 @@ func (a *App) initHTTPServer(_ context.Context) error {
 		Provisioner:     a.provisioner,
 
 		DefaultWorkerRuntime: a.cfg.DefaultWorkerRuntime,
+		WorkerAgentDir:       a.cfg.WorkerAgentDir(),
 	})
 	return nil
 }

@@ -35,6 +35,7 @@ type ServerDeps struct {
 	Provisioner     *service.Provisioner // for Matrix token refresh
 
 	DefaultWorkerRuntime string // install-time default for Worker create requests
+	WorkerAgentDir       string // source of builtin agent templates (skill catalog)
 }
 
 // HTTPServer serves the unified controller REST API.
@@ -136,6 +137,10 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	ah := NewApprovalHandler(deps.Client, deps.Namespace, deps.KubeMode, deps.ContainerPrefix)
 	mux.Handle("GET /api/v1/workers/{name}/approval", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(ah.getWorkerApproval)))
 	mux.Handle("PUT /api/v1/workers/{name}/approval", mw.RequireAuthz(authpkg.ActionWorkerApproval, "worker", nameFn)(http.HandlerFunc(ah.updateWorkerApproval)))
+
+	// --- Skill catalog (read-only: builtin skills per runtime + shared skills under agents/global/skills/) ---
+	skh := NewSkillsHandler(deps.WorkerAgentDir, deps.OSS)
+	mux.Handle("GET /api/v1/skills", mw.RequireAuthz(authpkg.ActionList, "skills", nil)(http.HandlerFunc(skh.ListSkills)))
 
 	// W-PR-2: human intervention + lifecycle (write endpoints). All writes go
 	// through RequireAuthz ActionUpdate + "project" so the authorizer's

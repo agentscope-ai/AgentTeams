@@ -90,6 +90,14 @@ func (m *Memory) Stat(_ context.Context, key string) error {
 	return nil
 }
 
+// LastWriteTime returns the fake's global write clock (the mtime that
+// ListObjectsDetailed reports for every entry).
+func (m *Memory) LastWriteTime() time.Time {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.modTime
+}
+
 // StatMeta returns a monotonic mtime for the object. Writes advance the clock,
 // so a test can verify the optimistic-lock conflict path by writing after a
 // read. The ETag is the content MD5 (mirroring MinIO single-part semantics),
@@ -158,16 +166,36 @@ func (m *Memory) Mirror(_ context.Context, src, dst string, _ oss.MirrorOptions)
 
 // ListObjects returns all keys whose names start with prefix, sorted.
 func (m *Memory) ListObjects(_ context.Context, prefix string) ([]string, error) {
+	infos, err := m.ListObjectsDetailed(context.Background(), prefix)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(infos))
+	for _, info := range infos {
+		out = append(out, info.Name)
+	}
+	return out, nil
+}
+
+// ListObjectsDetailed reports the fake's single global write clock as every
+// entry's UpdatedAt (the fake has no per-object mtime; writes advance the
+// clock, so the value reflects the most recent write).
+func (m *Memory) ListObjectsDetailed(_ context.Context, prefix string) ([]oss.ObjectInfo, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	out := make([]string, 0)
+	keys := make([]string, 0)
 	for key := range m.objects {
 		if strings.HasPrefix(key, prefix) {
-			out = append(out, key)
+			keys = append(keys, key)
 		}
 	}
-	sort.Strings(out)
-	return out, nil
+	sort.Strings(keys)
+	updatedAt := m.modTime.UTC().Format(time.RFC3339)
+	infos := make([]oss.ObjectInfo, 0, len(keys))
+	for _, key := range keys {
+		infos = append(infos, oss.ObjectInfo{Name: key, UpdatedAt: updatedAt})
+	}
+	return infos, nil
 }
 
 // DeletePrefix removes every object whose key starts with prefix.

@@ -143,6 +143,15 @@ func (a *Authorizer) authorizeHuman(caller *CallerIdentity, req AuthzRequest) er
 		}
 		return deny(caller, req)
 
+	case "skills":
+		// Read-only skill catalog (name/description metadata); no PII,
+		// scope-independent. Only the list action is granted — any other
+		// action on this resource is denied, not defaulted.
+		if req.Action == ActionList {
+			return nil
+		}
+		return deny(caller, req)
+
 	default:
 		return deny(caller, req)
 	}
@@ -168,6 +177,15 @@ func (a *Authorizer) authorizeTeamLeader(caller *CallerIdentity, req AuthzReques
 		// calling identity, and these routes never embed a target ResourceName
 		// (the handler uses caller.Username), so no requireSelf check is needed.
 		if req.Action == ActionSTS || req.Action == ActionRefreshMatrixToken {
+			return nil
+		}
+		return deny(caller, req)
+
+	case "skills":
+		// Read-only skill catalog (name/description metadata); no PII,
+		// scope-independent. Only the list action is granted — any other
+		// action on this resource is denied, not defaulted.
+		if req.Action == ActionList {
 			return nil
 		}
 		return deny(caller, req)

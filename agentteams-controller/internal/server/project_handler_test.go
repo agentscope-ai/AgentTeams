@@ -67,6 +67,9 @@ func (m *mcLikeOSS) ListObjects(_ context.Context, prefix string) ([]string, err
 // names (the mc ls directory view) and stamps each with the fake's global
 // write clock.
 func (m *mcLikeOSS) ListObjectsDetailed(_ context.Context, prefix string) ([]oss.ObjectInfo, error) {
+	if m.failList {
+		return nil, errors.New("oss list failed")
+	}
 	keys, err := m.Memory.ListObjects(context.Background(), prefix)
 	if err != nil {
 		return nil, err

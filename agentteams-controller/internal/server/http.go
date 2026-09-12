@@ -139,7 +139,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("PUT /api/v1/workers/{name}/approval", mw.RequireAuthz(authpkg.ActionWorkerApproval, "worker", nameFn)(http.HandlerFunc(ah.updateWorkerApproval)))
 
 	// --- Skill catalog (read-only: builtin skills per runtime + shared skills under agents/global/skills/) ---
-	skh := NewSkillsHandler(deps.WorkerAgentDir, deps.OSS)
+	skh := NewSkillsHandler(deps.WorkerAgentDir, deps.OSS, deps.Client, deps.Namespace)
 	mux.Handle("GET /api/v1/skills", mw.RequireAuthz(authpkg.ActionList, "skills", nil)(http.HandlerFunc(skh.ListSkills)))
 
 	// W-PR-2: human intervention + lifecycle (write endpoints). All writes go

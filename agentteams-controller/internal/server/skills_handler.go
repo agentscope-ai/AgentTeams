@@ -1,17 +1,20 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	"gopkg.in/yaml.v3"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // globalSkillsPrefix is the deployment-wide skill staging area maintained by
@@ -35,10 +38,10 @@ const globalSkillsPrefix = "agents/global/skills/"
 type SkillInfo struct {
 	Name         string             `json:"name"`
 	Description  string             `json:"description,omitempty"`
-	Source       string             `json:"source"`                 // "builtin" | "shared"
+	Source       string             `json:"source"`                 // "builtin" | "shared" | "team"
 	Version      string             `json:"version,omitempty"`      // builtin only: SKILL.md frontmatter version
 	Requirements *SkillRequirements `json:"requirements,omitempty"` // builtin only: frontmatter requires block
-	UpdatedAt    string             `json:"updated_at,omitempty"`   // shared only: last listing timestamp (RFC3339 UTC)
+	UpdatedAt    string             `json:"updated_at,omitempty"`   // shared/team only: last listing timestamp (RFC3339 UTC)
 	Agents       []string           `json:"agents,omitempty"`       // builtin only: template dirs providing the skill
 	Runtimes     []string           `json:"runtimes,omitempty"`     // runtimes for which the skill is available
 }
@@ -77,27 +80,71 @@ type SkillListResponse struct {
 type SkillsHandler struct {
 	workerAgentDir string
 	oss            oss.StorageClient
+	client         client.Client // Team CR existence checks for ?team= scope
+	namespace      string
 }
 
-func NewSkillsHandler(workerAgentDir string, o oss.StorageClient) *SkillsHandler {
-	return &SkillsHandler{workerAgentDir: workerAgentDir, oss: o}
+func NewSkillsHandler(workerAgentDir string, o oss.StorageClient, c client.Client, namespace string) *SkillsHandler {
+	return &SkillsHandler{workerAgentDir: workerAgentDir, oss: o, client: c, namespace: namespace}
 }
 
 // ListSkills handles GET /api/v1/skills.
 //
-// Access: admin (L1) only. The catalog exposes the deployment-level
-// ("individual") skill layer, which is managed by the admin. Non-admin
-// callers (L2 humans, team leaders, workers, manager) are meant to use the
-// team-scoped catalog (?team=) that ships with the team-skills work; no
-// team scope exists yet, so they are rejected with a self-explanatory 400
-// instead of a silent partial view.
+// No-param (the L1 deployment-level catalog): admin (L1) only — builtin +
+// agents/global/skills/ (the "individual" layer, managed by the admin).
+// Non-admin callers are rejected with a self-explanatory 400.
+//
+// ?team=T (the team-scoped catalog): builtin + teams/T/skills/.
+//   - admin: any team (Team CR existence checked);
+//   - L2 human: own teams only (Human CR accessibleTeams, by Team CR name);
+//   - team leader: own team only;
+//   - manager / worker: 403 (the Manager agent does not participate in
+//     team-skill paths);
+//   - cross-team or unknown team: 404 — deliberately indistinguishable
+//     (W8 anti-probing: a 403 here would let a scoped caller probe which
+//     teams exist).
 func (h *SkillsHandler) ListSkills(w http.ResponseWriter, r *http.Request) {
 	caller := auth.CallerFromContext(r.Context())
-	if caller == nil || caller.Role != auth.RoleAdmin {
+	team := r.URL.Query().Get("team")
+	if team == "" {
+		if caller == nil || caller.Role != auth.RoleAdmin {
+			httputil.WriteError(w, http.StatusBadRequest, "team scope required")
+			return
+		}
+		h.writeCatalog(w, r, nil)
+		return
+	}
+
+	switch caller.Role {
+	case auth.RoleAdmin:
+		// Any team; existence checked below.
+	case auth.RoleHuman, auth.RoleTeamLeader:
+		if !caller.TeamMatches(team) {
+			httputil.WriteError(w, http.StatusNotFound, "team not found")
+			return
+		}
+	default: // manager, worker, unknown role
+		httputil.WriteError(w, http.StatusForbidden, "team-scope catalog is not available for this role")
+		return
+	}
+	if caller == nil {
 		httputil.WriteError(w, http.StatusBadRequest, "team scope required")
 		return
 	}
 
+	var teamCR v1beta1.Team
+	if err := h.client.Get(r.Context(), client.ObjectKey{Name: team, Namespace: h.namespace}, &teamCR); err != nil {
+		// Unknown team → 404 (same code as cross-team: no probing).
+		httputil.WriteError(w, http.StatusNotFound, "team not found")
+		return
+	}
+	h.writeCatalog(w, r, &team)
+}
+
+// writeCatalog builds the catalog: the builtin half always, plus the shared
+// half (agents/global/skills/) for the no-param view or the team half
+// (teams/<t>/skills/) for the ?team= view.
+func (h *SkillsHandler) writeCatalog(w http.ResponseWriter, r *http.Request, team *string) {
 	skills := map[string]*SkillInfo{}
 
 	for _, tmpl := range h.builtinTemplates() {
@@ -142,35 +189,15 @@ func (h *SkillsHandler) ListSkills(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Shared half: directory entries under agents/global/skills/. A listing
-	// failure (prefix absent, storage down) degrades to an empty shared set
-	// rather than failing the whole catalog. Directory entries only (mc ls
-	// marks them with a trailing "/"); bare files and dot-entries are
-	// non-skill artifacts. Builtin names win on collision. Shared entries
-	// carry UpdatedAt from the listing when the backend exposes it (the mc
-	// ls line date; "" when unparseable) — no per-skill object fetch.
-	if h.oss != nil {
-		if entries, err := h.oss.ListObjectsDetailed(r.Context(), globalSkillsPrefix); err == nil {
-			for _, entry := range entries {
-				raw := entry.Name
-				if !strings.HasSuffix(raw, "/") {
-					continue
-				}
-				name := strings.TrimSuffix(raw, "/")
-				if name == "" || strings.HasPrefix(name, ".") {
-					continue
-				}
-				if _, ok := skills[name]; ok {
-					continue
-				}
-				skills[name] = &SkillInfo{
-					Name:      name,
-					Source:    "shared",
-					UpdatedAt: entry.UpdatedAt,
-					Runtimes:  append([]string{}, service.AllWorkerRuntimes...),
-				}
-			}
-		}
+	// Object-storage half: the no-param view lists the deployment-wide
+	// shared skills (agents/global/skills/, source "shared"); the ?team=
+	// view lists the team layer (teams/<t>/skills/, source "team"). Both
+	// halves share the exact same listing contract (listSkillDirs) — the
+	// team layer is the shared layer's team-scope sibling.
+	if team == nil {
+		h.listSkillDirs(r.Context(), globalSkillsPrefix, "shared", skills)
+	} else {
+		h.listSkillDirs(r.Context(), "teams/"+*team+"/skills/", "team", skills)
 	}
 
 	list := make([]SkillInfo, 0, len(skills))
@@ -182,6 +209,43 @@ func (h *SkillsHandler) ListSkills(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
 
 	httputil.WriteJSON(w, http.StatusOK, SkillListResponse{Skills: list, Total: len(list)})
+}
+
+// listSkillDirs fills skills with the direct-child directory entries under
+// prefix, tagged with the given source ("shared" | "team"). Contract for
+// both halves: a listing failure (prefix absent, storage down) degrades to
+// an empty set rather than failing the whole catalog; directory entries
+// only (mc ls marks them with a trailing "/"); bare files and dot-entries
+// are non-skill artifacts; builtin names win on collision. Entries carry
+// UpdatedAt from the listing when the backend exposes it (the mc ls line
+// date; "" when unparseable) — no per-skill object fetch.
+func (h *SkillsHandler) listSkillDirs(ctx context.Context, prefix, source string, skills map[string]*SkillInfo) {
+	if h.oss == nil {
+		return
+	}
+	entries, err := h.oss.ListObjectsDetailed(ctx, prefix)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		raw := entry.Name
+		if !strings.HasSuffix(raw, "/") {
+			continue
+		}
+		name := strings.TrimSuffix(raw, "/")
+		if name == "" || strings.HasPrefix(name, ".") {
+			continue
+		}
+		if _, ok := skills[name]; ok {
+			continue
+		}
+		skills[name] = &SkillInfo{
+			Name:      name,
+			Source:    source,
+			UpdatedAt: entry.UpdatedAt,
+			Runtimes:  append([]string{}, service.AllWorkerRuntimes...),
+		}
+	}
 }
 
 // builtinTemplate is one template directory and the runtimes it seeds.

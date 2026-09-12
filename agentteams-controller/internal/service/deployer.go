@@ -1231,7 +1231,10 @@ func (d *Deployer) EnsureTeamStorage(ctx context.Context, teamName string) error
 	if err := d.ensureDirectoryObject(ctx, prefix+"shared/"); err != nil {
 		return fmt.Errorf("create %sshared/: %w", prefix, err)
 	}
-	for _, subdir := range []string{"shared/tasks/", "shared/projects/", "shared/knowledge/"} {
+	// skills/ is the team-skill layer (catalog ?team= half, materialize-at-
+	// assign source); the .keep makes it explicit in listings. List-on-read
+	// tolerates its absence, so the seed is cosmetic for the API.
+	for _, subdir := range []string{"shared/tasks/", "shared/projects/", "shared/knowledge/", "skills/"} {
 		if err := d.oss.PutObject(ctx, prefix+subdir+".keep", []byte("")); err != nil {
 			return fmt.Errorf("create %s%s: %w", prefix, subdir, err)
 		}

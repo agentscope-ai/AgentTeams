@@ -12,9 +12,13 @@ import (
 	"testing"
 	"time"
 
+	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 func writeSkill(t *testing.T, dir, name, description string) {
@@ -64,10 +68,26 @@ func newSkillsRig(t *testing.T) (*SkillsHandler, *mcLikeOSS, string) {
 	mustPut(globalSkillsPrefix + "file-sync/SKILL.md")
 	mustPut(globalSkillsPrefix + "notes.txt")
 	mustPut(globalSkillsPrefix + ".hidden/SKILL.md")
+	// Team-skill layer: market-team has a team-only skill and a builtin
+	// name-collision (builtin must win); biz-team has its own.
+	mustPut("teams/market-team/skills/team-kb/SKILL.md")
+	mustPut("teams/market-team/skills/file-sync/SKILL.md")
+	mustPut("teams/biz-team/skills/biz-only/SKILL.md")
+
+	// Team CRs for the ?team= existence check (unknown-team → 404).
+	teams := []*v1beta1.Team{
+		{ObjectMeta: metav1.ObjectMeta{Name: "market-team", Namespace: "default"}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "biz-team", Namespace: "default"}},
+	}
+	objs := make([]runtime.Object, 0, len(teams))
+	for _, tm := range teams {
+		objs = append(objs, tm)
+	}
+	k8s := fake.NewClientBuilder().WithScheme(newServerTestScheme(t)).WithRuntimeObjects(objs...).Build()
 
 	fakeOSS := &mcLikeOSS{Memory: store}
 	dir := filepath.Join(base, "worker-agent")
-	return NewSkillsHandler(dir, fakeOSS), fakeOSS, base
+	return NewSkillsHandler(dir, fakeOSS, k8s, "default"), fakeOSS, base
 }
 
 func getSkills(t *testing.T, h *SkillsHandler) *httptest.ResponseRecorder {
@@ -100,6 +120,120 @@ func skillByName(t *testing.T, skills []SkillInfo, name string) SkillInfo {
 	}
 	t.Fatalf("skill %q not in catalog: %v", name, skills)
 	return SkillInfo{}
+}
+
+func getSkillsAs(t *testing.T, h *SkillsHandler, caller *authpkg.CallerIdentity, query string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := withCaller(httptest.NewRequest(http.MethodGet, "/api/v1/skills"+query, nil), caller)
+	rec := httptest.NewRecorder()
+	h.ListSkills(rec, req)
+	return rec
+}
+
+var (
+	skAdmin   = &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"}
+	skL2      = &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"market-team"}}
+	skL2Empty = &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "nobody"}
+	skLeader  = &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "market-lead", Team: "market-team"}
+	skManager = &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "manager"}
+	skWorker  = &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "market-dev", Team: "market-team"}
+)
+
+func TestSkills_TeamScopeAdmin(t *testing.T) {
+	h, _, _ := newSkillsRig(t)
+
+	// Own (any) team: builtin + team layer, no shared half.
+	rec := getSkillsAs(t, h, skAdmin, "?team=market-team")
+	skills := decodeSkills(t, rec)
+	teamKB := skillByName(t, skills, "team-kb")
+	if teamKB.Source != "team" {
+		t.Errorf("team-kb source = %q, want team", teamKB.Source)
+	}
+	// Builtin name wins over a same-named team skill.
+	if s := skillByName(t, skills, "file-sync"); s.Source != "builtin" {
+		t.Errorf("file-sync source = %q, want builtin (team entry shadowed)", s.Source)
+	}
+	// The deployment shared half is NOT part of the team view.
+	for _, s := range skills {
+		if s.Name == "shared-kb" {
+			t.Error("shared-kb leaked into the team view")
+		}
+		if s.Name == "biz-only" {
+			t.Error("biz-team skill leaked into market-team view")
+		}
+	}
+
+	// Unknown team → 404.
+	if rec := getSkillsAs(t, h, skAdmin, "?team=no-such-team"); rec.Code != http.StatusNotFound {
+		t.Errorf("admin unknown team: status = %d, want 404", rec.Code)
+	}
+}
+
+func TestSkills_TeamScopeL2(t *testing.T) {
+	h, _, _ := newSkillsRig(t)
+
+	// Own team: 200 with the team layer.
+	skills := decodeSkills(t, getSkillsAs(t, h, skL2, "?team=market-team"))
+	if s := skillByName(t, skills, "team-kb"); s.Source != "team" {
+		t.Errorf("team-kb source = %q, want team", s.Source)
+	}
+	// Builtin half still present for the team view.
+	_ = skillByName(t, skills, "file-sync")
+
+	// Cross-team → 404 (indistinguishable from unknown, W8 anti-probing).
+	if rec := getSkillsAs(t, h, skL2, "?team=biz-team"); rec.Code != http.StatusNotFound {
+		t.Errorf("cross-team: status = %d, want 404", rec.Code)
+	}
+	if rec := getSkillsAs(t, h, skL2, "?team=no-such-team"); rec.Code != http.StatusNotFound {
+		t.Errorf("unknown team: status = %d, want 404", rec.Code)
+	}
+	// Empty accessibleTeams → 404 for any team.
+	if rec := getSkillsAs(t, h, skL2Empty, "?team=market-team"); rec.Code != http.StatusNotFound {
+		t.Errorf("empty teams: status = %d, want 404", rec.Code)
+	}
+	// No-param stays #1211's L1-only contract.
+	if rec := getSkillsAs(t, h, skL2, ""); rec.Code != http.StatusBadRequest {
+		t.Errorf("L2 no-param: status = %d, want 400", rec.Code)
+	}
+}
+
+func TestSkills_TeamScopeLeader(t *testing.T) {
+	h, _, _ := newSkillsRig(t)
+
+	skills := decodeSkills(t, getSkillsAs(t, h, skLeader, "?team=market-team"))
+	if s := skillByName(t, skills, "team-kb"); s.Source != "team" {
+		t.Errorf("team-kb source = %q, want team", s.Source)
+	}
+	if rec := getSkillsAs(t, h, skLeader, "?team=biz-team"); rec.Code != http.StatusNotFound {
+		t.Errorf("leader other team: status = %d, want 404", rec.Code)
+	}
+}
+
+func TestSkills_TeamScopeForbiddenRoles(t *testing.T) {
+	h, _, _ := newSkillsRig(t)
+	// Manager does not participate in team-skill paths; worker never.
+	if rec := getSkillsAs(t, h, skManager, "?team=market-team"); rec.Code != http.StatusForbidden {
+		t.Errorf("manager: status = %d, want 403", rec.Code)
+	}
+	if rec := getSkillsAs(t, h, skWorker, "?team=market-team"); rec.Code != http.StatusForbidden {
+		t.Errorf("worker: status = %d, want 403", rec.Code)
+	}
+}
+
+func TestSkills_TeamScopeListingFailureDegrades(t *testing.T) {
+	h, fakeOSS, _ := newSkillsRig(t)
+	fakeOSS.failList = true
+
+	// Storage down: the team half degrades to an empty set; the builtin
+	// half (local disk) is unaffected and the request still succeeds.
+	rec := getSkillsAs(t, h, skAdmin, "?team=market-team")
+	skills := decodeSkills(t, rec)
+	for _, s := range skills {
+		if s.Name == "team-kb" {
+			t.Error("team-kb present despite listing failure")
+		}
+	}
+	_ = skillByName(t, skills, "file-sync") // builtin survives
 }
 
 // TestSkillsCatalogGolden covers the builtin half (per-runtime availability
@@ -221,7 +355,7 @@ func TestSkillsCatalogSharedDegradesOnOSSFailure(t *testing.T) {
 	base := t.TempDir()
 	writeSkill(t, filepath.Join(base, "worker-agent", "skills"), "file-sync", "Sync files.")
 	failing := &mcLikeOSS{Memory: ossfake.NewMemory(), failList: true}
-	h := NewSkillsHandler(filepath.Join(base, "worker-agent"), failing)
+	h := NewSkillsHandler(filepath.Join(base, "worker-agent"), failing, nil, "default")
 
 	skills := decodeSkills(t, getSkills(t, h))
 	if len(skills) != 1 || skills[0].Name != "file-sync" || skills[0].Source != "builtin" {
@@ -236,7 +370,7 @@ func TestSkillsCatalogNoTemplateDir(t *testing.T) {
 	if err := store.PutObject(context.Background(), globalSkillsPrefix+"shared-kb/SKILL.md", []byte("x")); err != nil {
 		t.Fatal(err)
 	}
-	h := NewSkillsHandler("", &mcLikeOSS{Memory: store})
+	h := NewSkillsHandler("", &mcLikeOSS{Memory: store}, nil, "default")
 	skills := decodeSkills(t, getSkills(t, h))
 	if len(skills) != 1 || skills[0].Name != "shared-kb" || skills[0].Source != "shared" {
 		t.Fatalf("skills = %v, want shared-only [shared-kb]", skills)
@@ -323,7 +457,7 @@ func TestSkillsCatalogFrontmatterExtension(t *testing.T) {
 			"requires: [git, jq]\n")
 	writeSkill(t, skillRoot, "plain-skill", "Declares nothing.")
 
-	h := NewSkillsHandler(filepath.Join(base, "worker-agent"), &mcLikeOSS{Memory: ossfake.NewMemory()})
+	h := NewSkillsHandler(filepath.Join(base, "worker-agent"), &mcLikeOSS{Memory: ossfake.NewMemory()}, nil, "default")
 	skills := decodeSkills(t, getSkills(t, h))
 
 	full := skillByName(t, skills, "full-skill")
@@ -369,7 +503,7 @@ func TestSkillsCatalogSharedUpdatedAt(t *testing.T) {
 	if err := fakeOSS.PutObject(context.Background(), "agents/global/skills/team-report/SKILL.md", []byte("---\nname: team-report\n---\n")); err != nil {
 		t.Fatal(err)
 	}
-	h := NewSkillsHandler(filepath.Join(base, "worker-agent"), &mcLikeOSS{Memory: fakeOSS})
+	h := NewSkillsHandler(filepath.Join(base, "worker-agent"), &mcLikeOSS{Memory: fakeOSS}, nil, "default")
 	skills := decodeSkills(t, getSkills(t, h))
 
 	shared := skillByName(t, skills, "team-report")
@@ -397,7 +531,7 @@ func TestSkillsCatalogRequiresNamespacePrecedence(t *testing.T) {
 			"  openclaw:\n"+
 			"    requires:\n"+
 			"      mcp: [ns-mcp]\n")
-	h := NewSkillsHandler(filepath.Join(base, "worker-agent"), &mcLikeOSS{Memory: ossfake.NewMemory()})
+	h := NewSkillsHandler(filepath.Join(base, "worker-agent"), &mcLikeOSS{Memory: ossfake.NewMemory()}, nil, "default")
 	skills := decodeSkills(t, getSkills(t, h))
 
 	ns := skillByName(t, skills, "ns-skill")

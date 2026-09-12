@@ -300,6 +300,9 @@ func (c *MinIOClient) Mirror(ctx context.Context, src, dst string, opts MirrorOp
 	if opts.Overwrite {
 		args = append(args, "--overwrite")
 	}
+	if opts.Remove {
+		args = append(args, "--remove")
+	}
 	for _, pattern := range opts.Exclude {
 		args = append(args, "--exclude", pattern)
 	}

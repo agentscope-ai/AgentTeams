@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -142,24 +143,66 @@ func (m *Memory) DeleteObject(_ context.Context, key string) error {
 }
 
 // Mirror copies every object under src to dst by swapping the src prefix for
-// dst. Local filesystem sources/destinations are not supported by the fake —
-// both src and dst must be in-memory prefixes. MirrorOptions.Exclude is
-// currently ignored; Overwrite=true is implicit (existing destination keys
-// are replaced).
-func (m *Memory) Mirror(_ context.Context, src, dst string, _ oss.MirrorOptions) error {
+// dst. src may be an in-memory prefix or a local directory ("/" prefix,
+// walked on disk — matching the minio backend's local-src semantics).
+// MirrorOptions.Exclude is currently ignored; Overwrite is implicit (existing
+// destination keys are replaced). With Remove=true, destination objects with
+// no counterpart at source are deleted (mc --remove, exact-copy semantics).
+func (m *Memory) Mirror(_ context.Context, src, dst string, opts oss.MirrorOptions) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	src = strings.TrimSuffix(src, "/")
 	dst = strings.TrimSuffix(dst, "/")
-	for key, data := range m.objects {
-		if key != src && !strings.HasPrefix(key, src+"/") {
-			continue
+
+	srcObjects := make(map[string][]byte)
+	if strings.HasPrefix(src, "/") {
+		// Local directory source.
+		if err := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() {
+				return err
+			}
+			rel, rerr := filepath.Rel(src, path)
+			if rerr != nil {
+				return rerr
+			}
+			data, derr := os.ReadFile(path)
+			if derr != nil {
+				return derr
+			}
+			// rel carries a leading slash (or is "" for the marker),
+			// uniformly, so newKey = dst + rel in both source kinds.
+			srcObjects["/"+filepath.ToSlash(rel)] = data
+			return nil
+		}); err != nil {
+			return err
 		}
-		rel := strings.TrimPrefix(key, src)
+	} else {
+		for key, data := range m.objects {
+			if key != src && !strings.HasPrefix(key, src+"/") {
+				continue
+			}
+			// TrimPrefix leaves the leading "/" (or "" for the marker).
+			srcObjects[strings.TrimPrefix(key, src)] = data
+		}
+	}
+
+	written := make(map[string]struct{}, len(srcObjects))
+	for rel, data := range srcObjects {
 		newKey := dst + rel
 		buf := make([]byte, len(data))
 		copy(buf, data)
 		m.objects[newKey] = buf
+		written[newKey] = struct{}{}
+	}
+
+	if opts.Remove {
+		for key := range m.objects {
+			if key == dst || strings.HasPrefix(key, dst+"/") {
+				if _, ok := written[key]; !ok {
+					delete(m.objects, key)
+				}
+			}
+		}
 	}
 	return nil
 }

@@ -1,5 +1,5 @@
 #!/bin/bash
-# start-qwenpaw-manager.sh - Start Manager Agent with QwenPaw 2.0 runtime
+# start-qwenpaw-manager.sh - Start Manager Agent with QwenPaw 2.2 runtime
 # Called by start-manager-agent.sh when AGENTTEAMS_MANAGER_RUNTIME=copaw|qwenpaw
 #
 # This script converts an OpenClaw-style workspace to a QwenPaw-style workspace
@@ -207,7 +207,7 @@ rm -f "${DM_ROOMS_FILE}" "${DM_ROOMS_FILE}.tmp"
 # Worker does this via api_client.disable_agent_if_present().
 # Manager runs QwenPaw in-process (no API client), so we set
 # enabled=false in config.json's agents.profiles before startup.
-# QwenPaw 2.0 start_all_configured_agents() skips enabled=false agents.
+# QwenPaw 2.2 start_all_configured_agents() skips enabled=false agents.
 CONFIG_JSON="${QWENPAW_WORKING_DIR}/config.json"
 if [ -f "${CONFIG_JSON}" ]; then
     # AgentProfileRef requires id + workspace_dir (both mandatory).
@@ -319,8 +319,16 @@ export QWENPAW_SECRET_DIR="${QWENPAW_SECRET_DIR:-${QWENPAW_WORKING_DIR}.secret}"
 export QWENPAW_RUNNING_IN_CONTAINER=true
 export QWENPAW_LOG_LEVEL="${COPAW_LOG_LEVEL:-info}"
 
+# LLM stream stall detection (QwenPaw 2.2.0 #7150): aligned with the Worker
+# entrypoint. Upstream default 30s; AgentTeams defaults 300s (8/26
+# QwenPaw001 false-kill precedent, lesson #386). Priority: native
+# QWENPAW_LLM_STREAM_* vars > AGENTTEAMS_LLM_STREAM_TIMEOUT_S > 300.
+AGENTTEAMS_LLM_STREAM_TIMEOUT_S="${AGENTTEAMS_LLM_STREAM_TIMEOUT_S:-300}"
+export QWENPAW_LLM_STREAM_FIRST_CONTENT_TIMEOUT="${QWENPAW_LLM_STREAM_FIRST_CONTENT_TIMEOUT:-${AGENTTEAMS_LLM_STREAM_TIMEOUT_S}}"
+export QWENPAW_LLM_STREAM_IDLE_TIMEOUT="${QWENPAW_LLM_STREAM_IDLE_TIMEOUT:-${AGENTTEAMS_LLM_STREAM_TIMEOUT_S}}"
+
 # YOLO mode: AGENTTEAMS_YOLO=1 → set approval_level=OFF in agent.json
-# (QwenPaw 2.0 equivalent of OpenClaw's tools.exec.ask=off).
+# (QwenPaw 2.2 equivalent of OpenClaw's tools.exec.ask=off).
 # start-manager-agent.sh promotes the yolo-mode marker file to
 # AGENTTEAMS_YOLO=1 before calling this script.
 if [ "${AGENTTEAMS_YOLO:-}" = "1" ] && [ -f "${AGENT_JSON}" ]; then
@@ -329,7 +337,7 @@ if [ "${AGENTTEAMS_YOLO:-}" = "1" ] && [ -f "${AGENT_JSON}" ]; then
     log "YOLO mode: approval_level set to OFF"
 fi
 
-log "Starting QwenPaw 2.0 Manager (app mode)..."
+log "Starting QwenPaw 2.2 Manager (app mode)..."
 
 # Keep canonical Manager skills under $HOME/skills synchronized with the
 # QwenPaw native workspace after startup. QwenPaw does not watch the OpenClaw

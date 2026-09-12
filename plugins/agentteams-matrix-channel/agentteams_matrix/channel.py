@@ -358,6 +358,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         encryption: bool = False,
         dm_disabled: bool = False,
         group_disabled: bool = False,
+        share_session_in_group: bool = True,
         groups: Optional[Dict[str, Any]] = None,
         vision_enabled: bool = False,
         history_limit: int = DEFAULT_HISTORY_LIMIT,
@@ -396,6 +397,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
         # Channel-level mute
         self.dm_disabled: bool = dm_disabled
         self.group_disabled: bool = group_disabled
+        # Group session policy (upstream #7001): True = room-wide shared
+        # session (legacy behavior); False = per-sender isolated sessions.
+        self.share_session_in_group: bool = share_session_in_group
         # Per-room overrides
         self.groups: Dict[str, Any] = groups or {}
         # Media / history
@@ -468,6 +472,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
             encryption=raw.get("encryption", False),
             dm_disabled=raw.get("dm_disabled", False),
             group_disabled=raw.get("group_disabled", False),
+            share_session_in_group=bool(raw.get("share_session_in_group", True)),
             groups=raw.get("groups"),
             vision_enabled=raw.get("vision_enabled", False),
             history_limit=raw.get("history_limit", DEFAULT_HISTORY_LIMIT),
@@ -3130,13 +3135,21 @@ class AgentTeamsMatrixChannel(BaseChannel):
         if not content:
             content = [TextContent(type=ContentType.TEXT, text="")]
 
-        # Use room_id as the AgentRequest user_id so that all participants
-        # in the same room share one session (QwenPaw keys session state on
-        # both session_id AND user_id).  The real sender is preserved in
-        # meta["sender_id"] for reply mentions.
+        # Session keying (QwenPaw keys session state on both session_id AND
+        # user_id).  share_session_in_group=True (default, legacy): user_id =
+        # room_id so all participants in the room share one session.
+        # share_session_in_group=False (upstream #7001): user_id = the real
+        # sender, so each sender in a group room gets an independent session.
+        # DMs are unaffected.  The real sender is always preserved in
+        # meta["sender_id"] for reply mentions, and replies still target the
+        # room (see get_to_handle_from_request).
         req = self.build_agent_request_from_user_content(
             channel_id=CHANNEL_KEY,
-            sender_id=room_id,
+            sender_id=(
+                sender_id
+                if meta.get("is_group") and not self.share_session_in_group
+                else room_id
+            ),
             session_id=session_id,
             content_parts=content,
             channel_meta=meta,

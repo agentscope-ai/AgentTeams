@@ -1836,6 +1836,12 @@ class RuntimeUpdater:
             "encryption": _env_bool("AGENTTEAMS_MATRIX_E2EE"),
             "group_disabled": False,
             "dm_disabled": False,
+            # #7001 group sender isolation: default False = per-sender
+            # sessions (AgentTeams decision 2026-09-05: "default isolated,
+            # otherwise the shared context will blow up"). Set
+            # AGENTTEAMS_MATRIX_SHARE_SESSION=true to restore room-wide
+            # session sharing (legacy behavior).
+            "share_session_in_group": _env_bool("AGENTTEAMS_MATRIX_SHARE_SESSION"),
             "show_tool_calls": True,
             "show_tool_results": True,
             "show_thinking": True,

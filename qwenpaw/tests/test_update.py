@@ -231,6 +231,63 @@ def test_runtime_updater_reconciles_model_mcp_matrix_channel_and_acl_via_api(
     assert not (updater.config.default_workspace_dir / "access_control.json").exists()
 
 
+def test_runtime_updater_matrix_payload_share_session_isolation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#7001 group sender isolation: the channel payload must carry
+    share_session_in_group, defaulting to False (per-sender sessions per the
+    AgentTeams decision 2026-09-05). AGENTTEAMS_MATRIX_SHARE_SESSION=true
+    restores the legacy room-wide shared session."""
+    raw = {
+        "metadata": {"generation": "1"},
+        "team": {"teamRoomId": "!team:matrix.local"},
+        "member": {
+            "runtime": "qwenpaw",
+            "matrixUserId": "@worker-a:matrix.local",
+        },
+        "credentials": {
+            "matrixTokenEnv": "AGENTTEAMS_WORKER_MATRIX_TOKEN",
+            "gatewayKeyEnv": "AGENTTEAMS_WORKER_GATEWAY_KEY",
+        },
+    }
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_URL", "http://matrix.example.com")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "matrix-token")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_GATEWAY_KEY", "gateway-secret")
+    monkeypatch.delenv("AGENTTEAMS_MATRIX_SHARE_SESSION", raising=False)
+
+    updater = _runtime_updater(
+        config=_config(tmp_path),
+        package_manager=_NoopPackageManager(),
+    )
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw=raw,
+        ),
+    )
+    assert (
+        updater.api_client.channels["agentteams_matrix"]["share_session_in_group"]
+        is False
+    )
+
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_SHARE_SESSION", "true")
+    updater2 = _runtime_updater(
+        config=_config(tmp_path),
+        package_manager=_NoopPackageManager(),
+    )
+    updater2.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=updater2.config.runtime_config_path,
+            raw=raw,
+        ),
+    )
+    assert (
+        updater2.api_client.channels["agentteams_matrix"]["share_session_in_group"]
+        is True
+    )
+
+
 def test_runtime_updater_maps_dingtalk_visibility_and_preserves_empty_secret(
     tmp_path: Path,
 ) -> None:

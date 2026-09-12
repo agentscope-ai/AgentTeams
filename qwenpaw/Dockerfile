@@ -24,7 +24,7 @@ FROM ${HIGRESS_REGISTRY}/higress/python:3.11-slim
 ARG APT_MIRROR=
 ARG PIP_INDEX_URL=https://pypi.org/simple/
 ARG PIP_TIMEOUT=300
-ARG QWENPAW_PIP_SPEC=qwenpaw==2.0.1
+ARG QWENPAW_PIP_SPEC=qwenpaw==2.2.0
 ARG NPM_REGISTRY=https://registry.npmjs.org/
 
 RUN if [ -n "${APT_MIRROR}" ]; then \

@@ -46,7 +46,7 @@ class _ApiHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/api/version":
-            self._reply(200, {"version": "2.0.1"})
+            self._reply(200, {"version": "2.2.0"})
             return
         if self.path == "/api/config/channels/agentteams_matrix":
             self._reply(

@@ -946,7 +946,7 @@ class Worker:
                     f"qwenpaw app exited before API readiness: {self._process.returncode}",
                 )
             try:
-                await asyncio.to_thread(self.api_client.require_version, "2.0.1")
+                await asyncio.to_thread(self.api_client.require_version, "2.2.0")
                 return
             except Exception as exc:
                 last_error = exc

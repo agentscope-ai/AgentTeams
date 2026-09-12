@@ -1074,6 +1074,72 @@ func (p *Provisioner) EnsureRoomNonMember(ctx context.Context, roomID, userID, r
 	return p.matrix.KickFromRoom(ctx, roomID, userID, reason)
 }
 
+// EnsureRoomPowerLevel reconciles userID's entry in the room's
+// m.room.power_levels to EXACTLY `level` (raising or lowering it). The
+// read and the write use actorToken when non-empty, otherwise the
+// homeserver-admin identity — state access is membership-scoped, so rooms
+// the admin is not in (TeamAdmin-owned rooms) must be passed a token of an
+// authorized member. The complete existing content is preserved — every
+// other user and every non-user field (events, invite, notifications,
+// users_default, state_default, ban, kick, redact, extension fields); only
+// the target users entry is mutated. Idempotent: no write when the user
+// already has exactly `level`. Rooms that never had power_levels set
+// (legacy rooms) start from an empty users map.
+//
+// Equal-level demotion: the homeserver refuses to let a sender change
+// ANOTHER user's power level unless the sender's level is strictly
+// greater than the target's current level (spec room-auth rule 9.6), so
+// an admin at 100 cannot demote a former L1 human who sits at 100. The
+// sender's OWN entry is exempt from that rule, so on an M_FORBIDDEN
+// rejection the write is retried with selfToken (the target user's own
+// access token) — a self-demotion is always authorized when the new level
+// does not exceed the target's current one.
+func (p *Provisioner) EnsureRoomPowerLevel(ctx context.Context, roomID, userID string, level int, actorToken, selfToken string) error {
+	cur, err := p.matrix.GetRoomState(ctx, roomID, "m.room.power_levels", "", actorToken)
+	if err != nil {
+		return fmt.Errorf("read power levels %s: %w", roomID, err)
+	}
+	// Preserve the complete existing content and mutate only the target
+	// users entry — rebuilding the struct would drop fields we don't
+	// explicitly know about (events, invite, notifications, extensions).
+	content := map[string]interface{}{}
+	var users map[string]interface{}
+	if cur != nil {
+		for k, v := range cur {
+			content[k] = v
+		}
+		users, _ = cur["users"].(map[string]interface{})
+	}
+	if users == nil {
+		users = map[string]interface{}{}
+	}
+	// Exact-target semantics: a demoted human (e.g. permissionLevel 1 → 2,
+	// 100 → 50) must actually be lowered, not kept at the old level.
+	if have, ok := users[userID]; ok {
+		if n, ok := have.(float64); ok && int(n) == level {
+			return nil // already at exactly the desired level — no write
+		}
+	}
+	users[userID] = float64(level)
+	content["users"] = users
+	if err := p.matrix.SetRoomState(ctx, roomID, "m.room.power_levels", "", content, actorToken); err != nil {
+		// M_FORBIDDEN on a power-level write to another user means the
+		// homeserver's strict-greater rule rejected the sender (typically
+		// an equal-level demotion). Retry with the target's own token:
+		// their own entry is exempt from that rule.
+		if matrix.IsForbidden(err) && selfToken != "" {
+			if selfErr := p.matrix.SetRoomState(ctx, roomID, "m.room.power_levels", "", content, selfToken); selfErr != nil {
+				return fmt.Errorf("write power levels %s: actor write rejected (%w); self-write also failed: %w", roomID, err, selfErr)
+			}
+			log.FromContext(ctx).Info("equal-level power demotion completed via self-write",
+				"room", roomID, "user", userID, "level", level)
+			return nil
+		}
+		return fmt.Errorf("write power levels %s: %w", roomID, err)
+	}
+	return nil
+}
+
 // ReconcileRoomMembership drives the membership of roomID to match `desired`
 // (a list of full Matrix user IDs). Users present in `desired` but not in
 // the room are invited; users in the room but not in `desired` are kicked.

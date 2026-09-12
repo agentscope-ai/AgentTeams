@@ -108,57 +108,11 @@ func (r *TeamReconciler) resolveTeamAdminActor(ctx context.Context, t *v1beta1.T
 	if t.Spec.Admin == nil {
 		return teamAdminActor{}, nil
 	}
-	if strings.TrimSpace(t.Spec.Admin.Name) == "" {
-		return teamAdminActor{}, fmt.Errorf("team admin human name is required")
-	}
-
-	var human v1beta1.Human
-	key := client.ObjectKey{Name: t.Spec.Admin.Name, Namespace: t.Namespace}
-	if err := r.Get(ctx, key, &human); err != nil {
-		return teamAdminActor{}, fmt.Errorf("load team admin human %s/%s: %w", key.Namespace, key.Name, err)
-	}
-
 	humanProv, ok := r.Provisioner.(service.HumanProvisioner)
 	if !ok {
-		return teamAdminActor{}, fmt.Errorf("team admin human %s/%s requires HumanProvisioner support", key.Namespace, key.Name)
+		return teamAdminActor{}, fmt.Errorf("team admin human %s/%s requires HumanProvisioner support", t.Namespace, t.Spec.Admin.Name)
 	}
-	identity, err := humanidentity.ResolveHuman(&human.Spec, human.Name, humanidentity.Deps{Provisioner: humanProv})
-	if err != nil {
-		return teamAdminActor{}, fmt.Errorf("resolve team admin human %s/%s identity: %w", key.Namespace, key.Name, err)
-	}
-	matrixUserID := human.Status.MatrixUserID
-	if matrixUserID == "" {
-		if human.Spec.IdentitySource != nil {
-			return teamAdminActor{}, fmt.Errorf("team admin human %s/%s uses an external identity source but is not provisioned yet",
-				key.Namespace, key.Name)
-		}
-		matrixUserID = identity.MatrixUserID
-	}
-	if matrixUserID != identity.MatrixUserID {
-		return teamAdminActor{}, fmt.Errorf("team admin human %s/%s status.matrixUserID %q does not match resolved identity %q",
-			key.Namespace, key.Name, matrixUserID, identity.MatrixUserID)
-	}
-	if t.Spec.Admin.MatrixUserID != "" && t.Spec.Admin.MatrixUserID != matrixUserID {
-		return teamAdminActor{}, fmt.Errorf("team admin matrixUserId %q does not match Human %s/%s matrix user %q",
-			t.Spec.Admin.MatrixUserID, key.Namespace, key.Name, matrixUserID)
-	}
-	if identity.ManagesInitialPassword && !r.Provisioner.MatrixAppServiceEnabled() && human.Status.InitialPassword == "" {
-		return teamAdminActor{}, fmt.Errorf("team admin human %s/%s has no initial password; cannot obtain Matrix token",
-			key.Namespace, key.Name)
-	}
-
-	token, err := identity.Source.EnsureUserToken(ctx, &human.Spec, &human.Status, human.Name)
-	if err != nil {
-		return teamAdminActor{}, fmt.Errorf("login as team admin human %s/%s: %w", key.Namespace, key.Name, err)
-	}
-	if token == "" {
-		return teamAdminActor{}, fmt.Errorf("team admin human %s/%s has no Matrix token", key.Namespace, key.Name)
-	}
-	return teamAdminActor{
-		MatrixUserID: matrixUserID,
-		Token:        token,
-		Username:     identity.MatrixLocalpart,
-	}, nil
+	return resolveTeamAdminActor(ctx, r.Client, humanProv, t)
 }
 
 // deriveTeamWithResolvedIdentities returns a deep copy of t with the team

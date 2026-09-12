@@ -25,6 +25,8 @@ on:
       - 'tests/check-windows-appservice-normalization.ps1'
       - 'tests/check-apply-wrapper-flags.sh'
       - 'tests/check-helm-agentteams.sh'
+      - 'tests/check-create-project-grant-admin.sh'
+      - 'manager/agent/skills/project-management/**'
   workflow_dispatch: ~
 
 jobs:
@@ -60,6 +62,9 @@ jobs:
 
       - name: Check declarative apply wrapper flags
         run: bash tests/check-apply-wrapper-flags.sh
+
+      - name: Check create-project grant-admin wiring
+        run: bash tests/check-create-project-grant-admin.sh
 
       - name: Set up Helm
         uses: azure/setup-helm@v4

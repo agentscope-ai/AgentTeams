@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -24,6 +25,47 @@ import (
 // homeserver yet. Callers should treat it as retryable and requeue quietly
 // instead of logging it as a hard error.
 var ErrAppServiceNotReady = errors.New("matrix appservice token not active yet")
+
+// APIError is a non-2xx Matrix response whose body carried a decoded
+// errcode (e.g. M_FORBIDDEN for an authorization rejection). Callers that
+// need to react to a specific rejection (retry with a different actor,
+// fall back to a self-operation, ...) should test with errors.As /
+// IsForbidden instead of pattern-matching on error text.
+type APIError struct {
+	StatusCode int
+	ErrCode    string
+	Message    string
+}
+
+func (e *APIError) Error() string {
+	if e.ErrCode != "" {
+		return fmt.Sprintf("HTTP %d %s: %s", e.StatusCode, e.ErrCode, e.Message)
+	}
+	return fmt.Sprintf("HTTP %d", e.StatusCode)
+}
+
+// IsForbidden reports whether err is (or wraps) a Matrix M_FORBIDDEN
+// response — the homeserver's authorization rejection (insufficient power
+// level, sender not a member of the room, equal-power kick/demotion, ...).
+func IsForbidden(err error) bool {
+	var ae *APIError
+	return errors.As(err, &ae) && ae.StatusCode == http.StatusForbidden && ae.ErrCode == "M_FORBIDDEN"
+}
+
+// apiErrorFromBody builds an *APIError from a non-2xx status line and the
+// response body ({"errcode": "...", "error": "..."} when decodable).
+func apiErrorFromBody(statusCode int, respBody []byte) *APIError {
+	ae := &APIError{StatusCode: statusCode}
+	var decoded struct {
+		ErrCode string `json:"errcode"`
+		Error   string `json:"error"`
+	}
+	if err := json.Unmarshal(respBody, &decoded); err == nil {
+		ae.ErrCode = decoded.ErrCode
+		ae.Message = decoded.Error
+	}
+	return ae
+}
 
 // Client abstracts Matrix homeserver operations.
 // Implementations: TuwunelClient (current), future SynapseClient.
@@ -59,6 +101,16 @@ type Client interface {
 	// SetRoomState writes a Matrix room state event. When userToken is empty,
 	// it falls back to the homeserver-admin identity.
 	SetRoomState(ctx context.Context, roomID, eventType, stateKey string, content map[string]interface{}, userToken string) error
+
+	// GetRoomState reads the content of a single state event from a room
+	// (the event's `content` object, not the full event envelope). The
+	// read uses userToken when non-empty, otherwise the homeserver-admin
+	// identity — state reads are membership-scoped, so rooms the admin is
+	// not in (e.g. TeamAdmin-owned rooms) must be read with a token of a
+	// member. A room that has never had the event set (e.g. legacy rooms
+	// with no m.room.power_levels) yields (nil, nil) rather than an error;
+	// any other failure (including M_FORBIDDEN) is returned.
+	GetRoomState(ctx context.Context, roomID, eventType, stateKey, userToken string) (map[string]interface{}, error)
 
 	// JoinRoom makes the user identified by token join the given room.
 	JoinRoom(ctx context.Context, roomID, userToken string) error
@@ -139,6 +191,12 @@ type Client interface {
 	// they can still log in via Element.
 	SetPasswordAsAdmin(ctx context.Context, userID, password string) error
 
+	// InvalidateUserToken discards any cached login token for the user so
+	// the next Login issues a fresh one. Implementations that cache /login
+	// tokens must call it (or be called after) operations that can
+	// invalidate access tokens: password reset, account deactivation.
+	InvalidateUserToken(userID string)
+
 	// RegisterAppService registers an Application Service with the homeserver
 	// via the admin bot command. Includes smoke-test-first idempotency and
 	// unregister-before-register fallback for safe token rotation.
@@ -175,12 +233,32 @@ type SyncMessagesResult struct {
 	Events    []MessageEvent
 }
 
+// loginTokenEntry is one cached /login access token.
+type loginTokenEntry struct {
+	token     string
+	expiresAt time.Time
+}
+
 // TuwunelClient implements Client for Tuwunel (conduwuit) homeservers.
 type TuwunelClient struct {
 	config      Config
 	http        *http.Client
 	adminToken  atomic.Value // cached admin access token (string)
 	adminRoomID atomic.Value // cached admin room ID (string), resolved from #admins:<domain>
+
+	// userLoginCache caches /login access tokens per full Matrix user ID,
+	// so repeated actor resolutions (the TeamAdmin token on every human
+	// room grant and every team reconcile, the human's own token on
+	// every join) do not issue a Matrix Login on every cycle. The admin
+	// token is cached separately (adminToken).
+	userLoginCache map[string]loginTokenEntry
+	userLoginMu    sync.Mutex
+	// loginTokenTTL bounds how long a cached login token is trusted.
+	// In-band invalidators (password reset, deactivation) call
+	// InvalidateUserToken; out-of-band invalidation (server-side revoke,
+	// logout-everywhere) self-heals on TTL expiry. Exposed as a field
+	// (not a const) so tests can collapse it.
+	loginTokenTTL time.Duration
 
 	// orphanRetryBaseDelay is the base backoff between Login retries
 	// after issuing an admin reset-password command. Exposed as a field
@@ -196,8 +274,39 @@ func NewTuwunelClient(cfg Config, httpClient *http.Client) *TuwunelClient {
 	return &TuwunelClient{
 		config:               cfg,
 		http:                 httpClient,
+		loginTokenTTL:        30 * time.Minute,
 		orphanRetryBaseDelay: 500 * time.Millisecond,
 	}
+}
+
+// cachedLoginToken returns the cached /login token for userID if it has
+// not expired.
+func (c *TuwunelClient) cachedLoginToken(userID string) (string, bool) {
+	c.userLoginMu.Lock()
+	defer c.userLoginMu.Unlock()
+	e, ok := c.userLoginCache[userID]
+	if !ok || time.Now().After(e.expiresAt) {
+		return "", false
+	}
+	return e.token, true
+}
+
+func (c *TuwunelClient) storeLoginToken(userID, token string) {
+	c.userLoginMu.Lock()
+	defer c.userLoginMu.Unlock()
+	if c.userLoginCache == nil {
+		c.userLoginCache = make(map[string]loginTokenEntry)
+	}
+	c.userLoginCache[userID] = loginTokenEntry{token: token, expiresAt: time.Now().Add(c.loginTokenTTL)}
+}
+
+// InvalidateUserToken discards any cached /login token for the user so the
+// next Login issues a fresh one. Call it after any operation that can
+// invalidate access tokens (password reset, account deactivation).
+func (c *TuwunelClient) InvalidateUserToken(userID string) {
+	c.userLoginMu.Lock()
+	defer c.userLoginMu.Unlock()
+	delete(c.userLoginCache, userID)
 }
 
 func (c *TuwunelClient) UserID(localpart string) string {
@@ -263,8 +372,10 @@ func (c *TuwunelClient) EnsureUser(ctx context.Context, req EnsureUserRequest) (
 		return nil, fmt.Errorf("register user %s: %s (%s)", req.Username, regResp.ErrCode, regResp.Error)
 	}
 
-	// Registration failed with M_USER_IN_USE — try login
-	token, err := c.Login(ctx, req.Username, password)
+	// Registration failed with M_USER_IN_USE — try login. loginFresh: this
+	// login doubles as an account-liveness check; a cached (possibly dead)
+	// token must not short-circuit the orphan recovery below.
+	token, err := c.loginFresh(ctx, req.Username, password)
 	if err == nil {
 		return &UserCredentials{
 			UserID:      c.UserID(req.Username),
@@ -286,6 +397,9 @@ func (c *TuwunelClient) EnsureUser(ctx context.Context, req EnsureUserRequest) (
 		return nil, fmt.Errorf("user %s exists but login failed (%v) and orphan recovery failed: %w",
 			req.Username, err, adminErr)
 	}
+	// The password just changed: any cached token is suspect — force the
+	// retry loop below to go to the homeserver.
+	c.InvalidateUserToken(userID)
 
 	const maxAttempts = 5
 	baseDelay := c.orphanRetryBaseDelay
@@ -299,7 +413,7 @@ func (c *TuwunelClient) EnsureUser(ctx context.Context, req EnsureUserRequest) (
 			return nil, ctx.Err()
 		case <-time.After(baseDelay * time.Duration(attempt)):
 		}
-		token, lastErr = c.Login(ctx, req.Username, password)
+		token, lastErr = c.loginFresh(ctx, req.Username, password)
 		if lastErr == nil {
 			return &UserCredentials{
 				UserID:      userID,
@@ -314,6 +428,22 @@ func (c *TuwunelClient) EnsureUser(ctx context.Context, req EnsureUserRequest) (
 }
 
 func (c *TuwunelClient) Login(ctx context.Context, username, password string) (string, error) {
+	// Cache hit: the token was obtained by a previous successful login for
+	// this user and is still within the TTL. No HTTP call is issued.
+	userID := c.UserID(username)
+	if token, ok := c.cachedLoginToken(userID); ok {
+		return token, nil
+	}
+	return c.loginFresh(ctx, username, password)
+}
+
+// loginFresh always goes to the homeserver and stores the result in the
+// cache. Callers whose login doubles as an account-liveness check (the
+// EnsureUser orphan-recovery path) must use it directly: a cached token
+// may be dead (account deactivated out-of-band) and must not short-
+// circuit the recovery flow.
+func (c *TuwunelClient) loginFresh(ctx context.Context, username, password string) (string, error) {
+	userID := c.UserID(username)
 	body := map[string]interface{}{
 		"type": "m.login.password",
 		"identifier": map[string]string{
@@ -337,6 +467,7 @@ func (c *TuwunelClient) Login(ctx context.Context, username, password string) (s
 	if resp.AccessToken == "" {
 		return "", fmt.Errorf("login %s: empty access token", username)
 	}
+	c.storeLoginToken(userID, resp.AccessToken)
 	return resp.AccessToken, nil
 }
 
@@ -375,10 +506,12 @@ func (c *TuwunelClient) EnsureAppServiceUser(ctx context.Context, username strin
 		}, nil
 	}
 
-	// User already exists → fall back to AS login
+	// User already exists → fall back to AS login. loginAppServiceFresh:
+	// this login doubles as an account-liveness check; a cached (possibly
+	// dead) token must not short-circuit deactivation handling.
 	if regResp.ErrCode == "M_USER_IN_USE" {
 		logger.Info("Matrix account already exists; falling back to AppService login", "httpStatus", statusCode)
-		token, loginErr := c.LoginAppServiceUser(ctx, username)
+		token, loginErr := c.loginAppServiceFresh(ctx, username)
 		if loginErr != nil {
 			if errors.Is(loginErr, ErrAppServiceNotReady) {
 				logger.Info("Matrix AppService token not active yet during login fallback; will retry")
@@ -413,6 +546,18 @@ func (c *TuwunelClient) EnsureAppServiceUser(ctx context.Context, username strin
 // Service login flow. The as_token authenticates the request; no user password
 // is needed.
 func (c *TuwunelClient) LoginAppServiceUser(ctx context.Context, username string) (string, error) {
+	// Cache hit: same TTL semantics as the password Login — no HTTP call.
+	userID := c.UserID(username)
+	if token, ok := c.cachedLoginToken(userID); ok {
+		return token, nil
+	}
+	return c.loginAppServiceFresh(ctx, username)
+}
+
+// loginAppServiceFresh is the AppService variant of loginFresh (see its
+// doc for why liveness-checking callers must bypass the cache).
+func (c *TuwunelClient) loginAppServiceFresh(ctx context.Context, username string) (string, error) {
+	userID := c.UserID(username)
 	body := map[string]interface{}{
 		"type": "m.login.application_service",
 		"identifier": map[string]string{
@@ -441,6 +586,7 @@ func (c *TuwunelClient) LoginAppServiceUser(ctx context.Context, username string
 	if resp.AccessToken == "" {
 		return "", fmt.Errorf("AS login %s: empty access token", username)
 	}
+	c.storeLoginToken(userID, resp.AccessToken)
 	return resp.AccessToken, nil
 }
 
@@ -449,7 +595,14 @@ func (c *TuwunelClient) LoginAppServiceUser(ctx context.Context, username string
 // so they can still log in via Element with username/password.
 func (c *TuwunelClient) SetPasswordAsAdmin(ctx context.Context, userID, password string) error {
 	cmd := fmt.Sprintf("!admin users reset-password %s %s", userID, password)
-	return c.AdminCommand(ctx, cmd)
+	if err := c.AdminCommand(ctx, cmd); err != nil {
+		return err
+	}
+	// A password reset may invalidate the user's existing access tokens
+	// (see the provisioner's "clear cached AS token" convention): drop any
+	// cached one so the next Login goes to the homeserver.
+	c.InvalidateUserToken(userID)
+	return nil
 }
 
 // doJSONWithASToken performs an HTTP request authenticated with the AppService
@@ -747,10 +900,46 @@ func (c *TuwunelClient) SetRoomState(ctx context.Context, roomID, eventType, sta
 		return fmt.Errorf("set room state %s %s: %w", roomID, eventType, err)
 	}
 	if statusCode != http.StatusOK && statusCode != http.StatusCreated {
-		return fmt.Errorf("set room state %s %s: HTTP %d: %s",
-			roomID, eventType, statusCode, truncate(respBody, 500))
+		return fmt.Errorf("set room state %s %s: %w",
+			roomID, eventType, apiErrorFromBody(statusCode, respBody))
 	}
 	return nil
+}
+
+func (c *TuwunelClient) GetRoomState(ctx context.Context, roomID, eventType, stateKey, userToken string) (map[string]interface{}, error) {
+	token := userToken
+	if token == "" {
+		var err error
+		token, err = c.ensureAdminToken(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("get room state %s %s: %w", roomID, eventType, err)
+		}
+	}
+	encodedRoom := encodeRoomID(roomID)
+	// Always include the state-key segment (trailing slash when the key is
+	// empty) to match SetRoomState — some strict homeservers reject the
+	// segment-less form for empty-key events.
+	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/state/%s/%s",
+		encodedRoom, url.PathEscape(eventType), url.PathEscape(stateKey))
+	statusCode, respBody, err := c.doJSON(ctx, http.MethodGet, path, token, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("get room state %s %s: %w", roomID, eventType, err)
+	}
+	if statusCode == http.StatusNotFound {
+		return nil, nil // state event never set on this room
+	}
+	if statusCode != http.StatusOK {
+		return nil, fmt.Errorf("get room state %s %s: %w",
+			roomID, eventType, apiErrorFromBody(statusCode, respBody))
+	}
+	// The state endpoint returns the state CONTENT object directly
+	// (e.g. {"users":{...},"ban":50}), not an event envelope — decode
+	// the wire response as-is.
+	var content map[string]interface{}
+	if err := json.Unmarshal(respBody, &content); err != nil {
+		return nil, fmt.Errorf("get room state %s %s: decode: %w", roomID, eventType, err)
+	}
+	return content, nil
 }
 
 func (c *TuwunelClient) JoinRoom(ctx context.Context, roomID, userToken string) error {
@@ -784,7 +973,11 @@ func (c *TuwunelClient) LeaveRoom(ctx context.Context, roomID, userToken string)
 		return fmt.Errorf("leave room %s: %w", roomID, err)
 	}
 	if statusCode != http.StatusOK && statusCode != http.StatusCreated {
-		return fmt.Errorf("leave room %s: HTTP %d: %s", roomID, statusCode, truncate(respBody, 500))
+		// Idempotent: the user is not (or no longer) in the room.
+		if statusCode == http.StatusNotFound {
+			return nil
+		}
+		return fmt.Errorf("leave room %s: %w", roomID, apiErrorFromBody(statusCode, respBody))
 	}
 	return nil
 }
@@ -1006,19 +1199,28 @@ func (c *TuwunelClient) KickFromRoomWithToken(ctx context.Context, roomID, userI
 	if statusCode == http.StatusOK || statusCode == http.StatusCreated {
 		return nil
 	}
-	// Idempotent: user not in the room (or already left).
+	// Idempotent: target not in the room (or already left). Some servers
+	// answer this with a 403 message instead of a 404.
 	if statusCode == http.StatusNotFound {
 		return nil
 	}
 	if statusCode == http.StatusForbidden && resp.ErrCode == "M_FORBIDDEN" {
 		lower := strings.ToLower(resp.Error)
-		if strings.Contains(lower, "not in") || strings.Contains(lower, "not a member") ||
-			strings.Contains(lower, "cannot kick") {
+		if strings.Contains(lower, "not in") || strings.Contains(lower, "not a member") {
 			return nil
 		}
 	}
-	return fmt.Errorf("kick %s from %s: HTTP %d %s %s: %s",
-		userID, roomID, statusCode, resp.ErrCode, resp.Error, truncate(respBody, 500))
+	// Any other 403 is an authorization failure and is NEVER an idempotent
+	// success: the kicker is not a member of the room, or the homeserver
+	// rejected the kick because the target's power level is not strictly
+	// below the kicker's (spec room-auth rule: a kick requires the target's
+	// level to be less than the sender's). Silently returning nil here is
+	// what used to make equal-power kicks ("cannot kick ...") look
+	// successful — the caller then dropped the room from status while the
+	// user stayed in it. Callers must fall back (self-leave with the
+	// target's own token, or the admin-bot force-leave).
+	return fmt.Errorf("kick %s from %s: %w",
+		userID, roomID, apiErrorFromBody(statusCode, respBody))
 }
 
 // ListJoinedRooms returns the room IDs joined by the user identified by

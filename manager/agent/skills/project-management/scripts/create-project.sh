@@ -14,18 +14,20 @@ source /opt/agentteams/scripts/lib/agentteams-env.sh
 PROJECT_ID=""
 PROJECT_TITLE=""
 WORKERS_CSV=""
+GRANT_ADMIN_CSV=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --id)      PROJECT_ID="$2"; shift 2 ;;
-        --title)   PROJECT_TITLE="$2"; shift 2 ;;
-        --workers) WORKERS_CSV="$2"; shift 2 ;;
+        --id)          PROJECT_ID="$2"; shift 2 ;;
+        --title)       PROJECT_TITLE="$2"; shift 2 ;;
+        --workers)     WORKERS_CSV="$2"; shift 2 ;;
+        --grant-admin) GRANT_ADMIN_CSV="$2"; shift 2 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
 
 if [ -z "${PROJECT_ID}" ] || [ -z "${PROJECT_TITLE}" ] || [ -z "${WORKERS_CSV}" ]; then
-    echo "Usage: create-project.sh --id <PROJECT_ID> --title <TITLE> --workers <w1,w2,...>"
+    echo "Usage: create-project.sh --id <PROJECT_ID> --title <TITLE> --workers <w1,w2,...> [--grant-admin <u1,u2,...>]"
     exit 1
 fi
 
@@ -107,6 +109,7 @@ log "Step 2: Creating Matrix project room..."
 # Build invite list and worker power level overrides (all workers → level 0)
 INVITE_LIST="[\"@${ADMIN_USER}:${MATRIX_DOMAIN}\""
 WORKER_POWER_LEVELS=""
+GRANT_ADMIN_LEVELS=""
 IFS=',' read -ra WORKER_ARR <<< "${WORKERS_CSV}"
 for worker in "${WORKER_ARR[@]}"; do
     worker=$(echo "${worker}" | tr -d ' ')
@@ -114,6 +117,25 @@ for worker in "${WORKER_ARR[@]}"; do
     INVITE_LIST="${INVITE_LIST},\"@${worker}:${MATRIX_DOMAIN}\""
     WORKER_POWER_LEVELS="${WORKER_POWER_LEVELS},\"@${worker}:${MATRIX_DOMAIN}\": 0"
 done
+# --grant-admin: extra users that should co-own the room (level 100) — e.g.
+# human operators who otherwise join at the implicit level 0 and 403 on room
+# operations (rename / invite). Accepts local parts or full Matrix IDs.
+if [ -n "${GRANT_ADMIN_CSV}" ]; then
+    IFS=',' read -ra GRANT_ARR <<< "${GRANT_ADMIN_CSV}"
+    for ga in "${GRANT_ARR[@]}"; do
+        ga=$(echo "${ga}" | tr -d ' ')
+        [ -z "${ga}" ] && continue
+        case "${ga}" in
+            @*:*) grant_id="${ga}" ;;
+            @*)   grant_id="@${ga#@}:${MATRIX_DOMAIN}" ;;
+            *)    grant_id="@${ga}:${MATRIX_DOMAIN}" ;;
+        esac
+        # The grant only takes effect once the user is in the room — invite
+        # them at creation time (a grant without membership is a no-op).
+        INVITE_LIST="${INVITE_LIST},\"${grant_id}\""
+        GRANT_ADMIN_LEVELS="${GRANT_ADMIN_LEVELS},\"${grant_id}\": 100"
+    done
+fi
 INVITE_LIST="${INVITE_LIST}]"
 
 MANAGER_MATRIX_ID="@manager:${MATRIX_DOMAIN}"
@@ -129,7 +151,7 @@ ROOM_RESP=$(curl -sf -X POST ${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/createRo
         "power_level_content_override": {
             "users": {
                 "'"${MANAGER_MATRIX_ID}"'": 100,
-                "'"${ADMIN_MATRIX_ID}"'": 100'"${WORKER_POWER_LEVELS}"'
+                "'"${ADMIN_MATRIX_ID}"'": 100'"${WORKER_POWER_LEVELS}"''"${GRANT_ADMIN_LEVELS}"'
             }
         }
     }' 2>/dev/null) || _fail "Failed to create Matrix project room"

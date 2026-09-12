@@ -183,6 +183,28 @@ func (p *Provisioner) KickFromRoom(ctx context.Context, roomID, userID, reason s
 	return p.matrix.KickFromRoom(ctx, roomID, userID, reason)
 }
 
+// KickFromRoomAs is KickFromRoom with an explicit kicker actor ("" =
+// homeserver-admin identity). Authorization failures (kicker not a member
+// of the room, or the target's power level not strictly below the kicker's)
+// are returned as errors for the caller to fall back on.
+func (p *Provisioner) KickFromRoomAs(ctx context.Context, roomID, userID, reason, actorToken string) error {
+	if actorToken == "" {
+		return p.matrix.KickFromRoom(ctx, roomID, userID, reason)
+	}
+	return p.matrix.KickFromRoomWithToken(ctx, roomID, userID, reason, actorToken)
+}
+
+// LeaveRoomAs makes the user identified by userToken leave roomID
+// (self-leave). Always authorized for a joined/invited member, which makes
+// it the fallback when an equal-power kick is rejected by the homeserver.
+// Idempotent: nil when the user is not a member.
+func (p *Provisioner) LeaveRoomAs(ctx context.Context, roomID, userToken string) error {
+	if userToken == "" {
+		return fmt.Errorf("leave room %s: empty user token", roomID)
+	}
+	return p.matrix.LeaveRoom(ctx, roomID, userToken)
+}
+
 // ForceLeaveRoom asks the Tuwunel admin bot to force-leave userID out of
 // roomID. Used by the Human delete flow where the controller no longer
 // holds a valid user token (password may be stale) and must rely on the
@@ -199,5 +221,12 @@ func (p *Provisioner) ForceLeaveRoom(ctx context.Context, userID, roomID string)
 func (p *Provisioner) DeactivateHumanUser(ctx context.Context, userID string) error {
 	cmd := fmt.Sprintf("!admin users deactivate %s", userID)
 	log.FromContext(ctx).Info("sending tuwunel human deactivate admin command", "user", userID, "command", cmd)
-	return p.matrix.AdminCommand(ctx, cmd)
+	if err := p.matrix.AdminCommand(ctx, cmd); err != nil {
+		return err
+	}
+	// Deactivation kills the account's access tokens: drop any cached one
+	// so a later re-provisioning of the same username re-logins fresh
+	// (and hits orphan recovery if the account is gone).
+	p.matrix.InvalidateUserToken(userID)
+	return nil
 }

@@ -35,6 +35,18 @@ bash /opt/agentteams/agent/skills/project-management/scripts/create-project.sh \
 
 The script handles: directory creation, meta.json, placeholder plan.md, Matrix room creation (with admin + all workers invited), Manager groupAllowFrom update, and MinIO sync.
 
+**Room administration for human operators (`--grant-admin`).** Human users who are not the default admin join the project room at the implicit power level 0 and get 403 on room operations (rename, inviting a colleague). When the project involves additional human operators who must be able to administer the room, pass their Matrix local parts (or full Matrix IDs):
+
+```bash
+bash /opt/agentteams/agent/skills/project-management/scripts/create-project.sh \
+  --id "${PROJECT_ID}" \
+  --title "<title>" \
+  --workers "worker1,worker2,worker3" \
+  --grant-admin "sunzong"
+```
+
+Each user listed in `--grant-admin` co-owns the project room (power level 100) from creation. Only pass humans who genuinely need room administration; workers are always created at level 0.
+
 After the script, **fill in the full plan.md** with phases, tasks, and assignments (see `references/plan-format.md` for format).
 
 ## Step 1c: Present plan (and confirm)

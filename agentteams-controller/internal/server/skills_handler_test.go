@@ -1,8 +1,13 @@
 package server
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io/fs"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +21,7 @@ import (
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/skillscan"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -45,7 +51,7 @@ func writeSkill(t *testing.T, dir, name, description string) {
 //	agents/global/skills/file-sync/SKILL.md   (collides with builtin → builtin wins)
 //	agents/global/skills/notes.txt            (bare file → skipped)
 //	agents/global/skills/.hidden/SKILL.md     (dot-entry → skipped)
-func newSkillsRig(t *testing.T) (*SkillsHandler, *mcLikeOSS, string) {
+func newSkillsRig(t *testing.T, scanner skillscan.SkillScanner) (*SkillsHandler, *mcLikeOSS, string) {
 	t.Helper()
 	base := t.TempDir()
 	writeSkill(t, filepath.Join(base, "worker-agent", "skills"), "file-sync", "Sync files with centralized storage.")
@@ -87,7 +93,7 @@ func newSkillsRig(t *testing.T) (*SkillsHandler, *mcLikeOSS, string) {
 
 	fakeOSS := &mcLikeOSS{Memory: store}
 	dir := filepath.Join(base, "worker-agent")
-	return NewSkillsHandler(dir, fakeOSS, k8s, "default"), fakeOSS, base
+	return NewSkillsHandler(dir, fakeOSS, k8s, "default", scanner), fakeOSS, base
 }
 
 func getSkills(t *testing.T, h *SkillsHandler) *httptest.ResponseRecorder {
@@ -140,7 +146,7 @@ var (
 )
 
 func TestSkills_TeamScopeAdmin(t *testing.T) {
-	h, _, _ := newSkillsRig(t)
+	h, _, _ := newSkillsRig(t, nil)
 
 	// Own (any) team: builtin + team layer, no shared half.
 	rec := getSkillsAs(t, h, skAdmin, "?team=market-team")
@@ -170,7 +176,7 @@ func TestSkills_TeamScopeAdmin(t *testing.T) {
 }
 
 func TestSkills_TeamScopeL2(t *testing.T) {
-	h, _, _ := newSkillsRig(t)
+	h, _, _ := newSkillsRig(t, nil)
 
 	// Own team: 200 with the team layer.
 	skills := decodeSkills(t, getSkillsAs(t, h, skL2, "?team=market-team"))
@@ -198,7 +204,7 @@ func TestSkills_TeamScopeL2(t *testing.T) {
 }
 
 func TestSkills_TeamScopeLeader(t *testing.T) {
-	h, _, _ := newSkillsRig(t)
+	h, _, _ := newSkillsRig(t, nil)
 
 	skills := decodeSkills(t, getSkillsAs(t, h, skLeader, "?team=market-team"))
 	if s := skillByName(t, skills, "team-kb"); s.Source != "team" {
@@ -210,7 +216,7 @@ func TestSkills_TeamScopeLeader(t *testing.T) {
 }
 
 func TestSkills_TeamScopeForbiddenRoles(t *testing.T) {
-	h, _, _ := newSkillsRig(t)
+	h, _, _ := newSkillsRig(t, nil)
 	// Manager does not participate in team-skill paths; worker never.
 	if rec := getSkillsAs(t, h, skManager, "?team=market-team"); rec.Code != http.StatusForbidden {
 		t.Errorf("manager: status = %d, want 403", rec.Code)
@@ -220,8 +226,358 @@ func TestSkills_TeamScopeForbiddenRoles(t *testing.T) {
 	}
 }
 
+// verdictScanner is a fake upload-scan backend for handler tests.
+type verdictScanner struct {
+	verdict skillscan.SkillScanVerdict
+	err     error
+}
+
+func (v verdictScanner) ScanSkill(_ context.Context, _ string, _ map[string][]byte) (skillscan.SkillScanVerdict, error) {
+	return v.verdict, v.err
+}
+
+// skillZip renders an in-memory skill zip: one top-level directory named
+// `name` holding SKILL.md (frontmatter name = name) plus the extra files.
+func skillZip(name string, extra map[string]string) []byte {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, _ := zw.Create(name + "/SKILL.md")
+	_, _ = w.Write([]byte("---\nname: " + name + "\n---\n"))
+	for path, content := range extra {
+		w, _ := zw.Create(name + "/" + path)
+		_, _ = w.Write([]byte(content))
+	}
+	_ = zw.Close()
+	return buf.Bytes()
+}
+
+func postSkill(t *testing.T, h *SkillsHandler, caller *authpkg.CallerIdentity, scope, team string, zipData []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("scope", scope)
+	if team != "" {
+		_ = mw.WriteField("team", team)
+	}
+	fw, _ := mw.CreateFormFile("file", "skill.zip")
+	_, _ = fw.Write(zipData)
+	_ = mw.Close()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/skills", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req = withCaller(req, caller)
+	rec := httptest.NewRecorder()
+	h.UploadSkill(rec, req)
+	return rec
+}
+
+var passScanner = verdictScanner{verdict: skillscan.SkillScanVerdict{Status: "pass"}}
+
+func TestSkills_UploadAdmin200(t *testing.T) {
+	h, store, _ := newSkillsRig(t, passScanner)
+
+	rec := postSkill(t, h, skAdmin, "team", "market-team", skillZip("team-tool", map[string]string{"scripts/run.sh": "#!/bin/sh\necho hi\n"}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var resp SkillUploadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Team != "market-team" || resp.Name != "team-tool" || resp.Scope != "team" || resp.Files != 2 {
+		t.Errorf("response = %+v", resp)
+	}
+	if resp.Scan == nil || resp.Scan.Status != "pass" {
+		t.Errorf("scan = %+v, want pass", resp.Scan)
+	}
+	// The files land under the team layer, readable back through the fake.
+	data, err := store.Memory.GetObject(context.Background(), "teams/market-team/skills/team-tool/SKILL.md")
+	if err != nil {
+		t.Fatalf("SKILL.md not stored: %v", err)
+	}
+	if !strings.Contains(string(data), "name: team-tool") {
+		t.Errorf("SKILL.md = %q", data)
+	}
+	if err := store.Memory.Stat(context.Background(), "teams/market-team/skills/team-tool/scripts/run.sh"); err != nil {
+		t.Errorf("scripts/run.sh not stored: %v", err)
+	}
+	// The new skill appears in the team-scope catalog.
+	skills := decodeSkills(t, getSkillsAs(t, h, skAdmin, "?team=market-team"))
+	if s := skillByName(t, skills, "team-tool"); s.Source != "team" {
+		t.Errorf("team-tool source = %q, want team", s.Source)
+	}
+}
+
+func TestSkills_UploadDeploymentScope(t *testing.T) {
+	h, store, _ := newSkillsRig(t, passScanner)
+	zip := skillZip("global-tool", nil)
+
+	// admin scope=deployment → 200, object lands under agents/global/skills/.
+	rec := postSkill(t, h, skAdmin, "deployment", "", zip)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin deployment: status = %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp SkillUploadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Scope != "deployment" || resp.Team != "" || resp.Name != "global-tool" {
+		t.Errorf("response = %+v", resp)
+	}
+	if err := store.Memory.Stat(context.Background(), globalSkillsPrefix+"global-tool/SKILL.md"); err != nil {
+		t.Errorf("global-tool not under the deployment prefix: %v", err)
+	}
+	// It shows up in the no-param (L1) catalog as source "shared".
+	skills := decodeSkills(t, getSkills(t, h))
+	if s := skillByName(t, skills, "global-tool"); s.Source != "shared" {
+		t.Errorf("global-tool source = %q, want shared", s.Source)
+	}
+
+	// L2 scope=deployment → 403 (deployment-wide writes are admin only).
+	if rec := postSkill(t, h, skL2, "deployment", "", zip); rec.Code != http.StatusForbidden {
+		t.Errorf("L2 deployment: status = %d, want 403", rec.Code)
+	}
+}
+
+func TestSkills_UploadScopeMatrix(t *testing.T) {
+	h, _, _ := newSkillsRig(t, passScanner)
+	zip := skillZip("team-tool", nil)
+
+	// L2 own team: 200.
+	if rec := postSkill(t, h, skL2, "team", "market-team", zip); rec.Code != http.StatusOK {
+		t.Errorf("L2 own team: status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	// L2 cross-team: 404 (indistinguishable from unknown, W8 anti-probing).
+	if rec := postSkill(t, h, skL2, "team", "biz-team", zip); rec.Code != http.StatusNotFound {
+		t.Errorf("L2 cross-team: status = %d, want 404", rec.Code)
+	}
+	if rec := postSkill(t, h, skL2, "team", "no-such", zip); rec.Code != http.StatusNotFound {
+		t.Errorf("L2 unknown team: status = %d, want 404", rec.Code)
+	}
+	// Leader: 403 — leaders read the catalog (assign surface) but never
+	// publish (pinned at the authorizer AND re-checked in the handler).
+	if rec := postSkill(t, h, skLeader, "team", "market-team", zip); rec.Code != http.StatusForbidden {
+		t.Errorf("leader: status = %d, want 403", rec.Code)
+	}
+	// Manager / worker: 403 (authorizer denies; the handler re-checks).
+	if rec := postSkill(t, h, skManager, "team", "market-team", zip); rec.Code != http.StatusForbidden {
+		t.Errorf("manager: status = %d, want 403", rec.Code)
+	}
+	if rec := postSkill(t, h, skWorker, "team", "market-team", zip); rec.Code != http.StatusForbidden {
+		t.Errorf("worker: status = %d, want 403", rec.Code)
+	}
+}
+
+func TestSkills_UploadStructureValidation(t *testing.T) {
+	h, _, _ := newSkillsRig(t, passScanner)
+
+	// A zip missing SKILL.md (only a readme in the root dir).
+	noSkillMD := func() []byte {
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		w, _ := zw.Create("team-tool/readme.md")
+		_, _ = w.Write([]byte("x"))
+		_ = zw.Close()
+		return buf.Bytes()
+	}
+	// Frontmatter name != directory name.
+	nameMismatch := func() []byte {
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		w, _ := zw.Create("team-tool/SKILL.md")
+		_, _ = w.Write([]byte("---\nname: other-name\n---\n"))
+		_ = zw.Close()
+		return buf.Bytes()
+	}
+	// No frontmatter at all.
+	noFrontmatter := func() []byte {
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		w, _ := zw.Create("team-tool/SKILL.md")
+		_, _ = w.Write([]byte("# just a heading\n"))
+		_ = zw.Close()
+		return buf.Bytes()
+	}
+	// Two top-level directories.
+	twoRoots := func() []byte {
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		w, _ := zw.Create("team-tool/SKILL.md")
+		_, _ = w.Write([]byte("---\nname: team-tool\n---\n"))
+		w, _ = zw.Create("other/SKILL.md")
+		_, _ = w.Write([]byte("---\nname: other\n---\n"))
+		_ = zw.Close()
+		return buf.Bytes()
+	}
+	// Zip-slip: a ../ entry.
+	slip := func() []byte {
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		w, _ := zw.Create("team-tool/SKILL.md")
+		_, _ = w.Write([]byte("---\nname: team-tool\n---\n"))
+		w, _ = zw.Create("team-tool/../evil.md")
+		_, _ = w.Write([]byte("y"))
+		_ = zw.Close()
+		return buf.Bytes()
+	}
+	// A symlink entry.
+	symlink := func() []byte {
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		w, _ := zw.Create("team-tool/SKILL.md")
+		_, _ = w.Write([]byte("---\nname: team-tool\n---\n"))
+		hdr := &zip.FileHeader{Name: "team-tool/link", Method: zip.Deflate}
+		hdr.SetMode(fs.ModeSymlink | 0o755)
+		lw, _ := zw.CreateHeader(hdr)
+		_, _ = lw.Write([]byte("SKILL.md")) // link target payload
+		_ = zw.Close()
+		return buf.Bytes()
+	}
+	// A file at the zip root (no top-level directory).
+	bareRoot := func() []byte {
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		w, _ := zw.Create("SKILL.md")
+		_, _ = w.Write([]byte("---\nname: team-tool\n---\n"))
+		_ = zw.Close()
+		return buf.Bytes()
+	}
+	// Bad directory name (uppercase).
+	badName := func() []byte {
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		w, _ := zw.Create("Team_Tool/SKILL.md")
+		_, _ = w.Write([]byte("---\nname: Team_Tool\n---\n"))
+		_ = zw.Close()
+		return buf.Bytes()
+	}
+
+	cases := []struct {
+		name string
+		zip  []byte
+	}{
+		{"missing SKILL.md", noSkillMD()},
+		{"frontmatter name mismatch", nameMismatch()},
+		{"no frontmatter", noFrontmatter()},
+		{"two top-level dirs", twoRoots()},
+		{"zip-slip dotdot", slip()},
+		{"symlink entry", symlink()},
+		{"bare root file", bareRoot()},
+		{"bad dir name uppercase", badName()},
+	}
+	for _, tc := range cases {
+		if rec := postSkill(t, h, skAdmin, "team", "market-team", tc.zip); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400 (%s)", tc.name, rec.Code, rec.Body.String())
+		}
+	}
+
+	// scope=team without the team field.
+	if rec := postSkill(t, h, skAdmin, "team", "", skillZip("team-tool", nil)); rec.Code != http.StatusBadRequest {
+		t.Errorf("missing team: status = %d, want 400", rec.Code)
+	}
+	// Unknown scope.
+	if rec := postSkill(t, h, skAdmin, "bogus", "", skillZip("team-tool", nil)); rec.Code != http.StatusBadRequest {
+		t.Errorf("unknown scope: status = %d, want 400", rec.Code)
+	}
+}
+
+func TestSkills_UploadZipBombRejected(t *testing.T) {
+	h, _, _ := newSkillsRig(t, passScanner)
+	// A tiny zip that decompresses past the 64 MB limit.
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, _ := zw.Create("team-tool/SKILL.md")
+	_, _ = w.Write(bytes.Repeat([]byte("a"), maxSkillUploadBytes+1))
+	_ = zw.Close()
+	if rec := postSkill(t, h, skAdmin, "team", "market-team", buf.Bytes()); rec.Code != http.StatusBadRequest {
+		t.Errorf("zip bomb: status = %d, want 400", rec.Code)
+	}
+}
+
+func TestSkills_UploadScanGate(t *testing.T) {
+	hBlock, storeBlock, _ := newSkillsRig(t, verdictScanner{verdict: skillscan.SkillScanVerdict{
+		Status:   "block",
+		Findings: []skillscan.SkillUploadFinding{{RuleID: "malicious.exec", Severity: "CRITICAL", File: "scripts/run.sh", Title: "exec call"}},
+	}})
+	hFail, storeFail, _ := newSkillsRig(t, verdictScanner{err: errors.New("exec timeout")})
+	hWarn, _, _ := newSkillsRig(t, verdictScanner{verdict: skillscan.SkillScanVerdict{
+		Status:   "warn",
+		Findings: []skillscan.SkillUploadFinding{{RuleID: "style.lint", Severity: "MEDIUM", Title: "style"}},
+	}})
+	zip := skillZip("team-tool", nil)
+
+	// block → 422, nothing written.
+	rec := postSkill(t, hBlock, skAdmin, "team", "market-team", zip)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("block: status = %d, want 422: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "malicious.exec") {
+		t.Errorf("block response should name the finding: %s", rec.Body.String())
+	}
+	if err := storeBlock.Memory.Stat(context.Background(), "teams/market-team/skills/team-tool/SKILL.md"); err == nil {
+		t.Error("blocked upload wrote files")
+	}
+
+	// unavailable → best-effort: 200 + scan.status="skipped" + files written
+	// (the mandatory gate is scan ② at assign time).
+	rec = postSkill(t, hFail, skAdmin, "team", "market-team", zip)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unavailable: status = %d, want 200 (best-effort): %s", rec.Code, rec.Body.String())
+	}
+	var resp SkillUploadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Scan == nil || resp.Scan.Status != "skipped" {
+		t.Errorf("unavailable scan = %+v, want skipped", resp.Scan)
+	}
+	if err := storeFail.Memory.Stat(context.Background(), "teams/market-team/skills/team-tool/SKILL.md"); err != nil {
+		t.Errorf("best-effort upload did not write: %v", err)
+	}
+
+	// warn → allowed, findings surfaced.
+	rec = postSkill(t, hWarn, skAdmin, "team", "market-team", zip)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("warn: status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Scan == nil || resp.Scan.Status != "warn" || len(resp.Scan.Findings) != 1 {
+		t.Errorf("warn scan not surfaced: %+v", resp.Scan)
+	}
+
+	// nil scanner → 200 + skipped (best-effort, nothing to ask).
+	_, _, base := newSkillsRig(t, nil)
+	k8s := fake.NewClientBuilder().
+		WithScheme(newServerTestScheme(t)).
+		WithRuntimeObjects(&v1beta1.Team{ObjectMeta: metav1.ObjectMeta{Name: "market-team", Namespace: "default"}}).
+		Build()
+	hNil := NewSkillsHandler(filepath.Join(base, "worker-agent"), &mcLikeOSS{Memory: ossfake.NewMemory()}, k8s, "default", nil)
+	if rec := postSkill(t, hNil, skAdmin, "team", "market-team", zip); rec.Code != http.StatusOK {
+		t.Errorf("nil scanner: status = %d, want 200 (best-effort)", rec.Code)
+	}
+}
+
+func TestSkills_UploadReplaceExactCopy(t *testing.T) {
+	h, store, _ := newSkillsRig(t, passScanner)
+
+	if rec := postSkill(t, h, skAdmin, "team", "market-team", skillZip("team-tool", map[string]string{"stale/old.sh": "stale"})); rec.Code != http.StatusOK {
+		t.Fatalf("v1: %d %s", rec.Code, rec.Body.String())
+	}
+	// Re-upload without stale/old.sh: exact-copy semantics delete it.
+	if rec := postSkill(t, h, skAdmin, "team", "market-team", skillZip("team-tool", nil)); rec.Code != http.StatusOK {
+		t.Fatalf("v2: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := store.Memory.Stat(context.Background(), "teams/market-team/skills/team-tool/SKILL.md"); err != nil {
+		t.Errorf("SKILL.md missing after re-upload: %v", err)
+	}
+	if err := store.Memory.Stat(context.Background(), "teams/market-team/skills/team-tool/stale/old.sh"); err == nil {
+		t.Error("stale file survived the re-upload (Remove not applied)")
+	}
+}
+
 func TestSkills_TeamScopeListingFailureDegrades(t *testing.T) {
-	h, fakeOSS, _ := newSkillsRig(t)
+	h, fakeOSS, _ := newSkillsRig(t, nil)
 	fakeOSS.failList = true
 
 	// Storage down: the team half degrades to an empty set; the builtin
@@ -240,7 +596,7 @@ func TestSkills_TeamScopeListingFailureDegrades(t *testing.T) {
 // derived from service.BuiltinAgentDir) and the shared half (directory
 // entries under agents/global/skills/ only).
 func TestSkillsCatalogGolden(t *testing.T) {
-	h, _, _ := newSkillsRig(t)
+	h, _, _ := newSkillsRig(t, nil)
 	skills := decodeSkills(t, getSkills(t, h))
 
 	wantNames := []string{"file-sync", "find-skills", "leader-briefing", "shared-kb", "task-progress"}
@@ -301,7 +657,7 @@ func TestSkillsCatalogGolden(t *testing.T) {
 // derivation to service.BuiltinAgentDir: for every (role, runtime) pair the
 // catalog must credit exactly the template the Deployer would seed from.
 func TestSkillsCatalogMappingConsistency(t *testing.T) {
-	h, _, _ := newSkillsRig(t)
+	h, _, _ := newSkillsRig(t, nil)
 	templates := h.builtinTemplates()
 	byRuntime := map[string]map[string]bool{} // runtime → set of template dirs
 	for _, tmpl := range templates {
@@ -327,7 +683,7 @@ func TestSkillsCatalogMappingConsistency(t *testing.T) {
 // identity/availability only — no content, credential, or registry fields
 // can sneak in.
 func TestSkillsCatalogFieldDiscipline(t *testing.T) {
-	h, _, _ := newSkillsRig(t)
+	h, _, _ := newSkillsRig(t, nil)
 	rec := getSkills(t, h)
 	var payload struct {
 		Skills []map[string]any `json:"skills"`
@@ -355,7 +711,7 @@ func TestSkillsCatalogSharedDegradesOnOSSFailure(t *testing.T) {
 	base := t.TempDir()
 	writeSkill(t, filepath.Join(base, "worker-agent", "skills"), "file-sync", "Sync files.")
 	failing := &mcLikeOSS{Memory: ossfake.NewMemory(), failList: true}
-	h := NewSkillsHandler(filepath.Join(base, "worker-agent"), failing, nil, "default")
+	h := NewSkillsHandler(filepath.Join(base, "worker-agent"), failing, nil, "default", nil)
 
 	skills := decodeSkills(t, getSkills(t, h))
 	if len(skills) != 1 || skills[0].Name != "file-sync" || skills[0].Source != "builtin" {
@@ -370,7 +726,7 @@ func TestSkillsCatalogNoTemplateDir(t *testing.T) {
 	if err := store.PutObject(context.Background(), globalSkillsPrefix+"shared-kb/SKILL.md", []byte("x")); err != nil {
 		t.Fatal(err)
 	}
-	h := NewSkillsHandler("", &mcLikeOSS{Memory: store}, nil, "default")
+	h := NewSkillsHandler("", &mcLikeOSS{Memory: store}, nil, "default", nil)
 	skills := decodeSkills(t, getSkills(t, h))
 	if len(skills) != 1 || skills[0].Name != "shared-kb" || skills[0].Source != "shared" {
 		t.Fatalf("skills = %v, want shared-only [shared-kb]", skills)
@@ -396,7 +752,7 @@ func TestSkills_NonAdminNoTeam_400(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			h, _, _ := newSkillsRig(t)
+			h, _, _ := newSkillsRig(t, nil)
 			req := withCaller(httptest.NewRequest(http.MethodGet, "/api/v1/skills", nil), tc.caller)
 			rec := httptest.NewRecorder()
 			h.ListSkills(rec, req)
@@ -410,7 +766,7 @@ func TestSkills_NonAdminNoTeam_400(t *testing.T) {
 	}
 
 	t.Run("no-caller", func(t *testing.T) {
-		h, _, _ := newSkillsRig(t)
+		h, _, _ := newSkillsRig(t, nil)
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/skills", nil)
 		rec := httptest.NewRecorder()
 		h.ListSkills(rec, req)
@@ -457,7 +813,7 @@ func TestSkillsCatalogFrontmatterExtension(t *testing.T) {
 			"requires: [git, jq]\n")
 	writeSkill(t, skillRoot, "plain-skill", "Declares nothing.")
 
-	h := NewSkillsHandler(filepath.Join(base, "worker-agent"), &mcLikeOSS{Memory: ossfake.NewMemory()}, nil, "default")
+	h := NewSkillsHandler(filepath.Join(base, "worker-agent"), &mcLikeOSS{Memory: ossfake.NewMemory()}, nil, "default", nil)
 	skills := decodeSkills(t, getSkills(t, h))
 
 	full := skillByName(t, skills, "full-skill")
@@ -503,7 +859,7 @@ func TestSkillsCatalogSharedUpdatedAt(t *testing.T) {
 	if err := fakeOSS.PutObject(context.Background(), "agents/global/skills/team-report/SKILL.md", []byte("---\nname: team-report\n---\n")); err != nil {
 		t.Fatal(err)
 	}
-	h := NewSkillsHandler(filepath.Join(base, "worker-agent"), &mcLikeOSS{Memory: fakeOSS}, nil, "default")
+	h := NewSkillsHandler(filepath.Join(base, "worker-agent"), &mcLikeOSS{Memory: fakeOSS}, nil, "default", nil)
 	skills := decodeSkills(t, getSkills(t, h))
 
 	shared := skillByName(t, skills, "team-report")
@@ -531,7 +887,7 @@ func TestSkillsCatalogRequiresNamespacePrecedence(t *testing.T) {
 			"  openclaw:\n"+
 			"    requires:\n"+
 			"      mcp: [ns-mcp]\n")
-	h := NewSkillsHandler(filepath.Join(base, "worker-agent"), &mcLikeOSS{Memory: ossfake.NewMemory()}, nil, "default")
+	h := NewSkillsHandler(filepath.Join(base, "worker-agent"), &mcLikeOSS{Memory: ossfake.NewMemory()}, nil, "default", nil)
 	skills := decodeSkills(t, getSkills(t, h))
 
 	ns := skillByName(t, skills, "ns-skill")

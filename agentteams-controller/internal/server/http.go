@@ -13,6 +13,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/proxy"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/skillscan"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -30,6 +31,7 @@ type ServerDeps struct {
 	ControllerName  string               // AGENTTEAMS_CONTROLLER_NAME; empty in embedded mode
 	SocketPath      string               // Docker proxy (embedded only)
 	ContainerPrefix string               // effective worker container prefix (config.ContainerPrefix); embedded-only address resolution
+	ResourcePrefix  string               // resource name prefix ("" = agentteams-); manager container name derivation for skillscan
 	MatrixConfig    matrix.Config        // for AppService rotation endpoint
 	MatrixClient    matrix.Client        // for project intervention notifications (SendMessageAsAdmin); nil to skip
 	Provisioner     *service.Provisioner // for Matrix token refresh
@@ -138,9 +140,21 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/workers/{name}/approval", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(ah.getWorkerApproval)))
 	mux.Handle("PUT /api/v1/workers/{name}/approval", mw.RequireAuthz(authpkg.ActionWorkerApproval, "worker", nameFn)(http.HandlerFunc(ah.updateWorkerApproval)))
 
-	// --- Skill catalog (read-only: builtin skills per runtime + shared skills under agents/global/skills/) ---
-	skh := NewSkillsHandler(deps.WorkerAgentDir, deps.OSS, deps.Client, deps.Namespace)
+	// --- Skill catalog (read: builtin per runtime + shared/team layers; write: team-skill upload) ---
+	// Scan backend: the qwenpaw skill scanner runs inside the manager
+	// container (embedded/docker mode, Docker API over the mounted socket);
+	// in k8s mode v1 fails closed (uploads mark scan.status="skipped";
+	// assign-time copy refuses to run).
+	skh := NewSkillsHandler(deps.WorkerAgentDir, deps.OSS, deps.Client, deps.Namespace,
+		skillscan.New(skillscan.Config{
+			KubeMode:       deps.KubeMode,
+			Client:         deps.Client,
+			Namespace:      deps.Namespace,
+			ResourcePrefix: authpkg.ResourcePrefix(deps.ResourcePrefix),
+			SocketPath:     deps.SocketPath,
+		}))
 	mux.Handle("GET /api/v1/skills", mw.RequireAuthz(authpkg.ActionList, "skills", nil)(http.HandlerFunc(skh.ListSkills)))
+	mux.Handle("POST /api/v1/skills", mw.RequireAuthz(authpkg.ActionSkillPublish, "skills", nil)(http.HandlerFunc(skh.UploadSkill)))
 
 	// W-PR-2: human intervention + lifecycle (write endpoints). All writes go
 	// through RequireAuthz ActionUpdate + "project" so the authorizer's

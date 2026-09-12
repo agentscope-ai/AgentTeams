@@ -1,10 +1,17 @@
 package server
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -13,8 +20,10 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/skillscan"
 	"gopkg.in/yaml.v3"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // globalSkillsPrefix is the deployment-wide skill staging area maintained by
@@ -82,10 +91,11 @@ type SkillsHandler struct {
 	oss            oss.StorageClient
 	client         client.Client // Team CR existence checks for ?team= scope
 	namespace      string
+	scanner        skillscan.SkillScanner
 }
 
-func NewSkillsHandler(workerAgentDir string, o oss.StorageClient, c client.Client, namespace string) *SkillsHandler {
-	return &SkillsHandler{workerAgentDir: workerAgentDir, oss: o, client: c, namespace: namespace}
+func NewSkillsHandler(workerAgentDir string, o oss.StorageClient, c client.Client, namespace string, scanner skillscan.SkillScanner) *SkillsHandler {
+	return &SkillsHandler{workerAgentDir: workerAgentDir, oss: o, client: c, namespace: namespace, scanner: scanner}
 }
 
 // ListSkills handles GET /api/v1/skills.
@@ -103,6 +113,63 @@ func NewSkillsHandler(workerAgentDir string, o oss.StorageClient, c client.Clien
 //   - cross-team or unknown team: 404 — deliberately indistinguishable
 //     (W8 anti-probing: a 403 here would let a scoped caller probe which
 //     teams exist).
+//
+// Team-scope check errors; the status-code mapping is centralized in
+// writeTeamScopeError (403 = role not allowed, 404 = cross-team or unknown
+// — deliberately indistinguishable, W8 anti-probing, 400 = bad input).
+var (
+	errScopeForbidden = errors.New("team-scope not available for this role")
+	errScopeNotFound  = errors.New("team not found")
+	errScopeRequired  = errors.New("team required")
+)
+
+// checkTeamScope validates (caller, team) against the team-scope matrix
+// shared by the ?team= catalog and the POST /skills upload:
+//
+//	admin          → any team (Team CR existence checked)
+//	L2 human       → own teams only (Human CR accessibleTeams, by Team CR name)
+//	team leader    → own team only
+//	manager/worker → not allowed
+//
+// Cross-team and unknown teams yield the same error (404 at the boundary)
+// so a scoped caller cannot probe which teams exist.
+func (h *SkillsHandler) checkTeamScope(ctx context.Context, caller *auth.CallerIdentity, team string) error {
+	if team == "" {
+		return errScopeRequired
+	}
+	if caller == nil {
+		return errScopeForbidden
+	}
+	switch caller.Role {
+	case auth.RoleAdmin:
+	case auth.RoleHuman, auth.RoleTeamLeader:
+		if !caller.TeamMatches(team) {
+			return errScopeNotFound
+		}
+	default:
+		return errScopeForbidden
+	}
+	if h.client == nil {
+		return errScopeNotFound
+	}
+	var teamCR v1beta1.Team
+	if err := h.client.Get(ctx, client.ObjectKey{Name: team, Namespace: h.namespace}, &teamCR); err != nil {
+		return errScopeNotFound
+	}
+	return nil
+}
+
+func writeTeamScopeError(w http.ResponseWriter, err error) {
+	switch err {
+	case errScopeForbidden:
+		httputil.WriteError(w, http.StatusForbidden, "team-scope catalog is not available for this role")
+	case errScopeNotFound:
+		httputil.WriteError(w, http.StatusNotFound, "team not found")
+	default:
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+	}
+}
+
 func (h *SkillsHandler) ListSkills(w http.ResponseWriter, r *http.Request) {
 	caller := auth.CallerFromContext(r.Context())
 	team := r.URL.Query().Get("team")
@@ -114,31 +181,305 @@ func (h *SkillsHandler) ListSkills(w http.ResponseWriter, r *http.Request) {
 		h.writeCatalog(w, r, nil)
 		return
 	}
-
-	switch caller.Role {
-	case auth.RoleAdmin:
-		// Any team; existence checked below.
-	case auth.RoleHuman, auth.RoleTeamLeader:
-		if !caller.TeamMatches(team) {
-			httputil.WriteError(w, http.StatusNotFound, "team not found")
-			return
-		}
-	default: // manager, worker, unknown role
-		httputil.WriteError(w, http.StatusForbidden, "team-scope catalog is not available for this role")
-		return
-	}
-	if caller == nil {
-		httputil.WriteError(w, http.StatusBadRequest, "team scope required")
-		return
-	}
-
-	var teamCR v1beta1.Team
-	if err := h.client.Get(r.Context(), client.ObjectKey{Name: team, Namespace: h.namespace}, &teamCR); err != nil {
-		// Unknown team → 404 (same code as cross-team: no probing).
-		httputil.WriteError(w, http.StatusNotFound, "team not found")
+	if err := h.checkTeamScope(r.Context(), caller, team); err != nil {
+		writeTeamScopeError(w, err)
 		return
 	}
 	h.writeCatalog(w, r, &team)
+}
+
+// SkillUploadRequest is the POST /api/v1/skills payload: one team skill
+// (name + files). File contents are base64 — a skill may embed arbitrary
+// bytes (scripts, data, images).
+type SkillUploadRequest struct {
+	Team  string            `json:"team"`
+	Name  string            `json:"name"`
+	Files map[string]string `json:"files"` // relative path -> base64 content
+}
+
+// SkillUploadScan is the upload-scan outcome in the response. Status:
+// "pass" | "warn" | "skipped" — "skipped" means the scan could not run
+// (no scanner backend or the container round trip failed) and the upload
+// proceeded best-effort (a warning was logged). Blocked uploads never
+// reach the response body (422 with findings).
+type SkillUploadScan struct {
+	Status   string                         `json:"status"`
+	Findings []skillscan.SkillUploadFinding `json:"findings,omitempty"`
+}
+
+// SkillUploadResponse is the successful upload response.
+type SkillUploadResponse struct {
+	Name  string           `json:"name"`
+	Scope string           `json:"scope"` // "team" | "deployment"
+	Team  string           `json:"team,omitempty"`
+	Files int              `json:"files"`
+	Scan  *SkillUploadScan `json:"scan"`
+}
+
+// maxSkillUploadBytes bounds both the raw zip and the uncompressed payload
+// (zip-bomb defence): 64 MB, matching the dashboard's current limit.
+const maxSkillUploadBytes = 64 << 20
+
+var skillNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
+
+// validateSkillName enforces the skill-directory naming rule: lowercase
+// kebab-case, at most 64 characters (the name doubles as the storage
+// directory name, so it must stay a safe path component).
+func validateSkillName(name string) error {
+	if !skillNameRe.MatchString(name) {
+		return fmt.Errorf("skill name %q is invalid: must match %s", name, skillNameRe.String())
+	}
+	return nil
+}
+
+// extractSkillZip unpacks the uploaded zip into a validated in-memory
+// skill: (name, files). The zip must contain exactly one top-level
+// directory (the skill root), which must be a valid skill name; SKILL.md
+// must sit directly in the root and its frontmatter name must equal the
+// directory name (the storage layout is keyed by that name).
+//
+// Security: absolute paths, backslashes, empty / "." / ".." components,
+// symlink entries, and any payload decompressing beyond maxSkillUploadBytes
+// (zip bomb) are rejected with a 400-class error.
+func extractSkillZip(data []byte) (name string, files map[string][]byte, err error) {
+	if len(data) > maxSkillUploadBytes {
+		return "", nil, fmt.Errorf("zip exceeds the %d-byte limit", maxSkillUploadBytes)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return "", nil, fmt.Errorf("invalid zip: %v", err)
+	}
+	out := make(map[string][]byte)
+	var total int
+	for _, entry := range zr.File {
+		zname := entry.Name
+		if zname == "" {
+			return "", nil, errors.New("zip entry with an empty name")
+		}
+		// Zip paths are forward-slash; a backslash is a path-traversal
+		// attempt on any consumer.
+		if strings.ContainsRune(zname, '\\') || strings.HasPrefix(zname, "/") {
+			return "", nil, fmt.Errorf("unsafe zip entry %q", zname)
+		}
+		if entry.Mode()&fs.ModeSymlink != 0 {
+			return "", nil, fmt.Errorf("symlink entries are not allowed: %q", zname)
+		}
+		parts := strings.Split(zname, "/")
+		for _, part := range parts {
+			if part == "" || part == "." || part == ".." {
+				return "", nil, fmt.Errorf("unsafe zip entry %q", zname)
+			}
+		}
+		if entry.FileInfo().IsDir() {
+			continue
+		}
+		if len(parts) < 2 {
+			return "", nil, errors.New("the zip must contain a single top-level skill directory")
+		}
+		if name == "" {
+			name = parts[0]
+		} else if name != parts[0] {
+			return "", nil, errors.New("the zip must contain exactly one top-level directory")
+		}
+		rel := strings.Join(parts[1:], "/")
+		if _, exists := out[rel]; exists {
+			return "", nil, fmt.Errorf("duplicate zip entry %q", rel)
+		}
+		rc, err := entry.Open()
+		if err != nil {
+			return "", nil, err
+		}
+		content, err := io.ReadAll(io.LimitReader(rc, maxSkillUploadBytes+1))
+		rc.Close()
+		if err != nil {
+			return "", nil, err
+		}
+		if len(content) > maxSkillUploadBytes {
+			return "", nil, fmt.Errorf("zip entry %q exceeds the %d-byte limit", rel, maxSkillUploadBytes)
+		}
+		total += len(content)
+		if total > maxSkillUploadBytes {
+			return "", nil, fmt.Errorf("uncompressed skill exceeds the %d-byte limit (zip bomb)", maxSkillUploadBytes)
+		}
+		out[rel] = content
+	}
+	if name == "" {
+		return "", nil, errors.New("the zip is empty")
+	}
+	if err := validateSkillName(name); err != nil {
+		return "", nil, err
+	}
+	skillMD, ok := out["SKILL.md"]
+	if !ok {
+		return "", nil, errors.New("SKILL.md is required at the skill root")
+	}
+	// Frontmatter name must equal the directory name (the storage key).
+	block := frontmatterBlock(string(skillMD))
+	var doc map[string]any
+	if block == "" {
+		return "", nil, errors.New("SKILL.md has no YAML frontmatter")
+	}
+	if err := yaml.Unmarshal([]byte(block), &doc); err != nil {
+		return "", nil, fmt.Errorf("SKILL.md frontmatter is not valid YAML: %v", err)
+	}
+	if fmName, _ := doc["name"].(string); strings.TrimSpace(fmName) != name {
+		return "", nil, fmt.Errorf("SKILL.md frontmatter name %q does not match the skill directory name %q", strings.TrimSpace(fmName), name)
+	}
+	return name, out, nil
+}
+
+// summarizeFindings compacts scan findings into an error fragment (severity
+// + rule id; never file contents).
+func summarizeFindings(findings []skillscan.SkillUploadFinding) string {
+	if len(findings) == 0 {
+		return "no findings reported"
+	}
+	parts := make([]string, 0, len(findings))
+	for _, f := range findings {
+		parts = append(parts, f.Severity+":"+f.RuleID)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// UploadSkill handles POST /api/v1/skills: upload (or replace) one skill.
+//
+// Request: multipart/form-data —
+//
+//	file   the skill zip (single top-level directory, 64 MB max)
+//	scope  "team" (→ teams/<t>/skills/<name>/) | "deployment"
+//	       (→ agents/global/skills/<name>/, admin only)
+//	team   Team CR name (required when scope=team)
+//
+// Flow: role gate (403 — manager/leader/worker are already denied by the
+// authorizer; the handler re-checks) → structure validation (400) →
+// team-scope check (403/404, the same matrix as the ?team= catalog) →
+// scan ① (best-effort: block → 422 with findings; unavailable → proceed
+// with scan.status="skipped" + a warning log) → exact-copy mirror
+// (Overwrite + Remove: a re-upload replaces stale files).
+//
+// Response: 200 {name, scope, team?, files, scan:{status, findings?}}.
+func (h *SkillsHandler) UploadSkill(w http.ResponseWriter, r *http.Request) {
+	caller := auth.CallerFromContext(r.Context())
+	logger := log.FromContext(r.Context())
+
+	// Role gate (handler layer — the authorizer already denies
+	// manager/leader/worker; both layers are pinned by tests).
+	if caller == nil || (caller.Role != auth.RoleAdmin && caller.Role != auth.RoleHuman) {
+		httputil.WriteError(w, http.StatusForbidden,
+			"skill upload is admin (any scope) or L2 human (own team) only")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxSkillUploadBytes+1<<20)
+	if err := r.ParseMultipartForm(16 << 20); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid multipart form: "+err.Error())
+		return
+	}
+	scope := strings.TrimSpace(r.FormValue("scope"))
+	team := strings.TrimSpace(r.FormValue("team"))
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, "missing form field \"file\" (the skill zip)")
+		return
+	}
+	defer file.Close()
+	zipData, err := io.ReadAll(io.LimitReader(file, maxSkillUploadBytes+1))
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, "read skill zip: "+err.Error())
+		return
+	}
+
+	// Scope + target prefix.
+	var targetPrefix string
+	switch scope {
+	case "team":
+		if team == "" {
+			httputil.WriteError(w, http.StatusBadRequest, "field \"team\" is required when scope=team")
+			return
+		}
+		if err := h.checkTeamScope(r.Context(), caller, team); err != nil {
+			writeTeamScopeError(w, err)
+			return
+		}
+	case "deployment":
+		if caller.Role != auth.RoleAdmin {
+			httputil.WriteError(w, http.StatusForbidden, "scope=deployment is admin only")
+			return
+		}
+	default:
+		httputil.WriteError(w, http.StatusBadRequest, "field \"scope\" must be \"team\" or \"deployment\"")
+		return
+	}
+
+	// Structure validation (400): single root dir, name rule, SKILL.md,
+	// frontmatter name match, zip-slip defence, 64 MB.
+	name, files, err := extractSkillZip(zipData)
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if scope == "team" {
+		targetPrefix = "teams/" + team + "/skills/" + name + "/"
+	} else {
+		targetPrefix = globalSkillsPrefix + name + "/"
+	}
+
+	// Scan ① — best-effort (the mandatory gate is scan ② at assign time):
+	// block → 422 with findings; pass/warn → proceed, findings surfaced;
+	// unavailable → proceed with scan.status="skipped" + a warning log.
+	scan := SkillUploadScan{Status: "skipped"}
+	if h.scanner != nil {
+		if verdict, err := h.scanner.ScanSkill(r.Context(), name, files); err == nil {
+			if verdict.Status == "block" {
+				httputil.WriteError(w, http.StatusUnprocessableEntity,
+					"skill scan blocked the upload: "+summarizeFindings(verdict.Findings))
+				return
+			}
+			scan = SkillUploadScan{Status: verdict.Status, Findings: verdict.Findings}
+		} else {
+			logger.Info("skill scan unavailable; upload proceeds best-effort (scan marked skipped)",
+				"skill", name, "scope", scope, "team", team, "err", err.Error())
+		}
+	}
+
+	// Exact-copy mirror (a re-upload replaces stale files): stage the
+	// files in a temp directory and mirror with Overwrite + Remove.
+	stage, err := os.MkdirTemp("", "skill-upload-")
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "stage skill files: "+err.Error())
+		return
+	}
+	defer os.RemoveAll(stage)
+	for path, data := range files {
+		full := filepath.Join(stage, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			httputil.WriteError(w, http.StatusInternalServerError, "stage skill files: "+err.Error())
+			return
+		}
+		if err := os.WriteFile(full, data, 0o644); err != nil {
+			httputil.WriteError(w, http.StatusInternalServerError, "stage skill files: "+err.Error())
+			return
+		}
+	}
+	if err := h.oss.Mirror(r.Context(), stage, targetPrefix, oss.MirrorOptions{Overwrite: true, Remove: true}); err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "mirror skill into storage: "+err.Error())
+		return
+	}
+
+	// Audit seam (PR-A parallel form: structured log line; switches to
+	// audit.Record once the capability foundation lands): who/what/where/how.
+	logger.Info("skill uploaded",
+		"caller", caller.Username, "role", caller.Role,
+		"scope", scope, "team", team, "skill", name,
+		"files", len(files), "scan", scan.Status)
+
+	httputil.WriteJSON(w, http.StatusOK, SkillUploadResponse{
+		Name:  name,
+		Scope: scope,
+		Team:  team,
+		Files: len(files),
+		Scan:  &scan,
+	})
 }
 
 // writeCatalog builds the catalog: the builtin half always, plus the shared

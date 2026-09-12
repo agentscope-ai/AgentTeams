@@ -21,6 +21,12 @@ const (
 	ActionRefreshMatrixToken  Action = "refresh-matrix-token"
 	ActionGateway             Action = "gateway"
 	ActionWorkspaceFilesWrite Action = "workspace-files-write"
+	// ActionSkillPublish authorizes POST /api/v1/skills (skill upload,
+	// #1221). Granted to admin (any scope) and L2 humans (own team,
+	// scope=team only); explicitly denied to manager, team leader, and
+	// worker. The scope/team refinement happens in the handler (403 for
+	// non-admin scope=deployment; 404 anti-probing for cross-team).
+	ActionSkillPublish Action = "skill-publish"
 )
 
 // AuthzRequest describes the resource being accessed.
@@ -47,9 +53,19 @@ func (a *Authorizer) Authorize(caller *CallerIdentity, req AuthzRequest) error {
 
 	switch caller.Role {
 	case RoleAdmin, RoleManager:
+		// Manager is a full-access SA but does NOT participate in the
+		// team-skill paths (#1221): publishing a team skill is admin (any
+		// scope) and L2 human (own team) only — never manager, never team
+		// leader. The manager agent manages workers, not team assets.
+		if caller.Role == RoleManager && req.ResourceKind == "skills" && req.Action == ActionSkillPublish {
+			return deny(caller, req)
+		}
 		return nil // full access
 
 	case RoleTeamLeader:
+		// Team leaders read their own team's skill catalog (the assign
+		// surface) but never publish: uploads are admin (any scope) and
+		// L2 human (own team) only (#1221).
 		return a.authorizeTeamLeader(caller, req)
 
 	case RoleHuman:
@@ -144,10 +160,10 @@ func (a *Authorizer) authorizeHuman(caller *CallerIdentity, req AuthzRequest) er
 		return deny(caller, req)
 
 	case "skills":
-		// Read-only skill catalog (name/description metadata); no PII,
-		// scope-independent. Only the list action is granted — any other
-		// action on this resource is denied, not defaulted.
-		if req.Action == ActionList {
+		// Skill catalog (list) + team-skill upload (#1221); the team-scope
+		// boundary is enforced in the handler (404 anti-probing, same as
+		// for L2 humans).
+		if req.Action == ActionList || req.Action == ActionSkillPublish {
 			return nil
 		}
 		return deny(caller, req)
@@ -182,9 +198,10 @@ func (a *Authorizer) authorizeTeamLeader(caller *CallerIdentity, req AuthzReques
 		return deny(caller, req)
 
 	case "skills":
-		// Read-only skill catalog (name/description metadata); no PII,
-		// scope-independent. Only the list action is granted — any other
-		// action on this resource is denied, not defaulted.
+		// Skill catalog read-only: leaders read their own team's catalog as
+		// the assign surface. Publishing is admin (any scope) and L2 human
+		// (own team) only — leader upload is denied here (the handler
+		// re-checks; both layers are pinned by tests).
 		if req.Action == ActionList {
 			return nil
 		}

@@ -77,6 +77,37 @@ func TestAuthorizer_HumanScoped(t *testing.T) {
 	}
 }
 
+func TestAuthorizer_SkillPublishRoles(t *testing.T) {
+	a := NewAuthorizer()
+	admin := &CallerIdentity{Role: RoleAdmin, Username: "admin"}
+	manager := &CallerIdentity{Role: RoleManager, Username: "manager"}
+	leader := &CallerIdentity{Role: RoleTeamLeader, Username: "market-lead", Team: "market-team"}
+	human := &CallerIdentity{Role: RoleHuman, Username: "maizong", Teams: []string{"market-team"}}
+	worker := &CallerIdentity{Role: RoleWorker, Username: "market-dev", Team: "market-team"}
+	req := AuthzRequest{Action: ActionSkillPublish, ResourceKind: "skills"}
+
+	if err := a.Authorize(admin, req); err != nil {
+		t.Errorf("admin skill-publish: denied: %v", err)
+	}
+	// The scope/team boundary (own team, scope=team only) is enforced in
+	// the handler; the authorizer grants the action to L2 humans.
+	if err := a.Authorize(human, req); err != nil {
+		t.Errorf("human skill-publish: denied: %v", err)
+	}
+	// Leaders read their team's catalog (assign surface) but never publish
+	// — denied at the authorizer AND re-checked in the handler.
+	if err := a.Authorize(leader, req); err == nil {
+		t.Error("leader skill-publish: allowed, want denied")
+	}
+	// Manager does not participate in team-skill paths; workers never.
+	if err := a.Authorize(manager, req); err == nil {
+		t.Error("manager skill-publish: allowed, want denied")
+	}
+	if err := a.Authorize(worker, req); err == nil {
+		t.Error("worker skill-publish: allowed, want denied")
+	}
+}
+
 // TestAuthorizer_HumanUpdateAdminOnly guards the human permission-update
 // boundary: only admin/manager may PUT /api/v1/humans/{name}.
 func TestAuthorizer_HumanUpdateAdminOnly(t *testing.T) {

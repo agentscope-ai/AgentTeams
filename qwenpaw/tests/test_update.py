@@ -231,6 +231,165 @@ def test_runtime_updater_reconciles_model_mcp_matrix_channel_and_acl_via_api(
     assert not (updater.config.default_workspace_dir / "access_control.json").exists()
 
 
+def test_runtime_updater_passes_model_capabilities_to_active_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QwenPaw worker must forward model input modalities so the provider is
+    registered with explicit supports_* flags instead of triggering a probe
+    that fails for reasoning models (supports_multimodal probe coverage)."""
+    monkeypatch.setenv("AGENTTEAMS_WORKER_GATEWAY_KEY", "gateway-secret")
+    updater = _runtime_updater(
+        config=_config(tmp_path),
+        package_manager=_NoopPackageManager(),
+    )
+
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw={
+                "metadata": {"generation": "1"},
+                "member": {"runtime": "qwenpaw"},
+                "credentials": {"gatewayKeyEnv": "AGENTTEAMS_WORKER_GATEWAY_KEY"},
+                "desired": {
+                    "model": {
+                        "providerId": "agentteams-gateway",
+                        "model": "qwen3.6-plus",
+                        "gatewayUrl": "https://gateway.example.com",
+                        "input": ["text", "image"],
+                    },
+                },
+            },
+        ),
+    )
+
+    api = updater.api_client
+    assert api.active_model["provider_id"] == "agentteams-gateway"
+    assert api.active_model["model"] == "qwen3.6-plus"
+    assert api.active_model["supports_image"] is True
+    assert api.active_model["supports_video"] is False
+    assert api.active_model["supports_multimodal"] is True
+    assert api.active_model["probe_source"] == "manual"
+
+
+def test_runtime_updater_without_input_keeps_capability_fields_unset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the runtime config omits model input (older controller), the
+    worker must keep supports_* unset so QwenPaw can still fall back to its
+    probe path instead of hard-coding false."""
+    monkeypatch.setenv("AGENTTEAMS_WORKER_GATEWAY_KEY", "gateway-secret")
+    updater = _runtime_updater(
+        config=_config(tmp_path),
+        package_manager=_NoopPackageManager(),
+    )
+
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw={
+                "metadata": {"generation": "1"},
+                "member": {"runtime": "qwenpaw"},
+                "credentials": {"gatewayKeyEnv": "AGENTTEAMS_WORKER_GATEWAY_KEY"},
+                "desired": {
+                    "model": {
+                        "providerId": "agentteams-gateway",
+                        "model": "qwen3.6-plus",
+                        "gatewayUrl": "https://gateway.example.com",
+                    },
+                },
+            },
+        ),
+    )
+
+    api = updater.api_client
+    assert api.active_model["provider_id"] == "agentteams-gateway"
+    # _apply_model passes explicit None for unset capabilities; api.py guards
+    # on `is not None` so the payload omits them, letting QwenPaw probe.
+    assert api.active_model["supports_image"] is None
+    assert api.active_model["supports_video"] is None
+    assert api.active_model["supports_multimodal"] is None
+    assert api.active_model["probe_source"] is None
+
+
+def test_runtime_updater_explicit_empty_input_declares_text_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit empty input list declares "text-only" and must NOT fall
+    back to probing: supports_* are set to False and probe_source="manual" so
+    QwenPaw does not run a probe that fails for reasoning models."""
+    monkeypatch.setenv("AGENTTEAMS_WORKER_GATEWAY_KEY", "gateway-secret")
+    updater = _runtime_updater(
+        config=_config(tmp_path),
+        package_manager=_NoopPackageManager(),
+    )
+
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw={
+                "metadata": {"generation": "1"},
+                "member": {"runtime": "qwenpaw"},
+                "credentials": {"gatewayKeyEnv": "AGENTTEAMS_WORKER_GATEWAY_KEY"},
+                "desired": {
+                    "model": {
+                        "providerId": "agentteams-gateway",
+                        "model": "deepseek-reasoner",
+                        "gatewayUrl": "https://gateway.example.com",
+                        "input": [],
+                    },
+                },
+            },
+        ),
+    )
+
+    api = updater.api_client
+    assert api.active_model["supports_image"] is False
+    assert api.active_model["supports_video"] is False
+    assert api.active_model["supports_multimodal"] is False
+    assert api.active_model["probe_source"] == "manual"
+
+
+def test_runtime_updater_text_only_input_does_not_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """input=["text"] declares a text-only model: capabilities are explicitly
+    False (not None) with probe_source="manual", so no probe is triggered."""
+    monkeypatch.setenv("AGENTTEAMS_WORKER_GATEWAY_KEY", "gateway-secret")
+    updater = _runtime_updater(
+        config=_config(tmp_path),
+        package_manager=_NoopPackageManager(),
+    )
+
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw={
+                "metadata": {"generation": "1"},
+                "member": {"runtime": "qwenpaw"},
+                "credentials": {"gatewayKeyEnv": "AGENTTEAMS_WORKER_GATEWAY_KEY"},
+                "desired": {
+                    "model": {
+                        "providerId": "agentteams-gateway",
+                        "model": "deepseek-chat",
+                        "gatewayUrl": "https://gateway.example.com",
+                        "input": ["text"],
+                    },
+                },
+            },
+        ),
+    )
+
+    api = updater.api_client
+    assert api.active_model["supports_image"] is False
+    assert api.active_model["supports_video"] is False
+    assert api.active_model["supports_multimodal"] is False
+    assert api.active_model["probe_source"] == "manual"
+
+
 def test_runtime_updater_maps_dingtalk_visibility_and_preserves_empty_secret(
     tmp_path: Path,
 ) -> None:

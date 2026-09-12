@@ -558,6 +558,11 @@ func TestDeployMemberRuntimeConfigWritesAgentScopedYaml(t *testing.T) {
 	if got := fmt.Sprint(model["gatewayUrl"]); got != "https://aigw.example.com" {
 		t.Fatalf("desired.model.gatewayUrl=%q", got)
 	}
+	// This deployer has no AgentConfig, so capability projection is skipped:
+	// input must be omitted (omitempty) instead of leaking a nil list.
+	if _, ok := model["input"]; ok {
+		t.Fatalf("desired.model.input should be omitted without AgentConfig: %#v", model)
+	}
 	inlineConfig := desired["inlineConfig"].(map[string]any)
 	if got := fmt.Sprint(inlineConfig["identity"]); got != "frontend specialist" {
 		t.Fatalf("desired.inlineConfig.identity=%q", got)
@@ -1335,6 +1340,114 @@ func TestDeployMemberRuntimeConfigRequiresOSSClient(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "OSS") {
 		t.Fatalf("error %q does not mention OSS", err)
+	}
+}
+
+func TestDeployMemberRuntimeConfigProjectsVisionInputForKnownMultimodalModel(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{
+		OSS: store,
+		AgentConfig: agentconfig.NewGenerator(agentconfig.Config{
+			DefaultModel: "qwen3.6-plus",
+		}),
+		RuntimeProjection: RuntimeProjectionConfig{
+			StorageProvider: "oss",
+			StorageBucket:   "agentteams-storage",
+			StorageEndpoint: "https://oss.example.com",
+			AIGatewayURL:    "https://aigw.example.com",
+		},
+	})
+
+	err := deployer.DeployMemberRuntimeConfig(ctx, MemberRuntimeConfigDeployRequest{
+		Name:        "worker-a",
+		RuntimeName: "worker-a",
+		Runtime:     "qwenpaw",
+		Role:        "worker",
+		Generation:  3,
+		Spec: v1beta1.WorkerSpec{
+			Model: "qwen3.6-plus",
+		},
+	})
+	if err != nil {
+		t.Fatalf("DeployMemberRuntimeConfig failed: %v", err)
+	}
+
+	got, err := store.GetObject(ctx, "agents/worker-a/runtime/runtime.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("runtime.yaml is invalid YAML: %v\n%s", err, got)
+	}
+	desired := doc["desired"].(map[string]any)
+	model := desired["model"].(map[string]any)
+	if got := fmt.Sprint(model["model"]); got != "qwen3.6-plus" {
+		t.Fatalf("desired.model.model=%q", got)
+	}
+	input, ok := model["input"].([]any)
+	if !ok {
+		t.Fatalf("desired.model.input missing for vision model: %#v", model)
+	}
+	// qwen3.6-plus is a multimodal preset → input must include image so the
+	// QwenPaw worker registers explicit supports_image/supports_multimodal.
+	hasImage := false
+	for _, item := range input {
+		if fmt.Sprint(item) == "image" {
+			hasImage = true
+		}
+	}
+	if !hasImage {
+		t.Fatalf("desired.model.input=%v, want [text image]", input)
+	}
+}
+
+func TestDeployMemberRuntimeConfigProjectsTextInputForTextOnlyModel(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{
+		OSS: store,
+		AgentConfig: agentconfig.NewGenerator(agentconfig.Config{
+			DefaultModel: "deepseek-chat",
+		}),
+		RuntimeProjection: RuntimeProjectionConfig{
+			StorageProvider: "oss",
+			StorageBucket:   "agentteams-storage",
+			StorageEndpoint: "https://oss.example.com",
+			AIGatewayURL:    "https://aigw.example.com",
+		},
+	})
+
+	err := deployer.DeployMemberRuntimeConfig(ctx, MemberRuntimeConfigDeployRequest{
+		Name:        "worker-textonly",
+		RuntimeName: "worker-textonly",
+		Runtime:     "qwenpaw",
+		Role:        "worker",
+		Generation:  1,
+		Spec: v1beta1.WorkerSpec{
+			Model: "deepseek-chat",
+		},
+	})
+	if err != nil {
+		t.Fatalf("DeployMemberRuntimeConfig failed: %v", err)
+	}
+
+	got, err := store.GetObject(ctx, "agents/worker-textonly/runtime/runtime.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("runtime.yaml is invalid YAML: %v\n%s", err, got)
+	}
+	model := doc["desired"].(map[string]any)["model"].(map[string]any)
+	input, ok := model["input"].([]any)
+	if !ok {
+		t.Fatalf("text-only model must project an explicit input (not omit it): %#v", model)
+	}
+	if len(input) != 1 || fmt.Sprint(input[0]) != "text" {
+		t.Fatalf("desired.model.input=%v, want [text]", input)
 	}
 }
 

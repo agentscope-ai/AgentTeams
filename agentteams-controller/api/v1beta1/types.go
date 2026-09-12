@@ -595,6 +595,12 @@ type HumanSpec struct {
 	// are never restricted, and team leaders always stay read-only on this
 	// API.
 	WorkspaceFileAccess string `json:"workspaceFileAccess,omitempty"`
+	// Capabilities grants named sensitive-surface privileges beyond the L2
+	// baseline (five-value set per docs/design/capability-foundation.md,
+	// #1220 §3). List-shaped so future values are additive; unknown values
+	// are rejected at admission by the human-update API. Team leaders and
+	// other SA-based identities never hold capabilities (#1220 §5).
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 type IdentitySourceSpec struct {

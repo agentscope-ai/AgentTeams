@@ -72,6 +72,45 @@ func TestMatrixAuthenticator_ResolvesL2Human(t *testing.T) {
 	}
 }
 
+func TestMatrixAuthenticator_L2HumanCarriesCapabilities(t *testing.T) {
+	h := newHuman("maizong", "maizong", 2, "market-team")
+	h.Spec.Capabilities = []string{"approval_policy", "channel_secrets"}
+	auth, fw := newMatrixAuthTest(t, h)
+	fw.userID = "@maizong:matrix.local"
+
+	id, err := auth.Authenticate(context.Background(), "matrix-token")
+	if err != nil {
+		t.Fatalf("authenticate: %v", err)
+	}
+	if len(id.Capabilities) != 2 || id.Capabilities[0] != "approval_policy" || id.Capabilities[1] != "channel_secrets" {
+		t.Fatalf("capabilities=%v, want [approval_policy channel_secrets]", id.Capabilities)
+	}
+	if !HasCapability(id, CapabilityApprovalPolicy) || !HasCapability(id, CapabilityChannelSecrets) {
+		t.Fatal("HasCapability should be true for the granted values")
+	}
+	if HasCapability(id, CapabilityExternalSources) {
+		t.Fatal("HasCapability(external_sources) = true, want false (not granted)")
+	}
+}
+
+func TestMatrixAuthenticator_HumanWithoutCapabilitiesHasEmptySet(t *testing.T) {
+	auth, fw := newMatrixAuthTest(t, newHuman("maizong", "maizong", 2, "market-team"))
+	fw.userID = "@maizong:matrix.local"
+
+	id, err := auth.Authenticate(context.Background(), "matrix-token")
+	if err != nil {
+		t.Fatalf("authenticate: %v", err)
+	}
+	if len(id.Capabilities) != 0 {
+		t.Fatalf("capabilities=%v, want empty (no field on the CR)", id.Capabilities)
+	}
+	for _, cap := range allCapabilities() {
+		if HasCapability(id, cap) {
+			t.Errorf("capability-less human: HasCapability(%s) = true, want false", cap)
+		}
+	}
+}
+
 func TestMatrixAuthenticator_UnknownUserDenied(t *testing.T) {
 	auth, fw := newMatrixAuthTest(t, newHuman("maizong", "maizong", 2, "market-team"))
 	fw.userID = "@stranger:matrix.local"

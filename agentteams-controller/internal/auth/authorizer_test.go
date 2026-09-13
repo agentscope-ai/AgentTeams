@@ -77,6 +77,37 @@ func TestAuthorizer_HumanScoped(t *testing.T) {
 	}
 }
 
+func TestAuthorizer_SkillPublishRoles(t *testing.T) {
+	a := NewAuthorizer()
+	admin := &CallerIdentity{Role: RoleAdmin, Username: "admin"}
+	manager := &CallerIdentity{Role: RoleManager, Username: "manager"}
+	leader := &CallerIdentity{Role: RoleTeamLeader, Username: "market-lead", Team: "market-team"}
+	human := &CallerIdentity{Role: RoleHuman, Username: "maizong", Teams: []string{"market-team"}}
+	worker := &CallerIdentity{Role: RoleWorker, Username: "market-dev", Team: "market-team"}
+	req := AuthzRequest{Action: ActionSkillPublish, ResourceKind: "skills"}
+
+	if err := a.Authorize(admin, req); err != nil {
+		t.Errorf("admin skill-publish: denied: %v", err)
+	}
+	// The scope/team boundary (own team, scope=team only) is enforced in
+	// the handler; the authorizer grants the action to L2 humans.
+	if err := a.Authorize(human, req); err != nil {
+		t.Errorf("human skill-publish: denied: %v", err)
+	}
+	// Leaders read their team's catalog (assign surface) but never publish
+	// — denied at the authorizer AND re-checked in the handler.
+	if err := a.Authorize(leader, req); err == nil {
+		t.Error("leader skill-publish: allowed, want denied")
+	}
+	// Manager does not participate in team-skill paths; workers never.
+	if err := a.Authorize(manager, req); err == nil {
+		t.Error("manager skill-publish: allowed, want denied")
+	}
+	if err := a.Authorize(worker, req); err == nil {
+		t.Error("worker skill-publish: allowed, want denied")
+	}
+}
+
 // TestAuthorizer_HumanUpdateAdminOnly guards the human permission-update
 // boundary: only admin/manager may PUT /api/v1/humans/{name}.
 func TestAuthorizer_HumanUpdateAdminOnly(t *testing.T) {
@@ -98,6 +129,27 @@ func TestAuthorizer_HumanUpdateAdminOnly(t *testing.T) {
 	for i := range denied {
 		if err := az.Authorize(&denied[i], AuthzRequest{Action: ActionUpdate, ResourceKind: "human", ResourceName: "maizong"}); err == nil {
 			t.Errorf("%s must be denied updating humans", denied[i].Role)
+		}
+	}
+}
+
+// TestAuthorizer_SkillsListOnly pins the skill catalog boundary: the skills
+// resource is read-only and grants exactly ActionList — any other action
+// (including ActionGet) is denied rather than defaulted.
+func TestAuthorizer_SkillsListOnly(t *testing.T) {
+	az := NewAuthorizer()
+	roles := []*CallerIdentity{
+		{Role: RoleHuman, Username: "maizong", Teams: []string{"market-team"}},
+		{Role: RoleTeamLeader, Username: "market-lead", Team: "market-team"},
+	}
+	for _, caller := range roles {
+		if err := az.Authorize(caller, AuthzRequest{Action: ActionList, ResourceKind: "skills"}); err != nil {
+			t.Errorf("%s: ActionList on skills should be allowed, got: %v", caller.Role, err)
+		}
+		for _, action := range []Action{ActionGet, ActionCreate, ActionUpdate, ActionDelete} {
+			if err := az.Authorize(caller, AuthzRequest{Action: action, ResourceKind: "skills"}); err == nil {
+				t.Errorf("%s: %s on skills must be denied, got nil error", caller.Role, action)
+			}
 		}
 	}
 }

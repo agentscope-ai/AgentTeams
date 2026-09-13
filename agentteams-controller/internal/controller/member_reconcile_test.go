@@ -655,7 +655,7 @@ func TestReconcileMemberConfigDeepSeekHarnessWritesRuntimeConfigWithoutLegacyFil
 
 func TestReconcileMemberSkillsFailureIsNonBlocking(t *testing.T) {
 	deployer := mocks.NewMockDeployer()
-	deployer.PushOnDemandSkillsFn = func(context.Context, string, []string, []v1beta1.RemoteSkillSource) error {
+	deployer.PushOnDemandSkillsFn = func(context.Context, string, string, []string, []v1beta1.RemoteSkillSource) error {
 		return errors.New("worker copy missing and source unavailable")
 	}
 	state := &MemberState{}

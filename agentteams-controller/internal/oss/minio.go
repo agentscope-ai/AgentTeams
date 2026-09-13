@@ -300,6 +300,9 @@ func (c *MinIOClient) Mirror(ctx context.Context, src, dst string, opts MirrorOp
 	if opts.Overwrite {
 		args = append(args, "--overwrite")
 	}
+	if opts.Remove {
+		args = append(args, "--remove")
+	}
 	for _, pattern := range opts.Exclude {
 		args = append(args, "--exclude", pattern)
 	}
@@ -316,6 +319,18 @@ func (c *MinIOClient) DeletePrefix(ctx context.Context, prefix string) error {
 }
 
 func (c *MinIOClient) ListObjects(ctx context.Context, prefix string) ([]string, error) {
+	infos, err := c.ListObjectsDetailed(ctx, prefix)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(infos))
+	for _, info := range infos {
+		names = append(names, info.Name)
+	}
+	return names, nil
+}
+
+func (c *MinIOClient) ListObjectsDetailed(ctx context.Context, prefix string) ([]ObjectInfo, error) {
 	if err := c.ensureAlias(ctx); err != nil {
 		return nil, err
 	}
@@ -324,7 +339,7 @@ func (c *MinIOClient) ListObjects(ctx context.Context, prefix string) ([]string,
 		return nil, err
 	}
 
-	var names []string
+	var infos []ObjectInfo
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -332,11 +347,23 @@ func (c *MinIOClient) ListObjects(ctx context.Context, prefix string) ([]string,
 		}
 		// mc ls output format: "[date] [size] filename"
 		parts := strings.Fields(line)
-		if len(parts) > 0 {
-			names = append(names, parts[len(parts)-1])
+		if len(parts) == 0 {
+			continue
 		}
+		info := ObjectInfo{Name: parts[len(parts)-1]}
+		// mc ls prints the date in the mc process's local zone; the
+		// reference deployment runs the controller in UTC. A parse failure
+		// (format drift between mc versions) degrades to an empty timestamp
+		// rather than failing the listing.
+		if len(parts) >= 3 {
+			raw := strings.TrimPrefix(parts[0], "[") + " " + parts[1]
+			if t, err := time.Parse("2006-01-02 15:04:05", raw); err == nil {
+				info.UpdatedAt = t.UTC().Format(time.RFC3339)
+			}
+		}
+		infos = append(infos, info)
 	}
-	return names, nil
+	return infos, nil
 }
 
 // EnsureBucket creates the configured bucket if it does not already exist.

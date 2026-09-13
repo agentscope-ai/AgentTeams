@@ -75,7 +75,11 @@ type WorkerDeployer interface {
 	// error is safe to surface as a non-blocking Worker warning: it reports a
 	// missing required copy or a failed remote refresh that retained an older
 	// canonical copy, without exposing remote source credentials.
-	PushOnDemandSkills(ctx context.Context, workerName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error
+	// teamName is the effective Team identity ("" for standalone workers):
+	// a skill present in teams/<teamName>/skills/ is materialized by the
+	// controller from the team layer (scan ② mandatory); the rest go
+	// through the builtin recovery path (team layer wins on a name clash).
+	PushOnDemandSkills(ctx context.Context, workerName, teamName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error
 	PrepareWorkerDeps(ctx context.Context, req WorkerDepsPrepareRequest) error
 	CleanupOSSData(ctx context.Context, workerName string) error
 	InjectCoordinationContext(ctx context.Context, req CoordinationDeployRequest) error
@@ -149,7 +153,7 @@ type ManagerProvisioner interface {
 type ManagerDeployer interface {
 	DeployPackage(ctx context.Context, name, uri string, isUpdate bool) error
 	DeployManagerConfig(ctx context.Context, req ManagerDeployRequest) error
-	PushOnDemandSkills(ctx context.Context, name string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error
+	PushOnDemandSkills(ctx context.Context, name, teamName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error
 	CleanupOSSData(ctx context.Context, name string) error
 }
 

@@ -27,6 +27,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/remoteclient"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/server"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/skillscan"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/store"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/watcher"
 	corev1 "k8s.io/api/core/v1"
@@ -86,8 +87,12 @@ type App struct {
 	remoteClientCache *remoteclient.Cache
 
 	// Service layer
-	provisioner   *service.Provisioner
-	deployer      *service.Deployer
+	provisioner *service.Provisioner
+	deployer    *service.Deployer
+	// skillScanner is shared by the skill upload endpoint (scan ①,
+	// best-effort) and the assign-time materialization (scan ②, mandatory)
+	// so both hit the same content-hash cache.
+	skillScanner  *skillscan.Client
 	envBuilder    *service.WorkerEnvBuilder
 	managerConfig *service.ManagerConfigStore
 }
@@ -523,6 +528,14 @@ func (a *App) initServiceLayer(_ context.Context) error {
 		})
 	}
 
+	a.skillScanner = skillscan.New(skillscan.Config{
+		KubeMode:       a.cfg.KubeMode,
+		Client:         a.mgr.GetClient(),
+		Namespace:      a.namespace,
+		ResourcePrefix: authpkg.ResourcePrefix(a.cfg.ResourcePrefix),
+		SocketPath:     a.cfg.SocketPath,
+	})
+
 	a.deployer = service.NewDeployer(service.DeployerConfig{
 		AgentConfig:     a.agentGen,
 		OSS:             a.oss,
@@ -533,6 +546,7 @@ func (a *App) initServiceLayer(_ context.Context) error {
 		WorkerAgentDir:  cfg.WorkerAgentDir(),
 		MatrixDomain:    cfg.MatrixDomain,
 		NacosCredClient: a.credProvider,
+		SkillScanner:    a.skillScanner,
 	})
 
 	return nil
@@ -648,11 +662,14 @@ func (a *App) initHTTPServer(_ context.Context) error {
 		ControllerName:  a.cfg.ControllerName,
 		SocketPath:      a.cfg.SocketPath,
 		ContainerPrefix: a.cfg.ContainerPrefix,
+		ResourcePrefix:  a.cfg.ResourcePrefix,
 		MatrixConfig:    a.cfg.MatrixConfig(),
 		MatrixClient:    a.matrix,
 		Provisioner:     a.provisioner,
 
 		DefaultWorkerRuntime: a.cfg.DefaultWorkerRuntime,
+		WorkerAgentDir:       a.cfg.WorkerAgentDir(),
+		SkillScanner:         a.skillScanner,
 	})
 	return nil
 }

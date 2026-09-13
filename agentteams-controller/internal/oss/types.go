@@ -40,6 +40,7 @@ type Credentials struct {
 // MirrorOptions controls the behavior of Mirror operations.
 type MirrorOptions struct {
 	Overwrite bool     // overwrite existing files at destination
+	Remove    bool     // delete destination objects with no counterpart at source (mc --remove; exact-copy semantics)
 	Exclude   []string // file patterns to exclude (passed as --exclude flags to mc mirror)
 }
 

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
@@ -26,12 +27,24 @@ type lsLikeOSS struct {
 }
 
 func (m *lsLikeOSS) ListObjects(_ context.Context, prefix string) ([]string, error) {
+	infos, err := m.ListObjectsDetailed(context.Background(), prefix)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(infos))
+	for _, info := range infos {
+		out = append(out, info.Name)
+	}
+	return out, nil
+}
+
+func (m *lsLikeOSS) ListObjectsDetailed(_ context.Context, prefix string) ([]oss.ObjectInfo, error) {
 	keys, err := m.Memory.ListObjects(context.Background(), prefix)
 	if err != nil {
 		return nil, err
 	}
 	seen := map[string]bool{}
-	out := make([]string, 0)
+	out := make([]oss.ObjectInfo, 0)
 	for _, k := range keys {
 		rest := strings.TrimPrefix(k, prefix)
 		parts := strings.SplitN(rest, "/", 2)
@@ -44,10 +57,10 @@ func (m *lsLikeOSS) ListObjects(_ context.Context, prefix string) ([]string, err
 		}
 		if !seen[child] {
 			seen[child] = true
-			out = append(out, child)
+			out = append(out, oss.ObjectInfo{Name: child, UpdatedAt: m.Memory.LastWriteTime().UTC().Format(time.RFC3339)})
 		}
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 

@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -51,12 +52,30 @@ func (m *mcLikeOSS) ListObjects(_ context.Context, prefix string) ([]string, err
 	if m.failList {
 		return nil, errors.New("oss list failed")
 	}
+	infos, err := m.ListObjectsDetailed(context.Background(), prefix)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(infos))
+	for _, info := range infos {
+		out = append(out, info.Name)
+	}
+	return out, nil
+}
+
+// ListObjectsDetailed groups the fake's flat keys into direct-child directory
+// names (the mc ls directory view) and stamps each with the fake's global
+// write clock.
+func (m *mcLikeOSS) ListObjectsDetailed(_ context.Context, prefix string) ([]oss.ObjectInfo, error) {
+	if m.failList {
+		return nil, errors.New("oss list failed")
+	}
 	keys, err := m.Memory.ListObjects(context.Background(), prefix)
 	if err != nil {
 		return nil, err
 	}
 	seen := map[string]bool{}
-	out := make([]string, 0)
+	out := make([]oss.ObjectInfo, 0)
 	for _, k := range keys {
 		rest := strings.TrimPrefix(k, prefix)
 		parts := strings.SplitN(rest, "/", 2)
@@ -66,10 +85,10 @@ func (m *mcLikeOSS) ListObjects(_ context.Context, prefix string) ([]string, err
 		dir := parts[0] + "/"
 		if !seen[dir] {
 			seen[dir] = true
-			out = append(out, dir)
+			out = append(out, oss.ObjectInfo{Name: dir, UpdatedAt: m.Memory.LastWriteTime().UTC().Format(time.RFC3339)})
 		}
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 
@@ -3632,6 +3651,10 @@ func (c *conflictInjectingOSS) ListObjects(ctx context.Context, prefix string) (
 	return c.mcLike.ListObjects(ctx, prefix)
 }
 
+func (c *conflictInjectingOSS) ListObjectsDetailed(ctx context.Context, prefix string) ([]oss.ObjectInfo, error) {
+	return c.mcLike.ListObjectsDetailed(ctx, prefix)
+}
+
 func (c *conflictInjectingOSS) GetObject(ctx context.Context, key string) ([]byte, error) {
 	data, err := c.mcLike.GetObject(ctx, key)
 	c.getCalls++
@@ -3695,6 +3718,18 @@ type bareLikeOSS struct {
 }
 
 func (m *bareLikeOSS) ListObjects(_ context.Context, prefix string) ([]string, error) {
+	infos, err := m.ListObjectsDetailed(context.Background(), prefix)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(infos))
+	for _, info := range infos {
+		out = append(out, info.Name)
+	}
+	return out, nil
+}
+
+func (m *bareLikeOSS) ListObjectsDetailed(_ context.Context, prefix string) ([]oss.ObjectInfo, error) {
 	keys, err := m.Memory.ListObjects(context.Background(), prefix)
 	if err != nil {
 		return nil, err
@@ -3702,7 +3737,7 @@ func (m *bareLikeOSS) ListObjects(_ context.Context, prefix string) ([]string, e
 	// mc ls semantics: direct children only — directory children keep the
 	// trailing slash ("p1/"), file children stay bare ("t1.json").
 	seen := map[string]bool{}
-	out := make([]string, 0)
+	out := make([]oss.ObjectInfo, 0)
 	for _, k := range keys {
 		rest := strings.TrimPrefix(k, prefix)
 		if rest == "" {
@@ -3715,10 +3750,10 @@ func (m *bareLikeOSS) ListObjects(_ context.Context, prefix string) ([]string, e
 		}
 		if !seen[child] {
 			seen[child] = true
-			out = append(out, child)
+			out = append(out, oss.ObjectInfo{Name: child, UpdatedAt: m.Memory.LastWriteTime().UTC().Format(time.RFC3339)})
 		}
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 

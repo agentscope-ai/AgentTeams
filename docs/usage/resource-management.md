@@ -137,6 +137,50 @@ All supported Dashboard distribution paths update `spec.skills`. The Controller 
 
 You can also use `spec.package` to provide a Worker package containing a `skills/` directory. Package skills and assigned skills are merged without conflict.
 
+### Skill Catalog API
+
+`GET /api/v1/skills` returns the read-only catalog of skills available in the deployment:
+
+- **`source: "builtin"`** — the skills shipped with the agent templates, with the providing templates listed in `agents` and the supporting runtimes in `runtimes` (derived from the deployer's own template selection, so the catalog never drifts from what workers actually receive).
+- **`source: "shared"`** — the skills staged under `agents/global/skills/` by the Dashboard's skill-upload flow, available for distribution to any worker. This prefix is a staging area, not a distribution channel: deleting an entry removes it from the catalog and the Dashboard's global area but never touches already-distributed per-worker copies or existing `spec.skills` assignments (no cascade).
+- **`source: "team"`** (only with `?team=`) — the team's own skills under `teams/<team>/skills/`, published through `POST /api/v1/skills` (see below).
+
+Output is sorted by name; the endpoint is metadata-only — no skill content, no registry calls, no credentials. Entries carry `name`/`description`/`source` plus `version`/`requirements` (builtin) and `updated_at` (shared). Without a team parameter the catalog is **admin (L1) only** — non-admin callers receive `400 team scope required`. With `?team=<name>` the catalog is team-scoped: admin reads any team, an L2 human or team leader reads their own team; a cross-team or unknown team reads `404` (indistinguishable from "no such team"). See [Skill Catalog API](../design/skill-catalog-api.md) and [Team Skills](../design/team-skills.md).
+
+### Team Skills
+
+A **team skill** belongs to one team (storage: `teams/<team>/skills/<name>/`) — the middle layer between deployment-wide skills and per-worker copies. Publishing and assigning:
+
+1. **Publish** (admin, any team; or the team's L2 human, own team only):
+
+   ```sh
+   curl -X POST "$CONTROLLER/api/v1/skills" \
+     -H "Authorization: Bearer $TOKEN" \
+     -F "scope=team" -F "team=marketing" \
+     -F "file=@./marketing-briefing.zip"
+   ```
+
+   The zip must contain exactly one top-level directory (the skill root,
+   named like the skill), with `SKILL.md` at its root whose frontmatter
+   `name` equals the directory name. Max 64 MB (zip and uncompressed).
+   The upload is content-scanned (best-effort): a blocked scan returns
+   `422` with the findings; an unavailable scan proceeds and reports
+   `scan.status: "skipped"`. Re-uploading the same skill replaces it
+   exactly (dropped files are deleted). `scope=deployment` (admin only)
+   publishes to `agents/global/skills/` instead.
+2. **Assign**: update the Worker's `spec.skills` (API, Dashboard, or
+   through the Manager). At the next reconcile the Controller scans the
+   skill **again, mandatorily** (a blocked or unavailable scan is not
+   copied and surfaces as a Worker warning), then copies it into
+   `agents/<worker>/skills/<name>/`; the Worker's sync loop materializes
+   it into its native workspace within the sync interval.
+
+Team leaders can browse their team's catalog (`GET /api/v1/skills?team=…`)
+as the assign surface but cannot publish; manager and worker principals
+cannot publish at all. On a name clash the **team layer wins** over the
+builtin library. See [Team Skills design](../design/team-skills.md) for
+the full contract, scan semantics, and the k8s-mode limitation.
+
 ### Worker with Custom Package
 
 ```yaml

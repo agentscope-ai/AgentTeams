@@ -438,6 +438,7 @@ spec:
 | `spec.permissionLevel` | int | 是 | — | 权限级别：1、2 或 3 |
 | `spec.accessibleTeams` | []string | 否 | — | 可访问的 Team 列表（L2 生效） |
 | `spec.accessibleWorkers` | []string | 否 | — | 可访问的独立 Worker 列表（L2/L3 生效） |
+| `spec.capabilities` | []string | 否 | — | L2 基线之外的敏感面特权：`full_access`、`channel_secrets`、`external_sources`、`approval_policy`、`secret_reveal`（见 [capability-foundation](../design/capability-foundation.md)） |
 | `spec.note` | string | 否 | — | 备注 |
 
 ### 三级权限模型

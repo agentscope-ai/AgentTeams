@@ -122,10 +122,17 @@ func (a *MatrixTokenAuthenticator) resolveHuman(ctx context.Context, userID stri
 		}
 		teams := make([]string, len(h.Spec.AccessibleTeams))
 		copy(teams, h.Spec.AccessibleTeams)
+		// Capabilities are granted on the Human CR (#1220 §3). Only L2
+		// humans carry them — resolveHuman rejects non-L2 humans above, and
+		// SA-based identities never pass through here (#1220 §5: team
+		// leaders never hold capabilities).
+		caps := make([]string, len(h.Spec.Capabilities))
+		copy(caps, h.Spec.Capabilities)
 		return &CallerIdentity{
-			Role:     RoleHuman,
-			Username: h.Name,
-			Teams:    teams,
+			Role:         RoleHuman,
+			Username:     h.Name,
+			Teams:        teams,
+			Capabilities: caps,
 		}, nil
 	}
 	return nil, fmt.Errorf("no L2 human matches matrix user %q", userID)

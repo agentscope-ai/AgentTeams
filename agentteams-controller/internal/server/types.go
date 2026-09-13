@@ -164,6 +164,10 @@ type UpdateHumanRequest struct {
 	AccessibleTeams   *[]string `json:"accessibleTeams,omitempty"`
 	AccessibleWorkers *[]string `json:"accessibleWorkers,omitempty"`
 	Note              *string   `json:"note,omitempty"`
+	// Capabilities follows the same merge-patch semantics as
+	// AccessibleTeams: absent = unchanged, explicit list = replaces,
+	// empty list = clears. Unknown values are rejected (400).
+	Capabilities *[]string `json:"capabilities,omitempty"`
 }
 
 type HumanResponse struct {
@@ -174,6 +178,7 @@ type HumanResponse struct {
 	PermissionLevel   int      `json:"permissionLevel"`
 	AccessibleTeams   []string `json:"accessibleTeams,omitempty"`
 	AccessibleWorkers []string `json:"accessibleWorkers,omitempty"`
+	Capabilities      []string `json:"capabilities,omitempty"`
 	Note              string   `json:"note,omitempty"`
 	MatrixUserID      string   `json:"matrixUserID,omitempty"`
 	InitialPassword   string   `json:"initialPassword,omitempty"`

@@ -4606,6 +4606,65 @@ func TestGetTaskInspection(t *testing.T) {
 	}
 }
 
+func TestGetTaskInspection_SubmissionIDForCancellation(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{{"task_id": "t1", "title": "T1", "status": "submitted", "depends_on": []string{}}},
+	})
+	const submissionID = "opaque/submission:v1"
+	putTask(store, "shared/tasks/t1/meta.json", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "submitted",
+		"submission_id": submissionID,
+		"continuation":  map[string]any{"status": "pending", "delivery_id": "delivery-1"},
+	})
+	h := newProjectTestHandler(t, store)
+	caller := &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/tasks/t1", nil)
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t1")
+	rec := httptest.NewRecorder()
+	h.GetTaskInspection(rec, withCaller(req, caller))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("inspect status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var insp taskInspection
+	if err := json.Unmarshal(rec.Body.Bytes(), &insp); err != nil {
+		t.Fatalf("decode inspection: %v", err)
+	}
+	if insp.SubmissionID != submissionID {
+		t.Fatalf("inspection submission_id=%q, want %q", insp.SubmissionID, submissionID)
+	}
+
+	// A caller inspecting one task can use its opaque identity directly for
+	// a fenced cancellation, without a second workflow-wide detail request.
+	body, err := json.Marshal(map[string]string{"reason": "obsolete", "submissionId": insp.SubmissionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelReq := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel", strings.NewReader(string(body)))
+	cancelReq.SetPathValue("id", "p1")
+	cancelReq.SetPathValue("taskId", "t1")
+	cancelRec := httptest.NewRecorder()
+	h.CancelTask(cancelRec, withCaller(cancelReq, caller))
+	if cancelRec.Code != http.StatusOK {
+		t.Fatalf("cancel status=%d body=%s", cancelRec.Code, cancelRec.Body.String())
+	}
+	taskData, err := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var task map[string]any
+	if err := json.Unmarshal(taskData, &task); err != nil {
+		t.Fatal(err)
+	}
+	continuation, _ := task["continuation"].(map[string]any)
+	if task["status"] != "cancelled" || task["submission_id"] != submissionID || continuation["status"] != "resolved" {
+		t.Fatalf("cancelled task lost its submission fence: %v", task)
+	}
+}
+
 func TestGetTaskInspection_MissingMeta(t *testing.T) {
 	store := ossfake.NewMemory()
 	putProject(store, "shared/projects/p1/meta.json", map[string]any{

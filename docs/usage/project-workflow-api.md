@@ -222,6 +222,8 @@ Response `200 OK`:
 
 Field notes:
 
+- `submission_id`, when present in TaskMeta, is returned verbatim. Pass it as
+  `submissionId` when cancelling that submission.
 - `status` is the **raw** TaskMeta status when TaskMeta exists (same
   semantics as `tasks_detail` with `?includeTasks=true`); when TaskMeta is
   absent it falls back to the normalized graph-node status

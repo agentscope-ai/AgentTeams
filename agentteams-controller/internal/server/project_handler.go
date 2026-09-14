@@ -1112,6 +1112,7 @@ func (h *ProjectHandler) GetTaskInspection(w http.ResponseWriter, r *http.Reques
 		detail.ResultStatus = str(raw["result_status"])
 		detail.ResultPath = str(raw["result_path"])
 		detail.CancelReason = str(raw["cancel_reason"])
+		detail.SubmissionID = str(raw["submission_id"])
 		if raw["deliverables"] != nil {
 			if list, ok := raw["deliverables"].([]any); ok {
 				detail.Deliverables = list

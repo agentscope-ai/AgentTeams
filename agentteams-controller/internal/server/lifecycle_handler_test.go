@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -137,6 +138,107 @@ func TestLifecycleEnsureReadyStartsSleepingWorker(t *testing.T) {
 	}
 }
 
+// TestLifecycleEnsureReadyProbesBackendWhenRunning covers #1260: a Running CR and a
+// ready flag from an earlier self-report must not produce "Ready" once the backend
+// itself says the worker is gone or cannot say anything at all.
+func TestLifecycleEnsureReadyProbesBackendWhenRunning(t *testing.T) {
+	tests := []struct {
+		name          string
+		status        backend.WorkerStatus
+		statusErr     error
+		wantPhase     string
+		wantStarts    int
+		wantReadyFlag bool
+	}{
+		{name: "running backend stays ready", status: backend.StatusRunning, wantPhase: "Ready", wantReadyFlag: true},
+		{name: "stopped backend is started", status: backend.StatusStopped, wantPhase: "Running", wantStarts: 1},
+		{name: "missing backend is started", status: backend.StatusNotFound, wantPhase: "Running", wantStarts: 1},
+		{name: "starting backend is not ready yet", status: backend.StatusStarting, wantPhase: "Running", wantReadyFlag: true},
+		{name: "failed backend is not ready", status: backend.StatusFailed, wantPhase: "Running", wantReadyFlag: true},
+		{name: "status error fails closed", statusErr: errors.New("docker unreachable"), wantPhase: "Running", wantReadyFlag: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := newLifecycleTestScheme(t)
+			running := "Running"
+			worker := &v1beta1.Worker{
+				ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"},
+				Spec:       v1beta1.WorkerSpec{State: &running},
+				Status:     v1beta1.WorkerStatus{Phase: "Running"},
+			}
+			k8sClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithStatusSubresource(&v1beta1.Worker{}).
+				WithObjects(worker).
+				Build()
+			backendStub := &stubWorkerBackend{status: tt.status, statusErr: tt.statusErr}
+			handler := NewLifecycleHandler(k8sClient, backend.NewRegistry([]backend.WorkerBackend{backendStub}), "default")
+			handler.setReady("alpha-dev", true)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/workers/alpha-dev/ensure-ready", nil)
+			req.SetPathValue("name", "alpha-dev")
+			rec := httptest.NewRecorder()
+
+			handler.EnsureReady(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+			}
+			var resp WorkerLifecycleResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if resp.Phase != tt.wantPhase {
+				t.Errorf("expected response phase %q, got %q", tt.wantPhase, resp.Phase)
+			}
+			if backendStub.startCalls != tt.wantStarts {
+				t.Errorf("expected %d start call(s), got %d", tt.wantStarts, backendStub.startCalls)
+			}
+			if got := handler.isReady("alpha-dev"); got != tt.wantReadyFlag {
+				t.Errorf("expected ready flag %v, got %v", tt.wantReadyFlag, got)
+			}
+
+			var updated v1beta1.Worker
+			if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "alpha-dev", Namespace: "default"}, &updated); err != nil {
+				t.Fatalf("get worker: %v", err)
+			}
+			if updated.Status.Phase != "Running" {
+				t.Errorf("expected phase Running, got %q", updated.Status.Phase)
+			}
+		})
+	}
+}
+
+// With no backend detected there is nothing to probe, so the self-report still decides.
+func TestLifecycleEnsureReadyWithoutBackendKeepsSelfReport(t *testing.T) {
+	scheme := newLifecycleTestScheme(t)
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"},
+		Status:     v1beta1.WorkerStatus{Phase: "Running"},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.Worker{}).
+		WithObjects(worker).
+		Build()
+	handler := NewLifecycleHandler(k8sClient, backend.NewRegistry(nil), "default")
+	handler.setReady("alpha-dev", true)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers/alpha-dev/ensure-ready", nil)
+	req.SetPathValue("name", "alpha-dev")
+	rec := httptest.NewRecorder()
+
+	handler.EnsureReady(rec, req)
+
+	var resp WorkerLifecycleResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Phase != "Ready" {
+		t.Fatalf("expected response phase Ready, got %q", resp.Phase)
+	}
+}
+
 func TestLifecycleWorkerStatusIncludesTeamMemberInfo(t *testing.T) {
 	scheme := newLifecycleTestScheme(t)
 	worker := &v1beta1.Worker{
@@ -214,6 +316,7 @@ func newLifecycleTestScheme(t *testing.T) *runtime.Scheme {
 
 type stubWorkerBackend struct {
 	status     backend.WorkerStatus
+	statusErr  error
 	message    string
 	startCalls int
 	stopCalls  int
@@ -236,6 +339,9 @@ func (s *stubWorkerBackend) Stop(_ context.Context, _ string) error {
 	return nil
 }
 func (s *stubWorkerBackend) Status(context.Context, string) (*backend.WorkerResult, error) {
+	if s.statusErr != nil {
+		return nil, s.statusErr
+	}
 	return &backend.WorkerResult{Backend: "stub", Status: s.status, Message: s.message}, nil
 }
 

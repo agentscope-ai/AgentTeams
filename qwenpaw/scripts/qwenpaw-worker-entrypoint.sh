@@ -7,7 +7,7 @@
 #   AGENTTEAMS_FS_ENDPOINT   - MinIO/OSS endpoint (required in local mode)
 #   AGENTTEAMS_FS_ACCESS_KEY - MinIO/OSS access key (required in local mode)
 #   AGENTTEAMS_FS_SECRET_KEY - MinIO/OSS secret key (required in local mode)
-#   AGENTTEAMS_RUNTIME       - "k8s" for controller-managed mc-wrapper storage access
+#   AGENTTEAMS_RUNTIME       - "k8s" for controller-managed storage access
 #   TZ                   - Timezone (optional)
 
 set -e
@@ -33,8 +33,9 @@ if [ -n "${TZ}" ] && [ -f "/usr/share/zoneinfo/${TZ}" ]; then
 fi
 
 if [ "${AGENTTEAMS_RUNTIME:-}" = "k8s" ]; then
-    log "Kubernetes mode: mc-wrapper handles storage credentials"
-    # CLI args are required by qwenpaw-worker but unused by FileSync in k8s mode.
+    log "Kubernetes mode: FileSync resolves the storage alias from controller credentials"
+    # CLI args are required by qwenpaw-worker. FileSync uses controller-issued
+    # MC_HOST credentials for OSS, or these static credentials for MinIO.
     FS_ENDPOINT="${AGENTTEAMS_FS_ENDPOINT:-k8s-placeholder}"
     FS_ACCESS_KEY="${AGENTTEAMS_FS_ACCESS_KEY:-k8s}"
     FS_SECRET_KEY="${AGENTTEAMS_FS_SECRET_KEY:-k8s}"

@@ -655,8 +655,21 @@ def resume_project(store: TaskStore, *, project_id: str) -> ProjectMeta:
 
 
 def complete_project(store: TaskStore, *, project_id: str) -> ProjectMeta:
-    """Mark a project complete after the Leader has finalized project result files."""
+    """Mark a project complete after the Leader has finalized project result files.
+
+    Every task in the project graph (the DAG, or a Loop's current iteration)
+    must already be terminal, as the controller's CompleteProject requires. A
+    project that still has schedulable work must not become terminal.
+    """
     meta = store.read_project_meta(project_id)
+    plan = store.read_project_plan(project_id)
+    tasks = parse_loop_tasks(plan) if parse_plan_type(plan) == "loop" else parse_dag_tasks(plan)
+    unfinished = [task for task in tasks if task.status not in TERMINAL_TASK_STATUSES]
+    if unfinished:
+        listed = ", ".join(f"{task.task_id} ({task.status})" for task in unfinished)
+        raise TaskflowError(
+            f"complete_project requires every project task to be terminal; not terminal: {listed}",
+        )
     updated = ProjectMeta(
         project_id=meta.project_id,
         title=meta.title,

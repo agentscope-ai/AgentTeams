@@ -27,6 +27,8 @@
 #   AGENTTEAMS_VERSION            Image tag          (default: latest)
 #   AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION DeepSeek Harness runtime image tag (default: v0.1.0; independent of AGENTTEAMS_VERSION)
 #   AGENTTEAMS_REGISTRY           Image registry     (default: auto-detected by timezone)
+#   AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY
+#                                      Higress WASM plugin registry (default: cn-hangzhou primary)
 #   AGENTTEAMS_INSTALL_MANAGER_IMAGE       Override manager image (e.g., local build)
 #   AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE Override QwenPaw manager image (e.g., local build)
 #   AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE  Override legacy CoPaw manager image (e.g., local build)
@@ -1144,8 +1146,9 @@ AGENTTEAMS_WORKER_IDLE_TIMEOUT=$($Config.WORKER_IDLE_TIMEOUT)
 # JVM Args for Higress Console
 JVM_ARGS=$($env:JVM_ARGS)
 
-# Higress WASM plugin image registry (auto-selected by timezone)
-HIGRESS_ADMIN_WASM_PLUGIN_IMAGE_REGISTRY=$($Config.REGISTRY)
+# Higress WASM plugin image registry
+AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY=$($Config.HIGRESS_WASM_PLUGIN_REGISTRY)
+HIGRESS_ADMIN_WASM_PLUGIN_IMAGE_REGISTRY=$($Config.HIGRESS_WASM_PLUGIN_REGISTRY)
 
 # Data persistence
 AGENTTEAMS_DATA_DIR=$($Config.DATA_DIR)
@@ -2545,6 +2548,11 @@ function Install-Manager {
 
     # Detect registry
     $script:AGENTTEAMS_REGISTRY = Get-Registry -Timezone $script:AGENTTEAMS_TIMEZONE
+    $script:AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY = if ($env:AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY) {
+        $env:AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY
+    } else {
+        "higress-registry.cn-hangzhou.cr.aliyuncs.com"
+    }
 
     # Set image names
     $script:MANAGER_IMAGE = if ($env:AGENTTEAMS_INSTALL_MANAGER_IMAGE) {
@@ -2777,6 +2785,7 @@ function Install-Manager {
     # Store additional config
     $config.LANGUAGE = $script:AGENTTEAMS_LANGUAGE
     $config.REGISTRY = $script:AGENTTEAMS_REGISTRY
+    $config.HIGRESS_WASM_PLUGIN_REGISTRY = $script:AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY
     $config.WORKER_IMAGE = $script:WORKER_IMAGE
     $config.COPAW_WORKER_IMAGE = $script:COPAW_WORKER_IMAGE
     $config.QWENPAW_WORKER_IMAGE = $script:QWENPAW_WORKER_IMAGE

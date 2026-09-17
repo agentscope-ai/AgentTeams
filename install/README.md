@@ -150,6 +150,7 @@ $env:AGENTTEAMS_LLM_API_KEY = "your-api-key"
 | `AGENTTEAMS_VERSION` | Image tag | `latest` |
 | `AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION` | Experimental DeepSeek Harness runtime image tag; released independently from AgentTeams | `v0.1.0` |
 | `AGENTTEAMS_REGISTRY` | Image registry | *(auto-detected by timezone)* |
+| `AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY` | Higress WASM plugin registry | `higress-registry.cn-hangzhou.cr.aliyuncs.com` |
 
 ## Platform Notes
 

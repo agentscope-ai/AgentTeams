@@ -134,6 +134,15 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 			},
 		},
 		"agents": map[string]interface{}{
+			"list": []interface{}{
+				map[string]interface{}{
+					"id":       "main",
+					"name":     req.WorkerName,
+					"identity": map[string]interface{}{
+						"name": req.WorkerName,
+					},
+				},
+			},
 			"defaults": map[string]interface{}{
 				"timeoutSeconds": 1800,
 				"workspace":      "~",

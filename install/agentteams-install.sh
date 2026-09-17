@@ -501,8 +501,8 @@ msg() {
         "llm.codingplan.models_title.en") text="Select Qwen Cloud default model:" ;;
         "llm.codingplan.model.qwen36plus.zh") text="  1) qwen3.6-plus  - 千问 3.6（推荐）" ;;
         "llm.codingplan.model.qwen36plus.en") text="  1) qwen3.6-plus  - Qwen 3.6 (recommended)" ;;
-        "llm.codingplan.model.glm5.zh") text="  2) glm-5  - 智谱 GLM-5（编程推荐）" ;;
-        "llm.codingplan.model.glm5.en") text="  2) glm-5  - Zhipu GLM-5 (recommended for coding)" ;;
+        "llm.codingplan.model.glm5.zh") text="  2) glm-5.2  - 智谱 GLM-5.2（编程推荐）" ;;
+        "llm.codingplan.model.glm5.en") text="  2) glm-5.2  - Zhipu GLM-5.2 (recommended for coding)" ;;
         "llm.codingplan.model.kimi.zh") text="  3) kimi-k2.5  - Moonshot Kimi K2.5" ;;
         "llm.codingplan.model.kimi.en") text="  3) kimi-k2.5  - Moonshot Kimi K2.5" ;;
         "llm.codingplan.model.minimax.zh") text="  4) MiniMax-M2.5  - MiniMax M2.5" ;;
@@ -1248,7 +1248,7 @@ resolve_embedded_image() {
 # ============================================================
 # Known models list — used to detect custom models during install
 # ============================================================
-KNOWN_MODELS="gpt-5.4 gpt-5.3-codex gpt-5-mini gpt-5-nano claude-opus-4-6 claude-sonnet-4-6 claude-haiku-4-5 qwen3.6-plus qwen3.5-plus deepseek-chat deepseek-reasoner kimi-k2.5 glm-5 MiniMax-M2.7 MiniMax-M2.7-highspeed MiniMax-M2.5"
+KNOWN_MODELS="gpt-5.4 gpt-5.3-codex gpt-5-mini gpt-5-nano claude-opus-4-6 claude-sonnet-4-6 claude-haiku-4-5 qwen3.6-plus qwen3.5-plus deepseek-chat deepseek-reasoner kimi-k2.5 glm-5.2 glm-5 MiniMax-M2.7 MiniMax-M2.7-highspeed MiniMax-M2.5"
 
 is_known_model() {
     local model="$1"
@@ -2145,7 +2145,7 @@ step_llm() {
                     local _model_default
                     case "${AGENTTEAMS_DEFAULT_MODEL}" in
                         qwen3.6-plus) _model_default="1" ;;
-                        glm-5)        _model_default="2" ;;
+                        glm-5|glm-5.2) _model_default="2" ;;
                         kimi-k2.5)    _model_default="3" ;;
                         MiniMax-M2.5) _model_default="4" ;;
                         *)            _model_default="1" ;;
@@ -2162,7 +2162,7 @@ step_llm() {
                 if [ "${CODINGPLAN_MODEL_CHOICE}" = "b" ]; then STEP_RESULT="back"; return 0; fi
                 case "${CODINGPLAN_MODEL_CHOICE}" in
                     1|qwen3.6-plus) AGENTTEAMS_DEFAULT_MODEL="qwen3.6-plus" ;;
-                    2|glm-5)        AGENTTEAMS_DEFAULT_MODEL="glm-5" ;;
+                    2|glm-5|glm-5.2) AGENTTEAMS_DEFAULT_MODEL="glm-5.2" ;;
                     3|kimi-k2.5)    AGENTTEAMS_DEFAULT_MODEL="kimi-k2.5" ;;
                     4|MiniMax-M2.5) AGENTTEAMS_DEFAULT_MODEL="MiniMax-M2.5" ;;
                     *)              AGENTTEAMS_DEFAULT_MODEL="qwen3.6-plus" ;;
@@ -2216,7 +2216,7 @@ step_llm() {
                             local _model_default
                             case "${AGENTTEAMS_DEFAULT_MODEL}" in
                                 qwen3.6-plus) _model_default="1" ;;
-                                glm-5)        _model_default="2" ;;
+                                glm-5|glm-5.2) _model_default="2" ;;
                                 kimi-k2.5)    _model_default="3" ;;
                                 MiniMax-M2.5) _model_default="4" ;;
                                 *)            _model_default="1" ;;
@@ -2233,7 +2233,7 @@ step_llm() {
                         if [ "${CODINGPLAN_MODEL_CHOICE}" = "b" ]; then STEP_RESULT="back"; return 0; fi
                         case "${CODINGPLAN_MODEL_CHOICE}" in
                             1|qwen3.6-plus) AGENTTEAMS_DEFAULT_MODEL="qwen3.6-plus" ;;
-                            2|glm-5)        AGENTTEAMS_DEFAULT_MODEL="glm-5" ;;
+                            2|glm-5|glm-5.2) AGENTTEAMS_DEFAULT_MODEL="glm-5.2" ;;
                             3|kimi-k2.5)    AGENTTEAMS_DEFAULT_MODEL="kimi-k2.5" ;;
                             4|MiniMax-M2.5) AGENTTEAMS_DEFAULT_MODEL="MiniMax-M2.5" ;;
                             *)              AGENTTEAMS_DEFAULT_MODEL="qwen3.6-plus" ;;

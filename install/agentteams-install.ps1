@@ -363,7 +363,7 @@ $script:Messages = @{
     "llm.alibaba.model.invalid" = @{ zh = "无效选择: {0}（请输入 1、2 或 3）"; en = "Invalid choice: {0} (please enter 1, 2, or 3)" }
     "llm.codingplan.models_title" = @{ zh = "选择通义 Token 套餐默认模型:"; en = "Select Qwen Cloud default model:" }
     "llm.codingplan.model.qwen36plus" = @{ zh = "  1) qwen3.6-plus  - 千问 3.6（推荐）"; en = "  1) qwen3.6-plus  - Qwen 3.6 (recommended)" }
-    "llm.codingplan.model.glm5" = @{ zh = "  2) glm-5  - 智谱 GLM-5（编程推荐）"; en = "  2) glm-5  - Zhipu GLM-5 (recommended for coding)" }
+    "llm.codingplan.model.glm5" = @{ zh = "  2) glm-5.2  - 智谱 GLM-5.2（编程推荐）"; en = "  2) glm-5.2  - Zhipu GLM-5.2 (recommended for coding)" }
     "llm.codingplan.model.kimi" = @{ zh = "  3) kimi-k2.5  - Moonshot Kimi K2.5"; en = "  3) kimi-k2.5  - Moonshot Kimi K2.5" }
     "llm.codingplan.model.minimax" = @{ zh = "  4) MiniMax-M2.5  - MiniMax M2.5"; en = "  4) MiniMax-M2.5  - MiniMax M2.5" }
     "llm.codingplan.model.select" = @{ zh = "选择模型 [1/2/3/4]"; en = "Select model [1/2/3/4]" }
@@ -727,7 +727,7 @@ $script:KnownModels = @(
     "gpt-5.4", "gpt-5.3-codex", "gpt-5-mini", "gpt-5-nano",
     "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5",
     "qwen3.6-plus", "qwen3.5-plus", "deepseek-chat", "deepseek-reasoner",
-    "kimi-k2.5", "glm-5", "MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5"
+    "kimi-k2.5", "glm-5.2", "glm-5", "MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5"
 )
 
 function Test-KnownModel {
@@ -1847,6 +1847,7 @@ function Step-Llm {
                     $defaultModel = switch ($script:config.DEFAULT_MODEL) {
                         "qwen3.6-plus" { "1" }
                         "glm-5"         { "2" }
+                        "glm-5.2"       { "2" }
                         "kimi-k2.5"     { "3" }
                         "MiniMax-M2.5"  { "4" }
                         default         { "1" }
@@ -1862,7 +1863,7 @@ function Step-Llm {
                 if ($codingPlanModelChoice -eq "b") { $script:StepResult = "back"; return }
                 switch -Regex ($codingPlanModelChoice) {
                     "^(1|qwen3\.6-plus)$"  { $script:config.DEFAULT_MODEL = "qwen3.6-plus" }
-                    "^(2|glm-5)$"          { $script:config.DEFAULT_MODEL = "glm-5" }
+                    "^(2|glm-5|glm-5\.2)$"  { $script:config.DEFAULT_MODEL = "glm-5.2" }
                     "^(3|kimi-k2\.5)$"     { $script:config.DEFAULT_MODEL = "kimi-k2.5" }
                     "^(4|MiniMax-M2\.5)$"  { $script:config.DEFAULT_MODEL = "MiniMax-M2.5" }
                     default                { $script:config.DEFAULT_MODEL = "qwen3.6-plus" }
@@ -1899,6 +1900,7 @@ function Step-Llm {
                         $defaultModel = switch ($script:config.DEFAULT_MODEL) {
                             "qwen3.6-plus" { "1" }
                             "glm-5"         { "2" }
+                            "glm-5.2"       { "2" }
                             "kimi-k2.5"     { "3" }
                             "MiniMax-M2.5"  { "4" }
                             default         { "1" }
@@ -1914,7 +1916,7 @@ function Step-Llm {
                     if ($codingPlanModelChoice -eq "b") { $script:StepResult = "back"; return }
                     switch -Regex ($codingPlanModelChoice) {
                         "^(1|qwen3\.6-plus)$"  { $script:config.DEFAULT_MODEL = "qwen3.6-plus" }
-                        "^(2|glm-5)$"          { $script:config.DEFAULT_MODEL = "glm-5" }
+                        "^(2|glm-5|glm-5\.2)$"  { $script:config.DEFAULT_MODEL = "glm-5.2" }
                         "^(3|kimi-k2\.5)$"     { $script:config.DEFAULT_MODEL = "kimi-k2.5" }
                         "^(4|MiniMax-M2\.5)$"  { $script:config.DEFAULT_MODEL = "MiniMax-M2.5" }
                         default                { $script:config.DEFAULT_MODEL = "qwen3.6-plus" }

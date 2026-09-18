@@ -126,7 +126,28 @@ func (h *LifecycleHandler) EnsureReady(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if worker.Status.Phase == "Stopped" || worker.Status.Phase == "Sleeping" {
+	b := h.registry.DetectWorkerBackend(r.Context())
+	needsStart := worker.Status.Phase == "Stopped" || worker.Status.Phase == "Sleeping"
+	// backendRunning gates the "Ready" answer. The CR phase is written asynchronously
+	// and the ready map only records the last self-report, so neither notices a
+	// container that was stopped or removed afterwards: ask the backend. With no
+	// backend detected there is nothing to ask, and the self-report stays the signal.
+	backendRunning := b == nil
+	if worker.Status.Phase == "Running" && b != nil {
+		result, err := b.Status(r.Context(), name)
+		switch {
+		case err != nil || result == nil:
+			// Fail closed: an undeterminable backend must not be reported Ready.
+			log.Printf("[WARN] ensure-ready status worker %s: %v", name, err)
+		case result.Status == backend.StatusRunning:
+			backendRunning = true
+		case result.Status == backend.StatusStopped || result.Status == backend.StatusNotFound:
+			log.Printf("[INFO] ensure-ready worker %s: phase Running but backend reports %s, starting", name, result.Status)
+			needsStart = true
+		}
+	}
+
+	if needsStart {
 		// Set desired state in spec (declarative)
 		running := "Running"
 		worker.Spec.State = &running
@@ -136,7 +157,6 @@ func (h *LifecycleHandler) EnsureReady(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Directly operate on backend for immediate response
-		b := h.registry.DetectWorkerBackend(r.Context())
 		if b != nil {
 			if err := b.Start(r.Context(), name); err != nil {
 				// Start may fail if container/pod was removed (Stopped state on K8s).
@@ -155,7 +175,7 @@ func (h *LifecycleHandler) EnsureReady(w http.ResponseWriter, r *http.Request) {
 	}
 
 	phase := worker.Status.Phase
-	if phase == "Running" && h.isReady(name) {
+	if phase == "Running" && backendRunning && h.isReady(name) {
 		phase = "Ready"
 	}
 

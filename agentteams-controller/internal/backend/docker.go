@@ -715,12 +715,14 @@ func (d *DockerBackend) buildCreatePayload(req CreateRequest, consolePort string
 		hc.RestartPolicy = &dockerRestartPolicy{Name: req.RestartPolicy}
 	}
 
-	// Console port binding (CoPaw workers)
+	// Console port binding (CoPaw workers). Bound to loopback so the
+	// automatically published console is not reachable from other hosts;
+	// remote access can be granted via an explicit port mapping instead.
 	if consolePort != "" && hostPort > 0 {
 		portKey := consolePort + "/tcp"
 		p.ExposedPorts = map[string]struct{}{portKey: {}}
 		hc.PortBindings = map[string][]dockerPortBinding{
-			portKey: {{HostPort: strconv.Itoa(hostPort)}},
+			portKey: {{HostIP: "127.0.0.1", HostPort: strconv.Itoa(hostPort)}},
 		}
 	}
 

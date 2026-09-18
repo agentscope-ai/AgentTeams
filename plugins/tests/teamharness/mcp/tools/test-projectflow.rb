@@ -62,7 +62,11 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
         },
     }
     runtime_config = pathlib.Path("#{root}") / "runtime.yaml"
+    # #1183: role resolves from the runtime identity first (payload role
+    # cannot override it). This suite exercises the leader-facing
+    # projectflow actions, so the fixture identity is a leader.
     runtime_config.write_text(
+        "member:\\n  role: 'leader'\\n"
         "team:\\n  teamRoomId: '!team:example.test'\\n",
         encoding="utf-8",
     )

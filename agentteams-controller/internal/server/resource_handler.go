@@ -6,13 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	audit "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/audit"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -30,6 +33,10 @@ type ResourceHandler struct {
 	client    client.Client
 	namespace string
 	backend   *backend.Registry
+	// oss backs object-storage-backed read surfaces (the shared MCP
+	// registry). Nil in embedded mode without MinIO: the affected endpoints
+	// then report the shared half as unavailable instead of failing.
+	oss oss.StorageClient
 
 	defaultWorkerRuntime string
 
@@ -39,6 +46,10 @@ type ResourceHandler struct {
 	// controller instance, regardless of what the caller attempts to set.
 	// Empty string means no enforcement (embedded mode).
 	controllerName string
+
+	// audit records sensitive-surface events (#1220 §8); nil disables the
+	// durable layer (tests).
+	audit *audit.Client
 }
 
 // NewResourceHandler creates a handler. backend may be nil, in which case
@@ -46,13 +57,22 @@ type ResourceHandler struct {
 // controllerName, when non-empty, is force-stamped as agentteams.io/controller
 // on every CR this handler creates so HTTP-created resources cannot escape
 // the serving controller instance's cache scope.
-func NewResourceHandler(c client.Client, namespace string, b *backend.Registry, controllerName string) *ResourceHandler {
+func NewResourceHandler(c client.Client, namespace string, b *backend.Registry, controllerName string, a *audit.Client) *ResourceHandler {
 	return &ResourceHandler{
 		client:         c,
 		namespace:      namespace,
 		backend:        b,
 		controllerName: controllerName,
+		audit:          a,
 	}
+}
+
+// WithOSS attaches the object-storage client used by object-storage-backed
+// read surfaces (the shared MCP registry in ListMCPServers). Returns the
+// receiver for chaining; a nil argument leaves the shared half unavailable.
+func (h *ResourceHandler) WithOSS(store oss.StorageClient) *ResourceHandler {
+	h.oss = store
+	return h
 }
 
 // stampControllerLabel force-writes the controller ownership label on meta.
@@ -215,8 +235,9 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	if caller := authpkg.CallerFromContext(ctx); caller != nil && caller.Role == authpkg.RoleHuman {
-		if status, msg := h.checkHumanWorkerUpdate(ctx, caller, name, &req); status != 0 {
+	if caller := authpkg.CallerFromContext(ctx); caller != nil &&
+		(caller.Role == authpkg.RoleHuman || caller.Role == authpkg.RoleTeamLeader) {
+		if status, msg := h.checkScopedWorkerUpdate(ctx, caller, name, &req); status != 0 {
 			httputil.WriteError(w, status, msg)
 			return
 		}
@@ -538,6 +559,11 @@ func (h *ResourceHandler) CreateHuman(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Audit wiring point (#1220 §8 event table, line 6): the initial
+	// scope granted at creation is a sensitive-surface change and is
+	// recorded on both audit layers.
+	h.auditHumanCreated(r.Context(), human)
+
 	httputil.WriteJSON(w, http.StatusCreated, humanToResponse(human))
 }
 
@@ -571,12 +597,17 @@ func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	caller := authpkg.CallerFromContext(ctx)
 	for attempt := 0; attempt < k8sUpdateMaxRetries; attempt++ {
 		var human v1beta1.Human
 		if err := h.client.Get(ctx, client.ObjectKey{Name: name, Namespace: h.namespace}, &human); err != nil {
 			writeK8sError(w, "get human for update", err)
 			return
 		}
+		capsBefore := human.Spec.Capabilities
+		plBefore := human.Spec.PermissionLevel
+		teamsBefore := human.Spec.AccessibleTeams
+		workersBefore := human.Spec.AccessibleWorkers
 
 		if req.PermissionLevel != nil && (*req.PermissionLevel < 1 || *req.PermissionLevel > 3) {
 			httputil.WriteError(w, http.StatusBadRequest, "permissionLevel must be 1 (admin), 2 (team), or 3 (worker)")
@@ -591,6 +622,12 @@ func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
 			// service error): a server problem, not a client error.
 			writeK8sError(w, "validate human references", err)
 			return
+		}
+		if req.Capabilities != nil {
+			if err := validateCapabilities(req.Capabilities); err != nil {
+				httputil.WriteError(w, http.StatusBadRequest, err.Error())
+				return
+			}
 		}
 
 		if req.DisplayName != nil {
@@ -608,6 +645,11 @@ func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
 		if req.AccessibleWorkers != nil {
 			human.Spec.AccessibleWorkers = *req.AccessibleWorkers
 		}
+		if req.Capabilities != nil {
+			// Store the canonical form (deduped + sorted); validation above
+			// already rejected values outside the closed set.
+			human.Spec.Capabilities = authpkg.NormalizeCapabilities(*req.Capabilities)
+		}
 		if req.Note != nil {
 			human.Spec.Note = *req.Note
 		}
@@ -621,9 +663,173 @@ func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Audit wiring point (#1220 §8 event table, line 1): a capability
+		// grant/revoke is a sensitive-surface change and is recorded on
+		// both audit layers.
+		if req.Capabilities != nil {
+			h.auditCapabilityChange(ctx, name, caller, capsBefore, human.Spec.Capabilities)
+		}
+
+		// Audit wiring point (#1220 §8 event table, line 6): human scope
+		// changes (permission level / accessible teams / accessible
+		// workers) are sensitive-surface changes and are recorded on both
+		// audit layers.
+		h.auditHumanScopeChange(ctx, name, caller, plBefore, teamsBefore, workersBefore, human.Spec)
+
 		httputil.WriteJSON(w, http.StatusOK, humanToResponse(&human))
 		return
 	}
+}
+
+// auditCapabilityChange emits one event per changed capability value
+// (#1220 §8 event table, line 1: capability grant/revoke). Audit failures
+// never break the update: the audit client logs durable-layer errors
+// internally.
+func (h *ResourceHandler) auditCapabilityChange(ctx context.Context, name string, caller *authpkg.CallerIdentity, before, after []string) {
+	if h.audit == nil || caller == nil {
+		return
+	}
+	beforeN := authpkg.NormalizeCapabilities(before)
+	afterN := authpkg.NormalizeCapabilities(after)
+	for _, cap := range diffStringSlices(beforeN, afterN) {
+		h.audit.Record(ctx, audit.Event{
+			Who: caller.Username, Role: caller.Role, Target: name,
+			Action: "capability_grant", Capability: cap,
+			Before: beforeN, After: afterN,
+		})
+	}
+	for _, cap := range diffStringSlices(afterN, beforeN) {
+		h.audit.Record(ctx, audit.Event{
+			Who: caller.Username, Role: caller.Role, Target: name,
+			Action: "capability_revoke", Capability: cap,
+			Before: beforeN, After: afterN,
+		})
+	}
+}
+
+// auditHumanScopeChange emits one event per changed scope field
+// (#1220 §8 event table, line 6: human scope change). Reordering a list
+// without membership changes is not a change and emits no event. Audit
+// failures never break the update: the audit client logs durable-layer
+// errors internally.
+func (h *ResourceHandler) auditHumanScopeChange(ctx context.Context, name string, caller *authpkg.CallerIdentity, plBefore int, teamsBefore, workersBefore []string, after v1beta1.HumanSpec) {
+	if h.audit == nil || caller == nil {
+		return
+	}
+	if after.PermissionLevel != plBefore {
+		h.audit.Record(ctx, audit.Event{
+			Who: caller.Username, Role: caller.Role, Target: name,
+			Action: "permission_level_change",
+			Before: []string{strconv.Itoa(plBefore)},
+			After:  []string{strconv.Itoa(after.PermissionLevel)},
+			Detail: fmt.Sprintf("permission_level %d -> %d", plBefore, after.PermissionLevel),
+		})
+	}
+	auditScopeListChange(h.audit, ctx, name, caller, "accessible_teams_change", teamsBefore, after.AccessibleTeams)
+	auditScopeListChange(h.audit, ctx, name, caller, "accessible_workers_change", workersBefore, after.AccessibleWorkers)
+}
+
+// auditScopeListChange records one scope-list field (accessible teams or
+// workers) when its set membership changed.
+func auditScopeListChange(ac *audit.Client, ctx context.Context, name string, caller *authpkg.CallerIdentity, action string, before, after []string) {
+	if ac == nil || caller == nil {
+		return
+	}
+	added := diffStringSlices(before, after)
+	removed := diffStringSlices(after, before)
+	if len(added) == 0 && len(removed) == 0 {
+		return
+	}
+	ac.Record(ctx, audit.Event{
+		Who: caller.Username, Role: caller.Role, Target: name,
+		Action: action,
+		Before: before, After: after,
+		Detail: "added=[" + strings.Join(added, ", ") + "] removed=[" + strings.Join(removed, ", ") + "]",
+	})
+}
+
+// humanScopeSummary renders the non-empty scope fields of a human spec as
+// a controlled summary (never secret values) for create/delete audit
+// events.
+func humanScopeSummary(spec v1beta1.HumanSpec) []string {
+	var out []string
+	if spec.PermissionLevel >= 1 {
+		out = append(out, "permission_level="+strconv.Itoa(spec.PermissionLevel))
+	}
+	if len(spec.AccessibleTeams) > 0 {
+		out = append(out, "accessible_teams=["+strings.Join(spec.AccessibleTeams, ", ")+"]")
+	}
+	if len(spec.AccessibleWorkers) > 0 {
+		out = append(out, "accessible_workers=["+strings.Join(spec.AccessibleWorkers, ", ")+"]")
+	}
+	return out
+}
+
+// auditHumanCreated records a human creation with its initial scope
+// (#1220 §8 event table, line 6). The After list carries the granted
+// scope summary.
+func (h *ResourceHandler) auditHumanCreated(ctx context.Context, human *v1beta1.Human) {
+	if h.audit == nil {
+		return
+	}
+	caller := authpkg.CallerFromContext(ctx)
+	if caller == nil {
+		return
+	}
+	h.audit.Record(ctx, audit.Event{
+		Who: caller.Username, Role: caller.Role, Target: human.Name,
+		Action: "human_created", After: humanScopeSummary(human.Spec),
+	})
+}
+
+// auditHumanDeleted records a human deletion with the scope that was
+// revoked (#1220 §8 event table, line 6). The Before list carries the
+// removed scope summary.
+func (h *ResourceHandler) auditHumanDeleted(ctx context.Context, human *v1beta1.Human) {
+	if h.audit == nil {
+		return
+	}
+	caller := authpkg.CallerFromContext(ctx)
+	if caller == nil {
+		return
+	}
+	h.audit.Record(ctx, audit.Event{
+		Who: caller.Username, Role: caller.Role, Target: human.Name,
+		Action: "human_deleted", Before: humanScopeSummary(human.Spec),
+	})
+}
+
+// diffStringSlices returns the elements present in b but not in a.
+func diffStringSlices(a, b []string) []string {
+	set := make(map[string]struct{}, len(a))
+	for _, s := range a {
+		set[s] = struct{}{}
+	}
+	var out []string
+	for _, s := range b {
+		if _, ok := set[s]; !ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// validateCapabilities rejects capability values outside the closed set
+// (#1220 §3). The error message lists the valid values so the client can
+// self-correct; the set itself is pinned in internal/auth
+// (TestValidCapabilitiesMatchesDocumentedValueSet).
+func validateCapabilities(caps *[]string) error {
+	var invalid []string
+	for _, c := range *caps {
+		if !authpkg.IsValidCapability(authpkg.Capability(c)) {
+			invalid = append(invalid, c)
+		}
+	}
+	if len(invalid) > 0 {
+		return fmt.Errorf("capabilities contains unknown value(s) %s; valid values: %s",
+			strings.Join(invalid, ", "), strings.Join(authpkg.ValidCapabilityList(), ", "))
+	}
+	return nil
 }
 
 // errDanglingReference marks validation errors where a referenced Team or
@@ -708,10 +914,21 @@ func (h *ResourceHandler) DeleteHuman(w http.ResponseWriter, r *http.Request) {
 	human := &v1beta1.Human{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: h.namespace},
 	}
+	// Read before delete so the revoked scope can be recorded (#1220 §8
+	// event table, line 6). A missing object is still a plain 404 with
+	// no audit event.
+	if err := h.client.Get(r.Context(), client.ObjectKeyFromObject(human), human); err != nil {
+		writeK8sError(w, "get human for delete", err)
+		return
+	}
 	if err := h.client.Delete(r.Context(), human); err != nil {
 		writeK8sError(w, "delete human", err)
 		return
 	}
+
+	// Audit wiring point (#1220 §8 event table, line 6): deleting a human
+	// revokes all of its access and is recorded on both audit layers.
+	h.auditHumanDeleted(r.Context(), human)
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -911,6 +1128,11 @@ func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 		MatrixUserID:     w.Status.MatrixUserID,
 		RoomID:           w.Status.RoomID,
 		Message:          w.Status.Message,
+		LastActiveAt:     w.Status.LastActiveAt,
+		AgentStatus:      w.Status.AgentStatus,
+		RunningTaskCount: w.Status.RunningTaskCount,
+		LastRunAt:        w.Status.LastRunAt,
+		LastFinishAt:     w.Status.LastFinishAt,
 	}
 	if resp.Phase == "" {
 		resp.Phase = "Pending"
@@ -991,6 +1213,7 @@ func humanToResponse(h *v1beta1.Human) HumanResponse {
 		PermissionLevel:   h.Spec.PermissionLevel,
 		AccessibleTeams:   h.Spec.AccessibleTeams,
 		AccessibleWorkers: h.Spec.AccessibleWorkers,
+		Capabilities:      h.Spec.Capabilities,
 		Note:              h.Spec.Note,
 		MatrixUserID:      h.Status.MatrixUserID,
 		InitialPassword:   h.Status.InitialPassword,
@@ -1013,20 +1236,27 @@ func (h *ResourceHandler) findTeamForMember(ctx context.Context, name string) (s
 	return team.Name, true, nil
 }
 
-// checkHumanWorkerUpdate enforces the L2 human boundary on worker updates.
+// checkScopedWorkerUpdate enforces the scoped write boundary on worker
+// updates for L2 humans and team leaders (#1220 §5/§9, B2). Both roles may
+// touch only the non-sensitive surfaces: skills (public-catalog assignment)
+// and mcpServers — the gateway credential is attached at generation time
+// only to entries on the trusted AI gateway host (GenerateMcporterConfig,
+// #1220 §7), so an external URL no longer receives the key and writing
+// mcpServers is no longer a credential-exfiltration path. remoteSkills
+// (arbitrary external registries whose source URIs may embed tokens) is
+// gated on the external_sources capability; team leaders are
+// service-account scoped and never carry it. Everything else (model, image,
+// identity, resources, ...) is the team owner's / admin's domain.
 // The worker must be a member of one of the caller's accessibleTeams —
-// standalone workers are hidden from L2 readers (ListWorkers), so they are
-// hidden here as well (404 keeps the endpoint probe-resistant). The request
-// may only touch the public-catalog skill assignment (skills). remoteSkills
-// (arbitrary external registries with credential-bearing source URIs) and
-// mcpServers (the gateway consumer key is injected into every entry, so an
-// L2-controlled URL is a credential-exfiltration path) require an elevated
-// capability pending the L2 permission design; everything else (model,
-// image, identity, resources, ...) is the team owner's domain.
+// standalone workers are hidden from scoped readers (ListWorkers), so they
+// are hidden here as well (404 keeps the endpoint probe-resistant, W8).
+// The middleware still carries the ActionUpdate+requireSameTeam scope; this
+// handler is the field-level boundary (same pattern as the #1216 approval
+// proxy — the middleware cannot parse the request body).
 // TestL2WorkerUpdateFieldPolicyCoversAllRequestFields pins the policy so no
-// field of UpdateWorkerRequest becomes L2-writable by omission.
+// field of UpdateWorkerRequest becomes scoped-writable by omission.
 // Returns (0, "") when the update is allowed.
-func (h *ResourceHandler) checkHumanWorkerUpdate(ctx context.Context, caller *authpkg.CallerIdentity, name string, req *UpdateWorkerRequest) (int, string) {
+func (h *ResourceHandler) checkScopedWorkerUpdate(ctx context.Context, caller *authpkg.CallerIdentity, name string, req *UpdateWorkerRequest) (int, string) {
 	team, _, ok, err := findTeamMember(ctx, h.client, h.namespace, name)
 	if err != nil {
 		return http.StatusInternalServerError, "lookup worker team: " + err.Error()
@@ -1066,17 +1296,19 @@ func (h *ResourceHandler) checkHumanWorkerUpdate(ctx context.Context, caller *au
 	if req.Agents != "" {
 		forbidden = append(forbidden, "agents")
 	}
-	// Credential-bearing surfaces: remoteSkills (registry source URIs may
-	// embed tokens) and mcpServers (GenerateMcporterConfig injects the
-	// gateway bearer key into every entry, URL used verbatim — an
-	// attacker-controlled URL exfiltrates it). Elevated capability pending
-	// the L2 permission design.
-	if req.RemoteSkills != nil {
+	// remoteSkills: arbitrary external registries whose source URIs may
+	// embed tokens — gated on the external_sources capability. L2 humans
+	// with the grant (or full_access) may write it; team leaders are
+	// service-account scoped and never carry the capability, so for them
+	// remoteSkills is always forbidden.
+	if req.RemoteSkills != nil && !authpkg.HasCapability(caller, authpkg.CapabilityExternalSources) {
 		forbidden = append(forbidden, "remoteSkills")
 	}
-	if req.McpServers != nil {
-		forbidden = append(forbidden, "mcpServers")
-	}
+	// mcpServers: writable for both scoped roles (#1220 §7, part 2). The
+	// gateway credential is attached at generation time only to entries on
+	// the trusted AI gateway host, so a scoped caller can no longer exfil
+	// the key through an external URL; pointing a worker at an external
+	// endpoint is an operator decision, not a credential leak.
 	if req.Package != "" {
 		forbidden = append(forbidden, "package")
 	}
@@ -1097,7 +1329,7 @@ func (h *ResourceHandler) checkHumanWorkerUpdate(ctx context.Context, caller *au
 	}
 	if len(forbidden) > 0 {
 		return http.StatusBadRequest,
-			"L2 humans may only update the skills field (public-catalog assignment); remoteSkills and mcpServers require an elevated capability; not allowed: " + strings.Join(forbidden, ", ")
+			"L2 humans and team leaders may only update the skills and mcpServers fields; remoteSkills requires the external_sources capability; not allowed: " + strings.Join(forbidden, ", ")
 	}
 	return 0, ""
 }

@@ -500,15 +500,18 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                         "submit_task",
                         "check_task",
                         "cancel_task",
+                        "report_progress",
                         "request_attention",
                     ],
                     "description": (
-                        "Task lifecycle operation. request_attention pulls a human "
-                        "decision (kind: approval / decision / escalation / other) "
-                        "out of the group chat while the task is still in flight. "
-                        "Pass payload.resolved=true to close the open record of "
-                        "that kind (no new ping); the call is rejected when no "
-                        "record of that kind exists."
+                        "Task lifecycle operation. report_progress records a "
+                        "non-terminal progress note on an in-flight task (state "
+                        "unchanged, no leader notification). request_attention "
+                        "pulls a human decision (kind: approval / decision / "
+                        "escalation / other) out of the group chat while the task "
+                        "is still in flight. Pass payload.resolved=true to close "
+                        "the open record of that kind (no new ping); the call is "
+                        "rejected when no record of that kind exists."
                     ),
                 },
                 "projectId": {
@@ -3422,18 +3425,16 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
         raise ValueError("task not found in project plan")
     # Accepting the result resolves ALL outstanding attention requests
     # on the task: the leader's decision closed the loop, so no room
-    # ping on this task counts as an open loop anymore.
-    task_state = _read_json(_task_state_path(arguments, task_id), {})
-    if isinstance(task_state, dict) and task_state:
-        attention = task_state.get("attention")
+    # ping on this task counts as an open loop anymore.  Resolve in place
+    # on the task_meta dict — the terminal status write below persists it
+    # in the same write (a separate read-modify-write here would be
+    # clobbered by that later write of the older dict).
+    if isinstance(task_meta, dict) and task_meta:
+        attention = task_meta.get("attention")
         if isinstance(attention, list):
-            attention_changed = False
             for item in attention:
                 if isinstance(item, dict) and not item.get("resolved"):
                     item["resolved"] = True
-                    attention_changed = True
-            if attention_changed:
-                _write_task(arguments, task_state)
     result_status = str(result_status_value or "SUCCESS")
     if node_status == "completed":
         project["requester_report"] = {
@@ -3490,14 +3491,18 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
         }, "accept_task_result project")
     synced: bool | None = None
     if task_meta:
+        # Gap fix (design G2): the task meta moves with the node.
+        # (Idempotent re-accepts returned earlier; from == submitted in the
+        # normal path — #1183's guard rejects anything else known.)
+        _append_transition_history(
+            task_meta,
+            str(task_meta.get("status") or ""),
+            node_status,
+            "accept_task_result",
+            _transition_actor(arguments),
+        )
         task_meta["status"] = node_status
         _resolve_task_continuation(task_meta, node_status)
-        # Carry the resolved attention list (closed above, possibly
-        # after the entry-time task load) into the final task write so
-        # the leader-side mutation cannot clobber the closed loops.
-        freshest_task = _read_json(_task_state_path(arguments, task_id), {})
-        if isinstance(freshest_task, dict) and isinstance(freshest_task.get("attention"), list):
-            task_meta["attention"] = freshest_task["attention"]
         try:
             _write_task(arguments, task_meta)
         except OSError as exc:
@@ -3648,6 +3653,7 @@ _TASKFLOW_MUTATING_ACTIONS = frozenset({
     "ack_task",
     "submit_task",
     "cancel_task",
+    "report_progress",
     "request_attention",
 })
 
@@ -4406,6 +4412,20 @@ def _pull_project(arguments: dict[str, Any], project_id: str) -> bool:
 
 TERMINAL_TASK_STATUSES = {"completed", "revision", "blocked", "cancelled"}
 
+# Task transition table — single source of truth:
+# plugins/teamharness/contracts/task-transitions.json (cross-language golden
+# fixture; the MCP contract test asserts this constant equals the file).
+# "prepared" never appears on project nodes; it only exists in task meta.
+TRANSITIONS: dict[str, list[str]] = {
+    "planned": ["prepared", "assigned", "in_progress", "submitted", "cancelled"],
+    "prepared": ["assigned", "cancelled"],
+    "assigned": ["in_progress", "submitted", "cancelled"],
+    "in_progress": ["submitted", "cancelled"],
+    "submitted": ["completed", "revision", "blocked", "cancelled"],
+}
+
+TASK_HISTORY_LIMIT = 50
+
 
 def _terminal_task_status(arguments: dict[str, Any], task: dict[str, Any], task_id: str) -> str:
     project_id = str(task.get("project_id") or "")
@@ -4450,6 +4470,122 @@ def _update_project_task(arguments: dict[str, Any], project_id: str, task_id: st
         _write_json(path, project)
         _write_project_plan(_project_dir(arguments, project_id), project)
     return _sync_project(arguments, project_id)
+
+
+def _transition_actor(arguments: dict[str, Any]) -> str:
+    """history actor: ``role:account_id`` (precedent: ``_ack_`` role stamping)."""
+    role = _role(arguments) or "unknown"
+    account = str(arguments.get("account_id") or "default").strip() or "default"
+    return f"{role}:{account}"
+
+
+def _transition_guidance(action: str, from_status: str) -> str:
+    if action in ("ack_task", "submit_task"):
+        if from_status in ("", "planned", "prepared"):
+            return "delegate_task it first" if action == "ack_task" else "ack_task it first"
+        return "wait for a leader decision (accept_task_result)"
+    if action == "accept_task_result":
+        return "wait for submit_task"
+    if action == "delegate_task":
+        return "cancel_task it first, or wait for the submission to be decided"
+    return "check the task transition table (task-transitions.json)"
+
+
+def _assert_transition(from_status: str, to_status: str, action: str) -> None:
+    """Table check.  Same-state re-entry is a legal no-op (idempotent retry)."""
+    if from_status == to_status:
+        return
+    allowed = TRANSITIONS.get(from_status)
+    if allowed is None:
+        raise ValueError(
+            f"{action}: task is in unexpected state {from_status or 'missing'}; "
+            f"{_transition_guidance(action, from_status)}"
+        )
+    if to_status not in allowed:
+        raise ValueError(
+            f"{action}: task is '{from_status}'; {_transition_guidance(action, from_status)} "
+            f"(allowed transitions from '{from_status}': {', '.join(allowed)})"
+        )
+
+
+def _append_transition_history(
+    task: dict[str, Any],
+    from_status: str,
+    to_status: str,
+    action: str,
+    actor: str,
+    note: str = "",
+    record_noop: bool = False,
+) -> None:
+    """Append a transition entry to task meta ``history`` (cap
+    TASK_HISTORY_LIMIT, dropping the oldest).  Mutates in place; the caller
+    persists.  No-op re-entries are not recorded unless ``record_noop``
+    (report_progress uses from == to on purpose).
+
+    Each entry carries ``seq``, the per-task monotonic sequence stored in
+    the task meta as ``history_seq``: timestamps are second-resolution and
+    repeated progress entries are allowed, so content cannot identify an
+    event, and the reader's /events cursor needs a stable identity that
+    survives cap truncation.  Legacy entries predating the field are
+    backfilled in list order on this write (append order is stable)."""
+    if from_status == to_status and not record_noop:
+        return
+    history = task.get("history")
+    if not isinstance(history, list):
+        history = []
+    # Stable event identity for the /events cursor (see docstring): the
+    # counter lives on the task meta, so it survives history truncation.
+    try:
+        seq = int(task.get("history_seq") or 0)
+    except (TypeError, ValueError):
+        seq = 0
+    for existing in history:
+        if isinstance(existing, dict) and existing.get("seq") is None:
+            seq += 1
+            existing["seq"] = seq
+    seq += 1
+    task["history_seq"] = seq
+    entry: dict[str, Any] = {
+        "ts": _utc_timestamp(),
+        "from": from_status,
+        "to": to_status,
+        "actor": actor,
+        "action": action,
+        "seq": seq,
+    }
+    if note:
+        entry["note"] = note
+    history.append(entry)
+    if len(history) > TASK_HISTORY_LIMIT:
+        history = history[-TASK_HISTORY_LIMIT:]
+    task["history"] = history
+
+
+def _transition_task(
+    arguments: dict[str, Any],
+    task: dict[str, Any],
+    task_id: str,
+    new_status: str,
+    action: str,
+    note: str = "",
+    from_status: str | None = None,
+    **extra: Any,
+) -> str:
+    """Single entry point for task status changes: table validation ->
+    history append -> status + extra fields merged -> ``_write_task``.
+
+    Project-node mirroring and shared-storage sync stay at the call site
+    (each site has a different sync shape: exclude / result_paths).
+    Returns the previous task-meta status.
+    """
+    old_status = from_status if from_status is not None else str(task.get("status") or "")
+    _assert_transition(old_status, new_status, action)
+    if extra:
+        task.update(extra)
+    _append_transition_history(task, old_status, new_status, action, _transition_actor(arguments), note)
+    task["status"] = new_status
+    _write_task(arguments, task)
+    return old_status
 
 
 def _validate_assignee_membership(room_id: str, assignee: str) -> dict[str, Any]:
@@ -5076,6 +5212,18 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     ),
                 }
 
+            # Transition discipline: an in-flight (in_progress) or submitted
+            # task must not be silently reset to prepared — rebuilding the
+            # meta here would destroy the recorded progress/submission.
+            # (The assigned+eventId retry above already returned; an assigned
+            # task without eventId is a broken state and gets re-prepared.)
+            _delegate_from = str(existing_task.get("status") or "")
+            if _delegate_from in ("in_progress", "submitted"):
+                raise ValueError(
+                    f"delegate_task: task is '{_delegate_from}'; "
+                    f"{_transition_guidance('delegate_task', _delegate_from)}"
+                )
+
             # Atomicity contract: never mark a task assigned until the Worker
             # can actually receive it. Validate room membership first; then
             # prepare (status="prepared", files published); then send the
@@ -5115,6 +5263,41 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 task["assigned_to"] = assigned_to
             if source_room_id:
                 task["source_room_id"] = source_room_id
+            if not _delegate_from:
+                # Creation is recorded with from="planned" (the project-node
+                # view at this moment); prepared -> prepared retries are
+                # no-op re-entries and stay out of the history.
+                _append_transition_history(
+                    task,
+                    "planned",
+                    "prepared",
+                    "delegate_task",
+                    _transition_actor(arguments),
+                )
+            else:
+                # Re-delegate (a retry after a send/sync failure, or a repair
+                # /re-dispatch of a broken or revision state) must not erase
+                # the audit trail already recorded on this task: the fresh
+                # meta dict below replaces meta.json, so carry the existing
+                # entries over before the write.
+                prior_history = existing_task.get("history")
+                if isinstance(prior_history, list) and prior_history:
+                    task["history"] = list(prior_history)
+                if _delegate_from != "prepared":
+                    # Only prepared -> prepared retries are silent no-op
+                    # re-entries. Any other reachable re-entry changes the
+                    # state and is recorded so the trail stays complete: an
+                    # assigned task without eventId is the broken-state
+                    # repair path (revision and the other terminal states
+                    # are frozen upstream by the mutability guard).
+                    _append_transition_history(
+                        task,
+                        _delegate_from,
+                        "prepared",
+                        "delegate_task",
+                        _transition_actor(arguments),
+                        note="repair: assigned without eventId",
+                    )
             _write_task(arguments, task)
             # Publish task files to shared storage FIRST so a Worker that
             # receives the notification can read spec.md/meta.json. If the
@@ -5191,9 +5374,15 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
 
             # Send succeeded - commit the assignment atomically with the
             # recorded event_id, then re-push the assigned state.
-            task["status"] = "assigned"
-            task["eventId"] = notification["eventId"]
-            _write_task(arguments, task)
+            # (prepared -> assigned goes through the transition table.)
+            _transition_task(
+                arguments,
+                task,
+                task_id,
+                "assigned",
+                "delegate_task",
+                eventId=notification["eventId"],
+            )
             project_task_updates: dict[str, Any] = {"status": "assigned"}
             if assigned_to:
                 project_task_updates["assigned_to"] = assigned_to
@@ -5248,9 +5437,20 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             task = _load_task(arguments, task_id)
             _require_task_mutable(arguments, task, task_id, action)
             if task.get("status") != "submitted":
-                task["status"] = "in_progress"
-                task["acknowledged_by_role"] = role
-                _write_task(arguments, task)
+                # Tightening: ack only makes sense after the assignment
+                # (planned/prepared/missing -> structured error, not a
+                # silent state jump).
+                _ack_from = str(task.get("status") or "")
+                if _ack_from not in ("assigned", "in_progress"):
+                    raise ValueError(f"ack_task: task is '{_ack_from}'; delegate_task it first")
+                _transition_task(
+                    arguments,
+                    task,
+                    task_id,
+                    "in_progress",
+                    "ack_task",
+                    acknowledged_by_role=role,
+                )
                 _update_project_task(arguments, task.get("project_id", ""), task_id, status="in_progress")
             spec_path = _task_dir(arguments, task_id) / "spec.md"
             spec = spec_path.read_text(encoding="utf-8") if spec_path.exists() else ""
@@ -5340,6 +5540,14 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     exclude=["spec.md", "base/"],
                     result_paths=deliverables,
                 )
+                if not synced:
+                    return _sync_failure_result({
+                        "tool": "taskflow",
+                        "action": action,
+                        "task": task,
+                        "reused": True,
+                        "publishedArtifacts": [],
+                    }, "submit_task")
                 result = {
                     "ok": True,
                     "tool": "taskflow",
@@ -5347,7 +5555,14 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     "task": task,
                     "reused": True,
                     "publishedArtifacts": [],
-                    "synced": synced,
+                    "synced": True,
+                    "notification": _task_completion_notification(
+                        arguments,
+                        task,
+                        task_id,
+                        status,
+                        summary,
+                    ),
                     "notificationNeeded": _notification_needed(
                         "submit_task",
                         {"project_id": task.get("project_id", "")},
@@ -5365,34 +5580,43 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     summary,
                 )
                 return result
+            # Tightening: submission requires an acknowledged assignment.
+            _submit_from = str(task.get("status") or "")
+            if _submit_from not in ("assigned", "in_progress"):
+                raise ValueError(f"submit_task: task is '{_submit_from}'; ack_task it first")
             task_dir = _task_dir(arguments, task_id)
             task_dir.mkdir(parents=True, exist_ok=True)
             submission_id = uuid.uuid4().hex
             submitted_at = _utc_timestamp()
-            task.update({
-                "status": "submitted",
-                "result_status": status,
-                "summary": summary,
-                "deliverables": deliverables,
-                "submitted_by_role": role,
-                "submission_id": submission_id,
-                "submitted_at": submitted_at,
-                "result_digest": submitted_digest,
-                "continuation": {
-                    "status": "pending",
-                    "delivery_id": _continuation_delivery_id(
-                        _first_text(task.get("project_id"), task.get("projectId")),
-                        task_id,
-                        submission_id,
-                    ),
-                },
-            })
             if (task_dir / "result.md").is_file():
-                task["result_path"] = f"shared/tasks/{task_id}/result.md"
+                result_path_extra = {"result_path": f"shared/tasks/{task_id}/result.md"}
             else:
+                result_path_extra = {}
                 task.pop("result_path", None)
             try:
-                _write_task(arguments, task)
+                _transition_task(
+                    arguments,
+                    task,
+                    task_id,
+                    "submitted",
+                    "submit_task",
+                    result_status=status,
+                    summary=summary,
+                    deliverables=deliverables,
+                    submitted_by_role=role,
+                    submission_id=submission_id,
+                    submitted_at=submitted_at,
+                    result_digest=submitted_digest,
+                    continuation={
+                        "status": "pending",
+                        "delivery_id": _continuation_delivery_id(
+                            _first_text(task.get("project_id"), task.get("projectId")),
+                            task_id,
+                            submission_id,
+                        ),
+                    },
+                    **result_path_extra,
+                )
             except OSError as exc:
                 return _uncommitted_state_failure_result(tool="taskflow", action=action, error=exc)
             try:
@@ -5462,6 +5686,49 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 summary,
             )
             return result
+
+        if action == "report_progress":
+            if role not in {"worker", "remote-member"}:
+                raise ValueError(
+                    "report_progress requires worker or remote-member role"
+                )
+            task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
+            _pull_task(arguments, task_id)
+            task = _load_task(arguments, task_id)
+            _require_task_mutable(arguments, task, task_id, action)
+            # Progress notes only exist while the task is actually in flight.
+            _progress_from = str(task.get("status") or "")
+            if _progress_from not in ("assigned", "in_progress"):
+                raise ValueError(
+                    f"report_progress: task is '{_progress_from}'; ack_task it first"
+                )
+            note = str(payload.get("note") or "").strip()
+            if not note:
+                raise ValueError("note is required")
+            truncated = len(note) > 200
+            if truncated:
+                note = note[:200] + "…"
+            # from == to on purpose: progress is a no-op re-entry recorded in
+            # history (cap 50), with no state change and no notification.
+            _append_transition_history(
+                task,
+                _progress_from,
+                _progress_from,
+                "progress",
+                _transition_actor(arguments),
+                note,
+                record_noop=True,
+            )
+            _write_task(arguments, task)
+            synced = _sync_task(arguments, task_id, exclude=["spec.md", "base/"])
+            return {
+                "ok": True,
+                "tool": "taskflow",
+                "action": action,
+                "task": task,
+                "synced": synced,
+                "truncated": truncated,
+            }
 
         if action == "request_attention":
             if role not in {"worker", "leader", "remote-member"}:
@@ -5773,16 +6040,24 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             if terminal_status:
                 raise ValueError(f"cannot cancel terminal task: {terminal_status}")
 
-            task["status"] = "cancelled"
-            task["cancel_reason"] = reason
-            task["cancelled_at"] = _utc_timestamp()
             _resolve_task_continuation(task, "cancelled")
             if normalized_replacement_task_id:
-                task["replacement_task_id"] = normalized_replacement_task_id
+                replacement_extra = {"replacement_task_id": normalized_replacement_task_id}
             else:
+                replacement_extra = {}
                 task.pop("replacement_task_id", None)
             try:
-                _write_task(arguments, task)
+                _transition_task(
+                    arguments,
+                    task,
+                    task_id,
+                    "cancelled",
+                    "cancel_task",
+                    note=reason,
+                    cancel_reason=reason,
+                    cancelled_at=_utc_timestamp(),
+                    **replacement_extra,
+                )
             except OSError as exc:
                 return _uncommitted_state_failure_result(tool="taskflow", action=action, error=exc)
 

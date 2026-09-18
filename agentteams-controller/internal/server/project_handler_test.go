@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -67,6 +68,9 @@ func (m *mcLikeOSS) ListObjects(_ context.Context, prefix string) ([]string, err
 // names (the mc ls directory view) and stamps each with the fake's global
 // write clock.
 func (m *mcLikeOSS) ListObjectsDetailed(_ context.Context, prefix string) ([]oss.ObjectInfo, error) {
+	if m.failList {
+		return nil, errors.New("oss list failed")
+	}
 	keys, err := m.Memory.ListObjects(context.Background(), prefix)
 	if err != nil {
 		return nil, err
@@ -556,6 +560,40 @@ func TestListProjects_SortedAndTeamFiltered(t *testing.T) {
 	}
 }
 
+func TestListProjects_UpdatedAtPassthrough(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"updated_at": "2026-09-18T08:30:00Z",
+	})
+	putProject(store, "shared/projects/p2/meta.json", map[string]any{
+		"project_id": "p2", "title": "P2", "status": "active", "plan_type": "dag",
+	})
+	h := newProjectTestHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.ListProjects(rec, req)
+	var resp struct {
+		Projects []map[string]any `json:"projects"`
+		Total    int              `json:"total"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Total != 2 {
+		t.Fatalf("total=%d, want 2", resp.Total)
+	}
+	p1, p2 := resp.Projects[0], resp.Projects[1]
+	if got := p1["updated_at"]; got != "2026-09-18T08:30:00Z" {
+		t.Fatalf("p1 updated_at=%v, want passthrough", got)
+	}
+	if _, ok := p2["updated_at"]; ok {
+		t.Fatalf("p2 should omit updated_at when meta has none: %v", p2)
+	}
+}
+
 func TestGetProjectWorkflow_LoopWaitingUserHasNoNext(t *testing.T) {
 	store := ossfake.NewMemory()
 	putProject(store, "shared/projects/p1/meta.json", map[string]any{
@@ -971,7 +1009,7 @@ func TestListProjects_L2HumanAggregatesTeams(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
 	// L2 human with two accessible teams (Human CR accessibleTeams = CR names).
 	req = withCaller(req, &authpkg.CallerIdentity{
-		Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"alpha-team", "beta-team"},
+		Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"alpha-team", "beta-team"},
 	})
 	rec := httptest.NewRecorder()
 	h.ListProjects(rec, req)
@@ -1010,7 +1048,7 @@ func TestGetProjectWorkflow_L2HumanAnyAccessibleTeam(t *testing.T) {
 	})
 	h := newProjectTestHandler(t, store, team("alpha-team"), team("gamma-team"))
 	l2 := &authpkg.CallerIdentity{
-		Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"alpha-team"},
+		Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"alpha-team"},
 	}
 
 	// Accessible team -> OK.
@@ -1148,7 +1186,7 @@ func TestListProjects_L2HumanTeamFilter(t *testing.T) {
 	})
 	h := newProjectTestHandler(t, store, team("alpha-team"), team("beta-team"))
 	l2 := &authpkg.CallerIdentity{
-		Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"alpha-team", "beta-team"},
+		Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"alpha-team", "beta-team"},
 	}
 
 	// Narrow to one accessible team.
@@ -1215,13 +1253,13 @@ func TestProjectHTTP_L2AuthChain(t *testing.T) {
 	})
 	scheme := newProjectTestScheme(t)
 	human := &v1beta1.Human{
-		ObjectMeta: metav1.ObjectMeta{Name: "maizong", Namespace: "default"},
-		Spec:       v1beta1.HumanSpec{Username: "maizong", PermissionLevel: 2, AccessibleTeams: []string{"alpha-team"}},
+		ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
+		Spec:       v1beta1.HumanSpec{Username: "alice", PermissionLevel: 2, AccessibleTeams: []string{"alpha-team"}},
 	}
 	k8s := fake.NewClientBuilder().WithScheme(scheme).
 		WithRuntimeObjects(human, team("alpha-team")).Build()
 
-	matrixAuth := authpkg.NewMatrixTokenAuthenticator(k8s, "default", &staticWhoami{validToken: "matrix-token", userID: "@maizong:matrix.local"})
+	matrixAuth := authpkg.NewMatrixTokenAuthenticator(k8s, "default", &staticWhoami{validToken: "matrix-token", userID: "@alice:matrix.local"})
 	composite := authpkg.NewCompositeAuthenticator(&alwaysFailAuth{}, matrixAuth)
 	enricher := authpkg.NewCREnricher(k8s, "default")
 	mw := authpkg.NewMiddleware(composite, enricher, authpkg.NewAuthorizer(), k8s, "default")
@@ -1303,13 +1341,13 @@ func TestProjectHTTP_L2WriteChain(t *testing.T) {
 	})
 	scheme := newProjectTestScheme(t)
 	human := &v1beta1.Human{
-		ObjectMeta: metav1.ObjectMeta{Name: "maizong", Namespace: "default"},
-		Spec:       v1beta1.HumanSpec{Username: "maizong", PermissionLevel: 2, AccessibleTeams: []string{"alpha-team"}},
+		ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
+		Spec:       v1beta1.HumanSpec{Username: "alice", PermissionLevel: 2, AccessibleTeams: []string{"alpha-team"}},
 	}
 	k8s := fake.NewClientBuilder().WithScheme(scheme).
 		WithRuntimeObjects(human, team("alpha-team"), team("beta-team")).Build()
 
-	matrixAuth := authpkg.NewMatrixTokenAuthenticator(k8s, "default", &staticWhoami{validToken: "matrix-token", userID: "@maizong:matrix.local"})
+	matrixAuth := authpkg.NewMatrixTokenAuthenticator(k8s, "default", &staticWhoami{validToken: "matrix-token", userID: "@alice:matrix.local"})
 	composite := authpkg.NewCompositeAuthenticator(&alwaysFailAuth{}, matrixAuth)
 	enricher := authpkg.NewCREnricher(k8s, "default")
 	mw := authpkg.NewMiddleware(composite, enricher, authpkg.NewAuthorizer(), k8s, "default")
@@ -1333,8 +1371,8 @@ func TestProjectHTTP_L2WriteChain(t *testing.T) {
 	data, _ := store.GetObject(context.Background(), "teams/alpha-team/shared/projects/pa/meta.json")
 	var meta map[string]any
 	_ = json.Unmarshal(data, &meta)
-	if meta["status"] != "paused" || meta["pause_reason"] != "review" || meta["updated_by"] != "maizong (human)" {
-		t.Fatalf("meta after pause=%v, want paused/review/maizong (human)", meta)
+	if meta["status"] != "paused" || meta["pause_reason"] != "review" || meta["updated_by"] != "alice (human)" {
+		t.Fatalf("meta after pause=%v, want paused/review/alice (human)", meta)
 	}
 
 	// Cross-team pause -> 404 (existence hidden through the write path too).
@@ -1414,7 +1452,7 @@ func TestGetProjectWorkflow_PassThroughAuditFields(t *testing.T) {
 	store := ossfake.NewMemory()
 	putProject(store, "shared/projects/audit1/meta.json", map[string]any{
 		"project_id": "audit1", "title": "Audit", "status": "paused", "plan_type": "dag",
-		"updated_by": "luo", "updated_at": "2026-08-12T10:00:00Z", "pause_reason": "hold for review",
+		"updated_by": "carol", "updated_at": "2026-08-12T10:00:00Z", "pause_reason": "hold for review",
 		"tasks": []map[string]any{},
 	})
 	h := newProjectTestHandler(t, store)
@@ -1429,7 +1467,7 @@ func TestGetProjectWorkflow_PassThroughAuditFields(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &wf); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if wf.UpdatedBy != "luo" || wf.UpdatedAt != "2026-08-12T10:00:00Z" || wf.PauseReason != "hold for review" {
+	if wf.UpdatedBy != "carol" || wf.UpdatedAt != "2026-08-12T10:00:00Z" || wf.PauseReason != "hold for review" {
 		t.Fatalf("audit fields not passed through: %+v", wf)
 	}
 }
@@ -1926,7 +1964,7 @@ func TestGetTaskArtifact_L2Scoped(t *testing.T) {
 	})
 	putProject(store, "teams/alpha-team/shared/tasks/t1/result.md", map[string]any{"ok": true})
 	// L2 human with alpha-team accessible.
-	l2 := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "sun", Teams: []string{"alpha-team"}}
+	l2 := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "dave", Teams: []string{"alpha-team"}}
 	h := newProjectTestHandler(t, store, team("alpha-team"))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/tasks/t1/artifact", nil)
@@ -1956,7 +1994,7 @@ func TestGetTaskArtifact_L2CrossTeam404(t *testing.T) {
 	})
 	putProject(store, "teams/alpha-team/shared/tasks/t1/result.md", map[string]any{"ok": true})
 	// L2 human controlling only beta-team cannot read alpha-team artifact.
-	l2 := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "ma", Teams: []string{"beta-team"}}
+	l2 := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "eve", Teams: []string{"beta-team"}}
 	h := newProjectTestHandler(t, store, team("alpha-team"))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/tasks/t1/artifact", nil)
@@ -2267,7 +2305,7 @@ func TestGetProjectSpawns_AggregatesWorkerSpawns(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/spawns", nil)
 	req.SetPathValue("id", "p1")
-	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "luo", Teams: []string{"alpha-team"}})
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "carol", Teams: []string{"alpha-team"}})
 	rec := httptest.NewRecorder()
 	h.GetProjectSpawns(rec, req)
 
@@ -2463,7 +2501,7 @@ func TestGetProjectSpawns_TwoProjectsSameTeamIsolated(t *testing.T) {
 	// p1 sees only its own room's spawn.
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/spawns", nil)
 	req.SetPathValue("id", "p1")
-	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "luo", Teams: []string{"alpha-team"}})
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "carol", Teams: []string{"alpha-team"}})
 	rec := httptest.NewRecorder()
 	h.GetProjectSpawns(rec, req)
 	if rec.Code != http.StatusOK {
@@ -2483,7 +2521,7 @@ func TestGetProjectSpawns_TwoProjectsSameTeamIsolated(t *testing.T) {
 	// p2 sees only its own room's spawn.
 	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p2/spawns", nil)
 	req2.SetPathValue("id", "p2")
-	req2 = withCaller(req2, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "luo", Teams: []string{"alpha-team"}})
+	req2 = withCaller(req2, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "carol", Teams: []string{"alpha-team"}})
 	rec2 := httptest.NewRecorder()
 	h.GetProjectSpawns(rec2, req2)
 	if rec2.Code != http.StatusOK {
@@ -2565,7 +2603,7 @@ func TestGetProjectWorkflow_AmbiguousProjectID(t *testing.T) {
 	// A scoped caller sees only their own team's p1 — no ambiguity.
 	req3 := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/workflow", nil)
 	req3.SetPathValue("id", "p1")
-	req3 = withCaller(req3, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "luo", Teams: []string{"alpha-team"}})
+	req3 = withCaller(req3, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "carol", Teams: []string{"alpha-team"}})
 	rec3 := httptest.NewRecorder()
 	h.GetProjectWorkflow(rec3, req3)
 	if rec3.Code != http.StatusOK {
@@ -2803,7 +2841,7 @@ func spawnMsgEnv(t *testing.T, history []byte) (*ProjectHandler, *ossfake.Memory
 }
 
 func humanCaller() *authpkg.CallerIdentity {
-	return &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "luo", Teams: []string{"alpha-team"}}
+	return &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "carol", Teams: []string{"alpha-team"}}
 }
 
 func TestGetProjectSpawnMessages_ReturnsStreamAndTask(t *testing.T) {
@@ -3143,7 +3181,7 @@ func TestPauseProject_L2CrossTeamDenied(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/pause", nil)
 	req.SetPathValue("id", "p1")
-	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"beta-team"}})
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"beta-team"}})
 	rec := httptest.NewRecorder()
 	h.PauseProject(rec, req)
 
@@ -3163,7 +3201,7 @@ func TestPauseProject_L2SameTeamAllowed(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/pause", nil)
 	req.SetPathValue("id", "p1")
-	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "sunzong", Teams: []string{"alpha-team", "beta-team"}})
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "bob", Teams: []string{"alpha-team", "beta-team"}})
 	rec := httptest.NewRecorder()
 	h.PauseProject(rec, req)
 
@@ -3494,7 +3532,7 @@ func TestCreateProject_Admin(t *testing.T) {
 	store := ossfake.NewMemory()
 	h := newProjectTestHandler(t, store, team("alpha-team"))
 
-	body := `{"title":"New Project","source":"matrix","requester":"@luo:server","team_id":"alpha-team"}`
+	body := `{"title":"New Project","source":"matrix","requester":"@carol:server","team_id":"alpha-team"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects", strings.NewReader(body))
 	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
 	rec := httptest.NewRecorder()
@@ -3532,7 +3570,7 @@ func TestCreateProject_L2CrossTeamDenied(t *testing.T) {
 	// L2 with only beta-team accessible tries to create in alpha-team.
 	body := `{"title":"X","team_id":"alpha-team"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects", strings.NewReader(body))
-	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"beta-team"}})
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"beta-team"}})
 	rec := httptest.NewRecorder()
 	h.CreateProject(rec, req)
 
@@ -4185,7 +4223,9 @@ func TestWriteProjectMeta_SnapshotsPreviousVersion(t *testing.T) {
 	if len(children) != 1 {
 		t.Fatalf("history entries=%d, want 1", len(children))
 	}
-	snap, err := store.GetObject(context.Background(), children[0])
+	// Listed names are relative to the prefix (mc ls contract) — re-attach
+	// the history prefix for the read.
+	snap, err := store.GetObject(context.Background(), historyPrefixFor(key)+children[0])
 	if err != nil {
 		t.Fatalf("read snapshot: %v", err)
 	}
@@ -5026,5 +5066,824 @@ func TestCancelTask_RetryRepairsLegacyCancelledTaskWithoutTimestamp(t *testing.T
 	}
 	if _, ok := task["continuation"]; ok {
 		t.Fatalf("legacy cancelled task=%v, must not invent continuation", task)
+	}
+}
+
+// --- task transition engine (PR: workflow-transition-engine) ---
+
+// TestTaskTransitionsFixture loads the shared golden fixture (the same file
+// the Python write side tests against) and asserts the Go cancel semantics
+// stay in lockstep with it: every non-terminal state may be cancelled, no
+// terminal state has outbound edges, and the terminal set matches.
+func TestTaskTransitionsFixture(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "plugins", "teamharness", "contracts", "task-transitions.json"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	var fixture struct {
+		States      []string            `json:"states"`
+		Terminal    []string            `json:"terminal"`
+		Transitions map[string][]string `json:"transitions"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatalf("decode fixture: %v", err)
+	}
+	stateSet := make(map[string]bool, len(fixture.States))
+	for _, s := range fixture.States {
+		stateSet[s] = true
+	}
+	terminalSet := make(map[string]bool, len(fixture.Terminal))
+	for _, s := range fixture.Terminal {
+		terminalSet[s] = true
+		if !stateSet[s] {
+			t.Fatalf("terminal state %q missing from states", s)
+		}
+	}
+	for src, targets := range fixture.Transitions {
+		if !stateSet[src] {
+			t.Fatalf("unknown source state %q", src)
+		}
+		if terminalSet[src] {
+			t.Fatalf("terminal state %q must have no outbound edges, got %v", src, targets)
+		}
+		for _, dst := range targets {
+			if !stateSet[dst] {
+				t.Fatalf("state %q: unknown target %q", src, dst)
+			}
+		}
+	}
+	// Go's isTerminalTaskStatus must equal the fixture terminal set.
+	for s := range terminalSet {
+		if !isTerminalTaskStatus(s) {
+			t.Fatalf("fixture terminal %q not terminal in Go isTerminalTaskStatus", s)
+		}
+	}
+	for s := range stateSet {
+		if !terminalSet[s] && isTerminalTaskStatus(s) {
+			t.Fatalf("fixture non-terminal %q terminal in Go isTerminalTaskStatus", s)
+		}
+	}
+	// CancelTask accepts exactly the non-terminal states: the fixture must
+	// grant "cancelled" as a target from every non-terminal state.
+	for s := range stateSet {
+		if terminalSet[s] {
+			continue
+		}
+		var cancellable bool
+		for _, dst := range fixture.Transitions[s] {
+			if dst == "cancelled" {
+				cancellable = true
+			}
+		}
+		if !cancellable {
+			t.Fatalf("fixture must allow %q -> cancelled (CancelTask accepts it)", s)
+		}
+	}
+}
+
+func TestTaskDetailHistoryPassthrough(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}},
+			{"task_id": "t2", "title": "T2", "status": "planned", "depends_on": []string{}},
+			{"task_id": "t3", "title": "T3", "status": "in_progress", "depends_on": []string{}},
+		},
+	})
+	putTaskMeta(store, "", "t1", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "in_progress",
+		"history": []map[string]any{
+			{"ts": "2026-09-09T10:00:00Z", "from": "planned", "to": "prepared", "action": "delegate_task", "actor": "leader:default"},
+			{"ts": "2026-09-09T10:00:01Z", "from": "prepared", "to": "assigned", "action": "delegate_task", "actor": "leader:default"},
+			{"ts": "2026-09-09T10:00:05Z", "from": "assigned", "to": "in_progress", "action": "ack_task", "actor": "worker:a"},
+		},
+	})
+	// t2 has no history field at all (meta predates the engine).
+	putTaskMeta(store, "", "t2", map[string]any{
+		"task_id": "t2", "project_id": "p1", "status": "planned",
+	})
+	// t3 carries a mix of one valid and two malformed entries.
+	putTaskMeta(store, "", "t3", map[string]any{
+		"task_id": "t3", "project_id": "p1", "status": "in_progress",
+		"history": []any{
+			"not-an-object",
+			map[string]any{"ts": "2026-09-09T10:01:01Z"},
+			map[string]any{"ts": "2026-09-09T10:01:00Z", "from": "planned", "to": "prepared", "action": "delegate_task", "actor": "leader:default", "note": ""},
+		},
+	})
+	h := newProjectTestHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/workflow?includeTasks=true", nil)
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetProjectWorkflow(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var wf workflowResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &wf); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	byID := map[string]taskDetail{}
+	for _, d := range wf.TasksDetail {
+		byID[d.TaskID] = d
+	}
+	if len(byID["t1"].History) != 3 {
+		t.Fatalf("t1 history=%v, want 3 entries", byID["t1"].History)
+	}
+	first := byID["t1"].History[0]
+	if first.Ts != "2026-09-09T10:00:00Z" || first.From != "planned" || first.To != "prepared" ||
+		first.Action != "delegate_task" || first.Actor != "leader:default" {
+		t.Fatalf("t1 history[0]=%+v", first)
+	}
+	if byID["t2"].History != nil {
+		t.Fatalf("t2 history=%v, want nil (field absent)", byID["t2"].History)
+	}
+	if len(byID["t3"].History) != 1 || byID["t3"].History[0].To != "prepared" {
+		t.Fatalf("t3 history=%v, want only the well-formed entry", byID["t3"].History)
+	}
+}
+
+func putEventsProject(t *testing.T, store *ossfake.Memory) {
+	t.Helper()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}},
+			{"task_id": "t2", "title": "T2", "status": "assigned", "depends_on": []string{}},
+			{"task_id": "t3", "title": "T3", "status": "planned", "depends_on": []string{}},
+		},
+	})
+	putTaskMeta(store, "", "t1", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "in_progress",
+		"history": []map[string]any{
+			{"ts": "2026-09-09T10:00:00Z", "from": "planned", "to": "prepared", "action": "delegate_task", "actor": "leader:default"},
+			{"ts": "2026-09-09T10:00:01Z", "from": "prepared", "to": "assigned", "action": "delegate_task", "actor": "leader:default"},
+			{"ts": "2026-09-09T10:00:05Z", "from": "assigned", "to": "in_progress", "action": "ack_task", "actor": "worker:a", "note": "starting"},
+		},
+	})
+	putTaskMeta(store, "", "t2", map[string]any{
+		"task_id": "t2", "project_id": "p1", "status": "assigned",
+		"history": []map[string]any{
+			{"ts": "2026-09-09T10:00:00Z", "from": "planned", "to": "prepared", "action": "delegate_task", "actor": "leader:default"},
+			{"ts": "2026-09-09T10:00:03Z", "from": "prepared", "to": "assigned", "action": "delegate_task", "actor": "leader:default"},
+		},
+	})
+	// t3 has a meta but no history field: contributes nothing.
+	putTaskMeta(store, "", "t3", map[string]any{
+		"task_id": "t3", "project_id": "p1", "status": "planned",
+	})
+}
+
+func doGetProjectEvents(t *testing.T, h *ProjectHandler, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetProjectEvents(rec, req)
+	return rec
+}
+
+func decodeEvents(t *testing.T, rec *httptest.ResponseRecorder) projectEventsResponse {
+	t.Helper()
+	var resp projectEventsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode events: %v (body=%s)", err, rec.Body.String())
+	}
+	return resp
+}
+
+func TestGetProjectEvents_AggregateSortAndPaginate(t *testing.T) {
+	store := ossfake.NewMemory()
+	putEventsProject(t, store)
+	h := newProjectTestHandler(t, store)
+
+	// limit=2: ascending by ts; the shared 10:00:00 timestamp breaks the
+	// tie by task_id (t1 before t2).
+	rec := doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=2")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	resp := decodeEvents(t, rec)
+	if len(resp.Events) != 2 || resp.NextCursor == "" {
+		t.Fatalf("page1=%+v, want 2 events + opaque cursor", resp)
+	}
+	if resp.Events[0].TaskID != "t1" || resp.Events[0].To != "prepared" {
+		t.Fatalf("page1[0]=%+v, want t1 planned->prepared", resp.Events[0])
+	}
+	if resp.Events[1].TaskID != "t2" || resp.Events[1].To != "prepared" {
+		t.Fatalf("page1[1]=%+v, want t2 planned->prepared (task_id tie-break)", resp.Events[1])
+	}
+	// The cursor is opaque (anchor of the page's last event): the test
+	// passes it back verbatim and never inspects its format.
+	cursor := resp.NextCursor
+
+	// The returned cursor continues exactly where page 1 stopped.
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=2&cursor="+cursor))
+	if len(resp.Events) != 2 || resp.NextCursor == "" {
+		t.Fatalf("page2=%+v, want 2 events + cursor", resp)
+	}
+	if resp.Events[0].TaskID != "t1" || resp.Events[0].To != "assigned" {
+		t.Fatalf("page2[0]=%+v, want t1 prepared->assigned", resp.Events[0])
+	}
+	if resp.Events[1].TaskID != "t2" || resp.Events[1].To != "assigned" {
+		t.Fatalf("page2[1]=%+v, want t2 prepared->assigned", resp.Events[1])
+	}
+	// Re-presenting the same cursor is idempotent: same page again.
+	again := decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=2&cursor="+cursor))
+	if len(again.Events) != 2 || again.Events[0] != resp.Events[0] || again.Events[1] != resp.Events[1] {
+		t.Fatalf("page2 retry=%+v, want identical events", again)
+	}
+
+	// tail page: one event, cursor exhausted, note passthrough.
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=2&cursor="+resp.NextCursor))
+	if len(resp.Events) != 1 || resp.NextCursor != "" {
+		t.Fatalf("page3=%+v, want 1 event + empty cursor", resp)
+	}
+	if resp.Events[0].Actor != "worker:a" || resp.Events[0].Note != "starting" {
+		t.Fatalf("page3[0]=%+v, want actor/note passthrough", resp.Events[0])
+	}
+
+	// whole list in one page: 5 events, no cursor.
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events"))
+	if len(resp.Events) != 5 || resp.NextCursor != "" {
+		t.Fatalf("full=%+v, want all 5 events + empty cursor", resp)
+	}
+
+	// limit is capped at 200, never rejected.
+	rec = doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=999")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("limit=999 status=%d, want capped 200 OK", rec.Code)
+	}
+	for _, bad := range []string{"limit=0", "limit=-1", "limit=abc", "cursor=abc", "cursor=-5", "cursor=99"} {
+		rec = doGetProjectEvents(t, h, "/api/v1/projects/p1/events?"+bad)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s status=%d, want 400", bad, rec.Code)
+		}
+	}
+}
+
+// TestGetProjectEvents_PaginationAcrossHistoryTruncation is the maintainer's
+// reproduction: one task with the full 50-entry retained history, page 1 of
+// 10, then a 51st event is appended and the writer's cap drops the oldest
+// (event 1). The next page must start at event 11 (still retained), not at
+// 12 — and when the anchor itself is eventually truncated away the
+// endpoint reports cursor_expired instead of serving a shifted page.
+func TestGetProjectEvents_PaginationAcrossHistoryTruncation(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}},
+		},
+	})
+	// tsForEvent: second-resolution UTC timestamps, ascending.
+	tsForEvent := func(n int) string {
+		return fmt.Sprintf("2026-09-09T10:%02d:%02dZ", (n-1)/60, (n-1)%60)
+	}
+	progressHistory := func(lo, hi int) []map[string]any {
+		hist := make([]map[string]any, 0, hi-lo+1)
+		for n := lo; n <= hi; n++ {
+			hist = append(hist, map[string]any{
+				"ts": tsForEvent(n), "from": "in_progress", "to": "in_progress",
+				"action": "progress", "actor": "worker:a", "note": fmt.Sprintf("step %d", n),
+			})
+		}
+		return hist
+	}
+	putTaskHistory := func(lo, hi int) {
+		putTaskMeta(store, "", "t1", map[string]any{
+			"task_id": "t1", "project_id": "p1", "status": "in_progress",
+			"history": progressHistory(lo, hi),
+		})
+	}
+
+	putTaskHistory(1, 50) // the writer's 50-entry cap, full
+	h := newProjectTestHandler(t, store)
+
+	// Page 1: events 1-10, cursor anchors event 10.
+	resp := decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=10"))
+	if len(resp.Events) != 10 || resp.NextCursor == "" || resp.CursorExpired {
+		t.Fatalf("page1=%+v, want events 1-10 + cursor", resp)
+	}
+	if resp.Events[9].Note != "step 10" {
+		t.Fatalf("page1 last=%+v, want step 10", resp.Events[9])
+	}
+	cursor := resp.NextCursor
+
+	// Ordinary progress: event 51 appended, cap drops event 1. The client
+	// has already read events 1-10, so nothing unread was lost — the
+	// cursor must simply continue at event 11, not at 12.
+	putTaskHistory(2, 51)
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=10&cursor="+cursor))
+	if resp.CursorExpired || resp.NextCursor == "" {
+		t.Fatalf("page2=%+v, want continuation after truncation", resp)
+	}
+	if len(resp.Events) != 10 || resp.Events[0].Note != "step 11" {
+		t.Fatalf("page2 first=%+v, want step 11 (no silent skip)", resp.Events)
+	}
+	if resp.Events[9].Note != "step 20" {
+		t.Fatalf("page2 last=%+v, want step 20", resp.Events[9])
+	}
+	cursor = resp.NextCursor
+
+	// Another truncation round: 52-61 appended, 2-11 dropped. Anchor
+	// (step 20) still retained -> continues at step 21.
+	putTaskHistory(12, 61)
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=10&cursor="+cursor))
+	if resp.CursorExpired || len(resp.Events) != 10 || resp.Events[0].Note != "step 21" {
+		t.Fatalf("page3=%+v, want step 21..30", resp)
+	}
+	cursor = resp.NextCursor
+
+	// The anchor (step 30) itself is now truncated away: explicit reset
+	// signal, empty page, no shifted events.
+	putTaskHistory(35, 84)
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=10&cursor="+cursor))
+	if !resp.CursorExpired || len(resp.Events) != 0 || resp.NextCursor != "" {
+		t.Fatalf("page4=%+v, want cursor_expired + empty", resp)
+	}
+
+	// After the reset the client starts over: fresh page from the
+	// (now retained) head.
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=10"))
+	if resp.CursorExpired || len(resp.Events) != 10 || resp.Events[0].Note != "step 35" {
+		t.Fatalf("refetch=%+v, want step 35..44", resp)
+	}
+}
+
+// TestGetProjectEvents_PaginationTailGrowthWithoutTruncation: below the
+// writer's 50-entry cap, new events only extend the tail. The cursor must
+// remain valid (no spurious cursor_expired) and continue after the growth.
+func TestGetProjectEvents_PaginationTailGrowthWithoutTruncation(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}},
+		},
+	})
+	tsForEvent := func(n int) string {
+		return fmt.Sprintf("2026-09-09T10:00:%02dZ", n-1)
+	}
+	progressHistory := func(lo, hi int) []map[string]any {
+		hist := make([]map[string]any, 0, hi-lo+1)
+		for n := lo; n <= hi; n++ {
+			hist = append(hist, map[string]any{
+				"ts": tsForEvent(n), "from": "in_progress", "to": "in_progress",
+				"action": "progress", "actor": "worker:a", "note": fmt.Sprintf("step %d", n),
+			})
+		}
+		return hist
+	}
+	putTaskHistory := func(lo, hi int) {
+		putTaskMeta(store, "", "t1", map[string]any{
+			"task_id": "t1", "project_id": "p1", "status": "in_progress",
+			"history": progressHistory(lo, hi),
+		})
+	}
+
+	putTaskHistory(1, 8)
+	h := newProjectTestHandler(t, store)
+	resp := decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=4"))
+	if len(resp.Events) != 4 || resp.NextCursor == "" {
+		t.Fatalf("page1=%+v, want steps 1-4 + cursor", resp)
+	}
+	cursor := resp.NextCursor
+
+	// Two more events land while the client is between page requests
+	// (no cap pressure yet, so the head is untouched).
+	putTaskHistory(1, 10)
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=4&cursor="+cursor))
+	if resp.CursorExpired || len(resp.Events) != 4 || resp.Events[0].Note != "step 5" {
+		t.Fatalf("page2=%+v, want steps 5-8 without expiry", resp)
+	}
+	cursor = resp.NextCursor
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=4&cursor="+cursor))
+	if resp.CursorExpired || len(resp.Events) != 2 || resp.Events[0].Note != "step 9" || resp.NextCursor != "" {
+		t.Fatalf("page3=%+v, want steps 9-10, tail reached", resp)
+	}
+}
+
+// TestGetProjectEvents_DuplicateEntriesPaginateUniquely is the maintainer's
+// second reproduction: three content-identical progress entries (same
+// second, same task, same actor/action/note — the writer permits repeated
+// progress and timestamps are second-resolution) with distinct
+// writer-assigned seq values. Each event must be delivered exactly once:
+// the content anchor located the LAST occurrence and the second page came
+// back empty with cursor_expired=false, silently skipping two events.
+func TestGetProjectEvents_DuplicateEntriesPaginateUniquely(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}},
+		},
+	})
+	// Content-identical entries; only the writer-assigned seq differs.
+	hist := make([]map[string]any, 0, 3)
+	for seq := int64(1); seq <= 3; seq++ {
+		hist = append(hist, map[string]any{
+			"ts": "2026-09-09T10:00:00Z", "from": "in_progress", "to": "in_progress",
+			"action": "progress", "actor": "worker:a", "note": "step done", "seq": seq,
+		})
+	}
+	putTaskMeta(store, "", "t1", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "in_progress",
+		"history": hist,
+	})
+	h := newProjectTestHandler(t, store)
+
+	var got []int64
+	cursor := ""
+	for page := 1; ; page++ {
+		q := "/api/v1/projects/p1/events?limit=1"
+		if cursor != "" {
+			q += "&cursor=" + cursor
+		}
+		resp := decodeEvents(t, doGetProjectEvents(t, h, q))
+		if resp.CursorExpired {
+			t.Fatalf("page%d: unexpected cursor_expired: %+v", page, resp)
+		}
+		if len(resp.Events) != 1 {
+			t.Fatalf("page%d=%+v, want exactly 1 event (no skip, no repeat)", page, resp)
+		}
+		if resp.Events[0].Note != "step done" || resp.Events[0].Ts != "2026-09-09T10:00:00Z" {
+			t.Fatalf("page%d[0]=%+v, want the duplicate progress entry", page, resp.Events[0])
+		}
+		got = append(got, resp.Events[0].Seq)
+		if len(got) > 3 {
+			t.Fatalf("more than 3 pages: %v (repeat or infinite loop)", got)
+		}
+		if resp.NextCursor == "" {
+			break // tail reached
+		}
+		cursor = resp.NextCursor
+	}
+	if len(got) != 3 || got[0] != 1 || got[1] != 2 || got[2] != 3 {
+		t.Fatalf("delivered seqs=%v, want [1 2 3] exactly once each", got)
+	}
+}
+
+// TestGetProjectEvents_DuplicatesAppendedBetweenRequests: while the client
+// is between page requests, two content-identical duplicates are appended
+// (seq 2, 3). The cursor from page 1 must continue exactly at seq 2 and
+// then deliver seq 3 — no skip, no repeat, no spurious expiry.
+func TestGetProjectEvents_DuplicatesAppendedBetweenRequests(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}},
+		},
+	})
+	dupHist := func(hi int64) []map[string]any {
+		hist := make([]map[string]any, 0, hi)
+		for seq := int64(1); seq <= hi; seq++ {
+			hist = append(hist, map[string]any{
+				"ts": "2026-09-09T10:00:00Z", "from": "in_progress", "to": "in_progress",
+				"action": "progress", "actor": "worker:a", "note": "step done", "seq": seq,
+			})
+		}
+		return hist
+	}
+	putTaskMeta(store, "", "t1", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "in_progress",
+		"history": dupHist(2),
+	})
+	h := newProjectTestHandler(t, store)
+
+	// Page 1 of a 2-event list: not the tail, so a cursor is issued.
+	resp := decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=1"))
+	if len(resp.Events) != 1 || resp.Events[0].Seq != 1 || resp.NextCursor == "" {
+		t.Fatalf("page1=%+v, want seq 1 + cursor", resp)
+	}
+	cursor := resp.NextCursor
+
+	// A content-identical duplicate (seq 3) lands while the client is
+	// between requests.
+	putTaskMeta(store, "", "t1", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "in_progress",
+		"history": dupHist(3),
+	})
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=1&cursor="+cursor))
+	if resp.CursorExpired || len(resp.Events) != 1 || resp.Events[0].Seq != 2 || resp.NextCursor == "" {
+		t.Fatalf("page2=%+v, want exactly seq 2 + cursor", resp)
+	}
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=1&cursor="+resp.NextCursor))
+	if resp.CursorExpired || len(resp.Events) != 1 || resp.Events[0].Seq != 3 || resp.NextCursor != "" {
+		t.Fatalf("page3=%+v, want exactly seq 3 (the between-request duplicate) + tail reached", resp)
+	}
+}
+
+// TestGetProjectEvents_LegacyCursorVersionExpires: a well-formed cursor in
+// the pre-seq content-tuple format (no version field) must not be matched
+// ambiguously against seq-less legacy entries — it answers
+// cursor_expired and forces a clean re-fetch instead of guessing an
+// occurrence direction.
+func TestGetProjectEvents_LegacyCursorVersionExpires(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}},
+		},
+	})
+	putTaskMeta(store, "", "t1", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "in_progress",
+		"history": []map[string]any{
+			{"ts": "2026-09-09T10:00:00Z", "from": "planned", "to": "prepared", "action": "delegate_task", "actor": "leader:default"},
+		},
+	})
+	h := newProjectTestHandler(t, store)
+
+	legacy := base64.RawURLEncoding.EncodeToString([]byte(`{"ts":"2026-09-09T10:00:00Z","task_id":"t1","from":"planned","to":"prepared","actor":"leader:default","action":"delegate_task","note":""}`))
+	resp := decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?cursor="+legacy))
+	if !resp.CursorExpired || len(resp.Events) != 0 || resp.NextCursor != "" {
+		t.Fatalf("legacy cursor=%+v, want cursor_expired + empty page", resp)
+	}
+	// After the reset the client re-fetches from the start.
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events"))
+	if resp.CursorExpired || len(resp.Events) != 1 {
+		t.Fatalf("refetch=%+v, want the retained event", resp)
+	}
+}
+
+// TestGetProjectEvents_LegacyDuplicatesStillPaginate: seq-less legacy
+// entries that are content-identical in one second share the identity
+// (ts, task_id, seq=0). Three of them with limit=1 must still paginate
+// to completion: every page delivers exactly one new event, every
+// issued cursor strictly advances (never re-issued), the walk
+// terminates at the tail, and all three duplicates are delivered
+// exactly once — no silent skip, no infinite loop.
+func TestGetProjectEvents_LegacyDuplicatesStillPaginate(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}},
+		},
+	})
+	putTaskMeta(store, "", "t1", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "in_progress",
+		"history": []map[string]any{
+			{"ts": "2026-09-09T10:00:00Z", "from": "in_progress", "to": "in_progress", "action": "progress", "actor": "worker:a", "note": "done"},
+			{"ts": "2026-09-09T10:00:00Z", "from": "in_progress", "to": "in_progress", "action": "progress", "actor": "worker:a", "note": "done"},
+			{"ts": "2026-09-09T10:00:00Z", "from": "in_progress", "to": "in_progress", "action": "progress", "actor": "worker:a", "note": "done"},
+		},
+	})
+	h := newProjectTestHandler(t, store)
+
+	seen := 0
+	cursors := map[string]bool{}
+	cursor := ""
+	for page := 1; page <= 5; page++ {
+		q := "/api/v1/projects/p1/events?limit=1"
+		if cursor != "" {
+			q += "&cursor=" + cursor
+		}
+		resp := decodeEvents(t, doGetProjectEvents(t, h, q))
+		if resp.CursorExpired {
+			t.Fatalf("page%d: unexpected cursor_expired: %+v", page, resp)
+		}
+		if len(resp.Events) != 1 {
+			t.Fatalf("page%d=%+v, want exactly 1 event (no skip, no repeat)", page, resp)
+		}
+		seen++
+		if resp.NextCursor == "" {
+			break // tail reached
+		}
+		if cursors[resp.NextCursor] {
+			t.Fatalf("page%d: non-advancing cursor %q already issued", page, resp.NextCursor)
+		}
+		cursors[resp.NextCursor] = true
+		cursor = resp.NextCursor
+	}
+	if seen != 3 {
+		t.Fatalf("walk stopped after %d events of 3 (infinite loop or silent skip)", seen)
+	}
+}
+
+// TestGetProjectEvents_LegacyDuplicatesSnapshotTruncationExpires: a
+// cursor anchored inside a seq-less duplicate group carries the list
+// length as a snapshot marker. When the writer's cap later truncates
+// the list (oldest first), the occurrence index may no longer name the
+// anchored event, so the endpoint answers cursor_expired — an explicit
+// reset — instead of resuming at a shifted position and silently
+// skipping an unread duplicate.
+func TestGetProjectEvents_LegacyDuplicatesSnapshotTruncationExpires(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}},
+		},
+	})
+	legacyEntry := func() map[string]any {
+		return map[string]any{
+			"ts": "2026-09-09T10:00:00Z", "from": "in_progress", "to": "in_progress",
+			"action": "progress", "actor": "worker:a", "note": "done",
+		}
+	}
+	hist3 := []map[string]any{legacyEntry(), legacyEntry(), legacyEntry()}
+	putTaskMeta(store, "", "t1", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "in_progress",
+		"history": hist3,
+	})
+	h := newProjectTestHandler(t, store)
+
+	// Page 1 of a 3-event list: entry 1 + a snapshot-marked cursor.
+	resp := decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=1"))
+	if resp.CursorExpired || len(resp.Events) != 1 || resp.NextCursor == "" {
+		t.Fatalf("page1=%+v, want 1 event + cursor", resp)
+	}
+	cursor := resp.NextCursor
+
+	// The cap drops the oldest entry while the client is between
+	// requests: the list now holds 2 of the 3 duplicates (len 2 < 3).
+	putTaskMeta(store, "", "t1", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "in_progress",
+		"history": []map[string]any{legacyEntry(), legacyEntry()},
+	})
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=1&cursor="+cursor))
+	if !resp.CursorExpired || len(resp.Events) != 0 || resp.NextCursor != "" {
+		t.Fatalf("page2=%+v, want cursor_expired + empty page (explicit reset)", resp)
+	}
+
+	// After the reset the client re-fetches from the start and still
+	// paginates the retained duplicates to the tail.
+	seen := 0
+	c := ""
+	for page := 1; page <= 5; page++ {
+		q := "/api/v1/projects/p1/events?limit=1"
+		if c != "" {
+			q += "&cursor=" + c
+		}
+		r := decodeEvents(t, doGetProjectEvents(t, h, q))
+		if r.CursorExpired || len(r.Events) != 1 {
+			t.Fatalf("refetch page%d=%+v, want 1 event", page, r)
+		}
+		seen++
+		if r.NextCursor == "" {
+			break
+		}
+		c = r.NextCursor
+	}
+	if seen != 2 {
+		t.Fatalf("refetch delivered %d events, want the 2 retained duplicates", seen)
+	}
+}
+
+func TestGetProjectEvents_EmptyProject(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "planned", "depends_on": []string{}},
+		},
+	})
+	// No task meta at all: the project exists, the timeline is empty.
+	h := newProjectTestHandler(t, store)
+	rec := doGetProjectEvents(t, h, "/api/v1/projects/p1/events")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp projectEventsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Events == nil || len(resp.Events) != 0 || resp.NextCursor != "" {
+		t.Fatalf("resp=%+v, want empty events list", resp)
+	}
+}
+
+func TestGetProjectEvents_UnknownProject404(t *testing.T) {
+	store := ossfake.NewMemory()
+	h := newProjectTestHandler(t, store)
+	rec := doGetProjectEvents(t, h, "/api/v1/projects/missing/events")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404 for unknown project", rec.Code)
+	}
+}
+
+func TestGetProjectEvents_CrossTeamDenied(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "teams/beta-team/shared/projects/p2/meta.json", map[string]any{
+		"project_id": "p2", "title": "Beta", "status": "active", "plan_type": "dag", "team_id": "beta-team",
+	})
+	putTaskMeta(store, "beta-team", "t1", map[string]any{
+		"task_id": "t1", "project_id": "p2", "status": "in_progress",
+		"history": []map[string]any{
+			{"ts": "2026-09-09T10:00:00Z", "from": "planned", "to": "prepared", "action": "delegate_task", "actor": "leader:default"},
+		},
+	})
+	h := newProjectTestHandler(t, store, team("beta-team"))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p2/events", nil)
+	req.SetPathValue("id", "p2")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team"})
+	rec := httptest.NewRecorder()
+	h.GetProjectEvents(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404 for cross-team access (W4: hide existence)", rec.Code)
+	}
+}
+
+func TestGetProjectEvents_CrossScopeNoFallback(t *testing.T) {
+	// A team project whose task meta exists ONLY in the global scope must
+	// not leak it (same rule as readTasksDetail): the timeline stays empty.
+	store := ossfake.NewMemory()
+	putProject(store, "teams/alpha-team/shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "Alpha", "status": "active", "plan_type": "dag", "team_id": "alpha-team",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}},
+		},
+	})
+	putTaskMeta(store, "", "t1", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "in_progress",
+		"history": []map[string]any{
+			{"ts": "2026-09-09T10:00:00Z", "from": "planned", "to": "prepared", "action": "delegate_task", "actor": "leader:default"},
+		},
+	})
+	h := newProjectTestHandler(t, store, team("alpha-team"))
+	rec := doGetProjectEvents(t, h, "/api/v1/projects/p1/events")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	resp := decodeEvents(t, rec)
+	if len(resp.Events) != 0 {
+		t.Fatalf("events=%+v, want none (global-scope meta must not leak into a team project)", resp.Events)
+	}
+}
+
+func TestCancelTask_LeavesHistoryTrace(t *testing.T) {
+	store := ossfake.NewMemory()
+	// Team-scoped project: a team leader of the owning team may cancel it,
+	// and authzActor renders leaders as "username (role)".
+	putProject(store, "teams/alpha-team/shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag", "team_id": "alpha-team",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}},
+		},
+	})
+	putTaskMeta(store, "alpha-team", "t1", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "in_progress",
+		"history": []map[string]any{
+			{"ts": "2026-09-09T10:00:05Z", "from": "assigned", "to": "in_progress", "action": "ack_task", "actor": "worker:a"},
+		},
+	})
+	h := newProjectTestHandler(t, store, team("alpha-team"))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel", strings.NewReader(`{"reason":"scope changed"}`))
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team"})
+	rec := httptest.NewRecorder()
+	h.CancelTask(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	taskData, _ := store.GetObject(context.Background(), "teams/alpha-team/shared/tasks/t1/meta.json")
+	var task map[string]any
+	_ = json.Unmarshal(taskData, &task)
+	hist, _ := task["history"].([]any)
+	if len(hist) != 2 {
+		t.Fatalf("history=%v, want the ack entry + the cancel entry", task["history"])
+	}
+	last, _ := hist[1].(map[string]any)
+	if last["from"] != "in_progress" || last["to"] != "cancelled" || last["action"] != "cancel_task" {
+		t.Fatalf("cancel entry=%v", last)
+	}
+	// Team leader caller: actor is "username (role)".
+	if last["actor"] != "alpha-lead (team-leader)" {
+		t.Fatalf("cancel actor=%v, want authzActor format", last["actor"])
+	}
+	if last["note"] != "scope changed" {
+		t.Fatalf("cancel note=%v, want the reason", last["note"])
+	}
+	cancelledAt, _ := task["cancelled_at"].(string)
+	if last["ts"] != cancelledAt {
+		t.Fatalf("cancel ts=%v, want cancelled_at=%v", last["ts"], cancelledAt)
+	}
+
+	// Retry-convergence: the second cancel must not append a second entry.
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel", strings.NewReader(`{"reason":"scope changed"}`))
+	req2.SetPathValue("id", "p1")
+	req2.SetPathValue("taskId", "t1")
+	req2 = withCaller(req2, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team"})
+	rec2 := httptest.NewRecorder()
+	h.CancelTask(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("retry status=%d body=%s", rec2.Code, rec2.Body.String())
+	}
+	taskData2, _ := store.GetObject(context.Background(), "teams/alpha-team/shared/tasks/t1/meta.json")
+	var task2 map[string]any
+	_ = json.Unmarshal(taskData2, &task2)
+	hist2, _ := task2["history"].([]any)
+	if len(hist2) != 2 {
+		t.Fatalf("history after retry=%v, want unchanged (no no-op entry)", task2["history"])
 	}
 }

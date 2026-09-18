@@ -84,7 +84,7 @@ func rcAdminCaller(req *http.Request) *http.Request {
 }
 
 func rcL2Caller(req *http.Request) *http.Request {
-	return withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"team-a"}})
+	return withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"team-a"}})
 }
 
 // TestRuntimeConfig_Get_ForwardsVerbatim: admin reads a qwenpaw worker's
@@ -102,9 +102,9 @@ func TestRuntimeConfig_Get_ForwardsVerbatim(t *testing.T) {
 	defer upstream.Close()
 
 	h := newTestRuntimeConfigHandler(t, "embedded", upstream, nil,
-		rcWorker("daily-luo", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-luo"))
+		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
 	rec := httptest.NewRecorder()
-	h.Handle(rec, rcAdminCaller(rcRequest(http.MethodGet, "daily-luo", "runtime-config", nil)))
+	h.Handle(rec, rcAdminCaller(rcRequest(http.MethodGet, "daily-carol", "runtime-config", nil)))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
@@ -126,10 +126,10 @@ func TestRuntimeConfig_L2PutWhitelistRejected(t *testing.T) {
 	defer upstream.Close()
 
 	h := newTestRuntimeConfigHandler(t, "embedded", upstream, nil,
-		rcWorker("daily-luo", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-luo"))
+		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
 	body := []byte(`{"max_iters":10,"dangerous_field":true}`)
 	rec := httptest.NewRecorder()
-	h.Handle(rec, rcL2Caller(rcRequest(http.MethodPut, "daily-luo", "runtime-config", body)))
+	h.Handle(rec, rcL2Caller(rcRequest(http.MethodPut, "daily-carol", "runtime-config", body)))
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status=%d body=%s, want 403 for non-whitelisted L2 field", rec.Code, rec.Body.String())
@@ -156,10 +156,10 @@ func TestRuntimeConfig_L2PutWhitelistAllowed(t *testing.T) {
 	defer upstream.Close()
 
 	h := newTestRuntimeConfigHandler(t, "embedded", upstream, nil,
-		rcWorker("daily-luo", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-luo"))
+		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
 	body := []byte(`{"max_iters":10}`)
 	rec := httptest.NewRecorder()
-	h.Handle(rec, rcL2Caller(rcRequest(http.MethodPut, "daily-luo", "runtime-config", body)))
+	h.Handle(rec, rcL2Caller(rcRequest(http.MethodPut, "daily-carol", "runtime-config", body)))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s, want 200 for whitelisted L2 write", rec.Code, rec.Body.String())
@@ -193,9 +193,9 @@ func TestRuntimeConfig_PutNoOpSkipsWrite(t *testing.T) {
 	defer upstream.Close()
 
 	h := newTestRuntimeConfigHandler(t, "embedded", upstream, nil,
-		rcWorker("daily-luo", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-luo"))
+		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
 	rec := httptest.NewRecorder()
-	h.Handle(rec, rcAdminCaller(rcRequest(http.MethodPut, "daily-luo", "runtime-config", []byte(`{"max_iters":100}`))))
+	h.Handle(rec, rcAdminCaller(rcRequest(http.MethodPut, "daily-carol", "runtime-config", []byte(`{"max_iters":100}`))))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s, want 200 no-op", rec.Code, rec.Body.String())
@@ -222,12 +222,12 @@ func TestRuntimeConfig_PutApprovalLevelRejected(t *testing.T) {
 	defer upstream.Close()
 
 	h := newTestRuntimeConfigHandler(t, "embedded", upstream, nil,
-		rcWorker("daily-luo", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-luo"))
+		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
 	body := []byte(`{"approval_level":"OFF"}`)
 
 	for name, req := range map[string]*http.Request{
-		"L1": rcAdminCaller(rcRequest(http.MethodPut, "daily-luo", "runtime-config", body)),
-		"L2": rcL2Caller(rcRequest(http.MethodPut, "daily-luo", "runtime-config", body)),
+		"L1": rcAdminCaller(rcRequest(http.MethodPut, "daily-carol", "runtime-config", body)),
+		"L2": rcL2Caller(rcRequest(http.MethodPut, "daily-carol", "runtime-config", body)),
 	} {
 		rec := httptest.NewRecorder()
 		h.Handle(rec, req)
@@ -265,8 +265,8 @@ func TestRuntimeConfig_CrossTeam404(t *testing.T) {
 	defer upstream.Close()
 
 	h := newTestRuntimeConfigHandler(t, "embedded", upstream, nil,
-		rcWorker("daily-luo", "qwenpaw"), rcTeamWithLeader("beta-team", "beta-lead", "daily-luo"))
-	req := rcRequest(http.MethodGet, "daily-luo", "runtime-config", nil)
+		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("beta-team", "beta-lead", "daily-carol"))
+	req := rcRequest(http.MethodGet, "daily-carol", "runtime-config", nil)
 	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team"})
 	rec := httptest.NewRecorder()
 	h.Handle(rec, req)
@@ -279,9 +279,9 @@ func TestRuntimeConfig_CrossTeam404(t *testing.T) {
 // TestRuntimeConfig_KubeMode503.
 func TestRuntimeConfig_KubeMode503(t *testing.T) {
 	h := newTestRuntimeConfigHandler(t, "k8s", nil, nil,
-		rcWorker("daily-luo", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-luo"))
+		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
 	rec := httptest.NewRecorder()
-	h.Handle(rec, rcAdminCaller(rcRequest(http.MethodGet, "daily-luo", "runtime-config", nil)))
+	h.Handle(rec, rcAdminCaller(rcRequest(http.MethodGet, "daily-carol", "runtime-config", nil)))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d, want 503 in kube mode", rec.Code)
 	}
@@ -310,10 +310,10 @@ func TestRuntimeConfig_LoopChangeNotifiesLeaderAndChanger(t *testing.T) {
 
 	fn := &fakeNotifier{domain: "matrix.local"}
 	h := newTestRuntimeConfigHandler(t, "embedded", upstream, fn,
-		rcWorker("daily-luo", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-luo"))
+		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
 	body := []byte(`{"id":"my-loop"}`)
-	req := rcRequest(http.MethodPost, "daily-luo", "loops/custom", body)
-	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"team-a"}})
+	req := rcRequest(http.MethodPost, "daily-carol", "loops/custom", body)
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"team-a"}})
 	rec := httptest.NewRecorder()
 	h.Handle(rec, req)
 
@@ -329,10 +329,10 @@ func TestRuntimeConfig_LoopChangeNotifiesLeaderAndChanger(t *testing.T) {
 	if !mentionsContain(fn.sentMentions, "@team-a-lead:matrix.local") {
 		t.Fatalf("mentions=%v, missing leader", fn.sentMentions)
 	}
-	if !mentionsContain(fn.sentMentions, "@maizong:matrix.local") {
+	if !mentionsContain(fn.sentMentions, "@alice:matrix.local") {
 		t.Fatalf("mentions=%v, missing changer (9/6: @list 含改动者)", fn.sentMentions)
 	}
-	if !containsAll(fn.sentBody, "daily-luo") || !containsAll(fn.sentBody, "新增") {
+	if !containsAll(fn.sentBody, "daily-carol") || !containsAll(fn.sentBody, "新增") {
 		t.Fatalf("notify body=%q, want worker + verb", fn.sentBody)
 	}
 }
@@ -349,8 +349,8 @@ func TestRuntimeConfig_LoopConflictNoNotify(t *testing.T) {
 
 	fn := &fakeNotifier{domain: "matrix.local"}
 	h := newTestRuntimeConfigHandler(t, "embedded", upstream, fn,
-		rcWorker("daily-luo", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-luo"))
-	req := rcRequest(http.MethodPost, "daily-luo", "loops/custom", []byte(`{"id":"taken"}`))
+		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
+	req := rcRequest(http.MethodPost, "daily-carol", "loops/custom", []byte(`{"id":"taken"}`))
 	rec := httptest.NewRecorder()
 	h.Handle(rec, rcAdminCaller(req))
 
@@ -377,8 +377,8 @@ func TestRuntimeConfig_LoopUpdateNotFound404(t *testing.T) {
 
 	fn := &fakeNotifier{domain: "matrix.local"}
 	h := newTestRuntimeConfigHandler(t, "embedded", upstream, fn,
-		rcWorker("daily-luo", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-luo"))
-	req := rcRequest(http.MethodPut, "daily-luo", "loops/custom/ghost-loop", []byte(`{"id":"ghost-loop"}`))
+		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
+	req := rcRequest(http.MethodPut, "daily-carol", "loops/custom/ghost-loop", []byte(`{"id":"ghost-loop"}`))
 	rec := httptest.NewRecorder()
 	h.Handle(rec, rcAdminCaller(req))
 
@@ -401,8 +401,8 @@ func TestRuntimeConfig_Upstream5xxIs502(t *testing.T) {
 
 	fn := &fakeNotifier{domain: "matrix.local"}
 	h := newTestRuntimeConfigHandler(t, "embedded", upstream, fn,
-		rcWorker("daily-luo", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-luo"))
-	req := rcRequest(http.MethodPost, "daily-luo", "loops/custom", []byte(`{"id":"x"}`))
+		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
+	req := rcRequest(http.MethodPost, "daily-carol", "loops/custom", []byte(`{"id":"x"}`))
 	rec := httptest.NewRecorder()
 	h.Handle(rec, rcAdminCaller(req))
 
@@ -428,9 +428,9 @@ func TestRuntimeConfig_Upstream404Unavailable(t *testing.T) {
 	defer upstream.Close()
 
 	h := newTestRuntimeConfigHandler(t, "embedded", upstream, nil,
-		rcWorker("daily-luo", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-luo"))
+		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
 	rec := httptest.NewRecorder()
-	h.Handle(rec, rcAdminCaller(rcRequest(http.MethodGet, "daily-luo", "runtime-config", nil)))
+	h.Handle(rec, rcAdminCaller(rcRequest(http.MethodGet, "daily-carol", "runtime-config", nil)))
 
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status=%d, want 502 for route-level 404", rec.Code)
@@ -449,9 +449,9 @@ func TestRuntimeConfig_L2PutEmptyRejected(t *testing.T) {
 	defer upstream.Close()
 
 	h := newTestRuntimeConfigHandler(t, "embedded", upstream, nil,
-		rcWorker("daily-luo", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-luo"))
+		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
 	rec := httptest.NewRecorder()
-	h.Handle(rec, rcL2Caller(rcRequest(http.MethodPut, "daily-luo", "runtime-config", []byte(`{}`))))
+	h.Handle(rec, rcL2Caller(rcRequest(http.MethodPut, "daily-carol", "runtime-config", []byte(`{}`))))
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status=%d, want 403 for empty L2 update", rec.Code)
@@ -467,8 +467,8 @@ func TestRuntimeConfig_LoopChangeNoMatrixSkipsNotify(t *testing.T) {
 	defer upstream.Close()
 
 	h := newTestRuntimeConfigHandler(t, "embedded", upstream, nil,
-		rcWorker("daily-luo", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-luo"))
-	req := rcRequest(http.MethodPost, "daily-luo", "loops/custom", []byte(`{"id":"x"}`))
+		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
+	req := rcRequest(http.MethodPost, "daily-carol", "loops/custom", []byte(`{"id":"x"}`))
 	rec := httptest.NewRecorder()
 	h.Handle(rec, rcAdminCaller(req))
 	if rec.Code != http.StatusOK {
@@ -516,9 +516,9 @@ func TestRuntimeConfig_LoopSectionChangeNotifies(t *testing.T) {
 
 	fn := &fakeNotifier{domain: "matrix.local"}
 	h := newTestRuntimeConfigHandler(t, "embedded", upstream, fn,
-		rcWorker("daily-luo", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-luo"))
-	req := rcRequest(http.MethodPut, "daily-luo", "runtime-config", []byte(`{"loop":{"enabled":true}}`))
-	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"team-a"}})
+		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
+	req := rcRequest(http.MethodPut, "daily-carol", "runtime-config", []byte(`{"loop":{"enabled":true}}`))
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"team-a"}})
 	rec := httptest.NewRecorder()
 	h.Handle(rec, req)
 
@@ -553,9 +553,9 @@ func TestRuntimeConfig_NonLoopChangeNoNotify(t *testing.T) {
 
 	fn := &fakeNotifier{domain: "matrix.local"}
 	h := newTestRuntimeConfigHandler(t, "embedded", upstream, fn,
-		rcWorker("daily-luo", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-luo"))
-	req := rcRequest(http.MethodPut, "daily-luo", "runtime-config", []byte(`{"max_iters":50}`))
-	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"team-a"}})
+		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
+	req := rcRequest(http.MethodPut, "daily-carol", "runtime-config", []byte(`{"max_iters":50}`))
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"team-a"}})
 	rec := httptest.NewRecorder()
 	h.Handle(rec, req)
 
@@ -580,8 +580,8 @@ func TestRuntimeConfig_LoopNoChangeNoNotify(t *testing.T) {
 
 	fn := &fakeNotifier{domain: "matrix.local"}
 	h := newTestRuntimeConfigHandler(t, "embedded", upstream, fn,
-		rcWorker("daily-luo", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-luo"))
-	req := rcRequest(http.MethodPut, "daily-luo", "runtime-config", []byte(`{"loop":{"enabled":true}}`))
+		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
+	req := rcRequest(http.MethodPut, "daily-carol", "runtime-config", []byte(`{"loop":{"enabled":true}}`))
 	rec := httptest.NewRecorder()
 	h.Handle(rec, rcAdminCaller(req))
 
@@ -593,5 +593,65 @@ func TestRuntimeConfig_LoopNoChangeNoNotify(t *testing.T) {
 	}
 	if fn.sentCount != 0 {
 		t.Fatalf("notification count=%d, want 0 (no-op)", fn.sentCount)
+	}
+}
+
+// TestRuntimeConfig_LoopsStatusForwardsSessionQuery: the upstream
+// loops/status endpoint answers per session (chat_id / session_id) and
+// reports "idle" without them — the proxy must forward those two selectors
+// (allowlisted, normalized order).
+func TestRuntimeConfig_LoopsStatusForwardsSessionQuery(t *testing.T) {
+	var gotPath, gotQuery string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotQuery = r.URL.Path, r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"state":"awaiting_user"}`))
+	}))
+	defer upstream.Close()
+
+	h := newTestRuntimeConfigHandler(t, "embedded", upstream, nil,
+		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
+	req := rcRequest(http.MethodGet, "daily-carol", "loops/status", nil)
+	req.URL.RawQuery = "session_id=abc123&chat_id=chat-1"
+	rec := httptest.NewRecorder()
+	h.Handle(rec, rcAdminCaller(req))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if gotPath != "/api/loops/status" {
+		t.Fatalf("upstream path=%q, want /api/loops/status", gotPath)
+	}
+	if gotQuery != "chat_id=chat-1&session_id=abc123" {
+		t.Fatalf("upstream query=%q, want chat_id=chat-1&session_id=abc123", gotQuery)
+	}
+}
+
+// TestRuntimeConfig_UnknownQueryRejected: query parameters are rejected
+// everywhere except GET loops/status, and unknown keys are rejected there
+// too (strict whitelist discipline).
+func TestRuntimeConfig_UnknownQueryRejected(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer upstream.Close()
+
+	h := newTestRuntimeConfigHandler(t, "embedded", upstream, nil,
+		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
+
+	req := rcRequest(http.MethodGet, "daily-carol", "loops/status", nil)
+	req.URL.RawQuery = "session_id=abc&evil=1"
+	rec := httptest.NewRecorder()
+	h.Handle(rec, rcAdminCaller(req))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unknown key: status=%d, want 400", rec.Code)
+	}
+
+	req2 := rcRequest(http.MethodGet, "daily-carol", "loops", nil)
+	req2.URL.RawQuery = "session_id=abc"
+	rec2 := httptest.NewRecorder()
+	h.Handle(rec2, rcAdminCaller(req2))
+	if rec2.Code != http.StatusBadRequest {
+		t.Fatalf("non-status route: status=%d, want 400", rec2.Code)
 	}
 }

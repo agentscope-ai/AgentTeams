@@ -461,7 +461,7 @@ func reconcileMemberSkills(ctx context.Context, d MemberDeps, m MemberContext, s
 	if len(m.Spec.Skills) == 0 && len(m.Spec.RemoteSkills) == 0 {
 		return
 	}
-	if err := d.Deployer.PushOnDemandSkills(ctx, m.RuntimeName, m.Spec.Skills, m.Spec.RemoteSkills); err != nil {
+	if err := d.Deployer.PushOnDemandSkills(ctx, m.RuntimeName, m.TeamName, m.Spec.Skills, m.Spec.RemoteSkills); err != nil {
 		log.FromContext(ctx).Info("declared Skill recovery failed (non-blocking warning)",
 			"worker", m.RuntimeName,
 			"error", err.Error())

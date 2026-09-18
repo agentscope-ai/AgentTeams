@@ -4,6 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"sort"
 	"strings"
 	"testing"
 
@@ -1685,6 +1688,49 @@ func TestWorkerStatusChangePredicateTriggersOnWorkerSpecChange(t *testing.T) {
 	}
 }
 
+// TestWorkerStatusChangePredicateTriggersOnTaskLevelStatusChanges proves the
+// team status view tracks runtime task transitions: a heartbeat-only update
+// flipping AgentStatus idle->running->idle (Phase, MatrixUserID and RoomID all
+// unchanged) must enqueue the owning Team at every transition, otherwise the
+// team's member status stays stale between container-level changes.
+func TestWorkerStatusChangePredicateTriggersOnTaskLevelStatusChanges(t *testing.T) {
+	p := workerStatusChangePredicate()
+	base := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "dev", Generation: 1},
+		Status: v1beta1.WorkerStatus{
+			ObservedGeneration: 1,
+			Phase:              "Running",
+			MatrixUserID:       "@dev:matrix.local",
+			RoomID:             "!room-dev:matrix.local",
+			AgentStatus:        "idle",
+			LastFinishAt:       "2026-09-16T04:00:00Z",
+		},
+	}
+
+	// idle -> running (task start; only task-level fields move)
+	running := base.DeepCopy()
+	running.Status.AgentStatus = "running"
+	if !p.Update(event.UpdateEvent{ObjectOld: base, ObjectNew: running}) {
+		t.Fatal("idle->running task transition must enqueue the owning Team")
+	}
+
+	// running -> idle (task finish; LastFinishAt moves too)
+	idleAgain := running.DeepCopy()
+	idleAgain.Status.AgentStatus = "idle"
+	idleAgain.Status.LastFinishAt = "2026-09-16T05:00:00Z"
+	if !p.Update(event.UpdateEvent{ObjectOld: running, ObjectNew: idleAgain}) {
+		t.Fatal("running->idle task transition must enqueue the owning Team")
+	}
+
+	// heartbeat-only update (LastHeartbeat bump, no task-level change) must
+	// NOT requeue — this predicate gates team reconciles, not per-tick noise
+	same := base.DeepCopy()
+	same.Status.LastHeartbeat = "2026-09-16T05:01:00Z"
+	if p.Update(event.UpdateEvent{ObjectOld: base, ObjectNew: same}) {
+		t.Fatal("heartbeat-only update without task-level change must not enqueue")
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
 		(len(s) > 0 && len(substr) > 0 && searchSubstring(s, substr)))
@@ -1891,5 +1937,161 @@ func TestDeriveTeamWithResolvedIdentities_BackfillsHumanMembers(t *testing.T) {
 	// Source team must remain untouched.
 	if team.Spec.HumanMembers[0].MatrixUserID != "@coord:matrix.local" {
 		t.Fatal("source team HumanMembers mutated; expected deep copy")
+	}
+}
+
+func TestReconcileTeam_AddsTeamHumansToManagerAllowFrom(t *testing.T) {
+	ctx := context.Background()
+	managerConfig, oss := newTestManagerConfig(t)
+	managerCfg := `{"channels":{"matrix":{"groupAllowFrom":["@manager:matrix.local"]}}}`
+	if err := oss.PutObject(ctx, "agents/manager/openclaw.json", []byte(managerCfg)); err != nil {
+		t.Fatalf("seed manager config: %v", err)
+	}
+
+	leaderWorker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{Model: "qwen"},
+		Status: v1beta1.WorkerStatus{
+			Phase:        "Running",
+			MatrixUserID: "@lead:matrix.local",
+			RoomID:       "!room-lead:matrix.local",
+		},
+	}
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "dev", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{Model: "qwen"},
+		Status: v1beta1.WorkerStatus{
+			Phase:        "Running",
+			MatrixUserID: "@dev:matrix.local",
+			RoomID:       "!room-dev:matrix.local",
+		},
+	}
+	// bob has access to team-a via accessibleTeams and is provisioned.
+	bob := &v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "bob", Namespace: "default"},
+		Spec: v1beta1.HumanSpec{
+			PermissionLevel: 2,
+			AccessibleTeams: []string{"team-a"},
+		},
+		Status: v1beta1.HumanStatus{
+			Phase:        "Active",
+			MatrixUserID: "@bob:matrix.local",
+		},
+	}
+	// carol is on a different team only — must not land in team-a's Manager allowlist.
+	carol := &v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "carol", Namespace: "default"},
+		Spec: v1beta1.HumanSpec{
+			PermissionLevel: 2,
+			AccessibleTeams: []string{"other-team"},
+		},
+		Status: v1beta1.HumanStatus{
+			Phase:        "Active",
+			MatrixUserID: "@carol:matrix.local",
+		},
+	}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: "team_leader"},
+				{Name: "dev"},
+			},
+		},
+	}
+
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team.DeepCopy(), leaderWorker.DeepCopy(), worker.DeepCopy(), bob.DeepCopy(), carol.DeepCopy()).
+		WithStatusSubresource(&v1beta1.Team{}).
+		Build()
+
+	deployer := mocks.NewMockDeployer()
+	provisioner := mocks.NewMockProvisioner()
+	provisioner.MatrixUserIDFn = func(name string) string {
+		return "@" + name + ":matrix.local"
+	}
+	r := &TeamReconciler{
+		Client:        c,
+		Provisioner:   provisioner,
+		Deployer:      deployer,
+		ManagerConfig: managerConfig,
+	}
+
+	patchBase := client.MergeFrom(team.DeepCopy())
+	if _, err := r.reconcileTeam(ctx, team, patchBase); err != nil {
+		t.Fatalf("reconcileTeam: %v", err)
+	}
+
+	data, err := oss.GetObject(ctx, "agents/manager/openclaw.json")
+	if err != nil {
+		t.Fatalf("read manager config: %v", err)
+	}
+	var cfg struct {
+		Channels map[string]map[string]interface{} `json:"channels"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("parse manager config: %v", err)
+	}
+	matrix := cfg.Channels["matrix"]
+	allow, _ := matrix["groupAllowFrom"].([]interface{})
+	ids := make([]string, 0, len(allow))
+	for _, v := range allow {
+		ids = append(ids, fmt.Sprintf("%v", v))
+	}
+	if !stringSliceContains(ids, "@lead:matrix.local") {
+		t.Errorf("groupAllowFrom=%v, missing team leader", ids)
+	}
+	if !stringSliceContains(ids, "@bob:matrix.local") {
+		t.Errorf("groupAllowFrom=%v, missing team human bob", ids)
+	}
+	if stringSliceContains(ids, "@carol:matrix.local") {
+		t.Errorf("groupAllowFrom=%v, unexpected human from other team", ids)
+	}
+}
+
+func TestHumanToTeamRequests(t *testing.T) {
+	ctx := context.Background()
+	teamA := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
+	}
+	teamB := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-b", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			HumanMembers: []v1beta1.TeamMemberSpec{{Name: "bob"}},
+		},
+	}
+	teamC := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-c", Namespace: "default"},
+	}
+	bob := &v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "bob", Namespace: "default"},
+		Spec: v1beta1.HumanSpec{
+			AccessibleTeams: []string{"team-a"},
+		},
+	}
+	c := newTeamTestClient(t, teamA.DeepCopy(), teamB.DeepCopy(), teamC.DeepCopy(), bob.DeepCopy())
+	r := &TeamReconciler{Client: c}
+
+	reqs := r.humanToTeamRequests(ctx, bob)
+	names := make([]string, 0, len(reqs))
+	for _, req := range reqs {
+		names = append(names, req.Name)
+	}
+	sort.Strings(names)
+	if len(names) != 2 || names[0] != "team-a" || names[1] != "team-b" {
+		t.Fatalf("humanToTeamRequests(bob)=%v, want [team-a team-b]", names)
+	}
+
+	unrelated := &v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "dave", Namespace: "default"},
+		Spec:       v1beta1.HumanSpec{AccessibleTeams: []string{"team-x"}},
+	}
+	if got := r.humanToTeamRequests(ctx, unrelated); len(got) != 0 {
+		t.Fatalf("humanToTeamRequests(dave)=%v, want empty", got)
 	}
 }

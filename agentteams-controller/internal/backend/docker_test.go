@@ -646,3 +646,100 @@ func TestDockerCreateResolvesImageFromRuntime(t *testing.T) {
 		})
 	}
 }
+
+// TestDockerCreateBindsConsolePortToLoopback verifies that the automatically
+// published worker console port (AGENTTEAMS_CONSOLE_PORT) is bound to
+// 127.0.0.1 instead of all interfaces, and that workers without a console
+// port do not publish any port.
+func TestDockerCreateBindsConsolePortToLoopback(t *testing.T) {
+	var payloads []dockerCreatePayload
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /images/", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"Id": "sha256-x"})
+	})
+	mux.HandleFunc("POST /containers/create", func(w http.ResponseWriter, r *http.Request) {
+		var body dockerCreatePayload
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode create payload: %v", err)
+		}
+		payloads = append(payloads, body)
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]string{"Id": "sha256-test"})
+	})
+	mux.HandleFunc("POST /containers/{id}/start", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	b := newTestDockerBackend(t, srv.URL)
+
+	result, err := b.Create(context.Background(), CreateRequest{
+		Name:  "console-worker",
+		Image: "img:latest",
+		Env:   map[string]string{"AGENTTEAMS_CONSOLE_PORT": "8088"},
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	if result.ConsoleHostPort == "" {
+		t.Fatal("expected ConsoleHostPort to be reported for console worker")
+	}
+	if len(payloads) != 1 {
+		t.Fatalf("expected 1 create payload, got %d", len(payloads))
+	}
+	binds := payloads[0].HostConfig.PortBindings
+	if len(binds) != 1 {
+		t.Fatalf("expected exactly 1 port binding, got %v", binds)
+	}
+	binding, ok := binds["8088/tcp"]
+	if !ok {
+		t.Fatalf("expected binding for 8088/tcp, got %v", binds)
+	}
+	if len(binding) != 1 {
+		t.Fatalf("expected 1 binding entry for 8088/tcp, got %v", binding)
+	}
+	if binding[0].HostIP != "127.0.0.1" {
+		t.Errorf("console binding HostIp = %q, want 127.0.0.1", binding[0].HostIP)
+	}
+	if binding[0].HostPort != result.ConsoleHostPort {
+		t.Errorf("console binding HostPort = %q, want %q (ConsoleHostPort)", binding[0].HostPort, result.ConsoleHostPort)
+	}
+
+	// A worker without AGENTTEAMS_CONSOLE_PORT must not publish any port.
+	if _, err := b.Create(context.Background(), CreateRequest{
+		Name:  "plain-worker",
+		Image: "img:latest",
+	}); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	if len(payloads) != 2 {
+		t.Fatalf("expected 2 create payloads, got %d", len(payloads))
+	}
+	plain := payloads[1].HostConfig
+	if plain != nil && len(plain.PortBindings) != 0 {
+		t.Errorf("worker without console port must not publish ports, got %v", plain.PortBindings)
+	}
+}
+
+// TestBuildCreatePayloadPreservesExplicitPortMappingHostIP verifies that
+// explicit port mappings requested via CreateRequest.Ports keep their HostIP
+// verbatim: an empty HostIP (all interfaces) stays empty and a specific HostIP
+// is passed through unchanged.
+func TestBuildCreatePayloadPreservesExplicitPortMappingHostIP(t *testing.T) {
+	d := &DockerBackend{}
+	p := d.buildCreatePayload(CreateRequest{
+		Ports: []PortMapping{
+			{HostIP: "", HostPort: "9090", ContainerPort: "9090"},
+			{HostIP: "192.0.2.10", HostPort: "9191", ContainerPort: "9191"},
+		},
+	}, "", 0)
+
+	allInterfaces := p.HostConfig.PortBindings["9090/tcp"]
+	if len(allInterfaces) != 1 || allInterfaces[0].HostIP != "" || allInterfaces[0].HostPort != "9090" {
+		t.Errorf("explicit mapping with empty HostIP changed: %v", allInterfaces)
+	}
+	specific := p.HostConfig.PortBindings["9191/tcp"]
+	if len(specific) != 1 || specific[0].HostIP != "192.0.2.10" || specific[0].HostPort != "9191" {
+		t.Errorf("explicit mapping with specific HostIP changed: %v", specific)
+	}
+}

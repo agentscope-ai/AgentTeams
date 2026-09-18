@@ -23,11 +23,17 @@ The catalog answers two questions:
    dashboard's skill-upload flow stages skills under
    `agents/global/skills/`; they can be distributed to any worker from the
    dashboard or via `PUT /workers` (`skills` field).
+3. **Which skills ship inside plugin packages?** Plugins such as
+   TeamHarness bundle their own skills; on the current QwenPaw runtime they
+   are live in the workers that carry the plugin, while being invisible to
+   every other catalog layer (templates, global, spec) — the catalog must
+   report them or it under-reports what a worker can actually do.
 
 ## Design
 
-A single read-only endpoint, `GET /api/v1/skills`, served by a
-`SkillsHandler` with two halves:
+The L1 read-only endpoint `GET /api/v1/skills` is served by a
+`SkillsHandler` with three sources (the team layer — see the follow-up
+section — adds a fourth via `?team=`):
 
 1. **Builtin skills.** The handler scans the agent-template directories the
    deployer uses when provisioning workers. The template→runtime mapping is
@@ -42,7 +48,27 @@ A single read-only endpoint, `GET /api/v1/skills`, served by a
    shipped by several templates is reported once, with the providing
    templates listed in `agents` and the union of their runtimes in
    `runtimes`.
-2. **Shared skills.** The handler lists the first level of
+2. **Plugin skills.** The handler scans the bundled plugin packages under
+   `AGENTTEAMS_PLUGIN_DIR` (default `/opt/agentteams/plugins`, baked into
+   the controller image; the same source the plugin build packages into the
+   worker images). Discovery is **manifest-driven**: a skill appears iff its
+   plugin's `plugin.yaml` (`kind: AgentTeamPlugin`) declares it in its
+   `skills:` block — unlisted `SKILL.md` directories do not leak into the
+   catalog, and no worker state is scraped. Each declared skill resolves to
+   `<pluginDir>/<plugin>/<path>/SKILL.md` for `name` / `description` /
+   `version` (the manifest `id` is the fallback name; the plugin package
+   `metadata.version` is the fallback version). Entries carry
+   `source: "plugin"` and `plugin: <name>`; they carry **no**
+   `runtimes` / `agents` / `updated_at` — availability follows the plugin's
+   deployment (a worker has the skill iff it has the plugin), not
+   per-runtime templates or per-worker assignment. They are read-only by
+   construction: the team-skill upload writes the team layer only and
+   never touches plugin entries, and a plugin skill's lifecycle belongs
+   to the plugin package. A missing plugin dir, a
+   malformed manifest, or a missing `SKILL.md` degrades that plugin (or
+   that one skill) to absence — never an error. Builtin names win on
+   collision, as with the shared half.
+3. **Shared skills.** The handler lists the first level of
    `agents/global/skills/` (read-only, on each request). Directory entries
    are skills; bare files and dot-entries are skipped. Builtin names win on
    collision. A listing failure (prefix absent, storage down) degrades to an
@@ -65,13 +91,15 @@ assignment in `spec.skills`. Consequently, deleting
 
 ### No content access
 
-Only frontmatter metadata of builtin skills is read
-(`name` / `description` / `version` / `requires`); shared skills are listed
-by name + `updated_at` (the listing timestamp) only. Skill bodies and
-registry credentials are never exposed; the endpoint performs no registry
-calls. The response schema is deliberately limited to `name` /
+Only frontmatter metadata of builtin and plugin skills is read
+(`name` / `description` / `version` / `requires` for builtins;
+`name` / `description` / `version` for plugin skills); shared skills are
+listed by name + `updated_at` (the listing timestamp) only. Skill bodies
+and registry credentials are never exposed; the endpoint performs no
+registry calls. The response schema is deliberately limited to `name` /
 `description` / `source` / `version` / `requirements` / `updated_at` /
-`agents` / `runtimes` (pinned by `TestSkillsCatalogFieldDiscipline`).
+`agents` / `plugin` / `runtimes` (pinned by
+`TestSkillsCatalogFieldDiscipline`).
 
 ## Contract
 
@@ -81,15 +109,20 @@ calls. The response schema is deliberately limited to `name` /
 {
   "skills": [
     {"name": "file-sync", "description": "Sync files with centralized storage.", "source": "builtin", "version": "1.0.0", "requirements": {"require_bins": ["mc"]}, "agents": ["copaw-worker-agent", "worker-agent"], "runtimes": ["copaw", "deepseek-harness", "openclaw", "openhuman", "qwenpaw"]},
+    {"name": "teamharness-communication", "description": "Message delivery protocol.", "source": "plugin", "version": "1.2.0", "plugin": "teamharness"},
     {"name": "shared-kb", "source": "shared", "updated_at": "2026-09-11T08:00:00Z", "runtimes": ["copaw", "deepseek-harness", "hermes", "openclaw", "openhuman", "qwenpaw"]}
   ],
-  "total": 2
+  "total": 3
 }
 ```
 
-- `source` is `"builtin"` or `"shared"`.
-- `version` (builtin only) is the SKILL.md frontmatter `version` (top-level,
-  falling back to `metadata.version`); omitted when undeclared.
+- `source` is `"builtin"`, `"plugin"`, or `"shared"` (the L1 view; the
+  `?team=` view adds `"team"` — see team-skills.md).
+- `version` is the SKILL.md frontmatter `version` (top-level, falling back
+  to `metadata.version`); for plugin skills it falls back further to the
+  plugin package's `metadata.version`. Omitted when nothing declares it.
+- `plugin` (plugin only) is the plugin package name (manifest
+  `metadata.name`, else the plugin directory name).
 - `requirements` (builtin only) mirrors the frontmatter `requires`
   declaration (`require_bins` / `require_envs` / `require_mcps`), parsed
   with QwenPaw 2.2.x semantics (`metadata.{openclaw,qwenpaw,clawdbot}.requires`
@@ -105,7 +138,10 @@ calls. The response schema is deliberately limited to `name` /
   directory names).
 - `runtimes` is sorted. For builtin skills it is the set of runtimes whose
   template ships the skill; for shared skills it is the full runtime list
-  (any worker can be given a shared skill via per-worker distribution).
+  (any worker can be given a shared skill via per-worker distribution); for
+  plugin skills it is **omitted** — a plugin skill is available to a worker
+  iff the worker has the plugin (availability follows the plugin's
+  deployment, not per-runtime templates).
 - Output is sorted by `name`; missing template directories (deployment
   without some runtimes) are silently skipped.
 - Errors: a backend read failure degrades to the remaining half (`200`).
@@ -142,8 +178,20 @@ separate (write) concern via `PUT /workers`.
 - Per-worker availability (`GET /workers/{name}/skills/available`) — the
   catalog is global metadata; per-worker truth (MinIO object existence) is a
   follow-up.
-- Plugin-bundled skills of the qwenpaw worker image (baked into the image,
-  not assignable via `spec.skills`; a build-time manifest is a follow-up).
+- Plugin skills remain read-only and non-assignable: they are not
+  distributed via `spec.skills` (their lifecycle belongs to the plugin
+  package), so the per-worker availability view above — when it ships —
+  must derive them from the worker's plugin set, not from assignments.
+
+## Follow-up: the team skill layer
+
+The team-scoped read (`?team=`), the upload surface
+(`POST /api/v1/skills`, `scope=team|deployment`), and the assign-time
+materialization with the mandatory content scan (scan ②) are specified in
+the companion design [team-skills.md](team-skills.md). This document stays
+the reference for the L1 read-only catalog half; the team layer reuses its
+response shape (new `source: "team"` entries) and its authorization
+foundation.
 
 ## Tests
 
@@ -160,6 +208,10 @@ separate (write) concern via `PUT /workers`.
   manager / missing caller → `400` with the self-explanatory message; the
   positive admin `200` path is pinned by the golden test), shared-half
   degradation on OSS list failure, empty `WorkerAgentDir` → shared-only
-  catalog.
+  catalog, plugin source (manifest-driven discovery; unlisted `SKILL.md`
+  dirs excluded; frontmatter name/version with manifest-id and
+  package-version fallbacks; no `runtimes`/`agents`/`updated_at` on plugin
+  entries; builtin-wins-on-collision; missing plugin dir and malformed
+  manifest degrade to absence).
 - `internal/auth/authorizer_test.go` — authorization matrix for the
   `skills` resource kind.

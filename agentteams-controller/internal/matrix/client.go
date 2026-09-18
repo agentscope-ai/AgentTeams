@@ -219,7 +219,7 @@ type Client interface {
 	VerifyAccessToken(ctx context.Context, accessToken string) error
 
 	// Whoami validates a user access token via GET /_matrix/client/v3/account/whoami
-	// and returns the owning user id (e.g. "@maizong:matrix.local"). This is
+	// and returns the owning user id (e.g. "@alice:matrix.local"). This is
 	// used by Matrix-token authentication (L2 human identities) to map a token
 	// back to the Matrix account.
 	Whoami(ctx context.Context, accessToken string) (string, error)

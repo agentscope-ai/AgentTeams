@@ -44,8 +44,8 @@ type MockProvisioner struct {
 	InviteToRoomFn                 func(ctx context.Context, roomID, userID string) error
 	JoinRoomAsFn                   func(ctx context.Context, roomID, userToken string) error
 	KickFromRoomFn                 func(ctx context.Context, roomID, userID, reason string) error
-	KickFromRoomAsFn       func(ctx context.Context, roomID, userID, reason, actorToken string) error
-	LeaveRoomAsFn          func(ctx context.Context, roomID, userToken string) error
+	KickFromRoomAsFn               func(ctx context.Context, roomID, userID, reason, actorToken string) error
+	LeaveRoomAsFn                  func(ctx context.Context, roomID, userToken string) error
 	EnsureRoomPowerLevelFn         func(ctx context.Context, roomID, userID string, level int, actorToken, selfToken string) error
 	ForceLeaveRoomFn               func(ctx context.Context, userID, roomID string) error
 	DeactivateHumanUserFn          func(ctx context.Context, userID string) error

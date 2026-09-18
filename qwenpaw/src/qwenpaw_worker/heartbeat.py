@@ -86,8 +86,14 @@ def check_qwenpaw_heartbeat(port: int) -> Tuple[str, str, Dict[str, Any]]:
         return "not_ready", str(exc), {"url": url}
 
 
-def get_qwenpaw_last_active_at(port: int, agent_id: str = "default") -> str | None:
-    """Read QwenPaw's agent-status endpoint and map it to controller lastActiveAt."""
+def get_qwenpaw_agent_status(port: int, agent_id: str = "default") -> Dict[str, Any] | None:
+    """Read QwenPaw's agent-status endpoint and return the raw payload.
+
+    The payload carries the runtime's task-level truth (status,
+    running_task_count, last_run_at, last_finish_at) — unlike Matrix
+    typing presence it has no time cap, so a long-running task stays
+    "running" for its whole duration.
+    """
 
     url = f"http://127.0.0.1:{port}/api/agents/{agent_id}/agent-status"
     try:
@@ -97,7 +103,12 @@ def get_qwenpaw_last_active_at(port: int, agent_id: str = "default") -> str | No
         logger.debug("qwenpaw agent-status request failed component=heartbeat error_type=%s", type(exc).__name__)
         return None
 
-    if not isinstance(payload, dict):
+    return payload if isinstance(payload, dict) else None
+
+
+def derive_last_active_at(payload: Dict[str, Any] | None) -> str | None:
+    """Map an agent-status payload to the controller lastActiveAt field."""
+    if payload is None:
         return None
     if payload.get("status") == "running":
         return _rfc3339_utc(datetime.now(timezone.utc))
@@ -108,6 +119,28 @@ def get_qwenpaw_last_active_at(port: int, agent_id: str = "default") -> str | No
     ]
     latest = max((item for item in candidates if item is not None), default=None)
     return _rfc3339_utc(latest) if latest is not None else None
+
+
+def get_qwenpaw_last_active_at(port: int, agent_id: str = "default") -> str | None:
+    """Read QwenPaw's agent-status endpoint and map it to controller lastActiveAt."""
+    return derive_last_active_at(get_qwenpaw_agent_status(port, agent_id))
+
+
+def _agent_status_report_fields(payload: Dict[str, Any] | None) -> Dict[str, Any]:
+    """Project the agent-status payload onto the heartbeat report body."""
+    if not payload:
+        return {}
+    fields: Dict[str, Any] = {}
+    for source, target in (
+        ("status", "agentStatus"),
+        ("running_task_count", "runningTaskCount"),
+        ("last_run_at", "lastRunAt"),
+        ("last_finish_at", "lastFinishAt"),
+    ):
+        value = payload.get(source)
+        if value is not None:
+            fields[target] = value
+    return fields
 
 
 @dataclass(frozen=True)
@@ -128,21 +161,38 @@ class ControllerHeartbeatReporter:
     def enabled(self) -> bool:
         return bool(self.controller_url)
 
-    def report_ready(self, last_active_at: str | None = None) -> bool:
-        return self._post("ready", last_active_at)
+    def report_ready(
+        self,
+        last_active_at: str | None = None,
+        agent_status: Dict[str, Any] | None = None,
+    ) -> bool:
+        return self._post("ready", last_active_at, agent_status)
 
-    def report_heartbeat(self, last_active_at: str | None = None) -> bool:
+    def report_heartbeat(
+        self,
+        last_active_at: str | None = None,
+        agent_status: Dict[str, Any] | None = None,
+    ) -> bool:
         # The controller uses repeated ready reports as worker heartbeats.
-        return self._post("ready", last_active_at)
+        return self._post("ready", last_active_at, agent_status)
 
-    def _post(self, action: str, last_active_at: str | None) -> bool:
+    def _post(
+        self,
+        action: str,
+        last_active_at: str | None,
+        agent_status: Dict[str, Any] | None = None,
+    ) -> bool:
         if not self.enabled():
             return False
         path = f"/api/v1/workers/{self.worker_name}/{action}"
         body = None
         headers = {}
-        if last_active_at:
-            body = json.dumps({"lastActiveAt": last_active_at}).encode("utf-8")
+        if last_active_at or agent_status:
+            data: Dict[str, Any] = {}
+            if last_active_at:
+                data["lastActiveAt"] = last_active_at
+            data.update(_agent_status_report_fields(agent_status))
+            body = json.dumps(data).encode("utf-8")
             headers["Content-Type"] = "application/json"
         token = self.token or _discover_auth_token()
         if token:
@@ -192,6 +242,7 @@ async def run_worker_heartbeat_loop(
     ready_reported = False
     next_report_at = 0.0
     last_status: tuple[str, str] | None = None
+    last_agent_status_key: tuple[str, int | None] | None = None
 
     logger.info(
         "qwenpaw heartbeat loop started component=heartbeat worker=%s port=%s local_interval_seconds=%s "
@@ -218,14 +269,31 @@ async def run_worker_heartbeat_loop(
                 last_status = status_key
 
             if status == "ready" and reporter.enabled():
-                last_active_at = await asyncio.to_thread(get_qwenpaw_last_active_at, port)
+                agent_status = await asyncio.to_thread(get_qwenpaw_agent_status, port)
+                last_active_at = derive_last_active_at(agent_status)
+                # Change-driven report: the status light must flip within
+                # one local poll (5s), not wait for the 60s heartbeat.
+                agent_status_key = (
+                    (agent_status or {}).get("status"),
+                    (agent_status or {}).get("running_task_count"),
+                )
+                if agent_status_key != last_agent_status_key:
+                    last_agent_status_key = agent_status_key
+                    logger.info(
+                        "qwenpaw agent status changed component=heartbeat worker=%s agent_status=%s running_task_count=%s",
+                        worker_name, agent_status_key[0], agent_status_key[1],
+                    )
+                    # The ready report (below, first tick) already carries
+                    # the full payload — skip the redundant change report.
+                    if ready_reported:
+                        await asyncio.to_thread(reporter.report_heartbeat, last_active_at, agent_status)
                 if not ready_reported:
-                    ready_reported = await asyncio.to_thread(reporter.report_ready, last_active_at)
+                    ready_reported = await asyncio.to_thread(reporter.report_ready, last_active_at, agent_status)
                     if ready_reported:
                         logger.info("controller ready report accepted component=heartbeat worker=%s", worker_name)
                 now = time.time()
                 if now >= next_report_at:
-                    reported = await asyncio.to_thread(reporter.report_heartbeat, last_active_at)
+                    reported = await asyncio.to_thread(reporter.report_heartbeat, last_active_at, agent_status)
                     if reported:
                         logger.debug("controller heartbeat report accepted component=heartbeat worker=%s", worker_name)
                     next_report_at = now + report_every

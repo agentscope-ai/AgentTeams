@@ -338,9 +338,9 @@ cat > "${HOME_DIR}/openclaw.json" <<EOF2
       "homeserver": "https://matrix.test",
       "accessToken": "NEW_MATRIX_TOKEN",
       "userId": "@manager-new:test",
-      "dm": {"policy": "allowlist", "allowFrom": ["@luo:test"]},
+      "dm": {"policy": "allowlist", "allowFrom": ["@carol:test"]},
       "groupPolicy": "allowlist",
-      "groupAllowFrom": ["@luo:test"]
+      "groupAllowFrom": ["@carol:test"]
     }
   },
   "models": {

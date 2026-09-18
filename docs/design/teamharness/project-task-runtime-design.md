@@ -210,6 +210,7 @@ TaskMeta status：
 
 | Status | 说明 |
 | --- | --- |
+| `prepared` | 过渡态：task meta 已建（delegate 进行中），委派通知尚未落地；通知成功后提交 `assigned`。 |
 | `assigned` | Leader 已委派，Worker 尚未 ack。 |
 | `in_progress` | Worker 已 ack，正在执行。 |
 | `submitted` | Worker 已提交 result，等待 Leader check 和显式 accept/revise/block。 |
@@ -246,6 +247,67 @@ TaskMeta 或 ProjectMeta 写入前返回 `unsupported result status`。
 携带布尔值 `accepted`。只要 TaskMeta 已有 `submission_id`，accept 和 cancel 都必须
 携带这个 `submissionId`；缺失或过期 identity、不同决定的重试以及 Worker 发起的决定
 都必须在写入前被拒绝。无 identity 的 legacy 迁移例外见下文。
+
+### 任务转换表（Transition Engine）
+
+任务状态转换的合法集合由单一事实来源
+`plugins/teamharness/contracts/task-transitions.json` 定义：Python 写侧
+（`server.py` 的 `TRANSITIONS` 常量 + `_assert_transition`）与 Go 读侧测试加载同一
+fixture 并断言一致（防双写漂移）。下表是 **meta 中存储的原始状态**（API 响应里的
+`pending`/`delegated` 等前端枚举由 `normalizeTaskStatus` 映射，见 workflow 端点）：
+
+| from | 允许 to |
+| --- | --- |
+| `planned` | `prepared`, `assigned`, `in_progress`, `submitted`, `cancelled` |
+| `prepared` | `assigned`, `cancelled` |
+| `assigned` | `in_progress`, `submitted`, `cancelled` |
+| `in_progress` | `submitted`, `cancelled` |
+| `submitted` | `completed`, `revision`, `blocked`, `cancelled` |
+
+终态：`completed`、`revision`、`blocked`、`cancelled`（无出边）。
+
+执法 = 严格表 + 三处收紧（行为变更，越序转换从静默接受改为结构化错误，错误消息含正确动作引导）：
+
+- `ack_task`：from ∈ {`assigned`, `in_progress`}（原先仅拒 `submitted`，`planned→in_progress` 可达）
+- `submit_task`：from ∈ {`assigned`, `in_progress`}（原先仅要求非终态，`planned→submitted` 可达）
+- `accept_task_result`：from == `submitted`（原先无来源守卫）
+
+补充语义：
+
+- `planned→assigned` 直边：project 节点视角（一次 plan_dag+delegate 节点不经过 `prepared`）；
+  task meta 实际经 `prepared`（delegate 创建 meta 时 stamp，通知成功后提交 `assigned`）。
+- 同状态重入（如 `in_progress` 上重复 ack）：幂等 no-op，不报错、不记 history。
+- `report_progress`：`from == to` 的 history 条目（action `progress`，worker/remote-member
+  角色，note 必填 ≤200 字符超长截断+标记），不改状态、不发房间通知。
+- `prepared` 是过渡态：委派通知未落地时短暂停留，重试 delegate 收敛到 `assigned`。
+
+### task meta 转换历史（history）
+
+`shared/tasks/{id}/meta.json` 新增 `history: []` 字段（additive）。条目：
+`{ts (RFC3339 UTC), from, to, action, actor (role:account), note?}`；`action` ∈
+`delegate_task` / `ack_task` / `submit_task` / `accept_task_result` / `cancel_task` / `progress`。
+上限 50 条，超出丢最旧（`projectHistoryLimit` 先例）。
+
+所有任务状态变更经 `_transition_task()` 单一入口：转换表校验 → 写 status → 追加
+history → task meta 与 project 节点同批同步。`accept_task_result` 现在也更新 task
+meta（原先只写 project meta——缺口已修复）。Controller `CancelTask` 在既有
+read-modify-write 同批写入 history 条目（actor = authzActor，重试收敛路径不重复记）。
+
+读侧消费者：
+
+- `GET /api/v1/projects/{id}/workflow?includeTasks=true` 的 `tasks_detail[].history` 透传
+  （无 history 字段的旧 meta 不输出该字段；畸形条目跳过不报错）。
+- `GET /api/v1/projects/{id}/events?limit=&cursor=`：读时聚合全部任务 history 成升序
+  时间线（零新存储、无写侧钩子），游标 = 不透明事件身份（ts, task_id, seq）：
+  时间戳为秒级精度且写入端允许重复 progress，内容相等不是事件身份，故用写入端
+  持久化的每任务序号 seq（`history_seq` 计数，跨 50 条截断稳定）做精确匹配；
+  无 seq 旧格式同秒重复（同一身份）的游标额外携带组内序号 + 列表长度快照，
+  逐条推进不歧义；锚点被截断、重复组快照被截断或游标为旧格式时返回
+  `cursor_expired`。项目级干预事件不在此端点范围
+  （`/history` 快照端点覆盖干预审计，两者互补）。
+
+已知限制：agent 写与 controller 写同一 task meta 的既有竞态（ETag vs pull-before-write）
+不恶化——history 追加与现有 task 字段同写事务、同待遇。
 
 ### 存储布局
 

@@ -213,9 +213,16 @@ async def test_worker_heartbeat_loop_reports_ready_and_heartbeat(
         "/api/v1/workers/worker-a/ready",
         "/api/v1/workers/worker-a/ready",
     ]
+    expected_body = {
+        "lastActiveAt": "2026-05-13T00:04:00Z",
+        "agentStatus": "idle",
+        "runningTaskCount": 0,
+        "lastRunAt": "2026-05-13T00:00:00Z",
+        "lastFinishAt": "2026-05-13T00:04:00Z",
+    }
     assert [json.loads(request["body"]) for request in post_requests] == [
-        {"lastActiveAt": "2026-05-13T00:04:00Z"},
-        {"lastActiveAt": "2026-05-13T00:04:00Z"},
+        expected_body,
+        expected_body,
     ]
 
 
@@ -257,3 +264,130 @@ def _start_server(routes):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, requests
+
+
+def test_get_qwenpaw_agent_status_returns_payload() -> None:
+    server, requests = _start_server(
+        {
+            "GET /api/agents/default/agent-status": (
+                200,
+                {
+                    "status": "running",
+                    "running_task_count": 1,
+                    "last_run_at": "2026-09-14T10:00:00Z",
+                    "last_finish_at": None,
+                },
+            ),
+        }
+    )
+    try:
+        from qwenpaw_worker.heartbeat import get_qwenpaw_agent_status
+
+        payload = get_qwenpaw_agent_status(server.server_port)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert payload is not None
+    assert payload["status"] == "running"
+    assert payload["running_task_count"] == 1
+    assert requests[0]["path"] == "/api/agents/default/agent-status"
+
+
+def test_get_qwenpaw_agent_status_returns_none_on_failure() -> None:
+    from qwenpaw_worker.heartbeat import get_qwenpaw_agent_status
+
+    assert get_qwenpaw_agent_status(1) is None
+
+
+def test_agent_status_report_fields_projection() -> None:
+    from qwenpaw_worker.heartbeat import _agent_status_report_fields
+
+    assert _agent_status_report_fields(None) == {}
+    assert _agent_status_report_fields({}) == {}
+    fields = _agent_status_report_fields(
+        {
+            "status": "idle",
+            "running_task_count": 0,
+            "last_run_at": "2026-09-14T09:58:00Z",
+            "last_finish_at": "2026-09-14T09:50:00Z",
+            "unexpected": "dropped",
+        }
+    )
+    assert fields == {
+        "agentStatus": "idle",
+        "runningTaskCount": 0,
+        "lastRunAt": "2026-09-14T09:58:00Z",
+        "lastFinishAt": "2026-09-14T09:50:00Z",
+    }
+
+
+def test_agent_status_running_maps_last_active_to_now() -> None:
+    from qwenpaw_worker.heartbeat import derive_last_active_at
+
+    value = derive_last_active_at({"status": "running"})
+    assert value is not None and value.endswith("Z")
+
+
+async def test_agent_status_change_triggers_immediate_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payloads: list[dict] = []
+    calls = {"n": 0}
+
+    def agent_status(_port):
+        calls["n"] += 1
+        return payloads[min(calls["n"] - 1, len(payloads) - 1)]
+
+    server, requests = _start_server(
+        {
+            "POST /api/v1/workers/worker-a/ready": (204, None),
+        }
+    )
+    heartbeat = WorkerHeartbeat(tmp_path / "heartbeat.json")
+    ticks = 0
+    payloads.append(
+        {"status": "idle", "running_task_count": 0,
+         "last_run_at": None, "last_finish_at": "2026-09-14T09:50:00Z"}
+    )
+    payloads.append(
+        {"status": "running", "running_task_count": 1,
+         "last_run_at": "2026-09-14T10:00:00Z", "last_finish_at": None}
+    )
+
+    def check(_port):
+        return "ready", "qwenpaw ready", {}
+
+    async def cancel_after_second_tick(_seconds):
+        nonlocal ticks
+        ticks += 1
+        if ticks >= 2:
+            raise asyncio.CancelledError
+
+    monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", f"http://127.0.0.1:{server.server_port}")
+    monkeypatch.setattr("qwenpaw_worker.heartbeat.check_qwenpaw_heartbeat", check)
+    monkeypatch.setattr("qwenpaw_worker.heartbeat.get_qwenpaw_agent_status", agent_status)
+    monkeypatch.setattr("qwenpaw_worker.heartbeat.asyncio.sleep", cancel_after_second_tick)
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await run_worker_heartbeat_loop(
+                heartbeat,
+                worker_name="worker-a",
+                port=server.server_port,
+                local_interval=0.01,
+                report_interval=60,
+            )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    post_bodies = [json.loads(r["body"]) for r in requests if r["method"] == "POST"]
+    # tick 1: ready + first interval (change report suppressed pre-ready)
+    # tick 2: change-driven report for the flip to running
+    assert len(post_bodies) == 3
+    assert post_bodies[0]["agentStatus"] == "idle"
+    assert post_bodies[2]["agentStatus"] == "running"
+    assert post_bodies[2]["runningTaskCount"] == 1
+    assert post_bodies[2]["lastActiveAt"].endswith("Z")

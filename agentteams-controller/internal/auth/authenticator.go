@@ -37,13 +37,18 @@ const (
 
 // CallerIdentity represents the authenticated caller.
 type CallerIdentity struct {
-	Role                    string   // admin | manager | team-leader | worker
-	Username                string   // canonical name (worker name, "manager", or "admin")
-	Team                    string   // team name (filled by Enricher, empty for standalone)
-	Teams                   []string // multi-team set for L2 humans (Human CR accessibleTeams); empty for SA-based callers
-	WorkerName              string   // equals Username when Role is worker or team-leader
-	ServiceAccountNamespace string   // namespace parsed from TokenReview username
-	ServiceAccountName      string   // service account parsed from TokenReview username
+	Role     string   // admin | manager | team-leader | worker
+	Username string   // canonical name (worker name, "manager", or "admin")
+	Team     string   // team name (filled by Enricher, empty for standalone)
+	Teams    []string // multi-team set for L2 humans (Human CR accessibleTeams); empty for SA-based callers
+	// Capabilities are the granted capability values for L2 humans (Human CR
+	// capabilities, #1220 §3). Never populated for SA-based callers
+	// (admin/manager/leader/worker) — team leaders never hold capabilities
+	// (#1220 §5).
+	Capabilities            []string
+	WorkerName              string // equals Username when Role is worker or team-leader
+	ServiceAccountNamespace string // namespace parsed from TokenReview username
+	ServiceAccountName      string // service account parsed from TokenReview username
 }
 
 // TeamMatches reports whether the caller can access the given team. For L2

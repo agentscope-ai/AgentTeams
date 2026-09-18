@@ -1,6 +1,9 @@
 package server
 
-import v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+import (
+	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
+)
 
 // --- Worker API types ---
 
@@ -76,9 +79,16 @@ type WorkerResponse struct {
 	MatrixUserID     string                     `json:"matrixUserID,omitempty"`
 	RoomID           string                     `json:"roomID,omitempty"`
 	Message          string                     `json:"message,omitempty"`
-	ExposedPorts     []ExposedPortInfo          `json:"exposedPorts,omitempty"`
-	Team             string                     `json:"team,omitempty"`
-	Role             string                     `json:"role,omitempty"`
+	LastActiveAt     string                     `json:"lastActiveAt,omitempty"`
+	// AgentStatus is the runtime task-level state reported by the worker
+	// heartbeat: "idle" / "running" / "disabled"; empty = not reported.
+	AgentStatus      string            `json:"agentStatus,omitempty"`
+	RunningTaskCount *int              `json:"runningTaskCount,omitempty"`
+	LastRunAt        string            `json:"lastRunAt,omitempty"`
+	LastFinishAt     string            `json:"lastFinishAt,omitempty"`
+	ExposedPorts     []ExposedPortInfo `json:"exposedPorts,omitempty"`
+	Team             string            `json:"team,omitempty"`
+	Role             string            `json:"role,omitempty"`
 }
 
 type ExposedPortInfo struct {
@@ -164,6 +174,10 @@ type UpdateHumanRequest struct {
 	AccessibleTeams   *[]string `json:"accessibleTeams,omitempty"`
 	AccessibleWorkers *[]string `json:"accessibleWorkers,omitempty"`
 	Note              *string   `json:"note,omitempty"`
+	// Capabilities follows the same merge-patch semantics as
+	// AccessibleTeams: absent = unchanged, explicit list = replaces,
+	// empty list = clears. Unknown values are rejected (400).
+	Capabilities *[]string `json:"capabilities,omitempty"`
 }
 
 type HumanResponse struct {
@@ -174,6 +188,7 @@ type HumanResponse struct {
 	PermissionLevel   int      `json:"permissionLevel"`
 	AccessibleTeams   []string `json:"accessibleTeams,omitempty"`
 	AccessibleWorkers []string `json:"accessibleWorkers,omitempty"`
+	Capabilities      []string `json:"capabilities,omitempty"`
 	Note              string   `json:"note,omitempty"`
 	MatrixUserID      string   `json:"matrixUserID,omitempty"`
 	InitialPassword   string   `json:"initialPassword,omitempty"`
@@ -256,6 +271,16 @@ type ConsumerResponse struct {
 	ConsumerID string `json:"consumer_id"`
 	APIKey     string `json:"api_key,omitempty"`
 	Status     string `json:"status"`
+}
+
+// AIRouteListResponse is the read-only AI route catalog returned by
+// GET /api/v1/gateway/ai-routes. Each entry is a gateway route: name is the
+// route name (NOT a model ID — one route can serve several models),
+// upstreams are the providers serving it, and allowedConsumers are the
+// gateway consumers authorized on the route.
+type AIRouteListResponse struct {
+	Routes []gateway.AIRouteInfo `json:"routes"`
+	Total  int                   `json:"total"`
 }
 
 // --- Lifecycle API types ---

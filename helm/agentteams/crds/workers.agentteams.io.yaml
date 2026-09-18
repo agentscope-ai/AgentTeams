@@ -329,6 +329,20 @@ spec:
                 lastActiveAt:
                   type: string
                   format: date-time
+                agentStatus:
+                  type: string
+                  description: "Worker runtime task-level state self-reported by the heartbeat: idle / running / disabled; empty when not reported."
+                runningTaskCount:
+                  type: integer
+                  description: "Number of active runtime tasks reported by the worker heartbeat; absent when unknown."
+                lastRunAt:
+                  type: string
+                  format: date-time
+                  description: "Runtime-reported timestamp of the last task start."
+                lastFinishAt:
+                  type: string
+                  format: date-time
+                  description: "Runtime-reported timestamp of the last task finish."
                 message:
                   type: string
                 exposedPorts:

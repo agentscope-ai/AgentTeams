@@ -149,11 +149,11 @@ OPENCLAW_BASE_PUSH_ARG  = --build-arg OPENCLAW_BASE_IMAGE=$(OPENCLAW_BASE_IMAGE)
 
 build-agentteams-controller: ## Build agentteams-controller image (prerequisite for Manager)
 	@echo "==> Building agentteams-controller image: $(LOCAL_CONTROLLER)"
-	@rm -rf ./agentteams-controller/agent && cp -r ./manager/agent ./agentteams-controller/agent
+	@rm -rf ./agentteams-controller/agent ./agentteams-controller/plugins && cp -r ./manager/agent ./agentteams-controller/agent && cp -r ./plugins ./agentteams-controller/plugins
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 		-t $(LOCAL_CONTROLLER) \
 		./agentteams-controller/
-	@rm -rf ./agentteams-controller/agent
+	@rm -rf ./agentteams-controller/agent ./agentteams-controller/plugins
 
 build-manager: build-agentteams-controller ## Build Manager image (OpenClaw runtime)
 	@echo "==> Building Manager image: $(LOCAL_MANAGER) (registry: $(HIGRESS_REGISTRY))"

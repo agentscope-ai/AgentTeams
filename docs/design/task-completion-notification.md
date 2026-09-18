@@ -29,7 +29,7 @@ The taskflow MCP layer is asymmetric:
   Worker's LLM must self-remember to send
   `@leader TASK_COMPLETED: <task-id> - Result: shared/tasks/<task-id>/result.md`.
 
-Real deployments (Node1, multi-turn sessions) show the Worker forgetting
+Real deployments (multi-turn sessions) show the Worker forgetting
 that line after context compaction. Consequences:
 
 - The Leader receives no wake signal: `check_task` is poll-based, and

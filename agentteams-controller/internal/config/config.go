@@ -499,6 +499,13 @@ func (c *Config) WorkerAgentDir() string {
 	return envOrDefault("AGENTTEAMS_WORKER_AGENT_DIR", "/opt/agentteams/agent/worker-agent")
 }
 
+// PluginDir returns the directory of bundled plugin packages (each
+// plugin.yaml + its skills/ tree). The skill catalog's plugin source
+// reads it read-only; an absent dir simply means no plugin entries.
+func (c *Config) PluginDir() string {
+	return envOrDefault("AGENTTEAMS_PLUGIN_DIR", "/opt/agentteams/plugins")
+}
+
 // ManagerConfigPath returns the path to the Manager Agent's openclaw.json (embedded mode).
 func (c *Config) ManagerConfigPath() string {
 	return envOrDefault("AGENTTEAMS_MANAGER_CONFIG_PATH", "/root/openclaw.json")

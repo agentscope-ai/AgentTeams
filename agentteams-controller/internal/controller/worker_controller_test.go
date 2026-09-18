@@ -161,7 +161,7 @@ func TestWorkerReconcileDoesNotOverwriteTeamOwnedRuntimeConfig(t *testing.T) {
 		},
 	}
 	rig := newWorkerRig(t, worker, team)
-	rig.deployer.PushOnDemandSkillsFn = func(context.Context, string, []string, []v1beta1.RemoteSkillSource) error {
+	rig.deployer.PushOnDemandSkillsFn = func(context.Context, string, string, []string, []v1beta1.RemoteSkillSource) error {
 		return errors.New("remote Skill refresh failed for remote-team-skill (label=\"stable\"); retained existing Worker copies")
 	}
 
@@ -244,6 +244,10 @@ func (g *workerTestGateway) EnsureStreamIdleTimeout(context.Context, int) error 
 func (g *workerTestGateway) EnsureAIRoute(context.Context, gateway.AIRouteRequest) error {
 	return nil
 }
+func (g *workerTestGateway) ListAIRoutes(context.Context) ([]gateway.AIRouteInfo, error) {
+	return nil, nil
+}
+
 func (g *workerTestGateway) ResolveModelProvider(context.Context, string) (*gateway.ModelProviderInfo, error) {
 	return g.modelInfo, g.modelErr
 }

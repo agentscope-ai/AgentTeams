@@ -67,7 +67,7 @@ does, via `create-project.sh`, which already writes a
 has no way to lift a human operator. New optional flag:
 
 ```
-create-project.sh --id p1 --title T --workers w1,w2 --grant-admin luo,sunzong
+create-project.sh --id p1 --title T --workers w1,w2 --grant-admin carol,bob
 ```
 
 `--grant-admin` accepts local parts or full Matrix IDs and adds each user at

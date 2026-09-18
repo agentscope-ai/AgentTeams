@@ -56,6 +56,11 @@ spec:
                     - read
                     - readwrite
                   description: "Knowledge base file access for this human's own teams: read (default when empty) or readwrite (explicit write opt-in); L1 admin is never restricted, team leaders stay read-only"
+                capabilities:
+                  type: array
+                  items:
+                    type: string
+                  description: "Named sensitive-surface privileges beyond the L2 baseline (five-value set: full_access, channel_secrets, external_sources, approval_policy, secret_reveal; docs/design/capability-foundation.md). Team leaders never hold capabilities"
             status:
               type: object
               properties:

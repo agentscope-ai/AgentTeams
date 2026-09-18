@@ -21,3 +21,5 @@ ruby plugins/tests/teamharness/mcp/tools/test-message.rb
 ruby plugins/tests/teamharness/mcp/tools/test-filesync.rb
 ruby plugins/tests/teamharness/mcp/tools/test-projectflow.rb
 ruby plugins/tests/teamharness/mcp/tools/test-taskflow.rb
+ruby plugins/tests/teamharness/mcp/tools/test-transition-table.rb
+python3 -m pytest plugins/tests/agentteams-matrix-channel/test_session_isolation.py -q

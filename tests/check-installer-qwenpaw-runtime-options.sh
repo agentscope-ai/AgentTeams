@@ -107,13 +107,9 @@ for manager_crd in \
         fail "Manager CRD must keep accepting legacy CoPaw: ${manager_crd}"
 done
 
-# Fork CI must exercise the PR-built QwenPaw Manager directly while retaining
-# one compatibility mapping for legacy CoPaw matrix entries.
+# Fork CI must exercise the PR-built QwenPaw Manager directly.
 grep -Fq 'AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE: agentteams/manager-qwenpaw:latest' \
     "${INTEGRATION_WORKFLOW}" ||
     fail "Integration CI must map the QwenPaw runtime to the PR-built Manager image"
-grep -Fq 'AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE: agentteams/manager-qwenpaw:latest' \
-    "${INTEGRATION_WORKFLOW}" ||
-    fail "Integration CI must explicitly map the CoPaw compatibility label to the PR-built QwenPaw Manager image"
 
 echo "PASS: QwenPaw Manager and Worker are first-class local installer options"

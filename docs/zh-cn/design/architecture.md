@@ -135,6 +135,9 @@ flowchart TB
 - **MCP servers** 以及可选的 worker 端口 **HTTP/gRPC 暴露**，都建模为 reconciliation 过程中管理的 gateway routes。
 - **Console** 使用 session-cookie auth，用于 route、consumer 和 MCP 管理；Manager 初始化脚本和 skills 与该模型保持一致。
 
+对外可调用端点的完整清单（LLM、MCP、暴露的 Worker 端口、内置服务）以及 Console API
+一览，见 [Higress 网关 API 参考](../usage/higress-gateway-api.md)。
+
 ---
 
 ## 运行时模型

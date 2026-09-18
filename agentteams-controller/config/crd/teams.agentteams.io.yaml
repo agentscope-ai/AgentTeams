@@ -160,6 +160,13 @@ spec:
                         type: string
                         format: date-time
                         description: "Latest runtime-reported business activity time for this member."
+                      agentStatus:
+                        type: string
+                        description: "Mirrors the member's Worker.Status.AgentStatus (idle/running/disabled; empty = not reported)."
+                      lastFinishAt:
+                        type: string
+                        format: date-time
+                        description: "Mirrors the member's Worker.Status.LastFinishAt."
                       lastHeartbeat:
                         type: string
                         format: date-time

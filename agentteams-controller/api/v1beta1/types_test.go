@@ -2,9 +2,12 @@ package v1beta1
 
 import (
 	"encoding/json"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
+
+	"sigs.k8s.io/yaml"
 )
 
 // strPtr / boolPtr are tiny helpers used by the cross-cluster deployment
@@ -199,5 +202,66 @@ func TestManagerSpec_DeepCopyResources(t *testing.T) {
 	src.Resources.Limits.Memory = "6Gi"
 	if cp.Resources.Limits.Memory != "5Gi" {
 		t.Fatalf("DeepCopy aliased ManagerSpec.Resources: %v", cp.Resources)
+	}
+}
+
+// TestCRDStatusSchemasCoverStatusStructs guards the structural-schema
+// pruning contract: every status field the controllers persist must exist
+// as a property in the CRD schema under config/crd/, otherwise a real
+// apiserver silently prunes it (the feature goes no-op while fake-client
+// unit tests stay green).
+func TestCRDStatusSchemasCoverStatusStructs(t *testing.T) {
+	workers := loadCRDDoc(t, "../../config/crd/workers.agentteams.io.yaml")
+	assertCRDPropertiesCoverStruct(t, "WorkerStatus", workers, reflect.TypeOf(WorkerStatus{}),
+		"spec", "versions", "*", "schema", "openAPIV3Schema", "properties", "status", "properties")
+	teams := loadCRDDoc(t, "../../config/crd/teams.agentteams.io.yaml")
+	assertCRDPropertiesCoverStruct(t, "TeamMemberStatus", teams, reflect.TypeOf(TeamMemberStatus{}),
+		"spec", "versions", "*", "schema", "openAPIV3Schema", "properties", "status", "properties", "members", "items", "properties")
+}
+
+func loadCRDDoc(t *testing.T, path string) map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	return doc
+}
+
+// assertCRDPropertiesCoverStruct walks path (with "*" selecting the first
+// list element) and asserts every JSON-tagged field of rt has a property in
+// the resolved schema node.
+func assertCRDPropertiesCoverStruct(t *testing.T, label string, doc map[string]any, rt reflect.Type, path ...string) {
+	t.Helper()
+	var cur any = doc
+	for _, key := range path {
+		switch node := cur.(type) {
+		case map[string]any:
+			cur = node[key]
+		case []any:
+			if key != "*" || len(node) == 0 {
+				t.Fatalf("%s: cannot walk %q in a list", label, key)
+			}
+			cur = node[0]
+		default:
+			t.Fatalf("%s: cannot walk %q at %T", label, key, cur)
+		}
+	}
+	props, ok := cur.(map[string]any)
+	if !ok {
+		t.Fatalf("%s: resolved node is %T, want a properties map", label, cur)
+	}
+	for i := 0; i < rt.NumField(); i++ {
+		name := strings.Split(rt.Field(i).Tag.Get("json"), ",")[0]
+		if name == "" || name == "-" {
+			continue
+		}
+		if _, ok := props[name]; !ok {
+			t.Errorf("%s: CRD schema is missing property %q (a real apiserver would prune it)", label, name)
+		}
 	}
 }

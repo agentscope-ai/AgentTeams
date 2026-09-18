@@ -95,6 +95,11 @@ write the full report content to that file before calling `submit_task`.
 `submit_task` records structured status in task metadata and does not create or
 rewrite `result.md`.
 
+For long-running tasks, report progress periodically with the `report_progress`
+action (a short `note`, ≤ 200 chars). It records a progress entry in the task's
+audit history without changing task state or notifying the room — use it to make
+multi-stage work visible, not as a status update.
+
 If blocked, submit a `BLOCKED` result instead of silently waiting.
 
 ## Submit

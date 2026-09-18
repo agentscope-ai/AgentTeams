@@ -363,7 +363,7 @@ func TestWorkspaceFiles_L2HumanInScopeAllowed(t *testing.T) {
 
 	h := newTestWorkspaceFilesHandler(t, "embedded", upstream, kbWorkerFixture("market-team", "market-writer")...)
 	req := withCaller(kbRequest("market-writer", "file-content", "path=MEMORY.md"),
-		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"market-team"}})
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"market-team"}})
 	rec := httptest.NewRecorder()
 	h.proxyWorkspaceFiles(rec, req)
 
@@ -383,7 +383,7 @@ func TestWorkspaceFiles_L2HumanCrossTeamHidden(t *testing.T) {
 
 	h := newTestWorkspaceFilesHandler(t, "embedded", upstream, kbWorkerFixture("market-team", "market-writer")...)
 	req := withCaller(kbRequest("market-writer", "tree", "path=memory"),
-		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "sunzong", Teams: []string{"biz-team"}})
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "bob", Teams: []string{"biz-team"}})
 	rec := httptest.NewRecorder()
 	h.proxyWorkspaceFiles(rec, req)
 
@@ -424,7 +424,7 @@ func TestWorkspaceFiles_StandaloneWorkerScopedHidden(t *testing.T) {
 	h.workerBaseURL = func(string, map[string]string) string { return upstream.URL }
 
 	scoped := withCaller(kbRequest("standalone-worker", "tree", "path=memory"),
-		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"market-team"}})
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"market-team"}})
 	rec := httptest.NewRecorder()
 	h.proxyWorkspaceFiles(rec, scoped)
 	if rec.Code != http.StatusNotFound {
@@ -663,9 +663,9 @@ func TestWorkspaceFilesWrite_CreateNewFile(t *testing.T) {
 	defer upstream.Close()
 	h := newTestWorkspaceFilesHandler(t, "embedded", upstream,
 		append(kbWorkerFixture("market-team", "market-writer"),
-			kbHumanFixture("maizong", []string{"market-team"}, "readwrite"))...)
+			kbHumanFixture("alice", []string{"market-team"}, "readwrite"))...)
 	req := withCaller(kbWriteRequest("market-writer", "file-content", "path=memory/t.md", `{"content":"hello-kb"}`, ""),
-		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"market-team"}})
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"market-team"}})
 	rec := httptest.NewRecorder()
 	h.proxyWorkspaceFileWrite(rec, req)
 
@@ -687,9 +687,9 @@ func TestWorkspaceFilesWrite_UpdateWithETag(t *testing.T) {
 	defer upstream.Close()
 	h := newTestWorkspaceFilesHandler(t, "embedded", upstream,
 		append(kbWorkerFixture("market-team", "market-writer"),
-			kbHumanFixture("maizong", []string{"market-team"}, "readwrite"))...)
+			kbHumanFixture("alice", []string{"market-team"}, "readwrite"))...)
 	req := withCaller(kbWriteRequest("market-writer", "file-content", "path=memory/t.md", `{"content":"hello-kb"}`, "et-1"),
-		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"market-team"}})
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"market-team"}})
 	rec := httptest.NewRecorder()
 	h.proxyWorkspaceFileWrite(rec, req)
 
@@ -707,9 +707,9 @@ func TestWorkspaceFilesWrite_ExistingWithoutIfMatchRejected(t *testing.T) {
 	defer upstream.Close()
 	h := newTestWorkspaceFilesHandler(t, "embedded", upstream,
 		append(kbWorkerFixture("market-team", "market-writer"),
-			kbHumanFixture("maizong", []string{"market-team"}, "readwrite"))...)
+			kbHumanFixture("alice", []string{"market-team"}, "readwrite"))...)
 	req := withCaller(kbWriteRequest("market-writer", "file-content", "path=memory/t.md", `{"content":"hello-kb"}`, ""),
-		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"market-team"}})
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"market-team"}})
 	rec := httptest.NewRecorder()
 	h.proxyWorkspaceFileWrite(rec, req)
 
@@ -728,9 +728,9 @@ func TestWorkspaceFilesWrite_NewFileWithIfMatchRejected(t *testing.T) {
 	defer upstream.Close()
 	h := newTestWorkspaceFilesHandler(t, "embedded", upstream,
 		append(kbWorkerFixture("market-team", "market-writer"),
-			kbHumanFixture("maizong", []string{"market-team"}, "readwrite"))...)
+			kbHumanFixture("alice", []string{"market-team"}, "readwrite"))...)
 	req := withCaller(kbWriteRequest("market-writer", "file-content", "path=memory/t.md", `{"content":"hello-kb"}`, "et-1"),
-		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"market-team"}})
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"market-team"}})
 	rec := httptest.NewRecorder()
 	h.proxyWorkspaceFileWrite(rec, req)
 
@@ -758,9 +758,9 @@ func TestWorkspaceFilesWrite_ETagConflictPassthrough(t *testing.T) {
 	defer upstream.Close()
 	h := newTestWorkspaceFilesHandler(t, "embedded", upstream,
 		append(kbWorkerFixture("market-team", "market-writer"),
-			kbHumanFixture("maizong", []string{"market-team"}, "readwrite"))...)
+			kbHumanFixture("alice", []string{"market-team"}, "readwrite"))...)
 	req := withCaller(kbWriteRequest("market-writer", "file-content", "path=memory/t.md", `{"content":"hello-kb"}`, "stale-et"),
-		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"market-team"}})
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"market-team"}})
 	rec := httptest.NewRecorder()
 	h.proxyWorkspaceFileWrite(rec, req)
 
@@ -779,9 +779,9 @@ func TestWorkspaceFilesWrite_CrossTeamHidden(t *testing.T) {
 	defer upstream.Close()
 	h := newTestWorkspaceFilesHandler(t, "embedded", upstream,
 		append(kbWorkerFixture("market-team", "market-writer"),
-			kbHumanFixture("sunzong", []string{"biz-team"}, ""))...)
+			kbHumanFixture("bob", []string{"biz-team"}, ""))...)
 	req := withCaller(kbWriteRequest("market-writer", "file-content", "path=memory/t.md", `{"content":"hello-kb"}`, ""),
-		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "sunzong", Teams: []string{"biz-team"}})
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "bob", Teams: []string{"biz-team"}})
 	rec := httptest.NewRecorder()
 	h.proxyWorkspaceFileWrite(rec, req)
 
@@ -800,9 +800,9 @@ func TestWorkspaceFilesWrite_ReadOnlyHumanDenied(t *testing.T) {
 	defer upstream.Close()
 	h := newTestWorkspaceFilesHandler(t, "embedded", upstream,
 		append(kbWorkerFixture("market-team", "market-writer"),
-			kbHumanFixture("maizong", []string{"market-team"}, "read"))...)
+			kbHumanFixture("alice", []string{"market-team"}, "read"))...)
 	req := withCaller(kbWriteRequest("market-writer", "file-content", "path=memory/t.md", `{"content":"hello-kb"}`, ""),
-		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"market-team"}})
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"market-team"}})
 	rec := httptest.NewRecorder()
 	h.proxyWorkspaceFileWrite(rec, req)
 
@@ -824,9 +824,9 @@ func TestWorkspaceFilesWrite_DefaultAccessDenied(t *testing.T) {
 	defer upstream.Close()
 	h := newTestWorkspaceFilesHandler(t, "embedded", upstream,
 		append(kbWorkerFixture("market-team", "market-writer"),
-			kbHumanFixture("maizong", []string{"market-team"}, ""))...)
+			kbHumanFixture("alice", []string{"market-team"}, ""))...)
 	req := withCaller(kbWriteRequest("market-writer", "file-content", "path=memory/t.md", `{"content":"hello-kb"}`, ""),
-		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"market-team"}})
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"market-team"}})
 	rec := httptest.NewRecorder()
 	h.proxyWorkspaceFileWrite(rec, req)
 
@@ -878,10 +878,10 @@ func TestWorkspaceFilesWrite_OverSizeRejected(t *testing.T) {
 	defer upstream.Close()
 	h := newTestWorkspaceFilesHandler(t, "embedded", upstream,
 		append(kbWorkerFixture("market-team", "market-writer"),
-			kbHumanFixture("maizong", []string{"market-team"}, "readwrite"))...)
+			kbHumanFixture("alice", []string{"market-team"}, "readwrite"))...)
 	big := strings.Repeat("x", 1024*1024+1)
 	req := withCaller(kbWriteRequest("market-writer", "file-content", "path=memory/t.md", `{"content":"`+big+`"}`, ""),
-		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"market-team"}})
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"market-team"}})
 	rec := httptest.NewRecorder()
 	h.proxyWorkspaceFileWrite(rec, req)
 
@@ -901,10 +901,10 @@ func TestWorkspaceFilesWrite_SensitivePathRejected(t *testing.T) {
 	defer upstream.Close()
 	h := newTestWorkspaceFilesHandler(t, "embedded", upstream,
 		append(kbWorkerFixture("market-team", "market-writer"),
-			kbHumanFixture("maizong", []string{"market-team"}, "readwrite"))...)
+			kbHumanFixture("alice", []string{"market-team"}, "readwrite"))...)
 	for _, path := range []string{"SOUL.md", "PROFILE.md", "skills/x/SKILL.md", ".copaw/agent.json", "memory/../../SOUL.md", "MEMORY.md/foo"} {
 		req := withCaller(kbWriteRequest("market-writer", "file-content", "path="+url.QueryEscape(path), `{"content":"hello-kb"}`, ""),
-			&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"market-team"}})
+			&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"market-team"}})
 		rec := httptest.NewRecorder()
 		h.proxyWorkspaceFileWrite(rec, req)
 		if rec.Code != http.StatusBadRequest {
@@ -941,10 +941,10 @@ func TestWorkspaceFilesWrite_UnknownSubpathAndBody(t *testing.T) {
 	defer upstream.Close()
 	h2 := newTestWorkspaceFilesHandler(t, "embedded", upstream,
 		append(kbWorkerFixture("market-team", "market-writer"),
-			kbHumanFixture("maizong", []string{"market-team"}, "readwrite"))...)
+			kbHumanFixture("alice", []string{"market-team"}, "readwrite"))...)
 	for _, body := range []string{`[]`, `{"noContent":true}`, `not-json`} {
 		req := withCaller(kbWriteRequest("market-writer", "file-content", "path=memory/t.md", body, ""),
-			&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"market-team"}})
+			&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"market-team"}})
 		rec := httptest.NewRecorder()
 		h2.proxyWorkspaceFileWrite(rec, req)
 		if rec.Code != http.StatusBadRequest {
@@ -970,7 +970,7 @@ func TestWorkspaceFilesDownload_InScopeAllowed(t *testing.T) {
 	defer upstream.Close()
 	h := newTestWorkspaceFilesHandler(t, "embedded", upstream, kbWorkerFixture("market-team", "market-writer")...)
 	req := withCaller(kbRequest("market-writer", "file-download", "path=MEMORY.md"),
-		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"market-team"}})
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"market-team"}})
 	rec := httptest.NewRecorder()
 	h.proxyWorkspaceFiles(rec, req)
 
@@ -996,7 +996,7 @@ func TestWorkspaceFilesDownload_CrossTeamHidden(t *testing.T) {
 	defer upstream.Close()
 	h := newTestWorkspaceFilesHandler(t, "embedded", upstream, kbWorkerFixture("market-team", "market-writer")...)
 	req := withCaller(kbRequest("market-writer", "file-download", "path=MEMORY.md"),
-		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "sunzong", Teams: []string{"biz-team"}})
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "bob", Teams: []string{"biz-team"}})
 	rec := httptest.NewRecorder()
 	h.proxyWorkspaceFiles(rec, req)
 

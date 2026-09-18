@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
@@ -236,4 +237,121 @@ func (s *stubWorkerBackend) Stop(_ context.Context, _ string) error {
 }
 func (s *stubWorkerBackend) Status(context.Context, string) (*backend.WorkerResult, error) {
 	return &backend.WorkerResult{Backend: "stub", Status: s.status, Message: s.message}, nil
+}
+
+func TestLifecycleReadyPersistsRuntimeReport(t *testing.T) {
+	scheme := newLifecycleTestScheme(t)
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"},
+		Status:     v1beta1.WorkerStatus{Phase: "Running"},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.Worker{}).
+		WithObjects(worker).
+		Build()
+	backendStub := &stubWorkerBackend{status: backend.StatusRunning}
+	handler := NewLifecycleHandler(k8sClient, backend.NewRegistry([]backend.WorkerBackend{backendStub}), "default")
+
+	payload := `{"lastActiveAt":"2026-09-14T10:00:00Z","agentStatus":"running","runningTaskCount":2,"lastRunAt":"2026-09-14T09:58:00Z","lastFinishAt":"2026-09-14T09:50:00Z"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers/alpha-dev/ready", strings.NewReader(payload))
+	req.SetPathValue("name", "alpha-dev")
+	rec := httptest.NewRecorder()
+
+	handler.Ready(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusNoContent, rec.Code, rec.Body.String())
+	}
+
+	var updated v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "alpha-dev", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if updated.Status.LastActiveAt != "2026-09-14T10:00:00Z" {
+		t.Errorf("expected lastActiveAt persisted, got %q", updated.Status.LastActiveAt)
+	}
+	if updated.Status.AgentStatus != "running" {
+		t.Errorf("expected agentStatus running, got %q", updated.Status.AgentStatus)
+	}
+	if updated.Status.RunningTaskCount == nil || *updated.Status.RunningTaskCount != 2 {
+		t.Errorf("expected runningTaskCount 2, got %v", updated.Status.RunningTaskCount)
+	}
+	if updated.Status.LastRunAt != "2026-09-14T09:58:00Z" {
+		t.Errorf("expected lastRunAt persisted, got %q", updated.Status.LastRunAt)
+	}
+	if updated.Status.LastFinishAt != "2026-09-14T09:50:00Z" {
+		t.Errorf("expected lastFinishAt persisted, got %q", updated.Status.LastFinishAt)
+	}
+}
+
+func TestLifecycleReadyEmptyBodyBackwardCompatible(t *testing.T) {
+	scheme := newLifecycleTestScheme(t)
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"},
+		Status:     v1beta1.WorkerStatus{Phase: "Running"},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.Worker{}).
+		WithObjects(worker).
+		Build()
+	backendStub := &stubWorkerBackend{status: backend.StatusRunning}
+	handler := NewLifecycleHandler(k8sClient, backend.NewRegistry([]backend.WorkerBackend{backendStub}), "default")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers/alpha-dev/ready", nil)
+	req.SetPathValue("name", "alpha-dev")
+	rec := httptest.NewRecorder()
+
+	handler.Ready(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusNoContent, rec.Code, rec.Body.String())
+	}
+	var updated v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "alpha-dev", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if updated.Status.AgentStatus != "" || updated.Status.RunningTaskCount != nil {
+		t.Errorf("expected no runtime report fields from empty body, got %+v", updated.Status)
+	}
+}
+
+func TestLifecycleReadyStaleLastActiveAtNotOverwritten(t *testing.T) {
+	scheme := newLifecycleTestScheme(t)
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"},
+		Status: v1beta1.WorkerStatus{
+			Phase:        "Running",
+			LastActiveAt: "2026-09-14T12:00:00Z",
+		},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.Worker{}).
+		WithObjects(worker).
+		Build()
+	backendStub := &stubWorkerBackend{status: backend.StatusRunning}
+	handler := NewLifecycleHandler(k8sClient, backend.NewRegistry([]backend.WorkerBackend{backendStub}), "default")
+
+	payload := `{"lastActiveAt":"2026-09-14T10:00:00Z","agentStatus":"idle"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers/alpha-dev/ready", strings.NewReader(payload))
+	req.SetPathValue("name", "alpha-dev")
+	rec := httptest.NewRecorder()
+
+	handler.Ready(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusNoContent, rec.Code, rec.Body.String())
+	}
+	var updated v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "alpha-dev", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if updated.Status.LastActiveAt != "2026-09-14T12:00:00Z" {
+		t.Errorf("stale lastActiveAt must not regress, got %q", updated.Status.LastActiveAt)
+	}
+	if updated.Status.AgentStatus != "idle" {
+		t.Errorf("agentStatus should still update independently, got %q", updated.Status.AgentStatus)
+	}
 }

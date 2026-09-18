@@ -2484,6 +2484,110 @@ async def test_projectflow_record_loop_iteration_updates_history(tmp_path, monke
 
 
 @pytest.mark.asyncio
+async def test_complete_project_rejects_a_dag_with_non_terminal_tasks(tmp_path, monkeypatch):
+    working_dir = tmp_path / "worker" / ".copaw"
+    workspace = working_dir / "workspaces" / "default"
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(working_dir))
+
+    assert _response_json(
+        await projectflow(
+            action="create_project",
+            payload={"projectId": "tp-open", "title": "Open work"},
+        )
+    )["ok"] is True
+    assert _response_json(
+        await projectflow(
+            action="plan_dag",
+            payload={
+                "projectId": "tp-open",
+                "tasks": [
+                    {"taskId": "tp-open-01", "title": "Done", "assignedTo": "worker-a", "dependsOn": []},
+                    {"taskId": "tp-open-02", "title": "Planned", "assignedTo": "worker-a", "dependsOn": []},
+                    {"taskId": "tp-open-03", "title": "Delegated", "assignedTo": "worker-b", "dependsOn": []},
+                ],
+            },
+        )
+    )["ok"] is True
+    plan_path = workspace / "shared" / "projects" / "tp-open" / "plan.md"
+    meta_path = workspace / "shared" / "projects" / "tp-open" / "meta.json"
+    plan_path.write_text(
+        plan_path.read_text()
+        .replace("- [ ] tp-open-01", "- [x] tp-open-01")
+        .replace("- [ ] tp-open-03", "- [~] tp-open-03")
+    )
+
+    payload = _response_json(
+        await projectflow(action="complete_project", payload={"projectId": "tp-open"})
+    )
+    assert payload["ok"] is False
+    assert "tp-open-02 (pending)" in payload["error"]
+    assert "tp-open-03 (delegated)" in payload["error"]
+    assert "tp-open-01" not in payload["error"]
+    assert json.loads(meta_path.read_text())["status"] == "active"
+
+    # every terminal marker counts: completed, blocked, revision and cancelled
+    plan_path.write_text(
+        plan_path.read_text()
+        .replace("- [ ] tp-open-02", "- [!] tp-open-02")
+        .replace("- [~] tp-open-03", "- [-] tp-open-03")
+    )
+    payload = _response_json(
+        await projectflow(action="complete_project", payload={"projectId": "tp-open"})
+    )
+    assert payload["ok"] is True
+    assert json.loads(meta_path.read_text())["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_complete_project_rejects_a_loop_iteration_with_non_terminal_tasks(tmp_path, monkeypatch):
+    working_dir = tmp_path / "worker" / ".copaw"
+    workspace = working_dir / "workspaces" / "default"
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(working_dir))
+
+    assert _response_json(
+        await projectflow(
+            action="create_project",
+            payload={"projectId": "tp-loop-open", "title": "Open loop"},
+        )
+    )["ok"] is True
+    assert _response_json(
+        await projectflow(
+            action="plan_loop",
+            payload={
+                "projectId": "tp-loop-open",
+                "goal": "Improve until accepted.",
+                "maxIterations": 2,
+                "stopCondition": "Accepted.",
+                "iterationTemplate": "Do one wave.",
+                "tasks": [
+                    {
+                        "taskId": "tp-loop-open-i001-01",
+                        "title": "Iteration task",
+                        "assignedTo": "worker-a",
+                        "dependsOn": [],
+                    }
+                ],
+            },
+        )
+    )["ok"] is True
+
+    payload = _response_json(
+        await projectflow(action="complete_project", payload={"projectId": "tp-loop-open"})
+    )
+    assert payload["ok"] is False
+    assert "tp-loop-open-i001-01 (pending)" in payload["error"]
+
+    plan_path = workspace / "shared" / "projects" / "tp-loop-open" / "plan.md"
+    plan_path.write_text(
+        plan_path.read_text().replace("- [ ] tp-loop-open-i001-01", "- [x] tp-loop-open-i001-01")
+    )
+    payload = _response_json(
+        await projectflow(action="complete_project", payload={"projectId": "tp-loop-open"})
+    )
+    assert payload["ok"] is True
+
+
+@pytest.mark.asyncio
 async def test_project_lifecycle_actions_only_update_meta_status(tmp_path, monkeypatch):
     working_dir = tmp_path / "worker" / ".copaw"
     workspace = working_dir / "workspaces" / "default"

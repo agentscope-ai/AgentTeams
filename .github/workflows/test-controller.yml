@@ -71,3 +71,4 @@ jobs:
           PYTHONPATH="${GITHUB_WORKSPACE}/copaw/src" \
             python -m pytest copaw/tests/test_taskflow_tool.py -q
           ruby plugins/tests/teamharness/mcp/tools/test-taskflow.rb
+          ruby plugins/tests/teamharness/mcp/tools/test-transition-table.rb

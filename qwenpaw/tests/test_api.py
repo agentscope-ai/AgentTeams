@@ -28,6 +28,7 @@ class _ApiHandler(BaseHTTPRequestHandler):
     }
     mcp = {}
     mcp_tools_unavailable = 0
+    mcp_tools_startup_502 = 0
     toggle_conflicts = 0
     providers = {}
     active_llm = None
@@ -67,6 +68,10 @@ class _ApiHandler(BaseHTTPRequestHandler):
             self._reply(200, type(self).mcp_policy)
             return
         if self.path == "/api/mcp/tools/teamharness":
+            if type(self).mcp_tools_startup_502:
+                type(self).mcp_tools_startup_502 -= 1
+                self._reply(502, {"detail": "MCP driver not active yet"})
+                return
             if type(self).mcp_tools_unavailable:
                 type(self).mcp_tools_unavailable -= 1
                 self._reply(503, {"detail": "driver not active yet"})
@@ -260,6 +265,7 @@ def api_url():
     }
     _ApiHandler.mcp = {}
     _ApiHandler.mcp_tools_unavailable = 0
+    _ApiHandler.mcp_tools_startup_502 = 0
     _ApiHandler.toggle_conflicts = 0
     _ApiHandler.providers = {}
     _ApiHandler.active_llm = None
@@ -318,6 +324,18 @@ def test_http_error_and_timeout_are_safe(api_url, monkeypatch):
     assert "sensitive upstream detail" not in str(exc.value)
 
 
+def test_request_surfaces_5xx_response_body_in_error(api_url):
+    _ApiHandler.mcp_tools_startup_502 = 1
+    client = QwenPawApiClient(api_url)
+
+    with pytest.raises(QwenPawApiError, match="MCP driver not active yet"):
+        client.list_mcp_tools("teamharness")
+
+    with pytest.raises(QwenPawApiError, match="HTTP 404") as exc:
+        client.get_acl("missing")
+    assert '"detail"' not in str(exc.value)
+
+
 def test_acl_reconcile_parses_structured_entries_and_is_channel_scoped(api_url):
     client = QwenPawApiClient(api_url)
 
@@ -366,6 +384,27 @@ def test_wait_for_mcp_tools_retries_until_driver_is_active(api_url):
         timeout=1,
         interval=0.01,
     ) == [{"name": "taskflow", "enabled": True}]
+
+
+def test_wait_for_mcp_tools_absorbs_slow_driver_activation(api_url, monkeypatch):
+    # A loaded runner can take ~40s before the MCP driver activates;
+    # simulate 2s of virtual time per poll so the default startup window
+    # is exercised in milliseconds.
+    _ApiHandler.mcp_tools_startup_502 = 20
+    client = QwenPawApiClient(api_url)
+
+    virtual_now = [0.0]
+
+    def fake_monotonic():
+        virtual_now[0] += 2.0
+        return virtual_now[0]
+
+    monkeypatch.setattr("qwenpaw_worker.api.time.monotonic", fake_monotonic)
+    monkeypatch.setattr("qwenpaw_worker.api.time.sleep", lambda *_args: None)
+
+    assert client.wait_for_mcp_tools("teamharness") == [
+        {"name": "taskflow", "enabled": True},
+    ]
 
 
 def test_mcp_create_update_delete_each_reads_back(api_url):

@@ -167,8 +167,11 @@ done
 
 if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
     for w in "${TEST_LEADER}" "${TEST_W1}" "${TEST_W2}"; do
+        expected_role="worker"
+        [ "${w}" = "${TEST_LEADER}" ] && expected_role="team_leader"
+        # A generic team-context header may predate the role update.
         if wait_qwenpaw_api_matches "${w}" /api/teamharness/health '.ok == true and .adapter == "qwenpaw-2"' 240 && \
-            wait_worker_runtime_file_contains "${w}" "TEAMS.md" "BEGIN AGENTTEAMS RUNTIME TEAM CONTEXT" 240; then
+            wait_worker_runtime_file_contains "${w}" "TEAMS.md" "member.role: ${expected_role}" 240; then
             log_pass "QwenPaw TeamHarness plugin ready for ${w}"
         else
             log_fail "QwenPaw TeamHarness plugin not ready for ${w}"

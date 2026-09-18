@@ -86,6 +86,9 @@ COPY manager/agent/hermes-worker-agent/ /opt/agentteams/agent/hermes-worker-agen
 COPY manager/agent/team-leader-agent/ /opt/agentteams/agent/team-leader-agent/
 COPY manager/agent/skills/ /opt/agentteams/agent/skills/
 
+# Plugin packages (skill catalog "plugin" source: plugin.yaml + skills/ trees)
+COPY plugins/ /opt/agentteams/plugins/
+
 # ---- Ports ----
 # 8080: Higress Gateway (unified entry point)
 # 8001: Higress Console

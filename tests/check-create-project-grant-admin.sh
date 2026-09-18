@@ -34,9 +34,27 @@ grep -F -- '${WORKER_POWER_LEVELS}' "${SCRIPT}" | grep -Fq -- '${GRANT_ADMIN_LEV
 #    the Manager is never told about it.
 grep -Fq -- "--grant-admin" "${REFERENCE}" ||
     fail "create-project.md must document --grant-admin for the Manager"
-grep -Fq -- "--grant-admin \"sunzong\"" "${REFERENCE}" ||
+grep -Fq -- "--grant-admin \"bob\"" "${REFERENCE}" ||
     fail "create-project.md must show a concrete --grant-admin usage example"
 grep -qi -- "co-owns the project room" "${REFERENCE}" ||
     fail "create-project.md must explain what --grant-admin grants (level 100 co-ownership)"
+
+# 5. Granted humans must also be added to the Manager's group allowlists so
+#    their @manager messages in the project room are processed (allowlist
+#    mode silently drops messages from users not on the list). Both runtime
+#    config shapes must be covered: openclaw.json (groupAllowFrom) and the
+#    copaw agent.json (group_allow_from).
+[ "$(grep -Fc 'for uid in "${GRANT_ADMIN_IDS[@]}"' "${SCRIPT}")" = "1" ] ||
+    fail "the member-list builder must append the granted human Matrix IDs (single code path)"
+[ "$(grep -Fc '_build_project_room_members_json' "${SCRIPT}")" = "3" ] ||
+    fail "the member-list builder must be defined once and used by both config patches"
+grep -Fq -- '+ \$members | unique' "${SCRIPT}" ||
+    fail "the merged member list (workers + granted humans) must be spliced into the allowlist with unique"
+[ "$(grep -c 'local members_json' "${SCRIPT}")" = "2" ] ||
+    fail "both patch functions must build a merged members_json (openclaw.json + agent.json)"
+[ "$(grep -c -- '--argjson members' "${SCRIPT}")" = "2" ] ||
+    fail "both allowlist splices must consume the merged members json"
+grep -qi -- "allowlist" "${REFERENCE}" ||
+    fail "create-project.md must explain that granted humans are added to the Manager allowlists"
 
 echo "PASS: create-project.sh --grant-admin is implemented and wired into the runtime reference"

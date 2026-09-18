@@ -36,8 +36,20 @@ class QwenPawApiClient:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 raw = response.read()
         except urllib.error.HTTPError as exc:
+            detail = ""
+            if 500 <= exc.code < 600:
+                try:
+                    body = exc.read()
+                except OSError:
+                    body = b""
+                finally:
+                    exc.close()
+                if body:
+                    detail = (
+                        f": {body.decode('utf-8', errors='replace').strip()}"
+                    )
             raise QwenPawApiError(
-                f"QwenPaw API {method} {path} failed with HTTP {exc.code}",
+                f"QwenPaw API {method} {path} failed with HTTP {exc.code}{detail}",
             ) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise QwenPawApiError(
@@ -254,7 +266,9 @@ class QwenPawApiClient:
         self,
         client_key: str,
         *,
-        timeout: float = 30,
+        # Startup window: driver activation is observed up to ~45s on a
+        # loaded runner; the previous 30s default crashed worker startup.
+        timeout: float = 120,
         interval: float = 0.5,
     ) -> list[dict[str, Any]]:
         deadline = time.monotonic() + timeout

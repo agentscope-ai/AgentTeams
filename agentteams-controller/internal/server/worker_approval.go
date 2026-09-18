@@ -33,8 +33,9 @@ package server
 // mode returns a uniform 503 before any worker lookup. Cross-team workers
 // hide as 404 (W8 anti-probing, same as reads). A worker on a QwenPaw
 // version without the running-config router surfaces the upstream 404
-// verbatim (version-gate contract). Every successful change is
-// audit-logged.
+// verbatim (version-gate contract). Every successful OFF transition is
+// recorded in the durable audit trail (switches between the guarded
+// levels are ordinary configuration).
 
 import (
 	"bytes"
@@ -45,6 +46,7 @@ import (
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	audit "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/audit"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
@@ -110,6 +112,9 @@ type ApprovalHandler struct {
 	kubeMode        string
 	http            *http.Client
 	containerPrefix string
+	// audit records security-policy changes (approval_level=OFF) in the
+	// shared durable audit trail. nil = audit layer disabled (tests).
+	audit *audit.Client
 	// workerBaseURL resolves a worker name to its qwenpaw app base URL
 	// from the effective prefix and the worker's env. Injectable for
 	// tests.
@@ -118,13 +123,14 @@ type ApprovalHandler struct {
 
 // NewApprovalHandler creates the handler with the default embedded-mode
 // worker address resolution (same chain as the checkpoint proxy).
-func NewApprovalHandler(c client.Client, namespace, kubeMode, containerPrefix string) *ApprovalHandler {
+func NewApprovalHandler(c client.Client, namespace, kubeMode, containerPrefix string, a *audit.Client) *ApprovalHandler {
 	h := &ApprovalHandler{
 		client:          c,
 		namespace:       namespace,
 		kubeMode:        kubeMode,
 		http:            &http.Client{Timeout: approvalProxyTimeout},
 		containerPrefix: containerPrefix,
+		audit:           a,
 	}
 	h.workerBaseURL = h.defaultWorkerBaseURL
 	return h
@@ -269,21 +275,16 @@ func (h *ApprovalHandler) updateWorkerApproval(w http.ResponseWriter, r *http.Re
 		return
 	}
 	// approval_level=OFF disables Tool Guard entirely (every tool call
-	// executes without approval) — that is a security-policy operation,
-	// not ordinary worker configuration. Default L2 humans may switch
-	// among the guarded levels (STRICT/SMART/AUTO) but cannot turn the
-	// guard off; OFF requires the elevated tool-approval capability that
-	// the L2 permission design (#1220) defines and admins grant
-	// explicitly. Admin/manager keep the full range (any-worker scope).
-	// TODO(#1220): when this hardcoded role check is replaced by the
-	// capability lookup, the capability design must EXPLICITLY
-	// enumerate which roles/capabilities may set OFF (an elevated
-	// tool-approval grant) — do not default OFF to "any non-human
-	// principal", which would silently let worker/leader roles
-	// disable Tool Guard.
-	if payload.ApprovalLevel == "OFF" && caller.Role == authpkg.RoleHuman {
+	// executes without approval) — a security-policy operation, not
+	// ordinary worker configuration. Admin and manager pass
+	// unconditionally; every other role needs the explicit
+	// approval_policy capability granted by an admin (L2 permission
+	// design, #1220). Worker and team-leader identities are
+	// service-account scoped and never carry the capability, so they
+	// cannot set OFF under any grant.
+	if payload.ApprovalLevel == "OFF" && !authpkg.HasCapability(caller, authpkg.CapabilityApprovalPolicy) {
 		httputil.WriteError(w, http.StatusForbidden,
-			"setting approval_level=OFF requires the elevated tool-approval capability (L2 permission design, #1220); use STRICT, SMART, or AUTO")
+			"setting approval_level=OFF requires the approval_policy capability (L2 permission design, #1220); use STRICT, SMART, or AUTO")
 		return
 	}
 	// Safe write: the upstream PUT persists the *full* running-config
@@ -326,6 +327,7 @@ func (h *ApprovalHandler) updateWorkerApproval(w http.ResponseWriter, r *http.Re
 		httputil.WriteError(w, http.StatusBadGateway, "worker returned an empty running-config object")
 		return
 	}
+	previousLevel, _ := cfg["approval_level"].(string)
 	cfg["approval_level"] = payload.ApprovalLevel
 	body, err := json.Marshal(cfg)
 	if err != nil {
@@ -371,6 +373,26 @@ func (h *ApprovalHandler) updateWorkerApproval(w http.ResponseWriter, r *http.Re
 			logger.Info("worker tool approval level changed",
 				"worker", name, "approval_level", payload.ApprovalLevel,
 				"caller", caller.Username, "role", caller.Role)
+		}
+		// OFF is a security-policy change: record it in the durable audit
+		// trail (who / role / target / before -> after). Switches between
+		// the guarded levels are ordinary configuration and are not
+		// audited.
+		if payload.ApprovalLevel == "OFF" && h.audit != nil {
+			before := "unknown"
+			if previousLevel != "" {
+				before = previousLevel
+			}
+			h.audit.Record(r.Context(), audit.Event{
+				Who:        caller.Username,
+				Role:       caller.Role,
+				Target:     name,
+				Action:     "approval_level_off",
+				Capability: string(authpkg.CapabilityApprovalPolicy),
+				Before:     []string{before},
+				After:      []string{"OFF"},
+				Detail:     "worker tool guard disabled via the approval API",
+			})
 		}
 	case http.StatusConflict:
 		// Concurrent upstream config change (path lock / reindex in

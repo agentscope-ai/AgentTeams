@@ -120,6 +120,7 @@ done
 # --grant-admin: extra users that should co-own the room (level 100) — e.g.
 # human operators who otherwise join at the implicit level 0 and 403 on room
 # operations (rename / invite). Accepts local parts or full Matrix IDs.
+GRANT_ADMIN_IDS=()
 if [ -n "${GRANT_ADMIN_CSV}" ]; then
     IFS=',' read -ra GRANT_ARR <<< "${GRANT_ADMIN_CSV}"
     for ga in "${GRANT_ARR[@]}"; do
@@ -134,6 +135,7 @@ if [ -n "${GRANT_ADMIN_CSV}" ]; then
         # them at creation time (a grant without membership is a no-op).
         INVITE_LIST="${INVITE_LIST},\"${grant_id}\""
         GRANT_ADMIN_LEVELS="${GRANT_ADMIN_LEVELS},\"${grant_id}\": 100"
+        GRANT_ADMIN_IDS+=("${grant_id}")
     done
 fi
 INVITE_LIST="${INVITE_LIST}]"
@@ -241,21 +243,33 @@ _worker_auto_join() {
     fi
 }
 
-_patch_manager_project_room_config() {
-    local config_path="$1"
-    local workers_json=""
-    [ -f "${config_path}" ] || return 0
-
-    workers_json=$(
+# Builds the project-room member list (workers + --grant-admin humans) as a
+# JSON array. Granted humans must be on the allowlists too: in allowlist
+# mode the Manager silently drops messages from users not listed, and the
+# room's human operators are exactly the --grant-admin users.
+_build_project_room_members_json() {
+    {
         for worker in "${WORKER_ARR[@]}"; do
             worker=$(echo "${worker}" | tr -d ' ')
             [ -z "${worker}" ] && continue
             echo "@${worker}:${MATRIX_DOMAIN}"
-        done | jq -R . | jq -s .
-    )
+        done
+        for uid in "${GRANT_ADMIN_IDS[@]}"; do
+            [ -z "${uid}" ] && continue
+            echo "${uid}"
+        done
+    } | jq -R . | jq -s .
+}
 
-    jq --arg room "${ROOM_ID}" --argjson workers "${workers_json}" \
-        ".channels.matrix.groupAllowFrom = ((.channels.matrix.groupAllowFrom // []) + \$workers | unique)
+_patch_manager_project_room_config() {
+    local config_path="$1"
+    local members_json=""
+    [ -f "${config_path}" ] || return 0
+
+    members_json=$(_build_project_room_members_json)
+
+    jq --arg room "${ROOM_ID}" --argjson members "${members_json}" \
+        ".channels.matrix.groupAllowFrom = ((.channels.matrix.groupAllowFrom // []) + \$members | unique)
          | .channels.matrix.groups = (.channels.matrix.groups // {})
          | .channels.matrix.groups[\$room] = {\"allow\": true, \"requireMention\": false, \"autoReply\": true}" \
         "${config_path}" > /tmp/project-manager-config.json
@@ -264,19 +278,13 @@ _patch_manager_project_room_config() {
 
 _patch_copaw_project_room_config() {
     local agent_json="${HOME}/.copaw/workspaces/default/agent.json"
-    local workers_json=""
+    local members_json=""
     [ -f "${agent_json}" ] || return 0
 
-    workers_json=$(
-        for worker in "${WORKER_ARR[@]}"; do
-            worker=$(echo "${worker}" | tr -d ' ')
-            [ -z "${worker}" ] && continue
-            echo "@${worker}:${MATRIX_DOMAIN}"
-        done | jq -R . | jq -s .
-    )
+    members_json=$(_build_project_room_members_json)
 
-    jq --arg room "${ROOM_ID}" --argjson workers "${workers_json}" \
-        ".channels.matrix.group_allow_from = ((.channels.matrix.group_allow_from // []) + \$workers | unique)
+    jq --arg room "${ROOM_ID}" --argjson members "${members_json}" \
+        ".channels.matrix.group_allow_from = ((.channels.matrix.group_allow_from // []) + \$members | unique)
          | .channels.matrix.groups = (.channels.matrix.groups // {})
          | .channels.matrix.groups[\$room] = {\"allow\": true, \"requireMention\": false, \"autoReply\": true}" \
         "${agent_json}" > /tmp/project-copaw-agent.json

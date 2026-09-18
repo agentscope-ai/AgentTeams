@@ -340,6 +340,97 @@ func routeMatchesProvider(route map[string]interface{}, provider string) bool {
 	return false
 }
 
+// ListAIRoutes returns the configured AI routes (the authoritative model list
+// for gateway-backed deployments). The console list endpoint returns route
+// names only, so each route is fetched individually for its upstreams and
+// consumer allowlist — the same list-then-get pattern as modifyAIRoutes.
+func (c *HigressClient) ListAIRoutes(ctx context.Context) ([]AIRouteInfo, error) {
+	respBody, statusCode, err := c.doJSON(ctx, http.MethodGet, "/v1/ai/routes", nil)
+	if err != nil {
+		return nil, fmt.Errorf("list AI routes: %w", err)
+	}
+	if statusCode != http.StatusOK {
+		return nil, fmt.Errorf("list AI routes: HTTP %d", statusCode)
+	}
+
+	var listResp struct {
+		Data []struct {
+			Name string `json:"name"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(respBody, &listResp); err != nil {
+		return nil, fmt.Errorf("decode AI routes list: %w", err)
+	}
+
+	routes := make([]AIRouteInfo, 0, len(listResp.Data))
+	for _, entry := range listResp.Data {
+		if entry.Name == "" {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		info, err := c.getAIRoute(ctx, entry.Name)
+		if err != nil {
+			// Fail the whole call rather than return a silently incomplete
+			// catalog: a partial route list would look authoritative.
+			return nil, fmt.Errorf("get AI route %s: %w", entry.Name, err)
+		}
+		routes = append(routes, *info)
+	}
+	return routes, nil
+}
+
+// getAIRoute fetches a single AI route by name and maps it to AIRouteInfo.
+func (c *HigressClient) getAIRoute(ctx context.Context, name string) (*AIRouteInfo, error) {
+	body, sc, err := c.doJSON(ctx, http.MethodGet, "/v1/ai/routes/"+name, nil)
+	if err != nil {
+		return nil, err
+	}
+	if sc != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", sc)
+	}
+
+	var routeResp struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(body, &routeResp); err != nil {
+		return nil, fmt.Errorf("decode route envelope: %w", err)
+	}
+	routeData := routeResp.Data
+	if routeData == nil {
+		routeData = body
+	}
+
+	var route map[string]interface{}
+	if err := json.Unmarshal(routeData, &route); err != nil {
+		return nil, fmt.Errorf("decode route: %w", err)
+	}
+
+	info := &AIRouteInfo{Name: name}
+	if authConfig, ok := route["authConfig"].(map[string]interface{}); ok {
+		info.AllowedConsumers = toStringSlice(authConfig["allowedConsumers"])
+	}
+	if upstreams, ok := route["upstreams"].([]interface{}); ok {
+		for _, u := range upstreams {
+			ups, ok := u.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			provider, _ := ups["provider"].(string)
+			weight := 0
+			if w, ok := ups["weight"].(float64); ok {
+				weight = int(w)
+			}
+			if provider == "" && weight == 0 {
+				continue
+			}
+			info.Upstreams = append(info.Upstreams, AIRouteUpstream{Provider: provider, Weight: weight})
+		}
+	}
+	return info, nil
+}
+
 func (c *HigressClient) ExposePort(ctx context.Context, req PortExposeRequest) error {
 	svcSrc := fmt.Sprintf("worker-%s-%d", req.WorkerName, req.Port)
 	routeN := svcSrc

@@ -22,12 +22,27 @@ const (
 	// allows cross-team so the handler can hide with 404 instead of the
 	// authorizer answering 403); team leaders are read-only (denied here,
 	// #1216 pattern); workers are denied by default.
-	ActionRuntimeConfig       Action = "runtime-config"
+	ActionRuntimeConfig Action = "runtime-config"
+	// ActionWorkerTools guards the qwenpaw tool-settings WRITE
+	// (PATCH /workers/{name}/tools/{tool}: enable / async-execution of
+	// built-in tools). L2 humans may write workers in their own teams
+	// (W8: the authorizer allows cross-team so the handler can hide with
+	// 404 instead of the authorizer answering 403); team leaders are
+	// read-only (denied here, #1216 pattern); workers are denied by
+	// default.
+	ActionWorkerTools         Action = "worker-tools"
 	ActionSTS                 Action = "sts"
 	ActionStatus              Action = "status"
 	ActionRefreshMatrixToken  Action = "refresh-matrix-token"
 	ActionGateway             Action = "gateway"
 	ActionWorkspaceFilesWrite Action = "workspace-files-write"
+	// ActionSkillPublish authorizes POST /api/v1/skills (skill upload,
+	// #1221). Granted to admin (any scope) and L2 humans (own team,
+	// scope=team only); explicitly denied to manager, team leader, and
+	// worker. The scope/team refinement happens in the handler (403 for
+	// non-admin scope=deployment; 404 anti-probing for cross-team).
+	ActionSkillPublish       Action = "skill-publish"
+	ActionWorkerSkillPreload Action = "worker-skill-preload"
 )
 
 // AuthzRequest describes the resource being accessed.
@@ -54,9 +69,19 @@ func (a *Authorizer) Authorize(caller *CallerIdentity, req AuthzRequest) error {
 
 	switch caller.Role {
 	case RoleAdmin, RoleManager:
+		// Manager is a full-access SA but does NOT participate in the
+		// team-skill paths (#1221): publishing a team skill is admin (any
+		// scope) and L2 human (own team) only — never manager, never team
+		// leader. The manager agent manages workers, not team assets.
+		if caller.Role == RoleManager && req.ResourceKind == "skills" && req.Action == ActionSkillPublish {
+			return deny(caller, req)
+		}
 		return nil // full access
 
 	case RoleTeamLeader:
+		// Team leaders read their own team's skill catalog (the assign
+		// surface) but never publish: uploads are admin (any scope) and
+		// L2 human (own team) only (#1221).
 		return a.authorizeTeamLeader(caller, req)
 
 	case RoleHuman:
@@ -110,6 +135,17 @@ func (a *Authorizer) authorizeHuman(caller *CallerIdentity, req AuthzRequest) er
 		}
 		return deny(caller, req)
 
+	case "mcp-server":
+		// Deployment MCP catalog (GET /api/v1/mcp-servers): L2 humans read
+		// the catalog scoped to their accessibleTeams. Like the worker
+		// list, the authorizer does not reject cross-team access — the
+		// handler filters by caller.Teams (accessibleTeams), hiding
+		// out-of-scope entries rather than probing via 403.
+		if req.Action == ActionGet || req.Action == ActionList {
+			return nil
+		}
+		return deny(caller, req)
+
 	case "worker":
 		if req.Action == ActionGet || req.Action == ActionList {
 			return nil // handler filters by accessibleTeams
@@ -155,13 +191,45 @@ func (a *Authorizer) authorizeHuman(caller *CallerIdentity, req AuthzRequest) er
 			// handler when cross-team.
 			return nil
 		}
+		if req.Action == ActionWorkerTools {
+			// L2 humans may toggle the built-in tools of workers in their
+			// own teams (enable / async-execution). Same W8 reasoning as
+			// ActionWorkerApproval: allowed here, hidden as 404 by the
+			// handler when cross-team.
+			return nil
+		}
+		if req.Action == ActionWorkerSkillPreload {
+			// Per-worker skill preload policy (QwenPaw 2.2.1): L2 humans
+			// may toggle preload on workers in their own teams. Like
+			// ActionGet this action is NOT rejected cross-team at the
+			// authorizer level: a 403 here would let a scoped caller probe
+			// which workers exist in other teams (W8 anti-probing). All
+			// real enforcement happens in the HANDLER: WorkerSkillsHandler
+			// performs the worker→team resolution and hides cross-team and
+			// standalone workers as 404. Team leaders and worker-role
+			// callers are denied at the authorizer level (default) and
+			// never reach the handler — team leaders stay read-only on
+			// skill runtime policy.
+			return nil
+		}
 		return deny(caller, req)
 
 	case "skills":
-		// Read-only skill catalog (name/description metadata); no PII,
-		// scope-independent. Only the list action is granted — any other
-		// action on this resource is denied, not defaulted.
-		if req.Action == ActionList {
+		// Skill catalog (list) + team-skill upload (#1221); the team-scope
+		// boundary is enforced in the handler (404 anti-probing, same as
+		// for L2 humans).
+		if req.Action == ActionList || req.Action == ActionSkillPublish {
+			return nil
+		}
+		return deny(caller, req)
+
+	case "audit":
+		// L2 humans may read audit events of their own teams (#1245).
+		// The middleware cannot resolve the requested team scope, so the
+		// handler is the real boundary: ?team= is mandatory for scoped
+		// callers, cross-team reads are hidden as 404 (W8 anti-probing),
+		// and unscoped reads are L1 only.
+		if req.Action == ActionGet {
 			return nil
 		}
 		return deny(caller, req)
@@ -185,6 +253,14 @@ func (a *Authorizer) authorizeTeamLeader(caller *CallerIdentity, req AuthzReques
 		}
 		return deny(caller, req)
 
+	case "mcp-server":
+		// Deployment MCP catalog: team leaders read the catalog scoped to
+		// their own team (the handler filters by caller team).
+		if req.Action == ActionGet || req.Action == ActionList {
+			return nil
+		}
+		return deny(caller, req)
+
 	case "credentials":
 		// Credential endpoints (STS + Matrix token refresh) are always
 		// self-scoped: the issued token / refreshed credential is bound to the
@@ -196,9 +272,10 @@ func (a *Authorizer) authorizeTeamLeader(caller *CallerIdentity, req AuthzReques
 		return deny(caller, req)
 
 	case "skills":
-		// Read-only skill catalog (name/description metadata); no PII,
-		// scope-independent. Only the list action is granted — any other
-		// action on this resource is denied, not defaulted.
+		// Skill catalog read-only: leaders read their own team's catalog as
+		// the assign surface. Publishing is admin (any scope) and L2 human
+		// (own team) only — leader upload is denied here (the handler
+		// re-checks; both layers are pinned by tests).
 		if req.Action == ActionList {
 			return nil
 		}
@@ -218,6 +295,16 @@ func (a *Authorizer) authorizeTeamLeader(caller *CallerIdentity, req AuthzReques
 			return deny(caller, req)
 		}
 
+	case "audit":
+		// Team leaders may read audit events of their own team (#1245),
+		// same pattern as the worker/team read paths: the handler enforces
+		// TeamMatches (?team= mandatory, cross-team hidden as 404, W8
+		// anti-probing); unscoped reads are L1 only.
+		if req.Action == ActionGet {
+			return nil
+		}
+		return deny(caller, req)
+
 	default:
 		return deny(caller, req)
 	}
@@ -233,9 +320,10 @@ func (a *Authorizer) authorizeTeamLeaderWorkerAction(caller *CallerIdentity, req
 		return a.requireSameTeam(caller, req)
 	case ActionWake, ActionSleep, ActionEnsureReady, ActionReady, ActionStatus:
 		return a.requireSameTeam(caller, req)
-	// ActionWorkerApproval and ActionRuntimeConfig deliberately fall
-	// through to deny: team leaders are READ-ONLY for worker approval and
-	// running-config (mirrors the #1216 approval proxy).
+	// ActionWorkerApproval, ActionRuntimeConfig and ActionWorkerTools
+	// deliberately fall through to deny: team leaders are READ-ONLY for
+	// worker approval, running-config, and tool settings (mirrors the
+	// #1216 approval proxy).
 	default:
 		return deny(caller, req)
 	}

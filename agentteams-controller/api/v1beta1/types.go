@@ -373,16 +373,30 @@ type DingTalkChannelSpec struct {
 }
 
 type WorkerStatus struct {
-	ObservedGeneration int64               `json:"observedGeneration,omitempty"`
-	SpecHash           string              `json:"specHash,omitempty"`
-	Phase              string              `json:"phase,omitempty"` // Pending/Running/Sleeping/Failed
-	MatrixUserID       string              `json:"matrixUserID,omitempty"`
-	RoomID             string              `json:"roomID,omitempty"`
-	ContainerState     string              `json:"containerState,omitempty"`
-	LastHeartbeat      string              `json:"lastHeartbeat,omitempty"`
-	LastActiveAt       string              `json:"lastActiveAt,omitempty"`
-	Message            string              `json:"message,omitempty"`
-	ExposedPorts       []ExposedPortStatus `json:"exposedPorts,omitempty"`
+	ObservedGeneration int64  `json:"observedGeneration,omitempty"`
+	SpecHash           string `json:"specHash,omitempty"`
+	Phase              string `json:"phase,omitempty"` // Pending/Running/Sleeping/Failed
+	MatrixUserID       string `json:"matrixUserID,omitempty"`
+	RoomID             string `json:"roomID,omitempty"`
+	ContainerState     string `json:"containerState,omitempty"`
+	LastHeartbeat      string `json:"lastHeartbeat,omitempty"`
+	LastActiveAt       string `json:"lastActiveAt,omitempty"`
+	// AgentStatus is the worker runtime's task-level state self-reported by
+	// the worker heartbeat. Values: "idle" (no active tasks), "running"
+	// (one or more active tasks), "disabled". Empty when the runtime does
+	// not report it (legacy or non-QwenPaw runtimes).
+	AgentStatus string `json:"agentStatus,omitempty"`
+	// RunningTaskCount is the number of active runtime tasks reported by the
+	// worker heartbeat. Nil when unknown or not reported.
+	RunningTaskCount *int `json:"runningTaskCount,omitempty"`
+	// LastRunAt is the runtime-reported timestamp of the last task start
+	// (RFC3339 UTC, from the QwenPaw agent-status endpoint).
+	LastRunAt string `json:"lastRunAt,omitempty"`
+	// LastFinishAt is the runtime-reported timestamp of the last task finish
+	// (RFC3339 UTC, from the QwenPaw agent-status endpoint).
+	LastFinishAt string              `json:"lastFinishAt,omitempty"`
+	Message      string              `json:"message,omitempty"`
+	ExposedPorts []ExposedPortStatus `json:"exposedPorts,omitempty"`
 
 	// BackendRuntime records the backend type currently used for this worker's container.
 	// Set after successful creation or backend switch.
@@ -549,6 +563,11 @@ type TeamMemberStatus struct {
 	Message string `json:"message,omitempty"`
 	// LastActiveAt is the latest runtime-reported business activity time.
 	LastActiveAt string `json:"lastActiveAt,omitempty"`
+	// AgentStatus mirrors the member's Worker.Status.AgentStatus (runtime
+	// task state: "idle" / "running" / "disabled"; empty = not reported).
+	AgentStatus string `json:"agentStatus,omitempty"`
+	// LastFinishAt mirrors the member's Worker.Status.LastFinishAt.
+	LastFinishAt string `json:"lastFinishAt,omitempty"`
 	// LastHeartbeat is the latest heartbeat timestamp for this member.
 	LastHeartbeat string `json:"lastHeartbeat,omitempty"`
 	// ExposedPorts records the ports currently exposed via Higress for this
@@ -595,6 +614,12 @@ type HumanSpec struct {
 	// are never restricted, and team leaders always stay read-only on this
 	// API.
 	WorkspaceFileAccess string `json:"workspaceFileAccess,omitempty"`
+	// Capabilities grants named sensitive-surface privileges beyond the L2
+	// baseline (five-value set per docs/design/capability-foundation.md,
+	// #1220 §3). List-shaped so future values are additive; unknown values
+	// are rejected at admission by the human-update API. Team leaders and
+	// other SA-based identities never hold capabilities (#1220 §5).
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 type IdentitySourceSpec struct {

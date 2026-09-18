@@ -10,7 +10,8 @@ package server
 // subpaths so L1 humans / the workbench plugin can inspect and adjust a
 // worker's runtime behavior without reaching into the docker network.
 //
-// Contract re-verified against the pinned qwenpaw 2.0.1 wheel on 2026-09-15 (PR #1231 review).
+// Contract re-verified against the pinned qwenpaw 2.0.1 wheel on 2026-09-15
+// (PR #1231 review); unchanged in the 2.2.x pin this branch now carries.
 //
 // Upstream contract (verified against the pinned qwenpaw 2.0.1 wheel,
 // still present in 2.2.x):
@@ -19,7 +20,8 @@ package server
 //     single-agent). PUT replaces the whole running section, so the proxy
 //     performs read-merge-write for partial updates (below).
 //   - GET  /api/loops
-//   - GET  /api/loops/status
+//   - GET  /api/loops/status?chat_id=&session_id=  (the proxy forwards
+//     both selectors verbatim; the upstream answers "idle" without them)
 //   - GET  /api/loops/custom
 //   - POST /api/loops/custom            (201; 409 on duplicate mode id)
 //   - PUT  /api/loops/custom/{mode}     (200; 404 not found; 422 on
@@ -70,6 +72,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -170,6 +173,12 @@ func allowedSub(sub string) bool {
 	return false
 }
 
+// loopsStatusQueryWhitelist is the set of query parameters forwarded to the
+// worker's /api/loops/status upstream. The endpoint answers per session
+// (chat_id / session_id); without either it reports "idle", so dropping the
+// parameters would make the proxied endpoint useless.
+var loopsStatusQueryWhitelist = map[string]bool{"chat_id": true, "session_id": true}
+
 // upstreamSub maps the controller subpath to the worker's qwenpaw app
 // subpath. Only runtime-config is remapped: the running-config contract
 // lives under /api/workspace/ (active agent resolved by the app). Verified
@@ -253,6 +262,27 @@ func (h *RuntimeConfigHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	if !allowedSub(sub) {
 		httputil.WriteError(w, http.StatusBadRequest, "unsupported runtime-config subpath")
 		return
+	}
+
+	// Query surface: only GET loops/status forwards the upstream session
+	// selectors (chat_id / session_id) — the worker answers "idle" without
+	// a session; every other route takes no query parameters, and unknown
+	// keys are rejected instead of forwarded.
+	var query string
+	if raw := r.URL.Query(); len(raw) > 0 {
+		if sub != "loops/status" || r.Method != http.MethodGet {
+			httputil.WriteError(w, http.StatusBadRequest, "unsupported query parameter")
+			return
+		}
+		values := url.Values{}
+		for key, v := range raw {
+			if !loopsStatusQueryWhitelist[key] {
+				httputil.WriteError(w, http.StatusBadRequest, "unsupported query parameter: "+key)
+				return
+			}
+			values[key] = v
+		}
+		query = "?" + values.Encode()
 	}
 
 	// Kube-mode check before any worker lookup (uniform 503, no existence leak).
@@ -351,7 +381,7 @@ func (h *RuntimeConfigHandler) Handle(w http.ResponseWriter, r *http.Request) {
 
 	// Forward to the worker's qwenpaw app (fixed subpath, same base URL as
 	// CheckpointHandler: container-prefix + name + effective console port).
-	target := h.workerBaseURL(name, worker.Spec.Env) + "/api/" + upstreamSub(sub)
+	target := h.workerBaseURL(name, worker.Spec.Env) + "/api/" + upstreamSub(sub) + query
 	resp, respBody, err := h.doUpstream(r, target, r.Method, body)
 	if err != nil {
 		httputil.WriteError(w, http.StatusBadGateway, "worker runtime-config API unreachable")

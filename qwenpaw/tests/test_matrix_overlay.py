@@ -915,6 +915,9 @@ def _make_inbound_channel(command_registry=True):
     channel.groups = {}
     channel.history_limit = 50
     channel._room_histories = {}
+    channel._room_history_gen = {}
+    channel._room_history_records = {}
+    channel._room_event_log = {}
     if command_registry:
         channel._command_registry = _FakeCommandRegistry()
     channel._is_dm_room = _false_dm

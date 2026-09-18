@@ -140,7 +140,7 @@ func TestGetProjectHistorySnapshot_ReturnsVerbatim(t *testing.T) {
 	putProject(store, "teams/alpha-team/shared/projects/p1/meta.json", map[string]any{
 		"project_id": "p1", "status": "active", "team_id": "alpha-team",
 	})
-	raw := `{"project_id":"p1","status":"planning","updated_by":"luo","pause_reason":"waiting for review"}`
+	raw := `{"project_id":"p1","status":"planning","updated_by":"carol","pause_reason":"waiting for review"}`
 	putHistorySnapshot(store, "teams/alpha-team/shared/projects/p1/", "1723785123456789010", raw)
 	h := newHistoryTestHandler(t, store, team("alpha-team"))
 

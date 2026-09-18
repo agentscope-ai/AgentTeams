@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -9,6 +11,7 @@ import (
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -169,8 +172,73 @@ func (h *LifecycleHandler) Ready(w http.ResponseWriter, r *http.Request) {
 
 	// Authorization (self-only for workers) is enforced by RequireAuthz middleware.
 	h.setReady(name, true)
+	h.updateWorkerRuntimeReport(name, readWorkerRuntimeReport(r))
 	log.Printf("[READY] Worker %s reported ready", name)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// workerRuntimeReport is the optional heartbeat payload sent by workers.
+// Every field is optional so legacy workers (empty body) keep working.
+type workerRuntimeReport struct {
+	LastActiveAt     string `json:"lastActiveAt"`
+	AgentStatus      string `json:"agentStatus"`
+	RunningTaskCount *int   `json:"runningTaskCount"`
+	LastRunAt        string `json:"lastRunAt"`
+	LastFinishAt     string `json:"lastFinishAt"`
+}
+
+func readWorkerRuntimeReport(r *http.Request) workerRuntimeReport {
+	var report workerRuntimeReport
+	if r.Body != nil {
+		// Best effort: a malformed or empty body must not fail the heartbeat.
+		_ = json.NewDecoder(r.Body).Decode(&report)
+	}
+	return report
+}
+
+// updateWorkerRuntimeReport persists the runtime-reported fields onto the
+// Worker status. Failures are non-fatal: the next heartbeat re-sends them.
+func (h *LifecycleHandler) updateWorkerRuntimeReport(name string, report workerRuntimeReport) {
+	if report.LastActiveAt == "" && report.AgentStatus == "" &&
+		report.RunningTaskCount == nil && report.LastRunAt == "" && report.LastFinishAt == "" {
+		return
+	}
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var worker v1beta1.Worker
+		if err := h.k8s.Get(context.Background(), client.ObjectKey{Name: name, Namespace: h.namespace}, &worker); err != nil {
+			return client.IgnoreNotFound(err)
+		}
+		changed := false
+		if report.LastActiveAt != "" && isLastActiveNewer(report.LastActiveAt, worker.Status.LastActiveAt) {
+			worker.Status.LastActiveAt = report.LastActiveAt
+			changed = true
+		}
+		if report.AgentStatus != "" && report.AgentStatus != worker.Status.AgentStatus {
+			worker.Status.AgentStatus = report.AgentStatus
+			changed = true
+		}
+		if report.RunningTaskCount != nil &&
+			(worker.Status.RunningTaskCount == nil || *report.RunningTaskCount != *worker.Status.RunningTaskCount) {
+			count := *report.RunningTaskCount
+			worker.Status.RunningTaskCount = &count
+			changed = true
+		}
+		if report.LastRunAt != "" && report.LastRunAt != worker.Status.LastRunAt {
+			worker.Status.LastRunAt = report.LastRunAt
+			changed = true
+		}
+		if report.LastFinishAt != "" && report.LastFinishAt != worker.Status.LastFinishAt {
+			worker.Status.LastFinishAt = report.LastFinishAt
+			changed = true
+		}
+		if !changed {
+			return nil
+		}
+		return h.k8s.Status().Update(context.Background(), &worker)
+	})
+	if err != nil {
+		log.Printf("[READY] worker %s runtime report persist failed (non-fatal): %v", name, err)
+	}
 }
 
 // GetWorkerRuntimeStatus handles GET /api/v1/workers/{name}/status — aggregates CR + backend state.

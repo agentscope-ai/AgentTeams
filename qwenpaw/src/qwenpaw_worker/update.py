@@ -1866,6 +1866,12 @@ class RuntimeUpdater:
             "encryption": _env_bool("AGENTTEAMS_MATRIX_E2EE"),
             "group_disabled": False,
             "dm_disabled": False,
+            # #7001 group sender isolation: default False = per-sender
+            # sessions (AgentTeams decision 2026-09-05: "default isolated,
+            # otherwise the shared context will blow up"). Set
+            # AGENTTEAMS_MATRIX_SHARE_SESSION=true to restore room-wide
+            # session sharing (legacy behavior).
+            "share_session_in_group": _env_bool("AGENTTEAMS_MATRIX_SHARE_SESSION"),
             "show_tool_calls": True,
             "show_tool_results": True,
             "show_thinking": True,
@@ -2099,9 +2105,28 @@ class RuntimeUpdater:
             return text
         return f"@{text}:{domain}" if domain else ""
 
+    @staticmethod
+    def _is_trusted_mcp_host(url: str, gateway_url: str) -> bool:
+        """Mirror of the controller-side agentconfig.IsTrustedMCPHost.
+
+        The MCP gateway consumer key is attached only to entries addressed
+        to the configured AI gateway (exact host:port match). An unset or
+        unparseable gateway URL or entry URL trusts nothing (fail closed)
+        (#1220 §7).
+        """
+        if not url or not gateway_url:
+            return False
+        try:
+            gateway_host = urlparse(gateway_url).netloc
+            entry_host = urlparse(url).netloc
+        except ValueError:
+            return False
+        return bool(gateway_host) and entry_host == gateway_host
+
     def _mcporter_servers(self, config: MemberRuntimeConfig) -> Dict[str, Any]:
         raw = config.mcp_servers
         gateway_key = self._gateway_key(config)
+        gateway_url = _string(os.getenv("AGENTTEAMS_AI_GATEWAY_URL"))
         if isinstance(raw, dict) and isinstance(raw.get("mcpServers"), dict):
             raw = raw["mcpServers"]
 
@@ -2110,7 +2135,7 @@ class RuntimeUpdater:
             for item in raw:
                 if isinstance(item, dict):
                     name = _string(item.get("name"))
-                    payload = self._mcporter_server_payload(item, gateway_key)
+                    payload = self._mcporter_server_payload(item, gateway_key, gateway_url)
                     if name and payload:
                         servers[name] = payload
             return servers
@@ -2118,18 +2143,24 @@ class RuntimeUpdater:
         if isinstance(raw, dict):
             for name, item in raw.items():
                 if isinstance(item, dict):
-                    payload = self._mcporter_server_payload(item, gateway_key)
+                    payload = self._mcporter_server_payload(item, gateway_key, gateway_url)
                     if _string(name) and payload:
                         servers[_string(name)] = payload
         return servers
 
-    def _mcporter_server_payload(self, item: Dict[str, Any], gateway_key: str) -> Dict[str, Any]:
+    def _mcporter_server_payload(
+        self, item: Dict[str, Any], gateway_key: str, gateway_url: str
+    ) -> Dict[str, Any]:
         url = _string(item.get("url"))
         if not url:
             return {}
         headers = item.get("headers")
         headers = dict(headers) if isinstance(headers, dict) else {}
-        if gateway_key and "Authorization" not in headers:
+        if (
+            gateway_key
+            and "Authorization" not in headers
+            and self._is_trusted_mcp_host(url, gateway_url)
+        ):
             headers["Authorization"] = f"Bearer {gateway_key}"
         transport = _string(item.get("transport") or "http").lower()
         return {

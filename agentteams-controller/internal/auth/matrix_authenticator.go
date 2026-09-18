@@ -14,7 +14,7 @@ import (
 )
 
 // MatrixWhoami validates a Matrix access token and returns the owning user id
-// (e.g. "@maizong:matrix.local"). Implemented by the tuwunel client.
+// (e.g. "@alice:matrix.local"). Implemented by the tuwunel client.
 type MatrixWhoami interface {
 	Whoami(ctx context.Context, accessToken string) (userID string, err error)
 }
@@ -122,10 +122,17 @@ func (a *MatrixTokenAuthenticator) resolveHuman(ctx context.Context, userID stri
 		}
 		teams := make([]string, len(h.Spec.AccessibleTeams))
 		copy(teams, h.Spec.AccessibleTeams)
+		// Capabilities are granted on the Human CR (#1220 §3). Only L2
+		// humans carry them — resolveHuman rejects non-L2 humans above, and
+		// SA-based identities never pass through here (#1220 §5: team
+		// leaders never hold capabilities).
+		caps := make([]string, len(h.Spec.Capabilities))
+		copy(caps, h.Spec.Capabilities)
 		return &CallerIdentity{
-			Role:     RoleHuman,
-			Username: h.Name,
-			Teams:    teams,
+			Role:         RoleHuman,
+			Username:     h.Name,
+			Teams:        teams,
+			Capabilities: caps,
 		}, nil
 	}
 	return nil, fmt.Errorf("no L2 human matches matrix user %q", userID)
@@ -156,7 +163,7 @@ func (a *MatrixTokenAuthenticator) putToCache(key [32]byte, identity *CallerIden
 }
 
 // localpartFromUserID extracts the localpart from a Matrix user id
-// ("@maizong:matrix.local" → "maizong").
+// ("@alice:matrix.local" → "alice").
 func localpartFromUserID(userID string) string {
 	if !strings.HasPrefix(userID, "@") {
 		return ""

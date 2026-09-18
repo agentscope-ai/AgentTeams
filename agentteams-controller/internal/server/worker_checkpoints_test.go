@@ -87,9 +87,9 @@ func TestCheckpointGraph_ForwardsVerbatim(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	h := newTestCheckpointHandler(t, "embedded", upstream, checkpointTeamWithWorkers("team-a", "daily-luo")...)
+	h := newTestCheckpointHandler(t, "embedded", upstream, checkpointTeamWithWorkers("team-a", "daily-carol")...)
 	rec := httptest.NewRecorder()
-	h.proxyCheckpoint(rec, adminCaller(checkpointRequest(http.MethodGet, "daily-luo", "graph", "?limit=10")))
+	h.proxyCheckpoint(rec, adminCaller(checkpointRequest(http.MethodGet, "daily-carol", "graph", "?limit=10")))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
@@ -114,9 +114,9 @@ func TestCheckpointStatus_Forwards(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	h := newTestCheckpointHandler(t, "embedded", upstream, checkpointTeamWithWorkers("team-a", "daily-luo")...)
+	h := newTestCheckpointHandler(t, "embedded", upstream, checkpointTeamWithWorkers("team-a", "daily-carol")...)
 	rec := httptest.NewRecorder()
-	h.proxyCheckpoint(rec, adminCaller(checkpointRequest(http.MethodGet, "daily-luo", "status", "")))
+	h.proxyCheckpoint(rec, adminCaller(checkpointRequest(http.MethodGet, "daily-carol", "status", "")))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
@@ -135,9 +135,9 @@ func TestCheckpoint_Upstream404MeansOldQwenPaw(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	h := newTestCheckpointHandler(t, "embedded", upstream, checkpointTeamWithWorkers("team-a", "daily-luo")...)
+	h := newTestCheckpointHandler(t, "embedded", upstream, checkpointTeamWithWorkers("team-a", "daily-carol")...)
 	rec := httptest.NewRecorder()
-	h.proxyCheckpoint(rec, adminCaller(checkpointRequest(http.MethodGet, "daily-luo", "graph", "")))
+	h.proxyCheckpoint(rec, adminCaller(checkpointRequest(http.MethodGet, "daily-carol", "graph", "")))
 
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status=%d, want 502", rec.Code)
@@ -153,11 +153,11 @@ func TestCheckpoint_UnreachableWorker(t *testing.T) {
 	url := upstream.URL
 	upstream.Close()
 
-	h := newTestCheckpointHandler(t, "embedded", nil, checkpointTeamWithWorkers("team-a", "daily-luo")...)
+	h := newTestCheckpointHandler(t, "embedded", nil, checkpointTeamWithWorkers("team-a", "daily-carol")...)
 	h.workerBaseURL = func(string, map[string]string) string { return url }
 
 	rec := httptest.NewRecorder()
-	h.proxyCheckpoint(rec, adminCaller(checkpointRequest(http.MethodGet, "daily-luo", "graph", "")))
+	h.proxyCheckpoint(rec, adminCaller(checkpointRequest(http.MethodGet, "daily-carol", "graph", "")))
 
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status=%d, want 502 for unreachable worker", rec.Code)
@@ -168,9 +168,9 @@ func TestCheckpoint_UnreachableWorker(t *testing.T) {
 }
 
 func TestCheckpoint_KubeModeUnsupported(t *testing.T) {
-	h := newTestCheckpointHandler(t, "k8s", nil, checkpointTeamWithWorkers("team-a", "daily-luo")...)
+	h := newTestCheckpointHandler(t, "k8s", nil, checkpointTeamWithWorkers("team-a", "daily-carol")...)
 	rec := httptest.NewRecorder()
-	h.proxyCheckpoint(rec, adminCaller(checkpointRequest(http.MethodGet, "daily-luo", "graph", "")))
+	h.proxyCheckpoint(rec, adminCaller(checkpointRequest(http.MethodGet, "daily-carol", "graph", "")))
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d, want 503 in kube mode", rec.Code)
@@ -178,9 +178,9 @@ func TestCheckpoint_KubeModeUnsupported(t *testing.T) {
 }
 
 func TestCheckpoint_RejectsUnknownSubpath(t *testing.T) {
-	h := newTestCheckpointHandler(t, "embedded", nil, checkpointTeamWithWorkers("team-a", "daily-luo")...)
+	h := newTestCheckpointHandler(t, "embedded", nil, checkpointTeamWithWorkers("team-a", "daily-carol")...)
 	rec := httptest.NewRecorder()
-	h.proxyCheckpoint(rec, adminCaller(checkpointRequest(http.MethodGet, "daily-luo", "restore", "")))
+	h.proxyCheckpoint(rec, adminCaller(checkpointRequest(http.MethodGet, "daily-carol", "restore", "")))
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d, want 400 for unknown subpath", rec.Code)
@@ -189,7 +189,7 @@ func TestCheckpoint_RejectsUnknownSubpath(t *testing.T) {
 
 func TestCheckpoint_RejectsInvalidWorkerName(t *testing.T) {
 	h := newTestCheckpointHandler(t, "embedded", nil)
-	for _, name := range []string{"", "Daily-Luo", "../etc", "a b"} {
+	for _, name := range []string{"", "Daily-Carol", "../etc", "a b"} {
 		rec := httptest.NewRecorder()
 		h.proxyCheckpoint(rec, adminCaller(checkpointRequest(http.MethodGet, name, "graph", "")))
 		if rec.Code != http.StatusBadRequest {
@@ -199,10 +199,10 @@ func TestCheckpoint_RejectsInvalidWorkerName(t *testing.T) {
 }
 
 func TestCheckpoint_RejectsInvalidLimit(t *testing.T) {
-	h := newTestCheckpointHandler(t, "embedded", nil, checkpointTeamWithWorkers("team-a", "daily-luo")...)
+	h := newTestCheckpointHandler(t, "embedded", nil, checkpointTeamWithWorkers("team-a", "daily-carol")...)
 	for _, q := range []string{"?limit=0", "?limit=1001", "?limit=abc", "?limit=5&other=1"} {
 		rec := httptest.NewRecorder()
-		h.proxyCheckpoint(rec, adminCaller(checkpointRequest(http.MethodGet, "daily-luo", "graph", q)))
+		h.proxyCheckpoint(rec, adminCaller(checkpointRequest(http.MethodGet, "daily-carol", "graph", q)))
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("query=%q status=%d, want 400", q, rec.Code)
 		}
@@ -225,8 +225,8 @@ func TestCheckpoint_TeamLeaderCrossTeamDenied(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	h := newTestCheckpointHandler(t, "embedded", upstream, checkpointTeamWithWorkers("beta-team", "daily-luo")...)
-	req := checkpointRequest(http.MethodGet, "daily-luo", "graph", "")
+	h := newTestCheckpointHandler(t, "embedded", upstream, checkpointTeamWithWorkers("beta-team", "daily-carol")...)
+	req := checkpointRequest(http.MethodGet, "daily-carol", "graph", "")
 	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team"})
 	rec := httptest.NewRecorder()
 	h.proxyCheckpoint(rec, req)
@@ -248,7 +248,7 @@ func TestCheckpoint_L2HumanInScopeAllowed(t *testing.T) {
 
 	h := newTestCheckpointHandler(t, "embedded", upstream, checkpointTeamWithWorkers("market-team", "market-writer")...)
 	req := checkpointRequest(http.MethodGet, "market-writer", "graph", "")
-	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"market-team"}})
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"market-team"}})
 	rec := httptest.NewRecorder()
 	h.proxyCheckpoint(rec, req)
 
@@ -265,9 +265,9 @@ func TestCheckpoint_UpstreamErrorBodyBounded(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	h := newTestCheckpointHandler(t, "embedded", upstream, checkpointTeamWithWorkers("team-a", "daily-luo")...)
+	h := newTestCheckpointHandler(t, "embedded", upstream, checkpointTeamWithWorkers("team-a", "daily-carol")...)
 	rec := httptest.NewRecorder()
-	h.proxyCheckpoint(rec, adminCaller(checkpointRequest(http.MethodGet, "daily-luo", "graph", "")))
+	h.proxyCheckpoint(rec, adminCaller(checkpointRequest(http.MethodGet, "daily-carol", "graph", "")))
 
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status=%d, want 502", rec.Code)
@@ -336,7 +336,7 @@ func (c *captureRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 // listens on. A pre-fix handler reading the raw spec.env would dial 9090
 // and 502, because the container listens on 8088.
 func TestCheckpoint_EffectivePrefixAndPortReachUpstream(t *testing.T) {
-	objs := checkpointTeamWithWorkers("team-a", "daily-luo")
+	objs := checkpointTeamWithWorkers("team-a", "daily-carol")
 	objs[1].(*v1beta1.Worker).Spec.Env = map[string]string{"AGENTTEAMS_CONSOLE_PORT": "9090"}
 	k8s := fake.NewClientBuilder().WithScheme(newProjectTestScheme(t)).WithRuntimeObjects(objs...).Build()
 
@@ -345,12 +345,12 @@ func TestCheckpoint_EffectivePrefixAndPortReachUpstream(t *testing.T) {
 	h.http = &http.Client{Transport: rt}
 
 	rec := httptest.NewRecorder()
-	h.proxyCheckpoint(rec, adminCaller(checkpointRequest(http.MethodGet, "daily-luo", "status", "")))
+	h.proxyCheckpoint(rec, adminCaller(checkpointRequest(http.MethodGet, "daily-carol", "status", "")))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
-	want := "http://acme-worker-daily-luo:8088/workspace/checkpoints/status"
+	want := "http://acme-worker-daily-carol:8088/workspace/checkpoints/status"
 	if rt.gotURL.String() != want {
 		t.Fatalf("upstream URL=%s, want %s", rt.gotURL.String(), want)
 	}
@@ -367,7 +367,7 @@ func TestCheckpointPort_MatchesContainerCreationEnvChain(t *testing.T) {
 
 	// The docker backend reads the port from the merged CreateRequest env.
 	builder := service.NewWorkerEnvBuilder(config.WorkerEnvDefaults{})
-	sysEnv := builder.Build("daily-luo", &service.WorkerProvisionResult{
+	sysEnv := builder.Build("daily-carol", &service.WorkerProvisionResult{
 		GatewayKey:    "gk",
 		MatrixToken:   "mt",
 		RoomID:        "!room",

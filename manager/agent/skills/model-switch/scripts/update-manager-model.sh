@@ -2,11 +2,17 @@
 # update-manager-model.sh - Hot-update the Manager Agent's model
 #
 # Patches config files in-place based on runtime:
-#   - OpenClaw: ~/manager-workspace/openclaw.json (model list + context window in one file)
-#   - CoPaw: ~/.copaw.secret/providers.json (model list) + ~/.copaw/config.json (context window)
+#   - OpenClaw: openclaw.json (model list + primary + reasoning)
+#   - CoPaw:
+#       ~/.copaw.secret/providers/custom/agentteams-gateway.json (extra_models)
+#       ~/.copaw.secret/providers/active_model.json
+#       ~/.copaw/config.json (context window)
+#       openclaw.json (bridge SoT: reasoning + primary)
 #
-# OpenClaw detects the file change (~300ms) and reloads config automatically.
-# CoPaw may require a restart.
+# --no-reasoning:
+#   OpenClaw → model.reasoning = false
+#   CoPaw    → model generate_kwargs.extra_body.enable_thinking = false
+#              + openclaw.json reasoning = false
 #
 # Usage:
 #   update-manager-model.sh <MODEL_ID> [--context-window <SIZE>] [--no-reasoning]
@@ -15,6 +21,9 @@
 #   update-manager-model.sh claude-sonnet-4-6
 #   update-manager-model.sh my-custom-model --context-window 300000
 #   update-manager-model.sh deepseek-chat --no-reasoning
+#
+# OpenClaw detects the file change (~300ms) and reloads config automatically.
+# CoPaw may require a restart.
 
 set -e
 source /opt/agentteams/scripts/lib/agentteams-env.sh
@@ -29,6 +38,68 @@ _get_max_tokens_param() {
     else
         echo "max_tokens"
     fi
+}
+
+# Patch openclaw.json primary + reasoning (OpenClaw runtime + CoPaw bridge SoT).
+# jq expressions match the historical OpenClaw path; only factored for reuse.
+_patch_openclaw_model() {
+    local openclaw_json="$1"
+    local model_exists
+    model_exists=$(jq --arg model "${MODEL_NAME}" \
+        '[.models.providers["agentteams-gateway"].models[] | select(.id == $model)] | length' \
+        "${openclaw_json}" 2>/dev/null || echo "0")
+
+    if [ "${model_exists}" -gt 0 ]; then
+        jq --arg model "${MODEL_NAME}" \
+           --argjson reasoning "${REASONING}" \
+           '(.models.providers["agentteams-gateway"].models[] | select(.id == $model)).reasoning = $reasoning
+            | .agents.defaults.model.primary = ("agentteams-gateway/" + $model)
+            | .agents.defaults.models["agentteams-gateway/" + $model] = { "alias": $model }' \
+           "${openclaw_json}" > "${TMP}" && mv "${TMP}" "${openclaw_json}"
+    else
+        jq --arg model "${MODEL_NAME}" \
+           --argjson ctx "${CTX}" \
+           --argjson max "${MAX}" \
+           --argjson reasoning "${REASONING}" \
+           --argjson input "${INPUT}" \
+           '.models.providers["agentteams-gateway"].models += [{
+               "id": $model,
+               "name": $model,
+               "reasoning": $reasoning,
+               "contextWindow": $ctx,
+               "maxTokens": $max,
+               "input": $input
+             }]
+            | .agents.defaults.model.primary = ("agentteams-gateway/" + $model)
+            | .agents.defaults.models["agentteams-gateway/" + $model] = { "alias": $model }' \
+           "${openclaw_json}" > "${TMP}" && mv "${TMP}" "${openclaw_json}"
+    fi
+    echo "${model_exists}"
+}
+
+# Ensure model in modern CoPaw extra_models; set/clear model-level enable_thinking.
+_patch_copaw_model_thinking() {
+    jq --arg model "${MODEL_NAME}" --argjson reasoning "${REASONING}" '
+        .extra_models = (.extra_models // [])
+        | if any(.extra_models[]; .id == $model) then .
+          else .extra_models += [{id: $model, name: $model}]
+          end
+        | .extra_models |= map(
+            if .id != $model then .
+            elif $reasoning == false then
+              .generate_kwargs = (.generate_kwargs // {})
+              | .generate_kwargs.extra_body =
+                  ((.generate_kwargs.extra_body // {}) + {enable_thinking: false})
+            elif .generate_kwargs.extra_body.enable_thinking? == false then
+              del(.generate_kwargs.extra_body.enable_thinking)
+              | if (.generate_kwargs.extra_body // {}) == {} then
+                  del(.generate_kwargs.extra_body) else . end
+              | if (.generate_kwargs // {}) == {} then
+                  del(.generate_kwargs) else . end
+            else .
+            end
+          )
+    ' "${COPAW_CUSTOM_PROVIDER}" > "${TMP}" && mv "${TMP}" "${COPAW_CUSTOM_PROVIDER}"
 }
 
 MODEL_NAME="${1:-}"
@@ -65,11 +136,18 @@ done
 # Determine config files based on runtime
 if [ "${MANAGER_RUNTIME}" = "copaw" ]; then
     CONFIG_FILE="${HOME}/.copaw/config.json"
-    PROVIDERS_FILE="${HOME}/.copaw.secret/providers.json"
-    if [ ! -f "${CONFIG_FILE}" ] || [ ! -f "${PROVIDERS_FILE}" ]; then
-        echo "ERROR: CoPaw config not found"
-        echo "  config.json: ${CONFIG_FILE} ($([ -f "${CONFIG_FILE}" ] && echo 'exists' || echo 'MISSING'))"
-        echo "  providers.json: ${PROVIDERS_FILE} ($([ -f "${PROVIDERS_FILE}" ] && echo 'exists' || echo 'MISSING'))"
+    COPAW_CUSTOM_PROVIDER="${HOME}/.copaw.secret/providers/custom/agentteams-gateway.json"
+    COPAW_ACTIVE_MODEL="${HOME}/.copaw.secret/providers/active_model.json"
+    OPENCLAW_JSON="${HOME}/openclaw.json"
+    [ -f "${OPENCLAW_JSON}" ] || OPENCLAW_JSON="${HOME}/manager-workspace/openclaw.json"
+
+    if [ ! -f "${CONFIG_FILE}" ]; then
+        echo "ERROR: CoPaw config not found: ${CONFIG_FILE}"
+        exit 1
+    fi
+    if [ ! -f "${COPAW_CUSTOM_PROVIDER}" ]; then
+        echo "ERROR: CoPaw provider not found: ${COPAW_CUSTOM_PROVIDER}"
+        echo "This skill expects the modern CoPaw provider layout."
         exit 1
     fi
 else
@@ -81,6 +159,7 @@ else
         echo "ERROR: OpenClaw config not found (checked ~/manager-workspace/openclaw.json and ~/openclaw.json)"
         exit 1
     fi
+    OPENCLAW_JSON="${CONFIG_FILE}"
 fi
 
 # Resolve context window and max tokens
@@ -170,53 +249,36 @@ rm -f /tmp/model-test-resp.json
 TMP=$(mktemp)
 
 if [ "${MANAGER_RUNTIME}" = "copaw" ]; then
-    # ── CoPaw: update providers.json (model list) + config.json (context window) ──
-    # providers.json: .custom_providers["agentteams-gateway"].models + .active_llm.model
-    # config.json: .agents.running.max_input_length
-    jq --arg model "${MODEL_NAME}" \
-       '.custom_providers["agentteams-gateway"].models = [{"id": $model, "name": $model}]
-        | .active_llm.model = $model' \
-       "${PROVIDERS_FILE}" > "${TMP}" && mv "${TMP}" "${PROVIDERS_FILE}"
-    cp "${PROVIDERS_FILE}" "${HOME}/.copaw/providers.json"
+    # Model-level enable_thinking only (no shared provider-level flag).
+    _patch_copaw_model_thinking
+    chmod 600 "${COPAW_CUSTOM_PROVIDER}" 2>/dev/null || true
+
+    mkdir -p "$(dirname "${COPAW_ACTIVE_MODEL}")"
+    jq -n --arg model "${MODEL_NAME}" \
+        '{provider_id: "agentteams-gateway", model: $model}' \
+        > "${TMP}" && mv "${TMP}" "${COPAW_ACTIVE_MODEL}"
+    chmod 600 "${COPAW_ACTIVE_MODEL}" 2>/dev/null || true
 
     jq --argjson ctx "${CTX}" \
        '.agents.running.max_input_length = $ctx' \
        "${CONFIG_FILE}" > "${TMP}" && mv "${TMP}" "${CONFIG_FILE}"
 
-    log "Done. CoPaw model is now: ${MODEL_NAME} (ctx=${CTX})"
+    if [ -f "${OPENCLAW_JSON}" ]; then
+        _patch_openclaw_model "${OPENCLAW_JSON}" >/dev/null
+        log "Synced openclaw.json reasoning=${REASONING} for ${MODEL_NAME}"
+    else
+        log "WARN: openclaw.json not found; provider store updated but bridge SoT was not synced"
+    fi
+
+    log "Done. CoPaw model is now: ${MODEL_NAME} (ctx=${CTX}, reasoning=${REASONING})"
     echo ""
     echo "RESTART_REQUIRED: Restart the CoPaw service to apply the model switch."
 else
     # ── OpenClaw: update openclaw.json ──
-    MODEL_EXISTS=$(jq --arg model "${MODEL_NAME}" \
-        '[.models.providers["agentteams-gateway"].models[] | select(.id == $model)] | length' \
-        "${CONFIG_FILE}" 2>/dev/null || echo "0")
-
+    MODEL_EXISTS=$(_patch_openclaw_model "${OPENCLAW_JSON}")
     if [ "${MODEL_EXISTS}" -gt 0 ]; then
-        jq --arg model "${MODEL_NAME}" \
-           --argjson reasoning "${REASONING}" \
-           '(.models.providers["agentteams-gateway"].models[] | select(.id == $model)).reasoning = $reasoning
-            | .agents.defaults.model.primary = ("agentteams-gateway/" + $model)
-            | .agents.defaults.models["agentteams-gateway/" + $model] = { "alias": $model }' \
-           "${CONFIG_FILE}" > "${TMP}" && mv "${TMP}" "${CONFIG_FILE}"
         log "Done. Model is now: ${MODEL_NAME}"
     else
-        jq --arg model "${MODEL_NAME}" \
-           --argjson ctx "${CTX}" \
-           --argjson max "${MAX}" \
-           --argjson reasoning "${REASONING}" \
-           --argjson input "${INPUT}" \
-           '.models.providers["agentteams-gateway"].models += [{
-               "id": $model,
-               "name": $model,
-               "reasoning": $reasoning,
-               "contextWindow": $ctx,
-               "maxTokens": $max,
-               "input": $input
-             }]
-            | .agents.defaults.model.primary = ("agentteams-gateway/" + $model)
-            | .agents.defaults.models["agentteams-gateway/" + $model] = { "alias": $model }' \
-           "${CONFIG_FILE}" > "${TMP}" && mv "${TMP}" "${CONFIG_FILE}"
         log "Done. Model '${MODEL_NAME}' has been added to the models list."
     fi
     echo ""

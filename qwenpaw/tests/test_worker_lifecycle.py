@@ -1016,6 +1016,9 @@ async def test_builtin_mcp_policy_is_persisted_before_desired_state_reload(
         def disable_agent_if_present(self, *_args, **_kwargs):
             return False
 
+        def get_agent_subagent_model(self, *_args, **_kwargs):
+            return None
+
     async def fake_create_subprocess_exec(*_args, **_kwargs):
         return FakeProcess()
 
@@ -1546,7 +1549,10 @@ def test_hot_update_apply_does_not_replace_qwenpaw_process(tmp_path: Path) -> No
     worker.updater.api_client = type(
         "FakeApi",
         (),
-        {"list_mcp": lambda _self: []},
+        {
+            "list_mcp": lambda _self: [],
+            "get_agent_subagent_model": lambda _self: None,
+        },
     )()
     worker.updater.adapter_apply = lambda: adapter_calls.append("adapter")
     worker.updater.current_config = MemberRuntimeConfig(

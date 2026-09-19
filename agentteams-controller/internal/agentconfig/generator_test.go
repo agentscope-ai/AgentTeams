@@ -522,3 +522,71 @@ func TestInjectChannelPolicy_PreservesUnrelatedFields(t *testing.T) {
 		t.Errorf("extras.foo lost: %v", extras)
 	}
 }
+
+func TestGenerateOpenClawConfig_SubagentModel(t *testing.T) {
+	g := NewGenerator(Config{
+		MatrixDomain:    "matrix.test:8080",
+		MatrixServerURL: "http://matrix.test:8080",
+		AIGatewayURL:    "http://aigw.test:8080",
+		DefaultModel:    "qwen3.5-plus",
+		AdminUser:       "admin",
+	})
+	req := WorkerConfigRequest{
+		WorkerName:        "worker-alice",
+		MatrixToken:       "tok-matrix-alice",
+		GatewayKey:        "tok-gw",
+		ModelName:         "qwen3.5-plus",
+		SubagentModelName: "qwen3.5-flash",
+		Runtime:           "qwenpaw",
+	}
+	data, err := g.GenerateOpenClawConfig(req)
+	if err != nil {
+		t.Fatalf("GenerateOpenClawConfig: %v", err)
+	}
+	var config map[string]interface{}
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	modelCfg := config["agents"].(map[string]interface{})["defaults"].(map[string]interface{})["model"].(map[string]interface{})
+	sub, ok := modelCfg["subagent"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("agents.defaults.model.subagent missing, want dict; got %v", modelCfg["subagent"])
+	}
+	if sub["provider_id"] != "agentteams-gateway" {
+		t.Errorf("subagent.provider_id = %v, want agentteams-gateway", sub["provider_id"])
+	}
+	if sub["model"] != "qwen3.5-flash" {
+		t.Errorf("subagent.model = %v, want qwen3.5-flash", sub["model"])
+	}
+	// primary must stay the historical "provider/model" string form
+	if modelCfg["primary"] != "agentteams-gateway/qwen3.5-plus" {
+		t.Errorf("primary = %v, want agentteams-gateway/qwen3.5-plus", modelCfg["primary"])
+	}
+}
+
+func TestGenerateOpenClawConfig_SubagentModelOmittedWhenEmpty(t *testing.T) {
+	g := NewGenerator(Config{
+		MatrixDomain:    "matrix.test:8080",
+		MatrixServerURL: "http://matrix.test:8080",
+		AIGatewayURL:    "http://aigw.test:8080",
+		DefaultModel:    "qwen3.5-plus",
+		AdminUser:       "admin",
+	})
+	data, err := g.GenerateOpenClawConfig(WorkerConfigRequest{
+		WorkerName:  "worker-alice",
+		MatrixToken: "tok-matrix-alice",
+		GatewayKey:  "tok-gw",
+		Runtime:     "qwenpaw",
+	})
+	if err != nil {
+		t.Fatalf("GenerateOpenClawConfig: %v", err)
+	}
+	var config map[string]interface{}
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	modelCfg := config["agents"].(map[string]interface{})["defaults"].(map[string]interface{})["model"].(map[string]interface{})
+	if _, present := modelCfg["subagent"]; present {
+		t.Errorf("agents.defaults.model.subagent = %v, want absent when SubagentModelName is empty", modelCfg["subagent"])
+	}
+}

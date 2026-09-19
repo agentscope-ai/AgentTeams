@@ -30,6 +30,19 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 	}
 	modelName = strings.TrimPrefix(modelName, "agentteams-gateway/")
 
+	// agents.defaults.model block. The subagent entry (QwenPaw >= 2.1.1
+	// native subagent_model) uses the dict form consumed by the worker
+	// bridge overlay; primary keeps the historical "provider/model" string.
+	modelCfg := map[string]interface{}{
+		"primary": "agentteams-gateway/" + modelName,
+	}
+	if req.SubagentModelName != "" {
+		modelCfg["subagent"] = map[string]interface{}{
+			"provider_id": "agentteams-gateway",
+			"model":       req.SubagentModelName,
+		}
+	}
+
 	matrixServerURL := g.config.MatrixServerURL
 	if matrixServerURL == "" {
 		// K8s deployments must set AGENTTEAMS_MATRIX_URL (Helm injects it automatically).
@@ -137,11 +150,9 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 			"defaults": map[string]interface{}{
 				"timeoutSeconds": 1800,
 				"workspace":      "~",
-				"model": map[string]interface{}{
-					"primary": "agentteams-gateway/" + modelName,
-				},
-				"models":        g.allModelAliases(modelName),
-				"maxConcurrent": 4,
+				"model":          modelCfg,
+				"models":         g.allModelAliases(modelName),
+				"maxConcurrent":  4,
 				"subagents": map[string]interface{}{
 					"maxConcurrent": 8,
 				},

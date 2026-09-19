@@ -560,6 +560,20 @@ def _write_agent_json(
     # Set workspace_dir
     agent_cfg.setdefault("workspace_dir", str(workspace_dir))
 
+    # Subagent model override (QwenPaw >= 2.1.1 native subagent_model).
+    # Controller-owned field: set when declared in openclaw.json, cleared
+    # otherwise, so the worker's agent.json never drifts from the Worker CR.
+    subagent_model = (
+        cfg.get("agents", {})
+        .get("defaults", {})
+        .get("model", {})
+        .get("subagent")
+    )
+    if subagent_model:
+        agent_cfg["subagent_model"] = subagent_model
+    else:
+        agent_cfg.pop("subagent_model", None)
+
     with open(agent_path, "w") as f:
         json.dump(agent_cfg, f, indent=2, ensure_ascii=False)
 

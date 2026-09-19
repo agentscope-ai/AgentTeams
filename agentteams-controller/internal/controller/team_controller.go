@@ -347,6 +347,7 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 	if err := r.Deployer.EnsureTeamStorage(ctx, teamRuntimeName); err != nil {
 		logger.Error(err, "team shared storage init failed (non-fatal)", "name", t.Name, "teamName", teamRuntimeName)
 	}
+	r.propagateSubagentModelChange(ctx, t, members)
 	for i := range members {
 		member := &members[i]
 		if err := r.setWorkerTeamAnnotation(ctx, &member.worker, teamRuntimeName); err != nil {
@@ -542,6 +543,38 @@ func (r *TeamReconciler) setWorkerTeamAnnotation(ctx context.Context, worker *v1
 	return r.Patch(ctx, worker, client.MergeFrom(base))
 }
 
+// propagateSubagentModelChange handles a change to the team-wide subagent
+// model default: members resolve it read-time during their config reconcile,
+// so the change must re-trigger their reconciles. It records the applied
+// value on the team (annotation) and bumps each member Worker's
+// resourceVersion with a no-op Update. Failures are logged, not returned —
+// a missed bump self-heals on the next team reconcile.
+func (r *TeamReconciler) propagateSubagentModelChange(ctx context.Context, t *v1beta1.Team, members []teamWorkerMember) bool {
+	if t.Annotations[v1beta1.AnnotationSubagentModelApplied] == t.Spec.SubagentModel {
+		return false
+	}
+	logger := log.FromContext(ctx)
+	base := t.DeepCopy()
+	if t.Annotations == nil {
+		t.Annotations = map[string]string{}
+	}
+	if t.Spec.SubagentModel == "" {
+		delete(t.Annotations, v1beta1.AnnotationSubagentModelApplied)
+	} else {
+		t.Annotations[v1beta1.AnnotationSubagentModelApplied] = t.Spec.SubagentModel
+	}
+	if err := r.Patch(ctx, t, client.MergeFrom(base)); err != nil {
+		logger.Error(err, "record applied subagent model on team (non-fatal)", "team", t.Name)
+	}
+	for i := range members {
+		member := &members[i]
+		if err := r.Update(ctx, &member.worker); err != nil {
+			logger.Error(err, "bump member worker for subagent model change (non-fatal)", "worker", member.runtimeName)
+		}
+	}
+	return true
+}
+
 func (r *TeamReconciler) resolveTeamMembers(ctx context.Context, t *v1beta1.Team) ([]teamWorkerMember, []string) {
 	members := make([]teamWorkerMember, 0, len(t.Spec.WorkerMembers))
 	var degradedMsgs []string
@@ -643,6 +676,7 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 			Role:              role.String(),
 			Generation:        member.worker.Generation,
 			Spec:              spec,
+			SubagentModel:     resolveSubagentModel(member.worker.Spec.SubagentModel, t.Spec.SubagentModel),
 			AIGatewayURL:      aiGatewayURL,
 			MatrixUserID:      member.worker.Status.MatrixUserID,
 			PersonalRoomID:    member.worker.Status.RoomID,
@@ -794,6 +828,7 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 		Role:            RoleStandalone.String(),
 		Generation:      w.Generation,
 		Spec:            w.Spec,
+		SubagentModel:   w.Spec.SubagentModel,
 		AIGatewayURL:    aiGatewayURL,
 		MatrixUserID:    w.Status.MatrixUserID,
 		PersonalRoomID:  w.Status.RoomID,

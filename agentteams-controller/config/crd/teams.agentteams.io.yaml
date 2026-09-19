@@ -72,6 +72,13 @@ spec:
                     Configures the Team Leader agent's periodic heartbeat check interval.
                     The TeamReconciler writes this into the leader Worker's openclaw.json
                     and coordination context. Example: "30m". Empty disables leader heartbeat.
+                subagentModel:
+                  type: string
+                  description: >
+                    Team-wide default model for spawned subagents. Members without an
+                    explicit Worker.spec.subagentModel inherit this value (read-time
+                    merge); an explicit worker value always wins. Empty disables the
+                    default.
                 admin:
                   type: object
                   description: "Team-specific admin (human). Has admin authority within this team."

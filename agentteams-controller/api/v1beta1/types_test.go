@@ -219,6 +219,22 @@ func TestCRDStatusSchemasCoverStatusStructs(t *testing.T) {
 		"spec", "versions", "*", "schema", "openAPIV3Schema", "properties", "status", "properties", "members", "items", "properties")
 }
 
+// TestCRDSpecSchemasCoverSpecStructs extends the structural-schema pruning
+// contract to the spec: every JSON-tagged WorkerSpec/TeamSpec field must
+// exist as a property in the deployed CRD schema under config/crd/,
+// otherwise a real apiserver silently prunes it (the field goes no-op
+// while fake-client unit tests stay green). Regression pin for #1292:
+// spec.subagentModel was added to the Go types but missing from the CRD,
+// so real clusters dropped it before the controller ever saw it.
+func TestCRDSpecSchemasCoverSpecStructs(t *testing.T) {
+	workers := loadCRDDoc(t, "../../config/crd/workers.agentteams.io.yaml")
+	assertCRDPropertiesCoverStruct(t, "WorkerSpec", workers, reflect.TypeOf(WorkerSpec{}),
+		"spec", "versions", "*", "schema", "openAPIV3Schema", "properties", "spec", "properties")
+	teams := loadCRDDoc(t, "../../config/crd/teams.agentteams.io.yaml")
+	assertCRDPropertiesCoverStruct(t, "TeamSpec", teams, reflect.TypeOf(TeamSpec{}),
+		"spec", "versions", "*", "schema", "openAPIV3Schema", "properties", "spec", "properties")
+}
+
 func loadCRDDoc(t *testing.T, path string) map[string]any {
 	t.Helper()
 	raw, err := os.ReadFile(path)

@@ -360,6 +360,10 @@ class MemberRuntimeConfig:
         return _section(self.desired, "model")
 
     @property
+    def subagent_model(self) -> Dict[str, Any]:
+        return _section(self.desired, "subagentModel")
+
+    @property
     def mcp_servers(self) -> Any:
         value = self.desired.get("mcpServers")
         return value if value is not None else {}
@@ -387,6 +391,7 @@ class MemberRuntimeConfig:
             *self.agent_package_identity,
             _stable_json(self.inline_config),
             _stable_json(self.model),
+            _stable_json(self.subagent_model),
             _stable_json(self.mcp_servers),
             _stable_json(self.channels),
             _stable_json(self.channel_policy),
@@ -1310,6 +1315,7 @@ class RuntimeUpdater:
         )
         self.current_config: Optional[MemberRuntimeConfig] = None
         self._applied_model_identity: Optional[str] = None
+        self._applied_subagent_model_identity: Optional[str] = None
         self._applied_matrix_channel_identity: Optional[str] = None
         self._applied_dingtalk_channel_identity: Optional[str] = None
         self._applied_agent_package_identity: Optional[Tuple[str, str, str, str]] = None
@@ -1356,6 +1362,12 @@ class RuntimeUpdater:
         )
         model_identity = self._component_identity(self._model_desired_state(config))
         model_should_apply = force or model_identity != self._applied_model_identity
+        subagent_model_identity = self._component_identity(
+            self._subagent_model_desired_state(config)
+        )
+        subagent_model_should_apply = (
+            force or subagent_model_identity != self._applied_subagent_model_identity
+        )
         matrix_channel_identity = self._component_identity(self._matrix_channel_payload(config))
         matrix_channel_should_apply = (
             force or matrix_channel_identity != self._applied_matrix_channel_identity
@@ -1385,7 +1397,8 @@ class RuntimeUpdater:
         logger.info(
             "runtime config apply begin component=update worker=%s generation=%s team=%s member=%s role=%s "
             "force=%s reapply_adapter=%s adapter_applied=%s mcp_server_count=%s channel_names=%s "
-            "credential_binding_count=%s model_reconcile=%s matrix_channel_reconcile=%s "
+            "credential_binding_count=%s model_reconcile=%s subagent_model_reconcile=%s "
+            "matrix_channel_reconcile=%s "
             "dingtalk_channel_reconcile=%s package_reconcile=%s duration_ms=%s",
             self.config.worker_name,
             config.generation,
@@ -1399,6 +1412,7 @@ class RuntimeUpdater:
             _named_keys(config.channels),
             len(config.credential_bindings),
             model_should_apply,
+            subagent_model_should_apply,
             matrix_channel_should_apply,
             dingtalk_channel_should_apply,
             package_should_apply,
@@ -1410,6 +1424,9 @@ class RuntimeUpdater:
         if model_should_apply:
             self._apply_model(config)
             self._applied_model_identity = model_identity
+        if subagent_model_should_apply:
+            self._apply_subagent_model(config)
+            self._applied_subagent_model_identity = subagent_model_identity
         if matrix_channel_should_apply:
             self._apply_matrix_channel(config)
             self._applied_matrix_channel_identity = matrix_channel_identity
@@ -1703,6 +1720,70 @@ class RuntimeUpdater:
             "supports_multimodal": supports_multimodal_val,
             "probe_source": probe_source_val,
         }
+
+    def _apply_subagent_model(self, config: MemberRuntimeConfig) -> None:
+        """Apply — or reconcile the removal of — the declared subagent model.
+
+        This is the startup/recreation path for the override: a recreated
+        container must pick the desired value up from runtime.yaml even
+        though the controller hot apply (annotation-gated, embedded-only)
+        would skip it. Removal is reconciled here as well, so clearing
+        does not depend on the embedded-only controller dial: when the
+        declaration is absent but the runtime still holds an override
+        (removed in the CR, possibly across a restart), an explicit null
+        clear is issued with readback. An initially absent declaration
+        stays read-only — one profile check, no write — preserving
+        compatibility for workers/runtimes that never used the surface.
+        """
+        desired = self._subagent_model_desired_state(config)
+        if desired is not None:
+            if self.api_client is None:
+                raise RuntimeError(
+                    "QwenPaw API client is required for subagent model configuration",
+                )
+            try:
+                self.api_client.update_agent_model_settings(desired)
+            except QwenPawApiError as exc:
+                # QwenPaw < 2.1.1 has no model-settings endpoint; the declared
+                # value stays in runtime.yaml and takes effect after an upgrade.
+                if "HTTP 404" in str(exc):
+                    logger.warning("subagent model endpoint unavailable, skipping: %s", exc)
+                    return
+                raise
+            return
+        # Absent declaration: clear only when an override is actually present.
+        # Without an API client there is nothing to inspect or clear —
+        # stay a no-op (compat).
+        if self.api_client is None:
+            return
+        try:
+            current = self.api_client.get_agent_subagent_model()
+        except QwenPawApiError as exc:
+            if "HTTP 404" in str(exc):
+                logger.warning("subagent model settings unavailable, skipping clear: %s", exc)
+                return
+            raise
+        if current is None:
+            return
+        try:
+            self.api_client.update_agent_model_settings(None)
+        except QwenPawApiError as exc:
+            if "HTTP 404" in str(exc):
+                logger.warning("subagent model endpoint unavailable, skipping clear: %s", exc)
+                return
+            raise
+
+    def _subagent_model_desired_state(
+        self, config: MemberRuntimeConfig
+    ) -> Optional[Dict[str, Any]]:
+        slot = config.subagent_model
+        provider_id = _string(
+            slot.get("providerId") or slot.get("provider_id") or slot.get("provider")
+        )
+        model_name = _string(slot.get("model") or slot.get("name"))
+        if not provider_id or not model_name:
+            return None
+        return {"provider_id": provider_id, "model": model_name}
 
     def _openai_compatible_base_url(self, base_url: str) -> str:
         value = base_url.rstrip("/")

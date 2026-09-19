@@ -2095,3 +2095,50 @@ func TestHumanToTeamRequests(t *testing.T) {
 		t.Fatalf("humanToTeamRequests(dave)=%v, want empty", got)
 	}
 }
+
+func TestPropagateSubagentModelChange_BumpsMembersOnce(t *testing.T) {
+	t.Parallel()
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "worker-a", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{Model: "qwen3.5-plus"},
+	}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			SubagentModel: "qwen3.5-flash",
+			WorkerMembers: []v1beta1.TeamWorkerRef{{Name: "worker-a", Role: "worker"}},
+		},
+	}
+	c := newTeamTestClient(t, worker, team)
+	r := &TeamReconciler{Client: c}
+	members := []teamWorkerMember{{
+		ref:         v1beta1.TeamWorkerRef{Name: "worker-a", Role: "worker"},
+		worker:      *worker,
+		runtimeName: "worker-a",
+	}}
+
+	if !r.propagateSubagentModelChange(context.Background(), team, members) {
+		t.Fatal("want propagation on first change")
+	}
+	var gotTeam v1beta1.Team
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "alpha", Namespace: "default"}, &gotTeam); err != nil {
+		t.Fatalf("get team: %v", err)
+	}
+	if gotTeam.Annotations[v1beta1.AnnotationSubagentModelApplied] != "qwen3.5-flash" {
+		t.Fatalf("applied annotation = %q, want qwen3.5-flash", gotTeam.Annotations[v1beta1.AnnotationSubagentModelApplied])
+	}
+	var gotWorker v1beta1.Worker
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "worker-a", Namespace: "default"}, &gotWorker); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if gotWorker.ResourceVersion == worker.ResourceVersion {
+		t.Fatal("member worker resourceVersion was not bumped")
+	}
+
+	// With the applied annotation in place the change is already propagated:
+	// a second call must be a no-op.
+	team.Annotations = gotTeam.Annotations
+	if r.propagateSubagentModelChange(context.Background(), team, members) {
+		t.Fatal("want no propagation when applied == spec")
+	}
+}

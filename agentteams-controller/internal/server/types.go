@@ -11,6 +11,7 @@ type CreateWorkerRequest struct {
 	Name          string                             `json:"name"`
 	WorkerName    string                             `json:"workerName,omitempty"`
 	Model         string                             `json:"model,omitempty"`
+	SubagentModel string                             `json:"subagentModel,omitempty"`
 	ModelProvider string                             `json:"modelProvider,omitempty"`
 	Runtime       string                             `json:"runtime,omitempty"`
 	Image         string                             `json:"image,omitempty"`
@@ -34,8 +35,12 @@ type CreateWorkerRequest struct {
 }
 
 type UpdateWorkerRequest struct {
-	WorkerName    string                             `json:"workerName,omitempty"`
-	Model         string                             `json:"model,omitempty"`
+	WorkerName string `json:"workerName,omitempty"`
+	Model      string `json:"model,omitempty"`
+	// SubagentModel is a pointer so callers can distinguish omission (nil:
+	// keep the current value) from an explicit clear ("" — the worker
+	// returns to inheriting the team default / the runtime default).
+	SubagentModel *string                            `json:"subagentModel,omitempty"`
 	ModelProvider string                             `json:"modelProvider,omitempty"`
 	Runtime       string                             `json:"runtime,omitempty"`
 	Image         string                             `json:"image,omitempty"`
@@ -59,27 +64,30 @@ type UpdateWorkerRequest struct {
 }
 
 type WorkerResponse struct {
-	Name             string                     `json:"name"`
-	WorkerName       string                     `json:"workerName,omitempty"`
-	Phase            string                     `json:"phase"`
-	ContainerManaged bool                       `json:"containerManaged"`
-	State            string                     `json:"state,omitempty"` // desired lifecycle state
-	Model            string                     `json:"model,omitempty"`
-	Runtime          string                     `json:"runtime,omitempty"`
-	Image            string                     `json:"image,omitempty"`
-	Identity         string                     `json:"identity,omitempty"`
-	Soul             string                     `json:"soul,omitempty"`
-	Agents           string                     `json:"agents,omitempty"`
-	Skills           []string                   `json:"skills,omitempty"`
-	McpServers       []v1beta1.MCPServer        `json:"mcpServers,omitempty"`
-	Package          string                     `json:"package,omitempty"`
-	BackendRuntime   string                     `json:"backendRuntime,omitempty"`
-	ChannelPolicy    *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
-	ContainerState   string                     `json:"containerState,omitempty"`
-	MatrixUserID     string                     `json:"matrixUserID,omitempty"`
-	RoomID           string                     `json:"roomID,omitempty"`
-	Message          string                     `json:"message,omitempty"`
-	LastActiveAt     string                     `json:"lastActiveAt,omitempty"`
+	Name             string `json:"name"`
+	WorkerName       string `json:"workerName,omitempty"`
+	Phase            string `json:"phase"`
+	ContainerManaged bool   `json:"containerManaged"`
+	State            string `json:"state,omitempty"` // desired lifecycle state
+	Model            string `json:"model,omitempty"`
+	// SubagentModel is the model used by spawned subagents ("" = inherit
+	// the worker's primary model). See WorkerSpec.SubagentModel.
+	SubagentModel  string                     `json:"subagentModel,omitempty"`
+	Runtime        string                     `json:"runtime,omitempty"`
+	Image          string                     `json:"image,omitempty"`
+	Identity       string                     `json:"identity,omitempty"`
+	Soul           string                     `json:"soul,omitempty"`
+	Agents         string                     `json:"agents,omitempty"`
+	Skills         []string                   `json:"skills,omitempty"`
+	McpServers     []v1beta1.MCPServer        `json:"mcpServers,omitempty"`
+	Package        string                     `json:"package,omitempty"`
+	BackendRuntime string                     `json:"backendRuntime,omitempty"`
+	ChannelPolicy  *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
+	ContainerState string                     `json:"containerState,omitempty"`
+	MatrixUserID   string                     `json:"matrixUserID,omitempty"`
+	RoomID         string                     `json:"roomID,omitempty"`
+	Message        string                     `json:"message,omitempty"`
+	LastActiveAt   string                     `json:"lastActiveAt,omitempty"`
 	// AgentStatus is the runtime task-level state reported by the worker
 	// heartbeat: "idle" / "running" / "disabled"; empty = not reported.
 	AgentStatus      string            `json:"agentStatus,omitempty"`

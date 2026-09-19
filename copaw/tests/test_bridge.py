@@ -754,3 +754,38 @@ def test_providers_json_no_input_field_no_capability_flags():
     providers = _run_bridge_and_read_providers(cfg)
     model = providers["custom_providers"]["gw"]["models"][0]
     assert model == {"id": "plain-model", "name": "plain-model"}
+
+# ---------------------------------------------------------------------------
+# subagent_model overlay (QwenPaw >= 2.1.1 native field)
+# ---------------------------------------------------------------------------
+
+
+def test_agent_json_overlays_subagent_model_from_openclaw():
+    """agents.defaults.model.subagent is mirrored into agent.json verbatim."""
+    cfg = _make_openclaw_cfg()
+    cfg["agents"]["defaults"]["model"]["subagent"] = {
+        "provider_id": "gw",
+        "model": "qwen3.5-flash",
+    }
+    agent = _bridge_and_read_agent(cfg)
+    assert agent["subagent_model"] == {
+        "provider_id": "gw",
+        "model": "qwen3.5-flash",
+    }
+
+
+def test_agent_json_clears_subagent_model_when_unset():
+    """Controller-owned field: a stale value is removed when openclaw has none."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        working_dir = Path(tmpdir) / "agent"
+        ws = working_dir / "workspaces" / "default"
+        ws.mkdir(parents=True)
+        stale = {
+            "id": "default",
+            "channels": {"matrix": {"enabled": True}},
+            "subagent_model": {"provider_id": "gw", "model": "stale-model"},
+        }
+        with open(ws / "agent.json", "w") as f:
+            json.dump(stale, f)
+        _run_bridge(_make_openclaw_cfg(), working_dir)
+        assert "subagent_model" not in _read_agent(working_dir)

@@ -577,6 +577,8 @@ func (a *App) initReconcilers(_ context.Context) error {
 		DefaultRuntime:              a.cfg.DefaultWorkerRuntime,
 		DefaultBackendRuntime:       a.cfg.WorkerBackendRuntime,
 		ControllerName:              a.cfg.ControllerName,
+		KubeMode:                    a.cfg.KubeMode,
+		ContainerPrefix:             a.cfg.ContainerPrefix,
 		GatewayClient:               a.gateway,
 		DynamicClient:               dynamicClient,
 		RemoteDynamicClientProvider: remoteDynamicClientProvider,

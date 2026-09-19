@@ -47,6 +47,13 @@ const AnnotationEdgeAppliedUUID = "agentteams.io/edge-applied-uuid"
 // Worker so independent Worker reconciles preserve its scoped team storage access.
 const AnnotationWorkerTeamName = "agentteams.io/team-name"
 
+// AnnotationSubagentModelApplied records the Team.spec.subagentModel value that
+// was last propagated to member workers. The TeamReconciler compares it against
+// the live spec value; on a change it bumps each member Worker's
+// resourceVersion so their config reconciles re-resolve the team default
+// (read-time merge — the Team never writes Worker specs).
+const AnnotationSubagentModelApplied = "agentteams.io/subagent-model-applied"
+
 // AccessEntry declares one cloud-permission grant under a logical
 // service. v1 supported services: "object-storage", "ai-gateway", "ai-registry", "schedulerx3".
 //
@@ -176,11 +183,19 @@ type Worker struct {
 }
 
 type WorkerSpec struct {
-	Model         string                     `json:"model"`
-	ModelProvider string                     `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
-	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | hermes | qwenpaw | deepseek-harness (default: openclaw)
-	Image         string                     `json:"image,omitempty"`         // custom Docker image
-	WorkerName    string                     `json:"workerName,omitempty"`    // business/runtime identity (Matrix localpart, OSS path key)
+	Model         string `json:"model"`
+	ModelProvider string `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
+	// SubagentModel optionally names a (cheaper/faster) model used by
+	// spawned subagents instead of the worker's primary model. It must be
+	// a model id served by the team's AI gateway (free string; the
+	// controller does not validate against any catalog — an unknown model
+	// surfaces as a visible upstream error at spawn time). Consumed by
+	// QwenPaw >= 2.1.1 via the native AgentProfileConfig.subagent_model
+	// field; on older runtimes the field is silently ignored.
+	SubagentModel string                     `json:"subagentModel,omitempty"`
+	Runtime       string                     `json:"runtime,omitempty"`    // openclaw | copaw | hermes | qwenpaw | deepseek-harness (default: openclaw)
+	Image         string                     `json:"image,omitempty"`      // custom Docker image
+	WorkerName    string                     `json:"workerName,omitempty"` // business/runtime identity (Matrix localpart, OSS path key)
 	Identity      string                     `json:"identity,omitempty"`
 	Soul          string                     `json:"soul,omitempty"`
 	Agents        string                     `json:"agents,omitempty"`
@@ -456,6 +471,13 @@ type TeamSpec struct {
 	// Worker's openclaw.json and coordination context AGENTS.md.
 	// Example: "30m". Empty means leader heartbeat is disabled.
 	HeartbeatEvery string `json:"heartbeatEvery,omitempty"`
+
+	// SubagentModel is the team-wide default for the model used by spawned
+	// subagents (see WorkerSpec.SubagentModel). A worker's own
+	// subagentModel always takes precedence; members without an explicit
+	// value inherit this default via read-time merge during their config
+	// reconcile. Changing it re-triggers member config reconciles.
+	SubagentModel string `json:"subagentModel,omitempty"`
 }
 
 // TeamWorkerRef references an existing Worker CR as a team member.

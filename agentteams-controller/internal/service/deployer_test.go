@@ -721,6 +721,74 @@ func TestDeployMemberRuntimeConfigOmitsDesiredModelForNativeConfig(t *testing.T)
 	}
 }
 
+func TestDeployMemberRuntimeConfigProjectsResolvedSubagentModel(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{OSS: store})
+
+	err := deployer.DeployMemberRuntimeConfig(ctx, MemberRuntimeConfigDeployRequest{
+		Name:          "worker-cr-a",
+		RuntimeName:   "worker-a",
+		Runtime:       "qwenpaw",
+		Role:          "worker",
+		Spec:          v1beta1.WorkerSpec{Model: "qwen-plus"},
+		SubagentModel: "qwen3.6-flash",
+	})
+	if err != nil {
+		t.Fatalf("DeployMemberRuntimeConfig failed: %v", err)
+	}
+
+	got, err := store.GetObject(ctx, "agents/worker-a/runtime/runtime.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("runtime.yaml is invalid YAML: %v\n%s", err, got)
+	}
+	desired := doc["desired"].(map[string]any)
+	slot, ok := desired["subagentModel"].(map[string]any)
+	if !ok {
+		t.Fatalf("desired.subagentModel missing: %#v", desired["subagentModel"])
+	}
+	if got := fmt.Sprint(slot["providerId"]); got != "agentteams-gateway" {
+		t.Fatalf("desired.subagentModel.providerId=%q", got)
+	}
+	if got := fmt.Sprint(slot["model"]); got != "qwen3.6-flash" {
+		t.Fatalf("desired.subagentModel.model=%q", got)
+	}
+}
+
+func TestDeployMemberRuntimeConfigOmitsSubagentModelWhenEmpty(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{OSS: store})
+
+	err := deployer.DeployMemberRuntimeConfig(ctx, MemberRuntimeConfigDeployRequest{
+		Name:        "worker-cr-a",
+		RuntimeName: "worker-a",
+		Runtime:     "qwenpaw",
+		Role:        "worker",
+		Spec:        v1beta1.WorkerSpec{Model: "qwen-plus"},
+	})
+	if err != nil {
+		t.Fatalf("DeployMemberRuntimeConfig failed: %v", err)
+	}
+
+	got, err := store.GetObject(ctx, "agents/worker-a/runtime/runtime.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("runtime.yaml is invalid YAML: %v\n%s", err, got)
+	}
+	desired := doc["desired"].(map[string]any)
+	if _, ok := desired["subagentModel"]; ok {
+		t.Fatalf("desired.subagentModel should be omitted when empty: %#v", desired["subagentModel"])
+	}
+}
+
 func TestDeployMemberRuntimeConfigRejectsCredentialBindingsWithoutWorkloadIdentity(t *testing.T) {
 	ctx := context.Background()
 	store := ossfake.NewMemory()

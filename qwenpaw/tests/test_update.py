@@ -53,6 +53,9 @@ class _FakeQwenPawApi:
         self.channel_events = []
         self.model_events = []
         self.active_model = None
+        self.subagent_model_events = []
+        self.subagent_model = None
+        self.subagent_model_reads = 0
         self.enabled_skills = []
         self.skill_events = []
 
@@ -99,6 +102,15 @@ class _FakeQwenPawApi:
         self.model_events.append((provider_id, model))
         self.active_model = {"provider_id": provider_id, "model": model, **kwargs}
         return {"active_llm": self.active_model}
+
+    def get_agent_subagent_model(self):
+        self.subagent_model_reads += 1
+        return dict(self.subagent_model) if self.subagent_model else None
+
+    def update_agent_model_settings(self, subagent_model):
+        self.subagent_model_events.append(dict(subagent_model) if subagent_model else None)
+        self.subagent_model = dict(subagent_model) if subagent_model else None
+        return {"subagent_model": self.subagent_model}
 
     def refresh_and_enable_skills(self, skill_names):
         self.enabled_skills = list(skill_names)
@@ -3135,3 +3147,114 @@ member:
 class _NoopPackageManager:
     def apply(self, _runtime_config: MemberRuntimeConfig):
         return None
+
+
+def _subagent_runtime_config(config: WorkerConfig, model: str | None) -> MemberRuntimeConfig:
+    desired: dict = {"skills": []}
+    if model is not None:
+        desired["subagentModel"] = {"providerId": "agentteams-gateway", "model": model}
+    return MemberRuntimeConfig(
+        path=config.runtime_config_path,
+        raw={
+            "metadata": {"generation": model or "none"},
+            "member": {"runtime": "qwenpaw"},
+            "desired": desired,
+        },
+    )
+
+
+def test_runtime_updater_applies_subagent_model_at_startup(tmp_path: Path) -> None:
+    """A declared subagent model must reach the runtime on the boot apply
+    (startup/recreation coverage — the controller hot apply is
+    annotation-gated and skips already-applied workers)."""
+    config = _config(tmp_path)
+    updater = _runtime_updater(config=config, package_manager=_NoopPackageManager())
+
+    updater.apply_once(runtime_config=_subagent_runtime_config(config, "qwen3.6-flash"))
+
+    assert updater.api_client.subagent_model_events == [
+        {"provider_id": "agentteams-gateway", "model": "qwen3.6-flash"}
+    ]
+
+
+def test_runtime_updater_subagent_model_reapplies_only_on_change(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    updater = _runtime_updater(config=config, package_manager=_NoopPackageManager())
+
+    updater.apply_once(runtime_config=_subagent_runtime_config(config, "qwen3.6-flash"))
+    updater.apply_once(runtime_config=_subagent_runtime_config(config, "qwen3.6-flash"))
+    updater.apply_once(runtime_config=_subagent_runtime_config(config, "deepseek-v4"))
+
+    assert updater.api_client.subagent_model_events == [
+        {"provider_id": "agentteams-gateway", "model": "qwen3.6-flash"},
+        {"provider_id": "agentteams-gateway", "model": "deepseek-v4"},
+    ]
+
+
+def test_runtime_updater_subagent_model_absent_is_noop(tmp_path: Path) -> None:
+    """An initially absent declaration is read-only: the updater checks the
+    runtime (compat — older runtimes and never-configured workers see no
+    write traffic) and issues nothing when no override is present."""
+    config = _config(tmp_path)
+    updater = _runtime_updater(config=config, package_manager=_NoopPackageManager())
+
+    updater.apply_once(runtime_config=_subagent_runtime_config(config, None))
+
+    assert updater.api_client.subagent_model_events == []
+    assert updater.api_client.subagent_model_reads >= 1
+
+
+def test_runtime_updater_clears_subagent_model_on_removal(tmp_path: Path) -> None:
+    """set → remove: clearing must not depend on the embedded-only controller
+    dial. After removing the declaration, the native updater issues an
+    explicit null clear (with readback via the API client)."""
+    config = _config(tmp_path)
+    updater = _runtime_updater(config=config, package_manager=_NoopPackageManager())
+
+    updater.apply_once(runtime_config=_subagent_runtime_config(config, "qwen3.6-flash"))
+    updater.apply_once(runtime_config=_subagent_runtime_config(config, None))
+
+    assert updater.api_client.subagent_model_events == [
+        {"provider_id": "agentteams-gateway", "model": "qwen3.6-flash"},
+        None,
+    ]
+    assert updater.api_client.subagent_model is None
+
+
+def test_runtime_updater_clears_stale_override_from_previous_boot(tmp_path: Path) -> None:
+    """The runtime already holds an override (applied before a restart, or
+    set outside this process) while the declaration is absent: the next
+    apply clears it — this is what makes removal independent of mode."""
+    config = _config(tmp_path)
+    updater = _runtime_updater(config=config, package_manager=_NoopPackageManager())
+    updater.api_client.subagent_model = {
+        "provider_id": "agentteams-gateway",
+        "model": "model-a",
+    }
+
+    updater.apply_once(runtime_config=_subagent_runtime_config(config, None))
+
+    assert updater.api_client.subagent_model_events == [None]
+    assert updater.api_client.subagent_model is None
+
+
+def test_runtime_updater_subagent_model_missing_endpoint_degrades(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Older QwenPaw (< 2.1.1) has no model-settings endpoint: the apply
+    must log and continue instead of failing the whole reconcile."""
+    from qwenpaw_worker.api import QwenPawApiError
+
+    config = _config(tmp_path)
+    updater = _runtime_updater(config=config, package_manager=_NoopPackageManager())
+
+    def _raise_404(_subagent_model):
+        raise QwenPawApiError("QwenPaw API PATCH /api/agents/default/model-settings failed with HTTP 404")
+
+    updater.api_client.update_agent_model_settings = _raise_404
+
+    with caplog.at_level(logging.WARNING):
+        updater.apply_once(runtime_config=_subagent_runtime_config(config, "qwen3.6-flash"))
+
+    assert any("subagent model endpoint unavailable" in rec.message for rec in caplog.records)

@@ -795,3 +795,16 @@ func equalStringSlices(a, b []string) bool {
 	}
 	return true
 }
+
+func TestResolveSubagentModel(t *testing.T) {
+	t.Parallel()
+	if got := resolveSubagentModel("qwen3.5-flash", "qwen3.5-plus"); got != "qwen3.5-flash" {
+		t.Errorf("explicit worker value: got %q, want qwen3.5-flash (must win)", got)
+	}
+	if got := resolveSubagentModel("", "qwen3.5-plus"); got != "qwen3.5-plus" {
+		t.Errorf("empty worker value: got %q, want team default qwen3.5-plus", got)
+	}
+	if got := resolveSubagentModel("", ""); got != "" {
+		t.Errorf("both empty: got %q, want empty", got)
+	}
+}

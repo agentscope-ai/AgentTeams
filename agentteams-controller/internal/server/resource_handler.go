@@ -1234,6 +1234,7 @@ func teamToResponse(t *v1beta1.Team) TeamResponse {
 		ReadyWorkers:   t.Status.ReadyWorkers,
 		TotalWorkers:   t.Status.TotalWorkers,
 		Message:        t.Status.Message,
+		SubagentModel:  t.Spec.SubagentModel,
 	}
 	if resp.Phase == "" {
 		resp.Phase = "Pending"

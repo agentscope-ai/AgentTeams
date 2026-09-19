@@ -152,6 +152,10 @@ type TeamResponse struct {
 	Message            string                       `json:"message,omitempty"`
 	WorkerNames        []string                     `json:"workerNames,omitempty"`
 	WorkerExposedPorts map[string][]ExposedPortInfo `json:"workerExposedPorts,omitempty"`
+	// SubagentModel exposes the team-wide default (Team.spec.subagentModel) so
+	// frontends can display the model members inherit; per-worker values stay
+	// on WorkerResponse.
+	SubagentModel string `json:"subagentModel,omitempty"`
 }
 
 type TeamListResponse struct {

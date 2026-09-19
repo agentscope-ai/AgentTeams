@@ -1072,6 +1072,32 @@ Cross-team access returns `404` uniformly (existence is not probed).
 `embedded` mode only — `503` in kube mode. Full contract:
 [design/worker-channels-api.md](../design/worker-channels-api.md).
 
+## Worker session visibility (chats proxy)
+
+A worker's conversation history (its qwenpaw *chats* — one per
+user/channel: Matrix room, QQ DM, console sessions) is readable through
+three read-only proxy routes: list the sessions, open a transcript, and
+check the run status of one session (`idle` / `running`).
+
+```bash
+# L2 human lists the sessions of a worker in their team
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/chats \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+# full transcript of one session
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/chats/{chat_id} \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+# run status of one session (QwenPaw >= 2.2.1; 404 on older builds = hide the indicator)
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/chats/{chat_id}/status \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+```
+
+Same scope model as the channel and checkpoint proxies: L1 any worker,
+L2 / team leader own-team workers, cross-team `404` (existence not
+probed), `embedded` mode only. Read-only — no create/archive/delete
+route. Transcripts are the worker's conversation context verbatim;
+access is bounded by the worker's team scope. Full contract:
+[design/worker-chats-api.md](../design/worker-chats-api.md).
+
 ## Communication Permission Matrix
 
 AgentTeams uses the `groupAllowFrom` field in `openclaw.json` to control which @mentions each Agent accepts, enabling fine-grained communication permissions.

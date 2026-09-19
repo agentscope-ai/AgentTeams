@@ -1040,6 +1040,24 @@ curl -s -X PUT http://127.0.0.1:8090/api/v1/workers/{name}/channels/qq \
 
 跨团队访问统一返回 `404`（不泄漏存在性）。仅 `embedded` 模式——kube 模式返回 `503`。完整契约见 [design/worker-channels-api.md](../../design/worker-channels-api.md)。
 
+## Worker 会话可见性（chats 代理）
+
+Worker 的会话历史（qwenpaw *chats*——每个用户/通道一条：Matrix 房间、QQ 私聊、console 会话）可通过三个只读代理路由读取：列出会话、打开完整消息记录、查看某会话的运行状态（`idle` / `running`）。
+
+```bash
+# L2 人类列出本团队某 Worker 的会话
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/chats \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+# 打开一条会话的完整消息记录
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/chats/{chat_id} \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+# 某会话的运行状态（QwenPaw >= 2.2.1；旧版本 404 = 前端隐藏该指示器）
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/chats/{chat_id}/status \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+```
+
+与频道/检查点代理相同的范围模型：L1 任意 Worker，L2 / 团队 Leader 本团队 Worker，跨团队 `404`（不泄漏存在性），仅 `embedded` 模式。只读——无创建/归档/删除路由。消息记录是 Worker 对话上下文的逐字内容，访问受该 Worker 的团队范围约束。完整契约见 [design/worker-chats-api.md](../../design/worker-chats-api.md)。
+
 ## 通信权限矩阵
 
 AgentTeams 通过 `openclaw.json` 中的 `groupAllowFrom` 字段控制每个 Agent 接受谁的 @mention，实现精细的通信权限控制。

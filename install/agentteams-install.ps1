@@ -354,7 +354,8 @@ $script:Messages = @{
     "llm.providers_title" = @{ zh = "可用 LLM 提供商:"; en = "Available LLM Providers:" }
     "llm.provider.alibaba" = @{ zh = "  1) 阿里云通义 Token 套餐  - 推荐中国用户使用"; en = "  1) Qwen Cloud  - International (OpenAI-compatible API, recommended)" }
     "llm.provider.openai_compat" = @{ zh = "  2) OpenAI 兼容 API  - 自定义 Base URL（OpenAI、DeepSeek 等）"; en = "  2) OpenAI-compatible API  - Custom Base URL (OpenAI, DeepSeek, etc.)" }
-    "llm.provider.select" = @{ zh = "选择提供商 [1/2]"; en = "Select provider [1/2]" }
+    "llm.provider.orcarouter" = @{ zh = "  3) OrcaRouter  - AI 网关（https://www.orcarouter.ai）"; en = "  3) OrcaRouter  - AI gateway (https://www.orcarouter.ai)" }
+    "llm.provider.select" = @{ zh = "选择提供商 [1/2/3]"; en = "Select provider [1/2/3]" }
     "llm.alibaba.models_title" = @{ zh = "选择阿里云模型接入方式:"; en = "Select Alibaba Cloud model access:" }
     "llm.alibaba.model.tokenplan" = @{ zh = "  1) 阿里云通义 Token 套餐  - 兼容模式（推荐）"; en = "  1) Alibaba Cloud Token Plan  - compatible-mode (recommended)" }
     "llm.alibaba.model.bailian" = @{ zh = "  2) 阿里云百炼  - DashScope 通用兼容接口"; en = "  2) Alibaba Cloud Bailian  - DashScope compatible mode" }
@@ -372,7 +373,7 @@ $script:Messages = @{
     "llm.provider.selected_codingplan_legacy" = @{ zh = "  提供商: 阿里云 Coding 套餐（coding.dashscope）"; en = "  Provider: Alibaba Cloud Coding Plan (coding.dashscope)" }
     "llm.provider.selected_qwen" = @{ zh = "  提供商: 阿里云百炼"; en = "  Provider: Alibaba Cloud Bailian" }
     "llm.provider.selected_openai" = @{ zh = "  提供商: {0}（OpenAI 兼容）"; en = "  Provider: {0} (OpenAI-compatible)" }
-    "llm.provider.invalid" = @{ zh = "无效选择: {0}（请输入 1 或 2）"; en = "Invalid choice: {0} (please enter 1 or 2)" }
+    "llm.provider.invalid" = @{ zh = "无效选择: {0}（请输入 1、2 或 3）"; en = "Invalid choice: {0} (please enter 1, 2, or 3)" }
     "llm.qwen.model_prompt" = @{ zh = "默认模型 ID"; en = "Default Model ID" }
     "llm.openai.base_url_prompt" = @{ zh = "Base URL"; en = "Base URL" }
     "llm.openai.model_prompt" = @{ zh = "默认模型 ID"; en = "Default Model ID" }
@@ -1381,7 +1382,8 @@ function New-OpenAICompatProvider {
     param(
         [string]$BaseUrl,
         [string]$ApiKey,
-        [int]$ConsolePort = 18001
+        [int]$ConsolePort = 18001,
+        [string]$ProviderName = "openai-compat"
     )
 
     if (-not $BaseUrl -or -not $ApiKey) {
@@ -1413,7 +1415,7 @@ function New-OpenAICompatProvider {
     Write-Log (Get-Msg "install.openai_compat.port" -f $port)
     Write-Log (Get-Msg "install.openai_compat.protocol" -f $protocol)
 
-    $serviceName = "openai-compat"
+    $serviceName = $ProviderName
 
     # Create DNS service source
     $serviceBody = @{
@@ -1437,7 +1439,7 @@ function New-OpenAICompatProvider {
     # Create AI provider
     $providerBody = @{
         type = "openai"
-        name = "openai-compat"
+        name = $ProviderName
         tokens = @($ApiKey)
         version = 0
         protocol = "openai/v1"
@@ -1813,11 +1815,16 @@ function Step-Llm {
     Write-Host (Get-Msg "llm.providers_title")
     Write-Host (Get-Msg "llm.provider.alibaba")
     Write-Host (Get-Msg "llm.provider.openai_compat")
+    Write-Host (Get-Msg "llm.provider.orcarouter")
     Write-Host ""
 
     # If upgrade mode with loaded provider, show current as default
     if ($script:AGENTTEAMS_UPGRADE -and $script:config.LLM_PROVIDER) {
-        $defaultProvider = if ($script:config.LLM_PROVIDER -eq "openai-compat") { "2" } else { "1" }
+        $defaultProvider = switch ($script:config.LLM_PROVIDER) {
+            "openai-compat" { "2" }
+            "orcarouter"    { "3" }
+            default         { "1" }
+        }
         $providerChoice = Read-Host "$(Get-Msg 'llm.provider.select') [${defaultProvider}]"
         $providerChoice = if ($providerChoice) { $providerChoice } else { $defaultProvider }
     } elseif ($script:AGENTTEAMS_QUICKSTART) {
@@ -2026,6 +2033,38 @@ function Step-Llm {
                 }
             }
             Write-Log (Get-Msg "llm.openai.base_url_label" -f $script:config.OPENAI_BASE_URL)
+            Write-Log (Get-Msg "llm.model.label" -f $script:config.DEFAULT_MODEL)
+            Request-CustomModelParams $script:config.DEFAULT_MODEL
+            if ($script:StepResult -eq "back") { return }
+            Write-Log ""
+            $script:config.LLM_API_KEY = Read-Prompt -VarName "AGENTTEAMS_LLM_API_KEY" -PromptText (Get-Msg "llm.apikey_prompt") -Secret
+            if ($script:StepResult -eq "back") { return }
+            Test-LlmConnectivity -BaseUrl $script:config.OPENAI_BASE_URL -ApiKey $script:config.LLM_API_KEY -Model $script:config.DEFAULT_MODEL
+            if ($script:StepResult -eq "back") { return }
+        }
+        "^(3|orcarouter)$" {
+            $script:config.LLM_PROVIDER = "orcarouter"
+            $script:config.OPENAI_BASE_URL = "https://api.orcarouter.ai/v1"
+            Write-Log (Get-Msg "llm.provider.selected_openai" -f "OrcaRouter")
+            Write-Log (Get-Msg "llm.openai.base_url_label" -f $script:config.OPENAI_BASE_URL)
+            if ($script:AGENTTEAMS_UPGRADE -and $env:AGENTTEAMS_UPGRADE_KEEP_ALL -eq "1") {
+                Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "llm.openai.model_prompt"), $script:config.DEFAULT_MODEL)
+            } else {
+                $currentModel = $script:config.DEFAULT_MODEL
+                if ($currentModel) {
+                    $modelInput = Read-Host "$(Get-Msg 'llm.openai.model_prompt') [${currentModel}]"
+                } else {
+                    $modelInput = Read-Host (Get-Msg 'llm.openai.model_prompt')
+                }
+                if ($modelInput -eq "b") { $script:StepResult = "back"; return }
+                if ($modelInput) {
+                    $script:config.DEFAULT_MODEL = $modelInput
+                } elseif ($currentModel) {
+                    $script:config.DEFAULT_MODEL = $currentModel
+                } else {
+                    $script:config.DEFAULT_MODEL = "orcarouter/auto"
+                }
+            }
             Write-Log (Get-Msg "llm.model.label" -f $script:config.DEFAULT_MODEL)
             Request-CustomModelParams $script:config.DEFAULT_MODEL
             if ($script:StepResult -eq "back") { return }
@@ -3412,6 +3451,8 @@ function Install-Manager {
     # Create OpenAI-compatible provider if needed
     if ($config.LLM_PROVIDER -eq "openai-compat") {
         New-OpenAICompatProvider -BaseUrl $config.OPENAI_BASE_URL -ApiKey $config.LLM_API_KEY -ConsolePort ([int]$config.PORT_CONSOLE)
+    } elseif ($config.LLM_PROVIDER -eq "orcarouter") {
+        New-OpenAICompatProvider -BaseUrl $config.OPENAI_BASE_URL -ApiKey $config.LLM_API_KEY -ConsolePort ([int]$config.PORT_CONSOLE) -ProviderName "orcarouter"
     }
 
     # Print success message

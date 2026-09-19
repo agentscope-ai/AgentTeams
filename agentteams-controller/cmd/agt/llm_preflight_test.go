@@ -40,6 +40,20 @@ func TestResolveLLMPreflightConfigDefaultsQwen(t *testing.T) {
 	}
 }
 
+func TestResolveLLMPreflightConfigDefaultsOrcaRouter(t *testing.T) {
+	cfg, err := resolveLLMPreflightConfig(llmPreflightOptions{
+		Provider: "orcarouter",
+		APIKey:   "sk-orca-test",
+		Model:    "orcarouter/auto",
+	})
+	if err != nil {
+		t.Fatalf("resolveLLMPreflightConfig: %v", err)
+	}
+	if cfg.BaseURL != "https://api.orcarouter.ai/v1" {
+		t.Fatalf("BaseURL=%q, want OrcaRouter gateway endpoint", cfg.BaseURL)
+	}
+}
+
 func TestResolveLLMPreflightConfigCustomProviderRequiresBaseURL(t *testing.T) {
 	_, err := resolveLLMPreflightConfig(llmPreflightOptions{
 		Provider: "custom-vendor",

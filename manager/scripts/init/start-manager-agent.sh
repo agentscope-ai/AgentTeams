@@ -430,7 +430,8 @@ if [ -n "${_HIGRESS_CONSOLE_URL}" ]; then
         _LLM_API_URL="${AGENTTEAMS_LLM_API_URL:-}"
         if [ -z "${_LLM_API_URL}" ]; then
             case "${_LLM_PROVIDER}" in
-                qwen) _LLM_API_URL="https://dashscope.aliyuncs.com/compatible-mode/v1" ;;
+                qwen)      _LLM_API_URL="https://dashscope.aliyuncs.com/compatible-mode/v1" ;;
+                orcarouter) _LLM_API_URL="https://api.orcarouter.ai/v1" ;;
             esac
         fi
         # 4. LLM Provider type-specific config
@@ -438,6 +439,11 @@ if [ -n "${_HIGRESS_CONSOLE_URL}" ]; then
             qwen)
                 _k8s_higress_api POST /v1/ai/providers "Creating LLM provider (qwen)" \
                     '{"type":"qwen","name":"qwen","tokens":["'"${AGENTTEAMS_LLM_API_KEY}"'"],"protocol":"openai/v1","tokenFailoverConfig":{"enabled":false},"rawConfigs":{"qwenEnableSearch":false,"qwenEnableCompatible":true,"qwenFileIds":[],"agentteamsMode":true}}'
+                ;;
+            orcarouter)
+                # OrcaRouter: OpenAI-compatible gateway (https://www.orcarouter.ai)
+                _k8s_higress_api POST /v1/ai/providers "Creating LLM provider (orcarouter)" \
+                    '{"type":"openai","name":"orcarouter","tokens":["'"${AGENTTEAMS_LLM_API_KEY}"'"],"version":0,"protocol":"openai/v1","tokenFailoverConfig":{"enabled":false},"rawConfigs":{"openaiCustomUrl":"https://api.orcarouter.ai/v1","openaiCustomServiceName":"orcarouter.dns","openaiCustomServicePort":443,"agentteamsMode":true}}'
                 ;;
             *)
                 _BODY='{"name":"'"${_LLM_PROVIDER}"'","type":"openai","tokens":["'"${AGENTTEAMS_LLM_API_KEY}"'"],"modelMapping":{},"protocol":"openai/v1","rawConfigs":{"agentteamsMode":true}}'

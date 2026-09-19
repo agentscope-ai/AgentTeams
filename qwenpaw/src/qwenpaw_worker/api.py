@@ -577,7 +577,9 @@ class QwenPawApiClient:
         self,
         agent_id: str,
         *,
-        retries: int = 120,
+        # 409 = agent still loading (startup gate); loads finish in seconds
+        # and the caller already downgrades failures to a warning.
+        retries: int = 30,
         retry_delay: float = 1.0,
     ) -> bool:
         agents = self._request("GET", "/api/agents").get("agents") or []

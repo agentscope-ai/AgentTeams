@@ -239,6 +239,43 @@ func TestLifecycleEnsureReadyWithoutBackendKeepsSelfReport(t *testing.T) {
 	}
 }
 
+// A configured backend that is unreachable is not the same as no backend at
+// all. Detection returns nil for both, but here the ready flag may be stale --
+// the daemon went away after the worker last reported in -- so ensure-ready
+// must fail closed instead of answering Ready.
+func TestLifecycleEnsureReadyWithUnavailableBackendIsNotReady(t *testing.T) {
+	scheme := newLifecycleTestScheme(t)
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"},
+		Status:     v1beta1.WorkerStatus{Phase: "Running"},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.Worker{}).
+		WithObjects(worker).
+		Build()
+	backendStub := &stubWorkerBackend{unavailable: true, status: backend.StatusRunning}
+	handler := NewLifecycleHandler(k8sClient, backend.NewRegistry([]backend.WorkerBackend{backendStub}), "default")
+	handler.setReady("alpha-dev", true)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers/alpha-dev/ensure-ready", nil)
+	req.SetPathValue("name", "alpha-dev")
+	rec := httptest.NewRecorder()
+
+	handler.EnsureReady(rec, req)
+
+	var resp WorkerLifecycleResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Phase != "Running" {
+		t.Fatalf("expected response phase Running, got %q", resp.Phase)
+	}
+	if backendStub.statusCalls != 0 {
+		t.Fatalf("expected no Status call on an unavailable backend, got %d", backendStub.statusCalls)
+	}
+}
+
 func TestLifecycleWorkerStatusIncludesTeamMemberInfo(t *testing.T) {
 	scheme := newLifecycleTestScheme(t)
 	worker := &v1beta1.Worker{
@@ -315,16 +352,18 @@ func newLifecycleTestScheme(t *testing.T) *runtime.Scheme {
 }
 
 type stubWorkerBackend struct {
-	status     backend.WorkerStatus
-	statusErr  error
-	message    string
-	startCalls int
-	stopCalls  int
+	status      backend.WorkerStatus
+	statusErr   error
+	message     string
+	startCalls  int
+	stopCalls   int
+	unavailable bool
+	statusCalls int
 }
 
 func (s *stubWorkerBackend) Name() string                   { return "stub" }
 func (s *stubWorkerBackend) DeploymentMode() string         { return backend.DeployLocal }
-func (s *stubWorkerBackend) Available(context.Context) bool { return true }
+func (s *stubWorkerBackend) Available(context.Context) bool { return !s.unavailable }
 func (s *stubWorkerBackend) NeedsCredentialInjection() bool { return false }
 func (s *stubWorkerBackend) Create(context.Context, backend.CreateRequest) (*backend.WorkerResult, error) {
 	return nil, nil
@@ -339,6 +378,7 @@ func (s *stubWorkerBackend) Stop(_ context.Context, _ string) error {
 	return nil
 }
 func (s *stubWorkerBackend) Status(context.Context, string) (*backend.WorkerResult, error) {
+	s.statusCalls++
 	if s.statusErr != nil {
 		return nil, s.statusErr
 	}

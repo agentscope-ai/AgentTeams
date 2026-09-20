@@ -130,9 +130,14 @@ func (h *LifecycleHandler) EnsureReady(w http.ResponseWriter, r *http.Request) {
 	needsStart := worker.Status.Phase == "Stopped" || worker.Status.Phase == "Sleeping"
 	// backendRunning gates the "Ready" answer. The CR phase is written asynchronously
 	// and the ready map only records the last self-report, so neither notices a
-	// container that was stopped or removed afterwards: ask the backend. With no
-	// backend detected there is nothing to ask, and the self-report stays the signal.
-	backendRunning := b == nil
+	// container that was stopped or removed afterwards: ask the backend.
+	//
+	// Detection returning nil means one of two things. With nothing registered
+	// there is no backend to ask and the self-report stays the signal. With a
+	// backend registered, nil instead means it is configured but unreachable --
+	// a missing Docker socket, or a daemon ping that failed or timed out -- so
+	// fail closed rather than trusting a possibly stale ready flag.
+	backendRunning := b == nil && !h.registry.HasWorkerBackends()
 	if worker.Status.Phase == "Running" && b != nil {
 		result, err := b.Status(r.Context(), name)
 		switch {

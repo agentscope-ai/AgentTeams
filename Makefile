@@ -296,7 +296,7 @@ endif
 
 push-agentteams-controller: buildx-setup ## Build + push multi-arch agentteams-controller image
 	@echo "==> Building + pushing multi-arch agentteams-controller: $(CONTROLLER_TAG) [$(MULTIARCH_PLATFORMS)]"
-	@rm -rf ./agentteams-controller/agent && cp -r ./manager/agent ./agentteams-controller/agent
+	@rm -rf ./agentteams-controller/agent ./agentteams-controller/plugins && cp -r ./manager/agent ./agentteams-controller/agent && cp -r ./plugins ./agentteams-controller/plugins
 ifeq ($(IS_PODMAN),1)
 	-podman manifest rm $(CONTROLLER_TAG) 2>/dev/null
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
@@ -319,7 +319,7 @@ else
 		--push \
 		./agentteams-controller/
 endif
-	@rm -rf ./agentteams-controller/agent
+	@rm -rf ./agentteams-controller/agent ./agentteams-controller/plugins
 
 push-embedded: push-agentteams-controller buildx-setup ## Build + push multi-arch embedded all-in-one image
 	@echo "==> Building + pushing multi-arch agentteams-embedded: $(EMBEDDED_TAG) [$(MULTIARCH_PLATFORMS)]"

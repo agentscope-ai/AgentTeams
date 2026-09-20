@@ -134,7 +134,8 @@ YAMLEOF
 " 2>/dev/null
 
 APPLY_OUTPUT=$(exec_in_agent agt apply -f "/tmp/agentteams-test-${TEST_TEAM}.yaml" 2>&1)
-if echo "${APPLY_OUTPUT}" | grep -q "created\|configured"; then
+APPLY_TEAM_EXIT=$?
+if [ "${APPLY_TEAM_EXIT}" -eq 0 ] && echo "${APPLY_OUTPUT}" | grep -q "created\|configured"; then
     log_pass "Team YAML applied via agt CLI"
 else
     log_fail "Team YAML apply failed: ${APPLY_OUTPUT}"

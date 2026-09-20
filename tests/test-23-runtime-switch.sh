@@ -248,6 +248,8 @@ if minio_file_exists "agents/${TEST_WORKER}/.copaw/workspaces/default/runtime-sw
     log_pass "CoPaw runtime state persisted to MinIO"
 else
     log_fail "CoPaw runtime state was not persisted to MinIO"
+    dump_diagnostics worker "${TEST_WORKER}"
+    test_teardown "23-runtime-switch"; test_summary; exit 1
 fi
 
 # ============================================================

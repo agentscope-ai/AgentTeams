@@ -830,6 +830,7 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
     # File extensions to skip (transient runtime files)
     _EXCLUDE_EXTENSIONS = {".lock"}
     pushed: list[str] = []
+    failed = 0
     local_dir = sync.local_dir
     if not local_dir.exists():
         return pushed
@@ -885,9 +886,13 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
             _mc("cp", str(path), dest, check=True)
             pushed.append(str(rel))
             logger.debug("Pushed %s -> %s", rel, dest)
-        except Exception as exc:
-            logger.debug("push_local: failed for %s: %s", rel, exc)
+        except Exception:
+            failed += 1
+            logger.warning("push_local: upload failed for %s", rel)
 
+    if failed:
+        # Keep the previous scan boundary so unchanged files are retried.
+        raise RuntimeError(f"Failed to persist {failed} runtime file(s)")
     return pushed
 
 

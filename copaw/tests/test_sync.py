@@ -538,3 +538,35 @@ async def test_push_loop_reports_bridge_failure_as_bridge_health(tmp_path, monke
     assert message == "runtime-to-standard bridge failed: runtime bridge failed"
     assert details["operation"] == "bridge_runtime_to_standard"
     assert details["error_type"] == "BridgeRuntimeError"
+
+@pytest.mark.anyio
+async def test_push_loop_retries_failed_upload_without_local_file_change(tmp_path, monkeypatch):
+    from copaw_worker import sync as sync_module
+
+    sync = _sync(tmp_path)
+    path = sync.local_dir / '.copaw.secret/runtime-switch-secret.txt'
+    path.parent.mkdir(parents=True)
+    path.write_text('test state')
+    monkeypatch.setattr(sync, '_ensure_alias', lambda: None)
+    monkeypatch.setattr(sync, '_cat', lambda _key: None)
+    attempts = []
+
+    def fake_mc(*args, **kwargs):
+        attempts.append(args)
+        if len(attempts) == 1:
+            raise RuntimeError('temporary storage failure')
+        return subprocess.CompletedProcess(args, 0, stdout='', stderr='')
+
+    monkeypatch.setattr(sync_module, '_mc', fake_mc)
+    iterations = 0
+
+    async def next_iteration(_delay):
+        nonlocal iterations
+        iterations += 1
+        if iterations > 2:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(sync_module.asyncio, 'sleep', next_iteration)
+    with pytest.raises(asyncio.CancelledError):
+        await sync_module.push_loop(sync)
+    assert len(attempts) == 2

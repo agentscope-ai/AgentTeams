@@ -21,6 +21,8 @@ on:
       - 'tests/check-installer-env-data-dir-readback.sh'
       - 'tests/check-installer-embedded-latest-pull.sh'
       - 'tests/check-installer-auto-version-images.sh'
+      - 'tests/check-teamharness-acceptance-observer.sh'
+      - 'tests/test-26-qwenpaw-teamharness-plugin-mode.sh'
       - 'tests/check-installer-qwenpaw-runtime-options.sh'
       - 'tests/check-installer-deepseek-harness-runtime-options.sh'
       - 'tests/check-powershell-deepseek-harness-latest.ps1'
@@ -52,6 +54,9 @@ jobs:
 
       - name: Check automatic installer version and platform selection
         run: bash tests/check-installer-auto-version-images.sh
+
+      - name: Check TeamHarness acceptance observer
+        run: bash tests/check-teamharness-acceptance-observer.sh
 
       - name: Check image build and release workflows
         run: |

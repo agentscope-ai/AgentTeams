@@ -145,6 +145,13 @@ RUN find /opt/agentteams/scripts -name '*.sh' -exec chmod +x {} + && \
 ENV HOME=/root/manager-workspace
 RUN mkdir -p /root/manager-workspace /root/agentteams-fs /root/.openclaw
 
+# QwenPaw 2.2.1 reload must not overwrite a concurrent policy update.
+COPY qwenpaw/scripts/patch-qwenpaw-driver-policy-reload.py /tmp/patch-qwenpaw-driver-policy-reload.py
+COPY qwenpaw/tests/check_driver_policy_reload.py /tmp/check_driver_policy_reload.py
+RUN /opt/venv/qwenpaw/bin/python /tmp/patch-qwenpaw-driver-policy-reload.py && \
+    /opt/venv/qwenpaw/bin/python /tmp/check_driver_policy_reload.py && \
+    rm /tmp/patch-qwenpaw-driver-policy-reload.py /tmp/check_driver_policy_reload.py
+
 WORKDIR /root/manager-workspace
 
 # start-manager-agent.sh branches on AGENTTEAMS_RUNTIME and AGENTTEAMS_MANAGER_RUNTIME

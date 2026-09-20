@@ -120,6 +120,13 @@ RUN chmod +x /opt/agentteams/scripts/lib/mc-wrapper.sh && \
     ln -sf /opt/agentteams/scripts/qwenpaw-teamharness-plugin-reload.sh /usr/local/bin/qwenpaw-teamharness-plugin-reload && \
     mkdir -p /root/agentteams-fs/agents
 
+# QwenPaw 2.2.1 reload must not overwrite a concurrent policy update.
+COPY qwenpaw/scripts/patch-qwenpaw-driver-policy-reload.py /tmp/patch-qwenpaw-driver-policy-reload.py
+COPY qwenpaw/tests/check_driver_policy_reload.py /tmp/check_driver_policy_reload.py
+RUN /opt/venv/qwenpaw/bin/python /tmp/patch-qwenpaw-driver-policy-reload.py && \
+    /opt/venv/qwenpaw/bin/python /tmp/check_driver_policy_reload.py && \
+    rm /tmp/patch-qwenpaw-driver-policy-reload.py /tmp/check_driver_policy_reload.py
+
 WORKDIR /root/agentteams-fs/agents
 
 ENTRYPOINT ["/opt/agentteams/scripts/qwenpaw-worker-entrypoint.sh"]

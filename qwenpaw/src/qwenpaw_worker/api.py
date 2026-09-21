@@ -78,6 +78,15 @@ class QwenPawApiClient:
                 f"expected QwenPaw {expected}, API reported {actual}",
             )
 
+    def require_agent_running(self, agent_id: str) -> None:
+        agents = self._request("GET", "/api/agents").get("agents") or []
+        agent = next((item for item in agents if item.get("id") == agent_id), {})
+        status = agent.get("startup_status")
+        if status != "running":
+            raise QwenPawApiError(
+                f"QwenPaw agent {agent_id} is not running: {status or 'missing'}",
+            )
+
     def get_channel(self, channel: str) -> dict[str, Any]:
         try:
             return self._request(

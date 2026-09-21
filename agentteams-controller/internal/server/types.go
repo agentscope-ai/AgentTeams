@@ -8,6 +8,7 @@ import (
 // --- Worker API types ---
 
 type CreateWorkerRequest struct {
+	Env           map[string]string                  `json:"env,omitempty"`
 	Name          string                             `json:"name"`
 	WorkerName    string                             `json:"workerName,omitempty"`
 	Model         string                             `json:"model,omitempty"`
@@ -35,8 +36,9 @@ type CreateWorkerRequest struct {
 }
 
 type UpdateWorkerRequest struct {
-	WorkerName string `json:"workerName,omitempty"`
-	Model      string `json:"model,omitempty"`
+	Env        map[string]string `json:"env,omitempty"`
+	WorkerName string            `json:"workerName,omitempty"`
+	Model      string            `json:"model,omitempty"`
 	// SubagentModel is a pointer so callers can distinguish omission (nil:
 	// keep the current value) from an explicit clear ("" — the worker
 	// returns to inheriting the team default / the runtime default).
@@ -64,12 +66,14 @@ type UpdateWorkerRequest struct {
 }
 
 type WorkerResponse struct {
-	Name             string `json:"name"`
-	WorkerName       string `json:"workerName,omitempty"`
-	Phase            string `json:"phase"`
-	ContainerManaged bool   `json:"containerManaged"`
-	State            string `json:"state,omitempty"` // desired lifecycle state
-	Model            string `json:"model,omitempty"`
+	EnvEditable      bool              `json:"envEditable"`
+	Env              map[string]string `json:"env,omitempty"`
+	Name             string            `json:"name"`
+	WorkerName       string            `json:"workerName,omitempty"`
+	Phase            string            `json:"phase"`
+	ContainerManaged bool              `json:"containerManaged"`
+	State            string            `json:"state,omitempty"` // desired lifecycle state
+	Model            string            `json:"model,omitempty"`
 	// SubagentModel is the model used by spawned subagents ("" = inherit
 	// the worker's primary model). See WorkerSpec.SubagentModel.
 	SubagentModel  string                     `json:"subagentModel,omitempty"`

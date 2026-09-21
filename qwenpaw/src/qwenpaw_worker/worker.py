@@ -959,6 +959,11 @@ class Worker:
                 )
             try:
                 await asyncio.to_thread(self.api_client.require_version, "2.2.1")
+                # Version readiness precedes the agent's MCP migration. Wait
+                # before changing agent.json to avoid invalidating its snapshot.
+                await asyncio.to_thread(
+                    self.api_client.require_agent_running, DEFAULT_AGENT_ID,
+                )
                 return
             except Exception as exc:
                 last_error = exc

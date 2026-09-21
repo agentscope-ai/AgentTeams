@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "copaw-worker"
-version = "1.0.3"
+version = "1.0.4"
 description = "Lightweight AgentTeams Worker runtime based on CoPaw"
 readme = "README.md"
 license = { text = "Apache-2.0" }

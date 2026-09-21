@@ -1696,3 +1696,21 @@ async def test_heartbeat_probe_loop_delegates_to_heartbeat_module(
     assert data["status"] == "ready"
     assert data["message"] == "qwenpaw ready"
     assert calls == [("worker-a-cr", config.console_port)]
+
+
+def test_api_readiness_waits_for_default_agent_startup(tmp_path, monkeypatch):
+    worker = Worker(_config(tmp_path))
+    states = iter(['pending', 'starting', 'running'])
+    observed = []
+
+    def request(method, path, *args):
+        if path == '/api/version':
+            return {'version': '2.2.1'}
+        assert (method, path) == ('GET', '/api/agents')
+        state = next(states)
+        observed.append(state)
+        return {'agents': [{'id': 'default', 'startup_status': state}]}
+
+    monkeypatch.setattr(worker.api_client, '_request', request)
+    asyncio.run(worker._wait_for_qwenpaw_api())
+    assert observed == ['pending', 'starting', 'running']

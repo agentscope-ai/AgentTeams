@@ -717,3 +717,17 @@ def test_configure_active_model_delete_failure_keeps_entry_and_raises(api_url):
     # Untouched: still the original stored state.
     assert entries[0]["supports_image"] is False
     assert _ApiHandler.model_deletes == 0
+
+
+@pytest.mark.parametrize("status", [None, "pending", "starting", "failed", "disabled"])
+def test_require_agent_running_rejects_unready_agent(api_url, status):
+    client = QwenPawApiClient(api_url)
+    _ApiHandler.agents = [{"id": "default", "startup_status": status}]
+    with pytest.raises(QwenPawApiError, match="is not running"):
+        client.require_agent_running("default")
+
+
+def test_require_agent_running_accepts_running_agent(api_url):
+    client = QwenPawApiClient(api_url)
+    _ApiHandler.agents = [{"id": "default", "startup_status": "running"}]
+    client.require_agent_running("default")

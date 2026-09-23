@@ -14,7 +14,7 @@ bash /opt/agentteams/agent/skills/mcp-server-management/scripts/setup-mcp-server
 | `server-name` | yes | Without `mcp-` prefix (e.g., `github`, `weather`) |
 | `credential-value` | yes | The credential (GitHub PAT, API key, etc.) |
 | `--yaml-file` | no | User-provided YAML config. Required when no built-in template exists |
-| `--api-domain` | no | Explicit API domain. Required when YAML URLs use variables instead of literal domains |
+| `--api-domain` | no | Use `[http://\|https://]host[:port]`. Required when your YAML URLs use variables instead of literal domains |
 
 ### Examples
 
@@ -26,6 +26,26 @@ bash .../setup-mcp-server.sh github "ghp_xxxxxxxxxxxx"
 bash .../setup-mcp-server.sh weather "my-key" \
     --yaml-file /tmp/mcp-weather.yaml --api-domain "api.weather.com"
 ```
+
+### Docker-internal HTTP services
+
+Use an explicit HTTP scheme and your service's listening port:
+
+```bash
+bash .../setup-mcp-server.sh security-tool "your-key" \
+    --yaml-file /tmp/mcp-security-tool.yaml \
+    --api-domain "http://security-tool.example.local:8080"
+```
+
+Attach your tool container to `agentteams-net` with a dotted network alias such as
+`security-tool.example.local`; Higress DNS service-source validation rejects
+single-label names. Use the same reachable address in your YAML request URLs.
+Do not include a path, query, or credentials in `--api-domain`.
+
+When you omit the scheme, you retain the existing HTTPS default: `host` uses port
+443 and `host:8080` uses HTTPS on port 8080. Use `http://host` for HTTP on port 80,
+or specify the port explicitly. When you omit `--api-domain`, you continue to use
+the scheme and port extracted from the first YAML request URL.
 
 ### What the script does
 

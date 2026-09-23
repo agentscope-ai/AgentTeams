@@ -20,7 +20,8 @@
 # Options:
 #   --yaml-file <path>      Path to a user-provided YAML config file. Required when no
 #                           built-in template exists for the given server-name.
-#   --api-domain <domain>   Explicit API domain for DNS service source (e.g., "api.github.com").
+#   --api-domain <domain>   Explicit [http[s]://]host[:port] for your DNS service source.
+#                           Bare hosts default to HTTPS/443; HTTP defaults to port 80.
 #                           If provided, skips auto-extraction from YAML template.
 #                           Required when the template URLs use variables instead of literal domains.
 #
@@ -75,7 +76,7 @@ if [ -z "${SERVER_NAME}" ] || [ -z "${CREDENTIAL_VALUE}" ]; then
     echo "  server-name       e.g., github, weather"
     echo "  credential-value  e.g., ghp_xxx, your-api-key"
     echo "  --yaml-file       Path to user-provided YAML config (required if no built-in template)"
-    echo "  --api-domain      Explicit API domain (e.g., api.github.com)"
+    echo "  --api-domain      API address (e.g., http://tools.example.local:8080)"
     exit 1
 fi
 
@@ -194,14 +195,36 @@ URL_PROTO="https"
 URL_PORT=443
 
 if [ -n "${EXPLICIT_API_DOMAIN}" ]; then
-    # Use explicit domain provided via --api-domain
     API_DOMAIN="${EXPLICIT_API_DOMAIN}"
-    # Handle explicit port in domain (e.g., api.example.com:8443)
-    if echo "${API_DOMAIN}" | grep -q ':'; then
+    case "${API_DOMAIN}" in
+        http://*)
+            URL_PROTO="http"
+            URL_PORT=80
+            API_DOMAIN="${API_DOMAIN#http://}"
+            ;;
+        https://*)
+            API_DOMAIN="${API_DOMAIN#https://}"
+            ;;
+    esac
+    # Accept only a DNS host and optional numeric port, not a URL path or credentials.
+    if [[ ! "${API_DOMAIN}" =~ ^[a-zA-Z0-9.-]+(:[0-9]{1,5})?$ ]]; then
+        log "ERROR: --api-domain must be [http://|https://]host[:port], without a path, query, or credentials."
+        exit 1
+    fi
+    if [[ "${API_DOMAIN}" == *:* ]]; then
         URL_PORT="${API_DOMAIN##*:}"
+        URL_PORT=$((10#${URL_PORT}))
         API_DOMAIN="${API_DOMAIN%:*}"
     fi
-    log "  Using explicit API domain: ${API_DOMAIN}:${URL_PORT}"
+    if [ "${URL_PORT}" -lt 1 ] || [ "${URL_PORT}" -gt 65535 ]; then
+        log "ERROR: --api-domain port must be between 1 and 65535."
+        exit 1
+    fi
+    if [[ "${API_DOMAIN}" != *.* ]]; then
+        log "ERROR: Higress DNS service sources require a dotted hostname. Give your Docker service a network alias such as tools.example.local."
+        exit 1
+    fi
+    log "  Using explicit API address: ${URL_PROTO}://${API_DOMAIN}:${URL_PORT}"
 else
     # Auto-extract from the first requestTemplate URL in the YAML
     # e.g., "https://api.github.com/repos/..." → domain=api.github.com

@@ -388,7 +388,9 @@ $script:Messages = @{
 
     # --- Admin Credentials ---
     "admin.title" = @{ zh = "--- 管理员凭据 ---"; en = "--- Admin Credentials ---" }
-    "admin.username_prompt" = @{ zh = "管理员用户名"; en = "Admin Username" }
+    "admin.username_prompt" = @{ zh = "管理员用户名（至少 3 个字符）"; en = "Admin Username (min 3 characters)" }
+    "admin.username_too_short" = @{ zh = "管理员用户名至少需要 3 个字符（MinIO 要求）。当前长度: {0}"; en = "Admin username must be at least 3 characters (MinIO requirement). Current length: {0}" }
+    "admin.minio_username_too_short" = @{ zh = "AGENTTEAMS_MINIO_USER 至少需要 3 个字符。当前长度: {0}"; en = "AGENTTEAMS_MINIO_USER must be at least 3 characters. Current length: {0}" }
     "admin.password_prompt" = @{ zh = "管理员密码（留空自动生成，最少 8 位）"; en = "Admin Password (leave empty to auto-generate, min 8 chars)" }
     "admin.password_generated" = @{ zh = "  已自动生成管理员密码"; en = "  Auto-generated admin password" }
     "admin.password_too_short" = @{ zh = "管理员密码至少需要 8 个字符（MinIO 要求）。当前长度: {0}"; en = "Admin password must be at least 8 characters (MinIO requirement). Current length: {0}" }
@@ -2112,9 +2114,19 @@ function Step-Llm {
 
 function Step-Admin {
     Write-Log (Get-Msg "admin.title")
-    $script:config.ADMIN_USER = Read-Prompt -VarName "AGENTTEAMS_ADMIN_USER" -PromptText (Get-Msg "admin.username_prompt") -Default "admin"
-    if ($script:StepResult -eq "back") { return }
-    $script:config.ADMIN_USER = $script:config.ADMIN_USER.ToLowerInvariant()
+    while ($true) {
+        $script:config.ADMIN_USER = Read-Prompt -VarName "AGENTTEAMS_ADMIN_USER" -PromptText (Get-Msg "admin.username_prompt") -Default "admin"
+        if ($script:StepResult -eq "back") { return }
+        $script:config.ADMIN_USER = $script:config.ADMIN_USER.ToLowerInvariant()
+        if ($script:config.ADMIN_USER.Length -ge 3) {
+            break
+        }
+        if ($script:AGENTTEAMS_NON_INTERACTIVE) {
+            Write-Error (Get-Msg "admin.username_too_short" -f $script:config.ADMIN_USER.Length)
+        }
+        Write-Host "$($script:ESC)[31m[AgentTeams ERROR]$($script:ESC)[0m $(Get-Msg "admin.username_too_short" -f $script:config.ADMIN_USER.Length)"
+        [Environment]::SetEnvironmentVariable("AGENTTEAMS_ADMIN_USER", $null, "Process")
+    }
 
     # Pre-set via env var: validate; non-interactive fails fast,
     # interactive warns and falls through to the retry prompt.
@@ -2765,6 +2777,9 @@ function Install-Manager {
     $config.MANAGER_PASSWORD = if ($env:AGENTTEAMS_MANAGER_PASSWORD) { $env:AGENTTEAMS_MANAGER_PASSWORD } else { New-RandomKey }
     $config.REGISTRATION_TOKEN = if ($env:AGENTTEAMS_REGISTRATION_TOKEN) { $env:AGENTTEAMS_REGISTRATION_TOKEN } else { New-RandomKey }
     $config.MINIO_USER = if ($env:AGENTTEAMS_MINIO_USER) { $env:AGENTTEAMS_MINIO_USER } else { $config.ADMIN_USER }
+    if ($config.MINIO_USER.Length -lt 3) {
+        Write-Error (Get-Msg "admin.minio_username_too_short" -f $config.MINIO_USER.Length)
+    }
     $config.MINIO_PASSWORD = if ($env:AGENTTEAMS_MINIO_PASSWORD) { $env:AGENTTEAMS_MINIO_PASSWORD } else { $config.ADMIN_PASSWORD }
     $config.MANAGER_GATEWAY_KEY = if ($env:AGENTTEAMS_MANAGER_GATEWAY_KEY) { $env:AGENTTEAMS_MANAGER_GATEWAY_KEY } else { New-RandomKey }
     $matrixAppServiceEnabled = if ($env:AGENTTEAMS_MATRIX_APPSERVICE_ENABLED) { $env:AGENTTEAMS_MATRIX_APPSERVICE_ENABLED } else { "true" }

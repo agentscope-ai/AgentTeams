@@ -547,8 +547,12 @@ msg() {
         # --- Admin Credentials ---
         "admin.title.zh") text="--- 管理员凭据 ---" ;;
         "admin.title.en") text="--- Admin Credentials ---" ;;
-        "admin.username_prompt.zh") text="管理员用户名" ;;
-        "admin.username_prompt.en") text="Admin Username" ;;
+        "admin.username_prompt.zh") text="管理员用户名（至少 3 个字符）" ;;
+        "admin.username_prompt.en") text="Admin Username (min 3 characters)" ;;
+        "admin.username_too_short.zh") text="管理员用户名至少需要 3 个字符（MinIO 要求）。当前长度: %s" ;;
+        "admin.username_too_short.en") text="Admin username must be at least 3 characters (MinIO requirement). Current length: %s" ;;
+        "admin.minio_username_too_short.zh") text="AGENTTEAMS_MINIO_USER 至少需要 3 个字符。当前长度: %s" ;;
+        "admin.minio_username_too_short.en") text="AGENTTEAMS_MINIO_USER must be at least 3 characters. Current length: %s" ;;
         "admin.password_prompt.zh") text="管理员密码（留空自动生成，最少 8 位）" ;;
         "admin.password_prompt.en") text="Admin Password (leave empty to auto-generate, min 8 chars)" ;;
         "admin.password_generated.zh") text="  已自动生成管理员密码" ;;
@@ -2511,8 +2515,18 @@ step_llm() {
 
 step_admin() {
     log "$(msg admin.title)"
-    prompt AGENTTEAMS_ADMIN_USER "$(msg admin.username_prompt)" "admin" || return 0
-    AGENTTEAMS_ADMIN_USER="$(printf '%s' "${AGENTTEAMS_ADMIN_USER}" | tr '[:upper:]' '[:lower:]')"
+    while true; do
+        prompt AGENTTEAMS_ADMIN_USER "$(msg admin.username_prompt)" "admin" || return 0
+        AGENTTEAMS_ADMIN_USER="$(printf '%s' "${AGENTTEAMS_ADMIN_USER}" | tr '[:upper:]' '[:lower:]')"
+        if [ ${#AGENTTEAMS_ADMIN_USER} -ge 3 ]; then
+            break
+        fi
+        if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
+            die "$(msg admin.username_too_short "${#AGENTTEAMS_ADMIN_USER}")"
+        fi
+        error "$(msg admin.username_too_short "${#AGENTTEAMS_ADMIN_USER}")"
+        unset AGENTTEAMS_ADMIN_USER
+    done
 
     # Pre-set via env var: validate; in non-interactive mode fail fast,
     # in interactive mode warn and fall through to the retry prompt.
@@ -3646,6 +3660,9 @@ install_manager() {
     AGENTTEAMS_MANAGER_PASSWORD="${AGENTTEAMS_MANAGER_PASSWORD:-$(generate_key)}"
     AGENTTEAMS_REGISTRATION_TOKEN="${AGENTTEAMS_REGISTRATION_TOKEN:-$(generate_key)}"
     AGENTTEAMS_MINIO_USER="${AGENTTEAMS_MINIO_USER:-${AGENTTEAMS_ADMIN_USER}}"
+    if [ ${#AGENTTEAMS_MINIO_USER} -lt 3 ]; then
+        die "$(msg admin.minio_username_too_short "${#AGENTTEAMS_MINIO_USER}")"
+    fi
     AGENTTEAMS_MINIO_PASSWORD="${AGENTTEAMS_MINIO_PASSWORD:-${AGENTTEAMS_ADMIN_PASSWORD}}"
     AGENTTEAMS_MANAGER_GATEWAY_KEY="${AGENTTEAMS_MANAGER_GATEWAY_KEY:-$(generate_key)}"
 

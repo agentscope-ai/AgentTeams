@@ -18,6 +18,8 @@ on:
       - 'openhuman/scripts/openhuman-worker-entrypoint.sh'
       - 'tests/check-agentteams-rename-defaults.sh'
       - 'tests/check-installer-pre-1.2-env-compat.sh'
+      - 'tests/check-installer-username-validation.sh'
+      - 'tests/check-installer-username-validation.ps1'
       - 'tests/check-installer-env-data-dir-readback.sh'
       - 'tests/check-installer-embedded-latest-pull.sh'
       - 'tests/check-installer-auto-version-images.sh'
@@ -45,6 +47,13 @@ jobs:
 
       - name: Check pre-v1.2 installer compatibility
         run: bash tests/check-installer-pre-1.2-env-compat.sh
+
+      - name: Check Bash installer username validation
+        run: bash tests/check-installer-username-validation.sh
+
+      - name: Check PowerShell installer username validation
+        shell: pwsh
+        run: ./tests/check-installer-username-validation.ps1
 
       - name: Check installer data-dir env readback
         run: bash tests/check-installer-env-data-dir-readback.sh

@@ -63,6 +63,445 @@ def test_matrix_overlay_supports_streaming_reasoning_hooks() -> None:
     assert "async def on_streaming_end" in source
 
 
+def test_matrix_event_callback_is_scheduled_without_blocking_sync() -> None:
+    module = _load_overlay_module()
+    channel = module.AgentTeamsMatrixChannel.__new__(
+        module.AgentTeamsMatrixChannel,
+    )
+    channel._callback_tasks = set()
+    channel._room_callback_locks = {}
+    started = asyncio.Event()
+    released = asyncio.Event()
+    finished = asyncio.Event()
+    room = SimpleNamespace(room_id="!room:hs.local")
+    event = SimpleNamespace(event_id="$event", sender="@worker:hs.local")
+
+    async def _blocked_callback(_room, _event):
+        started.set()
+        await released.wait()
+        finished.set()
+
+    async def _run() -> None:
+        channel._schedule_event_callback(_blocked_callback, room, event)
+        await asyncio.wait_for(started.wait(), timeout=1)
+        assert len(channel._callback_tasks) == 1
+
+        released.set()
+        await asyncio.wait_for(finished.wait(), timeout=1)
+        await asyncio.sleep(0)
+        assert not channel._callback_tasks
+
+    asyncio.run(_run())
+
+
+def test_matrix_event_callback_timeout_is_logged_and_cleaned_up(
+    caplog,
+    monkeypatch,
+) -> None:
+    module = _load_overlay_module()
+    monkeypatch.setattr(module, "MATRIX_EVENT_CALLBACK_TIMEOUT_S", 0.01)
+    channel = module.AgentTeamsMatrixChannel.__new__(
+        module.AgentTeamsMatrixChannel,
+    )
+    channel._callback_tasks = set()
+    channel._room_callback_locks = {}
+    room = SimpleNamespace(room_id="!room:hs.local")
+    event = SimpleNamespace(event_id="$event", sender="@worker:hs.local")
+
+    async def _blocked_callback(_room, _event):
+        await asyncio.Event().wait()
+
+    async def _run() -> None:
+        channel._schedule_event_callback(_blocked_callback, room, event)
+        for _ in range(10):
+            await asyncio.sleep(0.01)
+            if not channel._callback_tasks:
+                return
+        raise AssertionError("timed-out callback task was not cleaned up")
+
+    with caplog.at_level("ERROR"):
+        asyncio.run(_run())
+
+    assert "event callback timed out" in caplog.text
+
+
+def test_matrix_event_callbacks_are_serialized_per_room_but_not_globally() -> None:
+    module = _load_overlay_module()
+    channel = module.AgentTeamsMatrixChannel.__new__(
+        module.AgentTeamsMatrixChannel,
+    )
+    channel._callback_tasks = set()
+    channel._room_callback_locks = {}
+    room_a = SimpleNamespace(room_id="!room-a:hs.local")
+    room_b = SimpleNamespace(room_id="!room-b:hs.local")
+    event_a1 = SimpleNamespace(event_id="$event-a1", sender="@worker:hs.local")
+    event_a2 = SimpleNamespace(event_id="$event-a2", sender="@worker:hs.local")
+    event_b = SimpleNamespace(event_id="$event-b", sender="@worker:hs.local")
+    first_started = asyncio.Event()
+    second_started = asyncio.Event()
+    other_room_started = asyncio.Event()
+    release = asyncio.Event()
+    order = []
+
+    async def _first_callback(_room, _event):
+        order.append("first")
+        first_started.set()
+        await release.wait()
+
+    async def _second_callback(_room, _event):
+        order.append("second")
+        second_started.set()
+
+    async def _other_room_callback(_room, _event):
+        order.append("other-room")
+        other_room_started.set()
+        await release.wait()
+
+    async def _run() -> None:
+        channel._schedule_event_callback(_first_callback, room_a, event_a1)
+        channel._schedule_event_callback(_second_callback, room_a, event_a2)
+        channel._schedule_event_callback(_other_room_callback, room_b, event_b)
+        callback_tasks = tuple(channel._callback_tasks)
+
+        await asyncio.wait_for(first_started.wait(), timeout=1)
+        await asyncio.wait_for(other_room_started.wait(), timeout=1)
+        await asyncio.sleep(0)
+        assert not second_started.is_set()
+
+        release.set()
+        await asyncio.wait_for(asyncio.gather(*callback_tasks), timeout=1)
+        assert second_started.is_set()
+        assert order.index("first") < order.index("second")
+        assert not channel._callback_tasks
+
+    asyncio.run(_run())
+
+
+def test_matrix_stop_cancels_and_drains_event_callbacks() -> None:
+    module = _load_overlay_module()
+    channel = module.AgentTeamsMatrixChannel.__new__(
+        module.AgentTeamsMatrixChannel,
+    )
+    channel._callback_tasks = set()
+    channel._room_callback_locks = {}
+    channel._typing_tasks = {}
+    channel._typing_locks = {}
+    channel._typing_lifecycles = {}
+    channel._sync_task = None
+    channel._http_client = None
+
+    async def _close_client():
+        return None
+
+    channel._client = SimpleNamespace(close=_close_client)
+    room = SimpleNamespace(room_id="!room:hs.local")
+    event = SimpleNamespace(event_id="$event", sender="@worker:hs.local")
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def _blocked_callback(_room, _event):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    async def _run() -> None:
+        channel._schedule_event_callback(_blocked_callback, room, event)
+        await asyncio.wait_for(started.wait(), timeout=1)
+        await channel.stop()
+        assert cancelled.is_set()
+        assert not channel._callback_tasks
+
+    asyncio.run(_run())
+
+
+def test_matrix_sync_checkpoint_waits_until_callback_is_accepted() -> None:
+    module = _load_overlay_module()
+    channel = module.AgentTeamsMatrixChannel.__new__(
+        module.AgentTeamsMatrixChannel,
+    )
+    channel._callback_tasks = set()
+    channel._room_callback_locks = {}
+    channel._active_sync_callback_futures = []
+    channel._pending_sync_checkpoints = []
+    saved_tokens = []
+    channel._save_sync_token = lambda token, *_args: saved_tokens.append(token)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    room = SimpleNamespace(room_id="!room:hs.local")
+    event = SimpleNamespace(event_id="$event", sender="@worker:hs.local")
+
+    async def _enqueue_after_release(_room, _event):
+        started.set()
+        await release.wait()
+        channel._mark_event_callback_accepted()
+
+    async def _run() -> None:
+        channel._schedule_event_callback(_enqueue_after_release, room, event)
+        await asyncio.wait_for(started.wait(), timeout=1)
+        callback_tasks = tuple(channel._callback_tasks)
+        channel._queue_sync_checkpoint(
+            "next-batch",
+            channel._active_sync_callback_futures,
+        )
+        assert saved_tokens == []
+
+        release.set()
+        await asyncio.wait_for(asyncio.gather(*callback_tasks), timeout=1)
+        await asyncio.sleep(0)
+        assert saved_tokens == ["next-batch"]
+
+    asyncio.run(_run())
+
+
+def test_matrix_cancelled_callback_does_not_advance_sync_checkpoint() -> None:
+    module = _load_overlay_module()
+    channel = module.AgentTeamsMatrixChannel.__new__(
+        module.AgentTeamsMatrixChannel,
+    )
+    channel._callback_tasks = set()
+    channel._room_callback_locks = {}
+    channel._active_sync_callback_futures = []
+    channel._pending_sync_checkpoints = []
+    saved_tokens = []
+    channel._save_sync_token = lambda token, *_args: saved_tokens.append(token)
+    started = asyncio.Event()
+    room = SimpleNamespace(room_id="!room:hs.local")
+    event = SimpleNamespace(event_id="$event", sender="@worker:hs.local")
+
+    async def _blocked_callback(_room, _event):
+        started.set()
+        await asyncio.Event().wait()
+
+    async def _run() -> None:
+        channel._schedule_event_callback(_blocked_callback, room, event)
+        await asyncio.wait_for(started.wait(), timeout=1)
+        callback_task = next(iter(channel._callback_tasks))
+        channel._queue_sync_checkpoint(
+            "next-batch",
+            channel._active_sync_callback_futures,
+        )
+
+        callback_task.cancel()
+        await asyncio.gather(callback_task, return_exceptions=True)
+        await asyncio.sleep(0)
+        assert saved_tokens == []
+        assert channel._pending_sync_checkpoints
+        assert channel._checkpoint_recovery_required
+
+    asyncio.run(_run())
+
+
+def test_matrix_timed_out_callback_does_not_advance_sync_checkpoint(
+    monkeypatch,
+    caplog,
+) -> None:
+    module = _load_overlay_module()
+    monkeypatch.setattr(module, "MATRIX_EVENT_CALLBACK_TIMEOUT_S", 0.01)
+    channel = module.AgentTeamsMatrixChannel.__new__(
+        module.AgentTeamsMatrixChannel,
+    )
+    channel._callback_tasks = set()
+    channel._room_callback_locks = {}
+    channel._active_sync_callback_futures = []
+    channel._pending_sync_checkpoints = []
+    saved_tokens = []
+    channel._save_sync_token = lambda token, *_args: saved_tokens.append(token)
+    room = SimpleNamespace(room_id="!room:hs.local")
+    event = SimpleNamespace(event_id="$event", sender="@worker:hs.local")
+
+    async def _blocked_callback(_room, _event):
+        await asyncio.Event().wait()
+
+    async def _run() -> None:
+        channel._schedule_event_callback(_blocked_callback, room, event)
+        callback_task = next(iter(channel._callback_tasks))
+        channel._queue_sync_checkpoint(
+            "next-batch",
+            channel._active_sync_callback_futures,
+        )
+        await asyncio.wait_for(callback_task, timeout=1)
+        await asyncio.sleep(0)
+        assert saved_tokens == []
+        assert channel._pending_sync_checkpoints
+        assert channel._checkpoint_recovery_required
+        channel._queue_sync_checkpoint("later-batch", [])
+        assert saved_tokens == []
+
+    with caplog.at_level("ERROR"):
+        asyncio.run(_run())
+    assert "event callback timed out" in caplog.text
+
+
+def test_matrix_failed_callback_replays_and_deduplicates_after_restart(
+    tmp_path,
+) -> None:
+    module = _load_overlay_module()
+    module.WORKING_DIR = tmp_path
+
+    def _new_channel():
+        channel = module.AgentTeamsMatrixChannel.__new__(
+            module.AgentTeamsMatrixChannel,
+        )
+        channel._callback_tasks = set()
+        channel._room_callback_locks = {}
+        channel._callback_event_ids = {}
+        channel._inflight_callback_futures = {}
+        channel._accepted_event_ids = set()
+        channel._durable_sync_token = "t0"
+        channel._active_sync_callback_futures = None
+        channel._pending_sync_checkpoints = []
+        channel._checkpoint_recovery_required = False
+        return channel
+
+    channel = _new_channel()
+    saved_tokens = []
+    channel._save_sync_token = lambda token, *_args: saved_tokens.append(token)
+    room = SimpleNamespace(room_id="!room:hs.local")
+    failed_event = SimpleNamespace(event_id="$failed", sender="@worker:hs.local")
+    accepted_event = SimpleNamespace(event_id="$accepted", sender="@worker:hs.local")
+    enqueued = []
+
+    async def _fail(_room, _event):
+        raise RuntimeError("temporary callback failure")
+
+    async def _accept(_room, event):
+        enqueued.append(event.event_id)
+        channel._mark_event_callback_accepted()
+
+    async def _run_first_delivery() -> None:
+        first_batch = []
+        channel._active_sync_callback_futures = first_batch
+        channel._schedule_event_callback(_fail, room, failed_event)
+        channel._queue_sync_checkpoint("t1", first_batch)
+
+        second_batch = []
+        channel._active_sync_callback_futures = second_batch
+        channel._schedule_event_callback(_accept, room, accepted_event)
+        channel._queue_sync_checkpoint("t2", second_batch)
+        await asyncio.gather(*tuple(channel._callback_tasks))
+        await asyncio.sleep(0)
+
+    asyncio.run(_run_first_delivery())
+
+    assert saved_tokens == []
+    assert channel._checkpoint_recovery_required
+    assert channel._pending_sync_checkpoints
+    assert channel._accepted_event_ids == {"$accepted"}
+
+    async def _recover() -> None:
+        assert await channel._recover_sync_checkpoint() == "t0"
+
+    asyncio.run(_recover())
+
+    restarted = _new_channel()
+    assert restarted._load_sync_token() == "t0"
+    assert restarted._accepted_event_ids == {"$accepted"}
+    restarted._save_sync_token = lambda token, *_args: saved_tokens.append(token)
+
+    async def _replay_failed(_room, event):
+        enqueued.append(event.event_id)
+        restarted._mark_event_callback_accepted()
+
+    async def _must_not_reenqueue(_room, _event):
+        raise AssertionError("accepted event was replayed")
+
+    async def _run_replay() -> None:
+        replay_batch = []
+        restarted._active_sync_callback_futures = replay_batch
+        restarted._schedule_event_callback(_replay_failed, room, failed_event)
+        restarted._schedule_event_callback(
+            _must_not_reenqueue,
+            room,
+            accepted_event,
+        )
+        restarted._queue_sync_checkpoint("t3", replay_batch)
+        await asyncio.gather(*tuple(restarted._callback_tasks))
+        await asyncio.sleep(0)
+
+    asyncio.run(_run_replay())
+
+    assert enqueued == ["$accepted", "$failed"]
+    assert saved_tokens == ["t3"]
+
+
+def test_matrix_checkpoint_retains_later_accepted_events_until_their_token(
+    tmp_path,
+) -> None:
+    module = _load_overlay_module()
+    module.WORKING_DIR = tmp_path
+    channel = module.AgentTeamsMatrixChannel.__new__(
+        module.AgentTeamsMatrixChannel,
+    )
+    channel._callback_tasks = set()
+    channel._room_callback_locks = {}
+    channel._callback_event_ids = {}
+    channel._inflight_callback_futures = {}
+    channel._accepted_event_ids = set()
+    channel._durable_sync_token = "t0"
+    channel._active_sync_callback_futures = None
+    channel._pending_sync_checkpoints = []
+    channel._checkpoint_recovery_required = False
+    room_a = SimpleNamespace(room_id="!room-a:hs.local")
+    room_b = SimpleNamespace(room_id="!room-b:hs.local")
+    event_a = SimpleNamespace(event_id="$first", sender="@worker:hs.local")
+    event_b = SimpleNamespace(event_id="$later", sender="@worker:hs.local")
+    release = asyncio.Event()
+    later_accepted = asyncio.Event()
+    snapshots = []
+
+    original_save = channel._save_sync_token
+
+    def _save(token, retired_event_ids=None):
+        result = original_save(token, retired_event_ids)
+        snapshots.append(
+            json.loads(
+                (tmp_path / module.MATRIX_SYNC_STATE_FILENAME).read_text(
+                    encoding="utf-8",
+                ),
+            ),
+        )
+        return result
+
+    channel._save_sync_token = _save
+
+    async def _first(_room, _event):
+        await release.wait()
+        channel._mark_event_callback_accepted()
+
+    async def _later(_room, _event):
+        channel._mark_event_callback_accepted()
+        later_accepted.set()
+
+    async def _run() -> None:
+        first_batch = []
+        channel._active_sync_callback_futures = first_batch
+        channel._schedule_event_callback(_first, room_a, event_a)
+        channel._queue_sync_checkpoint("t1", first_batch)
+
+        later_batch = []
+        channel._active_sync_callback_futures = later_batch
+        channel._schedule_event_callback(_later, room_b, event_b)
+        channel._queue_sync_checkpoint("t2", later_batch)
+        await asyncio.wait_for(later_accepted.wait(), timeout=1)
+        assert snapshots == []
+
+        release.set()
+        await asyncio.wait_for(
+            asyncio.gather(*tuple(channel._callback_tasks)),
+            timeout=1,
+        )
+        await asyncio.sleep(0)
+
+    asyncio.run(_run())
+
+    assert [snapshot["sync_token"] for snapshot in snapshots] == ["t1", "t2"]
+    assert snapshots[0]["accepted_event_ids"] == ["$later"]
+    assert snapshots[1]["accepted_event_ids"] == []
+
+
 def _install_module(name: str, **attrs):
     module = types.ModuleType(name)
     module.__dict__.update(attrs)
@@ -192,7 +631,7 @@ class _FakeClient:
         return SimpleNamespace(event_id=f"$sent{len(self.sent)}")
 
 
-async def _noop_typing(_room_id, _typing):
+async def _noop_typing(_room_id, _typing, **_kwargs):
     return None
 
 
@@ -808,7 +1247,7 @@ def test_matrix_long_edit_fallback_failure_does_not_block_completion_cleanup(
     meta = {"thread_root_event_id": "$incoming"}
     typing_events = []
 
-    async def _capture_typing(room_id, typing):
+    async def _capture_typing(room_id, typing, **_kwargs):
         typing_events.append((room_id, typing))
 
     async def _fake_upload(_file_ref):
@@ -1137,6 +1576,79 @@ def test_matrix_ordinary_own_message_is_skipped() -> None:
     )
 
     assert channel.enqueued == []
+
+
+def test_matrix_text_message_is_enqueued_before_slow_receipt() -> None:
+    channel = _make_inbound_channel()
+    started = asyncio.Event()
+    released = asyncio.Event()
+
+    async def _blocked_read_receipt(_room_id, _event_id):
+        started.set()
+        await released.wait()
+
+    channel._send_read_receipt = _blocked_read_receipt
+
+    async def _run() -> None:
+        task = asyncio.create_task(
+            channel._on_room_event(
+                _FakeInboundRoom(),
+                _matrix_event("copywriting-assistant: process this", mentioned=True),
+            ),
+        )
+        await asyncio.wait_for(started.wait(), timeout=1)
+        assert len(channel.enqueued) == 1
+
+        released.set()
+        await task
+
+    asyncio.run(_run())
+
+
+def test_matrix_delayed_receipt_does_not_restart_typing_after_completion() -> None:
+    module = _load_overlay_module()
+    channel = _make_inbound_channel()
+    channel._send_typing = module.AgentTeamsMatrixChannel._send_typing.__get__(
+        channel,
+    )
+    channel._typing_tasks = {}
+    channel._typing_locks = {}
+    channel._typing_lifecycles = {}
+    typing_events = []
+    receipt_started = asyncio.Event()
+    receipt_released = asyncio.Event()
+
+    async def _room_typing(_room_id, typing_state, **_kwargs):
+        typing_events.append(typing_state)
+
+    async def _blocked_read_receipt(_room_id, _event_id):
+        receipt_started.set()
+        await receipt_released.wait()
+
+    channel._client.room_typing = _room_typing
+    channel._send_read_receipt = _blocked_read_receipt
+
+    async def _run() -> None:
+        inbound_task = asyncio.create_task(
+            channel._on_room_event(
+                _FakeInboundRoom(),
+                _matrix_event("copywriting-assistant: process this", mentioned=True),
+            ),
+        )
+        await asyncio.wait_for(receipt_started.wait(), timeout=1)
+        payload = channel.enqueued[0]
+
+        await channel._on_process_completed(
+            SimpleNamespace(),
+            "!room:hs.local",
+            payload["meta"],
+        )
+        receipt_released.set()
+        await inbound_task
+
+    asyncio.run(_run())
+
+    assert typing_events == [False]
 
 
 def test_matrix_teamharness_self_trigger_bypasses_own_skip_and_mention_gate() -> None:

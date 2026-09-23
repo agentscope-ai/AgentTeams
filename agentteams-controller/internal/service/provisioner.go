@@ -1834,3 +1834,13 @@ func (p *Provisioner) BackfillLegacyPasswords(ctx context.Context) error {
 	}
 	return firstErr
 }
+
+// WorkerGatewayKey reads the persisted key without rotating credentials or
+// changing authorization. Only trusted server-side gateway probes use it.
+func (p *Provisioner) WorkerGatewayKey(ctx context.Context, name string) (string, error) {
+	creds, err := p.loadWorkerCredentials(ctx, name)
+	if err != nil || creds == nil || creds.GatewayKey == "" {
+		return "", fmt.Errorf("worker gateway credentials unavailable")
+	}
+	return creds.GatewayKey, nil
+}

@@ -21,23 +21,25 @@ import (
 
 // ServerDeps aggregates all dependencies needed by the HTTP API handlers.
 type ServerDeps struct {
-	Client          client.Client
-	Backend         *backend.Registry
-	Gateway         gateway.Client
-	OSS             oss.StorageClient
-	STS             *credentials.STSService
-	AuthMw          *authpkg.Middleware
-	KubeMode        string
-	Namespace       string
-	ControllerName  string               // AGENTTEAMS_CONTROLLER_NAME; empty in embedded mode
-	SocketPath      string               // Docker proxy (embedded only)
-	SkillScanner    *skillscan.Client    // shared skill content scan (upload ① + assign ②)
-	ContainerPrefix string               // effective worker container prefix (config.ContainerPrefix); embedded-only address resolution
-	ResourcePrefix  string               // resource name prefix ("" = agentteams-); manager container name derivation for skillscan
-	MatrixConfig    matrix.Config        // for AppService rotation endpoint
-	MatrixClient    matrix.Client        // for project intervention notifications (SendMessageAsAdmin); nil to skip
-	Provisioner     *service.Provisioner // for Matrix token refresh
+	WorkerEnvBuilder *service.WorkerEnvBuilder
+	Client           client.Client
+	Backend          *backend.Registry
+	Gateway          gateway.Client
+	OSS              oss.StorageClient
+	STS              *credentials.STSService
+	AuthMw           *authpkg.Middleware
+	KubeMode         string
+	Namespace        string
+	ControllerName   string               // AGENTTEAMS_CONTROLLER_NAME; empty in embedded mode
+	SocketPath       string               // Docker proxy (embedded only)
+	SkillScanner     *skillscan.Client    // shared skill content scan (upload ① + assign ②)
+	ContainerPrefix  string               // effective worker container prefix (config.ContainerPrefix); embedded-only address resolution
+	ResourcePrefix   string               // resource name prefix ("" = agentteams-); manager container name derivation for skillscan
+	MatrixConfig     matrix.Config        // for AppService rotation endpoint
+	MatrixClient     matrix.Client        // for project intervention notifications (SendMessageAsAdmin); nil to skip
+	Provisioner      *service.Provisioner // for Matrix token refresh
 
+	GatewayURL           string
 	DefaultWorkerRuntime string // install-time default for Worker create requests
 	DefaultModel         string // install-time model for Worker create requests without a model
 	WorkerAgentDir       string // source of builtin agent templates (skill catalog)
@@ -77,6 +79,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// changes) and approval OFF transitions append to the same durable trail.
 	auditClient := audit.NewClient(deps.OSS)
 	rh := NewResourceHandler(deps.Client, deps.Namespace, deps.Backend, deps.ControllerName, auditClient).WithOSS(deps.OSS)
+	rh.workerEnvBuilder = deps.WorkerEnvBuilder
 	rh.defaultWorkerRuntime = deps.DefaultWorkerRuntime
 	rh.defaultWorkerModel = deps.DefaultModel
 	nameFn := authpkg.NameFromPath
@@ -90,6 +93,12 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// Deployment-level MCP catalog: shared registry (object storage) x
 	// per-worker spec.mcpServers, read-only, L1/L2 readable (issue #1248).
 	mux.Handle("GET /api/v1/mcp-servers", mw.RequireAuthz(authpkg.ActionList, "mcp-server", nil)(http.HandlerFunc(rh.ListMCPServers)))
+
+	probe := &workerGatewayProbe{client: deps.Client, namespace: deps.Namespace, gatewayURL: deps.GatewayURL}
+	if deps.Provisioner != nil {
+		probe.key = deps.Provisioner.WorkerGatewayKey
+	}
+	mux.Handle("POST /api/v1/workers/{name}/gateway-probe", mw.RequireAuthz(authpkg.ActionUpdate, "gateway", nil)(probe))
 
 	// Teams
 	mux.Handle("POST /api/v1/teams", mw.RequireAuthz(authpkg.ActionCreate, "team", nil)(http.HandlerFunc(rh.CreateTeam)))

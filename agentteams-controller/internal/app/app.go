@@ -669,6 +669,8 @@ func (a *App) initHTTPServer(_ context.Context) error {
 		MatrixClient:    a.matrix,
 		Provisioner:     a.provisioner,
 
+		WorkerEnvBuilder:     a.envBuilder,
+		GatewayURL:           a.cfg.WorkerEnv.AIGatewayURL,
 		DefaultWorkerRuntime: a.cfg.DefaultWorkerRuntime,
 		DefaultModel:         a.cfg.DefaultModel,
 		WorkerAgentDir:       a.cfg.WorkerAgentDir(),

@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/credprovider"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -592,7 +593,8 @@ func WriteInlineConfigs(agentDir, runtime, identity, soul, agents string) error 
 	}
 
 	mergeIdentityIntoSoul := strings.EqualFold(runtime, "copaw") ||
-		strings.EqualFold(runtime, "hermes")
+		strings.EqualFold(runtime, "hermes") ||
+		backend.IsCLIHarnessRuntime(runtime)
 
 	if mergeIdentityIntoSoul {
 		// CoPaw / Hermes: merge identity into soul (prepend)

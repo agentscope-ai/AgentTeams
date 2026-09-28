@@ -89,8 +89,8 @@ spec:
 |-------|------|----------|---------|-------------|
 | `metadata.name` | string | Yes | — | Worker name, globally unique |
 | `spec.model` | string | Yes | — | LLM model ID, e.g. `claude-sonnet-4-6`, `qwen3.5-plus` |
-| `spec.runtime` | string | No | `openclaw` | The current Worker CRD accepts `openclaw`, `qwenpaw`, `copaw` (legacy), or `hermes`. |
-| `spec.image` | string | No | — | Custom image. When empty, the controller selects `AGENTTEAMS_WORKER_IMAGE`, `AGENTTEAMS_COPAW_WORKER_IMAGE`, `AGENTTEAMS_QWENPAW_WORKER_IMAGE`, or `AGENTTEAMS_HERMES_WORKER_IMAGE` by runtime. The current chart has no `worker.defaultImage.qwenpaw`, so set this field explicitly for a QwenPaw Worker on Kubernetes. |
+| `spec.runtime` | string | No | `openclaw` | The current Worker CRD accepts `openclaw`, `qwenpaw`, `copaw` (legacy), `hermes`, `openhuman`, `deepseek-harness` (experimental), or a CLI coding-agent runtime (`atomcode`, `codex`, `claude-code`, `kimi-code`, `pi` — all share the cli-harness image). |
+| `spec.image` | string | No | — | Custom image. When empty, the controller selects `AGENTTEAMS_WORKER_IMAGE`, `AGENTTEAMS_COPAW_WORKER_IMAGE`, `AGENTTEAMS_QWENPAW_WORKER_IMAGE`, `AGENTTEAMS_HERMES_WORKER_IMAGE`, `AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE`, or `AGENTTEAMS_CLI_HARNESS_WORKER_IMAGE` by runtime. The current chart has no `worker.defaultImage.qwenpaw`, so set this field explicitly for a QwenPaw Worker on Kubernetes. |
 | `spec.identity` | string | No | — | Worker public identity (OpenClaw: generates IDENTITY.md; QwenPaw: merged into SOUL.md per controller) |
 | `spec.soul` | string | No | — | Worker personality and values (generates SOUL.md) |
 | `spec.agents` | string | No | — | Agent behavior rules, used to generate AGENTS.md |

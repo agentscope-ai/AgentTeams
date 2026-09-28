@@ -8,7 +8,7 @@ on:
         required: false
         type: string
       targets:
-        description: 'Space-separated list of push targets (default: all). Options: openclaw-base agentteams-controller embedded manager manager-qwenpaw worker copaw-worker hermes-worker qwenpaw-worker'
+        description: 'Space-separated list of push targets (default: all). Options: openclaw-base agentteams-controller embedded manager manager-qwenpaw worker copaw-worker hermes-worker qwenpaw-worker cli-harness-worker'
         required: false
         type: string
         default: 'all'
@@ -48,6 +48,7 @@ jobs:
               'copaw-worker': ['agentteams-controller'],
               'hermes-worker': ['agentteams-controller'],
               'qwenpaw-worker': [],
+              'cli-harness-worker': ['agentteams-controller'],
           }
           tagged = os.environ['GITHUB_REF'].startswith('refs/tags/')
           version = os.environ['GITHUB_REF_NAME'] if tagged else os.environ['REQUESTED_VERSION'] or 'latest'
@@ -145,8 +146,17 @@ jobs:
       version: ${{ needs.prepare.outputs.version }}
     secrets: inherit
 
+  cli-harness-worker:
+    needs: [prepare, agentteams-controller]
+    if: contains(fromJSON(needs.prepare.outputs.targets), 'cli-harness-worker')
+    uses: ./.github/workflows/build-image.yml
+    with:
+      target: cli-harness-worker
+      version: ${{ needs.prepare.outputs.version }}
+    secrets: inherit
+
   release:
-    needs: [prepare, openclaw-base, agentteams-controller, embedded, manager, manager-qwenpaw, worker, copaw-worker, hermes-worker, qwenpaw-worker]
+    needs: [prepare, openclaw-base, agentteams-controller, embedded, manager, manager-qwenpaw, worker, copaw-worker, hermes-worker, qwenpaw-worker, cli-harness-worker]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write

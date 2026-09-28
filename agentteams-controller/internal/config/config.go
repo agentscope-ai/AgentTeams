@@ -530,6 +530,7 @@ func (c *Config) DockerConfig() backend.DockerConfig {
 		OpenHumanWorkerImage:       envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
 		QwenPawWorkerImage:         envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-qwenpaw-worker:latest"),
 		DeepSeekHarnessWorkerImage: envOrDefault("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/agentteams-deepseek-harness-worker:v0.1.0"),
+		CLIHarnessWorkerImage:      envOrDefault("AGENTTEAMS_CLI_HARNESS_WORKER_IMAGE", "agentteams/agentteams-cli-harness-worker:latest"),
 		DefaultNetwork:             envOrDefault("AGENTTEAMS_DOCKER_NETWORK", "agentteams-net"),
 	}
 }
@@ -574,6 +575,7 @@ func (c *Config) K8sConfig() backend.K8sConfig {
 		OpenHumanWorkerImage:       envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
 		QwenPawWorkerImage:         envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-qwenpaw-worker:latest"),
 		DeepSeekHarnessWorkerImage: envOrDefault("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/agentteams-deepseek-harness-worker:v0.1.0"),
+		CLIHarnessWorkerImage:      envOrDefault("AGENTTEAMS_CLI_HARNESS_WORKER_IMAGE", "agentteams/agentteams-cli-harness-worker:latest"),
 		WorkerCPU:                  c.K8sWorkerCPU,
 		WorkerMemory:               c.K8sWorkerMemory,
 		ControllerName:             c.ControllerName,
@@ -592,6 +594,7 @@ func (c *Config) SandboxConfig() backend.SandboxConfig {
 		OpenHumanWorkerImage:         envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
 		QwenPawWorkerImage:           envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-qwenpaw-worker:latest"),
 		DeepSeekHarnessWorkerImage:   envOrDefault("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/agentteams-deepseek-harness-worker:v0.1.0"),
+		CLIHarnessWorkerImage:        envOrDefault("AGENTTEAMS_CLI_HARNESS_WORKER_IMAGE", "agentteams/agentteams-cli-harness-worker:latest"),
 		WorkerCPU:                    c.K8sWorkerCPU,
 		WorkerMemory:                 c.K8sWorkerMemory,
 		SandboxPrewarmSize:           c.SandboxPrewarmSize,

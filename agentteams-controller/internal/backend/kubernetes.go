@@ -33,6 +33,7 @@ type K8sConfig struct {
 	OpenHumanWorkerImage       string
 	QwenPawWorkerImage         string
 	DeepSeekHarnessWorkerImage string
+	CLIHarnessWorkerImage      string
 	WorkerCPU                  string
 	WorkerMemory               string
 
@@ -267,6 +268,8 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 			image = k.config.QwenPawWorkerImage
 		case req.Runtime == RuntimeDeepSeekHarness && k.config.DeepSeekHarnessWorkerImage != "":
 			image = k.config.DeepSeekHarnessWorkerImage
+		case IsCLIHarnessRuntime(req.Runtime) && k.config.CLIHarnessWorkerImage != "":
+			image = k.config.CLIHarnessWorkerImage
 		case k.config.WorkerImage != "":
 			image = k.config.WorkerImage
 		}
@@ -274,6 +277,10 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 	if image == "" {
 		return nil, fmt.Errorf("no worker image configured for kubernetes backend")
 	}
+
+	// Advertise the resolved runtime inside the container. CLI-harness
+	// runtimes select their adapter from this value; other runtimes ignore it.
+	req.Env["AGENTTEAMS_WORKER_RUNTIME"] = req.Runtime
 
 	if req.WorkingDir == "" {
 		switch {
@@ -742,18 +749,12 @@ func rawK8sPhase(phase corev1.PodPhase) string {
 }
 
 func defaultRuntime(runtime string) string {
-	switch runtime {
-	case RuntimeCopaw:
-		return RuntimeCopaw
-	case RuntimeHermes:
-		return RuntimeHermes
-	case RuntimeQwenPaw:
-		return RuntimeQwenPaw
-	case RuntimeDeepSeekHarness:
-		return RuntimeDeepSeekHarness
-	default:
-		return RuntimeOpenClaw
+	// Pass through any recognized runtime so the agentteams.io/runtime pod
+	// label reflects the real value (empty resolves to openclaw).
+	if runtime != "" && ValidRuntime(runtime) {
+		return runtime
 	}
+	return RuntimeOpenClaw
 }
 
 func loadK8sRESTConfig() (*rest.Config, error) {

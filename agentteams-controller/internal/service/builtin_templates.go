@@ -16,6 +16,11 @@ var AllWorkerRuntimes = []string{
 	backend.RuntimeOpenHuman,
 	backend.RuntimeQwenPaw,
 	backend.RuntimeDeepSeekHarness,
+	backend.RuntimeAtomCode,
+	backend.RuntimeCodex,
+	backend.RuntimeClaudeCode,
+	backend.RuntimeKimiCode,
+	backend.RuntimePi,
 }
 
 // BuiltinAgentDir returns the agent template directory that seeds the given
@@ -30,11 +35,13 @@ func BuiltinAgentDir(workerAgentDir, role, runtime string) string {
 	case "team_leader":
 		return filepath.Join(baseDir, "team-leader-agent")
 	default:
-		switch runtime {
-		case backend.RuntimeCopaw:
+		switch {
+		case runtime == backend.RuntimeCopaw:
 			return filepath.Join(baseDir, "copaw-worker-agent")
-		case backend.RuntimeHermes:
+		case runtime == backend.RuntimeHermes:
 			return filepath.Join(baseDir, "hermes-worker-agent")
+		case backend.IsCLIHarnessRuntime(runtime):
+			return filepath.Join(baseDir, "cli-harness-worker-agent")
 		}
 		return workerAgentDir
 	}

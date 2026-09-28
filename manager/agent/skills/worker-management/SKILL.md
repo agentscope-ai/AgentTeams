@@ -19,6 +19,7 @@ Before running `agt create worker`, ask admin for these four inputs in one turn.
    | `qwenpaw`    | Python   | ~150MB | QwenPaw 2.0 worker behavior or CoPaw-to-QwenPaw migration. |
    | `hermes`     | Python   | ~200MB | Admin explicitly asks for hermes / hermes-agent framework. |
    | `openhuman`  | Rust     | ~300MB | Admin explicitly asks for OpenHuman / openhuman framework. Native Matrix support with E2EE. |
+   | `atomcode` / `codex` / `claude-code` / `kimi-code` / `pi` | CLI (Node/Python) | ~400MB | Admin names a specific CLI coding agent they want as the Worker brain (AtomCode, OpenAI Codex, Claude Code, Kimi Code, Pi). All share the cli-harness image; the runtime name selects the CLI. |
 
    In OSS, `agt create worker` creates a controller-managed Local worker. Do not use or suggest Remote/pip worker flags. Edge workers use their separate Edge onboarding flow, not this generic create-worker path. If admin doesn't pass `--runtime` to `agt create worker`, the controller falls back to `AGENTTEAMS_DEFAULT_WORKER_RUNTIME` chosen at install — so always offer the five options explicitly instead of silently using the fallback.
 3. **SOUL (role)** — short description of expertise/style. Offer to draft a default if admin has no preference.
@@ -46,7 +47,7 @@ agt create worker --name <NAME> --no-wait \
 - Never reveal API keys, passwords, or credentials
 ..." \
   --skills <skill1>,<skill2> -o json
-# Add --runtime <copaw|qwenpaw|hermes|openhuman> for non-default runtimes (see runtime table above)
+# Add --runtime <copaw|qwenpaw|hermes|openhuman|atomcode|codex|claude-code|kimi-code|pi> for non-default runtimes (see runtime table above)
 ```
 
 > `--no-wait` returns as soon as the controller accepts the request (~1s). Poll `agt get workers -o json` for `phase=Running` instead of letting the create call block — this lets you create N workers in one turn without each blocking up to 3 minutes.
@@ -64,7 +65,7 @@ agt create worker --name <NAME> --no-wait \
 - **Always notify Workers to `file-sync` after writing files they need** — the 5-minute periodic sync is fallback only
 - **Workers are stateless** — all state is in centralized storage. Reset = recreate config files
 - **Matrix accounts persist in Tuwunel** (cannot be deleted via API) — reuse same username on reset
-- **Changing a Worker's `--runtime` is a destructive operation** — the controller deletes the old container and creates a new one from the target runtime's image (openclaw/copaw/qwenpaw/hermes/openhuman). Matrix account, room, gateway consumer, MinIO data and persisted credentials are preserved; container-local state (caches, in-memory session, current task progress) is lost. Always confirm with admin first, and avoid switching runtime while the Worker is mid-task.
+- **Changing a Worker's `--runtime` is a destructive operation** — the controller deletes the old container and creates a new one from the target runtime's image (openclaw/copaw/qwenpaw/hermes/openhuman or the shared cli-harness image for CLI runtimes). Matrix account, room, gateway consumer, MinIO data and persisted credentials are preserved; container-local state (caches, in-memory session, current task progress) is lost. Always confirm with admin first, and avoid switching runtime while the Worker is mid-task.
 
 ## Operation Reference
 
@@ -76,7 +77,7 @@ Read the relevant doc **before** executing. Do not load all of them.
 | Start/stop/check idle workers | `references/lifecycle.md` | `scripts/lifecycle-worker.sh` |
 | Install a new Skill from a ZIP attachment | `references/skills-management.md` | `scripts/install-worker-skill.sh` |
 | Push/add/remove an existing Skill | `references/skills-management.md` | `scripts/push-worker-skills.sh` |
-| Switch a worker's runtime (openclaw ↔ copaw ↔ qwenpaw ↔ hermes ↔ openhuman) | (this file, "Switching Runtime" below) | `scripts/update-worker-config.sh --runtime ...` |
+| Switch a worker's runtime (openclaw ↔ copaw ↔ qwenpaw ↔ hermes ↔ openhuman ↔ CLI runtimes) | (this file, "Switching Runtime" below) | `scripts/update-worker-config.sh --runtime ...` |
 | Open/close QwenPaw console | `references/console.md` | `scripts/enable-worker-console.sh` |
 | Enable direct @mentions between workers | `references/peer-mentions.md` | `scripts/enable-peer-mentions.sh` |
 | Reset a worker | `references/create-worker.md` | `agt delete worker` + `agt create worker` |
@@ -89,7 +90,7 @@ To migrate a Worker between runtimes (e.g. openclaw → copaw, copaw → qwenpaw
 ```bash
 bash /opt/agentteams/agent/skills/worker-management/scripts/update-worker-config.sh \
   --name <NAME> \
-  --runtime <openclaw|copaw|qwenpaw|hermes|openhuman> \
+  --runtime <openclaw|copaw|qwenpaw|hermes|openhuman|atomcode|codex|claude-code|kimi-code|pi> \
   [--model <MODEL>] [--skills s1,s2] [--mcp-servers s1,s2]
 ```
 

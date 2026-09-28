@@ -14,6 +14,7 @@ import (
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/credprovider"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/executor"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
@@ -403,7 +404,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	// in InjectCoordinationContext, so skip here.
 	if req.Role != "team_leader" {
 		soulKey := agentPrefix + "/SOUL.md"
-		inlineOwnsSoul := req.Spec.Soul != "" || ((strings.EqualFold(req.Spec.Runtime, "copaw") || strings.EqualFold(req.Spec.Runtime, "hermes")) && req.Spec.Identity != "")
+		inlineOwnsSoul := req.Spec.Soul != "" || ((strings.EqualFold(req.Spec.Runtime, "copaw") || strings.EqualFold(req.Spec.Runtime, "hermes") || backend.IsCLIHarnessRuntime(req.Spec.Runtime)) && req.Spec.Identity != "")
 		// Try external config ref if no inline soul
 		if inlineOwnsSoul {
 			soulPath := filepath.Join(localAgentDir, "SOUL.md")

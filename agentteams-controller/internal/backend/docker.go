@@ -29,6 +29,7 @@ type DockerConfig struct {
 	OpenHumanWorkerImage       string // default openhuman worker image (AGENTTEAMS_OPENHUMAN_WORKER_IMAGE)
 	QwenPawWorkerImage         string // default qwenpaw worker image (AGENTTEAMS_QWENPAW_WORKER_IMAGE)
 	DeepSeekHarnessWorkerImage string // default DeepSeek Harness worker image (AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE)
+	CLIHarnessWorkerImage      string // shared CLI-harness worker image (AGENTTEAMS_CLI_HARNESS_WORKER_IMAGE)
 	DefaultNetwork             string // default Docker network (default "agentteams-net")
 }
 
@@ -108,6 +109,13 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 	// workers, AGENTTEAMS_MANAGER_RUNTIME for managers).
 	req.Runtime = ResolveRuntime(req.Runtime, req.RuntimeFallback)
 
+	// Advertise the resolved runtime inside the container. CLI-harness
+	// runtimes select their adapter from this value; other runtimes ignore it.
+	if req.Env == nil {
+		req.Env = map[string]string{}
+	}
+	req.Env["AGENTTEAMS_WORKER_RUNTIME"] = req.Runtime
+
 	// Default image fallback
 	image := req.Image
 	if image == "" {
@@ -122,6 +130,8 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 			image = d.config.QwenPawWorkerImage
 		case req.Runtime == RuntimeDeepSeekHarness && d.config.DeepSeekHarnessWorkerImage != "":
 			image = d.config.DeepSeekHarnessWorkerImage
+		case IsCLIHarnessRuntime(req.Runtime) && d.config.CLIHarnessWorkerImage != "":
+			image = d.config.CLIHarnessWorkerImage
 		default:
 			image = d.config.WorkerImage
 		}

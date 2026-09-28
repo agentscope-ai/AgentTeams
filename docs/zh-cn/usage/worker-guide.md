@@ -27,8 +27,9 @@ Worker 由 **CR** 描述。除在 Matrix 里让 Manager 创建外，你还可以
 | **copaw** | `/root/.agentteams-worker/<worker-name>/`（运行时配置在 `.copaw/`） | 旧版兼容路径；符号链接 **`/root/agentteams-fs`** 指向该 Worker 树，便于沿用 OpenClaw 风格路径的脚本。 |
 | **qwenpaw** | `/root/agentteams-fs/agents/<worker-name>/`（QwenPaw 配置在 `.qwenpaw/`） | QwenPaw 2.x 路径；从 `copaw` 切换时会在恢复持久化数据后，将旧 `.copaw/` 状态迁移到 `.qwenpaw/`。共享数据：`/root/agentteams-fs/shared/`。 |
 | **hermes** | `/root/agentteams-fs/agents/<worker-name>/`（`HOME` 即工作区，与 OpenClaw 相同的镜像根） | Hermes 状态在目录内 **`.hermes/`**（如 `.hermes/config.yaml`、`state.db`）。 |
+| **atomcode** / **codex** / **claude-code** / **kimi-code** / **pi** | `/root/agentteams-fs/agents/<worker-name>/`（`HOME` 即工作区） | CLI coding-agent 运行时，共享 **cli-harness** 镜像；harness 状态在 **`.cli-harness/`**。runtime 名称决定使用哪个无头 CLI 作为 agent loop。 |
 
-Controller 中已包含 OpenHuman 后端，但当前发布的 Worker CRD enum 尚不接受显式的 `spec.runtime: openhuman`。在业务代码单独修正该契约前，不应按普通 Worker CR 流程创建 OpenHuman Worker。
+当前 Worker CRD enum 已接受 `openhuman` 与上表所列的 CLI coding-agent 运行时。
 
 ## 安装
 

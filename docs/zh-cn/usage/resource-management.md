@@ -89,8 +89,8 @@ spec:
 |------|------|------|--------|------|
 | `metadata.name` | string | 是 | — | Worker 名称，全局唯一 |
 | `spec.model` | string | 是 | — | LLM 模型 ID，如 `claude-sonnet-4-6`、`qwen3.5-plus` |
-| `spec.runtime` | string | 否 | `openclaw` | 当前 Worker CRD 接受 `openclaw`、`qwenpaw`、`copaw`（旧版兼容）或 `hermes` |
-| `spec.image` | string | 否 | — | 自定义镜像；留空时 controller 按 runtime 使用 `AGENTTEAMS_WORKER_IMAGE`、`AGENTTEAMS_COPAW_WORKER_IMAGE`、`AGENTTEAMS_QWENPAW_WORKER_IMAGE` 或 `AGENTTEAMS_HERMES_WORKER_IMAGE`。当前 Chart 未提供 `worker.defaultImage.qwenpaw`，在 Kubernetes 中使用 `qwenpaw` 时应显式设置本字段。 |
+| `spec.runtime` | string | 否 | `openclaw` | 当前 Worker CRD 接受 `openclaw`、`qwenpaw`、`copaw`（旧版兼容）、`hermes`、`openhuman`、`deepseek-harness`（实验性），以及 CLI coding-agent 运行时（`atomcode`、`codex`、`claude-code`、`kimi-code`、`pi`，共享 cli-harness 镜像） |
+| `spec.image` | string | 否 | — | 自定义镜像；留空时 controller 按 runtime 使用 `AGENTTEAMS_WORKER_IMAGE`、`AGENTTEAMS_COPAW_WORKER_IMAGE`、`AGENTTEAMS_QWENPAW_WORKER_IMAGE`、`AGENTTEAMS_HERMES_WORKER_IMAGE`、`AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE` 或 `AGENTTEAMS_CLI_HARNESS_WORKER_IMAGE`。当前 Chart 未提供 `worker.defaultImage.qwenpaw`，在 Kubernetes 中使用 `qwenpaw` 时应显式设置本字段。 |
 | `spec.identity` | string | 否 | — | Worker 公开身份（OpenClaw：生成 IDENTITY.md；QwenPaw：按实现合并入 SOUL.md） |
 | `spec.soul` | string | 否 | — | Worker 人格与价值观设定，用于生成 SOUL.md |
 | `spec.agents` | string | 否 | — | Agent 行为规则，用于生成 AGENTS.md |

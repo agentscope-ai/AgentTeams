@@ -329,6 +329,7 @@ def test_agent_status_running_maps_last_active_to_now() -> None:
     assert value is not None and value.endswith("Z")
 
 
+@pytest.mark.anyio
 async def test_agent_status_change_triggers_immediate_report(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

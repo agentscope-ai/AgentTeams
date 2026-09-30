@@ -108,7 +108,7 @@ fi
 
 section "Test 2: load_current_params_from_env loads Dashboard config"
 
-dashboard_env_vars="AGENTTEAMS_DASHBOARD AGENTTEAMS_DASHBOARD_VERSION AGENTTEAMS_PORT_DASHBOARD AGENTTEAMS_DASHBOARD_IMAGE AGENTTEAMS_AI_GATEWAY_ADMIN_URL"
+dashboard_env_vars="AGENTTEAMS_DASHBOARD AGENTTEAMS_DASHBOARD_VERSION AGENTTEAMS_PORT_DASHBOARD AGENTTEAMS_DASHBOARD_IMAGE AGENTTEAMS_AI_GATEWAY_ADMIN_URL DASHBOARD_SESSION_SECRET"
 for var in ${dashboard_env_vars}; do
     if grep -A 50 'load_current_params_from_env()' "${INSTALL_SCRIPT}" | grep -q "${var}"; then
         pass "load_current_params_from_env loads ${var}"
@@ -841,6 +841,162 @@ else
     else
         fail "Exec quick-start: wrong image (got: $(echo "${_qs_result}" | grep RESULT_IMAGE))"
     fi
+fi
+
+# ---------- Test 20: Executable DASHBOARD_SESSION_SECRET support ----------
+
+section "Test 20: Executable DASHBOARD_SESSION_SECRET support"
+
+# _start_dashboard must always pass -e DASHBOARD_SESSION_SECRET=<64 hex chars>
+# to docker run: from the environment when set, from the persisted env file
+# otherwise, and generate + persist only as a last resort (issue #1311).
+# Without it the dashboard disables multi-user login (fail closed).
+
+_test_start_dashboard_secret() {
+    local _env_secret="$1" _file_secret="$2"
+    local _tmpfile _tmpenv
+    _tmpfile=$(mktemp)
+    _tmpenv=$(mktemp)
+
+    if ! extract_function "_start_dashboard" "${INSTALL_SCRIPT}" > "${_tmpfile}" 2>/dev/null; then
+        echo "EXTRACTION_FAILED"
+        rm -f "${_tmpfile}" "${_tmpenv}"
+        return
+    fi
+
+    if [ -n "${_file_secret}" ]; then
+        echo "DASHBOARD_SESSION_SECRET=${_file_secret}" >> "${_tmpenv}"
+    fi
+
+    (
+        generate_key() { echo "generated-secret-placeholder-0123456789abcdef"; }
+        log() { :; }
+        msg() { echo "$*"; }
+        # Mock curl/sleep so the readiness wait loop finishes instantly
+        # instead of polling a real port for up to 60s.
+        curl() { return 1; }
+        sleep() { :; }
+
+        RUN_SECRET=""
+        docker() {
+            local _arg
+            for _arg in "$@"; do
+                case "${_arg}" in
+                    DASHBOARD_SESSION_SECRET=*) RUN_SECRET="${_arg#DASHBOARD_SESSION_SECRET=}" ;;
+                esac
+            done
+            case "$1" in
+                ps)
+                    if [ "$2" = "-a" ]; then
+                        echo "agentteams-dashboard"
+                    else
+                        echo "agentteams-controller"
+                    fi
+                    ;;
+            esac
+            return 0
+        }
+        podman() { docker "$@"; }
+        DOCKER_CMD="docker"
+
+        AGENTTEAMS_DASHBOARD=1
+        AGENTTEAMS_USE_EMBEDDED=1
+        AGENTTEAMS_REGISTRY="ghcr.io/agentteams-group"
+        AGENTTEAMS_PORT_DASHBOARD="13000"
+        AGENTTEAMS_DASHBOARD_VERSION="v1.0.0"
+        AGENTTEAMS_DASHBOARD_IMAGE="ghcr.io/agentteams-group/agentteams/agentteams-dashboard:v1.0.0"
+        AGENTTEAMS_LOCAL_ONLY=1
+        AGENTTEAMS_NETWORK="agentteams-net"
+        AGENTTEAMS_AI_GATEWAY_ADMIN_URL=""
+        AGENTTEAMS_AUTH_TOKEN="test-token"
+        AGENTTEAMS_ENV_FILE="${_tmpenv}"
+
+        if [ -n "${_env_secret}" ]; then
+            DASHBOARD_SESSION_SECRET="${_env_secret}"
+        else
+            unset DASHBOARD_SESSION_SECRET
+        fi
+
+        source "${_tmpfile}" 2>/dev/null
+
+        if ! declare -F _start_dashboard >/dev/null 2>&1; then
+            echo "FUNCTION_NOT_FOUND"
+        else
+            _start_dashboard
+            echo "RUN_SECRET=${RUN_SECRET}"
+            echo "FILE_SECRET=$(grep '^DASHBOARD_SESSION_SECRET=' "${_tmpenv}" 2>/dev/null | cut -d= -f2-)"
+        fi
+    )
+    rm -f "${_tmpfile}" "${_tmpenv}"
+}
+
+# Test 20a: explicit environment secret is passed through untouched
+_env_secret_result=$(_test_start_dashboard_secret "env-secret-aaaaaaaaaaaaaaaa" "" 2>&1)
+if echo "${_env_secret_result}" | grep -q "EXTRACTION_FAILED\|FUNCTION_NOT_FOUND"; then
+    fail "Exec session-secret: function extraction failed"
+else
+    if echo "${_env_secret_result}" | grep -q "RUN_SECRET=env-secret-aaaaaaaaaaaaaaaa"; then
+        pass "Exec session-secret: honors environment DASHBOARD_SESSION_SECRET"
+    else
+        fail "Exec session-secret: env secret not passed to docker run (got: $(echo "${_env_secret_result}" | grep RUN_SECRET))"
+    fi
+    if echo "${_env_secret_result}" | grep -q "FILE_SECRET=$"; then
+        pass "Exec session-secret: does not rewrite env file when secret is set"
+    else
+        fail "Exec session-secret: rewrote env file despite a preset secret"
+    fi
+fi
+
+# Test 20b: secret persisted in env file is reused (no regeneration)
+_file_secret_result=$(_test_start_dashboard_secret "" "file-secret-bbbbbbbbbbbbbbb" 2>&1)
+if echo "${_file_secret_result}" | grep -q "EXTRACTION_FAILED\|FUNCTION_NOT_FOUND"; then
+    fail "Exec session-secret (file): function extraction failed"
+else
+    if echo "${_file_secret_result}" | grep -q "RUN_SECRET=file-secret-bbbbbbbbbbbbbbb"; then
+        pass "Exec session-secret: reuses secret persisted in env file"
+    else
+        fail "Exec session-secret: env-file secret not used (got: $(echo "${_file_secret_result}" | grep RUN_SECRET))"
+    fi
+fi
+
+# Test 20c: nothing set anywhere → generate, persist, and pass to container
+_generated_result=$(_test_start_dashboard_secret "" "" 2>&1)
+if echo "${_generated_result}" | grep -q "EXTRACTION_FAILED\|FUNCTION_NOT_FOUND"; then
+    fail "Exec session-secret (generate): function extraction failed"
+else
+    if echo "${_generated_result}" | grep -q "RUN_SECRET=generated-secret-placeholder-0123456789abcdef"; then
+        pass "Exec session-secret: generates a secret when none is configured"
+    else
+        fail "Exec session-secret: no secret generated (got: $(echo "${_generated_result}" | grep RUN_SECRET))"
+    fi
+    if echo "${_generated_result}" | grep -q "FILE_SECRET=generated-secret-placeholder-0123456789abcdef"; then
+        pass "Exec session-secret: persists generated secret to env file"
+    else
+        fail "Exec session-secret: generated secret not persisted (got: $(echo "${_generated_result}" | grep FILE_SECRET))"
+    fi
+fi
+
+# Test 20d: env file heredoc writes the secret for later runs
+if grep -q '^DASHBOARD_SESSION_SECRET=' "${INSTALL_SCRIPT}"; then
+    pass "Env file generation persists DASHBOARD_SESSION_SECRET"
+else
+    fail "DASHBOARD_SESSION_SECRET missing from env file generation"
+fi
+
+# ---------- Test 21: Secret generation during install ----------
+
+section "Test 21: Session secret generated during install"
+
+if grep -A 40 'Generate secrets' "${INSTALL_SCRIPT}" | grep -q 'DASHBOARD_SESSION_SECRET'; then
+    pass "Install generates DASHBOARD_SESSION_SECRET in the secrets step"
+else
+    fail "Secrets step does not generate DASHBOARD_SESSION_SECRET"
+fi
+
+if grep -q 'export DASHBOARD_SESSION_SECRET' "${INSTALL_SCRIPT}"; then
+    pass "DASHBOARD_SESSION_SECRET is exported for later steps"
+else
+    fail "DASHBOARD_SESSION_SECRET is never exported"
 fi
 
 # ---------- Summary ----------

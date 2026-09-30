@@ -1525,6 +1525,7 @@ load_current_params_from_env() {
         [ -z "${AGENTTEAMS_PORT_DASHBOARD:+x}" ] && AGENTTEAMS_PORT_DASHBOARD="$(grep '^AGENTTEAMS_PORT_DASHBOARD=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         [ -z "${AGENTTEAMS_DASHBOARD_IMAGE:+x}" ] && AGENTTEAMS_DASHBOARD_IMAGE="$(grep '^AGENTTEAMS_DASHBOARD_IMAGE=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         [ -z "${AGENTTEAMS_AI_GATEWAY_ADMIN_URL:+x}" ] && AGENTTEAMS_AI_GATEWAY_ADMIN_URL="$(grep '^AGENTTEAMS_AI_GATEWAY_ADMIN_URL=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+        [ -z "${DASHBOARD_SESSION_SECRET:+x}" ] && DASHBOARD_SESSION_SECRET="$(grep '^DASHBOARD_SESSION_SECRET=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         [ -z "${AGENTTEAMS_DATA_DIR:+x}" ] && AGENTTEAMS_DATA_DIR="$(grep '^AGENTTEAMS_DATA_DIR=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         return 0
     fi
@@ -3365,6 +3366,31 @@ _start_dashboard() {
 
     # Build env args from controller container (MinIO/LLM/auth).
     local env_args=()
+
+    # Dashboard session secret: the dashboard refuses multi-user login (fail
+    # closed) when DASHBOARD_SESSION_SECRET is missing or shorter than 64 hex
+    # chars. Resolve it from the environment, then from the persisted env file,
+    # and only generate (and persist) when neither has it — persisting keeps
+    # sessions valid across container rebuilds (issue #1311).
+    local _dash_env_file="${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}"
+    if [ -z "${DASHBOARD_SESSION_SECRET:-}" ]; then
+        DASHBOARD_SESSION_SECRET="$(grep '^DASHBOARD_SESSION_SECRET=' "${_dash_env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+    fi
+    if [ -z "${DASHBOARD_SESSION_SECRET}" ]; then
+        DASHBOARD_SESSION_SECRET="$(generate_key)"
+        if [ -w "${_dash_env_file}" ] || touch "${_dash_env_file}" 2>/dev/null; then
+            echo "DASHBOARD_SESSION_SECRET=${DASHBOARD_SESSION_SECRET}" >> "${_dash_env_file}"
+            chmod 600 "${_dash_env_file}" 2>/dev/null || true
+            log "  Generated Dashboard session secret (saved to ${_dash_env_file})"
+        else
+            log "WARNING: could not persist Dashboard session secret to ${_dash_env_file}."
+            log "  Sessions will be invalidated if the dashboard container is recreated."
+            log "  Set DASHBOARD_SESSION_SECRET explicitly (openssl rand -hex 32)."
+        fi
+    fi
+    export DASHBOARD_SESSION_SECRET
+    env_args+=(-e DASHBOARD_SESSION_SECRET="${DASHBOARD_SESSION_SECRET}")
+
     env_args+=(-e AGENTTEAMS_CONTROLLER_URL="http://${CTRL_CONTAINER}:8090")
     env_args+=(-e NEXT_PUBLIC_MATRIX_API_URL="http://${CTRL_CONTAINER}:6167")
     env_args+=(-e MATRIX_HOMESERVER_ALLOWLIST="${CTRL_CONTAINER},matrix-local.agentteams.io,matrix.org")
@@ -3666,6 +3692,17 @@ install_manager() {
     AGENTTEAMS_MINIO_PASSWORD="${AGENTTEAMS_MINIO_PASSWORD:-${AGENTTEAMS_ADMIN_PASSWORD}}"
     AGENTTEAMS_MANAGER_GATEWAY_KEY="${AGENTTEAMS_MANAGER_GATEWAY_KEY:-$(generate_key)}"
 
+    # Dashboard session secret — multi-user login fails closed without a stable
+    # secret (>=64 hex chars). Generated once and persisted to the env file so
+    # container rebuilds keep existing sessions valid (issue #1311).
+    if [ -z "${DASHBOARD_SESSION_SECRET}" ]; then
+        DASHBOARD_SESSION_SECRET="$(generate_key)"
+        if [ "${AGENTTEAMS_DASHBOARD:-1}" = "1" ]; then
+            log "  Auto-generated Dashboard session secret (saved to env file)"
+        fi
+    fi
+    export DASHBOARD_SESSION_SECRET
+
     # Matrix AppService tokens — generate once during install/upgrade if not provided.
     # Persisted to env file so they survive controller restarts.
     AGENTTEAMS_MATRIX_APPSERVICE_ENABLED="${AGENTTEAMS_MATRIX_APPSERVICE_ENABLED:-true}"
@@ -3814,6 +3851,8 @@ AGENTTEAMS_DASHBOARD_VERSION=${AGENTTEAMS_DASHBOARD_VERSION:-v1.2.4.9}
 AGENTTEAMS_PORT_DASHBOARD=${AGENTTEAMS_PORT_DASHBOARD:-13000}
 AGENTTEAMS_DASHBOARD_IMAGE=${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}}
 AGENTTEAMS_AI_GATEWAY_ADMIN_URL=${AGENTTEAMS_AI_GATEWAY_ADMIN_URL:-}
+# Dashboard session secret (multi-user login; regenerate with `openssl rand -hex 32`)
+DASHBOARD_SESSION_SECRET=${DASHBOARD_SESSION_SECRET}
 EOF
 
     chmod 600 "${ENV_FILE}"

@@ -56,6 +56,7 @@ jobs:
             openclaw-base agentteams-controller agentteams-embedded
             agentteams-manager agentteams-manager-qwenpaw agentteams-worker
             agentteams-copaw-worker agentteams-qwenpaw-worker agentteams-hermes-worker
+            agentteams-cli-harness-worker
           )
           for image in "${images[@]}"; do
             ref="${REGISTRY}/${REPO}/${image}:${VERSION}"

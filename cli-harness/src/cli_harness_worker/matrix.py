@@ -21,6 +21,7 @@ from nio import (
     JoinResponse,
     LoginResponse,
     RoomMessageText,
+    SyncResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -114,8 +115,29 @@ class MatrixLoop:
                 "Join own room %s failed: %s", self.own_room_id, response
             )
 
+    async def catch_up_sync(self) -> None:
+        """Advance the sync cursor without dispatching historical messages.
+
+        First start (or a wiped nio store) has no ``since`` token. A full
+        ``sync_forever`` would replay every stored room event as a new task.
+        Mirror the CoPaw Matrix channel: one callback-suppressed catch-up
+        sync, then resume incremental processing from ``next_batch``.
+        """
+        logger.info("Matrix catch-up sync (historical messages suppressed)")
+        saved_cbs = self.client.event_callbacks[:]
+        self.client.event_callbacks.clear()
+        try:
+            response = await self.client.sync(timeout=30000, full_state=True)
+        finally:
+            self.client.event_callbacks.extend(saved_cbs)
+        if isinstance(response, SyncResponse):
+            logger.info("Matrix catch-up sync done (next_batch=%s)", response.next_batch)
+        else:
+            logger.warning("Matrix catch-up sync failed: %s", response)
+
     async def run(self) -> None:
         self._worker_task = asyncio.create_task(self._task_worker())
+        await self.catch_up_sync()
         # sync_forever retries internally; it only returns on fatal errors.
         await self.client.sync_forever(timeout=30000, full_state=True)
 

@@ -180,7 +180,7 @@ fi
 log "  Backend: ${URL_PROTO}://${API_DOMAIN}:${URL_PORT}"
 
 SVC_SOURCE_NAME="${SERVER_NAME}-proxy"
-higress_api POST /v1/service-sources "Registering ${SVC_SOURCE_NAME} DNS service source (${API_DOMAIN}:${URL_PORT})" \
+higress_api POST /v1/service-sources "Registering ${SVC_SOURCE_NAME} DNS service source (${URL_PROTO}://${API_DOMAIN}:${URL_PORT})" \
     '{"type":"dns","name":"'"${SVC_SOURCE_NAME}"'","domain":"'"${API_DOMAIN}"'","port":'"${URL_PORT}"',"protocol":"'"${URL_PROTO}"'"}'
 SERVICE_REF='[{"name":"'"${SVC_SOURCE_NAME}"'.dns","port":'"${URL_PORT}"',"weight":100}]'
 

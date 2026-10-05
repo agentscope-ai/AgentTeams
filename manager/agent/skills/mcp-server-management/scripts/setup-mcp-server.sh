@@ -220,6 +220,17 @@ if [ -n "${EXPLICIT_API_DOMAIN}" ]; then
         log "ERROR: --api-domain port must be between 1 and 65535."
         exit 1
     fi
+    # A scheme-less host:port registers as https (issue #1284: a plain-HTTP
+    # internal gateway then fails with 503s far from the root cause). Surface
+    # the assumption so the http:// prefix is not a hidden requirement.
+    case "${EXPLICIT_API_DOMAIN}" in
+        http://*|https://*) ;;
+        *)
+            if [[ "${EXPLICIT_API_DOMAIN}" == *:* ]]; then
+                log "  NOTE: no scheme given — registering as ${URL_PROTO}. Add http:// for a plain-HTTP service."
+            fi
+            ;;
+    esac
     if [[ "${API_DOMAIN}" != *.* ]]; then
         log "ERROR: Higress DNS service sources require a dotted hostname. Give your Docker service a network alias such as tools.example.local."
         exit 1
@@ -264,7 +275,7 @@ if [ -z "${API_DOMAIN}" ]; then
 fi
 
 SVC_SOURCE_NAME="${SERVER_NAME}-api"
-higress_api POST /v1/service-sources "Registering ${SVC_SOURCE_NAME} DNS service source (${API_DOMAIN}:${URL_PORT})" \
+higress_api POST /v1/service-sources "Registering ${SVC_SOURCE_NAME} DNS service source (${URL_PROTO}://${API_DOMAIN}:${URL_PORT})" \
     '{"type":"dns","name":"'"${SVC_SOURCE_NAME}"'","domain":"'"${API_DOMAIN}"'","port":'"${URL_PORT}"',"protocol":"'"${URL_PROTO}"'"}'
 SERVICE_REF='[{"name":"'"${SVC_SOURCE_NAME}"'.dns","port":'"${URL_PORT}"',"weight":100}]'
 

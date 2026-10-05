@@ -30,6 +30,7 @@ on:
       - 'tests/check-powershell-deepseek-harness-latest.ps1'
       - 'tests/check-windows-appservice-normalization.ps1'
       - 'tests/check-apply-wrapper-flags.sh'
+      - 'tests/check-mcp-setup-domain-parsing.sh'
       - 'tests/check-helm-agentteams.sh'
       - 'tests/check-create-project-grant-admin.sh'
       - 'manager/agent/skills/project-management/**'
@@ -84,6 +85,9 @@ jobs:
 
       - name: Check declarative apply wrapper flags
         run: bash tests/check-apply-wrapper-flags.sh
+
+      - name: Check MCP setup script domain parsing
+        run: bash tests/check-mcp-setup-domain-parsing.sh
 
       - name: Check create-project grant-admin wiring
         run: bash tests/check-create-project-grant-admin.sh

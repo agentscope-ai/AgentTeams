@@ -1524,6 +1524,7 @@ load_current_params_from_env() {
         [ -z "${AGENTTEAMS_DASHBOARD_VERSION:+x}" ] && AGENTTEAMS_DASHBOARD_VERSION="$(grep '^AGENTTEAMS_DASHBOARD_VERSION=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         [ -z "${AGENTTEAMS_PORT_DASHBOARD:+x}" ] && AGENTTEAMS_PORT_DASHBOARD="$(grep '^AGENTTEAMS_PORT_DASHBOARD=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         [ -z "${AGENTTEAMS_DASHBOARD_IMAGE:+x}" ] && AGENTTEAMS_DASHBOARD_IMAGE="$(grep '^AGENTTEAMS_DASHBOARD_IMAGE=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+        [ -z "${DASHBOARD_SESSION_SECRET:+x}" ] && DASHBOARD_SESSION_SECRET="$(grep '^DASHBOARD_SESSION_SECRET=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         [ -z "${AGENTTEAMS_AI_GATEWAY_ADMIN_URL:+x}" ] && AGENTTEAMS_AI_GATEWAY_ADMIN_URL="$(grep '^AGENTTEAMS_AI_GATEWAY_ADMIN_URL=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         [ -z "${AGENTTEAMS_DATA_DIR:+x}" ] && AGENTTEAMS_DATA_DIR="$(grep '^AGENTTEAMS_DATA_DIR=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         return 0
@@ -3368,6 +3369,21 @@ _start_dashboard() {
     env_args+=(-e AGENTTEAMS_CONTROLLER_URL="http://${CTRL_CONTAINER}:8090")
     env_args+=(-e NEXT_PUBLIC_MATRIX_API_URL="http://${CTRL_CONTAINER}:6167")
     env_args+=(-e MATRIX_HOMESERVER_ALLOWLIST="${CTRL_CONTAINER},matrix-local.agentteams.io,matrix.org")
+
+    # Session secret for dashboard multi-user login (issue #1311): the
+    # dashboard fail-closes when it is missing. Reuse an exported or persisted
+    # secret first so container rebuilds keep existing sessions valid; only a
+    # fresh install generates a new one, and the generated value is persisted
+    # to the env file for the same reason.
+    if [ -z "${DASHBOARD_SESSION_SECRET:-}" ]; then
+        DASHBOARD_SESSION_SECRET="$(grep '^DASHBOARD_SESSION_SECRET=' "${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+    fi
+    if [ -z "${DASHBOARD_SESSION_SECRET:-}" ]; then
+        DASHBOARD_SESSION_SECRET="$(openssl rand -hex 32)"
+        printf 'DASHBOARD_SESSION_SECRET=%s\n' "${DASHBOARD_SESSION_SECRET}" >> "${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}" 2>/dev/null || true
+        chmod 600 "${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}" 2>/dev/null || true
+    fi
+    env_args+=(-e DASHBOARD_SESSION_SECRET="${DASHBOARD_SESSION_SECRET}")
 
     if ${DOCKER_CMD} ps --format '{{.Names}}' | grep -qx "${CTRL_CONTAINER}"; then
         local env_out

@@ -938,6 +938,9 @@ func buildMemberWorkerEnv(ctx context.Context, d MemberDeps, m MemberContext, pr
 		workerEnv["AGENTTEAMS_AI_GATEWAY_URL"] = m.ModelProviderInfo.IntranetURL
 	}
 	workerEnv["AGENTTEAMS_WORKER_ROLE"] = m.Role.String()
+	// SandboxClaim cannot patch PodSpec env; CLI-harness adapters still need
+	// the resolved runtime via the mounted worker env file.
+	workerEnv["AGENTTEAMS_WORKER_RUNTIME"] = backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime)
 	mergeUserEnv(workerEnv, m.Spec.Env, logger, string(m.Role)+"/"+m.Name)
 	return workerEnv, nil
 }

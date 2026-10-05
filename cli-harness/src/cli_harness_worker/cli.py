@@ -1,0 +1,80 @@
+"""CLI entry point: ``cli-harness-worker``."""
+from __future__ import annotations
+
+import asyncio
+import logging
+import signal
+from pathlib import Path
+from typing import Optional
+
+import typer
+
+from cli_harness_worker.adapters import adapter_names
+from cli_harness_worker.config import WorkerConfig
+from cli_harness_worker.worker import Worker
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+
+
+def main() -> None:
+    """Entry point registered in pyproject.toml."""
+
+    def _run(
+        name: str = typer.Option(..., "--name", help="Worker name"),
+        runtime: str = typer.Option(
+            "",
+            "--runtime",
+            help="CLI runtime (one of: " + ", ".join(adapter_names()) + ")",
+        ),
+        fs: str = typer.Option(..., "--fs", help="MinIO endpoint"),
+        fs_key: str = typer.Option(..., "--fs-key", help="MinIO access key"),
+        fs_secret: str = typer.Option(..., "--fs-secret", help="MinIO secret key"),
+        fs_bucket: str = typer.Option(
+            "agentteams-storage", "--fs-bucket", help="MinIO bucket"
+        ),
+        sync_interval: int = typer.Option(
+            300, "--sync-interval", help="Sync interval (seconds)"
+        ),
+        install_dir: Optional[str] = typer.Option(
+            None, "--install-dir", help="Base install dir"
+        ),
+    ) -> None:
+        """Start the CLI-harness worker and bridge Matrix to the CLI agent."""
+        resolved_runtime = runtime or __import__("os").environ.get(
+            "AGENTTEAMS_WORKER_RUNTIME", ""
+        )
+        config = WorkerConfig(
+            worker_name=name,
+            minio_endpoint=fs,
+            minio_access_key=fs_key,
+            minio_secret_key=fs_secret,
+            minio_bucket=fs_bucket,
+            sync_interval=sync_interval,
+            install_dir=Path(install_dir) if install_dir else None,
+            runtime=resolved_runtime,
+        )
+        worker = Worker(config)
+
+        async def _async_run() -> None:
+            loop = asyncio.get_running_loop()
+
+            def _shutdown() -> None:
+                asyncio.create_task(worker.stop())
+
+            try:
+                for sig in (signal.SIGINT, signal.SIGTERM):
+                    loop.add_signal_handler(sig, _shutdown)
+            except NotImplementedError:
+                pass
+
+            await worker.run()
+
+        try:
+            asyncio.run(_async_run())
+        except KeyboardInterrupt:
+            pass
+
+    typer.run(_run)

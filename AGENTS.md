@@ -16,6 +16,7 @@ AgentTeams/
 ├── worker/              # OpenClaw Worker image (shared base pattern; runtime also selected at deploy time)
 ├── copaw/               # CoPaw Python package source (published as e.g. copaw-worker on PyPI)
 ├── hermes/              # Hermes Python package source (Hermes Matrix worker runtime)
+├── cli-harness/         # Shared CLI-harness worker image (atomcode/codex/claude-code/kimi-code/pi)
 ├── deepseek-harness/    # Experimental headless DeepSeek Harness Worker image and Matrix bridge
 ├── openhuman/           # OpenHuman Worker image: Rust core + native Matrix (channel-matrix feature)
 ├── openclaw-base/       # Base image: Ubuntu + Node.js + bundled agent assets + mcporter
@@ -44,6 +45,7 @@ Logs and local artifacts (for example replay logs) stay out of git via `.gitigno
 | `copaw`    | Python / AgentScope via CoPaw | Alternative worker runtime |
 | `hermes`   | Python / `hermes-worker` package | Alternative worker runtime (Matrix bridge + policies under `hermes/src/`) |
 | `deepseek-harness` | Node.js / DeepSeek Harness | Experimental headless Worker runtime pinned to a tested DSH release |
+| `atomcode` / `codex` / `claude-code` / `kimi-code` / `pi` | Headless CLI coding agents on the shared `cli-harness/` image | Harness provides MinIO sync + Matrix transport + provider env; the CLI is the agent loop (`AGENTTEAMS_WORKER_RUNTIME` selects the adapter) |
 
 **Manager runtimes** (container env `AGENTTEAMS_MANAGER_RUNTIME`, CoPaw Manager CR / Helm `manager.runtime` where applicable):
 
@@ -75,6 +77,7 @@ manager/agent/
 ├── worker-agent/                # Builtin OpenClaw Worker workspace template
 ├── copaw-worker-agent/          # Builtin CoPaw Worker workspace template
 ├── hermes-worker-agent/         # Builtin Hermes Worker workspace template
+├── cli-harness-worker-agent/    # Builtin template shared by CLI coding-agent runtimes
 ├── team-leader-agent/           # Team Leader agent template (Teams feature)
 └── worker-skills/               # Extra worker skill templates (e.g. GitHub) pushed on demand
 ```
@@ -186,6 +189,11 @@ The Manager **image** is an agent runtime plus scripts; Higress, Tuwunel, MinIO,
 - [deepseek-harness/](deepseek-harness/) — managed image, Matrix bridge, persisted room sessions, and runtime tests
 - [plugins/teamharness/adapters/deepseek-harness/](plugins/teamharness/adapters/deepseek-harness/) — DSH-native TeamHarness adapter and compatibility checks
 
+### To modify the CLI-harness worker runtimes
+
+- [cli-harness/](cli-harness/) — shared image for `atomcode` / `codex` / `claude-code` / `kimi-code` / `pi`: Python package under `src/cli_harness_worker/` (sync, bridge, Matrix loop, CLI adapters), entrypoint in `scripts/`
+- Adapter selection: controller injects `AGENTTEAMS_WORKER_RUNTIME`; `AGENTTEAMS_CLI_ADAPTER` is the escape hatch, `AGENTTEAMS_CLI_EXTRA_ARGS` covers CLI flag drift
+
 ### To modify the OpenHuman worker runtime
 
 - [openhuman/](openhuman/) — Rust-based Worker runtime with native Matrix support (`channel-matrix` feature flag)
@@ -232,6 +240,7 @@ In `k8s` / `aliyun` modes, Workers are created via the controller API instead of
 | Agent Framework | Hermes (`hermes-worker`) | Alternative Python Worker runtime |
 | Agent Framework | DeepSeek Harness (`@deepseek-ai/dsh`) | Experimental headless Worker runtime with room-scoped session continuation |
 | Agent Framework | OpenHuman (`openhuman-core`) | Alternative Rust Worker runtime with native Matrix |
+| Agent Framework | CLI coding agents (`cli-harness-worker`) | Headless CLI runtimes (atomcode/codex/claude-code/kimi-code/pi) on one shared image |
 | MCP CLI | mcporter | Worker calls MCP Server tools via CLI |
 
 ## Release Notes Policy
@@ -262,6 +271,7 @@ This convention applies to all files that end up in the Agent's workspace or are
 - `manager/agent/worker-agent/**` (OpenClaw Worker Agent config, builtin skills)
 - `manager/agent/copaw-worker-agent/**` (CoPaw Worker Agent config, builtin skills)
 - `manager/agent/hermes-worker-agent/**` (Hermes Worker Agent config, builtin skills)
+- `manager/agent/cli-harness-worker-agent/**` (CLI-harness Worker Agent config, builtin skills)
 - `manager/agent/team-leader-agent/**` (Team Leader Agent config and skills)
 - `manager/agent/worker-skills/**` (on-demand skill definitions pushed to Workers)
 

@@ -79,10 +79,11 @@ COPY manager/scripts/lib/ /opt/agentteams/scripts/lib/
 COPY shared/lib/ /opt/agentteams/scripts/lib/
 RUN chmod +x /opt/agentteams/scripts/init/*.sh
 
-# Agent templates (builtin AGENTS.md, skills for worker, copaw-worker, hermes-worker, team-leader)
+# Agent templates (builtin AGENTS.md, skills for worker, copaw-worker, hermes-worker, cli-harness, team-leader)
 COPY manager/agent/worker-agent/ /opt/agentteams/agent/worker-agent/
 COPY manager/agent/copaw-worker-agent/ /opt/agentteams/agent/copaw-worker-agent/
 COPY manager/agent/hermes-worker-agent/ /opt/agentteams/agent/hermes-worker-agent/
+COPY manager/agent/cli-harness-worker-agent/ /opt/agentteams/agent/cli-harness-worker-agent/
 COPY manager/agent/team-leader-agent/ /opt/agentteams/agent/team-leader-agent/
 COPY manager/agent/skills/ /opt/agentteams/agent/skills/
 COPY manager/agent/worker-skills/ /opt/agentteams/agent/worker-skills/

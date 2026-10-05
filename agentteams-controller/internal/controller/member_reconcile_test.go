@@ -308,6 +308,41 @@ func TestCreateMemberContainerPassesMemberRoleEnv(t *testing.T) {
 	if got := req.Env["AGENTTEAMS_WORKER_ROLE"]; got != "team_leader" {
 		t.Fatalf("AGENTTEAMS_WORKER_ROLE=%q, want team_leader", got)
 	}
+	if got := req.Env["AGENTTEAMS_WORKER_RUNTIME"]; got != "openclaw" {
+		t.Fatalf("AGENTTEAMS_WORKER_RUNTIME=%q, want openclaw default", got)
+	}
+}
+
+func TestCreateMemberContainerInjectsResolvedWorkerRuntimeEnv(t *testing.T) {
+	wb := mocks.NewMockWorkerBackend()
+	state := &MemberState{
+		ProvResult: &service.WorkerProvisionResult{MatrixToken: "token"},
+	}
+
+	_, err := createMemberContainer(context.Background(), MemberDeps{
+		Provisioner:  mocks.NewMockProvisioner(),
+		EnvBuilder:   mocks.NewMockEnvBuilder(),
+		DefaultRuntime: "kimi-code",
+	}, MemberContext{
+		Name:        "worker-cr-a",
+		RuntimeName: "worker-a",
+		Role:        RoleStandalone,
+		Spec:        v1beta1.WorkerSpec{Runtime: "claude-code", Image: "img:latest"},
+	}, state, wb)
+	if err != nil {
+		t.Fatalf("createMemberContainer failed: %v", err)
+	}
+
+	req, ok := wb.LastCreateReq()
+	if !ok {
+		t.Fatal("expected backend Create to be called")
+	}
+	if got := req.Env["AGENTTEAMS_WORKER_RUNTIME"]; got != "claude-code" {
+		t.Fatalf("AGENTTEAMS_WORKER_RUNTIME=%q, want claude-code", got)
+	}
+	if got := req.RuntimeFallback; got != "kimi-code" {
+		t.Fatalf("RuntimeFallback=%q, want kimi-code", got)
+	}
 }
 
 func TestReconcileMemberContainerSpecChangedDeletesRunningSandboxWithoutHash(t *testing.T) {

@@ -43,7 +43,7 @@ class BuildWorkflowTests(unittest.TestCase):
         self.assertEqual(selected, {
             'openclaw-base', 'agentteams-controller', 'embedded',
             'manager', 'manager-qwenpaw', 'worker', 'copaw-worker',
-            'hermes-worker', 'qwenpaw-worker',
+            'hermes-worker', 'qwenpaw-worker', 'cli-harness-worker',
         })
         self.assertEqual(selected, set(BUILD['jobs']) - {'prepare', 'release'})
         self.assertEqual(set(BUILD['jobs']['release']['needs']), selected | {'prepare'})
@@ -137,7 +137,7 @@ class BuildWorkflowTests(unittest.TestCase):
         single = json.dumps({'manifests': [{'platform': {'os': 'linux', 'architecture': 'amd64'}}]})
         with tempfile.TemporaryDirectory() as directory:
             stub = Path(directory) / 'docker'
-            stub.write_text('#!/bin/bash\nprintf "%s\\n" "$4" >> "$IMAGE_LOG"\nif [[ "$4" == *agentteams-hermes-worker:* ]]; then\n  printf "%s" "$LAST_MANIFEST"\n  exit "$LAST_STATUS"\nfi\nprintf "%s" "$MANIFEST"\n')
+            stub.write_text('#!/bin/bash\nprintf "%s\\n" "$4" >> "$IMAGE_LOG"\nif [[ "$4" == *agentteams-cli-harness-worker:* ]]; then\n  printf "%s" "$LAST_MANIFEST"\n  exit "$LAST_STATUS"\nfi\nprintf "%s" "$MANIFEST"\n')
             stub.chmod(0o755)
             for manifest, status, success in [(both, '0', True), (single, '0', False), ('', '1', False), ('not-json', '0', False), ('', '0', False)]:
                 with self.subTest(manifest=manifest, status=status):
@@ -150,7 +150,7 @@ class BuildWorkflowTests(unittest.TestCase):
                                                  'MANIFEST': both, 'LAST_MANIFEST': manifest,
                                                  'LAST_STATUS': status, 'IMAGE_LOG': str(log)})
                     self.assertEqual(result.returncode == 0, success, result.stderr)
-                    self.assertEqual(len(set(log.read_text().splitlines())), 9)
+                    self.assertEqual(len(set(log.read_text().splitlines())), 10)
 
 
 if __name__ == '__main__':

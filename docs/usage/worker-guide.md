@@ -27,8 +27,9 @@ Full field reference: [Declarative Resource Management](resource-management.md).
 | **copaw** | `/root/.agentteams-worker/<worker-name>/` (runtime config in `.copaw/`) | Legacy compatibility path. A symlink **`/root/agentteams-fs`** → the per-worker tree keeps scripts that assume OpenClaw-style paths working. |
 | **qwenpaw** | `/root/agentteams-fs/agents/<worker-name>/` (QwenPaw config in `.qwenpaw/`) | QwenPaw 2.x path. When switching from `copaw`, persisted state is restored before the legacy `.copaw/` state is migrated to `.qwenpaw/`. Shared data: `/root/agentteams-fs/shared/`. |
 | **hermes** | `/root/agentteams-fs/agents/<worker-name>/` (`HOME` equals workspace, same mirror root as OpenClaw) | Hermes policy/state under **`.hermes/`** inside that directory (e.g. `.hermes/config.yaml`, `state.db`). |
+| **atomcode** / **codex** / **claude-code** / **kimi-code** / **pi** | `/root/agentteams-fs/agents/<worker-name>/` (`HOME` equals workspace) | CLI coding-agent runtimes sharing the **cli-harness** image; harness state under **`.cli-harness/`**. Each runtime value selects a different headless CLI as the agent loop. |
 
-The Controller contains an OpenHuman backend, but the shipped Worker CRD enum does not currently accept an explicit `spec.runtime: openhuman`. Until that contract is fixed in a separate business-code change, do not create an OpenHuman Worker through the normal Worker CR flow.
+The shipped Worker CRD enum accepts `openhuman` and the CLI coding-agent runtimes listed above.
 
 ## Installation
 

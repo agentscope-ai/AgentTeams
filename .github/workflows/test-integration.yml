@@ -16,6 +16,7 @@ on:
       - 'qwenpaw/**'
       - 'hermes/**'
       - 'deepseek-harness/**'
+      - 'cli-harness/**'
       - 'plugins/teamharness/adapters/qwenpaw/**'
       - 'plugins/teamharness/adapters/deepseek-harness/**'
       - 'plugins/workerflow/adapters/qwenpaw/**'
@@ -38,6 +39,7 @@ on:
       - 'qwenpaw/**'
       - 'hermes/**'
       - 'deepseek-harness/**'
+      - 'cli-harness/**'
       - 'plugins/teamharness/adapters/qwenpaw/**'
       - 'plugins/teamharness/adapters/deepseek-harness/**'
       - 'plugins/workerflow/adapters/qwenpaw/**'
@@ -253,7 +255,7 @@ jobs:
       fail-fast: false
       matrix:
         # copaw-worker is retained for test-23 migration, not standalone regression.
-        target: [embedded, manager, manager-qwenpaw, worker, copaw-worker, qwenpaw-worker, hermes-worker, deepseek-harness-worker]
+        target: [embedded, manager, manager-qwenpaw, worker, copaw-worker, qwenpaw-worker, hermes-worker, deepseek-harness-worker, cli-harness-worker]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

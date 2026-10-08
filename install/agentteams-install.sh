@@ -38,6 +38,7 @@
 #   AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE Override QwenPaw worker image (e.g., local build)
 #   AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE Override hermes worker image (e.g., local build)
 #   AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE Override experimental DeepSeek Harness worker image
+#   AGENTTEAMS_INSTALL_CLI_HARNESS_WORKER_IMAGE Override CLI-harness worker image (atomcode/codex/claude-code/kimi-code/pi)
 #   AGENTTEAMS_NACOS_REGISTRY_URI          Default Nacos registry URI for Worker market search/import
 #                                      (default: nacos://market.agentteams.io:80/public)
 #   AGENTTEAMS_NACOS_USERNAME              Default Nacos username for nacos:// package imports (optional)
@@ -1154,6 +1155,7 @@ COPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-}"
 QWENPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE:-}"
 HERMES_WORKER_IMAGE="${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-}"
 DEEPSEEK_HARNESS_WORKER_IMAGE="${AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE:-}"
+CLI_HARNESS_WORKER_IMAGE="${AGENTTEAMS_INSTALL_CLI_HARNESS_WORKER_IMAGE:-}"
 CONTROLLER_IMAGE="${AGENTTEAMS_INSTALL_CONTROLLER_IMAGE:-}"
 
 resolve_image_tags() {
@@ -1166,13 +1168,18 @@ resolve_image_tags() {
     QWENPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-qwenpaw-worker:${AGENTTEAMS_VERSION}}"
     HERMES_WORKER_IMAGE="${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-hermes-worker:${AGENTTEAMS_VERSION}}"
     DEEPSEEK_HARNESS_WORKER_IMAGE="${AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-deepseek-harness-worker:${AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION}}"
+    CLI_HARNESS_WORKER_IMAGE="${AGENTTEAMS_INSTALL_CLI_HARNESS_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-cli-harness-worker:${AGENTTEAMS_VERSION}}"
     EMBEDDED_IMAGE="${AGENTTEAMS_INSTALL_EMBEDDED_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-embedded:${AGENTTEAMS_VERSION}}"
-    # CoPaw Worker introduced in v1.0.4; Hermes Worker introduced in v1.1.0
+    # CoPaw Worker introduced in v1.0.4; Hermes Worker introduced in v1.1.0;
+    # CLI-harness Worker (atomcode/codex/claude-code/kimi-code/pi) introduced in v1.2.5
     if [ -z "${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-}" ] && _ver_lt "${AGENTTEAMS_VERSION}" "v1.0.4"; then
         COPAW_WORKER_IMAGE=""
     fi
     if [ -z "${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-}" ] && _ver_lt "${AGENTTEAMS_VERSION}" "v1.1.0"; then
         HERMES_WORKER_IMAGE=""
+    fi
+    if [ -z "${AGENTTEAMS_INSTALL_CLI_HARNESS_WORKER_IMAGE:-}" ] && _ver_lt "${AGENTTEAMS_VERSION}" "v1.2.5"; then
+        CLI_HARNESS_WORKER_IMAGE=""
     fi
     if ! _supports_deepseek_harness "${AGENTTEAMS_VERSION}"; then
         DEEPSEEK_HARNESS_WORKER_IMAGE=""
@@ -1524,6 +1531,7 @@ load_current_params_from_env() {
         [ -z "${AGENTTEAMS_DASHBOARD_VERSION:+x}" ] && AGENTTEAMS_DASHBOARD_VERSION="$(grep '^AGENTTEAMS_DASHBOARD_VERSION=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         [ -z "${AGENTTEAMS_PORT_DASHBOARD:+x}" ] && AGENTTEAMS_PORT_DASHBOARD="$(grep '^AGENTTEAMS_PORT_DASHBOARD=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         [ -z "${AGENTTEAMS_DASHBOARD_IMAGE:+x}" ] && AGENTTEAMS_DASHBOARD_IMAGE="$(grep '^AGENTTEAMS_DASHBOARD_IMAGE=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+        [ -z "${DASHBOARD_SESSION_SECRET:+x}" ] && DASHBOARD_SESSION_SECRET="$(grep '^DASHBOARD_SESSION_SECRET=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         [ -z "${AGENTTEAMS_AI_GATEWAY_ADMIN_URL:+x}" ] && AGENTTEAMS_AI_GATEWAY_ADMIN_URL="$(grep '^AGENTTEAMS_AI_GATEWAY_ADMIN_URL=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         [ -z "${AGENTTEAMS_DATA_DIR:+x}" ] && AGENTTEAMS_DATA_DIR="$(grep '^AGENTTEAMS_DATA_DIR=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         return 0
@@ -3369,6 +3377,25 @@ _start_dashboard() {
     env_args+=(-e NEXT_PUBLIC_MATRIX_API_URL="http://${CTRL_CONTAINER}:6167")
     env_args+=(-e MATRIX_HOMESERVER_ALLOWLIST="${CTRL_CONTAINER},matrix-local.agentteams.io,matrix.org")
 
+    # Session secret for dashboard multi-user login (issue #1311): the
+    # dashboard fail-closes when it is missing. Resolve in order — exported
+    # env (upgrade / dashboard subcommand), then the env file, then generate.
+    # Persist the resolved value for every path (generated, exported, or
+    # read back) so an installer env-file rewrite cannot drop a secret that
+    # only lived in memory.
+    local _dash_env="${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}"
+    if [ -z "${DASHBOARD_SESSION_SECRET:-}" ]; then
+        DASHBOARD_SESSION_SECRET="$(grep '^DASHBOARD_SESSION_SECRET=' "${_dash_env}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+    fi
+    if [ -z "${DASHBOARD_SESSION_SECRET:-}" ]; then
+        DASHBOARD_SESSION_SECRET="$(openssl rand -hex 32)"
+    fi
+    if ! grep -q '^DASHBOARD_SESSION_SECRET=' "${_dash_env}" 2>/dev/null; then
+        printf 'DASHBOARD_SESSION_SECRET=%s\n' "${DASHBOARD_SESSION_SECRET}" >> "${_dash_env}" 2>/dev/null || true
+    fi
+    chmod 600 "${_dash_env}" 2>/dev/null || true
+    env_args+=(-e DASHBOARD_SESSION_SECRET="${DASHBOARD_SESSION_SECRET}")
+
     if ${DOCKER_CMD} ps --format '{{.Names}}' | grep -qx "${CTRL_CONTAINER}"; then
         local env_out
         env_out=$(${DOCKER_CMD} inspect "${CTRL_CONTAINER}" --format='{{range .Config.Env}}{{.}}{{"\n"}}{{end}}')
@@ -3665,6 +3692,9 @@ install_manager() {
     fi
     AGENTTEAMS_MINIO_PASSWORD="${AGENTTEAMS_MINIO_PASSWORD:-${AGENTTEAMS_ADMIN_PASSWORD}}"
     AGENTTEAMS_MANAGER_GATEWAY_KEY="${AGENTTEAMS_MANAGER_GATEWAY_KEY:-$(generate_key)}"
+    # Dashboard session secret for multi-user login (issue #1311).
+    # Generated once and written to the env file so upgrades and rebuilds reuse it.
+    DASHBOARD_SESSION_SECRET="${DASHBOARD_SESSION_SECRET:-$(generate_key)}"
 
     # Matrix AppService tokens — generate once during install/upgrade if not provided.
     # Persisted to env file so they survive controller restarts.
@@ -3771,8 +3801,9 @@ AGENTTEAMS_COPAW_WORKER_IMAGE=${COPAW_WORKER_IMAGE}
 AGENTTEAMS_QWENPAW_WORKER_IMAGE=${QWENPAW_WORKER_IMAGE}
 AGENTTEAMS_HERMES_WORKER_IMAGE=${HERMES_WORKER_IMAGE}
 AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE=${DEEPSEEK_HARNESS_WORKER_IMAGE}
+AGENTTEAMS_CLI_HARNESS_WORKER_IMAGE=${CLI_HARNESS_WORKER_IMAGE}
 
-# Default Worker runtime (qwenpaw | openclaw | hermes | copaw | deepseek-harness [experimental])
+# Default Worker runtime (qwenpaw | openclaw | hermes | copaw | deepseek-harness | atomcode | codex | claude-code | kimi-code | pi)
 AGENTTEAMS_DEFAULT_WORKER_RUNTIME=${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-qwenpaw}
 
 # Matrix E2EE (0=disabled, 1=enabled; default: 0)
@@ -3814,6 +3845,7 @@ AGENTTEAMS_DASHBOARD_VERSION=${AGENTTEAMS_DASHBOARD_VERSION:-v1.2.4.9}
 AGENTTEAMS_PORT_DASHBOARD=${AGENTTEAMS_PORT_DASHBOARD:-13000}
 AGENTTEAMS_DASHBOARD_IMAGE=${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}}
 AGENTTEAMS_AI_GATEWAY_ADMIN_URL=${AGENTTEAMS_AI_GATEWAY_ADMIN_URL:-}
+DASHBOARD_SESSION_SECRET=${DASHBOARD_SESSION_SECRET:-}
 EOF
 
     chmod 600 "${ENV_FILE}"
@@ -3944,6 +3976,9 @@ EOF
     _pull_image "${QWENPAW_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
     _pull_image "${HERMES_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
     _pull_image "${DEEPSEEK_HARNESS_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
+    if [ -n "${CLI_HARNESS_WORKER_IMAGE}" ]; then
+        _pull_image "${CLI_HARNESS_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
+    fi
 
     # --- Pre-upgrade: extract Matrix passwords from running old containers ---
     # Only needed when upgrading FROM old architecture (v1.0.9) TO embedded.
@@ -4170,6 +4205,7 @@ CREDEOF
             -e "${_ctrl_env_prefix}QWENPAW_WORKER_IMAGE=${QWENPAW_WORKER_IMAGE}"
             -e "${_ctrl_env_prefix}HERMES_WORKER_IMAGE=${HERMES_WORKER_IMAGE}"
             -e "${_ctrl_env_prefix}DEEPSEEK_HARNESS_WORKER_IMAGE=${DEEPSEEK_HARNESS_WORKER_IMAGE}"
+            -e "${_ctrl_env_prefix}CLI_HARNESS_WORKER_IMAGE=${CLI_HARNESS_WORKER_IMAGE}"
             -e "${_ctrl_env_prefix}MATRIX_DOMAIN=${_matrix_domain}"
             -e "${_ctrl_env_prefix}ELEMENT_HOMESERVER_URL=http://127.0.0.1:${AGENTTEAMS_PORT_GATEWAY}"
             -e "${_ctrl_env_prefix}MATRIX_URL=http://127.0.0.1:6167"
@@ -4436,6 +4472,7 @@ CREDEOF
                     -e AGENTTEAMS_QWENPAW_WORKER_IMAGE="${QWENPAW_WORKER_IMAGE}" \
                     -e AGENTTEAMS_HERMES_WORKER_IMAGE="${HERMES_WORKER_IMAGE}" \
                     -e AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE="${DEEPSEEK_HARNESS_WORKER_IMAGE}" \
+                    -e AGENTTEAMS_CLI_HARNESS_WORKER_IMAGE="${CLI_HARNESS_WORKER_IMAGE}" \
                     ${AGENTTEAMS_PROXY_ALLOWED_REGISTRIES:+-e AGENTTEAMS_PROXY_ALLOWED_REGISTRIES="${AGENTTEAMS_PROXY_ALLOWED_REGISTRIES}"} \
                     --restart unless-stopped \
                     "${_proxy_image}"

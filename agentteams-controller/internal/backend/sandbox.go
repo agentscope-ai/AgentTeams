@@ -41,6 +41,7 @@ type SandboxConfig struct {
 	OpenHumanWorkerImage         string
 	QwenPawWorkerImage           string
 	DeepSeekHarnessWorkerImage   string
+	CLIHarnessWorkerImage        string
 	WorkerCPU                    string
 	WorkerMemory                 string
 	SandboxPrewarmSize           int
@@ -157,6 +158,8 @@ func (s *SandboxBackend) Create(ctx context.Context, req CreateRequest) (*Worker
 			workerImage = s.config.QwenPawWorkerImage
 		case req.Runtime == RuntimeDeepSeekHarness && s.config.DeepSeekHarnessWorkerImage != "":
 			workerImage = s.config.DeepSeekHarnessWorkerImage
+		case IsCLIHarnessRuntime(req.Runtime) && s.config.CLIHarnessWorkerImage != "":
+			workerImage = s.config.CLIHarnessWorkerImage
 		case s.config.WorkerImage != "":
 			workerImage = s.config.WorkerImage
 		}

@@ -39,13 +39,32 @@ func TestValidRuntime(t *testing.T) {
 		{RuntimeOpenClaw, true},
 		{RuntimeCopaw, true},
 		{RuntimeHermes, true},
+		{RuntimeOpenHuman, true},
 		{RuntimeQwenPaw, true},
 		{RuntimeDeepSeekHarness, true},
+		{RuntimeAtomCode, true},
+		{RuntimeCodex, true},
+		{RuntimeClaudeCode, true},
+		{RuntimeKimiCode, true},
+		{RuntimePi, true},
 		{"unknown", false},
 	}
 	for _, tc := range cases {
 		if got := ValidRuntime(tc.in); got != tc.want {
 			t.Fatalf("ValidRuntime(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestIsCLIHarnessRuntime(t *testing.T) {
+	for _, r := range []string{RuntimeAtomCode, RuntimeCodex, RuntimeClaudeCode, RuntimeKimiCode, RuntimePi} {
+		if !IsCLIHarnessRuntime(r) {
+			t.Fatalf("IsCLIHarnessRuntime(%q) = false, want true", r)
+		}
+	}
+	for _, r := range []string{"", RuntimeOpenClaw, RuntimeCopaw, RuntimeHermes, RuntimeOpenHuman, RuntimeQwenPaw, RuntimeDeepSeekHarness, "unknown"} {
+		if IsCLIHarnessRuntime(r) {
+			t.Fatalf("IsCLIHarnessRuntime(%q) = true, want false", r)
 		}
 	}
 }

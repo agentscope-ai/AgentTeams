@@ -17,7 +17,7 @@
 #
 # Usage:
 #   update-worker-config.sh --name <NAME> [--model <MODEL_ID>] [--skills s1,s2] [--mcp-servers s1,s2] [--package-dir <DIR>]
-#   update-worker-config.sh --name <NAME> --runtime <openclaw|copaw|qwenpaw|hermes|openhuman> [--model <MODEL_ID>] [--skills s1,s2] [--mcp-servers s1,s2]
+#   update-worker-config.sh --name <NAME> --runtime <openclaw|copaw|qwenpaw|hermes|openhuman|atomcode|codex|claude-code|kimi-code|pi> [--model <MODEL_ID>] [--skills s1,s2] [--mcp-servers s1,s2]
 #
 # Prerequisites:
 #   - Worker must already exist (created via create-worker.sh)
@@ -65,7 +65,7 @@ done
 
 if [ -z "${WORKER_NAME}" ]; then
     echo "Usage: update-worker-config.sh --name <NAME> [--model <MODEL>] [--skills s1,s2] [--mcp-servers s1,s2] [--package-dir <DIR>]"
-    echo "       update-worker-config.sh --name <NAME> --runtime <openclaw|copaw|qwenpaw|hermes|openhuman> [--model <MODEL>] [--skills s1,s2] [--mcp-servers s1,s2]"
+    echo "       update-worker-config.sh --name <NAME> --runtime <openclaw|copaw|qwenpaw|hermes|openhuman|atomcode|codex|claude-code|kimi-code|pi> [--model <MODEL>] [--skills s1,s2] [--mcp-servers s1,s2]"
     exit 1
 fi
 
@@ -82,8 +82,8 @@ fi
 # ============================================================
 if [ -n "${RUNTIME}" ]; then
     case "${RUNTIME}" in
-        openclaw|copaw|qwenpaw|hermes|openhuman) ;;
-        *) _fail "Invalid --runtime '${RUNTIME}'. Must be one of: openclaw, copaw, qwenpaw, hermes, openhuman." ;;
+        openclaw|copaw|qwenpaw|hermes|openhuman|atomcode|codex|claude-code|kimi-code|pi) ;;
+        *) _fail "Invalid --runtime '${RUNTIME}'. Must be one of: openclaw, copaw, qwenpaw, hermes, openhuman, atomcode, codex, claude-code, kimi-code, pi." ;;
     esac
 
     if [ -n "${PACKAGE_DIR}" ]; then
@@ -250,6 +250,9 @@ if [ -n "${PACKAGE_DIR}" ] && [ -d "${PACKAGE_DIR}" ]; then
         _agent_src="/opt/agentteams/agent/copaw-worker-agent"
     elif [ "${_runtime}" = "hermes" ]; then
         _agent_src="/opt/agentteams/agent/hermes-worker-agent"
+    elif case "${_runtime}" in atomcode|codex|claude-code|kimi-code|pi) true ;; *) false ;; esac \
+         && [ -d "/opt/agentteams/agent/cli-harness-worker-agent" ]; then
+        _agent_src="/opt/agentteams/agent/cli-harness-worker-agent"
     else
         _agent_src="/opt/agentteams/agent/worker-agent"
     fi

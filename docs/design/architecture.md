@@ -10,7 +10,7 @@ AgentTeams is an **Agent Teams** platform: a **Manager** coordinates **Workers**
 |--------|------|------------------|
 | **agentteams-controller** | Go operator: reconciles **Worker**, **Manager**, **Team**, and **Human** CRDs; REST API; worker/manager lifecycle; gateway consumer setup; credential flows when cloud providers are enabled. | `agentteams-controller` (Kubernetes) or **`agentteams-controller-embedded`** (local): Higress all-in-one + **Tuwunel** + **MinIO** + **Element Web** (nginx) + controller binary |
 | **Manager** | Coordinator agent: tasks, workers, teams, humans, Higress routes/MCP—via Matrix and the controller API. | `agentteams-manager` (OpenClaw / Node) or `agentteams-manager-qwenpaw` (QwenPaw / Python)—based on **openclaw-base** or slim Python, **without** full infra stack |
-| **Worker** | Task executor: one container per worker, created on demand; stateless; config and artifacts on object storage. | `agentteams-worker`, `agentteams-copaw-worker`, `agentteams-qwenpaw-worker`, `agentteams-hermes-worker`, or experimental `agentteams-deepseek-harness-worker` |
+| **Worker** | Task executor: one container per worker, created on demand; stateless; config and artifacts on object storage. | `agentteams-worker`, `agentteams-copaw-worker`, `agentteams-qwenpaw-worker`, `agentteams-hermes-worker`, experimental `agentteams-deepseek-harness-worker`, or `agentteams-cli-harness-worker` (shared by CLI coding-agent runtimes) |
 
 The **openclaw-base** image supplies **Ubuntu 24.04**, **Node.js 22**, **OpenClaw**, and **mcporter** for OpenClaw-based Manager/Worker images. It intentionally **does not** ship the old all-in-one Higress bundle; the AI gateway runs in the **controller** (embedded) or as the **Higress Helm subchart** (Kubernetes).
 
@@ -152,8 +152,10 @@ the Console API surface.
 | **qwenpaw** | Python / **QwenPaw 2.x** | Current QwenPaw Worker path; uses `agentteams-qwenpaw-worker` and the `.qwenpaw/` runtime directory |
 | **hermes** | Python / **`hermes-worker`** | Matrix worker runtime with Hermes policy/config tree under `hermes-worker-agent/` |
 | **deepseek-harness** (experimental) | Node.js / **DeepSeek Harness** | Headless DSH Worker; consumes Controller-projected `runtime.yaml`, supports Matrix text/files, and persists room sessions and delivery state to object storage; pinned to a tested DSH release candidate |
+| **openhuman** | Rust / **`openhuman-core`** | Native Matrix (optional E2EE) worker runtime on `agentteams-openhuman-worker` |
+| **atomcode** / **codex** / **claude-code** / **kimi-code** / **pi** | Headless CLI coding agents on the shared **`agentteams-cli-harness-worker`** image | The controller injects `AGENTTEAMS_WORKER_RUNTIME`; the harness provides MinIO sync + Matrix transport + provider env, and the CLI is the agent loop. Builtin template: `cli-harness-worker-agent/` |
 
-The shipped Worker CRD enum accepts the five values above. The Controller and Helm values already contain an OpenHuman backend and default image configuration, but the current CRD does not accept an explicit `spec.runtime: openhuman`, so this document does not list it as a directly declarable Worker runtime. The current chart also has no `worker.defaultImage.qwenpaw`; set `spec.image` explicitly when using `qwenpaw` in a CR. The controller resolves the effective runtime and image when creating Pods or Docker containers.
+The shipped Worker CRD enum accepts the runtime values above (openclaw, copaw, hermes, openhuman, qwenpaw, deepseek-harness, plus the five CLI coding-agent runtimes). The chart still has no `worker.defaultImage.qwenpaw`; set `spec.image` explicitly when using `qwenpaw` in a CR. The controller resolves the effective runtime and image when creating Pods or Docker containers.
 
 ### Manager runtimes
 

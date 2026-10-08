@@ -605,11 +605,15 @@ func TestDockerCreateResolvesImageFromRuntime(t *testing.T) {
 		{"explicit_hermes_uses_hermes_image", RuntimeHermes, "", "agentteams/hermes-worker:latest"},
 		{"explicit_qwenpaw_uses_qwenpaw_image", RuntimeQwenPaw, "", "agentteams/qwenpaw-worker:latest"},
 		{"explicit_deepseek_harness_uses_deepseek_harness_image", RuntimeDeepSeekHarness, "", "agentteams/deepseek-harness-worker:latest"},
+		{"explicit_claude_code_uses_cli_harness_image", RuntimeClaudeCode, "", "agentteams/cli-harness-worker:latest"},
+		{"explicit_codex_uses_cli_harness_image", RuntimeCodex, "", "agentteams/cli-harness-worker:latest"},
+		{"explicit_pi_uses_cli_harness_image", RuntimePi, "", "agentteams/cli-harness-worker:latest"},
 		{"explicit_openclaw_uses_worker_image", RuntimeOpenClaw, "", "agentteams/worker-agent:latest"},
 		{"empty_runtime_with_no_fallback_uses_worker_image", "", "", "agentteams/worker-agent:latest"},
 		{"empty_runtime_with_copaw_fallback_uses_copaw_image", "", RuntimeCopaw, "agentteams/copaw-worker:latest"},
 		{"empty_runtime_with_hermes_fallback_uses_hermes_image", "", RuntimeHermes, "agentteams/hermes-worker:latest"},
 		{"empty_runtime_with_qwenpaw_fallback_uses_qwenpaw_image", "", RuntimeQwenPaw, "agentteams/qwenpaw-worker:latest"},
+		{"empty_runtime_with_cli_fallback_uses_cli_harness_image", "", RuntimeKimiCode, "agentteams/cli-harness-worker:latest"},
 		{"explicit_runtime_overrides_fallback", RuntimeOpenClaw, RuntimeHermes, "agentteams/worker-agent:latest"},
 	}
 	for _, tc := range cases {
@@ -624,6 +628,7 @@ func TestDockerCreateResolvesImageFromRuntime(t *testing.T) {
 					HermesWorkerImage:          "agentteams/hermes-worker:latest",
 					QwenPawWorkerImage:         "agentteams/qwenpaw-worker:latest",
 					DeepSeekHarnessWorkerImage: "agentteams/deepseek-harness-worker:latest",
+					CLIHarnessWorkerImage:      "agentteams/cli-harness-worker:latest",
 					DefaultNetwork:             "agentteams-net",
 				},
 				containerPrefix: "agentteams-worker-",

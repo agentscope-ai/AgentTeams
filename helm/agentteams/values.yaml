@@ -303,6 +303,9 @@ worker:
     deepseekHarness:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-deepseek-harness-worker
       tag: "v0.1.0"           # experimental; released independently from global.imageTag
+    cli-harness:
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-cli-harness-worker
+      tag: ""                 # defaults to global.imageTag; shared by atomcode/codex/claude-code/kimi-code/pi runtimes
   defaultRuntime: "openclaw"
   resources:
     requests:

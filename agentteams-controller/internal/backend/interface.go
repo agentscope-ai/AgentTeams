@@ -39,6 +39,29 @@ const (
 	RuntimeDeepSeekHarness = "deepseek-harness"
 )
 
+// CLI coding-agent runtimes. All of them share a single cli-harness worker
+// image; the runtime value selects the headless CLI adapter inside the
+// container (via the AGENTTEAMS_WORKER_RUNTIME env the backends inject).
+// DeepSeek Harness is served by its dedicated deepseek-harness runtime above,
+// so it is deliberately absent here.
+const (
+	RuntimeAtomCode   = "atomcode"
+	RuntimeCodex      = "codex"
+	RuntimeClaudeCode = "claude-code"
+	RuntimeKimiCode   = "kimi-code"
+	RuntimePi         = "pi"
+)
+
+// IsCLIHarnessRuntime reports whether r is one of the CLI coding-agent
+// runtimes that run on the shared cli-harness worker image.
+func IsCLIHarnessRuntime(r string) bool {
+	switch r {
+	case RuntimeAtomCode, RuntimeCodex, RuntimeClaudeCode, RuntimeKimiCode, RuntimePi:
+		return true
+	}
+	return false
+}
+
 const (
 	// BuiltinSandboxInstanceName is the fixed name for the shared SandboxSet,
 	// built-in worker-deps PV, AgentIdentity resources, and AccessKey Secret.
@@ -61,7 +84,10 @@ func NormalizeAuthTokenExpirationSeconds(seconds int64) int64 {
 // ValidRuntime reports whether r is a recognized runtime value.
 // An empty string is valid — backends resolve it via ResolveRuntime.
 func ValidRuntime(r string) bool {
-	return r == "" || r == RuntimeOpenClaw || r == RuntimeCopaw || r == RuntimeHermes || r == RuntimeOpenHuman || r == RuntimeQwenPaw || r == RuntimeDeepSeekHarness
+	if r == "" || IsCLIHarnessRuntime(r) {
+		return true
+	}
+	return r == RuntimeOpenClaw || r == RuntimeCopaw || r == RuntimeHermes || r == RuntimeOpenHuman || r == RuntimeQwenPaw || r == RuntimeDeepSeekHarness
 }
 
 // UsesMemberRuntimeConfig reports whether a runtime consumes the

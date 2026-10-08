@@ -44,6 +44,11 @@ jobs:
           trap 'rm -f "$error_file"' EXIT
           if manifest="$(docker buildx imagetools inspect "$ref" --raw 2>"$error_file")"; then
             # A successful command must still return a recognizable manifest.
+            # jq -e alone accepts empty stdin, so reject it explicitly.
+            if [[ -z "$manifest" ]]; then
+              echo "ERROR: empty manifest returned for $ref"
+              exit 1
+            fi
             jq -e 'type == "object" and
               ((.manifests | type) == "array" or
                ((.config | type) == "object" and (.layers | type) == "array"))

@@ -108,7 +108,7 @@ fi
 
 section "Test 2: load_current_params_from_env loads Dashboard config"
 
-dashboard_env_vars="AGENTTEAMS_DASHBOARD AGENTTEAMS_DASHBOARD_VERSION AGENTTEAMS_PORT_DASHBOARD AGENTTEAMS_DASHBOARD_IMAGE AGENTTEAMS_AI_GATEWAY_ADMIN_URL"
+dashboard_env_vars="AGENTTEAMS_DASHBOARD AGENTTEAMS_DASHBOARD_VERSION AGENTTEAMS_PORT_DASHBOARD AGENTTEAMS_DASHBOARD_IMAGE DASHBOARD_SESSION_SECRET AGENTTEAMS_AI_GATEWAY_ADMIN_URL"
 for var in ${dashboard_env_vars}; do
     if grep -A 50 'load_current_params_from_env()' "${INSTALL_SCRIPT}" | grep -q "${var}"; then
         pass "load_current_params_from_env loads ${var}"

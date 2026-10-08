@@ -101,6 +101,11 @@ jobs:
           IMAGE="${REGISTRY}/${REPO}/agentteams-deepseek-harness-worker:${VERSION}"
           docker buildx imagetools inspect "${IMAGE}"
           MANIFEST="$(docker buildx imagetools inspect --raw "${IMAGE}")"
+          # jq -e alone accepts empty stdin, so reject it explicitly.
+          if [[ -z "${MANIFEST}" ]]; then
+            echo "ERROR: ${IMAGE} returned an empty manifest"
+            exit 1
+          fi
           for PLATFORM in linux/amd64 linux/arm64; do
             if ! jq -e --arg platform "${PLATFORM}" \
               'any(.manifests[]?; ((.platform.os // "") + "/" + (.platform.architecture // "")) == $platform)' \

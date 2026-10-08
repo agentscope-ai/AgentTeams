@@ -43,7 +43,7 @@ class BuildWorkflowTests(unittest.TestCase):
         self.assertEqual(selected, {
             'openclaw-base', 'agentteams-controller', 'embedded',
             'manager', 'manager-qwenpaw', 'worker', 'copaw-worker',
-            'hermes-worker', 'qwenpaw-worker',
+            'hermes-worker', 'qwenpaw-worker', 'cli-harness-worker',
         })
         self.assertEqual(selected, set(BUILD['jobs']) - {'prepare', 'release'})
         self.assertEqual(set(BUILD['jobs']['release']['needs']), selected | {'prepare'})

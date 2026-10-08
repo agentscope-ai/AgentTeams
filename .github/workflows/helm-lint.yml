@@ -21,6 +21,7 @@ on:
       - 'tests/check-installer-username-validation.sh'
       - 'tests/check-installer-username-validation.ps1'
       - 'tests/check-installer-env-data-dir-readback.sh'
+      - 'tests/check-installer-dashboard-session-secret.sh'
       - 'tests/check-installer-embedded-latest-pull.sh'
       - 'tests/check-installer-auto-version-images.sh'
       - 'tests/check-teamharness-acceptance-observer.sh'
@@ -58,6 +59,9 @@ jobs:
 
       - name: Check installer data-dir env readback
         run: bash tests/check-installer-env-data-dir-readback.sh
+
+      - name: Check installer dashboard session secret
+        run: bash tests/check-installer-dashboard-session-secret.sh
 
       - name: Check embedded latest image pulling
         run: bash tests/check-installer-embedded-latest-pull.sh

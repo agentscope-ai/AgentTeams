@@ -199,6 +199,7 @@ app.kubernetes.io/component: {{ .component }}
 {{- end }}
 
 {{- define "agentteams.worker.cliHarnessImage" -}}
-{{- $tag := default (include "agentteams.globalImageTag" .) .Values.worker.defaultImage.cli-harness.tag }}
-{{- printf "%s:%s" .Values.worker.defaultImage.cli-harness.repository $tag }}
+{{- $cli := index .Values.worker.defaultImage "cli-harness" }}
+{{- $tag := default (include "agentteams.globalImageTag" .) $cli.tag }}
+{{- printf "%s:%s" $cli.repository $tag }}
 {{- end }}

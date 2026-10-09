@@ -3373,18 +3373,42 @@ _start_dashboard() {
     # Session secret for dashboard multi-user login (issue #1311): the
     # dashboard fail-closes when it is missing. Resolve in order — exported
     # env (upgrade / dashboard subcommand), then the env file, then generate.
-    # Persist the resolved value for every path (generated, exported, or
-    # read back) so an installer env-file rewrite cannot drop a secret that
-    # only lived in memory.
+    # Persist the resolved value whenever the stored field is missing, empty,
+    # or stale (explicit env override), keeping exactly one field, so a later
+    # process reuses this secret instead of generating a different one.
     local _dash_env="${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}"
     if [ -z "${DASHBOARD_SESSION_SECRET:-}" ]; then
-        DASHBOARD_SESSION_SECRET="$(grep '^DASHBOARD_SESSION_SECRET=' "${_dash_env}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+        DASHBOARD_SESSION_SECRET="$(grep '^DASHBOARD_SESSION_SECRET=' "${_dash_env}" 2>/dev/null | head -n1 | cut -d= -f2- | tr -d '\r')"
     fi
     if [ -z "${DASHBOARD_SESSION_SECRET:-}" ]; then
         DASHBOARD_SESSION_SECRET="$(openssl rand -hex 32)"
     fi
-    if ! grep -q '^DASHBOARD_SESSION_SECRET=' "${_dash_env}" 2>/dev/null; then
-        printf 'DASHBOARD_SESSION_SECRET=%s\n' "${DASHBOARD_SESSION_SECRET}" >> "${_dash_env}" 2>/dev/null || true
+    local _dash_stored
+    _dash_stored="$(grep '^DASHBOARD_SESSION_SECRET=' "${_dash_env}" 2>/dev/null | head -n1 | cut -d= -f2- | tr -d '\r')"
+    if [ "${_dash_stored}" != "${DASHBOARD_SESSION_SECRET}" ]; then
+        local _dash_tmp="${_dash_env}.secret.tmp"
+        local _persisted=0
+        if grep -q '^DASHBOARD_SESSION_SECRET=' "${_dash_env}" 2>/dev/null; then
+            # Replace the first field in place and drop any duplicate fields.
+            if awk -v secret="${DASHBOARD_SESSION_SECRET}" '
+                    !replaced && /^DASHBOARD_SESSION_SECRET=/ {
+                        print "DASHBOARD_SESSION_SECRET=" secret
+                        replaced = 1
+                        next
+                    }
+                    /^DASHBOARD_SESSION_SECRET=/ { next }
+                    { print }
+                ' "${_dash_env}" > "${_dash_tmp}" 2>/dev/null &&
+                cat "${_dash_tmp}" > "${_dash_env}" 2>/dev/null; then
+                _persisted=1
+            fi
+            rm -f "${_dash_tmp}" 2>/dev/null || true
+        elif printf 'DASHBOARD_SESSION_SECRET=%s\n' "${DASHBOARD_SESSION_SECRET}" >> "${_dash_env}" 2>/dev/null; then
+            _persisted=1
+        fi
+        if [ "${_persisted}" -ne 1 ]; then
+            log "WARNING: could not persist DASHBOARD_SESSION_SECRET to ${_dash_env}; a later start may generate a different secret"
+        fi
     fi
     chmod 600 "${_dash_env}" 2>/dev/null || true
     env_args+=(-e DASHBOARD_SESSION_SECRET="${DASHBOARD_SESSION_SECRET}")

@@ -355,4 +355,62 @@ if [ "${file_secret}" != "${fresh_secret}" ]; then
     exit 1
 fi
 
+# (5) The env file keeps the field but with an empty value: a new process
+# must treat it as missing, generate a secret, and overwrite the empty
+# field instead of skipping the writeback because the key already exists.
+awk '/^DASHBOARD_SESSION_SECRET=/ && !done { print "DASHBOARD_SESSION_SECRET="; done = 1; next } { print }' \
+    "${seq_env}" > "${seq_env}.empty"
+mv "${seq_env}.empty" "${seq_env}"
+if [ -n "$(read_file_secret)" ]; then
+    echo "FAIL: could not empty the persisted session secret for the empty-field case" >&2
+    exit 1
+fi
+unset DASHBOARD_SESSION_SECRET || true
+run_start_dashboard
+empty_field_secret="$(read_captured_secret)"
+if [ "${#empty_field_secret}" -lt 64 ]; then
+    echo "FAIL: empty-field start did not generate a session secret (got '${empty_field_secret}')" >&2
+    exit 1
+fi
+file_secret="$(read_file_secret)"
+if [ "${file_secret}" != "${empty_field_secret}" ]; then
+    echo "FAIL: empty DASHBOARD_SESSION_SECRET field was not overwritten (got '${file_secret}')" >&2
+    exit 1
+fi
+if [ "$(grep -c '^DASHBOARD_SESSION_SECRET=' "${seq_env}")" -ne 1 ]; then
+    echo "FAIL: empty-field writeback must keep exactly one DASHBOARD_SESSION_SECRET field" >&2
+    exit 1
+fi
+run_start_dashboard
+if [ "$(read_captured_secret)" != "${empty_field_secret}" ]; then
+    echo "FAIL: second process after empty-field writeback generated a different secret" >&2
+    exit 1
+fi
+
+# (6) An explicit environment override must be persisted so a later process
+# reuses the overridden value instead of reverting to the stale file value.
+override_secret="$(openssl rand -hex 32)"
+export DASHBOARD_SESSION_SECRET="${override_secret}"
+run_start_dashboard
+passed_secret="$(read_captured_secret)"
+if [ "${passed_secret}" != "${override_secret}" ]; then
+    echo "FAIL: override start passed '${passed_secret}', expected '${override_secret}'" >&2
+    exit 1
+fi
+file_secret="$(read_file_secret)"
+if [ "${file_secret}" != "${override_secret}" ]; then
+    echo "FAIL: explicit override was not persisted to the env file (got '${file_secret}')" >&2
+    exit 1
+fi
+if [ "$(grep -c '^DASHBOARD_SESSION_SECRET=' "${seq_env}")" -ne 1 ]; then
+    echo "FAIL: override writeback must keep exactly one DASHBOARD_SESSION_SECRET field" >&2
+    exit 1
+fi
+unset DASHBOARD_SESSION_SECRET || true
+run_start_dashboard
+if [ "$(read_captured_secret)" != "${override_secret}" ]; then
+    echo "FAIL: later process reverted to the stale secret instead of the override" >&2
+    exit 1
+fi
+
 echo "PASS: installer persists and reuses DASHBOARD_SESSION_SECRET for the dashboard"

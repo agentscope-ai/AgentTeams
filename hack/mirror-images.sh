@@ -58,7 +58,7 @@ IMAGES=(
     "quay.io/minio/minio:latest|minio|${DATE_TAG}"
     "quay.io/minio/mc:latest|mc|${DATE_TAG}"
     "docker.io/vectorim/element-web:latest|element-web|${DATE_TAG}"
-    "docker.io/library/node:20-slim|node|20-slim"
+    "docker.io/library/node:24-slim|node|24-slim"
     "docker.io/library/ubuntu:24.04|ubuntu|24.04"
     "docker.io/library/golang:1.23-alpine|golang|1.23-alpine"
     "docker.io/library/alpine:3.20|alpine|3.20"

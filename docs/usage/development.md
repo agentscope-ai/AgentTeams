@@ -359,10 +359,10 @@ Mounting the container runtime socket gives the container full control over the 
 
 ### Node.js Version
 
-OpenClaw requires **Node.js >= 22** (the `--disable-warning` flag used internally requires Node.js 21.3+). The Manager image is built on `openclaw-base` which already includes Node.js 22. The Worker Dockerfile copies Node.js 22 from a build stage.
+OpenClaw requires **Node.js >= 22** (the `--disable-warning` flag used internally requires Node.js 21.3+). The Manager image is built on `openclaw-base` which already includes Node.js 24. The Worker Dockerfile copies Node.js 24 from a build stage.
 
-- **Manager**: Node 22 is provided by `openclaw-base` (the base image already includes it).
-- **Worker**: Node 22 binary copied from build stage replaces Ubuntu 24.04 apt's Node.js 18.x (which lacks `--disable-warning` support).
+- **Manager**: Node 24 is provided by `openclaw-base` (the base image already includes it).
+- **Worker**: Node 24 binary copied from build stage replaces Ubuntu 24.04 apt's Node.js 18.x (which lacks `--disable-warning` support).
 
 ### Higress AI Provider API
 
@@ -500,9 +500,9 @@ mc ls test/agentteams-storage/ --recursive
 |---------|-------|-----|
 | `git clone` hangs during `docker build` | No proxy in build env | Pass `--build-arg http_proxy=...` via `DOCKER_BUILD_ARGS` |
 | Health checks return 503 | `http_proxy` capturing localhost requests | Set `no_proxy=localhost,127.0.0.1,::1` |
-| OpenClaw: `SyntaxError: Unexpected reserved word` | Node.js too old | Ensure Manager uses `openclaw-base` image; Worker uses Node.js 22 from build stage |
+| OpenClaw: `SyntaxError: Unexpected reserved word` | Node.js too old | Ensure Manager uses `openclaw-base` image; Worker uses Node.js 24 from build stage |
 | OpenClaw: `requires Node >=22.0.0` | Same as above | Same as above |
-| `--disable-warning= is not allowed in NODE_OPTIONS` | Node.js < 21.3 (e.g., Ubuntu apt's v18) | Ensure Worker uses Node.js 22 from build stage, not apt |
+| `--disable-warning= is not allowed in NODE_OPTIONS` | Node.js < 21.3 (e.g., Ubuntu apt's v18) | Ensure Worker uses Node.js 24 from build stage, not apt |
 | OpenClaw: `gateway.mode=local` required | Missing gateway config in openclaw.json | Add `"gateway": {"mode": "local", ...}` |
 | OpenClaw: `no token is configured` | Missing gateway auth token | Add `"gateway": {"auth": {"token": "..."}}` |
 | Higress: `Missing Qwen specific configurations` | `type=qwen` requires `rawConfigs` fields | Include `rawConfigs: {qwenEnableCompatible: true, ...}` — see `setup-higress.sh` |

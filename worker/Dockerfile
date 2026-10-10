@@ -21,7 +21,7 @@ FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
 FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS agentteams-controller
 
 # ============ Final Image: Based on openclaw-base ============
-# openclaw-base already includes: all-in-one + Node.js 22 + OpenClaw + mcporter + common tools
+# openclaw-base already includes: all-in-one + Node.js 24 + OpenClaw + mcporter + common tools
 FROM ${OPENCLAW_BASE_IMAGE}
 
 # mc (MinIO Client) — real binary; wrapper installed after shared libs are copied

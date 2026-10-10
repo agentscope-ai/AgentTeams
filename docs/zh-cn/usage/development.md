@@ -359,10 +359,10 @@ podman run -d --name agentteams-manager \
 
 ### Node.js 版本
 
-OpenClaw 需要 **Node.js >= 22**（内部使用的 `--disable-warning` 标志需要 Node.js 21.3+）。Manager 镜像基于 `openclaw-base` 构建，该基础镜像已包含 Node.js 22。Worker Dockerfile 从构建阶段复制 Node.js 22。
+OpenClaw 需要 **Node.js >= 22**（内部使用的 `--disable-warning` 标志需要 Node.js 21.3+）。Manager 镜像基于 `openclaw-base` 构建，该基础镜像已包含 Node.js 24。Worker Dockerfile 从构建阶段复制 Node.js 24。
 
-- **Manager**：Node 22 由 `openclaw-base` 提供（基础镜像已内置）。
-- **Worker**：从构建阶段复制的 Node 22 二进制文件替换了 Ubuntu 24.04 apt 的 Node.js 18.x（后者不支持 `--disable-warning`）。
+- **Manager**：Node 24 由 `openclaw-base` 提供（基础镜像已内置）。
+- **Worker**：从构建阶段复制的 Node 24 二进制文件替换了 Ubuntu 24.04 apt 的 Node.js 18.x（后者不支持 `--disable-warning`）。
 
 ### Higress AI Provider API
 
@@ -500,9 +500,9 @@ mc ls test/agentteams-storage/ --recursive
 |------|------|----------|
 | `docker build` 期间 `git clone` 卡住 | 构建环境没有代理 | 通过 `DOCKER_BUILD_ARGS` 传递 `--build-arg http_proxy=...` |
 | 健康检查返回 503 | `http_proxy` 拦截了 localhost 请求 | 设置 `no_proxy=localhost,127.0.0.1,::1` |
-| OpenClaw: `SyntaxError: Unexpected reserved word` | Node.js 版本过旧 | 确保 Manager 使用 `openclaw-base` 镜像；Worker 使用构建阶段的 Node.js 22 |
+| OpenClaw: `SyntaxError: Unexpected reserved word` | Node.js 版本过旧 | 确保 Manager 使用 `openclaw-base` 镜像；Worker 使用构建阶段的 Node.js 24 |
 | OpenClaw: `requires Node >=22.0.0` | 同上 | 同上 |
-| `--disable-warning= is not allowed in NODE_OPTIONS` | Node.js < 21.3（如 Ubuntu apt 的 v18） | 确保 Worker 使用构建阶段的 Node.js 22，而非 apt 安装的版本 |
+| `--disable-warning= is not allowed in NODE_OPTIONS` | Node.js < 21.3（如 Ubuntu apt 的 v18） | 确保 Worker 使用构建阶段的 Node.js 24，而非 apt 安装的版本 |
 | OpenClaw: `gateway.mode=local` required | openclaw.json 中缺少网关配置 | 添加 `"gateway": {"mode": "local", ...}` |
 | OpenClaw: `no token is configured` | 缺少网关认证 token | 添加 `"gateway": {"auth": {"token": "..."}}` |
 | Higress: `Missing Qwen specific configurations` | `type=qwen` 需要 `rawConfigs` 字段 | 包含 `rawConfigs: {qwenEnableCompatible: true, ...}`——参见 `setup-higress.sh` |

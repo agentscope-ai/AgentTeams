@@ -547,8 +547,12 @@ msg() {
         # --- Admin Credentials ---
         "admin.title.zh") text="--- 管理员凭据 ---" ;;
         "admin.title.en") text="--- Admin Credentials ---" ;;
-        "admin.username_prompt.zh") text="管理员用户名" ;;
-        "admin.username_prompt.en") text="Admin Username" ;;
+        "admin.username_prompt.zh") text="管理员用户名（至少 3 个字符）" ;;
+        "admin.username_prompt.en") text="Admin Username (min 3 characters)" ;;
+        "admin.username_too_short.zh") text="管理员用户名至少需要 3 个字符（MinIO 要求）。当前长度: %s" ;;
+        "admin.username_too_short.en") text="Admin username must be at least 3 characters (MinIO requirement). Current length: %s" ;;
+        "admin.minio_username_too_short.zh") text="AGENTTEAMS_MINIO_USER 至少需要 3 个字符。当前长度: %s" ;;
+        "admin.minio_username_too_short.en") text="AGENTTEAMS_MINIO_USER must be at least 3 characters. Current length: %s" ;;
         "admin.password_prompt.zh") text="管理员密码（留空自动生成，最少 8 位）" ;;
         "admin.password_prompt.en") text="Admin Password (leave empty to auto-generate, min 8 chars)" ;;
         "admin.password_generated.zh") text="  已自动生成管理员密码" ;;
@@ -566,8 +570,6 @@ msg() {
         "port.element_prompt.en") text="Host port for Element Web direct access (8088 inside container)" ;;
         "port.manager_console_prompt.zh") text="Manager 控制台主机端口（容器内 18888）" ;;
         "port.manager_console_prompt.en") text="Host port for Manager console (18888 inside container)" ;;
-        "port.copaw_app_prompt.zh") text="CoPaw App API 主机端口（容器内 18799）" ;;
-        "port.copaw_app_prompt.en") text="Host port for CoPaw App API (18799 inside container)" ;;
         # --- Local-only binding ---
         "port.local_only.title.zh") text="--- 网络访问模式 ---" ;;
         "port.local_only.title.en") text="--- Network Access Mode ---" ;;
@@ -658,12 +660,12 @@ msg() {
         "worker_runtime.deepseek_harness.en") text="DeepSeek Harness (experimental)" ;;
         "worker_runtime.deepseek_unavailable.zh") text="当前 Controller 版本不支持 DeepSeek Harness；请使用 v1.2.4+，或同时覆盖兼容的 Worker 与 embedded Controller 镜像" ;;
         "worker_runtime.deepseek_unavailable.en") text="The selected Controller version does not support DeepSeek Harness; use v1.2.4+, or override both the Worker and compatible embedded Controller image" ;;
-        "worker_runtime.choice.zh") text="请选择 [1/2/3/4]" ;;
-        "worker_runtime.choice.en") text="Enter choice [1/2/3/4]" ;;
-        "worker_runtime.choice_dsh.zh") text="请选择 [1/2/3/4/5]" ;;
-        "worker_runtime.choice_dsh.en") text="Enter choice [1/2/3/4/5]" ;;
-        "worker_runtime.choice_legacy.zh") text="请选择 [1/2/3]" ;;
-        "worker_runtime.choice_legacy.en") text="Enter choice [1/2/3]" ;;
+        "worker_runtime.choice.zh") text="请选择 [1/2/3]" ;;
+        "worker_runtime.choice.en") text="Enter choice [1/2/3]" ;;
+        "worker_runtime.choice_dsh.zh") text="请选择 [1/2/3/4]" ;;
+        "worker_runtime.choice_dsh.en") text="Enter choice [1/2/3/4]" ;;
+        "worker_runtime.choice_legacy.zh") text="请选择 [1/2]" ;;
+        "worker_runtime.choice_legacy.en") text="Enter choice [1/2]" ;;
         "worker_runtime.selected.zh") text="默认 Worker 运行时: %s" ;;
         "worker_runtime.selected.en") text="Default Worker runtime: %s" ;;
         "worker_runtime.title_short.zh") text="默认 Worker 运行时" ;;
@@ -676,8 +678,8 @@ msg() {
         "manager_runtime.qwenpaw.en") text="QwenPaw (recommended)" ;;
         "manager_runtime.copaw.zh") text="CoPaw（旧版本，建议升级为 QwenPaw）" ;;
         "manager_runtime.copaw.en") text="CoPaw (legacy; upgrade to QwenPaw recommended)" ;;
-        "manager_runtime.choice.zh") text="请选择 [1/2/3]" ;;
-        "manager_runtime.choice.en") text="Enter choice [1/2/3]" ;;
+        "manager_runtime.choice.zh") text="请选择 [1/2]" ;;
+        "manager_runtime.choice.en") text="Enter choice [1/2]" ;;
         "manager_runtime.selected.zh") text="Manager 运行时: %s" ;;
         "manager_runtime.selected.en") text="Manager runtime: %s" ;;
         "manager_runtime.title_short.zh") text="Manager 运行时" ;;
@@ -997,8 +999,6 @@ msg() {
         "success.manager_console.en") text="  Manager Console (local): http://localhost:%s (no login required)" ;;
         "success.manager_console_gateway.zh") text="  Manager 控制台（网关）: http://console-local.agentteams.io（用户名: %s / 密码: %s）" ;;
         "success.manager_console_gateway.en") text="  Manager Console (gateway): http://console-local.agentteams.io (Username: %s / Password: %s)" ;;
-        "success.copaw_console.zh") text="  CoPaw App API: http://localhost:%s（无需登录）" ;;
-        "success.copaw_console.en") text="  CoPaw App API: http://localhost:%s (no login required)" ;;
         "success.switch_llm.title.zh") text="--- 切换 LLM 提供商 ---" ;;
         "success.switch_llm.title.en") text="--- Switch LLM Providers ---" ;;
         "success.switch_llm.hint.zh") text="  您可以通过 Higress 控制台切换到其他 LLM 提供商（OpenAI、Anthropic 等）。" ;;
@@ -1156,9 +1156,10 @@ resolve_image_tags() {
     AGENTTEAMS_VERSION="$(_normalize_version "${AGENTTEAMS_VERSION}")"
     MANAGER_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-manager:${AGENTTEAMS_VERSION}}"
     MANAGER_QWENPAW_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-manager-qwenpaw:${AGENTTEAMS_VERSION}}"
-    MANAGER_COPAW_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-manager-copaw:${AGENTTEAMS_VERSION}}"
+    # CoPaw images are no longer built; only an explicit legacy override is honored.
+    MANAGER_COPAW_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE:-}"
     WORKER_IMAGE="${AGENTTEAMS_INSTALL_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-worker:${AGENTTEAMS_VERSION}}"
-    COPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-copaw-worker:${AGENTTEAMS_VERSION}}"
+    COPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-}"
     QWENPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-qwenpaw-worker:${AGENTTEAMS_VERSION}}"
     HERMES_WORKER_IMAGE="${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-hermes-worker:${AGENTTEAMS_VERSION}}"
     DEEPSEEK_HARNESS_WORKER_IMAGE="${AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-deepseek-harness-worker:${AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION}}"
@@ -1178,7 +1179,9 @@ resolve_image_tags() {
 manager_image_for_runtime() {
     case "${1:-qwenpaw}" in
         qwenpaw) printf '%s' "${MANAGER_QWENPAW_IMAGE}" ;;
-        copaw) printf '%s' "${MANAGER_COPAW_IMAGE}" ;;
+        # Legacy alias: route to the QwenPaw manager image unless an explicit
+        # AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE override is provided.
+        copaw) printf '%s' "${MANAGER_COPAW_IMAGE:-${MANAGER_QWENPAW_IMAGE}}" ;;
         *) printf '%s' "${MANAGER_IMAGE}" ;;
     esac
 }
@@ -1520,10 +1523,36 @@ load_current_params_from_env() {
         [ -z "${AGENTTEAMS_DASHBOARD_VERSION:+x}" ] && AGENTTEAMS_DASHBOARD_VERSION="$(grep '^AGENTTEAMS_DASHBOARD_VERSION=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         [ -z "${AGENTTEAMS_PORT_DASHBOARD:+x}" ] && AGENTTEAMS_PORT_DASHBOARD="$(grep '^AGENTTEAMS_PORT_DASHBOARD=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         [ -z "${AGENTTEAMS_DASHBOARD_IMAGE:+x}" ] && AGENTTEAMS_DASHBOARD_IMAGE="$(grep '^AGENTTEAMS_DASHBOARD_IMAGE=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+        [ -z "${DASHBOARD_SESSION_SECRET:+x}" ] && DASHBOARD_SESSION_SECRET="$(grep '^DASHBOARD_SESSION_SECRET=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         [ -z "${AGENTTEAMS_AI_GATEWAY_ADMIN_URL:+x}" ] && AGENTTEAMS_AI_GATEWAY_ADMIN_URL="$(grep '^AGENTTEAMS_AI_GATEWAY_ADMIN_URL=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         [ -z "${AGENTTEAMS_DATA_DIR:+x}" ] && AGENTTEAMS_DATA_DIR="$(grep '^AGENTTEAMS_DATA_DIR=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         return 0
     fi
+}
+
+# Legacy CoPaw upgrade compatibility (issue #1310): existing workers
+# commonly carry an empty spec.image and resolve their CoPaw worker image
+# from the deployment's env file. When upgrading (never on fresh
+# installs), carry the pre-upgrade AGENTTEAMS_COPAW_WORKER_IMAGE forward
+# so a post-upgrade wake/recreation keeps pulling the same image instead
+# of falling back to the controller's built-in default. An explicit
+# AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE override (already resolved into
+# COPAW_WORKER_IMAGE) always wins.
+inherit_legacy_copaw_worker_image() {
+    local env_file="${1:-}"
+    if [ -n "${COPAW_WORKER_IMAGE:-}" ]; then
+        return 0
+    fi
+    if [ -z "${env_file}" ] || [ ! -f "${env_file}" ]; then
+        return 0
+    fi
+    local legacy_image
+    legacy_image="$(grep '^AGENTTEAMS_COPAW_WORKER_IMAGE=' "${env_file}" 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d '\r')"
+    if [ -n "${legacy_image}" ]; then
+        COPAW_WORKER_IMAGE="${legacy_image}"
+        log "Keeping legacy CoPaw worker image from ${env_file}: ${legacy_image}"
+    fi
+    return 0
 }
 
 # In non-interactive mode, uses default or errors if required and no default.
@@ -2063,6 +2092,9 @@ step_existing() {
             fi
             # Load current parameters for both Keep-All and confirm-each modes
             load_current_params_from_env
+            # Legacy CoPaw deployments: carry the pre-upgrade worker image
+            # forward (fresh installs keep the image-less default).
+            inherit_legacy_copaw_worker_image "${existing_env}"
             if [ -n "${running_manager}" ] || [ -n "${running_workers}" ]; then
                 echo ""
                 echo -e "\033[33m$(msg install.existing.warn_manager_stop)\033[0m"
@@ -2511,8 +2543,18 @@ step_llm() {
 
 step_admin() {
     log "$(msg admin.title)"
-    prompt AGENTTEAMS_ADMIN_USER "$(msg admin.username_prompt)" "admin" || return 0
-    AGENTTEAMS_ADMIN_USER="$(printf '%s' "${AGENTTEAMS_ADMIN_USER}" | tr '[:upper:]' '[:lower:]')"
+    while true; do
+        prompt AGENTTEAMS_ADMIN_USER "$(msg admin.username_prompt)" "admin" || return 0
+        AGENTTEAMS_ADMIN_USER="$(printf '%s' "${AGENTTEAMS_ADMIN_USER}" | tr '[:upper:]' '[:lower:]')"
+        if [ ${#AGENTTEAMS_ADMIN_USER} -ge 3 ]; then
+            break
+        fi
+        if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
+            die "$(msg admin.username_too_short "${#AGENTTEAMS_ADMIN_USER}")"
+        fi
+        error "$(msg admin.username_too_short "${#AGENTTEAMS_ADMIN_USER}")"
+        unset AGENTTEAMS_ADMIN_USER
+    done
 
     # Pre-set via env var: validate; in non-interactive mode fail fast,
     # in interactive mode warn and fall through to the retry prompt.
@@ -2874,16 +2916,16 @@ step_runtime() {
     echo "  2) $(msg worker_runtime.openclaw)"
     if ! _ver_lt "${AGENTTEAMS_VERSION}" "v1.1.0"; then
         echo "  3) $(msg worker_runtime.hermes)"
-        echo "  4) $(msg worker_runtime.copaw)"
-        [ -n "${DEEPSEEK_HARNESS_WORKER_IMAGE:-}" ] && echo "  5) $(msg worker_runtime.deepseek_harness)"
-    else
-        echo "  3) $(msg worker_runtime.copaw)"
+        [ -n "${DEEPSEEK_HARNESS_WORKER_IMAGE:-}" ] && echo "  4) $(msg worker_runtime.deepseek_harness)"
     fi
     echo ""
     if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
         AGENTTEAMS_DEFAULT_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-qwenpaw}"
     elif [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ -n "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}" ]; then
         log "$(msg prompt.upgrade_keep "$(msg worker_runtime.title_short)" "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}")"
+        if [ "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}" = "copaw" ]; then
+            log "      $(msg worker_runtime.copaw)"
+        fi
         local _runtime_choice
         local _runtime_prompt
         if [ -n "${DEEPSEEK_HARNESS_WORKER_IMAGE:-}" ]; then
@@ -2900,11 +2942,8 @@ step_runtime() {
                 2) AGENTTEAMS_DEFAULT_WORKER_RUNTIME="openclaw" ;;
                 3) if ! _ver_lt "${AGENTTEAMS_VERSION}" "v1.1.0"; then
                        AGENTTEAMS_DEFAULT_WORKER_RUNTIME="hermes"
-                   else
-                       AGENTTEAMS_DEFAULT_WORKER_RUNTIME="copaw"
                    fi ;;
-                4) AGENTTEAMS_DEFAULT_WORKER_RUNTIME="copaw" ;;
-                5) if [ -n "${DEEPSEEK_HARNESS_WORKER_IMAGE:-}" ]; then
+                4) if [ -n "${DEEPSEEK_HARNESS_WORKER_IMAGE:-}" ]; then
                        AGENTTEAMS_DEFAULT_WORKER_RUNTIME="deepseek-harness"
                    fi ;;
                 *) AGENTTEAMS_DEFAULT_WORKER_RUNTIME="qwenpaw" ;;
@@ -2927,11 +2966,8 @@ step_runtime() {
             2) AGENTTEAMS_DEFAULT_WORKER_RUNTIME="openclaw" ;;
             3) if ! _ver_lt "${AGENTTEAMS_VERSION}" "v1.1.0"; then
                    AGENTTEAMS_DEFAULT_WORKER_RUNTIME="hermes"
-               else
-                   AGENTTEAMS_DEFAULT_WORKER_RUNTIME="copaw"
                fi ;;
-            4) AGENTTEAMS_DEFAULT_WORKER_RUNTIME="copaw" ;;
-            5) if [ -n "${DEEPSEEK_HARNESS_WORKER_IMAGE:-}" ]; then
+            4) if [ -n "${DEEPSEEK_HARNESS_WORKER_IMAGE:-}" ]; then
                    AGENTTEAMS_DEFAULT_WORKER_RUNTIME="deepseek-harness"
                fi ;;
             *) AGENTTEAMS_DEFAULT_WORKER_RUNTIME="qwenpaw" ;;
@@ -2949,19 +2985,20 @@ step_manager_runtime() {
     echo ""
     echo "  1) $(msg manager_runtime.qwenpaw)"
     echo "  2) $(msg manager_runtime.openclaw)"
-    echo "  3) $(msg manager_runtime.copaw)"
     echo ""
     if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
         AGENTTEAMS_MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}"
     elif [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ -n "${AGENTTEAMS_MANAGER_RUNTIME}" ]; then
         log "$(msg prompt.upgrade_keep "$(msg manager_runtime.title_short)" "${AGENTTEAMS_MANAGER_RUNTIME}")"
+        if [ "${AGENTTEAMS_MANAGER_RUNTIME}" = "copaw" ]; then
+            log "      $(msg manager_runtime.copaw)"
+        fi
         local _runtime_choice
         read -e -p "$(msg manager_runtime.choice): " _runtime_choice
         if [ "${_runtime_choice}" = "b" ]; then STEP_RESULT="back"; return 0; fi
         if [ -n "${_runtime_choice}" ]; then
             case "${_runtime_choice}" in
                 2) AGENTTEAMS_MANAGER_RUNTIME="openclaw" ;;
-                3) AGENTTEAMS_MANAGER_RUNTIME="copaw" ;;
                 *) AGENTTEAMS_MANAGER_RUNTIME="qwenpaw" ;;
             esac
         fi
@@ -2972,7 +3009,6 @@ step_manager_runtime() {
         _runtime_choice="${_runtime_choice:-1}"
         case "${_runtime_choice}" in
             2) AGENTTEAMS_MANAGER_RUNTIME="openclaw" ;;
-            3) AGENTTEAMS_MANAGER_RUNTIME="copaw" ;;
             *) AGENTTEAMS_MANAGER_RUNTIME="qwenpaw" ;;
         esac
     fi
@@ -3355,6 +3391,49 @@ _start_dashboard() {
     env_args+=(-e NEXT_PUBLIC_MATRIX_API_URL="http://${CTRL_CONTAINER}:6167")
     env_args+=(-e MATRIX_HOMESERVER_ALLOWLIST="${CTRL_CONTAINER},matrix-local.agentteams.io,matrix.org")
 
+    # Session secret for dashboard multi-user login (issue #1311): the
+    # dashboard fail-closes when it is missing. Resolve in order — exported
+    # env (upgrade / dashboard subcommand), then the env file, then generate.
+    # Persist the resolved value whenever the stored field is missing, empty,
+    # or stale (explicit env override), keeping exactly one field, so a later
+    # process reuses this secret instead of generating a different one.
+    local _dash_env="${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}"
+    if [ -z "${DASHBOARD_SESSION_SECRET:-}" ]; then
+        DASHBOARD_SESSION_SECRET="$(grep '^DASHBOARD_SESSION_SECRET=' "${_dash_env}" 2>/dev/null | head -n1 | cut -d= -f2- | tr -d '\r')"
+    fi
+    if [ -z "${DASHBOARD_SESSION_SECRET:-}" ]; then
+        DASHBOARD_SESSION_SECRET="$(openssl rand -hex 32)"
+    fi
+    local _dash_stored
+    _dash_stored="$(grep '^DASHBOARD_SESSION_SECRET=' "${_dash_env}" 2>/dev/null | head -n1 | cut -d= -f2- | tr -d '\r')"
+    if [ "${_dash_stored}" != "${DASHBOARD_SESSION_SECRET}" ]; then
+        local _dash_tmp="${_dash_env}.secret.tmp"
+        local _persisted=0
+        if grep -q '^DASHBOARD_SESSION_SECRET=' "${_dash_env}" 2>/dev/null; then
+            # Replace the first field in place and drop any duplicate fields.
+            if awk -v secret="${DASHBOARD_SESSION_SECRET}" '
+                    !replaced && /^DASHBOARD_SESSION_SECRET=/ {
+                        print "DASHBOARD_SESSION_SECRET=" secret
+                        replaced = 1
+                        next
+                    }
+                    /^DASHBOARD_SESSION_SECRET=/ { next }
+                    { print }
+                ' "${_dash_env}" > "${_dash_tmp}" 2>/dev/null &&
+                cat "${_dash_tmp}" > "${_dash_env}" 2>/dev/null; then
+                _persisted=1
+            fi
+            rm -f "${_dash_tmp}" 2>/dev/null || true
+        elif printf 'DASHBOARD_SESSION_SECRET=%s\n' "${DASHBOARD_SESSION_SECRET}" >> "${_dash_env}" 2>/dev/null; then
+            _persisted=1
+        fi
+        if [ "${_persisted}" -ne 1 ]; then
+            log "WARNING: could not persist DASHBOARD_SESSION_SECRET to ${_dash_env}; a later start may generate a different secret"
+        fi
+    fi
+    chmod 600 "${_dash_env}" 2>/dev/null || true
+    env_args+=(-e DASHBOARD_SESSION_SECRET="${DASHBOARD_SESSION_SECRET}")
+
     if ${DOCKER_CMD} ps --format '{{.Names}}' | grep -qx "${CTRL_CONTAINER}"; then
         local env_out
         env_out=$(${DOCKER_CMD} inspect "${CTRL_CONTAINER}" --format='{{range .Config.Env}}{{.}}{{"\n"}}{{end}}')
@@ -3646,8 +3725,14 @@ install_manager() {
     AGENTTEAMS_MANAGER_PASSWORD="${AGENTTEAMS_MANAGER_PASSWORD:-$(generate_key)}"
     AGENTTEAMS_REGISTRATION_TOKEN="${AGENTTEAMS_REGISTRATION_TOKEN:-$(generate_key)}"
     AGENTTEAMS_MINIO_USER="${AGENTTEAMS_MINIO_USER:-${AGENTTEAMS_ADMIN_USER}}"
+    if [ ${#AGENTTEAMS_MINIO_USER} -lt 3 ]; then
+        die "$(msg admin.minio_username_too_short "${#AGENTTEAMS_MINIO_USER}")"
+    fi
     AGENTTEAMS_MINIO_PASSWORD="${AGENTTEAMS_MINIO_PASSWORD:-${AGENTTEAMS_ADMIN_PASSWORD}}"
     AGENTTEAMS_MANAGER_GATEWAY_KEY="${AGENTTEAMS_MANAGER_GATEWAY_KEY:-$(generate_key)}"
+    # Dashboard session secret for multi-user login (issue #1311).
+    # Generated once and written to the env file so upgrades and rebuilds reuse it.
+    DASHBOARD_SESSION_SECRET="${DASHBOARD_SESSION_SECRET:-$(generate_key)}"
 
     # Matrix AppService tokens — generate once during install/upgrade if not provided.
     # Persisted to env file so they survive controller restarts.
@@ -3797,6 +3882,7 @@ AGENTTEAMS_DASHBOARD_VERSION=${AGENTTEAMS_DASHBOARD_VERSION:-v1.2.4.9}
 AGENTTEAMS_PORT_DASHBOARD=${AGENTTEAMS_PORT_DASHBOARD:-13000}
 AGENTTEAMS_DASHBOARD_IMAGE=${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}}
 AGENTTEAMS_AI_GATEWAY_ADMIN_URL=${AGENTTEAMS_AI_GATEWAY_ADMIN_URL:-}
+DASHBOARD_SESSION_SECRET=${DASHBOARD_SESSION_SECRET:-}
 EOF
 
     chmod 600 "${ENV_FILE}"

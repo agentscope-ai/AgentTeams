@@ -201,6 +201,31 @@ func TestBackendConfigsDefaultToIndependentDeepSeekHarnessVersion(t *testing.T) 
 	}
 }
 
+// TestBackendConfigsKeepLegacyCopawWorkerImage pins the legacy upgrade
+// contract (issue #1310): existing CoPaw workers commonly carry an empty
+// spec.image and resolve their image from the deployment's
+// AGENTTEAMS_COPAW_WORKER_IMAGE env (carried forward from the
+// pre-upgrade env file by the installer, or pinned in Helm values). That
+// deployment value must reach every backend instead of silently falling
+// back to the built-in agentteams-copaw-worker:latest default, which
+// would change (or break the pull of) the running image on the next
+// wake/recreation after a controller upgrade.
+func TestBackendConfigsKeepLegacyCopawWorkerImage(t *testing.T) {
+	t.Setenv("AGENTTEAMS_COPAW_WORKER_IMAGE", "private.registry.example/agentteams-copaw-worker:v1.2.3")
+
+	cfg := LoadConfig()
+
+	for name, got := range map[string]string{
+		"docker":  cfg.DockerConfig().CopawWorkerImage,
+		"k8s":     cfg.K8sConfig().CopawWorkerImage,
+		"sandbox": cfg.SandboxConfig().CopawWorkerImage,
+	} {
+		if want := "private.registry.example/agentteams-copaw-worker:v1.2.3"; got != want {
+			t.Fatalf("%s CopawWorkerImage = %q, want %q", name, got, want)
+		}
+	}
+}
+
 func TestLoadConfigPanicsOnInvalidManagerSpec(t *testing.T) {
 	t.Setenv("AGENTTEAMS_MANAGER_SPEC", "{")
 

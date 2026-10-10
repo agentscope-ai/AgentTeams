@@ -66,10 +66,10 @@ grep -Fq 'agentteams-deepseek-harness-worker:${AGENTTEAMS_DEEPSEEK_HARNESS_WORKE
     fail "Bash installer must resolve the independently versioned DeepSeek Harness Worker image"
 grep -Fq '_refresh_known_stable_version' "${BASH_INSTALLER}" ||
     fail "Bash installer must refresh the stable version used by the latest feature gate"
-grep -Fq '5) $(msg worker_runtime.deepseek_harness)' "${BASH_INSTALLER}" ||
+grep -Fq '4) $(msg worker_runtime.deepseek_harness)' "${BASH_INSTALLER}" ||
     fail "Bash installer Worker menu must list DeepSeek Harness"
 grep -Fq 'AGENTTEAMS_DEFAULT_WORKER_RUNTIME="deepseek-harness"' "${BASH_INSTALLER}" ||
-    fail "Bash installer must map menu choice 5 to deepseek-harness"
+    fail "Bash installer must map menu choice 4 to deepseek-harness"
 grep -Fq 'DEFAULT_WORKER_RUNTIME}" = "deepseek-harness"' "${BASH_INSTALLER}" ||
     fail "Bash installer must reject unavailable non-interactive DeepSeek Harness selections"
 grep -E '_pull_image.*DEEPSEEK_HARNESS_WORKER_IMAGE' "${BASH_INSTALLER}" | grep -Eqv '^[[:space:]]*#' ||
@@ -85,10 +85,10 @@ grep -Fq 'Update-AgentTeamsKnownStableVersion' "${POWERSHELL_INSTALLER}" ||
     fail "PowerShell installer must refresh the stable version used by the latest feature gate"
 grep -Fq 'repos/agentscope-ai/AgentTeams/releases/latest' "${POWERSHELL_INSTALLER}" ||
     fail "PowerShell installer must query the latest GitHub release"
-grep -Fq "5) \$(Get-Msg 'worker_runtime.deepseek_harness')" "${POWERSHELL_INSTALLER}" ||
+grep -Fq "4) \$(Get-Msg 'worker_runtime.deepseek_harness')" "${POWERSHELL_INSTALLER}" ||
     fail "PowerShell installer Worker menu must list DeepSeek Harness"
-grep -Fq '"5" { if ($deepSeekHarnessAvailable) { "deepseek-harness" }' "${POWERSHELL_INSTALLER}" ||
-    fail "PowerShell installer must map menu choice 5 to deepseek-harness"
+grep -Fq '"4" { if ($deepSeekHarnessAvailable) { "deepseek-harness" }' "${POWERSHELL_INSTALLER}" ||
+    fail "PowerShell installer must map menu choice 4 to deepseek-harness"
 grep -Fq 'DEFAULT_WORKER_RUNTIME -eq "deepseek-harness" -and -not $deepSeekHarnessAvailable' "${POWERSHELL_INSTALLER}" ||
     fail "PowerShell installer must reject unavailable non-interactive DeepSeek Harness selections"
 grep -Fq '$workerImages += $script:DEEPSEEK_HARNESS_WORKER_IMAGE' "${POWERSHELL_INSTALLER}" ||

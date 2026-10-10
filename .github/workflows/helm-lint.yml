@@ -18,7 +18,10 @@ on:
       - 'openhuman/scripts/openhuman-worker-entrypoint.sh'
       - 'tests/check-agentteams-rename-defaults.sh'
       - 'tests/check-installer-pre-1.2-env-compat.sh'
+      - 'tests/check-installer-username-validation.sh'
+      - 'tests/check-installer-username-validation.ps1'
       - 'tests/check-installer-env-data-dir-readback.sh'
+      - 'tests/check-installer-dashboard-session-secret.sh'
       - 'tests/check-installer-embedded-latest-pull.sh'
       - 'tests/check-installer-auto-version-images.sh'
       - 'tests/check-teamharness-acceptance-observer.sh'
@@ -28,7 +31,11 @@ on:
       - 'tests/check-powershell-deepseek-harness-latest.ps1'
       - 'tests/check-windows-appservice-normalization.ps1'
       - 'tests/check-apply-wrapper-flags.sh'
+      - 'tests/check-mcp-setup-domain-parsing.sh'
       - 'tests/check-helm-agentteams.sh'
+      - 'tests/check-copaw-helm-upgrade-gate.sh'
+      - 'tests/copaw-helm-upgrade-gate.sh'
+      - 'hack/local-k8s-up.sh'
       - 'tests/check-create-project-grant-admin.sh'
       - 'manager/agent/skills/project-management/**'
   workflow_dispatch: ~
@@ -46,8 +53,18 @@ jobs:
       - name: Check pre-v1.2 installer compatibility
         run: bash tests/check-installer-pre-1.2-env-compat.sh
 
+      - name: Check Bash installer username validation
+        run: bash tests/check-installer-username-validation.sh
+
+      - name: Check PowerShell installer username validation
+        shell: pwsh
+        run: ./tests/check-installer-username-validation.ps1
+
       - name: Check installer data-dir env readback
         run: bash tests/check-installer-env-data-dir-readback.sh
+
+      - name: Check installer dashboard session secret
+        run: bash tests/check-installer-dashboard-session-secret.sh
 
       - name: Check embedded latest image pulling
         run: bash tests/check-installer-embedded-latest-pull.sh
@@ -76,8 +93,14 @@ jobs:
       - name: Check declarative apply wrapper flags
         run: bash tests/check-apply-wrapper-flags.sh
 
+      - name: Check MCP setup script domain parsing
+        run: bash tests/check-mcp-setup-domain-parsing.sh
+
       - name: Check create-project grant-admin wiring
         run: bash tests/check-create-project-grant-admin.sh
+
+      - name: Check CoPaw upgrade gate failure modes
+        run: bash tests/check-copaw-helm-upgrade-gate.sh
 
       - name: Set up Helm
         uses: azure/setup-helm@v4

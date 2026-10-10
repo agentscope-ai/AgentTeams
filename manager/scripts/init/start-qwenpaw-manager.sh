@@ -15,9 +15,9 @@ OPENCLAW_WORKSPACE="${HOME}"
 QWENPAW_WORKING_DIR="${HOME}/.qwenpaw"
 
 # ============================================================
-# 1. Create CoPaw directory structure
+# 1. Create QwenPaw directory structure
 # ============================================================
-log "Creating CoPaw directory structure..."
+log "Creating QwenPaw directory structure..."
 mkdir -p "${QWENPAW_WORKING_DIR}/custom_channels"
 mkdir -p "${QWENPAW_WORKING_DIR}/.secret"
 
@@ -71,18 +71,18 @@ if [ -f "${QWENPAW_WORKING_DIR}/config.json" ]; then
     fi
 fi
 
-log "Bridging openclaw.json -> CoPaw config (manager)..."
-/opt/venv/qwenpaw/bin/python3 -m copaw_worker.bridge \
+log "Bridging openclaw.json -> QwenPaw config (manager)..."
+/opt/venv/qwenpaw/bin/python3 -m agentteams_manager.bridge \
         --profile manager \
         --openclaw-json "${OPENCLAW_JSON}" \
         --working-dir "${QWENPAW_WORKING_DIR}"
 log "Config bridged from openclaw.json"
 
 # ============================================================
-# 3. Sync prompt files into CoPaw paths
+# 3. Sync prompt files into QwenPaw paths
 # ============================================================
 # Canonical AgentTeams layout is OPENCLAW_WORKSPACE ($HOME): SOUL.md, memory/, skills/ etc.
-# CoPaw reads from QWENPAW_WORKING_DIR/workspaces/default/; we sync into that path only.
+# QwenPaw reads from QWENPAW_WORKING_DIR/workspaces/default/; we sync into that path only.
 # Use cp -u / cp -ru so we never overwrite newer files already in workspaces/default/.
 # ============================================================
 WORKSPACE_DIR="${QWENPAW_WORKING_DIR}/workspaces/default"
@@ -108,7 +108,7 @@ if [ -f "${OPENCLAW_WORKSPACE}/MEMORY.md" ]; then
 fi
 
 # ============================================================
-# 4. Sync memory/ and skills/ (OpenClaw layout -> CoPaw)
+# 4. Sync memory/ and skills/ (OpenClaw layout -> QwenPaw)
 # ============================================================
 log "Syncing memory/ and skills/ (cp -ru: recursive, do not overwrite newer dest)..."
 if [ -d "${OPENCLAW_WORKSPACE}/memory" ]; then
@@ -279,7 +279,7 @@ fi
         _curr_hash=$(md5sum "${OPENCLAW_JSON}" 2>/dev/null | awk '{print $1}')
         if [ -n "${_curr_hash}" ] && [ "${_curr_hash}" != "${_prev_hash}" ]; then
             log "openclaw.json changed, re-bridging..."
-            _bridge_out=$(/opt/venv/qwenpaw/bin/python3 -m copaw_worker.bridge \
+            _bridge_out=$(/opt/venv/qwenpaw/bin/python3 -m agentteams_manager.bridge \
                     --profile manager \
                     --openclaw-json "${OPENCLAW_JSON}" \
                     --working-dir "${QWENPAW_WORKING_DIR}" 2>&1)
@@ -351,5 +351,5 @@ python3 /opt/agentteams/scripts/init/qwenpaw_manager_skill_sync.py \
     --interval "${AGENTTEAMS_QWENPAW_SKILL_SYNC_INTERVAL_SECONDS:-1}" &
 log "QwenPaw Manager skill watcher started (PID: $!)"
 
-# run_copaw_app.py starts qwenpaw app (tools registered via agentteams-manager-tools plugin)
-exec python3 -m copaw_worker.run_copaw_app app --host 0.0.0.0 --port 18799
+# Start the QwenPaw app directly (tools registered via agentteams-manager-tools plugin)
+exec python3 -m qwenpaw app --host 0.0.0.0 --port 18799

@@ -70,33 +70,23 @@ RUN python3 -m venv /opt/venv/qwenpaw \
 
 ENV PATH="/opt/venv/qwenpaw/bin:${PATH}"
 
-# ---- CoPaw worker bridge module (for config conversion) ----
-# Stage the copaw-worker package metadata for dependency resolution
-COPY copaw/pyproject.toml copaw/README.md /tmp/copaw-worker/
-RUN mkdir -p /tmp/copaw-worker/src/copaw_worker \
-    && mkdir -p /tmp/copaw-worker/src/matrix \
-    && echo '__version__ = "0.0.0"' > /tmp/copaw-worker/src/copaw_worker/__init__.py \
-    && echo '__version__ = "0.0.0"' > /tmp/copaw-worker/src/matrix/__init__.py
-
-# Install copaw-worker package into qwenpaw venv (--no-deps: skip copaw 1.0.2,
-# which is not needed — bridge.py only patches qwenpaw.constant).
-# Install non-copaw dependencies that copaw_worker tools use.
+# ---- AgentTeams Manager runtime package (config bridge + Manager tools) ----
+# Own package for the Manager (agentteams_manager), installed into the
+# qwenpaw venv.  Its dependencies (PyYAML / markdown-it-py / linkify-it-py)
+# are declared explicitly so they do not rely on transitive resolution.
+RUN /opt/venv/qwenpaw/bin/pip install --no-cache-dir \
+        -i "${PIP_INDEX_URL}" \
+        --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
+        "PyYAML>=6.0" \
+        "markdown-it-py>=3.0" \
+        "linkify-it-py>=2.0"
+COPY manager/src/agentteams_manager/ /tmp/agentteams-manager/
 RUN /opt/venv/qwenpaw/bin/pip install --no-cache-dir \
         -i "${PIP_INDEX_URL}" \
         --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
         --no-deps \
-        /tmp/copaw-worker/ \
-    && /opt/venv/qwenpaw/bin/pip install --no-cache-dir \
-        -i "${PIP_INDEX_URL}" \
-        --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
-        "markdown-it-py>=3.0" \
-        "linkify-it-py>=2.0"
-
-# Overlay real copaw-worker source
-COPY copaw/src/ /tmp/copaw-worker/src/
-RUN SITE=/opt/venv/qwenpaw/lib/python3.11/site-packages \
-    && cp -a /tmp/copaw-worker/src/copaw_worker/* "$SITE/copaw_worker/" \
-    && rm -rf /tmp/copaw-worker/
+        /tmp/agentteams-manager/ \
+    && rm -rf /tmp/agentteams-manager/
 
 # ---- CMS Observability Plugin (in qwenpaw venv) ----
 # Aligned with qwenpaw Worker Dockerfile: installed into the runtime venv

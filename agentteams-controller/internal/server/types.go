@@ -76,22 +76,25 @@ type WorkerResponse struct {
 	Model            string            `json:"model,omitempty"`
 	// SubagentModel is the model used by spawned subagents ("" = inherit
 	// the worker's primary model). See WorkerSpec.SubagentModel.
-	SubagentModel  string                     `json:"subagentModel,omitempty"`
-	Runtime        string                     `json:"runtime,omitempty"`
-	Image          string                     `json:"image,omitempty"`
-	Identity       string                     `json:"identity,omitempty"`
-	Soul           string                     `json:"soul,omitempty"`
-	Agents         string                     `json:"agents,omitempty"`
-	Skills         []string                   `json:"skills,omitempty"`
-	McpServers     []v1beta1.MCPServer        `json:"mcpServers,omitempty"`
-	Package        string                     `json:"package,omitempty"`
-	BackendRuntime string                     `json:"backendRuntime,omitempty"`
-	ChannelPolicy  *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
-	ContainerState string                     `json:"containerState,omitempty"`
-	MatrixUserID   string                     `json:"matrixUserID,omitempty"`
-	RoomID         string                     `json:"roomID,omitempty"`
-	Message        string                     `json:"message,omitempty"`
-	LastActiveAt   string                     `json:"lastActiveAt,omitempty"`
+	SubagentModel string `json:"subagentModel,omitempty"`
+	Runtime       string `json:"runtime,omitempty"`
+	// RuntimeDeprecated marks legacy runtimes that are upgrade-compat
+	// only (CoPaw): new creation is rejected; migrate to QwenPaw.
+	RuntimeDeprecated bool                       `json:"runtimeDeprecated,omitempty"`
+	Image             string                     `json:"image,omitempty"`
+	Identity          string                     `json:"identity,omitempty"`
+	Soul              string                     `json:"soul,omitempty"`
+	Agents            string                     `json:"agents,omitempty"`
+	Skills            []string                   `json:"skills,omitempty"`
+	McpServers        []v1beta1.MCPServer        `json:"mcpServers,omitempty"`
+	Package           string                     `json:"package,omitempty"`
+	BackendRuntime    string                     `json:"backendRuntime,omitempty"`
+	ChannelPolicy     *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
+	ContainerState    string                     `json:"containerState,omitempty"`
+	MatrixUserID      string                     `json:"matrixUserID,omitempty"`
+	RoomID            string                     `json:"roomID,omitempty"`
+	Message           string                     `json:"message,omitempty"`
+	LastActiveAt      string                     `json:"lastActiveAt,omitempty"`
 	// AgentStatus is the runtime task-level state reported by the worker
 	// heartbeat: "idle" / "running" / "disabled"; empty = not reported.
 	AgentStatus      string            `json:"agentStatus,omitempty"`
@@ -253,16 +256,19 @@ type UpdateManagerRequest struct {
 }
 
 type ManagerResponse struct {
-	Name         string `json:"name"`
-	Phase        string `json:"phase"`
-	State        string `json:"state,omitempty"` // desired lifecycle state
-	Model        string `json:"model,omitempty"`
-	Runtime      string `json:"runtime,omitempty"`
-	Image        string `json:"image,omitempty"`
-	MatrixUserID string `json:"matrixUserID,omitempty"`
-	RoomID       string `json:"roomID,omitempty"`
-	Version      string `json:"version,omitempty"`
-	Message      string `json:"message,omitempty"`
+	Name    string `json:"name"`
+	Phase   string `json:"phase"`
+	State   string `json:"state,omitempty"` // desired lifecycle state
+	Model   string `json:"model,omitempty"`
+	Runtime string `json:"runtime,omitempty"`
+	// RuntimeDeprecated marks legacy runtimes that are upgrade-compat
+	// only (CoPaw): new creation is rejected; migrate to QwenPaw.
+	RuntimeDeprecated bool   `json:"runtimeDeprecated,omitempty"`
+	Image             string `json:"image,omitempty"`
+	MatrixUserID      string `json:"matrixUserID,omitempty"`
+	RoomID            string `json:"roomID,omitempty"`
+	Version           string `json:"version,omitempty"`
+	Message           string `json:"message,omitempty"`
 	// WelcomeSent mirrors ManagerStatus.WelcomeSent so installers / CLI can
 	// poll for first-boot onboarding completion (DM joined + LLM auth ready
 	// + welcome prompt actually delivered). Always present (false until set)

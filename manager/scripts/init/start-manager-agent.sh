@@ -190,6 +190,10 @@ fi
 # Subsequent boots: compare image version; upgrade only if changed
 # ============================================================
 mkdir -p /root/manager-workspace
+# Guarantee the Manager's own tree on the shared FS: on a fresh deployment
+# storage has no agents/manager/ prefix, so the mc mirror never materializes
+# it (Workers get theirs via the controller + their entrypoint's mkdir -p).
+mkdir -p /root/agentteams-fs/agents/manager
 
 IMAGE_VERSION=$(cat /opt/agentteams/agent/.builtin-version 2>/dev/null || echo "unknown")
 INSTALLED_VERSION=$(cat /root/manager-workspace/.builtin-version 2>/dev/null || echo "")

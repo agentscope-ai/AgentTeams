@@ -214,6 +214,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	skh := NewSkillsHandler(deps.WorkerAgentDir, deps.PluginDir, deps.OSS, deps.Client, deps.Namespace, deps.SkillScanner)
 
 	mux.Handle("GET /api/v1/skills", mw.RequireAuthz(authpkg.ActionList, "skills", nil)(http.HandlerFunc(skh.ListSkills)))
+	mux.Handle("GET /api/v1/skills/{name}/download", mw.RequireAuthz(authpkg.ActionList, "skills", nil)(http.HandlerFunc(skh.DownloadSkill)))
 	mux.Handle("POST /api/v1/skills", mw.RequireAuthz(authpkg.ActionSkillPublish, "skills", nil)(http.HandlerFunc(skh.UploadSkill)))
 
 	// --- Worker channels (channel configuration; proxy to the worker's qwenpaw app) ---

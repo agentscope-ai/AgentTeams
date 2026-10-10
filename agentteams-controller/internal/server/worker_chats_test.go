@@ -916,3 +916,77 @@ func TestChatsProxy_DialsEffectiveRuntimeName(t *testing.T) {
 		}
 	}
 }
+
+// TestChat_RuntimeAware400: a non-qwenpaw worker is rejected 400
+// (worker session inspection is qwenpaw-specific).
+func TestChat_RuntimeAware400(t *testing.T) {
+	w := checkpointWorker("oc-worker")
+	w.Spec.Runtime = "openclaw"
+	h := newTestChatsHandler(t, "embedded", nil,
+		checkpointTeam("team-a", "oc-worker"), w)
+	rec := httptest.NewRecorder()
+	h.listChats(rec, adminCaller(chatsListRequest("oc-worker", "?user_id=alice&channel=qq")))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400 for non-qwenpaw worker", rec.Code)
+	}
+	if !containsAll(rec.Body.String(), "only supported for qwenpaw") {
+		t.Fatalf("body=%s, want qwenpaw-specific message", rec.Body.String())
+	}
+}
+
+// TestChat_ScopeBeforeRuntime_CrossTeam404: an out-of-scope caller sees 404
+// (worker existence hidden) even for a non-qwenpaw worker — the runtime 400
+// must not leak worker type across the team boundary.
+func TestChat_ScopeBeforeRuntime_CrossTeam404(t *testing.T) {
+	w := checkpointWorker("oc-worker")
+	w.Spec.Runtime = "openclaw"
+	h := newTestChatsHandler(t, "embedded", nil,
+		checkpointTeam("team-a", "oc-worker"), w)
+	rec := httptest.NewRecorder()
+	req := withCaller(chatsListRequest("oc-worker", "?user_id=alice&channel=qq"),
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "bob", Teams: []string{"team-b"}})
+	h.listChats(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404 for cross-team caller (W8)", rec.Code)
+	}
+	if containsAll(rec.Body.String(), "only supported for qwenpaw") {
+		t.Fatalf("body=%s, runtime guard must not leak across the scope boundary", rec.Body.String())
+	}
+}
+
+// TestChat_ScopeBeforeRuntime_Standalone404: a scoped standalone worker
+// (no team) hides as 404 for a team-scoped caller regardless of runtime.
+func TestChat_ScopeBeforeRuntime_Standalone404(t *testing.T) {
+	for _, rt := range []string{"openclaw", ""} {
+		w := checkpointWorker("standalone-oc")
+		w.Spec.Runtime = rt
+		h := newTestChatsHandler(t, "embedded", nil, w)
+		rec := httptest.NewRecorder()
+		req := withCaller(chatsListRequest("standalone-oc", "?user_id=alice&channel=qq"),
+			&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "bob", Teams: []string{"team-b"}})
+		h.listChats(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("runtime=%q status=%d, want 404 for scoped standalone worker", rt, rec.Code)
+		}
+	}
+}
+
+// TestChat_ScopeBeforeRuntime_Authorized400: an in-scope caller still gets
+// the explicit runtime 400 for a non-qwenpaw worker (the guard stays in
+// force after the scope check, before the dial).
+func TestChat_ScopeBeforeRuntime_Authorized400(t *testing.T) {
+	w := checkpointWorker("oc-worker")
+	w.Spec.Runtime = "openclaw"
+	h := newTestChatsHandler(t, "embedded", nil,
+		checkpointTeam("team-a", "oc-worker"), w)
+	rec := httptest.NewRecorder()
+	req := withCaller(chatsListRequest("oc-worker", "?user_id=alice&channel=qq"),
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "bob", Teams: []string{"team-a"}})
+	h.listChats(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400 for authorized non-qwenpaw caller", rec.Code)
+	}
+	if !containsAll(rec.Body.String(), "only supported for qwenpaw") {
+		t.Fatalf("body=%s, want qwenpaw-specific message", rec.Body.String())
+	}
+}

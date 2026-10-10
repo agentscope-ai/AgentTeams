@@ -33,7 +33,6 @@ make build-embedded
 
 # 其他 Manager / Worker 运行时
 make build-manager-qwenpaw
-make build-copaw-worker
 make build-hermes-worker
 make build-deepseek-harness-worker
 
@@ -237,7 +236,7 @@ Agent 行为由 Markdown 文件定义，而非代码：
 
 ### 并行构建发布镜像
 
-`build.yml` 为每个镜像分配独立 runner。OpenClaw Base、Controller、QwenPaw Worker 独立启动；Embedded、QwenPaw Manager、CoPaw Worker、Hermes Worker 等待 Controller；OpenClaw Manager 和 Worker 等待 Base 与 Controller。每个镜像仍通过 QEMU 构建 amd64 和 arm64。
+`build.yml` 为每个镜像分配独立 runner。OpenClaw Base、Controller、QwenPaw Worker 独立启动；Embedded、QwenPaw Manager、Hermes Worker 等待 Controller；OpenClaw Manager 和 Worker 等待 Base 与 Controller。每个镜像仍通过 QEMU 构建 amd64 和 arm64。
 
 每个任务在构建前检查目标版本 tag：若 linux/amd64、linux/arm64 均已存在，则直接成功，跳过构建和推送，下游任务继续执行。仅在明确返回镜像不存在，或有效 manifest 缺少所需架构时执行构建。查询失败（认证、限流、网络错误等）或响应无效时直接失败，不触发重建。复用只校验 tag 和架构，不比对源码 commit；`latest` 也适用。复用版本镜像不会更新 `latest` 别名；修改源码后应使用新版本构建。
 

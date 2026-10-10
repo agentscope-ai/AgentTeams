@@ -58,12 +58,16 @@ bash_runtime_blocks="$(
 )"
 grep -Fq '1) $(msg worker_runtime.qwenpaw)' <<<"${bash_runtime_blocks}" ||
     fail "Bash installer Worker menu must list QwenPaw first"
-grep -Fq '4) $(msg worker_runtime.copaw)' <<<"${bash_runtime_blocks}" ||
-    fail "Bash installer Worker menu must list legacy CoPaw last for current versions"
+grep -Eq '[0-9]+\) \$\(msg worker_runtime\.copaw\)' <<<"${bash_runtime_blocks}" &&
+    fail "Bash installer Worker menu must not offer CoPaw as a new-install option (retired with the CoPaw runtime)"
+grep -Fq 'log "      $(msg worker_runtime.copaw)"' <<<"${bash_runtime_blocks}" ||
+    fail "Bash installer must keep the legacy CoPaw upgrade hint for existing instances"
 grep -Fq '1) $(msg manager_runtime.qwenpaw)' <<<"${bash_runtime_blocks}" ||
     fail "Bash installer Manager menu must list QwenPaw first"
-grep -Fq '3) $(msg manager_runtime.copaw)' <<<"${bash_runtime_blocks}" ||
-    fail "Bash installer Manager menu must list legacy CoPaw last"
+grep -Eq '[0-9]+\) \$\(msg manager_runtime\.copaw\)' <<<"${bash_runtime_blocks}" &&
+    fail "Bash installer Manager menu must not offer CoPaw as a new-install option (retired with the CoPaw runtime)"
+grep -Fq 'log "      $(msg manager_runtime.copaw)"' <<<"${bash_runtime_blocks}" ||
+    fail "Bash installer must keep the legacy CoPaw upgrade hint for existing instances"
 grep -Fq 'CoPaw（旧版本，建议升级为 QwenPaw）' "${BASH_INSTALLER}" ||
     fail "Bash installer must recommend upgrading CoPaw to QwenPaw"
 grep -E '_pull_image.*QWENPAW_WORKER_IMAGE' "${BASH_INSTALLER}" | grep -Eqv '^[[:space:]]*#' ||
@@ -79,12 +83,16 @@ powershell_runtime_blocks="$(
 )"
 grep -Fq "1) \$(Get-Msg 'worker_runtime.qwenpaw')" <<<"${powershell_runtime_blocks}" ||
     fail "PowerShell installer Worker menu must list QwenPaw first"
-grep -Fq "4) \$(Get-Msg 'worker_runtime.copaw')" <<<"${powershell_runtime_blocks}" ||
-    fail "PowerShell installer Worker menu must list legacy CoPaw last"
+grep -Eq "[0-9]+\) \$\(Get-Msg 'worker_runtime\.copaw'\)" <<<"${powershell_runtime_blocks}" &&
+    fail "PowerShell installer Worker menu must not offer CoPaw as a new-install option (retired with the CoPaw runtime)"
+grep -Fq 'Write-Log ("      " + (Get-Msg "worker_runtime.copaw"))' <<<"${powershell_runtime_blocks}" ||
+    fail "PowerShell installer must keep the legacy CoPaw upgrade hint for existing instances"
 grep -Fq "1) \$(Get-Msg 'manager_runtime.qwenpaw')" <<<"${powershell_runtime_blocks}" ||
     fail "PowerShell installer Manager menu must list QwenPaw first"
-grep -Fq "3) \$(Get-Msg 'manager_runtime.copaw')" <<<"${powershell_runtime_blocks}" ||
-    fail "PowerShell installer Manager menu must list legacy CoPaw last"
+grep -Eq "[0-9]+\) \$\(Get-Msg 'manager_runtime\.copaw'\)" <<<"${powershell_runtime_blocks}" &&
+    fail "PowerShell installer Manager menu must not offer CoPaw as a new-install option (retired with the CoPaw runtime)"
+grep -Fq 'Write-Log ("      " + (Get-Msg "manager_runtime.copaw"))' <<<"${powershell_runtime_blocks}" ||
+    fail "PowerShell installer must keep the legacy CoPaw upgrade hint for existing instances"
 grep -Fq 'CoPaw（旧版本，建议升级为 QwenPaw）' "${POWERSHELL_INSTALLER}" ||
     fail "PowerShell installer must recommend upgrading CoPaw to QwenPaw"
 grep -Fq 'AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE' "${POWERSHELL_INSTALLER}" ||

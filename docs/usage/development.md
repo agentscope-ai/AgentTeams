@@ -33,7 +33,6 @@ make build-embedded
 
 # Alternate Manager / Worker runtimes
 make build-manager-qwenpaw
-make build-copaw-worker
 make build-hermes-worker
 make build-deepseek-harness-worker
 
@@ -237,7 +236,7 @@ Route, consumer, and MCP server bootstrap for **embedded** stacks is owned by th
 
 ### Parallel release images
 
-`build.yml` runs each image on a separate runner. OpenClaw Base, Controller, and QwenPaw Worker start independently. Embedded, QwenPaw Manager, CoPaw Worker, and Hermes Worker wait for Controller; OpenClaw Manager and Worker wait for both Base and Controller. Each image still builds amd64 and arm64 using QEMU.
+`build.yml` runs each image on a separate runner. OpenClaw Base, Controller, and QwenPaw Worker start independently. Embedded, QwenPaw Manager, and Hermes Worker wait for Controller; OpenClaw Manager and Worker wait for both Base and Controller. Each image still builds amd64 and arm64 using QEMU.
 
 Before building, each job inspects its version tag. If both linux/amd64 and linux/arm64 already exist, it succeeds without building or pushing; downstream jobs continue normally. Only an explicit image-not-found response or a valid manifest missing a required architecture triggers a build. Query failures (including authentication, rate limiting, and network errors) or invalid responses fail the job without rebuilding. Reuse is based on the tag and architectures, not source commit identity, and also applies to `latest`. Reusing a version does not update the `latest` alias. Use a new version to build changed source.
 

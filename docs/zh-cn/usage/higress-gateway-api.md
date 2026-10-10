@@ -9,11 +9,16 @@ Console API（**控制面**）。
 - **控制面** —— 用于配置路由与 Consumer 的 Higress Console REST API（由
   `agentteams-controller` 与 Manager 侧脚本使用）；MCP Server 仅由 Manager 侧脚本注册。
 
-> **版本锚点。** 本文档描述 AgentTeams 锁定的 Higress **2.2.1** 版本行为
+> **版本锚点。** 本文档描述 AgentTeams 锁定的 Higress **2.2.5** 版本行为
 > （见 `agentteams-controller/Dockerfile.embedded`、`helm/agentteams/Chart.yaml`）。
-> 上游 Higress 已发布 2.2.4，新增 MCP 2026-07-28 协议标准（2.2.3）和 SSE transport
-> 路径修复（2.2.4）；这些是新增能力，不改变本文描述的端点。若 AgentTeams 升级到
-> 2.2.2 之后，请按上游 changelog 重新核对 MCP 服务器一节。
+> 2.2.1 → 2.2.5 升级已对照 AgentTeams 全部触点对齐审计（controller 与 Manager 侧脚本
+> 使用的全部 27 个 Console API 端点、CRD schema、key-auth / mcp-server WASM 插件、
+> all-in-one 镜像内部结构）：无破坏性变更。2.2.5 新增 MCP 2026-07-28 协议标准
+> （2.2.3；旧版 2024-11-05 / 2025-03-26 / 2025-06-18 客户端保持原路径不变）以及
+> 2.2.4 的 56 项 bug 修复；MCP 行为由 CI 的 MCP 测试（test-08 / test-12）重新验证。
+> 一处行为差异已中和：2.2.5 all-in-one 镜像默认开启 ACME automatic-HTTPS，
+> embedded 部署通过 `agentteams-controller/supervisord.embedded.conf` 中的
+> `GATEWAY_AUTO_HTTPS_ENABLED="false"` 显式关闭。
 
 ## 默认域名与端口
 

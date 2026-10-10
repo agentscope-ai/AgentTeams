@@ -55,11 +55,16 @@ jobs:
           images=(
             openclaw-base agentteams-controller agentteams-embedded
             agentteams-manager agentteams-manager-qwenpaw agentteams-worker
-            agentteams-copaw-worker agentteams-qwenpaw-worker agentteams-hermes-worker
+            agentteams-qwenpaw-worker agentteams-hermes-worker
           )
           for image in "${images[@]}"; do
             ref="${REGISTRY}/${REPO}/${image}:${VERSION}"
             manifest="$(docker buildx imagetools inspect "$ref" --raw)"
+            # jq -e alone accepts empty stdin, so reject it explicitly.
+            if [[ -z "$manifest" ]]; then
+              echo "ERROR: empty manifest returned for $ref"
+              exit 1
+            fi
             jq -e '
               any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "amd64") and
               any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "arm64")

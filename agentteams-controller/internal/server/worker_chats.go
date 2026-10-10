@@ -273,6 +273,14 @@ func (h *ChatsHandler) proxy(w http.ResponseWriter, r *http.Request, name string
 		return
 	}
 
+	// runtime-aware: worker session inspection is qwenpaw-specific. This
+	// runs after the team-scope check above so an out-of-scope caller sees
+	// 404 (existence hidden) regardless of the worker's runtime.
+	if rt := worker.Spec.Runtime; rt != "" && rt != "qwenpaw" {
+		httputil.WriteError(w, http.StatusBadRequest, "worker chats are only supported for qwenpaw workers")
+		return
+	}
+
 	// Participation boundary (L2 humans only): a team-scoped human sees
 	// the worker's conversations in the rooms the human is a current
 	// member of — not the worker's conversations in other rooms or DMs,

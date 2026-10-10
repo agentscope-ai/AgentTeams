@@ -87,6 +87,10 @@ action_start() {
     agt update worker --name "${worker}" --state Running >/dev/null
     _set_lifecycle "${worker}" container_status pending
     _set_lifecycle "${worker}" last_started_at "$(_ts)"
+    # Waking a worker starts a fresh idle window: without this, a stale idle_since
+    # from a previous idle period is already past the timeout, and the next
+    # check-idle stops the worker again right after the wake (wake -> re-sleep loop).
+    _set_lifecycle "${worker}" idle_since ""
     _log "Worker ${worker} desired state set to Running"
 }
 
@@ -101,6 +105,11 @@ action_delete() {
 
 action_ensure_ready() {
     local worker="$1" current phase
+    _init_files
+    # ensure-ready means the worker is wanted: reset the idle marker so an expired
+    # timeout cannot stop it immediately after it is brought up (same rationale as
+    # the wake reset in action_start; also covers the already-Running branch).
+    _set_lifecycle "${worker}" idle_since ""
     current=$(_worker_json "${worker}")
     phase=$(echo "${current}" | jq -r '.phase // "Pending"')
     if [ "${phase}" = "Running" ]; then

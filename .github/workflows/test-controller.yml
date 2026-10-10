@@ -4,8 +4,9 @@ on:
   pull_request:
     paths:
       - 'agentteams-controller/**'
-      - 'copaw/**'
+      - 'manager/src/**'
       - 'plugins/teamharness/**'
+      - 'plugins/agentteams-matrix-channel/**'
       - 'plugins/tests/**'
       - 'docs/design/teamharness/**'
       - '.github/workflows/test-controller.yml'
@@ -13,8 +14,9 @@ on:
     branches: [main]
     paths:
       - 'agentteams-controller/**'
-      - 'copaw/**'
+      - 'manager/src/**'
       - 'plugins/teamharness/**'
+      - 'plugins/agentteams-matrix-channel/**'
       - 'plugins/tests/**'
       - 'docs/design/teamharness/**'
   workflow_dispatch:
@@ -58,6 +60,7 @@ jobs:
           python -m pip install \
             'agentscope==2.0.4.post1' \
             'PyYAML>=6.0,<7' \
+            'matrix-nio>=0.25,<0.27' \
             'pytest>=8.3,<10' \
             'pytest-asyncio>=0.23,<2'
 
@@ -67,8 +70,105 @@ jobs:
         run: |
           ruby plugins/tests/teamharness/test-contracts.rb
           python -m pytest plugins/tests/teamharness/mcp/test_continuation.py -q
+          python -m pytest plugins/tests/teamharness/mcp/test_delegate_redelegation.py -q
+          python -m pytest plugins/tests/teamharness/mcp/test_filesync_remote_guard.py -q
+          python -m pytest plugins/tests/teamharness/mcp/test_sensitive_scan_placeholder.py -q
           python -m pytest plugins/tests/teamharness/test_pull_project.py -q
-          PYTHONPATH="${GITHUB_WORKSPACE}/copaw/src" \
-            python -m pytest copaw/tests/test_taskflow_tool.py -q
+          PYTHONPATH="${GITHUB_WORKSPACE}/manager/src/agentteams_manager" \
+            python -m pytest manager/src/agentteams_manager/agentteams_manager/tests/ -q
           ruby plugins/tests/teamharness/mcp/tools/test-taskflow.rb
           ruby plugins/tests/teamharness/mcp/tools/test-transition-table.rb
+
+  matrix-channel-completion-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install matrix-channel runtime dependencies
+        run: |
+          python -m pip install \
+            'matrix-nio>=0.25,<0.27' \
+            'qwenpaw>=2.2.1,<2.3' \
+            'pytest>=8.3,<10' \
+            'pytest-asyncio>=0.23,<2'
+
+      - name: Run matrix-channel completion-guard tests
+        run: |
+          python -m pytest plugins/tests/agentteams-matrix-channel/test_fake_completion_marker.py -q
+
+  matrix-channel-consume-error:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install matrix-channel runtime dependencies
+        run: |
+          python -m pip install \
+            'matrix-nio>=0.25,<0.27' \
+            'qwenpaw>=2.2.1,<2.3' \
+            'pytest>=8.3,<10' \
+            'pytest-asyncio>=0.23,<2'
+
+      - name: Run matrix-channel consume-error tests
+        run: |
+          python -m pytest plugins/tests/agentteams-matrix-channel/test_consume_error.py -q
+
+
+  matrix-channel-show-thinking-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install matrix-channel runtime dependencies
+        run: |
+          python -m pip install             'matrix-nio>=0.25,<0.27'             'qwenpaw>=2.2.1,<2.3'             'pytest>=8.3,<10'             'pytest-asyncio>=0.23,<2'
+
+      - name: Verify matrix-nio is importable (tests must not skip)
+        run: |
+          python - <<'PY'
+          import importlib.metadata as md
+          import nio  # noqa: F401  the suite skips without matrix-nio
+          print("matrix-nio", md.version("matrix-nio"))
+          print("qwenpaw", md.version("qwenpaw"))
+          PY
+
+      - name: Run matrix-channel show_thinking gate tests
+        run: |
+          python -m pytest plugins/tests/agentteams-matrix-channel/test_show_thinking_gate.py -q -rs
+
+  matrix-channel-mention-localpart:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install matrix-channel test dependencies
+        run: |
+          python -m pip install \
+            'matrix-nio>=0.25,<0.27' \
+            'qwenpaw>=2.2.1,<2.3' \
+            'pytest>=8.3,<10' \
+            'pytest-asyncio>=0.23,<2'
+
+      - name: Run mention localpart tests
+        run: |
+          python -m pytest plugins/tests/agentteams-matrix-channel/test_mention_localpart.py -q

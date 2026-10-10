@@ -380,7 +380,7 @@ mkdir -p "${QW}/custom_channels" "${QW}/.secret"
 # §1b migrate legacy .copaw state FIRST (before bridge)
 bash /opt/agentteams/scripts/init/migrate-copaw-state.sh >/dev/null 2>&1
 # §2 bridge re-overlays Controller-owned values
-/opt/venv/qwenpaw/bin/python3 -m copaw_worker.bridge \
+/opt/venv/qwenpaw/bin/python3 -m agentteams_manager.bridge \
     --profile manager \
     --openclaw-json "${HOME}/openclaw.json" \
     --working-dir "${QW}" >/dev/null 2>&1

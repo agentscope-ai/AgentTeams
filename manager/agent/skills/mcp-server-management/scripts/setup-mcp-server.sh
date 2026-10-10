@@ -21,7 +21,9 @@
 #   --yaml-file <path>      Path to a user-provided YAML config file. Required when no
 #                           built-in template exists for the given server-name.
 #   --api-domain <domain>   Explicit [http[s]://]host[:port] for your DNS service source.
-#                           Bare hosts default to HTTPS/443; HTTP defaults to port 80.
+#                           Bare hosts (no scheme) default to HTTPS/443, and an explicit
+#                           port defaults to HTTP except on 443/8443 (TLS convention ports);
+#                           prefix http:// or https:// to force a scheme.
 #                           If provided, skips auto-extraction from YAML template.
 #                           Required when the template URLs use variables instead of literal domains.
 #
@@ -196,13 +198,16 @@ URL_PORT=443
 
 if [ -n "${EXPLICIT_API_DOMAIN}" ]; then
     API_DOMAIN="${EXPLICIT_API_DOMAIN}"
+    EXPLICIT_SCHEME=""
     case "${API_DOMAIN}" in
         http://*)
+            EXPLICIT_SCHEME="http"
             URL_PROTO="http"
             URL_PORT=80
             API_DOMAIN="${API_DOMAIN#http://}"
             ;;
         https://*)
+            EXPLICIT_SCHEME="https"
             API_DOMAIN="${API_DOMAIN#https://}"
             ;;
     esac
@@ -232,8 +237,37 @@ if [ -n "${EXPLICIT_API_DOMAIN}" ]; then
             ;;
     esac
     if [[ "${API_DOMAIN}" != *.* ]]; then
-        log "ERROR: Higress DNS service sources require a dotted hostname. Give your Docker service a network alias such as tools.example.local."
+        log "ERROR: --api-domain needs a dotted hostname (got '${EXPLICIT_API_DOMAIN}'), e.g. security-tool.example.local."
+        log "Higress rejects single-label names as a DNS service source. Attach your tool"
+        log "container to agentteams-net with a dotted network alias and pass that alias."
         exit 1
+    fi
+    # No scheme given: only the TLS convention ports keep the HTTPS default. Any
+    # other explicit port is plain HTTP — Docker-internal tool services listen on
+    # plain HTTP, and defaulting to https there registered a dead *.dns:<port>
+    # service reference that made every tool call fail with 503 (issue #1284).
+    if [ -z "${EXPLICIT_SCHEME}" ]; then
+        case "${URL_PORT}" in
+            443|8443) ;;
+            *)
+                URL_PROTO="http"
+                log "  --api-domain gave no scheme for port ${URL_PORT}; using http:// (prefix https:// for TLS)."
+                ;;
+        esac
+    fi
+    # An explicit scheme is honored as given, but flag the combinations that are
+    # almost always a mistake: they produce a service source the tool service
+    # cannot answer on, and the failure only shows up as 503 on tool calls.
+    if [ "${URL_PROTO}" = "https" ]; then
+        case "${URL_PORT}" in
+            80|8000|8080)
+                log "  WARNING: https:// on port ${URL_PORT} is unusual. If your tool service listens on"
+                log "           plain HTTP, re-run with --api-domain http://${API_DOMAIN}:${URL_PORT}."
+                ;;
+        esac
+    elif [ "${URL_PORT}" = "443" ] || [ "${URL_PORT}" = "8443" ]; then
+        log "  WARNING: http:// on TLS port ${URL_PORT} is unusual. If your tool service expects TLS,"
+        log "           re-run with --api-domain https://${API_DOMAIN}:${URL_PORT}."
     fi
     log "  Using explicit API address: ${URL_PROTO}://${API_DOMAIN}:${URL_PORT}"
 else

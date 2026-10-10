@@ -37,15 +37,21 @@ bash .../setup-mcp-server.sh security-tool "your-key" \
     --api-domain "http://security-tool.example.local:8080"
 ```
 
+The scheme prefix is optional. When you omit it, the script keeps the HTTPS
+default for a bare `host` (port 443) and for the TLS convention ports 443/8443,
+and assumes plain HTTP for any other explicit port — Docker-internal tool
+services almost always listen on plain HTTP. It prints the scheme it picked, so
+you can re-run with `https://host:port` if your service does speak TLS. An
+explicit `http://`/`https://` prefix is always honored, with a warning when the
+scheme/port pair looks like a mistake (for example `https://host:8080`).
+
 Attach your tool container to `agentteams-net` with a dotted network alias such as
 `security-tool.example.local`; Higress DNS service-source validation rejects
 single-label names. Use the same reachable address in your YAML request URLs.
 Do not include a path, query, or credentials in `--api-domain`.
 
-When you omit the scheme, you retain the existing HTTPS default: `host` uses port
-443 and `host:8080` uses HTTPS on port 8080. Use `http://host` for HTTP on port 80,
-or specify the port explicitly. When you omit `--api-domain`, you continue to use
-the scheme and port extracted from the first YAML request URL.
+When you omit `--api-domain`, you continue to use the scheme and port extracted
+from the first YAML request URL.
 
 ### What the script does
 

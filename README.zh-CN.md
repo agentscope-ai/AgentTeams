@@ -481,18 +481,57 @@ python scripts/export-debug-log.py --range 1h
 
 浏览 [中文文档目录](docs/zh-cn/)，或从概览和快速入门开始：
 
+### 入门
+
 | | |
 |---|---|
 | [docs/zh-cn/overview.md](docs/zh-cn/overview.md) | 产品概览、核心概念与文档导航 |
 | [docs/zh-cn/quickstart.md](docs/zh-cn/quickstart.md) | 端到端快速入门，含验证检查点 |
-| [docs/zh-cn/usage/use-cases.md](docs/zh-cn/usage/use-cases.md) | 软件交付、研究、内容、故障分析和长期项目协作案例 |
-| [docs/zh-cn/usage/deployment/local.md](docs/zh-cn/usage/deployment/local.md) | 本地实例创建、安装选项、升级与卸载 |
-| [docs/zh-cn/design/architecture.md](docs/zh-cn/design/architecture.md) | 系统架构详解 |
-| [docs/zh-cn/usage/manager-guide.md](docs/zh-cn/usage/manager-guide.md) | Manager 配置与使用 |
-| [docs/zh-cn/usage/worker-guide.md](docs/zh-cn/usage/worker-guide.md) | Worker 部署与故障排查 |
-| [docs/zh-cn/usage/higress-gateway-api.md](docs/zh-cn/usage/higress-gateway-api.md) | Higress 网关对外接口参考（LLM / MCP / 暴露端口 / Console） |
-| [docs/zh-cn/usage/development.md](docs/zh-cn/usage/development.md) | 贡献指南与本地开发 |
+
+### 使用指南（usage/）
+
+| | |
+|---|---|
+| [docs/zh-cn/usage/use-cases.md](docs/zh-cn/usage/use-cases.md) | AgentTeams 使用案例：软件交付、研究、内容、故障分析和长期项目协作 |
+| [docs/zh-cn/usage/deployment/local.md](docs/zh-cn/usage/deployment/local.md) | AgentTeams 本地部署指南：实例创建、安装选项、升级与卸载 |
+| [docs/zh-cn/usage/deployment/kubernetes.md](docs/zh-cn/usage/deployment/kubernetes.md) | Kubernetes 部署指南：集群规划、values 文件、模型服务、持久化、Ingress 与运维 |
+| [docs/zh-cn/usage/deployment/windows.md](docs/zh-cn/usage/deployment/windows.md) | AgentTeams Windows 部署手册 |
+| [docs/zh-cn/usage/manager-guide.md](docs/zh-cn/usage/manager-guide.md) | Manager 使用指南 |
+| [docs/zh-cn/usage/worker-guide.md](docs/zh-cn/usage/worker-guide.md) | Worker 使用指南（含部署与故障排查） |
+| [docs/zh-cn/usage/import-worker.md](docs/zh-cn/usage/import-worker.md) | 导入 Worker 指南 |
+| [docs/zh-cn/usage/resource-management.md](docs/zh-cn/usage/resource-management.md) | 声明式资源管理（Worker / Team / Human YAML）、模板市场与 API 参考 |
+| [docs/zh-cn/usage/project-workflow-api.md](docs/zh-cn/usage/project-workflow-api.md) | 项目 / 工作流查看 API |
+| [docs/zh-cn/usage/higress-gateway-api.md](docs/zh-cn/usage/higress-gateway-api.md) | Higress 网关 API 参考（LLM / MCP / 暴露端口 / Console） |
+| [docs/zh-cn/usage/integrations/dingtalk.md](docs/zh-cn/usage/integrations/dingtalk.md) | AgentTeams/OpenClaw 钉钉机器人配置教程 |
+| [docs/zh-cn/usage/integrations/cms.md](docs/zh-cn/usage/integrations/cms.md) | 接入阿里云云监控 CMS 2.0 |
+| [docs/zh-cn/usage/integrations/credagent.md](docs/zh-cn/usage/integrations/credagent.md) | CredAgent 凭证保护配置 |
+| [docs/zh-cn/usage/development.md](docs/zh-cn/usage/development.md) | 开发指南：贡献与本地开发 |
 | [docs/zh-cn/usage/troubleshooting/faq.md](docs/zh-cn/usage/troubleshooting/faq.md) | 常见问题 |
+| [docs/zh-cn/usage/troubleshooting/legacy-faq.md](docs/zh-cn/usage/troubleshooting/legacy-faq.md) | 旧版常见问题 |
+
+### 设计文档（design/）
+
+| | |
+|---|---|
+| [docs/zh-cn/design/architecture.md](docs/zh-cn/design/architecture.md) | AgentTeams 架构说明：系统架构详解 |
+| [docs/zh-cn/design/k8s-native-orchestration.md](docs/zh-cn/design/k8s-native-orchestration.md) | 基于 Kubernetes 原生的多 Agent 协作编排：CRD、控制器、声明式资源 |
+| [docs/zh-cn/design/agent-pod-template.md](docs/zh-cn/design/agent-pod-template.md) | Agent Pod 模板 |
+| [docs/zh-cn/design/team-skills.md](docs/zh-cn/design/team-skills.md) | Team 技能 —— 上传、目录与指派时物化 |
+| [docs/zh-cn/design/skill-catalog-api.md](docs/zh-cn/design/skill-catalog-api.md) | 技能目录 API（`GET /api/v1/skills`） |
+| [docs/zh-cn/design/worker-channels-api.md](docs/zh-cn/design/worker-channels-api.md) | Worker Channels API：通道配置代理端点 |
+| [docs/zh-cn/design/worker-chats-api.md](docs/zh-cn/design/worker-chats-api.md) | Worker Chats API（只读会话可见性） |
+| [docs/zh-cn/design/room-power-levels.md](docs/zh-cn/design/room-power-levels.md) | 人类成员的房间权限级别 |
+| [docs/zh-cn/design/capability-foundation.md](docs/zh-cn/design/capability-foundation.md) | Capability 地基：字段、校验、helper 与双层审计 |
+| [docs/zh-cn/design/humans-update-api.md](docs/zh-cn/design/humans-update-api.md) | Human 更新 API（`PUT /api/v1/humans/{name}`） |
+| [docs/zh-cn/design/audit-events-api.md](docs/zh-cn/design/audit-events-api.md) | 审计事件查询端点（`GET /api/v1/audit`） |
+| [docs/zh-cn/design/ai-routes-list-api.md](docs/zh-cn/design/ai-routes-list-api.md) | AI 路由列表 API |
+| [docs/zh-cn/design/l2-worker-scoped-write.md](docs/zh-cn/design/l2-worker-scoped-write.md) | L2 人类 Worker 范围写 |
+| [docs/zh-cn/design/l3-worker-scoped-read.md](docs/zh-cn/design/l3-worker-scoped-read.md) | L3 Worker 范围读访问 |
+| [docs/zh-cn/design/member-runtime-config-contract.md](docs/zh-cn/design/member-runtime-config-contract.md) | 成员运行时配置契约 |
+| [docs/zh-cn/design/teamharness/boundary-and-contracts.md](docs/zh-cn/design/teamharness/boundary-and-contracts.md) | TeamHarness v0.1 边界与契约 |
+| [docs/zh-cn/design/task-completion-notification.md](docs/zh-cn/design/task-completion-notification.md) | 任务完成通知（submit_task）与生命周期 attention 事件 |
+
+> 注：以下设计文档上游原生即为中文，未建镜像，请直接阅读 `docs/design/` 下的原文：`docs/design/internal/` 全部 5 篇，以及 `docs/design/teamharness/project-task-runtime-design.md`、`docs/design/teamharness/runtime-integration-tdd-plan.md`、`docs/design/teamharness/task-transition-engine.md`。
 
 ## 构建与测试
 

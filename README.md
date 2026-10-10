@@ -431,12 +431,15 @@ Browse the [documentation directory](docs/), or start with the overview and quic
 | [docs/quickstart.md](docs/quickstart.md) | Step-by-step guide |
 | [docs/usage/use-cases.md](docs/usage/use-cases.md) | Software delivery, research, content, incident analysis, and long-running project collaboration examples |
 | [docs/usage/deployment/local.md](docs/usage/deployment/local.md) | Local instance creation, installation options, upgrades, and uninstalling |
-| [docs/design/architecture.md](docs/design/architecture.md) | System architecture deep dive |
+| [docs/design/architecture.md](docs/design/architecture.md) | System architecture deep dive (also available in [中文](docs/zh-cn/design/architecture.md)) |
+| [docs/design/k8s-native-orchestration.md](docs/design/k8s-native-orchestration.md) | Kubernetes-native multi-Agent orchestration: CRDs, controller, declarative resources (also available in [中文](docs/zh-cn/design/k8s-native-orchestration.md)) |
 | [docs/usage/manager-guide.md](docs/usage/manager-guide.md) | Manager configuration |
 | [docs/usage/worker-guide.md](docs/usage/worker-guide.md) | Worker deployment |
 | [docs/usage/project-workflow-api.md](docs/usage/project-workflow-api.md) | Project / workflow inspection API (also available in [中文](docs/zh-cn/usage/project-workflow-api.md)) |
 | [docs/usage/higress-gateway-api.md](docs/usage/higress-gateway-api.md) | Higress gateway external API reference (LLM / MCP / exposed ports / Console) (also available in [中文](docs/zh-cn/usage/higress-gateway-api.md)) |
-| [docs/usage/development.md](docs/usage/development.md) | Contributing and local dev |
+| [docs/usage/development.md](docs/usage/development.md) | Contributing and local dev (also available in [中文](docs/zh-cn/usage/development.md)) |
+
+The remaining design documents (skill catalog, worker channels/chats APIs, room power levels, capability foundation, human update / audit / AI-routes APIs, L2/L3 scoped access, member runtime config contract, team skills, agent pod template, TeamHarness v0.1 boundary) are indexed in the [中文 documentation table](README.zh-CN.md) — all are also available under `docs/zh-cn/design/`, except a few (`docs/design/internal/`, part of `docs/design/teamharness/`) that are natively written in Chinese upstream.
 
 ## Troubleshooting
 
@@ -444,7 +447,7 @@ Browse the [documentation directory](docs/), or start with the overview and quic
 docker exec -it agentteams-manager cat /var/log/agentteams/manager-agent.log
 ```
 
-See [docs/usage/troubleshooting/faq.md](docs/usage/troubleshooting/faq.md) for common issues.
+See [docs/usage/troubleshooting/faq.md](docs/usage/troubleshooting/faq.md) for common issues (also available in [中文](docs/zh-cn/usage/troubleshooting/faq.md)).
 
 ### Reporting Bugs
 

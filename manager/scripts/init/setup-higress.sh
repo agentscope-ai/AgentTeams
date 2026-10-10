@@ -27,8 +27,9 @@ LLM_PROVIDER="${AGENTTEAMS_LLM_PROVIDER:-qwen}"
 LLM_API_URL="${AGENTTEAMS_LLM_API_URL:-}"
 if [ -z "${LLM_API_URL}" ]; then
     case "${LLM_PROVIDER}" in
-        qwen) LLM_API_URL="https://dashscope.aliyuncs.com/compatible-mode/v1" ;;
-        *)    LLM_API_URL="" ;;
+        qwen)      LLM_API_URL="https://dashscope.aliyuncs.com/compatible-mode/v1" ;;
+        orcarouter) LLM_API_URL="https://api.orcarouter.ai/v1" ;;
+        *)         LLM_API_URL="" ;;
     esac
 fi
 
@@ -193,6 +194,25 @@ if [ -n "${AGENTTEAMS_LLM_API_KEY}" ]; then
                 higress_api PUT /v1/ai/providers/qwen "Updating LLM provider (qwen)" "${PROVIDER_BODY}"
             else
                 higress_api POST /v1/ai/providers "Creating LLM provider (qwen)" "${PROVIDER_BODY}"
+            fi
+            ;;
+        orcarouter)
+            # OrcaRouter: OpenAI-compatible gateway (https://www.orcarouter.ai)
+            # Service source (GET → PUT if exists, POST if not)
+            existing_svc=$(higress_get /v1/service-sources/orcarouter)
+            SVC_BODY='{"type":"dns","name":"orcarouter","port":443,"protocol":"https","proxyName":"","domain":"api.orcarouter.ai"}'
+            if [ -n "${existing_svc}" ]; then
+                higress_api PUT /v1/service-sources/orcarouter "Updating orcarouter DNS service source" "${SVC_BODY}"
+            else
+                higress_api POST /v1/service-sources "Registering orcarouter DNS service source" "${SVC_BODY}"
+            fi
+
+            PROVIDER_BODY='{"type":"openai","name":"orcarouter","tokens":["'"${AGENTTEAMS_LLM_API_KEY}"'"],"version":0,"protocol":"openai/v1","tokenFailoverConfig":{"enabled":false},"rawConfigs":{"openaiCustomUrl":"https://api.orcarouter.ai/v1","openaiCustomServiceName":"orcarouter.dns","openaiCustomServicePort":443,"agentteamsMode":true}}'
+            existing_provider=$(higress_get /v1/ai/providers/orcarouter)
+            if [ -n "${existing_provider}" ]; then
+                higress_api PUT /v1/ai/providers/orcarouter "Updating LLM provider (orcarouter)" "${PROVIDER_BODY}"
+            else
+                higress_api POST /v1/ai/providers "Creating LLM provider (orcarouter)" "${PROVIDER_BODY}"
             fi
             ;;
         openai-compat)

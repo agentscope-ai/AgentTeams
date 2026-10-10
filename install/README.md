@@ -137,7 +137,7 @@ $env:AGENTTEAMS_LLM_API_KEY = "your-api-key"
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `AGENTTEAMS_NON_INTERACTIVE` | Skip all prompts | `0` |
-| `AGENTTEAMS_LLM_PROVIDER` | LLM provider (`qwen` or `openai-compat`) | `qwen` |
+| `AGENTTEAMS_LLM_PROVIDER` | LLM provider (`qwen`, `orcarouter` or `openai-compat`) | `qwen` |
 | `AGENTTEAMS_DEFAULT_MODEL` | Default model ID | `qwen3.5-plus` |
 | `AGENTTEAMS_LLM_API_KEY` | LLM API key | *(required)* |
 | `AGENTTEAMS_ADMIN_USER` | Admin username | `admin` |

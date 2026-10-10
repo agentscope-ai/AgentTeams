@@ -19,6 +19,7 @@ func TestResolveRuntime(t *testing.T) {
 		{"explicit_hermes_preserved", RuntimeHermes, RuntimeCopaw, RuntimeHermes},
 		{"explicit_qwenpaw_preserved", RuntimeQwenPaw, RuntimeCopaw, RuntimeQwenPaw},
 		{"explicit_deepseek_harness_preserved", RuntimeDeepSeekHarness, RuntimeQwenPaw, RuntimeDeepSeekHarness},
+		{"explicit_qwen_code_preserved", RuntimeQwenCode, RuntimeQwenPaw, RuntimeQwenCode},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -41,6 +42,7 @@ func TestValidRuntime(t *testing.T) {
 		{RuntimeHermes, true},
 		{RuntimeQwenPaw, true},
 		{RuntimeDeepSeekHarness, true},
+		{RuntimeQwenCode, true},
 		{"unknown", false},
 	}
 	for _, tc := range cases {
@@ -54,6 +56,7 @@ func TestUsesMemberRuntimeConfig(t *testing.T) {
 	for runtime, want := range map[string]bool{
 		RuntimeQwenPaw:         true,
 		RuntimeDeepSeekHarness: true,
+		RuntimeQwenCode:        true,
 		RuntimeOpenClaw:        false,
 		RuntimeCopaw:           false,
 		RuntimeHermes:          false,

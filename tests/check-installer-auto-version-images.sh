@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INSTALLER="${ROOT_DIR}/install/agentteams-install.sh"
 fail() { echo "FAIL: $*" >&2; exit 1; }
-for fn in _normalize_version _ver_lt _supports_deepseek_harness resolve_image_tags manager_image_for_runtime _check_install_image _check_version_images _select_available_auto_version; do
+for fn in _normalize_version _ver_lt _supports_deepseek_harness _supports_qwen_code resolve_image_tags manager_image_for_runtime _check_install_image _check_version_images _select_available_auto_version; do
     eval "$(sed -n "/^${fn}()/,/^}/p" "$INSTALLER")"
 done
 log() { :; }
@@ -44,6 +44,8 @@ reset_case() {
     AGENTTEAMS_KNOWN_STABLE_VERSION=v1.2.4
     AGENTTEAMS_DEEPSEEK_HARNESS_MIN_VERSION=v1.2.4
     AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION=v0.1.0
+    AGENTTEAMS_QWEN_CODE_MIN_VERSION=v1.2.4
+    AGENTTEAMS_QWEN_CODE_WORKER_VERSION=v0.1.0
     AGENTTEAMS_REGISTRY=registry.example
     AGENTTEAMS_MANAGER_RUNTIME=qwenpaw
     AGENTTEAMS_DEFAULT_WORKER_RUNTIME=qwenpaw

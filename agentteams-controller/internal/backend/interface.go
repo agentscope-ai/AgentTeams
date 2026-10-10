@@ -37,6 +37,7 @@ const (
 	RuntimeOpenHuman       = "openhuman"
 	RuntimeQwenPaw         = "qwenpaw"
 	RuntimeDeepSeekHarness = "deepseek-harness"
+	RuntimeQwenCode        = "qwen-code"
 )
 
 const (
@@ -61,13 +62,13 @@ func NormalizeAuthTokenExpirationSeconds(seconds int64) int64 {
 // ValidRuntime reports whether r is a recognized runtime value.
 // An empty string is valid — backends resolve it via ResolveRuntime.
 func ValidRuntime(r string) bool {
-	return r == "" || r == RuntimeOpenClaw || r == RuntimeCopaw || r == RuntimeHermes || r == RuntimeOpenHuman || r == RuntimeQwenPaw || r == RuntimeDeepSeekHarness
+	return r == "" || r == RuntimeOpenClaw || r == RuntimeCopaw || r == RuntimeHermes || r == RuntimeOpenHuman || r == RuntimeQwenPaw || r == RuntimeDeepSeekHarness || r == RuntimeQwenCode
 }
 
 // UsesMemberRuntimeConfig reports whether a runtime consumes the
 // controller-projected agents/<runtimeName>/runtime/runtime.yaml contract.
 func UsesMemberRuntimeConfig(runtime string) bool {
-	return runtime == RuntimeQwenPaw || runtime == RuntimeDeepSeekHarness
+	return runtime == RuntimeQwenPaw || runtime == RuntimeDeepSeekHarness || runtime == RuntimeQwenCode
 }
 
 // ResolveRuntime returns the effective runtime for a backend request.
@@ -155,7 +156,7 @@ type CreateRequest struct {
 	Name    string            `json:"name"`
 	Image   string            `json:"image,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
-	Runtime string            `json:"runtime,omitempty"` // "openclaw" | "copaw" | "hermes" | "qwenpaw" | "deepseek-harness"
+	Runtime string            `json:"runtime,omitempty"` // "openclaw" | "copaw" | "hermes" | "qwenpaw" | "deepseek-harness" | "qwen-code"
 	// RuntimeFallback is the value used by Backend.Create when Runtime is
 	// empty, before falling back to RuntimeOpenClaw. Manager / Worker
 	// reconcilers populate this from AGENTTEAMS_MANAGER_RUNTIME /

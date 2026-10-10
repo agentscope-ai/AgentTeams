@@ -313,6 +313,9 @@ worker:
     deepseekHarness:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-deepseek-harness-worker
       tag: "v0.1.0"           # experimental; released independently from global.imageTag
+    qwenCode:
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-qwen-code-worker
+      tag: "v0.1.0"           # experimental; released independently from global.imageTag
   defaultRuntime: "openclaw"
   resources:
     requests:

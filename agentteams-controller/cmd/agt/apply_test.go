@@ -101,7 +101,7 @@ func TestWorkerRuntimeHelpIncludesProjectedConfigRuntimes(t *testing.T) {
 		"apply":  applyWorkerSubCmd().Flags().Lookup("runtime").Usage,
 		"update": updateWorkerCmd().Flags().Lookup("runtime").Usage,
 	} {
-		for _, runtime := range []string{"qwenpaw", "deepseek-harness"} {
+		for _, runtime := range []string{"qwenpaw", "deepseek-harness", "qwen-code"} {
 			if !strings.Contains(usage, runtime) {
 				t.Errorf("%s worker runtime help %q does not include %s", name, usage, runtime)
 			}

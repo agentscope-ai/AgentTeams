@@ -29,6 +29,7 @@
 #   AGENTTEAMS_WORKSPACE_DIR      Host directory for manager workspace (default: ~/agentteams-manager)
 #   AGENTTEAMS_VERSION            Image tag            (default: latest)
 #   AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION DeepSeek Harness runtime image tag (default: v0.1.0; independent of AGENTTEAMS_VERSION)
+#   AGENTTEAMS_QWEN_CODE_WORKER_VERSION Qwen Code runtime image tag (default: v0.1.0; independent of AGENTTEAMS_VERSION)
 #   AGENTTEAMS_REGISTRY           Image registry       (default: auto-detected by timezone)
 #   AGENTTEAMS_INSTALL_MANAGER_IMAGE       Override manager image (e.g., local build)
 #   AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE Override QwenPaw manager image (e.g., local build)
@@ -38,6 +39,7 @@
 #   AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE Override QwenPaw worker image (e.g., local build)
 #   AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE Override hermes worker image (e.g., local build)
 #   AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE Override experimental DeepSeek Harness worker image
+#   AGENTTEAMS_INSTALL_QWEN_CODE_WORKER_IMAGE Override experimental Qwen Code worker image
 #   AGENTTEAMS_NACOS_REGISTRY_URI          Default Nacos registry URI for Worker market search/import
 #                                      (default: nacos://market.agentteams.io:80/public)
 #   AGENTTEAMS_NACOS_USERNAME              Default Nacos username for nacos:// package imports (optional)
@@ -69,6 +71,8 @@ AGENTTEAMS_FALLBACK_VERSION="${AGENTTEAMS_KNOWN_STABLE_VERSION}"
 AGENTTEAMS_AUTO_VERSION=0
 AGENTTEAMS_DEEPSEEK_HARNESS_MIN_VERSION="v1.2.4"
 AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION="${AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION:-v0.1.0}"
+AGENTTEAMS_QWEN_CODE_MIN_VERSION="v1.2.4"
+AGENTTEAMS_QWEN_CODE_WORKER_VERSION="${AGENTTEAMS_QWEN_CODE_WORKER_VERSION:-v0.1.0}"
 
 _normalize_version() {
     local version="$1"
@@ -97,6 +101,16 @@ _supports_deepseek_harness() {
     fi
     [ "${version}" = "latest" ] && version="${AGENTTEAMS_KNOWN_STABLE_VERSION}"
     ! _ver_lt "${version}" "${AGENTTEAMS_DEEPSEEK_HARNESS_MIN_VERSION}"
+}
+
+_supports_qwen_code() {
+    local version="$1"
+    if [ -n "${AGENTTEAMS_INSTALL_QWEN_CODE_WORKER_IMAGE:-}" ] && \
+       [ -n "${AGENTTEAMS_INSTALL_EMBEDDED_IMAGE:-}" ]; then
+        return 0
+    fi
+    [ "${version}" = "latest" ] && version="${AGENTTEAMS_KNOWN_STABLE_VERSION}"
+    ! _ver_lt "${version}" "${AGENTTEAMS_QWEN_CODE_MIN_VERSION}"
 }
 
 _refresh_known_stable_version() {
@@ -660,10 +674,16 @@ msg() {
         "worker_runtime.deepseek_harness.en") text="DeepSeek Harness (experimental)" ;;
         "worker_runtime.deepseek_unavailable.zh") text="当前 Controller 版本不支持 DeepSeek Harness；请使用 v1.2.4+，或同时覆盖兼容的 Worker 与 embedded Controller 镜像" ;;
         "worker_runtime.deepseek_unavailable.en") text="The selected Controller version does not support DeepSeek Harness; use v1.2.4+, or override both the Worker and compatible embedded Controller image" ;;
+        "worker_runtime.qwen_code.zh") text="Qwen Code（实验性）" ;;
+        "worker_runtime.qwen_code.en") text="Qwen Code (experimental)" ;;
+        "worker_runtime.qwen_unavailable.zh") text="当前 Controller 版本不支持 Qwen Code；请使用 v1.2.4+，或同时覆盖兼容的 Worker 与 embedded Controller 镜像" ;;
+        "worker_runtime.qwen_unavailable.en") text="The selected Controller version does not support Qwen Code; use v1.2.4+, or override both the Worker and compatible embedded Controller image" ;;
         "worker_runtime.choice.zh") text="请选择 [1/2/3]" ;;
         "worker_runtime.choice.en") text="Enter choice [1/2/3]" ;;
         "worker_runtime.choice_dsh.zh") text="请选择 [1/2/3/4]" ;;
         "worker_runtime.choice_dsh.en") text="Enter choice [1/2/3/4]" ;;
+        "worker_runtime.choice_qc.zh") text="请选择 [1/2/3/4/5]" ;;
+        "worker_runtime.choice_qc.en") text="Enter choice [1/2/3/4/5]" ;;
         "worker_runtime.choice_legacy.zh") text="请选择 [1/2]" ;;
         "worker_runtime.choice_legacy.en") text="Enter choice [1/2]" ;;
         "worker_runtime.selected.zh") text="默认 Worker 运行时: %s" ;;
@@ -1150,6 +1170,7 @@ COPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-}"
 QWENPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE:-}"
 HERMES_WORKER_IMAGE="${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-}"
 DEEPSEEK_HARNESS_WORKER_IMAGE="${AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE:-}"
+QWEN_CODE_WORKER_IMAGE="${AGENTTEAMS_INSTALL_QWEN_CODE_WORKER_IMAGE:-}"
 CONTROLLER_IMAGE="${AGENTTEAMS_INSTALL_CONTROLLER_IMAGE:-}"
 
 resolve_image_tags() {
@@ -1163,6 +1184,7 @@ resolve_image_tags() {
     QWENPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-qwenpaw-worker:${AGENTTEAMS_VERSION}}"
     HERMES_WORKER_IMAGE="${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-hermes-worker:${AGENTTEAMS_VERSION}}"
     DEEPSEEK_HARNESS_WORKER_IMAGE="${AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-deepseek-harness-worker:${AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION}}"
+    QWEN_CODE_WORKER_IMAGE="${AGENTTEAMS_INSTALL_QWEN_CODE_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-qwen-code-worker:${AGENTTEAMS_QWEN_CODE_WORKER_VERSION}}"
     EMBEDDED_IMAGE="${AGENTTEAMS_INSTALL_EMBEDDED_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-embedded:${AGENTTEAMS_VERSION}}"
     # CoPaw Worker introduced in v1.0.4; Hermes Worker introduced in v1.1.0
     if [ -z "${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-}" ] && _ver_lt "${AGENTTEAMS_VERSION}" "v1.0.4"; then
@@ -1173,6 +1195,9 @@ resolve_image_tags() {
     fi
     if ! _supports_deepseek_harness "${AGENTTEAMS_VERSION}"; then
         DEEPSEEK_HARNESS_WORKER_IMAGE=""
+    fi
+    if ! _supports_qwen_code "${AGENTTEAMS_VERSION}"; then
+        QWEN_CODE_WORKER_IMAGE=""
     fi
 }
 
@@ -1252,6 +1277,9 @@ _select_available_auto_version() {
     [ "${AGENTTEAMS_VERSION}" != "${AGENTTEAMS_FALLBACK_VERSION}" ] || die "The stable image set is incomplete for ${platform}."
     if [ "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-}" = "deepseek-harness" ] && ! _supports_deepseek_harness "${AGENTTEAMS_FALLBACK_VERSION}"; then
         die "The fallback version does not support the selected DeepSeek Harness runtime."
+    fi
+    if [ "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-}" = "qwen-code" ] && ! _supports_qwen_code "${AGENTTEAMS_FALLBACK_VERSION}"; then
+        die "The fallback version does not support the selected Qwen Code runtime."
     fi
     log "${AGENTTEAMS_VERSION} images are incomplete for ${platform}; checking stable fallback ${AGENTTEAMS_FALLBACK_VERSION}."
     _check_version_images "${AGENTTEAMS_FALLBACK_VERSION}" "${platform}" || die "The fallback image set could not be verified. Installation stopped."
@@ -2917,6 +2945,7 @@ step_runtime() {
     if ! _ver_lt "${AGENTTEAMS_VERSION}" "v1.1.0"; then
         echo "  3) $(msg worker_runtime.hermes)"
         [ -n "${DEEPSEEK_HARNESS_WORKER_IMAGE:-}" ] && echo "  4) $(msg worker_runtime.deepseek_harness)"
+        [ -n "${QWEN_CODE_WORKER_IMAGE:-}" ] && echo "  5) $(msg worker_runtime.qwen_code)"
     fi
     echo ""
     if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
@@ -2928,7 +2957,9 @@ step_runtime() {
         fi
         local _runtime_choice
         local _runtime_prompt
-        if [ -n "${DEEPSEEK_HARNESS_WORKER_IMAGE:-}" ]; then
+        if [ -n "${QWEN_CODE_WORKER_IMAGE:-}" ]; then
+            _runtime_prompt="$(msg worker_runtime.choice_qc)"
+        elif [ -n "${DEEPSEEK_HARNESS_WORKER_IMAGE:-}" ]; then
             _runtime_prompt="$(msg worker_runtime.choice_dsh)"
         elif ! _ver_lt "${AGENTTEAMS_VERSION}" "v1.1.0"; then
             _runtime_prompt="$(msg worker_runtime.choice)"
@@ -2946,13 +2977,18 @@ step_runtime() {
                 4) if [ -n "${DEEPSEEK_HARNESS_WORKER_IMAGE:-}" ]; then
                        AGENTTEAMS_DEFAULT_WORKER_RUNTIME="deepseek-harness"
                    fi ;;
+                5) if [ -n "${QWEN_CODE_WORKER_IMAGE:-}" ]; then
+                       AGENTTEAMS_DEFAULT_WORKER_RUNTIME="qwen-code"
+                   fi ;;
                 *) AGENTTEAMS_DEFAULT_WORKER_RUNTIME="qwenpaw" ;;
             esac
         fi
     elif [ -z "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME+x}" ]; then
         local _runtime_choice
         local _runtime_prompt
-        if [ -n "${DEEPSEEK_HARNESS_WORKER_IMAGE:-}" ]; then
+        if [ -n "${QWEN_CODE_WORKER_IMAGE:-}" ]; then
+            _runtime_prompt="$(msg worker_runtime.choice_qc)"
+        elif [ -n "${DEEPSEEK_HARNESS_WORKER_IMAGE:-}" ]; then
             _runtime_prompt="$(msg worker_runtime.choice_dsh)"
         elif ! _ver_lt "${AGENTTEAMS_VERSION}" "v1.1.0"; then
             _runtime_prompt="$(msg worker_runtime.choice)"
@@ -2970,11 +3006,17 @@ step_runtime() {
             4) if [ -n "${DEEPSEEK_HARNESS_WORKER_IMAGE:-}" ]; then
                    AGENTTEAMS_DEFAULT_WORKER_RUNTIME="deepseek-harness"
                fi ;;
+            5) if [ -n "${QWEN_CODE_WORKER_IMAGE:-}" ]; then
+                   AGENTTEAMS_DEFAULT_WORKER_RUNTIME="qwen-code"
+               fi ;;
             *) AGENTTEAMS_DEFAULT_WORKER_RUNTIME="qwenpaw" ;;
         esac
     fi
     if [ "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}" = "deepseek-harness" ] && ! _supports_deepseek_harness "${AGENTTEAMS_VERSION}"; then
         die "$(msg worker_runtime.deepseek_unavailable)"
+    fi
+    if [ "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}" = "qwen-code" ] && ! _supports_qwen_code "${AGENTTEAMS_VERSION}"; then
+        die "$(msg worker_runtime.qwen_unavailable)"
     fi
     export AGENTTEAMS_DEFAULT_WORKER_RUNTIME
     log "$(msg worker_runtime.selected "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}")"
@@ -3840,7 +3882,9 @@ AGENTTEAMS_QWENPAW_WORKER_IMAGE=${QWENPAW_WORKER_IMAGE}
 AGENTTEAMS_HERMES_WORKER_IMAGE=${HERMES_WORKER_IMAGE}
 AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE=${DEEPSEEK_HARNESS_WORKER_IMAGE}
 
-# Default Worker runtime (qwenpaw | openclaw | hermes | copaw | deepseek-harness [experimental])
+# Default Worker runtime (qwenpaw | openclaw | hermes | copaw | deepseek-harness [experimental] | qwen-code [experimental])
+AGENTTEAMS_QWEN_CODE_WORKER_IMAGE=${QWEN_CODE_WORKER_IMAGE}
+
 AGENTTEAMS_DEFAULT_WORKER_RUNTIME=${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-qwenpaw}
 
 # Matrix E2EE (0=disabled, 1=enabled; default: 0)
@@ -4013,6 +4057,7 @@ EOF
     _pull_image "${QWENPAW_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
     _pull_image "${HERMES_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
     _pull_image "${DEEPSEEK_HARNESS_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
+    _pull_image "${QWEN_CODE_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
 
     # --- Pre-upgrade: extract Matrix passwords from running old containers ---
     # Only needed when upgrading FROM old architecture (v1.0.9) TO embedded.
@@ -4239,6 +4284,7 @@ CREDEOF
             -e "${_ctrl_env_prefix}QWENPAW_WORKER_IMAGE=${QWENPAW_WORKER_IMAGE}"
             -e "${_ctrl_env_prefix}HERMES_WORKER_IMAGE=${HERMES_WORKER_IMAGE}"
             -e "${_ctrl_env_prefix}DEEPSEEK_HARNESS_WORKER_IMAGE=${DEEPSEEK_HARNESS_WORKER_IMAGE}"
+            -e "${_ctrl_env_prefix}QWEN_CODE_WORKER_IMAGE=${QWEN_CODE_WORKER_IMAGE}"
             -e "${_ctrl_env_prefix}MATRIX_DOMAIN=${_matrix_domain}"
             -e "${_ctrl_env_prefix}ELEMENT_HOMESERVER_URL=http://127.0.0.1:${AGENTTEAMS_PORT_GATEWAY}"
             -e "${_ctrl_env_prefix}MATRIX_URL=http://127.0.0.1:6167"
@@ -4505,6 +4551,7 @@ CREDEOF
                     -e AGENTTEAMS_QWENPAW_WORKER_IMAGE="${QWENPAW_WORKER_IMAGE}" \
                     -e AGENTTEAMS_HERMES_WORKER_IMAGE="${HERMES_WORKER_IMAGE}" \
                     -e AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE="${DEEPSEEK_HARNESS_WORKER_IMAGE}" \
+                    -e AGENTTEAMS_QWEN_CODE_WORKER_IMAGE="${QWEN_CODE_WORKER_IMAGE}" \
                     ${AGENTTEAMS_PROXY_ALLOWED_REGISTRIES:+-e AGENTTEAMS_PROXY_ALLOWED_REGISTRIES="${AGENTTEAMS_PROXY_ALLOWED_REGISTRIES}"} \
                     --restart unless-stopped \
                     "${_proxy_image}"

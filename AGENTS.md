@@ -16,6 +16,7 @@ AgentTeams/
 ├── worker/              # OpenClaw Worker image (shared base pattern; runtime also selected at deploy time)
 ├── hermes/              # Hermes Python package source (Hermes Matrix worker runtime)
 ├── deepseek-harness/    # Experimental headless DeepSeek Harness Worker image and Matrix bridge
+├── qwen-code/           # Experimental headless Qwen Code Worker image and Matrix bridge
 ├── openhuman/           # OpenHuman Worker image: Rust core + native Matrix (channel-matrix feature)
 ├── openclaw-base/       # Base image: Ubuntu + Node.js + bundled agent assets + mcporter
 ├── shared/lib/          # Shared shell libs copied into images (agentteams-env.sh, render-skills.sh, …)
@@ -43,6 +44,7 @@ Logs and local artifacts (for example replay logs) stay out of git via `.gitigno
 | `copaw` (legacy) | Python / AgentScope via CoPaw | Legacy workers only (EOL; do not use for new workers) |
 | `hermes`   | Python / `hermes-worker` package | Alternative worker runtime (Matrix bridge + policies under `hermes/src/`) |
 | `deepseek-harness` | Node.js / DeepSeek Harness | Experimental headless Worker runtime pinned to a tested DSH release |
+| `qwen-code` | Node.js / Qwen Code CLI | Experimental headless Worker runtime pinned to a tested Qwen Code release |
 
 **Manager runtimes** (container env `AGENTTEAMS_MANAGER_RUNTIME`, CoPaw Manager CR / Helm `manager.runtime` where applicable):
 
@@ -51,7 +53,7 @@ Logs and local artifacts (for example replay logs) stay out of git via `.gitigno
 | `openclaw` | OpenClaw gateway; primary Matrix channel uses the **message** tool pattern (see upstream OpenClaw / AgentTeams manager config). |
 | `qwenpaw` (default) | Python QwenPaw workspace; Matrix traffic uses the **`copaw channels send`** CLI (see `start-qwenpaw-manager.sh`). |
 
-Hermes, DeepSeek Harness, and OpenHuman are **Worker-only** runtimes in the API and Helm worker defaults; the Manager entrypoint in `start-manager-agent.sh` today starts **openclaw** or **qwenpaw** only.
+Hermes, DeepSeek Harness, Qwen Code, and OpenHuman are **Worker-only** runtimes in the API and Helm worker defaults; the Manager entrypoint in `start-manager-agent.sh` today starts **openclaw** or **qwenpaw** only.
 
 **Deployment runtime** (`AGENTTEAMS_RUNTIME`): local embedded stack vs `aliyun` vs `k8s` changes which bootstrap steps run inside the Manager container (for example Matrix registration and Higress setup are skipped or reduced in `k8s` because the controller owns them).
 

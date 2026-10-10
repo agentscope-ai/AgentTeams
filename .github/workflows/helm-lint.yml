@@ -29,6 +29,8 @@ on:
       - 'tests/check-installer-qwenpaw-runtime-options.sh'
       - 'tests/check-installer-deepseek-harness-runtime-options.sh'
       - 'tests/check-powershell-deepseek-harness-latest.ps1'
+      - 'tests/check-installer-qwen-code-runtime-options.sh'
+      - 'tests/check-powershell-qwen-code-latest.ps1'
       - 'tests/check-windows-appservice-normalization.ps1'
       - 'tests/check-apply-wrapper-flags.sh'
       - 'tests/check-mcp-setup-domain-parsing.sh'
@@ -85,6 +87,9 @@ jobs:
 
       - name: Check DeepSeek Harness installer runtime options
         run: bash tests/check-installer-deepseek-harness-runtime-options.sh
+
+      - name: Check Qwen Code installer runtime options
+        run: bash tests/check-installer-qwen-code-runtime-options.sh
 
       - name: Check Windows AppService normalization
         shell: pwsh

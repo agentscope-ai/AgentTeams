@@ -193,7 +193,7 @@ type WorkerSpec struct {
 	// QwenPaw >= 2.1.1 via the native AgentProfileConfig.subagent_model
 	// field; on older runtimes the field is silently ignored.
 	SubagentModel string                     `json:"subagentModel,omitempty"`
-	Runtime       string                     `json:"runtime,omitempty"`    // openclaw | copaw | hermes | qwenpaw | deepseek-harness (default: openclaw)
+	Runtime       string                     `json:"runtime,omitempty"`    // openclaw | copaw | hermes | qwenpaw | deepseek-harness | qwen-code (default: openclaw)
 	Image         string                     `json:"image,omitempty"`      // custom Docker image
 	WorkerName    string                     `json:"workerName,omitempty"` // business/runtime identity (Matrix localpart, OSS path key)
 	Identity      string                     `json:"identity,omitempty"`

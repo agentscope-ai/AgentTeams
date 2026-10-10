@@ -16,7 +16,7 @@
 
 AgentTeams 不再实现 Agent 运行时本身，而是编排和管理多个 Agent 容器（Manager 和众多 Workers）。
 - 🧑‍💻 **设计了 Manger-Workers 架构**：不用真人去管理每个干活的 Worker Claw，实现由 Agent 管理 Agents。
-- 🤝 **多运行时协作**：OpenClaw、QwenPaw、Hermes 和实验性的 DeepSeek Harness Worker 可以在同一个 IM 房间中协作，并通过 Matrix 保持过程可见。
+- 🤝 **多运行时协作**：OpenClaw、QwenPaw、Hermes 和实验性的 DeepSeek Harness / Qwen Code Worker 可以在同一个 IM 房间中协作，并通过 Matrix 保持过程可见。
 - 📚 **引入 MinIO 共享文件系统**：用于 Agent 之间的信息共享，大幅降低多 Agent 协作带来的 Token 消耗。
 - ⛑️ **引入 Higress AI Gateway**：流量入口和各类凭证风险降低了，减少了用户对原生龙虾在安全上的顾虑。
 - 🎨 **使用 Element IM 客户端+Tuwunel IM 服务器（均基于 Matrix 实时通信协议）**：节省钉钉、飞书 IM 的接入和企业内的审批成本，方便用户快速体验在 IM 的交互环境中体验模型服务的"爽感"，同时支持以 OpenClaw 原生的方式接入 IM。
@@ -212,7 +212,7 @@ helm install agentteams higress.io/agentteams \
 | `preflight.llm.activeDeadlineSeconds` | 可选 | 探测 Job 的最长运行时间；默认 `120` 秒 |
 | `preflight.llm.resources` | 可选 | 探测容器的 Kubernetes requests/limits |
 | `manager.runtime` | 可选 | Manager Agent 运行时：OpenClaw 使用 `openclaw`（默认）；CoPaw 在当前 Chart 中使用 `qwenpaw`，`copaw` 为兼容别名。Manager 不支持 Hermes 或 DeepSeek Harness |
-| `worker.defaultRuntime` | 可选 | Chart 提供 `openclaw`（默认）、`copaw`、`hermes`、实验性的 `deepseek-harness` 和 `openhuman` 默认镜像值；当前 CRD 不接受显式的 `spec.runtime: openhuman`，QwenPaw Worker 需在 `spec.image` 中显式配置镜像 |
+| `worker.defaultRuntime` | 可选 | Chart 提供 `openclaw`（默认）、`copaw`、`hermes`、实验性的 `deepseek-harness` 与 `qwen-code` 和 `openhuman` 默认镜像值；当前 CRD 不接受显式的 `spec.runtime: openhuman`，QwenPaw Worker 需在 `spec.image` 中显式配置镜像 |
 
 Helm 默认在安装和升级前执行 LLM 探测，使用 `credentials.llmApiKey`、`credentials.llmBaseUrl` 和 `credentials.defaultModel` 发送一个最小的 OpenAI 兼容请求。无效密钥、无法访问的 Base URL、不支持的模型、额度错误或服务商故障会在 Controller 启动前终止安装。受限或离线集群可以临时关闭：
 
@@ -412,6 +412,7 @@ AgentTeams 提供多类 Worker 运行时，可以**在同一个 IM 房间中共�
 - **QwenPaw**（Python）— 轻量级运行时，适合浏览器自动化和快速任务
 - **Hermes**（[hermes-agent](https://github.com/NousResearch/hermes-agent)）— 自主编程 Agent，具备终端沙箱、自我进化的 Skill 和持久化记忆
 - **DeepSeek Harness**（实验性）— Headless 编程 Agent，支持按 Matrix 房间续聊、文件往返和重启恢复；当前固定在通过测试的 DSH release candidate
+- **Qwen Code**（实验性）— 基于 Qwen Code CLI 的 Headless 编程 Agent runtime，经托管 bridge 支持 Matrix 文本/文件往返，并支持对象存储恢复
 
 `copaw` 仍作为已有 CoPaw Worker 的兼容 runtime 值保留；当前 CRD 同时接受 `copaw` 和 `qwenpaw`。DeepSeek Harness runtime 目前属于实验能力，固定在通过兼容性测试的 DSH release candidate 上，支持按 Matrix 房间续聊、文件往返和重启恢复。所有运行时都通过 Matrix 房间通信——完全可见、随时可干预。
 

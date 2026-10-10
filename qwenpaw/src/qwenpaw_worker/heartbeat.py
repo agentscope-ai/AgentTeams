@@ -126,6 +126,47 @@ def get_qwenpaw_last_active_at(port: int, agent_id: str = "default") -> str | No
     return derive_last_active_at(get_qwenpaw_agent_status(port, agent_id))
 
 
+def get_qwenpaw_token_usage(path: Path) -> Dict[str, Any] | None:
+    """Read QwenPaw's token_usage.json and return cumulative lifetime totals.
+
+    The file is keyed by date then by (agent, provider, model) bucket, each
+    bucket carrying the accumulated counters. Totals are summed across every
+    bucket. Returns ``None`` when the file is missing (no usage recorded yet)
+    or unreadable, so the heartbeat simply omits the field.
+    """
+    try:
+        raw = path.read_text(encoding="utf-8")
+        data = json.loads(raw) if raw.strip() else {}
+    except (OSError, ValueError) as exc:
+        logger.debug(
+            "qwenpaw token usage read failed component=heartbeat error_type=%s",
+            type(exc).__name__,
+        )
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    prompt_tokens = 0
+    completion_tokens = 0
+    call_count = 0
+    for day_bucket in data.values():
+        if not isinstance(day_bucket, dict):
+            continue
+        for entry in day_bucket.values():
+            if not isinstance(entry, dict):
+                continue
+            prompt_tokens += int(entry.get("prompt_tokens", 0) or 0)
+            completion_tokens += int(entry.get("completion_tokens", 0) or 0)
+            call_count += int(entry.get("call_count", 0) or 0)
+
+    return {
+        "promptTokens": prompt_tokens,
+        "completionTokens": completion_tokens,
+        "totalTokens": prompt_tokens + completion_tokens,
+        "callCount": call_count,
+    }
+
+
 def _agent_status_report_fields(payload: Dict[str, Any] | None) -> Dict[str, Any]:
     """Project the agent-status payload onto the heartbeat report body."""
     if not payload:
@@ -165,33 +206,38 @@ class ControllerHeartbeatReporter:
         self,
         last_active_at: str | None = None,
         agent_status: Dict[str, Any] | None = None,
+        token_usage: Dict[str, Any] | None = None,
     ) -> bool:
-        return self._post("ready", last_active_at, agent_status)
+        return self._post("ready", last_active_at, agent_status, token_usage)
 
     def report_heartbeat(
         self,
         last_active_at: str | None = None,
         agent_status: Dict[str, Any] | None = None,
+        token_usage: Dict[str, Any] | None = None,
     ) -> bool:
         # The controller uses repeated ready reports as worker heartbeats.
-        return self._post("ready", last_active_at, agent_status)
+        return self._post("ready", last_active_at, agent_status, token_usage)
 
     def _post(
         self,
         action: str,
         last_active_at: str | None,
         agent_status: Dict[str, Any] | None = None,
+        token_usage: Dict[str, Any] | None = None,
     ) -> bool:
         if not self.enabled():
             return False
         path = f"/api/v1/workers/{self.worker_name}/{action}"
         body = None
         headers = {}
-        if last_active_at or agent_status:
+        if last_active_at or agent_status or token_usage:
             data: Dict[str, Any] = {}
             if last_active_at:
                 data["lastActiveAt"] = last_active_at
             data.update(_agent_status_report_fields(agent_status))
+            if token_usage:
+                data["tokenUsage"] = token_usage
             body = json.dumps(data).encode("utf-8")
             headers["Content-Type"] = "application/json"
         token = self.token or _discover_auth_token()
@@ -232,6 +278,7 @@ async def run_worker_heartbeat_loop(
     local_interval: float = 5,
     report_interval: float | None = None,
     reporter: ControllerHeartbeatReporter | None = None,
+    token_usage_path: Path | None = None,
 ) -> None:
     """Probe QwenPaw locally and report worker status to the controller."""
 
@@ -271,6 +318,11 @@ async def run_worker_heartbeat_loop(
             if status == "ready" and reporter.enabled():
                 agent_status = await asyncio.to_thread(get_qwenpaw_agent_status, port)
                 last_active_at = derive_last_active_at(agent_status)
+                token_usage = (
+                    await asyncio.to_thread(get_qwenpaw_token_usage, token_usage_path)
+                    if token_usage_path is not None
+                    else None
+                )
                 # Change-driven report: the status light must flip within
                 # one local poll (5s), not wait for the 60s heartbeat.
                 agent_status_key = (
@@ -286,14 +338,20 @@ async def run_worker_heartbeat_loop(
                     # The ready report (below, first tick) already carries
                     # the full payload — skip the redundant change report.
                     if ready_reported:
-                        await asyncio.to_thread(reporter.report_heartbeat, last_active_at, agent_status)
+                        await asyncio.to_thread(
+                            reporter.report_heartbeat, last_active_at, agent_status, token_usage
+                        )
                 if not ready_reported:
-                    ready_reported = await asyncio.to_thread(reporter.report_ready, last_active_at, agent_status)
+                    ready_reported = await asyncio.to_thread(
+                        reporter.report_ready, last_active_at, agent_status, token_usage
+                    )
                     if ready_reported:
                         logger.info("controller ready report accepted component=heartbeat worker=%s", worker_name)
                 now = time.time()
                 if now >= next_report_at:
-                    reported = await asyncio.to_thread(reporter.report_heartbeat, last_active_at, agent_status)
+                    reported = await asyncio.to_thread(
+                        reporter.report_heartbeat, last_active_at, agent_status, token_usage
+                    )
                     if reported:
                         logger.debug("controller heartbeat report accepted component=heartbeat worker=%s", worker_name)
                     next_report_at = now + report_every

@@ -205,11 +205,12 @@ func (h *LifecycleHandler) Ready(w http.ResponseWriter, r *http.Request) {
 // workerRuntimeReport is the optional heartbeat payload sent by workers.
 // Every field is optional so legacy workers (empty body) keep working.
 type workerRuntimeReport struct {
-	LastActiveAt     string `json:"lastActiveAt"`
-	AgentStatus      string `json:"agentStatus"`
-	RunningTaskCount *int   `json:"runningTaskCount"`
-	LastRunAt        string `json:"lastRunAt"`
-	LastFinishAt     string `json:"lastFinishAt"`
+	LastActiveAt     string                    `json:"lastActiveAt"`
+	AgentStatus      string                    `json:"agentStatus"`
+	RunningTaskCount *int                      `json:"runningTaskCount"`
+	LastRunAt        string                    `json:"lastRunAt"`
+	LastFinishAt     string                    `json:"lastFinishAt"`
+	TokenUsage       *v1beta1.WorkerTokenUsage `json:"tokenUsage"`
 }
 
 func readWorkerRuntimeReport(r *http.Request) workerRuntimeReport {
@@ -225,7 +226,8 @@ func readWorkerRuntimeReport(r *http.Request) workerRuntimeReport {
 // Worker status. Failures are non-fatal: the next heartbeat re-sends them.
 func (h *LifecycleHandler) updateWorkerRuntimeReport(name string, report workerRuntimeReport) {
 	if report.LastActiveAt == "" && report.AgentStatus == "" &&
-		report.RunningTaskCount == nil && report.LastRunAt == "" && report.LastFinishAt == "" {
+		report.RunningTaskCount == nil && report.LastRunAt == "" &&
+		report.LastFinishAt == "" && report.TokenUsage == nil {
 		return
 	}
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -254,6 +256,12 @@ func (h *LifecycleHandler) updateWorkerRuntimeReport(name string, report workerR
 		}
 		if report.LastFinishAt != "" && report.LastFinishAt != worker.Status.LastFinishAt {
 			worker.Status.LastFinishAt = report.LastFinishAt
+			changed = true
+		}
+		if report.TokenUsage != nil &&
+			(worker.Status.TokenUsage == nil || *report.TokenUsage != *worker.Status.TokenUsage) {
+			usage := *report.TokenUsage
+			worker.Status.TokenUsage = &usage
 			changed = true
 		}
 		if !changed {

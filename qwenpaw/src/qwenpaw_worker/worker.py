@@ -1043,4 +1043,5 @@ class Worker:
             self.heartbeat,
             worker_name=self.config.worker_cr_name,
             port=self.config.console_port,
+            token_usage_path=self.config.qwenpaw_working_dir / "token_usage.json",
         )

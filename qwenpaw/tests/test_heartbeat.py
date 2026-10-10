@@ -226,6 +226,161 @@ async def test_worker_heartbeat_loop_reports_ready_and_heartbeat(
     ]
 
 
+def test_get_qwenpaw_token_usage_sums_cumulative_totals(tmp_path: Path) -> None:
+    from qwenpaw_worker.heartbeat import get_qwenpaw_token_usage
+
+    (tmp_path / "token_usage.json").write_text(
+        json.dumps(
+            {
+                "2026-05-13": {
+                    "\x1fdashscope\x1fqwen-max": {
+                        "provider_id": "dashscope",
+                        "model_name": "qwen-max",
+                        "prompt_tokens": 100,
+                        "completion_tokens": 20,
+                        "call_count": 2,
+                    }
+                },
+                "2026-05-14": {
+                    "\x1fdashscope\x1fqwen-max": {
+                        "prompt_tokens": 300,
+                        "completion_tokens": 40,
+                        "call_count": 3,
+                    },
+                    "\x1fopenai\x1fgpt-4": {
+                        "prompt_tokens": 50,
+                        "completion_tokens": 10,
+                        "call_count": 1,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    usage = get_qwenpaw_token_usage(tmp_path / "token_usage.json")
+
+    assert usage == {
+        "promptTokens": 450,
+        "completionTokens": 70,
+        "totalTokens": 520,
+        "callCount": 6,
+    }
+
+
+def test_get_qwenpaw_token_usage_missing_or_invalid_file(tmp_path: Path) -> None:
+    from qwenpaw_worker.heartbeat import get_qwenpaw_token_usage
+
+    assert get_qwenpaw_token_usage(tmp_path / "missing.json") is None
+
+    bad = tmp_path / "bad.json"
+    bad.write_text("not json", encoding="utf-8")
+    assert get_qwenpaw_token_usage(bad) is None
+
+
+def test_controller_reporter_includes_token_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    server, requests = _start_server(
+        {
+            "POST /api/v1/workers/worker-a/ready": (204, None),
+        }
+    )
+    monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", f"http://127.0.0.1:{server.server_port}")
+    monkeypatch.setenv("AGENTTEAMS_AUTH_TOKEN", "worker-token")
+
+    try:
+        reporter = ControllerHeartbeatReporter.from_env("worker-a")
+        assert reporter.report_heartbeat(
+            token_usage={"promptTokens": 10, "completionTokens": 5, "totalTokens": 15, "callCount": 1}
+        ) is True
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert json.loads(requests[0]["body"]) == {
+        "tokenUsage": {
+            "promptTokens": 10,
+            "completionTokens": 5,
+            "totalTokens": 15,
+            "callCount": 1,
+        }
+    }
+
+
+@pytest.mark.anyio
+async def test_worker_heartbeat_loop_reports_token_usage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server, requests = _start_server(
+        {
+            "GET /api/agents/default/agent-status": (
+                200,
+                {
+                    "status": "idle",
+                    "running_task_count": 0,
+                    "last_run_at": "2026-05-13T00:00:00Z",
+                    "last_finish_at": "2026-05-13T00:04:00Z",
+                },
+            ),
+            "POST /api/v1/workers/worker-a/ready": (204, None),
+        }
+    )
+    token_usage_path = tmp_path / "token_usage.json"
+    token_usage_path.write_text(
+        json.dumps(
+            {
+                "2026-05-13": {
+                    "\x1fdashscope\x1fqwen-max": {
+                        "prompt_tokens": 7,
+                        "completion_tokens": 3,
+                        "call_count": 1,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    heartbeat = WorkerHeartbeat(tmp_path / "heartbeat.json")
+    ticks = 0
+
+    def check(_port):
+        return "ready", "qwenpaw ready", {}
+
+    async def cancel_after_tick(_seconds):
+        nonlocal ticks
+        ticks += 1
+        raise asyncio.CancelledError
+
+    monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", f"http://127.0.0.1:{server.server_port}")
+    monkeypatch.setattr("qwenpaw_worker.heartbeat.check_qwenpaw_heartbeat", check)
+    monkeypatch.setattr("qwenpaw_worker.heartbeat.asyncio.sleep", cancel_after_tick)
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await run_worker_heartbeat_loop(
+                heartbeat,
+                worker_name="worker-a",
+                port=server.server_port,
+                local_interval=0.01,
+                report_interval=60,
+                token_usage_path=token_usage_path,
+            )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    post_requests = [request for request in requests if request["method"] == "POST"]
+    assert post_requests
+    for request in post_requests:
+        body = json.loads(request["body"])
+        assert body["tokenUsage"] == {
+            "promptTokens": 7,
+            "completionTokens": 3,
+            "totalTokens": 10,
+            "callCount": 1,
+        }
+
+
 def _start_server(routes):
     requests = []
 
@@ -329,6 +484,7 @@ def test_agent_status_running_maps_last_active_to_now() -> None:
     assert value is not None and value.endswith("Z")
 
 
+@pytest.mark.anyio
 async def test_agent_status_change_triggers_immediate_report(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

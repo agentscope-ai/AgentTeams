@@ -1161,6 +1161,7 @@ func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 		RunningTaskCount: w.Status.RunningTaskCount,
 		LastRunAt:        w.Status.LastRunAt,
 		LastFinishAt:     w.Status.LastFinishAt,
+		TokenUsage:       w.Status.TokenUsage,
 	}
 	if resp.Phase == "" {
 		resp.Phase = "Pending"

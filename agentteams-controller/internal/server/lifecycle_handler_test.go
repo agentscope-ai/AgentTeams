@@ -399,7 +399,7 @@ func TestLifecycleReadyPersistsRuntimeReport(t *testing.T) {
 	backendStub := &stubWorkerBackend{status: backend.StatusRunning}
 	handler := NewLifecycleHandler(k8sClient, backend.NewRegistry([]backend.WorkerBackend{backendStub}), "default")
 
-	payload := `{"lastActiveAt":"2026-09-14T10:00:00Z","agentStatus":"running","runningTaskCount":2,"lastRunAt":"2026-09-14T09:58:00Z","lastFinishAt":"2026-09-14T09:50:00Z"}`
+	payload := `{"lastActiveAt":"2026-09-14T10:00:00Z","agentStatus":"running","runningTaskCount":2,"lastRunAt":"2026-09-14T09:58:00Z","lastFinishAt":"2026-09-14T09:50:00Z","tokenUsage":{"promptTokens":450,"completionTokens":70,"totalTokens":520,"callCount":6}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers/alpha-dev/ready", strings.NewReader(payload))
 	req.SetPathValue("name", "alpha-dev")
 	rec := httptest.NewRecorder()
@@ -428,6 +428,15 @@ func TestLifecycleReadyPersistsRuntimeReport(t *testing.T) {
 	}
 	if updated.Status.LastFinishAt != "2026-09-14T09:50:00Z" {
 		t.Errorf("expected lastFinishAt persisted, got %q", updated.Status.LastFinishAt)
+	}
+	if updated.Status.TokenUsage == nil {
+		t.Fatalf("expected tokenUsage persisted")
+	}
+	if updated.Status.TokenUsage.PromptTokens != 450 ||
+		updated.Status.TokenUsage.CompletionTokens != 70 ||
+		updated.Status.TokenUsage.TotalTokens != 520 ||
+		updated.Status.TokenUsage.CallCount != 6 {
+		t.Errorf("unexpected tokenUsage persisted: %+v", updated.Status.TokenUsage)
 	}
 }
 

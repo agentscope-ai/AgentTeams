@@ -387,6 +387,20 @@ type DingTalkChannelSpec struct {
 	CardTemplateID   string `json:"cardTemplateId,omitempty"`
 }
 
+// WorkerTokenUsage is the cumulative token consumption a worker runtime has
+// recorded over its lifetime, self-reported via the worker heartbeat. Nil on
+// the status when the runtime does not report it.
+type WorkerTokenUsage struct {
+	// PromptTokens is the cumulative number of input/prompt tokens.
+	PromptTokens int64 `json:"promptTokens,omitempty"`
+	// CompletionTokens is the cumulative number of output/completion tokens.
+	CompletionTokens int64 `json:"completionTokens,omitempty"`
+	// TotalTokens is prompt + completion tokens.
+	TotalTokens int64 `json:"totalTokens,omitempty"`
+	// CallCount is the cumulative number of model calls.
+	CallCount int64 `json:"callCount,omitempty"`
+}
+
 type WorkerStatus struct {
 	ObservedGeneration int64  `json:"observedGeneration,omitempty"`
 	SpecHash           string `json:"specHash,omitempty"`
@@ -409,7 +423,11 @@ type WorkerStatus struct {
 	LastRunAt string `json:"lastRunAt,omitempty"`
 	// LastFinishAt is the runtime-reported timestamp of the last task finish
 	// (RFC3339 UTC, from the QwenPaw agent-status endpoint).
-	LastFinishAt string              `json:"lastFinishAt,omitempty"`
+	LastFinishAt string `json:"lastFinishAt,omitempty"`
+	// TokenUsage is the cumulative token consumption self-reported by the
+	// worker heartbeat. Nil when the runtime does not report it (legacy or
+	// non-QwenPaw runtimes).
+	TokenUsage   *WorkerTokenUsage   `json:"tokenUsage,omitempty"`
 	Message      string              `json:"message,omitempty"`
 	ExposedPorts []ExposedPortStatus `json:"exposedPorts,omitempty"`
 

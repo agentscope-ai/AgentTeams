@@ -412,6 +412,22 @@ spec:
                   type: string
                   format: date-time
                   description: "Runtime-reported timestamp of the last task finish."
+                tokenUsage:
+                  type: object
+                  description: "Cumulative token consumption self-reported by the worker heartbeat; absent when not reported."
+                  properties:
+                    promptTokens:
+                      type: integer
+                      format: int64
+                    completionTokens:
+                      type: integer
+                      format: int64
+                    totalTokens:
+                      type: integer
+                      format: int64
+                    callCount:
+                      type: integer
+                      format: int64
                 message:
                   type: string
                 exposedPorts:

@@ -90,13 +90,16 @@ type WorkerResponse struct {
 	LastActiveAt   string                     `json:"lastActiveAt,omitempty"`
 	// AgentStatus is the runtime task-level state reported by the worker
 	// heartbeat: "idle" / "running" / "disabled"; empty = not reported.
-	AgentStatus      string            `json:"agentStatus,omitempty"`
-	RunningTaskCount *int              `json:"runningTaskCount,omitempty"`
-	LastRunAt        string            `json:"lastRunAt,omitempty"`
-	LastFinishAt     string            `json:"lastFinishAt,omitempty"`
-	ExposedPorts     []ExposedPortInfo `json:"exposedPorts,omitempty"`
-	Team             string            `json:"team,omitempty"`
-	Role             string            `json:"role,omitempty"`
+	AgentStatus      string `json:"agentStatus,omitempty"`
+	RunningTaskCount *int   `json:"runningTaskCount,omitempty"`
+	LastRunAt        string `json:"lastRunAt,omitempty"`
+	LastFinishAt     string `json:"lastFinishAt,omitempty"`
+	// TokenUsage is the cumulative token consumption reported by the worker
+	// heartbeat (QwenPaw runtime). Nil = not reported.
+	TokenUsage   *v1beta1.WorkerTokenUsage `json:"tokenUsage,omitempty"`
+	ExposedPorts []ExposedPortInfo         `json:"exposedPorts,omitempty"`
+	Team         string                    `json:"team,omitempty"`
+	Role         string                    `json:"role,omitempty"`
 }
 
 type ExposedPortInfo struct {

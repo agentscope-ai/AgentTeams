@@ -80,6 +80,18 @@ Shared runtime Secret name.
 {{- printf "%s-runtime-env" (include "agentteams.fullname" .) }}
 {{- end }}
 
+{{/*
+Effective OpenAI-compatible LLM base URL. Explicit values always win; known
+providers can supply a usable endpoint when credentials.llmBaseUrl is omitted.
+*/}}
+{{- define "agentteams.llmBaseURL" -}}
+{{- if .Values.credentials.llmBaseUrl -}}
+{{- .Values.credentials.llmBaseUrl -}}
+{{- else if eq (.Values.credentials.llmProvider | default "") "atlascloud" -}}
+{{- "https://api.atlascloud.ai/v1" -}}
+{{- end -}}
+{{- end }}
+
 {{/* ── Component naming helpers ────────────────────────────────────────── */}}
 
 {{- define "agentteams.manager.fullname" -}}

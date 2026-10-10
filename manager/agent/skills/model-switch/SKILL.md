@@ -79,4 +79,6 @@ When the human admin requests switching to a model you don't recognize, you MUST
 | claude-haiku-4-5 | 200,000 | 64,000 |
 | qwen3.5-plus | 200,000 | 64,000 |
 | deepseek-chat / deepseek-reasoner / kimi-k2.5 | 256,000 | 128,000 |
-| glm-5 / MiniMax-M2.7 / MiniMax-M2.7-highspeed / MiniMax-M2.5 | 200,000 | 128,000 |
+| glm-5 | 200,000 | 128,000 |
+| MiniMax-M3 | 1,000,000 | 128,000 |
+| MiniMax-M2.7 | 204,800 | 128,000 |

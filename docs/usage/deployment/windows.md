@@ -197,7 +197,7 @@ Select CodingPlan Default Model:
   1) qwen3.5-plus  - Qwen 3.5 (Fastest)
   2) glm-5  - Zhipu GLM-5 (Recommended for coding)
   3) kimi-k2.5  - Moonshot Kimi K2.5
-  4) MiniMax-M2.5  - MiniMax M2.5
+  4) MiniMax-M3  - MiniMax M3
 
 Select model [1/2/3/4]:
 ```

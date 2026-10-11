@@ -35,10 +35,10 @@ class IntegrationSchedulingTest(unittest.TestCase):
             self.assertTrue({'15', '17', '18', '19', '20', '22', '24', '100'} <= set(tests))
         for number in ('23', '25'):
             self.assertEqual([rt for rt, tests in selected.items() if number in tests], ['qwenpaw'])
-        for number in ('27', '28'):
+        for number in ('27', '28', '29'):
             self.assertEqual([rt for rt, tests in selected.items() if number in tests], ['qwenpaw'])
         self.assertEqual(len(matrix), 7)
-        self.assertEqual(sum(len(tests) for tests in selected.values()), 28)
+        self.assertEqual(sum(len(tests) for tests in selected.values()), 29)
         for tests in filters.values():
             for number in tests.split():
                 self.assertEqual(len(list((ROOT / 'tests').glob(f'test-{number}-*.sh'))), 1)
@@ -48,9 +48,9 @@ class IntegrationSchedulingTest(unittest.TestCase):
         self.assertFalse(any('copaw' in (entry['manager_runtime'], entry['worker_runtime']) for entry in matrix))
         self.assertFalse(any(entry['shard'] == 'controller-cr-2' for entry in matrix))
         self.assertTrue(any(entry['shard'] == 'qwenpaw-teamharness' for entry in matrix))
-        # Real state migration still needs a built CoPaw worker image.
+        # The legacy upgrade coverage pulls the pinned published image (test-29); no branch build of the CoPaw runtime is needed.
         targets = re.search(r'target: \[(.*?)\]', WORKFLOW).group(1).split(', ')
-        self.assertIn('copaw-worker', targets)
+        self.assertNotIn('copaw-worker', targets)
 
     def test_fork_keeps_shared_coverage_without_secrets(self):
         matrix = self.matrix(untrusted=True)

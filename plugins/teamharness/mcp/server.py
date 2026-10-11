@@ -42,15 +42,40 @@ SENSITIVE_ARTIFACT_NAME_RE = re.compile(
     r"(secret|token|cookie|authorization|private[_-]?key|credential|client[_-]?secret)",
     re.IGNORECASE,
 )
+# Each pattern's group 1 (when present) captures the credential value so the
+# scanner can whitelist placeholder templates. Patterns without a group
+# (the private-key header) never need it: group(0) is used instead.
 SENSITIVE_ARTIFACT_TEXT_RE = [
     re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----", re.IGNORECASE),
-    re.compile(r"\bAuthorization\s*:\s*(?:Bearer|Basic)\s+\S+", re.IGNORECASE),
+    re.compile(r"\bAuthorization\s*:\s*(?:Bearer|Basic)\s+(\S+)", re.IGNORECASE),
     re.compile(
         r"\b(?:access[_-]?key[_-]?secret|client[_-]?secret|secret[_-]?key|api[_-]?key|token)\b"
-        r"\s*[:=]\s*['\"]?[A-Za-z0-9_./+=:-]{16,}",
+        r"\s*[:=]\s*['\"]?([A-Za-z0-9_./+=:-]{16,})",
         re.IGNORECASE,
     ),
 ]
+# A value that is an *explicit* angle-bracket template is documentation,
+# not a credential. The exemption requires more than shape: the enclosed
+# text must carry an explicit placeholder marker (case-insensitive, whole
+# component) — your, my, our, paste, insert, replace, placeholder,
+# example, sample, dummy, fake, redacted, masked, change[-_]?me, todo,
+# tbd, here, xxx, yyy, zzz. Neither the kebab shape alone
+# (``<sk-abcdefghijklmnopqrstuvwxyz>``) nor arbitrary label:value content
+# (``<token:abc123def4567890>``) is exempt. Content nouns
+# (token/key/secret/password/api) are NOT markers: they name what the
+# value is, not that it is a placeholder. Additionally the content may
+# not contain a run of 16+ consecutive alphanumerics (mirrors the
+# scanner's minimum credential length).
+PLACEHOLDER_CREDENTIAL_RE = re.compile(
+    r"^['\"]*<"
+    r"(?=[^<>\s]*(?<![A-Za-z0-9])(?:your|my|our|paste|insert|replace|"
+    r"placeholder|example|sample|dummy|fake|redacted|masked|change[-_]?me|"
+    r"todo|tbd|here|xxx|yyy|zzz)(?![A-Za-z0-9]))"
+    r"(?![^<>\s]*[A-Za-z0-9]{16,})"
+    r"[^<>\s]+"
+    r">['\"]*$",
+    re.IGNORECASE,
+)
 MATRIX_ATTACHMENT_REL_TYPE = "com.agentteams.attachment"
 MATRIX_ATTACHMENT_CONTEXT_FILE = "teamharness-matrix-context.json"
 MATRIX_ATTACHMENT_CONTEXT_TTL_SECONDS = 30 * 60
@@ -1442,7 +1467,13 @@ def _artifact_text_has_sensitive_content(path: Path, mimetype: str) -> bool:
     if b"\x00" in sample:
         return False
     text = sample.decode("utf-8", errors="replace")
-    return any(pattern.search(text) for pattern in SENSITIVE_ARTIFACT_TEXT_RE)
+    for pattern in SENSITIVE_ARTIFACT_TEXT_RE:
+        for match in pattern.finditer(text):
+            value = match.group(1) if match.lastindex else match.group(0)
+            if PLACEHOLDER_CREDENTIAL_RE.match(value):
+                continue
+            return True
+    return False
 
 
 def _matrix_upload_artifact(homeserver: str, token: str, path: Path, filename: str, mimetype: str) -> str:
@@ -2527,6 +2558,128 @@ def _resolve_filesync(arguments: dict[str, Any]) -> tuple[str, str, Path, str, b
     return action, normalized, local, remote, is_directory
 
 
+_PUSH_CLOCK_TOLERANCE = datetime.timedelta(seconds=5)
+
+
+def _parse_remote_mtime(value: Any) -> datetime.datetime | None:
+    """Parse a remote last-modified timestamp into an aware UTC datetime.
+
+    Accepts RFC3339 (``Z`` or numeric offset, fractional seconds of any
+    precision) and the ``mc stat`` text form ``YYYY-MM-DD HH:MM:SS UTC``.
+    Returns None when unparseable.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith(("UTC", "GMT")):
+        text = text[:-3].strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    # Cap fractional seconds at microseconds for pre-3.11 fromisoformat.
+    text = re.sub(r"(\.\d{6})\d+", r"\1", text)
+    try:
+        parsed = datetime.datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+    return parsed.astimezone(datetime.timezone.utc)
+
+
+def _filesync_remote_mtime(
+    remote: str, mc_env: dict[str, str]
+) -> tuple[datetime.datetime | None, str | None, str | None]:
+    """Probe the remote object before a single-file push.
+
+    Best-effort freshness guard (2026-09-21 incident: a stale local view
+    clobbered newer MinIO state).  The comparison is against the local
+    file's *last edit time*, not the remote version that file was derived
+    from, so this is scoped as a check for unedited (synced) local copies.
+
+    Known limitations (documented, not enforced here):
+
+    - **Stale-read/edit/push**: if a local copy is pulled (v1), a newer
+      remote version is published (v2), and the local copy is then edited
+      *after* that remote write, the local mtime is newer and the guard
+      permits the overwrite.  A version-baseline or conditional-put check
+      is required to close that case; tracked as a follow-up.
+    - **Probe failure is fail-open by design**: the guard is a freshness
+      hint, not a write lock.  When the remote cannot be stat'ed the push
+      proceeds and the reason is surfaced via ``warning``; blocking on an
+      unavailable probe would make filesync unusable during transient
+      MinIO outages, while the guarded incident class (known-stale local
+      view) is unaffected by probe failures.
+    - **Not atomic**: stat and cp are separate steps (TOCTOU); this is not
+      a concurrent-write lock.
+
+    Returns (mtime, raw, warning):
+
+    - remote absent          -> (None, None, None): a normal first push
+    - probe/parse failed     -> (None, None, reason): push through, surface reason
+    - remote timestamp known -> (mtime, raw, None): caller compares vs local
+    """
+    try:
+        stat = subprocess.run(
+            ["mc", "stat", "--json", remote],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=mc_env,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, None, f"remote stat probe failed: {exc}"
+
+    if stat.returncode != 0:
+        detail = "\n".join(part.strip() for part in (stat.stderr, stat.stdout) if part.strip())
+        if "does not exist" in detail.lower():
+            return None, None, None
+        return None, None, f"remote stat probe failed: {detail or 'unknown error'}"
+
+    raw: str | None = None
+    mtime: datetime.datetime | None = None
+    try:
+        payload = json.loads(stat.stdout)
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict):
+        candidate = str(payload.get("lastModified") or "").strip()
+        if candidate:
+            raw = candidate
+            mtime = _parse_remote_mtime(candidate)
+    if mtime is None:
+        # --json output lacked a usable lastModified; degrade to the text
+        # `mc stat` Date: line before giving up on the guard.
+        try:
+            text_stat = subprocess.run(
+                ["mc", "stat", remote],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=mc_env,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return None, None, f"remote stat probe failed: {exc}"
+        if text_stat.returncode != 0:
+            detail = "\n".join(part.strip() for part in (text_stat.stderr, text_stat.stdout) if part.strip())
+            if "does not exist" in detail.lower():
+                return None, None, None
+            return None, None, f"remote stat probe failed: {detail or 'unknown error'}"
+        for line in text_stat.stdout.splitlines():
+            date_match = re.match(r"^date\s*:\s*(.+)$", line.strip(), re.IGNORECASE)
+            if date_match:
+                raw = date_match.group(1).strip()
+                mtime = _parse_remote_mtime(raw)
+                break
+        if mtime is None:
+            return None, None, (
+                "could not determine remote lastModified; push passed through "
+                "without the freshness guard"
+            )
+    return mtime, raw, None
+
+
 def _filesync(arguments: dict[str, Any]) -> dict[str, Any]:
     try:
         action, normalized, local, remote, is_directory = _resolve_filesync(arguments)
@@ -2547,6 +2700,7 @@ def _filesync(arguments: dict[str, Any]) -> dict[str, Any]:
             command = ["mc", "cp", remote, str(local)]
     else:
         if is_directory:
+            # TODO(B13): consider a per-file guard for directory pushes
             source = str(local) + ("/" if not str(local).endswith("/") else "")
             command = ["mc", "mirror", source, remote, "--overwrite"]
             for pattern in exclude:
@@ -2580,6 +2734,31 @@ def _filesync(arguments: dict[str, Any]) -> dict[str, Any]:
             "path": normalized,
             "error": env_error,
         }
+    guard_warning: str | None = None
+    if action == "push" and not is_directory:
+        remote_mtime, remote_raw, guard_warning = _filesync_remote_mtime(remote, mc_env)
+        if remote_mtime is not None:
+            try:
+                local_mtime = datetime.datetime.fromtimestamp(
+                    local.stat().st_mtime, tz=datetime.timezone.utc
+                )
+            except OSError:
+                local_mtime = None
+            if (
+                local_mtime is not None
+                and remote_mtime > local_mtime + _PUSH_CLOCK_TOLERANCE
+            ):
+                return {
+                    "ok": False,
+                    "conflict": True,
+                    "tool": "filesync",
+                    "action": "push",
+                    "path": normalized,
+                    "remotePath": remote,
+                    "localMtime": local_mtime.isoformat(),
+                    "remoteLastModified": remote_raw,
+                    "error": "remote copy is newer than the local file; pull before pushing again",
+                }
     try:
         completed = subprocess.run(
             command,
@@ -2590,7 +2769,7 @@ def _filesync(arguments: dict[str, Any]) -> dict[str, Any]:
             env=mc_env,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return {
+        body: dict[str, Any] = {
             "ok": False,
             "tool": "filesync",
             "action": action,
@@ -2598,9 +2777,12 @@ def _filesync(arguments: dict[str, Any]) -> dict[str, Any]:
             "error": f"filesync process failed: {exc}",
             "retryable": True,
         }
+        if guard_warning is not None:
+            body["warning"] = guard_warning
+        return body
     command_error = _filesync_command_error(completed)
     if command_error:
-        return {
+        body = {
             "ok": False,
             "tool": "filesync",
             "action": action,
@@ -2608,10 +2790,15 @@ def _filesync(arguments: dict[str, Any]) -> dict[str, Any]:
             "error": command_error,
             "returncode": completed.returncode,
         }
+        if guard_warning is not None:
+            body["warning"] = guard_warning
+        return body
     if action == "list":
         base["entries"] = [line for line in completed.stdout.splitlines() if line.strip()]
     if action == "stat":
         base["exists"] = True
+    if guard_warning is not None:
+        base["warning"] = guard_warning
     return base
 
 
@@ -2802,6 +2989,27 @@ def _canonical_room_id(value: Any) -> str:
     if text.startswith("room:"):
         text = text[len("room:") :].strip()
     return text
+
+
+def _canonical_assignee(value: Any) -> str:
+    """Comparison key for assignee identifiers.
+
+    Matrix user-id *localparts* are case-insensitive (the spec requires
+    reaching ``@user:matrix.org`` as ``@USER:matrix.org``), but *server
+    names* are case-sensitive (spec appendices §server-name: ``@user:matrix.org``
+    is a different person from ``@user:MATRIX.ORG``). An assignee may be
+    supplied as a full MXID or as a leading ``room:``-style alias.
+    Normalize only the localpart so a re-delegation to the *same* worker
+    (spelled with different localpart casing) compares equal, while a
+    different server name remains a genuinely different identity.
+    """
+    text = str(value or "").strip()
+    if text.startswith("room:"):
+        text = text[len("room:") :].strip()
+    if text.startswith("@") and ":" in text:
+        localpart, _, server = text[1:].partition(":")
+        return f"@{localpart.casefold()}:{server}"
+    return text.casefold()
 
 
 def _external_requester_channel(project: dict[str, Any]) -> str:
@@ -3963,8 +4171,25 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             elif action == "resume_project":
                 project["status"] = "active"
             else:
-                project["status"] = "completed"
                 loop = project.get("loop") if isinstance(project.get("loop"), dict) else {}
+                if str(project.get("plan_type") or "dag") == "loop":
+                    tasks = loop.get("tasks", []) if isinstance(loop.get("tasks"), list) else []
+                else:
+                    tasks = project.get("tasks", []) if isinstance(project.get("tasks"), list) else []
+                non_terminal = []
+                for task in tasks:
+                    if not isinstance(task, dict):
+                        non_terminal.append("<unknown> (invalid)")
+                        continue
+                    status = str(task.get("status") or "")
+                    if status not in TERMINAL_TASK_STATUSES:
+                        non_terminal.append(f"{task.get('task_id') or '<unknown>'} ({status or 'unknown'})")
+                if non_terminal:
+                    raise ValueError(
+                        "complete_project requires every project task to be terminal; "
+                        f"not terminal: {', '.join(non_terminal)}"
+                    )
+                project["status"] = "completed"
                 if loop:
                     loop["status"] = "completed"
                     project["loop"] = loop
@@ -4628,12 +4853,21 @@ def _send_delegate_notification(
     title: str,
     assignee: str,
     spec: str,
+    txn: str | None = None,
 ) -> dict[str, Any]:
     """Send the automatic Worker assignment notification for delegate_task.
 
     Publishes the assignment to the Task room with ``m.mentions`` using the
-    same Matrix HTTP send path as the message tool. The transaction ID is
-    stable per task so a retry cannot produce a duplicate assignment.
+    same Matrix HTTP send path as the message tool.
+
+    Transaction id: the caller passes the **persisted** transaction id for
+    this logical delegation attempt (``delegate-{task_id}-{nonce}``, stored
+    on the task BEFORE the send). A retry of the same attempt reuses it, so
+    a send that reached the room but whose response was lost is deduplicated
+    server-side instead of emitting a second assignment event. A genuinely
+    new delegation attempt (a different assignee, including A->B->A) rotates
+    the nonce, so its notification is never swallowed by a stale id. When
+    ``txn`` is omitted, a fresh id is generated for this send only.
     Returns the Matrix ``eventId`` on success.
     """
     homeserver = os.getenv("AGENTTEAMS_MATRIX_URL", "").rstrip("/")
@@ -4661,7 +4895,12 @@ def _send_delegate_notification(
     content = _matrix_content(notification_text, mentions)
 
     room_enc = urllib.parse.quote(matrix_room_id, safe="")
-    txn = urllib.parse.quote(f"delegate-{task_id}", safe="")
+    # Persisted transaction id for this delegation attempt (see docstring):
+    # the caller pre-mints it so a retry after a lost response reuses the
+    # same id and the homeserver deduplicates instead of double-sending.
+    if not txn:
+        txn = f"delegate-{task_id}-{uuid.uuid4().hex[:12]}"
+    txn = urllib.parse.quote(txn, safe="")
     url = f"{homeserver}/_matrix/client/v3/rooms/{room_enc}/send/m.room.message/{txn}"
     request = urllib.request.Request(
         url,
@@ -5170,7 +5409,22 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             # the existing assignment instead of sending a duplicate. The
             # assigned state must still reach shared storage: if the sync
             # fails, return a retryable failure so a later retry finishes it.
-            if str(existing_task.get("status") or "") == "assigned" and existing_task.get("eventId"):
+            #
+            # A re-delegation to a *different* assignee is not a retry:
+            # falling through re-prepares the task and sends a fresh
+            # notification (with a fresh transaction id) so the new worker
+            # actually receives the assignment instead of it being silently
+            # deduplicated by the homeserver.
+            existing_assignee = str(existing_task.get("assigned_to") or "").strip()
+            redelegate = bool(
+                assignment_mxid
+                and _canonical_assignee(assignment_mxid) != _canonical_assignee(existing_assignee)
+            )
+            if (
+                str(existing_task.get("status") or "") == "assigned"
+                and existing_task.get("eventId")
+                and not redelegate
+            ):
                 notification_reused = {
                     "sent": True,
                     "eventId": existing_task["eventId"],
@@ -5252,12 +5506,25 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             spec = str(payload.get("spec") or "")
             (task_dir / "spec.md").write_text(spec + ("\n" if spec else ""), encoding="utf-8")
             source_room_id = _source_room_id_from_payload(payload) or str(project.get("source_room_id") or "").strip()
+            # Transaction id for this logical delegation attempt:
+            # a re-delegation (different assignee) is a NEW attempt and
+            # rotates the nonce; a retry of the SAME attempt (previous send
+            # failed, or succeeded server-side but the client lost the
+            # response) REUSES the persisted nonce so the homeserver
+            # deduplicates the retry instead of emitting a second
+            # assignment event.
+            existing_notify_txn = str(existing_task.get("notifyTxn") or "").strip()
+            if redelegate or not existing_notify_txn:
+                notify_txn = f"delegate-{task_id}-{uuid.uuid4().hex[:12]}"
+            else:
+                notify_txn = existing_notify_txn
             task = {
                 "task_id": task_id,
                 "project_id": project_id,
                 "room_id": room_id,
                 "status": "prepared",
                 "spec_path": f"shared/tasks/{task_id}/spec.md",
+                "notifyTxn": notify_txn,
             }
             if assigned_to:
                 task["assigned_to"] = assigned_to
@@ -5286,17 +5553,22 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 if _delegate_from != "prepared":
                     # Only prepared -> prepared retries are silent no-op
                     # re-entries. Any other reachable re-entry changes the
-                    # state and is recorded so the trail stays complete: an
-                    # assigned task without eventId is the broken-state
-                    # repair path (revision and the other terminal states
-                    # are frozen upstream by the mutability guard).
+                    # state and is recorded so the trail stays complete: a
+                    # re-delegation to a new assignee, or an assigned task
+                    # without eventId (the broken-state repair path;
+                    # revision and the other terminal states are frozen
+                    # upstream by the mutability guard).
                     _append_transition_history(
                         task,
                         _delegate_from,
                         "prepared",
                         "delegate_task",
                         _transition_actor(arguments),
-                        note="repair: assigned without eventId",
+                        note=(
+                            "re-delegate: new assignee"
+                            if redelegate
+                            else "repair: assigned without eventId"
+                        ),
                     )
             _write_task(arguments, task)
             # Publish task files to shared storage FIRST so a Worker that
@@ -5346,6 +5618,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                         title=task_title or task_id,
                         assignee=assignment_mxid,
                         spec=spec,
+                        txn=notify_txn,
                     )
                 except Exception as exc:
                     notification = {

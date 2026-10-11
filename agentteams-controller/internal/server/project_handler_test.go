@@ -43,9 +43,10 @@ func newProjectTestScheme(t *testing.T) *runtime.Scheme {
 // in-memory fake, which itself returns full object keys.
 type mcLikeOSS struct {
 	*ossfake.Memory
-	listCalls int
-	failList  bool
-	failGet   bool
+	listCalls      int
+	failList       bool
+	failGet        bool
+	failListPrefix string // when set, only prefixes under it fail the detailed list
 }
 
 func (m *mcLikeOSS) ListObjects(_ context.Context, prefix string) ([]string, error) {
@@ -71,6 +72,9 @@ func (m *mcLikeOSS) ListObjectsDetailed(_ context.Context, prefix string) ([]oss
 	if m.failList {
 		return nil, errors.New("oss list failed")
 	}
+	if m.failListPrefix != "" && strings.HasPrefix(prefix, m.failListPrefix) {
+		return nil, errors.New("oss list failed (prefix-conditional)")
+	}
 	keys, err := m.Memory.ListObjects(context.Background(), prefix)
 	if err != nil {
 		return nil, err
@@ -81,6 +85,13 @@ func (m *mcLikeOSS) ListObjectsDetailed(_ context.Context, prefix string) ([]oss
 		rest := strings.TrimPrefix(k, prefix)
 		parts := strings.SplitN(rest, "/", 2)
 		if len(parts) != 2 {
+			// Direct child FILE at this level — real `mc ls <prefix>` lists
+			// files and directories alike (the catalog skips non-dir
+			// entries; the skill-download walk reads them).
+			if rest != "" && !seen[rest] {
+				seen[rest] = true
+				out = append(out, oss.ObjectInfo{Name: rest, UpdatedAt: m.Memory.LastWriteTime().UTC().Format(time.RFC3339)})
+			}
 			continue
 		}
 		dir := parts[0] + "/"

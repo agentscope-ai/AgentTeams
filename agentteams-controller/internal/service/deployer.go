@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -375,7 +376,9 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	// seeded before WorkerReconciler's first pass, and TeamReconciler may have
 	// already written a team-mode channel policy. Requiring IsUpdate would let
 	// that first standalone Worker pass clobber the Team overlay.
-	if existingJSON, err := d.oss.GetObject(ctx, agentPrefix+"/openclaw.json"); err == nil && len(existingJSON) > 0 {
+	openclawKey := agentPrefix + "/openclaw.json"
+	var existingJSON []byte
+	if existingJSON, err = d.oss.GetObject(ctx, openclawKey); err == nil && len(existingJSON) > 0 {
 		if merged, mergeErr := mergeUserPluginConfig(configJSON, existingJSON); mergeErr != nil {
 			logger.Error(mergeErr, "plugin config merge failed, using generated config")
 		} else {
@@ -383,19 +386,36 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 		}
 	}
 
-	openclawKey := agentPrefix + "/openclaw.json"
-	if err := d.oss.PutObject(ctx, openclawKey, configJSON); err != nil {
-		return fmt.Errorf("config push to storage failed: %w", err)
+	// No-op guard: a periodic reconcile that produces semantically
+	// identical config must not rewrite the object. Every rewrite bumps
+	// the object (version/mtime) and wakes the worker-side config
+	// watcher, and the resulting in-place agent reload interrupts
+	// in-flight turns for no change — the "reconcile no-op" defect
+	// (JEV P10: repeated agent.json rewrites correlated with worker
+	// session gaps). The comparison is semantic, not byte-wise: the
+	// plugin merge above re-marshals through freshly allocated maps, so
+	// Go's map-iteration order makes the bytes differ run to run even
+	// when the content is identical.
+	if openclawConfigEqual(configJSON, existingJSON) {
+		logger.V(1).Info("worker openclaw.json unchanged, skipping storage write",
+			"worker", req.Name,
+			"key", openclawKey,
+			"bytes", len(configJSON),
+		)
+	} else {
+		if err := d.oss.PutObject(ctx, openclawKey, configJSON); err != nil {
+			return fmt.Errorf("config push to storage failed: %w", err)
+		}
+		logger.Info("worker openclaw.json pushed to storage",
+			"worker", req.Name,
+			"key", openclawKey,
+			"bytes", len(configJSON),
+			"role", req.Role,
+			"runtime", req.Spec.Runtime,
+			"team", req.TeamName,
+			"isUpdate", req.IsUpdate,
+		)
 	}
-	logger.Info("worker openclaw.json pushed to storage",
-		"worker", req.Name,
-		"key", openclawKey,
-		"bytes", len(configJSON),
-		"role", req.Role,
-		"runtime", req.Spec.Runtime,
-		"team", req.TeamName,
-		"isUpdate", req.IsUpdate,
-	)
 
 	// --- SOUL.md (seed-only) ---
 	// Written once on first deploy; never overwritten so the agent owns it
@@ -1759,6 +1779,21 @@ func (d *Deployer) builtinAgentDir(role, runtime string) string {
 // overrides these to [leader, admin] for team members. WorkerReconciler is
 // team-agnostic and would otherwise revert them to standalone [manager, admin]
 // on every reconcile, breaking team-scoped task delivery.
+// openclawConfigEqual reports whether two openclaw.json payloads carry the
+// same configuration. The comparison is on unmarshaled values: the storage
+// merge path re-marshals through new maps, so byte order is not stable even
+// for identical content.
+func openclawConfigEqual(a, b []byte) bool {
+	var av, bv interface{}
+	if err := json.Unmarshal(a, &av); err != nil {
+		return false
+	}
+	if err := json.Unmarshal(b, &bv); err != nil {
+		return false
+	}
+	return reflect.DeepEqual(av, bv)
+}
+
 func mergeUserPluginConfig(generatedJSON, existingJSON []byte) ([]byte, error) {
 	var generated, existing map[string]interface{}
 	if err := json.Unmarshal(generatedJSON, &generated); err != nil {

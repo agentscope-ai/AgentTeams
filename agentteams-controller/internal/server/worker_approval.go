@@ -8,9 +8,11 @@ package server
 // STRICT (every tool needs approval), SMART (low-risk tools auto-allowed),
 // AUTO (only guarded tools — the upstream default), or OFF (guard
 // disabled). The worker's qwenpaw app exposes it on
-// GET/PUT /workspace/running-config: the field round-trips through the
-// running-config object and is written back into the agent profile by the
-// app itself.
+// GET/PUT /api/workspace/running-config (the qwenpaw app serves its API
+// under the /api prefix; a dial without it lands on the SPA catch-all
+// which answers 200 + index.html — fixed alongside the handler below):
+// the field round-trips through the running-config object and is written
+// back into the agent profile by the app itself.
 //
 // The Controller proxies a minimal surface so L2 humans can read and set
 // the level of workers in their own teams (L1/admin/manager: any team;
@@ -71,7 +73,11 @@ const (
 // silent truncation. It writes its own error responses and returns
 // (body, status, ok).
 func (h *ApprovalHandler) fetchUpstreamConfig(w http.ResponseWriter, r *http.Request, baseURL string) ([]byte, int, bool) {
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, baseURL+"/workspace/running-config", nil)
+	// The qwenpaw app serves its API under the /api prefix (same contract
+	// as RuntimeConfigHandler: workerBaseURL + "/api/" + subpath). Without
+	// it the dial lands on the SPA catch-all (200 + index.html) and the
+	// proxy fails with "worker returned an unparsable running config".
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, baseURL+"/api/workspace/running-config", nil)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "build running-config request: "+err.Error())
 		return nil, 0, false
@@ -188,6 +194,13 @@ func (h *ApprovalHandler) approvalScope(w http.ResponseWriter, r *http.Request, 
 			httputil.WriteError(w, http.StatusNotFound, "worker not found")
 			return "", false
 		}
+	}
+	// runtime-aware: tool approval is qwenpaw-specific. This runs after the
+	// team-scope check above so an out-of-scope caller sees 404 (existence
+	// hidden) regardless of the worker's runtime.
+	if rt := worker.Spec.Runtime; rt != "" && rt != "qwenpaw" {
+		httputil.WriteError(w, http.StatusBadRequest, "tool approval is only supported for qwenpaw workers")
+		return "", false
 	}
 	return h.workerBaseURL(name, worker.Spec.Env), true
 }
@@ -343,7 +356,8 @@ func (h *ApprovalHandler) updateWorkerApproval(w http.ResponseWriter, r *http.Re
 		httputil.WriteError(w, http.StatusInternalServerError, "marshal running-config update: "+err.Error())
 		return
 	}
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPut, baseURL+"/workspace/running-config", bytes.NewReader(body))
+	// Same /api prefix contract as the GET above (see fetchUpstreamConfig).
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPut, baseURL+"/api/workspace/running-config", bytes.NewReader(body))
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "build approval update request: "+err.Error())
 		return

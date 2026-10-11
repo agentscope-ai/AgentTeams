@@ -1789,3 +1789,66 @@ func TestPushOnDemandSkillsStandaloneWorkerIgnoresTeamLayer(t *testing.T) {
 		t.Errorf("scan ② ran for a standalone worker, want 0")
 	}
 }
+
+// countingOSS counts PutObject calls per key (the fake's modTime is
+// shared across keys, so it cannot measure single-object rewrites).
+type countingOSS struct {
+	*ossfake.Memory
+	puts map[string]int
+}
+
+func (c *countingOSS) PutObject(ctx context.Context, key string, data []byte) error {
+	c.puts[key]++
+	return c.Memory.PutObject(ctx, key, data)
+}
+
+// TestDeployWorkerConfigSkipsIdenticalOpenclawPush: a reconcile pass that
+// generates byte-identical openclaw.json must not rewrite the object.
+// Each rewrite wakes the worker-side config watcher and reloads the agent
+// in place, interrupting in-flight turns for no change (JEV P10).
+func TestDeployWorkerConfigSkipsIdenticalOpenclawPush(t *testing.T) {
+	ctx := context.Background()
+	store := &countingOSS{Memory: ossfake.NewMemory(), puts: map[string]int{}}
+	deployer := NewDeployer(DeployerConfig{
+		AgentConfig: agentconfig.NewGenerator(agentconfig.Config{}),
+		OSS:         store,
+		AgentFSDir:  t.TempDir(),
+	})
+	const key = "agents/alice/openclaw.json"
+	req := WorkerDeployRequest{
+		Name:        "alice",
+		MatrixToken: "matrix-token",
+		GatewayKey:  "gateway-key",
+	}
+	if err := deployer.DeployWorkerConfig(ctx, req); err != nil {
+		t.Fatalf("first deploy: %v", err)
+	}
+	if store.puts[key] != 1 {
+		t.Fatalf("first deploy must write openclaw.json exactly once, got %d", store.puts[key])
+	}
+	generated, err := store.GetObject(ctx, key)
+	if err != nil || len(generated) == 0 {
+		t.Fatalf("first deploy must write openclaw.json: %v", err)
+	}
+
+	// A second pass with an identical existing config is a no-op for the
+	// openclaw object: no rewrite, no watcher wake, no in-flight reload.
+	if err := deployer.DeployWorkerConfig(ctx, req); err != nil {
+		t.Fatalf("second deploy: %v", err)
+	}
+	if store.puts[key] != 1 {
+		t.Fatalf("identical config must not rewrite storage: %d puts, want 1", store.puts[key])
+	}
+	if got, _ := store.GetObject(ctx, key); string(got) != string(generated) {
+		t.Fatal("no-op pass changed the stored config")
+	}
+
+	// A changed spec must still be written (no false no-op).
+	req.SubagentModel = "qwen-other"
+	if err := deployer.DeployWorkerConfig(ctx, req); err != nil {
+		t.Fatalf("third deploy (changed spec): %v", err)
+	}
+	if store.puts[key] != 2 {
+		t.Fatalf("changed spec must rewrite storage: %d puts, want 2", store.puts[key])
+	}
+}

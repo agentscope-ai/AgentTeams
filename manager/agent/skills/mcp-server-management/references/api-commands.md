@@ -20,6 +20,15 @@ curl -s "http://127.0.0.1:8001/v1/mcpServer?name=<mcp-server-name>" -b "${HIGRES
 curl -X DELETE "http://127.0.0.1:8001/v1/mcpServer?name=<mcp-server-name>" -b "${HIGRESS_COOKIE_FILE}"
 ```
 
+## Editing servers manually
+
+`GET /v1/mcpServers` list responses omit `rawConfigurations`. PUT-ting a
+server object taken from the list output replaces the server without its
+tool definitions, and the MCP endpoint then returns 404. Before a manual
+PUT, rebuild `rawConfigurations` from the authoritative YAML (with the real
+access token), or run the setup script again instead of round-tripping a
+list entry.
+
 ## Consumer authorization
 
 The setup script handles this automatically. For manual adjustments:

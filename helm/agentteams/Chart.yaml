@@ -22,6 +22,6 @@ maintainers:
 
 dependencies:
   - name: higress
-    version: "2.2.1"
+    version: "2.2.5"
     repository: "https://higress.io/helm-charts"
     condition: gateway.higress.enabled

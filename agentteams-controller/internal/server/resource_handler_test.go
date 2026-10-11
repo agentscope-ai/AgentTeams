@@ -13,6 +13,7 @@ import (
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -794,6 +795,192 @@ func TestCreateWorkerUsesConfiguredDefaultRuntime(t *testing.T) {
 	}
 	if got := stored.Spec.Runtime; got != backend.RuntimeQwenPaw {
 		t.Fatalf("worker.spec.runtime = %q, want %q", got, backend.RuntimeQwenPaw)
+	}
+}
+
+// CoPaw is upgrade-compat only (issue #1310): new workers may not be created
+// on it, and a worker may not be switched onto it — but existing CoPaw
+// workers keep working and can be migrated to QwenPaw.
+func TestCreateWorkerRejectsLegacyCopawRuntime(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
+
+	body := []byte(`{"name":"legacy-w1","model":"qwen3.5-plus","runtime":"copaw"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateWorker(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "qwenpaw") || !strings.Contains(rec.Body.String(), "1310") {
+		t.Fatalf("error body should steer to qwenpaw and cite issue 1310, got: %s", rec.Body.String())
+	}
+
+	// A copaw *default* runtime resolves the same way: still rejected.
+	defaultCopaw := NewResourceHandler(k8sClient, "default", nil, "", nil)
+	defaultCopaw.defaultWorkerRuntime = backend.RuntimeCopaw
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/workers",
+		bytes.NewReader([]byte(`{"name":"legacy-w2","model":"qwen3.5-plus"}`)))
+	rec2 := httptest.NewRecorder()
+	defaultCopaw.CreateWorker(rec2, req2)
+
+	if rec2.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d for copaw default runtime, got %d: %s",
+			http.StatusBadRequest, rec2.Code, rec2.Body.String())
+	}
+	var stored v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "legacy-w1", Namespace: "default"}, &stored); err != nil {
+		if !apierrors.IsNotFound(err) {
+			t.Fatalf("get worker: %v", err)
+		}
+	} else {
+		t.Fatalf("worker legacy-w1 should not have been created")
+	}
+}
+
+func TestUpdateWorkerRejectsSwitchToLegacyCopaw(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	qwenpawWorker := &v1beta1.Worker{}
+	qwenpawWorker.Name = "upgrade-candidate"
+	qwenpawWorker.Namespace = "default"
+	qwenpawWorker.Spec.Model = "qwen3.5-plus"
+	qwenpawWorker.Spec.Runtime = backend.RuntimeQwenPaw
+
+	copawWorker := &v1beta1.Worker{}
+	copawWorker.Name = "legacy-in-place"
+	copawWorker.Namespace = "default"
+	copawWorker.Spec.Model = "qwen3.5-plus"
+	copawWorker.Spec.Runtime = backend.RuntimeCopaw
+
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(qwenpawWorker, copawWorker).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
+
+	// 1. qwenpaw → copaw switch is rejected; the CR keeps its runtime.
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/workers/upgrade-candidate",
+		bytes.NewReader([]byte(`{"runtime":"copaw"}`)))
+	req.SetPathValue("name", "upgrade-candidate")
+	rec := httptest.NewRecorder()
+	handler.UpdateWorker(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "qwenpaw") {
+		t.Fatalf("error body should steer to qwenpaw, got: %s", rec.Body.String())
+	}
+	var got v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "upgrade-candidate", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if got.Spec.Runtime != backend.RuntimeQwenPaw {
+		t.Fatalf("runtime changed to %q, want %q", got.Spec.Runtime, backend.RuntimeQwenPaw)
+	}
+
+	// 2. Existing copaw worker: a runtime-less update (e.g. model) still works.
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/workers/legacy-in-place",
+		bytes.NewReader([]byte(`{"model":"new-model"}`)))
+	req.SetPathValue("name", "legacy-in-place")
+	rec = httptest.NewRecorder()
+	handler.UpdateWorker(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "legacy-in-place", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if got.Spec.Model != "new-model" || got.Spec.Runtime != backend.RuntimeCopaw {
+		t.Fatalf("model/runtime = %q/%q, want new-model/%q", got.Spec.Model, got.Spec.Runtime, backend.RuntimeCopaw)
+	}
+
+	// 3. copaw → qwenpaw is the upgrade path and must be allowed.
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/workers/legacy-in-place",
+		bytes.NewReader([]byte(`{"runtime":"qwenpaw"}`)))
+	req.SetPathValue("name", "legacy-in-place")
+	rec = httptest.NewRecorder()
+	handler.UpdateWorker(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "legacy-in-place", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if got.Spec.Runtime != backend.RuntimeQwenPaw {
+		t.Fatalf("runtime = %q, want %q after upgrade", got.Spec.Runtime, backend.RuntimeQwenPaw)
+	}
+}
+
+// A runtime switch must not keep the previous runtime's image pin: the
+// recreated container has to resolve the new runtime's image (issue #1310
+// upgrade path, exercised end-to-end by test-29).
+func TestUpdateWorkerRuntimeSwitchDropsStaleImagePin(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	legacy := &v1beta1.Worker{}
+	legacy.Name = "pinned-legacy"
+	legacy.Namespace = "default"
+	legacy.Spec.Model = "qwen3.5-plus"
+	legacy.Spec.Runtime = backend.RuntimeCopaw
+	legacy.Spec.Image = "registry.example.com/agentteams-copaw-worker:v1.2.4"
+
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(legacy).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
+
+	// 1. copaw → qwenpaw without an explicit image clears the stale pin.
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/workers/pinned-legacy",
+		bytes.NewReader([]byte(`{"runtime":"qwenpaw"}`)))
+	req.SetPathValue("name", "pinned-legacy")
+	rec := httptest.NewRecorder()
+	handler.UpdateWorker(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var got v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "pinned-legacy", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if got.Spec.Runtime != backend.RuntimeQwenPaw {
+		t.Fatalf("runtime = %q, want %q", got.Spec.Runtime, backend.RuntimeQwenPaw)
+	}
+	if got.Spec.Image != "" {
+		t.Fatalf("image pin = %q, want cleared when the runtime changes", got.Spec.Image)
+	}
+
+	// 2. An explicit image in the same request still wins.
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/workers/pinned-legacy",
+		bytes.NewReader([]byte(`{"runtime":"qwenpaw","image":"registry.example.com/agentteams-qwenpaw-worker:v1.2.4"}`)))
+	req.SetPathValue("name", "pinned-legacy")
+	rec = httptest.NewRecorder()
+	handler.UpdateWorker(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "pinned-legacy", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if got.Spec.Image != "registry.example.com/agentteams-qwenpaw-worker:v1.2.4" {
+		t.Fatalf("image = %q, want the explicitly provided image", got.Spec.Image)
+	}
+}
+
+func TestWorkerResponseFlagsLegacyCopawRuntime(t *testing.T) {
+	copawWorker := &v1beta1.Worker{}
+	copawWorker.Name = "legacy"
+	copawWorker.Namespace = "default"
+	copawWorker.Spec.Runtime = backend.RuntimeCopaw
+
+	qwenpawWorker := &v1beta1.Worker{}
+	qwenpawWorker.Name = "modern"
+	qwenpawWorker.Namespace = "default"
+	qwenpawWorker.Spec.Runtime = backend.RuntimeQwenPaw
+
+	if got := workerToResponse(copawWorker); !got.RuntimeDeprecated {
+		t.Fatalf("copaw worker: RuntimeDeprecated = false, want true")
+	}
+	if got := workerToResponse(qwenpawWorker); got.RuntimeDeprecated {
+		t.Fatalf("qwenpaw worker: RuntimeDeprecated = true, want false")
 	}
 }
 

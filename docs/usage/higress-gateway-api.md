@@ -11,12 +11,18 @@ gateway (the **control plane**).
   consumers (by the `agentteams-controller` and Manager-side scripts); MCP servers
   are registered by the Manager-side scripts only.
 
-> **Version anchor.** This reference documents the behavior of Higress **2.2.1**, the
+> **Version anchor.** This reference documents the behavior of Higress **2.2.5**, the
 > version pinned by AgentTeams (`agentteams-controller/Dockerfile.embedded`,
-> `helm/agentteams/Chart.yaml`). Upstream Higress has since released 2.2.4, which adds
-> the MCP 2026-07-28 protocol standard (2.2.3) and SSE transport path fixes (2.2.4);
-> those are new capabilities, not changes to the endpoints described here. If AgentTeams
-> upgrades past 2.2.2, re-validate the MCP servers section against the upstream changelog.
+> `helm/agentteams/Chart.yaml`). The 2.2.1 → 2.2.5 upgrade was audited against every
+> AgentTeams touchpoint (all 27 Console API endpoints used by the controller and
+> Manager-side scripts, CRD schemas, key-auth / mcp-server WASM plugins, and the
+> all-in-one image internals): no breaking changes. 2.2.5 adds the MCP 2026-07-28
+> protocol standard (2.2.3; legacy 2024-11-05 / 2025-03-26 / 2025-06-18 clients keep
+> their original paths) plus the 2.2.4 batch of 56 bug fixes; MCP behavior is
+> re-validated by the CI MCP tests (test-08 / test-12). One behavior difference is
+> neutralized: 2.2.5's all-in-one image enables ACME automatic-HTTPS by default, which
+> the embedded deployment pins off via `GATEWAY_AUTO_HTTPS_ENABLED="false"` in
+> `agentteams-controller/supervisord.embedded.conf`.
 
 ## Default domains and ports
 

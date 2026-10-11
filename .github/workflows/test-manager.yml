@@ -1,0 +1,56 @@
+name: AgentTeams Manager Tests
+
+on:
+  pull_request:
+    paths:
+      - 'manager/src/**'
+      - 'manager/Dockerfile.qwenpaw'
+      - 'manager/scripts/init/start-qwenpaw-manager.sh'
+      - 'plugins/agentteams-manager-tools/**'
+      - '.github/workflows/test-manager.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'manager/src/**'
+      - 'manager/Dockerfile.qwenpaw'
+      - 'manager/scripts/init/start-qwenpaw-manager.sh'
+      - 'plugins/agentteams-manager-tools/**'
+  workflow_dispatch:
+
+jobs:
+  manager-tools:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install focused Python test dependencies
+        # Pinned to the QwenPaw 2.2.x production venv (qwenpaw==2.2.x
+        # requires agentscope==2.0.9; the manager image runs on the same
+        # venv via Dockerfile.qwenpaw) so unit tests match runtime behavior.
+        run: |
+          python -m pip install \
+            'agentscope==2.0.9' \
+            'matrix-nio==0.26.0' \
+            'PyYAML>=6.0,<7' \
+            'markdown-it-py>=3.0' \
+            'linkify-it-py>=2.0' \
+            'pytest>=8.3,<10' \
+            'pytest-asyncio>=0.23,<2'
+
+      - name: Run agentteams_manager unit tests
+        run: |
+          PYTHONPATH="${GITHUB_WORKSPACE}/manager/src/agentteams_manager" \
+            python -m pytest manager/src/agentteams_manager/agentteams_manager/tests/ -q
+
+      - name: Verify Manager package has zero copaw imports
+        run: |
+          if grep -rn "import copaw\|from copaw" manager/src/agentteams_manager/agentteams_manager/; then
+            echo "FAIL: agentteams_manager must not import copaw"
+            exit 1
+          fi
+          echo "OK: no copaw imports in agentteams_manager"

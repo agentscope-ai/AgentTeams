@@ -78,6 +78,10 @@ from qwenpaw.constant import WORKING_DIR
 
 logger = logging.getLogger("qwenpaw.channels.matrix")
 
+# #1334: masked replacement sent to the room on non-cancellation consume
+# errors; the raw err_text is logged only and never reaches the room.
+_CONSUME_ERROR_NOTICE = "⚠️ 本轮处理遇到系统错误，已中断。请重新发送你的请求；若问题持续出现，请联系管理员查看日志。"
+
 
 CHANNEL_KEY = "agentteams_matrix"
 
@@ -152,6 +156,11 @@ _MATRIX_PENDING_FINAL_MESSAGE_KEY = "matrix_pending_final_message"
 _MATRIX_STREAMING_FINAL_TEXT_KEY = "matrix_streaming_final_text"
 _MATRIX_FORCE_NOTICE_KEY = "matrix_force_notice"
 _MATRIX_PLACEHOLDER_THREAD_ROOT_KEY = "matrix_placeholder_thread_root"
+
+# Per-turn flag: at least one tool call/output message was routed during
+# this turn. Used at process completion to distinguish a quiet-but-real
+# turn from a silent turn that produced nothing (#1320).
+_MATRIX_TURN_TOOL_ACTIVITY_KEY = "matrix_turn_tool_activity"
 
 # Send alignment gate (#1244): before the final reply of a turn is
 # flushed, check whether new room events landed after the turn's context
@@ -424,6 +433,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         self.vision_enabled: bool = vision_enabled
         self.history_limit: int = max(0, history_limit)
         self.sync_timeout_ms: int = sync_timeout_ms
+        self.show_thinking: bool = show_thinking
 
         self._workspace_dir = (
             Path(workspace_dir).expanduser() if workspace_dir else None
@@ -1061,10 +1071,10 @@ class AgentTeamsMatrixChannel(BaseChannel):
             return
         if getattr(self, "_checkpoint_recovery_required", False):
             logger.debug(
-                "MatrixChannel: delaying sync checkpoint until callback "
-                "recovery completes component=matrix",
+                "MatrixChannel: retaining sync checkpoint until callback "
+                "recovery completes component=matrix token=%s",
+                token,
             )
-            return
         callback_event_ids = getattr(self, "_callback_event_ids", {})
         self._pending_sync_checkpoints.append(
             (
@@ -2246,6 +2256,30 @@ class AgentTeamsMatrixChannel(BaseChannel):
             re.IGNORECASE,
         ):
             return True
+        # 4. matrix.to localpart-only link (domain omitted by some clients)
+        localpart = self._user_id.lstrip("@").split(":", 1)[0]
+        if localpart and formatted_body and re.search(
+            rf'href=["\']https://matrix\.to/#/{re.escape("@" + localpart)}["\']',
+            formatted_body,
+            re.IGNORECASE,
+        ):
+            return True
+        # 5. bare @localpart in plain text.
+        #    A Matrix localpart may contain [A-Za-z0-9._=/+-] (spec user
+        #    identifiers), so the mention token in text extends over those
+        #    characters. `@alice-dev`, `@alice+dev`, `@alice/dev` and
+        #    `@alice2` are OTHER users (longer localparts) and
+        #    `@alice:other.test` is a full MXID on ANOTHER domain — none
+        #    of them is our user in bare form. Require the token to end
+        #    exactly where our localpart ends: the next character must
+        #    not be a localpart character or ':' (which would start an
+        #    MXID domain we do not own).
+        if localpart:
+            token = re.compile(
+                rf"(?<![\w@])@{re.escape(localpart)}(?![A-Za-z0-9._=:/+-])"
+            )
+            if token.search(text):
+                return True
         return False
 
     def _teamharness_self_trigger(self, room_id: str, event: Any) -> dict[str, Any] | None:
@@ -4655,9 +4689,16 @@ class AgentTeamsMatrixChannel(BaseChannel):
         """Route completed messages behind a processing root."""
         del request
         message_type = getattr(event, "type", None)
+        if self._is_reasoning_message(message_type) and not getattr(
+            self, "show_thinking", True
+        ):
+            # show_thinking disabled: reasoning is never rendered to the room.
+            return
         if self._is_reasoning_message(
             message_type,
         ) or self._is_tool_call_message(message_type):
+            if self._is_tool_call_message(message_type):
+                send_meta[_MATRIX_TURN_TOOL_ACTIVITY_KEY] = True
             await self._ensure_thread_root(to_handle, send_meta)
             await self._flush_pending_final_message_to_thread(
                 to_handle,
@@ -4676,6 +4717,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
             send_meta.pop(_MATRIX_FORCE_NOTICE_KEY, None)
             return
         if self._is_tool_output_message(message_type):
+            send_meta[_MATRIX_TURN_TOOL_ACTIVITY_KEY] = True
             await self._flush_pending_final_message_to_thread(
                 to_handle,
                 send_meta,
@@ -4709,6 +4751,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
         if stream_type == "reasoning":
             send_meta.pop(_MATRIX_STREAMING_REASONING_EVENT_ID_KEY, None)
             send_meta.pop(_MATRIX_STREAMING_REASONING_LAST_EDIT_KEY, None)
+            if not getattr(self, "show_thinking", True):
+                return
             stream_id = getattr(event, "id", None)
             if stream_id:
                 send_meta[_MATRIX_STREAMING_REASONING_STREAM_ID_KEY] = stream_id
@@ -4741,16 +4785,17 @@ class AgentTeamsMatrixChannel(BaseChannel):
         del request
         text = (accumulated_text or "").strip()
         if stream_type == "reasoning":
-            await self._ensure_thread_root(to_handle, send_meta)
-            if not text:
-                text = self._text_from_message_event(event)
-            if text:
-                text = f"Thinking:\n\n{text}"
-                await self._send_streaming_thread_text(
-                    to_handle,
-                    send_meta,
-                    text,
-                )
+            if getattr(self, "show_thinking", True):
+                await self._ensure_thread_root(to_handle, send_meta)
+                if not text:
+                    text = self._text_from_message_event(event)
+                if text:
+                    text = f"Thinking:\n\n{text}"
+                    await self._send_streaming_thread_text(
+                        to_handle,
+                        send_meta,
+                        text,
+                    )
             send_meta.pop(_MATRIX_STREAMING_REASONING_EVENT_ID_KEY, None)
             send_meta.pop(_MATRIX_STREAMING_REASONING_LAST_EDIT_KEY, None)
             send_meta.pop(_MATRIX_STREAMING_REASONING_STREAM_ID_KEY, None)
@@ -4970,6 +5015,10 @@ class AgentTeamsMatrixChannel(BaseChannel):
             None,
         )
         is_placeholder = send_meta.pop(_MATRIX_PLACEHOLDER_THREAD_ROOT_KEY, False)
+        had_tool_activity = send_meta.pop(_MATRIX_TURN_TOOL_ACTIVITY_KEY, False)
+        # A silent turn that never ran a tool produced nothing: do not
+        # report it as completed (#1320).
+        no_output_marker = "已完成" if had_tool_activity else "本回合无产出"
         if is_placeholder:
             if streaming_final_text:
                 raw_text = streaming_final_text.strip()
@@ -4981,7 +5030,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     text = self._visible_final_text(raw_text)
                     if not text:
                         await self._edit_thread_root(
-                            to_handle, send_meta, "已完成",
+                            to_handle, send_meta, no_output_marker,
                         )
                     else:
                         html_body = _md_to_html(text)
@@ -5005,11 +5054,11 @@ class AgentTeamsMatrixChannel(BaseChannel):
                         )
                     else:
                         await self._edit_thread_root(
-                            to_handle, send_meta, "已完成",
+                            to_handle, send_meta, no_output_marker,
                         )
             else:
                 await self._edit_thread_root(
-                    to_handle, send_meta, "已完成",
+                    to_handle, send_meta, no_output_marker,
                 )
             self._active_thread_roots.pop(to_handle, None)
         elif streaming_final_text:
@@ -5047,7 +5096,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         to_handle: str,
         err_text: str,
     ) -> None:
-        """Edit thread root on error; suppress user-visible cancellation noise."""
+        """Edit thread root on error; suppress cancellation noise; mask raw errors before room send."""
         request_meta = getattr(request, "channel_meta", None)
         typing_lifecycle = self._typing_lifecycle_from_meta(request_meta)
         root_id = self._active_thread_roots.pop(to_handle, None)
@@ -5066,7 +5115,13 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 lifecycle_token=typing_lifecycle,
             )
             return
-        await super()._on_consume_error(request, to_handle, err_text)
+        logger.warning(
+            "MatrixChannel: consume error masked before room send "
+            "component=matrix handle=%s err_text=%r",
+            to_handle,
+            err_text,
+        )
+        await super()._on_consume_error(request, to_handle, _CONSUME_ERROR_NOTICE)
 
     # ------------------------------------------------------------------
     # Outgoing send — retry helper

@@ -168,6 +168,8 @@ func TestL2WorkerUpdateFieldPolicyCoversAllRequestFields(t *testing.T) {
 			} else {
 				probe = fmt.Sprintf(`{"%s":[{}]}`, name)
 			}
+		case reflect.Map:
+			probe = fmt.Sprintf(`{"%s":{"CUSTOM":"x"}}`, name)
 		case reflect.Ptr:
 			probe = fmt.Sprintf(`{"%s":{}}`, name)
 		default:
@@ -180,7 +182,11 @@ func TestL2WorkerUpdateFieldPolicyCoversAllRequestFields(t *testing.T) {
 			}
 			continue
 		}
-		if rec.Code != http.StatusBadRequest {
+		expectedStatus := http.StatusBadRequest
+		if name == "env" {
+			expectedStatus = http.StatusForbidden
+		}
+		if rec.Code != expectedStatus {
 			t.Errorf("field %s: expected 400 (a scoped caller must not be able to write it), got %d: %s — fail-open policy gap", name, rec.Code, rec.Body.String())
 			continue
 		}

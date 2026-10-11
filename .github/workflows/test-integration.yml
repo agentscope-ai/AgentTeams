@@ -12,7 +12,6 @@ on:
       - 'tests/**'
       - 'install/**'
       - 'shared/**'
-      - 'copaw/**'
       - 'qwenpaw/**'
       - 'hermes/**'
       - 'deepseek-harness/**'
@@ -34,7 +33,6 @@ on:
       - 'tests/**'
       - 'install/**'
       - 'shared/**'
-      - 'copaw/**'
       - 'qwenpaw/**'
       - 'hermes/**'
       - 'deepseek-harness/**'
@@ -78,10 +76,10 @@ env:
   # Shard C: Keep runtime-dependent coverage in each supported CI worker runtime.
   # Run fixed runtime-switch/name-validation scenarios once (QwenPaw), and
   # Manager-only startup/migration once on QwenPaw, not per worker.
-  # CoPaw has no standalone shard; test-23 still uses its image as a migration source.
+  # CoPaw has no standalone shard; the legacy-upgrade coverage (test-29) runs on the pinned published image.
   SHARD_A_TESTS: "01 02 03 04 05 06"
   SHARD_C_TESTS: "15 17 18 19 20 22 24 100"
-  SHARD_C_QWENPAW_TESTS: "15 17 18 19 20 22 23 24 25 27 28 100"
+  SHARD_C_QWENPAW_TESTS: "15 17 18 19 20 22 23 24 25 27 28 29 100"
   SHARD_QWENPAW_TESTS: "26"
   NON_GITHUB_TESTS: "01 02 03 04 05 06 15 17 18 19 20 22 23 24 25 27 28 100"
 
@@ -252,8 +250,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # copaw-worker is retained for test-23 migration, not standalone regression.
-        target: [embedded, manager, manager-qwenpaw, worker, copaw-worker, qwenpaw-worker, hermes-worker, deepseek-harness-worker]
+        # The copaw-worker image is no longer built from the branch: the
+        # legacy-upgrade coverage (test-29) pulls the pinned published image
+        # (agentteams-copaw-worker) instead.
+        target: [embedded, manager, manager-qwenpaw, worker, qwenpaw-worker, hermes-worker, deepseek-harness-worker]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -289,9 +289,8 @@ jobs:
         run: |
           # When openclaw-base was rebuilt from this PR's source, point manager
           # and worker builds at the local image instead of pulling :latest from
-          # the published registry. Other targets (embedded, manager-qwenpaw,
-          # copaw-worker) do not depend on openclaw-base so the override is a
-          # no-op for them.
+          # the published registry. Other targets (embedded, manager-qwenpaw)
+          # do not depend on openclaw-base so the override is a no-op for them.
           EXTRA=""
           if [ "${{ needs.detect-changes.outputs.openclaw_base }}" = "true" ] && \
              { [ "${{ matrix.target }}" = "manager" ] || [ "${{ matrix.target }}" = "worker" ]; }; then
@@ -339,6 +338,12 @@ jobs:
       contents: write
       pull-requests: write
       actions: read
+    env:
+      # Fork PR runs receive no repository secrets; gate the registry login on
+      # credential availability. The pinned legacy image is also anonymously
+      # pullable from the cn-hangzhou primary, so credential-less runs can
+      # still attempt it and skip with a note when unreachable.
+      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.detect-changes.outputs.test_matrix) }}
@@ -357,6 +362,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Login to Higress registry (when credentials are available)
+        if: env.REGISTRY_USERNAME != ''
+        uses: docker/login-action@v3
+        with:
+          registry: higress-registry.cn-hangzhou.cr.aliyuncs.com
+          username: ${{ env.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
       - name: Download all images
         uses: actions/download-artifact@v4
         with:
@@ -371,6 +384,23 @@ jobs:
 
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y jq curl unzip
+
+      - name: Configure registry-dependent coverage
+        run: |
+          if [ -z "${REGISTRY_USERNAME}" ]; then
+            echo "COPAW_LEGACY_IMAGE_OPTIONAL=1" >> "$GITHUB_ENV"
+            # Credential-less runs (fork PRs) cannot pull the pinned legacy
+            # image anonymously. Point the embedded install's copaw slot at
+            # a locally-built worker image so the install skips the pull:
+            # no test in this run actually starts a CoPaw worker (test-23
+            # rejects the copaw switch; test-29 skips via
+            # COPAW_LEGACY_IMAGE_OPTIONAL).
+            echo "CI_COPAW_WORKER_IMAGE=agentteams/qwenpaw-worker:latest" >> "$GITHUB_ENV"
+            echo "::notice::Registry credentials unavailable in this run — the legacy-upgrade test (29) will skip, and the copaw install slot uses a local placeholder image."
+          else
+            echo "COPAW_LEGACY_IMAGE_OPTIONAL=0" >> "$GITHUB_ENV"
+            echo "CI_COPAW_WORKER_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-copaw-worker:v1.2.4" >> "$GITHUB_ENV"
+          fi
 
       - name: Run embedded integration tests
         id: tests
@@ -397,7 +427,18 @@ jobs:
           if [ -z "$FILTER" ]; then
             FILTER="${{ env[matrix.filter_env] }}"
           fi
-          AGENTTEAMS_VERSION=v1.2.0-beta.1 SKIP_BUILD=1 make test-embedded \
+          # The branch no longer builds copaw-worker; resolve the embedded
+          # install's legacy image from the pinned published source instead
+          # of the (unavailable) local build tag.
+          # LOCAL_COPAW_WORKER must be a make command-line variable (after
+          # 'make'): the Makefile assigns it unconditionally ('='), so a
+          # shell env prefix is silently ignored and the install would pull
+          # the default agentteams/copaw-worker:latest, which this branch
+          # no longer builds. AGENTTEAMS_VERSION/SKIP_BUILD stay env
+          # prefixes because the install script (not make) consumes them.
+          AGENTTEAMS_VERSION=v1.2.0-beta.1 SKIP_BUILD=1 \
+          make test-embedded \
+            LOCAL_COPAW_WORKER="${CI_COPAW_WORKER_IMAGE}" \
             TEST_FILTER="$FILTER"
 
       # ============================================================
@@ -749,3 +790,29 @@ jobs:
       - name: Cleanup
         if: always()
         run: make uninstall-embedded 2>/dev/null || true && docker system prune -af || true
+
+  install-verify-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the LLM-smoke regression suite (stubbed docker/curl)
+        run: bash install/tests/verify-llm-regressions.sh
+
+# ============================================================
+# Offline pre-flight suite: qwenpaw upgrade checker (AgentTeams#1341)
+# No Docker or network needed - builds miniature trees and a fake wheel.
+# ============================================================
+
+  qwenpaw-upgrade-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run the offline pre-flight suite
+        run: python3 qwenpaw/tests/test_check_qwenpaw_upgrade.py

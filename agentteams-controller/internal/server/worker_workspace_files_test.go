@@ -1074,3 +1074,170 @@ func TestWorkspaceFilesWrite_RouteAcceptsAuthorizedWrite(t *testing.T) {
 		t.Fatalf("unknown worker status=%d body=%s, want 404 from the worker lookup", rec2.Code, rec2.Body.String())
 	}
 }
+
+// TestWorkspaceFiles_RuntimeAware400: a non-qwenpaw worker is rejected 400
+// (workspace file inspection is qwenpaw-specific).
+func TestWorkspaceFiles_RuntimeAware400(t *testing.T) {
+	var dialed bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dialed = true
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"directory":"memory","entries":[],"has_more":false,"next_cursor":null}`))
+	}))
+	defer upstream.Close()
+	w := checkpointWorker("oc-worker")
+	w.Spec.Runtime = "openclaw"
+	h := newTestWorkspaceFilesHandler(t, "embedded", upstream,
+		checkpointTeam("market-team", "oc-worker"), w)
+	rec := httptest.NewRecorder()
+	h.proxyWorkspaceFiles(rec, adminCaller(kbRequest("oc-worker", "tree", "path=memory")))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400 for non-qwenpaw worker", rec.Code)
+	}
+	if !containsAll(rec.Body.String(), "only supported for qwenpaw") {
+		t.Fatalf("body=%s, want qwenpaw-specific message", rec.Body.String())
+	}
+	if dialed {
+		t.Fatal("guard must reject before dialing the worker upstream")
+	}
+}
+
+// TestWorkspaceFiles_EmptyRuntimePasses: a worker CR without an explicit
+// runtime keeps the historical behavior (no 400) — backward compatibility.
+func TestWorkspaceFiles_EmptyRuntimePasses(t *testing.T) {
+	const payload = `{"directory":"memory","entries":[],"has_more":false,"next_cursor":null}`
+	var dialed bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dialed = true
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(payload))
+	}))
+	defer upstream.Close()
+	h := newTestWorkspaceFilesHandler(t, "embedded", upstream,
+		kbWorkerFixture("market-team", "market-writer")...)
+	rec := httptest.NewRecorder()
+	h.proxyWorkspaceFiles(rec, adminCaller(kbRequest("market-writer", "tree", "path=memory")))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200 (empty runtime must not be rejected)", rec.Code, rec.Body.String())
+	}
+	if !dialed {
+		t.Fatal("empty runtime must fall through to the worker upstream")
+	}
+}
+
+// TestWorkspaceFiles_ScopeBeforeRuntime_CrossTeam404: an out-of-scope
+// caller sees 404 (worker existence hidden) even for a non-qwenpaw worker —
+// the runtime 400 must not leak worker type across the team boundary.
+func TestWorkspaceFiles_ScopeBeforeRuntime_CrossTeam404(t *testing.T) {
+	var dialed bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dialed = true
+	}))
+	defer upstream.Close()
+	w := checkpointWorker("oc-worker")
+	w.Spec.Runtime = "openclaw"
+	h := newTestWorkspaceFilesHandler(t, "embedded", upstream,
+		checkpointTeam("team-a", "oc-worker"), w)
+	rec := httptest.NewRecorder()
+	req := withCaller(kbRequest("oc-worker", "tree", "path=memory"),
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "bob", Teams: []string{"team-b"}})
+	h.proxyWorkspaceFiles(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404 for cross-team caller (W8)", rec.Code)
+	}
+	if containsAll(rec.Body.String(), "only supported for qwenpaw") {
+		t.Fatalf("body=%s, runtime guard must not leak across the scope boundary", rec.Body.String())
+	}
+	if dialed {
+		t.Fatal("upstream must not be dialed for a cross-team caller")
+	}
+}
+
+// TestWorkspaceFiles_ScopeBeforeRuntime_WriteCrossTeam404: the write path
+// applies the same ordering — an out-of-scope caller sees 404 regardless of
+// the worker's runtime.
+func TestWorkspaceFiles_ScopeBeforeRuntime_WriteCrossTeam404(t *testing.T) {
+	var dialed bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dialed = true
+	}))
+	defer upstream.Close()
+	w := checkpointWorker("oc-worker")
+	w.Spec.Runtime = "openclaw"
+	h := newTestWorkspaceFilesHandler(t, "embedded", upstream,
+		checkpointTeam("team-a", "oc-worker"), w)
+	rec := httptest.NewRecorder()
+	req := withCaller(kbWriteRequest("oc-worker", "file-content", "path=memory/t.md", `{"content":"x"}`, ""),
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "bob", Teams: []string{"team-b"}})
+	h.proxyWorkspaceFileWrite(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404 for cross-team write caller (W8)", rec.Code)
+	}
+	if containsAll(rec.Body.String(), "only supported for qwenpaw") {
+		t.Fatalf("body=%s, runtime guard must not leak across the scope boundary", rec.Body.String())
+	}
+	if dialed {
+		t.Fatal("upstream must not be dialed for a cross-team caller")
+	}
+}
+
+// TestWorkspaceFiles_ScopeBeforeRuntime_Standalone404: a scoped standalone
+// worker (no team) hides as 404 for a team-scoped caller regardless of
+// runtime.
+func TestWorkspaceFiles_ScopeBeforeRuntime_Standalone404(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer upstream.Close()
+	for _, rt := range []string{"openclaw", ""} {
+		w := checkpointWorker("standalone-oc")
+		w.Spec.Runtime = rt
+		h := newTestWorkspaceFilesHandler(t, "embedded", upstream, w)
+		rec := httptest.NewRecorder()
+		req := withCaller(kbRequest("standalone-oc", "tree", "path=memory"),
+			&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "bob", Teams: []string{"team-b"}})
+		h.proxyWorkspaceFiles(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("runtime=%q status=%d, want 404 for scoped standalone worker", rt, rec.Code)
+		}
+	}
+}
+
+// TestWorkspaceFiles_ScopeBeforeRuntime_Authorized400: an in-scope caller
+// still gets the explicit runtime 400 for a non-qwenpaw worker, on both the
+// read and the write path (the guard stays in force after the scope check,
+// before the dial).
+func TestWorkspaceFiles_ScopeBeforeRuntime_Authorized400(t *testing.T) {
+	var dialed bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dialed = true
+	}))
+	defer upstream.Close()
+	w := checkpointWorker("oc-worker")
+	w.Spec.Runtime = "openclaw"
+	h := newTestWorkspaceFilesHandler(t, "embedded", upstream,
+		checkpointTeam("team-a", "oc-worker"), w)
+
+	rec := httptest.NewRecorder()
+	req := withCaller(kbRequest("oc-worker", "tree", "path=memory"),
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "bob", Teams: []string{"team-a"}})
+	h.proxyWorkspaceFiles(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("read: status=%d, want 400 for authorized non-qwenpaw caller", rec.Code)
+	}
+	if !containsAll(rec.Body.String(), "only supported for qwenpaw") {
+		t.Fatalf("read: body=%s, want qwenpaw-specific message", rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = withCaller(kbWriteRequest("oc-worker", "file-content", "path=memory/t.md", `{"content":"x"}`, ""),
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "bob", Teams: []string{"team-a"}})
+	h.proxyWorkspaceFileWrite(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("write: status=%d, want 400 for authorized non-qwenpaw caller", rec.Code)
+	}
+	if !containsAll(rec.Body.String(), "only supported for qwenpaw") {
+		t.Fatalf("write: body=%s, want qwenpaw-specific message", rec.Body.String())
+	}
+	if dialed {
+		t.Fatal("guard must reject before dialing the worker upstream")
+	}
+}

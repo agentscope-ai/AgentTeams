@@ -346,6 +346,14 @@ func (h *WorkspaceFilesHandler) proxyWorkspaceFiles(w http.ResponseWriter, r *ht
 		return
 	}
 
+	// runtime-aware: workspace file inspection is qwenpaw-specific. This
+	// runs after the team-scope check above so an out-of-scope caller sees
+	// 404 (existence hidden) regardless of the worker's runtime.
+	if rt := worker.Spec.Runtime; rt != "" && rt != "qwenpaw" {
+		httputil.WriteError(w, http.StatusBadRequest, "workspace files are only supported for qwenpaw workers")
+		return
+	}
+
 	query, err := validateWorkspaceFilesQuery(sub, r.URL.Query())
 	if err != nil {
 		httputil.WriteError(w, http.StatusBadRequest, err.Error())
@@ -491,6 +499,14 @@ func (h *WorkspaceFilesHandler) proxyWorkspaceFileWrite(w http.ResponseWriter, r
 			return
 		}
 	}
+	// runtime-aware: workspace file inspection is qwenpaw-specific. This
+	// runs after the team-scope check above so an out-of-scope caller sees
+	// 404 (existence hidden) regardless of the worker's runtime.
+	if rt := worker.Spec.Runtime; rt != "" && rt != "qwenpaw" {
+		httputil.WriteError(w, http.StatusBadRequest, "workspace files are only supported for qwenpaw workers")
+		return
+	}
+
 	// Write-role boundary (see the function comment).
 	switch caller.Role {
 	case authpkg.RoleAdmin, authpkg.RoleManager:

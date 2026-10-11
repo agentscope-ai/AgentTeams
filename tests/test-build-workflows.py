@@ -42,7 +42,7 @@ class BuildWorkflowTests(unittest.TestCase):
         selected = set(json.loads(values['targets']))
         self.assertEqual(selected, {
             'openclaw-base', 'agentteams-controller', 'embedded',
-            'manager', 'manager-qwenpaw', 'worker', 'copaw-worker',
+            'manager', 'manager-qwenpaw', 'worker',
             'hermes-worker', 'qwenpaw-worker',
         })
         self.assertEqual(selected, set(BUILD['jobs']) - {'prepare', 'release'})
@@ -150,7 +150,7 @@ class BuildWorkflowTests(unittest.TestCase):
                                                  'MANIFEST': both, 'LAST_MANIFEST': manifest,
                                                  'LAST_STATUS': status, 'IMAGE_LOG': str(log)})
                     self.assertEqual(result.returncode == 0, success, result.stderr)
-                    self.assertEqual(len(set(log.read_text().splitlines())), 9)
+                    self.assertEqual(len(set(log.read_text().splitlines())), 8)
 
 
 if __name__ == '__main__':

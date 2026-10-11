@@ -112,7 +112,7 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 	image := req.Image
 	if image == "" {
 		switch {
-		case req.Runtime == RuntimeCopaw && d.config.CopawWorkerImage != "":
+		case req.Runtime == RuntimeCopaw:
 			image = d.config.CopawWorkerImage
 		case req.Runtime == RuntimeHermes && d.config.HermesWorkerImage != "":
 			image = d.config.HermesWorkerImage

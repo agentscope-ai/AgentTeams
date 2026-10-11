@@ -6,7 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
+	"net/url"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -1234,6 +1236,177 @@ func TestTeamSkillStandardZipToWorkerE2E(t *testing.T) {
 	} {
 		if err := store.Memory.Stat(ctx, key); err != nil {
 			t.Errorf("missing %s after materialization: %v", key, err)
+		}
+	}
+}
+
+
+// --- GET /api/v1/skills/{name}/download（v1.2.5 新增：技能包下载） ---
+
+func downloadSkill(t *testing.T, h *SkillsHandler, caller *authpkg.CallerIdentity, name, team string) *httptest.ResponseRecorder {
+	t.Helper()
+	path := "/api/v1/skills/" + name + "/download"
+	if team != "" {
+		path += "?team=" + url.QueryEscape(team)
+	}
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.SetPathValue("name", name)
+	req = withCaller(req, caller)
+	rec := httptest.NewRecorder()
+	h.DownloadSkill(rec, req)
+	return rec
+}
+
+// TestSkills_DownloadTeamZipRoundTrip: upload → download → re-upload. The
+// download keeps the skill-name root directory (the upload contract,
+// extractSkillZip, requires <skill-name>/<file> entries), so the downloaded
+// zip is fed back through the real upload endpoint and must be accepted
+// with an identical file set.
+func TestSkills_DownloadTeamZipRoundTrip(t *testing.T) {
+	h, _, _ := newSkillsRig(t, passScanner)
+	// 上传后下载：文件与嵌套子目录都要在包里（嵌套 = 走查关键断言）。
+	rec := postSkill(t, h, skAdmin, "team", "market-team",
+		skillZip("dl-tool", map[string]string{"scripts/run.sh": "#!/bin/sh\necho hi\n"}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("upload status = %d: %s", rec.Code, rec.Body.String())
+	}
+	got := downloadSkill(t, h, skAdmin, "dl-tool", "market-team")
+	if got.Code != http.StatusOK {
+		t.Fatalf("download status = %d: %s", got.Code, got.Body.String())
+	}
+	if ct := got.Header().Get("Content-Type"); ct != "application/zip" {
+		t.Errorf("content-type = %q, want application/zip", ct)
+	}
+	if cd := got.Header().Get("Content-Disposition"); !strings.Contains(cd, "dl-tool.zip") {
+		t.Errorf("content-disposition = %q", cd)
+	}
+	readZip := func(t *testing.T, data []byte) map[string]string {
+		t.Helper()
+		zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+		if err != nil {
+			t.Fatalf("zip read: %v", err)
+		}
+		files := map[string]string{}
+		for _, f := range zr.File {
+			rc, err := f.Open()
+			if err != nil {
+				t.Fatalf("open %s: %v", f.Name, err)
+			}
+			b, _ := io.ReadAll(rc)
+			_ = rc.Close()
+			files[f.Name] = string(b)
+		}
+		return files
+	}
+	files := readZip(t, got.Body.Bytes())
+	// 根目录保留：条目必须是 <技能名>/<文件> 形态（上传契约）。
+	if !strings.Contains(files["dl-tool/SKILL.md"], "name: dl-tool") {
+		t.Errorf("dl-tool/SKILL.md = %q (entries=%v)", files["dl-tool/SKILL.md"], files)
+	}
+	if files["dl-tool/scripts/run.sh"] == "" {
+		t.Errorf("dl-tool/scripts/run.sh missing from zip (entries=%v)", files)
+	}
+	// 再上传：下载的 zip 原样喂回真实上传端点（extractSkillZip 校验）。
+	rec2 := postSkill(t, h, skAdmin, "team", "biz-team", got.Body.Bytes())
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("re-upload status = %d: %s", rec2.Code, rec2.Body.String())
+	}
+	// 从第二个团队下载：文件集与内容必须与首轮一致。
+	got2 := downloadSkill(t, h, skAdmin, "dl-tool", "biz-team")
+	if got2.Code != http.StatusOK {
+		t.Fatalf("second download status = %d: %s", got2.Code, got2.Body.String())
+	}
+	files2 := readZip(t, got2.Body.Bytes())
+	if len(files2) != len(files) {
+		t.Fatalf("round-trip entry count = %d (%v), want %d (%v)", len(files2), files2, len(files), files)
+	}
+	for k, v := range files {
+		if files2[k] != v {
+			t.Errorf("round-trip %s = %q, want %q", k, files2[k], v)
+		}
+	}
+}
+
+// TestSkills_DownloadFileReadFailure500: an unreadable file inside an
+// existing skill package is an explicit 500 — never a successful partial
+// zip (a silently incomplete package breaks the re-upload round trip).
+func TestSkills_DownloadFileReadFailure500(t *testing.T) {
+	h, store, _ := newSkillsRig(t, passScanner)
+	rec := postSkill(t, h, skAdmin, "team", "market-team",
+		skillZip("read-fail", map[string]string{"scripts/run.sh": "x"}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("upload status = %d: %s", rec.Code, rec.Body.String())
+	}
+	store.failGet = true
+	got := downloadSkill(t, h, skAdmin, "read-fail", "market-team")
+	if got.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 for unreadable file: %s", got.Code, got.Body.String())
+	}
+}
+
+// TestSkills_DownloadSubtreeListFailure500: an unlistable subtree of an
+// existing skill package is an explicit 500 (pre-fix the subtree was
+// skipped silently and a partial zip was returned as success).
+func TestSkills_DownloadSubtreeListFailure500(t *testing.T) {
+	h, store, _ := newSkillsRig(t, passScanner)
+	rec := postSkill(t, h, skAdmin, "team", "market-team",
+		skillZip("sub-fail", map[string]string{"scripts/run.sh": "x"}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("upload status = %d: %s", rec.Code, rec.Body.String())
+	}
+	store.failListPrefix = "teams/market-team/skills/sub-fail/scripts"
+	got := downloadSkill(t, h, skAdmin, "sub-fail", "market-team")
+	if got.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 for unlistable subtree: %s", got.Code, got.Body.String())
+	}
+}
+
+// TestSkills_DownloadDepthLimit500: nesting beyond skillMaxDepth is an
+// explicit 500 (pre-fix the walk stopped silently and a partial zip was
+// returned as success).
+func TestSkills_DownloadDepthLimit500(t *testing.T) {
+	h, _, _ := newSkillsRig(t, passScanner)
+	// 7 nested directories: the walk reaches depth 7 and must fail.
+	rec := postSkill(t, h, skAdmin, "team", "market-team",
+		skillZip("deep-skill", map[string]string{"a/b/c/d/e/f/g/h/deep.txt": "x"}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("upload status = %d: %s", rec.Code, rec.Body.String())
+	}
+	got := downloadSkill(t, h, skAdmin, "deep-skill", "market-team")
+	if got.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 for over-depth package: %s", got.Code, got.Body.String())
+	}
+}
+
+func TestSkills_DownloadMissing404(t *testing.T) {
+	h, _, _ := newSkillsRig(t, passScanner)
+	rec := downloadSkill(t, h, skAdmin, "no-such-skill", "market-team")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSkills_DownloadScopeRules(t *testing.T) {
+	h, _, _ := newSkillsRig(t, passScanner)
+	cases := []struct {
+		name   string
+		caller *authpkg.CallerIdentity
+		skill  string
+		team   string
+		want   int
+	}{
+		{"admin own team", skAdmin, "team-kb", "market-team", http.StatusOK},
+		{"admin global no team", skAdmin, "shared-kb", "", http.StatusOK},
+		{"leader own team", skLeader, "team-kb", "market-team", http.StatusOK},
+		{"leader cross team", skLeader, "biz-only", "biz-team", http.StatusNotFound},
+		{"leader no team", skLeader, "shared-kb", "", http.StatusBadRequest},
+		{"manager denied", skManager, "team-kb", "market-team", http.StatusForbidden},
+		{"bad name", skAdmin, "Bad_Name", "market-team", http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		rec := downloadSkill(t, h, tc.caller, tc.skill, tc.team)
+		if rec.Code != tc.want {
+			t.Errorf("%s: status = %d, want %d (%s)", tc.name, rec.Code, tc.want, rec.Body.String())
 		}
 	}
 }

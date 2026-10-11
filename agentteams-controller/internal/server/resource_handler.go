@@ -17,6 +17,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -31,9 +32,10 @@ const k8sUpdateMaxRetries = 3
 // Team CRs reference independently managed Worker CRs. Worker CRUD always
 // operates on Worker CRs; Team CRUD only owns membership and coordination.
 type ResourceHandler struct {
-	client    client.Client
-	namespace string
-	backend   *backend.Registry
+	workerEnvBuilder *service.WorkerEnvBuilder
+	client           client.Client
+	namespace        string
+	backend          *backend.Registry
 	// oss backs object-storage-backed read surfaces (the shared MCP
 	// registry). Nil in embedded mode without MinIO: the affected endpoints
 	// then report the shared half as unavailable instead of failing.
@@ -103,12 +105,23 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.validateWorkerEnvRequest(w, r, req.Env) {
+		return
+	}
+
 	// containerManaged default is true (controller manages container).
 	containerManaged := true
 	if req.ContainerManaged != nil {
 		containerManaged = *req.ContainerManaged
 	}
 	runtime := backend.ResolveRuntime(req.Runtime, h.defaultWorkerRuntime)
+	if strings.EqualFold(runtime, backend.RuntimeCopaw) {
+		httputil.WriteError(w, http.StatusBadRequest,
+			"runtime \"copaw\" is deprecated and no longer offered for new workers; "+
+				"use \"qwenpaw\" for new workers (existing CoPaw workers keep working "+
+				"and can be migrated to QwenPaw — see issue #1310)")
+		return
+	}
 	if strings.TrimSpace(req.Model) == "" {
 		req.Model = h.defaultWorkerModel
 	}
@@ -119,6 +132,7 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 			Namespace: h.namespace,
 		},
 		Spec: v1beta1.WorkerSpec{
+			Env:              req.Env,
 			Model:            req.Model,
 			SubagentModel:    req.SubagentModel,
 			ModelProvider:    req.ModelProvider,
@@ -168,6 +182,10 @@ func (h *ResourceHandler) GetWorker(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 		resp := workerToResponse(&worker)
+		if !canManageWorkerEnv(r) {
+			resp.Env = nil
+			resp.EnvEditable = false
+		}
 		if team, member, ok, terr := findTeamMember(r.Context(), h.client, h.namespace, name); terr != nil {
 			writeK8sError(w, "get worker", terr)
 			return
@@ -216,6 +234,10 @@ func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 	}
 	for i := range list.Items {
 		resp := workerToResponse(&list.Items[i])
+		if !canManageWorkerEnv(r) {
+			resp.Env = nil
+			resp.EnvEditable = false
+		}
 		if team, member, ok, terr := findTeamMember(r.Context(), h.client, h.namespace, list.Items[i].Name); terr != nil {
 			writeK8sError(w, "list workers: lookup team member", terr)
 			return
@@ -256,6 +278,10 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.validateWorkerEnvRequest(w, r, req.Env) {
+		return
+	}
+
 	ctx := r.Context()
 	if caller := authpkg.CallerFromContext(ctx); caller != nil &&
 		(caller.Role == authpkg.RoleHuman || caller.Role == authpkg.RoleTeamLeader) {
@@ -271,6 +297,9 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if req.Env != nil {
+			worker.Spec.Env = req.Env
+		}
 		if req.Model != "" {
 			worker.Spec.Model = req.Model
 		}
@@ -286,6 +315,25 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 			worker.Spec.WorkerName = req.WorkerName
 		}
 		if req.Runtime != "" {
+			// Switching *to* CoPaw is deprecated; existing CoPaw workers
+			// keep working and can be migrated to QwenPaw. A no-op
+			// re-apply that repeats the current value stays allowed.
+			if strings.EqualFold(req.Runtime, backend.RuntimeCopaw) &&
+				!strings.EqualFold(worker.Spec.Runtime, backend.RuntimeCopaw) {
+				httputil.WriteError(w, http.StatusBadRequest,
+					"switching runtime to \"copaw\" is no longer supported; "+
+						"migrate the worker to \"qwenpaw\" instead (see issue #1310)")
+				return
+			}
+			if !strings.EqualFold(worker.Spec.Runtime, req.Runtime) && req.Image == "" {
+				// The runtime is changing without an explicit new image:
+				// drop the previous runtime's image pin so the recreated
+				// container resolves the new runtime's image instead of
+				// silently running on the old runtime's image — the CoPaw →
+				// QwenPaw upgrade path (see issue #1310). An image provided
+				// in this request still wins (applied below).
+				worker.Spec.Image = ""
+			}
 			worker.Spec.Runtime = req.Runtime
 		}
 		if req.Image != "" {
@@ -337,7 +385,12 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		httputil.WriteJSON(w, http.StatusOK, workerToResponse(&worker))
+		resp := workerToResponse(&worker)
+		if !canManageWorkerEnv(r) {
+			resp.Env = nil
+			resp.EnvEditable = false
+		}
+		httputil.WriteJSON(w, http.StatusOK, resp)
 		return
 	}
 }
@@ -1135,6 +1188,8 @@ func (h *ResourceHandler) DeleteManager(w http.ResponseWriter, r *http.Request) 
 
 func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 	resp := WorkerResponse{
+		EnvEditable:      true,
+		Env:              w.Spec.Env,
 		Name:             w.Name,
 		WorkerName:       w.Spec.WorkerName,
 		Phase:            w.Status.Phase,
@@ -1162,6 +1217,7 @@ func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 		LastRunAt:        w.Status.LastRunAt,
 		LastFinishAt:     w.Status.LastFinishAt,
 	}
+	resp.RuntimeDeprecated = strings.EqualFold(w.Spec.Runtime, backend.RuntimeCopaw)
 	if resp.Phase == "" {
 		resp.Phase = "Pending"
 	}
@@ -1278,6 +1334,7 @@ func managerToResponse(m *v1beta1.Manager) ManagerResponse {
 		Message:      m.Status.Message,
 		WelcomeSent:  m.Status.WelcomeSent,
 	}
+	resp.RuntimeDeprecated = strings.EqualFold(m.Spec.Runtime, backend.RuntimeCopaw)
 	if resp.Phase == "" {
 		resp.Phase = "Pending"
 	}

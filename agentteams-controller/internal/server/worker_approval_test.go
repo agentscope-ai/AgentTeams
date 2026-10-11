@@ -73,13 +73,15 @@ func approvalRequest(method, name, body string) *http.Request {
 	return req
 }
 
-// approvalUpstream simulates the worker's /workspace/running-config: GET
-// returns the full config, PUT validates the full-object round trip and
-// echoes the updated config.
+// approvalUpstream simulates the worker's /api/workspace/running-config:
+// GET returns the full config, PUT validates the full-object round trip
+// and echoes the updated config. The path check enforces the /api prefix
+// contract (any dial without it gets 404, as a pre-prefix build would
+// from a real qwenpaw worker behind its SPA catch-all).
 func approvalUpstream(t *testing.T, current string, gotPUT *[]byte) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/workspace/running-config") {
+		if !strings.HasPrefix(r.URL.Path, "/api/workspace/running-config") {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -111,6 +113,37 @@ func jsonQuote(s string) string {
 }
 
 // --- GET ---
+
+// TestApprovalGet_DialsAPIPrefix is the regression test for the #1216
+// dial-path bug: the proxy used to dial the worker without the /api
+// prefix, landing on the qwenpaw app's SPA catch-all, which answers
+// 200 + index.html — the proxy then failed with 502 "worker returned an
+// unparsable running config". The upstream here mimics that split: the
+// API path returns JSON, anything else returns 200 + HTML. A handler
+// dialing the non-API path gets the HTML and fails this test.
+func TestApprovalGet_DialsAPIPrefix(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/workspace/running-config" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"approval_level":"AUTO"}`))
+			return
+		}
+		// SPA catch-all behavior for non-API paths.
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><body>qwenpaw</body></html>`))
+	}))
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	rec := httptest.NewRecorder()
+	h.getWorkerApproval(rec, adminCaller(approvalRequest(http.MethodGet, "market-analyst", "")))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200 — the proxy must dial /api/workspace/running-config (the SPA catch-all answers HTML otherwise)", rec.Code, rec.Body.String())
+	}
+	if got := rec.Body.String(); got != `{"approval_level":"AUTO"}` {
+		t.Fatalf("body=%s, want the JSON approval_level passthrough", got)
+	}
+}
 
 func TestApprovalGet_InScopeL2Human(t *testing.T) {
 	up := approvalUpstream(t, "SMART", nil)
@@ -769,5 +802,85 @@ func TestApprovalPut_L3Denied(t *testing.T) {
 	}
 	if len(putBody) != 0 {
 		t.Fatal("upstream PUT must not be called for an L3 mutation")
+	}
+}
+
+// TestApproval_RuntimeAware400: a non-qwenpaw worker is rejected 400
+// (tool approval is qwenpaw-specific).
+func TestApproval_RuntimeAware400(t *testing.T) {
+	up := approvalUpstream(t, "AUTO", nil)
+	defer up.Close()
+	w := approvalWorker("oc-worker")
+	w.Spec.Runtime = "openclaw"
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeam("market-team", "oc-worker"), w)
+	rec := httptest.NewRecorder()
+	h.getWorkerApproval(rec, adminCaller(approvalRequest(http.MethodGet, "oc-worker", "")))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400 for non-qwenpaw worker", rec.Code)
+	}
+	if !containsAll(rec.Body.String(), "only supported for qwenpaw") {
+		t.Fatalf("body=%s, want qwenpaw-specific message", rec.Body.String())
+	}
+}
+
+// TestApproval_ScopeBeforeRuntime_CrossTeam404: an out-of-scope caller sees
+// 404 (worker existence hidden) even for a non-qwenpaw worker — the runtime
+// 400 must not leak worker type across the team boundary.
+func TestApproval_ScopeBeforeRuntime_CrossTeam404(t *testing.T) {
+	up := approvalUpstream(t, "AUTO", nil)
+	defer up.Close()
+	w := approvalWorker("oc-worker")
+	w.Spec.Runtime = "openclaw"
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeam("market-team", "oc-worker"), w)
+	rec := httptest.NewRecorder()
+	req := withCaller(approvalRequest(http.MethodGet, "oc-worker", ""),
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "bob", Teams: []string{"biz-team"}})
+	h.getWorkerApproval(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404 for cross-team caller (W8)", rec.Code)
+	}
+	if containsAll(rec.Body.String(), "only supported for qwenpaw") {
+		t.Fatalf("body=%s, runtime guard must not leak across the scope boundary", rec.Body.String())
+	}
+}
+
+// TestApproval_ScopeBeforeRuntime_Standalone404: a scoped standalone worker
+// (no team) hides as 404 for a team-scoped caller regardless of runtime.
+func TestApproval_ScopeBeforeRuntime_Standalone404(t *testing.T) {
+	for _, rt := range []string{"openclaw", ""} {
+		w := approvalWorker("standalone-oc")
+		w.Spec.Runtime = rt
+		h := newTestApprovalHandler(t, "embedded", approvalUpstream(t, "AUTO", nil), w)
+		rec := httptest.NewRecorder()
+		req := withCaller(approvalRequest(http.MethodGet, "standalone-oc", ""),
+			&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "bob", Teams: []string{"biz-team"}})
+		h.getWorkerApproval(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("runtime=%q status=%d, want 404 for scoped standalone worker", rt, rec.Code)
+		}
+	}
+}
+
+// TestApproval_ScopeBeforeRuntime_Authorized400: an in-scope caller still
+// gets the explicit runtime 400 for a non-qwenpaw worker (the guard stays
+// in force after the scope check, before the dial).
+func TestApproval_ScopeBeforeRuntime_Authorized400(t *testing.T) {
+	up := approvalUpstream(t, "AUTO", nil)
+	defer up.Close()
+	w := approvalWorker("oc-worker")
+	w.Spec.Runtime = "openclaw"
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeam("market-team", "oc-worker"), w)
+	rec := httptest.NewRecorder()
+	req := withCaller(approvalRequest(http.MethodGet, "oc-worker", ""),
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "bob", Teams: []string{"market-team"}})
+	h.getWorkerApproval(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400 for authorized non-qwenpaw caller", rec.Code)
+	}
+	if !containsAll(rec.Body.String(), "only supported for qwenpaw") {
+		t.Fatalf("body=%s, want qwenpaw-specific message", rec.Body.String())
 	}
 }

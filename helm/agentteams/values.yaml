@@ -292,8 +292,18 @@ worker:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-worker
       tag: ""                 # defaults to global.imageTag
     copaw:
-      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-copaw-worker
-      tag: ""                 # defaults to global.imageTag
+      # Legacy CoPaw deployments only (issue #1310): new releases must not
+      # inject AGENTTEAMS_COPAW_WORKER_IMAGE, so repository stays empty by
+      # default. Existing CoPaw deployments whose workers carry an empty
+      # spec.image must pin the image their previous chart resolved —
+      # repository AND tag (the old chart default was
+      # higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/
+      # agentteams-copaw-worker plus the release's global image tag) — so a
+      # controller upgrade/recreation keeps pulling it. tag has no global
+      # imageTag fallback: this release no longer builds CoPaw images, so a
+      # changed global tag must not select one (the render fails instead).
+      repository: ""
+      tag: ""
     hermes:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-hermes-worker
       tag: ""                 # defaults to global.imageTag
@@ -311,3 +321,12 @@ worker:
     limits:
       cpu: "2"
       memory: 2Gi
+
+# ── Legacy CoPaw upgrade gate (issue #1310) ──────────────────────────────
+# The pre-upgrade hook (templates/hook/legacy-copaw-upgrade-gate.yaml) aborts
+# the upgrade when it would drop a resolved AGENTTEAMS_COPAW_WORKER_IMAGE
+# from a live controller deployment (fail-closed by default). Set force to
+# true only to explicitly ack the drop — e.g. after migrating all CoPaw
+# workers to QwenPaw. `helm upgrade --no-hooks` bypasses the gate entirely.
+copawGate:
+  force: false

@@ -62,7 +62,7 @@ reset_case() {
 reset_case
 _select_available_auto_version
 [ "$AGENTTEAMS_VERSION" = v1.2.4 ] || fail 'complete release rejected'
-[ "$(wc -l < "$CALLS" | tr -d ' ')" = 8 ] || fail 'incomplete image set'
+[ "$(wc -l < "$CALLS" | tr -d ' ')" = 7 ] || fail 'incomplete image set'
 grep -q 'agentteams-manager-qwenpaw:v1.2.4' "$CALLS" || fail 'selected manager missing'
 grep -q 'agentteams-deepseek-harness-worker:v0.1.0' "$CALLS" || fail 'independent runtime tag lost'
 grep -q 'agentteams-dashboard:v1.2.4' "$CALLS" || fail 'dashboard missing'

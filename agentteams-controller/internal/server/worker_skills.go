@@ -160,6 +160,13 @@ func (h *WorkerSkillsHandler) skillScope(w http.ResponseWriter, r *http.Request,
 		httputil.WriteError(w, http.StatusNotFound, "worker not found")
 		return "", false
 	}
+	// runtime-aware: skill runtime state is qwenpaw-specific. This runs
+	// after the team-scope check above so an out-of-scope caller sees 404
+	// (existence hidden) regardless of the worker's runtime.
+	if rt := worker.Spec.Runtime; rt != "" && rt != "qwenpaw" {
+		httputil.WriteError(w, http.StatusBadRequest, "skill runtime state is only supported for qwenpaw workers")
+		return "", false
+	}
 	return h.workerBaseURL(name, worker.Spec.Env), true
 }
 

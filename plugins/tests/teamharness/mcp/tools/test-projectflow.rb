@@ -705,6 +705,41 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
     if [task["task_id"] for task in resumed_ready.get("readyNodes", [])] != ["t-001"]:
         raise AssertionError(f"resumed ready_nodes mismatch: {resumed_ready!r}")
 
+    incomplete = payload({
+        "action": "complete_project",
+        "payload": {"projectId": "daily-plan-2026-06-03"},
+    })
+    if incomplete.get("ok") or "t-001 (planned)" not in incomplete.get("error", "") or "t-002 (planned)" not in incomplete.get("error", ""):
+        raise AssertionError(f"complete_project should reject non-terminal tasks: {incomplete!r}")
+    incomplete_state = json.loads((pathlib.Path("#{workspace}") / "shared/projects/daily-plan-2026-06-03/meta.json").read_text(encoding="utf-8"))
+    if incomplete_state.get("status") != "active":
+        raise AssertionError(f"rejected complete_project changed project status: {incomplete_state!r}")
+
+    terminal_plan = payload({
+        "action": "plan_dag",
+        "payload": {
+            "projectId": "daily-plan-2026-06-03",
+            "tasks": [
+                {
+                    "taskId": "t-001",
+                    "title": "Collect input",
+                    "assignedTo": "@worker-a:example.test",
+                    "dependsOn": [],
+                    "status": "completed",
+                },
+                {
+                    "taskId": "t-002",
+                    "title": "Summarize",
+                    "assignedTo": "@worker-b:example.test",
+                    "dependsOn": ["t-001"],
+                    "status": "cancelled",
+                },
+            ],
+        },
+    })
+    if not terminal_plan.get("ok"):
+        raise AssertionError(f"terminal plan_dag failed: {terminal_plan!r}")
+
     completed = payload({
         "action": "complete_project",
         "payload": {"projectId": "daily-plan-2026-06-03"},
@@ -817,6 +852,52 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
         raise AssertionError(f"loop status mismatch: {loop_recorded!r}")
     if not loop_recorded["loop"].get("history"):
         raise AssertionError(f"loop history missing: {loop_recorded!r}")
+
+    loop_incomplete = payload({
+        "action": "complete_project",
+        "payload": {"projectId": "iterative-fix-2026-06-03"},
+    })
+    if loop_incomplete.get("ok") or "iterative-fix-2026-06-03-i001-01 (planned)" not in loop_incomplete.get("error", ""):
+        raise AssertionError(f"loop complete_project should reject non-terminal tasks: {loop_incomplete!r}")
+    loop_state = json.loads((pathlib.Path("#{workspace}") / "shared/projects/iterative-fix-2026-06-03/meta.json").read_text(encoding="utf-8"))
+    if loop_state.get("status") != "active":
+        raise AssertionError(f"rejected loop completion changed project status: {loop_state!r}")
+
+    loop_terminal_plan = payload({
+        "action": "plan_loop",
+        "payload": {
+            "projectId": "iterative-fix-2026-06-03",
+            "goal": "Fix until tests pass",
+            "stopCondition": "All target tests pass or max iterations reached",
+            "iterationTemplate": "Inspect failure, apply one fix, rerun tests.",
+            "maxIterations": 3,
+            "currentIteration": 1,
+            "tasks": [
+                {
+                    "taskId": "iterative-fix-2026-06-03-i001-01",
+                    "title": "Run first fix pass",
+                    "assignedTo": "@worker-a:example.test",
+                    "dependsOn": [],
+                    "status": "completed",
+                },
+                {
+                    "taskId": "iterative-fix-2026-06-03-i001-02",
+                    "title": "Verify first fix pass",
+                    "assignedTo": "@worker-b:example.test",
+                    "dependsOn": ["iterative-fix-2026-06-03-i001-01"],
+                    "status": "revision",
+                },
+            ],
+        },
+    })
+    if not loop_terminal_plan.get("ok"):
+        raise AssertionError(f"terminal plan_loop failed: {loop_terminal_plan!r}")
+    loop_completed = payload({
+        "action": "complete_project",
+        "payload": {"projectId": "iterative-fix-2026-06-03"},
+    })
+    if not loop_completed.get("ok") or loop_completed["project"].get("status") != "completed" or loop_completed["project"].get("loop", {}).get("status") != "completed":
+        raise AssertionError(f"complete_project should accept terminal loop tasks: {loop_completed!r}")
 
     loop_plan_path = pathlib.Path("#{workspace}") / "shared/projects/iterative-fix-2026-06-03/plan.md"
     loop_plan_text = loop_plan_path.read_text(encoding="utf-8")

@@ -647,6 +647,48 @@ func TestDockerCreateResolvesImageFromRuntime(t *testing.T) {
 	}
 }
 
+// TestDockerCreateRecreationKeepsLegacyCopawImage pins the legacy
+// upgrade-compat regression (issue #1310): a CoPaw worker with an empty
+// spec.image, recreated after a controller upgrade, must run on the image
+// carried forward from the pre-upgrade deployment env (CopawWorkerImage,
+// e.g. the old chart default higress-registry.../agentteams-copaw-worker
+// plus the release's global image tag), not on the generic worker image or
+// the built-in agentteams-copaw-worker:latest fallback. test-29 does not
+// cover this case because it explicitly pins spec.image.
+func TestDockerCreateRecreationKeepsLegacyCopawImage(t *testing.T) {
+	capturedImages := captureCreateImagesServer(t)
+	defer capturedImages.srv.Close()
+
+	// Same image test-29 pins as the legacy fingerprint (old chart default
+	// resolved at v1.2.4) — one concrete value across chart check, gate,
+	// and recreation coverage.
+	legacyImage := "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-copaw-worker:v1.2.4"
+	b := &DockerBackend{
+		config: DockerConfig{
+			WorkerImage:      "agentteams/agentteams-worker:latest",
+			CopawWorkerImage: legacyImage,
+			DefaultNetwork:   "agentteams-net",
+		},
+		containerPrefix: "agentteams-worker-",
+		client: &http.Client{
+			Transport: &testTransport{serverURL: capturedImages.srv.URL},
+		},
+	}
+
+	// Empty Image: legacy deployments resolve the image from the
+	// deployment env (CopawWorkerImage above).
+	_, err := b.Create(context.Background(), CreateRequest{
+		Name:    "legacy-copaw",
+		Runtime: RuntimeCopaw,
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	if got := capturedImages.lastImage(); got != legacyImage {
+		t.Fatalf("create body Image = %q, want the legacy env image %q", got, legacyImage)
+	}
+}
+
 // TestDockerCreateBindsConsolePortToLoopback verifies that the automatically
 // published worker console port (AGENTTEAMS_CONSOLE_PORT) is bound to
 // 127.0.0.1 instead of all interfaces, and that workers without a console

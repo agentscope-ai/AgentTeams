@@ -7,9 +7,30 @@ import sys
 import types
 from types import SimpleNamespace
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 OVERLAY = ROOT / "plugins" / "agentteams-matrix-channel" / "agentteams_matrix" / "channel.py"
+
+
+@pytest.fixture(autouse=True)
+def _restore_sys_modules():
+    """Undo the fake modules this file installs once the test finishes.
+
+    ``_load_overlay_module`` puts stubs for the whole ``qwenpaw`` package
+    (including ``qwenpaw.constant``) into ``sys.modules`` so the overlay can be
+    imported without the real framework. Left in place they outlive this file
+    and break later modules that import the real ``qwenpaw`` — e.g.
+    ``test_worker_lifecycle``'s ``from qwenpaw.constant import EnvVarLoader``
+    fails with "cannot import name 'EnvVarLoader' ... (unknown location)".
+    """
+    saved = dict(sys.modules)
+    try:
+        yield
+    finally:
+        sys.modules.clear()
+        sys.modules.update(saved)
 
 
 def _overlay_source() -> str:
@@ -425,6 +446,77 @@ def test_matrix_failed_callback_replays_and_deduplicates_after_restart(
 
     assert enqueued == ["$accepted", "$failed"]
     assert saved_tokens == ["t3"]
+
+
+def test_matrix_checkpoint_recovery_retains_batches_queued_after_failure(
+    tmp_path,
+) -> None:
+    """A failed batch must not discard later sync checkpoints."""
+    module = _load_overlay_module()
+    module.WORKING_DIR = tmp_path
+    channel = module.AgentTeamsMatrixChannel.__new__(
+        module.AgentTeamsMatrixChannel,
+    )
+    channel._callback_tasks = set()
+    channel._room_callback_locks = {}
+    channel._callback_event_ids = {}
+    channel._inflight_callback_futures = {}
+    channel._accepted_event_ids = set()
+    channel._durable_sync_token = "t0"
+    channel._active_sync_callback_futures = None
+    channel._pending_sync_checkpoints = []
+    channel._checkpoint_recovery_required = False
+
+    room = SimpleNamespace(room_id="!room:hs.local")
+    failed_event = SimpleNamespace(event_id="$failed", sender="@worker:hs.local")
+    later_event = SimpleNamespace(event_id="$later", sender="@worker:hs.local")
+    release_later = asyncio.Event()
+
+    async def _fail(_room, _event):
+        raise RuntimeError("temporary callback failure")
+
+    async def _later(_room, _event):
+        await release_later.wait()
+        channel._mark_event_callback_accepted()
+
+    async def _run() -> None:
+        first_batch = []
+        channel._active_sync_callback_futures = first_batch
+        channel._schedule_event_callback(_fail, room, failed_event)
+        channel._queue_sync_checkpoint("t1", first_batch)
+
+        later_batch = []
+        channel._active_sync_callback_futures = later_batch
+        channel._schedule_event_callback(_later, room, later_event)
+        channel._queue_sync_checkpoint("t2", later_batch)
+        await asyncio.sleep(0)
+
+        # This is the path that previously returned early and silently lost
+        # every checkpoint observed after the first failed callback.
+        channel._queue_sync_checkpoint("t3", [])
+        assert [token for token, *_ in channel._pending_sync_checkpoints] == [
+            "t1",
+            "t2",
+            "t3",
+        ]
+
+        release_later.set()
+        await asyncio.wait_for(
+            asyncio.gather(*tuple(channel._callback_tasks)),
+            timeout=1,
+        )
+
+    asyncio.run(_run())
+
+    assert channel._checkpoint_recovery_required
+    assert channel._durable_sync_token == "t0"
+
+    async def _recover() -> None:
+        assert await channel._recover_sync_checkpoint() == "t0"
+
+    asyncio.run(_recover())
+    assert channel._pending_sync_checkpoints == []
+    assert not channel._checkpoint_recovery_required
 
 
 def test_matrix_checkpoint_retains_later_accepted_events_until_their_token(

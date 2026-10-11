@@ -506,6 +506,148 @@ func (h *SkillsHandler) UploadSkill(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// DownloadSkill handles GET /api/v1/skills/{name}/download.
+//
+// Streams the skill's files as a zip (Content-Disposition attachment).
+// Scope rules mirror the catalog exactly:
+//
+//	?team=T   → teams/T/skills/<name>/   (admin any team; L2 human own
+//	                                       teams; leader own team; others
+//	                                       denied by checkTeamScope)
+//	no team   → agents/global/skills/<name>/  (admin only, same as the
+//	                                       no-param catalog)
+//
+// The controller-side storage client only exposes one-level listings on the
+// real backend (mc ls) and flattened relative names on the in-memory fake —
+// the walk below handles both: entries ending in "/" recurse, everything
+// else is fetched as a file at the walked prefix.
+func (h *SkillsHandler) DownloadSkill(w http.ResponseWriter, r *http.Request) {
+	caller := auth.CallerFromContext(r.Context())
+	name := strings.TrimSpace(r.PathValue("name"))
+	if !skillNameRe.MatchString(name) {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid skill name")
+		return
+	}
+	team := strings.TrimSpace(r.URL.Query().Get("team"))
+	if team == "" {
+		if caller == nil || caller.Role != auth.RoleAdmin {
+			httputil.WriteError(w, http.StatusBadRequest, "team scope required")
+			return
+		}
+	} else {
+		if err := h.checkTeamScope(r.Context(), caller, team); err != nil {
+			writeTeamScopeError(w, err)
+			return
+		}
+	}
+	if h.oss == nil {
+		httputil.WriteError(w, http.StatusServiceUnavailable, "storage client unavailable")
+		return
+	}
+	prefix := globalSkillsPrefix + name + "/"
+	if team != "" {
+		prefix = "teams/" + team + "/skills/" + name + "/"
+	}
+
+	files := map[string][]byte{}
+	if err := h.collectSkillFiles(r.Context(), prefix, "", files, 0); err != nil {
+		if _, ok := err.(*errSkillCollection); ok {
+			// 技能存在但包读取不完整（不可读文件/子树、超出深度上限）：
+			// 显式 500，而不是返回静默缺失文件的成功 zip。
+			httputil.WriteError(w, http.StatusInternalServerError,
+				fmt.Sprintf("incomplete skill package %q under %s: %v", name, prefix, err))
+			return
+		}
+		// 顶层列目录失败：技能前缀不存在（真实后端 mc ls 报错）——404 + 原因。
+		httputil.WriteError(w, http.StatusNotFound,
+			fmt.Sprintf("skill %q not found under %s (%v)", name, prefix, err))
+		return
+	}
+	if len(files) == 0 {
+		httputil.WriteError(w, http.StatusNotFound,
+			fmt.Sprintf("skill %q not found under %s", name, prefix))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition",
+		fmt.Sprintf("attachment; filename=\"%s.zip\"", name))
+	zw := zip.NewWriter(w)
+	paths := make([]string, 0, len(files))
+	for rel := range files {
+		paths = append(paths, rel)
+	}
+	sort.Strings(paths)
+	for _, rel := range paths {
+		// 保留技能根目录：上传契约（extractSkillZip）要求 <技能名>/<文件>
+		// 形态，下载包必须原样可再上传（round-trip）。
+		fw, err := zw.Create(name + "/" + rel)
+		if err != nil {
+			// 已开始写响应体——只能中断 zip（客户端解压报错比静默缺文件好）。
+			_ = zw.Close()
+			return
+		}
+		if _, err := fw.Write(files[rel]); err != nil {
+			_ = zw.Close()
+			return
+		}
+	}
+	_ = zw.Close()
+}
+
+// errSkillCollection is returned when a skill package exists but could not
+// be fully collected (unreadable file, unreadable subtree, or nesting beyond
+// skillMaxDepth). The caller maps it to 500: the skill exists, the read
+// failed — distinct from "not found" (404).
+type errSkillCollection struct{ msg string }
+
+func (e *errSkillCollection) Error() string { return e.msg }
+
+// skillMaxDepth bounds the package walk — skill packages are shallow, and a
+// deeper nesting is an explicit failure rather than a silent partial zip.
+const skillMaxDepth = 6
+
+// collectSkillFiles walks a skill prefix and reads every file into out
+// (relpath -> bytes; rel accumulates the walked subdirectories so nested
+// resources keep their path inside the zip). An incomplete package is an
+// explicit failure: an unreadable file, an unlistable subtree, or nesting
+// beyond skillMaxDepth returns errSkillCollection instead of a successful
+// partial zip — a silently incomplete package would break the
+// upload → download → re-upload round trip. A top-level (depth 0) list
+// error is returned as-is: that is the "skill not found / unreadable
+// prefix" case the caller maps to 404.
+func (h *SkillsHandler) collectSkillFiles(ctx context.Context, prefix, rel string, out map[string][]byte, depth int) error {
+	if depth > skillMaxDepth {
+		return &errSkillCollection{fmt.Sprintf("skill package nesting exceeds the %d-level limit at %s", skillMaxDepth, prefix)}
+	}
+	entries, err := h.oss.ListObjectsDetailed(ctx, prefix)
+	if err != nil {
+		if depth == 0 {
+			return err
+		}
+		return &errSkillCollection{fmt.Sprintf("list subtree %s: %v", prefix, err)}
+	}
+	for _, entry := range entries {
+		raw := strings.TrimSpace(entry.Name)
+		if raw == "" || strings.HasPrefix(raw, ".") {
+			continue
+		}
+		if strings.HasSuffix(raw, "/") {
+			sub := strings.TrimSuffix(raw, "/")
+			if err := h.collectSkillFiles(ctx, prefix+raw, rel+sub+"/", out, depth+1); err != nil {
+				return err
+			}
+			continue
+		}
+		data, err := h.oss.GetObject(ctx, prefix+raw)
+		if err != nil {
+			return &errSkillCollection{fmt.Sprintf("read %s: %v", prefix+raw, err)}
+		}
+		out[rel+raw] = data
+	}
+	return nil
+}
+
 // writeCatalog builds the catalog: the builtin half always, plus the shared
 // half (agents/global/skills/) for the no-param view or the team half
 // (teams/<t>/skills/) for the ?team= view.

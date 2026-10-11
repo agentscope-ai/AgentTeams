@@ -33,9 +33,13 @@ def test_integration_workflow_runs_qwenpaw_like_copaw() -> None:
     assert "14" not in workflow["env"]["NON_GITHUB_TESTS"].split()
     assert (
         '"shard":"qwenpaw-teamharness","filter_env":"SHARD_QWENPAW_TESTS",'
-        '"manager_runtime":"copaw","worker_runtime":"qwenpaw",'
+        '"manager_runtime":"qwenpaw","worker_runtime":"qwenpaw",'
         '"requires_secret":true'
     ) in matrix_script
+    # CoPaw was retired from the integration matrix (#1282) and only remains as a
+    # migration package build target, so no shard may schedule a CoPaw runtime.
+    assert '"manager_runtime":"copaw"' not in matrix_script
+    assert '"worker_runtime":"copaw"' not in matrix_script
     assert workflow["jobs"]["integration-tests"]["strategy"]["matrix"] == (
         "${{ fromJSON(needs.detect-changes.outputs.test_matrix) }}"
     )

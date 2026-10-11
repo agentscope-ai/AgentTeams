@@ -476,15 +476,16 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 	// Some worker runtimes (e.g. hermes-agent) don't auto-join invited
 	// rooms, so the controller does it explicitly here using the
 	// worker's freshly issued access token. JoinRoom is idempotent — if
-	// the worker already joined (e.g. CoPaw runtime which auto-accepts),
+	// the worker already joined (e.g. the legacy CoPaw runtime, which
+	// auto-accepts),
 	// the homeserver returns 200 OK. This decouples room membership from
 	// any runtime-specific Matrix client behaviour.
 	//
 	// IMPORTANT: "membership = join" is necessary but NOT sufficient for
-	// "worker is ready to process messages". CoPaw, in particular,
-	// suppresses message callbacks during its first-boot catch-up sync
-	// (see copaw/src/matrix/channel.py::_sync_loop). Any message that
-	// arrives in that catch-up window is silently dropped. Tests and
+	// "worker is ready to process messages". The legacy CoPaw runtime,
+	// in particular, suppressed message callbacks during its first-boot
+	// catch-up sync; any message that arrived in that window was silently
+	// dropped. Tests and
 	// managers must therefore implement at-least-once send semantics
 	// (see tests/lib/matrix-client.sh::matrix_send_and_wait_for_reply)
 	// rather than treating membership=join as a readiness signal.
@@ -1833,4 +1834,14 @@ func (p *Provisioner) BackfillLegacyPasswords(ctx context.Context) error {
 		logger.Info("legacy password backfill complete", "backfilled", backfilled, "total", len(names))
 	}
 	return firstErr
+}
+
+// WorkerGatewayKey reads the persisted key without rotating credentials or
+// changing authorization. Only trusted server-side gateway probes use it.
+func (p *Provisioner) WorkerGatewayKey(ctx context.Context, name string) (string, error) {
+	creds, err := p.loadWorkerCredentials(ctx, name)
+	if err != nil || creds == nil || creds.GatewayKey == "" {
+		return "", fmt.Errorf("worker gateway credentials unavailable")
+	}
+	return creds.GatewayKey, nil
 }

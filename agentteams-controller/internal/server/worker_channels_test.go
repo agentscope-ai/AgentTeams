@@ -1330,3 +1330,106 @@ func TestChannelsL3UnparseableUpstreamFailsClosed(t *testing.T) {
 		t.Fatalf("unparseable upstream for an L3 reader must fail closed to {}: %s", rec.Body.String())
 	}
 }
+
+// TestChannels_RuntimeAware400: a non-qwenpaw worker is rejected 400 and the
+// worker upstream is never dialed (channel configuration is qwenpaw-specific).
+func TestChannels_RuntimeAware400(t *testing.T) {
+	u := &channelsTestUpstream{status: http.StatusOK, response: `{}`}
+	w := checkpointWorker("oc-worker")
+	w.Spec.Runtime = "openclaw"
+	h := newTestChannelsHandler(t, "embedded", u.server(t), nil,
+		checkpointTeam("team-a", "oc-worker"), w)
+	rec := httptest.NewRecorder()
+	h.getChannels(rec, adminCaller(channelsRequest(http.MethodGet, "/api/v1/workers/placeholder/channels", "", "name", "oc-worker")))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400 for non-qwenpaw worker", rec.Code)
+	}
+	if !containsAll(rec.Body.String(), "only supported for qwenpaw") {
+		t.Fatalf("body=%s, want qwenpaw-specific message", rec.Body.String())
+	}
+	if u.dialed {
+		t.Fatal("guard must reject before dialing the worker upstream")
+	}
+}
+
+// TestChannels_EmptyRuntimePasses: a worker CR without an explicit runtime
+// keeps the historical behavior (no 400) — backward compatibility.
+func TestChannels_EmptyRuntimePasses(t *testing.T) {
+	const payload = `{"qq":{"enabled":true,"isBuiltin":true}}`
+	u := &channelsTestUpstream{status: http.StatusOK, response: payload}
+	h := newTestChannelsHandler(t, "embedded", u.server(t), nil,
+		checkpointTeamWithWorkers("team-a", "daily-carol")...)
+	rec := httptest.NewRecorder()
+	h.getChannels(rec, adminCaller(channelsRequest(http.MethodGet, "/api/v1/workers/placeholder/channels", "", "name", "daily-carol")))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200 (empty runtime must not be rejected)", rec.Code, rec.Body.String())
+	}
+	if !u.dialed {
+		t.Fatal("empty runtime must fall through to the worker upstream")
+	}
+}
+
+// TestChannels_ScopeBeforeRuntime_CrossTeam404: an out-of-scope caller sees
+// 404 (worker existence hidden) even for a non-qwenpaw worker — the runtime
+// 400 must not leak worker type across the team boundary.
+func TestChannels_ScopeBeforeRuntime_CrossTeam404(t *testing.T) {
+	u := &channelsTestUpstream{status: http.StatusOK, response: `{}`}
+	w := checkpointWorker("oc-worker")
+	w.Spec.Runtime = "openclaw"
+	h := newTestChannelsHandler(t, "embedded", u.server(t), nil,
+		checkpointTeam("team-a", "oc-worker"), w)
+	rec := httptest.NewRecorder()
+	req := withCaller(channelsRequest(http.MethodGet, "/api/v1/workers/placeholder/channels", "", "name", "oc-worker"),
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "bob", Teams: []string{"team-b"}})
+	h.getChannels(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404 for cross-team caller (W8)", rec.Code)
+	}
+	if containsAll(rec.Body.String(), "only supported for qwenpaw") {
+		t.Fatalf("body=%s, runtime guard must not leak across the scope boundary", rec.Body.String())
+	}
+	if u.dialed {
+		t.Fatal("upstream must not be dialed for a cross-team caller")
+	}
+}
+
+// TestChannels_ScopeBeforeRuntime_Standalone404: a scoped standalone worker
+// (no team) hides as 404 for a team-scoped caller regardless of runtime.
+func TestChannels_ScopeBeforeRuntime_Standalone404(t *testing.T) {
+	for _, rt := range []string{"openclaw", ""} {
+		w := checkpointWorker("standalone-oc")
+		w.Spec.Runtime = rt
+		h := newTestChannelsHandler(t, "embedded", nil, nil, w)
+		rec := httptest.NewRecorder()
+		req := withCaller(channelsRequest(http.MethodGet, "/api/v1/workers/placeholder/channels", "", "name", "standalone-oc"),
+			&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "bob", Teams: []string{"team-b"}})
+		h.getChannels(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("runtime=%q status=%d, want 404 for scoped standalone worker", rt, rec.Code)
+		}
+	}
+}
+
+// TestChannels_ScopeBeforeRuntime_Authorized400: an in-scope caller still
+// gets the explicit runtime 400 for a non-qwenpaw worker (the guard stays
+// in force after the scope check, before the dial).
+func TestChannels_ScopeBeforeRuntime_Authorized400(t *testing.T) {
+	u := &channelsTestUpstream{status: http.StatusOK, response: `{}`}
+	w := checkpointWorker("oc-worker")
+	w.Spec.Runtime = "openclaw"
+	h := newTestChannelsHandler(t, "embedded", u.server(t), nil,
+		checkpointTeam("team-a", "oc-worker"), w)
+	rec := httptest.NewRecorder()
+	req := withCaller(channelsRequest(http.MethodGet, "/api/v1/workers/placeholder/channels", "", "name", "oc-worker"),
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "bob", Teams: []string{"team-a"}})
+	h.getChannels(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400 for authorized non-qwenpaw caller", rec.Code)
+	}
+	if !containsAll(rec.Body.String(), "only supported for qwenpaw") {
+		t.Fatalf("body=%s, want qwenpaw-specific message", rec.Body.String())
+	}
+	if u.dialed {
+		t.Fatal("guard must reject before dialing the worker upstream")
+	}
+}

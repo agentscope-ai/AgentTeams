@@ -7,9 +7,30 @@ import sys
 import types
 from types import SimpleNamespace
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 OVERLAY = ROOT / "plugins" / "agentteams-matrix-channel" / "agentteams_matrix" / "channel.py"
+
+
+@pytest.fixture(autouse=True)
+def _restore_sys_modules():
+    """Undo the fake modules this file installs once the test finishes.
+
+    ``_load_overlay_module`` puts stubs for the whole ``qwenpaw`` package
+    (including ``qwenpaw.constant``) into ``sys.modules`` so the overlay can be
+    imported without the real framework. Left in place they outlive this file
+    and break later modules that import the real ``qwenpaw`` — e.g.
+    ``test_worker_lifecycle``'s ``from qwenpaw.constant import EnvVarLoader``
+    fails with "cannot import name 'EnvVarLoader' ... (unknown location)".
+    """
+    saved = dict(sys.modules)
+    try:
+        yield
+    finally:
+        sys.modules.clear()
+        sys.modules.update(saved)
 
 
 def _overlay_source() -> str:
@@ -915,6 +936,9 @@ def _make_inbound_channel(command_registry=True):
     channel.groups = {}
     channel.history_limit = 50
     channel._room_histories = {}
+    channel._room_history_gen = {}
+    channel._room_history_records = {}
+    channel._room_event_log = {}
     if command_registry:
         channel._command_registry = _FakeCommandRegistry()
     channel._is_dm_room = _false_dm

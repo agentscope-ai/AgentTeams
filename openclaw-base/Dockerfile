@@ -56,9 +56,11 @@ RUN if [ -n "${APT_MIRROR}" ]; then \
 
 # Install Node.js 22 via NodeSource (the base image does not ship Node.js).
 # setup_22.x auto-installs gnupg / apt-transport-https if missing.
+# Match OpenClaw's packageManager to avoid switching to a standalone pnpm
+# binary, which its build scripts incorrectly invoke through Node.js.
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y nodejs && \
-    npm install -g pnpm && \
+    npm install -g pnpm@10.32.1 && \
     rm -rf /var/lib/apt/lists/*
 
 # Clone, build, and optimize OpenClaw

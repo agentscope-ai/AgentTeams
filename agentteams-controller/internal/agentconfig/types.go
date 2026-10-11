@@ -35,15 +35,19 @@ type HeartbeatConfig struct {
 
 // WorkerConfigRequest describes everything needed to generate a worker's config files.
 type WorkerConfigRequest struct {
-	WorkerName     string           // e.g. "worker-alice"
-	MatrixToken    string           // worker's Matrix access token
-	GatewayKey     string           // worker's gateway API key
-	ModelName      string           // optional: override default model
-	AIGatewayURL   string           // per-worker AI Gateway URL override (from modelProvider)
-	TeamLeaderName string           // if non-empty, this is a team worker
-	ChannelPolicy  *ChannelPolicy   // optional communication policy overrides
-	Heartbeat      *HeartbeatConfig // optional: team leader heartbeat settings
-	Runtime        string           // agent runtime (openclaw | copaw | hermes | qwenpaw | deepseek-harness)
+	WorkerName  string // e.g. "worker-alice"
+	MatrixToken string // worker's Matrix access token
+	GatewayKey  string // worker's gateway API key
+	ModelName   string // optional: override default model
+	// SubagentModelName optionally names the model for spawned subagents
+	// (QwenPaw >= 2.1.1 native subagent_model). Written to
+	// agents.defaults.model.subagent when non-empty.
+	SubagentModelName string
+	AIGatewayURL      string           // per-worker AI Gateway URL override (from modelProvider)
+	TeamLeaderName    string           // if non-empty, this is a team worker
+	ChannelPolicy     *ChannelPolicy   // optional communication policy overrides
+	Heartbeat         *HeartbeatConfig // optional: team leader heartbeat settings
+	Runtime           string           // agent runtime (openclaw | copaw | hermes | qwenpaw | deepseek-harness)
 }
 
 // ChannelPolicy describes additive/subtractive communication rules.

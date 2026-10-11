@@ -57,6 +57,27 @@ type WorkerProvisioner interface {
 	// KickFromRoom removes userID from roomID using the admin token.
 	// Idempotent: returns nil when the user is not a member.
 	KickFromRoom(ctx context.Context, roomID, userID, reason string) error
+
+	// EnsureRoomPowerLevel reconciles userID's entry in the room's
+	// m.room.power_levels to exactly the given power level (raising or
+	// lowering it). The write uses actorToken when non-empty, otherwise the
+	// homeserver-admin identity — state reads/writes are membership-scoped,
+	// so TeamAdmin-owned rooms (where the admin is deliberately not a
+	// member) must be passed a token of an authorized member. The complete
+	// existing content is preserved (every other user, every non-user
+	// field); only the target users entry is mutated. The call is a no-op
+	// write when the user already has exactly that level. Rooms that never
+	// had power_levels set (legacy) are treated as starting from an empty
+	// users map.
+	//
+	// Homeserver authorization (spec room-auth rules) rejects a power-level
+	// change to another user whose current level is not strictly below the
+	// sender's — so an equal-level demotion (admin at 100 demoting a former
+	// L1 human at 100) fails with M_FORBIDDEN. When that happens and
+	// selfToken (the target users own access token) is non-empty, the write
+	// is retried with selfToken: the senders own entry is exempt from the
+	// strict-greater rule, making a self-demotion always authorized.
+	EnsureRoomPowerLevel(ctx context.Context, roomID, userID string, level int, actorToken, selfToken string) error
 	// ForceLeaveRoom removes a user whose room power level prevents a normal
 	// admin kick.
 	ForceLeaveRoom(ctx context.Context, userID, roomID string) error
@@ -75,7 +96,11 @@ type WorkerDeployer interface {
 	// error is safe to surface as a non-blocking Worker warning: it reports a
 	// missing required copy or a failed remote refresh that retained an older
 	// canonical copy, without exposing remote source credentials.
-	PushOnDemandSkills(ctx context.Context, workerName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error
+	// teamName is the effective Team identity ("" for standalone workers):
+	// a skill present in teams/<teamName>/skills/ is materialized by the
+	// controller from the team layer (scan ② mandatory); the rest go
+	// through the builtin recovery path (team layer wins on a name clash).
+	PushOnDemandSkills(ctx context.Context, workerName, teamName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error
 	PrepareWorkerDeps(ctx context.Context, req WorkerDepsPrepareRequest) error
 	CleanupOSSData(ctx context.Context, workerName string) error
 	InjectCoordinationContext(ctx context.Context, req CoordinationDeployRequest) error
@@ -149,7 +174,7 @@ type ManagerProvisioner interface {
 type ManagerDeployer interface {
 	DeployPackage(ctx context.Context, name, uri string, isUpdate bool) error
 	DeployManagerConfig(ctx context.Context, req ManagerDeployRequest) error
-	PushOnDemandSkills(ctx context.Context, name string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error
+	PushOnDemandSkills(ctx context.Context, name, teamName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error
 	CleanupOSSData(ctx context.Context, name string) error
 }
 
@@ -235,8 +260,38 @@ type HumanProvisioner interface {
 	JoinRoomAs(ctx context.Context, roomID, userToken string) error
 
 	// KickFromRoom removes userID from roomID using the admin token.
-	// Idempotent: returns nil when the user is not a member.
+	// Idempotent: returns nil when the user is not a member. An
+	// authorization rejection (kicker not a member, or the target's power
+	// level not strictly below the kickers) is returned as an error —
+	// callers must fall back (KickFromRoomAs with an authorized actor,
+	// LeaveRoomAs with the target's own token, or ForceLeaveRoom).
 	KickFromRoom(ctx context.Context, roomID, userID, reason string) error
+
+	// KickFromRoomAs is KickFromRoom with an explicit kicker: actorToken
+	// ("" = homeserver-admin identity). Same idempotency and error
+	// semantics as KickFromRoom.
+	KickFromRoomAs(ctx context.Context, roomID, userID, reason, actorToken string) error
+
+	// LeaveRoomAs makes the user identified by userToken leave roomID
+	// (self-leave). Always authorized for a joined/invited member
+	// (spec room-auth rule: a user may always leave their own room),
+	// which is why it is the fallback when an equal-power kick is
+	// rejected. Idempotent: returns nil when the user is not a member.
+	LeaveRoomAs(ctx context.Context, roomID, userToken string) error
+
+	// EnsureRoomPowerLevel reconciles userID's entry in the room's
+	// m.room.power_levels to exactly the given power level (raising or
+	// lowering it). actorToken ("" = homeserver-admin identity) performs
+	// the read and the write; on an M_FORBIDDEN rejection (the homeserver
+	// refuses to let a sender change another users level unless the senders
+	// level is strictly greater — an equal-level demotion) the write is
+	// retried with selfToken (the target users own token), whose own
+	// entries are exempt from that rule. The complete existing content is
+	// preserved (every other user, every non-user field); only the target
+	// users entry is mutated. The call is a no-op write when the user
+	// already has exactly that level. Rooms that never had power_levels
+	// set (legacy) are treated as starting from an empty users map.
+	EnsureRoomPowerLevel(ctx context.Context, roomID, userID string, level int, actorToken, selfToken string) error
 
 	// ForceLeaveRoom asks the Tuwunel admin bot to force-leave userID out
 	// of roomID via "!admin users force-leave-room". Fire-and-forget at

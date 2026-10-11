@@ -137,6 +137,35 @@ Manager 会先上传并验证 `SKILL.md`，再更新 `spec.skills`。QwenPaw Wor
 
 也可以通过 `spec.package` 引入一个包含 `skills/` 目录的 Worker 包。包内 Skills 与按名称分配的 Skills 会合并，互不冲突。
 
+### 技能目录 API
+
+`GET /api/v1/skills` 返回部署中可用技能的只读目录，含三类：
+
+- **`source: "builtin"`**——agent 模板自带的内置技能（取自各 `SKILL.md` frontmatter 的 name + description，`agents` 列出提供该技能的模板，`runtimes` 列出支持的运行时）。模板→运行时的映射取自 deployer 自身的 `BuiltinAgentDir` 选择逻辑，因此目录永远与 Worker 实际接收的内置技能一致、不会漂移。
+- **`source: "plugin"`**——随插件包分发的技能（如 TeamHarness），从各插件包的 `plugin.yaml` 清单发现——与插件构建打进 worker 镜像的同一数据源。条目携带 `plugin` 字段；只读且不可经 `spec.skills` 分配（Worker 有插件即有该技能——无 `runtimes`/`agents`/per-worker 分配字段）。
+- **`source: "shared"`**——Dashboard 技能上传流程暂存到 `agents/global/skills/` 下的技能，可分发到任意 Worker。该前缀是**暂存区而非分发通道**：删除其中某个条目只会把它从目录和 Dashboard 全局区移除，**不会**触碰已分发的 per-worker 副本或既有的 `spec.skills` 分配（无级联）。
+- **`source: "team"`**（仅 `?team=` 时）——该团队自有的技能，位于 `teams/<team>/skills/`，通过 `POST /api/v1/skills` 发布（见下文）。
+
+输出按名称排序；端点只暴露元数据——不读技能正文、不访问注册表、不泄露凭据。条目含 `name`/`description`/`source` 及 `version`/`requirements`（builtin）与 `updated_at`（shared）。不带团队参数时目录**仅 admin（L1）可访问**——非 admin 调用方收到 `400 team scope required`。带 `?team=<name>` 时目录按团队范围读：admin 可读任意团队，L2 人类或 team leader 可读自己所在团队；跨团队或不存在的团队读 `404`（与"团队不存在"不可区分）。设计见 [Skill Catalog API](../design/skill-catalog-api.md) 与 [团队技能](../design/team-skills.md)。
+
+### 团队技能
+
+**团队技能**归属单个团队（存储：`teams/<team>/skills/<name>/`）——介于全部署级技能与 per-worker 副本之间的中间层。发布与指派：
+
+1. **发布**（admin 任意团队；或该团队的 L2 人类仅限本团队）：
+
+   ```sh
+   curl -X POST "$CONTROLLER/api/v1/skills" \
+     -H "Authorization: Bearer $TOKEN" \
+     -F "scope=team" -F "team=marketing" \
+     -F "file=@./marketing-briefing.zip"
+   ```
+
+   ZIP 必须只含**一个顶层目录**（技能根目录，目录名即技能名），其根下必须有 `SKILL.md`，且 frontmatter `name` 与目录名一致。上限 64 MB（ZIP 与解压后均计）。上传会做内容扫描（尽力而为）：命中阻断（CRITICAL/HIGH）返回 `422` 并带 findings；扫描不可用则继续并上报 `scan.status: "skipped"`。重复上传同一技能为**精确替换**（新版删掉的旧文件会被删掉）。`scope=deployment`（仅 admin）改发布到 `agents/global/skills/`。
+2. **指派**：更新 Worker 的 `spec.skills`（API、Dashboard，或经 Manager）。下次 reconcile 时 Controller 会**再次、强制地**扫描该技能（扫描被阻断或不可用则不复制，并在 Worker 状态里记为非阻塞 warning），然后把它拷入 `agents/<worker>/skills/<name>/`；Worker 的同步循环会在同步周期内把它物化进原生工作空间。
+
+team leader 可以浏览本团队目录（`GET /api/v1/skills?team=…`）作为指派面，但**不能发布**；manager 与 worker 主体一律不能发布。同名冲突时**团队层优先于 builtin 库**。完整契约、扫描语义与 k8s 模式限制见 [团队技能设计](../design/team-skills.md)。
+
 ### 带自定义包的 Worker
 
 ```yaml
@@ -178,6 +207,18 @@ spec:
 | Failed | 创建或运行失败，查看 `status.message` |
 
 **状态字段（节选）：** `observedGeneration`、`matrixUserID`、`roomID`、`containerState`、`lastHeartbeat`、`message`、`exposedPorts`（暴露端口及域名）。
+
+### Worker 更新权限（按角色）
+
+`PUT /api/v1/workers/{name}` 是合并补丁：body 里出现的字段才会被修改。各角色可更新的范围：
+
+| 角色 | 范围 | 字段 |
+|------|------|------|
+| admin / manager | 任意 Worker | 全部字段 |
+| 团队 Leader | 本团队 Worker | 全部字段 |
+| L2 人类用户（`permissionLevel: 2`） | 仅 `accessibleTeams` 内的 Worker | `skills` |
+
+L2 人类用户可自主管理所协调 Worker 的内置技能分配，无需升级到 admin。`remoteSkills` 与 `mcpServers` 暂不开放给 L2：MCP 路径存在网关消费者密钥泄露风险（生成器会把 `Authorization: Bearer <gatewayKey>` 附加到每个 MCP 条目的 URL 上），因此这两个字段对 L2 调用方返回 `400`，直到提权能力设计落地（见 L2 权限设计 issue #1220）。其余字段——`model`、`image`、`soul`、`agents`、`runtime`、`package`、`expose`、`channelPolicy`、`resources`、`containerManaged`、`state`——仍属团队所有者的权限范围；body 触碰即 `400` 拒绝。越权 Worker（跨团队或独立）对 L2 用户读写均不可见（`404`），端点保持防探测。设计细节见 [L2 Human Worker-Scoped Write](../design/l2-worker-scoped-write.md)。
 
 ## Team
 
@@ -426,6 +467,7 @@ spec:
 | `spec.permissionLevel` | int | 是 | — | 权限级别：1、2 或 3 |
 | `spec.accessibleTeams` | []string | 否 | — | 可访问的 Team 列表（L2 生效） |
 | `spec.accessibleWorkers` | []string | 否 | — | 可访问的独立 Worker 列表（L2/L3 生效） |
+| `spec.capabilities` | []string | 否 | — | L2 基线之外的敏感面特权：`full_access`、`channel_secrets`、`external_sources`、`approval_policy`、`secret_reveal`（见 [capability-foundation](../design/capability-foundation.md)） |
 | `spec.note` | string | 否 | — | 备注 |
 
 ### 三级权限模型
@@ -480,6 +522,17 @@ Human 的权限通过两个机制实现：
 | L1 | 添加到 Manager + 所有 Leader + 所有 Worker | 所有 Room |
 | L2 | 添加到指定 Team 的 Leader + Worker + 指定独立 Worker | 指定 Team Room + Worker Room |
 | L3 | 添加到指定 Worker | 指定 Worker Room |
+
+### Human 更新（API）
+
+`PUT /api/v1/humans/{name}` 更新既有 human 的权限配置。合并补丁语义：body 里出现的字段才变，未出现保持原值，显式空数组清空列表。
+
+- **可更新：** `displayName`、`email`、`permissionLevel`（1/2/3）、`accessibleTeams`、`accessibleWorkers`、`note`。
+- **不可更新：** `name` 与 Matrix 身份（账号重新开通是独立操作）。
+- **校验：** `permissionLevel` 超出 1–3 → `400`；`accessibleTeams` / `accessibleWorkers` 引用不存在的 Team/Worker → `400` 并点名。
+- **鉴权：** 仅 admin / manager。团队 Leader、团队范围人类用户、worker 账号一律拒绝——授权是管理员操作。
+
+更新写入 Human CR，既有的 human reconcile 自动把 Matrix 邀请、房间成员、`groupAllowFrom` 重新同步到新范围。注意：本端点不修改 Matrix 房间 power level——`permissionLevel` 变更立即对 API 鉴权生效，但既有房间的管理权限不因本次更新而改变（房间 power level 的对账是独立的变更，不属于本端点）。
 
 ### Human 创建流程
 
@@ -960,6 +1013,50 @@ agt apply worker --name alice --model qwen3.5-plus
 | `dmDenyExtra` | DM 拒绝列表 |
 
 在 Worker 上设置 `spec.channelPolicy` 实现成员级策略，在 Team 上设置 `spec.channelPolicy` 实现团队级策略。
+
+## Worker 频道配置（代理）
+
+每个 Worker 的 qwenpaw app 暴露频道配置接口（QQ / Matrix / 钉钉 / ...）。Controller 将其代理，管理员与 L2 用户可通过 API 或图形化前端（工作台插件 / dashboard）配置频道，无需在 Worker 容器上开 shell：
+
+```bash
+# 列出某 Worker 的频道配置
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/channels \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+
+# 保存频道（body = 完整频道配置；立即生效，无需重启）
+curl -s -X PUT http://127.0.0.1:8090/api/v1/workers/{name}/channels/qq \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"enabled":true,"app_id":"...","client_secret":"***"}'
+# → 200，body 原样返回，X-AgentTeams-MinIO-Persisted: true|false|skipped
+```
+
+`schemas` 路由返回各频道的表单定义（字段名、类型、label、options），前端据此渲染接入表单，无需 per-channel 代码。`conflict-check` 路由（POST）在保存配置前检测其他 agent 是否持有相同频道凭据——2.2.x worker 上服务端执行；旧版本 worker 会原样返回其自身的 `404`，见到该 404 即隐藏入口（见 `docs/design/worker-channels-api.md` 的版本契约一节）。
+
+| 角色 | 读 | 写（`PUT` / `restart` / `conflict-check`） |
+|------|----|-------------------------|
+| L1（admin / cli token） | 任意 Worker | 任意 Worker |
+| L2（Matrix token） | 本团队 Worker | 本团队 Worker |
+| 团队 Leader | 本团队 Worker | 只读（`403`） |
+
+跨团队访问统一返回 `404`（不泄漏存在性）。仅 `embedded` 模式——kube 模式返回 `503`。完整契约见 [design/worker-channels-api.md](../../design/worker-channels-api.md)。
+
+## Worker 会话可见性（chats 代理）
+
+Worker 的会话历史（qwenpaw *chats*——每个用户/通道一条：Matrix 房间、QQ 私聊、console 会话）可通过三个只读代理路由读取：列出会话、打开完整消息记录、查看某会话的运行状态（`idle` / `running`）。
+
+```bash
+# L2 人类列出本团队某 Worker 的会话
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/chats \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+# 打开一条会话的完整消息记录
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/chats/{chat_id} \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+# 某会话的运行状态（QwenPaw >= 2.2.1；旧版本 404 = 前端隐藏该指示器）
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/chats/{chat_id}/status \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+```
+
+与频道/检查点代理相同的范围模型：L1 任意 Worker，L2 / 团队 Leader 本团队 Worker，跨团队 `404`（不泄漏存在性），仅 `embedded` 模式。只读——无创建/归档/删除路由。消息记录是 Worker 对话上下文的逐字内容，访问受该 Worker 的团队范围约束。完整契约见 [design/worker-chats-api.md](../../design/worker-chats-api.md)。
 
 ## 通信权限矩阵
 

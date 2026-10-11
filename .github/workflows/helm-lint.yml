@@ -9,19 +9,35 @@ on:
       - 'install/agentteams-apply.sh'
       - 'Makefile'
       - '.github/workflows/build.yml'
+      - '.github/workflows/build-image.yml'
+      - '.github/workflows/helm-lint.yml'
+      - 'tests/test-build-workflows.py'
       - '.github/workflows/build-rc.yml'
       - '.github/workflows/build-deepseek-harness.yml'
       - '.github/workflows/release.yml'
       - 'openhuman/scripts/openhuman-worker-entrypoint.sh'
       - 'tests/check-agentteams-rename-defaults.sh'
       - 'tests/check-installer-pre-1.2-env-compat.sh'
+      - 'tests/check-installer-username-validation.sh'
+      - 'tests/check-installer-username-validation.ps1'
+      - 'tests/check-installer-env-data-dir-readback.sh'
+      - 'tests/check-installer-dashboard-session-secret.sh'
       - 'tests/check-installer-embedded-latest-pull.sh'
+      - 'tests/check-installer-auto-version-images.sh'
+      - 'tests/check-teamharness-acceptance-observer.sh'
+      - 'tests/test-26-qwenpaw-teamharness-plugin-mode.sh'
       - 'tests/check-installer-qwenpaw-runtime-options.sh'
       - 'tests/check-installer-deepseek-harness-runtime-options.sh'
       - 'tests/check-powershell-deepseek-harness-latest.ps1'
       - 'tests/check-windows-appservice-normalization.ps1'
       - 'tests/check-apply-wrapper-flags.sh'
+      - 'tests/check-mcp-setup-domain-parsing.sh'
       - 'tests/check-helm-agentteams.sh'
+      - 'tests/check-copaw-helm-upgrade-gate.sh'
+      - 'tests/copaw-helm-upgrade-gate.sh'
+      - 'hack/local-k8s-up.sh'
+      - 'tests/check-create-project-grant-admin.sh'
+      - 'manager/agent/skills/project-management/**'
       - 'manager/scripts/init/start-manager-agent.sh'
       - 'manager/tests/test-manager-startup-recovery.sh'
   workflow_dispatch: ~
@@ -39,8 +55,32 @@ jobs:
       - name: Check pre-v1.2 installer compatibility
         run: bash tests/check-installer-pre-1.2-env-compat.sh
 
+      - name: Check Bash installer username validation
+        run: bash tests/check-installer-username-validation.sh
+
+      - name: Check PowerShell installer username validation
+        shell: pwsh
+        run: ./tests/check-installer-username-validation.ps1
+
+      - name: Check installer data-dir env readback
+        run: bash tests/check-installer-env-data-dir-readback.sh
+
+      - name: Check installer dashboard session secret
+        run: bash tests/check-installer-dashboard-session-secret.sh
+
       - name: Check embedded latest image pulling
         run: bash tests/check-installer-embedded-latest-pull.sh
+
+      - name: Check automatic installer version and platform selection
+        run: bash tests/check-installer-auto-version-images.sh
+
+      - name: Check TeamHarness acceptance observer
+        run: bash tests/check-teamharness-acceptance-observer.sh
+
+      - name: Check image build and release workflows
+        run: |
+          python3 -m pip install PyYAML==6.0.3
+          python3 tests/test-build-workflows.py
 
       - name: Check QwenPaw installer runtime options
         run: bash tests/check-installer-qwenpaw-runtime-options.sh
@@ -54,6 +94,15 @@ jobs:
 
       - name: Check declarative apply wrapper flags
         run: bash tests/check-apply-wrapper-flags.sh
+
+      - name: Check MCP setup script domain parsing
+        run: bash tests/check-mcp-setup-domain-parsing.sh
+
+      - name: Check create-project grant-admin wiring
+        run: bash tests/check-create-project-grant-admin.sh
+
+      - name: Check CoPaw upgrade gate failure modes
+        run: bash tests/check-copaw-helm-upgrade-gate.sh
 
       - name: Check Manager startup Worker recovery ownership
         run: bash manager/tests/test-manager-startup-recovery.sh

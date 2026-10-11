@@ -161,7 +161,7 @@ func TestWorkerReconcileDoesNotOverwriteTeamOwnedRuntimeConfig(t *testing.T) {
 		},
 	}
 	rig := newWorkerRig(t, worker, team)
-	rig.deployer.PushOnDemandSkillsFn = func(context.Context, string, []string, []v1beta1.RemoteSkillSource) error {
+	rig.deployer.PushOnDemandSkillsFn = func(context.Context, string, string, []string, []v1beta1.RemoteSkillSource) error {
 		return errors.New("remote Skill refresh failed for remote-team-skill (label=\"stable\"); retained existing Worker copies")
 	}
 
@@ -244,6 +244,10 @@ func (g *workerTestGateway) EnsureStreamIdleTimeout(context.Context, int) error 
 func (g *workerTestGateway) EnsureAIRoute(context.Context, gateway.AIRouteRequest) error {
 	return nil
 }
+func (g *workerTestGateway) ListAIRoutes(context.Context) ([]gateway.AIRouteInfo, error) {
+	return nil, nil
+}
+
 func (g *workerTestGateway) ResolveModelProvider(context.Context, string) (*gateway.ModelProviderInfo, error) {
 	return g.modelInfo, g.modelErr
 }
@@ -2602,5 +2606,30 @@ func TestWorkerReconcile_ModelProviderNotFound_CreateFails(t *testing.T) {
 	}
 	if out.Status.ObservedGeneration != 0 {
 		t.Fatalf("ObservedGeneration should remain 0 on failure, got %d", out.Status.ObservedGeneration)
+	}
+}
+
+func TestOwningTeamSubagentModel(t *testing.T) {
+	t.Parallel()
+	worker := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "worker-a", Namespace: "default"}}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			SubagentModel: "qwen3.5-flash",
+			WorkerMembers: []v1beta1.TeamWorkerRef{{Name: "worker-a", Role: "worker"}},
+		},
+	}
+	stray := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "stray", Namespace: "default"}}
+	c := fake.NewClientBuilder().
+		WithScheme(newWorkerScheme(t)).
+		WithObjects(worker, team, stray).
+		Build()
+	r := &WorkerReconciler{Client: c}
+
+	if got := r.owningTeamSubagentModel(context.Background(), worker); got != "qwen3.5-flash" {
+		t.Errorf("member worker: got %q, want qwen3.5-flash", got)
+	}
+	if got := r.owningTeamSubagentModel(context.Background(), stray); got != "" {
+		t.Errorf("non-member worker: got %q, want empty", got)
 	}
 }

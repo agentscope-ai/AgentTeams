@@ -12,7 +12,6 @@ on:
       - 'tests/**'
       - 'install/**'
       - 'shared/**'
-      - 'copaw/**'
       - 'qwenpaw/**'
       - 'hermes/**'
       - 'deepseek-harness/**'
@@ -34,7 +33,6 @@ on:
       - 'tests/**'
       - 'install/**'
       - 'shared/**'
-      - 'copaw/**'
       - 'qwenpaw/**'
       - 'hermes/**'
       - 'deepseek-harness/**'
@@ -59,7 +57,6 @@ on:
         options:
           - both
           - openclaw
-          - copaw
           - qwenpaw
           - hermes
         default: 'both'
@@ -74,15 +71,17 @@ permissions:
   pull-requests: read
 
 env:
-  # Tests that do not require a GitHub token, split into four shards for parallel execution
+  # Tests that do not require a GitHub token, split into three shard types for parallel execution
   # Shard A: LLM interaction tests (sequential dependency: 02 creates alice → 03-06 use alice)
-  # Shard C: Controller/CR tests (independent, no cross-test dependencies)
-  # Shard D: Controller/CR tests 2 (team project DAG)
+  # Shard C: Keep runtime-dependent coverage in each supported CI worker runtime.
+  # Run fixed runtime-switch/name-validation scenarios once (QwenPaw), and
+  # Manager-only startup/migration once on QwenPaw, not per worker.
+  # CoPaw has no standalone shard; the legacy-upgrade coverage (test-29) runs on the pinned published image.
   SHARD_A_TESTS: "01 02 03 04 05 06"
-  SHARD_C_TESTS: "15 17 18 19 20 22 23 24 25 27 28 100"
-  SHARD_D_TESTS: "21"
+  SHARD_C_TESTS: "15 17 18 19 20 22 24 100"
+  SHARD_C_QWENPAW_TESTS: "15 17 18 19 20 22 23 24 25 27 28 29 100"
   SHARD_QWENPAW_TESTS: "26"
-  NON_GITHUB_TESTS: "01 02 03 04 05 06 15 17 18 19 20 21 22 23 24 25 27 28 100"
+  NON_GITHUB_TESTS: "01 02 03 04 05 06 15 17 18 19 20 22 23 24 25 27 28 100"
 
 jobs:
   # Step 0: Detect which paths changed so we can decide whether to rebuild
@@ -130,11 +129,8 @@ jobs:
           MATRIX='[
             {"shard":"llm-interaction","filter_env":"SHARD_A_TESTS","manager_runtime":"openclaw","worker_runtime":"openclaw","requires_secret":true},
             {"shard":"controller-cr","filter_env":"SHARD_C_TESTS","manager_runtime":"openclaw","worker_runtime":"openclaw","requires_secret":false},
-            {"shard":"llm-interaction","filter_env":"SHARD_A_TESTS","manager_runtime":"copaw","worker_runtime":"copaw","requires_secret":true},
-            {"shard":"controller-cr","filter_env":"SHARD_C_TESTS","manager_runtime":"copaw","worker_runtime":"copaw","requires_secret":false},
-            {"shard":"controller-cr-2","filter_env":"SHARD_D_TESTS","manager_runtime":"copaw","worker_runtime":"copaw","requires_secret":false},
             {"shard":"llm-interaction","filter_env":"SHARD_A_TESTS","manager_runtime":"qwenpaw","worker_runtime":"qwenpaw","requires_secret":true},
-            {"shard":"controller-cr","filter_env":"SHARD_C_TESTS","manager_runtime":"qwenpaw","worker_runtime":"qwenpaw","requires_secret":false},
+            {"shard":"controller-cr","filter_env":"SHARD_C_QWENPAW_TESTS","manager_runtime":"qwenpaw","worker_runtime":"qwenpaw","requires_secret":false},
             {"shard":"qwenpaw-teamharness","filter_env":"SHARD_QWENPAW_TESTS","manager_runtime":"qwenpaw","worker_runtime":"qwenpaw","requires_secret":true},
             {"shard":"llm-interaction","filter_env":"SHARD_A_TESTS","manager_runtime":"qwenpaw","worker_runtime":"hermes","requires_secret":true},
             {"shard":"controller-cr","filter_env":"SHARD_C_TESTS","manager_runtime":"qwenpaw","worker_runtime":"hermes","requires_secret":false}
@@ -151,6 +147,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Check integration scheduling
+        run: python3 tests/check-integration-scheduling.py
 
       - name: Run DeepSeek Harness bridge tests
         run: |
@@ -251,7 +250,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [embedded, manager, manager-qwenpaw, worker, copaw-worker, qwenpaw-worker, hermes-worker, deepseek-harness-worker]
+        # The copaw-worker image is no longer built from the branch: the
+        # legacy-upgrade coverage (test-29) pulls the pinned published image
+        # (agentteams-copaw-worker) instead.
+        target: [embedded, manager, manager-qwenpaw, worker, qwenpaw-worker, hermes-worker, deepseek-harness-worker]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -287,9 +289,8 @@ jobs:
         run: |
           # When openclaw-base was rebuilt from this PR's source, point manager
           # and worker builds at the local image instead of pulling :latest from
-          # the published registry. Other targets (embedded, manager-qwenpaw,
-          # copaw-worker) do not depend on openclaw-base so the override is a
-          # no-op for them.
+          # the published registry. Other targets (embedded, manager-qwenpaw)
+          # do not depend on openclaw-base so the override is a no-op for them.
           EXTRA=""
           if [ "${{ needs.detect-changes.outputs.openclaw_base }}" = "true" ] && \
              { [ "${{ matrix.target }}" = "manager" ] || [ "${{ matrix.target }}" = "worker" ]; }; then
@@ -337,6 +338,12 @@ jobs:
       contents: write
       pull-requests: write
       actions: read
+    env:
+      # Fork PR runs receive no repository secrets; gate the registry login on
+      # credential availability. The pinned legacy image is also anonymously
+      # pullable from the cn-hangzhou primary, so credential-less runs can
+      # still attempt it and skip with a note when unreachable.
+      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.detect-changes.outputs.test_matrix) }}
@@ -355,6 +362,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Login to Higress registry (when credentials are available)
+        if: env.REGISTRY_USERNAME != ''
+        uses: docker/login-action@v3
+        with:
+          registry: higress-registry.cn-hangzhou.cr.aliyuncs.com
+          username: ${{ env.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
       - name: Download all images
         uses: actions/download-artifact@v4
         with:
@@ -370,6 +385,23 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y jq curl unzip
 
+      - name: Configure registry-dependent coverage
+        run: |
+          if [ -z "${REGISTRY_USERNAME}" ]; then
+            echo "COPAW_LEGACY_IMAGE_OPTIONAL=1" >> "$GITHUB_ENV"
+            # Credential-less runs (fork PRs) cannot pull the pinned legacy
+            # image anonymously. Point the embedded install's copaw slot at
+            # a locally-built worker image so the install skips the pull:
+            # no test in this run actually starts a CoPaw worker (test-23
+            # rejects the copaw switch; test-29 skips via
+            # COPAW_LEGACY_IMAGE_OPTIONAL).
+            echo "CI_COPAW_WORKER_IMAGE=agentteams/qwenpaw-worker:latest" >> "$GITHUB_ENV"
+            echo "::notice::Registry credentials unavailable in this run — the legacy-upgrade test (29) will skip, and the copaw install slot uses a local placeholder image."
+          else
+            echo "COPAW_LEGACY_IMAGE_OPTIONAL=0" >> "$GITHUB_ENV"
+            echo "CI_COPAW_WORKER_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-copaw-worker:v1.2.4" >> "$GITHUB_ENV"
+          fi
+
       - name: Run embedded integration tests
         id: tests
         env:
@@ -377,13 +409,11 @@ jobs:
           AGENTTEAMS_LLM_PROVIDER: qwen
           AGENTTEAMS_DEFAULT_MODEL: ${{ inputs.model || 'qwen3.6-plus' }}
           AGENTTEAMS_MANAGER_RUNTIME: ${{ matrix.manager_runtime }}
-          # Exercise the PR-built QwenPaw Manager directly and keep the legacy
-          # CoPaw compatibility matrix on the same current Python image.
+          # Exercise the PR-built QwenPaw Manager directly.
           AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE: agentteams/manager-qwenpaw:latest
-          AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE: agentteams/manager-qwenpaw:latest
           # Propagate the worker runtime to worker-creating tests too. Without
           # this the apply-zip path (test-15) silently falls back to openclaw
-          # on the copaw and hermes matrix entries because the controller's
+          # on the qwenpaw and hermes matrix entries because the controller's
           # backend resolves an empty req.Runtime to RuntimeOpenClaw — which
           # would make those dimensions run hidden openclaw workers and
           # invalidate the parallel-runtime coverage we set up above.
@@ -397,7 +427,18 @@ jobs:
           if [ -z "$FILTER" ]; then
             FILTER="${{ env[matrix.filter_env] }}"
           fi
-          AGENTTEAMS_VERSION=v1.2.0-beta.1 SKIP_BUILD=1 make test-embedded \
+          # The branch no longer builds copaw-worker; resolve the embedded
+          # install's legacy image from the pinned published source instead
+          # of the (unavailable) local build tag.
+          # LOCAL_COPAW_WORKER must be a make command-line variable (after
+          # 'make'): the Makefile assigns it unconditionally ('='), so a
+          # shell env prefix is silently ignored and the install would pull
+          # the default agentteams/copaw-worker:latest, which this branch
+          # no longer builds. AGENTTEAMS_VERSION/SKIP_BUILD stay env
+          # prefixes because the install script (not make) consumes them.
+          AGENTTEAMS_VERSION=v1.2.0-beta.1 SKIP_BUILD=1 \
+          make test-embedded \
+            LOCAL_COPAW_WORKER="${CI_COPAW_WORKER_IMAGE}" \
             TEST_FILTER="$FILTER"
 
       # ============================================================
@@ -749,3 +790,29 @@ jobs:
       - name: Cleanup
         if: always()
         run: make uninstall-embedded 2>/dev/null || true && docker system prune -af || true
+
+  install-verify-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the LLM-smoke regression suite (stubbed docker/curl)
+        run: bash install/tests/verify-llm-regressions.sh
+
+# ============================================================
+# Offline pre-flight suite: qwenpaw upgrade checker (AgentTeams#1341)
+# No Docker or network needed - builds miniature trees and a fake wheel.
+# ============================================================
+
+  qwenpaw-upgrade-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run the offline pre-flight suite
+        run: python3 qwenpaw/tests/test_check_qwenpaw_upgrade.py

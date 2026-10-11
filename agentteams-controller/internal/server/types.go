@@ -1,13 +1,18 @@
 package server
 
-import v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+import (
+	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
+)
 
 // --- Worker API types ---
 
 type CreateWorkerRequest struct {
+	Env           map[string]string                  `json:"env,omitempty"`
 	Name          string                             `json:"name"`
 	WorkerName    string                             `json:"workerName,omitempty"`
 	Model         string                             `json:"model,omitempty"`
+	SubagentModel string                             `json:"subagentModel,omitempty"`
 	ModelProvider string                             `json:"modelProvider,omitempty"`
 	Runtime       string                             `json:"runtime,omitempty"`
 	Image         string                             `json:"image,omitempty"`
@@ -15,6 +20,7 @@ type CreateWorkerRequest struct {
 	Soul          string                             `json:"soul,omitempty"`
 	Agents        string                             `json:"agents,omitempty"`
 	Skills        []string                           `json:"skills,omitempty"`
+	RemoteSkills  []v1beta1.RemoteSkillSource        `json:"remoteSkills,omitempty"`
 	McpServers    []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
 	Package       string                             `json:"package,omitempty"`
 	Expose        []v1beta1.ExposePort               `json:"expose,omitempty"`
@@ -30,8 +36,13 @@ type CreateWorkerRequest struct {
 }
 
 type UpdateWorkerRequest struct {
-	WorkerName    string                             `json:"workerName,omitempty"`
-	Model         string                             `json:"model,omitempty"`
+	Env        map[string]string `json:"env,omitempty"`
+	WorkerName string            `json:"workerName,omitempty"`
+	Model      string            `json:"model,omitempty"`
+	// SubagentModel is a pointer so callers can distinguish omission (nil:
+	// keep the current value) from an explicit clear ("" — the worker
+	// returns to inheriting the team default / the runtime default).
+	SubagentModel *string                            `json:"subagentModel,omitempty"`
 	ModelProvider string                             `json:"modelProvider,omitempty"`
 	Runtime       string                             `json:"runtime,omitempty"`
 	Image         string                             `json:"image,omitempty"`
@@ -39,6 +50,7 @@ type UpdateWorkerRequest struct {
 	Soul          string                             `json:"soul,omitempty"`
 	Agents        string                             `json:"agents,omitempty"`
 	Skills        []string                           `json:"skills,omitempty"`
+	RemoteSkills  []v1beta1.RemoteSkillSource        `json:"remoteSkills,omitempty"`
 	McpServers    []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
 	Package       string                             `json:"package,omitempty"`
 	Expose        []v1beta1.ExposePort               `json:"expose,omitempty"`
@@ -54,29 +66,44 @@ type UpdateWorkerRequest struct {
 }
 
 type WorkerResponse struct {
-	Name             string                     `json:"name"`
-	WorkerName       string                     `json:"workerName,omitempty"`
-	Phase            string                     `json:"phase"`
-	ContainerManaged bool                       `json:"containerManaged"`
-	State            string                     `json:"state,omitempty"` // desired lifecycle state
-	Model            string                     `json:"model,omitempty"`
-	Runtime          string                     `json:"runtime,omitempty"`
-	Image            string                     `json:"image,omitempty"`
-	Identity         string                     `json:"identity,omitempty"`
-	Soul             string                     `json:"soul,omitempty"`
-	Agents           string                     `json:"agents,omitempty"`
-	Skills           []string                   `json:"skills,omitempty"`
-	McpServers       []v1beta1.MCPServer        `json:"mcpServers,omitempty"`
-	Package          string                     `json:"package,omitempty"`
-	BackendRuntime   string                     `json:"backendRuntime,omitempty"`
-	ChannelPolicy    *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
-	ContainerState   string                     `json:"containerState,omitempty"`
-	MatrixUserID     string                     `json:"matrixUserID,omitempty"`
-	RoomID           string                     `json:"roomID,omitempty"`
-	Message          string                     `json:"message,omitempty"`
-	ExposedPorts     []ExposedPortInfo          `json:"exposedPorts,omitempty"`
-	Team             string                     `json:"team,omitempty"`
-	Role             string                     `json:"role,omitempty"`
+	EnvEditable      bool              `json:"envEditable"`
+	Env              map[string]string `json:"env,omitempty"`
+	Name             string            `json:"name"`
+	WorkerName       string            `json:"workerName,omitempty"`
+	Phase            string            `json:"phase"`
+	ContainerManaged bool              `json:"containerManaged"`
+	State            string            `json:"state,omitempty"` // desired lifecycle state
+	Model            string            `json:"model,omitempty"`
+	// SubagentModel is the model used by spawned subagents ("" = inherit
+	// the worker's primary model). See WorkerSpec.SubagentModel.
+	SubagentModel string `json:"subagentModel,omitempty"`
+	Runtime       string `json:"runtime,omitempty"`
+	// RuntimeDeprecated marks legacy runtimes that are upgrade-compat
+	// only (CoPaw): new creation is rejected; migrate to QwenPaw.
+	RuntimeDeprecated bool                       `json:"runtimeDeprecated,omitempty"`
+	Image             string                     `json:"image,omitempty"`
+	Identity          string                     `json:"identity,omitempty"`
+	Soul              string                     `json:"soul,omitempty"`
+	Agents            string                     `json:"agents,omitempty"`
+	Skills            []string                   `json:"skills,omitempty"`
+	McpServers        []v1beta1.MCPServer        `json:"mcpServers,omitempty"`
+	Package           string                     `json:"package,omitempty"`
+	BackendRuntime    string                     `json:"backendRuntime,omitempty"`
+	ChannelPolicy     *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
+	ContainerState    string                     `json:"containerState,omitempty"`
+	MatrixUserID      string                     `json:"matrixUserID,omitempty"`
+	RoomID            string                     `json:"roomID,omitempty"`
+	Message           string                     `json:"message,omitempty"`
+	LastActiveAt      string                     `json:"lastActiveAt,omitempty"`
+	// AgentStatus is the runtime task-level state reported by the worker
+	// heartbeat: "idle" / "running" / "disabled"; empty = not reported.
+	AgentStatus      string            `json:"agentStatus,omitempty"`
+	RunningTaskCount *int              `json:"runningTaskCount,omitempty"`
+	LastRunAt        string            `json:"lastRunAt,omitempty"`
+	LastFinishAt     string            `json:"lastFinishAt,omitempty"`
+	ExposedPorts     []ExposedPortInfo `json:"exposedPorts,omitempty"`
+	Team             string            `json:"team,omitempty"`
+	Role             string            `json:"role,omitempty"`
 }
 
 type ExposedPortInfo struct {
@@ -132,6 +159,10 @@ type TeamResponse struct {
 	Message            string                       `json:"message,omitempty"`
 	WorkerNames        []string                     `json:"workerNames,omitempty"`
 	WorkerExposedPorts map[string][]ExposedPortInfo `json:"workerExposedPorts,omitempty"`
+	// SubagentModel exposes the team-wide default (Team.spec.subagentModel) so
+	// frontends can display the model members inherit; per-worker values stay
+	// on WorkerResponse.
+	SubagentModel string `json:"subagentModel,omitempty"`
 }
 
 type TeamListResponse struct {
@@ -151,6 +182,23 @@ type CreateHumanRequest struct {
 	Note              string   `json:"note,omitempty"`
 }
 
+// UpdateHumanRequest is the merge-patch body of PUT /api/v1/humans/{name}.
+// Pointer fields: absent = unchanged, present = replace (an empty non-nil
+// slice clears the list). Matrix identity (name / username) is not
+// updatable — changing it re-provisions the account.
+type UpdateHumanRequest struct {
+	DisplayName       *string   `json:"displayName,omitempty"`
+	Email             *string   `json:"email,omitempty"`
+	PermissionLevel   *int      `json:"permissionLevel,omitempty"`
+	AccessibleTeams   *[]string `json:"accessibleTeams,omitempty"`
+	AccessibleWorkers *[]string `json:"accessibleWorkers,omitempty"`
+	Note              *string   `json:"note,omitempty"`
+	// Capabilities follows the same merge-patch semantics as
+	// AccessibleTeams: absent = unchanged, explicit list = replaces,
+	// empty list = clears. Unknown values are rejected (400).
+	Capabilities *[]string `json:"capabilities,omitempty"`
+}
+
 type HumanResponse struct {
 	Name              string   `json:"name"`
 	Phase             string   `json:"phase"`
@@ -159,6 +207,7 @@ type HumanResponse struct {
 	PermissionLevel   int      `json:"permissionLevel"`
 	AccessibleTeams   []string `json:"accessibleTeams,omitempty"`
 	AccessibleWorkers []string `json:"accessibleWorkers,omitempty"`
+	Capabilities      []string `json:"capabilities,omitempty"`
 	Note              string   `json:"note,omitempty"`
 	MatrixUserID      string   `json:"matrixUserID,omitempty"`
 	InitialPassword   string   `json:"initialPassword,omitempty"`
@@ -182,6 +231,7 @@ type CreateManagerRequest struct {
 	Soul          string                             `json:"soul,omitempty"`
 	Agents        string                             `json:"agents,omitempty"`
 	Skills        []string                           `json:"skills,omitempty"`
+	RemoteSkills  []v1beta1.RemoteSkillSource        `json:"remoteSkills,omitempty"`
 	McpServers    []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
 	Package       string                             `json:"package,omitempty"`
 	Config        *v1beta1.ManagerConfig             `json:"config,omitempty"`
@@ -191,12 +241,13 @@ type CreateManagerRequest struct {
 
 type UpdateManagerRequest struct {
 	Model         string                             `json:"model,omitempty"`
-	ModelProvider string                             `json:"modelProvider,omitempty"`
+	ModelProvider *string                            `json:"modelProvider,omitempty"`
 	Runtime       string                             `json:"runtime,omitempty"`
 	Image         string                             `json:"image,omitempty"`
 	Soul          string                             `json:"soul,omitempty"`
 	Agents        string                             `json:"agents,omitempty"`
 	Skills        []string                           `json:"skills,omitempty"`
+	RemoteSkills  []v1beta1.RemoteSkillSource        `json:"remoteSkills,omitempty"`
 	McpServers    []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
 	Package       string                             `json:"package,omitempty"`
 	Config        *v1beta1.ManagerConfig             `json:"config,omitempty"`
@@ -205,16 +256,19 @@ type UpdateManagerRequest struct {
 }
 
 type ManagerResponse struct {
-	Name         string `json:"name"`
-	Phase        string `json:"phase"`
-	State        string `json:"state,omitempty"` // desired lifecycle state
-	Model        string `json:"model,omitempty"`
-	Runtime      string `json:"runtime,omitempty"`
-	Image        string `json:"image,omitempty"`
-	MatrixUserID string `json:"matrixUserID,omitempty"`
-	RoomID       string `json:"roomID,omitempty"`
-	Version      string `json:"version,omitempty"`
-	Message      string `json:"message,omitempty"`
+	Name    string `json:"name"`
+	Phase   string `json:"phase"`
+	State   string `json:"state,omitempty"` // desired lifecycle state
+	Model   string `json:"model,omitempty"`
+	Runtime string `json:"runtime,omitempty"`
+	// RuntimeDeprecated marks legacy runtimes that are upgrade-compat
+	// only (CoPaw): new creation is rejected; migrate to QwenPaw.
+	RuntimeDeprecated bool   `json:"runtimeDeprecated,omitempty"`
+	Image             string `json:"image,omitempty"`
+	MatrixUserID      string `json:"matrixUserID,omitempty"`
+	RoomID            string `json:"roomID,omitempty"`
+	Version           string `json:"version,omitempty"`
+	Message           string `json:"message,omitempty"`
 	// WelcomeSent mirrors ManagerStatus.WelcomeSent so installers / CLI can
 	// poll for first-boot onboarding completion (DM joined + LLM auth ready
 	// + welcome prompt actually delivered). Always present (false until set)
@@ -239,6 +293,16 @@ type ConsumerResponse struct {
 	ConsumerID string `json:"consumer_id"`
 	APIKey     string `json:"api_key,omitempty"`
 	Status     string `json:"status"`
+}
+
+// AIRouteListResponse is the read-only AI route catalog returned by
+// GET /api/v1/gateway/ai-routes. Each entry is a gateway route: name is the
+// route name (NOT a model ID — one route can serve several models),
+// upstreams are the providers serving it, and allowedConsumers are the
+// gateway consumers authorized on the route.
+type AIRouteListResponse struct {
+	Routes []gateway.AIRouteInfo `json:"routes"`
+	Total  int                   `json:"total"`
 }
 
 // --- Lifecycle API types ---

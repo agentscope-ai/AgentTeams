@@ -278,7 +278,7 @@ Worker（仅持有 Consumer Token: GatewayKey）
 
 ```
 Worker 发起 LLM 请求:
-    POST https://aigw-local.agentteams.io/v1/chat/completions
+    POST http://aigw-local.agentteams.io:8080/v1/chat/completions
     Authorization: Bearer {GatewayKey}
         ↓
 Higress Gateway:
@@ -304,7 +304,7 @@ MCP Server 注册流程:
     4. 为 Worker 生成 mcporter 配置，指向 Gateway 的 MCP 端点
 
 Worker 调用 MCP 工具:
-    POST https://aigw-local.agentteams.io/mcp-servers/github/mcp
+    POST http://aigw-local.agentteams.io:8080/mcp-servers/mcp-github/mcp
     Authorization: Bearer {GatewayKey}
         ↓
     Higress Gateway:

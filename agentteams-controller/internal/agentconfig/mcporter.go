@@ -2,16 +2,36 @@ package agentconfig
 
 import (
 	"encoding/json"
+	"net/url"
 	"strings"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 )
 
+// IsTrustedMCPHost reports whether urlStr is addressed to the configured AI
+// gateway (exact host:port match against Config.AIGatewayURL). The MCP gateway
+// consumer key is attached only to entries on the trusted gateway; entries on
+// any other host are external and never receive the credential (#1220 §7).
+// An unset or unparseable gateway URL trusts nothing (fail closed).
+func (g *Generator) IsTrustedMCPHost(urlStr string) bool {
+	gw, err := url.Parse(g.config.AIGatewayURL)
+	if err != nil || gw.Host == "" {
+		return false
+	}
+	entry, err := url.Parse(urlStr)
+	if err != nil || entry.Host == "" {
+		return false
+	}
+	return entry.Host == gw.Host
+}
+
 // GenerateMcporterConfig produces mcporter-servers.json content for a worker or
 // manager's MCP servers. Each entry's URL is used verbatim (the CRD carries the
-// full gateway endpoint), and an Authorization: Bearer <gatewayKey> header is
+// full gateway endpoint). An Authorization: Bearer <gatewayKey> header is
 // injected so the agent authenticates with the same consumer key it uses for
-// LLM access.
+// LLM access — but only when the entry is addressed to the trusted AI gateway
+// (IsTrustedMCPHost); entries on any other host must not receive the gateway
+// credential.
 //
 // The transport defaults to "http" (Streamable HTTP) when unset. Entries with
 // an empty name or url are skipped silently. Returns (nil, nil) when the input
@@ -32,13 +52,16 @@ func (g *Generator) GenerateMcporterConfig(gatewayKey string, mcpServers []v1bet
 		if transport == "" {
 			transport = "http"
 		}
-		servers[name] = map[string]interface{}{
+		entry := map[string]interface{}{
 			"url":       url,
 			"transport": transport,
-			"headers": map[string]string{
-				"Authorization": "Bearer " + gatewayKey,
-			},
 		}
+		if g.IsTrustedMCPHost(url) {
+			entry["headers"] = map[string]string{
+				"Authorization": "Bearer " + gatewayKey,
+			}
+		}
+		servers[name] = entry
 	}
 
 	if len(servers) == 0 {

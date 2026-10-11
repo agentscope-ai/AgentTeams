@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -36,8 +36,20 @@ class QwenPawApiClient:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 raw = response.read()
         except urllib.error.HTTPError as exc:
+            detail = ""
+            if 500 <= exc.code < 600:
+                try:
+                    body = exc.read()
+                except OSError:
+                    body = b""
+                finally:
+                    exc.close()
+                if body:
+                    detail = (
+                        f": {body.decode('utf-8', errors='replace').strip()}"
+                    )
             raise QwenPawApiError(
-                f"QwenPaw API {method} {path} failed with HTTP {exc.code}",
+                f"QwenPaw API {method} {path} failed with HTTP {exc.code}{detail}",
             ) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise QwenPawApiError(
@@ -64,6 +76,15 @@ class QwenPawApiClient:
         if actual != expected:
             raise QwenPawApiError(
                 f"expected QwenPaw {expected}, API reported {actual}",
+            )
+
+    def require_agent_running(self, agent_id: str) -> None:
+        agents = self._request("GET", "/api/agents").get("agents") or []
+        agent = next((item for item in agents if item.get("id") == agent_id), {})
+        status = agent.get("startup_status")
+        if status != "running":
+            raise QwenPawApiError(
+                f"QwenPaw agent {agent_id} is not running: {status or 'missing'}",
             )
 
     def get_channel(self, channel: str) -> dict[str, Any]:
@@ -254,7 +275,9 @@ class QwenPawApiClient:
         self,
         client_key: str,
         *,
-        timeout: float = 30,
+        # Startup window: driver activation is observed up to ~45s on a
+        # loaded runner; the previous 30s default crashed worker startup.
+        timeout: float = 120,
         interval: float = 0.5,
     ) -> list[dict[str, Any]]:
         deadline = time.monotonic() + timeout
@@ -302,12 +325,25 @@ class QwenPawApiClient:
         api_key: str = "",
         provider_name: str = "",
         chat_model: str = "OpenAIChatModel",
+        supports_image: Optional[bool] = None,
+        supports_video: Optional[bool] = None,
+        supports_multimodal: Optional[bool] = None,
+        probe_source: Optional[str] = None,
     ) -> dict[str, Any]:
         providers = self._request("GET", "/api/models")
         provider = next(
             (item for item in providers if item.get("id") == provider_id),
             None,
         )
+        model_payload: dict[str, Any] = {"id": model, "name": model}
+        if supports_image is not None:
+            model_payload["supports_image"] = supports_image
+        if supports_video is not None:
+            model_payload["supports_video"] = supports_video
+        if supports_multimodal is not None:
+            model_payload["supports_multimodal"] = supports_multimodal
+        if probe_source is not None:
+            model_payload["probe_source"] = probe_source
         if provider is None:
             self._request(
                 "POST",
@@ -317,7 +353,7 @@ class QwenPawApiClient:
                     "name": provider_name or provider_id,
                     "default_base_url": base_url,
                     "chat_model": chat_model,
-                    "models": [{"id": model, "name": model}],
+                    "models": [model_payload],
                 },
             )
         else:
@@ -330,7 +366,19 @@ class QwenPawApiClient:
                 self._request(
                     "POST",
                     f"/api/models/{urllib.parse.quote(provider_id, safe='')}/models",
-                    {"id": model, "name": model},
+                    model_payload,
+                )
+            else:
+                # An already-registered entry keeps whatever capability
+                # state it was stored with (often an earlier self-probe
+                # result); the app exposes no in-place update for those
+                # fields, so converge them only when the stored values
+                # actually drift from the desired ones.
+                self._reconcile_existing_model(
+                    provider_id,
+                    provider,
+                    model,
+                    model_payload,
                 )
         config_payload: dict[str, Any] = {"chat_model": chat_model}
         if api_key:
@@ -375,7 +423,182 @@ class QwenPawApiClient:
             raise QwenPawApiError("QwenPaw provider model readback mismatch")
         if base_url and str(provider.get("base_url") or "").rstrip("/") != base_url.rstrip("/"):
             raise QwenPawApiError("QwenPaw provider base URL readback mismatch")
+        stored = self._find_model_entry(provider, model)
+        if stored is not None:
+            mismatched = sorted(
+                key
+                for key in (
+                    "supports_image",
+                    "supports_video",
+                    "supports_multimodal",
+                    "probe_source",
+                )
+                if key in model_payload and stored.get(key) != model_payload[key]
+            )
+            if mismatched:
+                raise QwenPawApiError(
+                    f"QwenPaw model capability readback mismatch: "
+                    f"{', '.join(mismatched)}"
+                )
         return actual
+
+    def get_agent_subagent_model(self) -> Optional[dict[str, Any]]:
+        """Return the worker's current subagent model override, if any."""
+        actual = self._request("GET", "/api/agents/default")
+        slot = (actual or {}).get("subagent_model")
+        return slot if isinstance(slot, dict) else None
+
+    def update_agent_model_settings(
+        self,
+        subagent_model: Optional[dict[str, Any]],
+    ) -> None:
+        """Set — or clear (``None``) — the worker's subagent model override.
+
+        ``PATCH /api/agents/default/model-settings`` applies only the fields
+        present in the body: an explicit ``null`` removes the override, a
+        value sets it. Either way the endpoint schedules an in-process
+        agent reload, so a running process picks the change up without a
+        restart. The profile readback verifies the write persisted (or the
+        override was removed).
+        """
+        self._request(
+            "PATCH",
+            "/api/agents/default/model-settings",
+            {"subagent_model": subagent_model},
+        )
+        slot = self.get_agent_subagent_model()
+        if subagent_model is None:
+            if slot is not None:
+                raise QwenPawApiError(
+                    "QwenPaw subagent model readback mismatch: clear not persisted",
+                )
+            return
+        if (
+            slot is None
+            or slot.get("provider_id") != subagent_model.get("provider_id")
+            or slot.get("model") != subagent_model.get("model")
+        ):
+            raise QwenPawApiError("QwenPaw subagent model readback mismatch")
+
+    @staticmethod
+    def _find_model_entry(
+        provider: dict[str, Any],
+        model: str,
+    ) -> Optional[dict[str, Any]]:
+        """Find the stored entry for ``model`` across ``models`` and
+        ``extra_models`` (the two lists a provider persists user models
+        in)."""
+        return next(
+            (
+                item
+                for item in list(provider.get("models") or [])
+                + list(provider.get("extra_models") or [])
+                if str(item.get("id")) == model
+            ),
+            None,
+        )
+
+    def _reconcile_existing_model(
+        self,
+        provider_id: str,
+        provider: dict[str, Any],
+        model: str,
+        model_payload: dict[str, Any],
+    ) -> None:
+        """Converge capability fields on an already-registered model entry.
+
+        The pinned QwenPaw app has no endpoint that updates an existing
+        model entry's capability fields: ``POST /api/models/{pid}/models``
+        rejects a duplicate id, and ``PUT .../models/{mid}/config`` only
+        carries generation parameters. The only available convergence is
+        delete + re-add, so it is used sparingly — only when a desired
+        capability value actually differs from the stored one. Steady
+        state stays a no-op, so repeated worker updates do not churn the
+        entry.
+
+        Failure safety: the re-add is wrapped in a compensating restore —
+        if it fails after the delete, the original entry is re-posted and
+        verified, so the Worker never ends up without its previously
+        usable model; a failed restore raises an actionable error.
+        """
+        desired = {
+            key: model_payload[key]
+            for key in (
+                "supports_image",
+                "supports_video",
+                "supports_multimodal",
+                "probe_source",
+            )
+            if key in model_payload
+        }
+        if not desired:
+            return
+        entry = self._find_model_entry(provider, model)
+        if entry is None or all(
+            entry.get(key) == value for key, value in desired.items()
+        ):
+            return
+        base = f"/api/models/{urllib.parse.quote(provider_id, safe='')}/models"
+        self._request("DELETE", f"{base}/{urllib.parse.quote(model, safe='')}")
+        readd = dict(model_payload)
+        if entry.get("name"):
+            # Re-add must not downgrade a human-readable display name to
+            # the bare model id.
+            readd["name"] = entry["name"]
+        try:
+            self._request("POST", base, readd)
+        except QwenPawApiError as exc:
+            # The entry is already deleted; a failed re-add must not leave
+            # the Worker without its previously usable model.
+            self._restore_model_entry(provider_id, base, entry, exc)
+
+    def _restore_model_entry(
+        self,
+        provider_id: str,
+        base: str,
+        entry: dict[str, Any],
+        readd_error: QwenPawApiError,
+    ) -> None:
+        """Compensating restore after a failed delete + re-add.
+
+        Re-posts the original stored entry and verifies it in the
+        response, so the previously usable model comes back; the next
+        update cycle retries the convergence from the restored state.
+        Always raises: the re-add error (with the restore confirmed) when
+        recovery succeeded, or an actionable error when it did not.
+        """
+        model_id = str(entry.get("id") or "")
+        restore = dict(entry)
+        if not restore.get("name"):
+            # The add endpoint requires a name; a malformed stored entry
+            # must not block the restore.
+            restore["name"] = model_id or "model"
+        try:
+            result = self._request("POST", base, restore)
+        except QwenPawApiError as restore_error:
+            raise QwenPawApiError(
+                "QwenPaw model re-add failed "
+                f"({readd_error}) and the compensating restore of the "
+                f"original entry also failed ({restore_error}); model "
+                f"'{model_id}' is no longer registered on provider "
+                f"'{provider_id}' - re-run the worker update (or wait "
+                "for the next reconcile) to re-register it"
+            ) from readd_error
+        if not isinstance(result, dict) or self._find_model_entry(
+            result, model_id
+        ) is None:
+            raise QwenPawApiError(
+                "QwenPaw model re-add failed "
+                f"({readd_error}) and the restore response did not "
+                f"confirm the entry; model '{model_id}' may be missing "
+                f"from provider '{provider_id}' - re-run the worker "
+                "update (or wait for the next reconcile) to re-register it"
+            ) from readd_error
+        raise QwenPawApiError(
+            f"QwenPaw model re-add failed ({readd_error}); the original "
+            "model entry was restored and verified, so the previously "
+            "usable model remains available"
+        ) from readd_error
 
     def configure_agent(
         self,
@@ -401,7 +624,9 @@ class QwenPawApiClient:
         self,
         agent_id: str,
         *,
-        retries: int = 120,
+        # 409 = agent still loading (startup gate); loads finish in seconds
+        # and the caller already downgrades failures to a warning.
+        retries: int = 30,
         retry_delay: float = 1.0,
     ) -> bool:
         agents = self._request("GET", "/api/agents").get("agents") or []

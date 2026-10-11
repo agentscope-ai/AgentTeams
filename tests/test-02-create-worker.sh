@@ -140,6 +140,16 @@ for i in $(seq 1 180); do
 done
 assert_contains "${CONSUMERS}" "worker-alice" "Higress consumer 'worker-alice' exists"
 
+# A conversational acknowledgement (including an approval prompt) is not proof
+# that the Worker started. Require the runtime readiness report as well.
+ALICE_PHASE=""
+for _ in $(seq 1 60); do
+    ALICE_PHASE=$(exec_in_agent agt worker status --name alice -o json 2>/dev/null | jq -r '.phase // empty')
+    [ "${ALICE_PHASE}" = "Ready" ] && break
+    sleep 3
+done
+assert_eq "Ready" "${ALICE_PHASE}" "Worker Alice reports runtime readiness"
+
 # Check MinIO files
 minio_setup
 minio_wait_for_file "agents/alice/SOUL.md" 60

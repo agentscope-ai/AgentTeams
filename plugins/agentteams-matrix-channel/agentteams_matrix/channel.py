@@ -19,7 +19,7 @@ import urllib.parse
 from uuid import uuid4
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -77,6 +77,9 @@ from qwenpaw.constant import WORKING_DIR
 
 logger = logging.getLogger("qwenpaw.channels.matrix")
 
+# #1334: masked replacement sent to the room on non-cancellation consume
+# errors; the raw err_text is logged only and never reaches the room.
+_CONSUME_ERROR_NOTICE = '⚠️ 本轮处理遇到系统错误，已中断。请重新发送你的请求；若问题持续出现，请联系管理员查看日志。'
 
 CHANNEL_KEY = "agentteams_matrix"
 
@@ -147,6 +150,18 @@ _MATRIX_PENDING_FINAL_MESSAGE_KEY = "matrix_pending_final_message"
 _MATRIX_STREAMING_FINAL_TEXT_KEY = "matrix_streaming_final_text"
 _MATRIX_FORCE_NOTICE_KEY = "matrix_force_notice"
 _MATRIX_PLACEHOLDER_THREAD_ROOT_KEY = "matrix_placeholder_thread_root"
+
+# Per-turn flag: at least one tool call/output message was routed during
+# this turn. Used at process completion to distinguish a quiet-but-real
+# turn from a silent turn that produced nothing (#1320).
+_MATRIX_TURN_TOOL_ACTIVITY_KEY = "matrix_turn_tool_activity"
+
+# Send alignment gate (#1244): before the final reply of a turn is
+# flushed, check whether new room events landed after the turn's context
+# snapshot.  Unaligned turns are re-triggered with the fresh context
+# instead of answering a stale conversation state.  Budgets:
+_MATRIX_SEND_GATE_MAX_RETRIGGERS = 2
+_MATRIX_SEND_GATE_MAX_WAIT_S = 600.0
 
 _TOOL_CALL_MESSAGE_TYPE_NAMES = frozenset(
     {"FUNCTION_CALL", "PLUGIN_CALL", "MCP_TOOL_CALL"},
@@ -358,6 +373,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         encryption: bool = False,
         dm_disabled: bool = False,
         group_disabled: bool = False,
+        share_session_in_group: bool = True,
         groups: Optional[Dict[str, Any]] = None,
         vision_enabled: bool = False,
         history_limit: int = DEFAULT_HISTORY_LIMIT,
@@ -396,12 +412,16 @@ class AgentTeamsMatrixChannel(BaseChannel):
         # Channel-level mute
         self.dm_disabled: bool = dm_disabled
         self.group_disabled: bool = group_disabled
+        # Group session policy (upstream #7001): True = room-wide shared
+        # session (legacy behavior); False = per-sender isolated sessions.
+        self.share_session_in_group: bool = share_session_in_group
         # Per-room overrides
         self.groups: Dict[str, Any] = groups or {}
         # Media / history
         self.vision_enabled: bool = vision_enabled
         self.history_limit: int = max(0, history_limit)
         self.sync_timeout_ms: int = sync_timeout_ms
+        self.show_thinking: bool = show_thinking
 
         self._workspace_dir = (
             Path(workspace_dir).expanduser() if workspace_dir else None
@@ -411,6 +431,23 @@ class AgentTeamsMatrixChannel(BaseChannel):
         self._sync_task: Optional[asyncio.Task] = None
         self._typing_tasks: Dict[str, asyncio.Task] = {}
         self._room_histories: Dict[str, List[HistoryEntry]] = {}
+        # Per-room history generation + cumulative record counters. The send
+        # alignment gate (#1244) snapshots the generation into each turn's
+        # meta, so a different mention's _clear_history can no longer
+        # consume the turn's staleness marker (the shared buffer is
+        # consumed at the next enqueue).
+        self._room_history_gen: Dict[str, int] = {}
+        self._room_history_records: Dict[str, int] = {}
+        # Retained per-room event log with stable record indexes: when the
+        # send gate retriggers an in-flight turn, the events that made it
+        # stale are recovered from here (the shared buffer above is already
+        # consumed by the next enqueue and would no longer hold them).
+        # Same cap as the buffer — a turn in flight longer than the cap
+        # loses the head of its window (tail through the newest event is
+        # always retained).
+        self._room_event_log: Dict[str, List[Tuple[int, HistoryEntry]]] = {}
+        # Send alignment gate state: room_id -> {event_id, count, deadline}.
+        self._send_gate_state: Dict[str, Dict[str, Any]] = {}
         self._dm_room_cache: Dict[str, Dict[str, Any]] = {}
         self._teamharness_task_room_cache: Dict[str, Dict[str, Any]] = {}
         self._http_client: Optional[httpx.AsyncClient] = None
@@ -468,6 +505,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
             encryption=raw.get("encryption", False),
             dm_disabled=raw.get("dm_disabled", False),
             group_disabled=raw.get("group_disabled", False),
+            share_session_in_group=bool(raw.get("share_session_in_group", True)),
             groups=raw.get("groups"),
             vision_enabled=raw.get("vision_enabled", False),
             history_limit=raw.get("history_limit", DEFAULT_HISTORY_LIMIT),
@@ -1773,6 +1811,30 @@ class AgentTeamsMatrixChannel(BaseChannel):
             re.IGNORECASE,
         ):
             return True
+        # 4. matrix.to localpart-only link (domain omitted by some clients)
+        localpart = self._user_id.lstrip("@").split(":", 1)[0]
+        if localpart and formatted_body and re.search(
+            rf'href=["\']https://matrix\.to/#/{re.escape("@" + localpart)}["\']',
+            formatted_body,
+            re.IGNORECASE,
+        ):
+            return True
+        # 5. bare @localpart in plain text.
+        #    A Matrix localpart may contain [A-Za-z0-9._=/+-] (spec user
+        #    identifiers), so the mention token in text extends over those
+        #    characters. `@alice-dev`, `@alice+dev`, `@alice/dev` and
+        #    `@alice2` are OTHER users (longer localparts) and
+        #    `@alice:other.test` is a full MXID on ANOTHER domain — none
+        #    of them is our user in bare form. Require the token to end
+        #    exactly where our localpart ends: the next character must
+        #    not be a localpart character or ':' (which would start an
+        #    MXID domain we do not own).
+        if localpart:
+            token = re.compile(
+                rf"(?<![\w@])@{re.escape(localpart)}(?![A-Za-z0-9._=:/+-])"
+            )
+            if token.search(text):
+                return True
         return False
 
     def _teamharness_self_trigger(self, room_id: str, event: Any) -> dict[str, Any] | None:
@@ -1929,7 +1991,12 @@ class AgentTeamsMatrixChannel(BaseChannel):
         return user_id.split(":")[0].lstrip("@") or user_id
 
     def _record_history(self, room_id: str, entry: HistoryEntry) -> None:
-        """Append *entry* to the per-room history buffer (respect limit)."""
+        """Append *entry* to the per-room history buffer (respect limit).
+
+        Also advances the per-room history generation and record counters
+        used by the send alignment gate snapshot (#1244): every new room
+        event is a potential staleness signal for turns still in flight.
+        """
         limit = self.history_limit
         if limit <= 0:
             return
@@ -1937,6 +2004,14 @@ class AgentTeamsMatrixChannel(BaseChannel):
         history.append(entry)
         while len(history) > limit:
             history.pop(0)
+        self._room_history_gen[room_id] = self._room_history_gen.get(room_id, 0) + 1
+        self._room_history_records[room_id] = (
+            self._room_history_records.get(room_id, 0) + 1
+        )
+        log = self._room_event_log.setdefault(room_id, [])
+        log.append((self._room_history_records[room_id], entry))
+        while len(log) > limit:
+            log.pop(0)
 
     def _build_history_prefix(self, room_id: str) -> str:
         """Format buffered history entries as a multi-line text block."""
@@ -1950,6 +2025,33 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 line += f" [id:{e.message_id}]"
             lines.append(line)
         return "\n".join(lines)
+
+    def _build_missed_history(
+        self, room_id: str, since_records: int
+    ) -> Tuple[str, list]:
+        """(text, media) of retained events recorded after *since_records*.
+
+        The exact window that made a turn stale: the room events its
+        context snapshot did not cover.  Sourced from the retained
+        per-room event log rather than the shared buffer, which the
+        mention that made the turn stale has already consumed at its own
+        enqueue.  The log is capped like the buffer: a turn in flight
+        for longer than ``history_limit`` room events loses the head of
+        its window (the tail through the newest event is always
+        retained).  Media parts carried by the entries ride along.
+        """
+        lines: list[str] = []
+        media: list[Any] = []
+        for record_idx, e in self._room_event_log.get(room_id, []):
+            if record_idx <= since_records:
+                continue
+            line = f"{e.sender}: {e.body}"
+            if e.message_id:
+                line += f" [id:{e.message_id}]"
+            lines.append(line)
+            if e.media_parts:
+                media.extend(e.media_parts)
+        return "\n".join(lines), media
 
     def _apply_history_to_parts(
         self,
@@ -2004,6 +2106,21 @@ class AgentTeamsMatrixChannel(BaseChannel):
     def _clear_history(self, room_id: str) -> None:
         """Drop the buffered history for *room_id*."""
         self._room_histories.pop(room_id, None)
+
+    def _capture_send_gate_snapshot(self, meta: Dict[str, Any], room_id: str) -> None:
+        """Record this turn's room-history generation into its own meta.
+
+        The gate marker travels with the turn's send_meta (captured when
+        the turn's context is snapshotted, before its buffer clear), so a
+        different mention's ``_clear_history`` can no longer consume it:
+        at turn end the gate compares the room's current generation
+        against this per-turn snapshot instead of inspecting the shared
+        buffer, which another turn may have drained.
+        """
+        meta["send_gate_snapshot_gen"] = self._room_history_gen.get(room_id, 0)
+        meta["send_gate_snapshot_records"] = self._room_history_records.get(
+            room_id, 0
+        )
 
     async def _record_media_history(
         self,
@@ -2391,6 +2508,11 @@ class AgentTeamsMatrixChannel(BaseChannel):
             },
         }
 
+        if not is_dm:
+            # Per-turn gate snapshot: captured before the buffer clear,
+            # carried with this turn's meta so no later enqueue can
+            # consume it.
+            self._capture_send_gate_snapshot(payload["meta"], room_id)
         if self._enqueue:
             self._enqueue(payload)
             if not is_dm:
@@ -2791,6 +2913,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 "event_id": event.event_id,
                 "thread_root_event_id": event.event_id,
                 "sender_id": sender_id,
+                "is_thread_event": is_thread_event,
             },
         }
         if teamharness_self_trigger is not None:
@@ -2802,6 +2925,11 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 },
             )
 
+        if not is_dm and not is_thread_event:
+            # Per-turn gate snapshot: captured before the buffer clear,
+            # carried with this turn's meta so no later enqueue can
+            # consume it.
+            self._capture_send_gate_snapshot(payload["meta"], room_id)
         if self._enqueue:
             self._enqueue(payload)
             if not is_dm and not is_thread_event:
@@ -2963,9 +3091,15 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 "event_id": event.event_id,
                 "thread_root_event_id": event.event_id,
                 "sender_id": sender_id,
+                "is_thread_event": is_thread_event,
             },
         }
 
+        if not is_dm and not is_thread_event:
+            # Per-turn gate snapshot: captured before the buffer clear,
+            # carried with this turn's meta so no later enqueue can
+            # consume it.
+            self._capture_send_gate_snapshot(payload["meta"], room_id)
         if self._enqueue:
             self._enqueue(payload)
             if not is_dm and not is_thread_event:
@@ -3130,13 +3264,21 @@ class AgentTeamsMatrixChannel(BaseChannel):
         if not content:
             content = [TextContent(type=ContentType.TEXT, text="")]
 
-        # Use room_id as the AgentRequest user_id so that all participants
-        # in the same room share one session (QwenPaw keys session state on
-        # both session_id AND user_id).  The real sender is preserved in
-        # meta["sender_id"] for reply mentions.
+        # Session keying (QwenPaw keys session state on both session_id AND
+        # user_id).  share_session_in_group=True (default, legacy): user_id =
+        # room_id so all participants in the room share one session.
+        # share_session_in_group=False (upstream #7001): user_id = the real
+        # sender, so each sender in a group room gets an independent session.
+        # DMs are unaffected.  The real sender is always preserved in
+        # meta["sender_id"] for reply mentions, and replies still target the
+        # room (see get_to_handle_from_request).
         req = self.build_agent_request_from_user_content(
             channel_id=CHANNEL_KEY,
-            sender_id=room_id,
+            sender_id=(
+                sender_id
+                if meta.get("is_group") and not self.share_session_in_group
+                else room_id
+            ),
             session_id=session_id,
             content_parts=content,
             channel_meta=meta,
@@ -4041,9 +4183,14 @@ class AgentTeamsMatrixChannel(BaseChannel):
         """Route completed messages behind a processing root."""
         del request
         message_type = getattr(event, "type", None)
+        if self._is_reasoning_message(message_type) and not self.show_thinking:
+            # show_thinking disabled: reasoning is never rendered to the room.
+            return
         if self._is_reasoning_message(
             message_type,
         ) or self._is_tool_call_message(message_type):
+            if self._is_tool_call_message(message_type):
+                send_meta[_MATRIX_TURN_TOOL_ACTIVITY_KEY] = True
             await self._ensure_thread_root(to_handle, send_meta)
             await self._flush_pending_final_message_to_thread(
                 to_handle,
@@ -4062,6 +4209,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
             send_meta.pop(_MATRIX_FORCE_NOTICE_KEY, None)
             return
         if self._is_tool_output_message(message_type):
+            send_meta[_MATRIX_TURN_TOOL_ACTIVITY_KEY] = True
             await self._flush_pending_final_message_to_thread(
                 to_handle,
                 send_meta,
@@ -4127,16 +4275,17 @@ class AgentTeamsMatrixChannel(BaseChannel):
         del request
         text = (accumulated_text or "").strip()
         if stream_type == "reasoning":
-            await self._ensure_thread_root(to_handle, send_meta)
-            if not text:
-                text = self._text_from_message_event(event)
-            if text:
-                text = f"Thinking:\n\n{text}"
-                await self._send_streaming_thread_text(
-                    to_handle,
-                    send_meta,
-                    text,
-                )
+            if self.show_thinking:
+                await self._ensure_thread_root(to_handle, send_meta)
+                if not text:
+                    text = self._text_from_message_event(event)
+                if text:
+                    text = f"Thinking:\n\n{text}"
+                    await self._send_streaming_thread_text(
+                        to_handle,
+                        send_meta,
+                        text,
+                    )
             send_meta.pop(_MATRIX_STREAMING_REASONING_EVENT_ID_KEY, None)
             send_meta.pop(_MATRIX_STREAMING_REASONING_LAST_EDIT_KEY, None)
             send_meta.pop(_MATRIX_STREAMING_REASONING_STREAM_ID_KEY, None)
@@ -4185,6 +4334,159 @@ class AgentTeamsMatrixChannel(BaseChannel):
             await self._on_process_completed(None, to_handle, send_meta)
             self._proactive_send_state.pop(to_handle, None)
 
+    def _evaluate_send_gate(self, send_meta: Dict[str, Any], to_handle: str) -> tuple:
+        """Send alignment gate (#1244).
+
+        Returns ``(action, new_count)`` where action is:
+          - ``"ok"``: aligned (or not gated: DM / thread / no snapshot) —
+            flush the reply as usual.
+          - ``"retrigger"``: new room events landed after the turn's
+            context snapshot — drop the stale reply and re-trigger the
+            agent with the fresh context.
+          - ``"note"``: gate budget exhausted (retrigger count or
+            wall-clock deadline) — flush, then append a short note.
+
+        Alignment is decided against the per-turn history-generation
+        snapshot captured at enqueue time (``send_gate_snapshot_gen``),
+        not against the shared room buffer: another mention's enqueue
+        clears that buffer, so with the buffer as the marker a second
+        mention would consume the first turn's staleness signal and let
+        its stale draft through.
+        """
+        meta_dict = send_meta if isinstance(send_meta, dict) else {}
+        room_id = to_handle
+        if not meta_dict.get("is_group") or meta_dict.get("is_dm") or meta_dict.get("is_thread_event"):
+            return "ok", 0
+        turn_event_id = meta_dict.get("event_id") or ""
+        snap_gen = meta_dict.get("send_gate_snapshot_gen")
+        if snap_gen is None:
+            # Turn without a snapshot (legacy / non-enqueue paths): fall
+            # back to the shared-buffer heuristic.
+            entries = self._room_histories.get(room_id) or []
+            if not entries or not turn_event_id:
+                return "ok", len(entries)
+            new_count = len(entries)
+        else:
+            if self._room_history_gen.get(room_id, 0) == snap_gen:
+                # No room event since this turn's context snapshot.
+                return "ok", 0
+            if not turn_event_id:
+                return "ok", 0
+            snap_records = int(meta_dict.get("send_gate_snapshot_records") or 0)
+            new_count = max(
+                0, self._room_history_records.get(room_id, 0) - snap_records
+            )
+        now = time.time()
+        state = self._send_gate_state.get(room_id)
+        if state is None or state.get("event_id") != turn_event_id:
+            # Fresh conversation turn (a real mention): new gate budget.
+            self._send_gate_state[room_id] = {
+                "event_id": turn_event_id,
+                "count": 0,
+                "deadline": now + _MATRIX_SEND_GATE_MAX_WAIT_S,
+            }
+            state = self._send_gate_state[room_id]
+        if state["count"] >= _MATRIX_SEND_GATE_MAX_RETRIGGERS or now >= state["deadline"]:
+            return "note", new_count
+        return "retrigger", new_count
+
+    async def _retrigger_for_new_context(
+        self,
+        send_meta: Dict[str, Any],
+        to_handle: str,
+        new_count: int,
+    ) -> None:
+        """Drop the stale draft and re-trigger the agent with fresh context.
+
+        The events that made this turn stale are recovered from the
+        retained per-room event log (its snapshot records .. now, media
+        included), not from the shared buffer: the mention that made this
+        turn stale consumed that buffer at its own enqueue, so reading it
+        here would bake an empty context into the re-trigger.  The
+        re-triggered turn's gate snapshot is captured after the recovery
+        and thus advances only to the context actually supplied.  The
+        shared buffer is left untouched — it keeps serving first-pass
+        turns.  The in-flight thread-root placeholder is carried over so
+        the retriggered turn reuses that message (no orphaned
+        placeholder).
+        """
+        meta_dict = send_meta if isinstance(send_meta, dict) else {}
+        room_id = to_handle
+        state = self._send_gate_state.get(room_id) or {}
+        state["count"] = int(state.get("count", 0)) + 1
+        self._send_gate_state[room_id] = state
+
+        sender_id = meta_dict.get("sender_id") or self._user_id
+        nudge = (
+            f"[System] Your previous draft reply was NOT sent: {new_count} "
+            "new message(s) arrived in this room after your context "
+            "snapshot. Review the latest room state (history above) and "
+            "reply to the current conversation."
+        )
+        # Recover exactly the events this turn missed (its snapshot
+        # records .. now) from the retained log.  The shared buffer no
+        # longer holds them — the mention that made this turn stale
+        # consumed it at that mention's own enqueue.
+        snap_records = int(meta_dict.get("send_gate_snapshot_records") or 0)
+        missed_text, missed_media = self._build_missed_history(
+            room_id, snap_records
+        )
+        if missed_text:
+            nudge = (
+                f"{HISTORY_CONTEXT_MARKER}\n{missed_text}\n\n"
+                f"{CURRENT_MESSAGE_MARKER}\n{nudge}"
+            )
+        content_parts: list[Any] = [
+            TextContent(type=ContentType.TEXT, text=nudge),
+        ] + missed_media
+        worker_name = (self._user_id or "").split(":")[0].lstrip("@")
+        retrigger_meta: Dict[str, Any] = {
+            "room_id": room_id,
+            "is_dm": False,
+            "is_group": True,
+            "worker_name": worker_name,
+            "event_id": meta_dict.get("event_id"),
+            "thread_root_event_id": meta_dict.get("thread_root_event_id")
+            or meta_dict.get("event_id"),
+            "sender_id": sender_id,
+            "send_gate_retrigger": True,
+        }
+        # Reuse the in-flight thread-root placeholder: carrying the root id
+        # over makes the retriggered turn edit the same message instead of
+        # leaving an orphaned "处理中..." behind and posting a second
+        # placeholder (the stale draft was never flushed, so the message is
+        # still the placeholder).
+        carry_root = meta_dict.get(_MATRIX_OWN_THREAD_ROOT_KEY)
+        if carry_root:
+            retrigger_meta[_MATRIX_OWN_THREAD_ROOT_KEY] = carry_root
+            carry_meta_root = meta_dict.get(_THREAD_META_ROOT_KEY)
+            if carry_meta_root:
+                retrigger_meta[_THREAD_META_ROOT_KEY] = carry_meta_root
+        # The re-triggered turn snapshots the room state it actually
+        # received: the recovered window extends to the newest retained
+        # event, so current gen/records — and the next gate can only
+        # re-trigger on events arriving after this recovery.  (If the
+        # retained log dropped the window head under the cap, the tail
+        # through the newest event is what was supplied, which is exactly
+        # what current gen/records denotes.)
+        self._capture_send_gate_snapshot(retrigger_meta, room_id)
+        payload = {
+            "channel_id": CHANNEL_KEY,
+            "sender_id": sender_id,
+            "content_parts": content_parts,
+            "acl_sender_id": sender_id,
+            "meta": retrigger_meta,
+        }
+        logger.info(
+            "send gate: retrigger enqueued room=%s new_messages=%s count=%s",
+            room_id,
+            new_count,
+            state["count"],
+        )
+        if self._enqueue:
+            await self._send_typing(room_id, True)
+            self._enqueue(payload)
+
     async def _on_process_completed(
         self,
         request: Any,
@@ -4192,12 +4494,20 @@ class AgentTeamsMatrixChannel(BaseChannel):
         send_meta: Dict[str, Any],
     ) -> None:
         """Edit thread root with final reply, or send directly if no thread."""
+        gate_action, gate_new_count = self._evaluate_send_gate(send_meta, to_handle)
+        if gate_action == "retrigger":
+            await self._retrigger_for_new_context(send_meta, to_handle, gate_new_count)
+            return
         pending = send_meta.pop(_MATRIX_PENDING_FINAL_MESSAGE_KEY, None)
         streaming_final_text = send_meta.pop(
             _MATRIX_STREAMING_FINAL_TEXT_KEY,
             None,
         )
         is_placeholder = send_meta.pop(_MATRIX_PLACEHOLDER_THREAD_ROOT_KEY, False)
+        had_tool_activity = send_meta.pop(_MATRIX_TURN_TOOL_ACTIVITY_KEY, False)
+        # A silent turn that never ran a tool produced nothing: do not
+        # report it as completed (#1320).
+        no_output_marker = "已完成" if had_tool_activity else "本回合无产出"
         if is_placeholder:
             if streaming_final_text:
                 raw_text = streaming_final_text.strip()
@@ -4209,7 +4519,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     text = self._visible_final_text(raw_text)
                     if not text:
                         await self._edit_thread_root(
-                            to_handle, send_meta, "已完成",
+                            to_handle, send_meta, no_output_marker,
                         )
                     else:
                         html_body = _md_to_html(text)
@@ -4233,17 +4543,26 @@ class AgentTeamsMatrixChannel(BaseChannel):
                         )
                     else:
                         await self._edit_thread_root(
-                            to_handle, send_meta, "已完成",
+                            to_handle, send_meta, no_output_marker,
                         )
             else:
                 await self._edit_thread_root(
-                    to_handle, send_meta, "已完成",
+                    to_handle, send_meta, no_output_marker,
                 )
             self._active_thread_roots.pop(to_handle, None)
         elif streaming_final_text:
             await self.send(to_handle, streaming_final_text.strip(), send_meta)
         elif pending is not None:
             await self.send_message_content(to_handle, pending, send_meta)
+        if gate_action == "note":
+            await self._send_plain_text(
+                to_handle,
+                "(Note: "
+                f"{gate_new_count} new message(s) arrived in this room while "
+                "this reply was being drafted, so it may not reflect the "
+                "latest room state / 本回复起草期间房间新增 "
+                f"{gate_new_count} 条消息，可能未反映最新房间状态)",
+            )
         await self._send_typing(to_handle, False)
         base_completed = getattr(super(), "_on_process_completed", None)
         try:
@@ -4258,7 +4577,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         to_handle: str,
         err_text: str,
     ) -> None:
-        """Edit thread root on error; suppress user-visible cancellation noise."""
+        """Edit thread root on error; suppress cancellation noise; mask raw errors before room send."""
         root_id = self._active_thread_roots.pop(to_handle, None)
         if root_id:
             fallback_meta = {_MATRIX_OWN_THREAD_ROOT_KEY: root_id}
@@ -4271,7 +4590,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
             )
             await self._send_typing(to_handle, False)
             return
-        await super()._on_consume_error(request, to_handle, err_text)
+        logger.warning('MatrixChannel: consume error masked before room send component=matrix handle=%s err_text=%r', to_handle, err_text)
+        await super()._on_consume_error(request, to_handle, _CONSUME_ERROR_NOTICE)
 
     # ------------------------------------------------------------------
     # Outgoing send — retry helper

@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 
@@ -92,4 +93,38 @@ func (h *GatewayHandler) DeleteConsumer(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ListAIRoutes serves GET /api/v1/gateway/ai-routes: the read-only AI route
+// catalog. Each entry is a gateway route — its name, the providers serving
+// it (upstreams) and the consumers authorized on it. A route is the /v1
+// entry point with consumer authorization, NOT a model: one route can
+// serve several models, and the model IDs valid in chat-completion requests
+// (and in Worker/Manager model fields) are defined by the route's upstream
+// provider, not by the route name. This endpoint therefore answers "which
+// routes exist and who may use them", not "which model names are valid".
+// The route is registered with the "gateway" resource kind, which the
+// authorizer grants to admin/manager only (L1); team leaders, humans and
+// workers get 403.
+func (h *GatewayHandler) ListAIRoutes(w http.ResponseWriter, r *http.Request) {
+	if h.gw == nil {
+		httputil.WriteError(w, http.StatusNotImplemented, "no gateway backend available")
+		return
+	}
+
+	routes, err := h.gw.ListAIRoutes(r.Context())
+	if err != nil {
+		if errors.Is(err, gateway.ErrUnsupportedOp) {
+			httputil.WriteError(w, http.StatusNotImplemented, err.Error())
+			return
+		}
+		log.Printf("[ERROR] list ai routes: %v", err)
+		httputil.WriteError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	if routes == nil {
+		routes = []gateway.AIRouteInfo{}
+	}
+	httputil.WriteJSON(w, http.StatusOK, AIRouteListResponse{Routes: routes, Total: len(routes)})
 }

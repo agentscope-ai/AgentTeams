@@ -68,6 +68,7 @@ type memberRuntimeConfigMatrix struct {
 
 type memberRuntimeConfigDesired struct {
 	Model              *memberRuntimeConfigModel         `json:"model,omitempty"`
+	SubagentModel      *memberRuntimeConfigModel         `json:"subagentModel,omitempty"`
 	AgentPackage       *memberRuntimeConfigAgentPackage  `json:"agentPackage,omitempty"`
 	InlineConfig       *memberRuntimeConfigInlineConfig  `json:"inlineConfig,omitempty"`
 	SkillRegistry      *memberRuntimeConfigSkillRegistry `json:"skillRegistry,omitempty"`
@@ -81,10 +82,11 @@ type memberRuntimeConfigDesired struct {
 }
 
 type memberRuntimeConfigModel struct {
-	ProviderID string `json:"providerId"`
-	Model      string `json:"model"`
-	GatewayURL string `json:"gatewayUrl,omitempty"`
-	GatewayKey string `json:"gatewayKey,omitempty"`
+	ProviderID string   `json:"providerId"`
+	Model      string   `json:"model"`
+	GatewayURL string   `json:"gatewayUrl,omitempty"`
+	GatewayKey string   `json:"gatewayKey,omitempty"`
+	Input      []string `json:"input,omitempty"` // model input modalities, e.g. ["text", "image"]
 }
 
 type memberRuntimeConfigAgentPackage struct {
@@ -269,6 +271,17 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 			Model:      req.Spec.Model,
 			GatewayURL: gatewayURL,
 			GatewayKey: strings.TrimSpace(req.GatewayKey),
+			Input:      d.agentConfig.ResolveModelInput(req.Spec.Model),
+		}
+	}
+	// Subagent model: callers pass the resolved value (worker value wins
+	// over the team default). Mirrors the openclaw.json projection so
+	// runtimes that consume this document apply the override at
+	// startup/recreation, not only through the controller hot apply.
+	if req.SubagentModel != "" {
+		desired.SubagentModel = &memberRuntimeConfigModel{
+			ProviderID: "agentteams-gateway",
+			Model:      req.SubagentModel,
 		}
 	}
 	if req.Spec.Package != "" {

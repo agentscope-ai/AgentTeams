@@ -47,6 +47,13 @@ const AnnotationEdgeAppliedUUID = "agentteams.io/edge-applied-uuid"
 // Worker so independent Worker reconciles preserve its scoped team storage access.
 const AnnotationWorkerTeamName = "agentteams.io/team-name"
 
+// AnnotationSubagentModelApplied records the Team.spec.subagentModel value that
+// was last propagated to member workers. The TeamReconciler compares it against
+// the live spec value; on a change it bumps each member Worker's
+// resourceVersion so their config reconciles re-resolve the team default
+// (read-time merge — the Team never writes Worker specs).
+const AnnotationSubagentModelApplied = "agentteams.io/subagent-model-applied"
+
 // AccessEntry declares one cloud-permission grant under a logical
 // service. v1 supported services: "object-storage", "ai-gateway", "ai-registry", "schedulerx3".
 //
@@ -176,11 +183,19 @@ type Worker struct {
 }
 
 type WorkerSpec struct {
-	Model         string                     `json:"model"`
-	ModelProvider string                     `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
-	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | hermes | qwenpaw | deepseek-harness (default: openclaw)
-	Image         string                     `json:"image,omitempty"`         // custom Docker image
-	WorkerName    string                     `json:"workerName,omitempty"`    // business/runtime identity (Matrix localpart, OSS path key)
+	Model         string `json:"model"`
+	ModelProvider string `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
+	// SubagentModel optionally names a (cheaper/faster) model used by
+	// spawned subagents instead of the worker's primary model. It must be
+	// a model id served by the team's AI gateway (free string; the
+	// controller does not validate against any catalog — an unknown model
+	// surfaces as a visible upstream error at spawn time). Consumed by
+	// QwenPaw >= 2.1.1 via the native AgentProfileConfig.subagent_model
+	// field; on older runtimes the field is silently ignored.
+	SubagentModel string                     `json:"subagentModel,omitempty"`
+	Runtime       string                     `json:"runtime,omitempty"`    // openclaw | copaw | hermes | qwenpaw | deepseek-harness (default: openclaw)
+	Image         string                     `json:"image,omitempty"`      // custom Docker image
+	WorkerName    string                     `json:"workerName,omitempty"` // business/runtime identity (Matrix localpart, OSS path key)
 	Identity      string                     `json:"identity,omitempty"`
 	Soul          string                     `json:"soul,omitempty"`
 	Agents        string                     `json:"agents,omitempty"`
@@ -373,16 +388,30 @@ type DingTalkChannelSpec struct {
 }
 
 type WorkerStatus struct {
-	ObservedGeneration int64               `json:"observedGeneration,omitempty"`
-	SpecHash           string              `json:"specHash,omitempty"`
-	Phase              string              `json:"phase,omitempty"` // Pending/Running/Sleeping/Failed
-	MatrixUserID       string              `json:"matrixUserID,omitempty"`
-	RoomID             string              `json:"roomID,omitempty"`
-	ContainerState     string              `json:"containerState,omitempty"`
-	LastHeartbeat      string              `json:"lastHeartbeat,omitempty"`
-	LastActiveAt       string              `json:"lastActiveAt,omitempty"`
-	Message            string              `json:"message,omitempty"`
-	ExposedPorts       []ExposedPortStatus `json:"exposedPorts,omitempty"`
+	ObservedGeneration int64  `json:"observedGeneration,omitempty"`
+	SpecHash           string `json:"specHash,omitempty"`
+	Phase              string `json:"phase,omitempty"` // Pending/Running/Sleeping/Failed
+	MatrixUserID       string `json:"matrixUserID,omitempty"`
+	RoomID             string `json:"roomID,omitempty"`
+	ContainerState     string `json:"containerState,omitempty"`
+	LastHeartbeat      string `json:"lastHeartbeat,omitempty"`
+	LastActiveAt       string `json:"lastActiveAt,omitempty"`
+	// AgentStatus is the worker runtime's task-level state self-reported by
+	// the worker heartbeat. Values: "idle" (no active tasks), "running"
+	// (one or more active tasks), "disabled". Empty when the runtime does
+	// not report it (legacy or non-QwenPaw runtimes).
+	AgentStatus string `json:"agentStatus,omitempty"`
+	// RunningTaskCount is the number of active runtime tasks reported by the
+	// worker heartbeat. Nil when unknown or not reported.
+	RunningTaskCount *int `json:"runningTaskCount,omitempty"`
+	// LastRunAt is the runtime-reported timestamp of the last task start
+	// (RFC3339 UTC, from the QwenPaw agent-status endpoint).
+	LastRunAt string `json:"lastRunAt,omitempty"`
+	// LastFinishAt is the runtime-reported timestamp of the last task finish
+	// (RFC3339 UTC, from the QwenPaw agent-status endpoint).
+	LastFinishAt string              `json:"lastFinishAt,omitempty"`
+	Message      string              `json:"message,omitempty"`
+	ExposedPorts []ExposedPortStatus `json:"exposedPorts,omitempty"`
 
 	// BackendRuntime records the backend type currently used for this worker's container.
 	// Set after successful creation or backend switch.
@@ -442,6 +471,13 @@ type TeamSpec struct {
 	// Worker's openclaw.json and coordination context AGENTS.md.
 	// Example: "30m". Empty means leader heartbeat is disabled.
 	HeartbeatEvery string `json:"heartbeatEvery,omitempty"`
+
+	// SubagentModel is the team-wide default for the model used by spawned
+	// subagents (see WorkerSpec.SubagentModel). A worker's own
+	// subagentModel always takes precedence; members without an explicit
+	// value inherit this default via read-time merge during their config
+	// reconcile. Changing it re-triggers member config reconciles.
+	SubagentModel string `json:"subagentModel,omitempty"`
 }
 
 // TeamWorkerRef references an existing Worker CR as a team member.
@@ -549,6 +585,11 @@ type TeamMemberStatus struct {
 	Message string `json:"message,omitempty"`
 	// LastActiveAt is the latest runtime-reported business activity time.
 	LastActiveAt string `json:"lastActiveAt,omitempty"`
+	// AgentStatus mirrors the member's Worker.Status.AgentStatus (runtime
+	// task state: "idle" / "running" / "disabled"; empty = not reported).
+	AgentStatus string `json:"agentStatus,omitempty"`
+	// LastFinishAt mirrors the member's Worker.Status.LastFinishAt.
+	LastFinishAt string `json:"lastFinishAt,omitempty"`
 	// LastHeartbeat is the latest heartbeat timestamp for this member.
 	LastHeartbeat string `json:"lastHeartbeat,omitempty"`
 	// ExposedPorts records the ports currently exposed via Higress for this
@@ -585,6 +626,22 @@ type HumanSpec struct {
 	AccessibleWorkers []string            `json:"accessibleWorkers,omitempty"`
 	IdentitySource    *IdentitySourceSpec `json:"identitySource,omitempty"`
 	Note              string              `json:"note,omitempty"`
+	// WorkspaceFileAccess controls what this human may do to the knowledge
+	// base files (workspace-files endpoints) of workers in their own teams:
+	// "read" (the default, including when empty) allows the read endpoints
+	// (tree / file-metadata / file-content / file-download); "readwrite"
+	// additionally allows PUT file-content. Write is an explicit opt-in so
+	// that a controller upgrade cannot silently grant pre-existing humans
+	// the new ability to modify worker knowledge files. Admin (L1) callers
+	// are never restricted, and team leaders always stay read-only on this
+	// API.
+	WorkspaceFileAccess string `json:"workspaceFileAccess,omitempty"`
+	// Capabilities grants named sensitive-surface privileges beyond the L2
+	// baseline (five-value set per docs/design/capability-foundation.md,
+	// #1220 §3). List-shaped so future values are additive; unknown values
+	// are rejected at admission by the human-update API. Team leaders and
+	// other SA-based identities never hold capabilities (#1220 §5).
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 type IdentitySourceSpec struct {

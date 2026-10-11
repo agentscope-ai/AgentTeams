@@ -30,6 +30,19 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 	}
 	modelName = strings.TrimPrefix(modelName, "agentteams-gateway/")
 
+	// agents.defaults.model block. The subagent entry (QwenPaw >= 2.1.1
+	// native subagent_model) uses the dict form consumed by the worker
+	// bridge overlay; primary keeps the historical "provider/model" string.
+	modelCfg := map[string]interface{}{
+		"primary": "agentteams-gateway/" + modelName,
+	}
+	if req.SubagentModelName != "" {
+		modelCfg["subagent"] = map[string]interface{}{
+			"provider_id": "agentteams-gateway",
+			"model":       req.SubagentModelName,
+		}
+	}
+
 	matrixServerURL := g.config.MatrixServerURL
 	if matrixServerURL == "" {
 		// K8s deployments must set AGENTTEAMS_MATRIX_URL (Helm injects it automatically).
@@ -137,11 +150,9 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 			"defaults": map[string]interface{}{
 				"timeoutSeconds": 1800,
 				"workspace":      "~",
-				"model": map[string]interface{}{
-					"primary": "agentteams-gateway/" + modelName,
-				},
-				"models":        g.allModelAliases(modelName),
-				"maxConcurrent": 4,
+				"model":          modelCfg,
+				"models":         g.allModelAliases(modelName),
+				"maxConcurrent":  4,
 				"subagents": map[string]interface{}{
 					"maxConcurrent": 8,
 				},
@@ -364,6 +375,18 @@ func (g *Generator) applyChannelPolicy(config map[string]interface{}, policy *Ch
 			dm["allowFrom"] = filtered
 		}
 	}
+}
+
+// ResolveModelInput returns the input modalities (e.g. ["text", "image"]) for
+// a model, applying the same config overrides as resolveModelSpec. It is the
+// exported capability view used by the runtime-config projector so that
+// managed runtimes (QwenPaw worker) receive model capabilities without having
+// to re-derive them from the model name.
+func (g *Generator) ResolveModelInput(modelName string) []string {
+	if g == nil {
+		return nil
+	}
+	return g.resolveModelSpec(modelName).Input
 }
 
 // resolveModelSpec returns model parameters, applying config overrides.

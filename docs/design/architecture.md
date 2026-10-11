@@ -135,6 +135,10 @@ flowchart TB
 - **MCP servers** and optional **HTTP/gRPC exposure** of worker ports are modeled as gateway routes managed during reconciliation.
 - **Console** (session-cookie auth) is used for route/consumer/MCP administration; the Manager’s init scripts and skills align with that model.
 
+See the [Higress Gateway API reference](../usage/higress-gateway-api.md) for the complete list
+of externally callable endpoints (LLM, MCP, exposed worker ports, bundled services) and
+the Console API surface.
+
 ---
 
 ## Runtime model

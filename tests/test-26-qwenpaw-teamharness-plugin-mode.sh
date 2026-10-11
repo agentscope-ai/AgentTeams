@@ -31,7 +31,7 @@ LEADER_PACKAGE_V1_MARKER="TEST26_LEADER_PACKAGE_V1_${TEST_RUN_ID}"
 WORKER_PACKAGE_V1_MARKER="TEST26_WORKER_PACKAGE_V1_${TEST_RUN_ID}"
 LEADER_PACKAGE_V2_MARKER="TEST26_LEADER_PACKAGE_V2_${TEST_RUN_ID}"
 WORKER_PACKAGE_V2_MARKER="TEST26_WORKER_PACKAGE_V2_${TEST_RUN_ID}"
-DONE_LINE="TEST26_TEAMHARNESS_DONE ${TASK_ID} ${MARKER}"
+DONE_LINE="TASK_COMPLETED: ${TASK_ID}"
 LEADER_CONTAINER="$(worker_container_name "${TEST_LEADER}")"
 WORKER_CONTAINER="$(worker_container_name "${TEST_WORKER}")"
 K8S_NAMESPACE="${AGENTTEAMS_E2E_NAMESPACE:-default}"
@@ -287,7 +287,17 @@ with urlopen("http://127.0.0.1:8088/api/mcp/teamharness") as response:
 cwd = Path(client["cwd"])
 working_dir = cwd.parents[2]
 workspace = working_dir / "workspaces" / "default"
+# QwenPaw 2.0.1 masks custom env values, including both role variables.
+# Recover the role from Controller-projected state, never the requested action
+# or the container's stale startup environment.
+import yaml
+runtime_path = working_dir.parent / "runtime" / "runtime.yaml"
+runtime_role = (yaml.safe_load(runtime_path.read_text()).get("member") or {}).get("role")
+if not runtime_role:
+    raise RuntimeError("runtime.yaml has no member role for the MCP probe")
 derived_env = {
+    "AGENTTEAMS_AGENT_ROLE": runtime_role,
+    "AGENTTEAMS_WORKER_ROLE": runtime_role,
     "QWENPAW_WORKING_DIR": str(working_dir),
     "TEAMHARNESS_RUNTIME_CONFIG": str(working_dir.parent / "runtime" / "runtime.yaml"),
     "TEAMHARNESS_SHARED_DIR": str((workspace / "shared").resolve()),
@@ -298,12 +308,14 @@ env = dict(os.environ)
 for key, value in (client.get("env") or {}).items():
     key = str(key)
     value = str(value)
-    if key in os.environ:
-        env[key] = os.environ[key]
+    # Match the MCP client's configured environment. The container's initial
+    # role can still be standalone after team attachment updates the client.
+    if "*" not in value:
+        env[key] = value
     elif key in derived_env:
         env[key] = derived_env[key]
-    elif "*" not in value:
-        env[key] = value
+    elif key in os.environ:
+        env[key] = os.environ[key]
 request = {
     "jsonrpc": "2.0",
     "id": 1,
@@ -358,6 +370,21 @@ for line in sys.stdin:
 print("no JSON MCP payload found", file=sys.stderr)
 raise SystemExit(1)
 '
+}
+
+# A real Leader may already have accepted the result before this observer checks.
+# effective is intentionally false after acceptance; require its recorded history.
+_task_check_succeeded() {
+    jq -e --arg task "${TASK_ID}" --arg marker "${MARKER}" '
+        .ok == true and .task.task_id == $task and
+        .result.status == "SUCCESS" and
+        (.result.summary | contains($marker)) and
+        (.validationErrors | type == "array" and length == 0) and
+        ((.task.status == "submitted" and .effective == true) or
+         (.task.status == "completed" and
+          any(.task.history[]?; .action == "accept_task_result" and
+              .from == "submitted" and .to == "completed")))
+    ' >/dev/null 2>&1
 }
 
 _leader_mcp_call() {
@@ -1116,8 +1143,9 @@ server = mcp.get(mcp_name) or {}
 if server.get("url") != mcp_url or server.get("transport") != api_mcp_transport:
     problems.append("mcp:api")
 authorization = (server.get("headers") or {}).get("Authorization", "")
-if not authorization or "*" not in authorization:
-    problems.append("auth:api")
+# This fixture is outside the trusted gateway; never forward its credential.
+if authorization:
+    problems.append("auth:external_credential_leak")
 package_server = mcp.get(package_mcp_name) or {}
 if package_server.get("url") != package_mcp_url or not package_server.get("enabled"):
     problems.append("package_mcp:api")
@@ -1370,12 +1398,9 @@ Then call taskflow submit_task with status SUCCESS, a summary containing
 ${MARKER}, and both shared/tasks/${TASK_ID}/result.md and
 shared/tasks/${TASK_ID}/workspace/readiness-note.txt as deliverables.
 
-After submit_task succeeds, reply in the Team Room with exactly this completion
-line and one short summary sentence:
-${DONE_LINE}
-
-Mention the leader Matrix user from your TeamHarness roster facts in the
-completion message.
+After submit_task succeeds, its automatic TASK_COMPLETED notification must
+reach the Team Room and mention the leader. Do not send a duplicate completion
+notification.
 EOF
 )
 
@@ -1432,10 +1457,20 @@ fi
 
 CHECK_ARGS=$(jq -nc --arg task "${TASK_ID}" '{role:"leader", action:"check_task", payload:{taskId:$task}}')
 TASK_CHECK=$(_leader_mcp_call taskflow "${CHECK_ARGS}" 2>/dev/null || echo "{}")
-if echo "${TASK_CHECK}" | jq -e '.ok == true and .effective == true' >/dev/null 2>&1; then
+if echo "${TASK_CHECK}" | _task_check_succeeded; then
     log_pass "Leader verified submitted worker result through taskflow"
 else
     log_fail "Leader could not verify submitted worker result through taskflow: ${TASK_CHECK}"
+fi
+
+# Existence alone does not prove that the Worker produced this run's deliverable.
+DELIVERABLE_CONTENT=$(minio_read_file "teams/${TEST_TEAM}/shared/tasks/${TASK_ID}/workspace/readiness-note.txt" 2>/dev/null || true)
+# QwenPaw write_file uses UTF-8 with BOM for a new text file.
+DELIVERABLE_CONTENT="${DELIVERABLE_CONTENT#$'\xEF\xBB\xBF'}"
+if [ "${DELIVERABLE_CONTENT}" = "${MARKER}" ]; then
+    log_pass "Persisted task deliverable matches this run's marker"
+else
+    log_fail "Persisted task deliverable does not match this run's marker"
 fi
 
 _dump_debug_snapshot

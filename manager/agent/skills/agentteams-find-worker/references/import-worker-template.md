@@ -79,7 +79,7 @@ bash /opt/agentteams/agent/skills/agentteams-find-worker/scripts/install-worker-
   --template <TEMPLATE_NAME> \
   --worker-name <WORKER_NAME> \
   --model <MODEL_ID> \
-  --runtime openclaw|copaw \
+  --runtime openclaw|qwenpaw \
   --skills s1,s2 \
   --mcp-servers m1,m2
 ```

@@ -86,6 +86,11 @@ type MemberContext struct {
 	Role        MemberRole
 	Spec        v1beta1.WorkerSpec
 
+	// TeamSubagentModel is the Team.spec.subagentModel default for this
+	// member, resolved by the owning reconciler (read-time merge input).
+	// An explicit Spec.SubagentModel always takes precedence.
+	TeamSubagentModel string
+
 	// Generation / ObservedGeneration are metadata included in logs to aid
 	// debugging. They are NOT used for spec-change detection — callers must
 	// set SpecChanged explicitly (see field doc below).
@@ -383,6 +388,15 @@ func EnsureMemberServiceAccount(ctx context.Context, d MemberDeps, m MemberConte
 	return nil
 }
 
+// resolveSubagentModel applies the precedence rule for the subagent model:
+// an explicit worker value wins over the team-wide default.
+func resolveSubagentModel(specValue, teamDefault string) string {
+	if specValue != "" {
+		return specValue
+	}
+	return teamDefault
+}
+
 // ReconcileMemberConfig pushes all OSS config (package, inline configs,
 // openclaw.json, mcporter, AGENTS.md, builtin skills) for the member.
 func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, state *MemberState) error {
@@ -411,6 +425,7 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 			Role:                  m.Role.String(),
 			Generation:            m.Generation,
 			Spec:                  m.Spec,
+			SubagentModel:         resolveSubagentModel(m.Spec.SubagentModel, m.TeamSubagentModel),
 			MatrixUserID:          state.MatrixUserID,
 			PersonalRoomID:        state.RoomID,
 			MatrixAccessToken:     matrixAccessToken,
@@ -431,9 +446,12 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 		return fmt.Errorf("write inline configs: %w", err)
 	}
 
+	// Subagent model: explicit worker value wins; otherwise inherit the
+	// team-wide default (read-time merge — no spec writes, no second writer).
 	if err := d.Deployer.DeployWorkerConfig(ctx, service.WorkerDeployRequest{
 		Name:           m.RuntimeName,
 		Spec:           m.Spec,
+		SubagentModel:  resolveSubagentModel(m.Spec.SubagentModel, m.TeamSubagentModel),
 		Role:           m.Role.String(),
 		MatrixToken:    state.ProvResult.MatrixToken,
 		GatewayKey:     state.ProvResult.GatewayKey,
@@ -461,7 +479,7 @@ func reconcileMemberSkills(ctx context.Context, d MemberDeps, m MemberContext, s
 	if len(m.Spec.Skills) == 0 && len(m.Spec.RemoteSkills) == 0 {
 		return
 	}
-	if err := d.Deployer.PushOnDemandSkills(ctx, m.RuntimeName, m.Spec.Skills, m.Spec.RemoteSkills); err != nil {
+	if err := d.Deployer.PushOnDemandSkills(ctx, m.RuntimeName, m.TeamName, m.Spec.Skills, m.Spec.RemoteSkills); err != nil {
 		log.FromContext(ctx).Info("declared Skill recovery failed (non-blocking warning)",
 			"worker", m.RuntimeName,
 			"error", err.Error())

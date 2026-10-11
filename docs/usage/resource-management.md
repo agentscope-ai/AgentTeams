@@ -137,6 +137,51 @@ All supported Dashboard distribution paths update `spec.skills`. The Controller 
 
 You can also use `spec.package` to provide a Worker package containing a `skills/` directory. Package skills and assigned skills are merged without conflict.
 
+### Skill Catalog API
+
+`GET /api/v1/skills` returns the read-only catalog of skills available in the deployment:
+
+- **`source: "builtin"`** — the skills shipped with the agent templates, with the providing templates listed in `agents` and the supporting runtimes in `runtimes` (derived from the deployer's own template selection, so the catalog never drifts from what workers actually receive).
+- **`source: "plugin"`** — the skills shipped inside plugin packages (e.g. TeamHarness), discovered from each package's `plugin.yaml` manifest — the same source the plugin build packages into the worker images. Entries carry the `plugin` name; they are read-only and non-assignable (a worker has the skill iff it has the plugin — no `runtimes`/`agents`/per-worker assignment field).
+- **`source: "shared"`** — the skills staged under `agents/global/skills/` by the Dashboard's skill-upload flow, available for distribution to any worker. This prefix is a staging area, not a distribution channel: deleting an entry removes it from the catalog and the Dashboard's global area but never touches already-distributed per-worker copies or existing `spec.skills` assignments (no cascade).
+- **`source: "team"`** (only with `?team=`) — the team's own skills under `teams/<team>/skills/`, published through `POST /api/v1/skills` (see below).
+
+Output is sorted by name; the endpoint is metadata-only — no skill content, no registry calls, no credentials. Entries carry `name`/`description`/`source` plus `version`/`requirements` (builtin) and `updated_at` (shared). Without a team parameter the catalog is **admin (L1) only** — non-admin callers receive `400 team scope required`. With `?team=<name>` the catalog is team-scoped: admin reads any team, an L2 human or team leader reads their own team; a cross-team or unknown team reads `404` (indistinguishable from "no such team"). See [Skill Catalog API](../design/skill-catalog-api.md) and [Team Skills](../design/team-skills.md).
+
+### Team Skills
+
+A **team skill** belongs to one team (storage: `teams/<team>/skills/<name>/`) — the middle layer between deployment-wide skills and per-worker copies. Publishing and assigning:
+
+1. **Publish** (admin, any team; or the team's L2 human, own team only):
+
+   ```sh
+   curl -X POST "$CONTROLLER/api/v1/skills" \
+     -H "Authorization: Bearer $TOKEN" \
+     -F "scope=team" -F "team=marketing" \
+     -F "file=@./marketing-briefing.zip"
+   ```
+
+   The zip must contain exactly one top-level directory (the skill root,
+   named like the skill), with `SKILL.md` at its root whose frontmatter
+   `name` equals the directory name. Max 64 MB (zip and uncompressed).
+   The upload is content-scanned (best-effort): a blocked scan returns
+   `422` with the findings; an unavailable scan proceeds and reports
+   `scan.status: "skipped"`. Re-uploading the same skill replaces it
+   exactly (dropped files are deleted). `scope=deployment` (admin only)
+   publishes to `agents/global/skills/` instead.
+2. **Assign**: update the Worker's `spec.skills` (API, Dashboard, or
+   through the Manager). At the next reconcile the Controller scans the
+   skill **again, mandatorily** (a blocked or unavailable scan is not
+   copied and surfaces as a Worker warning), then copies it into
+   `agents/<worker>/skills/<name>/`; the Worker's sync loop materializes
+   it into its native workspace within the sync interval.
+
+Team leaders can browse their team's catalog (`GET /api/v1/skills?team=…`)
+as the assign surface but cannot publish; manager and worker principals
+cannot publish at all. On a name clash the **team layer wins** over the
+builtin library. See [Team Skills design](../design/team-skills.md) for
+the full contract, scan semantics, and the k8s-mode limitation.
+
 ### Worker with Custom Package
 
 ```yaml
@@ -178,6 +223,18 @@ When the Controller receives a Worker resource, it executes:
 | Failed | Creation or runtime failure — check `status.message` |
 
 **Status fields (subset):** `status.observedGeneration`, `status.matrixUserID`, `status.roomID`, `status.containerState`, `status.lastHeartbeat`, `status.message`, `status.exposedPorts` (per-port `domain` after expose).
+
+### Worker Updates by Role (API)
+
+`PUT /api/v1/workers/{name}` is a merge-patch: only fields present in the body are changed. What each role may update:
+
+| Role | Scope | Fields |
+|------|-------|--------|
+| admin / manager | any worker | all fields |
+| team leader | workers in their team | all fields |
+| L2 human (`permissionLevel: 2`) | workers in `accessibleTeams` only | `skills` |
+
+L2 humans manage the built-in skill assignments of the workers they coordinate without escalating to the admin. `remoteSkills` and `mcpServers` are not L2-writable yet: the MCP path can exfiltrate the gateway consumer key (the generator attaches `Authorization: Bearer <gatewayKey>` to every MCP entry), so both fields return `400` for L2 callers until the elevated-capability design lands (see the L2 permission design issue #1220). Other fields — `model`, `image`, `soul`, `agents`, `runtime`, `package`, `expose`, `channelPolicy`, `resources`, `containerManaged`, `state` — stay in the team owner's domain; a body that touches them is rejected with `400`. Out-of-scope workers (cross-team or standalone) are invisible to L2 humans on both read and update (`404`), keeping the endpoint probe-resistant. See [L2 Human Worker-Scoped Write](../design/l2-worker-scoped-write.md).
 
 ## Team
 
@@ -427,6 +484,7 @@ spec:
 | `spec.permissionLevel` | int | Yes | — | Permission level: 1, 2, or 3 |
 | `spec.accessibleTeams` | []string | No | — | Accessible Team list (effective for L2) |
 | `spec.accessibleWorkers` | []string | No | — | Accessible standalone Worker list (effective for L2/L3) |
+| `spec.capabilities` | []string | No | — | Sensitive-surface privileges beyond the L2 baseline: `full_access`, `channel_secrets`, `external_sources`, `approval_policy`, `secret_reveal` (see [capability-foundation](../design/capability-foundation.md)) |
 | `spec.note` | string | No | — | Notes |
 
 ### Three-Level Permission Model
@@ -481,6 +539,17 @@ Human permissions are enforced through two mechanisms:
 | L1 | Added to Manager + all Leaders + all Workers | All Rooms |
 | L2 | Added to specified Teams' Leaders + Workers + specified standalone Workers | Specified Team Rooms + Worker Rooms |
 | L3 | Added to specified Workers | Specified Worker Rooms |
+
+### Human Updates (API)
+
+`PUT /api/v1/humans/{name}` updates an existing human's permission profile. It is a merge-patch: only fields present in the body change; an absent field is kept, and an explicitly empty list clears it.
+
+- **Updatable:** `displayName`, `email`, `permissionLevel` (1/2/3), `accessibleTeams`, `accessibleWorkers`, `note`.
+- **Not updatable:** `name` and the Matrix identity (re-provisioning the account is a separate operation).
+- **Validation:** `permissionLevel` outside 1–3 → `400`; `accessibleTeams` / `accessibleWorkers` referencing missing Teams/Workers → `400` naming the references.
+- **Authorization:** admin / manager only. Team leaders, team-scoped humans, and worker accounts are denied — permission grants are an admin operation.
+
+The update is applied to the Human CR; the existing human reconcile then re-syncs Matrix invitations, room memberships, and `groupAllowFrom` to match the new scope. This endpoint does not change Matrix room power levels: a `permissionLevel` change affects API authorization immediately, but room administration privileges in existing rooms are not altered by the update.
 
 ### Human Creation Flow
 
@@ -965,6 +1034,69 @@ agt apply worker --name alice --model qwen3.5-plus
 | `dmDenyExtra` | Deny list for DMs |
 
 Set `spec.channelPolicy` on a Worker for per-member policy, and `spec.channelPolicy` on a Team for Team-wide policy.
+
+## Worker channel configuration (proxy)
+
+Each worker's qwenpaw app exposes a channel-configuration API (QQ / Matrix /
+DingTalk / ...). The Controller proxies it so admins and L2 humans configure
+channels through the API or a graphical frontend (workbench plugin /
+dashboard) instead of opening a shell on the worker container:
+
+```bash
+# List a worker's channel configs
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/channels \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+
+# Save a channel (body = the full channel config; takes effect immediately, no restart)
+curl -s -X PUT http://127.0.0.1:8090/api/v1/workers/{name}/channels/qq \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"enabled":true,"app_id":"...","client_secret":"***"}'
+# → 200, body verbatim, X-AgentTeams-MinIO-Persisted: true|false|skipped
+```
+
+The `schemas` route returns per-channel form definitions (field names,
+types, labels, options) so frontends render the connect form without
+per-channel code. The `conflict-check` route (POST) detects other agents
+holding the same channel credentials before you save a config — on a
+2.2.x worker it runs server-side; on an older build the upstream's own
+`404` is returned verbatim, so hide the entry when you see it (see the
+version-contract section of `docs/design/worker-channels-api.md`).
+
+| Role | Read | Write (`PUT` / `restart` / `conflict-check`) |
+|------|------|---------------------------|
+| L1 (admin / cli token) | any worker | any worker |
+| L2 (Matrix token) | own-team workers | own-team workers |
+| Team Leader | own-team workers | read-only (`403`) |
+
+Cross-team access returns `404` uniformly (existence is not probed).
+`embedded` mode only — `503` in kube mode. Full contract:
+[design/worker-channels-api.md](../design/worker-channels-api.md).
+
+## Worker session visibility (chats proxy)
+
+A worker's conversation history (its qwenpaw *chats* — one per
+user/channel: Matrix room, QQ DM, console sessions) is readable through
+three read-only proxy routes: list the sessions, open a transcript, and
+check the run status of one session (`idle` / `running`).
+
+```bash
+# L2 human lists the sessions of a worker in their team
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/chats \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+# full transcript of one session
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/chats/{chat_id} \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+# run status of one session (QwenPaw >= 2.2.1; 404 on older builds = hide the indicator)
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/chats/{chat_id}/status \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+```
+
+Same scope model as the channel and checkpoint proxies: L1 any worker,
+L2 / team leader own-team workers, cross-team `404` (existence not
+probed), `embedded` mode only. Read-only — no create/archive/delete
+route. Transcripts are the worker's conversation context verbatim;
+access is bounded by the worker's team scope. Full contract:
+[design/worker-chats-api.md](../design/worker-chats-api.md).
 
 ## Communication Permission Matrix
 

@@ -51,6 +51,7 @@ COPY --from=builder /agt /usr/local/bin/agt
 COPY --from=kube-bin /kube-apiserver /usr/local/bin/kube-apiserver
 COPY config/crd/ /opt/agentteams/config/crd/
 COPY agent/ /opt/agentteams/agent/
+COPY plugins/ /opt/agentteams/plugins/
 
 # Default endpoint + token-file for the bundled `agt` CLI. The controller process mints a
 # long-lived admin SA token at startup (see internal/app.bootstrapAdminCLIToken)

@@ -1,6 +1,6 @@
 ---
 name: teamharness-task-delegation
-description: "Use when a Leader turns ready Quick Task or Project Work state into Worker task instructions, sends assignment messages, checks submitted results, and defines completion/blocker report contracts. Do not use to create projects, create rooms, or execute Worker tasks."
+description: "Use when you act as Leader to turn ready Quick Task or Project Work state into Worker task instructions, send assignment messages, check submitted results, and define completion/blocker report contracts. Do not use to create projects, create rooms, or execute Worker tasks."
 ---
 
 # Task Delegation
@@ -147,12 +147,17 @@ When a Worker reports completion or blocker status, call:
 If `effective` is false, do not accept the task. Tell the Worker what is
 missing and wait for a corrected result.
 
-If `effective` is true, return to `teamharness-project-management` and decide
-whether to accept the result into project progress.
+If `effective` is true, retain the returned current `task.submission_id`,
+return to `teamharness-project-management`, and pass that identity as
+`submissionId` with an explicit boolean `accepted` decision. You may decide
+only as the trusted Leader runtime; do not trust a payload role, and never
+delegate acceptance or cancellation to the Worker. For every normal task that
+already has a submission identity, omitting `submissionId` is an error for both
+accept and cancel; only the documented no-identity legacy migration may omit it.
 
 ## Result Contract
 
-Worker results should contain:
+Expect Worker results to contain:
 
 ```text
 STATUS: SUCCESS
@@ -162,7 +167,7 @@ DELIVERABLES:
 - shared/tasks/{task-id}/path
 ```
 
-For report-style tasks, the Worker may write the full report directly to
+For report-style tasks, let the Worker write the full report directly to
 `shared/tasks/{task-id}/result.md` before calling `submit_task`. The tool
 records structured status in task metadata and does not create or rewrite
 `result.md`. Do not treat `result.md` as only a short envelope when it is the
@@ -174,6 +179,11 @@ Accepted statuses are:
 - `SUCCESS_WITH_NOTES`
 - `REVISION_NEEDED`
 - `BLOCKED`
+- `INTERRUPTED`
+
+Treat `INTERRUPTED` like `BLOCKED` at the terminal decision boundary: accepting
+either status records the task and plan node as `blocked` and resolves the
+continuation with `resolution: blocked`.
 
 Submitting a result ends that Worker task. If more work is needed, create a new
 project node and delegate a new task.
@@ -190,7 +200,7 @@ completion report. When a Worker reports `TASK_COMPLETED` with a result path,
 check the result and follow `teamharness-project-management` for acceptance or
 rejection.
 
-The Leader should check `notificationNeeded` after accepting a task result to
+You should check `notificationNeeded` after accepting a task result to
 determine whether a requester report or downstream notification is due. See
 `teamharness-project-management` Post-Action Notification for the full
 protocol.

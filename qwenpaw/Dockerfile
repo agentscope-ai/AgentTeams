@@ -24,7 +24,7 @@ FROM ${HIGRESS_REGISTRY}/higress/python:3.11-slim
 ARG APT_MIRROR=
 ARG PIP_INDEX_URL=https://pypi.org/simple/
 ARG PIP_TIMEOUT=300
-ARG QWENPAW_PIP_SPEC=qwenpaw==2.0.1
+ARG QWENPAW_PIP_SPEC=qwenpaw==2.2.1
 ARG NPM_REGISTRY=https://registry.npmjs.org/
 
 RUN if [ -n "${APT_MIRROR}" ]; then \
@@ -119,6 +119,13 @@ RUN chmod +x /opt/agentteams/scripts/lib/mc-wrapper.sh && \
     ln -sf /opt/venv/qwenpaw/bin/qwenpaw-worker /usr/local/bin/qwenpaw-worker && \
     ln -sf /opt/agentteams/scripts/qwenpaw-teamharness-plugin-reload.sh /usr/local/bin/qwenpaw-teamharness-plugin-reload && \
     mkdir -p /root/agentteams-fs/agents
+
+# QwenPaw 2.2.1 reload must not overwrite a concurrent policy update.
+COPY qwenpaw/scripts/patch-qwenpaw-driver-policy-reload.py /tmp/patch-qwenpaw-driver-policy-reload.py
+COPY qwenpaw/tests/check_driver_policy_reload.py /tmp/check_driver_policy_reload.py
+RUN /opt/venv/qwenpaw/bin/python /tmp/patch-qwenpaw-driver-policy-reload.py && \
+    /opt/venv/qwenpaw/bin/python /tmp/check_driver_policy_reload.py && \
+    rm /tmp/patch-qwenpaw-driver-policy-reload.py /tmp/check_driver_policy_reload.py
 
 WORKDIR /root/agentteams-fs/agents
 

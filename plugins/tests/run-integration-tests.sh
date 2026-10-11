@@ -13,8 +13,17 @@ ruby plugins/tests/teamharness/test-contracts.rb
 python3 -m pytest plugins/tests/teamharness/adapters/qwenpaw/test_adapter.py -q
 python3 -m pytest plugins/tests/teamharness/adapters/qwenpaw/test_package.py -q
 python3 -m pytest plugins/tests/teamharness/test_pull_project.py -q
+python3 -m pytest plugins/tests/teamharness/mcp/test_continuation.py -q
+PYTHONPATH="${REPO_ROOT}/manager/src/agentteams_manager${PYTHONPATH:+:${PYTHONPATH}}" \
+  python3 -m pytest manager/src/agentteams_manager/agentteams_manager/tests/test_taskflow_tool.py -q
 ruby plugins/tests/teamharness/mcp/test-server.rb
 ruby plugins/tests/teamharness/mcp/tools/test-message.rb
 ruby plugins/tests/teamharness/mcp/tools/test-filesync.rb
 ruby plugins/tests/teamharness/mcp/tools/test-projectflow.rb
 ruby plugins/tests/teamharness/mcp/tools/test-taskflow.rb
+ruby plugins/tests/teamharness/mcp/tools/test-transition-table.rb
+python3 -m pytest plugins/tests/agentteams-matrix-channel/test_session_isolation.py -q
+python3 -m pytest plugins/tests/agentteams-matrix-channel/test_fake_completion_marker.py -q
+python3 -m pytest plugins/tests/agentteams-matrix-channel/test_consume_error.py -q
+
+python3 -m pytest plugins/tests/agentteams-matrix-channel/test_show_thinking_gate.py -q

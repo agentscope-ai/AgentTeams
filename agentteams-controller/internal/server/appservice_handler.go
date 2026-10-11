@@ -102,6 +102,7 @@ func (h *AppserviceHandler) HandleTransactions(w http.ResponseWriter, r *http.Re
 		"txnID", txnID, "totalEvents", len(body.Events))
 
 	mentionCount := 0
+	mentionFailed := false
 	for _, event := range body.Events {
 		if event.Type != "m.room.message" {
 			continue
@@ -115,6 +116,7 @@ func (h *AppserviceHandler) HandleTransactions(w http.ResponseWriter, r *http.Re
 				logger.Error(err, "handle mention event",
 					"txnID", txnID, "roomID", event.RoomID, "eventID", event.EventID,
 					"sender", event.Sender, "mentionedUser", userID)
+				mentionFailed = true
 			}
 		}
 	}
@@ -126,6 +128,19 @@ func (h *AppserviceHandler) HandleTransactions(w http.ResponseWriter, r *http.Re
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	if mentionFailed {
+		// At least one wake in this batch failed (e.g. a transient K8s
+		// List/Update error). That mention was left unmarked
+		// (mark-after-confirm), so answer 503: the homeserver's appservice
+		// sending queue treats a non-2xx as a failed transaction and
+		// re-pushes it (the transaction id is derived from the event ids,
+		// so the same events arrive again). Mentions that already succeeded
+		// in this batch stay marked and are deduplicated on the redelivery;
+		// the wake itself is idempotent (Running is set only from Sleeping).
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprint(w, `{"errcode":"M_UNKNOWN","error":"mention wake failed; please retry"}`)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, "{}")
 }
@@ -170,8 +185,22 @@ func (h *AppserviceHandler) handleMention(ctx context.Context, roomID, eventID, 
 	logger := log.FromContext(ctx).WithName("appservice")
 
 	// Dedup by roomID/eventID/userID.
+	//
+	// Mark-after-confirm: we record the event as seen only AFTER a
+	// successful wake. Marking before the wake (the historical behavior)
+	// meant a transient failure (e.g. a K8s List/Update error) permanently
+	// swallowed the mention — the homeserver's redelivery of the same
+	// eventID hit the dedup and was dropped, so the worker was never woken.
+	// Leaving a failed wake unmarked lets the redelivery be processed, and
+	// HandleTransactions answers 503 when any wake in the batch failed so
+	// the homeserver's appservice sending queue actually re-pushes the
+	// transaction (its transaction id is derived from the event ids, so the
+	// same events arrive again). Wake is idempotent (Running is set only
+	// from Sleeping, under retry), so a concurrent duplicate push cannot
+	// double-apply the state change.
+	key := ""
 	if eventID != "" {
-		key := fmt.Sprintf("%s/%s/%s", roomID, eventID, userID)
+		key = fmt.Sprintf("%s/%s/%s", roomID, eventID, userID)
 		h.mu.Lock()
 		if _, ok := h.seen[key]; ok {
 			h.mu.Unlock()
@@ -179,7 +208,6 @@ func (h *AppserviceHandler) handleMention(ctx context.Context, roomID, eventID, 
 				"roomID", roomID, "eventID", eventID, "mentionedUser", userID)
 			return nil
 		}
-		h.seen[key] = struct{}{}
 		h.mu.Unlock()
 	}
 
@@ -192,6 +220,12 @@ func (h *AppserviceHandler) handleMention(ctx context.Context, roomID, eventID, 
 	}
 	if err := h.wakeTeamWorker(ctx, roomID, userID); err != nil {
 		return fmt.Errorf("wake team worker: %w", err)
+	}
+
+	if key != "" {
+		h.mu.Lock()
+		h.seen[key] = struct{}{}
+		h.mu.Unlock()
 	}
 	return nil
 }

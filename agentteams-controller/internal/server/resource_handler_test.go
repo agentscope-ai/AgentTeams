@@ -13,6 +13,7 @@ import (
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -23,7 +24,7 @@ import (
 func TestCreateWorkerRejectsTeamLeaderCaller(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{"name":"alpha-temp","model":"qwen3.5-plus"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", bytes.NewReader(body))
@@ -53,7 +54,7 @@ func TestCreateWorkerAllowsRepairingMissingTeamReference(t *testing.T) {
 		{Name: "alpha-dev", Role: "worker"},
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(team).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{"name":"alpha-dev","model":"qwen3.5-plus"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", bytes.NewReader(body))
@@ -68,7 +69,7 @@ func TestCreateWorkerAllowsRepairingMissingTeamReference(t *testing.T) {
 func TestCreateWorkerPreservesResources(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{"name":"resource-worker","model":"qwen3.5-plus","resources":{"requests":{"cpu":"250m","memory":"512Mi"},"limits":{"cpu":"2","memory":"4Gi"}}}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", bytes.NewReader(body))
@@ -92,7 +93,7 @@ func TestUpdateWorkerPreservesResources(t *testing.T) {
 	worker.Namespace = "default"
 	worker.Spec.Model = "qwen3.5-plus"
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(worker).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{"resources":{"requests":{"cpu":"300m","memory":"768Mi"},"limits":{"cpu":"3","memory":"5Gi"}}}`)
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/workers/resource-worker", bytes.NewReader(body))
@@ -133,7 +134,7 @@ func TestCreateTeamDoesNotOwnWorkerRuntimeConfig(t *testing.T) {
 		},
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(leader, worker).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{
 		"name":"resource-team",
@@ -178,7 +179,7 @@ func TestCreateTeamReferencesExistingWorkerCRs(t *testing.T) {
 		Spec:       v1beta1.WorkerSpec{Model: "qwen3.5-plus"},
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(leader, worker).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{
 		"name":"alpha-team",
@@ -218,7 +219,7 @@ func TestCreateTeamRejectsMissingWorkerReference(t *testing.T) {
 		Spec:       v1beta1.WorkerSpec{Model: "qwen3.5-plus"},
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(leader).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{
 		"name":"alpha-team",
@@ -248,7 +249,7 @@ func TestCreateTeamRejectsEmptyWorkerRole(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"},
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(leader, worker).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{
 		"name":"alpha-team",
@@ -272,7 +273,7 @@ func TestCreateTeamRejectsEmptyWorkerRole(t *testing.T) {
 func TestCreateManagerPreservesResources(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{"name":"default","model":"qwen3.5-plus","resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"3","memory":"5Gi"}}}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/managers", bytes.NewReader(body))
@@ -300,7 +301,7 @@ func TestGetWorkerRequiresWorkerCRForTeamMember(t *testing.T) {
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(team).
 		Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers/alpha-dev", nil)
 	req.SetPathValue("name", "alpha-dev")
@@ -334,7 +335,7 @@ func TestGetWorkerEnrichesTeamReferencesMemberCR(t *testing.T) {
 		WithScheme(scheme).
 		WithObjects(worker, team).
 		Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers/alpha-dev", nil)
 	req.SetPathValue("name", "alpha-dev")
@@ -376,7 +377,7 @@ func TestListWorkersDoesNotSynthesizeMissingTeamMembers(t *testing.T) {
 
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(standalone, team).
 		Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers", nil)
 	rec := httptest.NewRecorder()
@@ -423,7 +424,7 @@ func TestListWorkersTeamFilterIncludesTeamReferencesMembers(t *testing.T) {
 		WithScheme(scheme).
 		WithObjects(solo, lead, dev, team).
 		Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers?team=alpha-team", nil)
 	rec := httptest.NewRecorder()
@@ -466,7 +467,7 @@ func TestUpdateWorkerAllowsTeamMember(t *testing.T) {
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(worker, team).
 		Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/workers/alpha-dev", bytes.NewReader([]byte(`{"model":"new-model"}`)))
 	req.SetPathValue("name", "alpha-dev")
@@ -496,7 +497,7 @@ func TestDeleteWorkerRejectsTeamMember(t *testing.T) {
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(team).
 		Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/workers/alpha-dev", nil)
 	req.SetPathValue("name", "alpha-dev")
@@ -525,7 +526,7 @@ func TestUpdateTeamMembershipAndHeartbeat(t *testing.T) {
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(leader, dev, qa, team).
 		Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	updateBody := []byte(`{
 		"heartbeatEvery":"45m",
@@ -573,7 +574,7 @@ func TestCreateTeamResponseDerivesNamesFromWorkerReferences(t *testing.T) {
 	leader := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "lead-cr", Namespace: "default"}}
 	worker := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "dev-cr", Namespace: "default"}}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(leader, worker).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{
 		"name":"alpha-team",
@@ -609,7 +610,7 @@ func TestCreateTeamResponseDerivesNamesFromWorkerReferences(t *testing.T) {
 func TestCreateAndUpdateManagerPersistsModelProvider(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	createBody := []byte(`{"name":"default","model":"qwen-plus","modelProvider":"qwen"}`)
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/managers", bytes.NewReader(createBody))
@@ -645,12 +646,47 @@ func TestCreateAndUpdateManagerPersistsModelProvider(t *testing.T) {
 	}
 }
 
+func TestUpdateManagerClearsModelProviderWhenExplicitlyEmpty(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	manager := &v1beta1.Manager{
+		ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: "default"},
+		Spec: v1beta1.ManagerSpec{
+			Model:         "custom-model",
+			ModelProvider: "deleted-provider",
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(manager).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
+
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/managers/default", bytes.NewReader([]byte(`{
+		"model":"known-good-model",
+		"modelProvider":""
+	}`)))
+	updateReq.SetPathValue("name", "default")
+	updateRec := httptest.NewRecorder()
+	handler.UpdateManager(updateRec, updateReq)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("expected update status %d, got %d: %s", http.StatusOK, updateRec.Code, updateRec.Body.String())
+	}
+
+	var updated v1beta1.Manager
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "default", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get updated manager: %v", err)
+	}
+	if updated.Spec.Model != "known-good-model" {
+		t.Fatalf("updated manager model=%q, want known-good-model", updated.Spec.Model)
+	}
+	if updated.Spec.ModelProvider != "" {
+		t.Fatalf("updated manager modelProvider=%q, want empty", updated.Spec.ModelProvider)
+	}
+}
+
 func TestCreateTeamRequiresExactlyOneLeaderReference(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	leadOne := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "lead-one", Namespace: "default"}}
 	leadTwo := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "lead-two", Namespace: "default"}}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(leadOne, leadTwo).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{
 		"name":"invalid-team",
@@ -675,7 +711,7 @@ func TestCreateTeamRequiresExactlyOneLeaderReference(t *testing.T) {
 func TestCreateWorker_StampsControllerLabel(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "ctrl-a")
+	handler := NewResourceHandler(k8sClient, "default", nil, "ctrl-a", nil)
 
 	body := []byte(`{"name":"w1","model":"qwen3.5-plus"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", bytes.NewReader(body))
@@ -698,7 +734,7 @@ func TestCreateWorker_StampsControllerLabel(t *testing.T) {
 func TestCreateWorkerPersistsRuntimeWorkerName(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{"name":"worker-cr","workerName":"worker-runtime"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", bytes.NewReader(body))
@@ -720,7 +756,7 @@ func TestCreateWorkerPersistsRuntimeWorkerName(t *testing.T) {
 func TestCreateWorkerDefaultsRuntime(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{"name":"worker-cr"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", bytes.NewReader(body))
@@ -742,7 +778,7 @@ func TestCreateWorkerDefaultsRuntime(t *testing.T) {
 func TestCreateWorkerUsesConfiguredDefaultRuntime(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 	handler.defaultWorkerRuntime = backend.RuntimeQwenPaw
 
 	body := []byte(`{"name":"worker-cr"}`)
@@ -762,11 +798,197 @@ func TestCreateWorkerUsesConfiguredDefaultRuntime(t *testing.T) {
 	}
 }
 
+// CoPaw is upgrade-compat only (issue #1310): new workers may not be created
+// on it, and a worker may not be switched onto it — but existing CoPaw
+// workers keep working and can be migrated to QwenPaw.
+func TestCreateWorkerRejectsLegacyCopawRuntime(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
+
+	body := []byte(`{"name":"legacy-w1","model":"qwen3.5-plus","runtime":"copaw"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateWorker(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "qwenpaw") || !strings.Contains(rec.Body.String(), "1310") {
+		t.Fatalf("error body should steer to qwenpaw and cite issue 1310, got: %s", rec.Body.String())
+	}
+
+	// A copaw *default* runtime resolves the same way: still rejected.
+	defaultCopaw := NewResourceHandler(k8sClient, "default", nil, "", nil)
+	defaultCopaw.defaultWorkerRuntime = backend.RuntimeCopaw
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/workers",
+		bytes.NewReader([]byte(`{"name":"legacy-w2","model":"qwen3.5-plus"}`)))
+	rec2 := httptest.NewRecorder()
+	defaultCopaw.CreateWorker(rec2, req2)
+
+	if rec2.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d for copaw default runtime, got %d: %s",
+			http.StatusBadRequest, rec2.Code, rec2.Body.String())
+	}
+	var stored v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "legacy-w1", Namespace: "default"}, &stored); err != nil {
+		if !apierrors.IsNotFound(err) {
+			t.Fatalf("get worker: %v", err)
+		}
+	} else {
+		t.Fatalf("worker legacy-w1 should not have been created")
+	}
+}
+
+func TestUpdateWorkerRejectsSwitchToLegacyCopaw(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	qwenpawWorker := &v1beta1.Worker{}
+	qwenpawWorker.Name = "upgrade-candidate"
+	qwenpawWorker.Namespace = "default"
+	qwenpawWorker.Spec.Model = "qwen3.5-plus"
+	qwenpawWorker.Spec.Runtime = backend.RuntimeQwenPaw
+
+	copawWorker := &v1beta1.Worker{}
+	copawWorker.Name = "legacy-in-place"
+	copawWorker.Namespace = "default"
+	copawWorker.Spec.Model = "qwen3.5-plus"
+	copawWorker.Spec.Runtime = backend.RuntimeCopaw
+
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(qwenpawWorker, copawWorker).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
+
+	// 1. qwenpaw → copaw switch is rejected; the CR keeps its runtime.
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/workers/upgrade-candidate",
+		bytes.NewReader([]byte(`{"runtime":"copaw"}`)))
+	req.SetPathValue("name", "upgrade-candidate")
+	rec := httptest.NewRecorder()
+	handler.UpdateWorker(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "qwenpaw") {
+		t.Fatalf("error body should steer to qwenpaw, got: %s", rec.Body.String())
+	}
+	var got v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "upgrade-candidate", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if got.Spec.Runtime != backend.RuntimeQwenPaw {
+		t.Fatalf("runtime changed to %q, want %q", got.Spec.Runtime, backend.RuntimeQwenPaw)
+	}
+
+	// 2. Existing copaw worker: a runtime-less update (e.g. model) still works.
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/workers/legacy-in-place",
+		bytes.NewReader([]byte(`{"model":"new-model"}`)))
+	req.SetPathValue("name", "legacy-in-place")
+	rec = httptest.NewRecorder()
+	handler.UpdateWorker(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "legacy-in-place", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if got.Spec.Model != "new-model" || got.Spec.Runtime != backend.RuntimeCopaw {
+		t.Fatalf("model/runtime = %q/%q, want new-model/%q", got.Spec.Model, got.Spec.Runtime, backend.RuntimeCopaw)
+	}
+
+	// 3. copaw → qwenpaw is the upgrade path and must be allowed.
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/workers/legacy-in-place",
+		bytes.NewReader([]byte(`{"runtime":"qwenpaw"}`)))
+	req.SetPathValue("name", "legacy-in-place")
+	rec = httptest.NewRecorder()
+	handler.UpdateWorker(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "legacy-in-place", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if got.Spec.Runtime != backend.RuntimeQwenPaw {
+		t.Fatalf("runtime = %q, want %q after upgrade", got.Spec.Runtime, backend.RuntimeQwenPaw)
+	}
+}
+
+// A runtime switch must not keep the previous runtime's image pin: the
+// recreated container has to resolve the new runtime's image (issue #1310
+// upgrade path, exercised end-to-end by test-29).
+func TestUpdateWorkerRuntimeSwitchDropsStaleImagePin(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	legacy := &v1beta1.Worker{}
+	legacy.Name = "pinned-legacy"
+	legacy.Namespace = "default"
+	legacy.Spec.Model = "qwen3.5-plus"
+	legacy.Spec.Runtime = backend.RuntimeCopaw
+	legacy.Spec.Image = "registry.example.com/agentteams-copaw-worker:v1.2.4"
+
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(legacy).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
+
+	// 1. copaw → qwenpaw without an explicit image clears the stale pin.
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/workers/pinned-legacy",
+		bytes.NewReader([]byte(`{"runtime":"qwenpaw"}`)))
+	req.SetPathValue("name", "pinned-legacy")
+	rec := httptest.NewRecorder()
+	handler.UpdateWorker(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var got v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "pinned-legacy", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if got.Spec.Runtime != backend.RuntimeQwenPaw {
+		t.Fatalf("runtime = %q, want %q", got.Spec.Runtime, backend.RuntimeQwenPaw)
+	}
+	if got.Spec.Image != "" {
+		t.Fatalf("image pin = %q, want cleared when the runtime changes", got.Spec.Image)
+	}
+
+	// 2. An explicit image in the same request still wins.
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/workers/pinned-legacy",
+		bytes.NewReader([]byte(`{"runtime":"qwenpaw","image":"registry.example.com/agentteams-qwenpaw-worker:v1.2.4"}`)))
+	req.SetPathValue("name", "pinned-legacy")
+	rec = httptest.NewRecorder()
+	handler.UpdateWorker(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "pinned-legacy", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if got.Spec.Image != "registry.example.com/agentteams-qwenpaw-worker:v1.2.4" {
+		t.Fatalf("image = %q, want the explicitly provided image", got.Spec.Image)
+	}
+}
+
+func TestWorkerResponseFlagsLegacyCopawRuntime(t *testing.T) {
+	copawWorker := &v1beta1.Worker{}
+	copawWorker.Name = "legacy"
+	copawWorker.Namespace = "default"
+	copawWorker.Spec.Runtime = backend.RuntimeCopaw
+
+	qwenpawWorker := &v1beta1.Worker{}
+	qwenpawWorker.Name = "modern"
+	qwenpawWorker.Namespace = "default"
+	qwenpawWorker.Spec.Runtime = backend.RuntimeQwenPaw
+
+	if got := workerToResponse(copawWorker); !got.RuntimeDeprecated {
+		t.Fatalf("copaw worker: RuntimeDeprecated = false, want true")
+	}
+	if got := workerToResponse(qwenpawWorker); got.RuntimeDeprecated {
+		t.Fatalf("qwenpaw worker: RuntimeDeprecated = true, want false")
+	}
+}
+
 func TestCreateTeam_StampsControllerLabel(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	leader := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "l1", Namespace: "default"}}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(leader).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "ctrl-a")
+	handler := NewResourceHandler(k8sClient, "default", nil, "ctrl-a", nil)
 
 	body := []byte(`{"name":"t1","workerMembers":[{"name":"l1","role":"team_leader"}]}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/teams", bytes.NewReader(body))
@@ -788,7 +1010,7 @@ func TestCreateTeam_StampsControllerLabel(t *testing.T) {
 func TestCreateHuman_StampsControllerLabel(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "ctrl-a")
+	handler := NewResourceHandler(k8sClient, "default", nil, "ctrl-a", nil)
 
 	body := []byte(`{"name":"h1","displayName":"Human One"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/humans", bytes.NewReader(body))
@@ -810,7 +1032,7 @@ func TestCreateHuman_StampsControllerLabel(t *testing.T) {
 func TestCreateManager_StampsControllerLabel(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "ctrl-a")
+	handler := NewResourceHandler(k8sClient, "default", nil, "ctrl-a", nil)
 
 	body := []byte(`{"name":"m1","model":"qwen3.5-plus"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/managers", bytes.NewReader(body))
@@ -836,7 +1058,7 @@ func TestCreateManager_StampsControllerLabel(t *testing.T) {
 func TestCreate_EmptyControllerName_NoLabel(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	body := []byte(`{"name":"h2","displayName":"Human Two"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/humans", bytes.NewReader(body))
@@ -898,11 +1120,11 @@ func TestListTeams_L2Scoped(t *testing.T) {
 	beta.Namespace = "default"
 
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(alpha, beta).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/teams", nil)
 	req = req.WithContext(context.WithValue(req.Context(), authpkg.CallerKeyForTest(), &authpkg.CallerIdentity{
-		Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"alpha-team"},
+		Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"alpha-team"},
 	}))
 	rec := httptest.NewRecorder()
 	handler.ListTeams(rec, req)
@@ -953,11 +1175,11 @@ func TestListWorkers_L2Scoped(t *testing.T) {
 
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).
 		WithObjects(solo, alphaLead, alphaDev, betaDev, alpha, beta).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers", nil)
 	req = req.WithContext(context.WithValue(req.Context(), authpkg.CallerKeyForTest(), &authpkg.CallerIdentity{
-		Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"alpha-team"},
+		Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"alpha-team"},
 	}))
 	rec := httptest.NewRecorder()
 	handler.ListWorkers(rec, req)
@@ -990,8 +1212,8 @@ func TestGetTeam_L2Scoped(t *testing.T) {
 	beta.Namespace = "default"
 
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(alpha, beta).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
-	l2 := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"alpha-team"}}
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
+	l2 := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"alpha-team"}}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/teams/alpha-team", nil)
 	req.SetPathValue("name", "alpha-team")
@@ -1038,8 +1260,8 @@ func TestGetWorker_L2Scoped(t *testing.T) {
 
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).
 		WithObjects(alphaLead, betaDev, solo, alpha, beta).Build()
-	handler := NewResourceHandler(k8sClient, "default", nil, "")
-	l2 := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"alpha-team"}}
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
+	l2 := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"alpha-team"}}
 
 	// Own team worker -> 200.
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers/alpha-lead", nil)
@@ -1069,5 +1291,308 @@ func TestGetWorker_L2Scoped(t *testing.T) {
 	handler.GetWorker(rec3, req3)
 	if rec3.Code != http.StatusNotFound {
 		t.Fatalf("standalone worker status=%d, want 404 (W8: hide existence)", rec3.Code)
+	}
+}
+
+// TestGetWorker_L3Scoped guards single-worker fetch for L3 (worker-scoped)
+// humans: exactly the assigned workers are readable (team members and
+// standalone alike); everything else is hidden (404, W8).
+func TestGetWorker_L3Scoped(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	alphaDev := &v1beta1.Worker{}
+	alphaDev.Name = "alpha-dev"
+	alphaDev.Namespace = "default"
+	betaDev := &v1beta1.Worker{}
+	betaDev.Name = "beta-dev"
+	betaDev.Namespace = "default"
+	solo := &v1beta1.Worker{}
+	solo.Name = "solo"
+	solo.Namespace = "default"
+
+	alpha := &v1beta1.Team{}
+	alpha.Name = "alpha-team"
+	alpha.Namespace = "default"
+	alpha.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{{Name: "alpha-dev"}}
+	beta := &v1beta1.Team{}
+	beta.Name = "beta-team"
+	beta.Namespace = "default"
+	beta.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{{Name: "beta-dev"}}
+
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(alphaDev, betaDev, solo, alpha, beta).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
+	l3 := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "viewer", AccessibleWorkers: []string{"alpha-dev", "solo"}}
+
+	get := func(name string) int {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/workers/"+name, nil)
+		req.SetPathValue("name", name)
+		req = req.WithContext(context.WithValue(req.Context(), authpkg.CallerKeyForTest(), l3))
+		rec := httptest.NewRecorder()
+		handler.GetWorker(rec, req)
+		return rec.Code
+	}
+
+	// Assigned team member (of a team the human does NOT control) -> 200.
+	if code := get("alpha-dev"); code != http.StatusOK {
+		t.Fatalf("assigned team worker status=%d, want 200", code)
+	}
+	// Assigned standalone worker -> 200.
+	if code := get("solo"); code != http.StatusOK {
+		t.Fatalf("assigned standalone worker status=%d, want 200", code)
+	}
+	// Unassigned worker in an uncontrolled team -> 404 (hidden, W8).
+	if code := get("beta-dev"); code != http.StatusNotFound {
+		t.Fatalf("unassigned other-team worker status=%d, want 404 (W8)", code)
+	}
+}
+
+// TestListWorkers_L3Scoped guards list filtering: an L3 human sees exactly
+// its assigned workers (team + standalone), nothing else — no team-scope
+// leakage, no existence probe.
+func TestListWorkers_L3Scoped(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	alphaDev := &v1beta1.Worker{}
+	alphaDev.Name = "alpha-dev"
+	alphaDev.Namespace = "default"
+	betaDev := &v1beta1.Worker{}
+	betaDev.Name = "beta-dev"
+	betaDev.Namespace = "default"
+	solo := &v1beta1.Worker{}
+	solo.Name = "solo"
+	solo.Namespace = "default"
+
+	alpha := &v1beta1.Team{}
+	alpha.Name = "alpha-team"
+	alpha.Namespace = "default"
+	alpha.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{{Name: "alpha-dev"}}
+	beta := &v1beta1.Team{}
+	beta.Name = "beta-team"
+	beta.Namespace = "default"
+	beta.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{{Name: "beta-dev"}}
+
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(alphaDev, betaDev, solo, alpha, beta).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
+	l3 := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "viewer", AccessibleWorkers: []string{"beta-dev"}}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers", nil)
+	req = req.WithContext(context.WithValue(req.Context(), authpkg.CallerKeyForTest(), l3))
+	rec := httptest.NewRecorder()
+	handler.ListWorkers(rec, req)
+
+	var resp WorkerListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Total != 1 || len(resp.Workers) != 1 || resp.Workers[0].Name != "beta-dev" {
+		t.Fatalf("L3 workers=%+v, want exactly [beta-dev]", resp)
+	}
+}
+
+// TestUpdateWorker_L3Denied pins the read-only contract (Q2): even for a
+// worker the L3 human is assigned to, the update path stays denied. The
+// middleware (authorizer requireSameTeam) answers 403 first for team
+// workers; this handler-level probe pins the defense-in-depth fallback —
+// the handler's own team-scope check hides the worker as 404, assigned or
+// not, so no handler path can widen L3 into a writer.
+func TestUpdateWorker_L3Denied(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	alphaDev := &v1beta1.Worker{}
+	alphaDev.Name = "alpha-dev"
+	alphaDev.Namespace = "default"
+	alpha := &v1beta1.Team{}
+	alpha.Name = "alpha-team"
+	alpha.Namespace = "default"
+	alpha.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{{Name: "alpha-dev"}}
+
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(alphaDev, alpha).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
+	l3 := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "viewer", AccessibleWorkers: []string{"alpha-dev"}}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/workers/alpha-dev", strings.NewReader(`{"skills":[]}`))
+	req.SetPathValue("name", "alpha-dev")
+	req = req.WithContext(context.WithValue(req.Context(), authpkg.CallerKeyForTest(), l3))
+	rec := httptest.NewRecorder()
+	handler.UpdateWorker(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("L3 update of an ASSIGNED worker status=%d, want 404 (read-only, W8)", rec.Code)
+	}
+}
+
+// TestGetWorker_L3MCPCredentialsSanitized pins the L3 no-plaintext-
+// credentials requirement on the worker detail surface: MCP endpoint URLs
+// may embed credentials in the query (?api_key=...) or the userinfo
+// component (user:pass@host); both must be absent from the raw L3 response,
+// while non-secret URL metadata (host, path, non-credential query values)
+// is retained.
+func TestGetWorker_L3MCPCredentialsSanitized(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	alphaDev := &v1beta1.Worker{}
+	alphaDev.Name = "alpha-dev"
+	alphaDev.Namespace = "default"
+	alphaDev.Spec.McpServers = []v1beta1.MCPServer{
+		{Name: "ext", URL: "https://mcp.example.test/mcp?api_key=REVIEW_SENTINEL_SECRET"},
+		{Name: "apiKey", URL: "https://mcp.example.test/mcp?apiKey=REVIEW_SENTINEL_SECRET"},
+		{Name: "key", URL: "https://mcp.example.test/key?key=REVIEW_SENTINEL_SECRET"},
+		{Name: "auth", URL: "https://review-user:REVIEW_SENTINEL_PASS@mcp.example.test/auth"},
+		{Name: "clean", URL: "https://plain.example.test/mcp?limit=5"},
+	}
+	alpha := &v1beta1.Team{}
+	alpha.Name = "alpha-team"
+	alpha.Namespace = "default"
+	alpha.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{{Name: "alpha-dev"}}
+
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(alphaDev, alpha).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
+	l3 := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "viewer", AccessibleWorkers: []string{"alpha-dev"}}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers/alpha-dev", nil)
+	req.SetPathValue("name", "alpha-dev")
+	req = req.WithContext(context.WithValue(req.Context(), authpkg.CallerKeyForTest(), l3))
+	rec := httptest.NewRecorder()
+	handler.GetWorker(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("assigned worker detail status=%d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, sentinel := range []string{"REVIEW_SENTINEL_SECRET", "REVIEW_SENTINEL_PASS", "review-user"} {
+		if strings.Contains(body, sentinel) {
+			t.Fatalf("L3 raw response leaks credential material %q: %s", sentinel, body)
+		}
+	}
+	// Non-secret metadata (scheme://host[:port]/path) must survive the scrub.
+	for _, want := range []string{
+		"https://mcp.example.test/mcp",
+		"https://mcp.example.test/auth",
+		"https://plain.example.test/mcp",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("L3 response lost non-secret metadata %q: %s", want, body)
+		}
+	}
+	// Query values are unclassified input for arbitrary external MCP
+	// endpoints: even a name that does not look like a credential must not
+	// be exposed to L3 (fail-closed, not denylisted).
+	if strings.Contains(body, "limit=5") {
+		t.Fatalf("L3 response exposed an unclassified query value: %s", body)
+	}
+}
+
+// TestListWorkers_L3MCPCredentialsSanitized pins the same contract on the
+// list surface: the sentinel must be absent from the raw list JSON for an
+// L3 viewer, with the non-credential metadata retained.
+func TestListWorkers_L3MCPCredentialsSanitized(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	betaDev := &v1beta1.Worker{}
+	betaDev.Name = "beta-dev"
+	betaDev.Namespace = "default"
+	betaDev.Spec.McpServers = []v1beta1.MCPServer{
+		{Name: "ext", URL: "https://mcp.example.test/mcp?api_key=REVIEW_SENTINEL_SECRET"},
+		{Name: "apiKey", URL: "https://mcp.example.test/mcp?apiKey=REVIEW_SENTINEL_SECRET"},
+		{Name: "key", URL: "https://mcp.example.test/key?key=REVIEW_SENTINEL_SECRET"},
+	}
+	beta := &v1beta1.Team{}
+	beta.Name = "beta-team"
+	beta.Namespace = "default"
+	beta.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{{Name: "beta-dev"}}
+
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(betaDev, beta).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
+	l3 := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "viewer", AccessibleWorkers: []string{"beta-dev"}}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers", nil)
+	req = req.WithContext(context.WithValue(req.Context(), authpkg.CallerKeyForTest(), l3))
+	rec := httptest.NewRecorder()
+	handler.ListWorkers(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status=%d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "REVIEW_SENTINEL_SECRET") {
+		t.Fatalf("L3 raw list response leaks the MCP api_key: %s", body)
+	}
+	if !strings.Contains(body, "https://mcp.example.test/mcp") {
+		t.Fatalf("L3 list response lost the MCP endpoint metadata: %s", body)
+	}
+}
+
+// TestGetWorker_L2MCPCredentialsVerbatim pins that the L3 scrub does not
+// over-apply: an L2 human (team scope) reads the assigned-in-team worker's
+// MCP URLs verbatim — credential URLs are legitimate for team controllers.
+func TestGetWorker_L2MCPCredentialsVerbatim(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	alphaDev := &v1beta1.Worker{}
+	alphaDev.Name = "alpha-dev"
+	alphaDev.Namespace = "default"
+	alphaDev.Spec.McpServers = []v1beta1.MCPServer{
+		{Name: "ext", URL: "https://mcp.example.test/mcp?api_key=REVIEW_SENTINEL_SECRET"},
+		{Name: "apiKey", URL: "https://mcp.example.test/mcp?apiKey=REVIEW_SENTINEL_SECRET"},
+	}
+	alpha := &v1beta1.Team{}
+	alpha.Name = "alpha-team"
+	alpha.Namespace = "default"
+	alpha.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{{Name: "alpha-dev"}}
+
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(alphaDev, alpha).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
+	l2 := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"alpha-team"}}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers/alpha-dev", nil)
+	req.SetPathValue("name", "alpha-dev")
+	req = req.WithContext(context.WithValue(req.Context(), authpkg.CallerKeyForTest(), l2))
+	rec := httptest.NewRecorder()
+	handler.GetWorker(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("L2 own-team worker detail status=%d, want 200", rec.Code)
+	}
+	// Both the denylisted (api_key) and the non-denylisted (apiKey) forms
+	// must reach L2 verbatim — the scrub applies to L3 only.
+	for _, want := range []string{"api_key=REVIEW_SENTINEL_SECRET", "apiKey=REVIEW_SENTINEL_SECRET"} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Fatalf("L2 response must carry the MCP URL verbatim (%s): %s", want, rec.Body.String())
+		}
+	}
+}
+
+func TestCreateWorkerDefaultModel(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{"omitted", `{"name":"default-model"}`, "deployment-model"},
+		{"empty", `{"name":"default-model","model":""}`, "deployment-model"},
+		{"whitespace", `{"name":"default-model","model":"  "}`, "deployment-model"},
+		{"explicit", `{"name":"default-model","model":"worker-model"}`, "worker-model"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			k8s := fake.NewClientBuilder().WithScheme(newServerTestScheme(t)).Build()
+			mw := authpkg.NewMiddleware(&alwaysAdminAuth{}, authpkg.NewCREnricher(k8s, "default"), authpkg.NewAuthorizer(), k8s, "default")
+			srv := NewHTTPServer(":0", ServerDeps{Client: k8s, Namespace: "default", AuthMw: mw, DefaultModel: "deployment-model"})
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", strings.NewReader(tc.body))
+			req.Header.Set("Authorization", "Bearer sa-token")
+			rec := httptest.NewRecorder()
+			srv.Mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			var response WorkerResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if response.Model != tc.want {
+				t.Errorf("response model=%q, want %q", response.Model, tc.want)
+			}
+			var worker v1beta1.Worker
+			if err := k8s.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "default-model"}, &worker); err != nil {
+				t.Fatal(err)
+			}
+			if worker.Spec.Model != tc.want {
+				t.Errorf("persisted model=%q, want %q", worker.Spec.Model, tc.want)
+			}
+		})
 	}
 }

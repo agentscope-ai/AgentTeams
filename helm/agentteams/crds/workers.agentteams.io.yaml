@@ -22,6 +22,13 @@ spec:
                 modelProvider:
                   type: string
                   description: Name of the AI gateway Model API to use as the LLM provider.
+                subagentModel:
+                  type: string
+                  description: >
+                    Model used by spawned subagents (spawn_subagent). Free string served by
+                    the team AI gateway; not catalog-validated (unknown ids surface as a
+                    visible upstream error at spawn time). Empty inherits the runtime
+                    default — a team-wide default applies when the Worker is a team member.
                 runtime:
                   type: string
                   enum: [openclaw, copaw, hermes, qwenpaw, deepseek-harness]
@@ -304,6 +311,68 @@ spec:
                           ${self.kind} / ${self.namespace} are expanded by the
                           controller before the request reaches the provider.
                         x-kubernetes-preserve-unknown-fields: true
+                volumes:
+                  type: array
+                  description: >
+                    External storage volumes. Only supported when backendRuntime is
+                    sandbox; otherwise the reconciler rejects them.
+                  items:
+                    type: object
+                    required: [name, type]
+                    properties:
+                      name:
+                        type: string
+                      type:
+                        type: string
+                        description: Volume type (OSS).
+                      oss:
+                        type: object
+                        properties:
+                          bucket:
+                            type: string
+                          endpoint:
+                            type: string
+                          auth:
+                            type: object
+                            properties:
+                              type:
+                                type: string
+                              rrsa:
+                                type: object
+                                properties:
+                                  roleName:
+                                    type: string
+                                  roleArn:
+                                    type: string
+                              accessKey:
+                                type: object
+                                properties:
+                                  secretRef:
+                                    type: object
+                                    properties:
+                                      name:
+                                        type: string
+                                      namespace:
+                                        type: string
+                mounts:
+                  type: array
+                  description: >
+                    Dynamic mounts referencing a volume by name. Only supported when
+                    backendRuntime is sandbox.
+                  items:
+                    type: object
+                    required: [name, volumeRef, mountPath]
+                    properties:
+                      name:
+                        type: string
+                      volumeRef:
+                        type: string
+                      subPath:
+                        type: string
+                      mountPath:
+                        type: string
+                      readOnly:
+                        type: boolean
             status:
               type: object
               properties:
@@ -329,6 +398,20 @@ spec:
                 lastActiveAt:
                   type: string
                   format: date-time
+                agentStatus:
+                  type: string
+                  description: "Worker runtime task-level state self-reported by the heartbeat: idle / running / disabled; empty when not reported."
+                runningTaskCount:
+                  type: integer
+                  description: "Number of active runtime tasks reported by the worker heartbeat; absent when unknown."
+                lastRunAt:
+                  type: string
+                  format: date-time
+                  description: "Runtime-reported timestamp of the last task start."
+                lastFinishAt:
+                  type: string
+                  format: date-time
+                  description: "Runtime-reported timestamp of the last task finish."
                 message:
                   type: string
                 exposedPorts:

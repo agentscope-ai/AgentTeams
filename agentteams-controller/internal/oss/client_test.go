@@ -59,6 +59,37 @@ func TestMinIOClient_PutObjectUsesCp(t *testing.T) {
 	}
 }
 
+func TestMinIOClient_MirrorPassesOverwriteAndRemove(t *testing.T) {
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args")
+	mcPath := filepath.Join(dir, "mc")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$MC_ARGS_FILE\"\n"
+	if err := os.WriteFile(mcPath, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MC_ARGS_FILE", argsPath)
+
+	c := NewMinIOClient(Config{
+		MCBinary:      mcPath,
+		StoragePrefix: "agentteams/agentteams-storage",
+	})
+	if err := c.Mirror(t.Context(), "teams/t1/skills/skill-a/", "agents/w1/skills/skill-a/", MirrorOptions{Overwrite: true, Remove: true}); err != nil {
+		t.Fatalf("Mirror failed: %v", err)
+	}
+
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(args)
+	if !strings.HasPrefix(got, "mirror ") {
+		t.Fatalf("mc args = %q, want the mirror invocation", got)
+	}
+	if !strings.Contains(got, "--overwrite") || !strings.Contains(got, "--remove") {
+		t.Fatalf("mc args = %q, want both --overwrite and --remove", got)
+	}
+}
+
 func TestMinIOAdminClient_BuildWorkerPolicy(t *testing.T) {
 	c := NewMinIOAdminClient(Config{Bucket: "agentteams-storage"})
 

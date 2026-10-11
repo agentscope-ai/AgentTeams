@@ -78,8 +78,13 @@ spec:
                   fieldPath: metadata.namespace
             - name: AGENTTEAMS_WORKER_IMAGE
               value: {{ include "agentteams.worker.openclawImage" . | quote }}
+            {{- /* Legacy CoPaw deployments only: workers with an empty spec.image
+                 resolve this image. Injected solely when values explicitly pin
+                 copaw.repository, so new releases stay image-less. */}}
+            {{- if .Values.worker.defaultImage.copaw.repository }}
             - name: AGENTTEAMS_COPAW_WORKER_IMAGE
               value: {{ include "agentteams.worker.copawImage" . | quote }}
+            {{- end }}
             - name: AGENTTEAMS_HERMES_WORKER_IMAGE
               value: {{ include "agentteams.worker.hermesImage" . | quote }}
             - name: AGENTTEAMS_OPENHUMAN_WORKER_IMAGE

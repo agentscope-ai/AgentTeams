@@ -8,7 +8,6 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASH_INSTALLER="${ROOT_DIR}/install/agentteams-install.sh"
 POWERSHELL_INSTALLER="${ROOT_DIR}/install/agentteams-install.ps1"
 INTEGRATION_WORKFLOW="${ROOT_DIR}/.github/workflows/test-integration.yml"
-BUILD_WORKFLOW="${ROOT_DIR}/.github/workflows/build.yml"
 RELEASE_WORKFLOW="${ROOT_DIR}/.github/workflows/release.yml"
 
 fail() {
@@ -59,12 +58,16 @@ bash_runtime_blocks="$(
 )"
 grep -Fq '1) $(msg worker_runtime.qwenpaw)' <<<"${bash_runtime_blocks}" ||
     fail "Bash installer Worker menu must list QwenPaw first"
-grep -Fq '4) $(msg worker_runtime.copaw)' <<<"${bash_runtime_blocks}" ||
-    fail "Bash installer Worker menu must list legacy CoPaw last for current versions"
+grep -Eq '[0-9]+\) \$\(msg worker_runtime\.copaw\)' <<<"${bash_runtime_blocks}" &&
+    fail "Bash installer Worker menu must not offer CoPaw as a new-install option (retired with the CoPaw runtime)"
+grep -Fq 'log "      $(msg worker_runtime.copaw)"' <<<"${bash_runtime_blocks}" ||
+    fail "Bash installer must keep the legacy CoPaw upgrade hint for existing instances"
 grep -Fq '1) $(msg manager_runtime.qwenpaw)' <<<"${bash_runtime_blocks}" ||
     fail "Bash installer Manager menu must list QwenPaw first"
-grep -Fq '3) $(msg manager_runtime.copaw)' <<<"${bash_runtime_blocks}" ||
-    fail "Bash installer Manager menu must list legacy CoPaw last"
+grep -Eq '[0-9]+\) \$\(msg manager_runtime\.copaw\)' <<<"${bash_runtime_blocks}" &&
+    fail "Bash installer Manager menu must not offer CoPaw as a new-install option (retired with the CoPaw runtime)"
+grep -Fq 'log "      $(msg manager_runtime.copaw)"' <<<"${bash_runtime_blocks}" ||
+    fail "Bash installer must keep the legacy CoPaw upgrade hint for existing instances"
 grep -Fq 'CoPaw（旧版本，建议升级为 QwenPaw）' "${BASH_INSTALLER}" ||
     fail "Bash installer must recommend upgrading CoPaw to QwenPaw"
 grep -E '_pull_image.*QWENPAW_WORKER_IMAGE' "${BASH_INSTALLER}" | grep -Eqv '^[[:space:]]*#' ||
@@ -80,12 +83,16 @@ powershell_runtime_blocks="$(
 )"
 grep -Fq "1) \$(Get-Msg 'worker_runtime.qwenpaw')" <<<"${powershell_runtime_blocks}" ||
     fail "PowerShell installer Worker menu must list QwenPaw first"
-grep -Fq "4) \$(Get-Msg 'worker_runtime.copaw')" <<<"${powershell_runtime_blocks}" ||
-    fail "PowerShell installer Worker menu must list legacy CoPaw last"
+grep -Eq "[0-9]+\) \$\(Get-Msg 'worker_runtime\.copaw'\)" <<<"${powershell_runtime_blocks}" &&
+    fail "PowerShell installer Worker menu must not offer CoPaw as a new-install option (retired with the CoPaw runtime)"
+grep -Fq 'Write-Log ("      " + (Get-Msg "worker_runtime.copaw"))' <<<"${powershell_runtime_blocks}" ||
+    fail "PowerShell installer must keep the legacy CoPaw upgrade hint for existing instances"
 grep -Fq "1) \$(Get-Msg 'manager_runtime.qwenpaw')" <<<"${powershell_runtime_blocks}" ||
     fail "PowerShell installer Manager menu must list QwenPaw first"
-grep -Fq "3) \$(Get-Msg 'manager_runtime.copaw')" <<<"${powershell_runtime_blocks}" ||
-    fail "PowerShell installer Manager menu must list legacy CoPaw last"
+grep -Eq "[0-9]+\) \$\(Get-Msg 'manager_runtime\.copaw'\)" <<<"${powershell_runtime_blocks}" &&
+    fail "PowerShell installer Manager menu must not offer CoPaw as a new-install option (retired with the CoPaw runtime)"
+grep -Fq 'Write-Log ("      " + (Get-Msg "manager_runtime.copaw"))' <<<"${powershell_runtime_blocks}" ||
+    fail "PowerShell installer must keep the legacy CoPaw upgrade hint for existing instances"
 grep -Fq 'CoPaw（旧版本，建议升级为 QwenPaw）' "${POWERSHELL_INSTALLER}" ||
     fail "PowerShell installer must recommend upgrading CoPaw to QwenPaw"
 grep -Fq 'AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE' "${POWERSHELL_INSTALLER}" ||
@@ -94,8 +101,7 @@ powershell_worker_images="$(sed -n '/\$workerImages = @(/,/^    )/p' "${POWERSHE
 grep -F 'QWENPAW_WORKER_IMAGE' <<<"${powershell_worker_images}" | grep -Eqv '^[[:space:]]*#' ||
     fail "PowerShell installer must pull the published QwenPaw Worker image"
 
-grep -F 'echo "targets=' "${BUILD_WORKFLOW}" | grep -F 'qwenpaw-worker' >/dev/null ||
-    fail "Tag-triggered image builds must publish qwenpaw-worker"
+# Tag-triggered image selection is exercised in test-build-workflows.py.
 grep -Fq 'docker pull ${REGISTRY}/${REPO}/agentteams-qwenpaw-worker:${VERSION}' \
     "${RELEASE_WORKFLOW}" ||
     fail "Release notes must list the versioned QwenPaw Worker image"
@@ -109,13 +115,9 @@ for manager_crd in \
         fail "Manager CRD must keep accepting legacy CoPaw: ${manager_crd}"
 done
 
-# Fork CI must exercise the PR-built QwenPaw Manager directly while retaining
-# one compatibility mapping for legacy CoPaw matrix entries.
+# Fork CI must exercise the PR-built QwenPaw Manager directly.
 grep -Fq 'AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE: agentteams/manager-qwenpaw:latest' \
     "${INTEGRATION_WORKFLOW}" ||
     fail "Integration CI must map the QwenPaw runtime to the PR-built Manager image"
-grep -Fq 'AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE: agentteams/manager-qwenpaw:latest' \
-    "${INTEGRATION_WORKFLOW}" ||
-    fail "Integration CI must explicitly map the CoPaw compatibility label to the PR-built QwenPaw Manager image"
 
 echo "PASS: QwenPaw Manager and Worker are first-class local installer options"

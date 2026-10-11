@@ -108,57 +108,11 @@ func (r *TeamReconciler) resolveTeamAdminActor(ctx context.Context, t *v1beta1.T
 	if t.Spec.Admin == nil {
 		return teamAdminActor{}, nil
 	}
-	if strings.TrimSpace(t.Spec.Admin.Name) == "" {
-		return teamAdminActor{}, fmt.Errorf("team admin human name is required")
-	}
-
-	var human v1beta1.Human
-	key := client.ObjectKey{Name: t.Spec.Admin.Name, Namespace: t.Namespace}
-	if err := r.Get(ctx, key, &human); err != nil {
-		return teamAdminActor{}, fmt.Errorf("load team admin human %s/%s: %w", key.Namespace, key.Name, err)
-	}
-
 	humanProv, ok := r.Provisioner.(service.HumanProvisioner)
 	if !ok {
-		return teamAdminActor{}, fmt.Errorf("team admin human %s/%s requires HumanProvisioner support", key.Namespace, key.Name)
+		return teamAdminActor{}, fmt.Errorf("team admin human %s/%s requires HumanProvisioner support", t.Namespace, t.Spec.Admin.Name)
 	}
-	identity, err := humanidentity.ResolveHuman(&human.Spec, human.Name, humanidentity.Deps{Provisioner: humanProv})
-	if err != nil {
-		return teamAdminActor{}, fmt.Errorf("resolve team admin human %s/%s identity: %w", key.Namespace, key.Name, err)
-	}
-	matrixUserID := human.Status.MatrixUserID
-	if matrixUserID == "" {
-		if human.Spec.IdentitySource != nil {
-			return teamAdminActor{}, fmt.Errorf("team admin human %s/%s uses an external identity source but is not provisioned yet",
-				key.Namespace, key.Name)
-		}
-		matrixUserID = identity.MatrixUserID
-	}
-	if matrixUserID != identity.MatrixUserID {
-		return teamAdminActor{}, fmt.Errorf("team admin human %s/%s status.matrixUserID %q does not match resolved identity %q",
-			key.Namespace, key.Name, matrixUserID, identity.MatrixUserID)
-	}
-	if t.Spec.Admin.MatrixUserID != "" && t.Spec.Admin.MatrixUserID != matrixUserID {
-		return teamAdminActor{}, fmt.Errorf("team admin matrixUserId %q does not match Human %s/%s matrix user %q",
-			t.Spec.Admin.MatrixUserID, key.Namespace, key.Name, matrixUserID)
-	}
-	if identity.ManagesInitialPassword && !r.Provisioner.MatrixAppServiceEnabled() && human.Status.InitialPassword == "" {
-		return teamAdminActor{}, fmt.Errorf("team admin human %s/%s has no initial password; cannot obtain Matrix token",
-			key.Namespace, key.Name)
-	}
-
-	token, err := identity.Source.EnsureUserToken(ctx, &human.Spec, &human.Status, human.Name)
-	if err != nil {
-		return teamAdminActor{}, fmt.Errorf("login as team admin human %s/%s: %w", key.Namespace, key.Name, err)
-	}
-	if token == "" {
-		return teamAdminActor{}, fmt.Errorf("team admin human %s/%s has no Matrix token", key.Namespace, key.Name)
-	}
-	return teamAdminActor{
-		MatrixUserID: matrixUserID,
-		Token:        token,
-		Username:     identity.MatrixLocalpart,
-	}, nil
+	return resolveTeamAdminActor(ctx, r.Client, humanProv, t)
 }
 
 // deriveTeamWithResolvedIdentities returns a deep copy of t with the team
@@ -393,6 +347,7 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 	if err := r.Deployer.EnsureTeamStorage(ctx, teamRuntimeName); err != nil {
 		logger.Error(err, "team shared storage init failed (non-fatal)", "name", t.Name, "teamName", teamRuntimeName)
 	}
+	r.propagateSubagentModelChange(ctx, t, members)
 	for i := range members {
 		member := &members[i]
 		if err := r.setWorkerTeamAnnotation(ctx, &member.worker, teamRuntimeName); err != nil {
@@ -501,6 +456,19 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 		if err := r.ManagerConfig.UpdateManagerGroupAllowFrom(leaderMatrixID, true); err != nil {
 			logger.Error(err, "failed to update Manager groupAllowFrom for team leader (non-fatal)")
 		}
+		// Team humans talk to the Manager in team/project rooms. Without
+		// their Matrix IDs in the allowlist, allowlist mode silently drops
+		// their @mentions. Their access derives from the Human CR's
+		// accessibleTeams, so it is intentionally not revoked when this
+		// Team is deleted.
+		for _, hm := range derivedTeam.Spec.HumanMembers {
+			if hm.MatrixUserID == "" {
+				continue
+			}
+			if err := r.ManagerConfig.UpdateManagerGroupAllowFrom(hm.MatrixUserID, true); err != nil {
+				logger.Error(err, "failed to update Manager groupAllowFrom for team human (non-fatal)", "human", hm.Name)
+			}
+		}
 		for _, rm := range members {
 			if rm.ref.Name != leaderRef.Name {
 				if rm.worker.Status.RoomID != "" {
@@ -573,6 +541,38 @@ func (r *TeamReconciler) setWorkerTeamAnnotation(ctx context.Context, worker *v1
 		worker.Annotations[v1beta1.AnnotationWorkerTeamName] = teamName
 	}
 	return r.Patch(ctx, worker, client.MergeFrom(base))
+}
+
+// propagateSubagentModelChange handles a change to the team-wide subagent
+// model default: members resolve it read-time during their config reconcile,
+// so the change must re-trigger their reconciles. It records the applied
+// value on the team (annotation) and bumps each member Worker's
+// resourceVersion with a no-op Update. Failures are logged, not returned —
+// a missed bump self-heals on the next team reconcile.
+func (r *TeamReconciler) propagateSubagentModelChange(ctx context.Context, t *v1beta1.Team, members []teamWorkerMember) bool {
+	if t.Annotations[v1beta1.AnnotationSubagentModelApplied] == t.Spec.SubagentModel {
+		return false
+	}
+	logger := log.FromContext(ctx)
+	base := t.DeepCopy()
+	if t.Annotations == nil {
+		t.Annotations = map[string]string{}
+	}
+	if t.Spec.SubagentModel == "" {
+		delete(t.Annotations, v1beta1.AnnotationSubagentModelApplied)
+	} else {
+		t.Annotations[v1beta1.AnnotationSubagentModelApplied] = t.Spec.SubagentModel
+	}
+	if err := r.Patch(ctx, t, client.MergeFrom(base)); err != nil {
+		logger.Error(err, "record applied subagent model on team (non-fatal)", "team", t.Name)
+	}
+	for i := range members {
+		member := &members[i]
+		if err := r.Update(ctx, &member.worker); err != nil {
+			logger.Error(err, "bump member worker for subagent model change (non-fatal)", "worker", member.runtimeName)
+		}
+	}
+	return true
 }
 
 func (r *TeamReconciler) resolveTeamMembers(ctx context.Context, t *v1beta1.Team) ([]teamWorkerMember, []string) {
@@ -676,6 +676,7 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 			Role:              role.String(),
 			Generation:        member.worker.Generation,
 			Spec:              spec,
+			SubagentModel:     resolveSubagentModel(member.worker.Spec.SubagentModel, t.Spec.SubagentModel),
 			AIGatewayURL:      aiGatewayURL,
 			MatrixUserID:      member.worker.Status.MatrixUserID,
 			PersonalRoomID:    member.worker.Status.RoomID,
@@ -767,6 +768,8 @@ func syncTeamMemberStatus(ms *v1beta1.TeamMemberStatus, member teamWorkerMember)
 	ms.ContainerState = member.worker.Status.ContainerState
 	ms.Message = member.worker.Status.Message
 	ms.LastActiveAt = member.worker.Status.LastActiveAt
+	ms.AgentStatus = member.worker.Status.AgentStatus
+	ms.LastFinishAt = member.worker.Status.LastFinishAt
 	ms.LastHeartbeat = member.worker.Status.LastHeartbeat
 	ms.ExposedPorts = member.worker.Status.ExposedPorts
 }
@@ -825,6 +828,7 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 		Role:            RoleStandalone.String(),
 		Generation:      w.Generation,
 		Spec:            w.Spec,
+		SubagentModel:   w.Spec.SubagentModel,
 		AIGatewayURL:    aiGatewayURL,
 		MatrixUserID:    w.Status.MatrixUserID,
 		PersonalRoomID:  w.Status.RoomID,
@@ -1349,6 +1353,15 @@ func (r *TeamReconciler) SetupWithManager(mgr ctrl.Manager) (controller.Controll
 		builder.WithPredicates(workerStatusChangePredicate()),
 	)
 
+	// Watch Human CRs: a change to a human's accessibleTeams — or provisioning
+	// that fills status.matrixUserID — must re-reconcile the affected teams so
+	// the Manager's groupAllowFrom (and derived channel policies) converge
+	// without waiting for an unrelated worker status change.
+	bldr = bldr.Watches(
+		&v1beta1.Human{},
+		handler.EnqueueRequestsFromMapFunc(r.humanToTeamRequests),
+	)
+
 	return bldr.Build(r)
 }
 
@@ -1371,8 +1384,47 @@ func (r *TeamReconciler) workerToTeamRequests(ctx context.Context, obj client.Ob
 	return reqs
 }
 
-// workerStatusChangePredicate triggers only on Worker status subresource
-// changes (Phase, MatrixUserID, RoomID) and delete events.
+// humanToTeamRequests maps a Human event to the Team(s) the human is attached
+// to: spec.accessibleTeams membership or an explicit spec.humanMembers entry.
+func (r *TeamReconciler) humanToTeamRequests(ctx context.Context, obj client.Object) []reconcile.Request {
+	human, ok := obj.(*v1beta1.Human)
+	if !ok {
+		return nil
+	}
+	var teamList v1beta1.TeamList
+	if err := r.List(ctx, &teamList, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(teamList.Items))
+	for i := range teamList.Items {
+		t := &teamList.Items[i]
+		if !containsString(human.Spec.AccessibleTeams, t.Name) {
+			explicit := false
+			for _, hm := range t.Spec.HumanMembers {
+				if hm.Name == human.Name {
+					explicit = true
+					break
+				}
+			}
+			if !explicit {
+				continue
+			}
+		}
+		reqs = append(reqs, reconcile.Request{
+			NamespacedName: client.ObjectKey{Name: t.Name, Namespace: t.Namespace},
+		})
+	}
+	return reqs
+}
+
+// workerStatusChangePredicate triggers on Worker status subresource changes
+// (Phase, MatrixUserID, RoomID, and the task-level AgentStatus/LastFinishAt
+// reported by heartbeats) and delete events. The task-level fields matter
+// because a worker's runtime can move idle->running->idle with the container
+// phase, Matrix user ID and room all unchanged; without them the owning
+// Team's member status view stays stale until some unrelated change.
+// Heartbeat-only updates (LastHeartbeat/LastActiveAt bumps) intentionally do
+// not trigger, so per-tick heartbeats do not requeue the team.
 func workerStatusChangePredicate() predicate.Predicate {
 	return predicate.Funcs{
 		CreateFunc: func(e event.CreateEvent) bool {
@@ -1388,7 +1440,9 @@ func workerStatusChangePredicate() predicate.Predicate {
 				oldW.Status.ObservedGeneration != newW.Status.ObservedGeneration ||
 				oldW.Status.Phase != newW.Status.Phase ||
 				oldW.Status.MatrixUserID != newW.Status.MatrixUserID ||
-				oldW.Status.RoomID != newW.Status.RoomID
+				oldW.Status.RoomID != newW.Status.RoomID ||
+				oldW.Status.AgentStatus != newW.Status.AgentStatus ||
+				oldW.Status.LastFinishAt != newW.Status.LastFinishAt
 		},
 		DeleteFunc: func(e event.DeleteEvent) bool {
 			return true

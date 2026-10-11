@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	audit "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/audit"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/credentials"
@@ -13,28 +14,36 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/proxy"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/skillscan"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // ServerDeps aggregates all dependencies needed by the HTTP API handlers.
 type ServerDeps struct {
-	Client          client.Client
-	Backend         *backend.Registry
-	Gateway         gateway.Client
-	OSS             oss.StorageClient
-	STS             *credentials.STSService
-	AuthMw          *authpkg.Middleware
-	KubeMode        string
-	Namespace       string
-	ControllerName  string               // AGENTTEAMS_CONTROLLER_NAME; empty in embedded mode
-	SocketPath      string               // Docker proxy (embedded only)
-	ContainerPrefix string               // effective worker container prefix (config.ContainerPrefix); embedded-only address resolution
-	MatrixConfig    matrix.Config        // for AppService rotation endpoint
-	MatrixClient    matrix.Client        // for project intervention notifications (SendMessageAsAdmin); nil to skip
-	Provisioner     *service.Provisioner // for Matrix token refresh
+	WorkerEnvBuilder *service.WorkerEnvBuilder
+	Client           client.Client
+	Backend          *backend.Registry
+	Gateway          gateway.Client
+	OSS              oss.StorageClient
+	STS              *credentials.STSService
+	AuthMw           *authpkg.Middleware
+	KubeMode         string
+	Namespace        string
+	ControllerName   string               // AGENTTEAMS_CONTROLLER_NAME; empty in embedded mode
+	SocketPath       string               // Docker proxy (embedded only)
+	SkillScanner     *skillscan.Client    // shared skill content scan (upload ① + assign ②)
+	ContainerPrefix  string               // effective worker container prefix (config.ContainerPrefix); embedded-only address resolution
+	ResourcePrefix   string               // resource name prefix ("" = agentteams-); manager container name derivation for skillscan
+	MatrixConfig     matrix.Config        // for AppService rotation endpoint
+	MatrixClient     matrix.Client        // for project intervention notifications (SendMessageAsAdmin); nil to skip
+	Provisioner      *service.Provisioner // for Matrix token refresh
 
+	GatewayURL           string
 	DefaultWorkerRuntime string // install-time default for Worker create requests
+	DefaultModel         string // install-time model for Worker create requests without a model
+	WorkerAgentDir       string // source of builtin agent templates (skill catalog)
+	PluginDir            string // bundled plugin packages (skill catalog plugin source); empty = no plugin entries
 }
 
 // HTTPServer serves the unified controller REST API.
@@ -66,8 +75,13 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/version", mw.Authenticate(http.HandlerFunc(sh.Version)))
 
 	// --- Declarative resource CRUD ---
-	rh := NewResourceHandler(deps.Client, deps.Namespace, deps.Backend, deps.ControllerName)
+	// One shared audit client: resource mutations (human updates, capability
+	// changes) and approval OFF transitions append to the same durable trail.
+	auditClient := audit.NewClient(deps.OSS)
+	rh := NewResourceHandler(deps.Client, deps.Namespace, deps.Backend, deps.ControllerName, auditClient).WithOSS(deps.OSS)
+	rh.workerEnvBuilder = deps.WorkerEnvBuilder
 	rh.defaultWorkerRuntime = deps.DefaultWorkerRuntime
+	rh.defaultWorkerModel = deps.DefaultModel
 	nameFn := authpkg.NameFromPath
 
 	// Workers
@@ -76,6 +90,15 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/workers/{name}", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(rh.GetWorker)))
 	mux.Handle("PUT /api/v1/workers/{name}", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(rh.UpdateWorker)))
 	mux.Handle("DELETE /api/v1/workers/{name}", mw.RequireAuthz(authpkg.ActionDelete, "worker", nameFn)(http.HandlerFunc(rh.DeleteWorker)))
+	// Deployment-level MCP catalog: shared registry (object storage) x
+	// per-worker spec.mcpServers, read-only, L1/L2 readable (issue #1248).
+	mux.Handle("GET /api/v1/mcp-servers", mw.RequireAuthz(authpkg.ActionList, "mcp-server", nil)(http.HandlerFunc(rh.ListMCPServers)))
+
+	probe := &workerGatewayProbe{client: deps.Client, namespace: deps.Namespace, gatewayURL: deps.GatewayURL}
+	if deps.Provisioner != nil {
+		probe.key = deps.Provisioner.WorkerGatewayKey
+	}
+	mux.Handle("POST /api/v1/workers/{name}/gateway-probe", mw.RequireAuthz(authpkg.ActionUpdate, "gateway", nil)(probe))
 
 	// Teams
 	mux.Handle("POST /api/v1/teams", mw.RequireAuthz(authpkg.ActionCreate, "team", nil)(http.HandlerFunc(rh.CreateTeam)))
@@ -88,6 +111,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/humans", mw.RequireAuthz(authpkg.ActionCreate, "human", nil)(http.HandlerFunc(rh.CreateHuman)))
 	mux.Handle("GET /api/v1/humans", mw.RequireAuthz(authpkg.ActionList, "human", nil)(http.HandlerFunc(rh.ListHumans)))
 	mux.Handle("GET /api/v1/humans/{name}", mw.RequireAuthz(authpkg.ActionGet, "human", nameFn)(http.HandlerFunc(rh.GetHuman)))
+	mux.Handle("PUT /api/v1/humans/{name}", mw.RequireAuthz(authpkg.ActionUpdate, "human", nameFn)(http.HandlerFunc(rh.UpdateHuman)))
 	mux.Handle("DELETE /api/v1/humans/{name}", mw.RequireAuthz(authpkg.ActionDelete, "human", nameFn)(http.HandlerFunc(rh.DeleteHuman)))
 
 	// Managers
@@ -96,6 +120,10 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/managers/{name}", mw.RequireAuthz(authpkg.ActionGet, "manager", nameFn)(http.HandlerFunc(rh.GetManager)))
 	mux.Handle("PUT /api/v1/managers/{name}", mw.RequireAuthz(authpkg.ActionUpdate, "manager", nameFn)(http.HandlerFunc(rh.UpdateManager)))
 	mux.Handle("DELETE /api/v1/managers/{name}", mw.RequireAuthz(authpkg.ActionDelete, "manager", nameFn)(http.HandlerFunc(rh.DeleteManager)))
+
+	// --- Audit (read-only view of the durable audit store, #1220 §8) ---
+	audh := NewAuditHandler(deps.OSS)
+	mux.Handle("GET /api/v1/audit", mw.RequireAuthz(authpkg.ActionGet, "audit", nil)(http.HandlerFunc(audh.List)))
 
 	// --- Package upload ---
 	ph := NewPackageHandler(deps.OSS)
@@ -115,15 +143,96 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	projectTaskNameFn := func(r *http.Request) string { return r.PathValue("id") + "/" + r.PathValue("taskId") }
 	mux.Handle("GET /api/v1/projects", mw.RequireAuthz(authpkg.ActionList, "project", nil)(http.HandlerFunc(projh.ListProjects)))
 	mux.Handle("GET /api/v1/projects/{id}/workflow", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectWorkflow)))
+	mux.Handle("GET /api/v1/projects/{id}/tasks/{taskId}", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetTaskInspection)))
 	mux.Handle("GET /api/v1/projects/{id}/tasks/{taskId}/artifact", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetTaskArtifact)))
 	mux.Handle("GET /api/v1/projects/{id}/spawns", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectSpawns)))
 	mux.Handle("GET /api/v1/projects/{id}/spawns/{sessionId}/messages", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectSpawnMessages)))
 	mux.Handle("GET /api/v1/projects/{id}/history", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectHistory)))
+	// Project event stream (transition engine history feed; read-only, L2 self-scope).
+	mux.Handle("GET /api/v1/projects/{id}/events", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectEvents)))
 	mux.Handle("GET /api/v1/projects/{id}/history/{timestamp}", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectHistorySnapshot)))
 
 	// --- Worker checkpoints (execution timeline; proxy to the worker's qwenpaw app) ---
 	ckh := NewCheckpointHandler(deps.Client, deps.Namespace, deps.KubeMode, deps.ContainerPrefix)
 	mux.Handle("GET /api/v1/workers/{name}/checkpoints/{sub}", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(ckh.proxyCheckpoint)))
+
+	// --- Worker chats (read-only session visibility; proxy to the worker's
+	// qwenpaw app). The dashboard renders a worker's conversation history
+	// for the caller's scoped workers; embedded mode only. ---
+	chatsh := NewChatsHandler(deps.Client, deps.Namespace, deps.KubeMode, deps.ContainerPrefix)
+	// L2 participation anchor (room level): the caller's own Matrix token
+	// → homeserver GET /joined_rooms (ListJoinedRooms takes the caller's
+	// token — membership is a property of the token's user, no admin
+	// substitute view). When there is no Matrix client the field stays
+	// nil and every L2 request fails closed (uniform 404).
+	if deps.MatrixClient != nil {
+		chatsh.joinedRooms = deps.MatrixClient.ListJoinedRooms
+	}
+	mux.Handle("GET /api/v1/workers/{name}/chats", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(chatsh.listChats)))
+	mux.Handle("GET /api/v1/workers/{name}/chats/{chat_id}", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(chatsh.getChat)))
+	mux.Handle("GET /api/v1/workers/{name}/chats/{chat_id}/status", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(chatsh.getChatStatus)))
+
+	// --- Worker knowledge base files (read-only MEMORY.md / memory/** / digest/** inspection; proxy to the worker's qwenpaw app) ---
+	wfh := NewWorkspaceFilesHandler(deps.Client, deps.Namespace, deps.KubeMode, deps.ContainerPrefix)
+	mux.Handle("GET /api/v1/workers/{name}/workspace-files/{sub}", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(wfh.proxyWorkspaceFiles)))
+	mux.Handle("PUT /api/v1/workers/{name}/workspace-files/file-content", mw.RequireAuthz(authpkg.ActionWorkspaceFilesWrite, "worker", nameFn)(http.HandlerFunc(wfh.proxyWorkspaceFileWrite)))
+	// Worker runtime-config proxy (qwenpaw running-config: 5-tab settings +
+	// Loop Engine catalog/status + custom-loop CRUD). runtime-aware (400 for
+	// non-qwenpaw), L2 team-scoped, 5-tab field whitelist for L2 writes, and
+	// loop-change notification (@leader + @changer) on custom-loop writes.
+	rch := NewRuntimeConfigHandler(deps.Client, deps.Namespace, deps.KubeMode, deps.ContainerPrefix, deps.MatrixClient)
+	mux.Handle("GET /api/v1/workers/{name}/runtime-config", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(rch.Handle)))
+	mux.Handle("PUT /api/v1/workers/{name}/runtime-config", mw.RequireAuthz(authpkg.ActionRuntimeConfig, "worker", nameFn)(http.HandlerFunc(rch.Handle)))
+	mux.Handle("GET /api/v1/workers/{name}/loops", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(rch.Handle)))
+	mux.Handle("GET /api/v1/workers/{name}/loops/status", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(rch.Handle)))
+	mux.Handle("GET /api/v1/workers/{name}/loops/custom", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(rch.Handle)))
+	mux.Handle("POST /api/v1/workers/{name}/loops/custom", mw.RequireAuthz(authpkg.ActionRuntimeConfig, "worker", nameFn)(http.HandlerFunc(rch.Handle)))
+	mux.Handle("PUT /api/v1/workers/{name}/loops/custom/{loop}", mw.RequireAuthz(authpkg.ActionRuntimeConfig, "worker", nameFn)(http.HandlerFunc(rch.Handle)))
+	mux.Handle("DELETE /api/v1/workers/{name}/loops/custom/{loop}", mw.RequireAuthz(authpkg.ActionRuntimeConfig, "worker", nameFn)(http.HandlerFunc(rch.Handle)))
+
+	// --- Worker skill runtime state + preload policy (QwenPaw >= 2.2.1; proxy to the worker's qwenpaw app) ---
+	wskh := NewWorkerSkillsHandler(deps.Client, deps.Namespace, deps.KubeMode, deps.ContainerPrefix)
+	mux.Handle("GET /api/v1/workers/{name}/skills", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(wskh.getWorkerSkills)))
+	mux.Handle("PUT /api/v1/workers/{name}/skills/{skill_name}/preload", mw.RequireAuthz(authpkg.ActionWorkerSkillPreload, "worker", nameFn)(http.HandlerFunc(wskh.putWorkerSkillPreload)))
+
+	// --- Worker tool approval (team-scoped; proxy to the worker's qwenpaw app) ---
+	ah := NewApprovalHandler(deps.Client, deps.Namespace, deps.KubeMode, deps.ContainerPrefix, auditClient)
+	mux.Handle("GET /api/v1/workers/{name}/approval", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(ah.getWorkerApproval)))
+	mux.Handle("PUT /api/v1/workers/{name}/approval", mw.RequireAuthz(authpkg.ActionWorkerApproval, "worker", nameFn)(http.HandlerFunc(ah.updateWorkerApproval)))
+
+	// --- Worker tool settings (qwenpaw built-in tools: enable / async execution;
+	// proxy to the worker's qwenpaw app; declarative PATCH, L2 team-scoped,
+	// leaders read-only) ---
+	th := NewToolsHandler(deps.Client, deps.Namespace, deps.KubeMode, deps.ContainerPrefix)
+	mux.Handle("GET /api/v1/workers/{name}/tools", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(th.listWorkerTools)))
+	mux.Handle("PATCH /api/v1/workers/{name}/tools/{tool}", mw.RequireAuthz(authpkg.ActionWorkerTools, "worker", nameFn)(http.HandlerFunc(th.patchWorkerTool)))
+
+	// --- Skill catalog (read: builtin per runtime + shared/team layers +
+	// plugin-bundled skills; write: team-skill upload) ---
+	// The scanner is shared with the Deployer (one content-hash cache
+	// across upload scan ① and assign-time scan ②).
+	skh := NewSkillsHandler(deps.WorkerAgentDir, deps.PluginDir, deps.OSS, deps.Client, deps.Namespace, deps.SkillScanner)
+
+	mux.Handle("GET /api/v1/skills", mw.RequireAuthz(authpkg.ActionList, "skills", nil)(http.HandlerFunc(skh.ListSkills)))
+	mux.Handle("GET /api/v1/skills/{name}/download", mw.RequireAuthz(authpkg.ActionList, "skills", nil)(http.HandlerFunc(skh.DownloadSkill)))
+	mux.Handle("POST /api/v1/skills", mw.RequireAuthz(authpkg.ActionSkillPublish, "skills", nil)(http.HandlerFunc(skh.UploadSkill)))
+
+	// --- Worker channels (channel configuration; proxy to the worker's qwenpaw app) ---
+	// Reads use ActionGet; mutations use ActionUpdate so the authorizer's
+	// worker-scoped policy applies (L2 human writes ride on the
+	// worker-scoped update rule). The handler is the real boundary: team
+	// leaders are read-only (403 on mutations), L2 humans are team-checked
+	// (W8: 404, never 403) and credential-field writes additionally require
+	// the channel_secrets capability (gated + audit-logged in the handler).
+	chh := NewChannelsHandler(deps.Client, deps.Namespace, deps.KubeMode, deps.ContainerPrefix, deps.OSS, auditClient)
+	mux.Handle("GET /api/v1/workers/{name}/channels", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(chh.getChannels)))
+	mux.Handle("GET /api/v1/workers/{name}/channels/{sub}", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(chh.getChannelResource)))
+	mux.Handle("PUT /api/v1/workers/{name}/channels/{channel}", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(chh.putChannel)))
+	mux.Handle("GET /api/v1/workers/{name}/channels/{channel}/health", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(chh.getChannelHealth)))
+	mux.Handle("GET /api/v1/workers/{name}/channels/{channel}/qrcode", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(chh.getChannelQrcode)))
+	mux.Handle("GET /api/v1/workers/{name}/channels/{channel}/qrcode/status", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(chh.getQrcodeStatus)))
+	mux.Handle("POST /api/v1/workers/{name}/channels/{channel}/restart", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(chh.restartChannel)))
+	mux.Handle("POST /api/v1/workers/{name}/channels/{channel}/conflict-check", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(chh.checkChannelConflict)))
 
 	// W-PR-2: human intervention + lifecycle (write endpoints). All writes go
 	// through RequireAuthz ActionUpdate + "project" so the authorizer's
@@ -144,6 +253,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/gateway/consumers", mw.RequireAuthz(authpkg.ActionCreate, "gateway", nil)(http.HandlerFunc(gh.CreateConsumer)))
 	mux.Handle("POST /api/v1/gateway/consumers/{id}/bind", mw.RequireAuthz(authpkg.ActionUpdate, "gateway", nil)(http.HandlerFunc(gh.BindConsumer)))
 	mux.Handle("DELETE /api/v1/gateway/consumers/{id}", mw.RequireAuthz(authpkg.ActionDelete, "gateway", nil)(http.HandlerFunc(gh.DeleteConsumer)))
+	mux.Handle("GET /api/v1/gateway/ai-routes", mw.RequireAuthz(authpkg.ActionGet, "gateway", nil)(http.HandlerFunc(gh.ListAIRoutes)))
 
 	// --- Credentials ---
 	// STS is self-scoped: no {name} in path; handler uses CallerIdentity to scope the issued token.

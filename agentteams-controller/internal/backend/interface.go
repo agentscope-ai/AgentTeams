@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"errors"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -352,4 +353,23 @@ type WorkerBackend interface {
 // worker's file-projected ServiceAccount token without recreating it.
 type AuthTokenProjector interface {
 	ProjectAuthToken(ctx context.Context, name, token string) error
+}
+
+// WorkerExecBackend is implemented by backends that can run a command and
+// write files inside a running worker container (currently: embedded
+// docker mode, which holds the docker socket).
+//
+// It powers the coding-CLI management surface (version probe, settings
+// read/write, CLI install), which must work for ANY worker runtime without
+// worker-side cooperation — the worker container only needs the CLI binary
+// and npm to exist, no worker-side router or image change.
+type WorkerExecBackend interface {
+	// Exec runs a command in the worker container and captures its
+	// output. Synchronous, bounded by timeout. The command runs as the
+	// container's default user with the container's own PATH.
+	Exec(ctx context.Context, name string, command []string, timeout time.Duration) (stdout, stderr string, exitCode int, err error)
+
+	// WriteFile atomically replaces a file inside the worker container
+	// (tmp file + rename, same as the auth-token projection).
+	WriteFile(ctx context.Context, name, path, content string) error
 }

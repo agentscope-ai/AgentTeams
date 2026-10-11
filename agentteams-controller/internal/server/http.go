@@ -234,6 +234,19 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/workers/{name}/channels/{channel}/restart", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(chh.restartChannel)))
 	mux.Handle("POST /api/v1/workers/{name}/channels/{channel}/conflict-check", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(chh.checkChannelConflict)))
 
+	// --- Worker coding CLIs (qwen-code / opencode; controller-side
+	// management via container exec — runtime-agnostic, works for any
+	// current runtime without worker-side cooperation or a QwenPaw
+	// release; see worker_coding_cli.go) ---
+	// Same boundary discipline as channels: fixed routes only, embedded
+	// mode, team scope, team leaders read-only.
+	cci := NewCodingCliHandler(deps.Client, deps.Namespace, deps.KubeMode, auditClient, deps.Backend)
+	mux.Handle("GET /api/v1/workers/{name}/coding-cli", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(cci.listCLIs)))
+	mux.Handle("GET /api/v1/workers/{name}/coding-cli/{cli}/settings", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(cci.getCliSettings)))
+	mux.Handle("PUT /api/v1/workers/{name}/coding-cli/{cli}/settings", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(cci.putCliSettings)))
+	mux.Handle("POST /api/v1/workers/{name}/coding-cli/{cli}/install", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(cci.startInstall)))
+	mux.Handle("GET /api/v1/workers/{name}/coding-cli/{cli}/install/{task_id}", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(cci.getInstallStatus)))
+
 	// W-PR-2: human intervention + lifecycle (write endpoints). All writes go
 	// through RequireAuthz ActionUpdate + "project" so the authorizer's
 	// requireSameTeam (TeamLeader / L2) rejects cross-team writes at the code

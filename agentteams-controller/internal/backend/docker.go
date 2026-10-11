@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -244,6 +245,10 @@ func dockerAuthVolumeName(containerName string) string {
 }
 
 func (d *DockerBackend) writeContainerFile(ctx context.Context, containerName, filePath, content string) error {
+	return d.writeContainerFileWithMode(ctx, containerName, filePath, content, 0400)
+}
+
+func (d *DockerBackend) writeContainerFileWithMode(ctx context.Context, containerName, filePath, content string, mode int64) error {
 	cleanPath := path.Clean(filePath)
 	if !path.IsAbs(cleanPath) || cleanPath == "/" || path.Base(cleanPath) == "." {
 		return fmt.Errorf("invalid container file path %q", filePath)
@@ -254,7 +259,7 @@ func (d *DockerBackend) writeContainerFile(ctx context.Context, containerName, f
 	data := []byte(content)
 	if err := tw.WriteHeader(&tar.Header{
 		Name: path.Base(cleanPath),
-		Mode: 0400,
+		Mode: mode,
 		Size: int64(len(data)),
 	}); err != nil {
 		return fmt.Errorf("write archive header: %w", err)
@@ -390,6 +395,145 @@ func (d *DockerBackend) execContainer(ctx context.Context, containerName string,
 		return fmt.Errorf("docker exec exited with code %d", inspected.ExitCode)
 	}
 	return nil
+}
+
+// Exec implements WorkerExecBackend: runs a command in the worker
+// container and captures stdout/stderr and the exit code. Synchronous;
+// bounded by timeout.
+func (d *DockerBackend) Exec(ctx context.Context, name string, command []string, timeout time.Duration) (string, string, int, error) {
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	containerName := d.containerPrefix + name
+
+	payload, err := json.Marshal(struct {
+		AttachStdout bool     `json:"AttachStdout"`
+		AttachStderr bool     `json:"AttachStderr"`
+		Cmd          []string `json:"Cmd"`
+	}{AttachStdout: true, AttachStderr: true, Cmd: command})
+	if err != nil {
+		return "", "", 0, fmt.Errorf("marshal exec payload: %w", err)
+	}
+	u := fmt.Sprintf("http://localhost/containers/%s/exec", url.PathEscape(containerName))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(payload))
+	if err != nil {
+		return "", "", 0, fmt.Errorf("build exec request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := d.client.Do(req)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("docker exec create: %w", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		return "", "", 0, fmt.Errorf("docker exec create failed (status %d): %s", resp.StatusCode, string(body))
+	}
+	var created struct {
+		ID string `json:"Id"`
+	}
+	if err := json.Unmarshal(body, &created); err != nil {
+		return "", "", 0, fmt.Errorf("parse docker exec response: %w", err)
+	}
+	if created.ID == "" {
+		return "", "", 0, fmt.Errorf("docker exec response: missing Id")
+	}
+
+	startReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("http://localhost/exec/%s/start", url.PathEscape(created.ID)),
+		strings.NewReader(`{"Detach":false,"Tty":false}`))
+	if err != nil {
+		return "", "", 0, fmt.Errorf("build exec start request: %w", err)
+	}
+	startReq.Header.Set("Content-Type", "application/json")
+	startResp, err := d.client.Do(startReq)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("docker exec start: %w", err)
+	}
+	stdout, stderr, streamErr := readDockerExecStream(startResp.Body)
+	startResp.Body.Close()
+	if streamErr != nil {
+		return "", "", 0, fmt.Errorf("docker exec stream: %w", streamErr)
+	}
+	if startResp.StatusCode != http.StatusOK && startResp.StatusCode != http.StatusCreated {
+		return stdout, stderr, 0, fmt.Errorf("docker exec start failed (status %d)", startResp.StatusCode)
+	}
+
+	inspectReq, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("http://localhost/exec/%s/json", url.PathEscape(created.ID)), nil)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("build exec inspect request: %w", err)
+	}
+	inspectResp, err := d.client.Do(inspectReq)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("docker exec inspect: %w", err)
+	}
+	inspectBody, _ := io.ReadAll(inspectResp.Body)
+	inspectResp.Body.Close()
+	if inspectResp.StatusCode != http.StatusOK {
+		return stdout, stderr, 0, fmt.Errorf("docker exec inspect failed (status %d): %s", inspectResp.StatusCode, string(inspectBody))
+	}
+	var inspected struct {
+		Running  bool `json:"Running"`
+		ExitCode int  `json:"ExitCode"`
+	}
+	if err := json.Unmarshal(inspectBody, &inspected); err != nil {
+		return "", "", 0, fmt.Errorf("parse docker exec inspect: %w", err)
+	}
+	if inspected.Running {
+		return stdout, stderr, 0, fmt.Errorf("docker exec still running")
+	}
+	return stdout, stderr, inspected.ExitCode, nil
+}
+
+// WriteFile implements WorkerExecBackend: atomically replaces a file inside
+// the worker container (tmp file + rename, same pattern as the auth-token
+// projection). The resulting file mode is 0600 so worker processes can keep
+// updating it (e.g. CLI auth flows writing credentials back).
+func (d *DockerBackend) WriteFile(ctx context.Context, name, filePath, content string) error {
+	containerName := d.containerPrefix + name
+	nextPath := filePath + ".next"
+	if err := d.writeContainerFileWithMode(ctx, containerName, nextPath, content, 0600); err != nil {
+		return fmt.Errorf("write next file: %w", err)
+	}
+	if err := d.execContainer(ctx, containerName, []string{"mv", "-f", nextPath, filePath}); err != nil {
+		return fmt.Errorf("activate next file: %w", err)
+	}
+	return nil
+}
+
+// readDockerExecStream demultiplexes a docker exec start stream (Tty=false):
+// frames are [8-byte header][payload] where the header is
+// [stream, 0, 0, 0, size1, size2, size3, size4] with the size big-endian.
+func readDockerExecStream(r io.Reader) (string, string, error) {
+	var out, errBuf bytes.Buffer
+	header := make([]byte, 8)
+	for {
+		if _, err := io.ReadFull(r, header); err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				return out.String(), errBuf.String(), nil
+			}
+			return "", "", fmt.Errorf("read exec stream header: %w", err)
+		}
+		size := int(binary.BigEndian.Uint32(header[4:8]))
+		if size == 0 {
+			continue
+		}
+		payload := make([]byte, size)
+		if _, err := io.ReadFull(r, payload); err != nil {
+			return "", "", fmt.Errorf("read exec stream payload: %w", err)
+		}
+		switch header[0] {
+		case 1:
+			out.Write(payload)
+		case 2:
+			errBuf.Write(payload)
+		default:
+			// unknown stream — ignore
+		}
+	}
 }
 
 // doCreate sends the container create request to Docker, handling conflict by

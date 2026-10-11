@@ -38,6 +38,8 @@ on:
       - 'hack/local-k8s-up.sh'
       - 'tests/check-create-project-grant-admin.sh'
       - 'manager/agent/skills/project-management/**'
+      - 'manager/scripts/init/start-manager-agent.sh'
+      - 'manager/tests/test-manager-startup-recovery.sh'
   workflow_dispatch: ~
 
 jobs:
@@ -101,6 +103,9 @@ jobs:
 
       - name: Check CoPaw upgrade gate failure modes
         run: bash tests/check-copaw-helm-upgrade-gate.sh
+
+      - name: Check Manager startup Worker recovery ownership
+        run: bash manager/tests/test-manager-startup-recovery.sh
 
       - name: Set up Helm
         uses: azure/setup-helm@v4

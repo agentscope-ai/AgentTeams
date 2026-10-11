@@ -1596,3 +1596,130 @@ func TestCreateWorkerDefaultModel(t *testing.T) {
 		})
 	}
 }
+
+// TestWorkerLlmStreamTimeoutAPIRoundTrip pins the API surface for the
+// LLM stream timeout fields: create carries them, update changes them,
+// and an explicit "" clears them back to unset (pointer semantics).
+func TestWorkerLlmStreamTimeoutAPIRoundTrip(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
+
+	post := func(path string, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader([]byte(body)))
+		rec := httptest.NewRecorder()
+		handler.CreateWorker(rec, req)
+		return rec
+	}
+	put := func(path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, path, bytes.NewReader([]byte(body)))
+		req.SetPathValue("name", "worker-lst")
+		rec := httptest.NewRecorder()
+		handler.UpdateWorker(rec, req)
+		return rec
+	}
+	getSpec := func() v1beta1.WorkerSpec {
+		var w v1beta1.Worker
+		if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "worker-lst", Namespace: "default"}, &w); err != nil {
+			t.Fatalf("get worker: %v", err)
+		}
+		return w.Spec
+	}
+
+	rec := post("/api/v1/workers", `{"name":"worker-lst","llmStreamFirstContentTimeout":"300","llmStreamIdleTimeout":"60"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	spec := getSpec()
+	if spec.LlmStreamFirstContentTimeout != "300" || spec.LlmStreamIdleTimeout != "60" {
+		t.Fatalf("create persisted first=%q idle=%q, want 300/60", spec.LlmStreamFirstContentTimeout, spec.LlmStreamIdleTimeout)
+	}
+
+	// GET response exposes the fields while they are set.
+	greq := httptest.NewRequest(http.MethodGet, "/api/v1/workers/worker-lst", nil)
+	greq.SetPathValue("name", "worker-lst")
+	greq = greq.WithContext(context.WithValue(greq.Context(), authpkg.CallerKeyForTest(), &authpkg.CallerIdentity{Role: authpkg.RoleAdmin}))
+	grec := httptest.NewRecorder()
+	handler.GetWorker(grec, greq)
+	if grec.Code != http.StatusOK {
+		t.Fatalf("get: %d %s", grec.Code, grec.Body.String())
+	}
+	if !bytes.Contains(grec.Body.Bytes(), []byte(`"llmStreamFirstContentTimeout":"300"`)) ||
+		!bytes.Contains(grec.Body.Bytes(), []byte(`"llmStreamIdleTimeout":"60"`)) {
+		t.Fatalf("get response missing llmStream fields: %s", grec.Body.String())
+	}
+
+	// Update: change one side, omit the other (pointer nil = keep).
+	rec = put("/api/v1/workers/worker-lst", `{"llmStreamIdleTimeout":"120"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update: %d %s", rec.Code, rec.Body.String())
+	}
+	spec = getSpec()
+	if spec.LlmStreamFirstContentTimeout != "300" || spec.LlmStreamIdleTimeout != "120" {
+		t.Fatalf("update persisted first=%q idle=%q, want 300/120", spec.LlmStreamFirstContentTimeout, spec.LlmStreamIdleTimeout)
+	}
+
+	// Update: explicit "" clears back to unset.
+	rec = put("/api/v1/workers/worker-lst", `{"llmStreamFirstContentTimeout":"","llmStreamIdleTimeout":""}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear: %d %s", rec.Code, rec.Body.String())
+	}
+	spec = getSpec()
+	if spec.LlmStreamFirstContentTimeout != "" || spec.LlmStreamIdleTimeout != "" {
+		t.Fatalf("clear persisted first=%q idle=%q, want empty/empty", spec.LlmStreamFirstContentTimeout, spec.LlmStreamIdleTimeout)
+	}
+}
+
+// TestWorkerLlmTuningAPIRoundTrip pins the API surface for the startup-only
+// LLM tuning fields: create carries them, update changes one (pointer keep),
+// and an explicit "" clears (pointer semantics).
+func TestWorkerLlmTuningAPIRoundTrip(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", bytes.NewReader([]byte(
+		`{"name":"worker-lt","llmMaxRetries":"7","llmAcquireTimeout":"180"}`)))
+	handler.CreateWorker(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	var w v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "worker-lt", Namespace: "default"}, &w); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if w.Spec.LlmMaxRetries != "7" || w.Spec.LlmAcquireTimeout != "180" {
+		t.Fatalf("create persisted maxRetries=%q acquireTimeout=%q, want 7/180", w.Spec.LlmMaxRetries, w.Spec.LlmAcquireTimeout)
+	}
+
+	// Update one side, omit the rest (nil = keep).
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/workers/worker-lt", bytes.NewReader([]byte(`{"llmMaxRetries":"9"}`)))
+	req.SetPathValue("name", "worker-lt")
+	handler.UpdateWorker(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "worker-lt", Namespace: "default"}, &w); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if w.Spec.LlmMaxRetries != "9" || w.Spec.LlmAcquireTimeout != "180" {
+		t.Fatalf("update persisted maxRetries=%q acquireTimeout=%q, want 9/180", w.Spec.LlmMaxRetries, w.Spec.LlmAcquireTimeout)
+	}
+
+	// Explicit "" clears.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/workers/worker-lt", bytes.NewReader([]byte(`{"llmMaxRetries":""}`)))
+	req.SetPathValue("name", "worker-lt")
+	handler.UpdateWorker(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "worker-lt", Namespace: "default"}, &w); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if w.Spec.LlmMaxRetries != "" || w.Spec.LlmAcquireTimeout != "180" {
+		t.Fatalf("clear persisted maxRetries=%q acquireTimeout=%q, want empty/180", w.Spec.LlmMaxRetries, w.Spec.LlmAcquireTimeout)
+	}
+}

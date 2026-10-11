@@ -192,22 +192,51 @@ type WorkerSpec struct {
 	// surfaces as a visible upstream error at spawn time). Consumed by
 	// QwenPaw >= 2.1.1 via the native AgentProfileConfig.subagent_model
 	// field; on older runtimes the field is silently ignored.
-	SubagentModel string                     `json:"subagentModel,omitempty"`
-	Runtime       string                     `json:"runtime,omitempty"`    // openclaw | copaw | hermes | qwenpaw | deepseek-harness (default: openclaw)
-	Image         string                     `json:"image,omitempty"`      // custom Docker image
-	WorkerName    string                     `json:"workerName,omitempty"` // business/runtime identity (Matrix localpart, OSS path key)
-	Identity      string                     `json:"identity,omitempty"`
-	Soul          string                     `json:"soul,omitempty"`
-	Agents        string                     `json:"agents,omitempty"`
-	Skills        []string                   `json:"skills,omitempty"`       // built-in skills only
-	RemoteSkills  []RemoteSkillSource        `json:"remoteSkills,omitempty"` // remote skills from source registries
-	McpServers    []MCPServer                `json:"mcpServers,omitempty"`
-	Package       string                     `json:"package,omitempty"` // file://, http(s)://, or nacos://[user:pass@]host:port/...; optional ?authType=nacos|sts-agentteams|none
-	Expose        []ExposePort               `json:"expose,omitempty"`  // ports to expose via Higress gateway
-	ChannelPolicy *ChannelPolicySpec         `json:"channelPolicy,omitempty"`
-	Channels      *ChannelsSpec              `json:"channels,omitempty"`
-	Resources     *AgentResourceRequirements `json:"resources,omitempty"`
-	IdleTimeout   string                     `json:"idleTimeout,omitempty"`
+	SubagentModel string `json:"subagentModel,omitempty"`
+	// LlmStreamFirstContentTimeout and LlmStreamIdleTimeout bound a stalled
+	// worker LLM stream, in seconds (e.g. "300", "0.5"). The controller
+	// hot-applies them to the QwenPaw runtime envs
+	// (QWENPAW_LLM_STREAM_FIRST_CONTENT_TIMEOUT /
+	// QWENPAW_LLM_STREAM_IDLE_TIMEOUT), which the runtime re-reads on every
+	// stream — so a change takes effect without a restart. An explicit
+	// worker value wins over the team default (TeamSpec.LlmStream*).
+	// Consumed by QwenPaw >= 2.2.1 (envs hot-apply API); older runtimes
+	// ignore them.
+	LlmStreamFirstContentTimeout string                     `json:"llmStreamFirstContentTimeout,omitempty"`
+	LlmStreamIdleTimeout         string                     `json:"llmStreamIdleTimeout,omitempty"`
+	// Llm* tuning knobs are the QwenPaw startup-only LLM settings
+	// (QWENPAW_LLM_MAX_RETRIES and friends). The controller projects the
+	// effective value (worker over team default) into the worker container
+	// environment at (re)creation, so a change takes effect when the
+	// container is recreated (spec-hash driven) — not hot, matching the
+	// QwenPaw registry's startup_only mutability. Values must be
+	// non-negative numbers matching the registry value type (integer or
+	// float); invalid values are skipped with a log, never breaking the
+	// container. All eight default to empty = "do not set the env" (the
+	// QwenPaw registry default then applies: 3/1/10/10/600/5/1/300).
+	LlmMaxRetries       string `json:"llmMaxRetries,omitempty"`
+	LlmBackoffBase      string `json:"llmBackoffBase,omitempty"`
+	LlmBackoffCap       string `json:"llmBackoffCap,omitempty"`
+	LlmMaxConcurrent    string `json:"llmMaxConcurrent,omitempty"`
+	LlmMaxQpm           string `json:"llmMaxQpm,omitempty"`
+	LlmRateLimitPause   string `json:"llmRateLimitPause,omitempty"`
+	LlmRateLimitJitter  string `json:"llmRateLimitJitter,omitempty"`
+	LlmAcquireTimeout   string `json:"llmAcquireTimeout,omitempty"`
+	Runtime             string `json:"runtime,omitempty"`    // openclaw | copaw | hermes | qwenpaw | deepseek-harness (default: openclaw)
+	Image                        string                     `json:"image,omitempty"`      // custom Docker image
+	WorkerName                   string                     `json:"workerName,omitempty"` // business/runtime identity (Matrix localpart, OSS path key)
+	Identity                     string                     `json:"identity,omitempty"`
+	Soul                         string                     `json:"soul,omitempty"`
+	Agents                       string                     `json:"agents,omitempty"`
+	Skills                       []string                   `json:"skills,omitempty"`       // built-in skills only
+	RemoteSkills                 []RemoteSkillSource        `json:"remoteSkills,omitempty"` // remote skills from source registries
+	McpServers                   []MCPServer                `json:"mcpServers,omitempty"`
+	Package                      string                     `json:"package,omitempty"` // file://, http(s)://, or nacos://[user:pass@]host:port/...; optional ?authType=nacos|sts-agentteams|none
+	Expose                       []ExposePort               `json:"expose,omitempty"`  // ports to expose via Higress gateway
+	ChannelPolicy                *ChannelPolicySpec         `json:"channelPolicy,omitempty"`
+	Channels                     *ChannelsSpec              `json:"channels,omitempty"`
+	Resources                    *AgentResourceRequirements `json:"resources,omitempty"`
+	IdleTimeout                  string                     `json:"idleTimeout,omitempty"`
 
 	// ContainerManaged indicates whether the controller should manage
 	// container lifecycle for this worker. When false, container
@@ -478,6 +507,28 @@ type TeamSpec struct {
 	// value inherit this default via read-time merge during their config
 	// reconcile. Changing it re-triggers member config reconciles.
 	SubagentModel string `json:"subagentModel,omitempty"`
+
+	// LlmStreamFirstContentTimeout and LlmStreamIdleTimeout are the
+	// team-wide defaults for the worker LLM stream timeouts (see
+	// WorkerSpec.LlmStreamFirstContentTimeout). A worker's own value always
+	// takes precedence; members without an explicit value inherit these via
+	// read-time merge during their config reconcile.
+	LlmStreamFirstContentTimeout string `json:"llmStreamFirstContentTimeout,omitempty"`
+	LlmStreamIdleTimeout         string `json:"llmStreamIdleTimeout,omitempty"`
+
+	// Llm* tuning knobs are the team-wide defaults for the QwenPaw
+	// startup-only LLM settings (see WorkerSpec.LlmMaxRetries and friends).
+	// A worker's own value always takes precedence; members without an
+	// explicit value inherit these defaults into their container environment
+	// at (re)creation.
+	LlmMaxRetries      string `json:"llmMaxRetries,omitempty"`
+	LlmBackoffBase     string `json:"llmBackoffBase,omitempty"`
+	LlmBackoffCap      string `json:"llmBackoffCap,omitempty"`
+	LlmMaxConcurrent   string `json:"llmMaxConcurrent,omitempty"`
+	LlmMaxQpm          string `json:"llmMaxQpm,omitempty"`
+	LlmRateLimitPause  string `json:"llmRateLimitPause,omitempty"`
+	LlmRateLimitJitter string `json:"llmRateLimitJitter,omitempty"`
+	LlmAcquireTimeout  string `json:"llmAcquireTimeout,omitempty"`
 }
 
 // TeamWorkerRef references an existing Worker CR as a team member.

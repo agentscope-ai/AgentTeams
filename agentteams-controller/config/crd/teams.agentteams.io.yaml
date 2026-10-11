@@ -79,6 +79,72 @@ spec:
                     explicit Worker.spec.subagentModel inherit this value (read-time
                     merge); an explicit worker value always wins. Empty disables the
                     default.
+                llmStreamFirstContentTimeout:
+                  type: string
+                  description: >
+                    Team-wide default for the worker LLM stream first-content timeout
+                    (seconds). Members without an explicit
+                    Worker.spec.llmStreamFirstContentTimeout inherit this value
+                    (read-time merge); an explicit worker value always wins. Empty
+                    disables the default.
+                llmStreamIdleTimeout:
+                  type: string
+                  description: >
+                    Team-wide default for the worker LLM stream idle timeout (seconds).
+                    Same inheritance semantics as llmStreamFirstContentTimeout.
+                llmMaxRetries:
+                  type: string
+                  description: >
+                    Team-wide default for the worker LLM max retries
+                    (non-negative integer). Members without an explicit
+                    Worker.spec.llmMaxRetries inherit this value (read-time
+                    merge); an explicit worker value always wins. Empty
+                    disables the default (the QwenPaw registry default then
+                    applies). Startup-only (spec-hash recreation).
+                llmBackoffBase:
+                  type: string
+                  description: >
+                    Team-wide default for the worker LLM backoff base seconds
+                    (non-negative float). Same inheritance semantics as
+                    llmMaxRetries. Startup-only (spec-hash recreation).
+                llmBackoffCap:
+                  type: string
+                  description: >
+                    Team-wide default for the worker LLM backoff cap seconds
+                    (non-negative float). Same inheritance semantics as
+                    llmMaxRetries. Startup-only (spec-hash recreation).
+                llmMaxConcurrent:
+                  type: string
+                  description: >
+                    Team-wide default for the worker LLM max concurrent
+                    requests (non-negative integer). Same inheritance
+                    semantics as llmMaxRetries. Startup-only (spec-hash
+                    recreation).
+                llmMaxQpm:
+                  type: string
+                  description: >
+                    Team-wide default for the worker LLM max queries per
+                    minute (non-negative integer). Same inheritance semantics
+                    as llmMaxRetries. Startup-only (spec-hash recreation).
+                llmRateLimitPause:
+                  type: string
+                  description: >
+                    Team-wide default for the worker LLM rate-limit pause
+                    seconds (non-negative float). Same inheritance semantics
+                    as llmMaxRetries. Startup-only (spec-hash recreation).
+                llmRateLimitJitter:
+                  type: string
+                  description: >
+                    Team-wide default for the worker LLM rate-limit pause
+                    jitter seconds (non-negative float). Same inheritance
+                    semantics as llmMaxRetries. Startup-only (spec-hash
+                    recreation).
+                llmAcquireTimeout:
+                  type: string
+                  description: >
+                    Team-wide default for the worker LLM slot-acquire timeout
+                    seconds (non-negative float). Same inheritance semantics
+                    as llmMaxRetries. Startup-only (spec-hash recreation).
                 admin:
                   type: object
                   description: "Team-specific admin (human). Has admin authority within this team."

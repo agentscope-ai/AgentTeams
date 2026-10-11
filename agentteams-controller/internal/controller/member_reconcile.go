@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"math"
 	"os"
 	"path"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -90,6 +92,19 @@ type MemberContext struct {
 	// member, resolved by the owning reconciler (read-time merge input).
 	// An explicit Spec.SubagentModel always takes precedence.
 	TeamSubagentModel string
+
+	// TeamLlmStreamFirstContentTimeout / TeamLlmStreamIdleTimeout are the
+	// Team.spec defaults for the worker LLM stream timeouts, resolved by the
+	// owning reconciler (read-time merge input). An explicit Spec.* value
+	// always takes precedence.
+	TeamLlmStreamFirstContentTimeout string
+	TeamLlmStreamIdleTimeout         string
+
+	// TeamLlmTuning holds the Team.spec startup-only LLM tuning defaults
+	// (keyed by the QWENPAW_LLM_* env name), resolved by the owning
+	// reconciler. An explicit Spec.* value always takes precedence; see
+	// resolveLlmTuningEnv for the projection rules.
+	TeamLlmTuning map[string]string
 
 	// Generation / ObservedGeneration are metadata included in logs to aid
 	// debugging. They are NOT used for spec-change detection — callers must
@@ -938,8 +953,86 @@ func buildMemberWorkerEnv(ctx context.Context, d MemberDeps, m MemberContext, pr
 		workerEnv["AGENTTEAMS_AI_GATEWAY_URL"] = m.ModelProviderInfo.IntranetURL
 	}
 	workerEnv["AGENTTEAMS_WORKER_ROLE"] = m.Role.String()
+	// Startup-only LLM tuning (QwenPaw registry "startup_only" keys):
+	// projected into the container environment (worker value over team
+	// default). The spec-hash path re-creates the container when the spec
+	// changes, which is how the new values reach the runtime — matching the
+	// registry's non-hot mutability. User spec.env keeps the highest
+	// priority (merged after, below).
+	for k, v := range resolveLlmTuningEnv(m, logger) {
+		workerEnv[k] = v
+	}
 	mergeUserEnv(workerEnv, m.Spec.Env, logger, string(m.Role)+"/"+m.Name)
 	return workerEnv, nil
+}
+
+// llmTuningEnvSpecs lists the QwenPaw startup-only LLM env keys with the
+// registry value type used for validation (mirrors qwenpaw envs/registry.py;
+// when a key is ever promoted to hot_runtime, the hot-apply table in
+// worker_hot_apply_envs.go is the extension point — see that file's docs).
+var llmTuningEnvSpecs = []struct {
+	envKey   string
+	valueTyp string // "integer" | "float"
+}{
+	{"QWENPAW_LLM_MAX_RETRIES", "integer"},
+	{"QWENPAW_LLM_BACKOFF_BASE", "float"},
+	{"QWENPAW_LLM_BACKOFF_CAP", "float"},
+	{"QWENPAW_LLM_MAX_CONCURRENT", "integer"},
+	{"QWENPAW_LLM_MAX_QPM", "integer"},
+	{"QWENPAW_LLM_RATE_LIMIT_PAUSE", "float"},
+	{"QWENPAW_LLM_RATE_LIMIT_JITTER", "float"},
+	{"QWENPAW_LLM_ACQUIRE_TIMEOUT", "float"},
+}
+
+// resolveLlmTuningEnv computes the effective startup-only LLM env for the
+// member. Per key an explicit worker value wins over the team default;
+// values are validated against the registry value type (non-negative integer
+// / non-negative finite float); invalid values are skipped with a log so the
+// QwenPaw default applies — best-effort, never blocking the container.
+func resolveLlmTuningEnv(m MemberContext, logger interface {
+	Info(msg string, keysAndValues ...interface{})
+}) map[string]string {
+	workerVals := map[string]string{
+		"QWENPAW_LLM_MAX_RETRIES":       m.Spec.LlmMaxRetries,
+		"QWENPAW_LLM_BACKOFF_BASE":      m.Spec.LlmBackoffBase,
+		"QWENPAW_LLM_BACKOFF_CAP":       m.Spec.LlmBackoffCap,
+		"QWENPAW_LLM_MAX_CONCURRENT":    m.Spec.LlmMaxConcurrent,
+		"QWENPAW_LLM_MAX_QPM":           m.Spec.LlmMaxQpm,
+		"QWENPAW_LLM_RATE_LIMIT_PAUSE":  m.Spec.LlmRateLimitPause,
+		"QWENPAW_LLM_RATE_LIMIT_JITTER": m.Spec.LlmRateLimitJitter,
+		"QWENPAW_LLM_ACQUIRE_TIMEOUT":   m.Spec.LlmAcquireTimeout,
+	}
+	out := map[string]string{}
+	for _, spec := range llmTuningEnvSpecs {
+		val := workerVals[spec.envKey]
+		if val == "" {
+			val = m.TeamLlmTuning[spec.envKey]
+		}
+		if val == "" {
+			continue
+		}
+		if !validLlmTuningValue(spec.valueTyp, val) {
+			if logger != nil {
+				logger.Info("skipping invalid LLM tuning value (QwenPaw default applies)",
+					"env", spec.envKey, "value", val)
+			}
+			continue
+		}
+		out[spec.envKey] = val
+	}
+	return out
+}
+
+func validLlmTuningValue(valueTyp, val string) bool {
+	switch valueTyp {
+	case "integer":
+		n, err := strconv.Atoi(val)
+		return err == nil && n >= 0
+	case "float":
+		f, err := strconv.ParseFloat(val, 64)
+		return err == nil && f >= 0 && !math.IsInf(f, 0) && !math.IsNaN(f)
+	}
+	return false
 }
 
 func memberUsesSandboxClaim(m MemberContext) bool {

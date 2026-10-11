@@ -92,6 +92,11 @@ type WorkerReconciler struct {
 	// ContainerPrefix + EffectiveWorkerConsolePort.
 	subagentModelURLFor func(w *v1beta1.Worker, spec v1beta1.WorkerSpec) string
 
+	// envsURLFor overrides the worker console base URL for LLM stream
+	// timeout hot-apply (tests). nil → the same derivation the subagent
+	// model dial uses.
+	envsURLFor func(w *v1beta1.Worker, spec v1beta1.WorkerSpec) string
+
 	// AuthCache is cleared after deleting a rotated Edge Worker's
 	// ServiceAccount so old SA tokens cannot pass via cached TokenReview.
 	AuthCache interface{ InvalidateCache() }
@@ -242,6 +247,20 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	if w.Spec.SubagentModel == "" && w.Annotations[v1beta1.AnnotationWorkerTeamName] != "" {
 		configContext.TeamSubagentModel = r.owningTeamSubagentModel(ctx, w)
 	}
+	// Team-wide LLM stream timeout defaults (read-time merge), same gating:
+	// only when the worker is actually a team member and at least one value
+	// is not set explicitly (the annotation check keeps the List call rare).
+	if w.Annotations[v1beta1.AnnotationWorkerTeamName] != "" &&
+		(w.Spec.LlmStreamFirstContentTimeout == "" || w.Spec.LlmStreamIdleTimeout == "") {
+		configContext.TeamLlmStreamFirstContentTimeout, configContext.TeamLlmStreamIdleTimeout = r.owningTeamLlmStreamTimeouts(ctx, w)
+	}
+	// Team-wide startup-only LLM tuning defaults (read-time merge), same
+	// gating pattern: only when at least one worker value is unset (the
+	// check keeps the List call rare).
+	if w.Annotations[v1beta1.AnnotationWorkerTeamName] != "" &&
+		!allLlmTuningSet(w.Spec) {
+		configContext.TeamLlmTuning = r.owningTeamLlmTuning(ctx, w)
+	}
 
 	if mctx.DeployMode == v1beta1.DeployModeEdge {
 		// Edge UUID rotation: when the UUID label changes, delete the SA so any
@@ -363,6 +382,12 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	// leaves the annotation unset and the periodic reconcile retries.
 	r.applySubagentModelHot(ctx, w, effectiveSpec, configContext, state)
 
+	// Hot-apply changed LLM stream timeouts to the running worker process
+	// via the QwenPaw envs API (the runtime re-reads the envs on every
+	// stream, so no restart is needed). Same best-effort contract as the
+	// subagent model dial.
+	r.applyLlmStreamTimeoutsHot(ctx, w, effectiveSpec, configContext, state)
+
 	r.reconcileManagerAccess(ctx, w, mctx, state)
 
 	if w.Status.ObservedGeneration == 0 {
@@ -397,6 +422,93 @@ func (r *WorkerReconciler) owningTeamSubagentModel(ctx context.Context, w *v1bet
 		}
 	}
 	return ""
+}
+
+// owningTeamLlmStreamTimeouts returns the LLM stream timeout defaults
+// declared on the team that owns this worker (the fallback for workers
+// without an explicit value). It mirrors owningTeamSubagentModel: it scans
+// Team.spec.workerMembers rather than trusting the annotation, and a lookup
+// failure degrades to empty strings (no default), never to a reconcile
+// error.
+func (r *WorkerReconciler) owningTeamLlmStreamTimeouts(ctx context.Context, w *v1beta1.Worker) (string, string) {
+	var teams v1beta1.TeamList
+	if err := r.List(ctx, &teams, client.InNamespace(w.Namespace)); err != nil {
+		logger := log.FromContext(ctx)
+		logger.Error(err, "list teams for LLM stream timeout defaults (non-fatal)", "worker", w.Name)
+		return "", ""
+	}
+	for i := range teams.Items {
+		team := &teams.Items[i]
+		for _, member := range team.Spec.WorkerMembers {
+			if member.Name == w.Name {
+				return team.Spec.LlmStreamFirstContentTimeout, team.Spec.LlmStreamIdleTimeout
+			}
+		}
+	}
+	return "", ""
+}
+
+// allLlmTuningSet reports whether every startup-only LLM tuning field is set
+// explicitly on the worker spec (gate for the team-defaults List call).
+func allLlmTuningSet(spec v1beta1.WorkerSpec) bool {
+	vals := []string{
+		spec.LlmMaxRetries, spec.LlmBackoffBase, spec.LlmBackoffCap,
+		spec.LlmMaxConcurrent, spec.LlmMaxQpm, spec.LlmRateLimitPause,
+		spec.LlmRateLimitJitter, spec.LlmAcquireTimeout,
+	}
+	for _, v := range vals {
+		if v == "" {
+			return false
+		}
+	}
+	return true
+}
+
+// owningTeamLlmTuning returns the team-wide startup-only LLM tuning defaults
+// for the worker's owning team (keyed by the QWENPAW_LLM_* env name), or an
+// empty map. Non-fatal: a List error degrades to "no team defaults".
+func (r *WorkerReconciler) owningTeamLlmTuning(ctx context.Context, w *v1beta1.Worker) map[string]string {
+	var teams v1beta1.TeamList
+	if err := r.List(ctx, &teams, client.InNamespace(w.Namespace)); err != nil {
+		logger := log.FromContext(ctx)
+		logger.Error(err, "list teams for LLM tuning defaults (non-fatal)", "worker", w.Name)
+		return nil
+	}
+	for i := range teams.Items {
+		team := &teams.Items[i]
+		for _, member := range team.Spec.WorkerMembers {
+			if member.Name == w.Name {
+				t := &team.Spec
+				m := map[string]string{}
+				if t.LlmMaxRetries != "" {
+					m["QWENPAW_LLM_MAX_RETRIES"] = t.LlmMaxRetries
+				}
+				if t.LlmBackoffBase != "" {
+					m["QWENPAW_LLM_BACKOFF_BASE"] = t.LlmBackoffBase
+				}
+				if t.LlmBackoffCap != "" {
+					m["QWENPAW_LLM_BACKOFF_CAP"] = t.LlmBackoffCap
+				}
+				if t.LlmMaxConcurrent != "" {
+					m["QWENPAW_LLM_MAX_CONCURRENT"] = t.LlmMaxConcurrent
+				}
+				if t.LlmMaxQpm != "" {
+					m["QWENPAW_LLM_MAX_QPM"] = t.LlmMaxQpm
+				}
+				if t.LlmRateLimitPause != "" {
+					m["QWENPAW_LLM_RATE_LIMIT_PAUSE"] = t.LlmRateLimitPause
+				}
+				if t.LlmRateLimitJitter != "" {
+					m["QWENPAW_LLM_RATE_LIMIT_JITTER"] = t.LlmRateLimitJitter
+				}
+				if t.LlmAcquireTimeout != "" {
+					m["QWENPAW_LLM_ACQUIRE_TIMEOUT"] = t.LlmAcquireTimeout
+				}
+				return m
+			}
+		}
+	}
+	return nil
 }
 
 func (r *WorkerReconciler) workerTeamName(ctx context.Context, w *v1beta1.Worker) (string, error) {

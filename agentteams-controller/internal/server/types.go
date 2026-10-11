@@ -8,24 +8,34 @@ import (
 // --- Worker API types ---
 
 type CreateWorkerRequest struct {
-	Env           map[string]string                  `json:"env,omitempty"`
-	Name          string                             `json:"name"`
-	WorkerName    string                             `json:"workerName,omitempty"`
-	Model         string                             `json:"model,omitempty"`
-	SubagentModel string                             `json:"subagentModel,omitempty"`
-	ModelProvider string                             `json:"modelProvider,omitempty"`
-	Runtime       string                             `json:"runtime,omitempty"`
-	Image         string                             `json:"image,omitempty"`
-	Identity      string                             `json:"identity,omitempty"`
-	Soul          string                             `json:"soul,omitempty"`
-	Agents        string                             `json:"agents,omitempty"`
-	Skills        []string                           `json:"skills,omitempty"`
-	RemoteSkills  []v1beta1.RemoteSkillSource        `json:"remoteSkills,omitempty"`
-	McpServers    []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
-	Package       string                             `json:"package,omitempty"`
-	Expose        []v1beta1.ExposePort               `json:"expose,omitempty"`
-	ChannelPolicy *v1beta1.ChannelPolicySpec         `json:"channelPolicy,omitempty"`
-	Resources     *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
+	Env                          map[string]string                  `json:"env,omitempty"`
+	Name                         string                             `json:"name"`
+	WorkerName                   string                             `json:"workerName,omitempty"`
+	Model                        string                             `json:"model,omitempty"`
+	SubagentModel                string                             `json:"subagentModel,omitempty"`
+	LlmStreamFirstContentTimeout string                             `json:"llmStreamFirstContentTimeout,omitempty"`
+	LlmStreamIdleTimeout         string                             `json:"llmStreamIdleTimeout,omitempty"`
+	ModelProvider                string                             `json:"modelProvider,omitempty"`
+	Runtime                      string                             `json:"runtime,omitempty"`
+	Image                        string                             `json:"image,omitempty"`
+	Identity                     string                             `json:"identity,omitempty"`
+	Soul                         string                             `json:"soul,omitempty"`
+	Agents                       string                             `json:"agents,omitempty"`
+	Skills                       []string                           `json:"skills,omitempty"`
+	RemoteSkills                 []v1beta1.RemoteSkillSource        `json:"remoteSkills,omitempty"`
+	McpServers                   []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
+	Package                      string                             `json:"package,omitempty"`
+	Expose                       []v1beta1.ExposePort               `json:"expose,omitempty"`
+	ChannelPolicy                *v1beta1.ChannelPolicySpec         `json:"channelPolicy,omitempty"`
+	Resources                    *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
+	LlmMaxRetries                string                             `json:"llmMaxRetries,omitempty"`
+	LlmBackoffBase               string                             `json:"llmBackoffBase,omitempty"`
+	LlmBackoffCap                string                             `json:"llmBackoffCap,omitempty"`
+	LlmMaxConcurrent             string                             `json:"llmMaxConcurrent,omitempty"`
+	LlmMaxQpm                    string                             `json:"llmMaxQpm,omitempty"`
+	LlmRateLimitPause            string                             `json:"llmRateLimitPause,omitempty"`
+	LlmRateLimitJitter           string                             `json:"llmRateLimitJitter,omitempty"`
+	LlmAcquireTimeout            string                             `json:"llmAcquireTimeout,omitempty"`
 
 	// ContainerManaged indicates whether the controller should manage
 	// container lifecycle for this worker. When false, container
@@ -42,20 +52,32 @@ type UpdateWorkerRequest struct {
 	// SubagentModel is a pointer so callers can distinguish omission (nil:
 	// keep the current value) from an explicit clear ("" — the worker
 	// returns to inheriting the team default / the runtime default).
-	SubagentModel *string                            `json:"subagentModel,omitempty"`
-	ModelProvider string                             `json:"modelProvider,omitempty"`
-	Runtime       string                             `json:"runtime,omitempty"`
-	Image         string                             `json:"image,omitempty"`
-	Identity      string                             `json:"identity,omitempty"`
-	Soul          string                             `json:"soul,omitempty"`
-	Agents        string                             `json:"agents,omitempty"`
-	Skills        []string                           `json:"skills,omitempty"`
-	RemoteSkills  []v1beta1.RemoteSkillSource        `json:"remoteSkills,omitempty"`
-	McpServers    []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
-	Package       string                             `json:"package,omitempty"`
-	Expose        []v1beta1.ExposePort               `json:"expose,omitempty"`
-	ChannelPolicy *v1beta1.ChannelPolicySpec         `json:"channelPolicy,omitempty"`
-	Resources     *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
+	SubagentModel *string `json:"subagentModel,omitempty"`
+	// LlmStream* follow the same pointer semantics (nil = keep, "" = clear
+	// back to the team default / registry default).
+	LlmStreamFirstContentTimeout *string                            `json:"llmStreamFirstContentTimeout,omitempty"`
+	LlmStreamIdleTimeout         *string                            `json:"llmStreamIdleTimeout,omitempty"`
+	LlmMaxRetries                *string                            `json:"llmMaxRetries,omitempty"`
+	LlmBackoffBase               *string                            `json:"llmBackoffBase,omitempty"`
+	LlmBackoffCap                *string                            `json:"llmBackoffCap,omitempty"`
+	LlmMaxConcurrent             *string                            `json:"llmMaxConcurrent,omitempty"`
+	LlmMaxQpm                    *string                            `json:"llmMaxQpm,omitempty"`
+	LlmRateLimitPause            *string                            `json:"llmRateLimitPause,omitempty"`
+	LlmRateLimitJitter           *string                            `json:"llmRateLimitJitter,omitempty"`
+	LlmAcquireTimeout            *string                            `json:"llmAcquireTimeout,omitempty"`
+	ModelProvider                string                             `json:"modelProvider,omitempty"`
+	Runtime                      string                             `json:"runtime,omitempty"`
+	Image                        string                             `json:"image,omitempty"`
+	Identity                     string                             `json:"identity,omitempty"`
+	Soul                         string                             `json:"soul,omitempty"`
+	Agents                       string                             `json:"agents,omitempty"`
+	Skills                       []string                           `json:"skills,omitempty"`
+	RemoteSkills                 []v1beta1.RemoteSkillSource        `json:"remoteSkills,omitempty"`
+	McpServers                   []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
+	Package                      string                             `json:"package,omitempty"`
+	Expose                       []v1beta1.ExposePort               `json:"expose,omitempty"`
+	ChannelPolicy                *v1beta1.ChannelPolicySpec         `json:"channelPolicy,omitempty"`
+	Resources                    *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
 
 	// ContainerManaged indicates whether the controller should manage
 	// container lifecycle for this worker. When false, container
@@ -77,7 +99,18 @@ type WorkerResponse struct {
 	// SubagentModel is the model used by spawned subagents ("" = inherit
 	// the worker's primary model). See WorkerSpec.SubagentModel.
 	SubagentModel string `json:"subagentModel,omitempty"`
-	Runtime       string `json:"runtime,omitempty"`
+	// LlmStream* mirror WorkerSpec ("" = unset). See WorkerSpec.LlmStream*.
+	LlmStreamFirstContentTimeout string `json:"llmStreamFirstContentTimeout,omitempty"`
+	LlmStreamIdleTimeout         string `json:"llmStreamIdleTimeout,omitempty"`
+	LlmMaxRetries                string `json:"llmMaxRetries,omitempty"`
+	LlmBackoffBase               string `json:"llmBackoffBase,omitempty"`
+	LlmBackoffCap                string `json:"llmBackoffCap,omitempty"`
+	LlmMaxConcurrent             string `json:"llmMaxConcurrent,omitempty"`
+	LlmMaxQpm                    string `json:"llmMaxQpm,omitempty"`
+	LlmRateLimitPause            string `json:"llmRateLimitPause,omitempty"`
+	LlmRateLimitJitter           string `json:"llmRateLimitJitter,omitempty"`
+	LlmAcquireTimeout            string `json:"llmAcquireTimeout,omitempty"`
+	Runtime                      string `json:"runtime,omitempty"`
 	// RuntimeDeprecated marks legacy runtimes that are upgrade-compat
 	// only (CoPaw): new creation is rejected; migrate to QwenPaw.
 	RuntimeDeprecated bool                       `json:"runtimeDeprecated,omitempty"`
@@ -119,26 +152,46 @@ type WorkerListResponse struct {
 // --- Team API types ---
 
 type CreateTeamRequest struct {
-	Name           string                     `json:"name"`
-	TeamName       string                     `json:"teamName,omitempty"`
-	Description    string                     `json:"description,omitempty"`
-	Admin          *v1beta1.TeamAdminSpec     `json:"admin,omitempty"`
-	HumanMembers   []v1beta1.TeamMemberSpec   `json:"humanMembers,omitempty"`
-	WorkerMembers  []v1beta1.TeamWorkerRef    `json:"workerMembers"`
-	HeartbeatEvery string                     `json:"heartbeatEvery,omitempty"`
-	PeerMentions   *bool                      `json:"peerMentions,omitempty"`
-	ChannelPolicy  *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
+	Name                         string                     `json:"name"`
+	TeamName                     string                     `json:"teamName,omitempty"`
+	Description                  string                     `json:"description,omitempty"`
+	Admin                        *v1beta1.TeamAdminSpec     `json:"admin,omitempty"`
+	HumanMembers                 []v1beta1.TeamMemberSpec   `json:"humanMembers,omitempty"`
+	WorkerMembers                []v1beta1.TeamWorkerRef    `json:"workerMembers"`
+	HeartbeatEvery               string                     `json:"heartbeatEvery,omitempty"`
+	LlmStreamFirstContentTimeout string                     `json:"llmStreamFirstContentTimeout,omitempty"`
+	LlmStreamIdleTimeout         string                     `json:"llmStreamIdleTimeout,omitempty"`
+	LlmMaxRetries                string                     `json:"llmMaxRetries,omitempty"`
+	LlmBackoffBase               string                     `json:"llmBackoffBase,omitempty"`
+	LlmBackoffCap                string                     `json:"llmBackoffCap,omitempty"`
+	LlmMaxConcurrent             string                     `json:"llmMaxConcurrent,omitempty"`
+	LlmMaxQpm                    string                     `json:"llmMaxQpm,omitempty"`
+	LlmRateLimitPause            string                     `json:"llmRateLimitPause,omitempty"`
+	LlmRateLimitJitter           string                     `json:"llmRateLimitJitter,omitempty"`
+	LlmAcquireTimeout            string                     `json:"llmAcquireTimeout,omitempty"`
+	PeerMentions                 *bool                      `json:"peerMentions,omitempty"`
+	ChannelPolicy                *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
 }
 
 type UpdateTeamRequest struct {
-	TeamName       string                     `json:"teamName,omitempty"`
-	Description    string                     `json:"description,omitempty"`
-	Admin          *v1beta1.TeamAdminSpec     `json:"admin,omitempty"`
-	HumanMembers   []v1beta1.TeamMemberSpec   `json:"humanMembers,omitempty"`
-	WorkerMembers  []v1beta1.TeamWorkerRef    `json:"workerMembers,omitempty"`
-	HeartbeatEvery *string                    `json:"heartbeatEvery,omitempty"`
-	PeerMentions   *bool                      `json:"peerMentions,omitempty"`
-	ChannelPolicy  *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
+	TeamName                     string                     `json:"teamName,omitempty"`
+	Description                  string                     `json:"description,omitempty"`
+	Admin                        *v1beta1.TeamAdminSpec     `json:"admin,omitempty"`
+	HumanMembers                 []v1beta1.TeamMemberSpec   `json:"humanMembers,omitempty"`
+	WorkerMembers                []v1beta1.TeamWorkerRef    `json:"workerMembers,omitempty"`
+	HeartbeatEvery               *string                    `json:"heartbeatEvery,omitempty"`
+	LlmStreamFirstContentTimeout *string                    `json:"llmStreamFirstContentTimeout,omitempty"`
+	LlmStreamIdleTimeout         *string                    `json:"llmStreamIdleTimeout,omitempty"`
+	LlmMaxRetries                *string                    `json:"llmMaxRetries,omitempty"`
+	LlmBackoffBase               *string                    `json:"llmBackoffBase,omitempty"`
+	LlmBackoffCap                *string                    `json:"llmBackoffCap,omitempty"`
+	LlmMaxConcurrent             *string                    `json:"llmMaxConcurrent,omitempty"`
+	LlmMaxQpm                    *string                    `json:"llmMaxQpm,omitempty"`
+	LlmRateLimitPause            *string                    `json:"llmRateLimitPause,omitempty"`
+	LlmRateLimitJitter           *string                    `json:"llmRateLimitJitter,omitempty"`
+	LlmAcquireTimeout            *string                    `json:"llmAcquireTimeout,omitempty"`
+	PeerMentions                 *bool                      `json:"peerMentions,omitempty"`
+	ChannelPolicy                *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
 }
 
 type TeamResponse struct {
@@ -163,6 +216,18 @@ type TeamResponse struct {
 	// frontends can display the model members inherit; per-worker values stay
 	// on WorkerResponse.
 	SubagentModel string `json:"subagentModel,omitempty"`
+	// LlmStream* expose the team-wide defaults (Team.spec.llmStream*) so
+	// frontends can display the values members inherit.
+	LlmStreamFirstContentTimeout string `json:"llmStreamFirstContentTimeout,omitempty"`
+	LlmStreamIdleTimeout         string `json:"llmStreamIdleTimeout,omitempty"`
+	LlmMaxRetries                string `json:"llmMaxRetries,omitempty"`
+	LlmBackoffBase               string `json:"llmBackoffBase,omitempty"`
+	LlmBackoffCap                string `json:"llmBackoffCap,omitempty"`
+	LlmMaxConcurrent             string `json:"llmMaxConcurrent,omitempty"`
+	LlmMaxQpm                    string `json:"llmMaxQpm,omitempty"`
+	LlmRateLimitPause            string `json:"llmRateLimitPause,omitempty"`
+	LlmRateLimitJitter           string `json:"llmRateLimitJitter,omitempty"`
+	LlmAcquireTimeout            string `json:"llmAcquireTimeout,omitempty"`
 }
 
 type TeamListResponse struct {

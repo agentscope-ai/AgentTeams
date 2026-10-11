@@ -29,6 +29,75 @@ spec:
                     the team AI gateway; not catalog-validated (unknown ids surface as a
                     visible upstream error at spawn time). Empty inherits the runtime
                     default — a team-wide default applies when the Worker is a team member.
+                llmStreamFirstContentTimeout:
+                  type: string
+                  description: >
+                    Seconds to wait for the first meaningful LLM stream chunk before
+                    failing the request. Hot-applied at runtime to the worker's QwenPaw
+                    envs (no restart); requires QwenPaw >= 2.2.1. Empty inherits the
+                    team-wide default (when the Worker is a team member), else the
+                    entrypoint default.
+                llmStreamIdleTimeout:
+                  type: string
+                  description: >
+                    Seconds of allowed silence between stream chunks after the first
+                    meaningful content. Same hot-apply semantics as
+                    llmStreamFirstContentTimeout.
+                llmMaxRetries:
+                  type: string
+                  description: >
+                    Maximum LLM request retries (non-negative integer).
+                    Startup-only: takes effect when the worker container is
+                    (re)created (spec-hash driven), not hot-applied. An
+                    explicit value wins over the team-wide default; empty
+                    inherits the team default, else the QwenPaw registry
+                    default (3). Invalid values are skipped with a log and
+                    never break the container.
+                llmBackoffBase:
+                  type: string
+                  description: >
+                    Base seconds for LLM retry backoff (non-negative float).
+                    Startup-only (spec-hash recreation); explicit value wins
+                    over the team default, empty inherits, else default (1).
+                llmBackoffCap:
+                  type: string
+                  description: >
+                    Cap in seconds for LLM retry backoff (non-negative float).
+                    Startup-only (spec-hash recreation); explicit value wins
+                    over the team default, empty inherits, else default (10).
+                llmMaxConcurrent:
+                  type: string
+                  description: >
+                    Maximum concurrent LLM requests (non-negative integer).
+                    Startup-only (spec-hash recreation); explicit value wins
+                    over the team default, empty inherits, else default (10).
+                llmMaxQpm:
+                  type: string
+                  description: >
+                    Maximum queries per minute (non-negative integer).
+                    Startup-only (spec-hash recreation); explicit value wins
+                    over the team default, empty inherits, else default (600).
+                llmRateLimitPause:
+                  type: string
+                  description: >
+                    Seconds to pause on a rate-limit response (non-negative
+                    float). Startup-only (spec-hash recreation); explicit
+                    value wins over the team default, empty inherits, else
+                    default (5).
+                llmRateLimitJitter:
+                  type: string
+                  description: >
+                    Jitter in seconds added to the rate-limit pause
+                    (non-negative float). Startup-only (spec-hash
+                    recreation); explicit value wins over the team default,
+                    empty inherits, else default (1).
+                llmAcquireTimeout:
+                  type: string
+                  description: >
+                    Seconds to wait for a concurrent-request slot before
+                    failing (non-negative float). Startup-only (spec-hash
+                    recreation); explicit value wins over the team default,
+                    empty inherits, else default (300).
                 runtime:
                   type: string
                   enum: [openclaw, copaw, hermes, qwenpaw, deepseek-harness]

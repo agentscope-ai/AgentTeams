@@ -1,17 +1,17 @@
 ---
 name: coding-cli
-description: 将编码工作委托给 Manager 持有的 AI CLI 工具（Claude Code / Gemini CLI / qodercli）执行
-assign_when: Worker 需要完成编码任务（写代码、修改代码、重构、修 bug 等），且 Manager 已启用 Coding CLI 委托模式（spec.md 中包含"## Coding CLI Mode"章节）
+description: 将编码工作委托给持有 CLI 的 agent（Manager / Leader / 获授权 Worker）的 AI CLI 工具（Claude Code / Gemini CLI / qodercli / Qwen Code / OpenCode）执行
+assign_when: Worker 需要完成编码任务（写代码、修改代码、重构、修 bug 等），且委托方 agent（Manager / Leader / 获授权 Worker）已启用 Coding CLI 委托模式（spec.md 中包含"## Coding CLI Mode"章节）
 ---
 
 # Coding CLI Delegation
 
-When the Manager assigns you a task with a "## Coding CLI Mode" section in `spec.md`, you do **not** write the code yourself. Instead, you:
+When the delegating agent (Manager / Leader / 获授权 Worker) assigns you a task with a "## Coding CLI Mode" section in `spec.md`, you do **not** write the code yourself. Instead, you:
 
 1. Understand the task deeply
 2. Prepare the workspace
 3. Generate a precise coding prompt
-4. Delegate execution to the Manager's CLI tool
+4. Delegate execution to the delegating agent's CLI tool
 5. Review the result
 
 ---
@@ -39,11 +39,11 @@ git clone <repo-url> "$workspace"
 cp -r /path/to/source "$workspace/"
 ```
 
-**Constraint**: The workspace path **must** be under `/root/agentteams-fs/`. The Manager accesses the same path via MinIO mirror.
+**Constraint**: The workspace path **must** be under `/root/agentteams-fs/`. The delegating agent accesses the same path via MinIO mirror.
 
 ### 2. Push Workspace to MinIO
 
-Before sending the coding-request, push all workspace files so the Manager can access them:
+Before sending the coding-request, push all workspace files so the delegating agent can access them:
 
 ```bash
 mc mirror "/root/agentteams-fs/shared/tasks/{task-id}/workspace/" \
@@ -61,12 +61,12 @@ mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/" \
 
 # Check for processing marker
 if [ -f "/root/agentteams-fs/shared/tasks/{task-id}/.processing" ]; then
-    echo "Task directory is being processed. Wait for manager to complete."
+    echo "Task directory is being processed. Wait for the delegating agent to complete."
     # Do NOT send coding-request yet; wait and retry
 fi
 ```
 
-If a `.processing` marker exists, wait for the Manager to complete their operation before sending your request.
+If a `.processing` marker exists, wait for the delegating agent to complete their operation before sending your request.
 
 ### 3. Generate a High-Quality Prompt
 
@@ -97,12 +97,12 @@ Do not change any other files.
 - "Improve performance" (no specific target)
 - "Add tests" (no specification of what to test or where)
 
-### 4. Send `coding-request:` to Manager
+### 4. Send `coding-request:` to the delegating agent
 
 Send in your Worker Room (or Project Room, wherever the task was assigned):
 
 ```
-@manager:DOMAIN task-{task-id} coding-request:
+@<delegator>:DOMAIN task-{task-id} coding-request:
 workspace: /root/agentteams-fs/shared/tasks/{task-id}/workspace
 ---PROMPT---
 {your detailed coding prompt here}
@@ -114,9 +114,9 @@ Note: `workspace` can be any subdirectory under `/root/agentteams-fs/`, e.g. a c
 workspace: /root/agentteams-fs/shared/tasks/{task-id}/workspace/my-repo
 ```
 
-### 5. Wait for Manager's Response
+### 5. Wait for the delegating agent's Response
 
-The Manager will run the CLI tool and respond with either:
+The delegating agent will run the CLI tool and respond with either:
 
 **Success** — `coding-result:`
 ```
@@ -147,9 +147,9 @@ Review the changes:
 - Check for obvious errors or unintended modifications
 - Run tests if applicable
 
-Report to Manager:
+Report to the delegating agent:
 ```
-@manager:DOMAIN task-{task-id} completed:
+@<delegator>:DOMAIN task-{task-id} completed:
 Changes reviewed and verified. {Brief summary of what was implemented.}
 ```
 
@@ -157,7 +157,7 @@ Changes reviewed and verified. {Brief summary of what was implemented.}
 
 Implement the coding task yourself using your normal approach. When done, report:
 ```
-@manager:DOMAIN task-{task-id} completed:
+@<delegator>:DOMAIN task-{task-id} completed:
 Implemented manually (CLI delegation failed). {Brief summary.}
 ```
 

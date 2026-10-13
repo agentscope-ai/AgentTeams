@@ -308,6 +308,12 @@ def _attach_long_message_metadata(
 HISTORY_CONTEXT_MARKER = "[Chat messages since your last reply - for context]"
 CURRENT_MESSAGE_MARKER = "[Current message - respond to this]"
 DEFAULT_HISTORY_LIMIT = 50
+# Lower bound for `sync_timeout_ms`: a value of `0` would turn the
+# nio `sync()` loop into a busy-spin and a negative value would feed
+# `max(sync_s + 30, 60)` a nonsense duration downstream. 1 second is
+# the smallest value that still gives the homeserver a chance to
+# return at least one long-poll iteration.
+_MIN_SYNC_TIMEOUT_MS = 1000
 
 
 class QwenPawMatrixClient(AsyncClient):
@@ -420,7 +426,11 @@ class AgentTeamsMatrixChannel(BaseChannel):
         # Media / history
         self.vision_enabled: bool = vision_enabled
         self.history_limit: int = max(0, history_limit)
-        self.sync_timeout_ms: int = sync_timeout_ms
+        # Clamp sync_timeout_ms to a sane minimum so a misconfigured
+        # `0` does not turn the sync loop into a busy-spin and a
+        # negative value does not produce a nonsense request_timeout
+        # downstream (`max(sync_s + 30, 60)`).
+        self.sync_timeout_ms: int = max(_MIN_SYNC_TIMEOUT_MS, int(sync_timeout_ms))
         self.show_thinking: bool = show_thinking
 
         self._workspace_dir = (

@@ -162,6 +162,26 @@ helm install agentteams higress.io/agentteams \
 
 </details>
 
+<details>
+<summary>OrcaRouter を使用する場合</summary>
+
+[OrcaRouter](https://www.orcarouter.ai) は `https://api.orcarouter.ai/v1` で OpenAI 互換 API を提供する統合 AI ゲートウェイです。provider 名を `orcarouter` に設定すると、単一の API キーで複数のモデルを利用できます：
+
+```bash
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace \
+  --render-subchart-notes \
+  --set credentials.llmApiKey=<your-orcarouter-api-key> \
+  --set credentials.llmProvider=orcarouter \
+  --set credentials.defaultModel=orcarouter/auto \
+  --set credentials.adminPassword=<your-admin-password> \
+  --set gateway.publicURL=http://localhost:18080
+```
+
+It also runs gateway-level, zero-trust security for AI agents on the same endpoint — screening every prompt/response and governing every tool call on a default-deny basis, with no application code changes.
+
+</details>
+
 | 値 | 必須 | 説明 |
 |---|---|---|
 | `credentials.llmApiKey` | 必須 | LLM プロバイダーの API キー |
@@ -169,7 +189,7 @@ helm install agentteams higress.io/agentteams \
 | `credentials.adminPassword` | 推奨 | Matrix 管理者パスワード。空のままだと自動生成（後で Secret から読み出す必要あり） |
 | `credentials.llmProvider` | 任意 | LLM プロバイダー名、デフォルトは `openai-compat` |
 | `credentials.defaultModel` | 任意 | デフォルトモデル、デフォルトは `gpt-5.4` |
-| `credentials.llmBaseUrl` | 任意 | OpenAI 互換のベース URL（例: `https://api.deepseek.com/v1`）。公式 OpenAI API を使用する場合は空のまま |
+| `credentials.llmBaseUrl` | 任意 | OpenAI 互換のベース URL（例: `https://api.deepseek.com/v1`）。公式 OpenAI API または内蔵の `orcarouter` provider を使用する場合は空のまま |
 | `manager.runtime` | 任意 | Manager エージェントランタイム: `openclaw`（デフォルト）、`copaw`、または `hermes` |
 | `worker.defaultRuntime` | 任意 | Worker デフォルトランタイム: `openclaw`（デフォルト）、`copaw`、`hermes`、または実験的な `deepseek-harness` |
 

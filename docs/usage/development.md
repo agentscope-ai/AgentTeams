@@ -35,12 +35,16 @@ make build-embedded
 make build-manager-qwenpaw
 make build-hermes-worker
 make build-deepseek-harness-worker
+make build-qwen-code-worker
 
 # Build with a specific version tag
 make build VERSION=0.1.0
 
 # DeepSeek Harness releases independently from the core VERSION
 make push-deepseek-harness-worker DEEPSEEK_HARNESS_WORKER_VERSION=v0.1.0
+
+# Qwen Code releases independently from the core VERSION
+make push-qwen-code-worker QWEN_CODE_WORKER_VERSION=v0.1.0
 
 # Build for a specific platform
 make build DOCKER_PLATFORM=linux/amd64

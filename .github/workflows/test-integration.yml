@@ -15,6 +15,7 @@ on:
       - 'qwenpaw/**'
       - 'hermes/**'
       - 'deepseek-harness/**'
+      - 'qwen-code/**'
       - 'plugins/teamharness/adapters/qwenpaw/**'
       - 'plugins/teamharness/adapters/deepseek-harness/**'
       - 'plugins/workerflow/adapters/qwenpaw/**'
@@ -36,6 +37,7 @@ on:
       - 'qwenpaw/**'
       - 'hermes/**'
       - 'deepseek-harness/**'
+      - 'qwen-code/**'
       - 'plugins/teamharness/adapters/qwenpaw/**'
       - 'plugins/teamharness/adapters/deepseek-harness/**'
       - 'plugins/workerflow/adapters/qwenpaw/**'
@@ -156,6 +158,19 @@ jobs:
           python3 -m unittest discover -s deepseek-harness/tests -p 'test_*.py' -v
           node --test deepseek-harness/tests/*.test.mjs
 
+  qwen-code-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check integration scheduling
+        run: python3 tests/check-integration-scheduling.py
+
+      - name: Run Qwen Code bridge tests
+        run: python3 -m unittest discover -s qwen-code/tests -p 'test_*.py' -v
+
   # Step 1a: Build the shared base image (agentteams-controller)
   build-base:
     runs-on: ubuntu-latest
@@ -253,7 +268,7 @@ jobs:
         # The copaw-worker image is no longer built from the branch: the
         # legacy-upgrade coverage (test-29) pulls the pinned published image
         # (agentteams-copaw-worker) instead.
-        target: [embedded, manager, manager-qwenpaw, worker, qwenpaw-worker, hermes-worker, deepseek-harness-worker]
+        target: [embedded, manager, manager-qwenpaw, worker, qwenpaw-worker, hermes-worker, deepseek-harness-worker, qwen-code-worker]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

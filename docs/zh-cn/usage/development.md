@@ -35,12 +35,16 @@ make build-embedded
 make build-manager-qwenpaw
 make build-hermes-worker
 make build-deepseek-harness-worker
+make build-qwen-code-worker
 
 # 使用指定版本标签构建
 make build VERSION=0.1.0
 
 # DeepSeek Harness 使用独立于主版本的 runtime 版本
 make push-deepseek-harness-worker DEEPSEEK_HARNESS_WORKER_VERSION=v0.1.0
+
+# Qwen Code 使用独立于主版本的 runtime 版本
+make push-qwen-code-worker QWEN_CODE_WORKER_VERSION=v0.1.0
 
 # 为指定平台构建
 make build DOCKER_PLATFORM=linux/amd64

@@ -91,6 +91,8 @@ spec:
               value: {{ include "agentteams.worker.openhumanImage" . | quote }}
             - name: AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE
               value: {{ include "agentteams.worker.deepseekHarnessImage" . | quote }}
+            - name: AGENTTEAMS_QWEN_CODE_WORKER_IMAGE
+              value: {{ include "agentteams.worker.qwenCodeImage" . | quote }}
             - name: AGENTTEAMS_DEFAULT_WORKER_RUNTIME
               value: {{ .Values.worker.defaultRuntime | quote }}
             - name: TZ

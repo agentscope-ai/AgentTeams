@@ -111,6 +111,7 @@ Changing only the runtime while retaining the OpenClaw Manager image can leave t
 | `copaw` | `worker.defaultImage.copaw` | Python / CoPaw Worker |
 | `hermes` | `worker.defaultImage.hermes` | Hermes Worker |
 | `deepseek-harness` | `worker.defaultImage.deepseekHarness` | Experimental headless DeepSeek Harness Worker with Matrix text/files and object-storage-backed recovery; pinned to a tested DSH release candidate; Matrix E2EE is rejected at startup |
+| `qwen-code` | `worker.defaultImage.qwenCode` | Experimental headless Qwen Code Worker with Matrix text/files via a hosted bridge and object-storage-backed recovery; pinned to a tested Qwen Code release candidate |
 | `openhuman` | `worker.defaultImage.openhuman` | The chart has a default image value, but the current Worker CRD enum does not accept an explicit `spec.runtime: openhuman` |
 
 The Controller recognizes the `qwenpaw` Worker runtime, but the current chart does not provide a separate default image value for it. Set the QwenPaw Worker image explicitly in `Worker.spec.image` when using it. The OpenHuman backend and Helm value exist, but the CRD contract is not aligned yet; do not use `openhuman` explicitly in Worker YAML until a separate business-code change resolves it.

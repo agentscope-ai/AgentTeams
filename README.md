@@ -20,7 +20,7 @@ AgentTeams does not compete with other Agent runtimes. Instead of implementing A
 
 - 🧬 **Manager-Workers Architecture**: Eliminates the need for human oversight of individual Worker Claws by enabling Agents to manage other Agents.
 
-- 🤝 **Multi-Runtime Collaboration**: OpenClaw, QwenPaw, Hermes, and experimental DeepSeek Harness Workers coexist in the same IM room. Use the runtime that best fits each role while keeping collaboration visible in Matrix.
+- 🤝 **Multi-Runtime Collaboration**: OpenClaw, QwenPaw, Hermes, and experimental DeepSeek Harness / Qwen Code Workers coexist in the same IM room. Use the runtime that best fits each role while keeping collaboration visible in Matrix.
 
 - 📦 **MinIO Shared File System**: Introduces a shared file system for inter-Agent information exchange, significantly reducing token consumption in multi-Agent collaboration scenarios.
 
@@ -186,7 +186,7 @@ helm install agentteams higress.io/agentteams \
 | `preflight.llm.activeDeadlineSeconds` | no | Kubernetes Job active deadline for the preflight hook. Defaults to `120` |
 | `preflight.llm.resources` | no | Optional Kubernetes resource requests/limits for the preflight hook container |
 | `manager.runtime` | no | Manager runtime: OpenClaw uses `openclaw` (default); CoPaw uses `qwenpaw` in the current chart, with `copaw` retained as a compatibility alias. Managers do not support Hermes or DeepSeek Harness |
-| `worker.defaultRuntime` | no | The chart provides default image values for `openclaw` (default), `copaw`, `hermes`, experimental `deepseek-harness`, and `openhuman`; the current CRD rejects an explicit `spec.runtime: openhuman`, and QwenPaw Workers require an explicit `spec.image` |
+| `worker.defaultRuntime` | no | The chart provides default image values for `openclaw` (default), `copaw`, `hermes`, experimental `deepseek-harness` and `qwen-code`, and `openhuman`; the current CRD rejects an explicit `spec.runtime: openhuman`, and QwenPaw Workers require an explicit `spec.image` |
 
 Helm installs run an LLM preflight hook by default. The hook sends a minimal OpenAI-compatible `/chat/completions` request using `credentials.llmApiKey`, `credentials.llmBaseUrl`, and `credentials.defaultModel`; invalid keys, unreachable base URLs, unsupported models, quota errors, and provider outages fail the install before the controller starts. To bypass this check for restricted or offline clusters:
 
@@ -373,6 +373,7 @@ AgentTeams provides multiple Worker runtime families that can **coexist in the s
 - **QwenPaw** (Python) — Lightweight runtime, suited for browser automation and quick tasks
 - **Hermes** ([hermes-agent](https://github.com/NousResearch/hermes-agent)) — Autonomous coding agent with terminal sandbox, self-improving skills, and persistent memory
 - **DeepSeek Harness** (experimental) — Headless coding agent with room-scoped session continuation, Matrix file exchange, and restart recovery; currently pinned to a tested DSH release candidate
+- **Qwen Code** (experimental) — Headless coding agent runtime built on the Qwen Code CLI, with Matrix text/file exchange via a hosted bridge and object-storage-backed restart recovery
 
 The `copaw` value remains available for compatibility with existing CoPaw Workers; the current CRD accepts both `copaw` and `qwenpaw`. Each runtime excels at different tasks. A common pattern is to use deterministic agents (OpenClaw/QwenPaw) as Leaders to decompose and assign work, and Hermes Workers for autonomous code execution. All runtimes communicate through Matrix rooms—fully visible and fully intervenable.
 

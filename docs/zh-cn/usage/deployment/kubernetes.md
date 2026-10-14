@@ -111,6 +111,7 @@ manager:
 | `copaw` | `worker.defaultImage.copaw` | Python / CoPaw Worker |
 | `hermes` | `worker.defaultImage.hermes` | Hermes Worker |
 | `deepseek-harness` | `worker.defaultImage.deepseekHarness` | 实验性的 headless DeepSeek Harness Worker，支持 Matrix 文本/文件和对象存储恢复；当前固定在通过测试的 DSH release candidate；Matrix E2EE 配置会在启动时被明确拒绝 |
+| `qwen-code` | `worker.defaultImage.qwenCode` | 实验性的 headless Qwen Code Worker，经托管 bridge 支持 Matrix 文本/文件并支持对象存储恢复；当前固定在通过测试的 Qwen Code release candidate |
 | `openhuman` | `worker.defaultImage.openhuman` | Chart 中已有默认镜像配置，但当前 Worker CRD enum 不接受显式的 `spec.runtime: openhuman` |
 
 Controller 也认识 `qwenpaw` Worker runtime，但当前 Chart 没有为它提供独立的默认镜像配置。使用时应在 `Worker.spec.image` 中显式指定 QwenPaw Worker 镜像。OpenHuman 的后端与 Helm values 已存在，但 CRD 契约尚未对齐；业务代码单独修正前，不应在 Worker YAML 中显式使用 `openhuman`。

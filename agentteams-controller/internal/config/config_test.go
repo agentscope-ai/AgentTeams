@@ -393,3 +393,35 @@ func TestLoadConfigAutoPrefixDisabledKeepsExplicitContainerPrefix(t *testing.T) 
 		t.Fatalf("ContainerPrefix = %q, want %q", cfg.ContainerPrefix, "custom-worker-")
 	}
 }
+
+func TestBackendConfigsIncludeQwenCodeWorkerImage(t *testing.T) {
+	t.Setenv("AGENTTEAMS_QWEN_CODE_WORKER_IMAGE", "agentteams/qwen-code-worker:test")
+
+	cfg := LoadConfig()
+
+	for name, got := range map[string]string{
+		"docker":  cfg.DockerConfig().QwenCodeWorkerImage,
+		"k8s":     cfg.K8sConfig().QwenCodeWorkerImage,
+		"sandbox": cfg.SandboxConfig().QwenCodeWorkerImage,
+	} {
+		if want := "agentteams/qwen-code-worker:test"; got != want {
+			t.Fatalf("%s QwenCodeWorkerImage = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestBackendConfigsDefaultToIndependentQwenCodeVersion(t *testing.T) {
+	t.Setenv("AGENTTEAMS_QWEN_CODE_WORKER_IMAGE", "")
+
+	cfg := LoadConfig()
+
+	for name, got := range map[string]string{
+		"docker":  cfg.DockerConfig().QwenCodeWorkerImage,
+		"k8s":     cfg.K8sConfig().QwenCodeWorkerImage,
+		"sandbox": cfg.SandboxConfig().QwenCodeWorkerImage,
+	} {
+		if want := "agentteams/agentteams-qwen-code-worker:v0.1.0"; got != want {
+			t.Fatalf("%s QwenCodeWorkerImage = %q, want %q", name, got, want)
+		}
+	}
+}

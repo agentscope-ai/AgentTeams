@@ -133,7 +133,7 @@ helm install agentteams higress.io/agentteams \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-OpenAI 互換 API を提供する他のプロバイダーを使用する場合は、`llmBaseUrl` も設定してください：
+OpenAI 互換 API を提供する他のプロバイダーを使用する場合は、`llmBaseUrl` も設定してください（組み込みの `atlascloud` プリセットでは不要で、チャートがデフォルトの `https://api.atlascloud.ai/v1` を設定します）：
 
 ```bash
 helm install agentteams higress.io/agentteams \
@@ -167,9 +167,9 @@ helm install agentteams higress.io/agentteams \
 | `credentials.llmApiKey` | 必須 | LLM プロバイダーの API キー |
 | `gateway.publicURL` | 必須 | ユーザーが Element Web にアクセスする公開 URL（port-forward 環境では `http://localhost:18080`、本番では `https://agentteams.example.com` 等） |
 | `credentials.adminPassword` | 推奨 | Matrix 管理者パスワード。空のままだと自動生成（後で Secret から読み出す必要あり） |
-| `credentials.llmProvider` | 任意 | LLM プロバイダー名、デフォルトは `openai-compat` |
+| `credentials.llmProvider` | 任意 | LLM プロバイダー名（`openai-compat`、`qwen`、`atlascloud`）、デフォルトは `openai-compat` |
 | `credentials.defaultModel` | 任意 | デフォルトモデル、デフォルトは `gpt-5.4` |
-| `credentials.llmBaseUrl` | 任意 | OpenAI 互換のベース URL（例: `https://api.deepseek.com/v1`）。公式 OpenAI API を使用する場合は空のまま |
+| `credentials.llmBaseUrl` | 任意 | OpenAI 互換のベース URL（例: `https://api.deepseek.com/v1`）。公式 OpenAI API を使用する場合は空のまま。`atlascloud` のデフォルトは `https://api.atlascloud.ai/v1` |
 | `manager.runtime` | 任意 | Manager エージェントランタイム: `openclaw`（デフォルト）、`copaw`、または `hermes` |
 | `worker.defaultRuntime` | 任意 | Worker デフォルトランタイム: `openclaw`（デフォルト）、`copaw`、`hermes`、または実験的な `deepseek-harness` |
 

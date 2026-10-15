@@ -166,7 +166,7 @@ helm install agentteams higress.io/agentteams \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-如果使用非 OpenAI 但兼容 OpenAI API 的服务商，还需设置 `llmBaseUrl`：
+如果使用非 OpenAI 但兼容 OpenAI API 的服务商，还需设置 `llmBaseUrl`（内置的 `atlascloud` 预设无需设置，Chart 会提供默认地址 `https://api.atlascloud.ai/v1`）：
 
 ```bash
 helm install agentteams higress.io/agentteams \
@@ -200,9 +200,9 @@ helm install agentteams higress.io/agentteams \
 | `credentials.llmApiKey` | 必填 | LLM 服务商 API Key |
 | `gateway.publicURL` | 必填 | 用户访问 Element Web 的对外地址（端口转发场景填 `http://localhost:18080`，正式环境填 `https://agentteams.example.com` 等） |
 | `credentials.adminPassword` | 推荐 | Matrix 管理员密码；留空时会自动生成（之后需要从 Secret 中读取） |
-| `credentials.llmProvider` | 可选 | LLM 服务商名，默认 `openai-compat` |
+| `credentials.llmProvider` | 可选 | LLM 服务商名（`openai-compat`、`qwen` 或 `atlascloud`），默认 `openai-compat` |
 | `credentials.defaultModel` | 可选 | 默认模型，默认 `gpt-5.4` |
-| `credentials.llmBaseUrl` | 可选 | OpenAI 兼容的 Base URL（例如 `https://api.deepseek.com/v1`）。使用官方 OpenAI API 时留空 |
+| `credentials.llmBaseUrl` | 可选 | OpenAI 兼容的 Base URL（例如 `https://api.deepseek.com/v1`）。使用官方 OpenAI API 时留空；`atlascloud` 默认为 `https://api.atlascloud.ai/v1` |
 | `preflight.llm.enabled` | 可选 | 安装或升级前通过 hook 验证 LLM API Key、Base URL 和模型；默认 `true` |
 | `preflight.llm.strict` | 可选 | LLM 探测失败时终止安装或升级；默认 `true`，设为 `false` 时仅告警并继续 |
 | `preflight.llm.timeoutSeconds` | 可选 | LLM 探测单次 HTTP 请求的超时时间；默认 `30` 秒 |

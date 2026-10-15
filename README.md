@@ -140,7 +140,7 @@ helm install agentteams higress.io/agentteams \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-For non-OpenAI providers that expose an OpenAI-compatible API, also set `llmBaseUrl`:
+For non-OpenAI providers that expose an OpenAI-compatible API, also set `llmBaseUrl` (not needed for the built-in `atlascloud` preset, whose default base URL `https://api.atlascloud.ai/v1` is supplied by the chart):
 
 ```bash
 helm install agentteams higress.io/agentteams \
@@ -174,9 +174,9 @@ helm install agentteams higress.io/agentteams \
 | `credentials.llmApiKey` | yes | API key for your LLM provider |
 | `gateway.publicURL` | yes | Public URL where users will reach Element Web (e.g. `http://localhost:18080` for port-forward, or `https://agentteams.example.com` for an Ingress) |
 | `credentials.adminPassword` | recommended | Matrix admin password; auto-generated if left empty (you'll have to read it back from the Secret) |
-| `credentials.llmProvider` | no | LLM provider name, defaults to `openai-compat` |
+| `credentials.llmProvider` | no | LLM provider name (`openai-compat`, `qwen`, or `atlascloud`), defaults to `openai-compat` |
 | `credentials.defaultModel` | no | Default model, defaults to `gpt-5.4` |
-| `credentials.llmBaseUrl` | no | OpenAI-compatible base URL (e.g. `https://api.deepseek.com/v1`). Leave empty for official OpenAI API |
+| `credentials.llmBaseUrl` | no | OpenAI-compatible base URL (e.g. `https://api.deepseek.com/v1`). Leave empty for official OpenAI API; `atlascloud` defaults to `https://api.atlascloud.ai/v1` |
 | `preflight.llm.enabled` | no | Run an install/upgrade hook that validates the LLM API key, base URL, and model before the controller starts. Defaults to `true` |
 | `preflight.llm.strict` | no | Fail the Helm install/upgrade when the LLM preflight fails. Defaults to `true`; set to `false` to emit a warning and continue |
 | `preflight.llm.timeoutSeconds` | no | Per-request timeout for the LLM preflight HTTP probe. Defaults to `30` |

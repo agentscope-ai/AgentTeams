@@ -19,6 +19,20 @@ helm template agentteams "${CHART}" "${COMMON_ARGS[@]}" > "${render}"
 grep -q 'name: agentteams-controller' "${render}"
 grep -q 'app.kubernetes.io/name: agentteams' "${render}"
 
+# Backward compat: without llmBaseUrl, no base URL is emitted for non-atlascloud providers.
+if grep -q 'AGENTTEAMS_OPENAI_BASE_URL' "${render}"; then
+    echo "FAIL: AGENTTEAMS_OPENAI_BASE_URL must be absent by default when llmBaseUrl is empty" >&2
+    exit 1
+fi
+
+helm template agentteams "${CHART}" "${COMMON_ARGS[@]}" \
+    --set credentials.llmProvider=qwen > "${render}"
+
+if grep -q 'AGENTTEAMS_OPENAI_BASE_URL' "${render}"; then
+    echo "FAIL: AGENTTEAMS_OPENAI_BASE_URL must be absent for qwen when llmBaseUrl is empty" >&2
+    exit 1
+fi
+
 helm template agentteams "${CHART}" "${COMMON_ARGS[@]}" \
     --set credentials.llmProvider=atlascloud \
     --set credentials.defaultModel=deepseek-ai/deepseek-v4-pro > "${render}"

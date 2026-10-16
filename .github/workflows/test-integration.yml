@@ -156,6 +156,16 @@ jobs:
           python3 -m unittest discover -s deepseek-harness/tests -p 'test_*.py' -v
           node --test deepseek-harness/tests/*.test.mjs
 
+  mcp-setup-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check MCP setup and Console session handling
+        run: |
+          python3 -m unittest discover -s manager/tests -p 'test_mcp*.py' -v
+          bash tests/check-mcp-setup-domain-parsing.sh
+
   # Step 1a: Build the shared base image (agentteams-controller)
   build-base:
     runs-on: ubuntu-latest

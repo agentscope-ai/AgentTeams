@@ -1,6 +1,6 @@
 # Create / Update MCP Server
 
-> **Cloud deployment (SAE) note:** The `setup-mcp-server.sh` script and Higress Console API commands are only available in local deployment mode. In cloud mode (`AGENTTEAMS_RUNTIME=aliyun`), direct admin to the Alibaba Cloud AI Gateway console.
+> **Deployment note:** You can use `setup-mcp-server.sh` with self-hosted Higress, including a separate Console container. Set `HIGRESS_CONSOLE_URL` to its reachable address and supply an existing `HIGRESS_COOKIE_FILE` or your Console admin credentials. In cloud mode (`AGENTTEAMS_RUNTIME=aliyun`), direct admin to the Alibaba Cloud AI Gateway console.
 
 ## Setup Script
 

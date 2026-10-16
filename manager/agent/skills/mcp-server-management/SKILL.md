@@ -9,6 +9,7 @@ MCP Servers expose REST APIs as tools on the Higress AI Gateway, or proxy existi
 
 ## Gotchas
 
+- **Self-hosted Console in another container:** set `HIGRESS_CONSOLE_URL` (or `AGENTTEAMS_HIGRESS_CONSOLE_URL`) to its reachable address. You can reuse `HIGRESS_COOKIE_FILE` or let the scripts log in with `AGENTTEAMS_ADMIN_USER` / `AGENTTEAMS_ADMIN_PASSWORD`. If Controller-local Worker credentials are unavailable, the scripts save your Worker MCP assignments through `agt apply`; wait for reconciliation and file-sync before verifying tools.
 - **Cloud mode (`AGENTTEAMS_RUNTIME=aliyun`) does not support script-based MCP management** — direct admin to the Alibaba Cloud AI Gateway console instead
 - **Auth plugin takes ~10s to activate** after server creation/update — always wait and verify with mcporter before notifying Workers
 - **Always verify end-to-end before notifying Workers** — call at least one tool via mcporter to confirm connectivity. Do not push broken tools

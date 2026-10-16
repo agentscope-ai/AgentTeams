@@ -65,7 +65,7 @@ _select_available_auto_version
 [ "$(wc -l < "$CALLS" | tr -d ' ')" = 7 ] || fail 'incomplete image set'
 grep -q 'agentteams-manager-qwenpaw:v1.2.4' "$CALLS" || fail 'selected manager missing'
 grep -q 'agentteams-deepseek-harness-worker:v0.1.0' "$CALLS" || fail 'independent runtime tag lost'
-grep -q 'agentteams-dashboard:v1.2.4' "$CALLS" || fail 'dashboard missing'
+grep -q 'agentteams-dashboard:v1.3.1' "$CALLS" || fail 'dashboard missing'
 for FAILURE_KIND in missing arch; do
     reset_case
     BAD_IMAGE=agentteams-hermes-worker:v1.2.4
@@ -118,7 +118,7 @@ BAD_IMAGE=agentteams-worker:v1.2.4
 AGENTTEAMS_DEFAULT_WORKER_RUNTIME=deepseek-harness
 if ( _select_available_auto_version ); then fail 'unsupported runtime fallback accepted'; fi
 reset_case
-BAD_IMAGE=agentteams-dashboard:v1.2.4
+BAD_IMAGE=agentteams-dashboard:v1.3.1
 if ( _select_available_auto_version ); then fail 'missing independent dashboard accepted'; fi
 reset_case
 PULLED_PLATFORM=linux/amd64

@@ -54,26 +54,49 @@ SENSITIVE_ARTIFACT_TEXT_RE = [
         re.IGNORECASE,
     ),
 ]
-# A value that is an *explicit* angle-bracket template is documentation,
-# not a credential. The exemption requires more than shape: the enclosed
-# text must carry an explicit placeholder marker (case-insensitive, whole
-# component) — your, my, our, paste, insert, replace, placeholder,
-# example, sample, dummy, fake, redacted, masked, change[-_]?me, todo,
-# tbd, here, xxx, yyy, zzz. Neither the kebab shape alone
-# (``<sk-abcdefghijklmnopqrstuvwxyz>``) nor arbitrary label:value content
-# (``<token:abc123def4567890>``) is exempt. Content nouns
-# (token/key/secret/password/api) are NOT markers: they name what the
-# value is, not that it is a placeholder. Additionally the content may
-# not contain a run of 16+ consecutive alphanumerics (mirrors the
-# scanner's minimum credential length).
-PLACEHOLDER_CREDENTIAL_RE = re.compile(
-    r"^['\"]*<"
-    r"(?=[^<>\s]*(?<![A-Za-z0-9])(?:your|my|our|paste|insert|replace|"
+# A value that is an *explicit* template is documentation, not a
+# credential. Three wrapper families are recognized — angle brackets
+# (``<YOUR_API_KEY>``), a single backtick code span
+# (`` `YOUR_API_KEY` ``), and markdown bold (``**YOUR_API_KEY**``) —
+# each optionally surrounded by quotes, because the Authorization
+# header pattern captures raw non-space runs and documentation
+# commonly wraps placeholders in any of the three. The exemption
+# requires more than shape: the enclosed text must carry an explicit
+# placeholder marker (case-insensitive, whole component) — your, my,
+# our, paste, insert, replace, placeholder, example, sample, dummy,
+# fake, redacted, masked, change[-_]?me, todo, tbd, here, xxx, yyy,
+# zzz. Neither the kebab shape alone
+# (``<sk-abcdefghijklmnopqrstuvwxyz>``) nor arbitrary label:value
+# content (``<token:abc123def4567890>``) is exempt, in any wrapper
+# family. Content nouns (token/key/secret/password/api) are NOT
+# markers: they name what the value is, not that it is a placeholder.
+# Additionally the content may not contain a run of 16+ consecutive
+# alphanumerics (mirrors the scanner's minimum credential length).
+PLACEHOLDER_MARKER_WORDS_RE = (
+    r"(?<![A-Za-z0-9])(?:your|my|our|paste|insert|replace|"
     r"placeholder|example|sample|dummy|fake|redacted|masked|change[-_]?me|"
-    r"todo|tbd|here|xxx|yyy|zzz)(?![A-Za-z0-9]))"
-    r"(?![^<>\s]*[A-Za-z0-9]{16,})"
-    r"[^<>\s]+"
-    r">['\"]*$",
+    r"todo|tbd|here|xxx|yyy|zzz)(?![A-Za-z0-9])"
+)
+
+
+def _placeholder_family(inner: str) -> str:
+    """Content pattern for one wrapper family.
+
+    ``inner`` is the family's excluded-character class (the wrapper's
+    own delimiters plus whitespace); the marker-word requirement and
+    the no-16+-alphanumeric-run rule are shared by every family.
+    """
+    return (
+        rf"(?={inner}*{PLACEHOLDER_MARKER_WORDS_RE})"
+        rf"(?!{inner}*[A-Za-z0-9]{{16,}})"
+        rf"{inner}+"
+    )
+
+
+PLACEHOLDER_CREDENTIAL_RE = re.compile(
+    r"^(?:['\"]*<" + _placeholder_family(r"[^<>\s]") + r">['\"]*"
+    r"|['\"]*`" + _placeholder_family(r"[^`\s]") + r"`['\"]*"
+    r"|['\"]*\*\*" + _placeholder_family(r"[^*\s]") + r"\*\*['\"]*)$",
     re.IGNORECASE,
 )
 MATRIX_ATTACHMENT_REL_TYPE = "com.agentteams.attachment"

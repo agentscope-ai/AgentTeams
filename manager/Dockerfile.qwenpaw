@@ -42,8 +42,12 @@ RUN if [ -n "${APT_MIRROR}" ]; then \
         libolm-dev \
         libjemalloc2 \
         git curl jq tzdata ca-certificates openssh-client gettext-base procps \
-        nodejs npm \
     && rm -rf /var/lib/apt/lists/*
+
+# Match the QwenPaw Worker runtime; mcporter requires Promise.withResolvers.
+RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
+    apt-get install -y nodejs && \
+    rm -rf /var/lib/apt/lists/*
 
 # jemalloc for memory efficiency
 RUN JEMALLOC=$(find /usr/lib -name 'libjemalloc.so.2' -print -quit) \

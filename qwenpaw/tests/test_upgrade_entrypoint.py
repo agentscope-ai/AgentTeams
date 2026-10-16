@@ -133,7 +133,18 @@ def _start(d: Path, settle: int = 0) -> subprocess.Popen:
         cwd=str(d),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        start_new_session=True,
     )
+
+
+def _cleanup(proc: subprocess.Popen) -> None:
+    # The worker inherits the output pipe; killing only the entrypoint can
+    # leave communicate() waiting forever after an assertion fails.
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    proc.communicate(timeout=5)
 
 
 def _wait_until(fn, timeout: float = CASE_BUDGET_S, what: str = "condition") -> None:
@@ -169,7 +180,9 @@ def test_recovery_full_chain_success(tmp_path):
     try:
         # the recovery is FINALIZED (pending removed) only after the restored
         # old runtime passed its readiness+settle gate
-        _wait_until(lambda: not pending.exists(), what="recovery finalization")
+        _wait_until(lambda: not pending.exists() and
+                    json.loads(state_file.read_text())["state"] == "rolled_back",
+                    what="recovery finalization")
         state = json.loads(state_file.read_text())
         assert state["state"] == "rolled_back"
         assert state["phase"] == "post-start"
@@ -184,9 +197,7 @@ def test_recovery_full_chain_success(tmp_path):
         assert proc.returncode == 0
         assert "Restored runtime verified" in out.decode()
     finally:
-        if proc.poll() is None:
-            proc.kill()
-            proc.communicate()
+        _cleanup(proc)
 
 
 def test_recovery_verification_failure_broken_old(tmp_path):
@@ -237,7 +248,9 @@ def test_boot_check_rollback_end_to_end(tmp_path):
     state_file, pending = _seed(d, "2.2.1", "2.2.1")  # target install never landed
     proc = _start(d)
     try:
-        _wait_until(lambda: not pending.exists(), what="recovery finalization")
+        _wait_until(lambda: not pending.exists() and
+                    json.loads(state_file.read_text())["state"] == "rolled_back",
+                    what="recovery finalization")
         state = json.loads(state_file.read_text())
         assert state["state"] == "rolled_back"
         assert state["phase"] == "post-start"
@@ -253,6 +266,4 @@ def test_boot_check_rollback_end_to_end(tmp_path):
         out, _ = proc.communicate(timeout=30)
         assert proc.returncode == 0
     finally:
-        if proc.poll() is None:
-            proc.kill()
-            proc.communicate()
+        _cleanup(proc)

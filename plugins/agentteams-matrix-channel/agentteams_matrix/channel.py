@@ -4634,7 +4634,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
         # 1. Check Matrix errcode (string)
         errcode = getattr(resp, "status_code", None)
-        if errcode in MatrixChannel._RETRYABLE_MATRIX_ERRCODES:
+        if errcode in AgentTeamsMatrixChannel._RETRYABLE_MATRIX_ERRCODES:
             return True
 
         # 2. Fall back to HTTP status via transport_response

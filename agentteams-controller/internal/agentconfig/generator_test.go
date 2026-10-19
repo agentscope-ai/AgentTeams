@@ -61,6 +61,21 @@ func TestGenerateOpenClawConfig_Basic(t *testing.T) {
 	if modelCfg["primary"] != "agentteams-gateway/qwen3.5-plus" {
 		t.Errorf("agents.defaults.model.primary = %v, want agentteams-gateway/qwen3.5-plus", modelCfg["primary"])
 	}
+
+	// Verify agents.list carries the worker identity so OpenClaw can build
+	// group @mention regexes (regression guard for group-chat no-reply issue).
+	list, ok := agents["list"].([]interface{})
+	if !ok || len(list) != 1 {
+		t.Fatalf("agents.list missing or wrong shape: %v", agents["list"])
+	}
+	listEntry := list[0].(map[string]interface{})
+	identity := listEntry["identity"].(map[string]interface{})
+	if listEntry["id"] != "main" {
+		t.Errorf("agents.list[0].id = %v, want main", listEntry["id"])
+	}
+	if identity["name"] != "worker-alice" {
+		t.Errorf("agents.list[0].identity.name = %v, want worker-alice", identity["name"])
+	}
 }
 
 func TestGenerateOpenClawConfig_TeamWorker(t *testing.T) {

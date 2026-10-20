@@ -1187,8 +1187,24 @@ resolve_embedded_image() {
 # ============================================================
 KNOWN_MODELS="gpt-5.4 gpt-5.3-codex gpt-5-mini gpt-5-nano claude-opus-4-6 claude-sonnet-4-6 claude-haiku-4-5 qwen3.6-plus qwen3.5-plus deepseek-chat deepseek-reasoner kimi-k2.5 glm-5 MiniMax-M3 MiniMax-M2.7"
 
+# Keep endpoint recognition exact: Alibaba and arbitrary compatible APIs have
+# independent model contracts. Explicit saved/custom model IDs always win.
+is_official_minimax() {
+    [ "${AGENTTEAMS_LLM_PROVIDER:-}" = "openai-compat" ] || return 1
+    local base_url="${AGENTTEAMS_OPENAI_BASE_URL:-}"
+    case "${base_url%/}" in
+        https://api.minimax.io/v1|https://api.minimax.cn/v1) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+openai_default_model() {
+    if is_official_minimax; then echo MiniMax-M3.1-Flash; else echo gpt-5.4; fi
+}
+
 is_known_model() {
     local model="$1"
+    if is_official_minimax && [ "${model}" = "MiniMax-M3.1-Flash" ]; then return 0; fi
     for m in ${KNOWN_MODELS}; do
         [ "${m}" = "${model}" ] && return 0
     done
@@ -2018,6 +2034,9 @@ step_existing() {
 step_llm() {
     log "$(msg llm.title)"
     if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
+        if is_official_minimax && [ -z "${AGENTTEAMS_DEFAULT_MODEL}" ]; then
+            AGENTTEAMS_DEFAULT_MODEL="MiniMax-M3.1-Flash"
+        fi
         if [ "${AGENTTEAMS_LANGUAGE}" = "zh" ]; then
             AGENTTEAMS_LLM_PROVIDER="${AGENTTEAMS_LLM_PROVIDER:-openai-compat}"
             AGENTTEAMS_DEFAULT_MODEL="${AGENTTEAMS_DEFAULT_MODEL:-qwen3.6-plus}"
@@ -2274,11 +2293,14 @@ step_llm() {
                 if [ -n "${_current}" ]; then
                     read -e -p "$(msg llm.openai.model_prompt) [${_current}]: " AGENTTEAMS_DEFAULT_MODEL
                 else
-                    read -e -p "$(msg llm.openai.model_prompt) [gpt-5.4]: " AGENTTEAMS_DEFAULT_MODEL
+                    if is_official_minimax; then
+                        echo "MiniMax-M3.1-Flash (default), MiniMax-M3; or enter a custom model ID."
+                    fi
+                    read -e -p "$(msg llm.openai.model_prompt) [$(openai_default_model)]: " AGENTTEAMS_DEFAULT_MODEL
                 fi
                 if [ "${AGENTTEAMS_DEFAULT_MODEL}" = "b" ]; then STEP_RESULT="back"; return 0; fi
                 AGENTTEAMS_DEFAULT_MODEL="${AGENTTEAMS_DEFAULT_MODEL:-${_current}}"
-                [ -z "${AGENTTEAMS_DEFAULT_MODEL}" ] && AGENTTEAMS_DEFAULT_MODEL="gpt-5.4"
+                [ -z "${AGENTTEAMS_DEFAULT_MODEL}" ] && AGENTTEAMS_DEFAULT_MODEL="$(openai_default_model)"
             fi
             log "$(msg llm.openai.base_url_label "${AGENTTEAMS_OPENAI_BASE_URL}")"
             log "$(msg llm.model.label "${AGENTTEAMS_DEFAULT_MODEL}")"

@@ -634,6 +634,13 @@ log "Generating Manager openclaw.json..."
 export MANAGER_MATRIX_TOKEN="${MANAGER_TOKEN}"
 export MANAGER_GATEWAY_KEY="${AGENTTEAMS_MANAGER_GATEWAY_KEY}"
 # Resolve model parameters based on model name
+if { [ "${_AGENTTEAMS_MINIMAX_DEFAULTED:-}" = "true" ] || [ "${AGENTTEAMS_MINIMAX_DEFAULTED:-}" = "1" ]; } &&
+    [ -f /root/manager-workspace/openclaw.json ]; then
+    _saved_model=$(jq -r '.agents.defaults.model.primary // empty' /root/manager-workspace/openclaw.json)
+    if [ -n "${_saved_model}" ]; then
+        export AGENTTEAMS_DEFAULT_MODEL="${_saved_model#agentteams-gateway/}"
+    fi
+fi
 MODEL_NAME="${AGENTTEAMS_DEFAULT_MODEL:-qwen3.6-plus}"
 case "${MODEL_NAME}" in
     gpt-5.3-codex|gpt-5-mini|gpt-5-nano)
@@ -658,6 +665,10 @@ case "${MODEL_NAME}" in
         export MODEL_CONTEXT_WINDOW=150000 MODEL_MAX_TOKENS=128000 ;;
 esac
 export MODEL_REASONING=true
+
+if agentteams_is_official_minimax && [ "${MODEL_NAME}" = "MiniMax-M3.1-Flash" ]; then
+    export MODEL_CONTEXT_WINDOW=1000000 MODEL_MAX_TOKENS=524288
+fi
 
 # Override with user-supplied custom model parameters from env (set during install)
 [ -n "${AGENTTEAMS_MODEL_CONTEXT_WINDOW:-}" ] && export MODEL_CONTEXT_WINDOW="${AGENTTEAMS_MODEL_CONTEXT_WINDOW}"
@@ -786,6 +797,11 @@ else
     fi
     _written_token=$(jq -r '.channels.matrix.accessToken' /root/manager-workspace/openclaw.json 2>/dev/null)
     log "Matrix token written from template (prefix: ${_written_token:0:10}...)"
+fi
+
+if agentteams_is_official_minimax; then
+    agentteams_minimax_config < /root/manager-workspace/openclaw.json > /root/manager-workspace/openclaw.json.tmp &&
+        mv /root/manager-workspace/openclaw.json.tmp /root/manager-workspace/openclaw.json
 fi
 
 # Cloud/K8s mode: overlay cloud-specific settings onto generated config

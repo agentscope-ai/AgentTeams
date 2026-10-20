@@ -6,6 +6,8 @@ type Config struct {
 	MatrixServerURL string // Matrix CS API URL for agent connections
 	AIGatewayURL    string // AI gateway URL for model API calls
 	AdminUser       string // admin username
+	LLMProvider     string // upstream provider behind the AI gateway
+	OpenAIBaseURL   string // upstream endpoint, not the local gateway URL
 	DefaultModel    string // default model name
 	EmbeddingModel  string // embedding model for memory search (optional)
 	Runtime         string // "docker", "k8s", "aliyun"
@@ -56,12 +58,13 @@ type ChannelPolicy struct {
 
 // ModelSpec describes LLM parameters for a specific model.
 type ModelSpec struct {
-	ID            string   `json:"id"`
-	Name          string   `json:"name"`
-	ContextWindow int      `json:"contextWindow"`
-	MaxTokens     int      `json:"maxTokens"`
-	Reasoning     bool     `json:"reasoning"`
-	Input         []string `json:"input"` // e.g. ["text", "image"]
+	ID            string                 `json:"id"`
+	Name          string                 `json:"name"`
+	ContextWindow int                    `json:"contextWindow"`
+	MaxTokens     int                    `json:"maxTokens"`
+	Reasoning     bool                   `json:"reasoning"`
+	Input         []string               `json:"input"` // e.g. ["text", "image"]
+	Compat        map[string]interface{} `json:"compat,omitempty"`
 }
 
 // BuiltinMarkers are the delimiters for merge-managed sections in AGENTS.md.

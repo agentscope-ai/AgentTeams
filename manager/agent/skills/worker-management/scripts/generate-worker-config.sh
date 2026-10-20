@@ -57,6 +57,10 @@ case "${MODEL_NAME}" in
         CTX=150000; MAX=128000 ;;
 esac
 
+if agentteams_is_official_minimax && [ "${MODEL_NAME}" = "MiniMax-M3.1-Flash" ]; then
+    CTX=1000000; MAX=524288
+fi
+
 # Override with user-supplied custom model parameters from env (set during install)
 [ -n "${AGENTTEAMS_MODEL_CONTEXT_WINDOW:-}" ] && CTX="${AGENTTEAMS_MODEL_CONTEXT_WINDOW}"
 [ -n "${AGENTTEAMS_MODEL_MAX_TOKENS:-}" ] && MAX="${AGENTTEAMS_MODEL_MAX_TOKENS}"
@@ -146,6 +150,11 @@ elif [ -n "${AGENTTEAMS_EMBEDDING_MODEL}" ]; then
        --arg key "${WORKER_GATEWAY_KEY}" \
        '.agents.defaults.memorySearch = {"provider":"openai","model":$emb_model,"remote":{"baseUrl":($aigw + "/v1"),"apiKey":$key}}' \
        "${OUTPUT_DIR}/openclaw.json" > "${OUTPUT_DIR}/openclaw.json.tmp" && \
+        mv "${OUTPUT_DIR}/openclaw.json.tmp" "${OUTPUT_DIR}/openclaw.json"
+fi
+
+if agentteams_is_official_minimax; then
+    agentteams_minimax_config < "${OUTPUT_DIR}/openclaw.json" > "${OUTPUT_DIR}/openclaw.json.tmp" &&
         mv "${OUTPUT_DIR}/openclaw.json.tmp" "${OUTPUT_DIR}/openclaw.json"
 fi
 

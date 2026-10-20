@@ -16,14 +16,18 @@ func NewGenerator(cfg Config) *Generator {
 	if cfg.AdminUser == "" {
 		cfg.AdminUser = "admin"
 	}
-	if cfg.DefaultModel == "" {
-		cfg.DefaultModel = "qwen3.6-plus"
-	}
+	cfg.DefaultModel = DefaultModel(cfg.LLMProvider, cfg.OpenAIBaseURL, cfg.DefaultModel, "qwen3.6-plus")
 	return &Generator{config: cfg}
 }
 
 // GenerateOpenClawConfig produces the openclaw.json content for a worker.
 func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, error) {
+	if req.AIGatewayURL != "" && req.AIGatewayURL != g.config.AIGatewayURL {
+		// A per-worker gateway has its own upstream contract.
+		copy := *g
+		copy.config.OpenAIBaseURL = ""
+		g = &copy
+	}
 	modelName := req.ModelName
 	if modelName == "" {
 		modelName = g.config.DefaultModel
@@ -369,6 +373,14 @@ func (g *Generator) applyChannelPolicy(config map[string]interface{}, policy *Ch
 // resolveModelSpec returns model parameters, applying config overrides.
 func (g *Generator) resolveModelSpec(modelName string) ModelSpec {
 	spec := defaultModelSpec(modelName)
+	if IsMiniMaxOpenAI(g.config.LLMProvider, g.config.OpenAIBaseURL) && modelName == MiniMaxFlash {
+		spec = ModelSpec{ID: modelName, Name: modelName, ContextWindow: 1000000,
+			MaxTokens: 524288, Reasoning: true, Input: []string{"text", "image"},
+			// Omit the pinned runtime's effort values (including none/minimal)
+			// to use Flash's adaptive thinking / max effort defaults.
+			Compat: map[string]interface{}{"supportsReasoningEffort": false, "supportsDeveloperRole": false,
+				"supportsStore": false, "maxTokensField": "max_completion_tokens"}}
+	}
 
 	// Apply user overrides
 	if g.config.ModelContextWindow > 0 {
@@ -400,20 +412,20 @@ func defaultModelSpec(modelName string) ModelSpec {
 	}
 
 	presets := map[string]preset{
-		"gpt-5.3-codex":          {400000, 128000, true, true},
-		"gpt-5-mini":             {400000, 128000, true, true},
-		"gpt-5-nano":             {400000, 128000, true, true},
-		"claude-opus-4-6":        {1000000, 128000, true, true},
-		"claude-sonnet-4-6":      {1000000, 64000, true, true},
-		"claude-haiku-4-5":       {200000, 64000, true, true},
-		"qwen3.6-plus":           {200000, 64000, true, true},
-		"qwen3.5-plus":           {200000, 64000, true, true},
-		"deepseek-chat":          {256000, 128000, false, true},
-		"deepseek-reasoner":      {256000, 128000, false, true},
-		"kimi-k2.5":              {256000, 128000, true, true},
-		"glm-5":                  {200000, 128000, false, true},
-		"MiniMax-M2.7":           {204800, 128000, false, true},
-		"MiniMax-M3":             {1000000, 128000, true, true},
+		"gpt-5.3-codex":     {400000, 128000, true, true},
+		"gpt-5-mini":        {400000, 128000, true, true},
+		"gpt-5-nano":        {400000, 128000, true, true},
+		"claude-opus-4-6":   {1000000, 128000, true, true},
+		"claude-sonnet-4-6": {1000000, 64000, true, true},
+		"claude-haiku-4-5":  {200000, 64000, true, true},
+		"qwen3.6-plus":      {200000, 64000, true, true},
+		"qwen3.5-plus":      {200000, 64000, true, true},
+		"deepseek-chat":     {256000, 128000, false, true},
+		"deepseek-reasoner": {256000, 128000, false, true},
+		"kimi-k2.5":         {256000, 128000, true, true},
+		"glm-5":             {200000, 128000, false, true},
+		"MiniMax-M2.7":      {204800, 128000, false, true},
+		"MiniMax-M3":        {1000000, 128000, true, true},
 	}
 
 	p, found := presets[modelName]
@@ -468,14 +480,7 @@ func containsString(slice []string, s string) bool {
 
 // allModelSpecs returns all known model specs for the openclaw.json models list.
 func (g *Generator) allModelSpecs(selectedModel string) []ModelSpec {
-	allModels := []string{
-		"gpt-5.4", "gpt-5.3-codex", "gpt-5-mini", "gpt-5-nano",
-		"claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5",
-		"qwen3.6-plus", "qwen3.5-plus",
-		"deepseek-chat", "deepseek-reasoner",
-		"kimi-k2.5", "glm-5",
-		"MiniMax-M3", "MiniMax-M2.7",
-	}
+	allModels := g.modelNames()
 
 	specs := make([]ModelSpec, 0, len(allModels)+1)
 	seen := make(map[string]bool)
@@ -492,14 +497,7 @@ func (g *Generator) allModelSpecs(selectedModel string) []ModelSpec {
 
 // allModelAliases returns the agents.defaults.models alias map.
 func (g *Generator) allModelAliases(selectedModel string) map[string]interface{} {
-	allModels := []string{
-		"gpt-5.4", "gpt-5.3-codex", "gpt-5-mini", "gpt-5-nano",
-		"claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5",
-		"qwen3.6-plus", "qwen3.5-plus",
-		"deepseek-chat", "deepseek-reasoner",
-		"kimi-k2.5", "glm-5",
-		"MiniMax-M3", "MiniMax-M2.7",
-	}
+	allModels := g.modelNames()
 
 	aliases := make(map[string]interface{})
 	for _, name := range allModels {

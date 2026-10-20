@@ -679,8 +679,19 @@ $script:KnownModels = @(
     "kimi-k2.5", "glm-5", "MiniMax-M3", "MiniMax-M2.7"
 )
 
+function Test-OfficialMiniMax {
+    return $script:config.LLM_PROVIDER -ceq "openai-compat" -and
+        ($script:config.OPENAI_BASE_URL -cmatch '^https://api\.minimax\.(io|cn)/v1/?$')
+}
+
+function Get-OpenAIModelDefault {
+    if (Test-OfficialMiniMax) { return "MiniMax-M3.1-Flash" }
+    return "gpt-5.4"
+}
+
 function Test-KnownModel {
     param([string]$Model)
+    if ((Test-OfficialMiniMax) -and $Model -ceq "MiniMax-M3.1-Flash") { return $true }
     return $script:KnownModels -contains $Model
 }
 
@@ -1730,6 +1741,7 @@ function Step-Llm {
     Write-Log (Get-Msg "llm.title")
 
     if ($script:AGENTTEAMS_NON_INTERACTIVE) {
+        $savedModel = $script:config.DEFAULT_MODEL
         if ($script:AGENTTEAMS_LANGUAGE -eq "zh") {
             $script:config.LLM_PROVIDER = if ($env:AGENTTEAMS_LLM_PROVIDER) { $env:AGENTTEAMS_LLM_PROVIDER } else { "openai-compat" }
             $script:config.DEFAULT_MODEL = if ($env:AGENTTEAMS_DEFAULT_MODEL) { $env:AGENTTEAMS_DEFAULT_MODEL } else { "qwen3.6-plus" }
@@ -1741,6 +1753,9 @@ function Step-Llm {
             $script:config.DEFAULT_MODEL = if ($env:AGENTTEAMS_DEFAULT_MODEL) { $env:AGENTTEAMS_DEFAULT_MODEL } else { "qwen3.6-plus" }
             $script:config.OPENAI_BASE_URL = if ($env:AGENTTEAMS_OPENAI_BASE_URL) { $env:AGENTTEAMS_OPENAI_BASE_URL } else { "" }
             Write-Log (Get-Msg "llm.provider.qwen_default" -f $script:config.LLM_PROVIDER)
+        }
+        if ((Test-OfficialMiniMax) -and -not $env:AGENTTEAMS_DEFAULT_MODEL) {
+            $script:config.DEFAULT_MODEL = if ($savedModel) { $savedModel } else { "MiniMax-M3.1-Flash" }
         }
         Write-Log (Get-Msg "llm.model.label" -f $script:config.DEFAULT_MODEL)
         Write-Log ""
@@ -1954,7 +1969,10 @@ function Step-Llm {
                 if ($currentModel) {
                     $modelInput = Read-Host "$(Get-Msg 'llm.openai.model_prompt') [${currentModel}]"
                 } else {
-                    $modelInput = Read-Host (Get-Msg 'llm.openai.model_prompt')
+                    if (Test-OfficialMiniMax) {
+                        Write-Host "MiniMax-M3.1-Flash (default), MiniMax-M3; or enter a custom model ID."
+                    }
+                    $modelInput = Read-Host "$(Get-Msg 'llm.openai.model_prompt') [$(Get-OpenAIModelDefault)]"
                 }
                 if ($modelInput -eq "b") { $script:StepResult = "back"; return }
                 if ($modelInput) {
@@ -1962,7 +1980,7 @@ function Step-Llm {
                 } elseif ($currentModel) {
                     $script:config.DEFAULT_MODEL = $currentModel
                 } else {
-                    $script:config.DEFAULT_MODEL = "gpt-5.4"
+                    $script:config.DEFAULT_MODEL = Get-OpenAIModelDefault
                 }
             }
             Write-Log (Get-Msg "llm.openai.base_url_label" -f $script:config.OPENAI_BASE_URL)

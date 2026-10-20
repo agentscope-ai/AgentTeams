@@ -381,7 +381,8 @@ func LoadConfig() *Config {
 
 		OSSStoragePrefix: envOrDefault("AGENTTEAMS_STORAGE_PREFIX", "agentteams/agentteams-storage"),
 
-		DefaultModel:       envOrDefault("AGENTTEAMS_DEFAULT_MODEL", "qwen3.6-plus"),
+		DefaultModel: agentconfig.DefaultModel(os.Getenv("AGENTTEAMS_LLM_PROVIDER"),
+			os.Getenv("AGENTTEAMS_OPENAI_BASE_URL"), os.Getenv("AGENTTEAMS_DEFAULT_MODEL"), "qwen3.6-plus"),
 		EmbeddingModel:     os.Getenv("AGENTTEAMS_EMBEDDING_MODEL"),
 		Runtime:            envOrDefault("AGENTTEAMS_RUNTIME", "docker"),
 		ModelContextWindow: envOrDefaultInt("AGENTTEAMS_MODEL_CONTEXT_WINDOW", 0),
@@ -808,8 +809,14 @@ func (c *Config) ManagerAgentEnv() map[string]string {
 	setIfNonEmpty("AGENTTEAMS_STORAGE_PREFIX", c.OSSStoragePrefix)
 	setIfNonEmpty("AGENTTEAMS_MATRIX_DOMAIN", c.MatrixDomain)
 	setIfNonEmpty("AGENTTEAMS_DEFAULT_MODEL", c.DefaultModel)
+	if agentconfig.IsMiniMaxOpenAI(c.LLMProvider, c.OpenAIBaseURL) && c.DefaultModel == agentconfig.MiniMaxFlash && os.Getenv("AGENTTEAMS_DEFAULT_MODEL") == "" {
+		// Distinguish a fresh default from an explicit model switch so manager
+		// startup can retain the primary model in an existing openclaw.json.
+		env["AGENTTEAMS_MINIMAX_DEFAULTED"] = "1"
+	}
 	setIfNonEmpty("AGENTTEAMS_EMBEDDING_MODEL", c.EmbeddingModel)
 	setIfNonEmpty("AGENTTEAMS_LLM_PROVIDER", c.LLMProvider)
+	setIfNonEmpty("AGENTTEAMS_OPENAI_BASE_URL", c.OpenAIBaseURL)
 	setIfNonEmpty("AGENTTEAMS_LLM_API_KEY", c.LLMAPIKey)
 	if c.AIStreamIdleTimeoutSeconds > 0 {
 		env["AGENTTEAMS_AI_STREAM_IDLE_TIMEOUT_SECONDS"] = strconv.Itoa(c.AIStreamIdleTimeoutSeconds)
@@ -853,6 +860,8 @@ func (c *Config) AgentConfig() agentconfig.Config {
 		MatrixServerURL:    matrixURL,
 		AIGatewayURL:       aiGatewayURL,
 		AdminUser:          c.MatrixAdminUser,
+		LLMProvider:        c.LLMProvider,
+		OpenAIBaseURL:      c.OpenAIBaseURL,
 		DefaultModel:       c.DefaultModel,
 		EmbeddingModel:     c.EmbeddingModel,
 		Runtime:            c.Runtime,

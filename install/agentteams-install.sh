@@ -20,6 +20,10 @@
 #   AGENTTEAMS_LLM_PROVIDER      LLM provider       (default: openai-compat for zh non-interactive Token Plan; qwen for en)
 #   AGENTTEAMS_DEFAULT_MODEL      Default model       (default: qwen3.6-plus for zh Token Plan and en non-interactive)
 #   AGENTTEAMS_OPENAI_BASE_URL    OpenAI-compatible base URL (default for zh non-interactive: Alibaba Token Plan endpoint)
+#   AGENTTEAMS_HIGRESS_ADAPTER_MODE Higress adapter mode (default: direct; external preserves the configured Gateway URL)
+#   AGENTTEAMS_AI_GATEWAY_URL     Higress Gateway data-plane URL for Manager and Worker model requests
+#   AGENTTEAMS_AI_GATEWAY_ADMIN_URL Higress Console URL for Dashboard shared authentication and management
+#   AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS Comma-separated Console proxy allowlist hostnames
 #   AGENTTEAMS_LLM_API_KEY        LLM API key         (required)
 #   AGENTTEAMS_ADMIN_USER         Admin username       (default: admin)
 #   AGENTTEAMS_ADMIN_PASSWORD     Admin password       (auto-generated if not set, min 8 chars)
@@ -1531,6 +1535,9 @@ load_current_params_from_env() {
         [ -z "${AGENTTEAMS_DASHBOARD_IMAGE:+x}" ] && AGENTTEAMS_DASHBOARD_IMAGE="$(grep '^AGENTTEAMS_DASHBOARD_IMAGE=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         [ -z "${DASHBOARD_SESSION_SECRET:+x}" ] && DASHBOARD_SESSION_SECRET="$(grep '^DASHBOARD_SESSION_SECRET=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         [ -z "${AGENTTEAMS_AI_GATEWAY_ADMIN_URL:+x}" ] && AGENTTEAMS_AI_GATEWAY_ADMIN_URL="$(grep '^AGENTTEAMS_AI_GATEWAY_ADMIN_URL=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+        [ -z "${AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS:+x}" ] && AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS="$(grep '^AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+        [ -z "${AGENTTEAMS_HIGRESS_ADAPTER_MODE:+x}" ] && AGENTTEAMS_HIGRESS_ADAPTER_MODE="$(grep '^AGENTTEAMS_HIGRESS_ADAPTER_MODE=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+        [ -z "${AGENTTEAMS_AI_GATEWAY_URL:+x}" ] && AGENTTEAMS_AI_GATEWAY_URL="$(grep '^AGENTTEAMS_AI_GATEWAY_URL=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         [ -z "${AGENTTEAMS_DATA_DIR:+x}" ] && AGENTTEAMS_DATA_DIR="$(grep '^AGENTTEAMS_DATA_DIR=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         return 0
     fi
@@ -2754,7 +2761,10 @@ step_dashboard() {
     AGENTTEAMS_DASHBOARD="${AGENTTEAMS_DASHBOARD:-1}"
     AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.3.1}"
     AGENTTEAMS_PORT_DASHBOARD="${AGENTTEAMS_PORT_DASHBOARD:-13000}"
+    AGENTTEAMS_HIGRESS_ADAPTER_MODE="${AGENTTEAMS_HIGRESS_ADAPTER_MODE:-direct}"
+    AGENTTEAMS_AI_GATEWAY_URL="${AGENTTEAMS_AI_GATEWAY_URL:-}"
     AGENTTEAMS_AI_GATEWAY_ADMIN_URL="${AGENTTEAMS_AI_GATEWAY_ADMIN_URL:-}"
+    AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS="${AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS:-}"
 
     # Compute the default image for the current version.
     # We track whether the current image matches the derived default so that
@@ -2797,7 +2807,7 @@ step_dashboard() {
         else
             log "$(msg dash.skip) (quick start)"
         fi
-        export AGENTTEAMS_DASHBOARD AGENTTEAMS_DASHBOARD_VERSION AGENTTEAMS_PORT_DASHBOARD AGENTTEAMS_DASHBOARD_IMAGE AGENTTEAMS_AI_GATEWAY_ADMIN_URL
+        export AGENTTEAMS_DASHBOARD AGENTTEAMS_DASHBOARD_VERSION AGENTTEAMS_PORT_DASHBOARD AGENTTEAMS_DASHBOARD_IMAGE AGENTTEAMS_HIGRESS_ADAPTER_MODE AGENTTEAMS_AI_GATEWAY_URL AGENTTEAMS_AI_GATEWAY_ADMIN_URL AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS
         return 0
     fi
 
@@ -2808,13 +2818,13 @@ step_dashboard() {
         else
             log "$(msg dash.skip) (non-interactive)"
         fi
-        export AGENTTEAMS_DASHBOARD AGENTTEAMS_DASHBOARD_VERSION AGENTTEAMS_PORT_DASHBOARD AGENTTEAMS_DASHBOARD_IMAGE AGENTTEAMS_AI_GATEWAY_ADMIN_URL
+        export AGENTTEAMS_DASHBOARD AGENTTEAMS_DASHBOARD_VERSION AGENTTEAMS_PORT_DASHBOARD AGENTTEAMS_DASHBOARD_IMAGE AGENTTEAMS_HIGRESS_ADAPTER_MODE AGENTTEAMS_AI_GATEWAY_URL AGENTTEAMS_AI_GATEWAY_ADMIN_URL AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS
         return 0
     fi
 
     if [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ "${AGENTTEAMS_UPGRADE_KEEP_ALL}" = "1" ]; then
         log "$(msg prompt.upgrade_keep "" "${AGENTTEAMS_DASHBOARD}") dashboard=${AGENTTEAMS_DASHBOARD} version=${AGENTTEAMS_DASHBOARD_VERSION} port=${AGENTTEAMS_PORT_DASHBOARD}"
-        export AGENTTEAMS_DASHBOARD AGENTTEAMS_DASHBOARD_VERSION AGENTTEAMS_PORT_DASHBOARD AGENTTEAMS_DASHBOARD_IMAGE AGENTTEAMS_AI_GATEWAY_ADMIN_URL
+        export AGENTTEAMS_DASHBOARD AGENTTEAMS_DASHBOARD_VERSION AGENTTEAMS_PORT_DASHBOARD AGENTTEAMS_DASHBOARD_IMAGE AGENTTEAMS_HIGRESS_ADAPTER_MODE AGENTTEAMS_AI_GATEWAY_URL AGENTTEAMS_AI_GATEWAY_ADMIN_URL AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS
         return 0
     fi
 
@@ -2829,7 +2839,7 @@ step_dashboard() {
 
     if [ "${AGENTTEAMS_DASHBOARD}" != "1" ]; then
         log "$(msg dash.skip)"
-        export AGENTTEAMS_DASHBOARD AGENTTEAMS_DASHBOARD_VERSION AGENTTEAMS_PORT_DASHBOARD AGENTTEAMS_DASHBOARD_IMAGE AGENTTEAMS_AI_GATEWAY_ADMIN_URL
+        export AGENTTEAMS_DASHBOARD AGENTTEAMS_DASHBOARD_VERSION AGENTTEAMS_PORT_DASHBOARD AGENTTEAMS_DASHBOARD_IMAGE AGENTTEAMS_HIGRESS_ADAPTER_MODE AGENTTEAMS_AI_GATEWAY_URL AGENTTEAMS_AI_GATEWAY_ADMIN_URL AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS
         return 0
     fi
 
@@ -2862,7 +2872,7 @@ step_dashboard() {
 
     # Higress Console URL (explicit config takes priority; auto-detect as fallback)
     local _higress_url="${AGENTTEAMS_AI_GATEWAY_ADMIN_URL}"
-    if [ -z "${_higress_url}" ]; then
+    if [ "${AGENTTEAMS_HIGRESS_ADAPTER_MODE}" != "external" ] && [ -z "${_higress_url}" ]; then
         if ${DOCKER_CMD} ps --format '{{.Names}}' | grep -q "^agentteams-controller$"; then
             if ${DOCKER_CMD} exec agentteams-controller curl -sf --max-time 2 http://127.0.0.1:8001/ >/dev/null 2>&1; then
                 _higress_url="http://agentteams-controller:8001"
@@ -2881,6 +2891,30 @@ step_dashboard() {
             http://*|https://*) ;;
             *) AGENTTEAMS_AI_GATEWAY_ADMIN_URL="http://${AGENTTEAMS_AI_GATEWAY_ADMIN_URL}" ;;
         esac
+    fi
+
+    # Merge the Console host into the admin allowlist. The Dashboard validates
+    # the Console host against AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS
+    # (SSRF guard); a custom host typed above (container name / IP / Service
+    # name) would otherwise be rejected at login time ("Console host ... is
+    # not allowed") because the built-in allowlist only covers embedded
+    # deployments. Union, never replace: operator-provided entries are kept.
+    if [ -n "${AGENTTEAMS_AI_GATEWAY_ADMIN_URL}" ]; then
+        local _gw_host
+        _gw_host="$(printf '%s' "${AGENTTEAMS_AI_GATEWAY_ADMIN_URL}" | sed -E 's#^https?://##; s#/.*$##; s#:\[([0-9a-fA-F:]+)\]$#:\1#; s#:[0-9]+$##')"
+        if [ -n "${_gw_host}" ]; then
+            case ",${AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS}," in
+                *,${_gw_host},*) ;;
+                *)
+                    if [ -n "${AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS}" ]; then
+                        AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS="${AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS},${_gw_host}"
+                    else
+                        AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS="${_gw_host}"
+                    fi
+                    log "  Console host '${_gw_host}' added to AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS (required by the Dashboard login allowlist)"
+                    ;;
+            esac
+        fi
     fi
 
     # Verify the Higress Console URL is reachable (best-effort warning only)
@@ -2912,7 +2946,7 @@ step_dashboard() {
     fi
 
     log "$(msg dash.summary "${AGENTTEAMS_PORT_DASHBOARD}" "${AGENTTEAMS_DASHBOARD_IMAGE}")"
-    export AGENTTEAMS_DASHBOARD AGENTTEAMS_DASHBOARD_VERSION AGENTTEAMS_PORT_DASHBOARD AGENTTEAMS_DASHBOARD_IMAGE AGENTTEAMS_AI_GATEWAY_ADMIN_URL
+    export AGENTTEAMS_DASHBOARD AGENTTEAMS_DASHBOARD_VERSION AGENTTEAMS_PORT_DASHBOARD AGENTTEAMS_DASHBOARD_IMAGE AGENTTEAMS_HIGRESS_ADAPTER_MODE AGENTTEAMS_AI_GATEWAY_URL AGENTTEAMS_AI_GATEWAY_ADMIN_URL AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS
 }
 
 step_runtime() {
@@ -3371,6 +3405,10 @@ _start_dashboard() {
     AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.3.1}"
     AGENTTEAMS_DASHBOARD_IMAGE="${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}}"
 
+    # Embedded deployment marker: controller lives on the same network as the
+    # dashboard, so the process can probe internal addresses on first boot.
+    AGENTTEAMS_DEPLOYMENT_MODE="${AGENTTEAMS_DEPLOYMENT_MODE:-embedded}"
+
     log ""
     log "Starting agentteams-dashboard..."
 
@@ -3395,7 +3433,12 @@ _start_dashboard() {
     local env_args=()
     env_args+=(-e AGENTTEAMS_CONTROLLER_URL="http://${CTRL_CONTAINER}:8090")
     env_args+=(-e NEXT_PUBLIC_MATRIX_API_URL="http://${CTRL_CONTAINER}:6167")
+    env_args+=(-e AGENTTEAMS_HIGRESS_ADAPTER_MODE="${AGENTTEAMS_HIGRESS_ADAPTER_MODE:-direct}")
+    env_args+=(-e AGENTTEAMS_AI_GATEWAY_URL="${AGENTTEAMS_AI_GATEWAY_URL:-}")
+    env_args+=(-e AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS="${AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS:-}")
     env_args+=(-e MATRIX_HOMESERVER_ALLOWLIST="${CTRL_CONTAINER},matrix-local.agentteams.io,matrix.org")
+    env_args+=(-e DASHBOARD_CONFIG_FILE="/data/agentteams-dashboard/config.json")
+    env_args+=(-e AGENTTEAMS_DEPLOYMENT_MODE="${AGENTTEAMS_DEPLOYMENT_MODE}")
 
     # Session secret for dashboard multi-user login (issue #1311): the
     # dashboard fail-closes when it is missing. Resolve in order — exported
@@ -3516,7 +3559,7 @@ _start_dashboard() {
                 *) _resolved_gw_url="http://${_resolved_gw_url}" ;;
             esac
             env_args+=(-e AGENTTEAMS_AI_GATEWAY_ADMIN_URL="${_resolved_gw_url}")
-        elif ${DOCKER_CMD} exec "${CTRL_CONTAINER}" wget -q -O- --timeout=2 http://127.0.0.1:8001/ >/dev/null 2>&1; then
+        elif [ "${AGENTTEAMS_HIGRESS_ADAPTER_MODE:-direct}" != "external" ] && ${DOCKER_CMD} exec "${CTRL_CONTAINER}" wget -q -O- --timeout=2 http://127.0.0.1:8001/ >/dev/null 2>&1; then
             _resolved_gw_url="http://${CTRL_CONTAINER}:8001"
             env_args+=(-e AGENTTEAMS_AI_GATEWAY_ADMIN_URL="${_resolved_gw_url}")
         fi
@@ -3541,8 +3584,25 @@ _start_dashboard() {
         fi
     fi
 
-    # Create persistent data volume (for future use)
+    # Create persistent data volume (F-1): the dashboard process reads
+    # config.json and writes .session-secret / .setup-token under
+    # /data/agentteams-dashboard — must match configFilePath() in
+    # src/lib/backend-config.ts.
     ${DOCKER_CMD} volume create agentteams-dashboard-data >/dev/null 2>&1 || true
+
+    # Migration: legacy installs wrote into /app/db inside the same volume.
+    # Detect /app/db contents (any file under it) and bind that mount once so
+    # existing files survive this cycle. Next upgrade drops the legacy bind.
+    local _vol_args=()
+    _vol_args+=(-v "agentteams-dashboard-data:/data/agentteams-dashboard")
+    if ${DOCKER_CMD} volume inspect agentteams-dashboard-data >/dev/null 2>&1; then
+        local _legacy_entries
+        _legacy_entries=$(${DOCKER_CMD} run --rm -v agentteams-dashboard-data:/probe alpine:latest sh -c 'ls -1A /probe/app 2>/dev/null' 2>/dev/null || true)
+        if [ -n "${_legacy_entries}" ]; then
+            log "WARNING: dashboard data volume has files under /app/db (legacy path); mounting it once so this upgrade does not lose them. Next upgrade will drop the legacy bind."
+            _vol_args+=(-v "agentteams-dashboard-data:/app/db")
+        fi
+    fi
 
     ${DOCKER_CMD} run -d \
         --name "${DASHBOARD_CONTAINER}" \
@@ -3551,7 +3611,7 @@ _start_dashboard() {
         --network-alias dashboard.agentteams.io \
         -p "${BIND_ADDR}:${AGENTTEAMS_PORT_DASHBOARD}:3000" \
         "${env_args[@]}" \
-        -v agentteams-dashboard-data:/app/db \
+        "${_vol_args[@]}" \
         "${AGENTTEAMS_DASHBOARD_IMAGE}"
 
     # Wait for dashboard to be ready
@@ -3806,6 +3866,10 @@ AGENTTEAMS_MATRIX_CLIENT_DOMAIN=${AGENTTEAMS_MATRIX_CLIENT_DOMAIN}
 
 # Gateway
 AGENTTEAMS_AI_GATEWAY_DOMAIN=${AGENTTEAMS_AI_GATEWAY_DOMAIN}
+AGENTTEAMS_HIGRESS_ADAPTER_MODE=${AGENTTEAMS_HIGRESS_ADAPTER_MODE:-direct}
+AGENTTEAMS_AI_GATEWAY_URL=${AGENTTEAMS_AI_GATEWAY_URL:-}
+AGENTTEAMS_AI_GATEWAY_ADMIN_URL=${AGENTTEAMS_AI_GATEWAY_ADMIN_URL:-}
+AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS=${AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS:-}
 AGENTTEAMS_MANAGER_GATEWAY_KEY=${AGENTTEAMS_MANAGER_GATEWAY_KEY}
 
 # File System
@@ -3887,7 +3951,6 @@ AGENTTEAMS_DASHBOARD=${AGENTTEAMS_DASHBOARD:-1}
 AGENTTEAMS_DASHBOARD_VERSION=${AGENTTEAMS_DASHBOARD_VERSION:-v1.3.1}
 AGENTTEAMS_PORT_DASHBOARD=${AGENTTEAMS_PORT_DASHBOARD:-13000}
 AGENTTEAMS_DASHBOARD_IMAGE=${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}}
-AGENTTEAMS_AI_GATEWAY_ADMIN_URL=${AGENTTEAMS_AI_GATEWAY_ADMIN_URL:-}
 DASHBOARD_SESSION_SECRET=${DASHBOARD_SESSION_SECRET:-}
 EOF
 
@@ -4221,6 +4284,10 @@ CREDEOF
         local _aigw_domain="${AGENTTEAMS_AI_GATEWAY_DOMAIN:-aigw-local.agentteams.io}"
         # Ensure internal gateway port is present (container-internal traffic uses 8080)
         case "${_aigw_domain}" in *:*) ;; *) _aigw_domain="${_aigw_domain}:${_internal_gw_port}" ;; esac
+        local _ai_gateway_url="http://${_aigw_domain}"
+        if [ "${AGENTTEAMS_HIGRESS_ADAPTER_MODE:-direct}" = "external" ] && [ -n "${AGENTTEAMS_AI_GATEWAY_URL:-}" ]; then
+            _ai_gateway_url="${AGENTTEAMS_AI_GATEWAY_URL}"
+        fi
         local _fs_domain="${AGENTTEAMS_FS_DOMAIN:-fs-local.agentteams.io}"
         case "${_fs_domain}" in *:*) ;; *) _fs_domain="${_fs_domain}:${_internal_gw_port}" ;; esac
 
@@ -4252,11 +4319,12 @@ CREDEOF
             -e "${_ctrl_env_prefix}ELEMENT_HOMESERVER_URL=http://127.0.0.1:${AGENTTEAMS_PORT_GATEWAY}"
             -e "${_ctrl_env_prefix}MATRIX_URL=http://127.0.0.1:6167"
             -e "${_ctrl_env_prefix}MATRIX_E2EE=${AGENTTEAMS_MATRIX_E2EE:-0}"
+            -e "${_ctrl_env_prefix}HIGRESS_ADAPTER_MODE=${AGENTTEAMS_HIGRESS_ADAPTER_MODE:-direct}"
             -e "${_ctrl_env_prefix}MINIO_ENDPOINT=http://127.0.0.1:9000"
             -e "${_ctrl_env_prefix}MINIO_BUCKET=agentteams-storage"
             -e "${_ctrl_env_prefix}STORAGE_PREFIX=${_storage_prefix}"
             -e "${_ctrl_env_prefix}FS_ENDPOINT=http://127.0.0.1:9000"
-            -e "${_ctrl_env_prefix}AI_GATEWAY_URL=http://${_aigw_domain}"
+            -e "${_ctrl_env_prefix}AI_GATEWAY_URL=${_ai_gateway_url}"
             -e "${_ctrl_env_prefix}CONTROLLER_URL=http://agentteams-controller:8090"
             -e "${_ctrl_env_prefix}DOCKER_NETWORK=agentteams-net"
             -e "${_ctrl_env_prefix}WORKSPACE_DIR=${AGENTTEAMS_WORKSPACE_DIR}"

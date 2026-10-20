@@ -93,7 +93,7 @@ class MiniMaxRouting(unittest.TestCase):
             {'model':{'primary':'agentteams-gateway/MiniMax-M3','fallbacks':['agentteams-gateway/MiniMax-M2.7']},'models':{}},
             {'model':{'primary':'agentteams-gateway/MiniMax-M3'},'models':{'agentteams-gateway/MiniMax-M2.7':{'alias':'My saved model','params':{'temperature':0.5}}}},
         ]:
-            config = {'models':{'providers':{'agentteams-gateway':{'models':json.loads((ROOT/'manager/configs/known-models.json').read_text())}}},'agents':{'defaults':saved}}
+            config = {'models':{'providers':{'agentteams-gateway':{'baseUrl':'http://aigw-local.agentteams.io:8080/v1','api':'openai-completions','models':json.loads((ROOT/'manager/configs/known-models.json').read_text())}}},'agents':{'defaults':saved}}
             result = json.loads(bash(helper+'\nagentteams_minimax_config', {'AGENTTEAMS_LLM_PROVIDER':'openai-compat','AGENTTEAMS_OPENAI_BASE_URL':'https://api.minimax.io/v1','AGENTTEAMS_DEFAULT_MODEL':'MiniMax-M3'}, json.dumps(config)))
             self.assertIn('MiniMax-M2.7',[m['id'] for m in result['models']['providers']['agentteams-gateway']['models']])
             self.assertEqual(result['agents']['defaults']['model'], saved['model'])
@@ -104,7 +104,7 @@ class MiniMaxRouting(unittest.TestCase):
         helper = function(LIB,'agentteams_is_official_minimax') + '\n' + function(LIB,'agentteams_minimax_config')
         models = json.loads((ROOT / 'manager/configs/known-models.json').read_text())
         for selected in ['MiniMax-M3.1-Flash', 'MiniMax-M2.7', 'custom-model']:
-            config = {'models':{'providers':{'agentteams-gateway':{'models':models + [{'id':'custom-model','input':['text']} ]}}},
+            config = {'models':{'providers':{'agentteams-gateway':{'baseUrl':'http://aigw-local.agentteams.io:8080/v1','api':'openai-completions','models':models + [{'id':'custom-model','input':['text']} ]}}},
                       'agents':{'defaults':{'model':{'primary':'agentteams-gateway/'+selected},
                                             'models':{'agentteams-gateway/MiniMax-M2.7':{'alias':'MiniMax-M2.7'}}}},
                       'tools':{'media':{'image':{'enabled':True},'audio':{'model':'speech-fixture'}}}}

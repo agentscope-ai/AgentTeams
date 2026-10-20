@@ -238,13 +238,21 @@ fi
 # omission uses the API's adaptive thinking and max effort defaults for Flash.
 agentteams_minimax_config() {
     if ! agentteams_is_official_minimax; then cat; return; fi
+    local gateway_url="${AGENTTEAMS_AI_GATEWAY_URL:-http://${AGENTTEAMS_AI_GATEWAY_DOMAIN:-aigw-local.agentteams.io}:8080}"
     jq --arg selected "${AGENTTEAMS_DEFAULT_MODEL:-MiniMax-M3.1-Flash}" \
+        --arg gateway "${gateway_url%/}/v1" \
         --arg vision "${AGENTTEAMS_MODEL_VISION:-}" '
+        # Upstream environment identifies only the configured gateway. A saved
+        # provider can point elsewhere, even when its model IDs look identical.
+        if .models.providers["agentteams-gateway"].api != "openai-completions"
+            or ((.models.providers["agentteams-gateway"].baseUrl // "" | rtrimstr("/")) != $gateway)
+        then . else
         ([.agents | .. | objects | .model? | .. | strings] + [$selected]
             + [.agents.defaults.models // {} | to_entries[]
                 | select(.value != {alias:(.key | sub("^agentteams-gateway/"; ""))}) | .key]) as $saved
-        | def legacy: . == "MiniMax-M2.7" or . == "MiniMax-M2.5";
+        | def legacy: test("^MiniMax-M2(\\.(1|5|7))?(-highspeed)?$");
         def retained: .id as $id | (($id | legacy | not) or
+            (.name != null and .name != $id) or
             ($saved | index($id)) != null or ($saved | index("agentteams-gateway/" + $id)) != null);
         .models.providers["agentteams-gateway"].models |=
             ((map(select(.id == "MiniMax-M3.1-Flash")) | first //
@@ -262,5 +270,6 @@ agentteams_minimax_config() {
             | ($id | legacy | not) or ($ids | index($id)) != null)))
             + {"agentteams-gateway/MiniMax-M3.1-Flash":
                 (."agentteams-gateway/MiniMax-M3.1-Flash" // {alias:"MiniMax-M3.1-Flash"})})
+        end
     '
 }

@@ -728,9 +728,9 @@ if [ -f /root/manager-workspace/openclaw.json ]; then
         | if (.models.providers["agentteams-gateway"].models | map(.id) | index($model) | not) then
             .models.providers["agentteams-gateway"].models += [{"id": $model, "name": $model, "reasoning": $reasoning, "contextWindow": $ctx, "maxTokens": $max, "input": $input}]
           else . end
-        # Rebuild model aliases from the full models list
+        # Add missing aliases without replacing saved names or request params.
         | (.models.providers["agentteams-gateway"].models | map({ ("agentteams-gateway/" + .id): { "alias": .id } }) | add // {}) as $aliases
-        | .agents.defaults.models = ((.agents.defaults.models // {}) + $aliases)
+        | .agents.defaults.models = ($aliases + (.agents.defaults.models // {}))
         | .channels.matrix.accessToken = $token | .channels.matrix.userId = $matrix_user_id | .models.providers["agentteams-gateway"].apiKey = $key
         | ((.hooks.token // "") as $ht | if $ht == $key or $ht == ($key + "-hooks" | @base64) then del(.hooks) else . end)
         | .agents.defaults.model.primary = ("agentteams-gateway/" + $model)

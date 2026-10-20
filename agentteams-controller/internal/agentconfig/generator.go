@@ -16,16 +16,21 @@ func NewGenerator(cfg Config) *Generator {
 	if cfg.AdminUser == "" {
 		cfg.AdminUser = "admin"
 	}
+	cfg.DefaultModelAutomatic = cfg.DefaultModelAutomatic || cfg.DefaultModel == ""
 	cfg.DefaultModel = DefaultModel(cfg.LLMProvider, cfg.OpenAIBaseURL, cfg.DefaultModel, "qwen3.6-plus")
 	return &Generator{config: cfg}
 }
 
 // GenerateOpenClawConfig produces the openclaw.json content for a worker.
 func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, error) {
-	if req.AIGatewayURL != "" && req.AIGatewayURL != g.config.AIGatewayURL {
-		// A per-worker gateway has its own upstream contract.
+	if req.AIGatewayURL != "" && strings.TrimRight(req.AIGatewayURL, "/") != strings.TrimRight(g.config.AIGatewayURL, "/") {
+		// A per-worker gateway has its own upstream contract. Resolve automatic
+		// defaults again after clearing provenance; explicit selections survive.
 		copy := *g
 		copy.config.OpenAIBaseURL = ""
+		if copy.config.DefaultModelAutomatic {
+			copy.config.DefaultModel = DefaultModel(copy.config.LLMProvider, "", "", "qwen3.6-plus")
+		}
 		g = &copy
 	}
 	modelName := req.ModelName

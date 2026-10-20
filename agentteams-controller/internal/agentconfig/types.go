@@ -2,16 +2,17 @@ package agentconfig
 
 // Config holds parameters for generating agent runtime configurations.
 type Config struct {
-	MatrixDomain    string // Matrix domain for user IDs, e.g. "matrix-local.agentteams.io:8080"
-	MatrixServerURL string // Matrix CS API URL for agent connections
-	AIGatewayURL    string // AI gateway URL for model API calls
-	AdminUser       string // admin username
-	LLMProvider     string // upstream provider behind the AI gateway
-	OpenAIBaseURL   string // upstream endpoint, not the local gateway URL
-	DefaultModel    string // default model name
-	EmbeddingModel  string // embedding model for memory search (optional)
-	Runtime         string // "docker", "k8s", "aliyun"
-	E2EEEnabled     bool   // enable Matrix E2EE
+	MatrixDomain          string // Matrix domain for user IDs, e.g. "matrix-local.agentteams.io:8080"
+	MatrixServerURL       string // Matrix CS API URL for agent connections
+	AIGatewayURL          string // AI gateway URL for model API calls
+	AdminUser             string // admin username
+	LLMProvider           string // upstream provider behind the AI gateway
+	OpenAIBaseURL         string // upstream endpoint, not the local gateway URL
+	DefaultModel          string // default model name
+	DefaultModelAutomatic bool   // model was resolved from endpoint, not explicitly selected
+	EmbeddingModel        string // embedding model for memory search (optional)
+	Runtime               string // "docker", "k8s", "aliyun"
+	E2EEEnabled           bool   // enable Matrix E2EE
 
 	// Model parameter overrides (empty = use defaults from model table)
 	ModelContextWindow int

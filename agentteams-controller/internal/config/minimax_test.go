@@ -17,6 +17,9 @@ func TestMiniMaxRoutePropagation(t *testing.T) {
 				t.Fatalf("default=%s want=%s", cfg.DefaultModel, want)
 			}
 			generated := cfg.AgentConfig()
+			if generated.DefaultModelAutomatic != (selected == "") {
+				t.Fatal("generator lost automatic default provenance")
+			}
 			if generated.OpenAIBaseURL != endpoint || generated.LLMProvider != "openai-compat" || generated.DefaultModel != want {
 				t.Fatalf("generator route lost: %+v", generated)
 			}

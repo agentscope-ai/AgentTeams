@@ -6620,6 +6620,76 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             question = str(payload.get("question") or payload.get("reason") or "").strip()
             if not question:
                 raise ValueError("question is required")
+            # S0 record fields (umbrella #1394, all optional/backward
+            # compatible): a structured deadline, the choices a human may
+            # pick from, and resolve provenance.
+            resolve_via = str(
+                payload.get("resolvedVia") or payload.get("resolved_via") or "tool"
+            ).strip().lower()
+            if resolve_via not in {
+                "tool",
+                "dashboard",
+                "im_reply",
+                "im_command",
+                "api",
+            }:
+                raise ValueError(
+                    "resolvedVia must be one of tool, dashboard, im_reply, "
+                    "im_command, api"
+                )
+            resolve_by = str(
+                payload.get("resolvedBy") or payload.get("resolved_by") or ""
+            ).strip()[:200]
+            resolve_evidence = payload.get(
+                "resolveEvidence", payload.get("resolve_evidence")
+            )
+            if resolve_evidence is not None and not isinstance(
+                resolve_evidence, dict
+            ):
+                raise ValueError("resolveEvidence must be an object")
+            timeout_at = str(
+                payload.get("timeoutAt") or payload.get("timeout_at") or ""
+            ).strip()
+            if timeout_at:
+                _iso = timeout_at.replace("Z", "+00:00")
+                try:
+                    datetime.datetime.fromisoformat(_iso)
+                except ValueError as exc:
+                    raise ValueError(
+                        "timeoutAt must be an ISO-8601 timestamp"
+                    ) from exc
+            options = payload.get("options")
+            if options is not None:
+                if not isinstance(options, list) or not options:
+                    raise ValueError("options must be a non-empty array")
+                if len(options) > 10:
+                    raise ValueError("options must contain at most 10 entries")
+                normalised_options: list[dict[str, Any]] = []
+                for index, option in enumerate(options):
+                    if isinstance(option, str):
+                        label = option.strip()
+                        entry: dict[str, Any] = {"label": label}
+                    elif isinstance(option, dict):
+                        label = str(option.get("label") or "").strip()
+                        entry = {
+                            "label": label,
+                            "id": str(
+                                option.get("id") or option.get("value") or index
+                            ),
+                        }
+                        description = str(
+                            option.get("description") or ""
+                        ).strip()
+                        if description:
+                            entry["description"] = description[:300]
+                    else:
+                        raise ValueError(
+                            "options entries must be strings or objects"
+                        )
+                    if not label:
+                        raise ValueError("every option needs a label")
+                    normalised_options.append(entry)
+                options = normalised_options
             attention = task.get("attention")
             if not isinstance(attention, list):
                 attention = []
@@ -6664,6 +6734,17 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                         "call request_attention without resolved to raise one"
                     )
                 target["resolved"] = True
+                # S0 resolve provenance: who closed the loop and how. A
+                # human reply in a room is recorded as im_reply with the
+                # evidence they cited, never conflated with a tool flip.
+                target["resolvedVia"] = resolve_via
+                if resolve_by:
+                    target["resolvedBy"] = resolve_by
+                if isinstance(resolve_evidence, dict) and resolve_evidence:
+                    target["resolveEvidence"] = resolve_evidence
+                target["resolvedAt"] = datetime.datetime.now(
+                    datetime.timezone.utc
+                ).isoformat()
                 _write_task(arguments, task)
                 synced = _sync_task(arguments, task_id, exclude=["spec.md", "base/"])
                 event_id = str(target.get("eventId") or "") or None
@@ -6774,6 +6855,13 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     # (handled above): a freshly raised record is always open.
                     "resolved": False,
                 }
+                # S0 optional fields (#1394): only present when the caller
+                # supplied them, so old records and old consumers are
+                # unaffected.
+                if timeout_at:
+                    record["timeoutAt"] = timeout_at
+                if options:
+                    record["options"] = options
                 attention.append(record)
                 task["attention"] = attention
                 _write_task(arguments, task)
@@ -6829,6 +6917,23 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                         if notification.get("sent"):
                             record["eventId"] = notification.get("eventId")
                             _write_task(arguments, task)
+            # S4a notification outcome persistence (#1394): one durable
+            # entry per logical attempt. `room_accepted` is Matrix's
+            # acceptance of the room event; `channel_accepted` is the
+            # per-recipient receipt and stays null unless an adapter
+            # reports it — it is never inferred from room acceptance.
+            # Network retries inside one attempt are folded into `retries`.
+            log_entry: dict[str, Any] = {
+                "attempt": attempt,
+                "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "room_accepted": bool(notification.get("sent")),
+                "channel_accepted": notification.get("channel_accepted"),
+                "retries": list(notification.get("retries") or []),
+            }
+            if notification.get("error"):
+                log_entry["error"] = str(notification.get("error"))[:300]
+            record.setdefault("notification_log", []).append(log_entry)
+            _write_task(arguments, task)
             return {
                 "ok": True,
                 "tool": "taskflow",

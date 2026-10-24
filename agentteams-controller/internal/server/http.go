@@ -130,7 +130,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// resume = admin + L2 human only (ActionLoopResume). The middleware
 	// cannot resolve loop -> team, so the handler is the real team-scope
 	// boundary (same pattern as the project endpoints).
-	looph := NewLoopHandler(deps.Client, deps.Namespace)
+	looph := NewLoopHandler(deps.Client, deps.Namespace, deps.OSS)
 	loopNameFn := func(r *http.Request) string { return r.PathValue("id") }
 	mux.Handle("POST /api/v1/loops/{id}/pause", mw.RequireAuthz(authpkg.ActionUpdate, "loop", loopNameFn)(http.HandlerFunc(looph.PauseLoop)))
 	mux.Handle("POST /api/v1/loops/{id}/resume", mw.RequireAuthz(authpkg.ActionLoopResume, "loop", loopNameFn)(http.HandlerFunc(looph.ResumeLoop)))

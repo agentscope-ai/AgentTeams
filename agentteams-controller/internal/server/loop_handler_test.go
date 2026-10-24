@@ -10,6 +10,7 @@ import (
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -33,6 +34,13 @@ func newLoopTestHandler(t *testing.T, objects ...client.Object) *LoopHandler {
 	}
 	c := fake.NewClientBuilder().WithScheme(newLoopTestScheme(t)).WithRuntimeObjects(objs...).Build()
 	return &LoopHandler{Client: c, Namespace: "default"}
+}
+
+func newLoopTestHandlerWithOSS(t *testing.T, store *ossfake.Memory, objects ...client.Object) *LoopHandler {
+	t.Helper()
+	h := newLoopTestHandler(t, objects...)
+	h.OSS = store
+	return h
 }
 
 func testLoop(name, teamName string, paused bool, annotations map[string]string) *v1beta1.Loop {
@@ -82,19 +90,19 @@ func TestPauseLoop_SuccessSetsSpecAndAnnotation(t *testing.T) {
 	if !loop.Spec.Paused {
 		t.Fatal("spec.paused not set")
 	}
-	if got := loop.Annotations[annotationLoopPausedBy]; got != "project" {
-		t.Fatalf("annotation=%q want project", got)
+	if got := loop.Annotations[annotationLoopPausedBy]; got != `["project"]` {
+		t.Fatalf("annotation=%q want [\"project\"]", got)
 	}
 
-	// Default source (no body) overwrites via last-writer-wins.
+	// Default source (no body) is ADDED: user and project pauses coexist.
 	rec = loopRequest(t, "loop-1", "",
 		&authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"}, h.PauseLoop)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	loop = getLoop(t, h, "loop-1")
-	if got := loop.Annotations[annotationLoopPausedBy]; got != "user" {
-		t.Fatalf("annotation=%q want user (last-writer-wins)", got)
+	if got := loop.Annotations[annotationLoopPausedBy]; got != `["project","user"]` {
+		t.Fatalf("annotation=%q want [\"project\",\"user\"] (additive)", got)
 	}
 
 	// Invalid source -> 400.
@@ -193,26 +201,105 @@ func TestResumeLoop_NotPausedIsNoOp(t *testing.T) {
 	}
 }
 
-func TestResumeLoop_UserSourceConflicts(t *testing.T) {
+func TestResumeLoop_UserSourceIsResumableByAdmin(t *testing.T) {
+	// Issue #1431 gap 2: a default user pause must have a working
+	// authorized resume path. The old handler returned 409 for it.
 	h := newLoopTestHandler(t, testLoop("loop-1", "alpha-team", true,
 		map[string]string{annotationLoopPausedBy: "user"}))
 
-	rec := loopRequest(t, "loop-1", "",
+	rec := loopRequest(t, "loop-1", `{"source":"user"}`,
+		&authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"}, h.ResumeLoop)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%s", rec.Code, rec.Body.String())
+	}
+	if getLoop(t, h, "loop-1").Spec.Paused {
+		t.Fatal("loop still paused after admin resume")
+	}
+}
+
+func TestResumeLoop_RemainingSourceKeepsPause(t *testing.T) {
+	// Overlapping pauses must not erase each other: clearing "user" while
+	// "project" is still active keeps the loop paused (409).
+	h := newLoopTestHandler(t, testLoop("loop-1", "alpha-team", true,
+		map[string]string{annotationLoopPausedBy: `["project","user"]`}))
+
+	rec := loopRequest(t, "loop-1", `{"source":"user"}`,
 		&authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"}, h.ResumeLoop)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status=%d want 409 body=%s", rec.Code, rec.Body.String())
 	}
 	var resp struct {
-		CurrentSource string `json:"current_source"`
+		Remaining []string `json:"remaining_sources"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.CurrentSource != "user" {
-		t.Fatalf("current_source=%q want user", resp.CurrentSource)
+	if len(resp.Remaining) != 1 || resp.Remaining[0] != "project" {
+		t.Fatalf("remaining=%v want [project]", resp.Remaining)
 	}
 	if !getLoop(t, h, "loop-1").Spec.Paused {
-		t.Fatal("loop unpaused despite 409 conflict")
+		t.Fatal("loop unpaused despite a remaining source")
+	}
+}
+
+func TestPauseProjectsIntoProjectMetaAndResumeReleases(t *testing.T) {
+	// effective=true requires the execution-side projection (project meta).
+	store := ossfake.NewMemory()
+	if err := store.PutObject(context.Background(),
+		"shared/projects/p1/meta.json",
+		[]byte(`{"project_id":"p1","loop":{"pause_sources":[]}}`)); err != nil {
+		t.Fatalf("seed project meta: %v", err)
+	}
+	h := newLoopTestHandlerWithOSS(t, store, testLoop("loop-1", "alpha-team", false, nil))
+
+	rec := loopRequest(t, "loop-1", `{"source":"user","projectId":"p1"}`,
+		&authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"}, h.PauseLoop)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var paused struct {
+		Effective bool `json:"effective"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &paused); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !paused.Effective {
+		t.Fatal("effective=false: pause was not projected into the project meta")
+	}
+	meta, err := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	if err != nil {
+		t.Fatalf("read project meta: %v", err)
+	}
+	if !strings.Contains(string(meta), `"user"`) {
+		t.Fatalf("project meta missing the projected source: %s", meta)
+	}
+
+	rec = loopRequest(t, "loop-1", `{"source":"user","projectId":"p1"}`,
+		&authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"}, h.ResumeLoop)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("resume status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	meta, _ = store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	if strings.Contains(string(meta), `"user"`) {
+		t.Fatalf("project meta still carries the released source: %s", meta)
+	}
+}
+
+func TestPauseWithoutProjectIDReportsNotEffective(t *testing.T) {
+	h := newLoopTestHandler(t, testLoop("loop-1", "alpha-team", false, nil))
+	rec := loopRequest(t, "loop-1", `{"source":"user"}`,
+		&authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"}, h.PauseLoop)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Effective bool `json:"effective"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Effective {
+		t.Fatal("effective=true without a projectId: a flag write must not claim execution is paused")
 	}
 }
 
@@ -256,5 +343,28 @@ func TestPauseResumeLoop_MissingLoop404(t *testing.T) {
 		&authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"}, h.ResumeLoop)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("resume missing status=%d want 404 body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPauseSurvivesReloadFromDurableState(t *testing.T) {
+	// Restart/reload: a NEW handler over the same durable objects must see
+	// the same pause set and the same execution projection.
+	store := ossfake.NewMemory()
+	if err := store.PutObject(context.Background(),
+		"shared/projects/p1/meta.json",
+		[]byte(`{"project_id":"p1","loop":{"pause_sources":["project"]}}`)); err != nil {
+		t.Fatalf("seed project meta: %v", err)
+	}
+	h := newLoopTestHandlerWithOSS(t, store, testLoop("loop-1", "alpha-team", true,
+		map[string]string{annotationLoopPausedBy: `["project","user"]`}))
+
+	reloaded := newLoopTestHandlerWithOSS(t, store, getLoop(t, h, "loop-1"))
+	rec := loopRequest(t, "loop-1", `{"source":"user","projectId":"p1"}`,
+		&authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"}, reloaded.ResumeLoop)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d want 409 (project source still active) body=%s", rec.Code, rec.Body.String())
+	}
+	if !getLoop(t, reloaded, "loop-1").Spec.Paused {
+		t.Fatal("loop unpaused after reload despite a remaining source")
 	}
 }

@@ -89,8 +89,9 @@ humans/                              （由初始化器创建）
   `{"usedBytes":N,"quotaBytes":M|null}`。`usedBytes` 通过实时列举两个前缀计算（不做任何持久化）；未设置配额时 `quotaBytes` 为 `null`。
 - **`PUT /api/v1/humans/{name}/quota`**（仅 admin）——请求体
   `{"quotaBytes":N}` 设置配额、`{"quotaBytes":null}` 清除；负值 → `400`。值会被 patch 到 Human CR 上，变更写入审计（`human_quota_set`）。
-- **强制：** 写入与回收站恢复在字节落盘前检查——`usedBytes + size > quota` → `413`
-  `{"code":"quota_exceeded"}`。已存在的数据即使超出被调低后的配额也不会被拒绝，只拒绝进一步的增长。
+- **强制：** 写入在字节落盘前检查——`usedBytes + size > quota` → `413`
+  `{"code":"quota_exceeded"}`。回收站恢复不做配额拦截：这些字节已计入
+  `usedBytes`，搬回 `files/` 不会增长用量（带 `?overwrite=1` 的恢复还会替换目标并减少用量）。已存在的数据即使超出被调低后的配额也不会被拒绝，只拒绝进一步的增长。
 
 ## 路径规则
 

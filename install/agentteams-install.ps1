@@ -365,7 +365,7 @@ $script:Messages = @{
     "llm.codingplan.model.qwen36plus" = @{ zh = "  1) qwen3.6-plus  - 千问 3.6（推荐）"; en = "  1) qwen3.6-plus  - Qwen 3.6 (recommended)" }
     "llm.codingplan.model.glm5" = @{ zh = "  2) glm-5  - 智谱 GLM-5（编程推荐）"; en = "  2) glm-5  - Zhipu GLM-5 (recommended for coding)" }
     "llm.codingplan.model.kimi" = @{ zh = "  3) kimi-k2.5  - Moonshot Kimi K2.5"; en = "  3) kimi-k2.5  - Moonshot Kimi K2.5" }
-    "llm.codingplan.model.minimax" = @{ zh = "  4) MiniMax-M2.5  - MiniMax M2.5"; en = "  4) MiniMax-M2.5  - MiniMax M2.5" }
+    "llm.codingplan.model.minimax" = @{ zh = "  4) MiniMax-M3  - MiniMax M3"; en = "  4) MiniMax-M3  - MiniMax M3" }
     "llm.codingplan.model.select" = @{ zh = "选择模型 [1/2/3/4]"; en = "Select model [1/2/3/4]" }
     "llm.provider.selected_tokenplan" = @{ zh = "  提供商: 阿里云通义 Token 套餐（兼容模式）"; en = "  Provider: Alibaba Cloud Token Plan (compatible mode)" }
     "llm.provider.selected_codingplan" = @{ zh = "  提供商: 阿里云通义 Token 套餐（alibaba-cloud）"; en = "  Provider: Qwen Cloud (international) (alibaba-cloud)" }
@@ -728,11 +728,22 @@ $script:KnownModels = @(
     "gpt-5.4", "gpt-5.3-codex", "gpt-5-mini", "gpt-5-nano",
     "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5",
     "qwen3.6-plus", "qwen3.5-plus", "deepseek-chat", "deepseek-reasoner",
-    "kimi-k2.5", "glm-5", "MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5"
+    "kimi-k2.5", "glm-5", "MiniMax-M3", "MiniMax-M2.7"
 )
+
+function Test-OfficialMiniMax {
+    return $script:config.LLM_PROVIDER -ceq "openai-compat" -and
+        ($script:config.OPENAI_BASE_URL -cmatch '^https://api\.minimax\.(io|cn)/v1/?$')
+}
+
+function Get-OpenAIModelDefault {
+    if (Test-OfficialMiniMax) { return "MiniMax-M3.1-Flash" }
+    return "gpt-5.4"
+}
 
 function Test-KnownModel {
     param([string]$Model)
+    if ((Test-OfficialMiniMax) -and $Model -ceq "MiniMax-M3.1-Flash") { return $true }
     return $script:KnownModels -contains $Model
 }
 
@@ -1791,6 +1802,7 @@ function Step-Llm {
     Write-Log (Get-Msg "llm.title")
 
     if ($script:AGENTTEAMS_NON_INTERACTIVE) {
+        $savedModel = $script:config.DEFAULT_MODEL
         if ($script:AGENTTEAMS_LANGUAGE -eq "zh") {
             $script:config.LLM_PROVIDER = if ($env:AGENTTEAMS_LLM_PROVIDER) { $env:AGENTTEAMS_LLM_PROVIDER } else { "openai-compat" }
             $script:config.DEFAULT_MODEL = if ($env:AGENTTEAMS_DEFAULT_MODEL) { $env:AGENTTEAMS_DEFAULT_MODEL } else { "qwen3.6-plus" }
@@ -1802,6 +1814,9 @@ function Step-Llm {
             $script:config.DEFAULT_MODEL = if ($env:AGENTTEAMS_DEFAULT_MODEL) { $env:AGENTTEAMS_DEFAULT_MODEL } else { "qwen3.6-plus" }
             $script:config.OPENAI_BASE_URL = if ($env:AGENTTEAMS_OPENAI_BASE_URL) { $env:AGENTTEAMS_OPENAI_BASE_URL } else { "" }
             Write-Log (Get-Msg "llm.provider.qwen_default" -f $script:config.LLM_PROVIDER)
+        }
+        if ((Test-OfficialMiniMax) -and -not $env:AGENTTEAMS_DEFAULT_MODEL) {
+            $script:config.DEFAULT_MODEL = if ($savedModel) { $savedModel } else { "MiniMax-M3.1-Flash" }
         }
         Write-Log (Get-Msg "llm.model.label" -f $script:config.DEFAULT_MODEL)
         Write-Log ""
@@ -1849,7 +1864,7 @@ function Step-Llm {
                         "qwen3.6-plus" { "1" }
                         "glm-5"         { "2" }
                         "kimi-k2.5"     { "3" }
-                        "MiniMax-M2.5"  { "4" }
+                        "MiniMax-M3"    { "4" }
                         default         { "1" }
                     }
                     $codingPlanModelChoice = Read-Host "$(Get-Msg 'llm.codingplan.model.select') [${defaultModel}]"
@@ -1865,7 +1880,7 @@ function Step-Llm {
                     "^(1|qwen3\.6-plus)$"  { $script:config.DEFAULT_MODEL = "qwen3.6-plus" }
                     "^(2|glm-5)$"          { $script:config.DEFAULT_MODEL = "glm-5" }
                     "^(3|kimi-k2\.5)$"     { $script:config.DEFAULT_MODEL = "kimi-k2.5" }
-                    "^(4|MiniMax-M2\.5)$"  { $script:config.DEFAULT_MODEL = "MiniMax-M2.5" }
+                    "^(4|MiniMax-M3)$"      { $script:config.DEFAULT_MODEL = "MiniMax-M3" }
                     default                { $script:config.DEFAULT_MODEL = "qwen3.6-plus" }
                 }
                 Write-Log (Get-Msg "llm.provider.selected_codingplan")
@@ -1901,7 +1916,7 @@ function Step-Llm {
                             "qwen3.6-plus" { "1" }
                             "glm-5"         { "2" }
                             "kimi-k2.5"     { "3" }
-                            "MiniMax-M2.5"  { "4" }
+                            "MiniMax-M3"    { "4" }
                             default         { "1" }
                         }
                         $codingPlanModelChoice = Read-Host "$(Get-Msg 'llm.codingplan.model.select') [${defaultModel}]"
@@ -1917,7 +1932,7 @@ function Step-Llm {
                         "^(1|qwen3\.6-plus)$"  { $script:config.DEFAULT_MODEL = "qwen3.6-plus" }
                         "^(2|glm-5)$"          { $script:config.DEFAULT_MODEL = "glm-5" }
                         "^(3|kimi-k2\.5)$"     { $script:config.DEFAULT_MODEL = "kimi-k2.5" }
-                        "^(4|MiniMax-M2\.5)$"  { $script:config.DEFAULT_MODEL = "MiniMax-M2.5" }
+                        "^(4|MiniMax-M3)$"      { $script:config.DEFAULT_MODEL = "MiniMax-M3" }
                         default                { $script:config.DEFAULT_MODEL = "qwen3.6-plus" }
                     }
                     Write-Log (Get-Msg "llm.provider.selected_tokenplan")
@@ -2015,7 +2030,10 @@ function Step-Llm {
                 if ($currentModel) {
                     $modelInput = Read-Host "$(Get-Msg 'llm.openai.model_prompt') [${currentModel}]"
                 } else {
-                    $modelInput = Read-Host (Get-Msg 'llm.openai.model_prompt')
+                    if (Test-OfficialMiniMax) {
+                        Write-Host "MiniMax-M3.1-Flash (default), MiniMax-M3; or enter a custom model ID."
+                    }
+                    $modelInput = Read-Host "$(Get-Msg 'llm.openai.model_prompt') [$(Get-OpenAIModelDefault)]"
                 }
                 if ($modelInput -eq "b") { $script:StepResult = "back"; return }
                 if ($modelInput) {
@@ -2023,7 +2041,7 @@ function Step-Llm {
                 } elseif ($currentModel) {
                     $script:config.DEFAULT_MODEL = $currentModel
                 } else {
-                    $script:config.DEFAULT_MODEL = "gpt-5.4"
+                    $script:config.DEFAULT_MODEL = Get-OpenAIModelDefault
                 }
             }
             Write-Log (Get-Msg "llm.openai.base_url_label" -f $script:config.OPENAI_BASE_URL)

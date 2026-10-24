@@ -62,6 +62,13 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if agentteams_is_official_minimax && [ "${MODEL_NAME}" = "MiniMax-M3.1-Flash" ]; then
+    if [ "${REASONING}" = "false" ]; then
+        echo "MiniMax-M3.1-Flash requires adaptive thinking; --no-reasoning is not supported." >&2
+        exit 1
+    fi
+fi
+
 # Determine config files based on runtime
 if [ "${MANAGER_RUNTIME}" = "copaw" ]; then
     CONFIG_FILE="${HOME}/.copaw/config.json"
@@ -99,19 +106,29 @@ case "${MODEL_NAME}" in
         CTX=200000; MAX=64000 ;;
     deepseek-chat|deepseek-reasoner|kimi-k2.5)
         CTX=256000; MAX=128000 ;;
-    glm-5|MiniMax-M2.7|MiniMax-M2.7-highspeed|MiniMax-M2.5)
+    MiniMax-M3)
+        CTX=1000000; MAX=128000 ;;
+    glm-5)
         CTX=200000; MAX=128000 ;;
+    MiniMax-M2.7)
+        CTX=204800; MAX=128000 ;;
     *)
         CTX=150000; MAX=128000 ;;
 esac
+
+if agentteams_is_official_minimax && [ "${MODEL_NAME}" = "MiniMax-M3.1-Flash" ]; then
+    CTX=1000000; MAX=524288
+fi
 
 # Allow explicit context-window override (for unknown models)
 if [ -n "${CTX_OVERRIDE:-}" ]; then
     CTX="${CTX_OVERRIDE}"
 fi
 
-# Resolve input modalities: only vision-capable models get "image"
+# OpenClaw currently supports only text and image input declarations.
 case "${MODEL_NAME}" in
+    MiniMax-M3)
+        INPUT='["text", "image"]' ;;
     gpt-5.4|gpt-5.3-codex|gpt-5-mini|gpt-5-nano|claude-opus-4-6|claude-sonnet-4-6|claude-haiku-4-5|qwen3.6-plus|qwen3.5-plus|kimi-k2.5)
         INPUT='["text", "image"]' ;;
     *)
@@ -229,6 +246,10 @@ else
         log "Done. Model '${MODEL_NAME}' has been added to the models list."
     fi
     echo ""
+    if agentteams_is_official_minimax; then
+        AGENTTEAMS_DEFAULT_MODEL="${MODEL_NAME}" agentteams_minimax_config < "${CONFIG_FILE}" > "${TMP}" &&
+            mv "${TMP}" "${CONFIG_FILE}"
+    fi
     echo "RESTART_REQUIRED: Run 'openclaw gateway restart' to apply the model switch."
 fi
 

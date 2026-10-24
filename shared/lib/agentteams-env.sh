@@ -216,3 +216,60 @@ export AGENTTEAMS_CMS_TRACES_ENABLED AGENTTEAMS_CMS_METRICS_ENABLED AGENTTEAMS_C
 export AGENTTEAMS_CMS_LICENSE_KEY AGENTTEAMS_CMS_PROJECT AGENTTEAMS_CMS_WORKSPACE AGENTTEAMS_CMS_SERVICE_NAME
 
 unset _AGENTTEAMS_STORAGE_ALIAS_ENV _AGENTTEAMS_STORAGE_PREFIX_ENV
+
+# Only documented direct MiniMax OpenAI endpoints opt into this catalog.
+agentteams_is_official_minimax() {
+    [ "${AGENTTEAMS_LLM_PROVIDER:-}" = "openai-compat" ] || return 1
+    local base_url="${AGENTTEAMS_OPENAI_BASE_URL:-}"
+    case "${base_url%/}" in
+        https://api.minimax.io/v1|https://api.minimax.cn/v1) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+if agentteams_is_official_minimax && [ -z "${AGENTTEAMS_DEFAULT_MODEL:-}" ]; then
+    export AGENTTEAMS_DEFAULT_MODEL=MiniMax-M3.1-Flash
+    _AGENTTEAMS_MINIMAX_DEFAULTED=true
+fi
+
+# Filter ordinary legacy entries after template rendering/merging. Preserve
+# explicit primary/fallback selections, custom entries, aliases and media config.
+# Omit pinned OpenClaw effort values (including unsupported none/minimal);
+# omission uses the API's adaptive thinking and max effort defaults for Flash.
+agentteams_minimax_config() {
+    if ! agentteams_is_official_minimax; then cat; return; fi
+    local gateway_url="${AGENTTEAMS_AI_GATEWAY_URL:-http://${AGENTTEAMS_AI_GATEWAY_DOMAIN:-aigw-local.agentteams.io}:8080}"
+    jq --arg selected "${AGENTTEAMS_DEFAULT_MODEL:-MiniMax-M3.1-Flash}" \
+        --arg gateway "${gateway_url%/}/v1" \
+        --arg vision "${AGENTTEAMS_MODEL_VISION:-}" '
+        # Upstream environment identifies only the configured gateway. A saved
+        # provider can point elsewhere, even when its model IDs look identical.
+        if .models.providers["agentteams-gateway"].api != "openai-completions"
+            or ((.models.providers["agentteams-gateway"].baseUrl // "" | rtrimstr("/")) != $gateway)
+        then . else
+        ([.agents | .. | objects | .model? | .. | strings] + [$selected]
+            + [.agents.defaults.models // {} | to_entries[]
+                | select(.value != {alias:(.key | sub("^agentteams-gateway/"; ""))}) | .key]) as $saved
+        | def legacy: test("^MiniMax-M2(\\.(1|5|7))?(-highspeed)?$");
+        def retained: .id as $id | (($id | legacy | not) or
+            (.name != null and .name != $id) or
+            ($saved | index($id)) != null or ($saved | index("agentteams-gateway/" + $id)) != null);
+        .models.providers["agentteams-gateway"].models |=
+            ((map(select(.id == "MiniMax-M3.1-Flash")) | first //
+                {id:"MiniMax-M3.1-Flash",name:"MiniMax-M3.1-Flash",reasoning:true,
+                 contextWindow:1000000,maxTokens:524288,input:["text","image"]}) as $flash
+             | [($flash | .reasoning = true | .input = (if $vision == "false" then ["text"] else ["text","image"] end)
+                | .compat = ((.compat // {}) +
+                {supportsReasoningEffort:false,supportsDeveloperRole:false,
+                 supportsStore:false,maxTokensField:"max_completion_tokens"}))]
+             + map(select(.id == "MiniMax-M3"))
+             + map(select(.id != "MiniMax-M3.1-Flash" and .id != "MiniMax-M3") | select(retained)))
+        | (.models.providers["agentteams-gateway"].models | map(.id)) as $ids
+        | .agents.defaults.models |= ((. // {} | with_entries(select(
+            (.key | sub("^agentteams-gateway/"; "")) as $id
+            | ($id | legacy | not) or ($ids | index($id)) != null)))
+            + {"agentteams-gateway/MiniMax-M3.1-Flash":
+                (."agentteams-gateway/MiniMax-M3.1-Flash" // {alias:"MiniMax-M3.1-Flash"})})
+        end
+    '
+}

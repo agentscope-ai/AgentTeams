@@ -638,6 +638,13 @@ log "Generating Manager openclaw.json..."
 export MANAGER_MATRIX_TOKEN="${MANAGER_TOKEN}"
 export MANAGER_GATEWAY_KEY="${AGENTTEAMS_MANAGER_GATEWAY_KEY}"
 # Resolve model parameters based on model name
+if { [ "${_AGENTTEAMS_MINIMAX_DEFAULTED:-}" = "true" ] || [ "${AGENTTEAMS_MINIMAX_DEFAULTED:-}" = "1" ]; } &&
+    [ -f /root/manager-workspace/openclaw.json ]; then
+    _saved_model=$(jq -r '.agents.defaults.model.primary // empty' /root/manager-workspace/openclaw.json)
+    if [ -n "${_saved_model}" ]; then
+        export AGENTTEAMS_DEFAULT_MODEL="${_saved_model#agentteams-gateway/}"
+    fi
+fi
 MODEL_NAME="${AGENTTEAMS_DEFAULT_MODEL:-qwen3.6-plus}"
 case "${MODEL_NAME}" in
     gpt-5.3-codex|gpt-5-mini|gpt-5-nano)
@@ -652,12 +659,20 @@ case "${MODEL_NAME}" in
         export MODEL_CONTEXT_WINDOW=200000 MODEL_MAX_TOKENS=64000 ;;
     deepseek-chat|deepseek-reasoner|kimi-k2.5)
         export MODEL_CONTEXT_WINDOW=256000 MODEL_MAX_TOKENS=128000 ;;
-    glm-5|MiniMax-M2.7|MiniMax-M2.7-highspeed|MiniMax-M2.5)
+    MiniMax-M3)
+        export MODEL_CONTEXT_WINDOW=1000000 MODEL_MAX_TOKENS=128000 ;;
+    glm-5)
         export MODEL_CONTEXT_WINDOW=200000 MODEL_MAX_TOKENS=128000 ;;
+    MiniMax-M2.7)
+        export MODEL_CONTEXT_WINDOW=204800 MODEL_MAX_TOKENS=128000 ;;
     *)
         export MODEL_CONTEXT_WINDOW=150000 MODEL_MAX_TOKENS=128000 ;;
 esac
 export MODEL_REASONING=true
+
+if agentteams_is_official_minimax && [ "${MODEL_NAME}" = "MiniMax-M3.1-Flash" ]; then
+    export MODEL_CONTEXT_WINDOW=1000000 MODEL_MAX_TOKENS=524288
+fi
 
 # Override with user-supplied custom model parameters from env (set during install)
 [ -n "${AGENTTEAMS_MODEL_CONTEXT_WINDOW:-}" ] && export MODEL_CONTEXT_WINDOW="${AGENTTEAMS_MODEL_CONTEXT_WINDOW}"
@@ -672,8 +687,10 @@ else
 fi
 log "Matrix E2EE: ${MATRIX_E2EE_ENABLED}"
 
-# Resolve input modalities: only vision-capable models get "image"
+# OpenClaw currently supports only text and image input declarations.
 case "${MODEL_NAME}" in
+    MiniMax-M3)
+        export MODEL_INPUT='["text", "image"]' ;;
     gpt-5.4|gpt-5.3-codex|gpt-5-mini|gpt-5-nano|claude-opus-4-6|claude-sonnet-4-6|claude-haiku-4-5|qwen3.6-plus|qwen3.5-plus|kimi-k2.5)
         export MODEL_INPUT='["text", "image"]' ;;
     *)
@@ -715,9 +732,9 @@ if [ -f /root/manager-workspace/openclaw.json ]; then
         | if (.models.providers["agentteams-gateway"].models | map(.id) | index($model) | not) then
             .models.providers["agentteams-gateway"].models += [{"id": $model, "name": $model, "reasoning": $reasoning, "contextWindow": $ctx, "maxTokens": $max, "input": $input}]
           else . end
-        # Rebuild model aliases from the full models list
+        # Add missing aliases without replacing saved names or request params.
         | (.models.providers["agentteams-gateway"].models | map({ ("agentteams-gateway/" + .id): { "alias": .id } }) | add // {}) as $aliases
-        | .agents.defaults.models = ((.agents.defaults.models // {}) + $aliases)
+        | .agents.defaults.models = ($aliases + (.agents.defaults.models // {}))
         | .channels.matrix.accessToken = $token | .channels.matrix.userId = $matrix_user_id | .models.providers["agentteams-gateway"].apiKey = $key
         | ((.hooks.token // "") as $ht | if $ht == $key or $ht == ($key + "-hooks" | @base64) then del(.hooks) else . end)
         | .agents.defaults.model.primary = ("agentteams-gateway/" + $model)
@@ -784,6 +801,11 @@ else
     fi
     _written_token=$(jq -r '.channels.matrix.accessToken' /root/manager-workspace/openclaw.json 2>/dev/null)
     log "Matrix token written from template (prefix: ${_written_token:0:10}...)"
+fi
+
+if agentteams_is_official_minimax; then
+    agentteams_minimax_config < /root/manager-workspace/openclaw.json > /root/manager-workspace/openclaw.json.tmp &&
+        mv /root/manager-workspace/openclaw.json.tmp /root/manager-workspace/openclaw.json
 fi
 
 # Cloud/K8s mode: overlay cloud-specific settings onto generated config

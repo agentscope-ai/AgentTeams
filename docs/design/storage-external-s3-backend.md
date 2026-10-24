@@ -111,6 +111,24 @@ object a worker wrote to the target back to the stale source content.
 Correctness is therefore measured against the **baseline manifest**
 captured right after the bulk copy, not against "source equals target".
 
+### Automated migration tool
+
+[`scripts/storage-migrate/`](../../scripts/storage-migrate/README.md) implements
+the phases above as a resumable state machine (`preflight → data → IAM replay →
+verify → cutover`), including the baseline manifest, the shadow delta gates and
+the rollback checklist. It supports three data modes (`mirror`, RustFS `odm`,
+`inplace`) and refuses `cutover` until `verify` is green.
+
+```bash
+bash scripts/storage-migrate/storage-migrate.sh --src-endpoint … --dst-endpoint … \
+  --mode mirror --state-dir /var/lib/storage-migrate --dry-run
+```
+
+The tool never changes production by itself: `--phase cutover` only produces a
+checklist for a human to execute, and `--mark-cutover-done` records it. The
+container image (`scripts/storage-migrate/Dockerfile.runner`) carries the whole
+toolchain for hosts without `mc`/`jq`/`curl`.
+
 ### 1. Bulk copy
 
 ```sh

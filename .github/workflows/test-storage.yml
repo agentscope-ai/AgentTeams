@@ -1,0 +1,173 @@
+name: Storage backend
+
+on:
+  pull_request:
+    paths:
+      - 'test/e2e/external-s3-backend.sh'
+      - 'scripts/storage-migrate/**'
+      - 'docs/design/storage-external-s3-backend.md'
+      - '.github/workflows/test-storage.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'test/e2e/external-s3-backend.sh'
+      - 'scripts/storage-migrate/**'
+      - 'docs/design/storage-external-s3-backend.md'
+      - '.github/workflows/test-storage.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: dual-engine S3 e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show runner docker version
+        run: docker version --format '{{.Server.Version}}'
+      - name: Run the dual-engine E2E (MinIO + RustFS, 76 assertions)
+        run: bash test/e2e/external-s3-backend.sh
+      - name: Upload the log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: external-s3-e2e-log
+          path: |
+            /tmp/e2e-externals3.*/**/*.log
+          if-no-files-found: ignore
+
+  migrate-unit:
+    name: migration tool unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check dependencies
+        run: jq --version && (command -v flock || sudo apt-get install -y util-linux) && curl --version | head -1
+      - name: State machine + argument parsing
+        run: bash scripts/storage-migrate/tests/storage-migrate-state-machine.sh
+      - name: Dry run against a fake S3 stack (no mutation, plan written)
+        run: bash scripts/storage-migrate/tests/storage-migrate-dryrun-fake.sh
+
+  migrate-e2e:
+    name: migration tool full chain against real engines
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MINIO_IMG: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/minio:20260216
+      RUSTFS_IMG: rustfs/rustfs:1.0.3
+      MC_IMG: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/mc:20260216
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install mc from the bundled image (pinned release)
+        run: |
+          set -euo pipefail
+          # dl.min.io returns 410 (MinIO archived the downloads) and the GitHub
+          # release assets are gone, so the dependable source is the same mc
+          # binary the controller image bundles.
+          docker create --name mc-extract "$MC_IMG" >/dev/null
+          docker cp mc-extract:/usr/bin/mc /usr/local/bin/mc
+          docker rm -f mc-extract >/dev/null
+          chmod +x /usr/local/bin/mc
+          /usr/local/bin/mc --version
+          /usr/local/bin/mc --version | grep -q "RELEASE.2025-08-13T08-35-41Z"
+      - name: Run the full-chain migration e2e
+        run: |
+          set -o pipefail
+          bash scripts/storage-migrate/tests/storage-migrate-e2e.sh 2>&1 | tee "$RUNNER_TEMP/migrate-e2e.log"
+      - name: Diagnose on failure
+        if: failure()
+        run: |
+          echo "--- engines ---"; docker ps -a --format '{{.Names}} {{.Status}}' | grep sm-e2e || true
+          echo "--- src log tail ---"; docker logs --tail 40 sm-e2e-src 2>&1 || true
+          echo "--- dst log tail ---"; docker logs --tail 40 sm-e2e-dst 2>&1 || true
+          echo "--- e2e output tail ---"; tail -60 "$RUNNER_TEMP/migrate-e2e.log" || true
+      - name: Upload the e2e log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-e2e-log
+          path: ${{ runner.temp }}/migrate-e2e.log
+          if-no-files-found: ignore
+
+  migrate-dryrun:
+    name: migration tool dry-run against real engines
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      MINIO_IMG: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/minio:20260216
+      RUSTFS_IMG: rustfs/rustfs:1.0.3
+      MC_IMG: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/mc:20260216
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start the source (MinIO) and target (RustFS) engines
+        run: |
+          docker run -d --name sm-src -p 19020:9000 \
+            -e MINIO_ROOT_USER=srcadmin -e MINIO_ROOT_PASSWORD=srcpass12345 \
+            "$MINIO_IMG" server /data
+          docker run -d --name sm-dst -p 19210:9000 \
+            -e RUSTFS_ACCESS_KEY=dstadmin -e RUSTFS_SECRET_KEY=dstpass12345 \
+            -e RUSTFS_DURABILITY_MODE=strict \
+            "$RUSTFS_IMG" /data
+          # deterministic readiness: probe each engine on its own published port
+          for i in $(seq 1 60); do
+            s=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:19020/minio/health/live || true)
+            d=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:19210/minio/health/live || true)
+            [ "$s" = "200" ] && [ "$d" = "200" ] && break
+            sleep 2
+          done
+          echo "src=$s dst=$d"
+          [ "$s" = "200" ] && [ "$d" = "200" ]
+
+      - name: Install mc from the bundled image (pinned release)
+        run: |
+          set -euo pipefail
+          docker create --name mc-extract "$MC_IMG" >/dev/null
+          docker cp mc-extract:/usr/bin/mc /usr/local/bin/mc
+          docker rm -f mc-extract >/dev/null
+          chmod +x /usr/local/bin/mc
+          /usr/local/bin/mc --version
+          /usr/local/bin/mc --version | grep -q "RELEASE.2025-08-13T08-35-41Z"
+
+      - name: Seed one bucket on the source
+        run: |
+          docker run --rm --network host --entrypoint sh "$MC_IMG" -c '
+            mc -q alias set src http://127.0.0.1:19020 srcadmin srcpass12345 >/dev/null
+            mc -q mb src/agentteams-storage >/dev/null
+            echo hello | mc -q pipe src/agentteams-storage/agents/w1/welcome.txt >/dev/null
+            mc ls --recursive src/agentteams-storage | head -3
+          '
+
+      - name: Dry run (preflight + plan, no mutation)
+        run: |
+          set -o pipefail
+          bash scripts/storage-migrate/storage-migrate.sh \
+            --src-endpoint http://127.0.0.1:19020 --src-ak srcadmin --src-sk srcpass12345 \
+            --dst-endpoint http://127.0.0.1:19210 --dst-ak dstadmin --dst-sk dstpass12345 \
+            --mode mirror --profile generic --state-dir "$RUNNER_TEMP/sm-state" --dry-run \
+            2>&1 | tee "$RUNNER_TEMP/dryrun.log"
+          # the plan file must exist and record a green preflight
+          test -s "$RUNNER_TEMP/sm-state/dryrun-plan.json"
+          jq -e '.run' "$RUNNER_TEMP/sm-state/dryrun-plan.json" >/dev/null
+          ! grep -q "FAIL: P" "$RUNNER_TEMP/dryrun.log"
+
+      - name: Diagnose on failure
+        if: failure()
+        run: |
+          echo "--- engines ---"; docker ps -a --format '{{.Names}} {{.Status}}' | grep -E 'sm-src|sm-dst' || true
+          echo "--- dry-run log tail ---"; tail -60 "$RUNNER_TEMP/dryrun.log" || true
+          echo "--- state dir ---"; ls -la "$RUNNER_TEMP/sm-state" 2>/dev/null || true
+
+      - name: Upload dry-run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: storage-migrate-dryrun
+          path: |
+            ${{ runner.temp }}/sm-state/**
+            ${{ runner.temp }}/dryrun.log
+          if-no-files-found: ignore

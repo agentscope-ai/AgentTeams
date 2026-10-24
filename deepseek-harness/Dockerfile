@@ -5,6 +5,11 @@ FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
 FROM node:24-bookworm-slim
 
 ARG DSH_VERSION=0.1.1-rc.2
+ARG NODE_MIN_VERSION=24.22.1
+# Reject a stale/floating Node 24 that is below the 2026-10-21 security floor.
+# The base tag is floating; use docker build --pull to refresh it.
+RUN node -e 'const [a,b,c]=process.versions.node.split(".").map(Number); const [x,y,z]=process.argv[1].split(".").map(Number); if (a<x || (a===x&&b<y) || (a===x&&b===y&&c<z)) { console.error(`Node ${process.versions.node} < required ${process.argv[1]}`); process.exit(1) }' "${NODE_MIN_VERSION}"
+
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \

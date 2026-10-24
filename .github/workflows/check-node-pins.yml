@@ -1,0 +1,24 @@
+name: Check Node Pins
+
+on:
+  pull_request:
+    paths:
+      - '**/Dockerfile'
+      - '**/Dockerfile.*'
+      - 'hack/mirror-images.sh'
+      - 'hack/check-node-pins.sh'
+      - '.github/workflows/check-node-pins.yml'
+  workflow_dispatch: ~
+
+permissions:
+  contents: read
+
+jobs:
+  check-node-pins:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify Node 24.22.1 pins
+        run: bash hack/check-node-pins.sh

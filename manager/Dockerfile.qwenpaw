@@ -44,9 +44,43 @@ RUN if [ -n "${APT_MIRROR}" ]; then \
         git curl jq tzdata ca-certificates openssh-client gettext-base procps \
     && rm -rf /var/lib/apt/lists/*
 
-# Match the QwenPaw Worker runtime; mcporter requires Promise.withResolvers.
-RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
-    apt-get install -y nodejs && \
+# Install the latest Node.js 24 LTS (floor: 24.22.1 for the 2026-10-21 security release).
+# By default the build resolves the latest 24.x LTS from nodejs.org and verifies its SHA-256.
+# For a byte-reproducible build, pass --build-arg NODE_VERSION=24.22.1 (or any 24.x >= floor).
+# Docker may reuse this layer: use --no-cache for a forced refresh to the latest 24 LTS.
+ARG NODE_MAJOR=24
+ARG NODE_MIN_VERSION=24.22.1
+ARG NODE_VERSION=
+ARG NODE_SHA256=
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates curl xz-utils jq; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) node_arch="x64" ;; \
+      arm64) node_arch="arm64" ;; \
+      *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \
+    esac; \
+    ver="${NODE_VERSION}"; \
+    if [ -z "$ver" ]; then \
+      ver="$(curl -fsSL https://nodejs.org/dist/index.json | jq -r --arg p "v${NODE_MAJOR}." '[.[] | select(.lts != false) | select(.version | startswith($p))][0].version' | sed 's/^v//')"; \
+    fi; \
+    test -n "$ver"; \
+    if [ "$(printf '%s\n%s\n' "$NODE_MIN_VERSION" "$ver" | sort -V | head -n1)" != "$NODE_MIN_VERSION" ]; then \
+      echo "Node $ver is older than required floor $NODE_MIN_VERSION" >&2; exit 1; \
+    fi; \
+    tarball="node-v${ver}-linux-${node_arch}.tar.xz"; \
+    sha="${NODE_SHA256}"; \
+    if [ -z "$sha" ]; then \
+      sha="$(curl -fsSL https://nodejs.org/dist/index.json | jq -r --arg v "v${ver}" --arg n "$tarball" '.[] | select(.version == $v) | .files[] | select(.name == $n) | .sha256')"; \
+    fi; \
+    test -n "$sha"; \
+    curl -fsSLO "https://nodejs.org/dist/v${ver}/${tarball}"; \
+    echo "${sha}  ${tarball}" | sha256sum -c -; \
+    tar -xJf "$tarball" -C /usr/local --strip-components=1 --no-same-owner; \
+    rm -f "$tarball"; \
+    node -v; npm -v; \
+    test "$(node -v)" = "v${ver}"; \
     rm -rf /var/lib/apt/lists/*
 
 # jemalloc for memory efficiency

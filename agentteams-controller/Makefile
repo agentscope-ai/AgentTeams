@@ -32,7 +32,7 @@ KUBEBUILDER_ASSETS ?= $(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --arch=$(ENV
 test: test-unit
 
 test-unit:
-	go test ./internal/... ./cmd/...
+	go test ./api/... ./internal/... ./cmd/...
 
 test-integration: setup-envtest
 	KUBEBUILDER_ASSETS="$(KUBEBUILDER_ASSETS)" \

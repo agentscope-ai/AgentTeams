@@ -257,7 +257,10 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 	image := req.Image
 	if image == "" {
 		switch {
-		case req.Runtime == RuntimeCopaw && k.config.CopawWorkerImage != "":
+		// CoPaw is upgrade-compat only: never fall through to the generic
+		// WorkerImage (that would run a legacy worker on another runtime's
+		// default image). An unset CoPaw image fails loudly below.
+		case req.Runtime == RuntimeCopaw:
 			image = k.config.CopawWorkerImage
 		case req.Runtime == RuntimeHermes && k.config.HermesWorkerImage != "":
 			image = k.config.HermesWorkerImage

@@ -360,6 +360,10 @@ class MemberRuntimeConfig:
         return _section(self.desired, "model")
 
     @property
+    def subagent_model(self) -> Dict[str, Any]:
+        return _section(self.desired, "subagentModel")
+
+    @property
     def mcp_servers(self) -> Any:
         value = self.desired.get("mcpServers")
         return value if value is not None else {}
@@ -387,6 +391,7 @@ class MemberRuntimeConfig:
             *self.agent_package_identity,
             _stable_json(self.inline_config),
             _stable_json(self.model),
+            _stable_json(self.subagent_model),
             _stable_json(self.mcp_servers),
             _stable_json(self.channels),
             _stable_json(self.channel_policy),
@@ -1310,6 +1315,7 @@ class RuntimeUpdater:
         )
         self.current_config: Optional[MemberRuntimeConfig] = None
         self._applied_model_identity: Optional[str] = None
+        self._applied_subagent_model_identity: Optional[str] = None
         self._applied_matrix_channel_identity: Optional[str] = None
         self._applied_dingtalk_channel_identity: Optional[str] = None
         self._applied_agent_package_identity: Optional[Tuple[str, str, str, str]] = None
@@ -1356,6 +1362,12 @@ class RuntimeUpdater:
         )
         model_identity = self._component_identity(self._model_desired_state(config))
         model_should_apply = force or model_identity != self._applied_model_identity
+        subagent_model_identity = self._component_identity(
+            self._subagent_model_desired_state(config)
+        )
+        subagent_model_should_apply = (
+            force or subagent_model_identity != self._applied_subagent_model_identity
+        )
         matrix_channel_identity = self._component_identity(self._matrix_channel_payload(config))
         matrix_channel_should_apply = (
             force or matrix_channel_identity != self._applied_matrix_channel_identity
@@ -1385,7 +1397,8 @@ class RuntimeUpdater:
         logger.info(
             "runtime config apply begin component=update worker=%s generation=%s team=%s member=%s role=%s "
             "force=%s reapply_adapter=%s adapter_applied=%s mcp_server_count=%s channel_names=%s "
-            "credential_binding_count=%s model_reconcile=%s matrix_channel_reconcile=%s "
+            "credential_binding_count=%s model_reconcile=%s subagent_model_reconcile=%s "
+            "matrix_channel_reconcile=%s "
             "dingtalk_channel_reconcile=%s package_reconcile=%s duration_ms=%s",
             self.config.worker_name,
             config.generation,
@@ -1399,6 +1412,7 @@ class RuntimeUpdater:
             _named_keys(config.channels),
             len(config.credential_bindings),
             model_should_apply,
+            subagent_model_should_apply,
             matrix_channel_should_apply,
             dingtalk_channel_should_apply,
             package_should_apply,
@@ -1410,6 +1424,9 @@ class RuntimeUpdater:
         if model_should_apply:
             self._apply_model(config)
             self._applied_model_identity = model_identity
+        if subagent_model_should_apply:
+            self._apply_subagent_model(config)
+            self._applied_subagent_model_identity = subagent_model_identity
         if matrix_channel_should_apply:
             self._apply_matrix_channel(config)
             self._applied_matrix_channel_identity = matrix_channel_identity
@@ -1636,9 +1653,13 @@ class RuntimeUpdater:
             api_key=desired["api_key"],
             provider_name=desired["provider_name"],
             chat_model=desired["chat_model"],
+            supports_image=desired.get("supports_image"),
+            supports_video=desired.get("supports_video"),
+            supports_multimodal=desired.get("supports_multimodal"),
+            probe_source=desired.get("probe_source"),
         )
 
-    def _model_desired_state(self, config: MemberRuntimeConfig) -> Optional[Dict[str, str]]:
+    def _model_desired_state(self, config: MemberRuntimeConfig) -> Optional[Dict[str, Any]]:
         model = config.model
         provider_id = _string(model.get("providerId") or model.get("provider_id") or model.get("provider"))
         model_name = _string(model.get("model") or model.get("name"))
@@ -1661,6 +1682,28 @@ class RuntimeUpdater:
         )
         if not api_key and api_key_env:
             api_key = _string(os.getenv(api_key_env))
+        # input modalities semantics:
+        #   key present -> explicit declaration; probe_source="manual" and the
+        #                  declared value is authoritative. An empty list means
+        #                  "declared text-only" and must NOT fall back to probing.
+        #   key absent  -> the runtime received no declaration; leave capabilities
+        #                  unset (None) so the runtime may probe.
+        if "input" in model:
+            input_modalities = model.get("input") or []
+            if isinstance(input_modalities, str):
+                input_modalities = [input_modalities]
+            supports_image = "image" in input_modalities
+            supports_video = "video" in input_modalities
+            supports_multimodal = bool(supports_image or supports_video)
+            supports_image_val = supports_image
+            supports_video_val = supports_video
+            supports_multimodal_val = supports_multimodal
+            probe_source_val = "manual"
+        else:
+            supports_image_val = None
+            supports_video_val = None
+            supports_multimodal_val = None
+            probe_source_val = None
         return {
             "provider_id": provider_id,
             "model": model_name,
@@ -1672,7 +1715,75 @@ class RuntimeUpdater:
             "chat_model": _string(
                 model.get("chatModel") or model.get("chat_model") or "OpenAIChatModel"
             ),
+            "supports_image": supports_image_val,
+            "supports_video": supports_video_val,
+            "supports_multimodal": supports_multimodal_val,
+            "probe_source": probe_source_val,
         }
+
+    def _apply_subagent_model(self, config: MemberRuntimeConfig) -> None:
+        """Apply — or reconcile the removal of — the declared subagent model.
+
+        This is the startup/recreation path for the override: a recreated
+        container must pick the desired value up from runtime.yaml even
+        though the controller hot apply (annotation-gated, embedded-only)
+        would skip it. Removal is reconciled here as well, so clearing
+        does not depend on the embedded-only controller dial: when the
+        declaration is absent but the runtime still holds an override
+        (removed in the CR, possibly across a restart), an explicit null
+        clear is issued with readback. An initially absent declaration
+        stays read-only — one profile check, no write — preserving
+        compatibility for workers/runtimes that never used the surface.
+        """
+        desired = self._subagent_model_desired_state(config)
+        if desired is not None:
+            if self.api_client is None:
+                raise RuntimeError(
+                    "QwenPaw API client is required for subagent model configuration",
+                )
+            try:
+                self.api_client.update_agent_model_settings(desired)
+            except QwenPawApiError as exc:
+                # QwenPaw < 2.1.1 has no model-settings endpoint; the declared
+                # value stays in runtime.yaml and takes effect after an upgrade.
+                if "HTTP 404" in str(exc):
+                    logger.warning("subagent model endpoint unavailable, skipping: %s", exc)
+                    return
+                raise
+            return
+        # Absent declaration: clear only when an override is actually present.
+        # Without an API client there is nothing to inspect or clear —
+        # stay a no-op (compat).
+        if self.api_client is None:
+            return
+        try:
+            current = self.api_client.get_agent_subagent_model()
+        except QwenPawApiError as exc:
+            if "HTTP 404" in str(exc):
+                logger.warning("subagent model settings unavailable, skipping clear: %s", exc)
+                return
+            raise
+        if current is None:
+            return
+        try:
+            self.api_client.update_agent_model_settings(None)
+        except QwenPawApiError as exc:
+            if "HTTP 404" in str(exc):
+                logger.warning("subagent model endpoint unavailable, skipping clear: %s", exc)
+                return
+            raise
+
+    def _subagent_model_desired_state(
+        self, config: MemberRuntimeConfig
+    ) -> Optional[Dict[str, Any]]:
+        slot = config.subagent_model
+        provider_id = _string(
+            slot.get("providerId") or slot.get("provider_id") or slot.get("provider")
+        )
+        model_name = _string(slot.get("model") or slot.get("name"))
+        if not provider_id or not model_name:
+            return None
+        return {"provider_id": provider_id, "model": model_name}
 
     def _openai_compatible_base_url(self, base_url: str) -> str:
         value = base_url.rstrip("/")
@@ -1836,6 +1947,12 @@ class RuntimeUpdater:
             "encryption": _env_bool("AGENTTEAMS_MATRIX_E2EE"),
             "group_disabled": False,
             "dm_disabled": False,
+            # #7001 group sender isolation: default False = per-sender
+            # sessions (AgentTeams decision 2026-09-05: "default isolated,
+            # otherwise the shared context will blow up"). Set
+            # AGENTTEAMS_MATRIX_SHARE_SESSION=true to restore room-wide
+            # session sharing (legacy behavior).
+            "share_session_in_group": _env_bool("AGENTTEAMS_MATRIX_SHARE_SESSION"),
             "show_tool_calls": True,
             "show_tool_results": True,
             "show_thinking": True,
@@ -2069,9 +2186,28 @@ class RuntimeUpdater:
             return text
         return f"@{text}:{domain}" if domain else ""
 
+    @staticmethod
+    def _is_trusted_mcp_host(url: str, gateway_url: str) -> bool:
+        """Mirror of the controller-side agentconfig.IsTrustedMCPHost.
+
+        The MCP gateway consumer key is attached only to entries addressed
+        to the configured AI gateway (exact host:port match). An unset or
+        unparseable gateway URL or entry URL trusts nothing (fail closed)
+        (#1220 §7).
+        """
+        if not url or not gateway_url:
+            return False
+        try:
+            gateway_host = urlparse(gateway_url).netloc
+            entry_host = urlparse(url).netloc
+        except ValueError:
+            return False
+        return bool(gateway_host) and entry_host == gateway_host
+
     def _mcporter_servers(self, config: MemberRuntimeConfig) -> Dict[str, Any]:
         raw = config.mcp_servers
         gateway_key = self._gateway_key(config)
+        gateway_url = _string(os.getenv("AGENTTEAMS_AI_GATEWAY_URL"))
         if isinstance(raw, dict) and isinstance(raw.get("mcpServers"), dict):
             raw = raw["mcpServers"]
 
@@ -2080,7 +2216,7 @@ class RuntimeUpdater:
             for item in raw:
                 if isinstance(item, dict):
                     name = _string(item.get("name"))
-                    payload = self._mcporter_server_payload(item, gateway_key)
+                    payload = self._mcporter_server_payload(item, gateway_key, gateway_url)
                     if name and payload:
                         servers[name] = payload
             return servers
@@ -2088,18 +2224,24 @@ class RuntimeUpdater:
         if isinstance(raw, dict):
             for name, item in raw.items():
                 if isinstance(item, dict):
-                    payload = self._mcporter_server_payload(item, gateway_key)
+                    payload = self._mcporter_server_payload(item, gateway_key, gateway_url)
                     if _string(name) and payload:
                         servers[_string(name)] = payload
         return servers
 
-    def _mcporter_server_payload(self, item: Dict[str, Any], gateway_key: str) -> Dict[str, Any]:
+    def _mcporter_server_payload(
+        self, item: Dict[str, Any], gateway_key: str, gateway_url: str
+    ) -> Dict[str, Any]:
         url = _string(item.get("url"))
         if not url:
             return {}
         headers = item.get("headers")
         headers = dict(headers) if isinstance(headers, dict) else {}
-        if gateway_key and "Authorization" not in headers:
+        if (
+            gateway_key
+            and "Authorization" not in headers
+            and self._is_trusted_mcp_host(url, gateway_url)
+        ):
             headers["Authorization"] = f"Bearer {gateway_key}"
         transport = _string(item.get("transport") or "http").lower()
         return {

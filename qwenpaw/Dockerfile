@@ -24,7 +24,7 @@ FROM ${HIGRESS_REGISTRY}/higress/python:3.11-slim
 ARG APT_MIRROR=
 ARG PIP_INDEX_URL=https://pypi.org/simple/
 ARG PIP_TIMEOUT=300
-ARG QWENPAW_PIP_SPEC=qwenpaw==2.0.1
+ARG QWENPAW_PIP_SPEC=qwenpaw==2.2.1
 ARG NPM_REGISTRY=https://registry.npmjs.org/
 
 RUN if [ -n "${APT_MIRROR}" ]; then \
@@ -36,11 +36,17 @@ RUN if [ -n "${APT_MIRROR}" ]; then \
         git \
         jq \
         libjemalloc2 \
-        nodejs \
-        npm \
         socat \
         tzdata \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js 24 via NodeSource (same approach as openclaw-base).
+# The distro node (e.g. 20.x) crashes on 16K-page arm64 kernels
+# (`node: bad option: --max_old_space_size`) before the coding CLIs can run;
+# Node 24 LTS is 16K-page compatible.
+RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
+    apt-get install -y nodejs && \
+    rm -rf /var/lib/apt/lists/*
 
 # jemalloc reduces Python memory fragmentation and matches the CoPaw worker base.
 RUN JEMALLOC=$(find /usr/lib -name 'libjemalloc.so.2' -print -quit) \
@@ -100,10 +106,12 @@ RUN mkdir -p /opt/agentteams/plugins
 COPY dist/adapters/qwenpaw/teamharness-qwenpaw.zip /opt/agentteams/plugins/teamharness-qwenpaw.zip
 COPY dist/adapters/qwenpaw/workerflow-qwenpaw.zip /opt/agentteams/plugins/workerflow-qwenpaw.zip
 COPY plugins/agentteams-matrix-channel/ /opt/agentteams/plugins/agentteams-matrix-channel/
+COPY plugins/agentteams-upgrade/ /opt/agentteams/plugins/agentteams-upgrade/
 COPY qwenpaw/scripts/install-builtin-qwenpaw-plugins.py /tmp/install-builtin-qwenpaw-plugins.py
 RUN /opt/venv/qwenpaw/bin/python /tmp/install-builtin-qwenpaw-plugins.py \
         --working-dir /opt/agentteams/qwenpaw-builtin \
         /opt/agentteams/plugins/agentteams-matrix-channel \
+        /opt/agentteams/plugins/agentteams-upgrade \
         /opt/agentteams/plugins/teamharness-qwenpaw.zip \
         /opt/agentteams/plugins/workerflow-qwenpaw.zip \
     && rm -f /tmp/install-builtin-qwenpaw-plugins.py
@@ -119,6 +127,21 @@ RUN chmod +x /opt/agentteams/scripts/lib/mc-wrapper.sh && \
     ln -sf /opt/venv/qwenpaw/bin/qwenpaw-worker /usr/local/bin/qwenpaw-worker && \
     ln -sf /opt/agentteams/scripts/qwenpaw-teamharness-plugin-reload.sh /usr/local/bin/qwenpaw-teamharness-plugin-reload && \
     mkdir -p /root/agentteams-fs/agents
+
+# QwenPaw 2.2.1 reload must not overwrite a concurrent policy update.
+# The patch is also KEPT in the image (not /tmp): the in-place runtime upgrade
+# orchestrator re-applies it after an S3 package swap (the pristine wheel does
+# not carry the fix). The build-time run below applies it for the 2.2.1 image.
+COPY qwenpaw/scripts/patch-qwenpaw-driver-policy-reload.py /opt/agentteams/scripts/patch-qwenpaw-driver-policy-reload.py
+# In-place runtime upgrade: two-phase orchestrator + checker CLI, kept next to
+# the patch script so the orchestrator's `$(dirname $0)` resolution finds both
+# the patch (re-applied after an S3 package swap) and the checker.
+COPY --chmod=755 qwenpaw/scripts/upgrade_qwenpaw_runtime.sh /opt/agentteams/scripts/upgrade_qwenpaw_runtime.sh
+COPY --chmod=755 qwenpaw/scripts/check_qwenpaw_upgrade.py /opt/agentteams/scripts/check_qwenpaw_upgrade.py
+COPY qwenpaw/tests/check_driver_policy_reload.py /tmp/check_driver_policy_reload.py
+RUN /opt/venv/qwenpaw/bin/python /opt/agentteams/scripts/patch-qwenpaw-driver-policy-reload.py && \
+    /opt/venv/qwenpaw/bin/python /tmp/check_driver_policy_reload.py && \
+    rm /tmp/check_driver_policy_reload.py
 
 WORKDIR /root/agentteams-fs/agents
 

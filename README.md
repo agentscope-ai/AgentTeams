@@ -31,6 +31,7 @@ AgentTeams does not compete with other Agent runtimes. Instead of implementing A
 
 ## News
 
+- **2026-09-20**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.4) — AgentTeams v1.2.4: adds TeamHarness task state history, progress tracking, and completion notifications; upgrades to QwenPaw 2.2.1 and Dashboard v1.2.4.9; expands team permissions, auditing, and skill management; introduces the experimental DeepSeek Harness Worker; and improves Worker state persistence and installation reliability.
 - **2026-08-22**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.3) — AgentTeams v1.2.3: makes long-running Project workflows visible and controllable through new Controller APIs, `agt` commands, and Dashboard v1.2.4; adds audited human interventions, Project history, and QwenPaw Worker checkpoints; promotes QwenPaw as the recommended local Manager and Worker runtime; and improves Skill recovery, Windows AppService startup, and runtime reliability.
 - **2026-08-08**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.2) — AgentTeams v1.2.2: adds Manager-to-Worker custom Skill delivery with validation, storage upload, `Worker.spec.skills` assignment, and QwenPaw hot refresh and enablement without a restart; hardens Manager and Worker Skill loading; and ensures Team Leaders and Workers explicitly join Team Rooms after invitation.
 - **2026-08-06**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.1) — AgentTeams v1.2.1: unifies the Manager and Worker runtime stack on QwenPaw 2.0.1, publishes the QwenPaw Worker multi-architecture image, strengthens atomic Matrix and TeamHarness task assignment and CoPaw-to-QwenPaw state migration, adds custom model vision and reasoning capability overrides, and improves Worker lifecycle and runtime management reliability.
@@ -430,11 +431,15 @@ Browse the [documentation directory](docs/), or start with the overview and quic
 | [docs/quickstart.md](docs/quickstart.md) | Step-by-step guide |
 | [docs/usage/use-cases.md](docs/usage/use-cases.md) | Software delivery, research, content, incident analysis, and long-running project collaboration examples |
 | [docs/usage/deployment/local.md](docs/usage/deployment/local.md) | Local instance creation, installation options, upgrades, and uninstalling |
-| [docs/design/architecture.md](docs/design/architecture.md) | System architecture deep dive |
+| [docs/design/architecture.md](docs/design/architecture.md) | System architecture deep dive (also available in [中文](docs/zh-cn/design/architecture.md)) |
+| [docs/design/k8s-native-orchestration.md](docs/design/k8s-native-orchestration.md) | Kubernetes-native multi-Agent orchestration: CRDs, controller, declarative resources (also available in [中文](docs/zh-cn/design/k8s-native-orchestration.md)) |
 | [docs/usage/manager-guide.md](docs/usage/manager-guide.md) | Manager configuration |
 | [docs/usage/worker-guide.md](docs/usage/worker-guide.md) | Worker deployment |
 | [docs/usage/project-workflow-api.md](docs/usage/project-workflow-api.md) | Project / workflow inspection API (also available in [中文](docs/zh-cn/usage/project-workflow-api.md)) |
-| [docs/usage/development.md](docs/usage/development.md) | Contributing and local dev |
+| [docs/usage/higress-gateway-api.md](docs/usage/higress-gateway-api.md) | Higress gateway external API reference (LLM / MCP / exposed ports / Console) (also available in [中文](docs/zh-cn/usage/higress-gateway-api.md)) |
+| [docs/usage/development.md](docs/usage/development.md) | Contributing and local dev (also available in [中文](docs/zh-cn/usage/development.md)) |
+
+The remaining design documents (skill catalog, worker channels/chats APIs, room power levels, capability foundation, human update / audit / AI-routes APIs, L2/L3 scoped access, member runtime config contract, team skills, agent pod template, TeamHarness v0.1 boundary) are indexed in the [中文 documentation table](README.zh-CN.md) — all are also available under `docs/zh-cn/design/`, except a few (`docs/design/internal/`, part of `docs/design/teamharness/`) that are natively written in Chinese upstream.
 
 ## Troubleshooting
 
@@ -442,7 +447,7 @@ Browse the [documentation directory](docs/), or start with the overview and quic
 docker exec -it agentteams-manager cat /var/log/agentteams/manager-agent.log
 ```
 
-See [docs/usage/troubleshooting/faq.md](docs/usage/troubleshooting/faq.md) for common issues.
+See [docs/usage/troubleshooting/faq.md](docs/usage/troubleshooting/faq.md) for common issues (also available in [中文](docs/zh-cn/usage/troubleshooting/faq.md)).
 
 ### Reporting Bugs
 

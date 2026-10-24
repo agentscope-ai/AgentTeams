@@ -1,0 +1,886 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	audit "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/audit"
+	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+)
+
+// newTestApprovalHandler builds an ApprovalHandler against a fake API and an
+// optional upstream worker app (nil = the default dialer, which fails
+// closed for the 502 test).
+func newTestApprovalHandler(t *testing.T, kubeMode string, ts *httptest.Server, objs ...runtime.Object) *ApprovalHandler {
+	t.Helper()
+	k8s := fake.NewClientBuilder().WithScheme(newProjectTestScheme(t)).WithRuntimeObjects(objs...).Build()
+	h := NewApprovalHandler(k8s, "default", kubeMode, "agentteams-worker-", nil)
+	if ts != nil {
+		h.workerBaseURL = func(string, map[string]string) string { return ts.URL }
+	}
+	return h
+}
+
+// approvalTeam / approvalWorker / approvalTeamWithWorkers build the CR
+// fixtures (same shape as the checkpoint test fixtures, distinct names to
+// keep the two suites independent).
+func approvalTeam(name string, workers ...string) *v1beta1.Team {
+	refs := make([]v1beta1.TeamWorkerRef, 0, len(workers))
+	for _, w := range workers {
+		refs = append(refs, v1beta1.TeamWorkerRef{Name: w})
+	}
+	return &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Spec:       v1beta1.TeamSpec{TeamName: name, WorkerMembers: refs},
+	}
+}
+
+func approvalWorker(name string) *v1beta1.Worker {
+	return &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{WorkerName: name},
+	}
+}
+
+func approvalTeamWithWorkers(name string, workers ...string) []runtime.Object {
+	objs := make([]runtime.Object, 0, len(workers)+1)
+	objs = append(objs, approvalTeam(name, workers...))
+	for _, w := range workers {
+		objs = append(objs, approvalWorker(w))
+	}
+	return objs
+}
+
+// approvalRequest builds a request with the {name} path value set.
+func approvalRequest(method, name, body string) *http.Request {
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+	req := httptest.NewRequest(method, "/api/v1/workers/"+name+"/approval", reader)
+	req.SetPathValue("name", name)
+	return req
+}
+
+// approvalUpstream simulates the worker's /api/workspace/running-config:
+// GET returns the full config, PUT validates the full-object round trip
+// and echoes the updated config. The path check enforces the /api prefix
+// contract (any dial without it gets 404, as a pre-prefix build would
+// from a real qwenpaw worker behind its SPA catch-all).
+func approvalUpstream(t *testing.T, current string, gotPUT *[]byte) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/workspace/running-config") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"approval_level":` + jsonQuote(current) + `,"reme_light_memory_config":{"needs_reindex":false},"daily_memory_dir":"memory"}`))
+		case http.MethodPut:
+			body, _ := io.ReadAll(r.Body)
+			*gotPUT = body
+			var cfg map[string]any
+			if err := json.Unmarshal(body, &cfg); err != nil || cfg["approval_level"] == nil {
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				_, _ = w.Write([]byte(`{"detail":"approval_level missing"}`))
+				return
+			}
+			level, _ := cfg["approval_level"].(string)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"approval_level":` + jsonQuote(level) + `,"daily_memory_dir":"memory"}`))
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+}
+
+func jsonQuote(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+// --- GET ---
+
+// TestApprovalGet_DialsAPIPrefix is the regression test for the #1216
+// dial-path bug: the proxy used to dial the worker without the /api
+// prefix, landing on the qwenpaw app's SPA catch-all, which answers
+// 200 + index.html — the proxy then failed with 502 "worker returned an
+// unparsable running config". The upstream here mimics that split: the
+// API path returns JSON, anything else returns 200 + HTML. A handler
+// dialing the non-API path gets the HTML and fails this test.
+func TestApprovalGet_DialsAPIPrefix(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/workspace/running-config" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"approval_level":"AUTO"}`))
+			return
+		}
+		// SPA catch-all behavior for non-API paths.
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><body>qwenpaw</body></html>`))
+	}))
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	rec := httptest.NewRecorder()
+	h.getWorkerApproval(rec, adminCaller(approvalRequest(http.MethodGet, "market-analyst", "")))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200 — the proxy must dial /api/workspace/running-config (the SPA catch-all answers HTML otherwise)", rec.Code, rec.Body.String())
+	}
+	if got := rec.Body.String(); got != `{"approval_level":"AUTO"}` {
+		t.Fatalf("body=%s, want the JSON approval_level passthrough", got)
+	}
+}
+
+func TestApprovalGet_InScopeL2Human(t *testing.T) {
+	up := approvalUpstream(t, "SMART", nil)
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	req := withCaller(approvalRequest(http.MethodGet, "market-analyst", ""),
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"market-team"}})
+	rec := httptest.NewRecorder()
+	h.getWorkerApproval(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200 for in-scope L2 human", rec.Code, rec.Body.String())
+	}
+	if got := rec.Body.String(); got != `{"approval_level":"SMART"}` {
+		t.Fatalf("body=%s, want the minimal approval_level response", got)
+	}
+}
+
+func TestApprovalGet_CrossTeamHidden(t *testing.T) {
+	up := approvalUpstream(t, "SMART", nil)
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	req := withCaller(approvalRequest(http.MethodGet, "market-analyst", ""),
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "bob", Teams: []string{"biz-team"}})
+	rec := httptest.NewRecorder()
+	h.getWorkerApproval(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404 for cross-team read (W8)", rec.Code)
+	}
+}
+
+func TestApprovalGet_TeamLeaderInScope(t *testing.T) {
+	up := approvalUpstream(t, "STRICT", nil)
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	req := withCaller(approvalRequest(http.MethodGet, "market-analyst", ""),
+		&authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "market-analyst", Team: "market-team"})
+	rec := httptest.NewRecorder()
+	h.getWorkerApproval(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d, want 200 for in-scope leader read", rec.Code)
+	}
+}
+
+func TestApprovalGet_StandaloneHiddenFromScoped(t *testing.T) {
+	up := approvalUpstream(t, "AUTO", nil)
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up, approvalWorker("lone-worker"))
+	req := withCaller(approvalRequest(http.MethodGet, "lone-worker", ""),
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"market-team"}})
+	rec := httptest.NewRecorder()
+	h.getWorkerApproval(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404 for standalone worker (scoped caller)", rec.Code)
+	}
+	// Admin still sees it.
+	rec2 := httptest.NewRecorder()
+	h.getWorkerApproval(rec2, adminCaller(approvalRequest(http.MethodGet, "lone-worker", "")))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("admin status=%d, want 200", rec2.Code)
+	}
+}
+
+func TestApprovalGet_DefaultLevelWhenMissing(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// No approval_level key at all in the config object.
+		_, _ = w.Write([]byte(`{"daily_memory_dir":"memory"}`))
+	}))
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	req := adminCaller(approvalRequest(http.MethodGet, "market-analyst", ""))
+	rec := httptest.NewRecorder()
+	h.getWorkerApproval(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d, want 200", rec.Code)
+	}
+	if got := rec.Body.String(); got != `{"approval_level":"AUTO"}` {
+		t.Fatalf("body=%s, want the AUTO default", got)
+	}
+}
+
+func TestApprovalGet_VersionGate404(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	rec := httptest.NewRecorder()
+	h.getWorkerApproval(rec, adminCaller(approvalRequest(http.MethodGet, "market-analyst", "")))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404 passthrough (pre-2.x version gate)", rec.Code)
+	}
+}
+
+func TestApprovalGet_Unreachable502(t *testing.T) {
+	h := newTestApprovalHandler(t, "embedded", nil,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	rec := httptest.NewRecorder()
+	h.getWorkerApproval(rec, adminCaller(approvalRequest(http.MethodGet, "market-analyst", "")))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d, want 502 when the worker app is unreachable", rec.Code)
+	}
+}
+
+func TestApprovalGet_KubeModeUnavailable(t *testing.T) {
+	h := newTestApprovalHandler(t, "kube", nil,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	rec := httptest.NewRecorder()
+	h.getWorkerApproval(rec, adminCaller(approvalRequest(http.MethodGet, "market-analyst", "")))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d, want 503 in kube mode", rec.Code)
+	}
+}
+
+// --- PUT ---
+
+func TestApprovalPut_InScopeL2Human(t *testing.T) {
+	var putBody []byte
+	up := approvalUpstream(t, "AUTO", &putBody)
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	req := withCaller(approvalRequest(http.MethodPut, "market-analyst", `{"approval_level":"STRICT"}`),
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"market-team"}})
+	rec := httptest.NewRecorder()
+	h.updateWorkerApproval(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200 for in-scope L2 human write", rec.Code, rec.Body.String())
+	}
+	if got := rec.Body.String(); got != `{"approval_level":"STRICT"}` {
+		t.Fatalf("body=%s, want the updated level echoed", got)
+	}
+	// The upstream PUT must carry the FULL config (safe write) with only
+	// the approval level changed.
+	if len(putBody) == 0 {
+		t.Fatal("upstream PUT never called")
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(putBody, &cfg); err != nil {
+		t.Fatalf("upstream PUT body is not JSON: %v", err)
+	}
+	if cfg["approval_level"] != "STRICT" {
+		t.Fatalf("upstream approval_level=%v, want STRICT", cfg["approval_level"])
+	}
+	if cfg["daily_memory_dir"] != "memory" {
+		t.Fatalf("unrelated field lost in the round trip: %v", cfg)
+	}
+}
+
+func TestApprovalPut_LeaderDenied(t *testing.T) {
+	up := approvalUpstream(t, "AUTO", nil)
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	req := withCaller(approvalRequest(http.MethodPut, "market-analyst", `{"approval_level":"OFF"}`),
+		&authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "market-analyst", Team: "market-team"})
+	rec := httptest.NewRecorder()
+	h.updateWorkerApproval(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d, want 403 for in-scope leader (read-only)", rec.Code)
+	}
+}
+
+func TestApprovalPut_CrossTeamHidden(t *testing.T) {
+	up := approvalUpstream(t, "AUTO", nil)
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	req := withCaller(approvalRequest(http.MethodPut, "market-analyst", `{"approval_level":"OFF"}`),
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "bob", Teams: []string{"biz-team"}})
+	rec := httptest.NewRecorder()
+	h.updateWorkerApproval(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404 for cross-team write (W8)", rec.Code)
+	}
+}
+
+func TestApprovalPut_AdminAllowed(t *testing.T) {
+	var putBody []byte
+	up := approvalUpstream(t, "AUTO", &putBody)
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	rec := httptest.NewRecorder()
+	h.updateWorkerApproval(rec, adminCaller(approvalRequest(http.MethodPut, "market-analyst", `{"approval_level":"SMART"}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d, want 200 for admin", rec.Code)
+	}
+	if len(putBody) == 0 {
+		t.Fatal("upstream PUT never called")
+	}
+}
+
+func TestApprovalPut_ManagerAllowed(t *testing.T) {
+	// Managers keep the full level range (including OFF), same as
+	// admin — guards the role boundary documented in the design.
+	var putBody []byte
+	up := approvalUpstream(t, "AUTO", &putBody)
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	req := withCaller(approvalRequest(http.MethodPut, "market-analyst", `{"approval_level":"OFF"}`),
+		&authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "manager"})
+	rec := httptest.NewRecorder()
+	h.updateWorkerApproval(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d, want 200 for manager (full range incl. OFF)", rec.Code)
+	}
+	if len(putBody) == 0 {
+		t.Fatal("upstream PUT never called")
+	}
+}
+
+func TestApprovalPut_InvalidLevelRejected(t *testing.T) {
+	up := approvalUpstream(t, "AUTO", nil)
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	for _, level := range []string{"strict", "YOLO", "", "Auto"} {
+		req := withCaller(approvalRequest(http.MethodPut, "market-analyst", `{"approval_level":`+jsonQuote(level)+`}`),
+			&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"market-team"}})
+		rec := httptest.NewRecorder()
+		h.updateWorkerApproval(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("level=%q status=%d, want 400 (value not in the fixed set)", level, rec.Code)
+		}
+	}
+}
+
+func TestApprovalPut_InvalidBody(t *testing.T) {
+	up := approvalUpstream(t, "AUTO", nil)
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	for _, body := range []string{`[]`, `{"noLevel":1}`, `not-json`} {
+		req := adminCaller(approvalRequest(http.MethodPut, "market-analyst", body))
+		rec := httptest.NewRecorder()
+		h.updateWorkerApproval(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body=%q status=%d, want 400", body, rec.Code)
+		}
+	}
+}
+
+func TestApprovalPut_ConflictPassthrough(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			_, _ = w.Write([]byte(`{"approval_level":"AUTO"}`))
+		default:
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"detail":"configuration changed concurrently"}`))
+		}
+	}))
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	rec := httptest.NewRecorder()
+	h.updateWorkerApproval(rec, adminCaller(approvalRequest(http.MethodPut, "market-analyst", `{"approval_level":"OFF"}`)))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d, want 409 passthrough", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "configuration changed concurrently") {
+		t.Fatalf("body=%s, want the upstream conflict detail", rec.Body.String())
+	}
+}
+
+func TestApprovalPut_VersionGate404(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	rec := httptest.NewRecorder()
+	h.updateWorkerApproval(rec, adminCaller(approvalRequest(http.MethodPut, "market-analyst", `{"approval_level":"OFF"}`)))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404 passthrough (pre-2.x version gate)", rec.Code)
+	}
+}
+
+func TestApprovalPut_KubeModeUnavailable(t *testing.T) {
+	h := newTestApprovalHandler(t, "kube", nil,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	rec := httptest.NewRecorder()
+	h.updateWorkerApproval(rec, adminCaller(approvalRequest(http.MethodPut, "market-analyst", `{"approval_level":"OFF"}`)))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d, want 503 in kube mode", rec.Code)
+	}
+}
+
+// approval_level=OFF disables Tool Guard — a security-policy operation
+// gated on the approval_policy capability (L2 permission design, #1220):
+// admin/manager pass unconditionally, L2 humans only when explicitly
+// granted (or via full_access), worker/leader identities never.
+func TestApprovalPut_OffDeniedForL2Human(t *testing.T) {
+	var offPut []byte
+	up := approvalUpstream(t, "AUTO", &offPut)
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+
+	req := withCaller(approvalRequest(http.MethodPut, "market-analyst", `{"approval_level":"OFF"}`),
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"market-team"}})
+	rec := httptest.NewRecorder()
+	h.updateWorkerApproval(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d, want 403 for L2 human setting OFF", rec.Code)
+	}
+
+	// Admin (any-worker scope) may still set OFF.
+	var putBody []byte
+	up2 := approvalUpstream(t, "AUTO", &putBody)
+	defer up2.Close()
+	h2 := newTestApprovalHandler(t, "embedded", up2,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	rec2 := httptest.NewRecorder()
+	h2.updateWorkerApproval(rec2, adminCaller(approvalRequest(http.MethodPut, "market-analyst", `{"approval_level":"OFF"}`)))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("admin status=%d, want 200 (admin keeps the full level range)", rec2.Code)
+	}
+	if len(putBody) == 0 {
+		t.Fatal("upstream PUT never called for admin OFF")
+	}
+
+	// Guarded levels remain L2-writable.
+	rec3 := httptest.NewRecorder()
+	h2.updateWorkerApproval(rec3, withCaller(
+		approvalRequest(http.MethodPut, "market-analyst", `{"approval_level":"STRICT"}`),
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"market-team"}}))
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("L2 guarded-level status=%d, want 200", rec3.Code)
+	}
+}
+
+// --- OFF gate via the approval_policy capability (#1220) ---
+
+func TestApprovalPut_OffAllowedForCapableL2Human(t *testing.T) {
+	sc := ossfake.NewMemory()
+	var putBody []byte
+	up := approvalUpstream(t, "AUTO", &putBody)
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	h.audit = audit.NewClient(sc)
+
+	req := withCaller(approvalRequest(http.MethodPut, "market-analyst", `{"approval_level":"OFF"}`),
+		&authpkg.CallerIdentity{
+			Role:         authpkg.RoleHuman,
+			Username:     "scoped-user",
+			Teams:        []string{"market-team"},
+			Capabilities: []string{string(authpkg.CapabilityApprovalPolicy)},
+		})
+	rec := httptest.NewRecorder()
+	h.updateWorkerApproval(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200 for an L2 human holding approval_policy", rec.Code, rec.Body.String())
+	}
+	if len(putBody) == 0 {
+		t.Fatal("upstream PUT never called")
+	}
+
+	key := "audit/" + time.Now().UTC().Format("2006-01-02") + ".jsonl"
+	data, err := sc.GetObject(context.Background(), key)
+	if err != nil {
+		t.Fatalf("audit object not written: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("want exactly 1 audit line, got %d: %s", len(lines), data)
+	}
+	var ev struct {
+		Who        string   `json:"who"`
+		Role       string   `json:"role"`
+		Target     string   `json:"target"`
+		Action     string   `json:"action"`
+		Capability string   `json:"capability"`
+		Before     []string `json:"before"`
+		After      []string `json:"after"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &ev); err != nil {
+		t.Fatalf("audit line parse: %v", err)
+	}
+	if ev.Who != "scoped-user" || ev.Role != authpkg.RoleHuman || ev.Target != "market-analyst" ||
+		ev.Action != "approval_level_off" || ev.Capability != string(authpkg.CapabilityApprovalPolicy) ||
+		len(ev.Before) != 1 || ev.Before[0] != "AUTO" ||
+		len(ev.After) != 1 || ev.After[0] != "OFF" {
+		t.Fatalf("audit event = %+v", ev)
+	}
+}
+
+func TestApprovalPut_OffDeniedForWorkerIdentity(t *testing.T) {
+	// Worker identities are service-account scoped: even a (bogus)
+	// capability list must not unlock OFF.
+	var putBody []byte
+	up := approvalUpstream(t, "AUTO", &putBody)
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	req := withCaller(approvalRequest(http.MethodPut, "market-analyst", `{"approval_level":"OFF"}`),
+		&authpkg.CallerIdentity{
+			Role:         authpkg.RoleWorker,
+			Username:     "market-analyst",
+			Team:         "market-team",
+			WorkerName:   "market-analyst",
+			Capabilities: []string{string(authpkg.CapabilityApprovalPolicy)},
+		})
+	rec := httptest.NewRecorder()
+	h.updateWorkerApproval(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d, want 403 for a worker identity (capabilities never honored)", rec.Code)
+	}
+	if len(putBody) != 0 {
+		t.Fatal("upstream PUT must not be reached for a worker identity")
+	}
+}
+
+func TestApprovalPut_OffAllowedForFullAccessHuman(t *testing.T) {
+	// full_access is the meta capability: it covers approval_policy.
+	var putBody []byte
+	up := approvalUpstream(t, "AUTO", &putBody)
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	req := withCaller(approvalRequest(http.MethodPut, "market-analyst", `{"approval_level":"OFF"}`),
+		&authpkg.CallerIdentity{
+			Role:         authpkg.RoleHuman,
+			Username:     "scoped-user",
+			Teams:        []string{"market-team"},
+			Capabilities: []string{string(authpkg.CapabilityFullAccess)},
+		})
+	rec := httptest.NewRecorder()
+	h.updateWorkerApproval(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200 (full_access covers approval_policy)", rec.Code, rec.Body.String())
+	}
+	if len(putBody) == 0 {
+		t.Fatal("upstream PUT never called")
+	}
+}
+
+func TestApprovalPut_GuardedLevelSwitchNotAudited(t *testing.T) {
+	sc := ossfake.NewMemory()
+	var putBody []byte
+	up := approvalUpstream(t, "AUTO", &putBody)
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	h.audit = audit.NewClient(sc)
+
+	req := withCaller(approvalRequest(http.MethodPut, "market-analyst", `{"approval_level":"STRICT"}`),
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "scoped-user", Teams: []string{"market-team"}})
+	rec := httptest.NewRecorder()
+	h.updateWorkerApproval(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d, want 200 for a guarded-level switch", rec.Code)
+	}
+
+	key := "audit/" + time.Now().UTC().Format("2006-01-02") + ".jsonl"
+	if _, err := sc.GetObject(context.Background(), key); err == nil {
+		t.Fatal("guarded-level switches must not write audit lines")
+	}
+}
+
+// --- upstream failure/shape coverage (bot review 2026-09-03) ---
+
+func TestApprovalGet_Upstream500(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"detail":"boom"}`))
+	}))
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	rec := httptest.NewRecorder()
+	h.getWorkerApproval(rec, adminCaller(approvalRequest(http.MethodGet, "market-analyst", "")))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d, want 502 for upstream 500", rec.Code)
+	}
+}
+
+func TestApprovalGet_NonStringLevel502(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"approval_level":3}`))
+		}
+	}))
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	rec := httptest.NewRecorder()
+	h.getWorkerApproval(rec, adminCaller(approvalRequest(http.MethodGet, "market-analyst", "")))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d, want 502 for a non-string approval_level", rec.Code)
+	}
+}
+
+func TestApprovalGet_VersionGateBodyPassthrough(t *testing.T) {
+	upBody := `{"detail":"running-config router not available on this QwenPaw version"}`
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(upBody))
+	}))
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	rec := httptest.NewRecorder()
+	h.getWorkerApproval(rec, adminCaller(approvalRequest(http.MethodGet, "market-analyst", "")))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404 version gate", rec.Code)
+	}
+	if got := rec.Body.String(); got != upBody {
+		t.Fatalf("body=%s, want the upstream 404 body verbatim", got)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("content-type=%s, want application/json", ct)
+	}
+}
+
+// A running-config larger than the old 4 KiB cap must round-trip the FULL
+// object through the safe write (fields beyond the cutoff must survive).
+func TestApprovalPut_RoundTripLargeConfig(t *testing.T) {
+	pad := strings.Repeat("x", 4500) // > old 4096 cap
+	cfg := `{"approval_level":"AUTO","large":"` + pad + `","daily_memory_dir":"memory"}`
+	var putBody []byte
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			_, _ = w.Write([]byte(cfg))
+		case http.MethodPut:
+			body, _ := io.ReadAll(r.Body)
+			putBody = body
+			var c map[string]any
+			if err := json.Unmarshal(body, &c); err != nil || c["approval_level"] == nil {
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				return
+			}
+			_, _ = w.Write([]byte(`{"approval_level":"STRICT"}`))
+		}
+	}))
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	req := withCaller(approvalRequest(http.MethodPut, "market-analyst", `{"approval_level":"STRICT"}`),
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"market-team"}})
+	rec := httptest.NewRecorder()
+	h.updateWorkerApproval(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var c map[string]any
+	if err := json.Unmarshal(putBody, &c); err != nil {
+		t.Fatalf("upstream PUT body is not JSON: %v", err)
+	}
+	if got, _ := c["large"].(string); got != pad {
+		t.Fatalf("large field truncated or lost in the round trip (len=%d, want %d)", len(got), len(pad))
+	}
+	if c["approval_level"] != "STRICT" {
+		t.Fatalf("approval_level=%v, want STRICT", c["approval_level"])
+	}
+}
+
+// A JSON null running-config must be rejected, not written back as {}
+// (which would wipe the worker's config) and not panic.
+func TestApprovalPut_NilConfigRejected(t *testing.T) {
+	putCalls := 0
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			_, _ = w.Write([]byte(`null`))
+		case http.MethodPut:
+			putCalls++
+		}
+	}))
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	rec := httptest.NewRecorder()
+	h.updateWorkerApproval(rec, adminCaller(approvalRequest(http.MethodPut, "market-analyst", `{"approval_level":"STRICT"}`)))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d, want 502 for a null running-config", rec.Code)
+	}
+	if putCalls != 0 {
+		t.Fatalf("upstream PUT called %d times, want 0 (no write-back of an empty object)", putCalls)
+	}
+}
+
+// TestApprovalGet_L3AssignedAllowed guards the L3 read leg: an L3
+// (worker-scoped) human may read the approval configuration of exactly its
+// assigned workers (team members and standalone alike).
+func TestApprovalGet_L3AssignedAllowed(t *testing.T) {
+	up := approvalUpstream(t, "SMART", nil)
+	defer up.Close()
+	objs := approvalTeamWithWorkers("market-team", "market-analyst")
+	objs = append(objs, approvalWorker("lone-worker"))
+	h := newTestApprovalHandler(t, "embedded", up, objs...)
+	l3 := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "viewer", AccessibleWorkers: []string{"market-analyst", "lone-worker"}}
+
+	rec := httptest.NewRecorder()
+	req := withCaller(approvalRequest(http.MethodGet, "market-analyst", ""), l3)
+	h.getWorkerApproval(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("assigned team worker status=%d body=%s, want 200 for L3 read", rec.Code, rec.Body.String())
+	}
+
+	rec2 := httptest.NewRecorder()
+	req2 := withCaller(approvalRequest(http.MethodGet, "lone-worker", ""), l3)
+	h.getWorkerApproval(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("assigned standalone worker status=%d body=%s, want 200 for L3 read", rec2.Code, rec2.Body.String())
+	}
+}
+
+// TestApprovalGet_L3UnassignedHidden guards the W8 boundary for L3 reads:
+// unassigned workers stay hidden (404) — including workers of teams the
+// human does not control.
+func TestApprovalGet_L3UnassignedHidden(t *testing.T) {
+	up := approvalUpstream(t, "SMART", nil)
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	l3 := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "viewer", AccessibleWorkers: []string{"someone-else"}}
+
+	rec := httptest.NewRecorder()
+	req := withCaller(approvalRequest(http.MethodGet, "market-analyst", ""), l3)
+	h.getWorkerApproval(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unassigned worker status=%d, want 404 (W8)", rec.Code)
+	}
+}
+
+// TestApprovalPut_L3Denied pins the read-only contract (Q2) at the handler
+// level: a PUT against an ASSIGNED worker still fails the strict team-scope
+// predicate (the middleware's ActionWorkerApproval path is handler-enforced;
+// L3 humans carry no teams, so they cannot approve at all).
+func TestApprovalPut_L3Denied(t *testing.T) {
+	var putBody []byte
+	up := approvalUpstream(t, "AUTO", &putBody)
+	defer up.Close()
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeamWithWorkers("market-team", "market-analyst")...)
+	l3 := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "viewer", AccessibleWorkers: []string{"market-analyst"}}
+
+	rec := httptest.NewRecorder()
+	req := withCaller(approvalRequest(http.MethodPut, "market-analyst", `{"approval_level":"STRICT"}`), l3)
+	h.updateWorkerApproval(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("L3 PUT of an ASSIGNED worker status=%d, want 404 (read-only)", rec.Code)
+	}
+	if len(putBody) != 0 {
+		t.Fatal("upstream PUT must not be called for an L3 mutation")
+	}
+}
+
+// TestApproval_RuntimeAware400: a non-qwenpaw worker is rejected 400
+// (tool approval is qwenpaw-specific).
+func TestApproval_RuntimeAware400(t *testing.T) {
+	up := approvalUpstream(t, "AUTO", nil)
+	defer up.Close()
+	w := approvalWorker("oc-worker")
+	w.Spec.Runtime = "openclaw"
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeam("market-team", "oc-worker"), w)
+	rec := httptest.NewRecorder()
+	h.getWorkerApproval(rec, adminCaller(approvalRequest(http.MethodGet, "oc-worker", "")))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400 for non-qwenpaw worker", rec.Code)
+	}
+	if !containsAll(rec.Body.String(), "only supported for qwenpaw") {
+		t.Fatalf("body=%s, want qwenpaw-specific message", rec.Body.String())
+	}
+}
+
+// TestApproval_ScopeBeforeRuntime_CrossTeam404: an out-of-scope caller sees
+// 404 (worker existence hidden) even for a non-qwenpaw worker — the runtime
+// 400 must not leak worker type across the team boundary.
+func TestApproval_ScopeBeforeRuntime_CrossTeam404(t *testing.T) {
+	up := approvalUpstream(t, "AUTO", nil)
+	defer up.Close()
+	w := approvalWorker("oc-worker")
+	w.Spec.Runtime = "openclaw"
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeam("market-team", "oc-worker"), w)
+	rec := httptest.NewRecorder()
+	req := withCaller(approvalRequest(http.MethodGet, "oc-worker", ""),
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "bob", Teams: []string{"biz-team"}})
+	h.getWorkerApproval(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404 for cross-team caller (W8)", rec.Code)
+	}
+	if containsAll(rec.Body.String(), "only supported for qwenpaw") {
+		t.Fatalf("body=%s, runtime guard must not leak across the scope boundary", rec.Body.String())
+	}
+}
+
+// TestApproval_ScopeBeforeRuntime_Standalone404: a scoped standalone worker
+// (no team) hides as 404 for a team-scoped caller regardless of runtime.
+func TestApproval_ScopeBeforeRuntime_Standalone404(t *testing.T) {
+	for _, rt := range []string{"openclaw", ""} {
+		w := approvalWorker("standalone-oc")
+		w.Spec.Runtime = rt
+		h := newTestApprovalHandler(t, "embedded", approvalUpstream(t, "AUTO", nil), w)
+		rec := httptest.NewRecorder()
+		req := withCaller(approvalRequest(http.MethodGet, "standalone-oc", ""),
+			&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "bob", Teams: []string{"biz-team"}})
+		h.getWorkerApproval(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("runtime=%q status=%d, want 404 for scoped standalone worker", rt, rec.Code)
+		}
+	}
+}
+
+// TestApproval_ScopeBeforeRuntime_Authorized400: an in-scope caller still
+// gets the explicit runtime 400 for a non-qwenpaw worker (the guard stays
+// in force after the scope check, before the dial).
+func TestApproval_ScopeBeforeRuntime_Authorized400(t *testing.T) {
+	up := approvalUpstream(t, "AUTO", nil)
+	defer up.Close()
+	w := approvalWorker("oc-worker")
+	w.Spec.Runtime = "openclaw"
+	h := newTestApprovalHandler(t, "embedded", up,
+		approvalTeam("market-team", "oc-worker"), w)
+	rec := httptest.NewRecorder()
+	req := withCaller(approvalRequest(http.MethodGet, "oc-worker", ""),
+		&authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "bob", Teams: []string{"market-team"}})
+	h.getWorkerApproval(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400 for authorized non-qwenpaw caller", rec.Code)
+	}
+	if !containsAll(rec.Body.String(), "only supported for qwenpaw") {
+		t.Fatalf("body=%s, want qwenpaw-specific message", rec.Body.String())
+	}
+}

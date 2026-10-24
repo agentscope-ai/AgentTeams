@@ -223,6 +223,16 @@ func TestDockerCreateProjectsAuthTokenFileBeforeStart(t *testing.T) {
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(map[string]string{"Id": "worker-id"})
 	})
+	mux.HandleFunc("POST /containers/{id}/exec", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]string{"Id": "exec-id"})
+	})
+	mux.HandleFunc("POST /exec/{id}/start", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("GET /exec/{id}/json", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"Running": false, "ExitCode": 0})
+	})
 	mux.HandleFunc("PUT /containers/{id}/archive", func(w http.ResponseWriter, r *http.Request) {
 		events = append(events, "project")
 		tr := tar.NewReader(r.Body)
@@ -325,6 +335,11 @@ func TestDockerProjectAuthTokenAtomicallyReplacesRunningWorkerFile(t *testing.T)
 	if projectedName != "token.next" || projectedToken != "rotated-token" {
 		t.Fatalf("projected file=%q content=%q", projectedName, projectedToken)
 	}
+	// ProjectAuthToken writes via writeContainerFileWithMode directly
+	// (NOT WriteFile), so no parent mkdir runs — the sequence is
+	// archive PUT (token.next) → mv (exec). The Create path projects the
+	// initial token the same way, before the container starts, where an
+	// exec would 409.
 	if strings.Join(events, ",") != "project-next,create-exec,start-exec,inspect-exec" {
 		t.Fatalf("events=%v", events)
 	}
@@ -645,4 +660,224 @@ func TestDockerCreateResolvesImageFromRuntime(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDockerCreateRecreationKeepsLegacyCopawImage pins the legacy
+// upgrade-compat regression (issue #1310): a CoPaw worker with an empty
+// spec.image, recreated after a controller upgrade, must run on the image
+// carried forward from the pre-upgrade deployment env (CopawWorkerImage,
+// e.g. the old chart default higress-registry.../agentteams-copaw-worker
+// plus the release's global image tag), not on the generic worker image or
+// the built-in agentteams-copaw-worker:latest fallback. test-29 does not
+// cover this case because it explicitly pins spec.image.
+func TestDockerCreateRecreationKeepsLegacyCopawImage(t *testing.T) {
+	capturedImages := captureCreateImagesServer(t)
+	defer capturedImages.srv.Close()
+
+	// Same image test-29 pins as the legacy fingerprint (old chart default
+	// resolved at v1.2.4) — one concrete value across chart check, gate,
+	// and recreation coverage.
+	legacyImage := "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-copaw-worker:v1.2.4"
+	b := &DockerBackend{
+		config: DockerConfig{
+			WorkerImage:      "agentteams/agentteams-worker:latest",
+			CopawWorkerImage: legacyImage,
+			DefaultNetwork:   "agentteams-net",
+		},
+		containerPrefix: "agentteams-worker-",
+		client: &http.Client{
+			Transport: &testTransport{serverURL: capturedImages.srv.URL},
+		},
+	}
+
+	// Empty Image: legacy deployments resolve the image from the
+	// deployment env (CopawWorkerImage above).
+	_, err := b.Create(context.Background(), CreateRequest{
+		Name:    "legacy-copaw",
+		Runtime: RuntimeCopaw,
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	if got := capturedImages.lastImage(); got != legacyImage {
+		t.Fatalf("create body Image = %q, want the legacy env image %q", got, legacyImage)
+	}
+}
+
+// TestDockerCreateBindsConsolePortToLoopback verifies that the automatically
+// published worker console port (AGENTTEAMS_CONSOLE_PORT) is bound to
+// 127.0.0.1 instead of all interfaces, and that workers without a console
+// port do not publish any port.
+func TestDockerCreateBindsConsolePortToLoopback(t *testing.T) {
+	var payloads []dockerCreatePayload
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /images/", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"Id": "sha256-x"})
+	})
+	mux.HandleFunc("POST /containers/create", func(w http.ResponseWriter, r *http.Request) {
+		var body dockerCreatePayload
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode create payload: %v", err)
+		}
+		payloads = append(payloads, body)
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]string{"Id": "sha256-test"})
+	})
+	mux.HandleFunc("POST /containers/{id}/start", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	b := newTestDockerBackend(t, srv.URL)
+
+	result, err := b.Create(context.Background(), CreateRequest{
+		Name:  "console-worker",
+		Image: "img:latest",
+		Env:   map[string]string{"AGENTTEAMS_CONSOLE_PORT": "8088"},
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	if result.ConsoleHostPort == "" {
+		t.Fatal("expected ConsoleHostPort to be reported for console worker")
+	}
+	if len(payloads) != 1 {
+		t.Fatalf("expected 1 create payload, got %d", len(payloads))
+	}
+	binds := payloads[0].HostConfig.PortBindings
+	if len(binds) != 1 {
+		t.Fatalf("expected exactly 1 port binding, got %v", binds)
+	}
+	binding, ok := binds["8088/tcp"]
+	if !ok {
+		t.Fatalf("expected binding for 8088/tcp, got %v", binds)
+	}
+	if len(binding) != 1 {
+		t.Fatalf("expected 1 binding entry for 8088/tcp, got %v", binding)
+	}
+	if binding[0].HostIP != "127.0.0.1" {
+		t.Errorf("console binding HostIp = %q, want 127.0.0.1", binding[0].HostIP)
+	}
+	if binding[0].HostPort != result.ConsoleHostPort {
+		t.Errorf("console binding HostPort = %q, want %q (ConsoleHostPort)", binding[0].HostPort, result.ConsoleHostPort)
+	}
+
+	// A worker without AGENTTEAMS_CONSOLE_PORT must not publish any port.
+	if _, err := b.Create(context.Background(), CreateRequest{
+		Name:  "plain-worker",
+		Image: "img:latest",
+	}); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	if len(payloads) != 2 {
+		t.Fatalf("expected 2 create payloads, got %d", len(payloads))
+	}
+	plain := payloads[1].HostConfig
+	if plain != nil && len(plain.PortBindings) != 0 {
+		t.Errorf("worker without console port must not publish ports, got %v", plain.PortBindings)
+	}
+}
+
+// TestBuildCreatePayloadPreservesExplicitPortMappingHostIP verifies that
+// explicit port mappings requested via CreateRequest.Ports keep their HostIP
+// verbatim: an empty HostIP (all interfaces) stays empty and a specific HostIP
+// is passed through unchanged.
+func TestBuildCreatePayloadPreservesExplicitPortMappingHostIP(t *testing.T) {
+	d := &DockerBackend{}
+	p := d.buildCreatePayload(CreateRequest{
+		Ports: []PortMapping{
+			{HostIP: "", HostPort: "9090", ContainerPort: "9090"},
+			{HostIP: "192.0.2.10", HostPort: "9191", ContainerPort: "9191"},
+		},
+	}, "", 0)
+
+	allInterfaces := p.HostConfig.PortBindings["9090/tcp"]
+	if len(allInterfaces) != 1 || allInterfaces[0].HostIP != "" || allInterfaces[0].HostPort != "9090" {
+		t.Errorf("explicit mapping with empty HostIP changed: %v", allInterfaces)
+	}
+	specific := p.HostConfig.PortBindings["9191/tcp"]
+	if len(specific) != 1 || specific[0].HostIP != "192.0.2.10" || specific[0].HostPort != "9191" {
+		t.Errorf("explicit mapping with specific HostIP changed: %v", specific)
+	}
+}
+
+// TestDockerWriteFileCreatesMissingParentDir pins the G4 fix: Docker's
+// archive upload 404s when the parent directory does not exist yet (first
+// write of e.g. /root/.qwen/settings.json into a fresh worker container —
+// field-verified on the Pi embedded stack, 2026-10-11). The backend must
+// mkdir -p the parent BEFORE the archive PUT.
+func TestDockerWriteFileCreatesMissingParentDir(t *testing.T) {
+	var events []string
+	var execCmds [][]string
+	var projectedName string
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /containers/{id}/exec", func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Cmd []string `json:"Cmd"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode exec payload: %v", err)
+		}
+		execCmds = append(execCmds, payload.Cmd)
+		events = append(events, "exec:"+strings.Join(payload.Cmd, " "))
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]string{"Id": "exec-id"})
+	})
+	mux.HandleFunc("POST /exec/{id}/start", func(w http.ResponseWriter, _ *http.Request) {
+		events = append(events, "start-exec")
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("GET /exec/{id}/json", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"Running": false, "ExitCode": 0})
+	})
+	mux.HandleFunc("PUT /containers/{id}/archive", func(w http.ResponseWriter, r *http.Request) {
+		events = append(events, "archive-put")
+		tr := tar.NewReader(r.Body)
+		hdr, err := tr.Next()
+		if err != nil {
+			t.Fatalf("read archive header: %v", err)
+		}
+		projectedName = hdr.Name
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	b := newTestDockerBackend(t, srv.URL)
+
+	if err := b.WriteFile(context.Background(), "alice", "/root/.qwen/settings.json", `{"a":1}`); err != nil {
+		t.Fatalf("WriteFile with fresh parent dir failed: %v", err)
+	}
+	// mkdir -p must come before the archive PUT, and the PUT must then
+	// carry only the leaf file.
+	wantMkdir := []string{"mkdir", "-p", "/root/.qwen"}
+	if len(execCmds) < 1 || !slicesEqual(execCmds[0], wantMkdir) {
+		t.Fatalf("exec cmds=%v, want first %v", execCmds, wantMkdir)
+	}
+	idxMkdir, idxPut := -1, -1
+	for i, e := range events {
+		if idxMkdir == -1 && strings.HasPrefix(e, "exec:") {
+			idxMkdir = i
+		}
+		if e == "archive-put" {
+			idxPut = i
+		}
+	}
+	if idxMkdir == -1 || idxPut == -1 || idxMkdir > idxPut {
+		t.Fatalf("events=%v, want mkdir before archive-put", events)
+	}
+	if projectedName != "settings.json.next" {
+		t.Fatalf("projected name=%q, want settings.json.next", projectedName)
+	}
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

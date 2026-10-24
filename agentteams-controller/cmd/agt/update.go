@@ -184,11 +184,12 @@ Create or update each Worker separately to configure its runtime fields.`,
 
 func updateManagerCmd() *cobra.Command {
 	var (
-		name    string
-		model   string
-		runtime string
-		image   string
-		soul    string
+		name          string
+		model         string
+		modelProvider string
+		runtime       string
+		image         string
+		soul          string
 	)
 
 	cmd := &cobra.Command{
@@ -197,6 +198,7 @@ func updateManagerCmd() *cobra.Command {
 		Long: `Update an existing Manager resource. Only specified fields are changed.
 
   agt update manager --name default --model claude-sonnet-4-6
+  agt update manager --name default --model qwen3.6-plus --model-provider=
   agt update manager --name default --image agentteams/agentteams-manager:v1.2.0
   To update CPU/memory resources, use a YAML manifest and pass it with 'agt apply -f manager.yaml'.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -206,6 +208,9 @@ func updateManagerCmd() *cobra.Command {
 
 			req := map[string]interface{}{}
 			setIfNotEmpty(req, "model", model)
+			if cmd.Flags().Changed("model-provider") {
+				req["modelProvider"] = modelProvider
+			}
 			setIfNotEmpty(req, "runtime", runtime)
 			setIfNotEmpty(req, "image", image)
 			setIfNotEmpty(req, "soul", soul)
@@ -226,6 +231,7 @@ func updateManagerCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&name, "name", "", "Manager name (required)")
 	cmd.Flags().StringVar(&model, "model", "", "LLM model ID")
+	cmd.Flags().StringVar(&modelProvider, "model-provider", "", "LLM provider name (empty clears the binding)")
 	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|hermes|openhuman)")
 	cmd.Flags().StringVar(&image, "image", "", "Container image override")
 	cmd.Flags().StringVar(&soul, "soul", "", "Manager SOUL.md content")

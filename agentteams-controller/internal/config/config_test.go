@@ -59,6 +59,29 @@ func TestLoadConfigMetricsBindAddrPrefersAgentTeamsEnv(t *testing.T) {
 	}
 }
 
+func TestLoadConfigEmbeddedPreservesWorkerAIGatewayURL(t *testing.T) {
+	t.Setenv("AGENTTEAMS_KUBE_MODE", "embedded")
+	t.Setenv("AGENTTEAMS_CONTROLLER_URL", "http://agentteams-controller:8090")
+	t.Setenv("AGENTTEAMS_MATRIX_URL", "http://127.0.0.1:6167")
+	t.Setenv("AGENTTEAMS_FS_ENDPOINT", "http://127.0.0.1:9000")
+	t.Setenv("AGENTTEAMS_AI_GATEWAY_URL", "http://aigw-local.agentteams.io:8080")
+
+	cfg := LoadConfig()
+
+	if got, want := cfg.WorkerEnv.MatrixURL, "http://agentteams-controller:6167"; got != want {
+		t.Fatalf("WorkerEnv.MatrixURL = %q, want %q", got, want)
+	}
+	if got, want := cfg.WorkerEnv.FSEndpoint, "http://agentteams-controller:9000"; got != want {
+		t.Fatalf("WorkerEnv.FSEndpoint = %q, want %q", got, want)
+	}
+	if got, want := cfg.WorkerEnv.AIGatewayURL, "http://aigw-local.agentteams.io:8080"; got != want {
+		t.Fatalf("WorkerEnv.AIGatewayURL = %q, want %q", got, want)
+	}
+	if got, want := cfg.GatewayConfig().DataPlaneURL, "http://aigw-local.agentteams.io:8080"; got != want {
+		t.Fatalf("GatewayConfig().DataPlaneURL = %q, want %q", got, want)
+	}
+}
+
 func TestLoadConfigAppliesManagerSpec(t *testing.T) {
 	t.Setenv("AGENTTEAMS_MANAGER_SPEC", `{
 		"model":"qwen-max",
@@ -174,6 +197,31 @@ func TestBackendConfigsDefaultToIndependentDeepSeekHarnessVersion(t *testing.T) 
 	} {
 		if want := "agentteams/agentteams-deepseek-harness-worker:v0.1.0"; got != want {
 			t.Fatalf("%s DeepSeekHarnessWorkerImage = %q, want %q", name, got, want)
+		}
+	}
+}
+
+// TestBackendConfigsKeepLegacyCopawWorkerImage pins the legacy upgrade
+// contract (issue #1310): existing CoPaw workers commonly carry an empty
+// spec.image and resolve their image from the deployment's
+// AGENTTEAMS_COPAW_WORKER_IMAGE env (carried forward from the
+// pre-upgrade env file by the installer, or pinned in Helm values). That
+// deployment value must reach every backend instead of silently falling
+// back to the built-in agentteams-copaw-worker:latest default, which
+// would change (or break the pull of) the running image on the next
+// wake/recreation after a controller upgrade.
+func TestBackendConfigsKeepLegacyCopawWorkerImage(t *testing.T) {
+	t.Setenv("AGENTTEAMS_COPAW_WORKER_IMAGE", "private.registry.example/agentteams-copaw-worker:v1.2.3")
+
+	cfg := LoadConfig()
+
+	for name, got := range map[string]string{
+		"docker":  cfg.DockerConfig().CopawWorkerImage,
+		"k8s":     cfg.K8sConfig().CopawWorkerImage,
+		"sandbox": cfg.SandboxConfig().CopawWorkerImage,
+	} {
+		if want := "private.registry.example/agentteams-copaw-worker:v1.2.3"; got != want {
+			t.Fatalf("%s CopawWorkerImage = %q, want %q", name, got, want)
 		}
 	}
 }

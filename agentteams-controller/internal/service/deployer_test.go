@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/skillscan"
 	"sigs.k8s.io/yaml"
 )
 
@@ -120,11 +122,11 @@ func TestPushOnDemandSkillsWithoutManagerExecutorUsesExistingWorkerCopy(t *testi
 		t.Fatal(err)
 	}
 
-	if err := deployer.PushOnDemandSkills(ctx, "alice", []string{"dashboard-skill"}, nil); err != nil {
+	if err := deployer.PushOnDemandSkills(ctx, "alice", "", []string{"dashboard-skill"}, nil); err != nil {
 		t.Fatalf("existing Worker copy must satisfy assignment without Manager executor: %v", err)
 	}
 
-	err := deployer.PushOnDemandSkills(ctx, "alice", []string{"missing-skill"}, nil)
+	err := deployer.PushOnDemandSkills(ctx, "alice", "", []string{"missing-skill"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "Worker copies are missing: missing-skill") {
 		t.Fatalf("missing Worker copy should return a recovery error, got %v", err)
 	}
@@ -165,7 +167,7 @@ func TestPushOnDemandSkillsRemoteFailureDependsOnWorkerCopy(t *testing.T) {
 			}
 		}
 		deployer := NewDeployer(DeployerConfig{OSS: store})
-		err := deployer.PushOnDemandSkills(ctx, "alice", nil, remote)
+		err := deployer.PushOnDemandSkills(ctx, "alice", "", nil, remote)
 		if err == nil {
 			t.Fatal("failed remote refresh must remain visible when existing copies are retained")
 		}
@@ -188,7 +190,7 @@ func TestPushOnDemandSkillsRemoteFailureDependsOnWorkerCopy(t *testing.T) {
 
 	t.Run("missing copy reports recovery failure", func(t *testing.T) {
 		deployer := NewDeployer(DeployerConfig{OSS: ossfake.NewMemory()})
-		err := deployer.PushOnDemandSkills(ctx, "alice", nil, remote)
+		err := deployer.PushOnDemandSkills(ctx, "alice", "", nil, remote)
 		if err == nil || !strings.Contains(err.Error(), "Worker copies missing: remote-label, remote-version") {
 			t.Fatalf("missing Worker copy should report recovery failure, got %v", err)
 		}
@@ -205,7 +207,7 @@ func TestPushOnDemandSkillsRemoteFailureDependsOnWorkerCopy(t *testing.T) {
 			}
 		}
 		deployer := NewDeployer(DeployerConfig{OSS: store})
-		err := deployer.PushOnDemandSkills(ctx, "alice", []string{"local-missing"}, remote)
+		err := deployer.PushOnDemandSkills(ctx, "alice", "", []string{"local-missing"}, remote)
 		if err == nil {
 			t.Fatal("remote warning and missing local assignment must both remain visible")
 		}
@@ -362,7 +364,7 @@ func TestDeployWorkerConfigMergesMcporterConfigPreservingExternalMCP(t *testing.
 	}
 
 	deployer := NewDeployer(DeployerConfig{
-		AgentConfig: agentconfig.NewGenerator(agentconfig.Config{}),
+		AgentConfig: agentconfig.NewGenerator(agentconfig.Config{AIGatewayURL: "https://gw.example.com"}),
 		OSS:         store,
 		AgentFSDir:  filepath.Join(tmp, "agents"),
 	})
@@ -558,6 +560,11 @@ func TestDeployMemberRuntimeConfigWritesAgentScopedYaml(t *testing.T) {
 	if got := fmt.Sprint(model["gatewayUrl"]); got != "https://aigw.example.com" {
 		t.Fatalf("desired.model.gatewayUrl=%q", got)
 	}
+	// This deployer has no AgentConfig, so capability projection is skipped:
+	// input must be omitted (omitempty) instead of leaking a nil list.
+	if _, ok := model["input"]; ok {
+		t.Fatalf("desired.model.input should be omitted without AgentConfig: %#v", model)
+	}
 	inlineConfig := desired["inlineConfig"].(map[string]any)
 	if got := fmt.Sprint(inlineConfig["identity"]); got != "frontend specialist" {
 		t.Fatalf("desired.inlineConfig.identity=%q", got)
@@ -711,6 +718,74 @@ func TestDeployMemberRuntimeConfigOmitsDesiredModelForNativeConfig(t *testing.T)
 	agentPackage := desired["agentPackage"].(map[string]any)
 	if got := fmt.Sprint(agentPackage["ref"]); got != "oss://agents/edge/packages/demo.zip" {
 		t.Fatalf("desired.agentPackage.ref=%q", got)
+	}
+}
+
+func TestDeployMemberRuntimeConfigProjectsResolvedSubagentModel(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{OSS: store})
+
+	err := deployer.DeployMemberRuntimeConfig(ctx, MemberRuntimeConfigDeployRequest{
+		Name:          "worker-cr-a",
+		RuntimeName:   "worker-a",
+		Runtime:       "qwenpaw",
+		Role:          "worker",
+		Spec:          v1beta1.WorkerSpec{Model: "qwen-plus"},
+		SubagentModel: "qwen3.6-flash",
+	})
+	if err != nil {
+		t.Fatalf("DeployMemberRuntimeConfig failed: %v", err)
+	}
+
+	got, err := store.GetObject(ctx, "agents/worker-a/runtime/runtime.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("runtime.yaml is invalid YAML: %v\n%s", err, got)
+	}
+	desired := doc["desired"].(map[string]any)
+	slot, ok := desired["subagentModel"].(map[string]any)
+	if !ok {
+		t.Fatalf("desired.subagentModel missing: %#v", desired["subagentModel"])
+	}
+	if got := fmt.Sprint(slot["providerId"]); got != "agentteams-gateway" {
+		t.Fatalf("desired.subagentModel.providerId=%q", got)
+	}
+	if got := fmt.Sprint(slot["model"]); got != "qwen3.6-flash" {
+		t.Fatalf("desired.subagentModel.model=%q", got)
+	}
+}
+
+func TestDeployMemberRuntimeConfigOmitsSubagentModelWhenEmpty(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{OSS: store})
+
+	err := deployer.DeployMemberRuntimeConfig(ctx, MemberRuntimeConfigDeployRequest{
+		Name:        "worker-cr-a",
+		RuntimeName: "worker-a",
+		Runtime:     "qwenpaw",
+		Role:        "worker",
+		Spec:        v1beta1.WorkerSpec{Model: "qwen-plus"},
+	})
+	if err != nil {
+		t.Fatalf("DeployMemberRuntimeConfig failed: %v", err)
+	}
+
+	got, err := store.GetObject(ctx, "agents/worker-a/runtime/runtime.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("runtime.yaml is invalid YAML: %v\n%s", err, got)
+	}
+	desired := doc["desired"].(map[string]any)
+	if _, ok := desired["subagentModel"]; ok {
+		t.Fatalf("desired.subagentModel should be omitted when empty: %#v", desired["subagentModel"])
 	}
 }
 
@@ -1338,6 +1413,114 @@ func TestDeployMemberRuntimeConfigRequiresOSSClient(t *testing.T) {
 	}
 }
 
+func TestDeployMemberRuntimeConfigProjectsVisionInputForKnownMultimodalModel(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{
+		OSS: store,
+		AgentConfig: agentconfig.NewGenerator(agentconfig.Config{
+			DefaultModel: "qwen3.6-plus",
+		}),
+		RuntimeProjection: RuntimeProjectionConfig{
+			StorageProvider: "oss",
+			StorageBucket:   "agentteams-storage",
+			StorageEndpoint: "https://oss.example.com",
+			AIGatewayURL:    "https://aigw.example.com",
+		},
+	})
+
+	err := deployer.DeployMemberRuntimeConfig(ctx, MemberRuntimeConfigDeployRequest{
+		Name:        "worker-a",
+		RuntimeName: "worker-a",
+		Runtime:     "qwenpaw",
+		Role:        "worker",
+		Generation:  3,
+		Spec: v1beta1.WorkerSpec{
+			Model: "qwen3.6-plus",
+		},
+	})
+	if err != nil {
+		t.Fatalf("DeployMemberRuntimeConfig failed: %v", err)
+	}
+
+	got, err := store.GetObject(ctx, "agents/worker-a/runtime/runtime.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("runtime.yaml is invalid YAML: %v\n%s", err, got)
+	}
+	desired := doc["desired"].(map[string]any)
+	model := desired["model"].(map[string]any)
+	if got := fmt.Sprint(model["model"]); got != "qwen3.6-plus" {
+		t.Fatalf("desired.model.model=%q", got)
+	}
+	input, ok := model["input"].([]any)
+	if !ok {
+		t.Fatalf("desired.model.input missing for vision model: %#v", model)
+	}
+	// qwen3.6-plus is a multimodal preset → input must include image so the
+	// QwenPaw worker registers explicit supports_image/supports_multimodal.
+	hasImage := false
+	for _, item := range input {
+		if fmt.Sprint(item) == "image" {
+			hasImage = true
+		}
+	}
+	if !hasImage {
+		t.Fatalf("desired.model.input=%v, want [text image]", input)
+	}
+}
+
+func TestDeployMemberRuntimeConfigProjectsTextInputForTextOnlyModel(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{
+		OSS: store,
+		AgentConfig: agentconfig.NewGenerator(agentconfig.Config{
+			DefaultModel: "deepseek-chat",
+		}),
+		RuntimeProjection: RuntimeProjectionConfig{
+			StorageProvider: "oss",
+			StorageBucket:   "agentteams-storage",
+			StorageEndpoint: "https://oss.example.com",
+			AIGatewayURL:    "https://aigw.example.com",
+		},
+	})
+
+	err := deployer.DeployMemberRuntimeConfig(ctx, MemberRuntimeConfigDeployRequest{
+		Name:        "worker-textonly",
+		RuntimeName: "worker-textonly",
+		Runtime:     "qwenpaw",
+		Role:        "worker",
+		Generation:  1,
+		Spec: v1beta1.WorkerSpec{
+			Model: "deepseek-chat",
+		},
+	})
+	if err != nil {
+		t.Fatalf("DeployMemberRuntimeConfig failed: %v", err)
+	}
+
+	got, err := store.GetObject(ctx, "agents/worker-textonly/runtime/runtime.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("runtime.yaml is invalid YAML: %v\n%s", err, got)
+	}
+	model := doc["desired"].(map[string]any)["model"].(map[string]any)
+	input, ok := model["input"].([]any)
+	if !ok {
+		t.Fatalf("text-only model must project an explicit input (not omit it): %#v", model)
+	}
+	if len(input) != 1 || fmt.Sprint(input[0]) != "text" {
+		t.Fatalf("desired.model.input=%v, want [text]", input)
+	}
+}
+
 func TestPrepareWorkerDepsWritesObjectStorageLayout(t *testing.T) {
 	ctx := context.Background()
 	store := ossfake.NewMemory()
@@ -1362,19 +1545,25 @@ func TestPrepareWorkerDepsWritesObjectStorageLayout(t *testing.T) {
 		t.Fatalf("PrepareWorkerDeps: %v", err)
 	}
 
-	wantKeys := []string{
-		"instances/alice/data/.agentteams-keep",
-		"instances/alice/env/env",
-		"instances/alice/token/token",
+	// ListObjects reports names relative to the prefix (production mc ls
+	// contract); Stat/GetObject still take full keys.
+	wantListed := []string{
+		"data/.agentteams-keep",
+		"env/env",
+		"token/token",
 	}
 	gotKeys, err := store.ListObjects(ctx, "instances/alice/")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(gotKeys, "\n") != strings.Join(wantKeys, "\n") {
-		t.Fatalf("worker deps keys=%v, want %v", gotKeys, wantKeys)
+	if strings.Join(gotKeys, "\n") != strings.Join(wantListed, "\n") {
+		t.Fatalf("worker deps keys=%v, want %v", gotKeys, wantListed)
 	}
-	for _, key := range wantKeys {
+	for _, key := range []string{
+		"instances/alice/data/.agentteams-keep",
+		"instances/alice/env/env",
+		"instances/alice/token/token",
+	} {
 		if err := store.Stat(ctx, key); err != nil {
 			t.Fatalf("missing %s: %v", key, err)
 		}
@@ -1402,5 +1591,264 @@ func TestPrepareWorkerDepsWritesObjectStorageLayout(t *testing.T) {
 	}
 	if strings.Contains(text, "INVALID-KEY") {
 		t.Fatalf("env file should ignore invalid env keys:\n%s", text)
+	}
+}
+
+// --- Team-skill assign-time materialization (scan ②, #1221) ---
+
+// scanStub is a fixed-verdict skillscan.SkillScanner for materialization tests.
+type scanStub struct {
+	verdict skillscan.SkillScanVerdict
+	err     error
+	calls   int
+}
+
+func (s *scanStub) ScanSkill(_ context.Context, _ string, _ map[string][]byte) (skillscan.SkillScanVerdict, error) {
+	s.calls++
+	return s.verdict, s.err
+}
+
+func seedTeamSkill(t *testing.T, store *ossfake.Memory, team, skill string, extra map[string]string) {
+	t.Helper()
+	ctx := context.Background()
+	key := "teams/" + team + "/skills/" + skill + "/SKILL.md"
+	if err := store.PutObject(ctx, key, []byte("---\nname: "+skill+"\n---\n")); err != nil {
+		t.Fatal(err)
+	}
+	for p, c := range extra {
+		if err := store.PutObject(ctx, "teams/"+team+"/skills/"+skill+"/"+p, []byte(c)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestPushOnDemandSkillsTeamSkillMaterialized(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	seedTeamSkill(t, store, "alpha", "team-kb", map[string]string{"scripts/run.sh": "echo hi"})
+	scanner := &scanStub{verdict: skillscan.SkillScanVerdict{Status: "pass"}}
+	deployer := NewDeployer(DeployerConfig{OSS: store, SkillScanner: scanner})
+
+	if err := deployer.PushOnDemandSkills(ctx, "alice", "alpha", []string{"team-kb"}, nil); err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+	if scanner.calls != 1 {
+		t.Fatalf("scan ② ran %d times, want 1", scanner.calls)
+	}
+	// Exact copy landed under the worker's agent dir.
+	for _, key := range []string{
+		"agents/alice/skills/team-kb/SKILL.md",
+		"agents/alice/skills/team-kb/scripts/run.sh",
+	} {
+		if err := store.Stat(ctx, key); err != nil {
+			t.Errorf("missing %s: %v", key, err)
+		}
+	}
+}
+
+func TestPushOnDemandSkillsTeamSkillReUploadExactCopy(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	// An older version with a stale file.
+	seedTeamSkill(t, store, "alpha", "team-kb", nil)
+	// A stale file in the WORKER copy only (left over from an older skill
+	// version): re-materialization must delete it.
+	if err := store.PutObject(ctx, "agents/alice/skills/team-kb/stale/old.sh", []byte("old")); err != nil {
+		t.Fatal(err)
+	}
+	scanner := &scanStub{verdict: skillscan.SkillScanVerdict{Status: "pass"}}
+	deployer := NewDeployer(DeployerConfig{OSS: store, SkillScanner: scanner})
+	if err := deployer.PushOnDemandSkills(ctx, "alice", "alpha", []string{"team-kb"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	// The stale worker file (no counterpart in the team source) is removed.
+	if err := store.Stat(ctx, "agents/alice/skills/team-kb/stale/old.sh"); err == nil {
+		t.Error("stale file survived re-materialization (Remove not applied)")
+	}
+}
+
+func TestPushOnDemandSkillsTeamSkillBlockedNotCopied(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	seedTeamSkill(t, store, "alpha", "evil-skill", nil)
+	scanner := &scanStub{verdict: skillscan.SkillScanVerdict{
+		Status:   "block",
+		Findings: []skillscan.SkillUploadFinding{{RuleID: "malicious.exec", Severity: "CRITICAL", Title: "exec call"}},
+	}}
+	deployer := NewDeployer(DeployerConfig{OSS: store, SkillScanner: scanner})
+
+	err := deployer.PushOnDemandSkills(ctx, "alice", "alpha", []string{"evil-skill"}, nil)
+	if err == nil {
+		t.Fatal("blocked skill: want warning error")
+	}
+	if !strings.Contains(err.Error(), "malicious.exec") {
+		t.Errorf("error should name the finding: %v", err)
+	}
+	if err := store.Stat(ctx, "agents/alice/skills/evil-skill/SKILL.md"); err == nil {
+		t.Error("blocked skill was copied (gate opened)")
+	}
+}
+
+func TestPushOnDemandSkillsTeamSkillScanUnavailableFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	seedTeamSkill(t, store, "alpha", "team-kb", nil)
+
+	// (a) no scan backend at all.
+	deployerNil := NewDeployer(DeployerConfig{OSS: store})
+	if err := deployerNil.PushOnDemandSkills(ctx, "alice", "alpha", []string{"team-kb"}, nil); err == nil {
+		t.Error("nil scanner: want fail-closed warning")
+	} else if serr := store.Stat(ctx, "agents/alice/skills/team-kb/SKILL.md"); serr == nil {
+		t.Error("nil scanner: skill was copied anyway")
+	}
+
+	// (b) backend round trip fails.
+	scanner := &scanStub{err: errors.New("exec timeout")}
+	deployer := NewDeployer(DeployerConfig{OSS: store, SkillScanner: scanner})
+	if err := deployer.PushOnDemandSkills(ctx, "alice", "alpha", []string{"team-kb"}, nil); err == nil {
+		t.Error("scan error: want fail-closed warning")
+	} else if serr := store.Stat(ctx, "agents/alice/skills/team-kb/SKILL.md"); serr == nil {
+		t.Error("scan error: skill was copied anyway")
+	}
+}
+
+func TestPushOnDemandSkillsTeamLayerWinsOverBuiltin(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	// The skill exists in the team layer AND is not a builtin. With no
+	// executor, the builtin path would fail on a missing copy — a clean
+	// pass here proves the team branch handled it (priority team > builtin).
+	seedTeamSkill(t, store, "alpha", "dup-skill", nil)
+	scanner := &scanStub{verdict: skillscan.SkillScanVerdict{Status: "pass"}}
+	deployer := NewDeployer(DeployerConfig{OSS: store, SkillScanner: scanner})
+
+	if err := deployer.PushOnDemandSkills(ctx, "alice", "alpha", []string{"dup-skill"}, nil); err != nil {
+		t.Fatalf("team-layer skill misrouted to the builtin path: %v", err)
+	}
+	if err := store.Stat(ctx, "agents/alice/skills/dup-skill/SKILL.md"); err != nil {
+		t.Errorf("team skill not materialized: %v", err)
+	}
+}
+
+func TestPushOnDemandSkillsNonTeamSkillGoesToBuiltinPath(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	// Team exists but does NOT hold this skill; no builtin copy either;
+	// no executor → the builtin path's missing-copy error must surface
+	// (proof the skill was not misread as a team skill).
+	if err := store.PutObject(ctx, "teams/alpha/.agentteams-keep", []byte{}); err != nil {
+		t.Fatal(err)
+	}
+	scanner := &scanStub{verdict: skillscan.SkillScanVerdict{Status: "pass"}}
+	deployer := NewDeployer(DeployerConfig{OSS: store, SkillScanner: scanner})
+
+	err := deployer.PushOnDemandSkills(ctx, "alice", "alpha", []string{"plain-builtin"}, nil)
+	if err == nil {
+		t.Fatal("non-team skill with no copy: want the builtin-path warning")
+	}
+	if scanner.calls != 0 {
+		t.Errorf("scan ② ran %d times for a non-team skill, want 0", scanner.calls)
+	}
+}
+
+func TestPushOnDemandSkillsMixedTeamAndBuiltin(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	seedTeamSkill(t, store, "alpha", "team-kb", nil)
+	// The builtin skill already has a Worker copy (no executor needed).
+	if err := store.PutObject(ctx, "agents/alice/skills/local-tool/SKILL.md", []byte("---\nname: local-tool\n---\n")); err != nil {
+		t.Fatal(err)
+	}
+	scanner := &scanStub{verdict: skillscan.SkillScanVerdict{Status: "pass"}}
+	deployer := NewDeployer(DeployerConfig{OSS: store, SkillScanner: scanner})
+
+	if err := deployer.PushOnDemandSkills(ctx, "alice", "alpha", []string{"team-kb", "local-tool"}, nil); err != nil {
+		t.Fatalf("mixed: %v", err)
+	}
+	if err := store.Stat(ctx, "agents/alice/skills/team-kb/SKILL.md"); err != nil {
+		t.Errorf("team skill missing: %v", err)
+	}
+	if scanner.calls != 1 {
+		t.Errorf("scan ② ran %d times, want 1 (team skill only)", scanner.calls)
+	}
+}
+
+func TestPushOnDemandSkillsStandaloneWorkerIgnoresTeamLayer(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	seedTeamSkill(t, store, "alpha", "team-kb", nil)
+	scanner := &scanStub{verdict: skillscan.SkillScanVerdict{Status: "pass"}}
+	deployer := NewDeployer(DeployerConfig{OSS: store, SkillScanner: scanner})
+
+	// teamName "" (standalone/manager): the team layer is never consulted —
+	// the skill is treated as builtin and (with no copy) warns.
+	if err := deployer.PushOnDemandSkills(ctx, "alice", "", []string{"team-kb"}, nil); err == nil {
+		t.Fatal("standalone worker: want the builtin-path warning")
+	}
+	if scanner.calls != 0 {
+		t.Errorf("scan ② ran for a standalone worker, want 0")
+	}
+}
+
+// countingOSS counts PutObject calls per key (the fake's modTime is
+// shared across keys, so it cannot measure single-object rewrites).
+type countingOSS struct {
+	*ossfake.Memory
+	puts map[string]int
+}
+
+func (c *countingOSS) PutObject(ctx context.Context, key string, data []byte) error {
+	c.puts[key]++
+	return c.Memory.PutObject(ctx, key, data)
+}
+
+// TestDeployWorkerConfigSkipsIdenticalOpenclawPush: a reconcile pass that
+// generates byte-identical openclaw.json must not rewrite the object.
+// Each rewrite wakes the worker-side config watcher and reloads the agent
+// in place, interrupting in-flight turns for no change (JEV P10).
+func TestDeployWorkerConfigSkipsIdenticalOpenclawPush(t *testing.T) {
+	ctx := context.Background()
+	store := &countingOSS{Memory: ossfake.NewMemory(), puts: map[string]int{}}
+	deployer := NewDeployer(DeployerConfig{
+		AgentConfig: agentconfig.NewGenerator(agentconfig.Config{}),
+		OSS:         store,
+		AgentFSDir:  t.TempDir(),
+	})
+	const key = "agents/alice/openclaw.json"
+	req := WorkerDeployRequest{
+		Name:        "alice",
+		MatrixToken: "matrix-token",
+		GatewayKey:  "gateway-key",
+	}
+	if err := deployer.DeployWorkerConfig(ctx, req); err != nil {
+		t.Fatalf("first deploy: %v", err)
+	}
+	if store.puts[key] != 1 {
+		t.Fatalf("first deploy must write openclaw.json exactly once, got %d", store.puts[key])
+	}
+	generated, err := store.GetObject(ctx, key)
+	if err != nil || len(generated) == 0 {
+		t.Fatalf("first deploy must write openclaw.json: %v", err)
+	}
+
+	// A second pass with an identical existing config is a no-op for the
+	// openclaw object: no rewrite, no watcher wake, no in-flight reload.
+	if err := deployer.DeployWorkerConfig(ctx, req); err != nil {
+		t.Fatalf("second deploy: %v", err)
+	}
+	if store.puts[key] != 1 {
+		t.Fatalf("identical config must not rewrite storage: %d puts, want 1", store.puts[key])
+	}
+	if got, _ := store.GetObject(ctx, key); string(got) != string(generated) {
+		t.Fatal("no-op pass changed the stored config")
+	}
+
+	// A changed spec must still be written (no false no-op).
+	req.SubagentModel = "qwen-other"
+	if err := deployer.DeployWorkerConfig(ctx, req); err != nil {
+		t.Fatalf("third deploy (changed spec): %v", err)
+	}
+	if store.puts[key] != 2 {
+		t.Fatalf("changed spec must rewrite storage: %d puts, want 2", store.puts[key])
 	}
 }

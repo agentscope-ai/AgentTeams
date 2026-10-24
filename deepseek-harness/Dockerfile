@@ -2,7 +2,7 @@ ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
 
 FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
 
-FROM node:22.22-bookworm-slim
+FROM node:24-bookworm-slim
 
 ARG DSH_VERSION=0.1.1-rc.2
 

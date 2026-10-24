@@ -7,7 +7,7 @@
 # modern Manager and Worker do not run — Higress lives in the
 # embedded controller image, not here.
 #
-# Includes: Ubuntu 24.04 + Node.js 22 + OpenClaw + mcporter
+# Includes: Ubuntu 24.04 + Node.js 24 + OpenClaw + mcporter
 #           + common tools (git, jq, etc.)
 #
 # Build args:
@@ -54,11 +54,15 @@ RUN if [ -n "${APT_MIRROR}" ]; then \
     jq gettext-base openssh-client ca-certificates procps tzdata \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Node.js 22 via NodeSource (the base image does not ship Node.js).
-# setup_22.x auto-installs gnupg / apt-transport-https if missing.
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+# Install Node.js 24 via NodeSource (the base image does not ship Node.js).
+# setup_24.x auto-installs gnupg / apt-transport-https if missing.
+# OpenClaw requires Node >= 22.14 (no upper cap); Node 24 is the current LTS
+# (Node 22 EOLs 2027-04) and matches the coding-CLI "target 24" guidance.
+# Match OpenClaw's packageManager to avoid switching to a standalone pnpm
+# binary, which its build scripts incorrectly invoke through Node.js.
+RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
     apt-get install -y nodejs && \
-    npm install -g pnpm && \
+    npm install -g pnpm@10.32.1 && \
     rm -rf /var/lib/apt/lists/*
 
 # Clone, build, and optimize OpenClaw
@@ -99,6 +103,7 @@ RUN git init /opt/openclaw && \
         exit 1; \
     fi && \
     echo "==> Native addon present: ${MSC_DIR}/${MSC_FILE} ($(stat -c%s ${MSC_DIR}/${MSC_FILE}) bytes)" && \
+    node -e "require('${MSC_DIR}/${MSC_FILE}'); console.log('==> matrix-sdk-crypto LOAD OK (NAPI/ABI verified) on Node ' + process.version)" && \
     chmod +x /opt/openclaw/openclaw.mjs && \
     ln -sf /opt/openclaw/openclaw.mjs /usr/local/bin/openclaw && \
     echo "==> Linked openclaw CLI to /usr/local/bin/openclaw" && \

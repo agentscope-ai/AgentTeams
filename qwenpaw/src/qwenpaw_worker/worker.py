@@ -858,10 +858,22 @@ class Worker:
                     "system_prompt_files": ["AGENTS.md", "SOUL.md", "TEAMS.md"],
                 },
             )
-            await asyncio.to_thread(
-                self.api_client.disable_agent_if_present,
-                "QwenPaw_QA_Agent_0.2",
-            )
+            # Disabling the demo agent is cosmetic: toggle returns 409 while
+            # the agent is still loading, and a failed disable only leaves an
+            # idle demo agent — warn and continue instead of crashing.
+            try:
+                await asyncio.to_thread(
+                    self.api_client.disable_agent_if_present,
+                    "QwenPaw_QA_Agent_0.2",
+                )
+            except Exception as exc:
+                logger.warning(
+                    "disable demo agent failed, continuing startup component=worker "
+                    "step=disable_demo_agent worker=%s agent=QwenPaw_QA_Agent_0.2 "
+                    "error_type=%s",
+                    self.config.worker_name,
+                    type(exc).__name__,
+                )
             await asyncio.to_thread(self._configure_builtin_plugin_mcp_clients)
             await asyncio.to_thread(self._configure_builtin_plugin_mcp_policies)
             runtime_config = self._initial_runtime_config or self.updater.load()
@@ -946,7 +958,12 @@ class Worker:
                     f"qwenpaw app exited before API readiness: {self._process.returncode}",
                 )
             try:
-                await asyncio.to_thread(self.api_client.require_version, "2.0.1")
+                await asyncio.to_thread(self.api_client.require_version, "2.2.1")
+                # Version readiness precedes the agent's MCP migration. Wait
+                # before changing agent.json to avoid invalidating its snapshot.
+                await asyncio.to_thread(
+                    self.api_client.require_agent_running, DEFAULT_AGENT_ID,
+                )
                 return
             except Exception as exc:
                 last_error = exc

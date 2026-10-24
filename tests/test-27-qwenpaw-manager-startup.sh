@@ -26,6 +26,15 @@ if [ "${_MANAGER_RUNTIME}" != "qwenpaw" ] && [ "${_MANAGER_RUNTIME}" != "copaw" 
     exit 0
 fi
 
+# ---- Node.js compatibility for mcporter connection setup ----
+log_section "mcporter Node.js Compatibility"
+
+if docker exec "${_AGENT_CTR}" node -e 'Promise.withResolvers()' >/dev/null 2>&1; then
+    log_pass "Node.js supports mcporter connection setup"
+else
+    log_fail "Node.js supports mcporter connection setup (Promise.withResolvers)"
+fi
+
 # ---- QWENPAW_WORKING_DIR ----
 log_section "QWENPAW_WORKING_DIR"
 
@@ -145,12 +154,17 @@ fi
 docker exec "${_AGENT_CTR}" bash -c \
     "printf '%s\n' '---' 'name: ${_HOT_SKILL}' 'description: QwenPaw Manager updated hot loading regression skill.' '---' '' '# Hot Loading Regression Updated' > '/root/manager-workspace/skills/${_HOT_SKILL}/SKILL.md'"
 
+# QwenPaw >= 2.2.0 skills API: the list endpoint (GET /api/skills) returns
+# metadata only (SkillSpec, no content); skill content is served by the
+# per-skill detail endpoint (GET /api/skills/{name}, SkillDetail) and read
+# from disk at request time. Poll the detail endpoint: the Manager skill
+# sync copies the canonical file into the workspace within ~1s, and the
+# detail endpoint then serves the fresh content.
 _skill_updated=false
 _deadline=$(( $(date +%s) + 30 ))
 while [ "$(date +%s)" -lt "${_deadline}" ]; do
-    if docker exec "${_AGENT_CTR}" curl -fsS http://127.0.0.1:18799/api/skills 2>/dev/null \
-        | jq -e --arg name "${_HOT_SKILL}" \
-            '.[] | select(.name == $name and (.content | contains("# Hot Loading Regression Updated")))' \
+    if docker exec "${_AGENT_CTR}" curl -fsS "http://127.0.0.1:18799/api/skills/${_HOT_SKILL}" 2>/dev/null \
+        | jq -e '.content | contains("# Hot Loading Regression Updated")' \
             >/dev/null 2>&1; then
         _skill_updated=true
         break

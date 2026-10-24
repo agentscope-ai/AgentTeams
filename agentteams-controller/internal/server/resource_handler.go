@@ -3,15 +3,21 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	audit "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/audit"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -26,11 +32,17 @@ const k8sUpdateMaxRetries = 3
 // Team CRs reference independently managed Worker CRs. Worker CRUD always
 // operates on Worker CRs; Team CRUD only owns membership and coordination.
 type ResourceHandler struct {
-	client    client.Client
-	namespace string
-	backend   *backend.Registry
+	workerEnvBuilder *service.WorkerEnvBuilder
+	client           client.Client
+	namespace        string
+	backend          *backend.Registry
+	// oss backs object-storage-backed read surfaces (the shared MCP
+	// registry). Nil in embedded mode without MinIO: the affected endpoints
+	// then report the shared half as unavailable instead of failing.
+	oss oss.StorageClient
 
 	defaultWorkerRuntime string
+	defaultWorkerModel   string
 
 	// controllerName is stamped as agentteams.io/controller on every CR this
 	// handler creates, overwriting any value supplied by the client. This
@@ -38,6 +50,19 @@ type ResourceHandler struct {
 	// controller instance, regardless of what the caller attempts to set.
 	// Empty string means no enforcement (embedded mode).
 	controllerName string
+
+	// apiReader reads CRs straight from the API server rather than the
+	// informer cache. Write-path reference validation must use it: an
+	// `agt apply` can create a Worker and then the Team naming it in
+	// immediate succession, and the cache — label-scoped and populated by a
+	// watch round-trip — may not hold the new Worker yet, which would fail
+	// the Team with "referenced Worker ... does not exist". Nil falls back to
+	// the cached client (embedded mode / tests).
+	apiReader client.Reader
+
+	// audit records sensitive-surface events (#1220 §8); nil disables the
+	// durable layer (tests).
+	audit *audit.Client
 }
 
 // NewResourceHandler creates a handler. backend may be nil, in which case
@@ -45,13 +70,54 @@ type ResourceHandler struct {
 // controllerName, when non-empty, is force-stamped as agentteams.io/controller
 // on every CR this handler creates so HTTP-created resources cannot escape
 // the serving controller instance's cache scope.
-func NewResourceHandler(c client.Client, namespace string, b *backend.Registry, controllerName string) *ResourceHandler {
+func NewResourceHandler(c client.Client, namespace string, b *backend.Registry, controllerName string, a *audit.Client) *ResourceHandler {
 	return &ResourceHandler{
 		client:         c,
 		namespace:      namespace,
 		backend:        b,
 		controllerName: controllerName,
+		audit:          a,
 	}
+}
+
+// WithOSS attaches the object-storage client used by object-storage-backed
+// read surfaces (the shared MCP registry in ListMCPServers). Returns the
+// receiver for chaining; a nil argument leaves the shared half unavailable.
+func (h *ResourceHandler) WithOSS(store oss.StorageClient) *ResourceHandler {
+	h.oss = store
+	return h
+}
+
+// WithAPIReader attaches the direct (uncached) reader the write-path
+// reference validators use — see the apiReader field. Returns the receiver
+// for chaining; nil keeps the cached client.
+func (h *ResourceHandler) WithAPIReader(reader client.Reader) *ResourceHandler {
+	h.apiReader = reader
+	return h
+}
+
+// referenceReader is the read path for references validated while writing:
+// the API server (authoritative for a create the same request chain just
+// completed) rather than the lagging informer cache.
+func (h *ResourceHandler) referenceReader() client.Reader {
+	if h.apiReader != nil {
+		return h.apiReader
+	}
+	return h.client
+}
+
+// referenceOutOfScope reports whether a reference read through the DIRECT
+// reader must still count as missing. The informer caches are built with an
+// agentteams.io/controller=<controllerName> selector (incluster mode), so a
+// cached read cannot see another controller instance's object; the direct
+// reader bypasses that selector, so the scope is re-applied here. Only the
+// direct path needs the guard — a cached read already carries the selector —
+// and embedded mode (empty controllerName) has no scope at all.
+func (h *ResourceHandler) referenceOutOfScope(labels map[string]string) bool {
+	if h.apiReader == nil || h.controllerName == "" {
+		return false
+	}
+	return labels[v1beta1.LabelController] != h.controllerName
 }
 
 // stampControllerLabel force-writes the controller ownership label on meta.
@@ -80,12 +146,26 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.validateWorkerEnvRequest(w, r, req.Env) {
+		return
+	}
+
 	// containerManaged default is true (controller manages container).
 	containerManaged := true
 	if req.ContainerManaged != nil {
 		containerManaged = *req.ContainerManaged
 	}
 	runtime := backend.ResolveRuntime(req.Runtime, h.defaultWorkerRuntime)
+	if strings.EqualFold(runtime, backend.RuntimeCopaw) {
+		httputil.WriteError(w, http.StatusBadRequest,
+			"runtime \"copaw\" is deprecated and no longer offered for new workers; "+
+				"use \"qwenpaw\" for new workers (existing CoPaw workers keep working "+
+				"and can be migrated to QwenPaw — see issue #1310)")
+		return
+	}
+	if strings.TrimSpace(req.Model) == "" {
+		req.Model = h.defaultWorkerModel
+	}
 
 	worker := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{
@@ -93,22 +173,34 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 			Namespace: h.namespace,
 		},
 		Spec: v1beta1.WorkerSpec{
-			Model:            req.Model,
-			ModelProvider:    req.ModelProvider,
-			WorkerName:       req.WorkerName,
-			Runtime:          runtime,
-			Image:            req.Image,
-			Identity:         req.Identity,
-			Soul:             req.Soul,
-			Agents:           req.Agents,
-			Skills:           req.Skills,
-			McpServers:       req.McpServers,
-			Package:          req.Package,
-			Expose:           req.Expose,
-			ChannelPolicy:    req.ChannelPolicy,
-			Resources:        req.Resources,
-			ContainerManaged: &containerManaged,
-			State:            req.State,
+			Env:                          req.Env,
+			Model:                        req.Model,
+			SubagentModel:                req.SubagentModel,
+			LlmStreamFirstContentTimeout: req.LlmStreamFirstContentTimeout,
+			LlmStreamIdleTimeout:         req.LlmStreamIdleTimeout,
+			LlmMaxRetries:                req.LlmMaxRetries,
+			LlmBackoffBase:               req.LlmBackoffBase,
+			LlmBackoffCap:                req.LlmBackoffCap,
+			LlmMaxConcurrent:             req.LlmMaxConcurrent,
+			LlmMaxQpm:                    req.LlmMaxQpm,
+			LlmRateLimitPause:            req.LlmRateLimitPause,
+			LlmRateLimitJitter:           req.LlmRateLimitJitter,
+			LlmAcquireTimeout:            req.LlmAcquireTimeout,
+			ModelProvider:                req.ModelProvider,
+			WorkerName:                   req.WorkerName,
+			Runtime:                      runtime,
+			Image:                        req.Image,
+			Identity:                     req.Identity,
+			Soul:                         req.Soul,
+			Agents:                       req.Agents,
+			Skills:                       req.Skills,
+			McpServers:                   req.McpServers,
+			Package:                      req.Package,
+			Expose:                       req.Expose,
+			ChannelPolicy:                req.ChannelPolicy,
+			Resources:                    req.Resources,
+			ContainerManaged:             &containerManaged,
+			State:                        req.State,
 		},
 	}
 
@@ -141,21 +233,34 @@ func (h *ResourceHandler) GetWorker(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 		resp := workerToResponse(&worker)
+		if !canManageWorkerEnv(r) {
+			resp.Env = nil
+			resp.EnvEditable = false
+		}
 		if team, member, ok, terr := findTeamMember(r.Context(), h.client, h.namespace, name); terr != nil {
 			writeK8sError(w, "get worker", terr)
 			return
 		} else if ok {
 			applyTeamMember(&resp, team, member)
 		}
-		// Scoped readers (team leaders or L2 humans) may only fetch workers
-		// in the teams they control; standalone workers are hidden. W8: return
-		// 404 (not 403) so scoped callers cannot probe worker existence by
-		// name — consistent with the project enumeration fix (W4).
-		if caller := authpkg.CallerFromContext(r.Context()); caller != nil &&
+		// Scoped readers (team leaders or humans) may only fetch workers in
+		// the teams they control; L3 (worker-scoped) humans may additionally
+		// fetch exactly their assigned workers (standalone or team members).
+		// W8: return 404 (not 403) so scoped callers cannot probe worker
+		// existence by name — consistent with the project enumeration fix
+		// (W4).
+		caller := authpkg.CallerFromContext(r.Context())
+		if caller != nil &&
 			(caller.Role == authpkg.RoleTeamLeader || caller.Role == authpkg.RoleHuman) &&
-			!caller.TeamMatches(resp.Team) {
+			!caller.WorkerReadable(resp.Team, name) {
 			httputil.WriteError(w, http.StatusNotFound, "get worker: not found")
 			return
+		}
+		// L3 (worker-scoped) readers never receive plaintext credentials:
+		// scrub the MCP endpoint URLs before the response leaves the server.
+		// Other callers get the verbatim spec.
+		if caller != nil && caller.IsWorkerScoped() {
+			sanitizeWorkerResponseForL3(&resp)
 		}
 		httputil.WriteJSON(w, http.StatusOK, resp)
 		return
@@ -180,19 +285,30 @@ func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 	}
 	for i := range list.Items {
 		resp := workerToResponse(&list.Items[i])
+		if !canManageWorkerEnv(r) {
+			resp.Env = nil
+			resp.EnvEditable = false
+		}
 		if team, member, ok, terr := findTeamMember(r.Context(), h.client, h.namespace, list.Items[i].Name); terr != nil {
 			writeK8sError(w, "list workers: lookup team member", terr)
 			return
 		} else if ok {
 			applyTeamMember(&resp, team, member)
 		}
-		// Scoped readers (team leaders or L2 humans) only see the workers in
-		// the teams they control; standalone workers are hidden.
-		if caller != nil && (caller.Role == authpkg.RoleTeamLeader || caller.Role == authpkg.RoleHuman) && !caller.TeamMatches(resp.Team) {
+		// Scoped readers (team leaders or humans) only see the workers in
+		// the teams they control; L3 (worker-scoped) humans only see their
+		// explicitly assigned workers (standalone or team members).
+		if caller != nil && (caller.Role == authpkg.RoleTeamLeader || caller.Role == authpkg.RoleHuman) && !caller.WorkerReadable(resp.Team, list.Items[i].Name) {
 			continue
 		}
 		if teamFilter != "" && resp.Team != teamFilter {
 			continue
+		}
+		// L3 (worker-scoped) readers never receive plaintext credentials:
+		// scrub the MCP endpoint URLs before the response leaves the server.
+		// Other callers get the verbatim spec.
+		if caller != nil && caller.IsWorkerScoped() {
+			sanitizeWorkerResponseForL3(&resp)
 		}
 		workers = append(workers, resp)
 	}
@@ -213,9 +329,14 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.validateWorkerEnvRequest(w, r, req.Env) {
+		return
+	}
+
 	ctx := r.Context()
-	if caller := authpkg.CallerFromContext(ctx); caller != nil && caller.Role == authpkg.RoleHuman {
-		if status, msg := h.checkHumanWorkerUpdate(ctx, caller, name, &req); status != 0 {
+	if caller := authpkg.CallerFromContext(ctx); caller != nil &&
+		(caller.Role == authpkg.RoleHuman || caller.Role == authpkg.RoleTeamLeader) {
+		if status, msg := h.checkScopedWorkerUpdate(ctx, caller, name, &req); status != 0 {
 			httputil.WriteError(w, status, msg)
 			return
 		}
@@ -227,8 +348,46 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if req.Env != nil {
+			worker.Spec.Env = req.Env
+		}
 		if req.Model != "" {
 			worker.Spec.Model = req.Model
+		}
+		// Pointer semantics: nil = omitted (keep), "" = explicit clear
+		// (return to team default / runtime default).
+		if req.SubagentModel != nil {
+			worker.Spec.SubagentModel = *req.SubagentModel
+		}
+		if req.LlmStreamFirstContentTimeout != nil {
+			worker.Spec.LlmStreamFirstContentTimeout = *req.LlmStreamFirstContentTimeout
+		}
+		if req.LlmStreamIdleTimeout != nil {
+			worker.Spec.LlmStreamIdleTimeout = *req.LlmStreamIdleTimeout
+		}
+		if req.LlmMaxRetries != nil {
+			worker.Spec.LlmMaxRetries = *req.LlmMaxRetries
+		}
+		if req.LlmBackoffBase != nil {
+			worker.Spec.LlmBackoffBase = *req.LlmBackoffBase
+		}
+		if req.LlmBackoffCap != nil {
+			worker.Spec.LlmBackoffCap = *req.LlmBackoffCap
+		}
+		if req.LlmMaxConcurrent != nil {
+			worker.Spec.LlmMaxConcurrent = *req.LlmMaxConcurrent
+		}
+		if req.LlmMaxQpm != nil {
+			worker.Spec.LlmMaxQpm = *req.LlmMaxQpm
+		}
+		if req.LlmRateLimitPause != nil {
+			worker.Spec.LlmRateLimitPause = *req.LlmRateLimitPause
+		}
+		if req.LlmRateLimitJitter != nil {
+			worker.Spec.LlmRateLimitJitter = *req.LlmRateLimitJitter
+		}
+		if req.LlmAcquireTimeout != nil {
+			worker.Spec.LlmAcquireTimeout = *req.LlmAcquireTimeout
 		}
 		if req.ModelProvider != "" {
 			worker.Spec.ModelProvider = req.ModelProvider
@@ -237,6 +396,25 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 			worker.Spec.WorkerName = req.WorkerName
 		}
 		if req.Runtime != "" {
+			// Switching *to* CoPaw is deprecated; existing CoPaw workers
+			// keep working and can be migrated to QwenPaw. A no-op
+			// re-apply that repeats the current value stays allowed.
+			if strings.EqualFold(req.Runtime, backend.RuntimeCopaw) &&
+				!strings.EqualFold(worker.Spec.Runtime, backend.RuntimeCopaw) {
+				httputil.WriteError(w, http.StatusBadRequest,
+					"switching runtime to \"copaw\" is no longer supported; "+
+						"migrate the worker to \"qwenpaw\" instead (see issue #1310)")
+				return
+			}
+			if !strings.EqualFold(worker.Spec.Runtime, req.Runtime) && req.Image == "" {
+				// The runtime is changing without an explicit new image:
+				// drop the previous runtime's image pin so the recreated
+				// container resolves the new runtime's image instead of
+				// silently running on the old runtime's image — the CoPaw →
+				// QwenPaw upgrade path (see issue #1310). An image provided
+				// in this request still wins (applied below).
+				worker.Spec.Image = ""
+			}
 			worker.Spec.Runtime = req.Runtime
 		}
 		if req.Image != "" {
@@ -288,7 +466,12 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		httputil.WriteJSON(w, http.StatusOK, workerToResponse(&worker))
+		resp := workerToResponse(&worker)
+		if !canManageWorkerEnv(r) {
+			resp.Env = nil
+			resp.EnvEditable = false
+		}
+		httputil.WriteJSON(w, http.StatusOK, resp)
 		return
 	}
 }
@@ -347,14 +530,24 @@ func (h *ResourceHandler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 			Namespace: h.namespace,
 		},
 		Spec: v1beta1.TeamSpec{
-			Description:    req.Description,
-			TeamName:       req.TeamName,
-			Admin:          req.Admin,
-			HumanMembers:   req.HumanMembers,
-			WorkerMembers:  req.WorkerMembers,
-			HeartbeatEvery: req.HeartbeatEvery,
-			PeerMentions:   req.PeerMentions,
-			ChannelPolicy:  req.ChannelPolicy,
+			Description:                  req.Description,
+			TeamName:                     req.TeamName,
+			Admin:                        req.Admin,
+			HumanMembers:                 req.HumanMembers,
+			WorkerMembers:                req.WorkerMembers,
+			HeartbeatEvery:               req.HeartbeatEvery,
+			LlmStreamFirstContentTimeout: req.LlmStreamFirstContentTimeout,
+			LlmStreamIdleTimeout:         req.LlmStreamIdleTimeout,
+			LlmMaxRetries:                req.LlmMaxRetries,
+			LlmBackoffBase:               req.LlmBackoffBase,
+			LlmBackoffCap:                req.LlmBackoffCap,
+			LlmMaxConcurrent:             req.LlmMaxConcurrent,
+			LlmMaxQpm:                    req.LlmMaxQpm,
+			LlmRateLimitPause:            req.LlmRateLimitPause,
+			LlmRateLimitJitter:           req.LlmRateLimitJitter,
+			LlmAcquireTimeout:            req.LlmAcquireTimeout,
+			PeerMentions:                 req.PeerMentions,
+			ChannelPolicy:                req.ChannelPolicy,
 		},
 	}
 
@@ -469,6 +662,36 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 		if req.HeartbeatEvery != nil {
 			team.Spec.HeartbeatEvery = *req.HeartbeatEvery
 		}
+		if req.LlmStreamFirstContentTimeout != nil {
+			team.Spec.LlmStreamFirstContentTimeout = *req.LlmStreamFirstContentTimeout
+		}
+		if req.LlmStreamIdleTimeout != nil {
+			team.Spec.LlmStreamIdleTimeout = *req.LlmStreamIdleTimeout
+		}
+		if req.LlmMaxRetries != nil {
+			team.Spec.LlmMaxRetries = *req.LlmMaxRetries
+		}
+		if req.LlmBackoffBase != nil {
+			team.Spec.LlmBackoffBase = *req.LlmBackoffBase
+		}
+		if req.LlmBackoffCap != nil {
+			team.Spec.LlmBackoffCap = *req.LlmBackoffCap
+		}
+		if req.LlmMaxConcurrent != nil {
+			team.Spec.LlmMaxConcurrent = *req.LlmMaxConcurrent
+		}
+		if req.LlmMaxQpm != nil {
+			team.Spec.LlmMaxQpm = *req.LlmMaxQpm
+		}
+		if req.LlmRateLimitPause != nil {
+			team.Spec.LlmRateLimitPause = *req.LlmRateLimitPause
+		}
+		if req.LlmRateLimitJitter != nil {
+			team.Spec.LlmRateLimitJitter = *req.LlmRateLimitJitter
+		}
+		if req.LlmAcquireTimeout != nil {
+			team.Spec.LlmAcquireTimeout = *req.LlmAcquireTimeout
+		}
 
 		if err := h.client.Update(ctx, &team); err != nil {
 			if apierrors.IsConflict(err) && attempt+1 < k8sUpdateMaxRetries {
@@ -537,6 +760,11 @@ func (h *ResourceHandler) CreateHuman(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Audit wiring point (#1220 §8 event table, line 6): the initial
+	// scope granted at creation is a sensitive-surface change and is
+	// recorded on both audit layers.
+	h.auditHumanCreated(r.Context(), human)
+
 	httputil.WriteJSON(w, http.StatusCreated, humanToResponse(human))
 }
 
@@ -554,6 +782,318 @@ func (h *ResourceHandler) GetHuman(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, humanToResponse(&human))
+}
+
+func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "human name is required")
+		return
+	}
+
+	var req UpdateHumanRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+
+	ctx := r.Context()
+	caller := authpkg.CallerFromContext(ctx)
+	for attempt := 0; attempt < k8sUpdateMaxRetries; attempt++ {
+		var human v1beta1.Human
+		if err := h.client.Get(ctx, client.ObjectKey{Name: name, Namespace: h.namespace}, &human); err != nil {
+			writeK8sError(w, "get human for update", err)
+			return
+		}
+		capsBefore := human.Spec.Capabilities
+		plBefore := human.Spec.PermissionLevel
+		teamsBefore := human.Spec.AccessibleTeams
+		workersBefore := human.Spec.AccessibleWorkers
+
+		if req.PermissionLevel != nil && (*req.PermissionLevel < 1 || *req.PermissionLevel > 3) {
+			httputil.WriteError(w, http.StatusBadRequest, "permissionLevel must be 1 (admin), 2 (team), or 3 (worker)")
+			return
+		}
+		if err := h.validateHumanReferences(ctx, req.AccessibleTeams, req.AccessibleWorkers); err != nil {
+			if errors.Is(err, errDanglingReference) {
+				httputil.WriteError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			// Backend lookup failure (K8s API timeout, permission, or
+			// service error): a server problem, not a client error.
+			writeK8sError(w, "validate human references", err)
+			return
+		}
+		if req.Capabilities != nil {
+			if err := validateCapabilities(req.Capabilities); err != nil {
+				httputil.WriteError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+
+		if req.DisplayName != nil {
+			human.Spec.DisplayName = *req.DisplayName
+		}
+		if req.Email != nil {
+			human.Spec.Email = *req.Email
+		}
+		if req.PermissionLevel != nil {
+			human.Spec.PermissionLevel = *req.PermissionLevel
+		}
+		if req.AccessibleTeams != nil {
+			human.Spec.AccessibleTeams = *req.AccessibleTeams
+		}
+		if req.AccessibleWorkers != nil {
+			human.Spec.AccessibleWorkers = *req.AccessibleWorkers
+		}
+		if req.Capabilities != nil {
+			// Store the canonical form (deduped + sorted); validation above
+			// already rejected values outside the closed set.
+			human.Spec.Capabilities = authpkg.NormalizeCapabilities(*req.Capabilities)
+		}
+		if req.Note != nil {
+			human.Spec.Note = *req.Note
+		}
+
+		if err := h.client.Update(ctx, &human); err != nil {
+			if apierrors.IsConflict(err) && attempt+1 < k8sUpdateMaxRetries {
+				time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
+				continue
+			}
+			writeK8sError(w, "update human", err)
+			return
+		}
+
+		// Audit wiring point (#1220 §8 event table, line 1): a capability
+		// grant/revoke is a sensitive-surface change and is recorded on
+		// both audit layers.
+		if req.Capabilities != nil {
+			h.auditCapabilityChange(ctx, name, caller, capsBefore, human.Spec.Capabilities)
+		}
+
+		// Audit wiring point (#1220 §8 event table, line 6): human scope
+		// changes (permission level / accessible teams / accessible
+		// workers) are sensitive-surface changes and are recorded on both
+		// audit layers.
+		h.auditHumanScopeChange(ctx, name, caller, plBefore, teamsBefore, workersBefore, human.Spec)
+
+		httputil.WriteJSON(w, http.StatusOK, humanToResponse(&human))
+		return
+	}
+}
+
+// auditCapabilityChange emits one event per changed capability value
+// (#1220 §8 event table, line 1: capability grant/revoke). Audit failures
+// never break the update: the audit client logs durable-layer errors
+// internally.
+func (h *ResourceHandler) auditCapabilityChange(ctx context.Context, name string, caller *authpkg.CallerIdentity, before, after []string) {
+	if h.audit == nil || caller == nil {
+		return
+	}
+	beforeN := authpkg.NormalizeCapabilities(before)
+	afterN := authpkg.NormalizeCapabilities(after)
+	for _, cap := range diffStringSlices(beforeN, afterN) {
+		h.audit.Record(ctx, audit.Event{
+			Who: caller.Username, Role: caller.Role, Target: name,
+			Action: "capability_grant", Capability: cap,
+			Before: beforeN, After: afterN,
+		})
+	}
+	for _, cap := range diffStringSlices(afterN, beforeN) {
+		h.audit.Record(ctx, audit.Event{
+			Who: caller.Username, Role: caller.Role, Target: name,
+			Action: "capability_revoke", Capability: cap,
+			Before: beforeN, After: afterN,
+		})
+	}
+}
+
+// auditHumanScopeChange emits one event per changed scope field
+// (#1220 §8 event table, line 6: human scope change). Reordering a list
+// without membership changes is not a change and emits no event. Audit
+// failures never break the update: the audit client logs durable-layer
+// errors internally.
+func (h *ResourceHandler) auditHumanScopeChange(ctx context.Context, name string, caller *authpkg.CallerIdentity, plBefore int, teamsBefore, workersBefore []string, after v1beta1.HumanSpec) {
+	if h.audit == nil || caller == nil {
+		return
+	}
+	if after.PermissionLevel != plBefore {
+		h.audit.Record(ctx, audit.Event{
+			Who: caller.Username, Role: caller.Role, Target: name,
+			Action: "permission_level_change",
+			Before: []string{strconv.Itoa(plBefore)},
+			After:  []string{strconv.Itoa(after.PermissionLevel)},
+			Detail: fmt.Sprintf("permission_level %d -> %d", plBefore, after.PermissionLevel),
+		})
+	}
+	auditScopeListChange(h.audit, ctx, name, caller, "accessible_teams_change", teamsBefore, after.AccessibleTeams)
+	auditScopeListChange(h.audit, ctx, name, caller, "accessible_workers_change", workersBefore, after.AccessibleWorkers)
+}
+
+// auditScopeListChange records one scope-list field (accessible teams or
+// workers) when its set membership changed.
+func auditScopeListChange(ac *audit.Client, ctx context.Context, name string, caller *authpkg.CallerIdentity, action string, before, after []string) {
+	if ac == nil || caller == nil {
+		return
+	}
+	added := diffStringSlices(before, after)
+	removed := diffStringSlices(after, before)
+	if len(added) == 0 && len(removed) == 0 {
+		return
+	}
+	ac.Record(ctx, audit.Event{
+		Who: caller.Username, Role: caller.Role, Target: name,
+		Action: action,
+		Before: before, After: after,
+		Detail: "added=[" + strings.Join(added, ", ") + "] removed=[" + strings.Join(removed, ", ") + "]",
+	})
+}
+
+// humanScopeSummary renders the non-empty scope fields of a human spec as
+// a controlled summary (never secret values) for create/delete audit
+// events.
+func humanScopeSummary(spec v1beta1.HumanSpec) []string {
+	var out []string
+	if spec.PermissionLevel >= 1 {
+		out = append(out, "permission_level="+strconv.Itoa(spec.PermissionLevel))
+	}
+	if len(spec.AccessibleTeams) > 0 {
+		out = append(out, "accessible_teams=["+strings.Join(spec.AccessibleTeams, ", ")+"]")
+	}
+	if len(spec.AccessibleWorkers) > 0 {
+		out = append(out, "accessible_workers=["+strings.Join(spec.AccessibleWorkers, ", ")+"]")
+	}
+	return out
+}
+
+// auditHumanCreated records a human creation with its initial scope
+// (#1220 §8 event table, line 6). The After list carries the granted
+// scope summary.
+func (h *ResourceHandler) auditHumanCreated(ctx context.Context, human *v1beta1.Human) {
+	if h.audit == nil {
+		return
+	}
+	caller := authpkg.CallerFromContext(ctx)
+	if caller == nil {
+		return
+	}
+	h.audit.Record(ctx, audit.Event{
+		Who: caller.Username, Role: caller.Role, Target: human.Name,
+		Action: "human_created", After: humanScopeSummary(human.Spec),
+	})
+}
+
+// auditHumanDeleted records a human deletion with the scope that was
+// revoked (#1220 §8 event table, line 6). The Before list carries the
+// removed scope summary.
+func (h *ResourceHandler) auditHumanDeleted(ctx context.Context, human *v1beta1.Human) {
+	if h.audit == nil {
+		return
+	}
+	caller := authpkg.CallerFromContext(ctx)
+	if caller == nil {
+		return
+	}
+	h.audit.Record(ctx, audit.Event{
+		Who: caller.Username, Role: caller.Role, Target: human.Name,
+		Action: "human_deleted", Before: humanScopeSummary(human.Spec),
+	})
+}
+
+// diffStringSlices returns the elements present in b but not in a.
+func diffStringSlices(a, b []string) []string {
+	set := make(map[string]struct{}, len(a))
+	for _, s := range a {
+		set[s] = struct{}{}
+	}
+	var out []string
+	for _, s := range b {
+		if _, ok := set[s]; !ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// validateCapabilities rejects capability values outside the closed set
+// (#1220 §3). The error message lists the valid values so the client can
+// self-correct; the set itself is pinned in internal/auth
+// (TestValidCapabilitiesMatchesDocumentedValueSet).
+func validateCapabilities(caps *[]string) error {
+	var invalid []string
+	for _, c := range *caps {
+		if !authpkg.IsValidCapability(authpkg.Capability(c)) {
+			invalid = append(invalid, c)
+		}
+	}
+	if len(invalid) > 0 {
+		return fmt.Errorf("capabilities contains unknown value(s) %s; valid values: %s",
+			strings.Join(invalid, ", "), strings.Join(authpkg.ValidCapabilityList(), ", "))
+	}
+	return nil
+}
+
+// errDanglingReference marks validation errors where a referenced Team or
+// Worker does not exist (a client error, mapped to 400 by the caller).
+// Any other error from validateHumanReferences is a backend lookup
+// failure (mapped to a server error).
+var errDanglingReference = errors.New("dangling reference")
+
+// validateHumanReferences rejects permission grants that point at missing
+// Teams or Workers: a dangling reference silently widens nothing but leaves
+// the human unable to reach a resource they believe they can. Missing
+// references are returned wrapped in errDanglingReference; backend lookup
+// failures (List/Get errors other than NotFound) are returned unwrapped so
+// the caller can surface them as a server error instead of a 400.
+func (h *ResourceHandler) validateHumanReferences(ctx context.Context, teams *[]string, workers *[]string) error {
+	if teams != nil {
+		var teamList v1beta1.TeamList
+		if err := h.referenceReader().List(ctx, &teamList, client.InNamespace(h.namespace)); err != nil {
+			return fmt.Errorf("list teams: %w", err)
+		}
+		existing := make(map[string]struct{}, len(teamList.Items))
+		for i := range teamList.Items {
+			if h.referenceOutOfScope(teamList.Items[i].Labels) {
+				continue
+			}
+			existing[teamList.Items[i].Name] = struct{}{}
+		}
+		var missing []string
+		for _, t := range *teams {
+			if t == "" {
+				continue
+			}
+			if _, ok := existing[t]; !ok {
+				missing = append(missing, t)
+			}
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf("%w: accessibleTeams references missing teams: %s", errDanglingReference, strings.Join(missing, ", "))
+		}
+	}
+	if workers != nil {
+		var missing []string
+		for _, wn := range *workers {
+			if wn == "" {
+				continue
+			}
+			var worker v1beta1.Worker
+			if err := h.referenceReader().Get(ctx, client.ObjectKey{Name: wn, Namespace: h.namespace}, &worker); err != nil {
+				if apierrors.IsNotFound(err) {
+					missing = append(missing, wn)
+					continue
+				}
+				return fmt.Errorf("get worker %s: %w", wn, err)
+			}
+			if h.referenceOutOfScope(worker.Labels) {
+				missing = append(missing, wn)
+			}
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf("%w: accessibleWorkers references missing workers: %s", errDanglingReference, strings.Join(missing, ", "))
+		}
+	}
+	return nil
 }
 
 func (h *ResourceHandler) ListHumans(w http.ResponseWriter, r *http.Request) {
@@ -581,10 +1121,21 @@ func (h *ResourceHandler) DeleteHuman(w http.ResponseWriter, r *http.Request) {
 	human := &v1beta1.Human{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: h.namespace},
 	}
+	// Read before delete so the revoked scope can be recorded (#1220 §8
+	// event table, line 6). A missing object is still a plain 404 with
+	// no audit event.
+	if err := h.client.Get(r.Context(), client.ObjectKeyFromObject(human), human); err != nil {
+		writeK8sError(w, "get human for delete", err)
+		return
+	}
 	if err := h.client.Delete(r.Context(), human); err != nil {
 		writeK8sError(w, "delete human", err)
 		return
 	}
+
+	// Audit wiring point (#1220 §8 event table, line 6): deleting a human
+	// revokes all of its access and is recorded on both audit layers.
+	h.auditHumanDeleted(r.Context(), human)
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -694,8 +1245,8 @@ func (h *ResourceHandler) UpdateManager(w http.ResponseWriter, r *http.Request) 
 		if req.Model != "" {
 			mgr.Spec.Model = req.Model
 		}
-		if req.ModelProvider != "" {
-			mgr.Spec.ModelProvider = req.ModelProvider
+		if req.ModelProvider != nil {
+			mgr.Spec.ModelProvider = *req.ModelProvider
 		}
 		if req.Runtime != "" {
 			mgr.Spec.Runtime = req.Runtime
@@ -764,27 +1315,46 @@ func (h *ResourceHandler) DeleteManager(w http.ResponseWriter, r *http.Request) 
 
 func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 	resp := WorkerResponse{
-		Name:             w.Name,
-		WorkerName:       w.Spec.WorkerName,
-		Phase:            w.Status.Phase,
-		State:            w.Spec.DesiredState(),
-		Model:            w.Spec.Model,
-		Runtime:          w.Spec.Runtime,
-		Image:            w.Spec.Image,
-		Identity:         w.Spec.Identity,
-		Soul:             w.Spec.Soul,
-		Agents:           w.Spec.Agents,
-		Skills:           w.Spec.Skills,
-		McpServers:       w.Spec.McpServers,
-		Package:          w.Spec.Package,
-		BackendRuntime:   w.Spec.GetBackendRuntime(),
-		ContainerManaged: w.Spec.DesiredContainerMan(),
-		ChannelPolicy:    w.Spec.ChannelPolicy,
-		ContainerState:   w.Status.ContainerState,
-		MatrixUserID:     w.Status.MatrixUserID,
-		RoomID:           w.Status.RoomID,
-		Message:          w.Status.Message,
+		EnvEditable:                  true,
+		Env:                          w.Spec.Env,
+		Name:                         w.Name,
+		WorkerName:                   w.Spec.WorkerName,
+		Phase:                        w.Status.Phase,
+		State:                        w.Spec.DesiredState(),
+		Model:                        w.Spec.Model,
+		SubagentModel:                w.Spec.SubagentModel,
+		LlmStreamFirstContentTimeout: w.Spec.LlmStreamFirstContentTimeout,
+		LlmStreamIdleTimeout:         w.Spec.LlmStreamIdleTimeout,
+		LlmMaxRetries:                w.Spec.LlmMaxRetries,
+		LlmBackoffBase:               w.Spec.LlmBackoffBase,
+		LlmBackoffCap:                w.Spec.LlmBackoffCap,
+		LlmMaxConcurrent:             w.Spec.LlmMaxConcurrent,
+		LlmMaxQpm:                    w.Spec.LlmMaxQpm,
+		LlmRateLimitPause:            w.Spec.LlmRateLimitPause,
+		LlmRateLimitJitter:           w.Spec.LlmRateLimitJitter,
+		LlmAcquireTimeout:            w.Spec.LlmAcquireTimeout,
+		Runtime:                      w.Spec.Runtime,
+		Image:                        w.Spec.Image,
+		Identity:                     w.Spec.Identity,
+		Soul:                         w.Spec.Soul,
+		Agents:                       w.Spec.Agents,
+		Skills:                       w.Spec.Skills,
+		McpServers:                   w.Spec.McpServers,
+		Package:                      w.Spec.Package,
+		BackendRuntime:               w.Spec.GetBackendRuntime(),
+		ContainerManaged:             w.Spec.DesiredContainerMan(),
+		ChannelPolicy:                w.Spec.ChannelPolicy,
+		ContainerState:               w.Status.ContainerState,
+		MatrixUserID:                 w.Status.MatrixUserID,
+		RoomID:                       w.Status.RoomID,
+		Message:                      w.Status.Message,
+		LastActiveAt:                 w.Status.LastActiveAt,
+		AgentStatus:                  w.Status.AgentStatus,
+		RunningTaskCount:             w.Status.RunningTaskCount,
+		LastRunAt:                    w.Status.LastRunAt,
+		LastFinishAt:                 w.Status.LastFinishAt,
 	}
+	resp.RuntimeDeprecated = strings.EqualFold(w.Spec.Runtime, backend.RuntimeCopaw)
 	if resp.Phase == "" {
 		resp.Phase = "Pending"
 	}
@@ -794,22 +1364,84 @@ func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 	return resp
 }
 
+// sanitizeWorkerResponseForL3 scrubs credential material from a worker
+// response before it is served to an L3 (worker-scoped) reader. The MCP
+// server URLs are the credential-bearing field: an endpoint URL may embed
+// the API key in the query (?api_key=..., ?apiKey=..., ?key=...) or in the
+// userinfo component (https://user:pass@host). Each URL is reduced to
+// scheme://host[:port]/path — the query and fragment are unclassified
+// input and dropped wholesale, not filtered key by key. No other
+// WorkerResponse field carries
+// secret material on the L3 read surfaces (audited: channel configs are
+// sanitized separately on the channel routes; the approval endpoint returns
+// a single level; checkpoints/workspace-files hide as 404 for L3; the
+// runtime-status endpoint is authorizer-denied for humans).
+func sanitizeWorkerResponseForL3(resp *WorkerResponse) {
+	for i := range resp.McpServers {
+		resp.McpServers[i].URL = sanitizeMCPURLForL3(resp.McpServers[i].URL)
+	}
+}
+
+// sanitizeMCPURLForL3 reduces an MCP endpoint URL to the metadata an L3
+// (worker-scoped) reader may safely see: scheme, host, port and path.
+//
+// MCP endpoints are arbitrary external URLs, so their query strings are
+// unclassified input. A denylist of known credential field names (such as
+// the L3 channel-config denylist) cannot be a complete credential contract
+// for that namespace — apiKey, key, token, or any vendor-specific name may
+// carry a secret. The query and fragment are therefore dropped wholesale,
+// along with the userinfo component (always secret in this context); no
+// query value, classified or not, is exposed to L3. scheme://host[:port]/
+// path still identifies the endpoint without exposing values.
+//
+// A URL without userinfo, query, or fragment is returned byte-identical.
+// It fails closed: a URL that cannot be parsed, is not absolute, or has no
+// host is a URL we cannot prove clean, so it is omitted entirely.
+func sanitizeMCPURLForL3(raw string) string {
+	if raw == "" {
+		return raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || !u.IsAbs() || u.Host == "" {
+		return ""
+	}
+	if u.User == nil && u.RawQuery == "" && u.Fragment == "" {
+		return raw
+	}
+	u.User = nil
+	u.RawQuery = ""
+	u.ForceQuery = false
+	u.Fragment = ""
+	return u.String()
+}
+
 func teamToResponse(t *v1beta1.Team) TeamResponse {
 	resp := TeamResponse{
-		Name:           t.Name,
-		TeamName:       t.Spec.EffectiveTeamName(t.Name),
-		Phase:          t.Status.Phase,
-		Description:    t.Spec.Description,
-		Admin:          t.Spec.Admin,
-		HumanMembers:   t.Spec.HumanMembers,
-		WorkerMembers:  t.Spec.WorkerMembers,
-		HeartbeatEvery: t.Spec.HeartbeatEvery,
-		TeamRoomID:     t.Status.TeamRoomID,
-		LeaderDMRoomID: t.Status.LeaderDMRoomID,
-		LeaderReady:    t.Status.LeaderReady,
-		ReadyWorkers:   t.Status.ReadyWorkers,
-		TotalWorkers:   t.Status.TotalWorkers,
-		Message:        t.Status.Message,
+		Name:                         t.Name,
+		TeamName:                     t.Spec.EffectiveTeamName(t.Name),
+		Phase:                        t.Status.Phase,
+		Description:                  t.Spec.Description,
+		Admin:                        t.Spec.Admin,
+		HumanMembers:                 t.Spec.HumanMembers,
+		WorkerMembers:                t.Spec.WorkerMembers,
+		HeartbeatEvery:               t.Spec.HeartbeatEvery,
+		TeamRoomID:                   t.Status.TeamRoomID,
+		LeaderDMRoomID:               t.Status.LeaderDMRoomID,
+		LeaderReady:                  t.Status.LeaderReady,
+		ReadyWorkers:                 t.Status.ReadyWorkers,
+		TotalWorkers:                 t.Status.TotalWorkers,
+		Message:                      t.Status.Message,
+		SubagentModel:                t.Spec.SubagentModel,
+		LlmStreamFirstContentTimeout: t.Spec.LlmStreamFirstContentTimeout,
+		LlmStreamIdleTimeout:         t.Spec.LlmStreamIdleTimeout,
+		LlmMaxRetries:                t.Spec.LlmMaxRetries,
+		LlmBackoffBase:               t.Spec.LlmBackoffBase,
+		LlmBackoffCap:                t.Spec.LlmBackoffCap,
+		LlmMaxConcurrent:             t.Spec.LlmMaxConcurrent,
+		LlmMaxQpm:                    t.Spec.LlmMaxQpm,
+		LlmRateLimitPause:            t.Spec.LlmRateLimitPause,
+		LlmRateLimitJitter:           t.Spec.LlmRateLimitJitter,
+		LlmAcquireTimeout:            t.Spec.LlmAcquireTimeout,
 	}
 	if resp.Phase == "" {
 		resp.Phase = "Pending"
@@ -849,6 +1481,7 @@ func managerToResponse(m *v1beta1.Manager) ManagerResponse {
 		Message:      m.Status.Message,
 		WelcomeSent:  m.Status.WelcomeSent,
 	}
+	resp.RuntimeDeprecated = strings.EqualFold(m.Spec.Runtime, backend.RuntimeCopaw)
 	if resp.Phase == "" {
 		resp.Phase = "Pending"
 	}
@@ -864,6 +1497,7 @@ func humanToResponse(h *v1beta1.Human) HumanResponse {
 		PermissionLevel:   h.Spec.PermissionLevel,
 		AccessibleTeams:   h.Spec.AccessibleTeams,
 		AccessibleWorkers: h.Spec.AccessibleWorkers,
+		Capabilities:      h.Spec.Capabilities,
 		Note:              h.Spec.Note,
 		MatrixUserID:      h.Status.MatrixUserID,
 		InitialPassword:   h.Status.InitialPassword,
@@ -886,20 +1520,27 @@ func (h *ResourceHandler) findTeamForMember(ctx context.Context, name string) (s
 	return team.Name, true, nil
 }
 
-// checkHumanWorkerUpdate enforces the L2 human boundary on worker updates.
+// checkScopedWorkerUpdate enforces the scoped write boundary on worker
+// updates for L2 humans and team leaders (#1220 §5/§9, B2). Both roles may
+// touch only the non-sensitive surfaces: skills (public-catalog assignment)
+// and mcpServers — the gateway credential is attached at generation time
+// only to entries on the trusted AI gateway host (GenerateMcporterConfig,
+// #1220 §7), so an external URL no longer receives the key and writing
+// mcpServers is no longer a credential-exfiltration path. remoteSkills
+// (arbitrary external registries whose source URIs may embed tokens) is
+// gated on the external_sources capability; team leaders are
+// service-account scoped and never carry it. Everything else (model, image,
+// identity, resources, ...) is the team owner's / admin's domain.
 // The worker must be a member of one of the caller's accessibleTeams —
-// standalone workers are hidden from L2 readers (ListWorkers), so they are
-// hidden here as well (404 keeps the endpoint probe-resistant). The request
-// may only touch the public-catalog skill assignment (skills). remoteSkills
-// (arbitrary external registries with credential-bearing source URIs) and
-// mcpServers (the gateway consumer key is injected into every entry, so an
-// L2-controlled URL is a credential-exfiltration path) require an elevated
-// capability pending the L2 permission design; everything else (model,
-// image, identity, resources, ...) is the team owner's domain.
+// standalone workers are hidden from scoped readers (ListWorkers), so they
+// are hidden here as well (404 keeps the endpoint probe-resistant, W8).
+// The middleware still carries the ActionUpdate+requireSameTeam scope; this
+// handler is the field-level boundary (same pattern as the #1216 approval
+// proxy — the middleware cannot parse the request body).
 // TestL2WorkerUpdateFieldPolicyCoversAllRequestFields pins the policy so no
-// field of UpdateWorkerRequest becomes L2-writable by omission.
+// field of UpdateWorkerRequest becomes scoped-writable by omission.
 // Returns (0, "") when the update is allowed.
-func (h *ResourceHandler) checkHumanWorkerUpdate(ctx context.Context, caller *authpkg.CallerIdentity, name string, req *UpdateWorkerRequest) (int, string) {
+func (h *ResourceHandler) checkScopedWorkerUpdate(ctx context.Context, caller *authpkg.CallerIdentity, name string, req *UpdateWorkerRequest) (int, string) {
 	team, _, ok, err := findTeamMember(ctx, h.client, h.namespace, name)
 	if err != nil {
 		return http.StatusInternalServerError, "lookup worker team: " + err.Error()
@@ -921,6 +1562,45 @@ func (h *ResourceHandler) checkHumanWorkerUpdate(ctx context.Context, caller *au
 	if req.Model != "" {
 		forbidden = append(forbidden, "model")
 	}
+	// subagentModel sits with model: the model slot is a decision-layer
+	// field owned by the team owner / admin (L1), not by scoped L2 writers.
+	// The pointer check also covers an explicit clear ("" present).
+	if req.SubagentModel != nil {
+		forbidden = append(forbidden, "subagentModel")
+	}
+	// llmStream* sit with model: LLM behavior tuning is a decision-layer
+	// field of the team owner / admin (L1). Same pointer check covers the
+	// explicit-clear case.
+	if req.LlmStreamFirstContentTimeout != nil {
+		forbidden = append(forbidden, "llmStreamFirstContentTimeout")
+	}
+	if req.LlmStreamIdleTimeout != nil {
+		forbidden = append(forbidden, "llmStreamIdleTimeout")
+	}
+	if req.LlmMaxRetries != nil {
+		forbidden = append(forbidden, "llmMaxRetries")
+	}
+	if req.LlmBackoffBase != nil {
+		forbidden = append(forbidden, "llmBackoffBase")
+	}
+	if req.LlmBackoffCap != nil {
+		forbidden = append(forbidden, "llmBackoffCap")
+	}
+	if req.LlmMaxConcurrent != nil {
+		forbidden = append(forbidden, "llmMaxConcurrent")
+	}
+	if req.LlmMaxQpm != nil {
+		forbidden = append(forbidden, "llmMaxQpm")
+	}
+	if req.LlmRateLimitPause != nil {
+		forbidden = append(forbidden, "llmRateLimitPause")
+	}
+	if req.LlmRateLimitJitter != nil {
+		forbidden = append(forbidden, "llmRateLimitJitter")
+	}
+	if req.LlmAcquireTimeout != nil {
+		forbidden = append(forbidden, "llmAcquireTimeout")
+	}
 	if req.ModelProvider != "" {
 		forbidden = append(forbidden, "modelProvider")
 	}
@@ -939,17 +1619,19 @@ func (h *ResourceHandler) checkHumanWorkerUpdate(ctx context.Context, caller *au
 	if req.Agents != "" {
 		forbidden = append(forbidden, "agents")
 	}
-	// Credential-bearing surfaces: remoteSkills (registry source URIs may
-	// embed tokens) and mcpServers (GenerateMcporterConfig injects the
-	// gateway bearer key into every entry, URL used verbatim — an
-	// attacker-controlled URL exfiltrates it). Elevated capability pending
-	// the L2 permission design.
-	if req.RemoteSkills != nil {
+	// remoteSkills: arbitrary external registries whose source URIs may
+	// embed tokens — gated on the external_sources capability. L2 humans
+	// with the grant (or full_access) may write it; team leaders are
+	// service-account scoped and never carry the capability, so for them
+	// remoteSkills is always forbidden.
+	if req.RemoteSkills != nil && !authpkg.HasCapability(caller, authpkg.CapabilityExternalSources) {
 		forbidden = append(forbidden, "remoteSkills")
 	}
-	if req.McpServers != nil {
-		forbidden = append(forbidden, "mcpServers")
-	}
+	// mcpServers: writable for both scoped roles (#1220 §7, part 2). The
+	// gateway credential is attached at generation time only to entries on
+	// the trusted AI gateway host, so a scoped caller can no longer exfil
+	// the key through an external URL; pointing a worker at an external
+	// endpoint is an operator decision, not a credential leak.
 	if req.Package != "" {
 		forbidden = append(forbidden, "package")
 	}
@@ -970,7 +1652,7 @@ func (h *ResourceHandler) checkHumanWorkerUpdate(ctx context.Context, caller *au
 	}
 	if len(forbidden) > 0 {
 		return http.StatusBadRequest,
-			"L2 humans may only update the skills field (public-catalog assignment); remoteSkills and mcpServers require an elevated capability; not allowed: " + strings.Join(forbidden, ", ")
+			"L2 humans and team leaders may only update the skills and mcpServers fields; remoteSkills requires the external_sources capability; not allowed: " + strings.Join(forbidden, ", ")
 	}
 	return 0, ""
 }
@@ -995,11 +1677,14 @@ func (h *ResourceHandler) validateTeamWorkerMembers(ctx context.Context, teamNam
 		}
 
 		var worker v1beta1.Worker
-		if err := h.client.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: h.namespace}, &worker); err != nil {
+		if err := h.referenceReader().Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: h.namespace}, &worker); err != nil {
 			if apierrors.IsNotFound(err) {
 				return fmt.Errorf("referenced Worker %s does not exist", ref.Name)
 			}
 			return fmt.Errorf("get referenced Worker %s: %w", ref.Name, err)
+		}
+		if h.referenceOutOfScope(worker.Labels) {
+			return fmt.Errorf("referenced Worker %s does not exist", ref.Name)
 		}
 	}
 	if leaders != 1 {
@@ -1007,12 +1692,12 @@ func (h *ResourceHandler) validateTeamWorkerMembers(ctx context.Context, teamNam
 	}
 
 	var teams v1beta1.TeamList
-	if err := h.client.List(ctx, &teams, client.InNamespace(h.namespace)); err != nil {
+	if err := h.referenceReader().List(ctx, &teams, client.InNamespace(h.namespace)); err != nil {
 		return fmt.Errorf("list Teams: %w", err)
 	}
 	for i := range teams.Items {
 		team := &teams.Items[i]
-		if team.Name == teamName {
+		if team.Name == teamName || h.referenceOutOfScope(team.Labels) {
 			continue
 		}
 		for _, ref := range team.Spec.WorkerMembers {

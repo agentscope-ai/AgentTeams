@@ -7,9 +7,9 @@ have that method, so the tools are now registered through the plugin API's
 ``api.register_tool()``.
 
 Tool dependencies (verified against agentscope 2.0.4.post1):
-  - ``agentscope.message.TextBlock / Msg`` ✅
-  - ``agentscope.tool.ToolResponse`` ✅
-  - ``copaw_worker.task / sync / hooks.message_filter`` — pure stdlib + agentscope
+  - ``agentscope.message.TextBlock / Msg``
+  - ``agentscope.tool.ToolResponse``
+  - ``agentteams_manager.task / sync / message_filter`` — pure stdlib + agentscope
 
 No dependency on ``copaw`` 1.0.2 at module-import time.  The message and
 taskflow tools read Matrix credentials directly from ``agent.json`` instead
@@ -19,10 +19,10 @@ of importing ``copaw.config.config``.
 
 class AgentTeamsManagerToolsPlugin:
     def register(self, api):
-        from copaw_worker.hooks.tools.projectflow import projectflow
-        from copaw_worker.hooks.tools.taskflow import taskflow
-        from copaw_worker.hooks.tools.message import message
-        from copaw_worker.hooks.tools.filesync import filesync
+        from agentteams_manager.tools.projectflow import projectflow
+        from agentteams_manager.tools.taskflow import taskflow
+        from agentteams_manager.tools.message import message
+        from agentteams_manager.tools.filesync import filesync
 
         api.register_tool(
             tool_name="projectflow",

@@ -54,8 +54,8 @@ type Config struct {
 	AuthTokenExpirationSeconds int64
 
 	// Provider selection (driven by Helm values)
-	GatewayProvider string // "higress" | "ai-gateway"
-	StorageProvider string // "minio"   | "oss"
+	GatewayProvider string // "higress"     | "ai-gateway"
+	StorageProvider string // "minio" | "oss" | "s3"
 
 	// Higress (self-hosted gateway)
 	HigressBaseURL       string
@@ -434,12 +434,14 @@ func LoadConfig() *Config {
 
 	// In embedded mode, services (Tuwunel, MinIO) run inside the controller container.
 	// The controller itself uses 127.0.0.1, but child containers (Manager, Workers) must
-	// reach them via the controller's Docker network hostname.
+	// reach Matrix and MinIO via the controller's Docker network hostname. Keep the
+	// configured AI Gateway URL worker-facing: the embedded installer provisions the
+	// aigw-local.agentteams.io network alias, and the gateway route may be exposed
+	// through a different hostname from the controller container.
 	if cfg.KubeMode == "embedded" {
 		if ctrlHost := extractHost(cfg.WorkerEnv.ControllerURL); ctrlHost != "" {
 			cfg.WorkerEnv.MatrixURL = replaceHost(cfg.WorkerEnv.MatrixURL, ctrlHost)
 			cfg.WorkerEnv.FSEndpoint = replaceHost(cfg.WorkerEnv.FSEndpoint, ctrlHost)
-			cfg.WorkerEnv.AIGatewayURL = replaceHost(cfg.WorkerEnv.AIGatewayURL, ctrlHost)
 		}
 	}
 	// S3/MinIO API is never on the Higress HTTP gateway port (8080). Misconfigured
@@ -495,6 +497,13 @@ func (c *Config) AgentFSDir() string {
 // WorkerAgentDir returns the source directory for builtin worker agent files.
 func (c *Config) WorkerAgentDir() string {
 	return envOrDefault("AGENTTEAMS_WORKER_AGENT_DIR", "/opt/agentteams/agent/worker-agent")
+}
+
+// PluginDir returns the directory of bundled plugin packages (each
+// plugin.yaml + its skills/ tree). The skill catalog's plugin source
+// reads it read-only; an absent dir simply means no plugin entries.
+func (c *Config) PluginDir() string {
+	return envOrDefault("AGENTTEAMS_PLUGIN_DIR", "/opt/agentteams/plugins")
 }
 
 // ManagerConfigPath returns the path to the Manager Agent's openclaw.json (embedded mode).
@@ -554,6 +563,15 @@ func (c *Config) UsesAIGateway() bool {
 // Cloud OSS (existing bucket) instead of an embedded MinIO.
 func (c *Config) UsesExternalOSS() bool {
 	return c.StorageProvider == "oss"
+}
+
+// UsesExternalS3 reports whether the controller should talk to an
+// external S3-compatible backend (e.g. RustFS) with fixed credentials.
+// Unlike external OSS, the backend exposes the MinIO-compatible admin
+// API, so per-worker users/policies are still ensured by the controller
+// via mc (see MinIOAdminClient) — verified against RustFS 1.0.3.
+func (c *Config) UsesExternalS3() bool {
+	return c.StorageProvider == "s3"
 }
 
 func (c *Config) K8sConfig() backend.K8sConfig {

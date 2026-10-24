@@ -100,10 +100,13 @@ class FileSync:
             self._alias_set = True
             logger.info("storage alias ready component=sync worker=%s mode=env", self.worker_name)
             return
-        if os.getenv("AGENTTEAMS_RUNTIME") == "k8s":
-            self._alias_set = True
-            logger.info("storage alias ready component=sync worker=%s mode=k8s-wrapper", self.worker_name)
-            return
+        if (
+            os.getenv("AGENTTEAMS_RUNTIME") == "k8s"
+            and os.getenv("AGENTTEAMS_STORAGE_PROVIDER", "").strip().lower() == "oss"
+        ):
+            raise RuntimeError(
+                f"OSS storage requires controller-issued MC_HOST_{self.mc_alias} credentials"
+            )
         missing = [
             name
             for name, value in (

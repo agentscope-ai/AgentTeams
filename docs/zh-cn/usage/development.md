@@ -33,7 +33,6 @@ make build-embedded
 
 # 其他 Manager / Worker 运行时
 make build-manager-qwenpaw
-make build-copaw-worker
 make build-hermes-worker
 make build-deepseek-harness-worker
 
@@ -235,14 +234,25 @@ Agent 行为由 Markdown 文件定义，而非代码：
 
 ## CI/CD
 
+### 并行构建发布镜像
+
+`build.yml` 为每个镜像分配独立 runner。OpenClaw Base、Controller、QwenPaw Worker 独立启动；Embedded、QwenPaw Manager、Hermes Worker 等待 Controller；OpenClaw Manager 和 Worker 等待 Base 与 Controller。每个镜像仍通过 QEMU 构建 amd64 和 arm64。
+
+每个任务在构建前检查目标版本 tag：若 linux/amd64、linux/arm64 均已存在，则直接成功，跳过构建和推送，下游任务继续执行。仅在明确返回镜像不存在，或有效 manifest 缺少所需架构时执行构建。查询失败（认证、限流、网络错误等）或响应无效时直接失败，不触发重建。复用只校验 tag 和架构，不比对源码 commit；`latest` 也适用。复用版本镜像不会更新 `latest` 别名；修改源码后应使用新版本构建。
+
+版本 tag 触发全量构建，全部镜像任务成功后才调用 `release.yml`。Release 校验全部九个版本镜像的双架构 manifest 后发布，不再使用固定轮询窗口等待构建。
+
+手动构建时选择 **Build Images**，填写 `version`，将 `targets` 设为 `all` 或以空格分隔的准确目标名称；所需的 Base/Controller 依赖会自动构建。手动构建不会发布 GitHub Release。手动发布需先完成全量构建，再用相同版本和源码 ref 运行 **Release**。若镜像成功后发布失败，可仅重跑失败的发布任务。
+
+修改工作流后，可运行 `actionlint` 和 `python3 tests/test-build-workflows.py` 校验（测试依赖 PyYAML 和 jq）。
+
 ### GitHub Actions 工作流
 
 | 工作流 | 触发条件 | 用途 | 架构 |
 |--------|----------|------|------|
-| `build.yml` | PR 到 main | 仅构建（不推送，快速反馈） | amd64 |
-| `build.yml` | 推送到 main | 多架构构建 + 推送 | amd64 + arm64 |
+| `build.yml` | 版本 tag / 手动 | 并行构建并推送多架构镜像 | amd64 + arm64 |
 | `integration-test.yml` | main 构建成功后 | 运行完整测试套件 | amd64（runner 原生） |
-| `release.yml` | 版本标签 `v*` | 多架构构建 + 推送发布镜像 | amd64 + arm64 |
+| `release.yml` | tag 构建成功后 / 手动 | 校验镜像并发布 GitHub Release | amd64 + arm64 |
 
 所有 CI 多架构构建使用 `docker/setup-qemu-action` 进行跨平台模拟，并通过 `make push` 调用 `docker buildx`。
 
@@ -349,10 +359,10 @@ podman run -d --name agentteams-manager \
 
 ### Node.js 版本
 
-OpenClaw 需要 **Node.js >= 22**（内部使用的 `--disable-warning` 标志需要 Node.js 21.3+）。Manager 镜像基于 `openclaw-base` 构建，该基础镜像已包含 Node.js 22。Worker Dockerfile 从构建阶段复制 Node.js 22。
+OpenClaw 需要 **Node.js >= 22**（内部使用的 `--disable-warning` 标志需要 Node.js 21.3+）。Manager 镜像基于 `openclaw-base` 构建，该基础镜像已包含 Node.js 24。Worker Dockerfile 从构建阶段复制 Node.js 24。
 
-- **Manager**：Node 22 由 `openclaw-base` 提供（基础镜像已内置）。
-- **Worker**：从构建阶段复制的 Node 22 二进制文件替换了 Ubuntu 24.04 apt 的 Node.js 18.x（后者不支持 `--disable-warning`）。
+- **Manager**：Node 24 由 `openclaw-base` 提供（基础镜像已内置）。
+- **Worker**：从构建阶段复制的 Node 24 二进制文件替换了 Ubuntu 24.04 apt 的 Node.js 18.x（后者不支持 `--disable-warning`）。
 
 ### Higress AI Provider API
 
@@ -490,9 +500,9 @@ mc ls test/agentteams-storage/ --recursive
 |------|------|----------|
 | `docker build` 期间 `git clone` 卡住 | 构建环境没有代理 | 通过 `DOCKER_BUILD_ARGS` 传递 `--build-arg http_proxy=...` |
 | 健康检查返回 503 | `http_proxy` 拦截了 localhost 请求 | 设置 `no_proxy=localhost,127.0.0.1,::1` |
-| OpenClaw: `SyntaxError: Unexpected reserved word` | Node.js 版本过旧 | 确保 Manager 使用 `openclaw-base` 镜像；Worker 使用构建阶段的 Node.js 22 |
+| OpenClaw: `SyntaxError: Unexpected reserved word` | Node.js 版本过旧 | 确保 Manager 使用 `openclaw-base` 镜像；Worker 使用构建阶段的 Node.js 24 |
 | OpenClaw: `requires Node >=22.0.0` | 同上 | 同上 |
-| `--disable-warning= is not allowed in NODE_OPTIONS` | Node.js < 21.3（如 Ubuntu apt 的 v18） | 确保 Worker 使用构建阶段的 Node.js 22，而非 apt 安装的版本 |
+| `--disable-warning= is not allowed in NODE_OPTIONS` | Node.js < 21.3（如 Ubuntu apt 的 v18） | 确保 Worker 使用构建阶段的 Node.js 24，而非 apt 安装的版本 |
 | OpenClaw: `gateway.mode=local` required | openclaw.json 中缺少网关配置 | 添加 `"gateway": {"mode": "local", ...}` |
 | OpenClaw: `no token is configured` | 缺少网关认证 token | 添加 `"gateway": {"auth": {"token": "..."}}` |
 | Higress: `Missing Qwen specific configurations` | `type=qwen` 需要 `rawConfigs` 字段 | 包含 `rawConfigs: {qwenEnableCompatible: true, ...}`——参见 `setup-higress.sh` |

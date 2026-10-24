@@ -86,9 +86,12 @@ def test_pull_runtime_config_downloads_controller_projection(tmp_path: Path, mon
     ]
 
 
-def test_ensure_alias_skips_static_alias_in_k8s_mode(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("storage_provider", ["minio", None])
+def test_ensure_alias_sets_static_alias_for_minio_in_k8s_mode(
+    tmp_path: Path, monkeypatch, storage_provider: str | None
+) -> None:
     sync = FileSync(
-        endpoint="https://oss.example.test",
+        endpoint="minio:9000",
         access_key="access-key",
         secret_key="secret-key",
         bucket="agentteams-storage",
@@ -98,12 +101,70 @@ def test_ensure_alias_skips_static_alias_in_k8s_mode(tmp_path: Path, monkeypatch
     )
     commands = []
     monkeypatch.setenv("AGENTTEAMS_RUNTIME", "k8s")
+    if storage_provider is None:
+        monkeypatch.delenv("AGENTTEAMS_STORAGE_PROVIDER", raising=False)
+    else:
+        monkeypatch.setenv("AGENTTEAMS_STORAGE_PROVIDER", storage_provider)
+    monkeypatch.delenv(f"MC_HOST_{sync.mc_alias}", raising=False)
 
     def fake_mc(*args, **_kwargs):
         commands.append(args)
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
     monkeypatch.setattr(sync, "_mc", fake_mc)
+
+    sync.ensure_alias()
+
+    assert sync._alias_set is True
+    assert commands == [
+        (
+            "alias",
+            "set",
+            "agentteams",
+            "http://minio:9000",
+            "access-key",
+            "secret-key",
+        )
+    ]
+
+
+def test_ensure_alias_requires_mc_host_for_oss_in_k8s_mode(tmp_path: Path, monkeypatch) -> None:
+    sync = FileSync(
+        endpoint="oss.example.test",
+        access_key="access-key",
+        secret_key="secret-key",
+        bucket="agentteams-storage",
+        worker_name="worker-a",
+        local_dir=tmp_path / "agents" / "worker-a",
+        shared_dir=tmp_path / "shared",
+    )
+    monkeypatch.setenv("AGENTTEAMS_RUNTIME", "k8s")
+    monkeypatch.setenv("AGENTTEAMS_STORAGE_PROVIDER", "oss")
+    monkeypatch.delenv(f"MC_HOST_{sync.mc_alias}", raising=False)
+
+    with pytest.raises(RuntimeError, match=f"MC_HOST_{sync.mc_alias}"):
+        sync.ensure_alias()
+
+
+def test_ensure_alias_uses_existing_mc_host_in_k8s_mode(tmp_path: Path, monkeypatch) -> None:
+    sync = FileSync(
+        endpoint="oss.example.test",
+        access_key="access-key",
+        secret_key="secret-key",
+        bucket="agentteams-storage",
+        worker_name="worker-a",
+        local_dir=tmp_path / "agents" / "worker-a",
+        shared_dir=tmp_path / "shared",
+    )
+    commands = []
+    monkeypatch.setenv("AGENTTEAMS_RUNTIME", "k8s")
+    monkeypatch.setenv("AGENTTEAMS_STORAGE_PROVIDER", "oss")
+    monkeypatch.setenv(f"MC_HOST_{sync.mc_alias}", "https://ak:sk@oss.example.test")
+    monkeypatch.setattr(
+        sync,
+        "_mc",
+        lambda *args, **_kwargs: commands.append(args),
+    )
 
     sync.ensure_alias()
 

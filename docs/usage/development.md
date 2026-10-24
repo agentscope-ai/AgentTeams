@@ -33,7 +33,6 @@ make build-embedded
 
 # Alternate Manager / Worker runtimes
 make build-manager-qwenpaw
-make build-copaw-worker
 make build-hermes-worker
 make build-deepseek-harness-worker
 
@@ -235,14 +234,25 @@ Route, consumer, and MCP server bootstrap for **embedded** stacks is owned by th
 
 ## CI/CD
 
+### Parallel release images
+
+`build.yml` runs each image on a separate runner. OpenClaw Base, Controller, and QwenPaw Worker start independently. Embedded, QwenPaw Manager, and Hermes Worker wait for Controller; OpenClaw Manager and Worker wait for both Base and Controller. Each image still builds amd64 and arm64 using QEMU.
+
+Before building, each job inspects its version tag. If both linux/amd64 and linux/arm64 already exist, it succeeds without building or pushing; downstream jobs continue normally. Only an explicit image-not-found response or a valid manifest missing a required architecture triggers a build. Query failures (including authentication, rate limiting, and network errors) or invalid responses fail the job without rebuilding. Reuse is based on the tag and architectures, not source commit identity, and also applies to `latest`. Reusing a version does not update the `latest` alias. Use a new version to build changed source.
+
+A version tag starts the full build, then calls `release.yml` only after every image job succeeds. Release verifies all nine versioned multi-architecture manifests before publishing. There is no fixed polling window while images are building.
+
+For manual builds, select **Build Images**, set `version`, and set `targets` to `all` or exact space-separated target names. Required Base/Controller dependencies are built automatically. Manual builds do not publish a GitHub Release. To publish manually, first finish the full build, then run **Release** with the same version and source ref. If publication fails after the images succeed, rerun the failed release job.
+
+Validate workflow changes locally with `actionlint` and `python3 tests/test-build-workflows.py` (requires PyYAML and jq).
+
 ### GitHub Actions Workflows
 
 | Workflow | Trigger | Purpose | Arch |
 |----------|---------|---------|------|
-| `build.yml` | PRs to main | Build only (no push, fast feedback) | amd64 |
-| `build.yml` | Push to main | Multi-arch build + push | amd64 + arm64 |
+| `build.yml` | Version tags / manual | Parallel multi-arch build + push | amd64 + arm64 |
 | `integration-test.yml` | After build succeeds on main | Run full test suite | amd64 (runner native) |
-| `release.yml` | Version tags `v*` | Multi-arch build + push release images | amd64 + arm64 |
+| `release.yml` | After tag build succeeds / manual | Verify images and publish GitHub Release | amd64 + arm64 |
 
 All CI multi-arch builds use `docker/setup-qemu-action` for cross-platform emulation and `docker buildx` via `make push`.
 
@@ -349,10 +359,10 @@ Mounting the container runtime socket gives the container full control over the 
 
 ### Node.js Version
 
-OpenClaw requires **Node.js >= 22** (the `--disable-warning` flag used internally requires Node.js 21.3+). The Manager image is built on `openclaw-base` which already includes Node.js 22. The Worker Dockerfile copies Node.js 22 from a build stage.
+OpenClaw requires **Node.js >= 22** (the `--disable-warning` flag used internally requires Node.js 21.3+). The Manager image is built on `openclaw-base` which already includes Node.js 24. The Worker Dockerfile copies Node.js 24 from a build stage.
 
-- **Manager**: Node 22 is provided by `openclaw-base` (the base image already includes it).
-- **Worker**: Node 22 binary copied from build stage replaces Ubuntu 24.04 apt's Node.js 18.x (which lacks `--disable-warning` support).
+- **Manager**: Node 24 is provided by `openclaw-base` (the base image already includes it).
+- **Worker**: Node 24 binary copied from build stage replaces Ubuntu 24.04 apt's Node.js 18.x (which lacks `--disable-warning` support).
 
 ### Higress AI Provider API
 
@@ -490,9 +500,9 @@ mc ls test/agentteams-storage/ --recursive
 |---------|-------|-----|
 | `git clone` hangs during `docker build` | No proxy in build env | Pass `--build-arg http_proxy=...` via `DOCKER_BUILD_ARGS` |
 | Health checks return 503 | `http_proxy` capturing localhost requests | Set `no_proxy=localhost,127.0.0.1,::1` |
-| OpenClaw: `SyntaxError: Unexpected reserved word` | Node.js too old | Ensure Manager uses `openclaw-base` image; Worker uses Node.js 22 from build stage |
+| OpenClaw: `SyntaxError: Unexpected reserved word` | Node.js too old | Ensure Manager uses `openclaw-base` image; Worker uses Node.js 24 from build stage |
 | OpenClaw: `requires Node >=22.0.0` | Same as above | Same as above |
-| `--disable-warning= is not allowed in NODE_OPTIONS` | Node.js < 21.3 (e.g., Ubuntu apt's v18) | Ensure Worker uses Node.js 22 from build stage, not apt |
+| `--disable-warning= is not allowed in NODE_OPTIONS` | Node.js < 21.3 (e.g., Ubuntu apt's v18) | Ensure Worker uses Node.js 24 from build stage, not apt |
 | OpenClaw: `gateway.mode=local` required | Missing gateway config in openclaw.json | Add `"gateway": {"mode": "local", ...}` |
 | OpenClaw: `no token is configured` | Missing gateway auth token | Add `"gateway": {"auth": {"token": "..."}}` |
 | Higress: `Missing Qwen specific configurations` | `type=qwen` requires `rawConfigs` fields | Include `rawConfigs: {qwenEnableCompatible: true, ...}` — see `setup-higress.sh` |

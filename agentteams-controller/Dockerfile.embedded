@@ -31,7 +31,7 @@ FROM ${HIGRESS_REGISTRY}/higress/element-web:20260216 AS element-web
 FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS agentteams-controller
 
 # ============ Final Image: Based on Higress all-in-one ============
-FROM ${HIGRESS_REGISTRY}/higress/all-in-one:2.2.1
+FROM ${HIGRESS_REGISTRY}/higress/all-in-one:2.2.5
 
 RUN mkdir -p /var/log/agentteams
 
@@ -85,6 +85,10 @@ COPY manager/agent/copaw-worker-agent/ /opt/agentteams/agent/copaw-worker-agent/
 COPY manager/agent/hermes-worker-agent/ /opt/agentteams/agent/hermes-worker-agent/
 COPY manager/agent/team-leader-agent/ /opt/agentteams/agent/team-leader-agent/
 COPY manager/agent/skills/ /opt/agentteams/agent/skills/
+COPY manager/agent/worker-skills/ /opt/agentteams/agent/worker-skills/
+
+# Plugin packages (skill catalog "plugin" source: plugin.yaml + skills/ trees)
+COPY plugins/ /opt/agentteams/plugins/
 
 # ---- Ports ----
 # 8080: Higress Gateway (unified entry point)

@@ -12,7 +12,7 @@ AgentTeams is an **Agent Teams** platform: a **Manager** coordinates **Workers**
 | **Manager** | Coordinator agent: tasks, workers, teams, humans, Higress routes/MCP—via Matrix and the controller API. | `agentteams-manager` (OpenClaw / Node) or `agentteams-manager-qwenpaw` (QwenPaw / Python)—based on **openclaw-base** or slim Python, **without** full infra stack |
 | **Worker** | Task executor: one container per worker, created on demand; stateless; config and artifacts on object storage. | `agentteams-worker`, `agentteams-copaw-worker`, `agentteams-qwenpaw-worker`, `agentteams-hermes-worker`, or experimental `agentteams-deepseek-harness-worker` |
 
-The **openclaw-base** image supplies **Ubuntu 24.04**, **Node.js 22**, **OpenClaw**, and **mcporter** for OpenClaw-based Manager/Worker images. It intentionally **does not** ship the old all-in-one Higress bundle; the AI gateway runs in the **controller** (embedded) or as the **Higress Helm subchart** (Kubernetes).
+The **openclaw-base** image supplies **Ubuntu 24.04**, **Node.js 24**, **OpenClaw**, and **mcporter** for OpenClaw-based Manager/Worker images. It intentionally **does not** ship the old all-in-one Higress bundle; the AI gateway runs in the **controller** (embedded) or as the **Higress Helm subchart** (Kubernetes).
 
 ---
 
@@ -134,6 +134,10 @@ flowchart TB
 - **LLM traffic**: OpenAI-compatible routes through Higress with **per-identity consumer** key auth.
 - **MCP servers** and optional **HTTP/gRPC exposure** of worker ports are modeled as gateway routes managed during reconciliation.
 - **Console** (session-cookie auth) is used for route/consumer/MCP administration; the Manager’s init scripts and skills align with that model.
+
+See the [Higress Gateway API reference](../usage/higress-gateway-api.md) for the complete list
+of externally callable endpoints (LLM, MCP, exposed worker ports, bundled services) and
+the Console API surface.
 
 ---
 

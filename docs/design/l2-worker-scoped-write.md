@@ -79,8 +79,10 @@ an L2 human.
 - Wake/sleep lifecycle for L2 humans (separate decision).
 - Team-scoping the leader update path (the current code lets a team leader
   update any worker; pre-existing, out of scope here).
-- Standalone-worker access via `accessibleWorkers` (read path does not
-  expose standalone workers to L2 humans either; keep parity).
+- Standalone-worker access via `accessibleWorkers` for **L2** writes
+  (L2 humans stay team-scoped; an L2 CR carrying `accessibleWorkers` is
+  inert — the field activates solely at `permissionLevel: 3`, where it
+  grants reads only; see [l3-worker-scoped-read.md](l3-worker-scoped-read.md)).
 - Propagating the update to a running worker container — the existing
   reconcile machinery already applies `spec` changes.
 

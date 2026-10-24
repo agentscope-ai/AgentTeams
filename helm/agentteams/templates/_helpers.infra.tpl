@@ -65,9 +65,32 @@ materialized condition flag.
      worker scripts can hard-code mc hosts when the provider isn't
      reachable from the worker network (rare). */ -}}
 {{- .Values.storage.oss.endpoint | default "" -}}
+{{- else if and (eq .Values.storage.provider "s3") (eq .Values.storage.mode "existing") -}}
+{{/* External S3-compatible backend (e.g. RustFS): the endpoint is a
+     deployment-time static value supplied by the chart user. */ -}}
+{{- .Values.storage.s3.endpoint -}}
 {{- else -}}
 {{- fail (printf "unsupported storage combination %s/%s" .Values.storage.provider .Values.storage.mode) -}}
 {{- end -}}
+{{- end }}
+
+{{/* S3 provider: name of the Secret holding the root/admin credentials
+     (user-supplied existingSecret, or the chart-rendered one for inline
+     dev credentials). */}}
+{{- define "agentteams.storage.s3.secretName" -}}
+{{- if .Values.storage.s3.existingSecret -}}
+{{- .Values.storage.s3.existingSecret -}}
+{{- else -}}
+{{- printf "%s-s3" (include "agentteams.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end }}
+
+{{- define "agentteams.storage.s3.accessKeyKey" -}}
+{{- .Values.storage.s3.accessKeySecretKey | default "accesskey" -}}
+{{- end }}
+
+{{- define "agentteams.storage.s3.secretKeyKey" -}}
+{{- .Values.storage.s3.secretKeySecretKey | default "secretkey" -}}
 {{- end }}
 
 {{- define "agentteams.storage.bucket" -}}

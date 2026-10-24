@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -112,7 +113,7 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 	image := req.Image
 	if image == "" {
 		switch {
-		case req.Runtime == RuntimeCopaw && d.config.CopawWorkerImage != "":
+		case req.Runtime == RuntimeCopaw:
 			image = d.config.CopawWorkerImage
 		case req.Runtime == RuntimeHermes && d.config.HermesWorkerImage != "":
 			image = d.config.HermesWorkerImage
@@ -244,6 +245,10 @@ func dockerAuthVolumeName(containerName string) string {
 }
 
 func (d *DockerBackend) writeContainerFile(ctx context.Context, containerName, filePath, content string) error {
+	return d.writeContainerFileWithMode(ctx, containerName, filePath, content, 0400)
+}
+
+func (d *DockerBackend) writeContainerFileWithMode(ctx context.Context, containerName, filePath, content string, mode int64) error {
 	cleanPath := path.Clean(filePath)
 	if !path.IsAbs(cleanPath) || cleanPath == "/" || path.Base(cleanPath) == "." {
 		return fmt.Errorf("invalid container file path %q", filePath)
@@ -254,7 +259,7 @@ func (d *DockerBackend) writeContainerFile(ctx context.Context, containerName, f
 	data := []byte(content)
 	if err := tw.WriteHeader(&tar.Header{
 		Name: path.Base(cleanPath),
-		Mode: 0400,
+		Mode: mode,
 		Size: int64(len(data)),
 	}); err != nil {
 		return fmt.Errorf("write archive header: %w", err)
@@ -390,6 +395,167 @@ func (d *DockerBackend) execContainer(ctx context.Context, containerName string,
 		return fmt.Errorf("docker exec exited with code %d", inspected.ExitCode)
 	}
 	return nil
+}
+
+// Exec implements WorkerExecBackend: runs a command in the worker
+// container and captures stdout/stderr and the exit code. Synchronous;
+// bounded by a GNU timeout process inside the container (included in managed
+// Worker images). KILL targets the process group: TERM can leave an ignoring
+// child alive when its parent exits first. The HTTP deadline leaves time for
+// Docker to report completion before callers release installation busy state.
+func (d *DockerBackend) Exec(ctx context.Context, name string, command []string, timeout time.Duration) (string, string, int, error) {
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	seconds := strconv.FormatFloat(timeout.Seconds(), 'f', 9, 64) + "s"
+	command = append([]string{"timeout", "--signal=KILL", "--", seconds}, command...)
+	ctx, cancel := context.WithTimeout(ctx, timeout+2*time.Second)
+	defer cancel()
+	containerName := d.containerPrefix + name
+
+	payload, err := json.Marshal(struct {
+		AttachStdout bool     `json:"AttachStdout"`
+		AttachStderr bool     `json:"AttachStderr"`
+		Cmd          []string `json:"Cmd"`
+	}{AttachStdout: true, AttachStderr: true, Cmd: command})
+	if err != nil {
+		return "", "", 0, fmt.Errorf("marshal exec payload: %w", err)
+	}
+	u := fmt.Sprintf("http://localhost/containers/%s/exec", url.PathEscape(containerName))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(payload))
+	if err != nil {
+		return "", "", 0, fmt.Errorf("build exec request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := d.client.Do(req)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("docker exec create: %w", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		return "", "", 0, fmt.Errorf("docker exec create failed (status %d): %s", resp.StatusCode, string(body))
+	}
+	var created struct {
+		ID string `json:"Id"`
+	}
+	if err := json.Unmarshal(body, &created); err != nil {
+		return "", "", 0, fmt.Errorf("parse docker exec response: %w", err)
+	}
+	if created.ID == "" {
+		return "", "", 0, fmt.Errorf("docker exec response: missing Id")
+	}
+
+	startReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("http://localhost/exec/%s/start", url.PathEscape(created.ID)),
+		strings.NewReader(`{"Detach":false,"Tty":false}`))
+	if err != nil {
+		return "", "", 0, fmt.Errorf("build exec start request: %w", err)
+	}
+	startReq.Header.Set("Content-Type", "application/json")
+	startResp, err := d.client.Do(startReq)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("docker exec start: %w", err)
+	}
+	stdout, stderr, streamErr := readDockerExecStream(startResp.Body)
+	startResp.Body.Close()
+	if streamErr != nil {
+		return "", "", 0, fmt.Errorf("docker exec stream: %w", streamErr)
+	}
+	if startResp.StatusCode != http.StatusOK && startResp.StatusCode != http.StatusCreated {
+		return stdout, stderr, 0, fmt.Errorf("docker exec start failed (status %d)", startResp.StatusCode)
+	}
+
+	inspectReq, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("http://localhost/exec/%s/json", url.PathEscape(created.ID)), nil)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("build exec inspect request: %w", err)
+	}
+	inspectResp, err := d.client.Do(inspectReq)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("docker exec inspect: %w", err)
+	}
+	inspectBody, _ := io.ReadAll(inspectResp.Body)
+	inspectResp.Body.Close()
+	if inspectResp.StatusCode != http.StatusOK {
+		return stdout, stderr, 0, fmt.Errorf("docker exec inspect failed (status %d): %s", inspectResp.StatusCode, string(inspectBody))
+	}
+	var inspected struct {
+		Running  bool `json:"Running"`
+		ExitCode int  `json:"ExitCode"`
+	}
+	if err := json.Unmarshal(inspectBody, &inspected); err != nil {
+		return "", "", 0, fmt.Errorf("parse docker exec inspect: %w", err)
+	}
+	if inspected.Running {
+		return stdout, stderr, 0, fmt.Errorf("docker exec still running")
+	}
+	if inspected.ExitCode == 137 {
+		// Preserve the old timeout error contract: settings callers must not
+		// interpret an interrupted read as an absent file and overwrite it.
+		return stdout, stderr, inspected.ExitCode, fmt.Errorf("worker command timed out or was killed (exit 137)")
+	}
+	return stdout, stderr, inspected.ExitCode, nil
+}
+
+// WriteFile implements WorkerExecBackend: atomically replaces a file inside
+// the worker container (tmp file + rename, same pattern as the auth-token
+// projection). The resulting file mode is 0600 so worker processes can keep
+// updating it (e.g. CLI auth flows writing credentials back).
+func (d *DockerBackend) WriteFile(ctx context.Context, name, filePath, content string) error {
+	containerName := d.containerPrefix + name
+	// Docker's archive upload 404s when the parent directory does not yet
+	// exist in the container (first-ever write, e.g. ~/.qwen/settings.json
+	// before the CLI has run once) — field-verified on the Pi embedded
+	// stack, 2026-10-11. WriteFile is only used against running workers,
+	// so a container exec is safe here (NOT in writeContainerFileWithMode:
+	// the Create-path auth-token projection runs before the container
+	// starts, where exec 409s).
+	if dir := path.Dir(path.Clean(filePath)); dir != "/" {
+		if err := d.execContainer(ctx, containerName, []string{"mkdir", "-p", dir}); err != nil {
+			return fmt.Errorf("prepare parent dir for %s: %w", filePath, err)
+		}
+	}
+	nextPath := filePath + ".next"
+	if err := d.writeContainerFileWithMode(ctx, containerName, nextPath, content, 0600); err != nil {
+		return fmt.Errorf("write next file: %w", err)
+	}
+	if err := d.execContainer(ctx, containerName, []string{"mv", "-f", nextPath, filePath}); err != nil {
+		return fmt.Errorf("activate next file: %w", err)
+	}
+	return nil
+}
+
+// readDockerExecStream demultiplexes a docker exec start stream (Tty=false):
+// frames are [8-byte header][payload] where the header is
+// [stream, 0, 0, 0, size1, size2, size3, size4] with the size big-endian.
+func readDockerExecStream(r io.Reader) (string, string, error) {
+	var out, errBuf bytes.Buffer
+	header := make([]byte, 8)
+	for {
+		if _, err := io.ReadFull(r, header); err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				return out.String(), errBuf.String(), nil
+			}
+			return "", "", fmt.Errorf("read exec stream header: %w", err)
+		}
+		size := int(binary.BigEndian.Uint32(header[4:8]))
+		if size == 0 {
+			continue
+		}
+		payload := make([]byte, size)
+		if _, err := io.ReadFull(r, payload); err != nil {
+			return "", "", fmt.Errorf("read exec stream payload: %w", err)
+		}
+		switch header[0] {
+		case 1:
+			out.Write(payload)
+		case 2:
+			errBuf.Write(payload)
+		default:
+			// unknown stream — ignore
+		}
+	}
 }
 
 // doCreate sends the container create request to Docker, handling conflict by
@@ -715,12 +881,14 @@ func (d *DockerBackend) buildCreatePayload(req CreateRequest, consolePort string
 		hc.RestartPolicy = &dockerRestartPolicy{Name: req.RestartPolicy}
 	}
 
-	// Console port binding (CoPaw workers)
+	// Console port binding (CoPaw workers). Bound to loopback so the
+	// automatically published console is not reachable from other hosts;
+	// remote access can be granted via an explicit port mapping instead.
 	if consolePort != "" && hostPort > 0 {
 		portKey := consolePort + "/tcp"
 		p.ExposedPorts = map[string]struct{}{portKey: {}}
 		hc.PortBindings = map[string][]dockerPortBinding{
-			portKey: {{HostPort: strconv.Itoa(hostPort)}},
+			portKey: {{HostIP: "127.0.0.1", HostPort: strconv.Itoa(hostPort)}},
 		}
 	}
 

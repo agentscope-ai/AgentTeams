@@ -338,9 +338,9 @@ cat > "${HOME_DIR}/openclaw.json" <<EOF2
       "homeserver": "https://matrix.test",
       "accessToken": "NEW_MATRIX_TOKEN",
       "userId": "@manager-new:test",
-      "dm": {"policy": "allowlist", "allowFrom": ["@luo:test"]},
+      "dm": {"policy": "allowlist", "allowFrom": ["@carol:test"]},
       "groupPolicy": "allowlist",
-      "groupAllowFrom": ["@luo:test"]
+      "groupAllowFrom": ["@carol:test"]
     }
   },
   "models": {
@@ -380,7 +380,7 @@ mkdir -p "${QW}/custom_channels" "${QW}/.secret"
 # §1b migrate legacy .copaw state FIRST (before bridge)
 bash /opt/agentteams/scripts/init/migrate-copaw-state.sh >/dev/null 2>&1
 # §2 bridge re-overlays Controller-owned values
-/opt/venv/qwenpaw/bin/python3 -m copaw_worker.bridge \
+/opt/venv/qwenpaw/bin/python3 -m agentteams_manager.bridge \
     --profile manager \
     --openclaw-json "${HOME}/openclaw.json" \
     --working-dir "${QW}" >/dev/null 2>&1

@@ -153,6 +153,14 @@ func (h *CheckpointHandler) proxyCheckpoint(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// runtime-aware: checkpoint inspection is qwenpaw-specific. This runs
+	// after the team-scope check above so an out-of-scope caller sees 404
+	// (existence hidden) regardless of the worker's runtime.
+	if rt := worker.Spec.Runtime; rt != "" && rt != "qwenpaw" {
+		httputil.WriteError(w, http.StatusBadRequest, "worker checkpoints are only supported for qwenpaw workers")
+		return
+	}
+
 	// Resolve the upstream address from the effective container prefix and
 	// the worker's own env (per-worker console port override).
 	target := h.workerBaseURL(name, worker.Spec.Env) + "/workspace/checkpoints/" + sub

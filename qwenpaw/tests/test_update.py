@@ -53,6 +53,9 @@ class _FakeQwenPawApi:
         self.channel_events = []
         self.model_events = []
         self.active_model = None
+        self.subagent_model_events = []
+        self.subagent_model = None
+        self.subagent_model_reads = 0
         self.enabled_skills = []
         self.skill_events = []
 
@@ -99,6 +102,15 @@ class _FakeQwenPawApi:
         self.model_events.append((provider_id, model))
         self.active_model = {"provider_id": provider_id, "model": model, **kwargs}
         return {"active_llm": self.active_model}
+
+    def get_agent_subagent_model(self):
+        self.subagent_model_reads += 1
+        return dict(self.subagent_model) if self.subagent_model else None
+
+    def update_agent_model_settings(self, subagent_model):
+        self.subagent_model_events.append(dict(subagent_model) if subagent_model else None)
+        self.subagent_model = dict(subagent_model) if subagent_model else None
+        return {"subagent_model": self.subagent_model}
 
     def refresh_and_enable_skills(self, skill_names):
         self.enabled_skills = list(skill_names)
@@ -229,6 +241,360 @@ def test_runtime_updater_reconciles_model_mcp_matrix_channel_and_acl_via_api(
     assert not (updater.config.default_workspace_dir / "agent.json").exists()
     assert not (updater.config.default_workspace_dir / "config" / "mcporter.json").exists()
     assert not (updater.config.default_workspace_dir / "access_control.json").exists()
+
+
+def _native_acl_raw(team_members=None, with_team: bool = True) -> dict:
+    """runtime.yaml raw used by the native Matrix ACL pin tests below."""
+    raw = {
+        "metadata": {"generation": "1"},
+        "member": {
+            "runtime": "qwenpaw",
+            "matrixUserId": "@worker-a:matrix.local",
+        },
+        "credentials": {
+            "matrixTokenEnv": "AGENTTEAMS_WORKER_MATRIX_TOKEN",
+            "gatewayKeyEnv": "AGENTTEAMS_WORKER_GATEWAY_KEY",
+        },
+        "desired": {
+            "model": {
+                "providerId": "agentteams-gateway",
+                "model": "qwen-plus",
+                "gatewayUrl": "https://gateway.example.com",
+            },
+        },
+    }
+    if with_team:
+        raw["team"] = {
+            "teamRoomId": "!team:matrix.local",
+            "members": team_members,
+        }
+    return raw
+
+
+def _native_acl_updater(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_URL", "http://matrix.example.com")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "matrix-token")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_GATEWAY_KEY", "gateway-secret")
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_DOMAIN", "matrix.example.com")
+    return _runtime_updater(
+        config=_config(tmp_path),
+        package_manager=_NoopPackageManager(),
+    )
+
+
+_TEAM_MEMBERS = [
+    {
+        "name": "leader-a",
+        "runtimeName": "leader-a",
+        "role": "team_leader",
+        "matrixUserId": "@leader-a:matrix.local",
+    },
+    {
+        "name": "worker-b",
+        "runtimeName": "worker-b",
+        "role": "worker",
+        "matrixUserId": "@worker-b:matrix.local",
+    },
+    # Coordinator human projected into the roster by team reconcile.
+    {"name": "alice", "role": "coordinator", "matrixUserId": "@alice:matrix.local"},
+]
+
+
+def test_runtime_updater_acl_drops_coordinator_human_removed_from_roster(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Scenario 1: a coordinator human leaves the team roster while the
+    worker stays in the team. The native qwenpaw worker enforces its
+    Matrix ACL from the roster (team.members -> _matrix_policy_ids ->
+    reconcile_acl), not from any openclaw.json allowlists (the qwenpaw
+    worker image does not consume them): the human is
+    allowlisted while on the roster and dropped on the next apply once
+    the roster no longer lists her."""
+    updater = _native_acl_updater(tmp_path, monkeypatch)
+
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw=_native_acl_raw(_TEAM_MEMBERS),
+        ),
+    )
+    whitelist = set(updater.api_client.acls["agentteams_matrix"]["whitelist"])
+    assert "@alice:matrix.local" in whitelist
+    assert "@leader-a:matrix.local" in whitelist
+    assert "@worker-b:matrix.local" in whitelist
+    assert "@worker-a:matrix.local" in whitelist  # self-allow
+
+    # The human is removed from the roster on the next apply; the worker
+    # itself stays in the team.
+    roster_without_alice = [
+        member for member in _TEAM_MEMBERS if member["name"] != "alice"
+    ]
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw=_native_acl_raw(roster_without_alice),
+        ),
+    )
+    whitelist = set(updater.api_client.acls["agentteams_matrix"]["whitelist"])
+    assert "@alice:matrix.local" not in whitelist
+    assert "@leader-a:matrix.local" in whitelist
+    assert "@worker-b:matrix.local" in whitelist
+
+
+def test_runtime_updater_acl_resets_to_standalone_when_worker_detached(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Scenario 2: the worker is detached from its team, i.e. the next
+    runtime config no longer carries a team section at all. The ACL must
+    reset to the standalone set (manager + system admin + self); no team
+    leader, peer worker, or coordinator human may linger."""
+    updater = _native_acl_updater(tmp_path, monkeypatch)
+
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw=_native_acl_raw(_TEAM_MEMBERS),
+        ),
+    )
+    whitelist = set(updater.api_client.acls["agentteams_matrix"]["whitelist"])
+    assert "@leader-a:matrix.local" in whitelist
+    assert "@alice:matrix.local" in whitelist
+
+    # Detach: the team section is gone from the worker runtime config.
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw=_native_acl_raw(with_team=False),
+        ),
+    )
+    whitelist = set(updater.api_client.acls["agentteams_matrix"]["whitelist"])
+    assert "@leader-a:matrix.local" not in whitelist
+    assert "@worker-b:matrix.local" not in whitelist
+    assert "@alice:matrix.local" not in whitelist
+    # Standalone fallback: self + manager + system admin, nothing else.
+    assert whitelist == {
+        "@worker-a:matrix.local",
+        "@manager:matrix.example.com",
+        "@admin:matrix.example.com",
+    }
+
+
+def test_runtime_updater_passes_model_capabilities_to_active_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QwenPaw worker must forward model input modalities so the provider is
+    registered with explicit supports_* flags instead of triggering a probe
+    that fails for reasoning models (supports_multimodal probe coverage)."""
+    monkeypatch.setenv("AGENTTEAMS_WORKER_GATEWAY_KEY", "gateway-secret")
+    updater = _runtime_updater(
+        config=_config(tmp_path),
+        package_manager=_NoopPackageManager(),
+    )
+
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw={
+                "metadata": {"generation": "1"},
+                "member": {"runtime": "qwenpaw"},
+                "credentials": {"gatewayKeyEnv": "AGENTTEAMS_WORKER_GATEWAY_KEY"},
+                "desired": {
+                    "model": {
+                        "providerId": "agentteams-gateway",
+                        "model": "qwen3.6-plus",
+                        "gatewayUrl": "https://gateway.example.com",
+                        "input": ["text", "image"],
+                    },
+                },
+            },
+        ),
+    )
+
+    api = updater.api_client
+    assert api.active_model["provider_id"] == "agentteams-gateway"
+    assert api.active_model["model"] == "qwen3.6-plus"
+    assert api.active_model["supports_image"] is True
+    assert api.active_model["supports_video"] is False
+    assert api.active_model["supports_multimodal"] is True
+    assert api.active_model["probe_source"] == "manual"
+
+
+def test_runtime_updater_without_input_keeps_capability_fields_unset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the runtime config omits model input (older controller), the
+    worker must keep supports_* unset so QwenPaw can still fall back to its
+    probe path instead of hard-coding false."""
+    monkeypatch.setenv("AGENTTEAMS_WORKER_GATEWAY_KEY", "gateway-secret")
+    updater = _runtime_updater(
+        config=_config(tmp_path),
+        package_manager=_NoopPackageManager(),
+    )
+
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw={
+                "metadata": {"generation": "1"},
+                "member": {"runtime": "qwenpaw"},
+                "credentials": {"gatewayKeyEnv": "AGENTTEAMS_WORKER_GATEWAY_KEY"},
+                "desired": {
+                    "model": {
+                        "providerId": "agentteams-gateway",
+                        "model": "qwen3.6-plus",
+                        "gatewayUrl": "https://gateway.example.com",
+                    },
+                },
+            },
+        ),
+    )
+
+    api = updater.api_client
+    assert api.active_model["provider_id"] == "agentteams-gateway"
+    # _apply_model passes explicit None for unset capabilities; api.py guards
+    # on `is not None` so the payload omits them, letting QwenPaw probe.
+    assert api.active_model["supports_image"] is None
+    assert api.active_model["supports_video"] is None
+    assert api.active_model["supports_multimodal"] is None
+    assert api.active_model["probe_source"] is None
+
+
+def test_runtime_updater_explicit_empty_input_declares_text_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit empty input list declares "text-only" and must NOT fall
+    back to probing: supports_* are set to False and probe_source="manual" so
+    QwenPaw does not run a probe that fails for reasoning models."""
+    monkeypatch.setenv("AGENTTEAMS_WORKER_GATEWAY_KEY", "gateway-secret")
+    updater = _runtime_updater(
+        config=_config(tmp_path),
+        package_manager=_NoopPackageManager(),
+    )
+
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw={
+                "metadata": {"generation": "1"},
+                "member": {"runtime": "qwenpaw"},
+                "credentials": {"gatewayKeyEnv": "AGENTTEAMS_WORKER_GATEWAY_KEY"},
+                "desired": {
+                    "model": {
+                        "providerId": "agentteams-gateway",
+                        "model": "deepseek-reasoner",
+                        "gatewayUrl": "https://gateway.example.com",
+                        "input": [],
+                    },
+                },
+            },
+        ),
+    )
+
+    api = updater.api_client
+    assert api.active_model["supports_image"] is False
+    assert api.active_model["supports_video"] is False
+    assert api.active_model["supports_multimodal"] is False
+    assert api.active_model["probe_source"] == "manual"
+
+
+def test_runtime_updater_text_only_input_does_not_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """input=["text"] declares a text-only model: capabilities are explicitly
+    False (not None) with probe_source="manual", so no probe is triggered."""
+    monkeypatch.setenv("AGENTTEAMS_WORKER_GATEWAY_KEY", "gateway-secret")
+    updater = _runtime_updater(
+        config=_config(tmp_path),
+        package_manager=_NoopPackageManager(),
+    )
+
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw={
+                "metadata": {"generation": "1"},
+                "member": {"runtime": "qwenpaw"},
+                "credentials": {"gatewayKeyEnv": "AGENTTEAMS_WORKER_GATEWAY_KEY"},
+                "desired": {
+                    "model": {
+                        "providerId": "agentteams-gateway",
+                        "model": "deepseek-chat",
+                        "gatewayUrl": "https://gateway.example.com",
+                        "input": ["text"],
+                    },
+                },
+            },
+        ),
+    )
+
+    api = updater.api_client
+    assert api.active_model["supports_image"] is False
+    assert api.active_model["supports_video"] is False
+    assert api.active_model["supports_multimodal"] is False
+    assert api.active_model["probe_source"] == "manual"
+
+
+def test_runtime_updater_matrix_payload_share_session_isolation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#7001 group sender isolation: the channel payload must carry
+    share_session_in_group, defaulting to False (per-sender sessions per the
+    AgentTeams decision 2026-09-05). AGENTTEAMS_MATRIX_SHARE_SESSION=true
+    restores the legacy room-wide shared session."""
+    raw = {
+        "metadata": {"generation": "1"},
+        "team": {"teamRoomId": "!team:matrix.local"},
+        "member": {
+            "runtime": "qwenpaw",
+            "matrixUserId": "@worker-a:matrix.local",
+        },
+        "credentials": {
+            "matrixTokenEnv": "AGENTTEAMS_WORKER_MATRIX_TOKEN",
+            "gatewayKeyEnv": "AGENTTEAMS_WORKER_GATEWAY_KEY",
+        },
+    }
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_URL", "http://matrix.example.com")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "matrix-token")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_GATEWAY_KEY", "gateway-secret")
+    monkeypatch.delenv("AGENTTEAMS_MATRIX_SHARE_SESSION", raising=False)
+
+    updater = _runtime_updater(
+        config=_config(tmp_path),
+        package_manager=_NoopPackageManager(),
+    )
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw=raw,
+        ),
+    )
+    assert (
+        updater.api_client.channels["agentteams_matrix"]["share_session_in_group"]
+        is False
+    )
+
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_SHARE_SESSION", "true")
+    updater2 = _runtime_updater(
+        config=_config(tmp_path),
+        package_manager=_NoopPackageManager(),
+    )
+    updater2.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=updater2.config.runtime_config_path,
+            raw=raw,
+        ),
+    )
+    assert (
+        updater2.api_client.channels["agentteams_matrix"]["share_session_in_group"]
+        is True
+    )
 
 
 def test_runtime_updater_maps_dingtalk_visibility_and_preserves_empty_secret(
@@ -533,6 +899,125 @@ def test_runtime_updater_reconciles_only_changed_direct_mcp_client(
         ("create", "b"),
         ("update", "a"),
     ]
+
+
+def test_runtime_updater_native_mcp_bearer_only_for_trusted_gateway(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1272 native path regression: the gateway credential is attached to
+    trusted-gateway MCP clients (create and update) and never to external
+    endpoints, mirroring the controller-side IsTrustedMCPHost rule."""
+    monkeypatch.setenv("AGENTTEAMS_WORKER_GATEWAY_KEY", "gateway-secret")
+    monkeypatch.setenv("AGENTTEAMS_AI_GATEWAY_URL", "https://gateway.example.com")
+    updater = _runtime_updater(config=_config(tmp_path), package_manager=_NoopPackageManager())
+
+    def runtime_config(generation: str, servers: list[dict]) -> MemberRuntimeConfig:
+        return MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw={
+                "metadata": {"generation": generation},
+                "member": {"runtime": "qwenpaw"},
+                "credentials": {"gatewayKeyEnv": "AGENTTEAMS_WORKER_GATEWAY_KEY"},
+                "desired": {"mcpServers": servers},
+            },
+        )
+
+    # Create: trusted host receives the credential, external host does not.
+    updater.apply_once(
+        runtime_config=runtime_config(
+            "1",
+            [
+                {"name": "docs", "url": "https://gateway.example.com/mcp"},
+                {"name": "external", "url": "https://external.example/mcp"},
+            ],
+        ),
+        reapply_adapter=False,
+    )
+    api = updater.api_client
+    assert api.mcp["docs"]["headers"] == {"Authorization": "Bearer gateway-secret"}
+    assert api.mcp["external"]["url"] == "https://external.example/mcp"
+    assert "Authorization" not in (api.mcp["external"].get("headers") or {})
+
+    # Update: the same rule holds when the clients are updated, including a
+    # client whose URL moves off the trusted gateway.
+    updater.apply_once(
+        runtime_config=runtime_config(
+            "2",
+            [
+                {"name": "docs", "url": "https://gateway.example.com/mcp/v2"},
+                {"name": "external", "url": "https://external.example/other"},
+            ],
+        ),
+        reapply_adapter=False,
+    )
+    assert api.mcp["docs"]["url"] == "https://gateway.example.com/mcp/v2"
+    assert api.mcp["docs"]["headers"] == {"Authorization": "Bearer gateway-secret"}
+    assert api.mcp["external"]["url"] == "https://external.example/other"
+    assert "Authorization" not in (api.mcp["external"].get("headers") or {})
+    assert ("update", "docs") in api.mcp_events
+    assert ("update", "external") in api.mcp_events
+
+
+def test_runtime_updater_native_mcp_bearer_fail_closed_without_gateway_url(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1272 fail-closed: without a configured gateway URL the credential is
+    never attached, even to URLs that look like gateway endpoints."""
+    monkeypatch.setenv("AGENTTEAMS_WORKER_GATEWAY_KEY", "gateway-secret")
+    monkeypatch.delenv("AGENTTEAMS_AI_GATEWAY_URL", raising=False)
+    updater = _runtime_updater(config=_config(tmp_path), package_manager=_NoopPackageManager())
+
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw={
+                "metadata": {"generation": "1"},
+                "member": {"runtime": "qwenpaw"},
+                "credentials": {"gatewayKeyEnv": "AGENTTEAMS_WORKER_GATEWAY_KEY"},
+                "desired": {
+                    "mcpServers": [{"name": "docs", "url": "https://gateway.example.com/mcp"}]
+                },
+            },
+        ),
+        reapply_adapter=False,
+    )
+
+    assert "Authorization" not in (updater.api_client.mcp["docs"].get("headers") or {})
+
+
+def test_runtime_updater_native_mcp_bearer_requires_exact_host_port(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1272: trust is an exact host:port match, so a same-host entry on a
+    different port is external and must not receive the credential."""
+    monkeypatch.setenv("AGENTTEAMS_WORKER_GATEWAY_KEY", "gateway-secret")
+    monkeypatch.setenv("AGENTTEAMS_AI_GATEWAY_URL", "https://gateway.example.com:8443")
+    updater = _runtime_updater(config=_config(tmp_path), package_manager=_NoopPackageManager())
+
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw={
+                "metadata": {"generation": "1"},
+                "member": {"runtime": "qwenpaw"},
+                "credentials": {"gatewayKeyEnv": "AGENTTEAMS_WORKER_GATEWAY_KEY"},
+                "desired": {
+                    "mcpServers": [
+                        {"name": "trusted", "url": "https://gateway.example.com:8443/mcp"},
+                        {"name": "wrong-port", "url": "https://gateway.example.com/mcp"},
+                    ]
+                },
+            },
+        ),
+        reapply_adapter=False,
+    )
+
+    api = updater.api_client
+    assert api.mcp["trusted"]["headers"] == {"Authorization": "Bearer gateway-secret"}
+    assert "Authorization" not in (api.mcp["wrong-port"].get("headers") or {})
 
 
 def test_runtime_updater_reapplies_package_mcp_only_when_package_identity_changes(
@@ -2662,3 +3147,114 @@ member:
 class _NoopPackageManager:
     def apply(self, _runtime_config: MemberRuntimeConfig):
         return None
+
+
+def _subagent_runtime_config(config: WorkerConfig, model: str | None) -> MemberRuntimeConfig:
+    desired: dict = {"skills": []}
+    if model is not None:
+        desired["subagentModel"] = {"providerId": "agentteams-gateway", "model": model}
+    return MemberRuntimeConfig(
+        path=config.runtime_config_path,
+        raw={
+            "metadata": {"generation": model or "none"},
+            "member": {"runtime": "qwenpaw"},
+            "desired": desired,
+        },
+    )
+
+
+def test_runtime_updater_applies_subagent_model_at_startup(tmp_path: Path) -> None:
+    """A declared subagent model must reach the runtime on the boot apply
+    (startup/recreation coverage — the controller hot apply is
+    annotation-gated and skips already-applied workers)."""
+    config = _config(tmp_path)
+    updater = _runtime_updater(config=config, package_manager=_NoopPackageManager())
+
+    updater.apply_once(runtime_config=_subagent_runtime_config(config, "qwen3.6-flash"))
+
+    assert updater.api_client.subagent_model_events == [
+        {"provider_id": "agentteams-gateway", "model": "qwen3.6-flash"}
+    ]
+
+
+def test_runtime_updater_subagent_model_reapplies_only_on_change(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    updater = _runtime_updater(config=config, package_manager=_NoopPackageManager())
+
+    updater.apply_once(runtime_config=_subagent_runtime_config(config, "qwen3.6-flash"))
+    updater.apply_once(runtime_config=_subagent_runtime_config(config, "qwen3.6-flash"))
+    updater.apply_once(runtime_config=_subagent_runtime_config(config, "deepseek-v4"))
+
+    assert updater.api_client.subagent_model_events == [
+        {"provider_id": "agentteams-gateway", "model": "qwen3.6-flash"},
+        {"provider_id": "agentteams-gateway", "model": "deepseek-v4"},
+    ]
+
+
+def test_runtime_updater_subagent_model_absent_is_noop(tmp_path: Path) -> None:
+    """An initially absent declaration is read-only: the updater checks the
+    runtime (compat — older runtimes and never-configured workers see no
+    write traffic) and issues nothing when no override is present."""
+    config = _config(tmp_path)
+    updater = _runtime_updater(config=config, package_manager=_NoopPackageManager())
+
+    updater.apply_once(runtime_config=_subagent_runtime_config(config, None))
+
+    assert updater.api_client.subagent_model_events == []
+    assert updater.api_client.subagent_model_reads >= 1
+
+
+def test_runtime_updater_clears_subagent_model_on_removal(tmp_path: Path) -> None:
+    """set → remove: clearing must not depend on the embedded-only controller
+    dial. After removing the declaration, the native updater issues an
+    explicit null clear (with readback via the API client)."""
+    config = _config(tmp_path)
+    updater = _runtime_updater(config=config, package_manager=_NoopPackageManager())
+
+    updater.apply_once(runtime_config=_subagent_runtime_config(config, "qwen3.6-flash"))
+    updater.apply_once(runtime_config=_subagent_runtime_config(config, None))
+
+    assert updater.api_client.subagent_model_events == [
+        {"provider_id": "agentteams-gateway", "model": "qwen3.6-flash"},
+        None,
+    ]
+    assert updater.api_client.subagent_model is None
+
+
+def test_runtime_updater_clears_stale_override_from_previous_boot(tmp_path: Path) -> None:
+    """The runtime already holds an override (applied before a restart, or
+    set outside this process) while the declaration is absent: the next
+    apply clears it — this is what makes removal independent of mode."""
+    config = _config(tmp_path)
+    updater = _runtime_updater(config=config, package_manager=_NoopPackageManager())
+    updater.api_client.subagent_model = {
+        "provider_id": "agentteams-gateway",
+        "model": "model-a",
+    }
+
+    updater.apply_once(runtime_config=_subagent_runtime_config(config, None))
+
+    assert updater.api_client.subagent_model_events == [None]
+    assert updater.api_client.subagent_model is None
+
+
+def test_runtime_updater_subagent_model_missing_endpoint_degrades(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Older QwenPaw (< 2.1.1) has no model-settings endpoint: the apply
+    must log and continue instead of failing the whole reconcile."""
+    from qwenpaw_worker.api import QwenPawApiError
+
+    config = _config(tmp_path)
+    updater = _runtime_updater(config=config, package_manager=_NoopPackageManager())
+
+    def _raise_404(_subagent_model):
+        raise QwenPawApiError("QwenPaw API PATCH /api/agents/default/model-settings failed with HTTP 404")
+
+    updater.api_client.update_agent_model_settings = _raise_404
+
+    with caplog.at_level(logging.WARNING):
+        updater.apply_once(runtime_config=_subagent_runtime_config(config, "qwen3.6-flash"))
+
+    assert any("subagent model endpoint unavailable" in rec.message for rec in caplog.records)

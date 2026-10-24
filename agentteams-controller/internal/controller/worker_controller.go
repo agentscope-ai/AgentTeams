@@ -77,6 +77,26 @@ type WorkerReconciler struct {
 	// namespace do not cross-watch each other's resources.
 	ControllerName string
 
+	// KubeMode is "embedded" or "incluster" (Config.KubeMode). Hot-apply
+	// dials the worker container's console directly, which is only
+	// addressable in embedded (docker) mode.
+	KubeMode string
+
+	// ContainerPrefix is the effective worker container name prefix
+	// (Config.ContainerPrefix) used to build the worker console URL for
+	// hot-apply — the same derivation the server-side proxies use.
+	ContainerPrefix string
+
+	// subagentModelURLFor overrides the worker console base URL for
+	// subagent model hot-apply (tests). nil → derived from
+	// ContainerPrefix + EffectiveWorkerConsolePort.
+	subagentModelURLFor func(w *v1beta1.Worker, spec v1beta1.WorkerSpec) string
+
+	// envsURLFor overrides the worker console base URL for LLM stream
+	// timeout hot-apply (tests). nil → the same derivation the subagent
+	// model dial uses.
+	envsURLFor func(w *v1beta1.Worker, spec v1beta1.WorkerSpec) string
+
 	// AuthCache is cleared after deleting a rotated Edge Worker's
 	// ServiceAccount so old SA tokens cannot pass via cached TokenReview.
 	AuthCache interface{ InvalidateCache() }
@@ -197,7 +217,19 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	if err := validateWorkerDeploymentTargetImmutable(w, effectiveSpec); err != nil {
 		return reconcile.Result{}, err
 	}
-	mctx := r.workerMemberContextWithSpec(w, effectiveSpec, resourceSpec, updateStrategy)
+	// Team-wide startup-only LLM tuning defaults (read-time merge), same
+	// gating pattern: only when at least one worker value is unset (the
+	// check keeps the List call rare). Resolved before the container
+	// context is built so both consumers see the same effective values:
+	// the pod spec hash (recreate trigger, merged into the spec before
+	// hashing) and the container env projection (mctx.TeamLlmTuning via
+	// resolveLlmTuningEnv).
+	var teamLlmTuning map[string]string
+	if w.Annotations[v1beta1.AnnotationWorkerTeamName] != "" &&
+		!allLlmTuningSet(w.Spec) {
+		teamLlmTuning = r.owningTeamLlmTuning(ctx, w)
+	}
+	mctx := r.workerMemberContextWithSpec(w, effectiveSpec, resourceSpec, updateStrategy, teamLlmTuning)
 	mctx.TeamName, err = r.workerTeamName(ctx, w)
 	if err != nil {
 		return reconcile.Result{}, err
@@ -220,6 +252,19 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	configContext := mctx
 	if inTeam && teamRole == RoleTeamLeader {
 		configContext.Role = RoleTeamLeader
+	}
+	// Team-wide subagent model default (read-time merge). Only workers
+	// without an explicit value consult the team, and only when they are
+	// actually team members (annotation check keeps the List call rare).
+	if w.Spec.SubagentModel == "" && w.Annotations[v1beta1.AnnotationWorkerTeamName] != "" {
+		configContext.TeamSubagentModel = r.owningTeamSubagentModel(ctx, w)
+	}
+	// Team-wide LLM stream timeout defaults (read-time merge), same gating:
+	// only when the worker is actually a team member and at least one value
+	// is not set explicitly (the annotation check keeps the List call rare).
+	if w.Annotations[v1beta1.AnnotationWorkerTeamName] != "" &&
+		(w.Spec.LlmStreamFirstContentTimeout == "" || w.Spec.LlmStreamIdleTimeout == "") {
+		configContext.TeamLlmStreamFirstContentTimeout, configContext.TeamLlmStreamIdleTimeout = r.owningTeamLlmStreamTimeouts(ctx, w)
 	}
 
 	if mctx.DeployMode == v1beta1.DeployModeEdge {
@@ -335,6 +380,19 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	w.Status.SpecHash = mctx.AppliedSpecHash
 	applyDeploymentTargetStatus(w, mctx)
 
+	// Hot-apply a changed subagent model to the running worker process
+	// (#1292 Part 3): the declarative chain (openclaw.json → bridge →
+	// agent.json) updates the file, but a running process keeps its
+	// in-memory config until it is dialed. Best-effort — a failed dial
+	// leaves the annotation unset and the periodic reconcile retries.
+	r.applySubagentModelHot(ctx, w, effectiveSpec, configContext, state)
+
+	// Hot-apply changed LLM stream timeouts to the running worker process
+	// via the QwenPaw envs API (the runtime re-reads the envs on every
+	// stream, so no restart is needed). Same best-effort contract as the
+	// subagent model dial.
+	r.applyLlmStreamTimeoutsHot(ctx, w, effectiveSpec, configContext, state)
+
 	r.reconcileManagerAccess(ctx, w, mctx, state)
 
 	if w.Status.ObservedGeneration == 0 {
@@ -345,6 +403,117 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 
 	requeueAfter := minPositiveDuration(reconcileInterval, state.RequeueAfter)
 	return reconcile.Result{RequeueAfter: requeueAfter}, nil
+}
+
+// owningTeamSubagentModel returns the subagent model declared on the team
+// that owns this worker (the fallback for workers without an explicit
+// subagentModel). It mirrors the ownership lookup in workerTeamName — by
+// scanning Team.spec.workerMembers rather than trusting the annotation, it
+// is correct whether or not the team has a display alias. A lookup failure
+// degrades to "" (no default), never to a reconcile error.
+func (r *WorkerReconciler) owningTeamSubagentModel(ctx context.Context, w *v1beta1.Worker) string {
+	var teams v1beta1.TeamList
+	if err := r.List(ctx, &teams, client.InNamespace(w.Namespace)); err != nil {
+		logger := log.FromContext(ctx)
+		logger.Error(err, "list teams for subagent model default (non-fatal)", "worker", w.Name)
+		return ""
+	}
+	for i := range teams.Items {
+		team := &teams.Items[i]
+		for _, member := range team.Spec.WorkerMembers {
+			if member.Name == w.Name {
+				return team.Spec.SubagentModel
+			}
+		}
+	}
+	return ""
+}
+
+// owningTeamLlmStreamTimeouts returns the LLM stream timeout defaults
+// declared on the team that owns this worker (the fallback for workers
+// without an explicit value). It mirrors owningTeamSubagentModel: it scans
+// Team.spec.workerMembers rather than trusting the annotation, and a lookup
+// failure degrades to empty strings (no default), never to a reconcile
+// error.
+func (r *WorkerReconciler) owningTeamLlmStreamTimeouts(ctx context.Context, w *v1beta1.Worker) (string, string) {
+	var teams v1beta1.TeamList
+	if err := r.List(ctx, &teams, client.InNamespace(w.Namespace)); err != nil {
+		logger := log.FromContext(ctx)
+		logger.Error(err, "list teams for LLM stream timeout defaults (non-fatal)", "worker", w.Name)
+		return "", ""
+	}
+	for i := range teams.Items {
+		team := &teams.Items[i]
+		for _, member := range team.Spec.WorkerMembers {
+			if member.Name == w.Name {
+				return team.Spec.LlmStreamFirstContentTimeout, team.Spec.LlmStreamIdleTimeout
+			}
+		}
+	}
+	return "", ""
+}
+
+// allLlmTuningSet reports whether every startup-only LLM tuning field is set
+// explicitly on the worker spec (gate for the team-defaults List call).
+func allLlmTuningSet(spec v1beta1.WorkerSpec) bool {
+	vals := []string{
+		spec.LlmMaxRetries, spec.LlmBackoffBase, spec.LlmBackoffCap,
+		spec.LlmMaxConcurrent, spec.LlmMaxQpm, spec.LlmRateLimitPause,
+		spec.LlmRateLimitJitter, spec.LlmAcquireTimeout,
+	}
+	for _, v := range vals {
+		if v == "" {
+			return false
+		}
+	}
+	return true
+}
+
+// owningTeamLlmTuning returns the team-wide startup-only LLM tuning defaults
+// for the worker's owning team (keyed by the QWENPAW_LLM_* env name), or an
+// empty map. Non-fatal: a List error degrades to "no team defaults".
+func (r *WorkerReconciler) owningTeamLlmTuning(ctx context.Context, w *v1beta1.Worker) map[string]string {
+	var teams v1beta1.TeamList
+	if err := r.List(ctx, &teams, client.InNamespace(w.Namespace)); err != nil {
+		logger := log.FromContext(ctx)
+		logger.Error(err, "list teams for LLM tuning defaults (non-fatal)", "worker", w.Name)
+		return nil
+	}
+	for i := range teams.Items {
+		team := &teams.Items[i]
+		for _, member := range team.Spec.WorkerMembers {
+			if member.Name == w.Name {
+				t := &team.Spec
+				m := map[string]string{}
+				if t.LlmMaxRetries != "" {
+					m["QWENPAW_LLM_MAX_RETRIES"] = t.LlmMaxRetries
+				}
+				if t.LlmBackoffBase != "" {
+					m["QWENPAW_LLM_BACKOFF_BASE"] = t.LlmBackoffBase
+				}
+				if t.LlmBackoffCap != "" {
+					m["QWENPAW_LLM_BACKOFF_CAP"] = t.LlmBackoffCap
+				}
+				if t.LlmMaxConcurrent != "" {
+					m["QWENPAW_LLM_MAX_CONCURRENT"] = t.LlmMaxConcurrent
+				}
+				if t.LlmMaxQpm != "" {
+					m["QWENPAW_LLM_MAX_QPM"] = t.LlmMaxQpm
+				}
+				if t.LlmRateLimitPause != "" {
+					m["QWENPAW_LLM_RATE_LIMIT_PAUSE"] = t.LlmRateLimitPause
+				}
+				if t.LlmRateLimitJitter != "" {
+					m["QWENPAW_LLM_RATE_LIMIT_JITTER"] = t.LlmRateLimitJitter
+				}
+				if t.LlmAcquireTimeout != "" {
+					m["QWENPAW_LLM_ACQUIRE_TIMEOUT"] = t.LlmAcquireTimeout
+				}
+				return m
+			}
+		}
+	}
+	return nil
 }
 
 func (r *WorkerReconciler) workerTeamName(ctx context.Context, w *v1beta1.Worker) (string, error) {
@@ -403,7 +572,7 @@ func (r *WorkerReconciler) reconcileDelete(ctx context.Context, w *v1beta1.Worke
 		return reconcile.Result{}, err
 	}
 	effectiveSpec = workerSpecWithAppliedDeploymentTarget(effectiveSpec, w.Status)
-	mctx := r.workerMemberContextWithSpec(w, effectiveSpec, resourceSpec, updateStrategy)
+	mctx := r.workerMemberContextWithSpec(w, effectiveSpec, resourceSpec, updateStrategy, nil)
 
 	_ = ReconcileMemberDelete(ctx, deps, mctx)
 
@@ -441,12 +610,21 @@ func (r *WorkerReconciler) reconcileManagerAccess(ctx context.Context, w *v1beta
 		// TeamReconciler owns Team-scoped Manager access and channel policies.
 		if role != RoleTeamLeader {
 			if w.Status.RoomID != "" {
-				if err := r.Provisioner.ForceLeaveRoom(
-					ctx,
-					r.ManagerConfig.MatrixUserID("manager"),
-					w.Status.RoomID,
-				); err != nil {
-					logger.Error(err, "failed to remove Manager from Team worker personal room (non-fatal)", "worker", w.Name, "roomID", w.Status.RoomID)
+				// #1079: skip the force-leave when the Manager is already out of
+				// the worker's personal room (the steady state). ForceLeaveRoom is
+				// fire-and-forget, so re-firing it on every worker reconcile floods
+				// the admin room; IsUserInRoom is queried with the homeserver-admin
+				// token so it is authoritative, and reports true on a lookup error
+				// to keep the removal reachable.
+				managerMatrixID := r.ManagerConfig.MatrixUserID("manager")
+				if inRoom, _ := r.Provisioner.IsUserInRoom(ctx, w.Status.RoomID, managerMatrixID); inRoom {
+					if err := r.Provisioner.ForceLeaveRoom(
+						ctx,
+						managerMatrixID,
+						w.Status.RoomID,
+					); err != nil {
+						logger.Error(err, "failed to remove Manager from Team worker personal room (non-fatal)", "worker", w.Name, "roomID", w.Status.RoomID)
+					}
 				}
 			}
 			if err := r.ManagerConfig.UpdateManagerGroupAllowFrom(r.ManagerConfig.MatrixUserID(runtimeName), false); err != nil {
@@ -588,10 +766,15 @@ func mergeBackendResourceRequirements(defaults, override *backend.ResourceRequir
 // deliberately come last so anything the user writes that collides (e.g.
 // `agentteams.io/controller`) is silently overridden rather than rejected.
 func (r *WorkerReconciler) workerMemberContext(w *v1beta1.Worker) MemberContext {
-	return r.workerMemberContextWithSpec(w, w.Spec, nil, "")
+	return r.workerMemberContextWithSpec(w, w.Spec, nil, "", nil)
 }
 
-func (r *WorkerReconciler) workerMemberContextWithSpec(w *v1beta1.Worker, spec v1beta1.WorkerSpec, resourceSpec *v1beta1.AgentResourceRequirements, updateStrategy string) MemberContext {
+// teamLlmTuning is the owning team's startup-only LLM tuning defaults
+// (QWENPAW_LLM_* env keys), resolved by the caller. It feeds two consumers
+// with the same effective values: the pod spec hash (merged in, so a change
+// recreates the container) and the container env projection (via
+// MemberContext.TeamLlmTuning / resolveLlmTuningEnv).
+func (r *WorkerReconciler) workerMemberContextWithSpec(w *v1beta1.Worker, spec v1beta1.WorkerSpec, resourceSpec *v1beta1.AgentResourceRequirements, updateStrategy string, teamLlmTuning map[string]string) MemberContext {
 	runtimeName := spec.EffectiveWorkerName(w.Name)
 	effectiveRuntime := backend.ResolveRuntime(spec.Runtime, r.DefaultRuntime)
 	backendRuntime := spec.GetBackendRuntime()
@@ -599,7 +782,7 @@ func (r *WorkerReconciler) workerMemberContextWithSpec(w *v1beta1.Worker, spec v
 		backendRuntime = r.DefaultBackendRuntime
 	}
 	hashSpec := workerSpecWithEffectiveBackendRuntimeForHash(spec, backendRuntime)
-	appliedSpecHash := hashAppliedWorkerSpecForRuntimeAndResources(hashSpec, effectiveRuntime, resourceSpec)
+	appliedSpecHash := hashAppliedWorkerSpecForRuntimeAndResources(hashSpecWithLlmTuningDefaults(hashSpec, teamLlmTuning), effectiveRuntime, resourceSpec)
 	// Only pod-affecting fields trigger recreation. A Worker without a recorded
 	// spec hash follows the normal create path and records it after success.
 	specChanged := w.Status.SpecHash != "" && w.Status.SpecHash != appliedSpecHash
@@ -624,6 +807,7 @@ func (r *WorkerReconciler) workerMemberContextWithSpec(w *v1beta1.Worker, spec v
 		Namespace:          w.Namespace,
 		Role:               RoleStandalone,
 		Spec:               spec,
+		TeamLlmTuning:      teamLlmTuning,
 		Generation:         w.Generation,
 		ObservedGeneration: w.Status.ObservedGeneration,
 		PodLabels: mergeLabels(
@@ -841,6 +1025,7 @@ func hashAppliedWorkerSpecForRuntimeAndResources(spec v1beta1.WorkerSpec, runtim
 		return hashAppliedWorkerSpec(spec)
 	}
 	spec.Model = ""           // config-only: written to openclaw.json/runtime.yaml
+	spec.SubagentModel = ""   // config-only: hot-applied via model-settings (#1292), no restart
 	spec.McpServers = nil     // config-only: written to mcporter/runtime config
 	spec.AccessEntries = nil  // permission-only: resolved when credentials are issued
 	spec.State = nil          // exclude lifecycle state from hash
@@ -873,6 +1058,27 @@ func workerSpecWithEffectiveBackendRuntimeForHash(spec v1beta1.WorkerSpec, backe
 	return spec
 }
 
+// hashSpecWithLlmTuningDefaults returns spec with the startup-only LLM
+// tuning fields set to their effective values (worker explicit value over
+// team default, per key). The result is fed to the container-recreation
+// hash so it covers exactly the values resolveLlmTuningEnv projects into
+// the container env — a change to either side recreates the container.
+// An empty teamLlmTuning leaves the spec untouched (no copy).
+func hashSpecWithLlmTuningDefaults(spec v1beta1.WorkerSpec, teamLlmTuning map[string]string) v1beta1.WorkerSpec {
+	if len(teamLlmTuning) == 0 {
+		return spec
+	}
+	for _, k := range llmTuningEnvSpecs {
+		if k.get(spec) != "" {
+			continue
+		}
+		if v := teamLlmTuning[k.envKey]; v != "" {
+			k.set(&spec, v)
+		}
+	}
+	return spec
+}
+
 func hashMemberRuntimePodSpec(spec v1beta1.WorkerSpec) string {
 	return hashMemberRuntimePodSpecWithResources(spec, nil)
 }
@@ -890,21 +1096,43 @@ func hashMemberRuntimePodSpecWithResources(spec v1beta1.WorkerSpec, resources *v
 		Labels           map[string]string                  `json:"labels,omitempty"`
 		Volumes          []v1beta1.WorkerVolumeSpec         `json:"volumes,omitempty"`
 		Mounts           []v1beta1.WorkerMountSpec          `json:"mounts,omitempty"`
-		WorkerDepsLayout string                             `json:"workerDepsLayout,omitempty"`
+		// Effective startup-only LLM tuning (worker value over team
+		// default, merged by the caller before hashing). These are
+		// projected into the container env, so any change must recreate
+		// the container. The two hot stream-timeout fields are
+		// deliberately absent: they are hot-applied via the QwenPaw envs
+		// API without a restart.
+		LlmMaxRetries      string `json:"llmMaxRetries,omitempty"`
+		LlmBackoffBase     string `json:"llmBackoffBase,omitempty"`
+		LlmBackoffCap      string `json:"llmBackoffCap,omitempty"`
+		LlmMaxConcurrent   string `json:"llmMaxConcurrent,omitempty"`
+		LlmMaxQpm          string `json:"llmMaxQpm,omitempty"`
+		LlmRateLimitPause  string `json:"llmRateLimitPause,omitempty"`
+		LlmRateLimitJitter string `json:"llmRateLimitJitter,omitempty"`
+		LlmAcquireTimeout  string `json:"llmAcquireTimeout,omitempty"`
+		WorkerDepsLayout   string `json:"workerDepsLayout,omitempty"`
 	}
 	payload := memberRuntimePodSpec{
-		Runtime:          spec.Runtime,
-		Image:            spec.Image,
-		WorkerName:       spec.WorkerName,
-		ContainerManaged: spec.ContainerManaged,
-		DeployMode:       spec.DeployMode,
-		BackendRuntime:   spec.BackendRuntime,
-		Resources:        resources,
-		Env:              spec.Env,
-		Labels:           spec.Labels,
-		Volumes:          spec.Volumes,
-		Mounts:           spec.Mounts,
-		WorkerDepsLayout: workerDepsLayoutHashVersion(spec),
+		Runtime:            spec.Runtime,
+		Image:              spec.Image,
+		WorkerName:         spec.WorkerName,
+		ContainerManaged:   spec.ContainerManaged,
+		DeployMode:         spec.DeployMode,
+		BackendRuntime:     spec.BackendRuntime,
+		Resources:          resources,
+		Env:                spec.Env,
+		Labels:             spec.Labels,
+		Volumes:            spec.Volumes,
+		Mounts:             spec.Mounts,
+		LlmMaxRetries:      spec.LlmMaxRetries,
+		LlmBackoffBase:     spec.LlmBackoffBase,
+		LlmBackoffCap:      spec.LlmBackoffCap,
+		LlmMaxConcurrent:   spec.LlmMaxConcurrent,
+		LlmMaxQpm:          spec.LlmMaxQpm,
+		LlmRateLimitPause:  spec.LlmRateLimitPause,
+		LlmRateLimitJitter: spec.LlmRateLimitJitter,
+		LlmAcquireTimeout:  spec.LlmAcquireTimeout,
+		WorkerDepsLayout:   workerDepsLayoutHashVersion(spec),
 	}
 	buf, err := json.Marshal(payload)
 	if err != nil {

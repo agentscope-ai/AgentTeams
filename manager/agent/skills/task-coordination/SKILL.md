@@ -52,6 +52,7 @@ Location: `tasks/{task-id}/.processing`
 | `started_at` | ISO 8601 timestamp when processing started |
 | `expires_at` | ISO 8601 timestamp when marker expires (15 min default) |
 | `operation` | What operation is in progress (optional) |
+| `run_id` | Optional unique identifier for your current operation; coding CLI execution requires it to match before passing through an active marker |
 
 ### Expiration
 
@@ -115,21 +116,24 @@ bash /opt/agentteams/agent/skills/task-coordination/scripts/check-processing-mar
 Create a processing marker for a task.
 
 ```bash
-bash /opt/agentteams/agent/skills/task-coordination/scripts/create-processing-marker.sh <task-id> <processor-name> [timeout-mins]
+bash /opt/agentteams/agent/skills/task-coordination/scripts/create-processing-marker.sh <task-id> <processor-name> [timeout-mins] [run-id]
 ```
 
 **Parameters:**
 - `task-id`: Task identifier (e.g., `task-20260225-103000`)
 - `processor-name`: Who is processing (`manager` or worker name)
 - `timeout-mins`: (Optional) Expiration timeout in minutes (default: 15)
+- `run-id`: (Optional) Fresh identifier for your operation. Generate it once and pass it unchanged to your coding CLI wrapper and marker removal call. Existing calls without it retain the legacy marker format.
 
 ### remove-processing-marker.sh
 
 Remove the processing marker after work is done.
 
 ```bash
-bash /opt/agentteams/agent/skills/task-coordination/scripts/remove-processing-marker.sh <task-id>
+bash /opt/agentteams/agent/skills/task-coordination/scripts/remove-processing-marker.sh <task-id> [run-id]
 ```
+
+When you supply `run-id`, removal refuses to delete a marker belonging to a different run. Existing calls without it retain their original behavior.
 
 ---
 

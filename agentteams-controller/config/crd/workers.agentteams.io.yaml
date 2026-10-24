@@ -22,6 +22,82 @@ spec:
                 modelProvider:
                   type: string
                   description: Name of the AI gateway Model API to use as the LLM provider.
+                subagentModel:
+                  type: string
+                  description: >
+                    Model used by spawned subagents (spawn_subagent). Free string served by
+                    the team AI gateway; not catalog-validated (unknown ids surface as a
+                    visible upstream error at spawn time). Empty inherits the runtime
+                    default — a team-wide default applies when the Worker is a team member.
+                llmStreamFirstContentTimeout:
+                  type: string
+                  description: >
+                    Seconds to wait for the first meaningful LLM stream chunk before
+                    failing the request. Hot-applied at runtime to the worker's QwenPaw
+                    envs (no restart); requires QwenPaw >= 2.2.1. Empty inherits the
+                    team-wide default (when the Worker is a team member), else the
+                    entrypoint default.
+                llmStreamIdleTimeout:
+                  type: string
+                  description: >
+                    Seconds of allowed silence between stream chunks after the first
+                    meaningful content. Same hot-apply semantics as
+                    llmStreamFirstContentTimeout.
+                llmMaxRetries:
+                  type: string
+                  description: >
+                    Maximum LLM request retries (non-negative integer).
+                    Startup-only: takes effect when the worker container is
+                    (re)created (spec-hash driven), not hot-applied. An
+                    explicit value wins over the team-wide default; empty
+                    inherits the team default, else the QwenPaw registry
+                    default (3). Invalid values are skipped with a log and
+                    never break the container.
+                llmBackoffBase:
+                  type: string
+                  description: >
+                    Base seconds for LLM retry backoff (non-negative float).
+                    Startup-only (spec-hash recreation); explicit value wins
+                    over the team default, empty inherits, else default (1).
+                llmBackoffCap:
+                  type: string
+                  description: >
+                    Cap in seconds for LLM retry backoff (non-negative float).
+                    Startup-only (spec-hash recreation); explicit value wins
+                    over the team default, empty inherits, else default (10).
+                llmMaxConcurrent:
+                  type: string
+                  description: >
+                    Maximum concurrent LLM requests (non-negative integer).
+                    Startup-only (spec-hash recreation); explicit value wins
+                    over the team default, empty inherits, else default (10).
+                llmMaxQpm:
+                  type: string
+                  description: >
+                    Maximum queries per minute (non-negative integer).
+                    Startup-only (spec-hash recreation); explicit value wins
+                    over the team default, empty inherits, else default (600).
+                llmRateLimitPause:
+                  type: string
+                  description: >
+                    Seconds to pause on a rate-limit response (non-negative
+                    float). Startup-only (spec-hash recreation); explicit
+                    value wins over the team default, empty inherits, else
+                    default (5).
+                llmRateLimitJitter:
+                  type: string
+                  description: >
+                    Jitter in seconds added to the rate-limit pause
+                    (non-negative float). Startup-only (spec-hash
+                    recreation); explicit value wins over the team default,
+                    empty inherits, else default (1).
+                llmAcquireTimeout:
+                  type: string
+                  description: >
+                    Seconds to wait for a concurrent-request slot before
+                    failing (non-negative float). Startup-only (spec-hash
+                    recreation); explicit value wins over the team default,
+                    empty inherits, else default (300).
                 runtime:
                   type: string
                   enum: [openclaw, copaw, hermes, qwenpaw, deepseek-harness]
@@ -304,6 +380,68 @@ spec:
                           ${self.kind} / ${self.namespace} are expanded by the
                           controller before the request reaches the provider.
                         x-kubernetes-preserve-unknown-fields: true
+                volumes:
+                  type: array
+                  description: >
+                    External storage volumes. Only supported when backendRuntime is
+                    sandbox; otherwise the reconciler rejects them.
+                  items:
+                    type: object
+                    required: [name, type]
+                    properties:
+                      name:
+                        type: string
+                      type:
+                        type: string
+                        description: Volume type (OSS).
+                      oss:
+                        type: object
+                        properties:
+                          bucket:
+                            type: string
+                          endpoint:
+                            type: string
+                          auth:
+                            type: object
+                            properties:
+                              type:
+                                type: string
+                              rrsa:
+                                type: object
+                                properties:
+                                  roleName:
+                                    type: string
+                                  roleArn:
+                                    type: string
+                              accessKey:
+                                type: object
+                                properties:
+                                  secretRef:
+                                    type: object
+                                    properties:
+                                      name:
+                                        type: string
+                                      namespace:
+                                        type: string
+                mounts:
+                  type: array
+                  description: >
+                    Dynamic mounts referencing a volume by name. Only supported when
+                    backendRuntime is sandbox.
+                  items:
+                    type: object
+                    required: [name, volumeRef, mountPath]
+                    properties:
+                      name:
+                        type: string
+                      volumeRef:
+                        type: string
+                      subPath:
+                        type: string
+                      mountPath:
+                        type: string
+                      readOnly:
+                        type: boolean
             status:
               type: object
               properties:
@@ -329,6 +467,20 @@ spec:
                 lastActiveAt:
                   type: string
                   format: date-time
+                agentStatus:
+                  type: string
+                  description: "Worker runtime task-level state self-reported by the heartbeat: idle / running / disabled; empty when not reported."
+                runningTaskCount:
+                  type: integer
+                  description: "Number of active runtime tasks reported by the worker heartbeat; absent when unknown."
+                lastRunAt:
+                  type: string
+                  format: date-time
+                  description: "Runtime-reported timestamp of the last task start."
+                lastFinishAt:
+                  type: string
+                  format: date-time
+                  description: "Runtime-reported timestamp of the last task finish."
                 message:
                   type: string
                 exposedPorts:

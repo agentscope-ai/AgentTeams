@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -130,6 +131,8 @@ func projectCreateCmd() *cobra.Command {
 func projectCancelCmd() *cobra.Command {
 	var reason string
 	var replacement string
+	var submissionID string
+	var team string
 	cmd := &cobra.Command{
 		Use:   "cancel <project-id> <task-id>",
 		Short: "Cancel a single task (reason required)",
@@ -142,11 +145,22 @@ func projectCancelCmd() *cobra.Command {
 			if replacement != "" {
 				body["replacementTaskId"] = replacement
 			}
-			return projectWrite("POST", "/api/v1/projects/"+args[0]+"/tasks/"+args[1]+"/cancel", body)
+			if submissionID != "" {
+				body["submissionId"] = submissionID
+			}
+			path := "/api/v1/projects/" + args[0] + "/tasks/" + args[1] + "/cancel"
+			if team != "" {
+				query := url.Values{}
+				query.Set("team", team)
+				path += "?" + query.Encode()
+			}
+			return projectWrite("POST", path, body)
 		},
 	}
 	cmd.Flags().StringVar(&reason, "reason", "", "cancellation reason (required)")
 	cmd.Flags().StringVar(&replacement, "replacement", "", "optional replacement task id")
+	cmd.Flags().StringVar(&submissionID, "submission-id", "", "current task submission identity (required when TaskMeta has submission_id)")
+	cmd.Flags().StringVar(&team, "team", "", "owning team for an ambiguous project id")
 	return cmd
 }
 

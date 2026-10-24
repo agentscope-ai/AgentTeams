@@ -136,6 +136,36 @@ func putProject(store *ossfake.Memory, key string, meta map[string]any) {
 	_ = store.PutObject(context.Background(), key, data)
 }
 
+// canonicalProjectMetaNoAudit normalizes raw project meta JSON to the
+// struct's canonical serialization (so map-seeded fixtures compare against
+// handler-written state without empty-field artifacts such as team_id/mode/
+// assigned_to), then strips the dual-ledger audit fields
+// (controlActions / controlActionsTruncatedCount). The remaining bytes are
+// compared for byte-equality by the caller: every business field is still
+// asserted, the exemption covers only the audit ledger.
+func canonicalProjectMetaNoAudit(t *testing.T, data []byte) []byte {
+	t.Helper()
+	var m projectMeta
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("canonicalProjectMetaNoAudit: unmarshal: %v (data=%s)", err, data)
+	}
+	canonical, err := json.Marshal(&m)
+	if err != nil {
+		t.Fatalf("canonicalProjectMetaNoAudit: marshal: %v", err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(canonical, &fields); err != nil {
+		t.Fatalf("canonicalProjectMetaNoAudit: re-unmarshal: %v", err)
+	}
+	delete(fields, "controlActions")
+	delete(fields, "controlActionsTruncatedCount")
+	out, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatalf("canonicalProjectMetaNoAudit: final marshal: %v", err)
+	}
+	return out
+}
+
 func team(name string) *v1beta1.Team {
 	return &v1beta1.Team{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
@@ -3354,7 +3384,7 @@ func TestReplanProject_CannotReopenCancellationDecision(t *testing.T) {
 		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
 	}
 	after, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
-	if string(after) != string(before) {
+	if string(canonicalProjectMetaNoAudit(t, after)) != string(canonicalProjectMetaNoAudit(t, before)) {
 		t.Fatalf("reopen attempt changed project: %s", after)
 	}
 }
@@ -3381,7 +3411,7 @@ func TestReplanProject_CannotRemoveCancellationDecision(t *testing.T) {
 		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
 	}
 	after, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
-	if string(after) != string(before) {
+	if string(canonicalProjectMetaNoAudit(t, after)) != string(canonicalProjectMetaNoAudit(t, before)) {
 		t.Fatalf("remove attempt changed project: %s", after)
 	}
 }
@@ -3745,7 +3775,7 @@ func TestCancelTask_SubmissionFence(t *testing.T) {
 			}
 			afterProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
 			afterTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
-			if string(afterProject) != string(beforeProject) || string(afterTask) != string(beforeTask) {
+			if string(canonicalProjectMetaNoAudit(t, afterProject)) != string(canonicalProjectMetaNoAudit(t, beforeProject)) || string(afterTask) != string(beforeTask) {
 				t.Fatalf("submission fence changed state: project=%s task=%s", afterProject, afterTask)
 			}
 		})
@@ -3778,7 +3808,7 @@ func TestCancelTask_LegacyRejectsUnknownSubmissionID(t *testing.T) {
 	}
 	afterProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
 	afterTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
-	if string(afterProject) != string(beforeProject) || string(afterTask) != string(beforeTask) {
+	if string(canonicalProjectMetaNoAudit(t, afterProject)) != string(canonicalProjectMetaNoAudit(t, beforeProject)) || string(afterTask) != string(beforeTask) {
 		t.Fatalf("unknown legacy identity changed state: project=%s task=%s", afterProject, afterTask)
 	}
 }
@@ -3841,7 +3871,7 @@ func TestCancelTask_RepeatedDecisionIsIdempotentAndConflictingPayloadIsRejected(
 		}
 		afterProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
 		afterTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
-		if string(afterProject) != string(firstProject) || string(afterTask) != string(firstTask) {
+		if string(canonicalProjectMetaNoAudit(t, afterProject)) != string(canonicalProjectMetaNoAudit(t, firstProject)) || string(afterTask) != string(firstTask) {
 			t.Fatalf("conflicting retry changed state: project=%s task=%s", afterProject, afterTask)
 		}
 	}
@@ -3876,7 +3906,7 @@ func TestCancelTask_TaskMetaTerminalDecisionCannotBeOverwritten(t *testing.T) {
 	}
 	afterProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
 	afterTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
-	if string(afterProject) != string(beforeProject) || string(afterTask) != string(beforeTask) {
+	if string(canonicalProjectMetaNoAudit(t, afterProject)) != string(canonicalProjectMetaNoAudit(t, beforeProject)) || string(afterTask) != string(beforeTask) {
 		t.Fatalf("terminal task decision changed: project=%s task=%s", afterProject, afterTask)
 	}
 }
@@ -3908,7 +3938,7 @@ func TestCancelTask_RejectsTaskMetaOwnedByAnotherProject(t *testing.T) {
 	}
 	afterProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
 	afterTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
-	if string(afterProject) != string(beforeProject) || string(afterTask) != string(beforeTask) {
+	if string(canonicalProjectMetaNoAudit(t, afterProject)) != string(canonicalProjectMetaNoAudit(t, beforeProject)) || string(afterTask) != string(beforeTask) {
 		t.Fatalf("ownership mismatch changed state: project=%s task=%s", afterProject, afterTask)
 	}
 }
@@ -3987,7 +4017,7 @@ func TestCancelTask_InvalidReplacementID400(t *testing.T) {
 			}
 			afterProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
 			afterTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
-			if string(afterProject) != string(beforeProject) || string(afterTask) != string(beforeTask) {
+			if string(canonicalProjectMetaNoAudit(t, afterProject)) != string(canonicalProjectMetaNoAudit(t, beforeProject)) || string(afterTask) != string(beforeTask) {
 				t.Fatalf("invalid replacement changed state: project=%s task=%s", afterProject, afterTask)
 			}
 		})

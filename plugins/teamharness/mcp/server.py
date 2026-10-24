@@ -3240,6 +3240,45 @@ def _safe_loop_decision(value: Any) -> str:
     return decision
 
 
+# Loop budget ledger (project["loop"]["budget"]). No budget by default:
+# iteration_budget stays None unless the project explicitly declares a
+# recognized tier or iteration_budget — then over_budget is never set,
+# while iterations_used / tokens_used still accumulate. The
+# tier→iteration-budget mapping (simple=3 / standard=5 / full=10) is the
+# TeamHarness iteration budget; the cost-model tiers only define
+# human-touch budgets, so the mapping is declared here and noted in the
+# change record. An explicit project iteration_budget wins over the tier
+# mapping. Over budget the loop is flagged (over_budget + provenance),
+# not truncated.
+LOOP_BUDGET_BY_TIER = {"simple": 3, "standard": 5, "full": 10}
+LOOP_PROVENANCE_LIMIT = 5
+
+
+def _loop_budget(project: dict[str, Any], previous_budget: Any) -> dict[str, Any]:
+    tier = str(project.get("tier") or "").strip().lower()
+    tier = tier if tier in LOOP_BUDGET_BY_TIER else None
+    budget = {
+        "tier": tier,
+        "iteration_budget": LOOP_BUDGET_BY_TIER[tier] if tier else None,
+        "iterations_used": 0,
+        "tokens_used": 0,
+        "over_budget": False,
+    }
+    # Explicit iteration_budget (project meta) wins over the tier mapping;
+    # with neither declared there is no budget at all (None).
+    explicit = project.get("iteration_budget")
+    if explicit is not None:
+        budget["iteration_budget"] = _non_negative_int(explicit, "iteration_budget")
+    if isinstance(previous_budget, dict):
+        budget["iterations_used"] = _non_negative_int(previous_budget.get("iterations_used") or 0, "iterations_used")
+        budget["tokens_used"] = _non_negative_int(previous_budget.get("tokens_used") or 0, "tokens_used")
+    budget["over_budget"] = (
+        budget["iteration_budget"] is not None
+        and budget["iterations_used"] > budget["iteration_budget"]
+    )
+    return budget
+
+
 def _write_project_plan(project_dir: Path, project: dict[str, Any]) -> None:
     lines = [
         f"# {project.get('title') or project.get('project_id')}",
@@ -4195,6 +4234,8 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 return mismatch
             project["plan_type"] = "loop"
             project["loop"] = loop
+            loop["budget"] = _loop_budget(project, previous_loop.get("budget"))
+            loop["provenance"] = previous_loop.get("provenance") if isinstance(previous_loop.get("provenance"), list) else []
             project_dir = _project_dir(arguments, project_id)
             _write_json(state_path, project)
             _write_project_plan(project_dir, project)
@@ -4265,6 +4306,31 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "next_action": str(payload.get("nextAction") or payload.get("next_action") or "").strip(),
             })
             loop["history"] = history
+            budget = loop.get("budget")
+            if not isinstance(budget, dict) or "iteration_budget" not in budget:
+                # Lazy-init for loops planned before the budget ledger existed.
+                budget = _loop_budget(project, budget)
+            iterations_used = _non_negative_int(budget.get("iterations_used") or 0, "iterations_used") + 1
+            tokens_used = _non_negative_int(budget.get("tokens_used") or 0, "tokens_used")
+            # Loop history entries carry no token field, so tokens_used stays
+            # 0 (placeholder) until per-iteration token accounting lands.
+            # No budget (iteration_budget is None): usage still accumulates,
+            # the over-budget comparison is skipped (over_budget stays False).
+            iteration_budget = budget.get("iteration_budget")
+            if iteration_budget is not None:
+                iteration_budget = _non_negative_int(iteration_budget, "iteration_budget")
+            budget["iterations_used"] = iterations_used
+            budget["tokens_used"] = tokens_used
+            budget["over_budget"] = iteration_budget is not None and iterations_used > iteration_budget
+            loop["budget"] = budget
+            provenance = loop.get("provenance") if isinstance(loop.get("provenance"), list) else []
+            provenance.append({
+                "iteration": iteration,
+                "iterations_used": iterations_used,
+                "iteration_budget": iteration_budget,
+                "over_budget": budget["over_budget"],
+            })
+            loop["provenance"] = provenance[-LOOP_PROVENANCE_LIMIT:]
             project["plan_type"] = "loop"
             project["loop"] = loop
             project_dir = _project_dir(arguments, project_id)

@@ -1,0 +1,18 @@
+{
+  "id": "qwen-code-bridge",
+  "name": "qwen-code-bridge",
+  "version": "0.1.0",
+  "type": "general",
+  "description": "Manage and run local coding CLIs (Qwen Code / OpenCode / Qoder) from QwenPaw: probe/settings/install management API ported from QwenPaw PR 8156; session-injection middleware and task dispatch land in later phases.",
+  "author": "QwenPaw community",
+  "entry": {
+    "backend": "plugin.py",
+    "frontend": "frontend/index.js"
+  },
+  "dependencies": [],
+  "min_version": "2.2.0",
+  "qwenpaw_version": {
+    "min": "2.2.0",
+    "max": "2.3.0"
+  }
+}

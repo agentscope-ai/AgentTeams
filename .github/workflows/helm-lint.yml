@@ -37,6 +37,7 @@ on:
       - 'tests/copaw-helm-upgrade-gate.sh'
       - 'hack/local-k8s-up.sh'
       - 'tests/check-create-project-grant-admin.sh'
+      - 'tests/check-create-project-team.sh'
       - 'manager/agent/skills/project-management/**'
       - 'manager/agent/skills/coding-cli-management/**'
       - 'manager/agent/worker-skills/coding-cli/**'
@@ -105,6 +106,9 @@ jobs:
 
       - name: Check create-project grant-admin wiring
         run: bash tests/check-create-project-grant-admin.sh
+
+      - name: Check create-project --team roster and join reporting
+        run: bash tests/check-create-project-team.sh
 
       - name: Check coding-cli Qoder PAT and .processing guard
         run: bash tests/check-coding-cli-qoder-pat-processing.sh

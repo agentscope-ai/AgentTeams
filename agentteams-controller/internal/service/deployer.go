@@ -1507,6 +1507,22 @@ func (d *Deployer) ensureDirectoryObject(ctx context.Context, key string) error 
 	return d.oss.PutObject(ctx, key+".agentteams-keep", []byte(""))
 }
 
+// EnsureHumanStorage creates the per-human file area (#1414 P1) under
+// humans/<username>/: a files/ directory (the human's working files,
+// served by the human-file API) and a .trash/ directory (soft-deleted
+// files). Idempotent — marker objects are re-put on every reconcile.
+// memory/ and digest/ are deliberately NOT created in P1.
+func (d *Deployer) EnsureHumanStorage(ctx context.Context, human *v1beta1.Human) error {
+	username := human.Spec.EffectiveUsername(human.Name)
+	prefix := fmt.Sprintf("humans/%s/", username)
+	for _, subdir := range []string{"files/", ".trash/"} {
+		if err := d.oss.PutObject(ctx, prefix+subdir+".keep", []byte("")); err != nil {
+			return fmt.Errorf("create %s%s: %w", prefix, subdir, err)
+		}
+	}
+	return nil
+}
+
 // --- Manager Config Deployment ---
 
 // ManagerDeployRequest describes a Manager config deployment (create or update).

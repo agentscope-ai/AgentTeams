@@ -314,6 +314,16 @@ type HumanProvisioner interface {
 	MatrixAppServiceEnabled() bool
 }
 
+// HumanDeployer defines the storage operations HumanReconciler needs.
+// Implemented by *Deployer; extracted for testability.
+type HumanDeployer interface {
+	// EnsureHumanStorage creates the per-human file area
+	// (humans/<username>/files/ + .trash/) idempotently. Called after the
+	// infra phase; failures are non-fatal (logged + requeued) and never
+	// block Matrix user/room sync.
+	EnsureHumanStorage(ctx context.Context, human *v1beta1.Human) error
+}
+
 // HumanCredentials is the subset of matrix.UserCredentials that the Human
 // reconcile path consumes. Decoupled from matrix.UserCredentials so the
 // reconciler does not import internal/matrix directly.
@@ -340,4 +350,5 @@ var (
 	_ ManagerEnvBuilderI = (*WorkerEnvBuilder)(nil)
 
 	_ HumanProvisioner = (*Provisioner)(nil)
+	_ HumanDeployer    = (*Deployer)(nil)
 )

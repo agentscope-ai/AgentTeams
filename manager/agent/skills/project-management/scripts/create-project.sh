@@ -3,6 +3,12 @@
 #
 # Usage:
 #   create-project.sh --id <PROJECT_ID> --title <TITLE> --workers <w1,w2,...>
+#   create-project.sh --id <PROJECT_ID> --title <TITLE> --team <TEAM> [--workers <w1,...>]
+#
+# --team expands to the Team's leader and all its workers, read from the
+# controller; --workers adds to that (union, each member once). --workers alone
+# is the member list exactly as given, so passing only a leader invites only
+# the leader.
 #
 # Prerequisites:
 #   - Worker SOUL.md files must already exist
@@ -14,6 +20,7 @@ source /opt/agentteams/scripts/lib/agentteams-env.sh
 PROJECT_ID=""
 PROJECT_TITLE=""
 WORKERS_CSV=""
+TEAM_NAME=""
 GRANT_ADMIN_CSV=""
 
 while [ $# -gt 0 ]; do
@@ -21,13 +28,14 @@ while [ $# -gt 0 ]; do
         --id)          PROJECT_ID="$2"; shift 2 ;;
         --title)       PROJECT_TITLE="$2"; shift 2 ;;
         --workers)     WORKERS_CSV="$2"; shift 2 ;;
+        --team)        TEAM_NAME="$2"; shift 2 ;;
         --grant-admin) GRANT_ADMIN_CSV="$2"; shift 2 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
 
-if [ -z "${PROJECT_ID}" ] || [ -z "${PROJECT_TITLE}" ] || [ -z "${WORKERS_CSV}" ]; then
-    echo "Usage: create-project.sh --id <PROJECT_ID> --title <TITLE> --workers <w1,w2,...> [--grant-admin <u1,u2,...>]"
+if [ -z "${PROJECT_ID}" ] || [ -z "${PROJECT_TITLE}" ] || { [ -z "${WORKERS_CSV}" ] && [ -z "${TEAM_NAME}" ]; }; then
+    echo "Usage: create-project.sh --id <PROJECT_ID> --title <TITLE> (--workers <w1,w2,...> | --team <TEAM> [--workers <w1,...>]) [--grant-admin <u1,u2,...>]"
     exit 1
 fi
 
@@ -38,6 +46,24 @@ _fail() {
     echo '{"error": "'"$1"'"}'
     exit 1
 }
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=project-members.sh
+source "${SCRIPT_DIR}/project-members.sh"
+
+# Resolve the member list before anything is created: a Team that cannot be
+# read stops here, not after a half-built project.
+if [ -n "${TEAM_NAME}" ]; then
+    TEAM_ROSTER=$(project_team_roster "${TEAM_NAME}" 2>&1) || _fail "${TEAM_ROSTER}"
+    TEAM_CSV=$(project_merge_members "$(printf '%s\n' "${TEAM_ROSTER}" | paste -sd, -)")
+    log "Team ${TEAM_NAME} roster: ${TEAM_CSV}"
+    [ -z "${WORKERS_CSV}" ] || log "  plus --workers: ${WORKERS_CSV}"
+    WORKERS_CSV=$(project_merge_members "${TEAM_CSV}" "${WORKERS_CSV}")
+else
+    WORKERS_CSV=$(project_merge_members "${WORKERS_CSV}")
+fi
+[ -n "${WORKERS_CSV}" ] || _fail "No project members to invite"
+log "Project members: ${WORKERS_CSV}"
 
 # Ensure Manager Matrix token is available
 SECRETS_FILE="/data/agentteams-secrets.env"
@@ -193,56 +219,6 @@ else
     log "  WARNING: Could not obtain admin token — admin will need to accept invite manually"
 fi
 
-_worker_auto_join() {
-    local worker="$1"
-    local room_id="$2"
-    local creds_file="/data/worker-creds/${worker}.env"
-    local worker_token=""
-    local room_enc=""
-    local WORKER_PASSWORD=""
-    local WORKER_MATRIX_TOKEN=""
-
-    if [ -z "${worker}" ] || [ -z "${room_id}" ]; then
-        return 0
-    fi
-
-    if [ -f "${creds_file}" ]; then
-        # shellcheck disable=SC1090
-        source "${creds_file}"
-    fi
-
-    if [ -z "${WORKER_PASSWORD}" ]; then
-        WORKER_PASSWORD=$(mc cat "${AGENTTEAMS_STORAGE_PREFIX}/agents/${worker}/credentials/matrix/password" 2>/dev/null || true)
-    fi
-    if [ -z "${WORKER_PASSWORD}" ] && [ -f "/root/agentteams-fs/agents/${worker}/credentials/matrix/password" ]; then
-        WORKER_PASSWORD=$(cat "/root/agentteams-fs/agents/${worker}/credentials/matrix/password" 2>/dev/null || true)
-    fi
-
-    if [ -n "${WORKER_PASSWORD}" ]; then
-        worker_token=$(curl -sf -X POST ${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/login \
-            -H 'Content-Type: application/json' \
-            -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"'"${worker}"'"},"password":"'"${WORKER_PASSWORD}"'"}' \
-            2>/dev/null | jq -r '.access_token // empty')
-    elif [ -n "${WORKER_MATRIX_TOKEN}" ]; then
-        worker_token="${WORKER_MATRIX_TOKEN}"
-    fi
-
-    if [ -z "${worker_token}" ]; then
-        log "  WARNING: Could not obtain Matrix token for worker ${worker} — worker will need to accept project room invite"
-        return 0
-    fi
-
-    room_enc=$(echo "${room_id}" | sed 's/!/%21/g')
-    if curl -sf -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${room_enc}/join" \
-        -H "Authorization: Bearer ${worker_token}" \
-        -H 'Content-Type: application/json' \
-        -d '{}' > /dev/null 2>&1; then
-        log "  Worker ${worker} auto-joined project room"
-    else
-        log "  WARNING: Worker ${worker} failed to auto-join project room"
-    fi
-}
-
 # Builds the project-room member list (workers + --grant-admin humans) as a
 # JSON array. Granted humans must be on the allowlists too: in allowlist
 # mode the Manager silently drops messages from users not listed, and the
@@ -291,11 +267,22 @@ _patch_copaw_project_room_config() {
     mv /tmp/project-copaw-agent.json "${agent_json}"
 }
 
+# An invite is not membership: record who actually joined, and report the
+# rest instead of listing them as in the room.
+JOINED=()
+JOIN_FAILED=()
 for worker in "${WORKER_ARR[@]}"; do
     worker=$(echo "${worker}" | tr -d ' ')
     [ -z "${worker}" ] && continue
-    _worker_auto_join "${worker}" "${ROOM_ID}"
+    if project_worker_auto_join "${worker}" "${ROOM_ID}"; then
+        JOINED+=("${worker}")
+    else
+        JOIN_FAILED+=("${worker}")
+    fi
 done
+if [ "${#JOIN_FAILED[@]}" -gt 0 ]; then
+    log "  WARNING: invited but not joined: ${JOIN_FAILED[*]}"
+fi
 
 # ============================================================
 # Step 3: Add Workers to Manager's groupAllowFrom
@@ -333,12 +320,16 @@ RESULT=$(jq -n \
     --arg room_id "${ROOM_ID}" \
     --arg status "planning" \
     --arg workers "${WORKERS_CSV}" \
+    --arg joined "$(IFS=,; echo "${JOINED[*]}")" \
+    --arg join_failed "$(IFS=,; echo "${JOIN_FAILED[*]}")" \
     '{
         project_id: $id,
         title: $title,
         project_room_id: $room_id,
         status: $status,
-        workers: ($workers | split(","))
+        workers: ($workers | split(",")),
+        joined: ($joined | split(",") | map(select(. != ""))),
+        join_failed: ($join_failed | split(",") | map(select(. != "")))
     }')
 
 echo "---RESULT---"

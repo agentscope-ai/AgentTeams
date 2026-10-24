@@ -35,6 +35,19 @@ bash /opt/agentteams/agent/skills/project-management/scripts/create-project.sh \
 
 The script handles: directory creation, meta.json, placeholder plan.md, Matrix room creation (with admin + all workers invited), Manager groupAllowFrom update, and MinIO sync.
 
+**Inviting a whole Team (`--team`).** When the project belongs to a Team, pass the Team instead of spelling out its members; the script reads the leader and every worker from the controller, logs the resolved roster, and invites each member once:
+
+```bash
+bash /opt/agentteams/agent/skills/project-management/scripts/create-project.sh \
+  --id "${PROJECT_ID}" \
+  --title "<title>" \
+  --team "<TEAM_NAME>"
+```
+
+`--workers` can be added to a `--team` call for extra members (the union is used, each member once). `--workers` on its own is the member list exactly as given: passing only a Team leader invites only the leader. A Team that cannot be read stops the script before anything is created.
+
+**Check who actually joined.** The result JSON lists `workers` (invited), `joined` and `join_failed`. An invite is not membership: a worker in `join_failed` has not joined the room and will not see tasks posted there until it accepts the invite, so follow up on those before dispatching work.
+
 **Room administration for human operators (`--grant-admin`).** Human users who are not the default admin join the project room at the implicit power level 0 and get 403 on room operations (rename, inviting a colleague). When the project involves additional human operators who must be able to administer the room, pass their Matrix local parts (or full Matrix IDs):
 
 ```bash

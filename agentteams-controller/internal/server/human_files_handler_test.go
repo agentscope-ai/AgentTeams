@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -812,5 +813,267 @@ func TestHumanFiles_AuditEvents(t *testing.T) {
 	}
 	if v := detailField(t, lines[4], "path"); v != "files/a.txt" {
 		t.Fatalf("purge detail path = %v", v)
+	}
+}
+
+// --- Quota --------------------------------------------------------------------
+
+// hfGetQuota runs GET quota and returns the recorder.
+func hfGetQuota(t *testing.T, hfh *humanFilesHandler, name string, caller *authpkg.CallerIdentity) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	hfh.getQuota(rec, hfReq(t, http.MethodGet, name, "", caller, nil))
+	return rec
+}
+
+func hfPutQuota(t *testing.T, hfh *humanFilesHandler, name string, caller *authpkg.CallerIdentity, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	hfh.putQuota(rec, hfReq(t, http.MethodPut, name, "", caller, strings.NewReader(body)))
+	return rec
+}
+
+func TestHumanFiles_QuotaUnsetIsUnlimited(t *testing.T) {
+	hfh, _, _ := newHumanFilesRig(t)
+
+	// No quota configured: a write of any size is allowed.
+	if rec := hfPutFile(t, hfh, "alice", "a.txt", hfSelf(), "0123456789"); rec.Code != http.StatusOK {
+		t.Fatalf("put: %d %s", rec.Code, rec.Body.String())
+	}
+	rec := hfGetQuota(t, hfh, "alice", hfSelf())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get quota: %d %s", rec.Code, rec.Body.String())
+	}
+	// quotaBytes must be present as null (not omitted) to signal unlimited.
+	if !strings.Contains(rec.Body.String(), `"usedBytes":10`) || !strings.Contains(rec.Body.String(), `"quotaBytes":null`) {
+		t.Fatalf("quota body = %s, want usedBytes:10 and quotaBytes:null", rec.Body.String())
+	}
+	var q humanQuotaResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &q); err != nil {
+		t.Fatal(err)
+	}
+	if q.UsedBytes != 10 || q.QuotaBytes != nil {
+		t.Fatalf("quota = %+v, want usedBytes 10 / quota nil", q)
+	}
+}
+
+func TestHumanFiles_QuotaEnforcement(t *testing.T) {
+	hfh, _, _ := newHumanFilesRig(t)
+
+	getUsed := func() int64 {
+		t.Helper()
+		rec := hfGetQuota(t, hfh, "alice", hfSelf())
+		if rec.Code != http.StatusOK {
+			t.Fatalf("get quota: %d %s", rec.Code, rec.Body.String())
+		}
+		var q humanQuotaResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &q); err != nil {
+			t.Fatal(err)
+		}
+		return q.UsedBytes
+	}
+
+	// Seed 10 bytes, then the admin sets a 20-byte quota through the API.
+	if rec := hfPutFile(t, hfh, "alice", "a.txt", hfSelf(), "0123456789"); rec.Code != http.StatusOK {
+		t.Fatalf("seed: %d %s", rec.Code, rec.Body.String())
+	}
+	rec := hfPutQuota(t, hfh, "alice", hfAdmin(), `{"quotaBytes":20}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put quota: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = hfGetQuota(t, hfh, "alice", hfSelf())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get quota: %d %s", rec.Code, rec.Body.String())
+	}
+	var q humanQuotaResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &q); err != nil {
+		t.Fatal(err)
+	}
+	if q.UsedBytes != 10 || q.QuotaBytes == nil || *q.QuotaBytes != 20 {
+		t.Fatalf("quota = %+v, want usedBytes 10 / quota 20", q)
+	}
+
+	// 10 + 15 > 20 -> 413 quota_exceeded and the file must not be written.
+	rec = hfPutFile(t, hfh, "alice", "b.txt", hfSelf(), strings.Repeat("x", 15))
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("over-quota put: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+	var coded humanFileCodedError
+	if err := json.Unmarshal(rec.Body.Bytes(), &coded); err != nil {
+		t.Fatal(err)
+	}
+	if coded.Code != "quota_exceeded" {
+		t.Fatalf("code = %q, want quota_exceeded", coded.Code)
+	}
+	if got := getUsed(); got != 10 {
+		t.Fatalf("usedBytes after rejected write = %d, want 10", got)
+	}
+
+	// 10 + 10 == 20 (exactly at the quota) -> 200; then any further byte -> 413.
+	if rec := hfPutFile(t, hfh, "alice", "b.txt", hfSelf(), strings.Repeat("x", 10)); rec.Code != http.StatusOK {
+		t.Fatalf("at-quota put: got %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if got := getUsed(); got != 20 {
+		t.Fatalf("usedBytes at quota = %d, want 20", got)
+	}
+	rec = hfPutFile(t, hfh, "alice", "c.txt", hfSelf(), "y")
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("one byte over quota: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &coded); err != nil {
+		t.Fatal(err)
+	}
+	if coded.Code != "quota_exceeded" {
+		t.Fatalf("code = %q, want quota_exceeded", coded.Code)
+	}
+}
+
+func TestHumanFiles_QuotaRestoreEnforcement(t *testing.T) {
+	hfh, _, _ := newHumanFilesRig(t)
+
+	// Soft-delete a file, then pin the quota exactly at the current usage
+	// (files/ is now empty, so the used bytes are the trash entry).
+	if rec := hfPutFile(t, hfh, "alice", "f.txt", hfSelf(), "0123456789"); rec.Code != http.StatusOK {
+		t.Fatalf("seed: %d %s", rec.Code, rec.Body.String())
+	}
+	rec := httptest.NewRecorder()
+	hfh.deleteFile(rec, hfReq(t, http.MethodDelete, "alice", "f.txt", hfSelf(), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body.String())
+	}
+	var delResp struct {
+		TrashID string `json:"trashId"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &delResp); err != nil {
+		t.Fatal(err)
+	}
+
+	rec = hfGetQuota(t, hfh, "alice", hfSelf())
+	var q humanQuotaResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &q); err != nil {
+		t.Fatal(err)
+	}
+	if q.UsedBytes == 0 {
+		t.Fatal("trash usage must count toward the quota")
+	}
+	rec = hfPutQuota(t, hfh, "alice", hfAdmin(), fmt.Sprintf(`{"quotaBytes":%d}`, q.UsedBytes))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put quota: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Restoring the 10 bytes on top of a full quota -> 413, and the trash
+	// entry must survive the failed restore.
+	rec = httptest.NewRecorder()
+	hfh.restoreTrash(rec, hfTrashReq(t, http.MethodPost, "alice", delResp.TrashID, hfSelf(), ""))
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("over-quota restore: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+	var coded humanFileCodedError
+	if err := json.Unmarshal(rec.Body.Bytes(), &coded); err != nil {
+		t.Fatal(err)
+	}
+	if coded.Code != "quota_exceeded" {
+		t.Fatalf("code = %q, want quota_exceeded", coded.Code)
+	}
+	list := httptest.NewRecorder()
+	hfh.listTrash(list, hfTrashReq(t, http.MethodGet, "alice", "", hfSelf(), ""))
+	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), delResp.TrashID) {
+		t.Fatalf("trash entry lost after rejected restore: %d %s", list.Code, list.Body.String())
+	}
+}
+
+func TestHumanFiles_QuotaAuthorization(t *testing.T) {
+	hfh, _, _ := newHumanFilesRig(t)
+
+	// Setting the quota is admin-only: authorized non-admin callers get
+	// 403, non-access callers get the same 404 as a missing human.
+	rec := hfPutQuota(t, hfh, "alice", hfSelf(), `{"quotaBytes":100}`)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("self put quota: got %d, want 403: %s", rec.Code, rec.Body.String())
+	}
+	rec = hfPutQuota(t, hfh, "alice", hfManager(), `{"quotaBytes":100}`)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("manager put quota: got %d, want 403: %s", rec.Code, rec.Body.String())
+	}
+	rec = hfPutQuota(t, hfh, "alice", hfBob(), `{"quotaBytes":100}`)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("foreign put quota: got %d, want 404: %s", rec.Code, rec.Body.String())
+	}
+
+	// Reading the quota follows the normal access matrix.
+	if rec := hfGetQuota(t, hfh, "alice", hfSelf()); rec.Code != http.StatusOK {
+		t.Fatalf("self get quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfGetQuota(t, hfh, "alice", hfAdmin()); rec.Code != http.StatusOK {
+		t.Fatalf("admin get quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfGetQuota(t, hfh, "alice", hfBob()); rec.Code != http.StatusNotFound {
+		t.Fatalf("foreign get quota: got %d, want 404", rec.Code)
+	}
+	if rec := hfGetQuota(t, hfh, "alice", hfWorker()); rec.Code != http.StatusNotFound {
+		t.Fatalf("worker get quota: got %d, want 404", rec.Code)
+	}
+	if rec := hfGetQuota(t, hfh, "ghost", hfAdmin()); rec.Code != http.StatusNotFound {
+		t.Fatalf("ghost get quota: got %d, want 404", rec.Code)
+	}
+}
+
+func TestHumanFiles_QuotaValidationAndReset(t *testing.T) {
+	hfh, _, k8s := newHumanFilesRig(t)
+
+	// Negative quota -> 400; invalid JSON -> 400.
+	rec := hfPutQuota(t, hfh, "alice", hfAdmin(), `{"quotaBytes":-5}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("negative quota: got %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+	rec = hfPutQuota(t, hfh, "alice", hfAdmin(), `{not json`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad json: got %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+
+	// Set a quota, verify it landed on the CR, then clear it with null.
+	rec = hfPutQuota(t, hfh, "alice", hfAdmin(), `{"quotaBytes":20}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put quota: %d %s", rec.Code, rec.Body.String())
+	}
+	var human v1beta1.Human
+	if err := k8s.Get(context.Background(), client.ObjectKey{Name: "alice", Namespace: "default"}, &human); err != nil {
+		t.Fatal(err)
+	}
+	if human.Spec.WorkspaceQuotaBytes == nil || *human.Spec.WorkspaceQuotaBytes != 20 {
+		t.Fatalf("CR quota = %v, want 20", human.Spec.WorkspaceQuotaBytes)
+	}
+	rec = hfPutQuota(t, hfh, "alice", hfAdmin(), `{"quotaBytes":null}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reset quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := k8s.Get(context.Background(), client.ObjectKey{Name: "alice", Namespace: "default"}, &human); err != nil {
+		t.Fatal(err)
+	}
+	if human.Spec.WorkspaceQuotaBytes != nil {
+		t.Fatalf("CR quota after reset = %v, want nil", *human.Spec.WorkspaceQuotaBytes)
+	}
+	if rec := hfGetQuota(t, hfh, "alice", hfSelf()); !strings.Contains(rec.Body.String(), `"quotaBytes":null`) {
+		t.Fatalf("quota after reset = %s, want quotaBytes:null", rec.Body.String())
+	}
+}
+
+func TestHumanFiles_QuotaAuditEvent(t *testing.T) {
+	hfh, store, _ := newHumanFilesRig(t)
+
+	rec := hfPutQuota(t, hfh, "alice", hfAdmin(), `{"quotaBytes":42}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put quota: %d %s", rec.Code, rec.Body.String())
+	}
+	lines := readAuditLines(t, store)
+	if len(lines) != 1 {
+		t.Fatalf("want 1 audit line, got %d: %s", len(lines), strings.Join(lines, " | "))
+	}
+	m := decodeAuditLine(t, lines[0])
+	if m["who"] != "admin" || m["role"] != "admin" || m["target"] != "alice" || m["action"] != "human_quota_set" {
+		t.Fatalf("audit line = who=%v role=%v target=%v action=%v", m["who"], m["role"], m["target"], m["action"])
+	}
+	if v := detailField(t, lines[0], "quotaBytes"); v != float64(42) {
+		t.Fatalf("detail quotaBytes = %v, want 42", v)
 	}
 }

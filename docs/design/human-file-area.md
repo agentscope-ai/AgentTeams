@@ -1,16 +1,17 @@
-# Per-Human File Area and Recycle Bin
+# Per-Human File Area, Recycle Bin, and Workspace Quota
 
 Status: implemented (P1 of #1414)
-APIs: `GET/PUT/DELETE /api/v1/humans/{name}/files/{path...}`, `GET /api/v1/humans/{name}/trash`, `POST /api/v1/humans/{name}/trash/{id}/restore`, `DELETE /api/v1/humans/{name}/trash/{id}`
+APIs: `GET/PUT/DELETE /api/v1/humans/{name}/files/{path...}`, `GET /api/v1/humans/{name}/trash`, `POST /api/v1/humans/{name}/trash/{id}/restore`, `DELETE /api/v1/humans/{name}/trash/{id}`, `GET/PUT /api/v1/humans/{name}/quota`
 
 ## Scope
 
 P1 gives every human a private, controller-proxied file area with a
-recycle bin:
+recycle bin and an optional workspace quota:
 
 - **In scope (P1):** per-human storage namespace, the proxied file API
   (read / list / write / soft-delete), the trash (list / restore / purge),
-  path validation, and a per-file size limit.
+  path validation, a per-file size limit, and an optional workspace quota
+  (`workspaceQuotaBytes`).
 - **Out of scope (later phases):** team default authorization and
   `workspaceAccess` (P2), file sync / carriers / `file_sync` (P3), agent
   attribution and UI (P4). In P1 the area is reachable by the human
@@ -39,6 +40,7 @@ humans/                              (created by the initializer)
   reconcile requeues sooner, the same contract as team shared storage —
   so a transient storage hiccup never blocks Matrix user/room sync.
 - `memory/` and `digest/` are deliberately not created in P1.
+- Trash entries count toward the workspace quota.
 
 Trash id format: `<UTC yyyymmddThhmmssZ>-<8 hex>` (e.g.
 `20261024T123045Z-abcd1234`). The timestamp prefix keeps listings
@@ -49,12 +51,12 @@ sortable; the random suffix disambiguates same-second deletes.
 All routes are authenticated; authorization happens in the handler after
 the Human CR is resolved, so the two denial shapes can coexist:
 
-| Caller | read / list / write | trash restore | trash purge |
-|---|---|---|---|
-| the human (username matches the area) | ✔ (own area) | ✔ (own area) | ✖ 403 |
-| manager | ✔ (any area) | ✔ | ✖ 403 |
-| admin | ✔ (any area) | ✔ (`?overwrite=1`) | ✔ |
-| other human / team leader / worker | ✖ 404 | ✖ 404 | ✖ 404 |
+| Caller | read / list / write | trash restore | trash purge | quota GET | quota PUT |
+|---|---|---|---|---|---|
+| the human (username matches the area) | ✔ (own area) | ✔ (own area) | ✖ 403 | ✔ (own area) | ✖ 403 |
+| manager | ✔ (any area) | ✔ | ✖ 403 | ✔ | ✖ 403 |
+| admin | ✔ (any area) | ✔ (`?overwrite=1`) | ✔ | ✔ | ✔ |
+| other human / team leader / worker | ✖ 404 | ✖ 404 | ✖ 404 | ✖ 404 | ✖ 404 |
 
 Callers with no access at all receive **404 with the same body as a
 non-existent Human** — the API does not confirm a human's existence or
@@ -86,6 +88,9 @@ file layout to strangers.
   with `{"code":"size_exceeded"}`.
 - Optional `If-Match: <etag>` for optimistic concurrency; a stale etag or
   a not-yet-existing target → `412` with `{"code":"etag_mismatch"}`.
+- The workspace quota is enforced before the write: if
+  `usedBytes + size` exceeds `workspaceQuotaBytes` → `413` with
+  `{"code":"quota_exceeded"}`.
 - Success → `200` `{"path":"files/<rel>","size":N,"etag":"..."}`.
 
 ### `DELETE /api/v1/humans/{name}/files/{path...}`
@@ -101,6 +106,25 @@ Soft delete: the file is copied to `.trash/<id>/{meta.json,content}`
 | `GET .../trash` | self / manager / admin | `{"entries":[{id,path,size,deletedAt,caller,role}]}`, newest first |
 | `POST .../trash/{id}/restore` | self / manager / admin | writes the bytes back to the original path and removes the entry; target already exists → `409` `{"code":"path_conflict"}`; `?overwrite=1` is accepted only from an admin |
 | `DELETE .../trash/{id}` | **admin only** (others `403`) | permanent removal + `human_trash_purge` audit event |
+
+## Quota
+
+`Human.spec.workspaceQuotaBytes` (nullable `int64`) is the total byte
+budget for the area — `files/**` plus `.trash/**` — and is unset
+(unlimited) by default.
+
+- **`GET /api/v1/humans/{name}/quota`** (self / manager / admin) →
+  `{"usedBytes":N,"quotaBytes":M|null}`. `usedBytes` is computed live by
+  listing both prefixes (nothing is persisted); `quotaBytes` is `null`
+  when the quota is unset.
+- **`PUT /api/v1/humans/{name}/quota`** (admin only) — body
+  `{"quotaBytes":N}` sets the quota, `{"quotaBytes":null}` clears it; a
+  negative value → `400`. The value is patched onto the Human CR and the
+  change is audited (`human_quota_set`).
+- **Enforcement:** writes and trash restores are checked before the bytes
+  land — `usedBytes + size > quota` → `413`
+  `{"code":"quota_exceeded"}`. Data that already exceeds a newly lowered
+  quota is not rejected; only further growth is.
 
 ## Path rules
 
@@ -133,5 +157,6 @@ written to `audit/<date>.jsonl` like all other controller audit events.
 | admin-only operation without admin | `403` | `{"message":"admin role required"}` |
 | invalid path / bad id / writing a directory | `400` | message names the problem |
 | per-file size limit | `413` | `{"code":"size_exceeded",...}` |
+| workspace quota exceeded | `413` | `{"code":"quota_exceeded",...}` |
 | stale `If-Match` | `412` | `{"code":"etag_mismatch",...}` |
 | restore target exists | `409` | `{"code":"path_conflict",...}` |

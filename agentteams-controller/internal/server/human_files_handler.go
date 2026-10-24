@@ -408,6 +408,14 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("file size exceeds the %d byte per-file limit", h.maxFileBytes))
 		return
 	}
+	if status, msg := h.checkQuota(ctx, a, username, len(data)); status != 0 {
+		if status == http.StatusRequestEntityTooLarge {
+			writeHumanFileCodedError(w, status, "quota_exceeded", msg)
+		} else {
+			httputil.WriteError(w, status, msg)
+		}
+		return
+	}
 
 	key := humanFilesPrefix(username) + rel
 	if match := r.Header.Get("If-Match"); match != "" {
@@ -662,6 +670,14 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 			"a file already exists at the restore target; an admin may pass ?overwrite=1")
 		return
 	}
+	if status, msg := h.checkQuota(ctx, a, username, len(content)); status != 0 {
+		if status == http.StatusRequestEntityTooLarge {
+			writeHumanFileCodedError(w, status, "quota_exceeded", msg)
+		} else {
+			httputil.WriteError(w, status, msg)
+		}
+		return
+	}
 	if err := h.oss.PutObject(ctx, target, content); err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "write restored file failed")
 		return
@@ -718,4 +734,125 @@ func (h *humanFilesHandler) purgeTrash(w http.ResponseWriter, r *http.Request) {
 	h.recordAudit(ctx, a, "human_trash_purge",
 		humanFileDetail("path", m.Path, "size", m.Size, "trashId", id))
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"purged": id})
+}
+
+// --- Quota -------------------------------------------------------------------
+
+// humanQuotaResponse is the GET quota body. quotaBytes is null when the
+// human has no workspace quota (unlimited).
+type humanQuotaResponse struct {
+	UsedBytes  int64  `json:"usedBytes"`
+	QuotaBytes *int64 `json:"quotaBytes"`
+}
+
+// usedBytes computes the current usage of a human's workspace live: the
+// total size of every object under files/ plus .trash/ (trash entries
+// count toward the quota). Usage is never persisted; it is derived from
+// storage on each read.
+func (h *humanFilesHandler) usedBytes(ctx context.Context, username string) (int64, error) {
+	total := int64(0)
+	for _, prefix := range []string{humanFilesPrefix(username), humanTrashPrefix(username)} {
+		infos, err := h.oss.ListObjectsDetailed(ctx, prefix)
+		if err != nil {
+			return 0, err
+		}
+		for _, info := range infos {
+			if strings.HasSuffix(info.Name, "/") {
+				continue
+			}
+			meta, err := h.oss.StatMeta(ctx, prefix+info.Name)
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					continue // removed between the list and the stat
+				}
+				return 0, err
+			}
+			total += meta.Size
+		}
+	}
+	return total, nil
+}
+
+// checkQuota enforces the workspace quota before a write of size bytes
+// lands. It returns the rejection status and message, or (0, "") when the
+// write is allowed. An unset quota is unlimited; a storage failure while
+// computing usage fails closed with 500.
+func (h *humanFilesHandler) checkQuota(ctx context.Context, a *humanFileAccess, username string, size int) (int, string) {
+	quota := a.human.Spec.WorkspaceQuotaBytes
+	if quota == nil {
+		return 0, ""
+	}
+	used, err := h.usedBytes(ctx, username)
+	if err != nil {
+		return http.StatusInternalServerError, "quota check failed"
+	}
+	if used+int64(size) > *quota {
+		return http.StatusRequestEntityTooLarge,
+			fmt.Sprintf("workspace quota of %d bytes exceeded (used %d, writing %d)", *quota, used, size)
+	}
+	return 0, ""
+}
+
+// getQuota handles GET /api/v1/humans/{name}/quota: the area's live usage
+// and its configured quota (null = unlimited).
+func (h *humanFilesHandler) getQuota(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
+	if a == nil {
+		httputil.WriteError(w, status, msg)
+		return
+	}
+	username := a.human.Spec.EffectiveUsername(a.human.Name)
+	used, err := h.usedBytes(r.Context(), username)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "compute usage failed")
+		return
+	}
+	httputil.WriteJSON(w, http.StatusOK, humanQuotaResponse{
+		UsedBytes:  used,
+		QuotaBytes: a.human.Spec.WorkspaceQuotaBytes,
+	})
+}
+
+// putQuota handles PUT /api/v1/humans/{name}/quota (admin only). Body:
+// {"quotaBytes": N} to set the quota or {"quotaBytes": null} to clear it
+// (unlimited).
+func (h *humanFilesHandler) putQuota(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, true)
+	if a == nil {
+		httputil.WriteError(w, status, msg)
+		return
+	}
+	ctx := r.Context()
+	var body struct {
+		QuotaBytes *int64 `json:"quotaBytes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if body.QuotaBytes != nil && *body.QuotaBytes < 0 {
+		httputil.WriteError(w, http.StatusBadRequest, "quotaBytes must not be negative")
+		return
+	}
+	for attempt := 0; attempt < k8sUpdateMaxRetries; attempt++ {
+		var human v1beta1.Human
+		if err := h.client.Get(ctx, client.ObjectKey{Name: name, Namespace: h.namespace}, &human); err != nil {
+			httputil.WriteError(w, http.StatusInternalServerError, "human lookup failed")
+			return
+		}
+		human.Spec.WorkspaceQuotaBytes = body.QuotaBytes
+		if err := h.client.Update(ctx, &human); err != nil {
+			if apierrors.IsConflict(err) && attempt+1 < k8sUpdateMaxRetries {
+				time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
+				continue
+			}
+			writeK8sError(w, "update human quota", err)
+			return
+		}
+		h.recordAudit(ctx, a, "human_quota_set", humanFileDetail("quotaBytes", body.QuotaBytes))
+		httputil.WriteJSON(w, http.StatusOK, map[string]any{"quotaBytes": body.QuotaBytes})
+		return
+	}
 }

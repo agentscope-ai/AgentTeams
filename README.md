@@ -435,6 +435,7 @@ Browse the [documentation directory](docs/), or start with the overview and quic
 | [docs/design/k8s-native-orchestration.md](docs/design/k8s-native-orchestration.md) | Kubernetes-native multi-Agent orchestration: CRDs, controller, declarative resources (also available in [中文](docs/zh-cn/design/k8s-native-orchestration.md)) |
 | [docs/usage/manager-guide.md](docs/usage/manager-guide.md) | Manager configuration |
 | [docs/usage/worker-guide.md](docs/usage/worker-guide.md) | Worker deployment |
+| [docs/usage/single-and-multi-user.md](docs/usage/single-and-multi-user.md) | One deployment for one person or many: roles, permission levels, and what changes when you add people (also available in [中文](docs/zh-cn/usage/single-and-multi-user.md)) |
 | [docs/usage/project-workflow-api.md](docs/usage/project-workflow-api.md) | Project / workflow inspection API (also available in [中文](docs/zh-cn/usage/project-workflow-api.md)) |
 | [docs/usage/higress-gateway-api.md](docs/usage/higress-gateway-api.md) | Higress gateway external API reference (LLM / MCP / exposed ports / Console) (also available in [中文](docs/zh-cn/usage/higress-gateway-api.md)) |
 | [docs/usage/development.md](docs/usage/development.md) | Contributing and local dev (also available in [中文](docs/zh-cn/usage/development.md)) |

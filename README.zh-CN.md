@@ -498,6 +498,7 @@ python scripts/export-debug-log.py --range 1h
 | [docs/zh-cn/usage/deployment/windows.md](docs/zh-cn/usage/deployment/windows.md) | AgentTeams Windows 部署手册 |
 | [docs/zh-cn/usage/manager-guide.md](docs/zh-cn/usage/manager-guide.md) | Manager 使用指南 |
 | [docs/zh-cn/usage/worker-guide.md](docs/zh-cn/usage/worker-guide.md) | Worker 使用指南（含部署与故障排查） |
+| [docs/zh-cn/usage/single-and-multi-user.md](docs/zh-cn/usage/single-and-multi-user.md) | 单人与多人部署：同一套部署模型、角色与权限级别、接入更多人时什么会变（[English](docs/usage/single-and-multi-user.md)） |
 | [docs/zh-cn/usage/import-worker.md](docs/zh-cn/usage/import-worker.md) | 导入 Worker 指南 |
 | [docs/zh-cn/usage/resource-management.md](docs/zh-cn/usage/resource-management.md) | 声明式资源管理（Worker / Team / Human YAML）、模板市场与 API 参考 |
 | [docs/zh-cn/usage/project-workflow-api.md](docs/zh-cn/usage/project-workflow-api.md) | 项目 / 工作流查看 API |

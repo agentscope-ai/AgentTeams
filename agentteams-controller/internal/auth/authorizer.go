@@ -41,7 +41,14 @@ const (
 	// scope=team only); explicitly denied to manager, team leader, and
 	// worker. The scope/team refinement happens in the handler (403 for
 	// non-admin scope=deployment; 404 anti-probing for cross-team).
-	ActionSkillPublish       Action = "skill-publish"
+	ActionSkillPublish Action = "skill-publish"
+	// ActionLoopResume authorizes POST /api/v1/loops/{id}/resume (INT-7b).
+	// Deliberately human-accountable: granted to admin (any scope) and
+	// L2 humans (own team) only; explicitly denied to manager, team
+	// leader, and worker — the same shape as ActionSkillPublish. A
+	// paused loop is a human decision; agent roles must not release it
+	// on their own (check-the-balance). Pause reuses ActionUpdate.
+	ActionLoopResume         Action = "loop:resume"
 	ActionWorkerSkillPreload Action = "worker-skill-preload"
 )
 
@@ -74,6 +81,12 @@ func (a *Authorizer) Authorize(caller *CallerIdentity, req AuthzRequest) error {
 		// scope) and L2 human (own team) only — never manager, never team
 		// leader. The manager agent manages workers, not team assets.
 		if caller.Role == RoleManager && req.ResourceKind == "skills" && req.Action == ActionSkillPublish {
+			return deny(caller, req)
+		}
+		// INT-7b: loop resume is human-accountable (admin + L2 human
+		// only), mirroring the skill-publish carve-out — a manager agent
+		// may pause a loop (ActionUpdate) but never release one.
+		if caller.Role == RoleManager && req.ResourceKind == "loop" && req.Action == ActionLoopResume {
 			return deny(caller, req)
 		}
 		return nil // full access
@@ -124,6 +137,21 @@ func (a *Authorizer) authorizeHuman(caller *CallerIdentity, req AuthzRequest) er
 			// projects within their accessibleTeams scope. requireSameTeam
 			// rejects cross-team writes at the code level (the model cannot
 			// bypass it), matching the upstream MCP code-level role checks.
+			return a.requireSameTeam(caller, req)
+		default:
+			return deny(caller, req)
+		}
+
+	case "loop":
+		// Loop control plane (INT-7b). Pause reuses ActionUpdate (any
+		// authenticated role except worker, same shape as project
+		// writes); resume is ActionLoopResume (admin + L2 human only —
+		// see the constant). The middleware cannot resolve loop ->
+		// team, so requireSameTeam short-circuits on an empty
+		// ResourceTeam; the LoopHandler is the real team-scope
+		// boundary (same pattern as the project endpoints).
+		switch req.Action {
+		case ActionUpdate, ActionLoopResume:
 			return a.requireSameTeam(caller, req)
 		default:
 			return deny(caller, req)
@@ -301,6 +329,20 @@ func (a *Authorizer) authorizeTeamLeader(caller *CallerIdentity, req AuthzReques
 		case ActionList:
 			return nil // handler filters by team prefix
 		case ActionGet, ActionUpdate, ActionCreate:
+			return a.requireSameTeam(caller, req)
+		default:
+			return deny(caller, req)
+		}
+
+	case "loop":
+		// Loop control plane (INT-7b): a team leader may pause a loop
+		// (ActionUpdate, same shape as project writes) but may never
+		// resume one — resume is admin + L2 human only (check-the-
+		// balance: agents do not release a human pause). The real team
+		// boundary is in the LoopHandler (the middleware cannot resolve
+		// loop -> team).
+		switch req.Action {
+		case ActionUpdate:
 			return a.requireSameTeam(caller, req)
 		default:
 			return deny(caller, req)

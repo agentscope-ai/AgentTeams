@@ -125,6 +125,16 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("PUT /api/v1/managers/{name}", mw.RequireAuthz(authpkg.ActionUpdate, "manager", nameFn)(http.HandlerFunc(rh.UpdateManager)))
 	mux.Handle("DELETE /api/v1/managers/{name}", mw.RequireAuthz(authpkg.ActionDelete, "manager", nameFn)(http.HandlerFunc(rh.DeleteManager)))
 
+	// --- Loop control plane (INT-7b) ---
+	// Pause = ActionUpdate shape (any authenticated role except worker);
+	// resume = admin + L2 human only (ActionLoopResume). The middleware
+	// cannot resolve loop -> team, so the handler is the real team-scope
+	// boundary (same pattern as the project endpoints).
+	looph := NewLoopHandler(deps.Client, deps.Namespace, deps.OSS)
+	loopNameFn := func(r *http.Request) string { return r.PathValue("id") }
+	mux.Handle("POST /api/v1/loops/{id}/pause", mw.RequireAuthz(authpkg.ActionUpdate, "loop", loopNameFn)(http.HandlerFunc(looph.PauseLoop)))
+	mux.Handle("POST /api/v1/loops/{id}/resume", mw.RequireAuthz(authpkg.ActionLoopResume, "loop", loopNameFn)(http.HandlerFunc(looph.ResumeLoop)))
+
 	// --- Audit (read-only view of the durable audit store, #1220 §8) ---
 	audh := NewAuditHandler(deps.OSS)
 	mux.Handle("GET /api/v1/audit", mw.RequireAuthz(authpkg.ActionGet, "audit", nil)(http.HandlerFunc(audh.List)))

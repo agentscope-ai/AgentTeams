@@ -3306,6 +3306,114 @@ def _write_project_plan(project_dir: Path, project: dict[str, Any]) -> None:
     _atomic_write_text(project_dir / "plan.md", "\n".join(lines) + "\n")
 
 
+def _observe_project_pause(
+    arguments: dict[str, Any],
+    project_id: str,
+    project: dict[str, Any],
+    paused_by_project: bool,
+) -> None:
+    """Cascade the project pause state into the plan's loop record (INT-7b).
+
+    Observation only: the flag tells the worker's next loop tick that the
+    parent project is paused. It never drives the Loop CRD — the Go
+    control plane is the only writer of loop state. Best-effort by design:
+    a no-op when the project has no loop dict or the value is unchanged
+    (idempotent), and a rewrite failure never blocks the project
+    pause/resume flow.
+    """
+    loop = project.get("loop")
+    if not isinstance(loop, dict):
+        return
+    sources = [
+        str(item or "").strip().lower()
+        for item in (loop.get("pause_sources") or [])
+        if isinstance(item, str) and str(item).strip()
+    ]
+    if paused_by_project:
+        if "project" not in sources:
+            sources.append("project")
+    else:
+        sources = [item for item in sources if item != "project"]
+    if (
+        bool(loop.get("paused_by_project")) == paused_by_project
+        and list(loop.get("pause_sources") or []) == sources
+    ):
+        return
+    loop["pause_sources"] = sources
+    loop["paused_by_project"] = paused_by_project
+    try:
+        project_dir = _project_dir(arguments, project_id)
+        _write_json(_project_state_path(arguments, project_id), project)
+        _write_project_plan(project_dir, project)
+    except Exception as exc:  # observation must not block the flow
+        print(
+            f"[projectflow] warn: loop pause observation not persisted: {exc}",
+            file=sys.stderr,
+        )
+
+
+def _loop_pause_sources(project: dict[str, Any]) -> list[str]:
+    """Pause sources that gate dispatch/progression (INT-7b, issue #1431).
+
+    Sources are ADDITIVE: a project pause (projectflow pause_project) and a
+    user pause (the Loop control API projection) must not erase each other.
+    `pause_sources` is the canonical list; the legacy flags are still read so
+    projects written before this change keep working.
+    """
+    sources: list[str] = []
+    loop = project.get("loop") if isinstance(project.get("loop"), dict) else {}
+    raw = loop.get("pause_sources")
+    if isinstance(raw, list):
+        for item in raw:
+            value = str(item or "").strip().lower()
+            if value and value not in sources:
+                sources.append(value)
+    if loop.get("paused_by_project") is True and "project" not in sources:
+        sources.append("project")
+    if loop.get("paused_by_user") is True and "user" not in sources:
+        sources.append("user")
+    if str(project.get("status") or "") == "paused" and "project" not in sources:
+        sources.append("project")
+    return sources
+
+
+def _paused_result(
+    tool: str,
+    action: str,
+    sources: list[str],
+    project: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Structured 'paused' rejection for the execution-side gate.
+
+    In-flight work keeps running: submit/ack/report_progress/record_loop_iteration
+    are NOT gated, only new dispatch, downstream release and new iterations.
+    """
+    result: dict[str, Any] = {
+        "ok": False,
+        "tool": tool,
+        "action": action,
+        "error": "paused",
+        "pause_sources": list(sources),
+        "retryable": True,
+        "detail": (
+            "project/loop is paused: no new dispatch, downstream release or "
+            "loop iteration is allowed; in-flight work may finish and persist "
+            "its result. Resume requires an authorized human/admin."
+        ),
+    }
+    if project is not None:
+        result["project"] = project
+    return result
+
+
+def _gated_ready_nodes(project: dict[str, Any]) -> list[dict[str, Any]]:
+    return [] if _loop_pause_sources(project) else _ready_nodes(project)
+
+
+def _gated_ready_loop_nodes(project: dict[str, Any]) -> list[dict[str, Any]]:
+    return [] if _loop_pause_sources(project) else _ready_loop_nodes(project)
+
+
 def _ready_nodes(project: dict[str, Any]) -> list[dict[str, Any]]:
     if project.get("plan_type") == "loop":
         raise ValueError(f"project plan is not a DAG: {project.get('project_id')}")
@@ -4132,7 +4240,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "tool": "projectflow",
                 "action": action,
                 "project": project,
-                "readyNodes": _ready_nodes(project),
+                "readyNodes": _gated_ready_nodes(project),
                 "notificationNeeded": _notification_needed(action, project),
             }
 
@@ -4141,6 +4249,12 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             state_path = _project_state_path(arguments, project_id)
             project = _read_json(state_path, {"project_id": project_id, "title": project_id, "status": "active", "tasks": []})
             previous_loop = project.get("loop") if isinstance(project.get("loop"), dict) else {}
+            # A paused loop must not be re-planned (that starts a new
+            # iteration in practice). An initial plan (no loop yet) is fine.
+            if previous_loop:
+                pause_sources = _loop_pause_sources(project)
+                if pause_sources:
+                    return _paused_result("projectflow", action, pause_sources, project)
             previous_tasks = {
                 task.get("task_id"): task
                 for task in (previous_loop.get("tasks", []) if isinstance(previous_loop.get("tasks"), list) else [])
@@ -4205,7 +4319,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "action": action,
                 "project": project,
                 "loop": loop,
-                "readyLoopNodes": _ready_loop_nodes(project),
+                "readyLoopNodes": _gated_ready_loop_nodes(project),
                 "notificationNeeded": _notification_needed(action, project),
             }
 
@@ -4219,7 +4333,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "tool": "projectflow",
                 "action": action,
                 "project": project,
-                "readyNodes": _ready_nodes(project),
+                "readyNodes": _gated_ready_nodes(project),
             }
 
         if action == "ready_loop_nodes":
@@ -4233,7 +4347,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "action": action,
                 "project": project,
                 "loop": project.get("loop", {}),
-                "readyLoopNodes": _ready_loop_nodes(project),
+                "readyLoopNodes": _gated_ready_loop_nodes(project),
             }
 
         if action == "record_loop_iteration":
@@ -4318,7 +4432,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "action": action,
                 "project": project,
                 "loop": loop,
-                "readyLoopNodes": _ready_loop_nodes(project),
+                "readyLoopNodes": _gated_ready_loop_nodes(project),
                 "notificationNeeded": _notification_needed(
                     action, project, summary=f"record_loop_iteration: iteration {iteration} -> {decision}",
                 ),
@@ -4360,6 +4474,16 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project_dir = _project_dir(arguments, project_id)
             _write_json(state_path, project)
             _write_project_plan(project_dir, project)
+            # INT-7b cascade: reflect the project pause/resume into the
+            # plan's loop dict before the shared-storage sync picks it up
+            # (observation only; best-effort, never blocks the flow).
+            if action in {"pause_project", "resume_project"}:
+                _observe_project_pause(
+                    arguments,
+                    project_id,
+                    project,
+                    paused_by_project=(action == "pause_project"),
+                )
             # P0 ordering (PR review 2026-09-14): the terminal state is
             # persisted locally first, then pushed to shared storage, and
             # only after a successful sync does the PROJECT_COMPLETED
@@ -5920,6 +6044,13 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             if not room_id:
                 raise ValueError("roomId is required")
             project = _read_json(_project_state_path(arguments, project_id))
+            # Execution-side pause gate (INT-7b / issue #1431): a paused
+            # project/loop must not dispatch NEW work. In-flight tasks keep
+            # running and their results still persist (submit/ack below are
+            # not gated).
+            pause_sources = _loop_pause_sources(project)
+            if pause_sources:
+                return _paused_result("taskflow", action, pause_sources, project)
             if not assigned_to:
                 for item in project.get("tasks", []):
                     if isinstance(item, dict) and item.get("task_id") == task_id:

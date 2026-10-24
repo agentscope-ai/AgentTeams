@@ -623,6 +623,12 @@ func (a *App) initReconcilers(_ context.Context) error {
 		return fmt.Errorf("setup HumanReconciler: %w", err)
 	}
 
+	if err := (&controller.LoopReconciler{
+		Client: a.mgr.GetClient(),
+	}).SetupWithManager(a.mgr); err != nil {
+		return fmt.Errorf("setup LoopReconciler: %w", err)
+	}
+
 	if a.cfg.ManagerEnabled {
 		mgrReconciler := &controller.ManagerReconciler{
 			Client:           a.mgr.GetClient(),

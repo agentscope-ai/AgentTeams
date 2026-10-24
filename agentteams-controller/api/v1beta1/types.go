@@ -704,6 +704,11 @@ type HumanSpec struct {
 	// are rejected at admission by the human-update API. Team leaders and
 	// other SA-based identities never hold capabilities (#1220 §5).
 	Capabilities []string `json:"capabilities,omitempty"`
+	// WorkspaceQuotaBytes is the total byte budget for this human's file
+	// area (#1414 P1): files/** plus .trash/**. nil = unlimited. Enforced
+	// before writes and trash restores (413 quota_exceeded); usage is
+	// computed live, never persisted.
+	WorkspaceQuotaBytes *int64 `json:"workspaceQuotaBytes,omitempty"`
 }
 
 type IdentitySourceSpec struct {

@@ -129,6 +129,8 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/humans/{name}/trash", mw.Authenticate(http.HandlerFunc(hfh.listTrash)))
 	mux.Handle("POST /api/v1/humans/{name}/trash/{id}/restore", mw.Authenticate(http.HandlerFunc(hfh.restoreTrash)))
 	mux.Handle("DELETE /api/v1/humans/{name}/trash/{id}", mw.Authenticate(http.HandlerFunc(hfh.purgeTrash)))
+	mux.Handle("GET /api/v1/humans/{name}/quota", mw.Authenticate(http.HandlerFunc(hfh.getQuota)))
+	mux.Handle("PUT /api/v1/humans/{name}/quota", mw.Authenticate(http.HandlerFunc(hfh.putQuota)))
 
 	// Managers
 	mux.Handle("POST /api/v1/managers", mw.RequireAuthz(authpkg.ActionCreate, "manager", nil)(http.HandlerFunc(rh.CreateManager)))

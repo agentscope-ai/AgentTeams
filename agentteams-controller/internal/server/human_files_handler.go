@@ -670,14 +670,11 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 			"a file already exists at the restore target; an admin may pass ?overwrite=1")
 		return
 	}
-	if status, msg := h.checkQuota(ctx, a, username, len(content)); status != 0 {
-		if status == http.StatusRequestEntityTooLarge {
-			writeHumanFileCodedError(w, status, "quota_exceeded", msg)
-		} else {
-			httputil.WriteError(w, status, msg)
-		}
-		return
-	}
+	// A restore is net-neutral for the quota: the trash entry's bytes are
+	// already counted in usedBytes, and moving them back to files/ does not
+	// add usage. An overwrite replaces an existing target and reduces usage
+	// further. Only writes (putFile) can grow the area, so only they are
+	// quota-gated; a restore must not be rejected at exactly the quota.
 	if err := h.oss.PutObject(ctx, target, content); err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "write restored file failed")
 		return

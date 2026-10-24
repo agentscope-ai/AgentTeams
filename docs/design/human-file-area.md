@@ -121,10 +121,13 @@ budget for the area — `files/**` plus `.trash/**` — and is unset
   `{"quotaBytes":N}` sets the quota, `{"quotaBytes":null}` clears it; a
   negative value → `400`. The value is patched onto the Human CR and the
   change is audited (`human_quota_set`).
-- **Enforcement:** writes and trash restores are checked before the bytes
-  land — `usedBytes + size > quota` → `413`
-  `{"code":"quota_exceeded"}`. Data that already exceeds a newly lowered
-  quota is not rejected; only further growth is.
+- **Enforcement:** writes are checked before the bytes land —
+  `usedBytes + size > quota` → `413` `{"code":"quota_exceeded"}`.
+  A trash restore is not quota-gated: the bytes are already counted in
+  `usedBytes`, and moving them back to `files/` does not grow usage (an
+  `?overwrite=1` restore replaces the target and reduces it). Data that
+  already exceeds a newly lowered quota is not rejected; only further
+  growth is.
 
 ## Path rules
 

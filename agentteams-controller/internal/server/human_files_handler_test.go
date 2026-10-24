@@ -928,11 +928,12 @@ func TestHumanFiles_QuotaEnforcement(t *testing.T) {
 	}
 }
 
-func TestHumanFiles_QuotaRestoreEnforcement(t *testing.T) {
+func TestHumanFiles_QuotaRestoreDoesNotGrowUsage(t *testing.T) {
 	hfh, _, _ := newHumanFilesRig(t)
 
-	// Soft-delete a file, then pin the quota exactly at the current usage
-	// (files/ is now empty, so the used bytes are the trash entry).
+	// Soft-delete a file, then pin the quota exactly at the current usage.
+	// The trash bytes are already counted, so restoring them is net-neutral
+	// and must not be rejected at exactly the quota.
 	if rec := hfPutFile(t, hfh, "alice", "f.txt", hfSelf(), "0123456789"); rec.Code != http.StatusOK {
 		t.Fatalf("seed: %d %s", rec.Code, rec.Body.String())
 	}
@@ -961,24 +962,71 @@ func TestHumanFiles_QuotaRestoreEnforcement(t *testing.T) {
 		t.Fatalf("put quota: %d %s", rec.Code, rec.Body.String())
 	}
 
-	// Restoring the 10 bytes on top of a full quota -> 413, and the trash
-	// entry must survive the failed restore.
 	rec = httptest.NewRecorder()
 	hfh.restoreTrash(rec, hfTrashReq(t, http.MethodPost, "alice", delResp.TrashID, hfSelf(), ""))
-	if rec.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("over-quota restore: got %d, want 413: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("restore at exact quota: got %d, want 200: %s", rec.Code, rec.Body.String())
 	}
-	var coded humanFileCodedError
-	if err := json.Unmarshal(rec.Body.Bytes(), &coded); err != nil {
+	rec = hfGetQuota(t, hfh, "alice", hfSelf())
+	var after humanQuotaResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &after); err != nil {
 		t.Fatal(err)
 	}
-	if coded.Code != "quota_exceeded" {
-		t.Fatalf("code = %q, want quota_exceeded", coded.Code)
+	if after.UsedBytes > q.UsedBytes {
+		t.Fatalf("restore grew usage: before=%d after=%d", q.UsedBytes, after.UsedBytes)
+	}
+	rec = httptest.NewRecorder()
+	hfh.getFile(rec, hfReq(t, http.MethodGet, "alice", "f.txt", hfSelf(), nil))
+	if rec.Code != http.StatusOK || rec.Body.String() != "0123456789" {
+		t.Fatalf("restored file: %d %q", rec.Code, rec.Body.String())
 	}
 	list := httptest.NewRecorder()
 	hfh.listTrash(list, hfTrashReq(t, http.MethodGet, "alice", "", hfSelf(), ""))
-	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), delResp.TrashID) {
-		t.Fatalf("trash entry lost after rejected restore: %d %s", list.Code, list.Body.String())
+	if list.Code != http.StatusOK || strings.Contains(list.Body.String(), delResp.TrashID) {
+		t.Fatalf("trash entry survived restore: %d %s", list.Code, list.Body.String())
+	}
+}
+
+func TestHumanFiles_QuotaRestoreWhenAlreadyOver(t *testing.T) {
+	hfh, _, _ := newHumanFilesRig(t)
+
+	if rec := hfPutFile(t, hfh, "alice", "f.txt", hfSelf(), "0123456789"); rec.Code != http.StatusOK {
+		t.Fatalf("seed: %d %s", rec.Code, rec.Body.String())
+	}
+	rec := httptest.NewRecorder()
+	hfh.deleteFile(rec, hfReq(t, http.MethodDelete, "alice", "f.txt", hfSelf(), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body.String())
+	}
+	var delResp struct {
+		TrashID string `json:"trashId"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &delResp); err != nil {
+		t.Fatal(err)
+	}
+	rec = hfGetQuota(t, hfh, "alice", hfSelf())
+	var q humanQuotaResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &q); err != nil {
+		t.Fatal(err)
+	}
+	// A quota lowered below the current usage must not block a net-neutral
+	// restore; only a further write would be rejected.
+	rec = hfPutQuota(t, hfh, "alice", hfAdmin(), fmt.Sprintf(`{"quotaBytes":%d}`, q.UsedBytes-1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put quota: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	hfh.restoreTrash(rec, hfTrashReq(t, http.MethodPost, "alice", delResp.TrashID, hfSelf(), ""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("restore while already over quota: got %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	rec = hfGetQuota(t, hfh, "alice", hfSelf())
+	var after humanQuotaResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &after); err != nil {
+		t.Fatal(err)
+	}
+	if after.UsedBytes > q.UsedBytes {
+		t.Fatalf("restore grew usage: before=%d after=%d", q.UsedBytes, after.UsedBytes)
 	}
 }
 

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import os
 from pathlib import Path
@@ -15,6 +17,19 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MC_ALIAS = "agentteams"
 COMPARE_CONTENT_MAX_BYTES = 20 * 1024 * 1024
+
+#: Persisted push manifest (#1391): the authority for "what did we push
+#: last", so a restart can tell unpushed local writes from pulled state
+#: without trusting mtimes.
+SYNC_STATE_VERSION = 1
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _to_text(value: object) -> str:
@@ -81,6 +96,11 @@ class FileSync:
         self.shared_prefix = (shared_prefix or "shared").strip("/")
         self.mc_alias = _storage_alias()
         self._alias_set = False
+        # The manifest lives OUTSIDE the synced roots: a file inside
+        # local_dir would be mirrored to the remote as worker state.
+        self.sync_state_path = Path(local_dir).parent / (
+            f".{worker_name}-sync-state.json"
+        )
 
     def _mc(self, *args: str, check: bool = True, text: bool = True) -> subprocess.CompletedProcess:
         mc_bin = shutil.which("mc")
@@ -165,14 +185,184 @@ class FileSync:
         logger.debug("mc cat failed component=sync key=%s returncode=%s", key, result.returncode)
         return None
 
+    # ---- push manifest / durability (#1391) ---------------------------
+
+    def _root_key(self, local_dir: Path) -> str:
+        base = Path(local_dir).resolve()
+        if base == self.local_dir.resolve():
+            return "worker"
+        if base == self.shared_dir.resolve():
+            return "shared"
+        return f"custom:{base}"
+
+    def _load_sync_state(self) -> dict:
+        try:
+            data = json.loads(self.sync_state_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {"version": SYNC_STATE_VERSION, "roots": {}}
+        if not isinstance(data, dict):
+            return {"version": SYNC_STATE_VERSION, "roots": {}}
+        if not isinstance(data.get("roots"), dict):
+            data["roots"] = {}
+        return data
+
+    def _save_sync_state(self, state: dict) -> None:
+        try:
+            self.sync_state_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.sync_state_path.with_suffix(
+                self.sync_state_path.suffix + ".tmp"
+            )
+            tmp.write_text(
+                json.dumps(state, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(tmp, self.sync_state_path)
+        except OSError as exc:
+            logger.warning(
+                "sync manifest not written component=sync worker=%s error=%s",
+                self.worker_name,
+                exc,
+            )
+
+    def _record_pushed(self, root: str, rel: str, path: Path) -> None:
+        state = self._load_sync_state()
+        files = state.setdefault("roots", {}).setdefault(root, {})
+        try:
+            files[rel] = {
+                "sha256": _sha256_file(path),
+                "pushed_at": time.time(),
+            }
+        except OSError:
+            return
+        state["updated_at"] = time.time()
+        self._save_sync_state(state)
+
+    def _protected_files(self, root: str, base: Path) -> dict:
+        """Local files that changed since their last push.
+
+        A pull must not overwrite them with the older remote copy. Only
+        files the manifest already knows are considered, so a first run
+        (empty manifest) still pulls normally.
+        """
+        state = self._load_sync_state()
+        files = (state.get("roots") or {}).get(root) or {}
+        if not files:
+            return {}
+        protected: dict = {}
+        for rel, entry in files.items():
+            if not isinstance(entry, dict):
+                continue
+            path = base / rel
+            if not path.is_file() or path.is_symlink():
+                continue
+            try:
+                if _sha256_file(path) != entry.get("sha256"):
+                    protected[rel] = path.read_bytes()
+            except OSError:
+                continue
+        return protected
+
+    def _restore_protected(self, base: Path, protected: dict) -> None:
+        for rel, content in protected.items():
+            path = base / rel
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+            except OSError as exc:
+                logger.warning(
+                    "unpushed local write not restored component=sync "
+                    "worker=%s path=%s error=%s",
+                    self.worker_name,
+                    rel,
+                    exc,
+                )
+        if protected:
+            logger.warning(
+                "pull skipped %s unpushed local write(s) component=sync "
+                "worker=%s paths=%s",
+                len(protected),
+                self.worker_name,
+                ",".join(sorted(protected)[:10]),
+            )
+
+    def _directory_conflicts(self, directory: Path) -> List[str]:
+        """Files whose local AND remote copies changed since the last push."""
+        state = self._load_sync_state()
+        files = (state.get("roots") or {}).get("worker") or {}
+        local_root = self.local_dir.resolve()
+        conflicts: List[str] = []
+        for path in sorted(directory.rglob("*")):
+            if not path.is_file() or path.is_symlink():
+                continue
+            try:
+                rel = path.resolve().relative_to(local_root).as_posix()
+            except ValueError:
+                continue
+            entry = files.get(rel)
+            if not isinstance(entry, dict) or not entry.get("sha256"):
+                continue  # never pushed: no base to conflict against
+            if path.stat().st_size > COMPARE_CONTENT_MAX_BYTES:
+                continue
+            local_sha = _sha256_file(path)
+            if local_sha == entry.get("sha256"):
+                continue  # unchanged locally
+            remote = self._cat_bytes(f"{self.remote_prefix}/{rel}")
+            if remote is None:
+                continue
+            remote_sha = hashlib.sha256(remote).hexdigest()
+            if (
+                remote_sha != entry.get("sha256")
+                and remote_sha != local_sha
+            ):
+                conflicts.append(path.relative_to(directory).as_posix())
+        return conflicts
+
+    def sync_status(self) -> dict:
+        """Push-state snapshot: what is tracked and what is not pushed yet."""
+        state = self._load_sync_state()
+        roots = state.get("roots") or {}
+        unpushed: List[dict] = []
+        for root, base in (("worker", self.local_dir), ("shared", self.shared_dir)):
+            for rel, entry in (roots.get(root) or {}).items():
+                if not isinstance(entry, dict):
+                    continue
+                path = base / rel
+                if not path.is_file():
+                    unpushed.append(
+                        {"root": root, "path": rel, "status": "deleted"}
+                    )
+                else:
+                    try:
+                        changed = _sha256_file(path) != entry.get("sha256")
+                    except OSError:
+                        changed = True
+                    if changed:
+                        unpushed.append(
+                            {"root": root, "path": rel, "status": "modified"}
+                        )
+        return {
+            "version": SYNC_STATE_VERSION,
+            "tracked": {root: len(files) for root, files in roots.items()},
+            "unpushed": unpushed,
+            "last_error": state.get("last_error"),
+            "updated_at": state.get("updated_at"),
+        }
+
     def _mirror_prefix(self, remote_prefix: str, local_dir: Path) -> None:
         local_dir.mkdir(parents=True, exist_ok=True)
         remote = f"{self.mc_alias}/{self.bucket}/{remote_prefix.strip('/')}/"
+        # #1391: an overwrite mirror must not replace unpushed local work
+        # with the older remote copy. Files whose content differs from the
+        # last pushed manifest are captured here and restored afterwards.
+        root_key = self._root_key(local_dir)
+        protected = self._protected_files(root_key, local_dir)
         logger.info(
-            "mirroring storage prefix component=sync worker=%s remote=%s local=%s",
+            "mirroring storage prefix component=sync worker=%s remote=%s local=%s"
+            " protected=%s",
             self.worker_name,
             remote,
             local_dir,
+            len(protected),
         )
         try:
             self._mc(
@@ -188,6 +378,7 @@ class FileSync:
                 logger.info("storage prefix is empty component=sync remote=%s", remote)
                 return
             raise RuntimeError(f"mirror storage failed: {_mc_error_message(exc)}") from None
+        self._restore_protected(local_dir, protected)
         logger.info(
             "mirrored storage prefix component=sync worker=%s remote=%s local=%s",
             self.worker_name,
@@ -239,6 +430,7 @@ class FileSync:
             except subprocess.CalledProcessError as exc:
                 raise RuntimeError(f"persist migrated state failed: {_mc_error_message(exc)}") from None
             pushed.append(rel.as_posix())
+            self._record_pushed("worker", rel.as_posix(), path)
         return pushed
 
     def push_directories(self, directories: Iterable[Path]) -> List[str]:
@@ -255,10 +447,47 @@ class FileSync:
             except ValueError:
                 raise ValueError(f"directory is outside worker storage root: {directory}") from None
             remote = self._object_path(f"{self.remote_prefix}/{rel.as_posix()}")
+            # #1391: a directory push must not overwrite a newer remote
+            # object. Files changed on both sides since the last push are
+            # excluded from the mirror and reported as conflicts; the rest
+            # of the directory still pushes.
+            conflicts = self._directory_conflicts(directory)
+            extra_args: List[str] = []
+            for conflict in conflicts:
+                extra_args.extend(["--exclude", conflict])
             try:
-                self._mc("mirror", f"{directory}/", f"{remote}/", "--overwrite")
+                self._mc(
+                    "mirror",
+                    f"{directory}/",
+                    f"{remote}/",
+                    "--overwrite",
+                    *extra_args,
+                )
             except subprocess.CalledProcessError as exc:
+                state = self._load_sync_state()
+                state["last_error"] = _mc_error_message(exc)
+                self._save_sync_state(state)
                 raise RuntimeError(f"persist migrated state failed: {_mc_error_message(exc)}") from None
+            if conflicts:
+                logger.warning(
+                    "push conflicts excluded component=sync worker=%s dir=%s "
+                    "paths=%s",
+                    self.worker_name,
+                    rel.as_posix(),
+                    ",".join(conflicts[:10]),
+                )
+            conflict_set = set(conflicts)
+            for path in sorted(directory.rglob("*")):
+                if not path.is_file() or path.is_symlink():
+                    continue
+                rel_to_dir = path.relative_to(directory).as_posix()
+                if rel_to_dir in conflict_set:
+                    continue
+                self._record_pushed(
+                    "worker",
+                    f"{rel.as_posix()}/{rel_to_dir}",
+                    path,
+                )
             mirrored.append(rel.as_posix())
         return mirrored
 

@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -443,3 +445,123 @@ async def test_push_loop_starts_from_current_time_instead_of_full_scan(
     await push_loop(sync, check_interval=0)
 
     assert since_values == [123.0]
+
+
+# ---------------------------------------------------------------------------
+# #1391: push manifest durability (pull protection / push conflict / status)
+# ---------------------------------------------------------------------------
+
+
+def _write_manifest(sync, worker_files: dict) -> None:
+    sync.sync_state_path.write_text(
+        json.dumps({"version": 1, "roots": {"worker": worker_files}}),
+        encoding="utf-8",
+    )
+
+
+def test_mirror_all_preserves_unpushed_local_write(tmp_path: Path, monkeypatch) -> None:
+    """Write -> restart: the startup mirror must not clobber local work."""
+    sync = _sync(tmp_path)
+    sync.local_dir.mkdir(parents=True)
+    state = sync.local_dir / "state.txt"
+    state.write_text("local-new", encoding="utf-8")
+    _write_manifest(
+        sync,
+        {"state.txt": {"sha256": hashlib.sha256(b"old-pushed").hexdigest(),
+                       "pushed_at": 1.0}},
+    )
+    monkeypatch.setattr(sync, "ensure_alias", lambda: None)
+
+    def fake_mc(*args, **_kwargs):
+        if args and args[0] == "mirror" and "agents/worker-a/" in args[1]:
+            (Path(args[2]) / "state.txt").write_text("remote-old", encoding="utf-8")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(sync, "_mc", fake_mc)
+
+    sync.mirror_all()
+
+    assert state.read_text(encoding="utf-8") == "local-new"
+
+
+def test_first_run_mirror_still_pulls(tmp_path: Path, monkeypatch) -> None:
+    """With no prior push manifest nothing is protected (fresh install)."""
+    sync = _sync(tmp_path)
+    sync.local_dir.mkdir(parents=True)
+    state = sync.local_dir / "state.txt"
+    state.write_text("local-placeholder", encoding="utf-8")
+    monkeypatch.setattr(sync, "ensure_alias", lambda: None)
+
+    def fake_mc(*args, **_kwargs):
+        if args and args[0] == "mirror" and "agents/worker-a/" in args[1]:
+            (Path(args[2]) / "state.txt").write_text("remote-old", encoding="utf-8")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(sync, "_mc", fake_mc)
+
+    sync.mirror_all()
+
+    assert state.read_text(encoding="utf-8") == "remote-old"
+
+
+def test_push_directories_excludes_conflicting_files(tmp_path: Path, monkeypatch) -> None:
+    """A newer remote copy is not overwritten by an older local change."""
+    sync = _sync(tmp_path)
+    work = sync.local_dir / ".qwenpaw"
+    work.mkdir(parents=True)
+    conflict = work / "conflict.txt"
+    conflict.write_text("local-change", encoding="utf-8")
+    _write_manifest(
+        sync,
+        {".qwenpaw/conflict.txt": {
+            "sha256": hashlib.sha256(b"base").hexdigest(), "pushed_at": 1.0}},
+    )
+    monkeypatch.setattr(sync, "ensure_alias", lambda: None)
+    monkeypatch.setattr(sync, "_cat_bytes", lambda key: b"remote-change")
+    commands = []
+
+    def fake_mc(*args, **_kwargs):
+        commands.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(sync, "_mc", fake_mc)
+
+    assert sync.push_directories([work]) == [".qwenpaw"]
+    assert "--exclude" in commands[0]
+    assert "conflict.txt" in commands[0]
+
+
+def test_push_paths_records_manifest(tmp_path: Path, monkeypatch) -> None:
+    sync = _sync(tmp_path)
+    sync.local_dir.mkdir(parents=True)
+    path = sync.local_dir / "state.txt"
+    path.write_text("v1", encoding="utf-8")
+    monkeypatch.setattr(sync, "ensure_alias", lambda: None)
+    monkeypatch.setattr(
+        sync, "_mc",
+        lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout="", stderr=""),
+    )
+    monkeypatch.setattr(sync, "_cat_bytes", lambda key: None)
+
+    assert sync.push_paths([path]) == ["state.txt"]
+
+    state = json.loads(sync.sync_state_path.read_text(encoding="utf-8"))
+    assert state["roots"]["worker"]["state.txt"]["sha256"] == (
+        hashlib.sha256(b"v1").hexdigest()
+    )
+
+
+def test_sync_status_reports_unpushed(tmp_path: Path) -> None:
+    sync = _sync(tmp_path)
+    sync.local_dir.mkdir(parents=True)
+    (sync.local_dir / "state.txt").write_text("v2", encoding="utf-8")
+    _write_manifest(
+        sync,
+        {"state.txt": {"sha256": hashlib.sha256(b"v1").hexdigest(),
+                       "pushed_at": 1.0}},
+    )
+    status = sync.sync_status()
+    assert status["unpushed"] == [
+        {"root": "worker", "path": "state.txt", "status": "modified"}
+    ]
+    assert status["tracked"]["worker"] == 1

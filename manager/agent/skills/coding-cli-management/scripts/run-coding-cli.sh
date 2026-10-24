@@ -195,6 +195,7 @@ append_run_record() {
     RUN_REC_ENDED_AT="$ended_at" RUN_REC_LOG_BYTES="$log_bytes" \
     RUN_REC_PROMPT_FILE="$prompt_file" RUN_REC_PROMPT_SHA256="$prompt_sha" \
     RUN_REC_PROMPT_SUMMARY="$prompt_summary" \
+    RUN_REC_JSON_FILE="$g_json_file" \
     python3 -c '
 import json, os
 e = os.environ
@@ -217,6 +218,9 @@ for k in ("PROMPT_FILE", "PROMPT_SHA256", "PROMPT_SUMMARY"):
     v = opt(k)
     if v is not None:
         rec[k.lower()] = v
+v = opt("JSON_FILE")
+if v is not None:
+    rec["json_file"] = v
 print(json.dumps(rec, ensure_ascii=False))
 ' >> "$runs_jsonl" 2>/dev/null || true
     return 0
@@ -387,11 +391,41 @@ case "$cli" in
         if [ "${g_bare}" = "1" ]; then
             qwen_args+=(--bare)
         fi
-        # Optional structured-output passthrough (qwen --json-file <path>):
-        # writes the final result JSON to <path> for machine audit. Off by
-        # default, so the raw stream remains the audit source of truth.
+        # --json-file: the wrapper's external contract is "the run ends with
+        # a parseable JSON audit file at <path>". qwen-code 0.25.3 turned the
+        # native --json-file into a dual-output flag that silently writes no
+        # file in headless one-shot mode (verified 2026-10-19: exit 0, text
+        # stdout, no file), so the mechanism is picked per detected CLI
+        # version (sort -V; boundary default 0.25.3, override
+        # CODING_CLI_JSON_BOUNDARY; detection failure/empty -> legacy, which
+        # is also how a version-less stub lands):
+        #   legacy   : original passthrough, byte-identical to the pre-drift
+        #              wrapper — the CLI itself writes the file; the post-run
+        #              assertion below proves it landed.
+        #   json-out : -o json (the stdout event array — NOT stream-json) and
+        #              the wrapper captures the file itself; stderr is
+        #              diverted so the captured JSON stays pure.
+        json_branch="none"
+        qwen_version=""
         if [ -n "${g_json_file}" ]; then
-            qwen_args+=(--json-file "${g_json_file}")
+            qwen_version="$(qwen --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" || true
+            json_boundary="${CODING_CLI_JSON_BOUNDARY:-0.25.3}"
+            if [ -n "${qwen_version}" ] && [ "$(printf '%s\n%s\n' "${json_boundary}" "${qwen_version}" | sort -V | tail -1)" = "${qwen_version}" ]; then
+                json_branch="json-out"
+                qwen_args+=(-o json)
+            else
+                json_branch="legacy"
+                qwen_args+=(--json-file "${g_json_file}")
+            fi
+        fi
+        # json-out capture writes <path> itself, so a pre-existing non-regular
+        # target (FIFO, /dev/fd/N, device) would block the run: the contract
+        # covers regular file paths only — refuse before the run starts.
+        if [ "${json_branch}" = "json-out" ] && [ -e "${g_json_file}" ] && [ ! -f "${g_json_file}" ]; then
+            fail_run failed json-file-not-regular 1 \
+                "[run-coding-cli] ERROR: --json-file target '${g_json_file}' is not a regular file (FIFO/device?)." \
+                "[run-coding-cli] The >= ${json_boundary} capture branch only guarantees regular file paths." \
+                "[run-coding-cli] No run was started; point --json-file at a regular file path and retry."
         fi
         # Governance visibility (code-level signal, NOT a hard gate): an
         # unattended qwen run that has none of a turn budget / sandbox / tool
@@ -412,8 +446,19 @@ case "$cli" in
         if [ "$ungoverned" = "1" ]; then
             echo "[run-coding-cli] WARNING: unattended qwen run is UNGOVERNED (no turn budget, no --sandbox, no tool allowlist) — bounded only by the ${timeout_secs}s wall-clock timeout. Tighten via ${config_file} (max_session_turns/sandbox) or --allowed-tools." | tee -a "$log_file"
         fi
-        timeout "$timeout_secs" qwen "${qwen_args[@]}" "$(cat "$prompt_file")" 2>&1 | tee -a "$log_file"
-        exit_code=${PIPESTATUS[0]}
+        if [ "${json_branch}" = "json-out" ]; then
+            # stdout -> tee (run log) + the json file; stderr -> a temp file
+            # merged into the log afterwards, so the captured stdout stays
+            # pure JSON (the contract is the parseable audit file).
+            json_err_tmp="$(mktemp "${log_dir}/.json-err-XXXXXX")"
+            timeout "$timeout_secs" qwen "${qwen_args[@]}" "$(cat "$prompt_file")" 2>"${json_err_tmp}" | tee -a "$log_file" > "${g_json_file}"
+            exit_code=${PIPESTATUS[0]}
+            cat "${json_err_tmp}" >> "${log_file}" 2>/dev/null || true
+            rm -f "${json_err_tmp}"
+        else
+            timeout "$timeout_secs" qwen "${qwen_args[@]}" "$(cat "$prompt_file")" 2>&1 | tee -a "$log_file"
+            exit_code=${PIPESTATUS[0]}
+        fi
         ;;
     opencode)
         # `opencode run --dir <path>` is the native working-directory flag
@@ -427,6 +472,36 @@ case "$cli" in
             "Unknown CLI tool: $cli. Supported: claude, gemini, qodercli, qwen, opencode"
         ;;
 esac
+
+# --json-file contract post-processing (qwen only, when the flag is set):
+# one structured log line per json run — the legacy trigger rate is the
+# drift-severity metric the log pipeline can aggregate — and, on the legacy
+# branch, the post-run proof that the file landed: an unknown version that
+# drifted like 0.25.3 would exit 0 and leave nothing, and this turns that
+# silent no-op into a loud one. It complements, not replaces, the "re-run
+# verify on any version change" discipline. A non-zero run exit is left
+# alone (the run already failed loudly; a missing file is a symptom, not
+# drift), so the assertion only fires on exit 0.
+json_assert="n/a"
+if [ "$cli" = "qwen" ] && [ -n "${g_json_file}" ]; then
+    if [ "${json_branch}" = "legacy" ] && [ "$exit_code" -eq 0 ]; then
+        if [ -f "${g_json_file}" ] && { ! command -v python3 >/dev/null 2>&1 || python3 -m json.tool "${g_json_file}" >/dev/null 2>&1; }; then
+            json_assert="pass"
+        else
+            json_assert="fail"
+        fi
+    fi
+    printf '{"event":"coding-cli-json-branch","qwen_version":"%s","branch":"%s","assert":"%s"}\n' \
+        "${qwen_version:-unknown}" "${json_branch}" "${json_assert}" >> "${log_file}"
+    if [ "${json_assert}" = "fail" ]; then
+        fail_run failed json-file-assertion 1 \
+            "JSON-FILE-DRIFT: --json-file target missing or unparseable (qwen ${qwen_version:-unknown}, legacy branch)" \
+            "[run-coding-cli] The run exited 0 but left no parseable JSON audit file at '${g_json_file}'." \
+            "[run-coding-cli] Either this qwen version drifted the --json-file semantics (compare 'qwen" \
+            "[run-coding-cli] --version' with CODING_CLI_JSON_BOUNDARY, default 0.25.3) or the CLI failed" \
+            "[run-coding-cli] to emit its structured result. Re-run verify-coding-cli.sh case g."
+    fi
+fi
 
 if [ "$exit_code" -eq 124 ]; then
     echo "[run-coding-cli] TIMEOUT after ${timeout_secs}s" | tee -a "$log_file"

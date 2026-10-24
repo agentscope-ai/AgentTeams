@@ -1,0 +1,12 @@
+{
+  "family": "legacy",
+  "status": "placeholder",
+  "qwen_version": "expected < 0.25.3 (0.25.1 or earlier file semantics; 0.25.2 unverified)",
+  "recorded_at": null,
+  "prompt": "Reply OK",
+  "flags": ["-m", "qwen3.6-27b-fp8", "--json-file", "<recorder temp path>"],
+  "output_source": "file",
+  "exit_code": 0,
+  "note": "Placeholder pending an old-CLI environment (the dev container only has qwen 0.25.3, where the native --json-file no longer writes a file). Record on a pre-drift qwen: run the recorded invocation with a temp --json-file path and overwrite qwen-json-file-legacy.stdout.json with the FILE content (not stdout), then set status=recorded and fill qwen_version/recorded_at/exit_code. Replay skips placeholders and reports them (no red).",
+  "re_record": "see note"
+}

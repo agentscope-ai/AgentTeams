@@ -18,9 +18,14 @@
 #      (the timeout-detection half of success/failure/timeout verification).
 #   5. failure     — the runner exits non-zero: the code is propagated and NO
 #      TIMEOUT is reported (the failure-detection half).
-#   6. json-file   — --json-file reaches the runner argv and the runner's
-#      structured-output file lands on disk (the stub writes it there), i.e.
-#      the optional structured-output passthrough is wired end to end.
+#   6. json-file   — dual-branch contract. Default (the stub reports no
+#      version): the LEGACY passthrough — the flag reaches the runner argv
+#      and the runner's file lands on disk (the stub writes it there).
+#      With QWEN_STUB_VERSION at/above the boundary (default 0.25.3,
+#      override CODING_CLI_JSON_BOUNDARY): the JSON-OUT branch — the argv
+#      carries -o json and NOT --json-file, and the wrapper's own stdout
+#      capture lands the file. The stub models the version it claims, so a
+#      hardcoded legacy semantic can no longer mask a CLI output drift.
 #
 # jq is optional: the config-driven budget/sandbox assertions are skipped (with
 # a note) when jq is absent, matching the detect suite's "skip when a
@@ -42,23 +47,47 @@ trap 'rm -rf "${TMP}"' EXIT
 
 # Stub qwen: record its argv (one token per line) to $QWEN_STUB_ARGS. Behavior
 # is selected by QWEN_STUB_MODE — default (exit 0) / sleep (sleep 5, to trip
-# the timeout) / fail (exit 7). No real runner required, so this runs in CI.
+# the timeout) / fail (exit 7). The version the wrapper's branch detection
+# reads is selected by QWEN_STUB_VERSION — unset means the stub prints no
+# version at all (detection falls to the legacy branch, the pre-upgrade
+# default). No real runner required, so this runs in CI.
 STUB_BIN="${TMP}/bin"
 STUB_ARGS="${TMP}/qwen-args.txt"
 mkdir -p "${STUB_BIN}"
 cat > "${STUB_BIN}/qwen" <<'STUB'
 #!/bin/bash
+# --version: echo QWEN_STUB_VERSION when set (the wrapper's branch detection
+# parses it). Unset -> no output, i.e. detection falls to the legacy branch.
+# Exit before the argv record so the detection probe never overwrites the
+# real run's argv capture.
+if [ "${1:-}" = "--version" ]; then
+    if [ -n "${QWEN_STUB_VERSION:-}" ]; then
+        printf 'qwen %s\n' "${QWEN_STUB_VERSION}"
+    fi
+    exit 0
+fi
 printf '%s\n' "$@" > "${QWEN_STUB_ARGS}"
-# Emulate `qwen --json-file <path>`: write a minimal structured result to the
-# given path so the wrapper's passthrough can be asserted end to end. A no-op
-# for the other cases (none of them pass --json-file).
+# Emulate the native structured-output surface per the semantics the claimed
+# version carries:
+#   --json-file <path> (pre-drift): write a minimal structured result to the
+#   given path, so the wrapper's legacy passthrough is asserted end to end.
+#   -o json (qwen-code >= 0.25.3 headless): print the stdout event array and
+#   write NO file — 0.25.3's --json-file is a dual-output no-op there, so the
+#   drift the wrapper works around is modeled here, not papered over.
+json_mode=0
 prev=""
 for a in "$@"; do
     if [ "${prev}" = "--json-file" ]; then
         printf '{"type":"result","subtype":"success","result":"stub"}\n' > "${a}"
     fi
+    if [ "${prev}" = "-o" ] && [ "${a}" = "json" ]; then
+        json_mode=1
+    fi
     prev="${a}"
 done
+if [ "${json_mode}" = "1" ]; then
+    printf '[{"type":"system","subtype":"init"},{"type":"result","subtype":"success","is_error":false,"result":"stub"}]\n'
+fi
 case "${QWEN_STUB_MODE:-default}" in
     sleep) sleep 5; exit 0 ;;
     fail)  exit 7 ;;
@@ -168,19 +197,39 @@ if ! grep -q "exit code 7" <<<"${out}"; then
     fail=1
 fi
 
-# --- case 6: --json-file passthrough — the flag reaches the runner argv and ---
-#             the runner's structured-output file lands on disk --------------
+# --- case 6: --json-file contract, dual-branch -------------------------------
+# default (no QWEN_STUB_VERSION): detection falls to the LEGACY branch — the
+# flag reaches the runner argv and the runner's file lands on disk (the
+# pre-drift behavior, asserted exactly as before).
+# QWEN_STUB_VERSION at/above the boundary (default 0.25.3): the JSON-OUT
+# branch — argv carries -o json and NOT --json-file, and the wrapper's own
+# stdout capture is what lands the file (the stub writes none).
 json_out="${TMP}/json-out/result.json"
 mkdir -p "$(dirname "${json_out}")"
 rm -f "${STUB_ARGS}" "${json_out}"
 out="$(CFG="" run_qwen --json-file "${json_out}")"
-if ! have_arg "--json-file" || ! have_arg "${json_out}"; then
-    echo "FAIL case6: --json-file should reach the runner argv (got: $(argv_show))"
-    fail=1
-fi
-if [ ! -f "${json_out}" ]; then
-    echo "FAIL case6: runner did not write the --json-file output at ${json_out}"
-    fail=1
+if [ -n "${QWEN_STUB_VERSION:-}" ] && [ "$(printf '%s\n%s\n' "${CODING_CLI_JSON_BOUNDARY:-0.25.3}" "${QWEN_STUB_VERSION}" | sort -V | tail -1)" = "${QWEN_STUB_VERSION}" ]; then
+    if ! have_arg "-o" || ! have_arg "json"; then
+        echo "FAIL case6-json-out: -o json should reach the runner argv (got: $(argv_show))"
+        fail=1
+    fi
+    if have_arg "--json-file"; then
+        echo "FAIL case6-json-out: --json-file must NOT reach the runner argv at/above the boundary (got: $(argv_show))"
+        fail=1
+    fi
+    if [ ! -f "${json_out}" ]; then
+        echo "FAIL case6-json-out: the wrapper's stdout capture did not land ${json_out}"
+        fail=1
+    fi
+else
+    if ! have_arg "--json-file" || ! have_arg "${json_out}"; then
+        echo "FAIL case6-legacy: --json-file should reach the runner argv (got: $(argv_show))"
+        fail=1
+    fi
+    if [ ! -f "${json_out}" ]; then
+        echo "FAIL case6-legacy: runner did not write the --json-file output at ${json_out}"
+        fail=1
+    fi
 fi
 
 # --- case 7: CLI missing (recreation wiped the install) -> actionable error --

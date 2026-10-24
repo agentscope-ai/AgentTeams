@@ -44,6 +44,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path"
 	"regexp"
 	"strings"
 	"sync"
@@ -293,7 +294,16 @@ func (h *CodingCliHandler) listCLIs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *CodingCliHandler) probeCLI(ctx context.Context, eb codingCliExecer, name string, spec codingCliSpec) map[string]interface{} {
-	out, _, exit, err := eb.Exec(ctx, name, []string{spec.BinName, "--version"}, codingCliExecTimeout)
+	bin := spec.BinName
+	// Installs made through the management tab/API land in the persistent
+	// agent home ($HOME/.coding-cli), not on PATH. Prefer that binary.
+	if home, err := h.workerHome(ctx, eb, name); err == nil {
+		candidate := path.Join(home, ".coding-cli", "bin", spec.BinName)
+		if _, _, exit, _ := eb.Exec(ctx, name, []string{"test", "-x", candidate}, 5*time.Second); exit == 0 {
+			bin = candidate
+		}
+	}
+	out, _, exit, err := eb.Exec(ctx, name, []string{bin, "--version"}, codingCliExecTimeout)
 	if err != nil {
 		return map[string]interface{}{"cli": spec.ID, "installed": false, "error": "probe failed: " + err.Error()}
 	}
@@ -555,7 +565,11 @@ func (h *CodingCliHandler) putCliSettings(w http.ResponseWriter, r *http.Request
 // workerHome resolves the worker's $HOME via the container shell (the
 // settings paths are ~-relative and must be absolute for WriteFile).
 func (h *CodingCliHandler) workerHome(ctx context.Context, eb codingCliExecer, name string) (string, error) {
-	out, _, exit, err := eb.Exec(ctx, name, []string{"sh", "-c", "printf %s \"$HOME\""}, 5*time.Second)
+	// Effective home for coding-CLI data. QwenPaw only persists its three
+	// mounted dirs (QWENPAW_WORKING_DIR=/app/working + .backups/.secret), so
+	// settings/prefix must live under that dir, not $HOME. OpenClaw/Hermes
+	// have no QWENPAW_WORKING_DIR; their $HOME is the MinIO-synced agent home.
+	out, _, exit, err := eb.Exec(ctx, name, []string{"sh", "-c", `printf %s "${QWENPAW_WORKING_DIR:-$HOME}"`}, 5*time.Second)
 	if err != nil {
 		return "", err
 	}
@@ -644,22 +658,32 @@ func (h *CodingCliHandler) startInstall(w http.ResponseWriter, r *http.Request) 
 var npmVersionPattern = regexp.MustCompile(`^([0-9][A-Za-z0-9.+-]*|\w+)$`)
 
 // runInstall installs/uninstalls the CLI inside the worker container via
-// `npm install/uninstall -g`. Persistence contract (joint-scenario note,
-// verified on the ARM worker image): the global npm payload lands in the
-// container's EPHEMERAL layer (the image layer at $npm prefix, e.g.
-// /usr/local/lib/node_modules) — NOT in the persistent agent home. A worker
-// recreation (image upgrade, a spec change such as an LLM-runtime parameter,
-// or any controller-driven container rebuild) wipes that layer, so the CLI
-// binary is lost even though the container "comes back". Operators must re-run
-// this install after a recreation; the settings surface is written
-// container-local too (no forced MinIO push), so auth may also need re-applying
-// — probe settings after a recreation and re-apply if the probe shows them gone.
+// `npm install/uninstall -g --prefix $HOME/.coding-cli`. The prefix is in the
+// persistent agent home, so a same-worker recreation keeps the CLI; settings
+// and auth stay in the agent home as before. Nothing is baked into the worker
+// image by default and no version is pinned: the tab/API passes a dist-tag
+// (latest/beta) or an explicit version. Probe prefers the prefix binary.
 func (h *CodingCliHandler) runInstall(name string, eb codingCliExecer, spec codingCliSpec, taskID, action, version string) {
-	var cmd []string
+	// Install into the persistent agent home (survives same-worker
+	// recreation); no version pin — the tab/API passes a dist-tag
+	// (latest/beta) or an explicit version.
+	prefix := ""
+	if home, err := h.workerHome(context.Background(), eb, name); err == nil {
+		prefix = path.Join(home, ".coding-cli")
+	}
+	cmd := []string{"npm"}
 	if action == "uninstall" {
-		cmd = []string{"npm", "uninstall", "-g", spec.NpmPackage}
+		cmd = append(cmd, "uninstall", "-g")
+		if prefix != "" {
+			cmd = append(cmd, "--prefix", prefix)
+		}
+		cmd = append(cmd, spec.NpmPackage)
 	} else {
-		cmd = []string{"npm", "install", "-g", spec.NpmPackage + "@" + version}
+		cmd = append(cmd, "install", "-g")
+		if prefix != "" {
+			cmd = append(cmd, "--prefix", prefix)
+		}
+		cmd = append(cmd, spec.NpmPackage+"@"+version)
 	}
 	_, stderr, exit, err := eb.Exec(context.Background(), name, cmd, codingCliInstallTimeout)
 	h.tasksMu.Lock()

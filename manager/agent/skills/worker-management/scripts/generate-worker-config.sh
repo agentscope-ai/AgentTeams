@@ -7,8 +7,9 @@
 # Reads env vars: AGENTTEAMS_MATRIX_URL, AGENTTEAMS_MATRIX_DOMAIN, AGENTTEAMS_AI_GATEWAY_URL, AGENTTEAMS_ADMIN_USER, AGENTTEAMS_DEFAULT_MODEL
 # Output: /root/agentteams-fs/agents/<WORKER_NAME>/openclaw.json
 #
-# If TEAM_LEADER_NAME is provided, groupAllowFrom and dm.allowFrom will use
-# [Leader, Admin] instead of [Manager, Admin].
+# If TEAM_LEADER_NAME is provided, groupAllowFrom, dm.allowFrom, and
+# tools.elevated.allowFrom.matrix use [Leader, Admin] instead of
+# [Manager, Admin].
 
 set -e
 source /opt/agentteams/scripts/lib/agentteams-env.sh
@@ -239,17 +240,19 @@ if [ "${_cms_traces_lc}" = "true" ]; then
 fi
 
 # If this worker belongs to a team, override groupAllowFrom and dm.allowFrom
-# to use [Leader, Admin] instead of [Manager, Admin]
+# and tools.elevated.allowFrom.matrix to use [Leader, Admin] instead of
+# [Manager, Admin]
 if [ -n "${TEAM_LEADER_NAME}" ]; then
     LEADER_MATRIX_ID="@${TEAM_LEADER_NAME}:${MATRIX_DOMAIN_FOR_ID}"
     ADMIN_MATRIX_ID="@${ADMIN_USER}:${MATRIX_DOMAIN_FOR_ID}"
     jq --arg leader "${LEADER_MATRIX_ID}" \
        --arg admin "${ADMIN_MATRIX_ID}" \
        '.channels.matrix.groupAllowFrom = [$leader, $admin]
-        | .channels.matrix.dm.allowFrom = [$leader, $admin]' \
+        | .channels.matrix.dm.allowFrom = [$leader, $admin]
+        | .tools.elevated.allowFrom.matrix = [$leader, $admin]' \
        "${OUTPUT_DIR}/openclaw.json" > "${OUTPUT_DIR}/openclaw.json.tmp"
     mv "${OUTPUT_DIR}/openclaw.json.tmp" "${OUTPUT_DIR}/openclaw.json"
-    log "  Overrode groupAllowFrom/dm.allowFrom for team worker (leader=${TEAM_LEADER_NAME})"
+    log "  Overrode groupAllowFrom/dm.allowFrom/elevated.allowFrom for team worker (leader=${TEAM_LEADER_NAME})"
 fi
 
 # ============================================================

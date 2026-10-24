@@ -699,6 +699,7 @@ if [ -f /root/manager-workspace/openclaw.json ]; then
        --arg emb_model "${AGENTTEAMS_EMBEDDING_MODEL}" \
        --arg aigw_domain "${AI_GATEWAY_DOMAIN}" \
        --arg matrix_user_id "@manager:${MATRIX_DOMAIN}" \
+       --arg admin_id "@${AGENTTEAMS_ADMIN_USER:-admin}:${MATRIX_DOMAIN}" \
        --argjson e2ee "${MATRIX_E2EE_ENABLED}" \
        --argjson known_models "${KNOWN_MODELS}" \
        --argjson ctx "${MODEL_CONTEXT_WINDOW}" \
@@ -724,7 +725,9 @@ if [ -f /root/manager-workspace/openclaw.json ]; then
         | .commands.restart = true
         | .gateway.port = 18799
         | .gateway.bind = "lan"
-        | .gateway.controlUi = ((.gateway.controlUi // {}) + {"dangerouslyDisableDeviceAuth": true, "allowInsecureAuth": true, "allowedOrigins": ["*"]})
+        # Keep Higress/HTTP console flags; do not clobber a tightened CORS list.
+        | .gateway.controlUi = ((.gateway.controlUi // {}) + {"dangerouslyDisableDeviceAuth": true, "allowInsecureAuth": true})
+        | .gateway.controlUi.allowedOrigins //= ["*"]
         | .channels.matrix.encryption = $e2ee
         | .channels.matrix.network = ((.channels.matrix.network // {}) + {"dangerouslyAllowPrivateNetwork": true})
         | .channels.matrix.autoJoin = "always"
@@ -733,7 +736,11 @@ if [ -f /root/manager-workspace/openclaw.json ]; then
         | .tools.exec = ((.tools.exec // {}) + {"host":"gateway","security":"full","ask":"off"})
         | .tools.elevated = (.tools.elevated // {})
         | .tools.elevated.enabled = true
-        | .tools.elevated.allowFrom |= ((. // {}) | .matrix = ["*"])
+        # Replace the historical matrix=["*"] wildcard; keep any operator allowlist.
+        | .tools.elevated.allowFrom |= ((. // {}) |
+            if (.matrix == null or .matrix == [] or ((.matrix // []) | index("*") != null)) then
+              .matrix = [$admin_id]
+            else . end)
         | .agents.defaults.elevatedDefault = "full"
         # Ensure memorySearch config exists (embedding model for memory) — skip if embedding model is empty
         | if $emb_model != "" then .agents.defaults.memorySearch //= {"provider":"openai","model":$emb_model,"remote":{"baseUrl":("http://" + $aigw_domain + ":8080/v1"),"apiKey":$key}} else . end

@@ -105,7 +105,10 @@
     "elevated": {
       "enabled": true,
       "allowFrom": {
-        "matrix": ["*"]
+        "matrix": [
+          "@manager:${AGENTTEAMS_MATRIX_DOMAIN}",
+          "@${AGENTTEAMS_ADMIN_USER}:${AGENTTEAMS_MATRIX_DOMAIN}"
+        ]
       }
     }
   },

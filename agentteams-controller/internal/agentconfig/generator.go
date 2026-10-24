@@ -100,6 +100,8 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 	// port at install time and may reach it via 127.0.0.1, the host's LAN IP,
 	// or a custom hostname; agentteams cannot enumerate every legitimate origin
 	// upfront. Token auth on the gateway remains the actual access boundary.
+	// Existing deployments that later tighten this list are preserved: the
+	// manager boot merge only fills allowedOrigins when it is absent.
 	//
 	// gateway.auth.token / gateway.remote.token: req.GatewayKey — these used to
 	// be `generateRandomHex(32)` per call, which produced a fresh value on every
@@ -155,6 +157,20 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 				"maxConcurrent":  4,
 				"subagents": map[string]interface{}{
 					"maxConcurrent": 8,
+				},
+				"elevatedDefault": "full",
+			},
+		},
+		"tools": map[string]interface{}{
+			"exec": map[string]interface{}{
+				"host":     "gateway",
+				"security": "full",
+				"ask":      "off",
+			},
+			"elevated": map[string]interface{}{
+				"enabled": true,
+				"allowFrom": map[string]interface{}{
+					"matrix": elevatedAllowFrom(req, matrixDomain, adminMatrixID),
 				},
 			},
 		},
@@ -295,6 +311,23 @@ func (g *Generator) buildMatrixChannelConfig(req WorkerConfigRequest, serverURL,
 	}
 
 	return cfg
+}
+
+// elevatedAllowFrom returns the Matrix senders allowed to trigger elevated
+// exec. Mirror the worker template: Manager + Admin for standalone workers,
+// Leader + Admin for team workers. Never use ["*"] — OpenClaw 2026.4.x
+// allowFrom matching is too broad (display-name / case-fold collisions).
+func elevatedAllowFrom(req WorkerConfigRequest, domain, adminMatrixID string) []string {
+	if req.TeamLeaderName != "" {
+		return []string{
+			fmt.Sprintf("@%s:%s", req.TeamLeaderName, domain),
+			adminMatrixID,
+		}
+	}
+	return []string{
+		fmt.Sprintf("@manager:%s", domain),
+		adminMatrixID,
+	}
 }
 
 func (g *Generator) applyChannelPolicy(config map[string]interface{}, policy *ChannelPolicy, domain string) {

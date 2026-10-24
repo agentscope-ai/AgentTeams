@@ -5,6 +5,10 @@ description: "Execute AI coding CLI tools (Claude Code / Gemini CLI / qodercli /
 
 # Coding CLI Management
 
+> Language/i18n: skill instructions and templates are **English** (agent-facing).
+> Deployments may localize outbound messages at the channel layer; do not
+> hardcode localized copy in this skill.
+
 This skill enables the delegating agent (Manager, team Leader, or an authorized Worker) to execute AI coding CLI tools (claude/gemini/qodercli/qwen/opencode) on behalf of Workers. Workers generate precise prompts; the delegating agent runs the CLI in the Worker's workspace and returns the result.
 
 Operational guidance distilled from field operation, in two parts, both detailed in [`references/delegation-guidance.md`](references/delegation-guidance.md) — Part A (first increment, currently supported): task-spec discipline, auth and execution boundary, preflight checks (including runner placement), and a pitfalls list; Part B (later capabilities, not yet implemented, evaluated separately): supervision and steering (including the delivery and wake contract), approval expectations, and a pitfalls list.
@@ -128,6 +132,33 @@ No new approval subsystem is introduced by this skill.
 Note: the pre-existing claude/gemini cases already run skip-permissions-class flags; per vendor guidance those are only sound inside an isolated environment, and headless runs should carry a turn cap (claude `--max-turns`).
 
 ---
+
+## Workflow visibility (TeamHarness)
+
+**Default ownership: the Worker manages the coding CLI.** The Worker has the
+`coding-cli` skill and runs/stops the CLI itself; a Manager/Leader runs it on
+the Worker's behalf only as a fallback (return the `run_id`/status to the
+Worker). The CLI is an **execution tool**, not a TeamHarness client. When a CLI
+run serves a TeamHarness task (the task id is in the assignment/spec), the
+**Worker** owns the run lifecycle and records it in the existing workflow task —
+no separate CLI task is created:
+
+1. **Dispatch**: the Worker calls
+   `taskflow report_progress` with a short note, e.g.
+   `coding-cli:<cli> run=<run_id> dispatched` (worker/remote-member role;
+   note ≤ 200 chars; it lands in the task audit history, state unchanged).
+2. **Terminal**: the Worker calls `taskflow submit_task`:
+   - success → `SUCCESS` / `SUCCESS_WITH_NOTES` (+ summary/deliverables),
+   - blocked/interrupted → `BLOCKED` / `INTERRUPTED`.
+3. **Cancellation**: stopping the CLI process is **Worker-managed**; the
+   workflow task's `cancel_task` is **Leader-only** by TeamHarness contract.
+   The Worker reports the stopped run, and the Leader cancels the task when
+   appropriate. Do not invent a second task or a parallel state.
+
+If a Manager/Leader runs the CLI **on behalf of** a Worker, it must return the
+`run_id` and terminal status to that Worker; only the Worker can call
+`report_progress` / `submit_task` for its own task. This keeps the workflow
+view = the existing task's status + history (dispatch/completed/blocked/cancelled).
 
 ## Persistence and re-install after worker recreation
 
@@ -308,9 +339,9 @@ fi
 **On success** — send to Worker in the same Room:
 ```
 @{worker}:DOMAIN task-{task-id} coding-result:
-CLI 工具已完成编码。请同步工作目录并 review 变更：
+The CLI finished the coding task. Sync the workspace and review the changes:
   agentteams-sync
-变更记录：/root/agentteams-fs/shared/tasks/{task-id}/workspace/coding-cli-logs/
+Run logs: /root/agentteams-fs/shared/tasks/{task-id}/workspace/coding-cli-logs/
 ```
 
 **On failure** (exit ≠ 0 or timeout) — see Step 4.
@@ -322,23 +353,23 @@ CLI 工具已完成编码。请同步工作目录并 review 变更：
 **Notify Worker** in the task Room:
 ```
 @{worker}:DOMAIN task-{task-id} coding-failed:
-CLI 工具执行失败（exit code: {code}）。请自行完成编码任务。
-你生成的提示词已保存于：/root/agentteams-fs/shared/tasks/{task-id}/coding-prompts/
+The CLI failed (exit code: {code}). Please complete the coding work yourself.
+Your prompt was saved at: /root/agentteams-fs/shared/tasks/{task-id}/coding-prompts/
 ```
 
 **Notify Human Admin** via primary channel (see channel-management skill "Sending Messages to Primary Channel"):
 ```
-Worker {worker-name} 的编码委托任务 {task-id} 中，{cli} 工具执行失败。
+Worker {worker-name}'s coding delegation task {task-id}: the {cli} CLI failed.
 
-错误信息：{last lines from log file}
+Error: {last lines from log file}
 
-建议检查：
-- ~/.{cli}/ 凭证是否有效（token 是否过期）
-- /host-share/.{cli}/ 软链是否正常（ls -la /root/.{cli}）
-- {cli} binary 是否在容器内可用（which {cli}）
-- qwen 凭证在 ~/.qwen（settings.json 的 security.auth 或模型环境变量）；opencode 凭证在 ~/.config/opencode 或 ~/.local/share/opencode/auth.json（opencode auth login 存储 / provider 配置）
-- opencode 报 `ProviderModelNotFoundError` / 请求没打到自定义网关 → provider 配置没被加载：1.19.0 只认**项目级** `<workspace>/.config/opencode/opencode.json`，全局 `~/.config/opencode/` 不生效（headless `--dir` 场景放项目级）
-- qwen 报 `API Error: 403 (no body)` 而裸 curl/fetch 同 key 同端点 200 → 多半是**默认模型名**不在自定义网关路由上（0.25.1 默认 `qwen3.7-max`）：显式 `-m <model>` 重跑
+Suggested checks:
+- Is the credential under ~/.{cli}/ valid (token expired?)
+- Is the /host-share/.{cli}/ symlink healthy (ls -la /root/.{cli})?
+- Is the {cli} binary available in the container (which {cli})?
+- qwen credentials live in ~/.qwen (settings.json security.auth or model env vars); opencode credentials live in ~/.config/opencode or ~/.local/share/opencode/auth.json (opencode auth login / provider config).
+- opencode: `ProviderModelNotFoundError` / requests not reaching the custom gateway → provider config not loaded: 1.19.0 only reads the **project-level** `<workspace>/.config/opencode/opencode.json`; the global `~/.config/opencode/` is ignored (headless `--dir`: use project-level).
+- qwen: `API Error: 403 (no body)` while curl/fetch with the same key/endpoint returns 200 → the **default model name** is likely not routed by the custom gateway (0.25.1 defaults to `qwen3.7-max`): rerun with an explicit `-m <model>`.
 ```
 
 **Record in config** (optional, for heartbeat diagnostics):
@@ -358,14 +389,14 @@ Append to the end of spec.md when CLI mode is enabled:
 ```markdown
 ## Coding CLI Mode
 
-本任务涉及代码修改。请使用 **Coding CLI 委托模式** 完成：
+This task involves code changes. Complete it using **Coding CLI delegation mode**:
 
-1. 克隆/准备代码到工作目录：`/root/agentteams-fs/shared/tasks/{task-id}/workspace/`
-2. 推送到 MinIO：`mc mirror /root/agentteams-fs/shared/tasks/{task-id}/workspace/ ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/workspace/`
-3. 根据你的理解和 `coding-cli` skill 生成编码提示词，发送给我
-4. 等待我执行 CLI 工具并返回结果
-5. Sync 拉取变更：`agentteams-sync`
-6. Review 变更并报告完成
+1. Clone/prepare the code in the work directory: `/root/agentteams-fs/shared/tasks/{task-id}/workspace/`
+2. Push to MinIO: `mc mirror /root/agentteams-fs/shared/tasks/{task-id}/workspace/ ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/workspace/`
+3. Based on your understanding and the `coding-cli` skill, generate the coding prompt and send it to me.
+4. Wait for me to run the CLI and return the result.
+5. Pull changes: `agentteams-sync`
+6. Review the changes and report completion.
 
-如收到 `coding-failed:`，请自行完成编码工作。
+If you receive `coding-failed:`, complete the coding work yourself.
 ```

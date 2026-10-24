@@ -102,6 +102,21 @@ multi-stage work visible, not as a status update.
 
 If blocked, submit a `BLOCKED` result instead of silently waiting.
 
+## Coding CLI runs (when used)
+
+If this task is executed through a coding CLI (`run-coding-cli.sh` / Qwen
+Code), keep the workflow view in this **same task** — do not create a second
+task:
+
+1. Before dispatch, record it with `report_progress`:
+   `coding-cli:<cli> run=<run_id> dispatched` (≤ 200 chars).
+2. When the CLI finishes, submit the task normally:
+   `SUCCESS` / `SUCCESS_WITH_NOTES` on success, `BLOCKED` / `INTERRUPTED` on
+   failure. Put the run id in the summary so the audit history links the run.
+3. The Worker owns starting/stopping the CLI; **workflow cancellation**
+   (`cancel_task`) stays Leader-only. Report a stopped run, then let the
+   Leader cancel the task if the task itself is cancelled.
+
 ## Submit
 
 Submit with `taskflow`:

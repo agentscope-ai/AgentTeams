@@ -193,6 +193,13 @@ func (h *ProjectHandler) readTaskAttention(ctx context.Context, node projectTask
 			if !ok {
 				continue
 			}
+			// TeamHarness writes the S0 deadline as `timeoutAt` (PR
+			// #1418); `expiresAt` is accepted as the design-doc alias so
+			// both spellings surface as the same `expires_at` wire field.
+			expires := str(m["timeoutAt"])
+			if expires == "" {
+				expires = str(m["expiresAt"])
+			}
 			out = append(out, attentionItem{
 				TaskID:      node.TaskID,
 				TaskTitle:   title,
@@ -205,7 +212,7 @@ func (h *ProjectHandler) readTaskAttention(ctx context.Context, node projectTask
 				EventID:     str(m["eventId"]),
 				Options:     attentionOptions(m["options"]),
 				Suggested:   str(m["suggested"]),
-				ExpiresAt:   str(m["expiresAt"]),
+				ExpiresAt:   expires,
 			})
 		}
 		return out

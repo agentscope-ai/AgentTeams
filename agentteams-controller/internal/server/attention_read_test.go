@@ -226,7 +226,7 @@ func TestGetProjectAttention_OptionsPassthrough(t *testing.T) {
 					map[string]any{"id": "reject", "label": "Reject"},
 				},
 				"suggested": "proceed_once",
-				"expiresAt": "2026-10-25T12:00:00Z",
+				"timeoutAt": "2026-10-25T12:00:00Z",
 			},
 			map[string]any{"kind": "decision", "question": "q", "attempt": 1,
 				"requestedAt": "2026-10-25T08:00:00Z", "resolved": false},

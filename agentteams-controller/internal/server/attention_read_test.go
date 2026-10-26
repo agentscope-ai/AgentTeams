@@ -291,3 +291,81 @@ func TestGetProjectAttention_LoopTasks(t *testing.T) {
 		t.Fatalf("loop task source: %+v", resp.Items)
 	}
 }
+
+func TestGetProjectAttention_RoomIDPassthrough(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "teams/alpha-team/shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "Alpha", "status": "active",
+		"plan_type": "dag", "team_id": "alpha-team",
+		"tasks": []any{
+			map[string]any{"task_id": "t1", "title": "Task One", "status": "active"},
+			map[string]any{"task_id": "t2", "title": "Task Two", "status": "planned"},
+			map[string]any{"task_id": "t3", "title": "Task Three", "status": "active"},
+		},
+	})
+	// t1: snake_case room_id (the persisted TeamHarness form).
+	putProject(store, "teams/alpha-team/shared/tasks/t1/meta.json", map[string]any{
+		"task_id": "t1", "project_id": "p1", "title": "Task One", "status": "active",
+		"room_id": "!t1room:example.com",
+		"attention": []any{
+			map[string]any{"kind": "approval", "question": "deploy?", "attempt": 1,
+				"requestedAt": "2026-10-25T09:00:00Z", "resolved": false},
+		},
+	})
+	// t2: camelCase roomId alias must still surface.
+	putProject(store, "teams/alpha-team/shared/tasks/t2/meta.json", map[string]any{
+		"task_id": "t2", "project_id": "p1", "title": "Task Two", "status": "planned",
+		"roomId": "!t2room:example.com",
+		"attention": []any{
+			map[string]any{"kind": "decision", "question": "branch?", "attempt": 1,
+				"requestedAt": "2026-10-25T08:00:00Z", "resolved": false},
+		},
+	})
+	// t3: attention but no room binding yet (omitempty path).
+	putProject(store, "teams/alpha-team/shared/tasks/t3/meta.json", map[string]any{
+		"task_id": "t3", "project_id": "p1", "title": "Task Three", "status": "active",
+		"attention": []any{
+			map[string]any{"kind": "escalation", "question": "blocked", "attempt": 1,
+				"requestedAt": "2026-10-25T07:00:00Z", "resolved": false},
+		},
+	})
+	h := newProjectTestHandler(t, store, team("alpha-team"))
+
+	resp := decodeAttention(t, getAttention(t, h, "p1", ""))
+	if resp.Count != 3 {
+		t.Fatalf("count=%d want 3: %+v", resp.Count, resp.Items)
+	}
+	byTask := map[string]attentionItem{}
+	for _, it := range resp.Items {
+		byTask[it.TaskID] = it
+	}
+	if got := byTask["t1"].RoomID; got != "!t1room:example.com" {
+		t.Fatalf("t1 room_id (snake)=%q want !t1room:example.com", got)
+	}
+	if got := byTask["t2"].RoomID; got != "!t2room:example.com" {
+		t.Fatalf("t2 roomId (camel)=%q want !t2room:example.com", got)
+	}
+	if got := byTask["t3"].RoomID; got != "" {
+		t.Fatalf("t3 (no binding) room_id=%q want empty", got)
+	}
+
+	// Wire: room_id present for t1/t2, omitted (omitempty) for t3.
+	var raw map[string]any
+	if err := json.Unmarshal(getAttention(t, h, "p1", "").Body.Bytes(), &raw); err != nil {
+		t.Fatalf("wire decode: %v", err)
+	}
+	wire := map[string]map[string]any{}
+	for _, it := range raw["items"].([]any) {
+		m := it.(map[string]any)
+		wire[m["task_id"].(string)] = m
+	}
+	if _, ok := wire["t1"]["room_id"]; !ok {
+		t.Fatalf("t1 wire must carry room_id: %v", wire["t1"])
+	}
+	if _, ok := wire["t2"]["room_id"]; !ok {
+		t.Fatalf("t2 wire must carry room_id: %v", wire["t2"])
+	}
+	if _, ok := wire["t3"]["room_id"]; ok {
+		t.Fatalf("t3 wire must omit room_id (omitempty): %v", wire["t3"])
+	}
+}

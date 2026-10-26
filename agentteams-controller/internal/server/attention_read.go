@@ -43,6 +43,7 @@ type attentionItem struct {
 	TaskID      string            `json:"task_id"`
 	TaskTitle   string            `json:"task_title"`
 	TaskStatus  string            `json:"task_status"`
+	RoomID      string            `json:"room_id,omitempty"`
 	Kind        string            `json:"kind"`
 	Question    string            `json:"question"`
 	Attempt     int               `json:"attempt"`
@@ -187,6 +188,17 @@ func (h *ProjectHandler) readTaskAttention(ctx context.Context, node projectTask
 		if status == "" {
 			status = node.Status
 		}
+		// Task-level room binding: TeamHarness writes the task room's
+		// Matrix room id into TaskMeta.room_id when a task is assigned a
+		// task room (create_task path). The ATTENTION ping and the human
+		// DECISION answer both live in that room, so it is the room the
+		// pending item should surface on (room-card badge, room-page
+		// pill). Prefer the persisted snake_case form, fall back to the
+		// camelCase alias.
+		roomID := str(raw["room_id"])
+		if roomID == "" {
+			roomID = str(raw["roomId"])
+		}
 		var out []attentionItem
 		for _, entry := range list {
 			m, ok := entry.(map[string]any)
@@ -204,6 +216,7 @@ func (h *ProjectHandler) readTaskAttention(ctx context.Context, node projectTask
 				TaskID:      node.TaskID,
 				TaskTitle:   title,
 				TaskStatus:  status,
+				RoomID:      roomID,
 				Kind:        str(m["kind"]),
 				Question:    str(m["question"]),
 				Attempt:     intFromAny(m["attempt"]),

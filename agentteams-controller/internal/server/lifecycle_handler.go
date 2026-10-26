@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
 	"k8s.io/client-go/util/retry"
@@ -20,17 +21,28 @@ type LifecycleHandler struct {
 	k8s       client.Client
 	registry  *backend.Registry
 	namespace string
+	// resourcePrefix derives the manager container name (the manager backend
+	// is used with an empty prefix, so the name must be fully qualified).
+	resourcePrefix authpkg.ResourcePrefix
 
 	readyMu sync.RWMutex
 	ready   map[string]bool
 }
 
-func NewLifecycleHandler(k8s client.Client, registry *backend.Registry, namespace string) *LifecycleHandler {
+// NewLifecycleHandler creates the lifecycle handler. resourcePrefix is
+// optional (existing callers/tests omit it); an empty value falls back to the
+// default prefix used for manager container names.
+func NewLifecycleHandler(k8s client.Client, registry *backend.Registry, namespace string, resourcePrefix ...string) *LifecycleHandler {
+	prefix := ""
+	if len(resourcePrefix) > 0 {
+		prefix = resourcePrefix[0]
+	}
 	return &LifecycleHandler{
-		k8s:       k8s,
-		registry:  registry,
-		namespace: namespace,
-		ready:     make(map[string]bool),
+		k8s:            k8s,
+		registry:       registry,
+		namespace:      namespace,
+		resourcePrefix: authpkg.ResourcePrefix(prefix).Or(authpkg.DefaultResourcePrefix),
+		ready:          make(map[string]bool),
 	}
 }
 
@@ -110,6 +122,105 @@ func (h *LifecycleHandler) Sleep(w http.ResponseWriter, r *http.Request) {
 	_ = h.k8s.Status().Update(r.Context(), &worker)
 
 	httputil.WriteJSON(w, http.StatusOK, WorkerLifecycleResponse{Name: name, Phase: "Sleeping"})
+}
+
+// Restart handles POST /api/v1/workers/{name}/restart: stop + start the
+// worker container so the running process re-reads its config from scratch.
+// Declarative state is set to Running first so the reconciler keeps the
+// container alive; a missing container reports "Restarting" and the
+// reconciler creates it from the CR.
+func (h *LifecycleHandler) Restart(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "worker name is required")
+		return
+	}
+
+	var worker v1beta1.Worker
+	if err := h.k8s.Get(r.Context(), client.ObjectKey{Name: name, Namespace: h.namespace}, &worker); err != nil {
+		writeK8sError(w, "get worker", err)
+		return
+	}
+
+	running := "Running"
+	worker.Spec.State = &running
+	if err := h.k8s.Update(r.Context(), &worker); err != nil {
+		writeK8sError(w, "update worker spec.state", err)
+		return
+	}
+
+	b := h.registry.DetectWorkerBackend(r.Context())
+	if b == nil {
+		httputil.WriteError(w, http.StatusServiceUnavailable, "no worker backend available")
+		return
+	}
+	// Best-effort stop: a missing container means there is nothing to stop.
+	_ = b.Stop(r.Context(), name)
+	if err := b.Start(r.Context(), name); err != nil {
+		if errors.Is(err, backend.ErrNotFound) {
+			h.setReady(name, false)
+			httputil.WriteJSON(w, http.StatusOK, WorkerLifecycleResponse{Name: name, Phase: "Restarting"})
+			return
+		}
+		httputil.WriteError(w, http.StatusBadGateway, "restart worker: "+err.Error())
+		return
+	}
+
+	h.setReady(name, false)
+	_ = h.k8s.Get(r.Context(), client.ObjectKey{Name: name, Namespace: h.namespace}, &worker)
+	worker.Status.Phase = "Running"
+	worker.Status.Message = ""
+	_ = h.k8s.Status().Update(r.Context(), &worker)
+	httputil.WriteJSON(w, http.StatusOK, WorkerLifecycleResponse{Name: name, Phase: "Running"})
+}
+
+// RestartManager handles POST /api/v1/managers/{name}/restart: stop + start
+// the manager container. Manager container names are already fully qualified
+// (auth.ResourcePrefix.ManagerPodName), so the shared backend is switched to
+// an empty prefix — the same derivation the manager reconciler uses.
+func (h *LifecycleHandler) RestartManager(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "manager name is required")
+		return
+	}
+
+	var mgr v1beta1.Manager
+	if err := h.k8s.Get(r.Context(), client.ObjectKey{Name: name, Namespace: h.namespace}, &mgr); err != nil {
+		writeK8sError(w, "get manager", err)
+		return
+	}
+
+	running := "Running"
+	mgr.Spec.State = &running
+	if err := h.k8s.Update(r.Context(), &mgr); err != nil {
+		writeK8sError(w, "update manager spec.state", err)
+		return
+	}
+
+	wb := h.registry.DetectWorkerBackend(r.Context())
+	if wb == nil {
+		httputil.WriteError(w, http.StatusServiceUnavailable, "no worker backend available")
+		return
+	}
+	switch b := wb.(type) {
+	case *backend.DockerBackend:
+		wb = b.WithPrefix("")
+	case *backend.K8sBackend:
+		wb = b.WithPrefix("")
+	}
+
+	containerName := h.resourcePrefix.ManagerPodName(name)
+	_ = wb.Stop(r.Context(), containerName)
+	if err := wb.Start(r.Context(), containerName); err != nil {
+		if errors.Is(err, backend.ErrNotFound) {
+			httputil.WriteJSON(w, http.StatusOK, map[string]string{"name": name, "phase": "Restarting"})
+			return
+		}
+		httputil.WriteError(w, http.StatusBadGateway, "restart manager: "+err.Error())
+		return
+	}
+	httputil.WriteJSON(w, http.StatusOK, map[string]string{"name": name, "phase": "Running"})
 }
 
 // EnsureReady handles POST /api/v1/workers/{name}/ensure-ready

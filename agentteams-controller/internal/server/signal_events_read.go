@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
@@ -53,8 +54,18 @@ func encodeSignalCursor(occurredAt, eventID string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(occurredAt + "\x00" + eventID))
 }
 
+// decodeSignalCursor accepts both padded and unpadded base64url cursors:
+// this endpoint emits unpadded (RawURLEncoding) while the Python side
+// (base64.urlsafe_b64encode) emits padded, and a page must resume across
+// the boundary in either direction.
 func decodeSignalCursor(raw string) (string, string, bool) {
-	data, err := base64.RawURLEncoding.DecodeString(raw)
+	unpadded := strings.TrimRight(raw, "=")
+	if len(unpadded)%4 == 1 {
+		return "", "", false // a base64 body can never be 1 mod 4
+	}
+	data, err := base64.URLEncoding.DecodeString(
+		unpadded + strings.Repeat("=", (4-len(unpadded)%4)%4),
+	)
 	if err != nil {
 		return "", "", false
 	}
@@ -141,6 +152,23 @@ func (h *ProjectHandler) GetProjectSignalEvents(w http.ResponseWriter, r *http.R
 		taskFilter = strings.TrimSpace(r.URL.Query().Get("taskId"))
 	}
 	since := strings.TrimSpace(r.URL.Query().Get("since"))
+	var sinceTime time.Time
+	if since != "" {
+		sinceTime, err = time.Parse(time.RFC3339, since)
+		if err != nil {
+			// A literal '+' offset (e.g. 18:01:00+08:00) reaches the
+			// handler as a space — the query parser decodes '+' as
+			// whitespace; retry with it mapped back so unencoded
+			// RFC3339 offsets are accepted.
+			if alt := strings.ReplaceAll(since, " ", "+"); alt != since {
+				sinceTime, err = time.Parse(time.RFC3339, alt)
+			}
+		}
+		if err != nil {
+			httputil.WriteError(w, http.StatusBadRequest, "invalid since")
+			return
+		}
+	}
 
 	teamID := signalTeamID(match.meta, match.team)
 	prefix := signalEventPrefix(match.team, teamID)
@@ -176,18 +204,33 @@ func (h *ProjectHandler) GetProjectSignalEvents(w http.ResponseWriter, r *http.R
 		if taskFilter != "" && ev.TaskID != taskFilter {
 			continue
 		}
-		if since != "" && ev.OccurredAt < since {
-			continue
+		if since != "" {
+			// Instant comparison, not string comparison: offset zones and
+			// fractional seconds must order chronologically.
+			evTime, perr := time.Parse(time.RFC3339, ev.OccurredAt)
+			if perr == nil && evTime.Before(sinceTime) {
+				continue
+			}
+			// perr != nil: keep the event — silently dropping it would
+			// lose data; emitters write normalized RFC3339, so this is
+			// defensive.
 		}
 		events = append(events, ev)
 	}
 
+	// Lexicographic order is chronological on purpose: both emitters
+	// (controller utcTimestamp; TeamHarness _utc_timestamp) write
+	// occurred_at as fixed-width UTC 'Z' second-precision RFC3339, where
+	// string order == time order (guarded by
+	// TestSignalEventOccurredAtNormalized).
 	sort.Slice(events, func(i, j int) bool {
 		if events[i].OccurredAt != events[j].OccurredAt {
 			return events[i].OccurredAt < events[j].OccurredAt
 		}
 		return events[i].EventID < events[j].EventID
 	})
+	// afterTs is itself an emitter-written occurred_at (same normalized
+	// form as above), so lexicographic comparison resumes the page.
 	if afterTs != "" || afterID != "" {
 		idx := 0
 		for idx < len(events) {

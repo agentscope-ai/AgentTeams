@@ -408,7 +408,18 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("file size exceeds the %d byte per-file limit", h.maxFileBytes))
 		return
 	}
-	if status, msg := h.checkQuota(ctx, a, username, len(data)); status != 0 {
+	key := humanFilesPrefix(username) + rel
+	// A replacement only charges its delta: used already counts the
+	// object being replaced, so only newSize-oldSize may grow the area.
+	// oldSize is 0 when the target does not exist yet.
+	var oldSize int64
+	if meta, merr := h.oss.StatMeta(ctx, key); merr == nil {
+		oldSize = meta.Size
+	} else if !errors.Is(merr, os.ErrNotExist) {
+		httputil.WriteError(w, http.StatusInternalServerError, "stat file failed")
+		return
+	}
+	if status, msg := h.checkQuota(ctx, a, username, oldSize, int64(len(data))); status != 0 {
 		if status == http.StatusRequestEntityTooLarge {
 			writeHumanFileCodedError(w, status, "quota_exceeded", msg)
 		} else {
@@ -417,7 +428,6 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key := humanFilesPrefix(username) + rel
 	if match := r.Header.Get("If-Match"); match != "" {
 		// Resolve the current state first so both backends reject
 		// identically when the target does not exist yet (mc If-Match
@@ -770,11 +780,14 @@ func (h *humanFilesHandler) usedBytes(ctx context.Context, username string) (int
 	return total, nil
 }
 
-// checkQuota enforces the workspace quota before a write of size bytes
-// lands. It returns the rejection status and message, or (0, "") when the
-// write is allowed. An unset quota is unlimited; a storage failure while
-// computing usage fails closed with 500.
-func (h *humanFilesHandler) checkQuota(ctx context.Context, a *humanFileAccess, username string, size int) (int, string) {
+// checkQuota enforces the workspace quota before a write lands. The write
+// replaces an existing object of oldSize bytes (0 when the file does not
+// exist yet) with one of newSize bytes; the area may only grow by the
+// delta, because used already counts the object being replaced. It
+// returns the rejection status and message, or (0, "") when the write is
+// allowed. An unset quota is unlimited; a storage failure while computing
+// usage fails closed with 500.
+func (h *humanFilesHandler) checkQuota(ctx context.Context, a *humanFileAccess, username string, oldSize, newSize int64) (int, string) {
 	quota := a.human.Spec.WorkspaceQuotaBytes
 	if quota == nil {
 		return 0, ""
@@ -783,9 +796,9 @@ func (h *humanFilesHandler) checkQuota(ctx context.Context, a *humanFileAccess, 
 	if err != nil {
 		return http.StatusInternalServerError, "quota check failed"
 	}
-	if used+int64(size) > *quota {
+	if used-oldSize+newSize > *quota {
 		return http.StatusRequestEntityTooLarge,
-			fmt.Sprintf("workspace quota of %d bytes exceeded (used %d, writing %d)", *quota, used, size)
+			fmt.Sprintf("workspace quota of %d bytes exceeded (used %d, old %d, new %d)", *quota, used, oldSize, newSize)
 	}
 	return 0, ""
 }

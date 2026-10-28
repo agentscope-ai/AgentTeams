@@ -928,6 +928,146 @@ func TestHumanFiles_QuotaEnforcement(t *testing.T) {
 	}
 }
 
+// TestHumanFiles_QuotaReplacementCharge pins the #1426 fix: a PUT that
+// replaces an existing object charges only the delta (newSize-oldSize),
+// not the full new size, because used already counts the old object.
+func TestHumanFiles_QuotaReplacementCharge(t *testing.T) {
+	hfh, _, _ := newHumanFilesRig(t)
+
+	getUsed := func() int64 {
+		t.Helper()
+		rec := hfGetQuota(t, hfh, "alice", hfSelf())
+		if rec.Code != http.StatusOK {
+			t.Fatalf("get quota: %d %s", rec.Code, rec.Body.String())
+		}
+		var q humanQuotaResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &q); err != nil {
+			t.Fatal(err)
+		}
+		return q.UsedBytes
+	}
+	codedCode := func(rec *httptest.ResponseRecorder) string {
+		t.Helper()
+		var coded humanFileCodedError
+		if err := json.Unmarshal(rec.Body.Bytes(), &coded); err != nil {
+			t.Fatal(err)
+		}
+		return coded.Code
+	}
+	getBody := func(path string) string {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		hfh.getFile(rec, hfReq(t, http.MethodGet, "alice", path, hfSelf(), nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("get %s: %d %s", path, rec.Code, rec.Body.String())
+		}
+		return rec.Body.String()
+	}
+
+	// Pin the quota at 10 bytes before anything is written.
+	if rec := hfPutQuota(t, hfh, "alice", hfAdmin(), `{"quotaBytes":10}`); rec.Code != http.StatusOK {
+		t.Fatalf("put quota: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// New files keep the original semantics: empty area + an 11-byte
+	// file over the 10-byte quota -> 413, nothing written.
+	rec := hfPutFile(t, hfh, "alice", "g.txt", hfSelf(), strings.Repeat("n", 11))
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("new over-quota file: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+	if code := codedCode(rec); code != "quota_exceeded" {
+		t.Fatalf("code = %q, want quota_exceeded", code)
+	}
+	if got := getUsed(); got != 0 {
+		t.Fatalf("used after rejected new file = %d, want 0", got)
+	}
+
+	// Maintainer repro: fill the quota exactly (10B -> 200), then
+	// overwrite with a 1-byte file. The old check charged 10+1 and
+	// rejected the shrink; the replacement delta is 1-10, so it is 200.
+	rec = hfPutFile(t, hfh, "alice", "f.txt", hfSelf(), strings.Repeat("a", 10))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("seed 10B: got %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	rec = hfPutFile(t, hfh, "alice", "f.txt", hfSelf(), "b")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("shrink overwrite at quota: got %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if got := getUsed(); got != 1 {
+		t.Fatalf("used after shrink = %d, want 1", got)
+	}
+
+	// Same-size overwrite at the quota: 10B -> 10B is a zero delta -> 200.
+	if rec := hfPutFile(t, hfh, "alice", "f.txt", hfSelf(), strings.Repeat("c", 10)); rec.Code != http.StatusOK {
+		t.Fatalf("grow back to 10B: got %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	rec = hfPutFile(t, hfh, "alice", "f.txt", hfSelf(), strings.Repeat("d", 10))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("same-size overwrite at quota: got %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if got := getUsed(); got != 10 {
+		t.Fatalf("used after same-size overwrite = %d, want 10", got)
+	}
+
+	// Growth past the quota: 10B -> 11B with used at the quota -> 413,
+	// and the rejection touches neither used nor the file.
+	rec = hfPutFile(t, hfh, "alice", "f.txt", hfSelf(), strings.Repeat("e", 11))
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("grow over quota: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+	if code := codedCode(rec); code != "quota_exceeded" {
+		t.Fatalf("code = %q, want quota_exceeded", code)
+	}
+	if got := getUsed(); got != 10 {
+		t.Fatalf("used after rejected grow = %d, want 10", got)
+	}
+	if body := getBody("f.txt"); body != strings.Repeat("d", 10) {
+		t.Fatalf("rejected grow changed the file: %q", body)
+	}
+
+	// Growth that lands exactly on the quota: 6B -> 10B -> 200.
+	if rec := hfPutFile(t, hfh, "alice", "f.txt", hfSelf(), strings.Repeat("f", 6)); rec.Code != http.StatusOK {
+		t.Fatalf("shrink to 6B: got %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	rec = hfPutFile(t, hfh, "alice", "f.txt", hfSelf(), strings.Repeat("g", 10))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("grow to exactly quota: got %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if got := getUsed(); got != 10 {
+		t.Fatalf("used at quota = %d, want 10", got)
+	}
+	var etagAtQuota struct {
+		ETag string `json:"etag"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &etagAtQuota); err != nil {
+		t.Fatal(err)
+	}
+
+	// If-Match conflict: an external writer replaces the file (same
+	// size, so used stays 10); the stale-ETag overwrite then fails with
+	// 412 and leaves used and the file untouched.
+	external := strings.Repeat("x", 10)
+	if rec := hfPutFile(t, hfh, "alice", "f.txt", hfAdmin(), external); rec.Code != http.StatusOK {
+		t.Fatalf("external put: got %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	req := hfReq(t, http.MethodPut, "alice", "f.txt", hfSelf(), strings.NewReader("h"))
+	req.Header.Set("If-Match", etagAtQuota.ETag)
+	rec = httptest.NewRecorder()
+	hfh.putFile(rec, req)
+	if rec.Code != http.StatusPreconditionFailed {
+		t.Fatalf("stale If-Match: got %d, want 412: %s", rec.Code, rec.Body.String())
+	}
+	if code := codedCode(rec); code != "etag_mismatch" {
+		t.Fatalf("code = %q, want etag_mismatch", code)
+	}
+	if got := getUsed(); got != 10 {
+		t.Fatalf("used after 412 = %d, want 10", got)
+	}
+	if body := getBody("f.txt"); body != external {
+		t.Fatalf("rejected If-Match write changed the file: %q", body)
+	}
+}
+
 func TestHumanFiles_QuotaRestoreDoesNotGrowUsage(t *testing.T) {
 	hfh, _, _ := newHumanFilesRig(t)
 

@@ -48,6 +48,7 @@ from mcp.room.notify import _send_project_completion_notification
 from mcp.room.rooms import _runtime_team_room_id
 from mcp.transport.route import _normalize_reply_route, _reply_route_from_requester
 from .state import (
+    _loop_pause_state,
     _mark_requester_report_sent,
     _normalize_tasks,
     _project_id_from_payload,
@@ -767,6 +768,9 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project_id = _safe_id(payload.get("projectId") or payload.get("project_id"), "projectId")
             state_path = _project_state_path(arguments, project_id)
             project = _read_json(state_path, {"project_id": project_id, "title": project_id, "status": "active", "tasks": []})
+            paused, pause_sources = _loop_pause_state(project)
+            if paused:
+                raise ValueError(f"project is paused (sources: {', '.join(pause_sources)})")
             previous_loop = project.get("loop") if isinstance(project.get("loop"), dict) else {}
             previous_tasks = {
                 task.get("task_id"): task
@@ -862,6 +866,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project = _read_json(_project_state_path(arguments, project_id))
             if not project:
                 raise ValueError("project not found")
+            paused, pause_sources = _loop_pause_state(project)
             return {
                 "ok": True,
                 "tool": "projectflow",
@@ -869,6 +874,8 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "project": project,
                 "loop": project.get("loop", {}),
                 "readyLoopNodes": _ready_loop_nodes(project),
+                "paused": paused,
+                "pauseSources": pause_sources,
             }
 
         if action == "record_loop_iteration":
@@ -879,6 +886,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             loop = project.get("loop") if isinstance(project.get("loop"), dict) else {}
             if not loop:
                 raise ValueError(f"project has no loop plan: {project_id}")
+            paused, pause_sources = _loop_pause_state(project)
             iteration = _positive_int(payload.get("iteration"), "iteration")
             max_iterations = _positive_int(loop.get("max_iterations"), "maxIterations")
             if iteration > max_iterations:
@@ -1045,7 +1053,13 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "action": action,
                 "project": project,
                 "loop": loop,
-                "readyLoopNodes": _ready_loop_nodes(project),
+                # Paused: the iteration still lands (in-flight work may
+                # finish), but nothing is released downstream and no next
+                # round opens — readyLoopNodes stays empty until the Go API
+                # clears loop.pause_sources.
+                "readyLoopNodes": [] if paused else _ready_loop_nodes(project),
+                "paused": paused,
+                "pauseSources": pause_sources,
                 "notificationNeeded": _notification_needed(
                     action, project, summary=f"record_loop_iteration: iteration {iteration} -> {decision}",
                 ),

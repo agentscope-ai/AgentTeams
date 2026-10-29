@@ -10,6 +10,7 @@
 #   AGENTTEAMS_MANAGER_RUNTIME=openclaw           - OpenClaw gateway mode
 
 source /opt/agentteams/scripts/lib/agentteams-env.sh
+. /opt/agentteams/scripts/lib/migrate-openclaw-config.sh
 
 # ============================================================
 # Runtime selection
@@ -719,14 +720,16 @@ if [ -f /root/manager-workspace/openclaw.json ]; then
         # Rebuild model aliases from the full models list
         | (.models.providers["agentteams-gateway"].models | map({ ("agentteams-gateway/" + .id): { "alias": .id } }) | add // {}) as $aliases
         | .agents.defaults.models = ((.agents.defaults.models // {}) + $aliases)
+        | if .agents.defaults.models != null and .agents.defaults.modelPolicy == null then .agents.defaults.modelPolicy = {allow: (.agents.defaults.models | keys)} else . end
         | .channels.matrix.accessToken = $token | .channels.matrix.userId = $matrix_user_id | .models.providers["agentteams-gateway"].apiKey = $key
         | ((.hooks.token // "") as $ht | if $ht == $key or $ht == ($key + "-hooks" | @base64) then del(.hooks) else . end)
         | .agents.defaults.model.primary = ("agentteams-gateway/" + $model)
         | .commands.restart = true
         | .gateway.port = 18799
         | .gateway.bind = "lan"
-        # Keep Higress/HTTP console flags; do not clobber a tightened CORS list.
-        | .gateway.controlUi = ((.gateway.controlUi // {}) + {"dangerouslyDisableDeviceAuth": true, "allowInsecureAuth": true})
+        # v2026.10.6 retired both device-auth bypass flags; keep the token
+        # auth/CORS contract instead of re-emitting rejected keys.
+        | .gateway.controlUi = ((.gateway.controlUi // {}) | del(.dangerouslyDisableDeviceAuth, .allowInsecureAuth))
         | .gateway.controlUi.allowedOrigins //= ["*"]
         | .channels.matrix.encryption = $e2ee
         | .channels.matrix.network = ((.channels.matrix.network // {}) + {"dangerouslyAllowPrivateNetwork": true})
@@ -742,11 +745,12 @@ if [ -f /root/manager-workspace/openclaw.json ]; then
               .matrix = [$admin_id]
             else . end)
         | .agents.defaults.elevatedDefault = "full"
-        # Ensure memorySearch config exists (embedding model for memory) — skip if embedding model is empty
-        | if $emb_model != "" then .agents.defaults.memorySearch //= {"provider":"openai","model":$emb_model,"remote":{"baseUrl":("http://" + $aigw_domain + ":8080/v1"),"apiKey":$key}} else . end
+        # Ensure memory.search exists (embedding model for memory) — skip if empty.
+        | if $emb_model != "" then .memory.search //= {"provider":"openai","model":$emb_model,"remote":{"baseUrl":("http://" + $aigw_domain + ":8080/v1"),"apiKey":$key}} else . end
        ' \
        /root/manager-workspace/openclaw.json > /tmp/openclaw.json.tmp && \
         mv /tmp/openclaw.json.tmp /root/manager-workspace/openclaw.json
+    migrate_openclaw_config /root/manager-workspace/openclaw.json || log "WARNING: openclaw config migration failed"
     # Disable openclaw's observe-recovery mechanism which compares config against
     # a lastKnownGood baseline in config-health.json. When meta is missing from the
     # current file but present in the baseline, observe-recovery restores from .bak,
@@ -764,7 +768,7 @@ if [ -f /root/manager-workspace/openclaw.json ]; then
 else
     log "Manager openclaw.json not found, generating from template..."
     envsubst < /opt/agentteams/configs/manager-openclaw.json.tmpl > /root/manager-workspace/openclaw.json
-    # Post-envsubst injection: memorySearch + custom model (single jq pass when possible)
+    # Post-envsubst injection: memory.search + custom model (single jq pass when possible)
     if ! jq -e --arg model "${MODEL_NAME}" '.models.providers["agentteams-gateway"].models | map(.id) | index($model)' /root/manager-workspace/openclaw.json > /dev/null 2>&1; then
         log "Custom model '${MODEL_NAME}' not in built-in list, injecting into config..."
         jq --arg emb_model "${AGENTTEAMS_EMBEDDING_MODEL}" \
@@ -776,19 +780,21 @@ else
            --argjson reasoning "${MODEL_REASONING}" \
            --argjson input "${MODEL_INPUT}" \
            '
-            (if $emb_model != "" then .agents.defaults.memorySearch = {"provider":"openai","model":$emb_model,"remote":{"baseUrl":("http://" + $aigw_domain + ":8080/v1"),"apiKey":$key}} else . end)
+            (if $emb_model != "" then .memory.search = {"provider":"openai","model":$emb_model,"remote":{"baseUrl":("http://" + $aigw_domain + ":8080/v1"),"apiKey":$key}} else . end)
             | .models.providers["agentteams-gateway"].models += [{"id": $model, "name": $model, "reasoning": $reasoning, "contextWindow": $ctx, "maxTokens": $max, "input": $input}]
             | .agents.defaults.models += {("agentteams-gateway/" + $model): {"alias": $model}}
+            | if .agents.defaults.modelPolicy.allow != null then .agents.defaults.modelPolicy.allow = ((.agents.defaults.modelPolicy.allow + ["agentteams-gateway/" + $model]) | unique) else . end
            ' /root/manager-workspace/openclaw.json > /tmp/openclaw.json.tmp && \
             mv /tmp/openclaw.json.tmp /root/manager-workspace/openclaw.json
     elif [ -n "${AGENTTEAMS_EMBEDDING_MODEL}" ]; then
         jq --arg emb_model "${AGENTTEAMS_EMBEDDING_MODEL}" \
            --arg aigw_domain "${AI_GATEWAY_DOMAIN}" \
            --arg key "${AGENTTEAMS_MANAGER_GATEWAY_KEY}" \
-           '.agents.defaults.memorySearch = {"provider":"openai","model":$emb_model,"remote":{"baseUrl":("http://" + $aigw_domain + ":8080/v1"),"apiKey":$key}}' \
+           '.memory.search = {"provider":"openai","model":$emb_model,"remote":{"baseUrl":("http://" + $aigw_domain + ":8080/v1"),"apiKey":$key}}' \
            /root/manager-workspace/openclaw.json > /tmp/openclaw.json.tmp && \
             mv /tmp/openclaw.json.tmp /root/manager-workspace/openclaw.json
     fi
+    migrate_openclaw_config /root/manager-workspace/openclaw.json || log "WARNING: openclaw config migration failed"
     _written_token=$(jq -r '.channels.matrix.accessToken' /root/manager-workspace/openclaw.json 2>/dev/null)
     log "Matrix token written from template (prefix: ${_written_token:0:10}...)"
 fi
@@ -804,9 +810,10 @@ if [ "${AGENTTEAMS_RUNTIME}" = "aliyun" ] || [ "${AGENTTEAMS_RUNTIME}" = "k8s" ]
         | .models.providers["agentteams-gateway"].apiKey = $key
         | ((.hooks.token // "") as $ht | if $ht == $key or $ht == ($key + "-hooks" | @base64) then del(.hooks) else . end)
         | .commands.restart = false
-        | if .agents.defaults.memorySearch then .agents.defaults.memorySearch.remote.baseUrl = $gateway | .agents.defaults.memorySearch.remote.apiKey = $key else . end' \
+        | if .memory.search then .memory.search.remote.baseUrl = $gateway | .memory.search.remote.apiKey = $key else . end' \
        /root/manager-workspace/openclaw.json > /tmp/openclaw-cloud.json && \
         mv /tmp/openclaw-cloud.json /root/manager-workspace/openclaw.json
+    migrate_openclaw_config /root/manager-workspace/openclaw.json || log "WARNING: openclaw config migration failed"
     log "Cloud/K8s overlay applied"
 fi
 

@@ -5,7 +5,14 @@ import subprocess
 
 import pytest
 
-from agentteams_manager.sync import BridgeRuntimeError, FileSync, _mc, push_local, sync_loop
+from agentteams_manager.sync import (
+    BridgeRuntimeError,
+    FileSync,
+    _mc,
+    _merge_openclaw_config,
+    push_local,
+    sync_loop,
+)
 
 
 @pytest.fixture
@@ -587,3 +594,46 @@ async def test_push_loop_retries_failed_upload_without_local_file_change(tmp_pat
     with pytest.raises(asyncio.CancelledError):
         await sync_module.push_loop(sync)
     assert len(attempts) == 2
+
+
+def test_merge_openclaw_config_migrates_legacy_v026_keys():
+    remote = json.dumps({
+        "models": {"remote": True},
+        "gateway": {
+            "controlUi": {
+                "allowInsecureAuth": True,
+                "dangerouslyDisableDeviceAuth": True,
+                "allowedOrigins": ["*"],
+            }
+        },
+        "channels": {
+            "matrix": {"streaming": "partial", "blockStreaming": True}
+        },
+    })
+    local = json.dumps({
+        "tools": {"local": True},
+        "agents": {
+            "defaults": {
+                "memorySearch": {"provider": "openai", "model": "legacy"},
+                "models": {"agentteams-gateway/a": {"alias": "a"}},
+            }
+        },
+        "session": {"resetByType": {"dm": {"mode": "daily", "atHour": 4}}},
+    })
+
+    merged = json.loads(_merge_openclaw_config(remote, local))
+
+    assert merged["memory"]["search"]["model"] == "legacy"
+    assert "memorySearch" not in merged["agents"]["defaults"]
+    assert merged["agents"]["defaults"]["modelPolicy"]["allow"] == [
+        "agentteams-gateway/a"
+    ]
+    assert merged["session"]["resetByType"]["direct"]["mode"] == "daily"
+    assert "dm" not in merged["session"]["resetByType"]
+    assert merged["channels"]["matrix"]["streaming"] == {
+        "mode": "partial",
+        "block": {"enabled": True},
+    }
+    assert "blockStreaming" not in merged["channels"]["matrix"]
+    assert "allowInsecureAuth" not in merged["gateway"]["controlUi"]
+    assert "dangerouslyDisableDeviceAuth" not in merged["gateway"]["controlUi"]

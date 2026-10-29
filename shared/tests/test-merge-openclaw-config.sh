@@ -10,6 +10,35 @@ fail() {
     exit 1
 }
 
+test_migrates_legacy_openclaw_keys() {
+    local tmpdir remote local_config
+    tmpdir="$(mktemp -d)"
+    remote="${tmpdir}/remote.json"
+    local_config="${tmpdir}/local.json"
+    printf '%s\n' \
+        '{"models":{"remote":true},"gateway":{"controlUi":{"allowInsecureAuth":true,"dangerouslyDisableDeviceAuth":true,"allowedOrigins":["*"]}},"agents":{"defaults":{"memorySearch":{"provider":"openai","model":"legacy"},"models":{"agentteams-gateway/a":{"alias":"a"}}}},"session":{"resetByType":{"dm":{"mode":"daily","atHour":4}}},"channels":{"matrix":{"streaming":"partial","blockStreaming":true}}}' \
+        > "${remote}"
+    printf '%s\n' '{"tools":{"local":true},"agents":{"defaults":{"memorySearch":{"provider":"openai","model":"legacy"},"models":{"agentteams-gateway/a":{"alias":"a"}}}},"session":{"resetByType":{"dm":{"mode":"daily","atHour":4}}}}' > "${local_config}"
+
+    source "${REPO_ROOT}/shared/lib/merge-openclaw-config.sh"
+    merge_openclaw_config "${remote}" "${local_config}"
+
+    jq -e '
+        .memory.search.model == "legacy"
+        and .agents.defaults.memorySearch == null
+        and .agents.defaults.modelPolicy.allow == ["agentteams-gateway/a"]
+        and .session.resetByType.direct.mode == "daily"
+        and .session.resetByType.dm == null
+        and .channels.matrix.streaming.mode == "partial"
+        and .channels.matrix.streaming.block.enabled == true
+        and .channels.matrix.blockStreaming == null
+        and .gateway.controlUi.allowInsecureAuth == null
+        and .gateway.controlUi.dangerouslyDisableDeviceAuth == null
+    ' "${local_config}" >/dev/null || fail "legacy OpenClaw keys were not migrated"
+
+    rm -rf "${tmpdir}"
+}
+
 test_merges_manager_fields_with_jq_1_7() {
     local tmpdir remote local_config
     tmpdir="$(mktemp -d)"
@@ -63,6 +92,7 @@ test_invalid_remote_config_is_recoverable_under_errexit() {
     rm -rf "${tmpdir}"
 }
 
+test_migrates_legacy_openclaw_keys
 test_merges_manager_fields_with_jq_1_7
 test_invalid_remote_config_is_recoverable_under_errexit
 

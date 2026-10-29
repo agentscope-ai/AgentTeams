@@ -40,8 +40,8 @@ Run against a locally built `openclaw-base` that uses the candidate commit (`OPE
 2. **Matrix boot.** Worker/Manager join the provisioned room (`autoJoin=always`) and `/sync` against the private homeserver (`dangerouslyAllowPrivateNetwork=true`).
 3. **Allowlists.** `channels.matrix.dm.allowFrom` / `groupAllowFrom` still use immutable Matrix user IDs (`@user:domain`). Confirm the new engine no longer matches display names (CVE-2026-53811) and no longer case-folds the server-name (GHSA-hgv5-f2r3-6v9r).
 4. **Elevated exec.** `tools.elevated.allowFrom.matrix` is an ID list (admin, plus manager or team leader). Confirm `["*"]` is no longer required for YOLO host exec.
-5. **Control UI.** Higress still fronts the console over HTTP with `dangerouslyDisableDeviceAuth` + `allowInsecureAuth`. Do not drop those flags in this upgrade; they are how the local installer reaches the console.
-6. **Schema drift.** Diff `openclaw.json` keys AgentTeams writes (`tools.exec`, `elevatedDefault`, `plugins.load.paths`, `session.resetByType`) against the candidate schema. Fix templates before shipping.
+5. **Control UI.** OpenClaw v2026.10.6 retired `gateway.controlUi.allowInsecureAuth` and `dangerouslyDisableDeviceAuth`; generated configs must not emit them. Verify console token access through the new device/pairing policy during upgrade smoke.
+6. **Schema drift.** Diff `openclaw.json` keys AgentTeams writes (`tools.exec`, `elevatedDefault`, `plugins.load.paths`, `session.resetByType.direct`, `memory.search`, `channels.matrix.streaming`) against the candidate schema. Fix templates before shipping.
 7. **Tests.** `tests/test-01-manager-boot.sh`, `tests/test-02-create-worker.sh`, and at least one Matrix round-trip (`test-06` or equivalent) on OpenClaw Manager **and** OpenClaw Worker. QwenPaw Manager is out of this blast radius.
 
 ## Suggested sequence

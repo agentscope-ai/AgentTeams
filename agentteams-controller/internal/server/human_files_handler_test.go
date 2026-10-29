@@ -1332,3 +1332,45 @@ func TestHumanFiles_QuotaCrossHandlerAtomic(t *testing.T) {
 		t.Fatalf("usedBytes=%d exceeds quota 10", q.UsedBytes)
 	}
 }
+
+// staleLedgerOSS returns an old ledger body on the first read while the
+// actual object has already advanced to a new version. This is the
+// GetObject/StatMeta interleaving: the old bytes must not be CASed using the
+// newer ETag.
+type staleLedgerOSS struct {
+	*ossfake.Memory
+	key   string
+	stale []byte
+	used  bool
+}
+
+func (s *staleLedgerOSS) GetObject(ctx context.Context, key string) ([]byte, error) {
+	if !s.used && key == s.key {
+		s.used = true
+		return append([]byte(nil), s.stale...), nil
+	}
+	return s.Memory.GetObject(ctx, key)
+}
+
+func TestHumanFiles_QuotaLedgerRejectsStaleSnapshot(t *testing.T) {
+	h1, store, k8s := newHumanFilesRig(t)
+	if rec := hfPutQuota(t, h1, "alice", hfAdmin(), `{"quotaBytes":10}`); rec.Code != http.StatusOK {
+		t.Fatalf("put quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPutFile(t, h1, "alice", "a.txt", hfSelf(), "aaaaaa"); rec.Code != http.StatusOK {
+		t.Fatalf("seed file: %d %s", rec.Code, rec.Body.String())
+	}
+
+	wrapped := &staleLedgerOSS{
+		Memory: store,
+		key:    humanQuotaLedgerKey("alice"),
+		stale:  []byte(`{"usedBytes":0}`),
+	}
+	h2 := NewHumanFilesHandler(k8s, "default", wrapped, audit.NewClient(wrapped))
+
+	rec := httptest.NewRecorder()
+	h2.putFile(rec, hfReq(t, http.MethodPut, "alice", "b.txt", hfSelf(), strings.NewReader("bbbbbb")))
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("stale ledger snapshot: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+}

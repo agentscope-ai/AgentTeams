@@ -154,14 +154,17 @@ RUN python -m venv /opt/venv/hermes \
     && /opt/venv/hermes/bin/pip install --upgrade pip setuptools wheel \
         --index-url "${PIP_INDEX_URL}" \
         --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
-    && /opt/venv/hermes/bin/pip install --no-cache-dir \
+    && /opt/venv/hermes/bin/pip install --no-cache-dir --editable \
         --index-url "${PIP_INDEX_URL}" \
         --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
         /opt/hermes-src \
     && /opt/venv/hermes/bin/pip install --no-cache-dir \
         --index-url "${PIP_INDEX_URL}" \
         --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
-         "mautrix[encryption]" \
+        "mautrix[encryption]==0.21.1" \
+        "aiosqlite==0.22.1" \
+        "asyncpg==0.31.0" \
+        "aiohttp-socks==0.11.0" \
         "matrix-nio[e2e]>=0.24.0" \
         "markdown-it-py>=3.0" \
         "linkify-it-py>=2.0" \
@@ -184,15 +187,13 @@ RUN SITE=/opt/venv/hermes/lib/python3.11/site-packages \
     && cp -a /tmp/hermes-worker/src/hermes_matrix/* "$SITE/hermes_matrix/" \
     && rm -rf /tmp/hermes-worker/
 
-# --- Overlay our Matrix shim into hermes-agent's gateway/platforms/ ---
-# Keep hermes-agent's native mautrix transport by renaming its original
-# gateway/platforms/matrix.py to _matrix_native.py, then install a shim at
-# the original import path.  The shim re-exports the native module and swaps
-# in hermes_matrix.adapter.MatrixAdapter, a thin subclass that only adds
-# AgentTeams policy hooks (mentions, allowlists, history, vision gating).
-RUN SITE=/opt/venv/hermes/lib/python3.11/site-packages \
-    && mv "$SITE/gateway/platforms/matrix.py" "$SITE/gateway/platforms/_matrix_native.py" \
-    && cp "$SITE/hermes_matrix/_shim.py" "$SITE/gateway/platforms/matrix.py"
+# --- AgentTeams Matrix platform plugin ---
+# hermes-agent v0.22.5 moved Matrix out of gateway/platforms/ into the
+# plugins/platforms/matrix/ bundled plugin.  The image ships a user plugin
+# under the same path-derived key (platforms/matrix); Hermes gives user
+# plugins precedence, and its register() subclasses the bundled adapter with
+# our policy overlay.
+COPY plugins/ /opt/agentteams/hermes-plugins/
 
 # Symlinks for hermes CLI on PATH (used by entrypoint and skills)
 RUN if [ -f /opt/venv/hermes/bin/hermes ]; then \

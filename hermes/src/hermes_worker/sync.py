@@ -637,6 +637,10 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
             continue
         if any(p in _EXCLUDE_DIRS for p in rel.parts):
             continue
+        # Hermes user plugins are installed at container startup; they are
+        # image artifacts, not worker state, and must not be mirrored to MinIO.
+        if rel.parts[:2] == (".hermes", "plugins"):
+            continue
         if rel.suffix in _EXCLUDE_EXTENSIONS:
             continue
         # Skip derived files directly inside .hermes/

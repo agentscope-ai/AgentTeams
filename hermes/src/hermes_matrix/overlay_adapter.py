@@ -20,7 +20,7 @@ import types
 from typing import Any, Dict, Optional
 
 from gateway.config import PlatformConfig
-from gateway.platforms._matrix_native import MatrixAdapter as _NativeMatrixAdapter
+from plugins.platforms.matrix.adapter import MatrixAdapter as _NativeMatrixAdapter
 
 from hermes_matrix.policies import (
     DualAllowList,
@@ -100,8 +100,8 @@ class MatrixAdapter(_NativeMatrixAdapter):
         self._history = HistoryBuffer.from_env()
         self._vision_enabled = _truthy_env("MATRIX_VISION_ENABLED", default=False)
 
-    async def connect(self) -> bool:
-        ok = await super().connect()
+    async def connect(self, *, is_reconnect: bool = False) -> bool:
+        ok = await super().connect(is_reconnect=is_reconnect)
         if ok and self._client is not None:
             self._wrap_send_message_event()
         return ok
@@ -139,6 +139,8 @@ class MatrixAdapter(_NativeMatrixAdapter):
         body: str,
         source_content: dict,
         relates_to: dict,
+        mention_claimed: bool = False,
+        voice_gate: Any = None,
     ) -> Optional[tuple]:
         """Apply AgentTeams allow/history policy around native mention gating."""
         is_dm = await self._is_dm_room(room_id)
@@ -152,6 +154,8 @@ class MatrixAdapter(_NativeMatrixAdapter):
             body,
             source_content,
             relates_to,
+            mention_claimed=mention_claimed,
+            voice_gate=voice_gate,
         )
         if ctx is None:
             if not is_dm:
@@ -185,10 +189,25 @@ class MatrixAdapter(_NativeMatrixAdapter):
         source_content: Dict[str, Any],
         relates_to: Dict[str, Any],
         msgtype: str,
+        mention_claimed: bool = False,
     ) -> None:
         """Downgrade images to text when the active model lacks vision."""
         if msgtype == "m.image" and not self._vision_enabled:
             body = source_content.get("body", "") or ""
+            # The v0.22.5 bundled adapter gates media inside
+            # _handle_media_message; this downgrade path replaces that call,
+            # so apply the same allow/mention gate explicitly.
+            ctx = await self._resolve_message_context(
+                room_id,
+                sender,
+                event_id,
+                body,
+                source_content,
+                relates_to,
+                mention_claimed=mention_claimed,
+            )
+            if ctx is None:
+                return
             display_body = body or "image"
             text_content = dict(source_content)
             text_content["msgtype"] = "m.text"
@@ -225,6 +244,7 @@ class MatrixAdapter(_NativeMatrixAdapter):
                 normalized_content,
                 relates_to,
                 msgtype,
+                mention_claimed=mention_claimed,
             )
             return
 
@@ -236,4 +256,5 @@ class MatrixAdapter(_NativeMatrixAdapter):
             source_content,
             relates_to,
             msgtype,
+            mention_claimed=mention_claimed,
         )

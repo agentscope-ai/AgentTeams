@@ -9,6 +9,7 @@
 set -e
 source /opt/agentteams/scripts/lib/agentteams-env.sh
 source /opt/agentteams/scripts/lib/merge-openclaw-config.sh
+source /opt/agentteams/scripts/lib/migrate-openclaw-config.sh
 source /opt/agentteams/scripts/lib/worker-file-sync.sh
 
 WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"

@@ -637,3 +637,19 @@ def test_merge_openclaw_config_migrates_legacy_v026_keys():
     assert "blockStreaming" not in merged["channels"]["matrix"]
     assert "allowInsecureAuth" not in merged["gateway"]["controlUi"]
     assert "dangerouslyDisableDeviceAuth" not in merged["gateway"]["controlUi"]
+
+
+def test_merge_openclaw_config_preserves_explicit_false_streaming_block():
+    remote = json.dumps({"channels": {"matrix": {}}})
+    local = json.dumps({
+        "channels": {
+            "matrix": {
+                "streaming": {"block": {"enabled": False}},
+                "blockStreaming": True,
+            }
+        }
+    })
+
+    merged = json.loads(_merge_openclaw_config(remote, local))
+
+    assert merged["channels"]["matrix"]["streaming"]["block"]["enabled"] is False

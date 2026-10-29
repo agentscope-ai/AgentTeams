@@ -39,6 +39,23 @@ test_migrates_legacy_openclaw_keys() {
     rm -rf "${tmpdir}"
 }
 
+test_preserves_explicit_false_streaming_block() {
+    local tmpdir remote local_config
+    tmpdir="$(mktemp -d)"
+    remote="${tmpdir}/remote.json"
+    local_config="${tmpdir}/local.json"
+    printf '%s\n' '{"channels":{"matrix":{}}}' > "${remote}"
+    printf '%s\n' '{"channels":{"matrix":{"streaming":{"block":{"enabled":false}},"blockStreaming":true}}}' > "${local_config}"
+
+    source "${REPO_ROOT}/shared/lib/merge-openclaw-config.sh"
+    merge_openclaw_config "${remote}" "${local_config}"
+
+    jq -e '.channels.matrix.streaming.block.enabled == false' "${local_config}" >/dev/null \
+        || fail "explicit streaming.block.enabled=false was overwritten by legacy blockStreaming"
+
+    rm -rf "${tmpdir}"
+}
+
 test_merges_manager_fields_with_jq_1_7() {
     local tmpdir remote local_config
     tmpdir="$(mktemp -d)"
@@ -93,6 +110,7 @@ test_invalid_remote_config_is_recoverable_under_errexit() {
 }
 
 test_migrates_legacy_openclaw_keys
+test_preserves_explicit_false_streaming_block
 test_merges_manager_fields_with_jq_1_7
 test_invalid_remote_config_is_recoverable_under_errexit
 

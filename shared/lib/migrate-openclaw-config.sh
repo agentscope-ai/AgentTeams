@@ -45,7 +45,8 @@ migrate_openclaw_config() {
               | if ($m.streamMode? != null) then .streaming.mode = (.streaming.mode // $m.streamMode) | del(.streamMode) else . end
               | if ($m.chunkMode? != null) then .streaming.chunkMode = (.streaming.chunkMode // $m.chunkMode) | del(.chunkMode) else . end
               | if ($m.blockStreaming? != null) then
-                  .streaming.block = ((.streaming.block // {}) + {enabled: (.streaming.block.enabled // $m.blockStreaming)})
+                  .streaming.block = ((.streaming.block // {}) |
+                    .enabled = (if .enabled != null then .enabled else $m.blockStreaming end))
                   | del(.blockStreaming)
                 else . end
               | if ($m.blockStreamingCoalesce? != null) then

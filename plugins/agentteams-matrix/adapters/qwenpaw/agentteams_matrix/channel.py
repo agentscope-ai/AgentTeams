@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import html
-import importlib
 import inspect
 import io
 import json
@@ -90,6 +89,11 @@ else:
         "directory must be installed next to the plugin (install.sh copies it)"
     )
 
+from core.e2ee import (  # noqa: E402
+    E2EEMaintainer,
+    e2ee_store_path,
+    probe_olm,
+)
 from core.history import (  # noqa: E402
     CURRENT_MESSAGE_MARKER,
     DEFAULT_HISTORY_LIMIT,
@@ -97,6 +101,7 @@ from core.history import (  # noqa: E402
     HistoryEntry,
     RoomHistory,
 )
+from core.media import MediaCache, mxc_to_http  # noqa: E402
 from core.mentions import (  # noqa: E402
     extract_mentions_from_text,
     strip_mention_prefix,
@@ -676,9 +681,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         disable E2EE if absent."""
         if not self.encryption:
             return
-        try:
-            importlib.import_module("olm")
-        except ImportError:
+        if not probe_olm():
             logger.error(
                 "MatrixChannel: olm not installed — falling back to "
                 "non-encrypted mode. "
@@ -1134,26 +1137,13 @@ class AgentTeamsMatrixChannel(BaseChannel):
     async def _e2ee_maintenance(self) -> None:
         """Perform E2EE key maintenance tasks after each sync.
 
-        Mirrors what nio's sync_forever() does between syncs:
-        - Upload device keys when needed
-        - Query device keys for new/changed users
-        - Claim one-time keys to establish Olm sessions
-        - Send outgoing to-device messages (key shares, key requests)
+        Delegates to the core :class:`E2EEMaintainer` (P9/PR1 M4c); the
+        encryption/client guards stay here, the maintenance order and
+        the error wording live in the core.
         """
-        if not self.encryption or not self._client or not self._client.olm:
+        if not self.encryption or not self._client:
             return
-        try:
-            if self._client.should_upload_keys:
-                await self._client.keys_upload()
-            if self._client.should_query_keys:
-                await self._client.keys_query()
-            if self._client.should_claim_keys:
-                await self._client.keys_claim(
-                    self._client.get_users_for_key_claiming(),
-                )
-            await self._client.send_to_device_messages()
-        except Exception as exc:
-            logger.warning("MatrixChannel: E2EE maintenance error: %s", exc)
+        await E2EEMaintainer(self._client).run_once()
 
     async def _on_key_verification_event(
         self,
@@ -1955,18 +1945,26 @@ class AgentTeamsMatrixChannel(BaseChannel):
         Returns the original URL unchanged if it is not an mxc:// URL or if
         the format is invalid.
         """
-        if not mxc_url:
-            return mxc_url
-        if not mxc_url.startswith("mxc://"):
-            return mxc_url
+        return mxc_to_http(mxc_url, self.homeserver)
+
+    async def _fetch_media_bytes(self, mxc_url: str) -> bytes:
+        """Authenticated HTTP GET for the core :class:`MediaCache`.
+
+        Adapter wiring for P9/PR1 M4c: resolves the mxc:// URL against
+        ``self.homeserver`` (the same construction the legacy download
+        methods used) and fetches the raw bytes with the channel's
+        access token — the token never leaves the adapter.
+        """
         rest = mxc_url[6:]  # strip "mxc://"
-        if "/" not in rest:
-            return mxc_url
         server, media_id = rest.split("/", 1)
-        return (
+        url = (
             f"{self.homeserver}/_matrix/media/v3/download"
             f"/{server}/{media_id}"
         )
+        headers = {"Authorization": f"Bearer {self.access_token}"}
+        resp = await self._http_client.get(url, headers=headers)
+        resp.raise_for_status()
+        return resp.content
 
     async def _download_mxc(
         self,
@@ -1976,34 +1974,18 @@ class AgentTeamsMatrixChannel(BaseChannel):
         """Download mxc:// to a local file; return path or None."""
         if not mxc_url.startswith("mxc://"):
             return None
-        try:
-            rest = mxc_url[6:]  # strip "mxc://"
-            server, media_id = rest.split("/", 1)
-            url = (
-                f"{self.homeserver}/_matrix/media/v3/download"
-                f"/{server}/{media_id}"
-            )
-            headers = {"Authorization": f"Bearer {self.access_token}"}
-            if not self._http_client:
-                logger.warning("MatrixChannel: HTTP client not initialized")
-                return None
-            resp = await self._http_client.get(url, headers=headers)
-            resp.raise_for_status()
-            dest = self._media_dir() / filename
-            dest.write_bytes(resp.content)
-            logger.debug("MatrixChannel: downloaded %s → %s", mxc_url, dest)
-            return str(dest)
-        except Exception as exc:
-            logger.warning(
-                "MatrixChannel: failed to download %s: %s",
-                mxc_url,
-                exc,
-            )
+        if not self._http_client:
+            logger.warning("MatrixChannel: HTTP client not initialized")
             return None
+        dest = await MediaCache(
+            self._fetch_media_bytes,
+            self._media_dir(),
+        ).fetch_to_file(mxc_url, filename)
+        return str(dest) if dest is not None else None
 
     def _e2ee_store_path(self) -> Path:
         """Return the directory for persisting Olm/Megolm crypto state."""
-        return WORKING_DIR / "matrix_crypto_store"
+        return e2ee_store_path(WORKING_DIR)
 
     async def _download_encrypted_mxc(
         self,
@@ -2016,46 +1998,14 @@ class AgentTeamsMatrixChannel(BaseChannel):
         """Download an encrypted mxc:// URI, decrypt it, and save locally."""
         if not mxc_url.startswith("mxc://") or not self._client:
             return None
-        try:
-            rest = mxc_url[6:]
-            server, media_id = rest.split("/", 1)
-            url = (
-                f"{self.homeserver}/_matrix/media/v3/download"
-                f"/{server}/{media_id}"
-            )
-            headers = {"Authorization": f"Bearer {self.access_token}"}
-            if not self._http_client:
-                logger.warning("MatrixChannel: HTTP client not initialized")
-                return None
-            resp = await self._http_client.get(url, headers=headers)
-            resp.raise_for_status()
-
-            from nio.crypto.attachments import decrypt_attachment
-
-            jwk_key = key.get("k", "")
-            sha256_hash = hashes.get("sha256", "")
-            plaintext = decrypt_attachment(
-                resp.content,
-                jwk_key,
-                sha256_hash,
-                iv,
-            )
-
-            dest = self._media_dir() / filename
-            dest.write_bytes(plaintext)
-            logger.debug(
-                "MatrixChannel: downloaded+decrypted %s → %s",
-                mxc_url,
-                dest,
-            )
-            return str(dest)
-        except Exception as exc:
-            logger.warning(
-                "MatrixChannel: failed to download encrypted %s: %s",
-                mxc_url,
-                exc,
-            )
+        if not self._http_client:
+            logger.warning("MatrixChannel: HTTP client not initialized")
             return None
+        dest = await MediaCache(
+            self._fetch_media_bytes,
+            self._media_dir(),
+        ).fetch_encrypted_to_file(mxc_url, filename, key, hashes, iv)
+        return str(dest) if dest is not None else None
 
     # ------------------------------------------------------------------
     # Incoming E2EE — undecryptable log + decrypted media (§7)

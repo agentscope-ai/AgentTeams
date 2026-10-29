@@ -7,9 +7,20 @@ protocol).  M1 lands the skeleton: interfaces, file-backed session
 state with the single-writer lock, and the sidecar protocol.
 
 This package has no matrix-nio dependency; the transport is injected.
+
+M2 adds the runtime-neutral mention parsing (``mentions``), the
+per-room history buffer (``history``), and the session-id derivation
+(``session``) extracted from the QwenPaw channel.
 """
 
 from .core import MatrixCore
+from .history import (
+    CURRENT_MESSAGE_MARKER,
+    DEFAULT_HISTORY_LIMIT,
+    HISTORY_CONTEXT_MARKER,
+    HistoryEntry,
+    RoomHistory,
+)
 from .interfaces import (
     INBOUND_KINDS,
     OUTBOUND_KINDS,
@@ -22,6 +33,13 @@ from .interfaces import (
     RuntimeBridge,
     SessionStore,
 )
+from .mentions import (
+    extract_mentions_from_text,
+    strip_mention_prefix,
+    text_mentions_worker,
+    was_mentioned,
+)
+from .session import resolve_session_id, to_handle_from_target
 from .sidecar import (
     FRAME_TYPES,
     MAX_LINE_BYTES,
@@ -49,6 +67,9 @@ from .state import (
 )
 
 __all__ = [
+    "CURRENT_MESSAGE_MARKER",
+    "DEFAULT_HISTORY_LIMIT",
+    "HISTORY_CONTEXT_MARKER",
     "INBOUND_KINDS",
     "OUTBOUND_KINDS",
     "TYPING_STATES",
@@ -56,6 +77,7 @@ __all__ = [
     "CoreLockedError",
     "FileSessionStore",
     "FRAME_TYPES",
+    "HistoryEntry",
     "InboundEvent",
     "MAX_LINE_BYTES",
     "MatrixCore",
@@ -63,6 +85,7 @@ __all__ = [
     "MediaRef",
     "OutboundMessage",
     "PROTOCOL_VERSION",
+    "RoomHistory",
     "RuntimeBridge",
     "SidecarClient",
     "SidecarNotConnectedError",
@@ -73,6 +96,7 @@ __all__ = [
     "StateLayout",
     "decode_line",
     "encode_frame",
+    "extract_mentions_from_text",
     "frame_to_inbound",
     "frame_to_outbound",
     "make_ack",
@@ -81,4 +105,9 @@ __all__ = [
     "make_inbound",
     "make_outbound",
     "make_typing",
+    "resolve_session_id",
+    "strip_mention_prefix",
+    "text_mentions_worker",
+    "to_handle_from_target",
+    "was_mentioned",
 ]

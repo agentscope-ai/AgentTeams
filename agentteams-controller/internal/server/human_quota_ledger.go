@@ -177,6 +177,14 @@ func (h *humanFilesHandler) reconcileQuotaLedger(ctx context.Context, username s
 		if err != nil {
 			return err
 		}
+		// Never lower the existing value: it may include a reservation that
+		// was granted but whose object PUT has not committed yet (live usage
+		// still reads 0). Rebuilding from live would erase that reservation
+		// and admit a second overlapping write. A stale over-count is safer
+		// than an over-quota admission.
+		if used < ledger.UsedBytes {
+			used = ledger.UsedBytes
+		}
 		if ledger.UsedBytes == used {
 			return nil
 		}

@@ -1306,6 +1306,40 @@ func TestHumanFiles_QuotaDisabledWriteThenReenable(t *testing.T) {
 	}
 }
 
+// TestHumanFiles_QuotaSetPreservesInFlightReservation is the quota-set vs
+// in-flight-write interleaving: the first handler reserves 6 bytes but has not
+// committed its object yet, then a second handler re-sets the same quota. The
+// reconciler must not rebuild the ledger from live usage 0 and erase the
+// outstanding reservation.
+func TestHumanFiles_QuotaSetPreservesInFlightReservation(t *testing.T) {
+	h1, store, k8s := newHumanFilesRig(t)
+	h2 := NewHumanFilesHandler(k8s, "default", store, audit.NewClient(store))
+
+	if rec := hfPutQuota(t, h1, "alice", hfAdmin(), `{"quotaBytes":10}`); rec.Code != http.StatusOK {
+		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
+	}
+	req := hfReq(t, http.MethodPut, "alice", "a.txt", hfSelf(), nil)
+	access, status, msg := h1.authorizeHumanFile(req.Context(), "alice", false)
+	if access == nil {
+		t.Fatalf("authorize: %d %s", status, msg)
+	}
+	delta, status, msg := h1.reserveQuota(req.Context(), access, "alice", 0, 6)
+	if status != 0 || delta != 6 {
+		t.Fatalf("reserve: status=%d delta=%d msg=%s", status, delta, msg)
+	}
+
+	// Re-setting the same quota must preserve the in-flight reservation.
+	if rec := hfPutQuota(t, h2, "alice", hfAdmin(), `{"quotaBytes":10}`); rec.Code != http.StatusOK {
+		t.Fatalf("re-set quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPutFile(t, h2, "alice", "b.txt", hfSelf(), "bbbbbb"); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("second write while first reservation is outstanding: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+
+	// Simulate the first write aborting; release restores the ledger.
+	h1.releaseQuota(req.Context(), "alice", delta)
+}
+
 // TestHumanFiles_QuotaCrossHandlerAtomic is the cross-controller quota gate:
 // two independently constructed handlers share the same OSS store and start
 // with the same 10-byte quota. Without a shared atomic reservation both can

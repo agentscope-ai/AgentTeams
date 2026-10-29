@@ -133,7 +133,10 @@ budget for the area — `files/**` plus `.trash/**` — and is unset
   live usage, and `.control/` is a reserved API path. Purge and an
   overwrite restore adjust the ledger when it exists. While quota is
   disabled, an existing ledger still advances on writes; enabling a quota
-  rebuilds the ledger from live usage before enforcement.
+  rebuilds the ledger from live usage before enforcement, but never lowers an
+  existing ledger value. The higher value may be an outstanding reservation
+  whose object PUT has not committed yet; preferring a conservative over-count
+  avoids admitting a second write over the quota.
 - **Cross-replica test:** two independently constructed handlers sharing
   one OSS store must produce one 200 and one 413 under a 10-byte quota,
   with final usage ≤10.

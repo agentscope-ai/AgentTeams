@@ -568,7 +568,6 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
         ".local",
         ".mc",
         # .hermes sub-dirs that are derived / installed at startup
-        "platforms",          # mautrix store, but our overlay uses matrix-nio store
         "matrix-nio-store",
         "image_cache",
         "audio_cache",
@@ -588,6 +587,15 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
         ".env",
         # SOUL.md and AGENTS.md are Worker-managed and DO get pushed.
     }
+    # Image-owned plugin tree.  Keep this list in sync with the directory the
+    # entrypoint installs; other user plugins under .hermes/plugins/ remain
+    # worker state and are intentionally NOT excluded.
+    _HERMES_IMAGE_PLUGIN_PATHS = (
+        Path(".hermes/plugins/platforms/matrix"),
+        Path(".hermes/plugins/matrix-platform"),  # legacy flat layout
+    )
+    # Runtime-derived Hermes state that must not be pushed back.
+    _HERMES_RUNTIME_PATHS = (Path(".hermes/platforms"),)
 
     pushed: list[str] = []
     local_dir = sync.local_dir
@@ -637,9 +645,19 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
             continue
         if any(p in _EXCLUDE_DIRS for p in rel.parts):
             continue
-        # Hermes user plugins are installed at container startup; they are
-        # image artifacts, not worker state, and must not be mirrored to MinIO.
-        if rel.parts[:2] == (".hermes", "plugins"):
+        # Exclude only the image-owned Hermes plugin path.  User plugins
+        # installed at runtime under .hermes/plugins/ are worker state and
+        # must be persisted like any other file; a blanket .hermes/plugins
+        # exclusion would silently lose them on worker recreation.
+        if any(
+            rel == image_path or image_path in rel.parents
+            for image_path in _HERMES_IMAGE_PLUGIN_PATHS
+        ):
+            continue
+        if any(
+            rel == hermes_path or hermes_path in rel.parents
+            for hermes_path in _HERMES_RUNTIME_PATHS
+        ):
             continue
         if rel.suffix in _EXCLUDE_EXTENSIONS:
             continue

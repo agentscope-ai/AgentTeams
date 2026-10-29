@@ -154,10 +154,10 @@ RUN python -m venv /opt/venv/hermes \
     && /opt/venv/hermes/bin/pip install --upgrade pip setuptools wheel \
         --index-url "${PIP_INDEX_URL}" \
         --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
-    && /opt/venv/hermes/bin/pip install --no-cache-dir --editable \
+    && /opt/venv/hermes/bin/pip install --no-cache-dir \
         --index-url "${PIP_INDEX_URL}" \
         --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
-        /opt/hermes-src \
+        --editable /opt/hermes-src \
     && /opt/venv/hermes/bin/pip install --no-cache-dir \
         --index-url "${PIP_INDEX_URL}" \
         --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \

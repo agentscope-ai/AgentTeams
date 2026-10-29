@@ -249,7 +249,7 @@ fi
 section "Test 10: Non-interactive mode"
 
 # Verify step_dashboard handles non-interactive mode
-if grep -A 60 'step_dashboard()' "${INSTALL_SCRIPT}" | grep -q 'AGENTTEAMS_NON_INTERACTIVE'; then
+if grep -A 120 'step_dashboard()' "${INSTALL_SCRIPT}" | grep -q 'AGENTTEAMS_NON_INTERACTIVE'; then
     pass "step_dashboard handles non-interactive mode"
 else
     fail "step_dashboard missing non-interactive handling"
@@ -840,6 +840,344 @@ else
         pass "Exec quick-start: image tag matches default version"
     else
         fail "Exec quick-start: wrong image (got: $(echo "${_qs_result}" | grep RESULT_IMAGE))"
+    fi
+fi
+
+# ---------- Test 20: Console host union on early-return paths ----------
+
+section "Test 20: Executable allowlist union on early-return paths"
+
+_test_step_dashboard_allowlist() {
+    local _mode="$1" _existing_hosts="$2" _url="$3"
+    local _tmpfile
+    _tmpfile=$(mktemp)
+
+    if ! extract_function "step_dashboard" "${INSTALL_SCRIPT}" > "${_tmpfile}" 2>/dev/null; then
+        echo "EXTRACTION_FAILED"
+        rm -f "${_tmpfile}"
+        return
+    fi
+
+    (
+        log() { :; }
+        msg() { echo "$1"; }
+        docker() { return 1; }
+        podman() { return 1; }
+        DOCKER_CMD="docker"
+
+        AGENTTEAMS_REGISTRY="ghcr.io/agentteams-group"
+        AGENTTEAMS_LANG="en"
+        AGENTTEAMS_DASHBOARD="1"
+        AGENTTEAMS_DASHBOARD_VERSION=""
+        AGENTTEAMS_PORT_DASHBOARD=""
+        AGENTTEAMS_DASHBOARD_IMAGE=""
+        AGENTTEAMS_HIGRESS_ADAPTER_MODE="external"
+        AGENTTEAMS_AI_GATEWAY_ADMIN_URL="${_url}"
+        AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS="${_existing_hosts}"
+        AGENTTEAMS_ENV_FILE="$(mktemp)"
+        STEP_RESULT=""
+        AGENTTEAMS_QUICKSTART=0
+        AGENTTEAMS_NON_INTERACTIVE=0
+        AGENTTEAMS_UPGRADE=0
+        AGENTTEAMS_UPGRADE_KEEP_ALL=0
+
+        case "${_mode}" in
+            quickstart) AGENTTEAMS_QUICKSTART=1 ;;
+            noninteractive) AGENTTEAMS_NON_INTERACTIVE=1 ;;
+            keepall) AGENTTEAMS_UPGRADE=1; AGENTTEAMS_UPGRADE_KEEP_ALL=1 ;;
+        esac
+
+        # shellcheck disable=SC1090
+        source "${_tmpfile}" 2>/dev/null
+
+        if ! declare -F step_dashboard >/dev/null 2>&1; then
+            echo "FUNCTION_NOT_FOUND"
+        else
+            step_dashboard < /dev/null
+            echo "RESULT_HOSTS=${AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS}"
+            echo "RESULT_URL=${AGENTTEAMS_AI_GATEWAY_ADMIN_URL}"
+        fi
+    )
+    rm -f "${_tmpfile}"
+}
+
+_assert_allowlist_union() {
+    local _mode="$1" _result="$2" _must_have="$3"
+    if echo "${_result}" | grep -q "EXTRACTION_FAILED\|FUNCTION_NOT_FOUND"; then
+        fail "Exec ${_mode} allowlist: function extraction failed"
+        return
+    fi
+    local _hosts
+    _hosts=$(echo "${_result}" | grep '^RESULT_HOSTS=' | sed 's/^RESULT_HOSTS=//')
+    case ",${_hosts}," in
+        *,${_must_have},*)
+            pass "Exec ${_mode}: allowlist contains ${_must_have}"
+            ;;
+        *)
+            fail "Exec ${_mode}: allowlist missing ${_must_have} (got: ${_hosts})"
+            ;;
+    esac
+}
+
+_empty_qs=$(_test_step_dashboard_allowlist quickstart "" "https://console.example.test:8443/login")
+_assert_allowlist_union "quickstart-empty" "${_empty_qs}" "console.example.test"
+
+_empty_ni=$(_test_step_dashboard_allowlist noninteractive "" "https://console.example.test:8443/login")
+_assert_allowlist_union "noninteractive-empty" "${_empty_ni}" "console.example.test"
+
+_empty_ka=$(_test_step_dashboard_allowlist keepall "" "https://console.example.test:8443/login")
+_assert_allowlist_union "keepall-empty" "${_empty_ka}" "console.example.test"
+
+_kept_qs=$(_test_step_dashboard_allowlist quickstart "operator.example,10.0.0.5" "https://console.example.test:8443/login")
+_assert_allowlist_union "quickstart-keep" "${_kept_qs}" "operator.example"
+_assert_allowlist_union "quickstart-keep-ip" "${_kept_qs}" "10.0.0.5"
+_assert_allowlist_union "quickstart-keep-console" "${_kept_qs}" "console.example.test"
+
+_dup_ni=$(_test_step_dashboard_allowlist noninteractive "console.example.test,operator.example" "https://console.example.test:8443/login")
+_dup_hosts=$(echo "${_dup_ni}" | grep '^RESULT_HOSTS=' | sed 's/^RESULT_HOSTS=//')
+_dup_count=$(printf '%s' "${_dup_hosts}" | awk -F, '{c=0; for(i=1;i<=NF;i++) if($i=="console.example.test") c++; print c}')
+if [ "${_dup_count}" = "1" ]; then
+    pass "Exec noninteractive: existing console host is not duplicated"
+else
+    fail "Exec noninteractive: console host duplicated (got: ${_dup_hosts})"
+fi
+
+# ---------- Test 21: Export overlay config before removing the old container ----------
+
+section "Test 21: Executable overlay export before container removal"
+
+_test_start_dashboard_export() {
+    local _cp_fail="$1"
+    local _tmpfile
+    _tmpfile=$(mktemp)
+    local _calls
+    _calls=$(mktemp)
+
+    if ! extract_function "_start_dashboard" "${INSTALL_SCRIPT}" > "${_tmpfile}" 2>/dev/null; then
+        echo "EXTRACTION_FAILED"
+        rm -f "${_tmpfile}" "${_calls}"
+        return
+    fi
+
+    (
+        CALLS_FILE="${_calls}"
+        CP_FAIL="${_cp_fail}"
+        docker() {
+            printf 'docker %s\n' "$*" >> "${CALLS_FILE}"
+            if [ "$1" = "ps" ]; then
+                if [ "$2" = "-a" ]; then
+                    echo "agentteams-dashboard"
+                else
+                    echo "agentteams-controller"
+                fi
+                return 0
+            fi
+            if [ "$1" = "cp" ]; then
+                if [ "${CP_FAIL}" = "1" ]; then
+                    return 1
+                fi
+                local _dest="${*: -1}"
+                mkdir -p "${_dest}"
+                if echo "$*" | grep -q '/data/agentteams-dashboard'; then
+                    echo '{"setup":true}' > "${_dest}/config.json"
+                elif echo "$*" | grep -q '/app/db'; then
+                    echo 'legacy' > "${_dest}/legacy.sqlite"
+                fi
+                return 0
+            fi
+            if [ "$1" = "diff" ]; then
+                echo "A /data/agentteams-dashboard/config.json"
+                return 0
+            fi
+            if [ "$1" = "image" ] && echo "$*" | grep -q 'Config.User'; then
+                echo "nextjs"
+                return 0
+            fi
+            if [ "$1" = "run" ]; then
+                return 0
+            fi
+            return 0
+        }
+        podman() { docker "$@"; }
+        DOCKER_CMD="docker"
+        log() { :; }
+        msg() { echo "$*"; }
+        curl() { return 1; }
+        sleep() { :; }
+
+        AGENTTEAMS_DASHBOARD=1
+        AGENTTEAMS_USE_EMBEDDED=1
+        AGENTTEAMS_REGISTRY="ghcr.io/agentteams-group"
+        AGENTTEAMS_PORT_DASHBOARD="13000"
+        AGENTTEAMS_DASHBOARD_VERSION="v1.3.1"
+        AGENTTEAMS_DASHBOARD_IMAGE="ghcr.io/agentteams-group/agentteams/agentteams-dashboard:v1.3.1"
+        AGENTTEAMS_LOCAL_ONLY=1
+        AGENTTEAMS_AI_GATEWAY_ADMIN_URL="https://console.example.test:8443"
+        AGENTTEAMS_AUTH_TOKEN="test-token"
+        AGENTTEAMS_ENV_FILE="$(mktemp)"
+
+        # shellcheck disable=SC1090
+        source "${_tmpfile}" 2>/dev/null
+
+        if ! declare -F _start_dashboard >/dev/null 2>&1; then
+            echo "FUNCTION_NOT_FOUND"
+        else
+            _start_dashboard
+            echo "CALLS_BEGIN"
+            cat "${CALLS_FILE}"
+            echo "CALLS_END"
+        fi
+    )
+    rm -f "${_tmpfile}" "${_calls}"
+}
+
+_export_ok=$(_test_start_dashboard_export 0 2>&1)
+
+if echo "${_export_ok}" | grep -q "EXTRACTION_FAILED\|FUNCTION_NOT_FOUND"; then
+    fail "Exec export: function extraction failed"
+else
+    _calls_ok=$(echo "${_export_ok}" | sed -n '/CALLS_BEGIN/,/CALLS_END/p')
+    _cp_line=$(echo "${_calls_ok}" | grep -n 'docker cp .*agentteams-dashboard:/data/agentteams-dashboard' | head -1 | cut -d: -f1)
+    _rm_line=$(echo "${_calls_ok}" | grep -n 'docker rm .*agentteams-dashboard' | head -1 | cut -d: -f1)
+    if [ -n "${_cp_line}" ] && [ -n "${_rm_line}" ] && [ "${_cp_line}" -lt "${_rm_line}" ]; then
+        pass "Exec export: copies /data/agentteams-dashboard before rm"
+    else
+        fail "Exec export: overlay copy did not happen before rm (cp=${_cp_line:-none} rm=${_rm_line:-none})"
+    fi
+    if echo "${_calls_ok}" | grep -q 'docker stop .*agentteams-dashboard'; then
+        pass "Exec export: stops old container before export"
+    else
+        fail "Exec export: did not stop old container before export"
+    fi
+    if echo "${_calls_ok}" | grep 'docker run -d' | grep -q '/app/db'; then
+        fail "Exec export: still dual-mounts volume at /app/db"
+    else
+        pass "Exec export: new container uses a single /data/agentteams-dashboard mount"
+    fi
+    if echo "${_calls_ok}" | grep 'docker run' | grep -q 'chown -R 1001:1001'; then
+        pass "Exec export: chowns volume to dashboard image uid 1001"
+    else
+        fail "Exec export: did not chown volume to 1001:1001"
+    fi
+
+    # Idempotent re-run: a second export with the same mock still reaches docker run -d.
+    _export_again=$(_test_start_dashboard_export 0 2>&1)
+    if echo "${_export_again}" | grep -q 'docker run -d'; then
+        pass "Exec export: re-run remains successful (idempotent)"
+    else
+        fail "Exec export: re-run did not start a new container"
+    fi
+fi
+
+# ---------- Test 22: Export failure leaves the old container in place ----------
+
+section "Test 22: Executable export failure recovery"
+
+_export_fail=$(_test_start_dashboard_export 1 2>&1)
+
+if echo "${_export_fail}" | grep -q "EXTRACTION_FAILED\|FUNCTION_NOT_FOUND"; then
+    fail "Exec export-fail: function extraction failed"
+else
+    _calls_fail=$(echo "${_export_fail}" | sed -n '/CALLS_BEGIN/,/CALLS_END/p')
+    if echo "${_calls_fail}" | grep -q 'docker start .*agentteams-dashboard'; then
+        pass "Exec export-fail: restarts old container when overlay export fails"
+    else
+        fail "Exec export-fail: did not restart old container"
+    fi
+    if echo "${_calls_fail}" | grep -q 'docker rm'; then
+        fail "Exec export-fail: removed old container after export failure"
+    else
+        pass "Exec export-fail: does not rm old container after export failure"
+    fi
+    if echo "${_calls_fail}" | grep -q 'docker run -d'; then
+        fail "Exec export-fail: started a new container after export failure"
+    else
+        pass "Exec export-fail: does not replace container after export failure"
+    fi
+fi
+
+# ---------- Test 23: Brand-new volume is chowned to the image UID ----------
+
+section "Test 23: Executable brand-new volume chown"
+
+_test_start_dashboard_newvol() {
+    local _tmpfile _calls
+    _tmpfile=$(mktemp)
+    _calls=$(mktemp)
+
+    if ! extract_function "_start_dashboard" "${INSTALL_SCRIPT}" > "${_tmpfile}" 2>/dev/null; then
+        echo "EXTRACTION_FAILED"
+        rm -f "${_tmpfile}" "${_calls}"
+        return
+    fi
+
+    (
+        CALLS_FILE="${_calls}"
+        docker() {
+            printf 'docker %s\n' "$*" >> "${CALLS_FILE}"
+            if [ "$1" = "ps" ]; then
+                echo "agentteams-controller"
+                return 0
+            fi
+            if [ "$1" = "image" ] && echo "$*" | grep -q 'Config.User'; then
+                echo "nextjs"
+                return 0
+            fi
+            return 0
+        }
+        podman() { docker "$@"; }
+        DOCKER_CMD="docker"
+        log() { :; }
+        msg() { echo "$*"; }
+        curl() { return 1; }
+        sleep() { :; }
+
+        AGENTTEAMS_DASHBOARD=1
+        AGENTTEAMS_USE_EMBEDDED=1
+        AGENTTEAMS_REGISTRY="ghcr.io/agentteams-group"
+        AGENTTEAMS_PORT_DASHBOARD="13000"
+        AGENTTEAMS_DASHBOARD_VERSION="v1.3.1"
+        AGENTTEAMS_DASHBOARD_IMAGE="ghcr.io/agentteams-group/agentteams/agentteams-dashboard:v1.3.1"
+        AGENTTEAMS_LOCAL_ONLY=1
+        AGENTTEAMS_AI_GATEWAY_ADMIN_URL=""
+        AGENTTEAMS_AUTH_TOKEN="test-token"
+        AGENTTEAMS_ENV_FILE="$(mktemp)"
+
+        # shellcheck disable=SC1090
+        source "${_tmpfile}" 2>/dev/null
+
+        if ! declare -F _start_dashboard >/dev/null 2>&1; then
+            echo "FUNCTION_NOT_FOUND"
+        else
+            _start_dashboard
+            echo "CALLS_BEGIN"
+            cat "${CALLS_FILE}"
+            echo "CALLS_END"
+        fi
+    )
+    rm -f "${_tmpfile}" "${_calls}"
+}
+
+_newvol=$(_test_start_dashboard_newvol 2>&1)
+
+if echo "${_newvol}" | grep -q "EXTRACTION_FAILED\|FUNCTION_NOT_FOUND"; then
+    fail "Exec newvol: function extraction failed"
+else
+    _calls_new=$(echo "${_newvol}" | sed -n '/CALLS_BEGIN/,/CALLS_END/p')
+    if echo "${_calls_new}" | grep 'docker run' | grep -q 'chown -R 1001:1001'; then
+        pass "Exec newvol: chowns brand-new volume to 1001:1001"
+    else
+        fail "Exec newvol: did not chown brand-new volume"
+    fi
+    if echo "${_calls_new}" | grep -q 'docker cp '; then
+        fail "Exec newvol: copied from a missing old container"
+    else
+        pass "Exec newvol: skips overlay export when no old container exists"
+    fi
+    if echo "${_calls_new}" | grep -q 'docker run -d'; then
+        pass "Exec newvol: starts dashboard after chown"
+    else
+        fail "Exec newvol: did not start dashboard container"
     fi
 fi
 

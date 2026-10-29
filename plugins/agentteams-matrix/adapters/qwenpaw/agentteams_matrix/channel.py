@@ -77,12 +77,21 @@ from qwenpaw.constant import WORKING_DIR
 
 # P9/PR1 M3: mention parsing, the per-room history buffer and session-id
 # derivation live in the runtime-neutral core package at the bundle root
-# (``plugins/agentteams-matrix/core``).  The parity-test conftest puts the
-# bundle root on sys.path; the shim below covers the other in-repo loading
-# contexts so ``core`` always resolves to this bundle's core package.
-_BUNDLE_ROOT = str(Path(__file__).resolve().parents[3])
-if _BUNDLE_ROOT not in sys.path:
-    sys.path.insert(0, _BUNDLE_ROOT)
+# (``plugins/agentteams-matrix/core``).  The core root is three levels up
+# in the source tree and one level up in the installed layout (install.sh
+# copies ``core/`` next to the adapter package); try both and fail closed
+# when neither provides the package.
+_here = Path(__file__).resolve()
+for _base in (_here.parents[1], _here.parents[3], _here.parents[2]):
+    if (_base / "core" / "__init__.py").is_file():
+        if str(_base) not in sys.path:
+            sys.path.insert(0, str(_base))
+        break
+else:
+    raise ImportError(
+        "agentteams-matrix: the core package is missing; the bundle's core/ "
+        "directory must be installed next to the plugin (install.sh copies it)"
+    )
 
 from core.history import (  # noqa: E402
     CURRENT_MESSAGE_MARKER,

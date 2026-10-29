@@ -133,6 +133,15 @@ func (m *Memory) PutObjectIfMatch(_ context.Context, key string, data []byte, ma
 	return nil
 }
 
+// PutObjectIfMatchStrict is the strict conditional write (see
+// MinIOClient.PutObjectIfMatchStrict). In memory it is identical to
+// PutObjectIfMatch — the CAS already runs under the lock and never
+// degrades; the method exists so the fake advertises the conflict-safety
+// guarantee that a degraded backend (compare-then-put) does not offer.
+func (m *Memory) PutObjectIfMatchStrict(ctx context.Context, key string, data []byte, matchETag string) error {
+	return m.PutObjectIfMatch(ctx, key, data, matchETag)
+}
+
 // DeleteObject removes the object stored under key. Deleting a missing key
 // is a no-op.
 func (m *Memory) DeleteObject(_ context.Context, key string) error {

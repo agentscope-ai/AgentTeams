@@ -146,14 +146,42 @@ func getLoop(t *testing.T, h *LoopHandler, id string) *v1beta1.Loop {
 	return loop
 }
 
-// failingOSS wraps a storage client so every GetObject fails — a
-// simulated storage outage mid-request.
+// failingOSS wraps the in-memory fake so every GetObject fails — a
+// simulated storage outage mid-request. It embeds the concrete fake (not
+// the interface) so the strict conditional write is still promoted and
+// the outage, not the backend's capability, is what the test exercises.
 type failingOSS struct {
-	oss.StorageClient
+	*ossfake.Memory
 }
 
 func (failingOSS) GetObject(ctx context.Context, key string) ([]byte, error) {
 	return nil, errors.New("oss unavailable")
+}
+
+// weakStore promotes only the StorageClient methods of the embedded
+// client: PutObjectIfMatchStrict is NOT part of the promoted set, so it
+// stands in for a backend whose conditional write can degrade to
+// compare-then-put.
+type weakStore struct {
+	oss.StorageClient
+}
+
+// emptyETagStore delegates everything to the embedded fake but reports no
+// ETag from StatMeta — a backend that tracks objects without content
+// hashes. It keeps PutObjectIfMatchStrict (promoted from *ossfake.Memory)
+// so the handler reaches the empty-ETag branch rather than the
+// missing-strict-method branch.
+type emptyETagStore struct {
+	*ossfake.Memory
+}
+
+func (e emptyETagStore) StatMeta(ctx context.Context, key string) (oss.ObjectMeta, error) {
+	meta, err := e.Memory.StatMeta(ctx, key)
+	if err != nil {
+		return meta, err
+	}
+	meta.ETag = ""
+	return meta, nil
 }
 
 func equalStrings(got, want []string) bool {
@@ -629,6 +657,15 @@ func (p *pauseCASBarrier) PutObjectIfMatch(ctx context.Context, key string, data
 	return err
 }
 
+// PutObjectIfMatchStrict carries the SAME gate as PutObjectIfMatch: the
+// handler now performs the CAS through the strict method, so the forced
+// interleaving must hold there too. For the in-memory fake the strict and
+// plain writes are identical, so the gated write is delegated to
+// PutObjectIfMatch.
+func (p *pauseCASBarrier) PutObjectIfMatchStrict(ctx context.Context, key string, data []byte, match string) error {
+	return p.PutObjectIfMatch(ctx, key, data, match)
+}
+
 // barrierLoopRequest is loopRequest plus a per-request barrier token in
 // the context, so the pauseCASBarrier wrapper can tell the concurrent
 // requests apart.
@@ -786,20 +823,20 @@ func TestResumeLoop_DoesNotDropConcurrentPause(t *testing.T) {
 	}
 }
 
-// conflictOnceStore fails PutObjectIfMatch a fixed number of times before
-// delegating — a deterministic stand-in for a concurrent writer (same
-// pattern as internal/audit's conflictOnce).
+// conflictOnceStore fails the strict conditional write a fixed number of
+// times before delegating — a deterministic stand-in for a concurrent
+// writer (same pattern as internal/audit's conflictOnce).
 type conflictOnceStore struct {
-	oss.StorageClient
+	*ossfake.Memory
 	fails int
 }
 
-func (c *conflictOnceStore) PutObjectIfMatch(ctx context.Context, key string, data []byte, match string) error {
+func (c *conflictOnceStore) PutObjectIfMatchStrict(ctx context.Context, key string, data []byte, match string) error {
 	if c.fails > 0 {
 		c.fails--
 		return oss.ErrPreconditionFailed
 	}
-	return c.StorageClient.PutObjectIfMatch(ctx, key, data, match)
+	return c.Memory.PutObjectIfMatchStrict(ctx, key, data, match)
 }
 
 // Group 12: a transient ETag conflict must be retried — the source lands
@@ -808,7 +845,7 @@ func TestPauseSourceWriteRetriesOnETagConflict(t *testing.T) {
 	store := ossfake.NewMemory()
 	seedLoopProject(t, store, "alpha-team", "p1", "p1-i001-01", map[string]any{"pause_sources": []string{}})
 	h := newLoopTestHandler(t, testLoop("loop-1", "alpha-team", "p1-i001-01"))
-	h.OSS = &conflictOnceStore{StorageClient: store, fails: 1}
+	h.OSS = &conflictOnceStore{Memory: store, fails: 1}
 	admin := &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"}
 
 	rec := loopRequest(t, "loop-1", "pause", `{"source":"user"}`, admin, h.PauseLoop)
@@ -823,5 +860,62 @@ func TestPauseSourceWriteRetriesOnETagConflict(t *testing.T) {
 	got := metaPauseSources(t, readProjectMeta(t, store, "alpha-team", "p1"))
 	if !equalStrings(got, []string{"user"}) {
 		t.Fatalf("persisted pause_sources=%v want [user] (the source must survive the retry)", got)
+	}
+}
+
+// Group 13: a backend without a strict conditional write (its
+// PutObjectIfMatch can degrade to compare-then-put) must be rejected with
+// 503 — pause-source updates never take the weak path, and nothing is
+// written.
+func TestPauseLoop_RejectsBackendWithoutConditionalWrites(t *testing.T) {
+	store := ossfake.NewMemory()
+	seedLoopProject(t, store, "alpha-team", "p1", "p1-i001-01", map[string]any{"pause_sources": []string{}})
+	h := newLoopTestHandler(t, testLoop("loop-1", "alpha-team", "p1-i001-01"))
+	h.OSS = weakStore{StorageClient: store}
+	admin := &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"}
+
+	rec := loopRequest(t, "loop-1", "pause", `{"source":"user"}`, admin, h.PauseLoop)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("pause status=%d want 503 body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "conditional writes") {
+		t.Fatalf("503 body must name the missing guarantee: %s", rec.Body.String())
+	}
+	got := metaPauseSources(t, readProjectMeta(t, store, "alpha-team", "p1"))
+	if len(got) != 0 {
+		t.Fatalf("meta pause_sources=%v want unchanged (no write may land on a weak backend)", got)
+	}
+
+	// Resume shares the same write path and gets the same 503.
+	rec = loopRequest(t, "loop-1", "resume", `{"source":"user"}`, admin, h.ResumeLoop)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("resume status=%d want 503 body=%s", rec.Code, rec.Body.String())
+	}
+	if got := metaPauseSources(t, readProjectMeta(t, store, "alpha-team", "p1")); len(got) != 0 {
+		t.Fatalf("meta pause_sources=%v want unchanged after resume 503", got)
+	}
+}
+
+// Group 14: a backend that supports the strict conditional write but
+// reports no ETag for the existing object: there is nothing to condition
+// on, so the handler must reject (503) instead of taking the old plain-put
+// branch, which had no concurrency guarantee.
+func TestPauseLoop_RejectsEmptyETag(t *testing.T) {
+	store := ossfake.NewMemory()
+	seedLoopProject(t, store, "alpha-team", "p1", "p1-i001-01", map[string]any{"pause_sources": []string{}})
+	h := newLoopTestHandler(t, testLoop("loop-1", "alpha-team", "p1-i001-01"))
+	h.OSS = emptyETagStore{Memory: store}
+	admin := &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"}
+
+	rec := loopRequest(t, "loop-1", "pause", `{"source":"user"}`, admin, h.PauseLoop)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("pause status=%d want 503 body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "conditional writes") {
+		t.Fatalf("503 body must name the missing guarantee: %s", rec.Body.String())
+	}
+	got := metaPauseSources(t, readProjectMeta(t, store, "alpha-team", "p1"))
+	if len(got) != 0 {
+		t.Fatalf("meta pause_sources=%v want unchanged (an empty ETag must never degrade to a plain put)", got)
 	}
 }

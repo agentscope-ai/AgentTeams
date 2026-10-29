@@ -104,6 +104,14 @@ func (h *LoopHandler) PauseLoop(w http.ResponseWriter, r *http.Request) {
 
 	sources, gated, err := h.setProjectPauseSource(ctx, key, source, true)
 	if err != nil {
+		if errors.Is(err, oss.ErrConditionalUnsupported) {
+			// The backend cannot provide the conditional-write guarantee
+			// this update relies on: the operation was rejected without
+			// writing, so the persisted pause state is unchanged.
+			httputil.WriteError(w, http.StatusServiceUnavailable,
+				"this operation requires a storage backend with conditional writes; the configured backend cannot provide that guarantee, so the request was rejected without writing")
+			return
+		}
 		httputil.WriteError(w, http.StatusConflict,
 			fmt.Sprintf("cannot update the loop's project state: %v", err))
 		return
@@ -193,6 +201,14 @@ func (h *LoopHandler) ResumeLoop(w http.ResponseWriter, r *http.Request) {
 
 	sources, gated, err := h.setProjectPauseSource(ctx, key, source, false)
 	if err != nil {
+		if errors.Is(err, oss.ErrConditionalUnsupported) {
+			// The backend cannot provide the conditional-write guarantee
+			// this update relies on: the operation was rejected without
+			// writing, so the persisted pause state is unchanged.
+			httputil.WriteError(w, http.StatusServiceUnavailable,
+				"this operation requires a storage backend with conditional writes; the configured backend cannot provide that guarantee, so the request was rejected without writing")
+			return
+		}
 		httputil.WriteError(w, http.StatusConflict,
 			fmt.Sprintf("cannot update the loop's project state: %v", err))
 		return
@@ -272,19 +288,41 @@ var pauseSourceCASBackoffs = [5]time.Duration{
 	40 * time.Millisecond, 50 * time.Millisecond,
 }
 
+// conditionalWriter is the strict conditional write that pause-source
+// updates require. It is an optional interface (deliberately NOT part of
+// oss.StorageClient) so backends whose conditional write can degrade to a
+// compare-then-put — or that report no ETag — are rejected for
+// conflict-sensitive writes while keeping the weak path available for the
+// callers that accept it.
+type conditionalWriter interface {
+	PutObjectIfMatchStrict(context.Context, string, []byte, string) error
+}
+
 // setProjectPauseSource adds or removes one source in the project meta's
 // `loop.pause_sources` at the given key. The read/modify/write runs as an
 // ETag-optimistic-concurrency loop (same pattern as the audit append
-// loop): stat, get, modify, PutObjectIfMatch, and retry with backoff when
-// a concurrent writer won the race — so two overlapping pause requests
-// can never silently erase each other's source. It re-reads the object
-// after the write and returns the PERSISTED source set, so the response
-// reports what the dispatcher will actually see. gated=false means the
-// meta has no loop record (nothing on the execution side to gate) or the
-// meta vanished between resolution and write — the caller must not claim
-// the loop is paused. An exhausted retry is an error, never a silent
-// success.
+// loop): stat, get, modify, strict conditional write, and retry with
+// backoff when a concurrent writer won the race — so two overlapping pause
+// requests can never silently erase each other's source. It re-reads the
+// object after the write and returns the PERSISTED source set, so the
+// response reports what the dispatcher will actually see. gated=false
+// means the meta has no loop record (nothing on the execution side to
+// gate) or the meta vanished between resolution and write — the caller
+// must not claim the loop is paused. An exhausted retry is an error, never
+// a silent success.
+//
+// Losing a source is a correctness bug (a released human veto, a lost
+// project hold), so the write is conflict-safe by construction: it goes
+// through the backend's STRICT conditional write (no compare-then-put
+// degradation) and requires a non-empty ETag. A backend without a strict
+// write, or one that reports no ETag for the existing object, is rejected
+// with oss.ErrConditionalUnsupported (mapped to 503) — never an
+// unconditional write.
 func (h *LoopHandler) setProjectPauseSource(ctx context.Context, key, source string, set bool) (sources []string, gated bool, err error) {
+	strict, ok := h.OSS.(conditionalWriter)
+	if !ok {
+		return nil, false, fmt.Errorf("pause-source updates require a backend with conditional writes: %w", oss.ErrConditionalUnsupported)
+	}
 	for attempt := 0; ; attempt++ {
 		if attempt > 0 {
 			delay := pauseSourceCASBackoffs[attempt-1]
@@ -352,16 +390,19 @@ func (h *LoopHandler) setProjectPauseSource(ctx context.Context, key, source str
 		updated = append(updated, '\n')
 
 		if etag == "" {
-			// Either a fresh object or a backend that reports no ETag: a
-			// conditional write is impossible, so a plain put is the best
-			// available (same fallback as the audit append loop).
-			if perr := h.OSS.PutObject(ctx, key, updated); perr != nil {
-				return nil, false, fmt.Errorf("put %s: %w", key, perr)
-			}
-		} else if perr := h.OSS.PutObjectIfMatch(ctx, key, updated, etag); perr != nil {
+			// The object exists but the backend reported no ETag: no
+			// conditional write is possible, and a plain put would race
+			// with a concurrent writer — reject instead of writing
+			// unconditionally.
+			return nil, false, fmt.Errorf("put-if-match %s: %w", key, oss.ErrConditionalUnsupported)
+		}
+		if perr := strict.PutObjectIfMatchStrict(ctx, key, updated, etag); perr != nil {
 			if errors.Is(perr, oss.ErrPreconditionFailed) && attempt < len(pauseSourceCASBackoffs) {
 				continue // someone wrote concurrently; re-read and retry
 			}
+			// ErrConditionalUnsupported is not retried: the backend
+			// cannot provide the guarantee at all, so retrying changes
+			// nothing.
 			return nil, false, fmt.Errorf("put-if-match %s: %w", key, perr)
 		}
 		sources = next

@@ -6,7 +6,9 @@ allowlist / history / session) shared by the three runtime adapters
 protocol).  M1 lands the skeleton: interfaces, file-backed session
 state with the single-writer lock, and the sidecar protocol.
 
-This package has no matrix-nio dependency; the transport is injected.
+This package has no matrix-nio dependency at the package level:
+``core.transport`` (M4a) is the only core module that imports
+matrix-nio, and it must not be imported from ``core/__init__.py``.
 
 M2 adds the runtime-neutral mention parsing (``mentions``), the
 per-room history buffer (``history``), and the session-id derivation

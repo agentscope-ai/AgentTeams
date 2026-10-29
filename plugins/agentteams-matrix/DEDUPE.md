@@ -27,8 +27,9 @@ commit: `fc25f272` (= main `23315f8e` + this PR's content).
 
 Not byte-copied: `adapters/qwenpaw/agentteams_matrix/channel.py` has been
 bundle-owned code since P9/PR1 M3 (#1468) — it delegates mention parsing,
-the per-room history buffer and session-id derivation to the bundle's
-`core/` package instead of carrying its own copy. The legacy tree's
+the per-room history buffer, session-id derivation and the matrix-nio
+client construction (M4a, `core/transport.py`) to the bundle's `core/`
+package instead of carrying its own copy. The legacy tree's
 `channel.py` remains the standalone reference implementation; the drift
 test still checks the file's presence on both sides and exempts only the
 byte-compare.

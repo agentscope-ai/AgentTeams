@@ -25,7 +25,6 @@ import httpx
 
 from nio import (
     AsyncClient,
-    AsyncClientConfig,
     KeysUploadResponse,
     LoginResponse,
     KeyVerificationCancel,
@@ -107,6 +106,11 @@ from core.mentions import (  # noqa: E402
     was_mentioned,
 )
 from core.session import resolve_session_id, to_handle_from_target  # noqa: E402
+from core.transport import (  # noqa: E402
+    MIN_SYNC_TIMEOUT_MS,
+    TransportConfig,
+    build_client,
+)
 
 logger = logging.getLogger("qwenpaw.channels.matrix")
 
@@ -336,45 +340,6 @@ def _attach_long_message_metadata(
         content[MATRIX_LONG_MESSAGE_METADATA_KEY] = dict(metadata)
 
 
-# Lower bound for `sync_timeout_ms`: a value of `0` would turn the
-# nio `sync()` loop into a busy-spin and a negative value would feed
-# `max(sync_s + 30, 60)` a nonsense duration downstream. 1 second is
-# the smallest value that still gives the homeserver a chance to
-# return at least one long-poll iteration.
-_MIN_SYNC_TIMEOUT_MS = 1000
-
-
-class QwenPawMatrixClient(AsyncClient):
-    """Keep query-token auth for homeservers/proxies that drop auth headers."""
-
-    async def send(
-        self,
-        method: str,
-        path: str,
-        data: Any = None,
-        headers: Optional[Dict[str, str]] = None,
-        trace_context: Optional[Any] = None,
-        timeout: Optional[float] = None,
-    ) -> Any:
-        if self.access_token and "access_token=" not in path:
-            url = urllib.parse.urlparse(path)
-            query = urllib.parse.parse_qs(url.query)
-            query["access_token"] = [self.access_token]
-            path = urllib.parse.urlunparse(
-                url._replace(
-                    query=urllib.parse.urlencode(query, doseq=True),
-                ),
-            )
-        return await super().send(
-            method,
-            path,
-            data,
-            headers,
-            trace_context,
-            timeout,
-        )
-
-
 class AgentTeamsMatrixChannel(BaseChannel):
     """QwenPaw channel that connects to a Matrix homeserver via matrix-nio."""
 
@@ -444,7 +409,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         # `0` does not turn the sync loop into a busy-spin and a
         # negative value does not produce a nonsense request_timeout
         # downstream (`max(sync_s + 30, 60)`).
-        self.sync_timeout_ms: int = max(_MIN_SYNC_TIMEOUT_MS, int(sync_timeout_ms))
+        self.sync_timeout_ms: int = max(MIN_SYNC_TIMEOUT_MS, int(sync_timeout_ms))
         self.show_thinking: bool = show_thinking
         self.show_tool_calls: bool = show_tool_calls
         self.show_tool_results: bool = show_tool_results
@@ -577,24 +542,6 @@ class AgentTeamsMatrixChannel(BaseChannel):
     # starts _sync_loop (§3).
     # ------------------------------------------------------------------
 
-    def _build_client_config(
-        self,
-        encryption: bool = False,
-    ) -> AsyncClientConfig:
-        """Build an AsyncClientConfig with proper request timeout.
-
-        The HTTP request timeout must exceed the sync long-poll timeout
-        so the HTTP layer doesn't kill the connection while the
-        homeserver is legitimately waiting for new events.
-        """
-        sync_s = self.sync_timeout_ms / 1000
-        request_timeout = max(sync_s + 30, 60)
-        return AsyncClientConfig(
-            store_sync_tokens=False,
-            encryption_enabled=encryption,
-            request_timeout=request_timeout,
-        )
-
     @staticmethod
     def _derive_device_id_from_name(device_name: str) -> str:
         """Use configured device_name directly as fallback device_id."""
@@ -667,26 +614,23 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
     def _init_async_client(self, resolved_device_id: str) -> None:
         # E2EE: when encryption is enabled, provide store_path so matrix-nio
-        # persists Olm/Megolm keys, and set config to auto-trust all devices
-        # (appropriate for bot use cases where interactive verification is
-        # impractical).
-        store_path = None
-        if self.encryption:
-            store_path = self._e2ee_store_path()
-            store_path.mkdir(parents=True, exist_ok=True)
-        client_config = self._build_client_config(
-            encryption=self.encryption,
+        # persists Olm/Megolm keys (build_client creates the directory).
+        store_path = self._e2ee_store_path() if self.encryption else None
+        self._client = build_client(
+            TransportConfig(
+                homeserver=self.homeserver,
+                # Keep user neutral before auth; token/whoami or login
+                # response will set the canonical MXID.
+                user_id="",
+                # The access token is applied by the login steps, not at
+                # construction time.
+                access_token="",
+                device_id=resolved_device_id,
+                store_path=store_path,
+                encryption=self.encryption,
+                sync_timeout_ms=self.sync_timeout_ms,
+            )
         )
-        self._client = QwenPawMatrixClient(
-            self.homeserver,
-            # Keep user neutral before auth; token/whoami or login response
-            # will set the canonical MXID.
-            user="",
-            store_path=str(store_path) if store_path else "",
-            config=client_config,
-        )
-        if resolved_device_id:
-            self._client.device_id = resolved_device_id
 
     def _password_login_kwargs_for_nio(
         self,

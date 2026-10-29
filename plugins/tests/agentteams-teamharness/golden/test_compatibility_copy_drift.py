@@ -13,10 +13,10 @@ differing byte — fails here with the first drifted file.
 
 One sanctioned exception: since P9/PR1 M3 (#1468) the matrix bundle's
 ``channel.py`` is bundle-owned code (it delegates mention parsing, the
-per-room history buffer and session-id derivation to the bundle's
-``core/`` package instead of carrying its own copy), so its byte-compare
-is exempted for the ``agentteams_matrix`` pair — the file's presence on
-both sides is still checked.
+per-room history buffer, session-id derivation and the matrix-nio client
+construction (M4a) to the bundle's ``core/`` package instead of carrying
+its own copy), so its byte-compare is exempted for the ``agentteams_matrix``
+pair — the file's presence on both sides is still checked.
 
 Pure stdlib: no qwenpaw, ruby, or third-party dependencies.
 """

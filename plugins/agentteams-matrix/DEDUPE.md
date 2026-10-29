@@ -22,9 +22,16 @@ commit: `fc25f272` (= main `23315f8e` + this PR's content).
 
 ## Target / copied files
 
-- `adapters/qwenpaw/agentteams_matrix/` — the package (`__init__.py`,
-  `channel.py`)
+- `adapters/qwenpaw/agentteams_matrix/__init__.py`
 - `adapters/qwenpaw/plugin.py` — the plugin entry point
+
+Not byte-copied: `adapters/qwenpaw/agentteams_matrix/channel.py` has been
+bundle-owned code since P9/PR1 M3 (#1468) — it delegates mention parsing,
+the per-room history buffer and session-id derivation to the bundle's
+`core/` package instead of carrying its own copy. The legacy tree's
+`channel.py` remains the standalone reference implementation; the drift
+test still checks the file's presence on both sides and exempts only the
+byte-compare.
 
 Not copied: the QwenPaw manifest (`adapters/qwenpaw/plugin.json`) and the
 adapter scaffolding (`README.md`, `install.sh`, `uninstall.sh`) are bundle
@@ -36,7 +43,9 @@ Re-sync is a byte-for-byte copy performed in the same commit as the upstream
 change, followed by the drift test
 (`plugins/tests/agentteams-teamharness/golden/test_compatibility_copy_drift.py`).
 Single-file hand edits of the copies are not allowed: a copy that drifts
-fails the drift test and must be re-synced whole.
+fails the drift test and must be re-synced whole. Since P9/PR1 M3 (#1468)
+the drift test byte-exempts the bundle's `channel.py` (bundle-owned, see
+above); every other synced file remains byte-checked.
 
 ## Removal condition
 

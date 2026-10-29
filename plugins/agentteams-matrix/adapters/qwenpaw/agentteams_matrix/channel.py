@@ -14,10 +14,10 @@ import mimetypes
 import os
 import random
 import re
+import sys
 import time
 import urllib.parse
 from uuid import uuid4
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -74,6 +74,30 @@ from qwenpaw.schemas import (
 from qwenpaw.app.channels.base import BaseChannel
 from qwenpaw.app.channels.utils import file_url_to_local_path
 from qwenpaw.constant import WORKING_DIR
+
+# P9/PR1 M3: mention parsing, the per-room history buffer and session-id
+# derivation live in the runtime-neutral core package at the bundle root
+# (``plugins/agentteams-matrix/core``).  The parity-test conftest puts the
+# bundle root on sys.path; the shim below covers the other in-repo loading
+# contexts so ``core`` always resolves to this bundle's core package.
+_BUNDLE_ROOT = str(Path(__file__).resolve().parents[3])
+if _BUNDLE_ROOT not in sys.path:
+    sys.path.insert(0, _BUNDLE_ROOT)
+
+from core.history import (  # noqa: E402
+    CURRENT_MESSAGE_MARKER,
+    DEFAULT_HISTORY_LIMIT,
+    HISTORY_CONTEXT_MARKER,
+    HistoryEntry,
+    RoomHistory,
+)
+from core.mentions import (  # noqa: E402
+    extract_mentions_from_text,
+    strip_mention_prefix,
+    text_mentions_worker,
+    was_mentioned,
+)
+from core.session import resolve_session_id, to_handle_from_target  # noqa: E402
 
 logger = logging.getLogger("qwenpaw.channels.matrix")
 
@@ -303,11 +327,6 @@ def _attach_long_message_metadata(
         content[MATRIX_LONG_MESSAGE_METADATA_KEY] = dict(metadata)
 
 
-# Markers that separate accumulated history from the triggering message,
-# matching the convention used by OpenClaw so agents can parse uniformly.
-HISTORY_CONTEXT_MARKER = "[Chat messages since your last reply - for context]"
-CURRENT_MESSAGE_MARKER = "[Current message - respond to this]"
-DEFAULT_HISTORY_LIMIT = 50
 # Lower bound for `sync_timeout_ms`: a value of `0` would turn the
 # nio `sync()` loop into a busy-spin and a negative value would feed
 # `max(sync_s + 30, 60)` a nonsense duration downstream. 1 second is
@@ -345,26 +364,6 @@ class QwenPawMatrixClient(AsyncClient):
             trace_context,
             timeout,
         )
-
-
-@dataclass
-class HistoryEntry:
-    """A buffered room message that didn't mention the bot."""
-
-    sender: str
-    body: str
-    timestamp: Optional[int] = None
-    message_id: Optional[str] = None
-    # Optional structured media parts (e.g. downloaded images for vision
-    # models) to be included alongside the text history when the mention
-    # arrives.
-    media_parts: Optional[List[Any]] = None
-    # Canonical Matrix user id (full MXID) of the sender. ``sender`` holds a
-    # human-readable display name (best-effort, may fall back to the
-    # localpart), which is NOT a stable identity: the send alignment gate
-    # compares senders against the turn's trigger-sender MXID, so the
-    # comparison must use this canonical id, not the display name (#1386 P1).
-    sender_id: Optional[str] = None
 
 
 class AgentTeamsMatrixChannel(BaseChannel):
@@ -448,22 +447,11 @@ class AgentTeamsMatrixChannel(BaseChannel):
         self._user_id: Optional[str] = None
         self._sync_task: Optional[asyncio.Task] = None
         self._typing_tasks: Dict[str, asyncio.Task] = {}
-        self._room_histories: Dict[str, List[HistoryEntry]] = {}
-        # Per-room history generation + cumulative record counters. The send
-        # alignment gate (#1244) snapshots the generation into each turn's
-        # meta, so a different mention's _clear_history can no longer
-        # consume the turn's staleness marker (the shared buffer is
-        # consumed at the next enqueue).
-        self._room_history_gen: Dict[str, int] = {}
-        self._room_history_records: Dict[str, int] = {}
-        # Retained per-room event log with stable record indexes: when the
-        # send gate retriggers an in-flight turn, the events that made it
-        # stale are recovered from here (the shared buffer above is already
-        # consumed by the next enqueue and would no longer hold them).
-        # Same cap as the buffer — a turn in flight longer than the cap
-        # loses the head of its window (tail through the newest event is
-        # always retained).
-        self._room_event_log: Dict[str, List[Tuple[int, HistoryEntry]]] = {}
+        # Per-room history buffer, the send-gate (#1244) generation /
+        # record counters and the retained per-room event log live in the
+        # runtime-neutral core (P9/PR1 M3): the channel owns the instance,
+        # the buffer logic is in core.
+        self._room_history = RoomHistory(limit=self.history_limit)
         # Send alignment gate state: room_id -> {event_id, count, deadline}.
         self._send_gate_state: Dict[str, Dict[str, Any]] = {}
         self._dm_room_cache: Dict[str, Dict[str, Any]] = {}
@@ -475,6 +463,25 @@ class AgentTeamsMatrixChannel(BaseChannel):
         # Thread tracking (ported from CoPaw overlay)
         self._active_thread_roots: Dict[str, str] = {}
         self._proactive_send_state: Dict[str, Dict[str, Any]] = {}
+
+    # Read-only views over the core buffer's per-room state (P9/PR1 M3):
+    # kept for the send-gate's dict-shaped reads and for the core-parity
+    # gate's direct-state assertions. The logic lives in core.
+    @property
+    def _room_histories(self) -> Dict[str, List[HistoryEntry]]:
+        return self._room_history._room_histories
+
+    @property
+    def _room_history_gen(self) -> Dict[str, int]:
+        return self._room_history._room_history_gen
+
+    @property
+    def _room_history_records(self) -> Dict[str, int]:
+        return self._room_history._room_history_records
+
+    @property
+    def _room_event_log(self) -> Dict[str, List[Tuple[int, HistoryEntry]]]:
+        return self._room_history._room_event_log
 
     # ------------------------------------------------------------------
     # Debounce key — serialize by room_id (avoid concurrent session access)
@@ -1794,66 +1801,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 return bool(room_cfg["requireMention"])
         return True  # default: require mention in group rooms
 
-    # pylint: disable=too-many-return-statements
     def _was_mentioned(self, event: Any, text: str) -> bool:
-        if not self._user_id:
-            return False
-        # 1. Check m.mentions (structured mention from Matrix spec)
-        content = event.source.get("content", {})
-        mentions = content.get("m.mentions", {})
-        if self._user_id in mentions.get("user_ids", []):
-            return True
-        if mentions.get("room"):
-            return True
-        # 2. formatted_body: matrix.to mention links (Element HTML format)
-        formatted_body = content.get("formatted_body", "")
-        if formatted_body and self._user_id:
-            escaped_uid = re.escape(self._user_id)
-            if re.search(
-                rf'href=["\']https://matrix\.to/#/{escaped_uid}["\']',
-                formatted_body,
-                re.IGNORECASE,
-            ):
-                return True
-            encoded_uid = re.escape(urllib.parse.quote(self._user_id))
-            if re.search(
-                rf'href=["\']https://matrix\.to/#/{encoded_uid}["\']',
-                formatted_body,
-                re.IGNORECASE,
-            ):
-                return True
-        # 3. Fallback: match full MXID in plain text
-        if self._user_id and re.search(
-            re.escape(self._user_id),
-            text,
-            re.IGNORECASE,
-        ):
-            return True
-        # 4. matrix.to localpart-only link (domain omitted by some clients)
-        localpart = self._user_id.lstrip("@").split(":", 1)[0]
-        if localpart and formatted_body and re.search(
-            rf'href=["\']https://matrix\.to/#/{re.escape("@" + localpart)}["\']',
-            formatted_body,
-            re.IGNORECASE,
-        ):
-            return True
-        # 5. bare @localpart in plain text.
-        #    A Matrix localpart may contain [A-Za-z0-9._=/+-] (spec user
-        #    identifiers), so the mention token in text extends over those
-        #    characters. `@alice-dev`, `@alice+dev`, `@alice/dev` and
-        #    `@alice2` are OTHER users (longer localparts) and
-        #    `@alice:other.test` is a full MXID on ANOTHER domain — none
-        #    of them is our user in bare form. Require the token to end
-        #    exactly where our localpart ends: the next character must
-        #    not be a localpart character or ':' (which would start an
-        #    MXID domain we do not own).
-        if localpart:
-            token = re.compile(
-                rf"(?<![\w@])@{re.escape(localpart)}(?![A-Za-z0-9._=:/+-])"
-            )
-            if token.search(text):
-                return True
-        return False
+        """Whether the channel's user is mentioned (core.mentions)."""
+        return was_mentioned(self._user_id or "", event, text)
 
     def _teamharness_self_trigger(self, room_id: str, event: Any) -> dict[str, Any] | None:
         content = getattr(event, "source", {}).get("content", {})
@@ -1882,18 +1832,14 @@ class AgentTeamsMatrixChannel(BaseChannel):
         Handles MXID format (@user:server), room display name, and localpart.
         E.g. ``"@worker:hs.example /new"`` → ``"/new"``
              ``"math 💕: /clear"`` → ``"/clear"``.
+
+        The display name is resolved by the channel (room/client access);
+        the stripping itself is :func:`core.mentions.strip_mention_prefix`.
         """
         if not self._user_id:
             return text
-        # 1. Strip MXID (@user:server) at start
-        escaped = re.escape(self._user_id)
-        result = re.sub(rf"^{escaped}\s*:?\s*", "", text, flags=re.IGNORECASE)
-        if result != text:
-            return result.strip()
-        # 2. Strip room display name (e.g. "math 💕") at start — try before
-        #    localpart so that "math 💕: /clear" is not partially matched by
-        #    the shorter localpart "math".
-        if room and self._user_id:
+        display_name = None
+        if room:
             display_name = self._get_display_name(room, self._user_id)
             logger.debug(
                 "strip_mention_prefix: user_id=%s display_name=%r "
@@ -1902,36 +1848,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 display_name,
                 len(getattr(room, "users", {})),
             )
-            if display_name and display_name != self._user_id:
-                result = re.sub(
-                    rf"^{re.escape(display_name)}\s*:?\s*",
-                    "",
-                    text,
-                    flags=re.IGNORECASE,
-                )
-                if result != text:
-                    # Clean leftover decoration (e.g. emoji suffix) between
-                    # the display name and the actual message content.
-                    result = re.sub(r"^[^\w/]+", "", result)
-                    return result.strip()
-        # 3. Strip localpart (e.g. "math") at start — only if display name
-        #    didn't match.
-        localpart = self._user_id.split(":")[0].lstrip("@")
-        if localpart:
-            result = re.sub(
-                rf"^@?{re.escape(localpart)}\s*:?\s*",
-                "",
-                text,
-                flags=re.IGNORECASE,
-            )
-            if result != text:
-                # After stripping localpart, there may be leftover decoration
-                # from the display name (e.g. emoji suffix "💕: " from
-                # "math 💕: /clear").  Strip non-alphanumeric prefix so the
-                # slash command is exposed.
-                result = re.sub(r"^[^\w/]+", "", result)
-                return result.strip()
-        return text
+        return strip_mention_prefix(self._user_id, text, display_name)
 
     def _control_command_text(self, text: str) -> str | None:
         """Return normalized runtime control command text, if any."""
@@ -2015,34 +1932,11 @@ class AgentTeamsMatrixChannel(BaseChannel):
         used by the send alignment gate snapshot (#1244): every new room
         event is a potential staleness signal for turns still in flight.
         """
-        limit = self.history_limit
-        if limit <= 0:
-            return
-        history = self._room_histories.setdefault(room_id, [])
-        history.append(entry)
-        while len(history) > limit:
-            history.pop(0)
-        self._room_history_gen[room_id] = self._room_history_gen.get(room_id, 0) + 1
-        self._room_history_records[room_id] = (
-            self._room_history_records.get(room_id, 0) + 1
-        )
-        log = self._room_event_log.setdefault(room_id, [])
-        log.append((self._room_history_records[room_id], entry))
-        while len(log) > limit:
-            log.pop(0)
+        self._room_history.record_history(room_id, entry)
 
     def _build_history_prefix(self, room_id: str) -> str:
         """Format buffered history entries as a multi-line text block."""
-        entries = self._room_histories.get(room_id, [])
-        if not entries:
-            return ""
-        lines: list[str] = []
-        for e in entries:
-            line = f"{e.sender}: {e.body}"
-            if e.message_id:
-                line += f" [id:{e.message_id}]"
-            lines.append(line)
-        return "\n".join(lines)
+        return self._room_history.build_history_prefix(room_id)
 
     def _build_missed_history(
         self, room_id: str, since_records: int
@@ -2058,18 +1952,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         its window (the tail through the newest event is always
         retained).  Media parts carried by the entries ride along.
         """
-        lines: list[str] = []
-        media: list[Any] = []
-        for record_idx, e in self._room_event_log.get(room_id, []):
-            if record_idx <= since_records:
-                continue
-            line = f"{e.sender}: {e.body}"
-            if e.message_id:
-                line += f" [id:{e.message_id}]"
-            lines.append(line)
-            if e.media_parts:
-                media.extend(e.media_parts)
-        return "\n".join(lines), media
+        return self._room_history.build_missed_history(room_id, since_records)
 
     def _apply_history_to_parts(
         self,
@@ -2086,44 +1969,19 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
         Returns a (possibly new) list — the original is not mutated.
         """
-        if self.history_limit <= 0:
-            return content_parts
-        history_text = self._build_history_prefix(room_id)
-        if not history_text:
-            return content_parts
-
-        # Collect media content parts carried by history entries
-        history_media: list[Any] = []
-        for entry in self._room_histories.get(room_id, []):
-            if entry.media_parts:
-                history_media.extend(entry.media_parts)
-
-        # Merge into the leading text part when possible
-        first = content_parts[0] if content_parts else None
-        if first and getattr(first, "type", None) == ContentType.TEXT:
-            current_text = first.text or ""
-            combined = (
-                f"{HISTORY_CONTEXT_MARKER}\n{history_text}\n\n"
-                f"{CURRENT_MESSAGE_MARKER}\n{current_text}"
-            )
-            return (
-                [TextContent(type=ContentType.TEXT, text=combined)]
-                + history_media
-                + content_parts[1:]
-            )
-        # No leading text part (e.g. pure media) — prepend a dedicated block
-        prefix_part = TextContent(
-            type=ContentType.TEXT,
-            text=(
-                f"{HISTORY_CONTEXT_MARKER}\n{history_text}\n\n"
-                f"{CURRENT_MESSAGE_MARKER}"
+        return self._room_history.apply_history_to_parts(
+            room_id,
+            content_parts,
+            is_text_part=lambda part: getattr(part, "type", None) == ContentType.TEXT,
+            make_text_part=lambda text: TextContent(
+                type=ContentType.TEXT,
+                text=text,
             ),
         )
-        return [prefix_part] + history_media + content_parts
 
     def _clear_history(self, room_id: str) -> None:
         """Drop the buffered history for *room_id*."""
-        self._room_histories.pop(room_id, None)
+        self._room_history.clear_history(room_id)
 
     def _capture_send_gate_snapshot(self, meta: Dict[str, Any], room_id: str) -> None:
         """Record this turn's room-history generation into its own meta.
@@ -2135,9 +1993,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
         against this per-turn snapshot instead of inspecting the shared
         buffer, which another turn may have drained.
         """
-        meta["send_gate_snapshot_gen"] = self._room_history_gen.get(room_id, 0)
-        meta["send_gate_snapshot_records"] = self._room_history_records.get(
-            room_id, 0
+        meta["send_gate_snapshot_gen"] = self._room_history.generation(room_id)
+        meta["send_gate_snapshot_records"] = self._room_history.record_count(
+            room_id
         )
 
     async def _record_media_history(
@@ -3308,8 +3166,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         return req
 
     def resolve_session_id(self, sender_id: str, channel_meta=None) -> str:
-        room_id = (channel_meta or {}).get("room_id", sender_id)
-        return f"matrix:{room_id}"
+        return resolve_session_id(sender_id, channel_meta)
 
     def to_handle_from_target(self, *, user_id: str, session_id: str) -> str:
         """For Matrix, return room_id (session_id), not user_id.
@@ -3320,9 +3177,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         :meth:`resolve_session_id`; strip it so the value is a raw
         Matrix room_id that can be passed directly to ``room_send``.
         """
-        if session_id.startswith("matrix:"):
-            return session_id[len("matrix:") :]
-        return session_id
+        return to_handle_from_target(user_id=user_id, session_id=session_id)
 
     def get_to_handle_from_request(self, request: Any) -> str:
         meta = getattr(request, "channel_meta", {}) or {}
@@ -3332,15 +3187,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
     # Mention helper — MSC3952 m.mentions from body text scan
     # ------------------------------------------------------------------
 
-    # Regex to match Matrix user IDs: @localpart:domain (with optional port)
-    _MATRIX_USER_ID_RE = re.compile(
-        r"@[a-zA-Z0-9._=+/\-]+:[a-zA-Z0-9.\-]+(?::\d+)?",
-    )
-
     def _extract_mentions_from_text(self, text: str) -> list[str]:
         """Extract all @user:domain Matrix IDs from message text."""
-        matches = self._MATRIX_USER_ID_RE.findall(text)
-        return list(dict.fromkeys(matches))  # dedupe, preserve order
+        return extract_mentions_from_text(text)
 
     def _apply_mention(
         self,
@@ -4368,16 +4217,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         + bare ``@localpart`` with localpart boundary rules); retained
         history entries carry plain body text only, no event content.
         """
-        if not text or not worker_localpart:
-            return False
-        if self._user_id and re.search(
-            re.escape(self._user_id), text, re.IGNORECASE
-        ):
-            return True
-        token = re.compile(
-            rf"(?<![\w@])@{re.escape(worker_localpart)}(?![A-Za-z0-9._=:/+-])"
-        )
-        return bool(token.search(text))
+        return text_mentions_worker(self._user_id, text, worker_localpart)
 
     def _new_events_relevant_to_turn(
         self, room_id: str, since_records: int, meta_dict: Dict[str, Any]

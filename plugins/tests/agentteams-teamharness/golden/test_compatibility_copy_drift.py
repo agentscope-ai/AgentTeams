@@ -11,6 +11,13 @@ the same commit as the upstream change; hand edits of individual copy files
 are not allowed. Any drift — a missing file, an extra file, or a single
 differing byte — fails here with the first drifted file.
 
+One sanctioned exception: since P9/PR1 M3 (#1468) the matrix bundle's
+``channel.py`` is bundle-owned code (it delegates mention parsing, the
+per-room history buffer and session-id derivation to the bundle's
+``core/`` package instead of carrying its own copy), so its byte-compare
+is exempted for the ``agentteams_matrix`` pair — the file's presence on
+both sides is still checked.
+
 Pure stdlib: no qwenpaw, ruby, or third-party dependencies.
 """
 
@@ -64,7 +71,12 @@ def _copy_files(base: Path) -> dict[str, Path]:
     return files
 
 
-def _assert_tree_copies_match(label: str, bundle_base: Path, legacy_base: Path) -> None:
+def _assert_tree_copies_match(
+    label: str,
+    bundle_base: Path,
+    legacy_base: Path,
+    byte_exempt: tuple[str, ...] = (),
+) -> None:
     assert bundle_base.is_dir(), f"missing bundle copy directory: {bundle_base}"
     assert legacy_base.is_dir(), f"missing legacy source directory: {legacy_base}"
 
@@ -88,6 +100,10 @@ def _assert_tree_copies_match(label: str, bundle_base: Path, legacy_base: Path) 
         )
 
     for rel in sorted(bundle_files):
+        if rel in byte_exempt:
+            # Bundle-owned file (present on both sides, checked above)
+            # that is no longer a byte copy — see the module docstring.
+            continue
         bundle_path = bundle_files[rel]
         legacy_path = legacy_files[rel]
         if bundle_path.read_bytes() != legacy_path.read_bytes():
@@ -109,8 +125,15 @@ def _assert_file_copies_match(label: str, bundle_file: Path, legacy_file: Path) 
 
 
 def test_compatibility_copies_match_legacy():
+    # P9/PR1 M3 (#1468): the matrix bundle's channel.py delegates to the
+    # bundle's core/ package and is bundle-owned, not a byte copy.
+    byte_exempt = {
+        "agentteams_matrix": ("channel.py",),
+    }
     for label, bundle, legacy, kind in COPY_PAIRS:
         if kind == "dir":
-            _assert_tree_copies_match(label, bundle, legacy)
+            _assert_tree_copies_match(
+                label, bundle, legacy, byte_exempt=byte_exempt.get(label, ())
+            )
         else:
             _assert_file_copies_match(label, bundle, legacy)

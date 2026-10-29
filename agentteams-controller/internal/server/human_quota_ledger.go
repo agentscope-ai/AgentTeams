@@ -113,24 +113,38 @@ func (h *humanFilesHandler) ensureQuotaLedger(ctx context.Context, username stri
 
 // reserveQuota atomically reserves the byte delta of a write. The returned
 // delta must be passed to releaseQuota if the subsequent object write fails.
-// A nil quota means unlimited and performs no ledger I/O.
+// A nil quota means unlimited, but an existing ledger is still advanced: a
+// later re-enable must not trust a ledger that predates writes made while the
+// quota was off. No ledger is created while quota is disabled.
 func (h *humanFilesHandler) reserveQuota(ctx context.Context, a *humanFileAccess, username string, oldSize, newSize int64) (int64, int, string) {
 	quota := a.human.Spec.WorkspaceQuotaBytes
-	if quota == nil {
-		return 0, 0, ""
-	}
 	key := humanQuotaLedgerKey(username)
 	for attempt := 0; attempt < humanQuotaLedgerRetries; attempt++ {
-		ledger, etag, err := h.ensureQuotaLedger(ctx, username)
+		var (
+			ledger humanQuotaLedger
+			etag   string
+			err    error
+		)
+		if quota == nil {
+			ledger, etag, err = h.readQuotaLedger(ctx, username)
+			if errors.Is(err, os.ErrNotExist) {
+				return 0, 0, ""
+			}
+		} else {
+			ledger, etag, err = h.ensureQuotaLedger(ctx, username)
+		}
 		if err != nil {
 			return 0, 500, "quota reservation failed"
 		}
 		next := ledger.UsedBytes - oldSize + newSize
-		if next > *quota {
+		if quota != nil && next > *quota {
 			return 0, 413, fmt.Sprintf(
 				"workspace quota of %d bytes exceeded (used %d, old %d, new %d)",
 				*quota, ledger.UsedBytes, oldSize, newSize,
 			)
+		}
+		if next < 0 {
+			next = 0
 		}
 		payload, err := json.Marshal(humanQuotaLedger{UsedBytes: next})
 		if err != nil {
@@ -145,6 +159,38 @@ func (h *humanFilesHandler) reserveQuota(ctx context.Context, a *humanFileAccess
 		// against its version.
 	}
 	return 0, 500, "quota reservation did not converge"
+}
+
+// reconcileQuotaLedger rebuilds the reservation ledger from live usage. It is
+// called when a quota is enabled: writes while unlimited advanced an existing
+// ledger, but a workspace created without any quota may not have one yet, and
+// old deployments may have stale state. Failure is fail-closed because
+// accepting writes against an unknown ledger would defeat the quota.
+func (h *humanFilesHandler) reconcileQuotaLedger(ctx context.Context, username string) error {
+	key := humanQuotaLedgerKey(username)
+	for attempt := 0; attempt < humanQuotaLedgerRetries; attempt++ {
+		ledger, etag, err := h.ensureQuotaLedger(ctx, username)
+		if err != nil {
+			return err
+		}
+		used, err := h.usedBytes(ctx, username)
+		if err != nil {
+			return err
+		}
+		if ledger.UsedBytes == used {
+			return nil
+		}
+		payload, err := json.Marshal(humanQuotaLedger{UsedBytes: used})
+		if err != nil {
+			return err
+		}
+		if err := h.oss.PutObjectIfMatch(ctx, key, payload, etag); err == nil {
+			return nil
+		} else if !errors.Is(err, oss.ErrPreconditionFailed) {
+			return err
+		}
+	}
+	return fmt.Errorf("quota ledger reconciliation did not converge")
 }
 
 // releaseQuota reverses a reservation after the file write failed. It never

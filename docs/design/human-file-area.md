@@ -131,7 +131,9 @@ budget for the area — `files/**` plus `.trash/**` — and is unset
   a precondition conflict. The reservation is released if the file write
   fails. The ledger is outside `files/` and `.trash/`, is excluded from
   live usage, and `.control/` is a reserved API path. Purge and an
-  overwrite restore adjust the ledger when it exists.
+  overwrite restore adjust the ledger when it exists. While quota is
+  disabled, an existing ledger still advances on writes; enabling a quota
+  rebuilds the ledger from live usage before enforcement.
 - **Cross-replica test:** two independently constructed handlers sharing
   one OSS store must produce one 200 and one 413 under a 10-byte quota,
   with final usage ≤10.

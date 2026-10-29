@@ -876,6 +876,15 @@ func (h *humanFilesHandler) putQuota(w http.ResponseWriter, r *http.Request) {
 			writeK8sError(w, "update human quota", err)
 			return
 		}
+		if body.QuotaBytes != nil {
+			// Writes made while the quota was disabled may not have advanced
+			// the ledger (or the workspace may predate it). Rebuild from live
+			// usage before enforcing the new limit.
+			if err := h.reconcileQuotaLedger(ctx, name); err != nil {
+				httputil.WriteError(w, http.StatusInternalServerError, "quota ledger reconciliation failed")
+				return
+			}
+		}
 		h.recordAudit(ctx, a, "human_quota_set", humanFileDetail("quotaBytes", body.QuotaBytes))
 		httputil.WriteJSON(w, http.StatusOK, map[string]any{"quotaBytes": body.QuotaBytes})
 		return

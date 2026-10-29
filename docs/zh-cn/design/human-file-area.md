@@ -72,7 +72,8 @@ humans/                              （由初始化器创建）
   （`If-None-Match:*`）创建；后续按 `newSize-oldSize` 增量用
   `PutObjectIfMatch`（`If-Match`）预留，冲突重试；文件写失败则释放预留。
   账本不在 `files/`/`.trash/` 下，不计入 live usage；`.control/` 为 API
-  保留路径。purge 与覆盖式 restore 在账本存在时同步调整。
+  保留路径。purge 与覆盖式 restore 在账本存在时同步调整；关闭配额期间
+  已有账本仍随写入推进，重新启用配额时按 live usage 安全重建。
 - **跨副本回归：** 两个独立 Handler 共享同一 OSS，在 10 字节配额下必须
   一个 200、一个 413，最终 usage ≤10。
 - 成功 → `200` `{"path":"files/<rel>","size":N,"etag":"..."}`。

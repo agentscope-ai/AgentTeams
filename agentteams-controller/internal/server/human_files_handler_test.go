@@ -1268,6 +1268,44 @@ func TestHumanFiles_QuotaAuditEvent(t *testing.T) {
 	}
 }
 
+// A write made while quota is disabled must not leave the ledger at its old
+// value when the quota is re-enabled. Without the transition handling, the
+// ledger says 6 while live usage is 12+, so a later 4-byte write is admitted.
+func TestHumanFiles_QuotaDisabledWriteThenReenable(t *testing.T) {
+	hfh, _, _ := newHumanFilesRig(t)
+
+	if rec := hfPutQuota(t, hfh, "alice", hfAdmin(), `{"quotaBytes":10}`); rec.Code != http.StatusOK {
+		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPutFile(t, hfh, "alice", "a.txt", hfSelf(), "aaaaaa"); rec.Code != http.StatusOK {
+		t.Fatalf("first write: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPutQuota(t, hfh, "alice", hfAdmin(), `{"quotaBytes":null}`); rec.Code != http.StatusOK {
+		t.Fatalf("clear quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPutFile(t, hfh, "alice", "a.txt", hfSelf(), strings.Repeat("b", 12)); rec.Code != http.StatusOK {
+		t.Fatalf("unlimited overwrite: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPutQuota(t, hfh, "alice", hfAdmin(), `{"quotaBytes":10}`); rec.Code != http.StatusOK {
+		t.Fatalf("re-enable quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPutFile(t, hfh, "alice", "b.txt", hfSelf(), "cccc"); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("post-reenable write: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+
+	rec := hfGetQuota(t, hfh, "alice", hfSelf())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get quota: %d %s", rec.Code, rec.Body.String())
+	}
+	var q humanQuotaResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &q); err != nil {
+		t.Fatal(err)
+	}
+	if q.UsedBytes != 12 {
+		t.Fatalf("usedBytes=%d, want 12 (the rejected 4-byte write must not land)", q.UsedBytes)
+	}
+}
+
 // TestHumanFiles_QuotaCrossHandlerAtomic is the cross-controller quota gate:
 // two independently constructed handlers share the same OSS store and start
 // with the same 10-byte quota. Without a shared atomic reservation both can

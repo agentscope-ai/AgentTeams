@@ -2,10 +2,13 @@ package server
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 )
@@ -36,22 +39,42 @@ func humanQuotaLedgerKey(username string) string {
 // since the feature was enabled or the human was created).
 func (h *humanFilesHandler) readQuotaLedger(ctx context.Context, username string) (humanQuotaLedger, string, error) {
 	key := humanQuotaLedgerKey(username)
-	data, err := h.oss.GetObject(ctx, key)
-	if err != nil {
-		return humanQuotaLedger{}, "", err
+	for attempt := 0; attempt < humanQuotaLedgerRetries; attempt++ {
+		data, err := h.oss.GetObject(ctx, key)
+		if err != nil {
+			return humanQuotaLedger{}, "", err
+		}
+		var ledger humanQuotaLedger
+		if err := json.Unmarshal(data, &ledger); err != nil {
+			return humanQuotaLedger{}, "", fmt.Errorf("decode quota ledger: %w", err)
+		}
+		meta, err := h.oss.StatMeta(ctx, key)
+		if err != nil {
+			return humanQuotaLedger{}, "", err
+		}
+		if meta.ETag == "" {
+			return humanQuotaLedger{}, "", fmt.Errorf("quota ledger has no ETag")
+		}
+		if quotaLedgerETagMatches(data, meta.ETag) {
+			return ledger, meta.ETag, nil
+		}
+		// The bytes and the ETag came from different object versions (a
+		// concurrent reservation landed between GetObject and StatMeta).
+		// Never bind stale contents to the newer ETag: retry the snapshot.
 	}
-	var ledger humanQuotaLedger
-	if err := json.Unmarshal(data, &ledger); err != nil {
-		return humanQuotaLedger{}, "", fmt.Errorf("decode quota ledger: %w", err)
-	}
-	meta, err := h.oss.StatMeta(ctx, key)
-	if err != nil {
-		return humanQuotaLedger{}, "", err
-	}
-	if meta.ETag == "" {
-		return humanQuotaLedger{}, "", fmt.Errorf("quota ledger has no ETag")
-	}
-	return ledger, meta.ETag, nil
+	return humanQuotaLedger{}, "", fmt.Errorf("quota ledger changed while taking a consistent snapshot")
+}
+
+// quotaLedgerETagMatches binds the ledger bytes to the ETag returned by the
+// subsequent metadata read. The ledger is a small single-part object, so its
+// S3 ETag is the MD5 of the body (MinIO/RustFS/S3 semantics). If a concurrent
+// writer changes the body between GetObject and StatMeta, the hash and ETag
+// disagree and the caller retries instead of CASing stale bytes onto the new
+// version. This is the validate-and-retry snapshot required for the ledger.
+func quotaLedgerETagMatches(data []byte, etag string) bool {
+	sum := md5.Sum(data)
+	expected := hex.EncodeToString(sum[:])
+	return strings.EqualFold(strings.Trim(etag, `"`), expected)
 }
 
 // ensureQuotaLedger lazily seeds the ledger from the actual object store. The

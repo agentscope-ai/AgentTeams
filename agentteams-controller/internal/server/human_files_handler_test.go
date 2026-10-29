@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
@@ -148,6 +149,7 @@ func TestValidateHumanFilePath(t *testing.T) {
 		{"reserved .trash rejected", ".trash/a.txt", "", false},
 		{"reserved .trash exact", ".trash", "", false},
 		{"reserved .sync rejected", ".sync/state.json", "", false},
+		{"reserved .control rejected", ".control/quota.json", "", false},
 		{"windows reserved CON", "CON", "", false},
 		{"windows reserved with ext", "con.txt", "", false},
 		{"windows reserved COM1 case-insensitive", "COM1", "", false},
@@ -1263,5 +1265,70 @@ func TestHumanFiles_QuotaAuditEvent(t *testing.T) {
 	}
 	if v := detailField(t, lines[0], "quotaBytes"); v != float64(42) {
 		t.Fatalf("detail quotaBytes = %v, want 42", v)
+	}
+}
+
+// TestHumanFiles_QuotaCrossHandlerAtomic is the cross-controller quota gate:
+// two independently constructed handlers share the same OSS store and start
+// with the same 10-byte quota. Without a shared atomic reservation both can
+// pass the check and write 12 bytes; the ledger CAS must let exactly one
+// write through.
+func TestHumanFiles_QuotaCrossHandlerAtomic(t *testing.T) {
+	h1, store, k8s := newHumanFilesRig(t)
+	h2 := NewHumanFilesHandler(k8s, "default", store, audit.NewClient(store))
+
+	if rec := hfPutQuota(t, h1, "alice", hfAdmin(), `{"quotaBytes":10}`); rec.Code != http.StatusOK {
+		t.Fatalf("put quota: %d %s", rec.Code, rec.Body.String())
+	}
+
+	req1 := hfReq(t, http.MethodPut, "alice", "a.txt", hfSelf(), strings.NewReader("aaaaaa"))
+	req2 := hfReq(t, http.MethodPut, "alice", "b.txt", hfSelf(), strings.NewReader("bbbbbb"))
+	start := make(chan struct{})
+	codes := make(chan int, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		rec := httptest.NewRecorder()
+		h1.putFile(rec, req1)
+		codes <- rec.Code
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		rec := httptest.NewRecorder()
+		h2.putFile(rec, req2)
+		codes <- rec.Code
+	}()
+	close(start)
+	wg.Wait()
+	close(codes)
+
+	ok, rejected := 0, 0
+	for code := range codes {
+		switch code {
+		case http.StatusOK:
+			ok++
+		case http.StatusRequestEntityTooLarge:
+			rejected++
+		default:
+			t.Fatalf("unexpected status %d", code)
+		}
+	}
+	if ok != 1 || rejected != 1 {
+		t.Fatalf("cross-handler quota result: ok=%d rejected=%d, want 1/1", ok, rejected)
+	}
+
+	rec := hfGetQuota(t, h1, "alice", hfSelf())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get quota: %d %s", rec.Code, rec.Body.String())
+	}
+	var q humanQuotaResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &q); err != nil {
+		t.Fatal(err)
+	}
+	if q.UsedBytes > 10 {
+		t.Fatalf("usedBytes=%d exceeds quota 10", q.UsedBytes)
 	}
 }

@@ -419,13 +419,25 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusInternalServerError, "stat file failed")
 		return
 	}
-	if status, msg := h.checkQuota(ctx, a, username, oldSize, int64(len(data))); status != 0 {
+	reservedDelta, status, msg := h.reserveQuota(ctx, a, username, oldSize, int64(len(data)))
+	if status != 0 {
 		if status == http.StatusRequestEntityTooLarge {
 			writeHumanFileCodedError(w, status, "quota_exceeded", msg)
 		} else {
 			httputil.WriteError(w, status, msg)
 		}
 		return
+	}
+	// The ledger reserves before the object write. If any later step fails,
+	// release the reservation; after a successful write, keep it because the
+	// new object's bytes are now part of usedBytes.
+	committed := false
+	if reservedDelta != 0 {
+		defer func() {
+			if !committed {
+				h.releaseQuota(ctx, username, reservedDelta)
+			}
+		}()
 	}
 
 	if match := r.Header.Get("If-Match"); match != "" {
@@ -457,11 +469,13 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 			httputil.WriteError(w, http.StatusInternalServerError, "write file failed")
 			return
 		}
+		committed = true
 	} else {
 		if err := h.oss.PutObject(ctx, key, data); err != nil {
 			httputil.WriteError(w, http.StatusInternalServerError, "write file failed")
 			return
 		}
+		committed = true
 	}
 
 	var etag string
@@ -666,10 +680,12 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	target := humanFilesPrefix(username) + rel
+	var existingSize int64
 	exists := false
-	switch serr := h.oss.Stat(ctx, target); {
+	switch meta, serr := h.oss.StatMeta(ctx, target); {
 	case serr == nil:
 		exists = true
+		existingSize = meta.Size
 	case errors.Is(serr, os.ErrNotExist):
 	default:
 		httputil.WriteError(w, http.StatusInternalServerError, "stat restore target failed")
@@ -685,13 +701,30 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 	// add usage. An overwrite replaces an existing target and reduces usage
 	// further. Only writes (putFile) can grow the area, so only they are
 	// quota-gated; a restore must not be rejected at exactly the quota.
-	if err := h.oss.PutObject(ctx, target, content); err != nil {
+	if !exists {
+		// Use If-None-Match:* so a file created between StatMeta and this
+		// write cannot be silently overwritten. The check and create are
+		// one storage operation, not a handler-local lock.
+		if err := h.oss.PutObjectIfAbsent(ctx, target, content); err != nil {
+			if errors.Is(err, oss.ErrPreconditionFailed) {
+				writeHumanFileCodedError(w, http.StatusConflict, "path_conflict",
+					"a file already exists at the restore target")
+				return
+			}
+			httputil.WriteError(w, http.StatusInternalServerError, "write restored file failed")
+			return
+		}
+	} else if err := h.oss.PutObject(ctx, target, content); err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "write restored file failed")
 		return
 	}
 	// Remove the trash entry; a failure here only leaks a recoverable copy.
 	_ = h.oss.DeleteObject(ctx, trashPrefix+"content")
 	_ = h.oss.DeleteObject(ctx, trashPrefix+"meta.json")
+	// An overwrite restore removes the pre-existing target; that target's
+	// bytes were part of the ledger's usedBytes, so release them. A
+	// non-overwrite restore is net-neutral and has existingSize == 0.
+	h.adjustQuotaLedger(ctx, username, -existingSize)
 	h.recordAudit(ctx, a, "human_trash_restore",
 		humanFileDetail("path", "files/"+rel, "size", len(content), "trashId", id, "overwrite", override))
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
@@ -738,6 +771,10 @@ func (h *humanFilesHandler) purgeTrash(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusInternalServerError, "purge trash entry failed")
 		return
 	}
+	// Purged bytes are gone from both files/ and .trash/; release them from
+	// the ledger when one exists. A missing ledger is fine: the next quota
+	// write seeds it from live usage (already reduced).
+	h.adjustQuotaLedger(ctx, username, -m.Size)
 	h.recordAudit(ctx, a, "human_trash_purge",
 		humanFileDetail("path", m.Path, "size", m.Size, "trashId", id))
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"purged": id})
@@ -754,8 +791,9 @@ type humanQuotaResponse struct {
 
 // usedBytes computes the current usage of a human's workspace live: the
 // total size of every object under files/ plus .trash/ (trash entries
-// count toward the quota). Usage is never persisted; it is derived from
-// storage on each read.
+// count toward the quota). GET /quota uses this live value; the separate
+// .control/quota.json ledger is only the atomic reservation state for
+// writes and is excluded from these prefixes.
 func (h *humanFilesHandler) usedBytes(ctx context.Context, username string) (int64, error) {
 	total := int64(0)
 	for _, prefix := range []string{humanFilesPrefix(username), humanTrashPrefix(username)} {
@@ -778,29 +816,6 @@ func (h *humanFilesHandler) usedBytes(ctx context.Context, username string) (int
 		}
 	}
 	return total, nil
-}
-
-// checkQuota enforces the workspace quota before a write lands. The write
-// replaces an existing object of oldSize bytes (0 when the file does not
-// exist yet) with one of newSize bytes; the area may only grow by the
-// delta, because used already counts the object being replaced. It
-// returns the rejection status and message, or (0, "") when the write is
-// allowed. An unset quota is unlimited; a storage failure while computing
-// usage fails closed with 500.
-func (h *humanFilesHandler) checkQuota(ctx context.Context, a *humanFileAccess, username string, oldSize, newSize int64) (int, string) {
-	quota := a.human.Spec.WorkspaceQuotaBytes
-	if quota == nil {
-		return 0, ""
-	}
-	used, err := h.usedBytes(ctx, username)
-	if err != nil {
-		return http.StatusInternalServerError, "quota check failed"
-	}
-	if used-oldSize+newSize > *quota {
-		return http.StatusRequestEntityTooLarge,
-			fmt.Sprintf("workspace quota of %d bytes exceeded (used %d, old %d, new %d)", *quota, used, oldSize, newSize)
-	}
-	return 0, ""
 }
 
 // getQuota handles GET /api/v1/humans/{name}/quota: the area's live usage

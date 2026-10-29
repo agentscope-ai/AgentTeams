@@ -20,7 +20,7 @@ const (
 // Reserved top-level names inside a human's file area. They map to internal
 // machinery (the recycle bin and a future sync state) and must not be
 // addressable through the files API.
-var reservedHumanFilePrefixes = []string{".trash", ".sync"}
+var reservedHumanFilePrefixes = []string{".trash", ".sync", ".control"}
 
 // windowsReservedNames are the DOS device names Windows refuses as a file
 // base name (CON.txt is reserved, myCON.txt is not). Checked case-
@@ -56,7 +56,7 @@ func isWindowsReservedName(seg string) bool {
 // Rejected: absolute paths, ".." and "." segments, empty segments
 // ("a//b", "a/"), backslashes, control characters, non-UTF-8 input,
 // total length over maxHumanFilePathBytes, any segment over
-// maxHumanPathSegmentBytes, the reserved top-level names (.trash, .sync),
+// maxHumanPathSegmentBytes, the reserved top-level names (.trash, .sync, .control),
 // and Windows reserved device names.
 func validateHumanFilePath(raw string) (string, error) {
 	if utf8.ValidString(raw) == false {

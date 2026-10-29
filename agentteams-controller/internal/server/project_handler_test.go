@@ -4140,6 +4140,10 @@ func (c *conflictInjectingOSS) PutObject(ctx context.Context, key string, data [
 	return c.mcLike.PutObject(ctx, key, data)
 }
 
+func (c *conflictInjectingOSS) PutObjectIfAbsent(ctx context.Context, key string, data []byte) error {
+	return c.mcLike.PutObjectIfAbsent(ctx, key, data)
+}
+
 // PutObjectIfMatch simulates the conditional write. When injectOnStat has
 // been reached (the concurrent-write simulation fired on StatMeta), the
 // underlying object's ETag no longer matches the read-time ETag, so the
@@ -6271,7 +6275,7 @@ func TestWorkflowStrongRereadFailureNotStrong(t *testing.T) {
 		getCounts:   getCounts,
 		advanceKey:  metaKey,
 		advanceData: v2,
-		advanceAt:   1, // advance invalidates the held snapshot → re-read ...
+		advanceAt:   1,    // advance invalidates the held snapshot → re-read ...
 		failReGet:   true, // ... which then fails
 	})
 
@@ -6316,7 +6320,7 @@ func TestWorkflowStrongRereadRacesAdvance(t *testing.T) {
 		getCounts:       getCounts,
 		advanceKey:      metaKey,
 		advanceData:     v2,
-		advanceAt:       1, // first advance: invalidates the held snapshot → re-read
+		advanceAt:       1,    // first advance: invalidates the held snapshot → re-read
 		races:           true, // second advance: lands after the re-read GetObject
 		advanceDataRace: v3,
 	})

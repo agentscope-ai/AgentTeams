@@ -34,7 +34,8 @@ type MinIOClient struct {
 	aliasReady bool
 	// sdkPutIfMatch overrides the SDK conditional write for tests; nil uses
 	// the real minio-go path.
-	sdkPutIfMatch func(ctx context.Context, key string, data []byte, matchETag string) error
+	sdkPutIfMatch  func(ctx context.Context, key string, data []byte, matchETag string) error
+	sdkPutIfAbsent func(ctx context.Context, key string, data []byte) error
 }
 
 // NewMinIOClient creates a StorageClient backed by the mc CLI.
@@ -110,6 +111,41 @@ func (c *MinIOClient) PutObjectIfMatch(ctx context.Context, key string, data []b
 	if errors.As(err, &resp) && (resp.Code == "NotImplemented" || resp.Code == "501") {
 		return ossFallbackWrite(ctx, key, data, matchETag, c.StatMeta, c.PutObject)
 	}
+	return err
+}
+
+// PutObjectIfAbsent creates an object only when the key does not exist.
+// This is the atomic initialization primitive for the per-human quota
+// ledger; unlike If-Match on a missing object, If-None-Match:* succeeds on
+// create and fails on an existing key. Providers that do not implement
+// If-None-Match return an error (fail closed) rather than falling back to a
+// racy Stat-then-Put.
+func (c *MinIOClient) PutObjectIfAbsent(ctx context.Context, key string, data []byte) error {
+	put := c.sdkPutIfAbsent
+	if put == nil {
+		put = c.sdkPutObjectIfAbsent
+	}
+	err := put(ctx, key, data)
+	if err == nil {
+		return nil
+	}
+	var resp minio.ErrorResponse
+	if errors.As(err, &resp) && (resp.Code == "PreconditionFailed" || resp.Code == "412") {
+		return ErrPreconditionFailed
+	}
+	return err
+}
+
+// sdkPutObjectIfAbsent is the MinIO SDK If-None-Match:* write.
+func (c *MinIOClient) sdkPutObjectIfAbsent(ctx context.Context, key string, data []byte) error {
+	sdk, err := c.sdkClient()
+	if err != nil {
+		return err
+	}
+	reader := bytes.NewReader(data)
+	opts := minio.PutObjectOptions{ContentType: "application/json"}
+	opts.SetMatchETagExcept("*")
+	_, err = sdk.PutObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), reader, int64(len(data)), opts)
 	return err
 }
 

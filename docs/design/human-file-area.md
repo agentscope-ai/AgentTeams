@@ -123,6 +123,18 @@ budget for the area — `files/**` plus `.trash/**` — and is unset
   change is audited (`human_quota_set`).
 - **Enforcement:** writes are checked before the bytes land —
   `usedBytes + size > quota` → `413` `{"code":"quota_exceeded"}`.
+- **Atomic reservation (cross-controller):** quota enforcement uses a
+  per-human ledger at `humans/<user>/.control/quota.json`, not only a
+  process-local check. The first writer creates it with
+  `PutObjectIfAbsent` (`If-None-Match:*`); later writers reserve the
+  `newSize-oldSize` delta with `PutObjectIfMatch` (`If-Match`) and retry on
+  a precondition conflict. The reservation is released if the file write
+  fails. The ledger is outside `files/` and `.trash/`, is excluded from
+  live usage, and `.control/` is a reserved API path. Purge and an
+  overwrite restore adjust the ledger when it exists.
+- **Cross-replica test:** two independently constructed handlers sharing
+  one OSS store must produce one 200 and one 413 under a 10-byte quota,
+  with final usage ≤10.
   A trash restore is not quota-gated: the bytes are already counted in
   `usedBytes`, and moving them back to `files/` does not grow usage (an
   `?overwrite=1` restore replaces the target and reduces it). Data that

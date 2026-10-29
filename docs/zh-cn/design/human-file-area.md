@@ -67,6 +67,14 @@ humans/                              （由初始化器创建）
 - 单文件大小上限：默认 **64 MiB**，可通过环境变量 `HUMAN_FILE_MAX_BYTES` 覆盖；超限 → `413`，`{"code":"size_exceeded"}`。
 - 可选 `If-Match: <etag>` 提供乐观并发控制；etag 过期或目标尚不存在 → `412`，`{"code":"etag_mismatch"}`。
 - 写入前执行工作区配额检查：`usedBytes + size` 超过 `workspaceQuotaBytes` → `413`，`{"code":"quota_exceeded"}`。
+- **跨 Controller 原子预留：** 配额不只用进程内检查；每个 Human 使用
+  `humans/<user>/.control/quota.json` 账本。首次用 `PutObjectIfAbsent`
+  （`If-None-Match:*`）创建；后续按 `newSize-oldSize` 增量用
+  `PutObjectIfMatch`（`If-Match`）预留，冲突重试；文件写失败则释放预留。
+  账本不在 `files/`/`.trash/` 下，不计入 live usage；`.control/` 为 API
+  保留路径。purge 与覆盖式 restore 在账本存在时同步调整。
+- **跨副本回归：** 两个独立 Handler 共享同一 OSS，在 10 字节配额下必须
+  一个 200、一个 413，最终 usage ≤10。
 - 成功 → `200` `{"path":"files/<rel>","size":N,"etag":"..."}`。
 
 ### `DELETE /api/v1/humans/{name}/files/{path...}`
@@ -95,7 +103,7 @@ humans/                              （由初始化器创建）
 
 ## 路径规则
 
-路径相对于 `files/`，经 NFC 归一化后、在任何存储访问之前完成校验。以下情况以 `400` 拒绝：绝对路径、`..` / `.` 段、空段、反斜杠、控制字符、非 UTF-8 输入、总长超过 1024 字节、任一段超过 255 字节、保留顶层名 `.trash` 与 `.sync`，以及 Windows 保留设备名（`CON`、`NUL`、`COM1-9`、`LPT1-9`，含或不含扩展名）。
+路径相对于 `files/`，经 NFC 归一化后、在任何存储访问之前完成校验。以下情况以 `400` 拒绝：绝对路径、`..` / `.` 段、空段、反斜杠、控制字符、非 UTF-8 输入、总长超过 1024 字节、任一段超过 255 字节、保留顶层名 `.trash`、`.sync` 与 `.control`，以及 Windows 保留设备名（`CON`、`NUL`、`COM1-9`、`LPT1-9`，含或不含扩展名）。
 
 ## 审计
 

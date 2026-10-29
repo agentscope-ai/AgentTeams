@@ -114,6 +114,23 @@ func (m *Memory) StatMeta(_ context.Context, key string) (oss.ObjectMeta, error)
 	return oss.ObjectMeta{Size: int64(len(data)), ModTime: m.modTime, ETag: md5Hex(data)}, nil
 }
 
+// PutObjectIfAbsent stores data only when the key does not exist. The check
+// and write happen under one lock so two handlers sharing a store cannot both
+// win; this mirrors the storage-level If-None-Match used by the real client.
+func (m *Memory) PutObjectIfAbsent(_ context.Context, key string, data []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.objects[key]; ok {
+		return oss.ErrPreconditionFailed
+	}
+	buf := make([]byte, len(data))
+	copy(buf, data)
+	m.objects[key] = buf
+	m.modTime = m.modTime.Add(time.Second)
+	m.next++
+	return nil
+}
+
 // PutObjectIfMatch writes only when the current object ETag equals matchETag.
 // Mirrors the MinIO conditional-write semantics: mismatch returns
 // oss.ErrPreconditionFailed and leaves the object untouched.

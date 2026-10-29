@@ -7,8 +7,9 @@ protocol).  M1 lands the skeleton: interfaces, file-backed session
 state with the single-writer lock, and the sidecar protocol.
 
 This package has no matrix-nio dependency at the package level:
-``core.transport`` (M4a) is the only core module that imports
-matrix-nio, and it must not be imported from ``core/__init__.py``.
+``core.transport`` (M4a) and ``core.sync`` (M4b) are the only core
+modules that import matrix-nio, and neither is imported from
+``core/__init__.py``.
 
 M2 adds the runtime-neutral mention parsing (``mentions``), the
 per-room history buffer (``history``), and the session-id derivation

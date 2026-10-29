@@ -44,7 +44,6 @@ from nio import (
     RoomMessageImage,
     RoomMessageText,
     RoomMessageVideo,
-    SyncResponse,
     ToDeviceEvent,
     ToDeviceError,
     UploadResponse,
@@ -55,7 +54,6 @@ from nio.responses import (
     JoinedMembersResponse,
     RoomGetStateEventResponse,
     RoomSendError,
-    SyncError,
     WhoamiResponse,
 )
 
@@ -106,6 +104,7 @@ from core.mentions import (  # noqa: E402
     was_mentioned,
 )
 from core.session import resolve_session_id, to_handle_from_target  # noqa: E402
+from core.sync import SyncEngine  # noqa: E402
 from core.transport import (  # noqa: E402
     MIN_SYNC_TIMEOUT_MS,
     TransportConfig,
@@ -340,6 +339,81 @@ def _attach_long_message_metadata(
         content[MATRIX_LONG_MESSAGE_METADATA_KEY] = dict(metadata)
 
 
+class _LegacySyncTokenStore:
+    """``SessionStore`` over the channel's legacy sync-token file (M4b).
+
+    The core ``SyncEngine`` takes its token persistence as a
+    ``SessionStore``.  The core's own ``FileSessionStore`` defaults to
+    ``<state_dir>/sync_token`` with a trailing newline, atomic replace
+    and ``ensure()`` side effects, which does not match this channel's
+    on-disk token — ``WORKING_DIR/matrix_sync_token``, plain text, no
+    trailing newline.  Changing the path or the format on upgrade would
+    lose the token and replay messages, so the channel keeps owning the
+    file through this adapter; the load/save logic (and the log lines)
+    are the channel's legacy methods moved verbatim.
+    """
+
+    def __init__(self, logger: logging.Logger) -> None:
+        self._logger = logger
+
+    @staticmethod
+    def _sync_token_path() -> Optional[Path]:
+        """Return the file path for persisting the Matrix sync token."""
+        return WORKING_DIR / "matrix_sync_token"
+
+    def load_sync_token(self) -> Optional[str]:
+        """Load persisted next_batch token from disk, or None.
+
+        The token file is pulled from MinIO by FileSync.pull_all() during
+        startup, so it's already on disk when this runs — even on a fresh
+        container after destroy/recreate.
+        """
+        path = self._sync_token_path()
+        if path and path.exists():
+            try:
+                token = path.read_text().strip()
+                if token:
+                    self._logger.info(
+                        "MatrixChannel: restored sync token from %s",
+                        path,
+                    )
+                    return token
+            except Exception as exc:
+                self._logger.warning(
+                    "MatrixChannel: failed to read sync token: %s",
+                    exc,
+                )
+        return None
+
+    def save_sync_token(self, token: str) -> None:
+        """Persist next_batch token to disk (push_loop uploads it to MinIO)."""
+        path = self._sync_token_path()
+        if path:
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(token)
+            except Exception as exc:
+                self._logger.warning(
+                    "MatrixChannel: failed to save sync token: %s",
+                    exc,
+                )
+
+    # The session-key pair is unused: the QwenPaw channel keys sessions
+    # on the room in-process, and the sync engine only touches the
+    # sync-token pair.
+    def load_session_key(self, room_id: str, sender: str) -> Optional[str]:
+        raise NotImplementedError(
+            "the QwenPaw channel does not persist per-(room, sender) "
+            "session keys"
+        )
+
+    def save_session_key(self, room_id: str, sender: str, key: str) -> None:
+        raise NotImplementedError(
+            "the QwenPaw channel does not persist per-(room, sender) "
+            "session keys"
+        )
+
+
 class AgentTeamsMatrixChannel(BaseChannel):
     """QwenPaw channel that connects to a Matrix homeserver via matrix-nio."""
 
@@ -420,6 +494,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         self._client: Optional[AsyncClient] = None
         self._user_id: Optional[str] = None
         self._sync_task: Optional[asyncio.Task] = None
+        self._sync_engine: Optional[SyncEngine] = None
         self._typing_tasks: Dict[str, asyncio.Task] = {}
         # Per-room history buffer, the send-gate (#1244) generation /
         # record counters and the retained per-room event log live in the
@@ -536,10 +611,10 @@ class AgentTeamsMatrixChannel(BaseChannel):
         )
 
     # ------------------------------------------------------------------
-    # Lifecycle — client, login, event callbacks, _sync_loop
+    # Lifecycle — client, login, event callbacks, sync engine
     # token + user_id/password login (§2); optional
     # E2EE client config + store; cleartext + encrypted event callbacks;
-    # starts _sync_loop (§3).
+    # starts the core SyncEngine (§3).
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -914,16 +989,21 @@ class AgentTeamsMatrixChannel(BaseChannel):
             timeout=60,
         )
 
-        self._sync_task = asyncio.create_task(self._sync_loop())
+        self._sync_engine = SyncEngine(
+            client=self._client,
+            store=_LegacySyncTokenStore(logger),
+            sync_timeout_ms=self.sync_timeout_ms,
+            logger=logger,
+            on_ready=self._mark_channel_ready,
+            on_maintenance=self._e2ee_maintenance,
+            on_token_invalid=self._clear_access_token,
+        )
+        self._sync_task = self._sync_engine.start()
         logger.info("MatrixChannel: sync loop started component=matrix")
 
     async def stop(self) -> None:
         if self._sync_task:
-            self._sync_task.cancel()
-            try:
-                await self._sync_task
-            except asyncio.CancelledError:
-                logger.debug("MatrixChannel: sync task cancelled during stop component=matrix")
+            await self._sync_engine.stop()
         if self._http_client:
             await self._http_client.aclose()
             self._http_client = None
@@ -931,17 +1011,23 @@ class AgentTeamsMatrixChannel(BaseChannel):
             await self._client.close()
         logger.info("MatrixChannel: stopped component=matrix")
 
-    # ------------------------------------------------------------------
-    # Sync loop — token persistence, catch-up, incremental sync, E2EE
-    # maintenance
-    # catch-up sync suppresses replay; incremental sync; E2EE maintenance
-    # between syncs when encryption on.
-    # ------------------------------------------------------------------
+    def _clear_access_token(self) -> None:
+        """Clear the channel's own token state.
 
-    @staticmethod
-    def _sync_token_path() -> Optional[Path]:
-        """Return the file path for persisting the Matrix sync token."""
-        return WORKING_DIR / "matrix_sync_token"
+        Invoked by the core ``SyncEngine`` when the homeserver rejects
+        the token (``M_UNKNOWN_TOKEN`` / ``M_MISSING_TOKEN``); the
+        engine clears the client's token, this clears the channel's
+        copy so later auth-header use (media downloads) sees the
+        invalidation.
+        """
+        self.access_token = ""
+
+    # ------------------------------------------------------------------
+    # State persistence + E2EE maintenance
+    # auth state and the ready marker on disk; E2EE key maintenance
+    # runs on every sync (invoked by the core SyncEngine) and before
+    # encrypted sends.
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _auth_state_path() -> Path:
@@ -1044,43 +1130,6 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 "MatrixChannel: failed to persist auth state: %s",
                 exc,
             )
-
-    def _load_sync_token(self) -> Optional[str]:
-        """Load persisted next_batch token from disk, or None.
-
-        The token file is pulled from MinIO by FileSync.pull_all() during
-        startup, so it's already on disk when this runs — even on a fresh
-        container after destroy/recreate.
-        """
-        path = self._sync_token_path()
-        if path and path.exists():
-            try:
-                token = path.read_text().strip()
-                if token:
-                    logger.info(
-                        "MatrixChannel: restored sync token from %s",
-                        path,
-                    )
-                    return token
-            except Exception as exc:
-                logger.warning(
-                    "MatrixChannel: failed to read sync token: %s",
-                    exc,
-                )
-        return None
-
-    def _save_sync_token(self, token: str) -> None:
-        """Persist next_batch token to disk (push_loop uploads it to MinIO)."""
-        path = self._sync_token_path()
-        if path:
-            try:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(token)
-            except Exception as exc:
-                logger.warning(
-                    "MatrixChannel: failed to save sync token: %s",
-                    exc,
-                )
 
     async def _e2ee_maintenance(self) -> None:
         """Perform E2EE key maintenance tasks after each sync.
@@ -1582,138 +1631,6 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 logger.debug("MatrixChannel: get_decimal failed: %s", exc)
 
         return "; ".join(parts) if parts else "unavailable"
-
-    # pylint: disable=too-many-branches,too-many-statements
-    async def _sync_loop(self) -> None:
-        next_batch: Optional[str] = self._load_sync_token()
-
-        # When no persisted token exists (old version upgrade or first
-        # deploy), do an initial sync with callbacks suppressed — only capture
-        # next_batch so subsequent syncs are incremental.  This prevents
-        # replaying old messages when the token file doesn't exist yet.
-        #
-        # Use timeout=0 so startup does not long-poll while callbacks are
-        # temporarily suppressed. A long-poll here can swallow fresh messages
-        # sent during worker boot.
-        #
-        # To truly suppress callbacks, temporarily remove event callbacks
-        # before the sync and restore them after, because nio's sync()
-        # internally calls receive_response() which fires callbacks.
-        if next_batch is None:
-            logger.info(
-                "MatrixChannel: no sync token found, "
-                "performing catch-up sync component=matrix messages_suppressed=True",
-            )
-            try:
-                saved_cbs = self._client.event_callbacks[:]
-                self._client.event_callbacks.clear()
-                try:
-                    resp = await self._client.sync(
-                        timeout=0,
-                        full_state=True,
-                    )
-                finally:
-                    self._client.event_callbacks.extend(saved_cbs)
-                if isinstance(resp, SyncResponse):
-                    next_batch = resp.next_batch
-                    if next_batch is not None:
-                        self._save_sync_token(next_batch)
-                    # Still auto-join invited rooms during catch-up
-                    for room_id in resp.rooms.invite:
-                        logger.info("MatrixChannel: auto-joining component=matrix room_id=%s", room_id)
-                        await self._client.join(room_id)
-                    await self._e2ee_maintenance()
-                    logger.info(
-                        "MatrixChannel: catch-up sync done, "
-                        "will process messages from next sync component=matrix",
-                    )
-                else:
-                    logger.warning(
-                        "MatrixChannel: catch-up sync error component=matrix response_type=%s",
-                        type(resp).__name__,
-                    )
-            except Exception as exc:
-                logger.exception(
-                    "MatrixChannel: catch-up sync exception component=matrix error_type=%s",
-                    type(exc).__name__,
-                )
-        else:
-            # Restored from token — do a full_state sync to populate room
-            # member display names (nio needs full state for user_name()).
-            # Event callbacks are already registered so any messages received
-            # during the offline window will be processed normally.
-            logger.info(
-                "MatrixChannel: restored token, "
-                "performing full-state sync component=matrix",
-            )
-            try:
-                resp = await self._client.sync(
-                    timeout=self.sync_timeout_ms,
-                    since=next_batch,
-                    full_state=True,
-                )
-                if isinstance(resp, SyncResponse):
-                    next_batch = resp.next_batch
-                    if next_batch is not None:
-                        self._save_sync_token(next_batch)
-                    for room_id in resp.rooms.invite:
-                        logger.info("MatrixChannel: auto-joining component=matrix room_id=%s", room_id)
-                        await self._client.join(room_id)
-                    await self._e2ee_maintenance()
-                else:
-                    logger.warning(
-                        "MatrixChannel: full-state sync error component=matrix response_type=%s",
-                        type(resp).__name__,
-                    )
-            except Exception as exc:
-                logger.exception(
-                    "MatrixChannel: full-state sync exception component=matrix error_type=%s",
-                    type(exc).__name__,
-                )
-
-        self._mark_channel_ready()
-
-        while True:
-            try:
-                resp = await self._client.sync(
-                    timeout=self.sync_timeout_ms,
-                    since=next_batch,
-                    full_state=False,
-                )
-                if isinstance(resp, SyncResponse):
-                    next_batch = resp.next_batch
-                    if next_batch is not None:
-                        self._save_sync_token(next_batch)
-                    # Auto-join invited rooms
-                    for room_id in resp.rooms.invite:
-                        logger.info("MatrixChannel: auto-joining component=matrix room_id=%s", room_id)
-                        await self._client.join(room_id)
-                    # E2EE: full key maintenance (upload, query, claim,
-                    # to-device)
-                    await self._e2ee_maintenance()
-                else:
-                    if isinstance(resp, SyncError) and getattr(
-                        resp,
-                        "status_code",
-                        None,
-                    ) in {"M_UNKNOWN_TOKEN", "M_MISSING_TOKEN"}:
-                        logger.error(
-                            "MatrixChannel: sync stopped due to "
-                            "invalid/missing access token; please re-login "
-                            "(password or fresh token) component=matrix",
-                        )
-                        if self._client:
-                            self._client.access_token = ""
-                        self.access_token = ""
-                        return
-                    logger.warning("MatrixChannel: sync error component=matrix response_type=%s", type(resp).__name__)
-                    await asyncio.sleep(5)
-            except asyncio.CancelledError:
-                logger.debug("MatrixChannel: sync loop cancelled component=matrix")
-                raise
-            except Exception as exc:
-                logger.exception("MatrixChannel: sync exception component=matrix error_type=%s", type(exc).__name__)
-                await asyncio.sleep(5)
 
     # ------------------------------------------------------------------
     # Channel-level mute, per-room requireMention, strip @mention prefix

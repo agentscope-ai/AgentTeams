@@ -1,0 +1,120 @@
+diff --git a/extensions/matrix/src/matrix/client.test.ts b/extensions/matrix/src/matrix/client.test.ts
+index a27362d..47e2ab5 100644
+--- a/extensions/matrix/src/matrix/client.test.ts
++++ b/extensions/matrix/src/matrix/client.test.ts
+@@ -663,14 +663,29 @@ describe("Matrix auth/config live surfaces", () => {
+   });
+ 
+   it("accepts internal http homeservers only when private-network access is enabled", () => {
+-    expect(() => validateMatrixHomeserverUrl("http://matrix-synapse:8008")).toThrow(
++    expect(() => validateMatrixHomeserverUrl("http://matrix-synapse.example.org:8008")).toThrow(
+       "Matrix homeserver must use https:// unless it targets a private or loopback host",
+     );
+     expect(
+-      validateMatrixHomeserverUrl("http://matrix-synapse:8008", {
++      validateMatrixHomeserverUrl("http://matrix-synapse.example.org:8008", {
+         allowPrivateNetwork: true,
+       }),
+-    ).toBe("http://matrix-synapse:8008");
++    ).toBe("http://matrix-synapse.example.org:8008");
++  });
++
++  it("accepts single-label and .local/.internal http homeservers without an explicit opt-in", () => {
++    expect(validateMatrixHomeserverUrl("http://matrix-synapse:8008")).toBe(
++      "http://matrix-synapse:8008",
++    );
++    expect(validateMatrixHomeserverUrl("http://agentteams-controller:6167")).toBe(
++      "http://agentteams-controller:6167",
++    );
++    expect(validateMatrixHomeserverUrl("http://matrix.local:8008")).toBe(
++      "http://matrix.local:8008",
++    );
++    expect(validateMatrixHomeserverUrl("http://matrix.internal:8008")).toBe(
++      "http://matrix.internal:8008",
++    );
+   });
+ 
+   it("resolves an explicit proxy dispatcher from top-level Matrix config", () => {
+@@ -737,6 +752,28 @@ describe("Matrix auth/config live surfaces", () => {
+       }),
+     ).resolves.toBe("http://localhost.localdomain:8008");
+   });
++
++  it("accepts single-label and .local/.internal http homeservers without explicit opt-in", async () => {
++    // Container/Kubernetes service names resolve to private addresses via the
++    // pod DNS, but they aren't literal RFC1918 strings. The synchronous
++    // validator already trusts them, so the async DNS-resolved guard must be
++    // consistent and not require dangerouslyAllowPrivateNetwork separately.
++    await expect(
++      resolveValidatedMatrixHomeserverUrl("http://agentteams-controller:6167", {
++        lookupFn: createLookupFn([{ address: "10.244.0.5", family: 4 }]),
++      }),
++    ).resolves.toBe("http://agentteams-controller:6167");
++    await expect(
++      resolveValidatedMatrixHomeserverUrl("http://matrix.local:8008", {
++        lookupFn: createLookupFn([{ address: "192.168.1.10", family: 4 }]),
++      }),
++    ).resolves.toBe("http://matrix.local:8008");
++    await expect(
++      resolveValidatedMatrixHomeserverUrl("http://matrix.internal:8008", {
++        lookupFn: createLookupFn([{ address: "172.16.0.5", family: 4 }]),
++      }),
++    ).resolves.toBe("http://matrix.internal:8008");
++  });
+ });
+ 
+ describe("resolveMatrixAuth", () => {
+@@ -996,6 +1033,53 @@ describe("resolveMatrixAuth", () => {
+     });
+   });
+ 
++  it("auto-enables the private-network opt-in when the homeserver hostname is private/loopback", () => {
++    // Container/Kubernetes service names like http://agentteams-controller:6167 are
++    // already accepted by the synchronous URL validator (single-label hostname is
++    // treated as private/loopback). The runtime SSRF policy must follow suit so
++    // matrix-js-sdk fetches don't get rejected and the sync session can reach
++    // PREPARED. Operators must not have to set channels.matrix.network as well.
++    for (const homeserver of [
++      "http://agentteams-controller:6167",
++      "http://matrix.local:8008",
++      "http://matrix.internal:8008",
++      "http://10.244.0.5:8008",
++    ]) {
++      const cfg = {
++        channels: {
++          matrix: {
++            homeserver,
++            userId: "@manager:agentteams.local",
++            accessToken: "tok-svc",
++            deviceId: "DEVICESVC",
++          },
++        },
++      } as CoreConfig;
++      const resolved = resolveMatrixConfigForAccount(cfg, "default", {} as NodeJS.ProcessEnv);
++      expect(resolved).toMatchObject({
++        homeserver,
++        allowPrivateNetwork: true,
++        ssrfPolicy: { allowPrivateNetwork: true },
++      });
++    }
++  });
++
++  it("does not auto-enable the private-network opt-in for public https homeservers", () => {
++    const cfg = {
++      channels: {
++        matrix: {
++          homeserver: "https://matrix.example.org",
++          userId: "@bot:example.org",
++          accessToken: "tok-pub",
++        },
++      },
++    } as CoreConfig;
++
++    const resolved = resolveMatrixConfigForAccount(cfg, "default", {} as NodeJS.ProcessEnv);
++    expect(resolved.allowPrivateNetwork).toBeUndefined();
++    expect(resolved.ssrfPolicy).toBeUndefined();
++  });
++
+   it("resolves token-only non-default account userId from whoami instead of inheriting the base user", async () => {
+     matrixDoRequestMock.mockResolvedValue({
+       user_id: "@ops:example.org",

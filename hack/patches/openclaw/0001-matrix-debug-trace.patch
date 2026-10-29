@@ -1,0 +1,88 @@
+diff --git a/extensions/matrix/src/matrix/debug-trace.ts b/extensions/matrix/src/matrix/debug-trace.ts
+new file mode 100644
+index 00000000..1b0ba5f4bfcf357c42aa1c9bc138351f88ac387e
+--- /dev/null
++++ b/extensions/matrix/src/matrix/debug-trace.ts
+@@ -0,0 +1,82 @@
++// Debug trace helper for the Matrix plugin runtime.
++//
++// Production logs only carry warnings/errors; when something goes wrong inside
++// the Matrix plugin the operator usually has zero visibility into the lifecycle
++// (was the client started? did sync ever reach PREPARED? did the message reach
++// the handler? did a filter drop it?). This module exposes a single
++// `matrixTraceEvent` helper that, when `OPENCLAW_MATRIX_DEBUG=1` (or
++// `MATRIX_DEBUG=1` for short), emits a structured one-line JSON record at INFO
++// level via the runtime logger so it shows up in the rotating openclaw log file
++// without requiring a global `--verbose` flag or `logging.level=debug`.
++//
++// The helper is intentionally cheap when disabled (a single env-var lookup
++// cached per process) so we can sprinkle it liberally across hot paths without
++// regressing throughput.
++
++import { LogService } from "./sdk/logger.js";
++
++let cachedEnabled: boolean | null = null;
++
++function isEnvFlagTruthy(value: string | undefined | null): boolean {
++  if (!value) {
++    return false;
++  }
++  const trimmed = value.trim().toLowerCase();
++  return (
++    trimmed === "1" ||
++    trimmed === "true" ||
++    trimmed === "yes" ||
++    trimmed === "on" ||
++    trimmed === "debug"
++  );
++}
++
++export function isMatrixTraceEnabled(): boolean {
++  if (cachedEnabled !== null) {
++    return cachedEnabled;
++  }
++  const env = typeof process !== "undefined" ? process.env : undefined;
++  cachedEnabled =
++    isEnvFlagTruthy(env?.OPENCLAW_MATRIX_DEBUG) ||
++    isEnvFlagTruthy(env?.MATRIX_DEBUG) ||
++    isEnvFlagTruthy(env?.OPENCLAW_MATRIX_TRACE);
++  return cachedEnabled;
++}
++
++// Test/runtime override — primarily for unit tests but also useful when a
++// long-running process wants to flip tracing without restarting.
++export function setMatrixTraceEnabledForTests(enabled: boolean | null): void {
++  cachedEnabled = enabled;
++}
++
++type TraceFields = Record<string, unknown>;
++
++function safeStringify(fields: TraceFields): string {
++  try {
++    return JSON.stringify(fields, (_key, value) => {
++      if (value instanceof Error) {
++        return { name: value.name, message: value.message };
++      }
++      if (typeof value === "bigint") {
++        return value.toString();
++      }
++      return value;
++    });
++  } catch {
++    return "{}";
++  }
++}
++
++// `scope` is a short namespace (e.g. "sdk.sync", "shared-client", "monitor.handler"),
++// `event` is the action ("transition", "started", "drop"), and `fields` is the
++// structured payload. Output shape:
++//   [matrix-trace scope=sdk.sync event=transition] {"state":"PREPARED",...}
++export function matrixTraceEvent(scope: string, event: string, fields: TraceFields = {}): void {
++  if (!isMatrixTraceEnabled()) {
++    return;
++  }
++  LogService.info(
++    `matrix-trace:${scope}`,
++    `event=${event} ${safeStringify({ scope, event, ...fields })}`,
++  );
++}

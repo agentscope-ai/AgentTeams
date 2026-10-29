@@ -1,0 +1,144 @@
+diff --git a/extensions/matrix/src/matrix/client/shared.ts b/extensions/matrix/src/matrix/client/shared.ts
+index ff13bb0..7e9ed9b 100644
+--- a/extensions/matrix/src/matrix/client/shared.ts
++++ b/extensions/matrix/src/matrix/client/shared.ts
+@@ -1,5 +1,6 @@
+ import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
+ import type { CoreConfig } from "../../types.js";
++import { matrixTraceEvent } from "../debug-trace.js";
+ import type { MatrixClient } from "../sdk.js";
+ import { LogService } from "../sdk/logger.js";
+ import { awaitMatrixStartupWithAbort } from "../startup-abort.js";
+@@ -51,29 +52,56 @@ async function createSharedMatrixClient(params: {
+   auth: MatrixAuth;
+   timeoutMs?: number;
+ }): Promise<SharedMatrixClientState> {
+-  const { createMatrixClient } = await loadMatrixCreateClientDeps();
+-  const client = await createMatrixClient({
++  matrixTraceEvent("shared-client", "create_begin", {
+     homeserver: params.auth.homeserver,
+-    userId: params.auth.userId,
+-    accessToken: params.auth.accessToken,
+-    password: params.auth.password,
+-    deviceId: params.auth.deviceId,
+-    encryption: params.auth.encryption,
+-    localTimeoutMs: params.timeoutMs,
+-    initialSyncLimit: params.auth.initialSyncLimit,
+-    accountId: params.auth.accountId,
+-    allowPrivateNetwork: params.auth.allowPrivateNetwork,
+-    ssrfPolicy: params.auth.ssrfPolicy,
+-    dispatcherPolicy: params.auth.dispatcherPolicy,
++    userId: params.auth.userId ?? null,
++    accountId: params.auth.accountId ?? null,
++    encryption: params.auth.encryption === true,
++    allowPrivateNetwork: params.auth.allowPrivateNetwork === true,
++    timeoutMs: params.timeoutMs ?? null,
+   });
+-  return {
+-    client,
+-    key: buildSharedClientKey(params.auth),
+-    started: false,
+-    cryptoReady: false,
+-    startPromise: null,
+-    leases: 0,
+-  };
++  const startedAt = Date.now();
++  try {
++    const { createMatrixClient } = await loadMatrixCreateClientDeps();
++    const client = await createMatrixClient({
++      homeserver: params.auth.homeserver,
++      userId: params.auth.userId,
++      accessToken: params.auth.accessToken,
++      password: params.auth.password,
++      deviceId: params.auth.deviceId,
++      encryption: params.auth.encryption,
++      localTimeoutMs: params.timeoutMs,
++      initialSyncLimit: params.auth.initialSyncLimit,
++      accountId: params.auth.accountId,
++      allowPrivateNetwork: params.auth.allowPrivateNetwork,
++      ssrfPolicy: params.auth.ssrfPolicy,
++      dispatcherPolicy: params.auth.dispatcherPolicy,
++    });
++    matrixTraceEvent("shared-client", "create_complete", {
++      homeserver: params.auth.homeserver,
++      userId: params.auth.userId ?? null,
++      accountId: params.auth.accountId ?? null,
++      elapsedMs: Date.now() - startedAt,
++    });
++    return {
++      client,
++      key: buildSharedClientKey(params.auth),
++      started: false,
++      cryptoReady: false,
++      startPromise: null,
++      leases: 0,
++    };
++  } catch (err) {
++    matrixTraceEvent("shared-client", "create_failed", {
++      homeserver: params.auth.homeserver,
++      userId: params.auth.userId ?? null,
++      accountId: params.auth.accountId ?? null,
++      elapsedMs: Date.now() - startedAt,
++      error: err instanceof Error ? err.message : String(err),
++      errorName: err instanceof Error ? err.name : null,
++    });
++    throw err;
++  }
+ }
+ 
+ function findSharedClientStateByInstance(client: MatrixClient): SharedMatrixClientState | null {
+@@ -109,6 +137,13 @@ async function ensureSharedClientStarted(params: {
+ 
+   const startPromise = (async () => {
+     const client = params.state.client;
++    matrixTraceEvent("shared-client", "start_begin", {
++      key: params.state.key,
++      encryption: params.encryption === true,
++      cryptoReady: params.state.cryptoReady,
++      leases: params.state.leases,
++    });
++    const startedAt = Date.now();
+ 
+     // Initialize crypto if enabled
+     if (params.encryption && !params.state.cryptoReady) {
+@@ -117,14 +152,38 @@ async function ensureSharedClientStarted(params: {
+         if (client.crypto) {
+           await client.crypto.prepare(joinedRooms);
+           params.state.cryptoReady = true;
++          matrixTraceEvent("shared-client", "crypto_prepared", {
++            key: params.state.key,
++            joinedRoomCount: joinedRooms.length,
++            elapsedMs: Date.now() - startedAt,
++          });
+         }
+       } catch (err) {
++        matrixTraceEvent("shared-client", "crypto_prepare_failed", {
++          key: params.state.key,
++          elapsedMs: Date.now() - startedAt,
++          error: err instanceof Error ? err.message : String(err),
++        });
+         LogService.warn("MatrixClientLite", "Failed to prepare crypto:", err);
+       }
+     }
+ 
+-    await client.start({ abortSignal: params.abortSignal });
+-    params.state.started = true;
++    try {
++      await client.start({ abortSignal: params.abortSignal });
++      params.state.started = true;
++      matrixTraceEvent("shared-client", "start_complete", {
++        key: params.state.key,
++        elapsedMs: Date.now() - startedAt,
++      });
++    } catch (err) {
++      matrixTraceEvent("shared-client", "start_failed", {
++        key: params.state.key,
++        elapsedMs: Date.now() - startedAt,
++        error: err instanceof Error ? err.message : String(err),
++        errorName: err instanceof Error ? err.name : null,
++      });
++      throw err;
++    }
+   })();
+   // Keep the shared startup lock until the underlying start fully settles, even
+   // if one waiter aborts early while another caller still owns the startup.

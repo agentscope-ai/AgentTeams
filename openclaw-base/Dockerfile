@@ -14,6 +14,8 @@
 #   HIGRESS_REGISTRY  - base image registry (default: cn-hangzhou)
 #   APT_MIRROR        - APT mirror host (default: empty; set to mirrors.aliyun.com for China)
 #   OPENCLAW_REPO_URL - OpenClaw git repository URL (default: https://github.com/higress-group/openclaw.git)
+#   OPENCLAW_TAG      - OpenClaw git tag to check out (default: v2026.10.6;
+#                       keep in sync with OPENCLAW_TAG in hack/versions.env)
 # ============================================================
 
 ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
@@ -29,6 +31,9 @@ ARG http_proxy
 ARG https_proxy
 ARG NPM_REGISTRY=https://registry.npmjs.org/
 ARG OPENCLAW_REPO_URL=https://github.com/higress-group/openclaw.git
+# Pinned checkout tag. Docker cannot source env files, so this default must
+# stay in sync with OPENCLAW_TAG in hack/versions.env.
+ARG OPENCLAW_TAG=v2026.10.6
 
 # Set proxy as environment variables to ensure all tools can use them
 ENV HTTP_PROXY=${HTTP_PROXY} \
@@ -118,15 +123,33 @@ RUN set -eux; \
 # binary, which its build scripts incorrectly invoke through Node.js.
 RUN npm install -g pnpm@10.32.1
 
-# Clone, build, and optimize OpenClaw
-# 1. Fetch only the pinned commit to minimize .git size
-# 2. Install dependencies and build
-# 3. Remove unnecessary files (tests, .git, etc.) - keep all node_modules for extensions
+# Clone, patch, build, and optimize OpenClaw
+# 1. Fetch only the pinned tag to minimize .git size
+# 2. Apply the AgentTeams patch series (any conflict fails the build) and
+#    commit it — .git is kept so downstream image builds can rebase against
+#    the patched tree (see hack/patches/openclaw/README.md)
+# 3. Install dependencies and build
+# 4. Remove unnecessary files (tests, docs, etc.) - keep all node_modules
+#    for extensions; .git is intentionally kept (see step 2)
 RUN git init /opt/openclaw && \
     cd /opt/openclaw && \
     git remote add origin ${OPENCLAW_REPO_URL} && \
-    git fetch --depth 1 origin 2f35b6fa6b65d012e3b0c9f24af3f8a4b617a6e0 && \
-    git checkout --detach FETCH_HEAD && \
+    git fetch --depth 1 origin "${OPENCLAW_TAG}" && \
+    git checkout --detach FETCH_HEAD
+
+COPY --from=openclaw-patches . /tmp/agentteams-patches/
+RUN cd /opt/openclaw && \
+    for p in /tmp/agentteams-patches/0*.patch; do \
+        echo "==> Applying $(basename "$p")" && \
+        git apply --check "$p" && \
+        git apply "$p" || exit 1; \
+    done && \
+    git add -A && \
+    git -c user.email=build@local -c user.name=build \
+        commit -m "agentteams patch series" && \
+    rm -rf /tmp/agentteams-patches
+
+RUN cd /opt/openclaw && \
     pnpm config set registry ${NPM_REGISTRY} && \
     pnpm install && \
     pnpm build && \
@@ -161,7 +184,7 @@ RUN git init /opt/openclaw && \
     ln -sf /opt/openclaw/openclaw.mjs /usr/local/bin/openclaw && \
     echo "==> Linked openclaw CLI to /usr/local/bin/openclaw" && \
     rm -rf \
-        .git .github \
+        .github \
         test \
         docker-compose.yml Dockerfile* \
         scripts/git-hooks \

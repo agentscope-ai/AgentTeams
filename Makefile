@@ -83,6 +83,8 @@ BUILTIN_VERSION_ARG = --build-arg BUILTIN_VERSION=$(VERSION)
 
 # Named build context for shared libraries (requires BuildKit / Docker 23+)
 SHARED_LIB_CTX = --build-context shared=./shared/lib
+# Named build context for the OpenClaw patch series (requires BuildKit / Docker 23+)
+OPENCLAW_PATCHES_CTX = --build-context openclaw-patches=./hack/patches/openclaw
 
 # Multi-arch build configuration
 # Platforms for multi-arch builds (comma-separated, no spaces)
@@ -130,7 +132,7 @@ build: build-manager build-manager-qwenpaw build-worker build-hermes-worker buil
 
 build-openclaw-base: ## Build OpenClaw base image
 	@echo "==> Building OpenClaw base image: $(LOCAL_OPENCLAW_BASE) (registry: $(HIGRESS_REGISTRY))"
-	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(OPENCLAW_PATCHES_CTX) $(DOCKER_BUILD_ARGS) \
 		-t $(LOCAL_OPENCLAW_BASE) \
 		./openclaw-base/
 
@@ -261,7 +263,7 @@ ifeq ($(IS_PODMAN),1)
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
 		echo "  -> Building OpenClaw base for $(plat)..." && \
 		podman build --platform $(plat) \
-			$(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
+			$(REGISTRY_ARG) $(OPENCLAW_PATCHES_CTX) $(DOCKER_BUILD_ARGS) \
 			--manifest $(OPENCLAW_BASE_TAG) \
 			./openclaw-base/ && ) true
 	podman manifest push --all $(OPENCLAW_BASE_TAG) docker://$(OPENCLAW_BASE_TAG)
@@ -272,7 +274,7 @@ else
 	docker buildx build \
 		--builder $(BUILDX_BUILDER) \
 		--platform $(MULTIARCH_PLATFORMS) \
-		$(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
+		$(REGISTRY_ARG) $(OPENCLAW_PATCHES_CTX) $(DOCKER_BUILD_ARGS) \
 		-t $(OPENCLAW_BASE_TAG) \
 		$(if $(PUSH_LATEST),-t $(OPENCLAW_BASE_IMAGE):latest) \
 		--push \

@@ -433,10 +433,8 @@ func TestHumanFiles_TrashLifecycle(t *testing.T) {
 	if !trashIDRegex.MatchString(id1) {
 		t.Fatalf("trash id %q does not match the id format", id1)
 	}
-	// Original is gone; trash content + metadata are present.
-	if _, err := store.GetObject(ctx, "humans/alice/files/a.txt"); err == nil {
-		t.Fatal("original still present after soft delete")
-	}
+	// Original is gone (tombstoned); trash content + metadata are present.
+	assertSoftDeleted(t, hfh, store, "alice", "a.txt")
 	content, err := store.GetObject(ctx, "humans/alice/.trash/"+id1+"/content")
 	if err != nil || string(content) != "hello" {
 		t.Fatalf("trash content missing or wrong: %v %q", err, content)
@@ -2075,6 +2073,20 @@ func hfTrashIDs(t *testing.T, store *ossfake.Memory, username string) map[string
 	return ids
 }
 
+// assertSoftDeleted checks the API contract for a deleted path: GET 404, and
+// the live object (if any) is a deletion tombstone rather than file content.
+func assertSoftDeleted(t *testing.T, h *humanFilesHandler, store oss.StorageClient, username, rel string) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.getFile(rec, hfReq(t, http.MethodGet, username, rel, hfSelf(), nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("GET %s after delete: got %d, want 404", rel, rec.Code)
+	}
+	if meta, err := store.StatMeta(context.Background(), humanFilesPrefix(username)+rel); err == nil && !isHumanFileTombstone(meta) {
+		t.Fatalf("%s: live object exists and is not a tombstone: %+v", rel, meta)
+	}
+}
+
 // TestReviewerFileGETETagMustDescribeReturnedBytes is the maintainer's
 // round-5 P1-1 repro: a GET that straddled a concurrent PUT used to serve
 // "A's bytes + B's ETag", whose If-Match write then silently clobbered the
@@ -2181,9 +2193,7 @@ func TestReviewerSoftDeleteMustPreserveConcurrentNewVersion(t *testing.T) {
 		if _, err := base.GetObject(ctx, humanTrashPrefix("alice")+trashID+"/meta.json"); err != nil {
 			t.Fatalf("trash entry %s has no meta.json", trashID)
 		}
-		if _, err := base.GetObject(ctx, key); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("delete reported success but the live file is still readable (err=%v)", err)
-		}
+		assertSoftDeleted(t, hfh, base, "alice", "f.txt")
 	default:
 		t.Fatalf("delete: got %d, want 409 (version_conflict) or 200: %s", rec.Code, rec.Body.String())
 	}
@@ -2526,5 +2536,148 @@ func TestReviewerExpiredHolderMustNotMutateFile(t *testing.T) {
 	}
 	if data, err := base.GetObject(ctx, fileKey); err != nil || string(data) != "AAAAA" {
 		t.Fatalf("file after lost-lease write = %q err=%v, want the original AAAAA", data, err)
+	}
+}
+
+// stallOnTombstoneOSS blocks the first typed conditional write on one key
+// until the test releases it — a deterministic "Verify passed, then the
+// handler stalled" point.
+type stallOnTombstoneOSS struct {
+	*ossfake.Memory
+	key     string
+	entered chan struct{}
+	release chan struct{}
+	armed   bool
+}
+
+func (s *stallOnTombstoneOSS) PutObjectIfMatchWithType(ctx context.Context, key string, data []byte, contentType, matchETag string) error {
+	if s.armed && key == s.key {
+		s.armed = false
+		close(s.entered)
+		<-s.release
+	}
+	return s.Memory.PutObjectIfMatchWithType(ctx, key, data, contentType, matchETag)
+}
+
+// TestReviewerPostVerifyTakeoverMustNotDeleteSuccessor is round 7: DELETE A
+// passes Verify, stalls long enough for its lease to expire, a real API PUT B
+// acquires the lease and returns 200, then A resumes. The removal must not
+// take B with it: A's conditional write targets the version it archived, so it
+// fails and B stays live while the trash holds A.
+func TestReviewerPostVerifyTakeoverMustNotDeleteSuccessor(t *testing.T) {
+	base := ossfake.NewMemory()
+	ctx := context.Background()
+	key := humanFilesPrefix("alice") + "f.txt"
+	if err := base.PutObject(ctx, key, []byte("AAAAA")); err != nil {
+		t.Fatal(err)
+	}
+
+	stalled := &stallOnTombstoneOSS{
+		Memory:  base,
+		key:     key,
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+		armed:   true,
+	}
+	_, _, k8s := newHumanFilesRig(t)
+	h1 := NewHumanFilesHandler(k8s, "default", stalled, audit.NewClient(base))
+	h1.pathLockTTL = 2 * time.Second // real, short TTL for the test
+	h2 := NewHumanFilesHandler(k8s, "default", base, audit.NewClient(base))
+
+	type result struct {
+		code int
+		body string
+	}
+	done := make(chan result, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		h1.deleteFile(rec, hfReq(t, http.MethodDelete, "alice", "f.txt", hfSelf(), nil))
+		done <- result{rec.Code, rec.Body.String()}
+	}()
+
+	select {
+	case <-stalled.entered: // A passed Verify and is about to write the tombstone
+	case <-time.After(5 * time.Second):
+		t.Fatal("delete never reached the tombstone write")
+	}
+	time.Sleep(2200 * time.Millisecond) // its lease expires for real
+	if rec := hfPutFile(t, h2, "alice", "f.txt", hfSelf(), "BBBBB"); rec.Code != http.StatusOK {
+		t.Fatalf("successor write under the expired lease: got %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	close(stalled.release)
+
+	got := <-done
+	if got.code != http.StatusConflict {
+		t.Fatalf("stalled delete: got %d, want 409 version_conflict: %s", got.code, got.body)
+	}
+	var coded humanFileCodedError
+	if err := json.Unmarshal([]byte(got.body), &coded); err != nil {
+		t.Fatal(err)
+	}
+	if coded.Code != "version_conflict" {
+		t.Fatalf("code = %q, want version_conflict", coded.Code)
+	}
+	if data, err := base.GetObject(ctx, key); err != nil || string(data) != "BBBBB" {
+		t.Fatalf("successor's version after the stalled delete = %q err=%v, want BBBBB", data, err)
+	}
+	// The trash entry A wrote must not survive a failed delete.
+	if ids := hfTrashIDs(t, base, "alice"); len(ids) != 0 {
+		t.Fatalf("failed delete left trash entries: %v", ids)
+	}
+}
+
+// TestHumanFiles_TombstoneIsInvisible pins the tombstone contract: a deleted
+// path is not readable and not listed, and a later write resurrects it.
+func TestHumanFiles_TombstoneIsInvisible(t *testing.T) {
+	h, store, _ := newHumanFilesRig(t)
+	if rec := hfPutFile(t, h, "alice", "gone.txt", hfSelf(), "hello"); rec.Code != http.StatusOK {
+		t.Fatalf("put: %d", rec.Code)
+	}
+	rec := httptest.NewRecorder()
+	h.deleteFile(rec, hfReq(t, http.MethodDelete, "alice", "gone.txt", hfSelf(), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body.String())
+	}
+	assertSoftDeleted(t, h, store, "alice", "gone.txt")
+
+	listReq := hfReq(t, http.MethodGet, "alice", "", hfSelf(), nil)
+	access, status, msg := h.authorizeHumanFile(listReq.Context(), "alice", false)
+	if access == nil {
+		t.Fatalf("authorize list: %d %s", status, msg)
+	}
+	list := httptest.NewRecorder()
+	h.listDirectory(list, listReq, access, "alice", "")
+	if strings.Contains(list.Body.String(), "gone.txt") {
+		t.Fatalf("listing still contains the deleted path: %s", list.Body.String())
+	}
+
+	if rec := hfPutFile(t, h, "alice", "gone.txt", hfSelf(), "back"); rec.Code != http.StatusOK {
+		t.Fatalf("re-put over tombstone: %d %s", rec.Code, rec.Body.String())
+	}
+	get := httptest.NewRecorder()
+	h.getFile(get, hfReq(t, http.MethodGet, "alice", "gone.txt", hfSelf(), nil))
+	if get.Code != http.StatusOK || get.Body.String() != "back" {
+		t.Fatalf("GET after resurrect = %d %q", get.Code, get.Body.String())
+	}
+}
+
+// TestHumanFiles_EmptyFileIsNotATombstone guards the marker's specificity: a
+// legitimate zero-byte upload is served, not treated as deleted.
+func TestHumanFiles_EmptyFileIsNotATombstone(t *testing.T) {
+	h, store, _ := newHumanFilesRig(t)
+	if rec := hfPutFile(t, h, "alice", "empty.txt", hfSelf(), ""); rec.Code != http.StatusOK {
+		t.Fatalf("put empty: %d %s", rec.Code, rec.Body.String())
+	}
+	meta, err := store.StatMeta(context.Background(), humanFilesPrefix("alice")+"empty.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if isHumanFileTombstone(meta) {
+		t.Fatalf("an empty upload was marked as a tombstone: %+v", meta)
+	}
+	rec := httptest.NewRecorder()
+	h.getFile(rec, hfReq(t, http.MethodGet, "alice", "empty.txt", hfSelf(), nil))
+	if rec.Code != http.StatusOK || rec.Body.Len() != 0 {
+		t.Fatalf("GET empty file = %d %q, want 200 with an empty body", rec.Code, rec.Body.String())
 	}
 }

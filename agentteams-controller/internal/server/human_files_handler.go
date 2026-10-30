@@ -50,6 +50,9 @@ type humanFilesHandler struct {
 	oss          oss.StorageClient
 	auditClient  *audit.Client
 	maxFileBytes int64
+	// pathLockTTL is the per-path lease lifetime; tests shorten it to exercise
+	// expiry deterministically.
+	pathLockTTL time.Duration
 }
 
 // NewHumanFilesHandler constructs the handler. The per-file size limit is
@@ -62,6 +65,7 @@ func NewHumanFilesHandler(k8sClient client.Client, namespace string, sc oss.Stor
 		oss:          sc,
 		auditClient:  ac,
 		maxFileBytes: defaultHumanFileMaxBytes,
+		pathLockTTL:  humanPathLockTTL,
 	}
 	if v := os.Getenv("HUMAN_FILE_MAX_BYTES"); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
@@ -324,6 +328,16 @@ func writeHumanFileSnapshotError(w http.ResponseWriter, err error) {
 	httputil.WriteError(w, http.StatusInternalServerError, "read file failed")
 }
 
+// humanFileTombstoneType marks a soft-deleted path. The object carries no
+// bytes, so the quota is unaffected, and the marker lets reads and listings
+// treat the path as absent without an unconditional delete.
+const humanFileTombstoneType = "application/vnd.agentteams.tombstone"
+
+// isHumanFileTombstone reports whether meta describes a deletion tombstone.
+func isHumanFileTombstone(meta oss.ObjectMeta) bool {
+	return strings.EqualFold(strings.TrimSpace(meta.ContentType), humanFileTombstoneType)
+}
+
 // --- GET files (read one file or list a directory) --------------------------
 
 // getFile handles GET /api/v1/humans/{name}/files/{path...}. When the path
@@ -367,6 +381,10 @@ func (h *humanFilesHandler) readSingleFile(w http.ResponseWriter, r *http.Reques
 	data, meta, err := h.readFileSnapshot(ctx, key)
 	if err != nil {
 		writeHumanFileSnapshotError(w, err)
+		return
+	}
+	if isHumanFileTombstone(meta) {
+		httputil.WriteError(w, http.StatusNotFound, "file not found")
 		return
 	}
 	if meta.ETag != "" {
@@ -428,6 +446,10 @@ func (h *humanFilesHandler) listDirectory(w http.ResponseWriter, r *http.Request
 		// ListObjectsDetailed does not carry sizes; resolve each file's
 		// exact byte count (the same source the quota accounting uses).
 		if meta, merr := h.oss.StatMeta(ctx, prefix+rel); merr == nil {
+			if isHumanFileTombstone(meta) {
+				delete(entries, base) // soft-deleted: not part of the listing
+				continue
+			}
 			e.Size = meta.Size
 		}
 	}
@@ -477,7 +499,7 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 	// The per-path lease serializes this write against concurrent
 	// deletes/restores on the same rel, so the oldSize stat, the quota
 	// reservation, and the post-write snapshot see no in-API interleave.
-	lock, err := h.acquireHumanPathLock(ctx, username, rel, humanPathLockTTL)
+	lock, err := h.acquireHumanPathLock(ctx, username, rel, h.pathLockTTL)
 	if err != nil {
 		if errors.Is(err, errHumanPathBusy) {
 			writeHumanFileCodedError(w, http.StatusConflict, "file_busy",
@@ -507,7 +529,9 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 	// oldSize is 0 when the target does not exist yet.
 	var oldSize int64
 	if meta, merr := h.oss.StatMeta(ctx, key); merr == nil {
-		oldSize = meta.Size
+		if !isHumanFileTombstone(meta) {
+			oldSize = meta.Size
+		}
 	} else if !errors.Is(merr, os.ErrNotExist) {
 		httputil.WriteError(w, http.StatusInternalServerError, "stat file failed")
 		return
@@ -637,7 +661,7 @@ func (h *humanFilesHandler) deleteFile(w http.ResponseWriter, r *http.Request) {
 	// Same per-path lease as putFile/restoreTrash: a concurrent in-API
 	// writer on this rel is rejected with file_busy instead of racing the
 	// archive step below.
-	lock, err := h.acquireHumanPathLock(ctx, username, rel, humanPathLockTTL)
+	lock, err := h.acquireHumanPathLock(ctx, username, rel, h.pathLockTTL)
 	if err != nil {
 		if errors.Is(err, errHumanPathBusy) {
 			writeHumanFileCodedError(w, http.StatusConflict, "file_busy",
@@ -656,6 +680,10 @@ func (h *humanFilesHandler) deleteFile(w http.ResponseWriter, r *http.Request) {
 	data, snapMeta, err := h.readFileSnapshot(ctx, key)
 	if err != nil {
 		writeHumanFileSnapshotError(w, err)
+		return
+	}
+	if isHumanFileTombstone(snapMeta) {
+		httputil.WriteError(w, http.StatusNotFound, "file not found")
 		return
 	}
 	trashID, err := newTrashID()
@@ -724,7 +752,19 @@ func (h *humanFilesHandler) deleteFile(w http.ResponseWriter, r *http.Request) {
 				"the path lease was taken over by another operation; nothing was deleted")
 			return
 		}
-		if err := h.oss.DeleteObject(ctx, key); err != nil {
+		// The removal is itself conditional: replacing the archived version
+		// with a tombstone only succeeds while the live object is still that
+		// exact version. An unconditional DeleteObject would remove whatever
+		// landed after this handler read the file (for example a successor's
+		// write once the lease expired); a failed CAS keeps that version.
+		if err := h.oss.PutObjectIfMatchWithType(ctx, key, nil, humanFileTombstoneType, snapMeta.ETag); err != nil {
+			_ = h.oss.DeleteObject(ctx, trashPrefix+"content")
+			_ = h.oss.DeleteObject(ctx, trashPrefix+"meta.json")
+			if errors.Is(err, oss.ErrPreconditionFailed) {
+				writeHumanFileCodedError(w, http.StatusConflict, "version_conflict",
+					"the file changed since it was read; nothing was deleted")
+				return
+			}
 			httputil.WriteError(w, http.StatusInternalServerError,
 				"remove original failed; the file is preserved in the trash and may still be readable")
 			return
@@ -847,7 +887,7 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 	target := humanFilesPrefix(username) + rel
 	// The same per-path lease as putFile/deleteFile: a restore mutates
 	// this rel, so it must serialize against in-flight writes and deletes.
-	lock, err := h.acquireHumanPathLock(ctx, username, rel, humanPathLockTTL)
+	lock, err := h.acquireHumanPathLock(ctx, username, rel, h.pathLockTTL)
 	if err != nil {
 		if errors.Is(err, errHumanPathBusy) {
 			writeHumanFileCodedError(w, http.StatusConflict, "file_busy",
@@ -861,12 +901,20 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 
 	var existingSize int64
 	var existingETag string
+	var tombstoneETag string
 	exists := false
 	switch meta, serr := h.oss.StatMeta(ctx, target); {
 	case serr == nil:
-		exists = true
-		existingSize = meta.Size
-		existingETag = meta.ETag
+		if isHumanFileTombstone(meta) {
+			// A soft-deleted path is an absent target, but its tombstone is
+			// still an object: replace that exact version instead of relying
+			// on If-None-Match, which would see the object as present.
+			tombstoneETag = meta.ETag
+		} else {
+			exists = true
+			existingSize = meta.Size
+			existingETag = meta.ETag
+		}
 	case errors.Is(serr, os.ErrNotExist):
 	default:
 		httputil.WriteError(w, http.StatusInternalServerError, "stat restore target failed")
@@ -894,8 +942,16 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 		// Use If-None-Match:* so a file created between StatMeta and this
 		// write cannot be silently overwritten. The check and create are
 		// one storage operation, not a handler-local lock.
-		if err := h.oss.PutObjectIfAbsent(ctx, target, content); err != nil {
-			if errors.Is(err, oss.ErrPreconditionFailed) {
+		var werr error
+		if tombstoneETag != "" {
+			// The target is a deletion tombstone: CAS it away so a concurrent
+			// recreate is not overwritten either.
+			werr = h.oss.PutObjectIfMatchWithType(ctx, target, content, "", tombstoneETag)
+		} else {
+			werr = h.oss.PutObjectIfAbsent(ctx, target, content)
+		}
+		if werr != nil {
+			if errors.Is(werr, oss.ErrPreconditionFailed) {
 				writeHumanFileCodedError(w, http.StatusConflict, "path_conflict",
 					"a file already exists at the restore target")
 				return

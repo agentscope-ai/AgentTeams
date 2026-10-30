@@ -3,12 +3,14 @@ package server
 import (
 	"context"
 	"crypto/md5"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 )
@@ -27,7 +29,26 @@ const humanQuotaLedgerPath = ".control/quota.json"
 const humanQuotaLedgerRetries = 8
 
 type humanQuotaLedger struct {
-	UsedBytes int64 `json:"usedBytes"`
+	UsedBytes    int64                       `json:"usedBytes"`
+	Reservations map[string]quotaReservation `json:"reservations,omitempty"`
+}
+
+// quotaReservation ties an in-flight write to the file version it observed.
+// Two replacements of the same path must subtract the old size only once;
+// the later reservation inherits the earlier reservation's target size and
+// the original base size so a release can restore the right value.
+type quotaReservation struct {
+	Token       string `json:"token"`
+	BaseOldSize int64  `json:"baseOldSize"`
+	NewSize     int64  `json:"newSize"`
+}
+
+func newQuotaReservationToken() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("fallback-%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b[:])
 }
 
 func humanQuotaLedgerKey(username string) string {
@@ -116,7 +137,7 @@ func (h *humanFilesHandler) ensureQuotaLedger(ctx context.Context, username stri
 // A nil quota means unlimited, but an existing ledger is still advanced: a
 // later re-enable must not trust a ledger that predates writes made while the
 // quota was off. No ledger is created while quota is disabled.
-func (h *humanFilesHandler) reserveQuota(ctx context.Context, a *humanFileAccess, username string, oldSize, newSize int64) (int64, int, string) {
+func (h *humanFilesHandler) reserveQuota(ctx context.Context, a *humanFileAccess, username, path string, oldSize, newSize int64) (string, int, string) {
 	quota := a.human.Spec.WorkspaceQuotaBytes
 	key := humanQuotaLedgerKey(username)
 	for attempt := 0; attempt < humanQuotaLedgerRetries; attempt++ {
@@ -128,37 +149,135 @@ func (h *humanFilesHandler) reserveQuota(ctx context.Context, a *humanFileAccess
 		if quota == nil {
 			ledger, etag, err = h.readQuotaLedger(ctx, username)
 			if errors.Is(err, os.ErrNotExist) {
-				return 0, 0, ""
+				return "", 0, ""
 			}
 		} else {
 			ledger, etag, err = h.ensureQuotaLedger(ctx, username)
 		}
 		if err != nil {
-			return 0, 500, "quota reservation failed"
+			return "", 500, "quota reservation failed"
 		}
-		next := ledger.UsedBytes - oldSize + newSize
+		effectiveOld := oldSize
+		baseOld := oldSize
+		if prior, ok := ledger.Reservations[path]; ok {
+			effectiveOld = prior.NewSize
+			baseOld = prior.BaseOldSize
+		}
+		next := ledger.UsedBytes - effectiveOld + newSize
 		if quota != nil && next > *quota {
-			return 0, 413, fmt.Sprintf(
+			return "", 413, fmt.Sprintf(
 				"workspace quota of %d bytes exceeded (used %d, old %d, new %d)",
-				*quota, ledger.UsedBytes, oldSize, newSize,
+				*quota, ledger.UsedBytes, effectiveOld, newSize,
 			)
 		}
 		if next < 0 {
 			next = 0
 		}
-		payload, err := json.Marshal(humanQuotaLedger{UsedBytes: next})
+		token := ""
+		if quota != nil {
+			token = newQuotaReservationToken()
+			if ledger.Reservations == nil {
+				ledger.Reservations = map[string]quotaReservation{}
+			}
+			ledger.Reservations[path] = quotaReservation{
+				Token:       token,
+				BaseOldSize: baseOld,
+				NewSize:     newSize,
+			}
+		}
+		ledger.UsedBytes = next
+		payload, err := json.Marshal(ledger)
 		if err != nil {
-			return 0, 500, "quota reservation failed"
+			return "", 500, "quota reservation failed"
 		}
 		if err := h.oss.PutObjectIfMatch(ctx, key, payload, etag); err == nil {
-			return newSize - oldSize, 0, ""
+			return token, 0, ""
 		} else if !errors.Is(err, oss.ErrPreconditionFailed) {
-			return 0, 500, "quota reservation failed"
+			return "", 500, "quota reservation failed"
 		}
-		// Another replica changed the ledger between read and CAS; retry
-		// against its version.
 	}
-	return 0, 500, "quota reservation did not converge"
+	return "", 500, "quota reservation did not converge"
+}
+
+// commitQuota removes a completed reservation. The ledger already carries the
+// reserved size, so a successful object write needs no further accounting.
+func (h *humanFilesHandler) commitQuota(ctx context.Context, username, path, token string) {
+	if token == "" {
+		return
+	}
+	key := humanQuotaLedgerKey(username)
+	for attempt := 0; attempt < humanQuotaLedgerRetries; attempt++ {
+		ledger, etag, err := h.readQuotaLedger(ctx, username)
+		if err != nil {
+			return
+		}
+		prior, ok := ledger.Reservations[path]
+		if !ok {
+			// A superseded commit can still be the last write for this path;
+			// recompute from live usage so the final size is counted.
+			_ = h.syncQuotaUsage(ctx, username)
+			return
+		}
+		if prior.Token != token {
+			return // a newer reservation owns the path
+		}
+		delete(ledger.Reservations, path)
+		if len(ledger.Reservations) == 0 {
+			ledger.Reservations = nil
+		}
+		payload, err := json.Marshal(ledger)
+		if err != nil {
+			return
+		}
+		if err := h.oss.PutObjectIfMatch(ctx, key, payload, etag); err == nil {
+			_ = h.syncQuotaUsage(ctx, username)
+			return
+		} else if !errors.Is(err, oss.ErrPreconditionFailed) {
+			return
+		}
+	}
+}
+
+// syncQuotaUsage derives the ledger value from live usage plus every active
+// reservation delta. It never creates a ledger. A reservation whose object PUT
+// already landed may be counted conservatively until its commit removes it;
+// this is safer than under-counting an in-flight write.
+func (h *humanFilesHandler) syncQuotaUsage(ctx context.Context, username string) error {
+	key := humanQuotaLedgerKey(username)
+	for attempt := 0; attempt < humanQuotaLedgerRetries; attempt++ {
+		ledger, etag, err := h.readQuotaLedger(ctx, username)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		live, err := h.usedBytes(ctx, username)
+		if err != nil {
+			return err
+		}
+		used := live
+		for _, reservation := range ledger.Reservations {
+			used += reservation.NewSize - reservation.BaseOldSize
+		}
+		if used < 0 {
+			used = 0
+		}
+		if ledger.UsedBytes == used {
+			return nil
+		}
+		ledger.UsedBytes = used
+		payload, err := json.Marshal(ledger)
+		if err != nil {
+			return err
+		}
+		if err := h.oss.PutObjectIfMatch(ctx, key, payload, etag); err == nil {
+			return nil
+		} else if !errors.Is(err, oss.ErrPreconditionFailed) {
+			return err
+		}
+	}
+	return fmt.Errorf("quota ledger usage sync did not converge")
 }
 
 // reconcileQuotaLedger rebuilds the reservation ledger from live usage. It is
@@ -167,67 +286,46 @@ func (h *humanFilesHandler) reserveQuota(ctx context.Context, a *humanFileAccess
 // old deployments may have stale state. Failure is fail-closed because
 // accepting writes against an unknown ledger would defeat the quota.
 func (h *humanFilesHandler) reconcileQuotaLedger(ctx context.Context, username string) error {
-	key := humanQuotaLedgerKey(username)
-	for attempt := 0; attempt < humanQuotaLedgerRetries; attempt++ {
-		ledger, etag, err := h.ensureQuotaLedger(ctx, username)
-		if err != nil {
-			return err
-		}
-		used, err := h.usedBytes(ctx, username)
-		if err != nil {
-			return err
-		}
-		// Never lower the existing value: it may include a reservation that
-		// was granted but whose object PUT has not committed yet (live usage
-		// still reads 0). Rebuilding from live would erase that reservation
-		// and admit a second overlapping write. A stale over-count is safer
-		// than an over-quota admission.
-		if used < ledger.UsedBytes {
-			used = ledger.UsedBytes
-		}
-		if ledger.UsedBytes == used {
-			return nil
-		}
-		payload, err := json.Marshal(humanQuotaLedger{UsedBytes: used})
-		if err != nil {
-			return err
-		}
-		if err := h.oss.PutObjectIfMatch(ctx, key, payload, etag); err == nil {
-			return nil
-		} else if !errors.Is(err, oss.ErrPreconditionFailed) {
-			return err
-		}
+	if _, _, err := h.ensureQuotaLedger(ctx, username); err != nil {
+		return err
 	}
-	return fmt.Errorf("quota ledger reconciliation did not converge")
+	return h.syncQuotaUsage(ctx, username)
 }
 
 // releaseQuota reverses a reservation after the file write failed. It never
 // creates a ledger and never makes usage negative; a missing ledger means
 // there was no quota reservation to release.
-func (h *humanFilesHandler) releaseQuota(ctx context.Context, username string, delta int64) {
-	if delta == 0 {
+func (h *humanFilesHandler) releaseQuota(ctx context.Context, username, path, token string) {
+	if token == "" {
 		return
 	}
 	key := humanQuotaLedgerKey(username)
 	for attempt := 0; attempt < humanQuotaLedgerRetries; attempt++ {
 		ledger, etag, err := h.readQuotaLedger(ctx, username)
-		if errors.Is(err, os.ErrNotExist) {
-			return
-		}
 		if err != nil {
 			return
 		}
-		next := ledger.UsedBytes - delta
+		prior, ok := ledger.Reservations[path]
+		if !ok || prior.Token != token {
+			return
+		}
+		delete(ledger.Reservations, path)
+		if len(ledger.Reservations) == 0 {
+			ledger.Reservations = nil
+		}
+		next := ledger.UsedBytes - prior.NewSize + prior.BaseOldSize
 		if next < 0 {
 			next = 0
 		}
-		payload, err := json.Marshal(humanQuotaLedger{UsedBytes: next})
+		ledger.UsedBytes = next
+		payload, err := json.Marshal(ledger)
 		if err != nil {
 			return
 		}
 		if err := h.oss.PutObjectIfMatch(ctx, key, payload, etag); err == nil {
+			_ = h.syncQuotaUsage(ctx, username)
 			return
-		} else if !errors.Is(err, oss.ErrPreconditionFailed) {
+		} else if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, oss.ErrPreconditionFailed) {
 			return
 		}
 	}

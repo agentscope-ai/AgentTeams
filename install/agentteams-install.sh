@@ -3697,7 +3697,6 @@ _start_dashboard() {
 
         local _import_vols=()
         _import_vols+=(-v "${DASHBOARD_VOLUME}:/dest")
-        local _import_script="mkdir -p /dest"
         if [ -f "${_overlay_exists}" ] && [ -n "$(ls -A "${_overlay_dir}" 2>/dev/null)" ]; then
             _import_vols+=(-v "${_overlay_dir}:/overlay:ro")
         fi
@@ -3705,7 +3704,10 @@ _start_dashboard() {
             _import_vols+=(-v "${_legacy_dir}:/legacy:ro")
         fi
         # Legacy first, overlay second so writable-layer files win on conflicts.
-        _import_script="${_import_script}; [ -d /legacy ] && cp -a /legacy/. /dest/; [ -d /overlay ] && cp -a /overlay/. /dest/; chown -R ${_dash_ids} /dest"
+        # sh -c returns the last command's status, so a failed cp followed by a
+        # successful chown would look like a successful import. Fail each copy
+        # explicitly; do not rely on && chaining into a later chown.
+        local _import_script="mkdir -p /dest || exit 1; if [ -d /legacy ]; then cp -a /legacy/. /dest/ || exit 1; fi; if [ -d /overlay ]; then cp -a /overlay/. /dest/ || exit 1; fi; chown -R ${_dash_ids} /dest || exit 1"
 
         if ! ${DOCKER_CMD} run --rm "${_import_vols[@]}" alpine:latest sh -c "${_import_script}" >/dev/null 2>&1; then
             log "WARNING: failed to import exported Dashboard configuration into ${DASHBOARD_VOLUME}; leaving the old container in place"

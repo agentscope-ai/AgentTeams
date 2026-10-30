@@ -1159,6 +1159,140 @@ else
     fi
 fi
 
+# ---------- Test 26: Import helper must fail when cp fails even if chown succeeds ----------
+
+section "Test 26: Executable import copy failure is not masked by chown"
+
+if extract_function "_start_dashboard" "${INSTALL_SCRIPT}" 2>/dev/null | grep -q 'cp -a /legacy/. /dest/ || exit 1' \
+    && extract_function "_start_dashboard" "${INSTALL_SCRIPT}" 2>/dev/null | grep -q 'cp -a /overlay/. /dest/ || exit 1'; then
+    pass "Import helper: each cp exits 1 on failure"
+else
+    fail "Import helper: cp failure is not propagated with || exit 1"
+fi
+
+_test_start_dashboard_import_cp_fail() {
+    local _tmpfile _calls
+    _tmpfile=$(mktemp)
+    _calls=$(mktemp)
+
+    if ! extract_function "_start_dashboard" "${INSTALL_SCRIPT}" > "${_tmpfile}" 2>/dev/null; then
+        echo "EXTRACTION_FAILED"
+        rm -f "${_tmpfile}" "${_calls}"
+        return
+    fi
+
+    (
+        CALLS_FILE="${_calls}"
+        docker() {
+            printf 'docker %s\n' "$*" >> "${CALLS_FILE}"
+            if [ "$1" = "ps" ]; then
+                if [ "$2" = "-a" ]; then
+                    echo "agentteams-dashboard"
+                else
+                    echo "agentteams-controller"
+                fi
+                return 0
+            fi
+            if [ "$1" = "cp" ]; then
+                local _dest="${*: -1}"
+                mkdir -p "${_dest}"
+                if echo "$*" | grep -q '/app/db'; then
+                    echo '{"legacy":true}' > "${_dest}/config.json"
+                elif echo "$*" | grep -q '/data/agentteams-dashboard'; then
+                    echo '{"overlay":true}' > "${_dest}/config.json"
+                fi
+                return 0
+            fi
+            if [ "$1" = "diff" ]; then
+                echo "A /app/db/config.json"
+                return 0
+            fi
+            if [ "$1" = "image" ] && echo "$*" | grep -q 'Config.User'; then
+                echo "nextjs"
+                return 0
+            fi
+            if [ "$1" = "run" ]; then
+                local _prev="" _script="" _alpine=0
+                for _arg in "$@"; do
+                    if [ "${_arg}" = "alpine:latest" ]; then
+                        _alpine=1
+                    fi
+                    if [ "${_prev}" = "-c" ]; then
+                        _script="${_arg}"
+                    fi
+                    _prev="${_arg}"
+                done
+                if [ "${_alpine}" = "1" ] && [ -n "${_script}" ]; then
+                    local _work
+                    _work=$(mktemp -d)
+                    mkdir -p "${_work}/dest" "${_work}/legacy"
+                    echo '{"legacy":true}' > "${_work}/legacy/config.json"
+                    local _rewritten
+                    _rewritten=$(printf '%s\n' "${_script}" | sed "s|/dest|${_work}/dest|g; s|/legacy|${_work}/legacy|g; s|/overlay|${_work}/overlay|g")
+                    # Inject a failing cp and a succeeding chown into the real helper body.
+                    sh -c "cp() { return 1; }; chown() { return 0; }; ${_rewritten}"
+                    return $?
+                fi
+                return 0
+            fi
+            return 0
+        }
+        podman() { docker "$@"; }
+        DOCKER_CMD="docker"
+        log() { :; }
+        msg() { echo "$*"; }
+        curl() { return 1; }
+        sleep() { :; }
+
+        AGENTTEAMS_DASHBOARD=1
+        AGENTTEAMS_USE_EMBEDDED=1
+        AGENTTEAMS_REGISTRY="ghcr.io/agentteams-group"
+        AGENTTEAMS_PORT_DASHBOARD="13000"
+        AGENTTEAMS_DASHBOARD_VERSION="v1.3.1"
+        AGENTTEAMS_DASHBOARD_IMAGE="ghcr.io/agentteams-group/agentteams/agentteams-dashboard:v1.3.1"
+        AGENTTEAMS_LOCAL_ONLY=1
+        AGENTTEAMS_AI_GATEWAY_ADMIN_URL="https://console.example.test:8443"
+        AGENTTEAMS_AUTH_TOKEN="test-token"
+        AGENTTEAMS_ENV_FILE="$(mktemp)"
+
+        # shellcheck disable=SC1090
+        source "${_tmpfile}" 2>/dev/null
+
+        if ! declare -F _start_dashboard >/dev/null 2>&1; then
+            echo "FUNCTION_NOT_FOUND"
+        else
+            _start_dashboard
+            echo "CALLS_BEGIN"
+            cat "${CALLS_FILE}"
+            echo "CALLS_END"
+        fi
+    )
+    rm -f "${_tmpfile}" "${_calls}"
+}
+
+_import_cp_fail=$(_test_start_dashboard_import_cp_fail 2>&1)
+
+if echo "${_import_cp_fail}" | grep -q "EXTRACTION_FAILED\|FUNCTION_NOT_FOUND"; then
+    fail "Exec import-cp-fail: function extraction failed"
+else
+    _calls_import=$(echo "${_import_cp_fail}" | sed -n '/CALLS_BEGIN/,/CALLS_END/p')
+    if echo "${_calls_import}" | grep -q 'docker start .*agentteams-dashboard'; then
+        pass "Exec import-cp-fail: keeps old container when inner cp fails and chown succeeds"
+    else
+        fail "Exec import-cp-fail: did not restart old container after inner cp failure"
+    fi
+    if echo "${_calls_import}" | grep -q 'docker rm'; then
+        fail "Exec import-cp-fail: removed old container after inner cp failure"
+    else
+        pass "Exec import-cp-fail: does not rm old container after inner cp failure"
+    fi
+    if echo "${_calls_import}" | grep -q 'docker run -d'; then
+        fail "Exec import-cp-fail: replaced container after inner cp failure"
+    else
+        pass "Exec import-cp-fail: does not start a new container after inner cp failure"
+    fi
+fi
+
 # ---------- Test 23: Brand-new volume is chowned to the image UID ----------
 
 section "Test 23: Executable brand-new volume chown"

@@ -1172,5 +1172,30 @@ else
         log "AGENTTEAMS_MATRIX_DEBUG=1 detected; OPENCLAW_MATRIX_DEBUG=1 exported for matrix plugin tracing"
     fi
 
+    # TEMP-DIAG(1460): capture the earliest config-validation result and sample
+    # the live config while the gateway's startup guard takes its snapshots.
+    # Remove this block once the restart loop is explained.
+    openclaw config validate > /tmp/openclaw-validate.out 2>&1
+    _validate_status=$?
+    log "[cfgvalidate] exit=${_validate_status}"
+    while IFS= read -r _line; do
+        log "[cfgvalidate] ${_line}"
+    done < /tmp/openclaw-validate.out
+    (
+        for _i in $(seq 1 200); do
+            if [ -f /root/manager-workspace/openclaw.json ]; then
+                printf '[cfgwatch] %s size=%s mtime=%s md5=%s\n' \
+                    "$(date +%s.%N)" \
+                    "$(stat -c %s /root/manager-workspace/openclaw.json 2>/dev/null)" \
+                    "$(stat -c %Y /root/manager-workspace/openclaw.json 2>/dev/null)" \
+                    "$(md5sum /root/manager-workspace/openclaw.json 2>/dev/null | cut -d' ' -f1)"
+            else
+                printf '[cfgwatch] %s MISSING\n' "$(date +%s.%N)"
+            fi
+            sleep 0.2
+        done
+    ) &
+    log "[cfgwatch] config sampler started"
+
     exec openclaw gateway run --verbose --force
 fi

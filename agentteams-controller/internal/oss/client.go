@@ -13,6 +13,10 @@ type ObjectMeta struct {
 	// ETag is the object's content hash (MD5 for single-part writes).
 	// Empty when the backend cannot report one.
 	ETag string
+	// ContentType is the stored object's media type ("" when the backend
+	// does not report one). The file API uses it to mark deleted files with
+	// a tombstone object instead of an unconditional delete.
+	ContentType string
 }
 
 // ErrPreconditionFailed is returned by PutObjectIfMatch when the object's
@@ -45,6 +49,11 @@ type StorageClient interface {
 	// equals matchETag (conditional write). Returns ErrPreconditionFailed
 	// (without writing) on mismatch. matchETag must be non-empty.
 	PutObjectIfMatch(ctx context.Context, key string, data []byte, matchETag string) error
+
+	// PutObjectIfMatchWithType is PutObjectIfMatch plus an explicit content
+	// type. The file API writes deletion tombstones through it so a deleted
+	// path stays recognizable without reading every object.
+	PutObjectIfMatchWithType(ctx context.Context, key string, data []byte, contentType, matchETag string) error
 
 	// PutObjectIfAbsent creates the object only when no object exists at
 	// key. Returns ErrPreconditionFailed when the key already exists.

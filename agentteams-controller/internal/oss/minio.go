@@ -86,11 +86,25 @@ func (c *MinIOClient) fullPath(key string) string {
 // Controller's read and its write makes the ETag change and the write fails
 // with ErrPreconditionFailed instead of silently overwriting.
 func (c *MinIOClient) PutObjectIfMatch(ctx context.Context, key string, data []byte, matchETag string) error {
-	put := c.sdkPutIfMatch
-	if put == nil {
-		put = c.sdkPutObjectIfMatch
+	return c.PutObjectIfMatchWithType(ctx, key, data, "application/json", matchETag)
+}
+
+// PutObjectIfMatchWithType is the conditional write with an explicit content
+// type; the file API uses it to write deletion tombstones.
+func (c *MinIOClient) PutObjectIfMatchWithType(ctx context.Context, key string, data []byte, contentType, matchETag string) error {
+	var err error
+	if put := c.sdkPutIfMatch; put != nil {
+		err = put(ctx, key, data, matchETag)
+	} else {
+		sdk, serr := c.sdkClient()
+		if serr != nil {
+			return serr
+		}
+		reader := bytes.NewReader(data)
+		opts := minio.PutObjectOptions{ContentType: contentType}
+		opts.SetMatchETag(matchETag)
+		_, err = sdk.PutObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), reader, int64(len(data)), opts)
 	}
-	err := put(ctx, key, data, matchETag)
 	if err == nil {
 		return nil
 	}
@@ -301,6 +315,7 @@ func (c *MinIOClient) StatMeta(ctx context.Context, key string) (ObjectMeta, err
 		LastModified string `json:"lastModified"`
 		Size         int64  `json:"size"`
 		ETag         string `json:"etag"`
+		ContentType  string `json:"contentType"`
 	}
 	if err := json.Unmarshal([]byte(out), &info); err != nil {
 		return ObjectMeta{}, fmt.Errorf("parse mc stat --json: %w", err)
@@ -309,7 +324,7 @@ func (c *MinIOClient) StatMeta(ctx context.Context, key string) (ObjectMeta, err
 	if err != nil {
 		return ObjectMeta{}, fmt.Errorf("parse lastModified %q: %w", info.LastModified, err)
 	}
-	return ObjectMeta{Size: info.Size, ModTime: modTime, ETag: info.ETag}, nil
+	return ObjectMeta{Size: info.Size, ModTime: modTime, ETag: info.ETag, ContentType: info.ContentType}, nil
 }
 
 func (c *MinIOClient) DeleteObject(ctx context.Context, key string) error {

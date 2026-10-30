@@ -4159,6 +4159,17 @@ func (c *conflictInjectingOSS) PutObjectIfMatch(ctx context.Context, key string,
 	return c.mcLike.PutObject(ctx, key, data)
 }
 
+func (c *conflictInjectingOSS) PutObjectIfMatchWithType(ctx context.Context, key string, data []byte, contentType, matchETag string) error {
+	cur, err := c.mcLike.StatMeta(ctx, key)
+	if err != nil {
+		return err
+	}
+	if cur.ETag != matchETag {
+		return oss.ErrPreconditionFailed
+	}
+	return c.mcLike.PutObjectIfMatchWithType(ctx, key, data, contentType, matchETag)
+}
+
 func (c *conflictInjectingOSS) Stat(ctx context.Context, key string) error {
 	return c.mcLike.Stat(ctx, key)
 }
@@ -4353,6 +4364,11 @@ func (f *snapshotFailGet) GetObject(ctx context.Context, key string) ([]byte, er
 	return nil, errors.New("get failed")
 }
 
+func (w *snapshotFailGet) PutObjectIfMatchWithType(ctx context.Context, key string, data []byte, contentType, matchETag string) error {
+	return w.StorageClient.PutObjectIfMatchWithType(ctx, key, data, contentType, matchETag)
+}
+
+
 func TestCreateProject_NoSnapshot(t *testing.T) {
 	store := ossfake.NewMemory()
 	h := newSnapshotTestHandler(t, store, team("alpha-team"))
@@ -4482,6 +4498,10 @@ type failTaskPutOSS struct {
 	oss.StorageClient
 	failPrefix string
 	failures   int
+}
+
+func (f *failTaskPutOSS) PutObjectIfMatchWithType(ctx context.Context, key string, data []byte, contentType, matchETag string) error {
+	return f.StorageClient.PutObjectIfMatchWithType(ctx, key, data, contentType, matchETag)
 }
 
 func (f *failTaskPutOSS) PutObject(ctx context.Context, key string, data []byte) error {

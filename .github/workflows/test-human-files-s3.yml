@@ -1,0 +1,65 @@
+name: test-human-files-s3
+
+on:
+  pull_request:
+    paths:
+      - "agentteams-controller/**"
+      - ".github/workflows/test-human-files-s3.yml"
+  workflow_dispatch:
+
+jobs:
+  lifecycle:
+    name: human files lifecycle (RustFS)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agentteams-controller/go.mod
+          cache-dependency-path: agentteams-controller/go.sum
+
+      # The controller shells out to mc for object reads, stats and copies, so
+      # the regression must exercise the same client. The MinIO project has
+      # archived its downloads page; the release asset is still published.
+      - name: Install mc
+        run: |
+          curl -fsSL -o /usr/local/bin/mc \
+            "https://github.com/minio/mc/releases/download/RELEASE.2025-08-13T08-35-41Z/mc.linux-amd64.RELEASE.2025-08-13T08-35-41Z"
+          chmod +x /usr/local/bin/mc
+          mc --version
+
+      # RustFS is the 1.2.6 default backend, so the native regression runs
+      # against it rather than MinIO.
+      - name: Start RustFS 1.0.4
+        run: |
+          docker run -d --name rustfs \
+            -p 9000:9000 -p 9001:9001 \
+            -e RUSTFS_ACCESS_KEY=minioadmin \
+            -e RUSTFS_SECRET_KEY=minioadmin \
+            -e RUSTFS_VOLUMES=/data \
+            -v "$PWD/.rustfs-data:/data" \
+            rustfs/rustfs:1.0.4
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs rustfs || true
+          exit 1
+
+      - name: Create bucket
+        run: |
+          mc alias set s3 http://127.0.0.1:9000 minioadmin minioadmin
+          mc mb s3/human-files-test
+
+      - name: Lifecycle regression
+        working-directory: agentteams-controller
+        env:
+          HUMAN_FILES_S3_ENDPOINT: http://127.0.0.1:9000
+          HUMAN_FILES_S3_ACCESS_KEY: minioadmin
+          HUMAN_FILES_S3_SECRET_KEY: minioadmin
+          HUMAN_FILES_S3_BUCKET: human-files-test
+        run: go test ./internal/server -run TestHumanFiles_S3Lifecycle -count=1 -v

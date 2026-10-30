@@ -1174,13 +1174,21 @@ else
 
     # TEMP-DIAG(1460): capture the earliest config-validation result and sample
     # the live config while the gateway's startup guard takes its snapshots.
+    # Order matters: replay the previous run's validate output first, then start
+    # the probes in background subshells with timeouts. Booting the CLI for
+    # `config validate` blocks startup (the previous revision produced no output
+    # at all: the container was restarted before reaching exec), so the result
+    # is also persisted in the workspace and replayed on the next boot.
     # Remove this block once the restart loop is explained.
-    openclaw config validate > /tmp/openclaw-validate.out 2>&1
-    _validate_status=$?
-    log "[cfgvalidate] exit=${_validate_status}"
-    while IFS= read -r _line; do
-        log "[cfgvalidate] ${_line}"
-    done < /tmp/openclaw-validate.out
+    log "[diag] openclaw=$(command -v openclaw 2>/dev/null) version=$(timeout 10 openclaw --version 2>&1 | head -1)"
+    mkdir -p /root/manager-workspace/.diag
+    if [ -f /root/manager-workspace/.diag/validate.out ]; then
+        log "[cfgvalidate] previous run output:"
+        while IFS= read -r _line; do
+            log "[cfgvalidate] prev: ${_line}"
+        done < /root/manager-workspace/.diag/validate.out
+        mv /root/manager-workspace/.diag/validate.out /root/manager-workspace/.diag/validate.prev 2>/dev/null || true
+    fi
     (
         for _i in $(seq 1 200); do
             if [ -f /root/manager-workspace/openclaw.json ]; then
@@ -1196,6 +1204,15 @@ else
         done
     ) &
     log "[cfgwatch] config sampler started"
+    (
+        timeout 25 openclaw config validate > /root/manager-workspace/.diag/validate.out 2>&1
+        _validate_status=$?
+        printf '[cfgvalidate] exit=%s\n' "$_validate_status"
+        while IFS= read -r _line; do
+            printf '[cfgvalidate] %s\n' "$_line"
+        done < /root/manager-workspace/.diag/validate.out
+    ) &
+    log "[cfgvalidate] validation started in background"
 
     exec openclaw gateway run --verbose --force
 fi

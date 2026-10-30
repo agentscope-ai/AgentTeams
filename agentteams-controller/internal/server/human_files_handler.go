@@ -798,23 +798,45 @@ type humanQuotaResponse struct {
 // writes and is excluded from these prefixes.
 func (h *humanFilesHandler) usedBytes(ctx context.Context, username string) (int64, error) {
 	total := int64(0)
-	for _, prefix := range []string{humanFilesPrefix(username), humanTrashPrefix(username)} {
+	seen := make(map[string]struct{})
+	var walk func(prefix string) error
+	walk = func(prefix string) error {
 		infos, err := h.oss.ListObjectsDetailed(ctx, prefix)
 		if err != nil {
-			return 0, err
+			return err
 		}
 		for _, info := range infos {
-			if strings.HasSuffix(info.Name, "/") {
+			if info.Name == "" || info.Name == ".keep" {
 				continue
 			}
-			meta, err := h.oss.StatMeta(ctx, prefix+info.Name)
+			full := prefix + info.Name
+			if strings.HasSuffix(info.Name, "/") {
+				if err := walk(full); err != nil {
+					return err
+				}
+				continue
+			}
+			// In-memory listings may already be recursive (names contain a
+			// slash) while the production mc listing is one directory level.
+			// Walking directories plus de-duplicating full keys covers both.
+			if _, ok := seen[full]; ok {
+				continue
+			}
+			meta, err := h.oss.StatMeta(ctx, full)
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
 					continue // removed between the list and the stat
 				}
-				return 0, err
+				return err
 			}
+			seen[full] = struct{}{}
 			total += meta.Size
+		}
+		return nil
+	}
+	for _, prefix := range []string{humanFilesPrefix(username), humanTrashPrefix(username)} {
+		if err := walk(prefix); err != nil {
+			return 0, err
 		}
 	}
 	return total, nil

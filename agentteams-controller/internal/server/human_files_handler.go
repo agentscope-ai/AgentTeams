@@ -1,7 +1,9 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"crypto/md5"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -245,6 +247,83 @@ func contentTypeForName(name string) string {
 	return "application/octet-stream"
 }
 
+// md5Hex returns the lowercase MD5 hex digest of data — the S3 ETag of a
+// single-part write (MinIO/RustFS semantics). Kept in this file so the
+// snapshot logic has no private cross-file dependency.
+func md5Hex(data []byte) string {
+	sum := md5.Sum(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// humanFileSnapshotAttempts bounds how many read cycles readFileSnapshot
+// allows before declaring the object unstable.
+const humanFileSnapshotAttempts = 6
+
+// errHumanFileSnapshotUnstable is returned by readFileSnapshot when the
+// object keeps changing between its reads; handlers map it to
+// 503 snapshot_unstable.
+var errHumanFileSnapshotUnstable = errors.New("file changed while taking a consistent snapshot")
+
+// readFileSnapshot returns the object's bytes together with the storage
+// version identifier that describes exactly those bytes.
+//
+// A plain GetObject+StatMeta pair can straddle a concurrent write (the
+// bytes of version A with the ETag of version B); the ETag is the
+// optimistic-concurrency token, so serving a mismatched pair lets an
+// If-Match writer silently clobber a version the client never saw. The
+// snapshot below re-reads until the bytes and the version provably agree:
+//
+//  1. single-part fast path: ETag == md5(bytes) binds them exactly (the
+//     common case — files are single-part up to the multipart threshold);
+//  2. multipart (md5-N), an unreported ETag, or a write that landed
+//     between the two reads: a second, independent read must return the
+//     same bytes and the same ETag;
+//  3. six cycles without agreement -> errHumanFileSnapshotUnstable (fail
+//     rather than serve a mismatched pair).
+func (h *humanFilesHandler) readFileSnapshot(ctx context.Context, key string) ([]byte, oss.ObjectMeta, error) {
+	for attempt := 0; attempt < humanFileSnapshotAttempts; attempt++ {
+		data, err := h.oss.GetObject(ctx, key)
+		if err != nil {
+			return nil, oss.ObjectMeta{}, err
+		}
+		meta, err := h.oss.StatMeta(ctx, key)
+		if err != nil {
+			return nil, oss.ObjectMeta{}, err
+		}
+		if meta.ETag != "" && strings.EqualFold(strings.Trim(meta.ETag, `"`), md5Hex(data)) {
+			return data, meta, nil
+		}
+		data2, err := h.oss.GetObject(ctx, key)
+		if err != nil {
+			return nil, oss.ObjectMeta{}, err
+		}
+		meta2, err := h.oss.StatMeta(ctx, key)
+		if err != nil {
+			return nil, oss.ObjectMeta{}, err
+		}
+		if bytes.Equal(data, data2) && meta.ETag == meta2.ETag {
+			return data2, meta2, nil
+		}
+	}
+	return nil, oss.ObjectMeta{}, errHumanFileSnapshotUnstable
+}
+
+// writeHumanFileSnapshotError maps a readFileSnapshot failure to its HTTP
+// form: NotExist is a plain 404, an unstable snapshot is 503 with the
+// stable code, anything else is a storage fault.
+func writeHumanFileSnapshotError(w http.ResponseWriter, err error) {
+	if errors.Is(err, os.ErrNotExist) {
+		httputil.WriteError(w, http.StatusNotFound, "file not found")
+		return
+	}
+	if errors.Is(err, errHumanFileSnapshotUnstable) {
+		writeHumanFileCodedError(w, http.StatusServiceUnavailable, "snapshot_unstable",
+			"the file changed while it was being read; retry the request")
+		return
+	}
+	httputil.WriteError(w, http.StatusInternalServerError, "read file failed")
+}
+
 // --- GET files (read one file or list a directory) --------------------------
 
 // getFile handles GET /api/v1/humans/{name}/files/{path...}. When the path
@@ -281,16 +360,16 @@ func (h *humanFilesHandler) readSingleFile(w http.ResponseWriter, r *http.Reques
 	}
 	ctx := r.Context()
 	key := humanFilesPrefix(username) + rel
-	data, err := h.oss.GetObject(ctx, key)
+	// The bytes and the ETag must come from one consistent snapshot: an
+	// independent GetObject+StatMeta pair could straddle a concurrent PUT
+	// and hand the client "A's bytes + B's ETag", whose If-Match write
+	// would then silently clobber the never-seen B.
+	data, meta, err := h.readFileSnapshot(ctx, key)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			httputil.WriteError(w, http.StatusNotFound, "file not found")
-			return
-		}
-		httputil.WriteError(w, http.StatusInternalServerError, "read file failed")
+		writeHumanFileSnapshotError(w, err)
 		return
 	}
-	if meta, merr := h.oss.StatMeta(ctx, key); merr == nil && meta.ETag != "" {
+	if meta.ETag != "" {
 		w.Header().Set("ETag", meta.ETag)
 	}
 	w.Header().Set("Content-Type", contentTypeForName(rel))
@@ -395,6 +474,20 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, "path is required")
 		return
 	}
+	// The per-path lease serializes this write against concurrent
+	// deletes/restores on the same rel, so the oldSize stat, the quota
+	// reservation, and the post-write snapshot see no in-API interleave.
+	lock, err := h.acquireHumanPathLock(ctx, username, rel, humanPathLockTTL)
+	if err != nil {
+		if errors.Is(err, errHumanPathBusy) {
+			writeHumanFileCodedError(w, http.StatusConflict, "file_busy",
+				"another operation is in flight on this file; retry shortly")
+			return
+		}
+		httputil.WriteError(w, http.StatusInternalServerError, "acquire path lease failed")
+		return
+	}
+	defer lock.Release(ctx)
 
 	// Bounded read: maxFileBytes+1 so an over-limit upload is detected
 	// without buffering more than one byte past the limit.
@@ -480,10 +573,22 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 		h.commitQuota(ctx, username, rel, reservedToken)
 	}
 
-	var etag string
-	if meta, merr := h.oss.StatMeta(ctx, key); merr == nil {
-		etag = meta.ETag
+	// Confirm the write with a content-bound snapshot: the ETag we report
+	// must describe exactly the bytes we wrote. A stored body that differs
+	// from what we sent means a storage-level change outside the API
+	// protocol (or a backend that rewrites content); report 409 rather
+	// than an ETag that would silently authorize a future If-Match.
+	snapData, snapMeta, serr := h.readFileSnapshot(ctx, key)
+	if serr != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "confirm file write failed")
+		return
 	}
+	if !bytes.Equal(snapData, data) {
+		writeHumanFileCodedError(w, http.StatusConflict, "version_conflict",
+			"the stored content does not match the bytes we wrote")
+		return
+	}
+	etag := snapMeta.ETag
 	h.recordAudit(ctx, a, "human_file_write",
 		humanFileDetail("path", "files/"+rel, "size", len(data), "etag", etag))
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
@@ -521,14 +626,28 @@ func (h *humanFilesHandler) deleteFile(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, "path is required")
 		return
 	}
-	key := humanFilesPrefix(username) + rel
-	data, err := h.oss.GetObject(ctx, key)
+	// Same per-path lease as putFile/restoreTrash: a concurrent in-API
+	// writer on this rel is rejected with file_busy instead of racing the
+	// archive step below.
+	lock, err := h.acquireHumanPathLock(ctx, username, rel, humanPathLockTTL)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			httputil.WriteError(w, http.StatusNotFound, "file not found")
+		if errors.Is(err, errHumanPathBusy) {
+			writeHumanFileCodedError(w, http.StatusConflict, "file_busy",
+				"another operation is in flight on this file; retry shortly")
 			return
 		}
-		httputil.WriteError(w, http.StatusInternalServerError, "read file failed")
+		httputil.WriteError(w, http.StatusInternalServerError, "acquire path lease failed")
+		return
+	}
+	defer lock.Release(ctx)
+
+	key := humanFilesPrefix(username) + rel
+	// Archive the content-bound snapshot, not a bare GetObject: the bytes
+	// in the trash must be exactly the bytes whose ETag we verify before
+	// removing the original.
+	data, snapMeta, err := h.readFileSnapshot(ctx, key)
+	if err != nil {
+		writeHumanFileSnapshotError(w, err)
 		return
 	}
 	trashID, err := newTrashID()
@@ -562,10 +681,39 @@ func (h *humanFilesHandler) deleteFile(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusInternalServerError, "write trash content failed")
 		return
 	}
-	if err := h.oss.DeleteObject(ctx, key); err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError,
-			"remove original failed; the file is preserved in the trash and may still be readable")
+	// Re-verify the version between the snapshot and the remove.
+	//
+	// Neither MinIO nor RustFS 1.0.4 exposes a conditional DELETE (RustFS
+	// app/object/delete.rs has no if_match), so this re-stat is the
+	// strongest guard the storage layer offers: the sub-millisecond
+	// window between this check and DeleteObject cannot be closed by any
+	// conditional write. Within the API the per-path lease above already
+	// excludes a concurrent writer; a write that bypasses the API (mc/ops)
+	// is outside the protocol. A missing object means a concurrent delete
+	// won; the archive is a redundant copy of the same bytes, so report
+	// success. A changed ETag means a newer version exists: roll the
+	// trash entry back and keep the live file intact.
+	fresh, merr := h.oss.StatMeta(ctx, key)
+	switch {
+	case errors.Is(merr, os.ErrNotExist):
+		// Gone between snapshot and now: nothing left to remove.
+	case merr != nil:
+		_ = h.oss.DeleteObject(ctx, trashPrefix+"content")
+		_ = h.oss.DeleteObject(ctx, trashPrefix+"meta.json")
+		httputil.WriteError(w, http.StatusInternalServerError, "stat file failed")
 		return
+	case !strings.EqualFold(fresh.ETag, snapMeta.ETag):
+		_ = h.oss.DeleteObject(ctx, trashPrefix+"content")
+		_ = h.oss.DeleteObject(ctx, trashPrefix+"meta.json")
+		writeHumanFileCodedError(w, http.StatusConflict, "version_conflict",
+			"the file changed since it was read; nothing was deleted")
+		return
+	default:
+		if err := h.oss.DeleteObject(ctx, key); err != nil {
+			httputil.WriteError(w, http.StatusInternalServerError,
+				"remove original failed; the file is preserved in the trash and may still be readable")
+			return
+		}
 	}
 	h.recordAudit(ctx, a, "human_file_delete",
 		humanFileDetail("path", "files/"+rel, "size", len(data), "trashId", trashID))
@@ -682,12 +830,28 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	target := humanFilesPrefix(username) + rel
+	// The same per-path lease as putFile/deleteFile: a restore mutates
+	// this rel, so it must serialize against in-flight writes and deletes.
+	lock, err := h.acquireHumanPathLock(ctx, username, rel, humanPathLockTTL)
+	if err != nil {
+		if errors.Is(err, errHumanPathBusy) {
+			writeHumanFileCodedError(w, http.StatusConflict, "file_busy",
+				"another operation is in flight on this file; retry shortly")
+			return
+		}
+		httputil.WriteError(w, http.StatusInternalServerError, "acquire path lease failed")
+		return
+	}
+	defer lock.Release(ctx)
+
 	var existingSize int64
+	var existingETag string
 	exists := false
 	switch meta, serr := h.oss.StatMeta(ctx, target); {
 	case serr == nil:
 		exists = true
 		existingSize = meta.Size
+		existingETag = meta.ETag
 	case errors.Is(serr, os.ErrNotExist):
 	default:
 		httputil.WriteError(w, http.StatusInternalServerError, "stat restore target failed")
@@ -716,9 +880,27 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 			httputil.WriteError(w, http.StatusInternalServerError, "write restored file failed")
 			return
 		}
-	} else if err := h.oss.PutObject(ctx, target, content); err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, "write restored file failed")
-		return
+	} else {
+		// Re-stat before overwriting: the target's version must be the one
+		// captured above, or a writer changed it in between (in-API it is
+		// blocked by the lease, but a storage-level change still shows up
+		// here). Never overwrite a version we have not seen.
+		fresh, serr := h.oss.StatMeta(ctx, target)
+		switch {
+		case errors.Is(serr, os.ErrNotExist):
+			// Deleted between the stats: recreate as a fresh object.
+		case serr != nil:
+			httputil.WriteError(w, http.StatusInternalServerError, "stat restore target failed")
+			return
+		case !strings.EqualFold(fresh.ETag, existingETag):
+			writeHumanFileCodedError(w, http.StatusConflict, "version_conflict",
+				"the restore target changed since it was read; nothing was overwritten")
+			return
+		}
+		if err := h.oss.PutObject(ctx, target, content); err != nil {
+			httputil.WriteError(w, http.StatusInternalServerError, "write restored file failed")
+			return
+		}
 	}
 	// Remove the trash entry; a failure here only leaks a recoverable copy.
 	_ = h.oss.DeleteObject(ctx, trashPrefix+"content")

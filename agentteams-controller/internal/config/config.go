@@ -441,7 +441,13 @@ func LoadConfig() *Config {
 	if cfg.KubeMode == "embedded" {
 		if ctrlHost := extractHost(cfg.WorkerEnv.ControllerURL); ctrlHost != "" {
 			cfg.WorkerEnv.MatrixURL = replaceHost(cfg.WorkerEnv.MatrixURL, ctrlHost)
-			cfg.WorkerEnv.FSEndpoint = replaceHost(cfg.WorkerEnv.FSEndpoint, ctrlHost)
+			// The controller-host rewrite is only valid for the embedded
+			// MinIO sidecar. External S3/OSS endpoints (e.g. rustfs-poc) must
+			// stay reachable as configured; rewriting them sends workers back
+			// to the embedded MinIO and creates a storage split-brain.
+			if provider := strings.ToLower(strings.TrimSpace(cfg.WorkerEnv.StorageProvider)); provider == "" || provider == "minio" {
+				cfg.WorkerEnv.FSEndpoint = replaceHost(cfg.WorkerEnv.FSEndpoint, ctrlHost)
+			}
 		}
 	}
 	// S3/MinIO API is never on the Higress HTTP gateway port (8080). Misconfigured

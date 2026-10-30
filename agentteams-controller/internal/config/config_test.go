@@ -59,6 +59,23 @@ func TestLoadConfigMetricsBindAddrPrefersAgentTeamsEnv(t *testing.T) {
 	}
 }
 
+func TestLoadConfigEmbeddedPreservesExternalS3Endpoint(t *testing.T) {
+	t.Setenv("AGENTTEAMS_KUBE_MODE", "embedded")
+	t.Setenv("AGENTTEAMS_CONTROLLER_URL", "http://agentteams-controller:8090")
+	t.Setenv("AGENTTEAMS_MATRIX_URL", "http://127.0.0.1:6167")
+	t.Setenv("AGENTTEAMS_FS_ENDPOINT", "http://rustfs-poc:9000")
+	t.Setenv("AGENTTEAMS_STORAGE_PROVIDER", "s3")
+
+	cfg := LoadConfig()
+
+	if got, want := cfg.WorkerEnv.FSEndpoint, "http://rustfs-poc:9000"; got != want {
+		t.Fatalf("WorkerEnv.FSEndpoint = %q, want external S3 endpoint %q", got, want)
+	}
+	if got, want := cfg.WorkerEnv.MatrixURL, "http://agentteams-controller:6167"; got != want {
+		t.Fatalf("WorkerEnv.MatrixURL = %q, want %q", got, want)
+	}
+}
+
 func TestLoadConfigEmbeddedPreservesWorkerAIGatewayURL(t *testing.T) {
 	t.Setenv("AGENTTEAMS_KUBE_MODE", "embedded")
 	t.Setenv("AGENTTEAMS_CONTROLLER_URL", "http://agentteams-controller:8090")

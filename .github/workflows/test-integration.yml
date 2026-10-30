@@ -810,6 +810,9 @@ jobs:
       - name: Run the LLM-smoke regression suite (stubbed docker/curl)
         run: bash install/tests/verify-llm-regressions.sh
 
+      - name: Run the installer storage-env regression
+        run: bash install/tests/test-install-storage-env.sh
+
   install-upgrade-cli:
     runs-on: ubuntu-latest
     timeout-minutes: 10

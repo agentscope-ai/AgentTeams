@@ -399,8 +399,11 @@ func (h *humanFilesHandler) commitQuota(ctx context.Context, username, path, tok
 // syncQuotaUsage re-derives the ledger from the invariants: live usage plus
 // each path's (Counted - live). It never creates a ledger and never clears
 // Outstanding (I2): an in-flight write keeps reserving until its own
-// commit/release settles it. A path whose stat fails keeps its old Counted
-// (I4: overstate rather than understate).
+// commit/release settles it. A stat fault on a tracked path aborts the whole
+// recompute and returns the error without touching the ledger (I4, fail
+// closed): writing the total without that path's contribution would drop the
+// in-flight charge and understate usage — understating is the dangerous
+// error, so the previous ledger (still charging the reservation) stands.
 func (h *humanFilesHandler) syncQuotaUsage(ctx context.Context, username string) error {
 	key := humanQuotaLedgerKey(username)
 	for attempt := 0; attempt < humanQuotaLedgerRetries; attempt++ {
@@ -420,7 +423,11 @@ func (h *humanFilesHandler) syncQuotaUsage(ctx context.Context, username string)
 		for path, entry := range ledger.Paths {
 			live, err := h.liveFileSize(ctx, username, path)
 			if err != nil {
-				continue // keep the old Counted; not re-charged from here
+				// NotExist is already folded into live == 0 inside
+				// liveFileSize; any other fault means this entry's charge
+				// cannot be re-verified, and the total would understate
+				// usage without it (I4). Abandon the recompute.
+				return fmt.Errorf("quota ledger sync: stat %s: %w", path, err)
 			}
 			counted := live
 			for _, r := range entry.Outstanding {

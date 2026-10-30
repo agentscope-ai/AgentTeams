@@ -16,6 +16,7 @@ import (
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	audit "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/audit"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -1907,5 +1908,104 @@ func TestHumanFiles_QuotaLedgerLegacyFormatMigration(t *testing.T) {
 	}
 	if rec := hfPutFile(t, h, "alice", "extra.txt", hfSelf(), "x"); rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("write over migrated in-flight reservation: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// faultyStatOSS returns a non-NotExist error from StatMeta for `remaining`
+// calls on one key, then delegates — a transient stat fault injected on an
+// in-flight path (the stat-side mirror of the staleLedgerOSS read fault).
+type faultyStatOSS struct {
+	*ossfake.Memory
+	key       string
+	remaining int
+}
+
+func (f *faultyStatOSS) StatMeta(ctx context.Context, key string) (oss.ObjectMeta, error) {
+	if f.remaining > 0 && key == f.key {
+		f.remaining--
+		return oss.ObjectMeta{}, errors.New("transient stat fault")
+	}
+	return f.Memory.StatMeta(ctx, key)
+}
+
+// TestHumanFiles_QuotaStatFaultDoesNotDropInFlightCharge is the maintainer's
+// fourth-round repro: with a 10-byte quota and an in-flight 6-byte
+// reservation that has not landed, re-setting the quota triggers
+// reconcile -> sync while the stat of the reserved path faults once. The
+// old code skipped the path yet still wrote the total, dropping the charge
+// to 0 — a following 6-byte write then passed and the final usage overshot
+// to 12. Sync must fail closed: the operation errors, the ledger is left
+// byte-for-byte untouched, and the preserved charge still gates writes.
+func TestHumanFiles_QuotaStatFaultDoesNotDropInFlightCharge(t *testing.T) {
+	h1, store, k8s := newHumanFilesRig(t)
+	ctx := context.Background()
+
+	if rec := hfPutQuota(t, h1, "alice", hfAdmin(), `{"quotaBytes":10}`); rec.Code != http.StatusOK {
+		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
+	}
+	req := hfReq(t, http.MethodPut, "alice", "first.txt", hfSelf(), nil)
+	access, status, msg := h1.authorizeHumanFile(req.Context(), "alice", false)
+	if access == nil {
+		t.Fatalf("authorize: %d %s", status, msg)
+	}
+	token, status, msg := h1.reserveQuota(req.Context(), access, "alice", "first.txt", 0, 6)
+	if status != 0 || token == "" {
+		t.Fatalf("reserve: status=%d token=%q msg=%s", status, token, msg)
+	}
+	before, beforeETag, err := h1.readQuotaLedger(ctx, "alice")
+	if err != nil {
+		t.Fatalf("read ledger before fault: %v", err)
+	}
+
+	faulty := &faultyStatOSS{
+		Memory:    store,
+		key:       humanFilesPrefix("alice") + "first.txt",
+		remaining: 1,
+	}
+	h2 := NewHumanFilesHandler(k8s, "default", faulty, audit.NewClient(faulty))
+
+	// Re-setting the quota reconciles the ledger; the stat fault must fail
+	// the whole operation (500) instead of writing a total that dropped the
+	// in-flight charge.
+	rec := hfPutQuota(t, h2, "alice", hfAdmin(), `{"quotaBytes":10}`)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("re-set quota under stat fault: got %d, want 500: %s", rec.Code, rec.Body.String())
+	}
+	faulty.remaining = 0
+	after, afterETag, err := h1.readQuotaLedger(ctx, "alice")
+	if err != nil {
+		t.Fatalf("read ledger after fault: %v", err)
+	}
+	if afterETag != beforeETag || after.UsedBytes != before.UsedBytes {
+		t.Fatalf("faulted sync modified the ledger: etag %q->%q, usedBytes %d->%d",
+			beforeETag, afterETag, before.UsedBytes, after.UsedBytes)
+	}
+	if after.UsedBytes != 6 {
+		t.Fatalf("ledger usedBytes = %d, want 6 (in-flight charge must survive the stat fault)", after.UsedBytes)
+	}
+	entry, ok := after.Paths["first.txt"]
+	if !ok || entry.Counted != 6 || len(entry.Outstanding) != 1 {
+		t.Fatalf("ledger paths = %+v, want first.txt Counted 6 with the outstanding reservation", after.Paths)
+	}
+
+	// The preserved charge still gates writes: 6 in-flight + 6 new > 10.
+	if rec := hfPutFile(t, h1, "alice", "second.txt", hfSelf(), "123456"); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("6B write against preserved in-flight charge: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+
+	// The original write lands and commits; usage settles at exactly 6.
+	if err := store.PutObject(ctx, humanFilesPrefix("alice")+"first.txt", []byte("abcdef")); err != nil {
+		t.Fatal(err)
+	}
+	h1.commitQuota(ctx, "alice", "first.txt", token)
+	ledger, _, err := h1.readQuotaLedger(ctx, "alice")
+	if err != nil {
+		t.Fatalf("read terminal ledger: %v", err)
+	}
+	if ledger.UsedBytes != 6 {
+		t.Fatalf("terminal usedBytes = %d, want 6", ledger.UsedBytes)
+	}
+	if _, ok := ledger.Paths["first.txt"]; ok {
+		t.Fatalf("settled entry survived commit: %+v", ledger.Paths["first.txt"])
 	}
 }

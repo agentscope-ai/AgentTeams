@@ -948,6 +948,12 @@ section "Test 21: Executable overlay export before container removal"
 
 _test_start_dashboard_export() {
     local _cp_fail="$1"
+    local _diff_out
+    if [ "$#" -ge 2 ]; then
+        _diff_out="$2"
+    else
+        _diff_out="A /data/agentteams-dashboard/config.json"
+    fi
     local _tmpfile
     _tmpfile=$(mktemp)
     local _calls
@@ -962,6 +968,7 @@ _test_start_dashboard_export() {
     (
         CALLS_FILE="${_calls}"
         CP_FAIL="${_cp_fail}"
+        DIFF_OUT="${_diff_out}"
         docker() {
             printf 'docker %s\n' "$*" >> "${CALLS_FILE}"
             if [ "$1" = "ps" ]; then
@@ -986,7 +993,9 @@ _test_start_dashboard_export() {
                 return 0
             fi
             if [ "$1" = "diff" ]; then
-                echo "A /data/agentteams-dashboard/config.json"
+                if [ -n "${DIFF_OUT}" ]; then
+                    printf '%s\n' "${DIFF_OUT}"
+                fi
                 return 0
             fi
             if [ "$1" = "image" ] && echo "$*" | grep -q 'Config.User'; then
@@ -1093,6 +1102,60 @@ else
         fail "Exec export-fail: started a new container after export failure"
     else
         pass "Exec export-fail: does not replace container after export failure"
+    fi
+fi
+
+# ---------- Test 24: Legacy-only /app/db export failure keeps the old container ----------
+
+section "Test 24: Executable legacy-only export failure"
+
+_legacy_fail=$(_test_start_dashboard_export 1 "A /app/db/config.json" 2>&1)
+
+if echo "${_legacy_fail}" | grep -q "EXTRACTION_FAILED\|FUNCTION_NOT_FOUND"; then
+    fail "Exec legacy-fail: function extraction failed"
+else
+    _calls_legacy=$(echo "${_legacy_fail}" | sed -n '/CALLS_BEGIN/,/CALLS_END/p')
+    if echo "${_calls_legacy}" | grep -q 'docker start .*agentteams-dashboard'; then
+        pass "Exec legacy-fail: restarts old container when /app/db export fails"
+    else
+        fail "Exec legacy-fail: did not restart old container"
+    fi
+    if echo "${_calls_legacy}" | grep -q 'docker rm'; then
+        fail "Exec legacy-fail: removed old container after /app/db export failure"
+    else
+        pass "Exec legacy-fail: does not rm old container after /app/db export failure"
+    fi
+    if echo "${_calls_legacy}" | grep -q 'docker run -d'; then
+        fail "Exec legacy-fail: started a new container after /app/db export failure"
+    else
+        pass "Exec legacy-fail: does not replace container after /app/db export failure"
+    fi
+fi
+
+# ---------- Test 25: Absent overlay and legacy paths are not treated as export failure ----------
+
+section "Test 25: Executable genuinely absent export paths"
+
+_absent_ok=$(_test_start_dashboard_export 1 "" 2>&1)
+
+if echo "${_absent_ok}" | grep -q "EXTRACTION_FAILED\|FUNCTION_NOT_FOUND"; then
+    fail "Exec absent-path: function extraction failed"
+else
+    _calls_absent=$(echo "${_absent_ok}" | sed -n '/CALLS_BEGIN/,/CALLS_END/p')
+    if echo "${_calls_absent}" | grep -q 'docker rm .*agentteams-dashboard'; then
+        pass "Exec absent-path: removes old container when neither overlay nor legacy data is present"
+    else
+        fail "Exec absent-path: did not rm old container for genuinely absent paths"
+    fi
+    if echo "${_calls_absent}" | grep -q 'docker run -d'; then
+        pass "Exec absent-path: starts a new container when export targets are absent"
+    else
+        fail "Exec absent-path: did not start a new container"
+    fi
+    if echo "${_calls_absent}" | grep -q 'docker start .*agentteams-dashboard'; then
+        fail "Exec absent-path: restarted old container for genuinely absent paths"
+    else
+        pass "Exec absent-path: does not treat a missing path as an export failure"
     fi
 fi
 

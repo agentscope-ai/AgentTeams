@@ -3651,6 +3651,20 @@ _start_dashboard() {
     local _dash_ids
     _dash_ids=$(_dashboard_image_ids)
 
+    # True when the stopped container still has files or a mount at src.
+    # docker diff sees the writable layer; inspect sees volume/bind mounts.
+    # A failed docker cp plus a missing path is "genuinely absent".
+    _dashboard_path_present() {
+        local _container="$1" _src="$2"
+        if ${DOCKER_CMD} diff "${_container}" 2>/dev/null | grep -F "${_src}" >/dev/null; then
+            return 0
+        fi
+        if ${DOCKER_CMD} inspect "${_container}" --format '{{range .Mounts}}{{.Destination}}{{"\n"}}{{end}}' 2>/dev/null | grep -Fx "${_src}" >/dev/null; then
+            return 0
+        fi
+        return 1
+    }
+
     # Export overlay config from the old container before removing it.
     # Checking a volume at /probe/app or dual-mounting the same volume is not
     # an export of the container writable layer.
@@ -3665,11 +3679,17 @@ _start_dashboard() {
         _dashboard_export_dir "${DASHBOARD_CONTAINER}" "/data/agentteams-dashboard" "${_overlay_dir}" "${_overlay_exists}"
         _dashboard_export_dir "${DASHBOARD_CONTAINER}" "/app/db" "${_legacy_dir}" "${_legacy_exists}"
 
-        local _overlay_hint
-        _overlay_hint=$(${DOCKER_CMD} diff "${DASHBOARD_CONTAINER}" 2>/dev/null | grep '/data/agentteams-dashboard' || true)
-
-        if [ -n "${_overlay_hint}" ] && [ ! -f "${_overlay_exists}" ]; then
-            log "WARNING: existing Dashboard config under /data/agentteams-dashboard could not be exported; leaving the old container in place"
+        local _keep_old=0
+        local _keep_where=""
+        if [ ! -f "${_overlay_exists}" ] && _dashboard_path_present "${DASHBOARD_CONTAINER}" "/data/agentteams-dashboard"; then
+            _keep_old=1
+            _keep_where="/data/agentteams-dashboard"
+        elif [ ! -f "${_legacy_exists}" ] && _dashboard_path_present "${DASHBOARD_CONTAINER}" "/app/db"; then
+            _keep_old=1
+            _keep_where="/app/db"
+        fi
+        if [ "${_keep_old}" = "1" ]; then
+            log "WARNING: existing Dashboard config under ${_keep_where} could not be exported; leaving the old container in place"
             ${DOCKER_CMD} start "${DASHBOARD_CONTAINER}" >/dev/null 2>&1 || true
             rm -rf "${_export_dir}" 2>/dev/null || true
             return 0

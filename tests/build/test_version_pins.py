@@ -1,15 +1,25 @@
-"""P3c: OpenClaw upstream tag pin (no native Matrix patch series).
+"""P3: runtime version pins (OpenClaw tag, Hermes git ref, QwenPaw pip spec).
 
-The AgentTeams Matrix bundle is a separate plugin/config projection; it does
-not patch OpenClaw's ``extensions/matrix`` sources. This test asserts the
-OpenClaw pin is an upstream tag and that no AgentTeams native patch context
-leaks back into the build.
+The container build carries independent version pins, one per runtime:
 
-It also guards the derived openclaw-base tag line: the immutable base tag
-lives in ``hack/versions.env`` (derived from the pin), and every CI-consumed
-file either reads that variable or carries the same pinned literal in a
-Dockerfile ARG default (Docker cannot source env files). The legacy April
-base tag must not reappear anywhere a build can read it.
+- ``OPENCLAW_TAG`` in ``openclaw-base/Dockerfile`` — the upstream OpenClaw
+  release tag the base image installs (via ``npx -y openclaw@<tag>``).
+- ``HERMES_GIT_REF`` in ``hermes/Dockerfile`` — the hermes-agent release
+  tag the Hermes worker image checks out.
+- ``QWENPAW_PIP_SPEC`` in ``qwenpaw/Dockerfile`` and
+  ``manager/Dockerfile.qwenpaw`` — the ``qwenpaw==X.Y.Z`` pip spec the
+  QwenPaw runtime images install.
+
+This test file is the single source of truth for all three: it reads
+``hack/versions.env`` and asserts that the Dockerfiles' ``ARG`` defaults
+still match the pins, so a pin bump that forgets to update a Dockerfile
+fails CI instead of shipping a mismatched image.
+
+It also asserts the OpenClaw pin is an upstream tag and that no AgentTeams
+native patch context leaks back into the build, and it guards the derived
+openclaw-base tag line: ``OPENCLAW_BASE_TAG = <OPENCLAW_TAG without the
+leading v> - node<NODE_MIN_VERSION>``, with no build-reachable file
+hard-coding the legacy April base tag.
 """
 
 from __future__ import annotations
@@ -154,11 +164,20 @@ def test_dot_git_is_kept_for_online_upgrade() -> None:
 # --- Hermes pin (#1472) -----------------------------------------------------
 HERMES_GIT_REF = "v0.22.7"
 
+# --- QwenPaw pin (#1471) ----------------------------------------------------
+QWENPAW_PIP_SPEC = "qwenpaw==2.2.2.post1"
+
 # Every pin in hack/versions.env must mirror the matching Dockerfile ARG
 # default (Docker cannot source env files).
 PIN_TARGETS = {
-    "OPENCLAW_TAG": ("openclaw-base/Dockerfile", "OPENCLAW_TAG"),
-    "HERMES_GIT_REF": ("hermes/Dockerfile", "HERMES_GIT_REF"),
+    "OPENCLAW_TAG": (("openclaw-base/Dockerfile", "OPENCLAW_TAG"),),
+    "HERMES_GIT_REF": (("hermes/Dockerfile", "HERMES_GIT_REF"),),
+    # The QwenPaw spec is consumed by two images (worker + Manager), so the
+    # value is a tuple of (dockerfile, ARG) pairs.
+    "QWENPAW_PIP_SPEC": (
+        ("qwenpaw/Dockerfile", "QWENPAW_PIP_SPEC"),
+        ("manager/Dockerfile.qwenpaw", "QWENPAW_PIP_SPEC"),
+    ),
 }
 
 
@@ -171,8 +190,9 @@ def _dockerfile_arg(dockerfile: str, arg: str) -> str:
 
 def test_versions_env_pins_match_dockerfile_args() -> None:
     env = _parse_env(VERSIONS_ENV)
-    for key, (dockerfile, arg) in PIN_TARGETS.items():
+    for key, targets in PIN_TARGETS.items():
         assert key in env, f"versions.env is missing the {key} pin"
-        assert env[key] == _dockerfile_arg(dockerfile, arg), (
-            f"versions.env {key}={env[key]!r} != ARG {arg} in {dockerfile}"
-        )
+        for dockerfile, arg in targets:
+            assert env[key] == _dockerfile_arg(dockerfile, arg), (
+                f"versions.env {key}={env[key]!r} != ARG {arg} in {dockerfile}"
+            )

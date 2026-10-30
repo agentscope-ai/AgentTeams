@@ -16,9 +16,9 @@ def test_worker_and_image_target_qwenpaw_2_2_0() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
     assert project["project"]["requires-python"] == ">=3.11,<3.14"
-    assert "qwenpaw==2.2.1" in project["project"]["dependencies"]
+    assert "qwenpaw==2.2.2.post1" in project["project"]["dependencies"]
     assert "agent-client-protocol>=0.9.0,<0.11.0" in project["project"]["dependencies"]
-    assert "ARG QWENPAW_PIP_SPEC=qwenpaw==2.2.1" in dockerfile
+    assert "ARG QWENPAW_PIP_SPEC=qwenpaw==2.2.2.post1" in dockerfile
 
 
 def test_runtime_uses_public_qwenpaw_extension_points_only() -> None:

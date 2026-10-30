@@ -98,14 +98,26 @@ func newHumanPathLockOwner() (string, error) {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 
-// humanPathLock is an acquired per-path lease. Release is idempotent and
-// swallows every error (the TTL is the safety net).
+// humanPathLock is an acquired per-path lease.
+//
+// The lease object is never deleted. Releasing CASes it to an expired
+// tombstone carrying the ETag this holder acquired, so a successor that
+// took over in the meantime keeps its lease: an owner check followed by an
+// unconditional delete (the earlier shape) could remove a fresher holder's
+// lease and let a third writer in behind it. The TTL bounds a holder that
+// dies without releasing.
 type humanPathLock struct {
 	h     *humanFilesHandler
 	key   string
+	rel   string
 	owner string
+	etag  string // ETag of the lease version this holder owns
 	held  bool
 }
+
+// errHumanPathLeaseLost reports that this holder no longer owns the lease
+// (expired and taken over, or replaced by a successor).
+var errHumanPathLeaseLost = errors.New("human file path lease was taken over")
 
 // acquireHumanPathLock takes the per-path lease for rel, retrying on
 // contention within the ~1s budget. The returned lock must be released
@@ -155,7 +167,7 @@ func (h *humanFilesHandler) tryAcquireHumanPathLock(ctx context.Context, key, re
 		return nil, err
 	}
 	if err := h.oss.PutObjectIfAbsent(ctx, key, body); err == nil {
-		return &humanPathLock{h: h, key: key, owner: owner, held: true}, nil
+		return h.settleHumanPathLock(ctx, key, rel, owner)
 	} else if !errors.Is(err, oss.ErrPreconditionFailed) {
 		return nil, err
 	}
@@ -177,7 +189,22 @@ func (h *humanFilesHandler) tryAcquireHumanPathLock(ctx context.Context, key, re
 		}
 		return nil, err
 	}
-	return &humanPathLock{h: h, key: key, owner: owner, held: true}, nil
+	return h.settleHumanPathLock(ctx, key, rel, owner)
+}
+
+// settleHumanPathLock reads back the lease we just wrote (create or steal)
+// and binds this holder to its ETag. Without the binding a later Verify
+// could not tell "still mine" from "replaced by a successor with identical
+// content".
+func (h *humanFilesHandler) settleHumanPathLock(ctx context.Context, key, rel, owner string) (*humanPathLock, error) {
+	current, etag, err := h.readHumanPathLease(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if current.Owner != owner || etag == "" {
+		return nil, errHumanPathContended
+	}
+	return &humanPathLock{h: h, key: key, rel: rel, owner: owner, etag: etag, held: true}, nil
 }
 
 // readHumanPathLease returns the lease body bound to the ETag that
@@ -205,25 +232,48 @@ func (h *humanFilesHandler) readHumanPathLease(ctx context.Context, key string) 
 	return p, meta.ETag, nil
 }
 
-// Release returns the lease to the pool: it deletes the lock object only
-// when the current owner is this holder, so a lease that expired and was
-// stolen in the meantime is left to its new owner. All errors are ignored
-// (the TTL bounds a leaked lease).
+// Verify reports whether this holder still owns the exact lease version it
+// acquired. Call it immediately before a mutating storage operation: a
+// holder whose lease expired and was taken over must not keep changing the
+// file unfenced, and a released holder must not act at all.
+func (l *humanPathLock) Verify(ctx context.Context) error {
+	if l == nil || !l.held {
+		return errHumanPathLeaseLost
+	}
+	current, etag, err := l.h.readHumanPathLease(ctx, l.key)
+	if err != nil {
+		return errHumanPathLeaseLost
+	}
+	if current.Owner != l.owner || etag != l.etag {
+		return errHumanPathLeaseLost
+	}
+	if current.expired(time.Now().UTC()) {
+		return errHumanPathLeaseLost
+	}
+	return nil
+}
+
+// Release yields the lease by CASing it to an expired tombstone that still
+// carries this holder's version. It never deletes the object: an
+// unconditional delete after an owner check races a successor that acquired
+// the lease in between (the check and the delete are two operations), and
+// removing that successor's lease would admit a third writer. A failed CAS
+// means the lease was already taken over — exactly when this holder must
+// leave it alone. All errors are ignored; the TTL bounds a leaked lease.
 func (l *humanPathLock) Release(ctx context.Context) {
 	if l == nil || !l.held {
 		return
 	}
 	l.held = false
-	data, err := l.h.oss.GetObject(ctx, l.key)
+	now := time.Now().UTC()
+	tomb, err := json.Marshal(humanPathLockPayload{
+		Owner:      "",
+		Path:       l.rel,
+		AcquiredAt: now.Format(time.RFC3339),
+		ExpiresAt:  now.Add(-time.Second).Format(time.RFC3339),
+	})
 	if err != nil {
 		return
 	}
-	var current humanPathLockPayload
-	if err := json.Unmarshal(data, &current); err != nil {
-		return
-	}
-	if current.Owner != l.owner {
-		return
-	}
-	_ = l.h.oss.DeleteObject(ctx, l.key)
+	_ = l.h.oss.PutObjectIfMatch(ctx, l.key, tomb, l.etag)
 }

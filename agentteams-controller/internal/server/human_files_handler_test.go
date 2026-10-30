@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	audit "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/audit"
@@ -2007,5 +2009,341 @@ func TestHumanFiles_QuotaStatFaultDoesNotDropInFlightCharge(t *testing.T) {
 	}
 	if _, ok := ledger.Paths["first.txt"]; ok {
 		t.Fatalf("settled entry survived commit: %+v", ledger.Paths["first.txt"])
+	}
+}
+
+// --- Round 5 P1 regressions (maintainer-named) -------------------------------
+
+// concurrentPutOSS serves a stale body on the first read of `key` while
+// advancing the underlying object to `injected` in the same call — the
+// concurrent writer landing between the handler's GetObject and StatMeta.
+type concurrentPutOSS struct {
+	*ossfake.Memory
+	key      string
+	stale    []byte
+	injected []byte
+	used     bool
+}
+
+func (c *concurrentPutOSS) GetObject(ctx context.Context, key string) ([]byte, error) {
+	if !c.used && key == c.key {
+		c.used = true
+		if err := c.Memory.PutObject(ctx, c.key, c.injected); err != nil {
+			return nil, err
+		}
+		return append([]byte(nil), c.stale...), nil
+	}
+	return c.Memory.GetObject(ctx, key)
+}
+
+// multipartETagOSS reports one key's ETag in multipart form (md5-N), which
+// cannot be verified against the body locally and forces the double-read
+// consistency fallback in readFileSnapshot.
+type multipartETagOSS struct {
+	*ossfake.Memory
+	key string
+}
+
+func (m *multipartETagOSS) StatMeta(ctx context.Context, key string) (oss.ObjectMeta, error) {
+	meta, err := m.Memory.StatMeta(ctx, key)
+	if err != nil {
+		return meta, err
+	}
+	if key == m.key {
+		if data, derr := m.Memory.GetObject(ctx, key); derr == nil {
+			meta.ETag = md5Hex(data) + "-3"
+		}
+	}
+	return meta, nil
+}
+
+// hfTrashIDs returns the valid trash entry ids currently present for a
+// human (ids carry a time prefix, so listing order is chronological).
+func hfTrashIDs(t *testing.T, store *ossfake.Memory, username string) map[string]struct{} {
+	t.Helper()
+	infos, err := store.ListObjectsDetailed(context.Background(), humanTrashPrefix(username))
+	if err != nil {
+		t.Fatalf("list trash: %v", err)
+	}
+	ids := map[string]struct{}{}
+	for _, info := range infos {
+		id := strings.SplitN(info.Name, "/", 2)[0]
+		if trashIDRegex.MatchString(id) {
+			ids[id] = struct{}{}
+		}
+	}
+	return ids
+}
+
+// TestReviewerFileGETETagMustDescribeReturnedBytes is the maintainer's
+// round-5 P1-1 repro: a GET that straddled a concurrent PUT used to serve
+// "A's bytes + B's ETag", whose If-Match write then silently clobbered the
+// never-seen B. The served ETag must describe exactly the served bytes,
+// and that same token must authorize an If-Match write.
+func TestReviewerFileGETETagMustDescribeReturnedBytes(t *testing.T) {
+	base := ossfake.NewMemory()
+	ctx := context.Background()
+	key := humanFilesPrefix("alice") + "f.txt"
+	if err := base.PutObject(ctx, key, []byte("AAAAA")); err != nil {
+		t.Fatal(err)
+	}
+	wrapped := &concurrentPutOSS{
+		Memory:   base,
+		key:      key,
+		stale:    []byte("AAAAA"),
+		injected: []byte("BBBBB"),
+	}
+	_, _, k8s := newHumanFilesRig(t)
+	hfh := NewHumanFilesHandler(k8s, "default", wrapped, audit.NewClient(wrapped))
+
+	rec := httptest.NewRecorder()
+	hfh.getFile(rec, hfReq(t, http.MethodGet, "alice", "f.txt", hfSelf(), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET: got %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.Bytes()
+	etag := rec.Result().Header.Get("ETag")
+	if etag == "" {
+		t.Fatal("GET did not set an ETag header")
+	}
+	if got := md5Hex(body); !strings.EqualFold(strings.Trim(etag, `"`), got) {
+		t.Fatalf("served ETag %q does not describe the served bytes (md5=%q): an If-Match write with this token would clobber a version the client never saw", etag, got)
+	}
+
+	// The served token must actually authorize an If-Match write.
+	put := hfReq(t, http.MethodPut, "alice", "f.txt", hfSelf(), strings.NewReader("CCCCC"))
+	put.Header.Set("If-Match", etag)
+	rec2 := httptest.NewRecorder()
+	hfh.putFile(rec2, put)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("If-Match PUT with the served ETag: got %d, want 200: %s", rec2.Code, rec2.Body.String())
+	}
+}
+
+// TestReviewerSoftDeleteMustPreserveConcurrentNewVersion is the maintainer's
+// round-5 P1-2 repro: a soft delete whose archive straddled a concurrent
+// PUT used to trash A and delete B — the newer version vanished from both
+// live and trash. Whatever the race resolves to, the newer version must
+// survive: either the delete 409s and B stays live, or the 200 archive
+// holds B (never A), the trash gains no orphan entry, and B is never gone
+// from both places.
+func TestReviewerSoftDeleteMustPreserveConcurrentNewVersion(t *testing.T) {
+	base := ossfake.NewMemory()
+	ctx := context.Background()
+	key := humanFilesPrefix("alice") + "f.txt"
+	if err := base.PutObject(ctx, key, []byte("AAAAA")); err != nil {
+		t.Fatal(err)
+	}
+	wrapped := &concurrentPutOSS{
+		Memory:   base,
+		key:      key,
+		stale:    []byte("AAAAA"),
+		injected: []byte("BBBBB"),
+	}
+	_, _, k8s := newHumanFilesRig(t)
+	hfh := NewHumanFilesHandler(k8s, "default", wrapped, audit.NewClient(wrapped))
+
+	before := hfTrashIDs(t, base, "alice")
+	rec := httptest.NewRecorder()
+	hfh.deleteFile(rec, hfReq(t, http.MethodDelete, "alice", "f.txt", hfSelf(), nil))
+
+	switch rec.Code {
+	case http.StatusConflict:
+		var ce humanFileCodedError
+		if err := json.Unmarshal(rec.Body.Bytes(), &ce); err != nil {
+			t.Fatalf("conflict body: %v: %s", err, rec.Body.String())
+		}
+		if ce.Code != "version_conflict" {
+			t.Fatalf("conflict code = %q, want version_conflict", ce.Code)
+		}
+		data, err := base.GetObject(ctx, key)
+		if err != nil || string(data) != "BBBBB" {
+			t.Fatalf("409 but the live file is not the new version: %q err=%v, want BBBBB", data, err)
+		}
+		if after := hfTrashIDs(t, base, "alice"); len(after) != len(before) {
+			t.Fatalf("409 left a trash entry behind: before=%v after=%v", before, after)
+		}
+	case http.StatusOK:
+		after := hfTrashIDs(t, base, "alice")
+		if len(after) != len(before)+1 {
+			t.Fatalf("trash ids after delete = %v, want exactly one new entry (before %v)", after, before)
+		}
+		var trashID string
+		for id := range after {
+			if _, existed := before[id]; !existed {
+				trashID = id
+			}
+		}
+		content, err := base.GetObject(ctx, humanTrashPrefix("alice")+trashID+"/content")
+		if err != nil || string(content) != "BBBBB" {
+			t.Fatalf("archived content = %q err=%v, want the new version BBBBB (never AAAAA)", content, err)
+		}
+		if _, err := base.GetObject(ctx, humanTrashPrefix("alice")+trashID+"/meta.json"); err != nil {
+			t.Fatalf("trash entry %s has no meta.json", trashID)
+		}
+		if _, err := base.GetObject(ctx, key); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("delete reported success but the live file is still readable (err=%v)", err)
+		}
+	default:
+		t.Fatalf("delete: got %d, want 409 (version_conflict) or 200: %s", rec.Code, rec.Body.String())
+	}
+
+	// Red line (both branches): the new version must be in live or in the
+	// trash — it may never be gone from both.
+	kept := false
+	if live, err := base.GetObject(ctx, key); err == nil && string(live) == "BBBBB" {
+		kept = true
+	} else {
+		for id := range hfTrashIDs(t, base, "alice") {
+			if c, err := base.GetObject(ctx, humanTrashPrefix("alice")+id+"/content"); err == nil && string(c) == "BBBBB" {
+				kept = true
+				break
+			}
+		}
+	}
+	if !kept {
+		t.Fatal("red line: the new version BBBBB is gone from both live and trash")
+	}
+	// No orphan trash entries: every id carries both content and meta.json.
+	for id := range hfTrashIDs(t, base, "alice") {
+		if _, err := base.GetObject(ctx, humanTrashPrefix("alice")+id+"/content"); err != nil {
+			t.Fatalf("orphan trash entry %s: missing content", id)
+		}
+		if _, err := base.GetObject(ctx, humanTrashPrefix("alice")+id+"/meta.json"); err != nil {
+			t.Fatalf("orphan trash entry %s: missing meta.json", id)
+		}
+	}
+}
+
+// TestHumanFiles_PathLockSerializesMutations verifies the per-path lease:
+// while one holder keeps the lease for a rel, a second handler's PUT on
+// that rel is rejected with 409 file_busy and writes nothing; after the
+// lease is released the same PUT succeeds.
+func TestHumanFiles_PathLockSerializesMutations(t *testing.T) {
+	h1, store, k8s := newHumanFilesRig(t)
+	ctx := context.Background()
+	key := humanFilesPrefix("alice") + "f.txt"
+	lockKey := humanPathLockKey("alice", "f.txt")
+
+	lock, err := h1.acquireHumanPathLock(ctx, "alice", "f.txt", humanPathLockTTL)
+	if err != nil {
+		t.Fatalf("manual acquire: %v", err)
+	}
+	if _, err := store.GetObject(ctx, lockKey); err != nil {
+		t.Fatalf("lock object not stored: %v", err)
+	}
+
+	h2 := NewHumanFilesHandler(k8s, "default", store, audit.NewClient(store))
+	rec := hfPutFile(t, h2, "alice", "f.txt", hfSelf(), "BBBBB")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("put under held lease: got %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	var ce humanFileCodedError
+	if err := json.Unmarshal(rec.Body.Bytes(), &ce); err != nil {
+		t.Fatal(err)
+	}
+	if ce.Code != "file_busy" {
+		t.Fatalf("error code = %q, want file_busy", ce.Code)
+	}
+	if _, err := store.GetObject(ctx, key); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the blocked put still wrote the file (err=%v)", err)
+	}
+
+	lock.Release(ctx)
+	if _, err := store.GetObject(ctx, lockKey); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("release left the lock object behind (err=%v)", err)
+	}
+	if rec := hfPutFile(t, h2, "alice", "f.txt", hfSelf(), "BBBBB"); rec.Code != http.StatusOK {
+		t.Fatalf("put after release: got %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if data, err := store.GetObject(ctx, key); err != nil || string(data) != "BBBBB" {
+		t.Fatalf("file after release = %q err=%v, want BBBBB", data, err)
+	}
+}
+
+// TestHumanFiles_PathLockExpiredLeaseCanBeStolen verifies the steal path:
+// a lease whose expiresAt is in the past (a crashed holder) is taken over
+// by a CAS write — quickly, with a new owner and a fresh expiry — and the
+// stolen lease releases cleanly.
+func TestHumanFiles_PathLockExpiredLeaseCanBeStolen(t *testing.T) {
+	hfh, store, _ := newHumanFilesRig(t)
+	ctx := context.Background()
+	lockKey := humanPathLockKey("alice", "f.txt")
+
+	past := time.Now().UTC().Add(-10 * time.Minute)
+	old := humanPathLockPayload{
+		Owner:      "00000000-0000-4000-8000-000000000000",
+		Path:       "f.txt",
+		AcquiredAt: past.Add(-time.Minute).Format(time.RFC3339),
+		ExpiresAt:  past.Format(time.RFC3339),
+	}
+	body, err := json.Marshal(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutObject(ctx, lockKey, body); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	lock, err := hfh.acquireHumanPathLock(ctx, "alice", "f.txt", humanPathLockTTL)
+	if err != nil {
+		t.Fatalf("acquire over an expired lease: %v", err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("stealing an expired lease took %v, want < 3s", d)
+	}
+	cur, err := store.GetObject(ctx, lockKey)
+	if err != nil {
+		t.Fatalf("lock object after steal: %v", err)
+	}
+	var p humanPathLockPayload
+	if err := json.Unmarshal(cur, &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.Owner == "" || p.Owner == old.Owner {
+		t.Fatalf("steal did not change the owner: %q", p.Owner)
+	}
+	exp, err := time.Parse(time.RFC3339, p.ExpiresAt)
+	if err != nil {
+		t.Fatalf("steal lease expiresAt parse: %v", err)
+	}
+	now := time.Now().UTC()
+	if exp.Before(now.Add(4*time.Minute)) || exp.After(now.Add(6*time.Minute)) {
+		t.Fatalf("stolen lease expires %v, want ≈ now+5min", exp)
+	}
+
+	lock.Release(ctx)
+	if _, err := store.GetObject(ctx, lockKey); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("release after steal left the lock object (err=%v)", err)
+	}
+}
+
+// TestHumanFiles_GetSnapshotHandlesMultipartETag verifies the fallback for
+// ETags that cannot be verified locally (multipart md5-N): the double-read
+// consistency check accepts a stable object and the GET still reports the
+// multipart ETag verbatim.
+func TestHumanFiles_GetSnapshotHandlesMultipartETag(t *testing.T) {
+	base := ossfake.NewMemory()
+	ctx := context.Background()
+	key := humanFilesPrefix("alice") + "big.bin"
+	content := []byte("multipart payload")
+	if err := base.PutObject(ctx, key, content); err != nil {
+		t.Fatal(err)
+	}
+	wrapped := &multipartETagOSS{Memory: base, key: key}
+	_, _, k8s := newHumanFilesRig(t)
+	hfh := NewHumanFilesHandler(k8s, "default", wrapped, audit.NewClient(wrapped))
+
+	rec := httptest.NewRecorder()
+	hfh.getFile(rec, hfReq(t, http.MethodGet, "alice", "big.bin", hfSelf(), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET: got %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if !bytes.Equal(rec.Body.Bytes(), content) {
+		t.Fatalf("body = %q, want %q", rec.Body.Bytes(), content)
+	}
+	if got, want := rec.Result().Header.Get("ETag"), md5Hex(content)+"-3"; got != want {
+		t.Fatalf("ETag = %q, want the multipart form %q", got, want)
 	}
 }

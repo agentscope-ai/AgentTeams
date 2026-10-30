@@ -1548,3 +1548,48 @@ func TestHumanFiles_QuotaLedgerRejectsStaleSnapshot(t *testing.T) {
 		t.Fatalf("stale ledger snapshot: got %d, want 413: %s", rec.Code, rec.Body.String())
 	}
 }
+
+// TestHumanFiles_UsedBytesCountsNestedDirectoriesWithMCLikeListing covers the
+// production listing contract: mc ls returns only direct children, so a
+// nested file (or a trash id directory) must be walked rather than silently
+// skipped. The in-memory fake returns the full subtree and masks this bug.
+func TestHumanFiles_UsedBytesCountsNestedDirectoriesWithMCLikeListing(t *testing.T) {
+	_, _, k8s := newHumanFilesRig(t)
+	base := ossfake.NewMemory()
+	store := &mcLikeOSS{Memory: base}
+	hfh := NewHumanFilesHandler(k8s, "default", store, audit.NewClient(base))
+
+	if rec := hfPutQuota(t, hfh, "alice", hfAdmin(), `{"quotaBytes":100}`); rec.Code != http.StatusOK {
+		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPutFile(t, hfh, "alice", "docs/notes/a.txt", hfSelf(), "123456"); rec.Code != http.StatusOK {
+		t.Fatalf("nested put: %d %s", rec.Code, rec.Body.String())
+	}
+	rec := hfGetQuota(t, hfh, "alice", hfSelf())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get quota: %d %s", rec.Code, rec.Body.String())
+	}
+	var q humanQuotaResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &q); err != nil {
+		t.Fatal(err)
+	}
+	if q.UsedBytes != 6 {
+		t.Fatalf("nested file usedBytes=%d, want 6", q.UsedBytes)
+	}
+
+	rec = httptest.NewRecorder()
+	hfh.deleteFile(rec, hfReq(t, http.MethodDelete, "alice", "docs/notes/a.txt", hfSelf(), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete nested file: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = hfGetQuota(t, hfh, "alice", hfSelf())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get quota after delete: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &q); err != nil {
+		t.Fatal(err)
+	}
+	if q.UsedBytes <= 6 {
+		t.Fatalf("trash usage=%d, want content+metadata above the 6-byte payload", q.UsedBytes)
+	}
+}

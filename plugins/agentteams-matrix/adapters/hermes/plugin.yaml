@@ -1,8 +1,60 @@
-# AgentTeams Matrix adapter manifest for the Hermes runtime.
-# The identifier mirrors the QwenPaw adapter so the channel plugin id is
-# stable across runtimes.
-apiVersion: agentteams.agentteam/v1alpha1
-kind: AgentTeamPlugin
-metadata:
-  name: agentteams-matrix-channel
-  version: 0.1.0
+name: agentteams-matrix-platform
+label: AgentTeams Matrix
+kind: platform
+version: 1.0.0
+description: >
+  AgentTeams Matrix gateway adapter for Hermes Agent. Serves Matrix to
+  the gateway through the bundle's runtime-neutral core (matrix-nio),
+  in-process: rooms and DMs relayed to the agent with E2EE support,
+  mention gating in group rooms and group history buffering.
+author: AgentTeams
+# ``requires_env`` / ``optional_env`` rich-dict entries are surfaced in
+# the ``hermes`` config UI via the platform-plugin env var injector.
+requires_env:
+  - name: AGENTTEAMS_MATRIX_SERVER
+    description: "Matrix homeserver URL (e.g. https://matrix.example.com)"
+    prompt: "Matrix homeserver"
+    password: false
+  - name: AGENTTEAMS_MATRIX_USER_ID
+    description: "Bot Matrix user ID (e.g. @agentteams-bot:matrix.example.com)"
+    prompt: "Matrix user ID"
+    password: false
+  - name: AGENTTEAMS_MATRIX_TOKEN
+    description: "Matrix access token for the bot user"
+    prompt: "Matrix access token"
+    password: true
+optional_env:
+  - name: AGENTTEAMS_MATRIX_DEVICE_ID
+    description: "Device ID to use for login (optional; the server assigns one when unset)"
+    prompt: "Device ID (or empty)"
+    password: false
+  - name: AGENTTEAMS_MATRIX_STATE_DIR
+    description: >
+      State directory for the sync token, E2EE key store and media cache
+      (default: <HERMES_HOME>/state/agentteams_matrix)
+    prompt: "State directory (or empty)"
+    password: false
+  - name: AGENTTEAMS_MATRIX_ENCRYPTION
+    description: "Enable end-to-end encryption (1/true/yes; degrades to plaintext when the E2EE backend is missing)"
+    prompt: "Enable E2EE? (true/false)"
+    password: false
+  - name: AGENTTEAMS_MATRIX_HISTORY_LIMIT
+    description: "Max buffered group-history messages per room before a mention (default: 50)"
+    prompt: "Group history limit"
+    password: false
+  - name: AGENTTEAMS_MATRIX_SYNC_TIMEOUT_MS
+    description: "Sync long-poll timeout in milliseconds (min 1000, default 30000)"
+    prompt: "Sync timeout (ms)"
+    password: false
+  - name: AGENTTEAMS_MATRIX_ALLOWED_USERS
+    description: "Comma-separated Matrix user IDs allowed to talk to the bot"
+    prompt: "Allowed users (comma-separated)"
+    password: false
+  - name: AGENTTEAMS_MATRIX_ALLOW_ALL_USERS
+    description: "Allow any room member to talk to the bot (dev only)"
+    prompt: "Allow all users? (true/false)"
+    password: false
+  - name: AGENTTEAMS_MATRIX_HOME_ROOM
+    description: "Room ID for cron / notification delivery (e.g. !abc123:matrix.example.com)"
+    prompt: "Home room (or empty)"
+    password: false

@@ -131,3 +131,7 @@ if [ "${ran}" -eq 0 ]; then
   echo "ERROR: no supported Matrix channel runtime found; expected qwenpaw, openclaw, or hermes" >&2
   exit 1
 fi
+
+if command -v hermes >/dev/null 2>&1; then
+  bash "${BUNDLE_DIR}/adapters/hermes/uninstall.sh"
+fi

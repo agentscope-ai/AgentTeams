@@ -7,11 +7,11 @@ truth; each adapter only projects it onto its runtime.
 | Runtime | Status |
 |---------|--------|
 | qwenpaw | P0 — present |
-| openclaw | P1 — present (`adapters/openclaw/`, projects `channels.matrix`) |
-| hermes | P1 — present (`adapters/hermes/`, projects the `platforms.matrix` block) |
+| hermes | PR1 — present (platform plugin, in-process core) |
+| openclaw | PR2 — absent until the sidecar protocol lands |
 
-The OpenClaw and Hermes adapters were added in P1 (commit
-`5877c10f`) without changing the contract or the bundle layout; their key
-projections were re-aligned with the upstream config schemas in P1-fix.
-Each adapter directory carries a README with the per-key upstream
-evidence.
+The Hermes adapter registers the `agentteams_matrix` platform with the
+Hermes gateway and drives the bundle's runtime-neutral core in-process
+(see `hermes/README.md`). The OpenClaw adapter lands in PR2 together
+with the sidecar protocol, without changing the contract or the bundle
+layout.

@@ -419,7 +419,7 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusInternalServerError, "stat file failed")
 		return
 	}
-	reservedDelta, status, msg := h.reserveQuota(ctx, a, username, oldSize, int64(len(data)))
+	reservedToken, status, msg := h.reserveQuota(ctx, a, username, rel, oldSize, int64(len(data)))
 	if status != 0 {
 		if status == http.StatusRequestEntityTooLarge {
 			writeHumanFileCodedError(w, status, "quota_exceeded", msg)
@@ -432,10 +432,10 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 	// release the reservation; after a successful write, keep it because the
 	// new object's bytes are now part of usedBytes.
 	committed := false
-	if reservedDelta != 0 {
+	if reservedToken != "" {
 		defer func() {
 			if !committed {
-				h.releaseQuota(ctx, username, reservedDelta)
+				h.releaseQuota(ctx, username, rel, reservedToken)
 			}
 		}()
 	}
@@ -470,12 +470,14 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		committed = true
+		h.commitQuota(ctx, username, rel, reservedToken)
 	} else {
 		if err := h.oss.PutObject(ctx, key, data); err != nil {
 			httputil.WriteError(w, http.StatusInternalServerError, "write file failed")
 			return
 		}
 		committed = true
+		h.commitQuota(ctx, username, rel, reservedToken)
 	}
 
 	var etag string

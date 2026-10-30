@@ -1306,6 +1306,108 @@ func TestHumanFiles_QuotaDisabledWriteThenReenable(t *testing.T) {
 	}
 }
 
+// TestHumanFiles_QuotaSamePathReplacementReservations covers two replacements
+// of the same object: both observed oldSize=10 before either PUT landed. The
+// second reservation must build on the first reservation's target size, not
+// subtract the same old 10 bytes again.
+func TestHumanFiles_QuotaSamePathReplacementReservations(t *testing.T) {
+	h1, store, k8s := newHumanFilesRig(t)
+	h2 := NewHumanFilesHandler(k8s, "default", store, audit.NewClient(store))
+
+	if rec := hfPutQuota(t, h1, "alice", hfAdmin(), `{"quotaBytes":10}`); rec.Code != http.StatusOK {
+		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPutFile(t, h1, "alice", "first.txt", hfSelf(), strings.Repeat("a", 10)); rec.Code != http.StatusOK {
+		t.Fatalf("seed file: %d %s", rec.Code, rec.Body.String())
+	}
+
+	req1 := hfReq(t, http.MethodPut, "alice", "first.txt", hfSelf(), nil)
+	a1, status, msg := h1.authorizeHumanFile(req1.Context(), "alice", false)
+	if a1 == nil {
+		t.Fatalf("authorize h1: %d %s", status, msg)
+	}
+	token1, status, msg := h1.reserveQuota(req1.Context(), a1, "alice", "first.txt", 10, 1)
+	if status != 0 || token1 == "" {
+		t.Fatalf("first reservation: status=%d token=%q msg=%s", status, token1, msg)
+	}
+
+	req2 := hfReq(t, http.MethodPut, "alice", "first.txt", hfSelf(), nil)
+	a2, status, msg := h2.authorizeHumanFile(req2.Context(), "alice", false)
+	if a2 == nil {
+		t.Fatalf("authorize h2: %d %s", status, msg)
+	}
+	token2, status, msg := h2.reserveQuota(req2.Context(), a2, "alice", "first.txt", 10, 1)
+	if status != 0 || token2 == "" {
+		t.Fatalf("second reservation: status=%d token=%q msg=%s", status, token2, msg)
+	}
+
+	// The second replacement lands first; the first replacement commits after
+	// it. The ledger must still count the one-byte object, not zero.
+	if err := h2.oss.PutObject(req2.Context(), humanFilesPrefix("alice")+"first.txt", []byte("b")); err != nil {
+		t.Fatal(err)
+	}
+	h2.commitQuota(req2.Context(), "alice", "first.txt", token2)
+	if err := h1.oss.PutObject(req1.Context(), humanFilesPrefix("alice")+"first.txt", []byte("c")); err != nil {
+		t.Fatal(err)
+	}
+	h1.commitQuota(req1.Context(), "alice", "first.txt", token1)
+
+	if rec := hfPutFile(t, h1, "alice", "new.txt", hfSelf(), strings.Repeat("d", 10)); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("new 10-byte file after same-path replacements: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+
+	rec := hfGetQuota(t, h1, "alice", hfSelf())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get quota: %d %s", rec.Code, rec.Body.String())
+	}
+	var q humanQuotaResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &q); err != nil {
+		t.Fatal(err)
+	}
+	if q.UsedBytes != 1 {
+		t.Fatalf("usedBytes=%d, want 1", q.UsedBytes)
+	}
+}
+
+// The later commit may carry a different size than the reservation that was
+// superseded. Recompute from live usage on commit so the last writer's bytes
+// are not undercounted.
+func TestHumanFiles_QuotaSamePathReplacementCommitOrder(t *testing.T) {
+	h, store, _ := newHumanFilesRig(t)
+	if rec := hfPutQuota(t, h, "alice", hfAdmin(), `{"quotaBytes":10}`); rec.Code != http.StatusOK {
+		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPutFile(t, h, "alice", "first.txt", hfSelf(), strings.Repeat("a", 10)); rec.Code != http.StatusOK {
+		t.Fatalf("seed file: %d %s", rec.Code, rec.Body.String())
+	}
+	req := hfReq(t, http.MethodPut, "alice", "first.txt", hfSelf(), nil)
+	a, status, msg := h.authorizeHumanFile(req.Context(), "alice", false)
+	if a == nil {
+		t.Fatalf("authorize: %d %s", status, msg)
+	}
+	token1, status, msg := h.reserveQuota(req.Context(), a, "alice", "first.txt", 10, 5)
+	if status != 0 {
+		t.Fatalf("first reserve: %d %s", status, msg)
+	}
+	token2, status, msg := h.reserveQuota(req.Context(), a, "alice", "first.txt", 10, 1)
+	if status != 0 {
+		t.Fatalf("second reserve: %d %s", status, msg)
+	}
+
+	if err := store.PutObject(req.Context(), humanFilesPrefix("alice")+"first.txt", []byte("b")); err != nil {
+		t.Fatal(err)
+	}
+	h.commitQuota(req.Context(), "alice", "first.txt", token2)
+	if err := store.PutObject(req.Context(), humanFilesPrefix("alice")+"first.txt", []byte("ccccc")); err != nil {
+		t.Fatal(err)
+	}
+	h.commitQuota(req.Context(), "alice", "first.txt", token1)
+
+	if rec := hfPutFile(t, h, "alice", "new.txt", hfSelf(), strings.Repeat("d", 6)); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("new 6-byte file: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+}
+
 // TestHumanFiles_QuotaSetPreservesInFlightReservation is the quota-set vs
 // in-flight-write interleaving: the first handler reserves 6 bytes but has not
 // committed its object yet, then a second handler re-sets the same quota. The
@@ -1323,9 +1425,9 @@ func TestHumanFiles_QuotaSetPreservesInFlightReservation(t *testing.T) {
 	if access == nil {
 		t.Fatalf("authorize: %d %s", status, msg)
 	}
-	delta, status, msg := h1.reserveQuota(req.Context(), access, "alice", 0, 6)
-	if status != 0 || delta != 6 {
-		t.Fatalf("reserve: status=%d delta=%d msg=%s", status, delta, msg)
+	token, status, msg := h1.reserveQuota(req.Context(), access, "alice", "a.txt", 0, 6)
+	if status != 0 || token == "" {
+		t.Fatalf("reserve: status=%d token=%q msg=%s", status, token, msg)
 	}
 
 	// Re-setting the same quota must preserve the in-flight reservation.
@@ -1337,7 +1439,7 @@ func TestHumanFiles_QuotaSetPreservesInFlightReservation(t *testing.T) {
 	}
 
 	// Simulate the first write aborting; release restores the ledger.
-	h1.releaseQuota(req.Context(), "alice", delta)
+	h1.releaseQuota(req.Context(), "alice", "a.txt", token)
 }
 
 // TestHumanFiles_QuotaCrossHandlerAtomic is the cross-controller quota gate:

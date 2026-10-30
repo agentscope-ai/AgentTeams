@@ -1,7 +1,7 @@
 # ============================================================
 # AgentTeams Hermes Worker Agent - Python-based Container
 # ============================================================
-# Lightweight Python container running hermes-agent v0.22.5 as a
+# Lightweight Python container running hermes-agent v0.10.0 as a
 # AgentTeams Worker. Uses the same MinIO-backed config/sync model as the
 # OpenClaw / CoPaw workers, with hermes-agent providing the agent loop
 # and tools. The Matrix gateway adapter keeps hermes-agent's native
@@ -15,8 +15,8 @@
 #   PIP_INDEX_URL           - PyPI mirror (default: official PyPI)
 #   NPM_REGISTRY            - npm registry (default: official)
 #   HERMES_GIT_REF          - git ref of hermes-agent to install
-#                             (default: v0.22.5; keep in sync with
-#                             HERMES_TAG in hack/versions.env)
+#                             (default: v2026.4.16, which is the
+#                             "Hermes Agent v0.10.0" release)
 #   HERMES_REPO_URL         - hermes-agent git repo URL
 # ============================================================
 
@@ -35,9 +35,9 @@ FROM ${HIGRESS_REGISTRY}/higress/python:3.11-slim
 ARG APT_MIRROR=
 ARG PIP_INDEX_URL=https://pypi.org/simple/
 ARG NPM_REGISTRY=https://registry.npmjs.org/
-# Pinned checkout ref. Docker cannot source env files, so this default
-# must stay in sync with HERMES_TAG in hack/versions.env.
-ARG HERMES_GIT_REF=v0.22.5
+# v2026.4.16 is the "Hermes Agent v0.10.0 (2026.4.16)" calendar tag
+# (commit 1dd6b5d5 on the upstream repo).
+ARG HERMES_GIT_REF=v2026.4.16
 ARG HERMES_REPO_URL=https://github.com/NousResearch/hermes-agent.git
 
 # python:3.11-slim is Debian-based, uses /etc/apt/sources.list.d/debian.sources

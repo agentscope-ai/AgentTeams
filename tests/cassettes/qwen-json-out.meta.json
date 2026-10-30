@@ -1,0 +1,14 @@
+{
+  "family": "json-out",
+  "status": "recorded",
+  "qwen_version": "0.25.3",
+  "recorded_at": "2026-10-20T00:29:16Z",
+  "recorded_by": "recorded 2026-10-19 (dev container, qwen 0.25.3, isolated HOME holding a settings.json auth copy)",
+  "prompt": "Reply OK",
+  "flags": ["-m", "qwen3.6-27b-fp8", "-o", "json"],
+  "output_source": "stdout",
+  "exit_code": 0,
+  "stderr": "empty (0 bytes)",
+  "shape": "single JSON array, 4 frames: system/init, assistant, assistant, result/success; last frame is_error=false",
+  "re_record": "re-run the recorded invocation (cwd scratch dir, same HOME auth), overwrite qwen-json-out.stdout.json with the raw stdout, and refresh qwen_version/recorded_at/exit_code/stderr here"
+}

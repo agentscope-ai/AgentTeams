@@ -1068,7 +1068,9 @@ if [ "${AGENTTEAMS_RUNTIME}" = "aliyun" ]; then
             ensure_mc_credentials 2>/dev/null || true
             mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/" /root/agentteams-fs/shared/ --overwrite --newer-than "1m" 2>/dev/null || true
             mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agents/" /root/agentteams-fs/agents/ --overwrite --newer-than "1m" 2>/dev/null || true
-            mc cp "${AGENTTEAMS_STORAGE_PREFIX}/manager/openclaw.json" /root/manager-workspace/openclaw.json 2>/dev/null || true
+            # Manager openclaw.json is local-only. Pulling it here races the
+            # OpenClaw startup config guard: the copy can change validity
+            # between the guard's two snapshots and force a restart loop.
         done
     ) &
     log "OSS→Local sync started (every 60s, PID: $!)"
@@ -1101,7 +1103,9 @@ if [ "${AGENTTEAMS_RUNTIME}" = "k8s" ]; then
             mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/" /root/agentteams-fs/shared/ --overwrite --newer-than "1m" 2>/dev/null || true
             mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agents/" /root/agentteams-fs/agents/ --overwrite --newer-than "1m" 2>/dev/null || true
             mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agentteams-config/" /root/agentteams-fs/agentteams-config/ --overwrite --newer-than "1m" 2>/dev/null || true
-            mc cp "${AGENTTEAMS_STORAGE_PREFIX}/manager/openclaw.json" /root/manager-workspace/openclaw.json 2>/dev/null || true
+            # Manager openclaw.json is local-only. Pulling it here races the
+            # OpenClaw startup config guard: the copy can change validity
+            # between the guard's two snapshots and force a restart loop.
         done
     ) &
     log "MinIO→Local sync started (every 60s, PID: $!)"

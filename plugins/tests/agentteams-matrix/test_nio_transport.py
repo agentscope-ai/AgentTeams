@@ -632,7 +632,12 @@ def test_send_final_with_reply(tmp_path):
         assert call["message_type"] == "m.room.message"
         assert call["content"]["msgtype"] == "m.text"
         assert call["content"]["body"] == "hello"
-        assert call["content"]["m.in_reply_to"] == {"event_id": "$orig"}
+        # Rich reply per the client-server spec: the in-reply-to
+        # relation lives inside m.relates_to, not at top level.
+        assert call["content"]["m.relates_to"] == {
+            "m.in_reply_to": {"event_id": "$orig"}
+        }
+        assert "m.in_reply_to" not in call["content"]
         assert call["tx_id"]
 
     _run(scenario)
@@ -656,7 +661,9 @@ def test_send_tool_and_notice_msgtypes(tmp_path):
         )
         assert client.room_send_calls[0]["content"]["msgtype"] == "m.notice"
         assert client.room_send_calls[1]["content"]["msgtype"] == "m.text"
-        assert "m.in_reply_to" not in client.room_send_calls[0]["content"]
+        content = client.room_send_calls[0]["content"]
+        assert "m.in_reply_to" not in content
+        assert "m.relates_to" not in content
 
     _run(scenario)
 
@@ -705,8 +712,17 @@ def test_react_sends_annotation(tmp_path):
         )
         await transport.react("!r:hs.example.com", "$orig", "+1")
         call = client.room_send_calls[0]
+        # m.reaction per the client-server spec: an m.annotation
+        # relation targeting the reacted event, carrying the key.
         assert call["message_type"] == "m.reaction"
-        assert call["content"]["m.annotation"] == {"key": "+1"}
+        assert call["content"] == {
+            "m.relates_to": {
+                "rel_type": "m.annotation",
+                "event_id": "$orig",
+                "key": "+1",
+            }
+        }
+        assert "m.annotation" not in call["content"]
 
     _run(scenario)
 
@@ -783,5 +799,35 @@ def test_download_failure_raises(tmp_path):
             await transport.download(
                 MediaRef(mxc_uri="mxc://hs.example.com/img1")
             )
+
+    _run(scenario)
+
+
+def test_download_traversal_filename_stays_in_cache(tmp_path):
+    """RoomMessageImage -> normalize -> download: a sender-controlled
+    ``../sentinel.txt`` body cannot escape the media cache dir."""
+
+    async def scenario():
+        client = FakeClient()
+        client.download_response = MemoryDownloadResponse(
+            body=b"sentinel-bytes", content_type="text/plain", filename=None
+        )
+        transport = NioTransport(
+            _config(), store=FakeStore(), state_dir=tmp_path, client=client
+        )
+        inbound = normalize_room_event(ROOM, _media_event())
+        assert inbound is not None and inbound.media
+        media = inbound.media[0]
+        ref = MediaRef(
+            mxc_uri=media.mxc_uri,
+            mime_type=media.mime_type,
+            file_name="../sentinel.txt",
+        )
+        data = await transport.download(ref)
+        assert data == b"sentinel-bytes"
+        cache_dir = tmp_path / "media_cache"
+        assert (cache_dir / "sentinel.txt").read_bytes() == b"sentinel-bytes"
+        # Nothing was created next to the cache dir.
+        assert not (tmp_path / "sentinel.txt").exists()
 
     _run(scenario)

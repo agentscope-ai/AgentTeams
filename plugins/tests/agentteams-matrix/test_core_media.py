@@ -20,7 +20,7 @@ from typing import List, Optional
 
 import pytest
 
-from core.media import MediaCache, mxc_to_http
+from core.media import MediaCache, mxc_to_http, safe_cache_name
 
 try:
     from nio.crypto.attachments import (
@@ -285,3 +285,96 @@ def test_core_media_import_does_not_pull_in_nio():
         check=True,
     )
     assert result.stdout.strip() == "False"
+
+
+# ----------------------------------------------------------------------
+# sender-controlled filename containment (cache layer)
+# ----------------------------------------------------------------------
+
+
+def test_safe_cache_name_never_escapes():
+    assert safe_cache_name(MHC, "../sentinel.txt") == "sentinel.txt"
+    assert safe_cache_name(MHC, "..\\windows\\x.txt") == "x.txt"
+    assert safe_cache_name(MHC, "/tmp/agentteams-escape-sentinel") == (
+        "agentteams-escape-sentinel"
+    )
+    assert safe_cache_name(MHC, "normal-name_1.2.jpg") == "normal-name_1.2.jpg"
+    # Empty / dot-only names fall back to a stable 32-char mxc hash.
+    hashed_empty = safe_cache_name(MHC, "")
+    assert len(hashed_empty) == 32
+    assert safe_cache_name(MHC, None) == hashed_empty
+    assert safe_cache_name(MHC, "..") == safe_cache_name(MHC, ".")
+    # Overlong names are truncated to the cap.
+    assert safe_cache_name(MHC, "a" * 200) == "a" * 120
+
+
+def test_fetch_to_file_traversal_name_stays_in_cache(tmp_path):
+    fetch = FakeFetch(b"traversal")
+    cache = MediaCache(fetch, tmp_path / "media")
+
+    dest = _run(cache.fetch_to_file(MHC, "../sentinel.txt"))
+
+    assert dest is not None
+    assert dest == tmp_path / "media" / "sentinel.txt"
+    assert dest.read_bytes() == b"traversal"
+    assert not (tmp_path / "sentinel.txt").exists()
+
+
+def test_fetch_to_file_absolute_path_stays_in_cache(tmp_path):
+    fetch = FakeFetch(b"absolute")
+    cache = MediaCache(fetch, tmp_path / "media")
+
+    dest = _run(cache.fetch_to_file(MHC, "/tmp/agentteams-escape-sentinel"))
+
+    assert dest is not None
+    assert dest == tmp_path / "media" / "agentteams-escape-sentinel"
+    assert dest.read_bytes() == b"absolute"
+    assert not Path("/tmp/agentteams-escape-sentinel").exists()
+
+
+def _encrypted_fetch(monkeypatch) -> tuple:
+    """(fetch, key, hashes, iv) for a decryptable payload in either env:
+    the real matrix-nio round trip when the crypto backend is
+    importable, the fake-decrypt stand-in at the lazy import point
+    otherwise."""
+    if HAVE_NIO_CRYPTO:
+        ciphertext, meta = _real_encrypt(b"PLAINTEXT")
+        return FakeFetch(ciphertext), meta["key"], meta["hashes"], meta["iv"]
+    _install_fake_decrypt(monkeypatch, lambda data, k, h, iv: b"PLAINTEXT")
+    return FakeFetch(b"cipher-bytes"), {"k": "k"}, {"sha256": "h"}, "iv"
+
+
+def test_fetch_encrypted_to_file_traversal_name_stays_in_cache(
+    tmp_path, monkeypatch
+):
+    fetch, key, hashes, iv = _encrypted_fetch(monkeypatch)
+    cache = MediaCache(fetch, tmp_path / "media")
+
+    dest = _run(
+        cache.fetch_encrypted_to_file(
+            MHC, "../sentinel.txt", key, hashes, iv
+        )
+    )
+
+    assert dest is not None
+    assert dest == tmp_path / "media" / "sentinel.txt"
+    assert dest.read_bytes() == b"PLAINTEXT"
+    assert not (tmp_path / "sentinel.txt").exists()
+
+
+def test_fetch_encrypted_to_file_absolute_path_stays_in_cache(
+    tmp_path, monkeypatch
+):
+    fetch, key, hashes, iv = _encrypted_fetch(monkeypatch)
+    cache = MediaCache(fetch, tmp_path / "media")
+
+    dest = _run(
+        cache.fetch_encrypted_to_file(
+            MHC, "/tmp/agentteams-escape-sentinel", key, hashes, iv
+        )
+    )
+
+    assert dest is not None
+    assert dest == tmp_path / "media" / "agentteams-escape-sentinel"
+    assert dest.read_bytes() == b"PLAINTEXT"
+    assert not Path("/tmp/agentteams-escape-sentinel").exists()

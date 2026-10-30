@@ -370,8 +370,9 @@ class NioTransport:
     the ``on_event`` callback from :meth:`start`; a failing handler is
     logged and never breaks the sync loop.  Outbound: :meth:`send`
     (``final``/``notice`` -> ``m.text``, ``tool`` -> ``m.notice``,
-    ``reply_to`` -> ``m.in_reply_to``), :meth:`edit` (``m.replace``),
-    :meth:`react` (``m.reaction``), :meth:`typing` (``room_typing``)
+    ``reply_to`` -> a rich reply in ``m.relates_to``), :meth:`edit`
+    (``m.replace``), :meth:`react` (``m.reaction`` with an
+    ``m.annotation`` relation), :meth:`typing` (``room_typing``)
     and :meth:`download` (bytes through :class:`~core.media.MediaCache`
     backed by ``client.download``; nio 0.26 returns a response object
     whose ``body`` holds the bytes).  Outbound failures raise;
@@ -564,7 +565,9 @@ class NioTransport:
         msgtype = "m.notice" if msg.kind == "tool" else "m.text"
         content: Dict[str, Any] = {"msgtype": msgtype, "body": msg.text}
         if msg.reply_to:
-            content["m.in_reply_to"] = {"event_id": msg.reply_to}
+            # Rich reply per the client-server spec: the in-reply-to
+            # relation lives inside m.relates_to, not at top level.
+            content["m.relates_to"] = {"m.in_reply_to": {"event_id": msg.reply_to}}
         resp = await client.room_send(
             msg.room_id,
             "m.room.message",
@@ -602,7 +605,15 @@ class NioTransport:
     async def react(self, room_id: str, event_id: str, key: str) -> None:
         """Add an annotation reaction to an event (``m.reaction``)."""
         client = self._require_client()
-        content: Dict[str, Any] = {"m.annotation": {"key": key}}
+        # m.reaction per the client-server spec: an m.annotation
+        # relation targeting the reacted event, carrying the key.
+        content: Dict[str, Any] = {
+            "m.relates_to": {
+                "rel_type": "m.annotation",
+                "event_id": event_id,
+                "key": key,
+            }
+        }
         resp = await client.room_send(
             room_id,
             "m.reaction",

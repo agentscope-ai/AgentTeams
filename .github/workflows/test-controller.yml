@@ -379,3 +379,25 @@ jobs:
         run: |
           python -m pytest plugins/tests/agentteams-matrix/golden -q
           python -m pytest plugins/tests/agentteams-teamharness/golden -q
+
+  matrix-bundle-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install bundle dependencies
+        run: |
+          python -m pip install \
+            'matrix-nio>=0.25,<0.27' \
+            'PyYAML>=6.0,<7' \
+            'qwenpaw>=2.2.1,<2.3' \
+            'pytest>=8.3,<10' \
+            'pytest-asyncio>=0.23,<2'
+
+      - name: Run bundle core, transport and sidecar tests
+        run: python -m pytest plugins/tests/agentteams-matrix -q

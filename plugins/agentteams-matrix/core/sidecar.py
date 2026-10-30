@@ -273,36 +273,45 @@ def make_error(code: str, message: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _read_line(sock: socket.socket) -> bytes:
-    """Read one ``\\n``-terminated line, enforcing :data:`MAX_LINE_BYTES`.
+class LineReader:
+    """Per-connection newline framer. Bytes after the first line are retained."""
 
-    Returns the line **without** the trailing newline.  A clean EOF
-    before any data returns ``b""``; an EOF mid-frame is a protocol
-    error.
-    """
-    buf = bytearray()
-    while True:
-        chunk = sock.recv(65536)
-        if not chunk:
-            if buf:
-                raise SidecarProtocolError(
-                    "connection closed mid-frame", "connection_closed"
-                )
-            return b""
-        buf.extend(chunk)
-        newline = buf.find(b"\n")
-        if newline != -1:
-            line = buf[:newline]
-            if len(line) > MAX_LINE_BYTES:
+    def __init__(self) -> None:
+        self._buffer = bytearray()
+
+    def read_line(self, sock: socket.socket) -> bytes:
+        """Read one ``\\n``-terminated line, enforcing :data:`MAX_LINE_BYTES`.
+
+        Returns the line **without** the trailing newline.  Bytes that
+        arrive beyond the first newline stay buffered for the next
+        ``read_line`` call (coalesced frames), so one connection always
+        uses one reader.  A clean EOF before any data returns ``b""``;
+        an EOF mid-frame is a protocol error.
+        """
+        while True:
+            newline = self._buffer.find(b"\n")
+            if newline != -1:
+                line = bytes(self._buffer[:newline])
+                del self._buffer[: newline + 1]
+                if len(line) > MAX_LINE_BYTES:
+                    raise SidecarProtocolError(
+                        f"line exceeds the {MAX_LINE_BYTES} byte limit",
+                        "line_exceeds_limit",
+                    )
+                return line
+            if len(self._buffer) > MAX_LINE_BYTES:
                 raise SidecarProtocolError(
                     f"line exceeds the {MAX_LINE_BYTES} byte limit",
                     "line_exceeds_limit",
                 )
-            return line
-        if len(buf) > MAX_LINE_BYTES:
-            raise SidecarProtocolError(
-                f"line exceeds the {MAX_LINE_BYTES} byte limit", "line_exceeds_limit"
-            )
+            chunk = sock.recv(65536)
+            if not chunk:
+                if self._buffer:
+                    raise SidecarProtocolError(
+                        "connection closed mid-frame", "connection_closed"
+                    )
+                return b""
+            self._buffer.extend(chunk)
 
 
 # ---------------------------------------------------------------------------
@@ -333,6 +342,7 @@ class SidecarServer:
         self._socket_path = Path(socket_path)
         self._listener: socket.socket | None = None
         self._conn: socket.socket | None = None
+        self._reader: LineReader | None = None
         self._state_lock = threading.Lock()
         self._send_lock = threading.Lock()
         self._connected = threading.Event()
@@ -409,8 +419,8 @@ class SidecarServer:
 
     def recv(self) -> dict[str, Any]:
         """Read and validate one frame from the active connection."""
-        conn = self._active_connection()
-        line = _read_line(conn)
+        conn, reader = self._active_frame_pair()
+        line = reader.read_line(conn)
         if line == b"":
             self._close_connection()
             raise SidecarProtocolError(
@@ -420,16 +430,21 @@ class SidecarServer:
 
     # -- internals ----------------------------------------------------------
 
-    def _active_connection(self) -> socket.socket:
+    def _active_frame_pair(self) -> tuple[socket.socket, LineReader]:
+        """The active connection and its per-connection reader, atomically."""
         with self._state_lock:
-            conn = self._conn
-        if conn is None:
+            conn, reader = self._conn, self._reader
+        if conn is None or reader is None:
             raise SidecarNotConnectedError("sidecar has no active connection")
-        return conn
+        return conn, reader
+
+    def _active_connection(self) -> socket.socket:
+        return self._active_frame_pair()[0]
 
     def _close_connection(self) -> None:
         with self._state_lock:
             conn, self._conn = self._conn, None
+            self._reader = None
         if conn is not None:
             try:
                 conn.close()
@@ -465,9 +480,13 @@ class SidecarServer:
             )
             self._reject(conn, "connection_limit", "sidecar already has one connection")
             return
+        # One reader per connection: it is created here and kept for the
+        # lifetime of this connection (discarded in _close_connection),
+        # so coalesced bytes survive the handshake read.
+        reader = LineReader()
         try:
             conn.settimeout(HANDSHAKE_TIMEOUT)
-            line = _read_line(conn)
+            line = reader.read_line(conn)
             if line == b"":
                 raise SidecarProtocolError(
                     "connection closed before handshake", "connection_closed"
@@ -497,6 +516,7 @@ class SidecarServer:
                 conn.close()
                 return
             self._conn = conn
+            self._reader = reader
             self.agent = frame["agent"]
             self.capabilities = list(frame["capabilities"])
         conn.settimeout(None)
@@ -542,6 +562,7 @@ class SidecarClient:
         self._socket_path = Path(socket_path)
         self._handshake_timeout = handshake_timeout
         self._sock: socket.socket | None = None
+        self._reader: LineReader | None = None
 
     @property
     def connected(self) -> bool:
@@ -562,11 +583,14 @@ class SidecarClient:
         if self._sock is not None:
             raise RuntimeError("client already connected")
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        # One reader per connection: created here and stored with the
+        # socket, so coalesced bytes survive the handshake read.
+        reader = LineReader()
         try:
             sock.connect(str(self._socket_path))
             sock.sendall(encode_frame(make_hello(agent, protocol, capabilities)))
             sock.settimeout(self._handshake_timeout)
-            line = _read_line(sock)
+            line = reader.read_line(sock)
             if line == b"":
                 raise SidecarProtocolError(
                     "sidecar closed the connection during handshake",
@@ -590,6 +614,7 @@ class SidecarClient:
             raise
         sock.settimeout(None)
         self._sock = sock
+        self._reader = reader
 
     def send(self, frame: dict[str, Any]) -> None:
         sock = self._active_socket()
@@ -597,7 +622,7 @@ class SidecarClient:
 
     def recv(self) -> dict[str, Any]:
         sock = self._active_socket()
-        line = _read_line(sock)
+        line = self._active_reader().read_line(sock)
         if line == b"":
             self.close()
             raise SidecarProtocolError(
@@ -612,8 +637,14 @@ class SidecarClient:
             except OSError:
                 pass
             self._sock = None
+        self._reader = None
 
     def _active_socket(self) -> socket.socket:
         if self._sock is None:
             raise SidecarNotConnectedError("client is not connected")
         return self._sock
+
+    def _active_reader(self) -> LineReader:
+        if self._reader is None:
+            raise SidecarNotConnectedError("client is not connected")
+        return self._reader

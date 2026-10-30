@@ -17,16 +17,39 @@ log message wording, same warning-on-failure degradation, same
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import re
 from pathlib import Path
 from typing import Awaitable, Callable, Dict, Optional
 
 __all__ = [
     "MediaCache",
     "mxc_to_http",
+    "safe_cache_name",
 ]
 
 logger = logging.getLogger("agentteams.matrix.core.media")
+
+# Sender-controlled filenames are never allowed to decide the cache
+# path: the name is reduced to a sanitized basename (traversal and
+# absolute-path separators are stripped, anything outside
+# [A-Za-z0-9._-] is replaced, leading/trailing dots and underscores
+# are trimmed).  A name that sanitizes to nothing falls back to a
+# hash of the mxc URL, so distinct media never collide.
+_SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+_MAX_NAME = 120
+
+
+def safe_cache_name(mxc_url: str, filename: str) -> str:
+    """Sender-controlled names never decide the path: keep a sanitized basename."""
+    candidate = str(filename or "").replace("\\", "/").rsplit("/", 1)[-1]
+    candidate = _SAFE_NAME_RE.sub("_", candidate).strip("._")
+    if not candidate or candidate in {".", ".."} or set(candidate) == {"."}:
+        candidate = hashlib.sha256(mxc_url.encode("utf-8")).hexdigest()[:32]
+    if len(candidate) > _MAX_NAME:
+        candidate = candidate[:_MAX_NAME]
+    return candidate
 
 
 def mxc_to_http(mxc_url: str, homeserver: str) -> str:
@@ -78,13 +101,20 @@ class MediaCache:
         mxc_url: str,
         filename: str,
     ) -> Optional[Path]:
-        """Download mxc:// to ``media_dir/filename``; return path or None."""
+        """Download mxc:// into the media cache; return path or None.
+
+        ``filename`` is sender-controlled (the media event body), so
+        the cache path uses :func:`safe_cache_name` — traversal and
+        absolute paths cannot escape the media dir.
+        """
         if not mxc_url.startswith("mxc://"):
             return None
         try:
             data = await self._fetch(mxc_url)
             self._media_dir.mkdir(parents=True, exist_ok=True)
-            dest = self._media_dir / filename
+            dest = self._media_dir / safe_cache_name(mxc_url, filename)
+            if not self._inside_media_dir(dest):
+                return None
             dest.write_bytes(data)
             logger.debug("MatrixChannel: downloaded %s → %s", mxc_url, dest)
             return dest
@@ -95,6 +125,20 @@ class MediaCache:
                 exc,
             )
             return None
+
+    def _inside_media_dir(self, dest: Path) -> bool:
+        """Containment guard: *dest* must resolve inside the cache dir."""
+        try:
+            inside = dest.resolve().is_relative_to(self._media_dir.resolve())
+        except OSError:
+            inside = False
+        if not inside:
+            logger.warning(
+                "MatrixChannel: refusing cache write outside %s: %s",
+                self._media_dir,
+                dest,
+            )
+        return inside
 
     async def fetch_encrypted_to_file(
         self,
@@ -122,7 +166,9 @@ class MediaCache:
                 iv,
             )
             self._media_dir.mkdir(parents=True, exist_ok=True)
-            dest = self._media_dir / filename
+            dest = self._media_dir / safe_cache_name(mxc_url, filename)
+            if not self._inside_media_dir(dest):
+                return None
             dest.write_bytes(plaintext)
             logger.debug(
                 "MatrixChannel: downloaded+decrypted %s → %s",

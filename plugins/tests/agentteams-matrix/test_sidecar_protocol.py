@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import threading
 
 import pytest
 
@@ -14,6 +15,7 @@ from core.interfaces import InboundEvent, MediaRef, OutboundMessage
 from core.sidecar import (
     MAX_LINE_BYTES,
     PROTOCOL_VERSION,
+    LineReader,
     SidecarClient,
     SidecarNotConnectedError,
     SidecarProtocolError,
@@ -387,3 +389,105 @@ def test_server_stop_is_idempotent(tmp_path):
     srv.start()
     srv.stop()
     srv.stop()
+
+
+# ---------------------------------------------------------------------------
+# LineReader: per-connection buffering (coalesced and fragmented frames)
+# ---------------------------------------------------------------------------
+
+
+def test_client_recv_coalesced_frames_socketpair():
+    """Maintainer reproduction: two ack frames in one sendall().
+
+    With a stateless line reader the bytes after the first newline
+    were discarded, so the second recv() would time out; the
+    per-connection buffer must deliver both frames.
+    """
+    a, b = socket.socketpair()
+    client = SidecarClient("/nonexistent.sock")
+    client._sock = b
+    client._reader = LineReader()
+    try:
+        a.sendall(encode_frame(make_ack("$first")) + encode_frame(make_ack("$second")))
+        assert client.recv() == make_ack("$first")
+        assert client.recv() == make_ack("$second")
+    finally:
+        client.close()
+        a.close()
+
+
+def test_server_handshake_and_following_frame_coalesced(server):
+    """Hello + a second frame in one sendall(): both are processed."""
+    sock = _raw_connect(server.socket_path)
+    try:
+        outbound = make_outbound(OutboundMessage(room_id="!room", text="after-hello"))
+        sock.sendall(encode_frame(make_hello("worker-a")) + encode_frame(outbound))
+        assert server.wait_connected(2.0)
+        # The handshake ack was sent; the coalesced frame is still queued.
+        assert json.loads(_raw_read_line(sock))["type"] == "ack"
+        assert server.recv() == outbound
+    finally:
+        sock.close()
+
+
+def test_read_line_fragmented_frame_waits_for_newline():
+    a, b = socket.socketpair()
+    try:
+        frame = encode_frame(make_ack("$frag"))
+        split = len(frame) // 2
+        a.sendall(frame[:split])  # first half, no newline yet
+        reader = LineReader()
+        result = []
+        errors = []
+
+        def _read():
+            try:
+                result.append(reader.read_line(b))
+            except Exception as exc:  # recorded, not swallowed
+                errors.append(exc)
+
+        worker = threading.Thread(target=_read, daemon=True)
+        worker.start()
+        worker.join(1.0)
+        assert not result and not errors  # still blocked, no partial line
+        a.sendall(frame[split:])
+        worker.join(5.0)
+        assert not errors
+        assert result == [frame[:-1]]  # the full line, without the newline
+    finally:
+        a.close()
+        b.close()
+
+
+def test_read_line_per_line_limit_not_buffered_window():
+    """Two lines, each under the limit, totalling over it: both are read.
+
+    The sender runs in a thread: the combined payload is larger than
+    the socket buffer, so a synchronous sendall would deadlock until
+    the reader consumes the first line.
+    """
+    a, b = socket.socketpair()
+    try:
+        line1 = b"a" * (MAX_LINE_BYTES // 2 + 1)
+        line2 = b"b" * (MAX_LINE_BYTES // 2 + 1)
+        assert len(line1) + len(line2) > MAX_LINE_BYTES
+        sent = []
+        errors = []
+
+        def _send():
+            try:
+                a.sendall(line1 + b"\n" + line2 + b"\n")
+                sent.append(1)
+            except OSError as exc:  # recorded, not swallowed
+                errors.append(exc)
+
+        sender = threading.Thread(target=_send, daemon=True)
+        sender.start()
+        reader = LineReader()
+        assert reader.read_line(b) == line1
+        assert reader.read_line(b) == line2
+        sender.join(5.0)
+        assert sent == [1] and not errors
+    finally:
+        a.close()
+        b.close()

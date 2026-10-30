@@ -1,10 +1,10 @@
 """Runtime e2e: the #1431 pause/resume closed loop through the real paths.
 
 Drives the real Controller HTTP API (project create / replan / pause /
-resume / workflow / task inspection) against the object store, and the
-real TeamHarness taskflow in separate ``loop_driver.py`` processes (only
-the two Matrix notifiers are stubbed there).  Covers the maintainer's
-three points:
+resume / workflow / task inspection) and the real TeamHarness taskflow in
+separate ``loop_driver.py`` processes (only the two Matrix notifiers are
+stubbed there).  Covers the maintainer's follow-up points on top of the
+original closed loop:
 
 1. pause blocks new dispatch — a fresh process delegating a ready task
    fails with "paused", records no notification, and the workflow shows
@@ -12,25 +12,53 @@ three points:
    next-round release); after the resume, ``next`` lists the ready
    planned/assigned tasks again, so the empty list is pause-only;
 2. in-flight work still saves its result after the pause — an assigned
-   task's real submission lands in MinIO and is read back through the
-   Controller's task-inspection endpoint;
+   task's real submission lands in the object store and is read back
+   through the Controller's task-inspection endpoint;
 3. authorized resume + a fresh process continues exactly once — the
    ready task is delegated once (one send record), a second fresh
    process reuses the recorded event instead of re-sending, and the
-   already-submitted task is not re-dispatched.
+   already-submitted task is not re-dispatched;
+4. the Loop CR is created through the embedded kube-apiserver (the
+   control-plane object the Loop endpoints resolve) — never through a
+   controller create-loop path, which does not exist;
+5. the durable state is the object store: ``loop.pause_sources`` is
+   verified by reading the project meta with ``mc`` (the API response
+   alone is not evidence);
+6. the human-source boundary holds: a "project"-source resume cannot
+   release the "user" veto (the loop stays paused on the remaining
+   source), and only an admin "user"-source resume releases it;
+7. the role boundary is executable: a worker token is rejected by the
+   authorizer middleware before the handler runs, and a manager token is
+   rejected by the handler when releasing the user source.
+
+Ordering note: the project pause (``POST /projects/{id}/pause``) runs
+BEFORE the loop pause, and the loop pause sources are released BEFORE the
+project resume. The project endpoints round-trip the meta through a typed
+struct whose ``loopMeta`` lacks ``pause_sources`` (a proven latent
+controller clobber, tracked as a follow-up), while the Loop endpoints'
+conditional write preserves the raw map — reversed, the project pause
+would silently drop the durable sources.
 
 Skipped entirely unless ``E2E_CONTROLLER_URL`` is set AND
-``E2E_MINIO=1`` (the CI ``loop-pause-e2e`` job provides both, plus the
-``AGENTTEAMS_FS_*`` env the driver's real ``mc`` path needs — see the
-README in this directory).
+``E2E_MINIO=1`` AND the embedded-apiserver env (``E2E_K8S_API_URL`` /
+``E2E_K8S_CA`` / ``E2E_K8S_NAMESPACE`` / ``E2E_K8S_TOKEN``) is present.
+The CI ``loop-pause-e2e`` job provides all of it, plus the
+``AGENTTEAMS_FS_*`` env the driver's real ``mc`` path needs (see the
+README in this directory). The skip reason names exactly which vars are
+missing, so a misconfigured run cannot silently drop the loop-endpoint
+coverage. The worker/manager role-boundary tokens are asserted INSIDE the
+test (not skipped): a run that cannot prove the role boundary is a broken
+run.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import ssl
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -44,21 +72,56 @@ DRIVER = E2E_DIR / "loop_driver.py"
 BASE_URL = os.environ.get("E2E_CONTROLLER_URL", "").strip().rstrip("/")
 TOKEN = os.environ.get("E2E_CONTROLLER_TOKEN", "").strip()
 
+# Embedded kube-apiserver (a controller subprocess): the Loop CR is
+# created through it, and the role-boundary tokens are its static token
+# identities (see the loop-pause-e2e job's restart step).
+K8S_API_URL = os.environ.get("E2E_K8S_API_URL", "").strip().rstrip("/")
+K8S_CA = os.environ.get("E2E_K8S_CA", "").strip()
+K8S_NAMESPACE = os.environ.get("E2E_K8S_NAMESPACE", "").strip()
+K8S_TOKEN = os.environ.get("E2E_K8S_TOKEN", "").strip()
+WORKER_TOKEN = os.environ.get("E2E_K8S_WORKER_TOKEN", "").strip()
+MANAGER_TOKEN = os.environ.get("E2E_K8S_MANAGER_TOKEN", "").strip()
+
+# The k8s helper may only be skipped when these are absent (and then the
+# skip says exactly why). The worker/manager tokens are NOT here: the role
+# boundary must be exercised, not skipped.
+_K8S_SKIP_ENV = {
+    "E2E_K8S_API_URL": K8S_API_URL,
+    "E2E_K8S_CA": K8S_CA,
+    "E2E_K8S_NAMESPACE": K8S_NAMESPACE,
+    "E2E_K8S_TOKEN": K8S_TOKEN,
+}
+
+_skip_missing: list[str] = []
+if not BASE_URL:
+    _skip_missing.append("E2E_CONTROLLER_URL")
+if os.environ.get("E2E_MINIO", "").strip() != "1":
+    _skip_missing.append("E2E_MINIO=1")
+_skip_missing += [name for name, value in _K8S_SKIP_ENV.items() if not value]
+
 pytestmark = pytest.mark.skipif(
-    not BASE_URL or os.environ.get("E2E_MINIO", "").strip() != "1",
-    reason="e2e requires a running controller + MinIO (E2E_CONTROLLER_URL, E2E_MINIO=1)",
+    bool(_skip_missing),
+    reason="e2e needs the loop-pause-e2e job's env; missing: " + ", ".join(_skip_missing),
 )
 
 
 # --- Controller API (stdlib urllib only) ---------------------------------
 
 
-def _api(method: str, path: str, body: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
+def _api(
+    method: str,
+    path: str,
+    body: dict[str, Any] | None = None,
+    token: str | None = None,
+) -> tuple[int, dict[str, Any]]:
+    """Controller HTTP call. ``token`` overrides the module admin token —
+    the role-boundary checks call with the worker/manager identities."""
     data = json.dumps(body).encode("utf-8") if body is not None else None
     request = urllib.request.Request(BASE_URL + path, data=data, method=method)
     request.add_header("Content-Type", "application/json")
-    if TOKEN:
-        request.add_header("Authorization", f"Bearer {TOKEN}")
+    bearer = TOKEN if token is None else token
+    if bearer:
+        request.add_header("Authorization", f"Bearer {bearer}")
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
             status = response.status
@@ -75,6 +138,119 @@ def _api(method: str, path: str, body: dict[str, Any] | None = None) -> tuple[in
     return status, payload
 
 
+# --- embedded kube-apiserver REST (Loop CR) --------------------------------
+
+
+def _k8s_api(method: str, path: str, body: dict[str, Any], token: str) -> tuple[int, dict[str, Any]]:
+    """Raw REST against the embedded kube-apiserver (TLS via the job CA).
+
+    Returns (status, payload) for EVERY HTTP answer — including 401/403 —
+    so the caller fails loudly with the exact command evidence. This path
+    never skips: the loop-endpoint coverage is only real when the CR was
+    created through the apiserver.
+    """
+    url = K8S_API_URL + path
+    data = json.dumps(body).encode("utf-8")
+    request = urllib.request.Request(url, data=data, method=method)
+    request.add_header("Content-Type", "application/json")
+    request.add_header("Authorization", f"Bearer {token}")
+    context = ssl.create_default_context(cafile=K8S_CA)
+    try:
+        with urllib.request.urlopen(request, timeout=30, context=context) as response:
+            status, raw = response.status, response.read()
+    except urllib.error.HTTPError as exc:
+        status, raw = exc.code, exc.read()
+    except Exception as exc:  # TLS failure, connection refused, timeout
+        raise AssertionError(
+            f"k8s apiserver {method} {url} unreachable (token {token[:12]}...): {exc}"
+        ) from exc
+    try:
+        payload = json.loads(raw.decode("utf-8")) if raw else {}
+    except json.JSONDecodeError:
+        payload = {"raw": raw.decode("utf-8", errors="replace")}
+    return status, payload
+
+
+def _create_loop_cr(name: str, task_id: str) -> None:
+    """Create the Loop CR through the embedded apiserver.
+
+    spec.taskID is the anchor task: resolveLoopProject follows
+    task meta -> project meta, and only a task with a published TaskMeta
+    resolves. The anchor must be the task delegated before the first
+    pause (B below); an anchor without a TaskMeta would make every
+    pause/resume a legitimate no-op ("no task meta found"), which is
+    exactly the gap these endpoints must close. teamName is omitted: the
+    project is standalone (no team), and a non-empty teamName would make
+    the resolution scan only the team-scoped prefix.
+    """
+    path = f"/apis/agentteams.io/v1beta1/namespaces/{K8S_NAMESPACE}/loops"
+    body = {
+        "apiVersion": "agentteams.io/v1beta1",
+        "kind": "Loop",
+        "metadata": {"name": name, "namespace": K8S_NAMESPACE},
+        "spec": {"taskID": task_id, "loopType": "event"},
+    }
+    last = ""
+    for _ in range(30):
+        status, payload = _k8s_api("POST", path, body, K8S_TOKEN)
+        if status == 201:
+            return
+        text = json.dumps(payload, ensure_ascii=False)
+        # The embedded apiserver registers the loops CRD asynchronously at
+        # startup (it only awaits workers/teams/humans/managers); until it
+        # is established the POST 404s with "no matches for kind". Retry
+        # that; fail loudly on anything else — a 401 here is exactly the
+        # kind of blocker that must be reported, never skipped.
+        if status == 404 and "no matches for kind" in text:
+            last = f"CRD not established yet: {text[:300]}"
+            time.sleep(1)
+            continue
+        raise AssertionError(
+            "Loop CR create failed — a blocker, not a skip condition. "
+            f"equivalent command: curl -sS -X POST --cacert {K8S_CA} "
+            f"-H 'Authorization: Bearer <{K8S_TOKEN[:12]}...>' -d "
+            f"'{json.dumps(body)}' {K8S_API_URL}{path} -> HTTP {status}: {text}"
+        )
+    raise AssertionError(f"Loop CRD never became established after 30s: {last}")
+
+
+# --- durable state (object store via mc) -----------------------------------
+
+
+def _mc_meta_object(project_id: str) -> dict[str, Any]:
+    """Read the project meta straight from the object store with mc.
+
+    The API response alone is not evidence that the pause state is
+    durable: this is the authoritative read of ``loop.pause_sources``.
+    """
+    values = {
+        "AGENTTEAMS_FS_ENDPOINT": os.environ.get("AGENTTEAMS_FS_ENDPOINT", "").strip(),
+        "AGENTTEAMS_FS_ACCESS_KEY": os.environ.get("AGENTTEAMS_FS_ACCESS_KEY", "").strip(),
+        "AGENTTEAMS_FS_SECRET_KEY": os.environ.get("AGENTTEAMS_FS_SECRET_KEY", "").strip(),
+        "AGENTTEAMS_STORAGE_PREFIX": os.environ.get("AGENTTEAMS_STORAGE_PREFIX", "").strip(),
+    }
+    missing = [name for name, value in values.items() if not value]
+    assert not missing, (
+        f"durable-state check needs the object-store env; missing: {missing} "
+        "(the loop-pause-e2e job exports it)"
+    )
+    bucket = os.environ.get("AGENTTEAMS_FS_BUCKET", "agentteams-storage").strip()
+    key = f"{values['AGENTTEAMS_STORAGE_PREFIX']}/shared/projects/{project_id}/meta.json"
+    # Repo-standard mc pattern (test/e2e/external-s3-backend.sh run_mc): the
+    # alias is (re)set in the same command, and every operation carries the
+    # alias prefix.
+    command = (
+        f"mc -q alias set e2edurable {values['AGENTTEAMS_FS_ENDPOINT']} "
+        f"{values['AGENTTEAMS_FS_ACCESS_KEY']} {values['AGENTTEAMS_FS_SECRET_KEY']} "
+        f">/dev/null 2>&1 && mc -q cat e2edurable/{bucket}/{key}"
+    )
+    proc = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, (
+        f"mc read of the project meta failed (command: {command}):\n{proc.stderr}"
+    )
+    return json.loads(proc.stdout)
+
+
 # --- driver subprocess + sent-record helpers -----------------------------
 
 
@@ -87,6 +263,7 @@ def _run_driver(
     worker: str,
     workspace: Path,
     result: dict[str, Any] | None = None,
+    payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     env = dict(env)
     env["E2E_WORKSPACE"] = str(workspace)
@@ -104,6 +281,8 @@ def _run_driver(
     ]
     if result is not None:
         command += ["--result", json.dumps(result)]
+    if payload is not None:
+        command += ["--payload", json.dumps(payload)]
     try:
         proc = subprocess.run(command, capture_output=True, text=True, timeout=300, env=env)
     except subprocess.TimeoutExpired as exc:
@@ -207,6 +386,21 @@ def test_pause_resume_closed_loop(e2e_env: tuple[dict[str, str], Path], tmp_path
     env, sent_path = e2e_env
     project_id = f"e2e-pause-{uuid.uuid4().hex[:8]}"
     worker = "@e2e-worker:matrix.e2e.invalid"
+    loop_name = f"e2e-loop-{uuid.uuid4().hex[:8]}"
+    # The role boundary is executable, not skippable: without the two
+    # identities the boundary below is untested, which is a broken run.
+    # (The loop-pause-e2e job appends them to the apiserver token file and
+    # restarts the controller; a local run must do the same — see README.)
+    assert WORKER_TOKEN, (
+        "E2E_K8S_WORKER_TOKEN is required: append a "
+        "system:serviceaccount:<ns>:agentteams-worker-e2e identity to the "
+        "apiserver token file and restart the controller (see README)"
+    )
+    assert MANAGER_TOKEN, (
+        "E2E_K8S_MANAGER_TOKEN is required: append a "
+        "system:serviceaccount:<ns>:agentteams-manager identity to the "
+        "apiserver token file and restart the controller (see README)"
+    )
 
     # --- 1. project + task graph through the real Controller API ----------
     status, project = _api("POST", "/api/v1/projects", {
@@ -230,13 +424,60 @@ def test_pause_resume_closed_loop(e2e_env: tuple[dict[str, str], Path], tmp_path
         f"got {replan.get('next')}: {json.dumps(replan, ensure_ascii=False)[:2000]}"
     )
 
-    # --- 2. delegate B BEFORE the pause (fresh driver process) ------------
+    # --- 2. loop plan through the real projectflow (fresh driver process) --
+    # BEFORE the delegate: _update_project_task only lands task statuses
+    # into loop.tasks once the loop record exists, and buildWorkflow
+    # renders loop.tasks (not project.tasks) for loop plans.
+    result = _run_driver(
+        env,
+        sent_path,
+        "plan_loop",
+        project_id,
+        "",
+        "leader",
+        tmp_path / "ws0",
+        payload={
+            "projectId": project_id,
+            "goal": "e2e loop goal",
+            "stopCondition": "e2e stop condition",
+            "iterationTemplate": "e2e iteration {n}",
+            "maxIterations": 2,
+            "tasks": [
+                {"taskId": "A", "title": "task A"},
+                {"taskId": "B", "title": "task B", "dependsOn": ["A"]},
+            ],
+        },
+    )
+    assert result.get("ok") is True, f"plan_loop: {result}\nsent: {_sent_tail(sent_path)}"
+    status, wf = _api("GET", f"/api/v1/projects/{project_id}/workflow")
+    assert status == 200, f"workflow after plan_loop -> {status}: {wf}"
+    assert wf.get("plan_type") == "loop", (
+        f"plan_type after plan_loop: {wf.get('plan_type')}: "
+        f"{json.dumps(wf, ensure_ascii=False)[:2000]}"
+    )
+    _assert_nodes(wf, {"A": "pending", "B": "pending"})
+    assert wf.get("next") == ["A"], (
+        f"loop plan must release A before any dispatch, next={wf.get('next')}: "
+        f"{json.dumps(wf, ensure_ascii=False)[:2000]}"
+    )
+
+    # --- 3. Loop CR through the embedded kube-apiserver (real control plane) ---
+    # Anchor on B (the task delegated right after this): only a task with a
+    # published TaskMeta resolves, and that is exactly the task whose pause
+    # must actually gate the project.
+    _create_loop_cr(loop_name, "B")
+
+    # --- 4. delegate B BEFORE the pause (fresh driver process) ------------
     result = _run_driver(env, sent_path, "delegate", project_id, "B", worker, tmp_path / "ws1")
     assert result.get("ok") is True, f"pre-pause delegate B: {result}\nsent: {_sent_tail(sent_path)}"
     assert result.get("notification", {}).get("sent") is True, f"pre-pause delegate B: {result}"
     _assert_sent_counts(sent_path, "delegate", {"B": 1})
 
-    # --- 3. pause through the real Controller API --------------------------
+    # --- 5. pause the PROJECT first through the real Controller API --------
+    # HARD ORDERING (see module docstring): the project endpoints round-trip
+    # the meta through a typed struct whose loopMeta lacks pause_sources;
+    # they must run BEFORE the loop pause, or they silently drop the
+    # durable sources.
     status, paused_wf = _api("POST", f"/api/v1/projects/{project_id}/pause", {"reason": "e2e pause"})
     assert status == 200, f"pause -> {status}: {paused_wf}"
     assert paused_wf.get("status") == "paused", f"pause response status: {paused_wf.get('status')}"
@@ -250,7 +491,42 @@ def test_pause_resume_closed_loop(e2e_env: tuple[dict[str, str], Path], tmp_path
         f"pause interrupt action_request: {interrupt.get('action_request')}"
     )
 
-    # --- 4. pause blocks NEW dispatch (fresh driver process) ---------------
+    # --- 6. pause the LOOP through the real Loop endpoint ------------------
+    status, loop_paused = _api("POST", f"/api/v1/loops/{loop_name}/pause", {"source": "user"})
+    assert status == 200, f"loop pause -> {status}: {loop_paused}"
+    assert loop_paused.get("id") == loop_name, f"loop pause id: {loop_paused}"
+    assert loop_paused.get("paused") is True, f"loop pause response: {loop_paused}"
+    assert loop_paused.get("sources") == ["user"], f"loop pause sources: {loop_paused}"
+
+    # --- 7. role boundary: worker/manager tokens are rejected BEFORE any ---
+    # state change (the durable check below proves nothing moved).
+    status, denied = _api("POST", f"/api/v1/loops/{loop_name}/pause", {"source": "user"}, token=WORKER_TOKEN)
+    assert status == 403, f"worker loop pause must be 403, got {status}: {denied}"
+    assert 'worker "e2e" cannot update loop' in str(denied.get("message") or denied), (
+        "worker 403 must come from the authorizer middleware (deny before the handler): "
+        f"{denied}"
+    )
+    status, denied = _api("POST", f"/api/v1/loops/{loop_name}/resume", {"source": "user"}, token=MANAGER_TOKEN)
+    assert status == 403, f"manager user-source resume must be 403, got {status}: {denied}"
+    assert "resuming the user pause source requires admin" in str(denied.get("message") or denied), (
+        "manager 403 must come from the handler (the manager passes the authorizer): "
+        f"{denied}"
+    )
+
+    # --- 8. durable pause state: read the project meta from the object store ---
+    meta = _mc_meta_object(project_id)
+    loop_record = meta.get("loop")
+    assert isinstance(loop_record, dict), (
+        f"project meta has no loop record after plan_loop + loop pause: "
+        f"{json.dumps(meta, ensure_ascii=False)[:800]}"
+    )
+    assert loop_record.get("pause_sources") == ["user"], (
+        f"durable loop.pause_sources must be ['user'] after the loop pause "
+        f"(got {json.dumps(loop_record.get('pause_sources'))}); this also proves the "
+        f"two 403s above changed no state"
+    )
+
+    # --- 9. pause blocks NEW dispatch (fresh driver process) ---------------
     result = _run_driver(env, sent_path, "delegate", project_id, "A", worker, tmp_path / "ws2")
     assert result.get("ok") is False, f"delegate A while paused must fail: {result}"
     assert "paused" in str(result.get("error")), f"delegate A while paused error: {result.get('error')}"
@@ -263,7 +539,7 @@ def test_pause_resume_closed_loop(e2e_env: tuple[dict[str, str], Path], tmp_path
         f"next={wf.get('next')}: {json.dumps(wf, ensure_ascii=False)[:2000]}"
     )
 
-    # --- 5. in-flight work STILL saves its result under the pause ----------
+    # --- 10. in-flight work STILL saves its result under the pause ---------
     task_dir = tmp_path / "ws3" / "shared" / "tasks" / "B"
     task_dir.mkdir(parents=True)
     (task_dir / "result.md").write_text(
@@ -285,8 +561,8 @@ def test_pause_resume_closed_loop(e2e_env: tuple[dict[str, str], Path], tmp_path
         },
     )
     assert result.get("ok") is True, f"submit B while paused: {result}\nsent: {_sent_tail(sent_path)}"
-    # The result is persisted to MinIO — read it back through the
-    # Controller's task-inspection endpoint (MinIO TaskMeta).
+    # The result is persisted to the object store — read it back through the
+    # Controller's task-inspection endpoint (stored TaskMeta).
     status, inspection = _api("GET", f"/api/v1/projects/{project_id}/tasks/B")
     assert status == 200, f"task B inspection -> {status}: {inspection}"
     assert inspection.get("status") == "submitted", f"task B status: {json.dumps(inspection, ensure_ascii=False)[:2000]}"
@@ -303,12 +579,33 @@ def test_pause_resume_closed_loop(e2e_env: tuple[dict[str, str], Path], tmp_path
     assert wf.get("status") == "paused", f"submit must keep the project paused: {wf.get('status')}"
     _assert_nodes(wf, {"A": "pending", "B": "in-progress"})
 
-    # --- 6. authorized resume through the real Controller API --------------
+    # --- 11. human-source boundary ------------------------------------------
+    # A "project"-source resume cannot release the human veto: the admin
+    # passes the access check, and removing an absent source is a no-op —
+    # the loop stays paused on the remaining "user" source.
+    status, partial = _api("POST", f"/api/v1/loops/{loop_name}/resume", {"source": "project"})
+    assert status == 200, f"project-source resume -> {status}: {partial}"
+    assert partial.get("paused") is True, (
+        f"the user veto must survive a project-source resume: {partial}"
+    )
+    assert partial.get("sources") == ["user"], f"remaining sources after project-source resume: {partial}"
+    # Releasing the user veto is admin-only.
+    status, released = _api("POST", f"/api/v1/loops/{loop_name}/resume", {"source": "user"})
+    assert status == 200, f"user-source resume -> {status}: {released}"
+    assert released.get("paused") is False, (
+        f"the loop must be unpaused after the admin release: {released}"
+    )
+    assert released.get("sources") == [], f"sources after the admin release: {released}"
+
+    # --- 12. authorized project resume through the real Controller API -----
+    # MUST come after the loop sources are released (above): the typed
+    # write-back drops the pause_sources set, which is harmless only once
+    # nothing meaningful remains in it.
     status, resumed_wf = _api("POST", f"/api/v1/projects/{project_id}/resume", {})
     assert status == 200, f"resume -> {status}: {resumed_wf}"
     assert resumed_wf.get("status") == "active", f"resume response status: {resumed_wf.get('status')}"
 
-    # --- 7. a FRESH process continues exactly once --------------------------
+    # --- 13. a FRESH process continues exactly once -------------------------
     result = _run_driver(env, sent_path, "delegate", project_id, "A", worker, tmp_path / "ws4")
     assert result.get("ok") is True, f"post-resume delegate A: {result}\nsent: {_sent_tail(sent_path)}"
     assert result.get("notification", {}).get("reused") is not True, (
@@ -326,7 +623,7 @@ def test_pause_resume_closed_loop(e2e_env: tuple[dict[str, str], Path], tmp_path
         f"post-resume only the delegated A stays ready (B waits on A): {wf.get('next')}"
     )
 
-    # --- 8. a second fresh process REUSES the event (no second send) --------
+    # --- 14. a second fresh process REUSES the event (no second send) -------
     result = _run_driver(env, sent_path, "delegate", project_id, "A", worker, tmp_path / "ws5")
     assert result.get("ok") is True, f"retry delegate A: {result}\nsent: {_sent_tail(sent_path)}"
     assert result.get("notification", {}).get("reused") is True, (
@@ -334,7 +631,7 @@ def test_pause_resume_closed_loop(e2e_env: tuple[dict[str, str], Path], tmp_path
     )
     _assert_sent_counts(sent_path, "delegate", {"A": 1, "B": 1})  # A still exactly once
 
-    # --- 9. completed work is NOT re-dispatched (fresh process) -------------
+    # --- 15. completed work is NOT re-dispatched (fresh process) ------------
     result = _run_driver(env, sent_path, "delegate", project_id, "B", worker, tmp_path / "ws6")
     assert result.get("ok") is False, f"delegate submitted B must fail: {result}"
     assert "submitted" in str(result.get("error")), (
@@ -346,7 +643,7 @@ def test_pause_resume_closed_loop(e2e_env: tuple[dict[str, str], Path], tmp_path
     # Only A advanced (once); B is still the in-flight submission.
     _assert_nodes(wf, {"A": "delegated", "B": "in-progress"})
 
-    # --- 10. check_task on the submitted task (fresh process, real path) ----
+    # --- 16. check_task on the submitted task (fresh process, real path) ----
     result = _run_driver(env, sent_path, "status", project_id, "B", worker, tmp_path / "ws7")
     assert result.get("ok") is True, f"check B: {result}"
     assert result.get("effective") is True, f"check B effective: {result.get('effective')}"

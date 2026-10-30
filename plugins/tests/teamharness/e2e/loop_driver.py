@@ -23,10 +23,14 @@ CLI:
       --result '{"summary": "...", "status": "SUCCESS",
                  "deliverables": ["shared/tasks/T/out.txt"]}'
   python loop_driver.py --action status --project P --task T --worker W
+  python loop_driver.py --action plan_loop --project P \
+      --payload '{"goal": "...", "stopCondition": "...",
+                  "iterationTemplate": "...", "maxIterations": 2,
+                  "tasks": [{"taskId": "A"}, {"taskId": "B", "dependsOn": ["A"]}]}'
 
 Environment:
   E2E_WORKSPACE    workspace directory (fresh per invocation = a fresh
-                   process re-reading persisted state from MinIO)
+                   process re-reading persisted state from the object store)
   E2E_SENT_JSONL   file the notification stubs append to
   AGENTTEAMS_FS_*  real object-store env (endpoint/keys/bucket/prefix)
   AGENTTEAMS_MATRIX_URL / AGENTTEAMS_WORKER_MATRIX_TOKEN
@@ -134,6 +138,14 @@ _ACTION_MAP = {
     "delegate": "delegate_task",
     "submit": "submit_task",
     "status": "check_task",
+    # projectflow entry point (not taskflow): the loop plan lands on the
+    # project meta's loop record.
+    "plan_loop": "plan_loop",
+}
+
+# Which MCP tool each action dispatches through.
+_TOOL_FOR_ACTION = {
+    "plan_loop": "projectflow",
 }
 
 
@@ -150,9 +162,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="loop pause/resume e2e driver")
     parser.add_argument("--action", required=True, choices=sorted(_ACTION_MAP))
     parser.add_argument("--project", required=True)
-    parser.add_argument("--task", required=True)
-    parser.add_argument("--worker", required=True)
+    parser.add_argument("--task", default="", help="task id (delegate/submit/status)")
+    parser.add_argument("--worker", default="", help="assignee/submitter (delegate/submit)")
     parser.add_argument("--result", default="", help="submit result JSON: {summary,status,deliverables}")
+    parser.add_argument(
+        "--payload",
+        default="",
+        help="plan_loop payload JSON: {goal,stopCondition,iterationTemplate,maxIterations,tasks}",
+    )
     args = parser.parse_args()
 
     workspace = Path(os.environ.get("E2E_WORKSPACE", "").strip() or "/tmp/loop-e2e-driver")
@@ -163,9 +180,26 @@ def main() -> int:
     # A fresh process reloads persisted state from the object store before
     # acting (best-effort: a task that was never published has no remote
     # state yet, and the action itself re-reads what it needs locally).
-    server._pull_task(arguments, args.task)
+    # plan_loop has no task to pre-pull: the projectflow entry point pulls
+    # the project meta itself (read-before-read).
+    if args.task:
+        server._pull_task(arguments, args.task)
 
-    if args.action == "delegate":
+    if args.action == "plan_loop":
+        if not args.payload.strip():
+            print(json.dumps({"ok": False, "error": "plan_loop requires --payload JSON"}))
+            return 2
+        try:
+            payload = json.loads(args.payload)
+        except json.JSONDecodeError as exc:
+            print(json.dumps({"ok": False, "error": f"--payload is not valid JSON: {exc}"}))
+            return 2
+        if not isinstance(payload, dict):
+            print(json.dumps({"ok": False, "error": "--payload must be a JSON object"}))
+            return 2
+        payload.setdefault("projectId", args.project)
+        arguments["payload"] = payload
+    elif args.action == "delegate":
         arguments["payload"] = {
             "projectId": args.project,
             "taskId": args.task,
@@ -192,7 +226,7 @@ def main() -> int:
             "taskId": args.task,
         }
 
-    response = server.call_tool("taskflow", arguments)
+    response = server.call_tool(_TOOL_FOR_ACTION.get(args.action, "taskflow"), arguments)
     print(json.dumps(json.loads(response["content"][0]["text"]), ensure_ascii=False))
     return 0
 

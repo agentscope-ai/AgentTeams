@@ -20,6 +20,7 @@ import types
 from typing import Any, Dict, Optional
 
 from gateway.config import PlatformConfig
+from gateway.platforms.event import MessageType
 from plugins.platforms.matrix.adapter import MatrixAdapter as _NativeMatrixAdapter
 
 from hermes_matrix.policies import (
@@ -194,35 +195,49 @@ class MatrixAdapter(_NativeMatrixAdapter):
         """Downgrade images to text when the active model lacks vision."""
         if msgtype == "m.image" and not self._vision_enabled:
             body = source_content.get("body", "") or ""
-            # The v0.22.5 bundled adapter gates media inside
-            # _handle_media_message; this downgrade path replaces that call,
-            # so apply the same allow/mention gate explicitly.
+            display_body = body or "image"
+            placeholder = (
+                "[User sent an image (current model does not support image "
+                f"input): {display_body}]"
+            )
+            text_content = dict(source_content)
+            text_content["msgtype"] = "m.text"
+            text_content["body"] = placeholder
+
+            # Resolve the context exactly once.  The resolved tuple already
+            # contains the drained group-history prefix and already emitted the
+            # read receipt/thread mark.  Passing it into _build_inbound_event
+            # avoids the old downgrade path resolving (and consuming history)
+            # a second time through _handle_text_message.
             ctx = await self._resolve_message_context(
                 room_id,
                 sender,
                 event_id,
-                body,
+                placeholder,
                 source_content,
                 relates_to,
                 mention_claimed=mention_claimed,
             )
             if ctx is None:
                 return
-            display_body = body or "image"
-            text_content = dict(source_content)
-            text_content["msgtype"] = "m.text"
-            text_content["body"] = (
-                "[User sent an image (current model does not support image "
-                f"input): {display_body}]"
-            )
-            await self._handle_text_message(
+            msg_event = await self._build_inbound_event(
                 room_id,
                 sender,
                 event_id,
-                event_ts,
+                placeholder,
                 text_content,
                 relates_to,
+                ctx=ctx,
             )
+            if msg_event is None:
+                return
+            if (
+                msg_event.message_type == MessageType.TEXT
+                and self._text_batch_delay_seconds > 0
+            ):
+                self._enqueue_text_event(msg_event)
+            else:
+                await self.handle_message(msg_event)
             return
 
         if msgtype == "m.image":

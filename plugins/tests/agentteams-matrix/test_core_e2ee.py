@@ -5,6 +5,11 @@ probe, and the post-sync maintenance pass — the call order and
 arguments (``keys_claim`` receiving ``get_users_for_key_claiming()``),
 the unconditional to-device send, the not-ready guards, and the
 warning-swallowing error handling.
+
+M5a adds the crypto-backend detection: matrix-nio 0.26+ ships E2EE
+through ``vodozemac`` (no top-level ``olm`` module), so the
+availability decision must follow the first importable backend in
+``CRYPTO_BACKENDS`` order, not the olm module alone.
 """
 
 from __future__ import annotations
@@ -15,7 +20,15 @@ from typing import List, Optional, Tuple
 
 import pytest
 
-from core.e2ee import E2EEMaintainer, e2ee_store_path, probe_olm
+import core.e2ee as core_e2ee
+from core.e2ee import (
+    CRYPTO_BACKENDS,
+    E2EEMaintainer,
+    crypto_available,
+    detect_crypto_backend,
+    e2ee_store_path,
+    probe_olm,
+)
 
 
 def _run(coro):
@@ -71,6 +84,48 @@ def test_probe_olm_absent():
     if probe_olm():
         pytest.skip("olm is installed in this environment")
     assert probe_olm() is False
+
+
+def _stub_backends(monkeypatch, available):
+    """Point the module-level import probe at a fixed set of names."""
+    monkeypatch.setattr(
+        core_e2ee,
+        "_importable",
+        lambda module: module in available,
+    )
+
+
+def test_detect_backend_vodozemac_only(monkeypatch):
+    _stub_backends(monkeypatch, {"vodozemac"})
+    assert detect_crypto_backend() == "vodozemac"
+    assert crypto_available() is True
+
+
+def test_detect_backend_olm_only(monkeypatch):
+    _stub_backends(monkeypatch, {"olm"})
+    assert detect_crypto_backend() == "olm"
+    assert crypto_available() is True
+
+
+def test_detect_backend_none(monkeypatch):
+    _stub_backends(monkeypatch, set())
+    assert detect_crypto_backend() is None
+    assert crypto_available() is False
+
+
+def test_detect_backend_prefers_vodozemac(monkeypatch):
+    """Both importable (legacy + 0.26+ runtime): vodozemac wins."""
+    assert CRYPTO_BACKENDS == ("vodozemac", "olm")
+    _stub_backends(monkeypatch, set(CRYPTO_BACKENDS))
+    assert detect_crypto_backend() == "vodozemac"
+
+
+def test_probe_olm_tracks_olm_module_only(monkeypatch):
+    """probe_olm stays an olm-only check (vodozemac-only -> False)."""
+    _stub_backends(monkeypatch, {"vodozemac"})
+    assert probe_olm() is False
+    _stub_backends(monkeypatch, {"olm"})
+    assert probe_olm() is True
 
 
 def test_run_once_all_flags_order_and_args():

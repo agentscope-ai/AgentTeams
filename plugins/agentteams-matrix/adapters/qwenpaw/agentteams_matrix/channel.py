@@ -91,8 +91,8 @@ else:
 
 from core.e2ee import (  # noqa: E402
     E2EEMaintainer,
+    crypto_available,
     e2ee_store_path,
-    probe_olm,
 )
 from core.history import (  # noqa: E402
     CURRENT_MESSAGE_MARKER,
@@ -677,16 +677,21 @@ class AgentTeamsMatrixChannel(BaseChannel):
         )
 
     def _preflight_e2ee_dependencies(self) -> None:
-        """Probe olm before creating AsyncClientConfig;
-        disable E2EE if absent."""
+        """Check the E2EE crypto backend before creating
+        AsyncClientConfig; disable E2EE when none is importable.
+
+        matrix-nio 0.26+ provides E2EE through vodozemac (no top-level
+        olm module), so availability is decided by ``crypto_available``
+        (vodozemac or olm), not by probing olm alone.
+        """
         if not self.encryption:
             return
-        if not probe_olm():
+        if not crypto_available():
             logger.error(
-                "MatrixChannel: olm not installed — falling back to "
-                "non-encrypted mode. "
-                "To enable E2EE: pip install matrix-nio[e2e] && "
-                "apt/dnf install libolm-dev",
+                "MatrixChannel: no Matrix E2EE backend (vodozemac/olm) "
+                "— falling back to non-encrypted mode. Install "
+                "matrix-nio[e2e]; on matrix-nio < 0.26 also install "
+                "libolm (apt/dnf install libolm-dev).",
             )
             self.encryption = False
 

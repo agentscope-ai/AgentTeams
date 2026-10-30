@@ -20,7 +20,14 @@ per-room history buffer (``history``), and the session-id derivation
 """
 
 from .core import MatrixCore
-from .e2ee import E2EEMaintainer, e2ee_store_path, probe_olm
+from .e2ee import (
+    CRYPTO_BACKENDS,
+    E2EEMaintainer,
+    crypto_available,
+    detect_crypto_backend,
+    e2ee_store_path,
+    probe_olm,
+)
 from .history import (
     CURRENT_MESSAGE_MARKER,
     DEFAULT_HISTORY_LIMIT,
@@ -75,6 +82,7 @@ from .state import (
 )
 
 __all__ = [
+    "CRYPTO_BACKENDS",
     "CURRENT_MESSAGE_MARKER",
     "DEFAULT_HISTORY_LIMIT",
     "HISTORY_CONTEXT_MARKER",
@@ -104,7 +112,9 @@ __all__ = [
     "SessionStore",
     "SingleWriterLock",
     "StateLayout",
+    "crypto_available",
     "decode_line",
+    "detect_crypto_backend",
     "e2ee_store_path",
     "encode_frame",
     "extract_mentions_from_text",

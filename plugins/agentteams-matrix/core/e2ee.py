@@ -6,9 +6,10 @@ maintainer drives the matrix-nio client it is given; the not-ready
 guard and the warning-on-error degradation are the channel's legacy
 behaviour, moved verbatim (same log message wording).
 
-This module never imports matrix-nio at import time: ``probe_olm``
-only probes for the ``olm`` module, and the client is an injected
-dependency.
+This module never imports matrix-nio at import time: the crypto
+backend probe only checks whether ``vodozemac`` (matrix-nio 0.26+)
+or ``olm`` (older releases) is importable, and the client is an
+injected dependency.
 """
 
 from __future__ import annotations
@@ -19,7 +20,10 @@ from pathlib import Path
 from typing import Any
 
 __all__ = [
+    "CRYPTO_BACKENDS",
     "E2EEMaintainer",
+    "crypto_available",
+    "detect_crypto_backend",
     "e2ee_store_path",
     "probe_olm",
 ]
@@ -36,16 +40,52 @@ def e2ee_store_path(working_dir: Path) -> Path:
     return Path(working_dir) / "matrix_crypto_store"
 
 
+# Crypto backends matrix-nio can drive E2EE with, in preference order:
+# 0.26 and newer ship the ``e2e`` extra as ``vodozemac`` (no top-level
+# ``olm`` module); older releases use ``olm``.
+CRYPTO_BACKENDS: tuple[str, ...] = ("vodozemac", "olm")
+
+
+def _importable(module: str) -> bool:
+    """Return True when ``module`` can be imported; False otherwise.
+
+    Only import failures are swallowed (``ImportError`` and its
+    ``ModuleNotFoundError`` subclass); any other exception raised while
+    importing the module propagates to the caller.
+    """
+    try:
+        importlib.import_module(module)
+    except (ImportError, ModuleNotFoundError):
+        return False
+    return True
+
+
+def detect_crypto_backend() -> str | None:
+    """Return the first importable name from ``CRYPTO_BACKENDS``.
+
+    ``None`` when no backend is importable.  Preference order matters:
+    a runtime where both are importable reports ``vodozemac``.
+    """
+    for backend in CRYPTO_BACKENDS:
+        if _importable(backend):
+            return backend
+    return None
+
+
+def crypto_available() -> bool:
+    """Return True when an E2EE crypto backend is importable."""
+    return detect_crypto_backend() is not None
+
+
 def probe_olm() -> bool:
     """Return True when the ``olm`` module imports; False otherwise.
 
-    No logging here: the caller keeps the existing error wording.
+    Legacy nio compatibility check only: matrix-nio 0.26+ no longer
+    provides a top-level ``olm`` module, so E2EE availability
+    decisions must use :func:`crypto_available`.  No logging here:
+    the caller keeps the existing error wording.
     """
-    try:
-        importlib.import_module("olm")
-    except ImportError:
-        return False
-    return True
+    return _importable("olm")
 
 
 class E2EEMaintainer:

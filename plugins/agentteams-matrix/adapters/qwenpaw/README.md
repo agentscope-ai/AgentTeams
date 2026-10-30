@@ -15,6 +15,32 @@ plugin.py              # channel registration
 agentteams_matrix/     # channel implementation
 ```
 
+## Runtime requirement: Matrix E2EE
+
+The channel's E2EE preflight detects the crypto backend of the host
+Python environment: `matrix-nio >= 0.26` provides E2EE through
+`vodozemac` (the `e2e` extra; there is no top-level `olm` module
+anymore), older releases through `olm`. Install the extra in the
+environment that runs the channel:
+
+```bash
+pip install "matrix-nio[e2e]"
+```
+
+(On `matrix-nio < 0.26` the extra additionally needs the system
+`libolm`, e.g. `apt/dnf install libolm-dev`.) Without any importable
+backend the channel degrades by design: it logs
+
+```text
+MatrixChannel: no Matrix E2EE backend (vodozemac/olm) — falling back to
+non-encrypted mode. Install matrix-nio[e2e]; on matrix-nio < 0.26 also
+install libolm (apt/dnf install libolm-dev).
+```
+
+and continues unencrypted. `install.sh` deliberately does not pip
+install this: the host/image Python environment is owned by the
+packaging line, and the installer must not touch the host venv.
+
 ## Install
 
 ```bash

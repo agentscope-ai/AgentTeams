@@ -4,7 +4,7 @@ from importlib.metadata import distribution
 
 def main():
     package = distribution("qwenpaw")
-    if package.version not in ("2.2.1", "2.2.2b4"):
+    if package.version not in ("2.2.1", "2.2.2b4", "2.2.2.post1"):
         raise RuntimeError("Review the Driver reload compatibility patch for QwenPaw " + package.version)
     path = package.locate_file("qwenpaw/drivers/manager.py")
     source = path.read_text(encoding="utf-8")

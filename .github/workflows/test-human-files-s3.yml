@@ -34,12 +34,19 @@ jobs:
       # against it rather than MinIO.
       - name: Start RustFS 1.0.4
         run: |
+          # The image runs as a non-root user, so a runner-owned bind directory is
+          # not writable for it (fatal: "Io error: Permission denied (os error 13)"
+          # while initializing /data and /logs). Make the mount points writable
+          # explicitly instead of relying on the image's directory ownership.
+          mkdir -p .rustfs-data .rustfs-logs
+          chmod 777 .rustfs-data .rustfs-logs
           docker run -d --name rustfs \
             -p 9000:9000 -p 9001:9001 \
             -e RUSTFS_ACCESS_KEY=minioadmin \
             -e RUSTFS_SECRET_KEY=minioadmin \
             -e RUSTFS_VOLUMES=/data \
             -v "$PWD/.rustfs-data:/data" \
+            -v "$PWD/.rustfs-logs:/logs" \
             rustfs/rustfs:1.0.4
           for i in $(seq 1 60); do
             if curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null 2>&1; then

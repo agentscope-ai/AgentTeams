@@ -1593,3 +1593,319 @@ func TestHumanFiles_UsedBytesCountsNestedDirectoriesWithMCLikeListing(t *testing
 		t.Fatalf("trash usage=%d, want content+metadata above the 6-byte payload", q.UsedBytes)
 	}
 }
+
+// TestHumanFiles_QuotaLargerOlderOutstandingReplacementStaysAccounted is the
+// maintainer's 10/1/1/9 interleaving: with a 10-byte quota and a 1-byte
+// first.txt, handler A reserves the 1->10 replacement without writing;
+// handler B then reserves 1->1, lands, and commits. The single-slot
+// reservation map used to let B's commit delete A's in-flight 10-byte charge,
+// so the 9-byte extra.txt write passed the quota check and the final usage
+// overshot. The per-path outstanding queue must keep A's reservation charged
+// until A's own commit removes it.
+func TestHumanFiles_QuotaLargerOlderOutstandingReplacementStaysAccounted(t *testing.T) {
+	h1, store, k8s := newHumanFilesRig(t)
+	h2 := NewHumanFilesHandler(k8s, "default", store, audit.NewClient(store))
+	ctx := context.Background()
+
+	if rec := hfPutQuota(t, h1, "alice", hfAdmin(), `{"quotaBytes":10}`); rec.Code != http.StatusOK {
+		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPutFile(t, h1, "alice", "first.txt", hfSelf(), "a"); rec.Code != http.StatusOK {
+		t.Fatalf("seed 1B: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Handler A reserves 1 -> 10 and stops before the object write.
+	req1 := hfReq(t, http.MethodPut, "alice", "first.txt", hfSelf(), nil)
+	a1, status, msg := h1.authorizeHumanFile(req1.Context(), "alice", false)
+	if a1 == nil {
+		t.Fatalf("authorize h1: %d %s", status, msg)
+	}
+	token1, status, msg := h1.reserveQuota(req1.Context(), a1, "alice", "first.txt", 1, 10)
+	if status != 0 || token1 == "" {
+		t.Fatalf("A reservation: status=%d token=%q msg=%s", status, token1, msg)
+	}
+
+	// Handler B reserves 1 -> 1, lands, and commits.
+	req2 := hfReq(t, http.MethodPut, "alice", "first.txt", hfSelf(), nil)
+	a2, status, msg := h2.authorizeHumanFile(req2.Context(), "alice", false)
+	if a2 == nil {
+		t.Fatalf("authorize h2: %d %s", status, msg)
+	}
+	token2, status, msg := h2.reserveQuota(req2.Context(), a2, "alice", "first.txt", 1, 1)
+	if status != 0 || token2 == "" {
+		t.Fatalf("B reservation: status=%d token=%q msg=%s", status, token2, msg)
+	}
+	if err := store.PutObject(ctx, humanFilesPrefix("alice")+"first.txt", []byte("b")); err != nil {
+		t.Fatal(err)
+	}
+	h2.commitQuota(ctx, "alice", "first.txt", token2)
+
+	// A's in-flight 10-byte replacement must still be charged: 10 + 9 > 10.
+	rec := hfPutFile(t, h2, "alice", "extra.txt", hfSelf(), strings.Repeat("e", 9))
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("extra 9B while A's 10B replacement is outstanding: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+	var coded humanFileCodedError
+	if err := json.Unmarshal(rec.Body.Bytes(), &coded); err != nil {
+		t.Fatal(err)
+	}
+	if coded.Code != "quota_exceeded" {
+		t.Fatalf("code = %q, want quota_exceeded", coded.Code)
+	}
+	ledger, _, err := h1.readQuotaLedger(ctx, "alice")
+	if err != nil {
+		t.Fatalf("read ledger: %v", err)
+	}
+	if ledger.UsedBytes != 10 {
+		t.Fatalf("ledger usedBytes = %d, want 10 (A's in-flight delta must survive B's commit)", ledger.UsedBytes)
+	}
+
+	// Handler A now lands and commits its 10-byte replacement.
+	if err := store.PutObject(ctx, humanFilesPrefix("alice")+"first.txt", []byte(strings.Repeat("a", 10))); err != nil {
+		t.Fatal(err)
+	}
+	h1.commitQuota(ctx, "alice", "first.txt", token1)
+
+	// Terminal state: exactly the quota's worth of live bytes, no extra.txt,
+	// and the path entry deleted once its last reservation settled.
+	// Reuse the outer recorder: `if rec := ...` would shadow it and the
+	// following unmarshal would decode the earlier 413 body instead.
+	rec = hfGetQuota(t, h1, "alice", hfSelf())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get quota: %d %s", rec.Code, rec.Body.String())
+	}
+	var q humanQuotaResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &q); err != nil {
+		t.Fatal(err)
+	}
+	if q.UsedBytes != 10 {
+		t.Fatalf("terminal live usage = %d, want 10", q.UsedBytes)
+	}
+	rec = httptest.NewRecorder()
+	h1.getFile(rec, hfReq(t, http.MethodGet, "alice", "extra.txt", hfSelf(), nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("extra.txt GET: got %d, want 404", rec.Code)
+	}
+	ledger, _, err = h1.readQuotaLedger(ctx, "alice")
+	if err != nil {
+		t.Fatalf("read terminal ledger: %v", err)
+	}
+	if ledger.UsedBytes != 10 {
+		t.Fatalf("terminal ledger usedBytes = %d, want 10", ledger.UsedBytes)
+	}
+	if _, ok := ledger.Paths["first.txt"]; ok {
+		t.Fatalf("settled path entry survived: %+v", ledger.Paths["first.txt"])
+	}
+
+	// Guard against regressing the other direction (rejecting everything):
+	// a shrinking overwrite at the quota is still a zero-delta write.
+	if rec := hfPutFile(t, h1, "alice", "first.txt", hfSelf(), "abcde"); rec.Code != http.StatusOK {
+		t.Fatalf("shrink overwrite at quota: got %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	rec = hfGetQuota(t, h1, "alice", hfSelf())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &q); err != nil {
+		t.Fatal(err)
+	}
+	if q.UsedBytes != 5 {
+		t.Fatalf("usage after shrink = %d, want 5", q.UsedBytes)
+	}
+}
+
+// TestHumanFiles_QuotaReverseInterleavedCommitStaysAccounted is the mirror of
+// the maintainer repro with the assertion pinned at the moment it matters:
+// B (the later, smaller reservation) lands and commits FIRST, and the
+// over-quota write must be rejected immediately, while A's larger earlier
+// reservation is still outstanding. A's later commit then settles everything
+// at the quota.
+func TestHumanFiles_QuotaReverseInterleavedCommitStaysAccounted(t *testing.T) {
+	h1, store, k8s := newHumanFilesRig(t)
+	h2 := NewHumanFilesHandler(k8s, "default", store, audit.NewClient(store))
+	ctx := context.Background()
+
+	if rec := hfPutQuota(t, h1, "alice", hfAdmin(), `{"quotaBytes":10}`); rec.Code != http.StatusOK {
+		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPutFile(t, h1, "alice", "first.txt", hfSelf(), "a"); rec.Code != http.StatusOK {
+		t.Fatalf("seed 1B: %d %s", rec.Code, rec.Body.String())
+	}
+
+	req1 := hfReq(t, http.MethodPut, "alice", "first.txt", hfSelf(), nil)
+	a1, status, msg := h1.authorizeHumanFile(req1.Context(), "alice", false)
+	if a1 == nil {
+		t.Fatalf("authorize h1: %d %s", status, msg)
+	}
+	token1, status, msg := h1.reserveQuota(req1.Context(), a1, "alice", "first.txt", 1, 10)
+	if status != 0 || token1 == "" {
+		t.Fatalf("A reservation: status=%d token=%q msg=%s", status, token1, msg)
+	}
+
+	req2 := hfReq(t, http.MethodPut, "alice", "first.txt", hfSelf(), nil)
+	a2, status, msg := h2.authorizeHumanFile(req2.Context(), "alice", false)
+	if a2 == nil {
+		t.Fatalf("authorize h2: %d %s", status, msg)
+	}
+	token2, status, msg := h2.reserveQuota(req2.Context(), a2, "alice", "first.txt", 1, 1)
+	if status != 0 || token2 == "" {
+		t.Fatalf("B reservation: status=%d token=%q msg=%s", status, token2, msg)
+	}
+	if err := store.PutObject(ctx, humanFilesPrefix("alice")+"first.txt", []byte("b")); err != nil {
+		t.Fatal(err)
+	}
+	h2.commitQuota(ctx, "alice", "first.txt", token2)
+
+	// Immediately after B's commit, A's 10-byte head of the chain is still
+	// outstanding: any further byte is over quota.
+	if rec := hfPutFile(t, h2, "alice", "extra2.txt", hfSelf(), strings.Repeat("e", 9)); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("extra2 9B right after B's commit: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+
+	if err := store.PutObject(ctx, humanFilesPrefix("alice")+"first.txt", []byte(strings.Repeat("a", 10))); err != nil {
+		t.Fatal(err)
+	}
+	h1.commitQuota(ctx, "alice", "first.txt", token1)
+
+	rec := hfGetQuota(t, h1, "alice", hfSelf())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get quota: %d %s", rec.Code, rec.Body.String())
+	}
+	var q humanQuotaResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &q); err != nil {
+		t.Fatal(err)
+	}
+	if q.UsedBytes != 10 {
+		t.Fatalf("terminal live usage = %d, want 10", q.UsedBytes)
+	}
+	ledger, _, err := h1.readQuotaLedger(ctx, "alice")
+	if err != nil {
+		t.Fatalf("read ledger: %v", err)
+	}
+	if ledger.UsedBytes != 10 {
+		t.Fatalf("terminal ledger usedBytes = %d, want 10", ledger.UsedBytes)
+	}
+}
+
+// TestHumanFiles_QuotaLostTokenFallback pins the crash-recovery contract: a
+// reservation whose commit/release never arrives keeps the ledger consistent
+// (I1/I5) — sync recomputes the invariant, a release for an unknown token is
+// a no-op, and the ledger stays valid JSON with no negative usage.
+func TestHumanFiles_QuotaLostTokenFallback(t *testing.T) {
+	h, _, _ := newHumanFilesRig(t)
+	ctx := context.Background()
+
+	if rec := hfPutQuota(t, h, "alice", hfAdmin(), `{"quotaBytes":10}`); rec.Code != http.StatusOK {
+		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
+	}
+	req := hfReq(t, http.MethodPut, "alice", "a.txt", hfSelf(), nil)
+	a, status, msg := h.authorizeHumanFile(req.Context(), "alice", false)
+	if a == nil {
+		t.Fatalf("authorize: %d %s", status, msg)
+	}
+	token, status, msg := h.reserveQuota(req.Context(), a, "alice", "a.txt", 0, 6)
+	if status != 0 || token == "" {
+		t.Fatalf("reserve: status=%d token=%q msg=%s", status, token, msg)
+	}
+
+	// The object write never happens and the token is lost. Syncing must
+	// leave I1 intact: used = liveTotal + (Counted - live(a.txt)).
+	if err := h.syncQuotaUsage(ctx, "alice"); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	ledger, _, err := h.readQuotaLedger(ctx, "alice")
+	if err != nil {
+		t.Fatalf("read ledger: %v", err)
+	}
+	liveTotal, err := h.usedBytes(ctx, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, ok := ledger.Paths["a.txt"]
+	if !ok {
+		t.Fatalf("outstanding entry missing after sync: %+v", ledger.Paths)
+	}
+	liveA, err := h.liveFileSize(ctx, "alice", "a.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := liveTotal + entry.Counted - liveA
+	if ledger.UsedBytes != want {
+		t.Fatalf("I1 broken after sync: usedBytes = %d, want liveTotal+(Counted-live) = %d", ledger.UsedBytes, want)
+	}
+	if ledger.UsedBytes != 6 {
+		t.Fatalf("usedBytes = %d, want 6 (6-byte reservation, nothing landed)", ledger.UsedBytes)
+	}
+
+	// A release for a path that was never reserved: no panic, no negative
+	// usage, and the ledger is still valid JSON.
+	h.releaseQuota(ctx, "alice", "ghost.txt", "missing-token")
+	ledger, _, err = h.readQuotaLedger(ctx, "alice")
+	if err != nil {
+		t.Fatalf("ledger no longer valid JSON: %v", err)
+	}
+	if ledger.UsedBytes < 0 {
+		t.Fatalf("usedBytes went negative: %d", ledger.UsedBytes)
+	}
+	if ledger.UsedBytes != 6 {
+		t.Fatalf("unknown-token release changed usage: %d, want 6", ledger.UsedBytes)
+	}
+}
+
+// TestHumanFiles_QuotaLedgerLegacyFormatMigration covers the one-time,
+// lenient, fail-closed upgrade of the legacy path->single-reservation ledger:
+// the in-flight reservation survives the migration charged at its reserved
+// target size, Reservations is cleared, and I1 holds for the recomputed
+// usage — so the migrated reservation still gates writes.
+func TestHumanFiles_QuotaLedgerLegacyFormatMigration(t *testing.T) {
+	h, store, _ := newHumanFilesRig(t)
+	ctx := context.Background()
+
+	// A legacy ledger body: an in-flight 10-byte reservation for first.txt
+	// whose object write has not landed.
+	legacy := humanQuotaLedger{
+		UsedBytes: 10,
+		Reservations: map[string]quotaReservation{
+			"first.txt": {Token: "legacy-token", BaseOldSize: 0, NewSize: 10},
+		},
+	}
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutObject(ctx, humanQuotaLedgerKey("alice"), data); err != nil {
+		t.Fatal(err)
+	}
+
+	// Any ledger read upgrades the format in place.
+	ledger, _, err := h.readQuotaLedger(ctx, "alice")
+	if err != nil {
+		t.Fatalf("read (migration) ledger: %v", err)
+	}
+	if len(ledger.Reservations) != 0 {
+		t.Fatalf("legacy Reservations not cleared: %+v", ledger.Reservations)
+	}
+	entry, ok := ledger.Paths["first.txt"]
+	if !ok {
+		t.Fatalf("migrated path entry missing: %+v", ledger.Paths)
+	}
+	if len(entry.Outstanding) != 1 || entry.Outstanding[0].Token != "legacy-token" || entry.Outstanding[0].NewSize != 10 {
+		t.Fatalf("migrated outstanding = %+v, want the legacy reservation", entry.Outstanding)
+	}
+	// I1: used = liveTotal (0) + (Counted (10) - live (0)).
+	if entry.Counted != 10 {
+		t.Fatalf("migrated Counted = %d, want 10", entry.Counted)
+	}
+	if ledger.UsedBytes != 10 {
+		t.Fatalf("migrated usedBytes = %d, want 10", ledger.UsedBytes)
+	}
+
+	// The migrated in-flight reservation still gates writes: with 10 of the
+	// 10-byte quota charged to the outstanding write, one more byte is over.
+	if rec := hfPutQuota(t, h, "alice", hfAdmin(), `{"quotaBytes":10}`); rec.Code != http.StatusOK {
+		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPutFile(t, h, "alice", "extra.txt", hfSelf(), "x"); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("write over migrated in-flight reservation: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+}

@@ -163,18 +163,33 @@ def sdk():
     saved_modules = set(sys.modules)
     sys.path.insert(0, str(root))
     try:
-        config_mod = importlib.import_module("gateway.config")
-        shared_mod = importlib.import_module("gateway.platforms._shared")
-        base_mod = importlib.import_module("gateway.platforms.base")
-        event_mod = importlib.import_module("gateway.platforms.event")
-        registry_mod = importlib.import_module("gateway.platform_registry")
-        plugins_mod = importlib.import_module("hermes_cli.plugins")
-        spec = importlib.util.spec_from_file_location(
-            "agentteams_hermes_adapter_sdk_under_test", ADAPTER_PATH
-        )
-        adapter_mod = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = adapter_mod
-        spec.loader.exec_module(adapter_mod)
+        try:
+            config_mod = importlib.import_module("gateway.config")
+            shared_mod = importlib.import_module("gateway.platforms._shared")
+            base_mod = importlib.import_module("gateway.platforms.base")
+            event_mod = importlib.import_module("gateway.platforms.event")
+            registry_mod = importlib.import_module("gateway.platform_registry")
+            plugins_mod = importlib.import_module("hermes_cli.plugins")
+            spec = importlib.util.spec_from_file_location(
+                "agentteams_hermes_adapter_sdk_under_test", ADAPTER_PATH
+            )
+            adapter_mod = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = adapter_mod
+            spec.loader.exec_module(adapter_mod)
+        except ModuleNotFoundError as exc:
+            # A missing third-party dependency of the SDK tree means the tree
+            # cannot be imported *here* — that is an environment gap, not an
+            # adapter incompatibility. A missing gateway.*/hermes_cli.* symbol
+            # is exactly the incompatibility this module exists to catch, so
+            # only those re-raise.
+            name = exc.name or ""
+            if name.startswith(("gateway", "hermes_cli")):
+                raise
+            pytest.skip(
+                f"the Hermes tree at {root} needs a dependency that is not installed "
+                f"({name or exc}); install its import closure (see the "
+                f"matrix-bundle-hermes-sdk CI job) or point HERMES_SDK_ROOT at a ready tree"
+            )
         yield SimpleNamespace(
             root=root,
             ref=ref or _describe_ref(root),
@@ -201,7 +216,7 @@ class _StubManifest:
     source = "user"
 
 
-def _stub_context(registry):
+def _stub_context(registry, plugins_mod):
     """Minimal plugin context carrying only what the real
     ``PluginContext.register_platform`` touches: ``manifest.name`` /
     ``manifest.source`` and the manager's scope bookkeeping.  The
@@ -219,7 +234,15 @@ def _stub_context(registry):
         def _remove_platform_name_if_unowned(self, name):
             self._plugin_platform_names.discard(name)
 
-    return SimpleNamespace(manifest=_StubManifest(), _manager=_StubManager())
+    context = SimpleNamespace(manifest=_StubManifest(), _manager=_StubManager())
+    # Bind the SDK's own ``register_platform``: the path under test is the
+    # real method writing to the real ``platform_registry``, not a fake.
+    from types import MethodType
+
+    context.register_platform = MethodType(
+        plugins_mod.PluginContext.register_platform, context
+    )
+    return context
 
 
 @pytest.fixture(scope="module")
@@ -231,7 +254,7 @@ def registered(sdk):
     registry = sdk.registry_mod.platform_registry
     name = sdk.adapter_mod.PLATFORM_NAME
     assert not registry.is_registered(name), "test isolation: name already registered"
-    sdk.adapter_mod.register(_stub_context(registry))
+    sdk.adapter_mod.register(_stub_context(registry, sdk.plugins_mod))
     try:
         yield sdk, name
     finally:

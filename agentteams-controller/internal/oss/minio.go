@@ -311,11 +311,23 @@ func (c *MinIOClient) StatMeta(ctx context.Context, key string) (ObjectMeta, err
 		}
 		return ObjectMeta{}, err
 	}
+	// mc stat --json has no top-level content type: S3 response headers land
+	// in the canonicalized `metadata` map (Content-Type, X-Amz-Meta-*, ...).
+	// The top-level field is accepted as a fallback so a future/other client
+	// shape still works.
+	return parseMCStatJSON(out)
+}
+
+// parseMCStatJSON decodes `mc stat --json` into ObjectMeta. Extracted so the
+// parsing contract (metadata map vs. top-level field) is testable without the
+// mc binary.
+func parseMCStatJSON(out string) (ObjectMeta, error) {
 	var info struct {
-		LastModified string `json:"lastModified"`
-		Size         int64  `json:"size"`
-		ETag         string `json:"etag"`
-		ContentType  string `json:"contentType"`
+		LastModified string            `json:"lastModified"`
+		Size         int64             `json:"size"`
+		ETag         string            `json:"etag"`
+		ContentType  string            `json:"contentType"`
+		Metadata     map[string]string `json:"metadata"`
 	}
 	if err := json.Unmarshal([]byte(out), &info); err != nil {
 		return ObjectMeta{}, fmt.Errorf("parse mc stat --json: %w", err)
@@ -324,7 +336,33 @@ func (c *MinIOClient) StatMeta(ctx context.Context, key string) (ObjectMeta, err
 	if err != nil {
 		return ObjectMeta{}, fmt.Errorf("parse lastModified %q: %w", info.LastModified, err)
 	}
-	return ObjectMeta{Size: info.Size, ModTime: modTime, ETag: info.ETag, ContentType: info.ContentType}, nil
+	contentType := info.ContentType
+	if contentType == "" {
+		contentType = contentTypeFromMCMetadata(info.Metadata)
+	}
+	return ObjectMeta{Size: info.Size, ModTime: modTime, ETag: info.ETag, ContentType: contentType}, nil
+}
+
+// contentTypeFromMCMetadata reads Content-Type out of mc's metadata map. S3
+// clients canonicalize header names, but the map is decoded from JSON, so the
+// lookup is case-insensitive and also accepts the lower-case and
+// X-Amz-Meta-Content-Type spellings some backends emit. RustFS serves the same
+// S3 headers, so the same lookup applies there.
+func contentTypeFromMCMetadata(metadata map[string]string) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+	clean := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		clean[strings.ToLower(strings.TrimSpace(key))] = strings.TrimSpace(value)
+	}
+	// Precedence is explicit so a map iteration order cannot change the result.
+	for _, key := range []string{"content-type", "x-amz-meta-content-type"} {
+		if value := clean[key]; value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (c *MinIOClient) DeleteObject(ctx context.Context, key string) error {

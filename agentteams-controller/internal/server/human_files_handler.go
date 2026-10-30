@@ -533,6 +533,14 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 		}()
 	}
 
+	// Fence: an expired holder whose lease was taken over must not keep
+	// mutating the file. The lease object is CAS-released, never deleted, so
+	// this read can tell "still mine" from "replaced by a successor".
+	if verr := lock.Verify(ctx); verr != nil {
+		writeHumanFileCodedError(w, http.StatusConflict, "lease_lost",
+			"the path lease was taken over by another operation; nothing was written")
+		return
+	}
 	if match := r.Header.Get("If-Match"); match != "" {
 		// Resolve the current state first so both backends reject
 		// identically when the target does not exist yet (mc If-Match
@@ -709,6 +717,13 @@ func (h *humanFilesHandler) deleteFile(w http.ResponseWriter, r *http.Request) {
 			"the file changed since it was read; nothing was deleted")
 		return
 	default:
+		if verr := lock.Verify(ctx); verr != nil {
+			_ = h.oss.DeleteObject(ctx, trashPrefix+"content")
+			_ = h.oss.DeleteObject(ctx, trashPrefix+"meta.json")
+			writeHumanFileCodedError(w, http.StatusConflict, "lease_lost",
+				"the path lease was taken over by another operation; nothing was deleted")
+			return
+		}
 		if err := h.oss.DeleteObject(ctx, key); err != nil {
 			httputil.WriteError(w, http.StatusInternalServerError,
 				"remove original failed; the file is preserved in the trash and may still be readable")
@@ -867,6 +882,14 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 	// add usage. An overwrite replaces an existing target and reduces usage
 	// further. Only writes (putFile) can grow the area, so only they are
 	// quota-gated; a restore must not be rejected at exactly the quota.
+	// Fence: an expired holder whose lease was taken over must not keep
+	// mutating the file. The lease object is CAS-released, never deleted, so
+	// this read can tell "still mine" from "replaced by a successor".
+	if verr := lock.Verify(ctx); verr != nil {
+		writeHumanFileCodedError(w, http.StatusConflict, "lease_lost",
+			"the path lease was taken over by another operation; nothing was written")
+		return
+	}
 	if !exists {
 		// Use If-None-Match:* so a file created between StatMeta and this
 		// write cannot be silently overwritten. The check and create are

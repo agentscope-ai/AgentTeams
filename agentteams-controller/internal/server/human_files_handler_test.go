@@ -2250,8 +2250,18 @@ func TestHumanFiles_PathLockSerializesMutations(t *testing.T) {
 	}
 
 	lock.Release(ctx)
-	if _, err := store.GetObject(ctx, lockKey); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("release left the lock object behind (err=%v)", err)
+	// Release CASes the lease to an expired tombstone; it must not delete the
+	// object (a delete could remove a successor's lease).
+	tomb, err := store.GetObject(ctx, lockKey)
+	if err != nil {
+		t.Fatalf("release removed the lease object: %v", err)
+	}
+	var tp humanPathLockPayload
+	if err := json.Unmarshal(tomb, &tp); err != nil {
+		t.Fatalf("tombstone decode: %v", err)
+	}
+	if tp.Owner != "" || !tp.expired(time.Now().UTC()) {
+		t.Fatalf("released lease = %+v, want an expired tombstone", tp)
 	}
 	if rec := hfPutFile(t, h2, "alice", "f.txt", hfSelf(), "BBBBB"); rec.Code != http.StatusOK {
 		t.Fatalf("put after release: got %d, want 200: %s", rec.Code, rec.Body.String())
@@ -2314,8 +2324,16 @@ func TestHumanFiles_PathLockExpiredLeaseCanBeStolen(t *testing.T) {
 	}
 
 	lock.Release(ctx)
-	if _, err := store.GetObject(ctx, lockKey); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("release after steal left the lock object (err=%v)", err)
+	tomb, err := store.GetObject(ctx, lockKey)
+	if err != nil {
+		t.Fatalf("release removed the lease object: %v", err)
+	}
+	var tp humanPathLockPayload
+	if err := json.Unmarshal(tomb, &tp); err != nil {
+		t.Fatalf("tombstone decode: %v", err)
+	}
+	if tp.Owner != "" || !tp.expired(time.Now().UTC()) {
+		t.Fatalf("released lease after steal = %+v, want an expired tombstone", tp)
 	}
 }
 
@@ -2345,5 +2363,168 @@ func TestHumanFiles_GetSnapshotHandlesMultipartETag(t *testing.T) {
 	}
 	if got, want := rec.Result().Header.Get("ETag"), md5Hex(content)+"-3"; got != want {
 		t.Fatalf("ETag = %q, want the multipart form %q", got, want)
+	}
+}
+
+// racyReleaseOSS forces the round-6 interleaving: the first lock-object
+// access after arming performs B's CAS takeover, and a GetObject that raced
+// the takeover returns the pre-takeover bytes (what the released holder read
+// before B acquired). A release built as "read owner, then unconditional
+// delete" therefore deletes B's lease; a CAS release cannot.
+type racyReleaseOSS struct {
+	*ossfake.Memory
+	lockKey string
+	steal   []byte
+	armed   bool
+}
+
+func (r *racyReleaseOSS) maybeSteal(ctx context.Context, key string) []byte {
+	if !r.armed || key != r.lockKey {
+		return nil
+	}
+	r.armed = false
+	cur, err := r.Memory.GetObject(ctx, key)
+	if err != nil {
+		return nil
+	}
+	_ = r.Memory.PutObjectIfMatch(ctx, key, r.steal, md5Hex(cur))
+	return cur
+}
+
+func (r *racyReleaseOSS) GetObject(ctx context.Context, key string) ([]byte, error) {
+	if stale := r.maybeSteal(ctx, key); stale != nil {
+		return stale, nil
+	}
+	return r.Memory.GetObject(ctx, key)
+}
+
+func (r *racyReleaseOSS) PutObjectIfMatch(ctx context.Context, key string, data []byte, etag string) error {
+	r.maybeSteal(ctx, key)
+	return r.Memory.PutObjectIfMatch(ctx, key, data, etag)
+}
+
+// TestReviewerLeaseReleaseMustNotDeleteSuccessor is the round-6 ordering: the
+// holder reads its own owner, a successor CAS-acquires the expired lease, and
+// the holder's release must not remove the successor's lease. Because the
+// release window is read-then-delete, an unconditional delete lands on the
+// successor and lets a third writer acquire the same path while the second
+// still holds it.
+func TestReviewerLeaseReleaseMustNotDeleteSuccessor(t *testing.T) {
+	base := ossfake.NewMemory()
+	ctx := context.Background()
+	lockKey := humanPathLockKey("alice", "f.txt")
+
+	past := time.Now().UTC().Add(-10 * time.Minute)
+	seed, err := json.Marshal(humanPathLockPayload{
+		Owner:      "00000000-0000-4000-8000-000000000000",
+		Path:       "f.txt",
+		AcquiredAt: past.Add(-time.Minute).Format(time.RFC3339),
+		ExpiresAt:  past.Format(time.RFC3339),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := base.PutObject(ctx, lockKey, seed); err != nil {
+		t.Fatal(err)
+	}
+
+	stealPayload, err := json.Marshal(humanPathLockPayload{
+		Owner:      "11111111-1111-4111-8111-111111111111",
+		Path:       "f.txt",
+		AcquiredAt: time.Now().UTC().Format(time.RFC3339),
+		ExpiresAt:  time.Now().UTC().Add(humanPathLockTTL).Format(time.RFC3339),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	racy := &racyReleaseOSS{Memory: base, lockKey: lockKey, steal: stealPayload}
+	_, _, k8s := newHumanFilesRig(t)
+	h := NewHumanFilesHandler(k8s, "default", racy, audit.NewClient(base))
+
+	lockA, err := h.acquireHumanPathLock(ctx, "alice", "f.txt", humanPathLockTTL)
+	if err != nil {
+		t.Fatalf("A acquire: %v", err)
+	}
+
+	racy.armed = true // B takes over during A's release window
+	lockA.Release(ctx)
+
+	cur, err := base.GetObject(ctx, lockKey)
+	if err != nil {
+		t.Fatalf("release removed the lease object: %v", err)
+	}
+	var p humanPathLockPayload
+	if err := json.Unmarshal(cur, &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.Owner != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("A's release replaced B's lease: owner = %q", p.Owner)
+	}
+
+	if _, err := h.acquireHumanPathLock(ctx, "alice", "f.txt", humanPathLockTTL); !errors.Is(err, errHumanPathBusy) {
+		t.Fatalf("a third writer acquired the path while B holds it: err=%v", err)
+	}
+}
+
+// stealLeaseOSS takes the lease over at a controlled point: the first
+// StatMeta of the locked file (the handler's oldSize probe) rewrites the
+// lease to a foreign live holder, so the fence before the write must fail.
+type stealLeaseOSS struct {
+	*ossfake.Memory
+	fileKey string
+	lockKey string
+	armed   bool
+}
+
+func (s *stealLeaseOSS) StatMeta(ctx context.Context, key string) (oss.ObjectMeta, error) {
+	if s.armed && key == s.fileKey {
+		s.armed = false
+		if lease, err := s.Memory.GetObject(ctx, s.lockKey); err == nil {
+			payload, merr := json.Marshal(humanPathLockPayload{
+				Owner:      "22222222-2222-4222-8222-222222222222",
+				Path:       "f.txt",
+				AcquiredAt: time.Now().UTC().Format(time.RFC3339),
+				ExpiresAt:  time.Now().UTC().Add(humanPathLockTTL).Format(time.RFC3339),
+			})
+			if merr == nil {
+				_ = s.Memory.PutObjectIfMatch(ctx, s.lockKey, payload, md5Hex(lease))
+			}
+		}
+	}
+	return s.Memory.StatMeta(ctx, key)
+}
+
+// TestReviewerExpiredHolderMustNotMutateFile is the fencing half of the
+// round-6 finding: a holder whose lease was taken over mid-operation must not
+// go on to write the file.
+func TestReviewerExpiredHolderMustNotMutateFile(t *testing.T) {
+	base := ossfake.NewMemory()
+	ctx := context.Background()
+	fileKey := humanFilesPrefix("alice") + "f.txt"
+	if err := base.PutObject(ctx, fileKey, []byte("AAAAA")); err != nil {
+		t.Fatal(err)
+	}
+	wrapped := &stealLeaseOSS{
+		Memory:  base,
+		fileKey: fileKey,
+		lockKey: humanPathLockKey("alice", "f.txt"),
+		armed:   true,
+	}
+	_, _, k8s := newHumanFilesRig(t)
+	h := NewHumanFilesHandler(k8s, "default", wrapped, audit.NewClient(base))
+
+	rec := hfPutFile(t, h, "alice", "f.txt", hfSelf(), "BBBBB")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("write by a holder that lost the lease: got %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	var coded humanFileCodedError
+	if err := json.Unmarshal(rec.Body.Bytes(), &coded); err != nil {
+		t.Fatal(err)
+	}
+	if coded.Code != "lease_lost" {
+		t.Fatalf("error code = %q, want lease_lost", coded.Code)
+	}
+	if data, err := base.GetObject(ctx, fileKey); err != nil || string(data) != "AAAAA" {
+		t.Fatalf("file after lost-lease write = %q err=%v, want the original AAAAA", data, err)
 	}
 }

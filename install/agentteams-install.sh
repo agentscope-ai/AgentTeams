@@ -3625,27 +3625,32 @@ _start_dashboard() {
     }
 
     # Copy src_dir from a (possibly stopped) container onto the host.
-    # Returns 0 always; sets the 4th nameref-style flag file if the path
-    # existed in the container (docker cp of the directory itself succeeded).
+    # Sets the 4th flag file only after every required copy succeeded, so the
+    # caller never mistakes a partial export for a complete one. Returns 0 when
+    # the files are staged, 1 when the export definitely failed.
     _dashboard_export_dir() {
         local _container="$1" _src="$2" _dest="$3" _exists_flag="$4"
-        mkdir -p "${_dest}"
+        rm -f "${_exists_flag}" 2>/dev/null || true
+        mkdir -p "${_dest}" || return 1
         if ${DOCKER_CMD} cp "${_container}:${_src}/." "${_dest}/" >/dev/null 2>&1; then
             : > "${_exists_flag}"
             return 0
         fi
         local _parent
-        _parent=$(mktemp -d "${TMPDIR:-/tmp}/agentteams-dashboard-cp.XXXXXX")
+        _parent=$(mktemp -d "${TMPDIR:-/tmp}/agentteams-dashboard-cp.XXXXXX") || return 1
+        local _rc=1
         if ${DOCKER_CMD} cp "${_container}:${_src}" "${_parent}/" >/dev/null 2>&1; then
-            : > "${_exists_flag}"
             local _copied
             _copied=$(ls -A "${_parent}" 2>/dev/null | head -1)
             if [ -n "${_copied}" ] && [ -d "${_parent}/${_copied}" ]; then
-                cp -a "${_parent}/${_copied}/." "${_dest}/" 2>/dev/null || true
+                if cp -a "${_parent}/${_copied}/." "${_dest}/" 2>/dev/null; then
+                    : > "${_exists_flag}"
+                    _rc=0
+                fi
             fi
         fi
         rm -rf "${_parent}" 2>/dev/null || true
-        return 0
+        return "${_rc}"
     }
 
     local _dash_ids
@@ -3676,8 +3681,11 @@ _start_dashboard() {
         local _legacy_dir="${_export_dir}/legacy"
         local _overlay_exists="${_export_dir}/overlay.exists"
         local _legacy_exists="${_export_dir}/legacy.exists"
-        _dashboard_export_dir "${DASHBOARD_CONTAINER}" "/data/agentteams-dashboard" "${_overlay_dir}" "${_overlay_exists}"
-        _dashboard_export_dir "${DASHBOARD_CONTAINER}" "/app/db" "${_legacy_dir}" "${_legacy_exists}"
+        # Failures are reported through the exists flag plus
+        # _dashboard_path_present below; keep set -e from aborting here so the
+        # old container can be restarted and left in place.
+        _dashboard_export_dir "${DASHBOARD_CONTAINER}" "/data/agentteams-dashboard" "${_overlay_dir}" "${_overlay_exists}" || true
+        _dashboard_export_dir "${DASHBOARD_CONTAINER}" "/app/db" "${_legacy_dir}" "${_legacy_exists}" || true
 
         local _keep_old=0
         local _keep_where=""

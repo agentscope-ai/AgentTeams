@@ -1293,6 +1293,117 @@ else
     fi
 fi
 
+# ---------- Test 27: Host staging copy failure after a successful fallback docker cp ----------
+
+section "Test 27: Executable host staging copy failure"
+
+_test_start_dashboard_export_hostcp_fail() {
+    local _tmpfile _calls
+    _tmpfile=$(mktemp)
+    _calls=$(mktemp)
+
+    if ! extract_function "_start_dashboard" "${INSTALL_SCRIPT}" > "${_tmpfile}" 2>/dev/null; then
+        echo "EXTRACTION_FAILED"
+        rm -f "${_tmpfile}" "${_calls}"
+        return
+    fi
+
+    (
+        CALLS_FILE="${_calls}"
+        docker() {
+            printf 'docker %s\n' "$*" >> "${CALLS_FILE}"
+            if [ "$1" = "ps" ]; then
+                if [ "$2" = "-a" ]; then
+                    echo "agentteams-dashboard"
+                else
+                    echo "agentteams-controller"
+                fi
+                return 0
+            fi
+            if [ "$1" = "cp" ]; then
+                # First form (container:/app/db/.) fails; fallback
+                # (container:/app/db <temp>/) succeeds and stages db/.
+                case "${*: -2}" in
+                    *":/app/db/."*) return 1 ;;
+                esac
+                local _dest="${*: -1}"
+                case "$*" in
+                    *":/app/db"*)
+                        mkdir -p "${_dest}/db"
+                        echo '{"legacy":true}' > "${_dest}/db/config.json"
+                        return 0
+                        ;;
+                esac
+                return 1
+            fi
+            if [ "$1" = "diff" ]; then
+                echo "A /app/db/config.json"
+                return 0
+            fi
+            if [ "$1" = "image" ] && echo "$*" | grep -q 'Config.User'; then
+                echo "nextjs"
+                return 0
+            fi
+            return 0
+        }
+        podman() { docker "$@"; }
+        DOCKER_CMD="docker"
+        log() { :; }
+        msg() { echo "$*"; }
+        curl() { return 1; }
+        sleep() { :; }
+        # Host-side staging copy fails after docker cp succeeded.
+        cp() { return 1; }
+
+        AGENTTEAMS_DASHBOARD=1
+        AGENTTEAMS_USE_EMBEDDED=1
+        AGENTTEAMS_REGISTRY="ghcr.io/agentteams-group"
+        AGENTTEAMS_PORT_DASHBOARD="13000"
+        AGENTTEAMS_DASHBOARD_VERSION="v1.3.1"
+        AGENTTEAMS_DASHBOARD_IMAGE="ghcr.io/agentteams-group/agentteams/agentteams-dashboard:v1.3.1"
+        AGENTTEAMS_LOCAL_ONLY=1
+        AGENTTEAMS_AI_GATEWAY_ADMIN_URL="https://console.example.test:8443"
+        AGENTTEAMS_AUTH_TOKEN="test-token"
+        AGENTTEAMS_ENV_FILE="$(mktemp)"
+
+        # shellcheck disable=SC1090
+        source "${_tmpfile}" 2>/dev/null
+
+        if ! declare -F _start_dashboard >/dev/null 2>&1; then
+            echo "FUNCTION_NOT_FOUND"
+        else
+            _start_dashboard
+            echo "CALLS_BEGIN"
+            cat "${CALLS_FILE}"
+            echo "CALLS_END"
+        fi
+    )
+    rm -f "${_tmpfile}" "${_calls}"
+}
+
+_hostcp_fail=$(_test_start_dashboard_export_hostcp_fail 2>&1)
+
+if echo "${_hostcp_fail}" | grep -q "EXTRACTION_FAILED\|FUNCTION_NOT_FOUND"; then
+    fail "Exec hostcp-fail: function extraction failed"
+else
+    _calls_hostcp=$(echo "${_hostcp_fail}" | sed -n '/CALLS_BEGIN/,/CALLS_END/p')
+    if echo "${_calls_hostcp}" | grep -q 'docker start .*agentteams-dashboard'; then
+        pass "Exec hostcp-fail: keeps old container when the host staging copy fails"
+    else
+        fail "Exec hostcp-fail: did not restart old container after host staging copy failure"
+    fi
+    if echo "${_calls_hostcp}" | grep -q 'docker rm'; then
+        fail "Exec hostcp-fail: removed old container after host staging copy failure"
+    else
+        pass "Exec hostcp-fail: does not rm old container after host staging copy failure"
+    fi
+    if echo "${_calls_hostcp}" | grep -q 'docker run -d'; then
+        fail "Exec hostcp-fail: replaced container after host staging copy failure"
+    else
+        pass "Exec hostcp-fail: does not start a new container after host staging copy failure"
+    fi
+fi
+
 # ---------- Test 23: Brand-new volume is chowned to the image UID ----------
 
 section "Test 23: Executable brand-new volume chown"

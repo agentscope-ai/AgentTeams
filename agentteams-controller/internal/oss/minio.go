@@ -123,7 +123,10 @@ func (c *MinIOClient) PutObjectIfMatchWithType(ctx context.Context, key string, 
 	// observed conflict is still rejected; only the narrow compare-to-put
 	// window is accepted on OSS.
 	if errors.As(err, &resp) && (resp.Code == "NotImplemented" || resp.Code == "501") {
-		return ossFallbackWrite(ctx, key, data, matchETag, c.StatMeta, c.PutObject)
+		// The fallback must keep the requested media type: dropping it turns a
+		// tombstone into an ordinary empty object, which reads as a live empty
+		// file and makes an ordinary restore answer path_conflict.
+		return ossFallbackWrite(ctx, key, data, matchETag, contentType, c.StatMeta, c.PutObjectWithType)
 	}
 	return err
 }
@@ -168,9 +171,9 @@ func (c *MinIOClient) sdkPutObjectIfAbsent(ctx context.Context, key string, data
 // ETag immediately before a plain PutObject: an observed conflict is
 // rejected; only the narrow compare-to-put race is accepted. Extracted as a
 // pure function so the contract is testable without a live backend.
-func ossFallbackWrite(ctx context.Context, key string, data []byte, matchETag string,
+func ossFallbackWrite(ctx context.Context, key string, data []byte, matchETag, contentType string,
 	stat func(context.Context, string) (ObjectMeta, error),
-	put func(context.Context, string, []byte) error) error {
+	put func(context.Context, string, []byte, string) error) error {
 	cur, err := stat(ctx, key)
 	if err != nil {
 		return err
@@ -178,7 +181,7 @@ func ossFallbackWrite(ctx context.Context, key string, data []byte, matchETag st
 	if canonicalizeETag(cur.ETag) != matchETag {
 		return ErrPreconditionFailed
 	}
-	return put(ctx, key, data)
+	return put(ctx, key, data, contentType)
 }
 
 // canonicalizeETag normalizes a provider ETag for comparison: S3-style
@@ -254,6 +257,30 @@ func (c *MinIOClient) PutObject(ctx context.Context, key string, data []byte) er
 	tmpFile.Close()
 
 	return c.PutFile(ctx, tmpFile.Name(), key)
+}
+
+// PutObjectWithType writes data with an explicit content type. mc infers the
+// type from the temp file's extension otherwise (application/octet-stream), so
+// the fallback path would lose a tombstone marker without this.
+func (c *MinIOClient) PutObjectWithType(ctx context.Context, key string, data []byte, contentType string) error {
+	if contentType == "" {
+		return c.PutObject(ctx, key, data)
+	}
+	if err := c.ensureAlias(ctx); err != nil {
+		return err
+	}
+	tmpFile, err := os.CreateTemp("", "agentteams-oss-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	tmpFile.Close()
+	_, err = c.runMC(ctx, "cp", "--attr", "Content-Type="+contentType, tmpFile.Name(), c.fullPath(key))
+	return err
 }
 
 func (c *MinIOClient) PutFile(ctx context.Context, localPath, key string) error {

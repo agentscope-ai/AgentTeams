@@ -62,6 +62,9 @@ jobs:
           mc alias set s3 http://127.0.0.1:9000 minioadmin minioadmin
           mc mb s3/human-files-test
 
+      # Both the normal handler lifecycle and the provider fallback (conditional
+      # PUT answered with 501) run against the same backend, because the
+      # fallback is a separate write path that can silently lose the marker.
       - name: Lifecycle regression
         working-directory: agentteams-controller
         env:
@@ -69,4 +72,6 @@ jobs:
           HUMAN_FILES_S3_ACCESS_KEY: minioadmin
           HUMAN_FILES_S3_SECRET_KEY: minioadmin
           HUMAN_FILES_S3_BUCKET: human-files-test
-        run: go test ./internal/server -run TestHumanFiles_S3Lifecycle -count=1 -v
+        run: |
+          go test ./internal/server -run TestHumanFiles_S3Lifecycle -count=1 -v
+          go test ./internal/oss -run TestS3FallbackLifecycle -count=1 -v

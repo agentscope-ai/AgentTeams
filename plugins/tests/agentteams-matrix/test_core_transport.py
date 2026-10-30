@@ -2,9 +2,12 @@
 
 The factory must be equivalent to the QwenPaw channel's legacy client
 construction: same ``AsyncClient`` kwargs, same ``AsyncClientConfig``,
-same store-path handling, same query-token ``send`` compatibility.
-Constructing the client is fully local — no network I/O is performed
-(the parent ``AsyncClient.send`` is stubbed where ``send`` is tested).
+same store-path handling.  The query-token ``send`` compatibility is
+opt-in via ``TransportConfig.query_token`` (off by default — modern
+Synapse rejects the ``Authorization`` header + query-token mix) and is
+tested on a ``query_token=True`` client.  Constructing the client is
+fully local — no network I/O is performed (the parent
+``AsyncClient.send`` is stubbed where ``send`` is tested).
 """
 
 from __future__ import annotations
@@ -35,6 +38,7 @@ def _config(**overrides: Any) -> TransportConfig:
         "store_path": None,
         "encryption": False,
         "sync_timeout_ms": None,
+        "query_token": False,
     }
     kwargs.update(overrides)
     return TransportConfig(**kwargs)
@@ -45,8 +49,19 @@ def _run(scenario):
     return asyncio.run(scenario)
 
 
-def test_build_client_returns_qwenpaw_matrix_client():
+def test_build_client_default_returns_plain_async_client():
+    """The default (``query_token=False``) must be a plain nio
+    ``AsyncClient``: matrix-nio already sends the ``Authorization``
+    header, and appending the access token to the query as well is
+    rejected by modern Synapse ("mixing Authorization headers and
+    access_token query parameters")."""
     client = build_client(_config())
+    assert type(client) is AsyncClient
+    assert not isinstance(client, QwenPawMatrixClient)
+
+
+def test_build_client_query_token_returns_qwenpaw_matrix_client():
+    client = build_client(_config(query_token=True))
     assert isinstance(client, QwenPawMatrixClient)
     assert isinstance(client, AsyncClient)
 
@@ -142,12 +157,14 @@ def _capture_parent_send(monkeypatch) -> Dict[str, Any]:
 
 
 def test_build_client_query_token_send_compat(monkeypatch):
-    """The moved client must keep query-token auth for homeservers/
+    """The opt-in client must keep query-token auth for homeservers/
     proxies that drop auth headers: the access token is appended to the
     request query by ``send`` before reaching the parent implementation
     (stubbed here — no network)."""
     seen = _capture_parent_send(monkeypatch)
-    client = build_client(_config(access_token="syt_token123"))
+    client = build_client(
+        _config(access_token="syt_token123", query_token=True)
+    )
     result = _run(client.send("GET", "/_matrix/client/v3/rooms"))
     assert result == "sent"
     assert seen["method"] == "GET"
@@ -157,7 +174,9 @@ def test_build_client_query_token_send_compat(monkeypatch):
 
 def test_build_client_send_does_not_duplicate_existing_token(monkeypatch):
     seen = _capture_parent_send(monkeypatch)
-    client = build_client(_config(access_token="syt_token123"))
+    client = build_client(
+        _config(access_token="syt_token123", query_token=True)
+    )
     _run(
         client.send(
             "GET",
@@ -170,5 +189,16 @@ def test_build_client_send_does_not_duplicate_existing_token(monkeypatch):
 def test_build_client_send_without_token_untouched(monkeypatch):
     seen = _capture_parent_send(monkeypatch)
     client = build_client(_config())
+    _run(client.send("GET", "/_matrix/client/v3/rooms"))
+    assert seen["path"] == "/_matrix/client/v3/rooms"
+
+
+def test_build_client_default_send_omits_query_token(monkeypatch):
+    """Regression guard for the real-world failure: the default plain
+    client must not append the access token to the query — modern
+    Synapse rejects the ``Authorization`` header + query-token mix
+    (``M_MISSING_TOKEN``), which broke the E2EE key upload."""
+    seen = _capture_parent_send(monkeypatch)
+    client = build_client(_config(access_token="syt_token123"))
     _run(client.send("GET", "/_matrix/client/v3/rooms"))
     assert seen["path"] == "/_matrix/client/v3/rooms"

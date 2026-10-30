@@ -19,6 +19,7 @@ import pytest
 pytest.importorskip("nio")
 
 from nio import (  # noqa: E402
+    AsyncClient,
     MegolmEvent,
     RoomMessageImage,
     RoomMessageNotice,
@@ -47,7 +48,6 @@ from core.transport import (  # noqa: E402
     ROOM_EVENT_FILTER,
     TYPING_TIMEOUT_MS,
     NioTransport,
-    QwenPawMatrixClient,
     TransportConfig,
     build_client,
     normalize_room_event,
@@ -329,7 +329,9 @@ def test_start_build_path_starts_sync_engine(tmp_path, monkeypatch):
             state_dir=tmp_path,
         )
         await transport.start(lambda e: _noop())
-        assert isinstance(transport._client, QwenPawMatrixClient)
+        # Default query_token=False → plain nio AsyncClient (the
+        # QwenPaw compat subclass is opt-in via TransportConfig).
+        assert type(transport._client) is AsyncClient
         engine = FakeSyncEngine.instances[-1]
         assert engine.started
         assert engine.client is transport._client
@@ -410,7 +412,7 @@ def test_start_build_path_crypto_degrades_without_backend(tmp_path, monkeypatch)
         )
         await transport.start(lambda e: _noop())
         assert transport.encryption is False
-        assert isinstance(transport._client, QwenPawMatrixClient)
+        assert type(transport._client) is AsyncClient
         assert transport._client.config.encryption_enabled is False
         await transport.stop()
 

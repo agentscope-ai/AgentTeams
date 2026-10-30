@@ -712,6 +712,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 store_path=store_path,
                 encryption=self.encryption,
                 sync_timeout_ms=self.sync_timeout_ms,
+                # QwenPaw's Matrix path drops the Authorization header —
+                # keep the legacy query-token behaviour (zero change).
+                query_token=True,
             )
         )
 

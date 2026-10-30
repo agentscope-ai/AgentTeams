@@ -8,7 +8,11 @@ the future Hermes / OpenClaw in-process adapters can reuse it.
 
 The construction logic is equivalent to the QwenPaw channel's legacy
 ``_init_async_client``: same ``AsyncClient`` kwargs, same
-``AsyncClientConfig`` and the same query-token ``send`` compatibility.
+``AsyncClientConfig`` and the same query-token ``send`` compatibility
+(the latter only behind the explicit ``TransportConfig.query_token``
+flag — off by default, since matrix-nio already sends the
+``Authorization`` header and modern Synapse rejects requests that mix
+it with an ``access_token`` query parameter).
 
 M5b adds :class:`NioTransport` — the full ``MatrixTransport``
 implementation over matrix-nio (sync loop, event normalisation,
@@ -76,7 +80,13 @@ MIN_SYNC_TIMEOUT_MS = 1000
 
 
 class QwenPawMatrixClient(AsyncClient):
-    """Keep query-token auth for homeservers/proxies that drop auth headers."""
+    """Keep query-token auth for homeservers/proxies that drop auth headers.
+
+    Optional compatibility layer only — enabled exclusively by
+    ``TransportConfig.query_token=True`` (the QwenPaw adapter sets the
+    flag to keep its legacy behaviour).  :func:`build_client` returns
+    a plain :class:`nio.AsyncClient` by default.
+    """
 
     async def send(
         self,
@@ -114,7 +124,10 @@ class TransportConfig:
     (the E2EE key store when encryption is on); ``None`` disables the
     on-disk store.  ``sync_timeout_ms`` is the sync long-poll timeout;
     values below :data:`MIN_SYNC_TIMEOUT_MS` are clamped to it and
-    ``None`` (no opinion) resolves to the floor.
+    ``None`` (no opinion) resolves to the floor.  ``query_token``
+    keeps the legacy QwenPaw query-token ``send`` compatibility (off
+    by default: matrix-nio already sends the ``Authorization`` header
+    and modern Synapse rejects the header + query-token mix).
     """
 
     homeserver: str
@@ -124,16 +137,26 @@ class TransportConfig:
     store_path: Optional[Path] = None
     encryption: bool = False
     sync_timeout_ms: Optional[int] = None
+    query_token: bool = False
 
 
-def build_client(config: TransportConfig) -> QwenPawMatrixClient:
-    """Build the QwenPaw Matrix client (matrix-nio transport).
+def build_client(config: TransportConfig) -> AsyncClient:
+    """Build the matrix-nio Matrix client.
+
+    By default (``query_token=False``) a plain :class:`nio.AsyncClient`
+    is returned: matrix-nio already authenticates with the
+    ``Authorization`` header, and appending the access token to the
+    query as well is rejected by modern Synapse ("mixing
+    Authorization headers and access_token query parameters").  With
+    ``query_token=True`` the :class:`QwenPawMatrixClient`
+    compatibility layer is returned instead (the QwenPaw adapter sets
+    the flag to keep its legacy behaviour).
 
     Equivalent to the QwenPaw channel's legacy construction: the same
     ``AsyncClient`` kwargs, the same ``AsyncClientConfig`` (sync-token
     store off, request timeout derived from the clamped sync long-poll
-    timeout, encryption flag passed through), the same store-path
-    handling and the same query-token ``send`` compatibility.
+    timeout, encryption flag passed through) and the same store-path
+    handling.
     """
     effective_sync_ms = (
         max(MIN_SYNC_TIMEOUT_MS, int(config.sync_timeout_ms))
@@ -149,7 +172,8 @@ def build_client(config: TransportConfig) -> QwenPawMatrixClient:
         encryption_enabled=config.encryption,
         request_timeout=max(effective_sync_ms / 1000 + 30, 60),
     )
-    client = QwenPawMatrixClient(
+    client_cls = QwenPawMatrixClient if config.query_token else AsyncClient
+    client = client_cls(
         config.homeserver,
         # Keep user neutral before auth; token/whoami or login response
         # will set the canonical MXID.
@@ -362,7 +386,7 @@ class NioTransport:
         state_dir: Union[str, Path],
         sync_timeout_ms: Optional[int] = None,
         encryption: bool = True,
-        client: Optional[QwenPawMatrixClient] = None,
+        client: Optional[AsyncClient] = None,
         on_sync: Optional[Callable[[], Any]] = None,
     ) -> None:
         self._config = config
@@ -370,7 +394,7 @@ class NioTransport:
         self._state_dir = Path(state_dir)
         self._sync_timeout_ms = sync_timeout_ms
         self.encryption = bool(encryption)
-        self._client: Optional[QwenPawMatrixClient] = client
+        self._client: Optional[AsyncClient] = client
         self._on_sync = on_sync
         self._on_event: Optional[Callable[[InboundEvent], Awaitable[None]]] = None
         self._engine: Optional[SyncEngine] = None
@@ -527,7 +551,7 @@ class NioTransport:
 
     # -- outbound -----------------------------------------------------------
 
-    def _require_client(self) -> QwenPawMatrixClient:
+    def _require_client(self) -> AsyncClient:
         if self._client is None:
             raise RuntimeError(
                 "NioTransport has no client (call start() first)"

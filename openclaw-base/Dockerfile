@@ -14,7 +14,7 @@
 #   HIGRESS_REGISTRY  - base image registry (default: cn-hangzhou)
 #   APT_MIRROR        - APT mirror host (default: empty; set to mirrors.aliyun.com for China)
 #   OPENCLAW_REPO_URL - OpenClaw git repository URL (default: https://github.com/openclaw/openclaw.git)
-#   OPENCLAW_TAG      - OpenClaw git tag to check out (default: v2026.10.6;
+#   OPENCLAW_TAG      - OpenClaw git tag to check out (default: v2026.10.9;
 #                       keep in sync with OPENCLAW_TAG in hack/versions.env)
 # ============================================================
 
@@ -33,7 +33,7 @@ ARG NPM_REGISTRY=https://registry.npmjs.org/
 ARG OPENCLAW_REPO_URL=https://github.com/openclaw/openclaw.git
 # Pinned checkout tag. Docker cannot source env files, so this default must
 # stay in sync with OPENCLAW_TAG in hack/versions.env.
-ARG OPENCLAW_TAG=v2026.10.6
+ARG OPENCLAW_TAG=v2026.10.9
 
 # Set proxy as environment variables to ensure all tools can use them
 ENV HTTP_PROXY=${HTTP_PROXY} \

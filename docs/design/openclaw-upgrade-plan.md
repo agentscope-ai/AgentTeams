@@ -1,6 +1,6 @@
 # OpenClaw Upgrade Plan
 
-AgentTeams still ships OpenClaw `2026.4.14` (`higress-group/openclaw@2f35b6fa6b65d012e3b0c9f24af3f8a4b617a6e0`). Upstream OpenClaw is at `2026.10.6` (2026-10-22). This note is the upgrade path after the config hardening that replaced `tools.elevated.allowFrom.matrix=["*"]`. It does **not** change the image pin.
+AgentTeams still ships OpenClaw `2026.4.14` (`higress-group/openclaw@2f35b6fa6b65d012e3b0c9f24af3f8a4b617a6e0`). Upstream OpenClaw is at `2026.10.9`. This note is the upgrade path after the config hardening that replaced `tools.elevated.allowFrom.matrix=["*"]`. It does **not** change the image pin.
 
 ## Why the pin stays
 
@@ -15,7 +15,7 @@ AgentTeams still ships OpenClaw `2026.4.14` (`higress-group/openclaw@2f35b6fa6b6
 | Minimum security floor | `2026.8.1` | 2026-09-11 GHSA batch, including Matrix user-id case-fold (`GHSA-hgv5-f2r3-6v9r`) and exec/workspace escapes |
 | Matrix display-name allowlist | `2026.5.7` (already included in 2026.8.1) | CVE-2026-53811 / `GHSA-7hxm-f538-3xp6` |
 | Browser CDP SSRF | `2026.6.6` (already included in 2026.8.1) | CVE-2026-62197 / `GHSA-3x84-qq85-fj65` |
-| Preferred current line | `2026.10.6` | October Node certificate-chain requirement (`Node >= 24.22.1` or `>= 26.12.1`) plus later engine fixes |
+| Preferred current line | `2026.10.9` | October Node certificate-chain requirement (`Node >= 24.22.1` or `>= 26.12.1`) plus later engine fixes |
 
 Recommended first candidate: **`openclaw/openclaw` tag `v2026.8.1`** (or the equivalent commit). Second candidate after that tag boots: **`v2026.10.6`**.
 

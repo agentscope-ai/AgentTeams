@@ -17,7 +17,7 @@ VERSIONS_ENV = ROOT / "hack" / "versions.env"
 OPENCLAW_DOCKERFILE = ROOT / "openclaw-base" / "Dockerfile"
 MAKEFILE = ROOT / "Makefile"
 
-OPENCLAW_TAG = "v2026.10.6"
+OPENCLAW_TAG = "v2026.10.9"
 UPSTREAM_REPO = "https://github.com/openclaw/openclaw.git"
 
 

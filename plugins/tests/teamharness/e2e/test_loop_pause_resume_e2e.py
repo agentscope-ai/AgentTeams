@@ -235,20 +235,34 @@ def _mc_meta_object(project_id: str) -> dict[str, Any]:
         "(the loop-pause-e2e job exports it)"
     )
     bucket = os.environ.get("AGENTTEAMS_FS_BUCKET", "agentteams-storage").strip()
-    key = f"{values['AGENTTEAMS_STORAGE_PREFIX']}/shared/projects/{project_id}/meta.json"
-    # Repo-standard mc pattern (test/e2e/external-s3-backend.sh run_mc): the
-    # alias is (re)set in the same command, and every operation carries the
-    # alias prefix.
-    command = (
+    # The object key layout depends on how the controller's storage client was
+    # configured: with a storage prefix the key is
+    # ``<prefix>/shared/projects/<id>/meta.json``, and without one (the
+    # embedded loop-pause-e2e layout, measured on this head) the object lands
+    # at ``shared/projects/<id>/meta.json``. Read whichever exists rather than
+    # assuming one layout.
+    alias = (
         f"mc -q alias set e2edurable {values['AGENTTEAMS_FS_ENDPOINT']} "
         f"{values['AGENTTEAMS_FS_ACCESS_KEY']} {values['AGENTTEAMS_FS_SECRET_KEY']} "
-        f">/dev/null 2>&1 && mc -q cat e2edurable/{bucket}/{key}"
+        f">/dev/null 2>&1"
     )
-    proc = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=60)
-    assert proc.returncode == 0, (
-        f"mc read of the project meta failed (command: {command}):\n{proc.stderr}"
+    prefix = values["AGENTTEAMS_STORAGE_PREFIX"].strip("/")
+    candidates = []
+    if prefix:
+        candidates.append(f"{prefix}/shared/projects/{project_id}/meta.json")
+    candidates.append(f"shared/projects/{project_id}/meta.json")
+    last = None
+    for key in candidates:
+        command = f"{alias} && mc -q cat e2edurable/{bucket}/{key}"
+        proc = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=60)
+        if proc.returncode == 0:
+            return json.loads(proc.stdout)
+        last = (command, proc.stderr)
+    tried = ", ".join(f"{bucket}/{key}" for key in candidates)
+    assert False, (
+        f"mc read of the project meta failed for every candidate key ({tried}); "
+        f"last error:\n{last[1] if last else ''}"
     )
-    return json.loads(proc.stdout)
 
 
 # --- driver subprocess + sent-record helpers -----------------------------

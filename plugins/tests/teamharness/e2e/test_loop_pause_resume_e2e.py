@@ -1,4 +1,6 @@
-"""Runtime e2e: the #1431 pause/resume closed loop through the real paths.
+"""Runtime e2e: the #1431 pause/resume closed loop through the real paths,
+plus the #1402 follow-up slices (project writes must preserve the loop
+pause veto: loop-only pause; project resume with the veto still held).
 
 Drives the real Controller HTTP API (project create / replan / pause /
 resume / workflow / task inspection) and the real TeamHarness taskflow in
@@ -31,13 +33,20 @@ original closed loop:
    authorizer middleware before the handler runs, and a manager token is
    rejected by the handler when releasing the user source.
 
-Ordering note: the project pause (``POST /projects/{id}/pause``) runs
-BEFORE the loop pause, and the loop pause sources are released BEFORE the
-project resume. The project endpoints round-trip the meta through a typed
-struct whose ``loopMeta`` lacks ``pause_sources`` (a proven latent
-controller clobber, tracked as a follow-up), while the Loop endpoints'
-conditional write preserves the raw map — reversed, the project pause
-would silently drop the durable sources.
+Ordering note: the project endpoints used to round-trip the meta through a
+typed struct whose ``loopMeta`` lacked ``pause_sources`` — a controller
+clobber that made the pause/resume ORDER load-bearing (reversed, a project
+write silently dropped the durable sources and turned the admin-only user
+veto into a bypass). That clobber is fixed (#1402: the loop block now
+round-trips byte-for-byte through the project writes, and the workflow
+releases nothing while any pause source is held), so both orderings are
+safe and are BOTH exercised: the closed loop is parametrised over
+"classic" (project pause first, sources released before the project
+resume) and "reversed" (loop pause first — the veto alone must hold
+dispatch on an ACTIVE project — then the project is resumed by a Manager
+while the user veto is still held), and the two independent tests cover
+the order-robust slices (loop-only pause; project resume with the veto
+present).
 
 Skipped entirely unless ``E2E_CONTROLLER_URL`` is set AND
 ``E2E_MINIO=1`` AND the embedded-apiserver env (``E2E_K8S_API_URL`` /
@@ -396,30 +405,75 @@ def e2e_env(tmp_path: Path) -> tuple[dict[str, str], Path]:
     return env, sent_path
 
 
-def test_pause_resume_closed_loop(e2e_env: tuple[dict[str, str], Path], tmp_path: Path) -> None:
-    env, sent_path = e2e_env
-    project_id = f"e2e-pause-{uuid.uuid4().hex[:8]}"
-    worker = "@e2e-worker:matrix.e2e.invalid"
-    loop_name = f"e2e-loop-{uuid.uuid4().hex[:8]}"
-    # The role boundary is executable, not skippable: without the two
-    # identities the boundary below is untested, which is a broken run.
-    # (The loop-pause-e2e job appends them to the apiserver token file and
-    # restarts the controller; a local run must do the same — see README.)
-    assert WORKER_TOKEN, (
-        "E2E_K8S_WORKER_TOKEN is required: append a "
-        "system:serviceaccount:<ns>:agentteams-worker-e2e identity to the "
-        "apiserver token file and restart the controller (see README)"
+# --- shared setup: project + loop plan + anchor CR + pre-pause delegate ---
+
+
+def _reset_task_objects(task_ids: list[str]) -> None:
+    """Clear this scenario's task objects before it sets up.
+
+    ``shared/tasks/<id>`` is a GLOBAL object key in the taskflow contract,
+    not project-scoped. Two scenarios that reuse the ids A/B would see the
+    previous assignment, the driver would "reuse" it instead of sending, and
+    the cases would silently depend on execution order. Each scenario owns
+    its ids and clears them up front; a missing object is a no-op.
+    """
+    endpoint = os.environ.get("AGENTTEAMS_FS_ENDPOINT", "").strip()
+    access = os.environ.get("AGENTTEAMS_FS_ACCESS_KEY", "").strip()
+    secret = os.environ.get("AGENTTEAMS_FS_SECRET_KEY", "").strip()
+    missing = [
+        name for name, value in (
+            ("AGENTTEAMS_FS_ENDPOINT", endpoint),
+            ("AGENTTEAMS_FS_ACCESS_KEY", access),
+            ("AGENTTEAMS_FS_SECRET_KEY", secret),
+        ) if not value
+    ]
+    assert not missing, (
+        f"task reset needs the object-store env; missing: {missing} "
+        "(the loop-pause-e2e job exports it)"
     )
-    assert MANAGER_TOKEN, (
-        "E2E_K8S_MANAGER_TOKEN is required: append a "
-        "system:serviceaccount:<ns>:agentteams-manager identity to the "
-        "apiserver token file and restart the controller (see README)"
+    bucket = os.environ.get("AGENTTEAMS_FS_BUCKET", "agentteams-storage").strip()
+    prefix = os.environ.get("AGENTTEAMS_STORAGE_PREFIX", "").strip("/")
+    keys: list[str] = []
+    for task_id in task_ids:
+        relative = f"shared/tasks/{task_id}"
+        if prefix:
+            keys.append(f"{prefix}/{relative}")
+        keys.append(relative)
+    seen: set[str] = set()
+    unique = [key for key in keys if not (key in seen or seen.add(key))]
+    alias = (
+        f"mc -q alias set e2ereset {endpoint} {access} {secret} >/dev/null 2>&1"
+    )
+    targets = " ".join(f"e2ereset/{bucket}/{key}" for key in unique)
+    subprocess.run(
+        f"{alias} && mc -q rm --recursive --force {targets}",
+        shell=True, capture_output=True, text=True, timeout=120, check=False,
     )
 
-    # --- 1. project + task graph through the real Controller API ----------
+
+def _setup_veto_project(
+    env: dict[str, str],
+    sent_path: Path,
+    workdir: Path,
+) -> tuple[str, str]:
+    """Project + loop plan + Loop CR + pre-pause delegate, shared by all scenarios.
+
+    Returns (project_id, loop_name). The graph is A (ready) -> B (waits on
+    A). B is delegated FIRST, before any pause: the Loop CR anchors on a
+    task whose TaskMeta must be published before the first pause, or every
+    pause/resume would be a legitimate "no task meta found" no-op —
+    exactly the gap these endpoints must close.
+    """
+    project_id = f"e2e-pause-{uuid.uuid4().hex[:8]}"
+    loop_name = f"e2e-loop-{uuid.uuid4().hex[:8]}"
+    worker = "@e2e-worker:matrix.e2e.invalid"
+    # Scenarios share the fixed ids A/B; the objects behind them are global.
+    _reset_task_objects(["A", "B"])
+
+    # 1. project + task graph through the real Controller API
     status, project = _api("POST", "/api/v1/projects", {
         "project_id": project_id,
-        "title": "loop e2e pause/resume closed loop",
+        "title": "loop e2e pause/resume",
         "source": "e2e",
         "requester": "e2e",
     })
@@ -438,7 +492,7 @@ def test_pause_resume_closed_loop(e2e_env: tuple[dict[str, str], Path], tmp_path
         f"got {replan.get('next')}: {json.dumps(replan, ensure_ascii=False)[:2000]}"
     )
 
-    # --- 2. loop plan through the real projectflow (fresh driver process) --
+    # 2. loop plan through the real projectflow (fresh driver process) —
     # BEFORE the delegate: _update_project_task only lands task statuses
     # into loop.tasks once the loop record exists, and buildWorkflow
     # renders loop.tasks (not project.tasks) for loop plans.
@@ -449,7 +503,7 @@ def test_pause_resume_closed_loop(e2e_env: tuple[dict[str, str], Path], tmp_path
         project_id,
         "",
         "leader",
-        tmp_path / "ws0",
+        workdir / "ws0",
         payload={
             "projectId": project_id,
             "goal": "e2e loop goal",
@@ -475,42 +529,241 @@ def test_pause_resume_closed_loop(e2e_env: tuple[dict[str, str], Path], tmp_path
         f"{json.dumps(wf, ensure_ascii=False)[:2000]}"
     )
 
-    # --- 3. Loop CR through the embedded kube-apiserver (real control plane) ---
+    # 3. Loop CR through the embedded kube-apiserver (real control plane).
     # Anchor on B (the task delegated right after this): only a task with a
     # published TaskMeta resolves, and that is exactly the task whose pause
     # must actually gate the project.
     _create_loop_cr(loop_name, "B")
 
-    # --- 4. delegate B BEFORE the pause (fresh driver process) ------------
-    result = _run_driver(env, sent_path, "delegate", project_id, "B", worker, tmp_path / "ws1")
+    # 4. delegate B BEFORE any pause (fresh driver process)
+    result = _run_driver(env, sent_path, "delegate", project_id, "B", worker, workdir / "ws1")
     assert result.get("ok") is True, f"pre-pause delegate B: {result}\nsent: {_sent_tail(sent_path)}"
     assert result.get("notification", {}).get("sent") is True, f"pre-pause delegate B: {result}"
     _assert_sent_counts(sent_path, "delegate", {"B": 1})
+    return project_id, loop_name
 
-    # --- 5. pause the PROJECT first through the real Controller API --------
-    # HARD ORDERING (see module docstring): the project endpoints round-trip
-    # the meta through a typed struct whose loopMeta lacks pause_sources;
-    # they must run BEFORE the loop pause, or they silently drop the
-    # durable sources.
-    status, paused_wf = _api("POST", f"/api/v1/projects/{project_id}/pause", {"reason": "e2e pause"})
-    assert status == 200, f"pause -> {status}: {paused_wf}"
-    assert paused_wf.get("status") == "paused", f"pause response status: {paused_wf.get('status')}"
-    assert paused_wf.get("next") == [], (
-        f"paused workflow must release nothing, next={paused_wf.get('next')}: "
-        f"{json.dumps(paused_wf, ensure_ascii=False)[:2000]}"
-    )
-    interrupt = _find_interrupt(paused_wf, "project", "paused")
-    assert interrupt is not None, f"paused workflow missing project interrupt: {paused_wf.get('interrupts')}"
-    assert interrupt.get("action_request", {}).get("action") == "resume", (
-        f"pause interrupt action_request: {interrupt.get('action_request')}"
-    )
 
-    # --- 6. pause the LOOP through the real Loop endpoint ------------------
+def test_loop_only_pause_blocks_dispatch(e2e_env: tuple[dict[str, str], Path], tmp_path: Path) -> None:
+    """#1402 slice (a): loop-only pause — the project stays ACTIVE, only
+    ``loop.pause_sources=["user"]`` is held. The ready task must not be
+    released (workflow ``next == []`` on an active project), a fresh
+    process is blocked with "paused" and records no send, and dispatch
+    proceeds exactly once only after the admin user-source release."""
+    env, sent_path = e2e_env
+    worker = "@e2e-worker:matrix.e2e.invalid"
+    project_id, loop_name = _setup_veto_project(env, sent_path, tmp_path)
+
+    # Loop pause only — the project is never paused.
     status, loop_paused = _api("POST", f"/api/v1/loops/{loop_name}/pause", {"source": "user"})
     assert status == 200, f"loop pause -> {status}: {loop_paused}"
     assert loop_paused.get("id") == loop_name, f"loop pause id: {loop_paused}"
     assert loop_paused.get("paused") is True, f"loop pause response: {loop_paused}"
     assert loop_paused.get("sources") == ["user"], f"loop pause sources: {loop_paused}"
+
+    # Durable: the project is ACTIVE and the veto is stored.
+    meta = _mc_meta_object(project_id)
+    assert meta.get("status") == "active", (
+        f"loop-only pause must not pause the project: {meta.get('status')}"
+    )
+    loop_record = meta.get("loop")
+    assert isinstance(loop_record, dict) and loop_record.get("pause_sources") == ["user"], (
+        f"durable loop.pause_sources must be ['user']: {json.dumps(loop_record, ensure_ascii=False)[:800]}"
+    )
+
+    # The ready task A is NOT released while the veto is held — even
+    # though the project is active (the #1402 workflow gate).
+    status, wf = _api("GET", f"/api/v1/projects/{project_id}/workflow")
+    assert status == 200, f"workflow -> {status}: {wf}"
+    assert wf.get("status") == "active", f"workflow status: {wf.get('status')}"
+    _assert_nodes(wf, {"A": "pending", "B": "delegated"})
+    assert wf.get("next") == [], (
+        f"active project with the loop veto held must release nothing: "
+        f"next={wf.get('next')}: {json.dumps(wf, ensure_ascii=False)[:2000]}"
+    )
+
+    # A fresh process is blocked by the worker-side gate.
+    result = _run_driver(env, sent_path, "delegate", project_id, "A", worker, tmp_path / "ws2")
+    assert result.get("ok") is False, f"delegate A while the loop is paused must fail: {result}"
+    assert "paused" in str(result.get("error")), f"delegate A error: {result.get('error')}"
+    _assert_sent_counts(sent_path, "delegate", {"B": 1})  # no new delegate send
+
+    # The admin user-source release unblocks dispatch; exactly one send.
+    status, released = _api("POST", f"/api/v1/loops/{loop_name}/resume", {"source": "user"})
+    assert status == 200, f"user-source resume -> {status}: {released}"
+    assert released.get("paused") is False, f"loop must be unpaused after the release: {released}"
+    assert released.get("sources") == [], f"sources after the release: {released}"
+    result = _run_driver(env, sent_path, "delegate", project_id, "A", worker, tmp_path / "ws3")
+    assert result.get("ok") is True, f"post-release delegate A: {result}\nsent: {_sent_tail(sent_path)}"
+    _assert_sent_counts(sent_path, "delegate", {"A": 1, "B": 1})
+    status, wf = _api("GET", f"/api/v1/projects/{project_id}/workflow")
+    assert status == 200, f"workflow -> {status}: {wf}"
+    assert wf.get("status") == "active", f"workflow status: {wf.get('status')}"
+    assert wf.get("next") == ["A"], f"post-release next: {wf.get('next')}"
+
+
+def test_project_resume_keeps_the_veto(e2e_env: tuple[dict[str, str], Path], tmp_path: Path) -> None:
+    """#1402 slice (b): project resume WITH the veto present. A Manager
+    resumes the project while ``loop.pause_sources`` holds "user": 200 +
+    active, but the veto must survive the write (dropping it is exactly
+    the #1402 bypass), the driver stays blocked, and dispatch proceeds
+    exactly once only after the ADMIN user-source release."""
+    env, sent_path = e2e_env
+    worker = "@e2e-worker:matrix.e2e.invalid"
+    assert MANAGER_TOKEN, (
+        "E2E_K8S_MANAGER_TOKEN is required: append a "
+        "system:serviceaccount:<ns>:agentteams-manager identity to the "
+        "apiserver token file and restart the controller (see README)"
+    )
+    project_id, loop_name = _setup_veto_project(env, sent_path, tmp_path)
+
+    status, loop_paused = _api("POST", f"/api/v1/loops/{loop_name}/pause", {"source": "user"})
+    assert status == 200, f"loop pause -> {status}: {loop_paused}"
+    assert loop_paused.get("sources") == ["user"], f"loop pause sources: {loop_paused}"
+    status, paused_wf = _api("POST", f"/api/v1/projects/{project_id}/pause", {"reason": "e2e pause"})
+    assert status == 200, f"project pause -> {status}: {paused_wf}"
+    assert paused_wf.get("status") == "paused", f"pause response status: {paused_wf.get('status')}"
+
+    # THE bypass scenario: a Manager resumes the project while the user
+    # veto is still held.
+    status, resumed_wf = _api("POST", f"/api/v1/projects/{project_id}/resume", {}, token=MANAGER_TOKEN)
+    assert status == 200, f"manager project resume -> {status}: {resumed_wf}"
+    assert resumed_wf.get("status") == "active", f"manager resume status: {resumed_wf.get('status')}"
+
+    # Durable: active AND the veto intact through the manager's write.
+    meta = _mc_meta_object(project_id)
+    assert meta.get("status") == "active", (
+        f"durable status after the manager resume: {meta.get('status')}"
+    )
+    loop_record = meta.get("loop")
+    assert isinstance(loop_record, dict) and loop_record.get("pause_sources") == ["user"], (
+        f"the user veto must survive the project resume write "
+        f"(got {json.dumps(loop_record.get('pause_sources') if isinstance(loop_record, dict) else loop_record)}); "
+        f"dropping it is exactly the #1402 bypass"
+    )
+
+    # Still blocked: the workflow releases nothing on the active project,
+    # and a fresh process is refused by the worker-side gate.
+    status, wf = _api("GET", f"/api/v1/projects/{project_id}/workflow")
+    assert status == 200, f"workflow -> {status}: {wf}"
+    assert wf.get("status") == "active", f"workflow status: {wf.get('status')}"
+    _assert_nodes(wf, {"A": "pending", "B": "delegated"})
+    assert wf.get("next") == [], (
+        f"the veto must hold the ready task on an active project: "
+        f"next={wf.get('next')}: {json.dumps(wf, ensure_ascii=False)[:2000]}"
+    )
+    result = _run_driver(env, sent_path, "delegate", project_id, "A", worker, tmp_path / "ws2")
+    assert result.get("ok") is False, f"delegate A under the surviving veto must fail: {result}"
+    assert "paused" in str(result.get("error")), f"delegate A error: {result.get('error')}"
+    _assert_sent_counts(sent_path, "delegate", {"B": 1})  # no new delegate send
+
+    # The user-source release is admin-only: manager 403, admin 200.
+    status, denied = _api("POST", f"/api/v1/loops/{loop_name}/resume", {"source": "user"}, token=MANAGER_TOKEN)
+    assert status == 403, f"manager user-source resume must be 403, got {status}: {denied}"
+    assert "resuming the user pause source requires admin" in str(denied.get("message") or denied), (
+        f"manager 403 must come from the handler: {denied}"
+    )
+    status, released = _api("POST", f"/api/v1/loops/{loop_name}/resume", {"source": "user"})
+    assert status == 200, f"user-source resume -> {status}: {released}"
+    assert released.get("paused") is False and released.get("sources") == [], f"release: {released}"
+
+    # Dispatch proceeds exactly once (fresh process); a second fresh
+    # process reuses the recorded event instead of re-sending.
+    result = _run_driver(env, sent_path, "delegate", project_id, "A", worker, tmp_path / "ws3")
+    assert result.get("ok") is True, f"post-release delegate A: {result}\nsent: {_sent_tail(sent_path)}"
+    assert result.get("notification", {}).get("reused") is not True, (
+        f"post-release delegate A must be a fresh send: {result.get('notification')}"
+    )
+    _assert_sent_counts(sent_path, "delegate", {"A": 1, "B": 1})
+    result = _run_driver(env, sent_path, "delegate", project_id, "A", worker, tmp_path / "ws4")
+    assert result.get("ok") is True, f"retry delegate A: {result}\nsent: {_sent_tail(sent_path)}"
+    assert result.get("notification", {}).get("reused") is True, (
+        f"retry of an assigned task must reuse the recorded event: {result.get('notification')}"
+    )
+    _assert_sent_counts(sent_path, "delegate", {"A": 1, "B": 1})  # A still exactly once
+    status, wf = _api("GET", f"/api/v1/projects/{project_id}/workflow")
+    assert status == 200, f"workflow -> {status}: {wf}"
+    assert wf.get("next") == ["A"], f"post-release next: {wf.get('next')}"
+
+
+@pytest.mark.parametrize("order", ["classic", "reversed"])
+def test_pause_resume_closed_loop(
+    e2e_env: tuple[dict[str, str], Path], tmp_path: Path, order: str
+) -> None:
+    env, sent_path = e2e_env
+    worker = "@e2e-worker:matrix.e2e.invalid"
+    # The role boundary is executable, not skippable: without the two
+    # identities the boundary below is untested, which is a broken run.
+    # (The loop-pause-e2e job appends them to the apiserver token file and
+    # restarts the controller; a local run must do the same — see README.)
+    assert WORKER_TOKEN, (
+        "E2E_K8S_WORKER_TOKEN is required: append a "
+        "system:serviceaccount:<ns>:agentteams-worker-e2e identity to the "
+        "apiserver token file and restart the controller (see README)"
+    )
+    assert MANAGER_TOKEN, (
+        "E2E_K8S_MANAGER_TOKEN is required: append a "
+        "system:serviceaccount:<ns>:agentteams-manager identity to the "
+        "apiserver token file and restart the controller (see README)"
+    )
+
+    # --- 1-4. shared setup: project + loop plan + anchor CR + delegate B ---
+    project_id, loop_name = _setup_veto_project(env, sent_path, tmp_path)
+
+    # --- 5-6. the pause phase, order-dependent -----------------------------
+    # "classic": project pause first, loop pause second (the original
+    # order). "reversed": loop pause first — the veto ALONE must hold the
+    # dispatch on the still-active project (the #1402 workflow gate) — then
+    # the project pause. Pre-#1402 the reversed order was broken (the typed
+    # project write dropped pause_sources); both orders must pass now.
+    if order == "classic":
+        status, paused_wf = _api("POST", f"/api/v1/projects/{project_id}/pause", {"reason": "e2e pause"})
+        assert status == 200, f"pause -> {status}: {paused_wf}"
+        assert paused_wf.get("status") == "paused", f"pause response status: {paused_wf.get('status')}"
+        assert paused_wf.get("next") == [], (
+            f"paused workflow must release nothing, next={paused_wf.get('next')}: "
+            f"{json.dumps(paused_wf, ensure_ascii=False)[:2000]}"
+        )
+        interrupt = _find_interrupt(paused_wf, "project", "paused")
+        assert interrupt is not None, f"paused workflow missing project interrupt: {paused_wf.get('interrupts')}"
+        assert interrupt.get("action_request", {}).get("action") == "resume", (
+            f"pause interrupt action_request: {interrupt.get('action_request')}"
+        )
+        status, loop_paused = _api("POST", f"/api/v1/loops/{loop_name}/pause", {"source": "user"})
+        assert status == 200, f"loop pause -> {status}: {loop_paused}"
+        assert loop_paused.get("id") == loop_name, f"loop pause id: {loop_paused}"
+        assert loop_paused.get("paused") is True, f"loop pause response: {loop_paused}"
+        assert loop_paused.get("sources") == ["user"], f"loop pause sources: {loop_paused}"
+    else:
+        status, loop_paused = _api("POST", f"/api/v1/loops/{loop_name}/pause", {"source": "user"})
+        assert status == 200, f"loop pause -> {status}: {loop_paused}"
+        assert loop_paused.get("id") == loop_name, f"loop pause id: {loop_paused}"
+        assert loop_paused.get("paused") is True, f"loop pause response: {loop_paused}"
+        assert loop_paused.get("sources") == ["user"], f"loop pause sources: {loop_paused}"
+        # The veto ALONE must hold the ready task on the still-ACTIVE
+        # project (buildWorkflow must not release next while
+        # loop.pause_sources is non-empty).
+        status, wf = _api("GET", f"/api/v1/projects/{project_id}/workflow")
+        assert status == 200, f"workflow -> {status}: {wf}"
+        assert wf.get("status") == "active", (
+            f"reversed order: the project is not paused yet: {wf.get('status')}"
+        )
+        _assert_nodes(wf, {"A": "pending", "B": "delegated"})
+        assert wf.get("next") == [], (
+            f"the loop veto alone must hold the ready task on an active project: "
+            f"next={wf.get('next')}: {json.dumps(wf, ensure_ascii=False)[:2000]}"
+        )
+        status, paused_wf = _api("POST", f"/api/v1/projects/{project_id}/pause", {"reason": "e2e pause"})
+        assert status == 200, f"pause -> {status}: {paused_wf}"
+        assert paused_wf.get("status") == "paused", f"pause response status: {paused_wf.get('status')}"
+        assert paused_wf.get("next") == [], (
+            f"paused workflow must release nothing, next={paused_wf.get('next')}: "
+            f"{json.dumps(paused_wf, ensure_ascii=False)[:2000]}"
+        )
+        interrupt = _find_interrupt(paused_wf, "project", "paused")
+        assert interrupt is not None, f"paused workflow missing project interrupt: {paused_wf.get('interrupts')}"
+        assert interrupt.get("action_request", {}).get("action") == "resume", (
+            f"pause interrupt action_request: {interrupt.get('action_request')}"
+        )
 
     # --- 7. role boundary: worker/manager tokens are rejected BEFORE any ---
     # state change (the durable check below proves nothing moved).
@@ -539,6 +792,40 @@ def test_pause_resume_closed_loop(e2e_env: tuple[dict[str, str], Path], tmp_path
         f"(got {json.dumps(loop_record.get('pause_sources'))}); this also proves the "
         f"two 403s above changed no state"
     )
+    assert meta.get("status") == "paused", (
+        f"durable project status after the pause phase: {meta.get('status')}"
+    )
+    project_status_now = "paused"
+
+    # --- 8b. reversed order ONLY: the Manager resumes the project NOW,
+    # while the user veto is still held (the order the pre-#1402 clobber
+    # made unsafe — the project write dropped the veto, the bypass).
+    # 200 + active, and the veto must survive the write.
+    if order == "reversed":
+        status, resumed_wf = _api(
+            "POST", f"/api/v1/projects/{project_id}/resume", {}, token=MANAGER_TOKEN
+        )
+        assert status == 200, f"manager project resume -> {status}: {resumed_wf}"
+        assert resumed_wf.get("status") == "active", (
+            f"manager resume status: {resumed_wf.get('status')}"
+        )
+        meta = _mc_meta_object(project_id)
+        assert meta.get("status") == "active", (
+            f"durable status after the manager resume: {meta.get('status')}"
+        )
+        assert meta.get("loop", {}).get("pause_sources") == ["user"], (
+            f"the user veto must survive the project resume write "
+            f"(got {json.dumps(meta.get('loop', {}).get('pause_sources'))}); "
+            f"dropping it is exactly the #1402 bypass"
+        )
+        status, wf = _api("GET", f"/api/v1/projects/{project_id}/workflow")
+        assert status == 200, f"workflow -> {status}: {wf}"
+        assert wf.get("status") == "active", f"workflow status: {wf.get('status')}"
+        assert wf.get("next") == [], (
+            f"the surviving veto must hold the ready task on an active project: "
+            f"next={wf.get('next')}: {json.dumps(wf, ensure_ascii=False)[:2000]}"
+        )
+        project_status_now = "active"
 
     # --- 9. pause blocks NEW dispatch (fresh driver process) ---------------
     result = _run_driver(env, sent_path, "delegate", project_id, "A", worker, tmp_path / "ws2")
@@ -587,11 +874,17 @@ def test_pause_resume_closed_loop(e2e_env: tuple[dict[str, str], Path], tmp_path
     history_actions = [str(entry.get("action") or "") for entry in inspection.get("history", [])]
     assert "submit_task" in history_actions, f"task B history missing submit_task: {history_actions}"
     _assert_sent_counts(sent_path, "completion", {"B": 1})
-    # The project-meta write-back must NOT clobber the paused state.
+    # The project-meta write-back must NOT clobber the pause state.
     status, wf = _api("GET", f"/api/v1/projects/{project_id}/workflow")
     assert status == 200, f"workflow -> {status}: {wf}"
-    assert wf.get("status") == "paused", f"submit must keep the project paused: {wf.get('status')}"
+    assert wf.get("status") == project_status_now, (
+        f"submit must keep the project {project_status_now}: {wf.get('status')}"
+    )
     _assert_nodes(wf, {"A": "pending", "B": "in-progress"})
+    assert wf.get("next") == [], (
+        f"the pause state must still hold the ready task after submit: "
+        f"next={wf.get('next')}: {json.dumps(wf, ensure_ascii=False)[:2000]}"
+    )
 
     # --- 11. human-source boundary ------------------------------------------
     # A "project"-source resume cannot release the human veto: the admin
@@ -611,13 +904,12 @@ def test_pause_resume_closed_loop(e2e_env: tuple[dict[str, str], Path], tmp_path
     )
     assert released.get("sources") == [], f"sources after the admin release: {released}"
 
-    # --- 12. authorized project resume through the real Controller API -----
-    # MUST come after the loop sources are released (above): the typed
-    # write-back drops the pause_sources set, which is harmless only once
-    # nothing meaningful remains in it.
-    status, resumed_wf = _api("POST", f"/api/v1/projects/{project_id}/resume", {})
-    assert status == 200, f"resume -> {status}: {resumed_wf}"
-    assert resumed_wf.get("status") == "active", f"resume response status: {resumed_wf.get('status')}"
+    # --- 12. authorized project resume (classic order: NOW; the reversed
+    # order already resumed it in step 8b — while the veto was still held) --
+    if order == "classic":
+        status, resumed_wf = _api("POST", f"/api/v1/projects/{project_id}/resume", {})
+        assert status == 200, f"resume -> {status}: {resumed_wf}"
+        assert resumed_wf.get("status") == "active", f"resume response status: {resumed_wf.get('status')}"
 
     # --- 13. a FRESH process continues exactly once -------------------------
     result = _run_driver(env, sent_path, "delegate", project_id, "A", worker, tmp_path / "ws4")
@@ -628,6 +920,7 @@ def test_pause_resume_closed_loop(e2e_env: tuple[dict[str, str], Path], tmp_path
     _assert_sent_counts(sent_path, "delegate", {"A": 1, "B": 1})
     status, wf = _api("GET", f"/api/v1/projects/{project_id}/workflow")
     assert status == 200, f"workflow -> {status}: {wf}"
+    assert wf.get("status") == "active", f"post-release workflow status: {wf.get('status')}"
     _assert_nodes(wf, {"A": "delegated", "B": "in-progress"})
     # `next` includes tasks whose raw status is planned *or* assigned
     # (buildWorkflow mirrors the upstream _ready_nodes semantics), so the

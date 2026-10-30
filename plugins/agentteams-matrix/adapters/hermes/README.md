@@ -17,6 +17,26 @@ __init__.py          # package-style import of register
 core/                # the bundle's runtime-neutral core (copied from the bundle root)
 ```
 
+## Supported Hermes versions
+
+Minimum supported Hermes runtime: **0.22.5**, declared as
+`requires_hermes: ">=0.22.5"` in `plugin.yaml` (the plugin loader blocks
+loading on a runtime below the minimum). The API surface this adapter
+imports — `gateway.platforms._shared`, `gateway.platforms.event`,
+`PluginContext.register_platform`, and dynamic `Platform` members
+resolved through `platform_registry` — first exists at 0.22.5 and does
+not exist at `v2026.4.16`. The surface is verified against the real SDK
+source at `v0.22.5` (it also holds at `v2026.9.24`) by
+`plugins/tests/agentteams-matrix/test_adapter_hermes_sdk.py`, which runs
+on every CI pass.
+
+**Boundary:** the current Worker image pins
+`HERMES_GIT_REF=v2026.4.16` (`hermes/Dockerfile`), which is **below the
+minimum**. This adapter is not compatible with the current Worker image
+and must not be claimed to be; the runtime pin update is carried
+separately in issue #1460, and until it lands the adapter requires a
+Hermes runtime at or above 0.22.5.
+
 ## Runtime requirement: matrix-nio
 
 The core transport needs `matrix-nio`; E2EE additionally needs the

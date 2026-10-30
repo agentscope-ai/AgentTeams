@@ -1,4 +1,8 @@
-"""Tests for the Hermes platform adapter (``adapters/hermes/adapter.py``).
+"""Behaviour tests for the Hermes platform adapter
+(``adapters/hermes/adapter.py``) — **fake SDK, behaviour only**; SDK
+compatibility (symbols, ``PlatformEntry`` kwargs, real registration) is
+covered by ``test_adapter_hermes_sdk.py`` against a real Hermes source
+tree.
 
 The Hermes gateway package (``gateway.*``) is not installed in this
 repo's test environment, so this module injects minimal fakes into

@@ -2,6 +2,13 @@ name: agentteams-matrix-platform
 label: AgentTeams Matrix
 kind: platform
 version: 1.0.0
+# Minimum supported Hermes runtime. The API surface this adapter imports
+# (gateway.platforms._shared, gateway.platforms.event,
+# PluginContext.register_platform, dynamic Platform members resolved
+# through platform_registry) first exists at 0.22.5; it is absent at the
+# v2026.4.16 Worker pin. The plugin loader blocks loading below the
+# minimum (requires_hermes_error).
+requires_hermes: ">=0.22.5"
 description: >
   AgentTeams Matrix gateway adapter for Hermes Agent. Serves Matrix to
   the gateway through the bundle's runtime-neutral core (matrix-nio),

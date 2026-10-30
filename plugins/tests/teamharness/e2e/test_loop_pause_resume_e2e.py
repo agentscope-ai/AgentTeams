@@ -8,8 +8,9 @@ three points:
 
 1. pause blocks new dispatch — a fresh process delegating a ready task
    fails with "paused", records no notification, and the workflow shows
-   the task unassigned with ``next == []`` (no downstream / next-round
-   release);
+   the task unassigned with ``next == []`` while paused (no downstream /
+   next-round release); after the resume, ``next`` lists the ready
+   planned/assigned tasks again, so the empty list is pause-only;
 2. in-flight work still saves its result after the pause — an assigned
    task's real submission lands in MinIO and is read back through the
    Controller's task-inspection endpoint;
@@ -317,7 +318,13 @@ def test_pause_resume_closed_loop(e2e_env: tuple[dict[str, str], Path], tmp_path
     status, wf = _api("GET", f"/api/v1/projects/{project_id}/workflow")
     assert status == 200, f"workflow -> {status}: {wf}"
     _assert_nodes(wf, {"A": "delegated", "B": "in-progress"})
-    assert wf.get("next") == [], f"post-resume next should be empty (B waits on A): {wf.get('next')}"
+    # `next` includes tasks whose raw status is planned *or* assigned
+    # (buildWorkflow mirrors the upstream _ready_nodes semantics), so the
+    # delegated A stays listed while its dependency-less sibling B must not
+    # be released: B waits on A.
+    assert wf.get("next") == ["A"], (
+        f"post-resume only the delegated A stays ready (B waits on A): {wf.get('next')}"
+    )
 
     # --- 8. a second fresh process REUSES the event (no second send) --------
     result = _run_driver(env, sent_path, "delegate", project_id, "A", worker, tmp_path / "ws5")

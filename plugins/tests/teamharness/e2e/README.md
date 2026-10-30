@@ -93,6 +93,32 @@ pytest plugins/tests/teamharness/e2e -q
 The same sequence, automated, is the `loop-pause-e2e` job in
 `.github/workflows/test-controller.yml`.
 
+## Notes for local re-runs
+
+### `workflow.next` semantics
+
+The controller's `workflow.next` lists every task whose raw status is
+`planned` or `assigned` and whose dependencies are complete (the upstream
+`_ready_nodes` semantics, mirrored in the controller's `buildWorkflow`).
+A *paused* workflow therefore shows `next == []`, but a resume re-lists
+the ready planned/assigned tasks — the e2e asserts `next == ["A"]` right
+after the resume, not `[]`. When asserting that downstream work was not
+released, write `"B" not in next` (or `next == ["A"]`), not `next == []`.
+
+### Reset the bucket between runs
+
+Task and project objects live at stable paths (`shared/projects/<id>`,
+`shared/tasks/<id>`), so reusing the same bucket carries the previous
+run's state forward: re-delegating a task that was `submitted` in the
+last run fails with `task is 'submitted'`. Reset the bucket before every
+local run:
+
+```bash
+mc rm --recursive --force agentteams/agentteams-storage
+mc mb --ignore-existing agentteams/agentteams-storage
+rm -rf /tmp/at-e2e/sent.jsonl /tmp/at-e2e/driver-workspace
+```
+
 ## How the driver stubs the notifier
 
 `loop_driver.py` imports `server` from `plugins/teamharness/mcp` (the same

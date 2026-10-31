@@ -379,3 +379,32 @@ jobs:
         run: |
           python -m pytest plugins/tests/agentteams-matrix/golden -q
           python -m pytest plugins/tests/agentteams-teamharness/golden -q
+
+  openclaw-native-discovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install pinned OpenClaw CLI
+        run: npm install -g openclaw@2026.4.14
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install \
+            'pytest>=8.3,<10'
+
+      - name: Run OpenClaw native discovery regression
+        env:
+          OPENCLAW_BIN: openclaw
+          OPENCLAW_EXPECTED_VERSION: '2026.4.14'
+        run: |
+          python -m pytest plugins/tests/agentteams-teamharness/test_openclaw_native_discovery.py -q -rs

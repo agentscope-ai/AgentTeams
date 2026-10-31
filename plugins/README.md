@@ -90,13 +90,35 @@ teamharness.tar.gz
 
 The lifecycle entrypoints are the shared contract:
 
-- `scripts/install.sh`: detects supported local runtimes and dispatches to the
-  matching TeamHarness adapter.
-- `scripts/uninstall.sh`: removes the runtime-specific installation through the
-  matching adapter when available.
+- `scripts/install.sh`: detects the supported local runtimes — `qwenpaw` on
+  PATH; `openclaw` on PATH or via `$OPENCLAW_CONFIG` /
+  `~/.openclaw/openclaw.json`; `hermes` on PATH or via `$HERMES_HOME` /
+  `~/.hermes/config.yaml` — and dispatches to the matching adapter for every
+  detected runtime, so coexisting runtimes are all installed.
+  `--runtime <name>` (repeatable) selects runtimes explicitly and bypasses
+  detection; `--dry-run` previews through every adapter without writing.
+- `scripts/uninstall.sh`: removes the runtime-specific installation through
+  the matching adapter. Detection is artifact-driven (config files and staged
+  plugin roots, not just the runtime binary), so residue is removed even
+  after the runtime binary is gone; the adapters are idempotent, so an
+  uninstall with nothing installed is a no-op. `--runtime` and `--dry-run`
+  behave as in install.
 
 Both the AgentTeams CLI and LoongSuite `plugin-probe` path call the same lifecycle
 scripts. Runtime-specific details stay inside TeamHarness adapters.
+
+Interpreter contract: the lifecycle scripts (and every per-runtime adapter
+script) run on the system shell — **bash 3.2 or later, macOS system bash
+included**. They deliberately avoid bash-4-only constructs (associative
+arrays, `mapfile`/`readarray`, case-modifying expansions such as `${var^^}`,
+`[[ -v ]]`, `wait -n`, `&>>`, `|&`, `coproc`, nameref declarations); the
+per-runtime status state is plain variables plus `set_status`/`get_status`
+helpers. `plugins/tests/teamharness/test_shell_portability.py` enforces the
+contract with a static denylist scan over every lifecycle script and a
+real-interpreter dry-run when a bash 3.2 is resolvable: set
+`TEAMHARNESS_BASH32` to a bash 3.2 path (or provide `bash3.2` / `bash-3.2`
+on PATH) and the whole lifecycle suite runs under it. On macOS the system
+`/bin/bash` is 3.2.57, so macOS CI exercises this automatically.
 
 ## Boundaries
 

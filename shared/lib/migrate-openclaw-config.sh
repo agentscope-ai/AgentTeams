@@ -55,6 +55,19 @@ migrate_openclaw_config() {
                 else . end
             )
           else . end
+        # retired fork-only matrix group switch: groups.<room>.allow
+        # Upstream room entries accept requireMention/enabled/... but not
+        # "allow". allow=true meant "the default" (room enabled), so drop it;
+        # allow=false meant "do not answer in this room", which upstream
+        # spells enabled=false, so keep the deny.
+        | if ((.channels.matrix.groups? // null) | type) == "object" then
+            .channels.matrix.groups |= with_entries(
+              .value |= (if type == "object" then
+                           (if (.allow == false) and (.enabled == null) then .enabled = false else . end)
+                           | del(.allow)
+                         else . end)
+            )
+          else . end
         # legacy agents.defaults.models restriction -> explicit modelPolicy
         | if ((.agents.defaults? // null) | type) == "object"
              and ((.agents.defaults.models? // null) | type) == "object"

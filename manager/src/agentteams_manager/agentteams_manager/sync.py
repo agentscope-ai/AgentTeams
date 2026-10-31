@@ -157,6 +157,20 @@ def _migrate_openclaw_config(config: dict[str, Any]) -> dict[str, Any]:
         channels["matrix"] = matrix
         config["channels"] = channels
 
+        # Retired fork-only matrix group switch: groups.<room>.allow.
+        # Upstream's room entry schema accepts requireMention/enabled/... but
+        # not "allow". allow=true meant "the default" (room enabled), so drop
+        # it; allow=false meant "do not answer in this room", which upstream
+        # spells enabled=false, so keep the deny.
+        groups = matrix.get("groups")
+        if isinstance(groups, dict):
+            for entry in groups.values():
+                if not isinstance(entry, dict):
+                    continue
+                allow = entry.pop("allow", None)
+                if allow is False and "enabled" not in entry:
+                    entry["enabled"] = False
+            matrix["groups"] = groups
     if isinstance(defaults.get("models"), dict) and defaults.get("modelPolicy") is None:
         defaults["modelPolicy"] = {"allow": list(defaults["models"].keys())}
     if defaults:

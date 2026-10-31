@@ -164,13 +164,14 @@ type Config struct {
 	OSSStoragePrefix string
 
 	// AI model
-	DefaultModel       string
-	EmbeddingModel     string
-	Runtime            string
-	ModelContextWindow int
-	ModelMaxTokens     int
-	ModelVision        *bool // nil = use model default; overrides model-level vision capability
-	ModelReasoning     *bool // nil = use model default; overrides model-level reasoning capability
+	DefaultModel          string
+	DefaultModelAutomatic bool
+	EmbeddingModel        string
+	Runtime               string
+	ModelContextWindow    int
+	ModelMaxTokens        int
+	ModelVision           *bool // nil = use model default; overrides model-level vision capability
+	ModelReasoning        *bool // nil = use model default; overrides model-level reasoning capability
 
 	// LLM provider (for Gateway initialization)
 	LLMProvider                string
@@ -381,13 +382,15 @@ func LoadConfig() *Config {
 
 		OSSStoragePrefix: envOrDefault("AGENTTEAMS_STORAGE_PREFIX", "agentteams/agentteams-storage"),
 
-		DefaultModel:       envOrDefault("AGENTTEAMS_DEFAULT_MODEL", "qwen3.6-plus"),
-		EmbeddingModel:     os.Getenv("AGENTTEAMS_EMBEDDING_MODEL"),
-		Runtime:            envOrDefault("AGENTTEAMS_RUNTIME", "docker"),
-		ModelContextWindow: envOrDefaultInt("AGENTTEAMS_MODEL_CONTEXT_WINDOW", 0),
-		ModelMaxTokens:     envOrDefaultInt("AGENTTEAMS_MODEL_MAX_TOKENS", 0),
-		ModelVision:        envOptionalBool("AGENTTEAMS_MODEL_VISION"),
-		ModelReasoning:     envOptionalBool("AGENTTEAMS_MODEL_REASONING"),
+		DefaultModel: agentconfig.DefaultModel(os.Getenv("AGENTTEAMS_LLM_PROVIDER"),
+			os.Getenv("AGENTTEAMS_OPENAI_BASE_URL"), os.Getenv("AGENTTEAMS_DEFAULT_MODEL"), "qwen3.6-plus"),
+		DefaultModelAutomatic: os.Getenv("AGENTTEAMS_DEFAULT_MODEL") == "",
+		EmbeddingModel:        os.Getenv("AGENTTEAMS_EMBEDDING_MODEL"),
+		Runtime:               envOrDefault("AGENTTEAMS_RUNTIME", "docker"),
+		ModelContextWindow:    envOrDefaultInt("AGENTTEAMS_MODEL_CONTEXT_WINDOW", 0),
+		ModelMaxTokens:        envOrDefaultInt("AGENTTEAMS_MODEL_MAX_TOKENS", 0),
+		ModelVision:           envOptionalBool("AGENTTEAMS_MODEL_VISION"),
+		ModelReasoning:        envOptionalBool("AGENTTEAMS_MODEL_REASONING"),
 
 		LLMProvider:                envOrDefault("AGENTTEAMS_LLM_PROVIDER", "qwen"),
 		LLMAPIKey:                  os.Getenv("AGENTTEAMS_LLM_API_KEY"),
@@ -829,8 +832,14 @@ func (c *Config) ManagerAgentEnv() map[string]string {
 	setIfNonEmpty("AGENTTEAMS_STORAGE_PREFIX", c.OSSStoragePrefix)
 	setIfNonEmpty("AGENTTEAMS_MATRIX_DOMAIN", c.MatrixDomain)
 	setIfNonEmpty("AGENTTEAMS_DEFAULT_MODEL", c.DefaultModel)
+	if agentconfig.IsMiniMaxOpenAI(c.LLMProvider, c.OpenAIBaseURL) && c.DefaultModel == agentconfig.MiniMaxFlash && c.DefaultModelAutomatic {
+		// Distinguish a fresh default from an explicit model switch so manager
+		// startup can retain the primary model in an existing openclaw.json.
+		env["AGENTTEAMS_MINIMAX_DEFAULTED"] = "1"
+	}
 	setIfNonEmpty("AGENTTEAMS_EMBEDDING_MODEL", c.EmbeddingModel)
 	setIfNonEmpty("AGENTTEAMS_LLM_PROVIDER", c.LLMProvider)
+	setIfNonEmpty("AGENTTEAMS_OPENAI_BASE_URL", c.OpenAIBaseURL)
 	setIfNonEmpty("AGENTTEAMS_LLM_API_KEY", c.LLMAPIKey)
 	if c.AIStreamIdleTimeoutSeconds > 0 {
 		env["AGENTTEAMS_AI_STREAM_IDLE_TIMEOUT_SECONDS"] = strconv.Itoa(c.AIStreamIdleTimeoutSeconds)
@@ -870,24 +879,27 @@ func (c *Config) AgentConfig() agentconfig.Config {
 		}
 	}
 	return agentconfig.Config{
-		MatrixDomain:       c.MatrixDomain,
-		MatrixServerURL:    matrixURL,
-		AIGatewayURL:       aiGatewayURL,
-		AdminUser:          c.MatrixAdminUser,
-		DefaultModel:       c.DefaultModel,
-		EmbeddingModel:     c.EmbeddingModel,
-		Runtime:            c.Runtime,
-		E2EEEnabled:        c.MatrixE2EE,
-		ModelContextWindow: c.ModelContextWindow,
-		ModelMaxTokens:     c.ModelMaxTokens,
-		ModelVision:        c.ModelVision,
-		ModelReasoning:     c.ModelReasoning,
-		CMSTracesEnabled:   c.CMSTracesEnabled,
-		CMSMetricsEnabled:  c.CMSMetricsEnabled,
-		CMSEndpoint:        c.CMSEndpoint,
-		CMSLicenseKey:      c.CMSLicenseKey,
-		CMSProject:         c.CMSProject,
-		CMSWorkspace:       c.CMSWorkspace,
-		CMSServiceName:     c.CMSServiceName,
+		MatrixDomain:          c.MatrixDomain,
+		MatrixServerURL:       matrixURL,
+		AIGatewayURL:          aiGatewayURL,
+		AdminUser:             c.MatrixAdminUser,
+		LLMProvider:           c.LLMProvider,
+		OpenAIBaseURL:         c.OpenAIBaseURL,
+		DefaultModel:          c.DefaultModel,
+		DefaultModelAutomatic: c.DefaultModelAutomatic,
+		EmbeddingModel:        c.EmbeddingModel,
+		Runtime:               c.Runtime,
+		E2EEEnabled:           c.MatrixE2EE,
+		ModelContextWindow:    c.ModelContextWindow,
+		ModelMaxTokens:        c.ModelMaxTokens,
+		ModelVision:           c.ModelVision,
+		ModelReasoning:        c.ModelReasoning,
+		CMSTracesEnabled:      c.CMSTracesEnabled,
+		CMSMetricsEnabled:     c.CMSMetricsEnabled,
+		CMSEndpoint:           c.CMSEndpoint,
+		CMSLicenseKey:         c.CMSLicenseKey,
+		CMSProject:            c.CMSProject,
+		CMSWorkspace:          c.CMSWorkspace,
+		CMSServiceName:        c.CMSServiceName,
 	}
 }

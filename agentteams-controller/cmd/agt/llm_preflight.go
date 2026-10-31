@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
 	"github.com/spf13/cobra"
 )
 
@@ -138,6 +139,7 @@ func resolveLLMPreflightConfig(opts llmPreflightOptions) (llmPreflightConfig, er
 	if cfg.APIKey == "" {
 		return cfg, fmt.Errorf("LLM API key is required (set AGENTTEAMS_LLM_API_KEY or --api-key)")
 	}
+	cfg.Model = agentconfig.DefaultModel(cfg.Provider, cfg.BaseURL, cfg.Model, "")
 	if cfg.Model == "" {
 		return cfg, fmt.Errorf("LLM model is required (set AGENTTEAMS_DEFAULT_MODEL or --model)")
 	}
@@ -224,6 +226,11 @@ func runLLMPreflightAttempt(ctx context.Context, client *http.Client, cfg llmPre
 		"messages": []map[string]string{
 			{"role": "user", "content": "Reply with only one word: ok"},
 		},
+	}
+	if agentconfig.IsMiniMaxOpenAI(cfg.Provider, cfg.BaseURL) && cfg.Model == agentconfig.MiniMaxFlash {
+		// Flash always thinks; leave thinking and effort omitted for adaptive/max.
+		// A one-token probe can otherwise return no visible answer.
+		payload["max_tokens"] = 4096
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {

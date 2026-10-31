@@ -1044,7 +1044,7 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 			// release them.
 			h.adjustQuotaLedger(ctx, username, -existingSize)
 		} else {
-			log.FromContext(ctx).Warn("trash restore removed the entry but lost the entry lease before the ledger release; the replaced bytes stay counted (conservative overstate)",
+			log.FromContext(ctx).Info("warning: trash restore removed the entry but lost the entry lease before the ledger release; the replaced bytes stay counted (conservative overstate)",
 				"human", username, "trashId", id, "size", existingSize)
 		}
 	}
@@ -1146,7 +1146,7 @@ func (h *humanFilesHandler) purgeTrash(w http.ResponseWriter, r *http.Request) {
 		// next quota write seeds it from live usage (already reduced).
 		h.adjustQuotaLedger(ctx, username, -m.Size)
 	} else {
-		log.FromContext(ctx).Warn("trash purge deleted the entry but lost the entry lease before the ledger release; the bytes stay counted (conservative overstate)",
+		log.FromContext(ctx).Info("warning: trash purge deleted the entry but lost the entry lease before the ledger release; the bytes stay counted (conservative overstate)",
 			"human", username, "trashId", id, "size", m.Size)
 	}
 	h.recordAudit(ctx, a, "human_trash_purge",

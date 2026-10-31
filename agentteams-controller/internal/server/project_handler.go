@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"os"
@@ -3013,6 +3014,135 @@ func (h *ProjectHandler) writeProjectMeta(ctx context.Context, w http.ResponseWr
 		return false
 	}
 	return true
+}
+
+// projectMetaCommitMaxBytes caps the commit body at 1 MiB: a project meta is
+// small by construction, and the cap bounds the request before it reaches
+// storage.
+const projectMetaCommitMaxBytes = 1 << 20
+
+// PutProjectMeta conditionally commits a project's full meta.json against
+// the version the caller read (the controller-side conditional commit
+// endpoint, #1402). The worker's filesync path used to `mc stat` and then
+// `mc cp` unconditionally: when a Controller handler committed a pause into
+// the meta in between, the blind copy clobbered it (remote
+// pause_sources=[], gate unpaused) while the sync still reported
+// ok=true/synced=true. This endpoint removes the blind write — the commit
+// is a strict If-Match CAS (PutObjectIfMatchStrict) bound to the ETag the
+// caller passes, and a mismatch is a 409 the client must resolve by
+// re-reading, merging and retrying.
+//
+// PUT /api/v1/projects/{id}/meta
+//
+//	Header If-Match: <ETag from the read / previous commit> (required)
+//	Body: the full meta.json as a JSON object (<= 1 MiB), written through
+//	byte-for-byte (no re-marshal, so the stored bytes equal the commit).
+//
+// Responses: 428 missing If-Match · 413 body > 1 MiB · 400 body not a JSON
+// object · 404 unknown project · 403 worker outside its team · 409 ETag
+// mismatch · 503 backend without strict conditional writes ·
+// 200 {"etag": <new ETag of the committed version>}.
+//
+// No history snapshot and no control-action audit entry: this is the
+// worker's high-frequency commit path, and amplifying every commit with
+// extra writes would widen the write storm this endpoint exists to close.
+// The intervention audit trail stays on the lifecycle endpoints.
+// Idempotency is intrinsic to If-Match: re-sending the same body against
+// the same version succeeds once; the second attempt sees the new ETag and
+// fails with 409 until it re-reads.
+func (h *ProjectHandler) PutProjectMeta(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	if projectID == "" {
+		writeError(w, http.StatusBadRequest, "project id is required")
+		return
+	}
+
+	// The commit is conditional by construction: without an If-Match there
+	// is no read version to bind, and this endpoint never blind-writes.
+	ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
+	if ifMatch == "" {
+		writeError(w, http.StatusPreconditionRequired,
+			"If-Match is required: read the meta and pass its ETag; this endpoint never blind-writes")
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, projectMetaCommitMaxBytes))
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "project meta commit body exceeds 1 MiB")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "read project meta commit body: "+err.Error())
+		return
+	}
+	// The body must be a JSON object. The decode is validation only — the
+	// raw bytes are what get written (byte-identical round-trip).
+	var asObject map[string]json.RawMessage
+	if err := json.Unmarshal(body, &asObject); err != nil {
+		writeError(w, http.StatusBadRequest, "project meta commit body must be a JSON object: "+err.Error())
+		return
+	}
+
+	pwc, failed := h.readProjectWriteContext(w, r)
+	if failed {
+		return
+	}
+
+	// Worker team-scope boundary (the real one): the middleware cannot
+	// resolve project -> team (projectNameFn returns only the id), so the
+	// authorizer's requireSameTeam short-circuits on an empty ResourceTeam.
+	// A worker may commit only the meta of a project in its own team; the
+	// global prefix resolves to team "" and is therefore unreachable for
+	// workers. Admin/manager skip (full access); team leaders and L2 humans
+	// were already scoped above by checkProjectAccess (W4: 404, never 403).
+	if caller := authpkg.CallerFromContext(r.Context()); caller != nil && caller.Role == authpkg.RoleWorker {
+		if !caller.TeamMatches(pwc.team) {
+			writeError(w, http.StatusForbidden, "worker can only commit the meta of a project in its own team")
+			return
+		}
+	}
+
+	// The unified exit is the STRICT conditional write (loop_handler's
+	// conditionalWriter): a backend whose If-Match can degrade to
+	// compare-then-put — or that does not implement it at all — is rejected
+	// with 503, never an unconditional write.
+	strict, ok := h.oss.(conditionalWriter)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable,
+			"project meta commit requires a backend with strict conditional writes: "+oss.ErrConditionalUnsupported.Error())
+		return
+	}
+	if err := strict.PutObjectIfMatchStrict(r.Context(), pwc.key, body, ifMatch); err != nil {
+		switch {
+		case errors.Is(err, oss.ErrPreconditionFailed):
+			// The meta changed since the caller's read: the write did NOT
+			// land. The client re-reads, merges and retries with the new
+			// ETag — this endpoint never guesses.
+			httputil.WriteJSON(w, http.StatusConflict, struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			}{Code: "conflict", Message: "project meta changed since the read; re-read, merge and retry"})
+		case errors.Is(err, oss.ErrConditionalUnsupported):
+			// The backend cannot honor If-Match at all: fail closed.
+			writeError(w, http.StatusServiceUnavailable,
+				"backend cannot provide conditional writes: "+oss.ErrConditionalUnsupported.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, "commit project meta: "+err.Error())
+		}
+		return
+	}
+
+	// Report the ETag of the version that actually landed (re-stat, not
+	// computed): the client binds its next commit to it.
+	committed, err := h.oss.StatMeta(r.Context(), pwc.key)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "stat project meta after commit: "+err.Error())
+		return
+	}
+	httputil.WriteJSON(w, http.StatusOK, struct {
+		ETag string `json:"etag"`
+	}{ETag: committed.ETag})
 }
 
 // interventionNotify sends an admin message to the project's source room so

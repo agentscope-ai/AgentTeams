@@ -296,6 +296,12 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/projects/{id}/replan", mw.RequireAuthz(authpkg.ActionUpdate, "project", projectNameFn)(http.HandlerFunc(projh.ReplanProject)))
 	mux.Handle("POST /api/v1/projects/{id}/tasks/{taskId}/cancel", mw.RequireAuthz(authpkg.ActionUpdate, "project", projectTaskNameFn)(http.HandlerFunc(projh.CancelTask)))
 	mux.Handle("POST /api/v1/projects/{id}/complete", mw.RequireAuthz(authpkg.ActionUpdate, "project", projectNameFn)(http.HandlerFunc(projh.CompleteProject)))
+	// Conditional project meta commit (#1402): the worker sync path commits
+	// the full meta.json against a strict If-Match CAS. The resource kind is
+	// the dedicated "project-meta" — NOT "project" — so the authorizer can
+	// grant workers exactly this one write without opening
+	// pause/resume/replan/complete/cancel (see authorizeWorker).
+	mux.Handle("PUT /api/v1/projects/{id}/meta", mw.RequireAuthz(authpkg.ActionUpdate, "project-meta", projectNameFn)(http.HandlerFunc(projh.PutProjectMeta)))
 
 	// --- Gateway ---
 	gh := NewGatewayHandler(deps.Gateway)

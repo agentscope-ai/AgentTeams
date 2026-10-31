@@ -21,7 +21,12 @@ import (
 // app/object/delete.rs has no if_match), so a soft delete cannot be
 // guarded against a concurrent writer at the storage layer. The lease
 // below serializes every in-API operation that mutates the same rel
-// (PUT, DELETE, RESTORE) on a per-path lock object:
+// (PUT, DELETE, RESTORE) on a per-path lock object. Trash entries join
+// the same protocol as rels of their own (".trash/<id>"): RESTORE and
+// PURGE of an entry both take the entry's lease — RESTORE before the
+// restored path's lease, PURGE with no path lease — so the two cannot
+// interleave on one entry and its bytes stay quota-counted until exactly
+// one of them finishes. The key is:
 //
 //	humans/<u>/.control/locks/<sha256hex(rel)>
 //

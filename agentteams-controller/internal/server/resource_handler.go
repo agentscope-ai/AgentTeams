@@ -1317,7 +1317,7 @@ func (h *ResourceHandler) ListHumans(w http.ResponseWriter, r *http.Request) {
 
 	humans := make([]HumanResponse, 0, len(list.Items))
 	for i := range list.Items {
-		humans = append(humans, humanToResponse(&list.Items[i]))
+		humans = append(humans, humanListToResponse(&list.Items[i]))
 	}
 
 	if fieldViews == listFieldsAll {
@@ -1729,6 +1729,17 @@ func humanToResponse(h *v1beta1.Human) HumanResponse {
 	if resp.Phase == "" {
 		resp.Phase = "Pending"
 	}
+	return resp
+}
+
+// humanListToResponse renders a human for a LIST body: identical to
+// humanToResponse except initialPassword, which no list response carries
+// (issue #1475: the one-shot provisioning credential must not ride along
+// on every enumeration). The detail endpoints keep returning it via
+// humanToResponse.
+func humanListToResponse(h *v1beta1.Human) HumanResponse {
+	resp := humanToResponse(h)
+	resp.InitialPassword = ""
 	return resp
 }
 

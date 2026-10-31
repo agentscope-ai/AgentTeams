@@ -325,19 +325,32 @@ func TestListTeamsFieldsWithScope(t *testing.T) {
 	}
 }
 
-// TestListHumansFieldsProjection pins the ?fields=summary contract on
-// GET /api/v1/humans (issue #1475): exactly the list-card fields, token
-// trimming and duplicates do not matter, humans/total envelope kept.
+// TestListHumansFieldsProjection pins the ?fields= contract on
+// GET /api/v1/humans (issue #1475): the default (fields absent or
+// "all") body is byte-identical to the post-#1475 fix shape (no
+// initialPassword), summary returns exactly the list-card fields, token
+// trimming and duplicates do not matter, and the humans/total envelope
+// is unchanged.
 func TestListHumansFieldsProjection(t *testing.T) {
 	handler, _ := teamHumanFixtureHandler()
 
+	const (
+		goldenHumansAll = `{"humans":[{"name":"alice","phase":"Active","displayName":"Alice A","email":"alice@example.com","permissionLevel":2,"accessibleTeams":["alpha-team"],"accessibleWorkers":["alpha-dev"],"capabilities":["external_sources"],"note":"ops lead","matrixUserID":"@alice:example.com","rooms":["!r1:example.com"],"message":"ok"},{"name":"bob","phase":"Pending","displayName":"Bob B","permissionLevel":3}],"total":2}
+`
+		goldenHumansSummary = `{"humans":[{"name":"alice","phase":"Active","displayName":"Alice A","email":"alice@example.com","permissionLevel":2,"matrixUserID":"@alice:example.com","message":"ok"},{"name":"bob","phase":"Pending","displayName":"Bob B","permissionLevel":3}],"total":2}
+`
+	)
+
 	for _, tc := range []struct {
-		name  string
-		query string
+		name   string
+		query  string
+		golden string
 	}{
-		{name: "summary", query: "fields=summary"},
-		{name: "summary-duplicate", query: "fields=summary,summary"},
-		{name: "trimmed", query: "fields=%20summary%20"},
+		{name: "default", query: "", golden: goldenHumansAll},
+		{name: "all", query: "fields=all", golden: goldenHumansAll},
+		{name: "summary", query: "fields=summary", golden: goldenHumansSummary},
+		{name: "summary-duplicate", query: "fields=summary,summary", golden: goldenHumansSummary},
+		{name: "trimmed", query: "fields=%20summary%20", golden: goldenHumansSummary},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/humans?"+tc.query, nil)
@@ -347,12 +360,51 @@ func TestListHumansFieldsProjection(t *testing.T) {
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
 			}
-			golden := `{"humans":[{"name":"alice","phase":"Active","displayName":"Alice A","email":"alice@example.com","permissionLevel":2,"matrixUserID":"@alice:example.com","message":"ok"},{"name":"bob","phase":"Pending","displayName":"Bob B","permissionLevel":3}],"total":2}
-`
-			if got := rec.Body.String(); got != golden {
-				t.Fatalf("body mismatch\ngot:  %s\nwant: %s", got, golden)
+			if got := rec.Body.String(); got != tc.golden {
+				t.Fatalf("body mismatch\ngot:  %s\nwant: %s", got, tc.golden)
 			}
 		})
+	}
+}
+
+// TestListHumansInitialPassword pins the #1475 credential rule: no LIST
+// response (default, fields=all, fields=summary) carries initialPassword
+// or its value, while the detail endpoint GET /humans/{name} still
+// returns it (one-shot provisioning, detail only).
+func TestListHumansInitialPassword(t *testing.T) {
+	handler, _ := teamHumanFixtureHandler()
+
+	for _, fields := range []string{"", "all", "summary"} {
+		t.Run("list-fields="+fields, func(t *testing.T) {
+			query := fields
+			if query != "" {
+				query = "fields=" + query
+			}
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/humans?"+query, nil)
+			rec := httptest.NewRecorder()
+			handler.ListHumans(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+			}
+			body := rec.Body.String()
+			if strings.Contains(body, "initialPassword") {
+				t.Errorf("list body carries the initialPassword key: %s", body)
+			}
+			if strings.Contains(body, "init-pw-123") {
+				t.Errorf("list body carries the credential value: %s", body)
+			}
+		})
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/humans/alice", nil)
+	req.SetPathValue("name", "alice")
+	rec := httptest.NewRecorder()
+	handler.GetHuman(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("detail status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"initialPassword":"init-pw-123"`) {
+		t.Errorf("detail body missing the credential: %s", rec.Body.String())
 	}
 }
 

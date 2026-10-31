@@ -143,6 +143,14 @@ func TestHumanFiles_S3TrashRestorePurgeQuotaRace(t *testing.T) {
 	})
 	ctx := context.Background()
 
+	// The lifecycle regression shares this bucket and human and runs first in
+	// the same `go test` invocation; it leaves files/ and .trash/ objects
+	// behind. Start from a clean area so the quota gate only sees this test's
+	// bytes (the in-memory variant starts empty).
+	_ = client.DeletePrefix(ctx, humanFilesPrefix("alice"))
+	_ = client.DeletePrefix(ctx, humanTrashPrefix("alice"))
+	_ = client.DeleteObject(ctx, humanQuotaLedgerKey("alice"))
+
 	stalled := &stallRestoreTargetOSS{
 		inner:   client,
 		key:     humanPathLockKey("alice", "f.txt"),

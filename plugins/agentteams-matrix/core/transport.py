@@ -61,6 +61,7 @@ from .state import StateLayout
 from .sync import SyncEngine
 
 __all__ = [
+    "E2EEInitError",
     "MIN_SYNC_TIMEOUT_MS",
     "NioTransport",
     "QwenPawMatrixClient",
@@ -195,6 +196,18 @@ def build_client(config: TransportConfig) -> AsyncClient:
 # ---------------------------------------------------------------------------
 # NioTransport — the matrix-nio MatrixTransport implementation (M5b)
 # ---------------------------------------------------------------------------
+
+
+class E2EEInitError(RuntimeError):
+    """The crypto backend is present but the Olm account could not be
+    initialized (``olm`` is still ``None`` after ``restore_login``).
+
+    Raised by :meth:`NioTransport.start` when encryption was requested
+    and the native store preparation ran, so the owning adapter can map
+    it to a retryable ``e2ee_init_failed`` fatal error instead of
+    silently downgrading to plaintext.
+    """
+
 
 #: Server-side typing-indication timeout (ms).  The QwenPaw channel
 #: renews with the same constant, so the core path matches its behaviour.
@@ -356,6 +369,14 @@ class NioTransport:
       :func:`core.e2ee.crypto_available` is false the transport degrades
       to non-encrypted mode and logs the error instead of raising
       (parity with the QwenPaw channel preflight);
+    - **native crypto init**: when encryption is on and the client
+      exposes the native ``restore_login`` (real matrix-nio client,
+      both build and injection paths), :meth:`start` initializes the
+      authenticated crypto store before anything else; when the Olm
+      account is still missing afterwards, the start aborts with
+      :class:`E2EEInitError` (the adapter maps it to a retryable
+      ``e2ee_init_failed`` fatal) — encrypted transport is never
+      declared ready over an uninitialized store;
     - **keys upload**: when encryption is on and ``should_upload_keys``
       is true, ``keys_upload()`` runs once during :meth:`start`; a
       failed upload aborts the start so the core records a
@@ -389,6 +410,7 @@ class NioTransport:
         encryption: bool = True,
         client: Optional[AsyncClient] = None,
         on_sync: Optional[Callable[[], Any]] = None,
+        on_token_invalid: Optional[Callable[[], None]] = None,
     ) -> None:
         self._config = config
         self._store = store
@@ -397,6 +419,12 @@ class NioTransport:
         self.encryption = bool(encryption)
         self._client: Optional[AsyncClient] = client
         self._on_sync = on_sync
+        # Terminal auth failure (M_UNKNOWN_TOKEN / M_MISSING_TOKEN) from
+        # the sync engine: the engine clears the client token and stops
+        # its loop, then invokes this hook so the owning adapter can
+        # surface a fatal error (re-login required) instead of keeping a
+        # healthy-looking connection.
+        self._on_token_invalid = on_token_invalid
         self._on_event: Optional[Callable[[InboundEvent], Awaitable[None]]] = None
         self._engine: Optional[SyncEngine] = None
         self._maintainer: Optional[E2EEMaintainer] = None
@@ -448,6 +476,48 @@ class NioTransport:
         self._maintainer = E2EEMaintainer(client)
 
         if self.encryption:
+            # Native crypto preparation — both client paths (injected
+            # and built above): initialize the authenticated crypto
+            # store BEFORE declaring encrypted transport ready.
+            # ``restore_login`` is synchronous in matrix-nio 0.26; it
+            # records the identity/token and calls ``load_store()``
+            # (crypto backend enabled), which loads or creates the Olm
+            # account + key store under ``store_path``.  Requires the
+            # canonical user_id + device_id; a successful whoami
+            # pre-validation (adapter) or the build path's
+            # ``user=`` kwarg populates them.
+            #
+            # Duck-typed test clients without a native crypto surface
+            # (no ``restore_login``) cannot hold an Olm account: the
+            # native init does not apply to them and the existing
+            # ``should_upload_keys`` contract below is kept as-is.
+            restore_login = getattr(client, "restore_login", None)
+            if restore_login is not None:
+                user_id = (
+                    getattr(client, "user_id", "")
+                    or getattr(client, "user", "")
+                    or ""
+                )
+                device_id = getattr(client, "device_id", "") or ""
+                access_token = getattr(client, "access_token", "") or ""
+                if not (user_id and device_id):
+                    raise E2EEInitError(
+                        "E2EE store was not initialized: user_id/device_id "
+                        "are not set before restore_login (encryption "
+                        "requested, crypto backend present)"
+                    )
+                restore_login(user_id, device_id, access_token)
+                if getattr(client, "olm", None) is None:
+                    # Encryption requested, backend present, store prep
+                    # ran — but no Olm account materialised (e.g. no
+                    # store path for a path-requiring store class).
+                    # Fail closed: never claim encrypted transport over
+                    # an uninitialized crypto store.
+                    raise E2EEInitError(
+                        "E2EE store was not initialized: olm is None after "
+                        "restore_login (encryption requested, crypto "
+                        "backend present)"
+                    )
             if getattr(client, "should_upload_keys", False):
                 resp = await client.keys_upload()
                 if not isinstance(resp, KeysUploadResponse):
@@ -477,6 +547,7 @@ class NioTransport:
             sync_timeout_ms=timeout_ms,
             logger=logger,
             on_maintenance=self._after_sync,
+            on_token_invalid=self._on_token_invalid,
         )
         self._engine.start()
         logger.info("NioTransport: sync loop started component=matrix")

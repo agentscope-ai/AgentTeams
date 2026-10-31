@@ -375,3 +375,152 @@ def test_connect_unconfigured_fails_clean(registered, monkeypatch):
     assert not adapter.fatal_error_retryable
     asyncio.run(adapter.disconnect())
     assert not adapter._running
+
+
+# ── lifecycle against the real base adapter ─────────────────────────────
+
+
+def _configured_env(monkeypatch, tmp_path, *, encryption: bool = False):
+    """Scrub the adapter env, then configure a fresh state dir."""
+    for var in ADAPTER_ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_SERVER", "https://matrix.example.org/")
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_USER_ID", "@agent:example.org")
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_TOKEN", "s3cr3t-token")
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_STATE_DIR", str(tmp_path / "state"))
+    if encryption:
+        monkeypatch.setenv("AGENTTEAMS_MATRIX_ENCRYPTION", "true")
+
+
+def _bypass_platform_lock(adapter):
+    """Stub only the scoped-lock file plumbing; the real base's
+    fatal/connected semantics are the surface under test."""
+    adapter._acquire_platform_lock = lambda scope, identity, desc: True
+    adapter._release_platform_lock = lambda: None
+
+
+def _new_adapter(sdk):
+    entry = sdk.registry_mod.platform_registry.get(sdk.adapter_mod.PLATFORM_NAME)
+    return entry.adapter_factory(sdk.config_mod.PlatformConfig())
+
+
+def test_terminal_token_invalid_and_reconnect_against_real_base(
+    registered, monkeypatch, tmp_path
+):
+    """The sync engine's terminal-auth path (token cleared +
+    ``on_token_invalid`` hook) reads as a non-retryable ``token_invalid``
+    fatal with a derived ``is_connected`` of False against the REAL
+    ``BasePlatformAdapter``; ``connect(is_reconnect=True)`` clears the
+    fatal error and reads connected again."""
+    sdk, _ = registered
+    _configured_env(monkeypatch, tmp_path)
+    adapter = _new_adapter(sdk)
+    _bypass_platform_lock(adapter)
+
+    clients: list = []
+    transports: list = []
+
+    def make_client(config):
+        client = SimpleNamespace(
+            user_id="", device_id="", access_token="s3cr3t-token",
+            olm=None, closed=False,
+        )
+
+        async def close():
+            client.closed = True
+
+        client.close = close
+        clients.append(client)
+        return client
+
+    class RecordingTransport:
+        def __init__(self, config, **kwargs):
+            self.kwargs = kwargs
+            self.started = False
+            transports.append(self)
+
+        async def start(self, on_event):
+            self.started = True
+
+        async def stop(self):
+            pass
+
+    monkeypatch.setattr(sdk.adapter_mod, "build_client", make_client)
+    monkeypatch.setattr(sdk.adapter_mod, "NioTransport", RecordingTransport)
+
+    assert asyncio.run(adapter.connect()) is True
+    assert adapter.is_connected is True
+    hook = transports[0].kwargs["on_token_invalid"]
+
+    # The sync engine's terminal-auth branch: clear the client token,
+    # then invoke the hook (core/sync.py does exactly this).
+    clients[0].access_token = ""
+    hook()
+
+    assert clients[0].access_token == ""
+    assert adapter.fatal_error_code == "token_invalid"
+    assert "M_UNKNOWN_TOKEN" in adapter.fatal_error_message
+    assert not adapter.fatal_error_retryable
+    assert adapter.is_connected is False
+    assert not adapter._running
+
+    # Reconnect: a fresh client/transport, the fatal error cleared.
+    assert asyncio.run(adapter.connect(is_reconnect=True)) is True
+    assert not adapter.has_fatal_error
+    assert adapter.is_connected is True
+    assert adapter._running is True
+    assert len(clients) == 2 and len(transports) == 2
+    # Bound methods compare by function + instance, not identity.
+    assert transports[1].kwargs["on_token_invalid"] == adapter._on_token_invalid
+    asyncio.run(adapter.disconnect())
+    assert not adapter._running
+
+
+def test_e2ee_init_failure_maps_to_retryable_fatal_against_real_base(
+    registered, monkeypatch, tmp_path
+):
+    """The REAL ``NioTransport`` (real ``E2EEInitError``) over a client
+    whose ``restore_login`` leaves ``olm is None`` must map to the
+    retryable ``e2ee_init_failed`` fatal with the encryption claim
+    withdrawn — against the real base adapter."""
+    sdk, _ = registered
+    _configured_env(monkeypatch, tmp_path, encryption=True)
+    monkeypatch.setattr(sdk.adapter_mod, "crypto_available", lambda: True)
+    adapter = _new_adapter(sdk)
+    _bypass_platform_lock(adapter)
+
+    class NoOlmClient:
+        """Duck-typed client whose native store prep does not
+        materialise an Olm account."""
+
+        def __init__(self):
+            self.user_id = "@agent:example.org"
+            self.device_id = "DEV1"
+            self.access_token = "s3cr3t-token"
+            self.olm = None
+            self.restore_login_calls: list = []
+            self.closed = False
+
+        def restore_login(self, user_id, device_id, access_token):
+            self.restore_login_calls.append((user_id, device_id, access_token))
+            self.olm = None
+
+        async def close(self):
+            self.closed = True
+
+    client = NoOlmClient()
+    monkeypatch.setattr(sdk.adapter_mod, "build_client", lambda config: client)
+    # NioTransport is intentionally NOT stubbed: the real transport raises.
+
+    assert asyncio.run(adapter.connect()) is False
+    assert client.restore_login_calls == [
+        ("@agent:example.org", "DEV1", "s3cr3t-token")
+    ]
+    assert adapter.fatal_error_code == "e2ee_init_failed"
+    assert adapter.fatal_error_retryable is True
+    assert "olm is None" in adapter.fatal_error_message
+    assert adapter.encryption is False
+    assert adapter.is_connected is False
+    assert not adapter._running
+    assert client.closed is True
+    asyncio.run(adapter.disconnect())

@@ -327,6 +327,9 @@ def test_start_build_path_starts_sync_engine(tmp_path, monkeypatch):
             _config(encryption=False),
             store=FakeStore(),
             state_dir=tmp_path,
+            # The encryption kwarg defaults to True; this test exercises
+            # the non-encrypted build path (the config already says so).
+            encryption=False,
         )
         await transport.start(lambda e: _noop())
         # Default query_token=False → plain nio AsyncClient (the

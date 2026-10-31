@@ -90,6 +90,7 @@ from core.interfaces import InboundEvent, OutboundMessage  # noqa: E402
 from core.mentions import strip_mention_prefix, text_mentions_worker  # noqa: E402
 from core.state import FileSessionStore, StateLayout  # noqa: E402
 from core.transport import (  # noqa: E402
+    E2EEInitError,
     MIN_SYNC_TIMEOUT_MS,
     NioTransport,
     TransportConfig,
@@ -253,9 +254,85 @@ class AgentTeamsMatrixAdapter(BasePlatformAdapter):
     def name(self) -> str:
         return PLATFORM_LABEL
 
+    @property
+    def is_connected(self) -> bool:
+        """Derived connection state: a live transport and no fatal error.
+
+        Overrides the base (which returns the ``_running`` flag set
+        only by ``connect()``): a terminal auth failure reaches this
+        adapter *after* a successful ``connect()``, so the flag alone
+        would keep reporting a healthy connection while the sync loop
+        is dead and re-login is required.  Derived, never asserted.
+        """
+        return self._transport is not None and not self.has_fatal_error
+
     def _fail(self, code: str, message: str, *, retryable: bool) -> bool:
         self._set_fatal_error(code, message, retryable=retryable)
         return False
+
+    def _on_token_invalid(self) -> None:
+        """Sync-engine terminal auth failure → the gateway's fatal contract.
+
+        The shared sync engine detected M_UNKNOWN_TOKEN / M_MISSING_TOKEN,
+        cleared the native client's access token and stopped its loop;
+        this hook (wired through ``NioTransport(on_token_invalid=...)``)
+        surfaces it as a non-retryable fatal error so the gateway offers
+        re-login instead of retaining a healthy-looking connection.
+        """
+        logger.error(
+            "AgentTeams Matrix: access token invalid or missing "
+            "(M_UNKNOWN_TOKEN); matrix re-login required",
+        )
+        self._mark_disconnected()
+        self._set_fatal_error(
+            "token_invalid",
+            "M_UNKNOWN_TOKEN: matrix re-login required",
+            retryable=False,
+        )
+
+    async def _preconnect_token_valid(self, client) -> bool:
+        """Pre-validate the access token before declaring connected.
+
+        Returns False only when the homeserver reports a terminal auth
+        failure (M_UNKNOWN_TOKEN / M_MISSING_TOKEN).  True when the
+        token is valid, or when it cannot be pre-validated (a client
+        without ``whoami``, or a transport-level error — those surface
+        through the sync loop instead).
+
+        A successful whoami also populates the client's canonical
+        ``user_id`` / ``device_id`` (nio leaves them empty until then),
+        which the transport's native crypto init (``restore_login``)
+        relies on — QwenPaw channel parity, which sets the same fields
+        from the whoami response at token login.
+        """
+        whoami = getattr(client, "whoami", None)
+        if whoami is None:
+            return True
+        try:
+            resp = await whoami()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "AgentTeams Matrix: whoami pre-validation raised: %s", exc
+            )
+            return True
+        if isinstance(resp, nio.WhoamiError):
+            status = getattr(resp, "status_code", None)
+            if status in ("M_UNKNOWN_TOKEN", "M_MISSING_TOKEN"):
+                logger.error(
+                    "AgentTeams Matrix: access token rejected by the "
+                    "homeserver (%s); matrix re-login required",
+                    status,
+                )
+                return False
+        user = getattr(resp, "user_id", None)
+        device = getattr(resp, "device_id", None)
+        if user:
+            client.user_id = user
+        if device:
+            client.device_id = device
+        return True
 
     # -- lifecycle --------------------------------------------------------
 
@@ -303,6 +380,19 @@ class AgentTeamsMatrixAdapter(BasePlatformAdapter):
             )
             client = build_client(config)
             self._client = client
+            # Terminal auth at startup: a token the homeserver rejects
+            # must fail the connect (fatal, re-login) — not a healthy
+            # connection whose sync loop dies on the first long-poll.
+            # Runs before transport.start() so a successful whoami
+            # populates the canonical user_id/device_id the native
+            # crypto init needs.
+            if not await self._preconnect_token_valid(client):
+                await self._close_client()
+                return self._fail(
+                    "token_invalid",
+                    "M_UNKNOWN_TOKEN: matrix re-login required",
+                    retryable=False,
+                )
             transport = NioTransport(
                 config,
                 store=FileSessionStore(self.state_dir),
@@ -310,9 +400,21 @@ class AgentTeamsMatrixAdapter(BasePlatformAdapter):
                 sync_timeout_ms=self.sync_timeout_ms,
                 encryption=encryption,
                 client=client,
+                on_token_invalid=self._on_token_invalid,
             )
             await transport.start(self._on_inbound)
             self._transport = transport
+            # Encryption state DERIVED from the client's actual crypto
+            # readiness (the transport's native store init ran inside
+            # start()), never asserted: a missing Olm account reads as
+            # no encryption instead of a false "encrypted" claim.
+            if encryption:
+                self.encryption = bool(getattr(client, "olm", None) is not None)
+        except E2EEInitError as e:
+            logger.error("AgentTeams Matrix: E2EE init failed — %s", e)
+            self.encryption = False
+            await self._close_client()
+            return self._fail("e2ee_init_failed", str(e), retryable=True)
         except Exception as e:
             logger.error("AgentTeams Matrix: failed to start core transport — %s", e)
             await self._close_client()

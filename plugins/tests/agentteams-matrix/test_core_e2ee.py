@@ -185,3 +185,398 @@ def test_run_once_error_swallowed_with_warning_and_stops(
         "MatrixChannel: E2EE maintenance error: boom" in record.getMessage()
         for record in caplog.records
     )
+
+
+# ---------------------------------------------------------------------------
+# Native crypto init (matrix-nio 0.26 + vodozemac): the NioTransport's
+# restore_login preparation, the fail-closed E2EEInitError, the persisted
+# Olm account, and the offline encrypt/decrypt round-trip.  These run the
+# REAL nio client (only the HTTP boundary and the sync engine are faked).
+# ---------------------------------------------------------------------------
+
+try:
+    from nio import AsyncClient, MatrixRoom, KeysUploadResponse, RoomMessageText
+    from nio.responses import RoomSendResponse, SyncResponse
+
+    from core.interfaces import OutboundMessage
+    import core.transport as transport_mod
+    from core.transport import E2EEInitError, NioTransport, TransportConfig, build_client
+
+    _NIO_IMPORT_ERROR = None
+except ImportError as _exc:  # pragma: no cover - nio is a hard core dep
+    AsyncClient = MatrixRoom = RoomMessageText = None
+    KeysUploadResponse = RoomSendResponse = SyncResponse = None
+    OutboundMessage = None
+    transport_mod = None
+    E2EEInitError = NioTransport = TransportConfig = build_client = None
+    _NIO_IMPORT_ERROR = _exc
+
+SELF_USER = "@agent:hs.example.com"
+HS = "https://hs.example.com"
+DEVICE = "DEV1"
+TOKEN = "tok-1"
+ROOM_ID = "!enc:hs.example.com"
+
+
+@pytest.fixture()
+def nio_available():
+    """Skip the native-crypto tests only when matrix-nio is absent."""
+    if _NIO_IMPORT_ERROR is not None:
+        pytest.skip(f"matrix-nio not available: {_NIO_IMPORT_ERROR}")
+
+
+class _FakeStore:
+    """SessionStore stand-in (the sync engine is faked in these tests)."""
+
+    def load_sync_token(self):
+        return None
+
+    def save_sync_token(self, token):
+        pass
+
+    def load_session_key(self, room_id, sender):
+        return None
+
+    def save_session_key(self, room_id, sender, key):
+        pass
+
+
+class _FakeSyncEngine:
+    """Recording stand-in for ``core.sync.SyncEngine`` (no sync loop)."""
+
+    instances: list = []
+
+    def __init__(self, client, store, sync_timeout_ms, **kwargs):
+        self.client = client
+        self.started = False
+        _FakeSyncEngine.instances.append(self)
+
+    def start(self):
+        self.started = True
+
+    async def stop(self):
+        self.stopped = True
+
+
+def _encrypted_config(tmp_path, **overrides) -> "TransportConfig":
+    kwargs = dict(
+        homeserver=HS,
+        user_id=SELF_USER,
+        access_token=TOKEN,
+        device_id=DEVICE,
+        store_path=tmp_path / "e2ee",
+        encryption=True,
+    )
+    kwargs.update(overrides)
+    return TransportConfig(**kwargs)
+
+
+def _initialized_client(tmp_path) -> "AsyncClient":
+    """A real nio client with a materialised Olm account (offline)."""
+    client = build_client(_encrypted_config(tmp_path))
+    client.restore_login(SELF_USER, DEVICE, TOKEN)
+    assert client.olm is not None
+    return client
+
+
+def _prime_encrypted_room(client, room_id: str = ROOM_ID) -> None:
+    """Prime the room as a synced, encrypted room and create a shared
+    outbound Megolm session for it (the session is auto-imported as an
+    inbound one for our own device, so our own events decrypt)."""
+    room = MatrixRoom(room_id, SELF_USER, encrypted=True)
+    room.members_synced = True
+    client.rooms[room_id] = room
+    client.olm.create_outbound_group_session(room_id)
+    client.olm.outbound_group_sessions[room_id].shared = True
+
+
+def _capture_send(client, room_id: str = ROOM_ID) -> dict:
+    """Monkeypatch the HTTP boundary: record the wire request, answer
+    with a RoomSendResponse."""
+    captured: dict = {}
+
+    async def fake_send(
+        response_class, method, path, data=None, response_data=None, **kwargs
+    ):
+        import json as _json
+
+        captured["method"] = method
+        captured["path"] = path
+        captured["body"] = _json.loads(data)
+        return RoomSendResponse(room_id=room_id, event_id="$sent-1")
+
+    client._send = fake_send
+    return captured
+
+
+def test_nio_transport_start_initializes_olm_via_restore_login(
+    tmp_path, monkeypatch, nio_available
+):
+    """encryption=True + store path: start() runs the native
+    ``restore_login`` preparation and the client comes up with an Olm
+    account; ``transport.encryption`` stays True and the keys upload
+    runs once (fresh account)."""
+    _FakeSyncEngine.instances = []
+    monkeypatch.setattr(transport_mod, "SyncEngine", _FakeSyncEngine)
+
+    async def scenario():
+        client = build_client(_encrypted_config(tmp_path))
+        uploaded = []
+
+        async def fake_keys_upload():
+            uploaded.append(1)
+            return KeysUploadResponse(
+                curve25519_count=5, signed_curve25519_count=1
+            )
+
+        client.keys_upload = fake_keys_upload
+        transport = NioTransport(
+            _encrypted_config(tmp_path),
+            store=_FakeStore(),
+            state_dir=tmp_path,
+            encryption=True,
+            client=client,
+        )
+        await transport.start(lambda e: None)
+        assert transport.encryption is True
+        assert client.olm is not None
+        assert uploaded == [1]
+        assert _FakeSyncEngine.instances[-1].started
+        await transport.stop()
+
+    _run(scenario())
+
+
+def test_restore_login_without_olm_aborts_start(tmp_path, monkeypatch, nio_available):
+    """A client whose ``restore_login`` leaves ``olm is None`` aborts the
+    start with ``E2EEInitError``; the sync engine never starts."""
+    _FakeSyncEngine.instances = []
+    monkeypatch.setattr(transport_mod, "SyncEngine", _FakeSyncEngine)
+
+    class _NoOlmClient:
+        """Duck-typed client whose store prep does not materialise an
+        Olm account (e.g. a store path the backend cannot open)."""
+
+        def __init__(self):
+            self.user_id = SELF_USER
+            self.device_id = DEVICE
+            self.access_token = TOKEN
+            self.olm = None
+            self.restore_login_calls = []
+
+        def restore_login(self, user_id, device_id, access_token):
+            self.restore_login_calls.append((user_id, device_id, access_token))
+            self.olm = None
+
+    async def scenario():
+        client = _NoOlmClient()
+        transport = NioTransport(
+            _encrypted_config(tmp_path),
+            store=_FakeStore(),
+            state_dir=tmp_path,
+            encryption=True,
+            client=client,
+        )
+        with pytest.raises(E2EEInitError, match="olm is None"):
+            await transport.start(lambda e: None)
+        assert client.restore_login_calls == [(SELF_USER, DEVICE, TOKEN)]
+        assert _FakeSyncEngine.instances == []
+
+    _run(scenario())
+
+
+def test_persisted_account_survives_client_rebuild(tmp_path, nio_available):
+    """Initialize on a store path, capture the Olm identity keys, close,
+    rebuild + ``restore_login`` on the same path: the same account is
+    restored (no new account on restart)."""
+
+    async def scenario():
+        store_path = tmp_path / "e2ee"
+        store_path.mkdir(parents=True, exist_ok=True)
+        client1 = build_client(
+            _encrypted_config(tmp_path, store_path=store_path)
+        )
+        client1.restore_login(SELF_USER, DEVICE, TOKEN)
+        keys1 = dict(client1.olm.account.identity_keys)
+        assert set(keys1) == {"curve25519", "ed25519"}
+        await client1.close()
+
+        client2 = build_client(
+            _encrypted_config(tmp_path, store_path=store_path)
+        )
+        client2.restore_login(SELF_USER, DEVICE, TOKEN)
+        keys2 = dict(client2.olm.account.identity_keys)
+        await client2.close()
+        return keys1, keys2
+
+    keys1, keys2 = _run(scenario())
+    assert keys2 == keys1
+
+
+def test_encrypted_send_emits_m_room_encrypted(tmp_path, nio_available):
+    """With an initialized client, the core send helper emits an
+    ``m.room.encrypted`` event whose envelope carries the Megolm
+    ciphertext (the plaintext never reaches the wire)."""
+
+    async def scenario():
+        client = _initialized_client(tmp_path)
+        _prime_encrypted_room(client)
+        captured = _capture_send(client)
+        transport = NioTransport(
+            _encrypted_config(tmp_path),
+            store=_FakeStore(),
+            state_dir=tmp_path,
+            encryption=True,
+            client=client,
+        )
+        event_id = await transport.send(
+            OutboundMessage(room_id=ROOM_ID, text="secret send")
+        )
+        await client.close()
+        return captured, event_id
+
+    captured, event_id = _run(scenario())
+    assert event_id == "$sent-1"
+    assert captured["method"] == "PUT"
+    # nio percent-encodes the room id in the wire path
+    # (!enc:hs.example.com -> %21enc%3Ahs.example.com).
+    from urllib.parse import quote
+
+    assert (
+        f"/rooms/{quote(ROOM_ID, safe='')}/send/m.room.encrypted/"
+        in captured["path"]
+    )
+    body = captured["body"]
+    for key in ("algorithm", "ciphertext", "sender_key", "session_id"):
+        assert key in body
+    assert body["algorithm"] == "m.megolm.v1.aes-sha2"
+    assert "secret send" not in body["ciphertext"]
+
+
+def test_encrypted_receive_decrypts_megolm_event(tmp_path, nio_available):
+    """A Megolm event fed through a raw sync response is decrypted into
+    the plaintext event (``decrypted=True``) and delivered to the
+    registered room-event callback."""
+
+    async def scenario():
+        client = _initialized_client(tmp_path)
+        _prime_encrypted_room(client)
+        enc = client.olm.group_encrypt(
+            ROOM_ID,
+            {
+                "content": {"msgtype": "m.text", "body": "secret receive"},
+                "type": "m.room.message",
+            },
+        )
+        raw = {
+            "next_batch": "tok-1",
+            "to_device": {"events": []},
+            "rooms": {
+                "join": {
+                    ROOM_ID: {
+                        "timeline": {
+                            "events": [
+                                {
+                                    "type": "m.room.encrypted",
+                                    "event_id": "$enc-1",
+                                    "room_id": ROOM_ID,
+                                    "sender": SELF_USER,
+                                    "origin_server_ts": 1_700_000_000_000,
+                                    "content": enc,
+                                }
+                            ],
+                            "limited": False,
+                            "prev_batch": "tok-0",
+                        },
+                        "state": {
+                            "events": [
+                                {
+                                    "type": "m.room.encryption",
+                                    "event_id": "$enc-state",
+                                    "state_key": "",
+                                    "room_id": ROOM_ID,
+                                    "sender": SELF_USER,
+                                    "origin_server_ts": 1_700_000_000_001,
+                                    "content": {
+                                        "algorithm": "m.megolm.v1.aes-sha2"
+                                    },
+                                }
+                            ]
+                        },
+                    }
+                },
+            },
+        }
+        got = []
+
+        async def on_event(room, event):
+            got.append(event)
+
+        client.add_event_callback(on_event, (RoomMessageText,))
+        await client.receive_response(SyncResponse.from_dict(raw))
+        await client.close()
+        return got
+
+    got = _run(scenario())
+    assert len(got) == 1
+    event = got[0]
+    assert isinstance(event, RoomMessageText)
+    assert event.body == "secret receive"
+    assert event.decrypted is True
+    assert event.verified is True
+
+
+def test_non_crypto_client_keeps_keys_upload_contract(
+    tmp_path, monkeypatch, nio_available
+):
+    """A duck-typed client without a native crypto surface (no
+    ``restore_login``) keeps the pre-existing ``should_upload_keys``
+    behaviour: no ``E2EEInitError``, keys upload runs when requested,
+    the sync engine starts."""
+    _FakeSyncEngine.instances = []
+    monkeypatch.setattr(transport_mod, "SyncEngine", _FakeSyncEngine)
+
+    class _PlainClient:
+        """Duck-typed client without the native crypto surface."""
+
+        def __init__(self, should_upload: bool):
+            self.user_id = SELF_USER
+            self.device_id = DEVICE
+            self.access_token = TOKEN
+            self.olm = None
+            self.should_upload_keys = should_upload
+            self.keys_upload_calls = 0
+            self.event_callbacks: list = []
+            self.sync_timeout_ms = 30000
+            self.closed = False
+
+        def add_event_callback(self, callback, filter=None):
+            self.event_callbacks.append((callback, filter))
+
+        async def keys_upload(self):
+            self.keys_upload_calls += 1
+            return KeysUploadResponse(
+                curve25519_count=5, signed_curve25519_count=1
+            )
+
+        async def close(self):
+            self.closed = True
+
+    async def scenario():
+        client = _PlainClient(should_upload=True)
+        transport = NioTransport(
+            _encrypted_config(tmp_path),
+            store=_FakeStore(),
+            state_dir=tmp_path,
+            encryption=True,
+            client=client,
+        )
+        # Must not raise E2EEInitError: no restore_login -> native init
+        # does not apply, the legacy contract below is kept as-is.
+        await transport.start(lambda e: None)
+        assert client.keys_upload_calls == 1
+        assert _FakeSyncEngine.instances[-1].started
+        await transport.stop()
+        assert client.closed is True
+
+    _run(scenario())

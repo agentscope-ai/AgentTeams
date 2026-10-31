@@ -397,8 +397,11 @@ class FakeTransport:
         self.sent = []
         self.typing_calls = []
         self.send_exc = None
+        self.start_exc = None
 
     async def start(self, on_event):
+        if self.start_exc is not None:
+            raise self.start_exc
         self.start_callbacks.append(on_event)
 
     async def stop(self):
@@ -683,6 +686,141 @@ def test_disconnect_stops_transport_releases_lock(
     assert adapter._connected is False
     assert adapter._transport is None
     assert adapter._client is None
+
+
+# ── terminal auth (token invalid) & E2EE init fatal ─────────────────────
+
+
+def test_token_invalid_hook_marks_fatal_and_derived_state(
+    adapter_mod, matrix_env, monkeypatch, tmp_path
+):
+    """Successful connect, then the sync engine's terminal-auth path
+    (token cleared + ``on_token_invalid`` hook) must read as a
+    non-retryable fatal error with a derived ``is_connected`` of False."""
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_STATE_DIR", str(tmp_path / "state"))
+    captured, client, transport = _stub_connect(adapter_mod, monkeypatch)
+
+    adapter = adapter_mod.AgentTeamsMatrixAdapter(SimpleNamespace(extra={}))
+    assert asyncio.run(adapter.connect()) is True
+    assert adapter.is_connected is True
+    # The sync engine's terminal-auth hook is wired through the transport
+    # (bound methods compare by function + instance, not identity).
+    assert captured["kwargs"]["on_token_invalid"] == adapter._on_token_invalid
+
+    # Simulate core/sync.py's terminal-auth branch: the engine clears the
+    # client token, stops its loop, then invokes the hook.
+    client.access_token = ""
+    adapter._on_token_invalid()
+
+    assert client.access_token == ""
+    assert adapter.is_connected is False
+    assert adapter.has_fatal_error
+    assert adapter._fatal_error_code == "token_invalid"
+    assert adapter._fatal_error_message == (
+        "M_UNKNOWN_TOKEN: matrix re-login required"
+    )
+    assert adapter._fatal_error_retryable is False
+
+
+def test_invalid_token_at_startup_fails_connect(
+    adapter_mod, matrix_env, monkeypatch, tmp_path
+):
+    """A client whose whoami answers M_UNKNOWN_TOKEN must fail the
+    connect (fatal, re-login) before the transport ever starts."""
+    from nio import WhoamiError
+
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_STATE_DIR", str(tmp_path / "state"))
+    captured, client, transport = _stub_connect(adapter_mod, monkeypatch)
+
+    async def rejected_whoami():
+        return WhoamiError(status_code="M_UNKNOWN_TOKEN", message="Unknown token")
+
+    client.whoami = rejected_whoami
+
+    adapter = adapter_mod.AgentTeamsMatrixAdapter(SimpleNamespace(extra={}))
+    assert asyncio.run(adapter.connect()) is False
+    assert adapter.is_connected is False
+    assert adapter.has_fatal_error
+    assert adapter._fatal_error_code == "token_invalid"
+    assert adapter._fatal_error_retryable is False
+    # The transport never started and the rejected client was closed.
+    assert transport.start_callbacks == []
+    assert client.closed is True
+    assert adapter._client is None
+    assert adapter._transport is None
+
+
+def test_reconnect_clears_fatal_error_and_reads_connected(
+    adapter_mod, matrix_env, monkeypatch, tmp_path
+):
+    """After a terminal-auth fatal, ``connect(is_reconnect=True)`` builds
+    a fresh client/transport, clears the fatal error, and the derived
+    ``is_connected`` reads True again."""
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_STATE_DIR", str(tmp_path / "state"))
+    clients: list = []
+    transports: list = []
+
+    def fake_build_client(config):
+        client = FakeClient()
+        clients.append(client)
+        return client
+
+    def fake_transport(config, **kwargs):
+        transport = FakeTransport()
+        transport.kwargs = kwargs
+        transports.append(transport)
+        return transport
+
+    monkeypatch.setattr(adapter_mod, "build_client", fake_build_client)
+    monkeypatch.setattr(adapter_mod, "NioTransport", fake_transport)
+
+    adapter = adapter_mod.AgentTeamsMatrixAdapter(SimpleNamespace(extra={}))
+    assert asyncio.run(adapter.connect()) is True
+
+    # Kill the first session the way the sync engine would.
+    clients[0].access_token = ""
+    transports[0].kwargs["on_token_invalid"]()
+    assert adapter.has_fatal_error
+    assert adapter.is_connected is False
+
+    assert asyncio.run(adapter.connect(is_reconnect=True)) is True
+    assert adapter.has_fatal_error is False
+    assert adapter.is_connected is True
+    assert len(clients) == 2
+    assert len(transports) == 2
+    # The new transport carries the same terminal-auth hook (bound
+    # methods compare by function + instance, not identity).
+    assert transports[1].kwargs["on_token_invalid"] == adapter._on_token_invalid
+    assert transports[1].start_callbacks == [adapter._on_inbound]
+
+
+def test_e2ee_init_error_maps_to_retryable_fatal(
+    adapter_mod, matrix_env, monkeypatch, tmp_path
+):
+    """``E2EEInitError`` from the transport start must map to the
+    retryable ``e2ee_init_failed`` fatal and read as no encryption."""
+    from core.transport import E2EEInitError
+
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_ENCRYPTION", "true")
+    captured, client, transport = _stub_connect(
+        adapter_mod, monkeypatch, crypto=True
+    )
+    transport.start_exc = E2EEInitError(
+        "E2EE store was not initialized: olm is None after restore_login"
+    )
+
+    adapter = adapter_mod.AgentTeamsMatrixAdapter(SimpleNamespace(extra={}))
+    assert asyncio.run(adapter.connect()) is False
+    assert adapter.is_connected is False
+    assert adapter._fatal_error_code == "e2ee_init_failed"
+    assert adapter._fatal_error_retryable is True
+    assert "olm is None" in adapter._fatal_error_message
+    # Derived state: the encrypted claim is withdrawn, client closed.
+    assert adapter.encryption is False
+    assert client.closed is True
+    assert adapter._client is None
+    assert adapter._transport is None
 
 
 # ── inbound ────────────────────────────────────────────────────────────

@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -127,8 +128,123 @@ type loopMeta struct {
 	CurrentIteration  int               `json:"current_iteration"`
 	MaxIterations     int               `json:"max_iterations"`
 	Status            string            `json:"status"`
+	PauseSources      []string          `json:"pause_sources,omitempty"`
 	Tasks             []projectTaskMeta `json:"tasks,omitempty"`
 	History           []json.RawMessage `json:"history,omitempty"`
+	// Extra keeps the loop keys this struct does not model. A project
+	// write must round-trip the durable loop block byte-for-byte — the
+	// worker-side pause veto (pause_sources, and any future field) is
+	// owned by the loop endpoints and the worker gate
+	// (_loop_pause_state), so dropping an unmodeled key here would
+	// silently clear state only the worker side understands (#1402).
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// loopModeled is loopMeta without its custom JSON methods, so
+// json.Unmarshal/Marshal on it cannot recurse into them.
+type loopModeled loopMeta
+
+// loopModeledKeys is the set of JSON keys the loopMeta struct models,
+// derived from the struct tags: a field added to the struct must never
+// also survive in Extra (that would emit the key twice), and drift in
+// the other direction would silently drop it.
+var loopModeledKeys = func() map[string]bool {
+	set := make(map[string]bool)
+	typ := reflect.TypeOf(loopMeta{})
+	for i := 0; i < typ.NumField(); i++ {
+		tag := typ.Field(i).Tag.Get("json")
+		if tag == "" || tag == "-" {
+			continue
+		}
+		if name := strings.Split(tag, ",")[0]; name != "" {
+			set[name] = true
+		}
+	}
+	return set
+}()
+
+// UnmarshalJSON decodes the modeled fields and keeps every unmodeled key
+// verbatim in Extra, so project writes preserve the loop block.
+func (m *loopMeta) UnmarshalJSON(data []byte) error {
+	var modeled loopModeled
+	if err := json.Unmarshal(data, &modeled); err != nil {
+		return err
+	}
+	*m = loopMeta(modeled)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	for key, value := range raw {
+		if !loopModeledKeys[key] {
+			if m.Extra == nil {
+				m.Extra = make(map[string]json.RawMessage)
+			}
+			m.Extra[key] = value
+		}
+	}
+	return nil
+}
+
+// MarshalJSON emits the modeled fields (struct order, exactly as before)
+// followed by the Extra keys sorted, with their stored bytes verbatim.
+// With no Extra keys the output is byte-identical to the plain struct
+// marshal, so stored JSON stays byte-stable for unchanged input.
+func (m loopMeta) MarshalJSON() ([]byte, error) {
+	base, err := json.Marshal(loopModeled(m))
+	if err != nil {
+		return nil, err
+	}
+	if len(m.Extra) == 0 {
+		return base, nil
+	}
+	keys := make([]string, 0, len(m.Extra))
+	for key := range m.Extra {
+		if !loopModeledKeys[key] {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	if len(keys) == 0 {
+		return base, nil
+	}
+	// A struct marshal is always an object: append the extra keys before
+	// the closing brace.
+	out := make([]byte, 0, len(base)+16*len(keys))
+	out = append(out, base[:len(base)-1]...)
+	// "{}" is the empty object; any other base already carries fields, so
+	// the first extra key needs a separator.
+	hasBase := len(base) > 2
+	for i, key := range keys {
+		quoted, err := json.Marshal(key)
+		if err != nil {
+			return nil, err
+		}
+		if hasBase || i > 0 {
+			out = append(out, ',')
+		}
+		out = append(out, quoted...)
+		out = append(out, ':')
+		out = append(out, m.Extra[key]...)
+	}
+	out = append(out, '}')
+	return out, nil
+}
+
+// loopPaused reports whether the loop block holds a pause source,
+// mirroring the worker-side _loop_pause_state veto: while any
+// pause_sources entry is non-empty (after trimming), dispatch stays
+// blocked even if the project itself is active.
+func loopPaused(loop *loopMeta) bool {
+	if loop == nil {
+		return false
+	}
+	for _, source := range loop.PauseSources {
+		if strings.TrimSpace(source) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // --- workflow response (LangGraph-aligned) ---
@@ -919,6 +1035,13 @@ func (h *ProjectHandler) buildWorkflow(meta *projectMeta, team string, includeTa
 	loopBlocked := false
 	if meta.Loop != nil {
 		if meta.Loop.Status == "completed" || meta.Loop.Status == "blocked" || meta.Loop.Status == "waiting_user" {
+			loopBlocked = true
+		}
+		// The pause veto is independent of the loop status: a loop paused
+		// by a human keeps its "running" status but must not dispatch
+		// until every pause source is released. Mirrors _ready_loop_nodes,
+		// which checks _loop_pause_state before computing ready nodes.
+		if !loopBlocked && loopPaused(meta.Loop) {
 			loopBlocked = true
 		}
 	}

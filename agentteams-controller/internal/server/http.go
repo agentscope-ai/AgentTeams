@@ -125,6 +125,16 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("PUT /api/v1/managers/{name}", mw.RequireAuthz(authpkg.ActionUpdate, "manager", nameFn)(http.HandlerFunc(rh.UpdateManager)))
 	mux.Handle("DELETE /api/v1/managers/{name}", mw.RequireAuthz(authpkg.ActionDelete, "manager", nameFn)(http.HandlerFunc(rh.DeleteManager)))
 
+	// --- Loop control plane (#1402: pause state lives in the project meta) ---
+	// Pause/resume project the source into the project's loop.pause_sources;
+	// the Loop CRD is only read to resolve team/project and never patched.
+	// The middleware cannot resolve loop -> team, so the handler is the real
+	// team-scope boundary (same pattern as the project endpoints).
+	looph := NewLoopHandler(deps.Client, deps.Namespace, deps.OSS)
+	loopNameFn := func(r *http.Request) string { return r.PathValue("name") }
+	mux.Handle("POST /api/v1/loops/{name}/pause", mw.RequireAuthz(authpkg.ActionUpdate, "loop", loopNameFn)(http.HandlerFunc(looph.PauseLoop)))
+	mux.Handle("POST /api/v1/loops/{name}/resume", mw.RequireAuthz(authpkg.ActionUpdate, "loop", loopNameFn)(http.HandlerFunc(looph.ResumeLoop)))
+
 	// --- Audit (read-only view of the durable audit store, #1220 §8) ---
 	audh := NewAuditHandler(deps.OSS)
 	mux.Handle("GET /api/v1/audit", mw.RequireAuthz(authpkg.ActionGet, "audit", nil)(http.HandlerFunc(audh.List)))

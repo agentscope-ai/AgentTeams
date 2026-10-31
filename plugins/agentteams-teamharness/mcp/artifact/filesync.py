@@ -139,8 +139,8 @@ def _normalize_shared_path(raw_path: str, action: str) -> tuple[str, bool]:
 
 def _resolve_filesync(arguments: dict[str, Any]) -> tuple[str, str, Path, str, bool]:
     action = str(arguments.get("action") or "").strip()
-    if action not in {"pull", "push", "list", "stat"}:
-        raise ValueError("action is required; use pull, push, stat, or list")
+    if action not in {"pull", "push", "list", "stat", "cat"}:
+        raise ValueError("action is required; use pull, push, stat, cat, or list")
     normalized, is_directory = _normalize_shared_path(str(arguments.get("path") or ""), action)
     parts = normalized.strip("/").split("/")
     kind = parts[0]
@@ -298,6 +298,11 @@ def _filesync(arguments: dict[str, Any]) -> dict[str, Any]:
         command = ["mc", "ls", "--recursive", remote]
     elif action == "stat":
         command = ["mc", "stat", remote]
+    elif action == "cat":
+        # Read one remote object without touching local state (#1402:
+        # _sync_project snapshots the project meta this way before its
+        # guarded single-file commit).  Read-only: no freshness guard.
+        command = ["mc", "cat", remote]
     elif action == "pull":
         if is_directory:
             command = ["mc", "mirror", remote, str(local), "--overwrite"]
@@ -402,6 +407,8 @@ def _filesync(arguments: dict[str, Any]) -> dict[str, Any]:
         base["entries"] = [line for line in completed.stdout.splitlines() if line.strip()]
     if action == "stat":
         base["exists"] = True
+    if action == "cat":
+        base["content"] = completed.stdout
     if guard_warning is not None:
         base["warning"] = guard_warning
     return base

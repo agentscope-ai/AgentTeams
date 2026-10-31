@@ -441,6 +441,34 @@ AgentTeams host can reach each other in the Tailscale network.
 
 ---
 
+## After upgrading, the console reports CONTROL_UI_DEVICE_IDENTITY_REQUIRED
+
+Since OpenClaw v2026.10.9 the Control UI requires a device identity for the
+gateway WebSocket handshake. Browsers provision one automatically in pure
+JavaScript — no TLS or secure context is needed, so the plain HTTP console
+keeps working unchanged.
+
+What happens depends on how you reach the console:
+
+- **Host localhost** (e.g. `http://127.0.0.1:18888`): nothing to do. The
+  manager nginx loopback proxy forwards to `127.0.0.1:18799` without
+  forwarding headers, so the gateway sees a loopback connection and pairing
+  is auto-approved after gateway auth.
+- **Container IP, LAN address, custom hostname, or a proxy that adds
+  forwarding headers**: the device needs a one-time approval. Approve the
+  pending pairing request with:
+
+  ```bash
+  docker exec agentteams-manager openclaw devices approve --latest
+  ```
+
+  or approve it in the Devices section of the console. The approval is
+  one-time — you only do it once for that entry point.
+- **Token-only programmatic WS clients**: no longer accepted — they must
+  present a device identity like any other client.
+
+---
+
 ## Element says the homeserver URL is not a valid Matrix server
 
 When Element asks for a custom homeserver, do not enter the Element Web UI URL

@@ -90,13 +90,18 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 	// Control UI handshake requires a device identity. Browsers provision one
 	// automatically in pure JavaScript (no secure context required, so plain
 	// HTTP works). The agentteams console is served through the manager nginx
-	// loopback proxy (host:18888 → 127.0.0.1:18799) with the gateway token
-	// injected into the URL hash, so real browsers present a device identity
-	// and hit the loopback direct-connection path, where pairing is
-	// auto-approved after gateway auth — no manual step. A client that reaches
-	// the gateway port directly, or through a proxy that adds forwarding
-	// headers, needs a one-time `openclaw devices approve <requestId>` (or the
-	// Devices UI). No legacy flag is carried or needed for this.
+	// loopback proxy: the host console port maps to nginx 18888 inside the
+	// manager container, which proxies to 127.0.0.1:18799. That nginx config
+	// deliberately sets no Host or X-Real-IP header, so the gateway treats a
+	// host-localhost browser as a loopback direct connection (not a proxied
+	// one) and pairing is auto-approved after gateway auth — zero manual
+	// step. The same proxy injects the gateway token into the URL hash
+	// (#token=...). Any other entry point — the container IP, a LAN address,
+	// a custom hostname, or a proxy that adds forwarding headers — needs a
+	// one-time `openclaw devices approve <requestId>` (or the Devices UI).
+	// Token-only programmatic WS clients are no longer accepted: they must
+	// present a device identity like any other client. No legacy flag is
+	// carried or needed for this.
 	//
 	// gateway.controlUi.allowedOrigins: ["*"] — the user picks the console host
 	// port at install time and may reach it via 127.0.0.1, the host's LAN IP,

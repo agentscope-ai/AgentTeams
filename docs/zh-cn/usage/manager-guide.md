@@ -247,7 +247,14 @@ curl -s http://127.0.0.1:18001/
 - **Element Web**：http://127.0.0.1:18088 — IM（宿主机直连端口），或经网关 `http://matrix-client-local.agentteams.io:18080`（需将 `*-local.agentteams.io` 解析到本机）
 - **MinIO**：嵌入式安装下 MinIO 在 **`agentteams-controller`** 内，默认不把控制台端口映射到宿主机；请用容器内 `mc`、内部 API，或自行增加访问方式
 - **OpenClaw 控制 UI**（仅 OpenClaw Manager）：http://127.0.0.1:18888
-  - 自 OpenClaw v2026.10.9 起，Control UI 要求设备身份（device identity）；经内置 nginx loopback 反代时，浏览器会自动生成设备身份且配对自动批准（无需手动步骤）。若你直连 gateway 端口，或经会添加转发头的代理访问，需一次性批准设备（`openclaw devices approve <requestId>` 或 Devices UI）。
+  - 宿主机控制台端口发布到 manager 容器的 nginx 18888，由 nginx 反向代理到 `127.0.0.1:18799` 的 gateway。代理刻意不设置转发头（Host/X-Real-IP），并将 gateway token 注入 URL hash（`#token=...`）。
+  - 自 OpenClaw v2026.10.9 起，Control UI 要求设备身份（device identity）；浏览器用纯 JavaScript 自动生成（纯 HTTP 即可，无需 TLS）。各入口行为：
+
+    | 入口 | 升级到 v2026.10.9 后首次打开 |
+    |---|---|
+    | 宿主机 localhost（如 `http://127.0.0.1:18888`） | 无缝 — gateway 看到 loopback 连接，配对自动批准（无需手动步骤） |
+    | 容器 IP / 局域网地址 / 自定义域名 | 一次性设备审批：`docker exec agentteams-manager openclaw devices approve --latest`（或在 Devices UI 中批准） |
+    | 仅带 token 的程序化 WS 客户端 | 不再被接受 — 需要设备身份，与其它客户端相同 |
 
 ## 备份与恢复
 

@@ -272,6 +272,15 @@ func (h *ResourceHandler) GetWorker(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteError(w, http.StatusNotFound, "get worker: not found")
 }
 
+// teamMemberHit is one entry of ListWorkers' per-request team index: the
+// first team (in list order) that references a worker, and that worker's
+// member ref within it — findTeamMember's first-hit result, precomputed
+// from a single Team list (issue #1475).
+type teamMemberHit struct {
+	team   *v1beta1.Team
+	member string
+}
+
 func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 	caller := authpkg.CallerFromContext(r.Context())
 	teamFilter := r.URL.Query().Get("team")
@@ -283,17 +292,37 @@ func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 		writeK8sError(w, "list workers", err)
 		return
 	}
+	// Index team membership once per request instead of once per worker
+	// (issue #1475: findTeamMember re-listed every Team CR per worker, so
+	// an N-worker list cost 1 WorkerList + N TeamList round-trips). The
+	// first team in list order referencing a worker wins, matching
+	// findTeamMember's first-hit traversal. An empty worker list skips the
+	// Team list entirely, exactly as the per-worker lookups did.
+	var teams v1beta1.TeamList
+	var teamIndex map[string]teamMemberHit
+	if len(list.Items) > 0 {
+		if err := h.client.List(r.Context(), &teams, client.InNamespace(h.namespace)); err != nil {
+			writeK8sError(w, "list workers: lookup team member", err)
+			return
+		}
+		teamIndex = make(map[string]teamMemberHit, len(teams.Items))
+		for i := range teams.Items {
+			team := &teams.Items[i]
+			for _, ref := range team.Spec.WorkerMembers {
+				if _, seen := teamIndex[ref.Name]; !seen {
+					teamIndex[ref.Name] = teamMemberHit{team: team, member: ref.Name}
+				}
+			}
+		}
+	}
 	for i := range list.Items {
 		resp := workerToResponse(&list.Items[i])
 		if !canManageWorkerEnv(r) {
 			resp.Env = nil
 			resp.EnvEditable = false
 		}
-		if team, member, ok, terr := findTeamMember(r.Context(), h.client, h.namespace, list.Items[i].Name); terr != nil {
-			writeK8sError(w, "list workers: lookup team member", terr)
-			return
-		} else if ok {
-			applyTeamMember(&resp, team, member)
+		if hit, ok := teamIndex[list.Items[i].Name]; ok {
+			applyTeamMember(&resp, hit.team, hit.member)
 		}
 		// Scoped readers (team leaders or humans) only see the workers in
 		// the teams they control; L3 (worker-scoped) humans only see their

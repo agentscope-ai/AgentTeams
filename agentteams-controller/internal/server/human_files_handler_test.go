@@ -2681,3 +2681,192 @@ func TestHumanFiles_EmptyFileIsNotATombstone(t *testing.T) {
 		t.Fatalf("GET empty file = %d %q, want 200 with an empty body", rec.Code, rec.Body.String())
 	}
 }
+
+// stallRestoreTargetOSS is a pass-through storage client that blocks on the
+// first PutObjectIfAbsent for one key until the test releases it. The
+// restore handler makes that call when it requests the restored path's
+// lease — after it has taken the trash entry lease and read the entry's
+// meta and content, before it writes anything — so the blocked window is
+// exactly the restore/purge overlap the entry lease must close.
+type stallRestoreTargetOSS struct {
+	inner   oss.StorageClient
+	key     string
+	entered chan struct{}
+	release chan struct{}
+	armed   bool
+}
+
+var _ oss.StorageClient = (*stallRestoreTargetOSS)(nil)
+
+func (s *stallRestoreTargetOSS) PutObjectIfAbsent(ctx context.Context, key string, data []byte) error {
+	if s.armed && key == s.key {
+		s.armed = false
+		close(s.entered)
+		<-s.release
+	}
+	return s.inner.PutObjectIfAbsent(ctx, key, data)
+}
+
+func (s *stallRestoreTargetOSS) ListObjectsDetailed(ctx context.Context, prefix string) ([]oss.ObjectInfo, error) {
+	return s.inner.ListObjectsDetailed(ctx, prefix)
+}
+
+func (s *stallRestoreTargetOSS) PutObject(ctx context.Context, key string, data []byte) error {
+	return s.inner.PutObject(ctx, key, data)
+}
+
+func (s *stallRestoreTargetOSS) PutObjectIfMatch(ctx context.Context, key string, data []byte, matchETag string) error {
+	return s.inner.PutObjectIfMatch(ctx, key, data, matchETag)
+}
+
+func (s *stallRestoreTargetOSS) PutObjectIfMatchWithType(ctx context.Context, key string, data []byte, contentType, matchETag string) error {
+	return s.inner.PutObjectIfMatchWithType(ctx, key, data, contentType, matchETag)
+}
+
+func (s *stallRestoreTargetOSS) PutFile(ctx context.Context, localPath, key string) error {
+	return s.inner.PutFile(ctx, localPath, key)
+}
+
+func (s *stallRestoreTargetOSS) GetObject(ctx context.Context, key string) ([]byte, error) {
+	return s.inner.GetObject(ctx, key)
+}
+
+func (s *stallRestoreTargetOSS) Stat(ctx context.Context, key string) error {
+	return s.inner.Stat(ctx, key)
+}
+
+func (s *stallRestoreTargetOSS) StatMeta(ctx context.Context, key string) (oss.ObjectMeta, error) {
+	return s.inner.StatMeta(ctx, key)
+}
+
+func (s *stallRestoreTargetOSS) DeleteObject(ctx context.Context, key string) error {
+	return s.inner.DeleteObject(ctx, key)
+}
+
+func (s *stallRestoreTargetOSS) Mirror(ctx context.Context, src, dst string, opts oss.MirrorOptions) error {
+	return s.inner.Mirror(ctx, src, dst, opts)
+}
+
+func (s *stallRestoreTargetOSS) ListObjects(ctx context.Context, prefix string) ([]string, error) {
+	return s.inner.ListObjects(ctx, prefix)
+}
+
+func (s *stallRestoreTargetOSS) DeletePrefix(ctx context.Context, prefix string) error {
+	return s.inner.DeletePrefix(ctx, prefix)
+}
+
+// TestHumanFiles_TrashRestorePurgeQuotaRace is the maintainer's round-8
+// repro: quota 10 bytes, a 6-byte file soft-deleted, and a restore paused
+// after it read the trash entry but before it took the target path lease.
+// An admin purge and a 10-byte upload that fits only if the purge freed
+// the 6 bytes must both be rejected while the restore holds the entry, and
+// the terminal state must be 6 used, never 16 against a 10-byte quota.
+func TestHumanFiles_TrashRestorePurgeQuotaRace(t *testing.T) {
+	base := ossfake.NewMemory()
+	ctx := context.Background()
+
+	stalled := &stallRestoreTargetOSS{
+		inner:   base,
+		key:     humanPathLockKey("alice", "f.txt"),
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	_, _, k8s := newHumanFilesRig(t)
+	h := NewHumanFilesHandler(k8s, "default", stalled, audit.NewClient(base))
+
+	// Quota 10 bytes; the 6-byte seed file leaves 4 bytes of headroom.
+	if rec := hfPutQuota(t, h, "alice", hfAdmin(), `{"quotaBytes":10}`); rec.Code != http.StatusOK {
+		t.Fatalf("put quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPutFile(t, h, "alice", "f.txt", hfSelf(), "012345"); rec.Code != http.StatusOK {
+		t.Fatalf("seed: %d %s", rec.Code, rec.Body.String())
+	}
+	del := httptest.NewRecorder()
+	h.deleteFile(del, hfReq(t, http.MethodDelete, "alice", "f.txt", hfSelf(), nil))
+	if del.Code != http.StatusOK {
+		t.Fatalf("delete: %d %s", del.Code, del.Body.String())
+	}
+	var delResp struct {
+		TrashID string `json:"trashId"`
+	}
+	if err := json.Unmarshal(del.Body.Bytes(), &delResp); err != nil {
+		t.Fatal(err)
+	}
+
+	// Start the restore: it stops once it has the entry lease and the
+	// entry's bytes, at the moment it requests the target path lease.
+	stalled.armed = true
+	type restoreResult struct {
+		code int
+		body string
+	}
+	restore := make(chan restoreResult, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		h.restoreTrash(rec, hfTrashReq(t, http.MethodPost, "alice", delResp.TrashID, hfSelf(), ""))
+		restore <- restoreResult{rec.Code, rec.Body.String()}
+	}()
+	select {
+	case <-stalled.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("restore never requested the target path lease")
+	}
+
+	// Purge in the window: the entry is being restored, so it must be
+	// rejected instead of freeing the bytes the restore will land.
+	purge := httptest.NewRecorder()
+	h.purgeTrash(purge, hfTrashReq(t, http.MethodDelete, "alice", delResp.TrashID, hfAdmin(), ""))
+	if purge.Code != http.StatusConflict {
+		t.Fatalf("purge during restore: got %d, want 409: %s", purge.Code, purge.Body.String())
+	}
+	var coded humanFileCodedError
+	if err := json.Unmarshal(purge.Body.Bytes(), &coded); err != nil {
+		t.Fatal(err)
+	}
+	if coded.Code != "file_busy" {
+		t.Fatalf("purge code = %q, want file_busy", coded.Code)
+	}
+
+	// A 10-byte upload fits only if the purge freed the trashed 6 bytes;
+	// while the entry is counted it must be rejected.
+	if rec := hfPutFile(t, h, "alice", "g.txt", hfSelf(), "0123456789"); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("upload in the window: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+
+	close(stalled.release)
+	select {
+	case res := <-restore:
+		if res.code != http.StatusOK {
+			t.Fatalf("restore: got %d, want 200: %s", res.code, res.body)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("restore did not finish after release")
+	}
+
+	// Terminal state: the restored 6 bytes are the entire usage, the ledger
+	// agrees, and the entry is gone — the pre-fix terminal state was 16
+	// used against a 10-byte quota with all three requests green.
+	get := httptest.NewRecorder()
+	h.getFile(get, hfReq(t, http.MethodGet, "alice", "f.txt", hfSelf(), nil))
+	if get.Code != http.StatusOK || get.Body.String() != "012345" {
+		t.Fatalf("restored file: %d %q", get.Code, get.Body.String())
+	}
+	rec := hfGetQuota(t, h, "alice", hfSelf())
+	var q humanQuotaResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &q); err != nil {
+		t.Fatal(err)
+	}
+	if q.UsedBytes != 6 {
+		t.Fatalf("live usage = %d, want 6", q.UsedBytes)
+	}
+	ledger, _, err := h.readQuotaLedger(ctx, "alice")
+	if err != nil {
+		t.Fatalf("read ledger: %v", err)
+	}
+	if ledger.UsedBytes != 6 {
+		t.Fatalf("ledger usage = %d, want 6", ledger.UsedBytes)
+	}
+	if ids := hfTrashIDs(t, base, "alice"); len(ids) != 0 {
+		t.Fatalf("trash entry survived restore: %v", ids)
+	}
+}

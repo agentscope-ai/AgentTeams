@@ -73,5 +73,7 @@ jobs:
           HUMAN_FILES_S3_SECRET_KEY: minioadmin
           HUMAN_FILES_S3_BUCKET: human-files-test
         run: |
-          go test ./internal/server -run TestHumanFiles_S3Lifecycle -count=1 -v
+          # TestHumanFiles_S3 matches both S3-gated regressions in the server
+          # package: the lifecycle and the trash restore/purge quota race.
+          go test ./internal/server -run 'TestHumanFiles_S3' -count=1 -v
           go test ./internal/oss -run TestS3FallbackLifecycle -count=1 -v

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 )
@@ -107,5 +108,154 @@ func TestHumanFiles_S3Lifecycle(t *testing.T) {
 	h.getFile(back, hfReq(t, http.MethodGet, "alice", "s3.txt", hfSelf(), nil))
 	if back.Code != http.StatusOK || back.Body.String() != "hello-s3" {
 		t.Fatalf("GET after restore = %d %q", back.Code, back.Body.String())
+	}
+}
+
+// TestHumanFiles_S3TrashRestorePurgeQuotaRace runs the trash restore/purge
+// quota race against a real S3-compatible backend: the same sequence as
+// TestHumanFiles_TrashRestorePurgeQuotaRace, with the stall pass-through
+// wrapping the real client so the lease protocol runs on MinIO/RustFS
+// conditional writes instead of the in-memory store.
+//
+// Skipped unless HUMAN_FILES_S3_ENDPOINT is set (the same gate as
+// TestHumanFiles_S3Lifecycle; the CI job selects both with -run
+// 'TestHumanFiles_S3').
+func TestHumanFiles_S3TrashRestorePurgeQuotaRace(t *testing.T) {
+	endpoint := os.Getenv("HUMAN_FILES_S3_ENDPOINT")
+	if endpoint == "" {
+		t.Skip("set HUMAN_FILES_S3_ENDPOINT/HUMAN_FILES_S3_ACCESS_KEY/HUMAN_FILES_S3_SECRET_KEY/HUMAN_FILES_S3_BUCKET to run the native backend restore/purge quota race")
+	}
+	access := os.Getenv("HUMAN_FILES_S3_ACCESS_KEY")
+	secret := os.Getenv("HUMAN_FILES_S3_SECRET_KEY")
+	bucket := os.Getenv("HUMAN_FILES_S3_BUCKET")
+	if access == "" || secret == "" || bucket == "" {
+		t.Fatal("HUMAN_FILES_S3_ACCESS_KEY, HUMAN_FILES_S3_SECRET_KEY and HUMAN_FILES_S3_BUCKET are required")
+	}
+
+	alias := "humanfilestest"
+	client := oss.NewMinIOClient(oss.Config{
+		Endpoint:      endpoint,
+		AccessKey:     access,
+		SecretKey:     secret,
+		Alias:         alias,
+		Bucket:        bucket,
+		StoragePrefix: alias + "/" + bucket,
+	})
+	ctx := context.Background()
+
+	stalled := &stallRestoreTargetOSS{
+		inner:   client,
+		key:     humanPathLockKey("alice", "f.txt"),
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	h, _, _ := newHumanFilesRig(t)
+	h.oss = stalled
+
+	// Quota 10 bytes; the 6-byte seed file leaves 4 bytes of headroom.
+	if rec := hfPutQuota(t, h, "alice", hfAdmin(), `{"quotaBytes":10}`); rec.Code != http.StatusOK {
+		t.Fatalf("put quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPutFile(t, h, "alice", "f.txt", hfSelf(), "012345"); rec.Code != http.StatusOK {
+		t.Fatalf("seed: %d %s", rec.Code, rec.Body.String())
+	}
+	del := httptest.NewRecorder()
+	h.deleteFile(del, hfReq(t, http.MethodDelete, "alice", "f.txt", hfSelf(), nil))
+	if del.Code != http.StatusOK {
+		t.Fatalf("delete: %d %s", del.Code, del.Body.String())
+	}
+	var delResp struct {
+		TrashID string `json:"trashId"`
+	}
+	if err := json.Unmarshal(del.Body.Bytes(), &delResp); err != nil {
+		t.Fatal(err)
+	}
+
+	// Start the restore: it stops once it has the entry lease and the
+	// entry's bytes, at the moment it requests the target path lease.
+	stalled.armed = true
+	type restoreResult struct {
+		code int
+		body string
+	}
+	restore := make(chan restoreResult, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		h.restoreTrash(rec, hfTrashReq(t, http.MethodPost, "alice", delResp.TrashID, hfSelf(), ""))
+		restore <- restoreResult{rec.Code, rec.Body.String()}
+	}()
+	select {
+	case <-stalled.entered:
+	case <-time.After(60 * time.Second):
+		t.Fatal("restore never requested the target path lease")
+	}
+
+	// Purge in the window: the entry is being restored, so it must be
+	// rejected instead of freeing the bytes the restore will land.
+	purge := httptest.NewRecorder()
+	h.purgeTrash(purge, hfTrashReq(t, http.MethodDelete, "alice", delResp.TrashID, hfAdmin(), ""))
+	if purge.Code != http.StatusConflict {
+		t.Fatalf("purge during restore: got %d, want 409: %s", purge.Code, purge.Body.String())
+	}
+	var coded humanFileCodedError
+	if err := json.Unmarshal(purge.Body.Bytes(), &coded); err != nil {
+		t.Fatal(err)
+	}
+	if coded.Code != "file_busy" {
+		t.Fatalf("purge code = %q, want file_busy", coded.Code)
+	}
+
+	// A 10-byte upload fits only if the purge freed the trashed 6 bytes;
+	// while the entry is counted it must be rejected.
+	if rec := hfPutFile(t, h, "alice", "g.txt", hfSelf(), "0123456789"); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("upload in the window: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+
+	close(stalled.release)
+	select {
+	case res := <-restore:
+		if res.code != http.StatusOK {
+			t.Fatalf("restore: got %d, want 200: %s", res.code, res.body)
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatal("restore did not finish after release")
+	}
+
+	// Terminal state: the restored 6 bytes are the entire usage, the ledger
+	// agrees, and the entry is gone — the pre-fix terminal state was 16
+	// used against a 10-byte quota with all three requests green.
+	get := httptest.NewRecorder()
+	h.getFile(get, hfReq(t, http.MethodGet, "alice", "f.txt", hfSelf(), nil))
+	if get.Code != http.StatusOK || get.Body.String() != "012345" {
+		t.Fatalf("restored file: %d %q", get.Code, get.Body.String())
+	}
+	rec := hfGetQuota(t, h, "alice", hfSelf())
+	var q humanQuotaResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &q); err != nil {
+		t.Fatal(err)
+	}
+	if q.UsedBytes != 6 {
+		t.Fatalf("live usage = %d, want 6", q.UsedBytes)
+	}
+	ledger, _, err := h.readQuotaLedger(ctx, "alice")
+	if err != nil {
+		t.Fatalf("read ledger: %v", err)
+	}
+	if ledger.UsedBytes != 6 {
+		t.Fatalf("ledger usage = %d, want 6", ledger.UsedBytes)
+	}
+	list := httptest.NewRecorder()
+	h.listTrash(list, hfTrashReq(t, http.MethodGet, "alice", "", hfSelf(), ""))
+	if list.Code != http.StatusOK {
+		t.Fatalf("list trash: %d %s", list.Code, list.Body.String())
+	}
+	var trashResp struct {
+		Entries []trashEntry `json:"entries"`
+	}
+	if err := json.Unmarshal(list.Body.Bytes(), &trashResp); err != nil {
+		t.Fatal(err)
+	}
+	if len(trashResp.Entries) != 0 {
+		t.Fatalf("trash entry survived restore: %+v", trashResp.Entries)
 	}
 }

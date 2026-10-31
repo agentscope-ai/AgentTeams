@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	audit "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/audit"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 )
 
@@ -265,5 +266,153 @@ func TestHumanFiles_S3TrashRestorePurgeQuotaRace(t *testing.T) {
 	}
 	if len(trashResp.Entries) != 0 {
 		t.Fatalf("trash entry survived restore: %+v", trashResp.Entries)
+	}
+}
+
+// TestHumanFiles_S3PurgeAfterLeaseExpiryQuotaRace runs the stale-purge
+// quota bypass after lease expiry against a real S3-compatible backend:
+// the same sequence as TestHumanFiles_TrashPurgeAfterLeaseExpiryQuotaRace,
+// with the stall pass-through wrapping the real client so the lease
+// protocol, the unconditional DeletePrefix and the conservative ledger
+// accounting all run on MinIO/RustFS instead of the in-memory store.
+//
+// Skipped unless HUMAN_FILES_S3_ENDPOINT is set (the same gate as the
+// other S3 tests; the CI job selects it with -run 'TestHumanFiles_S3').
+func TestHumanFiles_S3PurgeAfterLeaseExpiryQuotaRace(t *testing.T) {
+	endpoint := os.Getenv("HUMAN_FILES_S3_ENDPOINT")
+	if endpoint == "" {
+		t.Skip("set HUMAN_FILES_S3_ENDPOINT/HUMAN_FILES_S3_ACCESS_KEY/HUMAN_FILES_S3_SECRET_KEY/HUMAN_FILES_S3_BUCKET to run the native backend stale-purge race")
+	}
+	access := os.Getenv("HUMAN_FILES_S3_ACCESS_KEY")
+	secret := os.Getenv("HUMAN_FILES_S3_SECRET_KEY")
+	bucket := os.Getenv("HUMAN_FILES_S3_BUCKET")
+	if access == "" || secret == "" || bucket == "" {
+		t.Fatal("HUMAN_FILES_S3_ACCESS_KEY, HUMAN_FILES_S3_SECRET_KEY and HUMAN_FILES_S3_BUCKET are required")
+	}
+
+	alias := "humanfilestest"
+	client := oss.NewMinIOClient(oss.Config{
+		Endpoint:      endpoint,
+		AccessKey:     access,
+		SecretKey:     secret,
+		Alias:         alias,
+		Bucket:        bucket,
+		StoragePrefix: alias + "/" + bucket,
+	})
+	ctx := context.Background()
+
+	// The lifecycle regression and the round-8 race share this bucket and
+	// human and leave objects behind; start from a clean area so the quota
+	// gate only sees this test's bytes (the in-memory variant starts empty).
+	_ = client.DeletePrefix(ctx, humanFilesPrefix("alice"))
+	_ = client.DeletePrefix(ctx, humanTrashPrefix("alice"))
+	_ = client.DeleteObject(ctx, humanQuotaLedgerKey("alice"))
+
+	stalled := &stallPurgeContentStatOSS{
+		inner:   client,
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	_, _, k8s := newHumanFilesRig(t)
+	h1 := NewHumanFilesHandler(k8s, "default", stalled, audit.NewClient(client))
+	h1.pathLockTTL = 2 * time.Second // real, short TTL for the test
+	h2 := NewHumanFilesHandler(k8s, "default", client, audit.NewClient(client))
+
+	// Quota 10 bytes; the 6-byte seed file leaves 4 bytes of headroom.
+	if rec := hfPutQuota(t, h1, "alice", hfAdmin(), `{"quotaBytes":10}`); rec.Code != http.StatusOK {
+		t.Fatalf("put quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPutFile(t, h1, "alice", "f.txt", hfSelf(), "012345"); rec.Code != http.StatusOK {
+		t.Fatalf("seed: %d %s", rec.Code, rec.Body.String())
+	}
+	del := httptest.NewRecorder()
+	h1.deleteFile(del, hfReq(t, http.MethodDelete, "alice", "f.txt", hfSelf(), nil))
+	if del.Code != http.StatusOK {
+		t.Fatalf("delete: %d %s", del.Code, del.Body.String())
+	}
+	var delResp struct {
+		TrashID string `json:"trashId"`
+	}
+	if err := json.Unmarshal(del.Body.Bytes(), &delResp); err != nil {
+		t.Fatal(err)
+	}
+
+	// Start the purge: it stops on the second stat of the entry's content,
+	// at its commit boundary — after the meta read (size captured), before
+	// the DeletePrefix (unfixed) / before the fence (fixed).
+	stalled.key = humanTrashPrefix("alice") + delResp.TrashID + "/content"
+	stalled.armed = true
+	type purgeResult struct {
+		code int
+		body string
+	}
+	purge := make(chan purgeResult, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		h1.purgeTrash(rec, hfTrashReq(t, http.MethodDelete, "alice", delResp.TrashID, hfAdmin(), ""))
+		purge <- purgeResult{rec.Code, rec.Body.String()}
+	}()
+	select {
+	case <-stalled.entered:
+	case <-time.After(60 * time.Second):
+		t.Fatal("purge never reached its commit boundary")
+	}
+
+	// Let the purge's entry lease expire for real, then restore the entry
+	// from a second handler: it takes over the expired lease, lands the
+	// bytes in files/ and removes the entry.
+	time.Sleep(2200 * time.Millisecond)
+	restore := httptest.NewRecorder()
+	h2.restoreTrash(restore, hfTrashReq(t, http.MethodPost, "alice", delResp.TrashID, hfSelf(), ""))
+	if restore.Code != http.StatusOK {
+		t.Fatalf("restore after lease expiry: got %d, want 200: %s", restore.Code, restore.Body.String())
+	}
+
+	// Release the stale purge: it must abort at the fence without
+	// deleting or deducting.
+	close(stalled.release)
+	var res purgeResult
+	select {
+	case res = <-purge:
+	case <-time.After(60 * time.Second):
+		t.Fatal("stale purge did not finish after release")
+	}
+	if res.code != http.StatusConflict {
+		t.Fatalf("stale purge resume: got %d, want 409 lease_lost: %s", res.code, res.body)
+	}
+	var coded humanFileCodedError
+	if err := json.Unmarshal([]byte(res.body), &coded); err != nil {
+		t.Fatal(err)
+	}
+	if coded.Code != "lease_lost" {
+		t.Fatalf("stale purge code = %q, want lease_lost", coded.Code)
+	}
+
+	// Terminal state: the restored 6 bytes are the entire usage, the
+	// ledger agrees, and a 10-byte upload must not fit — the unfixed
+	// terminal state is 16 used against a 10-byte quota with all three
+	// requests green.
+	get := httptest.NewRecorder()
+	h1.getFile(get, hfReq(t, http.MethodGet, "alice", "f.txt", hfSelf(), nil))
+	if get.Code != http.StatusOK || get.Body.String() != "012345" {
+		t.Fatalf("restored file: %d %q", get.Code, get.Body.String())
+	}
+	rec := hfGetQuota(t, h1, "alice", hfSelf())
+	var q humanQuotaResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &q); err != nil {
+		t.Fatal(err)
+	}
+	if q.UsedBytes != 6 {
+		t.Fatalf("live usage = %d, want 6", q.UsedBytes)
+	}
+	ledger, _, err := h1.readQuotaLedger(ctx, "alice")
+	if err != nil {
+		t.Fatalf("read ledger: %v", err)
+	}
+	if ledger.UsedBytes != 6 {
+		t.Fatalf("ledger usage = %d, want 6", ledger.UsedBytes)
+	}
+	if rec := hfPutFile(t, h1, "alice", "g.txt", hfSelf(), "0123456789"); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("upload after the stale purge: got %d, want 413: %s", rec.Code, rec.Body.String())
 	}
 }

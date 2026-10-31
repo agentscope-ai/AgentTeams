@@ -284,7 +284,7 @@ func (g *Generator) buildMatrixChannelConfig(req WorkerConfigRequest, serverURL,
 		"groupPolicy":    "allowlist",
 		"groupAllowFrom": groupAllowFrom,
 		"groups": map[string]interface{}{
-			"*": map[string]interface{}{"allow": true, "requireMention": true},
+			"*": map[string]interface{}{"requireMention": true},
 		},
 		// Matrix v2026.10.6: nested streaming contract; editable preview while
 		// the LLM streams, one message per assistant block.

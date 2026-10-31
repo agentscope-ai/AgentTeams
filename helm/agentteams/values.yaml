@@ -95,8 +95,13 @@ gateway:
 # provider=oss + mode=existing → external Alibaba Cloud OSS bucket; the
 #   controller obtains STS credentials from agentteams-credential-provider
 #   on every mc invocation and does NOT create buckets/users/policies.
+# provider=s3 + mode=existing → external S3-compatible backend (e.g.
+#   RustFS) with fixed credentials. The backend must expose the
+#   MinIO-compatible admin API: the controller creates the bucket and
+#   manages per-worker users/policies via mc (verified against RustFS
+#   1.0.3; see docs/design/storage-external-s3-backend.md).
 storage:
-  provider: minio             # minio | oss
+  provider: minio             # minio | oss | s3
   mode: managed               # managed | existing
   bucket: "agentteams-storage"
   # Required when provider=oss:
@@ -105,6 +110,16 @@ storage:
     # Explicit endpoint override. Usually unset — the credential-provider
     # sidecar returns the correct endpoint as part of each STS response.
     endpoint: ""
+  # Required when provider=s3:
+  s3:
+    endpoint: ""              # e.g. "http://rustfs:9000"
+    # Root/admin credentials of the external backend. Provide either
+    # existingSecret (preferred) or inline accessKey/secretKey (dev only).
+    existingSecret: ""        # Secret name holding the keys below
+    accessKey: ""             # inline (dev only; prefer existingSecret)
+    secretKey: ""             # inline (dev only; prefer existingSecret)
+    accessKeySecretKey: "accesskey"
+    secretKeySecretKey: "secretkey"
   minio:
     image:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/minio

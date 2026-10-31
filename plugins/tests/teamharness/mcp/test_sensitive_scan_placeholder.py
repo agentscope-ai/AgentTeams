@@ -3,10 +3,16 @@
 A value wrapped in a single pair of angle brackets is a documentation
 template ONLY when it carries an explicit placeholder marker
 (``<YOUR_API_KEY>``, ``<paste-token-here>``, ``<token:your_key_here>``).
+The same rule covers the markdown wrapper families — a single backtick
+code span (`` `YOUR_API_KEY` ``) and markdown bold
+(``**PASTE_TOKEN_HERE**``) — because the Authorization header pattern
+captures raw non-space runs and documentation commonly wraps
+placeholders in any of the three.
+
 Brackets around credential-shaped content stay flagged: neither the
 kebab shape alone (``<sk-abcdefghijklmnopqrstuvwxyz>``) nor arbitrary
-label:value content (``<token:abc123def4567890>``) is exempt. Real
-credential values must still be flagged.
+label:value content (``<token:abc123def4567890>``) is exempt, in any
+wrapper family. Real credential values must still be flagged.
 """
 
 from __future__ import annotations
@@ -49,6 +55,26 @@ def test_placeholder_values_are_not_flagged(tmp_path: Path, content: str) -> Non
 @pytest.mark.parametrize(
     "content",
     [
+        # Markdown code-span templates carry the same explicit markers.
+        "Authorization: Bearer `YOUR_API_KEY`",
+        "Authorization: Basic `paste-token-here`",
+        "curl -H 'Authorization: Bearer `your-jev-api-key`' https://api.example.test/v1",
+        # Markdown-bold templates, with and without surrounding quotes.
+        "Authorization: Bearer **PASTE_TOKEN_HERE**",
+        "Authorization: Basic **your-api-key**",
+        "Authorization: Bearer '**YOUR_KEY**'",
+    ],
+)
+def test_markdown_placeholder_wrappers_are_not_flagged(
+    tmp_path: Path,
+    content: str,
+) -> None:
+    assert _scan(tmp_path, content) is False, content
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
         "Authorization: Bearer sk-a1b2c3d4e5f607182930415263748596",
         "authorization: basic dXNlcjpwYXNzd29yZA==",
         "api_key = a1b2c3d4e5f607182930415263748596",
@@ -74,6 +100,27 @@ def test_real_credential_values_still_flagged(tmp_path: Path, content: str) -> N
     ],
 )
 def test_bracketed_credential_shapes_still_flagged(
+    tmp_path: Path,
+    content: str,
+) -> None:
+    assert _scan(tmp_path, content) is True, content
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        # Real credentials wrapped in markdown are still credentials.
+        "Authorization: Bearer `sk-a1b2c3d4e5f607182930415263748596`",
+        "Authorization: Basic `dXNlcjpwYXNzd29yZA==`",
+        "Authorization: Bearer **sk-a1b2c3d4e5f607182930415263748596**",
+        "Authorization: Basic **dXNlcjpwYXNzd29yZA==**",
+        # Shape alone is never enough in the new families either.
+        "Authorization: Bearer `token:abc123def4567890`",
+        "Authorization: Basic `basic-token`",
+        "Authorization: Bearer **token:abc123def4567890**",
+    ],
+)
+def test_markdown_wrapped_credential_shapes_still_flagged(
     tmp_path: Path,
     content: str,
 ) -> None:

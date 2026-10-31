@@ -353,6 +353,19 @@ func (a *App) initInfraClients(_ context.Context) error {
 		mcClient = mcClient.WithCredentialSource(&ossControllerCredSource{tm: tm})
 		a.oss = mcClient
 		logger.Info("storage provider: oss (external)", "bucket", cfg.OSSBucket)
+	} else if cfg.UsesExternalS3() {
+		// External S3-compatible backend (e.g. RustFS): fixed credentials
+		// from env, and — unlike external OSS — the MinIO-compatible admin
+		// API is available, so the controller keeps managing per-worker
+		// users/policies via mc.
+		if cfg.OSSConfig().Endpoint == "" {
+			return fmt.Errorf("s3 provider requires AGENTTEAMS_FS_ENDPOINT to be set")
+		}
+		a.oss = mcClient
+		if cfg.HasMinIOAdmin() {
+			a.ossAdmin = oss.NewMinIOAdminClient(cfg.OSSConfig())
+		}
+		logger.Info("storage provider: s3 (external)", "bucket", cfg.OSSBucket)
 	} else {
 		a.oss = mcClient
 		logger.Info("storage provider: minio (embedded)", "bucket", cfg.OSSBucket)

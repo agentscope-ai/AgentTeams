@@ -402,6 +402,17 @@ type ChannelPolicySpec struct {
 
 type ChannelsSpec struct {
 	DingTalk *DingTalkChannelSpec `json:"dingtalk,omitempty"`
+	Matrix   *MatrixChannelSpec   `json:"matrix,omitempty"`
+}
+
+// MatrixChannelSpec holds display flags for the worker's Matrix channel.
+// Declarative source of truth for Matrix display flags; runtime channel-API
+// writes are not persisted to the CRD and survive only until this section
+// is set. When the section is present, unset flags default to false
+// (hidden), mirroring DingTalk semantics.
+type MatrixChannelSpec struct {
+	ShowThinking  bool `json:"showThinking,omitempty"`
+	ShowToolCalls bool `json:"showToolCalls,omitempty"`
 }
 
 type DingTalkChannelSpec struct {
@@ -817,4 +828,98 @@ type ManagerList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Manager `json:"items"`
+}
+
+// LoopType constants define how a Loop is triggered.
+const (
+	LoopTypeCron     = "cron"     // schedule is a cron expression
+	LoopTypeInterval = "interval" // schedule is a seconds count
+	LoopTypeEvent    = "event"    // triggered by external events; schedule ignored
+)
+
+// LoopState constants define the observed lifecycle state of a Loop.
+const (
+	LoopStatePending   = "pending"   // accepted, not yet observed by the reconciler
+	LoopStateActive    = "active"    // iterations are being scheduled/executed
+	LoopStatePaused    = "paused"    // mirrors spec.paused while true
+	LoopStateCompleted = "completed" // all iterations finished within maxIterations
+	LoopStateFailed    = "failed"    // a fatal error stopped the loop
+)
+
+// +genclient
+// +kubebuilder:subresource:status
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+// Loop represents a scheduled or event-driven iteration over a task. It is
+// the first-class K8s resource that mirrors the runtime's self-managed loop
+// (plan_loop / record_loop_iteration) so the control plane can observe loop
+// progress via `kubectl get loops`.
+//
+// Writers: Spec is written by users or the controller (desired state);
+// Status is written only by the loop reconciler (an independent goroutine,
+// not a separate controller instance). This type is the resource definition
+// only — the reconciler that fills Status is implemented separately.
+type Loop struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              LoopSpec   `json:"spec"`
+	Status            LoopStatus `json:"status,omitempty"`
+}
+
+type LoopSpec struct {
+	// TaskID is the id of the task this loop iterates over.
+	TaskID string `json:"taskID"`
+	// TeamName is the owning Team. Empty for standalone loops not tied
+	// to a Team.
+	TeamName string `json:"teamName,omitempty"`
+	// LoopType selects the trigger: "cron" (schedule is a cron expression),
+	// "interval" (schedule is a seconds count, e.g. "300"), or "event"
+	// (external wakeups; schedule is ignored).
+	// +kubebuilder:validation:Enum=cron;interval;event
+	LoopType string `json:"loopType"`
+	// Schedule is the trigger expression, interpreted by LoopType: a cron
+	// expression for "cron", a seconds count for "interval", ignored for
+	// "event". Written by the user; validated by the reconciler.
+	Schedule string `json:"schedule,omitempty"`
+	// TimeoutSeconds bounds one iteration. Nil = no per-iteration timeout.
+	TimeoutSeconds *int32 `json:"timeoutSeconds,omitempty"`
+	// MaxIterations caps the total number of iterations. Nil or 0 =
+	// unlimited.
+	MaxIterations *int32 `json:"maxIterations,omitempty"`
+	// Paused is the desired pause state (control-plane action, not a
+	// decision request). While true the reconciler holds the loop at
+	// status.state "paused" and skips scheduled iterations.
+	Paused bool `json:"paused,omitempty"`
+}
+
+// LoopStatus is the observed state of a Loop. Written only by the loop
+// reconciler; every field must be derivable from spec plus runtime
+// observation so the reconciler can mirror it idempotently.
+type LoopStatus struct {
+	// State is the observed lifecycle state: pending / active / paused /
+	// completed / failed.
+	State string `json:"state,omitempty"`
+	// CurrentIteration counts iterations started so far (0 before the
+	// first).
+	CurrentIteration int32 `json:"currentIteration,omitempty"`
+	// NextRunAt is when the next iteration is due, if any.
+	NextRunAt *metav1.Time `json:"nextRunAt,omitempty"`
+	// LastRunAt is when the most recent iteration started.
+	LastRunAt *metav1.Time `json:"lastRunAt,omitempty"`
+	// LastResult carries the terminal result or error message of the last
+	// iteration.
+	LastResult string `json:"lastResult,omitempty"`
+	// Conditions tracks typed loop conditions (e.g. Paused, Completed,
+	// Failed) following metav1.Condition semantics.
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	// ObservedGeneration is the metadata.generation last reconciled.
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+type LoopList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []Loop `json:"items"`
 }

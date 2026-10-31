@@ -20,6 +20,10 @@ worker_sync_mark_remote_pull() {
     touch "${state_dir}/last-successful-push"
 }
 
+# NOTE: `.coding-cli` is intentionally NOT excluded. It is the persistent
+# coding-CLI install prefix ($HOME/.coding-cli) written by the management tab/
+# API; excluding it would make a worker recreation lose the CLI. node_modules
+# under it is part of the synced payload.
 worker_sync_should_push() {
     local relative_path="$1"
 

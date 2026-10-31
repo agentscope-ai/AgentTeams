@@ -109,6 +109,24 @@ ln -sfn "${HOME}/skills" "${HOME}/.agents/skills"
 
 log "Worker config pulled successfully"
 
+# Replace historical tools.elevated.allowFrom.matrix=["*"] with this
+# worker's existing Matrix allowlist. tools is local-first on sync, so
+# a leftover wildcard would otherwise survive a tighter MinIO config.
+if jq -e '.tools.elevated.allowFrom.matrix == ["*"]' "${WORKSPACE}/openclaw.json" >/dev/null 2>&1 \
+    && jq -e '((.channels.matrix.groupAllowFrom // .channels.matrix.dm.allowFrom // []) | length) > 0' \
+        "${WORKSPACE}/openclaw.json" >/dev/null 2>&1; then
+    if jq '
+        (.channels.matrix.groupAllowFrom // .channels.matrix.dm.allowFrom // []) as $ids
+        | .tools.elevated.allowFrom.matrix = $ids
+    ' "${WORKSPACE}/openclaw.json" > /tmp/openclaw-elevated.json; then
+        mv /tmp/openclaw-elevated.json "${WORKSPACE}/openclaw.json"
+        log "Migrated tools.elevated.allowFrom.matrix from wildcard to groupAllowFrom/dm.allowFrom"
+    else
+        rm -f /tmp/openclaw-elevated.json
+        log "WARNING: failed to migrate tools.elevated.allowFrom.matrix; leaving openclaw.json unchanged"
+    fi
+fi
+
 # ============================================================
 # Optional: ensure diagnostics-otel npm dependencies are present
 # When CMS metrics are enabled, generate-worker-config.sh injects

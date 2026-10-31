@@ -810,6 +810,23 @@ jobs:
       - name: Run the LLM-smoke regression suite (stubbed docker/curl)
         run: bash install/tests/verify-llm-regressions.sh
 
+  install-upgrade-cli:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the upgrade CLI regression suite (stubbed docker/agt)
+        run: bash install/tests/test-upgrade-cli.sh
+
+      - name: Run the live boundary-preservation regression (real engine)
+        run: |
+          if docker info >/dev/null 2>&1; then
+            bash install/tests/test-upgrade-preserve-live.sh
+          else
+            echo "SKIP live boundary test (no docker)"
+          fi
+
 # ============================================================
 # Offline pre-flight suite: qwenpaw upgrade checker (AgentTeams#1341)
 # No Docker or network needed - builds miniature trees and a fake wheel.

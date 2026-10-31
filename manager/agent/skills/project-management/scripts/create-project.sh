@@ -193,6 +193,53 @@ else
     log "  WARNING: Could not obtain admin token — admin will need to accept invite manually"
 fi
 
+# Per-worker auto-join outcome ledger (#1390). Rows are
+# "<worker>\t<status>\t<detail>" with status one of joined|pending|failed,
+# so the caller can surface a result instead of only a warning.
+WORKER_JOIN_STATUS_ROWS=""
+
+_record_worker_join() { # _record_worker_join <worker> <status> <detail>
+    WORKER_JOIN_STATUS_ROWS="${WORKER_JOIN_STATUS_ROWS}${1}"$'\t'"${2}"$'\t'"${3}"$'\n'
+}
+
+_worker_join_summary() { # prints "joined=N pending=N failed=N"
+    local joined=0 pending=0 failed=0 status
+    while IFS=$'\t' read -r _worker status _detail; do
+        case "${status}" in
+            joined) joined=$((joined + 1)) ;;
+            pending) pending=$((pending + 1)) ;;
+            failed) failed=$((failed + 1)) ;;
+        esac
+    done <<< "${WORKER_JOIN_STATUS_ROWS}"
+    printf 'joined=%s pending=%s failed=%s' "${joined}" "${pending}" "${failed}"
+}
+
+_write_worker_join_status() { # _write_worker_join_status <path>
+    local out="${1:-/tmp/agentteams-project-join-status.json}"
+    local tmp="${out}.tmp"
+    {
+        printf '{\n'
+        printf '  "room_id": %s,\n' "$(printf '%s' "${ROOM_ID}" | jq -R .)"
+        printf '  "generated_at": %s,\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ | jq -R .)"
+        printf '  "summary": %s,\n' "$(_worker_join_summary | jq -R .)"
+        printf '  "workers": [\n'
+        local first=1 worker status detail
+        while IFS=$'\t' read -r worker status detail; do
+            [ -z "${worker}" ] && continue
+            [ "${first}" -eq 1 ] || printf ',\n'
+            first=0
+            printf '    {"worker": %s, "status": %s, "detail": %s}' \
+                "$(printf '%s' "${worker}" | jq -R .)" \
+                "$(printf '%s' "${status}" | jq -R .)" \
+                "$(printf '%s' "${detail}" | jq -R .)"
+        done <<< "${WORKER_JOIN_STATUS_ROWS}"
+        printf '\n  ]\n}\n'
+    } > "${tmp}" && mv "${tmp}" "${out}" && log "  Worker join status written to ${out}"
+}
+
+# Returns 0 = joined, 2 = pending (no credentials/token), 3 = join failed.
+# The ledger above records the detail either way, so the caller can report
+# `joined/pending/failed` instead of relying on a log line alone (#1390).
 _worker_auto_join() {
     local worker="$1"
     local room_id="$2"
@@ -203,7 +250,8 @@ _worker_auto_join() {
     local WORKER_MATRIX_TOKEN=""
 
     if [ -z "${worker}" ] || [ -z "${room_id}" ]; then
-        return 0
+        _record_worker_join "${worker:-?}" "pending" "invalid-arguments"
+        return 2
     fi
 
     if [ -f "${creds_file}" ]; then
@@ -229,18 +277,28 @@ _worker_auto_join() {
 
     if [ -z "${worker_token}" ]; then
         log "  WARNING: Could not obtain Matrix token for worker ${worker} — worker will need to accept project room invite"
-        return 0
+        _record_worker_join "${worker}" "pending" "no-credentials"
+        return 2
     fi
 
     room_enc=$(echo "${room_id}" | sed 's/!/%21/g')
-    if curl -sf -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${room_enc}/join" \
+    local join_http
+    join_http=$(curl -s -o /dev/null -w '%{http_code}' -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${room_enc}/join" \
         -H "Authorization: Bearer ${worker_token}" \
         -H 'Content-Type: application/json' \
-        -d '{}' > /dev/null 2>&1; then
-        log "  Worker ${worker} auto-joined project room"
-    else
-        log "  WARNING: Worker ${worker} failed to auto-join project room"
-    fi
+        -d '{}' 2>/dev/null || true)
+    case "${join_http}" in
+        200|201)
+            log "  Worker ${worker} auto-joined project room"
+            _record_worker_join "${worker}" "joined" "http-${join_http}"
+            return 0
+            ;;
+        *)
+            log "  WARNING: Worker ${worker} failed to auto-join project room (http ${join_http:-no-response})"
+            _record_worker_join "${worker}" "failed" "http-${join_http:-no-response}"
+            return 3
+            ;;
+    esac
 }
 
 # Builds the project-room member list (workers + --grant-admin humans) as a
@@ -294,8 +352,14 @@ _patch_copaw_project_room_config() {
 for worker in "${WORKER_ARR[@]}"; do
     worker=$(echo "${worker}" | tr -d ' ')
     [ -z "${worker}" ] && continue
-    _worker_auto_join "${worker}" "${ROOM_ID}"
+    # set -e is on: a pending/failed join must not abort room creation, so
+    # the per-worker outcome is recorded and reported instead (#1390).
+    _worker_auto_join "${worker}" "${ROOM_ID}" || true
 done
+if [ -n "${WORKER_JOIN_STATUS_ROWS}" ]; then
+    log "Worker auto-join: $(_worker_join_summary)"
+    _write_worker_join_status "${AGENTTEAMS_JOIN_STATUS_FILE:-/tmp/agentteams-project-join-status.json}"
+fi
 
 # ============================================================
 # Step 3: Add Workers to Manager's groupAllowFrom

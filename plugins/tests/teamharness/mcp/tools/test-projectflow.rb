@@ -110,6 +110,7 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
                 return
             matrix["events"].append({
                 "path": parsed.path,
+                "txn": parsed.path.rsplit("/", 1)[-1],
                 "auth": self.headers.get("Authorization"),
                 "content": json.loads(body.decode("utf-8") or "{}"),
             })
@@ -265,13 +266,26 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
         raise AssertionError(f"project artifact missing parent event reference: {project_artifact!r}")
     if not matrix["uploads"] or matrix["uploads"][-1].get("filename") != "matrix-dm-project-project-result.md":
         raise AssertionError(f"project result upload missing: {matrix['uploads']!r}")
-    project_file_event = matrix["events"][-1]["content"]
+    project_file_record = matrix["events"][-2]
+    project_file_event = project_file_record["content"]
     if project_file_event.get("msgtype") != "m.file" or project_file_event.get("body") != "matrix-dm-project-project-result.md":
         raise AssertionError(f"project result event mismatch: {project_file_event!r}")
     if project_file_event.get("m.relates_to") != {"rel_type": "com.agentteams.attachment", "event_id": "$project-parent"}:
         raise AssertionError(f"project result event missing attachment relation: {project_file_event!r}")
     if not project_file_event.get("url") or not (project_file_event.get("info") or {}).get("size"):
         raise AssertionError(f"project result event missing file metadata: {project_file_event!r}")
+    # Every publish is followed by an @-summary text event (MSC3952). Here no
+    # sender is resolvable (no room-event lookup), so it is plain text.
+    project_summary_record = matrix["events"][-1]
+    project_summary_event = project_summary_record["content"]
+    if project_summary_event.get("msgtype") != "m.text" or "已发布" not in project_summary_event.get("body", ""):
+        raise AssertionError(f"project result summary event mismatch: {project_summary_event!r}")
+    if "matrix-dm-project-project-result.md" not in project_summary_event.get("body", ""):
+        raise AssertionError(f"project result summary must name the file: {project_summary_event!r}")
+    if "m.mentions" in project_summary_event:
+        raise AssertionError(f"unresolvable sender must not carry m.mentions: {project_summary_event!r}")
+    if project_summary_record["txn"] != project_file_record["txn"] + "-summary":
+        raise AssertionError(f"summary txn must derive from the file txn: {project_summary_record['txn']!r}")
 
     context_project = payload({
         "action": "create_project",
@@ -331,9 +345,11 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
         raise AssertionError(f"context project result was not published: {context_accepted!r}")
     if context_artifacts[0].get("parentEventId") != "$context-project-parent":
         raise AssertionError(f"context project result did not infer parent event: {context_accepted!r}")
-    context_project_file_event = matrix["events"][-1]["content"]
+    context_project_file_event = matrix["events"][-2]["content"]
     if context_project_file_event.get("m.relates_to") != {"rel_type": "com.agentteams.attachment", "event_id": "$context-project-parent"}:
         raise AssertionError(f"context project result event missing attachment relation: {context_project_file_event!r}")
+    if matrix["events"][-1]["content"].get("msgtype") != "m.text":
+        raise AssertionError(f"context project result summary event missing: {matrix['events'][-1]!r}")
 
     deferred_project = payload({
         "action": "create_project",
@@ -416,9 +432,11 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
     artifact_payload = report_artifact.get("artifact") or {}
     if artifact_payload.get("parentEventId") != report["messageId"]:
         raise AssertionError(f"report artifact parent should be report message id: {report_artifact!r}")
-    report_file_event = matrix["events"][-1]["content"]
+    report_file_event = matrix["events"][-2]["content"]
     if report_file_event.get("m.relates_to") != {"rel_type": "com.agentteams.attachment", "event_id": report["messageId"]}:
         raise AssertionError(f"report artifact Matrix relation mismatch: {report_file_event!r}")
+    if matrix["events"][-1]["content"].get("msgtype") != "m.text":
+        raise AssertionError(f"report artifact summary event missing: {matrix['events'][-1]!r}")
 
     duplicate_explicit = payload({
         "action": "create_project",

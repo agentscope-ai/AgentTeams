@@ -61,6 +61,24 @@ func TestGenerateOpenClawConfig_Basic(t *testing.T) {
 	if modelCfg["primary"] != "agentteams-gateway/qwen3.5-plus" {
 		t.Errorf("agents.defaults.model.primary = %v, want agentteams-gateway/qwen3.5-plus", modelCfg["primary"])
 	}
+
+	if defaults["elevatedDefault"] != "full" {
+		t.Errorf("elevatedDefault = %v, want full", defaults["elevatedDefault"])
+	}
+
+	tools := config["tools"].(map[string]interface{})
+	elevated := tools["elevated"].(map[string]interface{})
+	allowFrom := elevated["allowFrom"].(map[string]interface{})
+	elevatedMatrix := toStringSlice(allowFrom["matrix"])
+	if containsString(elevatedMatrix, "*") {
+		t.Errorf("elevated.allowFrom.matrix must not contain wildcard: %v", elevatedMatrix)
+	}
+	if !containsString(elevatedMatrix, "@manager:matrix.test:8080") {
+		t.Errorf("elevated.allowFrom.matrix missing manager: %v", elevatedMatrix)
+	}
+	if !containsString(elevatedMatrix, "@admin:matrix.test:8080") {
+		t.Errorf("elevated.allowFrom.matrix missing admin: %v", elevatedMatrix)
+	}
 }
 
 func TestGenerateOpenClawConfig_TeamWorker(t *testing.T) {
@@ -91,6 +109,20 @@ func TestGenerateOpenClawConfig_TeamWorker(t *testing.T) {
 	}
 	if !containsString(groupAllow, "@team-lead-dev:matrix.test:8080") {
 		t.Errorf("team worker groupAllowFrom should include leader: %v", groupAllow)
+	}
+
+	tools := config["tools"].(map[string]interface{})
+	elevated := tools["elevated"].(map[string]interface{})
+	allowFrom := elevated["allowFrom"].(map[string]interface{})
+	elevatedMatrix := toStringSlice(allowFrom["matrix"])
+	if containsString(elevatedMatrix, "@manager:matrix.test:8080") {
+		t.Error("team worker elevated.allowFrom should not include manager")
+	}
+	if !containsString(elevatedMatrix, "@team-lead-dev:matrix.test:8080") {
+		t.Errorf("team worker elevated.allowFrom missing leader: %v", elevatedMatrix)
+	}
+	if !containsString(elevatedMatrix, "@admin:matrix.test:8080") {
+		t.Errorf("team worker elevated.allowFrom missing admin: %v", elevatedMatrix)
 	}
 }
 

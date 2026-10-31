@@ -54,8 +54,8 @@ type Config struct {
 	AuthTokenExpirationSeconds int64
 
 	// Provider selection (driven by Helm values)
-	GatewayProvider string // "higress" | "ai-gateway"
-	StorageProvider string // "minio"   | "oss"
+	GatewayProvider string // "higress"     | "ai-gateway"
+	StorageProvider string // "minio" | "oss" | "s3"
 
 	// Higress (self-hosted gateway)
 	HigressBaseURL       string
@@ -563,6 +563,15 @@ func (c *Config) UsesAIGateway() bool {
 // Cloud OSS (existing bucket) instead of an embedded MinIO.
 func (c *Config) UsesExternalOSS() bool {
 	return c.StorageProvider == "oss"
+}
+
+// UsesExternalS3 reports whether the controller should talk to an
+// external S3-compatible backend (e.g. RustFS) with fixed credentials.
+// Unlike external OSS, the backend exposes the MinIO-compatible admin
+// API, so per-worker users/policies are still ensured by the controller
+// via mc (see MinIOAdminClient) — verified against RustFS 1.0.3.
+func (c *Config) UsesExternalS3() bool {
+	return c.StorageProvider == "s3"
 }
 
 func (c *Config) K8sConfig() backend.K8sConfig {

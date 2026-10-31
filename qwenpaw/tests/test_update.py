@@ -11,6 +11,7 @@ import pytest
 
 from qwenpaw_worker.config import WorkerConfig
 from qwenpaw_worker.update import (
+    DeferredChannelRead,
     MemberRuntimeConfig,
     RuntimeUpdater,
     TEAMS_INTERNAL_CONTROL_MARKER,
@@ -116,6 +117,37 @@ class _FakeQwenPawApi:
         self.enabled_skills = list(skill_names)
         self.skill_events.append(list(skill_names))
         return {"results": {name: {"success": True} for name in self.enabled_skills}}
+
+
+class _FailingGetChannelApi(_FakeQwenPawApi):
+    def get_channel(self, channel):
+        raise RuntimeError("channel read failed")
+
+
+class _FlakyGetChannelApi(_FakeQwenPawApi):
+    """get_channel succeeds for the first ``fail_after`` reads, then fails
+    until ``fail_after`` is raised (e.g. to ``sys.maxsize``) to recover."""
+
+    def __init__(self, fail_after: int) -> None:
+        super().__init__()
+        self.fail_after = fail_after
+        self.reads = 0
+
+    def get_channel(self, channel):
+        self.reads += 1
+        if self.reads > self.fail_after:
+            raise RuntimeError("channel read failed")
+        return super().get_channel(channel)
+
+
+class _MatrixFailingGetChannelApi(_FakeQwenPawApi):
+    """Only the matrix channel read fails; other channels (dingtalk, ...)
+    keep working, as in the real partial-outage scenario."""
+
+    def get_channel(self, channel):
+        if channel == "agentteams_matrix":
+            raise RuntimeError("channel read failed")
+        return super().get_channel(channel)
 
 
 def _runtime_updater(*args, **kwargs):
@@ -659,6 +691,417 @@ def test_runtime_updater_maps_dingtalk_visibility_and_preserves_empty_secret(
     assert actual["show_tool_calls"] is True
     assert actual["show_tool_results"] is True
     assert updater.api_client.channel_events == ["dingtalk"]
+
+
+def test_runtime_updater_matrix_channel_visibility_follows_filters(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_URL", "http://matrix.example.com")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "matrix-token")
+    updater = _runtime_updater(
+        config=_config(tmp_path),
+        package_manager=_NoopPackageManager(),
+    )
+
+    def apply(desired: dict) -> None:
+        updater.apply_once(
+            runtime_config=MemberRuntimeConfig(
+                path=updater.config.runtime_config_path,
+                raw={
+                    "metadata": {"generation": "1"},
+                    "member": {
+                        "runtime": "qwenpaw",
+                        "matrixUserId": "@worker-a:matrix.local",
+                    },
+                    "desired": desired,
+                },
+            ),
+        )
+
+    # No channels.matrix section: historical default, everything shown.
+    apply({})
+    actual = updater.api_client.channels["agentteams_matrix"]
+    assert actual["show_thinking"] is True
+    assert actual["show_tool_calls"] is True
+    assert actual["show_tool_results"] is True
+
+    apply(
+        {
+            "channels": {
+                "matrix": {
+                    "filter_thinking": True,
+                    "filter_tool_messages": False,
+                },
+            },
+        }
+    )
+    actual = updater.api_client.channels["agentteams_matrix"]
+    assert actual["show_thinking"] is False
+    assert actual["show_tool_calls"] is True
+    assert actual["show_tool_results"] is True
+
+    apply(
+        {
+            "channels": {
+                "matrix": {
+                    "filter_thinking": False,
+                    "filter_tool_messages": True,
+                },
+            },
+        }
+    )
+    actual = updater.api_client.channels["agentteams_matrix"]
+    assert actual["show_thinking"] is True
+    assert actual["show_tool_calls"] is False
+    assert actual["show_tool_results"] is False
+
+
+def test_runtime_updater_keeps_runtime_display_flags_when_crd_matrix_is_silent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Runtime show_* written via the workbench channel API must survive a
+    reconcile when the CRD has no channels.matrix section (no reset to True)."""
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_URL", "http://matrix.example.com")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "matrix-token")
+    updater = _runtime_updater(
+        config=_config(tmp_path),
+        package_manager=_NoopPackageManager(),
+    )
+    updater.api_client.channels["agentteams_matrix"] = {
+        "show_thinking": False,
+        "show_tool_calls": False,
+        "show_tool_results": False,
+    }
+
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw={
+                "metadata": {"generation": "1"},
+                "member": {
+                    "runtime": "qwenpaw",
+                    "matrixUserId": "@worker-a:matrix.local",
+                },
+                "desired": {},
+            },
+        ),
+    )
+
+    actual = updater.api_client.channels["agentteams_matrix"]
+    assert actual["show_thinking"] is False
+    assert actual["show_tool_calls"] is False
+    assert actual["show_tool_results"] is False
+
+
+def test_runtime_updater_matrix_crd_flags_override_runtime_display_flags(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A declared channels.matrix section wins over the runtime's current values."""
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_URL", "http://matrix.example.com")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "matrix-token")
+    updater = _runtime_updater(
+        config=_config(tmp_path),
+        package_manager=_NoopPackageManager(),
+    )
+    updater.api_client.channels["agentteams_matrix"] = {
+        "show_thinking": False,
+        "show_tool_calls": False,
+        "show_tool_results": False,
+    }
+
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw={
+                "metadata": {"generation": "1"},
+                "member": {
+                    "runtime": "qwenpaw",
+                    "matrixUserId": "@worker-a:matrix.local",
+                },
+                "desired": {
+                    "channels": {
+                        "matrix": {
+                            "filter_thinking": True,
+                            "filter_tool_messages": False,
+                        },
+                    },
+                },
+            },
+        ),
+    )
+
+    actual = updater.api_client.channels["agentteams_matrix"]
+    assert actual["show_thinking"] is False
+    assert actual["show_tool_calls"] is True
+    assert actual["show_tool_results"] is True
+
+
+def _display_flags_raw(generation: str = "1") -> dict:
+    return {
+        "metadata": {"generation": generation},
+        "member": {
+            "runtime": "qwenpaw",
+            "matrixUserId": "@worker-a:matrix.local",
+        },
+        "desired": {},
+    }
+
+
+def _display_flags_updater(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    api_client: _FakeQwenPawApi,
+) -> RuntimeUpdater:
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_URL", "http://matrix.example.com")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "matrix-token")
+    updater = RuntimeUpdater(
+        config=_config(tmp_path),
+        package_manager=_NoopPackageManager(),
+        api_client=api_client,
+    )
+    api_client.channels["agentteams_matrix"] = {
+        "show_thinking": False,
+        "show_tool_calls": False,
+        "show_tool_results": False,
+    }
+    return updater
+
+
+def test_matrix_channel_read_failure_defers_instead_of_defaulting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failing get_channel must defer the Matrix reconcile: no PUT may
+    go out and the stored show_* flags must not be clobbered with the True
+    defaults (which would re-open display the user turned off)."""
+    api = _FailingGetChannelApi()
+    updater = _display_flags_updater(tmp_path, monkeypatch, api)
+    config = MemberRuntimeConfig(
+        path=updater.config.runtime_config_path,
+        raw=_display_flags_raw(),
+    )
+
+    with pytest.raises(DeferredChannelRead):
+        updater._matrix_channel_payload(config)
+
+    result = updater.apply_once(runtime_config=config)
+
+    assert "agentteams_matrix" not in api.channel_events
+    assert api.channels["agentteams_matrix"] == {
+        "show_thinking": False,
+        "show_tool_calls": False,
+        "show_tool_results": False,
+    }
+    assert updater._matrix_retry_pending is True
+    assert result.changed is True
+
+
+def test_matrix_channel_defers_first_apply_when_payload_build_read_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Maintainer sequence, first apply: the identity read succeeds, then
+    the payload build for the PUT fails. No PUT may go out and the stored
+    show_* flags must stay off."""
+    api = _FlakyGetChannelApi(fail_after=1)
+    updater = _display_flags_updater(tmp_path, monkeypatch, api)
+    config = MemberRuntimeConfig(
+        path=updater.config.runtime_config_path,
+        raw=_display_flags_raw(),
+    )
+    updater.apply_once(runtime_config=config)
+
+    assert "agentteams_matrix" not in api.channel_events
+    stored = api.channels["agentteams_matrix"]
+    assert stored["show_thinking"] is False
+    assert stored["show_tool_calls"] is False
+    assert stored["show_tool_results"] is False
+    assert updater._matrix_retry_pending is True
+    assert updater._applied_matrix_channel_identity is None
+
+
+def test_matrix_channel_retry_applies_stored_flags_after_read_recovers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Second apply after the read recovers: driven purely by
+    _matrix_retry_pending (the config is unchanged), the PUT payload must
+    carry the stored show_* flags (all False), never the True defaults."""
+    api = _FlakyGetChannelApi(fail_after=1)
+    updater = _display_flags_updater(tmp_path, monkeypatch, api)
+    config = MemberRuntimeConfig(
+        path=updater.config.runtime_config_path,
+        raw=_display_flags_raw(),
+    )
+    updater.apply_once(runtime_config=config)
+    assert "agentteams_matrix" not in api.channel_events
+
+    api.fail_after = sys.maxsize  # the read recovers
+    result = updater.apply_once(runtime_config=config)
+
+    assert result.changed is True
+    # Two events: the display-flags PUT, then the pre-existing access-flags
+    # reconcile (the seeded state has no access_control_* keys yet).
+    assert api.channel_events == ["agentteams_matrix", "agentteams_matrix"]
+    stored = api.channels["agentteams_matrix"]
+    assert stored["show_thinking"] is False
+    assert stored["show_tool_calls"] is False
+    assert stored["show_tool_results"] is False
+
+
+def test_matrix_channel_consecutive_read_failures_not_polluted_by_defaults(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two consecutive failed reads must not let the True defaults leak
+    into the channel state; after recovery the PUT still carries the
+    stored False flags."""
+    api = _FailingGetChannelApi()
+    updater = _display_flags_updater(tmp_path, monkeypatch, api)
+    config = MemberRuntimeConfig(
+        path=updater.config.runtime_config_path,
+        raw=_display_flags_raw(),
+    )
+    updater.apply_once(runtime_config=config)
+    updater.apply_once(runtime_config=config)
+
+    assert api.channel_events == []
+    stored = api.channels["agentteams_matrix"]
+    assert stored["show_thinking"] is False
+    assert stored["show_tool_calls"] is False
+    assert stored["show_tool_results"] is False
+
+    recovered = _FakeQwenPawApi()
+    recovered.channels["agentteams_matrix"] = dict(stored)
+    updater.api_client = recovered
+    updater.apply_once(runtime_config=config)
+
+    # Two events: the display-flags PUT, then the pre-existing access-flags
+    # reconcile (the seeded state has no access_control_* keys yet).
+    assert recovered.channel_events == ["agentteams_matrix", "agentteams_matrix"]
+    final = recovered.channels["agentteams_matrix"]
+    assert final["show_thinking"] is False
+    assert final["show_tool_calls"] is False
+    assert final["show_tool_results"] is False
+
+
+def test_matrix_channel_declared_flags_unaffected_by_read_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A declared channels.matrix section never reads the runtime channel,
+    so a failing get_channel must not defer the declarative path:
+    filter_thinking still projects to show_thinking=False."""
+    api = _FailingGetChannelApi()
+    updater = _display_flags_updater(tmp_path, monkeypatch, api)
+    config = MemberRuntimeConfig(
+        path=updater.config.runtime_config_path,
+        raw={
+            "metadata": {"generation": "1"},
+            "member": {
+                "runtime": "qwenpaw",
+                "matrixUserId": "@worker-a:matrix.local",
+            },
+            "desired": {
+                "channels": {
+                    "matrix": {
+                        "filter_thinking": True,
+                        "filter_tool_messages": False,
+                    },
+                },
+            },
+        },
+    )
+    payload = updater._matrix_channel_payload(config)
+
+    assert payload is not None
+    assert payload["show_thinking"] is False
+    assert payload["show_tool_calls"] is True
+    assert payload["show_tool_results"] is True
+
+
+def test_matrix_channel_read_failure_does_not_block_other_components(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A matrix channel read failure defers only the Matrix reconcile:
+    the model and dingtalk components are still applied in the same pass."""
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_URL", "http://matrix.example.com")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "matrix-token")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_GATEWAY_KEY", "gateway-secret")
+    api = _MatrixFailingGetChannelApi()
+    updater = RuntimeUpdater(
+        config=_config(tmp_path),
+        package_manager=_NoopPackageManager(),
+        api_client=api,
+    )
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw={
+                "metadata": {"generation": "1"},
+                "member": {
+                    "runtime": "qwenpaw",
+                    "matrixUserId": "@worker-a:matrix.local",
+                },
+                "credentials": {"gatewayKeyEnv": "AGENTTEAMS_WORKER_GATEWAY_KEY"},
+                "desired": {
+                    "model": {
+                        "providerId": "agentteams-gateway",
+                        "model": "qwen-plus",
+                        "gatewayUrl": "https://gateway.example.com",
+                    },
+                    "channels": {
+                        "dingtalk": {
+                            "enabled": True,
+                            "client_id": "client-id",
+                            "client_secret": "secret",
+                            "robot_code": "robot",
+                            "filter_thinking": True,
+                            "filter_tool_messages": False,
+                        },
+                    },
+                },
+            },
+        ),
+    )
+
+    assert api.active_model is not None
+    assert api.channel_events == ["dingtalk"]
+    dingtalk = api.channels["dingtalk"]
+    assert dingtalk["show_thinking"] is False
+    assert dingtalk["show_tool_calls"] is True
+    assert dingtalk["show_tool_results"] is True
+    assert updater._matrix_retry_pending is True
+
+
+def test_matrix_retry_pending_clears_after_successful_apply(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Once the deferred Matrix update succeeds, _matrix_retry_pending is
+    reset and an unchanged config goes back to a no-change apply (no extra
+    PUT, changed=False)."""
+    api = _FlakyGetChannelApi(fail_after=1)
+    updater = _display_flags_updater(tmp_path, monkeypatch, api)
+    config = MemberRuntimeConfig(
+        path=updater.config.runtime_config_path,
+        raw=_display_flags_raw(),
+    )
+    updater.apply_once(runtime_config=config)
+    assert updater._matrix_retry_pending is True
+
+    api.fail_after = sys.maxsize
+    updater.apply_once(runtime_config=config)
+    assert updater._matrix_retry_pending is False
+    puts = list(api.channel_events)
+
+    result = updater.apply_once(runtime_config=config)
+    assert result.changed is False
+    assert api.channel_events == puts
 
 
 def test_runtime_updater_ignores_unused_dingtalk_fields(

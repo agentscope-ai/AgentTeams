@@ -1,0 +1,50 @@
+{
+  "approvals": {
+    "level": "none"
+  },
+  "bundle": "agentteams-matrix",
+  "channels": {
+    "agentteams_matrix": {
+      "access_token": "fixed-golden-token",
+      "allow_from": [
+        "@operator:agentteams.local"
+      ],
+      "enabled": true,
+      "group_allow_from": [
+        "@operator:agentteams.local"
+      ],
+      "groups": {
+        "!operations:agentteams.local": {
+          "requireMention": true
+        }
+      },
+      "history_limit": 50,
+      "history_mode": "mention-buffer",
+      "homeserver": "https://matrix.agentteams.local",
+      "require_mention": true,
+      "rooms": [
+        "!operations:agentteams.local"
+      ],
+      "user_id": "@agentteams-worker:agentteams.local"
+    }
+  },
+  "contract": "agentteams/v1alpha1",
+  "identity": {
+    "agents_path": "AGENTS.md",
+    "display_name": "AgentTeams Worker",
+    "name": "agentteams-worker",
+    "soul_path": "SOUL.md"
+  },
+  "mcp": {
+    "servers": [],
+    "static_representable": true
+  },
+  "skills": {
+    "roots": []
+  },
+  "storage": {
+    "prefix": "agentteams/workspaces",
+    "sync_mode": "on-start"
+  },
+  "version": "0.1.0"
+}

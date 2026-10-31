@@ -950,6 +950,82 @@ func TestDeployMemberRuntimeConfigProjectsDingTalkDisabled(t *testing.T) {
 	}
 }
 
+func TestDeployMemberRuntimeConfigProjectsMatrixChannel(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{OSS: store})
+
+	err := deployer.DeployMemberRuntimeConfig(ctx, MemberRuntimeConfigDeployRequest{
+		Name:        "worker-cr-a",
+		RuntimeName: "worker-a",
+		Runtime:     "qwenpaw",
+		Spec: v1beta1.WorkerSpec{
+			Model: "qwen-plus",
+			Channels: &v1beta1.ChannelsSpec{
+				Matrix: &v1beta1.MatrixChannelSpec{
+					ShowThinking:  true,
+					ShowToolCalls: false,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("DeployMemberRuntimeConfig failed: %v", err)
+	}
+
+	got, err := store.GetObject(ctx, "agents/worker-a/runtime/runtime.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("runtime.yaml is invalid YAML: %v\n%s", err, got)
+	}
+	desired := doc["desired"].(map[string]any)
+	channels := desired["channels"].(map[string]any)
+	matrix := channels["matrix"].(map[string]any)
+
+	assertRuntimeField := func(key string, want any) {
+		t.Helper()
+		if got := matrix[key]; got != want {
+			t.Fatalf("matrix.%s=%#v, want %#v; all=%#v", key, got, want, matrix)
+		}
+	}
+	assertRuntimeField("filter_thinking", false)
+	assertRuntimeField("filter_tool_messages", true)
+}
+
+func TestDeployMemberRuntimeConfigOmitsMatrixChannelWhenUnset(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{OSS: store})
+
+	err := deployer.DeployMemberRuntimeConfig(ctx, MemberRuntimeConfigDeployRequest{
+		Name:        "worker-cr-a",
+		RuntimeName: "worker-a",
+		Runtime:     "qwenpaw",
+		Spec: v1beta1.WorkerSpec{
+			Model: "qwen-plus",
+		},
+	})
+	if err != nil {
+		t.Fatalf("DeployMemberRuntimeConfig failed: %v", err)
+	}
+
+	got, err := store.GetObject(ctx, "agents/worker-a/runtime/runtime.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("runtime.yaml is invalid YAML: %v\n%s", err, got)
+	}
+	desired := doc["desired"].(map[string]any)
+	if channels, ok := desired["channels"]; ok {
+		t.Fatalf("channels must be omitted when no channel is configured: %#v", channels)
+	}
+}
+
 func TestDeployMemberRuntimeConfigRejectsInvalidEnabledDingTalkChannel(t *testing.T) {
 	cases := []struct {
 		name     string

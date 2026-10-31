@@ -38,7 +38,17 @@ metadata = manifest.fetch("metadata") { fail!("metadata is required") }
 name = metadata["name"].to_s
 version = metadata["version"].to_s
 fail!("metadata.name is required") if name.empty?
-fail!("metadata.version must be semver") unless version.match?(/\A\d+\.\d+\.\d+\z/)
+fail!("build metadata is not supported for plugin releases") if version.include?("+")
+fail!("metadata.version must be semver") unless version.match?(/\A\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?\z/)
+
+if manifest.key?("requires")
+  requires = manifest["requires"]
+  fail!("requires must be a map") unless requires.is_a?(Hash)
+  %w[agentteams contracts tool_schema].each do |key|
+    value = requires[key].to_s
+    fail!("requires.#{key} is required and must be non-empty") if value.empty?
+  end
+end
 
 schema_path = plugins_root / "schemas/plugin.schema.json"
 assert_file(schema_path)

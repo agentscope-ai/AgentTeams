@@ -20,6 +20,17 @@ import (
 
 // fakeExecBackend records exec commands and file writes; canned responses
 // are provided per test.
+// shellPathArg returns the path passed as the last positional argument of a
+// `sh -c '<script>' sh <path>` invocation. Paths handed to the shell as
+// positional arguments never need quoting, so tests assert on this argument
+// instead of on the script text.
+func shellPathArg(cmd []string) string {
+	if len(cmd) >= 5 && cmd[0] == "sh" && cmd[1] == "-c" {
+		return cmd[len(cmd)-1]
+	}
+	return ""
+}
+
 type fakeExecBackend struct {
 	mu         sync.Mutex
 	commands   [][]string
@@ -61,7 +72,7 @@ func (f *fakeExecBackend) written(path string) (string, bool) {
 	return c, ok
 }
 
-func newTestCodingCliHandler(t *testing.T, kubeMode string, exec *fakeExecBackend, store *ossfake.Memory, objs ...runtime.Object) *CodingCliHandler {
+func newTestCodingCliHandler(t *testing.T, kubeMode string, exec codingCliExecer, store *ossfake.Memory, objs ...runtime.Object) *CodingCliHandler {
 	t.Helper()
 	k8s := fake.NewClientBuilder().WithScheme(newProjectTestScheme(t)).WithRuntimeObjects(objs...).Build()
 	h := NewCodingCliHandler(k8s, "default", kubeMode, nil, nil)
@@ -362,6 +373,9 @@ func TestCodingCliPutSettings_SentinelNoExisting_400(t *testing.T) {
 func TestCodingCliStartInstall_AcceptsAndCompletes(t *testing.T) {
 	exec := &fakeExecBackend{fileWrites: map[string]string{}}
 	exec.respond = func(cmd []string) (string, string, int, error) {
+		if cmd[0] == "sh" && len(cmd) > 2 && strings.Contains(cmd[2], "printf %s") {
+			return "/root", "", 0, nil // $HOME
+		}
 		if cmd[0] == "npm" {
 			return "added 1 package in 42s\n", "", 0, nil
 		}
@@ -406,6 +420,15 @@ func TestCodingCliStartInstall_AcceptsAndCompletes(t *testing.T) {
 			sawNpm = true
 			if c[len(c)-1] != "@qwen-code/qwen-code@0.25.0" {
 				t.Fatalf("npm argv: %v", c)
+			}
+			prefixOK := false
+			for i := 0; i+1 < len(c); i++ {
+				if c[i] == "--prefix" && c[i+1] == "/root/.coding-cli" {
+					prefixOK = true
+				}
+			}
+			if !prefixOK {
+				t.Fatalf("npm install must use the persistent prefix: %v", c)
 			}
 		}
 	}
@@ -952,4 +975,57 @@ func TestCodingCliHandler_BackendWiringNilRegistry(t *testing.T) {
 	if _, err := h.execBackend(context.Background(), "pi-coder"); err == nil {
 		t.Fatal("expected an error when the registry is nil, got nil")
 	}
+}
+
+
+// TestCodingCliStartInstall_QwenPawUsesWorkingDir: QwenPaw persists only
+// QWENPAW_WORKING_DIR (/app/working) + .backups/.secret; $HOME is ephemeral.
+// The install prefix must therefore be <working-dir>/.coding-cli.
+func TestCodingCliStartInstall_QwenPawUsesWorkingDir(t *testing.T) {
+	exec := &fakeExecBackend{fileWrites: map[string]string{}}
+	exec.respond = func(cmd []string) (string, string, int, error) {
+		if cmd[0] == "sh" && len(cmd) > 2 && strings.Contains(cmd[2], "printf %s") {
+			return "/app/working", "", 0, nil // QWENPAW_WORKING_DIR
+		}
+		if cmd[0] == "npm" {
+			return "added 1 package\n", "", 0, nil
+		}
+		return "", "", 1, nil
+	}
+	h := newTestCodingCliHandler(t, "embedded", exec, ossfake.NewMemory(), checkpointTeamWithWorkers("team-a", "daily-carol")...)
+	rec := httptest.NewRecorder()
+	h.startInstall(rec, adminCaller(codingCliRequest(http.MethodPost, "/api/v1/workers/daily-carol/coding-cli/qwen-code/install", `{"action":"install","version":"latest"}`, "name", "daily-carol", "cli", "qwen-code")))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	doc := decodeJSON(t, rec.Body.String())
+	taskID, _ := doc["task_id"].(string)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		statusRec := httptest.NewRecorder()
+		h.getInstallStatus(statusRec, adminCaller(codingCliRequest(http.MethodGet, "/api/v1/workers/daily-carol/coding-cli/qwen-code/install/"+taskID, "", "name", "daily-carol", "cli", "qwen-code", "task_id", taskID)))
+		if statusRec.Code == http.StatusOK {
+			sdoc := decodeJSON(t, statusRec.Body.String())
+			if sdoc["state"] != "running" {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	exec.mu.Lock()
+	defer exec.mu.Unlock()
+	for _, c := range exec.commands {
+		if c[0] != "npm" {
+			continue
+		}
+		for i := 0; i+1 < len(c); i++ {
+			if c[i] == "--prefix" {
+				if c[i+1] != "/app/working/.coding-cli" {
+					t.Fatalf("QwenPaw prefix = %q, want /app/working/.coding-cli", c[i+1])
+				}
+				return
+			}
+		}
+	}
+	t.Fatalf("npm install with prefix not executed: %v", exec.commands)
 }

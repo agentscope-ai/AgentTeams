@@ -7,7 +7,12 @@ on:
       - 'manager/src/**'
       - 'plugins/teamharness/**'
       - 'plugins/agentteams-matrix-channel/**'
+      - 'plugins/agentteams-matrix/**'
+      - 'plugins/agentteams-teamharness/**'
       - 'plugins/tests/**'
+      - 'plugins/scripts/**'
+      - 'plugins/*/plugin.yaml'
+      - '.github/workflows/build-plugin.yml'
       - 'docs/design/teamharness/**'
       - '.github/workflows/test-controller.yml'
   push:
@@ -17,8 +22,14 @@ on:
       - 'manager/src/**'
       - 'plugins/teamharness/**'
       - 'plugins/agentteams-matrix-channel/**'
+      - 'plugins/agentteams-matrix/**'
+      - 'plugins/agentteams-teamharness/**'
       - 'plugins/tests/**'
+      - 'plugins/scripts/**'
+      - 'plugins/*/plugin.yaml'
+      - '.github/workflows/build-plugin.yml'
       - 'docs/design/teamharness/**'
+      - '.github/workflows/test-controller.yml'
   workflow_dispatch:
 
 jobs:
@@ -73,7 +84,11 @@ jobs:
           python -m pytest plugins/tests/teamharness/mcp/test_delegate_redelegation.py -q
           python -m pytest plugins/tests/teamharness/mcp/test_filesync_remote_guard.py -q
           python -m pytest plugins/tests/teamharness/mcp/test_sensitive_scan_placeholder.py -q
+          python -m pytest plugins/tests/teamharness/test_loop_budget.py -q
           python -m pytest plugins/tests/teamharness/test_pull_project.py -q
+          python -m pytest plugins/tests/teamharness/test_signal_emission.py -q
+          python -m pytest plugins/tests/teamharness/test_transition_validation.py -q
+          python -m pytest plugins/tests/teamharness/test_attention_schema.py -q
           PYTHONPATH="${GITHUB_WORKSPACE}/manager/src/agentteams_manager" \
             python -m pytest manager/src/agentteams_manager/agentteams_manager/tests/ -q
           ruby plugins/tests/teamharness/mcp/tools/test-taskflow.rb
@@ -151,6 +166,37 @@ jobs:
         run: |
           python -m pytest plugins/tests/agentteams-matrix-channel/test_show_thinking_gate.py -q -rs
 
+  matrix-channel-send-gate-retrigger-placeholder:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install matrix-channel runtime dependencies
+        run: |
+          python -m pip install \
+            'matrix-nio>=0.25,<0.27' \
+            'qwenpaw>=2.2.1,<2.3' \
+            'pytest>=8.3,<10' \
+            'pytest-asyncio>=0.23,<2'
+
+      - name: Verify matrix-nio is importable (tests must not skip)
+        run: |
+          python - <<'PY'
+          import importlib.metadata as md
+          import nio  # noqa: F401  the suite skips without matrix-nio
+          print("matrix-nio", md.version("matrix-nio"))
+          print("qwenpaw", md.version("qwenpaw"))
+          PY
+
+      - name: Run matrix-channel send-gate retrigger placeholder tests
+        run: |
+          python -m pytest plugins/tests/agentteams-matrix-channel/test_send_gate_retrigger_placeholder.py -q -rs
+
   matrix-channel-mention-localpart:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -172,3 +218,164 @@ jobs:
       - name: Run mention localpart tests
         run: |
           python -m pytest plugins/tests/agentteams-matrix-channel/test_mention_localpart.py -q
+
+  matrix-channel-send-gate-retrigger-relevance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install matrix-channel runtime dependencies
+        run: |
+          python -m pip install \
+            'matrix-nio>=0.25,<0.27' \
+            'qwenpaw>=2.2.1,<2.3' \
+            'pytest>=8.3,<10' \
+            'pytest-asyncio>=0.23,<2'
+
+      - name: Verify matrix-nio is importable (tests must not skip)
+        run: |
+          python - <<'PY'
+          import importlib.metadata as md
+          import nio  # noqa: F401  the suite skips without matrix-nio
+          print("matrix-nio", md.version("matrix-nio"))
+          print("qwenpaw", md.version("qwenpaw"))
+          PY
+
+      - name: Run matrix-channel send-gate retrigger relevance tests
+        run: |
+          python -m pytest plugins/tests/agentteams-matrix-channel/test_send_gate_retrigger_relevance.py -q -rs
+
+  matrix-channel-retry-classifier:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install matrix-channel runtime dependencies
+        run: |
+          python -m pip install \
+            'matrix-nio>=0.25,<0.27' \
+            'qwenpaw>=2.2.1,<2.3' \
+            'pytest>=8.3,<10' \
+            'pytest-asyncio>=0.23,<2'
+
+      - name: Verify matrix-nio is importable (tests must not skip)
+        run: |
+          python - <<'PY'
+          import importlib.metadata as md
+          import nio  # noqa: F401  the suite skips without matrix-nio
+          print("matrix-nio", md.version("matrix-nio"))
+          print("qwenpaw", md.version("qwenpaw"))
+          PY
+
+      - name: Run matrix-channel retry-classifier regression tests
+        run: |
+          python -m pytest plugins/tests/agentteams-matrix-channel/test_retry_classifier.py -q -rs
+
+  matrix-channel-sync-timeout-clamp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install matrix-channel runtime dependencies
+        run: |
+          python -m pip install \
+            'matrix-nio>=0.25,<0.27' \
+            'qwenpaw>=2.2.1,<2.3' \
+            'pytest>=8.3,<10' \
+            'pytest-asyncio>=0.23,<2'
+
+      - name: Verify matrix-nio is importable (tests must not skip)
+        run: |
+          python - <<'PY'
+          import importlib.metadata as md
+          import nio  # noqa: F401  the suite skips without matrix-nio
+          print("matrix-nio", md.version("matrix-nio"))
+          print("qwenpaw", md.version("qwenpaw"))
+          PY
+
+      - name: Run matrix-channel sync-timeout clamp regression tests
+        run: |
+          python -m pytest plugins/tests/agentteams-matrix-channel/test_sync_timeout_clamp.py -q -rs
+
+  plugin-release-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler: none
+
+      - name: Install plugin release contract test dependencies
+        run: |
+          python -m pip install \
+            'pytest>=8.3,<10' \
+            'PyYAML>=6.0,<7'
+
+      - name: Run plugin release contract tests
+        run: |
+          python -m pytest plugins/tests/plugins -q
+
+  runtime-bundle-p0:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+
+      - name: Install runtime bundle test dependencies
+        run: |
+          python -m pip install \
+            'PyYAML>=6.0,<7' \
+            'qwenpaw>=2.2.1,<2.3' \
+            'pytest>=8.3,<10'
+
+      - name: Check bundle script syntax
+        run: |
+          bash -n plugins/agentteams-matrix/scripts/install.sh \
+            plugins/agentteams-matrix/scripts/uninstall.sh \
+            plugins/agentteams-matrix/adapters/qwenpaw/install.sh \
+            plugins/agentteams-matrix/adapters/qwenpaw/uninstall.sh \
+            plugins/agentteams-teamharness/scripts/install.sh \
+            plugins/agentteams-teamharness/scripts/uninstall.sh \
+            plugins/agentteams-teamharness/adapters/qwenpaw/install.sh \
+            plugins/agentteams-teamharness/adapters/qwenpaw/uninstall.sh
+
+      - name: Validate TeamHarness bundle manifest and package
+        run: |
+          ruby plugins/scripts/validate-plugin.rb plugins/teamharness/plugin.yaml
+          ruby plugins/scripts/validate-plugin.rb plugins/agentteams-teamharness/plugin.yaml
+          OUT_DIR="$(mktemp -d)" ruby plugins/scripts/package-plugin.rb plugins/agentteams-teamharness/plugin.yaml
+
+      - name: Run contract golden and install idempotence tests
+        run: |
+          python -m pytest plugins/tests/agentteams-matrix/golden -q
+          python -m pytest plugins/tests/agentteams-teamharness/golden -q

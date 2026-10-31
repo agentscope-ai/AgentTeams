@@ -3,6 +3,7 @@ package agentconfig
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -85,16 +86,22 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 	// back interface. Bind LAN-wide (0.0.0.0); access remains gated by the
 	// shared gateway token.
 	//
-	// gateway.controlUi.dangerouslyDisableDeviceAuth: true — Higress-hosted
-	// console access uses the shared gateway token (no per-device pairing). The
-	// manager template carries this flag; the controller-pushed config must
-	// preserve it too, otherwise the mc-mirror sync strips it and the Control
-	// UI starts demanding device authentication that agentteams never provisions.
-	//
-	// gateway.controlUi.allowInsecureAuth: true — agentteams exposes the console
-	// over plain HTTP on the user's host port (AGENTTEAMS_PORT_MANAGER_CONSOLE),
-	// so the strict HTTPS-only browser-auth checks introduced in 2026.4.x must
-	// be relaxed.
+	// gateway.controlUi device identity — since OpenClaw v2026.10.x the
+	// Control UI handshake requires a device identity. Browsers provision one
+	// automatically in pure JavaScript (no secure context required, so plain
+	// HTTP works). The agentteams console is served through the manager nginx
+	// loopback proxy: the host console port maps to nginx 18888 inside the
+	// manager container, which proxies to 127.0.0.1:18799. That nginx config
+	// deliberately sets no Host or X-Real-IP header, so the gateway treats a
+	// host-localhost browser as a loopback direct connection (not a proxied
+	// one) and pairing is auto-approved after gateway auth — zero manual
+	// step. The same proxy injects the gateway token into the URL hash
+	// (#token=...). Any other entry point — the container IP, a LAN address,
+	// a custom hostname, or a proxy that adds forwarding headers — needs a
+	// one-time `openclaw devices approve <requestId>` (or the Devices UI).
+	// Token-only programmatic WS clients are no longer accepted: they must
+	// present a device identity like any other client. No legacy flag is
+	// carried or needed for this.
 	//
 	// gateway.controlUi.allowedOrigins: ["*"] — the user picks the console host
 	// port at install time and may reach it via 127.0.0.1, the host's LAN IP,
@@ -117,7 +124,15 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 	// mirror that here so the controller-pushed config stays byte-stable across
 	// reconciles. The token doubles as the Control UI / remote auth token, so
 	// reusing GatewayKey is consistent with the manager template.
+	modelAliases := g.allModelAliases(modelName)
+	modelPolicy := map[string]interface{}{
+		"allow": sortedKeys(modelAliases),
+	}
+
 	config := map[string]interface{}{
+		"meta": map[string]interface{}{
+			"migrations": map[string]interface{}{"modelPolicyAllowlist": true},
+		},
 		"gateway": map[string]interface{}{
 			"mode": "local",
 			"port": 18799,
@@ -129,9 +144,7 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 				"token": req.GatewayKey,
 			},
 			"controlUi": map[string]interface{}{
-				"dangerouslyDisableDeviceAuth": true,
-				"allowInsecureAuth":            true,
-				"allowedOrigins":               []string{"*"},
+				"allowedOrigins": []string{"*"},
 			},
 		},
 		"channels": map[string]interface{}{
@@ -153,7 +166,8 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 				"timeoutSeconds": 1800,
 				"workspace":      "~",
 				"model":          modelCfg,
-				"models":         g.allModelAliases(modelName),
+				"models":         modelAliases,
+				"modelPolicy":    modelPolicy,
 				"maxConcurrent":  4,
 				"subagents": map[string]interface{}{
 					"maxConcurrent": 8,
@@ -176,8 +190,8 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 		},
 		"session": map[string]interface{}{
 			"resetByType": map[string]interface{}{
-				"dm":    map[string]interface{}{"mode": "daily", "atHour": 4},
-				"group": map[string]interface{}{"mode": "daily", "atHour": 4},
+				"direct": map[string]interface{}{"mode": "daily", "atHour": 4},
+				"group":  map[string]interface{}{"mode": "daily", "atHour": 4},
 			},
 		},
 		"plugins": map[string]interface{}{
@@ -229,16 +243,18 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 		}
 	}
 
-	// Add embedding model for memory search if configured
+	// Add embedding model for memory search if configured.  OpenClaw
+	// v2026.10.6 moved the legacy agents.defaults.memorySearch key to the
+	// top-level memory.search object.
 	if g.config.EmbeddingModel != "" {
-		agents := config["agents"].(map[string]interface{})
-		defaults := agents["defaults"].(map[string]interface{})
-		defaults["memorySearch"] = map[string]interface{}{
-			"provider": "openai",
-			"model":    g.config.EmbeddingModel,
-			"remote": map[string]interface{}{
-				"baseUrl": aiGatewayURL + "/v1",
-				"apiKey":  req.GatewayKey,
+		config["memory"] = map[string]interface{}{
+			"search": map[string]interface{}{
+				"provider": "openai",
+				"model":    g.config.EmbeddingModel,
+				"remote": map[string]interface{}{
+					"baseUrl": aiGatewayURL + "/v1",
+					"apiKey":  req.GatewayKey,
+				},
 			},
 		}
 	}
@@ -279,11 +295,14 @@ func (g *Generator) buildMatrixChannelConfig(req WorkerConfigRequest, serverURL,
 		"groupPolicy":    "allowlist",
 		"groupAllowFrom": groupAllowFrom,
 		"groups": map[string]interface{}{
-			"*": map[string]interface{}{"allow": true, "requireMention": true},
+			"*": map[string]interface{}{"requireMention": true},
 		},
-		// Matrix plugin: editable preview while the LLM streams; one message per assistant block.
-		"streaming":      "partial",
-		"blockStreaming": true,
+		// Matrix v2026.10.6: nested streaming contract; editable preview while
+		// the LLM streams, one message per assistant block.
+		"streaming": map[string]interface{}{
+			"mode":  "partial",
+			"block": map[string]interface{}{"enabled": true},
+		},
 		// openclaw 2026.4.x onwards forwards the SSRF policy to the matrix-js-sdk
 		// fetch path. Without this opt-in, /sync to private hosts (the embedded
 		// `matrix-local.agentteams.io` alias resolves to 127.0.0.1, k8s service DNS
@@ -665,4 +684,13 @@ func uniqueNonEmptyStrings(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func sortedKeys(values map[string]interface{}) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }

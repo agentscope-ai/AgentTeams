@@ -38,11 +38,37 @@ func TestGenerateOpenClawConfig_Basic(t *testing.T) {
 	if matrixCfg["accessToken"] != "tok-matrix-alice" {
 		t.Errorf("accessToken = %v", matrixCfg["accessToken"])
 	}
-	if matrixCfg["streaming"] != "partial" {
-		t.Errorf("streaming = %v, want partial", matrixCfg["streaming"])
+	streaming, ok := matrixCfg["streaming"].(map[string]interface{})
+	if !ok || streaming["mode"] != "partial" {
+		t.Errorf("matrix streaming = %v, want nested mode=partial", matrixCfg["streaming"])
 	}
-	if matrixCfg["blockStreaming"] != true {
-		t.Errorf("blockStreaming = %v, want true", matrixCfg["blockStreaming"])
+	if block, _ := streaming["block"].(map[string]interface{}); block["enabled"] != true {
+		t.Errorf("matrix streaming.block.enabled = %v, want true", streaming["block"])
+	}
+	if _, exists := matrixCfg["blockStreaming"]; exists {
+		t.Error("legacy channels.matrix.blockStreaming must not be emitted")
+	}
+
+	gateway := config["gateway"].(map[string]interface{})
+	controlUI := gateway["controlUi"].(map[string]interface{})
+	if _, exists := controlUI["allowInsecureAuth"]; exists {
+		t.Error("legacy gateway.controlUi.allowInsecureAuth must not be emitted")
+	}
+	if _, exists := controlUI["dangerouslyDisableDeviceAuth"]; exists {
+		t.Error("retired gateway.controlUi.dangerouslyDisableDeviceAuth must not be emitted")
+	}
+	session := config["session"].(map[string]interface{})
+	reset := session["resetByType"].(map[string]interface{})
+	if _, exists := reset["dm"]; exists {
+		t.Error("legacy session.resetByType.dm must not be emitted")
+	}
+	if _, exists := reset["direct"]; !exists {
+		t.Error("session.resetByType.direct is missing")
+	}
+	agents := config["agents"].(map[string]interface{})
+	defaults := agents["defaults"].(map[string]interface{})
+	if _, exists := defaults["modelPolicy"]; !exists {
+		t.Error("agents.defaults.modelPolicy is missing")
 	}
 
 	// Verify default allowFrom includes manager and admin
@@ -55,8 +81,6 @@ func TestGenerateOpenClawConfig_Basic(t *testing.T) {
 	}
 
 	// Verify default model in agents.defaults.model.primary
-	agents := config["agents"].(map[string]interface{})
-	defaults := agents["defaults"].(map[string]interface{})
 	modelCfg := defaults["model"].(map[string]interface{})
 	if modelCfg["primary"] != "agentteams-gateway/qwen3.5-plus" {
 		t.Errorf("agents.defaults.model.primary = %v, want agentteams-gateway/qwen3.5-plus", modelCfg["primary"])
@@ -208,14 +232,21 @@ func TestGenerateOpenClawConfig_WithEmbedding(t *testing.T) {
 	var config map[string]interface{}
 	json.Unmarshal(data, &config)
 
-	agents := config["agents"].(map[string]interface{})
-	defaults := agents["defaults"].(map[string]interface{})
-	memSearch, ok := defaults["memorySearch"].(map[string]interface{})
+	memory, ok := config["memory"].(map[string]interface{})
 	if !ok {
-		t.Fatal("memorySearch not found in agents.defaults")
+		t.Fatal("memory.search not found")
+	}
+	memSearch, ok := memory["search"].(map[string]interface{})
+	if !ok {
+		t.Fatal("memory.search not found")
 	}
 	if memSearch["model"] != "text-embedding-v3" {
-		t.Errorf("memorySearch.model = %v", memSearch["model"])
+		t.Errorf("memory.search.model = %v", memSearch["model"])
+	}
+	agents := config["agents"].(map[string]interface{})
+	defaults := agents["defaults"].(map[string]interface{})
+	if _, exists := defaults["memorySearch"]; exists {
+		t.Error("legacy agents.defaults.memorySearch must not be emitted")
 	}
 }
 

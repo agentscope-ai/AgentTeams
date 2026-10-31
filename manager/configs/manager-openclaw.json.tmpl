@@ -10,8 +10,6 @@
       "token": "${MANAGER_GATEWAY_KEY}"
     },
     "controlUi": {
-      "dangerouslyDisableDeviceAuth": true,
-      "allowInsecureAuth": true,
       "allowedOrigins": ["*"]
     }
   },
@@ -36,10 +34,12 @@
         "@${AGENTTEAMS_ADMIN_USER}:${AGENTTEAMS_MATRIX_DOMAIN}"
       ],
       "groups": {
-        "*": { "allow": true, "requireMention": true }
+        "*": { "requireMention": true }
       },
-      "streaming": "partial",
-      "blockStreaming": true
+      "streaming": {
+        "mode": "partial",
+        "block": { "enabled": true }
+      }
     }
   },
 
@@ -95,6 +95,25 @@
         "agentteams-gateway/MiniMax-M2.7-highspeed": { "alias": "MiniMax-M2.7-highspeed" },
         "agentteams-gateway/MiniMax-M2.5":      { "alias": "MiniMax-M2.5" }
       },
+      "modelPolicy": {
+        "allow": [
+          "agentteams-gateway/gpt-5.4",
+          "agentteams-gateway/gpt-5.3-codex",
+          "agentteams-gateway/gpt-5-mini",
+          "agentteams-gateway/gpt-5-nano",
+          "agentteams-gateway/claude-opus-4-6",
+          "agentteams-gateway/claude-sonnet-4-6",
+          "agentteams-gateway/claude-haiku-4-5",
+          "agentteams-gateway/qwen3.5-plus",
+          "agentteams-gateway/deepseek-chat",
+          "agentteams-gateway/deepseek-reasoner",
+          "agentteams-gateway/kimi-k2.5",
+          "agentteams-gateway/glm-5",
+          "agentteams-gateway/MiniMax-M2.7",
+          "agentteams-gateway/MiniMax-M2.7-highspeed",
+          "agentteams-gateway/MiniMax-M2.5"
+        ]
+      },
       "maxConcurrent": 8,
       "subagents": {
         "maxConcurrent": 16
@@ -126,8 +145,8 @@
   "session": {
     "dmScope": "per-channel-peer",
     "resetByType": {
-      "dm":    { "mode": "daily", "atHour": 4 },
-      "group": { "mode": "daily", "atHour": 4 }
+      "direct": { "mode": "daily", "atHour": 4 },
+      "group":  { "mode": "daily", "atHour": 4 }
     }
   },
 

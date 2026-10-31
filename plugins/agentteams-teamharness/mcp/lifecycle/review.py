@@ -28,6 +28,16 @@
 # payload-sourced side — keeps the unknown-sentinel rule for
 # compatibility ("default" / "unknown" / empty never match, concrete
 # accounts still compare).
+#
+# Round 8 (issue #1467) — the trusted decider: the r1 approval gate
+# reads the decider from the server-written resolvedActor marker ONLY.
+# resolvedBy is display provenance written from the caller's payload
+# and must never influence the decision: a record without the
+# server-written marker is not an approval (fail closed), whatever its
+# display fields claim. The self-approval comparison canonicalizes one
+# way on both sides (the shared _canonical_account): the MXID
+# localpart and the runtimeName of the same member are the same
+# identity, so the display spelling can no longer decide.
 from __future__ import annotations
 
 from typing import Any
@@ -35,6 +45,7 @@ from typing import Any
 from mcp.common import refs
 from mcp.common.config import _protocol_enforce_enabled, _runtime_team_name
 from mcp.common.constants import DECISION_CLASS_IDS, DEFAULT_DECISION_CLASS
+from mcp.common.identity import _canonical_account
 from mcp.common.io import _read_json, _utc_timestamp
 from mcp.common.payload import _first_text, _safe_id
 from mcp.common.paths import _task_state_path
@@ -98,12 +109,22 @@ def _has_approval_record(task: dict[str, Any], submitter_account: str = "") -> b
     server-written resolvedRole must be "human" (only the authorized
     close path writes it — a payload-supplied resolvedRole is never
     copied), the close went through a human channel (im_reply /
-    im_command / dashboard — never tool or api), and the recorded
-    decider (resolvedBy, else resolvedActor) carries an account that,
-    when the submitter's account is known, differs from it:
-    self-approval never counts. The role is read from the marker only —
-    never inferred from the decider strings (#1467 round 4: the marker
-    is the authority; record presence alone is not an approval)."""
+    im_command / dashboard — never tool or api), and the server-written
+    decider (resolvedActor) carries an account that, when the
+    submitter's account is known, differs from it: self-approval never
+    counts. The role is read from the marker only — never inferred from
+    the decider strings (#1467 round 4: the marker is the authority;
+    record presence alone is not an approval).
+
+    The decider is the server-written marker ONLY (#1467 round 8):
+    resolvedBy is display provenance written from the caller's payload
+    and must never influence the decision. A record without the
+    server-written resolvedActor marker is not an approval — fail
+    closed, whatever its display fields claim. The identity comparison
+    canonicalizes one way on both sides (the shared _canonical_account):
+    the MXID localpart and the runtimeName of the same member are the
+    same identity, so the display spelling can no longer decide whether
+    the decider is the submitter."""
     attention = task.get("attention")
     if not isinstance(attention, list):
         return False
@@ -118,12 +139,18 @@ def _has_approval_record(task: dict[str, Any], submitter_account: str = "") -> b
             continue
         if str(record.get("resolvedVia") or "") not in _HUMAN_RESOLVE_CHANNELS:
             continue
+        # The decider is the server-written marker only (#1467 round
+        # 8): resolvedBy is display provenance and never decides — a
+        # record without the server marker is not an approval (fail
+        # closed).
         _decider_role, account = _decider_identity(
-            str(record.get("resolvedBy") or record.get("resolvedActor") or "")
+            str(record.get("resolvedActor") or "")
         )
         if not account:
             continue
-        if submitter_account and account == submitter_account:
+        if submitter_account and _canonical_account(
+            account
+        ) == _canonical_account(submitter_account):
             continue
         return True
     return False
@@ -185,10 +212,11 @@ def _protocol_guard_for_accept(task: dict[str, Any], accepted: bool) -> None:
       approval record carrying the trusted-authority marker
       (approval_required): the record must have been closed by the
       authorized path (server-written resolvedRole "human") through a
-      human channel by a decider whose account differs from the task's
-      assignee (self-approval never counts; the role is never inferred
-      from the decider strings, and record presence alone is not an
-      approval).
+      human channel by a decider — the server-written resolvedActor
+      only; the display field resolvedBy never decides (#1467 round 8)
+      — whose account differs from the task's assignee (self-approval
+      never counts; the role is never inferred from the decider
+      strings, and record presence alone is not an approval).
     """
     if not _protocol_enforce_enabled():
         return

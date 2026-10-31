@@ -1197,3 +1197,172 @@ def test_r7_parity_legacy_concrete_submitter_without_source_still_forbidden(
     assert result["ok"] is False
     assert result["error_code"] == "self_review_forbidden"
     assert "review" not in _task_meta(tmp_path)
+
+
+# --- Round 8 (#1467): the trusted decider (bundle tree) ---------------------
+
+
+_R8_REVIEW = {
+    "verdict": "pass",
+    "reviewer": "critic:bob",
+    "reviewer_team": "",
+    "reviewed_at": "2026-10-31T00:00:00Z",
+    "note": "looks right",
+}
+
+
+def _r8_record(resolved_actor: str, resolved_by: str) -> dict[str, Any]:
+    """A resolved approval record in the shape the authorized close
+    writes: the trusted-authority marker (resolvedRole / resolvedActor
+    — server-written) plus the display provenance (resolvedBy —
+    caller-written)."""
+    record: dict[str, Any] = {
+        "kind": "approval",
+        "question": "Approve the result?",
+        "attempt": 1,
+        "resolved": True,
+        "eventId": "$att-approval-1",
+        "stall_count": 0,
+        "resolvedVia": "im_reply",
+        "resolvedBy": resolved_by,
+        "resolveEvidence": {"messageId": "$m1", "note": "approved in room"},
+        "resolvedRole": "human",
+    }
+    if resolved_actor is not None:
+        record["resolvedActor"] = resolved_actor
+    return record
+
+
+def test_r8_parity_display_field_never_decides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None
+) -> None:
+    """Case 1 (bundle tree, the maintainer's pair): a human runtime
+    role is configured for the SAME identity as the submitter — the
+    server wrote resolvedActor='human:worker' from the trusted runtime
+    member. Changing ONLY the caller-written display field (resolvedBy)
+    must not change the decision: the trusted decider is the submitter,
+    so self-approval holds in both spellings, the r1 acceptance stays
+    approval_required, and the task never reaches completed."""
+    _enforce_on(monkeypatch)
+    _write_submitted_task(
+        tmp_path,
+        decision_class="r1",
+        assigned_to="@worker:review.test",
+        submitted_by="worker:worker",
+        review=dict(_R8_REVIEW),
+        attention=[
+            _r8_record(
+                resolved_actor="human:worker",
+                resolved_by="human:@worker:review.test",
+            )
+        ],
+    )
+
+    result = _accept(tmp_path)
+    assert result["ok"] is False
+    assert result["error_code"] == "approval_required"
+    assert _task_meta(tmp_path)["status"] == "submitted"
+
+    # Flip ONLY the display field (the same trusted decider): still
+    # self-approval, still refused.
+    task = _task_meta(tmp_path)
+    task["attention"][0]["resolvedBy"] = "human:@human:review.test"
+    _write_task_meta(tmp_path, task)
+
+    result = _accept(tmp_path)
+    assert result["ok"] is False
+    assert result["error_code"] == "approval_required"
+    assert _task_meta(tmp_path)["status"] == "submitted"
+
+
+def test_r8_parity_distinct_human_decider_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None
+) -> None:
+    """Case 2 (bundle tree): a GENUINELY different human: the
+    server-written decider (resolvedActor='human:other') differs from
+    the submitter's identity in both spellings -> the r1 acceptance
+    succeeds and the task is persisted as completed."""
+    _enforce_on(monkeypatch)
+    _write_submitted_task(
+        tmp_path,
+        decision_class="r1",
+        assigned_to="@worker:review.test",
+        submitted_by="worker:worker",
+        review=dict(_R8_REVIEW),
+        attention=[
+            _r8_record(
+                resolved_actor="human:other",
+                resolved_by="human:@other:review.test",
+            )
+        ],
+    )
+
+    result = _accept(tmp_path)
+    assert result["ok"] is True
+    assert result["nodeStatus"] == "completed"
+    assert _task_meta(tmp_path)["status"] == "completed"
+
+
+def test_r8_parity_mxid_localpart_equals_runtimename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None
+) -> None:
+    """Case 3 (bundle tree): one canonicalization on both sides of the
+    comparison: the MXID localpart and the runtimeName of the same
+    member are the same identity, so self-approval is refused in BOTH
+    spellings — decider 'human:@worker:review.test' against the task
+    account 'worker', and the reverse, decider 'human:worker' against
+    '@worker:review.test'. (The display field carries an unrelated
+    human's spelling in both: only the server-written decider is
+    compared.)"""
+    _enforce_on(monkeypatch)
+    for assigned_to, resolved_actor in (
+        ("worker", "human:@worker:review.test"),
+        ("@worker:review.test", "human:worker"),
+    ):
+        _write_submitted_task(
+            tmp_path,
+            decision_class="r1",
+            assigned_to=assigned_to,
+            submitted_by="worker:worker",
+            review=dict(_R8_REVIEW),
+            attention=[
+                _r8_record(
+                    resolved_actor=resolved_actor,
+                    resolved_by="human:@other:review.test",
+                )
+            ],
+        )
+
+        result = _accept(tmp_path)
+        assert result["ok"] is False, (assigned_to, resolved_actor)
+        assert result["error_code"] == "approval_required"
+        assert _task_meta(tmp_path)["status"] == "submitted"
+
+
+def test_r8_parity_missing_server_marker_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None
+) -> None:
+    """Case 4 (bundle tree): fail closed: a resolved approval record
+    with the human marker role, a human channel, and a human-looking
+    resolvedBy — but NO server-written resolvedActor — is not an
+    approval (a record that lacks the server marker can never carry
+    authority): the r1 acceptance stays approval_required."""
+    _enforce_on(monkeypatch)
+    _write_submitted_task(
+        tmp_path,
+        decision_class="r1",
+        assigned_to="@worker:review.test",
+        submitted_by="worker:worker",
+        review=dict(_R8_REVIEW),
+        attention=[
+            _r8_record(
+                resolved_actor=None,
+                resolved_by="human:@luo:review.test",
+            )
+        ],
+    )
+
+    result = _accept(tmp_path)
+    assert result["ok"] is False
+    assert result["error_code"] == "approval_required"
+    assert _task_meta(tmp_path)["status"] == "submitted"

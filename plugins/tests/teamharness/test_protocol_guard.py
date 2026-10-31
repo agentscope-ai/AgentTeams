@@ -50,6 +50,18 @@ as a refused history entry (from='frozen', to='frozen',
 refused=<attempted status>). The regressions: the maintainer's exact
 chain, the per-kind absorbing matrix, and the choke-point refusal
 audit.
+
+Round 8 (issue #1467) — the trusted decider: the r1 approval gate
+reads the decider from the server-written resolvedActor marker ONLY
+(resolvedBy is display provenance and never decides; a record without
+the marker is not an approval — fail closed), and the
+self-approval comparison canonicalizes one way on both sides (the
+shared _canonical_account: the MXID localpart and the runtimeName of
+the same member are the same identity). The regressions: the
+maintainer's display-field pair (still approval_required when only
+resolvedBy changes), a genuine different human (accepted and
+persisted), the MXID/runtimeName self-approval pair in both
+spellings, and the marker-less fail-closed record.
 """
 
 from __future__ import annotations
@@ -1440,8 +1452,11 @@ def test_r3_record_counting_matrix() -> None:
     """The r1 gate's record counting, pinned at unit level: the
     trusted-authority marker (the server-written resolvedRole="human" —
     never inferred from the decider strings), the human channel set, the
-    decider-account requirement (a bare 'human' claim parses to no
-    account and never counts), and the self-approval exclusion."""
+    server-written decider (resolvedActor ONLY — resolvedBy is display
+    provenance and never decides; a record without the marker is not an
+    approval, #1467 round 8), and the self-approval exclusion
+    (canonicalized: the MXID localpart and the runtimeName of the same
+    member are the same identity)."""
     has = server.review._has_approval_record
 
     def record(**overrides: Any) -> dict[str, Any]:
@@ -1451,12 +1466,13 @@ def test_r3_record_counting_matrix() -> None:
             "resolvedRole": "human",
             "resolvedVia": "im_reply",
             "resolvedBy": "human:@luo:example.test",
+            "resolvedActor": "human:@luo:example.test",
         }
         base.update(overrides)
         return base
 
-    # A human-channel close with the trusted marker and a decider
-    # account counts — on any human channel.
+    # A human-channel close with the trusted marker and a server-written
+    # decider account counts — on any human channel.
     assert has({"attention": [record()]}) is True
     assert has({"attention": [record(resolvedVia="im_command")]}) is True
     assert has({"attention": [record(resolvedVia="dashboard")]}) is True
@@ -1471,21 +1487,26 @@ def test_r3_record_counting_matrix() -> None:
     assert has({"attention": [record(resolvedRole="")]}) is False
     stripped = {k: v for k, v in record().items() if k != "resolvedRole"}
     assert has({"attention": [stripped]}) is False
+    # The decider is the server-written resolvedActor ONLY (#1467
+    # round 8): a record without it is not an approval — fail closed —
+    # whatever its display fields claim (resolvedBy never decides).
+    by_only = {k: v for k, v in record().items() if k != "resolvedActor"}
+    assert has({"attention": [by_only]}) is False
     # A decider without an account (a bare "human" claim, or empty)
     # never counts, even with the marker.
-    assert has({"attention": [record(resolvedBy="human")]}) is False
-    assert has({"attention": [record(resolvedBy="")]}) is False
-    # resolvedActor is the fallback decider when resolvedBy is absent.
-    assert has({"attention": [{
-        "kind": "approval",
-        "resolved": True,
-        "resolvedRole": "human",
-        "resolvedVia": "im_reply",
-        "resolvedActor": "human:@luo:example.test",
-    }]}) is True
-    # Self-approval (decider account == submitter account) never counts.
+    assert has({"attention": [record(resolvedActor="human")]}) is False
+    assert has({"attention": [record(resolvedActor="")]}) is False
+    # Self-approval (decider account == submitter account) never
+    # counts — canonicalized one way on both sides, so the MXID
+    # localpart and the runtimeName of the same member are the same
+    # identity (and a distinct account, in either spelling, still
+    # counts).
     assert has({"attention": [record()]}, submitter_account="@luo:example.test") is False
+    assert has({"attention": [record()]}, submitter_account="luo") is False
+    assert has({"attention": [record(resolvedActor="human:luo")]},
+               submitter_account="@luo:example.test") is False
     assert has({"attention": [record()]}, submitter_account="@alice:example.test") is True
+    assert has({"attention": [record()]}, submitter_account="alice") is True
 
 
 # --- Round 5 (#1467): frozen is absorbing ----------------------------------
@@ -2039,6 +2060,173 @@ def test_r7_payload_reviewer_cannot_claim_trusted_submitter(
     assert result["ok"] is False
     assert result["error_code"] == "self_review_forbidden"
     assert "review" not in _task_meta(tmp_path)
+
+
+# --- Round 8 (#1467): the trusted decider ----------------------------------
+
+_R8_REVIEW = {
+    "verdict": "pass",
+    "reviewer": "critic:bob",
+    "reviewer_team": "",
+    "reviewed_at": "2026-10-31T00:00:00Z",
+    "note": "looks right",
+}
+
+
+def _r8_record(resolved_actor: str, resolved_by: str) -> dict[str, Any]:
+    """A resolved approval record in the shape the authorized close
+    writes: the trusted-authority marker (resolvedRole / resolvedActor
+    — server-written) plus the display provenance (resolvedBy —
+    caller-written)."""
+    record: dict[str, Any] = {
+        "kind": "approval",
+        "question": "Approve the result?",
+        "attempt": 1,
+        "resolved": True,
+        "eventId": "$att-approval-1",
+        "stall_count": 0,
+        "resolvedVia": "im_reply",
+        "resolvedBy": resolved_by,
+        "resolveEvidence": {"messageId": "$m1", "note": "approved in room"},
+        "resolvedRole": "human",
+    }
+    if resolved_actor is not None:
+        record["resolvedActor"] = resolved_actor
+    return record
+
+
+def test_r8_display_field_never_decides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None
+) -> None:
+    """The maintainer's pair: a human runtime role is configured for
+    the SAME identity as the submitter — the server wrote
+    resolvedActor='human:worker' from the trusted runtime member.
+    Changing ONLY the caller-written display field (resolvedBy) must
+    not change the decision: the trusted decider is the submitter, so
+    self-approval holds in both spellings, the r1 acceptance stays
+    approval_required, and the task never reaches completed."""
+    _enforce_on(monkeypatch)
+    _write_submitted_task(
+        tmp_path,
+        decision_class="r1",
+        assigned_to="@worker:review.test",
+        submitted_by="worker:worker",
+        review=dict(_R8_REVIEW),
+        attention=[
+            _r8_record(
+                resolved_actor="human:worker",
+                resolved_by="human:@worker:review.test",
+            )
+        ],
+    )
+
+    result = _accept(tmp_path)
+    assert result["ok"] is False
+    assert result["error_code"] == "approval_required"
+    assert _task_meta(tmp_path)["status"] == "submitted"
+
+    # Flip ONLY the display field (the same trusted decider): still
+    # self-approval, still refused.
+    task = _task_meta(tmp_path)
+    task["attention"][0]["resolvedBy"] = "human:@human:review.test"
+    _write_task_meta(tmp_path, task)
+
+    result = _accept(tmp_path)
+    assert result["ok"] is False
+    assert result["error_code"] == "approval_required"
+    assert _task_meta(tmp_path)["status"] == "submitted"
+
+
+def test_r8_distinct_human_decider_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None
+) -> None:
+    """A GENUINELY different human: the server-written decider
+    (resolvedActor='human:other') differs from the submitter's
+    identity in both spellings -> the r1 acceptance succeeds and the
+    task is persisted as completed."""
+    _enforce_on(monkeypatch)
+    _write_submitted_task(
+        tmp_path,
+        decision_class="r1",
+        assigned_to="@worker:review.test",
+        submitted_by="worker:worker",
+        review=dict(_R8_REVIEW),
+        attention=[
+            _r8_record(
+                resolved_actor="human:other",
+                resolved_by="human:@other:review.test",
+            )
+        ],
+    )
+
+    result = _accept(tmp_path)
+    assert result["ok"] is True
+    assert result["nodeStatus"] == "completed"
+    assert _task_meta(tmp_path)["status"] == "completed"
+
+
+def test_r8_mxid_localpart_equals_runtimename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None
+) -> None:
+    """One canonicalization on both sides of the comparison: the MXID
+    localpart and the runtimeName of the same member are the same
+    identity, so self-approval is refused in BOTH spellings — decider
+    'human:@worker:review.test' against the task account 'worker', and
+    the reverse, decider 'human:worker' against '@worker:review.test'.
+    (The display field carries an unrelated human's spelling in both:
+    only the server-written decider is compared.)"""
+    _enforce_on(monkeypatch)
+    for assigned_to, resolved_actor in (
+        ("worker", "human:@worker:review.test"),
+        ("@worker:review.test", "human:worker"),
+    ):
+        _write_submitted_task(
+            tmp_path,
+            decision_class="r1",
+            assigned_to=assigned_to,
+            submitted_by="worker:worker",
+            review=dict(_R8_REVIEW),
+            attention=[
+                _r8_record(
+                    resolved_actor=resolved_actor,
+                    resolved_by="human:@other:review.test",
+                )
+            ],
+        )
+
+        result = _accept(tmp_path)
+        assert result["ok"] is False, (assigned_to, resolved_actor)
+        assert result["error_code"] == "approval_required"
+        assert _task_meta(tmp_path)["status"] == "submitted"
+
+
+def test_r8_missing_server_marker_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None
+) -> None:
+    """Fail closed: a resolved approval record with the human marker
+    role, a human channel, and a human-looking resolvedBy — but NO
+    server-written resolvedActor — is not an approval (a record that
+    lacks the server marker can never carry authority): the r1
+    acceptance stays approval_required."""
+    _enforce_on(monkeypatch)
+    _write_submitted_task(
+        tmp_path,
+        decision_class="r1",
+        assigned_to="@worker:review.test",
+        submitted_by="worker:worker",
+        review=dict(_R8_REVIEW),
+        attention=[
+            _r8_record(
+                resolved_actor=None,
+                resolved_by="human:@luo:review.test",
+            )
+        ],
+    )
+
+    result = _accept(tmp_path)
+    assert result["ok"] is False
+    assert result["error_code"] == "approval_required"
+    assert _task_meta(tmp_path)["status"] == "submitted"
 
 
 # --- review_task gate edges -------------------------------------------------

@@ -21,7 +21,7 @@ from mcp.common.errors import (
     _sync_failure_result,
     _uncommitted_state_failure_result,
 )
-from mcp.common.identity import _canonical_assignee
+from mcp.common.identity import _canonical_account, _canonical_assignee
 from mcp.common.io import _read_json, _safe_read_bytes, _utc_timestamp
 from mcp.common.payload import _first_text, _payload, _safe_id
 from mcp.common.paths import _project_state_path, _task_dir, _task_state_path
@@ -1234,11 +1234,17 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                         # account behind the transition actor. A
                         # payload-supplied resolvedRole / resolvedActor
                         # is never copied: the r1 gate reads this marker,
-                        # not the caller's strings.
+                        # not the caller's strings. The account is
+                        # canonicalized (#1467 round 8): the shared
+                        # _canonical_account is the one identity form
+                        # used here AND by the r1 self-approval
+                        # comparison, so the MXID localpart and the
+                        # runtimeName of the same member are the same
+                        # identity.
                         trusted_role = _runtime_role()
                         target["resolvedRole"] = trusted_role
                         target["resolvedActor"] = (
-                            f"{trusted_role}:{_account_of(resolver)}"
+                            f"{trusted_role}:{_canonical_account(_account_of(resolver))}"
                         )
                     else:
                         # Non-approval close provenance: the record

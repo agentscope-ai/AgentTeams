@@ -459,7 +459,8 @@ What happens depends on how you reach the console:
   pending pairing request with:
 
   ```bash
-  docker exec agentteams-manager openclaw devices approve --latest
+  docker exec agentteams-manager openclaw devices list   # read the pending requestId
+  docker exec agentteams-manager openclaw devices approve <requestId>
   ```
 
   or approve it in the Devices section of the console. The approval is

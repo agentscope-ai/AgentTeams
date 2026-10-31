@@ -445,7 +445,8 @@ http://<局域网IP>:18080
   批准待处理的配对请求：
 
   ```bash
-  docker exec agentteams-manager openclaw devices approve --latest
+  docker exec agentteams-manager openclaw devices list   # 取得待批 requestId
+  docker exec agentteams-manager openclaw devices approve <requestId>
   ```
 
   也可以在控制台 Devices 界面中批准。审批是一次性的——该入口只需做一次。

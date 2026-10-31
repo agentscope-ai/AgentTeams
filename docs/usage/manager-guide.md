@@ -253,7 +253,7 @@ curl -s http://127.0.0.1:18001/
     | Entry point | First open after upgrading to v2026.10.9 |
     |---|---|
     | Host localhost (e.g. `http://127.0.0.1:18888`) | Seamless — the gateway sees a loopback connection, so pairing is auto-approved (no manual step) |
-    | Container IP / LAN address / custom hostname | One-time device approval: `docker exec agentteams-manager openclaw devices approve --latest` (or approve in the Devices UI) |
+    | Container IP / LAN address / custom hostname | One-time device approval: read the pending id with `docker exec agentteams-manager openclaw devices list`, then `docker exec agentteams-manager openclaw devices approve <requestId>` (or approve in the Devices UI; `--latest` only previews the request and exits 1) |
     | Token-only programmatic WS client | No longer accepted — a device identity is required, like any other client |
 
 ## Backup and Recovery

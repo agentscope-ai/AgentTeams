@@ -1437,15 +1437,15 @@ cmd_controller() {
             [ "${gw_code}" = "000" ] && warn "gateway data plane 8080/v1/models=000; continuing because --allow-gateway-down"
             write_state "controller" "done"
             log "controller upgraded: ${CONTROLLER_IMAGE}; old container kept as ${OLD_NAME}"
-            log "after the upgrade, the first console open from a non-localhost entry may need a one-time device approval: docker exec agentteams-manager openclaw devices approve --latest; the localhost entry is unaffected"
-            log "升级后首次从非 localhost 入口打开控制台可能需要一次性设备审批：docker exec agentteams-manager openclaw devices approve --latest；localhost 入口不受影响"
+            log "after the upgrade, the first console open from a non-localhost entry may need a one-time device approval: run 'docker exec agentteams-manager openclaw devices list' to read the pending requestId, then 'docker exec agentteams-manager openclaw devices approve <requestId>' (--latest only previews and exits 1); the localhost entry is unaffected"
+            log "升级后首次从非 localhost 入口打开控制台可能需要一次性设备审批：先 `docker exec agentteams-manager openclaw devices list` 取得待批 requestId，再 `docker exec agentteams-manager openclaw devices approve <requestId>`（--latest 仅预览且退出 1）；localhost 入口不受影响"
             return "${EXIT_OK}"
         fi
         if wait_gateway; then
             write_state "controller" "done"
             log "controller upgraded: ${CONTROLLER_IMAGE}; old container kept as ${OLD_NAME}"
-            log "after the upgrade, the first console open from a non-localhost entry may need a one-time device approval: docker exec agentteams-manager openclaw devices approve --latest; the localhost entry is unaffected"
-            log "升级后首次从非 localhost 入口打开控制台可能需要一次性设备审批：docker exec agentteams-manager openclaw devices approve --latest；localhost 入口不受影响"
+            log "after the upgrade, the first console open from a non-localhost entry may need a one-time device approval: run 'docker exec agentteams-manager openclaw devices list' to read the pending requestId, then 'docker exec agentteams-manager openclaw devices approve <requestId>' (--latest only previews and exits 1); the localhost entry is unaffected"
+            log "升级后首次从非 localhost 入口打开控制台可能需要一次性设备审批：先 `docker exec agentteams-manager openclaw devices list` 取得待批 requestId，再 `docker exec agentteams-manager openclaw devices approve <requestId>`（--latest 仅预览且退出 1）；localhost 入口不受影响"
             return "${EXIT_OK}"
         fi
         warn "gateway data plane 8080/v1/models=000; rolling back (use --allow-gateway-down to override)"

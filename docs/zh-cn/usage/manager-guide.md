@@ -253,7 +253,7 @@ curl -s http://127.0.0.1:18001/
     | 入口 | 升级到 v2026.10.9 后首次打开 |
     |---|---|
     | 宿主机 localhost（如 `http://127.0.0.1:18888`） | 无缝 — gateway 看到 loopback 连接，配对自动批准（无需手动步骤） |
-    | 容器 IP / 局域网地址 / 自定义域名 | 一次性设备审批：`docker exec agentteams-manager openclaw devices approve --latest`（或在 Devices UI 中批准） |
+    | 容器 IP / 局域网地址 / 自定义域名 | 一次性设备审批：先用 `docker exec agentteams-manager openclaw devices list` 取得待批 requestId，再 `docker exec agentteams-manager openclaw devices approve <requestId>`（或在 Devices UI 中批准；`--latest` 仅预览请求并退出 1） |
     | 仅带 token 的程序化 WS 客户端 | 不再被接受 — 需要设备身份，与其它客户端相同 |
 
 ## 备份与恢复

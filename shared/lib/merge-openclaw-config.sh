@@ -14,6 +14,9 @@
 #     - plugins.load.paths: union of both sides
 #     - channels: deep merge (remote wins shared keys, local-only keys preserved)
 #     - channels.matrix.accessToken: local wins (Worker re-login)
+#     - memory.search: remote wins per key; local-only keys preserved
+#     - legacy v2026.10.6 keys are migrated after merge (see
+#       migrate-openclaw-config.sh)
 #
 # Usage (as sourced function):
 #   source /opt/agentteams/scripts/lib/merge-openclaw-config.sh
@@ -21,19 +24,30 @@
 #
 # If output_path is omitted, writes merged result to local_path.
 
+if [ -n "${BASH_SOURCE:-}" ]; then
+    _MERGE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+else
+    # agentteams-sync.sh is /bin/sh and sources this file from the image path;
+    # BASH_SOURCE is unavailable there.
+    _MERGE_LIB_DIR=/opt/agentteams/scripts/lib
+fi
+. "${_MERGE_LIB_DIR}/migrate-openclaw-config.sh"
+
 merge_openclaw_config() {
     local remote_path="$1"
     local local_path="$2"
     local output_path="${3:-$local_path}"
 
     if [ ! -f "${remote_path}" ]; then
-        # No remote version, keep local as-is
+        # No remote version; still migrate the local config in place so a
+        # pre-v2026.10.6 workspace does not keep rejected keys forever.
+        migrate_openclaw_config "${local_path}" "${output_path}" || return 1
         return 0
     fi
 
     if [ ! -f "${local_path}" ]; then
-        # No local version, use remote directly
-        mv "${remote_path}" "${output_path}"
+        # No local version, use remote directly (after canonicalization).
+        migrate_openclaw_config "${remote_path}" "${output_path}" || return 1
         return 0
     fi
 
@@ -50,6 +64,9 @@ merge_openclaw_config() {
           else . end
         | if ($local.channels.matrix.accessToken // null) != null then
             .channels.matrix.accessToken = $local.channels.matrix.accessToken
+          else . end
+        | if (($remote.memory.search? // null) != null) then
+            .memory = ((.memory // {}) | .search = (((.search // {}) | if type == "object" then . else {} end) * ($remote.memory.search | if type == "object" then . else {} end)))
           else . end
         | if ($remote.plugins // null) != null or ($local.plugins // null) != null then
             .plugins = (
@@ -69,4 +86,5 @@ merge_openclaw_config() {
 
     [ -n "${merged}" ] || return 1
     printf '%s\n' "${merged}" > "${output_path}"
+    migrate_openclaw_config "${output_path}" || return 1
 }

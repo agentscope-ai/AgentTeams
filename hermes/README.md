@@ -1,8 +1,13 @@
 # hermes-worker
 
 `hermes-worker` is the AgentTeams Worker runtime built on top of
-[hermes-agent](https://github.com/NousResearch/hermes-agent) (v0.10.0,
-git tag `v2026.4.16`).
+[hermes-agent](https://github.com/NousResearch/hermes-agent) (git tag
+`v2026.9.24`).
+
+Python: `v2026.9.24` requires `>=3.11,<3.14`; the image runs on
+`python:3.11-slim`. (Do not port the Oct-2026 upstream line's 3.14-only
+runtime contract here — that tag's core dependencies are marker-gated
+to 3.14.)
 
 It plays the same role as `copaw-worker`:
 
@@ -11,10 +16,12 @@ It plays the same role as `copaw-worker`:
 * Translates the AgentTeams common config schema (`openclaw.json`) into
   hermes-agent's native config (`config.yaml` + `.env`) via a *bridge*.
 * Runs hermes-agent's gateway in Matrix-only mode.
-* Replaces hermes-agent's native `mautrix`-based Matrix adapter with a
-  `matrix-nio` adapter (`hermes_matrix.adapter.MatrixAdapter`) that
-  mirrors CoPaw worker's Matrix policies (allowlists, mention-required,
-  encryption, vision support, group/dm split).
+* Ships an AgentTeams Matrix **user plugin** (`plugins/matrix-platform`) that
+  overrides hermes-agent's bundled `matrix` platform adapter with
+  `hermes_matrix.overlay_adapter.MatrixAdapter`. The subclass keeps the native
+  `mautrix` transport (E2EE, media, streaming, reactions) and adds CoPaw-style
+  Worker policies: allowlists, history buffering, mention enrichment, and
+  vision gating.
 
 ## Layout
 
@@ -24,6 +31,10 @@ hermes/
 ├── pyproject.toml             hermes-worker package metadata
 ├── scripts/
 │   └── hermes-worker-entrypoint.sh   container entrypoint
+├── plugins/
+│   └── matrix-platform/      user plugin overriding the bundled Matrix adapter
+│       ├── plugin.yaml
+│       └── adapter.py        registration bridge; swaps in the policy subclass
 └── src/
     ├── hermes_worker/         worker bootstrap (cli, sync, bridge, run-loop)
     │   ├── __init__.py
@@ -32,9 +43,10 @@ hermes/
     │   ├── sync.py            FileSync (MinIO mirror)
     │   ├── bridge.py          openclaw.json → hermes config.yaml/.env/SOUL.md/skills
     │   └── worker.py          orchestrates bootstrap → bridge → run gateway
-    └── hermes_matrix/         Matrix adapter (overlays gateway/platforms/matrix.py)
+    └── hermes_matrix/         AgentTeams policy overlay on the bundled adapter
         ├── __init__.py
-        └── adapter.py         matrix-nio adapter, copaw-equivalent policies
+        ├── overlay_adapter.py  mautrix subclass with AgentTeams policies
+        └── policies.py         allowlist/history/mention helpers
 ```
 
 ## Local development
@@ -73,9 +85,9 @@ The bridge maps `openclaw.json` to hermes config in the following way:
 ## Why a custom Matrix adapter?
 
 hermes-agent's stock adapter uses [mautrix](https://github.com/mautrix/python),
-which has a different state model and encryption story than `matrix-nio`. The
-AgentTeams stack standardised on `matrix-nio` for the CoPaw worker (room
-allowlists, mention-required policy, free-response rooms, vision-on-image
-support) and the Manager's matrix tooling. Reusing those semantics here keeps
-operator behaviour identical regardless of which runtime a Worker is using,
-and avoids re-implementing the room-policy / encryption-key-store layers.
+and hermes-agent moved it into a bundled platform plugin. AgentTeams does not fork
+the transport: the user plugin keeps the stock mautrix adapter and only swaps in
+a subclass with the Worker policy layer (room allowlists, mention-required,
+free-response rooms, history buffering, vision gating). Reusing the upstream
+transport keeps E2EE, media, streaming, and reactions current with each Hermes
+release while preserving CoPaw-equivalent operator behavior.

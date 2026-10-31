@@ -157,8 +157,8 @@ The Manager and Worker OpenClaw instances use **type-based session policies**:
 ```json
 "session": {
   "resetByType": {
-    "dm":    { "mode": "daily", "atHour": 4 },
-    "group": { "mode": "daily", "atHour": 4 }
+    "direct": { "mode": "daily", "atHour": 4 },
+    "group":  { "mode": "daily", "atHour": 4 }
   }
 }
 ```

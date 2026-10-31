@@ -339,7 +339,7 @@ func TestPutProjectMeta_BackendWithoutStrictWrites503(t *testing.T) {
 	if err := store.PutObject(context.Background(), key, original); err != nil {
 		t.Fatal(err)
 	}
-	o := &noStrictConditionalStore{oss.StorageClient: &mcLikeOSS{Memory: store}}
+	o := &noStrictConditionalStore{StorageClient: &mcLikeOSS{Memory: store}}
 	h := newProjectTestHandlerWithOSS(t, o)
 	read, err := store.StatMeta(context.Background(), key)
 	if err != nil {

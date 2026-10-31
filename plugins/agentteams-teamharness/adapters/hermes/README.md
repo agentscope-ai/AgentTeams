@@ -13,8 +13,40 @@ Target: `~/.hermes/config.yaml` (or `$HERMES_HOME/config.yaml`; override with
 
 | Key | Value |
 |-----|-------|
-| `mcp_servers.teamharness` | `{command: python3, args: [<bundle root>/mcp/server.py], env: {TEAMHARNESS_RUNTIME_CONFIG: "${TEAMHARNESS_RUNTIME_CONFIG}"}}` |
+| `mcp_servers.teamharness` | `{command: python3, args: [<bundle root>/mcp/server.py], env: {<allowlisted NAME>: "${NAME}", …}}` — the narrow env allowlist below, projected by reference |
 | `~/.hermes/plugins/agentteams-teamharness/` | `__init__.py` (the directory-plugin entry the loader requires) + `plugin.yaml` + `register.py` + the bundle's `skills/` tree, synced byte-for-byte |
+
+### MCP child env allowlist
+
+The supported hermes SDK builds the MCP child environment in two stages
+(`tools/mcp_tool.py`): at config load, `_load_mcp_config()` makes
+`~/.hermes/.env` available and resolves each `${NAME}` in the server
+config from the environment (an unresolvable reference stays the literal
+placeholder); at spawn, `_build_safe_env(user_env)` gives the child a
+small safe baseline (PATH, HOME, TMPDIR, LANG, TERM, LC_ALL, SHELL, USER
+plus `XDG_*`) from the parent process and the entry's `env` map —
+**nothing else crosses the boundary** (no role overrides, no secrets, no
+whole-env inheritance). So the entry must project the narrow allowlist of
+`${NAME}` references the server needs (the variable name, never a value):
+
+| Group | Variables |
+|-------|-----------|
+| state/runtime | `TEAMHARNESS_RUNTIME_CONFIG` (kept for compat), `TEAMHARNESS_SHARED_DIR`, `AGENTTEAMS_SHARED_DIR`, `AGENTTEAMS_STORAGE_PREFIX`, `AGENTTEAMS_SHARED_STORAGE_PREFIX`, `TEAMHARNESS_MATRIX_CONTEXT_FILE` |
+| Matrix | `AGENTTEAMS_MATRIX_URL`, `AGENTTEAMS_WORKER_MATRIX_TOKEN`, `AGENTTEAMS_WORKER_NAME`, `AGENTTEAMS_MATRIX_USER_ID`, `AGENTTEAMS_MATRIX_DOMAIN` |
+| storage credentials | `AGENTTEAMS_FS_ENDPOINT`, `AGENTTEAMS_FS_ACCESS_KEY`, `AGENTTEAMS_FS_SECRET_KEY` |
+
+**Resolution rule** — a variable is written only when something can
+resolve it: it is set (non-empty) in the installer's environment, **or**
+its key appears in `~/.hermes/.env` (keys are parsed; values are never
+read). Otherwise the child would receive a literal `${NAME}` it could
+never resolve.
+
+**Explicitly excluded** — `AGENTTEAMS_AGENT_ROLE` and
+`AGENTTEAMS_WORKER_ROLE` (Worker role overrides stay blocked: role is
+operator-set only, never MCP-child-set), and everything not in the
+allowlist — the adapter never projects `PATH`, `HOME`, or arbitrary
+variables into the entry (no whole-env inheritance); the safe baseline
+above is the SDK's own, not something the adapter writes.
 
 `register(ctx)` (called by the hermes plugin loader) registers the bundle's
 skills via `ctx.register_skill(name, path)` and does **not** register the MCP
@@ -22,9 +54,11 @@ server — hermes-agent has no MCP registration API on `PluginContext`; MCP
 servers are read from `mcp_servers` in config.yaml
 (`tools/mcp_tool.py::_load_mcp_config`).
 
-`TEAMHARNESS_RUNTIME_CONFIG` is written as a `${VAR}` reference — the
-variable name, never a value. hermes resolves `${ENV_VAR}` from `os.environ`
-(including `~/.hermes/.env`) and keeps the placeholder verbatim when unset.
+Every allowlisted variable is written as a `${NAME}` reference — the
+variable name, never a value. hermes resolves each `${NAME}` from the
+environment (including `~/.hermes/.env`, loaded at startup) and keeps the
+placeholder verbatim when unresolvable; the resolution rule above is what
+keeps the placeholder resolvable in the first place.
 
 ## Usage
 

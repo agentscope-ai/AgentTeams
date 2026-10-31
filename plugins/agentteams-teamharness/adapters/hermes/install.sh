@@ -6,13 +6,22 @@ set -euo pipefail
 # Projects the bundle contract onto the Hermes runtime, statically:
 #
 #   1. mcp_servers.teamharness -> the MCP server entry in
-#      ~/.hermes/config.yaml (command: python3 <bundle>/mcp/server.py; env
-#      carries a ${TEAMHARNESS_RUNTIME_CONFIG} reference — the variable
-#      name, never a value; hermes resolves ${ENV_VAR} from os.environ,
-#      including ~/.hermes/.env, and keeps the placeholder verbatim when
-#      unset). There is no cwd field in hermes's MCP entry shape, so the
-#      absolute script path is used; server.py imports its sibling modules
-#      from its own directory, which works from any cwd.
+#      ~/.hermes/config.yaml (command: python3 <bundle>/mcp/server.py).
+#      env carries a narrow, documented allowlist of ${NAME} references —
+#      variable names, never values, never whole-env inheritance: the
+#      supported hermes SDK (tools/mcp_tool.py) gives the MCP child only a
+#      small safe baseline (PATH/HOME/etc. + XDG_*) from the parent plus
+#      the entry's env map (${NAME} resolved from the environment,
+#      including $HERMES_HOME/.env, at config load), so the child must be
+#      projected the storage/Matrix context it needs to pull the
+#      authoritative project state and push task files. Each allowlisted
+#      variable is written only when resolvable: set in the installer's
+#      environment, or its key present in $HERMES_HOME/.env (keys are
+#      parsed; values are never read). Worker role overrides
+#      (AGENTTEAMS_AGENT_ROLE / AGENTTEAMS_WORKER_ROLE) stay excluded —
+#      role is operator-set only. There is no cwd field in hermes's MCP
+#      entry shape, so the absolute script path is used; server.py imports
+#      its sibling modules from its own directory, which works from any cwd.
 #   2. The plugin (__init__.py + plugin.yaml + register.py + the bundle's
 #      skills tree) is synced into ~/.hermes/plugins/agentteams-teamharness/ —
 #      the upstream third-party plugin location. __init__.py is required:
@@ -71,10 +80,12 @@ export TH_HM_ADAPTER_DIR="$SCRIPT_DIR"
 export TH_HM_BUNDLE_DIR="$BUNDLE_DIR"
 export TH_HM_CONFIG="$CONFIG"
 export TH_HM_PLUGIN_HOME="$PLUGIN_HOME"
+export TH_HM_ENV_FILE="${HERMES_HOME}/.env"
 export TH_HM_DRY_RUN="$DRY_RUN"
 
 python3 - <<'PYEOF'
 import os
+import re
 import shutil
 import stat
 import sys
@@ -90,8 +101,77 @@ plugin_home = Path(os.environ["TH_HM_PLUGIN_HOME"]).expanduser()
 dry_run = os.environ.get("TH_HM_DRY_RUN") == "1"
 
 MCP_SERVER_ID = "teamharness"
-ENV_VAR = "TEAMHARNESS_RUNTIME_CONFIG"
 PLUGIN_FILES = ("plugin.yaml", "register.py", "__init__.py")
+ENV_FILE = Path(os.environ["TH_HM_ENV_FILE"]).expanduser()
+
+# MCP child environment — a narrow, documented allowlist (maintainer P1 on
+# 1143b604). The supported hermes SDK (tools/mcp_tool.py) gives the MCP
+# child only a small safe baseline (PATH, HOME, TMPDIR, LANG, TERM,
+# LC_ALL, SHELL, USER, plus XDG_*) from the parent process and this
+# entry's env map — nothing else crosses the boundary. The server needs
+# the storage/Matrix context to pull the authoritative project state and
+# push task files, so every required variable is projected as a ${NAME}
+# reference — the variable name, never a value (hermes resolves ${NAME}
+# from the environment, including ~/.hermes/.env, at config load and
+# keeps the placeholder verbatim when unresolvable). A variable is
+# projected only when something can resolve it: set (non-empty) in the
+# installer's environment, or its key present in $HERMES_HOME/.env (keys
+# are parsed; values are never read). Otherwise the child would receive a
+# literal "${NAME}" it could never resolve.
+#
+# Explicitly excluded:
+#   AGENTTEAMS_AGENT_ROLE, AGENTTEAMS_WORKER_ROLE — Worker role overrides
+#       stay blocked: role is operator-set only, never MCP-child-set.
+#   everything else (PATH, HOME, arbitrary variables) — no whole-env
+#       inheritance.
+MCP_CHILD_ENV_ALLOWLIST = (
+    # state/runtime
+    "TEAMHARNESS_RUNTIME_CONFIG",
+    "TEAMHARNESS_SHARED_DIR",
+    "AGENTTEAMS_SHARED_DIR",
+    "AGENTTEAMS_STORAGE_PREFIX",
+    "AGENTTEAMS_SHARED_STORAGE_PREFIX",
+    "TEAMHARNESS_MATRIX_CONTEXT_FILE",
+    # Matrix
+    "AGENTTEAMS_MATRIX_URL",
+    "AGENTTEAMS_WORKER_MATRIX_TOKEN",
+    "AGENTTEAMS_WORKER_NAME",
+    "AGENTTEAMS_MATRIX_USER_ID",
+    "AGENTTEAMS_MATRIX_DOMAIN",
+    # storage credentials
+    "AGENTTEAMS_FS_ENDPOINT",
+    "AGENTTEAMS_FS_ACCESS_KEY",
+    "AGENTTEAMS_FS_SECRET_KEY",
+)
+
+
+def _dotenv_keys(path):
+    """Key names of a dotenv file — keys only, values are never parsed."""
+    keys = set()
+    if not path.is_file():
+        return keys
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key = line.split("=", 1)[0].strip()
+        if key.startswith(("export ", "export\t")):
+            key = key.split(None, 1)[1].strip()
+        if key and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            keys.add(key)
+    return keys
+
+
+def _projected_mcp_env():
+    """The entry's env map: allowlisted vars as ${NAME} references, only
+    when resolvable (set in the installer env or a $HERMES_HOME/.env key)."""
+    resolvable = {name for name, value in os.environ.items() if value}
+    resolvable |= _dotenv_keys(ENV_FILE)
+    return {
+        name: "${" + name + "}"
+        for name in MCP_CHILD_ENV_ALLOWLIST
+        if name in resolvable
+    }
 
 
 def dump_yaml(obj):
@@ -184,10 +264,10 @@ config = load_yaml(config_path)
 mcp_entry = {
     "command": "python3",
     "args": [str(bundle_dir / "mcp" / "server.py")],
-    # Pass-through by reference: hermes resolves ${TEAMHARNESS_RUNTIME_CONFIG}
-    # from the environment (including ~/.hermes/.env); the value is never
-    # written into the config.
-    "env": {ENV_VAR: "${" + ENV_VAR + "}"},
+    # Pass-through by reference: hermes resolves each ${NAME} from the
+    # environment (including ~/.hermes/.env); values are never written
+    # into the config (see MCP_CHILD_ENV_ALLOWLIST above).
+    "env": _projected_mcp_env(),
 }
 config.setdefault("mcp_servers", {})[MCP_SERVER_ID] = mcp_entry
 

@@ -98,6 +98,9 @@ def test_mcp_entries_point_at_bundle_server():
         "/tmp/unused-hm.yaml",
         "--plugin-home",
         "/tmp/unused-hm-plugin",
+        # the runtime-config reference is projected only when resolvable;
+        # set it explicitly so the assertion is deterministic
+        env_extra={ENV_VAR: "/tmp/unused-runtime.yaml"},
     )
     assert result.returncode == 0, result.stderr
     entry = yaml.safe_load(result.stdout)["mcp_servers"]["teamharness"]
@@ -637,6 +640,178 @@ def test_uninstall_through_worker_layout_preserves_symlink(tmp_path):
 
 def test_adapter_scripts_pass_bash_syntax_check():
     for script in (OPENCLAW_ADAPTER / "install.sh", OPENCLAW_ADAPTER / "uninstall.sh"):
+        result = subprocess.run(
+            ["bash", "-n", str(script)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert result.returncode == 0, f"bash -n {script.name}: {result.stderr}"
+
+
+# ---------------------------------------------------------------------------
+# 11. Hermes env projection: narrow allowlist, by reference only
+#     (maintainer P1 on 1143b604 — the SDK hands the MCP child only a
+#     small safe baseline plus the entry's env map, so the entry must
+#     project the storage/Matrix context the child needs, as ${NAME}
+#     references)
+# ---------------------------------------------------------------------------
+
+HERMES_ALLOWLIST = (
+    # state/runtime
+    "TEAMHARNESS_RUNTIME_CONFIG",
+    "TEAMHARNESS_SHARED_DIR",
+    "AGENTTEAMS_SHARED_DIR",
+    "AGENTTEAMS_STORAGE_PREFIX",
+    "AGENTTEAMS_SHARED_STORAGE_PREFIX",
+    "TEAMHARNESS_MATRIX_CONTEXT_FILE",
+    # Matrix
+    "AGENTTEAMS_MATRIX_URL",
+    "AGENTTEAMS_WORKER_MATRIX_TOKEN",
+    "AGENTTEAMS_WORKER_NAME",
+    "AGENTTEAMS_MATRIX_USER_ID",
+    "AGENTTEAMS_MATRIX_DOMAIN",
+    # storage credentials
+    "AGENTTEAMS_FS_ENDPOINT",
+    "AGENTTEAMS_FS_ACCESS_KEY",
+    "AGENTTEAMS_FS_SECRET_KEY",
+)
+HERMES_ROLE_VARS = ("AGENTTEAMS_AGENT_ROLE", "AGENTTEAMS_WORKER_ROLE")
+HERMES_JUNK_VAR = "TH_TEST_UNRELATED_JUNK"
+HERMES_EXCLUDED = HERMES_ROLE_VARS + (HERMES_JUNK_VAR,)
+
+
+def hermes_script_env(tmp_path: Path, extra: dict) -> dict:
+    """Deterministic installer env: every allowlisted/role/junk variable
+    scrubbed, HOME + HERMES_HOME pinned (hermetic ~/.hermes/.env
+    resolution), then ``extra`` applied."""
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    env["HOME"] = str(home)
+    env["HERMES_HOME"] = str(home / ".hermes")
+    for key in list(env):
+        if key in HERMES_ALLOWLIST or key in HERMES_EXCLUDED:
+            del env[key]
+    env.update(extra)
+    return env
+
+
+def install_hermes(config: Path, plugin_home: Path, env: dict) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [
+            "bash",
+            str(HERMES_ADAPTER / "install.sh"),
+            "--config",
+            str(config),
+            "--plugin-home",
+            str(plugin_home),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
+    )
+
+
+def test_hermes_env_is_exactly_the_resolved_allowlist(tmp_path):
+    """Entry shape: env carries exactly the allowlist (every var set in
+    the installer env), each value a ${NAME} reference — no literal
+    values, no role overrides, no unrelated variables."""
+    values = {name: f"value-{name.lower()}-zzz" for name in HERMES_ALLOWLIST}
+    env = hermes_script_env(
+        tmp_path,
+        {
+            **values,
+            HERMES_JUNK_VAR: "junk-value",
+            "AGENTTEAMS_AGENT_ROLE": "override-leader",
+            "AGENTTEAMS_WORKER_ROLE": "override-worker",
+        },
+    )
+    config = tmp_path / "config.yaml"
+    plugin_home = tmp_path / "plugin-home"
+    result = install_hermes(config, plugin_home, env)
+    assert result.returncode == 0, result.stderr
+    projected = yaml.safe_load(config.read_text())["mcp_servers"]["teamharness"]["env"]
+    assert set(projected) == set(HERMES_ALLOWLIST)
+    for name in HERMES_ALLOWLIST:
+        assert projected[name] == "${" + name + "}"
+    raw = config.read_text()
+    for name in HERMES_ALLOWLIST:
+        assert values[name] not in raw, f"literal value of {name} written into config"
+    for name in HERMES_EXCLUDED:
+        assert name not in raw, f"excluded variable {name} projected into the entry"
+
+
+def test_hermes_env_resolution_rule_installer_env_and_dotenv_keys(tmp_path):
+    """Resolution rule: a var is projected when set (non-empty) in the
+    installer env OR its key appears in $HERMES_HOME/.env — keys parsed,
+    values never read, non-allowlisted dotenv keys never projected."""
+    home = tmp_path / "home"
+    (home / ".hermes").mkdir(parents=True)
+    (home / ".hermes" / ".env").write_text(
+        "# hermes dotenv\n"
+        "AGENTTEAMS_MATRIX_URL=https://hs.example.org\n"
+        "export AGENTTEAMS_WORKER_MATRIX_TOKEN='tok-dotenv-abc'\n"
+        "AGENTTEAMS_FS_SECRET_KEY=\n"
+        "TH_TEST_UNRELATED_JUNK=junk-in-dotenv\n"
+    )
+    env = hermes_script_env(tmp_path, {ENV_VAR: str(tmp_path / "runtime.yaml")})
+    config = tmp_path / "config.yaml"
+    plugin_home = tmp_path / "plugin-home"
+    result = install_hermes(config, plugin_home, env)
+    assert result.returncode == 0, result.stderr
+    projected = yaml.safe_load(config.read_text())["mcp_servers"]["teamharness"]["env"]
+    expected = {
+        ENV_VAR,  # set (non-empty) in the installer env
+        "AGENTTEAMS_MATRIX_URL",  # dotenv key
+        "AGENTTEAMS_WORKER_MATRIX_TOKEN",  # dotenv key, export-prefixed
+        "AGENTTEAMS_FS_SECRET_KEY",  # dotenv key with an empty value
+    }
+    assert set(projected) == expected
+    for name in expected:
+        assert projected[name] == "${" + name + "}"
+    raw = config.read_text()
+    for value in ("https://hs.example.org", "tok-dotenv-abc", "junk-in-dotenv"):
+        assert value not in raw, "dotenv value leaked into the config"
+    assert HERMES_JUNK_VAR not in raw
+
+
+def test_hermes_install_preserves_foreign_mcp_servers(tmp_path):
+    """No regression: an mcp_servers entry the installer does not own is
+    preserved next to the projected entry."""
+    env = hermes_script_env(
+        tmp_path,
+        {
+            ENV_VAR: str(tmp_path / "runtime.yaml"),
+            "AGENTTEAMS_MATRIX_URL": "https://hs.example.org",
+            "AGENTTEAMS_WORKER_MATRIX_TOKEN": "synthetic-token",
+        },
+    )
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        yaml.safe_dump(
+            {
+                "mcp_servers": {"other": {"command": "other-cmd", "args": ["--x"]}},
+                "tools": {"enabled": ["kept"]},
+            }
+        )
+    )
+    plugin_home = tmp_path / "plugin-home"
+    result = install_hermes(config, plugin_home, env)
+    assert result.returncode == 0, result.stderr
+    data = yaml.safe_load(config.read_text())
+    assert data["mcp_servers"]["other"] == {"command": "other-cmd", "args": ["--x"]}
+    assert data["mcp_servers"]["teamharness"]["env"] == {
+        ENV_VAR: "${" + ENV_VAR + "}",
+        "AGENTTEAMS_MATRIX_URL": "${AGENTTEAMS_MATRIX_URL}",
+        "AGENTTEAMS_WORKER_MATRIX_TOKEN": "${AGENTTEAMS_WORKER_MATRIX_TOKEN}",
+    }
+    assert data["tools"] == {"enabled": ["kept"]}
+
+
+def test_hermes_scripts_pass_bash_syntax_check():
+    for script in (HERMES_ADAPTER / "install.sh", HERMES_ADAPTER / "uninstall.sh"):
         result = subprocess.run(
             ["bash", "-n", str(script)],
             capture_output=True,

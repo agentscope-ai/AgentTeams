@@ -1404,6 +1404,108 @@ else
     fi
 fi
 
+# ---------- Test 28: Failed presence queries keep the old container ----------
+
+section "Test 28: Executable unknown presence metadata"
+
+_test_start_dashboard_metadata_unknown() {
+    local _tmpfile _calls
+    _tmpfile=$(mktemp)
+    _calls=$(mktemp)
+
+    if ! extract_function "_start_dashboard" "${INSTALL_SCRIPT}" > "${_tmpfile}" 2>/dev/null; then
+        echo "EXTRACTION_FAILED"
+        rm -f "${_tmpfile}" "${_calls}"
+        return
+    fi
+
+    (
+        CALLS_FILE="${_calls}"
+        docker() {
+            printf 'docker %s\n' "$*" >> "${CALLS_FILE}"
+            if [ "$1" = "ps" ]; then
+                if [ "$2" = "-a" ]; then
+                    echo "agentteams-dashboard"
+                else
+                    echo "agentteams-controller"
+                fi
+                return 0
+            fi
+            if [ "$1" = "cp" ]; then
+                return 1
+            fi
+            if [ "$1" = "diff" ]; then
+                # Presence query itself fails: state is unknown, not absent.
+                return 1
+            fi
+            if [ "$1" = "inspect" ]; then
+                if [ "$2" = "agentteams-dashboard" ]; then
+                    return 1
+                fi
+                return 0
+            fi
+            if [ "$1" = "image" ] && echo "$*" | grep -q 'Config.User'; then
+                echo "nextjs"
+                return 0
+            fi
+            return 0
+        }
+        podman() { docker "$@"; }
+        DOCKER_CMD="docker"
+        log() { :; }
+        msg() { echo "$*"; }
+        curl() { return 1; }
+        sleep() { :; }
+
+        AGENTTEAMS_DASHBOARD=1
+        AGENTTEAMS_USE_EMBEDDED=1
+        AGENTTEAMS_REGISTRY="ghcr.io/agentteams-group"
+        AGENTTEAMS_PORT_DASHBOARD="13000"
+        AGENTTEAMS_DASHBOARD_VERSION="v1.3.1"
+        AGENTTEAMS_DASHBOARD_IMAGE="ghcr.io/agentteams-group/agentteams/agentteams-dashboard:v1.3.1"
+        AGENTTEAMS_LOCAL_ONLY=1
+        AGENTTEAMS_AI_GATEWAY_ADMIN_URL="https://console.example.test:8443"
+        AGENTTEAMS_AUTH_TOKEN="test-token"
+        AGENTTEAMS_ENV_FILE="$(mktemp)"
+
+        # shellcheck disable=SC1090
+        source "${_tmpfile}" 2>/dev/null
+
+        if ! declare -F _start_dashboard >/dev/null 2>&1; then
+            echo "FUNCTION_NOT_FOUND"
+        else
+            _start_dashboard
+            echo "CALLS_BEGIN"
+            cat "${CALLS_FILE}"
+            echo "CALLS_END"
+        fi
+    )
+    rm -f "${_tmpfile}" "${_calls}"
+}
+
+_metadata_unknown=$(_test_start_dashboard_metadata_unknown 2>&1)
+
+if echo "${_metadata_unknown}" | grep -q "EXTRACTION_FAILED\|FUNCTION_NOT_FOUND"; then
+    fail "Exec metadata-unknown: function extraction failed"
+else
+    _calls_meta=$(echo "${_metadata_unknown}" | sed -n '/CALLS_BEGIN/,/CALLS_END/p')
+    if echo "${_calls_meta}" | grep -q 'docker start .*agentteams-dashboard'; then
+        pass "Exec metadata-unknown: keeps old container when presence queries fail"
+    else
+        fail "Exec metadata-unknown: did not restart old container when presence queries fail"
+    fi
+    if echo "${_calls_meta}" | grep -q 'docker rm'; then
+        fail "Exec metadata-unknown: removed old container on unknown presence state"
+    else
+        pass "Exec metadata-unknown: does not rm old container on unknown presence state"
+    fi
+    if echo "${_calls_meta}" | grep -q 'docker run -d'; then
+        fail "Exec metadata-unknown: replaced container on unknown presence state"
+    else
+        pass "Exec metadata-unknown: does not start a new container on unknown presence state"
+    fi
+fi
+
 # ---------- Test 23: Brand-new volume is chowned to the image UID ----------
 
 section "Test 23: Executable brand-new volume chown"

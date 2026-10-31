@@ -3656,18 +3656,30 @@ _start_dashboard() {
     local _dash_ids
     _dash_ids=$(_dashboard_image_ids)
 
-    # True when the stopped container still has files or a mount at src.
-    # docker diff sees the writable layer; inspect sees volume/bind mounts.
-    # A failed docker cp plus a missing path is "genuinely absent".
+    # Presence state of a path inside the stopped container.
+    # Exit 0 = confirmed present (diff or mount list shows it),
+    # exit 1 = confirmed absent (both queries answered and neither shows it),
+    # exit 2 = unknown (a query failed, so absence cannot be trusted).
     _dashboard_path_present() {
         local _container="$1" _src="$2"
-        if ${DOCKER_CMD} diff "${_container}" 2>/dev/null | grep -F "${_src}" >/dev/null; then
-            return 0
+        local _diff_ok=0 _mount_ok=0
+        local _diff_out _mount_out
+        if _diff_out=$(${DOCKER_CMD} diff "${_container}" 2>/dev/null); then
+            _diff_ok=1
+            if printf '%s\n' "${_diff_out}" | grep -F "${_src}" >/dev/null; then
+                return 0
+            fi
         fi
-        if ${DOCKER_CMD} inspect "${_container}" --format '{{range .Mounts}}{{.Destination}}{{"\n"}}{{end}}' 2>/dev/null | grep -Fx "${_src}" >/dev/null; then
-            return 0
+        if _mount_out=$(${DOCKER_CMD} inspect "${_container}" --format '{{range .Mounts}}{{.Destination}}{{"\n"}}{{end}}' 2>/dev/null); then
+            _mount_ok=1
+            if printf '%s\n' "${_mount_out}" | grep -Fx "${_src}" >/dev/null; then
+                return 0
+            fi
         fi
-        return 1
+        if [ "${_diff_ok}" = "1" ] && [ "${_mount_ok}" = "1" ]; then
+            return 1
+        fi
+        return 2
     }
 
     # Export overlay config from the old container before removing it.
@@ -3689,12 +3701,24 @@ _start_dashboard() {
 
         local _keep_old=0
         local _keep_where=""
-        if [ ! -f "${_overlay_exists}" ] && _dashboard_path_present "${DASHBOARD_CONTAINER}" "/data/agentteams-dashboard"; then
-            _keep_old=1
-            _keep_where="/data/agentteams-dashboard"
-        elif [ ! -f "${_legacy_exists}" ] && _dashboard_path_present "${DASHBOARD_CONTAINER}" "/app/db"; then
-            _keep_old=1
-            _keep_where="/app/db"
+        # Only skip the old container when its state is confirmed absent.
+        # Present or unqueryable (diff/inspect failed) both keep it, because an
+        # unverified export must never lead to data loss.
+        if [ ! -f "${_overlay_exists}" ]; then
+            local _overlay_state=0
+            _dashboard_path_present "${DASHBOARD_CONTAINER}" "/data/agentteams-dashboard" || _overlay_state=$?
+            if [ "${_overlay_state}" != "1" ]; then
+                _keep_old=1
+                _keep_where="/data/agentteams-dashboard"
+            fi
+        fi
+        if [ "${_keep_old}" = "0" ] && [ ! -f "${_legacy_exists}" ]; then
+            local _legacy_state=0
+            _dashboard_path_present "${DASHBOARD_CONTAINER}" "/app/db" || _legacy_state=$?
+            if [ "${_legacy_state}" != "1" ]; then
+                _keep_old=1
+                _keep_where="/app/db"
+            fi
         fi
         if [ "${_keep_old}" = "1" ]; then
             log "WARNING: existing Dashboard config under ${_keep_where} could not be exported; leaving the old container in place"

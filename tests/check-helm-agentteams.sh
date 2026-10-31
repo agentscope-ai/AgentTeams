@@ -492,3 +492,87 @@ if grep -qF "fsGroup: 10001" <<<"${rustfs_sts}"; then
     exit 1
 fi
 echo "PASS: podSecurityContext.fsGroup override passes through to the StatefulSet"
+
+# ---------------------------------------------------------------------------
+# Central storage.engine / storage.mode enum validation (render-time gate)
+# ---------------------------------------------------------------------------
+# 00-validate checks engine in {external, rustfs} and mode in {managed,
+# existing} before any combination logic, so an unknown value fails the
+# render instead of falling through a branch (any non-rustfs engine used
+# to be silently treated as external). Unknown values must fail before
+# any manifest is emitted.
+
+# 11. Unknown mode (the maintainer's example): must fail the render and
+#     emit no RustFS resource.
+rustfs_enum_render="$(mktemp)"
+trap 'rm -f "${render}" "${copaw_render}" "${upg_render}" "${drift_err}" "${s3_render}" "${rustfs_render}" "${rustfs_ext_render}" "${rustfs_bad_render}" "${rustfs_enum_render}"' EXIT
+if helm template agentteams "${CHART}" "${COMMON_ARGS[@]}" \
+    --set storage.provider=s3 \
+    --set storage.engine=rustfs \
+    --set storage.mode=invalid-review-mode > "${rustfs_enum_render}" 2> "${drift_err}"; then
+    echo "FAIL: unknown storage.mode must not render"
+    exit 1
+fi
+if ! grep -qF 'unsupported storage.mode "invalid-review-mode"' "${drift_err}"; then
+    echo "FAIL: unknown storage.mode error is not explicit:"
+    cat "${drift_err}" || true
+    exit 1
+fi
+if ! grep -qF '"managed" or "existing"' "${drift_err}"; then
+    echo "FAIL: unknown storage.mode error does not list the legal values:"
+    cat "${drift_err}" || true
+    exit 1
+fi
+for kind in StatefulSet Service Secret; do
+    if [ "$(awk -v kind="${kind}" 'BEGIN{RS="---"} $0 ~ ("kind: " kind) && /-rustfs/ {n++} END{print n+0}' "${rustfs_enum_render}")" -ne 0 ]; then
+        echo "FAIL: failed render (unknown storage.mode) must not emit a RustFS ${kind}"
+        exit 1
+    fi
+done
+echo "PASS: unknown storage.mode fails the render before any RustFS resource is emitted"
+
+# 12. Unknown engine: must fail the render even when the rest of the
+#     s3 + existing combination is fully valid (endpoint + credentials).
+if helm template agentteams "${CHART}" "${COMMON_ARGS[@]}" \
+    --set storage.provider=s3 \
+    --set storage.engine=bogus \
+    --set storage.mode=existing \
+    --set storage.s3.endpoint=http://x:9000 \
+    --set storage.s3.accessKey=a --set storage.s3.secretKey=b > "${rustfs_enum_render}" 2> "${drift_err}"; then
+    echo "FAIL: unknown storage.engine must not render"
+    exit 1
+fi
+if ! grep -qF 'unsupported storage.engine "bogus"' "${drift_err}"; then
+    echo "FAIL: unknown storage.engine error is not explicit:"
+    cat "${drift_err}" || true
+    exit 1
+fi
+if ! grep -qF '"external" or "rustfs"' "${drift_err}"; then
+    echo "FAIL: unknown storage.engine error does not list the legal values:"
+    cat "${drift_err}" || true
+    exit 1
+fi
+echo "PASS: unknown storage.engine fails the render before any combination logic runs"
+
+# 13. The documented managed combination (engine=rustfs + mode=managed)
+#     must still render the RustFS three-piece set with fsGroup 10001.
+if ! helm template agentteams "${CHART}" "${COMMON_ARGS[@]}" \
+    --set storage.provider=s3 \
+    --set storage.engine=rustfs \
+    --set storage.mode=managed > "${rustfs_enum_render}" 2> "${drift_err}"; then
+    echo "FAIL: helm template (engine=rustfs + explicit mode=managed) failed:"
+    cat "${drift_err}" || true
+    exit 1
+fi
+for kind in StatefulSet Service Secret; do
+    if [ "$(awk -v kind="${kind}" 'BEGIN{RS="---"} $0 ~ ("kind: " kind) && /-rustfs/ {n++} END{print n+0}' "${rustfs_enum_render}")" = "0" ]; then
+        echo "FAIL: engine=rustfs + mode=managed did not render a RustFS ${kind}"
+        exit 1
+    fi
+done
+rustfs_enum_sts="$(awk 'BEGIN{RS="---"} /kind: StatefulSet/ && /-rustfs/ {print}' "${rustfs_enum_render}")"
+if ! grep -qF "fsGroup: 10001" <<<"${rustfs_enum_sts}"; then
+    echo "FAIL: engine=rustfs + mode=managed StatefulSet is missing fsGroup: 10001"
+    exit 1
+fi
+echo "PASS: engine=rustfs + mode=managed still renders the RustFS three-piece set (fsGroup 10001)"

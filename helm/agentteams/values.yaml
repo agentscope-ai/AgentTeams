@@ -104,7 +104,7 @@ gateway:
 #   StatefulSet (image pinned with the release, same policy as MinIO).
 storage:
   provider: minio             # minio | oss | s3
-  engine: external            # external (default; user-managed backend: mode=existing + s3.endpoint) | rustfs (chart-managed; requires provider=s3; storage.s3.endpoint must stay empty)
+  engine: external            # external | rustfs (external = default, user-managed backend: mode=existing + s3.endpoint; rustfs = chart-managed, requires provider=s3 and an empty storage.s3.endpoint)
   mode: managed               # managed | existing
   bucket: "agentteams-storage"
   # Required when provider=oss:

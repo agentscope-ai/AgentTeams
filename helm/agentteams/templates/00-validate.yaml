@@ -8,6 +8,8 @@ Validate public values at render time. Supported combinations:
   storage.provider=oss        storage.mode=existing   → external OSS bucket
   storage.provider=s3         storage.mode=existing   → external S3 backend (e.g. RustFS)
   storage.provider=s3         storage.engine=rustfs   → chart-managed single-node RustFS (storage.s3.endpoint must stay empty)
+  storage.engine              external | rustfs
+  storage.mode                managed | existing
 */ -}}
 
 {{- $matrixProvider := .Values.matrix.provider | default "" -}}
@@ -44,6 +46,12 @@ Validate public values at render time. Supported combinations:
 {{- $storageProvider := .Values.storage.provider | default "" -}}
 {{- $storageMode := .Values.storage.mode | default "" -}}
 {{- $storageEngine := .Values.storage.engine | default "external" -}}
+{{- if not (has $storageEngine (list "external" "rustfs")) -}}
+{{- fail (printf "unsupported storage.engine %q: expected \"external\" or \"rustfs\"" $storageEngine) -}}
+{{- end -}}
+{{- if not (has $storageMode (list "managed" "existing")) -}}
+{{- fail (printf "unsupported storage.mode %q: expected \"managed\" or \"existing\"" $storageMode) -}}
+{{- end -}}
 {{- if eq $storageEngine "rustfs" -}}
   {{- if ne $storageProvider "s3" -}}
   {{- fail (printf "storage.engine=rustfs requires storage.provider=s3 (got %q)" $storageProvider) -}}

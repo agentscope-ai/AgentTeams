@@ -46,7 +46,7 @@ Target: `~/.openclaw/openclaw.json` (override with `--config <path>` or
 
 | Key | Value |
 |-----|-------|
-| `mcp.servers.teamharness` | `{command: python3, args: ["-m", "mcp.server"], cwd: <bundle root>, env: {TEAMHARNESS_RUNTIME_CONFIG: "${TEAMHARNESS_RUNTIME_CONFIG}"}}` |
+| `mcp.servers.teamharness` | `{command: python3, args: ["-m", "mcp.server"], cwd: <bundle root>, env: <the allowlisted ${NAME} references — policy below>}` |
 | `plugins.allow` | `+ "agentteams-teamharness"` (deduplicated) |
 | `plugins.load.paths` | `+ <config dir>/plugins/agentteams-teamharness` (the staged root; deduplicated, and the bare adapter directory is removed if an older install registered it) |
 | `plugins.entries.agentteams-teamharness.enabled` | `true` |
@@ -60,10 +60,44 @@ absolute-path based and does not depend on the workspace.
 The MCP entry is a *static projection*: `python3 -m mcp.server` with
 `cwd` = bundle root. The `mcp/` directory now carries an explicit
 `__init__.py` (a regular package, so `import mcp.server` can never resolve to
-the pip-installed MCP SDK instead of this bundle). `TEAMHARNESS_RUNTIME_CONFIG` is written
-as a `${VAR}` reference — the variable name, never a value. OpenClaw expands
-`${VAR}` over the whole parsed configuration; an unset variable degrades to a
-warning and keeps the placeholder, it does not crash the worker.
+the pip-installed MCP SDK instead of this bundle).
+
+### MCP child env allowlist
+
+OpenClaw's native MCP runner filters the child environment: the spawned
+server receives the entry's `env` map — each `${NAME}` expanded from the
+environment over the whole parsed configuration (`src/config/
+env-substitution.ts`; an unset variable degrades to a warning and keeps the
+placeholder, it does not crash the worker) — and **nothing else** crosses
+the boundary. The server needs the storage/Matrix context to pull the
+authoritative project state and push task files, so `install.sh` projects a
+narrow, documented allowlist (mirroring the accepted Hermes fix):
+
+- **References only** — every projected value is a `${NAME}` reference
+  (the variable name), never a value; the config file never carries a
+  credential.
+- **Resolvable variables only** — a variable is projected only when it is
+  non-empty in the installer's environment. OpenClaw has no documented
+  dotenv file (unlike Hermes's `~/.hermes/.env`), so the installer's
+  environment is the only resolution source; a variable that cannot be
+  resolved is omitted rather than written as a literal `${NAME}` the child
+  could never resolve. `TEAMHARNESS_RUNTIME_CONFIG` is the one exception:
+  it is always kept, first, for compatibility with existing installs (an
+  unresolvable reference degrades to a warning, it does not crash).
+- **Worker role overrides excluded** — `AGENTTEAMS_AGENT_ROLE` and
+  `AGENTTEAMS_WORKER_ROLE` are never projected: role is operator-set only,
+  never MCP-child-set.
+- **No whole-environment inheritance** — nothing else (PATH, HOME, or any
+  unrelated variable) is carried into the entry.
+
+The allowlist is exactly the set of variables the MCP server reads:
+`TEAMHARNESS_RUNTIME_CONFIG`, `TEAMHARNESS_SHARED_DIR`,
+`AGENTTEAMS_SHARED_DIR`, `AGENTTEAMS_STORAGE_PREFIX`,
+`AGENTTEAMS_SHARED_STORAGE_PREFIX`, `TEAMHARNESS_MATRIX_CONTEXT_FILE`,
+`AGENTTEAMS_MATRIX_URL`, `AGENTTEAMS_WORKER_MATRIX_TOKEN`,
+`AGENTTEAMS_WORKER_NAME`, `AGENTTEAMS_MATRIX_USER_ID`,
+`AGENTTEAMS_MATRIX_DOMAIN`, `AGENTTEAMS_FS_ENDPOINT`,
+`AGENTTEAMS_FS_ACCESS_KEY`, `AGENTTEAMS_FS_SECRET_KEY`.
 
 ## Usage
 

@@ -6,9 +6,17 @@ set -euo pipefail
 # Projects the bundle contract onto the OpenClaw runtime, statically:
 #
 #   1. mcp.servers.teamharness  -> the MCP server entry in openclaw.json
-#      (command: python3 -m mcp.server, cwd: <bundle root>, env carries a
-#      ${TEAMHARNESS_RUNTIME_CONFIG} reference — the variable name, never a
-#      value; OpenClaw expands ${VAR} over the whole parsed config).
+#      (command: python3 -m mcp.server, cwd: <bundle root>). env carries a
+#      narrow, documented allowlist of ${NAME} references — variable names,
+#      never values, never whole-env inheritance: the native MCP runner
+#      filters the child environment, so the child receives the entry's
+#      env map (each ${NAME} expanded from the environment over the whole
+#      parsed config) and nothing else. Each allowlisted variable is
+#      projected only when non-empty in the installer's environment
+#      (OpenClaw has no documented dotenv file; TEAMHARNESS_RUNTIME_CONFIG
+#      is always kept, first, for compatibility). Worker role overrides
+#      (AGENTTEAMS_AGENT_ROLE / AGENTTEAMS_WORKER_ROLE) stay excluded —
+#      role is operator-set only.
 #   2. A self-contained plugin root is staged next to the runtime config --
 #      <config dir>/plugins/agentteams-teamharness/ -- from the adapter
 #      directory: index.mjs, openclaw.plugin.json (skills rewritten to in-root
@@ -117,6 +125,60 @@ MCP_SERVER_ID = "teamharness"
 ENV_VAR = "TEAMHARNESS_RUNTIME_CONFIG"
 MANIFEST_NAME = "openclaw.plugin.json"
 
+# MCP child environment — a narrow, documented allowlist (mirrors the
+# accepted Hermes fix, maintainer P1 on 1143b604). OpenClaw's native MCP
+# runner filters the child environment: the spawned server receives the
+# entry's env map — each ${NAME} expanded from the environment over the
+# whole parsed config (src/config/env-substitution.ts) — and nothing else
+# crosses the boundary, so the child must be projected the storage/Matrix
+# context it needs to pull the authoritative project state and push task
+# files. Every allowlisted variable is projected as a ${NAME} reference —
+# the variable name, never a value — and only when non-empty in the
+# installer's environment: OpenClaw has no documented dotenv file, so the
+# installer's environment is the only resolution source, and a variable
+# that cannot be resolved would reach the child as a literal "${NAME}" it
+# could never resolve. TEAMHARNESS_RUNTIME_CONFIG is always kept, first,
+# for compatibility with existing installs (an unresolvable reference
+# degrades to a warning, it does not crash the worker).
+#
+# Explicitly excluded:
+#   AGENTTEAMS_AGENT_ROLE, AGENTTEAMS_WORKER_ROLE — Worker role overrides
+#       stay blocked: role is operator-set only, never MCP-child-set.
+#   everything else (PATH, HOME, arbitrary variables) — no whole-env
+#       inheritance.
+MCP_CHILD_ENV_ALLOWLIST = (
+    # state/runtime
+    "TEAMHARNESS_RUNTIME_CONFIG",
+    "TEAMHARNESS_SHARED_DIR",
+    "AGENTTEAMS_SHARED_DIR",
+    "AGENTTEAMS_STORAGE_PREFIX",
+    "AGENTTEAMS_SHARED_STORAGE_PREFIX",
+    "TEAMHARNESS_MATRIX_CONTEXT_FILE",
+    # Matrix
+    "AGENTTEAMS_MATRIX_URL",
+    "AGENTTEAMS_WORKER_MATRIX_TOKEN",
+    "AGENTTEAMS_WORKER_NAME",
+    "AGENTTEAMS_MATRIX_USER_ID",
+    "AGENTTEAMS_MATRIX_DOMAIN",
+    # storage credentials
+    "AGENTTEAMS_FS_ENDPOINT",
+    "AGENTTEAMS_FS_ACCESS_KEY",
+    "AGENTTEAMS_FS_SECRET_KEY",
+)
+
+
+def _projected_mcp_env():
+    """The entry's env map: the runtime-config reference always (kept first
+    for compatibility), plus each other allowlisted var as a ${NAME}
+    reference, only when non-empty in the installer's environment."""
+    env = {ENV_VAR: "${" + ENV_VAR + "}"}
+    for name in MCP_CHILD_ENV_ALLOWLIST:
+        if name == ENV_VAR:
+            continue
+        if os.environ.get(name, "").strip():
+            env[name] = "${" + name + "}"
+    return env
+
 
 def dump_json(obj):
     return json.dumps(obj, indent=2, sort_keys=True) + "\n"
@@ -220,9 +282,10 @@ def project(config):
         "command": "python3",
         "args": ["-m", "mcp.server"],
         "cwd": str(bundle_dir),
-        # Pass-through by reference: OpenClaw expands ${TEAMHARNESS_RUNTIME_CONFIG}
-        # from the environment; the value is never written into the config.
-        "env": {ENV_VAR: "${" + ENV_VAR + "}"},
+        # Pass-through by reference: OpenClaw expands each ${NAME} from the
+        # environment over the parsed config; values are never written into
+        # the config (see MCP_CHILD_ENV_ALLOWLIST above).
+        "env": _projected_mcp_env(),
     }
     config.setdefault("mcp", {}).setdefault("servers", {})[MCP_SERVER_ID] = mcp_entry
 

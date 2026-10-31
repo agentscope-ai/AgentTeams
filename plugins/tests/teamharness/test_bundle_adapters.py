@@ -27,15 +27,20 @@ ENV_VAR = "TEAMHARNESS_RUNTIME_CONFIG"
 ENV_REF = "${" + ENV_VAR + "}"
 
 
-def run_script(script: Path, *args: str, env_extra: dict | None = None) -> subprocess.CompletedProcess:
-    env = dict(os.environ)
+def run_script(
+    script: Path,
+    *args: str,
+    env_extra: dict | None = None,
+    env: dict | None = None,
+) -> subprocess.CompletedProcess:
+    base = dict(os.environ) if env is None else dict(env)
     if env_extra:
-        env.update(env_extra)
+        base.update(env_extra)
     return subprocess.run(
         ["bash", str(script), *args],
         capture_output=True,
         text=True,
-        env=env,
+        env=base,
         timeout=120,
     )
 
@@ -79,9 +84,49 @@ def test_dry_run_both_adapters_exit_zero_and_parse(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_mcp_entries_point_at_bundle_server():
+OPENCLAW_ALLOWLIST = (
+    # state/runtime
+    "TEAMHARNESS_RUNTIME_CONFIG",
+    "TEAMHARNESS_SHARED_DIR",
+    "AGENTTEAMS_SHARED_DIR",
+    "AGENTTEAMS_STORAGE_PREFIX",
+    "AGENTTEAMS_SHARED_STORAGE_PREFIX",
+    "TEAMHARNESS_MATRIX_CONTEXT_FILE",
+    # Matrix
+    "AGENTTEAMS_MATRIX_URL",
+    "AGENTTEAMS_WORKER_MATRIX_TOKEN",
+    "AGENTTEAMS_WORKER_NAME",
+    "AGENTTEAMS_MATRIX_USER_ID",
+    "AGENTTEAMS_MATRIX_DOMAIN",
+    # storage credentials
+    "AGENTTEAMS_FS_ENDPOINT",
+    "AGENTTEAMS_FS_ACCESS_KEY",
+    "AGENTTEAMS_FS_SECRET_KEY",
+)
+OPENCLAW_ROLE_VARS = ("AGENTTEAMS_AGENT_ROLE", "AGENTTEAMS_WORKER_ROLE")
+
+
+def openclaw_script_env(extra: dict) -> dict:
+    """Deterministic installer env: every allowlisted/role variable
+    scrubbed, then ``extra`` applied. OpenClaw has no documented dotenv
+    file, so the installer env is the only resolvable source."""
+    env = dict(os.environ)
+    for key in list(env):
+        if key in OPENCLAW_ALLOWLIST or key in OPENCLAW_ROLE_VARS:
+            del env[key]
+    env.update(extra)
+    return env
+
+
+def test_mcp_entries_point_at_bundle_server(tmp_path):
+    # clean installer env: the entry env is exactly the runtime-config
+    # reference (always projected, for compatibility)
     result = run_script(
-        OPENCLAW_ADAPTER / "install.sh", "--dry-run", "--config", "/tmp/unused-oc.json"
+        OPENCLAW_ADAPTER / "install.sh",
+        "--dry-run",
+        "--config",
+        str(tmp_path / "unused-oc-clean.json"),
+        env=openclaw_script_env({}),
     )
     assert result.returncode == 0, result.stderr
     entry = json.loads(result.stdout)["mcp"]["servers"]["teamharness"]
@@ -89,7 +134,33 @@ def test_mcp_entries_point_at_bundle_server():
     assert entry["args"] == ["-m", "mcp.server"]
     assert Path(entry["cwd"]) == BUNDLE
     assert (Path(entry["cwd"]) / "mcp" / "server.py").is_file()
-    assert entry["env"][ENV_VAR] == ENV_REF
+    assert entry["env"] == {ENV_VAR: ENV_REF}
+
+    # installer env with the allowlisted vars set: the entry env is
+    # exactly those ${NAME} references — never literal values, never role
+    # overrides, never the whole environment
+    values = {name: f"value-{name.lower()}-zzz" for name in OPENCLAW_ALLOWLIST}
+    full_config = tmp_path / "unused-oc-full.json"
+    result = run_script(
+        OPENCLAW_ADAPTER / "install.sh",
+        "--config",
+        str(full_config),
+        env=openclaw_script_env(
+            {
+                **values,
+                "AGENTTEAMS_AGENT_ROLE": "override-leader",
+                "AGENTTEAMS_WORKER_ROLE": "override-worker",
+            }
+        ),
+    )
+    assert result.returncode == 0, result.stderr
+    entry = json.loads(full_config.read_text())["mcp"]["servers"]["teamharness"]
+    assert entry["env"] == {name: "${" + name + "}" for name in OPENCLAW_ALLOWLIST}
+    raw = full_config.read_text()
+    for name in OPENCLAW_ALLOWLIST:
+        assert values[name] not in raw, f"literal value of {name} written into config"
+    for name in OPENCLAW_ROLE_VARS:
+        assert name not in raw, f"role override {name} projected into the entry"
 
     result = run_script(
         HERMES_ADAPTER / "install.sh",

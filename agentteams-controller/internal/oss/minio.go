@@ -341,6 +341,36 @@ func (c *MinIOClient) GetObject(ctx context.Context, key string) ([]byte, error)
 	return []byte(out), nil
 }
 
+// PresignGet mints a presigned download URL for the object at key that
+// stays valid for ttl (#1475 PR-4). It shells out to
+// `mc share download --expire <ttl> --json <fullPath>` and returns the URL
+// from the `share` field: the mc CLI computes the S3 V4 signature locally
+// from the alias credentials, so neither the object bytes nor the
+// credentials ever leave the process. The URL grants anonymous read access
+// to exactly that object until it expires.
+func (c *MinIOClient) PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	if ttl <= 0 {
+		return "", fmt.Errorf("presign ttl must be positive, got %s", ttl)
+	}
+	if err := c.ensureAlias(ctx); err != nil {
+		return "", err
+	}
+	out, err := c.runMC(ctx, "share", "download", "--expire", ttl.String(), "--json", c.fullPath(key))
+	if err != nil {
+		return "", err
+	}
+	var msg struct {
+		Share string `json:"share"`
+	}
+	if err := json.Unmarshal([]byte(out), &msg); err != nil {
+		return "", fmt.Errorf("parse mc share download --json: %w", err)
+	}
+	if msg.Share == "" {
+		return "", errors.New("mc share download returned an empty share URL")
+	}
+	return msg.Share, nil
+}
+
 func (c *MinIOClient) Stat(ctx context.Context, key string) error {
 	if err := c.ensureAlias(ctx); err != nil {
 		return err

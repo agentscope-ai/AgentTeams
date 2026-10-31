@@ -89,11 +89,12 @@ func TestOSSFallback_ObservedConflictRejected(t *testing.T) {
 	err := ossFallbackWrite(
 		t.Context(), "projects/p1/meta.json", []byte("new"),
 		"etag-read",
+		"application/json",
 		func(_ context.Context, key string) (ObjectMeta, error) {
 			statCalls++
 			return ObjectMeta{ETag: "etag-changed-by-worker"}, nil
 		},
-		func(_ context.Context, key string, data []byte) error {
+		func(_ context.Context, key string, data []byte, contentType string) error {
 			putCalls++
 			return nil
 		},
@@ -119,11 +120,12 @@ func TestOSSFallback_MatchingEtagPlainPut(t *testing.T) {
 	err := ossFallbackWrite(
 		t.Context(), "projects/p1/meta.json", []byte("new"),
 		"etag-read",
+		"application/json",
 		func(_ context.Context, key string) (ObjectMeta, error) {
 			statCalls++
 			return ObjectMeta{ETag: "etag-read"}, nil
 		},
-		func(_ context.Context, key string, data []byte) error {
+		func(_ context.Context, key string, data []byte, contentType string) error {
 			putCalls++
 			putData = data
 			return nil
@@ -145,10 +147,11 @@ func TestOSSFallback_UppercaseQuotedMD5Matches(t *testing.T) {
 	err := ossFallbackWrite(
 		t.Context(), "projects/p1/meta.json", []byte("new"),
 		"a1b2c3d4e5f60718293a4b5c6d7e8f90",
+		"application/json",
 		func(_ context.Context, key string) (ObjectMeta, error) {
 			return ObjectMeta{ETag: "\"A1B2C3D4E5F60718293A4B5C6D7E8F90\""}, nil
 		},
-		func(_ context.Context, key string, data []byte) error {
+		func(_ context.Context, key string, data []byte, contentType string) error {
 			putCalls++
 			return nil
 		},
@@ -167,10 +170,11 @@ func TestOSSFallback_UppercaseUnquotedMD5Matches(t *testing.T) {
 	err := ossFallbackWrite(
 		t.Context(), "projects/p1/meta.json", []byte("new"),
 		"a1b2c3d4e5f60718293a4b5c6d7e8f90",
+		"application/json",
 		func(_ context.Context, key string) (ObjectMeta, error) {
 			return ObjectMeta{ETag: "A1B2C3D4E5F60718293A4B5C6D7E8F90"}, nil
 		},
-		func(_ context.Context, key string, data []byte) error {
+		func(_ context.Context, key string, data []byte, contentType string) error {
 			putCalls++
 			return nil
 		},
@@ -190,10 +194,11 @@ func TestOSSFallback_ChangedMD5Rejected(t *testing.T) {
 	err := ossFallbackWrite(
 		t.Context(), "projects/p1/meta.json", []byte("new"),
 		"a1b2c3d4e5f60718293a4b5c6d7e8f90",
+		"application/json",
 		func(_ context.Context, key string) (ObjectMeta, error) {
 			return ObjectMeta{ETag: "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"}, nil
 		},
-		func(_ context.Context, key string, data []byte) error {
+		func(_ context.Context, key string, data []byte, contentType string) error {
 			putCalls++
 			return nil
 		},
@@ -211,11 +216,11 @@ func TestOSSFallback_StatFailurePropagates(t *testing.T) {
 	// closed — never write blindly.
 	putCalls := 0
 	err := ossFallbackWrite(
-		t.Context(), "k", []byte("new"), "etag-read",
+		t.Context(), "k", []byte("new"), "etag-read", "application/json",
 		func(_ context.Context, key string) (ObjectMeta, error) {
 			return ObjectMeta{}, os.ErrNotExist
 		},
-		func(_ context.Context, key string, data []byte) error {
+		func(_ context.Context, key string, data []byte, contentType string) error {
 			putCalls++
 			return nil
 		},

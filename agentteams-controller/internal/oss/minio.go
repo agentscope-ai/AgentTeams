@@ -34,7 +34,8 @@ type MinIOClient struct {
 	aliasReady bool
 	// sdkPutIfMatch overrides the SDK conditional write for tests; nil uses
 	// the real minio-go path.
-	sdkPutIfMatch func(ctx context.Context, key string, data []byte, matchETag string) error
+	sdkPutIfMatch  func(ctx context.Context, key string, data []byte, matchETag string) error
+	sdkPutIfAbsent func(ctx context.Context, key string, data []byte) error
 }
 
 // NewMinIOClient creates a StorageClient backed by the mc CLI.
@@ -85,11 +86,25 @@ func (c *MinIOClient) fullPath(key string) string {
 // Controller's read and its write makes the ETag change and the write fails
 // with ErrPreconditionFailed instead of silently overwriting.
 func (c *MinIOClient) PutObjectIfMatch(ctx context.Context, key string, data []byte, matchETag string) error {
-	put := c.sdkPutIfMatch
-	if put == nil {
-		put = c.sdkPutObjectIfMatch
+	return c.PutObjectIfMatchWithType(ctx, key, data, "application/json", matchETag)
+}
+
+// PutObjectIfMatchWithType is the conditional write with an explicit content
+// type; the file API uses it to write deletion tombstones.
+func (c *MinIOClient) PutObjectIfMatchWithType(ctx context.Context, key string, data []byte, contentType, matchETag string) error {
+	var err error
+	if put := c.sdkPutIfMatch; put != nil {
+		err = put(ctx, key, data, matchETag)
+	} else {
+		sdk, serr := c.sdkClient()
+		if serr != nil {
+			return serr
+		}
+		reader := bytes.NewReader(data)
+		opts := minio.PutObjectOptions{ContentType: contentType}
+		opts.SetMatchETag(matchETag)
+		_, err = sdk.PutObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), reader, int64(len(data)), opts)
 	}
-	err := put(ctx, key, data, matchETag)
 	if err == nil {
 		return nil
 	}
@@ -108,8 +123,46 @@ func (c *MinIOClient) PutObjectIfMatch(ctx context.Context, key string, data []b
 	// observed conflict is still rejected; only the narrow compare-to-put
 	// window is accepted on OSS.
 	if errors.As(err, &resp) && (resp.Code == "NotImplemented" || resp.Code == "501") {
-		return ossFallbackWrite(ctx, key, data, matchETag, c.StatMeta, c.PutObject)
+		// The fallback must keep the requested media type: dropping it turns a
+		// tombstone into an ordinary empty object, which reads as a live empty
+		// file and makes an ordinary restore answer path_conflict.
+		return ossFallbackWrite(ctx, key, data, matchETag, contentType, c.StatMeta, c.PutObjectWithType)
 	}
+	return err
+}
+
+// PutObjectIfAbsent creates an object only when the key does not exist.
+// This is the atomic initialization primitive for the per-human quota
+// ledger; unlike If-Match on a missing object, If-None-Match:* succeeds on
+// create and fails on an existing key. Providers that do not implement
+// If-None-Match return an error (fail closed) rather than falling back to a
+// racy Stat-then-Put.
+func (c *MinIOClient) PutObjectIfAbsent(ctx context.Context, key string, data []byte) error {
+	put := c.sdkPutIfAbsent
+	if put == nil {
+		put = c.sdkPutObjectIfAbsent
+	}
+	err := put(ctx, key, data)
+	if err == nil {
+		return nil
+	}
+	var resp minio.ErrorResponse
+	if errors.As(err, &resp) && (resp.Code == "PreconditionFailed" || resp.Code == "412") {
+		return ErrPreconditionFailed
+	}
+	return err
+}
+
+// sdkPutObjectIfAbsent is the MinIO SDK If-None-Match:* write.
+func (c *MinIOClient) sdkPutObjectIfAbsent(ctx context.Context, key string, data []byte) error {
+	sdk, err := c.sdkClient()
+	if err != nil {
+		return err
+	}
+	reader := bytes.NewReader(data)
+	opts := minio.PutObjectOptions{ContentType: "application/json"}
+	opts.SetMatchETagExcept("*")
+	_, err = sdk.PutObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), reader, int64(len(data)), opts)
 	return err
 }
 
@@ -118,9 +171,9 @@ func (c *MinIOClient) PutObjectIfMatch(ctx context.Context, key string, data []b
 // ETag immediately before a plain PutObject: an observed conflict is
 // rejected; only the narrow compare-to-put race is accepted. Extracted as a
 // pure function so the contract is testable without a live backend.
-func ossFallbackWrite(ctx context.Context, key string, data []byte, matchETag string,
+func ossFallbackWrite(ctx context.Context, key string, data []byte, matchETag, contentType string,
 	stat func(context.Context, string) (ObjectMeta, error),
-	put func(context.Context, string, []byte) error) error {
+	put func(context.Context, string, []byte, string) error) error {
 	cur, err := stat(ctx, key)
 	if err != nil {
 		return err
@@ -128,7 +181,7 @@ func ossFallbackWrite(ctx context.Context, key string, data []byte, matchETag st
 	if canonicalizeETag(cur.ETag) != matchETag {
 		return ErrPreconditionFailed
 	}
-	return put(ctx, key, data)
+	return put(ctx, key, data, contentType)
 }
 
 // canonicalizeETag normalizes a provider ETag for comparison: S3-style
@@ -206,6 +259,30 @@ func (c *MinIOClient) PutObject(ctx context.Context, key string, data []byte) er
 	return c.PutFile(ctx, tmpFile.Name(), key)
 }
 
+// PutObjectWithType writes data with an explicit content type. mc infers the
+// type from the temp file's extension otherwise (application/octet-stream), so
+// the fallback path would lose a tombstone marker without this.
+func (c *MinIOClient) PutObjectWithType(ctx context.Context, key string, data []byte, contentType string) error {
+	if contentType == "" {
+		return c.PutObject(ctx, key, data)
+	}
+	if err := c.ensureAlias(ctx); err != nil {
+		return err
+	}
+	tmpFile, err := os.CreateTemp("", "agentteams-oss-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	tmpFile.Close()
+	_, err = c.runMC(ctx, "cp", "--attr", "Content-Type="+contentType, tmpFile.Name(), c.fullPath(key))
+	return err
+}
+
 func (c *MinIOClient) PutFile(ctx context.Context, localPath, key string) error {
 	if err := c.ensureAlias(ctx); err != nil {
 		return err
@@ -261,10 +338,23 @@ func (c *MinIOClient) StatMeta(ctx context.Context, key string) (ObjectMeta, err
 		}
 		return ObjectMeta{}, err
 	}
+	// mc stat --json has no top-level content type: S3 response headers land
+	// in the canonicalized `metadata` map (Content-Type, X-Amz-Meta-*, ...).
+	// The top-level field is accepted as a fallback so a future/other client
+	// shape still works.
+	return parseMCStatJSON(out)
+}
+
+// parseMCStatJSON decodes `mc stat --json` into ObjectMeta. Extracted so the
+// parsing contract (metadata map vs. top-level field) is testable without the
+// mc binary.
+func parseMCStatJSON(out string) (ObjectMeta, error) {
 	var info struct {
-		LastModified string `json:"lastModified"`
-		Size         int64  `json:"size"`
-		ETag         string `json:"etag"`
+		LastModified string            `json:"lastModified"`
+		Size         int64             `json:"size"`
+		ETag         string            `json:"etag"`
+		ContentType  string            `json:"contentType"`
+		Metadata     map[string]string `json:"metadata"`
 	}
 	if err := json.Unmarshal([]byte(out), &info); err != nil {
 		return ObjectMeta{}, fmt.Errorf("parse mc stat --json: %w", err)
@@ -273,7 +363,33 @@ func (c *MinIOClient) StatMeta(ctx context.Context, key string) (ObjectMeta, err
 	if err != nil {
 		return ObjectMeta{}, fmt.Errorf("parse lastModified %q: %w", info.LastModified, err)
 	}
-	return ObjectMeta{Size: info.Size, ModTime: modTime, ETag: info.ETag}, nil
+	contentType := info.ContentType
+	if contentType == "" {
+		contentType = contentTypeFromMCMetadata(info.Metadata)
+	}
+	return ObjectMeta{Size: info.Size, ModTime: modTime, ETag: info.ETag, ContentType: contentType}, nil
+}
+
+// contentTypeFromMCMetadata reads Content-Type out of mc's metadata map. S3
+// clients canonicalize header names, but the map is decoded from JSON, so the
+// lookup is case-insensitive and also accepts the lower-case and
+// X-Amz-Meta-Content-Type spellings some backends emit. RustFS serves the same
+// S3 headers, so the same lookup applies there.
+func contentTypeFromMCMetadata(metadata map[string]string) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+	clean := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		clean[strings.ToLower(strings.TrimSpace(key))] = strings.TrimSpace(value)
+	}
+	// Precedence is explicit so a map iteration order cannot change the result.
+	for _, key := range []string{"content-type", "x-amz-meta-content-type"} {
+		if value := clean[key]; value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (c *MinIOClient) DeleteObject(ctx context.Context, key string) error {

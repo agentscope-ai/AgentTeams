@@ -175,6 +175,10 @@ func (i *Initializer) ensureOSSStructure(ctx context.Context) error {
 		"agentteams-config/teams/",
 		"agentteams-config/humans/",
 		"agents/",
+		// Top-level human file-area namespace (#1414 P1). Per-human
+		// subdirectories (humans/<username>/files, .trash) are created
+		// idempotently by the Human reconcile.
+		"humans/",
 	}
 	for _, dir := range dirs {
 		if err := i.OSS.PutObject(ctx, dir+".gitkeep", []byte("")); err != nil {

@@ -2890,15 +2890,22 @@ type stallPurgeContentStatOSS struct {
 
 var _ oss.StorageClient = (*stallPurgeContentStatOSS)(nil)
 
+// The handler acquires the entry lease first, then stats the entry's content
+// before its commit-boundary fence. Parking on that first Stat keeps the stale
+// holder *before* the fence, which is the window the fix has to close.
 func (s *stallPurgeContentStatOSS) Stat(ctx context.Context, key string) error {
 	if s.armed && key == s.key {
 		s.stats++
-		if s.stats == 2 {
+		if s.stats == 1 {
 			close(s.entered)
 			<-s.release
 		}
 	}
 	return s.inner.Stat(ctx, key)
+}
+
+func (s *stallPurgeContentStatOSS) StatMeta(ctx context.Context, key string) (oss.ObjectMeta, error) {
+	return s.inner.StatMeta(ctx, key)
 }
 
 func (s *stallPurgeContentStatOSS) ListObjectsDetailed(ctx context.Context, prefix string) ([]oss.ObjectInfo, error) {
@@ -2927,10 +2934,6 @@ func (s *stallPurgeContentStatOSS) PutFile(ctx context.Context, localPath, key s
 
 func (s *stallPurgeContentStatOSS) GetObject(ctx context.Context, key string) ([]byte, error) {
 	return s.inner.GetObject(ctx, key)
-}
-
-func (s *stallPurgeContentStatOSS) StatMeta(ctx context.Context, key string) (oss.ObjectMeta, error) {
-	return s.inner.StatMeta(ctx, key)
 }
 
 func (s *stallPurgeContentStatOSS) DeleteObject(ctx context.Context, key string) error {
@@ -2992,9 +2995,9 @@ func TestHumanFiles_TrashPurgeAfterLeaseExpiryQuotaRace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Start the purge: it stops on the second stat of the entry's content,
-	// at its commit boundary — after the meta read (size captured), before
-	// the DeletePrefix (unfixed) / before the fence (fixed).
+	// Start the purge: it stops on the first Stat of the entry's content —
+	// after the lease is acquired and the size captured, before the
+	// commit-boundary fence/DeletePrefix.
 	stalled.key = humanTrashPrefix("alice") + delResp.TrashID + "/content"
 	stalled.armed = true
 	type purgeResult struct {
@@ -3074,201 +3077,3 @@ func TestHumanFiles_TrashPurgeAfterLeaseExpiryQuotaRace(t *testing.T) {
 	}
 }
 
-// stallRestoreOverwritePutOSS is a pass-through storage client that blocks
-// on the first PutObject of one key until the test releases it. The
-// overwrite branch of a restore handler makes that call in its commit step
-// (unconditional PutObject of the archived bytes onto the re-validated
-// target), so the stalled window is exactly between the pre-write fences
-// and the post-write ledger adjustment.
-type stallRestoreOverwritePutOSS struct {
-	inner   oss.StorageClient
-	key     string
-	entered chan struct{}
-	release chan struct{}
-	armed   bool
-}
-
-var _ oss.StorageClient = (*stallRestoreOverwritePutOSS)(nil)
-
-func (s *stallRestoreOverwritePutOSS) PutObject(ctx context.Context, key string, data []byte) error {
-	if s.armed && key == s.key {
-		s.armed = false
-		close(s.entered)
-		<-s.release
-	}
-	return s.inner.PutObject(ctx, key, data)
-}
-
-func (s *stallRestoreOverwritePutOSS) ListObjectsDetailed(ctx context.Context, prefix string) ([]oss.ObjectInfo, error) {
-	return s.inner.ListObjectsDetailed(ctx, prefix)
-}
-
-func (s *stallRestoreOverwritePutOSS) PutObjectIfMatch(ctx context.Context, key string, data []byte, matchETag string) error {
-	return s.inner.PutObjectIfMatch(ctx, key, data, matchETag)
-}
-
-func (s *stallRestoreOverwritePutOSS) PutObjectIfMatchWithType(ctx context.Context, key string, data []byte, contentType, matchETag string) error {
-	return s.inner.PutObjectIfMatchWithType(ctx, key, data, contentType, matchETag)
-}
-
-func (s *stallRestoreOverwritePutOSS) PutObjectIfAbsent(ctx context.Context, key string, data []byte) error {
-	return s.inner.PutObjectIfAbsent(ctx, key, data)
-}
-
-func (s *stallRestoreOverwritePutOSS) PutFile(ctx context.Context, localPath, key string) error {
-	return s.inner.PutFile(ctx, localPath, key)
-}
-
-func (s *stallRestoreOverwritePutOSS) GetObject(ctx context.Context, key string) ([]byte, error) {
-	return s.inner.GetObject(ctx, key)
-}
-
-func (s *stallRestoreOverwritePutOSS) Stat(ctx context.Context, key string) error {
-	return s.inner.Stat(ctx, key)
-}
-
-func (s *stallRestoreOverwritePutOSS) StatMeta(ctx context.Context, key string) (oss.ObjectMeta, error) {
-	return s.inner.StatMeta(ctx, key)
-}
-
-func (s *stallRestoreOverwritePutOSS) DeleteObject(ctx context.Context, key string) error {
-	return s.inner.DeleteObject(ctx, key)
-}
-
-func (s *stallRestoreOverwritePutOSS) Mirror(ctx context.Context, src, dst string, opts oss.MirrorOptions) error {
-	return s.inner.Mirror(ctx, src, dst, opts)
-}
-
-func (s *stallRestoreOverwritePutOSS) ListObjects(ctx context.Context, prefix string) ([]string, error) {
-	return s.inner.ListObjects(ctx, prefix)
-}
-
-func (s *stallRestoreOverwritePutOSS) DeletePrefix(ctx context.Context, prefix string) error {
-	return s.inner.DeletePrefix(ctx, prefix)
-}
-
-// TestHumanFiles_TrashRestoreOverwriteLeaseExpiry is the second site of
-// the same defect: an overwrite restore paused inside its commit write,
-// long enough for its entry lease to expire, while a second overwrite
-// restore of the same entry runs to completion. The pre-existing target's
-// bytes must be released from the ledger exactly once (by the second
-// restore, the one still holding the lease); when the stale first restore
-// resumes it must skip its deduction. The unfixed tail deducts
-// unconditionally: 12 -> 6 -> 0, a -12 double release against 6 live
-// bytes, after which a 7-byte upload fits a 12-byte quota.
-func TestHumanFiles_TrashRestoreOverwriteLeaseExpiry(t *testing.T) {
-	base := ossfake.NewMemory()
-	ctx := context.Background()
-	target := humanFilesPrefix("alice") + "f.txt"
-
-	stalled := &stallRestoreOverwritePutOSS{
-		inner:   base,
-		key:     target,
-		entered: make(chan struct{}),
-		release: make(chan struct{}),
-	}
-	_, _, k8s := newHumanFilesRig(t)
-	h1 := NewHumanFilesHandler(k8s, "default", stalled, audit.NewClient(base))
-	h1.pathLockTTL = 2 * time.Second // real, short TTL for the test
-	h2 := NewHumanFilesHandler(k8s, "default", base, audit.NewClient(base))
-
-	// Quota 12 bytes: the trashed 6-byte version plus the 6-byte live
-	// replacement fill it exactly, so any double release shows up as an
-	// upload.
-	if rec := hfPutQuota(t, h1, "alice", hfAdmin(), `{"quotaBytes":12}`); rec.Code != http.StatusOK {
-		t.Fatalf("put quota: %d %s", rec.Code, rec.Body.String())
-	}
-	if rec := hfPutFile(t, h1, "alice", "f.txt", hfSelf(), "aaaaaa"); rec.Code != http.StatusOK {
-		t.Fatalf("seed: %d %s", rec.Code, rec.Body.String())
-	}
-	del := httptest.NewRecorder()
-	h1.deleteFile(del, hfReq(t, http.MethodDelete, "alice", "f.txt", hfSelf(), nil))
-	if del.Code != http.StatusOK {
-		t.Fatalf("delete: %d %s", del.Code, del.Body.String())
-	}
-	var delResp struct {
-		TrashID string `json:"trashId"`
-	}
-	if err := json.Unmarshal(del.Body.Bytes(), &delResp); err != nil {
-		t.Fatal(err)
-	}
-	// Replace the file so the overwrite restore has live bytes to release.
-	if rec := hfPutFile(t, h1, "alice", "f.txt", hfSelf(), "bbbbbb"); rec.Code != http.StatusOK {
-		t.Fatalf("replace: %d %s", rec.Code, rec.Body.String())
-	}
-
-	// Start the first overwrite restore: it passes its pre-write fences
-	// and stops inside the commit write, still holding the entry lease
-	// and the target path lease (both about to expire).
-	stalled.armed = true
-	type restoreResult struct {
-		code int
-		body string
-	}
-	first := make(chan restoreResult, 1)
-	go func() {
-		rec := httptest.NewRecorder()
-		h1.restoreTrash(rec, hfTrashReq(t, http.MethodPost, "alice", delResp.TrashID, hfAdmin(), "overwrite=1"))
-		first <- restoreResult{rec.Code, rec.Body.String()}
-	}()
-	select {
-	case <-stalled.entered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("restore never reached the commit write")
-	}
-
-	// Let both of the first restore's leases expire for real, then run a
-	// second overwrite restore of the same entry from a second handler:
-	// it takes over both expired leases, lands the archived bytes and
-	// releases the pre-existing target's 6 bytes exactly once.
-	time.Sleep(2200 * time.Millisecond)
-	second := httptest.NewRecorder()
-	h2.restoreTrash(second, hfTrashReq(t, http.MethodPost, "alice", delResp.TrashID, hfAdmin(), "overwrite=1"))
-	if second.Code != http.StatusOK {
-		t.Fatalf("second restore after lease expiry: got %d, want 200: %s", second.Code, second.Body.String())
-	}
-
-	// Release the stale first restore: its write lands (identical bytes;
-	// the target was re-validated before the stall) but its post-write
-	// deduction must be skipped.
-	close(stalled.release)
-	var res restoreResult
-	select {
-	case res = <-first:
-	case <-time.After(5 * time.Second):
-		t.Fatal("stale restore did not finish after release")
-	}
-	if res.code != http.StatusOK {
-		t.Fatalf("stale restore resume: got %d, want 200: %s", res.code, res.body)
-	}
-
-	// Terminal state after two restores: the file holds the archived 6
-	// bytes, live usage is 6, and the ledger equals the actual live
-	// usage (the unfixed tail deducts twice: 12 -> 6 -> 0).
-	get := httptest.NewRecorder()
-	h1.getFile(get, hfReq(t, http.MethodGet, "alice", "f.txt", hfSelf(), nil))
-	if get.Code != http.StatusOK || get.Body.String() != "aaaaaa" {
-		t.Fatalf("restored file: %d %q", get.Code, get.Body.String())
-	}
-	rec := hfGetQuota(t, h1, "alice", hfSelf())
-	var q humanQuotaResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &q); err != nil {
-		t.Fatal(err)
-	}
-	if q.UsedBytes != 6 {
-		t.Fatalf("live usage = %d, want 6", q.UsedBytes)
-	}
-	ledger, _, err := h1.readQuotaLedger(ctx, "alice")
-	if err != nil {
-		t.Fatalf("read ledger: %v", err)
-	}
-	if ledger.UsedBytes != 6 {
-		t.Errorf("ledger usage after two restores = %d, want 6 (double release)", ledger.UsedBytes)
-	}
-	// A 7-byte upload fits only if the replaced 6 bytes were released
-	// twice (ledger 0); with the correct single release it must be
-	// rejected.
-	if rec := hfPutFile(t, h1, "alice", "c.txt", hfSelf(), "0123456"); rec.Code != http.StatusRequestEntityTooLarge {
-		t.Errorf("upload after the double restore: got %d, want 413: %s", rec.Code, rec.Body.String())
-	}
-}

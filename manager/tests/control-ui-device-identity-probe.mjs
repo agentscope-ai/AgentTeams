@@ -19,9 +19,14 @@
 //   PROBE_TOKEN          shared gateway token          (required)
 //   PROBE_DEVICE         1 = present a device identity, 0 = device-less
 //   PROBE_IDENTITY_FILE  path to persist/reuse the identity (required when PROBE_DEVICE=1)
-//   PROBE_BUILD_ID       Control UI build id (the gateway's
-//                        data-openclaw-control-ui-build-id); omit when the
-//                        gateway serves none
+//   PROBE_BUILD_ID       Exact Control UI build id (e.g. details.gatewayBuildId
+//                        from a PROTOCOL_MISMATCH); wins over PROBE_RAW_BUILD_ID
+//   PROBE_RAW_BUILD_ID   Raw value of the served
+//                        data-openclaw-control-ui-build-id attribute. It is an
+//                        artifact stamp (>96 chars), so it goes through the
+//                        same normalization the real UI applies before it is
+//                        sent as client.buildId; omit when the gateway serves
+//                        none
 //   PROBE_TIMEOUT_MS     handshake budget (default 15000)
 //   PROBE_CLIENT_NAME    default openclaw-control-ui
 //   PROBE_MODE           default webchat
@@ -39,7 +44,19 @@ if (!url || !token) {
 const origin = process.env.PROBE_ORIGIN || url.replace(/^ws(s?):\/\//, "http$1://");
 const withDevice = process.env.PROBE_DEVICE === "1";
 const identityFile = process.env.PROBE_IDENTITY_FILE || "";
-const buildId = (process.env.PROBE_BUILD_ID || "").trim();
+const exactBuildId = (process.env.PROBE_BUILD_ID || "").trim();
+const rawBuildId = (process.env.PROBE_RAW_BUILD_ID || "").trim();
+
+// Mirrors ui/src/build-info-normalizers.ts::normalizeControlUiBuildId: the
+// served attribute is an artifact stamp (observed 112 chars) while the connect
+// schema caps client.buildId at 96 characters, so the UI strips characters
+// outside [A-Za-z0-9._-] and truncates before sending it.
+function normalizeControlUiBuildId(value) {
+  const normalized = String(value || "").trim().replace(/[^a-zA-Z0-9._-]+/g, "-");
+  return normalized.slice(0, 96) || "dev";
+}
+
+const buildId = exactBuildId || (rawBuildId ? normalizeControlUiBuildId(rawBuildId) : "");
 const timeoutMs = Number(process.env.PROBE_TIMEOUT_MS || "15000");
 
 function loadOrCreateIdentity() {

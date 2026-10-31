@@ -120,6 +120,7 @@ run_probe() { # $1=url $2=origin $3=device(0|1) $4=identity-file ; prints JSON
     PROBE_URL="$1" PROBE_ORIGIN="$2" PROBE_TOKEN="${TOKEN}" \
     PROBE_DEVICE="$3" PROBE_IDENTITY_FILE="$4" \
     PROBE_BUILD_ID="${BUILD_ID:-}" \
+    PROBE_RAW_BUILD_ID="${RAW_BUILD_ID:-}" \
     node /probe/probe.mjs 2>/dev/null
 }
 
@@ -154,8 +155,9 @@ for _ in $(seq 1 60); do
 done
 
 BUILD_ID=""
+RAW_BUILD_ID=""
 if [ "${READY}" -eq 1 ]; then
-  BUILD_ID="$(docker exec "${CONTAINER}" sh -c \
+  RAW_BUILD_ID="$(docker exec "${CONTAINER}" sh -c \
     "grep -o 'data-openclaw-control-ui-build-id=\"[^\"]*\"' /tmp/control-ui.html | head -n1 | sed 's/.*=\"//; s/\"$//'" 2>/dev/null)"
   pass "gateway served the Control UI page on 127.0.0.1:${HOST_PORT}"
 else
@@ -177,8 +179,8 @@ if [ "${READY}" -ne 1 ]; then
   exit 1
 fi
 
-if [ -n "${BUILD_ID}" ]; then
-  pass "gateway advertises its Control UI build id (${BUILD_ID})"
+if [ -n "${RAW_BUILD_ID}" ]; then
+  pass "gateway advertises its Control UI artifact stamp (${#RAW_BUILD_ID} chars; the probe normalizes it like the UI before sending)"
 else
   note "gateway serves no Control UI build id; the build check stays exempt"
 fi

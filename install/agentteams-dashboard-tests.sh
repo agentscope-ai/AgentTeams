@@ -124,7 +124,7 @@ section "Test 3: Explicit AGENTTEAMS_AI_GATEWAY_ADMIN_URL priority"
 # Look for the pattern in _start_dashboard: explicit URL branch comes
 # before auto-detection (wget) branch.
 start_line=$(grep -n '_start_dashboard()' "${INSTALL_SCRIPT}" | head -1 | cut -d: -f1)
-end_line=$((start_line + 200))
+end_line=$((start_line + 280))
 section_text=$(sed -n "${start_line},${end_line}p" "${INSTALL_SCRIPT}")
 
 explicit_line=$(echo "${section_text}" | grep -n '\-n.*AGENTTEAMS_AI_GATEWAY_ADMIN_URL' | head -1 | cut -d: -f1)
@@ -1713,6 +1713,122 @@ else
         pass "Exec newvol: starts dashboard after chown"
     else
         fail "Exec newvol: did not start dashboard container"
+    fi
+fi
+
+# ---------- Test 30: Standalone entry unions Console host before env_args ----------
+
+section "Test 30: Executable standalone saved-env Console override"
+
+# The `dashboard` subcommand path calls _start_dashboard directly with values
+# loaded from the saved env file. The Console URL normalization and allowlist
+# union must happen inside _start_dashboard too, before env_args is built, or
+# the published Dashboard rejects logins from the new Console host (503).
+_test_start_dashboard_standalone_union() {
+    local _init_hosts="$1" _expected="$2" _label="$3"
+    local _tmpfile _calls
+    _tmpfile=$(mktemp)
+    _calls=$(mktemp)
+
+    if ! extract_function "_start_dashboard" "${INSTALL_SCRIPT}" > "${_tmpfile}" 2>/dev/null; then
+        echo "EXTRACTION_FAILED"
+        rm -f "${_tmpfile}" "${_calls}"
+        return
+    fi
+
+    (
+        CALLS_FILE="${_calls}"
+        docker() {
+            printf 'docker %s\n' "$*" >> "${CALLS_FILE}"
+            if [ "$1" = "ps" ]; then
+                echo "agentteams-controller"
+                return 0
+            fi
+            if [ "$1" = "image" ] && echo "$*" | grep -q 'Config.User'; then
+                echo "nextjs"
+                return 0
+            fi
+            return 0
+        }
+        podman() { docker "$@"; }
+        DOCKER_CMD="docker"
+        log() { :; }
+        msg() { echo "$*"; }
+        curl() { return 1; }
+        sleep() { :; }
+
+        # Simulate the saved-env entry: operator allowlist already loaded,
+        # Console URL overridden on the command line / environment.
+        AGENTTEAMS_DASHBOARD=1
+        AGENTTEAMS_USE_EMBEDDED=1
+        AGENTTEAMS_REGISTRY="ghcr.io/agentteams-group"
+        AGENTTEAMS_PORT_DASHBOARD="13000"
+        AGENTTEAMS_DASHBOARD_VERSION="v1.3.1"
+        AGENTTEAMS_DASHBOARD_IMAGE="ghcr.io/agentteams-group/agentteams/agentteams-dashboard:v1.3.1"
+        AGENTTEAMS_LOCAL_ONLY=1
+        AGENTTEAMS_AI_GATEWAY_ADMIN_URL="https://new-console.example.test:8443"
+        AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS="${_init_hosts}"
+        AGENTTEAMS_AUTH_TOKEN="test-token"
+        AGENTTEAMS_ENV_FILE="$(mktemp)"
+
+        # shellcheck disable=SC1090
+        source "${_tmpfile}" 2>/dev/null
+
+        if ! declare -F _start_dashboard >/dev/null 2>&1; then
+            echo "FUNCTION_NOT_FOUND"
+        else
+            _start_dashboard
+            echo "CALLS_BEGIN"
+            cat "${CALLS_FILE}"
+            echo "CALLS_END"
+        fi
+    )
+    rm -f "${_tmpfile}" "${_calls}"
+}
+
+# Scenario A: saved allowlist from the env file + overridden Console URL.
+_standalone=$(_test_start_dashboard_standalone_union \
+    "operator.example" \
+    "operator.example,new-console.example.test" \
+    "saved-env-override" 2>&1)
+
+if echo "${_standalone}" | grep -q "EXTRACTION_FAILED\|FUNCTION_NOT_FOUND"; then
+    fail "Exec standalone-union: function extraction failed"
+else
+    _calls_union=$(echo "${_standalone}" | sed -n '/CALLS_BEGIN/,/CALLS_END/p')
+    if echo "${_standalone}" | grep -q 'CALLS_END'; then
+        pass "Exec standalone-union: completes the brand-new start path"
+    else
+        fail "Exec standalone-union: aborted before completion"
+    fi
+    if echo "${_calls_union}" | grep 'docker run -d' | grep -q 'AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS=operator.example,new-console.example.test'; then
+        pass "Exec standalone-union: run -d env contains operator host plus overridden Console host"
+    else
+        fail "Exec standalone-union: run -d env does not contain the host union"
+    fi
+    if echo "${_calls_union}" | grep 'docker run -d' | grep -q 'AGENTTEAMS_AI_GATEWAY_ADMIN_URL=https://new-console.example.test:8443'; then
+        pass "Exec standalone-union: run -d env passes the overridden Console URL"
+    else
+        fail "Exec standalone-union: run -d env does not pass the overridden Console URL"
+    fi
+fi
+
+# Scenario B: idempotency — allowlist already contains the Console host.
+_standalone_dup=$(_test_start_dashboard_standalone_union \
+    "operator.example,new-console.example.test" \
+    "operator.example,new-console.example.test" \
+    "already-listed" 2>&1)
+
+if echo "${_standalone_dup}" | grep -q "EXTRACTION_FAILED\|FUNCTION_NOT_FOUND"; then
+    fail "Exec standalone-union-dedup: function extraction failed"
+else
+    _calls_dup=$(echo "${_standalone_dup}" | sed -n '/CALLS_BEGIN/,/CALLS_END/p')
+    _hosts_val=$(echo "${_calls_dup}" | grep 'docker run -d' | grep -o 'AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS=[^ ]*' | head -1 | cut -d= -f2-)
+    _host_count=$(echo "${_hosts_val}" | grep -o 'new-console.example.test' | wc -l | tr -d ' ')
+    if [ "${_host_count}" = "1" ]; then
+        pass "Exec standalone-union-dedup: already-listed Console host is not duplicated"
+    else
+        fail "Exec standalone-union-dedup: Console host appears ${_host_count} times (expected 1)"
     fi
 fi
 

@@ -3413,6 +3413,37 @@ _start_dashboard() {
     # dashboard, so the process can probe internal addresses on first boot.
     AGENTTEAMS_DEPLOYMENT_MODE="${AGENTTEAMS_DEPLOYMENT_MODE:-embedded}"
 
+    # Standalone dashboard starts (e.g. the `dashboard` subcommand) bypass
+    # step_dashboard, so apply the same Console URL normalization and
+    # allowlist union here before env_args is built. Union, never replace:
+    # operator-supplied hosts are kept.
+    _dashboard_merge_console_host() {
+        if [ -z "${AGENTTEAMS_AI_GATEWAY_ADMIN_URL:-}" ]; then
+            return 0
+        fi
+        case "${AGENTTEAMS_AI_GATEWAY_ADMIN_URL}" in
+            http://*|https://*) ;;
+            *) AGENTTEAMS_AI_GATEWAY_ADMIN_URL="http://${AGENTTEAMS_AI_GATEWAY_ADMIN_URL}" ;;
+        esac
+        local _gw_host
+        _gw_host="$(printf '%s' "${AGENTTEAMS_AI_GATEWAY_ADMIN_URL}" | sed -E 's#^https?://##; s#/.*$##; s#:\[([0-9a-fA-F:]+)\]$#:\1#; s#:[0-9]+$##')"
+        if [ -z "${_gw_host}" ]; then
+            return 0
+        fi
+        case ",${AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS:-}," in
+            *,${_gw_host},*) ;;
+            *)
+                if [ -n "${AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS:-}" ]; then
+                    AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS="${AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS},${_gw_host}"
+                else
+                    AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS="${_gw_host}"
+                fi
+                log "  Console host '${_gw_host}' added to AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS (required by the Dashboard login allowlist)"
+                ;;
+        esac
+    }
+    _dashboard_merge_console_host
+
     log ""
     log "Starting agentteams-dashboard..."
 

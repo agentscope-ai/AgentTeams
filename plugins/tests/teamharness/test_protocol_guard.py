@@ -1872,6 +1872,175 @@ def test_r6_runtime_identity_resolution_order(
     assert server._runtime_identity() == ""
 
 
+# --- Round 7 (#1467): identity provenance -----------------------------------
+
+
+def test_r7_trusted_default_member_self_review_forbidden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None
+) -> None:
+    """Case 1 (the maintainer's case): the operator provisioned a
+    trusted Matrix member literally named 'default'. The member submits
+    as worker — the record is worker:default with
+    submitted_by_source='runtime'. The operator then reconfigures the
+    SAME member's role to leader: its review resolves to leader:default
+    (reviewer_source='runtime') and is refused self_review_forbidden —
+    a trusted name is never discarded as the legacy sentinel."""
+    _enforce_on(monkeypatch)
+    _write_project(tmp_path, task_status="assigned")
+    _write_task_meta(tmp_path, {
+        "task_id": TASK_ID,
+        "project_id": PROJECT_ID,
+        "status": "assigned",
+        "assigned_to": WORKER_A,
+    })
+
+    # The member's trusted runtime identity is literally "default".
+    _set_runtime_member(monkeypatch, tmp_path, {"name": "default"}, "member-config.json")
+    submitted = _submit(tmp_path, role="worker")
+    assert submitted["ok"] is True
+    assert submitted["task"]["submitted_by"] == "worker:default"
+    assert submitted["task"]["submitted_by_source"] == "runtime"
+    # The provenance marker is persisted, not just returned.
+    assert _task_meta(tmp_path)["submitted_by"] == "worker:default"
+    assert _task_meta(tmp_path)["submitted_by_source"] == "runtime"
+
+    # Same member, operator reconfigured its role to leader.
+    result = _review(tmp_path, role="leader", verdict="pass")
+    assert result["ok"] is False
+    assert result["error_code"] == "self_review_forbidden"
+    assert result["message"] == "reviewer must differ from submitted_by"
+    assert "review" not in _task_meta(tmp_path)
+
+
+def test_r7_trusted_concrete_member_control_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None
+) -> None:
+    """Case 2 (the control): the identical flow with member.name=worker
+    (a name that was never ambiguous) still ends
+    self_review_forbidden — the round-6 behaviour is unchanged."""
+    _enforce_on(monkeypatch)
+    _write_project(tmp_path, task_status="assigned")
+    _write_task_meta(tmp_path, {
+        "task_id": TASK_ID,
+        "project_id": PROJECT_ID,
+        "status": "assigned",
+        "assigned_to": WORKER_A,
+    })
+
+    _set_runtime_member(monkeypatch, tmp_path, {"name": "worker"}, "worker-config.json")
+    submitted = _submit(tmp_path, role="worker")
+    assert submitted["ok"] is True
+    assert submitted["task"]["submitted_by"] == "worker:worker"
+    assert submitted["task"]["submitted_by_source"] == "runtime"
+
+    result = _review(tmp_path, role="leader", verdict="pass")
+    assert result["ok"] is False
+    assert result["error_code"] == "self_review_forbidden"
+    assert "review" not in _task_meta(tmp_path)
+
+
+def test_r7_distinct_trusted_member_reviews_default_named_submitter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None
+) -> None:
+    """Case 3: a trusted member named 'default' submits; a DISTINCT
+    trusted member (member.name=leader) reviews -> allowed. Both sides
+    are runtime-sourced and the accounts differ, and the review record
+    carries its own provenance (reviewer_source='runtime')."""
+    _enforce_on(monkeypatch)
+    _write_project(tmp_path, task_status="assigned")
+    _write_task_meta(tmp_path, {
+        "task_id": TASK_ID,
+        "project_id": PROJECT_ID,
+        "status": "assigned",
+        "assigned_to": WORKER_A,
+    })
+
+    _set_runtime_member(monkeypatch, tmp_path, {"name": "default"}, "worker-config.json")
+    submitted = _submit(tmp_path, role="worker")
+    assert submitted["ok"] is True
+    assert submitted["task"]["submitted_by"] == "worker:default"
+    assert submitted["task"]["submitted_by_source"] == "runtime"
+
+    # The second process: a different member, 'leader'.
+    _set_runtime_member(monkeypatch, tmp_path, {"name": "leader"}, "leader-config.json")
+    result = _review(tmp_path, role="leader", verdict="pass")
+    assert result["ok"] is True, result
+    review = _task_meta(tmp_path)["review"]
+    assert review["reviewer"] == "leader:leader"
+    assert review["reviewer_source"] == "runtime"
+    assert review["verdict"] == "pass"
+
+
+def test_r7_legacy_default_submitter_without_source_still_allowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None
+) -> None:
+    """Case 4 (legacy compatibility): a pre-round-7 record
+    (submitted_by='worker:default', NO submitted_by_source marker) is
+    reviewed by a trusted 'leader' -> allowed: a record without runtime
+    provenance is treated as unknown, so the shared 'default' sentinel
+    can never be a self-review match."""
+    _enforce_on(monkeypatch)
+    _write_submitted_task(tmp_path, submitted_by="worker:default")
+
+    _set_runtime_member(monkeypatch, tmp_path, {"name": "leader"}, "leader-config.json")
+    result = _review(tmp_path, role="leader", verdict="pass")
+    assert result["ok"] is True, result
+    review = _task_meta(tmp_path)["review"]
+    assert review["reviewer"] == "leader:leader"
+    assert review["reviewer_source"] == "runtime"
+
+
+def test_r7_legacy_concrete_submitter_without_source_still_forbidden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None
+) -> None:
+    """Case 5 (legacy compatibility): a pre-round-7 record
+    (submitted_by='worker:alice', NO source marker) reviewed by a
+    trusted 'alice' -> forbidden: even without provenance, concrete
+    accounts still compare."""
+    _enforce_on(monkeypatch)
+    _write_submitted_task(tmp_path, submitted_by="worker:alice")
+
+    _set_runtime_member(monkeypatch, tmp_path, {"name": "alice"}, "leader-config.json")
+    result = _review(tmp_path, role="leader", verdict="pass")
+    assert result["ok"] is False
+    assert result["error_code"] == "self_review_forbidden"
+    assert "review" not in _task_meta(tmp_path)
+
+
+def test_r7_payload_reviewer_cannot_claim_trusted_submitter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None
+) -> None:
+    """Case 6: a trusted member 'alice' submits (the record carries
+    submitted_by_source='runtime'); a reviewer with NO trusted runtime
+    identity claims account_id='alice' in the payload ->
+    self_review_forbidden: on a mixed-provenance pair the round-6
+    sentinel/concrete rules apply — the payload account is provenance
+    only, and a concrete account still matches the submitter's. (No
+    regression of the round-6 evasion tests.)"""
+    _enforce_on(monkeypatch)
+    _write_project(tmp_path, task_status="assigned")
+    _write_task_meta(tmp_path, {
+        "task_id": TASK_ID,
+        "project_id": PROJECT_ID,
+        "status": "assigned",
+        "assigned_to": WORKER_A,
+    })
+
+    _set_runtime_member(monkeypatch, tmp_path, {"name": "alice"}, "worker-config.json")
+    submitted = _submit(tmp_path, role="worker")
+    assert submitted["ok"] is True
+    assert submitted["task"]["submitted_by"] == "worker:alice"
+    assert submitted["task"]["submitted_by_source"] == "runtime"
+
+    # The review process has NO trusted runtime identity (local / test
+    # path): its account comes from the payload only.
+    monkeypatch.delenv("TEAMHARNESS_RUNTIME_CONFIG")
+    result = _review(tmp_path, role="critic", account="alice", verdict="pass")
+    assert result["ok"] is False
+    assert result["error_code"] == "self_review_forbidden"
+    assert "review" not in _task_meta(tmp_path)
+
+
 # --- review_task gate edges -------------------------------------------------
 
 
@@ -1945,6 +2114,7 @@ def test_submit_without_enforce_writes_no_identity(
     assert result["ok"] is True
     task = _task_meta(tmp_path)
     assert "submitted_by" not in task
+    assert "submitted_by_source" not in task
     assert task["status"] == "submitted"
 
 

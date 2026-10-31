@@ -50,6 +50,7 @@ from .transitions import (
     _require_task_mutable,
     _terminal_task_status,
     _transition_actor,
+    _transition_actor_source,
     _transition_guidance,
 )
 
@@ -838,12 +839,16 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 result_path_extra = {}
                 task.pop("result_path", None)
             # W2: record the submitting actor identity (role:account) so
-            # review_task can enforce reviewer != submitted_by. Written
-            # only while protocol enforce is on: with the switch off the
-            # meta shape is byte-for-byte the pre-W2 one.
+            # review_task can enforce reviewer != submitted_by, plus its
+            # provenance (runtime / payload) so a trusted member
+            # literally named 'default' is not read as the legacy
+            # sentinel (#1467 round 7). Written only while protocol
+            # enforce is on: with the switch off the meta shape is
+            # byte-for-byte the pre-W2 one.
             submission_extra = {}
             if _protocol_enforce_enabled():
                 submission_extra["submitted_by"] = _transition_actor(arguments)
+                submission_extra["submitted_by_source"] = _transition_actor_source(arguments)
             try:
                 _transition_task(
                     arguments,

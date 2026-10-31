@@ -139,6 +139,21 @@ def _transition_actor(arguments: dict[str, Any]) -> str:
     return f"{role}:{account}"
 
 
+def _transition_actor_source(arguments: dict[str, Any]) -> str:
+    """The provenance of the actor's account: ``"runtime"`` when the
+    trusted runtime member identity (server._runtime_identity) is
+    non-empty, else ``"payload"`` (the account_id fallback — provenance
+    only, never an identity).
+
+    The provenance is recorded with the record, not inferred from the
+    value (#1467 round 7): a real trusted member literally named
+    ``default`` is indistinguishable from the legacy sentinel by value
+    alone, so the self-review comparison decides on source — the
+    unknown-sentinel rule applies only to the side without runtime
+    provenance."""
+    return "runtime" if _runtime_identity() else "payload"
+
+
 def _transition_guidance(action: str, from_status: str) -> str:
     if action in ("ack_task", "submit_task"):
         if from_status in ("", "planned", "prepared"):

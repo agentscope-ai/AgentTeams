@@ -14,6 +14,20 @@
 # unknown (legacy) submitter account is not a self-review match, while
 # a concrete trusted identity on both sides that matches — or a full
 # reviewer == submitted_by — is still self_review_forbidden.
+#
+# Round 7 (issue #1467) — identity provenance: round 6 encoded
+# "unknown" as the VALUE "default", so a real trusted member literally
+# named "default" was indistinguishable from the legacy sentinel. The
+# record now carries where its account came from — submitted_by_source
+# on the task meta, reviewer_source on the review object: "runtime" for
+# the trusted runtime member identity, "payload" for the account_id
+# fallback. The self-review rule compares identity + provenance: when
+# BOTH sides are runtime-sourced the normalized accounts compare
+# strictly, "default" included (a trusted name is an identity, never
+# the sentinel); a legacy record without the marker — or a
+# payload-sourced side — keeps the unknown-sentinel rule for
+# compatibility ("default" / "unknown" / empty never match, concrete
+# accounts still compare).
 from __future__ import annotations
 
 from typing import Any
@@ -24,7 +38,12 @@ from mcp.common.constants import DECISION_CLASS_IDS, DEFAULT_DECISION_CLASS
 from mcp.common.io import _read_json, _utc_timestamp
 from mcp.common.payload import _first_text, _safe_id
 from mcp.common.paths import _task_state_path
-from .transitions import _reject_task_transition, _require_task_mutable, _transition_actor
+from .transitions import (
+    _reject_task_transition,
+    _require_task_mutable,
+    _transition_actor,
+    _transition_actor_source,
+)
 
 # Call-time lookups (common.refs): these names resolve against the bound
 # mcp/server.py namespace, so test monkeypatches of server attributes stay
@@ -238,12 +257,26 @@ def _account_of(actor: str) -> str:
 # member collapsed to 'default') carry such accounts; they are unknown,
 # not an identity (#1467 round 6: unknown is unknown — no false
 # positive — and a concrete identity can never collide with one).
+#
+# UNKNOWN-SENTINEL VALUES ONLY (#1467 round 7): this set is the
+# vocabulary of records WITHOUT runtime provenance. A runtime-sourced
+# account is an identity and is never mapped through it — a trusted
+# member literally named 'default' is compared as 'default'.
 _UNKNOWN_ACCOUNTS = {"", "default", "unknown"}
 
 
 def _known_account_of(actor: str) -> str:
-    """The normalized account behind a ``role:account`` actor string, or
-    '' when the account is unknown (empty / 'default' / 'unknown').
+    """The UNKNOWN-SENTINEL rule (not the identity rule, #1467
+    round 7): the normalized account behind a ``role:account`` actor
+    string, or '' when the account is the unknown sentinel (empty /
+    'default' / 'unknown').
+
+    It applies only to the side of a comparison that has no runtime
+    provenance — a legacy record without the submitted_by_source /
+    reviewer_source marker, or a payload-sourced side. A
+    runtime-sourced account is compared strictly by the self-review
+    rule and never passes through here, so a trusted member literally
+    named 'default' is never discarded as a sentinel.
 
     Normalized (strip, lowercase) so only real identity matches count;
     an unknown account returns '' and can never match — a legacy
@@ -262,7 +295,21 @@ def _review_task_action(
     """W2: review_task — the critic/leader review of a submitted task
     result. Only 'submitted' tasks are reviewable; the reviewer must
     differ from the submitting identity (self_review_forbidden). The
-    record shape follows the design doc §3.3 review object."""
+    record shape follows the design doc §3.3 review object.
+
+    The self-review rule compares identity + provenance (#1467
+    round 7): the reviewer's account is the transition actor's — the
+    trusted runtime member identity when one exists, the payload's
+    account_id otherwise — and its source is recorded on the review
+    object (reviewer_source: "runtime" / "payload"); the submitter's
+    source is the record's submitted_by_source. The exact
+    reviewer == submitted_by match always holds. When both sides are
+    runtime-sourced the normalized accounts compare strictly,
+    "default" included — a trusted name is never treated as unknown
+    just because it equals a sentinel. A legacy record without
+    provenance (or a payload-sourced side) is treated as unknown for
+    compatibility: "default" / "unknown" / empty never match, concrete
+    accounts still compare."""
     if role not in {"critic", "leader"}:
         raise ValueError("review_task requires critic or leader role")
     task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
@@ -294,16 +341,30 @@ def _review_task_action(
         raise ValueError("scorecard must be an object")
     reviewer = _transition_actor(arguments)
     submitted_by = _first_text(task.get("submitted_by"), task.get("submittedBy"))
-    # Self-review: the identical actor string, or the same KNOWN
-    # (normalized) account on both sides. Unknown accounts — the
-    # 'default' fallback of older builds, 'unknown', empty — never
-    # match: a legacy submission must not read as self-review by a
-    # distinct trusted member, and two unidentifiable actors must not
-    # read as one (#1467 round 6).
+    # Self-review compares identity + provenance (#1467 round 7). The
+    # exact actor-string match always holds. When BOTH sides are
+    # runtime-sourced — the record carries submitted_by_source
+    # "runtime" and the reviewer has a trusted runtime identity — the
+    # normalized accounts compare strictly, "default" included: a
+    # trusted member literally named "default" is an identity, never
+    # the legacy sentinel. Otherwise — a legacy record without the
+    # provenance marker, or a payload-sourced side — the
+    # unknown-sentinel rule applies for compatibility: "default" /
+    # "unknown" / empty never match, concrete accounts still compare
+    # (#1467 round 6).
+    reviewer_account = _account_of(reviewer).strip().lower()
+    submitter_account = _account_of(submitted_by).strip().lower()
+    submitter_source = str(task.get("submitted_by_source") or "")
+    reviewer_source = _transition_actor_source(arguments)
+    both_runtime = submitter_source == "runtime" and reviewer_source == "runtime"
     if submitted_by and (
         reviewer == submitted_by
-        or _known_account_of(reviewer)
-        and _known_account_of(reviewer) == _known_account_of(submitted_by)
+        or (both_runtime and reviewer_account == submitter_account)
+        or (
+            not both_runtime
+            and _known_account_of(reviewer)
+            and _known_account_of(reviewer) == _known_account_of(submitted_by)
+        )
     ):
         raise ProtocolGuardError(
             "self_review_forbidden",
@@ -312,6 +373,7 @@ def _review_task_action(
     review: dict[str, Any] = {
         "verdict": verdict,
         "reviewer": reviewer,
+        "reviewer_source": reviewer_source,
         "reviewer_team": _runtime_team_name(),
         "reviewed_at": _utc_timestamp(),
         "note": note,

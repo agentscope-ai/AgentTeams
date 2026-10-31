@@ -1064,3 +1064,136 @@ def test_r6_parity_legacy_default_submitter_not_self_review(
     assert result["ok"] is True, result
     review = _task_meta(tmp_path)["review"]
     assert review["reviewer"] == "leader:leader"
+
+
+# --- Round 7 (#1467): identity provenance (bundle tree) ---------------------
+
+
+def test_r7_parity_trusted_default_member_self_review_forbidden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None
+) -> None:
+    """Case 1 (bundle tree, the maintainer's case): a trusted Matrix
+    member literally named 'default' submits as worker — the record is
+    worker:default with submitted_by_source='runtime'; the operator
+    reconfigures the SAME member's role to leader -> its review
+    resolves to leader:default (reviewer_source='runtime') and is
+    refused self_review_forbidden."""
+    _enforce_on(monkeypatch)
+    _write_project(tmp_path, task_status="assigned")
+    _write_task_meta(tmp_path, {
+        "task_id": TASK_ID,
+        "project_id": PROJECT_ID,
+        "status": "assigned",
+        "assigned_to": WORKER_A,
+    })
+
+    # The member's trusted runtime identity is literally "default".
+    _set_runtime_member(monkeypatch, tmp_path, {"name": "default"}, "member-config.json")
+    submitted = _submit(tmp_path, role="worker")
+    assert submitted["ok"] is True
+    assert submitted["task"]["submitted_by"] == "worker:default"
+    assert submitted["task"]["submitted_by_source"] == "runtime"
+    # The provenance marker is persisted, not just returned.
+    assert _task_meta(tmp_path)["submitted_by"] == "worker:default"
+    assert _task_meta(tmp_path)["submitted_by_source"] == "runtime"
+
+    # Same member, operator reconfigured its role to leader.
+    result = _review(tmp_path, role="leader", verdict="pass")
+    assert result["ok"] is False
+    assert result["error_code"] == "self_review_forbidden"
+    assert result["message"] == "reviewer must differ from submitted_by"
+    assert "review" not in _task_meta(tmp_path)
+
+
+def test_r7_parity_trusted_concrete_member_control_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None
+) -> None:
+    """Case 2 (bundle tree, the control): the identical flow with
+    member.name=worker still ends self_review_forbidden — the round-6
+    behaviour is unchanged."""
+    _enforce_on(monkeypatch)
+    _write_project(tmp_path, task_status="assigned")
+    _write_task_meta(tmp_path, {
+        "task_id": TASK_ID,
+        "project_id": PROJECT_ID,
+        "status": "assigned",
+        "assigned_to": WORKER_A,
+    })
+
+    _set_runtime_member(monkeypatch, tmp_path, {"name": "worker"}, "worker-config.json")
+    submitted = _submit(tmp_path, role="worker")
+    assert submitted["ok"] is True
+    assert submitted["task"]["submitted_by"] == "worker:worker"
+    assert submitted["task"]["submitted_by_source"] == "runtime"
+
+    result = _review(tmp_path, role="leader", verdict="pass")
+    assert result["ok"] is False
+    assert result["error_code"] == "self_review_forbidden"
+    assert "review" not in _task_meta(tmp_path)
+
+
+def test_r7_parity_distinct_trusted_member_reviews_default_named_submitter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None
+) -> None:
+    """Case 3 (bundle tree): a trusted member named 'default' submits;
+    a DISTINCT trusted member (member.name=leader) reviews -> allowed,
+    and the review record carries its own provenance
+    (reviewer_source='runtime')."""
+    _enforce_on(monkeypatch)
+    _write_project(tmp_path, task_status="assigned")
+    _write_task_meta(tmp_path, {
+        "task_id": TASK_ID,
+        "project_id": PROJECT_ID,
+        "status": "assigned",
+        "assigned_to": WORKER_A,
+    })
+
+    _set_runtime_member(monkeypatch, tmp_path, {"name": "default"}, "worker-config.json")
+    submitted = _submit(tmp_path, role="worker")
+    assert submitted["ok"] is True
+    assert submitted["task"]["submitted_by"] == "worker:default"
+    assert submitted["task"]["submitted_by_source"] == "runtime"
+
+    # The second process: a different member, 'leader'.
+    _set_runtime_member(monkeypatch, tmp_path, {"name": "leader"}, "leader-config.json")
+    result = _review(tmp_path, role="leader", verdict="pass")
+    assert result["ok"] is True, result
+    review = _task_meta(tmp_path)["review"]
+    assert review["reviewer"] == "leader:leader"
+    assert review["reviewer_source"] == "runtime"
+    assert review["verdict"] == "pass"
+
+
+def test_r7_parity_legacy_default_submitter_without_source_still_allowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None
+) -> None:
+    """Case 4 (bundle tree, legacy compatibility): a pre-round-7 record
+    (submitted_by='worker:default', NO submitted_by_source marker) is
+    reviewed by a trusted 'leader' -> allowed: a record without runtime
+    provenance is treated as unknown."""
+    _enforce_on(monkeypatch)
+    _write_submitted_task(tmp_path, submitted_by="worker:default")
+
+    _set_runtime_member(monkeypatch, tmp_path, {"name": "leader"}, "leader-config.json")
+    result = _review(tmp_path, role="leader", verdict="pass")
+    assert result["ok"] is True, result
+    review = _task_meta(tmp_path)["review"]
+    assert review["reviewer"] == "leader:leader"
+    assert review["reviewer_source"] == "runtime"
+
+
+def test_r7_parity_legacy_concrete_submitter_without_source_still_forbidden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None
+) -> None:
+    """Case 5 (bundle tree, legacy compatibility): a pre-round-7 record
+    (submitted_by='worker:alice', NO source marker) reviewed by a
+    trusted 'alice' -> forbidden: even without provenance, concrete
+    accounts still compare."""
+    _enforce_on(monkeypatch)
+    _write_submitted_task(tmp_path, submitted_by="worker:alice")
+
+    _set_runtime_member(monkeypatch, tmp_path, {"name": "alice"}, "leader-config.json")
+    result = _review(tmp_path, role="leader", verdict="pass")
+    assert result["ok"] is False
+    assert result["error_code"] == "self_review_forbidden"
+    assert "review" not in _task_meta(tmp_path)

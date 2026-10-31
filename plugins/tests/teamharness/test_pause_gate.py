@@ -21,6 +21,20 @@ Covers (spec 3):
    the Go-side clear of the sources unblocks delegation
 8. pause persisted during membership validation (after the initial read,
    before the send) -> send suppressed, task stays prepared
+
+Covers (#1402 commit gate, the overlap between the entry pull and the
+submit write-back):
+9. pause lands on the remote between the worker's pull and its submit
+   write-back -> the committed remote meta keeps the full pause state
+   (status, pause_sources, paused_by_project, extra loop keys) while the
+   worker's task update lands
+10. the guarded meta push conflicts once (a second pause source drifts in
+    during the push window) -> the bounded retry re-snapshots, re-merges
+    and converges with every source preserved
+11. storage drifts the meta during every push window -> the bounded
+    budget (3 attempts) is exhausted and _sync_project returns False
+12. no remote pause -> the commit is vacuously verified and the
+    worker-authored fields land in the final remote meta
 """
 
 from __future__ import annotations
@@ -89,19 +103,135 @@ def _read_task(workspace: Path, task_id: str) -> dict[str, Any]:
 
 
 class FakeFilesync:
-    """Records _filesync calls instead of touching shared storage."""
+    """Records _filesync calls instead of touching shared storage.
+
+    ``cat`` models durable single-file storage: it returns the content of
+    the local file last pushed to the same remote path (no concurrent
+    writer in these tests), so the #1402 commit verification sees its own
+    commit; a path that was never pushed reads as absent.
+    """
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.remote: dict[str, str] = {}
 
     def __call__(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        action = str(arguments.get("action") or "")
+        path = str(arguments.get("path") or "")
+        local = Path(arguments["workspaceDir"]) / Path(*path.split("/"))
         self.calls.append(dict(arguments))
+        if action == "push" and not path.endswith("/") and local.is_file():
+            self.remote[path] = local.read_text(encoding="utf-8")
+        if action == "cat":
+            if path in self.remote:
+                return {"ok": True, "content": self.remote[path]}
+            return {"ok": False, "error": f"<ERROR> The object {path} does not exist."}
         return {
             "ok": True,
             "tool": "filesync",
             "action": arguments.get("action"),
             "path": arguments.get("path"),
         }
+
+
+class FakeProjectStorage:
+    """A filesync fake with a real remote meta.json store (#1402).
+
+    Models the conflict window: a human pause write to the remote project
+    meta lands between the worker's entry pull and its commit push.
+
+    - ``pull`` writes the current remote object to the local file, then
+      applies ``pull_mutation`` once (the concurrent Controller write that
+      lands right after the worker's pull);
+    - ``cat`` reads the remote object without touching local state;
+    - a single-file push of a project meta copies the local file into the
+      remote store, but is scripted to fail with the freshness-guard
+      conflict first ``meta_push_conflicts`` times (or always) — when a
+      conflict fires, ``window_mutation`` models the remote drift that
+      caused the guard to trip;
+    - directory pushes and task pushes are recorded and succeed.
+    """
+
+    def __init__(
+        self,
+        remote: dict[str, dict[str, Any]] | None = None,
+        *,
+        pull_mutation: Any = None,
+        window_mutation: Any = None,
+        meta_push_conflicts: int | str = 0,
+        drift_always: bool = False,
+    ) -> None:
+        self.remote: dict[str, dict[str, Any]] = {
+            key: dict(value) for key, value in (remote or {}).items()
+        }
+        self.pull_mutation = pull_mutation
+        self.window_mutation = window_mutation
+        self.meta_push_conflicts = meta_push_conflicts
+        self.drift_always = drift_always
+        self.calls: list[dict[str, Any]] = []
+        self.meta_push_calls = 0
+
+    @staticmethod
+    def _is_directory(path: str) -> bool:
+        return "." not in path.rsplit("/", 1)[-1]
+
+    def __call__(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        action = str(arguments.get("action") or "")
+        path = str(arguments.get("path") or "")
+        local = Path(arguments["workspaceDir"]) / Path(*path.split("/"))
+        self.calls.append(dict(arguments))
+        if action == "cat":
+            meta = self.remote.get(path)
+            if meta is None:
+                return {
+                    "ok": False,
+                    "error": f"<ERROR> The object {path} does not exist.",
+                }
+            return {"ok": True, "content": json.dumps(meta)}
+        if action == "pull":
+            meta = self.remote.get(path)
+            if meta is None:
+                return {
+                    "ok": False,
+                    "error": f"<ERROR> The object {path} does not exist.",
+                }
+            local.parent.mkdir(parents=True, exist_ok=True)
+            local.write_text(json.dumps(meta), encoding="utf-8")
+            if self.pull_mutation is not None:
+                self.remote[path] = self.pull_mutation(self.remote[path])
+                if not self.drift_always:
+                    self.pull_mutation = None
+            return {"ok": True}
+        if action == "push":
+            if self._is_directory(path):
+                return {"ok": True}
+            project_meta = path.startswith("shared/projects/") and path.endswith("meta.json")
+            if project_meta:
+                self.meta_push_calls += 1
+                if self.meta_push_conflicts == "always" or self.meta_push_conflicts:
+                    if self.window_mutation is not None:
+                        self.remote[path] = self.window_mutation(self.remote[path])
+                        if not self.drift_always:
+                            self.window_mutation = None
+                    if self.meta_push_conflicts != "always":
+                        self.meta_push_conflicts -= 1
+                    return {
+                        "ok": False,
+                        "conflict": True,
+                        "error": (
+                            "remote copy is newer than the local file; "
+                            "pull before pushing again"
+                        ),
+                    }
+                if self.window_mutation is not None:
+                    self.remote[path] = self.window_mutation(self.remote[path])
+                    if not self.drift_always:
+                        self.window_mutation = None
+            self.remote[path] = json.loads(local.read_text(encoding="utf-8"))
+            return {"ok": True}
+        if action == "stat":
+            return {"ok": True, "exists": path in self.remote}
+        return {"ok": True}
 
 
 def _loop(
@@ -211,7 +341,8 @@ def test_inflight_ack_submit_succeed_while_delegate_blocked(
         _project(
             "pg-2",
             status="active",
-            loop=_loop(pause_sources=["user", "project"], tasks=loop_tasks),
+            # Canonical Go-side order: lowercased, deduped, sorted.
+            loop=_loop(pause_sources=["project", "user"], tasks=loop_tasks),
         ),
     )
     _write_task(
@@ -245,7 +376,7 @@ def test_inflight_ack_submit_succeed_while_delegate_blocked(
     assert submit["task"]["status"] == "submitted"
     meta = _read_project(workspace, "pg-2")
     assert meta["loop"]["tasks"][0]["status"] == "submitted"
-    assert meta["loop"]["pause_sources"] == ["user", "project"]
+    assert meta["loop"]["pause_sources"] == ["project", "user"]
 
 
 def test_ready_loop_nodes_reports_paused(
@@ -500,3 +631,203 @@ def test_pause_during_membership_validation_suppresses_send(
         isinstance(item, dict) and item.get("task_id") == "pg-8-next" for item in nodes
     )
     assert all(item.get("status") != "assigned" for item in nodes)
+
+
+def test_pause_between_pull_and_submit_survives_write_back(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 9 (the maintainer's #1402 overlap): the worker pulls an active
+    meta, a human pause (status=paused, loop.pause_sources=["user"]) lands
+    on the remote between that pull and the submit write-back.  The
+    committed remote meta must keep the full pause state while the
+    worker's task update lands."""
+    monkeypatch.setattr(server.sync, "_SYNC_PROJECT_RETRY_BACKOFFS", (0.0, 0.0))
+    monkeypatch.setattr(
+        _taskflow_module(),
+        "_task_completion_notification",
+        lambda *args, **kwargs: {"sent": True, "eventId": "$pg9-completion"},
+    )
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "worker")
+    workspace = tmp_path / "agent"
+    task_id = "pg-9-inflight"
+    loop_tasks = [
+        {
+            "task_id": task_id,
+            "title": "In-flight pass",
+            "assigned_to": WORKER,
+            "depends_on": [],
+            "status": "assigned",
+        },
+    ]
+    base_meta = _project("pg-9", status="active", loop=_loop(tasks=loop_tasks))
+    storage = FakeProjectStorage(
+        {"shared/projects/pg-9/meta.json": base_meta},
+        pull_mutation=lambda meta: {
+            **meta,
+            "status": "paused",
+            "loop": {
+                **meta["loop"],
+                "pause_sources": ["user"],
+                "paused_by_project": False,
+                "last_paused_at": "2026-10-31T00:00:00Z",
+            },
+        },
+    )
+    monkeypatch.setattr(server, "_filesync", storage)
+    _write_project(workspace, "pg-9", base_meta)
+    _write_task(
+        workspace,
+        task_id,
+        {
+            "task_id": task_id,
+            "project_id": "pg-9",
+            "room_id": ROOM,
+            "status": "assigned",
+            "assigned_to": WORKER,
+        },
+    )
+
+    submit = server._taskflow(
+        _arguments(workspace, "submit_task", taskId=task_id, status="SUCCESS", summary="done")
+    )
+
+    assert submit["ok"] is True
+    assert submit["task"]["status"] == "submitted"
+    final = storage.remote["shared/projects/pg-9/meta.json"]
+    assert final["status"] == "paused"
+    loop = final["loop"]
+    assert loop["pause_sources"] == ["user"]
+    assert loop["paused_by_project"] is False
+    assert loop["last_paused_at"] == "2026-10-31T00:00:00Z"
+    # The worker's update landed alongside the preserved pause state.
+    assert loop["tasks"][0]["task_id"] == task_id
+    assert loop["tasks"][0]["status"] == "submitted"
+    # The directory mirror must never have written meta.json.
+    dir_pushes = [
+        call
+        for call in storage.calls
+        if call.get("action") == "push" and call.get("path") == "shared/projects/pg-9"
+    ]
+    assert dir_pushes
+    assert all(call.get("exclude") == ["meta.json"] for call in dir_pushes)
+    # A fresh pull reports the pause to the reader: the explicit source plus
+    # the "project" source contributed by the legacy status (spec 6 rule).
+    assert server.sync._pull_project(_arguments(workspace, "noop"), "pg-9") is True
+    state_module = importlib.import_module("mcp.project.state")
+    paused, sources = state_module._loop_pause_state(_read_project(workspace, "pg-9"))
+    assert paused is True
+    assert sources == ["project", "user"]
+
+
+def test_sync_project_retries_conflict_and_converges(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 10: the guarded meta push conflicts once because a second pause
+    source drifts in during the push window; the bounded retry re-snapshots,
+    re-merges and converges with every source preserved."""
+    monkeypatch.setattr(server.sync, "_SYNC_PROJECT_RETRY_BACKOFFS", (0.0, 0.0))
+    workspace = tmp_path / "agent"
+    project_id = "pg-10"
+    meta_path = f"shared/projects/{project_id}/meta.json"
+    base_meta = _project(project_id, status="active", loop=_loop(pause_sources=["user"]))
+    storage = FakeProjectStorage(
+        {meta_path: base_meta},
+        window_mutation=lambda meta: {
+            **meta,
+            "loop": {**meta["loop"], "pause_sources": ["audit", "user"]},
+        },
+        meta_push_conflicts=1,
+    )
+    monkeypatch.setattr(server, "_filesync", storage)
+    _write_project(workspace, project_id, base_meta)
+
+    assert server.sync._sync_project(_arguments(workspace, "noop"), project_id) is True
+
+    assert storage.meta_push_calls == 2
+    final = storage.remote[meta_path]
+    assert final["status"] == "active"
+    assert final["loop"]["pause_sources"] == ["audit", "user"]
+
+
+def test_sync_project_exhausted_retries_return_false(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 11: storage drifts the meta during every push window, so the
+    bounded budget (3 attempts) is exhausted; _sync_project returns False —
+    an exhausted retry is an error, never a silent success."""
+    monkeypatch.setattr(server.sync, "_SYNC_PROJECT_RETRY_BACKOFFS", (0.0, 0.0))
+    workspace = tmp_path / "agent"
+    project_id = "pg-11"
+    meta_path = f"shared/projects/{project_id}/meta.json"
+    base_meta = _project(project_id, status="active", loop=_loop())
+    drifted = iter((["audit"], ["audit", "cron"], ["audit", "cron", "system"]))
+
+    def _drift(meta: dict[str, Any]) -> dict[str, Any]:
+        return {**meta, "loop": {**meta["loop"], "pause_sources": next(drifted)}}
+
+    storage = FakeProjectStorage(
+        {meta_path: base_meta},
+        window_mutation=_drift,
+        meta_push_conflicts="always",
+        drift_always=True,
+    )
+    monkeypatch.setattr(server, "_filesync", storage)
+    _write_project(workspace, project_id, base_meta)
+
+    assert server.sync._sync_project(_arguments(workspace, "noop"), project_id) is False
+    assert storage.meta_push_calls == 3
+
+
+def test_submit_without_pause_keeps_worker_fields(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 12: with no remote pause the commit is vacuously verified and
+    the worker-authored fields (assignment, loop task update) land in the
+    final remote meta."""
+    monkeypatch.setattr(server.sync, "_SYNC_PROJECT_RETRY_BACKOFFS", (0.0, 0.0))
+    monkeypatch.setattr(
+        _taskflow_module(),
+        "_task_completion_notification",
+        lambda *args, **kwargs: {"sent": True, "eventId": "$pg12-completion"},
+    )
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "worker")
+    workspace = tmp_path / "agent"
+    task_id = "pg-12-inflight"
+    loop_tasks = [
+        {
+            "task_id": task_id,
+            "title": "In-flight pass",
+            "assigned_to": WORKER,
+            "depends_on": [],
+            "status": "assigned",
+        },
+    ]
+    base_meta = _project("pg-12", status="active", loop=_loop(tasks=loop_tasks))
+    storage = FakeProjectStorage({"shared/projects/pg-12/meta.json": base_meta})
+    monkeypatch.setattr(server, "_filesync", storage)
+    _write_project(workspace, "pg-12", base_meta)
+    _write_task(
+        workspace,
+        task_id,
+        {
+            "task_id": task_id,
+            "project_id": "pg-12",
+            "room_id": ROOM,
+            "status": "assigned",
+            "assigned_to": WORKER,
+        },
+    )
+
+    submit = server._taskflow(
+        _arguments(workspace, "submit_task", taskId=task_id, status="SUCCESS", summary="done")
+    )
+
+    assert submit["ok"] is True
+    final = storage.remote["shared/projects/pg-12/meta.json"]
+    assert final["status"] == "active"
+    loop = final["loop"]
+    assert "pause_sources" not in loop
+    assert loop["tasks"][0]["status"] == "submitted"
+    assert loop["tasks"][0]["assigned_to"] == WORKER
+    assert final["title"] == "Pause gate pg-12"
+    assert storage.meta_push_calls == 1

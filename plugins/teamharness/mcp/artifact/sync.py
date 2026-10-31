@@ -1,6 +1,8 @@
 # shared task/project state sync and pull (W1-a2: real module)
 from __future__ import annotations
 
+import json
+import time
 from typing import Any
 
 # Cross-group imports are top-level absolutes (see lifecycle/transitions.py
@@ -57,23 +59,226 @@ def _sync_task(
     return bool(result.get("ok"))
 
 
+# #1402: the conflict-bearing object is the project meta.json — the object
+# the Go LoopHandler rewrites under a strict ETag CAS (PutObjectIfMatchStrict
+# in agentteams-controller/internal/server/loop_handler.go).  _sync_project
+# must therefore never commit it through the unguarded directory mirror:
+# it snapshots the remote meta, merges the controller-owned pause state,
+# pushes meta.json through the guarded single-file path, and verifies the
+# commit with a bounded retry (an exhausted retry is an error, never a
+# silent success — same stance as the Go CAS loop).
+_SYNC_PROJECT_MAX_ATTEMPTS = 3
+_SYNC_PROJECT_RETRY_BACKOFFS = (0.1, 0.25)
+
+
+def _remote_project_meta_snapshot(
+    arguments: dict[str, Any], meta_path: str
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Read the remote project meta without touching local state.
+
+    Filesync ``cat`` (``mc cat`` through the same alias/env resolution as
+    pull/push): unlike ``pull`` it never writes the local tree.  Returns
+    (meta, error):
+
+    - (meta, None)  -> remote object read (possibly empty)
+    - (None, None)  -> remote object does not exist (normal first push)
+    - (None, reason)-> the read failed; the caller proceeds without a
+      snapshot (fail-open, mirroring the single-file push guard's probe
+      semantics — a transient storage outage must not wedge project writes)
+    """
+    cat_args = dict(arguments)
+    cat_args.update({"action": "cat", "path": meta_path})
+    result = _filesync(cat_args)
+    if result.get("ok"):
+        content = result.get("content")
+        if not content:
+            return {}, None
+        try:
+            meta = json.loads(content)
+        except ValueError:
+            return None, "remote project meta is not valid JSON"
+        if not isinstance(meta, dict):
+            return None, "remote project meta is not a JSON object"
+        return meta, None
+    error = str(result.get("error") or "")
+    if "does not exist" in error.lower():
+        return None, None
+    return None, error
+
+
+def _merge_project_pause_state(
+    local_meta: dict[str, Any] | None,
+    snapshot: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Merge the controller-owned pause state from a remote snapshot into
+    the local project meta (the local copy stays the write base).
+
+    #1402 rules — a worker write preserves pause state it did not author:
+
+    - project ``status``: a remote ``paused`` is authoritative (never
+      write ``active`` over it); every other status is the local writer's
+      to own;
+    - ``loop.pause_sources``: union of remote and local — a worker never
+      removes a source it did not add; removal stays with the
+      Controller's CAS write;
+    - ``loop.paused_by_project``: the remote value wins;
+    - loop keys present remotely but unmodeled locally: carried over
+      (mirror of the Go ``loopMeta.Extra`` round-trip rule).
+    """
+    merged = dict(local_meta or {})
+    if not snapshot:
+        return merged
+    if str(snapshot.get("status") or "") == "paused":
+        merged["status"] = "paused"
+    snapshot_loop = snapshot.get("loop")
+    if not isinstance(snapshot_loop, dict) or not snapshot_loop:
+        return merged
+    local_loop = merged.get("loop")
+    loop = dict(local_loop) if isinstance(local_loop, dict) else {}
+    for key, value in snapshot_loop.items():
+        if key not in loop:
+            loop[key] = value
+    local_sources = loop.get("pause_sources")
+    remote_sources = snapshot_loop.get("pause_sources")
+    sources = {
+        source
+        for source in (local_sources if isinstance(local_sources, list) else [])
+        if isinstance(source, str) and source.strip()
+    }
+    sources.update(
+        source
+        for source in (remote_sources if isinstance(remote_sources, list) else [])
+        if isinstance(source, str) and source.strip()
+    )
+    if sources:
+        loop["pause_sources"] = sorted(sources)
+    if "paused_by_project" in snapshot_loop:
+        loop["paused_by_project"] = snapshot_loop["paused_by_project"]
+    merged["loop"] = loop
+    return merged
+
+
+def _project_pause_state(meta: dict[str, Any] | None) -> dict[str, Any]:
+    """The pause state a committed project meta must retain.
+
+    Every field unset when the meta carries no pause state, so the verify
+    step is vacuous for a write that authored and observed none.
+    """
+    meta = meta if isinstance(meta, dict) else {}
+    loop = meta.get("loop")
+    if not isinstance(loop, dict):
+        loop = {}
+    sources = loop.get("pause_sources")
+    return {
+        "status_paused": meta.get("status") == "paused",
+        "pause_sources": sorted(
+            {
+                source
+                for source in (sources if isinstance(sources, list) else [])
+                if isinstance(source, str) and source.strip()
+            }
+        )
+        or None,
+        "paused_by_project": loop.get("paused_by_project") is True,
+    }
+
+
+def _pause_state_missing(
+    expected: dict[str, Any],
+    remote_meta: dict[str, Any] | None,
+) -> bool:
+    """True when any pause state expected in the committed meta is absent
+    from the remote copy — or the remote copy could not be read at all
+    (``remote_meta is None``: a verified commit is required, so an
+    unverifiable one counts as missing)."""
+    if remote_meta is None:
+        return True
+    loop = remote_meta.get("loop")
+    if not isinstance(loop, dict):
+        loop = {}
+    if expected["status_paused"] and remote_meta.get("status") != "paused":
+        return True
+    if expected["pause_sources"]:
+        sources = loop.get("pause_sources")
+        remote = {
+            source
+            for source in (sources if isinstance(sources, list) else [])
+            if isinstance(source, str)
+        }
+        if not set(expected["pause_sources"]).issubset(remote):
+            return True
+    if expected["paused_by_project"] and loop.get("paused_by_project") is not True:
+        return True
+    return False
+
+
 def _sync_project(arguments: dict[str, Any], project_id: str) -> bool:
-    """Push a project directory (meta.json + plan.md + result.md) to shared
-    storage.
+    """Push a project's derived files and its meta.json to shared storage,
+    commit-safe against a concurrent Controller pause (#1402).
 
     Project state is written locally by projectflow, and — unlike tasks,
     which are pushed via _sync_task — was previously only synced to MinIO at
-    worker startup (mirror_all). Without this push, a Controller-level project
-    API (or dashboard) would read a stale startup snapshot. Mirrors the
-    _sync_task pattern.
+    worker startup (mirror_all). Without this push, a Controller-level
+    project API (or dashboard) would read a stale startup snapshot. Mirrors
+    the _sync_task pattern.
+
+    The conflict-bearing object (meta.json) is never written by the
+    unguarded directory mirror; every attempt:
+
+    1. snapshot the remote meta without touching local state (filesync
+       ``cat``; a failed snapshot is fail-open — the push proceeds without
+       a merge, the same stance as the guard's probe);
+    2. merge the controller-owned pause state from the snapshot into the
+       local meta and re-write it (``_merge_project_pause_state``), so
+       every project writer (lifecycle transitions, project flow, state)
+       inherits the protection;
+    3. push the project directory EXCLUDING meta.json (derived files only:
+       plan.md, result.md, ...);
+    4. push meta.json through the guarded single-file path;
+    5. verify the commit by re-reading the remote meta: if any pause state
+       observed in the snapshot (carried into the merged set) is absent,
+       re-snapshot, re-merge and retry — bounded to
+       _SYNC_PROJECT_MAX_ATTEMPTS with _SYNC_PROJECT_RETRY_BACKOFFS.
+
+    Returns True only when the meta commit is verified (or the project
+    carries no local meta.json, in which case the verified directory push
+    is the whole commit).  An exhausted retry returns False — never a
+    silent success.
     """
-    sync_args = dict(arguments)
-    sync_args.update({
-        "action": "push",
-        "path": f"shared/projects/{project_id}",
-    })
-    result = _filesync(sync_args)
-    return bool(result.get("ok"))
+    meta_path = f"shared/projects/{project_id}/meta.json"
+    dir_path = f"shared/projects/{project_id}"
+    state_path = _project_state_path(arguments, project_id)
+    has_local_meta = state_path.is_file()
+
+    for attempt in range(1, _SYNC_PROJECT_MAX_ATTEMPTS + 1):
+        if attempt > 1:
+            time.sleep(_SYNC_PROJECT_RETRY_BACKOFFS[attempt - 2])
+        snapshot, _snapshot_error = _remote_project_meta_snapshot(arguments, meta_path)
+        merged: dict[str, Any] | None = None
+        if has_local_meta:
+            merged = _merge_project_pause_state(_read_json(state_path), snapshot)
+            _write_json(state_path, merged)
+        dir_args = dict(arguments)
+        dir_args.update({
+            "action": "push",
+            "path": dir_path,
+            "exclude": ["meta.json"],
+        })
+        if not _filesync(dir_args).get("ok"):
+            continue
+        if has_local_meta:
+            meta_args = dict(arguments)
+            meta_args.update({"action": "push", "path": meta_path})
+            if not _filesync(meta_args).get("ok"):
+                continue
+            expected = _project_pause_state(merged)
+            if not any(expected.values()):
+                return True
+            verified, _verify_error = _remote_project_meta_snapshot(arguments, meta_path)
+            if _pause_state_missing(expected, verified):
+                continue
+        return True
+    return False
 
 
 def _pull_task(arguments: dict[str, Any], task_id: str) -> bool:

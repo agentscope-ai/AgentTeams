@@ -122,9 +122,9 @@ The Helm chart uses `credentials.*` for the default model service:
 | Value | Default | Meaning | Example |
 |---|---|---|---|
 | `credentials.llmApiKey` | None | Model service API key; required | `sk-...` |
-| `credentials.llmProvider` | `openai-compat` | Model service type used by the gateway | `openai-compat`, `qwen` |
+| `credentials.llmProvider` | `openai-compat` | Model service type used by the gateway | `openai-compat`, `qwen`, `atlascloud` |
 | `credentials.defaultModel` | `gpt-5.4` | Model used by the Manager and Workers without an explicit model | `gpt-5.4`, `qwen3.5-plus` |
-| `credentials.llmBaseUrl` | Empty | Base URL for an OpenAI-compatible API; leave empty for official OpenAI or a provider default | `https://api.deepseek.com/v1` |
+| `credentials.llmBaseUrl` | Empty | Base URL for an OpenAI-compatible API; leave empty for official OpenAI or a provider default (`atlascloud` defaults to `https://api.atlascloud.ai/v1`) | `https://api.deepseek.com/v1` |
 
 Set `llmBaseUrl` to the API root, not a specific `/chat/completions` endpoint. The model name must be an identifier accepted by that service.
 

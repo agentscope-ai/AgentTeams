@@ -303,6 +303,7 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 		if provider == "" {
 			provider = "qwen"
 		}
+		cfg.OpenAIBaseURL = resolveLLMBaseURL(provider, cfg.OpenAIBaseURL)
 
 		switch provider {
 		case "qwen":
@@ -440,6 +441,20 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 }
 
 // parseHostPort extracts host and port from a URL like "http://host:port".
+// defaultAtlasCloudBaseURL is the OpenAI-compatible endpoint used by the
+// "atlascloud" provider preset when AGENTTEAMS_OPENAI_BASE_URL is not set.
+const defaultAtlasCloudBaseURL = "https://api.atlascloud.ai/v1"
+
+// resolveLLMBaseURL returns the effective OpenAI-compatible base URL. An
+// explicit value always wins; the "atlascloud" preset supplies its default
+// endpoint so it does not depend on the caller injecting the env var.
+func resolveLLMBaseURL(provider, baseURL string) string {
+	if baseURL == "" && provider == "atlascloud" {
+		return defaultAtlasCloudBaseURL
+	}
+	return baseURL
+}
+
 func parseHostPort(rawURL string) (string, int, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {

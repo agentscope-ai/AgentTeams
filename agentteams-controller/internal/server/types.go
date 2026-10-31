@@ -457,6 +457,50 @@ type TeamListResponse struct {
 	Total int            `json:"total"`
 }
 
+// teamListProjection is the GET /api/v1/teams envelope for a ?fields=
+// projection: the same teams/total wrapping as TeamListResponse, with
+// each row already reduced to the requested view (TeamSummaryView).
+type teamListProjection struct {
+	Teams []any `json:"teams"`
+	Total int   `json:"total"`
+}
+
+// TeamSummaryView is the fields=summary projection of a team (issue
+// #1475): the stable identity, readiness and membership-name fields a
+// list card renders. Fields follow TeamResponse's order, so the JSON
+// encoding is byte-stable. Excluded from the list: the member and port
+// references (admin, humanMembers, workerMembers, workerExposedPorts),
+// the room IDs, heartbeatEvery and the team-wide LLM defaults — those
+// stay on the detail endpoint.
+type TeamSummaryView struct {
+	Name         string   `json:"name"`
+	TeamName     string   `json:"teamName,omitempty"`
+	Phase        string   `json:"phase"`
+	Description  string   `json:"description,omitempty"`
+	LeaderName   string   `json:"leaderName"`
+	LeaderReady  bool     `json:"leaderReady"`
+	ReadyWorkers int      `json:"readyWorkers"`
+	TotalWorkers int      `json:"totalWorkers"`
+	Message      string   `json:"message,omitempty"`
+	WorkerNames  []string `json:"workerNames,omitempty"`
+}
+
+// SummaryView projects a full team response down to its list summary.
+func (r TeamResponse) SummaryView() TeamSummaryView {
+	return TeamSummaryView{
+		Name:         r.Name,
+		TeamName:     r.TeamName,
+		Phase:        r.Phase,
+		Description:  r.Description,
+		LeaderName:   r.LeaderName,
+		LeaderReady:  r.LeaderReady,
+		ReadyWorkers: r.ReadyWorkers,
+		TotalWorkers: r.TotalWorkers,
+		Message:      r.Message,
+		WorkerNames:  r.WorkerNames,
+	}
+}
+
 // --- Human API types ---
 
 type CreateHumanRequest struct {
@@ -505,6 +549,43 @@ type HumanResponse struct {
 type HumanListResponse struct {
 	Humans []HumanResponse `json:"humans"`
 	Total  int             `json:"total"`
+}
+
+// humanListProjection is the GET /api/v1/humans envelope for a ?fields=
+// projection: the same humans/total wrapping as HumanListResponse, with
+// each row already reduced to the requested view (HumanSummaryView).
+type humanListProjection struct {
+	Humans []any `json:"humans"`
+	Total  int   `json:"total"`
+}
+
+// HumanSummaryView is the fields=summary projection of a human (issue
+// #1475): identity and permission level for a list card. Fields follow
+// HumanResponse's order, so the JSON encoding is byte-stable. Excluded
+// from the list: the scope lists (accessibleTeams/accessibleWorkers),
+// capabilities, note, rooms and initialPassword — those stay on the
+// detail endpoint. initialPassword is never a list field in any view.
+type HumanSummaryView struct {
+	Name            string `json:"name"`
+	Phase           string `json:"phase"`
+	DisplayName     string `json:"displayName"`
+	Email           string `json:"email,omitempty"`
+	PermissionLevel int    `json:"permissionLevel"`
+	MatrixUserID    string `json:"matrixUserID,omitempty"`
+	Message         string `json:"message,omitempty"`
+}
+
+// SummaryView projects a full human response down to its list summary.
+func (r HumanResponse) SummaryView() HumanSummaryView {
+	return HumanSummaryView{
+		Name:            r.Name,
+		Phase:           r.Phase,
+		DisplayName:     r.DisplayName,
+		Email:           r.Email,
+		PermissionLevel: r.PermissionLevel,
+		MatrixUserID:    r.MatrixUserID,
+		Message:         r.Message,
+	}
 }
 
 // --- Manager API types ---

@@ -346,6 +346,79 @@ func projectWorkerListRow(resp WorkerResponse, views workerFields) any {
 	}
 }
 
+// listFields is the parsed ?fields= selection of GET /api/v1/teams and
+// GET /api/v1/humans (issue #1475): which projection each list row
+// carries.
+type listFields int
+
+const (
+	// listFieldsAll is the default: the full response, serialized
+	// byte-identically to the pre-projection implementation.
+	listFieldsAll listFields = iota
+	listFieldsSummary
+)
+
+// parseTeamListFields parses the ?fields= query parameter of
+// GET /api/v1/teams (issue #1475). It is fail-closed on purpose: an
+// unknown token is a 400 before any cluster access, so a typo cannot
+// silently change the payload.
+func parseTeamListFields(raw string) (listFields, error) {
+	return parseSummaryListFields(raw)
+}
+
+// parseHumanListFields parses the ?fields= query parameter of
+// GET /api/v1/humans (issue #1475). Same fail-closed contract as
+// parseTeamListFields.
+func parseHumanListFields(raw string) (listFields, error) {
+	return parseSummaryListFields(raw)
+}
+
+// parseSummaryListFields is the shared parser behind parseTeamListFields
+// and parseHumanListFields. An empty value (or only empty tokens) selects
+// the default full response; otherwise the value must be "summary" (the
+// stable list-card fields) or "all" (the default full response). Token
+// order and duplicates do not matter; "all" cannot be combined with a
+// subset (same fail-closed stance as parseWorkerListFields).
+func parseSummaryListFields(raw string) (listFields, error) {
+	const valid = "summary, all"
+	summary, all := false, false
+	for _, token := range strings.Split(raw, ",") {
+		token = strings.TrimSpace(token)
+		switch token {
+		case "":
+		case "summary":
+			summary = true
+		case "all":
+			all = true
+		default:
+			return 0, fmt.Errorf("invalid fields value %q: valid values are %s", token, valid)
+		}
+	}
+	if all && summary {
+		return 0, fmt.Errorf("invalid fields value: %q cannot be combined with other values; valid values are %s", "all", valid)
+	}
+	if summary {
+		return listFieldsSummary, nil
+	}
+	return listFieldsAll, nil
+}
+
+// projectTeamListRow reduces one team list row to the requested view.
+func projectTeamListRow(resp TeamResponse, views listFields) any {
+	if views == listFieldsSummary {
+		return resp.SummaryView()
+	}
+	return resp
+}
+
+// projectHumanListRow reduces one human list row to the requested view.
+func projectHumanListRow(resp HumanResponse, views listFields) any {
+	if views == listFieldsSummary {
+		return resp.SummaryView()
+	}
+	return resp
+}
+
 func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 	caller := authpkg.CallerFromContext(r.Context())
 	teamFilter := r.URL.Query().Get("team")
@@ -706,6 +779,15 @@ func (h *ResourceHandler) GetTeam(w http.ResponseWriter, r *http.Request) {
 
 func (h *ResourceHandler) ListTeams(w http.ResponseWriter, r *http.Request) {
 	caller := authpkg.CallerFromContext(r.Context())
+	// fields selects a slim projection of each list row (issue #1475);
+	// parsed before any cluster access (fail-closed 400). Absent (or
+	// "all") keeps the default full response byte-identical.
+	fieldViews, err := parseTeamListFields(r.URL.Query().Get("fields"))
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	var list v1beta1.TeamList
 	if err := h.client.List(r.Context(), &list, client.InNamespace(h.namespace)); err != nil {
 		writeK8sError(w, "list teams", err)
@@ -722,7 +804,17 @@ func (h *ResourceHandler) ListTeams(w http.ResponseWriter, r *http.Request) {
 		teams = append(teams, teamToResponse(&list.Items[i]))
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, TeamListResponse{Teams: teams, Total: len(teams)})
+	if fieldViews == listFieldsAll {
+		httputil.WriteJSON(w, http.StatusOK, TeamListResponse{Teams: teams, Total: len(teams)})
+		return
+	}
+	// Projected rows share the envelope shape (teams/total) but carry
+	// only the requested view per row.
+	projected := make([]any, 0, len(teams))
+	for i := range teams {
+		projected = append(projected, projectTeamListRow(teams[i], fieldViews))
+	}
+	httputil.WriteJSON(w, http.StatusOK, teamListProjection{Teams: projected, Total: len(teams)})
 }
 
 func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
@@ -1208,6 +1300,15 @@ func (h *ResourceHandler) validateHumanReferences(ctx context.Context, teams *[]
 }
 
 func (h *ResourceHandler) ListHumans(w http.ResponseWriter, r *http.Request) {
+	// fields selects a slim projection of each list row (issue #1475);
+	// parsed before any cluster access (fail-closed 400). Absent (or
+	// "all") keeps the default full response byte-identical.
+	fieldViews, err := parseHumanListFields(r.URL.Query().Get("fields"))
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	var list v1beta1.HumanList
 	if err := h.client.List(r.Context(), &list, client.InNamespace(h.namespace)); err != nil {
 		writeK8sError(w, "list humans", err)
@@ -1219,7 +1320,17 @@ func (h *ResourceHandler) ListHumans(w http.ResponseWriter, r *http.Request) {
 		humans = append(humans, humanToResponse(&list.Items[i]))
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, HumanListResponse{Humans: humans, Total: len(humans)})
+	if fieldViews == listFieldsAll {
+		httputil.WriteJSON(w, http.StatusOK, HumanListResponse{Humans: humans, Total: len(humans)})
+		return
+	}
+	// Projected rows share the envelope shape (humans/total) but carry
+	// only the requested view per row.
+	projected := make([]any, 0, len(humans))
+	for i := range humans {
+		projected = append(projected, projectHumanListRow(humans[i], fieldViews))
+	}
+	httputil.WriteJSON(w, http.StatusOK, humanListProjection{Humans: projected, Total: len(humans)})
 }
 
 func (h *ResourceHandler) DeleteHuman(w http.ResponseWriter, r *http.Request) {

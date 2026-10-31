@@ -134,8 +134,10 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/packages", mw.RequireAuthz(authpkg.ActionCreate, "worker", nil)(http.HandlerFunc(ph.Upload)))
 
 	// --- Imperative lifecycle ---
-	lh := NewLifecycleHandler(deps.Client, deps.Backend, deps.Namespace)
+	lh := NewLifecycleHandler(deps.Client, deps.Backend, deps.Namespace, deps.ResourcePrefix)
 	mux.Handle("POST /api/v1/workers/{name}/wake", mw.RequireAuthz(authpkg.ActionWake, "worker", nameFn)(http.HandlerFunc(lh.Wake)))
+	mux.Handle("POST /api/v1/workers/{name}/restart", mw.RequireAuthz(authpkg.ActionWake, "worker", nameFn)(http.HandlerFunc(lh.Restart)))
+	mux.Handle("POST /api/v1/managers/{name}/restart", mw.RequireAuthz(authpkg.ActionUpdate, "manager", nameFn)(http.HandlerFunc(lh.RestartManager)))
 	mux.Handle("POST /api/v1/workers/{name}/sleep", mw.RequireAuthz(authpkg.ActionSleep, "worker", nameFn)(http.HandlerFunc(lh.Sleep)))
 	mux.Handle("POST /api/v1/workers/{name}/ensure-ready", mw.RequireAuthz(authpkg.ActionEnsureReady, "worker", nameFn)(http.HandlerFunc(lh.EnsureReady)))
 	mux.Handle("POST /api/v1/workers/{name}/ready", mw.RequireAuthz(authpkg.ActionReady, "worker", nameFn)(http.HandlerFunc(lh.Ready)))

@@ -387,6 +387,13 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	// leaves the annotation unset and the periodic reconcile retries.
 	r.applySubagentModelHot(ctx, w, effectiveSpec, configContext, state)
 
+	// Hot-apply the primary model as well: `model` is excluded from the
+	// container-recreation hash (config-only), so without this dial a running
+	// qwenpaw process kept the old in-memory model until a restart. Uses the
+	// same model-settings endpoint (mutates agent.json + schedules an
+	// in-process agent reload).
+	r.applyActiveModelHot(ctx, w, effectiveSpec, state)
+
 	// Hot-apply changed LLM stream timeouts to the running worker process
 	// via the QwenPaw envs API (the runtime re-reads the envs on every
 	// stream, so no restart is needed). Same best-effort contract as the

@@ -1068,6 +1068,35 @@ func TestChannelsQrcodeStatus_QueryWhitelist(t *testing.T) {
 	}
 }
 
+// TestChannelsQrcodeStatus_UsesLongPollClient guards the QR-status route's
+// long-poll client. iLink holds get_qrcode_status for ~30s server-side, so
+// the generic 5s channelProxyTimeout would abort every poll and a QR login
+// could never be confirmed through the proxy (the Console, which dials the
+// worker directly, works). The test shrinks both clients so it proves the
+// route selection without adding seconds to the suite.
+func TestChannelsQrcodeStatus_UsesLongPollClient(t *testing.T) {
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(80 * time.Millisecond) // > generic 40ms, < long-poll 500ms
+		_, _ = w.Write([]byte(`{"status":"confirmed","credentials":{"bot_token":"tok"}}`))
+	}))
+	t.Cleanup(slow.Close)
+
+	h := newTestChannelsHandler(t, "embedded", slow, nil, checkpointTeamWithWorkers("team-a", "daily-carol")...)
+	// The generic client must be too short for the upstream hold; the
+	// long-poll client must outlast it. Without the per-route selection the
+	// status call would hit the 40ms client and return 502.
+	h.http = &http.Client{Timeout: 40 * time.Millisecond}
+	h.longPollHTTP = &http.Client{Timeout: 500 * time.Millisecond}
+
+	rec := httptest.NewRecorder()
+	h.getQrcodeStatus(rec, adminCaller(channelsRequest(http.MethodGet,
+		"/api/v1/workers/placeholder/channels/wechat/qrcode/status?token=abc123", "",
+		"name", "daily-carol", "channel", "wechat")))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s (long-poll client not used?)", rec.Code, rec.Body.String())
+	}
+}
+
 // appearingStore wraps ossfake.Memory and materializes one object only after
 // N GetObject misses — simulating push_loop lag between the qwenpaw write
 // and the MinIO baseline.

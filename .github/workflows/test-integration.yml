@@ -829,6 +829,12 @@ jobs:
       - name: Run the upgrade CLI regression suite (stubbed docker/agt)
         run: bash install/tests/test-upgrade-cli.sh
 
+      - name: Run the console-approval hint literal-print regression (stubbed docker)
+        # #1460: the upgrade's device-approval hint must print its command
+        # examples literally - backticks in the double-quoted log line would
+        # execute them while printing. Pure bash + stubbed docker, no engine.
+        run: bash install/tests/test-upgrade-console-hint.sh
+
       - name: Run the live boundary-preservation regression (real engine)
         run: |
           if docker info >/dev/null 2>&1; then

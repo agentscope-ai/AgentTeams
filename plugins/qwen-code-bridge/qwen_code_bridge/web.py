@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import mimetypes
 import os
 import shutil
@@ -30,11 +31,18 @@ import httpx
 from fastapi import APIRouter, Request, WebSocket
 from fastapi.responses import JSONResponse, Response
 
+logger = logging.getLogger(__name__)
+
 SERVE_URL_ENV = "QWEN_CODE_BRIDGE_SERVE_URL"
 SERVE_AUTOSTART_ENV = "QWEN_CODE_BRIDGE_SERVE_AUTOSTART"
 SERVE_WORKSPACE_ENV = "QWEN_CODE_BRIDGE_SERVE_WORKSPACE"
 WEB_DIST_ENV = "QWEN_CODE_BRIDGE_WEB_DIST"
 SERVE_TOKEN_ENV = "QWEN_CODE_BRIDGE_SERVE_TOKEN"
+#: Fail-closed switch: when the SDK auth module cannot be imported, refuse
+#: every bridge WebSocket (4401) instead of keeping the open behaviour.
+REQUIRE_WS_AUTH_ENV = "QWEN_CODE_BRIDGE_REQUIRE_WS_AUTH"
+#: Denial close code, mirroring ``RuntimeBoundaryMiddleware``.
+WS_AUTH_DENY_CODE = 4401
 DEFAULT_SERVE_URL = ""  # resolved from env/serve.json; auto-start allocates a free port
 
 #: Where this proxy is mounted; the embedded console treats it as its root.
@@ -42,8 +50,10 @@ WEB_PREFIX = "/api/qwen-code-bridge/web"
 
 #: Injected into the console HTML: prefix every root-absolute request the
 #: shell makes (fetch / XHR / WebSocket / EventSource) so a prefixed mount
-#: behaves like the original origin root.
-_PREFIX_SHIM = """<script>(function(){
+#: behaves like the original origin root. Plain JavaScript (no HTML wrapper)
+#: so tests can execute it directly; the injection sites wrap it in
+#: ``<script>``.
+_PREFIX_SHIM = """(function(){
 var P=location.pathname.replace(/\\/?[^/]*\\/?$/,"")||"";
 function fix(u){try{
   if(typeof u!=="string") return u;
@@ -61,11 +71,12 @@ var f=window.fetch;if(f){window.fetch=function(u,o){
     var nu=fix(u.url); if(nu!==u.url){u=new Request(nu,u);}
   }}catch(e){}
 var x=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){var a=[].slice.call(arguments);a[1]=fix(u);return x.apply(this,a)};
-var W=window.WebSocket;if(W){window.WebSocket=function(u,p){return new W(fix(u),p)};window.WebSocket.prototype=W.prototype;}
+function wsAuth(u){try{if(typeof u!=="string")return u;var t=null;try{t=window.localStorage.getItem("qwenpaw_auth_token");}catch(e){}if(!t)return u;if(/[?&]token=/.test(u))return u;return u+(u.indexOf("?")>=0?"&":"?")+"token="+encodeURIComponent(t);}catch(e){}return u;}
+var W=window.WebSocket;if(W){window.WebSocket=function(u,p){return new W(wsAuth(fix(u)),p)};window.WebSocket.prototype=W.prototype;}
 var E=window.EventSource;if(E){window.EventSource=function(u,o){return new E(fix(u),o)};window.EventSource.prototype=E.prototype;}
 var WK=window.Worker;
 if(WK){
-  var bootCommon="var P="+JSON.stringify(P)+";function fix(u){try{if(typeof u!==\"string\")return u;if(u.indexOf(P+\"/\")===0)return u;if(u.charAt(0)===\"/\")return P+u;var o=location.origin;if(o&&u.indexOf(o+\"/\")===0)return o+P+u.slice(o.length);}catch(e){}return u;}var _f=self.fetch;self.fetch=function(u,o){return _f(fix(u),o)};if(self.XMLHttpRequest){var _x=self.XMLHttpRequest.prototype.open;self.XMLHttpRequest.prototype.open=function(m,u){var a=[].slice.call(arguments);a[1]=fix(u);return _x.apply(this,a)}};";
+  var bootCommon="var P="+JSON.stringify(P)+";function fix(u){try{if(typeof u!=='string')return u;if(u.indexOf(P+'/')===0)return u;if(u.charAt(0)==='/')return P+u;var o=location.origin;if(o&&u.indexOf(o+'/')===0)return o+P+u.slice(o.length);}catch(e){}return u;}var _f=self.fetch;self.fetch=function(u,o){return _f(fix(u),o)};if(self.XMLHttpRequest){var _x=self.XMLHttpRequest.prototype.open;self.XMLHttpRequest.prototype.open=function(m,u){var a=[].slice.call(arguments);a[1]=fix(u);return _x.apply(this,a)}};";
   window.Worker=function(u,o){try{
     if(String(u).indexOf("blob:")===0&&o&&o.type==="module"){
       var b2=bootCommon+"await import("+JSON.stringify(String(u))+");";
@@ -79,7 +90,7 @@ if(WK){
     }
   }catch(e){}return new WK(u,o)};
 }
-})();</script>"""
+})();"""
 
 
 def _rewrite_console_html(html: bytes) -> bytes:
@@ -88,7 +99,7 @@ def _rewrite_console_html(html: bytes) -> bytes:
     for path in ("/assets/", "/manifest.webmanifest", "/favicon"):
         text = text.replace('="' + path, '="' + WEB_PREFIX + path)
     if _PREFIX_SHIM not in text:
-        text = text.replace("<head>", "<head>" + _PREFIX_SHIM, 1)
+        text = text.replace("<head>", "<head><script>" + _PREFIX_SHIM + "</script>", 1)
     return text.encode("utf-8")
 
 router = APIRouter(tags=["qwen-code-bridge"])
@@ -142,6 +153,30 @@ def web_dist() -> Path | None:
         return None
 
 
+#: Injected by ``_inject_daemon_base`` (rebuilt-shell path): rewrites
+#: origin-absolute WebSocket URLs onto the prefixed origin and appends the
+#: console's stored login token (``localStorage["qwenpaw_auth_token"]``) as
+#: ``?token=`` when one is present (a URL that already carries a ``token=``
+#: query parameter is not re-tokened). Plain JavaScript (no HTML wrapper) so
+#: tests can execute it directly; ``_inject_daemon_base`` wraps it in
+#: ``<script>``.
+_DAEMON_WS_SHIM = (
+    "(function(){var P=window.__QWEN_DAEMON_BASE__||'';"
+    "var W=window.WebSocket;if(!W||!P)return;"
+    "function fix(u){try{var s=String(u);var o=location.origin"
+    ".replace('http://','ws://').replace('https://','wss://');"
+    "if(s.indexOf(o+'/')===0&&s.indexOf(o+P+'/')!==0)return o+P+s.slice(o.length);"
+    "if(s.charAt(0)==='/'&&s.indexOf(P+'/')!==0)return (o+P+s);}catch(e){}return u;}"
+    "function wsAuth(u){try{if(typeof u!=='string')return u;var t=null;"
+    "try{t=window.localStorage.getItem('qwenpaw_auth_token');}catch(e){}"
+    "if(!t)return u;if(/[?&]token=/.test(u))return u;"
+    "return u+(u.indexOf('?')>=0?'&':'?')+'token='+encodeURIComponent(t);}"
+    "catch(e){}return u;}"
+    "window.WebSocket=function(u,p){return new W(wsAuth(fix(u)),p)};"
+    "window.WebSocket.prototype=W.prototype;})()"
+)
+
+
 def _inject_daemon_base(data: bytes) -> bytes:
     html = data.decode("utf-8", "ignore")
     inject = (
@@ -150,17 +185,8 @@ def _inject_daemon_base(data: bytes) -> bytes:
         + ";</script>"
     )
     if "__QWEN_DAEMON_BASE__" not in html:
-        ws_shim = (
-            "<script>(function(){var P=window.__QWEN_DAEMON_BASE__||'';"
-            "var W=window.WebSocket;if(!W||!P)return;"
-            "function fix(u){try{var s=String(u);var o=location.origin"
-            ".replace('http://','ws://').replace('https://','wss://');"
-            "if(s.indexOf(o+'/')===0&&s.indexOf(o+P+'/')!==0)return o+P+s.slice(o.length);"
-            "if(s.charAt(0)==='/'&&s.indexOf(P+'/')!==0)return (o+P+s);}catch(e){}return u;}"
-            "window.WebSocket=function(u,p){return new W(fix(u),p)};"
-            "window.WebSocket.prototype=W.prototype;})();</script>"
-        )
-        html = html.replace("<head>", "<head>" + inject + ws_shim, 1)
+        wrapped = "<script>" + _DAEMON_WS_SHIM + "</script>"
+        html = html.replace("<head>", "<head>" + inject + wrapped, 1)
     return html.encode("utf-8")
 
 
@@ -579,6 +605,7 @@ async def web_proxy(path: str, request: Request) -> Response:
 
 
 _WS_ROUTE_REGISTERED = False
+_ws_auth_missing_warned = False
 
 
 def ensure_ws_route(app) -> None:
@@ -597,13 +624,104 @@ def ensure_ws_route(app) -> None:
     _WS_ROUTE_REGISTERED = True
 
 
+def _ws_caller_token(websocket: WebSocket) -> str:
+    """Resolve the caller's token: query ``token`` first, else Bearer.
+
+    Mirrors ``qwenpaw.app.auth.AuthMiddleware._extract_token``: the
+    supported WebSocket credential channel is the query token (the console
+    stores its login token in ``localStorage["qwenpaw_auth_token"]`` and the
+    injected shell shim appends it); the ``Authorization: Bearer …`` header
+    covers non-browser clients.
+    """
+    token = (websocket.query_params.get("token") or "").strip()
+    if not token:
+        auth_header = websocket.headers.get("authorization", "")
+        if auth_header[:7].lower() == "bearer ":
+            token = auth_header[7:].strip()
+    return token
+
+
+def _load_sdk_auth():
+    """The SDK auth module (``qwenpaw.app.auth``), or None when unavailable."""
+    try:
+        from qwenpaw.app import auth as sdk_auth
+
+        return sdk_auth
+    except Exception:
+        return None
+
+
+def _ws_caller_authenticated(websocket: WebSocket) -> bool:
+    """Authenticate the WS caller against the QwenPaw login (before accept).
+
+    Decision table:
+
+    - SDK auth module available + login active (``is_auth_enabled()`` and
+      ``has_registered_users()``): the caller token (query ``token`` or
+      ``Authorization: Bearer …``) must pass ``verify_token``; a missing or
+      invalid token is a denial — close code 4401 sent **before** the
+      handshake is accepted, the exact shape ``RuntimeBoundaryMiddleware``
+      uses, so the upstream ``qwen serve`` is never contacted.
+    - SDK auth module available + login off / no registered user: accept
+      (unchanged behaviour).
+    - SDK auth module unavailable: one logged warning; accept (documented
+      compatibility) unless ``QWEN_CODE_BRIDGE_REQUIRE_WS_AUTH=1`` forces a
+      fail-closed denial (4401).
+
+    ``allow_no_auth_hosts`` is intentionally NOT replicated for WebSocket:
+    a login-protected runtime requires a token on the WS path.
+    """
+    global _ws_auth_missing_warned
+    sdk_auth = _load_sdk_auth()
+    if sdk_auth is None:
+        if not _ws_auth_missing_warned:
+            logger.warning(
+                "qwenpaw.app.auth unavailable; bridge WebSocket login auth "
+                "is not enforced unless %s=1",
+                REQUIRE_WS_AUTH_ENV,
+            )
+            _ws_auth_missing_warned = True
+        if os.environ.get(REQUIRE_WS_AUTH_ENV, "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            return False
+        return True
+    if not (sdk_auth.is_auth_enabled() and sdk_auth.has_registered_users()):
+        return True
+    token = _ws_caller_token(websocket)
+    if not token:
+        return False
+    return sdk_auth.verify_token(token) is not None
+
+
 @router.websocket("/web/{path:path}")
 async def web_ws(websocket: WebSocket, path: str) -> None:
-    """Bridge the shell's WebSocket streams (live-state, terminals, …)."""
+    """Bridge the shell's WebSocket streams (live-state, terminals, …).
+
+    Caller authentication happens BEFORE ``accept()``: when the QwenPaw
+    login is active, the caller token (``?token=`` — the console's stored
+    ``qwenpaw_auth_token`` — or ``Authorization: Bearer …``) must verify via
+    the SDK's ``verify_token``; a missing or invalid token closes the socket
+    with code 4401 (the shape ``RuntimeBoundaryMiddleware`` uses) and the
+    upstream is never contacted. The backend ``serve_token()`` stays
+    server-side: it only ever appears in the upstream ``Authorization``
+    header, never in a response, URL or log. ``allow_no_auth_hosts`` is not
+    replicated for WS: a login-protected runtime requires a token here.
+    Without the SDK auth module the behaviour is unchanged unless
+    ``QWEN_CODE_BRIDGE_REQUIRE_WS_AUTH=1`` (fail-closed 4401).
+    """
     import asyncio
 
     import websockets
 
+    if not _ws_caller_authenticated(websocket):
+        try:
+            await websocket.close(code=WS_AUTH_DENY_CODE)
+        except Exception:
+            pass
+        return
     await websocket.accept()
     base = serve_url()
     if not base:

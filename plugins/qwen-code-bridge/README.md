@@ -110,6 +110,18 @@ sh web-shell/build.sh <SC/qwen-code 源码目录> [qwenpaw working 目录]
 
 产物写入 `<state>/web-shell/dist`（约 35 MB，不入库）；插件检测到它即静态伺服，否则回退为 daemon 反代。上游 Qwen Code 升级时重建一次。
 
+### WebSocket authentication（WS 鉴权，P1411）
+
+桥接的 WebSocket（`/web/{path}`：live-state、终端等流）在 `accept()` **之前**先鉴权调用方：
+
+- **触发条件**：QwenPaw 登录激活（`QWENPAW_AUTH_ENABLED=true` 且已有注册用户）。SDK 的 `AuthMiddleware` 只覆盖 HTTP scope，WS 升级不经过它，因此桥自己调 SDK 原语（`is_auth_enabled` / `has_registered_users` / `verify_token`）。
+- **凭据渠道**：`?token=<登录 token>`（首选，与控制台 `AuthMiddleware._extract_token` 对齐）或 `Authorization: Bearer <token>`（非浏览器客户端）。
+- **4401 语义**：拒绝 = 握手完成前发送 `websocket.close`（code **4401**），与 `RuntimeBoundaryMiddleware`（managed-runtime 边界 token：env `QWENPAW_RUNTIME_INTERNAL_TOKEN` / header `x-qwenpaw-runtime-token`）同一形态；拒绝后上游 `qwen serve` **绝不被接触**，不转发任何内容。
+- **控制台令牌来源**：注入的 `window.WebSocket` shim（daemon 反代与 rebuilt-dist 两条路径）自动把 `token=<localStorage["qwenpaw_auth_token"]>` 追加到 WS URL（已存在 `token=` 参数则不重复追加）；rebuilt-dist 路径同时把 origin 绝对 WS URL 改写到带前缀的 origin——登录保护部署下控制台无需改动即可连通。
+- **后端 token 只留服务端**：`qwen serve` 的 `serve_token` 只出现在发给后端的 `Authorization: Bearer …` 头里，不进任何响应、URL、客户端可见头或日志。
+- **fail-closed 开关**：`QWEN_CODE_BRIDGE_REQUIRE_WS_AUTH=1`——SDK auth 模块不可导入时，全部桥接 WS 按 4401 拒绝（不设开关则保持原开放行为并记一条 warning，兼容无 SDK 环境）。
+- **未启用登录的部署**：行为不变。注意 `allow_no_auth_hosts` **不**复制到 WS 路径——登录保护环境下 WS 同样必须带 token（比 HTTP 更严）。
+
 ## 使用
 
 | 入口 | 行为 |

@@ -13,7 +13,9 @@
 # Build args:
 #   HIGRESS_REGISTRY  - base image registry (default: cn-hangzhou)
 #   APT_MIRROR        - APT mirror host (default: empty; set to mirrors.aliyun.com for China)
-#   OPENCLAW_REPO_URL - OpenClaw git repository URL (default: https://github.com/higress-group/openclaw.git)
+#   OPENCLAW_REPO_URL - OpenClaw git repository URL (default: https://github.com/openclaw/openclaw.git)
+#   OPENCLAW_TAG      - OpenClaw git tag to check out (default: v2026.10.9;
+#                       keep in sync with OPENCLAW_TAG in hack/versions.env)
 # ============================================================
 
 ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
@@ -28,7 +30,10 @@ ARG HTTPS_PROXY
 ARG http_proxy
 ARG https_proxy
 ARG NPM_REGISTRY=https://registry.npmjs.org/
-ARG OPENCLAW_REPO_URL=https://github.com/higress-group/openclaw.git
+ARG OPENCLAW_REPO_URL=https://github.com/openclaw/openclaw.git
+# Pinned checkout tag. Docker cannot source env files, so this default must
+# stay in sync with OPENCLAW_TAG in hack/versions.env.
+ARG OPENCLAW_TAG=v2026.10.9
 
 # Set proxy as environment variables to ensure all tools can use them
 ENV HTTP_PROXY=${HTTP_PROXY} \
@@ -62,25 +67,30 @@ RUN if [ -n "${APT_MIRROR}" ]; then \
 # binary, which its build scripts incorrectly invoke through Node.js.
 RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
     apt-get install -y nodejs && \
-    npm install -g pnpm@10.32.1 && \
+    npm install -g pnpm@12.15.0 && \
+    node -e 'const [a,b,c]=process.versions.node.split(".").map(Number); if (a!==24 || a<24 || (a===24&&(b<22 || (b===22&&c<1)))) { console.error(`Node ${process.versions.node} is not Node 24.x >= 24.22.1`); process.exit(1) }' && \
     rm -rf /var/lib/apt/lists/*
 
 # Clone, build, and optimize OpenClaw
-# 1. Fetch only the pinned commit to minimize .git size
+# 1. Fetch only the pinned upstream tag (no AgentTeams native Matrix patches;
+#    the AgentTeams Matrix bundle is a separate plugin/config projection)
 # 2. Install dependencies and build
-# 3. Remove unnecessary files (tests, .git, etc.) - keep all node_modules for extensions
+# 3. Remove unnecessary files (tests, docs) but keep .git for the online-upgrade
+#    work (P7 rebase path)
 RUN git init /opt/openclaw && \
     cd /opt/openclaw && \
     git remote add origin ${OPENCLAW_REPO_URL} && \
-    git fetch --depth 1 origin 2f35b6fa6b65d012e3b0c9f24af3f8a4b617a6e0 && \
+    git fetch --depth 1 origin "${OPENCLAW_TAG}" && \
     git checkout --detach FETCH_HEAD && \
     pnpm config set registry ${NPM_REGISTRY} && \
-    pnpm install && \
+    pnpm install --frozen-lockfile && \
     pnpm build && \
     pnpm ui:build && \
     echo "==> Verifying critical native addons..." && \
-    MSC_DIR=/opt/openclaw/node_modules/@matrix-org/matrix-sdk-crypto-nodejs && \
-    MSC_VER=$(jq -r .version ${MSC_DIR}/package.json) && \
+    MSC_PKG=$(find /opt/openclaw/node_modules -path '*/matrix-sdk-crypto-nodejs/package.json' -print -quit) && \
+    if [ -z "${MSC_PKG}" ]; then echo "ERROR: matrix-sdk-crypto-nodejs package not found in node_modules"; exit 1; fi && \
+    MSC_DIR=$(dirname "${MSC_PKG}") && \
+    MSC_VER=$(jq -r .version "${MSC_DIR}/package.json") && \
     MSC_ARCH=$(uname -m) && \
     case "${MSC_ARCH}" in \
         x86_64)  MSC_FILE=matrix-sdk-crypto.linux-x64-gnu.node ;; \
@@ -108,7 +118,7 @@ RUN git init /opt/openclaw && \
     ln -sf /opt/openclaw/openclaw.mjs /usr/local/bin/openclaw && \
     echo "==> Linked openclaw CLI to /usr/local/bin/openclaw" && \
     rm -rf \
-        .git .github \
+        .github \
         test \
         docker-compose.yml Dockerfile* \
         scripts/git-hooks \

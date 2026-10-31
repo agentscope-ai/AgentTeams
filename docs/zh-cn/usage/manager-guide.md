@@ -157,8 +157,8 @@ Manager 和 Worker 的 OpenClaw 实例使用**基于类型的会话策略**：
 ```json
 "session": {
   "resetByType": {
-    "dm":    { "mode": "daily", "atHour": 4 },
-    "group": { "mode": "daily", "atHour": 4 }
+    "direct": { "mode": "daily", "atHour": 4 },
+    "group":  { "mode": "daily", "atHour": 4 }
   }
 }
 ```

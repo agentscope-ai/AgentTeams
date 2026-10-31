@@ -3660,6 +3660,9 @@ _start_dashboard() {
     # Exit 0 = confirmed present (diff or mount list shows it),
     # exit 1 = confirmed absent (both queries answered and neither shows it),
     # exit 2 = unknown (a query failed, so absence cannot be trusted).
+    # A mount covering the queried path (equal to it or a parent directory,
+    # e.g. /data covering /data/agentteams-dashboard) counts as present:
+    # writes inside such a volume never show up in the writable-layer diff.
     _dashboard_path_present() {
         local _container="$1" _src="$2"
         local _diff_ok=0 _mount_ok=0
@@ -3672,9 +3675,13 @@ _start_dashboard() {
         fi
         if _mount_out=$(${DOCKER_CMD} inspect "${_container}" --format '{{range .Mounts}}{{.Destination}}{{"\n"}}{{end}}' 2>/dev/null); then
             _mount_ok=1
-            if printf '%s\n' "${_mount_out}" | grep -Fx "${_src}" >/dev/null; then
-                return 0
-            fi
+            local _dest
+            while IFS= read -r _dest; do
+                [ -z "${_dest}" ] && continue
+                case "${_src}/" in
+                    "${_dest}/"*) return 0 ;;
+                esac
+            done < <(printf '%s\n' "${_mount_out}")
         fi
         if [ "${_diff_ok}" = "1" ] && [ "${_mount_ok}" = "1" ]; then
             return 1

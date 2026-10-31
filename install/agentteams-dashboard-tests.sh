@@ -1515,6 +1515,122 @@ else
     fi
 fi
 
+# ---------- Test 29: Parent-mounted volume keeps the old container ----------
+
+section "Test 29: Executable parent-mount export failure"
+
+_test_start_dashboard_mount_cover() {
+    local _mount_dest="$1" _label="$2"
+    local _tmpfile _calls
+    _tmpfile=$(mktemp)
+    _calls=$(mktemp)
+
+    if ! extract_function "_start_dashboard" "${INSTALL_SCRIPT}" > "${_tmpfile}" 2>/dev/null; then
+        echo "EXTRACTION_FAILED"
+        rm -f "${_tmpfile}" "${_calls}"
+        return
+    fi
+
+    (
+        CALLS_FILE="${_calls}"
+        MOUNT_DEST="${_mount_dest}"
+        docker() {
+            printf 'docker %s\n' "$*" >> "${CALLS_FILE}"
+            if [ "$1" = "ps" ]; then
+                if [ "$2" = "-a" ]; then
+                    echo "agentteams-dashboard"
+                else
+                    echo "agentteams-controller"
+                fi
+                return 0
+            fi
+            if [ "$1" = "cp" ]; then
+                return 1
+            fi
+            if [ "$1" = "diff" ]; then
+                # Real diff succeeds: writes inside a mounted volume are
+                # invisible to the writable-layer diff, so output stays empty.
+                return 0
+            fi
+            if [ "$1" = "inspect" ]; then
+                if [ "$2" = "agentteams-dashboard" ] && [ -n "${MOUNT_DEST}" ]; then
+                    printf '%s\n' "${MOUNT_DEST}"
+                fi
+                return 0
+            fi
+            if [ "$1" = "image" ] && echo "$*" | grep -q 'Config.User'; then
+                echo "nextjs"
+                return 0
+            fi
+            return 0
+        }
+        podman() { docker "$@"; }
+        DOCKER_CMD="docker"
+        log() { :; }
+        msg() { echo "$*"; }
+        curl() { return 1; }
+        sleep() { :; }
+
+        AGENTTEAMS_DASHBOARD=1
+        AGENTTEAMS_USE_EMBEDDED=1
+        AGENTTEAMS_REGISTRY="ghcr.io/agentteams-group"
+        AGENTTEAMS_PORT_DASHBOARD="13000"
+        AGENTTEAMS_DASHBOARD_VERSION="v1.3.1"
+        AGENTTEAMS_DASHBOARD_IMAGE="ghcr.io/agentteams-group/agentteams/agentteams-dashboard:v1.3.1"
+        AGENTTEAMS_LOCAL_ONLY=1
+        AGENTTEAMS_AI_GATEWAY_ADMIN_URL="https://console.example.test:8443"
+        AGENTTEAMS_AUTH_TOKEN="test-token"
+        AGENTTEAMS_ENV_FILE="$(mktemp)"
+
+        # shellcheck disable=SC1090
+        source "${_tmpfile}" 2>/dev/null
+
+        if ! declare -F _start_dashboard >/dev/null 2>&1; then
+            echo "FUNCTION_NOT_FOUND"
+            exit 0
+        fi
+        set -e
+        _start_dashboard
+        set +e
+        echo "CALLS_BEGIN"
+        cat "${CALLS_FILE}"
+        echo "CALLS_END"
+    )
+    rm -f "${_tmpfile}" "${_calls}"
+}
+
+for _pair in "/data:parent-mount" "/data/agentteams-dashboard:exact-mount"; do
+    _mount_dest="${_pair%%:*}"
+    _label="${_pair##*:}"
+    _mount_result=$(_test_start_dashboard_mount_cover "${_mount_dest}" "${_label}" 2>&1)
+
+    if echo "${_mount_result}" | grep -q "EXTRACTION_FAILED\|FUNCTION_NOT_FOUND"; then
+        fail "Exec ${_label}: function extraction failed"
+        continue
+    fi
+    _calls_mount=$(echo "${_mount_result}" | sed -n '/CALLS_BEGIN/,/CALLS_END/p')
+    if echo "${_mount_result}" | grep -q 'CALLS_END'; then
+        pass "Exec ${_label}: completes without errexit abort under set -e"
+    else
+        fail "Exec ${_label}: aborted before completion under set -e"
+    fi
+    if echo "${_calls_mount}" | grep -q 'docker start .*agentteams-dashboard'; then
+        pass "Exec ${_label}: keeps old container when ${_mount_dest} covers the config path"
+    else
+        fail "Exec ${_label}: did not restart old container for covering mount ${_mount_dest}"
+    fi
+    if echo "${_calls_mount}" | grep -q 'docker rm'; then
+        fail "Exec ${_label}: removed old container despite covering mount ${_mount_dest}"
+    else
+        pass "Exec ${_label}: does not rm old container despite covering mount ${_mount_dest}"
+    fi
+    if echo "${_calls_mount}" | grep -q 'docker run -d'; then
+        fail "Exec ${_label}: replaced container despite covering mount ${_mount_dest}"
+    else
+        pass "Exec ${_label}: does not start a new container despite covering mount ${_mount_dest}"
+    fi
+done
+
 # ---------- Test 23: Brand-new volume is chowned to the image UID ----------
 
 section "Test 23: Executable brand-new volume chown"

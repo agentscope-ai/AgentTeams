@@ -107,11 +107,13 @@ COPY dist/adapters/qwenpaw/teamharness-qwenpaw.zip /opt/agentteams/plugins/teamh
 COPY dist/adapters/qwenpaw/workerflow-qwenpaw.zip /opt/agentteams/plugins/workerflow-qwenpaw.zip
 COPY plugins/agentteams-matrix-channel/ /opt/agentteams/plugins/agentteams-matrix-channel/
 COPY plugins/agentteams-upgrade/ /opt/agentteams/plugins/agentteams-upgrade/
+COPY plugins/qwen-code-bridge/ /opt/agentteams/plugins/qwen-code-bridge/
 COPY qwenpaw/scripts/install-builtin-qwenpaw-plugins.py /tmp/install-builtin-qwenpaw-plugins.py
 RUN /opt/venv/qwenpaw/bin/python /tmp/install-builtin-qwenpaw-plugins.py \
         --working-dir /opt/agentteams/qwenpaw-builtin \
         /opt/agentteams/plugins/agentteams-matrix-channel \
         /opt/agentteams/plugins/agentteams-upgrade \
+        /opt/agentteams/plugins/qwen-code-bridge \
         /opt/agentteams/plugins/teamharness-qwenpaw.zip \
         /opt/agentteams/plugins/workerflow-qwenpaw.zip \
     && rm -f /tmp/install-builtin-qwenpaw-plugins.py

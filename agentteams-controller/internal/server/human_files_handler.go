@@ -27,6 +27,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // defaultHumanFileMaxBytes is the per-file size limit for human file areas
@@ -1021,13 +1022,32 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
+	// Fence for the tail accounting: the trash deletes below are a
+	// recoverable copy (a failure only leaks the entry), but the ledger
+	// release is not reversible. An overwrite restore releases the
+	// pre-existing target's bytes exactly once — and only while this
+	// holder still owns the entry lease. A lease taken over in the
+	// meantime means a second restore of the same entry already removed
+	// the entry and did this release, so deducting again would understate
+	// usage. The deletes therefore proceed regardless; on a lost lease
+	// only the accounting is skipped (overstate, never understate, until
+	// the next reconciliation). A net-neutral restore (existingSize == 0)
+	// has nothing to release and needs no fence.
+	leaseHeld := existingSize == 0 || trashLock.Verify(ctx) == nil
 	// Remove the trash entry; a failure here only leaks a recoverable copy.
 	_ = h.oss.DeleteObject(ctx, trashPrefix+"content")
 	_ = h.oss.DeleteObject(ctx, trashPrefix+"meta.json")
-	// An overwrite restore removes the pre-existing target; that target's
-	// bytes were part of the ledger's usedBytes, so release them. A
-	// non-overwrite restore is net-neutral and has existingSize == 0.
-	h.adjustQuotaLedger(ctx, username, -existingSize)
+	if existingSize > 0 {
+		if leaseHeld {
+			// An overwrite restore removes the pre-existing target; that
+			// target's bytes were part of the ledger's usedBytes, so
+			// release them.
+			h.adjustQuotaLedger(ctx, username, -existingSize)
+		} else {
+			log.FromContext(ctx).Warn("trash restore removed the entry but lost the entry lease before the ledger release; the replaced bytes stay counted (conservative overstate)",
+				"human", username, "trashId", id, "size", existingSize)
+		}
+	}
 	h.recordAudit(ctx, a, "human_trash_restore",
 		humanFileDetail("path", "files/"+rel, "size", len(content), "trashId", id, "overwrite", override))
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
@@ -1086,14 +1106,49 @@ func (h *humanFilesHandler) purgeTrash(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusNotFound, "trash entry not found")
 		return
 	}
+	// Commit-boundary fence: MinIO and RustFS lack a conditional DELETE, so
+	// the DeletePrefix below is unconditional — this re-Verify is the only
+	// thing that keeps a stale holder from deleting. If the entry lease
+	// expired and was taken over in the meantime (a restore of this entry
+	// is the in-API takeover), the entry may already be gone or about to
+	// be written back; abort without deleting and without touching the
+	// ledger.
+	if verr := trashLock.Verify(ctx); verr != nil {
+		writeHumanFileCodedError(w, http.StatusConflict, "lease_lost",
+			"the trash entry lease was taken over by another operation; nothing was deleted")
+		return
+	}
+	// Commit-boundary recheck: the entry must still exist. A restore that
+	// took over the lease removed it, and purging an entry that is no
+	// longer there would release bytes the area still holds.
+	if _, serr := h.oss.StatMeta(ctx, trashPrefix+"content"); serr != nil {
+		if errors.Is(serr, os.ErrNotExist) {
+			writeHumanFileCodedError(w, http.StatusConflict, "file_busy",
+				"trash entry is no longer available; retry")
+			return
+		}
+		httputil.WriteError(w, http.StatusInternalServerError, "stat trash entry failed")
+		return
+	}
 	if err := h.oss.DeletePrefix(ctx, trashPrefix); err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "purge trash entry failed")
 		return
 	}
-	// Purged bytes are gone from both files/ and .trash/; release them from
-	// the ledger when one exists. A missing ledger is fine: the next quota
-	// write seeds it from live usage (already reduced).
-	h.adjustQuotaLedger(ctx, username, -m.Size)
+	// The delete has landed and cannot be undone, so a lease lost in that
+	// window must not be rolled back — but it must not deduct either: the
+	// takeover (a restore) moved the bytes back into files/ and they are
+	// still counted in usage, so releasing them would understate it.
+	// Overstating is the safe direction: the ledger converges back on the
+	// next quota write.
+	if verr := trashLock.Verify(ctx); verr == nil {
+		// Purged bytes are gone from both files/ and .trash/; release them
+		// from the ledger when one exists. A missing ledger is fine: the
+		// next quota write seeds it from live usage (already reduced).
+		h.adjustQuotaLedger(ctx, username, -m.Size)
+	} else {
+		log.FromContext(ctx).Warn("trash purge deleted the entry but lost the entry lease before the ledger release; the bytes stay counted (conservative overstate)",
+			"human", username, "trashId", id, "size", m.Size)
+	}
 	h.recordAudit(ctx, a, "human_trash_purge",
 		humanFileDetail("path", m.Path, "size", m.Size, "trashId", id))
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"purged": id})

@@ -25,8 +25,11 @@ WORKING_DIR="${QWENPAW_WORKING_DIR:-$HOME/.qwenpaw}"
 python3 - "$SCRIPT_DIR" "$WORKING_DIR" <<'PY'
 import hashlib
 import json
+import os
 import shutil
+import stat
 import sys
+import tempfile
 from pathlib import Path
 
 adapter_dir = Path(sys.argv[1])
@@ -37,6 +40,50 @@ BUNDLE_ID = "agentteams-matrix"
 # Installer artifacts, not part of the runtime plugin payload.
 EXCLUDE_FILES = {"install.sh", "uninstall.sh", "README.md"}
 EXCLUDE_DIRS = {".agentteams", "__pycache__", "node_modules"}
+
+CREDENTIAL_SUFFIXES = ("token", "secret", "password", "passwd", "apikey", "credentials")
+
+
+def _is_credential_key(key):
+    normalized = "".join(ch for ch in str(key).lower() if ch.isalnum())
+    return normalized.endswith(CREDENTIAL_SUFFIXES)
+
+
+def _document_has_credentials(document):
+    if isinstance(document, dict):
+        return any(
+            (_is_credential_key(key) and isinstance(value, str) and value)
+            or _document_has_credentials(value)
+            for key, value in document.items()
+        )
+    if isinstance(document, list):
+        return any(_document_has_credentials(item) for item in document)
+    return False
+
+
+def write_atomic(path, text, document):
+    """Atomic write. 0600 whenever the document carries credentials, otherwise
+    preserve the target's mode (0600 for a new file). The temp file is created
+    0600 by mkstemp and only then chmod-ed to the final mode."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if _document_has_credentials(document):
+        mode = 0o600
+    elif path.exists():
+        mode = stat.S_IMODE(path.stat().st_mode)
+    else:
+        mode = 0o600
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def payload_files():
@@ -140,10 +187,11 @@ marker = {
     "contentHash": expected,
     "files": entries,
 }
-marker_path.parent.mkdir(parents=True, exist_ok=True)
-tmp = marker_path.with_name(marker_path.name + ".tmp")
-tmp.write_text(json.dumps(marker, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-tmp.replace(marker_path)
+write_atomic(
+    marker_path,
+    json.dumps(marker, indent=2, sort_keys=True) + "\n",
+    marker,
+)
 if removed:
     print(
         f"agentteams-matrix qwenpaw adapter: removed {removed} file(s) no longer in the payload from {target_dir}"

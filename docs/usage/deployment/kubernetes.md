@@ -54,7 +54,7 @@ The current chart supports these combinations:
 |---|---|---|
 | Matrix | `tuwunel` + `managed` | The current chart still accepts only managed Tuwunel |
 | Gateway | `higress` + `managed` | `ai-gateway` + `existing` |
-| Storage | `minio` + `managed` | `oss` + `existing` |
+| Storage | `minio` + `managed` | `oss` + `existing`; `s3` + `existing` (external S3/RustFS); `s3` + `engine=rustfs` (chart-managed RustFS) |
 
 Use the fully managed defaults for a first deployment. External AI Gateway or OSS requires an additional `credentialProvider` sidecar that issues scoped temporary credentials. It is not a general external-service mode that works by supplying only an endpoint.
 
@@ -65,6 +65,9 @@ The chart fails during Helm rendering for these combinations:
 - `gateway.provider=ai-gateway` with a mode other than `existing`.
 - `storage.provider=minio` with a mode other than `managed`.
 - `storage.provider=oss` with a mode other than `existing`.
+- `storage.provider=s3` with a mode other than `existing` while `storage.engine=external` (the default).
+- `storage.engine=rustfs` combined with `storage.mode=existing`.
+- `storage.engine=rustfs` with `storage.s3.endpoint` set (a chart-managed RustFS uses the in-cluster endpoint).
 - AI Gateway or OSS without an enabled and configured `credentialProvider`.
 
 ### 3.2 Access method
@@ -253,6 +256,109 @@ chmod 600 agentteams-values.yaml
 Do not commit real secrets to Git. Production environments can use a Secret management tool to generate or inject values. Regardless of the mechanism, `credentials.llmApiKey` must be available when Helm renders the release.
 
 When `credentials.adminPassword` is empty, the chart generates a password and reuses the existing Secret value on later upgrades. Explicitly managing a strong password is preferable in production.
+
+### Choosing an object storage backend
+
+The default is the embedded MinIO. The three complete presets below cover the supported backends; replace the `<...>` placeholders with your own values before rendering.
+
+Preset 1 — default embedded MinIO (the current default):
+
+```yaml
+storage:
+  provider: minio
+  mode: managed
+  bucket: agentteams-storage
+  minio:
+    persistence:
+      enabled: true
+      size: 10Gi
+      storageClassName: ""
+    auth:
+      rootUser: minioadmin
+      rootPassword: "<replace-with-a-strong-password>"
+```
+
+Preset 2 — chart-managed RustFS (single node, image pinned with the release):
+
+```yaml
+storage:
+  provider: s3
+  engine: rustfs
+  mode: managed
+  bucket: agentteams-storage
+  # Must stay empty for the managed engine; the controller points at the
+  # in-cluster http://<release>-rustfs:9000 automatically.
+  s3:
+    endpoint: ""
+  rustfs:
+    image:
+      # Image source: the default is the upstream multi-arch image
+      # (docker.io/rustfs/rustfs), directly pullable. Deployments in
+      # China can override repository with
+      # higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/rustfs —
+      # that mirror is only pullable after `make mirror-images` has run
+      # for this release (the entry exists in hack/mirror-images.sh).
+      tag: "1.0.4"
+    resources: {}
+    service:
+      apiPort: 9000
+    persistence:
+      # size sets the PVC capacity; an empty storageClassName uses the
+      # cluster's default StorageClass. The PVC is preserved across
+      # `helm upgrade` / `helm rollback`.
+      enabled: true
+      size: 10Gi
+      storageClassName: ""
+    # PVC permissions: RustFS runs non-root (uid/gid 10001). The chart
+    # sets podSecurityContext.fsGroup (default 10001) so kubelet makes
+    # the PVC group-writable; override
+    # storage.rustfs.podSecurityContext.fsGroup when your StorageClass
+    # or backend needs a different group.
+    auth:
+      rootUser: rustfsadmin
+      rootPassword: "<replace-with-a-strong-password>"
+      # Optional: reference an existing Secret with RUSTFS_ACCESS_KEY /
+      # RUSTFS_SECRET_KEY instead of the inline values:
+      # existingSecret: my-rustfs-creds
+```
+
+Preset 3 — an existing external S3/RustFS you operate:
+
+```yaml
+storage:
+  provider: s3
+  engine: external
+  mode: existing
+  bucket: agentteams-storage
+  s3:
+    endpoint: "http://<your-s3-endpoint>:9000"   # reachable from the controller pod
+    # Preferred: reference an existing Secret:
+    existingSecret: my-rustfs-creds
+    accessKeySecretKey: accesskey
+    secretKeySecretKey: secretkey
+    # Alternative (dev only): inline credentials; the chart renders the secret:
+    # accessKey: "<your-access-key>"
+    # secretKey: "<your-secret-key>"
+```
+
+For preset 3 the chart configures no PVC: persistence, backup, and retention of the external service are operated by whoever runs the backend. Minimum checklist before pointing AgentTeams at it — the bucket exists and the credentials can manage users and policies (the controller creates per-worker IAM through the MinIO-compatible admin API); bucket versioning / lifecycle rules are configured; cross-replica read consistency is understood; a credential rotation plan exists.
+
+Two boundaries to keep in mind:
+
+- **Local (embedded) installs are fixed to the built-in MinIO.** This PR is chart (Helm) only. The local installer today has no RustFS or external-S3 selection; local external S3 is tracked in #1464 (open), and the local RustFS selection flow is a proposed follow-up PR (see [Local installer boundary](../../design/storage-external-s3-backend.md#local-installer-boundary) in the design doc). This PR does not make local installs able to select RustFS.
+- **Switching an existing backend is not a data migration.** The presets choose what a fresh installation deploys — see [Fresh installs vs. switching an existing backend](#fresh-installs-vs-switching-an-existing-backend) below.
+
+#### Fresh installs vs. switching an existing backend
+
+The presets above define what a **fresh** installation deploys. Changing `storage.provider` (or `storage.engine`) on a running installation is **not a data migration**: the objects stay on the old backend, the new backend starts empty, and reads/writes are interrupted for the switch window. If you need to switch, move the data yourself first:
+
+1. Bulk-copy every bucket to the new backend (`mc mirror`, one per bucket).
+2. Stop writes (scale the Workers down / maintenance window).
+3. Change the values and run `helm upgrade`.
+4. Verify: the controller log shows the new provider, and one Worker round-trips a file through it.
+5. Keep the old backend (stopped, data retained) for the rollback window before decommissioning it.
+
+The full operational guide, including reconciliation and rollback after writes have begun on the target, is [Migrating an embedded MinIO deployment to an external backend](../../design/storage-external-s3-backend.md#migrating-an-embedded-minio-deployment-to-an-external-backend) in the storage backend design doc.
 
 ## 6. Install AgentTeams
 

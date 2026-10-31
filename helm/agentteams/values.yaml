@@ -100,8 +100,11 @@ gateway:
 #   MinIO-compatible admin API: the controller creates the bucket and
 #   manages per-worker users/policies via mc (verified against RustFS
 #   1.0.3; see docs/design/storage-external-s3-backend.md).
+# provider=s3 + engine=rustfs → chart-managed single-node RustFS
+#   StatefulSet (image pinned with the release, same policy as MinIO).
 storage:
   provider: minio             # minio | oss | s3
+  engine: external            # external (default; user-managed backend: mode=existing + s3.endpoint) | rustfs (chart-managed; requires provider=s3; storage.s3.endpoint must stay empty)
   mode: managed               # managed | existing
   bucket: "agentteams-storage"
   # Required when provider=oss:
@@ -112,7 +115,7 @@ storage:
     endpoint: ""
   # Required when provider=s3:
   s3:
-    endpoint: ""              # e.g. "http://rustfs:9000"
+    endpoint: ""              # e.g. "http://rustfs:9000" — engine=external (mode=existing) only; must stay empty when engine=rustfs
     # Root/admin credentials of the external backend. Provide either
     # existingSecret (preferred) or inline accessKey/secretKey (dev only).
     existingSecret: ""        # Secret name holding the keys below
@@ -143,6 +146,54 @@ storage:
     auth:
       rootUser: "minioadmin"
       rootPassword: "minioadmin"
+  # Chart-managed single-node RustFS (provider=s3 + engine=rustfs).
+  # The image tag is pinned with the AgentTeams release, same policy as
+  # minio.image.tag. Upgrade by bumping the tag + `helm upgrade` (the
+  # StatefulSet PVC is preserved); rollback with `helm rollback`.
+  # Mutually exclusive with an external endpoint: for this engine
+  # storage.s3.endpoint must stay empty (the controller always points at
+  # the in-chart StatefulSet). For an external S3/RustFS use
+  # engine=external (the default) + mode=existing instead.
+  rustfs:
+    image:
+      # Upstream multi-arch image (amd64/arm64), directly pullable.
+      # For deployments in China or on offline/internal networks override
+      # repository with
+      # higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/rustfs — the
+      # entry exists in hack/mirror-images.sh, but the mirror is only
+      # pullable after `make mirror-images` has run for this release.
+      repository: docker.io/rustfs/rustfs
+      tag: "1.0.4"
+      pullPolicy: IfNotPresent
+    # The RustFS image runs as uid/gid 10001 (USER=rustfs). fsGroup lets
+    # kubelet apply group ownership to the PVC so the non-root data dir
+    # is writable — a default (root-owned) PVC FATALs the server with
+    # "Permission denied" at startup. fsGroupChangePolicy OnRootMismatch
+    # avoids a recursive chown of a large volume at every start.
+    podSecurityContext:
+      fsGroup: 10001
+      fsGroupChangePolicy: OnRootMismatch
+    securityContext:
+      runAsUser: 10001
+      runAsGroup: 10001
+      runAsNonRoot: true
+      allowPrivilegeEscalation: false
+    resources: {}
+    service:
+      type: ClusterIP
+      apiPort: 9000
+    persistence:
+      enabled: true
+      size: 10Gi
+      # Empty storageClassName uses the cluster's default StorageClass.
+      # The volume is written by RustFS (uid 10001);
+      # podSecurityContext.fsGroup keeps the group writable.
+      # NFS/root_squash-type backends need the RustFS docs' handling.
+      storageClassName: ""
+    auth:
+      rootUser: "rustfsadmin"
+      rootPassword: "rustfsadmin"
+      existingSecret: ""      # Secret holding RUSTFS_ACCESS_KEY / RUSTFS_SECRET_KEY
 
 # ── Higress subchart values (passed directly to the higress dependency) ───
 # `gateway.higress.enabled` is the materialized condition flag. The actual

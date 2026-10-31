@@ -3,7 +3,7 @@
 AgentTeams can use an external S3-compatible object store as its storage
 backend instead of the embedded MinIO. The chart ships MinIO as the
 default; this document covers the optional `s3` provider, verified today
-against **RustFS 1.0.3** (see [compatibility matrix](#verified-compatibility)).
+against **RustFS 1.0.4** (see [compatibility matrix](#verified-compatibility)).
 
 ## What `provider=s3` means
 
@@ -31,7 +31,7 @@ actually exercised:
 |---|---|---|
 | AgentTeams | `main` @ `6ede5977` (v1.2.5) + this PR | K8s chart install |
 | `mc` (controller-embedded & test) | `RELEASE.2025-08-13T08-35-41Z` (commit `7394ce0d`) | same binary the controller image ships |
-| RustFS | `1.0.3` (`rustfs/rustfs:1.0.3`, amd64/arm64) | single-node, local disk; single-node on NFS loopback |
+| RustFS | `1.0.4` (`docker.io/rustfs/rustfs:1.0.4`, amd64/arm64) | single-node, local disk; single-node on NFS loopback |
 | MinIO (migration source) | `RELEASE.2025-09-07` | single-node, migration source only |
 | Test env | Raspberry Pi 5 (arm64), Docker | full migrate→verify→cutover E2E, 200 MiB / 100 objects / 3 users / 7 policies |
 
@@ -62,6 +62,147 @@ storage:
 (`provider=s3` requires `mode=existing`, an endpoint, and credentials).
 The MinIO StatefulSet is not rendered and no credential-provider sidecar
 is deployed.
+
+## Managed RustFS (single-node)
+
+Instead of operating the S3 backend yourself, the chart can deploy
+RustFS for you: a single-node StatefulSet whose image tag is pinned
+with the AgentTeams release — the same pinning policy as the bundled
+MinIO (the default `storage.rustfs.image.tag` and the
+`hack/mirror-images.sh` entry always match).
+
+```yaml
+# values.yaml
+storage:
+  provider: s3
+  engine: rustfs              # chart-managed RustFS (requires provider=s3)
+  bucket: agentteams-storage
+  rustfs:
+    image:
+      tag: "1.0.4"            # pinned with the release
+    resources: {}
+    persistence:
+      size: 10Gi
+    # Optional: reference an existing Secret (RUSTFS_ACCESS_KEY /
+    # RUSTFS_SECRET_KEY) instead of the inline defaults:
+    # auth:
+    #   existingSecret: my-rustfs-creds
+```
+
+The controller is wired to the in-chart RustFS automatically
+(`AGENTTEAMS_FS_ENDPOINT=http://<release>-rustfs:9000`, credentials via
+secretKeyRef). `storage.engine=rustfs` is mutually exclusive with an
+external endpoint: the render fails when the engine is combined with
+`storage.provider=minio`/`oss`, with `storage.mode=existing`, or with a
+non-empty `storage.s3.endpoint` — the managed engine deploys its own
+in-cluster RustFS and the endpoint is always derived from the in-chart
+StatefulSet. To point the controller at an external S3/RustFS instead,
+use `storage.engine=external` (the default) + `storage.mode=existing` +
+`storage.s3.endpoint=<your endpoint>`.
+
+**Version pinning.** Like MinIO, the RustFS image tag is pinned per
+AgentTeams release.
+
+**Upgrade.** Change `storage.rustfs.image.tag` and run `helm upgrade`.
+Data lives on the StatefulSet PVC and is preserved across upgrades
+(check the RustFS version's data-dir compatibility before upgrading).
+
+**Rollback.** `helm rollback <release> <revision>` restores the
+previous revision, including the previous RustFS image tag.
+
+## Fresh install vs. switching an existing installation
+
+The backend choices above (`minio` / `oss` / `s3` external / `s3` +
+`engine=rustfs`) define what a **fresh** installation deploys. They are
+not a migration mechanism.
+
+Changing `storage.provider` (or `storage.engine`) on an already running
+installation is **not a data migration**: the objects stay on the old
+backend, the new backend starts empty, and every read and write is
+interrupted for the duration of the switch window. Move the objects
+yourself before flipping the values, then switch. Minimal sequence:
+
+1. Bulk-copy every bucket to the target (`mc mirror --overwrite
+   --remove src/<bucket> dst/<bucket>`, one per bucket).
+2. Stop writes (scale the Workers down / maintenance window).
+3. Change the values (`storage.provider`, `storage.engine`, endpoint,
+   credentials) and run `helm upgrade`.
+4. Verify: the controller log shows the new provider, and one Worker
+   round-trips a file through the new backend.
+
+This PR does not implement or test the switch itself — it is out of
+scope for this PR. The full operational guide with reconciliation and
+rollback is the [Migrating an embedded MinIO deployment to an external
+backend](#migrating-an-embedded-minio-deployment-to-an-external-backend)
+section below.
+
+## Local installer boundary
+
+The local (embedded) installer currently always ships the embedded
+MinIO; it has no RustFS or external-S3 selection, and this PR (chart,
+Helm only) does not change that. Local external S3 is tracked in
+#1464 (open): the installer would honour the same `AGENTTEAMS_FS_*`
+variables the controller already reads. The local RustFS selection
+flow (a built-in RustFS container as an install-time choice) is a
+**proposed** follow-up PR — it is not implemented, and local
+installations cannot select RustFS today.
+
+## Acceptance
+
+Evidence for the review checklist, scoped to what was actually
+exercised in this round (2026-10-31, Raspberry Pi 5, aarch64, Docker,
+RustFS `docker.io/rustfs/rustfs:1.0.4`):
+
+- **Original backend compatibility.** The default `minio + managed`
+  render path emits no RustFS resource (asserted in
+  `tests/check-helm-agentteams.sh`), and this round's chart change
+  touches no template rendered by the default profile. The
+  `oss + existing` and `s3 + existing` render paths are covered by
+  the same helm test — all 18 scenario assertions PASS, including
+  the new managed-RustFS security-context assertions
+  (`fsGroup: 10001`, `fsGroupChangePolicy: OnRootMismatch`,
+  `runAsUser: 10001`, `runAsGroup: 10001`, `runAsNonRoot: true`,
+  `allowPrivilegeEscalation: false` on the RustFS StatefulSet), the
+  default-upstream image repository assertion, and the fsGroup
+  override pass-through.
+- **RustFS volume permissions.** RustFS 1.0.4 runs as uid/gid 10001
+  (`USER=rustfs`) and ships its `/data` dir as
+  `drwxr-x--- rustfs rustfs`. On the Pi: (i) a fresh volume whose
+  ownership is inherited from the image started cleanly —
+  `/minio/health/live` = 200, bucket create and object read/write
+  OK; (ii) a root-owned `0755` directory as the data volume — the
+  default PVC shape when no `fsGroup` is applied — FATALs at
+  startup: `Server runtime failed: Io error: Permission denied
+  (os error 13)`. The chart therefore runs the StatefulSet
+  non-root (`runAsUser`/`runAsGroup` 10001, `runAsNonRoot: true`)
+  with `podSecurityContext.fsGroup: 10001` +
+  `fsGroupChangePolicy: OnRootMismatch`, so kubelet applies group
+  ownership to the PVC (and does not recursively chown a large
+  volume at every start). This fix is verified at the render level
+  (helm assertions); a real cluster PVC is still pending k8s
+  acceptance.
+- **Admin API / user policies.** On the Pi instance (1.0.4),
+  `mc admin user add`, `mc admin policy create`, `mc admin policy
+  attach`, and `mc admin user list` all succeeded.
+- **File access.** On the Pi instance (1.0.4), `mc cp` / `mc cat`
+  round-tripped a 15-byte object with identical content. Controller-
+  side file access reuses the existing Pi evidence (controller S3
+  read/write plus Worker FileSync single-write to RustFS, from the
+  earlier 1.0.4 round).
+- **Restart persistence.** On the Pi, after `docker restart` the
+  object was still present (15 B, STANDARD). For the chart form, the
+  StatefulSet PVC survives `helm upgrade` / `helm rollback`, and the
+  RustFS data dir is not baked into the image (the container's
+  `/data` is the volume mount).
+
+**Not verified (listed as-is).**
+
+- A real Kubernetes cluster end to end: `helm install` → PVC
+  provisioning → Pod scheduling → controller wiring. The volume
+  permission fix above is asserted at render level only.
+- Multi-node RustFS.
+- RustFS on NFS in production mode (see the RustFS docs; treat as
+  risk).
 
 ## Tests
 

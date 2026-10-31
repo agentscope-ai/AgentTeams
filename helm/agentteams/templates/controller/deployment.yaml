@@ -97,8 +97,14 @@ spec:
               value: {{ .Values.controller.timezone | quote }}
             - name: AGENTTEAMS_STORAGE_PROVIDER
               value: {{ .Values.storage.provider | quote }}
+            {{- if and (eq .Values.storage.provider "s3") (eq .Values.storage.engine "rustfs") }}
+            {{- /* Managed RustFS: endpoint derived from the in-chart StatefulSet. 00-validate.yaml fails the render when storage.s3.endpoint is set for this engine, so the in-cluster endpoint is always the one wired here. */}}
+            - name: AGENTTEAMS_FS_ENDPOINT
+              value: {{ include "agentteams.rustfs.internalURL" . | quote }}
+            {{- else }}
             - name: AGENTTEAMS_FS_ENDPOINT
               value: {{ include "agentteams.storage.endpoint" . | quote }}
+            {{- end }}
             - name: AGENTTEAMS_FS_BUCKET
               value: {{ include "agentteams.storage.bucket" . | quote }}
             {{- if eq .Values.storage.provider "minio" }}
@@ -114,6 +120,19 @@ spec:
                   key: {{ include "agentteams.storage.adminSecretKeyKey" . }}
             {{- end }}
             {{- if eq .Values.storage.provider "s3" }}
+              {{- if eq .Values.storage.engine "rustfs" }}
+            {{- /* Managed RustFS: fixed root credentials from the RustFS secret. */}}
+            - name: AGENTTEAMS_FS_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentteams.rustfs.secretName" . }}
+                  key: RUSTFS_ACCESS_KEY
+            - name: AGENTTEAMS_FS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentteams.rustfs.secretName" . }}
+                  key: RUSTFS_SECRET_KEY
+              {{- else }}
             - name: AGENTTEAMS_FS_ACCESS_KEY
               valueFrom:
                 secretKeyRef:
@@ -124,6 +143,7 @@ spec:
                 secretKeyRef:
                   name: {{ include "agentteams.storage.s3.secretName" . }}
                   key: {{ include "agentteams.storage.s3.secretKeyKey" . }}
+              {{- end }}
             {{- end }}
             - name: AGENTTEAMS_GATEWAY_PROVIDER
               value: {{ .Values.gateway.provider | quote }}

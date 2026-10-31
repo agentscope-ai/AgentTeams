@@ -1,0 +1,93 @@
+{{- if and (eq .Values.storage.provider "s3") (eq .Values.storage.engine "rustfs") }}
+{{- $comp := dict "root" . "component" "rustfs" }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "agentteams.rustfs.fullname" . }}
+  namespace: {{ include "agentteams.namespace" . }}
+  labels:
+    {{- include "agentteams.component.labels" $comp | nindent 4 }}
+spec:
+  serviceName: {{ include "agentteams.rustfs.fullname" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "agentteams.component.selectorLabels" $comp | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "agentteams.component.selectorLabels" $comp | nindent 8 }}
+    spec:
+      {{- with .Values.storage.rustfs.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: rustfs
+          image: "{{ .Values.storage.rustfs.image.repository }}:{{ .Values.storage.rustfs.image.tag }}"
+          imagePullPolicy: {{ .Values.storage.rustfs.image.pullPolicy }}
+          {{- with .Values.storage.rustfs.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          args:
+            - /data
+          ports:
+            - name: api
+              containerPort: 9000
+          env:
+            - name: RUSTFS_VOLUMES
+              value: "/data"
+            - name: RUSTFS_DURABILITY_MODE
+              value: "strict"
+            - name: RUSTFS_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentteams.rustfs.secretName" . }}
+                  key: RUSTFS_ACCESS_KEY
+            - name: RUSTFS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentteams.rustfs.secretName" . }}
+                  key: RUSTFS_SECRET_KEY
+          resources:
+            {{- toYaml .Values.storage.rustfs.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: api
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: api
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      {{- if not .Values.storage.rustfs.persistence.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+  {{- if .Values.storage.rustfs.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: {{ .Values.storage.rustfs.persistence.size | quote }}
+        {{- if .Values.storage.rustfs.persistence.storageClassName }}
+        storageClassName: {{ .Values.storage.rustfs.persistence.storageClassName | quote }}
+        {{- end }}
+  {{- end }}
+{{- end }}

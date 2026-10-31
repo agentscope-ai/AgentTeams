@@ -98,6 +98,10 @@ Shared runtime Secret name.
 {{- printf "%s-minio" (include "agentteams.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
+{{- define "agentteams.rustfs.fullname" -}}
+{{- printf "%s-rustfs" (include "agentteams.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
 {{- define "agentteams.elementWeb.fullname" -}}
 {{- printf "%s-element-web" (include "agentteams.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
@@ -135,6 +139,23 @@ app.kubernetes.io/component: {{ .component }}
 
 {{- define "agentteams.minio.internalURL" -}}
 {{- printf "http://%s.%s.svc.cluster.local:%d" (include "agentteams.minio.fullname" .) (include "agentteams.namespace" .) (.Values.storage.minio.service.apiPort | int) }}
+{{- end }}
+
+{{/* Managed RustFS (storage.engine=rustfs): short in-cluster endpoint,
+     the same http://host:port shape the s3 provider takes from values. */}}
+{{- define "agentteams.rustfs.internalURL" -}}
+{{- printf "http://%s:%d" (include "agentteams.rustfs.fullname" .) (.Values.storage.rustfs.service.apiPort | int) }}
+{{- end }}
+
+{{/* Managed RustFS: name of the Secret holding RUSTFS_ACCESS_KEY /
+     RUSTFS_SECRET_KEY (user-supplied existingSecret, or the
+     chart-rendered one from storage.rustfs.auth.rootUser/rootPassword). */}}
+{{- define "agentteams.rustfs.secretName" -}}
+{{- if .Values.storage.rustfs.auth.existingSecret }}
+{{- .Values.storage.rustfs.auth.existingSecret }}
+{{- else }}
+{{- include "agentteams.rustfs.fullname" . }}
+{{- end }}
 {{- end }}
 
 {{- define "agentteams.controller.internalURL" -}}

@@ -1,0 +1,20 @@
+{{- if and (eq .Values.storage.provider "s3") (eq .Values.storage.engine "rustfs") }}
+{{- $comp := dict "root" . "component" "rustfs" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentteams.rustfs.fullname" . }}
+  namespace: {{ include "agentteams.namespace" . }}
+  labels:
+    {{- include "agentteams.component.labels" $comp | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    {{- include "agentteams.component.selectorLabels" $comp | nindent 4 }}
+  ports:
+    - name: api
+      port: {{ .Values.storage.rustfs.service.apiPort }}
+      targetPort: api
+      protocol: TCP
+{{- end }}

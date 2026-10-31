@@ -260,3 +260,235 @@ if ! grep -qE "storage.provider=s3 requires storage.mode=existing|unsupported st
 fi
 
 echo "PASS: s3 provider failure modes fail the render with explicit errors"
+
+# ---------------------------------------------------------------------------
+# Managed RustFS storage engine (storage.engine=rustfs, chart-hosted)
+# ---------------------------------------------------------------------------
+# engine=rustfs requires provider=s3: the chart deploys a single-node
+# RustFS StatefulSet (image pinned with the release, same policy as MinIO)
+# and wires the controller to it — endpoint derived from the in-chart
+# StatefulSet, credentials via secretKeyRef on the RustFS secret.
+# engine=external (default) must keep rendering exactly as before.
+# ---------------------------------------------------------------------------
+
+RUSTFS_ARGS=(
+    "${COMMON_ARGS[@]}"
+    --set storage.provider=s3
+    --set storage.engine=rustfs
+)
+rustfs_render="$(mktemp)"
+rustfs_ext_render="$(mktemp)"
+trap 'rm -f "${render}" "${copaw_render}" "${upg_render}" "${drift_err}" "${s3_render}" "${rustfs_render}" "${rustfs_ext_render}"' EXIT
+
+# 1. engine=rustfs renders the RustFS three-piece set and the controller
+#    env wiring; the MinIO StatefulSet must NOT render.
+if ! helm template agentteams "${CHART}" "${RUSTFS_ARGS[@]}" > "${rustfs_render}"; then
+    echo "FAIL: helm template (engine=rustfs) failed"
+    exit 1
+fi
+
+if ! grep -q "name: agentteams-rustfs" "${rustfs_render}"; then
+    echo "FAIL: managed RustFS resources missing (expected name: agentteams-rustfs)"
+    exit 1
+fi
+# Count only RustFS-owned documents; the higress dependency may render its
+# own Statefulsets/Services, so a global kind count is not meaningful.
+count_rustfs_docs() {
+    awk -v kind="$1" 'BEGIN{RS="---"} $0 ~ ("kind: " kind) && /-rustfs/ {n++} END{print n+0}' "${rustfs_render}"
+}
+for kind in StatefulSet Service Secret; do
+    if [ "$(count_rustfs_docs "${kind}")" = "0" ]; then
+        echo "FAIL: engine=rustfs did not render a RustFS ${kind}"
+        exit 1
+    fi
+done
+stss="$(count_rustfs_docs StatefulSet)"
+if [ "${stss}" -ne 1 ]; then
+    echo "FAIL: expected exactly 1 StatefulSet (RustFS) in engine=rustfs render, got: ${stss}"
+    exit 1
+fi
+if grep -qF "agentteams-minio" "${rustfs_render}"; then
+    echo "FAIL: MinIO resources must not render when storage.engine=rustfs"
+    exit 1
+fi
+grep -q 'name: AGENTTEAMS_STORAGE_PROVIDER' "${rustfs_render}"
+grep -q 'value: "s3"' "${rustfs_render}"
+grep -q 'value: "http://agentteams-rustfs:9000"' "${rustfs_render}" || {
+    echo "FAIL: AGENTTEAMS_FS_ENDPOINT not derived from the in-chart RustFS (want http://agentteams-rustfs:9000)"
+    exit 1
+}
+grep -qF -- "key: RUSTFS_ACCESS_KEY" "${rustfs_render}" || {
+    echo "FAIL: controller env must take RUSTFS_ACCESS_KEY via secretKeyRef"
+    exit 1
+}
+grep -qF -- "key: RUSTFS_SECRET_KEY" "${rustfs_render}" || {
+    echo "FAIL: controller env must take RUSTFS_SECRET_KEY via secretKeyRef"
+    exit 1
+}
+grep -qF -- 'RUSTFS_ACCESS_KEY: "rustfsadmin"' "${rustfs_render}" || {
+    echo "FAIL: chart-rendered RustFS secret missing the default root credentials"
+    exit 1
+}
+echo "PASS: managed RustFS renders StatefulSet/Service/Secret + controller env wiring, no MinIO"
+
+# 2. engine=external (default) must render no RustFS resource at all
+#    (existing behaviour unchanged — checked against the default render).
+if grep -qi "rustfs" "${render}"; then
+    echo "FAIL: default render (engine=external) must contain no RustFS resource"
+    exit 1
+fi
+echo "PASS: default render (engine=external) keeps rendering without RustFS"
+
+# 3. engine=rustfs with a non-s3 provider must fail the render.
+if helm template agentteams "${CHART}" "${COMMON_ARGS[@]}"     --set storage.engine=rustfs > /dev/null 2> "${drift_err}"; then
+    echo "FAIL: engine=rustfs with provider=minio must not render"
+    exit 1
+fi
+if ! grep -qF "storage.engine=rustfs requires storage.provider=s3" "${drift_err}"; then
+    echo "FAIL: engine=rustfs + provider=minio error is not explicit:"
+    cat "${drift_err}" || true
+    exit 1
+fi
+echo "PASS: engine=rustfs fails the render unless provider=s3"
+
+# 4. engine=rustfs + existingSecret: no chart-rendered secret, and the
+#    env (controller + RustFS container) references the user secret.
+if ! helm template agentteams "${CHART}" "${RUSTFS_ARGS[@]}"     --set storage.rustfs.auth.existingSecret=my-rustfs-creds > "${rustfs_ext_render}"; then
+    echo "FAIL: helm template (engine=rustfs, existingSecret) failed"
+    exit 1
+fi
+grep -qF -- "name: my-rustfs-creds" "${rustfs_ext_render}" || {
+    echo "FAIL: engine=rustfs deployment does not reference the user-supplied existingSecret"
+    exit 1
+}
+grep -qF -- "key: RUSTFS_ACCESS_KEY" "${rustfs_ext_render}" || {
+    echo "FAIL: existingSecret wiring must use the RUSTFS_ACCESS_KEY key"
+    exit 1
+}
+if grep -qF -- 'RUSTFS_ACCESS_KEY: "rustfsadmin"' "${rustfs_ext_render}"; then
+    echo "FAIL: chart RustFS secret must not render when existingSecret is set"
+    exit 1
+fi
+echo "PASS: managed RustFS honours existingSecret (no chart secret, env via secretKeyRef)"
+
+# 5. storage.rustfs.image.tag override must reach the rendered image.
+if ! helm template agentteams "${CHART}" "${RUSTFS_ARGS[@]}"     --set storage.rustfs.image.tag=1.1.1 > "${rustfs_ext_render}"; then
+    echo "FAIL: helm template (engine=rustfs, tag override) failed"
+    exit 1
+fi
+grep -qF "docker.io/rustfs/rustfs:1.1.1" "${rustfs_ext_render}" || {
+    echo "FAIL: storage.rustfs.image.tag override not rendered into the RustFS image"
+    exit 1
+}
+echo "PASS: storage.rustfs.image.tag override renders the pinned image"
+
+# 6. engine=rustfs + a non-empty storage.s3.endpoint must fail the render:
+#    the managed engine deploys its own in-cluster RustFS and the endpoint
+#    is derived from it — the old "endpoint still wins" override semantics
+#    is gone. 00-validate fails before any manifest is emitted, so no RustFS
+#    StatefulSet can render either.
+rustfs_bad_render="$(mktemp)"
+trap 'rm -f "${render}" "${copaw_render}" "${upg_render}" "${drift_err}" "${s3_render}" "${rustfs_render}" "${rustfs_ext_render}" "${rustfs_bad_render}"' EXIT
+if helm template agentteams "${CHART}" "${RUSTFS_ARGS[@]}" \
+    --set storage.s3.endpoint=http://external.example:9000 > "${rustfs_bad_render}" 2> "${drift_err}"; then
+    echo "FAIL: engine=rustfs with a non-empty storage.s3.endpoint must not render"
+    exit 1
+fi
+if ! grep -qF "storage.engine=rustfs deploys its own in-cluster RustFS; storage.s3.endpoint must be empty" "${drift_err}"; then
+    echo "FAIL: engine=rustfs + s3.endpoint error is not explicit:"
+    cat "${drift_err}" || true
+    exit 1
+fi
+if ! grep -qF "storage.engine=external (the default), storage.mode=existing" "${drift_err}"; then
+    echo "FAIL: engine=rustfs + s3.endpoint error does not point at the external fix:"
+    cat "${drift_err}" || true
+    exit 1
+fi
+if [ "$(awk 'BEGIN{RS="---"} /kind: StatefulSet/ && /-rustfs/ {n++} END{print n+0}' "${rustfs_bad_render}")" -ne 0 ]; then
+    echo "FAIL: the failed render must not emit the RustFS StatefulSet"
+    exit 1
+fi
+echo "PASS: engine=rustfs rejects a non-empty storage.s3.endpoint (external fix in the error, no RustFS manifests)"
+
+# 7. engine=rustfs + storage.mode=existing must fail the render and name
+#    both legal combinations in the error.
+if helm template agentteams "${CHART}" "${RUSTFS_ARGS[@]}" \
+    --set storage.mode=existing > /dev/null 2> "${drift_err}"; then
+    echo "FAIL: engine=rustfs with storage.mode=existing must not render"
+    exit 1
+fi
+if ! grep -qF "storage.engine=rustfs cannot be combined with storage.mode=existing" "${drift_err}"; then
+    echo "FAIL: engine=rustfs + mode=existing error is not explicit:"
+    cat "${drift_err}" || true
+    exit 1
+fi
+if ! grep -qF "storage.engine=rustfs + storage.mode=managed" "${drift_err}"; then
+    echo "FAIL: engine=rustfs + mode=existing error does not name the managed combination:"
+    cat "${drift_err}" || true
+    exit 1
+fi
+if ! grep -qF "storage.engine=external + storage.mode=existing" "${drift_err}"; then
+    echo "FAIL: engine=rustfs + mode=existing error does not name the external combination:"
+    cat "${drift_err}" || true
+    exit 1
+fi
+echo "PASS: engine=rustfs + mode=existing fails the render naming both legal combinations"
+
+# 8. Security context: the RustFS 1.0.4 image runs as uid/gid 10001
+#    (USER=rustfs) and a default (root-owned) PVC is unwritable for it —
+#    the server FATALs with "Permission denied". The StatefulSet must run
+#    non-root and let kubelet apply fsGroup to the PVC. Asserted on the
+#    RustFS StatefulSet document only (a whole-render grep would false-
+#    positive on other components' security contexts).
+rustfs_sts="$(awk 'BEGIN{RS="---"} /kind: StatefulSet/ && /-rustfs/ {print}' "${rustfs_render}")"
+if [ -z "${rustfs_sts}" ]; then
+    echo "FAIL: no RustFS StatefulSet document found in the engine=rustfs render"
+    exit 1
+fi
+for needle in \
+    "fsGroup: 10001" \
+    "fsGroupChangePolicy: OnRootMismatch" \
+    "runAsUser: 10001" \
+    "runAsGroup: 10001" \
+    "runAsNonRoot: true" \
+    "allowPrivilegeEscalation: false"
+do
+    if ! grep -qF "${needle}" <<<"${rustfs_sts}"; then
+        echo "FAIL: managed RustFS StatefulSet is missing ${needle}"
+        exit 1
+    fi
+done
+echo "PASS: managed RustFS StatefulSet runs non-root (uid/gid 10001) with fsGroup on the PVC"
+
+# 9. Image repository: the default is the upstream multi-arch image
+#    (docker.io/rustfs/rustfs), directly pullable; the higress mirror is
+#    an override (pullable only after `make mirror-images` has run).
+grep -qF "image: \"docker.io/rustfs/rustfs:1.0.4\"" "${rustfs_render}" || {
+    echo "FAIL: default storage.rustfs.image.repository is not the upstream docker.io/rustfs/rustfs"
+    exit 1
+}
+if ! helm template agentteams "${CHART}" "${RUSTFS_ARGS[@]}"     --set storage.rustfs.image.repository=higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/rustfs > "${rustfs_ext_render}"; then
+    echo "FAIL: helm template (engine=rustfs, mirror repository override) failed"
+    exit 1
+fi
+grep -qF "image: \"higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/rustfs:1.0.4\"" "${rustfs_ext_render}" || {
+    echo "FAIL: higress mirror repository override not rendered into the RustFS image"
+    exit 1
+}
+echo "PASS: default RustFS image is the upstream repository; the higress mirror override renders"
+
+# 10. podSecurityContext must be user-overridable (fsGroup pass-through).
+if ! helm template agentteams "${CHART}" "${RUSTFS_ARGS[@]}"     --set storage.rustfs.podSecurityContext.fsGroup=2000 > "${rustfs_ext_render}"; then
+    echo "FAIL: helm template (engine=rustfs, fsGroup override) failed"
+    exit 1
+fi
+rustfs_sts="$(awk 'BEGIN{RS="---"} /kind: StatefulSet/ && /-rustfs/ {print}' "${rustfs_ext_render}")"
+if ! grep -qF "fsGroup: 2000" <<<"${rustfs_sts}"; then
+    echo "FAIL: storage.rustfs.podSecurityContext.fsGroup override not rendered into the StatefulSet"
+    exit 1
+fi
+if grep -qF "fsGroup: 10001" <<<"${rustfs_sts}"; then
+    echo "FAIL: fsGroup override must replace the default, not coexist with it"
+    exit 1
+fi
+echo "PASS: podSecurityContext.fsGroup override passes through to the StatefulSet"

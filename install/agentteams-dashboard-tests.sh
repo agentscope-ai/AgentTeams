@@ -1474,7 +1474,11 @@ _test_start_dashboard_metadata_unknown() {
         if ! declare -F _start_dashboard >/dev/null 2>&1; then
             echo "FUNCTION_NOT_FOUND"
         else
+            # Match the real installer context: errexit must not abort the
+            # keep-old path when export and presence queries fail.
+            set -e
             _start_dashboard
+            set +e
             echo "CALLS_BEGIN"
             cat "${CALLS_FILE}"
             echo "CALLS_END"
@@ -1489,6 +1493,11 @@ if echo "${_metadata_unknown}" | grep -q "EXTRACTION_FAILED\|FUNCTION_NOT_FOUND"
     fail "Exec metadata-unknown: function extraction failed"
 else
     _calls_meta=$(echo "${_metadata_unknown}" | sed -n '/CALLS_BEGIN/,/CALLS_END/p')
+    if echo "${_metadata_unknown}" | grep -q 'CALLS_END'; then
+        pass "Exec metadata-unknown: completes without errexit abort under set -e"
+    else
+        fail "Exec metadata-unknown: aborted before completion under set -e"
+    fi
     if echo "${_calls_meta}" | grep -q 'docker start .*agentteams-dashboard'; then
         pass "Exec metadata-unknown: keeps old container when presence queries fail"
     else

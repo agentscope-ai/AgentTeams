@@ -54,16 +54,69 @@ RUN if [ -n "${APT_MIRROR}" ]; then \
     jq gettext-base openssh-client ca-certificates procps tzdata \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Node.js 24 via NodeSource (the base image does not ship Node.js).
-# setup_24.x auto-installs gnupg / apt-transport-https if missing.
-# OpenClaw requires Node >= 22.14 (no upper cap); Node 24 is the current LTS
-# (Node 22 EOLs 2027-04) and matches the coding-CLI "target 24" guidance.
+# Install the latest Node.js 24 LTS (floor: 24.22.1 for the 2026-10-21 security release).
+# By default the build resolves the latest 24.x LTS from nodejs.org and verifies its SHA-256.
+# For a byte-reproducible build, pass --build-arg NODE_VERSION=24.22.1 (or any 24.x >= floor).
+# NODE_MAJOR is fixed to 24: a 25.x/26.x override is rejected even if NODE_MAJOR=24 is passed.
+# Docker may reuse this layer: use --no-cache for a forced refresh to the latest 24 LTS.
+ARG NODE_MAJOR=24
+ARG NODE_MIN_VERSION=24.22.1
+ARG NODE_VERSION=
+ARG NODE_SHA256=
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates curl xz-utils jq; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) node_arch="x64" ;; \
+      arm64) node_arch="arm64" ;; \
+      *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \
+    esac; \
+    required_major="24"; \
+    if [ "${NODE_MAJOR}" != "${required_major}" ]; then \
+      echo "NODE_MAJOR=${NODE_MAJOR} is not Node ${required_major} LTS; refusing to build" >&2; exit 1; \
+    fi; \
+    case "${NODE_MIN_VERSION}" in 24.*) ;; *) echo "NODE_MIN_VERSION=${NODE_MIN_VERSION} is not Node 24.x" >&2; exit 1 ;; esac; \
+    ver="${NODE_VERSION}"; \
+    if [ -z "$ver" ]; then \
+      ver="$(curl -fsSL https://nodejs.org/dist/index.json | jq -r --arg p "v${NODE_MAJOR}." '[.[] | select(.lts != false) | select(.version | startswith($p))][0].version' | sed 's/^v//')"; \
+    fi; \
+    ver="${ver#v}"; \
+    test -n "$ver"; \
+    case "$ver" in \
+      *[!0-9.]*|*..*|.*|*.) echo "invalid Node version: $ver" >&2; exit 1 ;; \
+    esac; \
+    case "$ver" in \
+      *.*.*) ;; \
+      *) echo "invalid Node version: $ver" >&2; exit 1 ;; \
+    esac; \
+    case "$ver" in \
+      *.*.*.*) echo "invalid Node version: $ver" >&2; exit 1 ;; \
+    esac; \
+    major="${ver%%.*}"; \
+    if [ "$major" != "$required_major" ]; then \
+      echo "Node $ver is not a Node ${required_major}.x release; refusing a non-${required_major} major" >&2; exit 1; \
+    fi; \
+    if [ "$(printf '%s\n%s\n' "$NODE_MIN_VERSION" "$ver" | sort -V | head -n1)" != "$NODE_MIN_VERSION" ]; then \
+      echo "Node $ver is older than required floor $NODE_MIN_VERSION" >&2; exit 1; \
+    fi; \
+    tarball="node-v${ver}-linux-${node_arch}.tar.xz"; \
+    sha="${NODE_SHA256}"; \
+    if [ -z "$sha" ]; then \
+      sha="$(curl -fsSL "https://nodejs.org/dist/v${ver}/SHASUMS256.txt" | awk -v f="$tarball" '$2 == f {print $1}' | head -n1)"; \
+    fi; \
+    test -n "$sha" || { echo "no SHASUMS256.txt entry for ${tarball}" >&2; exit 1; }; \
+    curl -fsSLO "https://nodejs.org/dist/v${ver}/${tarball}"; \
+    echo "${sha}  ${tarball}" | sha256sum -c -; \
+    tar -xJf "$tarball" -C /usr/local --strip-components=1 --no-same-owner; \
+    rm -f "$tarball"; \
+    node -v; npm -v; \
+    test "$(node -v)" = "v${ver}"; \
+    rm -rf /var/lib/apt/lists/*
+
 # Match OpenClaw's packageManager to avoid switching to a standalone pnpm
 # binary, which its build scripts incorrectly invoke through Node.js.
-RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
-    apt-get install -y nodejs && \
-    npm install -g pnpm@10.32.1 && \
-    rm -rf /var/lib/apt/lists/*
+RUN npm install -g pnpm@10.32.1
 
 # Clone, build, and optimize OpenClaw
 # 1. Fetch only the pinned commit to minimize .git size

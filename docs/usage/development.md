@@ -361,8 +361,9 @@ Mounting the container runtime socket gives the container full control over the 
 
 OpenClaw requires **Node.js >= 22** (the `--disable-warning` flag used internally requires Node.js 21.3+). The Manager image is built on `openclaw-base` which already includes Node.js 24. The Worker Dockerfile copies Node.js 24 from a build stage.
 
-- **Manager**: Node 24 is provided by `openclaw-base` (the base image already includes it).
-- **Worker**: Node 24 binary copied from build stage replaces Ubuntu 24.04 apt's Node.js 18.x (which lacks `--disable-warning` support).
+- **Manager**: The latest Node 24 LTS (floor 24.22.1) is provided by `openclaw-base` (resolved and SHA-verified at build time).
+- **Node overrides**: `NODE_VERSION` selects a 24.x patch (≥24.22.1); the major is fixed to 24, so 25.x/26.x overrides are rejected even when `NODE_MAJOR=24` is passed.
+- **Worker**: The latest Node 24 LTS (floor 24.22.1) binary copied from build stage replaces Ubuntu 24.04 apt's Node.js 18.x (which lacks `--disable-warning` support).
 
 ### Higress AI Provider API
 

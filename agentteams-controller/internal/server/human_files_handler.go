@@ -843,6 +843,22 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 	ctx := r.Context()
 	username := a.human.Spec.EffectiveUsername(a.human.Name)
 	trashPrefix := humanTrashPrefix(username) + id + "/"
+	// The trash entry lease serializes this restore against a purge (and a
+	// second restore) of the same entry. Lock order: the entry lease is
+	// taken before the restored path's lease, and no operation takes an
+	// entry lease while holding a path lease (purge holds only the
+	// entry's), so the two lease kinds cannot cycle.
+	trashLock, err := h.acquireHumanPathLock(ctx, username, ".trash/"+id, h.pathLockTTL)
+	if err != nil {
+		if errors.Is(err, errHumanPathBusy) {
+			writeHumanFileCodedError(w, http.StatusConflict, "file_busy",
+				"another operation is in flight on this trash entry; retry shortly")
+			return
+		}
+		httputil.WriteError(w, http.StatusInternalServerError, "acquire path lease failed")
+		return
+	}
+	defer trashLock.Release(ctx)
 
 	metaData, err := h.oss.GetObject(ctx, trashPrefix+"meta.json")
 	if err != nil {
@@ -929,13 +945,37 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 	// already counted in usedBytes, and moving them back to files/ does not
 	// add usage. An overwrite replaces an existing target and reduces usage
 	// further. Only writes (putFile) can grow the area, so only they are
-	// quota-gated; a restore must not be rejected at exactly the quota.
+	// quota-gated; a restore must not be rejected at exactly the quota. The
+	// entry lease taken above is what guarantees it: while this restore
+	// holds it, the entry cannot be purged, so its bytes stay counted in
+	// usage until the restore itself removes the entry, one step after the
+	// write lands.
 	// Fence: an expired holder whose lease was taken over must not keep
 	// mutating the file. The lease object is CAS-released, never deleted, so
 	// this read can tell "still mine" from "replaced by a successor".
 	if verr := lock.Verify(ctx); verr != nil {
 		writeHumanFileCodedError(w, http.StatusConflict, "lease_lost",
 			"the path lease was taken over by another operation; nothing was written")
+		return
+	}
+	// Commit-boundary recheck: the entry must still exist and this holder
+	// must still own the entry lease before the restored bytes land. While
+	// the entry lease is held a purge cannot remove the entry or release
+	// its bytes, so both checks fail only if the lease expired and was
+	// taken over in the meantime — in which case the entry may already be
+	// gone and the restore must not write.
+	if _, serr := h.oss.StatMeta(ctx, trashPrefix+"content"); serr != nil {
+		if errors.Is(serr, os.ErrNotExist) {
+			writeHumanFileCodedError(w, http.StatusConflict, "file_busy",
+				"trash entry is no longer available; retry")
+			return
+		}
+		httputil.WriteError(w, http.StatusInternalServerError, "stat trash entry failed")
+		return
+	}
+	if verr := trashLock.Verify(ctx); verr != nil {
+		writeHumanFileCodedError(w, http.StatusConflict, "lease_lost",
+			"the trash entry lease was taken over by another operation; nothing was written")
 		return
 	}
 	if !exists {
@@ -1014,6 +1054,22 @@ func (h *humanFilesHandler) purgeTrash(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	username := a.human.Spec.EffectiveUsername(a.human.Name)
 	trashPrefix := humanTrashPrefix(username) + id + "/"
+	// The same entry lease a restore of this entry holds: purge must
+	// serialize against it (lock order — purge holds only the entry lease,
+	// never a path lease, so the two cannot cycle). While a restore holds
+	// the lease, the entry's bytes are still in use and must not be
+	// released from the quota.
+	trashLock, err := h.acquireHumanPathLock(ctx, username, ".trash/"+id, h.pathLockTTL)
+	if err != nil {
+		if errors.Is(err, errHumanPathBusy) {
+			writeHumanFileCodedError(w, http.StatusConflict, "file_busy",
+				"another operation is in flight on this trash entry; retry shortly")
+			return
+		}
+		httputil.WriteError(w, http.StatusInternalServerError, "acquire path lease failed")
+		return
+	}
+	defer trashLock.Release(ctx)
 
 	var m trashMeta
 	if data, err := h.oss.GetObject(ctx, trashPrefix+"meta.json"); err == nil {

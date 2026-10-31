@@ -1832,6 +1832,80 @@ else
     fi
 fi
 
+# ---------- Test 31: Controller receives the Console (admin) URL ----------
+
+section "Test 31: Installer-to-Controller Console URL forwarding"
+
+# The Controller's Higress client provisions against the Console (management
+# plane). In external Gateway mode the configured Console URL must reach the
+# Controller environment; in default direct mode the Controller keeps its
+# internal default.
+_test_controller_admin_url_env_args() {
+    local _admin_url="$1" _prefix="$2"
+    local _tmpfile
+    _tmpfile=$(mktemp)
+
+    if ! extract_function "_controller_admin_url_env_args" "${INSTALL_SCRIPT}" > "${_tmpfile}" 2>/dev/null; then
+        echo "EXTRACTION_FAILED"
+        rm -f "${_tmpfile}"
+        return
+    fi
+
+    (
+        AGENTTEAMS_AI_GATEWAY_ADMIN_URL="${_admin_url}"
+        # shellcheck disable=SC1090
+        source "${_tmpfile}" 2>/dev/null
+
+        if ! declare -F _controller_admin_url_env_args >/dev/null 2>&1; then
+            echo "FUNCTION_NOT_FOUND"
+        else
+            _controller_admin_url_env_args "${_prefix}"
+        fi
+    )
+    rm -f "${_tmpfile}"
+}
+
+# External mode: configured Console URL must be forwarded under the new prefix.
+_admin_ext=$(_test_controller_admin_url_env_args "https://console.review.invalid:8443" "AGENTTEAMS_" 2>&1)
+if echo "${_admin_ext}" | grep -q "EXTRACTION_FAILED\|FUNCTION_NOT_FOUND"; then
+    fail "Controller admin-url external: function extraction failed"
+elif [ "${_admin_ext}" = "AGENTTEAMS_AI_GATEWAY_ADMIN_URL=https://console.review.invalid:8443" ]; then
+    pass "Controller admin-url external: forwards configured Console URL under AGENTTEAMS_ prefix"
+else
+    fail "Controller admin-url external: unexpected output '${_admin_ext}'"
+fi
+
+# Legacy prefix flows through the same helper.
+_admin_legacy=$(_test_controller_admin_url_env_args "https://console.review.invalid:8443" "HICLAW_" 2>&1)
+if [ "${_admin_legacy}" = "HICLAW_AI_GATEWAY_ADMIN_URL=https://console.review.invalid:8443" ]; then
+    pass "Controller admin-url legacy prefix: forwards under HICLAW_ prefix"
+else
+    fail "Controller admin-url legacy prefix: unexpected output '${_admin_legacy}'"
+fi
+
+# Default direct mode: no Console URL configured -> empty output, Controller
+# keeps its internal default.
+_admin_direct=$(_test_controller_admin_url_env_args "" "AGENTTEAMS_" 2>&1)
+if [ -z "${_admin_direct}" ]; then
+    pass "Controller admin-url direct mode: leaves Controller default untouched (empty output)"
+else
+    fail "Controller admin-url direct mode: emitted an override '${_admin_direct}'"
+fi
+
+# Wiring: inside install_manager the helper must be invoked after the
+# _ctrl_env_args array is built and its result appended with -e, so the
+# Controller container actually receives the value.
+_install_text=$(sed -n '/^install_manager() {/,/^}/p' "${INSTALL_SCRIPT}")
+_array_line=$(echo "${_install_text}" | grep -n '_ctrl_env_args=(' | head -1 | cut -d: -f1)
+_call_line=$(echo "${_install_text}" | grep -n '_controller_admin_url_env_args "${_ctrl_env_prefix}"' | head -1 | cut -d: -f1)
+_append_line=$(echo "${_install_text}" | grep -n '_ctrl_env_args+=(-e "${_admin_url_env}")' | head -1 | cut -d: -f1)
+if [ -n "${_array_line}" ] && [ -n "${_call_line}" ] && [ -n "${_append_line}" ] \
+   && [ "${_array_line}" -lt "${_call_line}" ] && [ "${_call_line}" -lt "${_append_line}" ]; then
+    pass "Controller admin-url wiring: helper invoked after env array, appended before controller start"
+else
+    fail "Controller admin-url wiring: array=${_array_line:-?} call=${_call_line:-?} append=${_append_line:-?}"
+fi
+
 # ---------- Summary ----------
 
 echo ""

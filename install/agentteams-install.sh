@@ -138,6 +138,17 @@ _controller_env_prefix() {
     fi
 }
 
+_controller_admin_url_env_args() {
+    # Console (management plane) URL for the Controller's Higress client.
+    # External Gateway mode configures AGENTTEAMS_AI_GATEWAY_ADMIN_URL and the
+    # Controller must provision/login against that Console instead of its
+    # in-container default. Empty output in default direct mode leaves the
+    # Controller default (http://127.0.0.1:8001) untouched.
+    if [ -n "${AGENTTEAMS_AI_GATEWAY_ADMIN_URL:-}" ]; then
+        printf '%s' "${1}AI_GATEWAY_ADMIN_URL=${AGENTTEAMS_AI_GATEWAY_ADMIN_URL}"
+    fi
+}
+
 _controller_storage_prefix() {
     if _use_legacy_image_env "$1"; then
         printf '%s%s' 'hic' 'law/agentteams-storage'
@@ -4523,6 +4534,14 @@ CREDEOF
             -e "${_ctrl_env_prefix}MANAGER_ENABLED=true"
             -e "${_ctrl_env_prefix}PORT_MANAGER_CONSOLE=${AGENTTEAMS_PORT_MANAGER_CONSOLE:-18888}"
         )
+        # Forward the configured Console URL to the Controller (management
+        # plane); see _controller_admin_url_env_args. Default direct mode
+        # keeps the Controller's internal Console default.
+        local _admin_url_env
+        _admin_url_env="$(_controller_admin_url_env_args "${_ctrl_env_prefix}")"
+        if [ -n "${_admin_url_env}" ]; then
+            _ctrl_env_args+=(-e "${_admin_url_env}")
+        fi
         if _use_legacy_image_env "${AGENTTEAMS_VERSION}"; then
             _ctrl_env_args+=(
                 -e "${_ctrl_env_prefix}FS_BUCKET=agentteams-storage"

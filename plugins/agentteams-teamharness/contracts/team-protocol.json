@@ -1,0 +1,177 @@
+{
+  "version": "1.0.0",
+  "status": "defined-not-enforced",
+  "description": "Role/tool protocol for the TeamHarness MCP server, extracted as data from mcp/server.py @ d8332e0a. Tool-level visibility comes from _visible_tool_names (message hidden for MESSAGE_TOOL_BLOCKED_ROLES); action-level gates are the 'requires ... role' checks in projectflow/taskflow. leader/worker/remote-member carry real gates in the code; critic/writer/coordinator have NO role gate anywhere in mcp/server.py - they are default-allowed on every tool (they are not in the message block set) and are rejected per-action by the positive gates with the 'requires ... role' error.",
+  "role_resolution": "AGENTTEAMS_AGENT_ROLE env, then AGENTTEAMS_WORKER_ROLE env, then runtime config member.role; the per-call `role` argument is a fallback only when the runtime role resolves empty. Values are normalized (strip, '_' -> '-', lowercase).",
+  "tool_names": [
+    "health",
+    "message",
+    "roomflow",
+    "filesync",
+    "artifact",
+    "projectflow",
+    "taskflow"
+  ],
+  "roles": [
+    {
+      "role": "leader",
+      "gate_in_code": true,
+      "allowed_tools": [
+        "health",
+        "message",
+        "roomflow",
+        "filesync",
+        "artifact",
+        "projectflow",
+        "taskflow"
+      ]
+    },
+    {
+      "role": "worker",
+      "gate_in_code": true,
+      "allowed_tools": [
+        "health",
+        "roomflow",
+        "filesync",
+        "artifact",
+        "projectflow",
+        "taskflow"
+      ],
+      "note": "message tool hidden from tools/list and call-rejected (MESSAGE_TOOL_BLOCKED_ROLES)"
+    },
+    {
+      "role": "critic",
+      "gate_in_code": false,
+      "allowed_tools": [
+        "health",
+        "message",
+        "roomflow",
+        "filesync",
+        "artifact",
+        "projectflow",
+        "taskflow"
+      ],
+      "note": "no role gate in mcp/server.py (the string 'critic' only appears in the SIG-VERDICT origin name 'critic_verdict'); default-allowed, gated actions reject with 'requires ... role'"
+    },
+    {
+      "role": "writer",
+      "gate_in_code": false,
+      "allowed_tools": [
+        "health",
+        "message",
+        "roomflow",
+        "filesync",
+        "artifact",
+        "projectflow",
+        "taskflow"
+      ],
+      "note": "no role gate in mcp/server.py; default-allowed, gated actions reject with 'requires ... role'"
+    },
+    {
+      "role": "coordinator",
+      "gate_in_code": false,
+      "allowed_tools": [
+        "health",
+        "message",
+        "roomflow",
+        "filesync",
+        "artifact",
+        "projectflow",
+        "taskflow"
+      ],
+      "note": "no role gate in mcp/server.py ('coordinator' appears only as prompt prose and one deepseek-harness fixture member); default-allowed, gated actions reject with 'requires ... role'"
+    },
+    {
+      "role": "remote-member",
+      "gate_in_code": true,
+      "allowed_tools": [
+        "health",
+        "roomflow",
+        "filesync",
+        "artifact",
+        "projectflow",
+        "taskflow"
+      ],
+      "note": "message tool hidden from tools/list and call-rejected (MESSAGE_TOOL_BLOCKED_ROLES)"
+    }
+  ],
+  "message_tool": {
+    "blocked_roles": [
+      "worker",
+      "remote-member"
+    ],
+    "error": "message tool is not available to worker roles"
+  },
+  "action_gates": [
+    {
+      "tool": "projectflow",
+      "action": "accept_task_result",
+      "roles": [
+        "leader"
+      ],
+      "error": "accept_task_result requires leader role"
+    },
+    {
+      "tool": "taskflow",
+      "action": "cancel_task",
+      "roles": [
+        "leader"
+      ],
+      "error": "cancel_task requires leader role"
+    },
+    {
+      "tool": "taskflow",
+      "action": "check_task",
+      "roles": [
+        "leader"
+      ],
+      "error": "check_task requires leader role"
+    },
+    {
+      "tool": "taskflow",
+      "action": "delegate_task",
+      "roles": [
+        "leader"
+      ],
+      "error": "delegate_task requires leader role"
+    },
+    {
+      "tool": "taskflow",
+      "action": "ack_task",
+      "roles": [
+        "worker",
+        "remote-member"
+      ],
+      "error": "ack_task requires worker or remote-member role"
+    },
+    {
+      "tool": "taskflow",
+      "action": "report_progress",
+      "roles": [
+        "worker",
+        "remote-member"
+      ],
+      "error": "report_progress requires worker or remote-member role"
+    },
+    {
+      "tool": "taskflow",
+      "action": "request_attention",
+      "roles": [
+        "worker",
+        "leader",
+        "remote-member"
+      ],
+      "error": "request_attention requires worker, leader, or remote-member role"
+    },
+    {
+      "tool": "taskflow",
+      "action": "submit_task",
+      "roles": [
+        "worker",
+        "remote-member"
+      ],
+      "error": "submit_task requires worker or remote-member role"
+    }
+  ],
+  "ungated_note": "No role check exists in the code for: health; roomflow (create_task_room, list_rooms, describe_room, archive_room); filesync (list, stat, pull, push); artifact (publish_file); message for non-blocked roles; projectflow (create_project, create_quick_project, resolve_project, list_events, mark_requester_report_sent, plan_dag, plan_loop, ready_nodes, ready_loop_nodes, record_loop_iteration, pause_project, resume_project, complete_project). taskflow is fully gated per action."
+}

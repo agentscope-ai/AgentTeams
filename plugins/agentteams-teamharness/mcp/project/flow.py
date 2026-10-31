@@ -39,6 +39,7 @@ from mcp.common.payload import (
 )
 from mcp.common.paths import _project_dir, _project_state_path, _task_dir, _task_state_path
 from mcp.artifact.publish import _attachment_parent_event_id
+from mcp.lifecycle.review import ProtocolGuardError, _protocol_guard_for_accept
 from mcp.lifecycle.signal_events import _emit_signal_event, _list_events, _project_audit_seq
 # taskflow keeps NO module-level import of this module (its 9 flow names
 # are refs proxies), so this direction of the pair is cycle-free.
@@ -277,11 +278,16 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
                 )
             legacy_identity_persisted = True
     result_status_value = payload.get("resultStatus") or payload.get("result_status")
+    accepted = _payload_bool(payload.get("accepted"), True)
     if task_meta:
         persisted_result_status = str(task_meta.get("result_status") or "")
         if str(result_status_value or "SUCCESS").strip() != persisted_result_status:
             raise ValueError("resultStatus does not match the submitted task result")
-    accepted = _payload_bool(payload.get("accepted"), True)
+        # W2 protocol gates (protocol.enforce switch, default off): a
+        # missing / non-passing review record or a missing r1 approval
+        # record refuses a POSITIVE acceptance (error_code surface); a
+        # rejection / return-for-revision (accepted=False) is never gated.
+        _protocol_guard_for_accept(task_meta, accepted)
     node_status = _accepted_node_status(result_status_value)
     if not accepted and node_status == "completed":
         result_status_value = "REVISION_NEEDED"
@@ -1147,6 +1153,14 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 )
             result["notificationNeeded"] = _notification_needed(action, project)
             return result
+    except ProtocolGuardError as exc:
+        return {
+            "ok": False,
+            "tool": "projectflow",
+            "action": action,
+            "error_code": exc.error_code,
+            "message": exc.message,
+        }
     except ValueError as exc:
         return {"ok": False, "tool": "projectflow", "action": action, "error": str(exc)}
 

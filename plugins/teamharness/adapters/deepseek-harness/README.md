@@ -13,3 +13,5 @@ pwsh -File plugins/teamharness/adapters/deepseek-harness/smoke.ps1 -DshRoot ../d
 The script uses a temporary `DSH_HOME`, installs this directory as a DSH bundle, boots both Worker and standalone compositions, verifies the prompt/Skill/MCP path, removes the bundle, and deletes the temporary home after a successful run.
 
 Additional live checks are documented in `deepseek-harness/README.md`. They cover a real model turn, Matrix text and file delivery, MinIO-backed session recovery, Controller-driven Pod replacement, and a real Team Leader/Worker scenario.
+
+The runtime config `member` block (see `fixtures/runtime.yaml`) also carries the trusted review identity: the MCP server resolves the transition-actor account from `member.name` -> `member.runtimeName` -> `matrixUserId` localpart (overridable via the `AGENTTEAMS_WORKER_NAME` env), never from a tool payload field. A payload `account_id` is provenance only — it is used when no trusted identity exists (local / test runs) and is never authorization (#1467).

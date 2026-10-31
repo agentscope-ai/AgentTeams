@@ -20,13 +20,13 @@
 //   PROBE_DEVICE         1 = present a device identity, 0 = device-less
 //   PROBE_IDENTITY_FILE  path to persist/reuse the identity (required when PROBE_DEVICE=1)
 //   PROBE_BUILD_ID       Exact Control UI build id (e.g. details.gatewayBuildId
-//                        from a PROTOCOL_MISMATCH); wins over PROBE_RAW_BUILD_ID
+//                        from a PROTOCOL_MISMATCH); highest precedence
 //   PROBE_RAW_BUILD_ID   Raw value of the served
-//                        data-openclaw-control-ui-build-id attribute. It is an
-//                        artifact stamp (>96 chars), so it goes through the
-//                        same normalization the real UI applies before it is
-//                        sent as client.buildId; omit when the gateway serves
-//                        none
+//                        data-openclaw-control-ui-build-id attribute. That
+//                        attribute is an artifact stamp, NOT the runtime build
+//                        id the gateway compares against: it is only a last
+//                        resort (normalized like the UI) when the gateway's own
+//                        dist/build-info.json cannot be read
 //   PROBE_TIMEOUT_MS     handshake budget (default 15000)
 //   PROBE_CLIENT_NAME    default openclaw-control-ui
 //   PROBE_MODE           default webchat
@@ -47,6 +47,32 @@ const identityFile = process.env.PROBE_IDENTITY_FILE || "";
 const exactBuildId = (process.env.PROBE_BUILD_ID || "").trim();
 const rawBuildId = (process.env.PROBE_RAW_BUILD_ID || "").trim();
 
+// The gateway compares client.buildId against resolveRuntimeServiceBuildId(),
+// which reads build-info.json next to the built module (src/version.ts:
+// BUILD_INFO_CANDIDATES relative to dist/index.js). Mirror that resolution so
+// the probe presents the exact value the gateway expects, instead of the
+// 112-character artifact stamp the HTML attribute carries.
+function readRuntimeBuildIdFromBuildInfo() {
+  const candidates = [
+    "/opt/openclaw/build-info.json",
+    "/opt/openclaw/../build-info.json",
+    "/opt/openclaw/dist/build-info.json",
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (!existsSync(candidate)) continue;
+      const parsed = JSON.parse(readFileSync(candidate, "utf8"));
+      const buildId = typeof parsed.buildId === "string" ? parsed.buildId.trim() : "";
+      if (buildId && buildId.length <= 96) {
+        return buildId;
+      }
+    } catch {
+      // ignore unreadable candidates, same as the runtime resolver
+    }
+  }
+  return "";
+}
+
 // Mirrors ui/src/build-info-normalizers.ts::normalizeControlUiBuildId: the
 // served attribute is an artifact stamp (observed 112 chars) while the connect
 // schema caps client.buildId at 96 characters, so the UI strips characters
@@ -56,7 +82,16 @@ function normalizeControlUiBuildId(value) {
   return normalized.slice(0, 96) || "dev";
 }
 
-const buildId = exactBuildId || (rawBuildId ? normalizeControlUiBuildId(rawBuildId) : "");
+const buildInfoBuildId = exactBuildId ? "" : readRuntimeBuildIdFromBuildInfo();
+const buildId =
+  exactBuildId || buildInfoBuildId || (rawBuildId ? normalizeControlUiBuildId(rawBuildId) : "");
+const buildIdSource = exactBuildId
+  ? "explicit"
+  : buildInfoBuildId
+    ? "build-info.json"
+    : rawBuildId
+      ? "normalized-html-attribute"
+      : "none";
 const timeoutMs = Number(process.env.PROBE_TIMEOUT_MS || "15000");
 
 function loadOrCreateIdentity() {
@@ -145,7 +180,7 @@ const client = new GatewayClient({
   deviceIdentity: withDevice ? loadOrCreateIdentity() : null,
   hostDeps,
   requestTimeoutMs: timeoutMs,
-  onHelloOk: () => finish({ ok: true, result: "hello-ok" }, 0),
+  onHelloOk: () => finish({ ok: true, result: "hello-ok", buildId, buildIdSource }, 0),
   onConnectError: (err) =>
     finish(
       {
@@ -153,6 +188,8 @@ const client = new GatewayClient({
         error: err && err.message ? String(err.message) : String(err),
         code: detailCode(err),
         details: detailFields(err),
+        buildId,
+        buildIdSource,
       },
       0,
     ),

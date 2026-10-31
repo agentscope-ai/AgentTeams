@@ -124,6 +124,25 @@ run_probe() { # $1=url $2=origin $3=device(0|1) $4=identity-file ; prints JSON
     node /probe/probe.mjs 2>/dev/null
 }
 
+# Runs a probe and, when the gateway rejects the build id we sent, retries
+# once with the exact value it reports (details.gatewayBuildId) and keeps that
+# value for the following probes. The authoritative id normally comes from the
+# gateway's own build-info.json (the probe reads it); this covers the case
+# where that file is unreadable.
+run_probe_resolving_build() { # $1=url $2=origin $3=device $4=identity ; prints JSON
+  local out code reported
+  out="$(run_probe "$1" "$2" "$3" "$4")"
+  code="$(json_field "$out" code)"
+  if [ "${code}" = "PROTOCOL_MISMATCH" ]; then
+    reported="$(json_field "$out" details.gatewayBuildId)"
+    if [ -n "${reported}" ]; then
+      BUILD_ID="${reported}"
+      out="$(run_probe "$1" "$2" "$3" "$4")"
+    fi
+  fi
+  printf '%s' "${out}"
+}
+
 json_field() { # $1=json $2=field (supports dot paths under details.)
   printf '%s' "$1" | python3 -c '
 import json,sys
@@ -163,7 +182,7 @@ if [ "${READY}" -eq 1 ]; then
 else
   # No HTML surface: fall back to a handshake to prove liveness, and take the
   # build id from a PROTOCOL_MISMATCH rejection if the gateway advertises one.
-  OUT="$(run_probe "ws://127.0.0.1:${HOST_PORT}" "http://127.0.0.1:${HOST_PORT}" 0 "")"
+  OUT="$(run_probe_resolving_build "ws://127.0.0.1:${HOST_PORT}" "http://127.0.0.1:${HOST_PORT}" 0 "")"
   if [ -n "$(json_field "$OUT" code)" ] || [ -n "$(json_field "$OUT" result)" ]; then
     READY=1
     BUILD_ID="$(json_field "$OUT" details.gatewayBuildId)"
@@ -186,7 +205,7 @@ else
 fi
 
 # --- case 1: device-less Control UI over an HTTP origin -> explicit policy code.
-OUT="$(run_probe "ws://127.0.0.1:${HOST_PORT}" "http://127.0.0.1:${HOST_PORT}" 0 "")"
+OUT="$(run_probe_resolving_build "ws://127.0.0.1:${HOST_PORT}" "http://127.0.0.1:${HOST_PORT}" 0 "")"
 CODE="$(json_field "$OUT" code)"
 if [ "${CODE}" = "CONTROL_UI_DEVICE_IDENTITY_REQUIRED" ]; then
   pass "device-less Control UI is rejected with CONTROL_UI_DEVICE_IDENTITY_REQUIRED"
@@ -195,8 +214,12 @@ else
        "got code=${CODE:-<none>} output=${OUT}"
 fi
 
+# Which build id did the probe present? The gateway's build-info.json is the
+# authoritative source; the raw HTML attribute is only a fallback.
+note "build id source: $(json_field "$OUT" buildIdSource)"
+
 # --- case 2: a fresh identity over the loopback entry -> hello-ok, no approval.
-OUT="$(run_probe "ws://127.0.0.1:${HOST_PORT}" "http://127.0.0.1:${HOST_PORT}" 1 /probe/identity-loopback.json)"
+OUT="$(run_probe_resolving_build "ws://127.0.0.1:${HOST_PORT}" "http://127.0.0.1:${HOST_PORT}" 1 /probe/identity-loopback.json)"
 RESULT="$(json_field "$OUT" result)"
 CODE="$(json_field "$OUT" code)"
 if [ "${RESULT}" = "hello-ok" ]; then
@@ -208,7 +231,7 @@ fi
 
 # --- case 3: a *second, fresh* identity over the LAN entry -> PAIRING_REQUIRED,
 # explicit approval, reconnect -> hello-ok.
-OUT="$(run_probe "ws://${CONTAINER_IP}:${HOST_PORT}" "http://${CONTAINER_IP}:${HOST_PORT}" 1 /probe/identity-lan.json)"
+OUT="$(run_probe_resolving_build "ws://${CONTAINER_IP}:${HOST_PORT}" "http://${CONTAINER_IP}:${HOST_PORT}" 1 /probe/identity-lan.json)"
 CODE="$(json_field "$OUT" code)"
 REQUEST_ID="$(json_field "$OUT" details.requestId)"
 if [ "${CODE}" = "PAIRING_REQUIRED" ]; then
@@ -231,7 +254,7 @@ else
        "command failed (requestId=${REQUEST_ID:-<none>})"
 fi
 
-OUT="$(run_probe "ws://${CONTAINER_IP}:${HOST_PORT}" "http://${CONTAINER_IP}:${HOST_PORT}" 1 /probe/identity-lan.json)"
+OUT="$(run_probe_resolving_build "ws://${CONTAINER_IP}:${HOST_PORT}" "http://${CONTAINER_IP}:${HOST_PORT}" 1 /probe/identity-lan.json)"
 RESULT="$(json_field "$OUT" result)"
 CODE="$(json_field "$OUT" code)"
 if [ "${RESULT}" = "hello-ok" ]; then

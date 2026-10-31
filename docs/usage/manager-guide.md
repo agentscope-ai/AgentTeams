@@ -247,6 +247,7 @@ curl -s http://127.0.0.1:18001/
 - **Element Web**: http://127.0.0.1:18088 — IM (direct host port), or via gateway hostname `http://matrix-client-local.agentteams.io:18080` when `*-local.agentteams.io` resolves to localhost
 - **MinIO**: embedded install keeps MinIO **inside** `agentteams-controller` (no default host publish). Use `mc` from that container, the MinIO API through internal URLs, or browse objects if you add a console route yourself
 - **OpenClaw control UI** (OpenClaw Manager): http://127.0.0.1:18888
+  - Since OpenClaw v2026.10.9 the Control UI requires a device identity; via the bundled nginx loopback proxy the browser provisions one automatically and pairing is auto-approved (no manual step). If you reach the gateway port directly or through a proxy that adds forwarding headers, approve the device once (`openclaw devices approve <requestId>` or the Devices UI).
 
 ## Backup and Recovery
 

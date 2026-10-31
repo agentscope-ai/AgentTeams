@@ -904,6 +904,8 @@ OpenClaw Control UI（可视化 session 检查），打开：
 http://localhost:18888
 ```
 
+自 OpenClaw v2026.10.9 起，Control UI 要求设备身份（device identity）。经内置 nginx loopback 反代时，浏览器会自动生成设备身份且配对自动批准，无需手动步骤。若直连 gateway 端口或经会添加转发头的代理访问，需一次性执行 `openclaw devices approve <requestId>` 批准设备（或使用 Devices UI）。
+
 ---
 
 ## 如何对接飞书/钉钉/企业微信/Discord/Telegram

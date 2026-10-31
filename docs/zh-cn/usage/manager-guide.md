@@ -247,6 +247,7 @@ curl -s http://127.0.0.1:18001/
 - **Element Web**：http://127.0.0.1:18088 — IM（宿主机直连端口），或经网关 `http://matrix-client-local.agentteams.io:18080`（需将 `*-local.agentteams.io` 解析到本机）
 - **MinIO**：嵌入式安装下 MinIO 在 **`agentteams-controller`** 内，默认不把控制台端口映射到宿主机；请用容器内 `mc`、内部 API，或自行增加访问方式
 - **OpenClaw 控制 UI**（仅 OpenClaw Manager）：http://127.0.0.1:18888
+  - 自 OpenClaw v2026.10.9 起，Control UI 要求设备身份（device identity）；经内置 nginx loopback 反代时，浏览器会自动生成设备身份且配对自动批准（无需手动步骤）。若你直连 gateway 端口，或经会添加转发头的代理访问，需一次性批准设备（`openclaw devices approve <requestId>` 或 Devices UI）。
 
 ## 备份与恢复
 

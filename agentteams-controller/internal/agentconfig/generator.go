@@ -86,11 +86,17 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 	// back interface. Bind LAN-wide (0.0.0.0); access remains gated by the
 	// shared gateway token.
 	//
-	// gateway.controlUi.dangerouslyDisableDeviceAuth: true — Higress-hosted
-	// console access uses the shared gateway token (no per-device pairing). The
-	// manager template carries this flag; the controller-pushed config must
-	// preserve it too, otherwise the mc-mirror sync strips it and the Control
-	// UI starts demanding device authentication that agentteams never provisions.
+	// gateway.controlUi device identity — since OpenClaw v2026.10.x the
+	// Control UI handshake requires a device identity. Browsers provision one
+	// automatically in pure JavaScript (no secure context required, so plain
+	// HTTP works). The agentteams console is served through the manager nginx
+	// loopback proxy (host:18888 → 127.0.0.1:18799) with the gateway token
+	// injected into the URL hash, so real browsers present a device identity
+	// and hit the loopback direct-connection path, where pairing is
+	// auto-approved after gateway auth — no manual step. A client that reaches
+	// the gateway port directly, or through a proxy that adds forwarding
+	// headers, needs a one-time `openclaw devices approve <requestId>` (or the
+	// Devices UI). No legacy flag is carried or needed for this.
 	//
 	// gateway.controlUi.allowedOrigins: ["*"] — the user picks the console host
 	// port at install time and may reach it via 127.0.0.1, the host's LAN IP,

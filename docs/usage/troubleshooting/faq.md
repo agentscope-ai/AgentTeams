@@ -948,6 +948,8 @@ For OpenClaw Control UI (visual session inspection), open:
 http://localhost:18888
 ```
 
+Since OpenClaw v2026.10.9 the Control UI requires a device identity. Via the bundled nginx loopback proxy the browser provisions one automatically and pairing is auto-approved, so no manual step is needed. If you reach the gateway port directly or through a proxy that adds forwarding headers, approve the device once with `openclaw devices approve <requestId>` (or the Devices UI).
+
 ---
 
 ## How to connect Feishu/DingTalk/WeCom/Discord/Telegram

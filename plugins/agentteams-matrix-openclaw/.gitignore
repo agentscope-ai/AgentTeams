@@ -1,0 +1,4 @@
+# Repo convention: no tracked lockfiles (0 tracked in AgentTeams). The local
+# lock pulls the `openclaw` peer into node_modules during development and is
+# not part of the plugin artifact.
+package-lock.json

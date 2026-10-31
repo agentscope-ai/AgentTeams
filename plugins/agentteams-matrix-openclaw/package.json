@@ -1,0 +1,21 @@
+{
+  "name": "agentteams-matrix-openclaw",
+  "version": "0.0.0",
+  "private": true,
+  "description": "OpenClaw channel plugin bridging AgentTeams Matrix traffic through the Python sidecar (no Matrix logic in TypeScript).",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsc -p tsconfig.json && node --test dist/test/sidecar-client.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "typescript": "^5.5.4"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.10.6"
+  }
+}

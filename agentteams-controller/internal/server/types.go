@@ -149,6 +149,213 @@ type WorkerListResponse struct {
 	Total   int              `json:"total"`
 }
 
+// workerListProjection is the GET /api/v1/workers envelope for a ?fields=
+// projection: the same workers/total wrapping as WorkerListResponse, with
+// each row already reduced to the requested view (WorkerSpecView,
+// WorkerStatusView, or WorkerSpecStatusView).
+type workerListProjection struct {
+	Workers []any `json:"workers"`
+	Total   int   `json:"total"`
+}
+
+// --- Worker list projection views (GET /api/v1/workers?fields=...) ---
+//
+// The views project a WorkerResponse down to a stable subset of its fields
+// for list consumers that do not need the full payload. Each view is a
+// struct (never a map) whose fields follow WorkerResponse's order, so the
+// JSON encoding is byte-stable — issue #1475's ETag work hashes these
+// projections.
+//
+// Split (issue #1475):
+//   - spec:   stable configuration — identity, model and LLM tuning,
+//     runtime, package, exposed ports, team membership. Excludes prompt
+//     bodies and full configuration (soul/agents/env/skills/mcpServers/
+//     channelPolicy) and every status field.
+//   - status: volatile runtime state — phase, container state, heartbeat
+//     and task fields.
+//   - all:    the full WorkerResponse (the default; not a projection).
+//
+// team and role belong to both views: a membership change is a spec change
+// as well.
+
+// WorkerSpecView is the fields=spec projection of a worker.
+type WorkerSpecView struct {
+	Name                         string            `json:"name"`
+	WorkerName                   string            `json:"workerName,omitempty"`
+	ContainerManaged             bool              `json:"containerManaged"`
+	State                        string            `json:"state,omitempty"`
+	Model                        string            `json:"model,omitempty"`
+	SubagentModel                string            `json:"subagentModel,omitempty"`
+	LlmStreamFirstContentTimeout string            `json:"llmStreamFirstContentTimeout,omitempty"`
+	LlmStreamIdleTimeout         string            `json:"llmStreamIdleTimeout,omitempty"`
+	LlmMaxRetries                string            `json:"llmMaxRetries,omitempty"`
+	LlmBackoffBase               string            `json:"llmBackoffBase,omitempty"`
+	LlmBackoffCap                string            `json:"llmBackoffCap,omitempty"`
+	LlmMaxConcurrent             string            `json:"llmMaxConcurrent,omitempty"`
+	LlmMaxQpm                    string            `json:"llmMaxQpm,omitempty"`
+	LlmRateLimitPause            string            `json:"llmRateLimitPause,omitempty"`
+	LlmRateLimitJitter           string            `json:"llmRateLimitJitter,omitempty"`
+	LlmAcquireTimeout            string            `json:"llmAcquireTimeout,omitempty"`
+	Runtime                      string            `json:"runtime,omitempty"`
+	RuntimeDeprecated            bool              `json:"runtimeDeprecated,omitempty"`
+	Image                        string            `json:"image,omitempty"`
+	Identity                     string            `json:"identity,omitempty"`
+	Package                      string            `json:"package,omitempty"`
+	BackendRuntime               string            `json:"backendRuntime,omitempty"`
+	MatrixUserID                 string            `json:"matrixUserID,omitempty"`
+	RoomID                       string            `json:"roomID,omitempty"`
+	ExposedPorts                 []ExposedPortInfo `json:"exposedPorts,omitempty"`
+	Team                         string            `json:"team,omitempty"`
+	Role                         string            `json:"role,omitempty"`
+}
+
+// WorkerStatusView is the fields=status projection of a worker.
+type WorkerStatusView struct {
+	Phase            string `json:"phase"`
+	ContainerState   string `json:"containerState,omitempty"`
+	Message          string `json:"message,omitempty"`
+	LastActiveAt     string `json:"lastActiveAt,omitempty"`
+	AgentStatus      string `json:"agentStatus,omitempty"`
+	RunningTaskCount *int   `json:"runningTaskCount,omitempty"`
+	LastRunAt        string `json:"lastRunAt,omitempty"`
+	LastFinishAt     string `json:"lastFinishAt,omitempty"`
+	Team             string `json:"team,omitempty"`
+	Role             string `json:"role,omitempty"`
+}
+
+// WorkerSpecStatusView is the fields=spec,status projection: the union of
+// WorkerSpecView and WorkerStatusView in WorkerResponse field order.
+type WorkerSpecStatusView struct {
+	Name                         string            `json:"name"`
+	WorkerName                   string            `json:"workerName,omitempty"`
+	Phase                        string            `json:"phase"`
+	ContainerManaged             bool              `json:"containerManaged"`
+	State                        string            `json:"state,omitempty"`
+	Model                        string            `json:"model,omitempty"`
+	SubagentModel                string            `json:"subagentModel,omitempty"`
+	LlmStreamFirstContentTimeout string            `json:"llmStreamFirstContentTimeout,omitempty"`
+	LlmStreamIdleTimeout         string            `json:"llmStreamIdleTimeout,omitempty"`
+	LlmMaxRetries                string            `json:"llmMaxRetries,omitempty"`
+	LlmBackoffBase               string            `json:"llmBackoffBase,omitempty"`
+	LlmBackoffCap                string            `json:"llmBackoffCap,omitempty"`
+	LlmMaxConcurrent             string            `json:"llmMaxConcurrent,omitempty"`
+	LlmMaxQpm                    string            `json:"llmMaxQpm,omitempty"`
+	LlmRateLimitPause            string            `json:"llmRateLimitPause,omitempty"`
+	LlmRateLimitJitter           string            `json:"llmRateLimitJitter,omitempty"`
+	LlmAcquireTimeout            string            `json:"llmAcquireTimeout,omitempty"`
+	Runtime                      string            `json:"runtime,omitempty"`
+	RuntimeDeprecated            bool              `json:"runtimeDeprecated,omitempty"`
+	Image                        string            `json:"image,omitempty"`
+	Identity                     string            `json:"identity,omitempty"`
+	Package                      string            `json:"package,omitempty"`
+	BackendRuntime               string            `json:"backendRuntime,omitempty"`
+	ContainerState               string            `json:"containerState,omitempty"`
+	MatrixUserID                 string            `json:"matrixUserID,omitempty"`
+	RoomID                       string            `json:"roomID,omitempty"`
+	Message                      string            `json:"message,omitempty"`
+	LastActiveAt                 string            `json:"lastActiveAt,omitempty"`
+	AgentStatus                  string            `json:"agentStatus,omitempty"`
+	RunningTaskCount             *int              `json:"runningTaskCount,omitempty"`
+	LastRunAt                    string            `json:"lastRunAt,omitempty"`
+	LastFinishAt                 string            `json:"lastFinishAt,omitempty"`
+	ExposedPorts                 []ExposedPortInfo `json:"exposedPorts,omitempty"`
+	Team                         string            `json:"team,omitempty"`
+	Role                         string            `json:"role,omitempty"`
+}
+
+// SpecView projects a full worker response down to its stable
+// configuration fields (GET /api/v1/workers?fields=spec).
+func (r WorkerResponse) SpecView() WorkerSpecView {
+	return WorkerSpecView{
+		Name:                         r.Name,
+		WorkerName:                   r.WorkerName,
+		ContainerManaged:             r.ContainerManaged,
+		State:                        r.State,
+		Model:                        r.Model,
+		SubagentModel:                r.SubagentModel,
+		LlmStreamFirstContentTimeout: r.LlmStreamFirstContentTimeout,
+		LlmStreamIdleTimeout:         r.LlmStreamIdleTimeout,
+		LlmMaxRetries:                r.LlmMaxRetries,
+		LlmBackoffBase:               r.LlmBackoffBase,
+		LlmBackoffCap:                r.LlmBackoffCap,
+		LlmMaxConcurrent:             r.LlmMaxConcurrent,
+		LlmMaxQpm:                    r.LlmMaxQpm,
+		LlmRateLimitPause:            r.LlmRateLimitPause,
+		LlmRateLimitJitter:           r.LlmRateLimitJitter,
+		LlmAcquireTimeout:            r.LlmAcquireTimeout,
+		Runtime:                      r.Runtime,
+		RuntimeDeprecated:            r.RuntimeDeprecated,
+		Image:                        r.Image,
+		Identity:                     r.Identity,
+		Package:                      r.Package,
+		BackendRuntime:               r.BackendRuntime,
+		MatrixUserID:                 r.MatrixUserID,
+		RoomID:                       r.RoomID,
+		ExposedPorts:                 r.ExposedPorts,
+		Team:                         r.Team,
+		Role:                         r.Role,
+	}
+}
+
+// StatusView projects a full worker response down to its volatile runtime
+// fields (GET /api/v1/workers?fields=status).
+func (r WorkerResponse) StatusView() WorkerStatusView {
+	return WorkerStatusView{
+		Phase:            r.Phase,
+		ContainerState:   r.ContainerState,
+		Message:          r.Message,
+		LastActiveAt:     r.LastActiveAt,
+		AgentStatus:      r.AgentStatus,
+		RunningTaskCount: r.RunningTaskCount,
+		LastRunAt:        r.LastRunAt,
+		LastFinishAt:     r.LastFinishAt,
+		Team:             r.Team,
+		Role:             r.Role,
+	}
+}
+
+// SpecStatusView projects a full worker response down to the spec+status
+// union (GET /api/v1/workers?fields=spec,status).
+func (r WorkerResponse) SpecStatusView() WorkerSpecStatusView {
+	return WorkerSpecStatusView{
+		Name:                         r.Name,
+		WorkerName:                   r.WorkerName,
+		Phase:                        r.Phase,
+		ContainerManaged:             r.ContainerManaged,
+		State:                        r.State,
+		Model:                        r.Model,
+		SubagentModel:                r.SubagentModel,
+		LlmStreamFirstContentTimeout: r.LlmStreamFirstContentTimeout,
+		LlmStreamIdleTimeout:         r.LlmStreamIdleTimeout,
+		LlmMaxRetries:                r.LlmMaxRetries,
+		LlmBackoffBase:               r.LlmBackoffBase,
+		LlmBackoffCap:                r.LlmBackoffCap,
+		LlmMaxConcurrent:             r.LlmMaxConcurrent,
+		LlmMaxQpm:                    r.LlmMaxQpm,
+		LlmRateLimitPause:            r.LlmRateLimitPause,
+		LlmRateLimitJitter:           r.LlmRateLimitJitter,
+		LlmAcquireTimeout:            r.LlmAcquireTimeout,
+		Runtime:                      r.Runtime,
+		RuntimeDeprecated:            r.RuntimeDeprecated,
+		Image:                        r.Image,
+		Identity:                     r.Identity,
+		Package:                      r.Package,
+		BackendRuntime:               r.BackendRuntime,
+		ContainerState:               r.ContainerState,
+		MatrixUserID:                 r.MatrixUserID,
+		RoomID:                       r.RoomID,
+		Message:                      r.Message,
+		LastActiveAt:                 r.LastActiveAt,
+		AgentStatus:                  r.AgentStatus,
+		RunningTaskCount:             r.RunningTaskCount,
+		LastRunAt:                    r.LastRunAt,
+		LastFinishAt:                 r.LastFinishAt,
+		ExposedPorts:                 r.ExposedPorts,
+		Team:                         r.Team,
+		Role:                         r.Role,
+	}
+}
+
 // --- Team API types ---
 
 type CreateTeamRequest struct {

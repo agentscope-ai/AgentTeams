@@ -1779,7 +1779,7 @@ resolve_defaults() {
     else
       [ -n "$UG_INSTALL_CMD" ] || UG_INSTALL_CMD="docker exec $CONTAINER sh -c 'if command -v uv >/dev/null 2>&1; then VIRTUAL_ENV=$UG_VENV uv pip install --reinstall-package qwenpaw qwenpaw=={target}; else $UG_VENV/bin/pip install --force-reinstall --no-deps qwenpaw=={target}; fi'"
     fi
-    [ -n "$UG_PATCH_CMD" ] || UG_PATCH_CMD="docker exec $CONTAINER sh -c '$UG_VENV/bin/python /opt/agentteams/scripts/patch-qwenpaw-driver-policy-reload.py'"
+    [ -n "$UG_PATCH_CMD" ] || UG_PATCH_CMD="docker exec $CONTAINER sh -c '$UG_VENV/bin/python /opt/agentteams/scripts/patch-qwenpaw-driver-policy-reload.py && $UG_VENV/bin/python /opt/agentteams/scripts/patch-qwenpaw-matrix-cron-final.py'"
     [ -n "$UG_RESTART_CMD" ] || UG_RESTART_CMD="docker restart $CONTAINER"
     [ -n "$UG_ALIVE_CMD" ] || UG_ALIVE_CMD="docker inspect -f '{{.State.Running}}' $CONTAINER"
     # The rollback's `docker exec ... pip install` needs a running container;
@@ -1801,7 +1801,7 @@ resolve_defaults() {
     fi
     local _pd
     _pd="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    [ -n "$UG_PATCH_CMD" ] || UG_PATCH_CMD="$UG_VENV/bin/python $_pd/patch-qwenpaw-driver-policy-reload.py"
+    [ -n "$UG_PATCH_CMD" ] || UG_PATCH_CMD="$UG_VENV/bin/python $_pd/patch-qwenpaw-driver-policy-reload.py && $UG_VENV/bin/python $_pd/patch-qwenpaw-matrix-cron-final.py"
     [ -n "$UG_RESTART_CMD" ] || UG_RESTART_CMD="$DEFAULT_RESTART"
   fi
 

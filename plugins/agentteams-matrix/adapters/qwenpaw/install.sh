@@ -31,6 +31,11 @@ from pathlib import Path
 
 adapter_dir = Path(sys.argv[1])
 working_dir = Path(sys.argv[2])
+# The shared runtime-neutral core package at the bundle root. Since M3 the
+# channel imports it, so the installed plugin ships it under ``core/`` in
+# the target directory (the installed layout's core root).
+bundle_root = adapter_dir.parents[1]
+core_dir = bundle_root / "core"
 
 PLUGIN_ID = "agentteams-matrix-channel"
 BUNDLE_ID = "agentteams-matrix"
@@ -48,7 +53,18 @@ def payload_files():
             continue
         if len(rel.parts) == 1 and rel.name in EXCLUDE_FILES:
             continue
-        yield rel
+        yield rel, adapter_dir
+    # The core package ships next to the installed plugin so ``import core``
+    # resolves from the plugin target directory. rel is target-relative
+    # (``core/...``), so its source root is the bundle root.
+    if core_dir.is_dir():
+        for path in sorted(core_dir.rglob("*")):
+            if not path.is_file():
+                continue
+            rel = Path("core") / path.relative_to(core_dir)
+            if any(part in EXCLUDE_DIRS for part in rel.parts):
+                continue
+            yield rel, bundle_root
 
 
 def file_sha256(path):
@@ -68,7 +84,9 @@ def content_hash(entries):
 target_dir = working_dir / "plugins" / PLUGIN_ID
 marker_path = working_dir / ".agentteams" / BUNDLE_ID / "installed.json"
 
-entries = {rel.as_posix(): file_sha256(adapter_dir / rel) for rel in payload_files()}
+payload = list(payload_files())
+entries = {rel.as_posix(): file_sha256(src_root / rel) for rel, src_root in payload}
+sources = {rel.as_posix(): src_root for rel, src_root in payload}
 expected = content_hash(entries)
 
 installed = None
@@ -100,7 +118,7 @@ if up_to_date:
 
 changed = 0
 for rel, sha in sorted(entries.items()):
-    src = adapter_dir / rel
+    src = sources[rel] / rel
     dst = target_dir / rel
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.is_file() and file_sha256(dst) == sha:

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import html
-import importlib
 import inspect
 import io
 import json
@@ -14,10 +13,10 @@ import mimetypes
 import os
 import random
 import re
+import sys
 import time
 import urllib.parse
 from uuid import uuid4
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -25,7 +24,6 @@ import httpx
 
 from nio import (
     AsyncClient,
-    AsyncClientConfig,
     KeysUploadResponse,
     LoginResponse,
     KeyVerificationCancel,
@@ -45,7 +43,6 @@ from nio import (
     RoomMessageImage,
     RoomMessageText,
     RoomMessageVideo,
-    SyncResponse,
     ToDeviceEvent,
     ToDeviceError,
     UploadResponse,
@@ -56,7 +53,6 @@ from nio.responses import (
     JoinedMembersResponse,
     RoomGetStateEventResponse,
     RoomSendError,
-    SyncError,
     WhoamiResponse,
 )
 
@@ -74,6 +70,51 @@ from qwenpaw.schemas import (
 from qwenpaw.app.channels.base import BaseChannel
 from qwenpaw.app.channels.utils import file_url_to_local_path
 from qwenpaw.constant import WORKING_DIR
+
+# P9/PR1 M3: mention parsing, the per-room history buffer and session-id
+# derivation live in the runtime-neutral core package at the bundle root
+# (``plugins/agentteams-matrix/core``).  The core root is three levels up
+# in the source tree and one level up in the installed layout (install.sh
+# copies ``core/`` next to the adapter package); try both and fail closed
+# when neither provides the package.
+_here = Path(__file__).resolve()
+for _base in (_here.parents[1], _here.parents[3], _here.parents[2]):
+    if (_base / "core" / "__init__.py").is_file():
+        if str(_base) not in sys.path:
+            sys.path.insert(0, str(_base))
+        break
+else:
+    raise ImportError(
+        "agentteams-matrix: the core package is missing; the bundle's core/ "
+        "directory must be installed next to the plugin (install.sh copies it)"
+    )
+
+from core.e2ee import (  # noqa: E402
+    E2EEMaintainer,
+    crypto_available,
+    e2ee_store_path,
+)
+from core.history import (  # noqa: E402
+    CURRENT_MESSAGE_MARKER,
+    DEFAULT_HISTORY_LIMIT,
+    HISTORY_CONTEXT_MARKER,
+    HistoryEntry,
+    RoomHistory,
+)
+from core.media import MediaCache, mxc_to_http  # noqa: E402
+from core.mentions import (  # noqa: E402
+    extract_mentions_from_text,
+    strip_mention_prefix,
+    text_mentions_worker,
+    was_mentioned,
+)
+from core.session import resolve_session_id, to_handle_from_target  # noqa: E402
+from core.sync import SyncEngine  # noqa: E402
+from core.transport import (  # noqa: E402
+    MIN_SYNC_TIMEOUT_MS,
+    TransportConfig,
+    build_client,
+)
 
 logger = logging.getLogger("qwenpaw.channels.matrix")
 
@@ -303,68 +344,79 @@ def _attach_long_message_metadata(
         content[MATRIX_LONG_MESSAGE_METADATA_KEY] = dict(metadata)
 
 
-# Markers that separate accumulated history from the triggering message,
-# matching the convention used by OpenClaw so agents can parse uniformly.
-HISTORY_CONTEXT_MARKER = "[Chat messages since your last reply - for context]"
-CURRENT_MESSAGE_MARKER = "[Current message - respond to this]"
-DEFAULT_HISTORY_LIMIT = 50
-# Lower bound for `sync_timeout_ms`: a value of `0` would turn the
-# nio `sync()` loop into a busy-spin and a negative value would feed
-# `max(sync_s + 30, 60)` a nonsense duration downstream. 1 second is
-# the smallest value that still gives the homeserver a chance to
-# return at least one long-poll iteration.
-_MIN_SYNC_TIMEOUT_MS = 1000
+class _LegacySyncTokenStore:
+    """``SessionStore`` over the channel's legacy sync-token file (M4b).
 
+    The core ``SyncEngine`` takes its token persistence as a
+    ``SessionStore``.  The core's own ``FileSessionStore`` defaults to
+    ``<state_dir>/sync_token`` with a trailing newline, atomic replace
+    and ``ensure()`` side effects, which does not match this channel's
+    on-disk token — ``WORKING_DIR/matrix_sync_token``, plain text, no
+    trailing newline.  Changing the path or the format on upgrade would
+    lose the token and replay messages, so the channel keeps owning the
+    file through this adapter; the load/save logic (and the log lines)
+    are the channel's legacy methods moved verbatim.
+    """
 
-class QwenPawMatrixClient(AsyncClient):
-    """Keep query-token auth for homeservers/proxies that drop auth headers."""
+    def __init__(self, logger: logging.Logger) -> None:
+        self._logger = logger
 
-    async def send(
-        self,
-        method: str,
-        path: str,
-        data: Any = None,
-        headers: Optional[Dict[str, str]] = None,
-        trace_context: Optional[Any] = None,
-        timeout: Optional[float] = None,
-    ) -> Any:
-        if self.access_token and "access_token=" not in path:
-            url = urllib.parse.urlparse(path)
-            query = urllib.parse.parse_qs(url.query)
-            query["access_token"] = [self.access_token]
-            path = urllib.parse.urlunparse(
-                url._replace(
-                    query=urllib.parse.urlencode(query, doseq=True),
-                ),
-            )
-        return await super().send(
-            method,
-            path,
-            data,
-            headers,
-            trace_context,
-            timeout,
+    @staticmethod
+    def _sync_token_path() -> Optional[Path]:
+        """Return the file path for persisting the Matrix sync token."""
+        return WORKING_DIR / "matrix_sync_token"
+
+    def load_sync_token(self) -> Optional[str]:
+        """Load persisted next_batch token from disk, or None.
+
+        The token file is pulled from MinIO by FileSync.pull_all() during
+        startup, so it's already on disk when this runs — even on a fresh
+        container after destroy/recreate.
+        """
+        path = self._sync_token_path()
+        if path and path.exists():
+            try:
+                token = path.read_text().strip()
+                if token:
+                    self._logger.info(
+                        "MatrixChannel: restored sync token from %s",
+                        path,
+                    )
+                    return token
+            except Exception as exc:
+                self._logger.warning(
+                    "MatrixChannel: failed to read sync token: %s",
+                    exc,
+                )
+        return None
+
+    def save_sync_token(self, token: str) -> None:
+        """Persist next_batch token to disk (push_loop uploads it to MinIO)."""
+        path = self._sync_token_path()
+        if path:
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(token)
+            except Exception as exc:
+                self._logger.warning(
+                    "MatrixChannel: failed to save sync token: %s",
+                    exc,
+                )
+
+    # The session-key pair is unused: the QwenPaw channel keys sessions
+    # on the room in-process, and the sync engine only touches the
+    # sync-token pair.
+    def load_session_key(self, room_id: str, sender: str) -> Optional[str]:
+        raise NotImplementedError(
+            "the QwenPaw channel does not persist per-(room, sender) "
+            "session keys"
         )
 
-
-@dataclass
-class HistoryEntry:
-    """A buffered room message that didn't mention the bot."""
-
-    sender: str
-    body: str
-    timestamp: Optional[int] = None
-    message_id: Optional[str] = None
-    # Optional structured media parts (e.g. downloaded images for vision
-    # models) to be included alongside the text history when the mention
-    # arrives.
-    media_parts: Optional[List[Any]] = None
-    # Canonical Matrix user id (full MXID) of the sender. ``sender`` holds a
-    # human-readable display name (best-effort, may fall back to the
-    # localpart), which is NOT a stable identity: the send alignment gate
-    # compares senders against the turn's trigger-sender MXID, so the
-    # comparison must use this canonical id, not the display name (#1386 P1).
-    sender_id: Optional[str] = None
+    def save_session_key(self, room_id: str, sender: str, key: str) -> None:
+        raise NotImplementedError(
+            "the QwenPaw channel does not persist per-(room, sender) "
+            "session keys"
+        )
 
 
 class AgentTeamsMatrixChannel(BaseChannel):
@@ -436,7 +488,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         # `0` does not turn the sync loop into a busy-spin and a
         # negative value does not produce a nonsense request_timeout
         # downstream (`max(sync_s + 30, 60)`).
-        self.sync_timeout_ms: int = max(_MIN_SYNC_TIMEOUT_MS, int(sync_timeout_ms))
+        self.sync_timeout_ms: int = max(MIN_SYNC_TIMEOUT_MS, int(sync_timeout_ms))
         self.show_thinking: bool = show_thinking
         self.show_tool_calls: bool = show_tool_calls
         self.show_tool_results: bool = show_tool_results
@@ -447,23 +499,13 @@ class AgentTeamsMatrixChannel(BaseChannel):
         self._client: Optional[AsyncClient] = None
         self._user_id: Optional[str] = None
         self._sync_task: Optional[asyncio.Task] = None
+        self._sync_engine: Optional[SyncEngine] = None
         self._typing_tasks: Dict[str, asyncio.Task] = {}
-        self._room_histories: Dict[str, List[HistoryEntry]] = {}
-        # Per-room history generation + cumulative record counters. The send
-        # alignment gate (#1244) snapshots the generation into each turn's
-        # meta, so a different mention's _clear_history can no longer
-        # consume the turn's staleness marker (the shared buffer is
-        # consumed at the next enqueue).
-        self._room_history_gen: Dict[str, int] = {}
-        self._room_history_records: Dict[str, int] = {}
-        # Retained per-room event log with stable record indexes: when the
-        # send gate retriggers an in-flight turn, the events that made it
-        # stale are recovered from here (the shared buffer above is already
-        # consumed by the next enqueue and would no longer hold them).
-        # Same cap as the buffer — a turn in flight longer than the cap
-        # loses the head of its window (tail through the newest event is
-        # always retained).
-        self._room_event_log: Dict[str, List[Tuple[int, HistoryEntry]]] = {}
+        # Per-room history buffer, the send-gate (#1244) generation /
+        # record counters and the retained per-room event log live in the
+        # runtime-neutral core (P9/PR1 M3): the channel owns the instance,
+        # the buffer logic is in core.
+        self._room_history = RoomHistory(limit=self.history_limit)
         # Send alignment gate state: room_id -> {event_id, count, deadline}.
         self._send_gate_state: Dict[str, Dict[str, Any]] = {}
         self._dm_room_cache: Dict[str, Dict[str, Any]] = {}
@@ -475,6 +517,25 @@ class AgentTeamsMatrixChannel(BaseChannel):
         # Thread tracking (ported from CoPaw overlay)
         self._active_thread_roots: Dict[str, str] = {}
         self._proactive_send_state: Dict[str, Dict[str, Any]] = {}
+
+    # Read-only views over the core buffer's per-room state (P9/PR1 M3):
+    # kept for the send-gate's dict-shaped reads and for the core-parity
+    # gate's direct-state assertions. The logic lives in core.
+    @property
+    def _room_histories(self) -> Dict[str, List[HistoryEntry]]:
+        return self._room_history._room_histories
+
+    @property
+    def _room_history_gen(self) -> Dict[str, int]:
+        return self._room_history._room_history_gen
+
+    @property
+    def _room_history_records(self) -> Dict[str, int]:
+        return self._room_history._room_history_records
+
+    @property
+    def _room_event_log(self) -> Dict[str, List[Tuple[int, HistoryEntry]]]:
+        return self._room_history._room_event_log
 
     # ------------------------------------------------------------------
     # Debounce key — serialize by room_id (avoid concurrent session access)
@@ -555,29 +616,11 @@ class AgentTeamsMatrixChannel(BaseChannel):
         )
 
     # ------------------------------------------------------------------
-    # Lifecycle — client, login, event callbacks, _sync_loop
+    # Lifecycle — client, login, event callbacks, sync engine
     # token + user_id/password login (§2); optional
     # E2EE client config + store; cleartext + encrypted event callbacks;
-    # starts _sync_loop (§3).
+    # starts the core SyncEngine (§3).
     # ------------------------------------------------------------------
-
-    def _build_client_config(
-        self,
-        encryption: bool = False,
-    ) -> AsyncClientConfig:
-        """Build an AsyncClientConfig with proper request timeout.
-
-        The HTTP request timeout must exceed the sync long-poll timeout
-        so the HTTP layer doesn't kill the connection while the
-        homeserver is legitimately waiting for new events.
-        """
-        sync_s = self.sync_timeout_ms / 1000
-        request_timeout = max(sync_s + 30, 60)
-        return AsyncClientConfig(
-            store_sync_tokens=False,
-            encryption_enabled=encryption,
-            request_timeout=request_timeout,
-        )
 
     @staticmethod
     def _derive_device_id_from_name(device_name: str) -> str:
@@ -634,43 +677,46 @@ class AgentTeamsMatrixChannel(BaseChannel):
         )
 
     def _preflight_e2ee_dependencies(self) -> None:
-        """Probe olm before creating AsyncClientConfig;
-        disable E2EE if absent."""
+        """Check the E2EE crypto backend before creating
+        AsyncClientConfig; disable E2EE when none is importable.
+
+        matrix-nio 0.26+ provides E2EE through vodozemac (no top-level
+        olm module), so availability is decided by ``crypto_available``
+        (vodozemac or olm), not by probing olm alone.
+        """
         if not self.encryption:
             return
-        try:
-            importlib.import_module("olm")
-        except ImportError:
+        if not crypto_available():
             logger.error(
-                "MatrixChannel: olm not installed — falling back to "
-                "non-encrypted mode. "
-                "To enable E2EE: pip install matrix-nio[e2e] && "
-                "apt/dnf install libolm-dev",
+                "MatrixChannel: no Matrix E2EE backend (vodozemac/olm) "
+                "— falling back to non-encrypted mode. Install "
+                "matrix-nio[e2e]; on matrix-nio < 0.26 also install "
+                "libolm (apt/dnf install libolm-dev).",
             )
             self.encryption = False
 
     def _init_async_client(self, resolved_device_id: str) -> None:
         # E2EE: when encryption is enabled, provide store_path so matrix-nio
-        # persists Olm/Megolm keys, and set config to auto-trust all devices
-        # (appropriate for bot use cases where interactive verification is
-        # impractical).
-        store_path = None
-        if self.encryption:
-            store_path = self._e2ee_store_path()
-            store_path.mkdir(parents=True, exist_ok=True)
-        client_config = self._build_client_config(
-            encryption=self.encryption,
+        # persists Olm/Megolm keys (build_client creates the directory).
+        store_path = self._e2ee_store_path() if self.encryption else None
+        self._client = build_client(
+            TransportConfig(
+                homeserver=self.homeserver,
+                # Keep user neutral before auth; token/whoami or login
+                # response will set the canonical MXID.
+                user_id="",
+                # The access token is applied by the login steps, not at
+                # construction time.
+                access_token="",
+                device_id=resolved_device_id,
+                store_path=store_path,
+                encryption=self.encryption,
+                sync_timeout_ms=self.sync_timeout_ms,
+                # QwenPaw's Matrix path drops the Authorization header —
+                # keep the legacy query-token behaviour (zero change).
+                query_token=True,
+            )
         )
-        self._client = QwenPawMatrixClient(
-            self.homeserver,
-            # Keep user neutral before auth; token/whoami or login response
-            # will set the canonical MXID.
-            user="",
-            store_path=str(store_path) if store_path else "",
-            config=client_config,
-        )
-        if resolved_device_id:
-            self._client.device_id = resolved_device_id
 
     def _password_login_kwargs_for_nio(
         self,
@@ -954,16 +1000,21 @@ class AgentTeamsMatrixChannel(BaseChannel):
             timeout=60,
         )
 
-        self._sync_task = asyncio.create_task(self._sync_loop())
+        self._sync_engine = SyncEngine(
+            client=self._client,
+            store=_LegacySyncTokenStore(logger),
+            sync_timeout_ms=self.sync_timeout_ms,
+            logger=logger,
+            on_ready=self._mark_channel_ready,
+            on_maintenance=self._e2ee_maintenance,
+            on_token_invalid=self._clear_access_token,
+        )
+        self._sync_task = self._sync_engine.start()
         logger.info("MatrixChannel: sync loop started component=matrix")
 
     async def stop(self) -> None:
         if self._sync_task:
-            self._sync_task.cancel()
-            try:
-                await self._sync_task
-            except asyncio.CancelledError:
-                logger.debug("MatrixChannel: sync task cancelled during stop component=matrix")
+            await self._sync_engine.stop()
         if self._http_client:
             await self._http_client.aclose()
             self._http_client = None
@@ -971,17 +1022,23 @@ class AgentTeamsMatrixChannel(BaseChannel):
             await self._client.close()
         logger.info("MatrixChannel: stopped component=matrix")
 
-    # ------------------------------------------------------------------
-    # Sync loop — token persistence, catch-up, incremental sync, E2EE
-    # maintenance
-    # catch-up sync suppresses replay; incremental sync; E2EE maintenance
-    # between syncs when encryption on.
-    # ------------------------------------------------------------------
+    def _clear_access_token(self) -> None:
+        """Clear the channel's own token state.
 
-    @staticmethod
-    def _sync_token_path() -> Optional[Path]:
-        """Return the file path for persisting the Matrix sync token."""
-        return WORKING_DIR / "matrix_sync_token"
+        Invoked by the core ``SyncEngine`` when the homeserver rejects
+        the token (``M_UNKNOWN_TOKEN`` / ``M_MISSING_TOKEN``); the
+        engine clears the client's token, this clears the channel's
+        copy so later auth-header use (media downloads) sees the
+        invalidation.
+        """
+        self.access_token = ""
+
+    # ------------------------------------------------------------------
+    # State persistence + E2EE maintenance
+    # auth state and the ready marker on disk; E2EE key maintenance
+    # runs on every sync (invoked by the core SyncEngine) and before
+    # encrypted sends.
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _auth_state_path() -> Path:
@@ -1085,66 +1142,16 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 exc,
             )
 
-    def _load_sync_token(self) -> Optional[str]:
-        """Load persisted next_batch token from disk, or None.
-
-        The token file is pulled from MinIO by FileSync.pull_all() during
-        startup, so it's already on disk when this runs — even on a fresh
-        container after destroy/recreate.
-        """
-        path = self._sync_token_path()
-        if path and path.exists():
-            try:
-                token = path.read_text().strip()
-                if token:
-                    logger.info(
-                        "MatrixChannel: restored sync token from %s",
-                        path,
-                    )
-                    return token
-            except Exception as exc:
-                logger.warning(
-                    "MatrixChannel: failed to read sync token: %s",
-                    exc,
-                )
-        return None
-
-    def _save_sync_token(self, token: str) -> None:
-        """Persist next_batch token to disk (push_loop uploads it to MinIO)."""
-        path = self._sync_token_path()
-        if path:
-            try:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(token)
-            except Exception as exc:
-                logger.warning(
-                    "MatrixChannel: failed to save sync token: %s",
-                    exc,
-                )
-
     async def _e2ee_maintenance(self) -> None:
         """Perform E2EE key maintenance tasks after each sync.
 
-        Mirrors what nio's sync_forever() does between syncs:
-        - Upload device keys when needed
-        - Query device keys for new/changed users
-        - Claim one-time keys to establish Olm sessions
-        - Send outgoing to-device messages (key shares, key requests)
+        Delegates to the core :class:`E2EEMaintainer` (P9/PR1 M4c); the
+        encryption/client guards stay here, the maintenance order and
+        the error wording live in the core.
         """
-        if not self.encryption or not self._client or not self._client.olm:
+        if not self.encryption or not self._client:
             return
-        try:
-            if self._client.should_upload_keys:
-                await self._client.keys_upload()
-            if self._client.should_query_keys:
-                await self._client.keys_query()
-            if self._client.should_claim_keys:
-                await self._client.keys_claim(
-                    self._client.get_users_for_key_claiming(),
-                )
-            await self._client.send_to_device_messages()
-        except Exception as exc:
-            logger.warning("MatrixChannel: E2EE maintenance error: %s", exc)
+        await E2EEMaintainer(self._client).run_once()
 
     async def _on_key_verification_event(
         self,
@@ -1623,138 +1630,6 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
         return "; ".join(parts) if parts else "unavailable"
 
-    # pylint: disable=too-many-branches,too-many-statements
-    async def _sync_loop(self) -> None:
-        next_batch: Optional[str] = self._load_sync_token()
-
-        # When no persisted token exists (old version upgrade or first
-        # deploy), do an initial sync with callbacks suppressed — only capture
-        # next_batch so subsequent syncs are incremental.  This prevents
-        # replaying old messages when the token file doesn't exist yet.
-        #
-        # Use timeout=0 so startup does not long-poll while callbacks are
-        # temporarily suppressed. A long-poll here can swallow fresh messages
-        # sent during worker boot.
-        #
-        # To truly suppress callbacks, temporarily remove event callbacks
-        # before the sync and restore them after, because nio's sync()
-        # internally calls receive_response() which fires callbacks.
-        if next_batch is None:
-            logger.info(
-                "MatrixChannel: no sync token found, "
-                "performing catch-up sync component=matrix messages_suppressed=True",
-            )
-            try:
-                saved_cbs = self._client.event_callbacks[:]
-                self._client.event_callbacks.clear()
-                try:
-                    resp = await self._client.sync(
-                        timeout=0,
-                        full_state=True,
-                    )
-                finally:
-                    self._client.event_callbacks.extend(saved_cbs)
-                if isinstance(resp, SyncResponse):
-                    next_batch = resp.next_batch
-                    if next_batch is not None:
-                        self._save_sync_token(next_batch)
-                    # Still auto-join invited rooms during catch-up
-                    for room_id in resp.rooms.invite:
-                        logger.info("MatrixChannel: auto-joining component=matrix room_id=%s", room_id)
-                        await self._client.join(room_id)
-                    await self._e2ee_maintenance()
-                    logger.info(
-                        "MatrixChannel: catch-up sync done, "
-                        "will process messages from next sync component=matrix",
-                    )
-                else:
-                    logger.warning(
-                        "MatrixChannel: catch-up sync error component=matrix response_type=%s",
-                        type(resp).__name__,
-                    )
-            except Exception as exc:
-                logger.exception(
-                    "MatrixChannel: catch-up sync exception component=matrix error_type=%s",
-                    type(exc).__name__,
-                )
-        else:
-            # Restored from token — do a full_state sync to populate room
-            # member display names (nio needs full state for user_name()).
-            # Event callbacks are already registered so any messages received
-            # during the offline window will be processed normally.
-            logger.info(
-                "MatrixChannel: restored token, "
-                "performing full-state sync component=matrix",
-            )
-            try:
-                resp = await self._client.sync(
-                    timeout=self.sync_timeout_ms,
-                    since=next_batch,
-                    full_state=True,
-                )
-                if isinstance(resp, SyncResponse):
-                    next_batch = resp.next_batch
-                    if next_batch is not None:
-                        self._save_sync_token(next_batch)
-                    for room_id in resp.rooms.invite:
-                        logger.info("MatrixChannel: auto-joining component=matrix room_id=%s", room_id)
-                        await self._client.join(room_id)
-                    await self._e2ee_maintenance()
-                else:
-                    logger.warning(
-                        "MatrixChannel: full-state sync error component=matrix response_type=%s",
-                        type(resp).__name__,
-                    )
-            except Exception as exc:
-                logger.exception(
-                    "MatrixChannel: full-state sync exception component=matrix error_type=%s",
-                    type(exc).__name__,
-                )
-
-        self._mark_channel_ready()
-
-        while True:
-            try:
-                resp = await self._client.sync(
-                    timeout=self.sync_timeout_ms,
-                    since=next_batch,
-                    full_state=False,
-                )
-                if isinstance(resp, SyncResponse):
-                    next_batch = resp.next_batch
-                    if next_batch is not None:
-                        self._save_sync_token(next_batch)
-                    # Auto-join invited rooms
-                    for room_id in resp.rooms.invite:
-                        logger.info("MatrixChannel: auto-joining component=matrix room_id=%s", room_id)
-                        await self._client.join(room_id)
-                    # E2EE: full key maintenance (upload, query, claim,
-                    # to-device)
-                    await self._e2ee_maintenance()
-                else:
-                    if isinstance(resp, SyncError) and getattr(
-                        resp,
-                        "status_code",
-                        None,
-                    ) in {"M_UNKNOWN_TOKEN", "M_MISSING_TOKEN"}:
-                        logger.error(
-                            "MatrixChannel: sync stopped due to "
-                            "invalid/missing access token; please re-login "
-                            "(password or fresh token) component=matrix",
-                        )
-                        if self._client:
-                            self._client.access_token = ""
-                        self.access_token = ""
-                        return
-                    logger.warning("MatrixChannel: sync error component=matrix response_type=%s", type(resp).__name__)
-                    await asyncio.sleep(5)
-            except asyncio.CancelledError:
-                logger.debug("MatrixChannel: sync loop cancelled component=matrix")
-                raise
-            except Exception as exc:
-                logger.exception("MatrixChannel: sync exception component=matrix error_type=%s", type(exc).__name__)
-                await asyncio.sleep(5)
-
     # ------------------------------------------------------------------
     # Channel-level mute, per-room requireMention, strip @mention prefix
     # ------------------------------------------------------------------
@@ -1794,66 +1669,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 return bool(room_cfg["requireMention"])
         return True  # default: require mention in group rooms
 
-    # pylint: disable=too-many-return-statements
     def _was_mentioned(self, event: Any, text: str) -> bool:
-        if not self._user_id:
-            return False
-        # 1. Check m.mentions (structured mention from Matrix spec)
-        content = event.source.get("content", {})
-        mentions = content.get("m.mentions", {})
-        if self._user_id in mentions.get("user_ids", []):
-            return True
-        if mentions.get("room"):
-            return True
-        # 2. formatted_body: matrix.to mention links (Element HTML format)
-        formatted_body = content.get("formatted_body", "")
-        if formatted_body and self._user_id:
-            escaped_uid = re.escape(self._user_id)
-            if re.search(
-                rf'href=["\']https://matrix\.to/#/{escaped_uid}["\']',
-                formatted_body,
-                re.IGNORECASE,
-            ):
-                return True
-            encoded_uid = re.escape(urllib.parse.quote(self._user_id))
-            if re.search(
-                rf'href=["\']https://matrix\.to/#/{encoded_uid}["\']',
-                formatted_body,
-                re.IGNORECASE,
-            ):
-                return True
-        # 3. Fallback: match full MXID in plain text
-        if self._user_id and re.search(
-            re.escape(self._user_id),
-            text,
-            re.IGNORECASE,
-        ):
-            return True
-        # 4. matrix.to localpart-only link (domain omitted by some clients)
-        localpart = self._user_id.lstrip("@").split(":", 1)[0]
-        if localpart and formatted_body and re.search(
-            rf'href=["\']https://matrix\.to/#/{re.escape("@" + localpart)}["\']',
-            formatted_body,
-            re.IGNORECASE,
-        ):
-            return True
-        # 5. bare @localpart in plain text.
-        #    A Matrix localpart may contain [A-Za-z0-9._=/+-] (spec user
-        #    identifiers), so the mention token in text extends over those
-        #    characters. `@alice-dev`, `@alice+dev`, `@alice/dev` and
-        #    `@alice2` are OTHER users (longer localparts) and
-        #    `@alice:other.test` is a full MXID on ANOTHER domain — none
-        #    of them is our user in bare form. Require the token to end
-        #    exactly where our localpart ends: the next character must
-        #    not be a localpart character or ':' (which would start an
-        #    MXID domain we do not own).
-        if localpart:
-            token = re.compile(
-                rf"(?<![\w@])@{re.escape(localpart)}(?![A-Za-z0-9._=:/+-])"
-            )
-            if token.search(text):
-                return True
-        return False
+        """Whether the channel's user is mentioned (core.mentions)."""
+        return was_mentioned(self._user_id or "", event, text)
 
     def _teamharness_self_trigger(self, room_id: str, event: Any) -> dict[str, Any] | None:
         content = getattr(event, "source", {}).get("content", {})
@@ -1882,18 +1700,14 @@ class AgentTeamsMatrixChannel(BaseChannel):
         Handles MXID format (@user:server), room display name, and localpart.
         E.g. ``"@worker:hs.example /new"`` → ``"/new"``
              ``"math 💕: /clear"`` → ``"/clear"``.
+
+        The display name is resolved by the channel (room/client access);
+        the stripping itself is :func:`core.mentions.strip_mention_prefix`.
         """
         if not self._user_id:
             return text
-        # 1. Strip MXID (@user:server) at start
-        escaped = re.escape(self._user_id)
-        result = re.sub(rf"^{escaped}\s*:?\s*", "", text, flags=re.IGNORECASE)
-        if result != text:
-            return result.strip()
-        # 2. Strip room display name (e.g. "math 💕") at start — try before
-        #    localpart so that "math 💕: /clear" is not partially matched by
-        #    the shorter localpart "math".
-        if room and self._user_id:
+        display_name = None
+        if room:
             display_name = self._get_display_name(room, self._user_id)
             logger.debug(
                 "strip_mention_prefix: user_id=%s display_name=%r "
@@ -1902,36 +1716,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 display_name,
                 len(getattr(room, "users", {})),
             )
-            if display_name and display_name != self._user_id:
-                result = re.sub(
-                    rf"^{re.escape(display_name)}\s*:?\s*",
-                    "",
-                    text,
-                    flags=re.IGNORECASE,
-                )
-                if result != text:
-                    # Clean leftover decoration (e.g. emoji suffix) between
-                    # the display name and the actual message content.
-                    result = re.sub(r"^[^\w/]+", "", result)
-                    return result.strip()
-        # 3. Strip localpart (e.g. "math") at start — only if display name
-        #    didn't match.
-        localpart = self._user_id.split(":")[0].lstrip("@")
-        if localpart:
-            result = re.sub(
-                rf"^@?{re.escape(localpart)}\s*:?\s*",
-                "",
-                text,
-                flags=re.IGNORECASE,
-            )
-            if result != text:
-                # After stripping localpart, there may be leftover decoration
-                # from the display name (e.g. emoji suffix "💕: " from
-                # "math 💕: /clear").  Strip non-alphanumeric prefix so the
-                # slash command is exposed.
-                result = re.sub(r"^[^\w/]+", "", result)
-                return result.strip()
-        return text
+        return strip_mention_prefix(self._user_id, text, display_name)
 
     def _control_command_text(self, text: str) -> str | None:
         """Return normalized runtime control command text, if any."""
@@ -2015,34 +1800,11 @@ class AgentTeamsMatrixChannel(BaseChannel):
         used by the send alignment gate snapshot (#1244): every new room
         event is a potential staleness signal for turns still in flight.
         """
-        limit = self.history_limit
-        if limit <= 0:
-            return
-        history = self._room_histories.setdefault(room_id, [])
-        history.append(entry)
-        while len(history) > limit:
-            history.pop(0)
-        self._room_history_gen[room_id] = self._room_history_gen.get(room_id, 0) + 1
-        self._room_history_records[room_id] = (
-            self._room_history_records.get(room_id, 0) + 1
-        )
-        log = self._room_event_log.setdefault(room_id, [])
-        log.append((self._room_history_records[room_id], entry))
-        while len(log) > limit:
-            log.pop(0)
+        self._room_history.record_history(room_id, entry)
 
     def _build_history_prefix(self, room_id: str) -> str:
         """Format buffered history entries as a multi-line text block."""
-        entries = self._room_histories.get(room_id, [])
-        if not entries:
-            return ""
-        lines: list[str] = []
-        for e in entries:
-            line = f"{e.sender}: {e.body}"
-            if e.message_id:
-                line += f" [id:{e.message_id}]"
-            lines.append(line)
-        return "\n".join(lines)
+        return self._room_history.build_history_prefix(room_id)
 
     def _build_missed_history(
         self, room_id: str, since_records: int
@@ -2058,18 +1820,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         its window (the tail through the newest event is always
         retained).  Media parts carried by the entries ride along.
         """
-        lines: list[str] = []
-        media: list[Any] = []
-        for record_idx, e in self._room_event_log.get(room_id, []):
-            if record_idx <= since_records:
-                continue
-            line = f"{e.sender}: {e.body}"
-            if e.message_id:
-                line += f" [id:{e.message_id}]"
-            lines.append(line)
-            if e.media_parts:
-                media.extend(e.media_parts)
-        return "\n".join(lines), media
+        return self._room_history.build_missed_history(room_id, since_records)
 
     def _apply_history_to_parts(
         self,
@@ -2086,44 +1837,19 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
         Returns a (possibly new) list — the original is not mutated.
         """
-        if self.history_limit <= 0:
-            return content_parts
-        history_text = self._build_history_prefix(room_id)
-        if not history_text:
-            return content_parts
-
-        # Collect media content parts carried by history entries
-        history_media: list[Any] = []
-        for entry in self._room_histories.get(room_id, []):
-            if entry.media_parts:
-                history_media.extend(entry.media_parts)
-
-        # Merge into the leading text part when possible
-        first = content_parts[0] if content_parts else None
-        if first and getattr(first, "type", None) == ContentType.TEXT:
-            current_text = first.text or ""
-            combined = (
-                f"{HISTORY_CONTEXT_MARKER}\n{history_text}\n\n"
-                f"{CURRENT_MESSAGE_MARKER}\n{current_text}"
-            )
-            return (
-                [TextContent(type=ContentType.TEXT, text=combined)]
-                + history_media
-                + content_parts[1:]
-            )
-        # No leading text part (e.g. pure media) — prepend a dedicated block
-        prefix_part = TextContent(
-            type=ContentType.TEXT,
-            text=(
-                f"{HISTORY_CONTEXT_MARKER}\n{history_text}\n\n"
-                f"{CURRENT_MESSAGE_MARKER}"
+        return self._room_history.apply_history_to_parts(
+            room_id,
+            content_parts,
+            is_text_part=lambda part: getattr(part, "type", None) == ContentType.TEXT,
+            make_text_part=lambda text: TextContent(
+                type=ContentType.TEXT,
+                text=text,
             ),
         )
-        return [prefix_part] + history_media + content_parts
 
     def _clear_history(self, room_id: str) -> None:
         """Drop the buffered history for *room_id*."""
-        self._room_histories.pop(room_id, None)
+        self._room_history.clear_history(room_id)
 
     def _capture_send_gate_snapshot(self, meta: Dict[str, Any], room_id: str) -> None:
         """Record this turn's room-history generation into its own meta.
@@ -2135,9 +1861,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
         against this per-turn snapshot instead of inspecting the shared
         buffer, which another turn may have drained.
         """
-        meta["send_gate_snapshot_gen"] = self._room_history_gen.get(room_id, 0)
-        meta["send_gate_snapshot_records"] = self._room_history_records.get(
-            room_id, 0
+        meta["send_gate_snapshot_gen"] = self._room_history.generation(room_id)
+        meta["send_gate_snapshot_records"] = self._room_history.record_count(
+            room_id
         )
 
     async def _record_media_history(
@@ -2227,18 +1953,26 @@ class AgentTeamsMatrixChannel(BaseChannel):
         Returns the original URL unchanged if it is not an mxc:// URL or if
         the format is invalid.
         """
-        if not mxc_url:
-            return mxc_url
-        if not mxc_url.startswith("mxc://"):
-            return mxc_url
+        return mxc_to_http(mxc_url, self.homeserver)
+
+    async def _fetch_media_bytes(self, mxc_url: str) -> bytes:
+        """Authenticated HTTP GET for the core :class:`MediaCache`.
+
+        Adapter wiring for P9/PR1 M4c: resolves the mxc:// URL against
+        ``self.homeserver`` (the same construction the legacy download
+        methods used) and fetches the raw bytes with the channel's
+        access token — the token never leaves the adapter.
+        """
         rest = mxc_url[6:]  # strip "mxc://"
-        if "/" not in rest:
-            return mxc_url
         server, media_id = rest.split("/", 1)
-        return (
+        url = (
             f"{self.homeserver}/_matrix/media/v3/download"
             f"/{server}/{media_id}"
         )
+        headers = {"Authorization": f"Bearer {self.access_token}"}
+        resp = await self._http_client.get(url, headers=headers)
+        resp.raise_for_status()
+        return resp.content
 
     async def _download_mxc(
         self,
@@ -2248,34 +1982,18 @@ class AgentTeamsMatrixChannel(BaseChannel):
         """Download mxc:// to a local file; return path or None."""
         if not mxc_url.startswith("mxc://"):
             return None
-        try:
-            rest = mxc_url[6:]  # strip "mxc://"
-            server, media_id = rest.split("/", 1)
-            url = (
-                f"{self.homeserver}/_matrix/media/v3/download"
-                f"/{server}/{media_id}"
-            )
-            headers = {"Authorization": f"Bearer {self.access_token}"}
-            if not self._http_client:
-                logger.warning("MatrixChannel: HTTP client not initialized")
-                return None
-            resp = await self._http_client.get(url, headers=headers)
-            resp.raise_for_status()
-            dest = self._media_dir() / filename
-            dest.write_bytes(resp.content)
-            logger.debug("MatrixChannel: downloaded %s → %s", mxc_url, dest)
-            return str(dest)
-        except Exception as exc:
-            logger.warning(
-                "MatrixChannel: failed to download %s: %s",
-                mxc_url,
-                exc,
-            )
+        if not self._http_client:
+            logger.warning("MatrixChannel: HTTP client not initialized")
             return None
+        dest = await MediaCache(
+            self._fetch_media_bytes,
+            self._media_dir(),
+        ).fetch_to_file(mxc_url, filename)
+        return str(dest) if dest is not None else None
 
     def _e2ee_store_path(self) -> Path:
         """Return the directory for persisting Olm/Megolm crypto state."""
-        return WORKING_DIR / "matrix_crypto_store"
+        return e2ee_store_path(WORKING_DIR)
 
     async def _download_encrypted_mxc(
         self,
@@ -2288,46 +2006,14 @@ class AgentTeamsMatrixChannel(BaseChannel):
         """Download an encrypted mxc:// URI, decrypt it, and save locally."""
         if not mxc_url.startswith("mxc://") or not self._client:
             return None
-        try:
-            rest = mxc_url[6:]
-            server, media_id = rest.split("/", 1)
-            url = (
-                f"{self.homeserver}/_matrix/media/v3/download"
-                f"/{server}/{media_id}"
-            )
-            headers = {"Authorization": f"Bearer {self.access_token}"}
-            if not self._http_client:
-                logger.warning("MatrixChannel: HTTP client not initialized")
-                return None
-            resp = await self._http_client.get(url, headers=headers)
-            resp.raise_for_status()
-
-            from nio.crypto.attachments import decrypt_attachment
-
-            jwk_key = key.get("k", "")
-            sha256_hash = hashes.get("sha256", "")
-            plaintext = decrypt_attachment(
-                resp.content,
-                jwk_key,
-                sha256_hash,
-                iv,
-            )
-
-            dest = self._media_dir() / filename
-            dest.write_bytes(plaintext)
-            logger.debug(
-                "MatrixChannel: downloaded+decrypted %s → %s",
-                mxc_url,
-                dest,
-            )
-            return str(dest)
-        except Exception as exc:
-            logger.warning(
-                "MatrixChannel: failed to download encrypted %s: %s",
-                mxc_url,
-                exc,
-            )
+        if not self._http_client:
+            logger.warning("MatrixChannel: HTTP client not initialized")
             return None
+        dest = await MediaCache(
+            self._fetch_media_bytes,
+            self._media_dir(),
+        ).fetch_encrypted_to_file(mxc_url, filename, key, hashes, iv)
+        return str(dest) if dest is not None else None
 
     # ------------------------------------------------------------------
     # Incoming E2EE — undecryptable log + decrypted media (§7)
@@ -3308,8 +2994,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         return req
 
     def resolve_session_id(self, sender_id: str, channel_meta=None) -> str:
-        room_id = (channel_meta or {}).get("room_id", sender_id)
-        return f"matrix:{room_id}"
+        return resolve_session_id(sender_id, channel_meta)
 
     def to_handle_from_target(self, *, user_id: str, session_id: str) -> str:
         """For Matrix, return room_id (session_id), not user_id.
@@ -3320,9 +3005,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         :meth:`resolve_session_id`; strip it so the value is a raw
         Matrix room_id that can be passed directly to ``room_send``.
         """
-        if session_id.startswith("matrix:"):
-            return session_id[len("matrix:") :]
-        return session_id
+        return to_handle_from_target(user_id=user_id, session_id=session_id)
 
     def get_to_handle_from_request(self, request: Any) -> str:
         meta = getattr(request, "channel_meta", {}) or {}
@@ -3332,15 +3015,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
     # Mention helper — MSC3952 m.mentions from body text scan
     # ------------------------------------------------------------------
 
-    # Regex to match Matrix user IDs: @localpart:domain (with optional port)
-    _MATRIX_USER_ID_RE = re.compile(
-        r"@[a-zA-Z0-9._=+/\-]+:[a-zA-Z0-9.\-]+(?::\d+)?",
-    )
-
     def _extract_mentions_from_text(self, text: str) -> list[str]:
         """Extract all @user:domain Matrix IDs from message text."""
-        matches = self._MATRIX_USER_ID_RE.findall(text)
-        return list(dict.fromkeys(matches))  # dedupe, preserve order
+        return extract_mentions_from_text(text)
 
     def _apply_mention(
         self,
@@ -4368,16 +4045,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         + bare ``@localpart`` with localpart boundary rules); retained
         history entries carry plain body text only, no event content.
         """
-        if not text or not worker_localpart:
-            return False
-        if self._user_id and re.search(
-            re.escape(self._user_id), text, re.IGNORECASE
-        ):
-            return True
-        token = re.compile(
-            rf"(?<![\w@])@{re.escape(worker_localpart)}(?![A-Za-z0-9._=:/+-])"
-        )
-        return bool(token.search(text))
+        return text_mentions_worker(self._user_id, text, worker_localpart)
 
     def _new_events_relevant_to_turn(
         self, room_id: str, since_records: int, meta_dict: Dict[str, Any]

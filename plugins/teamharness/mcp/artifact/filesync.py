@@ -139,8 +139,8 @@ def _normalize_shared_path(raw_path: str, action: str) -> tuple[str, bool]:
 
 def _resolve_filesync(arguments: dict[str, Any]) -> tuple[str, str, Path, str, bool]:
     action = str(arguments.get("action") or "").strip()
-    if action not in {"pull", "push", "list", "stat", "cat"}:
-        raise ValueError("action is required; use pull, push, stat, cat, or list")
+    if action not in {"pull", "push", "list", "stat", "cat", "etag"}:
+        raise ValueError("action is required; use pull, push, stat, cat, list, or etag")
     normalized, is_directory = _normalize_shared_path(str(arguments.get("path") or ""), action)
     parts = normalized.strip("/").split("/")
     kind = parts[0]
@@ -303,6 +303,10 @@ def _filesync(arguments: dict[str, Any]) -> dict[str, Any]:
         # _sync_project snapshots the project meta this way before its
         # guarded single-file commit).  Read-only: no freshness guard.
         command = ["mc", "cat", remote]
+    elif action == "etag":
+        # The object's ETag for conditional commits (If-Match); same
+        # probe the push guard uses, read-only.
+        command = ["mc", "stat", "--json", remote]
     elif action == "pull":
         if is_directory:
             command = ["mc", "mirror", remote, str(local), "--overwrite"]
@@ -403,6 +407,19 @@ def _filesync(arguments: dict[str, Any]) -> dict[str, Any]:
         if guard_warning is not None:
             body["warning"] = guard_warning
         return body
+    if action == "etag":
+        etag = _filesync_stat_etag(completed.stdout)
+        if not etag:
+            return {
+                "ok": False,
+                "tool": "filesync",
+                "action": action,
+                "path": normalized,
+                "remotePath": remote,
+                "error": "the remote stat response carried no etag",
+            }
+        base["etag"] = etag
+        return base
     if action == "list":
         base["entries"] = [line for line in completed.stdout.splitlines() if line.strip()]
     if action == "stat":
@@ -415,6 +432,19 @@ def _filesync(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 refs.define("_filesync", _filesync)
+
+
+def _filesync_stat_etag(stdout: str) -> str | None:
+    """The etag field of an ``mc stat --json`` stdout, or None when the
+    response is not a JSON object carrying a usable etag."""
+    try:
+        payload = json.loads(stdout)
+    except (TypeError, ValueError):
+        return None
+    etag = payload.get("etag") if isinstance(payload, dict) else None
+    if isinstance(etag, str) and etag.strip():
+        return etag.strip()
+    return None
 
 
 def _filesync_command_error(completed: subprocess.CompletedProcess[str]) -> str:

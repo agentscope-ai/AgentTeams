@@ -2,7 +2,12 @@
 from __future__ import annotations
 
 import json
+import os
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
 from typing import Any
 
 # Cross-group imports are top-level absolutes (see lifecycle/transitions.py
@@ -60,13 +65,14 @@ def _sync_task(
 
 
 # #1402: the conflict-bearing object is the project meta.json — the object
-# the Go LoopHandler rewrites under a strict ETag CAS (PutObjectIfMatchStrict
-# in agentteams-controller/internal/server/loop_handler.go).  _sync_project
-# must therefore never commit it through the unguarded directory mirror:
-# it snapshots the remote meta, merges the controller-owned pause state,
-# pushes meta.json through the guarded single-file path, and verifies the
-# commit with a bounded retry (an exhausted retry is an error, never a
-# silent success — same stance as the Go CAS loop).
+# the Controller rewrites under a strict ETag CAS (PutObjectIfMatchStrict,
+# both the LoopHandler pause/resume writes and the conditional commit
+# endpoint PUT /api/v1/projects/{id}/meta).  _sync_project must therefore
+# never commit it through an unguarded push: it snapshots the remote meta,
+# merges the controller-owned pause state, commits the merged meta
+# conditionally against the observed ETag, and verifies the commit with a
+# bounded retry (an exhausted retry is an error, never a silent success —
+# same stance as the Go CAS loop).
 _SYNC_PROJECT_MAX_ATTEMPTS = 3
 _SYNC_PROJECT_RETRY_BACKOFFS = (0.1, 0.25)
 
@@ -212,6 +218,149 @@ def _pause_state_missing(
     return False
 
 
+_COMMIT_META_TIMEOUT_SECONDS = 15
+
+
+def _controller_base_url() -> str:
+    """The controller base URL for the conditional meta commit endpoint
+    (AGENTTEAMS_CONTROLLER_URL, trailing slash stripped)."""
+    return os.environ.get("AGENTTEAMS_CONTROLLER_URL", "").strip().rstrip("/")
+
+
+def _controller_bearer_token() -> str:
+    """The worker bearer token for the controller, in the session's
+    resolution order: AGENTTEAMS_AUTH_TOKEN, then the token file
+    (AGENTTEAMS_AUTH_TOKEN_FILE)."""
+    token = os.environ.get("AGENTTEAMS_AUTH_TOKEN", "").strip()
+    if token:
+        return token
+    token_file = os.environ.get("AGENTTEAMS_AUTH_TOKEN_FILE", "").strip()
+    if token_file:
+        try:
+            token = Path(token_file).read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+    return token
+
+
+def _remote_project_meta_etag(
+    arguments: dict[str, Any], meta_path: str
+) -> tuple[str | None, str | None]:
+    """The ETag of the remote project meta object (filesync ``etag`` =
+    ``mc stat --json``): (etag, None) when present, (None, None) when the
+    object does not exist, (None, reason) when the read failed. A
+    conditional commit must match the version it read, so every
+    non-present outcome is a sync failure for the caller — degrading to
+    an unconditional write is not an option.
+    """
+    stat_args = dict(arguments)
+    stat_args.update({"action": "etag", "path": meta_path})
+    result = _filesync(stat_args)
+    if result.get("ok"):
+        etag = result.get("etag")
+        if etag:
+            return str(etag), None
+        return None, "the remote project meta stat returned no etag"
+    error = str(result.get("error") or "")
+    if "does not exist" in error.lower():
+        return None, None
+    return None, error
+
+
+def _commit_project_meta(project_id: str, meta: dict[str, Any], etag: str) -> dict[str, Any]:
+    """Commit the merged meta through the controller's conditional
+    endpoint: PUT {AGENTTEAMS_CONTROLLER_URL}/api/v1/projects/{id}/meta
+    with If-Match: <etag> (stdlib urllib only, 15s timeout).
+
+    Returns:
+
+    - {"ok": True, "etag": <new>}  -> 200: the meta landed under the
+      observed ETag and the response carries the new one;
+    - {"ok": False, "conflict"}    -> 409: the meta changed after the
+      read (a pause or another writer landed); re-snapshot, re-merge and
+      retry;
+    - {"ok": False, ...}           -> everything else, fail-closed: 428
+      (If-Match missing/unsatisfied), 503 (the backend cannot perform the
+      strict conditional write), 404/405 (the controller is too old for
+      the endpoint) and network errors. The caller must never degrade to
+      an unconditional push.
+    """
+    base = _controller_base_url()
+    if not base:
+        return {
+            "ok": False,
+            "error": "AGENTTEAMS_CONTROLLER_URL is not set; the conditional project meta commit is unavailable",
+        }
+    url = f"{base}/api/v1/projects/{urllib.parse.quote(project_id, safe='')}/meta"
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(meta, ensure_ascii=False).encode("utf-8"),
+        method="PUT",
+    )
+    request.add_header("Content-Type", "application/json")
+    request.add_header("If-Match", etag)
+    token = _controller_bearer_token()
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(request, timeout=_COMMIT_META_TIMEOUT_SECONDS) as response:
+            status = response.status
+            body = response.read()
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+        try:
+            body = exc.read()
+        except OSError:
+            body = b""
+    except OSError as exc:  # URLError/timeout: the controller is unreachable
+        return {
+            "ok": False,
+            "error": f"controller unreachable for the conditional project meta commit (retryable): {exc}",
+        }
+    text = body.decode("utf-8", errors="replace")
+    if status == 200:
+        try:
+            payload = json.loads(text)
+        except ValueError:
+            payload = {}
+        new_etag = payload.get("etag") if isinstance(payload, dict) else None
+        if not new_etag:
+            return {
+                "ok": False,
+                "error": "the controller accepted the conditional meta commit but returned no etag",
+            }
+        return {"ok": True, "etag": str(new_etag)}
+    if status == 409:
+        return {
+            "ok": False,
+            "conflict": True,
+            "error": "the project meta changed after the read (409); re-snapshot and re-commit",
+        }
+    if status in (404, 405):
+        return {
+            "ok": False,
+            "error": (
+                f"the controller answered {status} for PUT /api/v1/projects/<id>/meta; it "
+                "predates the conditional meta commit endpoint — fail closed instead of "
+                "degrading to an unconditional push"
+            ),
+        }
+    if status == 428:
+        return {
+            "ok": False,
+            "error": "the controller rejected the conditional meta commit (428: If-Match missing or unsatisfied)",
+        }
+    if status == 503:
+        return {
+            "ok": False,
+            "error": "the controller backend cannot perform the strict conditional meta write (503)",
+        }
+    return {
+        "ok": False,
+        "error": f"the controller rejected the conditional meta commit ({status}): {text[:300]}",
+    }
+
+
 def _sync_project(arguments: dict[str, Any], project_id: str) -> bool:
     """Push a project's derived files and its meta.json to shared storage,
     commit-safe against a concurrent Controller pause (#1402).
@@ -223,27 +372,42 @@ def _sync_project(arguments: dict[str, Any], project_id: str) -> bool:
     the _sync_task pattern.
 
     The conflict-bearing object (meta.json) is never written by the
-    unguarded directory mirror; every attempt:
+    unguarded directory mirror and never by an unconditional single-file
+    push; every attempt:
 
     1. snapshot the remote meta without touching local state (filesync
-       ``cat``; a failed snapshot is fail-open — the push proceeds without
-       a merge, the same stance as the guard's probe);
+       ``cat``; a failed snapshot is fail-open — the commit proceeds
+       without a merge, the same stance as the guard's probe; a pause
+       that landed anyway still triggers the 409 below, because the
+       commit matches the ETag, not the snapshot);
     2. merge the controller-owned pause state from the snapshot into the
        local meta and re-write it (``_merge_project_pause_state``), so
        every project writer (lifecycle transitions, project flow, state)
        inherits the protection;
     3. push the project directory EXCLUDING meta.json (derived files only:
        plan.md, result.md, ...);
-    4. push meta.json through the guarded single-file path;
-    5. verify the commit by re-reading the remote meta: if any pause state
-       observed in the snapshot (carried into the merged set) is absent,
-       re-snapshot, re-merge and retry — bounded to
+    4. read the ETag of the remote meta (filesync ``etag`` =
+       ``mc stat --json``); without an observed ETag there is nothing to
+       match against, so the attempt fails closed — degrading to an
+       unconditional write would re-open the exact clobber this exists to
+       close;
+    5. commit the merged meta conditionally against that ETag
+       (``_commit_project_meta``: PUT /api/v1/projects/{id}/meta with
+       If-Match): 409 (the meta changed after the read — a pause or
+       another writer) retries; every other failure (428/503/404/405 —
+       the controller is too old or its backend cannot strict-CAS — and
+       network errors) fails closed;
+    6. verify the commit by re-reading the remote meta: if any pause state
+       carried into the merged set is absent — or, when the merged meta
+       carries no pause state at all, if the live ETag is not the one the
+       commit returned (a pause landed between the commit and the re-read)
+       — re-snapshot, re-merge and retry, bounded to
        _SYNC_PROJECT_MAX_ATTEMPTS with _SYNC_PROJECT_RETRY_BACKOFFS.
 
     Returns True only when the meta commit is verified (or the project
-    carries no local meta.json, in which case the verified directory push
-    is the whole commit).  An exhausted retry returns False — never a
-    silent success.
+    carries no local meta.json, in which case the directory push is the
+    whole commit).  An exhausted retry returns False — never a silent
+    success.
     """
     meta_path = f"shared/projects/{project_id}/meta.json"
     dir_path = f"shared/projects/{project_id}"
@@ -266,16 +430,35 @@ def _sync_project(arguments: dict[str, Any], project_id: str) -> bool:
         })
         if not _filesync(dir_args).get("ok"):
             continue
-        if has_local_meta:
-            meta_args = dict(arguments)
-            meta_args.update({"action": "push", "path": meta_path})
-            if not _filesync(meta_args).get("ok"):
+        if not has_local_meta:
+            return True
+        etag, _etag_error = _remote_project_meta_etag(arguments, meta_path)
+        if etag is None:
+            # No observed ETag (object missing or failed stat): a
+            # conditional commit is impossible. Fail closed — the
+            # unconditional write that lost concurrent pauses is exactly
+            # what this path retires.
+            return False
+        commit = _commit_project_meta(project_id, merged, etag)
+        if not commit.get("ok"):
+            if commit.get("conflict"):
+                # The meta changed after the read (a pause or another
+                # writer): re-snapshot, re-merge and re-commit below.
                 continue
-            expected = _project_pause_state(merged)
-            if not any(expected.values()):
-                return True
-            verified, _verify_error = _remote_project_meta_snapshot(arguments, meta_path)
-            if _pause_state_missing(expected, verified):
+            # 428/503/404/405, network, or an unexpected response: fail
+            # closed; never degrade to an unconditional push.
+            return False
+        expected = _project_pause_state(merged)
+        verified, _verify_error = _remote_project_meta_snapshot(arguments, meta_path)
+        if _pause_state_missing(expected, verified):
+            continue
+        if not any(expected.values()):
+            # Empty expectation: the re-read must also prove the committed
+            # version is still the live one — a pause can land between the
+            # commit and the re-read, and a bare "nothing expected" would
+            # early-return over it.
+            verified_etag, _verify_etag_error = _remote_project_meta_etag(arguments, meta_path)
+            if verified_etag != commit.get("etag"):
                 continue
         return True
     return False

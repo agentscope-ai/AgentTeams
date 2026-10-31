@@ -17,11 +17,22 @@ object store (``_pull_project`` / ``_pull_task`` / ``_sync_task`` /
 ``_sync_project``), the task/project state files, the pause gate, the
 transition table and the artifact publish bookkeeping.
 
+Optional boundary injection (``--pause-loop-before-commit LOOP``, submit
+only): before the FIRST conditional project meta commit of the run the
+driver fires a REAL loop pause
+(``POST {AGENTTEAMS_CONTROLLER_URL}/api/v1/loops/{LOOP}/pause`` with
+``{"source": "user"}`` — the same endpoint the e2e test drives), so the
+pause lands between the commit's ETag read and its PUT — strictly later
+than any pull-window race. The injection outcome (fired / HTTP status /
+every commit response) is added to the printed payload as
+``pause_injection``.
+
 CLI:
   python loop_driver.py --action delegate --project P --task T --worker W
   python loop_driver.py --action submit --project P --task T --worker W \
       --result '{"summary": "...", "status": "SUCCESS",
-                 "deliverables": ["shared/tasks/T/out.txt"]}'
+                 "deliverables": ["shared/tasks/T/out.txt"]}' \
+      [--pause-loop-before-commit LOOP]
   python loop_driver.py --action status --project P --task T --worker W
   python loop_driver.py --action plan_loop --project P \
       --payload '{"goal": "...", "stopCondition": "...",
@@ -36,6 +47,12 @@ Environment:
   AGENTTEAMS_MATRIX_URL / AGENTTEAMS_WORKER_MATRIX_TOKEN
                    dummy values are fine: the stubs intercept before any
                    HTTP call, the env only arms the send path
+  E2E_CONTROLLER_URL / E2E_CONTROLLER_TOKEN
+                   optional; mapped onto AGENTTEAMS_CONTROLLER_URL /
+                   AGENTTEAMS_AUTH_TOKEN via setdefault (an explicit
+                   AGENTTEAMS_* value always wins) so the
+                   pause-before-commit injection reaches the real
+                   controller without the caller duplicating the env
 
 The resulting JSON payload is printed on stdout (single line).
 """
@@ -46,6 +63,8 @@ import argparse
 import json
 import os
 import sys
+import urllib.error
+import urllib.request
 import uuid
 from pathlib import Path
 from typing import Any
@@ -55,6 +74,7 @@ if str(MCP_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_DIR))
 
 import server  # noqa: E402  (bootstraps the mcp.* package root)
+import mcp.artifact.sync as _sync_mod  # noqa: E402
 import mcp.lifecycle.taskflow as _taskflow_mod  # noqa: E402
 
 # A non-Matrix task room: membership validation and artifact publish both
@@ -134,6 +154,72 @@ def _stub_task_completion_notification(
 server._send_delegate_notification = _stub_delegate_notification
 _taskflow_mod._task_completion_notification = _stub_task_completion_notification
 
+
+def _install_pause_injection(loop_name: str) -> dict[str, Any]:
+    """Wrap ``sync._commit_project_meta`` with a one-shot REAL loop pause.
+
+    Before the first conditional project meta commit of the run the wrapper
+    fires ``POST {AGENTTEAMS_CONTROLLER_URL}/api/v1/loops/{loop}/pause``
+    with ``{"source": "user"}`` — the same endpoint the e2e test drives —
+    and only then performs the commit. The pause therefore lands between
+    the commit's ETag read and its PUT (a strictly later boundary than any
+    pull-window race), the commit must hit a real 409, and the retry's
+    re-snapshot + re-merge must preserve the durable pause. Every commit
+    response is recorded so the test can assert the real 409 -> 200 chain.
+    Returns the info dict: {loop, fired, status, commits}.
+    """
+    info: dict[str, Any] = {
+        "loop": loop_name,
+        "fired": False,
+        "status": None,
+        "commits": [],
+    }
+    real_commit = _sync_mod._commit_project_meta
+
+    def _fire_pause() -> None:
+        base = os.environ.get("AGENTTEAMS_CONTROLLER_URL", "").strip().rstrip("/")
+        if not base:
+            raise AssertionError(
+                "pause-before-commit injection needs AGENTTEAMS_CONTROLLER_URL "
+                "(the driver maps E2E_CONTROLLER_URL onto it by default)"
+            )
+        token = os.environ.get("AGENTTEAMS_AUTH_TOKEN", "").strip()
+        request = urllib.request.Request(
+            f"{base}/api/v1/loops/{loop_name}/pause",
+            data=json.dumps({"source": "user"}).encode("utf-8"),
+            method="POST",
+        )
+        request.add_header("Content-Type", "application/json")
+        if token:
+            request.add_header("Authorization", f"Bearer {token}")
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                info["status"] = response.status
+        except urllib.error.HTTPError as exc:
+            info["status"] = exc.code
+            raise AssertionError(
+                f"pause-before-commit injection failed: loop pause -> HTTP {exc.code}: "
+                f"{exc.read().decode('utf-8', errors='replace')[:500]}"
+            ) from exc
+        except Exception as exc:  # unreachable controller / timeout
+            raise AssertionError(
+                f"pause-before-commit injection failed: loop pause unreachable: {exc}"
+            ) from exc
+
+    def _commit_with_injection(
+        project_id: str, meta: dict[str, Any], etag: str
+    ) -> dict[str, Any]:
+        if not info["fired"]:
+            _fire_pause()
+            info["fired"] = True
+        result = real_commit(project_id, meta, etag)
+        info["commits"].append(dict(result))
+        return result
+
+    _sync_mod._commit_project_meta = _commit_with_injection
+    return info
+
+
 _ACTION_MAP = {
     "delegate": "delegate_task",
     "submit": "submit_task",
@@ -170,7 +256,34 @@ def main() -> int:
         default="",
         help="plan_loop payload JSON: {goal,stopCondition,iterationTemplate,maxIterations,tasks}",
     )
+    parser.add_argument(
+        "--pause-loop-before-commit",
+        default="",
+        help="submit only: fire a real loop pause (source user) right before the first "
+        "conditional meta commit; the injection result is added to the payload "
+        "as pause_injection",
+    )
     args = parser.parse_args()
+
+    # Map the e2e job's controller env onto the names the sync module reads
+    # (setdefault: an explicit AGENTTEAMS_* value always wins).
+    controller_url = os.environ.get("E2E_CONTROLLER_URL", "").strip()
+    if controller_url:
+        os.environ.setdefault("AGENTTEAMS_CONTROLLER_URL", controller_url)
+    controller_token = os.environ.get("E2E_CONTROLLER_TOKEN", "").strip()
+    if controller_token:
+        os.environ.setdefault("AGENTTEAMS_AUTH_TOKEN", controller_token)
+
+    if args.pause_loop_before_commit:
+        if args.action != "submit":
+            print(json.dumps({
+                "ok": False,
+                "error": "--pause-loop-before-commit is only supported with --action submit",
+            }))
+            return 2
+        pause_injection = _install_pause_injection(args.pause_loop_before_commit)
+    else:
+        pause_injection = None
 
     workspace = Path(os.environ.get("E2E_WORKSPACE", "").strip() or "/tmp/loop-e2e-driver")
     (workspace / "shared").mkdir(parents=True, exist_ok=True)
@@ -227,7 +340,10 @@ def main() -> int:
         }
 
     response = server.call_tool(_TOOL_FOR_ACTION.get(args.action, "taskflow"), arguments)
-    print(json.dumps(json.loads(response["content"][0]["text"]), ensure_ascii=False))
+    payload = json.loads(response["content"][0]["text"])
+    if pause_injection is not None:
+        payload["pause_injection"] = pause_injection
+    print(json.dumps(payload, ensure_ascii=False))
     return 0
 
 

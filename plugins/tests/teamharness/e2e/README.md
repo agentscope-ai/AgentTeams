@@ -54,6 +54,19 @@ The scenario, in order:
 8. **failure diagnostics** — every driver/API failure message carries the
    result JSON plus the last few `E2E_SENT_JSONL` records.
 
+The file additionally covers the #1402 B **later boundary**
+(`test_pause_before_meta_commit_survives_conditional_commit`): the
+driver's `--pause-loop-before-commit` flag (submit only) fires a REAL
+loop pause (`POST /loops/{name}/pause {"source":"user"}`) right before
+the first conditional project meta commit — after its ETag read —
+forcing a real 409. The retry must re-snapshot + re-merge and preserve
+the durable `pause_sources` while the in-flight submission still lands;
+the test asserts the real 409 → 200 commit chain, the object-store
+state, the real worker gate, and the admin user-source release. For that
+injection the driver maps `E2E_CONTROLLER_URL` / `E2E_CONTROLLER_TOKEN`
+onto `AGENTTEAMS_CONTROLLER_URL` / `AGENTTEAMS_AUTH_TOKEN` (setdefault,
+an explicit `AGENTTEAMS_*` value always wins).
+
 **Hard ordering:** the project pause runs *before* the loop pause, and the
 loop sources are released *before* the project resume. The project endpoints
 round-trip the meta through a typed struct whose `loopMeta` lacks

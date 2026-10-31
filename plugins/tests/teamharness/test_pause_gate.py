@@ -17,28 +17,49 @@ Covers (spec 3):
 4. plan_loop -> rejected
 5. record_loop_iteration -> recorded but paused=true, readyLoopNodes=[]
 6. legacy ``status="paused"`` (no sources) -> same effect as 1/3
-7. resume_project (agent) -> sources remain, delegate still rejected;
-   the Go-side clear of the sources unblocks delegation
+7. resume_project (agent) -> the authoritative merge re-pauses against the
+   durable remote state, sources remain, delegate still rejected; the
+   Go-side clear of the sources unblocks delegation
 8. pause persisted during membership validation (after the initial read,
    before the send) -> send suppressed, task stays prepared
 
-Covers (#1402 commit gate, the overlap between the entry pull and the
-submit write-back):
+Covers (#1402 conditional commit, the overlap between the entry pull and
+the submit write-back):
 9. pause lands on the remote between the worker's pull and its submit
-   write-back -> the committed remote meta keeps the full pause state
-   (status, pause_sources, paused_by_project, extra loop keys) while the
-   worker's task update lands
-10. the guarded meta push conflicts once (a second pause source drifts in
-    during the push window) -> the bounded retry re-snapshots, re-merges
-    and converges with every source preserved
-11. storage drifts the meta during every push window -> the bounded
+   write-back -> the conditional commit (If-Match on the observed ETag)
+   merges the pause state and the committed remote meta keeps the full
+   pause state (status, pause_sources, paused_by_project, extra loop
+   keys) while the worker's task update lands
+10. the conditional commit conflicts once (a second pause source drifts
+    in between the read and the commit) -> the bounded retry
+    re-snapshots, re-merges and converges with every source preserved
+11. storage drifts the meta during every commit window -> the bounded
     budget (3 attempts) is exhausted and _sync_project returns False
-12. no remote pause -> the commit is vacuously verified and the
-    worker-authored fields land in the final remote meta
+12. no remote pause -> the commit is verified against the committed ETag
+    (the empty expectation must not early-return over the re-read) and
+    the worker-authored fields land in the final remote meta
+
+Covers (#1402 conditional commit, the later boundary and fail-closed):
+13. no pause in the snapshot, but the remote is paused before the commit
+    (the 409 path) -> the retry re-snapshots and the committed meta
+    keeps the pause
+14. no pause in the merged meta, but a pause lands between the commit
+    and the verify re-read (the removed early-return pin) -> the
+    committed-ETag re-check catches the new version and the retry keeps
+    the pause in both the committed meta and the local copy
+15. the controller rejects the conditional commit (404/405 = the
+    controller predates the endpoint, 428, 503) -> fail closed:
+    _sync_project returns False and the meta is never written through an
+    unconditional filesync push
+16. the remote meta object is absent (no ETag to match) -> fail closed
+    before any commit is attempted
+17. the ETag probe fails (a storage error, not an absent object) ->
+    fail closed, no commit attempted
 """
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import importlib.util
 import json
@@ -102,54 +123,45 @@ def _read_task(workspace: Path, task_id: str) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-class FakeFilesync:
-    """Records _filesync calls instead of touching shared storage.
-
-    ``cat`` models durable single-file storage: it returns the content of
-    the local file last pushed to the same remote path (no concurrent
-    writer in these tests), so the #1402 commit verification sees its own
-    commit; a path that was never pushed reads as absent.
-    """
-
-    def __init__(self) -> None:
-        self.calls: list[dict[str, Any]] = []
-        self.remote: dict[str, str] = {}
-
-    def __call__(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        action = str(arguments.get("action") or "")
-        path = str(arguments.get("path") or "")
-        local = Path(arguments["workspaceDir"]) / Path(*path.split("/"))
-        self.calls.append(dict(arguments))
-        if action == "push" and not path.endswith("/") and local.is_file():
-            self.remote[path] = local.read_text(encoding="utf-8")
-        if action == "cat":
-            if path in self.remote:
-                return {"ok": True, "content": self.remote[path]}
-            return {"ok": False, "error": f"<ERROR> The object {path} does not exist."}
-        return {
-            "ok": True,
-            "tool": "filesync",
-            "action": arguments.get("action"),
-            "path": arguments.get("path"),
-        }
+def _meta_etag(meta: dict[str, Any]) -> str:
+    """A deterministic per-content etag: models the object store's
+    content-derived ETag, so a version is addressed by what it contains
+    — the same property the controller's strict CAS (If-Match) relies on."""
+    return hashlib.sha256(
+        json.dumps(meta, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
 
 
 class FakeProjectStorage:
-    """A filesync fake with a real remote meta.json store (#1402).
+    """The filesync + conditional-commit fake behind one remote meta store.
 
-    Models the conflict window: a human pause write to the remote project
-    meta lands between the worker's entry pull and its commit push.
+    Models the #1402 conflict windows under the conditional commit flow:
 
     - ``pull`` writes the current remote object to the local file, then
-      applies ``pull_mutation`` once (the concurrent Controller write that
-      lands right after the worker's pull);
+      applies ``pull_mutation`` once (the concurrent Controller write
+      that lands right after the worker's pull);
     - ``cat`` reads the remote object without touching local state;
-    - a single-file push of a project meta copies the local file into the
-      remote store, but is scripted to fail with the freshness-guard
-      conflict first ``meta_push_conflicts`` times (or always) — when a
-      conflict fires, ``window_mutation`` models the remote drift that
-      caused the guard to trip;
+    - ``etag`` returns the store's content-derived etag (absent object
+      -> the does-not-exist error ``mc stat --json`` produces;
+      ``etag_read_error`` forces a non-absent probe failure);
+    - a single-file push of a project meta is a hard test error
+      (tripwire): the #1402 flow must commit the meta through the
+      controller's conditional endpoint, never through an unconditional
+      filesync push;
+    - ``commit(project_id, meta, etag)`` (installed over
+      ``server.sync._commit_project_meta``) is the strict CAS: it
+      applies ``window_mutation`` first (drift landing between the
+      worker's read and its commit), a mismatch with the store's current
+      etag returns the 409 shape, a match writes the meta and returns
+      its new etag, then ``commit_mutation`` is applied (drift landing
+      between the commit and the verify re-read); ``fail_closed``
+      returns a scripted non-409 endpoint failure (428/503/404/405)
+      instead of touching the store;
     - directory pushes and task pushes are recorded and succeed.
+
+    In the real system the Controller's CreateProject writes the meta to
+    object storage, so a live project always has a remote meta (and
+    therefore an ETag); tests seed the store accordingly.
     """
 
     def __init__(
@@ -158,22 +170,31 @@ class FakeProjectStorage:
         *,
         pull_mutation: Any = None,
         window_mutation: Any = None,
-        meta_push_conflicts: int | str = 0,
+        commit_mutation: Any = None,
         drift_always: bool = False,
+        fail_closed: dict[str, Any] | None = None,
+        etag_read_error: str | None = None,
     ) -> None:
         self.remote: dict[str, dict[str, Any]] = {
             key: dict(value) for key, value in (remote or {}).items()
         }
         self.pull_mutation = pull_mutation
         self.window_mutation = window_mutation
-        self.meta_push_conflicts = meta_push_conflicts
+        self.commit_mutation = commit_mutation
         self.drift_always = drift_always
+        self.fail_closed = fail_closed
+        self.etag_read_error = etag_read_error
         self.calls: list[dict[str, Any]] = []
-        self.meta_push_calls = 0
+        self.commit_calls = 0
+        self.commits: list[tuple[str, dict[str, Any]]] = []
 
     @staticmethod
     def _is_directory(path: str) -> bool:
         return "." not in path.rsplit("/", 1)[-1]
+
+    def _etag(self, path: str) -> str | None:
+        meta = self.remote.get(path)
+        return _meta_etag(meta) if meta is not None else None
 
     def __call__(self, arguments: dict[str, Any]) -> dict[str, Any]:
         action = str(arguments.get("action") or "")
@@ -188,6 +209,16 @@ class FakeProjectStorage:
                     "error": f"<ERROR> The object {path} does not exist.",
                 }
             return {"ok": True, "content": json.dumps(meta)}
+        if action == "etag":
+            if self.etag_read_error is not None:
+                return {"ok": False, "error": self.etag_read_error}
+            etag = self._etag(path)
+            if etag is None:
+                return {
+                    "ok": False,
+                    "error": f"<ERROR> The object {path} does not exist.",
+                }
+            return {"ok": True, "etag": etag}
         if action == "pull":
             meta = self.remote.get(path)
             if meta is None:
@@ -205,33 +236,52 @@ class FakeProjectStorage:
         if action == "push":
             if self._is_directory(path):
                 return {"ok": True}
-            project_meta = path.startswith("shared/projects/") and path.endswith("meta.json")
-            if project_meta:
-                self.meta_push_calls += 1
-                if self.meta_push_conflicts == "always" or self.meta_push_conflicts:
-                    if self.window_mutation is not None:
-                        self.remote[path] = self.window_mutation(self.remote[path])
-                        if not self.drift_always:
-                            self.window_mutation = None
-                    if self.meta_push_conflicts != "always":
-                        self.meta_push_conflicts -= 1
-                    return {
-                        "ok": False,
-                        "conflict": True,
-                        "error": (
-                            "remote copy is newer than the local file; "
-                            "pull before pushing again"
-                        ),
-                    }
-                if self.window_mutation is not None:
-                    self.remote[path] = self.window_mutation(self.remote[path])
-                    if not self.drift_always:
-                        self.window_mutation = None
+            if path.startswith("shared/projects/") and path.endswith("meta.json"):
+                raise AssertionError(
+                    "tripwire: the project meta was pushed through filesync; the #1402 "
+                    "flow must commit it through the controller's conditional endpoint"
+                )
             self.remote[path] = json.loads(local.read_text(encoding="utf-8"))
             return {"ok": True}
         if action == "stat":
             return {"ok": True, "exists": path in self.remote}
         return {"ok": True}
+
+    def commit(self, project_id: str, meta: dict[str, Any], etag: str) -> dict[str, Any]:
+        """The fake ``_commit_project_meta``: a strict CAS against the
+        store, in the read -> commit -> verify window order."""
+        path = f"shared/projects/{project_id}/meta.json"
+        self.commit_calls += 1
+        self.commits.append((etag, json.loads(json.dumps(meta))))
+        if self.fail_closed is not None:
+            return dict(self.fail_closed)
+        if self.window_mutation is not None:
+            self.remote[path] = self.window_mutation(self.remote[path])
+            if not self.drift_always:
+                self.window_mutation = None
+        if etag != self._etag(path):
+            return {
+                "ok": False,
+                "conflict": True,
+                "error": "the project meta changed after the read (409); re-snapshot and re-commit",
+            }
+        self.remote[path] = json.loads(json.dumps(meta))
+        committed_etag = self._etag(path)
+        if self.commit_mutation is not None:
+            self.remote[path] = self.commit_mutation(self.remote[path])
+            if not self.drift_always:
+                self.commit_mutation = None
+        return {"ok": True, "etag": committed_etag}
+
+
+def _install_sync_fakes(
+    monkeypatch: Any, server: Any, storage: FakeProjectStorage
+) -> None:
+    """Install the storage fake as both halves of the #1402 write path:
+    the filesync actions (refs proxy on the server module) and the
+    controller's conditional commit (module global on server.sync)."""
+    monkeypatch.setattr(server, "_filesync", storage)
+    monkeypatch.setattr(server.sync, "_commit_project_meta", storage.commit)
 
 
 def _loop(
@@ -298,11 +348,12 @@ def test_delegate_rejected_when_paused_via_sources(
     server: Any, tmp_path: Path, monkeypatch: Any
 ) -> None:
     """Spec 1: loop.pause_sources=["user"] blocks a new delegation."""
-    monkeypatch.setattr(server, "_filesync", FakeFilesync())
     monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "leader")
     workspace = tmp_path / "agent"
-    _write_project(
-        workspace, "pg-1", _project("pg-1", status="active", loop=_loop(pause_sources=["user"]))
+    meta = _project("pg-1", status="active", loop=_loop(pause_sources=["user"]))
+    _write_project(workspace, "pg-1", meta)
+    _install_sync_fakes(
+        monkeypatch, server, FakeProjectStorage({"shared/projects/pg-1/meta.json": meta})
     )
 
     result = server._taskflow(_delegate_args(workspace, "pg-1", "pg-1-next"))
@@ -317,7 +368,6 @@ def test_inflight_ack_submit_succeed_while_delegate_blocked(
 ) -> None:
     """Spec 2: ["user","project"] blocks delegation; the in-flight task
     still acks and submits and its result lands in the project node."""
-    monkeypatch.setattr(server, "_filesync", FakeFilesync())
     monkeypatch.setattr(
         _taskflow_module(),
         "_task_completion_notification",
@@ -335,16 +385,13 @@ def test_inflight_ack_submit_succeed_while_delegate_blocked(
             "status": "assigned",
         },
     ]
-    _write_project(
-        workspace,
+    meta = _project(
         "pg-2",
-        _project(
-            "pg-2",
-            status="active",
-            # Canonical Go-side order: lowercased, deduped, sorted.
-            loop=_loop(pause_sources=["project", "user"], tasks=loop_tasks),
-        ),
+        status="active",
+        # Canonical Go-side order: lowercased, deduped, sorted.
+        loop=_loop(pause_sources=["project", "user"], tasks=loop_tasks),
     )
+    _write_project(workspace, "pg-2", meta)
     _write_task(
         workspace,
         task_id,
@@ -355,6 +402,9 @@ def test_inflight_ack_submit_succeed_while_delegate_blocked(
             "status": "assigned",
             "assigned_to": WORKER,
         },
+    )
+    _install_sync_fakes(
+        monkeypatch, server, FakeProjectStorage({"shared/projects/pg-2/meta.json": meta})
     )
 
     # New dispatch is blocked; both sources are reported (sorted).
@@ -384,7 +434,6 @@ def test_ready_loop_nodes_reports_paused(
 ) -> None:
     """Spec 3: paused -> readyLoopNodes=[] with paused/pauseSources exposed.
     The second task is dependency-ready, so the empty list proves the gate."""
-    monkeypatch.setattr(server, "_filesync", FakeFilesync())
     workspace = tmp_path / "agent"
     loop_tasks = [
         {
@@ -402,10 +451,12 @@ def test_ready_loop_nodes_reports_paused(
             "status": "planned",
         },
     ]
-    _write_project(
-        workspace,
-        "pg-3",
-        _project("pg-3", status="active", loop=_loop(pause_sources=["user"], tasks=loop_tasks)),
+    meta = _project(
+        "pg-3", status="active", loop=_loop(pause_sources=["user"], tasks=loop_tasks)
+    )
+    _write_project(workspace, "pg-3", meta)
+    _install_sync_fakes(
+        monkeypatch, server, FakeProjectStorage({"shared/projects/pg-3/meta.json": meta})
     )
 
     result = server._projectflow(_arguments(workspace, "ready_loop_nodes", projectId="pg-3"))
@@ -420,12 +471,13 @@ def test_plan_loop_rejected_when_paused(
     server: Any, tmp_path: Path, monkeypatch: Any
 ) -> None:
     """Spec 4: plan_loop is refused while paused and writes nothing."""
-    monkeypatch.setattr(server, "_filesync", FakeFilesync())
     workspace = tmp_path / "agent"
-    _write_project(
-        workspace, "pg-4", _project("pg-4", status="active", loop=_loop(pause_sources=["user"]))
-    )
+    meta = _project("pg-4", status="active", loop=_loop(pause_sources=["user"]))
+    _write_project(workspace, "pg-4", meta)
     meta_before = _read_project(workspace, "pg-4")
+    _install_sync_fakes(
+        monkeypatch, server, FakeProjectStorage({"shared/projects/pg-4/meta.json": meta})
+    )
 
     result = server._projectflow(
         _arguments(
@@ -458,12 +510,13 @@ def test_record_iteration_lands_but_releases_nothing_when_paused(
 ) -> None:
     """Spec 5: the in-flight iteration is recorded, but nothing is released
     downstream and no next round opens (readyLoopNodes=[])."""
-    monkeypatch.setattr(server, "_filesync", FakeFilesync())
     workspace = tmp_path / "agent"
-    _write_project(
-        workspace,
-        "pg-5",
-        _project("pg-5", status="active", loop=_loop(pause_sources=["user"], current_iteration=0)),
+    meta = _project(
+        "pg-5", status="active", loop=_loop(pause_sources=["user"], current_iteration=0)
+    )
+    _write_project(workspace, "pg-5", meta)
+    _install_sync_fakes(
+        monkeypatch, server, FakeProjectStorage({"shared/projects/pg-5/meta.json": meta})
     )
 
     result = server._projectflow(
@@ -502,10 +555,13 @@ def test_legacy_paused_status_gates_like_sources(
 ) -> None:
     """Spec 6: legacy status="paused" (no pause_sources) gates delegation and
     ready nodes the same way, reporting the "project" source."""
-    monkeypatch.setattr(server, "_filesync", FakeFilesync())
     monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "leader")
     workspace = tmp_path / "agent"
-    _write_project(workspace, "pg-6", _project("pg-6", status="paused", loop=_loop()))
+    meta = _project("pg-6", status="paused", loop=_loop())
+    _write_project(workspace, "pg-6", meta)
+    _install_sync_fakes(
+        monkeypatch, server, FakeProjectStorage({"shared/projects/pg-6/meta.json": meta})
+    )
 
     delegate = server._taskflow(_delegate_args(workspace, "pg-6", "pg-6-next"))
     assert delegate["ok"] is False
@@ -521,10 +577,12 @@ def test_legacy_paused_status_gates_like_sources(
 def test_resume_keeps_sources_and_admin_clear_unblocks(
     server: Any, tmp_path: Path, monkeypatch: Any
 ) -> None:
-    """Spec 7: the agent's resume_project clears only the legacy status;
-    pause_sources remain and delegation stays blocked until the Go API admin
-    action clears them."""
-    monkeypatch.setattr(server, "_filesync", FakeFilesync())
+    """Spec 7: the agent's resume_project clears only the legacy status
+    locally, but the authoritative merge re-pauses it against the durable
+    remote state (a remote paused status is never written over with
+    active) — pause_sources remain, delegation stays blocked, and only
+    the Go API admin action (a durable clear of status + sources)
+    unblocks it. An agent cannot self-resolve."""
     monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "worker")
     monkeypatch.setenv("AGENTTEAMS_MATRIX_URL", "http://matrix.example.test")
     monkeypatch.setenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "test-token")
@@ -540,28 +598,35 @@ def test_resume_keeps_sources_and_admin_clear_unblocks(
     )
     monkeypatch.setattr(server, "_validate_assignee_membership", lambda *args, **kwargs: {"ok": True})
     workspace = tmp_path / "agent"
-    _write_project(
-        workspace,
-        "pg-7",
-        _project("pg-7", status="paused", loop=_loop(pause_sources=["user"])),
-    )
+    meta_path = "shared/projects/pg-7/meta.json"
+    meta = _project("pg-7", status="paused", loop=_loop(pause_sources=["user"]))
+    _write_project(workspace, "pg-7", meta)
+    storage = FakeProjectStorage({meta_path: meta})
+    _install_sync_fakes(monkeypatch, server, storage)
 
-    # The agent resume clears the legacy status only.
+    # The agent resume clears the legacy status locally; the write-back's
+    # authoritative merge re-pauses it against the durable remote state.
     resumed = server._projectflow(_arguments(workspace, "resume_project", projectId="pg-7"))
     assert resumed["ok"] is True
+    assert resumed["synced"] is True
     meta = _read_project(workspace, "pg-7")
-    assert meta["status"] == "active"
+    assert meta["status"] == "paused"
     assert meta["loop"]["pause_sources"] == ["user"]
 
-    # ...so the project is still paused: delegation stays blocked.
+    # ...so the project is still paused: delegation stays blocked. The
+    # legacy status contributes the "project" source alongside the
+    # explicit one (spec 6 rule).
     monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "leader")
     still = server._taskflow(_delegate_args(workspace, "pg-7", "pg-7-next"))
     assert still["ok"] is False
-    assert still["error"] == "project is paused (sources: user)"
+    assert still["error"] == "project is paused (sources: project, user)"
 
-    # The Go API admin action clears the source -> dispatch unblocks.
-    meta["loop"]["pause_sources"] = []
-    _write_project(workspace, "pg-7", meta)
+    # The Go API admin action clears the pause durably (status + sources)
+    # -> dispatch unblocks.
+    meta = _read_project(workspace, "pg-7")
+    cleared = {**meta, "status": "active", "loop": {**meta["loop"], "pause_sources": []}}
+    _write_project(workspace, "pg-7", cleared)
+    storage.remote[meta_path] = cleared
     freed = server._taskflow(
         _arguments(
             workspace,
@@ -585,12 +650,15 @@ def test_pause_during_membership_validation_suppresses_send(
     delegate_task's initial pause read, before the send - is already
     effective at the pre-send re-check: the assignment is suppressed,
     the task stays prepared, and nothing is committed to assigned."""
-    monkeypatch.setattr(server, "_filesync", FakeFilesync())
     monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "leader")
     monkeypatch.setenv("AGENTTEAMS_MATRIX_URL", "http://matrix.example.test")
     monkeypatch.setenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "test-token")
     workspace = tmp_path / "agent"
-    _write_project(workspace, "pg-8", _project("pg-8", status="active", loop=_loop()))
+    meta = _project("pg-8", status="active", loop=_loop())
+    _write_project(workspace, "pg-8", meta)
+    _install_sync_fakes(
+        monkeypatch, server, FakeProjectStorage({"shared/projects/pg-8/meta.json": meta})
+    )
     sent: list[dict[str, Any]] = []
 
     def _membership_with_pause(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -639,6 +707,7 @@ def test_pause_between_pull_and_submit_survives_write_back(
     """Spec 9 (the maintainer's #1402 overlap): the worker pulls an active
     meta, a human pause (status=paused, loop.pause_sources=["user"]) lands
     on the remote between that pull and the submit write-back.  The
+    conditional commit must merge the pause state into the write and the
     committed remote meta must keep the full pause state while the
     worker's task update lands."""
     monkeypatch.setattr(server.sync, "_SYNC_PROJECT_RETRY_BACKOFFS", (0.0, 0.0))
@@ -673,7 +742,7 @@ def test_pause_between_pull_and_submit_survives_write_back(
             },
         },
     )
-    monkeypatch.setattr(server, "_filesync", storage)
+    _install_sync_fakes(monkeypatch, server, storage)
     _write_project(workspace, "pg-9", base_meta)
     _write_task(
         workspace,
@@ -693,6 +762,7 @@ def test_pause_between_pull_and_submit_survives_write_back(
 
     assert submit["ok"] is True
     assert submit["task"]["status"] == "submitted"
+    assert storage.commit_calls == 1
     final = storage.remote["shared/projects/pg-9/meta.json"]
     assert final["status"] == "paused"
     loop = final["loop"]
@@ -722,9 +792,10 @@ def test_pause_between_pull_and_submit_survives_write_back(
 def test_sync_project_retries_conflict_and_converges(
     server: Any, tmp_path: Path, monkeypatch: Any
 ) -> None:
-    """Spec 10: the guarded meta push conflicts once because a second pause
-    source drifts in during the push window; the bounded retry re-snapshots,
-    re-merges and converges with every source preserved."""
+    """Spec 10: the conditional commit returns 409 once because a second
+    pause source drifts in between the worker's read and its commit; the
+    bounded retry re-snapshots, re-merges and converges with every source
+    preserved."""
     monkeypatch.setattr(server.sync, "_SYNC_PROJECT_RETRY_BACKOFFS", (0.0, 0.0))
     workspace = tmp_path / "agent"
     project_id = "pg-10"
@@ -736,14 +807,13 @@ def test_sync_project_retries_conflict_and_converges(
             **meta,
             "loop": {**meta["loop"], "pause_sources": ["audit", "user"]},
         },
-        meta_push_conflicts=1,
     )
-    monkeypatch.setattr(server, "_filesync", storage)
+    _install_sync_fakes(monkeypatch, server, storage)
     _write_project(workspace, project_id, base_meta)
 
     assert server.sync._sync_project(_arguments(workspace, "noop"), project_id) is True
 
-    assert storage.meta_push_calls == 2
+    assert storage.commit_calls == 2
     final = storage.remote[meta_path]
     assert final["status"] == "active"
     assert final["loop"]["pause_sources"] == ["audit", "user"]
@@ -752,9 +822,10 @@ def test_sync_project_retries_conflict_and_converges(
 def test_sync_project_exhausted_retries_return_false(
     server: Any, tmp_path: Path, monkeypatch: Any
 ) -> None:
-    """Spec 11: storage drifts the meta during every push window, so the
-    bounded budget (3 attempts) is exhausted; _sync_project returns False —
-    an exhausted retry is an error, never a silent success."""
+    """Spec 11: storage drifts the meta during every commit window, so the
+    conditional commit conflicts on all attempts and the bounded budget
+    (3 attempts) is exhausted; _sync_project returns False — an exhausted
+    retry is an error, never a silent success."""
     monkeypatch.setattr(server.sync, "_SYNC_PROJECT_RETRY_BACKOFFS", (0.0, 0.0))
     workspace = tmp_path / "agent"
     project_id = "pg-11"
@@ -768,22 +839,22 @@ def test_sync_project_exhausted_retries_return_false(
     storage = FakeProjectStorage(
         {meta_path: base_meta},
         window_mutation=_drift,
-        meta_push_conflicts="always",
         drift_always=True,
     )
-    monkeypatch.setattr(server, "_filesync", storage)
+    _install_sync_fakes(monkeypatch, server, storage)
     _write_project(workspace, project_id, base_meta)
 
     assert server.sync._sync_project(_arguments(workspace, "noop"), project_id) is False
-    assert storage.meta_push_calls == 3
+    assert storage.commit_calls == 3
 
 
 def test_submit_without_pause_keeps_worker_fields(
     server: Any, tmp_path: Path, monkeypatch: Any
 ) -> None:
-    """Spec 12: with no remote pause the commit is vacuously verified and
-    the worker-authored fields (assignment, loop task update) land in the
-    final remote meta."""
+    """Spec 12: with no remote pause the commit is verified against the
+    committed ETag (the empty expectation must still re-read, not
+    early-return) and the worker-authored fields (assignment, loop task
+    update) land in the final remote meta."""
     monkeypatch.setattr(server.sync, "_SYNC_PROJECT_RETRY_BACKOFFS", (0.0, 0.0))
     monkeypatch.setattr(
         _taskflow_module(),
@@ -804,7 +875,7 @@ def test_submit_without_pause_keeps_worker_fields(
     ]
     base_meta = _project("pg-12", status="active", loop=_loop(tasks=loop_tasks))
     storage = FakeProjectStorage({"shared/projects/pg-12/meta.json": base_meta})
-    monkeypatch.setattr(server, "_filesync", storage)
+    _install_sync_fakes(monkeypatch, server, storage)
     _write_project(workspace, "pg-12", base_meta)
     _write_task(
         workspace,
@@ -830,4 +901,149 @@ def test_submit_without_pause_keeps_worker_fields(
     assert loop["tasks"][0]["status"] == "submitted"
     assert loop["tasks"][0]["assigned_to"] == WORKER
     assert final["title"] == "Pause gate pg-12"
-    assert storage.meta_push_calls == 1
+    assert storage.commit_calls == 1
+    # The verify step re-read the live ETag after the commit (the removed
+    # early-return pin): at least the commit's If-Match read plus the
+    # verify re-read, never just the commit's.
+    etag_reads = [call for call in storage.calls if call.get("action") == "etag"]
+    assert len(etag_reads) >= 2
+
+
+def test_pause_landing_before_commit_is_kept_on_retry(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 13: the snapshot carries no pause, but the remote is paused
+    between the worker's read and its commit (the 409 path) -> the bounded
+    retry re-snapshots, re-merges and the committed meta keeps the
+    pause that the first snapshot did not see."""
+    monkeypatch.setattr(server.sync, "_SYNC_PROJECT_RETRY_BACKOFFS", (0.0, 0.0))
+    workspace = tmp_path / "agent"
+    project_id = "pg-13"
+    meta_path = f"shared/projects/{project_id}/meta.json"
+    base_meta = _project(project_id, status="active", loop=_loop())
+    storage = FakeProjectStorage(
+        {meta_path: base_meta},
+        window_mutation=lambda meta: {
+            **meta,
+            "status": "paused",
+            "loop": {**meta["loop"], "pause_sources": ["user"]},
+        },
+    )
+    _install_sync_fakes(monkeypatch, server, storage)
+    _write_project(workspace, project_id, base_meta)
+
+    assert server.sync._sync_project(_arguments(workspace, "noop"), project_id) is True
+
+    assert storage.commit_calls == 2
+    final = storage.remote[meta_path]
+    assert final["status"] == "paused"
+    assert final["loop"]["pause_sources"] == ["user"]
+
+
+def test_pause_between_commit_and_verify_is_caught_by_etag_reread(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 14 (the removed early-return pin): the merged meta carries no
+    pause state, but a pause lands on the remote between the commit and
+    the verify re-read.  The empty expectation must not early-return
+    over the re-read: the committed-ETag re-check sees the new version
+    and the retry re-merges the pause, which the committed meta and the
+    local copy keep.  (The pre-#1402 verify would have returned True
+    after one commit with the local copy still active.)"""
+    monkeypatch.setattr(server.sync, "_SYNC_PROJECT_RETRY_BACKOFFS", (0.0, 0.0))
+    workspace = tmp_path / "agent"
+    project_id = "pg-14"
+    meta_path = f"shared/projects/{project_id}/meta.json"
+    base_meta = _project(project_id, status="active", loop=_loop())
+    storage = FakeProjectStorage(
+        {meta_path: base_meta},
+        commit_mutation=lambda meta: {
+            **meta,
+            "status": "paused",
+            "loop": {**meta["loop"], "pause_sources": ["user"]},
+        },
+    )
+    _install_sync_fakes(monkeypatch, server, storage)
+    _write_project(workspace, project_id, base_meta)
+
+    assert server.sync._sync_project(_arguments(workspace, "noop"), project_id) is True
+
+    assert storage.commit_calls == 2
+    final = storage.remote[meta_path]
+    assert final["status"] == "paused"
+    assert final["loop"]["pause_sources"] == ["user"]
+    local = _read_project(workspace, project_id)
+    assert local["status"] == "paused"
+    assert local["loop"]["pause_sources"] == ["user"]
+
+
+@pytest.mark.parametrize("status", [404, 405, 428, 503])
+def test_sync_project_fails_closed_on_endpoint_rejection(
+    server: Any, tmp_path: Path, monkeypatch: Any, status: int
+) -> None:
+    """Spec 15: the controller rejects the conditional commit (404/405 =
+    the controller predates the endpoint, 428 = If-Match rejected, 503 =
+    the backend cannot strict-CAS) -> _sync_project fails closed; the
+    remote store is untouched and the meta is never written through an
+    unconditional filesync push (the tripwire would fire on a
+    regression)."""
+    monkeypatch.setattr(server.sync, "_SYNC_PROJECT_RETRY_BACKOFFS", (0.0, 0.0))
+    workspace = tmp_path / "agent"
+    project_id = f"pg-15-{status}"
+    meta_path = f"shared/projects/{project_id}/meta.json"
+    base_meta = _project(project_id, status="active", loop=_loop())
+    storage = FakeProjectStorage(
+        {meta_path: base_meta},
+        fail_closed={"ok": False, "error": f"simulated controller rejection ({status})"},
+    )
+    _install_sync_fakes(monkeypatch, server, storage)
+    _write_project(workspace, project_id, base_meta)
+
+    assert server.sync._sync_project(_arguments(workspace, "noop"), project_id) is False
+    assert storage.commit_calls == 1
+    # No commit landed and no unconditional push replaced it.
+    assert storage.remote[meta_path] == base_meta
+
+
+def test_sync_project_fails_closed_without_remote_etag(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 16: the remote meta object is absent (no ETag to match) -> a
+    conditional commit is impossible and _sync_project fails closed
+    before any commit is attempted, instead of degrading to an
+    unconditional push."""
+    monkeypatch.setattr(server.sync, "_SYNC_PROJECT_RETRY_BACKOFFS", (0.0, 0.0))
+    workspace = tmp_path / "agent"
+    project_id = "pg-16"
+    meta_path = f"shared/projects/{project_id}/meta.json"
+    base_meta = _project(project_id, status="active", loop=_loop())
+    storage = FakeProjectStorage()  # the remote object does not exist
+    _install_sync_fakes(monkeypatch, server, storage)
+    _write_project(workspace, project_id, base_meta)
+
+    assert server.sync._sync_project(_arguments(workspace, "noop"), project_id) is False
+    assert storage.commit_calls == 0
+    assert meta_path not in storage.remote
+
+
+def test_sync_project_fails_closed_on_etag_read_failure(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 17: the ETag probe fails with a storage error (not an absent
+    object) -> still fail closed: an unmatchable commit must not degrade
+    to an unconditional push."""
+    monkeypatch.setattr(server.sync, "_SYNC_PROJECT_RETRY_BACKOFFS", (0.0, 0.0))
+    workspace = tmp_path / "agent"
+    project_id = "pg-17"
+    meta_path = f"shared/projects/{project_id}/meta.json"
+    base_meta = _project(project_id, status="active", loop=_loop())
+    storage = FakeProjectStorage(
+        {meta_path: base_meta},
+        etag_read_error="remote stat probe failed: connection refused",
+    )
+    _install_sync_fakes(monkeypatch, server, storage)
+    _write_project(workspace, project_id, base_meta)
+
+    assert server.sync._sync_project(_arguments(workspace, "noop"), project_id) is False
+    assert storage.commit_calls == 0
+    assert storage.remote[meta_path] == base_meta

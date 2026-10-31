@@ -31,7 +31,14 @@ original closed loop:
    source), and only an admin "user"-source resume releases it;
 7. the role boundary is executable: a worker token is rejected by the
    authorizer middleware before the handler runs, and a manager token is
-   rejected by the handler when releasing the user source.
+   rejected by the handler when releasing the user source;
+8. the later boundary of the conditional meta commit (#1402 B): a user
+   pause that lands BETWEEN the commit's ETag read and its PUT (the
+   driver fires the real loop pause right before the first conditional
+   commit) forces a real 409 on the commit; the retry's re-snapshot +
+   re-merge preserves the durable pause_sources, the in-flight
+   submission still succeeds, and a fresh process stays blocked by the
+   real worker gate until an admin user-source release.
 
 Ordering note: the project endpoints used to round-trip the meta through a
 typed struct whose ``loopMeta`` lacked ``pause_sources`` — a controller
@@ -287,6 +294,7 @@ def _run_driver(
     workspace: Path,
     result: dict[str, Any] | None = None,
     payload: dict[str, Any] | None = None,
+    pause_loop_before_commit: str | None = None,
 ) -> dict[str, Any]:
     env = dict(env)
     env["E2E_WORKSPACE"] = str(workspace)
@@ -306,6 +314,8 @@ def _run_driver(
         command += ["--result", json.dumps(result)]
     if payload is not None:
         command += ["--payload", json.dumps(payload)]
+    if pause_loop_before_commit:
+        command += ["--pause-loop-before-commit", pause_loop_before_commit]
     try:
         proc = subprocess.run(command, capture_output=True, text=True, timeout=300, env=env)
     except subprocess.TimeoutExpired as exc:
@@ -955,3 +965,116 @@ def test_pause_resume_closed_loop(
     assert result.get("ok") is True, f"check B: {result}"
     assert result.get("effective") is True, f"check B effective: {result.get('effective')}"
     assert result.get("result", {}).get("status") == "SUCCESS", f"check B result: {result.get('result')}"
+
+
+def test_pause_before_meta_commit_survives_conditional_commit(
+    e2e_env: tuple[dict[str, str], Path], tmp_path: Path
+) -> None:
+    """#1402 B, the later boundary: a user pause that lands BETWEEN the
+    project meta commit's ETag read and its PUT (the driver fires the
+    real loop pause right before the first conditional commit) must
+    force a REAL 409 on the commit, and the retry's re-snapshot +
+    re-merge must preserve the durable ``loop.pause_sources`` — the
+    in-flight submission still succeeds, a fresh process stays blocked
+    by the real worker gate, and only the admin user-source release
+    unblocks dispatch (exactly once)."""
+    env, sent_path = e2e_env
+    worker = "@e2e-worker:matrix.e2e.invalid"
+    project_id, loop_name = _setup_veto_project(env, sent_path, tmp_path)
+
+    # The in-flight B result, exactly as in the closed loop's step 10.
+    task_dir = tmp_path / "ws3" / "shared" / "tasks" / "B"
+    task_dir.mkdir(parents=True)
+    (task_dir / "result.md").write_text(
+        "# Task B result\n\ne2e submission across the commit boundary.\n", encoding="utf-8"
+    )
+    (task_dir / "out.txt").write_text("e2e deliverable for B\n", encoding="utf-8")
+
+    # THE injection: the driver pauses the loop for real right before the
+    # FIRST conditional meta commit (after the ETag read) — strictly later
+    # than any pull-window race the unit tests cover.
+    result = _run_driver(
+        env,
+        sent_path,
+        "submit",
+        project_id,
+        "B",
+        worker,
+        tmp_path / "ws3",
+        result={
+            "summary": "task B finished across the commit boundary",
+            "status": "SUCCESS",
+            "deliverables": ["shared/tasks/B/out.txt"],
+        },
+        pause_loop_before_commit=loop_name,
+    )
+    assert result.get("ok") is True, (
+        f"the in-flight submission must survive the 409 retry: {result}\n"
+        f"sent: {_sent_tail(sent_path)}"
+    )
+    injection = result.get("pause_injection")
+    assert isinstance(injection, dict), f"submit result missing pause_injection: {result}"
+    assert injection.get("loop") == loop_name, f"injection loop: {injection}"
+    assert injection.get("fired") is True, f"the injection never fired (no commit attempted): {injection}"
+    assert injection.get("status") == 200, (
+        f"the real loop pause must land with 200: {injection}"
+    )
+    commits = injection.get("commits")
+    assert isinstance(commits, list) and len(commits) == 2, (
+        f"expected exactly the 409 -> retry -> 200 chain, got: {json.dumps(commits, ensure_ascii=False)}"
+    )
+    assert commits[0].get("conflict") is True, (
+        f"the first commit must hit the real 409 (the pause landed after the ETag read): {commits[0]}"
+    )
+    assert commits[1].get("ok") is True, f"the retry commit must succeed: {commits[1]}"
+    assert commits[1].get("etag"), f"the retry commit must carry the new ETag: {commits[1]}"
+
+    # Durable (object store read, not the API response): the project stays
+    # ACTIVE (a loop pause never pauses the project) and the user veto is
+    # preserved across the conditional-commit retry.
+    meta = _mc_meta_object(project_id)
+    assert meta.get("status") == "active", (
+        f"the loop pause must not pause the project: {meta.get('status')}"
+    )
+    loop_record = meta.get("loop")
+    assert isinstance(loop_record, dict) and loop_record.get("pause_sources") == ["user"], (
+        "the pause that landed between the ETag read and the commit must survive "
+        f"the retry (got {json.dumps(loop_record.get('pause_sources') if isinstance(loop_record, dict) else loop_record, ensure_ascii=False)})"
+    )
+
+    # The in-flight result still landed: submit has no pause gate by
+    # design — read it back through the Controller's task inspection.
+    status, inspection = _api("GET", f"/api/v1/projects/{project_id}/tasks/B")
+    assert status == 200, f"task B inspection -> {status}: {inspection}"
+    assert inspection.get("status") == "submitted", (
+        f"task B status: {json.dumps(inspection, ensure_ascii=False)[:2000]}"
+    )
+    assert inspection.get("result_path") == "shared/tasks/B/result.md", (
+        f"task B result_path: {inspection.get('result_path')}"
+    )
+    _assert_sent_counts(sent_path, "completion", {"B": 1})
+
+    # The real worker-side gate now blocks new dispatch on the surviving
+    # veto, and the workflow releases nothing on the active project.
+    result = _run_driver(env, sent_path, "delegate", project_id, "A", worker, tmp_path / "ws4")
+    assert result.get("ok") is False, f"delegate A under the surviving veto must fail: {result}"
+    assert "paused" in str(result.get("error")), f"delegate A error: {result.get('error')}"
+    status, wf = _api("GET", f"/api/v1/projects/{project_id}/workflow")
+    assert status == 200, f"workflow -> {status}: {wf}"
+    assert wf.get("status") == "active", f"workflow status: {wf.get('status')}"
+    _assert_nodes(wf, {"A": "pending", "B": "in-progress"})
+    assert wf.get("next") == [], (
+        f"the surviving veto must hold the ready task on an active project: "
+        f"next={wf.get('next')}: {json.dumps(wf, ensure_ascii=False)[:2000]}"
+    )
+    _assert_sent_counts(sent_path, "delegate", {"B": 1})  # no new delegate send
+
+    # The admin user-source release is the only unlock; dispatch proceeds
+    # exactly once afterwards.
+    status, released = _api("POST", f"/api/v1/loops/{loop_name}/resume", {"source": "user"})
+    assert status == 200, f"user-source resume -> {status}: {released}"
+    assert released.get("paused") is False, f"the loop must be unpaused after the release: {released}"
+    assert released.get("sources") == [], f"sources after the release: {released}"
+    result = _run_driver(env, sent_path, "delegate", project_id, "A", worker, tmp_path / "ws5")
+    assert result.get("ok") is True, f"post-release delegate A: {result}\nsent: {_sent_tail(sent_path)}"
+    _assert_sent_counts(sent_path, "delegate", {"A": 1, "B": 1})

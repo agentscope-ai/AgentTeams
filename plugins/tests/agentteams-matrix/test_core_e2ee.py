@@ -10,11 +10,20 @@ M5a adds the crypto-backend detection: matrix-nio 0.26+ ships E2EE
 through ``vodozemac`` (no top-level ``olm`` module), so the
 availability decision must follow the first importable backend in
 ``CRYPTO_BACKENDS`` order, not the olm module alone.
+
+The native-crypto cases run behind :func:`require_e2ee_backend`, the
+explicit CI boundary: importing matrix-nio does not guarantee E2EE,
+a backend-less environment fails loudly naming the required
+dependency (never a silent skip, never a construction-time
+ImportWarning), and ``AGENTTEAMS_TEST_ALLOW_NO_E2EE=1`` is the only
+documented opt-out (skip with reason).  The decision happens before
+any encrypted ``AsyncClient`` is constructed.
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -29,6 +38,50 @@ from core.e2ee import (
     e2ee_store_path,
     probe_olm,
 )
+
+# ---------------------------------------------------------------------------
+# CI boundary for the native-crypto cases: importing ``nio`` is not
+# enough — the e2e extra (``vodozemac`` on 0.26+, ``olm`` on older
+# releases) must be importable.  Absence is a loud, actionable
+# failure; the single documented opt-out is AGENTTEAMS_TEST_ALLOW_NO_E2EE.
+# ---------------------------------------------------------------------------
+
+E2EE_OPT_OUT = "AGENTTEAMS_TEST_ALLOW_NO_E2EE"
+E2EE_DEP = "matrix-nio[e2e]>=0.26,<0.27"
+
+
+def require_e2ee_backend() -> None:
+    """Boundary decision for tests that run a real encrypted client.
+
+    Must be called before any encrypted ``AsyncClient`` is
+    constructed: without a backend nio only surfaces the problem as a
+    warning at construction time, and that warning must not be the
+    failure surface of these tests.
+
+    - a crypto backend is importable -> return (the test proceeds);
+    - none, and ``AGENTTEAMS_TEST_ALLOW_NO_E2EE=1`` -> skip with a
+      reason (documented opt-out for deliberately non-E2EE
+      environments);
+    - none, no opt-out -> fail explicitly, naming the required
+      dependency (a silent skip would hide a broken CI job).
+    """
+    backend = detect_crypto_backend()
+    if backend is not None:
+        return
+    if os.environ.get(E2EE_OPT_OUT) == "1":
+        pytest.skip(
+            f"no E2EE crypto backend importable (tried "
+            f"{', '.join(CRYPTO_BACKENDS)}); {E2EE_OPT_OUT}=1 "
+            "opt-out honoured"
+        )
+    pytest.fail(
+        "no E2EE crypto backend importable (tried "
+        f"{', '.join(CRYPTO_BACKENDS)}). The native E2EE tests need "
+        f"{E2EE_DEP}: its ``e2e`` extra pulls vodozemac, a pure wheel "
+        "(no libolm build). Install it, or set "
+        f"{E2EE_OPT_OUT}=1 to skip in a deliberately non-E2EE "
+        "environment."
+    )
 
 
 def _run(coro):
@@ -128,6 +181,31 @@ def test_probe_olm_tracks_olm_module_only(monkeypatch):
     assert probe_olm() is True
 
 
+def test_require_backend_present_proceeds(monkeypatch):
+    """Backend importable: the boundary is silent, the test proceeds."""
+    _stub_backends(monkeypatch, {"vodozemac"})
+    require_e2ee_backend()  # neither skip nor fail
+
+
+def test_require_backend_absent_fails_loudly(monkeypatch):
+    """No backend, no opt-out: an explicit failure naming the required
+    dependency (a silent skip would hide a broken CI job)."""
+    _stub_backends(monkeypatch, set())
+    monkeypatch.delenv(E2EE_OPT_OUT, raising=False)
+    with pytest.raises(
+        pytest.fail.Exception, match=r"matrix-nio\[e2e\]>=0\.26,<0\.27"
+    ):
+        require_e2ee_backend()
+
+
+def test_require_backend_absent_opt_out_skips(monkeypatch):
+    """No backend + documented opt-out: skip with a reason."""
+    _stub_backends(monkeypatch, set())
+    monkeypatch.setenv(E2EE_OPT_OUT, "1")
+    with pytest.raises(pytest.skip.Exception):
+        require_e2ee_backend()
+
+
 def test_run_once_all_flags_order_and_args():
     client = FakeClient(upload=True, query=True, claim=True)
 
@@ -220,9 +298,21 @@ ROOM_ID = "!enc:hs.example.com"
 
 @pytest.fixture()
 def nio_available():
-    """Skip the native-crypto tests only when matrix-nio is absent."""
+    """Skip only when matrix-nio itself is absent (the nio classes are
+    None sentinels then).  For the duck-typed cases that need nio but
+    no crypto backend."""
     if _NIO_IMPORT_ERROR is not None:
         pytest.skip(f"matrix-nio not available: {_NIO_IMPORT_ERROR}")
+
+
+@pytest.fixture()
+def crypto_backend():
+    """Boundary for cases that run a REAL encrypted client: proceed
+    with a backend, skip only under the documented
+    AGENTTEAMS_TEST_ALLOW_NO_E2EE=1 opt-out, fail loudly otherwise.
+    Runs before the test body, i.e. before any encrypted AsyncClient
+    is constructed."""
+    require_e2ee_backend()
 
 
 class _FakeStore:
@@ -310,7 +400,7 @@ def _capture_send(client, room_id: str = ROOM_ID) -> dict:
 
 
 def test_nio_transport_start_initializes_olm_via_restore_login(
-    tmp_path, monkeypatch, nio_available
+    tmp_path, monkeypatch, crypto_backend
 ):
     """encryption=True + store path: start() runs the native
     ``restore_login`` preparation and the client comes up with an Olm
@@ -385,7 +475,7 @@ def test_restore_login_without_olm_aborts_start(tmp_path, monkeypatch, nio_avail
     _run(scenario())
 
 
-def test_persisted_account_survives_client_rebuild(tmp_path, nio_available):
+def test_persisted_account_survives_client_rebuild(tmp_path, crypto_backend):
     """Initialize on a store path, capture the Olm identity keys, close,
     rebuild + ``restore_login`` on the same path: the same account is
     restored (no new account on restart)."""
@@ -413,7 +503,7 @@ def test_persisted_account_survives_client_rebuild(tmp_path, nio_available):
     assert keys2 == keys1
 
 
-def test_encrypted_send_emits_m_room_encrypted(tmp_path, nio_available):
+def test_encrypted_send_emits_m_room_encrypted(tmp_path, crypto_backend):
     """With an initialized client, the core send helper emits an
     ``m.room.encrypted`` event whose envelope carries the Megolm
     ciphertext (the plaintext never reaches the wire)."""
@@ -453,7 +543,7 @@ def test_encrypted_send_emits_m_room_encrypted(tmp_path, nio_available):
     assert "secret send" not in body["ciphertext"]
 
 
-def test_encrypted_receive_decrypts_megolm_event(tmp_path, nio_available):
+def test_encrypted_receive_decrypts_megolm_event(tmp_path, crypto_backend):
     """A Megolm event fed through a raw sync response is decrypted into
     the plaintext event (``decrypted=True``) and delivered to the
     registered room-event callback."""

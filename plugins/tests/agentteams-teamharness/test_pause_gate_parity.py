@@ -1,0 +1,107 @@
+"""Parity twin of the #1402 versioned-read regressions against the bundle.
+
+The two versioned-read regressions added to
+``plugins/tests/teamharness/test_pause_gate.py`` (spec 15: the
+maintainer's snapshot -> pause -> ETag/commit overlap; spec 16: the
+persistent version flip that exhausts the bounded read) must hold in the
+``plugins/agentteams-teamharness`` compatibility copy as well — the
+bundle ships a byte-identical ``mcp/`` tree (pinned by the drift test),
+and a regression that survives only in the live tree would ship to
+installations.
+
+The SAME test functions as the legacy suite are executed here, with the
+``server`` fixture pointed at the bundle's ``mcp/server.py``.  The
+legacy test module is imported, not copied: the parity twin cannot drift
+from the original.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import sys
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+BUNDLE_MCP_DIR = REPO_ROOT / "plugins" / "agentteams-teamharness" / "mcp"
+LEGACY_MCP_DIR = REPO_ROOT / "plugins" / "teamharness" / "mcp"
+LEGACY_PAUSE_GATE = (
+    REPO_ROOT / "plugins" / "tests" / "teamharness" / "test_pause_gate.py"
+)
+
+
+def _load_pause_gate_module() -> Any:
+    spec = importlib.util.spec_from_file_location(
+        "teamharness_pause_gate_parity_source", LEGACY_PAUSE_GATE
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        del sys.modules[spec.name]
+    return module
+
+
+pause_gate = _load_pause_gate_module()
+
+
+def _purge_legacy_mcp_modules() -> None:
+    """Drop ``mcp*`` modules imported from the LEGACY tree so the bundle
+    server binds to its own (byte-identical) copy: a cached legacy
+    ``mcp`` package would otherwise shadow the bundle's through
+    sys.modules and the parity run would silently test the wrong tree.
+    Only modules whose files live under the legacy tree are dropped."""
+    legacy_root = LEGACY_MCP_DIR.as_posix() + "/"
+    for name in [
+        name
+        for name, module in sys.modules.items()
+        if name == "mcp" or name.startswith("mcp.")
+    ]:
+        file = getattr(sys.modules[name], "__file__", None)
+        if file is not None and file.startswith(legacy_root):
+            del sys.modules[name]
+
+
+def _load_bundle_server() -> Any:
+    _purge_legacy_mcp_modules()
+    spec = importlib.util.spec_from_file_location(
+        "teamharness_mcp_server_pause_gate_parity_test",
+        BUNDLE_MCP_DIR / "server.py",
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(BUNDLE_MCP_DIR))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(BUNDLE_MCP_DIR))
+    return module
+
+
+@pytest.fixture()
+def server() -> Any:
+    return _load_bundle_server()
+
+
+def test_pause_between_body_read_and_etag_is_caught_by_versioned_read_in_bundle(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 15 (parity): the maintainer's overlap, run against the
+    bundle's compatibility copy."""
+    pause_gate.test_pause_between_body_read_and_etag_is_caught_by_versioned_read(
+        server, tmp_path, monkeypatch
+    )
+
+
+def test_versioned_read_exhausts_on_persistent_flip_no_stale_commit_in_bundle(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 16 (parity): the persistent version flip exhausts the bounded
+    read in the bundle's copy and commits nothing."""
+    pause_gate.test_versioned_read_exhausts_on_persistent_flip_no_stale_commit(
+        server, tmp_path, monkeypatch
+    )

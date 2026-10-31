@@ -75,6 +75,10 @@ def _sync_task(
 # same stance as the Go CAS loop).
 _SYNC_PROJECT_MAX_ATTEMPTS = 3
 _SYNC_PROJECT_RETRY_BACKOFFS = (0.1, 0.25)
+# Bounded retries for the versioned meta read: a version flip between the
+# bracketing stats discards the body and re-runs the read, but a writer in
+# flight on every attempt must not loop the sync forever.
+_SYNC_META_READ_ATTEMPTS = 3
 
 
 def _remote_project_meta_snapshot(
@@ -267,6 +271,55 @@ def _remote_project_meta_etag(
     return None, error
 
 
+def _remote_project_meta_consistent_read(
+    arguments: dict[str, Any], meta_path: str
+) -> tuple[dict[str, Any] | None, str | None, str | None]:
+    """One versioned read of the remote project meta, in the order
+    stat -> cat -> stat: the body is bracketed by two version reads that
+    must agree.  Returns (meta, etag, error):
+
+    - (meta, etag, None)  -> the body was read under version ``etag``, and
+      the etag is the only version this body may be merged AND committed
+      with (If-Match);
+    - (None, None, None)  -> the remote object does not exist (normal
+      first push);
+    - (None, None, reason) -> the read failed: a probe or the body read
+      errored, or the version changed between the bracketing stats on
+      every bounded attempt (a concurrent write is in flight).
+
+    A body whose surrounding versions disagree is discarded and the read
+    is retried, bounded to _SYNC_META_READ_ATTEMPTS.  A pause that lands
+    between the body read and the trailing stat therefore shows up as a
+    version change on THIS read, not as a stale body committed under a
+    fresh version — the window the maintainer's #1402 P1 named.  The
+    caller must not merge or commit without a consistent read: a body
+    unbound from its version is exactly the clobber this exists to close.
+    """
+    for _ in range(_SYNC_META_READ_ATTEMPTS):
+        first, error = _remote_project_meta_etag(arguments, meta_path)
+        if first is None:
+            if error:
+                return None, None, error
+            return None, None, None  # the remote object does not exist
+        snapshot, error = _remote_project_meta_snapshot(arguments, meta_path)
+        if error:
+            return None, None, error
+        second, error = _remote_project_meta_etag(arguments, meta_path)
+        if error:
+            return None, None, error
+        if second is None or second != first:
+            # Version flip between the bracketing stats (the object can
+            # even disappear): this body is not bound to any version —
+            # discard it and retry the read.
+            continue
+        return snapshot, second, None
+    return None, None, (
+        "the remote project meta version changed between the bracketing "
+        f"stats on every consistent read attempt ({_SYNC_META_READ_ATTEMPTS}); "
+        "the body was discarded rather than committed unbound from its version"
+    )
+
+
 def _commit_project_meta(project_id: str, meta: dict[str, Any], etag: str) -> dict[str, Any]:
     """Commit the merged meta through the controller's conditional
     endpoint: PUT {AGENTTEAMS_CONTROLLER_URL}/api/v1/projects/{id}/meta
@@ -375,34 +428,38 @@ def _sync_project(arguments: dict[str, Any], project_id: str) -> bool:
     unguarded directory mirror and never by an unconditional single-file
     push; every attempt:
 
-    1. snapshot the remote meta without touching local state (filesync
-       ``cat``; a failed snapshot is fail-open — the commit proceeds
-       without a merge, the same stance as the guard's probe; a pause
-       that landed anyway still triggers the 409 below, because the
-       commit matches the ETag, not the snapshot);
-    2. merge the controller-owned pause state from the snapshot into the
+    1. read the remote meta ONCE, versioned (``_remote_project_meta_consistent_read``:
+       filesync ``etag`` = ``mc stat --json`` -> ``cat`` -> ``etag`` again):
+       the committed body and the commit's version come from the same
+       consistent read — only a body whose surrounding versions match is
+       merged AND committed, with that version as the If-Match value; a
+       version flip between the bracketing stats discards the body and
+       retries the read, bounded to _SYNC_META_READ_ATTEMPTS;
+    2. merge the controller-owned pause state from that snapshot into the
        local meta and re-write it (``_merge_project_pause_state``), so
        every project writer (lifecycle transitions, project flow, state)
        inherits the protection;
     3. push the project directory EXCLUDING meta.json (derived files only:
        plan.md, result.md, ...);
-    4. read the ETag of the remote meta (filesync ``etag`` =
-       ``mc stat --json``); without an observed ETag there is nothing to
-       match against, so the attempt fails closed — degrading to an
-       unconditional write would re-open the exact clobber this exists to
-       close;
-    5. commit the merged meta conditionally against that ETag
-       (``_commit_project_meta``: PUT /api/v1/projects/{id}/meta with
-       If-Match): 409 (the meta changed after the read — a pause or
-       another writer) retries; every other failure (428/503/404/405 —
-       the controller is too old or its backend cannot strict-CAS — and
+    4. commit the merged meta conditionally against the version the
+       consistent read observed (``_commit_project_meta``: PUT
+       /api/v1/projects/{id}/meta with If-Match): 409 (the meta changed
+       after the read — a pause or another writer) retries the whole
+       versioned read + merge + commit; every other failure (428/503/404/405
+       — the controller is too old or its backend cannot strict-CAS — and
        network errors) fails closed;
-    6. verify the commit by re-reading the remote meta: if any pause state
+    5. verify the commit by re-reading the remote meta: if any pause state
        carried into the merged set is absent — or, when the merged meta
        carries no pause state at all, if the live ETag is not the one the
        commit returned (a pause landed between the commit and the re-read)
-       — re-snapshot, re-merge and retry, bounded to
+       — re-read, re-merge and retry, bounded to
        _SYNC_PROJECT_MAX_ATTEMPTS with _SYNC_PROJECT_RETRY_BACKOFFS.
+
+    Without a consistent read (object absent, a probe or body read error,
+    or the version flipping on every bounded read attempt) the attempt
+    fails closed: a conditional commit is impossible, and degrading to an
+    unconditional write — or committing a body unbound from its version —
+    would re-open the exact clobber this exists to close.
 
     Returns True only when the meta commit is verified (or the project
     carries no local meta.json, in which case the directory push is the
@@ -417,9 +474,24 @@ def _sync_project(arguments: dict[str, Any], project_id: str) -> bool:
     for attempt in range(1, _SYNC_PROJECT_MAX_ATTEMPTS + 1):
         if attempt > 1:
             time.sleep(_SYNC_PROJECT_RETRY_BACKOFFS[attempt - 2])
-        snapshot, _snapshot_error = _remote_project_meta_snapshot(arguments, meta_path)
         merged: dict[str, Any] | None = None
+        etag: str | None = None
         if has_local_meta:
+            # The ONE versioned read for this attempt: the snapshot for the
+            # merge and the If-Match version for the commit come from the
+            # same consistent read, so the committed body can never be
+            # bound to a version it was not read under.
+            snapshot, etag, read_error = _remote_project_meta_consistent_read(
+                arguments, meta_path
+            )
+            if etag is None:
+                # No observed version: the remote object is absent (nothing
+                # to match against), a probe or the body read failed, or the
+                # version flipped on every bounded read attempt.  A
+                # conditional commit is impossible. Fail closed — the
+                # unconditional write that lost concurrent pauses is exactly
+                # what this path retires.
+                return False
             merged = _merge_project_pause_state(_read_json(state_path), snapshot)
             _write_json(state_path, merged)
         dir_args = dict(arguments)
@@ -432,18 +504,12 @@ def _sync_project(arguments: dict[str, Any], project_id: str) -> bool:
             continue
         if not has_local_meta:
             return True
-        etag, _etag_error = _remote_project_meta_etag(arguments, meta_path)
-        if etag is None:
-            # No observed ETag (object missing or failed stat): a
-            # conditional commit is impossible. Fail closed — the
-            # unconditional write that lost concurrent pauses is exactly
-            # what this path retires.
-            return False
         commit = _commit_project_meta(project_id, merged, etag)
         if not commit.get("ok"):
             if commit.get("conflict"):
                 # The meta changed after the read (a pause or another
-                # writer): re-snapshot, re-merge and re-commit below.
+                # writer): re-read (versioned), re-merge and re-commit
+                # below.
                 continue
             # 428/503/404/405, network, or an unexpected response: fail
             # closed; never degrade to an unconditional push.

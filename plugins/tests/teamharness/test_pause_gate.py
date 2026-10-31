@@ -47,13 +47,25 @@ Covers (#1402 conditional commit, the later boundary and fail-closed):
     and the verify re-read (the removed early-return pin) -> the
     committed-ETag re-check catches the new version and the retry keeps
     the pause in both the committed meta and the local copy
-15. the controller rejects the conditional commit (404/405 = the
+15. the maintainer's #1402 P1 overlap (snapshot -> human pause ->
+    ETag/commit): the remote serves the unpaused body first, the pause
+    lands immediately after that read (new body, new ETag) -> the
+    versioned read (stat -> cat -> stat) detects the version change,
+    discards the stale read, re-reads, merges the pause and commits the
+    paused body — the final remote meta keeps pause_sources=["user"] and
+    status="paused", the worker's task update is present, and a fresh
+    pull reports paused
+16. the remote version flips between the bracketing stats on every read
+    (a writer in flight on every attempt) -> the bounded versioned read
+    discards every body and exhausts its attempts, and _sync_project
+    returns False without ever attempting a commit (no stale commit)
+17. the controller rejects the conditional commit (404/405 = the
     controller predates the endpoint, 428, 503) -> fail closed:
     _sync_project returns False and the meta is never written through an
     unconditional filesync push
-16. the remote meta object is absent (no ETag to match) -> fail closed
+18. the remote meta object is absent (no ETag to match) -> fail closed
     before any commit is attempted
-17. the ETag probe fails (a storage error, not an absent object) ->
+19. the ETag probe fails (a storage error, not an absent object) ->
     fail closed, no commit attempted
 """
 
@@ -140,10 +152,15 @@ class FakeProjectStorage:
     - ``pull`` writes the current remote object to the local file, then
       applies ``pull_mutation`` once (the concurrent Controller write
       that lands right after the worker's pull);
-    - ``cat`` reads the remote object without touching local state;
+    - ``cat`` reads the remote object without touching local state, then
+      applies ``cat_mutation`` once (the concurrent Controller write that
+      lands right after the worker's body read — the maintainer's
+      snapshot -> pause -> ETag window);
     - ``etag`` returns the store's content-derived etag (absent object
       -> the does-not-exist error ``mc stat --json`` produces;
-      ``etag_read_error`` forces a non-absent probe failure);
+      ``etag_read_error`` forces a non-absent probe failure) and, when
+      ``stat_mutation`` is set, applies it after every etag read (a
+      writer in flight between the bracketing stats);
     - a single-file push of a project meta is a hard test error
       (tripwire): the #1402 flow must commit the meta through the
       controller's conditional endpoint, never through an unconditional
@@ -169,6 +186,8 @@ class FakeProjectStorage:
         remote: dict[str, dict[str, Any]] | None = None,
         *,
         pull_mutation: Any = None,
+        cat_mutation: Any = None,
+        stat_mutation: Any = None,
         window_mutation: Any = None,
         commit_mutation: Any = None,
         drift_always: bool = False,
@@ -179,6 +198,8 @@ class FakeProjectStorage:
             key: dict(value) for key, value in (remote or {}).items()
         }
         self.pull_mutation = pull_mutation
+        self.cat_mutation = cat_mutation
+        self.stat_mutation = stat_mutation
         self.window_mutation = window_mutation
         self.commit_mutation = commit_mutation
         self.drift_always = drift_always
@@ -208,7 +229,15 @@ class FakeProjectStorage:
                     "ok": False,
                     "error": f"<ERROR> The object {path} does not exist.",
                 }
-            return {"ok": True, "content": json.dumps(meta)}
+            result = {"ok": True, "content": json.dumps(meta)}
+            if self.cat_mutation is not None:
+                # The concurrent Controller write lands immediately after
+                # this body read: the body is served, THEN the store
+                # changes (new body, new etag).
+                self.remote[path] = self.cat_mutation(self.remote[path])
+                if not self.drift_always:
+                    self.cat_mutation = None
+            return result
         if action == "etag":
             if self.etag_read_error is not None:
                 return {"ok": False, "error": self.etag_read_error}
@@ -218,7 +247,14 @@ class FakeProjectStorage:
                     "ok": False,
                     "error": f"<ERROR> The object {path} does not exist.",
                 }
-            return {"ok": True, "etag": etag}
+            result = {"ok": True, "etag": etag}
+            if self.stat_mutation is not None:
+                # A writer in flight between the bracketing stats: the
+                # version the caller just read is already stale.
+                self.remote[path] = self.stat_mutation(self.remote[path])
+                if not self.drift_always:
+                    self.stat_mutation = None
+            return result
         if action == "pull":
             meta = self.remote.get(path)
             if meta is None:
@@ -977,11 +1013,145 @@ def test_pause_between_commit_and_verify_is_caught_by_etag_reread(
     assert local["loop"]["pause_sources"] == ["user"]
 
 
+def test_pause_between_body_read_and_etag_is_caught_by_versioned_read(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 15 (the maintainer's #1402 P1 overlap): the remote serves the
+    unpaused body first; the human pause (status=paused,
+    loop.pause_sources=["user"]) lands immediately after that body read
+    (new body, new ETag).  The versioned read (stat -> cat -> stat) must
+    detect the version change, discard the stale read, re-read, merge
+    the pause and commit the paused body under the version it read with:
+    the final remote meta keeps the full pause state while the worker's
+    task update lands, and a fresh pull reports paused."""
+    monkeypatch.setattr(server.sync, "_SYNC_PROJECT_RETRY_BACKOFFS", (0.0, 0.0))
+    monkeypatch.setattr(
+        _taskflow_module(),
+        "_task_completion_notification",
+        lambda *args, **kwargs: {"sent": True, "eventId": "$pg15-completion"},
+    )
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "worker")
+    workspace = tmp_path / "agent"
+    task_id = "pg-15-inflight"
+    loop_tasks = [
+        {
+            "task_id": task_id,
+            "title": "In-flight pass",
+            "assigned_to": WORKER,
+            "depends_on": [],
+            "status": "assigned",
+        },
+    ]
+    base_meta = _project("pg-15", status="active", loop=_loop(tasks=loop_tasks))
+    storage = FakeProjectStorage(
+        {"shared/projects/pg-15/meta.json": base_meta},
+        cat_mutation=lambda meta: {
+            **meta,
+            "status": "paused",
+            "loop": {**meta["loop"], "pause_sources": ["user"]},
+        },
+    )
+    _install_sync_fakes(monkeypatch, server, storage)
+    _write_project(workspace, "pg-15", base_meta)
+    _write_task(
+        workspace,
+        task_id,
+        {
+            "task_id": task_id,
+            "project_id": "pg-15",
+            "room_id": ROOM,
+            "status": "assigned",
+            "assigned_to": WORKER,
+        },
+    )
+
+    submit = server._taskflow(
+        _arguments(workspace, "submit_task", taskId=task_id, status="SUCCESS", summary="done")
+    )
+
+    assert submit["ok"] is True
+    assert submit["task"]["status"] == "submitted"
+    # One commit: the pause was merged into the FIRST conditional commit
+    # (via the re-read), not lost to a stale body committed under a
+    # fresh ETag — and not papered over by a 409 retry.
+    assert storage.commit_calls == 1
+    final = storage.remote["shared/projects/pg-15/meta.json"]
+    assert final["status"] == "paused"
+    loop = final["loop"]
+    assert loop["pause_sources"] == ["user"]
+    # The worker's update landed alongside the preserved pause state.
+    assert loop["tasks"][0]["task_id"] == task_id
+    assert loop["tasks"][0]["status"] == "submitted"
+    # The versioned read bracketed the body with two stats, and the flip
+    # forced the re-read (a single cat / a single bracket would mean the
+    # pause landed after the read the commit was built from).
+    etag_reads = [call for call in storage.calls if call.get("action") == "etag"]
+    cat_reads = [call for call in storage.calls if call.get("action") == "cat"]
+    assert len(etag_reads) >= 4
+    assert len(cat_reads) >= 2
+    # The directory mirror must never have written meta.json.
+    dir_pushes = [
+        call
+        for call in storage.calls
+        if call.get("action") == "push" and call.get("path") == "shared/projects/pg-15"
+    ]
+    assert dir_pushes
+    assert all(call.get("exclude") == ["meta.json"] for call in dir_pushes)
+    # A fresh pull reports the pause to the reader: the explicit source
+    # plus the "project" source contributed by the legacy status (spec 6
+    # rule).
+    assert server.sync._pull_project(_arguments(workspace, "noop"), "pg-15") is True
+    state_module = importlib.import_module("mcp.project.state")
+    paused, sources = state_module._loop_pause_state(_read_project(workspace, "pg-15"))
+    assert paused is True
+    assert sources == ["project", "user"]
+
+
+def test_versioned_read_exhausts_on_persistent_flip_no_stale_commit(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 16: the remote version flips between the bracketing stats on
+    every read (a writer is in flight on every attempt) -> the first
+    versioned read must discard the body and retry, the bounded read
+    exhausts its attempts, and _sync_project returns False without ever
+    attempting a commit — a body unbound from its version is never
+    committed (no stale commit)."""
+    monkeypatch.setattr(server.sync, "_SYNC_PROJECT_RETRY_BACKOFFS", (0.0, 0.0))
+    workspace = tmp_path / "agent"
+    project_id = "pg-16"
+    meta_path = f"shared/projects/{project_id}/meta.json"
+    base_meta = _project(project_id, status="active", loop=_loop())
+    flips = 0
+
+    def _flip(meta: dict[str, Any]) -> dict[str, Any]:
+        nonlocal flips
+        flips += 1
+        return {**meta, "loop": {**meta["loop"], "flip": flips}}
+
+    storage = FakeProjectStorage(
+        {meta_path: base_meta},
+        stat_mutation=_flip,
+        drift_always=True,
+    )
+    _install_sync_fakes(monkeypatch, server, storage)
+    _write_project(workspace, project_id, base_meta)
+
+    assert server.sync._sync_project(_arguments(workspace, "noop"), project_id) is False
+    # The version really flipped on every stat (the test is not vacuous):
+    # at least one full read was discarded for it.
+    assert flips >= 2
+    assert storage.remote[meta_path] != base_meta
+    # ...yet no commit was ever attempted, and no discarded body reached
+    # the local state.
+    assert storage.commit_calls == 0
+    assert _read_project(workspace, project_id) == base_meta
+
+
 @pytest.mark.parametrize("status", [404, 405, 428, 503])
 def test_sync_project_fails_closed_on_endpoint_rejection(
     server: Any, tmp_path: Path, monkeypatch: Any, status: int
 ) -> None:
-    """Spec 15: the controller rejects the conditional commit (404/405 =
+    """Spec 17: the controller rejects the conditional commit (404/405 =
     the controller predates the endpoint, 428 = If-Match rejected, 503 =
     the backend cannot strict-CAS) -> _sync_project fails closed; the
     remote store is untouched and the meta is never written through an
@@ -1008,7 +1178,7 @@ def test_sync_project_fails_closed_on_endpoint_rejection(
 def test_sync_project_fails_closed_without_remote_etag(
     server: Any, tmp_path: Path, monkeypatch: Any
 ) -> None:
-    """Spec 16: the remote meta object is absent (no ETag to match) -> a
+    """Spec 18: the remote meta object is absent (no ETag to match) -> a
     conditional commit is impossible and _sync_project fails closed
     before any commit is attempted, instead of degrading to an
     unconditional push."""
@@ -1029,7 +1199,7 @@ def test_sync_project_fails_closed_without_remote_etag(
 def test_sync_project_fails_closed_on_etag_read_failure(
     server: Any, tmp_path: Path, monkeypatch: Any
 ) -> None:
-    """Spec 17: the ETag probe fails with a storage error (not an absent
+    """Spec 19: the ETag probe fails with a storage error (not an absent
     object) -> still fail closed: an unmatchable commit must not degrade
     to an unconditional push."""
     monkeypatch.setattr(server.sync, "_SYNC_PROJECT_RETRY_BACKOFFS", (0.0, 0.0))

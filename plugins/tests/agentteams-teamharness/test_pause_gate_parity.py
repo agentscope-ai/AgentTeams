@@ -1,13 +1,15 @@
 """Parity twin of the #1402 versioned-read regressions against the bundle.
 
-The two versioned-read regressions added to
+The versioned-read regressions added to
 ``plugins/tests/teamharness/test_pause_gate.py`` (spec 15: the
 maintainer's snapshot -> pause -> ETag/commit overlap; spec 16: the
-persistent version flip that exhausts the bounded read) must hold in the
-``plugins/agentteams-teamharness`` compatibility copy as well — the
-bundle ships a byte-identical ``mcp/`` tree (pinned by the drift test),
-and a regression that survives only in the live tree would ship to
-installations.
+persistent version flip that exhausts the bounded read; spec 18: the
+absent remote meta is the first push — the directory push including
+meta.json is the commit; spec 19: the unreadable stat fails closed with
+no half-write) must hold in the ``plugins/agentteams-teamharness``
+compatibility copy as well — the bundle ships a byte-identical
+``mcp/`` tree (pinned by the drift test), and a regression that survives
+only in the live tree would ship to installations.
 
 The SAME test functions as the legacy suite are executed here, with the
 ``server`` fixture pointed at the bundle's ``mcp/server.py``.  The
@@ -103,5 +105,27 @@ def test_versioned_read_exhausts_on_persistent_flip_no_stale_commit_in_bundle(
     """Spec 16 (parity): the persistent version flip exhausts the bounded
     read in the bundle's copy and commits nothing."""
     pause_gate.test_versioned_read_exhausts_on_persistent_flip_no_stale_commit(
+        server, tmp_path, monkeypatch
+    )
+
+
+def test_sync_project_first_push_when_remote_meta_absent_in_bundle(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 18 (parity): the absent remote meta is the first push in the
+    bundle's copy — the directory push including meta.json is the
+    commit, and no conditional commit is attempted."""
+    pause_gate.test_sync_project_first_push_when_remote_meta_absent(
+        server, tmp_path, monkeypatch
+    )
+
+
+def test_sync_project_fails_closed_on_etag_read_failure_in_bundle(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 19 (parity): the unreadable stat fails closed in the
+    bundle's copy — no commit, and no directory push that omits
+    meta.json."""
+    pause_gate.test_sync_project_fails_closed_on_etag_read_failure(
         server, tmp_path, monkeypatch
     )

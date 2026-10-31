@@ -63,10 +63,12 @@ Covers (#1402 conditional commit, the later boundary and fail-closed):
     controller predates the endpoint, 428, 503) -> fail closed:
     _sync_project returns False and the meta is never written through an
     unconditional filesync push
-18. the remote meta object is absent (no ETag to match) -> fail closed
-    before any commit is attempted
+18. the remote meta object is absent (no ETag to match) -> the normal
+    first push: the directory push INCLUDING meta.json (no conditional
+    commit, no exclusion) is the commit, and the sync returns its result
 19. the ETag probe fails (a storage error, not an absent object) ->
-    fail closed, no commit attempted
+    fail closed: no commit attempted, and no directory push that omits
+    meta.json either (an unknown remote version is never half-written)
 """
 
 from __future__ import annotations
@@ -174,11 +176,19 @@ class FakeProjectStorage:
       between the commit and the verify re-read); ``fail_closed``
       returns a scripted non-409 endpoint failure (428/503/404/405)
       instead of touching the store;
-    - directory pushes and task pushes are recorded and succeed.
+    - a directory push WITHOUT an exclusion mirrors the local meta.json
+      into the store (the first push: the directory push including
+      meta.json is the commit); one that excludes meta.json (the
+      conditional-commit path) never touches the meta object; both are
+      recorded and succeed;
+    - task pushes are recorded and succeed.
 
     In the real system the Controller's CreateProject writes the meta to
-    object storage, so a live project always has a remote meta (and
-    therefore an ETag); tests seed the store accordingly.
+    object storage, so a live project normally has a remote meta (and
+    therefore an ETag); tests of the conditional-commit path seed the
+    store accordingly. The store is left empty only for the first-push
+    case (spec 18): the remote object is absent, and the directory push
+    including meta.json is the commit.
     """
 
     def __init__(
@@ -271,6 +281,15 @@ class FakeProjectStorage:
             return {"ok": True}
         if action == "push":
             if self._is_directory(path):
+                if "exclude" not in arguments:
+                    # The first push: the directory mirror carries no
+                    # exclusion, so the local meta.json lands in the
+                    # store — the directory push IS the commit.
+                    meta_local = local / "meta.json"
+                    if meta_local.is_file():
+                        self.remote[f"{path}/meta.json"] = json.loads(
+                            meta_local.read_text(encoding="utf-8")
+                        )
                 return {"ok": True}
             if path.startswith("shared/projects/") and path.endswith("meta.json"):
                 raise AssertionError(
@@ -1175,13 +1194,13 @@ def test_sync_project_fails_closed_on_endpoint_rejection(
     assert storage.remote[meta_path] == base_meta
 
 
-def test_sync_project_fails_closed_without_remote_etag(
+def test_sync_project_first_push_when_remote_meta_absent(
     server: Any, tmp_path: Path, monkeypatch: Any
 ) -> None:
-    """Spec 18: the remote meta object is absent (no ETag to match) -> a
-    conditional commit is impossible and _sync_project fails closed
-    before any commit is attempted, instead of degrading to an
-    unconditional push."""
+    """Spec 18: the remote meta object is absent (no ETag to match) ->
+    the normal first push: there is nothing to match against, so the
+    directory push INCLUDING meta.json (no conditional commit, no
+    exclusion) is the commit, and _sync_project returns its result."""
     monkeypatch.setattr(server.sync, "_SYNC_PROJECT_RETRY_BACKOFFS", (0.0, 0.0))
     workspace = tmp_path / "agent"
     project_id = "pg-16"
@@ -1191,9 +1210,20 @@ def test_sync_project_fails_closed_without_remote_etag(
     _install_sync_fakes(monkeypatch, server, storage)
     _write_project(workspace, project_id, base_meta)
 
-    assert server.sync._sync_project(_arguments(workspace, "noop"), project_id) is False
+    assert server.sync._sync_project(_arguments(workspace, "noop"), project_id) is True
+    # The first push is the commit: no conditional commit was attempted.
     assert storage.commit_calls == 0
-    assert meta_path not in storage.remote
+    # ...and exactly one directory push went out, WITHOUT the
+    # conditional path's exclusion — meta.json is part of the push.
+    dir_pushes = [
+        call
+        for call in storage.calls
+        if call.get("action") == "push" and call.get("path") == f"shared/projects/{project_id}"
+    ]
+    assert len(dir_pushes) == 1
+    assert "exclude" not in dir_pushes[0]
+    # The meta landed in the store under the first push.
+    assert storage.remote[meta_path] == base_meta
 
 
 def test_sync_project_fails_closed_on_etag_read_failure(
@@ -1201,7 +1231,9 @@ def test_sync_project_fails_closed_on_etag_read_failure(
 ) -> None:
     """Spec 19: the ETag probe fails with a storage error (not an absent
     object) -> still fail closed: an unmatchable commit must not degrade
-    to an unconditional push."""
+    to an unconditional push, and the remote version is unknown, so the
+    conditional path's directory push (the one that omits meta.json)
+    must not go out either — the project is never half-written."""
     monkeypatch.setattr(server.sync, "_SYNC_PROJECT_RETRY_BACKOFFS", (0.0, 0.0))
     workspace = tmp_path / "agent"
     project_id = "pg-17"
@@ -1217,3 +1249,12 @@ def test_sync_project_fails_closed_on_etag_read_failure(
     assert server.sync._sync_project(_arguments(workspace, "noop"), project_id) is False
     assert storage.commit_calls == 0
     assert storage.remote[meta_path] == base_meta
+    # No directory push at all — neither the conditional path's push
+    # (excluding meta.json) nor a first-push-style push including it:
+    # the remote state could not even be probed.
+    dir_pushes = [
+        call
+        for call in storage.calls
+        if call.get("action") == "push" and call.get("path") == f"shared/projects/{project_id}"
+    ]
+    assert dir_pushes == []

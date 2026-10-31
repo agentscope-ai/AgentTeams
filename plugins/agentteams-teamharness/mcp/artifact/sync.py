@@ -455,16 +455,24 @@ def _sync_project(arguments: dict[str, Any], project_id: str) -> bool:
        — re-read, re-merge and retry, bounded to
        _SYNC_PROJECT_MAX_ATTEMPTS with _SYNC_PROJECT_RETRY_BACKOFFS.
 
-    Without a consistent read (object absent, a probe or body read error,
-    or the version flipping on every bounded read attempt) the attempt
-    fails closed: a conditional commit is impossible, and degrading to an
-    unconditional write — or committing a body unbound from its version —
-    would re-open the exact clobber this exists to close.
+    When the consistent read observes no version the two outcomes are kept
+    apart: the remote object ABSENT (no read error) is the normal first
+    push — there is nothing to match against, so the directory push
+    INCLUDING meta.json (no conditional commit, no exclusion) is the
+    commit and its result is returned; a read ERROR (a probe or body read
+    failure, or the version flipping on every bounded read attempt) fails
+    closed — the remote version is unknown, so a push including meta.json
+    could clobber a concurrent pause, and an unbound body is never
+    committed (degrading to an unconditional write, or committing a body
+    unbound from its version, would re-open the exact clobber this exists
+    to close).
 
     Returns True only when the meta commit is verified (or the project
     carries no local meta.json, in which case the directory push is the
-    whole commit).  An exhausted retry returns False — never a silent
-    success.
+    whole commit; or the remote meta is absent, in which case the
+    first-push directory push — including meta.json — is the commit).
+    An exhausted retry or a fail-closed read error returns False — never
+    a silent success.
     """
     meta_path = f"shared/projects/{project_id}/meta.json"
     dir_path = f"shared/projects/{project_id}"
@@ -485,13 +493,21 @@ def _sync_project(arguments: dict[str, Any], project_id: str) -> bool:
                 arguments, meta_path
             )
             if etag is None:
-                # No observed version: the remote object is absent (nothing
-                # to match against), a probe or the body read failed, or the
-                # version flipped on every bounded read attempt.  A
-                # conditional commit is impossible. Fail closed — the
-                # unconditional write that lost concurrent pauses is exactly
-                # what this path retires.
-                return False
+                if read_error is not None:
+                    # A probe or the body read failed, or the version
+                    # flipped on every bounded read attempt: the remote
+                    # version is unknown, so a push including meta.json
+                    # could clobber a concurrent pause.  Fail closed — an
+                    # unbound body is never committed.
+                    return False
+                # The remote object is absent (the normal first push):
+                # nothing to match against, so the directory push
+                # INCLUDING meta.json is the commit — no conditional
+                # commit, no exclusion — and its result is the result of
+                # the sync.
+                first_push = dict(arguments)
+                first_push.update({"action": "push", "path": dir_path})
+                return bool(_filesync(first_push).get("ok"))
             merged = _merge_project_pause_state(_read_json(state_path), snapshot)
             _write_json(state_path, merged)
         dir_args = dict(arguments)

@@ -161,6 +161,21 @@ echo "=== F) human gate: mark-cutover-done ==="
 out=$(bash "$TOOL" "${BASE[@]}" --mode mirror --state-dir "$WORK/stateB" --mark-cutover-done 2>&1); rc=$?
 [ "$rc" -eq 0 ] && pass "F1 mark-cutover-done exit 0" || fail "F1 mark-cutover-done exit 0 (rc=$rc)"
 [ "$(stage_of "$WORK/stateB")" = "CUTOVER_DONE" ] && pass "F2 state=CUTOVER_DONE" || fail "F2 state=CUTOVER_DONE (got $(stage_of "$WORK/stateB"))"
+# F3 (#1413 SIGPIPE regression): a consumer that closes the pipe early
+# (head -2) must not break the run. After its last log line the tool only
+# writes files, so rc must be 0 - or, at minimum, the state must have
+# advanced to CUTOVER_DONE.
+mkdir -p "$WORK/stateF3"
+jq -n '{stage:"CUTOVER_PENDING", src:{endpoint:"http://src.example:9000", buckets:["b"]}, dst:{endpoint:"http://dst.example:9090"}, stage_detail:{}}' > "$WORK/stateF3/state.json"
+bash "$TOOL" "${BASE[@]}" --mode mirror --state-dir "$WORK/stateF3" --mark-cutover-done 2>&1 | head -2
+rc3=${PIPESTATUS[0]}
+if [ "$rc3" -eq 0 ]; then
+  pass "F3 SIGPIPE regression: early-closing consumer, rc=0"
+elif [ "$(stage_of "$WORK/stateF3")" = "CUTOVER_DONE" ]; then
+  pass "F3 SIGPIPE regression: rc=$rc3 but state=CUTOVER_DONE"
+else
+  fail "F3 SIGPIPE regression: early-closing consumer (rc=$rc3, state=$(stage_of "$WORK/stateF3"))"
+fi
 
 echo
 echo "=== G) negative gate ==="

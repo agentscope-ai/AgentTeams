@@ -62,9 +62,12 @@ export MC_FIXTURE="$WORK/empty.json"; s5=$(window_sample); r5=$?
 s6=$(window_sample)
 [ "$s5" = "$s6" ] && ok "empty bucket digest is deterministic" || no "empty bucket digest not deterministic"
 
-# empty/garbage must fail, not silently pass
+# empty/garbage must fail, not silently pass. (The library source enables
+# set -e in this shell, so the failing call must sit in an if-condition -
+# a bare call would abort the suite before this check runs.)
 printf '%s\n' 'not json' > "$WORK/bad.json"
-export MC_FIXTURE="$WORK/bad.json"; window_sample >/dev/null; [ $? -ne 0 ] && ok "invalid listing is rejected" || no "invalid listing accepted"
+export MC_FIXTURE="$WORK/bad.json"
+if window_sample >/dev/null; then no "invalid listing accepted"; else ok "invalid listing is rejected"; fi
 
 echo "WINDOW RESULT: $([ "$fail" -eq 0 ] && echo PASS || echo FAIL) ($pass passed, $fail failed)"
 [ "$fail" -eq 0 ]

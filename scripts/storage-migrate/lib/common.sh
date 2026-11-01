@@ -43,11 +43,22 @@ STATE_FILE=""
 REPORT_FILE=""
 STATE_INT_LOCK=""
 
-# ---------- logging (stderr) ----------
+# ---------- logging (stderr + $LOG_FILE once parse_args has set it) ----------
+# #1413: the run record is also appended to $LOG_FILE, so a caller whose
+# consumer closes the pipe early (the terminal/CI tee losing the tail) cannot
+# lose the output of the failing run. The file write is best-effort: a
+# read-only state dir must not turn a log into a run killer.
 _ts() { date +%Y-%m-%dT%H:%M:%S%z; }
-log_info()  { echo "[$(_ts)] [INFO ] $*" >&2; }
-log_warn()  { echo "[$(_ts)] [WARN ] $*" >&2; }
-log_fail()  { echo "[$(_ts)] [FAIL ] $*" >&2; }
+_log() { # <tag e.g. "INFO "> <msg...> - stderr always; file when $LOG_FILE is set
+  local line="[$(_ts)] [$1] ${*:2}"
+  if [ -n "${LOG_FILE:-}" ]; then
+    printf '%s\n' "$line" >>"$LOG_FILE" 2>/dev/null || true
+  fi
+  printf '%s\n' "$line" >&2
+}
+log_info()  { _log "INFO " "$@"; }
+log_warn()  { _log "WARN " "$@"; }
+log_fail()  { _log "FAIL " "$@"; }
 die()       { local code="$1"; shift; log_fail "$*"; exit "$code"; }
 
 # ---------- trap: leave a trace on interrupt + resume hint (exit code 130) ----------
@@ -220,18 +231,33 @@ require_deps() {
   require_cmd bash mc curl jq flock
   # mc binary integrity (guards against an HTML 404 page saved as a binary)
   mc --version >/dev/null 2>&1 || die 4 "mc --version failed - the binary is corrupt (file $(which mc) must be ELF)"
-  local mcv
-  mcv=$(mc --version 2>/dev/null | head -1 | sed -n 's/.*RELEASE\.\([0-9][0-9T:-]*\).*/\1/p')
+  # #1413: capture each probe's output into a variable FIRST, then filter the
+  # variable. The previous shape (`cmd | head -1 | sed`, `cmd | grep -q`) put
+  # an early-exiting consumer on the pipe: when the producer's later write hit
+  # the closed end it died with SIGPIPE (rc=141), and under set -e + pipefail
+  # that 141 rode up through the bare assignment and killed the whole run -
+  # before the state write, so --mark-cutover-done left state=CUTOVER_PENDING
+  # (the CI signature). No pipes remain in this function.
+  local mcv mcv_raw mcv_first curl_ver curl_help has_sigv4=0
+  mcv_raw=$(mc --version 2>/dev/null) || mcv_raw=""
+  mcv_first=${mcv_raw%%$'\n'*}
+  mcv=$(sed -n 's/.*RELEASE\.\([0-9][0-9T:-]*\).*/\1/p' <<<"$mcv_first")
+  curl_ver=$(curl --version 2>/dev/null) || curl_ver=""
+  curl_ver=${curl_ver%%$'\n'*}
+  read -r _ curl_ver _ <<<"$curl_ver" || curl_ver=""
   # curl aws-sigv4 (hard requirement for the odm admin plane; fallback channel for admin SigV4)
-  local has_sigv4=0
-  curl --help all 2>/dev/null | grep -q aws-sigv4 && has_sigv4=1
+  if curl_help=$(curl --help all 2>/dev/null); then
+    case "$curl_help" in
+      *aws-sigv4*) has_sigv4=1 ;;
+    esac
+  fi
   if [ "$has_sigv4" -eq 0 ]; then
     if [ "$MODE" = "odm" ]; then
-      die 4 "curl lacks --aws-sigv4 (needs curl >= 7.88, have $(curl --version 2>/dev/null | head -1 | awk '{print $2}')): the odm admin plane is unavailable. Upgrade curl, run inside an image with curl >= 7.88, or use --mode mirror"
+      die 4 "curl lacks --aws-sigv4 (needs curl >= 7.88, have ${curl_ver:-unknown}): the odm admin plane is unavailable. Upgrade curl, run inside an image with curl >= 7.88, or use --mode mirror"
     fi
-    log_warn "curl lacks aws-sigv4 ($(curl --version 2>/dev/null | head -1 | awk '{print $2}')) - odm unavailable; admin SigV4 fallback degrades (mc admin only)"
+    log_warn "curl lacks aws-sigv4 (${curl_ver:-unknown}) - odm unavailable; admin SigV4 fallback degrades (mc admin only)"
   fi
-  log_info "dependency gate: bash=$BASH_VERSION mc=RELEASE.${mcv:-unknown} curl=$(curl --version 2>/dev/null | head -1 | awk '{print $2}') jq=$(jq --version 2>/dev/null) aws-sigv4=$has_sigv4"
+  log_info "dependency gate: bash=$BASH_VERSION mc=RELEASE.${mcv:-unknown} curl=${curl_ver:-unknown} jq=$(jq --version 2>/dev/null) aws-sigv4=$has_sigv4"
 }
 
 # ---------- robust mc admin list wrapper (0.2.0: 0.1.0 lost users/policies silently in two places) ----------

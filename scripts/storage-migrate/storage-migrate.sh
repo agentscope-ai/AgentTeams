@@ -6,10 +6,19 @@
 #                P7 per-component verification, P8 resume + observation
 #                (legacy mode without --deployment: P0->P2->P3->P4, cutover manual)
 set -euo pipefail
-# A consumer that closes the pipe early (a test harness piping through head, a
-# log collector) would otherwise SIGPIPE this script mid-phase and surface as
-# rc=141 with no output - which is what broke the verify job in CI. Ignoring
-# PIPE keeps the run alive; write errors still surface as EPIPE.
+# SIGPIPE discipline (#1413, was "verify job rc=141 in CI"): the run must not
+# die from a pipe whose reader left early. This is enforced in code, not by
+# ignoring the signal:
+#   1. lib/common.sh require_deps captures probe output into variables and
+#      filters the variables - no early-exiting consumer (head -1, grep -q)
+#      sits on the producing side, so SIGPIPE (141) cannot ride up through a
+#      bare assignment under set -e + pipefail and kill the run before the
+#      state write (that left --mark-cutover-done at CUTOVER_PENDING).
+#   2. The mark-cutover-done handler emits its only terminal line before the
+#      state write; everything after it is file-only, so `... | head -2`
+#      still yields rc=0 + CUTOVER_DONE.
+#   3. lib/common.sh appends every log line to $STATE_DIR/migrate.log, so a
+#      dead caller pipe cannot lose the failing run's record.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
@@ -1836,10 +1845,16 @@ main() {
         CUTOVER_PENDING) : ;;
         *) die 1 "state.stage=$stage (mark-cutover-done requires state=CUTOVER_PENDING; the automated flow records completion in P8)" ;;
       esac
-      state_stage "CUTOVER_DONE"
+      # #1413: emit the terminal line(s) FIRST, then do only file writes
+      # (state, report). By the time the state write happens, a caller whose
+      # consumer closed the pipe early (`... | head -2`) has already consumed
+      # every log line this run produces (dependency gate + this one), so no
+      # later write can SIGPIPE the run: rc stays 0 and the state still
+      # reaches CUTOVER_DONE.
+      log_info "state=CUTOVER_DONE - the $SHADOW_DAYS-day shadow period starts (keep the source read-only, do not delete)"
+      state_set stage '"CUTOVER_DONE"'
       report_add "cutover" "done" "pass" "operator acknowledgement recorded at $(now_iso) (it does not verify restarts or configuration)"
       report_write > "$STATE_DIR/report-final.json"
-      log_info "state=CUTOVER_DONE - the $SHADOW_DAYS-day shadow period starts (keep the source read-only, do not delete)"
       ;;
     *) die 4 "unknown --phase=$PHASE (all|quiesce|data|iam|verify|cutover|mark-cutover-done)" ;;
   esac

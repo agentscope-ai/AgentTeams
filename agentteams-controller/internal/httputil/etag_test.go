@@ -229,3 +229,57 @@ func TestETag_NoBodyNoETag(t *testing.T) {
 		t.Errorf("ETag = %q, want none without a JSON body", rec.Header().Get("ETag"))
 	}
 }
+
+// TestETag_DistinctBodiesDistinctETags pins the caller-scoping invariant
+// (issue #1480) at the middleware level: the validator is a function of
+// the exact bytes THIS call serialized, so two handlers standing in for
+// two visibility scopes (different row sets) must get different ETags,
+// and a foreign validator must miss against the other scope (200, full
+// body) — never a 304 that would hide the wider view. The only case in
+// which two callers share a validator is byte-identical bodies, where
+// the 304 replays nothing the caller does not already hold. (The real
+// auth-reduced bodies are pinned at the route level by
+// TestRouteETag_CallerScopedValidators.)
+func TestETag_DistinctBodiesDistinctETags(t *testing.T) {
+	// Two visibility scopes: the wider caller sees three rows, the
+	// narrower one only two.
+	wide := ETagMiddleware(jsonHandler(http.StatusOK, `{"total":3,"rows":["a","b","c"]}`))
+	narrow := ETagMiddleware(jsonHandler(http.StatusOK, `{"total":2,"rows":["a","b"]}`))
+
+	recWide := doETag(wide, "/x", "")
+	if recWide.Code != http.StatusOK {
+		t.Fatalf("wide status = %d, want 200", recWide.Code)
+	}
+	recNarrow := doETag(narrow, "/x", "")
+	if recNarrow.Code != http.StatusOK {
+		t.Fatalf("narrow status = %d, want 200", recNarrow.Code)
+	}
+	etagWide := recWide.Header().Get("ETag")
+	etagNarrow := recNarrow.Header().Get("ETag")
+	if !etagRe.MatchString(etagWide) || !etagRe.MatchString(etagNarrow) {
+		t.Fatalf("ETags = %q / %q, want quoted 32-hex each", etagWide, etagNarrow)
+	}
+	if etagWide == etagNarrow {
+		t.Fatalf("different row sets shared one ETag: %q", etagWide)
+	}
+
+	// Cross-caller: the narrower scope's validator must MISS against the
+	// wider scope — a 304 there would hide the extra rows.
+	if rec := doETag(wide, "/x", etagNarrow); rec.Code != http.StatusOK {
+		t.Fatalf("wide handler with the narrow validator: status = %d, want 200", rec.Code)
+	}
+
+	// The sharing boundary: byte-identical bodies are the ONLY case two
+	// callers can share a validator, and the 304 it answers replays
+	// nothing the caller does not already hold — safe by construction.
+	sameA := ETagMiddleware(jsonHandler(http.StatusOK, `{"total":1,"rows":["a"]}`))
+	sameB := ETagMiddleware(jsonHandler(http.StatusOK, `{"total":1,"rows":["a"]}`))
+	etagA := doETag(sameA, "/x", "").Header().Get("ETag")
+	etagB := doETag(sameB, "/x", "").Header().Get("ETag")
+	if etagA != etagB {
+		t.Fatalf("byte-identical bodies got different ETags: %q vs %q", etagA, etagB)
+	}
+	if rec := doETag(sameB, "/x", etagA); rec.Code != http.StatusNotModified {
+		t.Fatalf("shared validator on identical bytes: status = %d, want 304", rec.Code)
+	}
+}

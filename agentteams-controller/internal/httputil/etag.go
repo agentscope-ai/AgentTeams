@@ -27,6 +27,11 @@ const etagCacheControl = "private, max-age=0, must-revalidate"
 // application/json; every other status or media type passes through
 // byte-identical with no ETag.
 //
+// The benefit is wire bytes, not backend work: the handler — and the
+// backend queries it issues — runs in full on every request, including
+// a revalidation that ends in 304; a hit only saves the transfer of an
+// unchanged representation.
+//
 // Caller scoping is inherited, not computed: authorization runs before
 // this middleware, so the handler writes a body already reduced to the
 // caller's visibility, and the validator is a function of exactly those

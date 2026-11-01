@@ -1,6 +1,6 @@
 """AgentTeams Matrix platform plugin.
 
-Hermes v0.22.5 moved Matrix from ``gateway/platforms/matrix.py`` to the
+hermes-agent moved Matrix from ``gateway/platforms/matrix.py`` to the
 bundled ``plugins/platforms/matrix`` plugin.  At container startup this
 plugin is installed under the same path-derived key (``platforms/matrix``) and
 manifest name, so Hermes' user-over-bundled precedence replaces the stock

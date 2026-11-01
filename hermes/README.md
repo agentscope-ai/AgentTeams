@@ -2,7 +2,12 @@
 
 `hermes-worker` is the AgentTeams Worker runtime built on top of
 [hermes-agent](https://github.com/NousResearch/hermes-agent) (git tag
-`v0.22.5`).
+`v2026.9.24`).
+
+Python: `v2026.9.24` requires `>=3.11,<3.14`; the image runs on
+`python:3.11-slim`. (Do not port the Oct-2026 upstream line's 3.14-only
+runtime contract here — that tag's core dependencies are marker-gated
+to 3.14.)
 
 It plays the same role as `copaw-worker`:
 
@@ -80,7 +85,7 @@ The bridge maps `openclaw.json` to hermes config in the following way:
 ## Why a custom Matrix adapter?
 
 hermes-agent's stock adapter uses [mautrix](https://github.com/mautrix/python),
-and v0.22.5 moved it into a bundled platform plugin. AgentTeams does not fork
+and hermes-agent moved it into a bundled platform plugin. AgentTeams does not fork
 the transport: the user plugin keeps the stock mautrix adapter and only swaps in
 a subclass with the Worker policy layer (room allowlists, mention-required,
 free-response rooms, history buffering, vision gating). Reusing the upstream

@@ -1,6 +1,6 @@
 """AgentTeams Matrix overlay for hermes-worker.
 
-hermes-agent v0.22.5 moved Matrix out of ``gateway/platforms/`` into the
+hermes-agent moved Matrix out of ``gateway/platforms/`` into the
 bundled ``plugins/platforms/matrix`` platform plugin.  This package keeps the
 native mautrix transport and layers AgentTeams policy on top through a user
 plugin (``hermes/plugins/matrix-platform``) whose ``register()`` swaps the

@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -24,17 +26,40 @@ func etagRouteServer(t *testing.T, objs ...client.Object) (*HTTPServer, client.C
 	return NewHTTPServer(":0", ServerDeps{Client: k8s, Namespace: "default", AuthMw: mw}), k8s
 }
 
-// etagDo performs an authenticated GET through the real mux.
+// etagDo performs an authenticated GET through the real mux as the admin
+// (the "sa-token" every etagRouteServer accepts).
 func etagDo(t *testing.T, srv *HTTPServer, path, ifNoneMatch string) *httptest.ResponseRecorder {
+	return etagDoToken(t, srv, path, "sa-token", ifNoneMatch)
+}
+
+// etagDoToken performs an authenticated GET through the real mux with an
+// explicit bearer token, so one server can serve several callers.
+func etagDoToken(t *testing.T, srv *HTTPServer, path, token, ifNoneMatch string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, path, nil)
-	req.Header.Set("Authorization", "Bearer sa-token")
+	req.Header.Set("Authorization", "Bearer "+token)
 	if ifNoneMatch != "" {
 		req.Header.Set("If-None-Match", ifNoneMatch)
 	}
 	rec := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(rec, req)
 	return rec
+}
+
+// callerScopedAuth authenticates two callers with different visibility
+// scopes (issue #1475 PR-3): "sa-token" is the admin (sees every worker)
+// and "l2-token" is an L2 human scoped to alpha-team (sees only that
+// team's workers).
+type callerScopedAuth struct{}
+
+func (a *callerScopedAuth) Authenticate(_ context.Context, token string) (*authpkg.CallerIdentity, error) {
+	switch token {
+	case "sa-token":
+		return &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"}, nil
+	case "l2-token":
+		return &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"alpha-team"}}, nil
+	}
+	return nil, errors.New("unknown token " + token)
 }
 
 // TestRouteETag_WorkersSpecView pins the route-level contract for
@@ -238,5 +263,98 @@ func TestRouteETag_NotGlobal(t *testing.T) {
 		if !wantETag && etag != "" {
 			t.Errorf("%s: ETag %q present on an unprotected route", path, etag)
 		}
+	}
+}
+
+// TestRouteETag_CallerScopedValidators pins the caller-scoping guarantee
+// (issue #1475 PR-3): the validator is computed over the bytes THIS call
+// serialized, so two callers with different visibility get different
+// ETags; each caller's own validator still 304s, while the OTHER caller's
+// validator misses (200 with the full body) — a 304 can only replay bytes
+// the caller already holds, so no visibility difference can leak through
+// a cross-caller match.
+func TestRouteETag_CallerScopedValidators(t *testing.T) {
+	alpha := team("alpha-team")
+	alpha.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{{Name: "w1", Role: "worker"}}
+	beta := team("beta-team")
+	beta.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{{Name: "w2", Role: "worker"}}
+	w1 := &v1beta1.Worker{}
+	w1.Name = "w1"
+	w1.Namespace = "default"
+	w1.Spec.WorkerName = "w1-display"
+	w1.Spec.Model = "model-a"
+	w2 := &v1beta1.Worker{}
+	w2.Name = "w2"
+	w2.Namespace = "default"
+	w2.Spec.WorkerName = "w2-display"
+	w2.Spec.Model = "model-b"
+
+	k8s := fake.NewClientBuilder().WithScheme(newServerTestScheme(t)).WithObjects(alpha, beta, w1, w2).Build()
+	mw := authpkg.NewMiddleware(&callerScopedAuth{}, authpkg.NewCREnricher(k8s, "default"), authpkg.NewAuthorizer(), k8s, "default")
+	srv := NewHTTPServer(":0", ServerDeps{Client: k8s, Namespace: "default", AuthMw: mw})
+	const path = "/api/v1/workers?fields=spec"
+
+	admin := etagDoToken(t, srv, path, "sa-token", "")
+	if admin.Code != http.StatusOK {
+		t.Fatalf("admin status = %d, want 200 (body %s)", admin.Code, admin.Body.String())
+	}
+	etagRe := regexp.MustCompile(`^"[0-9a-f]{32}"$`)
+	etagAdmin := admin.Header().Get("ETag")
+	if !etagRe.MatchString(etagAdmin) {
+		t.Fatalf("admin ETag = %q, want a quoted 32-hex sha256-128", etagAdmin)
+	}
+
+	l2 := etagDoToken(t, srv, path, "l2-token", "")
+	if l2.Code != http.StatusOK {
+		t.Fatalf("L2 status = %d, want 200 (body %s)", l2.Code, l2.Body.String())
+	}
+	etagL2 := l2.Header().Get("ETag")
+	if !etagRe.MatchString(etagL2) {
+		t.Fatalf("L2 ETag = %q, want a quoted 32-hex sha256-128", etagL2)
+	}
+
+	// The two callers really see different representations: the admin
+	// both workers, the L2 human only alpha-team's.
+	var adminList, l2List workerListProjection
+	if err := json.Unmarshal(admin.Body.Bytes(), &adminList); err != nil {
+		t.Fatalf("decode admin list: %v", err)
+	}
+	if err := json.Unmarshal(l2.Body.Bytes(), &l2List); err != nil {
+		t.Fatalf("decode L2 list: %v", err)
+	}
+	if adminList.Total != 2 || l2List.Total != 1 {
+		t.Fatalf("visibility = admin %d / L2 %d workers, want 2 / 1", adminList.Total, l2List.Total)
+	}
+	if etagAdmin == etagL2 {
+		t.Fatalf("different visibility scopes shared one ETag: %q", etagAdmin)
+	}
+
+	// Each caller's own validator still hits: 304 with an empty body.
+	for _, tc := range []struct {
+		name  string
+		token string
+		etag  string
+	}{
+		{"admin-replay", "sa-token", etagAdmin},
+		{"l2-replay", "l2-token", etagL2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := etagDoToken(t, srv, path, tc.token, tc.etag)
+			if rec.Code != http.StatusNotModified {
+				t.Fatalf("status = %d, want 304 (body %s)", rec.Code, rec.Body.String())
+			}
+			if rec.Body.Len() != 0 {
+				t.Errorf("304 body = %q, want empty", rec.Body.String())
+			}
+		})
+	}
+
+	// Cross-caller: the other caller's validator must MISS (200 with the
+	// full body) — never a 304, which would hide the visibility difference.
+	if rec := etagDoToken(t, srv, path, "sa-token", etagL2); rec.Code != http.StatusOK {
+		t.Fatalf("admin with the L2 validator: status = %d, want 200 (a 304 would hide the wider view)", rec.Code)
+	}
+	if rec := etagDoToken(t, srv, path, "l2-token", etagAdmin); rec.Code != http.StatusOK {
+		t.Fatalf("L2 with the admin validator: status = %d, want 200 (a 304 would leak the narrower view)", rec.Code)
 	}
 }

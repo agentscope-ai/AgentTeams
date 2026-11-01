@@ -27,6 +27,15 @@ const etagCacheControl = "private, max-age=0, must-revalidate"
 // application/json; every other status or media type passes through
 // byte-identical with no ETag.
 //
+// Caller scoping is inherited, not computed: authorization runs before
+// this middleware, so the handler writes a body already reduced to the
+// caller's visibility, and the validator is a function of exactly those
+// bytes. Callers with different visibility scopes therefore serialize
+// different bytes and never share a validator; a foreign If-None-Match
+// can only match when the two representations are byte-identical, in
+// which case the 304 replays nothing the caller does not already hold —
+// no visibility difference can leak through it.
+//
 // The middleware buffers the whole body before writing it out, so it must
 // only wrap endpoints with bounded JSON responses — never file downloads
 // or streaming routes.

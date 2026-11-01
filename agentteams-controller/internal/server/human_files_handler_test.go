@@ -698,6 +698,97 @@ func TestHumanFiles_IfMatchConflict(t *testing.T) {
 	}
 }
 
+// A soft delete replaces the live object with a zero-byte tombstone whose
+// MD5 ETag equals an empty file's. A PUT carrying the pre-deletion
+// If-Match must not pass the ETag comparison against the tombstone and
+// revive the logically deleted file: it fails exactly like a missing
+// file. An explicit recreation without If-Match still succeeds.
+func TestHumanFiles_TombstoneIfMatchRejected(t *testing.T) {
+	hfh, _, _ := newHumanFilesRig(t)
+
+	putWithMatch := func(path, content, match string) *httptest.ResponseRecorder {
+		req := hfReq(t, http.MethodPut, "alice", path, hfSelf(), strings.NewReader(content))
+		req.Header.Set("If-Match", match)
+		rec := httptest.NewRecorder()
+		hfh.putFile(rec, req)
+		return rec
+	}
+	softDelete := func(path string) {
+		rec := httptest.NewRecorder()
+		hfh.deleteFile(rec, hfReq(t, http.MethodDelete, "alice", path, hfSelf(), nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("delete %s: %d %s", path, rec.Code, rec.Body.String())
+		}
+	}
+	getCode := func(path string) int {
+		rec := httptest.NewRecorder()
+		hfh.getFile(rec, hfReq(t, http.MethodGet, "alice", path, hfSelf(), nil))
+		return rec.Code
+	}
+
+	// An empty file: its MD5 ETag is identical to the zero-byte tombstone's.
+	rec := hfPutFile(t, hfh, "alice", "empty.txt", hfSelf(), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put empty: %d %s", rec.Code, rec.Body.String())
+	}
+	var putResp struct {
+		ETag string `json:"etag"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &putResp); err != nil {
+		t.Fatal(err)
+	}
+	etagEmpty := putResp.ETag
+	softDelete("empty.txt")
+	if code := getCode("empty.txt"); code != http.StatusNotFound {
+		t.Fatalf("GET deleted empty file: got %d, want 404", code)
+	}
+	// The pre-deletion If-Match must not write through the tombstone.
+	rec = putWithMatch("empty.txt", "revived", etagEmpty)
+	if rec.Code != http.StatusPreconditionFailed {
+		t.Fatalf("If-Match on a deleted empty file: got %d, want 412: %s", rec.Code, rec.Body.String())
+	}
+	var coded humanFileCodedError
+	if err := json.Unmarshal(rec.Body.Bytes(), &coded); err != nil {
+		t.Fatal(err)
+	}
+	if coded.Code != "etag_mismatch" {
+		t.Fatalf("code = %q, want etag_mismatch", coded.Code)
+	}
+	if code := getCode("empty.txt"); code != http.StatusNotFound {
+		t.Fatalf("tombstone was written through: GET = %d, want 404", code)
+	}
+
+	// A non-empty file fails the same way.
+	rec = hfPutFile(t, hfh, "alice", "data.txt", hfSelf(), "payload")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put data: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &putResp); err != nil {
+		t.Fatal(err)
+	}
+	softDelete("data.txt")
+	if code := getCode("data.txt"); code != http.StatusNotFound {
+		t.Fatalf("GET deleted data file: got %d, want 404", code)
+	}
+	if rec := putWithMatch("data.txt", "revived", putResp.ETag); rec.Code != http.StatusPreconditionFailed {
+		t.Fatalf("If-Match on a deleted non-empty file: got %d, want 412: %s", rec.Code, rec.Body.String())
+	}
+
+	// Explicit recreation without If-Match still succeeds: a tombstone is
+	// an absent target, not a write conflict.
+	if rec := hfPutFile(t, hfh, "alice", "data.txt", hfSelf(), "reborn"); rec.Code != http.StatusOK {
+		t.Fatalf("unconditional recreate: got %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if code := getCode("data.txt"); code != http.StatusOK {
+		t.Fatalf("GET recreated file: got %d, want 200", code)
+	}
+
+	// Control: If-Match on a path that never existed -> 412 (unchanged).
+	if rec := putWithMatch("fresh.txt", "x", "whatever"); rec.Code != http.StatusPreconditionFailed {
+		t.Fatalf("If-Match on absent path: got %d, want 412: %s", rec.Code, rec.Body.String())
+	}
+}
+
 // --- Size limit -----------------------------------------------------------------
 
 func TestHumanFiles_SizeLimit(t *testing.T) {
@@ -3076,4 +3167,3 @@ func TestHumanFiles_TrashPurgeAfterLeaseExpiryQuotaRace(t *testing.T) {
 		t.Errorf("upload after the stale purge: got %d, want 413: %s", rec.Code, rec.Body.String())
 	}
 }
-

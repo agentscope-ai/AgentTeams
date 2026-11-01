@@ -103,6 +103,35 @@ def _pull_task(arguments: dict[str, Any], task_id: str) -> bool:
     return True
 
 
+# mc phrases an absent object/prefix with these markers; every other
+# failure (network, auth, backend) must stay fail-closed.
+_ABSENT_STORAGE_MARKERS = (
+    "does not exist",
+    "not found",
+    "no such key",
+    "no such object",
+    "nosuchkey",
+)
+
+
+def _remote_task_absent(arguments: dict[str, Any], task_id: str) -> bool:
+    """True only when shared storage CONFIRMS the task meta is absent.
+
+    ``pull`` (mc mirror of the task directory) fails for a missing source
+    exactly like it fails for a storage outage, so a failed pull on its own
+    cannot tell "brand-new task" from "unreadable task". A stat probe on the
+    meta object separates them: mc's absence phrasings mean the caller is
+    creating the task (first delegation), anything else stays fail-closed.
+    """
+    probe = dict(arguments)
+    probe.update({"action": "stat", "path": f"shared/tasks/{task_id}/meta.json"})
+    result = _filesync(probe)
+    if result.get("ok"):
+        return False
+    error = str(result.get("error") or "").lower()
+    return any(marker in error for marker in _ABSENT_STORAGE_MARKERS)
+
+
 def _load_authoritative_task_optional(
     arguments: dict[str, Any], task_id: str
 ) -> dict[str, Any] | None:
@@ -116,6 +145,12 @@ def _load_authoritative_task_optional(
     raising.
     """
     if not _pull_task(arguments, task_id):
+        # A failed pull is ambiguous: a brand-new task has no remote prefix
+        # at all (the first delegation), while a storage failure has a
+        # remote copy the caller must not overwrite. Only a CONFIRMED
+        # absence takes the creation path; everything else fails closed.
+        if _remote_task_absent(arguments, task_id):
+            return None
         raise ValueError(
             "cannot pull the authoritative task state from shared storage; "
             "refusing to write on a stale local copy (retry)"

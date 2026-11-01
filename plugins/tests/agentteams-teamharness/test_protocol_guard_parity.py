@@ -1509,3 +1509,49 @@ def test_r11_parity_submit_pull_failure_refuses_stale_copy(
     assert result["ok"] is False
     assert "stale local copy" in result["error"]
     assert shared_remote["committed"] is None
+
+
+# --- Round 12 (#1467): first delegation with an absent remote task ----------
+# The source-tree module is imported lazily (it binds no `mcp` package at
+# import time), so this file's bundle-tree `mcp` stays the single identity
+# in this process.
+
+
+def _load_first_delegation_module() -> Any:
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "teamharness"
+        / "mcp"
+        / "test_first_delegation_absent_prefix.py"
+    )
+    spec = importlib.util.spec_from_file_location("legacy_first_delegation_r12", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_r12_parity_first_delegation_with_an_absent_prefix(
+    bound_server: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A brand-new task has no remote prefix: the copy must still create it
+    (the failed pull is confirmed absent, not treated as a storage error)."""
+    _load_first_delegation_module().test_first_delegation_succeeds_with_an_absent_remote_prefix(
+        server, tmp_path, monkeypatch
+    )
+
+
+def test_r12_parity_existing_task_failed_pull_still_fails_closed(
+    bound_server: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _load_first_delegation_module().test_existing_task_with_a_failed_pull_still_fails_closed(
+        server, tmp_path, monkeypatch
+    )
+
+
+def test_r12_parity_storage_outage_fails_closed(
+    bound_server: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _load_first_delegation_module().test_storage_outage_fails_closed(
+        server, tmp_path, monkeypatch
+    )

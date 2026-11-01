@@ -185,8 +185,6 @@ lifecycle_install_release() {
   [ -f "${release_dir}/dist/src/index.js" ] \
     || lifecycle_fail "release has no built entry (dist/src/index.js): $release_dir"
 
-  lifecycle_apply_channel_config
-
   lifecycle_log "Installing plugin from ${release_dir}"
   # --force: noninteractive local-path install (source trust) and overwrite
   # of an existing install target. --accept-capabilities: this plugin declares
@@ -194,6 +192,13 @@ lifecycle_install_release() {
   # noninteractive on hosts that prompt for local copies.
   "$OPENCLAW_BIN" plugins install --force --accept-capabilities "$release_dir" \
     || lifecycle_fail "openclaw plugins install failed for $release_dir"
+
+  # The channel section may only be written AFTER the plugin is registered:
+  # the CLI validates the whole config on every command, and on a fresh home
+  # it rejects the invalid config with `unknown channel id: <id>`, which made
+  # `plugins install` fail and left the invalid section behind (round 14).
+  # Installing first also means a failed install leaves the config untouched.
+  lifecycle_apply_channel_config
 
   lifecycle_log "Enabling ${PLUGIN_ID}"
   "$OPENCLAW_BIN" plugins enable "$PLUGIN_ID" \

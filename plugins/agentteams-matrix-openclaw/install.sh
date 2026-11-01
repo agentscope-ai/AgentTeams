@@ -6,9 +6,12 @@
 #      current version already exists)
 #   2. materialize a self-contained release directory under
 #      ${AGENTTEAMS_OPENCLAW_STATE_DIR:-~/.agentteams/openclaw-matrix}/releases/
-#   3. write channels.agentteams-matrix into the OpenClaw config
+#   3. openclaw plugins install --force --accept-capabilities <release-dir>
+#      (registering the channel id first — the CLI rejects a config that
+#      references an unknown channel, and a failed install must not leave
+#      the channel section behind)
+#   4. write channels.agentteams-matrix into the OpenClaw config
 #      (enabled:true, socketPath, agent — env-driven, existing extra keys kept)
-#   4. openclaw plugins install --force --accept-capabilities <release-dir>
 #   5. openclaw plugins enable agentteams-matrix
 #   6. openclaw plugins reload agentteams-matrix --wait (best effort)
 #   7. assert: openclaw plugins list --json + --enabled show the plugin

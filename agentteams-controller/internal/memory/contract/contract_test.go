@@ -376,14 +376,36 @@ func testIdempotency(t *testing.T, h *harness) {
 		t.Fatalf("export = %d entries, want 2", len(got))
 	}
 
-	// Same key, same content, different anchor: the payload hash
-	// includes the anchor, so this is a conflict, not a cross-scope
-	// replay.
+	// Same key, same content, different anchor: idempotency keys are
+	// scoped to the anchor, so this is a fresh create under
+	// human:carol — no cross-scope replay, and no cross-scope
+	// conflict (a conflict would carry the other anchor's current).
 	cross := h.doJSON(t, http.MethodPost, "/memory/human:carol", idemKey("key-1"), map[string]any{
 		"content_type": "fact",
 		"text":         "original",
 	})
-	requireStatus(t, cross, http.StatusConflict, "same key under a different anchor")
+	requireStatus(t, cross, http.StatusCreated, "same key under a different anchor")
+	crossE := entry(t, cross)
+	if crossE.ID == e1.ID || crossE.Anchor.String() != "human:carol" || crossE.Revision != 1 {
+		t.Fatalf("cross-anchor create = %+v, want a fresh revision-1 entry under human:carol", crossE)
+	}
+	if got := h.export(t, anchor); len(got) != 2 {
+		t.Fatalf("export under the original anchor = %d entries, want 2 (untouched)", len(got))
+	}
+	if got := h.export(t, "human:carol"); len(got) != 1 || got[0].ID != crossE.ID {
+		t.Fatalf("export under human:carol = %+v, want exactly the new entry", got)
+	}
+
+	// The original key still replays against the original entry
+	// (scoping must not break same-anchor replay).
+	replay2 := h.doJSON(t, http.MethodPost, "/memory/"+anchor, idemKey("key-1"), map[string]any{
+		"content_type": "fact",
+		"text":         "original",
+	})
+	requireStatus(t, replay2, http.StatusCreated, "same-anchor replay after cross-anchor create")
+	if e := entry(t, replay2); e.ID != e1.ID {
+		t.Fatalf("replay = %+v, want the first entry", e)
+	}
 }
 
 // Case 4: forget then restore — the forgotten entry disappears from
@@ -452,6 +474,7 @@ func testPCErrors(t *testing.T, h *harness) {
 	ctx := context.Background()
 	store := h.store
 
+	pa := memory.Anchor{Kind: memory.KindHuman, ID: "pc"}
 	upstream := memory.Entry{
 		ID:          "upstream-7",
 		Anchor:      memory.Anchor{Kind: memory.KindTeam, ID: "t1"},
@@ -468,7 +491,7 @@ func testPCErrors(t *testing.T, h *harness) {
 
 	// 412 with a usable current → ErrConflict carrying it.
 	h.fakePC.SetOverride("PUT", "/entries/whatever-1", http.StatusPreconditionFailed, conflictBody)
-	_, err := store.Replace(ctx, "whatever-1", 1, memory.Patch{})
+	_, err := store.Replace(ctx, pa, "whatever-1", 1, memory.Patch{})
 	if !memory.IsConflict(err) {
 		t.Fatalf("412: err = %v, want ErrConflict", err)
 	}
@@ -478,14 +501,14 @@ func testPCErrors(t *testing.T, h *harness) {
 
 	// 428 maps the same way.
 	h.fakePC.SetOverride("PUT", "/entries/whatever-2", http.StatusPreconditionRequired, conflictBody)
-	_, err = store.Replace(ctx, "whatever-2", 1, memory.Patch{})
+	_, err = store.Replace(ctx, pa, "whatever-2", 1, memory.Patch{})
 	if !memory.IsConflict(err) {
 		t.Fatalf("428: err = %v, want ErrConflict", err)
 	}
 
 	// 404 → ErrNotFound.
 	h.fakePC.SetOverride("PUT", "/entries/whatever-3", http.StatusNotFound, map[string]any{"code": "not_found"})
-	_, err = store.Replace(ctx, "whatever-3", 1, memory.Patch{})
+	_, err = store.Replace(ctx, pa, "whatever-3", 1, memory.Patch{})
 	if !errors.Is(err, memory.ErrNotFound) {
 		t.Fatalf("404: err = %v, want ErrNotFound", err)
 	}
@@ -493,7 +516,7 @@ func testPCErrors(t *testing.T, h *harness) {
 	// 401 / 403 → ErrForbidden.
 	for i, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
 		h.fakePC.SetOverride("PUT", "/entries/whatever-auth-"+string(rune('0'+i)), status, map[string]any{"code": "denied"})
-		_, err = store.Replace(ctx, "whatever-auth-"+string(rune('0'+i)), 1, memory.Patch{})
+		_, err = store.Replace(ctx, pa, "whatever-auth-"+string(rune('0'+i)), 1, memory.Patch{})
 		if !errors.Is(err, memory.ErrForbidden) {
 			t.Fatalf("%d: err = %v, want ErrForbidden", status, err)
 		}
@@ -502,13 +525,14 @@ func testPCErrors(t *testing.T, h *harness) {
 	// A precondition failure without a usable current is a generic
 	// error — never a partial trust of the body.
 	h.fakePC.SetOverride("PUT", "/entries/whatever-9", http.StatusPreconditionFailed, map[string]any{"code": "revision_conflict"})
-	_, err = store.Replace(ctx, "whatever-9", 1, memory.Patch{})
+	_, err = store.Replace(ctx, pa, "whatever-9", 1, memory.Patch{})
 	if err == nil || memory.IsConflict(err) || errors.Is(err, memory.ErrNotFound) || errors.Is(err, memory.ErrForbidden) {
 		t.Fatalf("412 without current: err = %v, want a generic (non-domain) error", err)
 	}
 
 	// The client sends the contract headers: Idempotency-Key on
-	// create, If-Match on replace.
+	// create, If-Match on replace, and the anchor in the query of
+	// every mutation.
 	e, err := store.Create(ctx, memory.NewEntry{
 		Anchor:         memory.Anchor{Kind: memory.KindHuman, ID: "rec"},
 		ContentType:    "fact",
@@ -518,7 +542,7 @@ func testPCErrors(t *testing.T, h *harness) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if _, err := store.Replace(ctx, e.ID, 1, memory.Patch{Text: strPtr("v2")}); err != nil {
+	if _, err := store.Replace(ctx, e.Anchor, e.ID, 1, memory.Patch{Text: strPtr("v2")}); err != nil {
 		t.Fatalf("replace: %v", err)
 	}
 	var sawIdem, sawIfMatch bool
@@ -528,6 +552,9 @@ func testPCErrors(t *testing.T, h *harness) {
 		}
 		if rec.Method == http.MethodPut && rec.Path == "/entries/"+e.ID && rec.Header.Get("If-Match") == `"1"` {
 			sawIfMatch = true
+			if q, _ := url.ParseQuery(rec.Query); q.Get("anchor") != e.Anchor.String() {
+				t.Fatalf("PUT query anchor = %q, want %q", q.Get("anchor"), e.Anchor)
+			}
 		}
 	}
 	if !sawIdem {
@@ -570,7 +597,7 @@ func testNoCredentialLeak(t *testing.T, h *harness) {
 	assertNoFragment(t, string(resp.body), fragments)
 
 	// (d) the store-level error string is static too.
-	_, err := h.store.Replace(context.Background(), e.ID, 1, memory.Patch{Text: strPtr(dirty)})
+	_, err := h.store.Replace(context.Background(), e.Anchor, e.ID, 1, memory.Patch{Text: strPtr(dirty)})
 	if err == nil {
 		t.Fatal("expected a conflict from the stale store-level replace")
 	}

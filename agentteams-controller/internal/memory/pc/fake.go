@@ -57,12 +57,14 @@ func (m *InMemory) SetNow(now func() time.Time) {
 	m.now = now
 }
 
-// Peek returns the stored entry regardless of tombstone state, for
-// the fake server's 428/412 current bodies. Not part of memory.Store.
-func (m *InMemory) Peek(id string) (memory.Entry, bool) {
+// Peek returns the stored entry under anchor regardless of tombstone
+// state, for the fake server's 428/412 current bodies. An id that
+// exists only under a different anchor is reported as missing. Not
+// part of memory.Store.
+func (m *InMemory) Peek(anchor memory.Anchor, id string) (memory.Entry, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if e, ok := m.entries[id]; ok {
+	if e, ok := m.entries[id]; ok && e.e.Anchor == anchor {
 		return e.e, true
 	}
 	return memory.Entry{}, false
@@ -78,7 +80,7 @@ func (m *InMemory) Create(_ context.Context, in memory.NewEntry) (memory.Entry, 
 	defer m.mu.Unlock()
 
 	if in.IdempotencyKey.IsSet() {
-		if rec, ok := m.idem[string(in.IdempotencyKey)]; ok {
+		if rec, ok := m.idem[in.ScopedKey()]; ok {
 			e, exists := m.entries[rec.entryID]
 			if !exists || e.deleted {
 				return memory.Entry{}, memory.ErrNotFound
@@ -106,16 +108,21 @@ func (m *InMemory) Create(_ context.Context, in memory.NewEntry) (memory.Entry, 
 	}
 	m.entries[id] = &memEntry{e: entry}
 	if in.IdempotencyKey.IsSet() {
-		m.idem[string(in.IdempotencyKey)] = &idemRecord{entryID: id, payloadHash: memory.PayloadHash(in)}
+		m.idem[in.ScopedKey()] = &idemRecord{entryID: id, payloadHash: memory.PayloadHash(in)}
 	}
 	return entry, nil
 }
 
-func (m *InMemory) Replace(_ context.Context, id string, ifRevision uint64, patch memory.Patch) (memory.Entry, error) {
+// The mutations below bind the anchor with the lookup itself: an id
+// that exists only under a different anchor is ErrNotFound, the entry
+// is left untouched, and no ErrConflict (with its Current) can ever be
+// produced for it — the same semantics as the SQLite backend.
+
+func (m *InMemory) Replace(_ context.Context, anchor memory.Anchor, id string, ifRevision uint64, patch memory.Patch) (memory.Entry, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	e, ok := m.entries[id]
-	if !ok || e.deleted {
+	if !ok || e.deleted || e.e.Anchor != anchor {
 		return memory.Entry{}, memory.ErrNotFound
 	}
 	if e.e.Revision != ifRevision {
@@ -125,11 +132,11 @@ func (m *InMemory) Replace(_ context.Context, id string, ifRevision uint64, patc
 	return e.e, nil
 }
 
-func (m *InMemory) Forget(_ context.Context, id string, ifRevision uint64) error {
+func (m *InMemory) Forget(_ context.Context, anchor memory.Anchor, id string, ifRevision uint64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	e, ok := m.entries[id]
-	if !ok || e.deleted {
+	if !ok || e.deleted || e.e.Anchor != anchor {
 		return memory.ErrNotFound
 	}
 	if e.e.Revision != ifRevision {
@@ -140,11 +147,11 @@ func (m *InMemory) Forget(_ context.Context, id string, ifRevision uint64) error
 	return nil
 }
 
-func (m *InMemory) Restore(_ context.Context, id string, ifRevision uint64) (memory.Entry, error) {
+func (m *InMemory) Restore(_ context.Context, anchor memory.Anchor, id string, ifRevision uint64) (memory.Entry, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	e, ok := m.entries[id]
-	if !ok || !e.deleted {
+	if !ok || !e.deleted || e.e.Anchor != anchor {
 		return memory.Entry{}, memory.ErrNotFound
 	}
 	if e.e.Revision != ifRevision {
@@ -226,10 +233,12 @@ func sortEntries(entries []memory.Entry) {
 
 // --- FakePC: HTTP fake with record/replay ---------------------------
 
-// Record is one captured request.
+// Record is one captured request. Path is the URL path (no query);
+// Query is the raw query string (e.g. "anchor=human%3Aalice").
 type Record struct {
 	Method string
 	Path   string
+	Query  string
 	Header http.Header
 	Body   []byte
 }
@@ -295,7 +304,10 @@ func (f *FakePC) record(r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	f.mu.Lock()
-	f.records = append(f.records, Record{Method: r.Method, Path: r.URL.Path, Header: r.Header.Clone(), Body: body})
+	f.records = append(f.records, Record{
+		Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery,
+		Header: r.Header.Clone(), Body: body,
+	})
 	f.mu.Unlock()
 }
 
@@ -344,9 +356,11 @@ func writePCError(w http.ResponseWriter, err error) {
 }
 
 // writePreconditionMissing renders 428 with the current entry when
-// the id is known (live or forgotten), 404 otherwise.
-func (f *FakePC) writePreconditionMissing(w http.ResponseWriter, id string) {
-	if e, ok := f.state.Peek(id); ok {
+// the (anchor, id) is known (live or forgotten), 404 otherwise — an
+// id that exists only under a different anchor is 404, so the 428
+// body can never carry another anchor's content.
+func (f *FakePC) writePreconditionMissing(w http.ResponseWriter, anchor memory.Anchor, id string) {
+	if e, ok := f.state.Peek(anchor, id); ok {
 		writeJSON(w, http.StatusPreconditionRequired, errorResponse{
 			Code:    "precondition_required",
 			Message: "If-Match header is required",
@@ -357,11 +371,23 @@ func (f *FakePC) writePreconditionMissing(w http.ResponseWriter, id string) {
 	writeJSON(w, http.StatusNotFound, errorResponse{Code: "not_found", Message: "entry not found"})
 }
 
+// parseAnchorQuery parses the anchor query parameter of a mutation
+// request or renders 400. The anchor is part of the entry key on the
+// wire (see the package doc).
+func parseAnchorQuery(w http.ResponseWriter, r *http.Request) (memory.Anchor, bool) {
+	anchor, err := memory.ParseAnchor(r.URL.Query().Get("anchor"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Code: "bad_request", Message: "invalid anchor"})
+		return memory.Anchor{}, false
+	}
+	return anchor, true
+}
+
 // requireIfMatch parses the If-Match header or renders the 428/404.
-func (f *FakePC) requireIfMatch(w http.ResponseWriter, r *http.Request, id string) (uint64, bool) {
+func (f *FakePC) requireIfMatch(w http.ResponseWriter, r *http.Request, anchor memory.Anchor, id string) (uint64, bool) {
 	revision, ok := memory.ParseIfMatch(r.Header.Get("If-Match"))
 	if !ok {
-		f.writePreconditionMissing(w, id)
+		f.writePreconditionMissing(w, anchor, id)
 		return 0, false
 	}
 	return revision, true
@@ -404,8 +430,12 @@ func (f *FakePC) handleReplace(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, o.Status, o.Body)
 		return
 	}
+	anchor, ok := parseAnchorQuery(w, r)
+	if !ok {
+		return
+	}
 	id := r.PathValue("id")
-	revision, ok := f.requireIfMatch(w, r, id)
+	revision, ok := f.requireIfMatch(w, r, anchor, id)
 	if !ok {
 		return
 	}
@@ -414,7 +444,7 @@ func (f *FakePC) handleReplace(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Code: "bad_request", Message: "malformed replace request"})
 		return
 	}
-	entry, err := f.state.Replace(r.Context(), id, revision, memory.Patch{
+	entry, err := f.state.Replace(r.Context(), anchor, id, revision, memory.Patch{
 		ContentType: req.ContentType,
 		Text:        req.Text,
 		Provenance:  req.Provenance,
@@ -433,12 +463,16 @@ func (f *FakePC) handleForget(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, o.Status, o.Body)
 		return
 	}
-	id := r.PathValue("id")
-	revision, ok := f.requireIfMatch(w, r, id)
+	anchor, ok := parseAnchorQuery(w, r)
 	if !ok {
 		return
 	}
-	if err := f.state.Forget(r.Context(), id, revision); err != nil {
+	id := r.PathValue("id")
+	revision, ok := f.requireIfMatch(w, r, anchor, id)
+	if !ok {
+		return
+	}
+	if err := f.state.Forget(r.Context(), anchor, id, revision); err != nil {
 		writePCError(w, err)
 		return
 	}
@@ -451,12 +485,16 @@ func (f *FakePC) handleRestore(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, o.Status, o.Body)
 		return
 	}
-	id := r.PathValue("id")
-	revision, ok := f.requireIfMatch(w, r, id)
+	anchor, ok := parseAnchorQuery(w, r)
 	if !ok {
 		return
 	}
-	entry, err := f.state.Restore(r.Context(), id, revision)
+	id := r.PathValue("id")
+	revision, ok := f.requireIfMatch(w, r, anchor, id)
+	if !ok {
+		return
+	}
+	entry, err := f.state.Restore(r.Context(), anchor, id, revision)
 	if err != nil {
 		writePCError(w, err)
 		return

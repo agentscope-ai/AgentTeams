@@ -21,7 +21,11 @@ var ErrIdempotencyKeyBadChars = errors.New("memory: idempotency key contains inv
 
 // IdempotencyKey makes Create replayable: the same key with the same
 // payload returns the first created entry; the same key with a
-// different payload is a conflict (see Store).
+// different payload is a conflict (see Store). Keys are scoped to the
+// anchor (NewEntry.ScopedKey): the same header value under a
+// different anchor names an independent key, so a cross-anchor
+// request can never read or collide with another anchor's
+// idempotency record.
 type IdempotencyKey string
 
 // IsSet reports whether the key is non-empty.
@@ -44,6 +48,20 @@ func ParseIdempotencyKey(raw string) (IdempotencyKey, error) {
 		}
 	}
 	return k, nil
+}
+
+// ScopedKey renders the anchor-bound storage form of the entry's
+// IdempotencyKey: "<anchor-string>\x00<key>". Backends must store and
+// look up idempotency records under this form (and nothing else), so
+// that the key is bound to the anchor by construction: the same
+// header value under two anchors names two independent records, and a
+// cross-anchor create can never surface another anchor's entry — not
+// on replay, not on conflict. An unset key renders as "".
+func (in NewEntry) ScopedKey() string {
+	if !in.IdempotencyKey.IsSet() {
+		return ""
+	}
+	return in.Anchor.String() + "\x00" + string(in.IdempotencyKey)
 }
 
 // PayloadHash fingerprints the idempotent payload of NewEntry:

@@ -57,7 +57,7 @@ func TestStoreBasics(t *testing.T) {
 	}
 
 	// replace at rev 1 → rev 2
-	updated, err := s.Replace(ctx, e.ID, 1, memory.Patch{Text: strPtr("likes go and rust")})
+	updated, err := s.Replace(ctx, anchor, e.ID, 1, memory.Patch{Text: strPtr("likes go and rust")})
 	if err != nil {
 		t.Fatalf("replace: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestStoreBasics(t *testing.T) {
 	}
 
 	// stale replace → ErrConflict carrying the current
-	_, err = s.Replace(ctx, e.ID, 1, memory.Patch{Text: strPtr("stale")})
+	_, err = s.Replace(ctx, anchor, e.ID, 1, memory.Patch{Text: strPtr("stale")})
 	if !memory.IsConflict(err) {
 		t.Fatalf("stale replace: err = %v, want ErrConflict", err)
 	}
@@ -78,27 +78,27 @@ func TestStoreBasics(t *testing.T) {
 	}
 
 	// unknown id → ErrNotFound
-	if _, err := s.Replace(ctx, "nope", 1, memory.Patch{Text: strPtr("x")}); err != memory.ErrNotFound {
+	if _, err := s.Replace(ctx, anchor, "nope", 1, memory.Patch{Text: strPtr("x")}); err != memory.ErrNotFound {
 		t.Fatalf("unknown id: err = %v, want ErrNotFound", err)
 	}
 
 	// forget → invisible to search, unreplaceable
-	if err := s.Forget(ctx, e.ID, 2); err != nil {
+	if err := s.Forget(ctx, anchor, e.ID, 2); err != nil {
 		t.Fatalf("forget: %v", err)
 	}
 	if got, err := s.Search(ctx, memory.SearchQuery{Anchor: anchor}); err != nil || len(got) != 0 {
 		t.Fatalf("search after forget = %d entries, err %v; want 0", len(got), err)
 	}
-	if _, err := s.Replace(ctx, e.ID, 3, memory.Patch{Text: strPtr("x")}); err != memory.ErrNotFound {
+	if _, err := s.Replace(ctx, anchor, e.ID, 3, memory.Patch{Text: strPtr("x")}); err != memory.ErrNotFound {
 		t.Fatalf("replace forgotten: err = %v, want ErrNotFound", err)
 	}
 
 	// stale restore (tombstone is at rev 3) → conflict
-	if _, err := s.Restore(ctx, e.ID, 1); !memory.IsConflict(err) {
+	if _, err := s.Restore(ctx, anchor, e.ID, 1); !memory.IsConflict(err) {
 		t.Fatalf("stale restore: err = %v, want ErrConflict", err)
 	}
 	// restore at the tombstone revision → live at rev 4
-	restored, err := s.Restore(ctx, e.ID, 3)
+	restored, err := s.Restore(ctx, anchor, e.ID, 3)
 	if err != nil {
 		t.Fatalf("restore: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestStoreIdempotency(t *testing.T) {
 	}
 
 	// replay after the entry is forgotten → ErrNotFound
-	if err := s.Forget(ctx, first.ID, 1); err != nil {
+	if err := s.Forget(ctx, anchor, first.ID, 1); err != nil {
 		t.Fatalf("forget: %v", err)
 	}
 	_, err = s.Create(ctx, memory.NewEntry{
@@ -206,7 +206,7 @@ func TestStoreConcurrentCAS(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			entry, err := s.Replace(ctx, e.ID, 1, memory.Patch{Text: strPtr("writer-" + string(rune('0'+i)))})
+			entry, err := s.Replace(ctx, anchor, e.ID, 1, memory.Patch{Text: strPtr("writer-" + string(rune('0'+i)))})
 			outcomes[i] = outcome{entry: entry, err: err}
 		}(i)
 	}
@@ -293,5 +293,75 @@ func TestStorePersistence(t *testing.T) {
 	}
 	if replay.ID != e.ID {
 		t.Fatalf("replay after reopen = %s, want %s", replay.ID, e.ID)
+	}
+}
+
+// TestStoreCrossAnchorBinding pins the store-level contract: an id
+// that exists only under a different anchor behaves exactly like an
+// unknown id — ErrNotFound, never ErrConflict (there is no current to
+// carry), and the entry is left untouched.
+func TestStoreCrossAnchorBinding(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	anchor := memory.Anchor{Kind: memory.KindHuman, ID: "alice"}
+	team := memory.Anchor{Kind: memory.KindTeam, ID: "t1"}
+
+	e, err := s.Create(ctx, memory.NewEntry{
+		Anchor:      anchor,
+		ContentType: "fact",
+		Text:        "alice-only",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// (1) cross-anchor replace → ErrNotFound, entry untouched.
+	if _, err := s.Replace(ctx, team, e.ID, 1, memory.Patch{Text: strPtr("pwned")}); err != memory.ErrNotFound {
+		t.Fatalf("cross-anchor replace: err = %v, want ErrNotFound", err)
+	}
+	if got, err := s.Export(ctx, anchor); err != nil || len(got) != 1 || got[0].Revision != 1 || got[0].Text != "alice-only" {
+		t.Fatalf("export after cross-anchor replace = %+v (err %v), want the untouched entry", got, err)
+	}
+
+	// (2) cross-anchor forget → ErrNotFound, entry still live.
+	if err := s.Forget(ctx, team, e.ID, 1); err != memory.ErrNotFound {
+		t.Fatalf("cross-anchor forget: err = %v, want ErrNotFound", err)
+	}
+	if got, err := s.Export(ctx, anchor); err != nil || len(got) != 1 || got[0].Revision != 1 {
+		t.Fatalf("export after cross-anchor forget = %+v (err %v), want the live entry at rev 1", got, err)
+	}
+
+	// (3) cross-anchor restore → ErrNotFound, entry not restored.
+	if err := s.Forget(ctx, anchor, e.ID, 1); err != nil {
+		t.Fatalf("own forget: %v", err)
+	}
+	if _, err := s.Restore(ctx, team, e.ID, 2); err != memory.ErrNotFound {
+		t.Fatalf("cross-anchor restore: err = %v, want ErrNotFound", err)
+	}
+	if got, err := s.Export(ctx, anchor); err != nil || len(got) != 0 {
+		t.Fatalf("export after cross-anchor restore = %+v (err %v), want 0 entries", got, err)
+	}
+	// and the own anchor can still restore it
+	restored, err := s.Restore(ctx, anchor, e.ID, 2)
+	if err != nil {
+		t.Fatalf("own restore: %v", err)
+	}
+	if restored.Revision != 3 || restored.Text != "alice-only" {
+		t.Fatalf("restored = %+v, want revision 3 with the original text", restored)
+	}
+
+	// (4) stale writes: under the own anchor → ErrConflict with the
+	// same-anchor current; under a foreign anchor → ErrNotFound and
+	// never a conflict (the leak path from #1482: a conflict's
+	// current would have carried alice's text).
+	_, err = s.Replace(ctx, anchor, e.ID, 2, memory.Patch{Text: strPtr("v3")})
+	if !memory.IsConflict(err) {
+		t.Fatalf("stale replace: err = %v, want ErrConflict", err)
+	}
+	if c := memory.ConflictOf(err); c.Current.Revision != 3 || c.Current.Text != "alice-only" || c.Current.Anchor != anchor {
+		t.Fatalf("conflict current = %+v, want the same-anchor state", c.Current)
+	}
+	if _, err := s.Replace(ctx, team, e.ID, 2, memory.Patch{Text: strPtr("v3")}); err != memory.ErrNotFound {
+		t.Fatalf("cross-anchor stale replace: err = %v, want ErrNotFound", err)
 	}
 }

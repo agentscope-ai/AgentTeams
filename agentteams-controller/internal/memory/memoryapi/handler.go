@@ -20,6 +20,12 @@
 // anything else. Every error body is the fixed envelope
 // {"code","message","current"?:{revision,etag,text}} with static
 // messages: request material and store errors are never echoed.
+//
+// The {anchor} segment is part of the entry key: the handler parses
+// it once and passes it to the store, which binds it inside the same
+// query/CAS that touches the entry. An entry that exists only under a
+// different anchor is 404, and no response ever carries another
+// anchor's content.
 package memoryapi
 
 import (
@@ -194,7 +200,8 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleReplace(w http.ResponseWriter, r *http.Request) {
-	if _, ok := parseAnchorPath(w, r); !ok {
+	anchor, ok := parseAnchorPath(w, r)
+	if !ok {
 		return
 	}
 	revision, ok := requireIfMatch(w, r)
@@ -209,7 +216,7 @@ func (s *Server) handleReplace(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "patch must set content_type, text or provenance")
 		return
 	}
-	entry, err := s.store.Replace(r.Context(), r.PathValue("id"), revision, memory.Patch{
+	entry, err := s.store.Replace(r.Context(), anchor, r.PathValue("id"), revision, memory.Patch{
 		ContentType: body.ContentType,
 		Text:        body.Text,
 		Provenance:  body.Provenance,
@@ -223,14 +230,15 @@ func (s *Server) handleReplace(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleForget(w http.ResponseWriter, r *http.Request) {
-	if _, ok := parseAnchorPath(w, r); !ok {
+	anchor, ok := parseAnchorPath(w, r)
+	if !ok {
 		return
 	}
 	revision, ok := requireIfMatch(w, r)
 	if !ok {
 		return
 	}
-	if err := s.store.Forget(r.Context(), r.PathValue("id"), revision); err != nil {
+	if err := s.store.Forget(r.Context(), anchor, r.PathValue("id"), revision); err != nil {
 		s.writeStoreError(w, err)
 		return
 	}
@@ -238,14 +246,15 @@ func (s *Server) handleForget(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
-	if _, ok := parseAnchorPath(w, r); !ok {
+	anchor, ok := parseAnchorPath(w, r)
+	if !ok {
 		return
 	}
 	revision, ok := requireIfMatch(w, r)
 	if !ok {
 		return
 	}
-	entry, err := s.store.Restore(r.Context(), r.PathValue("id"), revision)
+	entry, err := s.store.Restore(r.Context(), anchor, r.PathValue("id"), revision)
 	if err != nil {
 		s.writeStoreError(w, err)
 		return

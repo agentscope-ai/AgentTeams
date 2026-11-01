@@ -6,15 +6,15 @@ import (
 	"context"
 	"database/sql"
 
-	_ "modernc.org/sqlite" // pure-Go SQLite driver (same as internal/server)
 	"encoding/json"
 	"errors"
 	"fmt"
+	_ "modernc.org/sqlite" // pure-Go SQLite driver (same as internal/server)
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/memory"
+	"github.com/google/uuid"
 )
 
 // schemaStatements creates the store's tables; each statement is
@@ -147,9 +147,13 @@ func parseRow(r *rowData) (memory.Entry, error) {
 	}, nil
 }
 
-// loadRow fetches one row; reports exists/deleted.
-func (s *Store) loadRow(ctx context.Context, q rowQuerier, id string) (memory.Entry, bool, bool, error) {
-	rows, err := q.QueryContext(ctx, "SELECT "+entryCols+" FROM entries WHERE id = ?", id)
+// loadRow fetches one row; reports exists/deleted. The anchor is part
+// of the key: a row that exists under a different anchor is reported
+// as not exists.
+func (s *Store) loadRow(ctx context.Context, q rowQuerier, anchor memory.Anchor, id string) (memory.Entry, bool, bool, error) {
+	rows, err := q.QueryContext(ctx,
+		"SELECT "+entryCols+" FROM entries WHERE id = ? AND anchor_kind = ? AND anchor_id = ?",
+		id, string(anchor.Kind), anchor.ID)
 	if err != nil {
 		return memory.Entry{}, false, false, err
 	}
@@ -216,9 +220,9 @@ func (s *Store) createOnce(ctx context.Context, in memory.NewEntry, id, provJSON
 		var entryID, payloadHash string
 		err := tx.QueryRowContext(ctx,
 			"SELECT entry_id, payload_hash FROM idempotency WHERE key = ?",
-			string(in.IdempotencyKey)).Scan(&entryID, &payloadHash)
+			in.ScopedKey()).Scan(&entryID, &payloadHash)
 		if err == nil {
-			entry, exists, deleted, lerr := s.loadRow(ctx, tx, entryID)
+			entry, exists, deleted, lerr := s.loadRow(ctx, tx, in.Anchor, entryID)
 			if lerr != nil {
 				return memory.Entry{}, lerr
 			}
@@ -246,7 +250,7 @@ func (s *Store) createOnce(ctx context.Context, in memory.NewEntry, id, provJSON
 	if in.IdempotencyKey.IsSet() {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO idempotency (key, entry_id, payload_hash, created_at) VALUES (?, ?, ?, ?)`,
-			string(in.IdempotencyKey), id, memory.PayloadHash(in), now); err != nil {
+			in.ScopedKey(), id, memory.PayloadHash(in), now); err != nil {
 			// A concurrent create with the same key won the race;
 			// tx rolls back, the winner's row is committed.
 			return memory.Entry{}, err
@@ -257,7 +261,7 @@ func (s *Store) createOnce(ctx context.Context, in memory.NewEntry, id, provJSON
 	}
 	// Re-read after commit (the in-transaction row view is not valid
 	// past Commit on this driver).
-	entry, exists, deleted, err := s.loadRow(ctx, s.db, id)
+	entry, exists, deleted, err := s.loadRow(ctx, s.db, in.Anchor, id)
 	if err != nil {
 		return memory.Entry{}, err
 	}
@@ -267,24 +271,27 @@ func (s *Store) createOnce(ctx context.Context, in memory.NewEntry, id, provJSON
 	return entry, nil
 }
 
-// Replace implements memory.Store.
-func (s *Store) Replace(ctx context.Context, id string, ifRevision uint64, patch memory.Patch) (memory.Entry, error) {
+// Replace implements memory.Store. The anchor is bound inside the
+// same read and CAS that touch the row: an id that exists under a
+// different anchor yields ErrNotFound, never a conflict (there is no
+// current to carry).
+func (s *Store) Replace(ctx context.Context, anchor memory.Anchor, id string, ifRevision uint64, patch memory.Patch) (memory.Entry, error) {
 	for attempt := 0; ; attempt++ {
-		entry, err := s.replaceOnce(ctx, id, ifRevision, patch)
+		entry, err := s.replaceOnce(ctx, anchor, id, ifRevision, patch)
 		if err == nil || !errIsBusy(err) || attempt >= 20 {
 			return entry, err
 		}
 	}
 }
 
-func (s *Store) replaceOnce(ctx context.Context, id string, ifRevision uint64, patch memory.Patch) (memory.Entry, error) {
+func (s *Store) replaceOnce(ctx context.Context, anchor memory.Anchor, id string, ifRevision uint64, patch memory.Patch) (memory.Entry, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return memory.Entry{}, err
 	}
 	defer tx.Rollback()
 
-	current, exists, deleted, err := s.loadRow(ctx, tx, id)
+	current, exists, deleted, err := s.loadRow(ctx, tx, anchor, id)
 	if err != nil {
 		return memory.Entry{}, err
 	}
@@ -314,15 +321,16 @@ func (s *Store) replaceOnce(ctx context.Context, id string, ifRevision uint64, p
 
 	res, err := tx.ExecContext(ctx, `
 		UPDATE entries SET content_type = ?, text = ?, provenance = ?, revision = ?, etag = ?, updated_at = ?
-		WHERE id = ? AND deleted_at IS NULL AND revision = ?`,
-		updated.ContentType, updated.Text, provJSON, newRev, memory.ETagForRevision(newRev), now, id, ifRevision)
+		WHERE id = ? AND anchor_kind = ? AND anchor_id = ? AND deleted_at IS NULL AND revision = ?`,
+		updated.ContentType, updated.Text, provJSON, newRev, memory.ETagForRevision(newRev), now,
+		id, string(anchor.Kind), anchor.ID, ifRevision)
 	if err != nil {
 		return memory.Entry{}, err
 	}
 	if n, _ := res.RowsAffected(); n != 1 {
 		// Lost the CAS race inside the transaction; re-read and
 		// report the winner.
-		entry, exists, deleted, lerr := s.loadRow(ctx, tx, id)
+		entry, exists, deleted, lerr := s.loadRow(ctx, tx, anchor, id)
 		if lerr != nil {
 			return memory.Entry{}, lerr
 		}
@@ -334,7 +342,7 @@ func (s *Store) replaceOnce(ctx context.Context, id string, ifRevision uint64, p
 	if err := tx.Commit(); err != nil {
 		return memory.Entry{}, err
 	}
-	entry, exists, deleted, err := s.loadRow(ctx, s.db, id)
+	entry, exists, deleted, err := s.loadRow(ctx, s.db, anchor, id)
 	if err != nil {
 		return memory.Entry{}, err
 	}
@@ -344,24 +352,26 @@ func (s *Store) replaceOnce(ctx context.Context, id string, ifRevision uint64, p
 	return entry, nil
 }
 
-// Forget implements memory.Store.
-func (s *Store) Forget(ctx context.Context, id string, ifRevision uint64) error {
+// Forget implements memory.Store. The anchor is bound inside the same
+// read and CAS as Replace: a foreign anchor is ErrNotFound and the
+// entry is left untouched.
+func (s *Store) Forget(ctx context.Context, anchor memory.Anchor, id string, ifRevision uint64) error {
 	for attempt := 0; ; attempt++ {
-		err := s.forgetOnce(ctx, id, ifRevision)
+		err := s.forgetOnce(ctx, anchor, id, ifRevision)
 		if err == nil || !errIsBusy(err) || attempt >= 20 {
 			return err
 		}
 	}
 }
 
-func (s *Store) forgetOnce(ctx context.Context, id string, ifRevision uint64) error {
+func (s *Store) forgetOnce(ctx context.Context, anchor memory.Anchor, id string, ifRevision uint64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	current, exists, deleted, err := s.loadRow(ctx, tx, id)
+	current, exists, deleted, err := s.loadRow(ctx, tx, anchor, id)
 	if err != nil {
 		return err
 	}
@@ -376,13 +386,14 @@ func (s *Store) forgetOnce(ctx context.Context, id string, ifRevision uint64) er
 	newRev := ifRevision + 1
 	res, err := tx.ExecContext(ctx, `
 		UPDATE entries SET revision = ?, etag = ?, updated_at = ?, deleted_at = ?
-		WHERE id = ? AND deleted_at IS NULL AND revision = ?`,
-		newRev, memory.ETagForRevision(newRev), now, now, id, ifRevision)
+		WHERE id = ? AND anchor_kind = ? AND anchor_id = ? AND deleted_at IS NULL AND revision = ?`,
+		newRev, memory.ETagForRevision(newRev), now, now,
+		id, string(anchor.Kind), anchor.ID, ifRevision)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n != 1 {
-		entry, exists, deleted, lerr := s.loadRow(ctx, tx, id)
+		entry, exists, deleted, lerr := s.loadRow(ctx, tx, anchor, id)
 		if lerr != nil {
 			return lerr
 		}
@@ -394,24 +405,26 @@ func (s *Store) forgetOnce(ctx context.Context, id string, ifRevision uint64) er
 	return tx.Commit()
 }
 
-// Restore implements memory.Store.
-func (s *Store) Restore(ctx context.Context, id string, ifRevision uint64) (memory.Entry, error) {
+// Restore implements memory.Store. The anchor is bound inside the same
+// read and CAS as Replace: a foreign anchor is ErrNotFound and the
+// tombstone is left forgotten.
+func (s *Store) Restore(ctx context.Context, anchor memory.Anchor, id string, ifRevision uint64) (memory.Entry, error) {
 	for attempt := 0; ; attempt++ {
-		entry, err := s.restoreOnce(ctx, id, ifRevision)
+		entry, err := s.restoreOnce(ctx, anchor, id, ifRevision)
 		if err == nil || !errIsBusy(err) || attempt >= 20 {
 			return entry, err
 		}
 	}
 }
 
-func (s *Store) restoreOnce(ctx context.Context, id string, ifRevision uint64) (memory.Entry, error) {
+func (s *Store) restoreOnce(ctx context.Context, anchor memory.Anchor, id string, ifRevision uint64) (memory.Entry, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return memory.Entry{}, err
 	}
 	defer tx.Rollback()
 
-	current, exists, deleted, err := s.loadRow(ctx, tx, id)
+	current, exists, deleted, err := s.loadRow(ctx, tx, anchor, id)
 	if err != nil {
 		return memory.Entry{}, err
 	}
@@ -426,13 +439,14 @@ func (s *Store) restoreOnce(ctx context.Context, id string, ifRevision uint64) (
 	newRev := ifRevision + 1
 	res, err := tx.ExecContext(ctx, `
 		UPDATE entries SET revision = ?, etag = ?, updated_at = ?, deleted_at = NULL
-		WHERE id = ? AND deleted_at IS NOT NULL AND revision = ?`,
-		newRev, memory.ETagForRevision(newRev), now, id, ifRevision)
+		WHERE id = ? AND anchor_kind = ? AND anchor_id = ? AND deleted_at IS NOT NULL AND revision = ?`,
+		newRev, memory.ETagForRevision(newRev), now,
+		id, string(anchor.Kind), anchor.ID, ifRevision)
 	if err != nil {
 		return memory.Entry{}, err
 	}
 	if n, _ := res.RowsAffected(); n != 1 {
-		entry, exists, deleted, lerr := s.loadRow(ctx, tx, id)
+		entry, exists, deleted, lerr := s.loadRow(ctx, tx, anchor, id)
 		if lerr != nil {
 			return memory.Entry{}, lerr
 		}
@@ -444,7 +458,7 @@ func (s *Store) restoreOnce(ctx context.Context, id string, ifRevision uint64) (
 	if err := tx.Commit(); err != nil {
 		return memory.Entry{}, err
 	}
-	entry, exists, deleted, err := s.loadRow(ctx, s.db, id)
+	entry, exists, deleted, err := s.loadRow(ctx, s.db, anchor, id)
 	if err != nil {
 		return memory.Entry{}, err
 	}

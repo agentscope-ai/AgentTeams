@@ -20,11 +20,13 @@ type stubStore struct{ err error }
 func (s *stubStore) Create(context.Context, memory.NewEntry) (memory.Entry, error) {
 	return memory.Entry{}, s.err
 }
-func (s *stubStore) Replace(context.Context, string, uint64, memory.Patch) (memory.Entry, error) {
+func (s *stubStore) Replace(context.Context, memory.Anchor, string, uint64, memory.Patch) (memory.Entry, error) {
 	return memory.Entry{}, s.err
 }
-func (s *stubStore) Forget(context.Context, string, uint64) error { return s.err }
-func (s *stubStore) Restore(context.Context, string, uint64) (memory.Entry, error) {
+func (s *stubStore) Forget(context.Context, memory.Anchor, string, uint64) error {
+	return s.err
+}
+func (s *stubStore) Restore(context.Context, memory.Anchor, string, uint64) (memory.Entry, error) {
 	return memory.Entry{}, s.err
 }
 func (s *stubStore) Search(context.Context, memory.SearchQuery) ([]memory.Entry, error) {
@@ -58,10 +60,10 @@ func ifMatch(rev uint64) map[string]string {
 func TestBadAnchors(t *testing.T) {
 	srv := New(pc.NewInMemory())
 	for _, path := range []string{
-		"/memory/robot:x",  // unknown kind
-		"/memory/alice",    // missing kind
-		"/memory/human:",   // missing id
-		"/memory/Team:t1",  // kind is case-sensitive
+		"/memory/robot:x", // unknown kind
+		"/memory/alice",   // missing kind
+		"/memory/human:",  // missing id
+		"/memory/Team:t1", // kind is case-sensitive
 	} {
 		status, body, _ := doReq(t, srv.Handler(), http.MethodPost, path,
 			`{"content_type":"fact","text":"x"}`, nil)
@@ -139,7 +141,7 @@ func TestIfMatchRules(t *testing.T) {
 	}
 
 	// advance to rev 2, then a stale write → 409
-	updated, err := store.Replace(ctx, e.ID, 1, memory.Patch{Text: strPtr("v2")})
+	updated, err := store.Replace(ctx, e.Anchor, e.ID, 1, memory.Patch{Text: strPtr("v2")})
 	if err != nil || updated.Revision != 2 {
 		t.Fatalf("advance: %v (entry %+v)", err, updated)
 	}
@@ -283,6 +285,134 @@ func TestErrorMapping(t *testing.T) {
 				tc.check(t, body)
 			}
 		})
+	}
+}
+
+// TestCrossAnchorMutations pins the anchor binding at the HTTP level:
+// an entry addressed through a different anchor's path is
+// indistinguishable from a nonexistent entry — every mutation is 404
+// and no response carries the entry's material.
+func TestCrossAnchorMutations(t *testing.T) {
+	store := pc.NewInMemory()
+	srv := New(store)
+	ctx := context.Background()
+	e, err := store.Create(ctx, memory.NewEntry{
+		Anchor:      memory.Anchor{Kind: memory.KindHuman, ID: "alice"},
+		ContentType: "fact",
+		Text:        "alice-secret",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	own := "/memory/human:alice/" + e.ID
+	foreign := "/memory/team:t1/" + e.ID
+
+	// noMaterial asserts the leak contract for a 404 body: no text,
+	// no etag, no "current" view of the foreign entry.
+	noMaterial := func(name string, body []byte) {
+		t.Helper()
+		if strings.Contains(string(body), e.Text) {
+			t.Fatalf("%s: 404 body leaks the entry text: %s", name, body)
+		}
+		if strings.Contains(string(body), e.ETag) {
+			t.Fatalf("%s: 404 body leaks the entry etag: %s", name, body)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(body, &m); err != nil {
+			t.Fatalf("%s: decode 404 body: %v", name, err)
+		}
+		if _, ok := m["current"]; ok {
+			t.Fatalf("%s: 404 body carries a current view: %s", name, body)
+		}
+	}
+
+	exportOwn := func() []memory.Entry {
+		t.Helper()
+		status, body, _ := doReq(t, srv.Handler(), http.MethodGet, "/memory/human:alice/export", "", nil)
+		if status != http.StatusOK {
+			t.Fatalf("own export = %d (body %s), want 200", status, body)
+		}
+		var env struct {
+			Entries []memory.Entry `json:"entries"`
+		}
+		if err := json.Unmarshal(body, &env); err != nil {
+			t.Fatalf("decode export: %v", err)
+		}
+		return env.Entries
+	}
+
+	// (1) cross-anchor replace → 404, no material.
+	status, body, _ := doReq(t, srv.Handler(), http.MethodPut, foreign, `{"text":"pwned"}`, ifMatch(1))
+	if status != http.StatusNotFound {
+		t.Fatalf("cross-anchor PUT = %d (body %s), want 404", status, body)
+	}
+	noMaterial("cross-anchor PUT", body)
+
+	// (2) cross-anchor forget → 404, and the entry is NOT deleted.
+	status, body, _ = doReq(t, srv.Handler(), http.MethodDelete, foreign, "", ifMatch(1))
+	if status != http.StatusNotFound {
+		t.Fatalf("cross-anchor DELETE = %d (body %s), want 404", status, body)
+	}
+	noMaterial("cross-anchor DELETE", body)
+	if got := exportOwn(); len(got) != 1 || got[0].Revision != 1 || got[0].Text != "alice-secret" {
+		t.Fatalf("export after cross-anchor forget = %+v, want the untouched entry at rev 1", got)
+	}
+
+	// (3) cross-anchor restore → 404, and the entry is NOT restored.
+	if status, _, _ := doReq(t, srv.Handler(), http.MethodDelete, own, "", ifMatch(1)); status != http.StatusNoContent {
+		t.Fatalf("own forget = %d, want 204", status)
+	}
+	status, body, _ = doReq(t, srv.Handler(), http.MethodPost, foreign+"/restore", "", ifMatch(2))
+	if status != http.StatusNotFound {
+		t.Fatalf("cross-anchor restore = %d (body %s), want 404", status, body)
+	}
+	noMaterial("cross-anchor restore", body)
+	if got := exportOwn(); len(got) != 0 {
+		t.Fatalf("export after cross-anchor restore = %+v, want 0 entries (still forgotten)", got)
+	}
+	// and the own anchor can still restore it
+	status, body, _ = doReq(t, srv.Handler(), http.MethodPost, own+"/restore", "", ifMatch(2))
+	if status != http.StatusOK {
+		t.Fatalf("own restore = %d (body %s), want 200", status, body)
+	}
+	var er memory.Entry
+	if err := json.Unmarshal(body, &er); err != nil {
+		t.Fatalf("decode restored: %v", err)
+	}
+	if er.Revision != 3 || er.Text != "alice-secret" {
+		t.Fatalf("restored = %+v, want revision 3 with the original text", er)
+	}
+
+	// (4) stale writes: under the own anchor → 409 with the
+	// same-anchor current; under a foreign anchor → 404 with no
+	// content at all (the leak path called out in #1482).
+	if status, _, _ = doReq(t, srv.Handler(), http.MethodPut, own, `{"text":"v3"}`, ifMatch(3)); status != http.StatusOK {
+		t.Fatalf("own advance = %d, want 200", status)
+	}
+	status, body, _ = doReq(t, srv.Handler(), http.MethodPut, own, `{"text":"stale"}`, ifMatch(3))
+	if status != http.StatusConflict {
+		t.Fatalf("own stale PUT = %d (body %s), want 409", status, body)
+	}
+	var env struct {
+		Current struct {
+			Revision uint64 `json:"revision"`
+			ETag     string `json:"etag"`
+			Text     string `json:"text"`
+		} `json:"current"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("decode 409: %v", err)
+	}
+	if env.Current.Revision != 4 || env.Current.ETag != `"4"` || env.Current.Text != "v3" {
+		t.Fatalf("409 current = %+v, want the same-anchor winner state", env.Current)
+	}
+	status, body, _ = doReq(t, srv.Handler(), http.MethodPut, foreign, `{"text":"stale"}`, ifMatch(3))
+	if status != http.StatusNotFound {
+		t.Fatalf("cross-anchor stale PUT = %d (body %s), want 404", status, body)
+	}
+	noMaterial("cross-anchor stale PUT", body)
+	if strings.Contains(string(body), "v3") {
+		t.Fatalf("cross-anchor stale PUT body leaks the current text: %s", body)
 	}
 }
 

@@ -6,13 +6,18 @@
 // Wire protocol (adapter contract, W1 maps the real PC on top of
 // it):
 //
-//	POST   /entries                 create (anchor in body, optional
-//	                                Idempotency-Key header)
-//	PUT    /entries/{id}            replace (If-Match = strong ETag)
-//	DELETE /entries/{id}            forget   (If-Match)
-//	POST   /entries/{id}/restore    restore  (If-Match)
-//	GET    /entries?anchor=&q=      search
-//	GET    /export?anchor=          export
+//	POST   /entries                     create (anchor in body,
+//	                                    optional Idempotency-Key header)
+//	PUT    /entries/{id}?anchor=        replace (If-Match = strong ETag,
+//	                                     anchor required)
+//	DELETE /entries/{id}?anchor=        forget (If-Match, anchor required)
+//	POST   /entries/{id}/restore?anchor= restore (If-Match, anchor required)
+//	GET    /entries?anchor=&q=          search
+//	GET    /export?anchor=              export
+//
+// The anchor is part of the entry key on the wire: a mutation for an
+// id that exists only under a different anchor is a 404 from the
+// backend, with no content of that entry.
 //
 // Upstream error mapping (contract-pinned): 412 and 428 both mean
 // "CAS did not apply" and map to memory.ErrConflict carrying the
@@ -42,9 +47,9 @@ import (
 // both, and so do the fakes in this package.
 type Adapter interface {
 	Create(context.Context, memory.NewEntry) (memory.Entry, error)
-	Replace(context.Context, string, uint64, memory.Patch) (memory.Entry, error)
-	Forget(context.Context, string, uint64) error
-	Restore(context.Context, string, uint64) (memory.Entry, error)
+	Replace(context.Context, memory.Anchor, string, uint64, memory.Patch) (memory.Entry, error)
+	Forget(context.Context, memory.Anchor, string, uint64) error
+	Restore(context.Context, memory.Anchor, string, uint64) (memory.Entry, error)
 	Search(context.Context, memory.SearchQuery) ([]memory.Entry, error)
 	Export(context.Context, memory.Anchor) ([]memory.Entry, error)
 }
@@ -91,9 +96,9 @@ type entriesResponse struct {
 }
 
 type errorResponse struct {
-	Code    string          `json:"code"`
-	Message string          `json:"message"`
-	Current *memory.Entry   `json:"current"`
+	Code    string        `json:"code"`
+	Message string        `json:"message"`
+	Current *memory.Entry `json:"current"`
 }
 
 // mapUpstreamError converts an upstream status+body into a domain
@@ -179,27 +184,45 @@ func (c *Client) Create(ctx context.Context, in memory.NewEntry) (memory.Entry, 
 	return entry, err
 }
 
-// Replace updates the entry, CAS on ifRevision.
-func (c *Client) Replace(ctx context.Context, id string, ifRevision uint64, patch memory.Patch) (memory.Entry, error) {
+// entryPath renders the wire path of a mutation: the anchor is part
+// of the entry key and rides the query (path segments are reserved
+// for the id).
+func entryPath(id string, anchor memory.Anchor, suffix string) string {
+	return "/entries/" + url.PathEscape(id) + suffix +
+		"?anchor=" + url.QueryEscape(anchor.String())
+}
+
+// Replace updates the entry named by (anchor, id), CAS on ifRevision.
+func (c *Client) Replace(ctx context.Context, anchor memory.Anchor, id string, ifRevision uint64, patch memory.Patch) (memory.Entry, error) {
+	if !anchor.Valid() {
+		return memory.Entry{}, memory.ErrInvalidAnchor
+	}
 	var entry memory.Entry
-	err := c.do(ctx, http.MethodPut, "/entries/"+url.PathEscape(id),
+	err := c.do(ctx, http.MethodPut, entryPath(id, anchor, ""),
 		map[string]string{"If-Match": memory.ETagForRevision(ifRevision)},
 		replaceRequest{ContentType: patch.ContentType, Text: patch.Text, Provenance: patch.Provenance},
 		&entry)
 	return entry, err
 }
 
-// Forget deletes the entry, CAS on ifRevision.
-func (c *Client) Forget(ctx context.Context, id string, ifRevision uint64) error {
-	return c.do(ctx, http.MethodDelete, "/entries/"+url.PathEscape(id),
+// Forget forgets the entry named by (anchor, id), CAS on ifRevision.
+func (c *Client) Forget(ctx context.Context, anchor memory.Anchor, id string, ifRevision uint64) error {
+	if !anchor.Valid() {
+		return memory.ErrInvalidAnchor
+	}
+	return c.do(ctx, http.MethodDelete, entryPath(id, anchor, ""),
 		map[string]string{"If-Match": memory.ETagForRevision(ifRevision)},
 		nil, nil)
 }
 
-// Restore revives a forgotten entry, CAS on the tombstone revision.
-func (c *Client) Restore(ctx context.Context, id string, ifRevision uint64) (memory.Entry, error) {
+// Restore revives a forgotten entry named by (anchor, id), CAS on the
+// tombstone revision.
+func (c *Client) Restore(ctx context.Context, anchor memory.Anchor, id string, ifRevision uint64) (memory.Entry, error) {
+	if !anchor.Valid() {
+		return memory.Entry{}, memory.ErrInvalidAnchor
+	}
 	var entry memory.Entry
-	err := c.do(ctx, http.MethodPost, "/entries/"+url.PathEscape(id)+"/restore",
+	err := c.do(ctx, http.MethodPost, entryPath(id, anchor, "/restore"),
 		map[string]string{"If-Match": memory.ETagForRevision(ifRevision)},
 		nil, &entry)
 	return entry, err

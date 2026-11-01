@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # storage-migrate.sh - MinIO -> RustFS storage-plane migration (backfill + cutover)
 # Design: docs/design/storage-external-s3-backend.md (migration section)
-# Phases: 0 preflight, 1 data, 2 IAM replay, 3 verify, 4 cutover (human gate)
+# Stage machine: P0 preflight, P1 quiesce (--deployment), P2 data, P3 IAM replay,
+#                P4 final delta + verify, P5 switch config, P6 recreate consumers,
+#                P7 per-component verification, P8 resume + observation
+#                (legacy mode without --deployment: P0->P2->P3->P4, cutover manual)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
+source "$SCRIPT_DIR/lib/orchestration.sh"
 
 PREFLIGHT_FAILS=()
 PREFLIGHT_WARNS=()
@@ -204,6 +208,53 @@ phase_preflight() {
   # --- P0-15 declarative durability assertion ---
   pf_item "0-15" "warn" "target durability claim = $DST_DURABILITY (G2). Declarative only: verify the target container env RUSTFS_DURABILITY_MODE=$DST_DURABILITY by hand (1.0.3 defaults to strict; relaxed/none reduce durability and are not recommended for migrations)"
 
+  # --- P0-16 writer enumeration + original-config snapshot (one-command mode) ---
+  # read-only: enumerates the members that write to the source and snapshots the
+  # CURRENT controller config to the backup dir - the rollback source for P5.
+  if [ -n "$DEPLOYMENT" ]; then
+    local writers_json snapdir
+    snapdir="$(backup_root_path)/$(date -u +%Y%m%d-%H%M%S)"
+    if enum_writers; then
+      writers_json="$REPLY_WRITERS_JSON"
+      local wcount
+      wcount=$(jq 'length' <<<"$writers_json" 2>/dev/null || echo 0)
+      if [ "${wcount:-0}" = "0" ]; then
+        # A real deployment that verifies per component needs writers; zero
+        # members would make P6/P7 vacuous, so say it out loud.
+        pf_item "0-16" warn "writer enumeration returned 0 members - P6/P7 would have nothing to verify; confirm the deployment really has no Workers/Managers"
+      else
+        pf_item "0-16" pass "writer enumeration: $wcount member(s) ($DEPLOYMENT)"
+      fi
+    else
+      # Unknown writer set is not "no writers": refuse rather than verify nothing.
+      writers_json="[]"
+      pf_item "0-16" fail "writer enumeration failed (embedded: docker exec $CONTROLLER_CONTAINER agt get workers|managers; helm: kubectl get workers|managers) - refusing to migrate with an unknown writer set"
+    fi
+    if [ "$DRY_RUN" = false ]; then
+      mkdir -p "$snapdir"
+      case "$DEPLOYMENT" in
+        embedded)
+          docker inspect "$CONTROLLER_CONTAINER" > "$snapdir/controller-inspect-pre.json" 2>/dev/null || true
+          jq -c '.[0].Config.Env' "$snapdir/controller-inspect-pre.json" > "$snapdir/controller-env-pre.json" 2>/dev/null || echo '[]' > "$snapdir/controller-env-pre.json"
+          jq -r '.[0].Config.Image' "$snapdir/controller-inspect-pre.json" 2>/dev/null > "$snapdir/controller-image.txt" || true
+          docker exec "$CONTROLLER_CONTAINER" agt get workers -o json > "$snapdir/workers-pre.json" 2>/dev/null || true
+          docker exec "$CONTROLLER_CONTAINER" agt get managers -o json > "$snapdir/managers-pre.json" 2>/dev/null || true
+          ;;
+        helm)
+          helm get values "$HELM_RELEASE" -n "$NS" > "$snapdir/helm-values-pre.yaml" 2>/dev/null || true
+          kubectl -n "$NS" get workers -o yaml > "$snapdir/workers-pre.yaml" 2>/dev/null || true
+          kubectl -n "$NS" get managers -o yaml > "$snapdir/managers-pre.yaml" 2>/dev/null || true
+          ;;
+      esac
+    fi
+    state_set "stage_detail.writers" "$writers_json"
+    state_set "stage_detail.deployment" "\"$DEPLOYMENT\""
+    state_set "original_config_snapshot" "\"$snapdir\""
+  else
+    state_set "stage_detail.deployment" '"none"'
+    pf_item "0-16" skipped "no --deployment (legacy data-plane flow; writer enumeration/snapshot skipped)"
+  fi
+
   preflight_summary
 }
 
@@ -348,9 +399,120 @@ odm_probe() {
   pf_item "0-13" pass "backfill window estimate: object count=$est (dry-run echo); shadow period suggested at $SHADOW_DAYS days (zero source writes before detach)"
 }
 
-# restore the bucket list from state (cross-phase; preflight wrote src.buckets)
-get_buckets() {
-  state_get '.src.buckets | join(" ")'
+# ============ Phase 1: quiesce (P1; --deployment required) ============
+# Freezes the AgentTeams writers with the real in-repo mechanisms and proves
+# the freeze with the quiesce window (N equal samples of object count / total
+# bytes / top-level-prefix digest - object mtimes alone are NOT acceptable).
+# On ANY failure the members stopped by this phase are restored to their
+# original states (reverse order: managers, then workers) before exit.
+restore_quiesced() { # <stopped-json>
+  local sj="$1" k n o
+  [ -n "$sj" ] && [ "$sj" != "[]" ] || return 0
+  while IFS=$'\t' read -r k n o; do
+    [ -z "${k:-}" ] && continue
+    if set_member_state "$k" "$n" "$o"; then
+      log_info "P1 restore: $k/$n back to $o"
+    else
+      log_warn "P1 restore: $k/$n -> $o FAILED (fix by hand: see the mechanism notes in the runbook)"
+    fi
+  done < <(jq -r 'reverse | .[] | [.kind, .name, .original_state] | @tsv' <<<"$sj")
+}
+
+phase_quiesce() {
+  log_info "phase: quiesce start (deployment=$DEPLOYMENT)"
+  local writers stopped_json
+  if ! enum_writers; then
+    fail_notice "P1 quiesce" "writer enumeration failed (${deployment_unreachable_msg})"
+    exit 1
+  fi
+  writers="$REPLY_WRITERS_JSON"
+  stopped_json="[]"
+
+  log_warn "P1 MANUAL STEP (external clients): stop every client/CI/cron that writes to $SRC_EP now - the tool cannot enumerate them; the window evidence below will prove the freeze (or fail)."
+
+  # --- stop members: workers first, then managers (the writers list is in that order) ---
+  local k n st orig failed=""
+  while IFS=$'\t' read -r k n st orig; do
+    [ -z "${k:-}" ] && continue
+    if [ "$st" = "Stopped" ]; then
+      log_info "P1 $k/$n already Stopped (skip; original state preserved)"
+      continue
+    fi
+    if set_member_state "$k" "$n" Stopped; then
+      stopped_json=$(jq --argjson s "$stopped_json" --arg k "$k" --arg n "$n" --arg o "$orig" \
+        '. + [{kind:$k, name:$n, original_state:$o}]' <<<"$stopped_json")
+      if [ "$DRY_RUN" = false ]; then
+        # Stopped deletes the member container (ensureMemberContainerAbsent); assert absence
+        if ! wait_for_container_absent "$(member_container_name "$k" "$n")" 60; then
+          log_warn "P1 $k/$n: container still present after state=Stopped (reconciler lag?) - asserting CR state only"
+        fi
+      fi
+    else
+      failed="$failed $k/$n"
+    fi
+  done < <(jq -r '.[] | [.kind, .name, .state, .state] | @tsv' <<<"$writers")
+  if [ -n "$failed" ]; then
+    restore_quiesced "$stopped_json"
+    fail_notice "P1 quiesce" "stopping members failed:$failed (restored the already-stopped ones)"
+    exit 1
+  fi
+  state_set "stage_detail.quiesce.stopped" "$stopped_json"
+
+  # --- controller tier ---
+  case "$DEPLOYMENT" in
+    helm)
+      local cdep
+      cdep=$(helm_controller_deploy)
+      if [ -n "$cdep" ]; then
+        exec_or_print kubectl -n "$NS" scale deploy "$cdep" --replicas=0
+        state_set "stage_detail.quiesce.controller" "{\"scaled_to_zero\":true,\"deployment\":\"$cdep\"}"
+        log_info "P1 helm: controller deployment $cdep scaled to 0 (strict tier)"
+      else
+        state_set "stage_detail.quiesce.controller" "{\"scaled_to_zero\":false,\"reason\":\"controller deployment not found by label\"}"
+        log_warn "P1 helm: controller deployment not found by label app.kubernetes.io/instance=$HELM_RELEASE - controller-level freeze relies on the member stops + window evidence"
+      fi
+      ;;
+    embedded)
+      # the embedded controller hosts the source MinIO -> it CANNOT be stopped before the
+      # final delta. Degrade (maintainer rule: real mechanism if it exists, otherwise a
+      # documented step + script assertion): the controller stays up and is frozen
+      # operationally (no CR/config changes during the window); the tool-side assertion
+      # is the quiesce lock + the window evidence below.
+      state_set "stage_detail.quiesce.controller" "{\"embedded\":true,\"note\":\"source storage lives in the controller - it stays up until P5; frozen operationally, asserted by quiesce.lock + window evidence\"}"
+      log_warn "P1 embedded: the controller CANNOT be stopped (the source storage lives in it) - no CR/config changes until P5; the freeze is proven by the window evidence below"
+      ;;
+  esac
+
+  # --- assertions: every member stopped by P1 is Stopped in the CR ---
+  if [ "$DRY_RUN" = false ]; then
+    local st_now
+    while IFS=$'\t' read -r k n; do
+      [ -z "${k:-}" ] && continue
+      st_now=$(member_state_now "$k" "$n")
+      if [ "$st_now" != "Stopped" ]; then
+        restore_quiesced "$stopped_json"
+        fail_notice "P1 quiesce" "$k/$n CR state=$st_now (expected Stopped) - restored the stopped members"
+        exit 1
+      fi
+    done < <(jq -r '.[] | [.kind, .name] | @tsv' <<<"$stopped_json")
+  fi
+
+  # --- window evidence: N equal samples => freeze proven; hold the lock until P8/rollback ---
+  if [ "$DRY_RUN" = false ]; then
+    if ! window_evidence; then
+      restore_quiesced "$stopped_json"
+      fail_notice "P1 quiesce" "quiesce window evidence failed (a writer is still active - e.g. an external client) - restored the stopped members"
+      exit 1
+    fi
+    state_set "stage_detail.quiesce.window" "$REPLY_WINDOW_JSON"
+    : > "$STATE_DIR/quiesce.lock"
+    state_set "stage_detail.quiesce.lock" "\"$STATE_DIR/quiesce.lock\""
+    log_info "P1 quiesce: freeze proven by $(jq length <<<"$REPLY_WINDOW_JSON") equal samples (object count / total bytes / top-level prefix digest, ${QUIESCE_INTERVAL}s apart); window locked"
+  else
+    state_set "stage_detail.quiesce.window" "[]"
+    log_info "[dry-run] P1 would take $QUIESCE_SAMPLES window samples x ${QUIESCE_INTERVAL}s and create $STATE_DIR/quiesce.lock"
+  fi
+  state_stage "QUIESCED"
 }
 
 # ============ Phase 1: data plane ============
@@ -554,8 +716,65 @@ ver_item() { # <id> <status> <evidence>
   if [ "$2" = "fail" ]; then VERIFY_FAILS+=("$1"); log_fail "V$1: $3"; else log_info "V$1 [$2]: $3"; fi
 }
 
+# final_delta: source changes since the last mirror pass -> target.
+# Legacy mode (no --deployment): the source write probe runs here (the source
+# is expected to still be writable - the operator freezes it manually at cutover).
+# Orchestration mode: the source is frozen - instead of writing to it, the
+# tool asserts it is still READABLE (the final-delta precondition).
+final_delta() {
+  local buckets since b i n_pass
+  buckets=$(get_buckets)
+  n_pass=$(state_get '.stage_detail.passes // 1')
+  for i in $(seq "${n_pass:-1}" -1 1); do
+    since=$(state_get ".stage_detail.mirror_pass_$i // empty")
+    [ -n "$since" ] && break
+  done
+  if [ "$MODE" = "inplace" ]; then
+    log_info "inplace: final delta is a no-op (data imported on first start)"
+    report_add "verify" "final-delta" "info" "inplace: import on first start"
+  elif [ -n "$since" ]; then
+    log_info "final delta: mc mirror --newer-than $since"
+    for b in $buckets; do
+      mc_raw mirror "$SRC_ALIAS/$b" "$DST_ALIAS/$b" --newer-than "$since" 2>&1 | tail -1 >&2 || die 1 "final delta failed bucket=$b"
+    done
+    report_add "verify" "final-delta" "pass" "since=$since"
+  else
+    log_warn "no mirror timestamp to anchor on (odm mode) - rely on the V3 md5 sampling and the quiesce window evidence"
+    report_add "verify" "final-delta" "warn" "odm mode has no delta anchor; relies on the V6 write-freeze assertion"
+  fi
+  local pb="${buckets%% *}" pk="finaldelta-probe-$(date +%s).txt"
+  if [ "$DRY_RUN" = false ]; then
+    local dep_now
+    dep_now=$(state_get '.stage_detail.deployment // "none"')
+    if [ "$dep_now" = "none" ]; then
+      mc_put src-probe "$SRC_ALIAS/$pb/$pk" && mc_raw rm --force "$SRC_ALIAS/$pb/$pk" >/dev/null 2>&1 \
+        && report_add "verify" "probe-src" "pass" "source write probe OK" \
+        || report_add "verify" "probe-src" "warn" "source write probe failed (frozen? if expected, continue)"
+    else
+      mc_raw ls "$SRC_ALIAS/$pb" >/dev/null 2>&1 \
+        && report_add "verify" "src-readable" "pass" "source still readable after the freeze (final delta possible)" \
+        || report_add "verify" "src-readable" "fail" "source listing failed after the freeze"
+    fi
+    mc_put dst-probe "$DST_ALIAS/$pb/$pk" && mc_get "$DST_ALIAS/$pb/$pk" 2>/dev/null | grep -q dst-probe \
+      && mc_raw rm --force "$DST_ALIAS/$pb/$pk" >/dev/null 2>&1 \
+      && report_add "verify" "probe-dst" "pass" "target write probe OK" \
+      || die 1 "target write probe failed - cutover aborted (target not writable)"
+  fi
+}
+
+# ============ Phase 4: P4 = final delta + V1-V9 (runs AFTER the quiesce) ============
+# The source is still accessible at this point (nothing has switched yet) -
+# that is exactly what makes the FINAL delta possible: whatever the frozen
+# writers' last in-flight operations wrote is mirrored one last time.
 phase_verify() {
-  log_info "phase: verify start (V1-V9)"
+  log_info "phase: verify start (P4: final delta + V1-V9)"
+  local dep_now
+  dep_now=$(state_get '.stage_detail.deployment // "none"')
+  if [ "$dep_now" != "none" ] && [ "$DRY_RUN" = false ]; then
+    [ -f "$STATE_DIR/quiesce.lock" ] || { fail_notice "P4 verify" "quiesce lock missing (writers not frozen) - refusing the final delta"; exit 1; }
+    mc_raw ls "$SRC_ALIAS" >/dev/null 2>&1 || { fail_notice "P4 verify" "source unreachable - the final delta is impossible"; exit 1; }
+  fi
+  final_delta
   local buckets src_blist dst_blist b
   buckets=$(get_buckets)
 
@@ -687,7 +906,14 @@ phase_verify() {
     report_write > "$STATE_DIR/verify-report.json"
     die 2 "verify red (${#VERIFY_FAILS[@]} items): ${VERIFY_FAILS[*]} - fix and re-run verify; cutover stays blocked"
   fi
-  log_info "verify green (V1-V9)"
+  log_info "verify green (final delta + V1-V9)"
+  # the operator checklist (9 sections, [tool]/[manual] tagged) - written at P4
+  # for BOTH flows: the automated P5-P8 follows it, the legacy flow executes it by hand
+  [ -n "$DEPLOYMENT" ] && DEPLOY_MODE="$DEPLOYMENT"
+  local list="$STATE_DIR/cutover-checklist.sh"
+  render_cutover_checklist > "$list"
+  chmod +x "$list"
+  report_add "verify" "checklist" "pass" "cutover checklist -> $list (deploy-mode=$DEPLOY_MODE)"
   state_stage "VERIFIED"
 }
 
@@ -751,55 +977,68 @@ checklist_preparse() {
 render_cutover_checklist() {
   cat <<EOF
 #!/usr/bin/env bash
-# cutover-checklist.sh - generated at $(now_iso) (human-executed; tick each item)
+# cutover-checklist.sh - generated at $(now_iso)
 # deploy-mode=$DEPLOY_MODE | source=${SRC_EP:-<source endpoint>} | target=${DST_EP:-<target endpoint>} | shadow=$SHADOW_DAYS days
-# Preconditions: verify green (V1-V9) + final delta applied + target write probe ok (see report-cutover.json)
-# Step tags: [tool] = done by the tool run, [manual] = an operator runs it, [verify] = check the evidence.
-# [1] [tool]  final delta + verify already done by this run (see report-cutover.json)
+# Step tags: [tool] = done by the tool (one-command flow with --deployment, or the
+#              legacy data-plane run), [manual] = an operator runs it. The [tool]
+#              steps state exactly what the tool did and where the evidence is.
+# [1] [tool]  P0 preflight green (P0-1..P16) + writer enumeration + original-config
+#             snapshot to the backup dir (see state.json stage_detail; report-main.json)
 #     on a RustFS target the ODM source fallback stays off after cutover (RUSTFS_ON_DEMAND_MIGRATION_ENABLED=false; RUSTFS_DURABILITY_MODE=$DST_DURABILITY unchanged)
-# [2] [manual] freeze ALL writers — external clients -> members -> controller
+# [2] [manual] freeze the writers you control OUTSIDE AgentTeams, then let the tool
+#             freeze the members: stop the external clients that write to the source
+#             FIRST (CI, cron, sync jobs), then run the tool (P1 stops the members).
 EOF
   case "$DEPLOY_MODE" in
     embedded|both)
       cat <<'EOF'
-#     embedded:
-#       agt update worker <name> --state Stopped   (repeat per worker, or your loop)
-#       agt update manager <name> --state Stopped
+#     member stop mechanism the tool uses (embedded):
+#       agt update worker <name> --state Stopped   (per worker)
+#       manager: agt apply -f <manager yaml with spec.state Stopped> (agt update manager has no --state)
 #       # do NOT delete pods/containers to freeze: they are recreated immediately and keep writing
-#       # controller: no CR/config changes during the window; final delta must run BEFORE the controller stops (embedded MinIO lives in it)
+#     controller (embedded): it CANNOT be stopped - the source storage lives in it.
+#       It is frozen operationally (no CR/config changes during the window) and the
+#       tool proves the freeze with the quiesce window (3 equal samples of object
+#       count / total bytes / top-level prefix digest) + the quiesce lock.
 EOF
       ;;
   esac
   case "$DEPLOY_MODE" in
     helm|both)
       cat <<'EOF'
-#     helm:
+#     member stop mechanism the tool uses (helm):
 #       kubectl -n <ns> patch worker <name> --type merge -p '{"spec":{"state":"Stopped"}}'
 #       kubectl -n <ns> patch manager <name> --type merge -p '{"spec":{"state":"Stopped"}}'
-#       # strict tier (optional): kubectl -n <ns> scale deploy <release>-controller --replicas=0
+#     controller (helm): the tool scales the controller deployment to 0 (strict tier)
 EOF
       ;;
   esac
   cat <<'EOF'
-# [verify] no writes: object counts stable on both ends for N seconds
-# [3] [manual] switch deployment config atomically (provider + endpoint + bucket + credentials in ONE change)
+# [3] [tool]  P2 data backfill (odm/mirror/inplace) + P3 IAM replay (report-data/
+#             report-iam; every worker/manager user + policy re-created on the target)
+# [4] [tool]  P4 FINAL delta (source still readable after the freeze - that is why
+#             the delta runs after P1 and before the switch) + V1-V9 verify green
+# [5] [tool]  P5 switch the controller config in ONE change (provider + endpoint +
+#             bucket + credentials); the original env/values were snapshotted to the
+#             backup dir BEFORE the switch (rollback source)
 EOF
   case "$DEPLOY_MODE" in
     embedded|both)
       cat <<'EOF'
-#     embedded (manual container recreate; installer does not support external S3 yet):
-#       docker inspect agentteams-controller --format '{{json .Config.Env}}'   # capture the full current env first
+#     embedded (the tool rebuilds the container in the installer shape):
+#       docker inspect agentteams-controller --format '{{json .Config.Env}}'   # captured into the backup dir
 #       docker rm -f agentteams-controller
 #       docker run -d --name agentteams-controller --network agentteams-net \
 #         --network-alias matrix-local.agentteams.io --network-alias aigw-local.agentteams.io --network-alias fs-local.agentteams.io \
-#         <all previous -e flags> \
+#         --env-file <backup dir>/controller-env-post.env \
 #         -e AGENTTEAMS_STORAGE_PROVIDER=s3 \
 #         -e AGENTTEAMS_FS_ENDPOINT=<dst endpoint> -e AGENTTEAMS_FS_BUCKET=<bucket> \
 #         -e AGENTTEAMS_FS_ACCESS_KEY=<key> -e AGENTTEAMS_FS_SECRET_KEY=<secret> \
 #         -v /var/run/docker.sock:/var/run/docker.sock --security-opt label=disable \
 #         -v agentteams-data:/data -v <workspace>:/root/agentteams-fs/agents/manager \
-#         -p 8080:8080 -p 8001:8001 -p 18088:8088 --restart unless-stopped <embedded image>
+#         -p 8080:8080 -p 8001:8001 -p 18088:18088 --restart unless-stopped <embedded image>
 #       # WARNING: never use the installer reinstall path to change storage config (it deletes agentteams-data, the workspace and the env file)
+#       # the tool re-asserts the new env inside the rebuilt container before continuing
 EOF
       ;;
   esac
@@ -807,21 +1046,22 @@ EOF
     helm|both)
       cat <<'EOF'
 #     helm:
-#       helm upgrade --install <release> <chart> -n <ns> \
+#       helm upgrade <release> <chart> -n <ns> \
 #         --set storage.provider=s3 --set storage.mode=existing --set storage.bucket=<bucket> \
-#         --set storage.s3.endpoint=<dst endpoint> --set storage.s3.existingSecret=<secret>
+#         --set storage.s3.endpoint=<dst endpoint> --set storage.s3.existingSecret=<secret> --wait
 #       # the MinIO StatefulSet stops rendering after the switch; do NOT delete its PVC (it is the rollback data source)
+#       # the tool re-asserts the new env in the controller deployment template before continuing
 EOF
       ;;
   esac
   cat <<'EOF'
-# [verify] controller: storage provider=s3 (external) in logs; env inside the new container/pod shows the new AGENTTEAMS_FS_*
-# [4] [manual] recreate every consumer (env is baked at creation; "restart" does NOT re-read env)
+# [6] [tool]  P6 recreate every consumer with its ORIGINAL state (env is baked at
+#             creation; "restart" does NOT re-read env)
 EOF
   case "$DEPLOY_MODE" in
     embedded|both)
       cat <<'EOF'
-#     embedded: docker rm -f <prefix><manager> <prefix><worker-1> ... ; controller recreates them from current config
+#     embedded: docker rm -f <prefix><manager> <prefix><worker-1> ... where needed; the controller recreates them from the current config
 EOF
       ;;
   esac
@@ -832,71 +1072,534 @@ EOF
 EOF
       ;;
   esac
-  cat <<'EOF'
-# [verify] inside a recreated consumer: env | grep AGENTTEAMS_FS_  -> new endpoint, same bucket as controller
-# [5] [manual] per-component read/write + permission checks
-#     controller: trigger one config deploy, confirm the object lands on the target
-#     manager: write + read one object
-#     each worker: write + read with its own credentials (proves the per-worker IAM policy exists on the target)
-#     negative: worker A must get 403 reading worker B's prefix
-# [6] [manual] resume traffic: agt update worker --state Running (or kubectl patch back); watch errors/audit
-# [7] [manual] keep the source read-only for the shadow window; do not delete it
-# [8] [manual] rollback (preserves target-side writes)
-#     freeze target writers first, then per bucket:
-#       mc mirror --overwrite --remove <dst>/<bucket> <src>/<bucket>
-#     --remove is safe ONLY while the source took no writes (Gate A empty); otherwise reconcile key by key and do NOT use --remove
-#     then flip the config back (provider=minio / previous env), recreate all consumers again and re-run [5]
-# [9] [manual] record completion: --mark-cutover-done records an operator ACKNOWLEDGEMENT only; it does not verify restarts or configuration
+  cat <<EOF
+#     per-component env assertion (the tool prints and checks each one):
+#       inside a recreated consumer: env | grep AGENTTEAMS_FS_  -> new endpoint, same bucket as controller
+# [7] [tool]  P7 per-component read/write + permission checks on the NEW backend,
+#             each component with ITS OWN identity (not a storage-engine test):
+#     controller: admin-identity probe object lands on the target only
+#     each worker: write/read/list/delete in its own partition (agents/<name>/);
+#       negative: worker A must get 403 writing worker B's partition (IAM isolation)
+#     manager: write/read in manager/ + the shared/ human file area
+#     quota: source-vs-target bucket quota compared (degrades to a warning when the
+#       engine does not report quotas - there is no in-repo quota mechanism yet)
+#     criterion: every probe object appears ONLY on the new backend; PASS table in the report
+# [8] [manual] P8 resume + observation window: the tool resumes the members and
+#             releases the quiesce lock; you watch the ${SHADOW_DAYS}-day window
+#     keep the source read-only for the shadow window; do not delete it (it is the rollback data source)
+#     rollback (copy-paste, any time before the source is retired):
+#       <tool> <same args> --state-dir <state dir> --rollback
+#     target-side new writes disposition:
+#       (a) DEFAULT: discard - writes that landed on the target after the cutover are not preserved
+#       (b) optional manual reverse delta (only while the source took no writes - Gate A empty), per bucket:
+#         mc mirror --overwrite --remove <dst>/<bucket> <src>/<bucket>
+#       --remove is safe ONLY while the source took no writes (Gate A empty); otherwise reconcile key by key and do NOT use --remove
+#     rollback restores the original controller config from the backup dir AND the
+#     original per-member states, then recreates consumers so their env points back
+#     at the source
+# [9] [manual] record completion: --mark-cutover-done records an operator ACKNOWLEDGEMENT
+#             only; it does not verify restarts or configuration (the automated flow
+#             marks CUTOVER_DONE itself at P8)
 EOF
 }
 
-# ============ Phase 4: cutover (three steps) ============
+# ============ Phase cutover: P5-P8 chain (one-command; --deployment required) ============
+# Gate order (stable for the test contract): stage first (exit 1), then
+# --deployment (exit 4), then deployment reachability (fail-closed, exit 1).
 phase_cutover() {
-  log_info "phase: cutover start"
-  local buckets
-  buckets=$(get_buckets)
+  log_info "phase: cutover start (P5-P8)"
+  local stage
+  stage=$(state_get '.stage')
+  case "$stage" in
+    CONFIG_SWITCHED)    p6_recreate_consumers; p7_verify_components; p8_resume; return 0 ;;
+    CONSUMERS_RECREATED) p7_verify_components; p8_resume; return 0 ;;
+    COMPONENT_VERIFIED) p8_resume; return 0 ;;
+    VERIFIED) : ;;
+    *) die 1 "state.stage=$stage (cutover requires state=VERIFIED - verify must be green first)" ;;
+  esac
+  if [ -z "$DEPLOYMENT" ]; then
+    die 4 "cutover requires --deployment embedded|helm (one-command flow; without it the cutover stays manual via cutover-checklist.sh)"
+  fi
+  if ! deployment_reachable; then
+    fail_notice "P5 switch" "${deployment_unreachable_msg} - refusing to touch production"
+    exit 1
+  fi
+  [ -f "$STATE_DIR/quiesce.lock" ] || { fail_notice "P5 switch" "quiesce lock missing (writers not frozen - run --phase quiesce or --resume first)"; exit 1; }
+  p5_switch_config
+  p6_recreate_consumers
+  p7_verify_components
+  p8_resume
+}
 
-  # --- (1) final delta (source changes since the last mirror pass -> target) ---
-  local since=""
-  # take the timestamp of the most recent mirror pass
-  local i n_pass
-  n_pass=$(state_get '.stage_detail.passes // 1')
-  for i in $(seq "${n_pass:-1}" -1 1); do
-    since=$(state_get ".stage_detail.mirror_pass_$i // empty")
-    [ -n "$since" ] && break
-  done
-  if [ "$MODE" = "inplace" ]; then
-    log_info "inplace: final delta is a no-op (data imported on first start)"
-  elif [ -n "$since" ]; then
-    log_info "final delta mirror --newer-than $since"
-    for b in $buckets; do
-      mc_raw mirror "$SRC_ALIAS/$b" "$DST_ALIAS/$b" --newer-than "$since" 2>&1 | tail -1 >&2 || die 1 "final delta failed bucket=$b"
-    done
-    report_add "cutover" "final-delta" "pass" "since=$since"
-  else
-    log_warn "no mirror timestamp to anchor on (odm mode) - rely on the V3 md5 sampling and confirm the source is frozen before continuing"
-    report_add "cutover" "final-delta" "warn" "odm mode has no delta anchor; relies on the V6 write-freeze assertion"
+# ---- P5: switch the controller config (original config fully snapshotted first) ----
+p5_switch_config() {
+  log_info "P5: switch the controller config to the target backend"
+  local bdir
+  bdir=$(backup_dir_current)
+  [ -n "$bdir" ] && [ "$DRY_RUN" = true ] || { [ -d "$bdir" ] || { fail_notice "P5 switch" "original-config snapshot missing ($bdir) - refusing to switch without a rollback source"; exit 1; }; }
+  state_set "stage_detail.p5.backup_dir" "\"$bdir\""
+  case "$DEPLOYMENT" in
+    embedded) p5_embedded "$bdir" ;;
+    helm)     p5_helm "$bdir" ;;
+  esac
+  state_stage "CONFIG_SWITCHED"
+}
+
+p5_embedded() {
+  local bdir="$1" env_pre image out_sh envfile
+  assert_embedded_shape   # fail-closed on installer-shape drift BEFORE touching anything
+  env_pre=$(cat "$bdir/controller-env-pre.json" 2>/dev/null || true)
+  image=$(cat "$bdir/controller-image.txt" 2>/dev/null || true)
+  if [ -z "$env_pre" ] || [ "$env_pre" = "[]" ] || [ -z "$image" ]; then
+    fail_notice "P5 switch" "P0 snapshot incomplete ($bdir/controller-env-pre.json / controller-image.txt missing) - cannot reconstruct the controller"
+    exit 1
+  fi
+  EMBED_WORKSPACE=$(jq -r '.[0].Mounts[] | select(.Type == "bind" and .Destination == "/root/agentteams-fs/agents/manager") | .Source' "$bdir/controller-inspect-pre.json" 2>/dev/null || true)
+  local env_new
+  env_new=$(swap_storage_env "$env_pre")
+  out_sh="$bdir/controller-run-post.sh"; envfile="$bdir/controller-env-post.env"
+  render_controller_run "$out_sh" "$envfile" "$image" "$env_new"
+  log_info "P5 embedded: switching the controller (docker rm -f + installer-shape docker run, env via --env-file; backup: $bdir)"
+  exec_or_print_sh "docker rm -f $CONTROLLER_CONTAINER"
+  exec_or_print_sh "bash $out_sh"
+  if [ "$DRY_RUN" = false ]; then
+    wait_controller_up 120 || { fail_notice "P5 switch" "controller did not come up on the new backend (check $out_sh)"; exit 1; }
+    local env_now
+    env_now=$(container_env_json "$CONTROLLER_CONTAINER")
+    if [ "$(env_value "$env_now" AGENTTEAMS_STORAGE_PROVIDER)" != "s3" ]; then
+      fail_notice "P5 switch" "env assert failed: AGENTTEAMS_STORAGE_PROVIDER != s3 in the rebuilt controller"
+      exit 1
+    fi
+    assert_consumer_env "$env_now" "P5 controller" || { fail_notice "P5 switch" "controller env does not point at the target"; exit 1; }
+  fi
+  report_add "cutover" "p5-switch" "pass" "embedded controller switched to s3 (original env snapshotted: $bdir)"
+}
+
+p5_helm() {
+  local bdir="$1" cdep tenv
+  [ -n "$S3_SECRET" ] || { fail_notice "P5 switch" "helm mode requires --s3-secret <name> (an EXISTING k8s Secret with the s3 keys; the tool does not create secrets)"; exit 1; }
+  if [ "$DRY_RUN" = false ] && ! kubectl -n "$NS" get secret "$S3_SECRET" >/dev/null 2>&1; then
+    fail_notice "P5 switch" "secret '$S3_SECRET' not found in ns '$NS' - create it first (kubectl create secret generic $S3_SECRET --from-literal=accessKey=... --from-literal=secretKey=...)"
+    exit 1
+  fi
+  cdep=$(helm_controller_deploy)
+  log_info "P5 helm: helm upgrade (values backup: $bdir/helm-values-pre.yaml)"
+  exec_or_print helm upgrade "$HELM_RELEASE" "$HELM_CHART" -n "$NS" \
+    --set storage.provider=s3 --set storage.mode=existing --set storage.bucket="$(first_bucket)" \
+    --set storage.s3.endpoint="$DST_EP" --set storage.s3.existingSecret="$S3_SECRET" --wait
+  if [ "$DRY_RUN" = false ]; then
+    if [ -n "$cdep" ]; then
+      kubectl -n "$NS" rollout status "deploy/$cdep" --timeout=180s \
+        || { fail_notice "P5 switch" "controller rollout failed after helm upgrade"; exit 1; }
+      tenv=$(kubectl -n "$NS" get deploy "$cdep" -o jsonpath='{.spec.template.spec.containers[0].env}' 2>/dev/null | jq -c '. // []')
+      if ! jq -e 'map(select(.name == "AGENTTEAMS_STORAGE_PROVIDER" and .value == "s3")) | length > 0' <<<"$tenv" >/dev/null 2>&1; then
+        fail_notice "P5 switch" "deployment template env assert failed (AGENTTEAMS_STORAGE_PROVIDER=s3 not found)"
+        exit 1
+      fi
+    else
+      log_warn "P5 helm: controller deployment not found by label - template env assert skipped (rollout status was the gate)"
+    fi
+  fi
+  report_add "cutover" "p5-switch" "pass" "helm release switched to storage.provider=s3 existingSecret=$S3_SECRET"
+}
+
+# ---- P6: recreate consumers with their ORIGINAL states ----
+p6_recreate_consumers() {
+  log_info "P6: recreate consumers (original per-member states; env is baked at creation)"
+  local writers k n orig cname
+  writers=$(state_get '.stage_detail.writers // []')
+  [ -n "$writers" ] && [ "$writers" != "[]" ] || { fail_notice "P6 recreate" "no writer list in state (P0-16 did not run with --deployment?)" ; exit 1; }
+  while IFS=$'\t' read -r k n orig; do
+    [ -z "${k:-}" ] && continue
+    if [ "$orig" = "Stopped" ]; then
+      log_info "P6 $k/$n was Stopped before the migration - stays Stopped (no container)"
+      continue
+    fi
+    cname=$(member_container_name "$k" "$n")
+    if [ "$DRY_RUN" = false ] && container_present "$cname"; then
+      # a stale container may carry the old env - force a fresh one from the switched config
+      log_info "P6 $k/$n: removing the stale container so the controller recreates it from the current config"
+      delete_member_container "$cname"
+    fi
+    if ! set_member_state "$k" "$n" "$orig"; then
+      fail_notice "P6 recreate" "restoring $k/$n state to $orig failed"
+      exit 1
+    fi
+    if [ "$DRY_RUN" = false ]; then
+      wait_for_container "$cname" 180 || { fail_notice "P6 recreate" "$k/$n container '$cname' did not come back (check controller logs)"; exit 1; }
+      assert_consumer_env "$(container_env_json "$cname")" "P6 $k/$n" \
+        || { fail_notice "P6 recreate" "$k/$n env does not point at the target backend"; exit 1; }
+    fi
+  done < <(jq -r '.[] | select(.state != "Stopped") | [.kind, .name, .state] | @tsv' <<<"$writers")
+  report_add "cutover" "p6-recreate" "pass" "consumers recreated from the P0 writer list (original states; per-component env asserted)"
+  state_stage "CONSUMERS_RECREATED"
+}
+
+# ---- P7: per-component read/write + permission verification on the NEW backend ----
+# Each component probes with ITS OWN identity (the credentials the controller
+# handed it, read from the container env) - not a storage-engine test.
+p7_verify_components() {
+  log_info "P7: per-component read/write + permission verification on the NEW backend"
+  local ts="p7-$(date +%s)" bucket writers fail7=""
+  bucket=$(first_bucket)
+  local pass_json="[]"
+  add_pass() {
+    pass_json=$(jq --argjson p "$pass_json" --argjson e "$1" '. + [$e]' <<<"$pass_json")
+  }
+  print_table() {
+    log_info "P7 PASS table:"
+    jq -r '.[] | "  \(.component): \(.verdict) (\(.detail))"' <<<"$pass_json"
+  }
+
+  if [ "$DRY_RUN" = true ]; then
+    log_info "[dry-run] P7 would run per-component W/R/L/D probes + cross-partition 403 negative + shared/ probe + source-absence + quota compare"
+    report_add "cutover" "p7-components" "info" "dry-run: probes not executed"
+    state_stage "COMPONENT_VERIFIED"
+    return 0
   fi
 
-  # --- (2) write probes on both sides ---
-  local pb="${buckets%% *}" pk="cutover-probe-$(date +%s).txt"
-  mc_put src-probe "$SRC_ALIAS/$pb/$pk" && mc_raw rm --force "$SRC_ALIAS/$pb/$pk" >/dev/null 2>&1 \
-    && report_add "cutover" "probe-src" "pass" "source write probe OK" || report_add "cutover" "probe-src" "fail" "source write probe failed (frozen? if expected, continue)"
-  mc_put dst-probe "$DST_ALIAS/$pb/$pk" && mc_get "$DST_ALIAS/$pb/$pk" 2>/dev/null | grep -q dst-probe \
-    && mc_raw rm --force "$DST_ALIAS/$pb/$pk" >/dev/null 2>&1 \
-    && report_add "cutover" "probe-dst" "pass" "target write probe OK" || die 1 "target write probe failed - cutover aborted (target not writable)"
+  # --- controller (admin identity from its own env) ---
+  local cenv cep cbucket cak csk
+  cenv=$(container_env_json "$CONTROLLER_CONTAINER")
+  cep=$(env_value "$cenv" AGENTTEAMS_FS_ENDPOINT); [ -z "$cep" ] && cep="$DST_EP"
+  cbucket=$(env_value "$cenv" AGENTTEAMS_FS_BUCKET); [ -z "$cbucket" ] && cbucket="$bucket"
+  cak=$(env_value "$cenv" AGENTTEAMS_FS_ACCESS_KEY); [ -z "$cak" ] && cak=$(env_value "$cenv" MINIO_USER)
+  csk=$(env_value "$cenv" AGENTTEAMS_FS_SECRET_KEY); [ -z "$csk" ] && csk=$(env_value "$cenv" MINIO_PASSWORD)
+  local calias="p7_controller"
+  if mc_alias "$calias" "$cep" "$cak" "$csk"; then
+    local ckey="agentteams-config/migrate-probe-controller-$ts.txt"
+    if mc_put "probe-controller-$ts" "$calias/$cbucket/$ckey" && mc_get "$calias/$cbucket/$ckey" 2>/dev/null | grep -q probe-controller && mc_raw rm --force "$calias/$cbucket/$ckey" >/dev/null 2>&1 \
+       && ! mc_raw ls "$SRC_ALIAS/$cbucket/$ckey" 2>/dev/null | grep -q "migrate-probe-controller"; then
+      add_pass '{"component":"controller","verdict":"PASS","detail":"W/R/D with admin identity on the new backend only"}'
+      log_info "P7 controller: PASS"
+    else
+      fail7="$fail7 controller"
+      add_pass '{"component":"controller","verdict":"FAIL","detail":"probe did not complete on the new backend or leaked to the source"}'
+    fi
+  else
+    fail7="$fail7 controller"
+    add_pass '{"component":"controller","verdict":"FAIL","detail":"admin identity alias to the new backend refused"}'
+  fi
 
-  # --- (3) cutover checklist (human-executed; the script never changes production) ---
-  state_set "stage_detail.deploy_mode" "\"$DEPLOY_MODE\""
-  report_add "cutover" "deploy_mode" "info" "cutover checklist deploy-mode=$DEPLOY_MODE (recorded in state and report)"
-  local list="$STATE_DIR/cutover-checklist.sh"
-  render_cutover_checklist > "$list"
-  chmod +x "$list"
-  report_add "cutover" "checklist" "pass" "cutover checklist -> $list (human-executed; deploy-mode=$DEPLOY_MODE)"
-  log_info "cutover steps done: final delta ok, both write probes ok, checklist -> $list"
-  log_warn "after completing [2]-[9] in $list, record the state with: $0 <same args> --state-dir $(dirname "$STATE_FILE") --mark-cutover-done (records an operator acknowledgement only; it does not verify restarts or configuration)"
-  state_set "stage" '"CUTOVER_PENDING"'
-  report_write > "$STATE_DIR/report-cutover.json"
+  # --- members: each with its OWN identity from the recreated container env ---
+  writers=$(state_get '.stage_detail.writers // []')
+  local wnames
+  wnames=$(jq -r '.[] | select(.kind == "worker" and .state != "Stopped") | .name' <<<"$writers")
+  local k n cname menv mep mbucket mak msk malias mkey cross_key other
+  while IFS= read -r n; do
+    [ -z "$n" ] && continue
+    k="worker"; cname=$(member_container_name "$k" "$n")
+    menv=$(container_env_json "$cname")
+    mep=$(env_value "$menv" AGENTTEAMS_FS_ENDPOINT); mbucket=$(env_value "$menv" AGENTTEAMS_FS_BUCKET)
+    mak=$(env_value "$menv" AGENTTEAMS_FS_ACCESS_KEY); msk=$(env_value "$menv" AGENTTEAMS_FS_SECRET_KEY)
+    malias="p7_worker_$n"
+    if ! mc_alias "$malias" "${mep:-$DST_EP}" "$mak" "$msk"; then
+      fail7="$fail7 worker/$n"; add_pass "{\"component\":\"worker/$n\",\"verdict\":\"FAIL\",\"detail\":\"own-identity alias to the new backend refused\"}"; continue
+    fi
+    mkey="agents/$n/migrate-probe-$ts.txt"
+    # W/R/L/D in its own partition
+    local own_ok=1
+    mc_put "probe-worker-$ts" "$malias/${mbucket:-$bucket}/$mkey" || own_ok=0
+    mc_get "$malias/${mbucket:-$bucket}/$mkey" 2>/dev/null | grep -q probe-worker || own_ok=0
+    mc_raw ls "$malias/${mbucket:-$bucket}/agents/$n" >/dev/null 2>&1 || own_ok=0
+    mc_raw rm --force "$malias/${mbucket:-$bucket}/$mkey" >/dev/null 2>&1 || own_ok=0
+    # source-absence: the probe object must NOT exist on the source
+    mc_raw ls "$SRC_ALIAS/${mbucket:-$bucket}/$mkey" 2>/dev/null | grep -q "migrate-probe-$ts" && own_ok=0
+    # cross-partition negative: worker n must NOT write another worker's partition (403)
+    other=$(grep -vx "$n" <<<"$wnames" | head -1)
+    local cross_prefix="agents/${other:-manager}"
+    if [ -n "$other" ]; then cross_prefix="agents/$other"; fi
+    if mc_put "probe-cross-$ts" "$malias/${mbucket:-$bucket}/$cross_prefix/migrate-probe-cross-$ts.txt" 2>/dev/null; then
+      mc_raw rm --force "$malias/${mbucket:-$bucket}/$cross_prefix/migrate-probe-cross-$ts.txt" >/dev/null 2>&1 || true
+      own_ok=0
+    fi
+    # shared/ human file area
+    mc_put "probe-shared-$ts" "$malias/${mbucket:-$bucket}/shared/migrate-probe-shared-$ts-$n.txt" 2>/dev/null \
+      && mc_raw rm --force "$malias/${mbucket:-$bucket}/shared/migrate-probe-shared-$ts-$n.txt" >/dev/null 2>&1 || log_warn "P7 worker/$n: shared/ (human file area) probe not writable - check the policy"
+    if [ "$own_ok" = 1 ]; then
+      add_pass "{\"component\":\"worker/$n\",\"verdict\":\"PASS\",\"detail\":\"W/R/L/D own partition + cross 403 + source-absence\"}"
+      log_info "P7 worker/$n: PASS"
+    else
+      fail7="$fail7 worker/$n"
+      add_pass "{\"component\":\"worker/$n\",\"verdict\":\"FAIL\",\"detail\":\"own-identity probe or the 403 negative failed\"}"
+    fi
+  done <<<"$wnames"
+
+  # --- manager(s) ---
+  local mnames mn
+  mnames=$(jq -r '.[] | select(.kind == "manager" and .state != "Stopped") | .name' <<<"$writers")
+  while IFS= read -r mn; do
+    [ -z "$mn" ] && continue
+    k="manager"; cname=$(member_container_name "$k" "$mn")
+    menv=$(container_env_json "$cname")
+    mep=$(env_value "$menv" AGENTTEAMS_FS_ENDPOINT); mbucket=$(env_value "$menv" AGENTTEAMS_FS_BUCKET)
+    mak=$(env_value "$menv" AGENTTEAMS_FS_ACCESS_KEY); msk=$(env_value "$menv" AGENTTEAMS_FS_SECRET_KEY)
+    malias="p7_manager_$mn"
+    if ! mc_alias "$malias" "${mep:-$DST_EP}" "$mak" "$msk"; then
+      fail7="$fail7 manager/$mn"; add_pass "{\"component\":\"manager/$mn\",\"verdict\":\"FAIL\",\"detail\":\"own-identity alias to the new backend refused\"}"; continue
+    fi
+    local mg_ok=1
+    mc_put "probe-manager-$ts" "$malias/${mbucket:-$bucket}/manager/migrate-probe-$ts.txt" || mg_ok=0
+    mc_get "$malias/${mbucket:-$bucket}/manager/migrate-probe-$ts.txt" 2>/dev/null | grep -q probe-manager || mg_ok=0
+    mc_raw rm --force "$malias/${mbucket:-$bucket}/manager/migrate-probe-$ts.txt" >/dev/null 2>&1 || mg_ok=0
+    mc_put "probe-mshared-$ts" "$malias/${mbucket:-$bucket}/shared/migrate-probe-shared-$ts.txt" 2>/dev/null \
+      && mc_raw rm --force "$malias/${mbucket:-$bucket}/shared/migrate-probe-shared-$ts.txt" >/dev/null 2>&1 || mg_ok=0
+    if [ "$mg_ok" = 1 ]; then
+      add_pass "{\"component\":\"manager/$mn\",\"verdict\":\"PASS\",\"detail\":\"W/R in manager/ + shared/ human file area\"}"
+      log_info "P7 manager/$mn: PASS"
+    else
+      fail7="$fail7 manager/$mn"
+      add_pass "{\"component\":\"manager/$mn\",\"verdict\":\"FAIL\",\"detail\":\"manager/ or shared/ probe failed\"}"
+    fi
+  done <<<"$mnames"
+
+  # --- bucket quota: source vs target (degrades to a warning - no in-repo quota mechanism) ---
+  local qsrc qdst
+  qsrc=$(mc_raw admin bucket quota "$SRC_ALIAS/$bucket" 2>/dev/null | head -1 || true)
+  qdst=$(mc_raw admin bucket quota "$DST_ALIAS/$bucket" 2>/dev/null | head -1 || true)
+  if [ -n "$qsrc" ] && [ -n "$qdst" ]; then
+    log_info "P7 quota: source='$qsrc' target='$qdst'"
+    report_add "cutover" "p7-quota" "pass" "source='$qsrc' target='$qdst'"
+  else
+    log_warn "P7 quota: engine does not report bucket quotas (indeterminate - there is no in-repo quota mechanism; set the human file area quota by hand after cutover if needed)"
+    report_add "cutover" "p7-quota" "warn" "quota indeterminate (engine does not report it)"
+  fi
+
+  print_table
+  state_set "stage_detail.p7" "$pass_json"
+  report_add "cutover" "p7-components" "info" "$(jq -c . <<<"$pass_json")"
+  if [ -n "$fail7" ]; then
+    fail_notice "P7 components" "component verification failed:$fail7 (the PASS table above shows which)"
+    exit 1
+  fi
+  state_stage "COMPONENT_VERIFIED"
+}
+
+# ---- P8: resume + observation window + rollback command ----
+p8_resume() {
+  log_info "P8: resume complete + observation window"
+  local writers k n orig cname missing=""
+  writers=$(state_get '.stage_detail.writers // []')
+  if [ "$DRY_RUN" = false ]; then
+    while IFS=$'\t' read -r k n orig; do
+      [ -z "${k:-}" ] && continue
+      [ "$orig" = "Stopped" ] && continue
+      cname=$(member_container_name "$k" "$n")
+      container_present "$cname" || missing="$missing $cname"
+    done < <(jq -r '.[] | [.kind, .name, .state] | @tsv' <<<"$writers")
+    if [ -n "$missing" ]; then
+      fail_notice "P8 resume" "expected consumer containers missing:$missing"
+      exit 1
+    fi
+  fi
+  # the source goes read-only from here - OPERATIONAL DISCIPLINE, deliberately not
+  # enforced via the source IAM (the rollback path must be able to use the source again)
+  log_warn "P8: from now on the source $SRC_EP is READ-ONLY by discipline (point no client at it). The tool does NOT change the source IAM - the rollback path needs it."
+  cat <<EOF
+==================== OBSERVATION WINDOW ($SHADOW_DAYS days) ====================
+  * daily: compare object counts source vs target; the source count must NOT grow
+  * watch the controller + member logs for storage errors
+  * keep the source and its data disk/PVC alive - it is the rollback data source
+rollback (copy-paste): $0 <same-args> --state-dir $STATE_DIR --rollback
+===============================================================================
+EOF
+  rm -f "$STATE_DIR/quiesce.lock"
+  report_add "cutover" "p8-resume" "pass" "consumers running on the new backend; quiesce lock released; observation window started"
+  state_stage "CUTOVER_DONE"
+  report_write > "$STATE_DIR/report-final.json"
+  log_info "ONE-COMMAND MIGRATION COMPLETE (stage=CUTOVER_DONE)"
+}
+
+# ============ rollback (restores original config + writer states) ============
+do_rollback() {
+  local stage scope
+  stage=$(state_get '.stage')
+  [ "$stage" != "INIT" ] || die 1 "state.stage=INIT - nothing to roll back"
+  scope=$(rollback_scope "$stage")
+  [ "$scope" = "unsupported" ] && die 1 "state.stage=$stage is not a rollback-able state"
+  log_info "rollback: stage=$stage scope=$scope"
+  if [ "$scope" = "config+writers" ]; then
+    rollback_config
+  fi
+  rollback_writers "$scope"
+  rm -f "$STATE_DIR/quiesce.lock" 2>/dev/null || true
+  state_stage "ROLLED_BACK"
+  report_write > "$STATE_DIR/report-rollback.json"
+  cat <<EOF
+rollback complete (stage=ROLLED_BACK).
+Target-side new writes disposition:
+  (a) DEFAULT: discard - writes that landed on the target after the cutover are NOT preserved.
+  (b) optional manual reverse delta - only while the source took no writes (Gate A empty), per bucket:
+        mc mirror --overwrite --remove <dst>/<bucket> <src>/<bucket>
+      --remove is safe ONLY while Gate A is empty; otherwise reconcile key by key.
+Start over with a FRESH --state-dir (this state file is terminal).
+EOF
+}
+
+rollback_config() {
+  local bdir
+  bdir=$(backup_dir_current)
+  [ -n "$bdir" ] && [ -d "$bdir" ] || { log_fail "rollback: original-config snapshot missing ($bdir) - restore the controller config by hand from your own records"; return 0; }
+  case "$DEPLOYMENT" in
+    embedded)
+      local env_pre image out_sh envfile ws
+      env_pre=$(cat "$bdir/controller-env-pre.json" 2>/dev/null || true)
+      image=$(cat "$bdir/controller-image.txt" 2>/dev/null || true)
+      if [ -z "$env_pre" ] || [ "$env_pre" = "[]" ]; then
+        log_fail "rollback: $bdir/controller-env-pre.json missing - restore the controller env by hand"
+        return 1
+      fi
+      ws=$(jq -r '.[0].Mounts[] | select(.Type == "bind" and .Destination == "/root/agentteams-fs/agents/manager") | .Source' "$bdir/controller-inspect-pre.json" 2>/dev/null || true)
+      EMBED_WORKSPACE="$ws"
+      out_sh="$bdir/controller-run-rollback.sh"; envfile="$bdir/controller-env-rollback.env"
+      render_controller_run "$out_sh" "$envfile" "${image:-<embedded image>}" "$env_pre"
+      log_info "rollback: rebuilding the embedded controller with its ORIGINAL env ($bdir)"
+      exec_or_print_sh "docker rm -f $CONTROLLER_CONTAINER"
+      exec_or_print_sh "bash $out_sh"
+      [ "$DRY_RUN" = false ] && wait_controller_up 120 || true
+      if [ "$DRY_RUN" = false ]; then
+        local env_now
+        env_now=$(container_env_json "$CONTROLLER_CONTAINER")
+        log_info "rollback: controller env restored (endpoint=$(env_value "$env_now" AGENTTEAMS_FS_ENDPOINT), provider=$(env_value "$env_now" AGENTTEAMS_STORAGE_PROVIDER))"
+      fi
+      ;;
+    helm)
+      if [ -f "$bdir/helm-values-pre.yaml" ]; then
+        log_info "rollback: helm upgrade -f $bdir/helm-values-pre.yaml"
+        exec_or_print helm upgrade "$HELM_RELEASE" "$HELM_CHART" -n "$NS" -f "$bdir/helm-values-pre.yaml" --wait
+      else
+        log_fail "rollback: $bdir/helm-values-pre.yaml missing - restore the helm values by hand"
+        return 1
+      fi
+      ;;
+    *)
+      log_info "rollback: no --deployment (writers-only scope anyway); nothing to restore on the config side"
+      ;;
+  esac
+  return 0
+}
+
+rollback_writers() { # <scope>
+  local scope="$1" writers k n orig cname ep
+  writers=$(state_get '.stage_detail.writers // []')
+  if [ -z "$writers" ] || [ "$writers" = "[]" ]; then
+    log_info "rollback: no writer list in state (pre-0.3.0 state?) - restore the member states by hand"
+    return 0
+  fi
+  # reverse of the stop order: managers first, then workers
+  while IFS=$'\t' read -r k n orig; do
+    [ -z "${k:-}" ] && continue
+    if ! set_member_state "$k" "$n" "$orig"; then
+      log_warn "rollback: $k/$n -> $orig FAILED (fix by hand)"
+    fi
+    [ "$orig" = "Stopped" ] && continue
+    cname=$(member_container_name "$k" "$n")
+    if [ "$scope" = "config+writers" ] && [ "$DRY_RUN" = false ] && container_present "$cname"; then
+      # the consumer may carry the SWITCHED env (recreated in P6) - force a fresh one
+      # from the RESTORED config
+      log_info "rollback: $k/$n - recreating the container from the restored config"
+      delete_member_container "$cname"
+    fi
+    if [ "$DRY_RUN" = false ]; then
+      wait_for_container "$cname" 180 || { log_warn "rollback: $cname not back yet (the controller recreates it - check its logs)"; continue; }
+      ep=$(env_value "$(container_env_json "$cname")" AGENTTEAMS_FS_ENDPOINT)
+      case "$ep" in
+        *$(ep_hostport "$SRC_EP")*) log_info "rollback: $k/$n env back on the source ($ep)" ;;
+        *) log_warn "rollback: $k/$n env endpoint='$ep' (expected the source $(ep_hostport "$SRC_EP")) - if it still points at the target, delete the container once so the controller recreates it" ;;
+      esac
+    fi
+  done < <(jq -r 'reverse | .[] | [.kind, .name, .state] | @tsv' <<<"$writers")
+}
+
+# ============ --resume: continue the chain from the current stage ============
+run_resume_chain() {
+  local stage dep chain ph
+  stage=$(state_get '.stage')
+  dep=$(state_get '.stage_detail.deployment // "none"')
+  [ -n "$DEPLOYMENT" ] && dep="$DEPLOYMENT"
+  chain=$(resume_chain_for "$stage" "$dep")
+  log_info "resume: stage=$stage deployment=$dep -> chain: $chain"
+  if printf '%s' "$chain" | grep -q '^('; then
+    log_info "$chain"
+    return 0
+  fi
+  for ph in $chain; do
+    case "$ph" in
+      P1) phase_quiesce ;;
+      P2) phase_data ;;
+      P3) phase_iam ;;
+      P4) phase_verify ;;
+      P5) p5_switch_config ;;
+      P6) p6_recreate_consumers ;;
+      P7) p7_verify_components ;;
+      P8) p8_resume ;;
+      *) die 1 "resume: unknown phase $ph in chain '$chain'" ;;
+    esac
+  done
+  report_write > "$STATE_DIR/report-resume.json"
+}
+
+# ============ --dry-run: print the actual command lines for P1-P8 ============
+print_full_plan() {
+  local dep writers passes
+  dep=$(state_get '.stage_detail.deployment // "none"')
+  if [ "$dep" = "none" ]; then
+    log_info "dry-run plan (legacy mode, no --deployment): P0 preflight (done) -> P2 data (mc mirror, mode=$MODE) -> P3 IAM replay -> P4 final delta + V1-V9; the cutover itself stays manual (cutover-checklist.sh)"
+    return 0
+  fi
+  writers=$(state_get '.stage_detail.writers // []')
+  passes=$(state_get '.stage_detail.passes // 1')
+  log_info "dry-run plan (deployment=$dep): the actual commands P1-P8 would run:"
+  log_info "P1 quiesce:"
+  log_info "  [manual first] stop the external clients that write to $SRC_EP"
+  local k n st cn
+  while IFS=$'\t' read -r k n st; do
+    [ -z "${k:-}" ] && continue
+    if [ "$st" = "Stopped" ]; then
+      log_info "  $k/$n already Stopped (skip)"
+      continue
+    fi
+    case "$dep" in
+      embedded)
+        if [ "$k" = "worker" ]; then
+          log_info "  docker exec $CONTROLLER_CONTAINER agt update worker $n --state Stopped"
+        else
+          log_info "  docker cp <manager-$n-state-Stopped.yaml> $CONTROLLER_CONTAINER:/tmp/agentteams-migrate-$n.yaml && docker exec $CONTROLLER_CONTAINER agt apply -f /tmp/agentteams-migrate-$n.yaml"
+        fi ;;
+      helm)
+        log_info "  kubectl -n $NS patch $k $n --type merge -p {\"spec\":{\"state\":\"Stopped\"}}" ;;
+    esac
+  done < <(jq -r '.[] | [.kind, .name, .state] | @tsv' <<<"$writers")
+  case "$dep" in
+    helm)
+      local cd2
+      cd2=$(helm_controller_deploy)
+      [ -n "$cd2" ] && log_info "  kubectl -n $NS scale deploy $cd2 --replicas=0 (controller, strict tier)"
+      ;;
+    embedded)
+      log_info "  controller: stays up (hosts the source storage) - freeze asserted by quiesce.lock + window evidence" ;;
+  esac
+  log_info "  window evidence: $QUIESCE_SAMPLES equal samples x ${QUIESCE_INTERVAL}s (object count / total bytes / top-level prefix digest)"
+  log_info "P2 data: mc mirror $SRC_ALIAS/<bucket> $DST_ALIAS/<bucket> (mode=$MODE, $passes pass(es))"
+  log_info "P3 IAM: replay users/policies/service-credentials from the P0 snapshot"
+  log_info "P4: final delta (mc mirror --newer-than <last pass anchor>) + V1-V9 + cutover-checklist.sh"
+  case "$dep" in
+    embedded)
+      log_info "P5: (original env+inspect snapshotted to $(state_get '.original_config_snapshot // empty')) docker rm -f $CONTROLLER_CONTAINER && docker run (installer shape, AGENTTEAMS_STORAGE_PROVIDER=s3, AGENTTEAMS_FS_ENDPOINT=$DST_EP, AGENTTEAMS_FS_BUCKET=$(first_bucket), env via --env-file)" ;;
+    helm)
+      log_info "P5: helm upgrade $HELM_RELEASE $HELM_CHART -n $NS --set storage.provider=s3 --set storage.mode=existing --set storage.bucket=$(first_bucket) --set storage.s3.endpoint=$DST_EP --set storage.s3.existingSecret=${S3_SECRET:-<--s3-secret>} --wait" ;;
+  esac
+  log_info "P6: recreate consumers with their original states:"
+  while IFS=$'\t' read -r k n st; do
+    [ -z "${k:-}" ] && continue
+    cn=$(member_container_name "$k" "$n")
+    case "$dep" in
+      embedded) log_info "  (if present) docker rm -f $cn ; docker exec $CONTROLLER_CONTAINER agt ... state=$st ; assert env AGENTTEAMS_FS_ENDPOINT=$DST_EP" ;;
+      helm)     log_info "  (if present) kubectl -n $NS delete pod $cn ; kubectl -n $NS patch $k $n --type merge -p {\"spec\":{\"state\":\"$st\"}} ; assert pod env" ;;
+    esac
+  done < <(jq -r '.[] | select(.state != "Stopped") | [.kind, .name, .state] | @tsv' <<<"$writers")
+  log_info "P7: per-component W/R/L/D probes (own identity) + cross-partition 403 negative + shared/ human file area probe + source-absence assert + quota compare + PASS table"
+  log_info "P8: re-assert consumers, source read-only by discipline, $SHADOW_DAYS-day observation window, rollback command printed, quiesce lock released"
 }
 
 # ============ main ============
@@ -920,12 +1623,16 @@ status_json() {
   else
     pre='{}'; ver='{}'
   fi
+  local bdir
+  bdir=$(jq -r '.original_config_snapshot // empty' "$sf" 2>/dev/null || true)
   jq -n --arg s "$schema" --arg st "$stage" --arg up "$updated" \
     --argjson pre "$pre" --argjson ver "$ver" \
     --arg sd "$STATE_DIR" --arg sf "$sf" --arg rf "$rf" \
     --arg ck "$STATE_DIR/cutover-checklist.sh" --arg pl "$STATE_DIR/dryrun-plan.json" \
+    --arg bd "$bdir" \
     '{schema:$s, stage:$st, updated_at:$up, preflight:$pre, verify:$ver,
-      artifacts:{state:$sf, report:$rf, checklist:$ck, plan:$pl}}'
+      artifacts:{state:$sf, report:$rf, checklist:$ck, plan:$pl,
+                 backup_dir:(if $bd == "" then null else $bd end)}}'
 }
 
 main() {
@@ -952,26 +1659,58 @@ main() {
   state_init
   report_add "run" "start" "info" "mode=$MODE profile=$PROFILE dry_run=$DRY_RUN script=$SCRIPT_VERSION"
 
+  # --rollback / --resume operate on an existing state and bypass the phase gates
+  if [ "$ROLLBACK" = true ]; then
+    do_rollback
+    exit 0
+  fi
+  if [ "$RESUME" = true ]; then
+    run_resume_chain
+    exit 0
+  fi
+
   local stage
   stage=$(state_get '.stage')
   case "$PHASE" in
     all)
-      [ "$stage" = "INIT" ] || die 1 "state.stage=$stage (not INIT): resume per phase with --phase, or delete $STATE_FILE to start over"
+      [ "$stage" = "INIT" ] || die 1 "state.stage=$stage (not INIT): resume with --resume, or delete $STATE_FILE to start over"
       state_stage "PREFLIGHT"
       phase_preflight
       if [ "$DRY_RUN" = true ]; then
+        print_full_plan
         report_write > "$STATE_DIR/dryrun-plan.json"
         log_info "dry-run complete: plan and preflight report -> $STATE_DIR/dryrun-plan.json (drop --dry-run to execute for real)"
         exit 0
       fi
+      if [ -n "$DEPLOYMENT" ]; then
+        phase_quiesce
+      else
+        log_warn "--deployment not given: legacy data-plane flow (P0->P2->P3->P4); writers are NOT stopped, the cutover stays manual (cutover-checklist.sh)"
+      fi
       phase_data
       phase_iam
       phase_verify
-      log_info "main flow complete (preflight+data+IAM+verify green). cutover is a human gate: --phase cutover"
-      report_write > "$STATE_DIR/report-main.json"
+      if [ "$CUTOVER" = true ] && [ -n "$DEPLOYMENT" ]; then
+        phase_cutover
+        report_write > "$STATE_DIR/report-main.json"
+      else
+        local dep_hint="${DEPLOYMENT:-embedded|helm}"
+        log_info "main flow complete (P0..P4 green; writers frozen: $([ -n "$DEPLOYMENT" ] && echo yes || echo 'no - legacy mode')). cutover is a human gate: run --phase cutover --deployment $dep_hint with this same --state-dir"
+        report_write > "$STATE_DIR/report-main.json"
+      fi
+      ;;
+    quiesce)
+      [ "$stage" = "PREFLIGHT" ] || die 1 "state.stage=$stage (quiesce requires state=PREFLIGHT - run --phase all preflight first, or delete the state)"
+      [ -n "$DEPLOYMENT" ] || die 4 "quiesce requires --deployment embedded|helm"
+      deployment_reachable || die 1 "${deployment_unreachable_msg} - refusing to stop writers"
+      phase_quiesce
+      report_write > "$STATE_DIR/report-quiesce.json"
       ;;
     data)
-      [ "$stage" = "PREFLIGHT" ] || die 1 "state.stage=$stage (data requires state=PREFLIGHT - run --phase all preflight first, or delete the state)"
+      case "$stage" in
+        PREFLIGHT|QUIESCED) : ;;
+        *) die 1 "state.stage=$stage (data requires state=PREFLIGHT or QUIESCED)" ;;
+      esac
       phase_data
       report_write > "$STATE_DIR/report-data.json"
       ;;
@@ -986,17 +1725,24 @@ main() {
       report_write > "$STATE_DIR/report-verify.json"
       ;;
     cutover)
-      [ "$stage" = "VERIFIED" ] || die 1 "state.stage=$stage (cutover requires state=VERIFIED - verify must be green)"
+      case "$stage" in
+        VERIFIED|CONFIG_SWITCHED|CONSUMERS_RECREATED|COMPONENT_VERIFIED) : ;;
+        *) die 1 "state.stage=$stage (cutover requires state=VERIFIED - verify must be green first; if the cutover already started, --resume continues it)" ;;
+      esac
       phase_cutover
+      report_write > "$STATE_DIR/report-cutover.json"
       ;;
     mark-cutover-done)
-      [ "$stage" = "CUTOVER_PENDING" ] || die 1 "state.stage=$stage (run --phase cutover and complete cutover-checklist.sh first)"
+      case "$stage" in
+        VERIFIED|CONFIG_SWITCHED|CONSUMERS_RECREATED|COMPONENT_VERIFIED|CUTOVER_PENDING) : ;;
+        *) die 1 "state.stage=$stage (mark-cutover-done accepts any post-verify stage; for the automated flow P8 records it itself)" ;;
+      esac
       state_stage "CUTOVER_DONE"
       report_add "cutover" "done" "pass" "operator acknowledgement recorded at $(now_iso) (it does not verify restarts or configuration)"
       report_write > "$STATE_DIR/report-final.json"
       log_info "state=CUTOVER_DONE - the $SHADOW_DAYS-day shadow period starts (keep the source read-only, do not delete)"
       ;;
-    *) die 4 "unknown --phase=$PHASE (all|data|iam|verify|cutover|mark-cutover-done)" ;;
+    *) die 4 "unknown --phase=$PHASE (all|quiesce|data|iam|verify|cutover|mark-cutover-done)" ;;
   esac
 }
 

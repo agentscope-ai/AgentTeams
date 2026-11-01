@@ -4,18 +4,31 @@
 # Dependencies: bash>=4, mc, curl, jq (checked by require_cmd); file locking via flock
 set -euo pipefail
 
-SCRIPT_VERSION="0.2.1-v4fix"
+SCRIPT_VERSION="0.3.0-oneclick"
 
 # ---------- globals (populated by parse_args) ----------
 MODE="odm"                 # odm|mirror|inplace
 PROFILE="generic"          # generic|docker-local|docker-nfs|k8s-rwo|k8s-rwx|agentteams
-PHASE="all"                # all = preflight+data+iam+verify; cutover/mark-cutover-done must be explicit
+PHASE="all"                # all|quiesce|data|iam|verify|cutover|mark-cutover-done
 BUCKETS=""                 # comma separated; default = every source bucket (filled after P0)
 SHADOW_DAYS=14             # default shadow period (P0-13)
 STATE_DIR=""               # default ./storage-migrate-state
 DRY_RUN=false
 STATUS_MODE=false           # --status: print the machine-readable status and exit
 CUTOVER=false
+# --- one-command stop-the-world orchestration (maintainer 3rd round, 2026-11-01) ---
+DEPLOYMENT=""                 # embedded | helm | "" ("" = legacy data-plane flow P0->P4 only)
+NS="default"                  # helm: k8s namespace
+HELM_RELEASE="agentteams"
+HELM_CHART="helm/agentteams"
+S3_SECRET=""                  # helm: EXISTING k8s Secret holding the s3 keys (the tool never creates it)
+CONTROLLER_CONTAINER="agentteams-controller"
+CONTAINER_PREFIX="agentteams-"  # resource prefix (AGENTTEAMS_RESOURCE_PREFIX default)
+QUIESCE_INTERVAL=10           # window-evidence sampling interval (s)
+QUIESCE_SAMPLES=3             # window-evidence sample count (3 equal samples = freeze proven)
+BACKUP_ROOT=""                # original-config snapshot root (default ./storage-migrate-backup)
+RESUME=false                  # --resume: continue the chain from the current stage
+ROLLBACK=false                # --rollback: restore original config + writer states
 DST_DURABILITY="strict"    # declarative assertion (P0-15)
 SRC_EP="" SRC_AK="" SRC_SK=""
 DST_EP="" DST_AK="" DST_SK=""
@@ -56,22 +69,60 @@ usage() {
   cat <<'EOF'
 storage-migrate.sh - MinIO -> RustFS storage-plane migration (backfill + cutover)
 
+One command (stop-the-world cutover, maintainer 3rd round):
+  storage-migrate.sh --src-endpoint http://SRC:9000 --src-ak AK --src-sk SK \
+                     --dst-endpoint http://DST:9000 --dst-ak AK --dst-sk SK \
+                     --deployment embedded --phase all --cutover \
+                     [--dst-data-dir /host/path] ...
+
+  One command runs P0..P4 (preflight -> freeze writers -> data+IAM -> final
+  delta+verify), then P5..P8 (switch controller config -> recreate consumers ->
+  per-component read/write+permission verification -> resume + observation).
+  Supported deployment mode: embedded (single-node, installer shape) = verified;
+  helm = structurally supported, NOT end-to-end verified (see docs).
+
 Usage:
   storage-migrate.sh --src-endpoint http://SRC:9000 --src-ak AK --src-sk SK \
                      --dst-endpoint http://DST:9000 --dst-ak AK --dst-sk SK \
                      [--buckets a,b,c] [--mode odm|mirror|inplace] \
                      [--profile generic|docker-local|docker-nfs|k8s-rwo|k8s-rwx|agentteams] \
-                     [--phase all|data|iam|verify|cutover|mark-cutover-done] \
+                     [--phase all|quiesce|data|iam|verify|cutover|mark-cutover-done] \
                      [--dst-data-dir /host/path] [--shadow-days 14] \
                      [--backfill-timeout 21600] [--dst-durability strict|relaxed|none] \
                      [--iam-secrets-file /path/to/secrets.json] \
-                     [--state-dir DIR] [--dry-run] [--status]
+                     [--state-dir DIR] [--dry-run] [--status] [--cutover] \
+                     [--resume] [--rollback] \
+                     [--deployment embedded|helm] [--ns NS] [--helm-release R] \
+                     [--helm-chart C] [--s3-secret S] [--controller-container N] \
+                     [--container-prefix P] [--quiesce-interval 10] [--quiesce-samples 3] \
+                     [--backup-root DIR]
 
-Phases: 0 preflight (P0-1..15) -> 1 data (odm/mirror/inplace) -> 2 IAM -> 3 verify (V1-V8) -> 4 cutover
-      --phase all (default) = 0..3; --phase cutover requires state=VERIFIED (human gate);
-      --mark-cutover-done requires cutover-checklist.sh to be completed first
-      --status prints the machine-readable status (stable JSON) and exits 0;
-      it is the integration contract for a future API/UI (see README)
+Phases (stage machine in state.json):
+  P0 preflight (P0-1..16, incl. writer enumeration + original-config snapshot)
+  P1 quiesce  (stop writers with real mechanisms + quiesce-window evidence;
+               needs --deployment; embedded controller stop is a documented
+               manual step asserted by the tool - it hosts the source data)
+  P2 data     (odm/mirror/inplace backfill)
+  P3 IAM      (user/policy/service-credentials replay)
+  P4 verify   (FINAL delta + V1-V9; runs only after P1 - the source is still
+               readable at this point, so the final delta is possible)
+  P5 switch   (original config fully snapshotted to the backup dir, then the
+               controller env is switched to the new backend and re-asserted)
+  P6 recreate (consumers recreated with their ORIGINAL states; per-component
+               env assertion prints endpoint/bucket/prefix)
+  P7 component (per-component read/write/list/delete probes with each component's
+               OWN identity + cross-partition 403 negative + human-file-area check)
+  P8 resume   (resume writers, observation window, rollback command printed)
+
+  --phase all (default) = P0..P4; with --deployment P1 runs in between;
+  --cutover (with --deployment) = one command P0..P8.
+  --phase cutover = P5..P8 (requires state=VERIFIED, then --deployment).
+  --resume continues from the last finished stage; --rollback restores the
+  original config (if already switched) and the original writer states.
+  --mark-cutover-done acknowledges a manually completed cutover (any post-verify
+  stage; for the automated flow P8 does this itself).
+  --status prints the machine-readable status (stable JSON) and exits 0;
+  it is the integration contract for a future API/UI (see README)
 Exit codes: 0 ok - 1 general failure - 2 preflight red - 3 verify/IAM red - 4 usage error - 130 interrupted
 EOF
 }
@@ -101,6 +152,18 @@ parse_args() {
       --dry-run)           DRY_RUN=true; shift ;;
       --status)            STATUS_MODE=true; shift ;;
       --cutover)           CUTOVER=true; shift ;;
+      --resume)            RESUME=true; shift ;;
+      --rollback)          ROLLBACK=true; shift ;;
+      --deployment)        DEPLOYMENT="$2"; shift 2 ;;
+      --ns)                NS="$2"; shift 2 ;;
+      --helm-release)      HELM_RELEASE="$2"; shift 2 ;;
+      --helm-chart)        HELM_CHART="$2"; shift 2 ;;
+      --s3-secret)         S3_SECRET="$2"; shift 2 ;;
+      --controller-container) CONTROLLER_CONTAINER="$2"; shift 2 ;;
+      --container-prefix)  CONTAINER_PREFIX="$2"; shift 2 ;;
+      --quiesce-interval)  QUIESCE_INTERVAL="$2"; shift 2 ;;
+      --quiesce-samples)   QUIESCE_SAMPLES="$2"; shift 2 ;;
+      --backup-root)       BACKUP_ROOT="$2"; shift 2 ;;
       -h|--help)           usage; exit 0 ;;
       *) die 4 "unknown argument: $1 (see --help)" ;;
     esac
@@ -118,6 +181,19 @@ parse_args() {
     *) die 4 "--mode must be odm|mirror|inplace (got: $MODE)" ;; esac
   case "$DST_DURABILITY" in strict|relaxed|none) : ;;
     *) die 4 "--dst-durability must be strict|relaxed|none (got: $DST_DURABILITY)" ;; esac
+  case "$DEPLOYMENT" in ""|embedded|helm) : ;;
+    *) die 4 "--deployment must be embedded|helm (got: $DEPLOYMENT)" ;; esac
+  case "$QUIESCE_INTERVAL" in ''|*[!0-9]*) die 4 "--quiesce-interval must be a positive integer (got: $QUIESCE_INTERVAL)" ;; esac
+  [ "$QUIESCE_INTERVAL" -ge 1 ] || die 4 "--quiesce-interval must be >= 1 (got: $QUIESCE_INTERVAL)"
+  case "$QUIESCE_SAMPLES" in ''|*[!0-9]*) die 4 "--quiesce-samples must be an integer (got: $QUIESCE_SAMPLES)" ;; esac
+  [ "$QUIESCE_SAMPLES" -ge 2 ] || die 4 "--quiesce-samples must be >= 2 (got: $QUIESCE_SAMPLES)"
+  [ "$QUIESCE_SAMPLES" -le 10 ] || die 4 "--quiesce-samples must be <= 10 (got: $QUIESCE_SAMPLES)"
+  if [ "$CUTOVER" = true ] && [ -z "$DEPLOYMENT" ]; then
+    die 4 "--cutover requires --deployment embedded|helm (one-command flow; without --deployment run the legacy P0..P4 and cut over manually)"
+  fi
+  if [ "$RESUME" = true ] && [ "$ROLLBACK" = true ]; then
+    die 4 "--resume and --rollback are mutually exclusive"
+  fi
 
   [ -n "$STATE_DIR" ] || STATE_DIR="./storage-migrate-state"
   STATE_FILE="$STATE_DIR/state.json"
@@ -300,6 +376,9 @@ report_write() {
 }
 
 # ---------- helpers ----------
+get_buckets() { # space-separated bucket list from state (set by P0)
+  state_get '.src.buckets | join(" ")'
+}
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # extract host:port from an endpoint
 ep_hostport() { local e="$1"; e="${e#http://}"; e="${e#https://}"; echo "${e%%/*}"; }

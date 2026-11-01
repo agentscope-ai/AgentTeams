@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,6 +110,146 @@ func TestHumanFiles_S3Lifecycle(t *testing.T) {
 	h.getFile(back, hfReq(t, http.MethodGet, "alice", "s3.txt", hfSelf(), nil))
 	if back.Code != http.StatusOK || back.Body.String() != "hello-s3" {
 		t.Fatalf("GET after restore = %d %q", back.Code, back.Body.String())
+	}
+}
+
+// TestHumanFiles_S3SpaceNamesQuota reproduces the maintainer's quota bypass
+// against a real S3-compatible backend: the human-readable `mc ls` parse
+// truncated object names at the first space, so the per-key stat the quota
+// scan then targeted a key that does not exist and silently counted the
+// file as zero bytes. The full name must survive the listing round-trip.
+//
+// Skipped unless HUMAN_FILES_S3_ENDPOINT is set (the same gate as
+// TestHumanFiles_S3Lifecycle; the CI job selects it with -run
+// 'TestHumanFiles_S3').
+func TestHumanFiles_S3SpaceNamesQuota(t *testing.T) {
+	endpoint := os.Getenv("HUMAN_FILES_S3_ENDPOINT")
+	if endpoint == "" {
+		t.Skip("set HUMAN_FILES_S3_ENDPOINT/HUMAN_FILES_S3_ACCESS_KEY/HUMAN_FILES_S3_SECRET_KEY/HUMAN_FILES_S3_BUCKET to run the native backend space-name quota regression")
+	}
+	access := os.Getenv("HUMAN_FILES_S3_ACCESS_KEY")
+	secret := os.Getenv("HUMAN_FILES_S3_SECRET_KEY")
+	bucket := os.Getenv("HUMAN_FILES_S3_BUCKET")
+	if access == "" || secret == "" || bucket == "" {
+		t.Fatal("HUMAN_FILES_S3_ACCESS_KEY, HUMAN_FILES_S3_SECRET_KEY and HUMAN_FILES_S3_BUCKET are required")
+	}
+
+	alias := "humanfilestest"
+	client := oss.NewMinIOClient(oss.Config{
+		Endpoint:      endpoint,
+		AccessKey:     access,
+		SecretKey:     secret,
+		Alias:         alias,
+		Bucket:        bucket,
+		StoragePrefix: alias + "/" + bucket,
+	})
+	ctx := context.Background()
+
+	// The other S3 regressions share this bucket and human; start from a
+	// clean area so the quota gate only sees this test's bytes, and leave
+	// it clean.
+	_ = client.DeletePrefix(ctx, humanFilesPrefix("alice"))
+	_ = client.DeletePrefix(ctx, humanTrashPrefix("alice"))
+	_ = client.DeleteObject(ctx, humanQuotaLedgerKey("alice"))
+	defer func() {
+		_ = client.DeletePrefix(ctx, humanFilesPrefix("alice"))
+		_ = client.DeletePrefix(ctx, humanTrashPrefix("alice"))
+		_ = client.DeleteObject(ctx, humanQuotaLedgerKey("alice"))
+	}()
+
+	h, _, _ := newHumanFilesRig(t)
+	h.oss = client
+
+	listRoot := func() humanFileListResponse {
+		rec := httptest.NewRecorder()
+		h.getFile(rec, hfReq(t, http.MethodGet, "alice", "", hfSelf(), nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("list root: %d %s", rec.Code, rec.Body.String())
+		}
+		var resp humanFileListResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	findEntry := func(resp humanFileListResponse, name string) *humanFileEntry {
+		for i := range resp.Entries {
+			if resp.Entries[i].Name == name {
+				return &resp.Entries[i]
+			}
+		}
+		return nil
+	}
+	usedNow := func() int64 {
+		rec := hfGetQuota(t, h, "alice", hfSelf())
+		if rec.Code != http.StatusOK {
+			t.Fatalf("get quota: %d %s", rec.Code, rec.Body.String())
+		}
+		var q humanQuotaResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &q); err != nil {
+			t.Fatal(err)
+		}
+		return q.UsedBytes
+	}
+
+	// Quota 10 bytes: the 6-byte space-bearing upload fits...
+	if rec := hfPutQuota(t, h, "alice", hfAdmin(), `{"quotaBytes":10}`); rec.Code != http.StatusOK {
+		t.Fatalf("put quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPutFile(t, h, "alice", "meeting notes.txt", hfSelf(), "012345"); rec.Code != http.StatusOK {
+		t.Fatalf("put space name: %d %s", rec.Code, rec.Body.String())
+	}
+	// ...and must come back under its full name with its real size (the
+	// truncated parser reported "notes.txt" with size 0).
+	entries := listRoot()
+	if e := findEntry(entries, "meeting notes.txt"); e == nil || e.Type != "file" || e.Size != 6 {
+		t.Fatalf("listing lacks the full space-bearing file: %+v", entries.Entries)
+	}
+	if e := findEntry(entries, "notes.txt"); e != nil {
+		t.Fatalf("listing carries the truncated name: %+v", entries.Entries)
+	}
+	// ...and count toward the live usage.
+	if used := usedNow(); used != 6 {
+		t.Fatalf("live usage = %d, want 6", used)
+	}
+	// ...so the 10-byte upload no longer fits.
+	if rec := hfPutFile(t, h, "alice", "big.txt", hfSelf(), "0123456789"); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("upload against a full quota: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+
+	// Control: a plain name runs the identical flow. The quota grows by
+	// exactly the 6 bytes the control file needs, so both files coexist.
+	if rec := hfPutQuota(t, h, "alice", hfAdmin(), `{"quotaBytes":12}`); rec.Code != http.StatusOK {
+		t.Fatalf("raise quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPutFile(t, h, "alice", "plain.txt", hfSelf(), "012345"); rec.Code != http.StatusOK {
+		t.Fatalf("put plain name: %d %s", rec.Code, rec.Body.String())
+	}
+	if e := findEntry(listRoot(), "plain.txt"); e == nil || e.Size != 6 {
+		t.Fatalf("listing lacks the plain file: %+v", listRoot().Entries)
+	}
+	if used := usedNow(); used != 12 {
+		t.Fatalf("live usage after the control = %d, want 12", used)
+	}
+	if rec := hfPutFile(t, h, "alice", "big2.txt", hfSelf(), "0123456789"); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("plain-name control: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+
+	// A space-bearing directory name: the entry must keep its full name and
+	// its bytes must be walked. The quota gets headroom so this test's
+	// bytes are the only variable.
+	if rec := hfPutQuota(t, h, "alice", hfAdmin(), `{"quotaBytes":100}`); rec.Code != http.StatusOK {
+		t.Fatalf("raise quota for dir: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPutFile(t, h, "alice", "my dir/inner.txt", hfSelf(), "01"); rec.Code != http.StatusOK {
+		t.Fatalf("put nested file: %d %s", rec.Code, rec.Body.String())
+	}
+	entries = listRoot()
+	if e := findEntry(entries, "my dir"); e == nil || e.Type != "directory" {
+		t.Fatalf("listing lacks the space-bearing directory: %+v", entries.Entries)
+	}
+	if used := usedNow(); used != 14 {
+		t.Fatalf("live usage = %d, want 14 (6 + 6 + 2)", used)
 	}
 }
 

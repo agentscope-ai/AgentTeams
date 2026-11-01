@@ -990,6 +990,12 @@ checklist_preparse() {
       --dst-endpoint)
         [ $((i + 1)) -lt $n ] || die 4 "--dst-endpoint requires a value"
         DST_EP="${CHECKLIST_REST[$((i + 1))]}"; i=$((i + 2)) ;;
+      # The consumers run INSIDE the controller/worker network namespaces, where
+      # the host's 127.0.0.1 is their own loopback. Give the address they can
+      # actually reach (e.g. http://mig-target:9000); defaults to --dst-endpoint.
+      --dst-endpoint-in-container)
+        [ $((i + 1)) -lt $n ] || die 4 "--dst-endpoint-in-container requires a value"
+        DST_EP_IN_CONTAINER="${CHECKLIST_REST[$((i + 1))]}"; i=$((i + 2)) ;;
       *) die 4 "unexpected argument with --print-checklist: $a (print mode accepts only --deploy-mode, --src-endpoint, --dst-endpoint)" ;;
     esac
   done
@@ -1201,7 +1207,7 @@ p5_embedded() {
   fi
   EMBED_WORKSPACE=$(jq -r '.[0].Mounts[] | select(.Type == "bind" and .Destination == "/root/agentteams-fs/agents/manager") | .Source' "$bdir/controller-inspect-pre.json" 2>/dev/null || true)
   local env_new
-  env_new=$(swap_storage_env "$env_pre" "$DST_EP" "$(first_bucket)" "$DST_AK" "$DST_SK")
+  env_new=$(swap_storage_env "$env_pre" "${DST_EP_IN_CONTAINER:-$DST_EP}" "$(first_bucket)" "$DST_AK" "$DST_SK")
   out_sh="$bdir/controller-run-post.sh"; envfile="$bdir/controller-env-post.env"
   render_controller_run "$out_sh" "$envfile" "$image" "$env_new"
   log_info "P5 embedded: switching the controller (docker rm -f + installer-shape docker run, env via --env-file; backup: $bdir)"
@@ -1215,7 +1221,11 @@ p5_embedded() {
       fail_notice "P5 switch" "env assert failed: AGENTTEAMS_STORAGE_PROVIDER != s3 in the rebuilt controller"
       exit 1
     fi
-    assert_consumer_env "$env_now" "P5 controller" || { fail_notice "P5 switch" "controller env does not point at the target"; exit 1; }
+    # The container talks to the in-cluster address, not the host's loopback.
+    local _ep_saved="$DST_EP"
+    DST_EP="${DST_EP_IN_CONTAINER:-$DST_EP}"
+    assert_consumer_env "$env_now" "P5 controller" || { DST_EP="$_ep_saved"; fail_notice "P5 switch" "controller env does not point at the target"; exit 1; }
+    DST_EP="$_ep_saved"
   fi
   report_add "cutover" "p5-switch" "pass" "embedded controller switched to s3 (original env snapshotted: $bdir)"
 }
@@ -1306,7 +1316,11 @@ p7_verify_components() {
   # --- controller (admin identity from its own env) ---
   local cenv cep cbucket cak csk
   cenv=$(container_env_json "$CONTROLLER_CONTAINER")
-  cep=$(env_value "$cenv" AGENTTEAMS_FS_ENDPOINT); [ -z "$cep" ] && cep="$DST_EP"
+  # The probe runs mc on THIS host, so it needs the host-facing endpoint; the
+  # container's own endpoint (e.g. http://mig-target:9000) is not resolvable
+  # here. The credentials still come from the container env: they are what the
+  # controller itself uses against the new backend.
+  cep="$DST_EP"
   cbucket=$(env_value "$cenv" AGENTTEAMS_FS_BUCKET); [ -z "$cbucket" ] && cbucket="$bucket"
   cak=$(env_value "$cenv" AGENTTEAMS_FS_ACCESS_KEY); [ -z "$cak" ] && cak=$(env_value "$cenv" MINIO_USER)
   csk=$(env_value "$cenv" AGENTTEAMS_FS_SECRET_KEY); [ -z "$csk" ] && csk=$(env_value "$cenv" MINIO_PASSWORD)

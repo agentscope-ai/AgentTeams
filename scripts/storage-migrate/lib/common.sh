@@ -136,6 +136,8 @@ parse_args() {
       --src-ak)            SRC_AK="$2"; shift 2 ;;
       --src-sk)            SRC_SK="$2"; shift 2 ;;
       --dst-endpoint)      DST_EP="$2"; shift 2 ;;
+      # Container-side address: consumers do not share the host's loopback.
+      --dst-endpoint-in-container) DST_EP_IN_CONTAINER="$2"; shift 2 ;;
       --dst-ak)            DST_AK="$2"; shift 2 ;;
       --dst-sk)            DST_SK="$2"; shift 2 ;;
       --buckets)           BUCKETS="$2"; shift 2 ;;

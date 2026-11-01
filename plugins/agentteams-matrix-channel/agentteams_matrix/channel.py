@@ -4044,13 +4044,31 @@ class AgentTeamsMatrixChannel(BaseChannel):
             return None
         path = self._write_long_message_file(text)
         file_ref = str(path)
-        media_uri, _ = await self._upload_file(file_ref)
+        # #1469 P1: the long-text fallback follows the same room-aware
+        # attachment rule as send_media — an encrypted room never receives the
+        # full text as a plaintext upload behind a bare MXC URL.
+        if getattr(self, "encryption", False):
+            await self._prepare_room_send(room_id)
+        encrypted = self._room_will_encrypt(room_id)
+        media_uri, decryption = await self._upload_file(file_ref, encrypt=encrypted)
         if not media_uri:
             logger.warning(
                 "MatrixChannel: long text fallback upload failed for %s",
                 file_ref,
             )
-        long_message_metadata = _long_message_metadata(path, media_uri)
+        elif encrypted and not decryption:
+            logger.warning(
+                "MatrixChannel: encrypted long-text upload returned no "
+                "decryption metadata for %s; refusing to send a plaintext "
+                "attachment",
+                file_ref,
+            )
+            return None
+        # An encrypted room cannot use a bare MXC URL: the summary carries no
+        # media metadata and the file event below carries the descriptor.
+        long_message_metadata = _long_message_metadata(
+            path, None if encrypted else media_uri
+        )
 
         def build_content(summary: str) -> Dict[str, Any]:
             if edit_event_id:
@@ -4102,6 +4120,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     "m.file",
                     media_uri,
                     file_meta,
+                    decryption,
                 )
             except Exception as exc:
                 logger.warning(
@@ -5023,7 +5042,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         # event must carry the file descriptor. _prepare_room_send aligns the
         # client's local encryption flags with the server first (the same
         # helper the text path uses).
-        if self.encryption:
+        if getattr(self, "encryption", False):
             await self._prepare_room_send(room_id)
         encrypted = self._room_will_encrypt(room_id)
 

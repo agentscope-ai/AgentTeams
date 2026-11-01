@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
@@ -72,17 +73,57 @@ func (l *ManagerConfigStore) managerLocalConfigPath() string {
 	return fmt.Sprintf("%s/%s/openclaw.json", l.AgentFSDir, l.ManagerName)
 }
 
-// writeManagerLocalConfig writes openclaw.json to the local filesystem (shared mount).
-// This ensures the manager container sees changes immediately without MinIO sync.
+// writeManagerLocalConfig writes openclaw.json to the local filesystem (shared
+// mount) only when no local config exists yet. The Manager's start script owns
+// the live file after first boot: replacing it from the Controller on every
+// reconcile changes the authored revision under OpenClaw's startup config
+// guard and can trap the Manager in a restart loop.
 func (l *ManagerConfigStore) writeManagerLocalConfig(data []byte) {
 	path := l.managerLocalConfigPath()
 	if path == "" {
 		return
 	}
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	if _, err := os.Stat(path); err == nil {
+		return
+	} else if !os.IsNotExist(err) {
+		fmt.Printf("warning: cannot inspect manager local config %s: %v\n", path, err)
+		return
+	}
+	if err := writeManagerLocalConfigAtomic(path, data); err != nil {
 		// Non-fatal: MinIO is the source of truth
 		fmt.Printf("warning: failed to write manager local config %s: %v\n", path, err)
 	}
+}
+
+// writeManagerLocalConfigAtomic replaces the shared Manager config without
+// exposing a truncated/invalid file to OpenClaw's config reader.
+func writeManagerLocalConfigAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".openclaw.json.tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(0600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // --- Manager Config ---
@@ -124,6 +165,8 @@ func (l *ManagerConfigStore) PutManagerConfig(configJSON []byte) error {
 	if err := l.OSS.PutObject(ctx, key, configJSON); err != nil {
 		return err
 	}
+	// First boot may need the generated file on the shared workspace, but an
+	// existing local file is authoritative and must not be replaced here.
 	l.writeManagerLocalConfig(configJSON)
 	return nil
 }
@@ -196,12 +239,31 @@ func (l *ManagerConfigStore) UpdateManagerGroupAllowFrom(workerMatrixID string, 
 		return nil
 	}
 
-	allowList := extractStringSlice(matrixCfg["groupAllowFrom"])
+	if updateGroupAllowFrom(matrixCfg, workerMatrixID, add) {
+		out, err := json.MarshalIndent(config, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal manager config: %w", err)
+		}
+		if err := l.OSS.PutObject(ctx, key, out); err != nil {
+			return err
+		}
+	}
+	// Keep an already-running Manager's local allowlist in sync without
+	// replacing its entire local config (which may contain Manager-owned
+	// fields and customizations).
+	l.updateManagerLocalGroupAllowFrom(workerMatrixID, add)
+	return nil
+}
 
+// updateGroupAllowFrom applies an allowlist mutation and reports whether it
+// changed the slice. Keeping the local and OSS paths on one mutator prevents
+// the two copies from drifting.
+func updateGroupAllowFrom(matrixCfg map[string]interface{}, workerMatrixID string, add bool) bool {
+	allowList := extractStringSlice(matrixCfg["groupAllowFrom"])
 	if add {
 		for _, id := range allowList {
 			if id == workerMatrixID {
-				return nil
+				return false
 			}
 		}
 		allowList = append(allowList, workerMatrixID)
@@ -212,20 +274,45 @@ func (l *ManagerConfigStore) UpdateManagerGroupAllowFrom(workerMatrixID string, 
 				filtered = append(filtered, id)
 			}
 		}
+		if len(filtered) == len(allowList) {
+			return false
+		}
 		allowList = filtered
 	}
-
 	matrixCfg["groupAllowFrom"] = allowList
+	return true
+}
 
+// updateManagerLocalGroupAllowFrom mutates only the allowlist in the live
+// local Manager config, preserving Manager-owned fields and customizations.
+func (l *ManagerConfigStore) updateManagerLocalGroupAllowFrom(workerMatrixID string, add bool) {
+	path := l.managerLocalConfigPath()
+	if path == "" {
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var config map[string]interface{}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return
+	}
+	channels, _ := config["channels"].(map[string]interface{})
+	if channels == nil {
+		return
+	}
+	matrixCfg, _ := channels["matrix"].(map[string]interface{})
+	if matrixCfg == nil || !updateGroupAllowFrom(matrixCfg, workerMatrixID, add) {
+		return
+	}
 	out, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal manager config: %w", err)
+		return
 	}
-	if err := l.OSS.PutObject(ctx, key, out); err != nil {
-		return err
+	if err := writeManagerLocalConfigAtomic(path, out); err != nil {
+		fmt.Printf("warning: failed to update manager local allowlist %s: %v\n", path, err)
 	}
-	l.writeManagerLocalConfig(out)
-	return nil
 }
 
 func extractStringSlice(v interface{}) []string {

@@ -1,0 +1,17 @@
+{
+  "id": "agentteams-teamharness",
+  "name": "AgentTeams TeamHarness Bundle",
+  "version": "0.1.0",
+  "type": "bundle",
+  "description": "Portable runtime-adapter bundle for the AgentTeams TeamHarness runtime plugin.",
+  "author": "AgentTeams",
+  "manifest": "plugin.yaml",
+  "contract": "contract.yaml",
+  "adapters": [
+    {
+      "id": "qwenpaw",
+      "path": "adapters/qwenpaw",
+      "pluginId": "teamharness"
+    }
+  ]
+}

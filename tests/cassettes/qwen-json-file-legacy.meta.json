@@ -1,0 +1,18 @@
+{
+  "family": "legacy",
+  "status": "unsupported",
+  "qwen_version": "0.24.7, 0.25.0, 0.25.1, 0.25.2, 0.25.3, 0.26.3 — none writes the native --json-file file in headless one-shot mode",
+  "recorded_at": null,
+  "prompt": "Reply OK",
+  "flags": ["-m", "qwen3.6-27b-fp8", "--json-file", "<recorder temp path>"],
+  "output_source": "file",
+  "exit_code": 0,
+  "evidence": {
+    "tested_versions": ["0.24.7", "0.25.0", "0.25.1", "0.25.2", "0.25.3", "0.26.3"],
+    "invocation": "qwen -m qwen3.6-27b-fp8 --json-file <abs path> \"Reply OK\"",
+    "result": "exit 0 on every version; no --json-file file produced in headless one-shot mode",
+    "tested_at": "2026-10-30",
+    "tested_by": "controller"
+  },
+  "re_record": "none — settled unsupported: no published qwen (0.24.7-0.26.3, headless one-shot) writes the native --json-file file; a re-record is only meaningful if a future version reintroduces file semantics"
+}

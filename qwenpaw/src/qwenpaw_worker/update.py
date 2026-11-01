@@ -382,6 +382,11 @@ class MemberRuntimeConfig:
         return value if isinstance(value, dict) else None
 
     @property
+    def matrix_channel(self) -> Optional[Dict[str, Any]]:
+        value = self.channels.get("matrix")
+        return value if isinstance(value, dict) else None
+
+    @property
     def channel_policy(self) -> Dict[str, Any]:
         return _section(self.desired, "channelPolicy")
 
@@ -1285,6 +1290,12 @@ class ApplyResult:
     agent_package_dir: Optional[Path]
 
 
+class DeferredChannelRead(RuntimeError):
+    """A runtime channel read failed, so the dependent reconcile must be
+    deferred instead of substituting default values for the unread fields
+    (substituting show_*=True would silently re-open display the user
+    turned off via the workbench channel API)."""
+
 
 class RuntimeUpdater:
     """Apply controller-projected runtime desired state inside one worker pod."""
@@ -1317,6 +1328,7 @@ class RuntimeUpdater:
         self._applied_model_identity: Optional[str] = None
         self._applied_subagent_model_identity: Optional[str] = None
         self._applied_matrix_channel_identity: Optional[str] = None
+        self._matrix_retry_pending: bool = False
         self._applied_dingtalk_channel_identity: Optional[str] = None
         self._applied_agent_package_identity: Optional[Tuple[str, str, str, str]] = None
         self._applied_agent_package_dir: Optional[Path] = None
@@ -1340,7 +1352,12 @@ class RuntimeUpdater:
         started_at = time.monotonic()
         config = runtime_config or self.load()
         previous = self.current_config
-        changed = force or previous is None or config.changed_from(previous)
+        changed = (
+            force
+            or previous is None
+            or config.changed_from(previous)
+            or self._matrix_retry_pending
+        )
         if not changed:
             logger.info(
                 "runtime config apply skipped component=update worker=%s generation=%s changed=%s "
@@ -1368,10 +1385,23 @@ class RuntimeUpdater:
         subagent_model_should_apply = (
             force or subagent_model_identity != self._applied_subagent_model_identity
         )
-        matrix_channel_identity = self._component_identity(self._matrix_channel_payload(config))
-        matrix_channel_should_apply = (
-            force or matrix_channel_identity != self._applied_matrix_channel_identity
-        )
+        matrix_channel_identity: Optional[str] = None
+        matrix_channel_should_apply = False
+        try:
+            matrix_channel_identity = self._component_identity(self._matrix_channel_payload(config))
+            self._matrix_retry_pending = False
+            matrix_channel_should_apply = (
+                force or matrix_channel_identity != self._applied_matrix_channel_identity
+            )
+        except DeferredChannelRead as exc:
+            self._matrix_retry_pending = True
+            logger.warning(
+                "matrix_channel_reconcile=deferred reason=%s component=update worker=%s "
+                "step=identity duration_ms=%s",
+                exc,
+                self.config.worker_name,
+                _duration_ms(started_at),
+            )
         dingtalk_channel_identity = self._component_identity(
             self._dingtalk_channel_desired_fields(config.dingtalk_channel)
         )
@@ -1428,8 +1458,20 @@ class RuntimeUpdater:
             self._apply_subagent_model(config)
             self._applied_subagent_model_identity = subagent_model_identity
         if matrix_channel_should_apply:
-            self._apply_matrix_channel(config)
-            self._applied_matrix_channel_identity = matrix_channel_identity
+            try:
+                self._apply_matrix_channel(config)
+            except DeferredChannelRead as exc:
+                self._matrix_retry_pending = True
+                logger.warning(
+                    "matrix_channel_reconcile=deferred reason=%s component=update worker=%s "
+                    "step=apply duration_ms=%s",
+                    exc,
+                    self.config.worker_name,
+                    _duration_ms(started_at),
+                )
+            else:
+                self._applied_matrix_channel_identity = matrix_channel_identity
+                self._matrix_retry_pending = False
         if dingtalk_channel_should_apply:
             self._apply_dingtalk_channel(config)
             self._applied_dingtalk_channel_identity = dingtalk_channel_identity
@@ -1900,11 +1942,20 @@ class RuntimeUpdater:
 
     def _apply_channel_policy(self, config: MemberRuntimeConfig) -> None:
         group_allow, dm_allow, group_deny, dm_deny = self._matrix_policy_ids(config)
-        if (
-            not (group_allow or dm_allow or group_deny or dm_deny)
-            and self._matrix_channel_payload(config) is None
-        ):
-            return
+        if not (group_allow or dm_allow or group_deny or dm_deny):
+            try:
+                matrix_payload = self._matrix_channel_payload(config)
+            except DeferredChannelRead as exc:
+                self._matrix_retry_pending = True
+                logger.warning(
+                    "matrix_channel_reconcile=deferred reason=%s component=update worker=%s "
+                    "step=channel_policy",
+                    exc,
+                    self.config.worker_name,
+                )
+                return
+            if matrix_payload is None:
+                return
         self_allow = _string(config.member.get("matrixUserId"))
         self_allowlist = [self_allow] if self_allow else []
         whitelist = self._dedupe(self_allowlist + group_allow + dm_allow)
@@ -1938,6 +1989,34 @@ class RuntimeUpdater:
         room_id = desired["room_id"]
         if room_id:
             self._ensure_require_mention_group(groups, room_id)
+        # Display flags: the declarative source of truth is the
+        # controller's desired channels.matrix section (filter_* inverted
+        # to show_*). When the CRD is silent, keep the runtime's current
+        # values; workbench channel-API writes are runtime-only and must
+        # not be reset on the next reconcile.
+        flags = config.matrix_channel
+        if flags is None:
+            # No declarative section: keep what the runtime already has
+            # (the workbench channel API writes are runtime-only; they must
+            # not be reset on the next reconcile). A failed read defers the
+            # whole Matrix reconcile (DeferredChannelRead) instead of
+            # falling back to show_*=True defaults.
+            if self.api_client is None:
+                raw_current: Any = {}
+            else:
+                try:
+                    raw_current = self.api_client.get_channel("agentteams_matrix")
+                except Exception as exc:
+                    raise DeferredChannelRead("matrix channel read failed") from exc
+            current: Dict[str, Any] = raw_current if isinstance(raw_current, dict) else {}
+            show_tool_calls = bool(current.get("show_tool_calls", True))
+            show_tool_results = bool(current.get("show_tool_results", True))
+            show_thinking = bool(current.get("show_thinking", True))
+        else:
+            filtered = _bool(flags.get("filter_tool_messages", False))
+            show_tool_calls = not filtered
+            show_tool_results = not filtered
+            show_thinking = not _bool(flags.get("filter_thinking", False))
         return {
             "enabled": True,
             "homeserver": desired["homeserver"],
@@ -1953,9 +2032,9 @@ class RuntimeUpdater:
             # AGENTTEAMS_MATRIX_SHARE_SESSION=true to restore room-wide
             # session sharing (legacy behavior).
             "share_session_in_group": _env_bool("AGENTTEAMS_MATRIX_SHARE_SESSION"),
-            "show_tool_calls": True,
-            "show_tool_results": True,
-            "show_thinking": True,
+            "show_tool_calls": show_tool_calls,
+            "show_tool_results": show_tool_results,
+            "show_thinking": show_thinking,
             "groups": groups,
         }
 

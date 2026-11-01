@@ -45,7 +45,7 @@ type Config struct {
 
 	// Provider selection — drives which initialization steps run.
 	GatewayProvider string // "higress" | "ai-gateway"
-	StorageProvider string // "minio"   | "oss"
+	StorageProvider string // "minio" | "oss" | "s3"
 
 	// Gateway initialization (only consulted when GatewayProvider == "higress")
 	LLMProvider                string // e.g. "qwen", "openai"
@@ -61,8 +61,13 @@ func (c Config) managesGatewayRoutes() bool {
 	return c.GatewayProvider == "" || c.GatewayProvider == "higress"
 }
 
+// managesStorage reports whether the controller creates and maintains the
+// bucket itself. True for embedded MinIO and external S3-compatible
+// backends (e.g. RustFS): both expose the bucket-creation API via mc, so
+// the initializer uses the same on-demand EnsureBucket path. External
+// cloud OSS keeps bucket provisioning outside the controller.
 func (c Config) managesStorage() bool {
-	return c.StorageProvider == "" || c.StorageProvider == "minio"
+	return c.StorageProvider == "" || c.StorageProvider == "minio" || c.StorageProvider == "s3"
 }
 
 // Initializer performs one-time cluster bootstrap: waits for infrastructure,
@@ -141,11 +146,12 @@ func (i *Initializer) Run(ctx context.Context) error {
 
 // waitForOSS polls MinIO/OSS until the bucket is accessible.
 //
-// For the embedded MinIO (storage.provider == "minio") the bucket is
-// created on demand through BucketManager.EnsureBucket. For an
-// externally-managed OSS bucket the initializer does not try to create
-// or mutate anything — it just polls ListObjects to confirm that the
-// controller's credentials grant access to the configured bucket.
+// For the embedded MinIO (storage.provider == "minio") and external
+// S3-compatible backends (storage.provider == "s3", e.g. RustFS) the
+// bucket is created on demand through BucketManager.EnsureBucket. For an
+// externally-managed cloud OSS bucket the initializer does not try to
+// create or mutate anything — it just polls ListObjects to confirm that
+// the controller's credentials grant access to the configured bucket.
 func (i *Initializer) waitForOSS(ctx context.Context) error {
 	if i.Config.managesStorage() {
 		if bm, ok := i.OSS.(oss.BucketManager); ok {

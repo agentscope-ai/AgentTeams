@@ -8,6 +8,24 @@
 
 set -e
 
+# Coding-CLI home: QwenPaw only persists QWENPAW_WORKING_DIR (/app/working)
+# plus .backups/.secret — so use it as HOME for the CLI there. OpenClaw/Hermes
+# have no QWENPAW_WORKING_DIR; their $HOME is the MinIO-synced agent home.
+_orig_home="${HOME:-}"
+if [ -n "${QWENPAW_WORKING_DIR:-}" ]; then
+    HOME="$QWENPAW_WORKING_DIR"
+    export HOME
+    if [ -n "$_orig_home" ] && [ -f "$_orig_home/.gitconfig" ] && [ -z "${GIT_CONFIG_GLOBAL:-}" ]; then
+        GIT_CONFIG_GLOBAL="$_orig_home/.gitconfig"
+        export GIT_CONFIG_GLOBAL
+    fi
+fi
+_cli_prefix="${AGENTTEAMS_CODING_CLI_PREFIX:-${QWENPAW_WORKING_DIR:-$HOME}/.coding-cli}"
+if [ -d "$_cli_prefix/bin" ]; then
+    PATH="$_cli_prefix/bin:$PATH"
+    export PATH
+fi
+
 cli=""
 workspace=""
 prompt_file=""
@@ -195,6 +213,7 @@ append_run_record() {
     RUN_REC_ENDED_AT="$ended_at" RUN_REC_LOG_BYTES="$log_bytes" \
     RUN_REC_PROMPT_FILE="$prompt_file" RUN_REC_PROMPT_SHA256="$prompt_sha" \
     RUN_REC_PROMPT_SUMMARY="$prompt_summary" \
+    RUN_REC_JSON_FILE="$g_json_file" \
     python3 -c '
 import json, os
 e = os.environ
@@ -217,6 +236,9 @@ for k in ("PROMPT_FILE", "PROMPT_SHA256", "PROMPT_SUMMARY"):
     v = opt(k)
     if v is not None:
         rec[k.lower()] = v
+v = opt("JSON_FILE")
+if v is not None:
+    rec["json_file"] = v
 print(json.dumps(rec, ensure_ascii=False))
 ' >> "$runs_jsonl" 2>/dev/null || true
     return 0
@@ -255,22 +277,20 @@ if [ -f "$marker_file" ]; then
     # Expired marker, or matching processor AND run ID -> proceed.
 fi
 
-# Pre-flight: the configured CLI binary must be on PATH. If it is missing here
-# even though the config says delegation is enabled, the most common cause is a
-# worker RECREATION: the CLI is installed into the container's ephemeral layer
-# (npm install -g, i.e. the image layer at $npm prefix), which container
-# recreation wipes, while the auth config in the persistent agent home
-# (~/.qwen/settings.json) survives. Fail fast with an actionable message
-# instead of a confusing "command not found" deep inside the run.
+# Pre-flight: the configured CLI binary must be on PATH. The worker image
+# bakes in the default Qwen Code CLI (worker/Dockerfile, QWEN_CODE_VERSION),
+# so a plain container recreation keeps it. A missing binary here means the
+# image does not carry this CLI (or it was uninstalled): install/upgrade via
+# POST /api/v1/workers/{name}/coding-cli/$cli/install and retry. Auth settings
+# live in the agent home; probe the settings endpoint after a recreation.
 if ! command -v "$cli" >/dev/null 2>&1; then
     fail_run blocked cli-missing 125 \
         "[run-coding-cli] ERROR: coding CLI '$cli' is configured but not on PATH." \
-        "[run-coding-cli] Usual cause: the worker was recreated and the CLI install" \
-        "[run-coding-cli] (npm -g, container ephemeral layer) was wiped. Re-run the install" \
-        "[run-coding-cli] endpoint (POST /api/v1/workers/{name}/coding-cli/$cli/install)," \
-        "[run-coding-cli] then retry. Auth settings are written container-local by that" \
-        "[run-coding-cli] surface and may not survive a recreation — probe settings and" \
-        "[run-coding-cli] re-apply via the settings endpoint if the probe shows them missing."
+        "[run-coding-cli] The worker image bakes in Qwen Code (QWEN_CODE_VERSION);" \
+        "[run-coding-cli] another CLI/version is not in this image. Install/upgrade via" \
+        "[run-coding-cli] POST /api/v1/workers/{name}/coding-cli/$cli/install, then retry." \
+        "[run-coding-cli] Auth settings live in the agent home — probe settings after a" \
+        "[run-coding-cli] recreation and re-apply if the probe shows them missing."
 fi
 
 # Governance flags are defined by the qwen runner; other runners have no
@@ -280,10 +300,24 @@ if [ "$cli" != "qwen" ] && { [ -n "$g_model" ] || [ -n "$g_allowed_tools" ] || [
 fi
 
 # Optional per-runner budget/boundary fields from the delegating agent's
-# config (default ~/coding-cli-config.json, override with CODING_CLI_CONFIG
-# for tests). Only the qwen case consumes them today; absent/0/false -> no
-# extra flags.
-config_file="${CODING_CLI_CONFIG:-${HOME}/coding-cli-config.json}"
+# control config. The HOME override above moves HOME to the persisted
+# runtime home (CLI installation and auth belong there); the control
+# config belongs to the delegating agent, so its default path is resolved
+# against the ORIGINAL home captured before that override — otherwise an
+# existing config in the original home would be hidden by the move.
+# Backward compatible: a config created in the effective (persisted) home
+# after the move is still honoured when the original home has none.
+# Override with CODING_CLI_CONFIG for tests. Only the qwen case consumes
+# these today; absent/0/false -> no extra flags.
+if [ -n "${CODING_CLI_CONFIG:-}" ]; then
+    config_file="$CODING_CLI_CONFIG"
+elif [ -n "${_orig_home:-}" ] && [ -f "${_orig_home}/coding-cli-config.json" ]; then
+    config_file="${_orig_home}/coding-cli-config.json"
+elif [ -f "${HOME}/coding-cli-config.json" ]; then
+    config_file="${HOME}/coding-cli-config.json"
+else
+    config_file="${_orig_home:-$HOME}/coding-cli-config.json"
+fi
 max_session_turns=""
 sandbox_setting=""
 approval_mode_setting=""
@@ -387,11 +421,66 @@ case "$cli" in
         if [ "${g_bare}" = "1" ]; then
             qwen_args+=(--bare)
         fi
-        # Optional structured-output passthrough (qwen --json-file <path>):
-        # writes the final result JSON to <path> for machine audit. Off by
-        # default, so the raw stream remains the audit source of truth.
+        # --json-file: the wrapper's external contract is "the run ends with
+        # a parseable JSON audit file at <path>". Measured 2026-10-30 with
+        # the real CLI (headless one-shot, isolated HOME with a working
+        # ~/.qwen/settings.json): NO published qwen writes the native
+        # --json-file file — 0.24.7, 0.25.0, 0.25.1 and 0.25.2 all exit 0
+        # and produce no file (--yolo and -o json change nothing), matching
+        # the previously known 0.25.3 and 0.26.3; 0.25.1/0.25.2 --help
+        # already describe --json-file as dual output (TUI renders on
+        # stdout, JSON events go to the file) that never lands headless.
+        # The capture branch is therefore the DEFAULT for every version,
+        # and the pass-through is reachable only through an explicit
+        # operator override (CODING_CLI_JSON_BOUNDARY) pinning an older
+        # CLI — a branch with no supported version, whose post-run
+        # assertion fails loudly (JSON-FILE-DRIFT) when the file does not
+        # land:
+        #   json-out : -o json (the stdout event array — NOT stream-json)
+        #              and the wrapper captures the file itself; stderr is
+        #              diverted so the captured JSON stays pure. Default
+        #              for every version, including one the detection
+        #              probe cannot read.
+        #   legacy   : original passthrough — the CLI itself writes the
+        #              file. Reached only when CODING_CLI_JSON_BOUNDARY is
+        #              set and the detected version sorts below it (or
+        #              detection fails with the override set).
+        json_branch="none"
+        qwen_version=""
+        json_cap_tmp=""
         if [ -n "${g_json_file}" ]; then
-            qwen_args+=(--json-file "${g_json_file}")
+            qwen_version="$(qwen --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" || true
+            if [ -z "${CODING_CLI_JSON_BOUNDARY:-}" ]; then
+                # No explicit boundary override: capture is the default
+                # for every version (see the measured facts above).
+                json_branch="json-out"
+                qwen_args+=(-o json)
+            elif [ -n "${qwen_version}" ] && [ "$(printf '%s\n%s\n' "${CODING_CLI_JSON_BOUNDARY}" "${qwen_version}" | sort -V | tail -1)" = "${qwen_version}" ]; then
+                json_branch="json-out"
+                qwen_args+=(-o json)
+            else
+                json_branch="legacy"
+                # The CLI writes a unique per-run capture in the TARGET'S
+                # directory (so the post-run mv onto the contract path is an
+                # atomic rename) — never the target itself: handing
+                # ${g_json_file} to the CLI let a valid audit left by a
+                # previous run pass the post-run assertion for a CLI that
+                # wrote nothing (the maintainer's 0.24.0 repro).
+                json_cap_tmp="${g_json_file}.run-$$-$(date +%s)-${RANDOM}.tmp"
+                qwen_args+=(--json-file "${json_cap_tmp}")
+            fi
+        fi
+        # Both branches deliver the target via the wrapper's own validated
+        # move (legacy per-run capture, or the json-out stdout capture), so a
+        # pre-existing non-regular target (FIFO, /dev/fd/N, device) would
+        # block the delivery: the contract covers regular file paths only —
+        # refuse before the run starts.
+        if [ "${json_branch}" != "none" ] && [ -e "${g_json_file}" ] && [ ! -f "${g_json_file}" ]; then
+            fail_run failed json-file-not-regular 1 \
+                "[run-coding-cli] ERROR: --json-file target '${g_json_file}' is not a regular file (FIFO/device?)." \
+                "[run-coding-cli] The ${json_branch} branch only guarantees regular file paths — the" \
+                "[run-coding-cli] target is delivered by a validated move onto that path." \
+                "[run-coding-cli] No run was started; point --json-file at a regular file path and retry."
         fi
         # Governance visibility (code-level signal, NOT a hard gate): an
         # unattended qwen run that has none of a turn budget / sandbox / tool
@@ -412,8 +501,43 @@ case "$cli" in
         if [ "$ungoverned" = "1" ]; then
             echo "[run-coding-cli] WARNING: unattended qwen run is UNGOVERNED (no turn budget, no --sandbox, no tool allowlist) — bounded only by the ${timeout_secs}s wall-clock timeout. Tighten via ${config_file} (max_session_turns/sandbox) or --allowed-tools." | tee -a "$log_file"
         fi
-        timeout "$timeout_secs" qwen "${qwen_args[@]}" "$(cat "$prompt_file")" 2>&1 | tee -a "$log_file"
-        exit_code=${PIPESTATUS[0]}
+        if [ "${json_branch}" = "json-out" ]; then
+            # stdout -> tee (run log) + a TEMP capture file, never the target:
+            # the post-run section validates the capture (non-empty,
+            # parseable) and only then moves it into place, so a run that
+            # exits 0 with an empty or malformed capture cannot leave a
+            # zero-byte/invalid audit at the contract path while being
+            # recorded as ok. stderr -> a temp file merged into the log
+            # afterwards, so the captured stdout stays pure JSON (the
+            # contract is the parseable audit file).
+            json_err_tmp="$(mktemp "${log_dir}/.json-err-XXXXXX")"
+            json_cap_tmp="$(mktemp "${log_dir}/.json-cap-XXXXXX")"
+            # Capture under set +e: a failed write (tee or the redirect)
+            # must reach the post-run failure path below, not abort the
+            # script here, which would skip the runs.jsonl record.
+            # PIPESTATUS is read in ONE array assignment — each subsequent
+            # command resets the array, so splitting the read across
+            # statements would silently clobber the elements.
+            json_cap_write_failed=0
+            set +e
+            timeout "$timeout_secs" qwen "${qwen_args[@]}" "$(cat "$prompt_file")" 2>"${json_err_tmp}" | tee -a "$log_file" > "${json_cap_tmp}"
+            json_cap_status=("${PIPESTATUS[@]}")
+            set -e
+            exit_code="${json_cap_status[0]}"
+            if [ "${json_cap_status[1]}" -ne 0 ] || [ ! -e "${json_cap_tmp}" ]; then
+                # The capture write failed: discard the partial capture, keep
+                # the target untouched, and let the post-run section fail the
+                # run (json-capture-failed) instead of recording ok.
+                json_cap_write_failed=1
+                rm -f "${json_cap_tmp}"
+                json_cap_tmp=""
+            fi
+            cat "${json_err_tmp}" >> "${log_file}" 2>/dev/null || true
+            rm -f "${json_err_tmp}"
+        else
+            timeout "$timeout_secs" qwen "${qwen_args[@]}" "$(cat "$prompt_file")" 2>&1 | tee -a "$log_file"
+            exit_code=${PIPESTATUS[0]}
+        fi
         ;;
     opencode)
         # `opencode run --dir <path>` is the native working-directory flag
@@ -427,6 +551,115 @@ case "$cli" in
             "Unknown CLI tool: $cli. Supported: claude, gemini, qodercli, qwen, opencode"
         ;;
 esac
+
+# --json-file contract post-processing (qwen only, when the flag is set):
+# one structured log line per json run — the legacy trigger rate is the
+# drift-severity metric the log pipeline can aggregate — and, on exit 0, the
+# post-run proof that the audit file is a usable artifact on BOTH branches:
+#   legacy   : the CLI wrote the wrapper's per-run capture path — assert
+#              that capture is non-empty parseable, then move it into place
+#              (atomic replace; the target only ever holds a validated
+#              capture, so a stale file at the target can never pass).
+#   json-out : the wrapper captured stdout — assert the capture is non-empty
+#              parseable JSON, then move it into place (atomic replace; the
+#              target only ever holds a validated capture).
+# A capture WRITE failure (tee or the redirect, or the move into place)
+# fails the run as json-capture-failed regardless of the CLI's exit code —
+# a run whose audit cannot be written must never be recorded as ok. An
+# unknown version that drifted like 0.25.3 would exit 0 and leave nothing
+# (or a zero-byte/malformed capture), and this turns that silent no-op into
+# a loud one. It complements, not replaces, the "re-run verify on any
+# version change" discipline. A non-zero run exit without a capture failure
+# is left alone (the run already failed loudly; a missing file is a symptom,
+# not drift), so the validation only fires on exit 0.
+json_assert="n/a"
+json_fail_reason=""
+if [ "$cli" = "qwen" ] && [ -n "${g_json_file}" ]; then
+    if [ "${json_cap_write_failed:-0}" = "1" ]; then
+        json_assert="fail"
+        json_fail_reason="json-capture-failed"
+    elif [ "$exit_code" -eq 0 ]; then
+        if [ "${json_branch}" = "legacy" ]; then
+            # Validate the per-run capture BEFORE it becomes the target:
+            # non-empty and parseable (python3 absent -> non-empty only, the
+            # same degradation as before). The assertion is against THIS
+            # run's capture, never against the target: a valid audit left
+            # by a previous run at ${g_json_file} must not pass a CLI that
+            # wrote nothing. An invalid or missing capture is discarded and
+            # the target left exactly as found (the old file is neither
+            # deleted nor treated as this run's artifact).
+            if [ -n "${json_cap_tmp}" ] && [ -s "${json_cap_tmp}" ] && { ! command -v python3 >/dev/null 2>&1 || python3 -m json.tool "${json_cap_tmp}" >/dev/null 2>&1; }; then
+                if mv "${json_cap_tmp}" "${g_json_file}" 2>/dev/null; then
+                    json_assert="pass"
+                else
+                    json_assert="fail"
+                    json_fail_reason="json-capture-failed"
+                    rm -f "${json_cap_tmp}" 2>/dev/null || true
+                fi
+            else
+                json_assert="fail"
+                json_fail_reason="json-file-assertion"
+                rm -f "${json_cap_tmp}" 2>/dev/null || true
+            fi
+        elif [ "${json_branch}" = "json-out" ]; then
+            # Validate the capture BEFORE it becomes the target: non-empty
+            # and parseable (python3 absent -> non-empty only, the same
+            # degradation as the legacy assertion). An invalid capture is
+            # discarded and the target left untouched.
+            if [ -n "${json_cap_tmp:-}" ] && [ -s "${json_cap_tmp}" ] && { ! command -v python3 >/dev/null 2>&1 || python3 -m json.tool "${json_cap_tmp}" >/dev/null 2>&1; }; then
+                if mv "${json_cap_tmp}" "${g_json_file}" 2>/dev/null; then
+                    json_assert="pass"
+                else
+                    json_assert="fail"
+                    json_fail_reason="json-capture-failed"
+                    rm -f "${json_cap_tmp}" 2>/dev/null || true
+                fi
+            else
+                json_assert="fail"
+                json_fail_reason="json-file-assertion"
+                rm -f "${json_cap_tmp}" 2>/dev/null || true
+            fi
+        fi
+    fi
+    printf '{"event":"coding-cli-json-branch","qwen_version":"%s","branch":"%s","assert":"%s"}\n' \
+        "${qwen_version:-unknown}" "${json_branch}" "${json_assert}" >> "${log_file}"
+    if [ "${json_assert}" = "fail" ]; then
+        if [ "${json_fail_reason}" = "json-capture-failed" ]; then
+            fail_run failed json-capture-failed 1 \
+                "JSON-CAPTURE-FAILED: the captured JSON audit could not be delivered to '${g_json_file}' (qwen ${qwen_version:-unknown}, ${json_branch} branch)" \
+                "[run-coding-cli] The per-run capture write failed or the validated move into place failed;" \
+                "[run-coding-cli] no audit file was recorded and the run is not ok." \
+                "[run-coding-cli] Check that the --json-file target's directory exists and is writable, then retry."
+        elif [ "${json_branch}" = "json-out" ]; then
+            fail_run failed json-file-assertion 1 \
+                "JSON-FILE-DRIFT: the captured stdout is empty or unparseable (qwen ${qwen_version:-unknown}, json-out branch)" \
+                "[run-coding-cli] The run exited 0 but no parseable JSON audit could be delivered to" \
+                "'${g_json_file}' — the invalid capture was discarded and the target left untouched." \
+                "[run-coding-cli] Either this qwen version changed -o json's stdout semantics (the" \
+                "[run-coding-cli] capture branch is the default for every version — see 'qwen --version')" \
+                "[run-coding-cli] or the CLI failed to emit its structured result." \
+                "[run-coding-cli] Re-run verify-coding-cli.sh case g."
+        else
+            fail_run failed json-file-assertion 1 \
+                "JSON-FILE-DRIFT: the per-run JSON capture is missing or unparseable (qwen ${qwen_version:-unknown}, legacy branch)" \
+                "[run-coding-cli] The run exited 0 but the CLI wrote no parseable JSON audit for THIS run" \
+                "[run-coding-cli] (its --json-file capture was empty or invalid); the capture was discarded" \
+                "[run-coding-cli] and a file pre-existing at '${g_json_file}' was left untouched." \
+                "[run-coding-cli] The legacy pass-through is only reachable through an explicit" \
+                "[run-coding-cli] CODING_CLI_JSON_BOUNDARY override — and no published qwen (0.24.7-0.26.3," \
+                "[run-coding-cli] headless one-shot) writes the native --json-file file, so this pinned CLI" \
+                "[run-coding-cli] cannot produce the contract. Unset CODING_CLI_JSON_BOUNDARY to use the" \
+                "[run-coding-cli] capture default. Re-run verify-coding-cli.sh case g."
+        fi
+    fi
+    # A run that failed for its own reasons (CLI error, timeout) keeps no
+    # capture temp behind — the target is never written on those paths, and
+    # the log dir must hold no orphans. (The fail paths above have already
+    # exited; this covers the surviving non-zero exits only.)
+    if [ "$exit_code" -ne 0 ] && [ -n "${json_cap_tmp:-}" ] && [ -e "${json_cap_tmp}" ]; then
+        rm -f "${json_cap_tmp}" 2>/dev/null || true
+    fi
+fi
 
 if [ "$exit_code" -eq 124 ]; then
     echo "[run-coding-cli] TIMEOUT after ${timeout_secs}s" | tee -a "$log_file"

@@ -87,6 +87,30 @@ def _submit(workspace: Path, task_id: str, **overrides: Any) -> dict[str, Any]:
     )
 
 
+def _signal_event_path(workspace: Path, task_id: str) -> str:
+    """Shared path of the SIG-COMPLETE (task_submitted) event mirror push (INT-3).
+
+    id_rule v1.1: the fingerprint is the sha256 of the post-write task meta
+    bytes, so derive it (and the project identity) from the on-disk state
+    the submit left behind.
+    """
+    team = str(server._runtime_team_name() or "").strip() or "global"
+    meta_path = workspace / "shared" / "tasks" / task_id / "meta.json"
+    ref_bytes = meta_path.read_bytes()
+    task = json.loads(ref_bytes)
+    event_id = server._signal_event_id(
+        team,
+        str(task.get("project_id") or ""),
+        task_id,
+        "",
+        "SIG-COMPLETE",
+        "task_submitted",
+        None,
+        hashlib.sha256(ref_bytes).hexdigest(),
+    )
+    return f"shared/events/{team}/{event_id}.json"
+
+
 @pytest.fixture(autouse=True)
 def authoritative_project_pull(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep continuation tests focused on the post-pull state contract.
@@ -627,7 +651,12 @@ def test_late_worker_updates_cannot_revive_a_terminal_task(
     )
 
     assert late_update["ok"] is False
-    assert f"{action} cannot update terminal task: completed" in late_update["error"]
+    # The terminal guard rejects through the structured illegal_transition
+    # surface (from/to + detail), not a bare error string (INT-5 round 2).
+    assert late_update["error"] == "illegal_transition"
+    assert late_update["from"] == "completed"
+    assert late_update["to"] == ("in_progress" if action == "ack_task" else "submitted")
+    assert "terminal state completed" in late_update["detail"]
     assert project_path.read_bytes() == before_project
     assert task_path.read_bytes() == before_task
     assert successful_side_effects["publish"] == []
@@ -649,7 +678,10 @@ def test_late_submit_cannot_revive_a_project_terminal_fence_when_task_meta_is_st
     late_submit = _submit(tmp_path, task_id)
 
     assert late_submit["ok"] is False
-    assert "submit_task cannot update terminal task: completed" in late_submit["error"]
+    assert late_submit["error"] == "illegal_transition"
+    assert late_submit["from"] == "completed"
+    assert late_submit["to"] == "submitted"
+    assert "terminal state completed" in late_submit["detail"]
     assert project_path.read_bytes() == before_project
     assert task_path.read_bytes() == before_task
     assert successful_side_effects["publish"] == []
@@ -986,7 +1018,12 @@ def test_legacy_cancelled_task_still_rejects_a_second_cancel(
     )
 
     assert retried["ok"] is False
-    assert "cannot cancel terminal task: cancelled" in retried["error"]
+    # Uncommitted legacy cancel: the cancel terminal guard now rejects with
+    # the structured illegal_transition surface (from == to == cancelled).
+    assert retried["error"] == "illegal_transition"
+    assert retried["from"] == "cancelled"
+    assert retried["to"] == "cancelled"
+    assert "terminal state cancelled" in retried["detail"]
     assert successful_side_effects["sync"] == []
 
 
@@ -1751,6 +1788,8 @@ def test_submit_pushes_and_verifies_result_payload_before_the_meta_commit_point(
         ("stat", f"shared/tasks/{task_id}/output.txt"),
         ("push", f"shared/tasks/{task_id}/meta.json"),
         ("stat", f"shared/tasks/{task_id}/meta.json"),
+        # S2 SIG-COMPLETE (task_submitted) event mirror push — deterministic id.
+        ("push", _signal_event_path(tmp_path, task_id)),
     ]
 
 
@@ -1887,7 +1926,12 @@ def test_submit_meta_commit_must_be_remotely_verified_before_success(
     assert second["task"]["submission_id"] == first["task"]["submission_id"]
     assert calls.count(("push", meta_path)) == 2
     assert calls.count(("stat", meta_path)) == 2
-    assert calls[-2:] == [("push", meta_path), ("stat", meta_path)]
+    assert calls[-3:] == [
+        ("push", meta_path),
+        ("stat", meta_path),
+        # S2 SIG-COMPLETE (task_submitted) event mirror push from the resubmit.
+        ("push", _signal_event_path(tmp_path, task_id)),
+    ]
 
 
 def test_submit_retry_repairs_interrupted_payload_publish_without_rotating_identity(
@@ -1924,7 +1968,9 @@ def test_submit_retry_repairs_interrupted_payload_publish_without_rotating_ident
     assert second["task"]["submission_id"] == first["task"]["submission_id"]
     meta_push = ("push", f"shared/tasks/{task_id}/meta.json")
     assert calls.count(meta_push) == 1
-    assert calls[-2:] == [
+    assert calls[-3:] == [
         meta_push,
         ("stat", f"shared/tasks/{task_id}/meta.json"),
+        # S2 SIG-COMPLETE (task_submitted) event mirror push from the resubmit.
+        ("push", _signal_event_path(tmp_path, task_id)),
     ]

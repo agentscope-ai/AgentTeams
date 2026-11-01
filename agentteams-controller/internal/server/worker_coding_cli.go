@@ -44,6 +44,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path"
 	"regexp"
 	"strings"
 	"sync"
@@ -293,7 +294,24 @@ func (h *CodingCliHandler) listCLIs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *CodingCliHandler) probeCLI(ctx context.Context, eb codingCliExecer, name string, spec codingCliSpec) map[string]interface{} {
-	out, _, exit, err := eb.Exec(ctx, name, []string{spec.BinName, "--version"}, codingCliExecTimeout)
+	bin := spec.BinName
+	// Installs made through the management tab/API land in the persistent
+	// agent home ($HOME/.coding-cli), not on PATH. Prefer that binary.
+	if home, err := h.workerHome(ctx, eb, name); err == nil {
+		candidate := path.Join(home, ".coding-cli", "bin", spec.BinName)
+		if _, _, exit, _ := eb.Exec(ctx, name, []string{"test", "-x", candidate}, 5*time.Second); exit == 0 {
+			bin = candidate
+		}
+	}
+	// The CLI resolves its config from $HOME; run it with the same effective
+	// home the settings API reads and writes. Containers without `env` (or
+	// with a probe wrapper) fall back to the plain invocation.
+	out, _, exit, err := eb.Exec(ctx, name, []string{bin, "--version"}, codingCliExecTimeout)
+	if home, herr := h.workerHome(ctx, eb, name); herr == nil && home != "" {
+		if envOut, _, envExit, envErr := eb.Exec(ctx, name, []string{"env", "HOME=" + home, bin, "--version"}, codingCliExecTimeout); envErr == nil && envExit == 0 {
+			out, exit, err = envOut, envExit, nil
+		}
+	}
 	if err != nil {
 		return map[string]interface{}{"cli": spec.ID, "installed": false, "error": "probe failed: " + err.Error()}
 	}
@@ -340,6 +358,14 @@ func isVersionLike(s string) bool {
 }
 
 func (h *CodingCliHandler) probeCLIAuth(ctx context.Context, eb codingCliExecer, name string, spec codingCliSpec) map[string]interface{} {
+	home := h.settingsHome(ctx, eb, name)
+	settingsPath := expandHomePath(spec.SettingsPath, home)
+	legacyPath := ""
+	if rawHome, rerr := h.shellHome(ctx, eb, name); rerr == nil && rawHome != "" && home != "" {
+		if legacy := expandHomePath(spec.SettingsPath, rawHome); legacy != settingsPath {
+			legacyPath = legacy
+		}
+	}
 	// Auth env vars (qoder QODER_PERSONAL_ACCESS_TOKEN): a non-empty value
 	// means configured. Qoder's own precedence rule is PAT-over-login, so
 	// env is checked first. Only presence is reported, never the value.
@@ -350,13 +376,22 @@ func (h *CodingCliHandler) probeCLIAuth(ctx context.Context, eb codingCliExecer,
 	}
 	// Extra auth files (opencode auth.json): check existence.
 	for _, f := range spec.ExtraAuthFiles {
-		if _, _, exit, err := eb.Exec(ctx, name, []string{"sh", "-c", "test -s " + f}, codingCliExecTimeout); err == nil && exit == 0 {
+		if _, _, exit, err := eb.Exec(ctx, name, shellTestNonEmpty(expandHomePath(f, home)), codingCliExecTimeout); err == nil && exit == 0 {
 			return map[string]interface{}{"configured": true, "method": "auth-file"}
 		}
 	}
 	// Settings credentials: Qwen's fixed path and OpenCode's provider API keys.
-	if _, _, exit, err := eb.Exec(ctx, name, []string{"sh", "-c", "test -f " + spec.SettingsPath}, codingCliExecTimeout); err == nil && exit == 0 {
-		out, _, cexit, cerr := eb.Exec(ctx, name, []string{"sh", "-c", "cat " + spec.SettingsPath}, codingCliExecTimeout)
+	probePath := settingsPath
+	if _, _, exit, err := eb.Exec(ctx, name, shellTestFile(probePath), codingCliExecTimeout); err != nil || exit != 0 {
+		// Compatibility: credentials that only exist in the legacy $HOME
+		// location still count as configured.
+		if legacyPath == "" {
+			return map[string]interface{}{"configured": false}
+		}
+		probePath = legacyPath
+	}
+	if _, _, exit, err := eb.Exec(ctx, name, shellTestFile(probePath), codingCliExecTimeout); err == nil && exit == 0 {
+		out, _, cexit, cerr := eb.Exec(ctx, name, shellCatFile(probePath), codingCliExecTimeout)
 		if cerr == nil && cexit == 0 {
 			var doc map[string]interface{}
 			if json.Unmarshal([]byte(out), &doc) == nil {
@@ -404,12 +439,26 @@ func codingCliDotGet(doc map[string]interface{}, dotPath string) interface{} {
 // targets the same file. Qoder resolves its config directory inside the Worker;
 // pass the resulting path as an argument so shell characters stay literal.
 func (h *CodingCliHandler) readCliSettings(ctx context.Context, eb codingCliExecer, name string, spec codingCliSpec) (contents, filePath string, exitCode int, err error) {
-	filePath = spec.SettingsPath
-	cmd := []string{"sh", "-c", "cat " + filePath}
+	// Every settings read/write goes through the same effective home; the
+	// raw $HOME is only consulted as a compatibility fallback so settings
+	// written by older releases stay visible (and are migrated on the next
+	// write).
+	home := h.settingsHome(ctx, eb, name)
+	filePath = expandHomePath(spec.SettingsPath, home)
 	if spec.ID == "qoder" {
-		filePath, _, exitCode, err = eb.Exec(ctx, name, []string{"sh", "-c", `dir="${QODER_CONFIG_DIR:-$HOME/.qoder}"
+		qoderScript := `dir="${QODER_CONFIG_DIR:-$HOME/.qoder}"
 case "$dir" in /*) ;; *) dir="$PWD/$dir" ;; esac
-printf '%s/settings.json' "${dir%/}"`}, codingCliExecTimeout)
+printf '%s/settings.json' "${dir%/}"`
+		if home != "" {
+			qoderScript = `dir="${QODER_CONFIG_DIR:-"$1"/.qoder}"
+case "$dir" in /*) ;; *) dir="$PWD/$dir" ;; esac
+printf '%s/settings.json' "${dir%/}"`
+		}
+		qoderArgs := []string{"sh", "-c", qoderScript}
+		if home != "" {
+			qoderArgs = append(qoderArgs, "sh", home)
+		}
+		filePath, _, exitCode, err = eb.Exec(ctx, name, qoderArgs, codingCliExecTimeout)
 		if err != nil {
 			return
 		}
@@ -421,10 +470,29 @@ printf '%s/settings.json' "${dir%/}"`}, codingCliExecTimeout)
 			err = fmt.Errorf("worker Qoder settings path is not absolute")
 			return
 		}
-		cmd = []string{"cat", "--", filePath}
+		contents, _, exitCode, err = eb.Exec(ctx, name, []string{"cat", "--", filePath}, codingCliExecTimeout)
+		if err == nil && exitCode == 0 {
+			return contents, filePath, 0, nil
+		}
+	} else {
+		contents, _, exitCode, err = eb.Exec(ctx, name, shellCatFile(filePath), codingCliExecTimeout)
+		if err == nil && exitCode == 0 {
+			return contents, filePath, 0, nil
+		}
 	}
-	contents, _, exitCode, err = eb.Exec(ctx, name, cmd, codingCliExecTimeout)
-	return
+	// Compatibility: read the same spec path under the raw $HOME.
+	rawHome, rerr := h.shellHome(ctx, eb, name)
+	if rerr == nil && rawHome != "" {
+		legacy := expandHomePath(spec.SettingsPath, rawHome)
+		if legacy != filePath {
+			if legacyContents, _, legacyExit, legacyErr := eb.Exec(ctx, name, shellCatFile(legacy), codingCliExecTimeout); legacyErr == nil && legacyExit == 0 {
+				// The caller writes back to filePath, migrating the
+				// legacy settings on the first update.
+				return legacyContents, filePath, 0, nil
+			}
+		}
+	}
+	return contents, filePath, exitCode, err
 }
 
 func (h *CodingCliHandler) getCliSettings(w http.ResponseWriter, r *http.Request) {
@@ -526,15 +594,9 @@ func (h *CodingCliHandler) putCliSettings(w http.ResponseWriter, r *http.Request
 		return
 	}
 	merged := codingCliDeepMerge(current, incoming)
+	// readCliSettings already resolved the effective home, so this is the
+	// exact path the next GET probes.
 	writePath := filePath
-	if spec.ID != "qoder" {
-		home, err := h.workerHome(r.Context(), eb, name)
-		if err != nil {
-			httputil.WriteError(w, http.StatusBadGateway, "resolve worker home: "+err.Error())
-			return
-		}
-		writePath = strings.ReplaceAll(filePath, "~", home)
-	}
 	mergedJSON, err := json.MarshalIndent(merged, "", "  ")
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "encode settings: "+err.Error())
@@ -552,10 +614,64 @@ func (h *CodingCliHandler) putCliSettings(w http.ResponseWriter, r *http.Request
 	}))
 }
 
+// shellHome returns the container's raw $HOME (the pre-existing settings
+// location). Used only for compatibility reads: settings written by older
+// releases live there while the management API now writes to the effective
+// home.
+func (h *CodingCliHandler) shellHome(ctx context.Context, eb codingCliExecer, name string) (string, error) {
+	out, _, exit, err := eb.Exec(ctx, name, []string{"sh", "-c", `printf %s "${HOME:-}"`}, 5*time.Second)
+	if err != nil {
+		return "", err
+	}
+	if exit != 0 {
+		return "", fmt.Errorf("resolve worker $HOME: exec exit %d", exit)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// shellArgWithPath builds a `sh -c` invocation that receives the resolved
+// path as a positional argument and quotes it inside the script, so spaces or
+// shell metacharacters in a home directory never change the meaning of the
+// command. (Interpolating the path into the script is what broke
+// `/tmp/working dir`.)
+func shellArgWithPath(script, path string) []string {
+	return []string{"sh", "-c", script, "sh", path}
+}
+
+func shellTestFile(path string) []string     { return shellArgWithPath(`test -f "$1"`, path) }
+func shellTestNonEmpty(path string) []string { return shellArgWithPath(`test -s "$1"`, path) }
+func shellCatFile(path string) []string      { return shellArgWithPath(`cat -- "$1"`, path) }
+
+// expandHomePath replaces the leading "~" of a spec path with home.
+func expandHomePath(p, home string) string {
+	if home == "" {
+		return p
+	}
+	return strings.ReplaceAll(p, "~", home)
+}
+
+// settingsHome is the tolerant resolver used by the settings/auth paths: the
+// effective home when the container can report one, the raw $HOME when it
+// cannot, and "" when neither works (the caller then uses the spec path as
+// written, which keeps older fixtures and non-shell execers working).
+func (h *CodingCliHandler) settingsHome(ctx context.Context, eb codingCliExecer, name string) string {
+	if home, err := h.workerHome(ctx, eb, name); err == nil && home != "" {
+		return home
+	}
+	if home, err := h.shellHome(ctx, eb, name); err == nil {
+		return home
+	}
+	return ""
+}
+
 // workerHome resolves the worker's $HOME via the container shell (the
 // settings paths are ~-relative and must be absolute for WriteFile).
 func (h *CodingCliHandler) workerHome(ctx context.Context, eb codingCliExecer, name string) (string, error) {
-	out, _, exit, err := eb.Exec(ctx, name, []string{"sh", "-c", "printf %s \"$HOME\""}, 5*time.Second)
+	// Effective home for coding-CLI data. QwenPaw only persists its three
+	// mounted dirs (QWENPAW_WORKING_DIR=/app/working + .backups/.secret), so
+	// settings/prefix must live under that dir, not $HOME. OpenClaw/Hermes
+	// have no QWENPAW_WORKING_DIR; their $HOME is the MinIO-synced agent home.
+	out, _, exit, err := eb.Exec(ctx, name, []string{"sh", "-c", `printf %s "${QWENPAW_WORKING_DIR:-$HOME}"`}, 5*time.Second)
 	if err != nil {
 		return "", err
 	}
@@ -644,22 +760,32 @@ func (h *CodingCliHandler) startInstall(w http.ResponseWriter, r *http.Request) 
 var npmVersionPattern = regexp.MustCompile(`^([0-9][A-Za-z0-9.+-]*|\w+)$`)
 
 // runInstall installs/uninstalls the CLI inside the worker container via
-// `npm install/uninstall -g`. Persistence contract (joint-scenario note,
-// verified on the ARM worker image): the global npm payload lands in the
-// container's EPHEMERAL layer (the image layer at $npm prefix, e.g.
-// /usr/local/lib/node_modules) — NOT in the persistent agent home. A worker
-// recreation (image upgrade, a spec change such as an LLM-runtime parameter,
-// or any controller-driven container rebuild) wipes that layer, so the CLI
-// binary is lost even though the container "comes back". Operators must re-run
-// this install after a recreation; the settings surface is written
-// container-local too (no forced MinIO push), so auth may also need re-applying
-// — probe settings after a recreation and re-apply if the probe shows them gone.
+// `npm install/uninstall -g --prefix $HOME/.coding-cli`. The prefix is in the
+// persistent agent home, so a same-worker recreation keeps the CLI; settings
+// and auth stay in the agent home as before. Nothing is baked into the worker
+// image by default and no version is pinned: the tab/API passes a dist-tag
+// (latest/beta) or an explicit version. Probe prefers the prefix binary.
 func (h *CodingCliHandler) runInstall(name string, eb codingCliExecer, spec codingCliSpec, taskID, action, version string) {
-	var cmd []string
+	// Install into the persistent agent home (survives same-worker
+	// recreation); no version pin — the tab/API passes a dist-tag
+	// (latest/beta) or an explicit version.
+	prefix := ""
+	if home, err := h.workerHome(context.Background(), eb, name); err == nil {
+		prefix = path.Join(home, ".coding-cli")
+	}
+	cmd := []string{"npm"}
 	if action == "uninstall" {
-		cmd = []string{"npm", "uninstall", "-g", spec.NpmPackage}
+		cmd = append(cmd, "uninstall", "-g")
+		if prefix != "" {
+			cmd = append(cmd, "--prefix", prefix)
+		}
+		cmd = append(cmd, spec.NpmPackage)
 	} else {
-		cmd = []string{"npm", "install", "-g", spec.NpmPackage + "@" + version}
+		cmd = append(cmd, "install", "-g")
+		if prefix != "" {
+			cmd = append(cmd, "--prefix", prefix)
+		}
+		cmd = append(cmd, spec.NpmPackage+"@"+version)
 	}
 	_, stderr, exit, err := eb.Exec(context.Background(), name, cmd, codingCliInstallTimeout)
 	h.tasksMu.Lock()

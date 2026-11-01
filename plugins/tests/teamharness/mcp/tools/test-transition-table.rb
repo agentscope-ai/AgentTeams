@@ -219,6 +219,21 @@ Dir.mktmpdir("teamharness-transition-") do |dir|
             raise AssertionError(f"{label}: error {err!r} missing {fragment!r}")
         return res
 
+    def must_fail_transition(res, from_status, to_status, fragment, label):
+        """INT-5 round 2: state-guard rejections are structured."""
+        if res.get("ok"):
+            raise AssertionError(f"{label}: expected failure but succeeded: {res!r}")
+        if res.get("error") != "illegal_transition":
+            raise AssertionError(f"{label}: expected illegal_transition: {res!r}")
+        if res.get("from") != from_status or res.get("to") != to_status:
+            raise AssertionError(
+                f"{label}: from/to {res.get('from')!r}->{res.get('to')!r} "
+                f"!= {from_status!r}->{to_status!r}: {res!r}"
+            )
+        if fragment and fragment not in str(res.get("detail", "")):
+            raise AssertionError(f"{label}: detail missing {fragment!r}: {res!r}")
+        return res
+
     def entry(h, i):
         return (h[i]["from"], h[i]["to"], h[i]["action"], h[i].get("actor"))
 
@@ -361,9 +376,9 @@ Dir.mktmpdir("teamharness-transition-") do |dir|
         raise AssertionError(f"delegate without an assignee target must stay retryable: {d!r}")
     if read_meta("t-prep")["status"] != "prepared":
         raise AssertionError("unnotified delegation must leave the task prepared")
-    must_fail(ack("t-prep"), "ack_task: task is 'prepared'", "ack@prepared")
-    must_fail(submit("t-prep"), "submit_task: task is 'prepared'", "submit@prepared")
-    must_fail(progress("t-prep", "x"), "report_progress: task is 'prepared'", "progress@prepared")
+    must_fail_transition(ack("t-prep"), "prepared", "in_progress", "ack_task: task is 'prepared'", "ack@prepared")
+    must_fail_transition(submit("t-prep"), "prepared", "submitted", "submit_task: task is 'prepared'", "submit@prepared")
+    must_fail_transition(progress("t-prep", "x"), "prepared", "prepared", "report_progress: task is 'prepared'", "progress@prepared")
 
     # 3b. in_progress must not be re-delegated (would reset recorded progress).
     new_project("proj-redel", "t-redel")
@@ -444,8 +459,10 @@ Dir.mktmpdir("teamharness-transition-") do |dir|
     })
     if not acc_rev.get("ok") or read_meta("t-rev")["status"] != "revision":
         raise AssertionError(f"revision accept failed: {acc_rev!r}")
-    must_fail(
+    must_fail_transition(
         delegate("proj-rev", "t-rev"),
+        "revision",
+        "assigned",
         "delegate_task cannot update terminal task: revision",
         "redelegate@revision",
     )
@@ -526,7 +543,7 @@ Dir.mktmpdir("teamharness-transition-") do |dir|
     )
 
     # 3f. terminal tasks are frozen.
-    must_fail(
+    must_fail_transition(
         payload("taskflow", {
             "role": "leader",
             "action": "cancel_task",
@@ -534,12 +551,14 @@ Dir.mktmpdir("teamharness-transition-") do |dir|
             # the terminal guard must reject it regardless.
             "payload": {"taskId": "t-happy", "submissionId": sub_id, "reason": "Too late."},
         }),
+        "completed",
+        "cancelled",
         "cannot cancel terminal task",
         "cancel@terminal",
     )
     # Terminal tasks are frozen by the mutability guard before the
     # progress status gate (the terminal check is upstream of it).
-    must_fail(progress("t-happy", "done now"), "report_progress cannot update terminal task", "progress@completed")
+    must_fail_transition(progress("t-happy", "done now"), "completed", "completed", "report_progress cannot update terminal task", "progress@completed")
     must_fail(
         payload("taskflow", {
             "role": "leader",
@@ -580,7 +599,7 @@ Dir.mktmpdir("teamharness-transition-") do |dir|
     last = read_meta("t-redel")["history"][-1]
     if len(last.get("note", "")) != 201 or not last["note"].endswith("\u2026"):
         raise AssertionError(f"truncated note must be 200 chars + ellipsis: {last['note']!r}")
-    must_fail(progress("t-subd", "late"), "report_progress: task is 'submitted'", "progress@submitted")
+    must_fail_transition(progress("t-subd", "late"), "submitted", "submitted", "report_progress: task is 'submitted'", "progress@submitted")
 
     # ==================================================================
     # 6. History cap and no-op semantics (unit level).

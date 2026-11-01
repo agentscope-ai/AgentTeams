@@ -237,12 +237,24 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	chh := NewChannelsHandler(deps.Client, deps.Namespace, deps.KubeMode, deps.ContainerPrefix, deps.OSS, auditClient)
 	mux.Handle("GET /api/v1/workers/{name}/channels", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(chh.getChannels)))
 	mux.Handle("GET /api/v1/workers/{name}/channels/{sub}", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(chh.getChannelResource)))
+	// Proxies to the worker channel API only; it does NOT write WorkerSpec.
+	// Display flags set here are runtime-only (see WorkerSpec.channels.matrix
+	// for the declarative source).
 	mux.Handle("PUT /api/v1/workers/{name}/channels/{channel}", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(chh.putChannel)))
 	mux.Handle("GET /api/v1/workers/{name}/channels/{channel}/health", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(chh.getChannelHealth)))
 	mux.Handle("GET /api/v1/workers/{name}/channels/{channel}/qrcode", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(chh.getChannelQrcode)))
 	mux.Handle("GET /api/v1/workers/{name}/channels/{channel}/qrcode/status", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(chh.getQrcodeStatus)))
 	mux.Handle("POST /api/v1/workers/{name}/channels/{channel}/restart", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(chh.restartChannel)))
 	mux.Handle("POST /api/v1/workers/{name}/channels/{channel}/conflict-check", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(chh.checkChannelConflict)))
+
+	// --- Worker MCP registry (the worker's self-registered MCP servers;
+	// read-only proxy to the worker's qwenpaw app). The deployment catalog
+	// (GET /api/v1/mcp-servers) covers only the shared registry and
+	// spec.mcpServers; this route exposes what the worker's own qwenpaw
+	// app registered (builtin plugins, runtime additions). Same boundary
+	// discipline as channels: ActionGet, W8 team scope in the handler,
+	// uniform 503 in kube mode, embedded only. ---
+	mux.Handle("GET /api/v1/workers/{name}/mcp", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(rh.WorkerMCP(deps.KubeMode, deps.ContainerPrefix)))
 
 	// --- Worker coding CLIs (qwen-code / opencode / qoder; controller-side
 	// management via container exec — runtime-agnostic, works for any

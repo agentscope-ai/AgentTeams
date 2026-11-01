@@ -308,6 +308,12 @@ def _attach_long_message_metadata(
 HISTORY_CONTEXT_MARKER = "[Chat messages since your last reply - for context]"
 CURRENT_MESSAGE_MARKER = "[Current message - respond to this]"
 DEFAULT_HISTORY_LIMIT = 50
+# Lower bound for `sync_timeout_ms`: a value of `0` would turn the
+# nio `sync()` loop into a busy-spin and a negative value would feed
+# `max(sync_s + 30, 60)` a nonsense duration downstream. 1 second is
+# the smallest value that still gives the homeserver a chance to
+# return at least one long-poll iteration.
+_MIN_SYNC_TIMEOUT_MS = 1000
 
 
 class QwenPawMatrixClient(AsyncClient):
@@ -353,6 +359,12 @@ class HistoryEntry:
     # models) to be included alongside the text history when the mention
     # arrives.
     media_parts: Optional[List[Any]] = None
+    # Canonical Matrix user id (full MXID) of the sender. ``sender`` holds a
+    # human-readable display name (best-effort, may fall back to the
+    # localpart), which is NOT a stable identity: the send alignment gate
+    # compares senders against the turn's trigger-sender MXID, so the
+    # comparison must use this canonical id, not the display name (#1386 P1).
+    sender_id: Optional[str] = None
 
 
 class AgentTeamsMatrixChannel(BaseChannel):
@@ -420,8 +432,14 @@ class AgentTeamsMatrixChannel(BaseChannel):
         # Media / history
         self.vision_enabled: bool = vision_enabled
         self.history_limit: int = max(0, history_limit)
-        self.sync_timeout_ms: int = sync_timeout_ms
+        # Clamp sync_timeout_ms to a sane minimum so a misconfigured
+        # `0` does not turn the sync loop into a busy-spin and a
+        # negative value does not produce a nonsense request_timeout
+        # downstream (`max(sync_s + 30, 60)`).
+        self.sync_timeout_ms: int = max(_MIN_SYNC_TIMEOUT_MS, int(sync_timeout_ms))
         self.show_thinking: bool = show_thinking
+        self.show_tool_calls: bool = show_tool_calls
+        self.show_tool_results: bool = show_tool_results
 
         self._workspace_dir = (
             Path(workspace_dir).expanduser() if workspace_dir else None
@@ -2187,6 +2205,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 timestamp=getattr(event, "server_timestamp", None),
                 message_id=event.event_id,
                 media_parts=media_parts or None,
+                sender_id=sender_id,
             ),
         )
 
@@ -2390,6 +2409,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                         body=desc,
                         timestamp=getattr(event, "server_timestamp", None),
                         message_id=event.event_id,
+                        sender_id=sender_id,
                     ),
                 )
                 return
@@ -2832,6 +2852,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                         body=text,
                         timestamp=getattr(event, "server_timestamp", None),
                         message_id=event.event_id,
+                        sender_id=sender_id,
                     ),
                 )
                 return
@@ -4114,12 +4135,12 @@ class AgentTeamsMatrixChannel(BaseChannel):
         return _enum_name(message_type) == "MESSAGE"
 
     def _thread_content_parts(self, event: Any) -> List[Any]:
-        """Render event for thread display with tool messages enabled."""
+        """Render event for thread display with the channel's tool visibility flags."""
         from dataclasses import replace as dc_replace
         display_config = dc_replace(
             self._render_style.display_config,
-            show_tool_calls=True,
-            show_tool_results=True,
+            show_tool_calls=self.show_tool_calls,
+            show_tool_results=self.show_tool_results,
         )
         style = dc_replace(self._render_style, display_config=display_config)
         renderer = self._renderer.__class__(style)
@@ -4185,6 +4206,12 @@ class AgentTeamsMatrixChannel(BaseChannel):
         message_type = getattr(event, "type", None)
         if self._is_reasoning_message(message_type) and not self.show_thinking:
             # show_thinking disabled: reasoning is never rendered to the room.
+            return
+        if self._is_tool_call_message(message_type) and not self.show_tool_calls:
+            # show_tool_calls disabled: tool calls are never rendered to the room.
+            return
+        if self._is_tool_output_message(message_type) and not self.show_tool_results:
+            # show_tool_results disabled: tool output is never rendered to the room.
             return
         if self._is_reasoning_message(
             message_type,
@@ -4334,17 +4361,74 @@ class AgentTeamsMatrixChannel(BaseChannel):
             await self._on_process_completed(None, to_handle, send_meta)
             self._proactive_send_state.pop(to_handle, None)
 
+    def _text_mentions_worker(self, text: str, worker_localpart: str) -> bool:
+        """Text-only mention check for gate relevance (#1386 P1).
+
+        Mirrors the plain-text arms of :meth:`_was_mentioned` (full MXID
+        + bare ``@localpart`` with localpart boundary rules); retained
+        history entries carry plain body text only, no event content.
+        """
+        if not text or not worker_localpart:
+            return False
+        if self._user_id and re.search(
+            re.escape(self._user_id), text, re.IGNORECASE
+        ):
+            return True
+        token = re.compile(
+            rf"(?<![\w@])@{re.escape(worker_localpart)}(?![A-Za-z0-9._=:/+-])"
+        )
+        return bool(token.search(text))
+
+    def _new_events_relevant_to_turn(
+        self, room_id: str, since_records: int, meta_dict: Dict[str, Any]
+    ) -> bool:
+        """Gate relevance check (#1386 P1).
+
+        A turn's pending reply obligation should only be voided by room
+        events that can plausibly change it: a new message from the
+        turn's trigger sender (the person who asked), or any message
+        that addresses this worker by name.  Unrelated peer traffic
+        (a parallel worker answering its own question) does not void the
+        obligation — the gate downgrades to ``"note"`` and the
+        completed draft is delivered as-is.
+        """
+        trigger_sender = (meta_dict.get("sender_id") or "").strip()
+        worker_name = str(meta_dict.get("worker_name") or "").strip()
+        if not worker_name and self._user_id:
+            worker_name = self._user_id.lstrip("@").split(":", 1)[0]
+        for record_idx, entry in self._room_event_log.get(room_id, []):
+            if record_idx <= since_records:
+                continue
+            # Canonical identity comparison (#1386 P1): entry.sender is a
+            # display name (best-effort, may be the localpart fallback),
+            # while trigger_sender is the full MXID from the turn meta —
+            # compare the entry's canonical sender_id, never the display
+            # name, or an asker's un-@'d follow-up degrades to "note".
+            entry_sender = (getattr(entry, "sender_id", "") or "").strip()
+            if not entry_sender:
+                entry_sender = (entry.sender or "").strip()
+            if trigger_sender and entry_sender == trigger_sender:
+                return True
+            if worker_name and self._text_mentions_worker(
+                entry.body, worker_name
+            ):
+                return True
+        return False
+
     def _evaluate_send_gate(self, send_meta: Dict[str, Any], to_handle: str) -> tuple:
         """Send alignment gate (#1244).
 
         Returns ``(action, new_count)`` where action is:
           - ``"ok"``: aligned (or not gated: DM / thread / no snapshot) —
             flush the reply as usual.
-          - ``"retrigger"``: new room events landed after the turn's
-            context snapshot — drop the stale reply and re-trigger the
-            agent with the fresh context.
+          - ``"retrigger"``: new *relevant* room events landed after the
+            turn's context snapshot (from the trigger sender, or
+            addressing this worker — #1386 P1) — drop the stale reply
+            and re-trigger the agent with the fresh context.
           - ``"note"``: gate budget exhausted (retrigger count or
-            wall-clock deadline) — flush, then append a short note.
+            wall-clock deadline), or new events exist but are irrelevant
+            to this turn's obligation (#1386 P1) — flush, then append a
+            short note.
 
         Alignment is decided against the per-turn history-generation
         snapshot captured at enqueue time (``send_gate_snapshot_gen``),
@@ -4376,6 +4460,15 @@ class AgentTeamsMatrixChannel(BaseChannel):
             new_count = max(
                 0, self._room_history_records.get(room_id, 0) - snap_records
             )
+            # Relevance (#1386 P1): unrelated peer traffic must not void
+            # a completed reply obligation — a parallel worker's answer
+            # to its own question used to re-trigger this turn and the
+            # re-run often returned NO_REPLY, losing the original answer
+            # (case A).  Downgrade to "note": deliver the draft as-is.
+            if not self._new_events_relevant_to_turn(
+                room_id, snap_records, meta_dict
+            ):
+                return "note", new_count
         now = time.time()
         state = self._send_gate_state.get(room_id)
         if state is None or state.get("event_id") != turn_event_id:
@@ -4462,6 +4555,14 @@ class AgentTeamsMatrixChannel(BaseChannel):
             carry_meta_root = meta_dict.get(_THREAD_META_ROOT_KEY)
             if carry_meta_root:
                 retrigger_meta[_THREAD_META_ROOT_KEY] = carry_meta_root
+            # The placeholder flag must travel with the root id: without
+            # it the re-triggered turn completes on the non-placeholder
+            # path and posts its final answer as a thread reply, leaving
+            # the original "处理中..." root stranded on the main timeline
+            # (issue #1386 case B).  A NO_REPLY retry then also skips the
+            # placeholder close-out (case A).
+            if meta_dict.get(_MATRIX_PLACEHOLDER_THREAD_ROOT_KEY):
+                retrigger_meta[_MATRIX_PLACEHOLDER_THREAD_ROOT_KEY] = True
         # The re-triggered turn snapshots the room state it actually
         # received: the recovered window extends to the newest retained
         # event, so current gen/records — and the next gate can only
@@ -4634,7 +4735,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
         # 1. Check Matrix errcode (string)
         errcode = getattr(resp, "status_code", None)
-        if errcode in MatrixChannel._RETRYABLE_MATRIX_ERRCODES:
+        if errcode in AgentTeamsMatrixChannel._RETRYABLE_MATRIX_ERRCODES:
             return True
 
         # 2. Fall back to HTTP status via transport_response

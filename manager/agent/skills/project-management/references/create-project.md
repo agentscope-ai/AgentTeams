@@ -47,6 +47,8 @@ bash /opt/agentteams/agent/skills/project-management/scripts/create-project.sh \
 
 Each user listed in `--grant-admin` co-owns the project room (power level 100) from creation. Only pass humans who genuinely need room administration; workers are always created at level 0. The granted humans are **also added to the Manager's project-room allowlists** (`groupAllowFrom` / `group_allow_from`) alongside the workers — without this, their `@manager` messages in the project room are silently dropped in allowlist mode.
 
+**Worker auto-join outcome.** The script logs a single aggregated line (`Worker auto-join: joined=N pending=N failed=N`) and writes the per-worker detail to a join status file (`$AGENTTEAMS_JOIN_STATUS_FILE`, default `/tmp/agentteams-project-join-status.json`). `pending` means the worker credentials/token were unavailable (the worker will need to accept the invite from its own client); `failed` carries the Matrix HTTP status (e.g. `http-403`). A pending/failed join does **not** abort project creation — read the join status file (or the log line) and follow up with the affected workers instead of assuming everyone is in the room.
+
 After the script, **fill in the full plan.md** with phases, tasks, and assignments (see `references/plan-format.md` for format).
 
 ## Step 1c: Present plan (and confirm)

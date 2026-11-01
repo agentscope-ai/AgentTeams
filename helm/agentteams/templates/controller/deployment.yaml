@@ -113,6 +113,18 @@ spec:
                   name: {{ include "agentteams.storage.adminSecretName" . }}
                   key: {{ include "agentteams.storage.adminSecretKeyKey" . }}
             {{- end }}
+            {{- if eq .Values.storage.provider "s3" }}
+            - name: AGENTTEAMS_FS_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentteams.storage.s3.secretName" . }}
+                  key: {{ include "agentteams.storage.s3.accessKeyKey" . }}
+            - name: AGENTTEAMS_FS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentteams.storage.s3.secretName" . }}
+                  key: {{ include "agentteams.storage.s3.secretKeyKey" . }}
+            {{- end }}
             - name: AGENTTEAMS_GATEWAY_PROVIDER
               value: {{ .Values.gateway.provider | quote }}
             {{- if eq .Values.gateway.provider "higress" }}

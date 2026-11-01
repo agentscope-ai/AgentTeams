@@ -4,6 +4,11 @@
 #
 # Reference runner versions (the versions this suite was field-verified against on the AgentTeams dev host, 2026-10-08; deployments pick their own npm channel tag and re-run the suite on change):
 #   qwen     0.25.0  (verified flags: --yolo, --approval-mode, --max-wall-time, --max-session-turns)
+#            0.25.3  (field-verified 2026-10-19: -o json prints the stdout event
+#                     array; the native --json-file drifted to dual-output and
+#                     silently writes no file in headless one-shot mode — the
+#                     wrapper takes over the contract from that boundary on,
+#                     see case g)
 #   opencode 1.18.34 (field-verified 2026-10-02; not pinned — re-run this
 #            suite before relying on any other version)
 #
@@ -36,10 +41,16 @@
 #   f) turn_budget         : (qwen only) max_session_turns=1 in an isolated
 #                            config (CODING_CLI_CONFIG) stops a two-step
 #                            prompt at the turn budget
-#   g) json_file           : (qwen only) --json-file <path> writes the final
-#                            structured result to <path>; a real minimal
-#                            prompt asserts the file exists and parses as
-#                            JSON (python3 -m json.tool)
+#   g) json_file           : (qwen only) --json-file <path> — the wrapper's
+#                            contract: the run ends with a parseable JSON
+#                            audit file at <path>. The wrapper guarantees it
+#                            on both version branches (legacy passthrough;
+#                            >= 0.25.3 it captures the -o json stdout
+#                            event array itself, since the native flag
+#                            semantics were taken over by the wrapper from
+#                            that boundary on). A real minimal prompt
+#                            asserts the file exists and parses as JSON
+#                            (python3 -m json.tool)
 #
 # Note for (c) on qwen: qwen also has a native run-level budget,
 # `qwen --max-wall-time <secs>`, which aborts the run with exit code 55.
@@ -234,12 +245,19 @@ run_case_f() {
 
 # run_case_g <cli>: (qwen only) --json-file structured-output smoke.
 #
-# Real run of a minimal prompt with `--json-file <path>`: the qwen runner
-# writes its final structured result to <path> (config.ts, mutually exclusive
-# with --json-fd). The assertion pins that the file exists at that path AND
-# parses as JSON (`python3 -m json.tool`) — i.e. the wrapper's passthrough
-# produced a machine-auditable artifact end to end. Requires a real qwen with
-# working auth (the same environment case (a) needs).
+# Real run of a minimal prompt with `--json-file <path>`. The assertion pins
+# the WRAPPER's contract — the file exists at that path AND parses as JSON
+# (`python3 -m json.tool`) — which the wrapper now guarantees on both
+# version branches: below the 0.25.3 boundary the flag is a plain passthrough
+# and the CLI writes the file (config.ts, mutually exclusive with --json-fd);
+# at/above it the native flag semantics were taken over by the wrapper
+# (0.25.3's --json-file is dual-output and writes no file headless), which
+# captures the `-o json` stdout event array itself. On the >= boundary
+# family the captured document is the event array, so the last frame is
+# additionally asserted to be a clean result (type=result, is_error=false);
+# the legacy family's file is a single result JSON with no event array, so
+# that assertion is version-conditional, not unconditional. Requires a real
+# qwen with working auth (the same environment case (a) needs).
 run_case_g() {
     local cli="$1" rc json_out
     if ! command -v python3 >/dev/null 2>&1; then
@@ -266,6 +284,27 @@ run_case_g() {
     if ! python3 -m json.tool "${json_out}" >/dev/null 2>&1; then
         fail "${cli}.json_file" "file at ${json_out} is not valid JSON"
         return 0
+    fi
+    # >= boundary (same rule as the wrapper: qwen --version vs
+    # CODING_CLI_JSON_BOUNDARY, default 0.25.3): the captured file is the
+    # -o json stdout event array, so the last frame must be a clean result.
+    # Legacy family: the CLI wrote a single result JSON (no event array) —
+    # version-conditional, never unconditional.
+    local qwen_ver json_boundary
+    qwen_ver="$(qwen --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" || true
+    json_boundary="${CODING_CLI_JSON_BOUNDARY:-0.25.3}"
+    if [ -n "${qwen_ver}" ] && [ "$(printf '%s\n%s\n' "${json_boundary}" "${qwen_ver}" | sort -V | tail -1)" = "${qwen_ver}" ]; then
+        if ! python3 -c '
+import json, sys
+events = json.load(open(sys.argv[1]))
+assert isinstance(events, list) and events, "expected a non-empty event array"
+last = events[-1]
+assert isinstance(last, dict) and last.get("type") == "result" and last.get("is_error") is False, \
+    "last frame is not a clean result: %r" % (last.get("type") if isinstance(last, dict) else last,)
+' "${json_out}" 2>/dev/null; then
+            fail "${cli}.json_file" "last event frame is not type=result with is_error=false (qwen ${qwen_ver}, >= ${json_boundary} family)"
+            return 0
+        fi
     fi
     pass "${cli}.json_file (structured result written to the --json-file path and parses as JSON)"
 }

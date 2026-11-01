@@ -157,8 +157,8 @@ The Manager and Worker OpenClaw instances use **type-based session policies**:
 ```json
 "session": {
   "resetByType": {
-    "dm":    { "mode": "daily", "atHour": 4 },
-    "group": { "mode": "daily", "atHour": 4 }
+    "direct": { "mode": "daily", "atHour": 4 },
+    "group":  { "mode": "daily", "atHour": 4 }
   }
 }
 ```
@@ -247,6 +247,14 @@ curl -s http://127.0.0.1:18001/
 - **Element Web**: http://127.0.0.1:18088 — IM (direct host port), or via gateway hostname `http://matrix-client-local.agentteams.io:18080` when `*-local.agentteams.io` resolves to localhost
 - **MinIO**: embedded install keeps MinIO **inside** `agentteams-controller` (no default host publish). Use `mc` from that container, the MinIO API through internal URLs, or browse objects if you add a console route yourself
 - **OpenClaw control UI** (OpenClaw Manager): http://127.0.0.1:18888
+  - The host console port is published to the manager container's nginx on 18888, which reverse-proxies to the gateway at `127.0.0.1:18799`. The proxy deliberately sets no forwarding headers (Host/X-Real-IP) and injects the gateway token into the URL hash (`#token=...`).
+  - Since OpenClaw v2026.10.9 the Control UI requires a device identity; the browser provisions one automatically in pure JavaScript (plain HTTP works, no TLS needed). Behaviour by entry point:
+
+    | Entry point | First open after upgrading to v2026.10.9 |
+    |---|---|
+    | Host localhost (e.g. `http://127.0.0.1:18888`) | Seamless — the gateway sees a loopback connection, so pairing is auto-approved (no manual step) |
+    | Container IP / LAN address / custom hostname | One-time device approval: read the pending id with `docker exec agentteams-manager openclaw devices list`, then `docker exec agentteams-manager openclaw devices approve <requestId>` (or approve in the Devices UI; `--latest` only previews the request and exits 1) |
+    | Token-only programmatic WS client | No longer accepted — a device identity is required, like any other client |
 
 ## Backup and Recovery
 

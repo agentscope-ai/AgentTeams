@@ -57,6 +57,13 @@ IMAGES=(
     "ghcr.io/matrix-construct/tuwunel:main|tuwunel|${DATE_TAG}"
     "quay.io/minio/minio:latest|minio|${DATE_TAG}"
     "quay.io/minio/mc:latest|mc|${DATE_TAG}"
+    # Managed RustFS (storage.engine=rustfs): pinned to the release
+    # version, not DATE_TAG. The chart's storage.rustfs.image.tag must
+    # stay in sync with this entry. The chart's default
+    # storage.rustfs.image.repository points at this mirrored image;
+    # for offline/internal networks override TARGET_REGISTRY here or set
+    # storage.rustfs.image.repository in values.
+    "docker.io/rustfs/rustfs:1.0.4|rustfs|1.0.4"
     "docker.io/vectorim/element-web:latest|element-web|${DATE_TAG}"
     "docker.io/library/node:24-bookworm-slim|node|24-bookworm-slim"
     "docker.io/library/ubuntu:24.04|ubuntu|24.04"

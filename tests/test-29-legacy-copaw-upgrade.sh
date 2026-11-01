@@ -26,6 +26,7 @@ source "${SCRIPT_DIR}/lib/test-helpers.sh"
 source "${SCRIPT_DIR}/lib/minio-client.sh"
 source "${SCRIPT_DIR}/lib/higress-client.sh"
 source "${SCRIPT_DIR}/lib/test29-evidence.sh"
+source "${SCRIPT_DIR}/lib/test29-readiness.sh"
 
 test_setup "29-legacy-copaw-upgrade"
 
@@ -204,34 +205,14 @@ fi
 # On timeout: fail with the last observed value and collect evidence.
 # ------------------------------------------------------------
 READINESS_TIMEOUT=240
-PROBES_READY=""
-PROBE_LAST=""
-PREV_ROOM_ID=""
-STABLE_ROOM_ID=""
-CURRENT_ROOM_ID=""
-
+# The gate lives in lib/test29-readiness.sh so the poll sequence can be driven
+# deterministically (see tests/check-test29-readiness.sh).
 log_info "Waiting for Worker readiness (probes ready + stable roomID) (timeout: ${READINESS_TIMEOUT}s)..."
-READINESS_DEADLINE=$(( $(date +%s) + READINESS_TIMEOUT ))
-while [ "$(date +%s)" -lt "${READINESS_DEADLINE}" ]; do
-    if [ -z "${PROBES_READY}" ] && PROBE_LAST=$(check_copaw_worker_probes "${TEST_WORKER}" ready 15 2>&1); then
-        PROBES_READY="ready"
-    fi
-    CURRENT_ROOM_ID=$(get_worker_room_id "${TEST_WORKER}")
-    if [ -n "${CURRENT_ROOM_ID}" ] && [ "${CURRENT_ROOM_ID}" = "${PREV_ROOM_ID}" ]; then
-        STABLE_ROOM_ID="${CURRENT_ROOM_ID}"
-    fi
-    PREV_ROOM_ID="${CURRENT_ROOM_ID}"
-    if [ -n "${PROBES_READY}" ] && [ -n "${STABLE_ROOM_ID}" ]; then
-        break
-    fi
-    sleep 5
-done
-
-if [ -n "${PROBES_READY}" ] && [ -n "${STABLE_ROOM_ID}" ]; then
-    log_pass "Worker ready before seeding (probes ready; stable roomID: ${STABLE_ROOM_ID})"
+if test29_wait_worker_ready "${TEST_WORKER}" "${READINESS_TIMEOUT}"; then
+    log_pass "Worker ready before seeding (probes ready; stable roomID: ${TEST29_READY_ROOM})"
 else
-    PROBE_TAIL=$(printf '%s\n' "${PROBE_LAST}" | tail -n 2 | tr '\n' ' ')
-    log_fail "Worker not ready before seeding (timeout: ${READINESS_TIMEOUT}s; probes: ${PROBES_READY:-not ready} [last probe: ${PROBE_TAIL:-<no probe output>}] roomID: stable=${STABLE_ROOM_ID:-no} last_observed='${PREV_ROOM_ID:-<empty>}'"
+    PROBE_TAIL=$(printf '%s\n' "${TEST29_PROBE_LAST}" | tail -n 2 | tr '\n' ' ')
+    log_fail "Worker not ready before seeding (timeout: ${READINESS_TIMEOUT}s; probes: not ready [last probe: ${PROBE_TAIL:-<no probe output>}] roomID: stable=no last_observed='${TEST29_LAST_ROOM:-<empty>}'"
     collect_test29_evidence "${TEST_WORKER}"
     test_teardown "29-legacy-copaw-upgrade"; test_summary; exit 1
 fi

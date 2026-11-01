@@ -25,8 +25,11 @@ STUB
 chmod +x "$WORK/bin/mc"
 export PATH="$WORK/bin:$PATH"
 
+# The one-command flow requires --deployment (it is what makes P5/P6 able to
+# act); the state-machine cases below exercise stages after that gate.
 BASE_ARGS=(--src-endpoint http://src.example:9000 --src-ak a --src-sk b
            --dst-endpoint http://dst.example:9090 --dst-ak c --dst-sk d
+           --deployment embedded
            --state-dir "$WORK/state")
 
 run_tool() { # <expected-exit> <description> <args...>

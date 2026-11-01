@@ -1815,9 +1815,13 @@ main() {
       report_write > "$STATE_DIR/report-cutover.json"
       ;;
     mark-cutover-done)
+      # Contract (pinned by tests/storage-migrate-state-machine.sh #9): the
+      # manual acknowledgement is only valid while the cutover is PENDING. The
+      # automated flow records completion itself in P8, so any other stage -
+      # VERIFIED included - is a misuse and must be rejected.
       case "$stage" in
-        VERIFIED|CONFIG_SWITCHED|CONSUMERS_RECREATED|COMPONENT_VERIFIED|CUTOVER_PENDING) : ;;
-        *) die 1 "state.stage=$stage (mark-cutover-done accepts any post-verify stage; for the automated flow P8 records it itself)" ;;
+        CUTOVER_PENDING) : ;;
+        *) die 1 "state.stage=$stage (mark-cutover-done requires state=CUTOVER_PENDING; the automated flow records completion in P8)" ;;
       esac
       state_stage "CUTOVER_DONE"
       report_add "cutover" "done" "pass" "operator acknowledgement recorded at $(now_iso) (it does not verify restarts or configuration)"

@@ -71,28 +71,20 @@ def test_preflight_keeps_encryption_when_backend_available(
     assert channel.encryption is True
 
 
-def test_preflight_disables_encryption_when_backend_missing(
-    monkeypatch,
-    caplog,
-):
-    """Neither vodozemac nor olm importable: fall back to
-    non-encrypted mode and log both remediations."""
+def test_preflight_refuses_when_backend_missing(monkeypatch):
+    """#1469 round 13: encryption requested + no olm -> refuse to start.
+
+    The old behaviour demoted the channel to plaintext; that sends
+    m.room.message into rooms whose state says encrypted.
+    """
     monkeypatch.setattr(
         adapter_channel, "crypto_available", lambda: False
     )
     channel = _make_channel(encryption=True)
-    with caplog.at_level("ERROR", logger=CHANNEL_LOGGER):
+    with pytest.raises(RuntimeError, match="refusing to start in plaintext"):
         channel._preflight_e2ee_dependencies()
-    assert channel.encryption is False
-    assert any(
-        "MatrixChannel: no Matrix E2EE backend (vodozemac/olm)"
-        in record.getMessage()
-        and "falling back to non-encrypted mode"
-        in record.getMessage()
-        and "matrix-nio[e2e]" in record.getMessage()
-        and "libolm" in record.getMessage()
-        for record in caplog.records
-    )
+    # No silent demotion of the configured intent.
+    assert channel.encryption is True
 
 
 def test_preflight_noop_when_encryption_disabled(monkeypatch):

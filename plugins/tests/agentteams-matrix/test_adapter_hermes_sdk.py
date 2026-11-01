@@ -519,7 +519,9 @@ def test_e2ee_init_failure_maps_to_retryable_fatal_against_real_base(
     assert adapter.fatal_error_code == "e2ee_init_failed"
     assert adapter.fatal_error_retryable is True
     assert "olm is None" in adapter.fatal_error_message
-    assert adapter.encryption is False
+    # The configured intent is never demoted (no silent plaintext state);
+    # the failed connect is the fail-closed signal.
+    assert adapter.encryption is True
     assert adapter.is_connected is False
     assert not adapter._running
     assert client.closed is True

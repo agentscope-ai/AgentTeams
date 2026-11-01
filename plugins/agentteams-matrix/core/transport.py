@@ -424,9 +424,10 @@ class NioTransport:
 
     - **build path** (no injected client): the client comes from
       :func:`build_client`.  When ``encryption`` is requested but
-      :func:`core.e2ee.crypto_available` is false the transport degrades
-      to non-encrypted mode and logs the error instead of raising
-      (parity with the QwenPaw channel preflight);
+      :func:`core.e2ee.crypto_available` is false the transport REFUSES to
+      start (:class:`E2EEInitError`): a plaintext fallback in a room whose
+      synced state is encrypted silently leaks the body. Explicitly
+      unencrypted operation (``encryption=False``) is unaffected;
     - **native crypto init**: when encryption is on and the client
       exposes the native ``restore_login`` (real matrix-nio client,
       both build and injection paths), :meth:`start` initializes the
@@ -508,13 +509,18 @@ class NioTransport:
         client = self._client
         if client is None:
             if self.encryption and not crypto_available():
-                logger.error(
-                    "NioTransport: no Matrix E2EE backend (vodozemac/olm) "
-                    "— falling back to non-encrypted mode. Install "
+                # Fail closed (#1469 round 13): a transport asked for E2EE
+                # that cannot initialize must not start in plaintext — the
+                # room state still says encrypted, so every send would leak
+                # the body as m.room.message. Explicitly unencrypted
+                # operation (encryption=False) is unaffected.
+                raise E2EEInitError(
+                    "no Matrix E2EE backend (vodozemac/olm) while encryption "
+                    "is requested — refusing to start in plaintext. Install "
                     "matrix-nio[e2e]; on matrix-nio < 0.26 also install "
-                    "libolm (apt/dnf install libolm-dev).",
+                    "libolm (apt/dnf install libolm-dev), or disable "
+                    "encryption explicitly."
                 )
-                self.encryption = False
             build_config = self._config
             if self._sync_timeout_ms is not None:
                 build_config = replace(

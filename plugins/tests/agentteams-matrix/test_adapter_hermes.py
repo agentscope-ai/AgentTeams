@@ -651,9 +651,15 @@ def test_connect_e2ee_with_backend_sets_store_path(
     assert captured["kwargs"]["encryption"] is True
 
 
-def test_connect_e2ee_degrades_without_backend(
+def test_connect_refuses_when_e2ee_backend_is_missing(
     adapter_mod, matrix_env, monkeypatch, tmp_path, caplog
 ):
+    """#1469 round 13: requested E2EE with no backend must not connect.
+
+    The old behaviour demoted the config to plaintext and connected anyway,
+    so an encrypted room received m.room.message. The connect now fails
+    with a non-retryable reason and never builds a transport.
+    """
     monkeypatch.setenv("AGENTTEAMS_MATRIX_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("AGENTTEAMS_MATRIX_ENCRYPTION", "true")
     captured, client, transport = _stub_connect(
@@ -661,12 +667,12 @@ def test_connect_e2ee_degrades_without_backend(
     )
 
     adapter = adapter_mod.AgentTeamsMatrixAdapter(SimpleNamespace(extra={}))
-    assert asyncio.run(adapter.connect()) is True
+    assert asyncio.run(adapter.connect()) is False
 
-    tc = captured["config"]
-    assert tc.encryption is False
-    assert tc.store_path is None
+    # No transport was built and no plaintext client was injected.
+    assert captured == {}
     assert "no Matrix E2EE backend" in caplog.text
+    assert "refusing to connect in plaintext" in caplog.text
 
 
 def test_connect_config_missing_sets_fatal(adapter_mod, monkeypatch):
@@ -842,8 +848,9 @@ def test_e2ee_init_error_maps_to_retryable_fatal(
     assert adapter._fatal_error_code == "e2ee_init_failed"
     assert adapter._fatal_error_retryable is True
     assert "olm is None" in adapter._fatal_error_message
-    # Derived state: the encrypted claim is withdrawn, client closed.
-    assert adapter.encryption is False
+    # The configured intent is not demoted (no silent plaintext state);
+    # the failed connect and the closed client are the fail-closed signal.
+    assert adapter.encryption is True
     assert client.closed is True
     assert adapter._client is None
     assert adapter._transport is None

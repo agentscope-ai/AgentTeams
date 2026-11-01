@@ -684,7 +684,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
     def _preflight_e2ee_dependencies(self) -> None:
         """Check the E2EE crypto backend before creating
-        AsyncClientConfig; disable E2EE when none is importable.
+        AsyncClientConfig; refuse to start when none is importable.
 
         matrix-nio 0.26+ provides E2EE through vodozemac (no top-level
         olm module), so availability is decided by ``crypto_available``
@@ -693,13 +693,16 @@ class AgentTeamsMatrixChannel(BaseChannel):
         if not self.encryption:
             return
         if not crypto_available():
-            logger.error(
-                "MatrixChannel: no Matrix E2EE backend (vodozemac/olm) "
-                "— falling back to non-encrypted mode. Install "
-                "matrix-nio[e2e]; on matrix-nio < 0.26 also install "
-                "libolm (apt/dnf install libolm-dev).",
+            # Fail closed (#1469 round 13): the channel asked for E2EE; a
+            # plaintext fallback would send m.room.message into a room whose
+            # state says encrypted. Refuse to start instead of demoting.
+            raise RuntimeError(
+                "MatrixChannel: no Matrix E2EE backend (vodozemac/olm) while "
+                "encryption is enabled — refusing to start in plaintext. "
+                "Install matrix-nio[e2e]; on matrix-nio < 0.26 also install "
+                "libolm (apt/dnf install libolm-dev), or disable encryption "
+                "explicitly."
             )
-            self.encryption = False
 
     def _init_async_client(self, resolved_device_id: str) -> None:
         # E2EE: when encryption is enabled, provide store_path so matrix-nio

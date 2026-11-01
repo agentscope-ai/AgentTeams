@@ -401,8 +401,14 @@ def test_start_injected_client_no_keys_upload_when_not_needed(tmp_path, monkeypa
     _run(scenario)
 
 
-def test_start_build_path_crypto_degrades_without_backend(tmp_path, monkeypatch):
-    """No crypto backend → degrade to non-encrypted, log, do not raise."""
+def test_start_build_path_refuses_to_run_without_crypto_backend(tmp_path, monkeypatch):
+    """Requested E2EE with no backend → fail closed, never a plaintext start.
+
+    #1469 round 13: the transport used to demote itself to non-encrypted
+    and send m.room.message into rooms whose synced state is encrypted. A
+    transport that cannot establish the requested crypto must not start at
+    all, so no send path exists.
+    """
     FakeSyncEngine.instances = []
     monkeypatch.setattr(transport_mod, "SyncEngine", FakeSyncEngine)
     monkeypatch.setattr(transport_mod, "crypto_available", lambda: False)
@@ -413,10 +419,32 @@ def test_start_build_path_crypto_degrades_without_backend(tmp_path, monkeypatch)
             store=FakeStore(),
             state_dir=tmp_path,
         )
+        with pytest.raises(transport_mod.E2EEInitError, match="refusing to start in plaintext"):
+            await transport.start(lambda e: _noop())
+        # The configured intent is untouched (no silent demotion) and no
+        # client was built, so there is nothing that could send plaintext.
+        assert transport.encryption is True
+        assert transport._client is None
+
+    _run(scenario)
+
+
+def test_start_plaintext_mode_still_works_without_a_backend(tmp_path, monkeypatch):
+    """Explicitly unencrypted operation keeps working without crypto."""
+    FakeSyncEngine.instances = []
+    monkeypatch.setattr(transport_mod, "SyncEngine", FakeSyncEngine)
+    monkeypatch.setattr(transport_mod, "crypto_available", lambda: False)
+
+    async def scenario():
+        transport = NioTransport(
+            _config(encryption=False),
+            store=FakeStore(),
+            state_dir=tmp_path,
+            encryption=False,
+        )
         await transport.start(lambda e: _noop())
         assert transport.encryption is False
         assert type(transport._client) is AsyncClient
-        assert transport._client.config.encryption_enabled is False
         await transport.stop()
 
     _run(scenario)

@@ -359,12 +359,21 @@ class AgentTeamsMatrixAdapter(BasePlatformAdapter):
         try:
             encryption = self.encryption and crypto_available()
             if self.encryption and not encryption:
-                # Same wording as the QwenPaw channel preflight.
+                # Fail closed (#1469 round 13): the same contract as the core
+                # transport. A plaintext fallback in an encrypted room leaks
+                # the body; the operator either installs the backend or
+                # turns encryption off explicitly.
                 logger.error(
                     "AgentTeams Matrix: no Matrix E2EE backend "
-                    "(vodozemac/olm) — falling back to non-encrypted "
-                    "mode. Install matrix-nio[e2e]; on matrix-nio < 0.26 "
-                    "also install libolm (apt/dnf install libolm-dev).",
+                    "(vodozemac/olm) while encryption is requested — "
+                    "refusing to connect in plaintext.",
+                )
+                return self._fail(
+                    "e2ee_backend_missing",
+                    "no Matrix E2EE backend (vodozemac/olm) while encryption is "
+                    "requested — install matrix-nio[e2e] (matrix-nio < 0.26 also "
+                    "needs libolm), or disable encryption explicitly",
+                    retryable=False,
                 )
             self.state_dir.mkdir(parents=True, exist_ok=True)
             config = TransportConfig(
@@ -414,7 +423,8 @@ class AgentTeamsMatrixAdapter(BasePlatformAdapter):
                 self.encryption = bool(getattr(client, "olm", None) is not None)
         except E2EEInitError as e:
             logger.error("AgentTeams Matrix: E2EE init failed — %s", e)
-            self.encryption = False
+            # No silent demotion: the configured intent stays visible, and
+            # the failed connect is the fail-closed signal.
             await self._close_client()
             return self._fail("e2ee_init_failed", str(e), retryable=True)
         except Exception as e:

@@ -646,14 +646,16 @@ class AgentTeamsMatrixChannel(BaseChannel):
             return
         try:
             importlib.import_module("olm")
-        except ImportError:
-            logger.error(
-                "MatrixChannel: olm not installed — falling back to "
-                "non-encrypted mode. "
-                "To enable E2EE: pip install matrix-nio[e2e] && "
-                "apt/dnf install libolm-dev",
-            )
-            self.encryption = False
+        except ImportError as exc:
+            # Fail closed (#1469 round 13): the channel asked for E2EE; a
+            # plaintext fallback would send m.room.message into a room whose
+            # state says encrypted. Refuse to start instead of demoting.
+            raise RuntimeError(
+                "MatrixChannel: olm is not installed while encryption is "
+                "enabled — refusing to start in plaintext. To enable E2EE: "
+                "pip install matrix-nio[e2e] && apt/dnf install libolm-dev "
+                "(or disable encryption explicitly)"
+            ) from exc
 
     def _init_async_client(self, resolved_device_id: str) -> None:
         # E2EE: when encryption is enabled, provide store_path so matrix-nio

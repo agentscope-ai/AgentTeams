@@ -322,6 +322,33 @@ def storage(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
+def shared_remote(monkeypatch: pytest.MonkeyPatch, storage: None) -> dict[str, Any]:
+    """Two-plane shared-storage model for round-9 regressions: a hidden
+    'remote' meta (what shared storage actually holds) plus the local
+    meta.json the action reads. _pull_task copies remote -> local
+    (mc cp mirror semantics); _sync_task captures local -> remote
+    (mc mirror of the whole directory), so a write on a stale local copy
+    is observable in the committed bytes."""
+    planes: dict[str, Any] = {"remote": None, "committed": None, "pull_ok": True}
+
+    def fake_pull(_arguments: Any, task_id: Any, **_kw: Any) -> bool:
+        if not planes["pull_ok"]:
+            return False
+        if planes["remote"] is not None:
+            server._write_json(server._task_state_path(_arguments, str(task_id)), planes["remote"])
+        return True
+
+    def fake_sync(_arguments: Any, task_id: Any, **kw: Any) -> bool:
+        path = server._task_state_path(_arguments, str(task_id))
+        planes["committed"] = server._read_json(path)
+        return True
+
+    monkeypatch.setattr(server, "_pull_task", fake_pull)
+    monkeypatch.setattr(server, "_sync_task", fake_sync)
+    return planes
+
+
+@pytest.fixture
 def delegate_env(monkeypatch: pytest.MonkeyPatch, storage: None) -> dict[str, list[Any]]:
     calls: dict[str, list[Any]] = {"notify": []}
 
@@ -2321,3 +2348,185 @@ def test_attention_without_enforce_writes_no_protocol_fields(
     assert reused["attention"]["reused"] is True
     assert "stall_count" not in reused["task"]["attention"][0]
     assert "decision_status" not in reused["task"]
+
+
+# --- Round 9 (#1467): the authoritative task before cross-actor writes ---
+#
+# The round-9 repro: the leader's local task cache predates the worker's
+# stall-escalated decision_status=frozen; a cross-actor write (review /
+# cancel / accept) mirrors the WHOLE local directory back to shared
+# storage and deletes the frozen state, the approval record and the
+# decision_status_history. The guarded entries now load the
+# authoritative task first (fail closed on a failed pull), so the write
+# lands on the frozen state instead of clobbering it.
+
+
+def _r9_frozen_record() -> dict[str, Any]:
+    """The approval record of the round-9 repro: the worker's approval
+    request stalled to the frozen threshold (stall_count 3) and the
+    authorized close resolved it — the record a frozen task persists in
+    shared storage (same shape as the row-5 / round-8 records)."""
+    return {
+        "kind": "approval",
+        "question": "Approve the result?",
+        "attempt": 1,
+        "resolved": True,
+        "eventId": "$att-approval-1",
+        "stall_count": 3,
+        "resolvedVia": "im_reply",
+        "resolvedBy": "human:@approver:example.test",
+        "resolveEvidence": {"messageId": "$m1", "note": "approved in room"},
+        "resolvedRole": "human",
+        "resolvedActor": "human:@approver:example.test",
+    }
+
+
+def _r9_freeze(task: dict[str, Any]) -> dict[str, Any]:
+    """A copy of the task with the round-9 frozen state layered on:
+    decision_status=frozen, the approval record, and the
+    decision_status_history (open -> blocked -> frozen) exactly as the
+    stall chain writes it (transitions._set_decision_status)."""
+    frozen = dict(task)
+    frozen["decision_status"] = "frozen"
+    frozen["attention"] = [_r9_frozen_record()]
+    frozen["decision_status_history"] = [
+        {
+            "ts": "2026-11-01T00:00:00Z",
+            "from": "open",
+            "to": "blocked",
+            "reason": "attention stalled 2 times without an answer",
+            "source": "attention:approval",
+        },
+        {
+            "ts": "2026-11-01T00:01:00Z",
+            "from": "blocked",
+            "to": "frozen",
+            "reason": "attention stalled 3 times without an answer",
+            "source": "attention:approval",
+        },
+    ]
+    return frozen
+
+
+def test_r9_review_preserves_remote_frozen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shared_remote: dict[str, Any]
+) -> None:
+    """The maintainer's round-9 repro: the leader's local cache holds the
+    task as submitted/open while shared storage holds the same task
+    frozen by the worker's approval stall chain. The review (a
+    cross-actor whole-directory write) must load the authoritative task
+    first, so the committed directory records the review ON TOP of the
+    frozen state instead of clobbering it."""
+    _enforce_on(monkeypatch)
+    cached = _write_submitted_task(tmp_path, submitted_by="worker:alice")
+    frozen = _r9_freeze(cached)
+    shared_remote["remote"] = frozen
+
+    result = _review(tmp_path, role="leader", account="carol", verdict="pass")
+
+    assert result["ok"] is True
+    committed = shared_remote["committed"]
+    assert committed is not None
+    assert committed["status"] == "submitted"
+    # The frozen state survived the review write.
+    assert committed["decision_status"] == "frozen"
+    assert committed["attention"] == [_r9_frozen_record()]
+    assert committed["decision_status_history"] == frozen["decision_status_history"]
+    # ... and the review was recorded on top of it.
+    assert committed["review"]["verdict"] == "pass"
+    assert committed["review"]["reviewer"] == "leader:carol"
+
+
+def test_r9_review_pull_failure_refuses_stale_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shared_remote: dict[str, Any]
+) -> None:
+    """Fail closed: when the authoritative pull fails, the review must
+    refuse to write the stale local cache back (which would clobber the
+    remote frozen state) — the call returns an error, the local meta is
+    untouched and nothing is committed to shared storage."""
+    _enforce_on(monkeypatch)
+    cached = _write_submitted_task(tmp_path, submitted_by="worker:alice")
+    shared_remote["remote"] = _r9_freeze(cached)
+    shared_remote["pull_ok"] = False
+
+    result = _review(tmp_path, role="leader", account="carol", verdict="pass")
+
+    assert result["ok"] is False
+    assert "stale local copy" in result["error"]
+    # The stale local cache was not written back: still submitted/open,
+    # no review record, no frozen field adopted locally.
+    local = _task_meta(tmp_path)
+    assert local["status"] == "submitted"
+    assert "review" not in local
+    assert "decision_status" not in local
+    assert shared_remote["committed"] is None
+
+
+def test_r9_cancel_preserves_remote_frozen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shared_remote: dict[str, Any]
+) -> None:
+    """cancel_task is the same family of cross-actor write: the
+    leader's in-flight task cache predates the worker's stall-frozen
+    state. The cancel must land on the authoritative task, so the
+    committed directory is cancelled but keeps decision_status=frozen
+    with its approval record and history."""
+    _enforce_on(monkeypatch)
+    _write_in_progress_task(tmp_path)
+    cached = _task_meta(tmp_path)
+    frozen = _r9_freeze(cached)
+    shared_remote["remote"] = frozen
+
+    result = _call("taskflow", {
+        "role": "leader",
+        "action": "cancel_task",
+        "workspaceDir": str(tmp_path),
+        "payload": {
+            "projectId": PROJECT_ID,
+            "taskId": TASK_ID,
+            "reason": "superseded by the approval stall",
+        },
+    })
+
+    assert result["ok"] is True
+    committed = shared_remote["committed"]
+    assert committed is not None
+    assert committed["status"] == "cancelled"
+    # The frozen state survived the cancel write-back.
+    assert committed["decision_status"] == "frozen"
+    assert committed["attention"] == [_r9_frozen_record()]
+    assert committed["decision_status_history"] == frozen["decision_status_history"]
+
+
+def test_r9_accept_preserves_remote_frozen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shared_remote: dict[str, Any]
+) -> None:
+    """accept_task_result decides a submitted result and writes the task
+    meta back (whole directory): the leader's stale submitted cache must
+    not clobber the authoritative frozen state. The commit carries the
+    terminal node status AND the frozen decision_status with its
+    approval record and the pass review the acceptance gate validated
+    (the r1 approval gate is out of scope: decision_class reads r4)."""
+    _enforce_on(monkeypatch)
+    cached = _write_submitted_task(tmp_path, submitted_by="worker:alice")
+    frozen = _r9_freeze(cached)
+    frozen["review"] = {
+        "verdict": "pass",
+        "reviewer": "critic:bob",
+        "reviewer_team": "",
+        "reviewed_at": "2026-10-29T00:00:00Z",
+        "note": "looks right",
+    }
+    shared_remote["remote"] = frozen
+
+    result = _accept(tmp_path)
+
+    assert result["ok"] is True
+    assert result["nodeStatus"] == "completed"
+    committed = shared_remote["committed"]
+    assert committed is not None
+    assert committed["status"] == "completed"
+    # The frozen state survived the acceptance write-back.
+    assert committed["decision_status"] == "frozen"
+    assert committed["attention"] == [_r9_frozen_record()]
+    assert committed["decision_status_history"] == frozen["decision_status_history"]
+    assert committed["review"]["verdict"] == "pass"

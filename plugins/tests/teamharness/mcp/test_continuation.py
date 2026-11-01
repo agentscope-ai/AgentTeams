@@ -122,6 +122,20 @@ def authoritative_project_pull(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "_pull_project", lambda *_args, **_kwargs: True)
 
 
+@pytest.fixture(autouse=True)
+def authoritative_task_pull(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep continuation tests focused on the post-pull state contract.
+
+    Task pull success/failure semantics are covered by
+    ``test_protocol_guard.py`` (round 9 regressions). The guarded
+    cross-actor writes (cancel_task / accept_task_result) now load the
+    authoritative task before writing, so every test gets a successful
+    pull (the local state is authoritative) unless a test explicitly
+    fails the pull to assert the fail-closed path.
+    """
+    monkeypatch.setattr(server, "_pull_task", lambda *_args, **_kwargs: True)
+
+
 @pytest.fixture
 def successful_side_effects(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[Any]]:
     calls: dict[str, list[Any]] = {"publish": [], "sync": [], "project_sync": []}
@@ -1159,22 +1173,28 @@ def test_cancel_sync_failure_is_retryable_and_repairs_without_changing_reason(
 
 
 @pytest.mark.parametrize(
-    ("result_status", "expected_node_status"),
+    "result_status",
     [
-        ("SUCCESS", "completed"),
-        ("SUCCESS_WITH_NOTES", "completed"),
-        ("REVISION_NEEDED", "revision"),
-        ("BLOCKED", "blocked"),
-        ("INTERRUPTED", "blocked"),
+        "SUCCESS",
+        "SUCCESS_WITH_NOTES",
+        "REVISION_NEEDED",
+        "BLOCKED",
+        "INTERRUPTED",
     ],
 )
-def test_supported_result_status_round_trips_through_submit_check_and_accept(
+def test_submit_and_check_tolerate_a_failed_pull_but_accept_fails_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     successful_side_effects: dict[str, list[Any]],
     result_status: str,
-    expected_node_status: str,
 ) -> None:
+    """Round 9 (#1467) replaced the former pull-fail-accept-ok contract:
+    submit (which never pulls) and check (best-effort pull, surfaced as
+    ``pulled``) still succeed while the authoritative task pull fails,
+    but the cross-actor accept loads the authoritative task first and
+    now refuses to write the stale local copy back — the decision errors
+    out, the local task/project state is untouched and nothing is
+    committed to shared storage."""
     project_id, task_id = _write_project_and_task(tmp_path)
     monkeypatch.setattr(server, "_pull_task", lambda *_args, **_kwargs: False)
 
@@ -1188,6 +1208,14 @@ def test_supported_result_status_round_trips_through_submit_check_and_accept(
             "payload": {"taskId": task_id},
         },
     )
+    task_path = tmp_path / "shared" / "tasks" / task_id / "meta.json"
+    project_path = tmp_path / "shared" / "projects" / project_id / "meta.json"
+    before_task = task_path.read_bytes()
+    before_project = project_path.read_bytes()
+    before_side_effect_counts = {
+        name: len(calls) for name, calls in successful_side_effects.items()
+    }
+
     accepted = _tool_payload(
         "projectflow",
         {
@@ -1203,14 +1231,25 @@ def test_supported_result_status_round_trips_through_submit_check_and_accept(
         },
     )
 
+    # Unchanged by round 9: a failed pull does not block submit/check.
     assert submitted["ok"] is True
     assert submitted["task"]["result_status"] == result_status
     assert checked["ok"] is True
     assert checked["effective"] is True
     assert checked["validationErrors"] == []
     assert checked["result"]["status"] == result_status
-    assert accepted["ok"] is True
-    assert accepted["nodeStatus"] == expected_node_status
+    # The cross-actor accept fails closed on the failed authoritative
+    # pull (the ValueError raised by _load_authoritative_task, surfaced
+    # through the projectflow error wrapper) ...
+    assert accepted["ok"] is False
+    assert "stale local copy" in accepted["error"]
+    # ... and wrote nothing back: local state untouched, nothing
+    # committed to shared storage.
+    assert task_path.read_bytes() == before_task
+    assert project_path.read_bytes() == before_project
+    assert {
+        name: len(calls) for name, calls in successful_side_effects.items()
+    } == before_side_effect_counts
 
 
 @pytest.mark.parametrize("result_status", ["FAILED", "PARTIAL"])

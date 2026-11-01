@@ -30,6 +30,7 @@ from mcp.artifact.publish import (
     _normalize_workspace_artifact_path,
     _path_is_under,
 )
+from mcp.artifact.sync import _load_authoritative_task
 from mcp.room.matrix import _team_human_matrix_ids, _team_leader_matrix_id
 from mcp.room.notify import _send_attention_notification, _task_completion_notification
 from .review import (
@@ -1584,7 +1585,13 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             if role != "leader":
                 raise ValueError("cancel_task requires leader role")
             task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
-            task = _load_task(arguments, task_id)
+            # W2 round 9 (#1467): cancel is a cross-actor write like
+            # review — the leader's local copy may be a stale cache, and
+            # the whole-directory write-back would swallow a
+            # decision_status=frozen with the approval records the worker
+            # persisted after the cache was pulled. Load the
+            # authoritative task (pull first, fail closed on failure).
+            task = _load_authoritative_task(arguments, task_id)
             requested_submission_id = _first_text(
                 payload.get("submissionId"),
                 payload.get("submission_id"),

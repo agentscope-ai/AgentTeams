@@ -46,9 +46,9 @@ from mcp.common import refs
 from mcp.common.config import _protocol_enforce_enabled, _runtime_team_name
 from mcp.common.constants import DECISION_CLASS_IDS, DEFAULT_DECISION_CLASS
 from mcp.common.identity import _canonical_account
-from mcp.common.io import _read_json, _utc_timestamp
+from mcp.common.io import _utc_timestamp
 from mcp.common.payload import _first_text, _safe_id
-from mcp.common.paths import _task_state_path
+from mcp.artifact.sync import _load_authoritative_task
 from .transitions import (
     _reject_task_transition,
     _require_task_mutable,
@@ -341,11 +341,12 @@ def _review_task_action(
     if role not in {"critic", "leader"}:
         raise ValueError("review_task requires critic or leader role")
     task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
-    task = _read_json(_task_state_path(arguments, task_id))
-    if not task:
-        raise ValueError("task not found")
-    if not task.get("task_id") and task.get("taskId"):
-        task["task_id"] = str(task["taskId"])
+    # W2 round 9 (#1467): review is a cross-actor write and _sync_task
+    # pushes the WHOLE task directory — load the authoritative task
+    # (pull first, fail closed on failure) so a concurrently persisted
+    # decision_status=frozen, its approval records and the
+    # decision_status_history survive the review write.
+    task = _load_authoritative_task(arguments, task_id)
     _require_task_mutable(arguments, task, task_id, "review_task")
     status = str(task.get("status") or "")
     if status != "submitted":

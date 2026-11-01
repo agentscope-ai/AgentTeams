@@ -39,6 +39,7 @@ from mcp.common.payload import (
 )
 from mcp.common.paths import _project_dir, _project_state_path, _task_dir, _task_state_path
 from mcp.artifact.publish import _attachment_parent_event_id
+from mcp.artifact.sync import _load_authoritative_task
 from mcp.lifecycle.review import ProtocolGuardError, _protocol_guard_for_accept
 from mcp.lifecycle.signal_events import _emit_signal_event, _list_events, _project_audit_seq
 # taskflow keeps NO module-level import of this module (its 9 flow names
@@ -229,6 +230,12 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
     if not project:
         raise ValueError("project not found")
     task_meta = _read_json(_task_state_path(arguments, task_id))
+    if task_meta:
+        # W2 round 9 (#1467): positive acceptance writes the task back
+        # (the whole directory) — a stale local copy would clobber the
+        # authoritative state; absent task keeps the existing no-task
+        # behaviour.
+        task_meta = _load_authoritative_task(arguments, task_id)
     task_project_id = _first_text(task_meta.get("project_id"), task_meta.get("projectId"))
     if task_project_id and task_project_id != project_id:
         raise ValueError("task does not belong to project")

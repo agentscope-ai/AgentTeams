@@ -103,6 +103,33 @@ def _pull_task(arguments: dict[str, Any], task_id: str) -> bool:
     return True
 
 
+def _load_authoritative_task(arguments: dict[str, Any], task_id: str) -> dict[str, Any]:
+    """W2 round 9 (issue #1467): authoritative task read for a
+    cross-actor task write.
+
+    _sync_task pushes the WHOLE local task directory (mc mirror), so
+    writing on a stale local copy overwrites whatever a newer writer
+    persisted: a review written onto a leader's cached submitted/open
+    task clobbered a decision_status=frozen with its approval records
+    and decision_status_history (the maintainer's round-9 repro). The
+    guarded entries (review_task / cancel_task / accept_task_result)
+    only ever write a task that already exists in shared storage
+    (submitted or in flight), so the pull must succeed: on any failure
+    the caller fails closed instead of writing the stale copy back.
+    """
+    if not _pull_task(arguments, task_id):
+        raise ValueError(
+            "cannot pull the authoritative task state from shared storage; "
+            "refusing to write on a stale local copy (retry)"
+        )
+    task = _read_json(_task_state_path(arguments, task_id))
+    if not task:
+        raise ValueError("task not found")
+    if not task.get("task_id") and task.get("taskId"):
+        task["task_id"] = str(task["taskId"])
+    return task
+
+
 def _pull_project(arguments: dict[str, Any], project_id: str) -> bool:
     """Pull a project's meta.json from shared storage (single file) so a
     Controller-level write (pause / resume / replan) takes effect on the next
@@ -168,5 +195,10 @@ refs.define("_sync_task", _sync_task)
 refs.define("_sync_project", _sync_project)
 refs.define("_pull_task", _pull_task)
 refs.define("_pull_project", _pull_project)
+refs.define("_load_authoritative_task", _load_authoritative_task)
+
+# Rebind to a proxy so a test monkeypatch of server._pull_task is visible
+# inside this module (same pattern as taskflow's _write_task).
+_pull_task = refs.proxy("_pull_task")
 
 

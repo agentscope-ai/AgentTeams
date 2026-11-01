@@ -119,6 +119,8 @@ def _remote_project_meta_snapshot(
 def _merge_project_pause_state(
     local_meta: dict[str, Any] | None,
     snapshot: dict[str, Any] | None,
+    *,
+    authored_status: str | None = None,
 ) -> dict[str, Any]:
     """Merge the controller-owned pause state from a remote snapshot into
     the local project meta (the local copy stays the write base).
@@ -127,13 +129,22 @@ def _merge_project_pause_state(
     so the snapshot is authoritative for it and the local copy only owns
     the fields the worker writes:
 
-    - project ``status``: a remote ``paused`` is authoritative (never
-      write ``active`` over it); every other status is the local writer's
-      to own — the agent-side pause/resume is this legacy channel. (This
-      stays correct only while the Controller never transitions ``status``
-      itself: it writes ``active`` on create and nothing after. A future
-      Controller-side status transition must become remote-authoritative
-      too, or a stale cache could resurrect it the same way.)
+    - project ``status``: controller-owned, and the Controller DOES
+      transition it after creation (``PauseProject`` -> ``paused``,
+      ``ResumeProject`` -> ``active``, both strict CAS). So an ordinary
+      progress write takes the snapshot's value: a cache pulled before a
+      resume must not write ``paused`` back. Two deliberate transitions
+      are still allowed to move it forward, and only forward:
+
+      * ``authored_status="paused"`` (MCP ``pause_project``): escalate to
+        paused — a worker may pause, and a pause is fail-closed;
+      * ``authored_status="completed"`` (MCP ``complete_project``): the
+        terminal transition of the worker's own run.
+
+      A remote ``paused`` always wins, so no client write can release a
+      durable pause (an agent cannot self-resolve; the Controller's
+      ``ResumeProject`` is the release) — that is the pre-existing MCP
+      behaviour and it is kept.
     - ``loop.pause_sources``: the remote value wins. The local copy never
       adds or keeps a source, so a cache pulled before an admin resume
       cannot write the released veto back on the next progress sync. The
@@ -151,8 +162,23 @@ def _merge_project_pause_state(
     merged = dict(local_meta or {})
     if snapshot is None:
         return merged
-    if str(snapshot.get("status") or "") == "paused":
+    remote_status = str(snapshot.get("status") or "")
+    if remote_status == "paused":
+        # A durable pause is never cleared by a client write (round 10);
+        # only the Controller's ResumeProject releases it.
         merged["status"] = "paused"
+    elif authored_status == "paused":
+        # Deliberate MCP pause: escalate to paused (fail-closed).
+        merged["status"] = "paused"
+    elif authored_status == "completed":
+        # Deliberate MCP completion: the worker's own terminal transition.
+        merged["status"] = "completed"
+    elif "status" in snapshot:
+        # Ordinary progress write: the snapshot owns the status. A remote
+        # ``active``/``completed`` wins over a stale local ``paused``
+        # (round 14) — the reverse of round 10, which the durable state
+        # already covers above.
+        merged["status"] = snapshot["status"]
     snapshot_loop = snapshot.get("loop")
     snapshot_loop = snapshot_loop if isinstance(snapshot_loop, dict) else {}
     local_loop = merged.get("loop")
@@ -430,7 +456,12 @@ def _commit_project_meta(project_id: str, meta: dict[str, Any], etag: str) -> di
     }
 
 
-def _sync_project(arguments: dict[str, Any], project_id: str) -> bool:
+def _sync_project(
+    arguments: dict[str, Any],
+    project_id: str,
+    *,
+    authored_status: str | None = None,
+) -> bool:
     """Push a project's derived files and its meta.json to shared storage,
     commit-safe against a concurrent Controller pause (#1402).
 
@@ -453,11 +484,13 @@ def _sync_project(arguments: dict[str, Any], project_id: str) -> bool:
        retries the read, bounded to _SYNC_META_READ_ATTEMPTS;
     2. merge the controller-owned pause state from that snapshot into the
        local meta and re-write it (``_merge_project_pause_state``): the
-       snapshot is authoritative for ``loop.pause_sources`` /
+       snapshot is authoritative for ``status`` / ``loop.pause_sources`` /
        ``loop.paused_by_project`` (a stale local cache never re-adds a
-       released source) and a remote ``paused`` status is authoritative,
-       while the worker keeps the fields it owns (progress, iteration,
-       task plan) — so every project writer inherits the protection;
+       released source or a resumed status), except for the two deliberate
+       forward transitions (``authored_status`` = ``paused`` from MCP
+       pause, ``completed`` from MCP complete), while the worker keeps the
+       fields it owns (progress, iteration, task plan) — so every project
+       writer inherits the protection;
     3. push the project directory EXCLUDING meta.json (derived files only:
        plan.md, result.md, ...);
     4. commit the merged meta conditionally against the version the
@@ -527,7 +560,9 @@ def _sync_project(arguments: dict[str, Any], project_id: str) -> bool:
                 first_push = dict(arguments)
                 first_push.update({"action": "push", "path": dir_path})
                 return bool(_filesync(first_push).get("ok"))
-            merged = _merge_project_pause_state(_read_json(state_path), snapshot)
+            merged = _merge_project_pause_state(
+                _read_json(state_path), snapshot, authored_status=authored_status
+            )
             _write_json(state_path, merged)
         dir_args = dict(arguments)
         dir_args.update({

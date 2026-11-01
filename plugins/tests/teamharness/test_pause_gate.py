@@ -80,6 +80,16 @@ Covers (#1402 round 13, the reverse direction — release resurrected):
 22. no remote loop object -> both controller-owned keys
     (``pause_sources``, ``paused_by_project``) are dropped while the
     worker-owned loop content still lands.
+
+Covers (#1402 round 14, project-level status is controller-owned too —
+``PauseProject`` / ``ResumeProject`` write it under the strict CAS):
+23. pause -> cache -> controller resume -> ordinary progress sync: the
+    durable status stays ``active`` (the stale cache cannot restore
+    ``paused``), while the progress field lands;
+24. the same rule for a terminal status: a stale local ``active`` cannot
+    reopen a completed project;
+25. positive control: MCP ``pause_project`` / ``resume_project`` are
+    deliberate control actions and still author the status.
 """
 
 from __future__ import annotations
@@ -1370,3 +1380,88 @@ def test_sync_drops_stale_pause_and_flag_when_remote_has_no_loop(
     local = _read_project(workspace, project_id)
     assert "pause_sources" not in local["loop"]
     assert "paused_by_project" not in local["loop"]
+
+
+# --- Spec 23-25 (#1402 round 14): project-level ``status`` is controller-owned
+# too (PauseProject/ResumeProject write it under the strict CAS). A stale
+# cache must not restore it on a progress sync, while the deliberate MCP
+# control actions keep authoring it. ---
+
+
+def test_sync_after_controller_resume_does_not_restore_stale_paused_status(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 23 (the maintainer's P1): PauseProject persists ``paused``, the
+    worker caches that meta, ResumeProject writes ``active``, then an
+    ordinary progress sync commits the unchanged cache. The durable status
+    must stay ``active`` — the status is the Controller's, not the cache's."""
+    monkeypatch.setattr(server.sync, "_SYNC_PROJECT_RETRY_BACKOFFS", (0.0, 0.0))
+    workspace = tmp_path / "agent"
+    project_id = "pg-23"
+    meta_path = f"shared/projects/{project_id}/meta.json"
+    stale_local = _project(
+        project_id, status="paused", loop=_loop(pause_sources=[], current_iteration=1)
+    )
+    resumed_remote = _project(project_id, status="active", loop=_loop(pause_sources=[]))
+    storage = FakeProjectStorage({meta_path: resumed_remote})
+    _install_sync_fakes(monkeypatch, server, storage)
+    _write_project(workspace, project_id, stale_local)
+
+    assert server.sync._sync_project(_arguments(workspace, "noop"), project_id) is True
+
+    assert storage.commit_calls == 1
+    final = storage.remote[meta_path]
+    assert final["status"] == "active"
+    assert final["loop"]["current_iteration"] == 1  # progress still landed
+    # The local cache is rewritten from the authoritative snapshot.
+    assert _read_project(workspace, project_id)["status"] == "active"
+
+
+def test_sync_keeps_remote_completed_status(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 24: the rule is "the snapshot owns status", not "remote paused
+    wins" — a stale local ``active`` cannot reopen a completed project."""
+    monkeypatch.setattr(server.sync, "_SYNC_PROJECT_RETRY_BACKOFFS", (0.0, 0.0))
+    workspace = tmp_path / "agent"
+    project_id = "pg-24"
+    meta_path = f"shared/projects/{project_id}/meta.json"
+    stale_local = _project(project_id, status="active", loop=_loop(current_iteration=2))
+    completed_remote = _project(project_id, status="completed", loop=_loop())
+    storage = FakeProjectStorage({meta_path: completed_remote})
+    _install_sync_fakes(monkeypatch, server, storage)
+    _write_project(workspace, project_id, stale_local)
+
+    assert server.sync._sync_project(_arguments(workspace, "noop"), project_id) is True
+
+    final = storage.remote[meta_path]
+    assert final["status"] == "completed"
+    assert final["loop"]["current_iteration"] == 2
+    assert _read_project(workspace, project_id)["status"] == "completed"
+
+
+def test_mcp_pause_resume_control_actions_still_author_status(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 25 (positive control): the deliberate MCP pause keeps writing the
+    status (``authored_status="paused"``), and the MCP resume still only
+    clears the local legacy status — it never releases the durable pause
+    (spec 7), which the Controller's ResumeProject owns."""
+    monkeypatch.setattr(server.sync, "_SYNC_PROJECT_RETRY_BACKOFFS", (0.0, 0.0))
+    workspace = tmp_path / "agent"
+    project_id = "pg-25"
+    meta_path = f"shared/projects/{project_id}/meta.json"
+    meta = _project(project_id, status="active", loop=_loop())
+    storage = FakeProjectStorage({meta_path: meta})
+    _install_sync_fakes(monkeypatch, server, storage)
+    _write_project(workspace, project_id, meta)
+
+    paused = server._projectflow(_arguments(workspace, "pause_project", projectId=project_id))
+    assert paused["ok"] is True
+    assert storage.remote[meta_path]["status"] == "paused"
+
+    # resume_project clears the local legacy status but cannot release the
+    # durable pause: the merge keeps the remote ``paused`` (spec 7 rule).
+    resumed = server._projectflow(_arguments(workspace, "resume_project", projectId=project_id))
+    assert resumed["ok"] is True
+    assert storage.remote[meta_path]["status"] == "paused"

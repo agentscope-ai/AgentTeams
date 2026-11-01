@@ -1108,7 +1108,22 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             # and returns a retryable failure — the leader is never woken
             # by a completion whose state it cannot read, and no
             # projectCompletionEventId is recorded without durable state.
-            synced = _sync_project(arguments, project_id)
+            #
+            # authored_status: only the two deliberate FORWARD transitions
+            # may move the Controller-owned status — pause_project escalates
+            # to paused, complete_project lands the terminal state. An
+            # ordinary progress sync (and resume_project, which only clears
+            # the local legacy status: an agent cannot release a durable
+            # pause) never authors it, so a cache pulled before an admin
+            # resume cannot write the old ``paused`` back (#1402 round 14).
+            authored_status = None
+            if action == "pause_project":
+                authored_status = "paused"
+            elif action == "complete_project":
+                authored_status = "completed"
+            synced = _sync_project(
+                arguments, project_id, authored_status=authored_status
+            )
             if action == "complete_project" and not synced:
                 return {
                     "ok": False,

@@ -159,3 +159,31 @@ def test_sync_drops_stale_pause_and_flag_when_remote_has_no_loop_in_bundle(
     pause_gate.test_sync_drops_stale_pause_and_flag_when_remote_has_no_loop(
         server, tmp_path, monkeypatch
     )
+
+
+def test_sync_after_controller_resume_does_not_restore_stale_paused_status_in_bundle(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 23 (parity): the Controller's resume survives a stale progress
+    sync in the bundle's copy too."""
+    pause_gate.test_sync_after_controller_resume_does_not_restore_stale_paused_status(
+        server, tmp_path, monkeypatch
+    )
+
+
+def test_sync_keeps_remote_completed_status_in_bundle(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 24 (parity): a stale local active cannot reopen a completed
+    project in the bundle's copy."""
+    pause_gate.test_sync_keeps_remote_completed_status(server, tmp_path, monkeypatch)
+
+
+def test_mcp_pause_resume_control_actions_still_author_status_in_bundle(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 25 (parity): the deliberate MCP control actions keep authoring
+    the status in the bundle's copy."""
+    pause_gate.test_mcp_pause_resume_control_actions_still_author_status(
+        server, tmp_path, monkeypatch
+    )

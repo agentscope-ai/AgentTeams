@@ -479,7 +479,23 @@ phase_quiesce() {
       # operationally (no CR/config changes during the window); the tool-side assertion
       # is the quiesce lock + the window evidence below.
       state_set "stage_detail.quiesce.controller" "{\"embedded\":true,\"note\":\"source storage lives in the controller - it stays up until P5; frozen operationally, asserted by quiesce.lock + window evidence\"}"
-      log_warn "P1 embedded: the controller CANNOT be stopped (the source storage lives in it) - no CR/config changes until P5; the freeze is proven by the window evidence below"
+      # The controller shares the container with the source storage, so the
+      # container cannot be stopped - but the controller process is the last
+      # writer. Freeze only it (SIGSTOP): it stops writing while MinIO keeps
+      # serving reads, which is what "quiesced with the source still visible"
+      # requires. P8/--rollback resumes it with SIGCONT.
+      if [ "$DRY_RUN" = false ]; then
+        local ctrl_pid
+        ctrl_pid=$(docker exec "$CONTROLLER_CONTAINER" pgrep -f "/usr/local/bin/agentteams-controller" 2>/dev/null | head -1 || true)
+        if [ -n "${ctrl_pid:-}" ]; then
+          docker exec "$CONTROLLER_CONTAINER" kill -STOP "$ctrl_pid" 2>/dev/null || true
+          state_set "stage_detail.frozen_controller_pid" "\"$ctrl_pid\""
+          log_info "P1 embedded: controller process frozen (SIGSTOP pid $ctrl_pid); MinIO keeps serving reads"
+        else
+          log_warn "P1 embedded: controller pid not found; freeze relies on the window evidence alone"
+        fi
+      fi
+      log_warn "P1 embedded: the controller container stays up (the source storage lives in it); its process is frozen and no CR/config changes happen until P5"
       ;;
   esac
 
@@ -1185,7 +1201,7 @@ p5_embedded() {
   fi
   EMBED_WORKSPACE=$(jq -r '.[0].Mounts[] | select(.Type == "bind" and .Destination == "/root/agentteams-fs/agents/manager") | .Source' "$bdir/controller-inspect-pre.json" 2>/dev/null || true)
   local env_new
-  env_new=$(swap_storage_env "$env_pre")
+  env_new=$(swap_storage_env "$env_pre" "$DST_EP" "$(first_bucket)" "$DST_AK" "$DST_SK")
   out_sh="$bdir/controller-run-post.sh"; envfile="$bdir/controller-env-post.env"
   render_controller_run "$out_sh" "$envfile" "$image" "$env_new"
   log_info "P5 embedded: switching the controller (docker rm -f + installer-shape docker run, env via --env-file; backup: $bdir)"
@@ -1407,6 +1423,15 @@ p7_verify_components() {
 # ---- P8: resume + observation window + rollback command ----
 p8_resume() {
   log_info "P8: resume complete + observation window"
+  if [ "$DRY_RUN" = false ]; then
+    local _fp
+    _fp=$(state_get '.stage_detail.frozen_controller_pid // empty')
+    if [ -n "${_fp:-}" ]; then
+      docker exec "$CONTROLLER_CONTAINER" kill -CONT "$_fp" 2>/dev/null || true
+      log_info "P8: controller process resumed (SIGCONT pid $_fp)"
+      state_unset "stage_detail.frozen_controller_pid" 2>/dev/null || true
+    fi
+  fi
   local writers k n orig cname missing=""
   writers=$(state_get '.stage_detail.writers // []')
   if [ "$DRY_RUN" = false ]; then

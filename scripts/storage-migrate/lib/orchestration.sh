@@ -391,14 +391,15 @@ assert_embedded_shape() { # inspects the controller container; fail-closed unles
 # swap_storage_env <env-json-list> -> new env list pointing at the target backend.
 # Swaps the storage-plane entries (and the MINIO_* admin fallbacks the controller
 # reads via OSSConfig); every other env entry is preserved verbatim.
-swap_storage_env() {
-  local env_json="$1" bucket
-  bucket=$(first_bucket)
+swap_storage_env() {  # <env-json> <endpoint> <bucket> <ak> <sk>
+  # Values arrive as arguments: the caller runs this in a command substitution,
+  # where relying on globals produced an empty bucket and empty credentials.
+  local env_json="$1" ep="$2" bucket="$3" ak="$4" sk="$5"
   # jq strings do NOT interpolate $var - only \($var) does. Writing
   # "AGENTTEAMS_FS_ENDPOINT=$ep" produced a literal $ep in the env file, and an
   # env that never had a provider line kept none, so the rebuilt controller came
   # up without AGENTTEAMS_STORAGE_PROVIDER (the cutover assert caught it).
-  jq -c --arg ep "$DST_EP" --arg b "$bucket" --arg ak "$DST_AK" --arg sk "$DST_SK" '
+  jq -c --arg ep "$ep" --arg b "$bucket" --arg ak "$ak" --arg sk "$sk" '
     map(
       if   (. | startswith("AGENTTEAMS_STORAGE_PROVIDER")) or (. | startswith("HICLAW_STORAGE_PROVIDER")) then "AGENTTEAMS_STORAGE_PROVIDER=s3"
       elif (. | startswith("AGENTTEAMS_FS_ENDPOINT"))     or (. | startswith("HICLAW_FS_ENDPOINT"))     then "AGENTTEAMS_FS_ENDPOINT=\($ep)"
@@ -411,7 +412,13 @@ swap_storage_env() {
     | if (map(select(startswith("AGENTTEAMS_STORAGE_PROVIDER"))) | length) > 0
       then . else . + ["AGENTTEAMS_STORAGE_PROVIDER=s3"] end
     | if (map(select(startswith("AGENTTEAMS_FS_ENDPOINT"))) | length) > 0
-      then . else . + ["AGENTTEAMS_FS_ENDPOINT=\($ep)"] end' <<<"$env_json"
+      then . else . + ["AGENTTEAMS_FS_ENDPOINT=\($ep)"] end
+    | if (map(select(startswith("AGENTTEAMS_FS_BUCKET"))) | length) > 0
+      then . else . + ["AGENTTEAMS_FS_BUCKET=\($b)"] end
+    | if (map(select(startswith("AGENTTEAMS_FS_ACCESS_KEY"))) | length) > 0
+      then . else . + ["AGENTTEAMS_FS_ACCESS_KEY=\($ak)"] end
+    | if (map(select(startswith("AGENTTEAMS_FS_SECRET_KEY"))) | length) > 0
+      then . else . + ["AGENTTEAMS_FS_SECRET_KEY=\($sk)"] end' <<<"$env_json"
 }
 
 # render_controller_run <out-script> <out-env-file> <image> <env-json>

@@ -1165,6 +1165,11 @@ async def test_start_uses_image_builtin_plugins_without_runtime_install(
     _write_builtin_plugin(builtin_plugins, "agentteams-matrix-channel", "apply_matrix")
     _write_builtin_plugin(builtin_plugins, "teamharness", "apply_teamharness")
     _write_builtin_plugin(builtin_plugins, "workerflow", "apply_workerflow")
+    _write_builtin_plugin(
+        builtin_plugins,
+        "qwen-code-bridge",
+        "apply_coding_cli",
+    )
     teamharness_zip = _write_plugin_zip(
         tmp_path,
         "teamharness",
@@ -1214,6 +1219,12 @@ async def test_start_uses_image_builtin_plugins_without_runtime_install(
     assert install_commands == []
     assert (config.qwenpaw_working_dir / "plugins" / "teamharness" / "plugin.py").is_file()
     assert (config.qwenpaw_working_dir / "plugins" / "workerflow" / "plugin.py").is_file()
+    assert (
+        config.qwenpaw_working_dir
+        / "plugins"
+        / "qwen-code-bridge"
+        / "plugin.py"
+    ).is_file()
 
 
 def test_install_teamharness_plugin_rejects_zip_path_traversal(tmp_path: Path) -> None:
@@ -1240,6 +1251,11 @@ def test_runtime_adapter_reapplies_builtin_assets_without_runtime_install(
     _write_builtin_plugin(builtin_plugins, "agentteams-matrix-channel", "apply_matrix")
     _write_builtin_plugin(builtin_plugins, "teamharness", "apply_teamharness")
     _write_builtin_plugin(builtin_plugins, "workerflow", "apply_workerflow")
+    _write_builtin_plugin(
+        builtin_plugins,
+        "qwen-code-bridge",
+        "apply_coding_cli",
+    )
     install_commands: list[list[str]] = []
 
     def fake_run(command, check):
@@ -1260,6 +1276,12 @@ def test_runtime_adapter_reapplies_builtin_assets_without_runtime_install(
     assert (config.qwenpaw_working_dir / "plugins" / "agentteams-matrix-channel" / "plugin.py").is_file()
     assert (config.qwenpaw_working_dir / "plugins" / "teamharness" / "plugin.py").is_file()
     assert (config.qwenpaw_working_dir / "plugins" / "workerflow" / "plugin.py").is_file()
+    assert (
+        config.qwenpaw_working_dir
+        / "plugins"
+        / "qwen-code-bridge"
+        / "plugin.py"
+    ).is_file()
 
 
 def test_prepare_builtin_plugin_repairs_partial_target_with_matching_marker(tmp_path: Path) -> None:

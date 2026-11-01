@@ -3021,6 +3021,30 @@ func (h *ProjectHandler) writeProjectMeta(ctx context.Context, w http.ResponseWr
 // storage.
 const projectMetaCommitMaxBytes = 1 << 20
 
+// metaHasPauseSource reports whether a project meta document's
+// loop.pause_sources contains source. A malformed or absent loop object
+// reads as false, which is the safe direction: only a verifiably-present
+// server-owned source is protected.
+func metaHasPauseSource(meta []byte, source string) bool {
+	if len(meta) == 0 {
+		return false
+	}
+	var doc struct {
+		Loop struct {
+			PauseSources []string `json:"pause_sources"`
+		} `json:"loop"`
+	}
+	if err := json.Unmarshal(meta, &doc); err != nil {
+		return false
+	}
+	for _, entry := range doc.Loop.PauseSources {
+		if entry == source {
+			return true
+		}
+	}
+	return false
+}
+
 // PutProjectMeta conditionally commits a project's full meta.json against
 // the version the caller read (the controller-side conditional commit
 // endpoint, #1402). The worker's filesync path used to `mc stat` and then
@@ -3109,6 +3133,30 @@ func (h *ProjectHandler) PutProjectMeta(w http.ResponseWriter, r *http.Request) 
 		if !caller.TeamMatches(pwc.team) {
 			writeError(w, http.StatusForbidden, "worker can only commit the meta of a project in its own team")
 			return
+		}
+		// The human pause source is server-owned state (#1402 round 10):
+		// If-Match binds the version, not the field authority. A worker
+		// commit that drops loop.pause_sources=["user"] — or omits the
+		// loop object entirely — must not clear a pause the admin placed.
+		// Ordinary task-progress commits keep the source and stay on the
+		// no-extra-read path; only a body that lacks the source pays the
+		// read that decides whether protecting it is required.
+		if !metaHasPauseSource(body, pauseSourceUser) {
+			current, readErr := h.oss.GetObject(r.Context(), pwc.key)
+			switch {
+			case readErr == nil:
+				if metaHasPauseSource(current, pauseSourceUser) {
+					writeError(w, http.StatusForbidden,
+						"the human pause source is server-owned; a worker meta commit cannot clear it (use the resume endpoint)")
+					return
+				}
+			case errors.Is(readErr, os.ErrNotExist):
+				// No stored meta yet: nothing to protect.
+			default:
+				writeError(w, http.StatusInternalServerError,
+					"verify the human pause source: "+readErr.Error())
+				return
+			}
 		}
 	}
 

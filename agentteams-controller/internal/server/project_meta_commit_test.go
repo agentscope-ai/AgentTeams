@@ -53,9 +53,9 @@ func TestPutProjectMeta_MissingIfMatch428(t *testing.T) {
 	admin := &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"}
 
 	cases := []struct {
-		name  string
-		hdr   string
-		set   bool
+		name string
+		hdr  string
+		set  bool
 	}{
 		{"absent", "", false},
 		{"blank", "   ", true},
@@ -99,12 +99,12 @@ func TestPutProjectMeta_BodyValidation400(t *testing.T) {
 	admin := &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"}
 
 	badBodies := []string{
-		`{"project_id":`,    // truncated JSON
-		`[1, 2, 3]`,         // JSON array, not an object
-		`"just a string"`,   // JSON scalar
-		``,                  // empty body
-		`null`,              // JSON null -> nil map, must not write
-		"\t null \n",        // null with surrounding whitespace
+		`{"project_id":`,  // truncated JSON
+		`[1, 2, 3]`,       // JSON array, not an object
+		`"just a string"`, // JSON scalar
+		``,                // empty body
+		`null`,            // JSON null -> nil map, must not write
+		"\t null \n",      // null with surrounding whitespace
 	}
 	for _, body := range badBodies {
 		req := httptest.NewRequest(http.MethodPut, "/api/v1/projects/pm1/meta", strings.NewReader(body))
@@ -447,5 +447,108 @@ func TestPutProjectMeta_WorkerHTTPChain(t *testing.T) {
 	}
 	if string(got) != body {
 		t.Fatalf("stored bytes differ from commit body:\n stored=%q\n commit=%q", got, body)
+	}
+}
+
+// Round 10 (#1402): the human pause source is server-owned state — a worker
+// meta commit must not clear it through the data plane, while ordinary
+// task-progress commits (which keep the source) stay allowed.
+func TestPutProjectMeta_WorkerCannotClearHumanPause(t *testing.T) {
+	pausedMeta := `{"project_id":"p1","title":"P1","status":"active","plan_type":"dag","team_id":"alpha-team","loop":{"pause_sources":["user"]}}`
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			"clears the source",
+			`{"project_id":"p1","title":"P1","status":"active","plan_type":"dag","team_id":"alpha-team","loop":{"pause_sources":[]}}`,
+		},
+		{
+			"omits the loop object",
+			`{"project_id":"p1","title":"P1","status":"active","plan_type":"dag","team_id":"alpha-team","synced":true}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := ossfake.NewMemory()
+			key := "teams/alpha-team/shared/projects/p1/meta.json"
+			if err := store.PutObject(context.Background(), key, []byte(pausedMeta)); err != nil {
+				t.Fatal(err)
+			}
+			k8s := fake.NewClientBuilder().
+				WithScheme(newProjectTestScheme(t)).
+				WithRuntimeObjects(team("alpha-team")).
+				Build()
+			worker := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "alpha-dev", Team: "alpha-team"}
+			mw := authpkg.NewMiddleware(&roleAuthenticator{identity: worker}, nil, authpkg.NewAuthorizer(), k8s, "default")
+			var ossStore oss.StorageClient = &mcLikeOSS{Memory: store}
+			srv := NewHTTPServer(":0", ServerDeps{Client: k8s, Namespace: "default", OSS: ossStore, AuthMw: mw})
+
+			read, err := store.StatMeta(context.Background(), key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(http.MethodPut, "/api/v1/projects/p1/meta", strings.NewReader(tc.body))
+			req.Header.Set("Authorization", "Bearer sa-token")
+			req.Header.Set("If-Match", read.ETag)
+			rec := httptest.NewRecorder()
+			srv.Mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status=%d, want 403; body=%s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), "human pause source") {
+				t.Fatalf("403 body does not name the human pause source: %s", rec.Body.String())
+			}
+			got, err := store.GetObject(context.Background(), key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != pausedMeta {
+				t.Fatalf("refused commit changed the stored meta:\n got=%s\n want=%s", got, pausedMeta)
+			}
+		})
+	}
+}
+
+func TestPutProjectMeta_WorkerProgressCommitKeepsHumanPause(t *testing.T) {
+	pausedMeta := `{"project_id":"p1","title":"P1","status":"active","plan_type":"dag","team_id":"alpha-team","loop":{"pause_sources":["user"]}}`
+	body := `{"project_id":"p1","title":"P1","status":"active","plan_type":"dag","team_id":"alpha-team","loop":{"pause_sources":["user"]},"synced":true}`
+
+	store := ossfake.NewMemory()
+	key := "teams/alpha-team/shared/projects/p1/meta.json"
+	if err := store.PutObject(context.Background(), key, []byte(pausedMeta)); err != nil {
+		t.Fatal(err)
+	}
+	k8s := fake.NewClientBuilder().
+		WithScheme(newProjectTestScheme(t)).
+		WithRuntimeObjects(team("alpha-team")).
+		Build()
+	worker := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "alpha-dev", Team: "alpha-team"}
+	mw := authpkg.NewMiddleware(&roleAuthenticator{identity: worker}, nil, authpkg.NewAuthorizer(), k8s, "default")
+	var ossStore oss.StorageClient = &mcLikeOSS{Memory: store}
+	srv := NewHTTPServer(":0", ServerDeps{Client: k8s, Namespace: "default", OSS: ossStore, AuthMw: mw})
+
+	read, err := store.StatMeta(context.Background(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/projects/p1/meta", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sa-token")
+	req.Header.Set("If-Match", read.ETag)
+	rec := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("progress commit status=%d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	got, err := store.GetObject(context.Background(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != body {
+		t.Fatalf("progress commit bytes differ:\n got=%s\n want=%s", got, body)
 	}
 }

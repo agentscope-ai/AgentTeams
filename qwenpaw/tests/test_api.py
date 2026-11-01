@@ -302,11 +302,18 @@ def test_put_channel_rejects_readback_mismatch(api_url):
         client.put_channel("agentteams_matrix", {"enabled": True})
 
 
-def test_require_version_rejects_unexpected_qwenpaw(api_url):
+@pytest.mark.parametrize("minimum", ["2.0.0", "2.2.1"])
+def test_require_version_accepts_compatible_qwenpaw(api_url, minimum):
     client = QwenPawApiClient(api_url)
 
-    with pytest.raises(QwenPawApiError, match="expected QwenPaw 2.0.0"):
-        client.require_version("2.0.0")
+    client.require_version(minimum)
+
+
+def test_require_version_rejects_qwenpaw_below_minimum(api_url):
+    client = QwenPawApiClient(api_url)
+
+    with pytest.raises(QwenPawApiError, match=r"required minimum 2\.3\.0"):
+        client.require_version("2.3.0")
 
 
 def test_http_error_and_timeout_are_safe(api_url, monkeypatch):

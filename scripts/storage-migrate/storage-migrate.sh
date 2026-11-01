@@ -6,6 +6,10 @@
 #                P7 per-component verification, P8 resume + observation
 #                (legacy mode without --deployment: P0->P2->P3->P4, cutover manual)
 set -euo pipefail
+# A consumer that closes the pipe early (a test harness piping through head, a
+# log collector) would otherwise SIGPIPE this script mid-phase and surface as
+# rc=141 with no output - which is what broke the verify job in CI. Ignoring
+# PIPE keeps the run alive; write errors still surface as EPIPE.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"

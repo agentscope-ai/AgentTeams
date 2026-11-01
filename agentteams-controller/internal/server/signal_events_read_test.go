@@ -213,6 +213,9 @@ func TestGetProjectSignalEvents_SinceInstantSemantics(t *testing.T) {
 // TestSignalCursor_PaddedUnpaddedInterop pins the P2 regression: cursors
 // must survive the Go<->Python boundary — Go emits unpadded base64url
 // (RawURLEncoding), Python emits padded (base64.urlsafe_b64encode).
+// Reverse direction (Python accepting Go's unpadded cursor) is covered by
+// plugins/tests/teamharness/test_signal_emission.py::
+// test_list_events_cursor_accepts_both_base64_forms (#1433 round 2).
 func TestSignalCursor_PaddedUnpaddedInterop(t *testing.T) {
 	payload := []byte("2026-10-24T10:00:00Z\x00ev_a")
 

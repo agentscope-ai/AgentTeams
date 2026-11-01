@@ -51,6 +51,8 @@ func signalEventPrefix(team, teamID string) string {
 // (base64url of "<occurred_at>\x00<event_id>"): events sort by
 // (occurred_at, event_id), and a page resumes strictly after the anchor.
 func encodeSignalCursor(occurredAt, eventID string) string {
+	// Unpadded by design: the Python peer (_list_events, #1433 round 2)
+	// must accept unpadded base64url cursors (it re-pads before decoding).
 	return base64.RawURLEncoding.EncodeToString([]byte(occurredAt + "\x00" + eventID))
 }
 

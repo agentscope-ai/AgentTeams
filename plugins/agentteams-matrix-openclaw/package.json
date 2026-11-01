@@ -1,0 +1,49 @@
+{
+  "name": "agentteams-matrix-openclaw",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenClaw channel plugin bridging AgentTeams Matrix traffic through the Python sidecar (no Matrix logic in TypeScript).",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "runtimeExtensions": [
+      "./dist/src/index.js"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.10.9"
+    }
+  },
+  "files": [
+    "dist/src",
+    "src",
+    "openclaw.plugin.json",
+    "README.md",
+    "scripts",
+    "test"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "test": "tsc -p tsconfig.json && node --test dist/test/sidecar-client.test.js dist/test/plugin-dispatch.test.js dist/test/lifecycle-config.test.js dist/test/e2e-preflight.test.js dist/test/install-order.test.js dist/test/e2e-bootstrap.test.js",
+    "verify:sdk": "node scripts/verify-sdk.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "typescript": "^5.5.4"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.10.6"
+  }
+}

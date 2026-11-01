@@ -520,16 +520,23 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             }
             if assignment_mxid and _role(arguments) == "leader" and has_matrix_env:
                 # Ordering contract (#1402/#1431): the dispatch decision
-                # re-reads the authoritative pause state one last time
-                # immediately before the send. The initial read at the top
-                # of delegate_task predates membership validation, which
-                # can span a pause write; a pause already persisted at
-                # this re-check means this dispatch is suppressed - the
-                # task stays prepared and nothing is committed to
-                # assigned. A pause landing concurrently with the send
-                # itself does not recall the in-flight Matrix event
-                # (already-dispatched work may finish under the agreed
-                # contract).
+                # refreshes the AUTHORITATIVE pause state one last time
+                # immediately before the send. The read at the top of
+                # delegate_task predates membership validation, which can
+                # span a Controller pause write; re-reading the local file
+                # here would only replay the last pull (the maintainer's
+                # round-16 repro: the pause was durable in shared storage
+                # while the local copy still said active, and the
+                # assignment went out anyway). A failed refresh is a
+                # suppression too — never send on a state we cannot read.
+                # A pause landing concurrently with the send itself does
+                # not recall the in-flight Matrix event (already
+                # dispatched work may finish under the agreed contract).
+                if not _pull_project(arguments, project_id):
+                    raise ValueError(
+                        "cannot refresh the authoritative project state before "
+                        "dispatch; refusing to send on a stale local copy (retry)"
+                    )
                 project = _read_json(_project_state_path(arguments, project_id))
                 paused, pause_sources = _loop_pause_state(project or {})
                 if paused:

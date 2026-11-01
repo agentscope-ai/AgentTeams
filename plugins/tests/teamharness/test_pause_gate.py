@@ -719,6 +719,41 @@ def test_resume_keeps_sources_and_admin_clear_unblocks(
     assert freed["task"]["status"] == "assigned"
 
 
+def test_presend_refresh_failure_suppresses_send(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 8b: the pre-send refresh is authoritative — if shared storage
+    cannot be read, nothing is sent (never dispatch on an unreadable state)."""
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "leader")
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_URL", "http://matrix.example.test")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "test-token")
+    workspace = tmp_path / "agent"
+    meta = _project("pg-8b", status="active", loop=_loop())
+    _write_project(workspace, "pg-8b", meta)
+    storage = FakeProjectStorage({"shared/projects/pg-8b/meta.json": meta})
+    _install_sync_fakes(monkeypatch, server, storage)
+    sent: list[dict[str, Any]] = []
+
+    def _membership_with_outage(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        # The pull the pre-send refresh needs now fails (storage outage).
+        storage.remote.pop("shared/projects/pg-8b/meta.json", None)
+        return {"ok": True}
+
+    monkeypatch.setattr(server, "_validate_assignee_membership", _membership_with_outage)
+    monkeypatch.setattr(
+        server,
+        "_send_delegate_notification",
+        lambda *args, **kwargs: sent.append(dict(kwargs)) or {"sent": True, "eventId": "$x"},
+    )
+
+    result = server._taskflow(_delegate_args(workspace, "pg-8b", "pg-8b-next"))
+
+    assert sent == []
+    assert result["ok"] is False
+    assert "cannot refresh the authoritative project state" in result["error"]
+    assert _read_task(workspace, "pg-8b-next")["status"] == "prepared"
+
+
 def test_pause_during_membership_validation_suppresses_send(
     server: Any, tmp_path: Path, monkeypatch: Any
 ) -> None:
@@ -732,17 +767,19 @@ def test_pause_during_membership_validation_suppresses_send(
     workspace = tmp_path / "agent"
     meta = _project("pg-8", status="active", loop=_loop())
     _write_project(workspace, "pg-8", meta)
-    _install_sync_fakes(
-        monkeypatch, server, FakeProjectStorage({"shared/projects/pg-8/meta.json": meta})
-    )
+    storage = FakeProjectStorage({"shared/projects/pg-8/meta.json": meta})
+    _install_sync_fakes(monkeypatch, server, storage)
     sent: list[dict[str, Any]] = []
 
     def _membership_with_pause(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        # Storage interleaving: the user pause lands while room membership
-        # is being validated - after the initial pause read.
-        meta = _read_project(workspace, "pg-8")
-        meta["loop"]["pause_sources"] = ["user"]
-        _write_project(workspace, "pg-8", meta)
+        # Storage interleaving: the Controller's PauseProject lands in
+        # SHARED STORAGE while room membership is being validated — after
+        # the initial read, before the pre-send decision. The local copy
+        # is deliberately left stale: only the authoritative refresh can
+        # see this pause (the maintainer's round-16 repro).
+        remote = dict(storage.remote["shared/projects/pg-8/meta.json"])
+        remote["loop"] = {**remote["loop"], "pause_sources": ["user"]}
+        storage.remote["shared/projects/pg-8/meta.json"] = remote
         return {"ok": True}
 
     monkeypatch.setattr(server, "_validate_assignee_membership", _membership_with_pause)

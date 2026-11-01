@@ -187,3 +187,25 @@ def test_mcp_pause_resume_control_actions_still_author_status_in_bundle(
     pause_gate.test_mcp_pause_resume_control_actions_still_author_status(
         server, tmp_path, monkeypatch
     )
+
+
+# --- Round 16 (#1402): the pre-send decision refreshes the AUTHORITATIVE
+# pause state. The source-tree regression now flips only the shared-storage
+# copy, so a local re-read cannot see it; these wrappers run the same two
+# cases against the bundle tree.
+
+
+def test_parity_pause_during_membership_validation_suppresses_send(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    pause_gate.test_pause_during_membership_validation_suppresses_send(
+        server, tmp_path, monkeypatch
+    )
+
+
+def test_parity_presend_refresh_failure_suppresses_send(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    pause_gate.test_presend_refresh_failure_suppresses_send(
+        server, tmp_path, monkeypatch
+    )

@@ -12,8 +12,12 @@
     }
   },
   "openclaw": {
-    "extensions": ["./src/index.ts"],
-    "runtimeExtensions": ["./dist/src/index.js"],
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "runtimeExtensions": [
+      "./dist/src/index.js"
+    ],
     "compat": {
       "pluginApi": ">=2026.10.9"
     }
@@ -23,7 +27,8 @@
     "src",
     "openclaw.plugin.json",
     "README.md",
-    "scripts"
+    "scripts",
+    "test"
   ],
   "engines": {
     "node": ">=24"
@@ -31,7 +36,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
-    "test": "tsc -p tsconfig.json && node --test dist/test/sidecar-client.test.js dist/test/plugin-dispatch.test.js",
+    "test": "tsc -p tsconfig.json && node --test dist/test/sidecar-client.test.js dist/test/plugin-dispatch.test.js dist/test/lifecycle-config.test.js",
     "verify:sdk": "node scripts/verify-sdk.mjs"
   },
   "devDependencies": {

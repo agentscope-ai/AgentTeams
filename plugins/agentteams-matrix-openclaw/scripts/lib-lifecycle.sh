@@ -120,16 +120,25 @@ lifecycle_apply_channel_config() {
     printf '{}\n' > "$OPENCLAW_CONFIG"
   fi
 
-  local tmp
+  local tmp mode
   tmp="$(mktemp)"
-  jq --arg socket "$SOCKET_PATH" --arg agent "$AGENT_NAME" '
+  mode="$(stat -c '%a' "$OPENCLAW_CONFIG" 2>/dev/null || true)"
+  # The channel section lives at channels.<id> (OpenClaw's config schema
+  # rejects a platform key at the root: `Unrecognized key: "agentteams-matrix"`).
+  # The merge keeps every other channel and every other key inside our own
+  # section: only enabled/socketPath/agent are managed here.
+  if ! jq --arg id "$PLUGIN_ID" --arg socket "$SOCKET_PATH" --arg agent "$AGENT_NAME" '
     (.channels //= {})
-    | .["agentteams-matrix"] = ((.["agentteams-matrix"] // {}) + {
+    | .channels[$id] = ((.channels[$id] // {}) + {
         enabled: true,
         socketPath: $socket,
         agent: $agent
       })
-  ' "$OPENCLAW_CONFIG" > "$tmp"
+  ' "$OPENCLAW_CONFIG" > "$tmp"; then
+    rm -f "$tmp"
+    lifecycle_fail "cannot update ${OPENCLAW_CONFIG} (channels.${PLUGIN_ID}); the file was left unchanged"
+  fi
+  if [ -n "$mode" ]; then chmod "$mode" "$tmp"; fi
   mv "$tmp" "$OPENCLAW_CONFIG"
   lifecycle_log "Wrote channels.${PLUGIN_ID} (socketPath=${SOCKET_PATH}, agent=${AGENT_NAME}) to ${OPENCLAW_CONFIG}"
 }
@@ -141,12 +150,17 @@ lifecycle_purge_channel_config() {
     lifecycle_log "No OpenClaw config at ${OPENCLAW_CONFIG}; nothing to purge"
     return 0
   fi
-  local tmp
+  local tmp mode
   tmp="$(mktemp)"
-  jq '
-    if (.channels["agentteams-matrix"]? != null) then del(.channels["agentteams-matrix"]) else . end
-    | if (.plugins.entries["agentteams-matrix"]? != null) then del(.plugins.entries["agentteams-matrix"]) else . end
-  ' "$OPENCLAW_CONFIG" > "$tmp"
+  mode="$(stat -c '%a' "$OPENCLAW_CONFIG" 2>/dev/null || true)"
+  if ! jq --arg id "$PLUGIN_ID" '
+    if (.channels[$id]? != null) then del(.channels[$id]) else . end
+    | if (.plugins.entries[$id]? != null) then del(.plugins.entries[$id]) else . end
+  ' "$OPENCLAW_CONFIG" > "$tmp"; then
+    rm -f "$tmp"
+    lifecycle_fail "cannot purge from ${OPENCLAW_CONFIG}; the file was left unchanged"
+  fi
+  if [ -n "$mode" ]; then chmod "$mode" "$tmp"; fi
   mv "$tmp" "$OPENCLAW_CONFIG"
   lifecycle_log "Purged channels.${PLUGIN_ID} (and plugins.entries.${PLUGIN_ID}) from ${OPENCLAW_CONFIG}"
 }

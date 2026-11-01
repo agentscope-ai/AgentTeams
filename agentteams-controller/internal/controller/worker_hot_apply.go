@@ -89,6 +89,61 @@ func (r *WorkerReconciler) applySubagentModelHot(ctx context.Context, w *v1beta1
 	}
 }
 
+// annotationActiveModelApplied records the primary model value that was last
+// successfully hot-applied to the worker's running process. The active model
+// used to be config-only (written to the runtime config, requiring a
+// container recreate to take effect); it now goes through the same
+// model-settings endpoint as the subagent model, which mutates agent.json
+// and schedules an in-process agent reload.
+const annotationActiveModelApplied = "agentteams.io/active-model-applied"
+
+// applyActiveModelHot makes a changed primary model effective without a
+// restart. Same guard rails as applySubagentModelHot; an empty spec.Model is
+// left untouched (the deployment default stays in place).
+func (r *WorkerReconciler) applyActiveModelHot(ctx context.Context, w *v1beta1.Worker, spec v1beta1.WorkerSpec, state *MemberState) {
+	if r.KubeMode != "embedded" {
+		return
+	}
+	if state.ContainerState != string(backend.StatusRunning) {
+		return
+	}
+	resolved := spec.Model
+	if resolved == "" {
+		return
+	}
+	if w.Annotations[annotationActiveModelApplied] == resolved {
+		return // already applied
+	}
+
+	urlFor := r.subagentModelURLFor
+	if urlFor == nil {
+		urlFor = func(w *v1beta1.Worker, spec v1beta1.WorkerSpec) string {
+			port := service.EffectiveWorkerConsolePort(spec.Env)
+			return fmt.Sprintf("http://%s%s:%s", r.ContainerPrefix, spec.EffectiveWorkerName(w.Name), port)
+		}
+	}
+	baseURL := urlFor(w, spec)
+	payload := map[string]any{
+		"active_model": map[string]string{
+			"provider_id": subagentModelProviderID,
+			"model":       resolved,
+		},
+	}
+	if err := patchModelSettings(ctx, baseURL, subagentConsoleAgentID, payload); err != nil {
+		log.FromContext(ctx).Error(err, "active model hot-apply failed, will retry on next reconcile", "worker", w.Name, "model", resolved)
+		return
+	}
+
+	base := w.DeepCopy()
+	if w.Annotations == nil {
+		w.Annotations = map[string]string{}
+	}
+	w.Annotations[annotationActiveModelApplied] = resolved
+	if err := r.Patch(ctx, w, client.MergeFrom(base)); err != nil {
+		log.FromContext(ctx).Error(err, "failed to record active model hot-apply annotation", "worker", w.Name)
+	}
+}
+
 // subagentConsoleAgentID is the single agent ID an AgentTeams worker runs
 // (the bridge provisions one default agent per worker container).
 const subagentConsoleAgentID = "default"
@@ -114,7 +169,14 @@ func patchSubagentModel(ctx context.Context, baseURL, agentID, model string) err
 			"model":       model,
 		}
 	}
-	payload := map[string]any{"subagent_model": slot}
+	return patchModelSettings(ctx, baseURL, agentID, map[string]any{"subagent_model": slot})
+}
+
+// patchModelSettings PATCHes the worker console's model-settings endpoint
+// with an explicit payload. The endpoint applies only the fields present in
+// the body and triggers an in-process agent reload, so a running process
+// picks up the change without a restart.
+func patchModelSettings(ctx context.Context, baseURL, agentID string, payload map[string]any) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal model-settings payload: %w", err)

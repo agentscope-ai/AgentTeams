@@ -102,6 +102,16 @@ const (
 	// app (same bound as the checkpoint proxy).
 	channelProxyTimeout = 5 * time.Second
 
+	// qrcodeStatusTimeout bounds the QR-status long-poll route. iLink holds
+	// get_qrcode_status up to ~30s server-side (the QwenPaw client allows
+	// 60s; the official Tencent plugin uses 35s), so the generic 5s
+	// channelProxyTimeout would abort every poll — the worker could never
+	// read "confirmed" and a QR login would never complete through the
+	// proxy (the Console, which dials the worker directly, works). 45s
+	// leaves headroom over the server hold without pinning a connection
+	// indefinitely.
+	qrcodeStatusTimeout = 45 * time.Second
+
 	// minioPersistedHeader reports the read-back validation state of a
 	// successful PUT without touching the verbatim upstream response body.
 	// Values: "pending" (background re-check scheduled; the convergence
@@ -141,6 +151,10 @@ type ChannelsHandler struct {
 	namespace       string
 	kubeMode        string
 	http            *http.Client
+	// longPollHTTP is used only for routes whose upstream holds the
+	// connection open (qrcode/status). The generic client's 5s timeout
+	// would cut every iLink status long-poll before it can return.
+	longPollHTTP    *http.Client
 	containerPrefix string
 	// oss is the storage client for the MinIO baseline read-back (nil =
 	// read-back skipped; the header reports "skipped").
@@ -175,6 +189,7 @@ func NewChannelsHandler(c client.Client, namespace, kubeMode, containerPrefix st
 		namespace:       namespace,
 		kubeMode:        kubeMode,
 		http:            &http.Client{Timeout: channelProxyTimeout},
+		longPollHTTP:    &http.Client{Timeout: qrcodeStatusTimeout},
 		containerPrefix: containerPrefix,
 		oss:             o,
 		audit:           ac,
@@ -268,6 +283,10 @@ type channelRoute struct {
 	body     []byte // JSON request body (PUT channel config)
 	readback bool   // verify the MinIO baseline after a successful 200
 	mutates  bool   // true for state-changing calls (audit-logged)
+	// longPoll routes through longPollHTTP instead of the 5s client:
+	// the upstream (iLink get_qrcode_status) holds the connection open for
+	// up to ~30s, so the generic timeout would abort every poll.
+	longPoll bool
 	// changedCreds lists the credential fields this write changed or
 	// cleared, pre-diffed against the saved config (PUT only). The audit
 	// records exactly these — not a re-scan of the (possibly back-filled)
@@ -319,7 +338,11 @@ func (h *ChannelsHandler) serveChannels(w http.ResponseWriter, r *http.Request, 
 	if route.body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := h.http.Do(req)
+	httpClient := h.http
+	if route.longPoll {
+		httpClient = h.longPollHTTP
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		// Connection refused (worker stopped), DNS failure, timeout.
 		httputil.WriteError(w, http.StatusBadGateway, "worker channel API unreachable")
@@ -572,6 +595,7 @@ func (h *ChannelsHandler) getQrcodeStatus(w http.ResponseWriter, r *http.Request
 		method:   http.MethodGet,
 		upstream: "/api/config/channels/" + ch + "/qrcode/status",
 		query:    "token=" + url.QueryEscape(token),
+		longPoll: true,
 	})
 }
 

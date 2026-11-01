@@ -156,6 +156,8 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/projects/{id}/events", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectEvents)))
 	// S2 signal-event read surface (#1405 writes only; browsers need a read).
 	mux.Handle("GET /api/v1/projects/{id}/signal-events", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectSignalEvents)))
+	// Attention read surface (workbench decision modal; answers go to the room).
+	mux.Handle("GET /api/v1/projects/{id}/attention", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectAttention)))
 	mux.Handle("GET /api/v1/projects/{id}/history/{timestamp}", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectHistorySnapshot)))
 
 	// --- Coding runs (read-only coding-CLI transcript visibility, D12 路 A;

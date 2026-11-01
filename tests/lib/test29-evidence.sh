@@ -20,9 +20,17 @@
 #   R4  "key": value (JSON) with a sensitive key name       -> "***"
 #   R5  NAME=value / --name value where the name contains
 #       KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL (case-insensitive) -> "***"
+#       Value forms consumed WHOLE: double-quoted (incl. \"
+#       escape pairs), single-quoted, or a plain run - an escaped
+#       quote or a single quote can therefore not split the value
+#       and leave a secret tail (#1476 round 3).
 #   R6  key: value (unquoted) with a sensitive key name     -> "***"
 #   R7  explicit blacklist: AGENTTEAMS_LLM_API_KEY, *_TOKEN, *_SECRET,
 #       *_API_KEY, *_PASSWORD (covers the spec's named variables)  -> "***"
+#   R8  hyphenated sensitive name + whitespace + value (log/header/
+#       CLI form, e.g. "x-auth-token <token>") -> "***"; bare prose
+#       words without a hyphen are intentionally not masked
+#   R9  URL userinfo "scheme://user:pass@host" -> "scheme://user:***@host"
 #
 # Long (>=24 char) high-entropy values under a suspected sensitive key name
 # are subsumed by R3-R7: the whole value is replaced regardless of length,
@@ -55,9 +63,11 @@ evidence_redact() {
     sed -E \
         -e 's/(Authorization[[:space:]]*:)[[:space:]]*(Bearer[[:space:]]+|Basic[[:space:]]+)?[^[:space:]]*/\1 ***/gI' \
         -e 's/Bearer[[:space:]]+[^[:space:]]+/Bearer ***/gI' \
-        -e 's/("name"[[:space:]]*:[[:space:]]*"[^"]*(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)[^"]*"[[:space:]]*,[[:space:]]*"value"[[:space:]]*:[[:space:]]*)"[^"]*"/\1"***"/gI' \
+        -e 's/("name"[[:space:]]*:[[:space:]]*"[^"]*(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)[^"]*"[[:space:]]*,[[:space:]]*"value"[[:space:]]*:[[:space:]]*)"((\\.|[^"\\])*)"/\1"***"/gI' \
         -e 's/("[^"]*(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)[^"]*"[[:space:]]*:[[:space:]]*)("[^"]*"|[^,}[:space:]]+)/\1"***"/gI' \
-        -e 's/([A-Za-z0-9_.-]*(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|apiKey)[A-Za-z0-9_.-]*)([[:space:]]*[:=][[:space:]]*)("[^"]*"|[^[:space:]",]+)/\1\3***/gI'
+        -e 's/([A-Za-z0-9_.-]*(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|apiKey)[A-Za-z0-9_.-]*)([[:space:]]*[:=][[:space:]]*)("[^"]*"|'\''[^'\'']*'\''|([^[:space:]",\\]|\\.)+)/\1\3***/gI' \
+        -e 's/(([A-Za-z0-9_.-]*-(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)[A-Za-z0-9_.-]*|[A-Za-z0-9_.-]*(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)-[A-Za-z0-9_.-]*))[[:space:]]+([^[:space:]]+)/\1 ***/gI' \
+        -e 's|(://[^/:[:space:]@]+:)[^@[:space:]]+[[:space:]]*@|\1***@|gI'
 }
 
 # ------------------------------------------------------------

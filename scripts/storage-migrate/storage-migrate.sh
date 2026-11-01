@@ -1344,11 +1344,24 @@ p7_verify_components() {
   # --- members: each with its OWN identity from the recreated container env ---
   writers=$(state_get '.stage_detail.writers // []')
   local wnames
-  wnames=$(jq -r '.[] | select(.kind == "worker" and .state != "Stopped") | .name' <<<"$writers")
+  # Every worker gets a row: a member whose container did not come up after the
+  # recreate is reported as SKIP (not silently omitted), so the table always
+  # accounts for each component the deployment has.
+  wnames=$(jq -r '.[] | select(.kind == "worker") | .name' <<<"$writers")
   local k n cname menv mep mbucket mak msk malias mkey cross_key other
   while IFS= read -r n; do
     [ -z "$n" ] && continue
     k="worker"; cname=$(member_container_name "$k" "$n")
+    # P6 recreates consumers asynchronously; wait for the container before
+    # probing it, otherwise the row would be skipped or fail on empty env.
+    local _w=0
+    while [ "$_w" -lt 120 ]; do
+      docker inspect -f '{{.State.Running}}' "$cname" 2>/dev/null | grep -q true && break
+      sleep 5; _w=$((_w + 5))
+    done
+    if ! docker inspect -f '{{.State.Running}}' "$cname" 2>/dev/null | grep -q true; then
+      fail7="$fail7 worker/$n"; add_pass "{\"component\":\"worker/$n\",\"verdict\":\"SKIP\",\"detail\":\"container did not reach Running within 120s after P6 recreate (state=$(_S=); agt state not re-read)\"}"; continue
+    fi
     menv=$(container_env_json "$cname")
     mep=$(env_value "$menv" AGENTTEAMS_FS_ENDPOINT); mbucket=$(env_value "$menv" AGENTTEAMS_FS_BUCKET)
     mak=$(env_value "$menv" AGENTTEAMS_FS_ACCESS_KEY); msk=$(env_value "$menv" AGENTTEAMS_FS_SECRET_KEY)

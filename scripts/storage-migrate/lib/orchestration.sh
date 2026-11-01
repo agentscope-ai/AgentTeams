@@ -259,17 +259,26 @@ wait_for_container_absent() {
 # count/bytes from 'mc ls --recursive --json'; digest over the top-level prefix
 # (first path segment) with per-prefix object counts - small even for huge buckets.
 window_sample() {
-  local buckets b raw n bytes digest combined=""
+  # Prints "<count>\t<bytes>\t<digest>" AND sets REPLY_SAMPLE to the same value.
+  # Printing is the contract: window_evidence captures the output with $(...),
+  # and a producer that only assigns made every sample "{count:-1,...}" - three
+  # identical bogus samples that "proved" a freeze while the bucket grew.
+  local buckets b raw n bytes total_n=0 total_bytes=0 digests="" digest_all
   buckets=$(get_buckets)
   for b in $buckets; do
     raw=$(mc_raw ls --recursive --json "$SRC_ALIAS/$b" 2>/dev/null) || { REPLY_SAMPLE=""; return 1; }
-    n=$(jq -s 'length' <<<"$raw" 2>/dev/null || echo -1)
-    bytes=$(jq -s 'map(.size // 0) | add // 0' <<<"$raw" 2>/dev/null || echo -1)
-    digest=$(jq -rs 'map(.key // "") | map(split("/")[0]) | sort | group_by(.) | map(.[0] + ":" + (length | tostring)) | join(",")' <<<"$raw" 2>/dev/null | md5sum | awk '{print $1}')
-    [ "$n" = "-1" ] || [ "$bytes" = "-1" ] || [ -z "$digest" ] && { REPLY_SAMPLE=""; return 1; }
-    combined="$combined$b=$n/$bytes/$digest;"
+    n=$(jq -s 'length' <<<"$raw" 2>/dev/null) || { REPLY_SAMPLE=""; return 1; }
+    bytes=$(jq -s 'map(.size // 0) | add // 0' <<<"$raw" 2>/dev/null) || { REPLY_SAMPLE=""; return 1; }
+    case "$n" in ''|*[!0-9]*) REPLY_SAMPLE=""; return 1 ;; esac
+    case "$bytes" in ''|*[!0-9]*) REPLY_SAMPLE=""; return 1 ;; esac
+    [ "$n" -ge 0 ] || { REPLY_SAMPLE=""; return 1; }
+    [ "$bytes" -ge 0 ] || { REPLY_SAMPLE=""; return 1; }
+    digests="$digests$b=$n/$bytes;"
   done
-  REPLY_SAMPLE="$combined"
+  digest_all=$(printf '%s' "$digests" | md5sum | awk '{print $1}')
+  [ -n "$digest_all" ] || { REPLY_SAMPLE=""; return 1; }
+  REPLY_SAMPLE="$total_n	$total_bytes	$digest_all"
+  printf '%s\n' "$REPLY_SAMPLE"
 }
 
 # window_evidence -> REPLY_OK=0/1, REPLY_WINDOW_JSON (the samples, for state.json)
@@ -284,7 +293,14 @@ window_evidence() {
       log_fail "quiesce window: sample $i/$QUIESCE_SAMPLES failed (source listing error) - the freeze cannot be proven"
       REPLY_OK=1; REPLY_WINDOW_JSON="$samples_json"; return 1
     fi
+    if [ -z "${s:-}" ]; then
+      log_fail "quiesce window: sample $i/$QUIESCE_SAMPLES produced no data (empty sample) - the freeze cannot be proven"
+      REPLY_OK=1; REPLY_WINDOW_JSON="$samples_json"; return 1
+    fi
     count=$(cut -f1 <<<"$s"); bytes=$(cut -f2 <<<"$s"); digest=$(cut -f3 <<<"$s")
+    case "$count" in ''|*[!0-9]*) log_fail "quiesce window: invalid count '${count}' in sample $i - refusing to treat it as evidence"; REPLY_OK=1; REPLY_WINDOW_JSON="$samples_json"; return 1 ;; esac
+    case "$bytes" in ''|*[!0-9]*) log_fail "quiesce window: invalid bytes '${bytes}' in sample $i - refusing to treat it as evidence"; REPLY_OK=1; REPLY_WINDOW_JSON="$samples_json"; return 1 ;; esac
+    [ -n "$digest" ] || { log_fail "quiesce window: empty prefix digest in sample $i - refusing to treat it as evidence"; REPLY_OK=1; REPLY_WINDOW_JSON="$samples_json"; return 1; }
     samples_json=$(jq --argjson c "${count:--1}" --argjson b "${bytes:--1}" --arg d "$digest" --arg t "$(now_iso)" \
       '. + [{count:$c, bytes:$b, prefix_digest:$d, at:$t}]' <<<"$samples_json")
     if [ -z "$first" ]; then first="$count $bytes $digest"
@@ -440,7 +456,7 @@ render_controller_run() {
     echo "  -v /var/run/docker.sock:/var/run/docker.sock --security-opt label=disable \\"
     # The workspace is a bind mount onto the manager fs path only; a bare -v path
     # would create an anonymous volume instead of reusing the host directory.
-    echo "  -v agentteams-data:/data -v '${EMBED_WORKSPACE:-<workspace>}/agents/manager:/root/agentteams-fs/agents/manager' \\"
+    echo "  -v agentteams-data:/data -v '${EMBED_WORKSPACE:-<workspace>}:/root/agentteams-fs/agents/manager' \\"
     # Installer shape: host ports 18001/18080/18088 -> container 8001/8080/8088.
     echo "  -p 127.0.0.1:18001:8001 -p 127.0.0.1:18080:8080 -p 127.0.0.1:18088:8088 \\"
     echo "  --restart unless-stopped $image"

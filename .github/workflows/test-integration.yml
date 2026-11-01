@@ -307,10 +307,18 @@ jobs:
             EXTRA="OPENCLAW_BASE_IMAGE=agentteams/openclaw-base OPENCLAW_BASE_VERSION=latest"
             echo "Using locally-built openclaw-base for ${{ matrix.target }}"
           elif [ "${{ matrix.target }}" = "manager" ] || [ "${{ matrix.target }}" = "worker" ]; then
-            # The pinned base predates the AgentTeams registry namespace. Keep
-            # using its existing location until a release seeds the new repo.
-            EXTRA="OPENCLAW_BASE_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/openclaw-base OPENCLAW_BASE_VERSION=20260423-8359cbc"
-            echo "Using published migration base for ${{ matrix.target }}"
+            # Same namespace the Build Base Image workflow publishes to; the tag
+            # is derived from the OpenClaw pin (hack/versions.env).
+            BASE_TAG="$(sed -n 's/^OPENCLAW_BASE_TAG=//p' hack/versions.env)"
+            EXTRA="OPENCLAW_BASE_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/openclaw-base OPENCLAW_BASE_VERSION=${BASE_TAG}"
+            # Fail loudly (naming the exact reference) if the published base
+            # tag does not exist yet, instead of letting docker fail mid-build.
+            IMAGE_REF="$(printf '%s' "${EXTRA}" | sed -n 's/.*OPENCLAW_BASE_IMAGE=\([^ ]*\) OPENCLAW_BASE_VERSION=\([^ ]*\)/\1:\2/p')"
+            if ! docker manifest inspect "${IMAGE_REF}" >/dev/null 2>&1; then
+              echo "::error::${IMAGE_REF} is not published; run the 'Build Base Image' workflow (push to main touching openclaw-base/**) or make push-openclaw-base VERSION=<derived>"
+              exit 1
+            fi
+            echo "Using published base ${IMAGE_REF} for ${{ matrix.target }}"
           fi
           # Override HIGRESS_REGISTRY to the us-west mirror — the default
           # cn-hangzhou registry is unreachable from GitHub-hosted runners.

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -550,5 +551,91 @@ func TestPutProjectMeta_WorkerProgressCommitKeepsHumanPause(t *testing.T) {
 	}
 	if string(got) != body {
 		t.Fatalf("progress commit bytes differ:\n got=%s\n want=%s", got, body)
+	}
+}
+
+// durablePauseSources reads the pause sources back from the stored meta the
+// way the task runtime does: the exact lowercase loop.pause_sources key.
+func durablePauseSources(t *testing.T, store oss.StorageClient, key string) []string {
+	t.Helper()
+	data, err := store.GetObject(context.Background(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Loop map[string]json.RawMessage `json:"loop"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("stored meta is not a JSON object: %v", err)
+	}
+	var sources []string
+	_ = json.Unmarshal(doc.Loop["pause_sources"], &sources)
+	return sources
+}
+
+// Round 11 (#1402): Go decodes JSON names case-insensitively, so a body
+// that keeps the source only under a case alias ("PAUSE_SOURCES") would pass
+// a struct-based check while the exact lowercase field — the durable state
+// the task runtime reads — is cleared. Such a body is rejected outright and
+// the durable pause survives.
+func TestPutProjectMeta_WorkerCannotClearHumanPauseViaCaseAlias(t *testing.T) {
+	pausedMeta := `{"project_id":"p1","title":"P1","status":"active","plan_type":"dag","team_id":"alpha-team","loop":{"pause_sources":["user"]}}`
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			"field alias",
+			`{"project_id":"p1","title":"P1","status":"active","plan_type":"dag","team_id":"alpha-team","loop":{"pause_sources":[],"PAUSE_SOURCES":["user"]}}`,
+		},
+		{
+			"container alias",
+			`{"project_id":"p1","title":"P1","status":"active","plan_type":"dag","team_id":"alpha-team","LOOP":{"pause_sources":["user"]}}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := ossfake.NewMemory()
+			key := "teams/alpha-team/shared/projects/p1/meta.json"
+			if err := store.PutObject(context.Background(), key, []byte(pausedMeta)); err != nil {
+				t.Fatal(err)
+			}
+			k8s := fake.NewClientBuilder().
+				WithScheme(newProjectTestScheme(t)).
+				WithRuntimeObjects(team("alpha-team")).
+				Build()
+			worker := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "alpha-dev", Team: "alpha-team"}
+			mw := authpkg.NewMiddleware(&roleAuthenticator{identity: worker}, nil, authpkg.NewAuthorizer(), k8s, "default")
+			var ossStore oss.StorageClient = &mcLikeOSS{Memory: store}
+			srv := NewHTTPServer(":0", ServerDeps{Client: k8s, Namespace: "default", OSS: ossStore, AuthMw: mw})
+
+			read, err := store.StatMeta(context.Background(), key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(http.MethodPut, "/api/v1/projects/p1/meta", strings.NewReader(tc.body))
+			req.Header.Set("Authorization", "Bearer sa-token")
+			req.Header.Set("If-Match", read.ETag)
+			rec := httptest.NewRecorder()
+			srv.Mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d, want 400 for the case alias; body=%s", rec.Code, rec.Body.String())
+			}
+			got, err := store.GetObject(context.Background(), key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != pausedMeta {
+				t.Fatalf("refused commit changed the stored meta:\n got=%s\n want=%s", got, pausedMeta)
+			}
+			// Read the durable state back the way the runtime does: the
+			// exact lowercase key still carries the human pause.
+			if sources := durablePauseSources(t, ossStore, key); len(sources) != 1 || sources[0] != "user" {
+				t.Fatalf("durable pause sources = %v, want [user]", sources)
+			}
+		})
 	}
 }

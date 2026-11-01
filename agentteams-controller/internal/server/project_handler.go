@@ -3021,23 +3021,57 @@ func (h *ProjectHandler) writeProjectMeta(ctx context.Context, w http.ResponseWr
 // storage.
 const projectMetaCommitMaxBytes = 1 << 20
 
-// metaHasPauseSource reports whether a project meta document's
-// loop.pause_sources contains source. A malformed or absent loop object
-// reads as false, which is the safe direction: only a verifiably-present
-// server-owned source is protected.
-func metaHasPauseSource(meta []byte, source string) bool {
+// pauseSourcesField is the exact JSON key the task runtime persists and
+// reads. Go's struct decoding matches JSON names case-insensitively, so a
+// struct-based presence check accepts "PAUSE_SOURCES":["user"] while the
+// runtime reads the exact lowercase key (the round-11 maintainer repro:
+// the check passed and the durable pause stayed cleared). The helpers below
+// therefore parse the object maps and bind to the exact key; a case variant
+// is reported as an ambiguity the caller rejects.
+const pauseSourcesField = "pause_sources"
+
+// exactPauseSources returns the exact-key loop.pause_sources list and
+// whether any case-variant alias of "loop" or "pause_sources" is present.
+// The task runtime reads the exact lowercase keys, so only the exact value
+// decides the durable state; an alias can only shadow it.
+func exactPauseSources(meta []byte) (sources []string, hasAlias bool) {
 	if len(meta) == 0 {
-		return false
+		return nil, false
 	}
-	var doc struct {
-		Loop struct {
-			PauseSources []string `json:"pause_sources"`
-		} `json:"loop"`
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(meta, &top); err != nil {
+		return nil, false
 	}
-	if err := json.Unmarshal(meta, &doc); err != nil {
-		return false
+	var loopRaw json.RawMessage
+	for key, raw := range top {
+		switch {
+		case key == "loop":
+			loopRaw = raw
+		case strings.EqualFold(key, "loop"):
+			hasAlias = true
+		}
 	}
-	for _, entry := range doc.Loop.PauseSources {
+	if len(loopRaw) == 0 {
+		return nil, hasAlias
+	}
+	var loop map[string]json.RawMessage
+	if err := json.Unmarshal(loopRaw, &loop); err != nil {
+		return nil, hasAlias
+	}
+	for key, raw := range loop {
+		switch {
+		case key == pauseSourcesField:
+			_ = json.Unmarshal(raw, &sources)
+		case strings.EqualFold(key, pauseSourcesField):
+			hasAlias = true
+		}
+	}
+	return sources, hasAlias
+}
+
+// pauseSourcesContain reports whether the exact-key list contains source.
+func pauseSourcesContain(sources []string, source string) bool {
+	for _, entry := range sources {
 		if entry == source {
 			return true
 		}
@@ -3141,11 +3175,25 @@ func (h *ProjectHandler) PutProjectMeta(w http.ResponseWriter, r *http.Request) 
 		// Ordinary task-progress commits keep the source and stay on the
 		// no-extra-read path; only a body that lacks the source pays the
 		// read that decides whether protecting it is required.
-		if !metaHasPauseSource(body, pauseSourceUser) {
+		bodySources, bodyAlias := exactPauseSources(body)
+		if bodyAlias {
+			// The runtime persists and reads the exact lowercase keys; a
+			// case-variant alias cannot be honored without guessing which
+			// spelling the durable state means. Reject instead of writing an
+			// object whose real field may be empty (round 11).
+			writeError(w, http.StatusBadRequest,
+				"ambiguous case alias for loop."+pauseSourcesField+
+					": the task runtime persists and reads the exact lowercase key")
+			return
+		}
+		if !pauseSourcesContain(bodySources, pauseSourceUser) {
 			current, readErr := h.oss.GetObject(r.Context(), pwc.key)
 			switch {
 			case readErr == nil:
-				if metaHasPauseSource(current, pauseSourceUser) {
+				// Only the exact key is the durable state the runtime reads;
+				// an alias in storage never counts as an active pause.
+				currentSources, _ := exactPauseSources(current)
+				if pauseSourcesContain(currentSources, pauseSourceUser) {
 					writeError(w, http.StatusForbidden,
 						"the human pause source is server-owned; a worker meta commit cannot clear it (use the resume endpoint)")
 					return

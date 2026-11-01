@@ -280,13 +280,10 @@ cfg = {
             }
         }
     },
-    "channels": {
-        "agentteams-matrix": {
-            "enabled": True,
-            "socketPath": os.path.join(work, "sidecar.sock"),
-            "agent": os.environ["E2E_AGENT_NAME"],
-        }
-    },
+    # NOTE: no channels.<id> here. The channel section is written AFTER the
+    # plugin is installed (scripts/e2e-bootstrap.sh): the CLI validates the
+    # whole config on every command, and a channel for an unregistered
+    # plugin fails the install on a fresh home (#1470).
 }
 with open(os.path.join(work, "openclaw.json"), "w", encoding="utf-8") as fh:
     json.dump(cfg, fh, indent=2)
@@ -303,11 +300,15 @@ if [ ! -f "$PLUGIN_ROOT/dist/src/index.js" ]; then
     || e2e_die "plugin build failed"
 fi
 
-# --- install the plugin into the isolated home --------------------------------
-echo "e2e: installing the plugin into the isolated OpenClaw home"
-"$OPENCLAW_BIN" plugins install --force --accept-capabilities "$PLUGIN_ROOT" \
-  || e2e_die "openclaw plugins install failed"
-"$OPENCLAW_BIN" plugins enable agentteams-matrix || e2e_die "openclaw plugins enable failed"
+# --- bootstrap the isolated home (install -> channel -> enable -> validate) ----
+# Ordering is the shared lifecycle contract: registering the plugin first
+# keeps the config valid, then channels.<id> is written by the same helper
+# the production installer uses, and the CLI validates the result.
+AGENTTEAMS_MATRIX_SOCKET="$WORK/sidecar.sock" \
+AGENTTEAMS_MATRIX_AGENT="$E2E_AGENT_NAME" \
+E2E_RELEASE_DIR="$PLUGIN_ROOT" \
+  bash "${SCRIPT_DIR}/e2e-bootstrap.sh" \
+  || e2e_die "isolated-home bootstrap failed"
 
 # --- the harness (core + sidecar + REST assertions) ----------------------------
 cat > "$WORK/harness.py" <<'PYEOF'

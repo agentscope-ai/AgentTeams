@@ -113,6 +113,36 @@ func (c *MinIOClient) PutObjectIfMatch(ctx context.Context, key string, data []b
 	return err
 }
 
+// PutObjectIfMatchStrict is the non-degrading variant of PutObjectIfMatch:
+// only the SDK conditional write is used. An ETag mismatch surfaces as
+// ErrPreconditionFailed, and a provider that cannot honor If-Match
+// (NotImplemented/501) surfaces as ErrConditionalUnsupported — with NO
+// write performed and no compare-then-put fallback. Conflict-sensitive
+// callers (pause-source updates) must use this and fail closed on
+// ErrConditionalUnsupported; PutObjectIfMatch keeps the weak fallback for
+// callers that can accept the narrow compare-to-put window.
+func (c *MinIOClient) PutObjectIfMatchStrict(ctx context.Context, key string, data []byte, matchETag string) error {
+	put := c.sdkPutIfMatch
+	if put == nil {
+		put = c.sdkPutObjectIfMatch
+	}
+	err := put(ctx, key, data, matchETag)
+	if err == nil {
+		return nil
+	}
+
+	var resp minio.ErrorResponse
+	if errors.As(err, &resp) && (resp.Code == "PreconditionFailed" || resp.Code == "412") {
+		return ErrPreconditionFailed
+	}
+	// Never degrade: a compare-then-put here would reopen exactly the
+	// conflict window this method exists to close.
+	if errors.As(err, &resp) && (resp.Code == "NotImplemented" || resp.Code == "501") {
+		return ErrConditionalUnsupported
+	}
+	return err
+}
+
 // ossFallbackWrite is the OSS degradation for providers without If-Match
 // (Alibaba Cloud OSS returns NotImplemented). It re-checks the read-bound
 // ETag immediately before a plain PutObject: an observed conflict is

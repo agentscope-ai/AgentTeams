@@ -48,7 +48,7 @@ const (
 // AuthzRequest describes the resource being accessed.
 type AuthzRequest struct {
 	Action       Action
-	ResourceKind string // "worker" | "team" | "human" | "manager" | "gateway" | "status" | "credentials" | "project"
+	ResourceKind string // "worker" | "team" | "human" | "manager" | "gateway" | "status" | "credentials" | "project" | "project-meta"
 	ResourceName string // target resource name (empty for list operations)
 	ResourceTeam string // target resource's team (resolved by handler/middleware)
 }
@@ -128,6 +128,17 @@ func (a *Authorizer) authorizeHuman(caller *CallerIdentity, req AuthzRequest) er
 		default:
 			return deny(caller, req)
 		}
+
+	case "project-meta":
+		// Conditional project meta commit (#1402): same criteria as the
+		// "project" Update — L2 humans commit meta only within their
+		// accessibleTeams scope. The middleware cannot resolve project ->
+		// team (empty ResourceTeam short-circuits requireSameTeam); the
+		// handler is the real team boundary.
+		if req.Action == ActionUpdate {
+			return a.requireSameTeam(caller, req)
+		}
+		return deny(caller, req)
 
 	case "team":
 		if req.Action == ActionGet || req.Action == ActionList {
@@ -306,6 +317,16 @@ func (a *Authorizer) authorizeTeamLeader(caller *CallerIdentity, req AuthzReques
 			return deny(caller, req)
 		}
 
+	case "project-meta":
+		// Conditional project meta commit (#1402): same criteria as the
+		// "project" Update — own team only. The middleware cannot resolve
+		// project -> team (empty ResourceTeam short-circuits requireSameTeam);
+		// the handler enforces team equality after resolving the project.
+		if req.Action == ActionUpdate {
+			return a.requireSameTeam(caller, req)
+		}
+		return deny(caller, req)
+
 	case "audit":
 		// Team leaders may read audit events of their own team (#1245),
 		// same pattern as the worker/team read paths: the handler enforces
@@ -365,6 +386,23 @@ func (a *Authorizer) authorizeWorker(caller *CallerIdentity, req AuthzRequest) e
 		// (the handler uses caller.Username), so no requireSelf check is needed.
 		if req.Action == ActionSTS || req.Action == ActionRefreshMatrixToken {
 			return nil
+		}
+		return deny(caller, req)
+
+	case "project-meta":
+		// The single project-kind write opened to workers (#1402): committing
+		// the project meta through the controller's strict conditional
+		// endpoint (PUT /api/v1/projects/{id}/meta). requireSameTeam rejects
+		// team-less workers here; team EQUALITY is enforced in the handler —
+		// the middleware cannot resolve project -> team, so ResourceTeam is
+		// empty and the check would otherwise short-circuit.
+		//
+		// INVARIANT: "project" must never gain a case in this switch — that
+		// would open pause/resume/replan/complete/cancel (all registered as
+		// ActionUpdate + "project") to every worker. Pinned by
+		// TestAuthorizer_ProjectMetaCommit (worker "project" Update denied).
+		if req.Action == ActionUpdate {
+			return a.requireSameTeam(caller, req)
 		}
 		return deny(caller, req)
 

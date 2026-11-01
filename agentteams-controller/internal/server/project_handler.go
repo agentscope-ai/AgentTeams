@@ -3069,6 +3069,39 @@ func exactPauseSources(meta []byte) (sources []string, hasAlias bool) {
 	return sources, hasAlias
 }
 
+// exactProjectStatus returns the exact-key top-level “status“ and whether
+// the key is present at all. A case-variant alias is reported separately:
+// the handler treats an alias-only status as "no status", the same way the
+// task runtime does (it reads the exact lowercase key).
+func exactProjectStatus(meta []byte) (status string, present bool, hasAlias bool) {
+	if len(meta) == 0 {
+		return "", false, false
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(meta, &top); err != nil {
+		return "", false, false
+	}
+	for key, raw := range top {
+		switch {
+		case key == "status":
+			present = true
+			_ = json.Unmarshal(raw, &status)
+		case strings.EqualFold(key, "status"):
+			hasAlias = true
+		}
+	}
+	return strings.TrimSpace(status), present, hasAlias
+}
+
+// writeMetaConflict writes the standard 409 body for a stale meta commit:
+// the caller must re-read, merge and retry (#1402).
+func writeMetaConflict(w http.ResponseWriter) {
+	httputil.WriteJSON(w, http.StatusConflict, struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}{Code: "conflict", Message: "project meta changed since the read; re-read, merge and retry"})
+}
+
 // pauseSourcesContain reports whether the exact-key list contains source.
 func pauseSourcesContain(sources []string, source string) bool {
 	for _, entry := range sources {
@@ -3195,23 +3228,55 @@ func (h *ProjectHandler) PutProjectMeta(w http.ResponseWriter, r *http.Request) 
 					": the task runtime persists and reads the exact lowercase key")
 			return
 		}
-		if !pauseSourcesContain(bodySources, pauseSourceUser) {
+		// The project ``status`` is server-owned too (round 14): the
+		// Controller's PauseProject/ResumeProject write it under the strict
+		// CAS, so a commit that clears a stored ``paused`` (or omits the
+		// field, which drops it from the stored bytes just the same) would
+		// release a pause without going through ResumeProject. Escalating
+		// to paused stays allowed — a worker may pause, and a pause is
+		// fail-closed.
+		bodyStatus, bodyStatusPresent, _ := exactProjectStatus(body)
+		pausesStored := bodyStatusPresent && bodyStatus == "paused"
+		if !pauseSourcesContain(bodySources, pauseSourceUser) || !pausesStored {
 			current, readErr := h.oss.GetObject(r.Context(), pwc.key)
 			switch {
 			case readErr == nil:
 				// Only the exact key is the durable state the runtime reads;
 				// an alias in storage never counts as an active pause.
 				currentSources, _ := exactPauseSources(current)
-				if pauseSourcesContain(currentSources, pauseSourceUser) {
+				// A stale If-Match is a version conflict, not a permanent
+				// refusal: the client must re-read and merge (which now
+				// keeps the server-owned values) and retry. Only a caller
+				// bound to the CURRENT version gets the field-authority
+				// 403 — it read the pause and tried to clear it anyway.
+				stale := ifMatch != pwc.etag
+				if !pauseSourcesContain(bodySources, pauseSourceUser) &&
+					pauseSourcesContain(currentSources, pauseSourceUser) {
+					if stale {
+						writeMetaConflict(w)
+						return
+					}
 					writeError(w, http.StatusForbidden,
 						"the human pause source is server-owned; a meta commit cannot clear it (use the resume endpoint)")
 					return
+				}
+				if !pausesStored {
+					currentStatus, _, _ := exactProjectStatus(current)
+					if currentStatus == "paused" {
+						if stale {
+							writeMetaConflict(w)
+							return
+						}
+						writeError(w, http.StatusForbidden,
+							"the paused project status is server-owned; a meta commit cannot release it (use the resume endpoint)")
+						return
+					}
 				}
 			case errors.Is(readErr, os.ErrNotExist):
 				// No stored meta yet: nothing to protect.
 			default:
 				writeError(w, http.StatusInternalServerError,
-					"verify the human pause source: "+readErr.Error())
+					"verify the server-owned pause state: "+readErr.Error())
 				return
 			}
 		}

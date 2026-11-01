@@ -776,3 +776,169 @@ func TestPutProjectMeta_NonAdminCannotClearHumanPause(t *testing.T) {
 		}
 	})
 }
+
+// Round 14 (#1402): the project “status“ is server-owned too — the
+// Controller's PauseProject/ResumeProject write it under the strict CAS, so a
+// non-admin metadata commit that clears a stored “paused“ (or omits the
+// field, which drops it from the stored bytes) must be rejected. Escalating
+// to paused stays allowed (a worker may pause; a pause is fail-closed).
+func TestPutProjectMeta_NonAdminCannotReleasePausedStatus(t *testing.T) {
+	pausedMeta := `{"project_id":"p1","title":"P1","status":"paused","plan_type":"dag","team_id":"alpha-team"}`
+
+	identities := map[string]*authpkg.CallerIdentity{
+		"worker":  {Role: authpkg.RoleWorker, Username: "alpha-dev", Team: "alpha-team"},
+		"manager": {Role: authpkg.RoleManager, Username: "manager"},
+		"team leader": {
+			Role: authpkg.RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team",
+		},
+		"L2 human": {
+			Role: authpkg.RoleHuman, Username: "alpha-viewer", Teams: []string{"alpha-team"},
+		},
+	}
+	destructive := map[string]string{
+		"writes active": `{"project_id":"p1","title":"P1","status":"active","plan_type":"dag","team_id":"alpha-team","synced":true}`,
+		"omits status":  `{"project_id":"p1","title":"P1","plan_type":"dag","team_id":"alpha-team","synced":true}`,
+	}
+
+	for roleName, identity := range identities {
+		for caseName, body := range destructive {
+			t.Run(roleName+"/"+caseName, func(t *testing.T) {
+				store := ossfake.NewMemory()
+				key := "teams/alpha-team/shared/projects/p1/meta.json"
+				if err := store.PutObject(context.Background(), key, []byte(pausedMeta)); err != nil {
+					t.Fatal(err)
+				}
+				k8s := fake.NewClientBuilder().
+					WithScheme(newProjectTestScheme(t)).
+					WithRuntimeObjects(team("alpha-team")).
+					Build()
+				mw := authpkg.NewMiddleware(&roleAuthenticator{identity: identity}, nil, authpkg.NewAuthorizer(), k8s, "default")
+				var ossStore oss.StorageClient = &mcLikeOSS{Memory: store}
+				srv := NewHTTPServer(":0", ServerDeps{Client: k8s, Namespace: "default", OSS: ossStore, AuthMw: mw})
+
+				read, err := store.StatMeta(context.Background(), key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				req := httptest.NewRequest(http.MethodPut, "/api/v1/projects/p1/meta", strings.NewReader(body))
+				req.Header.Set("Authorization", "Bearer sa-token")
+				req.Header.Set("If-Match", read.ETag)
+				rec := httptest.NewRecorder()
+				srv.Mux.ServeHTTP(rec, req)
+
+				if rec.Code != http.StatusForbidden {
+					t.Fatalf("status=%d, want 403; body=%s", rec.Code, rec.Body.String())
+				}
+				if !strings.Contains(rec.Body.String(), "paused project status") {
+					t.Fatalf("403 body does not name the paused status: %s", rec.Body.String())
+				}
+				got, err := store.GetObject(context.Background(), key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(got) != pausedMeta {
+					t.Fatalf("refused commit changed the stored meta:\n got=%s\n want=%s", got, pausedMeta)
+				}
+			})
+		}
+	}
+
+	// Positive control: an ordinary progress commit that KEEPS the paused
+	// status must still be accepted for the same non-admin identity.
+	t.Run("worker progress commit keeps the pause", func(t *testing.T) {
+		store := ossfake.NewMemory()
+		key := "teams/alpha-team/shared/projects/p1/meta.json"
+		if err := store.PutObject(context.Background(), key, []byte(pausedMeta)); err != nil {
+			t.Fatal(err)
+		}
+		k8s := fake.NewClientBuilder().
+			WithScheme(newProjectTestScheme(t)).
+			WithRuntimeObjects(team("alpha-team")).
+			Build()
+		worker := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "alpha-dev", Team: "alpha-team"}
+		mw := authpkg.NewMiddleware(&roleAuthenticator{identity: worker}, nil, authpkg.NewAuthorizer(), k8s, "default")
+		var ossStore oss.StorageClient = &mcLikeOSS{Memory: store}
+		srv := NewHTTPServer(":0", ServerDeps{Client: k8s, Namespace: "default", OSS: ossStore, AuthMw: mw})
+
+		read, err := store.StatMeta(context.Background(), key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := `{"project_id":"p1","title":"P1","status":"paused","plan_type":"dag","team_id":"alpha-team","synced":true}`
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/projects/p1/meta", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer sa-token")
+		req.Header.Set("If-Match", read.ETag)
+		rec := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d, want 200 (progress commit keeping the pause); body=%s", rec.Code, rec.Body.String())
+		}
+	})
+
+	// Positive control: a worker may PAUSE (escalation is fail-closed).
+	t.Run("worker may escalate to paused", func(t *testing.T) {
+		store := ossfake.NewMemory()
+		key := "teams/alpha-team/shared/projects/p1/meta.json"
+		active := `{"project_id":"p1","title":"P1","status":"active","plan_type":"dag","team_id":"alpha-team"}`
+		if err := store.PutObject(context.Background(), key, []byte(active)); err != nil {
+			t.Fatal(err)
+		}
+		k8s := fake.NewClientBuilder().
+			WithScheme(newProjectTestScheme(t)).
+			WithRuntimeObjects(team("alpha-team")).
+			Build()
+		worker := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "alpha-dev", Team: "alpha-team"}
+		mw := authpkg.NewMiddleware(&roleAuthenticator{identity: worker}, nil, authpkg.NewAuthorizer(), k8s, "default")
+		var ossStore oss.StorageClient = &mcLikeOSS{Memory: store}
+		srv := NewHTTPServer(":0", ServerDeps{Client: k8s, Namespace: "default", OSS: ossStore, AuthMw: mw})
+
+		read, err := store.StatMeta(context.Background(), key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := `{"project_id":"p1","title":"P1","status":"paused","plan_type":"dag","team_id":"alpha-team"}`
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/projects/p1/meta", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer sa-token")
+		req.Header.Set("If-Match", read.ETag)
+		rec := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d, want 200 (worker pause escalation); body=%s", rec.Code, rec.Body.String())
+		}
+	})
+
+	// The admin keeps field authority: releasing the status through the meta
+	// commit stays allowed.
+	t.Run("admin may release the status", func(t *testing.T) {
+		store := ossfake.NewMemory()
+		key := "teams/alpha-team/shared/projects/p1/meta.json"
+		if err := store.PutObject(context.Background(), key, []byte(pausedMeta)); err != nil {
+			t.Fatal(err)
+		}
+		k8s := fake.NewClientBuilder().
+			WithScheme(newProjectTestScheme(t)).
+			WithRuntimeObjects(team("alpha-team")).
+			Build()
+		admin := &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"}
+		mw := authpkg.NewMiddleware(&roleAuthenticator{identity: admin}, nil, authpkg.NewAuthorizer(), k8s, "default")
+		var ossStore oss.StorageClient = &mcLikeOSS{Memory: store}
+		srv := NewHTTPServer(":0", ServerDeps{Client: k8s, Namespace: "default", OSS: ossStore, AuthMw: mw})
+
+		read, err := store.StatMeta(context.Background(), key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := `{"project_id":"p1","title":"P1","status":"active","plan_type":"dag","team_id":"alpha-team"}`
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/projects/p1/meta", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer sa-token")
+		req.Header.Set("If-Match", read.ETag)
+		rec := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d, want 200 for the admin; body=%s", rec.Code, rec.Body.String())
+		}
+	})
+}

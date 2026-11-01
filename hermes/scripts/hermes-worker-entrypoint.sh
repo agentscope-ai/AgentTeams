@@ -98,6 +98,21 @@ log "  Hermes venv: ${VENV}"
 export HERMES_HOME="${WORKSPACE}/.hermes"
 mkdir -p "${HERMES_HOME}"
 
+# Install the AgentTeams Matrix platform overlay as a user plugin at the
+# bundled plugin's path-derived key (platforms/matrix).  Hermes treats a user
+# copy at that key as the documented override, so this registration replaces
+# the stock adapter.  The image keeps the source under /opt so restarts always
+# refresh the plugin without relying on MinIO state.
+mkdir -p "${HERMES_HOME}/plugins/platforms"
+rm -rf "${HERMES_HOME}/plugins/matrix-platform"
+rm -rf "${HERMES_HOME}/plugins/platforms/matrix"
+if [ -d /opt/agentteams/hermes-plugins/platforms/matrix ]; then
+    cp -a /opt/agentteams/hermes-plugins/platforms/matrix "${HERMES_HOME}/plugins/platforms/matrix"
+    log "Installed AgentTeams Matrix plugin into ${HERMES_HOME}/plugins/platforms/matrix"
+else
+    log "WARNING: AgentTeams Matrix plugin missing from image; using bundled adapter"
+fi
+
 # ── Hermes runtime knobs for autonomous Worker operation ─────────────────────
 # These match hermes-agent's own "container deployment" intent but it does not
 # auto-detect that we're inside the worker pod (hermes only auto-bypasses when

@@ -60,9 +60,13 @@ def _parse_env(path: Path) -> dict[str, str]:
     return env
 
 
-def test_versions_env_is_openclaw_only() -> None:
+def test_versions_env_holds_exactly_the_pinned_keys() -> None:
+    """Every key in versions.env is accounted for: direct pins or derived ones.
+
+    Strict equality - a new key must be classified here, not silently added.
+    """
     env = _parse_env(VERSIONS_ENV)
-    assert set(env) == {"OPENCLAW_TAG", "OPENCLAW_BASE_TAG"}, (
+    assert set(env) == set(PIN_TARGETS) | {"OPENCLAW_BASE_TAG"}, (
         f"hack/versions.env keys changed: {sorted(env)}"
     )
     assert env["OPENCLAW_TAG"] == OPENCLAW_TAG
@@ -145,3 +149,30 @@ def test_dot_git_is_kept_for_online_upgrade() -> None:
     # The final cleanup must not remove .git (P7 uses the git checkout).
     assert "\n        .git .github \\\n" not in text
     assert "\n        .github \\\n" in text
+
+
+# --- Hermes pin (#1472) -----------------------------------------------------
+HERMES_GIT_REF = "v2026.9.24"
+
+# Every pin in hack/versions.env must mirror the matching Dockerfile ARG
+# default (Docker cannot source env files).
+PIN_TARGETS = {
+    "OPENCLAW_TAG": ("openclaw-base/Dockerfile", "OPENCLAW_TAG"),
+    "HERMES_GIT_REF": ("hermes/Dockerfile", "HERMES_GIT_REF"),
+}
+
+
+def _dockerfile_arg(dockerfile: str, arg: str) -> str:
+    text = (ROOT / dockerfile).read_text(encoding="utf-8")
+    match = re.search(rf"^ARG {arg}=(\S+)", text, re.MULTILINE)
+    assert match, f"{dockerfile}: no ARG {arg} line"
+    return match.group(1)
+
+
+def test_versions_env_pins_match_dockerfile_args() -> None:
+    env = _parse_env(VERSIONS_ENV)
+    for key, (dockerfile, arg) in PIN_TARGETS.items():
+        assert key in env, f"versions.env is missing the {key} pin"
+        assert env[key] == _dockerfile_arg(dockerfile, arg), (
+            f"versions.env {key}={env[key]!r} != ARG {arg} in {dockerfile}"
+        )

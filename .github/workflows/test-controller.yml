@@ -108,9 +108,15 @@ jobs:
         run: |
           python -m pip install \
             'matrix-nio>=0.25,<0.27' \
-            'qwenpaw>=2.2.1,<2.3' \
+            'qwenpaw==2.2.1' \
             'pytest>=8.3,<10' \
             'pytest-asyncio>=0.23,<2'
+
+      - name: Verify Matrix cron final completion compatibility patch
+        run: |
+          python qwenpaw/scripts/patch-qwenpaw-matrix-cron-final.py
+          python qwenpaw/scripts/patch-qwenpaw-matrix-cron-final.py
+          python qwenpaw/tests/check_matrix_cron_final.py
 
       - name: Run matrix-channel completion-guard tests
         run: |

@@ -185,6 +185,7 @@ RUN chmod +x /opt/agentteams/scripts/lib/mc-wrapper.sh && \
 # orchestrator re-applies it after an S3 package swap (the pristine wheel does
 # not carry the fix). The build-time run below applies it for the 2.2.1 image.
 COPY qwenpaw/scripts/patch-qwenpaw-driver-policy-reload.py /opt/agentteams/scripts/patch-qwenpaw-driver-policy-reload.py
+COPY qwenpaw/scripts/patch-qwenpaw-matrix-cron-final.py /opt/agentteams/scripts/patch-qwenpaw-matrix-cron-final.py
 # In-place runtime upgrade: two-phase orchestrator + checker CLI, kept next to
 # the patch script so the orchestrator's `$(dirname $0)` resolution finds both
 # the patch (re-applied after an S3 package swap) and the checker.
@@ -192,6 +193,7 @@ COPY --chmod=755 qwenpaw/scripts/upgrade_qwenpaw_runtime.sh /opt/agentteams/scri
 COPY --chmod=755 qwenpaw/scripts/check_qwenpaw_upgrade.py /opt/agentteams/scripts/check_qwenpaw_upgrade.py
 COPY qwenpaw/tests/check_driver_policy_reload.py /tmp/check_driver_policy_reload.py
 RUN /opt/venv/qwenpaw/bin/python /opt/agentteams/scripts/patch-qwenpaw-driver-policy-reload.py && \
+    /opt/venv/qwenpaw/bin/python /opt/agentteams/scripts/patch-qwenpaw-matrix-cron-final.py && \
     /opt/venv/qwenpaw/bin/python /tmp/check_driver_policy_reload.py && \
     rm /tmp/check_driver_policy_reload.py
 

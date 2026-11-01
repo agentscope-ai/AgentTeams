@@ -61,6 +61,11 @@ spec:
                   items:
                     type: string
                   description: "Named sensitive-surface privileges beyond the L2 baseline (five-value set: full_access, channel_secrets, external_sources, approval_policy, secret_reveal; docs/design/capability-foundation.md). Team leaders never hold capabilities"
+                workspaceQuotaBytes:
+                  type: integer
+                  format: int64
+                  nullable: true
+                  description: "Total byte budget for the human's file area (files/** plus .trash/**); null/absent = unlimited. Enforced before writes and trash restores; usage is computed live"
             status:
               type: object
               properties:

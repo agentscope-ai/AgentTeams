@@ -1089,3 +1089,78 @@ func TestHumanReconciler_RevocationProceedsForKnownOriginTeamRoom(t *testing.T) 
 		t.Errorf("Status.Rooms=%v, want empty (revoked)", out.Status.Rooms)
 	}
 }
+
+// TestHumanReconciler_FileAreaStoragePhase covers the per-human file-area
+// init (#1414 P1) inside the normal reconcile loop: the deployer's
+// EnsureHumanStorage runs after the infra phase, and its result decides
+// only the requeue cadence — a storage failure must never block Matrix
+// user/room sync.
+func TestHumanReconciler_FileAreaStoragePhase(t *testing.T) {
+	t.Run("success requeues on the normal interval", func(t *testing.T) {
+		human := newHuman("alice", v1beta1.HumanSpec{DisplayName: "Alice"})
+		rig := newHumanRig(t, human)
+		dep := mocks.NewMockDeployer()
+		rig.r.Deployer = dep
+
+		_, res, err := rig.reconcile("alice")
+		if err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+		if len(dep.Calls.EnsureHumanStorage) != 1 {
+			t.Fatalf("EnsureHumanStorage called %d times, want 1",
+				len(dep.Calls.EnsureHumanStorage))
+		}
+		if res.RequeueAfter != reconcileInterval {
+			t.Errorf("RequeueAfter=%v, want %v", res.RequeueAfter, reconcileInterval)
+		}
+	})
+
+	t.Run("idempotent across reconciles", func(t *testing.T) {
+		human := newHuman("alice", v1beta1.HumanSpec{DisplayName: "Alice"})
+		rig := newHumanRig(t, human)
+		dep := mocks.NewMockDeployer()
+		rig.r.Deployer = dep
+
+		if _, _, err := rig.reconcile("alice"); err != nil {
+			t.Fatalf("first reconcile: %v", err)
+		}
+		if _, _, err := rig.reconcile("alice"); err != nil {
+			t.Fatalf("second reconcile: %v", err)
+		}
+		if len(dep.Calls.EnsureHumanStorage) != 2 {
+			t.Fatalf("EnsureHumanStorage called %d times across two reconciles, want 2",
+				len(dep.Calls.EnsureHumanStorage))
+		}
+	})
+
+	t.Run("storage failure is non-fatal and requeues sooner", func(t *testing.T) {
+		worker := newReadyWorker("w1", "!room-w1:localhost")
+		human := newHuman("alice", v1beta1.HumanSpec{
+			DisplayName:       "Alice",
+			AccessibleWorkers: []string{"w1"},
+		})
+		rig := newHumanRig(t, human, worker)
+		dep := mocks.NewMockDeployer()
+		dep.EnsureHumanStorageFn = func(ctx context.Context, h *v1beta1.Human) error {
+			return errors.New("storage backend down")
+		}
+		rig.r.Deployer = dep
+
+		_, res, err := rig.reconcile("alice")
+		if err != nil {
+			t.Fatalf("storage failure must not fail the reconcile: %v", err)
+		}
+		if res.RequeueAfter != reconcileRetryDelay {
+			t.Errorf("RequeueAfter=%v, want %v", res.RequeueAfter, reconcileRetryDelay)
+		}
+		if len(dep.Calls.EnsureHumanStorage) != 1 {
+			t.Fatalf("EnsureHumanStorage called %d times, want 1",
+				len(dep.Calls.EnsureHumanStorage))
+		}
+		// The rooms phase still runs after a storage failure.
+		if len(rig.prov.Calls.InviteToRoom) != 1 {
+			t.Fatalf("room phase did not run after storage failure: %+v",
+				rig.prov.Calls.InviteToRoom)
+		}
+	})
+}

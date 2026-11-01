@@ -27,10 +27,11 @@ import (
 // Memory is an in-memory implementation of oss.StorageClient suitable for
 // tests. All methods are safe for concurrent use.
 type Memory struct {
-	mu      sync.RWMutex
-	objects map[string][]byte
-	modTime time.Time
-	next    int64
+	mu           sync.RWMutex
+	objects      map[string][]byte
+	contentTypes map[string]string
+	modTime      time.Time
+	next         int64
 }
 
 // md5Hex returns the lowercase MD5 hex digest of data (MinIO single-part
@@ -42,7 +43,11 @@ func md5Hex(data []byte) string {
 
 // NewMemory constructs an empty in-memory storage client.
 func NewMemory() *Memory {
-	return &Memory{objects: make(map[string][]byte), modTime: time.Unix(1700000000, 0)}
+	return &Memory{
+		objects:      make(map[string][]byte),
+		contentTypes: make(map[string]string),
+		modTime:      time.Unix(1700000000, 0),
+	}
 }
 
 // PutObject stores data under key.
@@ -52,6 +57,29 @@ func (m *Memory) PutObject(_ context.Context, key string, data []byte) error {
 	buf := make([]byte, len(data))
 	copy(buf, data)
 	m.objects[key] = buf
+	delete(m.contentTypes, key)
+	m.modTime = m.modTime.Add(time.Second)
+	m.next++
+	return nil
+}
+
+// PutObjectIfMatchWithType stores data with an explicit content type when the
+// current ETag matches, mirroring the typed conditional write.
+func (m *Memory) PutObjectIfMatchWithType(_ context.Context, key string, data []byte, contentType, matchETag string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cur, ok := m.objects[key]
+	if !ok {
+		// S3 semantics: If-Match against a missing object fails.
+		return oss.ErrPreconditionFailed
+	}
+	if matchETag == "" || md5Hex(cur) != matchETag {
+		return oss.ErrPreconditionFailed
+	}
+	buf := make([]byte, len(data))
+	copy(buf, data)
+	m.objects[key] = buf
+	m.contentTypes[key] = contentType
 	m.modTime = m.modTime.Add(time.Second)
 	m.next++
 	return nil
@@ -111,7 +139,29 @@ func (m *Memory) StatMeta(_ context.Context, key string) (oss.ObjectMeta, error)
 	if !ok {
 		return oss.ObjectMeta{}, os.ErrNotExist
 	}
-	return oss.ObjectMeta{Size: int64(len(data)), ModTime: m.modTime, ETag: md5Hex(data)}, nil
+	return oss.ObjectMeta{
+		Size:        int64(len(data)),
+		ModTime:     m.modTime,
+		ETag:        md5Hex(data),
+		ContentType: m.contentTypes[key],
+	}, nil
+}
+
+// PutObjectIfAbsent stores data only when the key does not exist. The check
+// and write happen under one lock so two handlers sharing a store cannot both
+// win; this mirrors the storage-level If-None-Match used by the real client.
+func (m *Memory) PutObjectIfAbsent(_ context.Context, key string, data []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.objects[key]; ok {
+		return oss.ErrPreconditionFailed
+	}
+	buf := make([]byte, len(data))
+	copy(buf, data)
+	m.objects[key] = buf
+	m.modTime = m.modTime.Add(time.Second)
+	m.next++
+	return nil
 }
 
 // PutObjectIfMatch writes only when the current object ETag equals matchETag.
@@ -120,10 +170,13 @@ func (m *Memory) StatMeta(_ context.Context, key string) (oss.ObjectMeta, error)
 func (m *Memory) PutObjectIfMatch(_ context.Context, key string, data []byte, matchETag string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if cur, ok := m.objects[key]; ok {
-		if matchETag == "" || md5Hex(cur) != matchETag {
-			return oss.ErrPreconditionFailed
-		}
+	cur, ok := m.objects[key]
+	if !ok {
+		// S3 semantics: If-Match against a missing object fails.
+		return oss.ErrPreconditionFailed
+	}
+	if matchETag == "" || md5Hex(cur) != matchETag {
+		return oss.ErrPreconditionFailed
 	}
 	buf := make([]byte, len(data))
 	copy(buf, data)

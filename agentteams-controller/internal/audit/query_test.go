@@ -30,6 +30,10 @@ type failingStorage struct {
 	failOn string
 }
 
+func (f failingStorage) PutObjectIfMatchWithType(ctx context.Context, key string, data []byte, contentType, matchETag string) error {
+	return f.StorageClient.PutObjectIfMatchWithType(ctx, key, data, contentType, matchETag)
+}
+
 func (f failingStorage) GetObject(ctx context.Context, key string) ([]byte, error) {
 	if key == f.failOn {
 		return nil, errors.New("simulated storage outage")

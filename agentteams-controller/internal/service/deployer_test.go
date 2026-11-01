@@ -14,6 +14,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/skillscan"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/yaml"
 )
 
@@ -109,6 +110,54 @@ func TestEnsureTeamStorageCreatesPrefixMarkers(t *testing.T) {
 		}
 		if len(got) != 0 {
 			t.Fatalf("%s should be empty, got %q", key, got)
+		}
+	}
+}
+
+func TestEnsureHumanStorageCreatesPrefixMarkers(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{OSS: store})
+
+	human := &v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
+	}
+	if err := deployer.EnsureHumanStorage(ctx, human); err != nil {
+		t.Fatalf("EnsureHumanStorage failed: %v", err)
+	}
+	for _, key := range []string{
+		"humans/alice/files/.keep",
+		"humans/alice/.trash/.keep",
+	} {
+		got, err := store.GetObject(ctx, key)
+		if err != nil {
+			t.Fatalf("missing %s: %v", key, err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("%s should be empty, got %q", key, got)
+		}
+	}
+
+	// Idempotent: a second pass (every reconcile calls this) must not
+	// error or change anything.
+	if err := deployer.EnsureHumanStorage(ctx, human); err != nil {
+		t.Fatalf("second EnsureHumanStorage call must be idempotent: %v", err)
+	}
+
+	// A spec username overrides the metadata name for the storage path.
+	bob := &v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "bob", Namespace: "default"},
+		Spec:       v1beta1.HumanSpec{Username: "bob-smith"},
+	}
+	if err := deployer.EnsureHumanStorage(ctx, bob); err != nil {
+		t.Fatalf("EnsureHumanStorage(bob) failed: %v", err)
+	}
+	for _, key := range []string{
+		"humans/bob-smith/files/.keep",
+		"humans/bob-smith/.trash/.keep",
+	} {
+		if _, err := store.GetObject(ctx, key); err != nil {
+			t.Fatalf("missing %s: %v", key, err)
 		}
 	}
 }

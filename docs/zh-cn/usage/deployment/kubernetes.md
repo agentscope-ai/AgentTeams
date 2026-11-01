@@ -122,9 +122,9 @@ Helm Chart 使用 `credentials.*` 配置默认模型服务：
 | 配置项 | 默认值 | 意义 | 示例 |
 |---|---|---|---|
 | `credentials.llmApiKey` | 无 | 模型服务 API Key；必填 | `sk-...` |
-| `credentials.llmProvider` | `openai-compat` | 网关采用的模型服务类型 | `openai-compat`、`qwen` |
+| `credentials.llmProvider` | `openai-compat` | 网关采用的模型服务类型 | `openai-compat`、`qwen`、`atlascloud` |
 | `credentials.defaultModel` | `gpt-5.4` | Manager 和未显式指定模型的 Worker 使用的模型名 | `gpt-5.4`、`qwen3.5-plus` |
-| `credentials.llmBaseUrl` | 空 | OpenAI 兼容 API 的 Base URL；官方 OpenAI 或已有 provider 默认地址可留空 | `https://api.deepseek.com/v1` |
+| `credentials.llmBaseUrl` | 空 | OpenAI 兼容 API 的 Base URL；官方 OpenAI 或已有 provider 默认地址可留空（`atlascloud` 默认为 `https://api.atlascloud.ai/v1`） | `https://api.deepseek.com/v1` |
 
 `llmBaseUrl` 应填写 API 根路径，不要填写具体的 `/chat/completions` 接口。模型名必须是该服务端真实接受的标识。
 

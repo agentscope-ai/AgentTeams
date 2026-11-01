@@ -598,17 +598,21 @@ func parseMCLsJSON(out, prefix string) ([]ObjectInfo, error) {
 		if !ok || rel == "" {
 			continue
 		}
+		// Normalise the shape: a listing entry may carry a trailing slash from
+		// the backend, so strip it first, then collapse anything nested to its
+		// first directory segment. Files never end in "/", directories always do.
+		rel = strings.TrimSuffix(rel, "/")
 		name := rel
-		if i := strings.IndexByte(rel, '/'); i >= 0 {
-			name = rel[:i] + "/" // nested key: synthesize its directory entry
-		} else if entry.Type == "dir" || strings.HasSuffix(rel, "/") {
-			name = strings.TrimSuffix(rel, "/") + "/" // dir entries always end in "/"
+		if k := strings.IndexByte(rel, '/'); k > 0 {
+			name = rel[:k] + "/" // nested key: synthesize its directory entry
+		} else if entry.Type == "dir" {
+			name = rel + "/"
 		}
 		if _, dup := seen[name]; dup {
 			continue
 		}
 		seen[name] = struct{}{}
-		updated := entry.Modified
+		updated := ""
 		if t, perr := time.Parse(time.RFC3339Nano, entry.Modified); perr == nil {
 			updated = t.UTC().Format(time.RFC3339) // callers expect RFC3339 UTC
 		}

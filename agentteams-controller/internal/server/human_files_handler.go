@@ -1182,6 +1182,11 @@ type humanQuotaResponse struct {
 func (h *humanFilesHandler) usedBytes(ctx context.Context, username string) (int64, error) {
 	total := int64(0)
 	seen := make(map[string]struct{})
+	// A listed key whose stat answers NotExist may still hold bytes (the
+	// listing and the stat raced, or the key was written out-of-band).
+	// Counting it zero is exactly how the space-name truncation bypassed
+	// the quota, so it is re-verified below instead of skipped.
+	var unverified []string
 	var walk func(prefix string) error
 	walk = func(prefix string) error {
 		infos, err := h.oss.ListObjectsDetailed(ctx, prefix)
@@ -1208,7 +1213,8 @@ func (h *humanFilesHandler) usedBytes(ctx context.Context, username string) (int
 			meta, err := h.oss.StatMeta(ctx, full)
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
-					continue // removed between the list and the stat
+					unverified = append(unverified, full)
+					continue
 				}
 				return err
 			}
@@ -1221,6 +1227,22 @@ func (h *humanFilesHandler) usedBytes(ctx context.Context, username string) (int
 		if err := walk(prefix); err != nil {
 			return 0, err
 		}
+	}
+	// Re-verify the keys the first pass could not stat. Re-listing would not
+	// work: a key deleted in the window no longer appears in a fresh
+	// listing, so a recount would silently zero it — the same bypass. A key
+	// that still does not exist after the retry fails the scan (fail closed,
+	// like every other unverifiable stat on the ledger path) instead of
+	// counting its bytes as zero.
+	for _, full := range unverified {
+		meta, err := h.oss.StatMeta(ctx, full)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return 0, fmt.Errorf("listed object %s vanished from the store; usage cannot be verified", full)
+			}
+			return 0, err
+		}
+		total += meta.Size
 	}
 	return total, nil
 }

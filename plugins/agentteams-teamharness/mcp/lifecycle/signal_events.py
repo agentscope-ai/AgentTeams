@@ -205,6 +205,16 @@ def _list_events(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[str
     pattern as the other projectflow read actions. Controller-side emits
     become visible once the worker's next mirror cycle lands them (the
     consumer dedupes by event_id regardless).
+
+    Cursor contract (#1433 round 2): the cursor is opaque to callers but
+    shared ACROSS the two read surfaces — this action and the controller's
+    GET /api/v1/projects/{id}/signal-events both emit
+    ``base64url("<occurred_at>\x00<event_id>")`` and a page must resume
+    across the boundary in either direction. Go emits unpadded
+    (RawURLEncoding), Python emits padded (urlsafe_b64encode), so BOTH
+    sides must accept BOTH forms (this decoder re-pads before decoding).
+    If either side changes its cursor encoding, sync the other side's
+    decoder and this note.
     """
     team = str(payload.get("team") or _runtime_team_name() or "").strip() or "global"
     since = str(payload.get("since") or "").strip()
@@ -225,7 +235,10 @@ def _list_events(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[str
     after: tuple[str, str] | None = None
     if cursor:
         try:
-            decoded = base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")
+            # Re-pad to a multiple of 4: the Go read surface (#1433) emits
+            # unpadded base64url cursors, and both forms must be accepted.
+            padded = cursor + "=" * (-len(cursor) % 4)
+            decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
             after_ts, after_id = decoded.rsplit("\x00", 1)
             after = (after_ts, after_id)
         except Exception:

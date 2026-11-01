@@ -11,7 +11,7 @@ import (
 const mcLsSpaceFileLine = `{"type":"file","size":6,"title":"meeting notes.txt","modified":"2026-11-01T02:33:00.000Z","etag":"d41d8cd98f00b204e9800998ecf8427e"}`
 
 func TestParseMCLsJSONPreservesSpacesInNames(t *testing.T) {
-	infos, err := parseMCLsJSON(mcLsSpaceFileLine + "\n")
+	infos, err := parseMCLsJSON(mcLsSpaceFileLine + "\n", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestParseMCLsJSONNormalizesDirectoryTrailingSlash(t *testing.T) {
 		`{"type":"dir","size":0,"title":"my dir","modified":"2026-11-01T02:33:00Z"}`,
 	}
 	for _, line := range lines {
-		infos, err := parseMCLsJSON(line)
+		infos, err := parseMCLsJSON(line, "")
 		if err != nil {
 			t.Fatalf("%s: %v", line, err)
 		}
@@ -43,7 +43,7 @@ func TestParseMCLsJSONNormalizesDirectoryTrailingSlash(t *testing.T) {
 }
 
 func TestParseMCLsJSONStripsUnexpectedSlashFromFile(t *testing.T) {
-	infos, err := parseMCLsJSON(`{"type":"file","size":2,"title":"inner.txt/","modified":"2026-11-01T02:33:00Z"}`)
+	infos, err := parseMCLsJSON(`{"type":"file","size":2,"title":"inner.txt/","modified":"2026-11-01T02:33:00Z"}`, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestParseMCLsJSONStripsUnexpectedSlashFromFile(t *testing.T) {
 
 func TestParseMCLsJSONEmptyOutputIsEmpty(t *testing.T) {
 	for _, out := range []string{"", "\n"} {
-		infos, err := parseMCLsJSON(out)
+		infos, err := parseMCLsJSON(out, "")
 		if err != nil {
 			t.Fatalf("%q: %v", out, err)
 		}
@@ -70,14 +70,14 @@ func TestParseMCLsJSONMalformedLineFailsLoudly(t *testing.T) {
 		"not json",
 		`{"type":"file",}`,
 	} {
-		if _, err := parseMCLsJSON(out); err == nil {
+		if _, err := parseMCLsJSON(out, ""); err == nil {
 			t.Fatalf("%q: expected a parse error, got none", out)
 		}
 	}
 }
 
 func TestParseMCLsJSONBadModifiedDegradesToEmpty(t *testing.T) {
-	infos, err := parseMCLsJSON(`{"type":"file","size":6,"title":"a.txt","modified":"not-a-time"}`)
+	infos, err := parseMCLsJSON(`{"type":"file","size":6,"title":"a.txt","modified":"not-a-time"}`, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestParseMCLsJSONKeepsEntryOrder(t *testing.T) {
 		`{"type":"dir","size":0,"title":"my dir/","modified":"2026-11-01T02:34:00Z"}`,
 		`{"type":"file","size":2,"title":"plain.txt","modified":"2026-11-01T02:35:00Z"}`,
 	}, "\n")
-	infos, err := parseMCLsJSON(out)
+	infos, err := parseMCLsJSON(out, "")
 	if err != nil {
 		t.Fatal(err)
 	}

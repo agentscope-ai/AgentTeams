@@ -126,6 +126,15 @@ cat > "${WORKDIR}/home/.openclaw/openclaw.json" <<JSON
 }
 JSON
 
+# Startup diagnostics for the early-exit paths below. The cleanup trap fires
+# on exit and removes the container, so the logs must be captured before the
+# exit; the dump tolerates failure on purpose — a failed dump must never mask
+# the primary error.
+dump_startup_log() { # $1 = header line
+  echo "$1"
+  docker logs --tail 40 "${CONTAINER}" 2>&1 | tail -40 || true
+}
+
 echo "--- starting gateway (${IMAGE}) on an isolated network"
 if ! docker network create "${NETWORK}" >/dev/null; then
   fail "isolated docker network created" "docker network create failed"
@@ -133,7 +142,11 @@ if ! docker network create "${NETWORK}" >/dev/null; then
   exit 1
 fi
 # --entrypoint sh: the manager image sets an entrypoint
-# (start-manager-agent.sh); overriding it is how the probe gets a bare gateway.
+# (start-manager-agent.sh); overriding it is how the probe gets a bare
+# gateway. Argument contract: the command after the image must be exactly
+# `-c "..."`, so docker executes `sh -c "..."`. A leading `sh` of its own
+# would make it `sh sh -c ...` and the container exits at once, before the
+# gateway can start.
 if ! docker run -d --name "${CONTAINER}" --network "${NETWORK}" \
     --entrypoint sh \
     -e HOME=/root \
@@ -141,15 +154,37 @@ if ! docker run -d --name "${CONTAINER}" --network "${NETWORK}" \
     -v "${WORKDIR}/probe:/probe" \
     -v "${PROBE_SRC}:/probe/probe.mjs:ro" \
     "${IMAGE}" \
-    sh -c "openclaw gateway run --port ${HOST_PORT} --bind lan --auth token --token ${TOKEN} > /tmp/gateway.log 2>&1" \
+    -c "openclaw gateway run --port ${HOST_PORT} --bind lan --auth token --token ${TOKEN} > /tmp/gateway.log 2>&1" \
     >/dev/null; then
+  dump_startup_log "--- gateway startup log (docker run failed)"
   fail "gateway container started" "docker run failed"
+  echo "SUMMARY: ${PASS} passed, ${FAIL} failed, ${SKIP} skipped"
+  exit 1
+fi
+
+# docker run -d returns when the process is forked, not when it survives:
+# with a bad command line the container exits within moments of -d. Poll
+# briefly, and capture the startup logs before failing — the cleanup trap
+# fires on exit and would destroy the container otherwise.
+GATEWAY_UP=0
+for _ in $(seq 1 5); do
+  if [ "$(docker inspect -f '{{.State.Running}}' "${CONTAINER}" 2>/dev/null)" = "true" ]; then
+    GATEWAY_UP=1
+    break
+  fi
+  sleep 1
+done
+if [ "${GATEWAY_UP}" -ne 1 ]; then
+  dump_startup_log "--- gateway startup log (container exited early)"
+  fail "gateway container exited before starting" \
+       "state=$(docker inspect -f '{{.State.Status}}' "${CONTAINER}" 2>/dev/null)"
   echo "SUMMARY: ${PASS} passed, ${FAIL} failed, ${SKIP} skipped"
   exit 1
 fi
 
 CONTAINER_IP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${CONTAINER}" 2>/dev/null)"
 if [ -z "${CONTAINER_IP}" ]; then
+  dump_startup_log "--- gateway startup log (no network IP)"
   fail "gateway container has an address on the isolated network" "docker inspect returned no IP"
   echo "SUMMARY: ${PASS} passed, ${FAIL} failed, ${SKIP} skipped"
   exit 1

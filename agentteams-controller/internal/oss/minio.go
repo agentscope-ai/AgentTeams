@@ -450,32 +450,64 @@ func (c *MinIOClient) ListObjectsDetailed(ctx context.Context, prefix string) ([
 	if err := c.ensureAlias(ctx); err != nil {
 		return nil, err
 	}
-	out, err := c.runMC(ctx, "ls", c.fullPath(prefix))
+	// The human-readable form is space-split and would truncate object
+	// names that contain spaces ("meeting notes.txt" -> "notes.txt"),
+	// silently dropping those bytes from quota accounting. NDJSON carries
+	// the full name intact.
+	out, err := c.runMC(ctx, "ls", "--json", c.fullPath(prefix))
 	if err != nil {
 		return nil, err
 	}
+	return parseMCLsJSON(out)
+}
 
+// parseMCLsJSON decodes `mc ls --json` (mc RELEASE.2025-08-13) NDJSON into
+// one ObjectInfo per line:
+//
+//	{"type":"file","size":6,"title":"meeting notes.txt","modified":"2026-11-01T02:33:00.000Z","etag":"..."}
+//	{"type":"dir","size":0,"title":"my dir/","modified":"..."}
+//
+// Parsing contract (every ListObjectsDetailed consumer relies on it):
+//
+//   - Name is the one-level relative name from `title`, spaces preserved;
+//     directories carry a trailing slash (added when mc omits it), files
+//     never do;
+//   - UpdatedAt is `modified` as RFC3339 UTC, or "" when it cannot be
+//     parsed (timestamp drift must never fail a listing);
+//   - a single malformed line is an error: a silently skipped line would
+//     undercount the quota exactly the way the old space-truncating parser
+//     did.
+//
+// size and etag are intentionally not read: ObjectInfo is unchanged and
+// callers stat each key for the exact bytes. Extracted so the contract is
+// testable without the mc binary.
+func parseMCLsJSON(out string) ([]ObjectInfo, error) {
 	var infos []ObjectInfo
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		// mc ls output format: "[date] [size] filename"
-		parts := strings.Fields(line)
-		if len(parts) == 0 {
-			continue
+		var entry struct {
+			Type     string `json:"type"`
+			Title    string `json:"title"`
+			Modified string `json:"modified"`
 		}
-		info := ObjectInfo{Name: parts[len(parts)-1]}
-		// mc ls prints the date in the mc process's local zone; the
-		// reference deployment runs the controller in UTC. A parse failure
-		// (format drift between mc versions) degrades to an empty timestamp
-		// rather than failing the listing.
-		if len(parts) >= 3 {
-			raw := strings.TrimPrefix(parts[0], "[") + " " + parts[1]
-			if t, err := time.Parse("2006-01-02 15:04:05", raw); err == nil {
-				info.UpdatedAt = t.UTC().Format(time.RFC3339)
-			}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			return nil, fmt.Errorf("parse mc ls --json line %q: %w", line, err)
+		}
+		name := entry.Title
+		if entry.Type == "dir" {
+			name = strings.TrimSuffix(name, "/") + "/"
+		} else {
+			name = strings.TrimSuffix(name, "/")
+		}
+		info := ObjectInfo{Name: name}
+		// mc reports RFC3339 with fractional seconds; a parse failure
+		// (format drift between mc versions) degrades to an empty
+		// timestamp rather than failing the listing, as the old parser did.
+		if t, err := time.Parse(time.RFC3339, entry.Modified); err == nil {
+			info.UpdatedAt = t.UTC().Format(time.RFC3339)
 		}
 		infos = append(infos, info)
 	}

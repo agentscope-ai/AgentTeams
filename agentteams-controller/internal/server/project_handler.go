@@ -3083,6 +3083,15 @@ func (h *ProjectHandler) PutProjectMeta(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "project meta commit body must be a JSON object: "+err.Error())
 		return
 	}
+	// A bare JSON null unmarshals into a nil map WITHOUT an error, and the
+	// raw bytes are what get written — a "null" commit would replace the
+	// whole project meta (including the durable loop.pause_sources) with
+	// the literal null. Reject it before the conditional write (#1402
+	// round 9).
+	if asObject == nil {
+		writeError(w, http.StatusBadRequest, "project meta commit body must be a JSON object, not null")
+		return
+	}
 
 	pwc, failed := h.readProjectWriteContext(w, r)
 	if failed {

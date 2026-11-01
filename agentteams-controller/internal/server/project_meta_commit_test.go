@@ -103,6 +103,8 @@ func TestPutProjectMeta_BodyValidation400(t *testing.T) {
 		`[1, 2, 3]`,         // JSON array, not an object
 		`"just a string"`,   // JSON scalar
 		``,                  // empty body
+		`null`,              // JSON null -> nil map, must not write
+		"\t null \n",        // null with surrounding whitespace
 	}
 	for _, body := range badBodies {
 		req := httptest.NewRequest(http.MethodPut, "/api/v1/projects/pm1/meta", strings.NewReader(body))

@@ -25,6 +25,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/test-helpers.sh"
 source "${SCRIPT_DIR}/lib/minio-client.sh"
 source "${SCRIPT_DIR}/lib/higress-client.sh"
+source "${SCRIPT_DIR}/lib/test29-evidence.sh"
 
 test_setup "29-legacy-copaw-upgrade"
 
@@ -42,7 +43,9 @@ CTRL=agentteams-controller
 TEST_OUTPUT_DIR="${TEST_OUTPUT_DIR:-${SCRIPT_DIR%/*}/tests/output}"
 
 # ============================================================
-# Failure evidence collector
+# Failure evidence collector (credential-safe; implementation in
+# lib/test29-evidence.sh: diagnostic-field projection + unified
+# redaction applied before any artifact is written)
 # ============================================================
 # When the test has failed, persist diagnostics for the failing Worker
 # under ${TEST_OUTPUT_DIR}/test-29-evidence/ *before* cleanup deletes
@@ -50,45 +53,6 @@ TEST_OUTPUT_DIR="${TEST_OUTPUT_DIR:-${SCRIPT_DIR%/*}/tests/output}"
 # Never fails the test itself: every command is guarded.
 EVIDENCE_DIR="${TEST_OUTPUT_DIR}/test-29-evidence"
 EVIDENCE_COLLECTED=0
-
-collect_test29_evidence() {
-    local worker="$1"
-    local container
-    [ "${EVIDENCE_COLLECTED}" = "1" ] && return 0
-    EVIDENCE_COLLECTED=1
-    container="$(worker_container_name "${worker}")"
-
-    log_info "Collecting failure evidence for ${worker} into ${EVIDENCE_DIR}"
-    mkdir -p "${EVIDENCE_DIR}" 2>/dev/null || true
-
-    # Worker container logs
-    docker logs --tail 1000 "${container}" > "${EVIDENCE_DIR}/worker-logs.txt" 2>&1 || true
-
-    # Worker container inspect
-    docker inspect "${container}" > "${EVIDENCE_DIR}/worker-inspect.json" 2>&1 || true
-
-    # Worker config / workspace listing
-    {
-        printf '=== workspace listing: /root/agentteams-fs/agents/%s ===\n' "${worker}"
-        docker exec "${container}" sh -c "ls -laR '/root/agentteams-fs/agents/${worker}' 2>/dev/null" 2>/dev/null | head -400 || true
-        printf '\n=== .qwenpaw config files ===\n'
-        docker exec "${container}" sh -c "
-            for f in '/root/agentteams-fs/agents/${worker}/.qwenpaw/config.json' \
-                    '/root/agentteams-fs/agents/${worker}/.qwenpaw/workspaces/default/agent.json'; do
-                printf -- '--- %s ---\n' \"\$f\"
-                cat \"\$f\" 2>/dev/null || printf '(missing)\n'
-            done
-        " 2>/dev/null || true
-    } > "${EVIDENCE_DIR}/workspace-listing.txt" 2>&1 || true
-
-    # Worker CR
-    exec_in_agent agt get workers "${worker}" -o json > "${EVIDENCE_DIR}/worker-cr.json" 2>&1 || true
-
-    # MinIO listing under the worker prefix
-    exec_in_manager mc ls --recursive "${STORAGE_PREFIX}/agents/${worker}/" > "${EVIDENCE_DIR}/minio-listing.txt" 2>&1 || true
-
-    return 0
-}
 
 # One pass/fail line for a migrated object's presence in MinIO
 # (expected vs actual), used by the per-file report below.

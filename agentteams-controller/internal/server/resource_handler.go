@@ -272,9 +272,90 @@ func (h *ResourceHandler) GetWorker(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteError(w, http.StatusNotFound, "get worker: not found")
 }
 
+// teamMemberHit is one entry of ListWorkers' per-request team index: the
+// first team (in list order) that references a worker, and that worker's
+// member ref within it — findTeamMember's first-hit result, precomputed
+// from a single Team list (issue #1475).
+type teamMemberHit struct {
+	team   *v1beta1.Team
+	member string
+}
+
+// workerFields is the parsed ?fields= selection of GET /api/v1/workers
+// (issue #1475): which projection each list row carries.
+type workerFields int
+
+const (
+	// workerFieldsAll is the default: the full WorkerResponse, serialized
+	// byte-identically to the pre-projection implementation.
+	workerFieldsAll workerFields = iota
+	workerFieldsSpec
+	workerFieldsStatus
+	workerFieldsSpecStatus
+)
+
+// parseWorkerListFields parses the ?fields= query parameter of
+// GET /api/v1/workers (issue #1475). An empty value (or only empty
+// tokens) selects the default full response. Otherwise it must be a
+// comma-separated selection from "spec" and "status" — token order and
+// duplicates do not matter. "all" names the default full response and
+// cannot be combined with a subset. Unknown tokens are rejected so a
+// typo cannot silently change the payload (same fail-closed stance as
+// the kind parameter on the project events endpoint).
+func parseWorkerListFields(raw string) (workerFields, error) {
+	const valid = "spec, status, all"
+	spec, status, all := false, false, false
+	for _, token := range strings.Split(raw, ",") {
+		token = strings.TrimSpace(token)
+		switch token {
+		case "":
+		case "spec":
+			spec = true
+		case "status":
+			status = true
+		case "all":
+			all = true
+		default:
+			return 0, fmt.Errorf("invalid fields value %q: valid values are %s", token, valid)
+		}
+	}
+	if all && (spec || status) {
+		return 0, fmt.Errorf("invalid fields value: %q cannot be combined with other values; valid values are %s", "all", valid)
+	}
+	switch {
+	case spec && status:
+		return workerFieldsSpecStatus, nil
+	case spec:
+		return workerFieldsSpec, nil
+	case status:
+		return workerFieldsStatus, nil
+	default:
+		return workerFieldsAll, nil
+	}
+}
+
+// projectWorkerListRow reduces one list row to the requested view.
+func projectWorkerListRow(resp WorkerResponse, views workerFields) any {
+	switch views {
+	case workerFieldsSpec:
+		return resp.SpecView()
+	case workerFieldsStatus:
+		return resp.StatusView()
+	default: // workerFieldsSpecStatus
+		return resp.SpecStatusView()
+	}
+}
+
 func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 	caller := authpkg.CallerFromContext(r.Context())
 	teamFilter := r.URL.Query().Get("team")
+	// fields selects a slim projection of each list row (issue #1475);
+	// absent (or "all") keeps the default full response byte-identical.
+	fieldViews, err := parseWorkerListFields(r.URL.Query().Get("fields"))
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	workers := make([]WorkerResponse, 0)
 
@@ -283,17 +364,37 @@ func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 		writeK8sError(w, "list workers", err)
 		return
 	}
+	// Index team membership once per request instead of once per worker
+	// (issue #1475: findTeamMember re-listed every Team CR per worker, so
+	// an N-worker list cost 1 WorkerList + N TeamList round-trips). The
+	// first team in list order referencing a worker wins, matching
+	// findTeamMember's first-hit traversal. An empty worker list skips the
+	// Team list entirely, exactly as the per-worker lookups did.
+	var teams v1beta1.TeamList
+	var teamIndex map[string]teamMemberHit
+	if len(list.Items) > 0 {
+		if err := h.client.List(r.Context(), &teams, client.InNamespace(h.namespace)); err != nil {
+			writeK8sError(w, "list workers: lookup team member", err)
+			return
+		}
+		teamIndex = make(map[string]teamMemberHit, len(teams.Items))
+		for i := range teams.Items {
+			team := &teams.Items[i]
+			for _, ref := range team.Spec.WorkerMembers {
+				if _, seen := teamIndex[ref.Name]; !seen {
+					teamIndex[ref.Name] = teamMemberHit{team: team, member: ref.Name}
+				}
+			}
+		}
+	}
 	for i := range list.Items {
 		resp := workerToResponse(&list.Items[i])
 		if !canManageWorkerEnv(r) {
 			resp.Env = nil
 			resp.EnvEditable = false
 		}
-		if team, member, ok, terr := findTeamMember(r.Context(), h.client, h.namespace, list.Items[i].Name); terr != nil {
-			writeK8sError(w, "list workers: lookup team member", terr)
-			return
-		} else if ok {
-			applyTeamMember(&resp, team, member)
+		if hit, ok := teamIndex[list.Items[i].Name]; ok {
+			applyTeamMember(&resp, hit.team, hit.member)
 		}
 		// Scoped readers (team leaders or humans) only see the workers in
 		// the teams they control; L3 (worker-scoped) humans only see their
@@ -313,7 +414,17 @@ func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 		workers = append(workers, resp)
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, WorkerListResponse{Workers: workers, Total: len(workers)})
+	if fieldViews == workerFieldsAll {
+		httputil.WriteJSON(w, http.StatusOK, WorkerListResponse{Workers: workers, Total: len(workers)})
+		return
+	}
+	// Projected rows share the envelope shape (workers/total) but carry
+	// only the selected view per row.
+	projected := make([]any, 0, len(workers))
+	for i := range workers {
+		projected = append(projected, projectWorkerListRow(workers[i], fieldViews))
+	}
+	httputil.WriteJSON(w, http.StatusOK, workerListProjection{Workers: projected, Total: len(workers)})
 }
 
 func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {

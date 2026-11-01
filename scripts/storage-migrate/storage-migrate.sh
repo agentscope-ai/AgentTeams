@@ -479,22 +479,6 @@ phase_quiesce() {
       # operationally (no CR/config changes during the window); the tool-side assertion
       # is the quiesce lock + the window evidence below.
       state_set "stage_detail.quiesce.controller" "{\"embedded\":true,\"note\":\"source storage lives in the controller - it stays up until P5; frozen operationally, asserted by quiesce.lock + window evidence\"}"
-      # The controller shares the container with the source storage, so the
-      # container cannot be stopped - but the controller process is the last
-      # writer. Freeze only it (SIGSTOP): it stops writing while MinIO keeps
-      # serving reads, which is what "quiesced with the source still visible"
-      # requires. P8/--rollback resumes it with SIGCONT.
-      if [ "$DRY_RUN" = false ]; then
-        local ctrl_pid
-        ctrl_pid=$(docker exec "$CONTROLLER_CONTAINER" pgrep -f "/usr/local/bin/agentteams-controller" 2>/dev/null | head -1 || true)
-        if [ -n "${ctrl_pid:-}" ]; then
-          docker exec "$CONTROLLER_CONTAINER" kill -STOP "$ctrl_pid" 2>/dev/null || true
-          state_set "stage_detail.frozen_controller_pid" "\"$ctrl_pid\""
-          log_info "P1 embedded: controller process frozen (SIGSTOP pid $ctrl_pid); MinIO keeps serving reads"
-        else
-          log_warn "P1 embedded: controller pid not found; freeze relies on the window evidence alone"
-        fi
-      fi
       log_warn "P1 embedded: the controller container stays up (the source storage lives in it); its process is frozen and no CR/config changes happen until P5"
       ;;
   esac
@@ -527,6 +511,20 @@ phase_quiesce() {
   else
     state_set "stage_detail.quiesce.window" "[]"
     log_info "[dry-run] P1 would take $QUIESCE_SAMPLES window samples x ${QUIESCE_INTERVAL}s and create $STATE_DIR/quiesce.lock"
+  fi
+  # Freeze the controller process AFTER the window evidence: the evidence still
+  # queries the controller, and freezing it earlier hangs those calls (a real
+  # run stalled exactly there). MinIO is a separate process and keeps serving.
+  if [ "$DRY_RUN" = false ] && [ "$DEPLOYMENT" = "embedded" ]; then
+    local ctrl_pid
+    ctrl_pid=$(docker exec "$CONTROLLER_CONTAINER" pgrep -f "/usr/local/bin/agentteams-controller" 2>/dev/null | head -1 || true)
+    if [ -n "${ctrl_pid:-}" ]; then
+      docker exec "$CONTROLLER_CONTAINER" kill -STOP "$ctrl_pid" 2>/dev/null || true
+      state_set "stage_detail.frozen_controller_pid" "\"$ctrl_pid\""
+      log_info "P1 embedded: controller process frozen (SIGSTOP pid $ctrl_pid); MinIO keeps serving reads"
+    else
+      log_warn "P1 embedded: controller pid not found; freeze relies on the window evidence alone"
+    fi
   fi
   state_stage "QUIESCED"
 }
@@ -752,9 +750,12 @@ final_delta() {
     log_info "inplace: final delta is a no-op (data imported on first start)"
     report_add "verify" "final-delta" "info" "inplace: import on first start"
   elif [ -n "$since" ]; then
-    log_info "final delta: mc mirror --newer-than $since"
+    # Source is frozen here (window evidence), so the final delta must be a FULL
+    # reconcile: --newer-than skips objects whose mtime equals the anchor and a
+    # real run lost 39 bytes that way.
+    log_info "final delta: mc mirror (full reconcile; source is frozen)"
     for b in $buckets; do
-      mc_raw mirror "$SRC_ALIAS/$b" "$DST_ALIAS/$b" --newer-than "$since" 2>&1 | tail -1 >&2 || die 1 "final delta failed bucket=$b"
+      mc_raw mirror --overwrite "$SRC_ALIAS/$b" "$DST_ALIAS/$b" 2>&1 | tail -1 >&2 || die 1 "final delta failed bucket=$b"
     done
     report_add "verify" "final-delta" "pass" "since=$since"
   else

@@ -642,7 +642,10 @@ phase_iam() {
     local pfile="$STATE_DIR/policy-$pname.json"
     if jq --arg n "$pname" '.policies[$n]' "$snap" | jq -e . >/dev/null 2>&1; then
       # tolerate old snapshots that stored the wrapped structure -> unwrap once more
-      jq --arg n "$pname" '.policies[$n] | if .Policy then .Policy else . end' "$snap" > "$pfile"
+      # The snapshot entry is {"policy_name": ..., "policy": {...}} (mc's
+      # export shape); older exports used the capitalised .Policy. Unwrap
+      # either, and keep a bare document as-is.
+      jq --arg n "$pname" '.policies[$n] | if .policy then .policy elif .Policy then .Policy else . end' "$snap" > "$pfile"
     else
       # body export failed -> create a placeholder (read-only, conservative) + warn
       echo '{"Version":"2012-10-17","Statement":[]}' > "$pfile"
@@ -809,7 +812,9 @@ phase_verify() {
   local bad=""
   for b in $buckets; do
     local keys k s_md5 d_md5
-    keys=$({ mc_raw ls --recursive "$SRC_ALIAS/$b" 2>/dev/null || true; } | awk '{print $NF}' | head -10)
+    # No `head` here: under `set -o pipefail` an early-exit reader SIGPIPEs the
+    # producer (141) and `set -e` aborts the whole verify. awk reads it all.
+    keys=$({ mc_raw ls --recursive "$SRC_ALIAS/$b" 2>/dev/null || true; } | awk '{print $NF}' | awk 'NR<=10')
     for k in $keys; do
       s_md5=$(mc_get "$SRC_ALIAS/$b/$k" 2>/dev/null | md5sum | awk '{print $1}')
       d_md5=$(mc_get "$DST_ALIAS/$b/$k" 2>/dev/null | md5sum | awk '{print $1}')
@@ -845,7 +850,7 @@ phase_verify() {
   lmod_raw=$(mc_raw ls --recursive --json "$SRC_ALIAS" 2>/dev/null); lmod_rc=$?
   if [ $lmod_rc -ne 0 ]; then
     ver_item "6" fail "source listing failed (rc=$lmod_rc) - the write freeze cannot be asserted (V6 must not pass silently)"
-  elif [ -z "$(jq -r '.lastModified // empty' <<<"$lmod_raw" | head -1)" ]; then
+  elif [ -z "$(jq -r '.lastModified // empty' <<<"$lmod_raw" | awk 'NR==1')" ]; then
     ver_item "6" warn "no source object mtimes available (write-freeze sampling skipped)"
   else
     max_lmod=$(jq -r '.lastModified // empty' <<<"$lmod_raw" | sort | tail -1)

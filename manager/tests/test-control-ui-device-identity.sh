@@ -2,9 +2,9 @@
 # Control UI device-identity regression for the existing HTTP / LAN console
 # entries (#1460).
 #
-# Runs a real OpenClaw gateway from the openclaw-base image on an isolated
-# Docker network and probes it with the real gateway client the way a browser
-# does over plain HTTP:
+# Runs a real OpenClaw gateway from the manager image on an isolated Docker
+# network and probes it with the real gateway client the way a browser does
+# over plain HTTP:
 #
 #   1. policy pin      - a device-less Control UI connection over an HTTP origin
 #                        is rejected with CONTROL_UI_DEVICE_IDENTITY_REQUIRED;
@@ -20,10 +20,14 @@
 # the real same-origin UI also sends.
 #
 # Requirements: docker plus a locally available image (OPENCLAW_BASE_IMAGE,
-# default agentteams/openclaw-base:latest). With docker present but the image
-# missing the test FAILS (set CONTROL_UI_TEST_ALLOW_MISSING_IMAGE=1 to skip for
-# local development); without docker it skips with a reason — never a false
-# pass.
+# default agentteams/manager:latest — the manager image is FROM the pinned
+# openclaw-base, so in the CI shard the probe tests the shipped pairing with
+# no extra pull). Before the gateway starts, the probe also asserts that the
+# OpenClaw version inside the image equals the pin (AGENTTEAMS_OPENCLAW_TAG,
+# falling back to hack/versions.env): a known mismatch FAILS, an
+# unresolvable version only NOTEs. With docker present but the image missing
+# the test FAILS (set CONTROL_UI_TEST_ALLOW_MISSING_IMAGE=1 to skip for local
+# development); without docker it skips with a reason — never a false pass.
 #
 # Example:
 #   OPENCLAW_BASE_IMAGE=agentteams/openclaw-base:latest \
@@ -36,7 +40,11 @@ FAIL=0
 SKIP=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROBE_SRC="${SCRIPT_DIR}/control-ui-device-identity-probe.mjs"
-IMAGE="${OPENCLAW_BASE_IMAGE:-agentteams/openclaw-base:latest}"
+# Same normalization rules as the manager startup guard (#1479).
+source "${SCRIPT_DIR}/../scripts/lib/openclaw-version-guard.sh"
+# Default to the manager image: it is FROM the pinned openclaw-base and the
+# CI shard already loads it, so the probe exercises the shipped pairing.
+IMAGE="${OPENCLAW_BASE_IMAGE:-agentteams/manager:latest}"
 CONTAINER="control-ui-device-identity-$$"
 NETWORK="control-ui-test-net-$$"
 HOST_PORT="${CONTROL_UI_TEST_PORT:-19799}"
@@ -48,6 +56,28 @@ fail() { echo "  FAIL: $1"; echo "       $2"; FAIL=$((FAIL + 1)); }
 skip() { echo "  SKIP: $1"; SKIP=$((SKIP + 1)); }
 note() { echo "  NOTE: $1"; }
 
+# #1479: the image must carry the pinned OpenClaw, not a stale base. The
+# expected side is resolved on the host (AGENTTEAMS_OPENCLAW_TAG, falling
+# back to hack/versions.env via the guard library); the installed side is
+# read from the image itself, so any local image works.
+assert_pinned_version() {
+  local EXPECTED ACTUAL
+  EXPECTED="$(openclaw_expected_version || true)"
+  ACTUAL="$(docker run --rm --entrypoint sh "${IMAGE}" -c 'node -p "require(\"/opt/openclaw/package.json\").version"' 2>/dev/null | tr -d '\r')"
+  local NEXP NACT
+  NEXP="$(openclaw_version_normalize "${EXPECTED}" || true)"
+  NACT="$(openclaw_version_normalize "${ACTUAL}" || true)"
+  if [ -n "${NEXP}" ] && [ -n "${NACT}" ]; then
+    if [ "${NEXP}" = "${NACT}" ]; then
+      pass "gateway version matches the pinned OpenClaw tag (${NACT})"
+    else
+      fail "gateway version matches the pinned OpenClaw tag" "expected ${NEXP}, image has ${NACT}"
+    fi
+  else
+    note "gateway version unknown (${ACTUAL}); pin assertion skipped"
+  fi
+}
+
 cleanup() {
   docker rm -f "${CONTAINER}" >/dev/null 2>&1 || true
   docker network rm "${NETWORK}" >/dev/null 2>&1 || true
@@ -55,6 +85,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Main flow. Wrapped (without re-indenting, to keep the diff reviewable) so
+# the stub regression test-control-ui-version-assert.sh can source this file
+# and exercise assert_pinned_version() without starting a gateway.
+main() {
 echo "=== Control UI device-identity policy (existing HTTP / LAN entries) ==="
 
 if ! command -v docker >/dev/null 2>&1; then
@@ -73,6 +107,9 @@ if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
   echo "SUMMARY: ${PASS} passed, ${FAIL} failed, ${SKIP} skipped"
   exit 1
 fi
+
+# #1479: before the gateway starts, prove the image carries the pinned OpenClaw.
+assert_pinned_version
 
 # The gateway state (config + device pairing DB) lives in HOME; identities are
 # kept on the shared /probe mount so each case can present its own device.
@@ -95,7 +132,10 @@ if ! docker network create "${NETWORK}" >/dev/null; then
   echo "SUMMARY: ${PASS} passed, ${FAIL} failed, ${SKIP} skipped"
   exit 1
 fi
+# --entrypoint sh: the manager image sets an entrypoint
+# (start-manager-agent.sh); overriding it is how the probe gets a bare gateway.
 if ! docker run -d --name "${CONTAINER}" --network "${NETWORK}" \
+    --entrypoint sh \
     -e HOME=/root \
     -v "${WORKDIR}/home:/root" \
     -v "${WORKDIR}/probe:/probe" \
@@ -271,3 +311,9 @@ if [ "${FAIL}" -ne 0 ]; then
   exit 1
 fi
 exit 0
+}
+
+# Direct execution only; when sourced (stub regression test) main stays dormant.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi

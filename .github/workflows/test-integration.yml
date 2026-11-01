@@ -403,13 +403,14 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y jq curl unzip
       - name: Control UI device-identity policy (HTTP/LAN entries)
-        # #1460: OpenClaw v2026.10.9 requires a device identity on the Control
-        # UI handshake. This runs one real gateway from the openclaw-base image
-        # and probes the existing HTTP (loopback) and LAN console entries. Only
-        # one shard needs to run it.
+        # #1460/#1479: the gateway requires a device identity on the Control UI
+        # handshake. Runs one real gateway from the manager image this shard
+        # already loaded (the manager image is FROM the pinned openclaw-base),
+        # so the probe tests the shipped pairing and needs no extra pull; the
+        # script asserts that gateway version == the pin in hack/versions.env.
         if: matrix.shard == 'controller-cr' && matrix.manager_runtime == 'openclaw' && matrix.worker_runtime == 'openclaw'
         env:
-          OPENCLAW_BASE_IMAGE: agentteams/openclaw-base:latest
+          OPENCLAW_BASE_IMAGE: agentteams/manager:latest
         run: bash manager/tests/test-control-ui-device-identity.sh
 
 
@@ -827,6 +828,12 @@ jobs:
 
       - name: Run the LLM-smoke regression suite (stubbed docker/curl)
         run: bash install/tests/verify-llm-regressions.sh
+
+      - name: Run the OpenClaw version-guard regression (stubbed fs/node)
+        run: bash manager/tests/test-openclaw-version-guard.sh
+
+      - name: Run the Control UI pin-assertion regression (stubbed docker)
+        run: bash manager/tests/test-control-ui-version-assert.sh
 
   install-upgrade-cli:
     runs-on: ubuntu-latest

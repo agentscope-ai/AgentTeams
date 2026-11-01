@@ -224,6 +224,9 @@ async def _noop_prepare(_room_id):
 def _make_thread_channel():
     module = _load_overlay_module()
     channel = module.AgentTeamsMatrixChannel.__new__(module.AgentTeamsMatrixChannel)
+    channel.show_thinking = True
+    channel.show_tool_calls = True
+    channel.show_tool_results = True
     channel._client = _FakeClient()
     channel._user_id = "@bot:hs.local"
     channel._active_thread_roots = {}
@@ -929,6 +932,9 @@ async def _noop_read_receipt(_room_id, _event_id):
 def _make_inbound_channel(command_registry=True):
     module = _load_overlay_module()
     channel = module.AgentTeamsMatrixChannel.__new__(module.AgentTeamsMatrixChannel)
+    channel.show_thinking = True
+    channel.show_tool_calls = True
+    channel.show_tool_results = True
     channel._user_id = "@copywriting-assistant:hs.local"
     channel._client = _FakeClient()
     channel.dm_disabled = False

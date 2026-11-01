@@ -242,7 +242,7 @@ function makeContext(storedToken, daemonBase) {
     constructor(u, p) { seen.push(String(u)); }
   }
   const windowObj = {
-    location: { pathname: '/console', origin: 'http://testserver' },
+    location: { pathname: '/console', origin: 'http://testserver', host: 'testserver' },
     fetch: function () {},
     WebSocket: InnerWebSocket,
     EventSource: class EventSource {},
@@ -256,6 +256,7 @@ function makeContext(storedToken, daemonBase) {
   if (daemonBase) windowObj.__QWEN_DAEMON_BASE__ = daemonBase;
   const sandbox = {
     console,
+    URL: URL, // browsers expose URL as a global; the shim relies on it
     window: windowObj,
     location: windowObj.location,
     XMLHttpRequest: { prototype: { open: function () {} } },
@@ -307,6 +308,29 @@ PREFIX_SCENARIOS = [
         "expect": PREFIX_BASE + "?token=other",
     },
     {"stored": None, "url": PREFIX_BASE, "expect": PREFIX_BASE},
+    # P1411 round 2: the login token never leaves the bridge destination.
+    # Cross-origin and unrelated same-origin URLs are preserved untouched.
+    {
+        "stored": "tok-123",
+        "url": "wss://evil.example/socket",
+        "expect": "wss://evil.example/socket",
+    },
+    {
+        "stored": "tok-123",
+        "url": "ws://testserver/other-service/ws",
+        "expect": "ws://testserver/other-service/ws",
+    },
+    {"stored": "tok-123", "url": "/other-service/ws", "expect": "/other-service/ws"},
+    # The shell's own root-absolute WebSocket route is mapped onto the mount
+    # and stays authenticated (the existing success behaviour).
+    {
+        "stored": "tok-123",
+        "url": "/sessions/live-state?x=1",
+        "expect": (
+            "ws://testserver/api/qwen-code-bridge/web/sessions/live-state"
+            "?x=1&token=tok-123"
+        ),
+    },
 ]
 
 DAEMON_SCENARIOS = [
@@ -333,6 +357,35 @@ DAEMON_SCENARIOS = [
         "daemonBase": "/api/qwen-code-bridge/web",
         "url": DAEMON_BASE,
         "expect": PREFIX_BASE,
+    },
+    # P1411 round 2: cross-origin and unrelated same-origin URLs are never
+    # rewritten and never receive the login token.
+    {
+        "stored": "tok-123",
+        "daemonBase": "/api/qwen-code-bridge/web",
+        "url": "wss://evil.example/socket",
+        "expect": "wss://evil.example/socket",
+    },
+    {
+        "stored": "tok-123",
+        "daemonBase": "/api/qwen-code-bridge/web",
+        "url": "ws://testserver/other-service/ws",
+        "expect": "ws://testserver/other-service/ws",
+    },
+    {
+        "stored": "tok-123",
+        "daemonBase": "/api/qwen-code-bridge/web",
+        "url": "/other-service/ws",
+        "expect": "/other-service/ws",
+    },
+    {
+        "stored": "tok-123",
+        "daemonBase": "/api/qwen-code-bridge/web",
+        "url": "/sessions/live-state?x=1",
+        "expect": (
+            "ws://testserver/api/qwen-code-bridge/web/sessions/live-state"
+            "?x=1&token=tok-123"
+        ),
     },
 ]
 

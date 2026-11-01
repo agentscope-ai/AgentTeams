@@ -48,12 +48,58 @@ DEFAULT_SERVE_URL = ""  # resolved from env/serve.json; auto-start allocates a f
 #: Where this proxy is mounted; the embedded console treats it as its root.
 WEB_PREFIX = "/api/qwen-code-bridge/web"
 
+#: WebSocket destination scoping shared by both injected shims (P1411 round
+#: 2): the console's login token (``localStorage["qwenpaw_auth_token"]``) is
+#: attached ONLY to the bridge destination — a same-origin URL whose path is
+#: the mount prefix or below it — and never to a cross-origin URL or an
+#: unrelated same-origin path. The qwen serve web-shell's own WebSocket
+#: routes (``/workspaces``, ``/sessions``, ``/session``, ``/session-groups``,
+#: ``/git``, ``/terminals``) are mapped onto the mount prefix first, so the
+#: shell keeps working when it is served at the origin root; every other URL
+#: is passed through untouched. Plain ES5 (no arrow functions) so it runs in
+#: the console browser as-is and executes directly in the node tests.
+_WS_TARGET_JS = r"""
+function bridgePath(p){return p===B||p.indexOf(B+"/")===0;}
+function shellPath(p){return /^\/(?:workspaces|sessions|session|session-groups|git|terminals)(?:\/|$)/.test(p);}
+function bridgeTarget(u){try{
+  if(typeof u!=="string"||!u)return u;
+  var pageHost=location.host||"";
+  if(!pageHost){var om=/^[a-zA-Z][a-zA-Z0-9+.\-]*:\/\/([^\/]+)/.exec(location.origin||"");if(om)pageHost=om[1];}
+  var m=/^([a-zA-Z][a-zA-Z0-9+.\-]*:)\/\/([^\/?#]*)([^?#]*)(\?[^#]*)?(#.*)?$/.exec(u);
+  var p,search,hash,abs=false;
+  if(m){
+    var scheme=m[1].toLowerCase();
+    if(scheme!=="ws:"&&scheme!=="wss:")return u;
+    if(!pageHost||m[2]!==pageHost)return u;
+    p=m[3]||"/";search=m[4]||"";hash=m[5]||"";abs=true;
+  }else{
+    var base=location.href||((location.origin||"")+(location.pathname||"/"));
+    var a;try{a=new URL(u,base);}catch(e){return u;}
+    p=a.pathname||"/";search=a.search||"";hash=a.hash||"";
+  }
+  var out=u;
+  if(!bridgePath(p)){
+    if(!shellPath(p))return u;
+    var proto=abs?m[1].toLowerCase():((location.protocol==="https:")?"wss:":"ws:");
+    out=proto+"//"+pageHost+B+p+search+hash;
+  }
+  if(/[?&]token=/.test(out))return out;
+  var t=null;try{t=window.localStorage.getItem("qwenpaw_auth_token");}catch(e){}
+  if(!t)return out;
+  return out+(out.indexOf("?")>=0?"&":"?")+"token="+encodeURIComponent(t);
+}catch(e){return u;}}
+"""
+
 #: Injected into the console HTML: prefix every root-absolute request the
-#: shell makes (fetch / XHR / WebSocket / EventSource) so a prefixed mount
-#: behaves like the original origin root. Plain JavaScript (no HTML wrapper)
+#: shell makes (fetch / XHR / EventSource / Worker) so a prefixed mount
+#: behaves like the original origin root; WebSocket URLs go through
+#: ``bridgeTarget`` (see above) instead. ``__BRIDGE_PREFIX__`` and
+#: ``__WS_TARGET_JS__`` are rendered once at import time — the injector and
+#: the tests consume the finished string. Plain JavaScript (no HTML wrapper)
 #: so tests can execute it directly; the injection sites wrap it in
 #: ``<script>``.
 _PREFIX_SHIM = """(function(){
+var B=__BRIDGE_PREFIX__;
 var P=location.pathname.replace(/\\/?[^/]*\\/?$/,"")||"";
 function fix(u){try{
   if(typeof u!=="string") return u;
@@ -71,8 +117,8 @@ var f=window.fetch;if(f){window.fetch=function(u,o){
     var nu=fix(u.url); if(nu!==u.url){u=new Request(nu,u);}
   }}catch(e){}
 var x=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){var a=[].slice.call(arguments);a[1]=fix(u);return x.apply(this,a)};
-function wsAuth(u){try{if(typeof u!=="string")return u;var t=null;try{t=window.localStorage.getItem("qwenpaw_auth_token");}catch(e){}if(!t)return u;if(/[?&]token=/.test(u))return u;return u+(u.indexOf("?")>=0?"&":"?")+"token="+encodeURIComponent(t);}catch(e){}return u;}
-var W=window.WebSocket;if(W){window.WebSocket=function(u,p){return new W(wsAuth(fix(u)),p)};window.WebSocket.prototype=W.prototype;}
+__WS_TARGET_JS__
+var W=window.WebSocket;if(W){window.WebSocket=function(u,p){return new W(bridgeTarget(u),p)};window.WebSocket.prototype=W.prototype;}
 var E=window.EventSource;if(E){window.EventSource=function(u,o){return new E(fix(u),o)};window.EventSource.prototype=E.prototype;}
 var WK=window.Worker;
 if(WK){
@@ -90,7 +136,9 @@ if(WK){
     }
   }catch(e){}return new WK(u,o)};
 }
-})();"""
+})();""".replace("__WS_TARGET_JS__", _WS_TARGET_JS).replace(
+    "__BRIDGE_PREFIX__", json.dumps(WEB_PREFIX)
+)
 
 
 def _rewrite_console_html(html: bytes) -> bytes:
@@ -153,26 +201,17 @@ def web_dist() -> Path | None:
         return None
 
 
-#: Injected by ``_inject_daemon_base`` (rebuilt-shell path): rewrites
-#: origin-absolute WebSocket URLs onto the prefixed origin and appends the
-#: console's stored login token (``localStorage["qwenpaw_auth_token"]``) as
-#: ``?token=`` when one is present (a URL that already carries a ``token=``
-#: query parameter is not re-tokened). Plain JavaScript (no HTML wrapper) so
+#: Injected by ``_inject_daemon_base`` (rebuilt-shell path): the same
+#: ``bridgeTarget`` destination scoping, with the mount prefix taken from
+#: ``window.__QWEN_DAEMON_BASE__``. A URL that already carries a ``token=``
+#: query parameter is not re-tokened. Plain JavaScript (no HTML wrapper) so
 #: tests can execute it directly; ``_inject_daemon_base`` wraps it in
 #: ``<script>``.
 _DAEMON_WS_SHIM = (
-    "(function(){var P=window.__QWEN_DAEMON_BASE__||'';"
-    "var W=window.WebSocket;if(!W||!P)return;"
-    "function fix(u){try{var s=String(u);var o=location.origin"
-    ".replace('http://','ws://').replace('https://','wss://');"
-    "if(s.indexOf(o+'/')===0&&s.indexOf(o+P+'/')!==0)return o+P+s.slice(o.length);"
-    "if(s.charAt(0)==='/'&&s.indexOf(P+'/')!==0)return (o+P+s);}catch(e){}return u;}"
-    "function wsAuth(u){try{if(typeof u!=='string')return u;var t=null;"
-    "try{t=window.localStorage.getItem('qwenpaw_auth_token');}catch(e){}"
-    "if(!t)return u;if(/[?&]token=/.test(u))return u;"
-    "return u+(u.indexOf('?')>=0?'&':'?')+'token='+encodeURIComponent(t);}"
-    "catch(e){}return u;}"
-    "window.WebSocket=function(u,p){return new W(wsAuth(fix(u)),p)};"
+    "(function(){var B=window.__QWEN_DAEMON_BASE__||'';"
+    "var W=window.WebSocket;if(!W||!B)return;"
+    + _WS_TARGET_JS
+    + "window.WebSocket=function(u,p){return new W(bridgeTarget(u),p)};"
     "window.WebSocket.prototype=W.prototype;})()"
 )
 

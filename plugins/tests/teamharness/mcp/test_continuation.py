@@ -1182,21 +1182,28 @@ def test_cancel_sync_failure_is_retryable_and_repairs_without_changing_reason(
         "INTERRUPTED",
     ],
 )
-def test_submit_and_check_tolerate_a_failed_pull_but_accept_fails_closed(
+def test_failed_pull_fails_closed_for_submit_and_accept_but_check_still_reads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     successful_side_effects: dict[str, list[Any]],
     result_status: str,
 ) -> None:
-    """Round 9 (#1467) replaced the former pull-fail-accept-ok contract:
-    submit (which never pulls) and check (best-effort pull, surfaced as
-    ``pulled``) still succeed while the authoritative task pull fails,
-    but the cross-actor accept loads the authoritative task first and
-    now refuses to write the stale local copy back — the decision errors
-    out, the local task/project state is untouched and nothing is
-    committed to shared storage."""
+    """Round 11 (#1467) extends the W2 invariant to every whole-task
+    writer: submit_task loads the authoritative task before its write and
+    fails closed on a failed pull (round 9 left it on the local copy), and
+    the cross-actor accept keeps the same fail-closed behaviour.
+    check_task stays a read, so it still succeeds and surfaces
+    ``pulled`` — a reader may tolerate a failed pull, a writer may not."""
     project_id, task_id = _write_project_and_task(tmp_path)
     monkeypatch.setattr(server, "_pull_task", lambda *_args, **_kwargs: False)
+
+    task_path = tmp_path / "shared" / "tasks" / task_id / "meta.json"
+    project_path = tmp_path / "shared" / "projects" / project_id / "meta.json"
+    before_task = task_path.read_bytes()
+    before_project = project_path.read_bytes()
+    before_side_effect_counts = {
+        name: len(calls) for name, calls in successful_side_effects.items()
+    }
 
     submitted = _submit(tmp_path, task_id, status=result_status)
     checked = _tool_payload(
@@ -1208,14 +1215,6 @@ def test_submit_and_check_tolerate_a_failed_pull_but_accept_fails_closed(
             "payload": {"taskId": task_id},
         },
     )
-    task_path = tmp_path / "shared" / "tasks" / task_id / "meta.json"
-    project_path = tmp_path / "shared" / "projects" / project_id / "meta.json"
-    before_task = task_path.read_bytes()
-    before_project = project_path.read_bytes()
-    before_side_effect_counts = {
-        name: len(calls) for name, calls in successful_side_effects.items()
-    }
-
     accepted = _tool_payload(
         "projectflow",
         {
@@ -1224,27 +1223,29 @@ def test_submit_and_check_tolerate_a_failed_pull_but_accept_fails_closed(
             "payload": {
                 "projectId": project_id,
                 "taskId": task_id,
-                "submissionId": submitted["task"]["submission_id"],
                 "resultStatus": result_status,
                 "summary": "Review the submitted result.",
             },
         },
     )
 
-    # Unchanged by round 9: a failed pull does not block submit/check.
-    assert submitted["ok"] is True
-    assert submitted["task"]["result_status"] == result_status
+    # Round 11: the submit is a whole-task write, so a failed authoritative
+    # pull fails closed instead of writing the stale local copy back.
+    assert submitted["ok"] is False
+    assert "stale local copy" in submitted["error"]
+    # The read-only check still succeeds (it may read the local copy) and
+    # reports that the pull did not land: the task is not submitted because
+    # the submit itself failed closed.
     assert checked["ok"] is True
-    assert checked["effective"] is True
-    assert checked["validationErrors"] == []
-    assert checked["result"]["status"] == result_status
+    assert checked["pulled"] is False
+    assert checked["effective"] is False
     # The cross-actor accept fails closed on the failed authoritative
     # pull (the ValueError raised by _load_authoritative_task, surfaced
     # through the projectflow error wrapper) ...
     assert accepted["ok"] is False
     assert "stale local copy" in accepted["error"]
-    # ... and wrote nothing back: local state untouched, nothing
-    # committed to shared storage.
+    # ... and every writer wrote nothing back: local state untouched,
+    # nothing committed to shared storage.
     assert task_path.read_bytes() == before_task
     assert project_path.read_bytes() == before_project
     assert {

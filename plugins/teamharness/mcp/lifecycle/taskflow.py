@@ -30,7 +30,7 @@ from mcp.artifact.publish import (
     _normalize_workspace_artifact_path,
     _path_is_under,
 )
-from mcp.artifact.sync import _load_authoritative_task
+from mcp.artifact.sync import _load_authoritative_task, _load_authoritative_task_optional
 from mcp.room.matrix import _team_human_matrix_ids, _team_leader_matrix_id
 from mcp.room.notify import _send_attention_notification, _task_completion_notification
 from .review import (
@@ -317,8 +317,17 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                         assigned_to = str(item.get("assigned_to") or item.get("assignedTo") or "").strip()
                         break
             _validate_assignment_room(project, room_id)
+            # W2 round 11 (#1467): a re-delegation rewrites the whole task
+            # record, so the existing copy must come from shared storage, not
+            # from the leader's cache (a stale cache would erase a peer's
+            # freeze / approval record). A genuinely absent task keeps the
+            # creation path; a FAILED pull fails closed.
+            existing_task = _load_authoritative_task_optional(arguments, task_id)
+            if existing_task is None:
+                existing_task = _read_json(
+                    _task_state_path(arguments, task_id), {"project_id": project_id}
+                )
             _validate_task_redelegation(arguments, project, task_id, room_id)
-            existing_task = _read_json(_task_state_path(arguments, task_id), {"project_id": project_id})
             _require_task_mutable(arguments, existing_task, task_id, action, to_status="assigned")
             assigned_to = str(payload.get("assignedTo") or payload.get("assigned_to") or "").strip()
             if not assigned_to:
@@ -636,8 +645,12 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             local_task = _read_json(_task_state_path(arguments, task_id))
             if local_task:
                 _require_task_mutable(arguments, local_task, task_id, action, to_status="in_progress")
-            pulled = _pull_task(arguments, task_id)
-            task = _load_task(arguments, task_id)
+            # W2 round 11 (#1467): the authoritative task first — a worker
+            # write-back mirrors the WHOLE local directory, so the stale
+            # cached copy must never be the write base (fail closed on a
+            # failed pull).
+            task = _load_authoritative_task(arguments, task_id)
+            pulled = True
             _require_task_mutable(arguments, task, task_id, action, to_status="in_progress")
             if task.get("status") != "submitted":
                 # Tightening: ack only makes sense after the assignment
@@ -681,7 +694,11 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             if role not in {"worker", "remote-member"}:
                 raise ValueError("submit_task requires worker or remote-member role")
             task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
-            task = _load_task(arguments, task_id)
+            # W2 round 11 (#1467): same invariant as ack/report/review — the
+            # whole task directory is mirrored back, so the write must start
+            # from the authoritative copy (a stale cache would drop a peer's
+            # freeze or approval record). Fail closed on a failed pull.
+            task = _load_authoritative_task(arguments, task_id)
             _require_task_mutable(arguments, task, task_id, action, to_status="submitted")
             summary = str(payload.get("summary") or "")
             status = _validate_task_result_status(payload.get("status"))
@@ -966,8 +983,10 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     "report_progress requires worker or remote-member role"
                 )
             task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
-            _pull_task(arguments, task_id)
-            task = _load_task(arguments, task_id)
+            # W2 round 11 (#1467): authoritative task, fail closed — the
+            # previous pull ignored its own failure and fell back to the
+            # stale local copy.
+            task = _load_authoritative_task(arguments, task_id)
             _require_task_mutable(arguments, task, task_id, action)
             # Progress notes only exist while the task is actually in flight.
             _progress_from = str(task.get("status") or "")
@@ -1025,7 +1044,12 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     "request_attention requires worker, leader, or remote-member role"
                 )
             task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
-            task = _load_task(arguments, task_id)
+            # W2 round 11 (#1467): request_attention appends to the task and
+            # mirrors the whole directory back, so an ordinary question on a
+            # stale cache would erase a peer's persisted freeze, approval
+            # record and decision_status_history. Load the authoritative task
+            # first and fail closed when it cannot be retrieved.
+            task = _load_authoritative_task(arguments, task_id)
             _require_task_mutable(arguments, task, task_id, action)
             kind = str(payload.get("kind") or "other").strip().lower()
             if kind not in {"approval", "decision", "escalation", "other"}:

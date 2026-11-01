@@ -2680,3 +2680,117 @@ def test_r10_legacy_no_task_refused_with_enforcement_on(
 
     assert result["ok"] is False
     assert result["error_code"] == "task_not_found"
+
+
+# --- Round 11 (#1467): request_attention is a whole-task write too --------
+#
+# The maintainer's round-11 repro: after submission the leader caches the
+# submitted/open task; the worker's approval requests stall into
+# decision_status=frozen (approval record + decision_status_history in
+# shared storage). An ordinary request_attention(kind=other) on the cached
+# copy then mirrored the whole stale directory back and erased the freeze,
+# the approval and the history. Like review/cancel/accept, the action now
+# loads the authoritative task first and fails closed on a failed pull.
+
+
+def test_r11_request_attention_preserves_remote_frozen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shared_remote: dict[str, Any],
+    attention_env: None,
+) -> None:
+    """The maintainer's repro: an ordinary question must not erase a
+    persisted freeze, approval record or history."""
+    _enforce_on(monkeypatch)
+    cached = _write_submitted_task(tmp_path, submitted_by="worker:alice")
+    frozen = _r9_freeze(cached)
+    shared_remote["remote"] = frozen
+
+    result = _request_attention(tmp_path, kind="other", question="Operator note?")
+
+    assert result["ok"] is True
+    committed = shared_remote["committed"]
+    assert committed is not None
+    # The frozen state, the approval record and the history survived.
+    assert committed["decision_status"] == "frozen"
+    assert committed["decision_status_history"] == frozen["decision_status_history"]
+    assert committed["attention"][0] == _r9_frozen_record()
+    # ... and the new question was appended on top.
+    assert committed["attention"][-1]["question"] == "Operator note?"
+    assert committed["attention"][-1]["kind"] == "other"
+
+
+def test_r11_request_attention_refreshed_control_stays_preserved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shared_remote: dict[str, Any],
+    attention_env: None,
+) -> None:
+    """The control the maintainer pairs with the repro: refreshing the cache
+    first (the pull the action now performs) keeps the freeze too."""
+    _enforce_on(monkeypatch)
+    cached = _write_submitted_task(tmp_path, submitted_by="worker:alice")
+    shared_remote["remote"] = _r9_freeze(cached)
+    # An explicit refresh before the call: what a well-behaved leader does.
+    server._pull_task({"workspaceDir": str(tmp_path)}, TASK_ID)
+
+    result = _request_attention(tmp_path, kind="other", question="Operator note?")
+
+    assert result["ok"] is True
+    committed = shared_remote["committed"]
+    assert committed["decision_status"] == "frozen"
+    assert committed["decision_status_history"] == _r9_freeze({})["decision_status_history"]
+    assert committed["attention"][-1]["question"] == "Operator note?"
+
+
+def test_r11_request_attention_pull_failure_refuses_stale_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shared_remote: dict[str, Any],
+    attention_env: None,
+) -> None:
+    """Fail closed: an unreadable authoritative task must not be replaced by
+    the stale local cache (which would erase the freeze)."""
+    _enforce_on(monkeypatch)
+    cached = _write_submitted_task(tmp_path, submitted_by="worker:alice")
+    shared_remote["remote"] = _r9_freeze(cached)
+    shared_remote["pull_ok"] = False
+
+    result = _request_attention(tmp_path, kind="other", question="Operator note?")
+
+    assert result["ok"] is False
+    assert "stale local copy" in result["error"]
+    assert shared_remote["committed"] is None
+
+
+def test_r11_submit_preserves_remote_frozen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shared_remote: dict[str, Any],
+    attention_env: None,
+) -> None:
+    """submit_task writes the whole task back too: a worker submitting from a
+    stale cache must not erase a freeze another actor persisted."""
+    _enforce_on(monkeypatch)
+    cached = _write_submitted_task(tmp_path, submitted_by="worker:alice")
+    frozen = _r9_freeze(cached)
+    shared_remote["remote"] = frozen
+
+    result = _submit(tmp_path)
+
+    assert result["ok"] is True
+    committed = shared_remote["committed"]
+    assert committed is not None
+    assert committed["status"] == "submitted"
+    assert committed["decision_status"] == "frozen"
+    assert committed["attention"] == frozen["attention"]
+    assert committed["decision_status_history"] == frozen["decision_status_history"]
+
+
+def test_r11_submit_pull_failure_refuses_stale_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shared_remote: dict[str, Any],
+    attention_env: None,
+) -> None:
+    """submit_task fails closed when the authoritative task cannot be read."""
+    _enforce_on(monkeypatch)
+    cached = _write_submitted_task(tmp_path, submitted_by="worker:alice")
+    shared_remote["remote"] = _r9_freeze(cached)
+    shared_remote["pull_ok"] = False
+
+    result = _submit(tmp_path)
+
+    assert result["ok"] is False
+    assert "stale local copy" in result["error"]
+    assert shared_remote["committed"] is None

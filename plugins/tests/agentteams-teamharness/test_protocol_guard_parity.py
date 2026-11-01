@@ -1366,3 +1366,146 @@ def test_r8_parity_missing_server_marker_fails_closed(
     assert result["ok"] is False
     assert result["error_code"] == "approval_required"
     assert _task_meta(tmp_path)["status"] == "submitted"
+
+
+# --- Round 11 (#1467) parity: request_attention / submit are whole-task
+# writes — they must load the authoritative task and fail closed. ----------
+
+
+@pytest.fixture
+def shared_remote(
+    monkeypatch: pytest.MonkeyPatch, storage: None
+) -> dict[str, Any]:
+    """Two-plane shared-storage model (bundle copy): a hidden 'remote' meta
+    plus the local meta.json the action reads; a failed pull is scriptable."""
+    planes: dict[str, Any] = {"remote": None, "committed": None, "pull_ok": True}
+
+    def fake_pull(_arguments: Any, task_id: Any, **_kw: Any) -> bool:
+        if not planes["pull_ok"]:
+            return False
+        if planes["remote"] is not None:
+            server._write_json(
+                server._task_state_path(_arguments, str(task_id)), planes["remote"]
+            )
+        return True
+
+    def fake_sync(_arguments: Any, task_id: Any, **kw: Any) -> bool:
+        planes["committed"] = server._read_json(
+            server._task_state_path(_arguments, str(task_id))
+        )
+        return True
+
+    monkeypatch.setattr(server, "_pull_task", fake_pull)
+    monkeypatch.setattr(server, "_sync_task", fake_sync)
+    return planes
+
+
+def _r11_frozen_record() -> dict[str, Any]:
+    return {
+        "kind": "approval",
+        "question": "Approve the result?",
+        "attempt": 1,
+        "resolved": True,
+        "eventId": "$att-approval-1",
+        "stall_count": 3,
+        "resolvedVia": "im_reply",
+        "resolvedBy": "human:@approver:example.test",
+        "resolveEvidence": {"messageId": "$m1", "note": "approved in room"},
+        "resolvedRole": "human",
+        "resolvedActor": "human:@approver:example.test",
+    }
+
+
+def _r11_freeze(task: dict[str, Any]) -> dict[str, Any]:
+    frozen = dict(task)
+    frozen["decision_status"] = "frozen"
+    frozen["attention"] = [_r11_frozen_record()]
+    frozen["decision_status_history"] = [
+        {
+            "ts": "2026-11-01T00:00:00Z",
+            "from": "open",
+            "to": "blocked",
+            "reason": "attention stalled 2 times without an answer",
+            "source": "attention:approval",
+        },
+        {
+            "ts": "2026-11-01T00:01:00Z",
+            "from": "blocked",
+            "to": "frozen",
+            "reason": "attention stalled 3 times without an answer",
+            "source": "attention:approval",
+        },
+    ]
+    return frozen
+
+
+def test_r11_parity_request_attention_preserves_remote_frozen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shared_remote: dict[str, Any],
+    attention_env: None,
+) -> None:
+    """The maintainer's repro in the bundle tree: an ordinary question must
+    not erase a persisted freeze, approval record or history."""
+    _enforce_on(monkeypatch)
+    cached = _write_submitted_task(tmp_path, submitted_by="worker:alice")
+    frozen = _r11_freeze(cached)
+    shared_remote["remote"] = frozen
+
+    result = _request_attention(tmp_path, kind="other", question="Operator note?")
+
+    assert result["ok"] is True
+    committed = shared_remote["committed"]
+    assert committed is not None
+    assert committed["decision_status"] == "frozen"
+    assert committed["decision_status_history"] == frozen["decision_status_history"]
+    assert committed["attention"][0] == _r11_frozen_record()
+    assert committed["attention"][-1]["question"] == "Operator note?"
+
+
+def test_r11_parity_request_attention_pull_failure_refuses_stale_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shared_remote: dict[str, Any],
+    attention_env: None,
+) -> None:
+    _enforce_on(monkeypatch)
+    cached = _write_submitted_task(tmp_path, submitted_by="worker:alice")
+    shared_remote["remote"] = _r11_freeze(cached)
+    shared_remote["pull_ok"] = False
+
+    result = _request_attention(tmp_path, kind="other", question="Operator note?")
+
+    assert result["ok"] is False
+    assert "stale local copy" in result["error"]
+    assert shared_remote["committed"] is None
+
+
+def test_r11_parity_submit_preserves_remote_frozen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shared_remote: dict[str, Any],
+    attention_env: None,
+) -> None:
+    _enforce_on(monkeypatch)
+    cached = _write_submitted_task(tmp_path, submitted_by="worker:alice")
+    frozen = _r11_freeze(cached)
+    shared_remote["remote"] = frozen
+
+    result = _submit(tmp_path)
+
+    assert result["ok"] is True
+    committed = shared_remote["committed"]
+    assert committed["status"] == "submitted"
+    assert committed["decision_status"] == "frozen"
+    assert committed["decision_status_history"] == frozen["decision_status_history"]
+
+
+def test_r11_parity_submit_pull_failure_refuses_stale_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shared_remote: dict[str, Any],
+    attention_env: None,
+) -> None:
+    _enforce_on(monkeypatch)
+    cached = _write_submitted_task(tmp_path, submitted_by="worker:alice")
+    shared_remote["remote"] = _r11_freeze(cached)
+    shared_remote["pull_ok"] = False
+
+    result = _submit(tmp_path)
+
+    assert result["ok"] is False
+    assert "stale local copy" in result["error"]
+    assert shared_remote["committed"] is None

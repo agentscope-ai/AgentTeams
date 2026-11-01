@@ -11,7 +11,7 @@ import (
 const mcLsSpaceFileLine = `{"type":"file","size":6,"title":"meeting notes.txt","modified":"2026-11-01T02:33:00.000Z","etag":"d41d8cd98f00b204e9800998ecf8427e"}`
 
 func TestParseMCLsJSONPreservesSpacesInNames(t *testing.T) {
-	infos, err := parseMCLsJSON(mcLsSpaceFileLine + "\n", "")
+	infos, err := parseMCLsJSON(mcLsSpaceFileLine+"\n", "")
 	if err != nil {
 		t.Fatal(err)
 	}

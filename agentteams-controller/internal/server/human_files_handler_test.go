@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -71,7 +72,16 @@ func hfReq(t *testing.T, method, name, path string, caller *authpkg.CallerIdenti
 	t.Helper()
 	target := "/api/v1/humans/" + name + "/files"
 	if path != "" {
-		target += "/" + path
+		// Percent-encode each segment: a raw space (space-bearing file
+		// names) is not a legal request-target and makes
+		// httptest.NewRequest panic on Go 1.25. A real client sends this
+		// same encoded form over the wire, and the handler still sees the
+		// raw name — PathValue is set from path below.
+		segs := strings.Split(path, "/")
+		for i, s := range segs {
+			segs[i] = url.PathEscape(s)
+		}
+		target += "/" + strings.Join(segs, "/")
 	}
 	req := httptest.NewRequest(method, target, body)
 	req.SetPathValue("name", name)
@@ -1019,6 +1029,162 @@ func TestHumanFiles_QuotaEnforcement(t *testing.T) {
 	}
 	if coded.Code != "quota_exceeded" {
 		t.Fatalf("code = %q, want quota_exceeded", coded.Code)
+	}
+}
+
+// TestHumanFiles_QuotaSpaceBearingNamesAreCounted is the round-4 P1-A
+// end-to-end regression in the maintainer's own repro shape: a file whose
+// name contains spaces, plus a file inside a directory whose name contains
+// spaces, must count their real bytes against the quota. With the old
+// space-splitting listing parser the key "meeting notes.txt" was truncated
+// to "notes.txt", its stat answered NotExist, and the bytes silently
+// dropped out of the usage total — a 6-byte file read as 0 and the quota
+// never engaged.
+func TestHumanFiles_QuotaSpaceBearingNamesAreCounted(t *testing.T) {
+	hfh, _, _ := newHumanFilesRig(t)
+
+	// Quota 10, set before the uploads.
+	if rec := hfPutQuota(t, hfh, "alice", hfAdmin(), `{"quotaBytes":10}`); rec.Code != http.StatusOK {
+		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
+	}
+	// 6 bytes under a space-bearing file name.
+	if rec := hfPutFile(t, hfh, "alice", "meeting notes.txt", hfSelf(), "012345"); rec.Code != http.StatusOK {
+		t.Fatalf("put space-name file: %d %s", rec.Code, rec.Body.String())
+	}
+	// The listing carries the full name, and the quota counts the real bytes.
+	rec := httptest.NewRecorder()
+	hfh.getFile(rec, hfReq(t, http.MethodGet, "alice", "", hfSelf(), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list root: %d %s", rec.Code, rec.Body.String())
+	}
+	var root humanFileListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &root); err != nil {
+		t.Fatal(err)
+	}
+	if len(root.Entries) != 1 || root.Entries[0].Name != "meeting notes.txt" ||
+		root.Entries[0].Type != "file" || root.Entries[0].Size != 6 {
+		t.Fatalf("root entries = %+v, want one file named \"meeting notes.txt\" at 6 bytes", root.Entries)
+	}
+	q := hfGetQuota(t, hfh, "alice", hfSelf())
+	if q.Code != http.StatusOK {
+		t.Fatalf("get quota: %d %s", q.Code, q.Body.String())
+	}
+	var quota humanQuotaResponse
+	if err := json.Unmarshal(q.Body.Bytes(), &quota); err != nil {
+		t.Fatal(err)
+	}
+	if quota.UsedBytes != 6 || quota.QuotaBytes == nil || *quota.QuotaBytes != 10 {
+		t.Fatalf("quota = %+v, want usedBytes 6 / quota 10", quota)
+	}
+
+	// 3 more bytes inside a space-bearing directory: 9 of 10 used.
+	if rec := hfPutFile(t, hfh, "alice", "my dir/inner.txt", hfSelf(), "abc"); rec.Code != http.StatusOK {
+		t.Fatalf("put in space-name dir: %d %s", rec.Code, rec.Body.String())
+	}
+	// The 3 bytes count immediately: the flat listing key "my dir/inner.txt"
+	// is the stored key itself (prefix + name, counted once), not a
+	// double-prefixed ghost that a stat would miss.
+	q = hfGetQuota(t, hfh, "alice", hfSelf())
+	if q.Code != http.StatusOK {
+		t.Fatalf("get quota after dir put: %d %s", q.Code, q.Body.String())
+	}
+	if err := json.Unmarshal(q.Body.Bytes(), &quota); err != nil {
+		t.Fatal(err)
+	}
+	if quota.UsedBytes != 9 {
+		t.Fatalf("usedBytes after dir put = %d, want 9 (the 3 bytes of \"my dir/inner.txt\" must be counted)", quota.UsedBytes)
+	}
+	// 9 + 10 > 10 -> 413; the old parser saw 0 bytes used and would have
+	// accepted this write.
+	rec = hfPutFile(t, hfh, "alice", "my dir/inner2.txt", hfSelf(), "0123456789")
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("over-quota put: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+	var coded humanFileCodedError
+	if err := json.Unmarshal(rec.Body.Bytes(), &coded); err != nil {
+		t.Fatal(err)
+	}
+	if coded.Code != "quota_exceeded" {
+		t.Fatalf("code = %q, want quota_exceeded", coded.Code)
+	}
+	// The directory lists the kept file under its full name and nothing else;
+	// usage is exactly the real 9 bytes.
+	rec = httptest.NewRecorder()
+	hfh.getFile(rec, hfReq(t, http.MethodGet, "alice", "my dir/", hfSelf(), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list dir: %d %s", rec.Code, rec.Body.String())
+	}
+	var dir humanFileListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &dir); err != nil {
+		t.Fatal(err)
+	}
+	if len(dir.Entries) != 1 || dir.Entries[0].Name != "inner.txt" ||
+		dir.Entries[0].Type != "file" || dir.Entries[0].Size != 3 {
+		t.Fatalf("dir entries = %+v, want only inner.txt at 3 bytes", dir.Entries)
+	}
+	{
+		// Block scope so the unmarshal reads this fresh response: a q := in
+		// the if-init alone ends its scope at the if body, and the assertion
+		// below would silently read the stale step-4 recorder (usedBytes 6).
+		if q := hfGetQuota(t, hfh, "alice", hfSelf()); q.Code != http.StatusOK {
+			t.Fatalf("get quota after 413: %d %s", q.Code, q.Body.String())
+		}
+		if err := json.Unmarshal(q.Body.Bytes(), &quota); err != nil {
+			t.Fatal(err)
+		}
+		if quota.UsedBytes != 9 {
+			t.Fatalf("usedBytes after rejected write = %d, want 9", quota.UsedBytes)
+		}
+	}
+}
+
+// TestHumanFiles_QuotaSpaceBearingNestedDirectories is the round-5 follow-up
+// to the space-bearing quota regression: a file nested two space-bearing
+// directories deep ("a b/c d/x.txt") must count its real bytes. The flat
+// listing key "a b/c d/x.txt" (Memory) and the one-level mc shape
+// (a b/ -> c d/ -> x.txt) must both resolve to the same stored object.
+func TestHumanFiles_QuotaSpaceBearingNestedDirectories(t *testing.T) {
+	hfh, _, _ := newHumanFilesRig(t)
+
+	if rec := hfPutQuota(t, hfh, "alice", hfAdmin(), `{"quotaBytes":10}`); rec.Code != http.StatusOK {
+		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
+	}
+	// 4 bytes two space-bearing directories deep.
+	if rec := hfPutFile(t, hfh, "alice", "a b/c d/x.txt", hfSelf(), "abcd"); rec.Code != http.StatusOK {
+		t.Fatalf("put nested space-name file: %d %s", rec.Code, rec.Body.String())
+	}
+	q := hfGetQuota(t, hfh, "alice", hfSelf())
+	if q.Code != http.StatusOK {
+		t.Fatalf("get quota: %d %s", q.Code, q.Body.String())
+	}
+	var quota humanQuotaResponse
+	if err := json.Unmarshal(q.Body.Bytes(), &quota); err != nil {
+		t.Fatal(err)
+	}
+	if quota.UsedBytes != 4 {
+		t.Fatalf("usedBytes = %d, want 4 (\"a b/c d/x.txt\" must be counted)", quota.UsedBytes)
+	}
+	// 4 + 7 > 10 -> 413, and usage stays at the real 4 after the rejection.
+	rec := hfPutFile(t, hfh, "alice", "a b/c d/y.txt", hfSelf(), "0123456")
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("over-quota put: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+	var coded humanFileCodedError
+	if err := json.Unmarshal(rec.Body.Bytes(), &coded); err != nil {
+		t.Fatal(err)
+	}
+	if coded.Code != "quota_exceeded" {
+		t.Fatalf("code = %q, want quota_exceeded", coded.Code)
+	}
+	q2 := hfGetQuota(t, hfh, "alice", hfSelf())
+	if q2.Code != http.StatusOK {
+		t.Fatalf("get quota after 413: %d %s", q2.Code, q2.Body.String())
+	}
+	if err := json.Unmarshal(q2.Body.Bytes(), &quota); err != nil {
+		t.Fatal(err)
+	}
+	if quota.UsedBytes != 4 {
+		t.Fatalf("usedBytes after rejected write = %d, want 4", quota.UsedBytes)
 	}
 }
 
@@ -3165,5 +3331,128 @@ func TestHumanFiles_TrashPurgeAfterLeaseExpiryQuotaRace(t *testing.T) {
 	}
 	if rec := hfPutFile(t, h1, "alice", "g.txt", hfSelf(), "0123456789"); rec.Code != http.StatusRequestEntityTooLarge {
 		t.Errorf("upload after the stale purge: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// --- Round 4 P1-A regressions: usedBytes must not swallow NotExist --------
+
+// ghostStatOSS simulates the listing/stat race window: its stat answers
+// os.ErrNotExist for the first `faults` calls on `key`, and when `ghost` is
+// set its listing carries `key` as a phantom entry (a listing snapshot
+// taken before the key was deleted out-of-band).
+type ghostStatOSS struct {
+	*ossfake.Memory
+	key    string
+	faults int
+	ghost  bool
+}
+
+func (g *ghostStatOSS) StatMeta(ctx context.Context, key string) (oss.ObjectMeta, error) {
+	if key == g.key && g.faults > 0 {
+		g.faults--
+		return oss.ObjectMeta{}, os.ErrNotExist
+	}
+	return g.Memory.StatMeta(ctx, key)
+}
+
+func (g *ghostStatOSS) ListObjectsDetailed(ctx context.Context, prefix string) ([]oss.ObjectInfo, error) {
+	infos, err := g.Memory.ListObjectsDetailed(ctx, prefix)
+	if err != nil {
+		return nil, err
+	}
+	if g.ghost && strings.HasPrefix(g.key, prefix) {
+		infos = append(infos, oss.ObjectInfo{Name: strings.TrimPrefix(g.key, prefix)})
+	}
+	return infos, nil
+}
+
+// TestHumanFiles_QuotaStatNotExistRetriesInsteadOfZero is the round-4 P1-A
+// regression: a listed key whose stat answers NotExist on the first pass
+// (the listing/stat race window) must be re-verified, not silently counted
+// as zero — counting it zero is exactly how the truncated space-name key
+// bypassed the quota.
+func TestHumanFiles_QuotaStatNotExistRetriesInsteadOfZero(t *testing.T) {
+	_, store, k8s := newHumanFilesRig(t)
+	ctx := context.Background()
+
+	key := humanFilesPrefix("alice") + "meeting notes.txt"
+	if err := store.PutObject(ctx, key, []byte("012345")); err != nil {
+		t.Fatal(err)
+	}
+
+	// The first stat of the key faults with NotExist; the retry sees the
+	// object.
+	ghost := &ghostStatOSS{Memory: store, key: key, faults: 1}
+	h2 := NewHumanFilesHandler(k8s, "default", ghost, audit.NewClient(ghost))
+
+	rec := hfGetQuota(t, h2, "alice", hfSelf())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get quota: %d %s", rec.Code, rec.Body.String())
+	}
+	var q humanQuotaResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &q); err != nil {
+		t.Fatal(err)
+	}
+	if q.UsedBytes != 6 {
+		t.Fatalf("usedBytes = %d, want 6 (a NotExist stat must be re-verified, not counted as zero)", q.UsedBytes)
+	}
+}
+
+// TestHumanFiles_QuotaUnverifiableUsageFailsClosed is the round-4 P1-A
+// regression's conservative side: a listed key that still does not exist
+// after the retry (deleted out-of-band between the listing snapshot and
+// both stats) makes the usage unverifiable. Every consumer must fail
+// closed — GET /quota reports 500 instead of an understated total, and a
+// PUT whose reservation would have to re-seed the ledger is rejected with
+// 500 instead of proceeding against an unknown base.
+func TestHumanFiles_QuotaUnverifiableUsageFailsClosed(t *testing.T) {
+	h1, store, k8s := newHumanFilesRig(t)
+	ctx := context.Background()
+
+	// Seed the quota (and its ledger) while the store is consistent...
+	if rec := hfPutQuota(t, h1, "alice", hfAdmin(), `{"quotaBytes":10}`); rec.Code != http.StatusOK {
+		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
+	}
+	// ...then drop the ledger so the next reservation must re-seed it from
+	// live usage through the faulty scan.
+	if err := store.DeleteObject(ctx, humanQuotaLedgerKey("alice")); err != nil {
+		t.Fatal(err)
+	}
+
+	// The listing carries a key whose stats answer NotExist: deleted
+	// out-of-band between the listing snapshot and the scan.
+	key := humanFilesPrefix("alice") + "gone.txt"
+	ghost := &ghostStatOSS{Memory: store, key: key, faults: 4, ghost: true}
+	h2 := NewHumanFilesHandler(k8s, "default", ghost, audit.NewClient(ghost))
+
+	if rec := hfGetQuota(t, h2, "alice", hfSelf()); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("get quota with unverifiable usage: got %d, want 500: %s", rec.Code, rec.Body.String())
+	}
+	// The conservative write gate: the reservation cannot be computed, so
+	// the upload is rejected with 500 — not accepted (200) and not a quota
+	// verdict (413).
+	if rec := hfPutFile(t, h2, "alice", "victim.txt", hfSelf(), "012345"); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("put with unverifiable usage: got %d, want 500: %s", rec.Code, rec.Body.String())
+	}
+	if _, err := store.StatMeta(ctx, humanFilesPrefix("alice")+"victim.txt"); err == nil {
+		t.Fatal("the rejected write landed in the store")
+	}
+
+	// Once the listing and the store agree again, usage is verifiable and
+	// the flow recovers: the quota re-seeds from zero and the upload fits.
+	ghost.ghost = false
+	rec := hfGetQuota(t, h2, "alice", hfSelf())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get quota after recovery: %d %s", rec.Code, rec.Body.String())
+	}
+	var q humanQuotaResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &q); err != nil {
+		t.Fatal(err)
+	}
+	if q.UsedBytes != 0 {
+		t.Fatalf("usedBytes after recovery = %d, want 0", q.UsedBytes)
+	}
+	if rec := hfPutFile(t, h2, "alice", "victim.txt", hfSelf(), "012345"); rec.Code != http.StatusOK {
+		t.Fatalf("put after recovery: got %d, want 200: %s", rec.Code, rec.Body.String())
 	}
 }

@@ -134,6 +134,12 @@ TASK_ROOM_CACHE_TTL_MS = 30_000
 MATRIX_EVENT_PROTOCOL_LIMIT_BYTES = 64 * 1024
 MATRIX_TEXT_EVENT_SAFE_BYTES = (MATRIX_EVENT_PROTOCOL_LIMIT_BYTES * 3) // 4
 MATRIX_TEXT_EVENT_FALLBACK_BUDGET_BYTES = MATRIX_TEXT_EVENT_SAFE_BYTES - 1024
+#: A long-text summary is only a preview, so an encrypted room gets a much
+#: smaller plaintext budget: encryption adds base64 (4/3) plus the megolm
+#: envelope and the outer event fields, and the server rejects PDUs over
+#: 65535 bytes outright (M_TOO_LARGE). A 105 KB message must still leave room
+#: for the envelope; 16 KiB of preview is plenty for a summary.
+MATRIX_TEXT_EVENT_ENCRYPTED_BUDGET_BYTES = 16 * 1024
 MATRIX_LONG_MESSAGE_METADATA_KEY = "com.agentteams.long_message"
 TEAMHARNESS_TRIGGER_CONTENT_KEY = "m.teamharness.trigger"
 TEAMHARNESS_SELF_TRIGGER_TYPES = frozenset({"PROJECT_REQUESTED"})
@@ -3686,6 +3692,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         path: Path,
         media_uri: Optional[str],
         build_content: Callable[[str], Dict[str, Any]],
+        budget_bytes: int = MATRIX_TEXT_EVENT_FALLBACK_BUDGET_BYTES,
     ) -> Dict[str, Any]:
         low = 0
         high = len(text or "")
@@ -3699,7 +3706,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 preview_chars,
             )
             content = build_content(summary)
-            if _matrix_event_payload_size(content) <= MATRIX_TEXT_EVENT_FALLBACK_BUDGET_BYTES:
+            if _matrix_event_payload_size(content) <= budget_bytes:
                 best_content = content
                 low = preview_chars + 1
             else:
@@ -3774,22 +3781,62 @@ class AgentTeamsMatrixChannel(BaseChannel):
             _attach_long_message_metadata(content, long_message_metadata)
             return content
 
+        budget = (
+            MATRIX_TEXT_EVENT_ENCRYPTED_BUDGET_BYTES
+            if encrypted
+            else MATRIX_TEXT_EVENT_FALLBACK_BUDGET_BYTES
+        )
         content = self._bounded_long_message_content(
             text,
             path,
             media_uri,
             build_content,
+            budget_bytes=budget,
         )
         resp = await self._room_send_with_retry(
             room_id,
             "m.room.message",
             content,
         )
+        if isinstance(resp, RoomSendError):
+            # M_TOO_LARGE (and friends) mean the server rejected the summary
+            # event. The attachment is the deliverable, so retry once with the
+            # smallest preview and never abandon the file event.
+            logger.warning(
+                "MatrixChannel: long-text summary rejected (%s %s) "
+                "room_id=%s; retrying with a minimal summary component=matrix",
+                getattr(resp, "status_code", "?"),
+                getattr(resp, "message", ""),
+                room_id,
+            )
+            content = self._bounded_long_message_content(
+                text,
+                path,
+                media_uri,
+                build_content,
+                budget_bytes=1024,
+            )
+            resp = await self._room_send_with_retry(
+                room_id,
+                "m.room.message",
+                content,
+            )
         event_id = getattr(resp, "event_id", None)
+        if isinstance(resp, RoomSendError):
+            logger.error(
+                "MatrixChannel: long-text summary still rejected (%s %s) "
+                "room_id=%s; delivering the attachment without a summary "
+                "component=matrix",
+                getattr(resp, "status_code", "?"),
+                getattr(resp, "message", ""),
+                room_id,
+            )
+            event_id = None
         parent_event_id = edit_event_id or event_id
-        if media_uri and parent_event_id:
+        if media_uri:
             file_meta = dict(meta or {})
-            file_meta["matrixAttachmentParentEventId"] = parent_event_id
+            if parent_event_id:
+                file_meta["matrixAttachmentParentEventId"] = parent_event_id
             try:
                 await self._send_uploaded_media_event(
                     room_id,

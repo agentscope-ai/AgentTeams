@@ -1,9 +1,14 @@
-"""P3c: OpenClaw upstream tag pin (no native Matrix patch series).
+"""P3: runtime version pins (OpenClaw upstream tag + QwenPaw pip spec).
 
 The AgentTeams Matrix bundle is a separate plugin/config projection; it does
 not patch OpenClaw's ``extensions/matrix`` sources. This test asserts the
 OpenClaw pin is an upstream tag and that no AgentTeams native patch context
 leaks back into the build.
+
+It also pins the QwenPaw runtime: ``QWENPAW_PIP_SPEC`` — the
+``qwenpaw==X.Y.Z`` pip spec the QwenPaw runtime images install in
+``qwenpaw/Dockerfile`` (the worker) and ``manager/Dockerfile.qwenpaw``
+(the QwenPaw Manager).
 
 It also guards the derived openclaw-base tag line: the immutable base tag
 lives in ``hack/versions.env`` (derived from the pin), and every CI-consumed
@@ -25,6 +30,7 @@ MAKEFILE = ROOT / "Makefile"
 
 OPENCLAW_TAG = "v2026.10.9"
 UPSTREAM_REPO = "https://github.com/openclaw/openclaw.git"
+QWENPAW_PIP_SPEC = "qwenpaw==2.2.2.post1"
 
 # Legacy April base pin — must not appear in any CI-consumed file.
 # The value is assembled at runtime from fragments so the legacy tag does not
@@ -45,6 +51,18 @@ BASE_TAG_CONSUMER_GLOBS = (
     (ROOT / "hack", "*.sh"),
 )
 
+#: Every source pin in hack/versions.env maps to (dockerfile path, ARG name) —
+#: or, for QWENPAW_PIP_SPEC, to the two Dockerfiles that consume it
+#: (qwenpaw runtime image + manager variant). OPENCLAW_BASE_TAG is derived,
+#: not a source pin, so it is not in this mapping.
+PIN_TARGETS: dict[str, "tuple[str, str] | list[tuple[str, str]]"] = {
+    "OPENCLAW_TAG": ("openclaw-base/Dockerfile", "OPENCLAW_TAG"),
+    "QWENPAW_PIP_SPEC": [
+        ("qwenpaw/Dockerfile", "QWENPAW_PIP_SPEC"),
+        ("manager/Dockerfile.qwenpaw", "QWENPAW_PIP_SPEC"),
+    ],
+}
+
 
 def _parse_env(path: Path) -> dict[str, str]:
     env: dict[str, str] = {}
@@ -60,9 +78,25 @@ def _parse_env(path: Path) -> dict[str, str]:
     return env
 
 
-def test_versions_env_is_openclaw_only() -> None:
+def _iter_targets(name: str):
+    target = PIN_TARGETS[name]
+    return target if isinstance(target, list) else [target]
+
+
+def _dockerfile_arg(dockerfile: str, arg: str) -> str:
+    """Return the ARG default for ``arg`` in the given Dockerfile."""
+    text = (ROOT / dockerfile).read_text(encoding="utf-8")
+    match = re.search(rf"^ARG {arg}=(\S+)$", text, re.MULTILINE)
+    assert match, f"ARG {arg} not found in {dockerfile}"
+    return match.group(1)
+
+
+def test_versions_env_is_exactly_the_pinned_keys() -> None:
     env = _parse_env(VERSIONS_ENV)
-    assert set(env) == {"OPENCLAW_TAG", "OPENCLAW_BASE_TAG"}, (
+    # OPENCLAW_BASE_TAG is derived (asserted by
+    # test_openclaw_base_tag_is_derived), not a source pin, so it is
+    # expected in the env file but not in PIN_TARGETS.
+    assert set(env) == set(PIN_TARGETS) | {"OPENCLAW_BASE_TAG"}, (
         f"hack/versions.env keys changed: {sorted(env)}"
     )
     assert env["OPENCLAW_TAG"] == OPENCLAW_TAG
@@ -145,3 +179,21 @@ def test_dot_git_is_kept_for_online_upgrade() -> None:
     # The final cleanup must not remove .git (P7 uses the git checkout).
     assert "\n        .git .github \\\n" not in text
     assert "\n        .github \\\n" in text
+
+
+def test_versions_env_matches_pins() -> None:
+    env = _parse_env(VERSIONS_ENV)
+    assert set(env) == set(PIN_TARGETS) | {"OPENCLAW_BASE_TAG"}, (
+        f"hack/versions.env keys changed: {sorted(env)}"
+    )
+    assert env["QWENPAW_PIP_SPEC"] == QWENPAW_PIP_SPEC
+
+
+def test_dockerfile_args_match_pins() -> None:
+    env = _parse_env(VERSIONS_ENV)
+    for name in PIN_TARGETS:
+        for dockerfile, arg in _iter_targets(name):
+            assert env[name] == _dockerfile_arg(dockerfile, arg), (
+                f"versions.env {name}={env[name]} but {dockerfile} has ARG {arg}="
+                f"{_dockerfile_arg(dockerfile, arg)}"
+            )

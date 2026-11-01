@@ -20,7 +20,7 @@ QwenPaw localhost HTTP API.
 - Prepare the QwenPaw working directory and default workspace.
 - Prepare image-bundled TeamHarness, WorkerFlow, and AgentTeams Matrix plugins.
 - Start the QwenPaw app process.
-- Wait for `/api/version` to report exactly `2.2.0`.
+- Wait for `/api/version` to report at least `2.2.2.post1`.
 - Apply Agent, Model, MCP, Channel, and ACL desired state through public APIs
   and GET-read it back before starting the update loop.
 - Stop background tasks and the QwenPaw process on shutdown.

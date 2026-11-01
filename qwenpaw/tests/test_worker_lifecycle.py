@@ -1705,7 +1705,10 @@ def test_api_readiness_waits_for_default_agent_startup(tmp_path, monkeypatch):
 
     def request(method, path, *args):
         if path == '/api/version':
-            return {'version': '2.2.1'}
+            # The pin raises the readiness floor to 2.2.2.post1, so the
+            # fake app must report that floor or the readiness gate fails
+            # before the startup-state polling this test is about.
+            return {'version': '2.2.2.post1'}
         assert (method, path) == ('GET', '/api/agents')
         state = next(states)
         observed.append(state)

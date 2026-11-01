@@ -9,6 +9,7 @@
 set -e
 source /opt/agentteams/scripts/lib/agentteams-env.sh
 source /opt/agentteams/scripts/lib/merge-openclaw-config.sh
+source /opt/agentteams/scripts/lib/migrate-openclaw-config.sh
 source /opt/agentteams/scripts/lib/worker-file-sync.sh
 
 WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"
@@ -108,6 +109,16 @@ mkdir -p "${HOME}/.agents"
 ln -sfn "${HOME}/skills" "${HOME}/.agents/skills"
 
 log "Worker config pulled successfully"
+
+# Migrate the pulled config before the gateway ever reads it. The periodic
+# remote->local merge below runs only after its initial 5-minute sleep, so
+# sourcing the merge helper alone does not cover an existing workspace that
+# still has pre-v2026.10.6 keys.
+if ! migrate_openclaw_config "${WORKSPACE}/openclaw.json"; then
+    log "ERROR: failed to migrate openclaw.json to the current schema; refusing to start the gateway"
+    exit 1
+fi
+log "Migrated openclaw.json to the current OpenClaw schema"
 
 # Replace historical tools.elevated.allowFrom.matrix=["*"] with this
 # worker's existing Matrix allowlist. tools is local-first on sync, so

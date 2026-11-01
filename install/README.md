@@ -114,6 +114,82 @@ Workers are created by the Manager Agent through conversation. The Manager provi
 .\agentteams-install.ps1 uninstall
 ```
 
+### Upgrade (safe orchestrator, P1)
+
+`install/agentteams-upgrade.sh` upgrades the **controller as a separate step**,
+with a cold kine backup, a health gate and a rollback path. It does not use the
+big-bang in-place flow of `agentteams-install.sh`.
+
+```bash
+# 1. inspect (read-only, JSON)
+./install/agentteams-upgrade.sh preflight --json
+
+# 2. back up kine + env + image IDs (stop/start the controller)
+./install/agentteams-upgrade.sh backup --yes
+
+# 3. upgrade the controller only; the old container is kept for rollback
+./install/agentteams-upgrade.sh controller --yes --controller-image <image>
+
+# 4. inspect the last state
+./install/agentteams-upgrade.sh status
+```
+
+`backup` copies kine only after the controller is confirmed stopped; a failed stop, a container that is still running, a failed cp, a failed restart, or a failed post-backup health gate all exit nonzero and write `status: failed` (with a `detail`), and the failure path still attempts to bring the controller back whenever it was stopped.
+
+No remote mount is required: Docker volumes work out of the box. Bind and remote mounts are detected and preserved as-is; remote filesystems are reported as warnings, not failures.
+The preflight also detects the storage backend (embedded MinIO vs external S3/RustFS) from the endpoint, bucket and `/data/minio` mount, and compares the **live** `AGENTTEAMS_FS_ENDPOINT` / `AGENTTEAMS_STORAGE_PROVIDER` / bucket reported by the controller, Manager and Workers. A split — for example, the controller on RustFS while a Manager or Worker still points at MinIO — fails closed with `storage split-brain`; `--allow-storage-split` is an explicit migration-window override, not a normal upgrade flag. Storage migration itself is a separate runbook; do not combine it with a controller upgrade.
+
+> **Gateway note:** if the controller embeds the Higress gateway, a controller upgrade can leave `healthz` green while the data plane is down (Wasm plugin version mismatch). Verify `http://127.0.0.1:8080/v1/models` after the controller step; plugin files are container-layer and may need a backfill after each rebuild.
+> If plugin files were added to the running container at runtime, a fresh container from the same image fails the default 8080 gate and the controller step rolls back (live-validated on a single-node aarch64 host: same image, no backfill → rollback; with `--higress-backfill-dir` → `8080/v1/models=401`, `state=done`). Pass `--higress-backfill-dir <dir>` on upgrade in that case.
+
+### Boundary preservation
+
+A controller rebuilt from the image would silently lose any security or
+resource boundary applied to the running container (`--user`, read-only
+rootfs, memory caps, dropped capabilities, ...). The `controller` step
+therefore carries the current container's boundary over into the new one:
+
+- **Preserved and re-applied:** `user`, `workdir`, read-only rootfs,
+  `memory`, `memory-swap`, `cpus`, `cpu-shares`, `cpuset-cpus`, `pids-limit`,
+  `init`, `privileged`, `group-add`, `security-opt`, `cap-add`, `cap-drop`,
+  `tmpfs`, `ulimit`, `devices`, **`shm-size`**, `domainname`, `stop-signal`,
+  `stop-timeout`, `oom-kill-disable`, `cgroupns`. The shared-memory size is
+  always passed explicitly (`--shm-size <old value>`): daemons differ in
+  their default (64 MiB vs several GiB), so relying on the default silently
+  changes the runtime configuration.
+- **Not representable in `docker create`** and **refused while non-default:**
+  `ipc-mode`, `pid-mode`, `uts-mode`, `userns-mode`, `cgroup-parent`,
+  `sysctls`, `extra-hosts`, `dns*`, non-default log driver, `oom-score-adj`,
+  `runtime`, `blkio-weight`, `memory-reservation`, `cpu-quota`,
+  `cpu-period`, an explicitly set `mac-address` (it would collide with the
+  retained old container) and a custom `hostname` (the default is the
+  container id and cannot be compared across a rebuild). Preflight reports them (and fails the gate) before anything
+  is stopped; the controller step refuses to rename the container while any
+  of them is set.
+- After the new container is created, the preserved fields are compared
+  key by key (`boundary verify`); a mismatch discards the new container and
+  restores the old one before it is ever stopped. Empty/default values are
+  treated as "not set".
+- `--prepare-only` runs exactly that cycle — create, verify, discard the new
+  container, restore the old one — and exits 0 with `boundary preserved: ...`
+  without starting anything. Use it as a pre-check before a real upgrade.
+
+- `OomKillDisable` is a `*bool`: an unset value renders `<nil>` on an ordinary
+  `docker run` container, while `docker create` stores `false`. The verifier
+  normalizes unset/false to the same default but keeps explicit `true`
+  distinct; the real-engine regression is
+  `bash install/tests/test-upgrade-boundary-real.sh` (skips without a
+  daemon/cached image, or when the daemon rejects `--oom-kill-disable`).- `--controller-name <name>` targets a controller container with a
+  non-default name; the preserved-boundary logic applies identically.
+
+This is the same failure mode class as the gateway note above: the health
+gate would pass while the security posture silently regressed. `--dry-run`
+shows the exact `docker create` line including every preserved flag.
+
+Add `--dry-run` to any mutating command to print the exact steps first. P1
+covers `preflight`/`backup`/`controller`/`status`; workers (canary), manager,
+dashboard and memory are follow-ups. See the upgrade design issue for the full design.
+
 ## Non-Interactive Mode (Automation)
 
 Set environment variables to skip prompts:

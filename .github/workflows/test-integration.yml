@@ -394,6 +394,16 @@ jobs:
 
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y jq curl unzip
+      - name: Control UI device-identity policy (HTTP/LAN entries)
+        # #1460: OpenClaw v2026.10.9 requires a device identity on the Control
+        # UI handshake. This runs one real gateway from the openclaw-base image
+        # and probes the existing HTTP (loopback) and LAN console entries. Only
+        # one shard needs to run it.
+        if: matrix.shard == 'controller-cr' && matrix.manager_runtime == 'openclaw' && matrix.worker_runtime == 'openclaw'
+        env:
+          OPENCLAW_BASE_IMAGE: agentteams/openclaw-base:latest
+        run: bash manager/tests/test-control-ui-device-identity.sh
+
 
       - name: Configure registry-dependent coverage
         run: |
@@ -809,6 +819,29 @@ jobs:
 
       - name: Run the LLM-smoke regression suite (stubbed docker/curl)
         run: bash install/tests/verify-llm-regressions.sh
+
+  install-upgrade-cli:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the upgrade CLI regression suite (stubbed docker/agt)
+        run: bash install/tests/test-upgrade-cli.sh
+
+      - name: Run the console-approval hint literal-print regression (stubbed docker)
+        # #1460: the upgrade's device-approval hint must print its command
+        # examples literally - backticks in the double-quoted log line would
+        # execute them while printing. Pure bash + stubbed docker, no engine.
+        run: bash install/tests/test-upgrade-console-hint.sh
+
+      - name: Run the live boundary-preservation regression (real engine)
+        run: |
+          if docker info >/dev/null 2>&1; then
+            bash install/tests/test-upgrade-preserve-live.sh
+          else
+            echo "SKIP live boundary test (no docker)"
+          fi
 
 # ============================================================
 # Offline pre-flight suite: qwenpaw upgrade checker (AgentTeams#1341)

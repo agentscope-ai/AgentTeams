@@ -11,6 +11,16 @@
       "id": "qwenpaw",
       "path": "adapters/qwenpaw",
       "pluginId": "agentteams-matrix-channel"
+    },
+    {
+      "id": "openclaw",
+      "path": "adapters/openclaw",
+      "pluginId": "agentteams-matrix-channel"
+    },
+    {
+      "id": "hermes",
+      "path": "adapters/hermes",
+      "pluginId": "agentteams-matrix-channel"
     }
   ]
 }

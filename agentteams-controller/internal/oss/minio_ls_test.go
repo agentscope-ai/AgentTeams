@@ -42,13 +42,18 @@ func TestParseMCLsJSONNormalizesDirectoryTrailingSlash(t *testing.T) {
 	}
 }
 
-func TestParseMCLsJSONStripsUnexpectedSlashFromFile(t *testing.T) {
-	infos, err := parseMCLsJSON(`{"type":"file","size":2,"title":"inner.txt/","modified":"2026-11-01T02:33:00Z"}`, "")
+// A key ending in "/" is a directory, whatever `type` says. MinIO and RustFS
+// 1.0.4 both report directories as {"type":"file","size":0} with a trailing
+// slash on the key (CI job 112062391396 listed "my dir" as a zero-byte file and
+// the space-bearing directory vanished from the listing), so the slash - not
+// the type field - decides.
+func TestParseMCLsJSONTrailingSlashIsADirectory(t *testing.T) {
+	infos, err := parseMCLsJSON(`{"type":"file","size":0,"key":"my dir/","modified":"2026-11-01T02:33:00Z"}`, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(infos) != 1 || infos[0].Name != "inner.txt" {
-		t.Fatalf("infos = %+v, want the file name without a trailing slash", infos)
+	if len(infos) != 1 || infos[0].Name != "my dir/" {
+		t.Fatalf("infos = %+v, want the directory name with its trailing slash", infos)
 	}
 }
 

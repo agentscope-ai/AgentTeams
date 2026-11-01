@@ -601,11 +601,15 @@ func parseMCLsJSON(out, prefix string) ([]ObjectInfo, error) {
 		// Normalise the shape: a listing entry may carry a trailing slash from
 		// the backend, so strip it first, then collapse anything nested to its
 		// first directory segment. Files never end in "/", directories always do.
+		// Both real backends report a directory as a key ending in "/" - MinIO
+		// and RustFS 1.0.4 do not always set type:"dir" (they emit type:"file"
+		// with size 0), so the trailing slash is the authority, not `type`.
+		isDir := entry.Type == "dir" || strings.HasSuffix(rel, "/")
 		rel = strings.TrimSuffix(rel, "/")
 		name := rel
-		if k := strings.IndexByte(rel, '/'); k > 0 {
+		if k := strings.IndexByte(rel, '/'); k > 0 && !isDir {
 			name = rel[:k] + "/" // nested key: synthesize its directory entry
-		} else if entry.Type == "dir" {
+		} else if isDir {
 			name = rel + "/"
 		}
 		if _, dup := seen[name]; dup {

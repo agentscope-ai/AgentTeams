@@ -7,6 +7,9 @@ on:
       - main
     paths:
       - 'openclaw-base/**'
+      # A pin bump changes the derived tag without touching openclaw-base/**;
+      # the published tag must follow the pin, or consumers wait forever.
+      - 'hack/versions.env'
 
 env:
   REGISTRY: higress-registry.cn-hangzhou.cr.aliyuncs.com

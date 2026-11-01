@@ -6,28 +6,53 @@
  * thin: it maps OpenClaw's channel contract onto the sidecar's JSON-lines
  * protocol and contains no Matrix logic of its own.
  *
- * Wiring into OpenClaw (verified against the public plugin SDK, v2026.10.6):
- *   - `openclaw/plugin-sdk/channel-core` — `ChannelPlugin`, `OpenClawConfig`.
+ * Inbound dispatch (verified against the installed OpenClaw 2026.10.9 SDK):
+ * the entry (`src/index.ts`) injects the runtime via {@link setRuntime}
+ * (the public `PluginRuntime` from `openclaw/plugin-sdk/channel-core`), and
+ * every sidecar `inbound` frame is dispatched through
+ *   1. `runtime.channel.routing.resolveAgentRoute` — agent + session routing,
+ *   2. `runtime.channel.inbound.run` (the core-managed delivery overload,
+ *      typed as `ChannelInboundEventRunnerParams` from
+ *      `openclaw/plugin-sdk/channel-inbound`) with a turn adapter whose
+ *      `resolveTurn` builds the turn context via
+ *      `runtime.channel.inbound.buildContext` and wires `delivery.deliver`
+ *      back to the sidecar (`sendOutbound`, kind `final`, `reply_to` = the
+ *      inbound event id),
+ *   3. on `run` failure: log with the event id and drop. There is no
+ *      requeue — the sidecar delivers each event exactly once, and
+ *      re-delivery from here would risk a double reply.
+ * DM vs group: the sidecar `inbound` frame carries no directness field
+ * (no `is_direct` / `members`; protocol version 1), so v1 routes every room
+ * as a group (`peer.kind = "group"`). DM semantics need a core protocol
+ * field.
+ *
+ * Without an injected runtime (unit tests, or an entry that never ran
+ * `setRuntime`), inbound frames fall back to the `onInboundMessage` hook
+ * (default: log only).
+ *
+ * Wiring into OpenClaw (verified against the public plugin SDK):
+ *   - `openclaw/plugin-sdk/channel-core` — `ChannelPlugin`, `OpenClawConfig`,
+ *     `PluginRuntime`, `defineChannelPluginEntry`.
  *   - `openclaw/plugin-sdk/channel-config-schema` —
  *     `buildJsonChannelConfigSchema` (ZOD-free config schema with a runtime
  *     `safeParse`, so this package does not depend on zod).
+ *   - `openclaw/plugin-sdk/channel-inbound` — `ChannelInboundEventRunnerParams`
+ *     (type-only import; pins the core-managed delivery overload of
+ *     `runtime.channel.inbound.run`).
  *
  * Lifecycle: the gateway calls `gateway.startAccount` / `stopAccount`, which
- * own the {@link SidecarClient} connection for the account. Inbound frames are
- * normalized to {@link OpenClawMatrixInboundMessage} and handed to the
- * `onInboundMessage` hook; outbound text goes through `outbound.sendText`.
- *
- * KNOWN LIMITATION (documented, not guessed): the remaining core integration
- * is dispatching inbound messages into OpenClaw's agent-turn pipeline
- * (`runChannelInboundEvent` from `openclaw/plugin-sdk/channel-inbound`). Its
- * `ChannelTurnAdapter.resolveTurn` requires core-internal dispatch context
- * (`ChannelTurnContext`, store paths, finalized msg context), which a thin
- * external plugin cannot synthesize. Until that binding lands, the default
- * inbound handler only logs, and the sidecar still delivers normally.
+ * own the {@link SidecarClient} connection for the account. Outbound text
+ * goes through `outbound.sendText` (channel-level) or the turn's
+ * `delivery.deliver` (dispatch-level); both land on the sidecar socket.
  */
 
-import type { ChannelPlugin, OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
+import type {
+  ChannelPlugin,
+  OpenClawConfig,
+  PluginRuntime,
+} from "openclaw/plugin-sdk/channel-core";
 import { buildJsonChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+import type { ChannelInboundEventRunnerParams } from "openclaw/plugin-sdk/channel-inbound";
 import {
   PROTOCOL_VERSION,
   SidecarClient,
@@ -40,6 +65,13 @@ import {
 export const CHANNEL_ID = "agentteams-matrix";
 
 const DEFAULT_ACCOUNT_ID = "default";
+
+/**
+ * The OpenClaw runtime injected by the entry's `setRuntime`. This is the
+ * public `PluginRuntime` from `openclaw/plugin-sdk/channel-core`; the alias
+ * keeps the plugin's public API stable across SDK versions.
+ */
+export type OpenClawMatrixRuntime = PluginRuntime;
 
 /** Shape of `channels.agentteams-matrix` in the OpenClaw config. */
 export type OpenClawMatrixChannelConfig = {
@@ -91,15 +123,35 @@ export type OpenClawMatrixLogger = {
   error?: (message: string) => void;
 };
 
+let moduleRuntime: OpenClawMatrixRuntime | null = null;
+
+/**
+ * Inject the OpenClaw runtime (called by the entry's `setRuntime` in
+ * `src/index.ts`). The default instance then dispatches inbound frames
+ * through the real agent-turn pipeline instead of the log-only fallback.
+ */
+export function setRuntime(runtime: OpenClawMatrixRuntime): void {
+  moduleRuntime = runtime;
+}
+
+/** Remove the injected runtime (test seam for the module-level state). */
+export function clearRuntime(): void {
+  moduleRuntime = null;
+}
+
 export type OpenClawMatrixPluginDeps = {
   /** Test seam: replace the SidecarClient implementation. */
   createSidecarClient?: () => SidecarClient;
   /**
-   * Receives every normalized inbound message. The default handler logs only.
-   *
-   * This is the seam where the OpenClaw core agent-turn dispatch
-   * (`runChannelInboundEvent` / `ChannelTurnAdapter.resolveTurn`) will be
-   * bound; see the module docstring for why the scaffold cannot call it yet.
+   * Override the runtime used for inbound dispatch. When omitted, the
+   * runtime injected via {@link setRuntime} is used; when neither is
+   * available, the `onInboundMessage` fallback applies.
+   */
+  runtime?: OpenClawMatrixRuntime;
+  /**
+   * Receives every normalized inbound message when NO runtime is available
+   * (no `deps.runtime` and no {@link setRuntime} injection — e.g. unit
+   * tests without a gateway). The default handler logs only.
    */
   onInboundMessage?: (message: OpenClawMatrixInboundMessage) => void | Promise<void>;
   /** Receives sidecar `typing` frames. No default behavior. */
@@ -170,13 +222,19 @@ export function createOpenClawMatrixPlugin(
   };
   const createClient = deps.createSidecarClient ?? (() => new SidecarClient());
   const clients = new Map<string, SidecarClient>();
+  // One wiring pass per client instance (see wireClientOnce).
+  const wiredClients = new WeakSet<SidecarClient>();
 
   const onInboundMessage = deps.onInboundMessage ?? ((message: OpenClawMatrixInboundMessage) => {
-    // Documented seam: bind the OpenClaw agent-turn dispatch here.
+    // No-runtime fallback (see the module docstring).
     log.info?.(
       `inbound ${message.eventId} from ${message.sender} in ${message.roomId}: ${message.text}`,
     );
   });
+
+  function activeRuntime(): OpenClawMatrixRuntime | null {
+    return deps.runtime ?? moduleRuntime;
+  }
 
   function clientFor(account: ResolvedOpenClawMatrixAccount): SidecarClient {
     let client = clients.get(account.accountId);
@@ -187,9 +245,134 @@ export function createOpenClawMatrixPlugin(
     return client;
   }
 
-  function wireClient(client: SidecarClient, account: ResolvedOpenClawMatrixAccount): void {
+  /**
+   * Dispatch one sidecar `inbound` frame into the OpenClaw agent-turn
+   * pipeline. Never throws: a failed dispatch is logged with the event id
+   * and dropped (no requeue — dedupe is the sidecar's job, and a retry here
+   * could produce a duplicate reply).
+   */
+  async function dispatchInbound(
+    frame: SidecarInboundFrame,
+    account: ResolvedOpenClawMatrixAccount,
+    client: SidecarClient,
+    cfg: OpenClawConfig,
+  ): Promise<void> {
+    const rt = activeRuntime();
+    if (rt === null) {
+      await onInboundMessage(normalizeInboundFrame(frame, account.accountId));
+      return;
+    }
+
+    // DM/group: the sidecar `inbound` frame carries no directness field, so
+    // v1 routes every room as a group (see the module docstring).
+    const route = rt.channel.routing.resolveAgentRoute({
+      cfg,
+      channel: CHANNEL_ID,
+      accountId: account.accountId,
+      peer: { kind: "group", id: frame.room_id },
+    });
+
+    const params: ChannelInboundEventRunnerParams<SidecarInboundFrame> = {
+      channel: CHANNEL_ID,
+      accountId: account.accountId,
+      raw: frame,
+      adapter: {
+        ingest: (raw) => ({
+          id: raw.event_id,
+          timestamp: raw.ts,
+          rawText: raw.text,
+          textForAgent: raw.text,
+          textForCommands: raw.text,
+          raw,
+        }),
+        resolveTurn: (input) => {
+          const ctxPayload = rt.channel.inbound.buildContext({
+            channel: CHANNEL_ID,
+            accountId: account.accountId,
+            messageId: input.id,
+            timestamp: input.timestamp,
+            from: `${CHANNEL_ID}:${frame.sender}`,
+            sender: { id: frame.sender, name: frame.sender },
+            conversation: { kind: "group", id: frame.room_id, label: frame.room_id },
+            route: {
+              agentId: route.agentId,
+              dmScope: route.dmScope,
+              accountId: account.accountId,
+              routeSessionKey: route.sessionKey,
+              dispatchSessionKey: route.sessionKey,
+            },
+            reply: { to: frame.room_id },
+            message: {
+              rawBody: input.rawText,
+              commandBody: input.textForCommands,
+              bodyForAgent: input.textForAgent,
+            },
+            extra: {
+              ThreadRoot: frame.thread_root ?? undefined,
+              Mentions: frame.mentions,
+            },
+            channelIngress: "unsupported",
+          });
+          return {
+            cfg,
+            channel: CHANNEL_ID,
+            accountId: account.accountId,
+            route: {
+              agentId: route.agentId,
+              dmScope: route.dmScope,
+              sessionKey: route.sessionKey,
+            },
+            ctxPayload,
+            delivery: {
+              durable: () => ({ to: frame.room_id }),
+              deliver: async (payload) => {
+                const text = payload.text;
+                if (!text) return;
+                await client.sendOutbound({
+                  room_id: frame.room_id,
+                  text,
+                  reply_to: frame.event_id,
+                });
+              },
+            },
+          };
+        },
+      },
+    };
+
+    try {
+      await rt.channel.inbound.run(params);
+    } catch (err) {
+      log.error?.(
+        `inbound dispatch failed for ${frame.event_id} in ${frame.room_id} ` +
+          `(account ${account.accountId}): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * Attach the frame handlers exactly once per client instance. The
+   * SidecarClient registration helpers append to an EventEmitter, so a
+   * second `wireClient` on the same instance would dispatch every inbound
+   * frame twice (two agent turns, two replies).
+   */
+  function wireClientOnce(
+    client: SidecarClient,
+    account: ResolvedOpenClawMatrixAccount,
+    cfg: OpenClawConfig,
+  ): void {
+    if (wiredClients.has(client)) return;
+    wiredClients.add(client);
+    wireClient(client, account, cfg);
+  }
+
+  function wireClient(
+    client: SidecarClient,
+    account: ResolvedOpenClawMatrixAccount,
+    cfg: OpenClawConfig,
+  ): void {
     client.onInbound((frame: SidecarInboundFrame) => {
-      void onInboundMessage(normalizeInboundFrame(frame, account.accountId));
+      void dispatchInbound(frame, account, client, cfg);
     });
     client.onTyping((frame) => {
       deps.onTyping?.({
@@ -295,8 +478,13 @@ export function createOpenClawMatrixPlugin(
           );
         }
         const client = clientFor(account);
+        // Wire first, then connect: a client that is already connected
+        // (a restarted account reusing the cached instance, or a test fake)
+        // still needs its inbound/typing handlers attached. `wireClientOnce`
+        // is idempotent per client instance, so a repeated startAccount never
+        // double-dispatches an inbound frame.
+        wireClientOnce(client, account, ctx.cfg);
         if (client.connected) return { connected: true };
-        wireClient(client, account);
         await client.connect(account.socketPath, {
           agent: account.agent,
           protocol: account.protocolVersion,

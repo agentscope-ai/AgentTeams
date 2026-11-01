@@ -191,6 +191,48 @@ describe("SidecarClient", () => {
     }
   });
 
+  it("sends every outbound frame with all five validated wire fields", async () => {
+    const mock = await startMockSidecar();
+    const client = new SidecarClient();
+    try {
+      await client.connect(mock.socketPath, { agent: "test-agent" });
+
+      // The core sidecar validates EVERY outbound frame for all five fields
+      // (`_validate_frame` in `plugins/agentteams-matrix/core/sidecar.py`,
+      // protocol version 1), so absent values must be sent as their explicit
+      // defaults: `reply_to: null`, `kind: "final"`, `media: []`.
+      await client.sendOutbound({ room_id: "!room:example.org", text: "t1" });
+      assert.deepEqual(mock.lastOutbound, {
+        type: "outbound",
+        room_id: "!room:example.org",
+        text: "t1",
+        reply_to: null,
+        kind: "final",
+        media: [],
+      });
+
+      // Explicit values pass through untouched.
+      await client.sendOutbound({
+        room_id: "!room:example.org",
+        text: "t2",
+        reply_to: "$evt-1",
+        kind: "tool",
+        media: [{ mxc_uri: "mxc://a/b", mime_type: "text/plain" }],
+      });
+      assert.deepEqual(mock.lastOutbound, {
+        type: "outbound",
+        room_id: "!room:example.org",
+        text: "t2",
+        reply_to: "$evt-1",
+        kind: "tool",
+        media: [{ mxc_uri: "mxc://a/b", mime_type: "text/plain" }],
+      });
+    } finally {
+      client.close();
+      await mock.close();
+    }
+  });
+
   it("buffers partial lines until the newline arrives", async () => {
     const mock = await startMockSidecar();
     const client = new SidecarClient();

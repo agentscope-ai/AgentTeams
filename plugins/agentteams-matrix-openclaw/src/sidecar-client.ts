@@ -91,7 +91,13 @@ export type SidecarFrame =
   | SidecarErrorFrame
   | SidecarAckFrame;
 
-/** Client-side request for an `outbound` frame. */
+/**
+ * Client-side request for an `outbound` frame.
+ *
+ * The wire frame always carries all five validated fields: absent
+ * `reply_to`/`kind`/`media` are sent as `null` / `"final"` / `[]` (the core
+ * sidecar rejects an outbound frame missing any of the five).
+ */
 export type SidecarOutboundRequest = {
   room_id: string;
   text: string;
@@ -281,14 +287,19 @@ export class SidecarClient extends EventEmitter {
     }
     const socket = this.socket;
 
+    // The core sidecar validates EVERY outbound frame for all five fields
+    // (`_validate_frame` in `plugins/agentteams-matrix/core/sidecar.py`,
+    // protocol version 1), so absent values must be sent as their explicit
+    // defaults rather than omitted: `reply_to: null`, `kind: "final"`,
+    // `media: []`.
     const frame: Record<string, unknown> = {
       type: "outbound",
       room_id: request.room_id,
       text: request.text,
+      reply_to: request.reply_to ?? null,
+      kind: request.kind ?? "final",
+      media: request.media ?? [],
     };
-    if (request.reply_to !== undefined) frame.reply_to = request.reply_to;
-    if (request.kind !== undefined) frame.kind = request.kind;
-    if (request.media !== undefined) frame.media = request.media;
 
     return new Promise<SidecarOutboundAck>((resolve, reject) => {
       const pending: PendingOutbound = { resolve, reject };

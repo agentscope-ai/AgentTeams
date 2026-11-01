@@ -168,7 +168,21 @@ set_member_state() { # <kind> <name> <state>
     embedded)
       case "$kind" in
         worker)
-          exec_or_print docker exec "$CONTROLLER_CONTAINER" agt update worker "$name" --state "$state" ;;
+          # CLI drift: current builds require `--name`, older ones take a
+          # positional name. Probe once from the help text (read-only) instead
+          # of guessing, and cache the answer for the rest of the run.
+          if [ -z "${AGTU_WORKER_FORM:-}" ]; then
+            if docker exec "$CONTROLLER_CONTAINER" agt update worker -h 2>&1 | grep -q -- '--name string'; then
+              AGTU_WORKER_FORM=flag
+            else
+              AGTU_WORKER_FORM=positional
+            fi
+          fi
+          if [ "$AGTU_WORKER_FORM" = "flag" ]; then
+            exec_or_print docker exec "$CONTROLLER_CONTAINER" agt update worker --name "$name" --state "$state"
+          else
+            exec_or_print docker exec "$CONTROLLER_CONTAINER" agt update worker "$name" --state "$state"
+          fi ;;
         manager)
           f="$STATE_DIR/manager-$name-state-$state.yaml"
           printf 'apiVersion: agentteams.io/v1beta1\nkind: Manager\nmetadata:\n  name: %s\nspec:\n  state: %s\n' "$name" "$state" > "$f"

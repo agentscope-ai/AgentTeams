@@ -331,6 +331,26 @@ PREFIX_SCENARIOS = [
             "?x=1&token=tok-123"
         ),
     },
+    # P1411 round 3: protocol-relative URLs resolve against the page scheme;
+    # the RESOLVED host decides — a foreign host is preserved even when its
+    # path starts with the bridge prefix.
+    {
+        "stored": "tok-123",
+        "url": "//evil.example/api/qwen-code-bridge/web/sessions",
+        "expect": "//evil.example/api/qwen-code-bridge/web/sessions",
+    },
+    {
+        "stored": "tok-123",
+        "url": "//testserver/api/qwen-code-bridge/web/sessions",
+        "expect": "//testserver/api/qwen-code-bridge/web/sessions?token=tok-123",
+    },
+    {
+        "stored": "tok-123",
+        "url": "//testserver/sessions",
+        "expect": (
+            "ws://testserver/api/qwen-code-bridge/web/sessions?token=tok-123"
+        ),
+    },
 ]
 
 DAEMON_SCENARIOS = [
@@ -385,6 +405,27 @@ DAEMON_SCENARIOS = [
         "expect": (
             "ws://testserver/api/qwen-code-bridge/web/sessions/live-state"
             "?x=1&token=tok-123"
+        ),
+    },
+    # P1411 round 3: protocol-relative foreign/same-origin controls.
+    {
+        "stored": "tok-123",
+        "daemonBase": "/api/qwen-code-bridge/web",
+        "url": "//evil.example/api/qwen-code-bridge/web/sessions",
+        "expect": "//evil.example/api/qwen-code-bridge/web/sessions",
+    },
+    {
+        "stored": "tok-123",
+        "daemonBase": "/api/qwen-code-bridge/web",
+        "url": "//testserver/api/qwen-code-bridge/web/sessions",
+        "expect": "//testserver/api/qwen-code-bridge/web/sessions?token=tok-123",
+    },
+    {
+        "stored": "tok-123",
+        "daemonBase": "/api/qwen-code-bridge/web",
+        "url": "//testserver/sessions",
+        "expect": (
+            "ws://testserver/api/qwen-code-bridge/web/sessions?token=tok-123"
         ),
     },
 ]

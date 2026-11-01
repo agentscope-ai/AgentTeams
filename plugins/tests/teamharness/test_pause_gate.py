@@ -323,6 +323,19 @@ class FakeProjectStorage:
             return {"ok": True, "exists": path in self.remote}
         return {"ok": True}
 
+    def commit_task(
+        self, task_id: str, meta: dict[str, Any], etag: str, team: str = ""
+    ) -> dict[str, Any]:
+        """The fake ``_commit_task_meta``: a strict CAS on the task object."""
+        path = f"shared/tasks/{task_id}/meta.json"
+        self.commit_calls += 1
+        self.commits.append((task_id, dict(meta)))
+        current = self._etag(path)
+        if current is not None and current != etag:
+            return {"ok": False, "conflict": True, "error": "409"}
+        self.remote[path] = dict(meta)
+        return {"ok": True, "etag": self._etag(path)}
+
     def commit(self, project_id: str, meta: dict[str, Any], etag: str) -> dict[str, Any]:
         """The fake ``_commit_project_meta``: a strict CAS against the
         store, in the read -> commit -> verify window order."""
@@ -358,6 +371,10 @@ def _install_sync_fakes(
     controller's conditional commit (module global on server.sync)."""
     monkeypatch.setattr(server, "_filesync", storage)
     monkeypatch.setattr(server.sync, "_commit_project_meta", storage.commit)
+    # #1471: the task meta commit is the conditional, version-bound path too;
+    # the fake models both endpoints so a delegate/ack/submit in these tests
+    # never reaches the real controller client.
+    monkeypatch.setattr(server.sync, "_commit_task_meta", storage.commit_task)
 
 
 def _loop(

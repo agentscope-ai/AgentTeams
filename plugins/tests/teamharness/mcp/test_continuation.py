@@ -1760,17 +1760,46 @@ def test_submit_pushes_and_verifies_result_payload_before_the_meta_commit_point(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """#1471: the payload files land BEFORE the meta commit, and the meta
+    never travels through the plain filesync push."""
     _project_id, task_id = _write_project_and_task(tmp_path)
     task_dir = tmp_path / "shared" / "tasks" / task_id
     (task_dir / "result.md").write_text("result", encoding="utf-8")
     (task_dir / "output.txt").write_text("output", encoding="utf-8")
+    meta_path = f"shared/tasks/{task_id}/meta.json"
+    remote: dict[str, dict[str, Any]] = {
+        meta_path: json.loads((task_dir / "meta.json").read_text(encoding="utf-8"))
+    }
+    state = {"etag": "v1"}
     calls: list[tuple[str, str]] = []
 
     def filesync(arguments: dict[str, Any]) -> dict[str, Any]:
-        calls.append((str(arguments["action"]), str(arguments["path"])))
+        action = str(arguments["action"])
+        path = str(arguments["path"])
+        calls.append((action, path))
+        if action == "etag":
+            if path not in remote:
+                return {"ok": False, "error": f"<ERROR> The object {path} does not exist."}
+            return {"ok": True, "etag": state["etag"]}
+        if action == "cat":
+            if path not in remote:
+                return {"ok": False, "error": f"<ERROR> The object {path} does not exist."}
+            return {"ok": True, "content": json.dumps(remote[path])}
+        if action == "push":
+            local = tmp_path / path
+            if local.is_file() and path.endswith("meta.json"):
+                remote[path] = json.loads(local.read_text(encoding="utf-8"))
+            return {"ok": True}
         return {"ok": True}
 
+    def commit_task(task_id_: str, meta: dict[str, Any], etag: str, team: str = "") -> dict[str, Any]:
+        calls.append(("commit", meta_path))
+        remote[meta_path] = dict(meta)
+        state["etag"] = "v2"
+        return {"ok": True, "etag": "v2"}
+
     monkeypatch.setattr(server, "_filesync", filesync)
+    monkeypatch.setattr(server.sync, "_commit_task_meta", commit_task)
     monkeypatch.setattr(server, "_sync_project", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(server, "_publish_task_artifacts", lambda *_args, **_kwargs: [])
 
@@ -1781,16 +1810,19 @@ def test_submit_pushes_and_verifies_result_payload_before_the_meta_commit_point(
     )
 
     assert submitted["ok"] is True
-    assert calls == [
+    commit_index = calls.index(("commit", meta_path))
+    payload_calls = [
         ("push", f"shared/tasks/{task_id}/result.md"),
         ("stat", f"shared/tasks/{task_id}/result.md"),
         ("push", f"shared/tasks/{task_id}/output.txt"),
         ("stat", f"shared/tasks/{task_id}/output.txt"),
-        ("push", f"shared/tasks/{task_id}/meta.json"),
-        ("stat", f"shared/tasks/{task_id}/meta.json"),
-        # S2 SIG-COMPLETE (task_submitted) event mirror push — deterministic id.
-        ("push", _signal_event_path(tmp_path, task_id)),
     ]
+    for call in payload_calls:
+        assert call in calls, calls
+        assert calls.index(call) < commit_index, calls
+    # The meta reaches storage ONLY through the conditional commit endpoint.
+    assert ("push", meta_path) not in calls
+    assert calls.count(("commit", meta_path)) == 1
 
 
 def test_plan_dag_preserves_a_committed_cancellation_decision(
@@ -1894,27 +1926,46 @@ def test_submit_meta_commit_must_be_remotely_verified_before_success(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """#1471: a commit the remote never reflects is a failed sync (submit
+    reports synced=false, retryable), and the retry converges with the
+    same submission identity."""
     _project_id, task_id = _write_project_and_task(tmp_path)
     task_dir = tmp_path / "shared" / "tasks" / task_id
     (task_dir / "result.md").write_text("result", encoding="utf-8")
-    calls: list[tuple[str, str]] = []
-    meta_stat_failed = False
     meta_path = f"shared/tasks/{task_id}/meta.json"
+    remote: dict[str, dict[str, Any]] = {
+        meta_path: json.loads((task_dir / "meta.json").read_text(encoding="utf-8"))
+    }
+    state = {"etag": "v1", "landed": False}
+    calls: list[tuple[str, str]] = []
 
     def filesync(arguments: dict[str, Any]) -> dict[str, Any]:
-        nonlocal meta_stat_failed
-        call = (str(arguments["action"]), str(arguments["path"]))
-        calls.append(call)
-        if call == ("stat", meta_path) and not meta_stat_failed:
-            meta_stat_failed = True
-            return {"ok": False, "error": "remote meta commit is not visible"}
+        action = str(arguments["action"])
+        path = str(arguments["path"])
+        calls.append((action, path))
+        if action == "etag" and path == meta_path:
+            return {"ok": True, "etag": state["etag"]}
+        if action == "cat" and path == meta_path:
+            return {"ok": True, "content": json.dumps(remote[path])}
         return {"ok": True}
 
+    def commit_task(task_id_: str, meta: dict[str, Any], etag: str, team: str = "") -> dict[str, Any]:
+        calls.append(("commit", meta_path))
+        if not state["landed"]:
+            # Claims success, but the store never receives it: the verify
+            # re-read must catch that.
+            return {"ok": True, "etag": "never-lands"}
+        remote[meta_path] = dict(meta)
+        state["etag"] = "v2"
+        return {"ok": True, "etag": "v2"}
+
     monkeypatch.setattr(server, "_filesync", filesync)
+    monkeypatch.setattr(server.sync, "_commit_task_meta", commit_task)
     monkeypatch.setattr(server, "_sync_project", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(server, "_publish_task_artifacts", lambda *_args, **_kwargs: [])
 
     first = _submit(tmp_path, task_id, deliverables=[])
+    state["landed"] = True
     second = _submit(tmp_path, task_id, deliverables=[])
 
     assert first["ok"] is False
@@ -1924,36 +1975,49 @@ def test_submit_meta_commit_must_be_remotely_verified_before_success(
     assert second["ok"] is True
     assert second["reused"] is True
     assert second["task"]["submission_id"] == first["task"]["submission_id"]
-    assert calls.count(("push", meta_path)) == 2
-    assert calls.count(("stat", meta_path)) == 2
-    assert calls[-3:] == [
-        ("push", meta_path),
-        ("stat", meta_path),
-        # S2 SIG-COMPLETE (task_submitted) event mirror push from the resubmit.
-        ("push", _signal_event_path(tmp_path, task_id)),
-    ]
+    assert calls.count(("commit", meta_path)) == 4   # 3 attempts + the retry
+    assert ("push", meta_path) not in calls
 
 
 def test_submit_retry_repairs_interrupted_payload_publish_without_rotating_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """#1471: a failed payload publish fails the sync before any meta
+    commit; the retry repairs it without rotating the submission id."""
     _project_id, task_id = _write_project_and_task(tmp_path)
     task_dir = tmp_path / "shared" / "tasks" / task_id
     (task_dir / "result.md").write_text("result", encoding="utf-8")
+    meta_path = f"shared/tasks/{task_id}/meta.json"
+    remote: dict[str, dict[str, Any]] = {
+        meta_path: json.loads((task_dir / "meta.json").read_text(encoding="utf-8"))
+    }
+    state = {"stat_failed": False, "etag": "v1"}
     calls: list[tuple[str, str]] = []
-    failed = False
 
     def filesync(arguments: dict[str, Any]) -> dict[str, Any]:
-        nonlocal failed
-        call = (str(arguments["action"]), str(arguments["path"]))
-        calls.append(call)
-        if call[0] == "stat" and not failed:
-            failed = True
+        action = str(arguments["action"])
+        path = str(arguments["path"])
+        calls.append((action, path))
+        if action == "etag" and path == meta_path:
+            return {"ok": True, "etag": state["etag"]}
+        if action == "cat" and path == meta_path:
+            return {"ok": True, "content": json.dumps(remote[path])}
+        if action == "stat" and path.endswith("result.md") and not state["stat_failed"]:
+            state["stat_failed"] = True
             return {"ok": False, "error": "remote stat unavailable"}
         return {"ok": True}
 
+    commits: list[str] = []
+
+    def commit_task(task_id_: str, meta: dict[str, Any], etag: str, team: str = "") -> dict[str, Any]:
+        commits.append(etag)
+        remote[meta_path] = dict(meta)
+        state["etag"] = "v2"
+        return {"ok": True, "etag": "v2"}
+
     monkeypatch.setattr(server, "_filesync", filesync)
+    monkeypatch.setattr(server.sync, "_commit_task_meta", commit_task)
     monkeypatch.setattr(server, "_sync_project", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(server, "_publish_task_artifacts", lambda *_args, **_kwargs: [])
 
@@ -1966,11 +2030,8 @@ def test_submit_retry_repairs_interrupted_payload_publish_without_rotating_ident
     assert second["ok"] is True
     assert second["reused"] is True
     assert second["task"]["submission_id"] == first["task"]["submission_id"]
-    meta_push = ("push", f"shared/tasks/{task_id}/meta.json")
-    assert calls.count(meta_push) == 1
-    assert calls[-3:] == [
-        meta_push,
-        ("stat", f"shared/tasks/{task_id}/meta.json"),
-        # S2 SIG-COMPLETE (task_submitted) event mirror push from the resubmit.
-        ("push", _signal_event_path(tmp_path, task_id)),
-    ]
+    # The interrupted publish committed nothing; the retry committed once.
+    assert len(commits) == 1
+    assert ("push", meta_path) not in calls
+
+

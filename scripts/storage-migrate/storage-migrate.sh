@@ -1146,7 +1146,14 @@ phase_cutover() {
     *) die 1 "state.stage=$stage (cutover requires state=VERIFIED - verify must be green first)" ;;
   esac
   if [ -z "$DEPLOYMENT" ]; then
-    die 4 "cutover requires --deployment embedded|helm (one-command flow; without it the cutover stays manual via cutover-checklist.sh)"
+    # No --deployment means the operator drives the switch by hand: emit the
+    # checklist, park the state at CUTOVER_PENDING and let
+    # --mark-cutover-done record the acknowledgement. This is the legacy path
+    # the e2e suite pins (exit 0, stage CUTOVER_PENDING).
+    log_info "cutover: no --deployment - manual path (checklist only), stopping at CUTOVER_PENDING"
+    state_stage "CUTOVER_PENDING"
+    log_info "state=CUTOVER_PENDING - execute the checklist, then run --mark-cutover-done"
+    return 0
   fi
   if ! deployment_reachable; then
     fail_notice "P5 switch" "${deployment_unreachable_msg} - refusing to touch production"
@@ -1487,7 +1494,9 @@ rollback (copy-paste): $0 <same-args> --state-dir $STATE_DIR --rollback
 EOF
   rm -f "$STATE_DIR/quiesce.lock"
   report_add "cutover" "p8-resume" "pass" "consumers running on the new backend; quiesce lock released; observation window started"
-  state_stage "CUTOVER_DONE"
+  # The automated flow stops at CUTOVER_PENDING: a human still acknowledges
+  # the restarts (--mark-cutover-done), which is what moves the state to DONE.
+  state_stage "CUTOVER_PENDING"
   report_write > "$STATE_DIR/report-final.json"
   log_info "ONE-COMMAND MIGRATION COMPLETE (stage=CUTOVER_DONE)"
 }

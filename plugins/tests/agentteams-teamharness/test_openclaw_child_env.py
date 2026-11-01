@@ -337,10 +337,117 @@ def test_faithful_openclaw_child_env_keeps_only_allowlisted_values(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+REQUIRE_NATIVE_ENV = "AGENTTEAMS_TEST_REQUIRE_NATIVE_SDK"
+#: The two allowlisted variables that carry credentials: the public CLI
+#: readback resolves them and then REDACTES them in its output.
+SECRET_VARS = ("AGENTTEAMS_WORKER_MATRIX_TOKEN", "AGENTTEAMS_FS_SECRET_KEY")
+REDACTED = "__OPENCLAW_REDACTED__"
+
+
+def _require_native_sdk() -> bool:
+    """CI sets this on the job that installs a pinned SDK: a configured
+    native runtime that cannot run must FAIL that job instead of skipping."""
+    return os.environ.get(REQUIRE_NATIVE_ENV, "").strip() == "1"
+
+
+def _skip_or_fail(reason: str) -> None:
+    if _require_native_sdk():
+        pytest.fail(f"{reason} (required by {REQUIRE_NATIVE_ENV}=1)")
+    pytest.skip(reason)
+
+
+def _openclaw_sdk_root(argv_prefix: list[str]) -> Path | None:
+    """The installed OpenClaw package root (the directory with package.json),
+    derived from OPENCLAW_SDK_ROOT or the resolved CLI entry."""
+    root = os.environ.get("OPENCLAW_SDK_ROOT", "").strip()
+    if root:
+        candidate = Path(root)
+        if (candidate / "package.json").is_file():
+            return candidate
+    try:
+        entry = Path(argv_prefix[0]).resolve()
+    except OSError:
+        return None
+    for parent in entry.parents:
+        pkg = parent / "package.json"
+        if pkg.is_file():
+            try:
+                data = json.loads(pkg.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return None
+            if data.get("name") == "openclaw":
+                return parent
+    return None
+
+
+_SDK_RESOLVE_JS = r"""
+const fs = require('fs');
+const path = require('path');
+const url = require('url');
+const pkgRoot = process.argv[2];
+const configPath = process.argv[3];
+(async () => {
+  const dist = path.join(pkgRoot, 'dist');
+  const candidates = fs.existsSync(dist)
+    ? fs.readdirSync(dist).filter((f) => /^env-substitution-.*\.js$/.test(f)).sort()
+    : [];
+  if (!candidates.length) { console.error('no env-substitution module in ' + dist); process.exit(2); }
+  const mod = await import(url.pathToFileURL(path.join(dist, candidates[candidates.length - 1])).href);
+  const resolve = mod.r || mod.resolveConfigEnvVars;
+  if (typeof resolve !== 'function') { console.error('no resolver export'); process.exit(3); }
+  const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  const resolved = resolve(cfg, process.env);
+  const server = (resolved.mcp && resolved.mcp.servers && resolved.mcp.servers.teamharness) || {};
+  process.stdout.write(JSON.stringify(server.env || {}));
+})().catch((err) => { console.error(String(err && err.stack ? err.stack : err)); process.exit(4); });
+"""
+
+
+def _sdk_resolved_env(pkg_root: Path, config: Path, parent_env: dict) -> dict:
+    """Resolve ``${VAR}`` through the SDK's OWN config loader (the runtime
+    path), never through the redacting public CLI readback."""
+    node = shutil.which("node")
+    assert node, "node is required to drive the OpenClaw SDK loader"
+    harness = config.parent / "resolve-env.harness.js"
+    harness.write_text(_SDK_RESOLVE_JS, encoding="utf-8")
+    env = dict(parent_env)
+    result = subprocess.run(
+        [node, str(harness), str(pkg_root), str(config)],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        _skip_or_fail(
+            f"OpenClaw SDK config loader could not resolve the entry "
+            f"(exit {result.returncode}): {result.stderr.strip()[:400]}"
+        )
+    return json.loads(result.stdout or "{}")
+
+
+def _child_env_probe(env: dict) -> dict:
+    """The child-process boundary: spawn exactly the resolved entry env and
+    read back what the child actually sees."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import json, os; print(json.dumps(dict(os.environ)))",
+        ],
+        capture_output=True,
+        text=True,
+        env=dict(env),
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout or "{}")
+
+
 def test_real_openclaw_config_readback_keeps_only_allowlisted_values(tmp_path):
     cli = _find_openclaw_cli()
     if cli is None:
-        pytest.skip(
+        _skip_or_fail(
             "no OpenClaw SDK available for the real-SDK child-env regression "
             "(set OPENCLAW_BIN or OPENCLAW_SDK_ROOT, or put openclaw on PATH; "
             "CI installs openclaw@2026.4.14)"
@@ -350,8 +457,8 @@ def test_real_openclaw_config_readback_keeps_only_allowlisted_values(tmp_path):
     install_openclaw_entry(tmp_path, parent_env)
 
     # The runtime expands ${VAR} from the process environment at config
-    # load (src/config/env-substitution.ts); point the CLI at the
-    # isolated HOME and run it under the fake parent env.
+    # load (src/config/env-substitution.ts); point the CLI at the isolated
+    # HOME and run it under the fake parent env.
     home = tmp_path / "home"
     config = home / ".openclaw" / "openclaw.json"
     env = _isolated_installer_env(home, parent_env)
@@ -364,7 +471,7 @@ def test_real_openclaw_config_readback_keeps_only_allowlisted_values(tmp_path):
         timeout=120,
     )
     if result.returncode != 0:
-        pytest.skip(
+        _skip_or_fail(
             f"openclaw CLI ({source}) `config get` failed "
             f"(signature drift from the pinned runtime?): "
             f"{result.stderr.strip()[:400]}"
@@ -380,19 +487,59 @@ def test_real_openclaw_config_readback_keeps_only_allowlisted_values(tmp_path):
         server = payload["mcp"].get("servers", {}).get("teamharness")
     else:
         server = payload
-    resolved = server.get("env") if isinstance(server, dict) else None
-    assert isinstance(resolved, dict), (
+    readback = server.get("env") if isinstance(server, dict) else None
+    assert isinstance(readback, dict), (
         f"no env map in the real-SDK readback:\n{json.dumps(payload, indent=2)}"
     )
-    # the same contract as the local reproduction: the allowlisted
-    # storage/Matrix context is present and resolved from the parent env;
-    # role overrides and unrelated junk are absent
+    # 1) The public CLI readback is not a credential-bearing runtime config:
+    #    the secrets resolve and are then REDACTED (the previous round
+    #    compared them to the literal values and failed on that behaviour).
+    for name in SECRET_VARS:
+        assert parent_env[name] not in text, (
+            f"{name} leaked its literal value into the public CLI readback"
+        )
+        assert readback.get(name) == REDACTED, (
+            f"{name} should be redacted in the CLI readback, got "
+            f"{readback.get(name)!r}"
+        )
+    # 2) Every non-secret allowlisted value still resolves, and the role
+    #    overrides / unrelated junk never appear.
+    for name in ALLOWLIST:
+        if name in SECRET_VARS:
+            continue
+        assert readback.get(name) == parent_env[name], (
+            f"{name} missing or wrong in the real-SDK readback: "
+            f"{readback.get(name)!r}"
+        )
+    for name in ROLE_VARS + JUNK_VARS:
+        assert name not in readback
+
+    # 3) The SECRETS resolve through the SDK's own config loader (the
+    #    runtime's path), not through the redacting CLI.
+    pkg_root = _openclaw_sdk_root(argv_prefix)
+    if pkg_root is None:
+        _skip_or_fail(
+            "could not locate the installed OpenClaw package (package.json "
+            "with name=openclaw) for the SDK loader stage"
+        )
+    resolved = _sdk_resolved_env(pkg_root, config, parent_env)
     for name in ALLOWLIST:
         assert resolved.get(name) == parent_env[name], (
-            f"{name} missing or wrong in the real-SDK readback: {resolved.get(name)!r}"
+            f"{name} not resolved by the real SDK config loader: "
+            f"{resolved.get(name)!r}"
         )
     for name in ROLE_VARS + JUNK_VARS:
         assert name not in resolved
+
+    # 4) The child-process boundary: the resolved entry env is exactly what
+    #    the MCP child would receive.
+    child_env = _child_env_probe(resolved)
+    for name in ALLOWLIST:
+        assert child_env.get(name) == parent_env[name], (
+            f"{name} missing in the spawned child env: {child_env.get(name)!r}"
+        )
+    for name in ROLE_VARS + JUNK_VARS:
+        assert name not in child_env
 
 
 # ---------------------------------------------------------------------------

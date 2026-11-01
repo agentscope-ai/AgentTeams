@@ -309,17 +309,32 @@ def _import_hermes_mcp_tool():
         return None
 
 
+REQUIRE_NATIVE_ENV = "AGENTTEAMS_TEST_REQUIRE_NATIVE_SDK"
+
+
+def _require_native_sdk() -> bool:
+    """CI sets this on the job that installs a pinned SDK: a configured
+    native runtime that cannot run must FAIL that job instead of skipping."""
+    return os.environ.get(REQUIRE_NATIVE_ENV, "").strip() == "1"
+
+
+def _skip_or_fail(reason: str) -> None:
+    if _require_native_sdk():
+        pytest.fail(f"{reason} (required by {REQUIRE_NATIVE_ENV}=1)")
+    pytest.skip(reason)
+
+
 def test_real_sdk_build_safe_env_keeps_only_allowlisted_values(tmp_path, monkeypatch):
     mcp_tool = _import_hermes_mcp_tool()
     if mcp_tool is None:
-        pytest.skip(
+        _skip_or_fail(
             "hermes v2026.4.16 SDK not available for the real-SDK child-env "
             "regression (set HERMES_SDK_ROOT or HERMES_416_ROOT to a "
             "checkout with tools/mcp_tool.py; CI installs hermes v2026.4.16)"
         )
     fn = getattr(mcp_tool, "_build_safe_env", None)
     if fn is None:
-        pytest.skip(
+        _skip_or_fail(
             "hermes SDK's tools.mcp_tool has no _build_safe_env (signature "
             "drift from the v2026.4.16 pin)"
         )
@@ -341,7 +356,7 @@ def test_real_sdk_build_safe_env_keeps_only_allowlisted_values(tmp_path, monkeyp
     try:
         child = fn(user_env)
     except TypeError:
-        pytest.skip(
+        _skip_or_fail(
             "hermes SDK _build_safe_env no longer takes the entry's env "
             "map (signature drift from the v2026.4.16 pin); update the "
             "call site"

@@ -18,7 +18,7 @@ credentials:
   adminUser: "admin"
   adminPassword: ""           # Matrix admin password (auto-generated if empty)
   llmApiKey: ""               # LLM API key (required)
-  llmProvider: "openai-compat"
+  llmProvider: "openai-compat"  # openai-compat, qwen, orcarouter, or a custom name
   defaultModel: "gpt-5.4"
   llmBaseUrl: ""              # OpenAI-compatible base URL (e.g. https://api.openai.com/v1)
 

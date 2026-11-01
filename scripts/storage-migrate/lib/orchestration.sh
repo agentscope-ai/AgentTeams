@@ -50,7 +50,10 @@ first_bucket() { # the (first) bucket the migration targets
 }
 
 backup_root_path() {
-  [ -n "$BACKUP_ROOT" ] || BACKUP_ROOT="./storage-migrate-backup"
+  # Absolute: the snapshot is created in P0 and read again by P5, which may run
+  # from a different working directory (a relative path there pointed at a
+  # directory that never existed).
+  [ -n "$BACKUP_ROOT" ] || BACKUP_ROOT="$PWD/storage-migrate-backup"
   echo "$BACKUP_ROOT"
 }
 backup_dir_current() { # the original-config snapshot dir (P0 wrote it) or ""

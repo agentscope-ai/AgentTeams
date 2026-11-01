@@ -1141,6 +1141,30 @@ p5_switch_config() {
   log_info "P5: switch the controller config to the target backend"
   local bdir
   bdir=$(backup_dir_current)
+  # A snapshot path recorded by a dry-run (or from another working directory)
+  # can point at a directory that was never written. Create the rollback source
+  # now rather than switching without one - the controller is still on the old
+  # config at this point, so this is exactly when it must be captured.
+  if [ "$DRY_RUN" = false ] && { [ -z "$bdir" ] || [ ! -d "$bdir" ]; }; then
+    log_info "P5: original-config snapshot missing (${bdir:-unset}); capturing it now before the switch"
+    bdir="$(backup_root_path)/$(date -u +%Y%m%d-%H%M%S)"
+    mkdir -p "$bdir"
+    case "$DEPLOYMENT" in
+      embedded)
+        docker inspect "$CONTROLLER_CONTAINER" > "$bdir/controller-inspect-pre.json" 2>/dev/null || true
+        jq -c '.[0].Config.Env' "$bdir/controller-inspect-pre.json" > "$bdir/controller-env-pre.json" 2>/dev/null || echo '[]' > "$bdir/controller-env-pre.json"
+        jq -r '.[0].Config.Image' "$bdir/controller-inspect-pre.json" 2>/dev/null > "$bdir/controller-image.txt" || true
+        docker exec "$CONTROLLER_CONTAINER" agt get workers -o json > "$bdir/workers-pre.json" 2>/dev/null || true
+        docker exec "$CONTROLLER_CONTAINER" agt get managers -o json > "$bdir/managers-pre.json" 2>/dev/null || true
+        ;;
+      helm)
+        helm get values "$HELM_RELEASE" -n "$NS" > "$bdir/helm-values-pre.yaml" 2>/dev/null || true
+        kubectl -n "$NS" get workers -o yaml > "$bdir/workers-pre.yaml" 2>/dev/null || true
+        kubectl -n "$NS" get managers -o yaml > "$bdir/managers-pre.yaml" 2>/dev/null || true
+        ;;
+    esac
+    state_set "original_config_snapshot" "\"$bdir\""
+  fi
   [ -n "$bdir" ] && [ "$DRY_RUN" = true ] || { [ -d "$bdir" ] || { fail_notice "P5 switch" "original-config snapshot missing ($bdir) - refusing to switch without a rollback source"; exit 1; }; }
   state_set "stage_detail.p5.backup_dir" "\"$bdir\""
   case "$DEPLOYMENT" in

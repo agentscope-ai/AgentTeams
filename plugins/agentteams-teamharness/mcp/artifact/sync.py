@@ -123,48 +123,64 @@ def _merge_project_pause_state(
     """Merge the controller-owned pause state from a remote snapshot into
     the local project meta (the local copy stays the write base).
 
-    #1402 rules — a worker write preserves pause state it did not author:
+    #1402 rules — the Controller is the single writer of the pause state,
+    so the snapshot is authoritative for it and the local copy only owns
+    the fields the worker writes:
 
     - project ``status``: a remote ``paused`` is authoritative (never
       write ``active`` over it); every other status is the local writer's
-      to own;
-    - ``loop.pause_sources``: union of remote and local — a worker never
-      removes a source it did not add; removal stays with the
-      Controller's CAS write;
-    - ``loop.paused_by_project``: the remote value wins;
+      to own — the agent-side pause/resume is this legacy channel. (This
+      stays correct only while the Controller never transitions ``status``
+      itself: it writes ``active`` on create and nothing after. A future
+      Controller-side status transition must become remote-authoritative
+      too, or a stale cache could resurrect it the same way.)
+    - ``loop.pause_sources``: the remote value wins. The local copy never
+      adds or keeps a source, so a cache pulled before an admin resume
+      cannot write the released veto back on the next progress sync. The
+      union this replaces protected nothing: the snapshot and the commit's
+      If-Match come from the same versioned read, and a pause landing after
+      it fails either the CAS (409 -> re-read -> merge) or the verify
+      re-read — the union only resurrected stale local state;
+    - ``loop.paused_by_project``: the remote value wins (an absent remote
+      key drops the stale local copy);
     - loop keys present remotely but unmodeled locally: carried over
-      (mirror of the Go ``loopMeta.Extra`` round-trip rule).
+      (mirror of the Go ``loopMeta.Extra`` round-trip rule);
+    - local-only loop keys (``current_iteration``, the task plan, ...):
+      the local writer keeps them.
     """
     merged = dict(local_meta or {})
-    if not snapshot:
+    if snapshot is None:
         return merged
     if str(snapshot.get("status") or "") == "paused":
         merged["status"] = "paused"
     snapshot_loop = snapshot.get("loop")
-    if not isinstance(snapshot_loop, dict) or not snapshot_loop:
-        return merged
+    snapshot_loop = snapshot_loop if isinstance(snapshot_loop, dict) else {}
     local_loop = merged.get("loop")
     loop = dict(local_loop) if isinstance(local_loop, dict) else {}
     for key, value in snapshot_loop.items():
         if key not in loop:
             loop[key] = value
-    local_sources = loop.get("pause_sources")
-    remote_sources = snapshot_loop.get("pause_sources")
-    sources = {
-        source
-        for source in (local_sources if isinstance(local_sources, list) else [])
-        if isinstance(source, str) and source.strip()
-    }
-    sources.update(
-        source
-        for source in (remote_sources if isinstance(remote_sources, list) else [])
-        if isinstance(source, str) and source.strip()
-    )
-    if sources:
-        loop["pause_sources"] = sorted(sources)
+    # Controller-owned keys: the snapshot is authoritative for the exact
+    # lowercase keys; a stale local value is dropped, never unioned.
+    if "pause_sources" in snapshot_loop:
+        raw_sources = snapshot_loop.get("pause_sources")
+        loop["pause_sources"] = sorted(
+            {
+                source
+                for source in (raw_sources if isinstance(raw_sources, list) else [])
+                if isinstance(source, str) and source.strip()
+            }
+        )
+    else:
+        loop.pop("pause_sources", None)
     if "paused_by_project" in snapshot_loop:
         loop["paused_by_project"] = snapshot_loop["paused_by_project"]
-    merged["loop"] = loop
+    else:
+        loop.pop("paused_by_project", None)
+    if loop:
+        merged["loop"] = loop
+    else:
+        merged.pop("loop", None)
     return merged
 
 
@@ -436,9 +452,12 @@ def _sync_project(arguments: dict[str, Any], project_id: str) -> bool:
        version flip between the bracketing stats discards the body and
        retries the read, bounded to _SYNC_META_READ_ATTEMPTS;
     2. merge the controller-owned pause state from that snapshot into the
-       local meta and re-write it (``_merge_project_pause_state``), so
-       every project writer (lifecycle transitions, project flow, state)
-       inherits the protection;
+       local meta and re-write it (``_merge_project_pause_state``): the
+       snapshot is authoritative for ``loop.pause_sources`` /
+       ``loop.paused_by_project`` (a stale local cache never re-adds a
+       released source) and a remote ``paused`` status is authoritative,
+       while the worker keeps the fields it owns (progress, iteration,
+       task plan) — so every project writer inherits the protection;
     3. push the project directory EXCLUDING meta.json (derived files only:
        plan.md, result.md, ...);
     4. commit the merged meta conditionally against the version the

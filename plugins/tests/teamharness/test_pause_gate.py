@@ -69,6 +69,17 @@ Covers (#1402 conditional commit, the later boundary and fail-closed):
 19. the ETag probe fails (a storage error, not an absent object) ->
     fail closed: no commit attempted, and no directory push that omits
     meta.json either (an unknown remote version is never half-written)
+
+Covers (#1402 round 13, the reverse direction — release resurrected):
+20. a cache pulled while ``pause_sources=["user"]`` survives an admin
+    resume: the next progress sync commits the stale copy, and the
+    durable source set must stay released (``[]``), not be unioned back;
+21. the remote loop carries no ``pause_sources`` key at all -> the absent
+    controller-owned key means "no pause"; the stale local source is
+    dropped, not written back;
+22. no remote loop object -> both controller-owned keys
+    (``pause_sources``, ``paused_by_project``) are dropped while the
+    worker-owned loop content still lands.
 """
 
 from __future__ import annotations
@@ -1258,3 +1269,104 @@ def test_sync_project_fails_closed_on_etag_read_failure(
         if call.get("action") == "push" and call.get("path") == f"shared/projects/{project_id}"
     ]
     assert dir_pushes == []
+
+
+# --- Spec 20-22 (#1402 round 13): the reverse direction — a cache pulled
+# before an admin resume must not write the released pause back. The
+# snapshot is authoritative for the controller-owned pause keys; the local
+# copy only owns the fields the worker writes. ---
+
+
+def test_sync_after_admin_resume_does_not_resurrect_stale_pause(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 20 (the maintainer's P1): pull while ``pause_sources=["user"]``,
+    admin ResumeLoop clears the source, then the worker syncs the unchanged
+    cached project plus a progress field. The durable source set must stay
+    released — the stale cache never re-adds it."""
+    monkeypatch.setattr(server.sync, "_SYNC_PROJECT_RETRY_BACKOFFS", (0.0, 0.0))
+    workspace = tmp_path / "agent"
+    project_id = "pg-20"
+    meta_path = f"shared/projects/{project_id}/meta.json"
+    # The stale local cache: pulled while the human pause was still active.
+    stale_local = _project(
+        project_id, status="active", loop=_loop(pause_sources=["user"], current_iteration=1)
+    )
+    # After ResumeLoop(source=user): the Go writer keeps the exact key, so
+    # the remote carries [] rather than a missing key.
+    resumed_remote = _project(project_id, status="active", loop=_loop(pause_sources=[]))
+    storage = FakeProjectStorage({meta_path: resumed_remote})
+    _install_sync_fakes(monkeypatch, server, storage)
+    _write_project(workspace, project_id, stale_local)
+
+    assert server.sync._sync_project(_arguments(workspace, "noop"), project_id) is True
+
+    assert storage.commit_calls == 1
+    final = storage.remote[meta_path]
+    assert final["loop"]["pause_sources"] == []
+    # The worker-authored progress field still landed.
+    assert final["loop"]["current_iteration"] == 1
+    # The local cache is re-written from the authoritative snapshot, so the
+    # next gate read in this worker no longer sees the released pause.
+    assert _read_project(workspace, project_id)["loop"]["pause_sources"] == []
+
+
+def test_sync_drops_stale_pause_when_remote_has_no_pause_key(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 21: the remote loop carries no ``pause_sources`` key at all (an
+    older writer, or a meta cleaned outside the Go CAS). The absent
+    controller-owned key means "no pause": the stale local source is
+    dropped instead of being written back."""
+    monkeypatch.setattr(server.sync, "_SYNC_PROJECT_RETRY_BACKOFFS", (0.0, 0.0))
+    workspace = tmp_path / "agent"
+    project_id = "pg-21"
+    meta_path = f"shared/projects/{project_id}/meta.json"
+    stale_local = _project(
+        project_id, status="active", loop=_loop(pause_sources=["user"], current_iteration=2)
+    )
+    remote_without_key = _project(project_id, status="active", loop=_loop())
+    storage = FakeProjectStorage({meta_path: remote_without_key})
+    _install_sync_fakes(monkeypatch, server, storage)
+    _write_project(workspace, project_id, stale_local)
+
+    assert server.sync._sync_project(_arguments(workspace, "noop"), project_id) is True
+
+    final = storage.remote[meta_path]
+    assert "pause_sources" not in final["loop"]
+    assert final["loop"]["current_iteration"] == 2
+    assert "pause_sources" not in _read_project(workspace, project_id)["loop"]
+
+
+def test_sync_drops_stale_pause_and_flag_when_remote_has_no_loop(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 22: the remote meta has no loop object, so both controller-owned
+    keys are absent. The stale local ``pause_sources`` and
+    ``paused_by_project`` are dropped while the worker-owned loop content
+    (iteration, task plan) is still committed."""
+    monkeypatch.setattr(server.sync, "_SYNC_PROJECT_RETRY_BACKOFFS", (0.0, 0.0))
+    workspace = tmp_path / "agent"
+    project_id = "pg-22"
+    meta_path = f"shared/projects/{project_id}/meta.json"
+    stale_local = _project(
+        project_id,
+        status="active",
+        loop=_loop(pause_sources=["project"], current_iteration=3),
+    )
+    stale_local["loop"]["paused_by_project"] = True
+    remote_without_loop = _project(project_id, status="active")
+    storage = FakeProjectStorage({meta_path: remote_without_loop})
+    _install_sync_fakes(monkeypatch, server, storage)
+    _write_project(workspace, project_id, stale_local)
+
+    assert server.sync._sync_project(_arguments(workspace, "noop"), project_id) is True
+
+    final = storage.remote[meta_path]
+    assert "pause_sources" not in final["loop"]
+    assert "paused_by_project" not in final["loop"]
+    assert final["loop"]["current_iteration"] == 3
+    assert final["loop"]["tasks"][0]["task_id"] == "pg-task-01"
+    local = _read_project(workspace, project_id)
+    assert "pause_sources" not in local["loop"]
+    assert "paused_by_project" not in local["loop"]

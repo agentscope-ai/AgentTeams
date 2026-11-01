@@ -129,3 +129,33 @@ def test_sync_project_fails_closed_on_etag_read_failure_in_bundle(
     pause_gate.test_sync_project_fails_closed_on_etag_read_failure(
         server, tmp_path, monkeypatch
     )
+
+
+def test_sync_after_admin_resume_does_not_resurrect_stale_pause_in_bundle(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 20 (parity): a cache pulled before the admin resume must not
+    write the released pause back in the bundle's copy either."""
+    pause_gate.test_sync_after_admin_resume_does_not_resurrect_stale_pause(
+        server, tmp_path, monkeypatch
+    )
+
+
+def test_sync_drops_stale_pause_when_remote_has_no_pause_key_in_bundle(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 21 (parity): the absent controller-owned key means "no pause" in
+    the bundle's copy too — the stale local source is dropped."""
+    pause_gate.test_sync_drops_stale_pause_when_remote_has_no_pause_key(
+        server, tmp_path, monkeypatch
+    )
+
+
+def test_sync_drops_stale_pause_and_flag_when_remote_has_no_loop_in_bundle(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Spec 22 (parity): with no remote loop both controller-owned keys are
+    dropped in the bundle's copy while the worker-owned content lands."""
+    pause_gate.test_sync_drops_stale_pause_and_flag_when_remote_has_no_loop(
+        server, tmp_path, monkeypatch
+    )

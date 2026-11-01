@@ -2230,10 +2230,17 @@ class AgentTeamsMatrixChannel(BaseChannel):
     # send_media outbound path (same role as worker _upload_file).
     # ------------------------------------------------------------------
 
-    async def _upload_file(self, file_ref: str) -> Optional[str]:
-        """Upload a local file to Matrix; return mxc:// URI or None."""
+    async def _upload_file(
+        self, file_ref: str, *, encrypt: bool = False
+    ) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
+        """Upload a local file; return ``(mxc:// URI, decryption info)``.
+
+        ``encrypt=True`` asks matrix-nio to encrypt the bytes and returns the
+        decryption descriptor the event's ``file`` object must carry; the
+        plaintext path returns ``(uri, None)`` unchanged.
+        """
         if not self._client:
-            return None
+            return None, None
         try:
             # file_ref may be a file:// URI or a plain path
             path = Path(file_url_to_local_path(file_ref) or file_ref)
@@ -2242,15 +2249,16 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     "MatrixChannel: upload source not found: %s",
                     file_ref,
                 )
-                return None
+                return None, None
             mime_type, _ = mimetypes.guess_type(str(path))
             mime_type = mime_type or "application/octet-stream"
             data = path.read_bytes()
-            resp, _ = await self._client.upload(
+            resp, decryption = await self._client.upload(
                 io.BytesIO(data),
                 content_type=mime_type,
                 filename=path.name,
                 filesize=len(data),
+                encrypt=encrypt,
             )
             if isinstance(resp, UploadResponse):
                 logger.debug(
@@ -2258,16 +2266,16 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     path.name,
                     resp.content_uri,
                 )
-                return resp.content_uri
+                return resp.content_uri, (decryption if encrypt else None)
             logger.warning("MatrixChannel: upload failed: %s", resp)
-            return None
+            return None, None
         except Exception as exc:
             logger.warning(
                 "MatrixChannel: upload error for %s: %s",
                 file_ref,
                 exc,
             )
-            return None
+            return None, None
 
     # ------------------------------------------------------------------
     # DM room detection (joined_members API + short-lived cache)
@@ -3544,6 +3552,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         file_ref: str,
         matrix_msgtype: str,
         mxc_uri: str,
+        decryption: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         path_str = file_url_to_local_path(file_ref) or file_ref
         filename = os.path.basename(path_str) or "file"
@@ -3553,15 +3562,31 @@ class AgentTeamsMatrixChannel(BaseChannel):
             file_size = os.path.getsize(path_str)
         except OSError:
             file_size = 0
-        return {
+        content: Dict[str, Any] = {
             "msgtype": matrix_msgtype,
             "body": filename,
-            "url": mxc_uri,
             "info": {
                 "mimetype": mime_type,
                 "size": file_size,
             },
         }
+        if decryption:
+            # An encrypted room's attachment MUST carry the file descriptor
+            # (url + key/iv/hashes/v): the receiver decrypts the room event
+            # and then requires `file`; a bare `url` is a BadEvent and the
+            # repository stored the plaintext bytes (#1469 P1).
+            file_info: Dict[str, Any] = dict(decryption)
+            file_info.update(
+                {
+                    "url": mxc_uri,
+                    "mimetype": mime_type,
+                    "size": file_size,
+                }
+            )
+            content["file"] = file_info
+        else:
+            content["url"] = mxc_uri
+        return content
 
     async def _send_uploaded_media_event(
         self,
@@ -3570,11 +3595,13 @@ class AgentTeamsMatrixChannel(BaseChannel):
         matrix_msgtype: str,
         mxc_uri: str,
         meta: Optional[Dict[str, Any]],
+        decryption: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
         event_content = self._matrix_media_event_content(
             file_ref,
             matrix_msgtype,
             mxc_uri,
+            decryption,
         )
         meta_dict = meta or {}
         sender_id = meta_dict.get("sender_id") or meta_dict.get("user_id")
@@ -3694,7 +3721,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
             return None
         path = self._write_long_message_file(text)
         file_ref = str(path)
-        media_uri = await self._upload_file(file_ref)
+        media_uri, _ = await self._upload_file(file_ref)
         if not media_uri:
             logger.warning(
                 "MatrixChannel: long text fallback upload failed for %s",
@@ -4659,11 +4686,28 @@ class AgentTeamsMatrixChannel(BaseChannel):
         if not file_ref:
             return None
 
+        # The destination room decides whether the attachment is encrypted
+        # (#1469 P1): an encrypted room's upload must store ciphertext and the
+        # event must carry the file descriptor. _prepare_room_send aligns the
+        # client's local encryption flags with the server first (the same
+        # helper the text path uses).
+        if self.encryption:
+            await self._prepare_room_send(room_id)
+        encrypted = self._room_will_encrypt(room_id)
+
         # Upload to Matrix media repository
-        mxc_uri = await self._upload_file(file_ref)
+        mxc_uri, decryption = await self._upload_file(file_ref, encrypt=encrypted)
         if not mxc_uri:
             logger.warning(
                 "MatrixChannel: send_media upload failed for %s",
+                file_ref,
+            )
+            return None
+        if encrypted and not decryption:
+            logger.warning(
+                "MatrixChannel: encrypted upload returned no decryption "
+                "metadata for %s; refusing to send it as a plaintext "
+                "attachment",
                 file_ref,
             )
             return None
@@ -4676,6 +4720,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 matrix_msgtype,
                 mxc_uri,
                 meta,
+                decryption,
             )
             logger.debug(
                 "MatrixChannel: sent %s %s to %s",

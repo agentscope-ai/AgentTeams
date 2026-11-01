@@ -558,22 +558,49 @@ class AgentTeamsMatrixAdapter(BasePlatformAdapter):
         src = Path(path).expanduser()
         if not src.is_file():
             return SendResult(success=False, error=f"file not found: {path}")
-        mxc_uri = await self._upload_file(src)
+        encrypted = await self._room_is_encrypted(chat_id)
+        mxc_uri, decryption = await self._upload_file(src, encrypt=encrypted)
         if not mxc_uri:
             return SendResult(success=False, error=f"upload failed: {path}")
-        content: Dict[str, Any] = {
-            "msgtype": msgtype,
-            "body": caption or src.name,
-            "url": mxc_uri,
-        }
-        info: Dict[str, Any] = {}
         try:
             size = src.stat().st_size
         except OSError:
             size = None
+        mime_type, _ = mimetypes.guess_type(str(src))
+        content: Dict[str, Any] = {
+            "msgtype": msgtype,
+            "body": caption or src.name,
+        }
+        if encrypted:
+            # An encrypted room's attachment MUST carry the file descriptor
+            # (url + key/iv/hashes/v): matrix-nio decrypts the room event, and
+            # a receiving client then requires `file` — a bare `url` there is
+            # a BadEvent, and the media repository would have stored the
+            # plaintext bytes anyway. Fail closed when the upload returned no
+            # encryption metadata rather than inventing a plaintext event.
+            if not decryption:
+                logger.warning(
+                    "AgentTeams Matrix: encrypted upload returned no "
+                    "decryption metadata for %s; refusing to send it as a "
+                    "plaintext attachment",
+                    path,
+                )
+                return SendResult(
+                    success=False,
+                    error="encrypted upload missing decryption metadata",
+                )
+            file_info: Dict[str, Any] = dict(decryption)
+            file_info["url"] = mxc_uri
+            if mime_type:
+                file_info["mimetype"] = mime_type
+            if size is not None:
+                file_info["size"] = size
+            content["file"] = file_info
+        else:
+            content["url"] = mxc_uri
+        info: Dict[str, Any] = {}
         if size is not None:
             info["size"] = size
-        mime_type, _ = mimetypes.guess_type(str(src))
         if mime_type:
             info["mimetype"] = mime_type
         if info:
@@ -595,22 +622,73 @@ class AgentTeamsMatrixAdapter(BasePlatformAdapter):
             )
         return SendResult(success=True, message_id=resp.event_id)
 
-    async def _upload_file(self, path: Path) -> Optional[str]:
-        """Upload a local file to Matrix; return mxc:// URI or None.
+    async def _room_is_encrypted(self, room_id: str) -> bool:
+        """Whether the destination room is encrypted (attachment decision).
 
-        QwenPaw parity: same upload kwargs, same warning wording.
+        The client's live state decides first (a synced m.room.encryption
+        marks the room on matrix-nio's side); when that is unknown the
+        server-side state event is read once and cached on the client. Any
+        failure reads as not encrypted: the caller then keeps the ordinary
+        plaintext path instead of inventing an encrypted descriptor for a
+        room the server does not encrypt.
+        """
+        if not self.encryption or self._client is None:
+            return False
+        rooms = getattr(self._client, "rooms", {}) or {}
+        room = rooms.get(room_id)
+        if room is not None and getattr(room, "encrypted", False) is True:
+            return True
+        encrypted_rooms = getattr(self._client, "encrypted_rooms", None)
+        if encrypted_rooms is not None and room_id in encrypted_rooms:
+            return True
+        try:
+            state = await self._client.room_get_state_event(
+                room_id, "m.room.encryption", ""
+            )
+        except Exception as exc:
+            logger.debug(
+                "AgentTeams Matrix: room encryption lookup failed for %s: %s",
+                room_id,
+                exc,
+            )
+            return False
+        content = getattr(state, "content", None) or {}
+        algorithm = content.get("algorithm") if isinstance(content, dict) else None
+        if not algorithm:
+            return False
+        if encrypted_rooms is not None:
+            try:
+                encrypted_rooms.add(room_id)
+            except Exception:
+                pass
+        if room is not None:
+            try:
+                room.encrypted = True
+            except Exception:
+                pass
+        return True
+
+    async def _upload_file(
+        self, path: Path, *, encrypt: bool = False
+    ) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
+        """Upload a local file; return ``(mxc:// URI, decryption info)``.
+
+        ``encrypt=True`` asks matrix-nio to encrypt the bytes and returns the
+        decryption descriptor (key/iv/hashes/v) the room event must carry;
+        the plaintext path returns ``(uri, None)`` unchanged.
         """
         if self._client is None:
-            return None
+            return None, None
         try:
             mime_type, _ = mimetypes.guess_type(str(path))
             mime_type = mime_type or "application/octet-stream"
             data = path.read_bytes()
-            resp, _ = await self._client.upload(
+            resp, decryption = await self._client.upload(
                 io.BytesIO(data),
                 content_type=mime_type,
                 filename=path.name,
                 filesize=len(data),
+                encrypt=encrypt,
             )
             if isinstance(resp, UploadResponse):
                 logger.debug(
@@ -618,14 +696,14 @@ class AgentTeamsMatrixAdapter(BasePlatformAdapter):
                     path.name,
                     resp.content_uri,
                 )
-                return resp.content_uri
+                return resp.content_uri, (decryption if encrypt else None)
             logger.warning("AgentTeams Matrix: upload failed: %s", resp)
-            return None
+            return None, None
         except Exception as exc:
             logger.warning(
                 "AgentTeams Matrix: upload error for %s: %s", path, exc
             )
-            return None
+            return None, None
 
     # -- inbound ------------------------------------------------------------
 

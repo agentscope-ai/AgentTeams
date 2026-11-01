@@ -336,6 +336,10 @@ class FakeClient:
             UploadResponse(content_uri="mxc://example.org/abc"),
             None,
         )
+        #: Encrypt the uploaded bytes for real when ``encrypt=True`` (the
+        #: decryption descriptor is what the event's ``file`` object carries).
+        self.upload_encryption_info = True
+        self.uploaded_ciphertext = b""
         self.closed = False
 
     async def joined_members(self, room_id):
@@ -373,15 +377,32 @@ class FakeClient:
         return RoomSendResponse(room_id=room_id, event_id="$room-send")
 
     async def upload(
-        self, data, content_type=None, filename=None, filesize=None, **kwargs
+        self,
+        data,
+        content_type=None,
+        filename=None,
+        filesize=None,
+        encrypt=False,
+        **kwargs,
     ):
+        payload = data.read() if hasattr(data, "read") else bytes(data or b"")
         self.upload_calls.append(
             {
                 "content_type": content_type,
                 "filename": filename,
                 "filesize": filesize,
+                "encrypt": encrypt,
+                "data": payload,
             }
         )
+        if encrypt:
+            if self.upload_encryption_info is None:
+                return self.upload_response[0], None
+            from nio.crypto import encrypt_attachment
+
+            ciphertext, info = encrypt_attachment(payload)
+            self.uploaded_ciphertext = ciphertext
+            return self.upload_response[0], info
         return self.upload_response
 
     async def close(self):
@@ -1007,6 +1028,8 @@ def test_send_document_uploads_and_room_sends(adapter_mod, matrix_env, tmp_path)
             "content_type": "application/pdf",
             "filename": "report.pdf",
             "filesize": len(doc.read_bytes()),
+            "encrypt": False,
+            "data": doc.read_bytes(),
         }
     ]
     call = client.room_send_calls[0]
@@ -1140,3 +1163,88 @@ def test_install_uninstall_staging(tmp_path):
         ["bash", str(uninstall)], capture_output=True, text=True, env=env
     )
     assert r3.returncode == 0
+
+
+def _encrypted_group_room(client):
+    room = FakeRoom(name="Team", members=[SELF, USER])
+    room.encrypted = True
+    client.rooms[GROUP_ROOM] = room
+    return room
+
+
+def test_send_document_in_encrypted_room_uses_file_descriptor(
+    adapter_mod, matrix_env, tmp_path
+):
+    """P1469: an encrypted room's attachment is uploaded as ciphertext and
+    the event carries the file descriptor (url + key/iv/hashes/v), never a
+    bare url — the receiving client decrypts the event and requires it."""
+    client = FakeClient()
+    adapter, client, transport, events = _wire_adapter(adapter_mod, client=client)
+    adapter.encryption = True
+    _encrypted_group_room(client)
+    doc = tmp_path / "report.pdf"
+    plaintext = b"%PDF-1.4 encrypted attachment"
+    doc.write_bytes(plaintext)
+
+    result = asyncio.run(adapter.send_document(GROUP_ROOM, str(doc), caption="report"))
+
+    assert result.success is True
+    assert client.upload_calls[0]["encrypt"] is True
+    content = client.room_send_calls[0]["content"]
+    assert "url" not in content
+    file_info = content["file"]
+    for key in ("url", "key", "iv", "hashes", "v"):
+        assert key in file_info, f"missing {key} in the file descriptor"
+    assert file_info["url"] == "mxc://example.org/abc"
+    assert file_info["mimetype"] == "application/pdf"
+    assert file_info["size"] == len(plaintext)
+    # The "media repository" stored ciphertext, and a receiving client can
+    # decrypt it back to the plaintext with exactly the descriptor fields.
+    assert client.uploaded_ciphertext != plaintext
+    from nio.crypto import decrypt_attachment
+
+    decrypted = decrypt_attachment(
+        client.uploaded_ciphertext,
+        file_info["key"]["k"],
+        file_info["hashes"]["sha256"],
+        file_info["iv"],
+    )
+    assert decrypted == plaintext
+
+
+def test_send_document_in_plaintext_room_keeps_url(adapter_mod, matrix_env, tmp_path):
+    """P1469: the ordinary plaintext-room path is unchanged — no encryption
+    is requested and the event keeps the url media content."""
+    client = FakeClient()
+    adapter, client, transport, events = _wire_adapter(adapter_mod, client=client)
+    adapter.encryption = True  # E2EE is configured, but the room is not encrypted
+    doc = tmp_path / "report.pdf"
+    doc.write_bytes(b"%PDF-1.4 fake")
+
+    result = asyncio.run(adapter.send_document(GROUP_ROOM, str(doc), caption="report"))
+
+    assert result.success is True
+    assert client.upload_calls[0]["encrypt"] is False
+    content = client.room_send_calls[0]["content"]
+    assert content["url"] == "mxc://example.org/abc"
+    assert "file" not in content
+
+
+def test_send_document_in_encrypted_room_fails_closed_without_metadata(
+    adapter_mod, matrix_env, tmp_path
+):
+    """P1469: when the encrypted upload returns no decryption metadata the
+    adapter refuses to send a plaintext attachment into the encrypted room."""
+    client = FakeClient()
+    client.upload_encryption_info = None
+    adapter, client, transport, events = _wire_adapter(adapter_mod, client=client)
+    adapter.encryption = True
+    _encrypted_group_room(client)
+    doc = tmp_path / "report.pdf"
+    doc.write_bytes(b"%PDF-1.4 fake")
+
+    result = asyncio.run(adapter.send_document(GROUP_ROOM, str(doc), caption="report"))
+
+    assert result.success is False
+    assert "decryption metadata" in (result.error or "")
+    assert client.room_send_calls == []

@@ -111,17 +111,29 @@ func (h *ResourceHandler) ListMCPServers(w http.ResponseWriter, r *http.Request)
 		writeK8sError(w, "list mcp servers: list workers", err)
 		return
 	}
+	// Index team membership once for the whole catalog instead of once per
+	// worker (issue #1475: findTeamMember re-listed every Team CR per
+	// worker, so an N-worker catalog cost 1 WorkerList + N TeamList
+	// round-trips; the index pays a single Team list). The index covers ALL
+	// workers: the scoped filter below runs inside the loop, so building it
+	// from a pre-filtered name list would change what scoped readers see.
+	workerNames := make([]string, 0, len(workers.Items))
+	for i := range workers.Items {
+		workerNames = append(workerNames, workers.Items[i].Name)
+	}
+	teamIndex, err := teamMemberIndex(ctx, h.client, h.namespace, workerNames)
+	if err != nil {
+		writeK8sError(w, "list mcp servers: lookup team member", err)
+		return
+	}
 	// name -> workers referencing it; name -> worker-spec entry.
 	referencedBy := map[string][]MCPWorkerRef{}
 	specEntries := map[string]v1beta1.MCPServer{}
 	for i := range workers.Items {
 		wkr := &workers.Items[i]
 		team := ""
-		if t, _, ok, err := findTeamMember(ctx, h.client, h.namespace, wkr.Name); err != nil {
-			writeK8sError(w, "list mcp servers: lookup team member", err)
-			return
-		} else if ok {
-			team = t.Name
+		if hit, ok := teamIndex[wkr.Name]; ok {
+			team = hit.team.Name
 		}
 		// Scoped readers only see workers in the teams they control.
 		if scoped && !caller.TeamMatches(team) {

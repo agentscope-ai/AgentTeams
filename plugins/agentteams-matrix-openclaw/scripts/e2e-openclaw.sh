@@ -63,9 +63,30 @@ PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 e2e_die() { echo "e2e: $*" >&2; exit "${2:-1}"; }
 
+# --- modes -------------------------------------------------------------------
+# --preflight-only validates the Matrix environment (both tokens, both
+# memberships) and exits without touching OpenClaw, the sidecar or the core.
+# That is the check an operator runs first; it is also what the harness
+# regression drives against a fake homeserver.
+PREFLIGHT_ONLY=0
+case "${1:-}" in
+  --preflight-only) PREFLIGHT_ONLY=1 ;;
+  "") ;;
+  -h|--help)
+    sed -n '1,55p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    exit 0
+    ;;
+  *) e2e_die "unknown argument: $1 (supported: --preflight-only, --help)" 2 ;;
+esac
+
 # --- required environment ---------------------------------------------------
-for v in AGENTTEAMS_MATRIX_URL E2E_MATRIX_USER E2E_MATRIX_TOKEN \
-         E2E_SENDER_USER E2E_SENDER_TOKEN E2E_ROOM_ID MATRIX_CORE_DIR; do
+MATRIX_ENV_VARS="AGENTTEAMS_MATRIX_URL E2E_MATRIX_USER E2E_MATRIX_TOKEN E2E_SENDER_USER E2E_SENDER_TOKEN E2E_ROOM_ID"
+if [ "$PREFLIGHT_ONLY" = "1" ]; then
+  REQUIRED_ENV_VARS="$MATRIX_ENV_VARS"
+else
+  REQUIRED_ENV_VARS="$MATRIX_ENV_VARS MATRIX_CORE_DIR"
+fi
+for v in $REQUIRED_ENV_VARS; do
   if [ -z "${!v:-}" ]; then
     echo "e2e: missing required environment variable: $v" >&2
     echo "     (see the header of $(basename "$0") for the full list)" >&2
@@ -80,6 +101,11 @@ E2E_REPLY_TIMEOUT_SECONDS="${E2E_REPLY_TIMEOUT_SECONDS:-120}"
 E2E_SETTLE_SECONDS="${E2E_SETTLE_SECONDS:-30}"
 
 command -v python3 >/dev/null || e2e_die "python3 is required" 2
+
+if [ "$PREFLIGHT_ONLY" = "1" ]; then
+  exec python3 "${SCRIPT_DIR}/e2e_preflight.py"
+fi
+
 command -v "$OPENCLAW_BIN" >/dev/null || e2e_die "openclaw binary not found: $OPENCLAW_BIN" 2
 [ -f "${MATRIX_CORE_DIR}/core/__init__.py" ] \
   || e2e_die "MATRIX_CORE_DIR must point at plugins/agentteams-matrix (needs core/__init__.py): ${MATRIX_CORE_DIR}" 2
@@ -371,55 +397,22 @@ def fail(msg):
     sys.exit(1)
 
 
-# --- Matrix client-server REST (synchronous; called via asyncio.to_thread) ----
+# --- Matrix client-server REST (shared with scripts/e2e_preflight.py) --------
+# One implementation for both the standalone --preflight-only check and this
+# harness: the membership lookup lives there because the one this file used
+# to carry (`/rooms/{id}/members/{user}`) is not a client-server route and
+# Tuwunel answers it with 404 M_UNRECOGNIZED (it aborted every e2e run in
+# preflight). See that module for the member-state endpoint and the
+# /joined_members fallback.
 
-def rest(method, path, token, body=None):
-    url = HS + path
-    data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(url, method=method, data=data)
-    req.add_header("Authorization", f"Bearer {token}")
-    if body is not None:
-        req.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            payload = resp.read()
-            return json.loads(payload) if payload else {}
-    except urllib.error.HTTPError as exc:
-        detail = exc.read()[:500]
-        raise RuntimeError(f"{method} {path} -> HTTP {exc.code}: {detail!r}") from None
+sys.path.insert(0, os.environ["E2E_SCRIPTS_DIR"])
 
-
-def whoami(token):
-    return rest("GET", "/_matrix/client/v3/account/whoami", token)
-
-
-def membership(token, user):
-    data = rest(
-        "GET",
-        f"/_matrix/client/v3/rooms/{urllib.parse.quote(ROOM_ID)}/members/{urllib.parse.quote(user)}",
-        token,
-    )
-    return data.get("membership")
-
-
-def send_message(text):
-    txn = f"e2e-{int(time.time() * 1000)}-{os.getpid()}"
-    data = rest(
-        "PUT",
-        f"/_matrix/client/v3/rooms/{urllib.parse.quote(ROOM_ID)}/send/m.room.message/{txn}",
-        SENDER_TOKEN,
-        {"msgtype": "m.text", "body": text},
-    )
-    return data["event_id"]
-
-
-def list_recent_messages():
-    data = rest(
-        "GET",
-        f"/_matrix/client/v3/rooms/{urllib.parse.quote(ROOM_ID)}/messages?dir=b&limit=100",
-        SENDER_TOKEN,
-    )
-    return [ev for ev in data.get("chunk", []) if ev.get("type") == "m.room.message"]
+from e2e_preflight import (  # noqa: E402
+    PreflightError,
+    list_recent_messages,
+    preflight as matrix_preflight,
+    send_message,
+)
 
 
 def replies_to(sent_event_id):
@@ -503,17 +496,11 @@ def sidecar_worker(server, core, loop):
 # --- orchestration -------------------------------------------------------------
 
 def preflight():
-    agent = whoami(AGENT_TOKEN)
-    if agent.get("user_id") != AGENT_MXID:
-        fail(f"agent token whoami {agent.get('user_id')!r} != E2E_MATRIX_USER {AGENT_MXID!r}")
-    sender = whoami(SENDER_TOKEN)
-    if sender.get("user_id") != SENDER_MXID:
-        fail(f"sender token whoami {sender.get('user_id')!r} != E2E_SENDER_USER {SENDER_MXID!r}")
-    if membership(SENDER_TOKEN, AGENT_MXID) != "join":
-        fail(f"agent {AGENT_MXID} is not joined to {ROOM_ID}")
-    if membership(SENDER_TOKEN, SENDER_MXID) != "join":
-        fail(f"sender {SENDER_MXID} is not joined to {ROOM_ID}")
-    log("preflight ok: both users valid and joined")
+    """The shared preflight (scripts/e2e_preflight.py); a failure is an e2e fail."""
+    try:
+        matrix_preflight()
+    except PreflightError as exc:
+        fail(str(exc))
 
 
 async def orchestrate(server, bridge):
@@ -631,6 +618,7 @@ PYEOF
 # --- run: harness first (binds the socket), then the gateway --------------------
 echo "e2e: starting the core/sidecar harness"
 E2E_WORK="$WORK" \
+E2E_SCRIPTS_DIR="$SCRIPT_DIR" \
 E2E_ECHO_CHECK="$E2E_ECHO_CHECK" \
 E2E_AGENT_NAME="$E2E_AGENT_NAME" \
 E2E_CONNECT_TIMEOUT_SECONDS="$E2E_CONNECT_TIMEOUT_SECONDS" \

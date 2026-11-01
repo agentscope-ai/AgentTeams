@@ -49,10 +49,17 @@ The server default is unchanged — an absent `?fields=` returns the full
 `?fields=` is an opt-in for new consumers.
 
 The `agt` CLI's list command gained `--fields` (`all|spec|status|
-spec,status`, default `all`, which sends `fields=all`): `agt get workers
--o json` output is byte-identical to before, and the single-worker form
-`agt get workers <name>` always returns the full detail (the detail
-endpoint has no projection) regardless of `--fields`.
+spec,status`, default `all`, which sends `fields=all`). `-o json` is a
+**verbatim pass-through** of the selected view: the CLI re-emits the
+server's response bytes (re-indented) without decoding them into a
+response type, so no field of the chosen view is dropped and none is
+invented (issue #1477); for `fields=all` that is the full response,
+semantically identical to the pre-projection output. The single-worker
+form `agt get workers <name>` always returns the full detail (the detail
+endpoint has no projection) regardless of `--fields`, also passed through
+verbatim for `-o json`. The table output renders a field the selected
+view does not carry as `-` (like the TEAM column) instead of assuming a
+default — a status-view row without `runtime` shows `-`, not `openclaw`.
 
 ### Backend capability × client type
 
@@ -81,6 +88,12 @@ directly from a list row breaks as soon as the row stops carrying
 3. The list view itself must **not** issue a per-row detail fetch
    (N+1): list rows render from the list payload alone; the detail fetch
    happens once, when the user opens one worker.
+
+As of this release the Dashboard migration — summary-polling list view
+plus the detail-fetch-before-write rule — is an **independent,
+not-yet-delivered consumer migration**: the rule above is the contract
+the Dashboard must meet before the default flips, not a description of
+shipped Dashboard behavior.
 
 ### Known in-repo callers
 

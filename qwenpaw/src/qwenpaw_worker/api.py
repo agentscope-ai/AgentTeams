@@ -3,11 +3,34 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from typing import Any, Iterable, Optional
 import urllib.error
 import urllib.parse
 import urllib.request
+
+logger = logging.getLogger(__name__)
+
+#: Capability fields QwenPaw >= 2.2.2 accepts on the in-place model config
+#: endpoint (``PUT /api/models/{pid}/models/{mid}/config``, i.e. the app's
+#: ``ModelConfigRequest``).  The app records accepted fields in the entry's
+#: ``config_overrides`` and capability resolution honours them over the
+#: global model template store — the only way a declared capability (e.g.
+#: supports_video) survives readback when the template disagrees.
+#: ``supports_multimodal`` is a derived readback value and ``probe_source``
+#: is only writable when a model is added, so neither belongs here.  The
+#: QwenPaw 2.2.1 endpoint carries no capability fields at all.
+_INPLACE_CAPABILITY_FIELDS = (
+    "supports_image",
+    "supports_video",
+    "supports_audio",
+    "supports_tool_calling",
+    "thinking_control",
+    "max_input_length",
+    "template_id",
+    "generate_kwargs",
+)
 
 
 class QwenPawApiError(RuntimeError):
@@ -357,6 +380,13 @@ class QwenPawApiClient:
             model_payload["supports_multimodal"] = supports_multimodal
         if probe_source is not None:
             model_payload["probe_source"] = probe_source
+        # Which capability write actually landed; the readback assertion
+        # below names it when a mismatch (or a probe_source warning)
+        # occurs, so the failure is locatable without a live app.
+        write_path = "no write (steady state)"
+        # probe_source is only writable when a model entry is added, so it
+        # is asserted as a hard failure only on the paths that add.
+        assert_probe_source = False
         if provider is None:
             self._request(
                 "POST",
@@ -368,6 +398,16 @@ class QwenPawApiClient:
                     "chat_model": chat_model,
                     "models": [model_payload],
                 },
+            )
+            write_path = "create provider"
+            assert_probe_source = True
+            # 2.2.2+: capability resolution would otherwise overwrite the
+            # declared values with the global template's on readback, so
+            # record them as config_overrides in place.  On 2.2.1 the
+            # endpoint rejects capability fields and the raw stored values
+            # are already the readback, so this is a no-op fallback there.
+            self._apply_inplace_capability_overrides(
+                provider_id, model, model_payload
             )
         else:
             known_models = {
@@ -381,18 +421,23 @@ class QwenPawApiClient:
                     f"/api/models/{urllib.parse.quote(provider_id, safe='')}/models",
                     model_payload,
                 )
+                write_path = "add model"
+                assert_probe_source = True
+                self._apply_inplace_capability_overrides(
+                    provider_id, model, model_payload
+                )
             else:
-                # An already-registered entry keeps whatever capability
-                # state it was stored with (often an earlier self-probe
-                # result); the app exposes no in-place update for those
-                # fields, so converge them only when the stored values
-                # actually drift from the desired ones.
-                self._reconcile_existing_model(
+                outcome = self._reconcile_existing_model(
                     provider_id,
                     provider,
                     model,
                     model_payload,
                 )
+                if outcome == "in-place":
+                    write_path = "in-place PUT model config"
+                elif outcome == "re-add":
+                    write_path = "delete + re-add"
+                    assert_probe_source = True
         config_payload: dict[str, Any] = {"chat_model": chat_model}
         if api_key:
             config_payload["api_key"] = api_key
@@ -438,21 +483,49 @@ class QwenPawApiClient:
             raise QwenPawApiError("QwenPaw provider base URL readback mismatch")
         stored = self._find_model_entry(provider, model)
         if stored is not None:
-            mismatched = sorted(
-                key
-                for key in (
-                    "supports_image",
-                    "supports_video",
-                    "supports_multimodal",
-                    "probe_source",
-                )
-                if key in model_payload and stored.get(key) != model_payload[key]
-            )
+            # Assert only the capability fields this call actually wrote.
+            # supports_multimodal is never asserted: the app derives it
+            # from supports_image/supports_video and does not accept it as
+            # a writable field, so comparing a desired value against the
+            # readback would be an assertion on a derived value.
+            mismatched = [
+                f"{key} (expected {model_payload[key]!r}, "
+                f"stored {stored.get(key)!r})"
+                for key in ("supports_image", "supports_video")
+                if key in model_payload
+                and stored.get(key) != model_payload[key]
+            ]
             if mismatched:
                 raise QwenPawApiError(
-                    f"QwenPaw model capability readback mismatch: "
-                    f"{', '.join(mismatched)}"
+                    "QwenPaw model capability readback mismatch: "
+                    + "; ".join(mismatched)
+                    + f" [write path: {write_path}]"
                 )
+            if "probe_source" in model_payload:
+                if assert_probe_source:
+                    if stored.get("probe_source") != model_payload["probe_source"]:
+                        raise QwenPawApiError(
+                            "QwenPaw model capability readback mismatch: "
+                            "probe_source (expected "
+                            f"{model_payload['probe_source']!r}, stored "
+                            f"{stored.get('probe_source')!r}) "
+                            f"[write path: {write_path}]"
+                        )
+                elif stored.get("probe_source") != model_payload["probe_source"]:
+                    # Existing-model convergence (in-place update or
+                    # steady state) cannot rewrite probe_source — only a
+                    # model add/create accepts it.  The drift is recorded
+                    # but is not a failure condition.
+                    logger.warning(
+                        "QwenPaw model %s on provider %s kept "
+                        "probe_source %r (desired %r); existing-model "
+                        "capability updates only rewrite probe_source via "
+                        "delete + re-add",
+                        model,
+                        provider_id,
+                        stored.get("probe_source"),
+                        model_payload["probe_source"],
+                    )
         return actual
 
     def get_agent_subagent_model(self) -> Optional[dict[str, Any]]:
@@ -511,46 +584,98 @@ class QwenPawApiClient:
             None,
         )
 
+    def _apply_inplace_capability_overrides(
+        self,
+        provider_id: str,
+        model: str,
+        desired: dict[str, Any],
+    ) -> bool:
+        """Record capability overrides in place via
+        ``PUT /api/models/{pid}/models/{mid}/config`` (QwenPaw >= 2.2.2).
+
+        The app stores the accepted fields and lists them in the entry's
+        ``config_overrides``, which capability resolution honours over the
+        global model template store — the only way a declared capability
+        (e.g. supports_video) survives readback when the template
+        disagrees.  Without the override, a create/add that carries the
+        desired values still reads back the template's.
+
+        Returns True when the app accepted the write.  A 404/405/422
+        answer identifies an older app (QwenPaw 2.2.1: the endpoint
+        exists but carries no capability fields); there the create/add
+        payload is authoritative — raw stored values are the readback —
+        so the caller keeps raw-value semantics.  Any other error is
+        raised as-is.
+        """
+        writable = {
+            key: desired[key]
+            for key in _INPLACE_CAPABILITY_FIELDS
+            if key in desired
+        }
+        if not writable:
+            return False
+        path = (
+            f"/api/models/{urllib.parse.quote(provider_id, safe='')}"
+            f"/models/{urllib.parse.quote(model, safe='')}/config"
+        )
+        try:
+            self._request("PUT", path, writable)
+            return True
+        except QwenPawApiError as exc:
+            if not any(
+                f"HTTP {code}" in str(exc) for code in (404, 405, 422)
+            ):
+                raise
+            return False
+
     def _reconcile_existing_model(
         self,
         provider_id: str,
         provider: dict[str, Any],
         model: str,
         model_payload: dict[str, Any],
-    ) -> None:
+    ) -> Optional[str]:
         """Converge capability fields on an already-registered model entry.
 
-        The pinned QwenPaw app has no endpoint that updates an existing
-        model entry's capability fields: ``POST /api/models/{pid}/models``
-        rejects a duplicate id, and ``PUT .../models/{mid}/config`` only
-        carries generation parameters. The only available convergence is
-        delete + re-add, so it is used sparingly — only when a desired
-        capability value actually differs from the stored one. Steady
-        state stays a no-op, so repeated worker updates do not churn the
-        entry.
+        Returns the write path that converged (or would converge) the
+        entry: ``"in-place"`` or ``"re-add"``, or ``None`` when the
+        stored state already matches the desired values (steady state —
+        a no-op, so repeated worker updates do not churn the entry).
 
-        Failure safety: the re-add is wrapped in a compensating restore —
-        if it fails after the delete, the original entry is re-posted and
-        verified, so the Worker never ends up without its previously
-        usable model; a failed restore raises an actionable error.
+        QwenPaw >= 2.2.2 resolves model capabilities from the global
+        model template store unless the entry records the field in
+        ``config_overrides`` (user intent beats template), and the only
+        write that records overrides is the in-place model config
+        endpoint.  It is therefore the preferred convergence: no
+        delete/re-add churn, and the desired capability survives
+        readback even when the template disagrees.
+
+        QwenPaw 2.2.1's endpoint answers 404/405/422 to capability
+        fields; there the stored raw values are the readback, and the
+        fallback is delete + re-add — used sparingly, only when a
+        desired value actually drifts.  Failure safety is unchanged: the
+        re-add is wrapped in a compensating restore — if it fails after
+        the delete, the original entry is re-posted and verified, so the
+        Worker never ends up without its previously usable model; a
+        failed restore raises an actionable error.
         """
-        desired = {
+        writable = {
             key: model_payload[key]
-            for key in (
-                "supports_image",
-                "supports_video",
-                "supports_multimodal",
-                "probe_source",
-            )
+            for key in _INPLACE_CAPABILITY_FIELDS
             if key in model_payload
         }
-        if not desired:
-            return
+        if not writable:
+            return None
         entry = self._find_model_entry(provider, model)
         if entry is None or all(
-            entry.get(key) == value for key, value in desired.items()
+            entry.get(key) == value for key, value in writable.items()
         ):
-            return
+            return None
+        if self._apply_inplace_capability_overrides(
+            provider_id, model, writable
+        ):
+            return "in-place"
+        # Older app (2.2.1): no in-place capability update available.
         base = f"/api/models/{urllib.parse.quote(provider_id, safe='')}/models"
         self._request("DELETE", f"{base}/{urllib.parse.quote(model, safe='')}")
         readd = dict(model_payload)
@@ -564,6 +689,7 @@ class QwenPawApiClient:
             # The entry is already deleted; a failed re-add must not leave
             # the Worker without its previously usable model.
             self._restore_model_entry(provider_id, base, entry, exc)
+        return "re-add"
 
     def _restore_model_entry(
         self,

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -47,6 +48,19 @@ func printJSON(v interface{}) {
 		return
 	}
 	fmt.Println(string(data))
+}
+
+// printRawJSON emits the server's JSON body for -o json output. It
+// re-indents the raw bytes but never decodes them into a Go type, so every
+// field of the requested view survives and none are invented; on
+// unparseable input it passes the bytes through unchanged.
+func printRawJSON(data []byte) {
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, data, "", "  "); err != nil {
+		fmt.Println(string(data))
+		return
+	}
+	fmt.Println(buf.String())
 }
 
 // or returns fallback if s is empty.

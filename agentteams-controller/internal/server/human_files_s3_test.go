@@ -253,6 +253,133 @@ func TestHumanFiles_S3SpaceNamesQuota(t *testing.T) {
 	}
 }
 
+// TestHumanFiles_S3TombstoneIfMatch runs the maintainer's tombstone
+// reproduction against a real S3-compatible backend: a soft delete
+// replaces the live key with a zero-byte tombstone whose MD5 ETag equals
+// the empty file's, so a PUT carrying the pre-deletion If-Match used to
+// pass the ETag comparison against the tombstone and revive the file with
+// 200. It must now fail exactly like a missing file, while an explicit
+// unconditional recreation still succeeds.
+//
+// Skipped unless HUMAN_FILES_S3_ENDPOINT is set (the same gate as
+// TestHumanFiles_S3Lifecycle; the CI job selects it with -run
+// 'TestHumanFiles_S3').
+func TestHumanFiles_S3TombstoneIfMatch(t *testing.T) {
+	endpoint := os.Getenv("HUMAN_FILES_S3_ENDPOINT")
+	if endpoint == "" {
+		t.Skip("set HUMAN_FILES_S3_ENDPOINT/HUMAN_FILES_S3_ACCESS_KEY/HUMAN_FILES_S3_SECRET_KEY/HUMAN_FILES_S3_BUCKET to run the native backend tombstone If-Match regression")
+	}
+	access := os.Getenv("HUMAN_FILES_S3_ACCESS_KEY")
+	secret := os.Getenv("HUMAN_FILES_S3_SECRET_KEY")
+	bucket := os.Getenv("HUMAN_FILES_S3_BUCKET")
+	if access == "" || secret == "" || bucket == "" {
+		t.Fatal("HUMAN_FILES_S3_ACCESS_KEY, HUMAN_FILES_S3_SECRET_KEY and HUMAN_FILES_S3_BUCKET are required")
+	}
+
+	alias := "humanfilestest"
+	client := oss.NewMinIOClient(oss.Config{
+		Endpoint:      endpoint,
+		AccessKey:     access,
+		SecretKey:     secret,
+		Alias:         alias,
+		Bucket:        bucket,
+		StoragePrefix: alias + "/" + bucket,
+	})
+	ctx := context.Background()
+
+	// The other S3 regressions share this bucket and human; start from a
+	// clean area and leave it clean.
+	_ = client.DeletePrefix(ctx, humanFilesPrefix("alice"))
+	_ = client.DeletePrefix(ctx, humanTrashPrefix("alice"))
+	_ = client.DeleteObject(ctx, humanQuotaLedgerKey("alice"))
+	defer func() {
+		_ = client.DeletePrefix(ctx, humanFilesPrefix("alice"))
+		_ = client.DeletePrefix(ctx, humanTrashPrefix("alice"))
+		_ = client.DeleteObject(ctx, humanQuotaLedgerKey("alice"))
+	}()
+
+	h, _, _ := newHumanFilesRig(t)
+	h.oss = client
+
+	putWithMatch := func(path, content, match string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := hfReq(t, http.MethodPut, "alice", path, hfSelf(), strings.NewReader(content))
+		req.Header.Set("If-Match", match)
+		h.putFile(rec, req)
+		return rec
+	}
+	getCode := func(path string) int {
+		rec := httptest.NewRecorder()
+		h.getFile(rec, hfReq(t, http.MethodGet, "alice", path, hfSelf(), nil))
+		return rec.Code
+	}
+	softDelete := func(path string) {
+		rec := httptest.NewRecorder()
+		h.deleteFile(rec, hfReq(t, http.MethodDelete, "alice", path, hfSelf(), nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("delete %s: %d %s", path, rec.Code, rec.Body.String())
+		}
+	}
+
+	// Empty file: the zero-byte tombstone carries the same MD5 ETag.
+	rec := hfPutFile(t, h, "alice", "empty.txt", hfSelf(), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put empty: %d %s", rec.Code, rec.Body.String())
+	}
+	var putResp struct {
+		ETag string `json:"etag"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &putResp); err != nil {
+		t.Fatal(err)
+	}
+	softDelete("empty.txt")
+	if code := getCode("empty.txt"); code != http.StatusNotFound {
+		t.Fatalf("GET deleted empty file: got %d, want 404", code)
+	}
+	// The pre-deletion If-Match passed the ETag comparison against the
+	// tombstone before the fix and revived the file with 200.
+	rec = putWithMatch("empty.txt", "revived", putResp.ETag)
+	if rec.Code != http.StatusPreconditionFailed {
+		t.Fatalf("If-Match on a deleted empty file: got %d, want 412 (pre-fix: 200): %s",
+			rec.Code, rec.Body.String())
+	}
+	if code := getCode("empty.txt"); code != http.StatusNotFound {
+		t.Fatalf("tombstone was written through: GET = %d, want 404", code)
+	}
+	// An explicit recreation without If-Match still succeeds.
+	rec = hfPutFile(t, h, "alice", "empty.txt", hfSelf(), "reborn")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unconditional recreate: got %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if code := getCode("empty.txt"); code != http.StatusOK {
+		t.Fatalf("GET recreated file: got %d, want 200", code)
+	}
+
+	// Non-empty control: the same sequence must also fail 412.
+	rec = hfPutFile(t, h, "alice", "data.txt", hfSelf(), "payload-bytes")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put data: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &putResp); err != nil {
+		t.Fatal(err)
+	}
+	softDelete("data.txt")
+	if code := getCode("data.txt"); code != http.StatusNotFound {
+		t.Fatalf("GET deleted data file: got %d, want 404", code)
+	}
+	rec = putWithMatch("data.txt", "revived", putResp.ETag)
+	if rec.Code != http.StatusPreconditionFailed {
+		t.Fatalf("If-Match on a deleted non-empty file: got %d, want 412: %s",
+			rec.Code, rec.Body.String())
+	}
+
+	// Never-existing control: If-Match on an absent key -> 412.
+	rec = putWithMatch("fresh.txt", "x", "whatever")
+	if rec.Code != http.StatusPreconditionFailed {
+		t.Fatalf("If-Match on absent key: got %d, want 412: %s", rec.Code, rec.Body.String())
+	}
+}
+
 // TestHumanFiles_S3TrashRestorePurgeQuotaRace runs the trash restore/purge
 // quota race against a real S3-compatible backend: the same sequence as
 // TestHumanFiles_TrashRestorePurgeQuotaRace, with the stall pass-through

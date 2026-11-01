@@ -579,6 +579,17 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 		case merr != nil:
 			httputil.WriteError(w, http.StatusInternalServerError, "stat file failed")
 			return
+		case isHumanFileTombstone(meta):
+			// A soft delete leaves the path as a zero-byte tombstone,
+			// which is logically absent. An empty file's MD5 ETag equals
+			// the tombstone's, so without this case a PUT carrying the
+			// pre-deletion If-Match would pass the ETag comparison below
+			// and revive the deleted file. The response mirrors the
+			// missing-file denial: the tombstone is an implementation
+			// detail the API does not expose.
+			writeHumanFileCodedError(w, http.StatusPreconditionFailed, "etag_mismatch",
+				"If-Match failed: the file does not exist")
+			return
 		case meta.ETag != "":
 			if meta.ETag != match {
 				writeHumanFileCodedError(w, http.StatusPreconditionFailed, "etag_mismatch",

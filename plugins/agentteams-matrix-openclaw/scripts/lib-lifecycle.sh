@@ -87,7 +87,12 @@ lifecycle_build_release() {
   fi
 
   lifecycle_log "Installing dependencies and building (this may take a while)..."
-  (cd "$PLUGIN_ROOT" && npm install --no-audit --no-fund && npm run build) \
+  # stdout of this function is the release path consumed by
+  # `release_dir="$(lifecycle_build_release ...)"`; npm/tsc write their own
+  # progress to stdout, which would glue itself to that path (Pi round: the
+  # installer then reported `release directory missing:` with a multi-line
+  # argument). Keep the build logs on stderr.
+  (cd "$PLUGIN_ROOT" && npm install --no-audit --no-fund && npm run build) >&2 \
     || lifecycle_fail "npm install/build failed in ${PLUGIN_ROOT}"
 
   if [ -d "$release_dir" ]; then

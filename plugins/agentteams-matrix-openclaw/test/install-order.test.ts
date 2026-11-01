@@ -180,3 +180,103 @@ describe("install order", () => {
     assert.equal(cfg.channels["agentteams-matrix"].enabled, true);
   });
 });
+
+// --- installer end-to-end: the release path must survive a noisy build -----
+//
+// On the Pi the first real run failed with `release directory missing:` and a
+// multi-line argument: `install.sh` captures
+// `$(lifecycle_build_release reuse)`, and npm/tsc progress on stdout glued
+// itself to the printed release path. The build output now goes to stderr;
+// this case forces the build path with a fake npm that prints noise.
+
+describe("install.sh release capture", () => {
+  it("keeps the release path clean when the build prints to stdout", () => {
+    const dir = mkdtempSync(join(tmpdir(), "agentteams-install-capture-"));
+    const plugin = join(dir, "plugin");
+    mkdirSync(join(plugin, "scripts"), { recursive: true });
+    mkdirSync(join(plugin, "src"), { recursive: true });
+    // The release materialization copies node_modules into it.
+    mkdirSync(join(plugin, "node_modules", ".keep"), { recursive: true });
+    for (const file of ["install.sh"]) {
+      writeFileSync(join(plugin, file), readFileSync(join(PLUGIN_ROOT, file)));
+      chmodSync(join(plugin, file), 0o755);
+    }
+    for (const file of ["scripts/lib-lifecycle.sh"]) {
+      writeFileSync(join(plugin, file), readFileSync(join(PLUGIN_ROOT, file)));
+    }
+    writeFileSync(join(plugin, "openclaw.plugin.json"), readFileSync(join(PLUGIN_ROOT, "openclaw.plugin.json")));
+    writeFileSync(join(plugin, "README.md"), "# test\n");
+    writeFileSync(join(plugin, "package.json"), JSON.stringify({ name: "agentteams-matrix-openclaw", version: "0.1.0", scripts: { build: "node -e \"\"" } }));
+
+    // Fake npm: prints progress on stdout, then "builds" dist/src/index.js.
+    const bin = join(dir, "bin");
+    mkdirSync(bin, { recursive: true });
+    const npm = join(bin, "npm");
+    writeFileSync(
+      npm,
+      `#!/usr/bin/env bash
+echo "npm notice: noisy progress on stdout"
+echo "> tsc -p tsconfig.json"
+if [ "\${1:-}" = "run" ]; then
+  mkdir -p dist/src
+  echo "export default {};" > dist/src/index.js
+fi
+exit 0
+`,
+      { mode: 0o755 },
+    );
+    const openclaw = join(bin, "openclaw");
+    writeFileSync(
+      openclaw,
+      `#!/usr/bin/env bash
+set -u
+STATE="\${FAKE_OPENCLAW_STATE:?}"
+mkdir -p "$STATE"
+echo "$*" >> "$STATE/calls.log"
+case "\${1:-}" in
+  plugins)
+    case "\${2:-}" in
+      install) touch "$STATE/registered" ;;
+      enable) touch "$STATE/enabled" ;;
+      reload) : ;;
+      list)
+        if [ "\${3:-}" = "--json" ]; then
+          [ -f "$STATE/registered" ] && printf '[{"id":"agentteams-matrix"}]\n' || printf '[]\n'
+        elif [ "\${3:-}" = "--enabled" ]; then
+          [ -f "$STATE/enabled" ] && echo agentteams-matrix
+        fi
+        ;;
+    esac
+    ;;
+esac
+exit 0
+`,
+      { mode: 0o755 },
+    );
+    chmodSync(npm, 0o755);
+    chmodSync(openclaw, 0o755);
+
+    const config = join(dir, "openclaw.json");
+    writeFileSync(config, "{}\n");
+    const stateDir = join(dir, "state");
+    mkdirSync(stateDir, { recursive: true });
+
+    execFileSync("bash", [join(plugin, "install.sh")], {
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        OPENCLAW_BIN: openclaw,
+        OPENCLAW_CONFIG_PATH: config,
+        AGENTTEAMS_OPENCLAW_STATE_DIR: stateDir,
+        AGENTTEAMS_MATRIX_SOCKET: "/tmp/x.sock",
+        AGENTTEAMS_MATRIX_AGENT: "capture-agent",
+        FAKE_OPENCLAW_STATE: join(dir, "cli-state"),
+      },
+      stdio: "pipe",
+      encoding: "utf-8",
+    });
+
+    const cfg = JSON.parse(readFileSync(config, "utf-8"));
+    assert.equal(cfg.channels["agentteams-matrix"].agent, "capture-agent");
+  });
+});

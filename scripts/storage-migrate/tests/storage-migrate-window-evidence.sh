@@ -39,6 +39,14 @@ export MC_FIXTURE="$WORK/grown.json"; s3=$(window_sample)
 export MC_FIXTURE="$WORK/moved.json"; s4=$(window_sample)
 [ "$s4" != "$s1" ] && ok "equal-size prefix move changes the digest" || no "prefix move not detected (same count/size accepted as frozen)"
 
+
+# empty bucket: success with zero objects must be a valid, deterministic sample
+: > "$WORK/empty.json"
+export MC_FIXTURE="$WORK/empty.json"; s5=$(window_sample); r5=$?
+[ "$r5" = 0 ] && [ "$(cut -f1 <<<"$s5")" = "0" ] && [ "$(cut -f2 <<<"$s5")" = "0" ] && ok "empty bucket reports 0/0 instead of failing" || no "empty bucket rejected or wrong totals ($s5)"
+s6=$(window_sample)
+[ "$s5" = "$s6" ] && ok "empty bucket digest is deterministic" || no "empty bucket digest not deterministic"
+
 # empty/garbage must fail, not silently pass
 printf '%s\n' 'not json' > "$WORK/bad.json"
 export MC_FIXTURE="$WORK/bad.json"; window_sample >/dev/null; [ $? -ne 0 ] && ok "invalid listing is rejected" || no "invalid listing accepted"

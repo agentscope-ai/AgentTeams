@@ -268,12 +268,23 @@ window_sample() {
   buckets=$(get_buckets)
   for b in $buckets; do
     raw=$(mc_raw ls --recursive --json "$SRC_ALIAS/$b" 2>/dev/null) || { REPLY_SAMPLE=""; return 1; }
-    n=$(jq -s 'length' <<<"$raw" 2>/dev/null) || { REPLY_SAMPLE=""; return 1; }
-    bytes=$(jq -s 'map(.size // 0) | add // 0' <<<"$raw" 2>/dev/null) || { REPLY_SAMPLE=""; return 1; }
+    # An empty bucket is a valid state, not a listing failure: mc succeeds with
+    # zero objects and prints nothing. Represent it as 0/0 with a deterministic
+    # digest token instead of rejecting the whole window.
+    if [ -z "$(printf '%s' "$raw" | tr -d '[:space:]')" ]; then
+      n=0; bytes=0; dist="(empty)"
+    else
+      n=$(jq -s 'length' <<<"$raw" 2>/dev/null) || { REPLY_SAMPLE=""; return 1; }
+      bytes=$(jq -s 'map(.size // 0) | add // 0' <<<"$raw" 2>/dev/null) || { REPLY_SAMPLE=""; return 1; }
+    fi
     case "$n" in ''|*[!0-9]*) REPLY_SAMPLE=""; return 1 ;; esac
     case "$bytes" in ''|*[!0-9]*) REPLY_SAMPLE=""; return 1 ;; esac
-    dist=$(jq -rs 'map(.key // "") | map(split("/")[0]) | sort | group_by(.) | map(.[0] + ":" + (length | tostring)) | join(",")' <<<"$raw" 2>/dev/null) || { REPLY_SAMPLE=""; return 1; }
-    [ -n "$dist" ] || { REPLY_SAMPLE=""; return 1; }
+    if [ "${dist:-}" = "" ]; then
+      dist=$(jq -rs 'map(.key // "") | map(split("/")[0]) | sort | group_by(.) | map(.[0] + ":" + (length | tostring)) | join(",")' <<<"$raw" 2>/dev/null) || { REPLY_SAMPLE=""; return 1; }
+      # A listing that parsed but carries no keys (e.g. only a marker row) is
+      # still a legitimately empty prefix set.
+      [ -n "$dist" ] || dist="(empty)"
+    fi
     total_n=$((total_n + n))
     total_bytes=$((total_bytes + bytes))
     parts="$parts$b|$dist;"

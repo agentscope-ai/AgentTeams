@@ -942,3 +942,147 @@ func TestPutProjectMeta_NonAdminCannotReleasePausedStatus(t *testing.T) {
 		}
 	})
 }
+
+// Round 15 (#1402): the endpoint stores the body byte-for-byte while the
+// runtime compares exact strings, so `exactProjectStatus` must NOT trim: a
+// body that "preserves" the pause as " paused " (or any other non-canonical
+// spelling) would be stored verbatim and read as NOT paused. Non-canonical
+// pause values are rejected — only a byte-identical echo of the stored value
+// (legacy data) passes through.
+func TestPutProjectMeta_RejectsNonCanonicalPauseValues(t *testing.T) {
+	pausedMeta := `{"project_id":"p1","title":"P1","status":"paused","plan_type":"dag","team_id":"alpha-team"}`
+
+	identities := map[string]*authpkg.CallerIdentity{
+		"manager": {Role: authpkg.RoleManager, Username: "manager"},
+		"worker":  {Role: authpkg.RoleWorker, Username: "alpha-dev", Team: "alpha-team"},
+		"team leader": {
+			Role: authpkg.RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team",
+		},
+		"L2 human": {
+			Role: authpkg.RoleHuman, Username: "alpha-viewer", Teams: []string{"alpha-team"},
+		},
+		"admin": {Role: authpkg.RoleAdmin, Username: "admin"},
+	}
+
+	cases := map[string]string{
+		"padded paused":    `{"project_id":"p1","title":"P1","status":" paused ","plan_type":"dag","team_id":"alpha-team"}`,
+		"uppercase":        `{"project_id":"p1","title":"P1","status":"PAUSED","plan_type":"dag","team_id":"alpha-team"}`,
+		"padded active":    `{"project_id":"p1","title":"P1","status":"active ","plan_type":"dag","team_id":"alpha-team"}`,
+		"empty status":     `{"project_id":"p1","title":"P1","status":"","plan_type":"dag","team_id":"alpha-team"}`,
+		"padded source":    `{"project_id":"p1","title":"P1","status":"paused","plan_type":"dag","team_id":"alpha-team","loop":{"pause_sources":[" user "]}}`,
+		"uppercase source": `{"project_id":"p1","title":"P1","status":"paused","plan_type":"dag","team_id":"alpha-team","loop":{"pause_sources":["USER"]}}`,
+	}
+
+	for roleName, identity := range identities {
+		for caseName, body := range cases {
+			t.Run(roleName+"/"+caseName, func(t *testing.T) {
+				store := ossfake.NewMemory()
+				key := "teams/alpha-team/shared/projects/p1/meta.json"
+				if err := store.PutObject(context.Background(), key, []byte(pausedMeta)); err != nil {
+					t.Fatal(err)
+				}
+				k8s := fake.NewClientBuilder().
+					WithScheme(newProjectTestScheme(t)).
+					WithRuntimeObjects(team("alpha-team")).
+					Build()
+				mw := authpkg.NewMiddleware(&roleAuthenticator{identity: identity}, nil, authpkg.NewAuthorizer(), k8s, "default")
+				var ossStore oss.StorageClient = &mcLikeOSS{Memory: store}
+				srv := NewHTTPServer(":0", ServerDeps{Client: k8s, Namespace: "default", OSS: ossStore, AuthMw: mw})
+
+				read, err := store.StatMeta(context.Background(), key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				req := httptest.NewRequest(http.MethodPut, "/api/v1/projects/p1/meta", strings.NewReader(body))
+				req.Header.Set("Authorization", "Bearer sa-token")
+				req.Header.Set("If-Match", read.ETag)
+				rec := httptest.NewRecorder()
+				srv.Mux.ServeHTTP(rec, req)
+
+				if rec.Code != http.StatusBadRequest {
+					t.Fatalf("status=%d, want 400 (noncanonical pause value); body=%s", rec.Code, rec.Body.String())
+				}
+				got, err := store.GetObject(context.Background(), key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(got) != pausedMeta {
+					t.Fatalf("refused commit changed the stored meta:\n got=%s\n want=%s", got, pausedMeta)
+				}
+			})
+		}
+	}
+
+	// A byte-identical echo of a legacy stored value still passes: the sync
+	// must be able to round-trip data written before the canonical rule.
+	t.Run("legacy echo is allowed", func(t *testing.T) {
+		legacy := `{"project_id":"p1","title":"P1","status":" paused ","plan_type":"dag","team_id":"alpha-team"}`
+		store := ossfake.NewMemory()
+		key := "teams/alpha-team/shared/projects/p1/meta.json"
+		if err := store.PutObject(context.Background(), key, []byte(legacy)); err != nil {
+			t.Fatal(err)
+		}
+		k8s := fake.NewClientBuilder().
+			WithScheme(newProjectTestScheme(t)).
+			WithRuntimeObjects(team("alpha-team")).
+			Build()
+		worker := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "alpha-dev", Team: "alpha-team"}
+		mw := authpkg.NewMiddleware(&roleAuthenticator{identity: worker}, nil, authpkg.NewAuthorizer(), k8s, "default")
+		var ossStore oss.StorageClient = &mcLikeOSS{Memory: store}
+		srv := NewHTTPServer(":0", ServerDeps{Client: k8s, Namespace: "default", OSS: ossStore, AuthMw: mw})
+
+		read, err := store.StatMeta(context.Background(), key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := `{"project_id":"p1","title":"P1","status":" paused ","plan_type":"dag","team_id":"alpha-team","synced":true}`
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/projects/p1/meta", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer sa-token")
+		req.Header.Set("If-Match", read.ETag)
+		rec := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d, want 200 (byte-identical legacy echo); body=%s", rec.Code, rec.Body.String())
+		}
+	})
+}
+
+// Round 15 control: the admin control plane reads a legacy padded status the
+// way the pause gate does, so an operator can still resume (and repair) it.
+func TestResumeProject_RepairsLegacyPaddedStatus(t *testing.T) {
+	legacy := `{"project_id":"p1","title":"P1","status":" paused ","plan_type":"dag","team_id":"alpha-team"}`
+	store := ossfake.NewMemory()
+	key := "teams/alpha-team/shared/projects/p1/meta.json"
+	if err := store.PutObject(context.Background(), key, []byte(legacy)); err != nil {
+		t.Fatal(err)
+	}
+	k8s := fake.NewClientBuilder().
+		WithScheme(newProjectTestScheme(t)).
+		WithRuntimeObjects(team("alpha-team")).
+		Build()
+	admin := &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"}
+	mw := authpkg.NewMiddleware(&roleAuthenticator{identity: admin}, nil, authpkg.NewAuthorizer(), k8s, "default")
+	var ossStore oss.StorageClient = &mcLikeOSS{Memory: store}
+	srv := NewHTTPServer(":0", ServerDeps{Client: k8s, Namespace: "default", OSS: ossStore, AuthMw: mw})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/resume", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer sa-token")
+	rec := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("resume status=%d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	got, err := store.GetObject(context.Background(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored map[string]any
+	if err := json.Unmarshal(got, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored["status"] != "active" {
+		t.Fatalf("stored status=%v, want the canonical \"active\" (legacy value repaired)", stored["status"])
+	}
+}

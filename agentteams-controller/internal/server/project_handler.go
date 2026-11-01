@@ -3090,7 +3090,44 @@ func exactProjectStatus(meta []byte) (status string, present bool, hasAlias bool
 			hasAlias = true
 		}
 	}
-	return strings.TrimSpace(status), present, hasAlias
+	return status, present, hasAlias
+}
+
+// canonicalProjectStatuses are the exact project-status values the rest of
+// the system reads: the Controller's own PauseProject / ResumeProject /
+// ReplanProject compare with ==, and the TeamHarness gate treats exactly
+// "paused" as paused and exactly "active" as runnable. The metadata
+// endpoint stores the body byte-for-byte, so any other spelling — " paused ",
+// "PAUSED", "" — would persist a value no reader interprets the way the
+// writer meant (round 15).
+var canonicalProjectStatuses = map[string]struct{}{
+	"active":    {},
+	"paused":    {},
+	"completed": {},
+}
+
+// canonicalProjectStatus reports whether status is one of the exact values
+// above. An empty or padded string is NOT canonical.
+func canonicalProjectStatus(status string) bool {
+	_, ok := canonicalProjectStatuses[status]
+	return ok
+}
+
+// normalizedProjectStatus is the comparison view used by the AUTHORITY
+// decision only (never for what gets stored): legacy data written before
+// the canonical rule may carry " Paused ", and a canonical rewrite of it
+// must not be mistaken for a release attempt.
+func normalizedProjectStatus(status string) string {
+	return strings.ToLower(strings.TrimSpace(status))
+}
+
+// canonicalPauseSource reports whether source is already in the form both
+// readers produce (Go parsePauseSourcesMeta and the Python gate lowercase
+// and trim). A non-canonical entry is an equivalent-but-unstable spelling:
+// the runtime treats it as the canonical source while the control plane
+// compares exactly, so it must not be introduced by a commit.
+func canonicalPauseSource(source string) bool {
+	return source != "" && source == strings.ToLower(strings.TrimSpace(source))
 }
 
 // writeMetaConflict writes the standard 409 body for a stale meta commit:
@@ -3216,39 +3253,83 @@ func (h *ProjectHandler) PutProjectMeta(w http.ResponseWriter, r *http.Request) 
 	// Ordinary task-progress commits keep the source and stay on the
 	// no-extra-read path; only a body that lacks the source pays the read
 	// that decides whether protecting it is required.
-	if caller := authpkg.CallerFromContext(r.Context()); caller == nil || caller.Role != authpkg.RoleAdmin {
-		bodySources, bodyAlias := exactPauseSources(body)
-		if bodyAlias {
-			// The runtime persists and reads the exact lowercase keys; a
-			// case-variant alias cannot be honored without guessing which
-			// spelling the durable state means. Reject instead of writing an
-			// object whose real field may be empty (round 11).
-			writeError(w, http.StatusBadRequest,
-				"ambiguous case alias for loop."+pauseSourcesField+
-					": the task runtime persists and reads the exact lowercase key")
-			return
+	// Field-authority + canonical-spelling rules for the metadata commit
+	// (#1402 rounds 10-15). The body is stored byte-for-byte, so everything
+	// here must agree with what the READERS do with those bytes:
+	//
+	//   * a case-variant alias of "loop"/"pause_sources"/"status" is
+	//     rejected: the readers only look at the exact lowercase keys, so
+	//     an alias would silently empty the real field (round 11);
+	//   * a non-canonical spelling of a pause-relevant value is rejected
+	//     unless it is a byte-identical echo of what is already stored: a
+	//     padded/cased "status" or a " user " source reads differently in
+	//     the runtime than in this check, which is exactly how a manager
+	//     released a pause by writing " paused " (round 15);
+	//   * non-admin callers may not release the human pause source or a
+	//     stored paused status (rounds 10/14), and escalating to paused
+	//     stays allowed (a pause is fail-closed).
+	caller := authpkg.CallerFromContext(r.Context())
+	isAdmin := caller != nil && caller.Role == authpkg.RoleAdmin
+	bodySources, bodySourcesAlias := exactPauseSources(body)
+	bodyStatus, bodyStatusPresent, bodyStatusAlias := exactProjectStatus(body)
+	if bodySourcesAlias {
+		writeError(w, http.StatusBadRequest,
+			"ambiguous case alias for loop."+pauseSourcesField+
+				": the task runtime persists and reads the exact lowercase key")
+		return
+	}
+	if bodyStatusAlias {
+		writeError(w, http.StatusBadRequest,
+			`ambiguous case alias for "status": the task runtime persists and reads the exact lowercase key`)
+		return
+	}
+	statusCanonical := !bodyStatusPresent || canonicalProjectStatus(bodyStatus)
+	sourcesCanonical := true
+	for _, source := range bodySources {
+		if !canonicalPauseSource(source) {
+			sourcesCanonical = false
+			break
 		}
-		// The project ``status`` is server-owned too (round 14): the
-		// Controller's PauseProject/ResumeProject write it under the strict
-		// CAS, so a commit that clears a stored ``paused`` (or omits the
-		// field, which drops it from the stored bytes just the same) would
-		// release a pause without going through ResumeProject. Escalating
-		// to paused stays allowed — a worker may pause, and a pause is
-		// fail-closed.
-		bodyStatus, bodyStatusPresent, _ := exactProjectStatus(body)
-		pausesStored := bodyStatusPresent && bodyStatus == "paused"
-		if !pauseSourcesContain(bodySources, pauseSourceUser) || !pausesStored {
-			current, readErr := h.oss.GetObject(r.Context(), pwc.key)
-			switch {
-			case readErr == nil:
-				// Only the exact key is the durable state the runtime reads;
-				// an alias in storage never counts as an active pause.
-				currentSources, _ := exactPauseSources(current)
+	}
+	// The read is needed when a non-admin commit might release a pause,
+	// and whenever a canonicality question must be answered against the
+	// stored bytes (the byte-identical-echo exception).
+	needsRead := !isAdmin &&
+		(!pauseSourcesContain(bodySources, pauseSourceUser) ||
+			normalizedProjectStatus(bodyStatus) != "paused")
+	needsRead = needsRead || !statusCanonical || !sourcesCanonical
+	if needsRead {
+		current, readErr := h.oss.GetObject(r.Context(), pwc.key)
+		switch {
+		case readErr == nil:
+			currentStatus, currentStatusPresent, _ := exactProjectStatus(current)
+			currentSources, _ := exactPauseSources(current)
+			if !statusCanonical {
+				if !(currentStatusPresent && bodyStatus == currentStatus) {
+					writeError(w, http.StatusBadRequest,
+						"noncanonical project status "+strconv.Quote(bodyStatus)+
+							": the runtime compares the exact string, so the stored value would not mean what it spells (use one of active, paused, completed)")
+					return
+				}
+			}
+			if !sourcesCanonical {
+				for _, source := range bodySources {
+					if canonicalPauseSource(source) {
+						continue
+					}
+					if !pauseSourcesContain(currentSources, source) {
+						writeError(w, http.StatusBadRequest,
+							"noncanonical pause source "+strconv.Quote(source)+
+								": the runtime lowercases and trims sources, so this entry would pause the project under a spelling the resume endpoint cannot address")
+						return
+					}
+				}
+			}
+			if !isAdmin {
 				// A stale If-Match is a version conflict, not a permanent
-				// refusal: the client must re-read and merge (which now
-				// keeps the server-owned values) and retry. Only a caller
-				// bound to the CURRENT version gets the field-authority
-				// 403 — it read the pause and tried to clear it anyway.
+				// refusal: the client must re-read and merge (which keeps
+				// the server-owned values) and retry. Only a caller bound
+				// to the CURRENT version gets the field-authority 403.
 				stale := ifMatch != pwc.etag
 				if !pauseSourcesContain(bodySources, pauseSourceUser) &&
 					pauseSourcesContain(currentSources, pauseSourceUser) {
@@ -3260,25 +3341,29 @@ func (h *ProjectHandler) PutProjectMeta(w http.ResponseWriter, r *http.Request) 
 						"the human pause source is server-owned; a meta commit cannot clear it (use the resume endpoint)")
 					return
 				}
-				if !pausesStored {
-					currentStatus, _, _ := exactProjectStatus(current)
-					if currentStatus == "paused" {
-						if stale {
-							writeMetaConflict(w)
-							return
-						}
-						writeError(w, http.StatusForbidden,
-							"the paused project status is server-owned; a meta commit cannot release it (use the resume endpoint)")
+				if normalizedProjectStatus(bodyStatus) != "paused" &&
+					currentStatusPresent && normalizedProjectStatus(currentStatus) == "paused" {
+					if stale {
+						writeMetaConflict(w)
 						return
 					}
+					writeError(w, http.StatusForbidden,
+						"the paused project status is server-owned; a meta commit cannot release it (use the resume endpoint)")
+					return
 				}
-			case errors.Is(readErr, os.ErrNotExist):
-				// No stored meta yet: nothing to protect.
-			default:
-				writeError(w, http.StatusInternalServerError,
-					"verify the server-owned pause state: "+readErr.Error())
+			}
+		case errors.Is(readErr, os.ErrNotExist):
+			// No stored meta yet: there is no pause to protect, and a
+			// non-canonical body has no echo to be identical to.
+			if !statusCanonical || !sourcesCanonical {
+				writeError(w, http.StatusBadRequest,
+					"noncanonical pause value: the runtime compares exact strings, so the stored value would not mean what it spells")
 				return
 			}
+		default:
+			writeError(w, http.StatusInternalServerError,
+				"verify the server-owned pause state: "+readErr.Error())
+			return
 		}
 	}
 
@@ -3579,7 +3664,10 @@ func (h *ProjectHandler) PauseProject(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&reqBody)
 
-	if meta.Status == "paused" {
+	// Legacy data may carry a padded/cased status (written before the
+	// canonical rule, round 15). The control plane reads it the way the
+	// pause gate does, and both writes below store a canonical value.
+	if normalizedProjectStatus(meta.Status) == "paused" {
 		writeError(w, http.StatusConflict, "project is already paused")
 		appendControlAction(meta, "pause", actor, role, "project is already paused", "error")
 		h.persistControlActionAudit(r.Context(), pwc.key, pwc.etag, meta)
@@ -3617,7 +3705,7 @@ func (h *ProjectHandler) ResumeProject(w http.ResponseWriter, r *http.Request) {
 	meta := pwc.meta
 	caller := authpkg.CallerFromContext(r.Context())
 	actor, role := auditCaller(caller)
-	if meta.Status != "paused" {
+	if normalizedProjectStatus(meta.Status) != "paused" {
 		writeError(w, http.StatusConflict, "project is not paused")
 		appendControlAction(meta, "resume", actor, role, "project is not paused", "error")
 		h.persistControlActionAudit(r.Context(), pwc.key, pwc.etag, meta)

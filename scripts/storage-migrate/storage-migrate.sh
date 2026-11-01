@@ -139,7 +139,11 @@ phase_preflight() {
   # --- P0-7 data-plane read/write (source GET on one object; target PUT/GET/DEL round trip) ---
   local probe_key="migrate-preflight-probe.txt"
   local first_obj
-  first_obj=$({ mc_raw ls --recursive "$SRC_ALIAS" 2>/dev/null || true; } | head -1 | awk '{print $NF}')
+  # #1413: no early-exiting consumer on a bare assignment - a `head -1` here
+  # would SIGPIPE the mc listing and, under set -e + pipefail, kill the run.
+  local src_ls_all
+  src_ls_all=$({ mc_raw ls --recursive "$SRC_ALIAS" 2>/dev/null || true; })
+  first_obj=$(printf '%s\n' "$src_ls_all" | sed -n '1p' | awk '{print $NF}')
   if [ -n "$first_obj" ] && mc_get "$SRC_ALIAS/$first_obj" >/dev/null 2>&1; then
     pf_item "0-7" pass "source GET sample OK ($first_obj)"
   else

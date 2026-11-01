@@ -159,7 +159,7 @@ grep -q "RUSTFS_ON_DEMAND_MIGRATION_ENABLED" "$WORK/stateB/cutover-checklist.sh"
 echo
 echo "=== F) human gate: mark-cutover-done ==="
 out=$(bash "$TOOL" "${BASE[@]}" --mode mirror --state-dir "$WORK/stateB" --mark-cutover-done 2>&1); rc=$?
-[ "$rc" -eq 0 ] && pass "F1 mark-cutover-done exit 0" || fail "F1 mark-cutover-done exit 0 (rc=$rc)"
+[ "$rc" -eq 0 ] && pass "F1 mark-cutover-done exit 0" || fail "F1 mark-cutover-done exit 0 (rc=$rc): $(printf '%s' "$out" | tail -5 | tr '\n' ' ')"
 [ "$(stage_of "$WORK/stateB")" = "CUTOVER_DONE" ] && pass "F2 state=CUTOVER_DONE" || fail "F2 state=CUTOVER_DONE (got $(stage_of "$WORK/stateB"))"
 # F3 (#1413 SIGPIPE regression): a consumer that closes the pipe early
 # (head -2) must not break the run. After its last log line the tool only

@@ -27,3 +27,6 @@ qwenpaw-worker = "qwenpaw_worker.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "../plugins/agentteams-matrix-channel"]

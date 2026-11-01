@@ -32,6 +32,7 @@ func getCmd() *cobra.Command {
 func getWorkersCmd() *cobra.Command {
 	var team string
 	var output string
+	var fields string
 
 	cmd := &cobra.Command{
 		Use:   "workers [name]",
@@ -41,7 +42,14 @@ func getWorkersCmd() *cobra.Command {
   agt get workers
   agt get workers alice
   agt get workers --team alpha-team
-  agt get workers alice -o json`,
+  agt get workers -o json
+  agt get workers --fields=status -o json
+
+The list accepts --fields to select the row view (issue #1477): all,
+spec, status, or spec,status. The default "all" sends fields=all and
+keeps the full response, so scripts that read skills, env, or mcpServers
+from the list keep working unchanged. A named worker always returns the
+full detail, regardless of --fields.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client := NewAPIClient()
@@ -59,9 +67,16 @@ func getWorkersCmd() *cobra.Command {
 				return nil
 			}
 
-			path := "/api/v1/workers"
+			query := url.Values{}
 			if team != "" {
-				path += "?team=" + team
+				query.Set("team", team)
+			}
+			if fields != "" {
+				query.Set("fields", fields)
+			}
+			path := "/api/v1/workers"
+			if encoded := query.Encode(); encoded != "" {
+				path += "?" + encoded
 			}
 			var resp workerListResp
 			if err := client.DoJSON("GET", path, nil, &resp); err != nil {
@@ -92,6 +107,7 @@ func getWorkersCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&team, "team", "", "Filter by team name")
+	cmd.Flags().StringVar(&fields, "fields", "all", "List row view: all, spec, status, or spec,status (default: all, the full response)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "Output format (json)")
 	return cmd
 }

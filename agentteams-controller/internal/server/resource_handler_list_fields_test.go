@@ -83,7 +83,7 @@ const (
 `
 	goldenListSpec = `{"workers":[{"name":"full","workerName":"full-display","containerManaged":true,"state":"Sleeping","model":"model-a","subagentModel":"model-s","llmStreamFirstContentTimeout":"30","llmStreamIdleTimeout":"60","llmMaxRetries":"5","llmBackoffBase":"200","llmBackoffCap":"5","llmMaxConcurrent":"4","llmMaxQpm":"100","llmRateLimitPause":"1","llmRateLimitJitter":"100","llmAcquireTimeout":"10","runtime":"copaw","runtimeDeprecated":true,"image":"image-a","identity":"identity-a","package":"package-a","backendRuntime":"pod","matrixUserID":"@full:example.com","roomID":"room-full","exposedPorts":[{"port":8080,"domain":"full.example.com"}],"team":"alpha-team","role":"team_leader"},{"name":"solo","containerManaged":true,"state":"Running"}],"total":2}
 `
-	goldenListStatus = `{"workers":[{"phase":"Running","containerState":"running","message":"ok","lastActiveAt":"2026-10-31T00:00:00Z","agentStatus":"running","runningTaskCount":3,"lastRunAt":"2026-10-30T00:00:00Z","lastFinishAt":"2026-10-29T00:00:00Z","team":"alpha-team","role":"team_leader"},{"phase":"Pending"}],"total":2}
+	goldenListStatus = `{"workers":[{"name":"full","workerName":"full-display","phase":"Running","containerState":"running","message":"ok","lastActiveAt":"2026-10-31T00:00:00Z","agentStatus":"running","runningTaskCount":3,"lastRunAt":"2026-10-30T00:00:00Z","lastFinishAt":"2026-10-29T00:00:00Z","team":"alpha-team","role":"team_leader"},{"name":"solo","phase":"Pending"}],"total":2}
 `
 	goldenListSpecStatus = `{"workers":[{"name":"full","workerName":"full-display","phase":"Running","containerManaged":true,"state":"Sleeping","model":"model-a","subagentModel":"model-s","llmStreamFirstContentTimeout":"30","llmStreamIdleTimeout":"60","llmMaxRetries":"5","llmBackoffBase":"200","llmBackoffCap":"5","llmMaxConcurrent":"4","llmMaxQpm":"100","llmRateLimitPause":"1","llmRateLimitJitter":"100","llmAcquireTimeout":"10","runtime":"copaw","runtimeDeprecated":true,"image":"image-a","identity":"identity-a","package":"package-a","backendRuntime":"pod","containerState":"running","matrixUserID":"@full:example.com","roomID":"room-full","message":"ok","lastActiveAt":"2026-10-31T00:00:00Z","agentStatus":"running","runningTaskCount":3,"lastRunAt":"2026-10-30T00:00:00Z","lastFinishAt":"2026-10-29T00:00:00Z","exposedPorts":[{"port":8080,"domain":"full.example.com"}],"team":"alpha-team","role":"team_leader"},{"name":"solo","phase":"Pending","containerManaged":true,"state":"Running"}],"total":2}
 `
@@ -151,7 +151,11 @@ func TestListWorkersFieldsKeySets(t *testing.T) {
 		"package", "backendRuntime", "containerManaged", "state",
 		"exposedPorts", "matrixUserID", "roomID", "team", "role",
 	}
+	// The status view carries the identity contract (issue #1477): name is
+	// always present so a status row can be keyed by name, never by row
+	// order.
 	statusKeys := []string{
+		"name", "workerName",
 		"phase", "containerState", "message", "lastActiveAt",
 		"agentStatus", "runningTaskCount", "lastRunAt", "lastFinishAt",
 		"team", "role",
@@ -337,5 +341,154 @@ func TestListWorkersFieldsWithFilters(t *testing.T) {
 `
 	if got := rec.Body.String(); got != golden {
 		t.Fatalf("body mismatch\ngot:  %s\nwant: %s", got, golden)
+	}
+}
+
+// TestListWorkersIdentityInAllViews pins the identity contract of issue
+// #1477 on GET /api/v1/workers: EVERY view — the default full response,
+// "all", spec, status and spec,status — carries a stable identity in each
+// row, so rows can be keyed by the CR name instead of by row order. The
+// status view previously had no identity field at all, which made a
+// phase→worker mapping depend on the list order surviving between calls.
+func TestListWorkersIdentityInAllViews(t *testing.T) {
+	full, solo, alpha := listFieldsFixtures()
+	// CR name (metadata.name) is the identity the views must carry.
+	wantNames := []string{full.Name, solo.Name}
+
+	for _, tc := range []struct{ name, query string }{
+		{name: "default", query: ""},
+		{name: "all", query: "fields=all"},
+		{name: "spec", query: "fields=spec"},
+		{name: "status", query: "fields=status"},
+		{name: "spec-status", query: "fields=spec,status"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			counting := &listFixtureClient{
+				workers: []v1beta1.Worker{*full, *solo},
+				teams:   []v1beta1.Team{*alpha},
+			}
+			handler := NewResourceHandler(counting, "default", nil, "", nil)
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/workers?"+tc.query, nil)
+			rec := httptest.NewRecorder()
+			handler.ListWorkers(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+			}
+			var body struct {
+				Workers []map[string]any `json:"workers"`
+				Total   int              `json:"total"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if len(body.Workers) != len(wantNames) {
+				t.Fatalf("rows = %d, want %d", len(body.Workers), len(wantNames))
+			}
+			for i, row := range body.Workers {
+				if got, _ := row["name"].(string); got != wantNames[i] {
+					t.Errorf("row %d: name = %q, want the CR name %q (every view carries the identity)", i, got, wantNames[i])
+				}
+				// workerName is the display name: present on the fully
+				// populated worker, omitted on the bare one (omitempty).
+				wantWorkerName := ""
+				if wantNames[i] == full.Name {
+					wantWorkerName = "full-display"
+				}
+				if got, present := row["workerName"].(string); present != (wantWorkerName != "") || (present && got != wantWorkerName) {
+					t.Errorf("row %d: workerName = %q (present %v), want %q (present %v)", i, got, present, wantWorkerName, wantWorkerName != "")
+				}
+			}
+		})
+	}
+}
+
+// TestListWorkersIdentitySurvivesAddRemoveReorder pins that list rows stay
+// correlated to their worker across mutations (issue #1477): three
+// workers with distinct phases are listed, the middle one is deleted, a
+// fourth is added, and the second list comes back in a DIFFERENT slice
+// order than the first — a consumer that correlated by row order (instead
+// of by name) would assign gamma-dev and alpha-dev each other's phases.
+// The same assertions run on fields=status (the view that had no identity
+// before #1477) and fields=all.
+func TestListWorkersIdentitySurvivesAddRemoveReorder(t *testing.T) {
+	mk := func(name, phase string) v1beta1.Worker {
+		w := v1beta1.Worker{}
+		w.Name = name
+		w.Namespace = "default"
+		w.Status.Phase = phase
+		return w
+	}
+	alpha := mk("alpha-dev", "Running")
+	beta := mk("beta-dev", "Pending")
+	gamma := mk("gamma-dev", "Failed")
+	delta := mk("delta-dev", "Running")
+
+	counting := &listFixtureClient{workers: []v1beta1.Worker{alpha, beta, gamma}}
+	handler := NewResourceHandler(counting, "default", nil, "", nil)
+
+	phasesByName := func(t *testing.T, fields string) map[string]string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/workers?fields="+fields, nil)
+		rec := httptest.NewRecorder()
+		handler.ListWorkers(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("fields=%s: status = %d: %s", fields, rec.Code, rec.Body.String())
+		}
+		var body struct {
+			Workers []struct {
+				Name  string `json:"name"`
+				Phase string `json:"phase"`
+			} `json:"workers"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("fields=%s: decode: %v", fields, err)
+		}
+		byName := make(map[string]string, len(body.Workers))
+		for _, row := range body.Workers {
+			if row.Name == "" {
+				t.Fatalf("fields=%s: row without an identity: %v", fields, body.Workers)
+			}
+			byName[row.Name] = row.Phase
+		}
+		return byName
+	}
+
+	for _, fields := range []string{"status", "all"} {
+		t.Run("fields="+fields, func(t *testing.T) {
+			// Each view starts from the same three workers: the mutation
+			// below is per-case, so the fake client must be reset here
+			// (a shared slice leaked the mutated set into the next case).
+			counting.workers = []v1beta1.Worker{alpha, beta, gamma}
+			first := phasesByName(t, fields)
+			if len(first) != 3 {
+				t.Fatalf("pass 1: %d workers, want 3: %v", len(first), first)
+			}
+			if first["alpha-dev"] != "Running" || first["beta-dev"] != "Pending" || first["gamma-dev"] != "Failed" {
+				t.Fatalf("pass 1: name→phase index wrong: %v", first)
+			}
+
+			// Delete the middle worker (beta-dev), add delta-dev, and
+			// serve the second list in a different slice order than the
+			// first: position 0 was Running, position 1 was Pending.
+			counting.workers = []v1beta1.Worker{gamma, alpha, delta}
+			second := phasesByName(t, fields)
+
+			// alpha-dev moved from position 0 to 1, gamma-dev from 2 to 0;
+			// a row-order correlation would swap their phases.
+			want := map[string]string{
+				"alpha-dev": "Running",
+				"gamma-dev": "Failed",
+				"delta-dev": "Running",
+			}
+			if len(second) != len(want) {
+				t.Fatalf("pass 2: %d workers, want %d: %v", len(second), len(want), second)
+			}
+			for name, wantPhase := range want {
+				if got := second[name]; got != wantPhase {
+					t.Errorf("pass 2: %s phase = %q, want %q — rows must stay correlated by name, not row order", name, got, wantPhase)
+				}
+			}
+		})
 	}
 }

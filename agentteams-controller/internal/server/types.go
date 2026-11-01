@@ -175,6 +175,12 @@ type workerListProjection struct {
 //     and task fields.
 //   - all:    the full WorkerResponse (the default; not a projection).
 //
+// Identity contract (issue #1477): every view carries the worker's stable
+// identity — name (the CR name, always present) plus workerName (the
+// display name, when set). List rows are keyed by name; a consumer must
+// never correlate rows by position in the list, because workers can be
+// created, deleted, or reordered between two list calls.
+//
 // team and role belong to both views: a membership change is a spec change
 // as well.
 
@@ -209,8 +215,13 @@ type WorkerSpecView struct {
 	Role                         string            `json:"role,omitempty"`
 }
 
-// WorkerStatusView is the fields=status projection of a worker.
+// WorkerStatusView is the fields=status projection of a worker. Like every
+// other view it carries the stable identity (name/workerName), so a status
+// row can be keyed by name instead of by its position in the list
+// (issue #1477).
 type WorkerStatusView struct {
+	Name             string `json:"name"`
+	WorkerName       string `json:"workerName,omitempty"`
 	Phase            string `json:"phase"`
 	ContainerState   string `json:"containerState,omitempty"`
 	Message          string `json:"message,omitempty"`
@@ -298,9 +309,13 @@ func (r WorkerResponse) SpecView() WorkerSpecView {
 }
 
 // StatusView projects a full worker response down to its volatile runtime
-// fields (GET /api/v1/workers?fields=status).
+// fields (GET /api/v1/workers?fields=status). The identity fields are part
+// of the projection: the status view must stay keyable by name
+// (issue #1477).
 func (r WorkerResponse) StatusView() WorkerStatusView {
 	return WorkerStatusView{
+		Name:             r.Name,
+		WorkerName:       r.WorkerName,
 		Phase:            r.Phase,
 		ContainerState:   r.ContainerState,
 		Message:          r.Message,

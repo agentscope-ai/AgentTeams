@@ -378,7 +378,9 @@ assert_embedded_shape() { # inspects the controller container; fail-closed unles
   ws=$(jq -r '.[0].Mounts[] | select(.Type == "bind" and .Destination == "/root/agentteams-fs/agents/manager") | .Source' <<<"$insp")
   [ -n "$ws" ] && [ "$ws" != "null" ] || die 1 "workspace bind on /root/agentteams-fs/agents/manager missing (not the installer shape) - fail-closed"
   EMBED_WORKSPACE="$ws"
-  for p in 8080 8001 18088; do
+  # Container ports, not host ports: the installer publishes 8080->18080,
+  # 8001->18001 and 8088->18088, so the third check must look for 8088.
+  for p in 8080 8001 8088; do
     jq -e --arg p "$p" '.[0].HostConfig.PortBindings | has($p + "/tcp")' <<<"$insp" >/dev/null \
       || die 1 "port $p not published (not the installer shape) - fail-closed"
   done
@@ -392,16 +394,24 @@ assert_embedded_shape() { # inspects the controller container; fail-closed unles
 swap_storage_env() {
   local env_json="$1" bucket
   bucket=$(first_bucket)
+  # jq strings do NOT interpolate $var - only \($var) does. Writing
+  # "AGENTTEAMS_FS_ENDPOINT=$ep" produced a literal $ep in the env file, and an
+  # env that never had a provider line kept none, so the rebuilt controller came
+  # up without AGENTTEAMS_STORAGE_PROVIDER (the cutover assert caught it).
   jq -c --arg ep "$DST_EP" --arg b "$bucket" --arg ak "$DST_AK" --arg sk "$DST_SK" '
     map(
       if   (. | startswith("AGENTTEAMS_STORAGE_PROVIDER")) or (. | startswith("HICLAW_STORAGE_PROVIDER")) then "AGENTTEAMS_STORAGE_PROVIDER=s3"
-      elif (. | startswith("AGENTTEAMS_FS_ENDPOINT")) or (. | startswith("HICLAW_FS_ENDPOINT")) then "AGENTTEAMS_FS_ENDPOINT=$ep"
-      elif (. | startswith("AGENTTEAMS_FS_BUCKET")) or (. | startswith("HICLAW_FS_BUCKET")) then "AGENTTEAMS_FS_BUCKET=$b"
-      elif (. | startswith("AGENTTEAMS_FS_ACCESS_KEY")) or (. | startswith("HICLAW_FS_ACCESS_KEY")) then "AGENTTEAMS_FS_ACCESS_KEY=$ak"
-      elif (. | startswith("AGENTTEAMS_FS_SECRET_KEY")) or (. | startswith("HICLAW_FS_SECRET_KEY")) then "AGENTTEAMS_FS_SECRET_KEY=$sk"
-      elif (. | startswith("MINIO_USER"))     then "MINIO_USER=$ak"
-      elif (. | startswith("MINIO_PASSWORD")) then "MINIO_PASSWORD=$sk"
-      else . end )' <<<"$env_json"
+      elif (. | startswith("AGENTTEAMS_FS_ENDPOINT"))     or (. | startswith("HICLAW_FS_ENDPOINT"))     then "AGENTTEAMS_FS_ENDPOINT=\($ep)"
+      elif (. | startswith("AGENTTEAMS_FS_BUCKET"))       or (. | startswith("HICLAW_FS_BUCKET"))       then "AGENTTEAMS_FS_BUCKET=\($b)"
+      elif (. | startswith("AGENTTEAMS_FS_ACCESS_KEY"))   or (. | startswith("HICLAW_FS_ACCESS_KEY"))   then "AGENTTEAMS_FS_ACCESS_KEY=\($ak)"
+      elif (. | startswith("AGENTTEAMS_FS_SECRET_KEY"))   or (. | startswith("HICLAW_FS_SECRET_KEY"))   then "AGENTTEAMS_FS_SECRET_KEY=\($sk)"
+      elif (. | startswith("MINIO_USER"))     then "MINIO_USER=\($ak)"
+      elif (. | startswith("MINIO_PASSWORD")) then "MINIO_PASSWORD=\($sk)"
+      else . end )
+    | if (map(select(startswith("AGENTTEAMS_STORAGE_PROVIDER"))) | length) > 0
+      then . else . + ["AGENTTEAMS_STORAGE_PROVIDER=s3"] end
+    | if (map(select(startswith("AGENTTEAMS_FS_ENDPOINT"))) | length) > 0
+      then . else . + ["AGENTTEAMS_FS_ENDPOINT=\($ep)"] end' <<<"$env_json"
 }
 
 # render_controller_run <out-script> <out-env-file> <image> <env-json>
@@ -415,11 +425,17 @@ render_controller_run() {
     echo '#!/usr/bin/env bash'
     echo "set -euo pipefail"
     echo "docker run -d --name $CONTROLLER_CONTAINER --network agentteams-net \\"
-    echo "  --network alias matrix-local.agentteams.io --network alias aigw-local.agentteams.io --network alias fs-local.agentteams.io \\"
+    # `--network-alias` is one flag with a value; `--network alias X` makes docker
+    # treat X as the image name (that is how a cutover once tried to pull
+    # matrix-local.agentteams.io). One flag per alias.
+    echo "  --network-alias matrix-local.agentteams.io --network-alias aigw-local.agentteams.io --network-alias fs-local.agentteams.io \\"
     echo "  --env-file $envfile \\"
     echo "  -v /var/run/docker.sock:/var/run/docker.sock --security-opt label=disable \\"
-    echo "  -v agentteams-data:/data -v '${EMBED_WORKSPACE:-<workspace>}' -v '${EMBED_WORKSPACE:-<workspace>}/agents/manager:/root/agentteams-fs/agents/manager' \\"
-    echo "  -p 8080:8080 -p 8001:8001 -p 18088:18088 \\"
+    # The workspace is a bind mount onto the manager fs path only; a bare -v path
+    # would create an anonymous volume instead of reusing the host directory.
+    echo "  -v agentteams-data:/data -v '${EMBED_WORKSPACE:-<workspace>}/agents/manager:/root/agentteams-fs/agents/manager' \\"
+    # Installer shape: host ports 18001/18080/18088 -> container 8001/8080/8088.
+    echo "  -p 127.0.0.1:18001:8001 -p 127.0.0.1:18080:8080 -p 127.0.0.1:18088:8088 \\"
     echo "  --restart unless-stopped $image"
   } > "$out"
 }

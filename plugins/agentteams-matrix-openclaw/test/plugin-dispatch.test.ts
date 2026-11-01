@@ -194,7 +194,15 @@ async function startAccount(
   cfg: OpenClawConfig,
 ): Promise<ResolvedOpenClawMatrixAccount> {
   const account = plugin.config!.resolveAccount!(cfg);
-  await plugin.gateway!.startAccount!({ account, cfg } as never);
+  // startAccount now keeps the account alive until the gateway aborts it,
+  // so it is intentionally NOT awaited: the wiring is synchronous up to the
+  // keep-alive promise. The controller mirrors the gateway's abort signal.
+  const aborter = new AbortController();
+  void plugin.gateway!.startAccount!({
+    account,
+    cfg,
+    abortSignal: aborter.signal,
+  } as never);
   return account;
 }
 
@@ -362,8 +370,16 @@ describe("agentteams-matrix inbound dispatch", () => {
     setRuntime(runtime);
     try {
       const account = openClawMatrixPlugin.config!.resolveAccount!(cfg);
-      await openClawMatrixPlugin.gateway!.startAccount!({ account, cfg } as never);
+      void openClawMatrixPlugin.gateway!.startAccount!({
+        account,
+        cfg,
+        abortSignal: new AbortController().signal,
+      } as never);
 
+      // startAccount is not awaited (it keeps the account alive), so wait
+      // for the handshake before pushing the frame.
+      await waitFor(() => mock.connectionCount > 0);
+      await waitTick();
       const frame = makeFrame();
       mock.pushInbound(frame);
       await waitFor(() => mock.lastOutbound !== null);

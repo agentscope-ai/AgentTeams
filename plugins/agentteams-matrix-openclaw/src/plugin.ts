@@ -484,12 +484,27 @@ export function createOpenClawMatrixPlugin(
         // is idempotent per client instance, so a repeated startAccount never
         // double-dispatches an inbound frame.
         wireClientOnce(client, account, ctx.cfg);
-        if (client.connected) return { connected: true };
-        await client.connect(account.socketPath, {
-          agent: account.agent,
-          protocol: account.protocolVersion,
+        if (!client.connected) {
+          await client.connect(account.socketPath, {
+            agent: account.agent,
+            protocol: account.protocolVersion,
+          });
+          log.info?.(`sidecar ${account.accountId} connected at ${account.socketPath}`);
+        }
+        // Keep the account running until the gateway aborts it. A resolved
+        // `startAccount` is treated as "channel exited" and auto-restarted
+        // (the Pi run logged `channel exited without an error` every few
+        // seconds): each restart tore the sidecar wiring down between the
+        // agent turn and its delivery, and the reply never reached the room.
+        await new Promise<void>((resolve) => {
+          const signal = ctx.abortSignal as AbortSignal | undefined;
+          if (signal?.aborted) {
+            resolve();
+            return;
+          }
+          signal?.addEventListener("abort", () => resolve(), { once: true });
+          client.onClose(() => resolve());
         });
-        log.info?.(`sidecar ${account.accountId} connected at ${account.socketPath}`);
         return { connected: true };
       },
       stopAccount: async (ctx) => {

@@ -473,6 +473,14 @@ def sidecar_worker(server, core, loop):
         try:
             frame = server.recv()
         except Exception as exc:
+            if "no active connection" in str(exc):
+                # The worker starts before the gateway's plugin connects; the
+                # first recv on an empty server raises instead of blocking.
+                # Retry instead of exiting (Pi run: the worker died at
+                # startup and every outbound frame went unread, so the
+                # client's sendOutbound never got its ack).
+                time.sleep(0.2)
+                continue
             log(f"sidecar worker: connection ended ({exc})")
             return
         ftype = frame.get("type")

@@ -259,11 +259,12 @@ wait_for_container_absent() {
 # count/bytes from 'mc ls --recursive --json'; digest over the top-level prefix
 # (first path segment) with per-prefix object counts - small even for huge buckets.
 window_sample() {
-  # Prints "<count>\t<bytes>\t<digest>" AND sets REPLY_SAMPLE to the same value.
-  # Printing is the contract: window_evidence captures the output with $(...),
-  # and a producer that only assigns made every sample "{count:-1,...}" - three
-  # identical bogus samples that "proved" a freeze while the bucket grew.
-  local buckets b raw n bytes total_n=0 total_bytes=0 digests="" digest_all
+  # Prints "<total_count>\t<total_bytes>\t<digest>" AND sets REPLY_SAMPLE.
+  # The digest is the per-bucket TOP-LEVEL PREFIX distribution (prefix:count,...),
+  # not just totals: moving an object from prefix-a/ to prefix-b/ keeps the count
+  # and the bytes identical but must still change the digest, otherwise a
+  # reshuffling bucket would look frozen.
+  local buckets b raw n bytes dist total_n=0 total_bytes=0 parts="" digest_all
   buckets=$(get_buckets)
   for b in $buckets; do
     raw=$(mc_raw ls --recursive --json "$SRC_ALIAS/$b" 2>/dev/null) || { REPLY_SAMPLE=""; return 1; }
@@ -271,11 +272,13 @@ window_sample() {
     bytes=$(jq -s 'map(.size // 0) | add // 0' <<<"$raw" 2>/dev/null) || { REPLY_SAMPLE=""; return 1; }
     case "$n" in ''|*[!0-9]*) REPLY_SAMPLE=""; return 1 ;; esac
     case "$bytes" in ''|*[!0-9]*) REPLY_SAMPLE=""; return 1 ;; esac
-    [ "$n" -ge 0 ] || { REPLY_SAMPLE=""; return 1; }
-    [ "$bytes" -ge 0 ] || { REPLY_SAMPLE=""; return 1; }
-    digests="$digests$b=$n/$bytes;"
+    dist=$(jq -rs 'map(.key // "") | map(split("/")[0]) | sort | group_by(.) | map(.[0] + ":" + (length | tostring)) | join(",")' <<<"$raw" 2>/dev/null) || { REPLY_SAMPLE=""; return 1; }
+    [ -n "$dist" ] || { REPLY_SAMPLE=""; return 1; }
+    total_n=$((total_n + n))
+    total_bytes=$((total_bytes + bytes))
+    parts="$parts$b|$dist;"
   done
-  digest_all=$(printf '%s' "$digests" | md5sum | awk '{print $1}')
+  digest_all=$(printf '%s' "$parts" | md5sum | awk '{print $1}')
   [ -n "$digest_all" ] || { REPLY_SAMPLE=""; return 1; }
   REPLY_SAMPLE="$total_n	$total_bytes	$digest_all"
   printf '%s\n' "$REPLY_SAMPLE"

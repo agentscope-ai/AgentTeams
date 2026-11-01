@@ -120,7 +120,11 @@ if [ -n "${WORKER_NAME}" ] && [ -n "${SKILL_NAME}" ] \
     exit 0
 fi
 
-workers_json=$(agt get workers -o json)
+# Request the full view explicitly (issue #1477): the --skill selector below
+# reads .skills from each list row, and the notify path reads .roomID — both
+# are omitted from the slim spec/status views. Explicit --fields=all keeps
+# this working even if the server default ever switches to a summary view.
+workers_json=$(agt get workers --fields=all -o json)
 if [ -n "${WORKER_NAME}" ]; then
     targets="${WORKER_NAME}"
 else
@@ -128,6 +132,10 @@ else
 fi
 
 for worker in ${targets}; do
+    # Baseline for --add-skill/--remove-skill is the single-worker DETAIL
+    # endpoint (agt get workers <name> hits GET /api/v1/workers/<name>, not
+    # the list), so it always carries skills regardless of the list view
+    # (issue #1477).
     current=$(agt get workers "${worker}" -o json | jq '.skills // []')
     if [ -n "${ADD_SKILL}" ]; then
         desired=$(echo "${current}" | jq --arg skill "${ADD_SKILL}" 'if index($skill) then . else . + [$skill] end')

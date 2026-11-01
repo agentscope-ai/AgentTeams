@@ -28,18 +28,27 @@ pip install "matrix-nio[e2e]"
 ```
 
 (On `matrix-nio < 0.26` the extra additionally needs the system
-`libolm`, e.g. `apt/dnf install libolm-dev`.) Without any importable
-backend the channel degrades by design: it logs
+`libolm`, e.g. `apt/dnf install libolm-dev`.)
+
+The channel never falls back to plaintext when encryption is requested:
+without an importable backend the E2EE preflight refuses to start —
 
 ```text
-MatrixChannel: no Matrix E2EE backend (vodozemac/olm) — falling back to
-non-encrypted mode. Install matrix-nio[e2e]; on matrix-nio < 0.26 also
-install libolm (apt/dnf install libolm-dev).
+MatrixChannel: no Matrix E2EE backend (vodozemac/olm) while encryption is
+enabled — refusing to start in plaintext. Install matrix-nio[e2e]; on
+matrix-nio < 0.26 also install libolm (apt/dnf install libolm-dev), or
+disable encryption explicitly.
 ```
 
-and continues unencrypted. `install.sh` deliberately does not pip
-install this: the host/image Python environment is owned by the
-packaging line, and the installer must not touch the host venv.
+Explicitly unencrypted operation is a separate, supported configuration:
+leave the channel's `encryption` option unset (or `false`) and it runs
+over plaintext rooms by design. Only that explicit setting skips the
+preflight — a missing backend while encryption is enabled is an error,
+not a downgrade.
+
+`install.sh` deliberately does not pip install this: the host/image
+Python environment is owned by the packaging line, and the installer
+must not touch the host venv.
 
 ## Install
 

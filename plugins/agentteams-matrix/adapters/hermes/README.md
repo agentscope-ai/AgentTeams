@@ -49,18 +49,32 @@ pip install "matrix-nio[e2e]"
 ```
 
 (On `matrix-nio < 0.26` the extra additionally needs the system
-`libolm`, e.g. `apt/dnf install libolm-dev`.) Without any importable
-backend the adapter degrades by design: it logs
+`libolm`, e.g. `apt/dnf install libolm-dev`.)
 
-```text
-AgentTeams Matrix: no Matrix E2EE backend (vodozemac/olm) — falling back
-to non-encrypted mode. Install matrix-nio[e2e]; on matrix-nio < 0.26
-also install libolm (apt/dnf install libolm-dev).
-```
+The adapter never falls back to plaintext when encryption is requested:
+without an importable backend the request is **refused**, on both
+delivery paths.
 
-and continues unencrypted. `install.sh` deliberately does not pip
-install this: the host Python environment is owned by the packaging
-line, and the installer must not touch the host venv.
+- Long-running connection: `connect()` fails with the non-retryable
+  error code `e2ee_backend_missing` —
+  `no Matrix E2EE backend (vodozemac/olm) while encryption is requested
+  — install matrix-nio[e2e] (matrix-nio < 0.26 also needs libolm), or
+  disable encryption explicitly` — and the platform stays disconnected
+  instead of joining a room it cannot encrypt for.
+- Out-of-process sender (cron / notification): the send fails with
+  `E2EE is enabled but no crypto backend is installed — refusing to send
+  a plaintext cron message (install 'matrix-nio[e2e]')`, so a scheduled
+  message is never delivered in plaintext behind the operator's back.
+
+Explicitly unencrypted operation is a separate, supported configuration:
+leave `AGENTTEAMS_MATRIX_ENCRYPTION` unset (or `0`/`false`/`no`) and the
+adapter runs over plaintext rooms by design. Only that explicit setting
+skips the check — a missing backend while encryption is requested is an
+error, not a downgrade.
+
+`install.sh` deliberately does not pip install this: the host Python
+environment is owned by the packaging line, and the installer must not
+touch the host venv.
 
 ## Configuration (env-driven)
 
@@ -71,7 +85,7 @@ line, and the installer must not touch the host venv.
 | `AGENTTEAMS_MATRIX_TOKEN` | yes | Bot access token (secret; `password: true`) |
 | `AGENTTEAMS_MATRIX_DEVICE_ID` | no | Device ID for login |
 | `AGENTTEAMS_MATRIX_STATE_DIR` | no | State dir (sync token / E2EE keys / media cache); default `<HERMES_HOME>/state/agentteams_matrix` |
-| `AGENTTEAMS_MATRIX_ENCRYPTION` | no | `1/true/yes` enables E2EE (degrades without the backend) |
+| `AGENTTEAMS_MATRIX_ENCRYPTION` | no | `1/true/yes` requests E2EE; a missing crypto backend then fails the connection (refused, never plaintext). Unset/`0` = explicitly unencrypted |
 | `AGENTTEAMS_MATRIX_HISTORY_LIMIT` | no | Group history buffer size per room (default 50) |
 | `AGENTTEAMS_MATRIX_SYNC_TIMEOUT_MS` | no | Sync long-poll timeout (min 1000, default 30000) |
 | `AGENTTEAMS_MATRIX_ALLOWED_USERS` | no | Comma-separated MXID allowlist |

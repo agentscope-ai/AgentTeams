@@ -1109,8 +1109,9 @@ async def _standalone_send(
     if encryption_requested and not encryption:
         # Fail closed: an account configured for E2EE must never fall back
         # to a plaintext cron message just because the crypto backend is
-        # missing (the in-process transport logs the same condition and
-        # downgrades, but a one-shot sender has no operator watching it).
+        # missing. The in-process connection refuses the same condition
+        # (``e2ee_backend_missing``); a one-shot sender has no operator
+        # watching it, so the send itself fails.
         return send_error(
             "agentteams-matrix: E2EE is enabled but no crypto backend is "
             "installed — refusing to send a plaintext cron message "

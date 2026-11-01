@@ -3168,13 +3168,22 @@ func (h *ProjectHandler) PutProjectMeta(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusForbidden, "worker can only commit the meta of a project in its own team")
 			return
 		}
-		// The human pause source is server-owned state (#1402 round 10):
-		// If-Match binds the version, not the field authority. A worker
-		// commit that drops loop.pause_sources=["user"] — or omits the
-		// loop object entirely — must not clear a pause the admin placed.
-		// Ordinary task-progress commits keep the source and stay on the
-		// no-extra-read path; only a body that lacks the source pays the
-		// read that decides whether protecting it is required.
+	}
+
+	// The human pause source is server-owned state for EVERY non-admin
+	// caller (#1402 round 10, widened in round 12): If-Match binds the
+	// version, not the field authority. A commit from a worker, manager,
+	// team leader or L2 human that drops loop.pause_sources=["user"] — or
+	// omits the loop object entirely — must not clear a pause the admin
+	// placed; only the admin and the dedicated resume endpoint may. The
+	// earlier worker-only gate left the other three identities able to
+	// clear the veto through the metadata path while ResumeLoop still
+	// returned 403.
+	//
+	// Ordinary task-progress commits keep the source and stay on the
+	// no-extra-read path; only a body that lacks the source pays the read
+	// that decides whether protecting it is required.
+	if caller := authpkg.CallerFromContext(r.Context()); caller == nil || caller.Role != authpkg.RoleAdmin {
 		bodySources, bodyAlias := exactPauseSources(body)
 		if bodyAlias {
 			// The runtime persists and reads the exact lowercase keys; a
@@ -3195,7 +3204,7 @@ func (h *ProjectHandler) PutProjectMeta(w http.ResponseWriter, r *http.Request) 
 				currentSources, _ := exactPauseSources(current)
 				if pauseSourcesContain(currentSources, pauseSourceUser) {
 					writeError(w, http.StatusForbidden,
-						"the human pause source is server-owned; a worker meta commit cannot clear it (use the resume endpoint)")
+						"the human pause source is server-owned; a meta commit cannot clear it (use the resume endpoint)")
 					return
 				}
 			case errors.Is(readErr, os.ErrNotExist):

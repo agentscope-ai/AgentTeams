@@ -639,3 +639,140 @@ func TestPutProjectMeta_WorkerCannotClearHumanPauseViaCaseAlias(t *testing.T) {
 		})
 	}
 }
+
+// Round 12 (#1402): the human pause veto is server-owned for EVERY
+// non-admin caller. The round-10 gate only covered RoleWorker, so a manager,
+// a same-team team leader and an L2 human could still clear
+// loop.pause_sources=["user"] (or drop the loop object) through the
+// metadata commit while ResumeLoop(source=user) returned 403 for them.
+func TestPutProjectMeta_NonAdminCannotClearHumanPause(t *testing.T) {
+	pausedMeta := `{"project_id":"p1","title":"P1","status":"active","plan_type":"dag","team_id":"alpha-team","loop":{"pause_sources":["user"]}}`
+
+	identities := map[string]*authpkg.CallerIdentity{
+		"manager": {Role: authpkg.RoleManager, Username: "manager"},
+		"team leader": {
+			Role: authpkg.RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team",
+		},
+		"L2 human": {
+			Role: authpkg.RoleHuman, Username: "alpha-viewer", Teams: []string{"alpha-team"},
+		},
+	}
+	destructive := map[string]string{
+		"clears the source":     `{"project_id":"p1","title":"P1","status":"active","plan_type":"dag","team_id":"alpha-team","loop":{"pause_sources":[]}}`,
+		"omits the loop object": `{"project_id":"p1","title":"P1","status":"active","plan_type":"dag","team_id":"alpha-team","synced":true}`,
+	}
+
+	for roleName, identity := range identities {
+		for caseName, body := range destructive {
+			t.Run(roleName+"/"+caseName, func(t *testing.T) {
+				store := ossfake.NewMemory()
+				key := "teams/alpha-team/shared/projects/p1/meta.json"
+				if err := store.PutObject(context.Background(), key, []byte(pausedMeta)); err != nil {
+					t.Fatal(err)
+				}
+				k8s := fake.NewClientBuilder().
+					WithScheme(newProjectTestScheme(t)).
+					WithRuntimeObjects(team("alpha-team")).
+					Build()
+				mw := authpkg.NewMiddleware(&roleAuthenticator{identity: identity}, nil, authpkg.NewAuthorizer(), k8s, "default")
+				var ossStore oss.StorageClient = &mcLikeOSS{Memory: store}
+				srv := NewHTTPServer(":0", ServerDeps{Client: k8s, Namespace: "default", OSS: ossStore, AuthMw: mw})
+
+				read, err := store.StatMeta(context.Background(), key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				req := httptest.NewRequest(http.MethodPut, "/api/v1/projects/p1/meta", strings.NewReader(body))
+				req.Header.Set("Authorization", "Bearer sa-token")
+				req.Header.Set("If-Match", read.ETag)
+				rec := httptest.NewRecorder()
+				srv.Mux.ServeHTTP(rec, req)
+
+				if rec.Code != http.StatusForbidden {
+					t.Fatalf("status=%d, want 403; body=%s", rec.Code, rec.Body.String())
+				}
+				if !strings.Contains(rec.Body.String(), "human pause source") {
+					t.Fatalf("403 body does not name the human pause source: %s", rec.Body.String())
+				}
+				got, err := store.GetObject(context.Background(), key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(got) != pausedMeta {
+					t.Fatalf("refused commit changed the stored meta:\n got=%s\n want=%s", got, pausedMeta)
+				}
+			})
+		}
+
+		// Positive control: an ordinary progress commit that KEEPS the
+		// human pause source must still succeed for the same identity.
+		t.Run(roleName+"/progress commit keeps the pause", func(t *testing.T) {
+			store := ossfake.NewMemory()
+			key := "teams/alpha-team/shared/projects/p1/meta.json"
+			if err := store.PutObject(context.Background(), key, []byte(pausedMeta)); err != nil {
+				t.Fatal(err)
+			}
+			k8s := fake.NewClientBuilder().
+				WithScheme(newProjectTestScheme(t)).
+				WithRuntimeObjects(team("alpha-team")).
+				Build()
+			mw := authpkg.NewMiddleware(&roleAuthenticator{identity: identity}, nil, authpkg.NewAuthorizer(), k8s, "default")
+			var ossStore oss.StorageClient = &mcLikeOSS{Memory: store}
+			srv := NewHTTPServer(":0", ServerDeps{Client: k8s, Namespace: "default", OSS: ossStore, AuthMw: mw})
+
+			read, err := store.StatMeta(context.Background(), key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := `{"project_id":"p1","title":"P1","status":"active","plan_type":"dag","team_id":"alpha-team","loop":{"pause_sources":["user"]},"synced":true}`
+			req := httptest.NewRequest(http.MethodPut, "/api/v1/projects/p1/meta", strings.NewReader(body))
+			req.Header.Set("Authorization", "Bearer sa-token")
+			req.Header.Set("If-Match", read.ETag)
+			rec := httptest.NewRecorder()
+			srv.Mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status=%d, want 200 (progress commit keeping the pause); body=%s", rec.Code, rec.Body.String())
+			}
+			if sources := durablePauseSources(t, store, key); len(sources) != 1 || sources[0] != "user" {
+				t.Fatalf("durable pause sources = %v, want [user]", sources)
+			}
+		})
+	}
+
+	// The admin keeps field authority: clearing the source through the meta
+	// commit stays allowed (the ordinary pause/resume control plane).
+	t.Run("admin may still clear the source", func(t *testing.T) {
+		store := ossfake.NewMemory()
+		key := "teams/alpha-team/shared/projects/p1/meta.json"
+		if err := store.PutObject(context.Background(), key, []byte(pausedMeta)); err != nil {
+			t.Fatal(err)
+		}
+		k8s := fake.NewClientBuilder().
+			WithScheme(newProjectTestScheme(t)).
+			WithRuntimeObjects(team("alpha-team")).
+			Build()
+		admin := &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"}
+		mw := authpkg.NewMiddleware(&roleAuthenticator{identity: admin}, nil, authpkg.NewAuthorizer(), k8s, "default")
+		var ossStore oss.StorageClient = &mcLikeOSS{Memory: store}
+		srv := NewHTTPServer(":0", ServerDeps{Client: k8s, Namespace: "default", OSS: ossStore, AuthMw: mw})
+
+		read, err := store.StatMeta(context.Background(), key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := `{"project_id":"p1","title":"P1","status":"active","plan_type":"dag","team_id":"alpha-team","loop":{"pause_sources":[]}}`
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/projects/p1/meta", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer sa-token")
+		req.Header.Set("If-Match", read.ETag)
+		rec := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d, want 200 for the admin; body=%s", rec.Code, rec.Body.String())
+		}
+		if sources := durablePauseSources(t, store, key); len(sources) != 0 {
+			t.Fatalf("durable pause sources = %v, want [] after the admin clear", sources)
+		}
+	})
+}

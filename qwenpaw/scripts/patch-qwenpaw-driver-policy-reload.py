@@ -1,10 +1,12 @@
 """QwenPaw 2.2.x compatibility fix: do not publish a stale reload policy."""
 from importlib.metadata import distribution
 
+SUPPORTED_VERSIONS = ("2.2.1", "2.2.2b4", "2.2.2.post1")
+
 
 def main():
     package = distribution("qwenpaw")
-    if package.version not in ("2.2.1", "2.2.2b4", "2.2.2.post1"):
+    if package.version not in SUPPORTED_VERSIONS:
         raise RuntimeError("Review the Driver reload compatibility patch for QwenPaw " + package.version)
     path = package.locate_file("qwenpaw/drivers/manager.py")
     source = path.read_text(encoding="utf-8")

@@ -62,6 +62,11 @@ maintainer's display-field pair (still approval_required when only
 resolvedBy changes), a genuine different human (accepted and
 persisted), the MXID/runtimeName self-approval pair in both
 spellings, and the marker-less fail-closed record.
+
+Round 10 (issue #1467) — the acceptance resolves the authoritative task
+before the gates regardless of the local cache: a fresh workspace with a
+submitted task but no local copy is gated (review/approval/pull-failure),
+while the legacy no-task path stays available only with enforcement off.
 """
 
 from __future__ import annotations
@@ -2530,3 +2535,148 @@ def test_r9_accept_preserves_remote_frozen(
     assert committed["attention"] == [_r9_frozen_record()]
     assert committed["decision_status_history"] == frozen["decision_status_history"]
     assert committed["review"]["verdict"] == "pass"
+
+
+# --- Round 10 (#1467): the authoritative task is resolved regardless of
+# the local cache; a fresh workspace must not skip the acceptance gates ---
+
+
+def _remote_submitted_task(**extra: Any) -> dict[str, Any]:
+    """The submitted task as shared storage holds it (a fresh Leader
+    workspace has no local copy of it)."""
+    task: dict[str, Any] = {
+        "task_id": TASK_ID,
+        "project_id": PROJECT_ID,
+        "status": "submitted",
+        "result_status": "SUCCESS",
+        "summary": "done",
+        "deliverables": [],
+        "submission_id": SUBMISSION_ID,
+        "submitted_at": "2026-10-29T00:00:00Z",
+        "continuation": {"status": "pending", "delivery_id": "dl-w2-0001"},
+    }
+    task.update(extra)
+    return task
+
+
+def _fresh_workspace_accept(
+    tmp_path: Path,
+    shared_remote: dict[str, Any],
+    **task_extra: Any,
+) -> dict[str, Any]:
+    """A Leader workspace that has the project but no local Task cache."""
+    _write_project(tmp_path, task_status="submitted")
+    shared_remote["remote"] = _remote_submitted_task(**task_extra)
+    return _accept(tmp_path)
+
+
+def test_r10_fresh_workspace_accept_without_review_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shared_remote: dict[str, Any]
+) -> None:
+    """The maintainer's round-10 repro: no local Task cache, the task is
+    submitted in shared storage, the acceptance carries no review — the
+    gate must still fire (review_missing) and nothing is committed."""
+    _enforce_on(monkeypatch)
+
+    result = _fresh_workspace_accept(tmp_path, shared_remote)
+
+    assert result["ok"] is False
+    assert result["error_code"] == "review_missing"
+    assert shared_remote["committed"] is None
+
+
+def test_r10_fresh_workspace_accept_with_review_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shared_remote: dict[str, Any]
+) -> None:
+    """The positive control: the same fresh workspace accepts once the
+    authoritative task carries a passing review."""
+    _enforce_on(monkeypatch)
+
+    result = _fresh_workspace_accept(
+        tmp_path,
+        shared_remote,
+        review={
+            "verdict": "pass",
+            "reviewer": "critic:bob",
+            "reviewer_team": "",
+            "reviewed_at": "2026-10-29T00:00:00Z",
+            "note": "looks right",
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["nodeStatus"] == "completed"
+    assert shared_remote["committed"] is not None
+
+
+def test_r10_fresh_workspace_r1_requires_approval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shared_remote: dict[str, Any]
+) -> None:
+    """An r1 task in a fresh workspace still needs the resolved human
+    approval record (approval_required), not just the review gate."""
+    _enforce_on(monkeypatch)
+
+    result = _fresh_workspace_accept(
+        tmp_path,
+        shared_remote,
+        decision_class="r1",
+        review={
+            "verdict": "pass",
+            "reviewer": "critic:bob",
+            "reviewer_team": "",
+            "reviewed_at": "2026-10-29T00:00:00Z",
+            "note": "looks right",
+        },
+    )
+
+    assert result["ok"] is False
+    assert result["error_code"] == "approval_required"
+    assert shared_remote["committed"] is None
+
+
+def test_r10_fresh_workspace_pull_failure_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shared_remote: dict[str, Any]
+) -> None:
+    """A failed authoritative pull is fail-closed even when the local cache
+    is empty: the acceptance must not proceed on unseen state."""
+    _enforce_on(monkeypatch)
+    _write_project(tmp_path, task_status="submitted")
+    shared_remote["pull_ok"] = False
+
+    result = _accept(tmp_path)
+
+    assert result["ok"] is False
+    assert "stale local copy" in str(
+        result.get("error") or result.get("message") or ""
+    )
+    assert shared_remote["committed"] is None
+
+
+def test_r10_legacy_no_task_still_accepts_with_enforcement_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shared_remote: dict[str, Any]
+) -> None:
+    """Legacy compatibility: no task anywhere and enforcement off keeps the
+    old accept-without-task behaviour."""
+    _write_project(tmp_path, task_status="submitted")
+    shared_remote["remote"] = None
+
+    # A legacy no-task accept carries no submission identity (there is no
+    # submitted result to fence against).
+    result = _accept(tmp_path, submission_id="")
+
+    assert result["ok"] is True
+
+
+def test_r10_legacy_no_task_refused_with_enforcement_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shared_remote: dict[str, Any]
+) -> None:
+    """Under enforcement the legacy no-task path must not bypass the gates:
+    the acceptance is refused (task_not_found) instead of silently ok."""
+    _enforce_on(monkeypatch)
+    _write_project(tmp_path, task_status="submitted")
+    shared_remote["remote"] = None
+
+    result = _accept(tmp_path, submission_id="")
+
+    assert result["ok"] is False
+    assert result["error_code"] == "task_not_found"

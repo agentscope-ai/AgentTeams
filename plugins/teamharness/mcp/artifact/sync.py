@@ -103,6 +103,31 @@ def _pull_task(arguments: dict[str, Any], task_id: str) -> bool:
     return True
 
 
+def _load_authoritative_task_optional(
+    arguments: dict[str, Any], task_id: str
+) -> dict[str, Any] | None:
+    """W2 round 10 (issue #1467): pull, then read; None when no task exists.
+
+    Same fail-closed pull as ``_load_authoritative_task``: a failed pull
+    raises (the caller must not write on a stale local copy). A task that
+    is genuinely absent from shared storage is NOT an error here — the
+    caller keeps the legacy no-task compatibility while protocol
+    enforcement is off — so the absence is reported as ``None`` instead of
+    raising.
+    """
+    if not _pull_task(arguments, task_id):
+        raise ValueError(
+            "cannot pull the authoritative task state from shared storage; "
+            "refusing to write on a stale local copy (retry)"
+        )
+    task = _read_json(_task_state_path(arguments, task_id))
+    if not task:
+        return None
+    if not task.get("task_id") and task.get("taskId"):
+        task["task_id"] = str(task["taskId"])
+    return task
+
+
 def _load_authoritative_task(arguments: dict[str, Any], task_id: str) -> dict[str, Any]:
     """W2 round 9 (issue #1467): authoritative task read for a
     cross-actor task write.
@@ -117,16 +142,9 @@ def _load_authoritative_task(arguments: dict[str, Any], task_id: str) -> dict[st
     (submitted or in flight), so the pull must succeed: on any failure
     the caller fails closed instead of writing the stale copy back.
     """
-    if not _pull_task(arguments, task_id):
-        raise ValueError(
-            "cannot pull the authoritative task state from shared storage; "
-            "refusing to write on a stale local copy (retry)"
-        )
-    task = _read_json(_task_state_path(arguments, task_id))
-    if not task:
+    task = _load_authoritative_task_optional(arguments, task_id)
+    if task is None:
         raise ValueError("task not found")
-    if not task.get("task_id") and task.get("taskId"):
-        task["task_id"] = str(task["taskId"])
     return task
 
 
@@ -196,6 +214,7 @@ refs.define("_sync_project", _sync_project)
 refs.define("_pull_task", _pull_task)
 refs.define("_pull_project", _pull_project)
 refs.define("_load_authoritative_task", _load_authoritative_task)
+refs.define("_load_authoritative_task_optional", _load_authoritative_task_optional)
 
 # Rebind to a proxy so a test monkeypatch of server._pull_task is visible
 # inside this module (same pattern as taskflow's _write_task).

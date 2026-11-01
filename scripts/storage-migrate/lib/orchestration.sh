@@ -267,6 +267,9 @@ window_sample() {
   local buckets b raw n bytes dist total_n=0 total_bytes=0 parts="" digest_all
   buckets=$(get_buckets)
   for b in $buckets; do
+    # Recompute per bucket: a dist carried over from a previous bucket would
+    # hide a prefix move in any later bucket (multi-bucket sources).
+    dist=""
     raw=$(mc_raw ls --recursive --json "$SRC_ALIAS/$b" 2>/dev/null) || { REPLY_SAMPLE=""; return 1; }
     # An empty bucket is a valid state, not a listing failure: mc succeeds with
     # zero objects and prints nothing. Represent it as 0/0 with a deterministic
@@ -279,7 +282,7 @@ window_sample() {
     fi
     case "$n" in ''|*[!0-9]*) REPLY_SAMPLE=""; return 1 ;; esac
     case "$bytes" in ''|*[!0-9]*) REPLY_SAMPLE=""; return 1 ;; esac
-    if [ "${dist:-}" = "" ]; then
+    if [ -z "$dist" ]; then
       dist=$(jq -rs 'map(.key // "") | map(split("/")[0]) | sort | group_by(.) | map(.[0] + ":" + (length | tostring)) | join(",")' <<<"$raw" 2>/dev/null) || { REPLY_SAMPLE=""; return 1; }
       # A listing that parsed but carries no keys (e.g. only a marker row) is
       # still a legitimately empty prefix set.

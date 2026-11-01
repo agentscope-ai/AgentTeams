@@ -50,6 +50,7 @@ import nio
 from nio import (
     JoinedMembersResponse,
     RoomSendResponse,
+    SyncResponse,
     UploadResponse,
 )
 
@@ -80,7 +81,7 @@ else:
         "(install.sh copies it)"
     )
 
-from core.e2ee import crypto_available  # noqa: E402
+from core.e2ee import E2EEMaintainer, crypto_available  # noqa: E402
 from core.history import (  # noqa: E402
     DEFAULT_HISTORY_LIMIT,
     HistoryEntry,
@@ -95,6 +96,7 @@ from core.transport import (  # noqa: E402
     NioTransport,
     TransportConfig,
     build_client,
+    prepare_e2ee_client,
 )
 
 logger = logging.getLogger("agentteams.matrix.hermes")
@@ -1092,9 +1094,18 @@ async def _standalone_send(
     target = _resolve_cron_room(pconfig, chat_id)
     if not target:
         return send_error("agentteams-matrix: chat_id is required")
-    encryption = _extra_bool(extra, ENV_ENCRYPTION, "encryption", False)
-    if encryption:
-        encryption = crypto_available()
+    encryption_requested = _extra_bool(extra, ENV_ENCRYPTION, "encryption", False)
+    encryption = encryption_requested and crypto_available()
+    if encryption_requested and not encryption:
+        # Fail closed: an account configured for E2EE must never fall back
+        # to a plaintext cron message just because the crypto backend is
+        # missing (the in-process transport logs the same condition and
+        # downgrades, but a one-shot sender has no operator watching it).
+        return send_error(
+            "agentteams-matrix: E2EE is enabled but no crypto backend is "
+            "installed — refusing to send a plaintext cron message "
+            "(install 'matrix-nio[e2e]')"
+        )
     state_dir = _resolve_state_dir(extra)
     state_dir.mkdir(parents=True, exist_ok=True)
     config = TransportConfig(
@@ -1109,6 +1120,55 @@ async def _standalone_send(
     try:
         client = build_client(config)
         try:
+            if encryption:
+                # The ordinary send path rides a long-running NioTransport
+                # that has already initialized the crypto store, uploaded
+                # keys and synced the room state. A one-shot sender must
+                # establish the SAME state before it may claim an encrypted
+                # delivery: without it nio does not know the room is
+                # encrypted and silently sends m.room.message in plaintext
+                # (the round-12 regression). Anything that cannot be
+                # established fails closed here.
+                #
+                # The canonical identity: config values win, and a whoami
+                # fills in what is missing (nio leaves user_id/device_id
+                # empty until then) — the same pre-validation the
+                # long-running adapter performs before its crypto init.
+                if not (
+                    getattr(client, "user_id", "")
+                    and getattr(client, "device_id", "")
+                ):
+                    whoami = getattr(client, "whoami", None)
+                    if whoami is not None:
+                        try:
+                            info = await whoami()
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:
+                            info = None
+                        user = getattr(info, "user_id", None)
+                        device = getattr(info, "device_id", None)
+                        if user:
+                            client.user_id = user
+                        if device:
+                            client.device_id = device
+                await prepare_e2ee_client(client)
+                sync_response = await client.sync(timeout=0)
+                if not isinstance(sync_response, SyncResponse):
+                    return send_error(
+                        "agentteams-matrix: E2EE standalone send could not "
+                        f"sync the room state ({type(sync_response).__name__})"
+                    )
+                await E2EEMaintainer(client).run_once()
+                rooms = getattr(client, "rooms", None) or {}
+                room = rooms.get(target) if hasattr(rooms, "get") else None
+                if room is None:
+                    return send_error(
+                        "agentteams-matrix: E2EE standalone send could not "
+                        f"establish the room state for {target} "
+                        "(not joined, or not visible after sync) — refusing "
+                        "to send a message whose encryption status is unknown"
+                    )
             resp = await client.room_send(
                 target,
                 "m.room.message",
@@ -1120,6 +1180,9 @@ async def _standalone_send(
             await client.close()
     except asyncio.CancelledError:
         raise
+    except E2EEInitError as e:
+        logger.warning("agentteams-matrix standalone E2EE init failed", exc_info=True)
+        return send_error(f"agentteams-matrix standalone send refused: {e}")
     except Exception as e:
         logger.debug("agentteams-matrix standalone send raised", exc_info=True)
         return send_error(f"agentteams-matrix standalone send failed: {e}")

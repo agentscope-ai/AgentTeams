@@ -39,7 +39,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from nio import JoinedMembersResponse, RoomSendResponse, UploadResponse
+from nio import (
+    JoinedMembersResponse,
+    KeysUploadResponse,
+    RoomSendResponse,
+    UploadResponse,
+)
 
 from core.interfaces import InboundEvent
 
@@ -1248,3 +1253,222 @@ def test_send_document_in_encrypted_room_fails_closed_without_metadata(
     assert result.success is False
     assert "decryption metadata" in (result.error or "")
     assert client.room_send_calls == []
+
+
+# ── standalone (cron) E2EE: round 12 ───────────────────────────────────
+#
+# The maintainer's round-12 repro: with encryption enabled and a real
+# encrypted room, the installed plugin's `_standalone_send` returned
+# success while the server stored a plaintext `m.room.message` — the
+# one-shot client never initialized its crypto store/room state, so nio
+# did not know the room was encrypted. These tests pin the init sequence
+# and the fail-closed branches (a live-homeserver e2e covers the wire).
+
+
+class _SyncStub:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+
+class _E2EEStubClient:
+    """Duck-typed nio client with the crypto surface the init path uses."""
+
+    def __init__(self, *, room_id, encrypted_room=True, olm_missing=False,
+                 room_known=True):
+        self.room_id = room_id
+        # A real AsyncClient carries the identity from its build config.
+        self.user_id = "@bot:example.org"
+        self.device_id = "DEVICE123"
+        self.access_token = "token"
+        self.encrypted_room = encrypted_room
+        self.olm_missing = olm_missing
+        self.room_known = room_known
+        self.calls = []
+        self.rooms = {}
+        self.olm = None
+        self.should_upload_keys = True
+        self.should_query_keys = False
+        self.should_claim_keys = False
+        self.sent = []
+        self.closed = False
+
+    def restore_login(self, user_id, device_id, access_token):
+        self.calls.append(("restore_login", user_id, device_id, access_token))
+        self.user_id = user_id
+        self.device_id = device_id
+        if not self.olm_missing:
+            self.olm = object()
+
+    async def keys_upload(self):
+        self.calls.append(("keys_upload",))
+        return KeysUploadResponse(curve25519_count=1, signed_curve25519_count=1)
+
+    async def sync(self, timeout=0):
+        self.calls.append(("sync", timeout))
+        if self.room_known:
+            self.rooms[self.room_id] = SimpleNamespace(
+                room_id=self.room_id, encrypted=self.encrypted_room
+            )
+        return _SyncStub(next_batch="s1")
+
+    async def room_send(self, room_id, message_type, content, tx_id=None,
+                        ignore_unverified_devices=False, **kwargs):
+        room = self.rooms.get(room_id)
+        self.sent.append(
+            {
+                "room_id": room_id,
+                "content": content,
+                "encrypted": bool(getattr(room, "encrypted", False)),
+                "known": room is not None,
+            }
+        )
+        return RoomSendResponse(room_id=room_id, event_id="$e2ee-sent")
+
+    async def close(self):
+        self.closed = True
+
+
+def _e2ee_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_ENCRYPTION", "1")
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_DEVICE_ID", "DEVICE123")
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_STATE_DIR", str(tmp_path / "e2ee-state"))
+
+
+def test_standalone_send_initializes_e2ee_before_an_encrypted_send(
+    adapter_mod, matrix_env, monkeypatch, tmp_path
+):
+    """The one-shot sender must establish the same state the long-running
+    transport has: crypto store, uploaded keys, synced room state. Only
+    then does nio know the room is encrypted."""
+    _e2ee_env(monkeypatch, tmp_path)
+    room = "!e2ee:example.org"
+    client = _E2EEStubClient(room_id=room, encrypted_room=True)
+    built = {}
+
+    def fake_build(config):
+        built["config"] = config
+        return client
+
+    maintainer_runs = []
+
+    class _Maintainer:
+        def __init__(self, c):
+            self.client = c
+
+        async def run_once(self):
+            maintainer_runs.append(True)
+
+    monkeypatch.setattr(adapter_mod, "build_client", fake_build)
+    monkeypatch.setattr(adapter_mod, "crypto_available", lambda: True)
+    monkeypatch.setattr(adapter_mod, "E2EEMaintainer", _Maintainer)
+    monkeypatch.setattr(adapter_mod, "SyncResponse", _SyncStub)
+
+    result = asyncio.run(
+        adapter_mod._standalone_send(SimpleNamespace(extra={}), room, "ping")
+    )
+
+    assert result == {"success": True, "message_id": "$e2ee-sent"}
+    # The E2EE store was requested on the client.
+    assert built["config"].encryption is True
+    assert built["config"].store_path is not None
+    # The init sequence ran before the send, in order.
+    ops = [c[0] for c in client.calls]
+    assert ops[:3] == ["restore_login", "keys_upload", "sync"]
+    assert maintainer_runs == [True]
+    # The send happened with the room known-encrypted.
+    assert client.sent == [
+        {
+            "room_id": room,
+            "content": {"msgtype": "m.text", "body": "ping"},
+            "encrypted": True,
+            "known": True,
+        }
+    ]
+    assert client.closed is True
+
+
+def test_standalone_send_fails_closed_without_a_crypto_backend(
+    adapter_mod, matrix_env, monkeypatch, tmp_path
+):
+    """Encryption enabled but no crypto backend: refuse — never downgrade a
+    cron message to plaintext."""
+    _e2ee_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(adapter_mod, "crypto_available", lambda: False)
+    monkeypatch.setattr(
+        adapter_mod,
+        "build_client",
+        lambda config: (_ for _ in ()).throw(AssertionError("must not build")),
+    )
+
+    result = asyncio.run(
+        adapter_mod._standalone_send(SimpleNamespace(extra={}), "!r:x", "ping")
+    )
+
+    assert "error" in result
+    assert "crypto backend" in result["error"]
+
+
+def test_standalone_send_fails_closed_when_the_room_state_is_unknown(
+    adapter_mod, matrix_env, monkeypatch, tmp_path
+):
+    """An unreadable/unjoined room means the encryption status is unknown:
+    refuse instead of sending a message that may be plaintext."""
+    _e2ee_env(monkeypatch, tmp_path)
+    room = "!unknown:example.org"
+    client = _E2EEStubClient(room_id=room, room_known=False)
+    monkeypatch.setattr(adapter_mod, "build_client", lambda config: client)
+    monkeypatch.setattr(adapter_mod, "crypto_available", lambda: True)
+    monkeypatch.setattr(adapter_mod, "SyncResponse", _SyncStub)
+
+    result = asyncio.run(
+        adapter_mod._standalone_send(SimpleNamespace(extra={}), room, "ping")
+    )
+
+    assert "error" in result
+    assert "room state" in result["error"]
+    assert client.sent == []
+
+
+def test_standalone_send_fails_closed_when_olm_is_not_initialized(
+    adapter_mod, matrix_env, monkeypatch, tmp_path
+):
+    """restore_login without an Olm account (no store materialised) must
+    abort the send, not fall through to plaintext."""
+    _e2ee_env(monkeypatch, tmp_path)
+    room = "!e2ee:example.org"
+    client = _E2EEStubClient(room_id=room, olm_missing=True)
+    monkeypatch.setattr(adapter_mod, "build_client", lambda config: client)
+    monkeypatch.setattr(adapter_mod, "crypto_available", lambda: True)
+    monkeypatch.setattr(adapter_mod, "SyncResponse", _SyncStub)
+
+    result = asyncio.run(
+        adapter_mod._standalone_send(SimpleNamespace(extra={}), room, "ping")
+    )
+
+    assert "error" in result
+    assert "E2EE" in result["error"]
+    assert client.sent == []
+
+
+def test_standalone_send_plaintext_control_skips_crypto(
+    adapter_mod, matrix_env, monkeypatch, tmp_path
+):
+    """Control: with encryption off the sender stays the plain one-shot
+    client (no crypto init, no sync)."""
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_STATE_DIR", str(tmp_path / "plain-state"))
+    sent = {}
+
+    class _Plain(FakeClient):
+        async def room_send(self, room_id, message_type, content, tx_id=None,
+                            ignore_unverified_devices=False, **kwargs):
+            sent["content"] = content
+            return RoomSendResponse(room_id=room_id, event_id="$plain1")
+
+    monkeypatch.setattr(adapter_mod, "build_client", lambda config: _Plain())
+
+    result = asyncio.run(
+        adapter_mod._standalone_send(SimpleNamespace(extra={}), "!r:x", "ping")
+    )
+
+    assert result == {"success": True, "message_id": "$plain1"}
+    assert sent["content"] == {"msgtype": "m.text", "body": "ping"}

@@ -209,6 +209,64 @@ class E2EEInitError(RuntimeError):
     """
 
 
+async def prepare_e2ee_client(client: Any) -> None:
+    """Initialize the authenticated native crypto store on a nio client.
+
+    ``restore_login`` is synchronous in matrix-nio 0.26; it records the
+    identity/token and calls ``load_store()`` (crypto backend enabled),
+    which loads or creates the Olm account + key store under the client's
+    ``store_path``. It requires the canonical user_id + device_id — a
+    successful whoami pre-validation (adapter) or the build path's
+    ``user=`` kwarg populates them. The device keys are then uploaded so
+    the account is discoverable by its peers.
+
+    Raised by both the long-running transport (``NioTransport.start``) and
+    the out-of-process senders (the Hermes cron ``standalone_sender_fn``)
+    so a single implementation decides what "encrypted transport ready"
+    means. Fails closed with :class:`E2EEInitError` when the store cannot
+    be established: never send plaintext over a client that claims E2EE.
+
+    Duck-typed test clients without a native crypto surface (no
+    ``restore_login``) cannot hold an Olm account: the native init does
+    not apply to them and the ``should_upload_keys`` contract below is
+    kept as-is.
+    """
+    restore_login = getattr(client, "restore_login", None)
+    if restore_login is not None:
+        user_id = (
+            getattr(client, "user_id", "")
+            or getattr(client, "user", "")
+            or ""
+        )
+        device_id = getattr(client, "device_id", "") or ""
+        access_token = getattr(client, "access_token", "") or ""
+        if not (user_id and device_id):
+            raise E2EEInitError(
+                "E2EE store was not initialized: user_id/device_id "
+                "are not set before restore_login (encryption "
+                "requested, crypto backend present)"
+            )
+        restore_login(user_id, device_id, access_token)
+        if getattr(client, "olm", None) is None:
+            # Encryption requested, backend present, store prep ran — but
+            # no Olm account materialised (e.g. no store path for a
+            # path-requiring store class). Fail closed: never claim
+            # encrypted transport over an uninitialized crypto store.
+            raise E2EEInitError(
+                "E2EE store was not initialized: olm is None after "
+                "restore_login (encryption requested, crypto "
+                "backend present)"
+            )
+    if getattr(client, "should_upload_keys", False):
+        resp = await client.keys_upload()
+        if not isinstance(resp, KeysUploadResponse):
+            raise RuntimeError(
+                "E2E keys upload failed after start "
+                f"(response_type={type(resp).__name__})"
+            )
+        logger.info("NioTransport: E2E keys uploaded component=matrix")
+
+
 #: Server-side typing-indication timeout (ms).  The QwenPaw channel
 #: renews with the same constant, so the core path matches its behaviour.
 TYPING_TIMEOUT_MS = 30000
@@ -476,56 +534,10 @@ class NioTransport:
         self._maintainer = E2EEMaintainer(client)
 
         if self.encryption:
-            # Native crypto preparation — both client paths (injected
-            # and built above): initialize the authenticated crypto
-            # store BEFORE declaring encrypted transport ready.
-            # ``restore_login`` is synchronous in matrix-nio 0.26; it
-            # records the identity/token and calls ``load_store()``
-            # (crypto backend enabled), which loads or creates the Olm
-            # account + key store under ``store_path``.  Requires the
-            # canonical user_id + device_id; a successful whoami
-            # pre-validation (adapter) or the build path's
-            # ``user=`` kwarg populates them.
-            #
-            # Duck-typed test clients without a native crypto surface
-            # (no ``restore_login``) cannot hold an Olm account: the
-            # native init does not apply to them and the existing
-            # ``should_upload_keys`` contract below is kept as-is.
-            restore_login = getattr(client, "restore_login", None)
-            if restore_login is not None:
-                user_id = (
-                    getattr(client, "user_id", "")
-                    or getattr(client, "user", "")
-                    or ""
-                )
-                device_id = getattr(client, "device_id", "") or ""
-                access_token = getattr(client, "access_token", "") or ""
-                if not (user_id and device_id):
-                    raise E2EEInitError(
-                        "E2EE store was not initialized: user_id/device_id "
-                        "are not set before restore_login (encryption "
-                        "requested, crypto backend present)"
-                    )
-                restore_login(user_id, device_id, access_token)
-                if getattr(client, "olm", None) is None:
-                    # Encryption requested, backend present, store prep
-                    # ran — but no Olm account materialised (e.g. no
-                    # store path for a path-requiring store class).
-                    # Fail closed: never claim encrypted transport over
-                    # an uninitialized crypto store.
-                    raise E2EEInitError(
-                        "E2EE store was not initialized: olm is None after "
-                        "restore_login (encryption requested, crypto "
-                        "backend present)"
-                    )
-            if getattr(client, "should_upload_keys", False):
-                resp = await client.keys_upload()
-                if not isinstance(resp, KeysUploadResponse):
-                    raise RuntimeError(
-                        "E2E keys upload failed after start "
-                        f"(response_type={type(resp).__name__})"
-                    )
-                logger.info("NioTransport: E2E keys uploaded component=matrix")
+            # Native crypto preparation (shared with the out-of-process
+            # senders: one implementation decides what "encrypted
+            # transport ready" means).
+            await prepare_e2ee_client(client)
 
         # nio 0.26 requires the event-type filter on registration; the
         # SyncEngine's catch-up suppression window clears and restores

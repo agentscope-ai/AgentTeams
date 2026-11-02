@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import subprocess
+import threading
 import types
 from pathlib import Path
 
@@ -1174,3 +1175,71 @@ def test_flush_is_idempotent(tmp_path: Path, monkeypatch) -> None:
     assert second["uploaded"] == []
     assert second["skipped"] == ["unchanged:a.md"]
     assert second["pending"] == 0
+
+
+# ---------------------------------------------------------------------------
+# #1391: push_directories shares the push lock
+# ---------------------------------------------------------------------------
+
+
+def test_push_directories_waits_for_the_push_lock(tmp_path: Path, monkeypatch) -> None:
+    """push_directories must block on _push_lock, like flush and push_local."""
+    sync = _sync(tmp_path)
+    sync.local_dir.mkdir(parents=True)
+    work = sync.local_dir / "data"
+    note = work / "notes.txt"
+    note.parent.mkdir(parents=True)
+    note.write_text("before-mirror", encoding="utf-8")
+
+    started = threading.Event()  # the locked method was actually entered
+    done = threading.Event()  # the locked method returned normally
+    real_locked = sync._push_directories_locked
+
+    def observe_locked(directories):
+        started.set()
+        try:
+            return real_locked(directories)
+        finally:
+            done.set()
+
+    monkeypatch.setattr(sync, "ensure_alias", lambda: None)
+    monkeypatch.setattr(
+        sync, "_mc",
+        lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout="", stderr=""),
+    )
+    monkeypatch.setattr(sync, "_push_directories_locked", observe_locked)
+
+    worker_errors = []
+
+    def worker() -> None:
+        try:
+            assert sync.push_directories([work]) == ["data"]
+        except BaseException as exc:
+            worker_errors.append(exc)
+
+    sync._push_lock.acquire()
+    try:
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        assert started.wait(0.2) is False, (
+            "push_directories entered the locked method while the main "
+            "thread still held the push lock: it is not waiting on "
+            "_push_lock"
+        )
+        sync._push_lock.release()
+        assert started.wait(2.0), (
+            "push_directories never entered the locked method after the "
+            "push lock was released: deadlock or lost lock handoff"
+        )
+        assert done.wait(2.0), (
+            "push_directories entered the locked method but never "
+            "returned: deadlock inside the push"
+        )
+    finally:
+        if sync._push_lock.locked():
+            sync._push_lock.release()
+    thread.join(2.0)
+    assert not thread.is_alive(), "push_directories worker thread did not exit"
+    assert worker_errors == [], (
+        f"push_directories raised in the worker thread: {worker_errors!r}"
+    )

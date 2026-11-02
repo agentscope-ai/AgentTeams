@@ -106,9 +106,10 @@ class FileSync:
         self.sync_state_path = Path(local_dir).parent / (
             f".{worker_name}-sync-state.json"
         )
-        # #1391: every local->remote push path (background push_local and
-        # the blocking flush) takes this lock, so the same object is never
-        # uploaded concurrently from two threads.
+        # #1391: every local->remote push path (the blocking flush, the
+        # background push_local, and the on-demand push_directories) takes
+        # this lock, so the same object is never uploaded concurrently
+        # from two threads.
         self._push_lock = threading.Lock()
 
     def _mc(self, *args: str, check: bool = True, text: bool = True) -> subprocess.CompletedProcess:
@@ -517,7 +518,13 @@ class FileSync:
 
     def push_directories(self, directories: Iterable[Path]) -> List[str]:
         """Persist selected worker directories with one mirror per directory."""
+        # #1391: a directory push is a local->remote push path too; take
+        # the same lock as flush and the background push_local so the
+        # three never upload the same object concurrently.
+        with self._push_lock:
+            return self._push_directories_locked(directories)
 
+    def _push_directories_locked(self, directories: Iterable[Path]) -> List[str]:
         self.ensure_alias()
         mirrored = []
         local_root = self.local_dir.resolve()

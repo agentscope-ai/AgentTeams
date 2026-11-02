@@ -744,3 +744,84 @@ jobs:
             kill "$(cat /tmp/at-e2e/controller.pid)" 2>/dev/null || true
           fi
           cat /tmp/at-e2e/controller.log || true
+  matrix-bundle-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install bundle dependencies
+        # matrix-nio[e2e] is required here: the bundle's crypto tests
+        # exercise real Olm initialisation (restore_login, encrypted
+        # send/receive, persisted keys). Without the extra nio raises an
+        # ImportWarning and the suite fails; the tests also skip cleanly
+        # when the backend is absent, so other environments stay green.
+        run: |
+          python -m pip install \
+            'matrix-nio[e2e]>=0.26,<0.27' \
+            'PyYAML>=6.0,<7' \
+            'qwenpaw>=2.2.1,<2.3' \
+            'pytest>=8.3,<10' \
+            'pytest-asyncio>=0.23,<2'
+
+      - name: Run bundle core, transport and sidecar tests
+        run: python -m pytest plugins/tests/agentteams-matrix -q
+
+  matrix-bundle-hermes-sdk:
+    # Real-SDK compatibility for the Hermes adapter (#1469): shallow-clone
+    # hermes-agent at the declared minimum (v0.22.5) and run the adapter's
+    # register() against the real gateway modules. Independent of the
+    # bundle suite on purpose: a missing SDK symbol must fail this job
+    # even when the fake-SDK behaviour suite passes.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Shallow-clone hermes-agent at the declared minimum
+        id: sdk
+        env:
+          HERMES_SDK_REF: v0.22.5
+        run: |
+          SDK_ROOT="$(mktemp -d)"
+          git clone --depth 1 --branch "$HERMES_SDK_REF" \
+            https://github.com/NousResearch/hermes-agent.git "$SDK_ROOT"
+          echo "root=$SDK_ROOT" >> "$GITHUB_OUTPUT"
+          echo "ref=$HERMES_SDK_REF" >> "$GITHUB_OUTPUT"
+
+      - name: Install real-SDK import closure and bundle test dependencies
+        # hermes-agent pins its dependencies to python_version >= '3.14',
+        # so a plain `pip install <sdk-tree>` provides no closure on 3.11:
+        # the import closure of the SDK modules under test is installed
+        # explicitly.
+        run: |
+          python -m pip install \
+            'ruamel.yaml>=0.18,<0.19' \
+            'matrix-nio>=0.25,<0.27' \
+            'PyYAML>=6.0,<7' \
+            'qwenpaw>=2.2.1,<2.3' \
+            'python-dotenv>=1.0,<2' \
+            'httpx>=0.27,<1' \
+            'openai>=1.0' \
+            'pydantic>=2.0,<3' \
+            'requests>=2.31' \
+            'rich>=13.0' \
+            'tenacity>=8.0' \
+            'Markdown>=3.5' \
+            'jinja2>=3.1' \
+            'packaging>=24.0' \
+            'pytest>=8.3,<10'
+
+      - name: Run real-SDK adapter compatibility tests
+        env:
+          HERMES_SDK_ROOT: ${{ steps.sdk.outputs.root }}
+          HERMES_SDK_REF: ${{ steps.sdk.outputs.ref }}
+        run: python -m pytest plugins/tests/agentteams-matrix/test_adapter_hermes_sdk.py -q

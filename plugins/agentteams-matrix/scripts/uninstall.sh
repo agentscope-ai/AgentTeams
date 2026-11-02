@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bundle uninstaller: removes the agentteams-matrix projection from an
+# Bundle uninstaller: removes the agentteams-matrix install from an
 # AgentTeams runtime via that runtime's adapter. Mirrors install.sh.
 #
 # Usage:
@@ -13,8 +13,8 @@
 # $HOME/.openclaw/openclaw.json — so a Worker whose only signal is the
 # config path is detected without the binary on PATH. Adapter options
 # given after the adapter name (e.g. --config, --dry-run for the
-# openclaw/hermes adapters) are forwarded to the selected adapter's
-# uninstall.sh.
+# openclaw adapter) are forwarded to the selected adapter's
+# uninstall.sh; the qwenpaw and hermes adapters take no options.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,8 +33,10 @@ Adapters:
              (takes no options)
   openclaw   remove the channels.matrix projection from
              ~/.openclaw/openclaw.json (options: --config, --dry-run)
-  hermes     remove the platforms.matrix projection from
-             ~/.hermes/config.yaml (options: --config, --dry-run)
+  hermes     remove the staged matrix platform plugin from $HERMES_HOME
+             (default ~/.hermes): the payload under
+             $HERMES_HOME/plugins/agentteams-matrix plus the
+             ownership marker (takes no options)
 
 Without --adapter, every detected runtime (search order: qwenpaw,
 openclaw, hermes) is uninstalled. OpenClaw counts as present when its
@@ -97,6 +99,10 @@ uninstall_adapter() {
       echo "ERROR: the qwenpaw adapter takes no options; drop: ${FORWARD[*]}" >&2
       exit 2
     fi
+    if [ "${adapter}" = "hermes" ]; then
+      echo "ERROR: the hermes adapter takes no options; drop: ${FORWARD[*]}" >&2
+      exit 2
+    fi
     bash "${BUNDLE_DIR}/adapters/${adapter}/uninstall.sh" "${FORWARD[@]}"
   else
     bash "${BUNDLE_DIR}/adapters/${adapter}/uninstall.sh"
@@ -113,7 +119,7 @@ if [ -n "${ADAPTER}" ]; then
       ;;
   esac
   if ! runtime_present "${ADAPTER}"; then
-    echo "WARNING: ${ADAPTER} binary not found on PATH; the adapter still removes its config file" >&2
+    echo "WARNING: ${ADAPTER} binary not found on PATH; the adapter still removes its files" >&2
   fi
   uninstall_adapter "${ADAPTER}"
   exit 0

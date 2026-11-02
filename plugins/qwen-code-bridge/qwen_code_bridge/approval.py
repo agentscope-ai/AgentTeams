@@ -38,8 +38,11 @@ Shell policy (fail closed, #1411):
    (``outside-root``).  A bare name (no path separator) is checked the
    same way when it exists in the run dir — the shell resolves bare
    names against the cwd — while a missing bare name is a pattern or
-   argument and is left to the command itself to fail.  Flag tokens
-   (leading ``-``) are never path operands.  Secret-ish operands are
+   argument and is left to the command itself to fail.  Bare flag
+   tokens (leading ``-`` without ``=``) are never path operands, but
+   the value part of an equals-form flag (``--files0-from=<file>``) is
+   data the program actually opens and is guarded like a bare
+   operand.  Secret-ish operands are
    refused everywhere.  Programs whose arguments are a program (``sed``)
    are denied outright: their scripts can execute commands
    (``e``/``s///e``) or write files (``w``/``W``/``s///w``, ``-f``),
@@ -411,11 +414,51 @@ def _classify_shell(tool_input: Any, root_list: list[str]) -> dict[str, Any]:
         )
 
     base_dir = cwd_input or (root_list[0] if root_list else os.getcwd())
+
+    def _guard_operand(value: str) -> dict[str, Any] | None:
+        """The two path-guard checks for one candidate operand: a
+        secret-like name is refused, and the resolved path (symlinks
+        followed) must stay inside the run roots.  Returns the deny
+        result, or ``None`` when the operand passes both checks."""
+        if _looks_secret(value):
+            return _result(
+                RISK_DENY,
+                "secret-path",
+                "refuses to touch credential-like files",
+                value,
+            )
+        if not _inside(os.path.join(base_dir, os.path.expanduser(value)), root_list):
+            return _result(
+                RISK_DENY,
+                "outside-root",
+                "path argument is outside the run root",
+                value,
+            )
+        return None
+
     for i, arg in enumerate(argv[1:]):
         if skip_message and i == 2:
             continue
         if arg.startswith("-"):
-            # A flag (``tail -f``, ``-n`` …): never a path operand.
+            # A bare flag (``tail -f``, ``-n`` …): never a path
+            # operand.  The value part of an equals-form flag
+            # (``--files0-from=<file>``) is different: it is data the
+            # program actually opens (a file, a NUL-separated file
+            # list), so it is an operand exactly like a bare one and
+            # gets the same two checks whenever it is path-like or
+            # names something that exists in the run dir.  Non-path
+            # values (``--color=auto``, ``--include=*.py``) are
+            # neither path-like nor present and are left to the
+            # command itself, just like missing bare names.
+            if "=" not in arg:
+                continue
+            value = arg.split("=", 1)[1]
+            v_resolved = os.path.join(base_dir, os.path.expanduser(value))
+            if not (_path_like(value) or os.path.lexists(v_resolved)):
+                continue
+            verdict = _guard_operand(value)
+            if verdict is not None:
+                return verdict
             continue
         path_like = _path_like(arg)
         resolved = os.path.join(base_dir, os.path.expanduser(arg))
@@ -429,20 +472,9 @@ def _classify_shell(tool_input: Any, root_list: list[str]) -> dict[str, Any]:
         # check, exactly as before.
         if not (path_like or os.path.lexists(resolved)):
             continue
-        if _looks_secret(arg):
-            return _result(
-                RISK_DENY,
-                "secret-path",
-                "refuses to touch credential-like files",
-                arg,
-            )
-        if not _inside(resolved, root_list):
-            return _result(
-                RISK_DENY,
-                "outside-root",
-                "path argument is outside the run root",
-                arg,
-            )
+        verdict = _guard_operand(arg)
+        if verdict is not None:
+            return verdict
     if not root_list:
         return _result(
             RISK_ESCALATE,

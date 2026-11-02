@@ -440,3 +440,77 @@ def test_can_use_tool_bare_notes_allow(tmp_path):
     assert d["behavior"] == "allow"
     resp = approval.control_response("req-bare-notes", d)
     assert resp["response"]["response"]["behavior"] == "allow"
+
+
+# ---------------------------------------------------------------------------
+# F4-equals — the value part of an equals-form flag
+# (--files0-from=<file>) is data the program actually opens (a file, a
+# NUL-separated file list): an operand exactly like a bare one, guarded
+# the same way when path-like or existing in the run dir.  Non-path
+# values (--color=auto, --include=*.py) are left to the command.
+# ---------------------------------------------------------------------------
+
+
+def test_equals_value_outside_root_deny(tmp_path):
+    """head/tail --files0-from=<absolute outside path> opens the file
+    directly -> outside-root.  Regression: the blanket flag skip used
+    to let this through while the old code checked the token."""
+    root = _make_run_root(tmp_path)
+    for command in (
+        "head --files0-from=/abs/outside/root/list",
+        "tail --files0-from=/abs/outside",
+    ):
+        d = approval.decide(
+            "run_shell_command",
+            {"command": command, "cwd": str(root)},
+            [str(root)],
+        )
+        assert d["behavior"] == "deny", command
+        assert d["rule"] == "outside-root", command
+
+
+def test_equals_value_in_root_allow(tmp_path):
+    """Equals values that resolve inside the run root (explicit ./
+    spelling and an existing bare name) stay auto-approved; the
+    program reads the listed paths itself."""
+    root = _make_run_root(tmp_path)
+    (root / "list").write_text("notes.md\n", encoding="utf-8")
+    (root / "listfile").write_text("file.txt\n", encoding="utf-8")
+    for command in ("head --files0-from=./list", "tail --files0-from=listfile"):
+        d = approval.decide(
+            "run_shell_command",
+            {"command": command, "cwd": str(root)},
+            [str(root)],
+        )
+        assert d["behavior"] == "allow", command
+
+
+def test_equals_value_non_path_allow(tmp_path):
+    """Non-path values are neither path-like nor present in the run
+    dir: left to the command, no false positive.  Space-form flags
+    (``-n 5``) keep the original operand path for the following token."""
+    root = _make_run_root(tmp_path)
+    for command in (
+        "grep --include=*.py foo .",
+        "rg --color=auto x .",
+        "head -n 5 file",
+    ):
+        d = approval.decide(
+            "run_shell_command",
+            {"command": command, "cwd": str(root)},
+            [str(root)],
+        )
+        assert d["behavior"] == "allow", command
+
+
+def test_equals_value_secret_name_deny(tmp_path):
+    """A bare secret name as an equals value, existing in the run root
+    (the id_rsa fixture), is guarded like a bare operand ->
+    secret-path."""
+    root = _make_run_root(tmp_path)
+    d = approval.decide(
+        "run_shell_command",
+        {"command": "head --files0-from=id_rsa", "cwd": str(root)},
+        [str(root)],
+    )
+    assert d["behavior"] == "deny" and d["rule"] == "secret-path"

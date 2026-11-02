@@ -261,6 +261,51 @@ def _task_result_from_meta(task: dict[str, Any]) -> tuple[dict[str, Any], list[s
     return result, errors
 
 
+# Process start, computed once at import time. This MCP server runs inside
+# the Worker container, so its (re)start is the only observable Worker
+# restart signal: a task whose assignment predates this moment survived a
+# restart. Canonical ISO-8601 UTC "Z" strings compare chronologically.
+_SESSION_STARTED_AT = _utc_timestamp()
+
+# Verbatim restart-recovery note appended to a delegate notification for a
+# cross-restart leftover (do not reword or rewrap).
+_RECOVERY_NOTE = (
+    "The host restarted during this ticket. Inspect the current worktree, git history\n"
+    "and external state (task record, PRs, sent messages) before continuing. Do not\n"
+    "repeat an already completed external operation. Finish the original assignment\n"
+    "and report its status."
+)
+
+
+def _recovery_note_for_delegate(existing_task: dict[str, Any]) -> str:
+    """Return _RECOVERY_NOTE when this delegation re-wakes a cross-restart
+    leftover, else "".
+
+    Judged against the EXISTING task meta (read before this delegation
+    rewrites it); all three conditions must hold:
+      1. the meta carries an assignment time (assigned_at, falling back to
+         createdAt; both absent -> no note);
+      2. that time predates this session (assigned_at <
+         _SESSION_STARTED_AT: the task already existed before this process
+         started);
+      3. no note was injected in this session yet (recoveryNoteAt absent or
+         < _SESSION_STARTED_AT — a previous session's stamp may be
+         re-injected after the next restart).
+    """
+    assigned_at = _first_text(
+        existing_task.get("assigned_at"),
+        existing_task.get("assignedAt"),
+        existing_task.get("created_at"),
+        existing_task.get("createdAt"),
+    )
+    if not assigned_at or not assigned_at < _SESSION_STARTED_AT:
+        return ""
+    note_at = _first_text(existing_task.get("recoveryNoteAt"))
+    if note_at and not note_at < _SESSION_STARTED_AT:
+        return ""
+    return _RECOVERY_NOTE
+
+
 def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
     action = str(arguments.get("action") or "").strip()
     payload = _payload(arguments)
@@ -415,6 +460,11 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             spec = str(payload.get("spec") or "")
             (task_dir / "spec.md").write_text(spec + ("\n" if spec else ""), encoding="utf-8")
             source_room_id = _source_room_id_from_payload(payload) or str(project.get("source_room_id") or "").strip()
+            # Restart-recovery note: the assignment predates this session
+            # (the task survived a Worker restart) and no note was recorded
+            # in this session yet -> the notification must tell the Worker
+            # to inspect current state before continuing.
+            recovery_note = _recovery_note_for_delegate(existing_task)
             # Transaction id for this logical delegation attempt:
             # a re-delegation (different assignee) is a NEW attempt and
             # rotates the nonce; a retry of the SAME attempt (previous send
@@ -439,6 +489,12 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 task["assigned_to"] = assigned_to
             if source_room_id:
                 task["source_room_id"] = source_room_id
+            if recovery_note:
+                # Stamped into the prepared write: a same-session retry sees
+                # it and does not re-inject, while a later restart moves
+                # _SESSION_STARTED_AT past the stamp so the next session
+                # injects again.
+                task["recoveryNoteAt"] = _utc_timestamp()
             if not _delegate_from:
                 # Creation is recorded with from="planned" (the project-node
                 # view at this moment); prepared -> prepared retries are
@@ -550,6 +606,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                         assignee=assignment_mxid,
                         spec=spec,
                         txn=notify_txn,
+                        recovery_note=recovery_note,
                     )
                 except Exception as exc:
                     notification = {
@@ -623,6 +680,9 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "task": task,
                 "synced": True,
                 "notification": notification,
+                # True only when the notification sent in this call carried
+                # the restart-recovery note (absent from every other return).
+                "recoveryNote": bool(notification.get("recoveryNote")),
                 "notificationNeeded": _notification_needed(
                     "delegate_task",
                     project or {"project_id": project_id},

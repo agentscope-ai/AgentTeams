@@ -8,8 +8,8 @@ import (
 // The allowed key set is exactly the three delegation keys; backend and
 // backends are the session's concern and must never be projected.
 var allowedDelegationKeys = map[string]bool{
-	"delegation.model":             true,
-	"delegation.provider":          true,
+	"delegation.model":              true,
+	"delegation.provider":           true,
 	"delegation.fallback_providers": true,
 }
 

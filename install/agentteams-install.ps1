@@ -27,6 +27,8 @@
 #   AGENTTEAMS_VERSION            Image tag          (default: latest)
 #   AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION DeepSeek Harness runtime image tag (default: v0.1.0; independent of AGENTTEAMS_VERSION)
 #   AGENTTEAMS_REGISTRY           Image registry     (default: auto-detected by timezone)
+#   AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY
+#                                      WASM plugins (default: cn-hangzhou primary)
 #   AGENTTEAMS_INSTALL_MANAGER_IMAGE       Override manager image (e.g., local build)
 #   AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE Override QwenPaw manager image (e.g., local build)
 #   AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE  Override legacy CoPaw manager image (e.g., local build)
@@ -1145,8 +1147,9 @@ AGENTTEAMS_WORKER_IDLE_TIMEOUT=$($Config.WORKER_IDLE_TIMEOUT)
 # JVM Args for Higress Console
 JVM_ARGS=$($env:JVM_ARGS)
 
-# Higress WASM plugin image registry (auto-selected by timezone)
-HIGRESS_ADMIN_WASM_PLUGIN_IMAGE_REGISTRY=$($Config.REGISTRY)
+# Higress WASM plugins are independent of the regional AgentTeams images.
+AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY=$($Config.HIGRESS_WASM_PLUGIN_REGISTRY)
+HIGRESS_ADMIN_WASM_PLUGIN_IMAGE_REGISTRY=$($Config.HIGRESS_WASM_PLUGIN_REGISTRY)
 
 # Data persistence
 AGENTTEAMS_DATA_DIR=$($Config.DATA_DIR)
@@ -1288,6 +1291,9 @@ function Load-CurrentParamsFromEnv {
             }
             if ($_ -match "^AGENTTEAMS_HOST_SHARE_DIR=(.*)$") {
                 $script:config.HOST_SHARE_DIR = $Matches[1].Trim()
+            }
+            if ($_ -match "^AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY=(.*)$") {
+                $script:config.HIGRESS_WASM_PLUGIN_REGISTRY = $Matches[1].Trim()
             }
         }
     }
@@ -2784,6 +2790,13 @@ function Install-Manager {
     # Store additional config
     $config.LANGUAGE = $script:AGENTTEAMS_LANGUAGE
     $config.REGISTRY = $script:AGENTTEAMS_REGISTRY
+    $config.HIGRESS_WASM_PLUGIN_REGISTRY = if ($env:AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY) {
+        $env:AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY
+    } elseif ($config.HIGRESS_WASM_PLUGIN_REGISTRY) {
+        $config.HIGRESS_WASM_PLUGIN_REGISTRY
+    } else {
+        "higress-registry.cn-hangzhou.cr.aliyuncs.com"
+    }
     $config.WORKER_IMAGE = $script:WORKER_IMAGE
     $config.COPAW_WORKER_IMAGE = $script:COPAW_WORKER_IMAGE
     $config.QWENPAW_WORKER_IMAGE = $script:QWENPAW_WORKER_IMAGE
@@ -3190,6 +3203,7 @@ function Install-Manager {
             "-e", "AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN=$($config.MATRIX_APPSERVICE_AS_TOKEN)",
             "-e", "AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN=$($config.MATRIX_APPSERVICE_HS_TOKEN)",
             "-e", "AGENTTEAMS_MINIO_ENDPOINT=http://127.0.0.1:9000",
+            "-e", "HIGRESS_ADMIN_WASM_PLUGIN_IMAGE_REGISTRY=$($config.HIGRESS_WASM_PLUGIN_REGISTRY)",
             "-e", "AGENTTEAMS_MINIO_BUCKET=agentteams-storage",
             "-e", "AGENTTEAMS_STORAGE_PREFIX=agentteams/agentteams-storage",
             "-e", "AGENTTEAMS_FS_ENDPOINT=http://127.0.0.1:9000",

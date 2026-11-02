@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import threading
 import time
 from typing import Iterable, List, Optional
 
@@ -105,6 +106,10 @@ class FileSync:
         self.sync_state_path = Path(local_dir).parent / (
             f".{worker_name}-sync-state.json"
         )
+        # #1391: every local->remote push path (background push_local and
+        # the blocking flush) takes this lock, so the same object is never
+        # uploaded concurrently from two threads.
+        self._push_lock = threading.Lock()
 
     def _mc(self, *args: str, check: bool = True, text: bool = True) -> subprocess.CompletedProcess:
         mc_bin = shutil.which("mc")
@@ -575,6 +580,172 @@ class FileSync:
             mirrored.append(rel.as_posix())
         return mirrored
 
+    # ---- blocking flush barrier (#1391) --------------------------------
+
+    def flush(self, timeout: float | None = None) -> dict:
+        """Blocking push of every pending local change; returns per-file receipts.
+
+        Covers the same ground as ``push_local(sync, since=0)`` but runs as
+        a class method under the push lock, so a flush and the background
+        push loop never upload the same object concurrently.  A per-file
+        failure is recorded as a receipt and does not abort the rest of
+        the scan; with nothing pending the call is an idempotent no-op.
+        """
+        started_at = time.monotonic()
+        if timeout is None:
+            acquired = self._push_lock.acquire()
+        else:
+            acquired = self._push_lock.acquire(timeout=timeout)
+        if not acquired:
+            # The background push still holds the lock.  Report a failure
+            # receipt instead of racing it on the same objects.
+            return {
+                "ok": False,
+                "uploaded": [],
+                "skipped": [],
+                "errors": [
+                    {
+                        "path": "",
+                        "error": (
+                            f"flush timed out after {timeout:g}s waiting "
+                            "for the background push lock"
+                        ),
+                    }
+                ],
+                "pending": self._count_dirty_files(),
+                "lastPushAt": self._last_push_at(),
+                "durationMs": max(0, int((time.monotonic() - started_at) * 1000)),
+            }
+        try:
+            return self._flush_locked()
+        finally:
+            self._push_lock.release()
+
+    def _flush_locked(self) -> dict:
+        started_at = time.monotonic()
+        self.ensure_alias()
+        uploaded: List[str] = []
+        skipped: List[str] = []
+        errors: List[dict] = []
+
+        local_dir = self.local_dir
+        if local_dir.is_dir():
+            state = self._load_sync_state()
+            tracked = (state.get("roots") or {}).get("worker") or {}
+            for path in sorted(local_dir.rglob("*")):
+                if not path.is_file() or path.is_symlink():
+                    continue
+                try:
+                    rel_path = path.relative_to(local_dir)
+                except ValueError:
+                    continue
+                rel = rel_path.as_posix()
+                if _skip_background_push(rel_path):
+                    continue
+                key = f"{self.remote_prefix}/{rel}"
+                try:
+                    data: Optional[bytes] = None
+                    if path.stat().st_size <= COMPARE_CONTENT_MAX_BYTES:
+                        # Snapshot the bytes before any compare or upload;
+                        # the baseline is derived from this content, never
+                        # from a re-read at record time.
+                        data = path.read_bytes()
+                        local_sha = hashlib.sha256(data).hexdigest()
+                    else:
+                        # Large file: no remote download for the compare,
+                        # the same rule push_local and _directory_conflicts
+                        # apply via the size threshold.
+                        local_sha = _sha256_file(path)
+                    if data is not None:
+                        remote = self._cat_bytes(key)
+                        if remote == data:
+                            # The remote already holds this exact content:
+                            # no upload, but the manifest still needs the
+                            # baseline.
+                            self._record_pushed("worker", rel, local_sha)
+                            skipped.append(f"unchanged:{rel}")
+                            continue
+                        baseline_entry = tracked.get(rel)
+                        baseline = (
+                            baseline_entry.get("sha256")
+                            if isinstance(baseline_entry, dict)
+                            else None
+                        )
+                        if (
+                            baseline
+                            and local_sha != baseline
+                            and remote is not None
+                            and hashlib.sha256(remote).hexdigest() != baseline
+                        ):
+                            # Changed on both sides since the last push:
+                            # keep the newer remote object, the same rule
+                            # push_directories applies via conflicts.
+                            skipped.append(f"conflict:{rel}")
+                            continue
+                    self._mc("cp", str(path), self._object_path(key), check=True)
+                    if data is not None:
+                        # Bind the baseline to what the remote actually
+                        # holds after the upload; a failed or empty
+                        # read-back falls back to the pre-upload snapshot.
+                        remote_after = self._cat_bytes(key)
+                        if remote_after is not None and remote_after != data:
+                            local_sha = hashlib.sha256(remote_after).hexdigest()
+                    uploaded.append(rel)
+                    self._record_pushed("worker", rel, local_sha)
+                except Exception as exc:
+                    if isinstance(exc, subprocess.CalledProcessError):
+                        message = _mc_error_message(exc)
+                    else:
+                        message = str(exc) or type(exc).__name__
+                    errors.append({"path": rel, "error": message})
+
+        pending = len(errors) + sum(
+            1 for item in skipped if item.startswith("conflict:")
+        )
+        return {
+            "ok": not errors,
+            "uploaded": sorted(set(uploaded)),
+            "skipped": sorted(skipped),
+            "errors": errors,
+            "pending": pending,
+            "lastPushAt": self._last_push_at(),
+            "durationMs": max(0, int((time.monotonic() - started_at) * 1000)),
+        }
+
+    def _count_dirty_files(self) -> int:
+        """Read-only estimate of local files ahead of the push manifest."""
+        state = self._load_sync_state()
+        files = (state.get("roots") or {}).get("worker") or {}
+        local_dir = self.local_dir
+        if not local_dir.is_dir():
+            return 0
+        count = 0
+        for path in local_dir.rglob("*"):
+            if not path.is_file() or path.is_symlink():
+                continue
+            try:
+                rel_path = path.relative_to(local_dir)
+            except ValueError:
+                continue
+            if _skip_background_push(rel_path):
+                continue
+            try:
+                sha = _sha256_file(path)
+            except OSError:
+                continue
+            entry = files.get(rel_path.as_posix())
+            baseline = entry.get("sha256") if isinstance(entry, dict) else None
+            if baseline != sha:
+                count += 1
+        return count
+
+    def _last_push_at(self) -> str:
+        state = self._load_sync_state()
+        timestamp = state.get("updated_at")
+        if not isinstance(timestamp, (int, float)) or timestamp <= 0:
+            timestamp = time.time()
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(timestamp))
+
 
 def _skip_background_push(rel: Path) -> bool:
     rel_path = rel.as_posix()
@@ -602,6 +773,13 @@ def _skip_background_push(rel: Path) -> bool:
 
 
 def push_local(sync: FileSync, since: float = 0) -> List[str]:
+    # #1391: the background push and FileSync.flush share this lock, so the
+    # two never upload the same object concurrently.
+    with sync._push_lock:
+        return _push_local_locked(sync, since)
+
+
+def _push_local_locked(sync: FileSync, since: float = 0) -> List[str]:
     pushed = []
     local_dir = sync.local_dir
     if not local_dir.exists():

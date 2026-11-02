@@ -243,6 +243,24 @@ class Worker:
                 await self._process.wait()
                 logger.warning("qwenpaw app killed after stop timeout component=worker worker=%s", self.config.worker_name)
         self._process = None
+        if self.sync is not None:
+            # #1391: durability barrier — the app is already stopped, so
+            # this is the last chance to push pending local changes before
+            # the container exits instead of waiting on the 5s push loop.
+            stage_started = self._log_worker_stage_begin(
+                "flush_on_shutdown", timeout_seconds=30
+            )
+            try:
+                result = await asyncio.to_thread(self.sync.flush, 30)
+                self._log_worker_stage_complete(
+                    "flush_on_shutdown",
+                    stage_started,
+                    ok=result.get("ok"),
+                    uploaded=len(result.get("uploaded") or []),
+                    pending=result.get("pending"),
+                )
+            except Exception as exc:
+                self._log_worker_stage_failed("flush_on_shutdown", stage_started, exc)
         logger.info("qwenpaw worker stopped component=worker worker=%s", self.config.worker_name)
 
     def _log_worker_stage_begin(self, stage: str, **fields: object) -> float:

@@ -1007,3 +1007,170 @@ def test_partial_mirror_failure_keeps_unpushed_file(
         sync.mirror_all()
 
     assert state.read_text(encoding="utf-8") == "local-new"
+
+
+# ---------------------------------------------------------------------------
+# #1391: blocking flush barrier with per-file receipts
+# ---------------------------------------------------------------------------
+
+
+class _FlushFakeRemote:
+    """In-memory object store with consistent alias/bucket keying.
+
+    Unlike _FakeRemote (whose cat() is keyed by bare remote prefix), this
+    one keys cat() through the same full object path that mc cp/mirror
+    use, so a startup mirror after a flush really pulls what the flush
+    uploaded.
+    """
+
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+
+    @staticmethod
+    def full(key: str) -> str:
+        return f"agentteams/agentteams-storage/{key}"
+
+    def mc(self, *args, **_kwargs):
+        if args and args[0] == "cp":
+            self.objects[args[2]] = Path(args[1]).read_bytes()
+        elif args and args[0] == "mirror":
+            prefix, local = args[1], Path(args[2])
+            for key, data in list(self.objects.items()):
+                if key.startswith(prefix):
+                    target = local / key[len(prefix):]
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(data)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    def cat(self, key: str):
+        return self.objects.get(self.full(key))
+
+
+def test_flush_returns_per_file_receipts(tmp_path: Path, monkeypatch) -> None:
+    sync = _sync(tmp_path)
+    sync.local_dir.mkdir(parents=True)
+    (sync.local_dir / "b.md").write_text("bee", encoding="utf-8")
+    (sync.local_dir / "a.md").write_text("ay", encoding="utf-8")
+    remote = _FlushFakeRemote()
+
+    monkeypatch.setattr(sync, "ensure_alias", lambda: None)
+    monkeypatch.setattr(sync, "_mc", remote.mc)
+    monkeypatch.setattr(sync, "_cat_bytes", remote.cat)
+
+    result = sync.flush()
+
+    assert result["ok"] is True
+    assert result["uploaded"] == ["a.md", "b.md"]
+    assert result["skipped"] == []
+    assert result["errors"] == []
+    assert result["pending"] == 0
+    assert result["lastPushAt"].endswith("Z")
+    assert result["durationMs"] >= 0
+    assert remote.objects[_FlushFakeRemote.full("agents/worker-a/a.md")] == b"ay"
+    assert remote.objects[_FlushFakeRemote.full("agents/worker-a/b.md")] == b"bee"
+    manifest = json.loads(sync.sync_state_path.read_text(encoding="utf-8"))
+    assert manifest["roots"]["worker"]["a.md"]["sha256"] == (
+        hashlib.sha256(b"ay").hexdigest()
+    )
+
+
+def test_flush_write_restart_readback_survives_startup_pull(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Write -> flush -> restart: the startup mirror must not clobber work."""
+    sync = _sync(tmp_path)
+    sync.local_dir.mkdir(parents=True)
+    state = sync.local_dir / "state.txt"
+    state.write_text("stale-remote", encoding="utf-8")
+    remote = _FlushFakeRemote()
+    remote.objects[_FlushFakeRemote.full("agents/worker-a/state.txt")] = (
+        b"stale-remote"
+    )
+
+    monkeypatch.setattr(sync, "ensure_alias", lambda: None)
+    monkeypatch.setattr(sync, "_mc", remote.mc)
+    monkeypatch.setattr(sync, "_cat_bytes", remote.cat)
+
+    state.write_text("fresh-local", encoding="utf-8")
+    result = sync.flush()
+    assert result["ok"] is True
+    assert result["uploaded"] == ["state.txt"]
+
+    # Simulate a restart: a brand-new instance over the same dirs pulls
+    # from the remote at startup.
+    restarted = _sync(tmp_path)
+    monkeypatch.setattr(restarted, "ensure_alias", lambda: None)
+    monkeypatch.setattr(restarted, "_mc", remote.mc)
+    monkeypatch.setattr(restarted, "_cat_bytes", remote.cat)
+
+    restarted.mirror_all()
+
+    assert state.read_text(encoding="utf-8") == "fresh-local"
+
+
+def test_flush_without_pending_changes_is_empty(tmp_path: Path, monkeypatch) -> None:
+    sync = _sync(tmp_path)
+    sync.local_dir.mkdir(parents=True)
+    remote = _FlushFakeRemote()
+
+    monkeypatch.setattr(sync, "ensure_alias", lambda: None)
+    monkeypatch.setattr(sync, "_mc", remote.mc)
+    monkeypatch.setattr(sync, "_cat_bytes", remote.cat)
+
+    result = sync.flush()
+
+    assert result["ok"] is True
+    assert result["uploaded"] == []
+    assert result["skipped"] == []
+    assert result["errors"] == []
+    assert result["pending"] == 0
+    assert result["lastPushAt"].endswith("Z")
+
+
+def test_flush_single_file_failure_keeps_other_uploads(
+    tmp_path: Path, monkeypatch
+) -> None:
+    sync = _sync(tmp_path)
+    sync.local_dir.mkdir(parents=True)
+    (sync.local_dir / "good.md").write_text("good", encoding="utf-8")
+    (sync.local_dir / "bad.md").write_text("bad", encoding="utf-8")
+    remote = _FlushFakeRemote()
+
+    monkeypatch.setattr(sync, "ensure_alias", lambda: None)
+    monkeypatch.setattr(sync, "_cat_bytes", remote.cat)
+
+    def fake_mc(*args, **_kwargs):
+        if args and args[0] == "cp" and args[2].endswith("/bad.md"):
+            raise subprocess.CalledProcessError(1, args, stderr="boom: upload failed")
+        return remote.mc(*args)
+
+    monkeypatch.setattr(sync, "_mc", fake_mc)
+
+    result = sync.flush()
+
+    assert result["ok"] is False
+    assert result["uploaded"] == ["good.md"]
+    assert result["errors"] == [{"path": "bad.md", "error": "boom: upload failed"}]
+    assert result["pending"] == 1
+    assert remote.objects[_FlushFakeRemote.full("agents/worker-a/good.md")] == b"good"
+    assert _FlushFakeRemote.full("agents/worker-a/bad.md") not in remote.objects
+
+
+def test_flush_is_idempotent(tmp_path: Path, monkeypatch) -> None:
+    sync = _sync(tmp_path)
+    sync.local_dir.mkdir(parents=True)
+    (sync.local_dir / "a.md").write_text("one", encoding="utf-8")
+    remote = _FlushFakeRemote()
+
+    monkeypatch.setattr(sync, "ensure_alias", lambda: None)
+    monkeypatch.setattr(sync, "_mc", remote.mc)
+    monkeypatch.setattr(sync, "_cat_bytes", remote.cat)
+
+    first = sync.flush()
+    second = sync.flush()
+
+    assert first["uploaded"] == ["a.md"]
+    assert second["ok"] is True
+    assert second["uploaded"] == []
+    assert second["skipped"] == ["unchanged:a.md"]
+    assert second["pending"] == 0

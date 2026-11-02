@@ -60,6 +60,17 @@ type HTTPServer struct {
 	server *http.Server
 }
 
+// newRuntimeRegistry builds the registry of runtime adapters compiled into
+// this binary. It is the single wiring site: a runtime whose adapter is not
+// registered here 404s as an unknown runtime even though its package builds,
+// so TestNewRuntimeRegistry_RegistersEveryCompiledRuntime pins it.
+func newRuntimeRegistry() *runtimeconfig.Registry {
+	reg := runtimeconfig.NewRegistry()
+	reg.Register(openclaw.New())
+	reg.Register(hermes.New())
+	return reg
+}
+
 func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux := http.NewServeMux()
 	s := &HTTPServer{
@@ -315,9 +326,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// standing authorizer's worker-scoped policy (ActionGet/ActionUpdate)
 	// plus the handler's W8 team scope, embedded-mode gate, and the
 	// leader-read-only rule.
-	runtimeReg := runtimeconfig.NewRegistry()
-	runtimeReg.Register(openclaw.New())
-	runtimeReg.Register(hermes.New())
+	runtimeReg := newRuntimeRegistry()
 	mch := NewMemberConfigHandler(deps.Client, deps.Namespace, deps.KubeMode, auditClient, deps.Backend, deps.OSS, runtimeReg, deps.DefaultWorkerRuntime)
 	mux.Handle("GET /api/runtimes/{runtime}/surface", mw.Authenticate(http.HandlerFunc(mch.getSurface)))
 	mux.Handle("GET /api/members/{name}/config", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(mch.getConfig)))

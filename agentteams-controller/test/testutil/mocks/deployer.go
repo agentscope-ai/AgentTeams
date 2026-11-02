@@ -26,6 +26,7 @@ type MockDeployer struct {
 	InjectChannelPolicyFn           func(ctx context.Context, req service.InjectChannelPolicyRequest) error
 	SyncTeamLeaderAssetsFn          func(ctx context.Context, req service.SyncTeamLeaderAssetsRequest) error
 	EnsureTeamStorageFn             func(ctx context.Context, teamName string) error
+	EnsureHumanStorageFn            func(ctx context.Context, human *v1beta1.Human) error
 
 	Calls struct {
 		DeployPackage                 []string
@@ -42,6 +43,7 @@ type MockDeployer struct {
 		InjectChannelPolicy           []service.InjectChannelPolicyRequest
 		SyncTeamLeaderAssets          []service.SyncTeamLeaderAssetsRequest
 		EnsureTeamStorage             []string
+		EnsureHumanStorage            []*v1beta1.Human
 	}
 }
 
@@ -68,6 +70,7 @@ func (m *MockDeployer) Reset() {
 	m.InjectChannelPolicyFn = nil
 	m.SyncTeamLeaderAssetsFn = nil
 	m.EnsureTeamStorageFn = nil
+	m.EnsureHumanStorageFn = nil
 }
 
 // ClearCalls resets call records only, preserving Fn overrides.
@@ -93,6 +96,7 @@ func (m *MockDeployer) clearCallsLocked() {
 		InjectChannelPolicy           []service.InjectChannelPolicyRequest
 		SyncTeamLeaderAssets          []service.SyncTeamLeaderAssetsRequest
 		EnsureTeamStorage             []string
+		EnsureHumanStorage            []*v1beta1.Human
 	}{}
 }
 
@@ -206,6 +210,17 @@ func (m *MockDeployer) EnsureTeamStorage(ctx context.Context, teamName string) e
 	return nil
 }
 
+func (m *MockDeployer) EnsureHumanStorage(ctx context.Context, human *v1beta1.Human) error {
+	m.mu.Lock()
+	m.Calls.EnsureHumanStorage = append(m.Calls.EnsureHumanStorage, human)
+	fn := m.EnsureHumanStorageFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, human)
+	}
+	return nil
+}
+
 func (m *MockDeployer) InjectWorkerCoordination(ctx context.Context, req service.WorkerCoordinationRequest) error {
 	m.mu.Lock()
 	m.Calls.InjectWorkerCoordination = append(m.Calls.InjectWorkerCoordination, req)
@@ -271,4 +286,7 @@ func (m *MockDeployer) CallCounts() (deployPkg, writeInline, deployConfig, pushS
 		len(m.Calls.CleanupOSSData)
 }
 
-var _ service.WorkerDeployer = (*MockDeployer)(nil)
+var (
+	_ service.WorkerDeployer = (*MockDeployer)(nil)
+	_ service.HumanDeployer  = (*MockDeployer)(nil)
+)

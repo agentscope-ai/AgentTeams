@@ -35,6 +35,10 @@ ARG OPENCLAW_REPO_URL=https://github.com/openclaw/openclaw.git
 # stay in sync with OPENCLAW_TAG in hack/versions.env.
 ARG OPENCLAW_TAG=v2026.10.9
 
+# Runtime-visible pin: the manager and the CI probe compare the installed
+# package version against this instead of guessing (#1479 hardening).
+ENV AGENTTEAMS_OPENCLAW_TAG=${OPENCLAW_TAG}
+
 # Set proxy as environment variables to ensure all tools can use them
 ENV HTTP_PROXY=${HTTP_PROXY} \
     HTTPS_PROXY=${HTTPS_PROXY} \

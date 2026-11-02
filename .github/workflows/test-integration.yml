@@ -60,6 +60,18 @@ on:
           - qwenpaw
           - hermes
         default: 'both'
+      # Sibling input (declared after worker_runtime is complete). Lets a
+      # maintainer exercise the published-base consumer path on a ref that
+      # does not touch openclaw-base/**, without crafting a PR for it.
+      openclaw_base_override:
+        description: 'Force the openclaw-base path. auto = follow the trigger (PR diff; rebuild on push/dispatch). force_unchanged demonstrates the published-base consumer path.'
+        required: false
+        type: choice
+        options:
+          - auto
+          - force_unchanged
+          - force_rebuild
+        default: auto
       model:
         description: 'LLM model to use'
         required: false
@@ -114,7 +126,15 @@ jobs:
       - name: Decide whether to rebuild openclaw-base
         id: decide
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
+          # Manual override (workflow_dispatch only): force_unchanged lets a
+          # maintainer exercise the published-base consumer path on a ref that
+          # does not touch openclaw-base/**, without crafting a PR for it.
+          OVERRIDE="${{ github.event.inputs.openclaw_base_override }}"
+          if [ "${OVERRIDE}" = "force_unchanged" ]; then
+            echo "openclaw_base=false" >> $GITHUB_OUTPUT
+          elif [ "${OVERRIDE}" = "force_rebuild" ]; then
+            echo "openclaw_base=true" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "openclaw_base=${{ steps.filter.outputs.openclaw_base }}" >> $GITHUB_OUTPUT
           else
             # push to main / tag / workflow_dispatch: always rebuild
@@ -250,6 +270,11 @@ jobs:
   # manager and worker additionally depend on openclaw-base when it was rebuilt).
   build-images:
     needs: [detect-changes, build-base, build-openclaw-base]
+    env:
+      # Needed to read the published openclaw-base manifest from the private
+      # registry; without it the manifest check cannot distinguish "not
+      # published" from "not authorised" and would always bootstrap locally.
+      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
     # Run even if build-openclaw-base was skipped (no openclaw-base changes).
     if: |
       always() &&
@@ -270,6 +295,14 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      - name: Login to Higress registry (when credentials are available)
+        if: env.REGISTRY_USERNAME != ''
+        uses: docker/login-action@v3
+        with:
+          registry: higress-registry.cn-hangzhou.cr.aliyuncs.com
+          username: ${{ env.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
 
       - name: Download controller image
         uses: actions/download-artifact@v4
@@ -306,11 +339,48 @@ jobs:
              { [ "${{ matrix.target }}" = "manager" ] || [ "${{ matrix.target }}" = "worker" ]; }; then
             EXTRA="OPENCLAW_BASE_IMAGE=agentteams/openclaw-base OPENCLAW_BASE_VERSION=latest"
             echo "Using locally-built openclaw-base for ${{ matrix.target }}"
+            echo "- \`${{ matrix.target }}\`: locally built openclaw-base (changed-base path)" >> "$GITHUB_STEP_SUMMARY"
           elif [ "${{ matrix.target }}" = "manager" ] || [ "${{ matrix.target }}" = "worker" ]; then
-            # The pinned base predates the AgentTeams registry namespace. Keep
-            # using its existing location until a release seeds the new repo.
-            EXTRA="OPENCLAW_BASE_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/openclaw-base OPENCLAW_BASE_VERSION=20260423-8359cbc"
-            echo "Using published migration base for ${{ matrix.target }}"
+            # Same namespace the Build Base Image workflow publishes to; the tag
+            # is derived from the OpenClaw pin (hack/versions.env).
+            BASE_TAG="$(sed -n 's/^OPENCLAW_BASE_TAG=//p' hack/versions.env)"
+            EXTRA="OPENCLAW_BASE_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/openclaw-base OPENCLAW_BASE_VERSION=${BASE_TAG}"
+            # The published tag is the intended consumer path. It can only be
+            # absent in one window: between landing the pin change and the
+            # 'Build Base Image' workflow publishing the derived tag. Do not
+            # hard-fail there (that blocks every unchanged-base run); build the
+            # pinned base locally instead — the same bootstrap the changed-base
+            # path performs — and say so loudly so the missing publication is
+            # visible without turning the pipeline red.
+            IMAGE_REF="$(printf '%s' "${EXTRA}" | sed -n 's/.*OPENCLAW_BASE_IMAGE=\([^ ]*\) OPENCLAW_BASE_VERSION=\([^ ]*\)/\1:\2/p')"
+            # Three outcomes, not two: published, genuinely absent, or not
+            # verifiable here (auth/network). Only a real absence or an
+            # unverifiable registry may bootstrap, and they are reported
+            # differently so an auth outage is never mislabelled as
+            # "not published".
+            MANIFEST_ERR="$(mktemp)"
+            if docker manifest inspect "${IMAGE_REF}" >/dev/null 2>"${MANIFEST_ERR}"; then
+              BASE_SOURCE="published"
+              BASE_DETAIL="${IMAGE_REF}"
+            elif grep -qiE 'no such manifest|manifest unknown|not found' "${MANIFEST_ERR}"; then
+              BASE_SOURCE="bootstrap"
+              BASE_DETAIL="published base absent (${IMAGE_REF})"
+              echo "::warning::${IMAGE_REF} is not published yet; building the pinned base locally. Publish it with the 'Build Base Image' workflow (workflow_dispatch, or a push to main touching openclaw-base/** or hack/versions.env)."
+            else
+              BASE_SOURCE="bootstrap-unverified"
+              BASE_DETAIL="published base unverifiable (${IMAGE_REF}): $(head -c 200 "${MANIFEST_ERR}" | tr '\n' ' ')"
+              echo "::warning::could not verify ${IMAGE_REF} (auth or network); building the pinned base locally. Check the registry credentials/login step if this persists."
+            fi
+            rm -f "${MANIFEST_ERR}"
+            if [ "${BASE_SOURCE}" = "published" ]; then
+              echo "Using published base ${IMAGE_REF} for ${{ matrix.target }}"
+            else
+              make build-openclaw-base \
+                HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
+                DOCKER_BUILD_ARGS="--build-arg APT_MIRROR="
+              EXTRA="OPENCLAW_BASE_IMAGE=agentteams/openclaw-base OPENCLAW_BASE_VERSION=latest"
+            fi
+            echo "- \`${{ matrix.target }}\`: ${BASE_SOURCE} — ${BASE_DETAIL}" >> "$GITHUB_STEP_SUMMARY"
           fi
           # Override HIGRESS_REGISTRY to the us-west mirror — the default
           # cn-hangzhou registry is unreachable from GitHub-hosted runners.
@@ -395,13 +465,14 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y jq curl unzip
       - name: Control UI device-identity policy (HTTP/LAN entries)
-        # #1460: OpenClaw v2026.10.9 requires a device identity on the Control
-        # UI handshake. This runs one real gateway from the openclaw-base image
-        # and probes the existing HTTP (loopback) and LAN console entries. Only
-        # one shard needs to run it.
+        # #1460/#1479: the gateway requires a device identity on the Control UI
+        # handshake. Runs one real gateway from the manager image this shard
+        # already loaded (the manager image is FROM the pinned openclaw-base),
+        # so the probe tests the shipped pairing and needs no extra pull; the
+        # script asserts that gateway version == the pin in hack/versions.env.
         if: matrix.shard == 'controller-cr' && matrix.manager_runtime == 'openclaw' && matrix.worker_runtime == 'openclaw'
         env:
-          OPENCLAW_BASE_IMAGE: agentteams/openclaw-base:latest
+          OPENCLAW_BASE_IMAGE: agentteams/manager:latest
         run: bash manager/tests/test-control-ui-device-identity.sh
 
 
@@ -819,6 +890,12 @@ jobs:
 
       - name: Run the LLM-smoke regression suite (stubbed docker/curl)
         run: bash install/tests/verify-llm-regressions.sh
+
+      - name: Run the OpenClaw version-guard regression (stubbed fs/node)
+        run: bash manager/tests/test-openclaw-version-guard.sh
+
+      - name: Run the Control UI pin-assertion regression (stubbed docker)
+        run: bash manager/tests/test-control-ui-version-assert.sh
 
   install-upgrade-cli:
     runs-on: ubuntu-latest

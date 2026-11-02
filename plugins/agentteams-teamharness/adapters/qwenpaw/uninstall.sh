@@ -1,7 +1,34 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+usage() {
+  cat <<'EOF'
+Usage: uninstall.sh [--dry-run]
+
+  --dry-run  Print what would be removed; change nothing
+EOF
+}
+
+DRY_RUN=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
 WORKING_DIR="${QWENPAW_WORKING_DIR:-$HOME/.qwenpaw}"
+
+if [ "$DRY_RUN" -eq 1 ]; then
+  MARKER_FILE="${WORKING_DIR}/.agentteams/teamharness/installed.json"
+  if [ -f "$MARKER_FILE" ]; then
+    echo "qwenpaw adapter: dry-run, would uninstall the plugin via the qwenpaw CLI and remove ${MARKER_FILE}" >&2
+  else
+    echo "qwenpaw adapter: dry-run, no TeamHarness state to remove" >&2
+  fi
+  exit 0
+fi
 
 # The QwenPaw-owned plugin files are removed by the QwenPaw CLI itself; the
 # installer's own footprint is the state marker, which is removed here so a

@@ -569,6 +569,52 @@ func TestUpdateTeamMembershipAndHeartbeat(t *testing.T) {
 	}
 }
 
+func TestUpdateTeamHumanMembers(t *testing.T) {
+	initial := []v1beta1.TeamMemberSpec{{Name: "alice", Role: "member"}}
+	for _, tc := range []struct {
+		name string
+		body string
+		want []v1beta1.TeamMemberSpec
+	}{
+		{"replace", `{"humanMembers":[{"name":"bob","role":"coordinator"}]}`, []v1beta1.TeamMemberSpec{{Name: "bob", Role: "coordinator"}}},
+		{"role change", `{"humanMembers":[{"name":"alice","role":"coordinator"}]}`, []v1beta1.TeamMemberSpec{{Name: "alice", Role: "coordinator"}}},
+		{"clear", `{"humanMembers":[]}`, nil},
+		{"omitted", `{"heartbeatEvery":"45m"}`, initial},
+		{"null", `{"humanMembers":null}`, initial},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			team := &v1beta1.Team{
+				ObjectMeta: metav1.ObjectMeta{Name: "alpha-team", Namespace: "default"},
+				Spec:       v1beta1.TeamSpec{HumanMembers: initial},
+			}
+			k8s := fake.NewClientBuilder().WithScheme(newServerTestScheme(t)).WithObjects(team).Build()
+			mw := authpkg.NewMiddleware(&alwaysAdminAuth{}, authpkg.NewCREnricher(k8s, "default"), authpkg.NewAuthorizer(), k8s, "default")
+			srv := NewHTTPServer(":0", ServerDeps{Client: k8s, Namespace: "default", AuthMw: mw})
+			req := httptest.NewRequest(http.MethodPut, "/api/v1/teams/alpha-team", strings.NewReader(tc.body))
+			req.Header.Set("Authorization", "Bearer test-token")
+			rec := httptest.NewRecorder()
+			srv.Mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("update status = %d: %s", rec.Code, rec.Body.String())
+			}
+			var stored v1beta1.Team
+			if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(team), &stored); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(stored.Spec.HumanMembers, tc.want) {
+				t.Fatalf("persisted humanMembers = %#v, want %#v", stored.Spec.HumanMembers, tc.want)
+			}
+			var resp TeamResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(resp.HumanMembers, tc.want) {
+				t.Fatalf("response humanMembers = %#v, want %#v", resp.HumanMembers, tc.want)
+			}
+		})
+	}
+}
+
 func TestCreateTeamResponseDerivesNamesFromWorkerReferences(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	leader := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "lead-cr", Namespace: "default"}}

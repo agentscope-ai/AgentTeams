@@ -2909,3 +2909,239 @@ def test_review_commit_preserves_freeze_committed_after_pull(
     assert committed["review"]["verdict"] == "pass"
     # The first attempt was refused by the guard; the retry committed.
     assert state["version"] >= 3
+
+
+# --- Round 18: the authoritative read must bind the body to the version
+# it was read from (the stat -> pull -> stat bracket) ---------------------
+#
+# #1467 round 17 closed the pull -> mirror window, but the version read
+# still trailed the body: _load_authoritative_task_versioned pulled the
+# body FIRST and stat-ed the remote meta AFTER. A freeze committed
+# between the pull and the stat bound the OLD body to the NEW etag, so
+# the pre-write stat and the post-write read-back both matched the
+# peer's version and the whole-directory mirror erased the freeze with a
+# silent success. The maintainer's 11-02 repro: the real pull completes,
+# an independent worker commits the freeze (four normal approval
+# requests, one resolved by the trusted human runtime, the full
+# history), and the leader's released review overwrites all three
+# records. The read is now bracketed: a version flip between the
+# bracketing stats discards the body and re-reads the whole bracket, so
+# the commit base is always the version the body was read from. The
+# peer commit below is deterministic — triggered by call order (the
+# first pull / the first stat), never by timing.
+
+
+def _r18_peer_freeze(base: dict[str, Any]) -> dict[str, Any]:
+    """The freeze the independent worker commits inside the window:
+    decision_status=frozen, four normal approval requests (the first
+    resolved by the trusted human runtime, three still open) and the
+    full open -> blocked -> frozen history."""
+    frozen = dict(base)
+    frozen["decision_status"] = "frozen"
+    attention: list[dict[str, Any]] = [
+        {
+            "kind": "approval",
+            "question": "Approve the result?",
+            "attempt": 1,
+            "requestedAt": "2026-11-01T00:01:00+00:00",
+            "resolved": True,
+            "stall_count": 3,
+            "resolvedVia": "im_reply",
+            "resolvedBy": "human:@approver:example.test",
+            "resolveEvidence": {"messageId": "$m1", "note": "approved in room"},
+            "resolvedRole": "human",
+            "resolvedActor": "human:@approver:example.test",
+        }
+    ]
+    for attempt in (2, 3, 4):
+        attention.append({
+            "kind": "approval",
+            "question": "Approve the result?",
+            "attempt": attempt,
+            "requestedAt": f"2026-11-01T00:0{attempt}:00+00:00",
+            "resolved": False,
+            "stall_count": 0,
+        })
+    frozen["attention"] = attention
+    frozen["decision_status_history"] = [
+        {
+            "ts": "2026-11-01T00:02:00Z",
+            "from": "open",
+            "to": "blocked",
+            "reason": "attention stalled 2 times without an answer",
+            "source": "attention:approval",
+        },
+        {
+            "ts": "2026-11-01T00:03:00Z",
+            "from": "blocked",
+            "to": "frozen",
+            "reason": "attention stalled 3 times without an answer",
+            "source": "attention:approval",
+        },
+    ]
+    return frozen
+
+
+def _r18_versioned_planes(
+    monkeypatch: pytest.MonkeyPatch,
+    base: dict[str, Any],
+    *,
+    commit_peer_after: str,
+) -> tuple[dict[str, Any], dict[str, int]]:
+    """Two-plane remote with a version: the meta shared storage holds
+    plus the etag it reports (etag-<version>, bumped by every commit).
+    filesync etag/cat read the remote plane; the fake _pull_task mirrors
+    remote -> local meta (mc mirror semantics); the fake _sync_task
+    mirrors local -> remote and bumps the version. The peer freeze commit
+    fires exactly once, by call order, when the named call completes:
+    "pull" (after the first pull, before the bracket's trailing stat —
+    the reported window) or "stat" (after the first stat, before the
+    pull — the bracket's leading edge)."""
+    state: dict[str, Any] = {
+        "remote": dict(base),
+        "version": 1,
+        "freeze": _r18_peer_freeze(base),
+        "injected": False,
+    }
+    calls: dict[str, int] = {"etag": 0, "pull": 0}
+
+    def commit_peer_freeze() -> None:
+        if state["injected"]:
+            return
+        state["injected"] = True
+        state["remote"] = state["freeze"]
+        state["version"] += 1
+
+    def fake_filesync(args: dict[str, Any]) -> dict[str, Any]:
+        action = args.get("action")
+        if action == "etag":
+            calls["etag"] += 1
+            if state["remote"] is None:
+                return {"ok": False, "error": "object does not exist"}
+            etag = f"etag-{state['version']}"
+            if commit_peer_after == "stat" and calls["etag"] == 1:
+                # the leading stat just reported the stale version: the
+                # peer worker commits the freeze before the pull runs
+                commit_peer_freeze()
+            return {"ok": True, "etag": etag}
+        if action == "cat":
+            if state["remote"] is None:
+                return {"ok": False, "error": "object does not exist"}
+            return {"ok": True, "content": json.dumps(state["remote"])}
+        return {"ok": True}
+
+    def fake_pull(arguments: dict[str, Any], task_id: Any, **_kw: Any) -> bool:
+        calls["pull"] += 1
+        if state["remote"] is not None:
+            server._write_json(
+                server._task_state_path(arguments, str(task_id)), state["remote"]
+            )
+        if commit_peer_after == "pull" and calls["pull"] == 1:
+            # the mirror just copied the stale body: the peer worker
+            # commits the freeze before the bracket's trailing stat
+            commit_peer_freeze()
+        return True
+
+    def fake_sync(arguments: dict[str, Any], task_id: Any, **_kw: Any) -> bool:
+        state["remote"] = server._read_json(
+            server._task_state_path(arguments, str(task_id))
+        )
+        state["version"] += 1
+        return True
+
+    monkeypatch.setattr(server, "_filesync", fake_filesync)
+    monkeypatch.setattr(server, "_pull_task", fake_pull)
+    monkeypatch.setattr(server, "_sync_task", fake_sync)
+    return state, calls
+
+
+def test_review_commit_preserves_freeze_committed_between_pull_and_stat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None
+) -> None:
+    """#1467 round 18 (the reported window): the pull completes, an
+    independent worker commits the freeze, and only then does the
+    bracket's trailing stat run. The stale body must be discarded — the
+    re-read binds the frozen base, and the review commits on top of it,
+    so the freeze, all four approval records and the full history
+    survive the whole-directory mirror."""
+    _enforce_on(monkeypatch)
+    _write_project(tmp_path, task_status="assigned")
+    _write_task_meta(tmp_path, {
+        "task_id": TASK_ID,
+        "project_id": PROJECT_ID,
+        "status": "assigned",
+        "assigned_to": WORKER_A,
+    })
+    submitted = _submit(tmp_path, role="worker", account="@alice:example.test")
+    assert submitted["ok"] is True
+    base = _task_meta(tmp_path)
+
+    state, calls = _r18_versioned_planes(monkeypatch, base, commit_peer_after="pull")
+
+    result = _review(tmp_path, role="critic", account="@bob:example.test", verdict="pass")
+
+    # The bracket detected the flip: the first (stale) body was
+    # discarded and the whole bracket re-read — exactly two pulls.
+    assert calls["pull"] == 2
+    assert state["injected"] is True
+    # The action is not a silent success that erased the freeze: the
+    # committed remote meta keeps the frozen baseline.
+    assert result["ok"] is True
+    committed = state["remote"]
+    assert committed["status"] == "submitted"
+    assert committed["decision_status"] == "frozen"
+    assert committed["attention"] == state["freeze"]["attention"]
+    assert committed["decision_status_history"] == state["freeze"][
+        "decision_status_history"
+    ]
+    # ... and the review landed on top of it: the committed meta is
+    # exactly the frozen base plus the review (the stale open baseline
+    # did not resurrect).
+    assert committed["review"]["verdict"] == "pass"
+    expected = dict(state["freeze"])
+    expected["review"] = committed["review"]
+    assert committed == expected
+    # The freeze commit bumped the version, the review commit landed on
+    # top of it — nothing overwrote the peer's object.
+    assert state["version"] == 3
+
+
+def test_review_commit_preserves_freeze_committed_between_stat_and_pull(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None
+) -> None:
+    """#1467 round 18 (the bracket's leading edge): the peer freeze lands
+    after the bracket's leading stat and before the pull, so the leading
+    etag is already stale when the trailing stat runs. The body read
+    under a moved version must be discarded the same way — the review
+    commits on the frozen base and the freeze survives."""
+    _enforce_on(monkeypatch)
+    _write_project(tmp_path, task_status="assigned")
+    _write_task_meta(tmp_path, {
+        "task_id": TASK_ID,
+        "project_id": PROJECT_ID,
+        "status": "assigned",
+        "assigned_to": WORKER_A,
+    })
+    submitted = _submit(tmp_path, role="worker", account="@alice:example.test")
+    assert submitted["ok"] is True
+    base = _task_meta(tmp_path)
+
+    state, calls = _r18_versioned_planes(monkeypatch, base, commit_peer_after="stat")
+
+    result = _review(tmp_path, role="critic", account="@bob:example.test", verdict="pass")
+
+    assert calls["pull"] == 2
+    assert state["injected"] is True
+    assert result["ok"] is True
+    committed = state["remote"]
+    assert committed["status"] == "submitted"
+    assert committed["decision_status"] == "frozen"
+    assert committed["attention"] == state["freeze"]["attention"]
+    assert committed["decision_status_history"] == state["freeze"][
+        "decision_status_history"
+    ]
+    assert committed["review"]["verdict"] == "pass"
+    expected = dict(state["freeze"])
+    expected["review"] = committed["review"]
+    assert committed == expected
+    assert state["version"] == 3

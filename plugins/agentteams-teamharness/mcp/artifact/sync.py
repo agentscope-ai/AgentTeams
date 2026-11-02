@@ -748,25 +748,84 @@ def _remote_task_meta_body(arguments: dict[str, Any], task_id: str) -> dict[str,
     return body if isinstance(body, dict) else None
 
 
+_TASK_META_READ_ATTEMPTS = 3
+
+
 def _load_authoritative_task_versioned(
     arguments: dict[str, Any], task_id: str
 ) -> tuple[dict[str, Any], str | None]:
-    """Authoritative task plus the ETag of the version that was read.
+    """Authoritative task plus the ETag of the version it was read under,
+    bound together by a bracket read (stat -> pull -> stat).
 
-    ``mc`` has no atomic read-with-version, so the stat follows the pull
-    immediately: the etag describes the base the caller's mutation is
-    computed from, and the commit guard refuses to write when a peer has
-    committed a newer base in the meantime (#1467 round 17: a freeze
-    persisted between the pull and the whole-directory mirror was erased).
+    The bracket invariant (#1467 round 17 window): ``mc`` has no atomic
+    read-with-version, so the pulled body is bracketed by two version
+    reads that must agree. Only when the trailing stat repeats the
+    leading one is the pulled body the object of that exact version —
+    on MinIO every put is a new object version with a new etag, so an
+    unchanged etag across the pull proves the body came from that
+    version. A body read under a version the trailing stat no longer
+    reports is discarded, and the whole bracket is re-read, bounded to
+    _TASK_META_READ_ATTEMPTS (a writer in flight on every attempt must
+    not loop the read forever).
+
+    This closes the window the previous order left open: the body was
+    pulled FIRST and stat-ed AFTER, so a freeze committed between the
+    pull and the stat bound the OLD body to the NEW etag — the pre-write
+    stat and the post-write read-back both then matched the peer's
+    version, and the whole-directory mirror erased the freeze with a
+    silent success.
+
+    Every failure is fail-closed — there is no unbound fallback, because
+    the guarded commit path writes the whole task directory on top of
+    whatever the base is:
+
+    - stat #1 probe error -> refuse: the remote version is unknown, so
+      the base cannot be verified (transport errors included);
+    - stat #1 confirms the meta absent -> "task not found" (the guarded
+      commit path only writes a task that already exists in shared
+      storage);
+    - pull failure -> refuse: writing on a stale local copy would
+      clobber whatever a newer writer persisted;
+    - stat #2 probe error -> refuse (same as stat #1);
+    - stat #2 != stat #1 (or the object disappeared) -> discard this
+      body and re-run the bracket.
     """
-    task = _load_authoritative_task(arguments, task_id)
-    etag, error = _remote_task_meta_etag(arguments, task_id)
-    if error:
-        raise ValueError(
-            "cannot read the authoritative task version from shared storage; "
-            "refusing to write on an unverified base (retry)"
-        )
-    return task, etag
+    for _ in range(_TASK_META_READ_ATTEMPTS):
+        first, error = _remote_task_meta_etag(arguments, task_id)
+        if error:
+            raise ValueError(
+                "cannot read the authoritative task version from shared storage; "
+                "refusing to write on an unverified base (retry)"
+            )
+        if first is None:
+            raise ValueError("task not found")
+        if not _pull_task(arguments, task_id):
+            raise ValueError(
+                "cannot pull the authoritative task state from shared storage; "
+                "refusing to write on a stale local copy (retry)"
+            )
+        second, error = _remote_task_meta_etag(arguments, task_id)
+        if error:
+            raise ValueError(
+                "cannot read the authoritative task version from shared storage; "
+                "refusing to write on an unverified base (retry)"
+            )
+        if second is None or second != first:
+            # A peer committed between the bracketing stats (the object
+            # can even disappear): the pulled body is not bound to any
+            # version — discard it and re-read the whole bracket.
+            continue
+        task = _read_json(_task_state_path(arguments, task_id))
+        if not task:
+            raise ValueError("task not found")
+        if not task.get("task_id") and task.get("taskId"):
+            task["task_id"] = str(task["taskId"])
+        return task, second
+    raise ValueError(
+        "cannot bind the task body to the version it was read from: "
+        "the task changed concurrently on every read attempt; refusing "
+        "to write on an unverified base (retry)"
+    )
 
 
 def _task_meta_commit_landed(

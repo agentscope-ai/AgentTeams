@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -99,6 +100,176 @@ func TestLifecycleWakeSetsRunningPhase(t *testing.T) {
 	}
 	if updated.Spec.DesiredState() != "Running" {
 		t.Fatalf("expected spec.state Running, got %q", updated.Spec.DesiredState())
+	}
+}
+
+// The restart tests below cover #1473: Restart must fail closed (502, no
+// Start) on any Stop failure other than ErrNotFound, because starting over a
+// still-running container would 304 "already running" and the endpoint would
+// report Running although no restart happened.
+
+func TestLifecycleRestartStopFailureFailsWithoutStart(t *testing.T) {
+	scheme := newLifecycleTestScheme(t)
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"},
+		Status:     v1beta1.WorkerStatus{Phase: "Running"},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.Worker{}).
+		WithObjects(worker).
+		Build()
+	backendStub := &stubWorkerBackend{stopErr: errors.New("docker stop failed (status 500): boom")}
+	handler := NewLifecycleHandler(k8sClient, backend.NewRegistry([]backend.WorkerBackend{backendStub}), "default")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers/alpha-dev/restart", nil)
+	req.SetPathValue("name", "alpha-dev")
+	rec := httptest.NewRecorder()
+
+	handler.Restart(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusBadGateway, rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "stop failed") {
+		t.Fatalf("expected body to contain \"stop failed\", got %s", rec.Body.String())
+	}
+	if backendStub.stopCalls != 1 {
+		t.Fatalf("expected one stop call, got %d", backendStub.stopCalls)
+	}
+	if backendStub.startCalls != 0 {
+		t.Fatalf("expected no start call after a failed stop, got %d", backendStub.startCalls)
+	}
+}
+
+func TestLifecycleRestartStopNotFoundProceedsToStart(t *testing.T) {
+	scheme := newLifecycleTestScheme(t)
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"},
+		Status:     v1beta1.WorkerStatus{Phase: "Running"},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.Worker{}).
+		WithObjects(worker).
+		Build()
+	// Wrap form matches DockerBackend.Stop's 404 branch exactly.
+	backendStub := &stubWorkerBackend{stopErr: fmt.Errorf("%w: worker %q", backend.ErrNotFound, "alpha-dev")}
+	handler := NewLifecycleHandler(k8sClient, backend.NewRegistry([]backend.WorkerBackend{backendStub}), "default")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers/alpha-dev/restart", nil)
+	req.SetPathValue("name", "alpha-dev")
+	rec := httptest.NewRecorder()
+
+	handler.Restart(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if backendStub.stopCalls != 1 {
+		t.Fatalf("expected one stop call, got %d", backendStub.stopCalls)
+	}
+	if backendStub.startCalls != 1 {
+		t.Fatalf("expected one start call, got %d", backendStub.startCalls)
+	}
+}
+
+func TestLifecycleRestartHappyPathStopsThenStarts(t *testing.T) {
+	scheme := newLifecycleTestScheme(t)
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"},
+		Status:     v1beta1.WorkerStatus{Phase: "Running"},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.Worker{}).
+		WithObjects(worker).
+		Build()
+	backendStub := &stubWorkerBackend{}
+	handler := NewLifecycleHandler(k8sClient, backend.NewRegistry([]backend.WorkerBackend{backendStub}), "default")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers/alpha-dev/restart", nil)
+	req.SetPathValue("name", "alpha-dev")
+	rec := httptest.NewRecorder()
+
+	handler.Restart(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if backendStub.stopCalls != 1 {
+		t.Fatalf("expected one stop call, got %d", backendStub.stopCalls)
+	}
+	if backendStub.startCalls != 1 {
+		t.Fatalf("expected one start call, got %d", backendStub.startCalls)
+	}
+	var resp WorkerLifecycleResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Phase != "Running" {
+		t.Fatalf("expected response phase Running, got %q", resp.Phase)
+	}
+}
+
+func TestLifecycleRestartManagerStopFailureFailsWithoutStart(t *testing.T) {
+	scheme := newLifecycleTestScheme(t)
+	mgr := &v1beta1.Manager{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-mgr", Namespace: "default"},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.Manager{}).
+		WithObjects(mgr).
+		Build()
+	backendStub := &stubWorkerBackend{stopErr: errors.New("docker stop failed (status 500): boom")}
+	handler := NewLifecycleHandler(k8sClient, backend.NewRegistry([]backend.WorkerBackend{backendStub}), "default")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/managers/alpha-mgr/restart", nil)
+	req.SetPathValue("name", "alpha-mgr")
+	rec := httptest.NewRecorder()
+
+	handler.RestartManager(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusBadGateway, rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "stop failed") {
+		t.Fatalf("expected body to contain \"stop failed\", got %s", rec.Body.String())
+	}
+	if backendStub.stopCalls != 1 {
+		t.Fatalf("expected one stop call, got %d", backendStub.stopCalls)
+	}
+	if backendStub.startCalls != 0 {
+		t.Fatalf("expected no start call after a failed stop, got %d", backendStub.startCalls)
+	}
+}
+
+func TestLifecycleRestartManagerStopNotFoundProceedsToStart(t *testing.T) {
+	scheme := newLifecycleTestScheme(t)
+	mgr := &v1beta1.Manager{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-mgr", Namespace: "default"},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.Manager{}).
+		WithObjects(mgr).
+		Build()
+	// Wrap form matches DockerBackend.Stop's 404 branch exactly.
+	backendStub := &stubWorkerBackend{stopErr: fmt.Errorf("%w: worker %q", backend.ErrNotFound, "alpha-mgr")}
+	handler := NewLifecycleHandler(k8sClient, backend.NewRegistry([]backend.WorkerBackend{backendStub}), "default")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/managers/alpha-mgr/restart", nil)
+	req.SetPathValue("name", "alpha-mgr")
+	rec := httptest.NewRecorder()
+
+	handler.RestartManager(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if backendStub.startCalls != 1 {
+		t.Fatalf("expected one start call, got %d", backendStub.startCalls)
 	}
 }
 
@@ -354,6 +525,8 @@ func newLifecycleTestScheme(t *testing.T) *runtime.Scheme {
 type stubWorkerBackend struct {
 	status      backend.WorkerStatus
 	statusErr   error
+	stopErr     error
+	startErr    error
 	message     string
 	startCalls  int
 	stopCalls   int
@@ -371,11 +544,11 @@ func (s *stubWorkerBackend) Create(context.Context, backend.CreateRequest) (*bac
 func (s *stubWorkerBackend) Delete(context.Context, string) error { return nil }
 func (s *stubWorkerBackend) Start(_ context.Context, _ string) error {
 	s.startCalls++
-	return nil
+	return s.startErr
 }
 func (s *stubWorkerBackend) Stop(_ context.Context, _ string) error {
 	s.stopCalls++
-	return nil
+	return s.stopErr
 }
 func (s *stubWorkerBackend) Status(context.Context, string) (*backend.WorkerResult, error) {
 	s.statusCalls++

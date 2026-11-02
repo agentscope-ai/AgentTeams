@@ -154,8 +154,17 @@ func (h *LifecycleHandler) Restart(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusServiceUnavailable, "no worker backend available")
 		return
 	}
-	// Best-effort stop: a missing container means there is nothing to stop.
-	_ = b.Stop(r.Context(), name)
+	// Stop, then start. Only a missing container (ErrNotFound) is ignored:
+	// there is nothing to stop and the start creates the container. Any
+	// other stop failure means the old container is (or may still be)
+	// running, so a subsequent start 304s "already running" and the whole
+	// request would report Running although no restart happened — a lie
+	// the reconciler cannot repair, because Running is exactly the desired
+	// declarative state. Fail without proceeding to start.
+	if err := b.Stop(r.Context(), name); err != nil && !errors.Is(err, backend.ErrNotFound) {
+		httputil.WriteError(w, http.StatusBadGateway, "restart worker: stop failed: "+err.Error())
+		return
+	}
 	if err := b.Start(r.Context(), name); err != nil {
 		if errors.Is(err, backend.ErrNotFound) {
 			h.setReady(name, false)
@@ -211,7 +220,11 @@ func (h *LifecycleHandler) RestartManager(w http.ResponseWriter, r *http.Request
 	}
 
 	containerName := h.resourcePrefix.ManagerPodName(name)
-	_ = wb.Stop(r.Context(), containerName)
+	// Same contract as Restart: only a missing container is ignored.
+	if err := wb.Stop(r.Context(), containerName); err != nil && !errors.Is(err, backend.ErrNotFound) {
+		httputil.WriteError(w, http.StatusBadGateway, "restart manager: stop failed: "+err.Error())
+		return
+	}
 	if err := wb.Start(r.Context(), containerName); err != nil {
 		if errors.Is(err, backend.ErrNotFound) {
 			httputil.WriteJSON(w, http.StatusOK, map[string]string{"name": name, "phase": "Restarting"})

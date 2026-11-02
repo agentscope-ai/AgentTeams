@@ -1,0 +1,24 @@
+{
+  "version": "1.0.0",
+  "status": "defined-not-enforced",
+  "description": "Claim/lease semantics for work claims. Data only: no lease mechanism exists in mcp/server.py @ d8332e0a - the 'defined' block is the W1 target definition, not a description of enforced behavior.",
+  "current": {
+    "lease_in_code": false,
+    "evidence": "no claim/lease code path in the TeamHarness MCP; the only TTL constant is MATRIX_ATTACHMENT_CONTEXT_TTL_SECONDS = 30 * 60 (Matrix attachment-context cache, unrelated to work claims)",
+    "current_write_mutex": "per-file atomic replace (same-dir tempfile + fsync + os.replace in _atomic_write_text) plus an in-process per-path threading.Lock for session records (SESSION_WRITE_LOCKS); no cross-process lockfile and no CAS check in the Python write path; the design contract (project-task-runtime-design.md) names single-writer + compare-and-swap (CAS) as the cross-process boundary"
+  },
+  "defined": {
+    "ttl_seconds": {
+      "min": 60,
+      "max": 3600,
+      "default": 300
+    },
+    "renew": "renew extends the expiry from the renew time; a renew is idempotent for the same holder + claim identity and never extends more than ttl_seconds from the most recent successful renew; a renew after expiry fails and the claim must be re-acquired",
+    "expiry": "lazy: there is no background reaper; a claim is treated as expired when an acquire/renew/operate check reads its expiry timestamp in the past, and the next acquire may take the work",
+    "mutex": "cas"
+  },
+  "rationale": {
+    "mutex": "the design contract already mandates single-writer + CAS for cross-process state changes, so the lease mutex reuses cas (conditional write on the claim record) instead of introducing lockfiles",
+    "ttl_seconds": "proposed range around a 300s default: short enough that a dead holder's claim frees within one leader wake-up cycle, long enough to cover a normal working turn; W1 proposal, no code source"
+  }
+}

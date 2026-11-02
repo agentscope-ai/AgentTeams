@@ -1,4 +1,5 @@
-# room/assignee canonicalization shared by project and room fragments (W1-a2: real module)
+# identifier canonicalization shared by project / room / lifecycle
+# fragments (W1-a2: real module)
 from __future__ import annotations
 
 from typing import Any
@@ -28,6 +29,26 @@ def _canonical_assignee(value: Any) -> str:
     if text.startswith("@") and ":" in text:
         localpart, _, server = text[1:].partition(":")
         return f"@{localpart.casefold()}:{server}"
+    return text.casefold()
+
+
+def _canonical_account(value: Any) -> str:
+    """Identity comparison key for account identifiers (#1467 round 8).
+
+    The ONE canonicalization shared by the approval write path (the
+    server-written ``resolvedActor`` marker) and the r1 self-approval
+    comparison, so both paths reduce an identity the same way: a
+    Matrix MXID (@localpart:server) reduces to its localpart, and the
+    result is casefolded (the localpart is case-insensitive per the
+    Matrix spec) — so ``@worker:review.test`` and the runtimeName
+    ``worker`` of the same member are the same identity. The server
+    part is dropped on purpose: a runtime member identity is a bare
+    name, never an MXID, and the localpart is the identity both sides
+    can spell. A bare account is compared casefolded as-is. Empty
+    input stays empty: no identity is never an identity."""
+    text = str(value or "").strip()
+    if text.startswith("@") and ":" in text:
+        text = text[1:].partition(":")[0]
     return text.casefold()
 
 

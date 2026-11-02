@@ -30,7 +30,7 @@ from mcp.artifact import filesync, publish, sync
 
 from mcp.common import config, constants, errors, identity, io, payload, paths, refs, tool_schemas
 
-from mcp.lifecycle import signal_events, taskflow, transitions
+from mcp.lifecycle import review, signal_events, taskflow, transitions
 
 from mcp.project import flow, state
 
@@ -44,9 +44,9 @@ from mcp import roomflow_tool
 
 refs.register_modules((
     constants, tool_schemas, paths, config, io, payload, errors, identity,
-    transitions, signal_events, taskflow, state, flow, filesync, publish,
-    sync, mention, matrix, rooms, notify, route, message, message_tool,
-    roomflow_tool,
+    transitions, signal_events, review, taskflow, state, flow, filesync,
+    publish, sync, mention, matrix, rooms, notify, route, message,
+    message_tool, roomflow_tool,
 ))
 
 # Every test loads its own server instance (function-scoped) and the bind
@@ -55,7 +55,7 @@ refs.register_modules((
 # instance stay visible at every proxy call site.
 refs.bind(globals())
 
-from mcp.common.config import _load_runtime_config, _section
+from mcp.common.config import _load_runtime_config, _protocol_enforce_enabled, _section
 from mcp.common.constants import MESSAGE_TOOL_BLOCKED_ROLES, TOOL_NAMES
 from mcp.common.tool_schemas import TOOL_SCHEMAS
 from mcp.lifecycle.transitions import _append_transition_history, _assert_transition, _transition_actor
@@ -173,6 +173,35 @@ def _runtime_role() -> str:
     if not role:
         role = str(_section(_load_runtime_config(), "member").get("role") or "").strip()
     return _normalize_role(role)
+
+def _runtime_identity() -> str:
+    """The trusted runtime member identity (the account part of the
+    transition actor). Read from operator-set runtime data only, never
+    from a tool payload field (#1467 round 6: the identity used for an
+    authorization decision comes from the runtime, and two different
+    members must never collapse into one identity).
+
+    Resolution order (first non-empty wins): the AGENTTEAMS_WORKER_NAME
+    env var (the name env the message/trace layers already use), then
+    the runtime config member block: member.name, member.runtimeName,
+    then the matrixUserId localpart ('@user:server' -> 'user').
+    Normalized (strip, lowercase); '' when unknown — only then may the
+    payload's account_id carry the account (provenance for local /
+    test runs), and it can never override a trusted identity."""
+    identity = os.getenv("AGENTTEAMS_WORKER_NAME", "").strip()
+    if not identity:
+        member = _section(_load_runtime_config(), "member")
+        identity = (
+            str(member.get("name") or "").strip()
+            or str(member.get("runtimeName") or member.get("runtime_name") or "").strip()
+        )
+        if not identity:
+            user_id = str(
+                member.get("matrixUserId") or member.get("matrix_user_id") or ""
+            ).strip()
+            if user_id:
+                identity = user_id.lstrip("@").split(":", 1)[0].strip()
+    return identity.lower()
 
 def _visible_tool_names() -> list[str]:
     if _message_tool_blocked_for_runtime_role():

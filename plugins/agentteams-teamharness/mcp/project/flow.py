@@ -39,6 +39,9 @@ from mcp.common.payload import (
 )
 from mcp.common.paths import _project_dir, _project_state_path, _task_dir, _task_state_path
 from mcp.artifact.publish import _attachment_parent_event_id
+from mcp.artifact.sync import _load_authoritative_task_optional
+from mcp.common.config import _protocol_enforce_enabled
+from mcp.lifecycle.review import ProtocolGuardError, _protocol_guard_for_accept
 from mcp.lifecycle.signal_events import _emit_signal_event, _list_events, _project_audit_seq
 # taskflow keeps NO module-level import of this module (its 9 flow names
 # are refs proxies), so this direction of the pair is cycle-free.
@@ -229,6 +232,24 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
     if not project:
         raise ValueError("project not found")
     task_meta = _read_json(_task_state_path(arguments, task_id))
+    # W2 round 10 (#1467): resolve the authoritative task INDEPENDENTLY of
+    # the local cache. Round 9 pulled only when a local copy existed, so a
+    # fresh Leader workspace skipped the pull — and every acceptance gate
+    # below — while the task existed in shared storage: an r1 task with no
+    # review and no human approval was accepted with nodeStatus completed
+    # while the Task stayed submitted (the maintainer's round-10 repro).
+    # A failed pull still fails closed; a genuinely absent task keeps the
+    # legacy no-task path ONLY while protocol enforcement is off — under
+    # enforcement the acceptance must not bypass the gates.
+    authoritative = _load_authoritative_task_optional(arguments, task_id)
+    if authoritative is not None:
+        task_meta = authoritative
+    elif _protocol_enforce_enabled():
+        raise ProtocolGuardError(
+            "task_not_found",
+            "accept_task_result requires an authoritative task record while "
+            "protocol enforcement is enabled",
+        )
     task_project_id = _first_text(task_meta.get("project_id"), task_meta.get("projectId"))
     if task_project_id and task_project_id != project_id:
         raise ValueError("task does not belong to project")
@@ -278,11 +299,16 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
                 )
             legacy_identity_persisted = True
     result_status_value = payload.get("resultStatus") or payload.get("result_status")
+    accepted = _payload_bool(payload.get("accepted"), True)
     if task_meta:
         persisted_result_status = str(task_meta.get("result_status") or "")
         if str(result_status_value or "SUCCESS").strip() != persisted_result_status:
             raise ValueError("resultStatus does not match the submitted task result")
-    accepted = _payload_bool(payload.get("accepted"), True)
+        # W2 protocol gates (protocol.enforce switch, default off): a
+        # missing / non-passing review record or a missing r1 approval
+        # record refuses a POSITIVE acceptance (error_code surface); a
+        # rejection / return-for-revision (accepted=False) is never gated.
+        _protocol_guard_for_accept(task_meta, accepted)
     node_status = _accepted_node_status(result_status_value)
     if not accepted and node_status == "completed":
         result_status_value = "REVISION_NEEDED"
@@ -1176,6 +1202,14 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 )
             result["notificationNeeded"] = _notification_needed(action, project)
             return result
+    except ProtocolGuardError as exc:
+        return {
+            "ok": False,
+            "tool": "projectflow",
+            "action": action,
+            "error_code": exc.error_code,
+            "message": exc.message,
+        }
     except ValueError as exc:
         return {"ok": False, "tool": "projectflow", "action": action, "error": str(exc)}
 

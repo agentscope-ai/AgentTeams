@@ -114,9 +114,26 @@ contains '-e AGENTTEAMS_FS_ENDPOINT=http://rustfs:9000'
 contains '-e AGENTTEAMS_FS_BUCKET=b'
 contains '-e AGENTTEAMS_FS_ACCESS_KEY=ak'
 contains '-e AGENTTEAMS_FS_SECRET_KEY=sk'
-contains '-e AGENTTEAMS_STORAGE_PREFIX=agentteams/agentteams-storage'
+# The prefix model is "<mc alias>/<bucket>": the bucket segment must track
+# the configured bucket, or the controller's object paths address a
+# different (nonexistent) bucket than the one it provisions.
+contains '-e AGENTTEAMS_STORAGE_PREFIX=agentteams/b'
+not_contains 'agentteams/agentteams-storage'
 not_contains 'FS_ENDPOINT=http://127.0.0.1:9000'
 finish "s3_full"
+
+# 2b. provider=s3 with a custom bucket name: the prefix follows the bucket.
+run_env \
+    AGENTTEAMS_STORAGE_PROVIDER=s3 \
+    AGENTTEAMS_FS_ENDPOINT=http://rustfs:9000 \
+    AGENTTEAMS_FS_BUCKET=review-external-bucket \
+    AGENTTEAMS_FS_ACCESS_KEY=ak \
+    AGENTTEAMS_FS_SECRET_KEY=sk
+problems=""
+[ "${RUN_RC}" = "0" ] || note_problem "rc=${RUN_RC} (want 0)"
+contains '-e AGENTTEAMS_STORAGE_PREFIX=agentteams/review-external-bucket'
+contains '-e AGENTTEAMS_MINIO_BUCKET=review-external-bucket'
+finish "s3_custom_bucket_prefix_follows_bucket"
 
 # 3. provider=s3 with the secret key missing: non-zero rc, names the var.
 run_env \

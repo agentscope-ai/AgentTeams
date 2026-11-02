@@ -82,6 +82,96 @@ func TestLoadConfigEmbeddedPreservesWorkerAIGatewayURL(t *testing.T) {
 	}
 }
 
+// TestLoadConfigEmbeddedExternalS3WorkerStorageWiring feeds the exact env
+// values the embedded installer emits for an external-S3 controller (custom
+// bucket) and asserts the full wiring: child runtimes keep the external
+// endpoint, Matrix still routes through the controller, and every storage
+// path (mc prefix, admin-client bucket, worker env) addresses the same
+// bucket.
+func TestLoadConfigEmbeddedExternalS3WorkerStorageWiring(t *testing.T) {
+	t.Setenv("AGENTTEAMS_KUBE_MODE", "embedded")
+	t.Setenv("AGENTTEAMS_CONTROLLER_URL", "http://agentteams-controller:8090")
+	t.Setenv("AGENTTEAMS_MATRIX_URL", "http://127.0.0.1:6167")
+	t.Setenv("AGENTTEAMS_STORAGE_PROVIDER", "s3")
+	t.Setenv("AGENTTEAMS_FS_ENDPOINT", "http://s3.external.test:9000")
+	t.Setenv("AGENTTEAMS_FS_BUCKET", "review-external-bucket")
+	t.Setenv("AGENTTEAMS_FS_ACCESS_KEY", "test-access-key")
+	t.Setenv("AGENTTEAMS_FS_SECRET_KEY", "test-secret-key")
+
+	cfg := LoadConfig()
+
+	// The external S3 endpoint must survive for child runtimes; rewriting
+	// it to the controller host sends workers to the embedded MinIO sidecar.
+	if got := cfg.WorkerEnv.FSEndpoint; got != "http://s3.external.test:9000" {
+		t.Fatalf("WorkerEnv.FSEndpoint = %q, want the external S3 endpoint preserved", got)
+	}
+	// Matrix (Tuwunel) still runs in the controller container and keeps the
+	// controller-host rewrite.
+	if got := cfg.WorkerEnv.MatrixURL; got != "http://agentteams-controller:6167" {
+		t.Fatalf("WorkerEnv.MatrixURL = %q, want http://agentteams-controller:6167", got)
+	}
+	// One bucket for the admin client, the mc CLI path and the minio-go
+	// SDK write: the prefix's bucket segment must track FS_BUCKET.
+	if got := cfg.WorkerEnv.FSBucket; got != "review-external-bucket" {
+		t.Fatalf("WorkerEnv.FSBucket = %q, want review-external-bucket", got)
+	}
+	if got := cfg.WorkerEnv.StoragePrefix; got != "agentteams/review-external-bucket" {
+		t.Fatalf("WorkerEnv.StoragePrefix = %q, want agentteams/review-external-bucket", got)
+	}
+	ossCfg := cfg.OSSConfig()
+	if got := ossCfg.Bucket; got != "review-external-bucket" {
+		t.Fatalf("OSSConfig().Bucket = %q, want review-external-bucket", got)
+	}
+	if got := ossCfg.StoragePrefix; got != "agentteams/review-external-bucket" {
+		t.Fatalf("OSSConfig().StoragePrefix = %q, want agentteams/review-external-bucket", got)
+	}
+	if got := ossCfg.Endpoint; got != "http://s3.external.test:9000" {
+		t.Fatalf("OSSConfig().Endpoint = %q, want the external S3 endpoint", got)
+	}
+}
+
+// TestLoadConfigEmbeddedMinIOStillRewritesEndpoint is the control case:
+// with the embedded MinIO provider the controller-host rewrite must stay,
+// because the sidecar is only reachable through the controller container
+// on the Docker network.
+func TestLoadConfigEmbeddedMinIOStillRewritesEndpoint(t *testing.T) {
+	t.Setenv("AGENTTEAMS_KUBE_MODE", "embedded")
+	t.Setenv("AGENTTEAMS_CONTROLLER_URL", "http://agentteams-controller:8090")
+	t.Setenv("AGENTTEAMS_STORAGE_PROVIDER", "minio")
+	t.Setenv("AGENTTEAMS_FS_ENDPOINT", "http://127.0.0.1:9000")
+
+	cfg := LoadConfig()
+
+	if got := cfg.WorkerEnv.FSEndpoint; got != "http://agentteams-controller:9000" {
+		t.Fatalf("WorkerEnv.FSEndpoint = %q, want the embedded-MinIO rewrite retained", got)
+	}
+}
+
+// TestLoadConfigStoragePrefixDefaultsTrackBucket covers the controller
+// side (no embedded rewrite involved): without an explicit
+// AGENTTEAMS_STORAGE_PREFIX the default is derived from the configured
+// bucket, and the default bucket keeps the historical prefix value.
+func TestLoadConfigStoragePrefixDefaultsTrackBucket(t *testing.T) {
+	t.Setenv("AGENTTEAMS_KUBE_MODE", "incluster")
+	t.Setenv("AGENTTEAMS_FS_BUCKET", "custom-bucket")
+
+	cfg := LoadConfig()
+
+	if got := cfg.OSSStoragePrefix; got != "agentteams/custom-bucket" {
+		t.Fatalf("OSSStoragePrefix = %q, want agentteams/custom-bucket", got)
+	}
+	if got := cfg.WorkerEnv.StoragePrefix; got != "agentteams/custom-bucket" {
+		t.Fatalf("WorkerEnv.StoragePrefix = %q, want agentteams/custom-bucket", got)
+	}
+
+	// Control: no FS_BUCKET override -> the historical default prefix.
+	t.Setenv("AGENTTEAMS_FS_BUCKET", "")
+	cfg = LoadConfig()
+	if got := cfg.OSSStoragePrefix; got != "agentteams/agentteams-storage" {
+		t.Fatalf("OSSStoragePrefix (default bucket) = %q, want agentteams/agentteams-storage", got)
+	}
+}
+
 func TestLoadConfigAppliesManagerSpec(t *testing.T) {
 	t.Setenv("AGENTTEAMS_MANAGER_SPEC", `{
 		"model":"qwen-max",

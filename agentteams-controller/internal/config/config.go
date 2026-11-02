@@ -277,6 +277,15 @@ func LoadConfig() *Config {
 		containerPrefix = resourcePrefix + "worker-"
 	}
 
+	// Object-storage settings share one authoritative bucket. The storage
+	// prefix model is "<mc alias>/<bucket>" (see oss.Config.StoragePrefix),
+	// so its default must track AGENTTEAMS_FS_BUCKET: the admin client
+	// (EnsureBucket/EnsureUser), the mc CLI paths and the minio-go
+	// conditional writes must all address the same bucket. An explicit
+	// AGENTTEAMS_STORAGE_PREFIX still wins over the derivation.
+	storageBucket := envOrDefault("AGENTTEAMS_FS_BUCKET", "agentteams-storage")
+	defaultStoragePrefix := "agentteams/" + storageBucket
+
 	cfg := &Config{
 		KubeMode:        kubeMode,
 		DataDir:         dataDir,
@@ -322,7 +331,7 @@ func LoadConfig() *Config {
 		GWModelAPIID: os.Getenv("AGENTTEAMS_GW_MODEL_API_ID"),
 		GWEnvID:      os.Getenv("AGENTTEAMS_GW_ENV_ID"),
 
-		OSSBucket: envOrDefault("AGENTTEAMS_FS_BUCKET", "agentteams-storage"),
+		OSSBucket: storageBucket,
 		WorkerDepsStorageBucket: firstNonEmpty(
 			os.Getenv("AGENTTEAMS_WORKER_DEPS_STORAGE_BUCKET"),
 			os.Getenv("AGENTTEAMS_FS_BUCKET"),
@@ -379,7 +388,7 @@ func LoadConfig() *Config {
 		MatrixAppServiceSenderLocalpart:    envOrDefault("AGENTTEAMS_MATRIX_APPSERVICE_SENDER_LOCALPART", "agentteams-controller"),
 		MatrixAppServiceUserNamespaceRegex: os.Getenv("AGENTTEAMS_MATRIX_APPSERVICE_USER_NAMESPACE_REGEX"),
 
-		OSSStoragePrefix: envOrDefault("AGENTTEAMS_STORAGE_PREFIX", "agentteams/agentteams-storage"),
+		OSSStoragePrefix: envOrDefault("AGENTTEAMS_STORAGE_PREFIX", defaultStoragePrefix),
 
 		DefaultModel:       envOrDefault("AGENTTEAMS_DEFAULT_MODEL", "qwen3.6-plus"),
 		EmbeddingModel:     os.Getenv("AGENTTEAMS_EMBEDDING_MODEL"),
@@ -409,8 +418,8 @@ func LoadConfig() *Config {
 		WorkerEnv: WorkerEnvDefaults{
 			MatrixDomain:         envOrDefault("AGENTTEAMS_MATRIX_DOMAIN", "matrix-local.agentteams.io:8080"),
 			FSEndpoint:           os.Getenv("AGENTTEAMS_FS_ENDPOINT"),
-			FSBucket:             envOrDefault("AGENTTEAMS_FS_BUCKET", "agentteams-storage"),
-			StoragePrefix:        envOrDefault("AGENTTEAMS_STORAGE_PREFIX", "agentteams/agentteams-storage"),
+			FSBucket:             storageBucket,
+			StoragePrefix:        envOrDefault("AGENTTEAMS_STORAGE_PREFIX", defaultStoragePrefix),
 			StorageProvider:      envOrDefault("AGENTTEAMS_STORAGE_PROVIDER", "minio"),
 			ControllerURL:        os.Getenv("AGENTTEAMS_CONTROLLER_URL"),
 			AIGatewayURL:         envOrDefault("AGENTTEAMS_AI_GATEWAY_URL", "http://aigw-local.agentteams.io:8080"),
@@ -441,7 +450,13 @@ func LoadConfig() *Config {
 	if cfg.KubeMode == "embedded" {
 		if ctrlHost := extractHost(cfg.WorkerEnv.ControllerURL); ctrlHost != "" {
 			cfg.WorkerEnv.MatrixURL = replaceHost(cfg.WorkerEnv.MatrixURL, ctrlHost)
-			cfg.WorkerEnv.FSEndpoint = replaceHost(cfg.WorkerEnv.FSEndpoint, ctrlHost)
+			// The controller-host rewrite is only valid for the embedded
+			// MinIO sidecar. External S3/OSS endpoints (e.g. RustFS) must
+			// stay reachable as configured; rewriting them sends workers
+			// back to the embedded MinIO and creates a storage split-brain.
+			if provider := strings.ToLower(strings.TrimSpace(cfg.WorkerEnv.StorageProvider)); provider == "" || provider == "minio" {
+				cfg.WorkerEnv.FSEndpoint = replaceHost(cfg.WorkerEnv.FSEndpoint, ctrlHost)
+			}
 		}
 	}
 	// S3/MinIO API is never on the Higress HTTP gateway port (8080). Misconfigured

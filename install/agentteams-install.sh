@@ -150,10 +150,17 @@ _controller_admin_url_env_args() {
 }
 
 _controller_storage_prefix() {
-    if _use_legacy_image_env "$1"; then
+    # $1 = image version, $2 = resolved bucket (optional). The prefix model
+    # is "<mc alias>/<bucket>": the bucket segment must track the configured
+    # external bucket so the mc CLI paths and the S3 backend address the
+    # same bucket. Legacy images only support the built-in MinIO (the
+    # storage resolver rejects s3 for them), so they keep the fixed prefix.
+    local version="$1"
+    local bucket="${2:-agentteams-storage}"
+    if _use_legacy_image_env "${version}"; then
         printf '%s%s' 'hic' 'law/agentteams-storage'
     else
-        printf '%s' 'agentteams/agentteams-storage'
+        printf 'agentteams/%s' "${bucket}"
     fi
 }
 
@@ -285,7 +292,7 @@ if [ "${AGENTTEAMS_PRINT_CONTROLLER_ENV:-0}" = "1" ] || [ "${1:-}" = "--print-co
     AGENTTEAMS_VERSION="${AGENTTEAMS_VERSION:-latest}"
     _resolve_controller_storage
     _print_prefix="$(_controller_env_prefix "${AGENTTEAMS_VERSION}")"
-    _print_storage_prefix="$(_controller_storage_prefix "${AGENTTEAMS_VERSION}")"
+    _print_storage_prefix="$(_controller_storage_prefix "${AGENTTEAMS_VERSION}" "${_storage_bucket}")"
     printf -- '-e %sSTORAGE_PROVIDER=%s\n' "${_print_prefix}" "${_storage_provider}"
     printf -- '-e %sMINIO_ENDPOINT=%s\n' "${_print_prefix}" "${_storage_endpoint}"
     printf -- '-e %sMINIO_BUCKET=%s\n' "${_print_prefix}" "${_storage_bucket}"
@@ -4620,10 +4627,12 @@ CREDEOF
         # Controller env args
         local _ctrl_env_prefix
         _ctrl_env_prefix="$(_controller_env_prefix "${AGENTTEAMS_VERSION}")"
-        local _storage_prefix
-        _storage_prefix="$(_controller_storage_prefix "${AGENTTEAMS_VERSION}")"
         # Storage backend values (validated before any container starts).
+        # Must run before the prefix derivation below: the prefix's bucket
+        # segment has to track the resolved external bucket.
         _resolve_controller_storage
+        local _storage_prefix
+        _storage_prefix="$(_controller_storage_prefix "${AGENTTEAMS_VERSION}" "${_storage_bucket}")"
         local _ctrl_env_args=(
             -e "${_ctrl_env_prefix}ADMIN_USER=${AGENTTEAMS_ADMIN_USER}"
             -e "${_ctrl_env_prefix}ADMIN_PASSWORD=${AGENTTEAMS_ADMIN_PASSWORD}"

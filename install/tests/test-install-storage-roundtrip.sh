@@ -51,6 +51,17 @@ else
     fail "save happens before the storage resolver (resolve=${resolve_line:-none} write=${write_line:-none})"
 fi
 
+# The docker-run block derives STORAGE_PREFIX after resolving storage, so
+# the prefix's bucket segment tracks the resolved external bucket. (The
+# 8-space indent selects the run block; the print/save blocks use 4.)
+resolve_run="$(grep -n '^        _resolve_controller_storage$' "${INSTALLER}" | tail -1 | cut -d: -f1)"
+prefix_run="$(grep -n '_storage_prefix="\$(_controller_storage_prefix' "${INSTALLER}" | tail -1 | cut -d: -f1)"
+if [ -n "${resolve_run}" ] && [ -n "${prefix_run}" ] && [ "${resolve_run}" -lt "${prefix_run}" ]; then
+    pass "run block derives the storage prefix after the resolver"
+else
+    fail "run block prefix derived before the resolver (resolve=${resolve_run:-none} prefix=${prefix_run:-none})"
+fi
+
 # The writer block, extracted from the resolve call it must contain.
 eof_line="$(awk -v s="${write_line:-0}" 'NR>=s && /^EOF$/{print NR; exit}' "${INSTALLER}")"
 if [ -n "${resolve_line}" ] && [ -n "${eof_line}" ] && [ "${resolve_line}" -lt "${eof_line}" ]; then

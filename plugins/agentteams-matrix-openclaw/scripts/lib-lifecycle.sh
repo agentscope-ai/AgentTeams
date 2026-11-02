@@ -23,6 +23,11 @@
 #   AGENTTEAMS_MATRIX_SOCKET       sidecar socket path written to the config
 #                                  (default ${AGENTTEAMS_MATRIX_STATE_DIR:-$HOME/.agentteams/matrix}/sidecar.sock)
 #   AGENTTEAMS_MATRIX_AGENT        agent name written to the config (default: agentteams)
+#   AGENTTEAMS_MATRIX_URL / _USER / _TOKEN
+#                                  when all three are set, install.sh also
+#                                  writes the sidecar config
+#                                  (STATE_DIR/sidecar-config.json, 0600) that
+#                                  the production sidecar (sidecar.sh) reads
 
 PLUGIN_ID="agentteams-matrix"
 
@@ -108,6 +113,17 @@ lifecycle_build_release() {
   cp -a "${PLUGIN_ROOT}/dist" "$release_dir/"
   cp -a "${PLUGIN_ROOT}/src" "$release_dir/"
   cp -a "${PLUGIN_ROOT}/scripts" "$release_dir/"
+  # The production Python sidecar and its operator entry ship with the
+  # release (so a rollback can also restore them). The source tree may lack
+  # them (e.g. a capture that only copied the node files), so copy only what
+  # exists; the entry is made executable in the materialized release.
+  if [ -d "${PLUGIN_ROOT}/sidecar" ]; then
+    cp -a "${PLUGIN_ROOT}/sidecar" "$release_dir/"
+  fi
+  if [ -f "${PLUGIN_ROOT}/sidecar.sh" ]; then
+    cp -a "${PLUGIN_ROOT}/sidecar.sh" "$release_dir/"
+    chmod +x "$release_dir/sidecar.sh"
+  fi
   # Full node_modules copy keeps the release self-contained: the managed
   # install (and any later rollback to it) resolves openclaw/plugin-sdk/*
   # without the source checkout.
@@ -146,6 +162,78 @@ lifecycle_apply_channel_config() {
   if [ -n "$mode" ]; then chmod "$mode" "$tmp"; fi
   mv "$tmp" "$OPENCLAW_CONFIG"
   lifecycle_log "Wrote channels.${PLUGIN_ID} (socketPath=${SOCKET_PATH}, agent=${AGENT_NAME}) to ${OPENCLAW_CONFIG}"
+}
+
+# Write the sidecar config (credentials + paths) to
+# STATE_DIR/sidecar-config.json (0600). This is the production sidecar's
+# config; it is separate from the OpenClaw channel config and is left alone
+# by upgrade/rollback (it holds the operator's credentials).
+#
+# The access token reaches the writer only through the environment — never on
+# an argv line, in the script, or in the log. When any of the three
+# credentials is missing this logs a warning and writes nothing (the
+# installer continues; the sidecar must then be configured by hand).
+lifecycle_write_sidecar_config() {
+  local url="${AGENTTEAMS_MATRIX_URL:-}"
+  local user="${AGENTTEAMS_MATRIX_USER:-}"
+  local token="${AGENTTEAMS_MATRIX_TOKEN:-}"
+  local target="${STATE_DIR}/sidecar-config.json"
+
+  if [ -z "$url" ] || [ -z "$user" ] || [ -z "$token" ]; then
+    lifecycle_log "WARN: sidecar config not written — set AGENTTEAMS_MATRIX_URL, AGENTTEAMS_MATRIX_USER and AGENTTEAMS_MATRIX_TOKEN to have install.sh write ${target} (or write it by hand; see README.md, 'Running the sidecar'). The sidecar cannot start until it exists."
+    return 0
+  fi
+
+  lifecycle_require_cmd python3
+  mkdir -p "$STATE_DIR"
+  chmod 700 "$STATE_DIR" 2>/dev/null || true
+
+  local tmp
+  tmp="$(mktemp "${STATE_DIR}/.sidecar-config.XXXXXX")"
+  if ! AGENTTEAMS_MATRIX_URL="$url" \
+    AGENTTEAMS_MATRIX_USER="$user" \
+    AGENTTEAMS_MATRIX_TOKEN="$token" \
+    AGENTTEAMS_MATRIX_SOCKET="$SOCKET_PATH" \
+    AGENTTEAMS_MATRIX_AGENT="$AGENT_NAME" \
+    python3 - > "$tmp" <<'PY'
+import json, os, sys
+
+data = {
+    "homeserver_url": os.environ["AGENTTEAMS_MATRIX_URL"],
+    "agent_user": os.environ["AGENTTEAMS_MATRIX_USER"],
+    "agent_access_token": os.environ["AGENTTEAMS_MATRIX_TOKEN"],
+    "socket_path": os.environ["AGENTTEAMS_MATRIX_SOCKET"],
+    "agent_name": os.environ["AGENTTEAMS_MATRIX_AGENT"],
+}
+sys.stdout.write(json.dumps(data, indent=2) + "\n")
+PY
+  then
+    rm -f "$tmp"
+    # Return, do not exit: a sidecar-config write failure must not fail an
+    # otherwise successful plugin install (the caller downgrades it to a WARN).
+    lifecycle_log "ERROR: failed to write the sidecar config (${target})"
+    return 1
+  fi
+  chmod 600 "$tmp"
+  mv "$tmp" "$target"
+  lifecycle_log "Wrote sidecar config (0600) at ${target}; start the sidecar with: ${PLUGIN_ROOT}/sidecar.sh start"
+}
+
+# A sidecar started before a release switch keeps executing the code of the
+# release it was started from. The lifecycle scripts never manage the
+# sidecar process — they only tell the operator to restart it ($1 names the
+# release the operator should move to).
+lifecycle_warn_sidecar_restart() {
+  local pid_file="${STATE_DIR}/sidecar.pid" pid
+  [ -f "$pid_file" ] || return 0
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  case "$pid" in
+    '' | *[!0-9]*) return 0 ;;
+  esac
+  if kill -0 "$pid" 2>/dev/null; then
+    lifecycle_log "WARN: the sidecar is still running (pid ${pid}); run sidecar.sh restart so it picks up ${1}"
+  fi
+  return 0
 }
 
 # Remove our owned config sections (uninstall --purge).

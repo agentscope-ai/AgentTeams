@@ -27,6 +27,9 @@ source "${SCRIPT_DIR}/scripts/lib-lifecycle.sh"
 
 lifecycle_require_cmd "$OPENCLAW_BIN"
 
+# The sidecar config (STATE_DIR/sidecar-config.json) holds the operator's
+# credentials and is independent of the release, so a rollback never touches
+# it — edit it by hand if the previous release used a different socket path.
 prev_release="$(lifecycle_read_marker "$PREVIOUS_FILE")"
 if [ -z "$prev_release" ]; then
   lifecycle_fail "no previous release recorded (${PREVIOUS_FILE}); nothing to roll back to"
@@ -46,3 +49,4 @@ lifecycle_log "Rolled back ${PLUGIN_ID} to release: ${prev_release}"
 if [ -n "$current_active" ] && [ "$current_active" != "$prev_release" ]; then
   lifecycle_log "Superseded release kept at: ${current_active} (upgrade.sh moves forward again)"
 fi
+lifecycle_warn_sidecar_restart "the rolled-back release"

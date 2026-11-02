@@ -75,4 +75,8 @@ else
   lifecycle_log "Channel config kept (re-run with --purge to remove channels.${PLUGIN_ID})"
 fi
 
+if [ -f "${STATE_DIR}/sidecar-config.json" ]; then
+  lifecycle_log "Sidecar config kept at ${STATE_DIR}/sidecar-config.json (it holds your credentials; remove it by hand if you no longer run the sidecar)"
+fi
+
 lifecycle_log "Uninstall complete. Release directories kept under ${RELEASES_DIR}."

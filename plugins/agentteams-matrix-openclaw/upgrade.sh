@@ -24,6 +24,9 @@ source "${SCRIPT_DIR}/scripts/lib-lifecycle.sh"
 
 lifecycle_require_cmd "$OPENCLAW_BIN"
 
+# The sidecar config (STATE_DIR/sidecar-config.json) holds the operator's
+# credentials and is independent of the release, so an upgrade never touches
+# it — re-run install.sh to (re)write it, or edit it by hand.
 release_dir="$(lifecycle_build_release fresh)"
 old_active="$(lifecycle_read_marker "$ACTIVE_FILE")"
 
@@ -42,3 +45,4 @@ if [ -n "$old_active" ] && [ "$old_active" != "$release_dir" ]; then
 else
   lifecycle_log "No previous release to keep (first tracked install)."
 fi
+lifecycle_warn_sidecar_restart "the new release"

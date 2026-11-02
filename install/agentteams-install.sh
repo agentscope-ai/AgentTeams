@@ -4136,6 +4136,12 @@ install_manager() {
         JVM_ARGS="-XX:+UnlockDiagnosticVMOptions -XX:-UseAESCTRIntrinsics -XX:UseSVE=0"
     fi
 
+    # Resolve (and validate) the storage backend BEFORE writing the config:
+    # the saved file is exactly what a keep-config upgrade reloads, so a
+    # backend resolved later would be persisted as the default and the next
+    # upgrade would silently switch to embedded MinIO.
+    _resolve_controller_storage
+
     # Write .env file
     ENV_FILE="${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}"
     cat > "${ENV_FILE}" << EOF

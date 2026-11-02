@@ -42,7 +42,7 @@ optional_env:
     prompt: "State directory (or empty)"
     password: false
   - name: AGENTTEAMS_MATRIX_ENCRYPTION
-    description: "Enable end-to-end encryption (1/true/yes; degrades to plaintext when the E2EE backend is missing)"
+    description: "Enable end-to-end encryption (1/true/yes). Requested E2EE without a crypto backend (vodozemac/olm) fails the connection (e2ee_backend_missing) — it is never downgraded to plaintext; leave unset/0 for explicitly unencrypted rooms (supported)"
     prompt: "Enable E2EE? (true/false)"
     password: false
   - name: AGENTTEAMS_MATRIX_HISTORY_LIMIT

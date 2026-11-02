@@ -107,6 +107,7 @@ def _stub_delegate_notification(
     assignee: str,
     spec: str,
     txn: str | None = None,
+    recovery_note: str = "",
 ) -> dict[str, Any]:
     """Stub for room/notify._send_delegate_notification (same signature)."""
     _record_sent(
@@ -117,6 +118,7 @@ def _stub_delegate_notification(
         assignee=assignee,
         title=title,
         txn=txn or "",
+        recovery_note=recovery_note or "",
     )
     return {
         "sent": True,

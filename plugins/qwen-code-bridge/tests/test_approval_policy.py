@@ -297,3 +297,146 @@ def test_symlink_escape_deny(tmp_path):
     link.symlink_to(outside)
     d = approval.decide("read_file", {"file_path": str(link)}, [str(root)])
     assert d["behavior"] == "deny" and d["rule"] == "outside-root"
+
+
+# ---------------------------------------------------------------------------
+# F4 — bare relative file operands (no path separator) must not bypass
+# the path guard: the shell resolves bare names against the cwd, so an
+# existing bare name is a real operand; a missing bare name is a pattern
+# or argument (only the command itself can fail).
+# ---------------------------------------------------------------------------
+
+
+def _make_run_root(tmp_path) -> "Path":
+    """A run root with the F4 fixtures: secret-ish files, a notes file,
+    a git file, a subdirectory, and symlinks escaping the root."""
+    root = tmp_path / "root"
+    root.mkdir()
+    outside_file = tmp_path / "outside-secret.txt"
+    outside_file.write_text("outside", encoding="utf-8")
+    outside_dir = tmp_path / "outside-dir"
+    outside_dir.mkdir()
+    (root / "id_rsa").write_text("key", encoding="utf-8")
+    (root / ".env").write_text("A=B", encoding="utf-8")
+    (root / "notes.md").write_text("notes", encoding="utf-8")
+    (root / "file.txt").write_text("f", encoding="utf-8")
+    (root / "subdir").mkdir()
+    (root / "link").symlink_to(outside_file)
+    (root / "escdir").symlink_to(outside_dir)
+    return root
+
+
+def test_bare_secret_name_deny(tmp_path):
+    """cat id_rsa / cat .env (bare, existing in the run root) -> secret-path."""
+    root = _make_run_root(tmp_path)
+    for name in ("id_rsa", ".env"):
+        d = approval.decide(
+            "run_shell_command",
+            {"command": f"cat {name}", "cwd": str(root)},
+            [str(root)],
+        )
+        assert d["behavior"] == "deny", name
+        assert d["rule"] == "secret-path", name
+
+
+def test_bare_symlink_escape_deny(tmp_path):
+    """A bare symlink name pointing outside the root -> outside-root
+    (file and directory escapes)."""
+    root = _make_run_root(tmp_path)
+    d = approval.decide(
+        "run_shell_command",
+        {"command": "cat link", "cwd": str(root)},
+        [str(root)],
+    )
+    assert d["behavior"] == "deny" and d["rule"] == "outside-root"
+    d2 = approval.decide(
+        "run_shell_command",
+        {"command": "ls escdir", "cwd": str(root)},
+        [str(root)],
+    )
+    assert d2["behavior"] == "deny" and d2["rule"] == "outside-root"
+
+
+def test_bare_existing_in_root_allow(tmp_path):
+    """Existing bare names inside the root stay auto-approved."""
+    root = _make_run_root(tmp_path)
+    for command in ("cat notes.md", "git add file.txt", "ls subdir"):
+        d = approval.decide(
+            "run_shell_command",
+            {"command": command, "cwd": str(root)},
+            [str(root)],
+        )
+        assert d["behavior"] == "allow", command
+
+
+def test_bare_missing_name_is_pattern_allow(tmp_path):
+    """Missing bare names are patterns/arguments: skipped, no leak.
+    Flags (leading -) are never operands either."""
+    root = _make_run_root(tmp_path)
+    d = approval.decide(
+        "run_shell_command",
+        {"command": "grep hello some-pattern-no-such-file", "cwd": str(root)},
+        [str(root)],
+    )
+    assert d["behavior"] == "allow"
+    d2 = approval.decide(
+        "run_shell_command",
+        {"command": "tail -f log", "cwd": str(root)},
+        [str(root)],
+    )
+    assert d2["behavior"] == "allow"
+
+
+def test_explicit_spellings_unconditional(tmp_path):
+    """Explicit path spellings keep the pre-fix unconditional checks:
+    ./x is checked even when missing; an absolute outside path is
+    denied even when it does not exist."""
+    root = _make_run_root(tmp_path)
+    d = approval.decide(
+        "run_shell_command",
+        {"command": "cat ./id_rsa", "cwd": str(root)},
+        [str(root)],
+    )
+    assert d["behavior"] == "deny" and d["rule"] == "secret-path"
+    d2 = approval.decide(
+        "run_shell_command",
+        {"command": "cat ./missing-inside", "cwd": str(root)},
+        [str(root)],
+    )
+    assert d2["behavior"] == "allow"  # resolves inside the root
+    d3 = approval.decide(
+        "run_shell_command",
+        {"command": "cat /tmp/qcb-definitely-outside", "cwd": str(root)},
+        [str(root)],
+    )
+    assert d3["behavior"] == "deny" and d3["rule"] == "outside-root"
+
+
+def test_can_use_tool_bare_env_deny(tmp_path):
+    """can_use_tool chain: the worker-proxy answer for a bare
+    ``cat .env`` is a protocol-level deny with a message."""
+    root = _make_run_root(tmp_path)
+    d = approval.decide(
+        "run_shell_command",
+        {"command": "cat .env", "cwd": str(root)},
+        [str(root)],
+    )
+    assert d["behavior"] == "deny"
+    resp = approval.control_response("req-bare-env", d)
+    body = resp["response"]["response"]
+    assert body["behavior"] == "deny"
+    assert body["message"]
+
+
+def test_can_use_tool_bare_notes_allow(tmp_path):
+    """can_use_tool chain: a bare ``cat notes.md`` inside the root is a
+    protocol-level allow."""
+    root = _make_run_root(tmp_path)
+    d = approval.decide(
+        "run_shell_command",
+        {"command": "cat notes.md", "cwd": str(root)},
+        [str(root)],
+    )
+    assert d["behavior"] == "allow"
+    resp = approval.control_response("req-bare-notes", d)
+    assert resp["response"]["response"]["behavior"] == "allow"

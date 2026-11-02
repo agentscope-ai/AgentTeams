@@ -35,10 +35,15 @@ Shell policy (fail closed, #1411):
    (``outside-root-cwd``).
 4. Path-like argv (absolute, ``./``, ``../``, ``~/``, contains ``/``)
    must ``realpath`` into the roots — symlinks included
-   (``outside-root``).  Secret-ish paths are refused everywhere.  Programs
-   whose arguments are a program (``sed``) are denied outright: their scripts
-   can execute commands (``e``/``s///e``) or write files (``w``/``W``/``s///w``,
-   ``-f``), which no flag check can rule out.
+   (``outside-root``).  A bare name (no path separator) is checked the
+   same way when it exists in the run dir — the shell resolves bare
+   names against the cwd — while a missing bare name is a pattern or
+   argument and is left to the command itself to fail.  Flag tokens
+   (leading ``-``) are never path operands.  Secret-ish operands are
+   refused everywhere.  Programs whose arguments are a program (``sed``)
+   are denied outright: their scripts can execute commands
+   (``e``/``s///e``) or write files (``w``/``W``/``s///w``, ``-f``),
+   which no flag check can rule out.
 5. Unconstrained interpreters (``sh``/``bash``/``python*``/``node`` …)
    and destructive utilities are hard-denied (``exec-denied``);
    anything else escalates (deny by default, overridable via
@@ -409,7 +414,20 @@ def _classify_shell(tool_input: Any, root_list: list[str]) -> dict[str, Any]:
     for i, arg in enumerate(argv[1:]):
         if skip_message and i == 2:
             continue
-        if not _path_like(arg):
+        if arg.startswith("-"):
+            # A flag (``tail -f``, ``-n`` …): never a path operand.
+            continue
+        path_like = _path_like(arg)
+        resolved = os.path.join(base_dir, os.path.expanduser(arg))
+        # A bare name (no path separator) is only an operand when it
+        # names something that exists in the run dir: the shell resolves
+        # bare names against the cwd, so an existing one is a real file
+        # (or a symlink to one) — while a missing bare name is a pattern
+        # or argument (``grep hello nomatch``), and only the command
+        # itself can fail. Explicit path spellings (``./x``, ``/x``,
+        # ``../x``, ``x/y``, ``.``, ``..``, ``~``) keep the unconditional
+        # check, exactly as before.
+        if not (path_like or os.path.lexists(resolved)):
             continue
         if _looks_secret(arg):
             return _result(
@@ -418,7 +436,6 @@ def _classify_shell(tool_input: Any, root_list: list[str]) -> dict[str, Any]:
                 "refuses to touch credential-like files",
                 arg,
             )
-        resolved = os.path.join(base_dir, os.path.expanduser(arg))
         if not _inside(resolved, root_list):
             return _result(
                 RISK_DENY,

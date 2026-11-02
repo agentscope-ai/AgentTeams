@@ -59,34 +59,8 @@ jobs:
 
       - name: Create bucket
         run: |
-          # The live probe answers before RustFS finishes its own initialisation:
-          # observed phases are "waiting for startup_finalization" and "waiting
-          # for iam". Both surface as a failed `mc alias set`, so retry the
-          # alias instead of trusting the health probe.
-          for i in $(seq 1 90); do
-            if mc alias set s3 http://127.0.0.1:9000 minioadmin minioadmin; then
-              break
-            fi
-            if [ "$i" -eq 90 ]; then
-              echo "RustFS did not become ready for mc within 90s" >&2
-              docker logs rustfs || true
-              exit 1
-            fi
-            sleep 1
-          done
-          # Bucket creation can hit the same readiness window; keep it idempotent
-          # and retry it for the same reason.
-          for i in $(seq 1 30); do
-            if mc mb --ignore-existing s3/human-files-test; then
-              break
-            fi
-            if [ "$i" -eq 30 ]; then
-              echo "bucket creation kept failing after the alias was ready" >&2
-              docker logs rustfs || true
-              exit 1
-            fi
-            sleep 1
-          done
+          mc alias set s3 http://127.0.0.1:9000 minioadmin minioadmin
+          mc mb s3/human-files-test
 
       # Both the normal handler lifecycle and the provider fallback (conditional
       # PUT answered with 501) run against the same backend, because the

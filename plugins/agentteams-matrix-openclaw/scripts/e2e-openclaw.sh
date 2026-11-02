@@ -350,23 +350,21 @@ import urllib.parse
 import urllib.request
 
 sys.path.insert(0, os.environ["MATRIX_CORE_DIR"])
+sys.path.insert(0, os.environ["E2E_PLUGIN_ROOT"])
 
 try:
-    from core import (
-        CoreConfig,
-        FileSessionStore,
-        MatrixCore,
-        SidecarServer,
-        frame_to_outbound,
-        make_ack,
-        make_inbound,
-    )
+    from core import CoreConfig, FileSessionStore, MatrixCore, SidecarServer
     from core.transport import NioTransport, TransportConfig
+    # The shared agent-side runtime (own-echo/dedupe bridge + outbound ack
+    # worker) lives in the sidecar package so the harness and the production
+    # entry (sidecar/app.py) honour the same protocol semantics.
+    from sidecar.bridge import AgentBridge, run_outbound_worker
 except ImportError as exc:
     print(
-        f"E2E_RESULT fail: cannot import the matrix core "
-        f"(MATRIX_CORE_DIR={os.environ['MATRIX_CORE_DIR']!r}): {exc!r} "
-        f"— the core needs its own dependencies (matrix-nio)",
+        f"E2E_RESULT fail: cannot import the runtime "
+        f"(core from MATRIX_CORE_DIR={os.environ['MATRIX_CORE_DIR']!r}, "
+        f"sidecar package from E2E_PLUGIN_ROOT={os.environ['E2E_PLUGIN_ROOT']!r}): "
+        f"{exc!r} — the core needs its own dependencies (matrix-nio)",
         flush=True,
     )
     sys.exit(1)
@@ -434,72 +432,23 @@ def replies_to(sent_event_id):
 
 
 # --- the runtime bridge (adapter-boundary filter + dedupe) ---------------------
+# The own-echo suppression, event-id dedupe, make_inbound forward, and the
+# outbound ack worker are the shared sidecar package (sidecar/bridge.py); the
+# e2e harness only adds its room/kind scope on top, so both entry points
+# honour the same protocol semantics.
 
-class E2EBridge:
-    """RuntimeBridge for the e2e: forwards e2e-room text events to the
-    sidecar, once per event id."""
+class E2EBridge(AgentBridge):
+    """RuntimeBridge for the e2e: e2e-room text events, once per event id."""
 
     def __init__(self, server):
-        self.server = server
-        self.seen = set()
-        self.last_event = None
-        self.forwarded = 0
-        self.dropped = 0
+        super().__init__(server, AGENT_MXID, log=log)
 
     async def on_inbound(self, event):
         if event.room_id != ROOM_ID:
             return
         if event.kind != "text":
             return
-        if event.sender == AGENT_MXID:
-            return  # our own outbound echoing back through sync
-        if event.event_id in self.seen:
-            self.dropped += 1
-            log(f"dedupe: dropping duplicate delivery of {event.event_id}")
-            return
-        self.seen.add(event.event_id)
-        self.last_event = event
-        self.forwarded += 1
-        self.server.send(make_inbound(event))
-        log(f"forwarded inbound {event.event_id} ({len(event.text)} chars) to sidecar")
-
-    async def on_runtime_output(self, msg):
-        log(f"runtime output delivered to {msg.room_id} (kind={msg.kind})")
-
-
-def sidecar_worker(server, core, loop):
-    """Read sidecar frames; answer every outbound with a real Matrix send."""
-    while True:
-        try:
-            frame = server.recv()
-        except Exception as exc:
-            if "no active connection" in str(exc):
-                # The worker starts before the gateway's plugin connects; the
-                # first recv on an empty server raises instead of blocking.
-                # Retry instead of exiting (Pi run: the worker died at
-                # startup and every outbound frame went unread, so the
-                # client's sendOutbound never got its ack).
-                time.sleep(0.2)
-                continue
-            log(f"sidecar worker: connection ended ({exc})")
-            return
-        ftype = frame.get("type")
-        if ftype == "outbound":
-            msg = frame_to_outbound(frame)
-            log(f"outbound to {msg.room_id}: {msg.text[:120]!r} (reply_to={msg.reply_to})")
-            try:
-                event_id = asyncio.run_coroutine_threadsafe(
-                    core.submit(msg), loop
-                ).result(timeout=120)
-            except Exception as exc:
-                # No ack: a wrong ack would desync the client's FIFO
-                # correlation. The connection will surface the failure.
-                log(f"sidecar worker: submit failed: {exc!r}")
-                return
-            server.send(make_ack(event_id))
-            log(f"acked outbound with {event_id}")
-        elif ftype == "typing":
-            log(f"typing frame (ignored): state={frame.get('state')}")
+        await super().on_inbound(event)
 
 
 # --- orchestration -------------------------------------------------------------
@@ -597,8 +546,14 @@ async def main():
     )
 
     loop = asyncio.get_running_loop()
+    # log is a kwarg: it is the 5th parameter of run_outbound_worker, after
+    # submit_timeout, so it must not be passed positionally.
     worker = threading.Thread(
-        target=sidecar_worker, args=(server, core, loop), daemon=True, name="sidecar-worker"
+        target=run_outbound_worker,
+        args=(server, core, loop),
+        kwargs={"log": log},
+        daemon=True,
+        name="sidecar-worker",
     )
     worker.start()
 
@@ -628,6 +583,7 @@ PYEOF
 echo "e2e: starting the core/sidecar harness"
 E2E_WORK="$WORK" \
 E2E_SCRIPTS_DIR="$SCRIPT_DIR" \
+E2E_PLUGIN_ROOT="$PLUGIN_ROOT" \
 E2E_ECHO_CHECK="$E2E_ECHO_CHECK" \
 E2E_AGENT_NAME="$E2E_AGENT_NAME" \
 E2E_CONNECT_TIMEOUT_SECONDS="$E2E_CONNECT_TIMEOUT_SECONDS" \

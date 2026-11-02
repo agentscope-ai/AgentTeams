@@ -15,8 +15,10 @@ deliberately **no Matrix logic in this package**.
 | `src/sidecar-client.ts` | Runtime-neutral sidecar protocol client (no OpenClaw dependency). |
 | `src/plugin.ts` | `ChannelPlugin` factory wiring OpenClaw config/inbound dispatch/outbound/gateway onto the client. |
 | `openclaw.plugin.json` | OpenClaw plugin manifest (identity, activation, channel config schema + UI hints). |
-| `install.sh` / `upgrade.sh` / `rollback.sh` / `uninstall.sh` | Release lifecycle: self-contained release dirs, `active`/`previous` markers, channel config. Uninstall is fail-closed on an unreadable inventory. |
-| `scripts/lib-lifecycle.sh` | Shared lifecycle helpers (state layout, channel config, three-valued inventory check). |
+| `install.sh` / `upgrade.sh` / `rollback.sh` / `uninstall.sh` | Release lifecycle: self-contained release dirs, `active`/`previous` markers, channel config, sidecar config. Uninstall is fail-closed on an unreadable inventory. |
+| `sidecar/` | The production Python runtime: config loader, own-echo/dedupe bridge, outbound ack worker, and the `python3 -m sidecar` entry. Stdlib + the Matrix core lib — no third-party dependencies. |
+| `sidecar.sh` | Operator process entry: `start` / `stop` / `restart` / `status` / `run` (foreground, for systemd). |
+| `scripts/lib-lifecycle.sh` | Shared lifecycle helpers (state layout, channel config, sidecar config, three-valued inventory check). |
 | `scripts/verify-sdk.mjs` | Runtime assertion that the installed OpenClaw SDK actually loads the built entry. |
 | `test/*.test.ts` | `node:test` suites (no framework): protocol client, inbound dispatch, lifecycle config, member preflight, install order, e2e bootstrap. |
 
@@ -94,6 +96,83 @@ the runtime through `setRuntime`. The manifest is `openclaw.plugin.json`
 (channel id `agentteams-matrix`, activation on startup), and `package.json`
 exposes the extension via `openclaw.extensions` / `runtimeExtensions` with
 `main: dist/src/index.js`.
+
+## Running the sidecar (production entry)
+
+The Matrix logic lives in the **Python sidecar** (the `core` checkout
+`MATRIX_CORE_DIR` points at). The production entry is the `sidecar/`
+package in this repo, with `sidecar.sh` as the operator wrapper. With the
+sidecar and the OpenClaw gateway both running, Matrix messages arrive and
+agent replies are sent — **no E2E script required**. `scripts/e2e-openclaw.sh`
+is only a test harness that boots a throwaway sidecar and asserts a
+roundtrip; it is not the production path.
+
+### Config
+
+`install.sh` writes `sidecar-config.json` (0600) into the state directory
+when `AGENTTEAMS_MATRIX_URL`, `AGENTTEAMS_MATRIX_USER` and
+`AGENTTEAMS_MATRIX_TOKEN` are all set. Otherwise write it by hand:
+
+```json
+{
+  "homeserver_url": "https://matrix.example.com",
+  "agent_user": "@agent:example.com",
+  "agent_access_token": "syt_...",
+  "socket_path": "/home/op/.agentteams/matrix/sidecar.sock",
+  "agent_name": "agentteams"
+}
+```
+
+| Field | Required | Env override | Notes |
+| --- | --- | --- | --- |
+| `homeserver_url` | yes | `AGENTTEAMS_MATRIX_URL` | `http(s)://…`. |
+| `agent_user` | yes | `AGENTTEAMS_MATRIX_USER` | the agent's MXID. |
+| `agent_access_token` | yes | `AGENTTEAMS_MATRIX_TOKEN` | Matrix access token (never logged). |
+| `socket_path` | no | `AGENTTEAMS_MATRIX_SOCKET` | default `${AGENTTEAMS_MATRIX_STATE_DIR:-~/.agentteams/matrix}/sidecar.sock`. |
+| `agent_name` | no | `AGENTTEAMS_MATRIX_AGENT` | default `agentteams`. |
+
+Env overrides the file (an empty env var means "unset"). The config file
+must be exactly `0600` — the sidecar refuses to start otherwise (run
+`chmod 600`). `socket_path` must match the `socketPath` in the OpenClaw
+channel config: the gateway's plugin and the sidecar talk over that socket.
+The sidecar **requires** `MATRIX_CORE_DIR` (a directory containing `core/`)
+to be set before it starts.
+
+### `sidecar.sh`
+
+```sh
+sidecar.sh start     # start in the background (idempotent)
+sidecar.sh stop      # SIGTERM, wait up to 10s, then SIGKILL
+sidecar.sh restart   # stop + start
+sidecar.sh status    # report pid + socket presence (exit 0 = running)
+sidecar.sh run       # foreground (for systemd: ExecStart=.../sidecar.sh run)
+```
+
+State (default `~/.agentteams/openclaw-matrix`, override with
+`AGENTTEAMS_OPENCLAW_STATE_DIR`): `sidecar-config.json`, `sidecar.pid`,
+`sidecar.log`.
+
+### systemd (optional)
+
+```ini
+# /etc/systemd/system/agentteams-matrix-sidecar.service
+[Unit]
+Description=AgentTeams Matrix sidecar
+After=network-online.target
+
+[Service]
+Type=simple
+Environment=MATRIX_CORE_DIR=/path/to/agentteams-matrix
+ExecStart=/path/to/release/sidecar.sh run
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`sidecar.sh run` execs Python in the foreground, so systemd's SIGTERM
+reaches the sidecar directly and it shuts down cleanly (core stopped,
+socket file removed).
 
 ## Developing
 

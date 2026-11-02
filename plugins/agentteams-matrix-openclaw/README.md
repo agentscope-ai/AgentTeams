@@ -11,10 +11,14 @@ deliberately **no Matrix logic in this package**.
 
 | File | Role |
 | --- | --- |
+| `src/index.ts` | Plugin entry: `defineChannelPluginEntry` + runtime injection (`setRuntime`). |
 | `src/sidecar-client.ts` | Runtime-neutral sidecar protocol client (no OpenClaw dependency). |
-| `src/plugin.ts` | `ChannelPlugin` factory wiring OpenClaw config/outbound/gateway onto the client. |
-| `test/mock-sidecar.ts` | In-process mock sidecar (Unix socket) for tests. |
-| `test/sidecar-client.test.ts` | `node:test` unit tests (no framework). |
+| `src/plugin.ts` | `ChannelPlugin` factory wiring OpenClaw config/inbound dispatch/outbound/gateway onto the client. |
+| `openclaw.plugin.json` | OpenClaw plugin manifest (identity, activation, channel config schema + UI hints). |
+| `install.sh` / `upgrade.sh` / `rollback.sh` / `uninstall.sh` | Release lifecycle: self-contained release dirs, `active`/`previous` markers, channel config. Uninstall is fail-closed on an unreadable inventory. |
+| `scripts/lib-lifecycle.sh` | Shared lifecycle helpers (state layout, channel config, three-valued inventory check). |
+| `scripts/verify-sdk.mjs` | Runtime assertion that the installed OpenClaw SDK actually loads the built entry. |
+| `test/*.test.ts` | `node:test` suites (no framework): protocol client, inbound dispatch, lifecycle config, member preflight, install order, e2e bootstrap. |
 
 ## Sidecar protocol (version 1)
 
@@ -39,8 +43,10 @@ no auto-reconnect — a new `connect()` is allowed after a terminal `close`.
 
 ## Wiring into OpenClaw
 
-Verified against the public plugin SDK in the OpenClaw source
-(**v2026.10.6**; the target environment is v2026.10.9 — see Limitations):
+Verified against the public plugin SDK of the installed OpenClaw
+**v2026.10.9** (typecheck against the real peer, `npm run verify:sdk`
+runtime import assertions, and a native Matrix text roundtrip on a real
+OpenClaw install — see Gate status):
 
 - `openclaw/plugin-sdk/channel-core` — `ChannelPlugin` (type),
   `OpenClawConfig` (type). `ChannelPlugin` requires
@@ -70,17 +76,24 @@ account. Config section:
   (handshake) and wires `inbound` / `typing` / `error` / `close` events;
   `gateway.stopAccount` closes it.
 - **Inbound**: sidecar `inbound` frames are normalized to
-  `OpenClawMatrixInboundMessage` and handed to the `onInboundMessage` hook
-  (default: log). This is the seam for OpenClaw agent-turn dispatch — see
-  Limitations.
+  `OpenClawMatrixInboundMessage` and dispatched into the agent turn through
+  the public runtime API: `runtime.channel.routing.resolveAgentRoute` →
+  `runtime.channel.inbound.run` (core-managed delivery overload) with a turn
+  adapter whose `resolveTurn` builds the turn context via
+  `runtime.channel.inbound.buildContext` and wires `delivery.deliver` back to
+  the sidecar (`kind: final`, `reply_to` = the inbound event id). Without an
+  injected runtime (unit tests), frames fall back to the `onInboundMessage`
+  hook (default: log).
 - **Outbound**: `outbound.sendText` sends an `outbound` frame and returns the
   sidecar's ack `event_id` as the delivery `messageId`. Fail-closed: if the
   sidecar is not connected, the send throws.
 
-To register it as a plugin entry, wrap the exported plugin in an entry module,
-e.g. `defineChannelPluginEntry` from `openclaw/plugin-sdk/channel-core`
-(see `docs/plugins/sdk-channel-plugins.md` in the OpenClaw tree). That entry
-file is intentionally not part of this scaffold.
+The entry module is `src/index.ts`: it wraps the plugin in
+`defineChannelPluginEntry` (`openclaw/plugin-sdk/channel-core`) and injects
+the runtime through `setRuntime`. The manifest is `openclaw.plugin.json`
+(channel id `agentteams-matrix`, activation on startup), and `package.json`
+exposes the extension via `openclaw.extensions` / `runtimeExtensions` with
+`main: dist/src/index.js`.
 
 ## Developing
 
@@ -90,7 +103,8 @@ Node 24 LTS (24.22.x; the `openclaw` peer's install scripts require Node 24).
 ```sh
 npm install
 npm run typecheck   # tsc --noEmit
-npm test            # tsc -p tsconfig.json && node --test dist/test/sidecar-client.test.js
+npm test            # tsc -p tsconfig.json && node --test (6 suites)
+npm run verify:sdk  # runtime import assertions against the installed SDK
 ```
 
 The test script compiles first because `node --test` resolves the ESM `./x.js`
@@ -98,30 +112,21 @@ specifiers against the compiled layout (`dist/src` + `dist/test`).
 
 ## Limitations / open questions
 
-1. **Version skew**: the plugin was written against the OpenClaw
-   **v2026.10.6** source tree (local checkout `fe06181d`); the target runtime
-   is **v2026.10.9**, which could not be fetched (shallow clone). Re-run
-   `npm run typecheck` against the installed peer to confirm the SDK surface
-   (`ChannelPlugin`, `ChannelGatewayAdapter`, `ChannelOutboundAdapter`,
-   `buildJsonChannelConfigSchema`) is unchanged.
-2. **Inbound dispatch not yet bound**: `runChannelInboundEvent`
-   (`openclaw/plugin-sdk/channel-inbound`) needs a
-   `ChannelTurnAdapter.resolveTurn` backed by core-internal dispatch context
-   (`ChannelTurnContext`: store path, finalized msg context, inbound session
-   recorder; `AssembledChannelTurn` additionally needs the runtime config and
-   the buffered block dispatcher). A thin external plugin cannot synthesize
-   that context, so inbound currently ends at the `onInboundMessage` hook.
-   Binding real agent-turn dispatch is the next core-integration step and may
-   need an OpenClaw-side helper that accepts a pre-resolved turn.
-3. **Single default account**: `accounts.*` multi-account support is not
+1. **Single default account**: `accounts.*` multi-account support is not
    implemented; one sidecar per agent matches the protocol's one-connection
    rule.
-4. **Protocol gaps to settle with the maintainer**: reconnect/backoff
+2. **DM vs group**: the sidecar `inbound` frame carries no directness field
+   (no `is_direct` / `members`; protocol version 1), so v1 routes every room
+   as a group (`peer.kind = "group"`). DM semantics need a core protocol
+   field.
+3. **Protocol gaps to settle with the maintainer**: reconnect/backoff
    semantics after a terminal close (client never auto-reconnects), typing
    direction (server→client only today), edit/react frames, media
    upload/download over the sidecar, and a health/ping frame.
-5. **Gate status**: `npm install` / `npm run typecheck` / `npm test`
-   (`tsc -p tsconfig.json && node --test`) were run on Node 24 LTS
-   (v24.22.2) with a plain `npm install` (the `openclaw` peer's install
-   scripts succeed on 24): typecheck clean, 8/8 tests pass. Re-run the
-   three commands against the installed peer (v2026.10.9) before merging.
+4. **Gate status**: `npm install` / `npm run typecheck` / `npm test`
+   (6 `node:test` suites) / `npm run verify:sdk` run green on Node 24 LTS
+   (v24.22.2) with the installed **OpenClaw v2026.10.9** peer: typecheck
+   clean against the real peer, `verify-sdk` runtime import assertions pass,
+   and a native Matrix text roundtrip (inbound message → agent turn → routed
+   reply through the sidecar) was verified twice on a real OpenClaw +
+   Synapse install (`scripts/e2e-openclaw.sh`).

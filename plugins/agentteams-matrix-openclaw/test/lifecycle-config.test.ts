@@ -17,12 +17,25 @@
  *     resulting config validates against the active schema. The check
  *     skips cleanly on hosts where the CLI refuses to start (it aborts on
  *     Node < 24), so the shape assertions above are the always-on gate.
+ *
+ * The "uninstall failure path" block drives the real `uninstall.sh` with a
+ * fake `openclaw` CLI to pin the three-valued inventory contract: an
+ * unreadable inventory (command failure or malformed JSON) must abort the
+ * uninstall and keep the `active`/`previous` release markers, while a
+ * listed plugin is removed and an established absence is a clean no-op.
  */
 
 import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -199,5 +212,155 @@ describe("lifecycle channel config", () => {
 
     const result = validateWithCli(config);
     assert.equal(result.valid, true, `openclaw config validate: ${JSON.stringify(result.issues)}`);
+  });
+});
+
+/**
+ * Uninstall failure-path regressions (#1470).
+ *
+ * `lifecycle_is_listed` is three-valued: listed / absent / unreadable.
+ * The uninstaller used to collapse "inventory command exited non-zero"
+ * and "plugin not in the inventory" into one outcome — with a corrupted
+ * OpenClaw config, `plugins list --json` exits 1, the uninstaller then
+ * reported "nothing to uninstall", deleted the `active`/`previous` release
+ * markers, and exited 0 with "Uninstall complete" while the plugin was
+ * still installed. These tests run the real `uninstall.sh` against a fake
+ * `openclaw` CLI that reproduces each inventory state:
+ *
+ *   - unreadable inventory (command fails, or malformed JSON) -> non-zero
+ *     exit, release markers KEPT, no "Uninstall complete";
+ *   - listed plugin -> authoritative `plugins uninstall` invoked, markers
+ *     cleared, exit 0;
+ *   - established absence (empty inventory) -> no-op, markers cleared,
+ *     exit 0 (idempotency is preserved).
+ */
+describe("uninstall failure path", () => {
+  type InventoryMode = "corrupt" | "malformed" | "listed" | "absent";
+
+  /**
+   * Fake `openclaw` CLI. Its behavior is driven by a mode file, and every
+   * invocation is appended to a call log so the tests can assert which
+   * subcommands the uninstaller actually ran (no silent bypass).
+   */
+  function fakeCli(dir: string, mode: InventoryMode): string {
+    const state = join(dir, "fake-cli-state");
+    mkdirSync(state, { recursive: true });
+    const callLog = join(state, "calls.log");
+    const cli = join(dir, "fake-openclaw");
+    const script = `#!/usr/bin/env bash
+echo "$*" >> "${callLog}"
+case "$1 $2" in
+  "plugins list")
+    case "$(cat "${state}/mode")" in
+      corrupt)   echo "fatal: failed to load openclaw config" >&2; exit 1 ;;
+      malformed) echo '{"plugins": [' ;;
+      listed)    echo '{"plugins": [{"id": "agentteams-matrix", "enabled": true}]}' ;;
+      absent)    echo '{"plugins": []}' ;;
+      *)         echo "fake-openclaw: unknown mode" >&2; exit 64 ;;
+    esac
+    ;;
+  "plugins uninstall")
+    echo "uninstalled $3" >&2
+    ;;
+  *)
+    echo "fake-openclaw: unhandled: $*" >&2
+    exit 64
+    ;;
+esac
+`;
+    writeFileSync(cli, script, { mode: 0o755 });
+    writeFileSync(join(state, "mode"), mode + "\n");
+    return cli;
+  }
+
+  /** A sandbox that looks like an existing installed state: both markers set. */
+  function installedSandbox(mode: InventoryMode): {
+    active: string;
+    previous: string;
+    callLog: string;
+    env: Record<string, string>;
+  } {
+    const dir = mkdtempSync(join(tmpdir(), "agentteams-uninstall-"));
+    const state = join(dir, "state");
+    const releaseDir = join(state, "releases", "0.1.0");
+    mkdirSync(releaseDir, { recursive: true });
+    const active = join(state, "active");
+    const previous = join(state, "previous");
+    writeFileSync(active, releaseDir + "\n");
+    writeFileSync(previous, releaseDir + "\n");
+    const cli = fakeCli(dir, mode);
+    return {
+      active,
+      previous,
+      callLog: join(dir, "fake-cli-state", "calls.log"),
+      env: {
+        OPENCLAW_CONFIG_PATH: join(dir, "openclaw.json"),
+        AGENTTEAMS_OPENCLAW_STATE_DIR: state,
+        OPENCLAW_BIN: cli,
+        AGENTTEAMS_MATRIX_SOCKET: "/run/agentteams/matrix.sock",
+        AGENTTEAMS_MATRIX_AGENT: "agentteams-test",
+      },
+    };
+  }
+
+  function runUninstall(env: Record<string, string>) {
+    return spawnSync("bash", [join(PLUGIN_ROOT, "uninstall.sh")], {
+      env: { ...process.env, ...env },
+      encoding: "utf-8",
+    });
+  }
+
+  it("an unreadable inventory (list command fails) aborts and keeps the release markers", () => {
+    const { active, previous, callLog, env } = installedSandbox("corrupt");
+    const res = runUninstall(env);
+
+    assert.notEqual(res.status, 0, "must fail, not report success:\n" + res.stderr);
+    assert.ok(res.stderr.includes("cannot read the plugin inventory"), res.stderr);
+    assert.ok(!res.stderr.includes("nothing to uninstall"), res.stderr);
+    assert.ok(!res.stderr.includes("Uninstall complete"), res.stderr);
+    // The release markers must survive so a later retry/rollback works.
+    assert.ok(existsSync(active), "active marker must be kept");
+    assert.ok(existsSync(previous), "previous marker must be kept");
+    // The inventory was actually consulted (no silent bypass), and no
+    // removal was attempted.
+    const calls = readFileSync(callLog, "utf-8");
+    assert.ok(calls.includes("plugins list --json"), calls);
+    assert.ok(!calls.includes("plugins uninstall"), calls);
+  });
+
+  it("a malformed inventory (invalid JSON, exit 0) aborts and keeps the release markers", () => {
+    const { active, previous, callLog, env } = installedSandbox("malformed");
+    const res = runUninstall(env);
+
+    assert.notEqual(res.status, 0, "must fail, not report success:\n" + res.stderr);
+    assert.ok(res.stderr.includes("cannot read the plugin inventory"), res.stderr);
+    assert.ok(!res.stderr.includes("Uninstall complete"), res.stderr);
+    assert.ok(existsSync(active), "active marker must be kept");
+    assert.ok(existsSync(previous), "previous marker must be kept");
+    assert.ok(!readFileSync(callLog, "utf-8").includes("plugins uninstall"));
+  });
+
+  it("a listed plugin is removed authoritatively and the markers are cleared", () => {
+    const { active, previous, callLog, env } = installedSandbox("listed");
+    const res = runUninstall(env);
+
+    assert.equal(res.status, 0, res.stderr);
+    assert.ok(res.stderr.includes("Uninstall complete"), res.stderr);
+    const calls = readFileSync(callLog, "utf-8");
+    assert.ok(calls.includes("plugins uninstall agentteams-matrix --force"), calls);
+    assert.ok(!existsSync(active), "active marker must be cleared after removal");
+    assert.ok(!existsSync(previous), "previous marker must be cleared after removal");
+  });
+
+  it("an established absence is a clean no-op that clears the markers", () => {
+    const { active, previous, callLog, env } = installedSandbox("absent");
+    const res = runUninstall(env);
+
+    assert.equal(res.status, 0, res.stderr);
+    assert.ok(res.stderr.includes("nothing to uninstall"), res.stderr);
+    assert.ok(res.stderr.includes("Uninstall complete"), res.stderr);
+    assert.ok(!readFileSync(callLog, "utf-8").includes("plugins uninstall"));
+    assert.ok(!existsSync(active));
+    assert.ok(!existsSync(previous));
   });
 });

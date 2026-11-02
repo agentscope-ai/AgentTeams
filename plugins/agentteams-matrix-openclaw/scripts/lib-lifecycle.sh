@@ -170,13 +170,27 @@ lifecycle_purge_channel_config() {
   lifecycle_log "Purged channels.${PLUGIN_ID} (and plugins.entries.${PLUGIN_ID}) from ${OPENCLAW_CONFIG}"
 }
 
-# True when the plugin id appears in the cold inventory.
+# Inventory state of the plugin in the cold inventory. Returns:
+#   0  listed — the plugin id is present in the inventory
+#   1  absent — the inventory was read successfully and the plugin is not in it
+#   2  unreadable — the inventory command failed, or its output is not the
+#      expected inventory JSON. Callers must NOT treat this as "absent": an
+#      unreadable inventory says nothing about the install, and acting on it
+#      (e.g. clearing the release markers during uninstall) would leave the
+#      plugin installed but unmanaged.
 lifecycle_is_listed() {
-  local json
-  json="$("$OPENCLAW_BIN" plugins list --json)" \
-    || { lifecycle_log "WARN: 'openclaw plugins list --json' failed"; return 1; }
+  local json rc
+  if ! json="$("$OPENCLAW_BIN" plugins list --json)"; then
+    return 2
+  fi
+  rc=0
   printf '%s' "$json" | jq -e --arg id "$PLUGIN_ID" \
-    '[.. | objects | select(.id == $id)] | length > 0' >/dev/null
+    '[.. | objects | select(.id == $id)] | length > 0' >/dev/null || rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    1) return 1 ;;
+    *) return 2 ;;
+  esac
 }
 
 # Managed-install a release directory, write config, enable, reload, verify.
@@ -214,9 +228,24 @@ lifecycle_install_release() {
     || lifecycle_log "WARN: reload failed — the plugin will load on the next Gateway start"
 
   lifecycle_log "Verifying plugin inventory"
-  lifecycle_is_listed \
-    || lifecycle_fail "plugin ${PLUGIN_ID} not found in 'openclaw plugins list --json'"
-  if "$OPENCLAW_BIN" plugins list --enabled | grep -Fq "$PLUGIN_ID"; then
+  # Post-install, both inventory failures are fatal, but they must be
+  # reported as different conditions: an unreadable inventory means the
+  # install could not be verified, not that the plugin is missing.
+  local listed_rc=0
+  lifecycle_is_listed || listed_rc=$?
+  if [ "$listed_rc" -eq 2 ]; then
+    lifecycle_fail "could not read the plugin inventory ('openclaw plugins list --json' failed); the install is not verified"
+  elif [ "$listed_rc" -ne 0 ]; then
+    lifecycle_fail "plugin ${PLUGIN_ID} not found in 'openclaw plugins list --json'"
+  fi
+
+  local enabled_rc=0 enabled_out
+  enabled_out="$("$OPENCLAW_BIN" plugins list --enabled 2>&1)" || enabled_rc=$?
+  if [ "$enabled_rc" -ne 0 ]; then
+    printf '%s\n' "$enabled_out" >&2
+    lifecycle_fail "could not read the enabled-plugin list ('openclaw plugins list --enabled' exited ${enabled_rc}); the install is not verified"
+  fi
+  if printf '%s\n' "$enabled_out" | grep -Fq "$PLUGIN_ID"; then
     lifecycle_log "OK: ${PLUGIN_ID} is installed and enabled"
   else
     lifecycle_fail "plugin ${PLUGIN_ID} is installed but not enabled ('openclaw plugins list --enabled')"

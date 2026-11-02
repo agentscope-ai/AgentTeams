@@ -50,10 +50,8 @@ from mcp.common.io import _utc_timestamp
 from mcp.common.payload import _first_text, _safe_id
 from mcp.artifact.sync import (
     _TASK_COMMIT_ATTEMPTS,
+    _commit_task_guarded,
     _load_authoritative_task,
-    _load_authoritative_task_versioned,
-    _remote_task_meta_etag,
-    _task_meta_commit_landed,
 )
 from .transitions import (
     _reject_task_transition,
@@ -65,8 +63,6 @@ from .transitions import (
 # Call-time lookups (common.refs): these names resolve against the bound
 # mcp/server.py namespace, so test monkeypatches of server attributes stay
 # visible to this module.
-_write_task = refs.proxy("_write_task")
-_sync_task = refs.proxy("_sync_task")
 # The trusted runtime role (server.py): it reads the operator-set
 # environment / runtime config, never the tool payload, so a caller cannot
 # spoof it. Call-time proxy so tests can monkeypatch it.
@@ -373,26 +369,6 @@ def _review_task_attempt(
     if role not in {"critic", "leader"}:
         raise ValueError("review_task requires critic or leader role")
     task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
-    # W2 round 9 (#1467): review is a cross-actor write and _sync_task
-    # pushes the WHOLE task directory — load the authoritative task
-    # (pull first, fail closed on failure) so a concurrently persisted
-    # decision_status=frozen, its approval records and the
-    # decision_status_history survive the review write.
-    task, base_etag = _load_authoritative_task_versioned(arguments, task_id)
-    _require_task_mutable(arguments, task, task_id, "review_task")
-    status = str(task.get("status") or "")
-    if status != "submitted":
-        _reject_task_transition(
-            status,
-            status,
-            "review_task",
-            (
-                f"illegal_transition: review_task: task is '{status}'; "
-                "wait for submit_task"
-            ),
-            arguments=arguments,
-            task_id=task_id,
-        )
     verdict = str(payload.get("verdict") or "").strip().lower()
     if verdict not in {"pass", "fail"}:
         raise ValueError("verdict must be one of pass, fail")
@@ -401,72 +377,97 @@ def _review_task_attempt(
     if scorecard is not None and not isinstance(scorecard, dict):
         raise ValueError("scorecard must be an object")
     reviewer = _transition_actor(arguments)
-    submitted_by = _first_text(task.get("submitted_by"), task.get("submittedBy"))
-    # Self-review compares identity + provenance (#1467 round 7). The
-    # exact actor-string match always holds. When BOTH sides are
-    # runtime-sourced — the record carries submitted_by_source
-    # "runtime" and the reviewer has a trusted runtime identity — the
-    # normalized accounts compare strictly, "default" included: a
-    # trusted member literally named "default" is an identity, never
-    # the legacy sentinel. Otherwise — a legacy record without the
-    # provenance marker, or a payload-sourced side — the
-    # unknown-sentinel rule applies for compatibility: "default" /
-    # "unknown" / empty never match, concrete accounts still compare
-    # (#1467 round 6).
-    reviewer_account = _account_of(reviewer).strip().lower()
-    submitter_account = _account_of(submitted_by).strip().lower()
-    submitter_source = str(task.get("submitted_by_source") or "")
     reviewer_source = _transition_actor_source(arguments)
-    both_runtime = submitter_source == "runtime" and reviewer_source == "runtime"
-    if submitted_by and (
-        reviewer == submitted_by
-        or (both_runtime and reviewer_account == submitter_account)
-        or (
-            not both_runtime
-            and _known_account_of(reviewer)
-            and _known_account_of(reviewer) == _known_account_of(submitted_by)
-        )
-    ):
-        raise ProtocolGuardError(
-            "self_review_forbidden",
-            "reviewer must differ from submitted_by",
-        )
-    review: dict[str, Any] = {
-        "verdict": verdict,
-        "reviewer": reviewer,
-        "reviewer_source": reviewer_source,
-        "reviewer_team": _runtime_team_name(),
-        "reviewed_at": _utc_timestamp(),
-        "note": note,
-    }
-    if scorecard is not None:
-        review["scorecard"] = scorecard
-    task["review"] = review
-    # Guard the commit against a base change during the window: mirroring a
-    # stale directory would erase a peer's freeze, approval and history.
-    current_etag, version_error = _remote_task_meta_etag(arguments, task_id)
-    if version_error:
-        raise ValueError(
-            "review_task: cannot verify the authoritative task version before "
-            "the commit; refusing to write (retry)"
-        )
-    if base_etag is not None and current_etag != base_etag:
-        raise _TaskCommitConflict(
-            "a peer committed a newer task version during the commit window"
-        )
-    _write_task(arguments, task)
-    synced = _sync_task(arguments, task_id, exclude=["spec.md", "base/"])
-    if not synced:
+    reviewed_at = _utc_timestamp()
+
+    def apply_review(task: dict[str, Any]) -> dict[str, Any]:
+        """Validate the task against THIS attempt's authoritative base and
+        stamp the review onto it.
+
+        Re-run on every attempt (#1467 round 20): a 409 means a peer
+        committed inside the commit window, so the mutation has to land on
+        the peer's version — never on the body this attempt read before
+        the conflict.
+        """
+        _require_task_mutable(arguments, task, task_id, "review_task")
+        status = str(task.get("status") or "")
+        if status != "submitted":
+            _reject_task_transition(
+                status,
+                status,
+                "review_task",
+                (
+                    f"illegal_transition: review_task: task is '{status}'; "
+                    "wait for submit_task"
+                ),
+                arguments=arguments,
+                task_id=task_id,
+            )
+        submitted_by = _first_text(task.get("submitted_by"), task.get("submittedBy"))
+        # Self-review compares identity + provenance (#1467 round 7). The
+        # exact actor-string match always holds. When BOTH sides are
+        # runtime-sourced — the record carries submitted_by_source
+        # "runtime" and the reviewer has a trusted runtime identity — the
+        # normalized accounts compare strictly, "default" included: a
+        # trusted member literally named "default" is an identity, never
+        # the legacy sentinel. Otherwise — a legacy record without the
+        # provenance marker, or a payload-sourced side — the
+        # unknown-sentinel rule applies for compatibility: "default" /
+        # "unknown" / empty never match, concrete accounts still compare
+        # (#1467 round 6).
+        reviewer_account = _account_of(reviewer).strip().lower()
+        submitter_account = _account_of(submitted_by).strip().lower()
+        submitter_source = str(task.get("submitted_by_source") or "")
+        both_runtime = submitter_source == "runtime" and reviewer_source == "runtime"
+        if submitted_by and (
+            reviewer == submitted_by
+            or (both_runtime and reviewer_account == submitter_account)
+            or (
+                not both_runtime
+                and _known_account_of(reviewer)
+                and _known_account_of(reviewer) == _known_account_of(submitted_by)
+            )
+        ):
+            raise ProtocolGuardError(
+                "self_review_forbidden",
+                "reviewer must differ from submitted_by",
+            )
+        review: dict[str, Any] = {
+            "verdict": verdict,
+            "reviewer": reviewer,
+            "reviewer_source": reviewer_source,
+            "reviewer_team": _runtime_team_name(),
+            "reviewed_at": reviewed_at,
+            "note": note,
+        }
+        if scorecard is not None:
+            review["scorecard"] = scorecard
+        task["review"] = review
+        return review
+
+    # #1467 round 20: this caller's body must be bound to the version it
+    # read. The old tail re-read the peer's ETag but still committed through
+    # _sync_task, which merges only cancellation fields — so a freeze that
+    # landed after the pre-write stat was silently erased even though the
+    # guard had "seen" the newer version. _commit_task_guarded does the whole
+    # job: versioned bracket read -> pre-write stat -> derived-file push
+    # (never meta.json) -> If-Match meta commit; a 409 re-reads the bracket
+    # and replays apply_review on the peer's version, and any other refusal
+    # fails closed instead of degrading to an unconditional push.
+    task, review, committed = _commit_task_guarded(
+        arguments,
+        task_id,
+        apply_review,
+        action="review_task",
+        exclude=["spec.md", "base/"],
+    )
+    if not committed:
         raise ValueError("review_task: task sync failed (retry)")
-    if not _task_meta_commit_landed(arguments, task_id, task):
-        raise _TaskCommitConflict(
-            "a peer overwrote the task during the commit window"
-        )
     return {
         "ok": True,
         "tool": "taskflow",
         "action": "review_task",
         "task": task,
         "review": review,
-        "synced": synced,
+        "synced": committed,
     }

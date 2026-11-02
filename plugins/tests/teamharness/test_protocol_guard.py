@@ -346,6 +346,14 @@ def storage(monkeypatch: pytest.MonkeyPatch) -> None:
         return {"ok": True}
 
     monkeypatch.setattr(server, "_filesync", _fake_filesync)
+    # #1467 round 20: every task write now lands through the conditional
+    # meta commit; the transport is stubbed here (an unconditional accept
+    # keeps these protocol-layer tests focused on the guard, not HTTP).
+    monkeypatch.setattr(
+        server.sync,
+        "_commit_task_meta",
+        lambda _tid, _meta, _etag, _team="": {"ok": True, "etag": "etag-committed"},
+    )
     monkeypatch.setattr(server, "_sync_task", lambda *_a, **_k: True)
     monkeypatch.setattr(server, "_sync_project", lambda *_a, **_k: True)
     monkeypatch.setattr(server, "_publish_task_artifacts", lambda *_a, **_k: [])
@@ -375,8 +383,13 @@ def shared_remote(monkeypatch: pytest.MonkeyPatch, storage: None) -> dict[str, A
         planes["committed"] = server._read_json(path)
         return True
 
+    def fake_commit(_task_id: Any, meta: dict[str, Any], _etag: Any, _team: str = "") -> dict[str, Any]:
+        planes["committed"] = meta
+        return {"ok": True, "etag": "etag-committed"}
+
     monkeypatch.setattr(server, "_pull_task", fake_pull)
     monkeypatch.setattr(server, "_sync_task", fake_sync)
+    monkeypatch.setattr(server.sync, "_commit_task_meta", fake_commit)
     return planes
 
 
@@ -2856,12 +2869,14 @@ def test_review_commit_preserves_freeze_committed_after_pull(
         )
         return True
 
-    def fake_sync(arguments: dict[str, Any], task_id: Any, **_kw: Any) -> bool:
-        state["remote"] = server._read_json(
-            server._task_state_path(arguments, str(task_id))
-        )
+    def fake_commit(
+        _task_id: Any, meta: dict[str, Any], etag: Any, _team: str = ""
+    ) -> dict[str, Any]:
+        if etag != f"etag-v{state['version']}":
+            return {"ok": False, "conflict": True}
+        state["remote"] = meta
         state["version"] += 1
-        return True
+        return {"ok": True, "etag": f"etag-v{state['version']}"}
 
     def fake_filesync(args: dict[str, Any]) -> dict[str, Any]:
         action = args.get("action")
@@ -2894,7 +2909,7 @@ def test_review_commit_preserves_freeze_committed_after_pull(
         return {"ok": True}
 
     monkeypatch.setattr(server, "_pull_task", fake_pull)
-    monkeypatch.setattr(server, "_sync_task", fake_sync)
+    monkeypatch.setattr(server.sync, "_commit_task_meta", fake_commit)
     monkeypatch.setattr(server, "_filesync", fake_filesync)
 
     result = _review(tmp_path, role="critic", account="@bob:example.test", verdict="pass")
@@ -3042,17 +3057,74 @@ def _r18_versioned_planes(
             commit_peer_freeze()
         return True
 
-    def fake_sync(arguments: dict[str, Any], task_id: Any, **_kw: Any) -> bool:
-        state["remote"] = server._read_json(
-            server._task_state_path(arguments, str(task_id))
-        )
+    def fake_commit(
+        _task_id: Any, meta: dict[str, Any], etag: Any, _team: str = ""
+    ) -> dict[str, Any]:
+        # If-Match (#1467 round 20): the commit lands only on the version
+        # the caller read — a peer that committed inside the window turns
+        # this into a 409-style conflict and the caller replays.
+        if etag != f"etag-{state['version']}":
+            return {"ok": False, "conflict": True}
+        state["remote"] = meta
         state["version"] += 1
-        return True
+        return {"ok": True, "etag": f"etag-{state['version']}"}
 
     monkeypatch.setattr(server, "_filesync", fake_filesync)
     monkeypatch.setattr(server, "_pull_task", fake_pull)
-    monkeypatch.setattr(server, "_sync_task", fake_sync)
+    monkeypatch.setattr(server.sync, "_commit_task_meta", fake_commit)
     return state, calls
+
+
+def test_review_task_preserves_freeze_committed_between_stat_and_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None
+) -> None:
+    """#1467 round 20 — the maintainer's exact repro, through the review
+    entry point.
+
+    The peer worker commits decision_status=frozen after the review's
+    pre-commit stat (the third version read). The old tail re-read the new
+    ETag but still committed through _sync_task, which merges only
+    cancellation fields — so the stale review body was committed under the
+    peer's fresh version and the freeze, its approvals and the history were
+    erased even though the review "succeeded". The review now commits
+    through the conditional endpoint: the stale base is refused (409 ->
+    conflict), the whole bracket is re-read and the review mutation is
+    replayed on the frozen version.
+    """
+    _enforce_on(monkeypatch)
+    _write_project(tmp_path, task_status="assigned")
+    _write_task_meta(tmp_path, {
+        "task_id": TASK_ID,
+        "project_id": PROJECT_ID,
+        "status": "assigned",
+        "assigned_to": WORKER_A,
+    })
+    submitted = _submit(tmp_path, role="worker", account="@alice:example.test")
+    assert submitted["ok"] is True
+    base = _task_meta(tmp_path)
+
+    commits: list[dict[str, Any]] = []
+    state, calls = _r19_commit_planes(monkeypatch, base, commits)
+
+    result = _review(tmp_path, role="critic", account="@bob:example.test")
+    assert result["ok"] is True
+
+    # The stale commit was refused and the mutation replayed on the frozen
+    # base: two commits, the first on the pre-freeze version.
+    assert len(commits) == 2
+    assert commits[0]["etag"] == "etag-1"
+    assert commits[1]["etag"] == "etag-2"
+    assert calls["pull"] == 2
+    assert state["injected"] is True
+
+    committed = state["remote"]
+    assert committed["decision_status"] == "frozen"
+    assert committed["attention"] == state["freeze"]["attention"]
+    assert committed["decision_status_history"] == state["freeze"][
+        "decision_status_history"
+    ]
+    assert committed["review"]["verdict"] == "pass"
+    assert committed["review"]["reviewer"]
 
 
 def test_review_commit_preserves_freeze_committed_between_pull_and_stat(

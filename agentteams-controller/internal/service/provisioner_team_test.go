@@ -366,7 +366,9 @@ func (fakeGateway) UnexposePort(context.Context, gateway.PortExposeRequest) erro
 func (fakeGateway) EnsureServiceSource(context.Context, string, string, int, string) error {
 	return nil
 }
-func (fakeGateway) EnsureStaticServiceSource(context.Context, string, string, int) error { return nil }
+func (fakeGateway) EnsureStaticServiceSource(context.Context, string, string, int, string) error {
+	return nil
+}
 func (fakeGateway) EnsureRoute(context.Context, string, []string, string, int, string) error {
 	return nil
 }

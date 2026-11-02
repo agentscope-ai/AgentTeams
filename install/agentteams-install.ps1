@@ -1398,22 +1398,25 @@ function New-OpenAICompatProvider {
 
     $consoleUrl = "http://localhost:$ConsolePort"
 
-    # Parse base URL
-    $protocol = "https"
-    $port = 443
-    $urlWithoutProto = $BaseUrl -replace "^https?://", ""
-
-    if ($BaseUrl -match "^http://") {
-        $protocol = "http"
-        $port = 80
+    $uri = [Uri]$BaseUrl
+    if (-not $uri.IsAbsoluteUri -or $uri.Scheme -notin @('http', 'https')) {
+        Write-Log (Get-Msg "install.openai_compat.missing")
+        return $false
     }
-
-    $domain = $urlWithoutProto.Split("/")[0]
-
-    if ($domain -match ":(\d+)$") {
-        $port = [int]$Matches[1]
-        $domain = $domain -replace ":\d+$", ""
+    $protocol = $uri.Scheme
+    $port = $uri.Port
+    $domain = $uri.DnsSafeHost
+    $sourceType = "dns"
+    $ip = $null
+    if ([Net.IPAddress]::TryParse($domain, [ref]$ip)) { $sourceType = "static" }
+    $urlHost = $domain
+    if ($domain.Contains(':')) {
+        Write-Log "ERROR: Higress Console static service sources do not support IPv6 endpoints"
+        return $false
     }
+    $sourceDomain = $domain
+    if ($sourceType -eq "static") { $sourceDomain = "${urlHost}:$port" }
+    $customUrl = "${protocol}://${urlHost}$($uri.PathAndQuery)$($uri.Fragment)"
 
     Write-Log (Get-Msg "install.openai_compat.creating")
     Write-Log (Get-Msg "install.openai_compat.domain" -f $domain)
@@ -1422,21 +1425,38 @@ function New-OpenAICompatProvider {
 
     $serviceName = "openai-compat"
 
-    # Create DNS service source
+    try {
+        $loginBody = @{ username = $script:config.ADMIN_USER; password = $script:config.ADMIN_PASSWORD } | ConvertTo-Json -Compress
+        Invoke-RestMethod -Uri "$consoleUrl/session/login" -Method POST -ContentType "application/json" -Body $loginBody -SessionVariable consoleSession -ErrorAction Stop | Out-Null
+    } catch {
+        Write-Log (Get-Msg "install.openai_compat.provider_fail")
+        return $false
+    }
+
+    # Repair an existing source on upgrade, including a previous DNS reference.
     $serviceBody = @{
-        type = "dns"
+        type = $sourceType
         name = $serviceName
-        port = $port.ToString()
+        port = $port
         protocol = $protocol
         proxyName = ""
-        domain = $domain
-    } | ConvertTo-Json -Compress
+        domain = $sourceDomain
+    }
 
     try {
-        Invoke-RestMethod -Uri "$consoleUrl/v1/service-sources" -Method POST -ContentType "application/json" -Body $serviceBody -ErrorAction SilentlyContinue | Out-Null
+        Invoke-RestMethod -WebSession $consoleSession -Uri "$consoleUrl/v1/service-sources" -Method POST -ContentType "application/json" -Body ($serviceBody | ConvertTo-Json -Compress) -ErrorAction Stop | Out-Null
     }
     catch {
-        Write-Log (Get-Msg "install.openai_compat.service_fail")
+        if ([int]$_.Exception.Response.StatusCode -ne 409) {
+            Write-Log (Get-Msg "install.openai_compat.service_fail")
+            return $false
+        }
+        $existing = Invoke-RestMethod -WebSession $consoleSession -Uri "$consoleUrl/v1/service-sources/$serviceName" -Method GET -ErrorAction Stop
+        $serviceBody.version = $existing.data.version
+        foreach ($property in $existing.data.PSObject.Properties) {
+            if (-not $serviceBody.ContainsKey($property.Name)) { $serviceBody[$property.Name] = $property.Value }
+        }
+        Invoke-RestMethod -WebSession $consoleSession -Uri "$consoleUrl/v1/service-sources/$serviceName" -Method PUT -ContentType "application/json" -Body ($serviceBody | ConvertTo-Json -Compress) -ErrorAction Stop | Out-Null
     }
 
     Start-Sleep -Seconds 2
@@ -1450,18 +1470,30 @@ function New-OpenAICompatProvider {
         protocol = "openai/v1"
         tokenFailoverConfig = @{ enabled = $false }
         rawConfigs = @{
-            openaiCustomUrl = $BaseUrl
-            openaiCustomServiceName = "$serviceName.dns"
+            openaiCustomUrl = $customUrl
+            openaiCustomServiceName = "$serviceName.$sourceType"
             openaiCustomServicePort = $port
         }
-    } | ConvertTo-Json -Compress -Depth 3
+    }
 
     try {
-        Invoke-RestMethod -Uri "$consoleUrl/v1/ai/providers" -Method POST -ContentType "application/json" -Body $providerBody -ErrorAction SilentlyContinue | Out-Null
+        Invoke-RestMethod -WebSession $consoleSession -Uri "$consoleUrl/v1/ai/providers" -Method POST -ContentType "application/json" -Body ($providerBody | ConvertTo-Json -Compress -Depth 3) -ErrorAction Stop | Out-Null
         Write-Log (Get-Msg "install.openai_compat.success")
         return $true
     }
     catch {
+        if ([int]$_.Exception.Response.StatusCode -eq 409) {
+            $existing = Invoke-RestMethod -WebSession $consoleSession -Uri "$consoleUrl/v1/ai/providers/$serviceName" -Method GET -ErrorAction Stop
+            $providerBody.version = $existing.data.version
+            foreach ($property in $existing.data.PSObject.Properties) {
+                if (-not $providerBody.ContainsKey($property.Name)) { $providerBody[$property.Name] = $property.Value }
+            }
+            foreach ($property in $existing.data.rawConfigs.PSObject.Properties) {
+                if (-not $providerBody.rawConfigs.ContainsKey($property.Name)) { $providerBody.rawConfigs[$property.Name] = $property.Value }
+            }
+            Invoke-RestMethod -WebSession $consoleSession -Uri "$consoleUrl/v1/ai/providers/$serviceName" -Method PUT -ContentType "application/json" -Body ($providerBody | ConvertTo-Json -Compress -Depth 3) -ErrorAction Stop | Out-Null
+            return $true
+        }
         Write-Log (Get-Msg "install.openai_compat.provider_fail")
         return $false
     }

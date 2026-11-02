@@ -1,6 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+usage() {
+  cat <<'EOF'
+Usage: install.sh [--dry-run]
+
+  --dry-run  Print the planned install on stdout; change nothing
+EOF
+}
+
+DRY_RUN=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEAMHARNESS_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 BUILD_SCRIPT="${SCRIPT_DIR}/scripts/build-qwenpaw-plugin.rb"
@@ -13,6 +30,13 @@ if ! command -v qwenpaw >/dev/null 2>&1; then
 fi
 
 WORKING_DIR="${QWENPAW_WORKING_DIR:-$HOME/.qwenpaw}"
+
+if [ "$DRY_RUN" -eq 1 ]; then
+  printf '{"event":"install","runtime":"qwenpaw","dryRun":true,"pluginDir":"%s"}\n' \
+    "${WORKING_DIR}/plugins/teamharness"
+  echo "qwenpaw adapter: dry-run, no files changed" >&2
+  exit 0
+fi
 
 # Content hash of exactly what build-qwenpaw-plugin.rb would package: the
 # manifest, prompts, skills, mcp, the adapter entrypoints, and the version

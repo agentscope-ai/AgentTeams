@@ -12,6 +12,16 @@
       "id": "qwenpaw",
       "path": "adapters/qwenpaw",
       "pluginId": "teamharness"
+    },
+    {
+      "id": "openclaw",
+      "path": "adapters/openclaw",
+      "pluginId": "agentteams-teamharness"
+    },
+    {
+      "id": "hermes",
+      "path": "adapters/hermes",
+      "pluginId": "agentteams-teamharness"
     }
   ]
 }

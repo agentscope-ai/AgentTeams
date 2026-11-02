@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -6430,5 +6432,372 @@ func TestGetProjectEvents_CursorBoundToKind(t *testing.T) {
 	rec := doGetProjectEvents(t, h, "/api/v1/projects/p1/events?cursor=" + old)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("old cursor on default feed status=%d body=%s, want 200 (kind check passed)", rec.Code, rec.Body.String())
+	}
+}
+
+// =====================================================================
+// #1402: project writes must preserve the loop pause veto
+// =====================================================================
+
+// vetoLoopMeta is the loop block the #1402 tests seed: the human veto
+// (pause_sources) plus an unknown forward-compat key — both must survive
+// every project write (the defect class: the next field added to the loop
+// block must not be silently dropped by a project write).
+func vetoLoopMeta() map[string]any {
+	return map[string]any{
+		"goal":              "g",
+		"stop_condition":    "s",
+		"current_iteration": 1,
+		"max_iterations":    5,
+		"status":            "running",
+		"pause_sources":     []string{"user"},
+		"x_future":          "keep-me",
+	}
+}
+
+// storedLoop reads back the persisted project meta and returns its loop block.
+func storedLoop(t *testing.T, store *ossfake.Memory, key string) map[string]any {
+	t.Helper()
+	data, err := store.GetObject(context.Background(), key)
+	if err != nil {
+		t.Fatalf("read back %s: %v", key, err)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(data, &meta); err != nil {
+		t.Fatalf("decode %s: %v", key, err)
+	}
+	loop, ok := meta["loop"].(map[string]any)
+	if !ok {
+		t.Fatalf("stored meta has no loop block: %s", data)
+	}
+	return loop
+}
+
+func assertLoopVetoIntact(t *testing.T, loop map[string]any) {
+	t.Helper()
+	sources, ok := loop["pause_sources"].([]any)
+	if !ok || len(sources) != 1 || sources[0] != "user" {
+		t.Fatalf("pause_sources=%v, want [user] (veto dropped by project write)", loop["pause_sources"])
+	}
+	if loop["x_future"] != "keep-me" {
+		t.Fatalf("x_future=%v, want keep-me (unknown loop key dropped by project write)", loop["x_future"])
+	}
+}
+
+func sameSet(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	g := append([]string(nil), got...)
+	w := append([]string(nil), want...)
+	sort.Strings(g)
+	sort.Strings(w)
+	for i := range g {
+		if g[i] != w[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestResumeProjectPreservesLoopPauseSources is the maintainer's #1402
+// reproduction: a paused project seeded with loop.pause_sources=["user"]
+// is resumed by a Manager. The project becomes active, but the veto must
+// survive the write — pre-fix, the typed loopMeta dropped pause_sources,
+// so the worker-side _loop_pause_state saw (False, []) and dispatch
+// proceeded, bypassing the admin-only user release.
+func TestResumeProjectPreservesLoopPauseSources(t *testing.T) {
+	key := "teams/alpha-team/shared/projects/p1/meta.json"
+	store := ossfake.NewMemory()
+	putProject(store, key, map[string]any{
+		"project_id": "p1", "title": "P1", "status": "paused", "plan_type": "loop", "team_id": "alpha-team",
+		"tasks": []map[string]any{},
+		"loop":  vetoLoopMeta(),
+	})
+	h := newProjectTestHandler(t, store, team("alpha-team"))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/resume", nil)
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "manager"})
+	rec := httptest.NewRecorder()
+	h.ResumeProject(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var wf workflowResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &wf); err != nil {
+		t.Fatalf("decode workflow response: %v", err)
+	}
+	if wf.Status != "active" {
+		t.Fatalf("status=%q, want active", wf.Status)
+	}
+	assertLoopVetoIntact(t, storedLoop(t, store, key))
+}
+
+// TestStoredMetaKeepsTheVetoForThePythonGate feeds the exact bytes the
+// controller persists through the real worker-side gate (_loop_pause_state
+// in plugins/teamharness/mcp/project/state.py) — the component that
+// actually blocks dispatch. It runs the maintainer's reproduction command
+// against the seed and the post-resume stored bytes:
+//
+//	python3 -c "import json,sys; sys.path.insert(0,'plugins/teamharness/mcp'); \
+//	  from project.state import _loop_pause_state; \
+//	  print(_loop_pause_state(json.load(open(sys.argv[1]))))" <meta.json>
+//
+// The seed (status=paused + user veto) yields (True, ['project', 'user'])
+// — the maintainer's tuple. The post-resume bytes (status=active + user
+// veto) must yield (True, ['user']): still paused for dispatch, veto
+// intact. Pre-fix, the same post-resume bytes yielded (False, []) — the
+// bypass.
+func TestStoredMetaKeepsTheVetoForThePythonGate(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 not available; the worker-side gate check needs the interpreter")
+	}
+	root := findRepoRoot(t)
+
+	gate := func(data []byte) (bool, []string) {
+		t.Helper()
+		tmp := filepath.Join(t.TempDir(), "meta.json")
+		if err := os.WriteFile(tmp, data, 0o644); err != nil {
+			t.Fatalf("write temp meta: %v", err)
+		}
+		cmd := exec.Command(python, "-c",
+			"import json,sys; sys.path.insert(0,'plugins/teamharness'); sys.path.insert(0,'plugins/teamharness/mcp'); from project.state import _loop_pause_state; print(_loop_pause_state(json.load(open(sys.argv[1]))))",
+			tmp)
+		cmd.Dir = root
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("worker-side gate failed: %v\n%s", err, out)
+		}
+		return parseLoopPauseState(t, string(out))
+	}
+
+	key := "teams/alpha-team/shared/projects/p1/meta.json"
+	store := ossfake.NewMemory()
+	putProject(store, key, map[string]any{
+		"project_id": "p1", "title": "P1", "status": "paused", "plan_type": "loop", "team_id": "alpha-team",
+		"tasks": []map[string]any{},
+		"loop":  vetoLoopMeta(),
+	})
+	h := newProjectTestHandler(t, store, team("alpha-team"))
+
+	seed, err := store.GetObject(context.Background(), key)
+	if err != nil {
+		t.Fatalf("read seed: %v", err)
+	}
+	if paused, sources := gate(seed); !paused || !sameSet(sources, []string{"project", "user"}) {
+		t.Fatalf("seed gate=(%v, %v), want (True, {project user}) order-insensitive", paused, sources)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/resume", nil)
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "manager"})
+	rec := httptest.NewRecorder()
+	h.ResumeProject(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("resume status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+
+	after, err := store.GetObject(context.Background(), key)
+	if err != nil {
+		t.Fatalf("read post-resume meta: %v", err)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(after, &meta); err != nil {
+		t.Fatalf("decode post-resume meta: %v", err)
+	}
+	if meta["status"] != "active" {
+		t.Fatalf("post-resume status=%v, want active", meta["status"])
+	}
+	if paused, sources := gate(after); !paused || !sameSet(sources, []string{"user"}) {
+		t.Fatalf("post-resume gate=(%v, %v), want (True, [user]) — the veto must survive the project resume", paused, sources)
+	}
+}
+
+// findRepoRoot walks up from the test working directory to the repository
+// root (the directory containing plugins/teamharness/mcp/project/state.py).
+func findRepoRoot(t *testing.T) string {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	dir := wd
+	for {
+		candidate := filepath.Join(dir, "plugins", "teamharness", "mcp", "project", "state.py")
+		if _, err := os.Stat(candidate); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Skipf("cannot locate plugins/teamharness/mcp/project/state.py above %s", wd)
+		}
+		dir = parent
+	}
+}
+
+// parseLoopPauseState parses the gate's printed tuple, e.g.
+// "(True, ['project', 'user'])", into (paused, sources). The sources
+// comparison is order-insensitive (sameSet on the caller side).
+func parseLoopPauseState(t *testing.T, out string) (bool, []string) {
+	t.Helper()
+	trimmed := strings.TrimSpace(out)
+	if !strings.HasPrefix(trimmed, "(") || !strings.HasSuffix(trimmed, ")") {
+		t.Fatalf("unexpected gate output: %q", out)
+	}
+	inner := trimmed[1 : len(trimmed)-1]
+	parts := strings.SplitN(inner, ",", 2)
+	if len(parts) != 2 {
+		t.Fatalf("unexpected gate output: %q", out)
+	}
+	paused := strings.TrimSpace(parts[0]) == "True"
+	list := strings.TrimSpace(parts[1])
+	if !strings.HasPrefix(list, "[") || !strings.HasSuffix(list, "]") {
+		t.Fatalf("unexpected gate output: %q", out)
+	}
+	inside := strings.TrimSpace(list[1 : len(list)-1])
+	var sources []string
+	if inside != "" {
+		for _, s := range strings.Split(inside, ",") {
+			if s = strings.Trim(strings.TrimSpace(s), "'\""); s != "" {
+				sources = append(sources, s)
+			}
+		}
+	}
+	return paused, sources
+}
+
+// TestProjectWritePathsPreserveUnknownLoopKeys walks the project write
+// paths that touch a loop project (named per row) and asserts the loop
+// block survives with the veto and the unknown key intact. The replan row
+// documents that a REJECTED loop replan (409 by design) also writes its
+// audit entry without clobbering the loop block.
+func TestProjectWritePathsPreserveUnknownLoopKeys(t *testing.T) {
+	cases := []struct {
+		name             string
+		seedStatus       string
+		body             string
+		withLoopTasks    bool
+		wantCode         int
+		wantProjectState string
+	}{
+		{name: "pause", seedStatus: "active", wantCode: http.StatusOK, wantProjectState: "paused"},
+		{name: "resume", seedStatus: "paused", wantCode: http.StatusOK, wantProjectState: "active"},
+		{name: "complete", seedStatus: "active", withLoopTasks: true, wantCode: http.StatusOK, wantProjectState: "completed"},
+		{name: "replan", seedStatus: "active",
+			body:             `{"tasks":[{"taskId":"x","title":"X","assignedTo":"@w1"}]}`,
+			wantCode:         http.StatusConflict, // loop replan is rejected by design
+			wantProjectState: "active",
+	},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			key := "teams/alpha-team/shared/projects/p1/meta.json"
+			store := ossfake.NewMemory()
+			loop := vetoLoopMeta()
+			if tc.withLoopTasks {
+				// complete requires every loop task to be terminal
+				loop["tasks"] = []map[string]any{
+					{"task_id": "A", "title": "A", "assigned_to": "@w1", "depends_on": []string{}, "status": "completed"},
+				}
+			}
+			putProject(store, key, map[string]any{
+				"project_id": "p1", "title": "P1", "status": tc.seedStatus, "plan_type": "loop", "team_id": "alpha-team",
+				"tasks": []map[string]any{},
+				"loop":  loop,
+			})
+			h := newProjectTestHandler(t, store, team("alpha-team"))
+
+			path := map[string]string{"pause": "/pause", "resume": "/resume", "complete": "/complete", "replan": "/replan"}[tc.name]
+			var reqBody io.Reader
+			if tc.body != "" {
+				reqBody = strings.NewReader(tc.body)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1"+path, reqBody)
+			req.SetPathValue("id", "p1")
+			req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+			rec := httptest.NewRecorder()
+			switch tc.name {
+			case "pause":
+				h.PauseProject(rec, req)
+			case "resume":
+				h.ResumeProject(rec, req)
+			case "complete":
+				h.CompleteProject(rec, req)
+			case "replan":
+				h.ReplanProject(rec, req)
+			}
+			if rec.Code != tc.wantCode {
+				t.Fatalf("%s: status=%d body=%s, want %d", tc.name, rec.Code, rec.Body.String(), tc.wantCode)
+			}
+			loopBlock := storedLoop(t, store, key)
+			assertLoopVetoIntact(t, loopBlock)
+			data, err := store.GetObject(context.Background(), key)
+			if err != nil {
+				t.Fatalf("read back: %v", err)
+			}
+			var meta map[string]any
+			_ = json.Unmarshal(data, &meta)
+			if meta["status"] != tc.wantProjectState {
+				t.Fatalf("%s: project status=%v, want %s", tc.name, meta["status"], tc.wantProjectState)
+			}
+		})
+	}
+}
+
+// TestWorkflowNextEmptyWhileLoopVetoHeld guards the buildWorkflow side of
+// #1402: while the loop holds a pause source, next must be empty even on
+// an active project — mirroring _ready_loop_nodes, which checks the pause
+// state before computing ready nodes (the e2e assertion a fresh-process
+// delegate sees next == [] while blocked).
+func TestWorkflowNextEmptyWhileLoopVetoHeld(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		loop map[string]any
+		want []string
+	}{
+		{
+			name: "veto held",
+			loop: map[string]any{
+				"goal": "g", "stop_condition": "s", "current_iteration": 1, "max_iterations": 5, "status": "running",
+				"pause_sources": []string{"user"},
+				"tasks":         []map[string]any{{"task_id": "A", "title": "A", "assigned_to": "@w1", "depends_on": []string{}, "status": "planned"}},
+			},
+			want: nil,
+		},
+		{
+			name: "no veto (control)",
+			loop: map[string]any{
+				"goal": "g", "stop_condition": "s", "current_iteration": 1, "max_iterations": 5, "status": "running",
+				"tasks": []map[string]any{{"task_id": "A", "title": "A", "assigned_to": "@w1", "depends_on": []string{}, "status": "planned"}},
+			},
+			want: []string{"A"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := ossfake.NewMemory()
+			putProject(store, "shared/projects/p1/meta.json", map[string]any{
+				"project_id": "p1", "title": "P", "status": "active", "plan_type": "loop",
+				"tasks": []map[string]any{},
+				"loop":  tc.loop,
+			})
+			h := newProjectTestHandler(t, store)
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/workflow", nil)
+			req.SetPathValue("id", "p1")
+			req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+			rec := httptest.NewRecorder()
+			h.GetProjectWorkflow(rec, req)
+
+			var wf workflowResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &wf); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if !sameSet(wf.Next, tc.want) {
+				t.Fatalf("next=%v, want %v", wf.Next, tc.want)
+			}
+		})
 	}
 }

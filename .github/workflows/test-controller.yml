@@ -408,3 +408,339 @@ jobs:
         run: |
           python -m pytest plugins/tests/agentteams-matrix/golden -q
           python -m pytest plugins/tests/agentteams-teamharness/golden -q
+
+  openclaw-native-discovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install pinned OpenClaw CLI
+        run: npm install -g openclaw@2026.4.14
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install \
+            'pytest>=8.3,<10'
+
+      - name: Run OpenClaw native discovery regression
+        env:
+          OPENCLAW_BIN: openclaw
+          OPENCLAW_EXPECTED_VERSION: '2026.4.14'
+        run: |
+          python -m pytest plugins/tests/agentteams-teamharness/test_openclaw_native_discovery.py -q -rs
+
+  openclaw-child-env:
+    # #1459 P2: the native child-env regression must actually RUN in CI — the
+    # discovery suite alone does not select it. A configured SDK that cannot
+    # run fails this required job (AGENTTEAMS_TEST_REQUIRE_NATIVE_SDK turns
+    # the skips into failures) instead of a silent green.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install pinned OpenClaw CLI
+        run: npm install -g openclaw@2026.4.14
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install \
+            'pytest>=8.3,<10'
+
+      - name: Run the OpenClaw child-env regressions
+        env:
+          OPENCLAW_BIN: openclaw
+          OPENCLAW_EXPECTED_VERSION: '2026.4.14'
+          AGENTTEAMS_TEST_REQUIRE_NATIVE_SDK: '1'
+        run: |
+          python -m pytest plugins/tests/agentteams-teamharness/test_openclaw_child_env.py -q -rs
+
+  hermes-native-child-env:
+    # #1459 P2: the Hermes mirror of the OpenClaw child-env job. hermes-agent
+    # is cloned at the adapter's declared minimum (v2026.4.16); its import
+    # closure is installed explicitly because the SDK pins its own
+    # dependencies to python >= 3.14 (a tree install provides no closure on
+    # 3.11). A configured SDK that cannot run fails the job.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Shallow-clone hermes-agent at the declared minimum
+        id: sdk
+        env:
+          HERMES_SDK_REF: v2026.4.16
+        run: |
+          SDK_ROOT="$(mktemp -d)"
+          git clone --depth 1 --branch "$HERMES_SDK_REF" \
+            https://github.com/NousResearch/hermes-agent.git "$SDK_ROOT"
+          echo "root=$SDK_ROOT" >> "$GITHUB_OUTPUT"
+
+      - name: Install the real-SDK import closure and test dependencies
+        run: |
+          python -m pip install \
+            'ruamel.yaml>=0.18,<0.19' \
+            'matrix-nio>=0.25,<0.27' \
+            'PyYAML>=6.0,<7' \
+            'qwenpaw>=2.2.1,<2.3' \
+            'python-dotenv>=1.0,<2' \
+            'httpx>=0.27,<1' \
+            'openai>=1.0' \
+            'pydantic>=2.0,<3' \
+            'requests>=2.31' \
+            'rich>=13.0' \
+            'tenacity>=8.0' \
+            'Markdown>=3.5' \
+            'jinja2>=3.1' \
+            'packaging>=24.0' \
+            'pytest>=8.3,<10'
+
+      - name: Run the Hermes child-env regressions
+        env:
+          HERMES_SDK_ROOT: ${{ steps.sdk.outputs.root }}
+          AGENTTEAMS_TEST_REQUIRE_NATIVE_SDK: '1'
+        run: |
+          python -m pytest plugins/tests/agentteams-teamharness/test_hermes_child_env.py -q -rs
+
+  # #1431 closed loop: pause stops new delegations and downstream/next-round
+  # work, an in-flight task still saves its result under pause, and an
+  # authorized resume in a fresh process continues exactly once. The driver
+  # (plugins/tests/teamharness/e2e/loop_driver.py) runs the real
+  # plugins/teamharness/mcp taskflow in separate processes against the
+  # embedded controller + object store; only the Matrix notifier is stubbed.
+  # The loop pause/resume half additionally goes through the controller's
+  # Loop endpoints (POST /api/v1/loops/{name}/pause|resume): the Loop CR is
+  # created through the embedded kube-apiserver, the durable
+  # loop.pause_sources is read straight from the object store, and the
+  # human-source + worker/manager authorization boundaries are asserted.
+  #
+  # Object store: RustFS — the repo-standard S3-compatible engine (see
+  # test/e2e/external-s3-backend.sh). The minio/minio image is no longer
+  # pullable (Docker Hub 404, dl.min.io 410), so the job cannot run on it.
+  loop-pause-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      objstore:
+        image: rustfs/rustfs:1.0.3
+        env:
+          RUSTFS_ACCESS_KEY: minioadmin
+          RUSTFS_SECRET_KEY: minioadmin
+          RUSTFS_ADDRESS: ":9000"
+          RUSTFS_CONSOLE_ENABLE: "false"
+        ports:
+          - 9000:9000
+
+    # Object-store credentials (RustFS) for the mc steps and the controller
+    # start blocks below. The MINIO_ROOT_* names are kept so the start block
+    # stays byte-identical across the initial start and the mid-job restart.
+    env:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agentteams-controller/go.mod
+          cache-dependency-path: agentteams-controller/go.sum
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install \
+            'PyYAML>=6.0,<7' \
+            'matrix-nio>=0.25,<0.27' \
+            'pytest>=8.3,<10' \
+            'pytest-asyncio>=0.23,<2'
+
+      - name: Install mc and kube-apiserver
+        run: |
+          # dl.min.io is gone (410); this is the same mc release the
+          # repo-standard S3 backend test pins (test/e2e/external-s3-backend.sh).
+          curl -fSL -o /usr/local/bin/mc \
+            https://github.com/minio/mc/releases/download/RELEASE.2025-08-13T08-35-41Z/mc.linux-amd64.RELEASE.2025-08-13T08-35-41Z
+          sudo chmod +x /usr/local/bin/mc
+          # embedded mode execs kube-apiserver by name; it must be on PATH.
+          curl -fSL -o /usr/local/bin/kube-apiserver \
+            https://dl.k8s.io/release/v1.31.3/bin/linux/amd64/kube-apiserver
+          sudo chmod +x /usr/local/bin/kube-apiserver
+
+      - name: Wait for the object store
+        run: |
+          # Repo-standard probe (test/e2e/external-s3-backend.sh
+          # wait_health): the admin plane is reachable via `mc admin user
+          # list`, retried 60x1s. `mc admin info` is NOT usable — RustFS
+          # rejects it. The alias is (re)set inside the loop because
+          # `mc alias set` itself probes the endpoint and fails while the
+          # store is still starting.
+          for _ in $(seq 1 60); do
+            if mc -q alias set e2eobjstore http://127.0.0.1:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null 2>&1 \
+              && mc -q admin user list e2eobjstore >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "object store did not become healthy in 60s" >&2
+          exit 1
+
+      - name: Create the object-store bucket
+        env:
+          MC_HOST_agentteams: http://minioadmin:minioadmin@127.0.0.1:9000
+        run: |
+          mc mb --ignore-existing agentteams/agentteams-storage
+
+      - name: Build the controller
+        working-directory: agentteams-controller
+        run: |
+          CGO_ENABLED=1 go build -o /tmp/agentteams-controller ./cmd/controller
+
+      - name: Prepare controller runtime directories
+        run: |
+          mkdir -p /tmp/at-e2e/data /tmp/at-e2e/config
+          # /var/run/agentteams is the fixed CLI-token path and root-owned on
+          # GitHub runners; the controller's MkdirAll must succeed.
+          sudo mkdir -p /var/run/agentteams
+          sudo chown "$USER" /var/run/agentteams
+
+      - name: Start the embedded controller
+        run: |
+          # Point Matrix at the object store: any HTTP answer counts as
+          # "ready" (the init loop only retries on connection errors), and
+          # admin registration then fails fast and non-fatally, so the CLI
+          # token is minted within seconds instead of after a 5-minute
+          # timeout.
+          AGENTTEAMS_KUBE_MODE=embedded \
+          AGENTTEAMS_MATRIX_APPSERVICE_ENABLED=0 \
+          AGENTTEAMS_DATA_DIR=/tmp/at-e2e/data \
+          AGENTTEAMS_CONFIG_DIR=/tmp/at-e2e/config \
+          AGENTTEAMS_CRD_DIR="$GITHUB_WORKSPACE/agentteams-controller/config/crd" \
+          AGENTTEAMS_HTTP_ADDR=127.0.0.1:18090 \
+          AGENTTEAMS_FS_ENDPOINT=http://127.0.0.1:9000 \
+          AGENTTEAMS_FS_ACCESS_KEY="$MINIO_ROOT_USER" \
+          AGENTTEAMS_FS_SECRET_KEY="$MINIO_ROOT_PASSWORD" \
+          AGENTTEAMS_FS_BUCKET=agentteams-storage \
+          AGENTTEAMS_STORAGE_PREFIX=agentteams/agentteams-storage \
+          AGENTTEAMS_MATRIX_URL=http://127.0.0.1:9000 \
+          nohup /tmp/agentteams-controller > /tmp/at-e2e/controller.log 2>&1 &
+          echo $! > /tmp/at-e2e/controller.pid
+
+      - name: Wait for the controller and the CLI token
+        run: |
+          # /healthz is served from process start (before init), so wait for
+          # the CLI token separately: it is minted after the init loop runs.
+          curl --retry-connrefused --retry-delay 1 --retry 60 -f \
+            http://127.0.0.1:18090/healthz
+          for _ in $(seq 1 120); do
+            if [ -s /var/run/agentteams/cli-token ]; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "CLI token never appeared; controller log:" >&2
+          cat /tmp/at-e2e/controller.log >&2
+          exit 1
+
+      - name: Mint the role-boundary tokens (worker / manager)
+        env:
+          E2E_K8S_NAMESPACE: default
+        run: |
+          # The controller's auth plane and the embedded kube-apiserver's
+          # auth plane accept DIFFERENT token kinds (measured on this head):
+          #   - the apiserver authenticates only its static --token-auth-file
+          #     entries (the controller's CLI token is a ServiceAccount token
+          #     and gets 401 there);
+          #   - the controller validates via TokenReview with the
+          #     "agentteams-controller" audience, so it needs ServiceAccount
+          #     tokens carrying that audience (a static token gets 401).
+          # The Loop e2e therefore uses the static admin token for the k8s
+          # API and ServiceAccount tokens for the controller's role boundary.
+          # Roles are derived from the SA NAME (internal/auth/prefix.go), so
+          # agentteams-worker-e2e -> worker and agentteams-manager -> manager.
+          ADMIN_TOKEN="$(head -1 /tmp/at-e2e/data/pki/token.csv | cut -d, -f1)"
+          API="https://127.0.0.1:6443"
+          CA="/tmp/at-e2e/data/pki/ca.crt"
+          for sa in agentteams-worker-e2e agentteams-manager; do
+            curl -sk -m 10 --cacert "$CA" -H "Authorization: Bearer $ADMIN_TOKEN" \
+              -H 'Content-Type: application/json' -X POST \
+              "$API/api/v1/namespaces/$E2E_K8S_NAMESPACE/serviceaccounts" \
+              -d "{\"apiVersion\":\"v1\",\"kind\":\"ServiceAccount\",\"metadata\":{\"name\":\"$sa\"}}" \
+              -o /dev/null
+          done
+          mint() {
+            curl -sk -m 10 --cacert "$CA" -H "Authorization: Bearer $ADMIN_TOKEN" \
+              -H 'Content-Type: application/json' -X POST \
+              "$API/api/v1/namespaces/$E2E_K8S_NAMESPACE/serviceaccounts/$1/token" \
+              -d '{"apiVersion":"authentication.k8s.io/v1","kind":"TokenRequest","spec":{"audiences":["agentteams-controller"]}}' \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"]["token"])'
+          }
+          mint agentteams-worker-e2e > /tmp/at-e2e/e2e-worker-token
+          mint agentteams-manager > /tmp/at-e2e/e2e-manager-token
+          test -s /tmp/at-e2e/e2e-worker-token && test -s /tmp/at-e2e/e2e-manager-token
+
+      - name: Run the loop pause/resume e2e tests
+        env:
+          E2E_CONTROLLER_URL: http://127.0.0.1:18090
+          # Back-compat name for the test module's skip condition: it now
+          # gates on the object store (RustFS), not MinIO.
+          E2E_MINIO: '1'
+          AGENTTEAMS_FS_ENDPOINT: http://127.0.0.1:9000
+          AGENTTEAMS_FS_ACCESS_KEY: minioadmin
+          AGENTTEAMS_FS_SECRET_KEY: minioadmin
+          AGENTTEAMS_STORAGE_PREFIX: agentteams/agentteams-storage
+          # Embedded kube-apiserver (a controller subprocess): the test
+          # creates the Loop CR through it. The durable state check reads
+          # the project meta from the object store with mc (AGENTTEAMS_FS_*
+          # above).
+          E2E_K8S_API_URL: https://127.0.0.1:6443
+          E2E_K8S_CA: /tmp/at-e2e/data/pki/ca.crt
+          E2E_K8S_NAMESPACE: default
+        run: |
+          export E2E_CONTROLLER_TOKEN="$(cat /var/run/agentteams/cli-token)"
+          # The Loop CR is created through the embedded apiserver, which
+          # authenticates via its static token file (--token-auth-file). The
+          # controller's CLI token is a ServiceAccount token and the
+          # embedded apiserver rejects it on the k8s API (401 Unauthorized,
+          # measured on 0346932f+): use the admin identity from the token
+          # file instead. The role-boundary identities below are appended to
+          # the same file, so they authenticate the same way.
+          export E2E_K8S_TOKEN="$(head -1 /tmp/at-e2e/data/pki/token.csv | cut -d, -f1)"
+          # Role-boundary ServiceAccount tokens minted in the previous step
+          # (audience "agentteams-controller"; roles derived from the SA name).
+          export E2E_K8S_WORKER_TOKEN="$(cat /tmp/at-e2e/e2e-worker-token)"
+          export E2E_K8S_MANAGER_TOKEN="$(cat /tmp/at-e2e/e2e-manager-token)"
+          python -m pytest plugins/tests/teamharness/e2e -q -rs
+
+      - name: Stop the controller
+        if: always()
+        run: |
+          if [ -f /tmp/at-e2e/controller.pid ]; then
+            kill "$(cat /tmp/at-e2e/controller.pid)" 2>/dev/null || true
+          fi
+          cat /tmp/at-e2e/controller.log || true

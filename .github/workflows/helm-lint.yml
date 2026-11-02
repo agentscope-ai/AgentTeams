@@ -50,6 +50,9 @@ on:
       - 'tests/check-coding-cli-runs-metadata.sh'
       - 'manager/scripts/init/start-manager-agent.sh'
       - 'manager/tests/test-manager-startup-recovery.sh'
+      - 'tests/check-docs-zh-parity.sh'
+      - 'docs/usage/**'
+      - 'docs/zh-cn/usage/**'
   workflow_dispatch: ~
 
 jobs:
@@ -146,3 +149,16 @@ jobs:
       - name: Template dry-run
         run: |
           bash tests/check-helm-agentteams.sh
+
+  docs-zh-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check zh-cn docs parity self-test (missing counterpart fails, complete pairing passes)
+        run: bash tests/check-docs-zh-parity.sh --self-test
+
+      - name: Check zh-cn docs parity on the repository tree
+        run: bash tests/check-docs-zh-parity.sh

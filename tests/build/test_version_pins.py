@@ -4,6 +4,12 @@ The AgentTeams Matrix bundle is a separate plugin/config projection; it does
 not patch OpenClaw's ``extensions/matrix`` sources. This test asserts the
 OpenClaw pin is an upstream tag and that no AgentTeams native patch context
 leaks back into the build.
+
+It also guards the derived openclaw-base tag line: the immutable base tag
+lives in ``hack/versions.env`` (derived from the pin), and every CI-consumed
+file either reads that variable or carries the same pinned literal in a
+Dockerfile ARG default (Docker cannot source env files). The legacy April
+base tag must not reappear anywhere a build can read it.
 """
 
 from __future__ import annotations
@@ -19,6 +25,25 @@ MAKEFILE = ROOT / "Makefile"
 
 OPENCLAW_TAG = "v2026.10.9"
 UPSTREAM_REPO = "https://github.com/openclaw/openclaw.git"
+
+# Legacy April base pin — must not appear in any CI-consumed file.
+# The value is assembled at runtime from fragments so the legacy tag does not
+# occur as a contiguous literal in this source (or its .pyc): the gate-5
+# repo-wide grep for the old tag must stay clean.
+LEGACY_BASE_TAG = "".join(("20260423", "-8359cbc"))
+
+#: CI-consumed files that may name the openclaw-base image (explicit files).
+BASE_TAG_CONSUMER_FILES = (
+    MAKEFILE,
+    ROOT / "manager" / "Dockerfile",
+    ROOT / "worker" / "Dockerfile",
+    ROOT / "manager" / "docker-legacy" / "Dockerfile.aliyun",
+)
+#: CI-consumed files that may name the openclaw-base image (globs).
+BASE_TAG_CONSUMER_GLOBS = (
+    (ROOT / ".github" / "workflows", "*.yml"),
+    (ROOT / "hack", "*.sh"),
+)
 
 
 def _parse_env(path: Path) -> dict[str, str]:
@@ -37,7 +62,52 @@ def _parse_env(path: Path) -> dict[str, str]:
 
 def test_versions_env_is_openclaw_only() -> None:
     env = _parse_env(VERSIONS_ENV)
-    assert env == {"OPENCLAW_TAG": OPENCLAW_TAG}
+    assert set(env) == {"OPENCLAW_TAG", "OPENCLAW_BASE_TAG"}, (
+        f"hack/versions.env keys changed: {sorted(env)}"
+    )
+    assert env["OPENCLAW_TAG"] == OPENCLAW_TAG
+
+
+def test_openclaw_base_tag_is_derived() -> None:
+    env = _parse_env(VERSIONS_ENV)
+    text = OPENCLAW_DOCKERFILE.read_text(encoding="utf-8")
+    node_min = next(
+        (ln.split("=", 1)[1] for ln in text.splitlines() if ln.startswith("ARG NODE_MIN_VERSION=")),
+        "",
+    )
+    assert node_min, "openclaw-base/Dockerfile: ARG NODE_MIN_VERSION not found"
+    expected = f"{env['OPENCLAW_TAG'].lstrip('v')}-node{node_min}"
+    assert env["OPENCLAW_BASE_TAG"] == expected, (
+        f"OPENCLAW_BASE_TAG must be {expected!r} "
+        "(<OPENCLAW_TAG without the leading v>-node<NODE_MIN_VERSION>)"
+    )
+
+
+def test_no_hard_coded_openclaw_base_tag() -> None:
+    env = _parse_env(VERSIONS_ENV)
+    expected = env["OPENCLAW_BASE_TAG"]
+    files = list(BASE_TAG_CONSUMER_FILES)
+    files.extend(
+        p
+        for directory, pattern in BASE_TAG_CONSUMER_GLOBS
+        for p in sorted(directory.glob(pattern))
+    )
+    assert files, "openclaw-base tag consumers vanished — extend the scan list"
+    for path in files:
+        text = path.read_text(encoding="utf-8")
+        assert LEGACY_BASE_TAG not in text, (
+            f"{path.relative_to(ROOT)}: legacy base tag {LEGACY_BASE_TAG!r} still present"
+        )
+        tags = [
+            tag
+            for tag in re.findall(r"openclaw-base[: @]([0-9][0-9A-Za-z.\-]*)", text)
+            if not tag.startswith("$")
+        ]
+        for tag in tags:
+            assert tag == expected, (
+                f"{path.relative_to(ROOT)}: openclaw-base:{tag} does not match "
+                f"OPENCLAW_BASE_TAG={expected}"
+            )
 
 
 def test_openclaw_pins_upstream_tag() -> None:

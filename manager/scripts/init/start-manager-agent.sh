@@ -8,9 +8,15 @@
 #   AGENTTEAMS_MANAGER_RUNTIME=qwenpaw           - QwenPaw 2.0 workspace mode (default)
 #   AGENTTEAMS_MANAGER_RUNTIME=copaw              - Legacy alias, auto-routed to QwenPaw
 #   AGENTTEAMS_MANAGER_RUNTIME=openclaw           - OpenClaw gateway mode
+#
+# OpenClaw version guard (openclaw runtime only; see lib/openclaw-version-guard.sh):
+#   AGENTTEAMS_OPENCLAW_VERSION_GUARD_MODE=fatal|warn - default fatal: a known
+#       mismatch between the installed gateway and the pinned tag refuses to start
+#   AGENTTEAMS_ALLOW_OPENCLAW_VERSION_MISMATCH=1 - equivalent to warn
 
 source /opt/agentteams/scripts/lib/agentteams-env.sh
 . /opt/agentteams/scripts/lib/migrate-openclaw-config.sh
+. /opt/agentteams/scripts/lib/openclaw-version-guard.sh
 
 # ============================================================
 # Runtime selection
@@ -1137,6 +1143,22 @@ if [ "${MANAGER_RUNTIME}" = "copaw" ] || [ "${MANAGER_RUNTIME}" = "qwenpaw" ]; t
 else
     # ── OpenClaw Runtime ─────────────────────────────────────────────────────
     log "Starting OpenClaw Manager..."
+
+    # #1479: refuse to serve a gateway that drifts from the pinned OpenClaw
+    # tag. The workspace config is rendered against the pin in
+    # hack/versions.env, so a stale base image (the #1460 incident) breaks
+    # version-coupled contracts at runtime. Parse failures never exit —
+    # #1460's 70-restart crash loop came from a startup check that could not
+    # read its own input; only a *known* mismatch in fatal mode stops boot.
+    if [ "${AGENTTEAMS_ALLOW_OPENCLAW_VERSION_MISMATCH:-0}" = "1" ] && [ -z "${AGENTTEAMS_OPENCLAW_VERSION_GUARD_MODE:-}" ]; then
+        _OPENCLAW_GUARD_MODE="warn"
+    else
+        _OPENCLAW_GUARD_MODE="${AGENTTEAMS_OPENCLAW_VERSION_GUARD_MODE:-fatal}"
+    fi
+    if ! openclaw_version_guard "${_OPENCLAW_GUARD_MODE}"; then
+        log "FATAL: refusing to start the gateway: the OpenClaw version does not match the pinned version"
+        exit 1
+    fi
 
     export OPENCLAW_CONFIG_PATH="/root/manager-workspace/openclaw.json"
 

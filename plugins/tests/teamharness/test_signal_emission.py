@@ -13,9 +13,11 @@ Covers the Python side of the shared contract:
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -25,6 +27,10 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MCP_DIR = REPO_ROOT / "plugins" / "teamharness" / "mcp"
+# P0 compatibility copy shipped in the portable bundle (DEDUPE.md). It is a
+# whole-tree copy of MCP_DIR and must stay behaviourally identical, not only
+# byte-identical to the live tree at sync time.
+BUNDLE_MCP_DIR = REPO_ROOT / "plugins" / "agentteams-teamharness" / "mcp"
 CONTRACT_PATH = REPO_ROOT / "plugins" / "teamharness" / "contracts" / "signal-mapping.json"
 
 # id_rule v1.2 fixed input: the post-write ref state bytes `{"project_id":
@@ -348,6 +354,64 @@ def test_list_events_filters_and_pagination(server: Any, tmp_path: Path, monkeyp
     assert "cursor" in bad["error"]
 
 
+def test_list_events_cursor_accepts_both_base64_forms(server: Any, tmp_path: Path, monkeypatch: Any) -> None:
+    # #1433 round 2: the cursor is opaque across the two read surfaces —
+    # the Go endpoint emits unpadded base64url (RawURLEncoding) while this
+    # side emits padded (urlsafe_b64encode); a page must resume from the
+    # same anchor under BOTH forms.
+    monkeypatch.setattr(server, "_filesync", FakeFilesync())
+    workspace = tmp_path / "agent"
+    team = _team(server)
+    directory = _events_dir(server, workspace)
+    directory.mkdir(parents=True, exist_ok=True)
+
+    def seed(event_id: str, occurred_at: str) -> None:
+        (directory / f"{event_id}.json").write_text(json.dumps({
+            "event_id": event_id,
+            "task_id": "",
+            "loop_id": None,
+            "event_type": "SIG-DECISION",
+            "is_signal": True,
+            "source_event": {"origin": "submit", "request_id": None},
+            "ref": "shared/projects/p1/meta.json",
+            "fingerprint": "0" * 64,
+            "iteration_index": None,
+            "payload": {},
+            "occurred_at": occurred_at,
+        }), encoding="utf-8")
+
+    seed("ev_01", "2026-10-01T00:00:01Z")
+    seed("ev_02", "2026-10-01T00:00:02Z")
+    seed("ev_03", "2026-10-01T00:00:03Z")
+
+    # The exact bytes Go's encodeSignalCursor builds for this anchor.
+    anchor = "2026-10-01T00:00:02Z\x00ev_02"
+    encoded = base64.urlsafe_b64encode(anchor.encode("utf-8")).decode("ascii")
+    padded = encoded  # this side's (Python) form
+    unpadded = encoded.rstrip("=")  # Go's form (RawURLEncoding)
+    assert len(anchor) % 4 != 0, "vector must actually differ between the two forms"
+
+    def query(**payload: Any) -> dict[str, Any]:
+        return server._projectflow(_arguments(workspace, "list_events", team=team, **payload))
+
+    # Padded form (existing behavior must not regress).
+    res_padded = query(cursor=padded)
+    assert res_padded["ok"] is True
+    assert [e["event_id"] for e in res_padded["events"]] == ["ev_03"]
+
+    # Unpadded form (Go-shaped) resumes from the same anchor.
+    res_unpadded = query(cursor=unpadded)
+    assert res_unpadded["ok"] is True
+    assert res_unpadded == res_padded
+
+    # Invalid cursors are still rejected, not guessed at.
+    no_separator = base64.urlsafe_b64encode(b"2026-10-01T00:00:02Zev_02").decode("ascii")
+    for bad in ("not-a-valid-cursor", no_separator):
+        res = query(cursor=bad)
+        assert res["ok"] is False
+        assert "cursor" in res["error"]
+
+
 def test_record_loop_iteration_emits(server: Any, tmp_path: Path, monkeypatch: Any) -> None:
     monkeypatch.setattr(server, "_filesync", FakeFilesync())
     monkeypatch.setattr(server, "_sync_project", lambda *a, **k: True)
@@ -548,3 +612,72 @@ def test_submit_retry_after_project_revision_advances_is_one_event(
     events = _read_events(server, workspace)
     assert len(events) == 1, [e["event_id"] for e in events]
     assert events[0]["event_type"] == "SIG-COMPLETE"
+
+
+def test_go_cursor_is_accepted_through_both_installed_entries(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """The shipped bundle entry must decode a Go-produced cursor too (#1433).
+
+    ``plugins/agentteams-teamharness/mcp`` is a P0 compatibility copy
+    (``DEDUPE.md``). The drift test proves byte equality at sync time; this
+    test proves the *behaviour* through the bundle's own entry point, so a
+    future change that touches only the live tree is caught even before a
+    re-sync (and a stale copy that still rejects Go cursors fails here).
+    The bundle runs in a fresh process: ``mcp.*`` submodules are cached in
+    ``sys.modules``, so an in-process second import would silently reuse the
+    live tree.
+    """
+    monkeypatch.setattr(server, "_filesync", FakeFilesync())
+    workspace = tmp_path / "agent"
+    team = _team(server)
+    directory = _events_dir(server, workspace)
+    directory.mkdir(parents=True, exist_ok=True)
+    for event_id, occurred_at in (
+        ("ev_01", "2026-10-01T00:00:01Z"),
+        ("ev_02", "2026-10-01T00:00:02Z"),
+        ("ev_03", "2026-10-01T00:00:03Z"),
+    ):
+        (directory / f"{event_id}.json").write_text(json.dumps({
+            "event_id": event_id,
+            "task_id": "",
+            "loop_id": None,
+            "event_type": "SIG-DECISION",
+            "is_signal": True,
+            "source_event": {"origin": "submit", "request_id": None},
+            "ref": "shared/projects/p1/meta.json",
+            "fingerprint": "0" * 64,
+            "iteration_index": None,
+            "payload": {},
+            "occurred_at": occurred_at,
+        }), encoding="utf-8")
+
+    # Exactly what Go's encodeSignalCursor emits: unpadded base64url.
+    anchor = "2026-10-01T00:00:02Z\x00ev_02"
+    unpadded = base64.urlsafe_b64encode(anchor.encode("utf-8")).decode("ascii").rstrip("=")
+
+    live_args = _arguments(workspace, "list_events", team=team, cursor=unpadded)
+    live_result = server._projectflow(live_args)
+    assert live_result["ok"] is True
+
+    script = f"""
+import importlib.util, json, sys
+mcp_dir = {json.dumps(str(BUNDLE_MCP_DIR))}
+sys.path.insert(0, mcp_dir)
+spec = importlib.util.spec_from_file_location("bundle_server_under_test", mcp_dir + "/server.py")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+args = {json.dumps(live_args)}
+print(json.dumps(module._projectflow(args)))
+"""
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert proc.returncode == 0, proc.stderr
+    bundle_result = json.loads(proc.stdout)
+    assert bundle_result.get("ok") is True, bundle_result
+    # Both entries resume from the same Go cursor with the same page.
+    assert json.dumps(bundle_result, sort_keys=True) == json.dumps(live_result, sort_keys=True)

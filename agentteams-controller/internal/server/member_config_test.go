@@ -17,6 +17,7 @@ import (
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/runtimeconfig"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/runtimeconfig/hermes"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/runtimeconfig/openclaw"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -118,6 +119,7 @@ func newTestMemberConfigHandler(t *testing.T, kubeMode string, exec openclaw.Exe
 	k8s := fake.NewClientBuilder().WithScheme(newProjectTestScheme(t)).WithRuntimeObjects(objs...).Build()
 	reg := runtimeconfig.NewRegistry()
 	reg.Register(openclaw.New())
+	reg.Register(hermes.New())
 	var ac *audit.Client
 	if store != nil {
 		ac = audit.NewClient(store)
@@ -187,22 +189,56 @@ func TestMemberConfigSurface_ImmutableCacheAndETag(t *testing.T) {
 func TestMemberConfigSurface_UnknownRuntime404(t *testing.T) {
 	h := newTestMemberConfigHandler(t, "embedded", nil, nil)
 	rec := httptest.NewRecorder()
-	h.getSurface(rec, adminCaller(codingCliRequest(http.MethodGet, "/api/runtimes/hermes/surface", "", "runtime", "hermes")))
+	h.getSurface(rec, adminCaller(codingCliRequest(http.MethodGet, "/api/runtimes/unknown-runtime/surface", "", "runtime", "unknown-runtime")))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status=%d body=%s, want 404", rec.Code, rec.Body.String())
+	}
+	body := decodeJSON(t, rec.Body.String())
+	if body["runtime"] != "unknown-runtime" {
+		t.Fatalf("runtime=%v, want unknown-runtime", body["runtime"])
+	}
+	found := map[string]bool{}
+	for _, s := range body["supported"].([]interface{}) {
+		found[s.(string)] = true
+	}
+	if !found["openclaw"] || !found["hermes"] {
+		t.Fatalf("supported=%v must list both compiled-in runtimes (openclaw + hermes)", body["supported"])
+	}
+}
+
+func TestMemberConfigSurface_Hermes200(t *testing.T) {
+	h := newTestMemberConfigHandler(t, "embedded", nil, nil)
+	rec := httptest.NewRecorder()
+	h.getSurface(rec, adminCaller(codingCliRequest(http.MethodGet, "/api/runtimes/hermes/surface", "", "runtime", "hermes")))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
+		t.Fatalf("Cache-Control=%q, want the immutable strong-cache header", got)
+	}
+	sv := hermes.New().Surface()
+	wantETag := "\"" + sv.Runtime + "-" + sv.RuntimeVersion + "-" + sv.SurfaceVersion + "\""
+	if got := rec.Header().Get("ETag"); got != wantETag {
+		t.Fatalf("ETag=%q, want %q", got, wantETag)
 	}
 	body := decodeJSON(t, rec.Body.String())
 	if body["runtime"] != "hermes" {
 		t.Fatalf("runtime=%v, want hermes", body["runtime"])
 	}
-	found := false
-	for _, s := range body["supported"].([]interface{}) {
-		if s == "openclaw" {
-			found = true
-		}
+	if faces, _ := body["faces"].([]interface{}); len(faces) == 0 {
+		t.Fatalf("surface faces empty: %s", rec.Body.String())
 	}
-	if !found {
-		t.Fatalf("supported=%v must list the compiled-in runtimes", body["supported"])
+
+	// Second GET with If-None-Match -> 304 with an empty body.
+	req := codingCliRequest(http.MethodGet, "/api/runtimes/hermes/surface", "", "runtime", "hermes")
+	req.Header.Set("If-None-Match", wantETag)
+	rec2 := httptest.NewRecorder()
+	h.getSurface(rec2, adminCaller(req))
+	if rec2.Code != http.StatusNotModified {
+		t.Fatalf("status=%d body=%s, want 304", rec2.Code, rec2.Body.String())
+	}
+	if rec2.Body.Len() != 0 {
+		t.Fatalf("304 must carry an empty body, got %d bytes", rec2.Body.Len())
 	}
 }
 
@@ -251,14 +287,12 @@ func TestMemberConfigGet_UnknownRuntime409(t *testing.T) {
 	if body["error"] != "runtime_unknown" || body["runtime"] != "qwenpaw" {
 		t.Fatalf("body=%s, want runtime_unknown for qwenpaw", rec.Body.String())
 	}
-	found := false
+	found := map[string]bool{}
 	for _, s := range body["supported"].([]interface{}) {
-		if s == "openclaw" {
-			found = true
-		}
+		found[s.(string)] = true
 	}
-	if !found {
-		t.Fatalf("supported=%v must contain openclaw", body["supported"])
+	if !found["openclaw"] || !found["hermes"] {
+		t.Fatalf("supported=%v must contain openclaw and hermes", body["supported"])
 	}
 }
 

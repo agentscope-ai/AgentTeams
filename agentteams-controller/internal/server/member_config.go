@@ -79,8 +79,10 @@ func NewMemberConfigHandler(c client.Client, namespace, kubeMode string, ac *aud
 		reg:            runtimes,
 		defaultRuntime: defaultRuntime,
 	}
-	if a, ok := runtimes.Lookup("openclaw").(*openclaw.Adapter); ok {
-		h.openclawAdapter = a
+	if a, ok := runtimes.Lookup("openclaw"); ok {
+		if ad, ok := a.(*openclaw.Adapter); ok {
+			h.openclawAdapter = ad
+		}
 	}
 	h.execBackend = func(ctx context.Context, _ string) (openclaw.ExecBackend, error) {
 		if reg == nil {

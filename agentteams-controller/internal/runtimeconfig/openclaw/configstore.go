@@ -92,41 +92,79 @@ type UnsupportedKey struct {
 }
 
 // DesiredState is the controller's last requested configuration, persisted
-// under agents/{worker}/config/desired.json. It is the "expected state" half
-// of the reconcile: disk document == DesiredState.Content is "applied".
+// under agents/{worker}/config/desired.json. It carries the pre-write
+// appliedConfigHash baseline that the baseline-diff reconcile (Read/Write)
+// diffs the gateway's current hash against.
 type DesiredState struct {
-	Rev         string         `json:"rev"` // sha256 hex of the written content bytes
-	UpdatedAt   string         `json:"updatedAt"`
-	WrittenKeys []string       `json:"writtenKeys"`           // concrete leaves of the last write
-	RestartKeys []string       `json:"restartKeys,omitempty"` // written leaves with applies=restart
-	Content     map[string]any `json:"content"`               // full desired document
+	Rev string `json:"rev"` // sha256 hex of the written content bytes
+	// BaselineHash is the gateway's appliedConfigHash captured BEFORE the
+	// write (null = the runtime had applied no config yet). The write is
+	// "applied" when the gateway's hash moves away from it.
+	BaselineHash *string `json:"baselineHash"`
+	// BaselineKnown is false when the pre-write gateway query failed: the
+	// write is then unverifiable and can never report "applied".
+	BaselineKnown bool           `json:"baselineKnown"`
+	UpdatedAt     string         `json:"updatedAt"`
+	WrittenKeys   []string       `json:"writtenKeys"`           // concrete leaves of the last write
+	RestartKeys   []string       `json:"restartKeys,omitempty"` // written leaves with applies=restart
+	Content       map[string]any `json:"content"`               // full desired document
 }
+
+// Applied-state vocabulary (design §4.3). Reconcile is fail-closed
+// (§5.2): a write is "applied" only when the worker's gateway reports a
+// config it actually applied that moved since the pre-write baseline, and
+// a reconcile that cannot be completed is "pending" — never "applied".
+const (
+	StateApplied            = "applied"
+	StatePending            = "pending"
+	StateUnapplied          = "unapplied"
+	StateAppliedButInactive = "applied-but-inactive"
+)
 
 // ConfigState is the GET /config projection.
 type ConfigState struct {
-	Runtime        string         `json:"runtime"`
-	Rev            string         `json:"rev"` // sha256 hex of the current on-disk bytes (optimistic-lock token)
-	Values         map[string]any `json:"values"`
-	Applied        bool           `json:"applied"`
-	PendingRestart bool           `json:"pendingRestart"`
+	Runtime string         `json:"runtime"`
+	Rev     string         `json:"rev"` // sha256 hex of the current on-disk bytes (optimistic-lock token)
+	Values  map[string]any `json:"values"`
+	// Applied is the reconcile verdict: applied | pending | unapplied |
+	// applied-but-inactive (State* constants).
+	Applied string `json:"applied"`
+	// PendingRestart lists the applies=restart keys of the last
+	// controller write. The frontend shows the "restart required" banner
+	// from it; the controller never restarts the worker itself.
+	PendingRestart []string `json:"pendingRestart"`
 	// Inactive lists written channel ids whose channel plugin is not
 	// loaded (or has no plugin at all): the config is applied to the file
-	// but inert at runtime — the "applied-but-inactive" state.
+	// but inert at runtime — the "applied-but-inactive" state (§8.4).
 	Inactive []string `json:"inactive,omitempty"`
 }
 
 // WriteResult is the PUT/rollback response.
 type WriteResult struct {
-	Runtime        string           `json:"runtime"`
-	Rev            string           `json:"rev"` // sha256 hex of the new on-disk bytes
-	Applied        bool             `json:"applied"`
-	PendingRestart bool             `json:"pendingRestart"`
+	Runtime string `json:"runtime"`
+	Rev     string `json:"rev"` // sha256 hex of the new on-disk bytes
+	// Applied is the post-write reconcile verdict (State* constants):
+	// "applied" when the gateway's applied hash moved within the poll
+	// window, "pending" when it has not (or could not be observed).
+	Applied        string           `json:"applied"`
+	PendingRestart []string         `json:"pendingRestart"`
 	Inactive       []string         `json:"inactive,omitempty"`
 	Unsupported    []UnsupportedKey `json:"unsupported,omitempty"`
 	// Snapshot is the storage key of the pre-write snapshot:
 	// rollback = POST .../config/rollback?rev=<pre-write rev>.
 	Snapshot string `json:"snapshot"`
 }
+
+// Reconcile timing. The gateway's file watch applies a changed
+// openclaw.json within well under a second in practice; the window is a
+// generous bound after which the write is reported "pending" (subsequent
+// GETs settle it, and the grace window eventually flips it to
+// "unapplied").
+const (
+	defaultReconcileWindow   = 10 * time.Second
+	defaultReconcileInterval = 200 * time.Millisecond
+	defaultReconcileGrace    = 30 * time.Second
+)
 
 // ConfigManager performs read/reconcile/write/rollback of one runtime's
 // native config file inside a worker container, with desired state and
@@ -136,10 +174,45 @@ type ConfigManager struct {
 	adapter *Adapter
 	exec    ExecBackend
 	store   KeyStore
+
+	reconcileWindow   time.Duration
+	reconcileInterval time.Duration
+	reconcileGrace    time.Duration
 }
 
-func NewConfigManager(adapter *Adapter, exec ExecBackend, store KeyStore) *ConfigManager {
-	return &ConfigManager{adapter: adapter, exec: exec, store: store}
+// Option tunes reconcile timing (tests use millisecond values).
+type Option func(*ConfigManager)
+
+// WithReconcileWindow bounds the post-write poll for the gateway's
+// applied hash to move.
+func WithReconcileWindow(d time.Duration) Option {
+	return func(m *ConfigManager) { m.reconcileWindow = d }
+}
+
+// WithReconcileInterval is the delay between applied-hash probes.
+func WithReconcileInterval(d time.Duration) Option {
+	return func(m *ConfigManager) { m.reconcileInterval = d }
+}
+
+// WithReconcileGrace is how long a still-unchanged applied hash is
+// reported "pending" on read before it is reported "unapplied".
+func WithReconcileGrace(d time.Duration) Option {
+	return func(m *ConfigManager) { m.reconcileGrace = d }
+}
+
+func NewConfigManager(adapter *Adapter, exec ExecBackend, store KeyStore, opts ...Option) *ConfigManager {
+	m := &ConfigManager{
+		adapter:           adapter,
+		exec:              exec,
+		store:             store,
+		reconcileWindow:   defaultReconcileWindow,
+		reconcileInterval: defaultReconcileInterval,
+		reconcileGrace:    defaultReconcileGrace,
+	}
+	for _, o := range opts {
+		o(m)
+	}
+	return m
 }
 
 // Runtime is the runtime id this manager writes.
@@ -223,17 +296,25 @@ func (m *ConfigManager) readConfigFile(ctx context.Context, worker, path string)
 
 // --- read / reconcile ------------------------------------------------------
 
-// Read returns the worker's current config state (GET /config projection).
-// Reconcile semantics (fail-closed):
+// Read returns the worker's current config state (GET /config
+// projection). Reconcile semantics (fail-closed, design §5.2):
+//
 //   - rev is always the sha256 of the current on-disk bytes;
-//   - applied is true when there is no controller desired state, or when
-//     the on-disk document deep-equals the desired document;
-//   - pendingRestart is true when the last controller write included
-//     applies=restart keys (it stays set until the next write or rollback;
-//     the controller cannot observe a manual restart);
-//   - Inactive: for every written channels.<id>.* key, the channel plugin
-//     must exist and be loaded (openclaw plugins list --json); otherwise
-//     the id is reported inactive (applied-but-inactive).
+//   - with no controller desired state, applied is "applied" (nothing
+//     is outstanding: the file is what the runtime sees);
+//   - a desired state whose pre-write baseline is unknown (the gateway
+//     was unreachable during the write) stays "pending" forever — a
+//     reconcile that cannot be completed is never "applied";
+//   - otherwise the gateway's current appliedConfigHash is diffed
+//     against the pre-write baseline: unchanged within the grace window
+//     is "pending", unchanged beyond it is "unapplied" (the write is NOT
+//     retried, §5.2), changed is "applied" — refined to
+//     "applied-but-inactive" when a written channel's plugin is not
+//     loaded (§8.4: the hash proves the config was applied, not that the
+//     channel plugin is running);
+//   - pendingRestart lists the applies=restart keys of the last
+//     controller write (the frontend shows the restart banner; the
+//     controller cannot observe a manual restart and never performs one).
 func (m *ConfigManager) Read(ctx context.Context, worker string) (ConfigState, error) {
 	path, err := m.resolveConfigPath(ctx, worker)
 	if err != nil {
@@ -252,19 +333,47 @@ func (m *ConfigManager) Read(ctx context.Context, worker string) (ConfigState, e
 		return ConfigState{}, err
 	}
 	st := ConfigState{
-		Runtime: m.Runtime(),
-		Rev:     revOf(raw),
-		Values:  m.redactSensitive(doc),
-		Applied: desired == nil,
+		Runtime:        m.Runtime(),
+		Rev:            revOf(raw),
+		Values:         m.redactSensitive(doc),
+		Applied:        StatePending,
+		PendingRestart: []string{},
 	}
-	if desired != nil {
-		st.Applied = deepEqualJSON(doc, desired.Content)
-		st.PendingRestart = len(desired.RestartKeys) > 0
-		inactive, err := m.checkChannelPlugins(ctx, worker, desired.WrittenKeys)
+	if desired == nil {
+		// Nothing outstanding: the file is what the runtime sees.
+		st.Applied = StateApplied
+		return st, nil
+	}
+	st.PendingRestart = desired.RestartKeys
+	if st.PendingRestart == nil {
+		st.PendingRestart = []string{}
+	}
+	if !desired.BaselineKnown {
+		return st, nil // Applied stays "pending" (fail-closed)
+	}
+	current, err := m.gatewayAppliedHash(ctx, worker)
+	if err != nil {
+		return ConfigState{}, err
+	}
+	if !hashMoved(desired.BaselineHash, current) {
+		age, err := desiredAge(desired)
 		if err != nil {
 			return ConfigState{}, err
 		}
-		st.Inactive = inactive
+		if age < m.reconcileGrace {
+			return st, nil // Applied stays "pending"
+		}
+		st.Applied = StateUnapplied
+		return st, nil
+	}
+	inactive, err := m.checkChannelPlugins(ctx, worker, desired.WrittenKeys)
+	if err != nil {
+		return ConfigState{}, err
+	}
+	st.Applied = StateApplied
+	st.Inactive = inactive
+	if len(inactive) > 0 {
+		st.Applied = StateAppliedButInactive
 	}
 	return st, nil
 }
@@ -363,6 +472,96 @@ func contains(list []string, s string) bool {
 	return false
 }
 
+// --- gateway reconcile (appliedConfigHash baseline-diff) -------------------
+
+// gatewayAppliedHash asks the worker's own gateway for the config it has
+// actually applied: `openclaw gateway call config.get --json` →
+// appliedConfigHash (string|null; null = the runtime has applied no
+// config yet). The hash is an opaque token from the gateway's revision
+// projector — the controller never recomputes it (re-implementing the
+// gateway's hashing in Go would drift from the runtime); only
+// equality/inequality matters.
+func (m *ConfigManager) gatewayAppliedHash(ctx context.Context, worker string) (*string, error) {
+	out, stderr, exit, err := m.exec.Exec(ctx, worker, []string{"openclaw", "gateway", "call", "config.get", "--json"}, execTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("gateway applied-config query: %w", err)
+	}
+	if exit != 0 {
+		return nil, fmt.Errorf("gateway applied-config query exit %d: %s", exit, strings.TrimSpace(stderr))
+	}
+	var res struct {
+		AppliedConfigHash *string `json:"appliedConfigHash"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		return nil, fmt.Errorf("gateway applied-config query: unparseable config.get response: %w", err)
+	}
+	return res.AppliedConfigHash, nil
+}
+
+// hashMoved reports whether the gateway's applied hash differs from the
+// pre-write baseline. A nil side normalizes to ""; the gateway's hashes
+// are non-empty, so the comparison is unambiguous.
+func hashMoved(baseline, current *string) bool {
+	b, c := "", ""
+	if baseline != nil {
+		b = *baseline
+	}
+	if current != nil {
+		c = *current
+	}
+	return b != c
+}
+
+// desiredAge is how long ago the last controller write was recorded. An
+// unparseable timestamp is corrupt state: fail closed with an error
+// rather than guessing freshness.
+func desiredAge(desired *DesiredState) (time.Duration, error) {
+	at, err := time.Parse(time.RFC3339, desired.UpdatedAt)
+	if err != nil {
+		return 0, fmt.Errorf("desired state updatedAt %q is not RFC3339: %w", desired.UpdatedAt, err)
+	}
+	return time.Since(at), nil
+}
+
+// pollApplied waits, bounded by the reconcile window, for the gateway's
+// applied hash to move away from the pre-write baseline, then refines the
+// verdict with the channel-plugin state (§8.4). It never fails the write:
+// the file write is already byte-verified; an unfinished reconcile
+// reports "pending" (the next GET re-probes, and the grace window
+// eventually flips it to "unapplied") — never "applied" (§5.2).
+func (m *ConfigManager) pollApplied(ctx context.Context, worker string, baseline *string, baselineKnown bool, writtenKeys []string) (string, []string, error) {
+	if !baselineKnown {
+		return StatePending, nil, nil
+	}
+	deadline := time.Now().Add(m.reconcileWindow)
+	for {
+		current, err := m.gatewayAppliedHash(ctx, worker)
+		if err != nil {
+			// Transient gateway trouble: stop probing, report "pending";
+			// the next GET settles it. Never "applied" on a failed probe.
+			return StatePending, nil, nil
+		}
+		if hashMoved(baseline, current) {
+			inactive, err := m.checkChannelPlugins(ctx, worker, writtenKeys)
+			if err != nil {
+				return "", nil, err
+			}
+			if len(inactive) > 0 {
+				return StateAppliedButInactive, inactive, nil
+			}
+			return StateApplied, nil, nil
+		}
+		if time.Now().After(deadline) {
+			return StatePending, nil, nil
+		}
+		select {
+		case <-ctx.Done():
+			return StatePending, nil, nil
+		case <-time.After(m.reconcileInterval):
+		}
+	}
+}
+
 // redactSensitive replaces every value at a sensitive field path with
 // "***" unless it is already a secret ref (refs carry no material and are
 // returned as-is — "sensitive keys read back as ref only").
@@ -411,7 +610,11 @@ func (m *ConfigManager) redactNode(path string, v any) any {
 //     downgraded to plaintext;
 //  3. pre-write snapshot -> agents/{worker}/config/previous/<current rev>.json
 //  4. atomic write (tmp+rename in the backend) + read-back hash verify
-//  5. persist desired state; reconcile (plugin check for written channels)
+//  5. capture the gateway's pre-write appliedConfigHash baseline; persist
+//     desired state; post-write poll: "applied" when the gateway's hash
+//     moves within the reconcile window, "pending" otherwise (fail-closed,
+//     §5.2); written channels refine "applied" to "applied-but-inactive"
+//     when their plugin is not loaded (§8.4)
 func (m *ConfigManager) Write(ctx context.Context, worker string, values map[string]any, ifRev string) (WriteResult, error) {
 	path, err := m.resolveConfigPath(ctx, worker)
 	if err != nil {
@@ -498,6 +701,19 @@ func (m *ConfigManager) Write(ctx context.Context, worker string, values map[str
 		return WriteResult{}, &NoWritableKeysError{Unsupported: unsupported}
 	}
 
+	// Reconcile baseline: the gateway's appliedConfigHash BEFORE the file
+	// write (only the gateway's own reload moves it). A failed capture
+	// does not abort the write — the file plane is independent — but it
+	// makes the write unverifiable, so it can never report "applied"
+	// (fail-closed, §5.2).
+	var baseline *string
+	baselineKnown := true
+	if b, err := m.gatewayAppliedHash(ctx, worker); err != nil {
+		baselineKnown = false
+	} else {
+		baseline = b
+	}
+
 	newDoc := deepMerge(current, pruned)
 	newContent, err := json.MarshalIndent(newDoc, "", "  ")
 	if err != nil {
@@ -533,11 +749,13 @@ func (m *ConfigManager) Write(ctx context.Context, worker string, values map[str
 		}
 	}
 	desired := DesiredState{
-		Rev:         revOf(newContent),
-		UpdatedAt:   time.Now().UTC().Format(time.RFC3339),
-		WrittenKeys: writtenKeys,
-		RestartKeys: restartKeys,
-		Content:     newDoc,
+		Rev:           revOf(newContent),
+		BaselineHash:  baseline,
+		BaselineKnown: baselineKnown,
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339),
+		WrittenKeys:   writtenKeys,
+		RestartKeys:   restartKeys,
+		Content:       newDoc,
 	}
 	encoded, err := json.Marshal(desired)
 	if err != nil {
@@ -548,15 +766,15 @@ func (m *ConfigManager) Write(ctx context.Context, worker string, values map[str
 		// the next read would report drift. Surface this as an error.
 		return WriteResult{}, fmt.Errorf("persist desired state (file already written): %w", err)
 	}
-	inactive, err := m.checkChannelPlugins(ctx, worker, writtenKeys)
+	applied, inactive, err := m.pollApplied(ctx, worker, baseline, baselineKnown, writtenKeys)
 	if err != nil {
 		return WriteResult{}, err
 	}
 	return WriteResult{
 		Runtime:        m.Runtime(),
 		Rev:            revOf(newContent),
-		Applied:        true,
-		PendingRestart: len(restartKeys) > 0,
+		Applied:        applied,
+		PendingRestart: restartKeys,
 		Inactive:       inactive,
 		Unsupported:    unsupported,
 		Snapshot:       snapKey,
@@ -660,7 +878,8 @@ func (m *ConfigManager) envResolves(ctx context.Context, worker, id string) bool
 // Rollback rewrites the worker's openclaw.json with the pre-write snapshot
 // taken when the state identified by rev was CURRENT (the snapshot key is
 // previous/<rev>.json). It goes through the same snapshot + write +
-// verify + desired-state path as Write, so a rollback is itself reversible.
+// verify + desired-state + reconcile-baseline path as Write, so a rollback
+// is itself reversible.
 //
 // Reload: OpenClaw's gateway watches openclaw.json and hot-applies
 // writable sections automatically; restart keys stay pendingRestart.
@@ -706,6 +925,17 @@ func (m *ConfigManager) Rollback(ctx context.Context, worker, rev string) (Write
 		}, nil
 	}
 
+	// Reconcile baseline: the gateway's appliedConfigHash BEFORE the
+	// rollback write (same fail-closed semantics as Write — a failed
+	// capture does not abort, but makes the write unverifiable, §5.2).
+	var baseline *string
+	baselineKnown := true
+	if b, err := m.gatewayAppliedHash(ctx, worker); err != nil {
+		baselineKnown = false
+	} else {
+		baseline = b
+	}
+
 	// Snapshot the CURRENT state before overwriting it with the old one.
 	snapKey := snapshotKey(worker, curRev)
 	if err := m.store.PutObject(ctx, snapKey, curRaw); err != nil {
@@ -730,11 +960,13 @@ func (m *ConfigManager) Rollback(ctx context.Context, worker, rev string) (Write
 		}
 	}
 	desired := DesiredState{
-		Rev:         rev,
-		UpdatedAt:   time.Now().UTC().Format(time.RFC3339),
-		WrittenKeys: writtenKeys,
-		RestartKeys: restartKeys,
-		Content:     doc,
+		Rev:           rev,
+		BaselineHash:  baseline,
+		BaselineKnown: baselineKnown,
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339),
+		WrittenKeys:   writtenKeys,
+		RestartKeys:   restartKeys,
+		Content:       doc,
 	}
 	encoded, err := json.Marshal(desired)
 	if err != nil {
@@ -743,15 +975,15 @@ func (m *ConfigManager) Rollback(ctx context.Context, worker, rev string) (Write
 	if err := m.store.PutObject(ctx, desiredKey(worker), encoded); err != nil {
 		return WriteResult{}, fmt.Errorf("persist desired state (file already written): %w", err)
 	}
-	inactive, err := m.checkChannelPlugins(ctx, worker, writtenKeys)
+	applied, inactive, err := m.pollApplied(ctx, worker, baseline, baselineKnown, writtenKeys)
 	if err != nil {
 		return WriteResult{}, err
 	}
 	return WriteResult{
 		Runtime:        m.Runtime(),
 		Rev:            rev,
-		Applied:        true,
-		PendingRestart: len(restartKeys) > 0,
+		Applied:        applied,
+		PendingRestart: restartKeys,
 		Inactive:       inactive,
 		Snapshot:       snapKey,
 	}, nil
@@ -787,18 +1019,6 @@ func deepMerge(current, incoming map[string]any) map[string]any {
 		out[k] = v
 	}
 	return out
-}
-
-func deepEqualJSON(a, b map[string]any) bool {
-	ea, err := json.Marshal(a)
-	if err != nil {
-		return false
-	}
-	eb, err := json.Marshal(b)
-	if err != nil {
-		return false
-	}
-	return string(ea) == string(eb)
 }
 
 // isNotFound reports whether an object-store error means "absent" rather

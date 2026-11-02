@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -44,10 +45,16 @@ const memberPluginsJSON = `{"plugins":[{"id":"discord","enabled":true,"status":"
 // in-container filesystem: the config manager's sh scripts resolve paths
 // against fs, and WriteFile mutates fs so the read-back verify sees the new
 // bytes (exactly like the atomic tmp+rename write in the docker backend).
+// gwHash emulates the gateway's appliedConfigHash; with gwApplyOnWrite the
+// hash moves to the sha256 of freshly written bytes, exactly like the
+// gateway's file watch applying a changed openclaw.json.
 type memberExecBackend struct {
-	fs       map[string]string
-	plugins  string
-	commands [][]string
+	fs             map[string]string
+	plugins        string
+	commands       [][]string
+	gwHash         *string
+	gwApplyOnWrite bool
+	gwErr          error
 }
 
 func (b *memberExecBackend) Exec(_ context.Context, _ string, command []string, _ time.Duration) (string, string, int, error) {
@@ -70,6 +77,15 @@ func (b *memberExecBackend) Exec(_ context.Context, _ string, command []string, 
 		return c, "", 0, nil
 	case len(command) >= 4 && command[0] == "openclaw" && command[1] == "plugins":
 		return b.plugins, "", 0, nil
+	case len(command) >= 4 && command[0] == "openclaw" && command[1] == "gateway":
+		if b.gwErr != nil {
+			return "", "gateway unavailable: " + b.gwErr.Error(), 1, nil
+		}
+		h := "null"
+		if b.gwHash != nil {
+			h = `"` + *b.gwHash + `"`
+		}
+		return `{"appliedConfigHash":` + h + `}`, "", 0, nil
 	case len(command) == 2 && command[0] == "printenv":
 		return "", "not defined", 1, nil
 	}
@@ -78,14 +94,23 @@ func (b *memberExecBackend) Exec(_ context.Context, _ string, command []string, 
 
 func (b *memberExecBackend) WriteFile(_ context.Context, _, path, content string) error {
 	b.fs[path] = content
+	if b.gwApplyOnWrite {
+		sum := sha256.Sum256([]byte(content))
+		h := hex.EncodeToString(sum[:])
+		b.gwHash = &h
+	}
 	return nil
 }
 
 func newMemberExec() *memberExecBackend {
-	return &memberExecBackend{
+	b := &memberExecBackend{
 		fs:      map[string]string{memberConfigPath: memberConfigInitial},
 		plugins: memberPluginsJSON,
 	}
+	h := "applied-baseline"
+	b.gwHash = &h
+	b.gwApplyOnWrite = true
+	return b
 }
 
 func newTestMemberConfigHandler(t *testing.T, kubeMode string, exec openclaw.ExecBackend, store *ossfake.Memory, objs ...runtime.Object) *MemberConfigHandler {
@@ -201,11 +226,11 @@ func TestMemberConfigGet_StateShape(t *testing.T) {
 	if body["rev"] != revOfBytes(t, memberConfigInitial) {
 		t.Fatalf("rev=%v, want the sha256 of the on-disk bytes", body["rev"])
 	}
-	if body["applied"] != true {
-		t.Fatalf("applied=%v, want true when there is no controller desired state", body["applied"])
+	if body["applied"] != "applied" {
+		t.Fatalf("applied=%v, want \"applied\" when there is no controller desired state", body["applied"])
 	}
-	if body["pendingRestart"] != false {
-		t.Fatalf("pendingRestart=%v, want false", body["pendingRestart"])
+	if pr, _ := body["pendingRestart"].([]interface{}); len(pr) != 0 {
+		t.Fatalf("pendingRestart=%v, want an empty list", body["pendingRestart"])
 	}
 	if _, ok := body["values"].(map[string]interface{}); !ok {
 		t.Fatalf("values missing or not an object: %s", rec.Body.String())
@@ -237,6 +262,40 @@ func TestMemberConfigGet_UnknownRuntime409(t *testing.T) {
 	}
 }
 
+func TestMemberConfigGet_AppliedButInactive(t *testing.T) {
+	exec := newMemberExec()
+	// The discord plugin exists but is not enabled: a write touching
+	// channels.discord is applied to the file (the gateway reloads) yet
+	// inert at runtime — applied-but-inactive (design §8.4).
+	exec.plugins = `{"plugins":[{"id":"discord","enabled":false,"status":"loaded","channelIds":["discord"]}]}`
+	store := ossfake.NewMemory()
+	h := newTestMemberConfigHandler(t, "embedded", exec, store,
+		checkpointTeamWithWorkers("team-a", "daily-carol")...)
+	body := `{"patch":{"channels":{"discord":{"enabled":true}}}}`
+	rec := httptest.NewRecorder()
+	h.putConfig(rec, adminCaller(codingCliRequest(http.MethodPut, "/api/members/daily-carol/config", body, "name", "daily-carol")))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	res := decodeJSON(t, rec.Body.String())
+	if res["applied"] != "applied-but-inactive" {
+		t.Fatalf("applied=%v, want applied-but-inactive", res["applied"])
+	}
+	if in, _ := res["inactive"].([]interface{}); len(in) != 1 || in[0] != "discord" {
+		t.Fatalf("inactive=%v, want [discord]", res["inactive"])
+	}
+	// The GET projection agrees.
+	rec2 := httptest.NewRecorder()
+	h.getConfig(rec2, adminCaller(codingCliRequest(http.MethodGet, "/api/members/daily-carol/config", "", "name", "daily-carol")))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("GET status=%d body=%s", rec2.Code, rec2.Body.String())
+	}
+	body2 := decodeJSON(t, rec2.Body.String())
+	if body2["applied"] != "applied-but-inactive" {
+		t.Fatalf("GET applied=%v, want applied-but-inactive", body2["applied"])
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Write
 // ---------------------------------------------------------------------------
@@ -258,6 +317,9 @@ func TestMemberConfigPut_DeclaredAndOpaqueLeaves(t *testing.T) {
 	res := decodeJSON(t, rec.Body.String())
 	if res["runtime"] != "openclaw" || res["rev"] == "" {
 		t.Fatalf("response=%s", rec.Body.String())
+	}
+	if res["applied"] != "applied" {
+		t.Fatalf("applied=%v, want \"applied\" (the fake gateway reloads on write)", res["applied"])
 	}
 	doc := memberConfigDoc(t, exec.fs[memberConfigPath])
 	discord, _ := doc["channels"].(map[string]any)["discord"].(map[string]any)
@@ -383,6 +445,62 @@ func TestMemberConfigPut_MissingPatch400(t *testing.T) {
 		`{}`, "name", "daily-carol")))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMemberConfigPut_RestartKeysListed(t *testing.T) {
+	exec := newMemberExec()
+	h := newTestMemberConfigHandler(t, "embedded", exec, ossfake.NewMemory(),
+		checkpointTeamWithWorkers("team-a", "daily-carol")...)
+	// gateway.port is declared with applies=restart: it is written and
+	// reported in pendingRestart as a key list (design §4.3), not a bool.
+	body := `{"patch":{"gateway":{"port":19000}}}`
+	rec := httptest.NewRecorder()
+	h.putConfig(rec, adminCaller(codingCliRequest(http.MethodPut, "/api/members/daily-carol/config", body, "name", "daily-carol")))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	res := decodeJSON(t, rec.Body.String())
+	pr, _ := res["pendingRestart"].([]interface{})
+	if len(pr) != 1 || pr[0] != "gateway.port" {
+		t.Fatalf("pendingRestart=%v, want [gateway.port]", res["pendingRestart"])
+	}
+	doc := memberConfigDoc(t, exec.fs[memberConfigPath])
+	gw, _ := doc["gateway"].(map[string]any)
+	if gw["port"] != 19000.0 {
+		t.Fatalf("gateway.port not written: %v", doc["gateway"])
+	}
+}
+
+func TestMemberConfigPut_GatewayDownStillWritesPending(t *testing.T) {
+	exec := newMemberExec()
+	exec.gwErr = errors.New("gateway not running")
+	store := ossfake.NewMemory()
+	h := newTestMemberConfigHandler(t, "embedded", exec, store,
+		checkpointTeamWithWorkers("team-a", "daily-carol")...)
+	body := `{"patch":{"agents":{"defaults":{"subagents":{"model":"agentteams-gateway/qwen3.5-flash"}}}}}`
+	rec := httptest.NewRecorder()
+	h.putConfig(rec, adminCaller(codingCliRequest(http.MethodPut, "/api/members/daily-carol/config", body, "name", "daily-carol")))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s (the file write must succeed even with the gateway down)", rec.Code, rec.Body.String())
+	}
+	res := decodeJSON(t, rec.Body.String())
+	if res["applied"] != "pending" {
+		t.Fatalf("applied=%v, want pending (an unverifiable write never reports applied)", res["applied"])
+	}
+	// The file was written and verified.
+	if exec.fs[memberConfigPath] == memberConfigInitial {
+		t.Fatalf("file not written despite the 200")
+	}
+	// The GET projection is fail-closed too: baseline unknown -> pending.
+	rec2 := httptest.NewRecorder()
+	h.getConfig(rec2, adminCaller(codingCliRequest(http.MethodGet, "/api/members/daily-carol/config", "", "name", "daily-carol")))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("GET status=%d body=%s", rec2.Code, rec2.Body.String())
+	}
+	body2 := decodeJSON(t, rec2.Body.String())
+	if body2["applied"] != "pending" {
+		t.Fatalf("GET applied=%v, want pending", body2["applied"])
 	}
 }
 

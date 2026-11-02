@@ -1652,6 +1652,14 @@ load_current_params_from_env() {
         [ -z "${AGENTTEAMS_HIGRESS_ADAPTER_MODE:+x}" ] && AGENTTEAMS_HIGRESS_ADAPTER_MODE="$(grep '^AGENTTEAMS_HIGRESS_ADAPTER_MODE=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         [ -z "${AGENTTEAMS_AI_GATEWAY_URL:+x}" ] && AGENTTEAMS_AI_GATEWAY_URL="$(grep '^AGENTTEAMS_AI_GATEWAY_URL=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         [ -z "${AGENTTEAMS_DATA_DIR:+x}" ] && AGENTTEAMS_DATA_DIR="$(grep '^AGENTTEAMS_DATA_DIR=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+        # Storage backend: an installation created against an external S3 must
+        # upgrade as the same backend. Explicit environment values still win -
+        # the [ -z ] guard is the override precedence, same as every key above.
+        [ -z "${AGENTTEAMS_STORAGE_PROVIDER:+x}" ] && AGENTTEAMS_STORAGE_PROVIDER="$(grep '^AGENTTEAMS_STORAGE_PROVIDER=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+        [ -z "${AGENTTEAMS_FS_ENDPOINT:+x}" ] && AGENTTEAMS_FS_ENDPOINT="$(grep '^AGENTTEAMS_FS_ENDPOINT=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+        [ -z "${AGENTTEAMS_FS_BUCKET:+x}" ] && AGENTTEAMS_FS_BUCKET="$(grep '^AGENTTEAMS_FS_BUCKET=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+        [ -z "${AGENTTEAMS_FS_ACCESS_KEY:+x}" ] && AGENTTEAMS_FS_ACCESS_KEY="$(grep '^AGENTTEAMS_FS_ACCESS_KEY=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+        [ -z "${AGENTTEAMS_FS_SECRET_KEY:+x}" ] && AGENTTEAMS_FS_SECRET_KEY="$(grep '^AGENTTEAMS_FS_SECRET_KEY=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         return 0
     fi
 }
@@ -4149,6 +4157,14 @@ AGENTTEAMS_MODEL_VISION=${AGENTTEAMS_MODEL_VISION:-}
 
 # Embedding model (empty = disabled, default: text-embedding-v4)
 AGENTTEAMS_EMBEDDING_MODEL=${AGENTTEAMS_EMBEDDING_MODEL}
+
+# Storage backend (minio = embedded, default; s3 = external)
+# Persisted so an upgrade keeps the backend the installation was created with.
+AGENTTEAMS_STORAGE_PROVIDER=${_storage_provider:-minio}
+AGENTTEAMS_FS_ENDPOINT=${_storage_endpoint:-}
+AGENTTEAMS_FS_BUCKET=${_storage_bucket:-}
+AGENTTEAMS_FS_ACCESS_KEY=${_storage_ak:-}
+AGENTTEAMS_FS_SECRET_KEY=${_storage_sk:-}
 
 # Admin
 AGENTTEAMS_ADMIN_USER=${AGENTTEAMS_ADMIN_USER}

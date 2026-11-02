@@ -21,6 +21,10 @@ const (
 	// CapabilityApprovalPolicy authorizes setting worker approval_level=OFF
 	// (L2 tool-approval endpoints, #1216).
 	CapabilityApprovalPolicy Capability = "approval_policy"
+	// CapabilityFileSync authorizes the per-human file sync surface
+	// (#1414 §6): the manifest/status endpoints under
+	// /api/v1/humans/{name}/sync/.
+	CapabilityFileSync Capability = "file_sync"
 	// CapabilitySecretReveal is reserved; no v1 consumer (#1220 §6.4).
 	CapabilitySecretReveal Capability = "secret_reveal"
 )
@@ -32,6 +36,7 @@ var ValidCapabilities = map[Capability]struct{}{
 	CapabilityChannelSecrets:  {},
 	CapabilityExternalSources: {},
 	CapabilityApprovalPolicy:  {},
+	CapabilityFileSync:        {},
 	CapabilitySecretReveal:    {},
 }
 

@@ -11,6 +11,7 @@ func allCapabilities() []Capability {
 		CapabilityChannelSecrets,
 		CapabilityExternalSources,
 		CapabilityApprovalPolicy,
+		CapabilityFileSync,
 		CapabilitySecretReveal,
 	}
 }
@@ -84,12 +85,13 @@ func TestHasCapabilityFullAccessMeta(t *testing.T) {
 }
 
 // TestValidCapabilitiesMatchesDocumentedValueSet pins the closed value set
-// against #1220 §3 (EN and ZH issue bodies): any drift between the code
-// constants and the documented five values fails here.
+// against #1220 §3 (EN and ZH issue bodies), plus file_sync appended by
+// #1414 §6 for the per-human file sync surface: any drift between the code
+// constants and the documented values fails here.
 func TestValidCapabilitiesMatchesDocumentedValueSet(t *testing.T) {
-	want := []string{"approval_policy", "channel_secrets", "external_sources", "full_access", "secret_reveal"}
+	want := []string{"approval_policy", "channel_secrets", "external_sources", "file_sync", "full_access", "secret_reveal"}
 	if got := ValidCapabilityList(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("ValidCapabilities drifted from the #1220 §3 value set: got %v, want %v", got, want)
+		t.Fatalf("ValidCapabilities drifted from the documented value set: got %v, want %v", got, want)
 	}
 }
 

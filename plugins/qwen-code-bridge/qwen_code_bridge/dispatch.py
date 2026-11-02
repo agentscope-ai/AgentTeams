@@ -1057,6 +1057,42 @@ class DispatchService:
             self._write_task(task)
         return task
 
+    def _mark_unowned(
+        self,
+        task: dict[str, Any],
+        reason: str = "pid_reused_or_mismatch",
+    ) -> dict[str, Any]:
+        """Terminal ``stale`` for a task whose recorded pid no longer
+        belongs to this dispatch (kernel pid reuse or identity mismatch).
+
+        Distinct from :meth:`_mark_stale`, whose guard requires
+        ``not self._pid_alive(pid)``: a *reused* pid is alive, so that
+        guard can never match it. An identity mismatch is itself proof
+        the original child is gone — no live process can carry both this
+        dispatch's CLI name and its session id — so liveness is
+        deliberately not checked here. No signal is sent; the terminal
+        state carries an explicit reason so readers can tell the case
+        apart from a crash.
+        """
+        now = _utcnow()
+        task.update(
+            {
+                "state": "stale",
+                "exit_code": None,
+                "death_reason": reason,
+                "finished_at": task.get("finished_at") or now,
+                "updated_at": now,
+                "terminal_summary": [
+                    f"[{task.get('task')}] stale · 记录的 pid 已不属于本 dispatch"
+                    "（被复用或身份不符），未发信号",
+                    f"evidence: {reason}",
+                    "下一步：重新派单，或 POST /dispatch/cleanup 清理",
+                ],
+            }
+        )
+        self._write_task(task)
+        return task
+
     def _ensure_reaper(self) -> None:
         """Start the restart-recovery reaper once per dispatch dir.
 
@@ -1153,8 +1189,24 @@ class DispatchService:
                 progress_age = float("inf")
             if progress_age <= stall_after:
                 continue
+            # Re-read the task file from disk: it may have been updated
+            # concurrently (cancel, watchdog), and the kill target must be
+            # identity-verified against the fresh record, not the scan
+            # snapshot (a reused pid in the snapshot kills the wrong
+            # process).
+            fresh_task = self._read_task(str(task.get("task_id") or ""))
+            if fresh_task is None or str(fresh_task.get("state") or "") != "running":
+                continue
             try:
-                os.kill(int(pid), 9)
+                kill_pid = self._verify_kill_target(fresh_task)
+            except (PidMismatchError, NotCancellableError):
+                # Fail closed: the recorded pid no longer belongs to this
+                # dispatch (kernel reuse or identity mismatch). Never
+                # signal it; close the task with an explicit terminal.
+                changed.append(self._mark_unowned(task, "pid_reused_or_mismatch"))
+                continue
+            try:
+                os.kill(kill_pid, 9)
             except OSError:
                 pass
             # No progress file means "no observable progress" (inf); it must
@@ -1507,19 +1559,38 @@ class DispatchService:
         Background follow-up to ``request_cancel`` (the request returns
         immediately; the escalation must not block it). Both signals are
         recorded in the task's ``signals[]``.
+
+        The kill target is re-verified against the *fresh* task file (it
+        may have been updated concurrently): when the recorded pid no
+        longer belongs to this dispatch (kernel reuse or identity
+        mismatch) no signal is sent and the skip is recorded instead of
+        forging a SIGKILL entry. The terminal state is deliberately NOT
+        written here — it belongs to the watchdog/reaper paths (a
+        mismatching task is closed as ``stale`` there on the next round).
         """
         await asyncio.sleep(grace)
-        try:
-            if not self._pid_alive(pid):
-                return
-            os.kill(pid, signal.SIGKILL)
-        except (OSError, ProcessLookupError):
+        if not self._pid_alive(pid):
             return
         task = self._read_task(task_id)
         if task is None:
             return
+        try:
+            kill_pid = self._verify_kill_target(task)
+        except (PidMismatchError, NotCancellableError):
+            signals = list(task.get("signals") or [])
+            signals.append(
+                {"ts": _utcnow(), "signal": "skip_pid_mismatch", "pid": pid}
+            )
+            self._update_task(
+                task_id, {"signals": signals, "updated_at": _utcnow()}
+            )
+            return
+        try:
+            os.kill(kill_pid, signal.SIGKILL)
+        except (OSError, ProcessLookupError):
+            return
         signals = list(task.get("signals") or [])
-        signals.append({"ts": _utcnow(), "signal": "SIGKILL", "pid": pid})
+        signals.append({"ts": _utcnow(), "signal": "SIGKILL", "pid": kill_pid})
         self._update_task(task_id, {"signals": signals, "updated_at": _utcnow()})
 
     async def request_cancel(

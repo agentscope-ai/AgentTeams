@@ -31,17 +31,23 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 	}
 	modelName = strings.TrimPrefix(modelName, "agentteams-gateway/")
 
-	// agents.defaults.model block. The subagent entry (QwenPaw >= 2.1.1
-	// native subagent_model) uses the dict form consumed by the worker
-	// bridge overlay; primary keeps the historical "provider/model" string.
+	// agents.defaults.model block. Primary keeps the historical
+	// "provider/model" string.
 	modelCfg := map[string]interface{}{
 		"primary": "agentteams-gateway/" + modelName,
 	}
+
+	// The subagent model is written to agents.defaults.subagents.model as a
+	// single "provider/model" string. OpenClaw's zod schema accepts
+	// subagents.model as a string or {primary, fallbacks}; the old
+	// agents.defaults.model.subagent dict (QwenPaw shape) is not a valid
+	// OpenClaw key and would be rejected by strict config validation.
+	subagentsCfg := map[string]interface{}{
+		"maxConcurrent": 8,
+	}
 	if req.SubagentModelName != "" {
-		modelCfg["subagent"] = map[string]interface{}{
-			"provider_id": "agentteams-gateway",
-			"model":       req.SubagentModelName,
-		}
+		subagentsCfg["model"] = "agentteams-gateway/" +
+			strings.TrimPrefix(req.SubagentModelName, "agentteams-gateway/")
 	}
 
 	matrixServerURL := g.config.MatrixServerURL
@@ -169,9 +175,7 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 				"models":         modelAliases,
 				"modelPolicy":    modelPolicy,
 				"maxConcurrent":  4,
-				"subagents": map[string]interface{}{
-					"maxConcurrent": 8,
-				},
+				"subagents":      subagentsCfg,
 				"elevatedDefault": "full",
 			},
 		},

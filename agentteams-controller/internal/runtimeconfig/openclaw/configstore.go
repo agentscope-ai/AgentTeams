@@ -39,6 +39,7 @@ type KeyStore interface {
 // Errors the server layer maps to HTTP statuses:
 //
 //	UnknownFieldsError   -> 422
+//	ValidationError      -> 422
 //	StaleRevisionError   -> 409
 //	NoWritableKeysError  -> 422
 //	UnknownRuntimeError  -> 404 (carries the supported list)
@@ -53,11 +54,22 @@ type (
 		Supported []string
 	}
 	ConfigFileMissingError struct{ Worker string }
+	// ValidationError is a 422-class write rejection: the key is declared
+	// (or sits below a declared container the surface refuses) but the
+	// value fails type/enum/secret-shape validation.
+	ValidationError struct {
+		Key string
+		Err error
+	}
 )
 
 func (e *UnknownFieldsError) Error() string {
 	return fmt.Sprintf("undeclared openclaw config keys: %s", strings.Join(e.Fields, ", "))
 }
+func (e *ValidationError) Error() string {
+	return "key " + e.Key + ": " + e.Err.Error()
+}
+func (e *ValidationError) Unwrap() error { return e.Err }
 func (e *StaleRevisionError) Error() string {
 	return "config changed since it was read (stale if-rev); re-read and retry"
 }
@@ -140,6 +152,10 @@ func revOf(raw []byte) string {
 }
 
 var revPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// ValidRev reports whether rev is a well-formed optimistic-lock token
+// (64-char lowercase sha256 hex).
+func ValidRev(rev string) bool { return revPattern.MatchString(rev) }
 
 func desiredKey(worker string) string {
 	return "agents/" + worker + "/config/desired.json"
@@ -416,20 +432,43 @@ func (m *ConfigManager) Write(ctx context.Context, worker string, values map[str
 
 	leaves := collectLeaves("", values)
 	var unknown []string
+	var validation *ValidationError
 	sensitiveLeaves := map[string]SecretRef{}
 	for _, leaf := range leaves {
-		f, ok := m.adapter.FieldForKey(leaf.key)
+		f, mode, ok := m.adapter.ResolveKey(leaf.key)
 		if !ok {
 			unknown = append(unknown, leaf.key)
 			continue
 		}
+		if mode == KeyOpaque {
+			// Opaque container: the surface does not decompose it, so the
+			// value passes through unvalidated and OpenClaw's zod strict
+			// validation is the final arbiter. A declared SENSITIVE
+			// container is the one exception: nested writes through an
+			// opaque bypass would silently weaken the ref-only rule, so
+			// they are refused (fail-closed).
+			if f.Sensitive {
+				validation = &ValidationError{
+					Key: leaf.key,
+					Err: fmt.Errorf("nested writes below sensitive object %q are not supported", f.Key),
+				}
+				continue
+			}
+			continue
+		}
 		if err := m.adapter.ValidateValue(leaf.key, leaf.value); err != nil {
-			return WriteResult{}, err
+			if validation == nil {
+				validation = &ValidationError{Key: leaf.key, Err: err}
+			}
+			continue
 		}
 		if IsSecret(f) {
 			ref, err := ValidateSecretRef(leaf.value)
 			if err != nil {
-				return WriteResult{}, fmt.Errorf("key %q: %w", leaf.key, err)
+				if validation == nil {
+					validation = &ValidationError{Key: leaf.key, Err: err}
+				}
+				continue
 			}
 			sensitiveLeaves[leaf.key] = *ref
 		}
@@ -437,6 +476,9 @@ func (m *ConfigManager) Write(ctx context.Context, worker string, values map[str
 	if len(unknown) > 0 {
 		sort.Strings(unknown)
 		return WriteResult{}, &UnknownFieldsError{Fields: unknown}
+	}
+	if validation != nil {
+		return WriteResult{}, validation
 	}
 
 	// Credential invariants: an env ref that does not resolve in the
@@ -484,7 +526,9 @@ func (m *ConfigManager) Write(ctx context.Context, worker string, values map[str
 	writtenKeys := collectLeafKeys("", pruned)
 	restartKeys := make([]string, 0)
 	for _, k := range writtenKeys {
-		if f, ok := m.adapter.FieldForKey(k); ok && f.Applies == runtimeconfig.AppliesRestart {
+		// Opaque leaves inherit the applies level of their declared
+		// container.
+		if f, _, ok := m.adapter.ResolveKey(k); ok && f.Applies == runtimeconfig.AppliesRestart {
 			restartKeys = append(restartKeys, k)
 		}
 	}
@@ -681,7 +725,7 @@ func (m *ConfigManager) Rollback(ctx context.Context, worker, rev string) (Write
 	writtenKeys := collectLeafKeys("", doc)
 	restartKeys := make([]string, 0)
 	for _, k := range writtenKeys {
-		if f, ok := m.adapter.FieldForKey(k); ok && f.Applies == runtimeconfig.AppliesRestart {
+		if f, _, ok := m.adapter.ResolveKey(k); ok && f.Applies == runtimeconfig.AppliesRestart {
 			restartKeys = append(restartKeys, k)
 		}
 	}

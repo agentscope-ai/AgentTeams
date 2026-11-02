@@ -62,6 +62,39 @@ func keyMatchesPattern(pattern, key string) bool {
 	return true
 }
 
+// KeyMode classifies how a concrete config key matched the declared
+// surface.
+type KeyMode int
+
+const (
+	// KeyExact: the key itself matched a declared field (pattern `*`
+	// segments allowed). The value is type/enum/secret validated.
+	KeyExact KeyMode = iota
+	// KeyOpaque: a dot-ancestor of the key matched a declared
+	// object/record field. The surface does not decompose that container,
+	// so the value passes through to the file as written; OpenClaw's own
+	// zod strict validation is the final arbiter (an illegal document is
+	// rejected by the gateway, which keeps its last-good config).
+	KeyOpaque
+)
+
+// ResolveKey classifies a concrete key against the declared surface: an
+// exact field match wins, then the longest dot-ancestor declared as an
+// object/record field. ok is false when neither applies (422
+// unknown_field on write).
+func (a *Adapter) ResolveKey(key string) (runtimeconfig.Field, KeyMode, bool) {
+	if f, ok := a.FieldForKey(key); ok {
+		return f, KeyExact, true
+	}
+	for i := strings.LastIndex(key, "."); i >= 0; i = strings.LastIndex(key[:i], ".") {
+		ancestor := key[:i]
+		if f, ok := a.FieldForKey(ancestor); ok && (f.Type == "object" || f.Type == "record") {
+			return f, KeyOpaque, true
+		}
+	}
+	return runtimeconfig.Field{}, 0, false
+}
+
 // SecretRef is the only shape a sensitive value may take in a write
 // (OpenClaw SecretRefSchema: strict {source, provider, id}). The runtime
 // resolves the reference; the controller never sees or stores the value.

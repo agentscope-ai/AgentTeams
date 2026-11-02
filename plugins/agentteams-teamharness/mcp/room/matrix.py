@@ -140,3 +140,44 @@ def _team_human_matrix_ids() -> list[str]:
     return ids
 
 
+def _team_member_lookup() -> tuple[dict[str, dict], dict[str, dict]]:
+    """Return (by_matrix_id, by_name) for the team roster; empty dicts on standalone.
+
+    Same runtime-config source as ``_team_leader_matrix_id``: the
+    controller projects the full roster into ``team.members`` (with
+    ``role`` / ``matrixUserId`` / ``name``) plus the ``team.admin``
+    entry, recorded with role "admin". ``by_matrix_id`` is keyed by the
+    stripped ``@user:server`` id; ``by_name`` by the exact ``name``
+    string (no case or fuzzy matching). A missing roster (not a list or
+    empty) yields two empty dicts so callers skip validation on
+    standalone runs.
+    """
+    by_id: dict[str, dict] = {}
+    by_name: dict[str, dict] = {}
+    config = _load_runtime_config()
+    team = _section(config, "team")
+    members = team.get("members")
+    if not isinstance(members, list) or not members:
+        return by_id, by_name
+    for member in members:
+        if not isinstance(member, dict):
+            continue
+        matrix_user_id = str(member.get("matrixUserId") or member.get("matrix_user_id") or "").strip()
+        name = str(member.get("name") or "").strip()
+        role = str(member.get("role") or "").strip()
+        entry = {"matrixUserId": matrix_user_id, "name": name, "role": role}
+        if matrix_user_id.startswith("@") and matrix_user_id not in by_id:
+            by_id[matrix_user_id] = entry
+        if name and name not in by_name:
+            by_name[name] = entry
+    admin = _section(team, "admin")
+    admin_mxid = str(admin.get("matrixUserId") or admin.get("matrix_user_id") or "").strip()
+    if admin_mxid.startswith("@") and admin_mxid not in by_id:
+        by_id[admin_mxid] = {
+            "matrixUserId": admin_mxid,
+            "name": str(admin.get("name") or "").strip(),
+            "role": "admin",
+        }
+    return by_id, by_name
+
+

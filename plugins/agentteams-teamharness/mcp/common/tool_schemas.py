@@ -485,6 +485,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "type": "string",
                     "enum": [
                         "delegate_task",
+                        "register_delegated_task",
                         "ack_task",
                         "submit_task",
                         "check_task",
@@ -500,7 +501,14 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                         "escalation / other) out of the group chat while the task "
                         "is still in flight. Pass payload.resolved=true to close "
                         "the open record of that kind (no new ping); the call is "
-                        "rejected when no record of that kind exists."
+                        "rejected when no record of that kind exists. "
+                        "register_delegated_task is the worker-side registration "
+                        "of a delegated task (taskId; optional delegationId, "
+                        "default delegate-<taskId>; optional projectId): it "
+                        "records the delegation link and the ack receipt in the "
+                        "task meta, never changes the task status, and emits no "
+                        "signal event; unknown tasks return reason "
+                        "unknown_task."
                     ),
                 },
                 "projectId": {
@@ -510,6 +518,10 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "taskId": {
                     "type": "string",
                     "description": "Safe task id used under shared/tasks/{taskId}.",
+                },
+                "delegationId": {
+                    "type": "string",
+                    "description": "Delegation link recorded by register_delegated_task; defaults to delegate-<taskId>.",
                 },
                 "submissionId": {
                     "type": "string",

@@ -229,3 +229,180 @@ def test_prepare_preserves_other_settings(tmp_path):
     ]
     assert "other-hook" in names
     assert state.APPROVAL_HOOK_NAME in names
+
+
+# ---- ensure_approval_hook merge semantics (F3: sibling preservation) ----
+
+
+def _managed_old():
+    """An outdated managed hook entry (as left by an older build)."""
+    return {
+        "type": "command",
+        "command": "/old/interpreter /old/path/hook_policy.py",
+        "name": state.APPROVAL_HOOK_NAME,
+        "timeout": 10,
+    }
+
+
+def _user_audit():
+    return {
+        "type": "command",
+        "command": "echo user-audit",
+        "name": "user-audit-hook",
+    }
+
+
+def _qdir_with_settings(tmp_path, settings: dict) -> Path:
+    qdir = tmp_path / "home" / ".qwen"
+    qdir.mkdir(parents=True)
+    (qdir / "settings.json").write_text(
+        json.dumps(settings, ensure_ascii=False), encoding="utf-8"
+    )
+    return qdir
+
+
+def _load(qdir: Path) -> dict:
+    return json.loads((qdir / "settings.json").read_text(encoding="utf-8"))
+
+
+def _managed_hooks(settings: dict) -> list:
+    return [
+        h
+        for e in settings["hooks"]["PreToolUse"]
+        if isinstance(e, dict) and isinstance(e.get("hooks"), list)
+        for h in e["hooks"]
+        if isinstance(h, dict) and h.get("name") == state.APPROVAL_HOOK_NAME
+    ]
+
+
+# 10. same matcher group: our hook is upgraded in place; the sibling
+# user hook in the same entry survives, entry count and matcher intact
+def test_upgrade_same_group_preserves_siblings(tmp_path):
+    qdir = _qdir_with_settings(
+        tmp_path,
+        {
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "run_shell_command",
+                        "hooks": [_managed_old(), _user_audit()],
+                    }
+                ]
+            }
+        },
+    )
+    assert state.ensure_approval_hook(qdir) is True
+    pre = _load(qdir)["hooks"]["PreToolUse"]
+    assert len(pre) == 1  # entry count unchanged
+    assert pre[0]["matcher"] == "run_shell_command"
+    hooks = pre[0]["hooks"]
+    ours = [h for h in hooks if h.get("name") == state.APPROVAL_HOOK_NAME]
+    assert len(ours) == 1
+    assert hooks[0] is ours[0]
+    assert hooks[0]["command"] == state.approval_hook_command()
+    assert hooks[1] == _user_audit()  # sibling kept, in order
+    # Second run is byte-idempotent (no duplicate append).
+    first = (qdir / "settings.json").read_text(encoding="utf-8")
+    assert state.ensure_approval_hook(qdir) is True
+    assert (qdir / "settings.json").read_text(encoding="utf-8") == first
+
+
+# 11. separate groups: both entries survive, managed command refreshed
+def test_upgrade_separate_groups_both_preserved(tmp_path):
+    qdir = _qdir_with_settings(
+        tmp_path,
+        {
+            "hooks": {
+                "PreToolUse": [
+                    {"matcher": "run_shell_command", "hooks": [_managed_old()]},
+                    {"matcher": "*", "hooks": [_user_audit()]},
+                ]
+            }
+        },
+    )
+    assert state.ensure_approval_hook(qdir) is True
+    pre = _load(qdir)["hooks"]["PreToolUse"]
+    assert len(pre) == 2
+    assert pre[0]["hooks"] == [
+        {
+            "type": "command",
+            "command": state.approval_hook_command(),
+            "name": state.APPROVAL_HOOK_NAME,
+            "timeout": 10,
+        }
+    ]
+    assert pre[1] == {"matcher": "*", "hooks": [_user_audit()]}
+
+
+# 12. several entries carrying our hook: each replaced in place,
+# no extra entry appended
+def test_upgrade_multiple_managed_entries_in_place(tmp_path):
+    qdir = _qdir_with_settings(
+        tmp_path,
+        {
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "run_shell_command",
+                        "hooks": [_managed_old(), _user_audit()],
+                    },
+                    {
+                        "matcher": "read_file",
+                        "hooks": [_managed_old(), _user_audit()],
+                    },
+                ]
+            }
+        },
+    )
+    assert state.ensure_approval_hook(qdir) is True
+    data = _load(qdir)
+    pre = data["hooks"]["PreToolUse"]
+    assert len(pre) == 2  # no duplicate append
+    for entry in pre:
+        hooks = entry["hooks"]
+        ours = [
+            h for h in hooks if h.get("name") == state.APPROVAL_HOOK_NAME
+        ]
+        assert len(ours) == 1
+        assert ours[0]["command"] == state.approval_hook_command()
+        assert hooks[1] == _user_audit()
+    assert len(_managed_hooks(data)) == 2
+
+
+# 13. no managed hook present: standard entry appended (existing behavior)
+def test_no_managed_appends_standard_entry(tmp_path):
+    qdir = _qdir_with_settings(
+        tmp_path,
+        {
+            "hooks": {
+                "PreToolUse": [{"matcher": "*", "hooks": [_user_audit()]}]
+            }
+        },
+    )
+    assert state.ensure_approval_hook(qdir) is True
+    pre = _load(qdir)["hooks"]["PreToolUse"]
+    assert len(pre) == 2
+    assert pre[0] == {"matcher": "*", "hooks": [_user_audit()]}
+    assert pre[1]["matcher"] == "*"
+    assert len(_managed_hooks(_load(qdir))) == 1
+
+
+# 14. malformed entries (inner not a list / entry not a dict) are kept
+# untouched; the standard entry is still appended
+def test_malformed_entries_preserved(tmp_path):
+    qdir = _qdir_with_settings(
+        tmp_path,
+        {
+            "hooks": {
+                "PreToolUse": [
+                    {"matcher": "*", "hooks": "not-a-list"},
+                    "stray-entry",
+                ]
+            }
+        },
+    )
+    assert state.ensure_approval_hook(qdir) is True
+    pre = _load(qdir)["hooks"]["PreToolUse"]
+    assert pre[0] == {"matcher": "*", "hooks": "not-a-list"}
+    assert pre[1] == "stray-entry"
+    assert len(_managed_hooks(_load(qdir))) == 1

@@ -108,11 +108,15 @@ def approval_hook_command() -> str:
 def ensure_approval_hook(qdir: Path) -> bool:
     """Idempotently install the worker-proxy PreToolUse hook.
 
-    Merges into ``<qdir>/settings.json``: any existing hook entry named
-    ``agentteams-worker-proxy-policy`` (under any PreToolUse matcher) is
-    replaced by the fresh copy; every other setting and hook is
-    preserved.  Returns False — file left untouched — when the settings
-    are not a valid JSON object or cannot be written.
+    Merges into ``<qdir>/settings.json``: in every PreToolUse entry that
+    already carries a hook named ``agentteams-worker-proxy-policy``, that
+    hook is replaced in place by the fresh copy while the entry's other
+    keys (``matcher`` etc.) and its sibling hooks are preserved; entries
+    without our hook are untouched.  Only when no entry carries our hook
+    is a fresh ``{"matcher": "*", "hooks": [ours]}`` entry appended.
+    Every other setting is preserved.  Returns False — file left
+    untouched — when the settings are not a valid JSON object or cannot
+    be written.
     """
     import json
 
@@ -136,16 +140,29 @@ def ensure_approval_hook(qdir: Path) -> bool:
             "name": APPROVAL_HOOK_NAME,
             "timeout": 10,
         }
+
+        def _is_ours(h):
+            return isinstance(h, dict) and h.get("name") == APPROVAL_HOOK_NAME
+
         kept: list = []
+        replaced = False
         for entry in pre:
             inner = entry.get("hooks") if isinstance(entry, dict) else None
-            if isinstance(inner, list) and any(
-                isinstance(h, dict) and h.get("name") == APPROVAL_HOOK_NAME
-                for h in inner
+            if not isinstance(inner, list) or not any(
+                _is_ours(h) for h in inner
             ):
-                continue  # replaced by the fresh copy below
+                # Malformed entry (inner not a list) or a group without
+                # our hook: preserve as-is.
+                kept.append(entry)
+                continue
+            # Replace only our hook(s) in place; keep the entry's other
+            # keys and any sibling hooks (dropping the whole entry used
+            # to silently lose user hooks sharing the matcher group).
+            entry["hooks"] = [ours] + [h for h in inner if not _is_ours(h)]
+            replaced = True
             kept.append(entry)
-        kept.append({"matcher": "*", "hooks": [ours]})
+        if not replaced:
+            kept.append({"matcher": "*", "hooks": [ours]})
         hooks["PreToolUse"] = kept
         data["hooks"] = hooks
         tmp = path.with_suffix(path.suffix + ".tmp")

@@ -358,6 +358,14 @@ def _install_sync_fakes(
     controller's conditional commit (module global on server.sync)."""
     monkeypatch.setattr(server, "_filesync", storage)
     monkeypatch.setattr(server.sync, "_commit_project_meta", storage.commit)
+    # The W2 Task guards pull the authoritative task before a cross-actor
+    # write (ack/submit/review). These tests model a task that already
+    # exists in shared storage, so the pull succeeds as a no-op and the
+    # local copy stays authoritative: the pause semantics under test are
+    # the project gate, not the task-read failure path (covered by the
+    # protocol-guard suite).
+    monkeypatch.setattr(server, "_pull_task", lambda arguments, task_id: True)
+    monkeypatch.setattr(server, "_remote_task_absent", lambda arguments, task_id: False)
 
 
 def _loop(

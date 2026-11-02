@@ -48,7 +48,13 @@ from mcp.common.constants import DECISION_CLASS_IDS, DEFAULT_DECISION_CLASS
 from mcp.common.identity import _canonical_account
 from mcp.common.io import _utc_timestamp
 from mcp.common.payload import _first_text, _safe_id
-from mcp.artifact.sync import _load_authoritative_task
+from mcp.artifact.sync import (
+    _TASK_COMMIT_ATTEMPTS,
+    _load_authoritative_task,
+    _load_authoritative_task_versioned,
+    _remote_task_meta_etag,
+    _task_meta_commit_landed,
+)
 from .transitions import (
     _reject_task_transition,
     _require_task_mutable,
@@ -315,7 +321,33 @@ def _known_account_of(actor: str) -> str:
     return "" if account in _UNKNOWN_ACCOUNTS else account
 
 
+class _TaskCommitConflict(RuntimeError):
+    """The task base moved between the authoritative read and the commit."""
+
+
 def _review_task_action(
+    arguments: dict[str, Any],
+    payload: dict[str, Any],
+    role: str,
+) -> dict[str, Any]:
+    """review_task with a bounded version-guarded commit (#1467 round 17).
+
+    A peer commit (a freeze with its approval record and
+    decision_status_history) can land after the authoritative pull and
+    before the whole-directory mirror. Each attempt reloads the fresh base
+    and re-applies the review, so the peer's record survives; an exhausted
+    retry fails closed instead of overwriting.
+    """
+    last_error: Exception | None = None
+    for _attempt in range(1, _TASK_COMMIT_ATTEMPTS + 1):
+        try:
+            return _review_task_attempt(arguments, payload, role)
+        except _TaskCommitConflict as exc:
+            last_error = exc
+    raise ValueError(f"review_task: {last_error}; reload and retry")
+
+
+def _review_task_attempt(
     arguments: dict[str, Any],
     payload: dict[str, Any],
     role: str,
@@ -346,7 +378,7 @@ def _review_task_action(
     # (pull first, fail closed on failure) so a concurrently persisted
     # decision_status=frozen, its approval records and the
     # decision_status_history survive the review write.
-    task = _load_authoritative_task(arguments, task_id)
+    task, base_etag = _load_authoritative_task_versioned(arguments, task_id)
     _require_task_mutable(arguments, task, task_id, "review_task")
     status = str(task.get("status") or "")
     if status != "submitted":
@@ -410,8 +442,26 @@ def _review_task_action(
     if scorecard is not None:
         review["scorecard"] = scorecard
     task["review"] = review
+    # Guard the commit against a base change during the window: mirroring a
+    # stale directory would erase a peer's freeze, approval and history.
+    current_etag, version_error = _remote_task_meta_etag(arguments, task_id)
+    if version_error:
+        raise ValueError(
+            "review_task: cannot verify the authoritative task version before "
+            "the commit; refusing to write (retry)"
+        )
+    if base_etag is not None and current_etag != base_etag:
+        raise _TaskCommitConflict(
+            "a peer committed a newer task version during the commit window"
+        )
     _write_task(arguments, task)
     synced = _sync_task(arguments, task_id, exclude=["spec.md", "base/"])
+    if not synced:
+        raise ValueError("review_task: task sync failed (retry)")
+    if not _task_meta_commit_landed(arguments, task_id, task):
+        raise _TaskCommitConflict(
+            "a peer overwrote the task during the commit window"
+        )
     return {
         "ok": True,
         "tool": "taskflow",

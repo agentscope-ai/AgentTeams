@@ -258,6 +258,33 @@ def storage(monkeypatch: pytest.MonkeyPatch) -> None:
     about the protocol layer, not the transport."""
     monkeypatch.setattr(server, "_pull_project", lambda *_a, **_k: True)
     monkeypatch.setattr(server, "_pull_task", lambda *_a, **_k: True)
+
+    # The version-guarded task commit (#1467 round 17) probes the remote
+    # meta through filesync (etag + cat). The stubbed mirror keeps the
+    # local copy as the committed copy, so the probe must agree with it.
+    def _fake_filesync(args: dict[str, Any]) -> dict[str, Any]:
+        action = args.get("action")
+        if action == "etag":
+            return {"ok": True, "etag": "etag-stable"}
+        if action == "cat":
+            path = str(args.get("path") or "")
+            parts = path.split("/")
+            task_id = (
+                parts[2]
+                if len(parts) > 2 and parts[0] == "shared" and parts[1] == "tasks"
+                else ""
+            )
+            meta = (
+                server._read_json(server._task_state_path(args, task_id))
+                if task_id
+                else None
+            )
+            if not meta:
+                return {"ok": False, "error": "object does not exist"}
+            return {"ok": True, "content": json.dumps(meta)}
+        return {"ok": True}
+
+    monkeypatch.setattr(server, "_filesync", _fake_filesync)
     monkeypatch.setattr(server, "_sync_task", lambda *_a, **_k: True)
     monkeypatch.setattr(server, "_sync_project", lambda *_a, **_k: True)
     monkeypatch.setattr(server, "_publish_task_artifacts", lambda *_a, **_k: [])
@@ -1555,3 +1582,71 @@ def test_r12_parity_storage_outage_fails_closed(
     _load_first_delegation_module().test_storage_outage_fails_closed(
         server, tmp_path, monkeypatch
     )
+
+# --- Round 17: a freeze committed after the pull must survive review -----
+
+
+def test_review_commit_preserves_freeze_committed_after_pull(
+    bound_server: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None
+) -> None:
+    """#1467 round 17 (bundle entry): a peer freeze landing between the
+    authoritative pull and the whole-directory mirror must not be erased."""
+    _enforce_on(monkeypatch)
+    base = _write_submitted_task(tmp_path, submitted_by="worker:alice")
+
+    state: dict[str, Any] = {"remote": dict(base), "version": 1, "peer_wrote": False}
+
+    def fake_pull(arguments: dict[str, Any], task_id: Any, **_kw: Any) -> bool:
+        server._write_json(
+            server._task_state_path(arguments, str(task_id)), state["remote"]
+        )
+        return True
+
+    def fake_sync(arguments: dict[str, Any], task_id: Any, **_kw: Any) -> bool:
+        state["remote"] = server._read_json(
+            server._task_state_path(arguments, str(task_id))
+        )
+        state["version"] += 1
+        return True
+
+    def fake_filesync(args: dict[str, Any]) -> dict[str, Any]:
+        action = args.get("action")
+        if action == "etag":
+            etag = f"etag-v{state['version']}"
+            if not state["peer_wrote"]:
+                state["peer_wrote"] = True
+                frozen = dict(state["remote"])
+                frozen["decision_status"] = "frozen"
+                frozen["attention"] = [{
+                    "kind": "approval",
+                    "question": "freeze until reviewed",
+                    "attempt": 1,
+                    "requestedAt": "2026-11-02T00:00:00+00:00",
+                    "resolved": False,
+                }]
+                frozen["decision_status_history"] = [{
+                    "at": "2026-11-02T00:00:00+00:00",
+                    "from": "open",
+                    "to": "frozen",
+                    "source": "peer-worker",
+                }]
+                state["remote"] = frozen
+                state["version"] += 1
+            return {"ok": True, "etag": etag}
+        if action == "cat":
+            return {"ok": True, "content": json.dumps(state["remote"])}
+        return {"ok": True}
+
+    monkeypatch.setattr(server, "_pull_task", fake_pull)
+    monkeypatch.setattr(server, "_sync_task", fake_sync)
+    monkeypatch.setattr(server, "_filesync", fake_filesync)
+
+    result = _review(tmp_path, role="critic", account="bob", verdict="pass")
+
+    assert result["ok"] is True
+    committed = state["remote"]
+    assert committed["decision_status"] == "frozen"
+    assert committed["attention"][0]["kind"] == "approval"
+    assert committed["decision_status_history"][0]["to"] == "frozen"
+    assert committed["review"]["verdict"] == "pass"
+    assert state["version"] >= 3

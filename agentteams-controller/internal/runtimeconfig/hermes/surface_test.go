@@ -119,20 +119,23 @@ func TestProviderEntryKeySet(t *testing.T) {
 func TestRestartKeySetIsExact(t *testing.T) {
 	s := mustSurface(t)
 	want := map[string]bool{
-		"platforms.matrix.enabled":   true,
-		"platforms.matrix.token":     true,
-		"platforms.matrix.api_key":   true,
+		"platforms.matrix.enabled":    true,
+		"platforms.matrix.token":      true,
+		"platforms.matrix.api_key":    true,
 		"platforms.matrix.homeserver": true,
-		"platforms.matrix.user_id":   true,
-		"platforms.matrix.password":  true,
-		"streaming.enabled":          true,
+		"platforms.matrix.user_id":    true,
+		"platforms.matrix.password":   true,
+		"streaming.enabled":           true,
 	}
 	var got []string
 	for _, k := range s.Keys() {
 		fld, _ := s.Field(k)
 		if fld.Applies == runtimeconfig.AppliesRestart {
-			got = append(got, k)
-			delete(want, k)
+			if _, ok := want[k]; ok {
+				delete(want, k)
+			} else {
+				got = append(got, k)
+			}
 		}
 	}
 	sort.Strings(got)
@@ -179,17 +182,17 @@ func TestDelegationModelDefaults(t *testing.T) {
 func TestSensitiveSpotChecks(t *testing.T) {
 	s := mustSurface(t)
 	sensitive := map[string]bool{
-		"providers.*.api_key":       true,
-		"providers.*.key_cmd":       true,
-		"providers.*.extra_headers": true,
-		"delegation.api_key":        true,
-		"auxiliary.vision.api_key":  true,
+		"providers.*.api_key":           true,
+		"providers.*.key_cmd":           true,
+		"providers.*.extra_headers":     true,
+		"delegation.api_key":            true,
+		"auxiliary.vision.api_key":      true,
 		"dashboard.basic_auth.password": true,
-		"platforms.matrix.token":    true,
-		"platforms.matrix.password": true,
-		"mcp_servers.*.env":         true,
-		"terminal.docker_env":       true,
-		"secrets.onepassword.env":   true,
+		"platforms.matrix.token":        true,
+		"platforms.matrix.password":     true,
+		"mcp_servers.*.env":             true,
+		"terminal.docker_env":           true,
+		"secrets.onepassword.env":       true,
 	}
 	for key, want := range sensitive {
 		fld, ok := FieldFor(s, key)
@@ -222,7 +225,7 @@ func TestMatchKey(t *testing.T) {
 		{"a.b", "a.b", true},
 		{"a.b", "a.c", false},
 		{"a.*.b", "a.x.b", true},
-		{"a.*.b", "a..b", false}, // wildcard needs a non-empty segment
+		{"a.*.b", "a..b", false},      // wildcard needs a non-empty segment
 		{"a.*.b.*", "a.x.b.y", false}, // at most one wildcard
 		{"*", "a", true},
 		{"*", "a.b", false},

@@ -290,6 +290,19 @@ jobs:
         # (agentteams-copaw-worker) instead.
         target: [embedded, manager, manager-qwenpaw, worker, qwenpaw-worker, hermes-worker, deepseek-harness-worker]
     steps:
+      # The manager target exports openclaw-base + controller + manager layers in
+      # one tar; on a stock runner that export hit ENOSPC ("no space left on
+      # device"), so reclaim the preinstalled toolchains first.
+      - name: Free Up Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -391,15 +404,26 @@ jobs:
 
       - name: Save image
         run: |
+          set -euo pipefail
           # Exclude already-uploaded base images (controller, openclaw-base) so
           # each per-target tar only contains its own deltas.
-          docker save \
-            $(docker images --format '{{.Repository}}:{{.Tag}}' \
-              | grep -E '^agentteams/' \
-              | grep -v '<none>' \
-              | grep -v 'agentteams-controller' \
-              | grep -v 'openclaw-base') \
-            | gzip > /tmp/agentteams-${{ matrix.target }}.tar.gz
+          images=$(docker images --format '{{.Repository}}:{{.Tag}}' \
+            | grep -E '^agentteams/' \
+            | grep -v '<none>' \
+            | grep -v 'agentteams-controller' \
+            | grep -v 'openclaw-base' || true)
+          if [ -z "${images}" ]; then
+            echo "no agentteams images were built for ${{ matrix.target }}" >&2
+            docker images >&2
+            exit 1
+          fi
+          # pipefail: a failed export (e.g. "no space left on device") must fail
+          # this job instead of publishing a truncated tar, which only shows up
+          # much later as "open .../docker-import-*/repositories: no such file"
+          # in the consumer jobs.
+          docker save ${images} | gzip > /tmp/agentteams-${{ matrix.target }}.tar.gz
+          gzip -t /tmp/agentteams-${{ matrix.target }}.tar.gz
+          ls -l /tmp/agentteams-${{ matrix.target }}.tar.gz
 
       - name: Upload image
         uses: actions/upload-artifact@v4

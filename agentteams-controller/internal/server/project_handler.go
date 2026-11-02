@@ -9,11 +9,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -127,8 +129,123 @@ type loopMeta struct {
 	CurrentIteration  int               `json:"current_iteration"`
 	MaxIterations     int               `json:"max_iterations"`
 	Status            string            `json:"status"`
+	PauseSources      []string          `json:"pause_sources,omitempty"`
 	Tasks             []projectTaskMeta `json:"tasks,omitempty"`
 	History           []json.RawMessage `json:"history,omitempty"`
+	// Extra keeps the loop keys this struct does not model. A project
+	// write must round-trip the durable loop block byte-for-byte — the
+	// worker-side pause veto (pause_sources, and any future field) is
+	// owned by the loop endpoints and the worker gate
+	// (_loop_pause_state), so dropping an unmodeled key here would
+	// silently clear state only the worker side understands (#1402).
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// loopModeled is loopMeta without its custom JSON methods, so
+// json.Unmarshal/Marshal on it cannot recurse into them.
+type loopModeled loopMeta
+
+// loopModeledKeys is the set of JSON keys the loopMeta struct models,
+// derived from the struct tags: a field added to the struct must never
+// also survive in Extra (that would emit the key twice), and drift in
+// the other direction would silently drop it.
+var loopModeledKeys = func() map[string]bool {
+	set := make(map[string]bool)
+	typ := reflect.TypeOf(loopMeta{})
+	for i := 0; i < typ.NumField(); i++ {
+		tag := typ.Field(i).Tag.Get("json")
+		if tag == "" || tag == "-" {
+			continue
+		}
+		if name := strings.Split(tag, ",")[0]; name != "" {
+			set[name] = true
+		}
+	}
+	return set
+}()
+
+// UnmarshalJSON decodes the modeled fields and keeps every unmodeled key
+// verbatim in Extra, so project writes preserve the loop block.
+func (m *loopMeta) UnmarshalJSON(data []byte) error {
+	var modeled loopModeled
+	if err := json.Unmarshal(data, &modeled); err != nil {
+		return err
+	}
+	*m = loopMeta(modeled)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	for key, value := range raw {
+		if !loopModeledKeys[key] {
+			if m.Extra == nil {
+				m.Extra = make(map[string]json.RawMessage)
+			}
+			m.Extra[key] = value
+		}
+	}
+	return nil
+}
+
+// MarshalJSON emits the modeled fields (struct order, exactly as before)
+// followed by the Extra keys sorted, with their stored bytes verbatim.
+// With no Extra keys the output is byte-identical to the plain struct
+// marshal, so stored JSON stays byte-stable for unchanged input.
+func (m loopMeta) MarshalJSON() ([]byte, error) {
+	base, err := json.Marshal(loopModeled(m))
+	if err != nil {
+		return nil, err
+	}
+	if len(m.Extra) == 0 {
+		return base, nil
+	}
+	keys := make([]string, 0, len(m.Extra))
+	for key := range m.Extra {
+		if !loopModeledKeys[key] {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	if len(keys) == 0 {
+		return base, nil
+	}
+	// A struct marshal is always an object: append the extra keys before
+	// the closing brace.
+	out := make([]byte, 0, len(base)+16*len(keys))
+	out = append(out, base[:len(base)-1]...)
+	// "{}" is the empty object; any other base already carries fields, so
+	// the first extra key needs a separator.
+	hasBase := len(base) > 2
+	for i, key := range keys {
+		quoted, err := json.Marshal(key)
+		if err != nil {
+			return nil, err
+		}
+		if hasBase || i > 0 {
+			out = append(out, ',')
+		}
+		out = append(out, quoted...)
+		out = append(out, ':')
+		out = append(out, m.Extra[key]...)
+	}
+	out = append(out, '}')
+	return out, nil
+}
+
+// loopPaused reports whether the loop block holds a pause source,
+// mirroring the worker-side _loop_pause_state veto: while any
+// pause_sources entry is non-empty (after trimming), dispatch stays
+// blocked even if the project itself is active.
+func loopPaused(loop *loopMeta) bool {
+	if loop == nil {
+		return false
+	}
+	for _, source := range loop.PauseSources {
+		if strings.TrimSpace(source) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // --- workflow response (LangGraph-aligned) ---
@@ -919,6 +1036,13 @@ func (h *ProjectHandler) buildWorkflow(meta *projectMeta, team string, includeTa
 	loopBlocked := false
 	if meta.Loop != nil {
 		if meta.Loop.Status == "completed" || meta.Loop.Status == "blocked" || meta.Loop.Status == "waiting_user" {
+			loopBlocked = true
+		}
+		// The pause veto is independent of the loop status: a loop paused
+		// by a human keeps its "running" status but must not dispatch
+		// until every pause source is released. Mirrors _ready_loop_nodes,
+		// which checks _loop_pause_state before computing ready nodes.
+		if !loopBlocked && loopPaused(meta.Loop) {
 			loopBlocked = true
 		}
 	}
@@ -2892,6 +3016,399 @@ func (h *ProjectHandler) writeProjectMeta(ctx context.Context, w http.ResponseWr
 	return true
 }
 
+// projectMetaCommitMaxBytes caps the commit body at 1 MiB: a project meta is
+// small by construction, and the cap bounds the request before it reaches
+// storage.
+const projectMetaCommitMaxBytes = 1 << 20
+
+// pauseSourcesField is the exact JSON key the task runtime persists and
+// reads. Go's struct decoding matches JSON names case-insensitively, so a
+// struct-based presence check accepts "PAUSE_SOURCES":["user"] while the
+// runtime reads the exact lowercase key (the round-11 maintainer repro:
+// the check passed and the durable pause stayed cleared). The helpers below
+// therefore parse the object maps and bind to the exact key; a case variant
+// is reported as an ambiguity the caller rejects.
+const pauseSourcesField = "pause_sources"
+
+// exactPauseSources returns the exact-key loop.pause_sources list and
+// whether any case-variant alias of "loop" or "pause_sources" is present.
+// The task runtime reads the exact lowercase keys, so only the exact value
+// decides the durable state; an alias can only shadow it.
+func exactPauseSources(meta []byte) (sources []string, hasAlias bool) {
+	if len(meta) == 0 {
+		return nil, false
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(meta, &top); err != nil {
+		return nil, false
+	}
+	var loopRaw json.RawMessage
+	for key, raw := range top {
+		switch {
+		case key == "loop":
+			loopRaw = raw
+		case strings.EqualFold(key, "loop"):
+			hasAlias = true
+		}
+	}
+	if len(loopRaw) == 0 {
+		return nil, hasAlias
+	}
+	var loop map[string]json.RawMessage
+	if err := json.Unmarshal(loopRaw, &loop); err != nil {
+		return nil, hasAlias
+	}
+	for key, raw := range loop {
+		switch {
+		case key == pauseSourcesField:
+			_ = json.Unmarshal(raw, &sources)
+		case strings.EqualFold(key, pauseSourcesField):
+			hasAlias = true
+		}
+	}
+	return sources, hasAlias
+}
+
+// exactProjectStatus returns the exact-key top-level “status“ and whether
+// the key is present at all. A case-variant alias is reported separately:
+// the handler treats an alias-only status as "no status", the same way the
+// task runtime does (it reads the exact lowercase key).
+func exactProjectStatus(meta []byte) (status string, present bool, hasAlias bool) {
+	if len(meta) == 0 {
+		return "", false, false
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(meta, &top); err != nil {
+		return "", false, false
+	}
+	for key, raw := range top {
+		switch {
+		case key == "status":
+			present = true
+			_ = json.Unmarshal(raw, &status)
+		case strings.EqualFold(key, "status"):
+			hasAlias = true
+		}
+	}
+	return status, present, hasAlias
+}
+
+// canonicalProjectStatuses are the exact project-status values the rest of
+// the system reads: the Controller's own PauseProject / ResumeProject /
+// ReplanProject compare with ==, and the TeamHarness gate treats exactly
+// "paused" as paused and exactly "active" as runnable. The metadata
+// endpoint stores the body byte-for-byte, so any other spelling — " paused ",
+// "PAUSED", "" — would persist a value no reader interprets the way the
+// writer meant (round 15).
+var canonicalProjectStatuses = map[string]struct{}{
+	"active":    {},
+	"paused":    {},
+	"completed": {},
+}
+
+// canonicalProjectStatus reports whether status is one of the exact values
+// above. An empty or padded string is NOT canonical.
+func canonicalProjectStatus(status string) bool {
+	_, ok := canonicalProjectStatuses[status]
+	return ok
+}
+
+// normalizedProjectStatus is the comparison view used by the AUTHORITY
+// decision only (never for what gets stored): legacy data written before
+// the canonical rule may carry " Paused ", and a canonical rewrite of it
+// must not be mistaken for a release attempt.
+func normalizedProjectStatus(status string) string {
+	return strings.ToLower(strings.TrimSpace(status))
+}
+
+// canonicalPauseSource reports whether source is already in the form both
+// readers produce (Go parsePauseSourcesMeta and the Python gate lowercase
+// and trim). A non-canonical entry is an equivalent-but-unstable spelling:
+// the runtime treats it as the canonical source while the control plane
+// compares exactly, so it must not be introduced by a commit.
+func canonicalPauseSource(source string) bool {
+	return source != "" && source == strings.ToLower(strings.TrimSpace(source))
+}
+
+// writeMetaConflict writes the standard 409 body for a stale meta commit:
+// the caller must re-read, merge and retry (#1402).
+func writeMetaConflict(w http.ResponseWriter) {
+	httputil.WriteJSON(w, http.StatusConflict, struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}{Code: "conflict", Message: "project meta changed since the read; re-read, merge and retry"})
+}
+
+// pauseSourcesContain reports whether the exact-key list contains source.
+func pauseSourcesContain(sources []string, source string) bool {
+	for _, entry := range sources {
+		if entry == source {
+			return true
+		}
+	}
+	return false
+}
+
+// PutProjectMeta conditionally commits a project's full meta.json against
+// the version the caller read (the controller-side conditional commit
+// endpoint, #1402). The worker's filesync path used to `mc stat` and then
+// `mc cp` unconditionally: when a Controller handler committed a pause into
+// the meta in between, the blind copy clobbered it (remote
+// pause_sources=[], gate unpaused) while the sync still reported
+// ok=true/synced=true. This endpoint removes the blind write — the commit
+// is a strict If-Match CAS (PutObjectIfMatchStrict) bound to the ETag the
+// caller passes, and a mismatch is a 409 the client must resolve by
+// re-reading, merging and retrying.
+//
+// PUT /api/v1/projects/{id}/meta
+//
+//	Header If-Match: <ETag from the read / previous commit> (required)
+//	Body: the full meta.json as a JSON object (<= 1 MiB), written through
+//	byte-for-byte (no re-marshal, so the stored bytes equal the commit).
+//
+// Responses: 428 missing If-Match · 413 body > 1 MiB · 400 body not a JSON
+// object · 404 unknown project · 403 worker outside its team · 409 ETag
+// mismatch · 503 backend without strict conditional writes ·
+// 200 {"etag": <new ETag of the committed version>}.
+//
+// No history snapshot and no control-action audit entry: this is the
+// worker's high-frequency commit path, and amplifying every commit with
+// extra writes would widen the write storm this endpoint exists to close.
+// The intervention audit trail stays on the lifecycle endpoints.
+// Idempotency is intrinsic to If-Match: re-sending the same body against
+// the same version succeeds once; the second attempt sees the new ETag and
+// fails with 409 until it re-reads.
+func (h *ProjectHandler) PutProjectMeta(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	if projectID == "" {
+		writeError(w, http.StatusBadRequest, "project id is required")
+		return
+	}
+
+	// The commit is conditional by construction: without an If-Match there
+	// is no read version to bind, and this endpoint never blind-writes.
+	ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
+	if ifMatch == "" {
+		writeError(w, http.StatusPreconditionRequired,
+			"If-Match is required: read the meta and pass its ETag; this endpoint never blind-writes")
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, projectMetaCommitMaxBytes))
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "project meta commit body exceeds 1 MiB")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "read project meta commit body: "+err.Error())
+		return
+	}
+	// The body must be a JSON object. The decode is validation only — the
+	// raw bytes are what get written (byte-identical round-trip).
+	var asObject map[string]json.RawMessage
+	if err := json.Unmarshal(body, &asObject); err != nil {
+		writeError(w, http.StatusBadRequest, "project meta commit body must be a JSON object: "+err.Error())
+		return
+	}
+	// A bare JSON null unmarshals into a nil map WITHOUT an error, and the
+	// raw bytes are what get written — a "null" commit would replace the
+	// whole project meta (including the durable loop.pause_sources) with
+	// the literal null. Reject it before the conditional write (#1402
+	// round 9).
+	if asObject == nil {
+		writeError(w, http.StatusBadRequest, "project meta commit body must be a JSON object, not null")
+		return
+	}
+
+	pwc, failed := h.readProjectWriteContext(w, r)
+	if failed {
+		return
+	}
+
+	// Worker team-scope boundary (the real one): the middleware cannot
+	// resolve project -> team (projectNameFn returns only the id), so the
+	// authorizer's requireSameTeam short-circuits on an empty ResourceTeam.
+	// A worker may commit only the meta of a project in its own team; the
+	// global prefix resolves to team "" and is therefore unreachable for
+	// workers. Admin/manager skip (full access); team leaders and L2 humans
+	// were already scoped above by checkProjectAccess (W4: 404, never 403).
+	if caller := authpkg.CallerFromContext(r.Context()); caller != nil && caller.Role == authpkg.RoleWorker {
+		if !caller.TeamMatches(pwc.team) {
+			writeError(w, http.StatusForbidden, "worker can only commit the meta of a project in its own team")
+			return
+		}
+	}
+
+	// The human pause source is server-owned state for EVERY non-admin
+	// caller (#1402 round 10, widened in round 12): If-Match binds the
+	// version, not the field authority. A commit from a worker, manager,
+	// team leader or L2 human that drops loop.pause_sources=["user"] — or
+	// omits the loop object entirely — must not clear a pause the admin
+	// placed; only the admin and the dedicated resume endpoint may. The
+	// earlier worker-only gate left the other three identities able to
+	// clear the veto through the metadata path while ResumeLoop still
+	// returned 403.
+	//
+	// Ordinary task-progress commits keep the source and stay on the
+	// no-extra-read path; only a body that lacks the source pays the read
+	// that decides whether protecting it is required.
+	// Field-authority + canonical-spelling rules for the metadata commit
+	// (#1402 rounds 10-15). The body is stored byte-for-byte, so everything
+	// here must agree with what the READERS do with those bytes:
+	//
+	//   * a case-variant alias of "loop"/"pause_sources"/"status" is
+	//     rejected: the readers only look at the exact lowercase keys, so
+	//     an alias would silently empty the real field (round 11);
+	//   * a non-canonical spelling of a pause-relevant value is rejected
+	//     unless it is a byte-identical echo of what is already stored: a
+	//     padded/cased "status" or a " user " source reads differently in
+	//     the runtime than in this check, which is exactly how a manager
+	//     released a pause by writing " paused " (round 15);
+	//   * non-admin callers may not release the human pause source or a
+	//     stored paused status (rounds 10/14), and escalating to paused
+	//     stays allowed (a pause is fail-closed).
+	caller := authpkg.CallerFromContext(r.Context())
+	isAdmin := caller != nil && caller.Role == authpkg.RoleAdmin
+	bodySources, bodySourcesAlias := exactPauseSources(body)
+	bodyStatus, bodyStatusPresent, bodyStatusAlias := exactProjectStatus(body)
+	if bodySourcesAlias {
+		writeError(w, http.StatusBadRequest,
+			"ambiguous case alias for loop."+pauseSourcesField+
+				": the task runtime persists and reads the exact lowercase key")
+		return
+	}
+	if bodyStatusAlias {
+		writeError(w, http.StatusBadRequest,
+			`ambiguous case alias for "status": the task runtime persists and reads the exact lowercase key`)
+		return
+	}
+	statusCanonical := !bodyStatusPresent || canonicalProjectStatus(bodyStatus)
+	sourcesCanonical := true
+	for _, source := range bodySources {
+		if !canonicalPauseSource(source) {
+			sourcesCanonical = false
+			break
+		}
+	}
+	// The read is needed when a non-admin commit might release a pause,
+	// and whenever a canonicality question must be answered against the
+	// stored bytes (the byte-identical-echo exception).
+	needsRead := !isAdmin &&
+		(!pauseSourcesContain(bodySources, pauseSourceUser) ||
+			normalizedProjectStatus(bodyStatus) != "paused")
+	needsRead = needsRead || !statusCanonical || !sourcesCanonical
+	if needsRead {
+		current, readErr := h.oss.GetObject(r.Context(), pwc.key)
+		switch {
+		case readErr == nil:
+			currentStatus, currentStatusPresent, _ := exactProjectStatus(current)
+			currentSources, _ := exactPauseSources(current)
+			if !statusCanonical {
+				if !(currentStatusPresent && bodyStatus == currentStatus) {
+					writeError(w, http.StatusBadRequest,
+						"noncanonical project status "+strconv.Quote(bodyStatus)+
+							": the runtime compares the exact string, so the stored value would not mean what it spells (use one of active, paused, completed)")
+					return
+				}
+			}
+			if !sourcesCanonical {
+				for _, source := range bodySources {
+					if canonicalPauseSource(source) {
+						continue
+					}
+					if !pauseSourcesContain(currentSources, source) {
+						writeError(w, http.StatusBadRequest,
+							"noncanonical pause source "+strconv.Quote(source)+
+								": the runtime lowercases and trims sources, so this entry would pause the project under a spelling the resume endpoint cannot address")
+						return
+					}
+				}
+			}
+			if !isAdmin {
+				// A stale If-Match is a version conflict, not a permanent
+				// refusal: the client must re-read and merge (which keeps
+				// the server-owned values) and retry. Only a caller bound
+				// to the CURRENT version gets the field-authority 403.
+				stale := ifMatch != pwc.etag
+				if !pauseSourcesContain(bodySources, pauseSourceUser) &&
+					pauseSourcesContain(currentSources, pauseSourceUser) {
+					if stale {
+						writeMetaConflict(w)
+						return
+					}
+					writeError(w, http.StatusForbidden,
+						"the human pause source is server-owned; a meta commit cannot clear it (use the resume endpoint)")
+					return
+				}
+				if normalizedProjectStatus(bodyStatus) != "paused" &&
+					currentStatusPresent && normalizedProjectStatus(currentStatus) == "paused" {
+					if stale {
+						writeMetaConflict(w)
+						return
+					}
+					writeError(w, http.StatusForbidden,
+						"the paused project status is server-owned; a meta commit cannot release it (use the resume endpoint)")
+					return
+				}
+			}
+		case errors.Is(readErr, os.ErrNotExist):
+			// No stored meta yet: there is no pause to protect, and a
+			// non-canonical body has no echo to be identical to.
+			if !statusCanonical || !sourcesCanonical {
+				writeError(w, http.StatusBadRequest,
+					"noncanonical pause value: the runtime compares exact strings, so the stored value would not mean what it spells")
+				return
+			}
+		default:
+			writeError(w, http.StatusInternalServerError,
+				"verify the server-owned pause state: "+readErr.Error())
+			return
+		}
+	}
+
+	// The unified exit is the STRICT conditional write (loop_handler's
+	// conditionalWriter): a backend whose If-Match can degrade to
+	// compare-then-put — or that does not implement it at all — is rejected
+	// with 503, never an unconditional write.
+	strict, ok := h.oss.(conditionalWriter)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable,
+			"project meta commit requires a backend with strict conditional writes: "+oss.ErrConditionalUnsupported.Error())
+		return
+	}
+	if err := strict.PutObjectIfMatchStrict(r.Context(), pwc.key, body, ifMatch); err != nil {
+		switch {
+		case errors.Is(err, oss.ErrPreconditionFailed):
+			// The meta changed since the caller's read: the write did NOT
+			// land. The client re-reads, merges and retries with the new
+			// ETag — this endpoint never guesses.
+			httputil.WriteJSON(w, http.StatusConflict, struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			}{Code: "conflict", Message: "project meta changed since the read; re-read, merge and retry"})
+		case errors.Is(err, oss.ErrConditionalUnsupported):
+			// The backend cannot honor If-Match at all: fail closed.
+			writeError(w, http.StatusServiceUnavailable,
+				"backend cannot provide conditional writes: "+oss.ErrConditionalUnsupported.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, "commit project meta: "+err.Error())
+		}
+		return
+	}
+
+	// Report the ETag of the version that actually landed (re-stat, not
+	// computed): the client binds its next commit to it.
+	committed, err := h.oss.StatMeta(r.Context(), pwc.key)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "stat project meta after commit: "+err.Error())
+		return
+	}
+	httputil.WriteJSON(w, http.StatusOK, struct {
+		ETag string `json:"etag"`
+	}{ETag: committed.ETag})
+}
+
 // interventionNotify sends an admin message to the project's source room so
 // agents there learn about a human intervention without polling. Best-effort:
 // failures (no source room, no matrix client, send error) are logged and
@@ -3147,7 +3664,10 @@ func (h *ProjectHandler) PauseProject(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&reqBody)
 
-	if meta.Status == "paused" {
+	// Legacy data may carry a padded/cased status (written before the
+	// canonical rule, round 15). The control plane reads it the way the
+	// pause gate does, and both writes below store a canonical value.
+	if normalizedProjectStatus(meta.Status) == "paused" {
 		writeError(w, http.StatusConflict, "project is already paused")
 		appendControlAction(meta, "pause", actor, role, "project is already paused", "error")
 		h.persistControlActionAudit(r.Context(), pwc.key, pwc.etag, meta)
@@ -3185,7 +3705,7 @@ func (h *ProjectHandler) ResumeProject(w http.ResponseWriter, r *http.Request) {
 	meta := pwc.meta
 	caller := authpkg.CallerFromContext(r.Context())
 	actor, role := auditCaller(caller)
-	if meta.Status != "paused" {
+	if normalizedProjectStatus(meta.Status) != "paused" {
 		writeError(w, http.StatusConflict, "project is not paused")
 		appendControlAction(meta, "resume", actor, role, "project is not paused", "error")
 		h.persistControlActionAudit(r.Context(), pwc.key, pwc.etag, meta)

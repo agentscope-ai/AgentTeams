@@ -125,6 +125,16 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("PUT /api/v1/managers/{name}", mw.RequireAuthz(authpkg.ActionUpdate, "manager", nameFn)(http.HandlerFunc(rh.UpdateManager)))
 	mux.Handle("DELETE /api/v1/managers/{name}", mw.RequireAuthz(authpkg.ActionDelete, "manager", nameFn)(http.HandlerFunc(rh.DeleteManager)))
 
+	// --- Loop control plane (#1402: pause state lives in the project meta) ---
+	// Pause/resume project the source into the project's loop.pause_sources;
+	// the Loop CRD is only read to resolve team/project and never patched.
+	// The middleware cannot resolve loop -> team, so the handler is the real
+	// team-scope boundary (same pattern as the project endpoints).
+	looph := NewLoopHandler(deps.Client, deps.Namespace, deps.OSS)
+	loopNameFn := func(r *http.Request) string { return r.PathValue("name") }
+	mux.Handle("POST /api/v1/loops/{name}/pause", mw.RequireAuthz(authpkg.ActionUpdate, "loop", loopNameFn)(http.HandlerFunc(looph.PauseLoop)))
+	mux.Handle("POST /api/v1/loops/{name}/resume", mw.RequireAuthz(authpkg.ActionUpdate, "loop", loopNameFn)(http.HandlerFunc(looph.ResumeLoop)))
+
 	// --- Audit (read-only view of the durable audit store, #1220 §8) ---
 	audh := NewAuditHandler(deps.OSS)
 	mux.Handle("GET /api/v1/audit", mw.RequireAuthz(authpkg.ActionGet, "audit", nil)(http.HandlerFunc(audh.List)))
@@ -286,6 +296,12 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/projects/{id}/replan", mw.RequireAuthz(authpkg.ActionUpdate, "project", projectNameFn)(http.HandlerFunc(projh.ReplanProject)))
 	mux.Handle("POST /api/v1/projects/{id}/tasks/{taskId}/cancel", mw.RequireAuthz(authpkg.ActionUpdate, "project", projectTaskNameFn)(http.HandlerFunc(projh.CancelTask)))
 	mux.Handle("POST /api/v1/projects/{id}/complete", mw.RequireAuthz(authpkg.ActionUpdate, "project", projectNameFn)(http.HandlerFunc(projh.CompleteProject)))
+	// Conditional project meta commit (#1402): the worker sync path commits
+	// the full meta.json against a strict If-Match CAS. The resource kind is
+	// the dedicated "project-meta" — NOT "project" — so the authorizer can
+	// grant workers exactly this one write without opening
+	// pause/resume/replan/complete/cancel (see authorizeWorker).
+	mux.Handle("PUT /api/v1/projects/{id}/meta", mw.RequireAuthz(authpkg.ActionUpdate, "project-meta", projectNameFn)(http.HandlerFunc(projh.PutProjectMeta)))
 
 	// --- Gateway ---
 	gh := NewGatewayHandler(deps.Gateway)

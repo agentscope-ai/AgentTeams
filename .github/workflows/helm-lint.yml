@@ -35,6 +35,11 @@ on:
       - 'tests/check-helm-agentteams.sh'
       - 'tests/check-copaw-helm-upgrade-gate.sh'
       - 'tests/copaw-helm-upgrade-gate.sh'
+      - 'tests/test-29-legacy-copaw-upgrade.sh'
+      - 'tests/lib/test29-evidence.sh'
+      - 'tests/check-test29-evidence-redaction.sh'
+      - 'tests/check-test29-readiness.sh'
+      - 'tests/lib/test29-readiness.sh'
       - 'hack/local-k8s-up.sh'
       - 'tests/check-create-project-grant-admin.sh'
       - 'manager/agent/skills/project-management/**'
@@ -114,6 +119,12 @@ jobs:
 
       - name: Check CoPaw upgrade gate failure modes
         run: bash tests/check-copaw-helm-upgrade-gate.sh
+
+      - name: Check test-29 failure evidence redaction
+        run: bash tests/check-test29-evidence-redaction.sh
+
+      - name: Check test-29 readiness gate (room change resets stability)
+        run: bash tests/check-test29-readiness.sh
 
       - name: Check Manager startup Worker recovery ownership
         run: bash manager/tests/test-manager-startup-recovery.sh

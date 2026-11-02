@@ -23,7 +23,7 @@ NACOS_PORT=""
 NACOS_NAMESPACE=""
 
 usage() {
-    echo "Usage: $0 (--template <template-name> | --package-uri <nacos://...>) --worker-name <name> [--version <v>] [--model <model>] [--skills s1,s2] [--mcp-servers m1,m2] [--runtime openclaw|copaw] [--dry-run]" >&2
+    echo "Usage: $0 (--template <template-name> | --package-uri <nacos://...>) --worker-name <name> [--version <v>] [--model <model>] [--skills s1,s2] [--mcp-servers m1,m2] [--runtime openclaw|qwenpaw] [--dry-run]" >&2
     exit 1
 }
 

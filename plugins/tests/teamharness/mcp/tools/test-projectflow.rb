@@ -23,6 +23,13 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
   (bin_dir / "mc").write(<<~SH)
     #!/usr/bin/env bash
     printf '%s\\n' "$*" >> "#{log_path}"
+    # Stale-overwrite guard probes single-file pushes with mc stat --json
+    # before mc cp; the emulated remote is always fresh here, so the probe
+    # reports 'object does not exist' and the push proceeds.
+    if [ "$1" = "stat" ] && [ "$2" = "--json" ]; then
+      printf '%s\\n' '{"status":"error","error":"object does not exist"}'
+      exit 1
+    fi
   SH
   (bin_dir / "mc").chmod(0o755)
 
@@ -62,7 +69,11 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
         },
     }
     runtime_config = pathlib.Path("#{root}") / "runtime.yaml"
+    # #1183: role resolves from the runtime identity first (payload role
+    # cannot override it). This suite exercises the leader-facing
+    # projectflow actions, so the fixture identity is a leader.
     runtime_config.write_text(
+        "member:\\n  role: 'leader'\\n"
         "team:\\n  teamRoomId: '!team:example.test'\\n",
         encoding="utf-8",
     )
@@ -106,6 +117,7 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
                 return
             matrix["events"].append({
                 "path": parsed.path,
+                "txn": parsed.path.rsplit("/", 1)[-1],
                 "auth": self.headers.get("Authorization"),
                 "content": json.loads(body.decode("utf-8") or "{}"),
             })
@@ -261,13 +273,26 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
         raise AssertionError(f"project artifact missing parent event reference: {project_artifact!r}")
     if not matrix["uploads"] or matrix["uploads"][-1].get("filename") != "matrix-dm-project-project-result.md":
         raise AssertionError(f"project result upload missing: {matrix['uploads']!r}")
-    project_file_event = matrix["events"][-1]["content"]
+    project_file_record = matrix["events"][-2]
+    project_file_event = project_file_record["content"]
     if project_file_event.get("msgtype") != "m.file" or project_file_event.get("body") != "matrix-dm-project-project-result.md":
         raise AssertionError(f"project result event mismatch: {project_file_event!r}")
     if project_file_event.get("m.relates_to") != {"rel_type": "com.agentteams.attachment", "event_id": "$project-parent"}:
         raise AssertionError(f"project result event missing attachment relation: {project_file_event!r}")
     if not project_file_event.get("url") or not (project_file_event.get("info") or {}).get("size"):
         raise AssertionError(f"project result event missing file metadata: {project_file_event!r}")
+    # Every publish is followed by an @-summary text event (MSC3952). Here no
+    # sender is resolvable (no room-event lookup), so it is plain text.
+    project_summary_record = matrix["events"][-1]
+    project_summary_event = project_summary_record["content"]
+    if project_summary_event.get("msgtype") != "m.text" or "已发布" not in project_summary_event.get("body", ""):
+        raise AssertionError(f"project result summary event mismatch: {project_summary_event!r}")
+    if "matrix-dm-project-project-result.md" not in project_summary_event.get("body", ""):
+        raise AssertionError(f"project result summary must name the file: {project_summary_event!r}")
+    if "m.mentions" in project_summary_event:
+        raise AssertionError(f"unresolvable sender must not carry m.mentions: {project_summary_event!r}")
+    if project_summary_record["txn"] != project_file_record["txn"] + "-summary":
+        raise AssertionError(f"summary txn must derive from the file txn: {project_summary_record['txn']!r}")
 
     context_project = payload({
         "action": "create_project",
@@ -327,9 +352,11 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
         raise AssertionError(f"context project result was not published: {context_accepted!r}")
     if context_artifacts[0].get("parentEventId") != "$context-project-parent":
         raise AssertionError(f"context project result did not infer parent event: {context_accepted!r}")
-    context_project_file_event = matrix["events"][-1]["content"]
+    context_project_file_event = matrix["events"][-2]["content"]
     if context_project_file_event.get("m.relates_to") != {"rel_type": "com.agentteams.attachment", "event_id": "$context-project-parent"}:
         raise AssertionError(f"context project result event missing attachment relation: {context_project_file_event!r}")
+    if matrix["events"][-1]["content"].get("msgtype") != "m.text":
+        raise AssertionError(f"context project result summary event missing: {matrix['events'][-1]!r}")
 
     deferred_project = payload({
         "action": "create_project",
@@ -412,9 +439,11 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
     artifact_payload = report_artifact.get("artifact") or {}
     if artifact_payload.get("parentEventId") != report["messageId"]:
         raise AssertionError(f"report artifact parent should be report message id: {report_artifact!r}")
-    report_file_event = matrix["events"][-1]["content"]
+    report_file_event = matrix["events"][-2]["content"]
     if report_file_event.get("m.relates_to") != {"rel_type": "com.agentteams.attachment", "event_id": report["messageId"]}:
         raise AssertionError(f"report artifact Matrix relation mismatch: {report_file_event!r}")
+    if matrix["events"][-1]["content"].get("msgtype") != "m.text":
+        raise AssertionError(f"report artifact summary event missing: {matrix['events'][-1]!r}")
 
     duplicate_explicit = payload({
         "action": "create_project",
@@ -701,6 +730,41 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
     if [task["task_id"] for task in resumed_ready.get("readyNodes", [])] != ["t-001"]:
         raise AssertionError(f"resumed ready_nodes mismatch: {resumed_ready!r}")
 
+    incomplete = payload({
+        "action": "complete_project",
+        "payload": {"projectId": "daily-plan-2026-06-03"},
+    })
+    if incomplete.get("ok") or "t-001 (planned)" not in incomplete.get("error", "") or "t-002 (planned)" not in incomplete.get("error", ""):
+        raise AssertionError(f"complete_project should reject non-terminal tasks: {incomplete!r}")
+    incomplete_state = json.loads((pathlib.Path("#{workspace}") / "shared/projects/daily-plan-2026-06-03/meta.json").read_text(encoding="utf-8"))
+    if incomplete_state.get("status") != "active":
+        raise AssertionError(f"rejected complete_project changed project status: {incomplete_state!r}")
+
+    terminal_plan = payload({
+        "action": "plan_dag",
+        "payload": {
+            "projectId": "daily-plan-2026-06-03",
+            "tasks": [
+                {
+                    "taskId": "t-001",
+                    "title": "Collect input",
+                    "assignedTo": "@worker-a:example.test",
+                    "dependsOn": [],
+                    "status": "completed",
+                },
+                {
+                    "taskId": "t-002",
+                    "title": "Summarize",
+                    "assignedTo": "@worker-b:example.test",
+                    "dependsOn": ["t-001"],
+                    "status": "cancelled",
+                },
+            ],
+        },
+    })
+    if not terminal_plan.get("ok"):
+        raise AssertionError(f"terminal plan_dag failed: {terminal_plan!r}")
+
     completed = payload({
         "action": "complete_project",
         "payload": {"projectId": "daily-plan-2026-06-03"},
@@ -813,6 +877,52 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
         raise AssertionError(f"loop status mismatch: {loop_recorded!r}")
     if not loop_recorded["loop"].get("history"):
         raise AssertionError(f"loop history missing: {loop_recorded!r}")
+
+    loop_incomplete = payload({
+        "action": "complete_project",
+        "payload": {"projectId": "iterative-fix-2026-06-03"},
+    })
+    if loop_incomplete.get("ok") or "iterative-fix-2026-06-03-i001-01 (planned)" not in loop_incomplete.get("error", ""):
+        raise AssertionError(f"loop complete_project should reject non-terminal tasks: {loop_incomplete!r}")
+    loop_state = json.loads((pathlib.Path("#{workspace}") / "shared/projects/iterative-fix-2026-06-03/meta.json").read_text(encoding="utf-8"))
+    if loop_state.get("status") != "active":
+        raise AssertionError(f"rejected loop completion changed project status: {loop_state!r}")
+
+    loop_terminal_plan = payload({
+        "action": "plan_loop",
+        "payload": {
+            "projectId": "iterative-fix-2026-06-03",
+            "goal": "Fix until tests pass",
+            "stopCondition": "All target tests pass or max iterations reached",
+            "iterationTemplate": "Inspect failure, apply one fix, rerun tests.",
+            "maxIterations": 3,
+            "currentIteration": 1,
+            "tasks": [
+                {
+                    "taskId": "iterative-fix-2026-06-03-i001-01",
+                    "title": "Run first fix pass",
+                    "assignedTo": "@worker-a:example.test",
+                    "dependsOn": [],
+                    "status": "completed",
+                },
+                {
+                    "taskId": "iterative-fix-2026-06-03-i001-02",
+                    "title": "Verify first fix pass",
+                    "assignedTo": "@worker-b:example.test",
+                    "dependsOn": ["iterative-fix-2026-06-03-i001-01"],
+                    "status": "revision",
+                },
+            ],
+        },
+    })
+    if not loop_terminal_plan.get("ok"):
+        raise AssertionError(f"terminal plan_loop failed: {loop_terminal_plan!r}")
+    loop_completed = payload({
+        "action": "complete_project",
+        "payload": {"projectId": "iterative-fix-2026-06-03"},
+    })
+    if not loop_completed.get("ok") or loop_completed["project"].get("status") != "completed" or loop_completed["project"].get("loop", {}).get("status") != "completed":
+        raise AssertionError(f"complete_project should accept terminal loop tasks: {loop_completed!r}")
 
     loop_plan_path = pathlib.Path("#{workspace}") / "shared/projects/iterative-fix-2026-06-03/plan.md"
     loop_plan_text = loop_plan_path.read_text(encoding="utf-8")

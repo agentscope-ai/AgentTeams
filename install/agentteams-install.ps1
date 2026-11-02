@@ -25,6 +25,7 @@
 #   AGENTTEAMS_DATA_DIR           Docker volume name for persistent data (default: agentteams-data)
 #   AGENTTEAMS_WORKSPACE_DIR      Host directory for manager workspace (default: ~/agentteams-manager)
 #   AGENTTEAMS_VERSION            Image tag          (default: latest)
+#   AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION DeepSeek Harness runtime image tag (default: v0.1.0; independent of AGENTTEAMS_VERSION)
 #   AGENTTEAMS_REGISTRY           Image registry     (default: auto-detected by timezone)
 #   AGENTTEAMS_INSTALL_MANAGER_IMAGE       Override manager image (e.g., local build)
 #   AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE Override QwenPaw manager image (e.g., local build)
@@ -33,6 +34,7 @@
 #   AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE  Override copaw worker image (e.g., local build)
 #   AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE Override qwenpaw worker image (e.g., local build)
 #   AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE Override hermes worker image (e.g., local build)
+#   AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE Override experimental DeepSeek Harness worker image
 #   AGENTTEAMS_PORT_GATEWAY       Host port for Higress gateway (default: 18080)
 #   AGENTTEAMS_PORT_CONSOLE       Host port for Higress console (default: 18001)
 #   AGENTTEAMS_PORT_ELEMENT_WEB   Host port for Element Web direct access (default: 18088)
@@ -64,6 +66,9 @@ param(
 # ============================================================
 
 $script:AGENTTEAMS_VERSION = if ($env:AGENTTEAMS_VERSION) { $env:AGENTTEAMS_VERSION } else { "latest" }
+$script:AGENTTEAMS_KNOWN_STABLE_VERSION = "v1.2.5"
+$script:AGENTTEAMS_DEEPSEEK_HARNESS_MIN_VERSION = "v1.2.4"
+$script:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION = if ($env:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION) { $env:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION } else { "v0.1.0" }
 $script:AGENTTEAMS_NON_INTERACTIVE = if ($env:AGENTTEAMS_NON_INTERACTIVE -eq "1" -or $NonInteractive) { $true } else { $false }
 $script:AGENTTEAMS_MOUNT_SOCKET = if ($env:AGENTTEAMS_MOUNT_SOCKET -eq "0") { $false } else { $true }
 $script:AGENTTEAMS_ENV_FILE = if ($EnvFile) { $EnvFile } elseif ($env:AGENTTEAMS_ENV_FILE) { $env:AGENTTEAMS_ENV_FILE } else { "$env:USERPROFILE\agentteams-manager.env" }
@@ -116,9 +121,41 @@ function Write-Warning {
     Write-Host "$($script:ESC)[33m[AgentTeams WARNING]$($script:ESC)[0m $Message"
 }
 
+function Update-AgentTeamsKnownStableVersion {
+    if ($script:AGENTTEAMS_VERSION -ne "latest") { return }
+    try {
+        $release = Invoke-RestMethod `
+            -Uri "https://api.github.com/repos/agentscope-ai/AgentTeams/releases/latest" `
+            -Headers @{ "Accept" = "application/vnd.github+json"; "User-Agent" = "AgentTeams-Installer" } `
+            -TimeoutSec 5 `
+            -ErrorAction Stop
+        $tag = [string]$release.tag_name
+        if ($tag -match '^v\d+\.\d+\.\d+$') {
+            $script:AGENTTEAMS_KNOWN_STABLE_VERSION = $tag
+        }
+    } catch {
+        # Keep the bundled fallback when GitHub is unavailable.
+    }
+}
+
 function ConvertTo-MatrixAppServiceEnabledValue {
     param([string]$Value)
     return $Value.ToLowerInvariant()
+}
+
+function Test-DeepSeekHarnessAvailable {
+    $hasWorkerOverride = -not [string]::IsNullOrWhiteSpace($env:AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE)
+    $hasEmbeddedOverride = -not [string]::IsNullOrWhiteSpace($env:AGENTTEAMS_INSTALL_EMBEDDED_IMAGE)
+    if ($hasWorkerOverride -and $hasEmbeddedOverride) { return $true }
+    $selected = if ($script:AGENTTEAMS_VERSION -eq "latest") {
+        $script:AGENTTEAMS_KNOWN_STABLE_VERSION
+    } else {
+        $script:AGENTTEAMS_VERSION
+    }
+    $selectedMatch = [regex]::Match($selected, '^v?(\d+\.\d+\.\d+)')
+    $minimumMatch = [regex]::Match($script:AGENTTEAMS_DEEPSEEK_HARNESS_MIN_VERSION, '^v?(\d+\.\d+\.\d+)')
+    if (-not $selectedMatch.Success -or -not $minimumMatch.Success) { return $false }
+    return [version]$selectedMatch.Groups[1].Value -ge [version]$minimumMatch.Groups[1].Value
 }
 
 # Pause before exit on error so user can read the message when running via double-click
@@ -351,7 +388,9 @@ $script:Messages = @{
 
     # --- Admin Credentials ---
     "admin.title" = @{ zh = "--- 管理员凭据 ---"; en = "--- Admin Credentials ---" }
-    "admin.username_prompt" = @{ zh = "管理员用户名"; en = "Admin Username" }
+    "admin.username_prompt" = @{ zh = "管理员用户名（至少 3 个字符）"; en = "Admin Username (min 3 characters)" }
+    "admin.username_too_short" = @{ zh = "管理员用户名至少需要 3 个字符（MinIO 要求）。当前长度: {0}"; en = "Admin username must be at least 3 characters (MinIO requirement). Current length: {0}" }
+    "admin.minio_username_too_short" = @{ zh = "AGENTTEAMS_MINIO_USER 至少需要 3 个字符。当前长度: {0}"; en = "AGENTTEAMS_MINIO_USER must be at least 3 characters. Current length: {0}" }
     "admin.password_prompt" = @{ zh = "管理员密码（留空自动生成，最少 8 位）"; en = "Admin Password (leave empty to auto-generate, min 8 chars)" }
     "admin.password_generated" = @{ zh = "  已自动生成管理员密码"; en = "  Auto-generated admin password" }
     "admin.password_too_short" = @{ zh = "管理员密码至少需要 8 个字符（MinIO 要求）。当前长度: {0}"; en = "Admin password must be at least 8 characters (MinIO requirement). Current length: {0}" }
@@ -409,7 +448,10 @@ $script:Messages = @{
     "worker_runtime.qwenpaw" = @{ zh = "QwenPaw（推荐）"; en = "QwenPaw (recommended)" }
     "worker_runtime.copaw" = @{ zh = "CoPaw（旧版本，建议升级为 QwenPaw）"; en = "CoPaw (legacy; upgrade to QwenPaw recommended)" }
     "worker_runtime.hermes" = @{ zh = "Hermes"; en = "Hermes" }
-    "worker_runtime.choice" = @{ zh = "请选择 [1/2/3/4]"; en = "Enter choice [1/2/3/4]" }
+    "worker_runtime.deepseek_harness" = @{ zh = "DeepSeek Harness（实验性）"; en = "DeepSeek Harness (experimental)" }
+    "worker_runtime.deepseek_unavailable" = @{ zh = "当前 Controller 版本不支持 DeepSeek Harness；请使用 v1.2.4+，或同时覆盖兼容的 Worker 与 embedded Controller 镜像"; en = "The selected Controller version does not support DeepSeek Harness; use v1.2.4+, or override both the Worker and compatible embedded Controller image" }
+    "worker_runtime.choice" = @{ zh = "请选择 [1/2/3]"; en = "Enter choice [1/2/3]" }
+    "worker_runtime.choice_dsh" = @{ zh = "请选择 [1/2/3/4]"; en = "Enter choice [1/2/3/4]" }
     "worker_runtime.selected" = @{ zh = "默认 Worker 运行时: {0}"; en = "Default Worker runtime: {0}" }
     "worker_runtime.title_short" = @{ zh = "默认 Worker 运行时"; en = "Default Worker Runtime" }
 
@@ -418,7 +460,7 @@ $script:Messages = @{
     "manager_runtime.openclaw" = @{ zh = "OpenClaw"; en = "OpenClaw" }
     "manager_runtime.qwenpaw" = @{ zh = "QwenPaw（推荐）"; en = "QwenPaw (recommended)" }
     "manager_runtime.copaw" = @{ zh = "CoPaw（旧版本，建议升级为 QwenPaw）"; en = "CoPaw (legacy; upgrade to QwenPaw recommended)" }
-    "manager_runtime.choice" = @{ zh = "请选择 [1/2/3]"; en = "Enter choice [1/2/3]" }
+    "manager_runtime.choice" = @{ zh = "请选择 [1/2]"; en = "Enter choice [1/2]" }
     "manager_runtime.selected" = @{ zh = "Manager 运行时: {0}"; en = "Manager runtime: {0}" }
     "manager_runtime.title_short" = @{ zh = "Manager 运行时"; en = "Manager Runtime" }
 
@@ -572,7 +614,6 @@ $script:Messages = @{
     "success.higress_console" = @{ zh = "  Higress 控制台: http://localhost:{0}（用户名: {1} / 密码: {2}）"; en = "  Higress Console: http://localhost:{0} (Username: {1} / Password: {2})" }
     "success.manager_console" = @{ zh = "  Manager 控制台（本地）: http://localhost:{0}（无需登录）"; en = "  Manager Console (local): http://localhost:{0} (no login required)" }
     "success.manager_console_gateway" = @{ zh = "  Manager 控制台（网关）: http://console-local.agentteams.io（用户名: {0} / 密码: {1}）"; en = "  Manager Console (gateway): http://console-local.agentteams.io (Username: {0} / Password: {1})" }
-    "success.copaw_console" = @{ zh = "  CoPaw 控制台（本地）: http://localhost:{0}（无需登录）"; en = "  CoPaw Console (local): http://localhost:{0} (no login required)" }
     "success.switch_llm.title" = @{ zh = "--- 切换 LLM 提供商 ---"; en = "--- Switch LLM Providers ---" }
     "success.switch_llm.hint" = @{ zh = "  您可以通过 Higress 控制台切换到其他 LLM 提供商（OpenAI、Anthropic 等）。"; en = "  You can switch to other LLM providers (OpenAI, Anthropic, etc.) via Higress Console." }
     "success.switch_llm.docs" = @{ zh = "  详细说明请参阅:"; en = "  For detailed instructions, see:" }
@@ -1081,11 +1122,12 @@ AGENTTEAMS_WORKER_IMAGE=$($Config.WORKER_IMAGE)
 AGENTTEAMS_COPAW_WORKER_IMAGE=$($Config.COPAW_WORKER_IMAGE)
 AGENTTEAMS_QWENPAW_WORKER_IMAGE=$($Config.QWENPAW_WORKER_IMAGE)
 AGENTTEAMS_HERMES_WORKER_IMAGE=$($Config.HERMES_WORKER_IMAGE)
+AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE=$($Config.DEEPSEEK_HARNESS_WORKER_IMAGE)
 
 # Manager runtime (qwenpaw | openclaw | copaw)
 AGENTTEAMS_MANAGER_RUNTIME=$($Config.MANAGER_RUNTIME)
 
-# Default Worker runtime (qwenpaw | openclaw | hermes | copaw)
+# Default Worker runtime (qwenpaw | openclaw | hermes | copaw | deepseek-harness [experimental])
 AGENTTEAMS_DEFAULT_WORKER_RUNTIME=$($Config.DEFAULT_WORKER_RUNTIME)
 
 # Matrix E2EE (0=disabled, 1=enabled; default: 0)
@@ -2071,9 +2113,19 @@ function Step-Llm {
 
 function Step-Admin {
     Write-Log (Get-Msg "admin.title")
-    $script:config.ADMIN_USER = Read-Prompt -VarName "AGENTTEAMS_ADMIN_USER" -PromptText (Get-Msg "admin.username_prompt") -Default "admin"
-    if ($script:StepResult -eq "back") { return }
-    $script:config.ADMIN_USER = $script:config.ADMIN_USER.ToLowerInvariant()
+    while ($true) {
+        $script:config.ADMIN_USER = Read-Prompt -VarName "AGENTTEAMS_ADMIN_USER" -PromptText (Get-Msg "admin.username_prompt") -Default "admin"
+        if ($script:StepResult -eq "back") { return }
+        $script:config.ADMIN_USER = $script:config.ADMIN_USER.ToLowerInvariant()
+        if ($script:config.ADMIN_USER.Length -ge 3) {
+            break
+        }
+        if ($script:AGENTTEAMS_NON_INTERACTIVE) {
+            Write-Error (Get-Msg "admin.username_too_short" -f $script:config.ADMIN_USER.Length)
+        }
+        Write-Host "$($script:ESC)[31m[AgentTeams ERROR]$($script:ESC)[0m $(Get-Msg "admin.username_too_short" -f $script:config.ADMIN_USER.Length)"
+        [Environment]::SetEnvironmentVariable("AGENTTEAMS_ADMIN_USER", $null, "Process")
+    }
 
     # Pre-set via env var: validate; non-interactive fails fast,
     # interactive warns and falls through to the retry prompt.
@@ -2226,25 +2278,29 @@ function Step-Workspace {
 }
 
 function Step-Runtime {
+    $deepSeekHarnessAvailable = Test-DeepSeekHarnessAvailable
     Write-Log (Get-Msg "worker_runtime.title")
     Write-Host ""
     Write-Host "  1) $(Get-Msg 'worker_runtime.qwenpaw')"
     Write-Host "  2) $(Get-Msg 'worker_runtime.openclaw')"
     Write-Host "  3) $(Get-Msg 'worker_runtime.hermes')"
-    Write-Host "  4) $(Get-Msg 'worker_runtime.copaw')"
+    if ($deepSeekHarnessAvailable) { Write-Host "  4) $(Get-Msg 'worker_runtime.deepseek_harness')" }
     Write-Host ""
 
     if ($script:AGENTTEAMS_NON_INTERACTIVE) {
         $script:config.DEFAULT_WORKER_RUNTIME = if ($env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME) { $env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME } else { "qwenpaw" }
     } elseif ($script:AGENTTEAMS_UPGRADE -and $env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME) {
         Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "worker_runtime.title_short"), $env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME)
-        $rtChoice = Read-Host (Get-Msg "worker_runtime.choice")
+        if ($env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME -eq "copaw") {
+            Write-Log ("      " + (Get-Msg "worker_runtime.copaw"))
+        }
+        $rtChoice = Read-Host (Get-Msg $(if ($deepSeekHarnessAvailable) { "worker_runtime.choice_dsh" } else { "worker_runtime.choice" }))
         if ($rtChoice -eq "b") { $script:StepResult = "back"; return }
         if ($rtChoice) {
             $script:config.DEFAULT_WORKER_RUNTIME = switch ($rtChoice) {
                 "2" { "openclaw" }
                 "3" { "hermes" }
-                "4" { "copaw" }
+                "4" { if ($deepSeekHarnessAvailable) { "deepseek-harness" } else { "qwenpaw" } }
                 default { "qwenpaw" }
             }
         } else {
@@ -2253,15 +2309,18 @@ function Step-Runtime {
     } elseif ($env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME) {
         $script:config.DEFAULT_WORKER_RUNTIME = $env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME
     } else {
-        $rtChoice = Read-Host (Get-Msg "worker_runtime.choice")
+        $rtChoice = Read-Host (Get-Msg $(if ($deepSeekHarnessAvailable) { "worker_runtime.choice_dsh" } else { "worker_runtime.choice" }))
         if ($rtChoice -eq "b") { $script:StepResult = "back"; return }
         $rtChoice = if ($rtChoice) { $rtChoice } else { "1" }
         $script:config.DEFAULT_WORKER_RUNTIME = switch ($rtChoice) {
             "2" { "openclaw" }
             "3" { "hermes" }
-            "4" { "copaw" }
+            "4" { if ($deepSeekHarnessAvailable) { "deepseek-harness" } else { "qwenpaw" } }
             default { "qwenpaw" }
         }
+    }
+    if ($script:config.DEFAULT_WORKER_RUNTIME -eq "deepseek-harness" -and -not $deepSeekHarnessAvailable) {
+        Write-Error (Get-Msg "worker_runtime.deepseek_unavailable")
     }
     Write-Log (Get-Msg "worker_runtime.selected" -f $script:config.DEFAULT_WORKER_RUNTIME)
 }
@@ -2271,19 +2330,20 @@ function Step-ManagerRuntime {
     Write-Host ""
     Write-Host "  1) $(Get-Msg 'manager_runtime.qwenpaw')"
     Write-Host "  2) $(Get-Msg 'manager_runtime.openclaw')"
-    Write-Host "  3) $(Get-Msg 'manager_runtime.copaw')"
     Write-Host ""
 
     if ($script:AGENTTEAMS_NON_INTERACTIVE) {
         $script:config.MANAGER_RUNTIME = if ($env:AGENTTEAMS_MANAGER_RUNTIME) { $env:AGENTTEAMS_MANAGER_RUNTIME } else { "qwenpaw" }
     } elseif ($script:AGENTTEAMS_UPGRADE -and $env:AGENTTEAMS_MANAGER_RUNTIME) {
         Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "manager_runtime.title_short"), $env:AGENTTEAMS_MANAGER_RUNTIME)
+        if ($env:AGENTTEAMS_MANAGER_RUNTIME -eq "copaw") {
+            Write-Log ("      " + (Get-Msg "manager_runtime.copaw"))
+        }
         $mrChoice = Read-Host (Get-Msg "manager_runtime.choice")
         if ($mrChoice -eq "b") { $script:StepResult = "back"; return }
         if ($mrChoice) {
             $script:config.MANAGER_RUNTIME = switch ($mrChoice) {
                 "2" { "openclaw" }
-                "3" { "copaw" }
                 default { "qwenpaw" }
             }
         } else {
@@ -2297,7 +2357,6 @@ function Step-ManagerRuntime {
         $mrChoice = if ($mrChoice) { $mrChoice } else { "1" }
         $script:config.MANAGER_RUNTIME = switch ($mrChoice) {
             "2" { "openclaw" }
-            "3" { "copaw" }
             default { "qwenpaw" }
         }
     }
@@ -2491,6 +2550,10 @@ function Install-Manager {
     }
     $env:AGENTTEAMS_LANGUAGE = $script:AGENTTEAMS_LANGUAGE
 
+    # "latest" is mutable. Refresh the stable release used by runtime feature
+    # gates so a newly released Controller is not hidden behind a stale constant.
+    Update-AgentTeamsKnownStableVersion
+
     # Detect registry
     $script:AGENTTEAMS_REGISTRY = Get-Registry -Timezone $script:AGENTTEAMS_TIMEZONE
 
@@ -2513,11 +2576,8 @@ function Install-Manager {
         "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-worker:$($script:AGENTTEAMS_VERSION)"
     }
 
-    $script:COPAW_WORKER_IMAGE = if ($env:AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE) {
-        $env:AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE
-    } else {
-        "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-copaw-worker:$($script:AGENTTEAMS_VERSION)"
-    }
+    # CoPaw images are no longer built; only an explicit legacy override is honored.
+    $script:COPAW_WORKER_IMAGE = $env:AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE
 
     $script:QWENPAW_WORKER_IMAGE = if ($env:AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE) {
         $env:AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE
@@ -2531,11 +2591,15 @@ function Install-Manager {
         "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-hermes-worker:$($script:AGENTTEAMS_VERSION)"
     }
 
-    $script:MANAGER_COPAW_IMAGE = if ($env:AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE) {
-        $env:AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE
+    $script:DEEPSEEK_HARNESS_WORKER_IMAGE = if ($env:AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE) {
+        $env:AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE
+    } elseif (Test-DeepSeekHarnessAvailable) {
+        "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-deepseek-harness-worker:$($script:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION)"
     } else {
-        "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-manager-copaw:$($script:AGENTTEAMS_VERSION)"
+        ""
     }
+
+    $script:MANAGER_COPAW_IMAGE = $env:AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE
 
     $script:CONTROLLER_IMAGE = if ($env:AGENTTEAMS_INSTALL_CONTROLLER_IMAGE) {
         $env:AGENTTEAMS_INSTALL_CONTROLLER_IMAGE
@@ -2705,6 +2769,9 @@ function Install-Manager {
     $config.MANAGER_PASSWORD = if ($env:AGENTTEAMS_MANAGER_PASSWORD) { $env:AGENTTEAMS_MANAGER_PASSWORD } else { New-RandomKey }
     $config.REGISTRATION_TOKEN = if ($env:AGENTTEAMS_REGISTRATION_TOKEN) { $env:AGENTTEAMS_REGISTRATION_TOKEN } else { New-RandomKey }
     $config.MINIO_USER = if ($env:AGENTTEAMS_MINIO_USER) { $env:AGENTTEAMS_MINIO_USER } else { $config.ADMIN_USER }
+    if ($config.MINIO_USER.Length -lt 3) {
+        Write-Error (Get-Msg "admin.minio_username_too_short" -f $config.MINIO_USER.Length)
+    }
     $config.MINIO_PASSWORD = if ($env:AGENTTEAMS_MINIO_PASSWORD) { $env:AGENTTEAMS_MINIO_PASSWORD } else { $config.ADMIN_PASSWORD }
     $config.MANAGER_GATEWAY_KEY = if ($env:AGENTTEAMS_MANAGER_GATEWAY_KEY) { $env:AGENTTEAMS_MANAGER_GATEWAY_KEY } else { New-RandomKey }
     $matrixAppServiceEnabled = if ($env:AGENTTEAMS_MATRIX_APPSERVICE_ENABLED) { $env:AGENTTEAMS_MATRIX_APPSERVICE_ENABLED } else { "true" }
@@ -2721,6 +2788,7 @@ function Install-Manager {
     $config.COPAW_WORKER_IMAGE = $script:COPAW_WORKER_IMAGE
     $config.QWENPAW_WORKER_IMAGE = $script:QWENPAW_WORKER_IMAGE
     $config.HERMES_WORKER_IMAGE = $script:HERMES_WORKER_IMAGE
+    $config.DEEPSEEK_HARNESS_WORKER_IMAGE = $script:DEEPSEEK_HARNESS_WORKER_IMAGE
     $config.MANAGER_QWENPAW_IMAGE = $script:MANAGER_QWENPAW_IMAGE
     $config.MANAGER_COPAW_IMAGE = $script:MANAGER_COPAW_IMAGE
 
@@ -2731,7 +2799,9 @@ function Install-Manager {
     # and legacy — used directly as `docker run` target).
     $managerImage = switch ($config.MANAGER_RUNTIME) {
         "qwenpaw" { $script:MANAGER_QWENPAW_IMAGE }
-        "copaw" { $script:MANAGER_COPAW_IMAGE }
+        # Legacy alias: route to the QwenPaw manager image unless an explicit
+        # AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE override is provided.
+        "copaw" { if ($script:MANAGER_COPAW_IMAGE) { $script:MANAGER_COPAW_IMAGE } else { $script:MANAGER_QWENPAW_IMAGE } }
         default { $script:MANAGER_IMAGE }
     }
     $portPrefix = if ($config.LOCAL_ONLY -eq "1") { "127.0.0.1:" } else { "" }
@@ -2803,6 +2873,7 @@ function Install-Manager {
                     -e "AGENTTEAMS_COPAW_WORKER_IMAGE=$($script:COPAW_WORKER_IMAGE)" `
                     -e "AGENTTEAMS_QWENPAW_WORKER_IMAGE=$($script:QWENPAW_WORKER_IMAGE)" `
                     -e "AGENTTEAMS_HERMES_WORKER_IMAGE=$($script:HERMES_WORKER_IMAGE)" `
+                    -e "AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE=$($script:DEEPSEEK_HARNESS_WORKER_IMAGE)" `
                     -e "AGENTTEAMS_DEFAULT_WORKER_RUNTIME=$($script:config.DEFAULT_WORKER_RUNTIME)" `
                     $(if ($config.PROXY_ALLOWED_REGISTRIES) { @("-e", "AGENTTEAMS_PROXY_ALLOWED_REGISTRIES=$($config.PROXY_ALLOWED_REGISTRIES)") }) `
                     --restart unless-stopped `
@@ -2909,7 +2980,9 @@ function Install-Manager {
         $script:QWENPAW_WORKER_IMAGE
         $script:HERMES_WORKER_IMAGE
     )
+    if ($script:DEEPSEEK_HARNESS_WORKER_IMAGE) { $workerImages += $script:DEEPSEEK_HARNESS_WORKER_IMAGE }
     foreach ($workerImg in $workerImages) {
+        if (-not $workerImg) { continue }
         if ($workerImg -match $LocalImagePattern) {
             if (Test-LocalImage $workerImg) {
                 Write-Log (Get-Msg "install.image.worker_exists" -f $workerImg)
@@ -3108,6 +3181,7 @@ function Install-Manager {
             "-e", "AGENTTEAMS_COPAW_WORKER_IMAGE=$($script:COPAW_WORKER_IMAGE)",
             "-e", "AGENTTEAMS_QWENPAW_WORKER_IMAGE=$($script:QWENPAW_WORKER_IMAGE)",
             "-e", "AGENTTEAMS_HERMES_WORKER_IMAGE=$($script:HERMES_WORKER_IMAGE)",
+            "-e", "AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE=$($script:DEEPSEEK_HARNESS_WORKER_IMAGE)",
             "-e", "AGENTTEAMS_MATRIX_DOMAIN=$matrixDomain",
             "-e", "AGENTTEAMS_ELEMENT_HOMESERVER_URL=http://127.0.0.1:$($config.PORT_GATEWAY)",
             "-e", "AGENTTEAMS_MATRIX_URL=http://127.0.0.1:6167",

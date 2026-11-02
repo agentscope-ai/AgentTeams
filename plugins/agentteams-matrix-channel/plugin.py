@@ -16,6 +16,11 @@ class AgentTeamsMatrixPlugin:
                 {"name": "access_token", "label": "Access Token", "type": "password", "required": True},
                 {"name": "encryption", "label": "Encryption", "type": "switch"},
                 {"name": "require_mention", "label": "Require mention", "type": "switch"},
+                {
+                    "name": "share_session_in_group",
+                    "label": "Share session in group",
+                    "type": "switch",
+                },
                 {"name": "show_thinking", "label": "Show thinking", "type": "switch"},
                 {"name": "show_tool_calls", "label": "Show tool calls", "type": "switch"},
                 {"name": "show_tool_results", "label": "Show tool results", "type": "switch"},

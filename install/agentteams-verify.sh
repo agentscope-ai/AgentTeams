@@ -4,7 +4,8 @@
 # Usage:
 #   bash install/agentteams-verify.sh [container_name]   # default: agentteams-manager
 #
-# Runs 7 read-only reachability checks and prints PASS/FAIL per check.
+# Runs 8 checks: 7 read-only reachability checks plus one minimal LLM
+# completion smoke (check #8). Prints PASS/FAIL/SKIP per check.
 # Exit code: 0 if all pass, 1 if any fail.
 #
 # ── Extension notes ────────────────────────────────────────────────────────────
@@ -197,6 +198,46 @@ else
             fi
         fi
     fi
+fi
+
+# 8. LLM channel smoke (one minimal completion through the gateway)
+# TODO(k8s): same as checks #4/#5 — use the Ingress/NodePort address, or
+#   accept AGENTTEAMS_VERIFY_LLM_URL as an override.
+# Checks #1-#7 can all pass while the LLM channel is broken end to end —
+# e.g. a provider whose base URL makes every completion fail at the
+# upstream. This sends one minimal completion request with the Manager's
+# own gateway key and configured model; the same request shape the
+# controller's welcome-readiness probe uses (model + messages only,
+# one-word prompt; no max_tokens — providers that reject it stay
+# supported).
+LLM_GATEWAY_KEY=$(echo "$container_env" | grep ^AGENTTEAMS_MANAGER_GATEWAY_KEY= | cut -d= -f2-)
+LLM_MODEL=$(echo "$container_env" | grep ^AGENTTEAMS_DEFAULT_MODEL= | cut -d= -f2-)
+LLM_MODEL="${LLM_MODEL:-qwen3.6-plus}"
+
+if [ "${AGENTTEAMS_VERIFY_SKIP_LLM:-0}" = "1" ]; then
+    check_skip "LLM channel smoke (disabled via AGENTTEAMS_VERIFY_SKIP_LLM)"
+elif [ -z "${LLM_GATEWAY_KEY}" ]; then
+    check_skip "LLM channel smoke (no gateway key in the Manager container env)"
+else
+    llm_url="${AGENTTEAMS_VERIFY_LLM_URL:-http://127.0.0.1:${PORT_GATEWAY}/v1/chat/completions}"
+    # Same minimal shape as the controller's welcome-readiness probe
+    # (IsManagerLLMAuthReady): model + messages only — no max_tokens.
+    # Some providers reject that parameter with a 400, so the probe omits
+    # it and asks for a one-word answer instead; only the status matters.
+    llm_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 \
+        -X POST "${llm_url}" \
+        -H "Authorization: Bearer ${LLM_GATEWAY_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "{\"model\":\"${LLM_MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with only one word: ok\"}]}" \
+        2>/dev/null) || llm_status="000"
+    case "${llm_status}" in
+        2*)
+            check_pass "LLM channel smoke (HTTP ${llm_status}, model=${LLM_MODEL})"
+            ;;
+        *)
+            check_fail "LLM channel smoke (HTTP ${llm_status}, model=${LLM_MODEL}; check the provider's base URL host/port and the gateway logs)"
+            ;;
+    esac
 fi
 
 # ---------- Summary ----------

@@ -1,0 +1,7 @@
+{
+  "id": "agentteams-matrix-channel",
+  "name": "AgentTeams Matrix Channel",
+  "version": "0.1.0",
+  "description": "AgentTeams-owned Matrix channel for OpenClaw. The bundle installer projects the agentteams-matrix contract onto channels.matrix in openclaw.json; by default no credential material is written (the contract's access_token_ref has no OpenClaw key) unless installed with --with-credentials.",
+  "author": "AgentTeams"
+}

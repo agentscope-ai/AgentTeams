@@ -272,11 +272,11 @@ agt get workers amy-ai -o json | jq '.skills'
 
 ### 通过 Dashboard 分发
 
-进入 **技能中心 → 分发技能**，选择 Worker 和不超过 64 MB 的 Skill ZIP，然后点击**分发技能**。也可以通过 **Workers → 目标 Worker → 详情 → 上传技能包** 操作。ZIP 必须包含带 `name`、`description` frontmatter 的 `SKILL.md`。
+进入**资源中心 → 市场**。如果 Skill 尚未入库，先点击**上传技能**并上传不超过 64 MB 的 Skill ZIP；然后在目标 Skill 所在行点击**分发到 Worker**，选择一个或多个 Worker，再点击**分发到 N 个 Worker**。也可以通过 **Workers → 目标 Worker → 详情 → 上传技能包**直接为单个 Worker 上传 ZIP，或者在创建、编辑 Worker 时通过表单的**技能**字段选择市场或 Nacos 中已有的 Skill。ZIP 必须包含带 `name`、`description` frontmatter 的 `SKILL.md`。
 
-不要把技能中心列表上方的**上传技能**当作 Worker 分发入口：该按钮只维护 Dashboard 的集中式技能库。Worker 分发完成后，应在 Worker 详情的“已分发技能”中检查结果；Dashboard 会尝试休眠、唤醒 Worker，失败时新文件最长约 5 分钟内通过周期同步被发现。
+不要把市场右上角的**上传技能**当作 Worker 分发入口：该按钮只维护 Dashboard 的集中式市场。上传后还需从目标 Skill 所在行点击**分发到 Worker**。Worker 分发完成后，应在 Worker 详情的“已分发技能”和 `Worker.spec.skills` 中检查结果；Dashboard 会尝试重启 Worker 触发加载。若重启未确认，文件和 `spec.skills` 仍会保留，页面会报告部分失败，后续 Controller reconcile 可以继续使该分配生效。
 
-Dashboard 直接分发不会更新 `Worker.spec.skills`，所以 `agt get workers <name> -o json | jq '.skills'` 不一定列出该 Skill。完整差异、ZIP 约束和验证方法参见 [Worker 指南：为 Worker 安装 Skill](../worker-guide.md#为-worker-安装-skill)。Manager 方式的完整对话流程参见 [通过 Manager 为 Worker 安装 Skill](../manager-guide.md#通过-manager-为-worker-安装-skill)。
+所有 Dashboard 分发路径都会更新 `Worker.spec.skills`。如果状态中出现 `Skill assignment warning`，说明 Worker 的规范 Skill 副本缺失且 Manager 无法恢复，或者远程 Skill 请求的版本或标签刷新失败、已有规范副本被保留。该告警不会阻塞 Worker reconcile。远程刷新告警会标明 Skill 及请求的版本或标签，但不会包含源地址凭据。完整行为、ZIP 约束和验证方法参见 [Worker 指南：为 Worker 安装 Skill](../worker-guide.md#为-worker-安装-skill)。Manager 方式的完整对话流程参见 [通过 Manager 为 Worker 安装 Skill](../manager-guide.md#通过-manager-为-worker-安装-skill)。
 
 ---
 
@@ -427,6 +427,31 @@ http://<局域网IP>:18080
 
 如果通过 Tailscale 使用 FluffyChat 或 Element Mobile，规则相同：homeserver 填
 `http://<tailscale-ip>:18080`，并确认手机和 AgentTeams 所在机器在 Tailscale 网络内互通。
+
+---
+
+## 升级后控制台报 CONTROL_UI_DEVICE_IDENTITY_REQUIRED
+
+自 OpenClaw v2026.10.9 起，Control UI 的 gateway WebSocket 握手要求设备身份
+（device identity）。浏览器用纯 JavaScript 自动生成——不需要 TLS 或安全上下文，
+纯 HTTP 的控制台保持可用、无需改动。
+
+具体表现取决于你如何访问控制台：
+
+- **宿主机 localhost**（如 `http://127.0.0.1:18888`）：无需任何操作。manager
+  内置的 nginx loopback 反代不带转发头转发到 `127.0.0.1:18799`，gateway 视为
+  loopback 连接，认证后配对自动批准。
+- **容器 IP、局域网地址、自定义域名，或添加转发头的代理**：设备需要一次性审批。
+  批准待处理的配对请求：
+
+  ```bash
+  docker exec agentteams-manager openclaw devices list   # 取得待批 requestId
+  docker exec agentteams-manager openclaw devices approve <requestId>
+  ```
+
+  也可以在控制台 Devices 界面中批准。审批是一次性的——该入口只需做一次。
+- **仅带 token 的程序化 WS 客户端**：不再被接受——必须像其它客户端一样携带
+  设备身份。
 
 ---
 
@@ -903,6 +928,8 @@ OpenClaw Control UI（可视化 session 检查），打开：
 ```
 http://localhost:18888
 ```
+
+自 OpenClaw v2026.10.9 起，Control UI 要求设备身份（device identity）。经内置 nginx loopback 反代时，浏览器会自动生成设备身份且配对自动批准，无需手动步骤。若直连 gateway 端口或经会添加转发头的代理访问，需一次性执行 `openclaw devices approve <requestId>` 批准设备（或使用 Devices UI）。
 
 ---
 

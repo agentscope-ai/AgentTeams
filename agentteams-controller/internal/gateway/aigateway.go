@@ -307,6 +307,13 @@ func (a *AIGatewayClient) EnsureAIRoute(_ context.Context, _ AIRouteRequest) err
 	return ErrUnsupportedOp
 }
 
+// ListAIRoutes is not supported by the ai-gateway provider: model APIs are
+// managed per-name (see ResolveModelProvider) and the SDK has no equivalent
+// of the self-hosted console's AI route list.
+func (a *AIGatewayClient) ListAIRoutes(_ context.Context) ([]AIRouteInfo, error) {
+	return nil, ErrUnsupportedOp
+}
+
 // Healthy makes a lightweight ListConsumers call to verify that both the
 // SDK credential (via the sidecar) and the APIG endpoint are reachable.
 // Any error is bubbled up so that the initializer's waitForGateway can

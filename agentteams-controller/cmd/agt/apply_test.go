@@ -96,13 +96,15 @@ func TestExtractWorkerFieldsFromZip_NotAZip(t *testing.T) {
 	}
 }
 
-func TestWorkerRuntimeHelpIncludesQwenPaw(t *testing.T) {
+func TestWorkerRuntimeHelpIncludesProjectedConfigRuntimes(t *testing.T) {
 	for name, usage := range map[string]string{
 		"apply":  applyWorkerSubCmd().Flags().Lookup("runtime").Usage,
 		"update": updateWorkerCmd().Flags().Lookup("runtime").Usage,
 	} {
-		if !strings.Contains(usage, "qwenpaw") {
-			t.Errorf("%s worker runtime help %q does not include qwenpaw", name, usage)
+		for _, runtime := range []string{"qwenpaw", "deepseek-harness"} {
+			if !strings.Contains(usage, runtime) {
+				t.Errorf("%s worker runtime help %q does not include %s", name, usage, runtime)
+			}
 		}
 	}
 }

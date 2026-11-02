@@ -110,22 +110,28 @@ log_info "Waiting for controller to process all deletes..."
 RECONCILE_TIMEOUT=120
 RECONCILE_ELAPSED=0
 
-# Wait until all test worker containers are gone (not just stopped — removed)
+# Container removal precedes finalizer completion. Wait for both resources
+# and containers; an API error must not count as successful deletion.
 while [ "${RECONCILE_ELAPSED}" -lt "${RECONCILE_TIMEOUT}" ]; do
     REMAINING=$(list_test_worker_containers)
-    if [ -z "${REMAINING}" ]; then
+    if [ -z "${REMAINING}" ] \
+        && exec_in_agent agt get workers -o json 2>/dev/null | jq -e \
+            '.workers | if type == "array" then all(.[]; .name | startswith("test-") | not) else false end' >/dev/null \
+        && exec_in_agent agt get teams -o json 2>/dev/null | jq -e \
+            '.teams | if type == "array" then all(.[]; .name | startswith("test-") | not) else false end' >/dev/null; then
         break
     fi
     sleep 5
     RECONCILE_ELAPSED=$((RECONCILE_ELAPSED + 5))
     REMAINING_COUNT=$(echo "${REMAINING}" | awk 'NF { count++ } END { print count + 0 }')
-    printf "\r[TEST INFO] Waiting for containers to be removed... (%d remaining, %ds/%ds)" "${REMAINING_COUNT}" "${RECONCILE_ELAPSED}" "${RECONCILE_TIMEOUT}"
+    printf "\r[TEST INFO] Waiting for resources and containers to be removed... (%d remaining, %ds/%ds)" "${REMAINING_COUNT}" "${RECONCILE_ELAPSED}" "${RECONCILE_TIMEOUT}"
 done
 echo ""
 
 if [ "${RECONCILE_ELAPSED}" -lt "${RECONCILE_TIMEOUT}" ]; then
-    log_pass "All test containers removed (took ~${RECONCILE_ELAPSED}s)"
+    log_pass "All test resources and containers removed (took ~${RECONCILE_ELAPSED}s)"
 else
+    log_fail "Controller deletion did not finish within ${RECONCILE_TIMEOUT}s"
     STILL_PRESENT=$(list_test_worker_containers)
     if [ -n "${STILL_PRESENT}" ]; then
         log_fail "Some test containers still present after ${RECONCILE_TIMEOUT}s:"

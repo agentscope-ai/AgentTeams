@@ -131,3 +131,86 @@ do
 done
 
 echo "PASS: installer selects exactly one controller env contract by image version"
+
+# ---------------------------------------------------------------------------
+# Legacy CoPaw worker image inheritance (upgrade path, issue #1310)
+# ---------------------------------------------------------------------------
+# PR #1335 removed the default CoPaw worker image from new installs, but an
+# upgrade must not lose an existing deployment's private CoPaw worker image:
+# legacy workers commonly carry an empty spec.image and resolve their image
+# from the deployment env file. inherit_legacy_copaw_worker_image() must
+# carry the pre-upgrade AGENTTEAMS_COPAW_WORKER_IMAGE forward so a
+# post-upgrade wake/recreation keeps pulling the same image instead of the
+# controller's built-in agentteams-copaw-worker:latest fallback.
+# ---------------------------------------------------------------------------
+
+eval "$(sed -n '/^inherit_legacy_copaw_worker_image()/,/^}/p' "${INSTALLER}")"
+if ! declare -F inherit_legacy_copaw_worker_image >/dev/null; then
+    echo "FAIL: function inherit_legacy_copaw_worker_image not found in installer" >&2
+    exit 1
+fi
+
+log() { echo "$*"; }
+
+LEGACY_IMAGE="private.registry.example/agentteams-copaw-worker:v1.2.3"
+CO_PAW_ENV_FILE="$(mktemp)"
+trap 'rm -f "${CO_PAW_ENV_FILE}"' EXIT
+
+# case: upgrade inherits the non-empty legacy value
+printf 'AGENTTEAMS_QWENPAW_IMAGE=old/qwenpaw:1.1\n' > "${CO_PAW_ENV_FILE}"
+printf 'AGENTTEAMS_COPAW_WORKER_IMAGE=%s\n' "${LEGACY_IMAGE}" >> "${CO_PAW_ENV_FILE}"
+COPAW_WORKER_IMAGE=""
+inherit_legacy_copaw_worker_image "${CO_PAW_ENV_FILE}"
+if [ "${COPAW_WORKER_IMAGE}" != "${LEGACY_IMAGE}" ]; then
+    echo "FAIL: upgrade did not inherit legacy AGENTTEAMS_COPAW_WORKER_IMAGE (got '${COPAW_WORKER_IMAGE}')" >&2
+    exit 1
+fi
+echo "ok: upgrade inherits non-empty legacy AGENTTEAMS_COPAW_WORKER_IMAGE"
+
+# case: fresh install (no env file) stays image-less
+COPAW_WORKER_IMAGE=""
+inherit_legacy_copaw_worker_image ""
+if [ -n "${COPAW_WORKER_IMAGE}" ]; then
+    echo "FAIL: fresh install must not pick up a CoPaw worker image (got '${COPAW_WORKER_IMAGE}')" >&2
+    exit 1
+fi
+echo "ok: fresh install (no env file) stays image-less"
+
+# case: an explicit override always wins over the legacy value
+COPAW_WORKER_IMAGE="override.registry.example/copaw:explicit"
+inherit_legacy_copaw_worker_image "${CO_PAW_ENV_FILE}"
+if [ "${COPAW_WORKER_IMAGE}" != "override.registry.example/copaw:explicit" ]; then
+    echo "FAIL: explicit override was clobbered by legacy inheritance (got '${COPAW_WORKER_IMAGE}')" >&2
+    exit 1
+fi
+echo "ok: explicit AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE override wins"
+
+# case: an empty legacy value is NOT inherited
+printf 'AGENTTEAMS_COPAW_WORKER_IMAGE=\n' > "${CO_PAW_ENV_FILE}"
+COPAW_WORKER_IMAGE=""
+inherit_legacy_copaw_worker_image "${CO_PAW_ENV_FILE}"
+if [ -n "${COPAW_WORKER_IMAGE}" ]; then
+    echo "FAIL: empty legacy value must not be inherited (got '${COPAW_WORKER_IMAGE}')" >&2
+    exit 1
+fi
+echo "ok: empty legacy value is not inherited"
+
+# case: the inheritance hook is wired into the upgrade branch of step_existing
+# (capture the range before grepping: `sed | grep -q` under `set -o pipefail`
+#  is racy — grep -q exits as soon as it matches, sed then dies on a broken
+#  pipe and the pipeline reports failure even though the call is present)
+step_existing_body="$(sed -n '/^step_existing()/,/^}/p' "${INSTALLER}")"
+if ! grep -Fq 'inherit_legacy_copaw_worker_image "${existing_env}"' <<<"${step_existing_body}"; then
+    echo "FAIL: step_existing upgrade branch does not call inherit_legacy_copaw_worker_image" >&2
+    exit 1
+fi
+echo "ok: upgrade branch calls inherit_legacy_copaw_worker_image with the env file"
+
+# case: the inherited value is written back into the new env file
+if ! grep -Fq 'AGENTTEAMS_COPAW_WORKER_IMAGE=${COPAW_WORKER_IMAGE}' "${INSTALLER}"; then
+    echo "FAIL: installer no longer writes AGENTTEAMS_COPAW_WORKER_IMAGE to the env file" >&2
+    exit 1
+fi
+echo "ok: inherited image is written back to the env file"
+
+echo "PASS: legacy CoPaw worker image inheritance (upgrade path) verified"

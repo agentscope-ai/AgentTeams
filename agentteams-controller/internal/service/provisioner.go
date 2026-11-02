@@ -476,15 +476,16 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 	// Some worker runtimes (e.g. hermes-agent) don't auto-join invited
 	// rooms, so the controller does it explicitly here using the
 	// worker's freshly issued access token. JoinRoom is idempotent — if
-	// the worker already joined (e.g. CoPaw runtime which auto-accepts),
+	// the worker already joined (e.g. the legacy CoPaw runtime, which
+	// auto-accepts),
 	// the homeserver returns 200 OK. This decouples room membership from
 	// any runtime-specific Matrix client behaviour.
 	//
 	// IMPORTANT: "membership = join" is necessary but NOT sufficient for
-	// "worker is ready to process messages". CoPaw, in particular,
-	// suppresses message callbacks during its first-boot catch-up sync
-	// (see copaw/src/matrix/channel.py::_sync_loop). Any message that
-	// arrives in that catch-up window is silently dropped. Tests and
+	// "worker is ready to process messages". The legacy CoPaw runtime,
+	// in particular, suppressed message callbacks during its first-boot
+	// catch-up sync; any message that arrived in that window was silently
+	// dropped. Tests and
 	// managers must therefore implement at-least-once send semantics
 	// (see tests/lib/matrix-client.sh::matrix_send_and_wait_for_reply)
 	// rather than treating membership=join as a readiness signal.
@@ -1072,6 +1073,72 @@ func (p *Provisioner) EnsureRoomMember(ctx context.Context, roomID, userID strin
 // not-in-room as success). Returns nil on success.
 func (p *Provisioner) EnsureRoomNonMember(ctx context.Context, roomID, userID, reason string) error {
 	return p.matrix.KickFromRoom(ctx, roomID, userID, reason)
+}
+
+// EnsureRoomPowerLevel reconciles userID's entry in the room's
+// m.room.power_levels to EXACTLY `level` (raising or lowering it). The
+// read and the write use actorToken when non-empty, otherwise the
+// homeserver-admin identity — state access is membership-scoped, so rooms
+// the admin is not in (TeamAdmin-owned rooms) must be passed a token of an
+// authorized member. The complete existing content is preserved — every
+// other user and every non-user field (events, invite, notifications,
+// users_default, state_default, ban, kick, redact, extension fields); only
+// the target users entry is mutated. Idempotent: no write when the user
+// already has exactly `level`. Rooms that never had power_levels set
+// (legacy rooms) start from an empty users map.
+//
+// Equal-level demotion: the homeserver refuses to let a sender change
+// ANOTHER user's power level unless the sender's level is strictly
+// greater than the target's current level (spec room-auth rule 9.6), so
+// an admin at 100 cannot demote a former L1 human who sits at 100. The
+// sender's OWN entry is exempt from that rule, so on an M_FORBIDDEN
+// rejection the write is retried with selfToken (the target user's own
+// access token) — a self-demotion is always authorized when the new level
+// does not exceed the target's current one.
+func (p *Provisioner) EnsureRoomPowerLevel(ctx context.Context, roomID, userID string, level int, actorToken, selfToken string) error {
+	cur, err := p.matrix.GetRoomState(ctx, roomID, "m.room.power_levels", "", actorToken)
+	if err != nil {
+		return fmt.Errorf("read power levels %s: %w", roomID, err)
+	}
+	// Preserve the complete existing content and mutate only the target
+	// users entry — rebuilding the struct would drop fields we don't
+	// explicitly know about (events, invite, notifications, extensions).
+	content := map[string]interface{}{}
+	var users map[string]interface{}
+	if cur != nil {
+		for k, v := range cur {
+			content[k] = v
+		}
+		users, _ = cur["users"].(map[string]interface{})
+	}
+	if users == nil {
+		users = map[string]interface{}{}
+	}
+	// Exact-target semantics: a demoted human (e.g. permissionLevel 1 → 2,
+	// 100 → 50) must actually be lowered, not kept at the old level.
+	if have, ok := users[userID]; ok {
+		if n, ok := have.(float64); ok && int(n) == level {
+			return nil // already at exactly the desired level — no write
+		}
+	}
+	users[userID] = float64(level)
+	content["users"] = users
+	if err := p.matrix.SetRoomState(ctx, roomID, "m.room.power_levels", "", content, actorToken); err != nil {
+		// M_FORBIDDEN on a power-level write to another user means the
+		// homeserver's strict-greater rule rejected the sender (typically
+		// an equal-level demotion). Retry with the target's own token:
+		// their own entry is exempt from that rule.
+		if matrix.IsForbidden(err) && selfToken != "" {
+			if selfErr := p.matrix.SetRoomState(ctx, roomID, "m.room.power_levels", "", content, selfToken); selfErr != nil {
+				return fmt.Errorf("write power levels %s: actor write rejected (%w); self-write also failed: %w", roomID, err, selfErr)
+			}
+			log.FromContext(ctx).Info("equal-level power demotion completed via self-write",
+				"room", roomID, "user", userID, "level", level)
+			return nil
+		}
+		return fmt.Errorf("write power levels %s: %w", roomID, err)
+	}
+	return nil
 }
 
 // ReconcileRoomMembership drives the membership of roomID to match `desired`
@@ -1767,4 +1834,14 @@ func (p *Provisioner) BackfillLegacyPasswords(ctx context.Context) error {
 		logger.Info("legacy password backfill complete", "backfilled", backfilled, "total", len(names))
 	}
 	return firstErr
+}
+
+// WorkerGatewayKey reads the persisted key without rotating credentials or
+// changing authorization. Only trusted server-side gateway probes use it.
+func (p *Provisioner) WorkerGatewayKey(ctx context.Context, name string) (string, error) {
+	creds, err := p.loadWorkerCredentials(ctx, name)
+	if err != nil || creds == nil || creds.GatewayKey == "" {
+		return "", fmt.Errorf("worker gateway credentials unavailable")
+	}
+	return creds.GatewayKey, nil
 }

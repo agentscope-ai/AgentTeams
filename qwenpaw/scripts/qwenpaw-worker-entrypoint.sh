@@ -7,12 +7,16 @@
 #   AGENTTEAMS_FS_ENDPOINT   - MinIO/OSS endpoint (required in local mode)
 #   AGENTTEAMS_FS_ACCESS_KEY - MinIO/OSS access key (required in local mode)
 #   AGENTTEAMS_FS_SECRET_KEY - MinIO/OSS secret key (required in local mode)
-#   AGENTTEAMS_RUNTIME       - "k8s" for controller-managed mc-wrapper storage access
+#   AGENTTEAMS_RUNTIME       - "k8s" for controller-managed storage access
 #   TZ                   - Timezone (optional)
 
 set -e
 
-source /opt/agentteams/scripts/lib/agentteams-env.sh
+# AGENTTEAMS_ENV_LIB lets tests (and image variants) point the bootstrap at a
+# different copy; the default is the image path and production behavior is
+# unchanged.
+ENV_LIB="${AGENTTEAMS_ENV_LIB:-/opt/agentteams/scripts/lib/agentteams-env.sh}"
+source "${ENV_LIB}"
 
 WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"
 WORKER_CR_NAME="${AGENTTEAMS_WORKER_CR_NAME:-${WORKER_NAME}}"
@@ -33,8 +37,9 @@ if [ -n "${TZ}" ] && [ -f "/usr/share/zoneinfo/${TZ}" ]; then
 fi
 
 if [ "${AGENTTEAMS_RUNTIME:-}" = "k8s" ]; then
-    log "Kubernetes mode: mc-wrapper handles storage credentials"
-    # CLI args are required by qwenpaw-worker but unused by FileSync in k8s mode.
+    log "Kubernetes mode: FileSync resolves the storage alias from controller credentials"
+    # CLI args are required by qwenpaw-worker. FileSync uses controller-issued
+    # MC_HOST credentials for OSS, or these static credentials for MinIO.
     FS_ENDPOINT="${AGENTTEAMS_FS_ENDPOINT:-k8s-placeholder}"
     FS_ACCESS_KEY="${AGENTTEAMS_FS_ACCESS_KEY:-k8s}"
     FS_SECRET_KEY="${AGENTTEAMS_FS_SECRET_KEY:-k8s}"
@@ -61,6 +66,16 @@ export QWENPAW_SECRET_DIR="${QWENPAW_SECRET_DIR:-${QWENPAW_WORKING_DIR}.secret}"
 export QWENPAW_RUNNING_IN_CONTAINER=true
 export QWENPAW_LOG_LEVEL="${QWENPAW_LOG_LEVEL:-info}"
 
+# LLM stream stall detection (QwenPaw 2.2.0 #7150): first-content and idle
+# timeouts are read from these env vars at process startup (upstream default
+# 30s each; 0 disables). Local SGLang can starve a stream under concurrent
+# load (8/26 QwenPaw001 false-kill precedent, lesson #386), so AgentTeams
+# defaults both to 300s. Priority: native QWENPAW_LLM_STREAM_* vars (finer
+# per-phase control) > AGENTTEAMS_LLM_STREAM_TIMEOUT_S (single knob) > 300.
+AGENTTEAMS_LLM_STREAM_TIMEOUT_S="${AGENTTEAMS_LLM_STREAM_TIMEOUT_S:-300}"
+export QWENPAW_LLM_STREAM_FIRST_CONTENT_TIMEOUT="${QWENPAW_LLM_STREAM_FIRST_CONTENT_TIMEOUT:-${AGENTTEAMS_LLM_STREAM_TIMEOUT_S}}"
+export QWENPAW_LLM_STREAM_IDLE_TIMEOUT="${QWENPAW_LLM_STREAM_IDLE_TIMEOUT:-${AGENTTEAMS_LLM_STREAM_TIMEOUT_S}}"
+
 # Configure LoongSuite observability plugin if tracing is enabled.
 CMS_TRACES_ENABLED="$(echo "${AGENTTEAMS_CMS_TRACES_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')"
 if [ "${CMS_TRACES_ENABLED}" = "true" ]; then
@@ -85,7 +100,9 @@ EOF
     export LOONGSUITE_PYTHON_SITE_BOOTSTRAP_LOG_SUCCESS=false
 fi
 
-VENV="/opt/venv/qwenpaw"
+# AGENTTEAMS_QWENPAW_VENV lets tests point the runtime at a stub venv; the
+# default is the image path.
+VENV="${AGENTTEAMS_QWENPAW_VENV:-/opt/venv/qwenpaw}"
 
 CMD_ARGS=(
     --name "${WORKER_NAME}"
@@ -107,4 +124,106 @@ log "  QwenPaw working dir: ${QWENPAW_WORKING_DIR}"
 log "  QwenPaw venv: ${VENV}"
 log "  Console port: ${CONSOLE_PORT}"
 
-exec "${VENV}/bin/qwenpaw-worker" "${CMD_ARGS[@]}"
+# In-place runtime upgrade (two-phase + post-start health gate, design doc
+# §4.8). Phase 1 (pre-restart) swaps the package and restarts the container,
+# leaving pending.json on success. Phase 2 (boot-check, below, before boot)
+# verifies the installed venv version: match -> pending RETAINED (the app is
+# not up yet, so this is only a pre-check); mismatch -> boot-check restores
+# the old version and DEFERS (the job goes to the non-terminal state
+# `recovering`, pending kept with expect=old — the app is not up yet, so the
+# restored runtime cannot be verified here). The post-start gate (after the
+# app is up) is the real arbiter: it verifies the RUNNING app serves the
+# expected version (the target on a success path; the OLD version when
+# pending.json carries expect=old) and stays alive (settle window), and only
+# a PASSED gate finalizes the job (success / rolled_back, pending removed) —
+# so a package that installed fine but whose app fails to start is recovered
+# automatically. boot-check always exits 0 once handled (the container MUST
+# boot; the result lives in the job state file). The post-start exit code is
+# the VERDICT (this worker image has no supervisor, so the rollback's
+# restart primitive is kill, not supervisorctl):
+#   0 = the CURRENT runtime passed its verification gate -> keep it
+#       (the new version on a success path; the restored OLD version when
+#       expect=old — the recovery is verified and the job is rolled_back)
+#   3 = restore done, UNVERIFIED (kill mode): the app child is dead and the
+#       wrapper exited with it — this entrypoint must relaunch the OLD
+#       runtime and re-run the post-start gate, whose expect=old branch
+#       performs the verification and finalizes the job
+#   other (4 = FATAL: the restore and/or its verification failed, pending
+#       kept) -> never read as "keep the new runtime": stop the app and exit
+#       non-zero so the container supervisor surfaces the failure.
+# AGENTTEAMS_UPGRADE_SCRIPT lets tests point the orchestrator at a repo copy;
+# the default is the image path (same convention as the runner plugin).
+UPGRADE_SH="${AGENTTEAMS_UPGRADE_SCRIPT:-/opt/agentteams/scripts/upgrade_qwenpaw_runtime.sh}"
+PENDING_UPGRADE="${QWENPAW_WORKING_DIR}/upgrade/pending.json"
+POST_START=0
+if [ -f "${PENDING_UPGRADE}" ] && [ -f "${UPGRADE_SH}" ]; then
+    log "Pending in-place upgrade found: running boot-check before startup..."
+    if bash "${UPGRADE_SH}" --phase boot-check --venv "${VENV}" --pending-file "${PENDING_UPGRADE}"; then
+        log "Upgrade boot-check completed"
+        # boot-check retained the pending file (venv matched the target), so
+        # the running app still has to be verified before the upgrade counts
+        # as a success.
+        if [ -f "${PENDING_UPGRADE}" ]; then
+            POST_START=1
+        fi
+    else
+        log "WARNING: upgrade boot-check exited $?; continuing startup"
+    fi
+fi
+
+# No pending upgrade left to verify: normal foreground start.
+if [ "${POST_START}" -ne 1 ]; then
+    exec "${VENV}/bin/qwenpaw-worker" "${CMD_ARGS[@]}"
+fi
+
+# Post-start verification: start the app in the background, run the health
+# gate (version/readiness/settle), then branch on the orchestrator's exit
+# code (the verdict — see the two-phase block above).
+log "Starting qwenpaw-worker in the background for post-start upgrade verification..."
+"${VENV}/bin/qwenpaw-worker" "${CMD_ARGS[@]}" &
+APP_PID=$!
+POST_START_RC=0
+bash "${UPGRADE_SH}" --phase post-start --venv "${VENV}" \
+    --pending-file "${PENDING_UPGRADE}" --restart-mode kill || POST_START_RC=$?
+case "${POST_START_RC}" in
+    0)
+        # The current runtime passed its verification gate: the new version
+        # on a success path, or the restored OLD version when pending.json
+        # carried expect=old (the recovery is verified, job rolled_back).
+        log "Post-start verification passed; keeping the current runtime (new on success, restored old on recovery)."
+        wait "${APP_PID}"
+        ;;
+    3)
+        # UNVERIFIED handoff (kill mode): the restore actions succeeded, but
+        # the app child is dead and the wrapper exited with it — the restored
+        # runtime has NOT been verified and the job is still `recovering`.
+        # Relaunch the OLD runtime and re-run the post-start gate against it
+        # (its expect=old branch performs the readiness+settle verification
+        # and finalizes rolled_back). With expect=old set, that second run
+        # can only exit 0 (verified) or 4 (verification failed) — never 3
+        # again, so there is no relaunch loop.
+        log "Post-start restore done (unverified); relaunching the old runtime and re-verifying..."
+        kill "${APP_PID}" 2>/dev/null || true
+        wait "${APP_PID}" 2>/dev/null || true
+        "${VENV}/bin/qwenpaw-worker" "${CMD_ARGS[@]}" &
+        APP_PID=$!
+        POST_START_RC=0
+        bash "${UPGRADE_SH}" --phase post-start --venv "${VENV}" \
+            --pending-file "${PENDING_UPGRADE}" --restart-mode kill || POST_START_RC=$?
+        if [ "${POST_START_RC}" -eq 0 ]; then
+            log "Restored runtime verified; serving the old runtime."
+            wait "${APP_PID}"
+        else
+            log "FATAL: recovery verification failed (rc=${POST_START_RC}); manual intervention required."
+            kill "${APP_PID}" 2>/dev/null || true
+            wait "${APP_PID}" 2>/dev/null || true
+            exit 1
+        fi
+        ;;
+    *)
+        log "FATAL: post-start verification and its rollback failed (rc=${POST_START_RC}); manual intervention required."
+        kill "${APP_PID}" 2>/dev/null || true
+        wait "${APP_PID}" 2>/dev/null || true
+        exit 1
+        ;;
+esac

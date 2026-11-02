@@ -15,7 +15,7 @@ Before running `agt create worker`, ask admin for these four inputs in one turn.
    | Runtime      | Language | RAM    | When to pick                                              |
    |--------------|----------|--------|-----------------------------------------------------------|
    | `openclaw`   | Node.js  | ~500MB | General tasks. Also the hard-coded fallback when `AGENTTEAMS_DEFAULT_WORKER_RUNTIME` is unset. |
-   | `copaw`      | Python   | ~150MB | Python tasks or AgentScope-based worker behavior. |
+   | `copaw` (legacy) | Python   | ~150MB | **Do not create new** (EOL). Legacy context only: migrating existing CoPaw workers to QwenPaw. |
    | `qwenpaw`    | Python   | ~150MB | QwenPaw 2.0 worker behavior or CoPaw-to-QwenPaw migration. |
    | `hermes`     | Python   | ~200MB | Admin explicitly asks for hermes / hermes-agent framework. |
    | `openhuman`  | Rust     | ~300MB | Admin explicitly asks for OpenHuman / openhuman framework. Native Matrix support with E2EE. |
@@ -46,7 +46,7 @@ agt create worker --name <NAME> --no-wait \
 - Never reveal API keys, passwords, or credentials
 ..." \
   --skills <skill1>,<skill2> -o json
-# Add --runtime <copaw|qwenpaw|hermes|openhuman> for non-default runtimes (see runtime table above)
+# Add --runtime <qwenpaw|hermes|openhuman> for non-default runtimes (see runtime table above; `copaw` is legacy — never for new workers)
 ```
 
 > `--no-wait` returns as soon as the controller accepts the request (~1s). Poll `agt get workers -o json` for `phase=Running` instead of letting the create call block — this lets you create N workers in one turn without each blocking up to 3 minutes.

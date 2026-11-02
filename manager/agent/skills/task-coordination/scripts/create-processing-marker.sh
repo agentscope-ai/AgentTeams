@@ -1,15 +1,16 @@
 #!/bin/bash
 # Create a processing marker for a task directory
-# Usage: create-processing-marker.sh <task-id> <processor-name> [timeout-mins]
+# Usage: create-processing-marker.sh <task-id> <processor-name> [timeout-mins] [run-id]
 
 set -e
 
 task_id="$1"
 processor="$2"
 timeout_mins="${3:-15}"
+run_id="${4:-}"
 
 if [ -z "$task_id" ] || [ -z "$processor" ]; then
-    echo "Usage: $0 <task-id> <processor-name> [timeout-mins]" >&2
+    echo "Usage: $0 <task-id> <processor-name> [timeout-mins] [run-id]" >&2
     exit 2
 fi
 
@@ -31,13 +32,10 @@ else
 fi
 
 # Create marker file
-cat > "$marker_file" << EOF
-{
-  "processor": "${processor}",
-  "started_at": "${started_at}",
-  "expires_at": "${expires_at}"
-}
-EOF
+jq -n --arg processor "$processor" --arg started_at "$started_at" \
+    --arg expires_at "$expires_at" --arg run_id "$run_id" \
+    '{processor:$processor, started_at:$started_at, expires_at:$expires_at}
+     + (if $run_id == "" then {} else {run_id:$run_id} end)' > "$marker_file"
 
 echo "[create-processing-marker] Created marker for ${task_id}"
 echo "  Processor: ${processor}"

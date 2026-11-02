@@ -7,8 +7,9 @@
 # Reads env vars: AGENTTEAMS_MATRIX_URL, AGENTTEAMS_MATRIX_DOMAIN, AGENTTEAMS_AI_GATEWAY_URL, AGENTTEAMS_ADMIN_USER, AGENTTEAMS_DEFAULT_MODEL
 # Output: /root/agentteams-fs/agents/<WORKER_NAME>/openclaw.json
 #
-# If TEAM_LEADER_NAME is provided, groupAllowFrom and dm.allowFrom will use
-# [Leader, Admin] instead of [Manager, Admin].
+# If TEAM_LEADER_NAME is provided, groupAllowFrom, dm.allowFrom, and
+# tools.elevated.allowFrom.matrix use [Leader, Admin] instead of
+# [Manager, Admin].
 
 set -e
 source /opt/agentteams/scripts/lib/agentteams-env.sh
@@ -117,7 +118,7 @@ mkdir -p "${OUTPUT_DIR}"
 
 envsubst < /opt/agentteams/agent/skills/worker-management/references/worker-openclaw.json.tmpl > "${OUTPUT_DIR}/openclaw.json"
 
-# Post-envsubst injection: memorySearch + custom model (single jq pass when possible)
+# Post-envsubst injection: memory.search + custom model (single jq pass when possible)
 if ! jq -e --arg model "${MODEL_NAME}" '.models.providers["agentteams-gateway"].models | map(.id) | index($model)' "${OUTPUT_DIR}/openclaw.json" > /dev/null 2>&1; then
     log "Custom model '${MODEL_NAME}' not in built-in list, injecting into worker config..."
     jq --arg emb_model "${AGENTTEAMS_EMBEDDING_MODEL}" \
@@ -129,16 +130,17 @@ if ! jq -e --arg model "${MODEL_NAME}" '.models.providers["agentteams-gateway"].
        --argjson reasoning "${MODEL_REASONING}" \
        --argjson input "${INPUT}" \
        '
-        (if $emb_model != "" then .agents.defaults.memorySearch = {"provider":"openai","model":$emb_model,"remote":{"baseUrl":($aigw + "/v1"),"apiKey":$key}} else . end)
+        (if $emb_model != "" then .memory.search = {"provider":"openai","model":$emb_model,"remote":{"baseUrl":($aigw + "/v1"),"apiKey":$key}} else . end)
         | .models.providers["agentteams-gateway"].models += [{"id": $model, "name": $model, "reasoning": $reasoning, "contextWindow": $ctx, "maxTokens": $max, "input": $input}]
         | .agents.defaults.models += {("agentteams-gateway/" + $model): {"alias": $model}}
+        | if .agents.defaults.modelPolicy.allow != null then .agents.defaults.modelPolicy.allow = ((.agents.defaults.modelPolicy.allow + ["agentteams-gateway/" + $model]) | unique) else . end
        ' "${OUTPUT_DIR}/openclaw.json" > "${OUTPUT_DIR}/openclaw.json.tmp" && \
         mv "${OUTPUT_DIR}/openclaw.json.tmp" "${OUTPUT_DIR}/openclaw.json"
 elif [ -n "${AGENTTEAMS_EMBEDDING_MODEL}" ]; then
     jq --arg emb_model "${AGENTTEAMS_EMBEDDING_MODEL}" \
        --arg aigw "${AGENTTEAMS_AI_GATEWAY_URL}" \
        --arg key "${WORKER_GATEWAY_KEY}" \
-       '.agents.defaults.memorySearch = {"provider":"openai","model":$emb_model,"remote":{"baseUrl":($aigw + "/v1"),"apiKey":$key}}' \
+       '.memory.search = {"provider":"openai","model":$emb_model,"remote":{"baseUrl":($aigw + "/v1"),"apiKey":$key}}' \
        "${OUTPUT_DIR}/openclaw.json" > "${OUTPUT_DIR}/openclaw.json.tmp" && \
         mv "${OUTPUT_DIR}/openclaw.json.tmp" "${OUTPUT_DIR}/openclaw.json"
 fi
@@ -239,17 +241,19 @@ if [ "${_cms_traces_lc}" = "true" ]; then
 fi
 
 # If this worker belongs to a team, override groupAllowFrom and dm.allowFrom
-# to use [Leader, Admin] instead of [Manager, Admin]
+# and tools.elevated.allowFrom.matrix to use [Leader, Admin] instead of
+# [Manager, Admin]
 if [ -n "${TEAM_LEADER_NAME}" ]; then
     LEADER_MATRIX_ID="@${TEAM_LEADER_NAME}:${MATRIX_DOMAIN_FOR_ID}"
     ADMIN_MATRIX_ID="@${ADMIN_USER}:${MATRIX_DOMAIN_FOR_ID}"
     jq --arg leader "${LEADER_MATRIX_ID}" \
        --arg admin "${ADMIN_MATRIX_ID}" \
        '.channels.matrix.groupAllowFrom = [$leader, $admin]
-        | .channels.matrix.dm.allowFrom = [$leader, $admin]' \
+        | .channels.matrix.dm.allowFrom = [$leader, $admin]
+        | .tools.elevated.allowFrom.matrix = [$leader, $admin]' \
        "${OUTPUT_DIR}/openclaw.json" > "${OUTPUT_DIR}/openclaw.json.tmp"
     mv "${OUTPUT_DIR}/openclaw.json.tmp" "${OUTPUT_DIR}/openclaw.json"
-    log "  Overrode groupAllowFrom/dm.allowFrom for team worker (leader=${TEAM_LEADER_NAME})"
+    log "  Overrode groupAllowFrom/dm.allowFrom/elevated.allowFrom for team worker (leader=${TEAM_LEADER_NAME})"
 fi
 
 # ============================================================

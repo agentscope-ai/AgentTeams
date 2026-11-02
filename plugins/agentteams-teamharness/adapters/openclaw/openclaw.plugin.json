@@ -1,0 +1,24 @@
+{
+  "author": "AgentTeams",
+  "configSchema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "description": "AgentTeams TeamHarness runtime plugin for OpenClaw. install.sh projects the bundle contract onto the OpenClaw runtime: the MCP server entry lands in openclaw.json (mcp.servers.teamharness) and this plugin is registered; this manifest declares the skills roots. The manifest carries no MCP keys: OpenClaw only reads documented manifest fields, and MCP servers are plain runtime configuration.",
+  "id": "agentteams-teamharness",
+  "name": "TeamHarness",
+  "skills": [
+    "skills/agent/find-skills",
+    "skills/agent/mcporter",
+    "skills/team/communication",
+    "skills/team/file-sharing",
+    "skills/team/organization",
+    "skills/team/project-management",
+    "skills/team/roomflow",
+    "skills/team/task-delegation",
+    "skills/team/task-execution",
+    "skills/team/team-coordination"
+  ],
+  "version": "0.1.0"
+}

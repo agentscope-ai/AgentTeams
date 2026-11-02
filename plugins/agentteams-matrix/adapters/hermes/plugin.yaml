@@ -1,0 +1,8 @@
+# AgentTeams Matrix adapter manifest for the Hermes runtime.
+# The identifier mirrors the QwenPaw adapter so the channel plugin id is
+# stable across runtimes.
+apiVersion: agentteams.agentteam/v1alpha1
+kind: AgentTeamPlugin
+metadata:
+  name: agentteams-matrix-channel
+  version: 0.1.0

@@ -19,9 +19,31 @@ type ObjectMeta struct {
 // current ETag does not match the expected one — the write was NOT applied.
 var ErrPreconditionFailed = errors.New("oss: precondition failed (etag mismatch)")
 
+// ErrConditionalUnsupported is returned by a strict conditional write
+// (PutObjectIfMatchStrict) when the backend cannot honor If-Match at all
+// (the provider answers NotImplemented/501). The write is NOT performed and
+// the call never degrades to a compare-then-put: callers that need conflict
+// safety must fail closed on this error.
+var ErrConditionalUnsupported = errors.New("oss: backend cannot provide conditional writes")
+
 // StorageClient abstracts object storage operations.
 // Implementations: MinIOClient (mc CLI), future S3Client (aws-sdk-go).
+// ObjectInfo is a listing entry with the last-updated timestamp when the
+// backend can provide it.
+type ObjectInfo struct {
+	Name string
+	// UpdatedAt is RFC3339 UTC, or "" when the backend does not expose
+	// (or the parser cannot decode) a timestamp.
+	UpdatedAt string
+}
+
 type StorageClient interface {
+	// ListObjectsDetailed is like ListObjects but also reports each entry's
+	// last-updated timestamp when the backend exposes one (mc ls lines carry
+	// a date). Unparseable dates degrade to UpdatedAt == "" — a listing must
+	// never fail because of timestamp parsing.
+	ListObjectsDetailed(ctx context.Context, prefix string) ([]ObjectInfo, error)
+
 	// PutObject writes data to the given key path.
 	// Key is relative to the configured storage prefix.
 	PutObject(ctx context.Context, key string, data []byte) error

@@ -1,0 +1,135 @@
+{
+  "version": "1.2",
+  "description": "Cross-language golden fixture for S2 signal emission (INT-3, #1394 S2 aligned). Single source of truth for the 14-event list: the Go side keeps an in-code emitter table (F8 precedent, task-transitions.json) and cross-checks it against this file in tests; the Python side reads this file at runtime. Precedent: task-transitions.json.",
+  "id_rule": "event_id = 'ev_' + sha256(team_id|project_id|task_id|loop_id|event_type|source_event|iteration|fingerprint|attempt|audit_seq)[:16] hex. Fixed field order; each field is a plain string, empty string when the emitter carries no such identity (project-level events leave task_id empty; task events set project_id and leave loop_id/iteration empty; iteration is the decimal iteration_index or empty). fingerprint = the event fingerprint field = hex(sha256 of the ref bytes after the main write) - the stable identity of the logical operation's result. audit_seq = the project's persisted committed-operation revision (project meta 'audit_seq'; 0 when absent): advanced by exactly one on each committed Go intervention write (markAuditFields + conditional ETag write), it is the persistent identity of the operation INSTANCE. A retry of the same operation re-reads the same committed revision and the same state bytes, so it re-lands on the same id (consumers dedupe by event_id, keyed on the operation identity per #1394), while two distinct operations - another project, another loop iteration, or a second occurrence of the same control operation (pause/resume/pause within one wall-clock second, whose post-write state bytes are byte-identical at second-precision updated_at) - hash distinct inputs and cannot share a key. No raw timestamp is ever part of the identity; audit_seq, not the clock, distinguishes operation instances. Rejection family (SIG-MISMATCH): a rejection commits no state, so the ref bytes - and the fingerprint - are identical across distinct rejected operations on the same task state; those emitters append one extra final component `action|from|to` (the rejection discriminator) to the hash input. Distinct rejections therefore get distinct ids, while a retry of the same rejection re-hashes identically. Events without a discriminator hash the fixed ten-field input above unchanged (the cross-language fixed vector is unaffected; Go has no rejection emitter).",
+  "levels": ["info", "warn", "error", "critical"],
+  "source_event_note": "source_event = the row's row id, unique per emit point. It is hashed into id_rule, so two emit points must never share it (11-SIGNAL: submit and accept share source_event.origin=submit but use different source_events to keep ids distinct).",
+  "events": [
+    {
+      "source_events": ["task_submitted"],
+      "event_type": "SIG-COMPLETE",
+      "source_layer": "task",
+      "emitters": ["py:submit_task"],
+      "level": "info",
+      "#1394_type": "task.submitted"
+    },
+    {
+      "source_events": ["task_accepted", "project_completed"],
+      "event_type": "SIG-COMPLETE",
+      "source_layer": "task",
+      "emitters": ["py:accept_task_result", "go:CompleteProject"],
+      "level": "info",
+      "#1394_type": "task.submitted"
+    },
+    {
+      "source_events": ["project_paused"],
+      "event_type": "SIG-DECISION",
+      "source_layer": "control",
+      "emitters": ["go:PauseProject"],
+      "level": "warn",
+      "#1394_type": "decision.locked"
+    },
+    {
+      "source_events": ["project_resumed"],
+      "event_type": "SIG-DECISION",
+      "source_layer": "control",
+      "emitters": ["go:ResumeProject"],
+      "level": "info",
+      "#1394_type": "decision.locked"
+    },
+    {
+      "source_events": ["project_replanned"],
+      "event_type": "SIG-DECISION",
+      "source_layer": "control",
+      "emitters": ["go:ReplanProject"],
+      "level": "warn",
+      "#1394_type": "decision.locked"
+    },
+    {
+      "source_events": ["task_cancelled"],
+      "event_type": "SIG-DECISION",
+      "source_layer": "control",
+      "emitters": ["go:CancelTask"],
+      "level": "error",
+      "#1394_type": "decision.locked"
+    },
+    {
+      "source_events": ["loop_iteration_finished"],
+      "event_type": "SIG-DECISION",
+      "source_layer": "loop",
+      "emitters": ["py:record_loop_iteration"],
+      "level": "info",
+      "#1394_type": "loop.iteration_finished"
+    },
+    {
+      "source_events": ["loop_review_verdict"],
+      "event_type": "SIG-VERDICT",
+      "source_layer": "loop",
+      "emitters": ["py:record_loop_iteration:review"],
+      "level": "warn",
+      "#1394_type": "loop.iteration_finished"
+    },
+    {
+      "source_events": ["attention_raised"],
+      "event_type": "SIG-ATTENTION",
+      "source_layer": "attention",
+      "emitters": ["#1394:S2"],
+      "level": "warn",
+      "conditional": true,
+      "#1394_type": "attention.raised"
+    },
+    {
+      "source_events": ["attention_resolved"],
+      "event_type": "SIG-ATTENTION",
+      "source_layer": "attention",
+      "emitters": ["#1394:S2"],
+      "level": "info",
+      "conditional": true,
+      "#1394_type": "attention.resolved"
+    },
+    {
+      "source_events": ["attention_overdue"],
+      "event_type": "SIG-ATTENTION",
+      "source_layer": "attention",
+      "emitters": ["#1394:S2"],
+      "level": "error",
+      "conditional": true,
+      "#1394_type": "attention.overdue"
+    },
+    {
+      "source_events": ["mismatch_recorded"],
+      "event_type": "SIG-MISMATCH",
+      "source_layer": "verification",
+      "emitters": ["py:illegal_transition_rejected"],
+      "level": "error",
+      "conditional": true,
+      "#1394_type": null
+    },
+    {
+      "source_events": ["contract_snapshot"],
+      "event_type": "SIG-CONTRACT",
+      "source_layer": "store",
+      "emitters": ["#future:contract_snapshot"],
+      "level": "warn",
+      "conditional": true,
+      "#1394_type": null
+    },
+    {
+      "source_events": ["artifact_delivered"],
+      "event_type": "SIG-ARTIFACT",
+      "source_layer": "store",
+      "emitters": ["#future:artifact_write", "#future:handoff_write"],
+      "level": "info",
+      "conditional": true,
+      "#1394_type": null
+    }
+  ],
+  "#1394_types": {
+    "task.submitted": ["SIG-COMPLETE"],
+    "decision.locked": ["SIG-DECISION"],
+    "loop.iteration_finished": ["SIG-DECISION", "SIG-VERDICT"],
+    "attention.raised": ["SIG-ATTENTION"],
+    "attention.resolved": ["SIG-ATTENTION"],
+    "attention.overdue": ["SIG-ATTENTION"]
+  }
+}

@@ -360,6 +360,10 @@ class MemberRuntimeConfig:
         return _section(self.desired, "model")
 
     @property
+    def subagent_model(self) -> Dict[str, Any]:
+        return _section(self.desired, "subagentModel")
+
+    @property
     def mcp_servers(self) -> Any:
         value = self.desired.get("mcpServers")
         return value if value is not None else {}
@@ -378,6 +382,11 @@ class MemberRuntimeConfig:
         return value if isinstance(value, dict) else None
 
     @property
+    def matrix_channel(self) -> Optional[Dict[str, Any]]:
+        value = self.channels.get("matrix")
+        return value if isinstance(value, dict) else None
+
+    @property
     def channel_policy(self) -> Dict[str, Any]:
         return _section(self.desired, "channelPolicy")
 
@@ -387,6 +396,7 @@ class MemberRuntimeConfig:
             *self.agent_package_identity,
             _stable_json(self.inline_config),
             _stable_json(self.model),
+            _stable_json(self.subagent_model),
             _stable_json(self.mcp_servers),
             _stable_json(self.channels),
             _stable_json(self.channel_policy),
@@ -1173,6 +1183,23 @@ class AgentPackageManager:
             return []
         return sorted(path.name for path in skills_dir.iterdir() if path.is_dir())
 
+    def package_skills_identity(self, package_dir: Optional[Path]) -> str:
+        if package_dir is None:
+            return ""
+        skills_dir = self._package_content_root(package_dir) / "skills"
+        if not skills_dir.is_dir():
+            return ""
+        digest = hashlib.sha256()
+        for path in sorted(skills_dir.rglob("*")):
+            relative = path.relative_to(skills_dir).as_posix()
+            digest.update(relative.encode("utf-8"))
+            if path.is_file():
+                digest.update(b"\0file\0")
+                digest.update(path.read_bytes())
+            elif path.is_dir():
+                digest.update(b"\0dir\0")
+        return digest.hexdigest()
+
     def _qwenpaw_mcp_client_payload(self, name: str, item: Dict[str, Any]) -> Dict[str, Any]:
         payload = dict(item)
         payload.pop("id", None)
@@ -1263,6 +1290,12 @@ class ApplyResult:
     agent_package_dir: Optional[Path]
 
 
+class DeferredChannelRead(RuntimeError):
+    """A runtime channel read failed, so the dependent reconcile must be
+    deferred instead of substituting default values for the unread fields
+    (substituting show_*=True would silently re-open display the user
+    turned off via the workbench channel API)."""
+
 
 class RuntimeUpdater:
     """Apply controller-projected runtime desired state inside one worker pod."""
@@ -1277,9 +1310,11 @@ class RuntimeUpdater:
         api_client: Optional[QwenPawApiClient] = None,
         runtime_reconcile: Optional[Callable[[MemberRuntimeConfig], None]] = None,
         skill_sync: Optional[Callable[[List[str]], None]] = None,
+        adapter_force_apply: Optional[Callable[[], None]] = None,
     ) -> None:
         self.config = config
         self.adapter_apply = adapter_apply
+        self.adapter_force_apply = adapter_force_apply
         self.runtime_config_pull = runtime_config_pull
         self.team_context_renderer = team_context_renderer
         self.api_client = api_client
@@ -1290,6 +1325,18 @@ class RuntimeUpdater:
             workspace_dir=config.default_workspace_dir,
         )
         self.current_config: Optional[MemberRuntimeConfig] = None
+        self._applied_model_identity: Optional[str] = None
+        self._applied_subagent_model_identity: Optional[str] = None
+        self._applied_matrix_channel_identity: Optional[str] = None
+        self._matrix_retry_pending: bool = False
+        self._applied_dingtalk_channel_identity: Optional[str] = None
+        self._applied_agent_package_identity: Optional[Tuple[str, str, str, str]] = None
+        self._applied_agent_package_dir: Optional[Path] = None
+        self._package_mcp_clients: Dict[str, Dict[str, Any]] = {}
+        self._applied_mcp_client_identities: Dict[str, str] = {}
+        self._applied_package_skills_identity: Optional[str] = None
+        self._applied_managed_skills_identity: Optional[str] = None
+        self._applied_inline_config_identity: Optional[str] = None
 
     def load(self) -> MemberRuntimeConfig:
         if self.runtime_config_pull is not None:
@@ -1305,7 +1352,12 @@ class RuntimeUpdater:
         started_at = time.monotonic()
         config = runtime_config or self.load()
         previous = self.current_config
-        changed = force or previous is None or config.changed_from(previous)
+        changed = (
+            force
+            or previous is None
+            or config.changed_from(previous)
+            or self._matrix_retry_pending
+        )
         if not changed:
             logger.info(
                 "runtime config apply skipped component=update worker=%s generation=%s changed=%s "
@@ -1325,10 +1377,59 @@ class RuntimeUpdater:
             and self.adapter_apply is not None
             and not self._adapter_neutral_change(config)
         )
+        model_identity = self._component_identity(self._model_desired_state(config))
+        model_should_apply = force or model_identity != self._applied_model_identity
+        subagent_model_identity = self._component_identity(
+            self._subagent_model_desired_state(config)
+        )
+        subagent_model_should_apply = (
+            force or subagent_model_identity != self._applied_subagent_model_identity
+        )
+        matrix_channel_identity: Optional[str] = None
+        matrix_channel_should_apply = False
+        try:
+            matrix_channel_identity = self._component_identity(self._matrix_channel_payload(config))
+            self._matrix_retry_pending = False
+            matrix_channel_should_apply = (
+                force or matrix_channel_identity != self._applied_matrix_channel_identity
+            )
+        except DeferredChannelRead as exc:
+            self._matrix_retry_pending = True
+            logger.warning(
+                "matrix_channel_reconcile=deferred reason=%s component=update worker=%s "
+                "step=identity duration_ms=%s",
+                exc,
+                self.config.worker_name,
+                _duration_ms(started_at),
+            )
+        dingtalk_channel_identity = self._component_identity(
+            self._dingtalk_channel_desired_fields(config.dingtalk_channel)
+        )
+        dingtalk_channel_should_apply = (
+            force or dingtalk_channel_identity != self._applied_dingtalk_channel_identity
+        )
+        package_should_apply = (
+            force
+            or config.agent_package_identity != self._applied_agent_package_identity
+        )
+        managed_skills_identity = self._component_identity(self._managed_skill_names(config))
+        managed_skills_should_apply = (
+            force
+            or package_should_apply
+            or managed_skills_identity != self._applied_managed_skills_identity
+        )
+        inline_config_identity = self._component_identity(config.inline_config)
+        inline_config_should_apply = (
+            force
+            or package_should_apply
+            or inline_config_identity != self._applied_inline_config_identity
+        )
         logger.info(
             "runtime config apply begin component=update worker=%s generation=%s team=%s member=%s role=%s "
             "force=%s reapply_adapter=%s adapter_applied=%s mcp_server_count=%s channel_names=%s "
-            "credential_binding_count=%s duration_ms=%s",
+            "credential_binding_count=%s model_reconcile=%s subagent_model_reconcile=%s "
+            "matrix_channel_reconcile=%s "
+            "dingtalk_channel_reconcile=%s package_reconcile=%s duration_ms=%s",
             self.config.worker_name,
             config.generation,
             config.team_name,
@@ -1340,27 +1441,91 @@ class RuntimeUpdater:
             _count_collection(config.mcp_servers),
             _named_keys(config.channels),
             len(config.credential_bindings),
+            model_should_apply,
+            subagent_model_should_apply,
+            matrix_channel_should_apply,
+            dingtalk_channel_should_apply,
+            package_should_apply,
             _duration_ms(started_at),
         )
         self._apply_member_identity(config)
         if self.runtime_reconcile is not None:
             self.runtime_reconcile(config)
-        self._apply_model(config)
-        self._apply_mcp_servers(config)
-        self._apply_matrix_channel(config)
-        self._apply_dingtalk_channel(config)
+        if model_should_apply:
+            self._apply_model(config)
+            self._applied_model_identity = model_identity
+        if subagent_model_should_apply:
+            self._apply_subagent_model(config)
+            self._applied_subagent_model_identity = subagent_model_identity
+        if matrix_channel_should_apply:
+            try:
+                self._apply_matrix_channel(config)
+            except DeferredChannelRead as exc:
+                self._matrix_retry_pending = True
+                logger.warning(
+                    "matrix_channel_reconcile=deferred reason=%s component=update worker=%s "
+                    "step=apply duration_ms=%s",
+                    exc,
+                    self.config.worker_name,
+                    _duration_ms(started_at),
+                )
+            else:
+                self._applied_matrix_channel_identity = matrix_channel_identity
+                self._matrix_retry_pending = False
+        if dingtalk_channel_should_apply:
+            self._apply_dingtalk_channel(config)
+            self._applied_dingtalk_channel_identity = dingtalk_channel_identity
+        # Matrix PUT replaces the full channel object, including ACL flags.
+        # Always reconcile policy after it; the policy methods are differential.
         self._apply_channel_policy(config)
         self._apply_team_context_prompt(config)
 
-        applied_package = self.package_manager.apply(config)
-        self._apply_package_mcp_servers(applied_package)
-        self._apply_package_skills(applied_package)
-        self._apply_managed_skills(config)
-        self._apply_inline_config(config)
+        applied_package = self._applied_agent_package_dir
+        package_mcp_clients = self._package_mcp_clients
+        package_skills_identity = self._applied_package_skills_identity
+        if package_should_apply:
+            applied_package = self.package_manager.apply(config)
+            package_clients = getattr(self.package_manager, "package_mcp_clients", None)
+            package_mcp_clients = (
+                package_clients(applied_package)
+                if callable(package_clients)
+                else {}
+            )
+            package_skills_identity_fn = getattr(
+                self.package_manager,
+                "package_skills_identity",
+                None,
+            )
+            package_skills_identity = (
+                package_skills_identity_fn(applied_package)
+                if callable(package_skills_identity_fn)
+                else self._component_identity(config.agent_package_identity)
+            )
+        self._reconcile_mcp_clients(config, package_mcp_clients, force=force)
+        package_skills_should_apply = (
+            force
+            or package_skills_identity != self._applied_package_skills_identity
+        )
+        if package_should_apply and package_skills_should_apply:
+            self._apply_package_skills(applied_package)
+        if managed_skills_should_apply:
+            self._apply_managed_skills(config)
+            self._applied_managed_skills_identity = managed_skills_identity
+        if inline_config_should_apply:
+            self._apply_inline_config(config)
+            self._applied_inline_config_identity = inline_config_identity
+        if package_should_apply:
+            self._applied_agent_package_dir = applied_package
+            self._package_mcp_clients = package_mcp_clients
+            self._applied_package_skills_identity = package_skills_identity
+            self._applied_agent_package_identity = config.agent_package_identity
 
         adapter_applied = False
         if adapter_should_apply:
-            self.adapter_apply()
+            if force and self.adapter_force_apply is not None:
+                self.adapter_force_apply()
+            else:
+                self.adapter_apply()
             adapter_applied = True
 
         self.current_config = config
@@ -1379,6 +1544,10 @@ class RuntimeUpdater:
             _duration_ms(started_at),
         )
         return ApplyResult(runtime_config=config, changed=True, agent_package_dir=applied_package)
+
+    def _component_identity(self, value: Any) -> str:
+        payload = _stable_json(value).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
 
     def _apply_inline_config(self, config: MemberRuntimeConfig) -> None:
         prompt_files = {
@@ -1514,15 +1683,30 @@ class RuntimeUpdater:
             os.environ["AGENTTEAMS_WORKER_ROLE"] = role
 
     def _apply_model(self, config: MemberRuntimeConfig) -> None:
-        model = config.model
-        if not model:
-            return
-        provider_id = _string(model.get("providerId") or model.get("provider_id") or model.get("provider"))
-        model_name = _string(model.get("model") or model.get("name"))
-        if not provider_id or not model_name:
+        desired = self._model_desired_state(config)
+        if desired is None:
             return
         if self.api_client is None:
             raise RuntimeError("QwenPaw API client is required for model configuration")
+        self.api_client.configure_active_model(
+            desired["provider_id"],
+            desired["model"],
+            base_url=desired["base_url"],
+            api_key=desired["api_key"],
+            provider_name=desired["provider_name"],
+            chat_model=desired["chat_model"],
+            supports_image=desired.get("supports_image"),
+            supports_video=desired.get("supports_video"),
+            supports_multimodal=desired.get("supports_multimodal"),
+            probe_source=desired.get("probe_source"),
+        )
+
+    def _model_desired_state(self, config: MemberRuntimeConfig) -> Optional[Dict[str, Any]]:
+        model = config.model
+        provider_id = _string(model.get("providerId") or model.get("provider_id") or model.get("provider"))
+        model_name = _string(model.get("model") or model.get("name"))
+        if not provider_id or not model_name:
+            return None
         base_url = _string(
             model.get("baseUrl")
             or model.get("base_url")
@@ -1540,14 +1724,108 @@ class RuntimeUpdater:
         )
         if not api_key and api_key_env:
             api_key = _string(os.getenv(api_key_env))
-        self.api_client.configure_active_model(
-            provider_id,
-            model_name,
-            base_url=self._openai_compatible_base_url(base_url) if base_url else "",
-            api_key=api_key,
-            provider_name=_string(model.get("providerName") or model.get("provider_name") or provider_id),
-            chat_model=_string(model.get("chatModel") or model.get("chat_model") or "OpenAIChatModel"),
+        # input modalities semantics:
+        #   key present -> explicit declaration; probe_source="manual" and the
+        #                  declared value is authoritative. An empty list means
+        #                  "declared text-only" and must NOT fall back to probing.
+        #   key absent  -> the runtime received no declaration; leave capabilities
+        #                  unset (None) so the runtime may probe.
+        if "input" in model:
+            input_modalities = model.get("input") or []
+            if isinstance(input_modalities, str):
+                input_modalities = [input_modalities]
+            supports_image = "image" in input_modalities
+            supports_video = "video" in input_modalities
+            supports_multimodal = bool(supports_image or supports_video)
+            supports_image_val = supports_image
+            supports_video_val = supports_video
+            supports_multimodal_val = supports_multimodal
+            probe_source_val = "manual"
+        else:
+            supports_image_val = None
+            supports_video_val = None
+            supports_multimodal_val = None
+            probe_source_val = None
+        return {
+            "provider_id": provider_id,
+            "model": model_name,
+            "base_url": self._openai_compatible_base_url(base_url) if base_url else "",
+            "api_key": api_key,
+            "provider_name": _string(
+                model.get("providerName") or model.get("provider_name") or provider_id
+            ),
+            "chat_model": _string(
+                model.get("chatModel") or model.get("chat_model") or "OpenAIChatModel"
+            ),
+            "supports_image": supports_image_val,
+            "supports_video": supports_video_val,
+            "supports_multimodal": supports_multimodal_val,
+            "probe_source": probe_source_val,
+        }
+
+    def _apply_subagent_model(self, config: MemberRuntimeConfig) -> None:
+        """Apply — or reconcile the removal of — the declared subagent model.
+
+        This is the startup/recreation path for the override: a recreated
+        container must pick the desired value up from runtime.yaml even
+        though the controller hot apply (annotation-gated, embedded-only)
+        would skip it. Removal is reconciled here as well, so clearing
+        does not depend on the embedded-only controller dial: when the
+        declaration is absent but the runtime still holds an override
+        (removed in the CR, possibly across a restart), an explicit null
+        clear is issued with readback. An initially absent declaration
+        stays read-only — one profile check, no write — preserving
+        compatibility for workers/runtimes that never used the surface.
+        """
+        desired = self._subagent_model_desired_state(config)
+        if desired is not None:
+            if self.api_client is None:
+                raise RuntimeError(
+                    "QwenPaw API client is required for subagent model configuration",
+                )
+            try:
+                self.api_client.update_agent_model_settings(desired)
+            except QwenPawApiError as exc:
+                # QwenPaw < 2.1.1 has no model-settings endpoint; the declared
+                # value stays in runtime.yaml and takes effect after an upgrade.
+                if "HTTP 404" in str(exc):
+                    logger.warning("subagent model endpoint unavailable, skipping: %s", exc)
+                    return
+                raise
+            return
+        # Absent declaration: clear only when an override is actually present.
+        # Without an API client there is nothing to inspect or clear —
+        # stay a no-op (compat).
+        if self.api_client is None:
+            return
+        try:
+            current = self.api_client.get_agent_subagent_model()
+        except QwenPawApiError as exc:
+            if "HTTP 404" in str(exc):
+                logger.warning("subagent model settings unavailable, skipping clear: %s", exc)
+                return
+            raise
+        if current is None:
+            return
+        try:
+            self.api_client.update_agent_model_settings(None)
+        except QwenPawApiError as exc:
+            if "HTTP 404" in str(exc):
+                logger.warning("subagent model endpoint unavailable, skipping clear: %s", exc)
+                return
+            raise
+
+    def _subagent_model_desired_state(
+        self, config: MemberRuntimeConfig
+    ) -> Optional[Dict[str, Any]]:
+        slot = config.subagent_model
+        provider_id = _string(
+            slot.get("providerId") or slot.get("provider_id") or slot.get("provider")
         )
+        model_name = _string(slot.get("model") or slot.get("name"))
+        if not provider_id or not model_name:
+            return None
+        return {"provider_id": provider_id, "model": model_name}
 
     def _openai_compatible_base_url(self, base_url: str) -> str:
         value = base_url.rstrip("/")
@@ -1555,28 +1833,61 @@ class RuntimeUpdater:
             return value
         return f"{value}/v1"
 
-    def _apply_mcp_servers(self, config: MemberRuntimeConfig) -> None:
-        servers = self._mcporter_servers(config)
+    def _reconcile_mcp_clients(
+        self,
+        config: MemberRuntimeConfig,
+        package_servers: Dict[str, Dict[str, Any]],
+        *,
+        force: bool,
+    ) -> None:
+        direct_servers = self._direct_mcp_clients(config)
+        builtin_conflicts = {"teamharness", "workerflow"} & (
+            direct_servers.keys() | package_servers.keys()
+        )
+        if builtin_conflicts:
+            names = ", ".join(sorted(builtin_conflicts))
+            raise ValueError(f"desired MCP client names conflict with builtin clients: {names}")
+
+        # Preserve the established precedence: AgentPackage MCP definitions
+        # override Direct definitions with the same client key.
+        desired = {**direct_servers, **package_servers}
         if self.api_client is None:
-            if servers:
+            if desired:
                 raise RuntimeError("QwenPaw API client is required for MCP configuration")
             return
+
         existing = {str(item.get("key")): item for item in self.api_client.list_mcp()}
-        ownership_path = self.config.qwenpaw_working_dir / ".agentteams-managed-mcp.json"
-        try:
-            managed = set(json.loads(ownership_path.read_text(encoding="utf-8")))
-        except (FileNotFoundError, json.JSONDecodeError, TypeError):
-            managed = set()
-        for key in sorted((managed & existing.keys()) - servers.keys()):
+        direct_ownership_path = (
+            self.config.qwenpaw_working_dir / ".agentteams-managed-mcp.json"
+        )
+        package_ownership_path = (
+            self.config.qwenpaw_working_dir / ".agentteams-managed-package-mcp.json"
+        )
+        managed = self._read_managed_mcp_keys(direct_ownership_path)
+        managed.update(self._read_managed_mcp_keys(package_ownership_path))
+        for key in sorted((managed & existing.keys()) - desired.keys()):
             self.api_client.delete_mcp(key)
-        for key, server in servers.items():
-            transport = _string(server.get("transport") or "http")
-            payload = {
+
+        next_identities: Dict[str, str] = {}
+        for key in sorted(desired):
+            payload = desired[key]
+            identity = self._component_identity(payload)
+            if key not in existing:
+                self.api_client.create_mcp(key, payload)
+            elif force or self._applied_mcp_client_identities.get(key) != identity:
+                self.api_client.update_mcp(key, payload)
+            next_identities[key] = identity
+        self._applied_mcp_client_identities = next_identities
+        self._write_managed_mcp_keys(direct_ownership_path, direct_servers)
+        self._write_managed_mcp_keys(package_ownership_path, package_servers)
+
+    def _direct_mcp_clients(self, config: MemberRuntimeConfig) -> Dict[str, Dict[str, Any]]:
+        clients: Dict[str, Dict[str, Any]] = {}
+        for key, server in self._mcporter_servers(config).items():
+            clients[key] = {
                 "name": key,
                 "enabled": True,
-                "transport": "streamable_http"
-                if transport in {"http", "streamable_http"}
-                else transport,
+                "transport": _string(server.get("transport") or "streamable_http"),
                 "url": _string(server.get("url")),
                 "headers": dict(server.get("headers") or {}),
                 "command": _string(server.get("command")),
@@ -1584,47 +1895,21 @@ class RuntimeUpdater:
                 "env": dict(server.get("env") or {}),
                 "cwd": _string(server.get("cwd")),
             }
-            if key in existing:
-                self.api_client.update_mcp(key, payload)
-            else:
-                self.api_client.create_mcp(key, payload)
-        ownership_path.parent.mkdir(parents=True, exist_ok=True)
-        ownership_path.write_text(
-            json.dumps(sorted(servers), ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+        return clients
 
-    def _apply_package_mcp_servers(self, package_dir: Optional[Path]) -> None:
-        package_clients = getattr(self.package_manager, "package_mcp_clients", None)
-        servers = package_clients(package_dir) if callable(package_clients) else {}
-        if self.api_client is None:
-            if servers:
-                raise RuntimeError(
-                    "QwenPaw API client is required for agent package MCP configuration",
-                )
-            return
-        existing = {str(item.get("key")): item for item in self.api_client.list_mcp()}
-        ownership_path = (
-            self.config.qwenpaw_working_dir / ".agentteams-managed-package-mcp.json"
-        )
+    def _read_managed_mcp_keys(self, path: Path) -> set[str]:
         try:
-            managed = set(json.loads(ownership_path.read_text(encoding="utf-8")))
+            value = json.loads(path.read_text(encoding="utf-8"))
         except (FileNotFoundError, json.JSONDecodeError, TypeError):
-            managed = set()
-        for key in sorted((managed & existing.keys()) - servers.keys()):
-            self.api_client.delete_mcp(key)
-        for key, server in servers.items():
-            payload = dict(server)
-            payload.setdefault("name", key)
-            if key in existing:
-                self.api_client.update_mcp(key, payload)
-            else:
-                self.api_client.create_mcp(key, payload)
-        ownership_path.parent.mkdir(parents=True, exist_ok=True)
-        ownership_path.write_text(
-            json.dumps(sorted(servers), ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+            return set()
+        return {_string(item) for item in value if _string(item)} if isinstance(value, list) else set()
+
+    def _write_managed_mcp_keys(self, path: Path, servers: Dict[str, Any]) -> None:
+        content = json.dumps(sorted(servers), ensure_ascii=False) + "\n"
+        if path.is_file() and path.read_text(encoding="utf-8") == content:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
 
     def _apply_package_skills(self, package_dir: Optional[Path]) -> None:
         if package_dir is None or self.api_client is None:
@@ -1635,7 +1920,7 @@ class RuntimeUpdater:
             self.api_client.refresh_and_enable_skills(skill_names)
 
     def _apply_managed_skills(self, config: MemberRuntimeConfig) -> None:
-        skill_names = config.skills
+        skill_names = self._managed_skill_names(config)
         if not skill_names:
             return
         if self.skill_sync is None:
@@ -1652,11 +1937,25 @@ class RuntimeUpdater:
             raise RuntimeError(f"assigned skill files are missing: {', '.join(missing)}")
         self.api_client.refresh_and_enable_skills(skill_names)
 
+    def _managed_skill_names(self, config: MemberRuntimeConfig) -> List[str]:
+        return sorted(set(config.skills))
+
     def _apply_channel_policy(self, config: MemberRuntimeConfig) -> None:
         group_allow, dm_allow, group_deny, dm_deny = self._matrix_policy_ids(config)
         if not (group_allow or dm_allow or group_deny or dm_deny):
-            return
-
+            try:
+                matrix_payload = self._matrix_channel_payload(config)
+            except DeferredChannelRead as exc:
+                self._matrix_retry_pending = True
+                logger.warning(
+                    "matrix_channel_reconcile=deferred reason=%s component=update worker=%s "
+                    "step=channel_policy",
+                    exc,
+                    self.config.worker_name,
+                )
+                return
+            if matrix_payload is None:
+                return
         self_allow = _string(config.member.get("matrixUserId"))
         self_allowlist = [self_allow] if self_allow else []
         whitelist = self._dedupe(self_allowlist + group_allow + dm_allow)
@@ -1670,19 +1969,55 @@ class RuntimeUpdater:
         self._write_matrix_access_control(whitelist, blacklist)
 
     def _apply_matrix_channel(self, config: MemberRuntimeConfig) -> None:
-        desired = self._matrix_channel_desired_state(config)
-        if desired is None:
+        payload = self._matrix_channel_payload(config)
+        if payload is None:
             return
         if self.api_client is None:
             raise RuntimeError("QwenPaw API client is required for Matrix configuration")
+        self.api_client.put_channel(
+            "agentteams_matrix",
+            payload,
+            secret_fields={"access_token", "password"},
+        )
+
+    def _matrix_channel_payload(self, config: MemberRuntimeConfig) -> Optional[Dict[str, Any]]:
+        desired = self._matrix_channel_desired_state(config)
+        if desired is None:
+            return None
         groups: Dict[str, Any] = {}
         self._ensure_require_mention_group(groups, "*")
         room_id = desired["room_id"]
         if room_id:
             self._ensure_require_mention_group(groups, room_id)
-        self.api_client.put_channel(
-            "agentteams_matrix",
-            {
+        # Display flags: the declarative source of truth is the
+        # controller's desired channels.matrix section (filter_* inverted
+        # to show_*). When the CRD is silent, keep the runtime's current
+        # values; workbench channel-API writes are runtime-only and must
+        # not be reset on the next reconcile.
+        flags = config.matrix_channel
+        if flags is None:
+            # No declarative section: keep what the runtime already has
+            # (the workbench channel API writes are runtime-only; they must
+            # not be reset on the next reconcile). A failed read defers the
+            # whole Matrix reconcile (DeferredChannelRead) instead of
+            # falling back to show_*=True defaults.
+            if self.api_client is None:
+                raw_current: Any = {}
+            else:
+                try:
+                    raw_current = self.api_client.get_channel("agentteams_matrix")
+                except Exception as exc:
+                    raise DeferredChannelRead("matrix channel read failed") from exc
+            current: Dict[str, Any] = raw_current if isinstance(raw_current, dict) else {}
+            show_tool_calls = bool(current.get("show_tool_calls", True))
+            show_tool_results = bool(current.get("show_tool_results", True))
+            show_thinking = bool(current.get("show_thinking", True))
+        else:
+            filtered = _bool(flags.get("filter_tool_messages", False))
+            show_tool_calls = not filtered
+            show_tool_results = not filtered
+            show_thinking = not _bool(flags.get("filter_thinking", False))
+        return {
             "enabled": True,
             "homeserver": desired["homeserver"],
             "user_id": desired["user_id"],
@@ -1691,13 +2026,17 @@ class RuntimeUpdater:
             "encryption": _env_bool("AGENTTEAMS_MATRIX_E2EE"),
             "group_disabled": False,
             "dm_disabled": False,
-            "show_tool_calls": True,
-            "show_tool_results": True,
-            "show_thinking": True,
+            # #7001 group sender isolation: default False = per-sender
+            # sessions (AgentTeams decision 2026-09-05: "default isolated,
+            # otherwise the shared context will blow up"). Set
+            # AGENTTEAMS_MATRIX_SHARE_SESSION=true to restore room-wide
+            # session sharing (legacy behavior).
+            "share_session_in_group": _env_bool("AGENTTEAMS_MATRIX_SHARE_SESSION"),
+            "show_tool_calls": show_tool_calls,
+            "show_tool_results": show_tool_results,
+            "show_thinking": show_thinking,
             "groups": groups,
-            },
-            secret_fields={"access_token", "password"},
-        )
+        }
 
     def _apply_dingtalk_channel(self, config: MemberRuntimeConfig) -> None:
         desired = config.dingtalk_channel
@@ -1706,48 +2045,18 @@ class RuntimeUpdater:
         if self.api_client is None:
             raise RuntimeError("QwenPaw API client is required for DingTalk configuration")
         current = self.api_client.get_channel("dingtalk")
-        if not _bool(desired.get("enabled")):
+        desired_fields = self._dingtalk_channel_desired_fields(desired)
+        assert desired_fields is not None
+        if not desired_fields["enabled"]:
             self.api_client.put_channel(
                 "dingtalk",
-                {**current, "enabled": False},
+                {**current, **desired_fields},
                 secret_fields={"client_secret"},
             )
             return
 
-        streaming_enabled = _bool(desired.get("streaming_enabled"))
-        client_id = _string(desired.get("client_id"))
-        client_secret = _string(desired.get("client_secret"))
-        robot_code = _string(desired.get("robot_code"))
-        desired_fields = {
-            "enabled": True,
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "robot_code": robot_code,
-            "show_thinking": not _bool(desired.get("filter_thinking")),
-            "show_tool_calls": not _bool(desired.get("filter_tool_messages")),
-            "show_tool_results": not _bool(desired.get("filter_tool_messages")),
-            "streaming_enabled": streaming_enabled,
-        }
-        if streaming_enabled:
-            missing = [
-                name
-                for name, value in (
-                    ("client_id", client_id),
-                    ("client_secret", client_secret),
-                    ("robot_code", robot_code),
-                    ("card_template_id", _string(desired.get("card_template_id"))),
-                )
-                if not value
-            ]
-            if missing:
-                raise ValueError(
-                    "DingTalk streaming requires client_id, client_secret, "
-                    "robot_code, and card_template_id. Create and publish the "
-                    "streaming card template in DingTalk Open Platform, select "
-                    "card mode, then set card_template_id; missing "
-                    f"{', '.join(missing)}"
-                )
-            card_template_id = _string(desired.get("card_template_id"))
+        if desired_fields["streaming_enabled"]:
+            card_template_id = desired_fields["card_template_id"]
             previous_message_type = _string(current.get("message_type"))
             previous_template_id = _string(current.get("card_template_id"))
             if (
@@ -1762,7 +2071,56 @@ class RuntimeUpdater:
                     previous_template_id,
                     card_template_id,
                 )
-            desired_fields.update(
+        self.api_client.put_channel(
+            "dingtalk",
+            {**current, **desired_fields},
+            secret_fields={"client_secret"},
+        )
+
+    def _dingtalk_channel_desired_fields(
+        self,
+        desired: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        if desired is None:
+            return None
+        if not _bool(desired.get("enabled")):
+            return {"enabled": False}
+
+        streaming_enabled = _bool(desired.get("streaming_enabled"))
+        client_id = _string(desired.get("client_id"))
+        client_secret = _string(desired.get("client_secret"))
+        robot_code = _string(desired.get("robot_code"))
+        fields: Dict[str, Any] = {
+            "enabled": True,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "robot_code": robot_code,
+            "show_thinking": not _bool(desired.get("filter_thinking")),
+            "show_tool_calls": not _bool(desired.get("filter_tool_messages")),
+            "show_tool_results": not _bool(desired.get("filter_tool_messages")),
+            "streaming_enabled": streaming_enabled,
+        }
+        if streaming_enabled:
+            card_template_id = _string(desired.get("card_template_id"))
+            missing = [
+                name
+                for name, value in (
+                    ("client_id", client_id),
+                    ("client_secret", client_secret),
+                    ("robot_code", robot_code),
+                    ("card_template_id", card_template_id),
+                )
+                if not value
+            ]
+            if missing:
+                raise ValueError(
+                    "DingTalk streaming requires client_id, client_secret, "
+                    "robot_code, and card_template_id. Create and publish the "
+                    "streaming card template in DingTalk Open Platform, select "
+                    "card mode, then set card_template_id; missing "
+                    f"{', '.join(missing)}"
+                )
+            fields.update(
                 {
                     "message_type": "card",
                     "card_template_id": card_template_id,
@@ -1774,20 +2132,16 @@ class RuntimeUpdater:
             )
         else:
             if "message_type" in desired:
-                desired_fields["message_type"] = _string(desired.get("message_type") or "markdown")
+                fields["message_type"] = _string(desired.get("message_type") or "markdown")
             if "card_template_id" in desired:
-                desired_fields["card_template_id"] = _string(desired.get("card_template_id"))
+                fields["card_template_id"] = _string(desired.get("card_template_id"))
             if "card_template_key" in desired:
-                desired_fields["card_template_key"] = _string(
+                fields["card_template_key"] = _string(
                     desired.get("card_template_key") or "content"
                 )
             if "card_auto_layout" in desired:
-                desired_fields["card_auto_layout"] = _bool(desired.get("card_auto_layout"))
-        self.api_client.put_channel(
-            "dingtalk",
-            {**current, **desired_fields},
-            secret_fields={"client_secret"},
-        )
+                fields["card_auto_layout"] = _bool(desired.get("card_auto_layout"))
+        return fields
 
     def _matrix_channel_desired_state(self, config: MemberRuntimeConfig) -> Optional[Dict[str, str]]:
         homeserver = _string(
@@ -1911,9 +2265,28 @@ class RuntimeUpdater:
             return text
         return f"@{text}:{domain}" if domain else ""
 
+    @staticmethod
+    def _is_trusted_mcp_host(url: str, gateway_url: str) -> bool:
+        """Mirror of the controller-side agentconfig.IsTrustedMCPHost.
+
+        The MCP gateway consumer key is attached only to entries addressed
+        to the configured AI gateway (exact host:port match). An unset or
+        unparseable gateway URL or entry URL trusts nothing (fail closed)
+        (#1220 §7).
+        """
+        if not url or not gateway_url:
+            return False
+        try:
+            gateway_host = urlparse(gateway_url).netloc
+            entry_host = urlparse(url).netloc
+        except ValueError:
+            return False
+        return bool(gateway_host) and entry_host == gateway_host
+
     def _mcporter_servers(self, config: MemberRuntimeConfig) -> Dict[str, Any]:
         raw = config.mcp_servers
         gateway_key = self._gateway_key(config)
+        gateway_url = _string(os.getenv("AGENTTEAMS_AI_GATEWAY_URL"))
         if isinstance(raw, dict) and isinstance(raw.get("mcpServers"), dict):
             raw = raw["mcpServers"]
 
@@ -1922,7 +2295,7 @@ class RuntimeUpdater:
             for item in raw:
                 if isinstance(item, dict):
                     name = _string(item.get("name"))
-                    payload = self._mcporter_server_payload(item, gateway_key)
+                    payload = self._mcporter_server_payload(item, gateway_key, gateway_url)
                     if name and payload:
                         servers[name] = payload
             return servers
@@ -1930,22 +2303,33 @@ class RuntimeUpdater:
         if isinstance(raw, dict):
             for name, item in raw.items():
                 if isinstance(item, dict):
-                    payload = self._mcporter_server_payload(item, gateway_key)
+                    payload = self._mcporter_server_payload(item, gateway_key, gateway_url)
                     if _string(name) and payload:
                         servers[_string(name)] = payload
         return servers
 
-    def _mcporter_server_payload(self, item: Dict[str, Any], gateway_key: str) -> Dict[str, Any]:
+    def _mcporter_server_payload(
+        self, item: Dict[str, Any], gateway_key: str, gateway_url: str
+    ) -> Dict[str, Any]:
         url = _string(item.get("url"))
         if not url:
             return {}
         headers = item.get("headers")
         headers = dict(headers) if isinstance(headers, dict) else {}
-        if gateway_key and "Authorization" not in headers:
+        if (
+            gateway_key
+            and "Authorization" not in headers
+            and self._is_trusted_mcp_host(url, gateway_url)
+        ):
             headers["Authorization"] = f"Bearer {gateway_key}"
+        transport = _string(item.get("transport") or "http").lower()
         return {
             "url": url,
-            "transport": _string(item.get("transport") or "http"),
+            "transport": (
+                "streamable_http"
+                if transport in {"http", "streamable_http"}
+                else transport
+            ),
             "headers": headers,
         }
 
@@ -1957,6 +2341,11 @@ class RuntimeUpdater:
         if self.api_client is None:
             raise RuntimeError("QwenPaw API client is required for Matrix ACL configuration")
         current = self.api_client.get_channel("agentteams_matrix")
+        if (
+            current.get("access_control_group") is group_enabled
+            and current.get("access_control_dm") is dm_enabled
+        ):
+            return
         try:
             self.api_client.put_channel(
                 "agentteams_matrix",

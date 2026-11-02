@@ -18,10 +18,13 @@ const (
 	RoleManager    = "manager"
 	RoleTeamLeader = "team-leader"
 	RoleWorker     = "worker"
-	// RoleHuman is an L2 human (Human CR permissionLevel=2) authenticated by
-	// Matrix token. It is a read-only viewer scoped to accessibleTeams —
-	// deliberately NOT RoleTeamLeader, which would grant worker management
-	// (create/update/wake) and credential refresh.
+	// RoleHuman is a human (Human CR permissionLevel 2 or 3) authenticated
+	// by Matrix token. It is a read-only viewer scoped to accessibleTeams
+	// (L2) or, for worker-scoped humans, to accessibleWorkers (L3, read
+	// only) — deliberately NOT RoleTeamLeader, which would grant worker
+	// management (create/update/wake) and credential refresh. The L2/L3
+	// distinction is carried by AccessibleWorkers (non-empty for L3), not
+	// by a separate role value.
 	RoleHuman = "human"
 )
 
@@ -37,13 +40,25 @@ const (
 
 // CallerIdentity represents the authenticated caller.
 type CallerIdentity struct {
-	Role                    string   // admin | manager | team-leader | worker
-	Username                string   // canonical name (worker name, "manager", or "admin")
-	Team                    string   // team name (filled by Enricher, empty for standalone)
-	Teams                   []string // multi-team set for L2 humans (Human CR accessibleTeams); empty for SA-based callers
-	WorkerName              string   // equals Username when Role is worker or team-leader
-	ServiceAccountNamespace string   // namespace parsed from TokenReview username
-	ServiceAccountName      string   // service account parsed from TokenReview username
+	Role     string   // admin | manager | team-leader | worker
+	Username string   // canonical name (worker name, "manager", or "admin")
+	Team     string   // team name (filled by Enricher, empty for standalone)
+	Teams    []string // multi-team set for L2 humans (Human CR accessibleTeams); empty for SA-based callers
+	// Capabilities are the granted capability values for L2 humans (Human CR
+	// capabilities, #1220 §3). Never populated for SA-based callers
+	// (admin/manager/leader/worker) — team leaders never hold capabilities
+	// (#1220 §5).
+	Capabilities []string
+	// AccessibleWorkers is the explicit worker assignment for L3
+	// (worker-scoped) humans (Human CR accessibleWorkers, #1220 §2/Q2).
+	// Only L3 humans carry it — L2 humans and every SA-based identity keep
+	// it empty, so every existing team-scope check is unaffected. It grants
+	// reads only: mutation paths keep the strict team-scope predicate,
+	// which L3 humans (no teams) fail — Q2: L3 is read-only.
+	AccessibleWorkers       []string
+	WorkerName              string // equals Username when Role is worker or team-leader
+	ServiceAccountNamespace string // namespace parsed from TokenReview username
+	ServiceAccountName      string // service account parsed from TokenReview username
 }
 
 // TeamMatches reports whether the caller can access the given team. For L2
@@ -62,6 +77,33 @@ func (c *CallerIdentity) TeamMatches(team string) bool {
 		return false
 	}
 	return c.Team == team
+}
+
+// WorkerReadable reports whether the caller may READ the given worker:
+// either through the team scope (the caller controls the team the worker
+// belongs to) or through an explicit worker assignment (L3 humans — the
+// worker name appears in AccessibleWorkers, whether the worker is a team
+// member or standalone). Mutation paths must not use this: writes stay
+// team-scoped (TeamMatches), and L3 humans carry no teams, so they are
+// denied there — Q2: L3 is read-only. SA callers and L2 humans carry no
+// AccessibleWorkers, so for them this reduces to TeamMatches exactly.
+func (c *CallerIdentity) WorkerReadable(team, workerName string) bool {
+	for _, w := range c.AccessibleWorkers {
+		if w == workerName {
+			return true
+		}
+	}
+	return c.TeamMatches(team)
+}
+
+// IsWorkerScoped reports whether the caller is an L3 (worker-scoped)
+// human — a RoleHuman identity whose access leg is AccessibleWorkers.
+// L2 humans (teams + capabilities) and every SA-based identity always
+// carry an empty AccessibleWorkers, so this is false for them. Callers
+// use it to apply L3-only response handling (e.g. credential sanitization
+// on read-only surfaces); it never grants access by itself.
+func (c *CallerIdentity) IsWorkerScoped() bool {
+	return c.Role == RoleHuman && len(c.AccessibleWorkers) > 0
 }
 
 // Authenticator validates a bearer token against the local Kubernetes API and

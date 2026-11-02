@@ -935,6 +935,61 @@ def test_builtin_plugin_mcp_is_reconciled_through_api(
     assert expected_storage_env.items() <= created["teamharness"]["env"].items()
 
 
+def test_builtin_plugin_mcp_skips_update_when_payload_is_unchanged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = Worker(_config(tmp_path))
+    worker._prepare_env()
+
+    class Api:
+        def __init__(self) -> None:
+            self.mcp = {
+                "teamharness": {"key": "teamharness"},
+                "workerflow": {"key": "workerflow"},
+            }
+            self.updated: list[str] = []
+
+        def list_mcp(self):
+            return list(self.mcp.values())
+
+        def create_mcp(self, key, payload):
+            self.mcp[key] = {"key": key, **payload}
+
+        def update_mcp(self, key, payload):
+            self.updated.append(key)
+            self.mcp[key] = {"key": key, **payload}
+
+    api = Api()
+    worker.api_client = api
+
+    worker._configure_builtin_plugin_mcp_clients()
+    worker._configure_builtin_plugin_mcp_clients()
+
+    assert api.updated == ["teamharness", "workerflow"]
+
+    worker._configure_builtin_plugin_mcp_clients(force=True)
+
+    assert api.updated == [
+        "teamharness",
+        "workerflow",
+        "teamharness",
+        "workerflow",
+    ]
+
+    monkeypatch.setenv("AGENTTEAMS_WORKER_ROLE", "team_leader")
+    worker._configure_builtin_plugin_mcp_clients()
+
+    assert api.updated == [
+        "teamharness",
+        "workerflow",
+        "teamharness",
+        "workerflow",
+        "teamharness",
+        "workerflow",
+    ]
+
+
 @pytest.mark.anyio
 async def test_builtin_mcp_policy_is_persisted_before_desired_state_reload(
     tmp_path: Path,
@@ -960,6 +1015,9 @@ async def test_builtin_mcp_policy_is_persisted_before_desired_state_reload(
 
         def disable_agent_if_present(self, *_args, **_kwargs):
             return False
+
+        def get_agent_subagent_model(self, *_args, **_kwargs):
+            return None
 
     async def fake_create_subprocess_exec(*_args, **_kwargs):
         return FakeProcess()
@@ -1491,7 +1549,10 @@ def test_hot_update_apply_does_not_replace_qwenpaw_process(tmp_path: Path) -> No
     worker.updater.api_client = type(
         "FakeApi",
         (),
-        {"list_mcp": lambda _self: []},
+        {
+            "list_mcp": lambda _self: [],
+            "get_agent_subagent_model": lambda _self: None,
+        },
     )()
     worker.updater.adapter_apply = lambda: adapter_calls.append("adapter")
     worker.updater.current_config = MemberRuntimeConfig(
@@ -1635,3 +1696,21 @@ async def test_heartbeat_probe_loop_delegates_to_heartbeat_module(
     assert data["status"] == "ready"
     assert data["message"] == "qwenpaw ready"
     assert calls == [("worker-a-cr", config.console_port)]
+
+
+def test_api_readiness_waits_for_default_agent_startup(tmp_path, monkeypatch):
+    worker = Worker(_config(tmp_path))
+    states = iter(['pending', 'starting', 'running'])
+    observed = []
+
+    def request(method, path, *args):
+        if path == '/api/version':
+            return {'version': '2.2.1'}
+        assert (method, path) == ('GET', '/api/agents')
+        state = next(states)
+        observed.append(state)
+        return {'agents': [{'id': 'default', 'startup_status': state}]}
+
+    monkeypatch.setattr(worker.api_client, '_request', request)
+    asyncio.run(worker._wait_for_qwenpaw_api())
+    assert observed == ['pending', 'starting', 'running']

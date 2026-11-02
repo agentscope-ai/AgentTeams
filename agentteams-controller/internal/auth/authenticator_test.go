@@ -193,3 +193,51 @@ func TestAuthenticate_UsesLocalTokenReview(t *testing.T) {
 		t.Fatalf("unexpected identity metadata: %+v", id)
 	}
 }
+
+// TestWorkerReadable_L3Leg guards the L3 read leg: an explicitly assigned
+// worker is readable whether it is a team member or standalone, while
+// unassigned workers stay hidden — including workers of teams the L3 human
+// does not control (WorkerReadable must not widen team scope).
+func TestWorkerReadable_L3Leg(t *testing.T) {
+	l3 := &CallerIdentity{
+		Role:              RoleHuman,
+		Username:          "viewer",
+		AccessibleWorkers: []string{"alpha-dev", "solo"},
+	}
+	if !l3.WorkerReadable("alpha-team", "alpha-dev") {
+		t.Fatal("assigned team worker: WorkerReadable = false, want true")
+	}
+	if !l3.WorkerReadable("", "solo") {
+		t.Fatal("assigned standalone worker: WorkerReadable = false, want true")
+	}
+	if l3.WorkerReadable("alpha-team", "alpha-lead") {
+		t.Fatal("unassigned worker in an uncontrolled team: WorkerReadable = true, want false")
+	}
+	if l3.WorkerReadable("", "other-solo") {
+		t.Fatal("unassigned standalone worker: WorkerReadable = true, want false")
+	}
+}
+
+// TestWorkerReadable_NonL3Unchanged guards the no-op contract: SA callers
+// and L2 humans carry no AccessibleWorkers, so WorkerReadable must reduce
+// to TeamMatches exactly — no behavior drift for existing roles.
+func TestWorkerReadable_NonL3Unchanged(t *testing.T) {
+	l2 := &CallerIdentity{Role: RoleHuman, Username: "scoped-user", Teams: []string{"alpha-team"}}
+	if !l2.WorkerReadable("alpha-team", "alpha-dev") {
+		t.Fatal("L2 own-team worker: WorkerReadable = false, want true (TeamMatches)")
+	}
+	if l2.WorkerReadable("beta-team", "beta-dev") {
+		t.Fatal("L2 cross-team worker: WorkerReadable = true, want false")
+	}
+	if l2.WorkerReadable("", "solo") {
+		t.Fatal("L2 standalone worker: WorkerReadable = true, want false")
+	}
+
+	leader := &CallerIdentity{Role: RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team", WorkerName: "alpha-lead"}
+	if !leader.WorkerReadable("alpha-team", "alpha-dev") {
+		t.Fatal("leader own-team worker: WorkerReadable = false, want true (TeamMatches)")
+	}
+	if leader.WorkerReadable("beta-team", "beta-dev") {
+		t.Fatal("leader cross-team worker: WorkerReadable = true, want false")
+	}
+}

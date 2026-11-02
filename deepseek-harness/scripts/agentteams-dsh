@@ -1,0 +1,16 @@
+#!/bin/bash
+# Prepare the TeamHarness adapter before handing the turn to DSH.
+set -euo pipefail
+
+: "${DSH_HOME:?DSH_HOME is required}"
+: "${AGENTTEAMS_PLUGIN_DIR:?AGENTTEAMS_PLUGIN_DIR is required}"
+: "${TEAMHARNESS_RUNTIME_CONFIG:?TEAMHARNESS_RUNTIME_CONFIG is required}"
+: "${TEAMHARNESS_DSH_SKILL_ROOT:?TEAMHARNESS_DSH_SKILL_ROOT is required}"
+
+ADAPTER_PACKAGE="${DSH_HOME}/profiles/headless/node_modules/agentteams-teamharness-dsh"
+node "${ADAPTER_PACKAGE}/prepare-skills.js" \
+    --plugin-dir "${AGENTTEAMS_PLUGIN_DIR}" \
+    --runtime-config "${TEAMHARNESS_RUNTIME_CONFIG}" \
+    --output "${TEAMHARNESS_DSH_SKILL_ROOT}" >/dev/null
+
+exec dsh --profile headless "$@"

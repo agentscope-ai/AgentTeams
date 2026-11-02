@@ -1,0 +1,26 @@
+{
+  "id": "agentteams-matrix",
+  "name": "AgentTeams Matrix Bundle",
+  "version": "0.1.0",
+  "type": "bundle",
+  "description": "Portable runtime-adapter bundle for the AgentTeams Matrix channel plugin.",
+  "author": "AgentTeams",
+  "contract": "contract.yaml",
+  "adapters": [
+    {
+      "id": "qwenpaw",
+      "path": "adapters/qwenpaw",
+      "pluginId": "agentteams-matrix-channel"
+    },
+    {
+      "id": "openclaw",
+      "path": "adapters/openclaw",
+      "pluginId": "agentteams-matrix-channel"
+    },
+    {
+      "id": "hermes",
+      "path": "adapters/hermes",
+      "pluginId": "agentteams-matrix-channel"
+    }
+  ]
+}

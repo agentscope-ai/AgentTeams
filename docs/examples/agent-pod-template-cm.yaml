@@ -1,0 +1,52 @@
+# Ready-to-apply example of the agent Pod template overlay.
+#
+# The agentteams-controller reads this ConfigMap on every Pod Create() and
+# merges `data.pod-template.yaml` (a corev1.PodTemplateSpec) over its default
+# Pod shape. See docs/design/agent-pod-template.md for the full merge
+# semantics; only the "template wins" fields have any effect.
+#
+# For the controller to pick this up:
+#   * `metadata.name` MUST equal the controller's AGENTTEAMS_CONTROLLER_NAME
+#     env (a Helm release `prod` sets it to `prod-agentteams-controller`);
+#   * `metadata.namespace` MUST be the controller's namespace.
+#
+# The value under `data.pod-template.yaml` is a PodTemplateSpec with ONLY
+# `metadata:` and `spec:` — do NOT wrap it in `apiVersion:` / `kind:`.
+# Fields the controller always overwrites (serviceAccountName, the `worker`
+# container's image/env, ownerReferences) are deliberately omitted here.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prod-agentteams-controller
+  namespace: agentteams
+data:
+  pod-template.yaml: |
+    metadata:
+      labels:
+        agentteams.io/pod-tier: gpu
+      annotations:
+        # Example of an annotation a CNI / sidecar injector would consume.
+        k8s.v1.cni.cncf.io/networks: "agentteams-overlay"
+    spec:
+      nodeSelector:
+        node-role.kubernetes.io/gpu: "true"
+      tolerations:
+        - key: "node-role.kubernetes.io/gpu"
+          operator: "Equal"
+          value: "true"
+          effect: "NoSchedule"
+      imagePullSecrets:
+        - name: agentteams-regcred
+      securityContext:
+        runAsNonRoot: true
+        sysctls:
+          - name: net.core.somaxconn
+            value: "4096"
+      # Any container named other than `worker` is preserved as a sidecar.
+      containers:
+        - name: metrics-agent
+          image: registry.example.com/agentteams/metrics-agent:1.0.0
+          ports:
+            - containerPort: 9100
+              name: metrics

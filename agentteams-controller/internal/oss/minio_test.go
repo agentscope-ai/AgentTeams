@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/minio/minio-go/v7"
 )
 
 func TestBuildMCHostEnv_FullURL(t *testing.T) {
@@ -245,5 +247,76 @@ func TestSDKClient_CredentialResolutionFailurePropagates(t *testing.T) {
 	_, err := c.sdkClient()
 	if err == nil || !strings.Contains(err.Error(), "resolve dynamic oss credentials") {
 		t.Fatalf("err=%v, want dynamic-credential resolution error", err)
+	}
+}
+
+// TestOSSFallbackCompareToPutLosesConcurrentWrite documents (asserts) the
+// compare-to-put interleaving the OSS fallback ACCEPTS: a concurrent write
+// committed between the pre-write ETag re-check and the plain put is
+// silently overwritten. This asserts the EXISTING weak guarantee of the
+// degraded path — NOT the desired behavior — which is why
+// conflict-sensitive callers (pause-source updates) must use
+// PutObjectIfMatchStrict and reject backends that can only degrade.
+func TestOSSFallbackCompareToPutLosesConcurrentWrite(t *testing.T) {
+	// In-memory object; the stored ETag is a stand-in content hash, so any
+	// write changes it — exactly what a true CAS would observe.
+	objects := map[string]string{"k": "x"}
+	err := ossFallbackWrite(
+		t.Context(), "k", []byte("fallback"),
+		"etag(x)",
+		func(_ context.Context, key string) (ObjectMeta, error) {
+			return ObjectMeta{ETag: "etag(" + objects[key] + ")"}, nil
+		},
+		func(_ context.Context, key string, data []byte) error {
+			// Interleaving: a concurrent writer commits content "y"
+			// between the compare above and this plain put.
+			objects[key] = "y"
+			// The fallback's plain put then clobbers it.
+			objects[key] = string(data)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("err=%v, want nil (the fallback's plain put always lands)", err)
+	}
+	if got := objects["k"]; got != "fallback" {
+		t.Fatalf("objects[k]=%q, want %q: the concurrent write must be lost to the plain put", got, "fallback")
+	}
+}
+
+// TestPutObjectIfMatchStrict_ErrorMapping pins the strict method's error
+// contract: 412/PreconditionFailed -> ErrPreconditionFailed (retriable by
+// a CAS caller), NotImplemented/501 -> ErrConditionalUnsupported (never
+// retried, never degraded to a compare-then-put), anything else
+// propagates verbatim.
+func TestPutObjectIfMatchStrict_ErrorMapping(t *testing.T) {
+	cases := []struct {
+		name   string
+		sdkErr error
+		want   error
+	}{
+		{"precondition-failed", minio.ErrorResponse{Code: "PreconditionFailed", StatusCode: 412}, ErrPreconditionFailed},
+		{"code-412", minio.ErrorResponse{Code: "412", StatusCode: 412}, ErrPreconditionFailed},
+		{"not-implemented", minio.ErrorResponse{Code: "NotImplemented", StatusCode: 501}, ErrConditionalUnsupported},
+		{"code-501", minio.ErrorResponse{Code: "501", StatusCode: 501}, ErrConditionalUnsupported},
+		{"other-error-propagates", errors.New("sdk unavailable"), nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewMinIOClient(Config{Endpoint: "https://oss.example.com", AccessKey: "ak", SecretKey: "sk"})
+			c.sdkPutIfMatch = func(ctx context.Context, key string, data []byte, matchETag string) error {
+				return tc.sdkErr
+			}
+			err := c.PutObjectIfMatchStrict(t.Context(), "k", []byte("data"), "etag-1")
+			if tc.want != nil {
+				if !errors.Is(err, tc.want) {
+					t.Fatalf("err=%v, want %v", err, tc.want)
+				}
+				return
+			}
+			if !errors.Is(err, tc.sdkErr) {
+				t.Fatalf("err=%v, want the SDK error propagated verbatim", err)
+			}
+		})
 	}
 }

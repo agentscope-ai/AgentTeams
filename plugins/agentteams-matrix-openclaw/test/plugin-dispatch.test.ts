@@ -294,6 +294,55 @@ describe("agentteams-matrix inbound dispatch", () => {
     assert.equal(client.sent[0].reply_to, "$evt-1");
   });
 
+  it("carries inbound media refs into the turn context so image attachments reach the model", async () => {
+    // #1470: an image event used to reach the model as a bare file name —
+    // resolveTurn built a text-only context and dropped frame.media. The
+    // refs now map onto the SDK's inbound media facts (url/contentType/
+    // fileName/sizeBytes/messageId), which is the path the core hydrates
+    // the bytes through.
+    const client = new FakeSidecarClient();
+    const { runtime, turns } = makeRuntime();
+    const plugin = makePlugin(client, runtime);
+    await startAccount(plugin, CFG);
+
+    client.emit("inbound", makeFrame({
+      event_id: "$evt-image",
+      kind: "media",
+      text: "reviewer-media-probe.png",
+      media: [
+        {
+          mxc_uri: "mxc://matrix.example.org/AbCdEf123",
+          mime_type: "image/png",
+          file_name: "reviewer-media-probe.png",
+          size: 8446,
+        },
+      ],
+    }));
+    await waitTick();
+
+    assert.equal(turns.length, 1);
+    const imageCtx = turns[0].ctxPayload as Record<string, any>;
+    assert.deepEqual(imageCtx.media, [
+      {
+        url: "mxc://matrix.example.org/AbCdEf123",
+        contentType: "image/png",
+        fileName: "reviewer-media-probe.png",
+        sizeBytes: 8446,
+        messageId: "$evt-image",
+      },
+    ]);
+    // The text body still carries the caption/name; the attachment now
+    // travels alongside it instead of being dropped.
+    assert.equal(imageCtx.message.bodyForAgent, "reviewer-media-probe.png");
+
+    // A text-only frame must not fabricate a media fact.
+    client.emit("inbound", makeFrame({ event_id: "$evt-text" }));
+    await waitTick();
+    assert.equal(turns.length, 2);
+    const textCtx = turns[1].ctxPayload as Record<string, any>;
+    assert.deepEqual(textCtx.media, []);
+  });
+
   it("sends nothing when the turn delivers an empty text", async () => {
     const client = new FakeSidecarClient();
     const { runtime, calls } = makeRuntime({

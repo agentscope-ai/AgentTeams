@@ -189,6 +189,33 @@ function resolveAccount(
 }
 
 /** Map a sidecar `inbound` frame onto the plugin's normalized inbound message. */
+/**
+ * Map a sidecar frame's Matrix media refs onto the SDK's inbound media
+ * facts — the only channel through which the model actually receives the
+ * attachment (#1470). The frame carries mxc references (`mxc_uri`) plus the
+ * MIME type / file name / size; the SDK's `buildContext` takes
+ * `media: MediaFact[]` (`url`, `contentType`, `fileName`, `sizeBytes`,
+ * `messageId`), and `resolveTurn` previously dropped them, so an
+ * image-capable model saw only the file name in the text body. Passing the
+ * refs here keeps the transport-neutral identity (the mxc URI) and the
+ * metadata the core needs to hydrate the bytes.
+ */
+function inboundMediaFacts(frame: SidecarInboundFrame): Array<{
+  url: string;
+  contentType?: string;
+  fileName?: string;
+  sizeBytes?: number;
+  messageId: string;
+}> {
+  return (frame.media ?? []).map((ref) => ({
+    url: ref.mxc_uri,
+    contentType: ref.mime_type,
+    fileName: ref.file_name,
+    sizeBytes: ref.size,
+    messageId: frame.event_id,
+  }));
+}
+
 export function normalizeInboundFrame(
   frame: SidecarInboundFrame,
   accountId: string,
@@ -307,6 +334,7 @@ export function createOpenClawMatrixPlugin(
               commandBody: input.textForCommands,
               bodyForAgent: input.textForAgent,
             },
+            media: inboundMediaFacts(frame),
             extra: {
               ThreadRoot: frame.thread_root ?? undefined,
               Mentions: frame.mentions,

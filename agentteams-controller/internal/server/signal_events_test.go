@@ -83,28 +83,32 @@ var signalEventTypeClosed = map[string]bool{
 	"SIG-CONTRACT":  true,
 }
 
-// origin enum of signal_event.schema.json (10 values).
+// origin enum of signal_event.schema.json (12 values; attention_raised and
+// attention_overdue are the S1 additions — the Python emitter owns raised,
+// the controller's overdue sweep owns the deadline event).
 var signalOriginClosed = map[string]bool{
-	"submit":                    true,
-	"decision_lock":             true,
-	"decision_reopen":           true,
-	"critic_verdict":            true,
-	"stop_condition_predicate":  true,
-	"artifact_write":            true,
-	"handoff_write":             true,
-	"attention_resolved":        true,
-	"mismatch_recorded":         true,
-	"contract_snapshot":         true,
+	"submit":                   true,
+	"decision_lock":            true,
+	"decision_reopen":          true,
+	"critic_verdict":           true,
+	"stop_condition_predicate": true,
+	"artifact_write":           true,
+	"handoff_write":            true,
+	"attention_raised":         true,
+	"attention_resolved":       true,
+	"attention_overdue":        true,
+	"mismatch_recorded":        true,
+	"contract_snapshot":        true,
 }
 
 type signalContractRow struct {
-	SourceEvents []string  `json:"source_events"`
-	EventType    string    `json:"event_type"`
-	SourceLayer  string    `json:"source_layer"`
-	Emitters     []string  `json:"emitters"`
-	Level        string    `json:"level"`
-	Conditional  *bool     `json:"conditional"`
-	Type1394     *string   `json:"#1394_type"`
+	SourceEvents []string `json:"source_events"`
+	EventType    string   `json:"event_type"`
+	SourceLayer  string   `json:"source_layer"`
+	Emitters     []string `json:"emitters"`
+	Level        string   `json:"level"`
+	Conditional  *bool    `json:"conditional"`
+	Type1394     *string  `json:"#1394_type"`
 }
 
 type signalContract struct {

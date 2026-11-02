@@ -91,7 +91,7 @@
       "source_events": ["attention_overdue"],
       "event_type": "SIG-ATTENTION",
       "source_layer": "attention",
-      "emitters": ["#1394:S2"],
+      "emitters": ["go:AttentionOverdueSweep"],
       "level": "error",
       "conditional": true,
       "#1394_type": "attention.overdue"

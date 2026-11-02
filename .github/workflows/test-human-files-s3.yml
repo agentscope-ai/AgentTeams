@@ -59,8 +59,21 @@ jobs:
 
       - name: Create bucket
         run: |
-          mc alias set s3 http://127.0.0.1:9000 minioadmin minioadmin
-          mc mb s3/human-files-test
+          # The live probe answers before RustFS finishes startup_finalization,
+          # so the alias is retried instead of trusted on the first try
+          # (observed: "Service not ready: waiting for startup_finalization").
+          for i in $(seq 1 60); do
+            if mc alias set s3 http://127.0.0.1:9000 minioadmin minioadmin; then
+              break
+            fi
+            if [ "$i" -eq 60 ]; then
+              echo "RustFS did not become ready for mc within 60s" >&2
+              docker logs rustfs || true
+              exit 1
+            fi
+            sleep 1
+          done
+          mc mb --ignore-existing s3/human-files-test
 
       # Both the normal handler lifecycle and the provider fallback (conditional
       # PUT answered with 501) run against the same backend, because the

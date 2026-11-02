@@ -1194,17 +1194,29 @@ def _commit_task_guarded(
     *,
     action: str,
     exclude: list[str] | None = None,
+    result_paths: list[str] | None = None,
 ) -> tuple[dict[str, Any], Any, bool]:
-    """Load → mutate → commit a task with a version guard (#1467 round 17).
+    """Load → mutate → commit a task with a version guard (#1467 round 17,
+    round 19: the commit itself is conditional).
 
     The commit mirrors the WHOLE task directory, so writing on a base a
     peer has already replaced erases that peer's write — the reported case
     is a freeze committed between the authoritative pull and the mirror.
-    Every attempt reloads the authoritative task, re-applies the caller's
-    mutation on the fresh base, refuses to mirror when the base moved, and
-    verifies the commit landed. Exhausted attempts fail closed; a silent
+    Every attempt reloads the authoritative task (the stat -> pull -> stat
+    bracket binds the body to the version it was read under), re-applies
+    the caller's mutation on the fresh base, refuses to proceed when the
+    base moved before the write (the pre-write stat, kept as a fast
+    signal), pushes the derived files WITHOUT the meta, and commits the
+    meta conditionally against the version the bracket read observed
+    (``_commit_task_meta``, If-Match). The conditional commit is the
+    authoritative landing check — there is no post-write read-back: a 409
+    means a peer committed during the commit window (from the pre-write
+    stat to the endpoint), so the attempt re-reads and re-applies on the
+    peer's version; any other refusal fails closed instead of degrading
+    to an unconditional push. Exhausted attempts fail closed; a silent
     overwrite is never an outcome.
     """
+    team = str(_runtime_team_name() or "").strip()
     last_conflict = "the task changed concurrently"
     for _attempt in range(1, _TASK_COMMIT_ATTEMPTS + 1):
         task, base_etag = _load_authoritative_task_versioned(arguments, task_id)
@@ -1219,12 +1231,25 @@ def _commit_task_guarded(
             last_conflict = "a peer committed a newer task version during the commit window"
             continue
         _write_task(arguments, task)
-        synced = _sync_task(arguments, task_id, exclude=exclude or [])
-        if not synced:
+        if not _push_task_files(
+            arguments,
+            task_id,
+            exclude=exclude or [],
+            result_paths=result_paths,
+            include_meta=False,
+        ):
             raise ValueError(f"{action}: task sync failed (retry)")
-        if _task_meta_commit_landed(arguments, task_id, task):
-            return task, result, True
-        last_conflict = "a peer overwrote the task during the commit window"
+        commit = _commit_task_meta(task_id, task, base_etag, team)
+        if not commit.get("ok"):
+            if commit.get("conflict"):
+                last_conflict = "a peer committed a newer task version during the commit window"
+                continue
+            raise ValueError(
+                f"{action}: the conditional task meta commit failed: "
+                f"{commit.get('error') or 'unknown controller error'}; failing "
+                "closed (never degrading to an unconditional push)"
+            )
+        return task, result, True
     raise ValueError(f"{action}: {last_conflict}; reload and retry")
 
 

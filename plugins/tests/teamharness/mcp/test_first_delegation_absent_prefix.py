@@ -54,18 +54,34 @@ OUTAGE_ERROR = "mc: <ERROR> Unable to reach the storage backend: connection refu
 
 
 class McLikeStorage:
-    """The filesync surface with mc's semantics for absent objects."""
+    """The filesync surface with mc's semantics for absent objects.
+
+    #1498: the steady-state task sync reads the remote meta through a
+    versioned bracket (filesync ``etag`` -> ``cat`` -> ``etag``) before it
+    commits it conditionally, so the fake models the remote version the
+    way MinIO does — every put is a new object version with a new etag
+    (``v<version>``), and a put-less object has a stable one.
+    """
 
     def __init__(self, workspace: Path) -> None:
         self.workspace = workspace
         self.files: dict[str, bytes] = {}
         self.directories: set[str] = set()
+        self.versions: dict[str, int] = {}
         self.calls: list[tuple[str, str]] = []
         self.stat_error: str | None = None
         self.pull_error: str | None = None
 
     def _local(self, path: str) -> Path:
         return self.workspace / path
+
+    def etag_of(self, path: str) -> str:
+        return f"v{self.versions.get(path, 0)}"
+
+    def put(self, path: str, payload: bytes) -> str:
+        self.files[path] = payload
+        self.versions[path] = self.versions.get(path, 0) + 1
+        return self.etag_of(path)
 
     def __call__(self, arguments: dict[str, Any]) -> dict[str, Any]:
         action = str(arguments.get("action") or "")
@@ -91,19 +107,30 @@ class McLikeStorage:
             if path in self.files:
                 return {"ok": True, "exists": True}
             return {"ok": False, "error": ABSENT_ERROR.format(task=path)}
+        if action == "etag":
+            if self.stat_error is not None:
+                return {"ok": False, "error": self.stat_error}
+            if path not in self.files:
+                return {"ok": False, "error": ABSENT_ERROR.format(task=path)}
+            return {"ok": True, "etag": self.etag_of(path)}
+        if action == "cat":
+            if self.stat_error is not None:
+                return {"ok": False, "error": self.stat_error}
+            if path not in self.files:
+                return {"ok": False, "error": ABSENT_ERROR.format(task=path)}
+            return {"ok": True, "content": self.files[path].decode("utf-8")}
         if action == "push":
             local = self._local(path)
             if local.is_file():
-                self.files[path] = local.read_bytes()
+                self.put(path, local.read_bytes())
                 return {"ok": True}
             if local.is_dir():
                 exclude = set(arguments.get("exclude") or [])
                 for candidate in sorted(local.rglob("*")):
                     if not candidate.is_file() or candidate.name in exclude:
                         continue
-                    self.files[f"{path}/{candidate.relative_to(local).as_posix()}"] = (
-                        candidate.read_bytes()
-                    )
+                    key = f"{path}/{candidate.relative_to(local).as_posix()}"
+                    self.put(key, candidate.read_bytes())
                 self.directories.add(path)
                 return {"ok": True}
             return {"ok": True}
@@ -136,6 +163,22 @@ def _install(server: Any, monkeypatch: pytest.MonkeyPatch, storage: McLikeStorag
     monkeypatch.setattr(server, "_filesync", storage)
     monkeypatch.setattr(server, "_pull_project", lambda *_a, **_k: True)
     monkeypatch.setattr(server, "_validate_assignee_membership", lambda *_a, **_k: {"ok": True})
+    # #1498: the steady-state sync commits meta.json through the
+    # controller's conditional endpoint. The delegation tests have no
+    # controller, so the endpoint is modelled against the same in-memory
+    # remote the filesync fake serves: a commit is a put that bumps the
+    # remote version and returns the new etag (no peer writes in these
+    # scenarios, so no If-Match check is needed).
+    def fake_commit(
+        task_id: str, meta: dict[str, Any], etag: str, team: str = ""
+    ) -> dict[str, Any]:
+        new_etag = storage.put(
+            f"shared/tasks/{task_id}/meta.json",
+            json.dumps(meta, ensure_ascii=False).encode("utf-8"),
+        )
+        return {"ok": True, "etag": new_etag}
+
+    monkeypatch.setattr(server.sync, "_commit_task_meta", fake_commit)
     # The delegate path only notifies when the Matrix env is present; the
     # send itself is out of scope here (the assignment must still be created
     # and published when the notification is skipped, and the reviewer's

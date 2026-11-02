@@ -3145,3 +3145,174 @@ def test_review_commit_preserves_freeze_committed_between_stat_and_pull(
     expected["review"] = committed["review"]
     assert committed == expected
     assert state["version"] == 3
+
+
+# --- Round 19: the commit itself is conditional (the commit window) ----
+#
+# #1467 round 19: the guarded commit used to mirror the whole task
+# directory and then read the meta back to see whose write landed. The
+# commit is now conditional: the derived files push WITHOUT the meta and
+# the meta commits through the controller's If-Match endpoint against the
+# version the bracket read observed. The window the pre-write stat cannot
+# see is between that stat (the third version read of the attempt) and the
+# endpoint — a freeze landing there must surface as a 409 conflict, not
+# as a mirror that overwrites the peer. The peer commit below is
+# deterministic — triggered by call order (the third etag read), never by
+# timing.
+
+
+def _r19_commit_planes(
+    monkeypatch: pytest.MonkeyPatch,
+    base: dict[str, Any],
+    commits: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, int]]:
+    """Two-plane remote with a version, around _commit_task_guarded's own
+    primitives: filesync etag/cat read the remote plane; the fake
+    _pull_task mirrors remote -> local meta; the fake _push records what
+    the plain push carried (it must never carry meta.json); the stubbed
+    _commit_task_meta maintains the remote version — an etag that no
+    longer matches the remote version is a conflict (409), a matching
+    one lands the meta and bumps the version. The peer freeze commit
+    fires exactly once, by call order, right after the third etag read
+    returned its (stale) value — the pre-write stat of the first
+    attempt, i.e. the start of the commit window."""
+    state: dict[str, Any] = {
+        "remote": dict(base),
+        "version": 1,
+        "freeze": _r18_peer_freeze(base),
+        "injected": False,
+        "pushed": [],
+    }
+    calls: dict[str, int] = {"etag": 0, "pull": 0}
+
+    def commit_peer_freeze() -> None:
+        if state["injected"]:
+            return
+        state["injected"] = True
+        state["remote"] = state["freeze"]
+        state["version"] += 1
+
+    def fake_filesync(args: dict[str, Any]) -> dict[str, Any]:
+        action = args.get("action")
+        if action == "etag":
+            calls["etag"] += 1
+            etag = f"etag-{state['version']}"
+            if calls["etag"] == 3:
+                # the pre-write stat just reported the stale version: the
+                # peer worker commits the freeze AFTER it, inside the
+                # commit window (pre-write stat -> conditional commit)
+                commit_peer_freeze()
+            return {"ok": True, "etag": etag}
+        if action == "cat":
+            return {"ok": True, "content": json.dumps(state["remote"])}
+        if action == "push":
+            prefix = str(args.get("path") or "")
+            local = Path(str(args.get("workspaceDir") or "")) / prefix
+            exclude = set(args.get("exclude") or [])
+            if local.is_dir():
+                for candidate in sorted(local.rglob("*")):
+                    if not candidate.is_file() or candidate.name in exclude:
+                        continue
+                    state["pushed"].append(
+                        f"{prefix}/{candidate.relative_to(local).as_posix()}"
+                    )
+            return {"ok": True}
+        return {"ok": True}
+
+    def fake_pull(arguments: dict[str, Any], task_id: Any, **_kw: Any) -> bool:
+        calls["pull"] += 1
+        server._write_json(
+            server._task_state_path(arguments, str(task_id)), state["remote"]
+        )
+        return True
+
+    def fake_commit(
+        task_id: str, meta: dict[str, Any], etag: str, team: str = ""
+    ) -> dict[str, Any]:
+        commits.append(
+            {"task_id": task_id, "meta": dict(meta), "etag": etag, "team": team}
+        )
+        if etag != f"etag-{state['version']}":
+            return {
+                "ok": False,
+                "conflict": True,
+                "error": "409: the task meta changed after the read",
+            }
+        state["remote"] = dict(meta)
+        state["version"] += 1
+        return {"ok": True, "etag": f"etag-{state['version']}"}
+
+    monkeypatch.setattr(server, "_filesync", fake_filesync)
+    monkeypatch.setattr(server, "_pull_task", fake_pull)
+    monkeypatch.setattr(server.sync, "_commit_task_meta", fake_commit)
+    return state, calls
+
+
+def test_commit_task_guarded_preserves_freeze_committed_between_stat_and_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None
+) -> None:
+    """#1467 round 19 (the commit window): the pre-write stat — the third
+    version read of the guarded commit — reports the stale version, the
+    peer worker commits the freeze after it, and only then does the
+    conditional commit run. The stale base must be refused (409 ->
+    conflict), the whole bracket re-read, the mutation replayed on the
+    frozen base, and the commit landed at the frozen version — so the
+    committed meta keeps decision_status=frozen, all four approval
+    records (the first resolved by the trusted human, three still open)
+    and the full history, and the action is not a silent success that
+    erased the freeze."""
+    _enforce_on(monkeypatch)
+    _write_project(tmp_path, task_status="assigned")
+    _write_task_meta(tmp_path, {
+        "task_id": TASK_ID,
+        "project_id": PROJECT_ID,
+        "status": "assigned",
+        "assigned_to": WORKER_A,
+    })
+    submitted = _submit(tmp_path, role="worker", account="@alice:example.test")
+    assert submitted["ok"] is True
+    base = _task_meta(tmp_path)
+
+    commits: list[dict[str, Any]] = []
+    state, calls = _r19_commit_planes(monkeypatch, base, commits)
+
+    def apply_review(task: dict[str, Any]) -> str:
+        task["review"] = {"verdict": "pass", "note": "looks right"}
+        return "reviewed"
+
+    task, result, committed = server.sync._commit_task_guarded(
+        {"workspaceDir": str(tmp_path)}, TASK_ID, apply_review, action="review_task"
+    )
+
+    # The first commit carried the stale base etag and was refused; the
+    # conflict forced a FULL re-read (both brackets re-run: two pulls,
+    # six version reads), not a re-commit of the same body.
+    assert len(commits) == 2
+    assert commits[0]["etag"] == "etag-1"
+    assert calls["pull"] == 2
+    assert calls["etag"] == 6
+    assert state["injected"] is True
+    # The replayed commit bound the frozen base and landed at the frozen
+    # version (the peer's commit had already bumped it once).
+    assert commits[1]["etag"] == "etag-2"
+    assert committed is True
+    assert result == "reviewed"
+    # The committed remote meta is exactly the frozen base plus the
+    # replayed review: the stale open baseline did not resurrect, and
+    # nothing the peer wrote was dropped.
+    committed_meta = state["remote"]
+    assert committed_meta["decision_status"] == "frozen"
+    assert committed_meta["attention"] == state["freeze"]["attention"]
+    assert committed_meta["decision_status_history"] == state["freeze"][
+        "decision_status_history"
+    ]
+    assert committed_meta["review"] == task["review"]
+    expected = dict(state["freeze"])
+    expected["review"] = task["review"]
+    assert committed_meta == expected
+    # The stale first commit never landed, the plain push never carried
+    # meta.json (the conditional commit is the only meta writer), and
+    # the freeze + the guarded commit both bumped the remote version.
+    assert commits[0]["meta"].get("decision_status") != "frozen"
+    assert not any(key.endswith("meta.json") for key in state["pushed"])
+    assert state["version"] == 3

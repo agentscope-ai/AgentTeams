@@ -52,13 +52,42 @@ if str(MCP_DIR) not in sys.path:
 import server  # noqa: E402
 
 
+def _evict_mcp_modules() -> None:
+    """Evict every cached ``mcp`` module — from BOTH trees.
+
+    The mcp subpackages (artifact / common / lifecycle / project / room /
+    transport) are namespace packages WITHOUT ``__file__``, so a
+    ``__file__``-prefix filter would leave them behind: the surviving
+    package objects keep their stale submodule attributes, and the
+    re-exec'd bundle server's ``from mcp.artifact import sync`` binds the
+    STALE sync module while the later submodule imports re-register the
+    fresh one — monkeypatches on ``server.sync`` then miss the module
+    actually executing. Evicting by name (plus the import-cache
+    invalidation) makes every ``mcp.*`` import a fresh one resolved from
+    the tree at the front of sys.path.
+    """
+    importlib.invalidate_caches()
+    for name in [
+        name for name in sys.modules if name == "mcp" or name.startswith("mcp.")
+    ]:
+        del sys.modules[name]
+
+
 def _load_server() -> Any:
     """This file's own copy of the bundle tree's server (suite
     convention, see plugins/tests/teamharness/test_protocol_guard.py):
     refs name resolution is process-global and every harness that execs
     server.py rebinds it at exec time — so this file's monkeypatches
     must land on the copy the proxies resolve against, i.e. the copy
-    this file loads itself."""
+    this file loads itself.
+
+    The eviction must cover the legacy tree's mcp.* too (the teamharness
+    suite runs first in the gate and leaves them cached); nothing later
+    in the gate needs the legacy modules. The post-load identity assert
+    is the guard against a stale-bind regression: every test patch of
+    this file lands on ``server.<module>`` attributes, so the executing
+    code must come from the modules this copy bound at import time."""
+    _evict_mcp_modules()
     spec = importlib.util.spec_from_file_location(
         "teamharness_mcp_server_protocol_guard_parity_test",
         MCP_DIR / "server.py",
@@ -70,6 +99,12 @@ def _load_server() -> Any:
         spec.loader.exec_module(module)
     finally:
         sys.path.remove(str(MCP_DIR))
+    for name in ("sync", "filesync", "publish", "review", "taskflow"):
+        mod_file = str(getattr(getattr(module, name), "__file__", "") or "")
+        assert mod_file.startswith(MCP_DIR.as_posix() + "/"), (
+            f"the bundle server bound a stale {name!r} module: {mod_file!r} "
+            f"(expected under {MCP_DIR.as_posix()})"
+        )
     return module
 
 
@@ -1869,4 +1904,158 @@ def test_review_commit_preserves_freeze_committed_between_stat_and_pull(
     expected = dict(state["freeze"])
     expected["review"] = committed["review"]
     assert committed == expected
+    assert state["version"] == 3
+
+
+# --- Round 19: the commit itself is conditional (the commit window) —
+# bundle entry ----
+#
+# #1467 round 19: the guarded commit is conditional — the derived files
+# push WITHOUT the meta and the meta commits through the controller's
+# If-Match endpoint against the version the bracket read observed. A
+# freeze landing in the commit window (after the pre-write stat, the
+# third version read of the attempt) must surface as a 409 conflict and
+# be re-read, not overwritten by a whole-directory mirror. The peer
+# commit is deterministic — triggered by call order (the third etag
+# read), never by timing.
+
+
+def _r19_commit_planes(
+    monkeypatch: pytest.MonkeyPatch,
+    base: dict[str, Any],
+    commits: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, int]]:
+    """Two-plane remote with a version, around _commit_task_guarded's own
+    primitives (bundle copy): filesync etag/cat read the remote plane;
+    the fake _pull_task mirrors remote -> local meta; the fake _push
+    records what the plain push carried (it must never carry meta.json);
+    the stubbed _commit_task_meta maintains the remote version — an
+    etag that no longer matches the remote version is a conflict (409),
+    a matching one lands the meta and bumps the version. The peer freeze
+    commit fires exactly once, by call order, right after the third etag
+    read returned its (stale) value — the pre-write stat of the first
+    attempt, i.e. the start of the commit window."""
+    state: dict[str, Any] = {
+        "remote": dict(base),
+        "version": 1,
+        "freeze": _r18_peer_freeze(base),
+        "injected": False,
+        "pushed": [],
+    }
+    calls: dict[str, int] = {"etag": 0, "pull": 0}
+
+    def commit_peer_freeze() -> None:
+        if state["injected"]:
+            return
+        state["injected"] = True
+        state["remote"] = state["freeze"]
+        state["version"] += 1
+
+    def fake_filesync(args: dict[str, Any]) -> dict[str, Any]:
+        action = args.get("action")
+        if action == "etag":
+            calls["etag"] += 1
+            etag = f"etag-{state['version']}"
+            if calls["etag"] == 3:
+                # the pre-write stat just reported the stale version: the
+                # peer worker commits the freeze AFTER it, inside the
+                # commit window (pre-write stat -> conditional commit)
+                commit_peer_freeze()
+            return {"ok": True, "etag": etag}
+        if action == "cat":
+            return {"ok": True, "content": json.dumps(state["remote"])}
+        if action == "push":
+            prefix = str(args.get("path") or "")
+            local = Path(str(args.get("workspaceDir") or "")) / prefix
+            exclude = set(args.get("exclude") or [])
+            if local.is_dir():
+                for candidate in sorted(local.rglob("*")):
+                    if not candidate.is_file() or candidate.name in exclude:
+                        continue
+                    state["pushed"].append(
+                        f"{prefix}/{candidate.relative_to(local).as_posix()}"
+                    )
+            return {"ok": True}
+        return {"ok": True}
+
+    def fake_pull(arguments: dict[str, Any], task_id: Any, **_kw: Any) -> bool:
+        calls["pull"] += 1
+        server._write_json(
+            server._task_state_path(arguments, str(task_id)), state["remote"]
+        )
+        return True
+
+    def fake_commit(
+        task_id: str, meta: dict[str, Any], etag: str, team: str = ""
+    ) -> dict[str, Any]:
+        commits.append(
+            {"task_id": task_id, "meta": dict(meta), "etag": etag, "team": team}
+        )
+        if etag != f"etag-{state['version']}":
+            return {
+                "ok": False,
+                "conflict": True,
+                "error": "409: the task meta changed after the read",
+            }
+        state["remote"] = dict(meta)
+        state["version"] += 1
+        return {"ok": True, "etag": f"etag-{state['version']}"}
+
+    monkeypatch.setattr(server, "_filesync", fake_filesync)
+    monkeypatch.setattr(server, "_pull_task", fake_pull)
+    monkeypatch.setattr(server.sync, "_commit_task_meta", fake_commit)
+    return state, calls
+
+
+def test_commit_task_guarded_preserves_freeze_committed_between_stat_and_commit(
+    bound_server: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None
+) -> None:
+    """#1467 round 19 (bundle entry, the commit window): the copy's
+    guarded commit must refuse the stale base (409 -> conflict), re-read
+    the whole bracket, replay the mutation on the frozen base, and land
+    at the frozen version — the freeze, all four approval records and
+    the full history survive."""
+    _enforce_on(monkeypatch)
+    _write_project(tmp_path, task_status="assigned")
+    _write_task_meta(tmp_path, {
+        "task_id": TASK_ID,
+        "project_id": PROJECT_ID,
+        "status": "assigned",
+        "assigned_to": WORKER_A,
+    })
+    submitted = _submit(tmp_path, role="worker", account="alice")
+    assert submitted["ok"] is True
+    base = _task_meta(tmp_path)
+
+    commits: list[dict[str, Any]] = []
+    state, calls = _r19_commit_planes(monkeypatch, base, commits)
+
+    def apply_review(task: dict[str, Any]) -> str:
+        task["review"] = {"verdict": "pass", "note": "looks right"}
+        return "reviewed"
+
+    task, result, committed = server.sync._commit_task_guarded(
+        {"workspaceDir": str(tmp_path)}, TASK_ID, apply_review, action="review_task"
+    )
+
+    assert len(commits) == 2
+    assert commits[0]["etag"] == "etag-1"
+    assert calls["pull"] == 2
+    assert calls["etag"] == 6
+    assert state["injected"] is True
+    assert commits[1]["etag"] == "etag-2"
+    assert committed is True
+    assert result == "reviewed"
+    committed_meta = state["remote"]
+    assert committed_meta["decision_status"] == "frozen"
+    assert committed_meta["attention"] == state["freeze"]["attention"]
+    assert committed_meta["decision_status_history"] == state["freeze"][
+        "decision_status_history"
+    ]
+    assert committed_meta["review"] == task["review"]
+    expected = dict(state["freeze"])
+    expected["review"] = task["review"]
+    assert committed_meta == expected
+    assert commits[0]["meta"].get("decision_status") != "frozen"
+    assert not any(key.endswith("meta.json") for key in state["pushed"])
     assert state["version"] == 3

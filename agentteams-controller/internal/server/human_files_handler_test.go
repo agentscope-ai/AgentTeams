@@ -1580,7 +1580,7 @@ func TestHumanFiles_QuotaSamePathReplacementReservations(t *testing.T) {
 	}
 
 	req1 := hfReq(t, http.MethodPut, "alice", "first.txt", hfSelf(), nil)
-	a1, status, msg := h1.authorizeHumanFile(req1.Context(), "alice", false)
+	a1, status, msg := h1.authorizeHumanFile(req1.Context(), "alice", req1.PathValue("path"), true, false)
 	if a1 == nil {
 		t.Fatalf("authorize h1: %d %s", status, msg)
 	}
@@ -1590,7 +1590,7 @@ func TestHumanFiles_QuotaSamePathReplacementReservations(t *testing.T) {
 	}
 
 	req2 := hfReq(t, http.MethodPut, "alice", "first.txt", hfSelf(), nil)
-	a2, status, msg := h2.authorizeHumanFile(req2.Context(), "alice", false)
+	a2, status, msg := h2.authorizeHumanFile(req2.Context(), "alice", req2.PathValue("path"), true, false)
 	if a2 == nil {
 		t.Fatalf("authorize h2: %d %s", status, msg)
 	}
@@ -1639,7 +1639,7 @@ func TestHumanFiles_QuotaSamePathReplacementCommitOrder(t *testing.T) {
 		t.Fatalf("seed file: %d %s", rec.Code, rec.Body.String())
 	}
 	req := hfReq(t, http.MethodPut, "alice", "first.txt", hfSelf(), nil)
-	a, status, msg := h.authorizeHumanFile(req.Context(), "alice", false)
+	a, status, msg := h.authorizeHumanFile(req.Context(), "alice", req.PathValue("path"), true, false)
 	if a == nil {
 		t.Fatalf("authorize: %d %s", status, msg)
 	}
@@ -1679,7 +1679,7 @@ func TestHumanFiles_QuotaSetPreservesInFlightReservation(t *testing.T) {
 		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
 	}
 	req := hfReq(t, http.MethodPut, "alice", "a.txt", hfSelf(), nil)
-	access, status, msg := h1.authorizeHumanFile(req.Context(), "alice", false)
+	access, status, msg := h1.authorizeHumanFile(req.Context(), "alice", req.PathValue("path"), true, false)
 	if access == nil {
 		t.Fatalf("authorize: %d %s", status, msg)
 	}
@@ -1874,7 +1874,7 @@ func TestHumanFiles_QuotaLargerOlderOutstandingReplacementStaysAccounted(t *test
 
 	// Handler A reserves 1 -> 10 and stops before the object write.
 	req1 := hfReq(t, http.MethodPut, "alice", "first.txt", hfSelf(), nil)
-	a1, status, msg := h1.authorizeHumanFile(req1.Context(), "alice", false)
+	a1, status, msg := h1.authorizeHumanFile(req1.Context(), "alice", req1.PathValue("path"), true, false)
 	if a1 == nil {
 		t.Fatalf("authorize h1: %d %s", status, msg)
 	}
@@ -1885,7 +1885,7 @@ func TestHumanFiles_QuotaLargerOlderOutstandingReplacementStaysAccounted(t *test
 
 	// Handler B reserves 1 -> 1, lands, and commits.
 	req2 := hfReq(t, http.MethodPut, "alice", "first.txt", hfSelf(), nil)
-	a2, status, msg := h2.authorizeHumanFile(req2.Context(), "alice", false)
+	a2, status, msg := h2.authorizeHumanFile(req2.Context(), "alice", req2.PathValue("path"), true, false)
 	if a2 == nil {
 		t.Fatalf("authorize h2: %d %s", status, msg)
 	}
@@ -1991,7 +1991,7 @@ func TestHumanFiles_QuotaReverseInterleavedCommitStaysAccounted(t *testing.T) {
 	}
 
 	req1 := hfReq(t, http.MethodPut, "alice", "first.txt", hfSelf(), nil)
-	a1, status, msg := h1.authorizeHumanFile(req1.Context(), "alice", false)
+	a1, status, msg := h1.authorizeHumanFile(req1.Context(), "alice", req1.PathValue("path"), true, false)
 	if a1 == nil {
 		t.Fatalf("authorize h1: %d %s", status, msg)
 	}
@@ -2001,7 +2001,7 @@ func TestHumanFiles_QuotaReverseInterleavedCommitStaysAccounted(t *testing.T) {
 	}
 
 	req2 := hfReq(t, http.MethodPut, "alice", "first.txt", hfSelf(), nil)
-	a2, status, msg := h2.authorizeHumanFile(req2.Context(), "alice", false)
+	a2, status, msg := h2.authorizeHumanFile(req2.Context(), "alice", req2.PathValue("path"), true, false)
 	if a2 == nil {
 		t.Fatalf("authorize h2: %d %s", status, msg)
 	}
@@ -2057,7 +2057,7 @@ func TestHumanFiles_QuotaLostTokenFallback(t *testing.T) {
 		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
 	}
 	req := hfReq(t, http.MethodPut, "alice", "a.txt", hfSelf(), nil)
-	a, status, msg := h.authorizeHumanFile(req.Context(), "alice", false)
+	a, status, msg := h.authorizeHumanFile(req.Context(), "alice", req.PathValue("path"), true, false)
 	if a == nil {
 		t.Fatalf("authorize: %d %s", status, msg)
 	}
@@ -2201,7 +2201,7 @@ func TestHumanFiles_QuotaStatFaultDoesNotDropInFlightCharge(t *testing.T) {
 		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
 	}
 	req := hfReq(t, http.MethodPut, "alice", "first.txt", hfSelf(), nil)
-	access, status, msg := h1.authorizeHumanFile(req.Context(), "alice", false)
+	access, status, msg := h1.authorizeHumanFile(req.Context(), "alice", req.PathValue("path"), true, false)
 	if access == nil {
 		t.Fatalf("authorize: %d %s", status, msg)
 	}
@@ -2898,7 +2898,7 @@ func TestHumanFiles_TombstoneIsInvisible(t *testing.T) {
 	assertSoftDeleted(t, h, store, "alice", "gone.txt")
 
 	listReq := hfReq(t, http.MethodGet, "alice", "", hfSelf(), nil)
-	access, status, msg := h.authorizeHumanFile(listReq.Context(), "alice", false)
+	access, status, msg := h.authorizeHumanFile(listReq.Context(), "alice", listReq.PathValue("path"), false, false)
 	if access == nil {
 		t.Fatalf("authorize list: %d %s", status, msg)
 	}

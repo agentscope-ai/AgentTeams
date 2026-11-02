@@ -262,6 +262,11 @@ type UpdateHumanRequest struct {
 	// AccessibleTeams: absent = unchanged, explicit list = replaces,
 	// empty list = clears. Unknown values are rejected (400).
 	Capabilities *[]string `json:"capabilities,omitempty"`
+	// WorkspaceAccess follows the same merge-patch semantics as
+	// Capabilities: absent (or null) = unchanged, present object =
+	// replace, an empty object clears both lists. Invalid paths/modes
+	// or duplicate teams are rejected (400).
+	WorkspaceAccess *v1beta1.HumanWorkspaceAccess `json:"workspaceAccess,omitempty"`
 }
 
 type HumanResponse struct {

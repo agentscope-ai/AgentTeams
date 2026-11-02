@@ -137,21 +137,41 @@ type humanFileAccess struct {
 	isAdmin   bool
 	isManager bool
 	isSelf    bool
+	// effectiveMode is the caller's resolved mode on the authorized path
+	// (none/read/readwrite; readwrite for admin/manager/self). Write
+	// operations (put/delete/restore) require readwrite.
+	effectiveMode string
+	// team is the caller's team that produced the winning effectiveMode
+	// ("" for admin/manager/self), recorded in the audit Detail for write
+	// attribution.
+	team string
 }
 
 // authorizeHumanFile resolves access to the file area of the Human CR
-// named name. Access matrix (P1):
+// named name. Access matrix (P1 + P2 workspace access):
 //
 //   - RoleAdmin: full access (read, write, trash restore, purge, quota)
 //   - RoleManager: read, write, trash restore (any human's area)
 //   - the human themself (RoleHuman whose Username equals the area's
 //     EffectiveUsername): read and write their own area
-//   - everyone else (other humans, team leaders, workers): 404 — the
-//     same response as a non-existent Human, to avoid existence probing
+//   - team leaders / workers / other humans: per-team rules — a caller
+//     team in the human's default set (spec.accessibleTeams ∪ teams that
+//     list the human in spec.humanMembers) has readwrite on files/**;
+//     spec.workspaceAccess grants add access for other teams and
+//     restrictions narrow the default set (a restriction always wins,
+//     fail closed). A caller whose teams grant no access at all receives
+//     404 — the same response as a non-existent Human, to avoid
+//     existence probing.
 //
-// adminOnly additionally requires RoleAdmin (purge), denying with 403
-// when the caller has area access but lacks the role.
-func (h *humanFilesHandler) authorizeHumanFile(ctx context.Context, name string, adminOnly bool) (*humanFileAccess, int, string) {
+// path is the files-relative path being authorized ("" = the files root,
+// used by area-level endpoints). isWrite marks mutating operations; a
+// readwrite requirement is denied with 403 (area access, no write grant).
+// adminOnly additionally requires RoleAdmin (purge, quota set), denying
+// with 403 when the caller has area access but lacks the role.
+//
+// A Team CR's spec.admin field is deliberately NOT a source of access:
+// team administration never implies file-area rights.
+func (h *humanFilesHandler) authorizeHumanFile(ctx context.Context, name, path string, isWrite, adminOnly bool) (*humanFileAccess, int, string) {
 	var human v1beta1.Human
 	if err := h.client.Get(ctx, client.ObjectKey{Name: name, Namespace: h.namespace}, &human); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -168,13 +188,85 @@ func (h *humanFilesHandler) authorizeHumanFile(ctx context.Context, name string,
 	isAdmin := caller.Role == authpkg.RoleAdmin
 	isManager := caller.Role == authpkg.RoleManager
 	isSelf := caller.Role == authpkg.RoleHuman && caller.Username == human.Spec.EffectiveUsername(human.Name)
-	if !isAdmin && !isManager && !isSelf {
+	if isAdmin || isManager || isSelf {
+		if adminOnly && !isAdmin {
+			return nil, http.StatusForbidden, "admin role required"
+		}
+		return &humanFileAccess{
+			human:         &human,
+			caller:        caller,
+			isAdmin:       isAdmin,
+			isManager:     isManager,
+			isSelf:        isSelf,
+			effectiveMode: humanWorkspaceModeReadWrite,
+		}, 0, ""
+	}
+	// Team-scoped caller (leader, worker, or a human addressed through a
+	// team identity). With no caller teams there is nothing to match.
+	teams := callerTeamSet(caller)
+	if len(teams) == 0 {
 		return nil, http.StatusNotFound, "human not found"
 	}
-	if adminOnly && !isAdmin {
+	defaultTeams, err := h.defaultTeams(ctx, &human)
+	if err != nil {
+		return nil, http.StatusInternalServerError, "team lookup failed"
+	}
+	mode, team := humanWorkspaceEffectiveMode(&human.Spec, teams, defaultTeams, path)
+	if mode == humanWorkspaceModeNone {
+		return nil, http.StatusNotFound, "human not found"
+	}
+	if adminOnly {
 		return nil, http.StatusForbidden, "admin role required"
 	}
-	return &humanFileAccess{human: &human, caller: caller, isAdmin: isAdmin, isManager: isManager, isSelf: isSelf}, 0, ""
+	if isWrite && mode != humanWorkspaceModeReadWrite {
+		return nil, http.StatusForbidden, "write access required"
+	}
+	return &humanFileAccess{human: &human, caller: caller, effectiveMode: mode, team: team}, 0, ""
+}
+
+// callerTeamSet returns the teams the caller identity carries. Team
+// leaders and workers are bound to their single Team; a human addressed
+// through a team identity carries the Teams set from its Human CR.
+// Roles with no team scoping return nil.
+func callerTeamSet(caller *authpkg.CallerIdentity) []string {
+	switch caller.Role {
+	case authpkg.RoleTeamLeader, authpkg.RoleWorker:
+		if caller.Team != "" {
+			return []string{caller.Team}
+		}
+	case authpkg.RoleHuman:
+		if len(caller.Teams) > 0 {
+			return caller.Teams
+		}
+	}
+	return nil
+}
+
+// defaultTeams computes the human's default team set:
+// spec.accessibleTeams ∪ { team names that list the human in
+// spec.humanMembers }. Teams in this set give the team's leaders and
+// workers readwrite on files/** unless narrowed by a restriction.
+func (h *humanFilesHandler) defaultTeams(ctx context.Context, human *v1beta1.Human) (map[string]struct{}, error) {
+	sets := make(map[string]struct{})
+	for _, t := range human.Spec.AccessibleTeams {
+		if t != "" {
+			sets[t] = struct{}{}
+		}
+	}
+	var teams v1beta1.TeamList
+	if err := h.client.List(ctx, &teams, client.InNamespace(h.namespace)); err != nil {
+		return nil, err
+	}
+	for i := range teams.Items {
+		t := &teams.Items[i]
+		for _, m := range t.Spec.HumanMembers {
+			if m.Name == human.Name {
+				sets[t.Name] = struct{}{}
+				break
+			}
+		}
+	}
+	return sets, nil
 }
 
 // --- Wire-level shapes ----------------------------------------------------
@@ -217,23 +309,26 @@ func writeHumanFileCodedError(w http.ResponseWriter, status int, code, message s
 
 // --- Helpers ----------------------------------------------------------------
 
-// humanFileDetail renders the audit Detail field: a controlled JSON
-// summary of non-secret request attributes.
-func humanFileDetail(kv ...any) string {
-	m := make(map[string]any, len(kv)/2)
+// recordAudit appends an audit event for an authorized operation. The
+// Detail always carries the write attribution (#1414 P2): onBehalfOf names
+// the human whose area was touched, and team names the caller's team when
+// the access came from a team identity (leader/worker/human team identity);
+// kv adds the operation-specific attributes as key/value pairs.
+func (h *humanFilesHandler) recordAudit(ctx context.Context, a *humanFileAccess, action string, kv ...any) {
+	if h.auditClient == nil {
+		return
+	}
+	m := make(map[string]any, len(kv)/2+2)
 	for i := 0; i+1 < len(kv); i += 2 {
 		m[fmt.Sprint(kv[i])] = kv[i+1]
 	}
-	b, err := json.Marshal(m)
-	if err != nil {
-		return ""
+	m["onBehalfOf"] = a.human.Spec.EffectiveUsername(a.human.Name)
+	if a.team != "" {
+		m["team"] = a.team
 	}
-	return string(b)
-}
-
-func (h *humanFilesHandler) recordAudit(ctx context.Context, a *humanFileAccess, action string, detail string) {
-	if h.auditClient == nil {
-		return
+	var detail string
+	if b, err := json.Marshal(m); err == nil {
+		detail = string(b)
 	}
 	h.auditClient.Record(ctx, audit.Event{
 		Who:    a.caller.Username,
@@ -349,7 +444,7 @@ func (h *humanFilesHandler) getFile(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	rawPath := r.PathValue("path")
 
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, rawPath, false, false)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -481,7 +576,7 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, "cannot write a directory; name the file explicitly")
 		return
 	}
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, rawPath, true, false)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -554,7 +649,7 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 			// unguarded (fail closed, #1426 P1).
 			writeHumanFileCodedError(w, status, "conditional_write_unsupported", msg)
 			h.recordAudit(ctx, a, "human_file_write_blocked",
-				humanFileDetail("path", "files/"+rel, "size", len(data), "reason", "conditional_write_unsupported"))
+				"path", "files/"+rel, "size", len(data), "reason", "conditional_write_unsupported")
 		default:
 			httputil.WriteError(w, status, msg)
 		}
@@ -648,7 +743,7 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 	}
 	etag := snapMeta.ETag
 	h.recordAudit(ctx, a, "human_file_write",
-		humanFileDetail("path", "files/"+rel, "size", len(data), "etag", etag))
+		"path", "files/"+rel, "size", len(data), "etag", etag)
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"path": "files/" + rel,
 		"size": len(data),
@@ -668,7 +763,7 @@ func (h *humanFilesHandler) deleteFile(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, "directory deletion is not supported; delete files individually")
 		return
 	}
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, rawPath, true, false)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -802,7 +897,7 @@ func (h *humanFilesHandler) deleteFile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	h.recordAudit(ctx, a, "human_file_delete",
-		humanFileDetail("path", "files/"+rel, "size", len(data), "trashId", trashID))
+		"path", "files/"+rel, "size", len(data), "trashId", trashID)
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"trashId": trashID})
 }
 
@@ -812,7 +907,7 @@ func (h *humanFilesHandler) deleteFile(w http.ResponseWriter, r *http.Request) {
 // first (the trash id is time-prefixed).
 func (h *humanFilesHandler) listTrash(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, "", false, false)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -866,7 +961,7 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 		httputil.WriteError(w, http.StatusBadRequest, "invalid trash id")
 		return
 	}
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, "", false, false)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -929,6 +1024,23 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "trash metadata path is invalid: "+err.Error())
 		return
+	}
+	// A restore rewrites the original path, so the caller must hold
+	// readwrite on that specific path. The area-level check above ran on
+	// the root; the path-specific mode is what a grant/restriction
+	// actually decided for this rel (a read grant may allow listing the
+	// trash but never putting bytes back).
+	if !a.isAdmin && !a.isManager && !a.isSelf {
+		defaultTeams, terr := h.defaultTeams(ctx, a.human)
+		if terr != nil {
+			httputil.WriteError(w, http.StatusInternalServerError, "team lookup failed")
+			return
+		}
+		mode, _ := humanWorkspaceEffectiveMode(&a.human.Spec, callerTeamSet(a.caller), defaultTeams, rel)
+		if mode != humanWorkspaceModeReadWrite {
+			httputil.WriteError(w, http.StatusForbidden, "write access required")
+			return
+		}
 	}
 
 	override := r.URL.Query().Get("overwrite") == "1"
@@ -1089,7 +1201,7 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	h.recordAudit(ctx, a, "human_trash_restore",
-		humanFileDetail("path", "files/"+rel, "size", len(content), "trashId", id, "overwrite", override))
+		"path", "files/"+rel, "size", len(content), "trashId", id, "overwrite", override)
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"path": "files/" + rel,
 		"size": len(content),
@@ -1106,7 +1218,7 @@ func (h *humanFilesHandler) purgeTrash(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid trash id")
 		return
 	}
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, true)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, "", false, true)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -1195,7 +1307,7 @@ func (h *humanFilesHandler) purgeTrash(w http.ResponseWriter, r *http.Request) {
 			"human", username, "trashId", id, "size", m.Size)
 	}
 	h.recordAudit(ctx, a, "human_trash_purge",
-		humanFileDetail("path", m.Path, "size", m.Size, "trashId", id))
+		"path", m.Path, "size", m.Size, "trashId", id)
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"purged": id})
 }
 
@@ -1285,7 +1397,7 @@ func (h *humanFilesHandler) usedBytes(ctx context.Context, username string) (int
 // and its configured quota (null = unlimited).
 func (h *humanFilesHandler) getQuota(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, "", false, false)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -1307,7 +1419,7 @@ func (h *humanFilesHandler) getQuota(w http.ResponseWriter, r *http.Request) {
 // (unlimited).
 func (h *humanFilesHandler) putQuota(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, true)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, "", false, true)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -1353,7 +1465,7 @@ func (h *humanFilesHandler) putQuota(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		h.recordAudit(ctx, a, "human_quota_set", humanFileDetail("quotaBytes", body.QuotaBytes))
+		h.recordAudit(ctx, a, "human_quota_set", "quotaBytes", body.QuotaBytes)
 		httputil.WriteJSON(w, http.StatusOK, map[string]any{"quotaBytes": body.QuotaBytes})
 		return
 	}

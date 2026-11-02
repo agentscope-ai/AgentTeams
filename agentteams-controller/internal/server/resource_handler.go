@@ -833,6 +833,12 @@ func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if req.WorkspaceAccess != nil {
+			if err := validateHumanWorkspaceAccess(req.WorkspaceAccess); err != nil {
+				httputil.WriteError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
 
 		if req.DisplayName != nil {
 			human.Spec.DisplayName = *req.DisplayName
@@ -853,6 +859,13 @@ func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
 			// Store the canonical form (deduped + sorted); validation above
 			// already rejected values outside the closed set.
 			human.Spec.Capabilities = authpkg.NormalizeCapabilities(*req.Capabilities)
+		}
+		if req.WorkspaceAccess != nil {
+			// Merge-patch semantics like Capabilities: a present object
+			// replaces the whole object (an empty object clears both
+			// lists); absent or null leaves the spec unchanged.
+			// Validation above already rejected invalid rules.
+			human.Spec.WorkspaceAccess = req.WorkspaceAccess
 		}
 		if req.Note != nil {
 			human.Spec.Note = *req.Note

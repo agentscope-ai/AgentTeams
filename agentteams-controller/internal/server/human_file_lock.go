@@ -188,6 +188,13 @@ func (h *humanFilesHandler) tryAcquireHumanPathLock(ctx context.Context, key, re
 	if !current.expired(time.Now().UTC()) {
 		return nil, errHumanPathContended // live foreign lease; wait
 	}
+	// Scope note: the strict (fail-closed) primitive is reserved for the
+	// quota ledger and project metadata - the two writes whose loss admits
+	// an over-quota upload. The lease keeps its existing CAS: making it
+	// strict changes the steal path under a 501 provider and broke
+	// TestReviewerLeaseReleaseMustNotDeleteSuccessor, which guards against a
+	// releasing owner clobbering its successor. Lease strictness is a
+	// separate design question, not part of this fix.
 	if err := h.oss.PutObjectIfMatch(ctx, key, body, etag); err != nil {
 		if errors.Is(err, oss.ErrPreconditionFailed) {
 			return nil, errHumanPathContended // lost the steal race; retry
@@ -280,5 +287,6 @@ func (l *humanPathLock) Release(ctx context.Context) {
 	if err != nil {
 		return
 	}
+	// Same scope note as tryAcquire: the lease stays on the existing CAS.
 	_ = l.h.oss.PutObjectIfMatch(ctx, l.key, tomb, l.etag)
 }

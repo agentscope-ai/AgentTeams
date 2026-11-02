@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -56,6 +57,18 @@ import (
 const humanQuotaLedgerPath = ".control/quota.json"
 
 const humanQuotaLedgerRetries = 8
+
+// errQuotaLedgerCASLost marks a lost conditional-write race inside the
+// ledger loops (a concurrent writer won the same version): the caller
+// re-snapshots. It is distinct from real errors, which must propagate —
+// in particular oss.ErrConditionalUnsupported, which fails the whole
+// operation closed (503) instead of retrying.
+var errQuotaLedgerCASLost = errors.New("quota ledger conditional write lost to a concurrent writer")
+
+// conditionalWriteUnsupportedMsg is the operator-facing message for the 503
+// fail-closed answer: the provider rejected If-Match (501/NotImplemented),
+// so the atomic metadata write cannot be made at all.
+const conditionalWriteUnsupportedMsg = "storage provider does not support conditional writes; the metadata write was not applied (fail closed)"
 
 type humanQuotaLedger struct {
 	UsedBytes int64 `json:"usedBytes"`
@@ -125,9 +138,15 @@ func (h *humanFilesHandler) readQuotaLedger(ctx context.Context, username string
 			continue
 		}
 		if len(ledger.Reservations) > 0 && len(ledger.Paths) == 0 {
-			migrated, etag, ok := h.migrateQuotaLedger(ctx, username, ledger, meta.ETag)
-			if !ok {
+			migrated, etag, merr := h.migrateQuotaLedger(ctx, username, ledger, meta.ETag)
+			switch {
+			case errors.Is(merr, errQuotaLedgerCASLost):
 				continue // lost the migration CAS race; re-snapshot
+			case merr != nil:
+				// A real fault (including conditional-write unsupported on a
+				// 501 provider): fail closed instead of building on an
+				// unverified ledger.
+				return humanQuotaLedger{}, "", merr
 			}
 			return migrated, etag, nil
 		}
@@ -166,19 +185,23 @@ func (h *humanFilesHandler) liveFileSize(ctx context.Context, username, rel stri
 // the per-path outstanding-queue format, preserving every in-flight
 // reservation: each becomes its path's sole outstanding entry, charged at
 // max(live, reserved target) so an in-flight write keeps reserving after the
-// migration (I4). UsedBytes is recomputed from I1. The write is a CAS on the
-// snapshot's ETag; a lost race means the caller re-snapshots.
-func (h *humanFilesHandler) migrateQuotaLedger(ctx context.Context, username string, legacy humanQuotaLedger, etag string) (humanQuotaLedger, string, bool) {
+// migration (I4). UsedBytes is recomputed from I1. The write is a STRICT CAS
+// on the snapshot's ETag: a lost race (errQuotaLedgerCASLost) means the
+// caller re-snapshots, while any other error — in particular
+// oss.ErrConditionalUnsupported — propagates and fails the operation
+// closed, because building on a legacy ledger whose upgrade could not be
+// committed atomically would risk double-charging reservations.
+func (h *humanFilesHandler) migrateQuotaLedger(ctx context.Context, username string, legacy humanQuotaLedger, etag string) (humanQuotaLedger, string, error) {
 	liveTotal, err := h.usedBytes(ctx, username)
 	if err != nil {
-		return humanQuotaLedger{}, "", false
+		return humanQuotaLedger{}, "", err
 	}
 	paths := make(map[string]quotaLedgerPathEntry, len(legacy.Reservations))
 	extra := int64(0)
 	for rel, r := range legacy.Reservations {
 		live, err := h.liveFileSize(ctx, username, rel)
 		if err != nil {
-			return humanQuotaLedger{}, "", false // fail closed: I1 is unverifiable
+			return humanQuotaLedger{}, "", fmt.Errorf("quota ledger migration: stat %s: %w", rel, err)
 		}
 		counted := r.NewSize
 		if live > counted {
@@ -201,16 +224,19 @@ func (h *humanFilesHandler) migrateQuotaLedger(ctx context.Context, username str
 	migrated := humanQuotaLedger{UsedBytes: used, Paths: paths}
 	payload, err := json.Marshal(migrated)
 	if err != nil {
-		return humanQuotaLedger{}, "", false
+		return humanQuotaLedger{}, "", err
 	}
-	if err := h.oss.PutObjectIfMatch(ctx, humanQuotaLedgerKey(username), payload, etag); err != nil {
-		return humanQuotaLedger{}, "", false // concurrent writer; caller re-snapshots
+	if err := strictPut(ctx, h.oss, humanQuotaLedgerKey(username), payload, etag); err != nil {
+		if errors.Is(err, oss.ErrPreconditionFailed) {
+			return humanQuotaLedger{}, "", errQuotaLedgerCASLost // concurrent writer; caller re-snapshots
+		}
+		return humanQuotaLedger{}, "", err
 	}
 	fresh, etag, err := h.readQuotaLedger(ctx, username)
 	if err != nil {
-		return humanQuotaLedger{}, "", false
+		return humanQuotaLedger{}, "", err
 	}
-	return fresh, etag, true
+	return fresh, etag, nil
 }
 
 // ensureQuotaLedger lazily seeds the ledger from the actual object store. The
@@ -253,25 +279,70 @@ func (h *humanFilesHandler) ensureQuotaLedger(ctx context.Context, username stri
 // but an existing ledger is still advanced: a later re-enable must not trust
 // a ledger that predates writes made while the quota was off. No ledger is
 // created while quota is disabled.
+//
+// Every metadata write here is strict (PutObjectIfMatchStrict): the ledger
+// IS the atomic quota transaction, and a provider without If-Match fails the
+// reservation closed (503) rather than degrading to the racy Stat-then-Put
+// that let two writers both commit (#1426 P1). When the ledger does not
+// exist yet, the reservation is folded into the If-None-Match create: a
+// seed-then-reserve two-step would leave the first write's charge on a
+// version no later CAS can reach on a 501 provider, and two concurrent
+// seeders would each pass the quota check against the missing ledger.
 func (h *humanFilesHandler) reserveQuota(ctx context.Context, a *humanFileAccess, username, path string, oldSize, newSize int64) (string, int, string) {
 	quota := a.human.Spec.WorkspaceQuotaBytes
 	key := humanQuotaLedgerKey(username)
 	for attempt := 0; attempt < humanQuotaLedgerRetries; attempt++ {
-		var (
-			ledger humanQuotaLedger
-			etag   string
-			err    error
-		)
-		if quota == nil {
-			ledger, etag, err = h.readQuotaLedger(ctx, username)
-			if errors.Is(err, os.ErrNotExist) {
+		ledger, etag, err := h.readQuotaLedger(ctx, username)
+		switch {
+		case errors.Is(err, oss.ErrConditionalUnsupported):
+			return "", http.StatusServiceUnavailable, conditionalWriteUnsupportedMsg
+		case errors.Is(err, os.ErrNotExist):
+			if quota == nil {
+				// No ledger and no quota: nothing to reserve; a later
+				// re-enable reconciles from live usage.
 				return "", 0, ""
 			}
-		} else {
-			ledger, etag, err = h.ensureQuotaLedger(ctx, username)
-		}
-		if err != nil {
-			return "", 500, "quota reservation failed"
+			// Seed the ledger together with this reservation in one atomic
+			// create (see the function doc).
+			used, werr := h.usedBytes(ctx, username)
+			if werr != nil {
+				return "", http.StatusInternalServerError, "quota reservation failed"
+			}
+			countedNew := oldSize
+			if newSize > countedNew {
+				countedNew = newSize
+			}
+			next := used - oldSize + countedNew
+			if next < 0 {
+				next = 0
+			}
+			if next > *quota {
+				return "", http.StatusRequestEntityTooLarge, fmt.Sprintf(
+					"workspace quota of %d bytes exceeded (used %d, old %d, new %d)",
+					*quota, used, oldSize, newSize)
+			}
+			token := newQuotaReservationToken()
+			created, merr := json.Marshal(humanQuotaLedger{
+				UsedBytes: next,
+				Paths: map[string]quotaLedgerPathEntry{path: {
+					Counted:     countedNew,
+					Outstanding: []quotaReservation{{Token: token, BaseOldSize: oldSize, NewSize: newSize}},
+				}},
+			})
+			if merr != nil {
+				return "", http.StatusInternalServerError, "quota reservation failed"
+			}
+			if cerr := h.oss.PutObjectIfAbsent(ctx, key, created); cerr == nil {
+				return token, 0, ""
+			} else if errors.Is(cerr, oss.ErrPreconditionFailed) {
+				continue // lost the create race; the winner's ledger now exists
+			} else if errors.Is(cerr, oss.ErrConditionalUnsupported) {
+				return "", http.StatusServiceUnavailable, conditionalWriteUnsupportedMsg
+			} else {
+				return "", http.StatusInternalServerError, "quota reservation failed"
+			}
+		case err != nil:
+			return "", http.StatusInternalServerError, "quota reservation failed"
 		}
 		entry := ledger.Paths[path]
 		// With an existing entry the path is already charged at its Counted
@@ -315,15 +386,20 @@ func (h *humanFilesHandler) reserveQuota(ctx context.Context, a *humanFileAccess
 		ledger.UsedBytes = next
 		payload, err := json.Marshal(ledger)
 		if err != nil {
-			return "", 500, "quota reservation failed"
+			return "", http.StatusInternalServerError, "quota reservation failed"
 		}
-		if err := h.oss.PutObjectIfMatch(ctx, key, payload, etag); err == nil {
+		switch err := strictPut(ctx, h.oss, key, payload, etag); {
+		case err == nil:
 			return token, 0, ""
-		} else if !errors.Is(err, oss.ErrPreconditionFailed) {
-			return "", 500, "quota reservation failed"
+		case errors.Is(err, oss.ErrPreconditionFailed):
+			// Lost the race; re-snapshot and re-decide on the next loop.
+		case errors.Is(err, oss.ErrConditionalUnsupported):
+			return "", http.StatusServiceUnavailable, conditionalWriteUnsupportedMsg
+		default:
+			return "", http.StatusInternalServerError, "quota reservation failed"
 		}
 	}
-	return "", 500, "quota reservation did not converge"
+	return "", http.StatusInternalServerError, "quota reservation did not converge"
 }
 
 // commitQuota settles a completed reservation. The path's counted size is
@@ -387,10 +463,14 @@ func (h *humanFilesHandler) commitQuota(ctx context.Context, username, path, tok
 		if err != nil {
 			return
 		}
-		if err := h.oss.PutObjectIfMatch(ctx, key, payload, etag); err == nil {
+		if err := strictPut(ctx, h.oss, key, payload, etag); err == nil {
 			_ = h.syncQuotaUsage(ctx, username)
 			return
 		} else if !errors.Is(err, oss.ErrPreconditionFailed) {
+			// A strict write can also fail with ErrConditionalUnsupported
+			// (501 provider): returning without settling keeps the token
+			// outstanding, i.e. the bytes stay reserved — overstate, never
+			// understate (I4).
 			return
 		}
 	}
@@ -454,9 +534,12 @@ func (h *humanFilesHandler) syncQuotaUsage(ctx context.Context, username string)
 		if err != nil {
 			return err
 		}
-		if err := h.oss.PutObjectIfMatch(ctx, key, payload, etag); err == nil {
+		if err := strictPut(ctx, h.oss, key, payload, etag); err == nil {
 			return nil
 		} else if !errors.Is(err, oss.ErrPreconditionFailed) {
+			// Propagates ErrConditionalUnsupported to the caller
+			// (reconcileQuotaLedger → 503): a recompute that cannot be
+			// committed atomically must not be dropped silently.
 			return err
 		}
 	}
@@ -529,10 +612,14 @@ func (h *humanFilesHandler) releaseQuota(ctx context.Context, username, path, to
 		if err != nil {
 			return
 		}
-		if err := h.oss.PutObjectIfMatch(ctx, key, payload, etag); err == nil {
+		if err := strictPut(ctx, h.oss, key, payload, etag); err == nil {
 			_ = h.syncQuotaUsage(ctx, username)
 			return
 		} else if !errors.Is(err, oss.ErrPreconditionFailed) {
+			// A strict write can also fail with ErrConditionalUnsupported
+			// (501 provider): returning without settling keeps the token
+			// outstanding, i.e. the bytes stay reserved — overstate, never
+			// understate (I4).
 			return
 		}
 	}
@@ -564,9 +651,12 @@ func (h *humanFilesHandler) adjustQuotaLedger(ctx context.Context, username stri
 		if err != nil {
 			return
 		}
-		if err := h.oss.PutObjectIfMatch(ctx, key, payload, etag); err == nil {
+		if err := strictPut(ctx, h.oss, key, payload, etag); err == nil {
 			return
 		} else if !errors.Is(err, oss.ErrPreconditionFailed) {
+			// A strict write can also fail with ErrConditionalUnsupported
+			// (501 provider): returning without applying the delta keeps the
+			// old (higher) usage — overstate, never understate (I4).
 			return
 		}
 	}

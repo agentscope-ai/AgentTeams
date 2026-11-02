@@ -269,10 +269,11 @@ func TestOSSFallbackCompareToPutLosesConcurrentWrite(t *testing.T) {
 	err := ossFallbackWrite(
 		t.Context(), "k", []byte("fallback"),
 		"etag(x)",
+		"application/json",
 		func(_ context.Context, key string) (ObjectMeta, error) {
 			return ObjectMeta{ETag: "etag(" + objects[key] + ")"}, nil
 		},
-		func(_ context.Context, key string, data []byte) error {
+		func(_ context.Context, key string, data []byte, contentType string) error {
 			// Interleaving: a concurrent writer commits content "y"
 			// between the compare above and this plain put.
 			objects[key] = "y"

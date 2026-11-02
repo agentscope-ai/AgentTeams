@@ -2998,12 +2998,21 @@ func (h *ProjectHandler) writeProjectMeta(ctx context.Context, w http.ResponseWr
 	h.snapshotProjectMeta(ctx, key)
 
 	if etag != "" {
-		err = h.oss.PutObjectIfMatch(ctx, key, data, etag)
+		// Strict: project meta is critical metadata — a 501 provider must
+		// fail the write closed (503) rather than degrade to the racy
+		// Stat-then-Put, which could clobber a concurrent _sync_project
+		// version (#1426 P1).
+		err = strictPut(ctx, h.oss, key, data, etag)
 		if err == nil {
 			return true
 		}
 		if errors.Is(err, oss.ErrPreconditionFailed) {
 			httputil.WriteError(w, http.StatusConflict, "conflict: project was modified concurrently")
+			return false
+		}
+		if errors.Is(err, oss.ErrConditionalUnsupported) {
+			httputil.WriteError(w, http.StatusServiceUnavailable,
+				"conditional_write_unsupported: storage provider does not support conditional writes")
 			return false
 		}
 		httputil.WriteError(w, http.StatusInternalServerError, "write project meta: "+err.Error())
@@ -3568,7 +3577,11 @@ func (h *ProjectHandler) persistControlActionAudit(ctx context.Context, key, eta
 		return
 	}
 	if etag != "" {
-		err = h.oss.PutObjectIfMatch(ctx, key, data, etag)
+		// Strict: the audit write re-binds the whole meta to the resolve-time
+		// ETag, so on a 501 provider the degraded Stat-then-Put could clobber
+		// a concurrent meta version. Dropping the audit entry (logged) is the
+		// designed best-effort loss; clobbering meta is not.
+		err = strictPut(ctx, h.oss, key, data, etag)
 	} else {
 		err = h.oss.PutObject(ctx, key, data)
 	}

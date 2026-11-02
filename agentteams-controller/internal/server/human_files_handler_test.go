@@ -2964,6 +2964,10 @@ func (s *stallRestoreTargetOSS) PutObjectIfAbsent(ctx context.Context, key strin
 	return s.inner.PutObjectIfAbsent(ctx, key, data)
 }
 
+func (s *stallRestoreTargetOSS) PutObjectIfMatchStrict(ctx context.Context, key string, data []byte, matchETag string) error {
+	return strictPut(ctx, s.inner, key, data, matchETag)
+}
+
 func (s *stallRestoreTargetOSS) ListObjectsDetailed(ctx context.Context, prefix string) ([]oss.ObjectInfo, error) {
 	return s.inner.ListObjectsDetailed(ctx, prefix)
 }
@@ -3163,6 +3167,10 @@ func (s *stallPurgeContentStatOSS) Stat(ctx context.Context, key string) error {
 
 func (s *stallPurgeContentStatOSS) StatMeta(ctx context.Context, key string) (oss.ObjectMeta, error) {
 	return s.inner.StatMeta(ctx, key)
+}
+
+func (s *stallPurgeContentStatOSS) PutObjectIfMatchStrict(ctx context.Context, key string, data []byte, matchETag string) error {
+	return strictPut(ctx, s.inner, key, data, matchETag)
 }
 
 func (s *stallPurgeContentStatOSS) ListObjectsDetailed(ctx context.Context, prefix string) ([]oss.ObjectInfo, error) {

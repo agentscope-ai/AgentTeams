@@ -10,6 +10,7 @@ package ossfake
 import (
 	"crypto/md5"
 	"encoding/hex"
+	"sync/atomic"
 
 	"context"
 	"errors"
@@ -32,6 +33,9 @@ type Memory struct {
 	contentTypes map[string]string
 	modTime      time.Time
 	next         int64
+
+	// StrictUnsupported makes PutObjectIfMatchStrict answer 501, for tests.
+	StrictUnsupported atomic.Bool
 }
 
 // md5Hex returns the lowercase MD5 hex digest of data (MinIO single-part
@@ -191,7 +195,12 @@ func (m *Memory) PutObjectIfMatch(_ context.Context, key string, data []byte, ma
 // PutObjectIfMatch — the CAS already runs under the lock and never
 // degrades; the method exists so the fake advertises the conflict-safety
 // guarantee that a degraded backend (compare-then-put) does not offer.
+// With StrictUnsupported set it models a 501 provider and returns
+// oss.ErrConditionalUnsupported without writing.
 func (m *Memory) PutObjectIfMatchStrict(ctx context.Context, key string, data []byte, matchETag string) error {
+	if m.StrictUnsupported.Load() {
+		return oss.ErrConditionalUnsupported
+	}
 	return m.PutObjectIfMatch(ctx, key, data, matchETag)
 }
 

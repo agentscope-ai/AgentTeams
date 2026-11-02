@@ -507,6 +507,11 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 				"another operation is in flight on this file; retry shortly")
 			return
 		}
+		if errors.Is(err, oss.ErrConditionalUnsupported) {
+			writeHumanFileCodedError(w, http.StatusServiceUnavailable, "conditional_write_unsupported",
+				"storage provider does not support conditional writes; the path lease cannot be taken (fail closed)")
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "acquire path lease failed")
 		return
 	}
@@ -539,9 +544,18 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 	}
 	reservedToken, status, msg := h.reserveQuota(ctx, a, username, rel, oldSize, int64(len(data)))
 	if status != 0 {
-		if status == http.StatusRequestEntityTooLarge {
+		switch status {
+		case http.StatusRequestEntityTooLarge:
 			writeHumanFileCodedError(w, status, "quota_exceeded", msg)
-		} else {
+		case http.StatusServiceUnavailable:
+			// The storage provider rejected the atomic ledger write
+			// (501/NotImplemented): without it the quota cannot be
+			// reserved, so the write is refused rather than applied
+			// unguarded (fail closed, #1426 P1).
+			writeHumanFileCodedError(w, status, "conditional_write_unsupported", msg)
+			h.recordAudit(ctx, a, "human_file_write_blocked",
+				humanFileDetail("path", "files/"+rel, "size", len(data), "reason", "conditional_write_unsupported"))
+		default:
 			httputil.WriteError(w, status, msg)
 		}
 		return
@@ -678,6 +692,11 @@ func (h *humanFilesHandler) deleteFile(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, errHumanPathBusy) {
 			writeHumanFileCodedError(w, http.StatusConflict, "file_busy",
 				"another operation is in flight on this file; retry shortly")
+			return
+		}
+		if errors.Is(err, oss.ErrConditionalUnsupported) {
+			writeHumanFileCodedError(w, http.StatusServiceUnavailable, "conditional_write_unsupported",
+				"storage provider does not support conditional writes; the path lease cannot be taken (fail closed)")
 			return
 		}
 		httputil.WriteError(w, http.StatusInternalServerError, "acquire path lease failed")
@@ -867,6 +886,11 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 				"another operation is in flight on this trash entry; retry shortly")
 			return
 		}
+		if errors.Is(err, oss.ErrConditionalUnsupported) {
+			writeHumanFileCodedError(w, http.StatusServiceUnavailable, "conditional_write_unsupported",
+				"storage provider does not support conditional writes; the trash entry lease cannot be taken (fail closed)")
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "acquire path lease failed")
 		return
 	}
@@ -920,6 +944,11 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 		if errors.Is(err, errHumanPathBusy) {
 			writeHumanFileCodedError(w, http.StatusConflict, "file_busy",
 				"another operation is in flight on this file; retry shortly")
+			return
+		}
+		if errors.Is(err, oss.ErrConditionalUnsupported) {
+			writeHumanFileCodedError(w, http.StatusServiceUnavailable, "conditional_write_unsupported",
+				"storage provider does not support conditional writes; the path lease cannot be taken (fail closed)")
 			return
 		}
 		httputil.WriteError(w, http.StatusInternalServerError, "acquire path lease failed")
@@ -1095,6 +1124,11 @@ func (h *humanFilesHandler) purgeTrash(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, errHumanPathBusy) {
 			writeHumanFileCodedError(w, http.StatusConflict, "file_busy",
 				"another operation is in flight on this trash entry; retry shortly")
+			return
+		}
+		if errors.Is(err, oss.ErrConditionalUnsupported) {
+			writeHumanFileCodedError(w, http.StatusServiceUnavailable, "conditional_write_unsupported",
+				"storage provider does not support conditional writes; the trash entry lease cannot be taken (fail closed)")
 			return
 		}
 		httputil.WriteError(w, http.StatusInternalServerError, "acquire path lease failed")
@@ -1310,6 +1344,11 @@ func (h *humanFilesHandler) putQuota(w http.ResponseWriter, r *http.Request) {
 			// the ledger (or the workspace may predate it). Rebuild from live
 			// usage before enforcing the new limit.
 			if err := h.reconcileQuotaLedger(ctx, name); err != nil {
+				if errors.Is(err, oss.ErrConditionalUnsupported) {
+					writeHumanFileCodedError(w, http.StatusServiceUnavailable, "conditional_write_unsupported",
+						"storage provider does not support conditional writes; the quota ledger cannot be reconciled (fail closed)")
+					return
+				}
 				httputil.WriteError(w, http.StatusInternalServerError, "quota ledger reconciliation failed")
 				return
 			}

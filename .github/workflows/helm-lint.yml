@@ -18,6 +18,8 @@ on:
       - 'openhuman/scripts/openhuman-worker-entrypoint.sh'
       - 'tests/check-agentteams-rename-defaults.sh'
       - 'tests/check-installer-pre-1.2-env-compat.sh'
+      - 'tests/check-installer-wasm-registry.sh'
+      - 'tests/check-installer-wasm-registry.ps1'
       - 'tests/check-installer-username-validation.sh'
       - 'tests/check-installer-username-validation.ps1'
       - 'tests/check-installer-env-data-dir-readback.sh'
@@ -50,6 +52,9 @@ on:
       - 'tests/check-coding-cli-runs-metadata.sh'
       - 'manager/scripts/init/start-manager-agent.sh'
       - 'manager/tests/test-manager-startup-recovery.sh'
+      - 'tests/check-docs-zh-parity.sh'
+      - 'docs/usage/**'
+      - 'docs/zh-cn/usage/**'
   workflow_dispatch: ~
 
 jobs:
@@ -64,6 +69,13 @@ jobs:
 
       - name: Check pre-v1.2 installer compatibility
         run: bash tests/check-installer-pre-1.2-env-compat.sh
+
+      - name: Check Bash installer WASM registry
+        run: bash tests/check-installer-wasm-registry.sh
+
+      - name: Check PowerShell installer WASM registry
+        shell: pwsh
+        run: ./tests/check-installer-wasm-registry.ps1
 
       - name: Check Bash installer username validation
         run: bash tests/check-installer-username-validation.sh
@@ -146,3 +158,16 @@ jobs:
       - name: Template dry-run
         run: |
           bash tests/check-helm-agentteams.sh
+
+  docs-zh-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check zh-cn docs parity self-test (missing counterpart fails, complete pairing passes)
+        run: bash tests/check-docs-zh-parity.sh --self-test
+
+      - name: Check zh-cn docs parity on the repository tree
+        run: bash tests/check-docs-zh-parity.sh

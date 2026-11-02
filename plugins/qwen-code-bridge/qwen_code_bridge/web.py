@@ -29,7 +29,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import APIRouter, Request, WebSocket
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 logger = logging.getLogger(__name__)
 
@@ -334,6 +334,63 @@ def _drop_nested_workspaces(workspaces: list[str]) -> list[str]:
     return out
 
 
+def _workspace_candidates() -> list[str]:
+    """Ordered ``--workspace`` list for the daemon (primary first).
+
+    env ``QWEN_CODE_BRIDGE_SERVE_WORKSPACE`` entries, then every dispatch
+    run's cwd in recency order, then the plugin's state dir. Nested
+    workspaces are dropped (the daemon rejects nesting). Primary-workspace
+    ordering matters: the first entry drives the console's default
+    project view, so task cwds must precede the plugin's state dir.
+    """
+    from .state import state_dir
+
+    workspaces: list[str] = []
+    env_ws = os.environ.get(SERVE_WORKSPACE_ENV, "").strip()
+    for chunk in env_ws.replace(":", ",").split(","):
+        chunk = chunk.strip()
+        if chunk and os.path.isdir(chunk) and chunk not in workspaces:
+            workspaces.append(chunk)
+    try:  # every run's cwd becomes a serve workspace, in recency order
+        tasks = []
+        for path in (state_dir() / "dispatch").glob("*.json"):
+            try:
+                task = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            cwd = str(task.get("cwd") or "").strip()
+            if cwd and os.path.isdir(cwd):
+                tasks.append((float(task.get("started_epoch") or 0), cwd))
+        for _, cwd in sorted(tasks, reverse=True):
+            if cwd not in workspaces:
+                workspaces.append(cwd)
+    except Exception:
+        pass
+    # primary workspace first: the first entry drives the console's
+    # default project view, so task cwds must precede the state dir.
+    state = str(state_dir())
+    if state in workspaces:
+        workspaces.remove(state)
+    workspaces.append(state)
+    return _drop_nested_workspaces(workspaces)
+
+
+def default_workspace() -> str:
+    """Primary workspace for the embedded shell (first ``--workspace``).
+
+    Shared by the ``/workspace`` endpoint (the frontend's iframe
+    pass-through) and the index 302 fallback — one source of truth for
+    the workspace a workspace-less shell navigation should land in.
+    Never raises; the state dir is always a candidate, so this is
+    effectively always non-empty.
+    """
+    try:
+        candidates = _workspace_candidates()
+    except Exception:
+        return ""
+    return candidates[0] if candidates else ""
+
+
 _ensure_lock: asyncio.Lock | None = None
 
 
@@ -376,37 +433,7 @@ async def _ensure_serve_locked() -> str:
     try:
         from .state import state_dir
 
-        workspaces: list[str] = []
-        env_ws = os.environ.get(SERVE_WORKSPACE_ENV, "").strip()
-        for chunk in env_ws.replace(":", ",").split(","):
-            chunk = chunk.strip()
-            if chunk and os.path.isdir(chunk) and chunk not in workspaces:
-                workspaces.append(chunk)
-        try:  # every run's cwd becomes a serve workspace, in recency order
-            import json as _json
-            import time as _time
-
-            tasks = []
-            for path in (state_dir() / "dispatch").glob("*.json"):
-                try:
-                    task = _json.loads(path.read_text(encoding="utf-8"))
-                except Exception:
-                    continue
-                cwd = str(task.get("cwd") or "").strip()
-                if cwd and os.path.isdir(cwd):
-                    tasks.append((float(task.get("started_epoch") or 0), cwd))
-            for _, cwd in sorted(tasks, reverse=True):
-                if cwd not in workspaces:
-                    workspaces.append(cwd)
-        except Exception:
-            pass
-        # primary workspace first: the first entry drives the console's default
-        # project view, so task cwds must precede the plugin's state dir.
-        state = str(state_dir())
-        if state in workspaces:
-            workspaces.remove(state)
-        workspaces.append(state)
-        workspaces = _drop_nested_workspaces(workspaces)
+        workspaces = _workspace_candidates()
         ws_args: list[str] = []
         for workspace in workspaces[:8]:
             ws_args += ["--workspace", workspace]
@@ -540,12 +567,44 @@ async def web_status() -> dict:
         }
 
 
+@router.get("/workspace")
+async def workspace_default() -> dict:
+    """Primary workspace for the embedded shell (iframe pass-through).
+
+    The value the daemon was (or will be) started with as its first
+    ``--workspace`` — the console's default project view. Computed from
+    env + dispatch records + state dir; no daemon round-trip needed, so
+    the iframe can scope its session list before the daemon is up.
+    """
+    return {"workspace": default_workspace()}
+
+
 @router.api_route(
     "/web/{path:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
 )
 async def web_proxy(path: str, request: Request) -> Response:
     """Reverse-proxy a request to the local ``qwen serve`` instance."""
+    if (
+        request.method == "GET"
+        and not (path or "").strip("/")
+        and "text/html" in request.headers.get("accept", "").lower()
+        and not request.query_params.get("workspace")
+    ):
+        # Browser navigation to the shell index without a workspace
+        # selector would boot the shell with an empty session list: 302
+        # back to the same URL carrying the primary workspace. Requests
+        # that already carry ?workspace= pass through untouched, as do
+        # non-HTML requests (the shell's XHR/fetch calls, curl probes).
+        from urllib.parse import quote
+
+        workspace = default_workspace()
+        if workspace:
+            sep = "&" if request.query_params else "?"
+            return RedirectResponse(
+                str(request.url) + sep + "workspace=" + quote(workspace, safe=""),
+                status_code=302,
+            )
     dist = web_dist()
     if dist is not None and request.method == "GET":
         rel = (path or "").strip("/")

@@ -16,6 +16,52 @@
 
   var THEME_KEY = "qwenpaw-theme";
   var BASE = "/api/qwen-code-bridge/web/";
+  var WORKSPACE_ENDPOINT = "/api/qwen-code-bridge/workspace";
+  var WORKSPACE_WAIT_MS = 1000;
+  var workspacePromise = null;
+
+  // Primary workspace for the embedded shell, resolved server-side (env ->
+  // newest dispatch cwd -> plugin state dir). The iframe passes it through
+  // as ?workspace= so the shell's session list is scoped on first load;
+  // the bridge's 302 on /web/ repeats the same default for navigations
+  // that arrive without it (fallback for stale bundles / direct opens).
+  // Cached per page load; any failure resolves to "" (the 302 still
+  // covers that case).
+  function bridgeWorkspace() {
+    if (!workspacePromise) {
+      workspacePromise = Promise.race([
+        (function () {
+          try {
+            var headers = { Accept: "application/json" };
+            try {
+              var token = localStorage.getItem("qwenpaw_auth_token");
+              if (token) headers.Authorization = "Bearer " + token;
+            } catch (e) {}
+            return fetch(WORKSPACE_ENDPOINT, {
+              credentials: "same-origin",
+              headers: headers,
+            })
+              .then(function (resp) {
+                return resp && resp.ok ? resp.json() : null;
+              })
+              .then(function (data) {
+                return (data && data.workspace) || "";
+              });
+          } catch (e) {
+            return Promise.resolve("");
+          }
+        })(),
+        new Promise(function (resolve) {
+          setTimeout(function () {
+            resolve("");
+          }, WORKSPACE_WAIT_MS);
+        }),
+      ]).catch(function () {
+        return "";
+      });
+    }
+    return workspacePromise;
+  }
 
   function isDark() {
     var pref = "system";
@@ -44,6 +90,22 @@
     var st = React.useState(hostDark);
     var dark = st[0];
     var setDark = st[1];
+    // null = workspace still resolving (iframe held back so the shell
+    // boots exactly once, already scoped); "" = unavailable (render
+    // without ?workspace= — the bridge 302 adds the default then).
+    var wsSt = React.useState(null);
+    var workspace = wsSt[0];
+    var setWorkspace = wsSt[1];
+
+    React.useEffect(function () {
+      var alive = true;
+      bridgeWorkspace().then(function (w) {
+        if (alive) setWorkspace(w);
+      });
+      return function () {
+        alive = false;
+      };
+    }, []);
 
     React.useEffect(function () {
       function sync() {
@@ -67,9 +129,11 @@
       };
     }, [setDark]);
 
+    if (workspace === null) return null;
     var src = BASE + "?theme=" + (dark ? "dark" : "light");
+    if (workspace) src += "&workspace=" + encodeURIComponent(workspace);
     return React.createElement("iframe", {
-      key: dark ? "dark" : "light",
+      key: (dark ? "dark" : "light") + "|" + workspace,
       src: src,
       title: "Qwen Code",
       style: { width: "100%", height: "100%", minHeight: 480, border: 0, display: "block" },

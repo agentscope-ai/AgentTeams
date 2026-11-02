@@ -224,15 +224,32 @@ PY
 # sidecar process — they only tell the operator to restart it ($1 names the
 # release the operator should move to).
 lifecycle_warn_sidecar_restart() {
-  local pid_file="${STATE_DIR}/sidecar.pid" pid
-  [ -f "$pid_file" ] || return 0
-  pid="$(cat "$pid_file" 2>/dev/null || true)"
-  case "$pid" in
-    '' | *[!0-9]*) return 0 ;;
+  # "Is the sidecar running" is answered by sidecar.sh status, which
+  # verifies the pidfile's process identity (a live PID that is not the
+  # sidecar — stale or reused — must not trigger the warning). status
+  # exits non-zero when the sidecar is not running, so `|| true` keeps
+  # the set -e callers (upgrade/rollback) going.
+  local status pid
+  status="$("${PLUGIN_ROOT}/sidecar.sh" status 2>/dev/null || true)"
+  pid=""
+  case "$status" in
+    *"sidecar running (pid "*)
+      pid="${status#*(pid }"
+      pid="${pid%%)*}"
+      case "$pid" in
+        *[!0-9]*) pid="" ;;
+      esac
+      ;;
   esac
-  if kill -0 "$pid" 2>/dev/null; then
-    lifecycle_log "WARN: the sidecar is still running (pid ${pid}); run sidecar.sh restart so it picks up ${1}"
-  fi
+  case "$status" in
+    *"sidecar running"*)
+      if [ -n "$pid" ]; then
+        lifecycle_log "WARN: the sidecar is still running (pid ${pid}); run sidecar.sh restart so it picks up ${1}"
+      else
+        lifecycle_log "WARN: the sidecar is still running; run sidecar.sh restart so it picks up ${1}"
+      fi
+      ;;
+  esac
   return 0
 }
 

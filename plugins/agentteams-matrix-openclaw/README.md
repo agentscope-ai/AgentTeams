@@ -20,7 +20,7 @@ deliberately **no Matrix logic in this package**.
 | `sidecar.sh` | Operator process entry: `start` / `stop` / `restart` / `status` / `run` (foreground, for systemd). |
 | `scripts/lib-lifecycle.sh` | Shared lifecycle helpers (state layout, channel config, sidecar config, three-valued inventory check). |
 | `scripts/verify-sdk.mjs` | Runtime assertion that the installed OpenClaw SDK actually loads the built entry. |
-| `test/*.test.ts` | `node:test` suites (no framework): protocol client, inbound dispatch, lifecycle config, member preflight, install order, e2e bootstrap. |
+| `test/*.test.ts` | `node:test` suites (no framework): protocol client, inbound dispatch, lifecycle config, member preflight, install order, e2e bootstrap, sidecar process identity. |
 
 ## Sidecar protocol (version 1)
 
@@ -152,6 +152,25 @@ State (default `~/.agentteams/openclaw-matrix`, override with
 `AGENTTEAMS_OPENCLAW_STATE_DIR`): `sidecar-config.json`, `sidecar.pid`,
 `sidecar.log`.
 
+`sidecar.pid` holds `<pid> <starttime>` — the process's start identity
+(field 22 of `/proc/<pid>/stat`, written as `-` when it cannot be
+read). Every `start` / `stop` / `restart` / `status` re-verifies that
+identity before reporting "running" or sending a signal: the pid must
+be alive, its start time must match the recorded one, and its command
+line must be `python3 -m sidecar --config <the config file>`. A PID
+that the kernel handed to an unrelated process after the sidecar died
+therefore never reports "running" and never receives a signal:
+
+- `status` exits non-zero and says the pid file names a process that is
+  not this sidecar (it does not delete the file);
+- `start` removes the stale pid file, prints `ignoring stale pid file
+  (...)`, and starts fresh;
+- `stop` removes the pid file, prints `sidecar not running (stale pid
+  file ignored)`, and sends no signal.
+
+Old single-field pid files (just the pid) are still honored: the
+start-time check is skipped and the command line alone decides.
+
 ### systemd (optional)
 
 ```ini
@@ -182,7 +201,7 @@ Node 24 LTS (24.22.x; the `openclaw` peer's install scripts require Node 24).
 ```sh
 npm install
 npm run typecheck   # tsc --noEmit
-npm test            # tsc -p tsconfig.json && node --test (6 suites)
+npm test            # tsc -p tsconfig.json && node --test (7 suites)
 npm run verify:sdk  # runtime import assertions against the installed SDK
 ```
 
@@ -203,7 +222,7 @@ specifiers against the compiled layout (`dist/src` + `dist/test`).
    direction (server→client only today), edit/react frames, media
    upload/download over the sidecar, and a health/ping frame.
 4. **Gate status**: `npm install` / `npm run typecheck` / `npm test`
-   (6 `node:test` suites) / `npm run verify:sdk` run green on Node 24 LTS
+   (7 `node:test` suites) / `npm run verify:sdk` run green on Node 24 LTS
    (v24.22.2) with the installed **OpenClaw v2026.10.9** peer: typecheck
    clean against the real peer, `verify-sdk` runtime import assertions pass,
    and a native Matrix text roundtrip (inbound message → agent turn → routed

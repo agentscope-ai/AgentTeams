@@ -10,7 +10,11 @@
 # State (default $HOME/.agentteams/openclaw-matrix, the installer's
 # state directory; override with AGENTTEAMS_OPENCLAW_STATE_DIR):
 #   sidecar-config.json   credentials + paths (written by install.sh, 0600)
-#   sidecar.pid           pid of the background process
+#   sidecar.pid           '<pid> <starttime>' of the background process;
+#                         every command re-verifies that identity before
+#                         reporting "running" or sending a signal, so a
+#                         stale or reused PID is never treated as the
+#                         sidecar
 #   sidecar.log           combined stdout/stderr
 #
 # The sidecar needs MATRIX_CORE_DIR to point at the agentteams-matrix
@@ -55,18 +59,102 @@ require_core_dir() {
   [ -n "${MATRIX_CORE_DIR:-}" ] || die "MATRIX_CORE_DIR is not set — point it at the agentteams-matrix core checkout (the directory that contains core/)"
 }
 
-# Prints the pid when the pidfile names a live process; prints nothing
-# (and exits 0) otherwise. A stale pidfile is simply not "running".
-read_live_pid() {
+# Field 22 of /proc/<pid>/stat (starttime, in clock ticks since boot),
+# or nothing when it cannot be read. The "pid (comm)" prefix is stripped
+# at the LAST ") " because comm may itself contain spaces or
+# parentheses; starttime is then the 20th remaining field.
+proc_starttime() {
+  local pid="$1" stat rest fields=()
+  stat="$(cat "/proc/$pid/stat" 2>/dev/null)" || return 0
+  rest="${stat##*)}"
+  read -r -a fields <<< "$rest"
+  if [ "${#fields[@]}" -ge 20 ]; then
+    printf '%s' "${fields[19]}"
+  fi
+  return 0
+}
+
+# Does /proc/<pid>/cmdline look like the sidecar's own command line?
+# The NUL-separated token sequence must contain "-m" immediately
+# followed by "sidecar" AND "--config" immediately followed by
+# $CONFIG_FILE (or the one-token form "--config=$CONFIG_FILE"). When
+# the config file exists, its resolved real path is accepted too.
+# Comparison is literal.
+cmdline_is_sidecar() {
+  local pid="$1"
+  local cmdline
+  cmdline="$(tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null)" || return 1
+  [ -n "$cmdline" ] || return 1
+  local -a tokens=()
+  mapfile -t tokens <<< "$cmdline"
+  local alt_config=""
+  if [ -f "$CONFIG_FILE" ] && command -v realpath >/dev/null 2>&1; then
+    alt_config="$(realpath "$CONFIG_FILE" 2>/dev/null || true)"
+  fi
+  local i n found_module=0 found_config=0
+  n=${#tokens[@]}
+  for ((i = 0; i < n; i++)); do
+    if [ "${tokens[i]}" = "-m" ] && [ $((i + 1)) -lt "$n" ] \
+       && [ "${tokens[i + 1]}" = "sidecar" ]; then
+      found_module=1
+    fi
+    if [ "${tokens[i]}" = "--config" ] && [ $((i + 1)) -lt "$n" ]; then
+      if [ "${tokens[i + 1]}" = "$CONFIG_FILE" ] \
+         || { [ -n "$alt_config" ] && [ "${tokens[i + 1]}" = "$alt_config" ]; }; then
+        found_config=1
+      fi
+    elif [ "${tokens[i]}" = "--config=$CONFIG_FILE" ] \
+         || { [ -n "$alt_config" ] && [ "${tokens[i]}" = "--config=$alt_config" ]; }; then
+      found_config=1
+    fi
+  done
+  [ "$found_module" -eq 1 ] && [ "$found_config" -eq 1 ]
+}
+
+# The pid token recorded in the pidfile, whatever it is (for operator
+# messages); prints nothing when the file is absent or empty.
+pidfile_pid() {
+  local line
+  line="$(head -n 1 -- "$PID_FILE" 2>/dev/null || true)"
+  printf '%s' "${line%%[[:space:]]*}"
+}
+
+# Prints the pid when the pidfile names the live sidecar process
+# itself; prints nothing (and exits 0) otherwise. All of these must
+# hold:
+#   1. the recorded pid is a number > 1 and not this script's own pid;
+#   2. the process is alive (kill -0);
+#   3. start identity: when the pidfile records a starttime (anything
+#      but "-"), it must match field 22 of /proc/<pid>/stat verbatim —
+#      the kernel assigns a fresh starttime to every new process, so a
+#      PID handed to an unrelated process fails this check. Old-format
+#      pidfiles (a bare pid, or "-") skip it but must pass (4);
+#   4. the command line is the sidecar's own: "python3 -m sidecar
+#      --config <CONFIG_FILE>" (or --config=<CONFIG_FILE>).
+# A stale or reused PID therefore never reports "running" and never
+# receives a signal from this script.
+verified_sidecar_pid() {
   [ -f "$PID_FILE" ] || return 0
-  local pid
-  pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+  local line pid recorded fields=()
+  line="$(head -n 1 -- "$PID_FILE" 2>/dev/null || true)"
+  read -r -a fields <<< "$line"
+  [ "${#fields[@]}" -ge 1 ] || return 0
+  pid="${fields[0]}"
+  recorded="${fields[1]:-}"
   case "$pid" in
     '' | *[!0-9]*) return 0 ;;
   esac
-  if kill -0 "$pid" 2>/dev/null; then
-    echo "$pid"
+  [ "$pid" -gt 1 ] 2>/dev/null || return 0
+  [ "$pid" != "$$" ] || return 0
+  kill -0 "$pid" 2>/dev/null || return 0
+  if [ -n "$recorded" ] && [ "$recorded" != "-" ]; then
+    local current
+    current="$(proc_starttime "$pid")"
+    [ -n "$current" ] || return 0
+    [ "$current" = "$recorded" ] || return 0
   fi
+  cmdline_is_sidecar "$pid" || return 0
+  echo "$pid"
   return 0
 }
 
@@ -98,10 +186,16 @@ cmd_start() {
   require_config
   require_core_dir
   local pid
-  pid="$(read_live_pid)"
+  pid="$(verified_sidecar_pid)"
   if [ -n "$pid" ]; then
     echo "sidecar already running (pid $pid)"
     return 0
+  fi
+  if [ -f "$PID_FILE" ]; then
+    local stale
+    stale="$(pidfile_pid)"
+    rm -f "$PID_FILE"
+    echo "ignoring stale pid file (pid ${stale:--} is not this sidecar)"
   fi
   if [ ! -d "$STATE_DIR" ]; then
     mkdir -p "$STATE_DIR"
@@ -109,10 +203,15 @@ cmd_start() {
   fi
   PYTHONPATH="$PLUGIN_ROOT" nohup python3 -m sidecar --config "$CONFIG_FILE" >> "$LOG_FILE" 2>&1 &
   local new_pid=$!
-  echo "$new_pid" > "$PID_FILE"
+  # Record the process's start identity (field 22 of /proc/<pid>/stat)
+  # alongside the pid so a later PID reuse can be detected; "-" when the
+  # kernel does not tell us (the command-line check still applies).
+  local start_id
+  start_id="$(proc_starttime "$new_pid")"
+  printf '%s %s\n' "$new_pid" "${start_id:--}" > "$PID_FILE"
   # Give it a moment to fail fast (config error, locked state dir, ...).
   sleep 1
-  if ! kill -0 "$new_pid" 2>/dev/null; then
+  if [ "$(verified_sidecar_pid)" != "$new_pid" ]; then
     rm -f "$PID_FILE"
     echo "sidecar exited during startup; last log lines:" >&2
     tail -n 20 "$LOG_FILE" >&2
@@ -123,20 +222,27 @@ cmd_start() {
 
 cmd_stop() {
   local pid
-  pid="$(read_live_pid)"
+  pid="$(verified_sidecar_pid)"
   if [ -z "$pid" ]; then
-    rm -f "$PID_FILE" 2>/dev/null || true
-    echo "sidecar not running"
+    if [ -f "$PID_FILE" ]; then
+      rm -f "$PID_FILE"
+      echo "sidecar not running (stale pid file ignored)"
+    else
+      echo "sidecar not running"
+    fi
     return 0
   fi
   echo "stopping sidecar (pid $pid, SIGTERM)"
   kill -TERM "$pid" 2>/dev/null || true
+  # Re-verify the start identity on every poll, not a bare kill -0: once
+  # the sidecar dies the kernel may hand its PID to an unrelated process,
+  # which a liveness-only check would keep waiting on (and later KILL).
   local waited=0
-  while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt "$STOP_TIMEOUT" ]; do
+  while [ "$(verified_sidecar_pid)" = "$pid" ] && [ "$waited" -lt "$STOP_TIMEOUT" ]; do
     sleep 1
     waited=$((waited + 1))
   done
-  if kill -0 "$pid" 2>/dev/null; then
+  if [ "$(verified_sidecar_pid)" = "$pid" ]; then
     echo "sidecar did not stop within ${STOP_TIMEOUT}s; sending SIGKILL" >&2
     kill -KILL "$pid" 2>/dev/null || true
   fi
@@ -145,11 +251,14 @@ cmd_stop() {
 }
 
 cmd_status() {
-  local pid sock
-  pid="$(read_live_pid)"
+  local pid sock stale
+  pid="$(verified_sidecar_pid)"
   sock="$(socket_path_from_config)"
   if [ -n "$pid" ]; then
     echo "sidecar running (pid $pid)"
+  elif [ -f "$PID_FILE" ]; then
+    stale="$(pidfile_pid)"
+    echo "sidecar not running (stale pid file names pid ${stale:--}, which is not this sidecar)"
   else
     echo "sidecar not running"
   fi

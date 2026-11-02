@@ -46,6 +46,7 @@
  * `delivery.deliver` (dispatch-level); both land on the sidecar socket.
  */
 
+import { pathToFileURL } from "node:url";
 import type {
   ChannelPlugin,
   OpenClawConfig,
@@ -200,6 +201,25 @@ function resolveAccount(
  * refs here keeps the transport-neutral identity (the mxc URI) and the
  * metadata the core needs to hydrate the bytes.
  */
+/** Canonical fact URL for a local file — the legacy projection keeps this. */
+function localFileUrl(path: string): string {
+  return pathToFileURL(path).href;
+}
+
+/** Inbound source modality for the turn, when the frame carries media. */
+function inboundSourceModality(
+  frame: SidecarInboundFrame,
+): "image" | "audio" | "video" | "document" | undefined {
+  const first = (frame.media ?? [])[0];
+  if (!first) return undefined;
+  const mime = (first.mime_type ?? "").toLowerCase();
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("audio/")) return "audio";
+  if (mime.startsWith("video/")) return "video";
+  if (mime.length > 0) return "document";
+  return undefined;
+}
+
 function inboundMediaFacts(frame: SidecarInboundFrame): Array<{
   path?: string;
   url: string;
@@ -215,7 +235,10 @@ function inboundMediaFacts(frame: SidecarInboundFrame): Array<{
     // therefore downloads the bytes and hands us `local_path`, which is
     // what actually produces the image block in the model request.
     ...(ref.local_path ? { path: ref.local_path } : {}),
-    url: ref.mxc_uri,
+    // The SDK's legacy projection derives MediaUrl from `url ?? path`; a
+    // bare mxc URI there is unreadable, so a local copy is projected as a
+    // file:// URL (canonical facts still resolve through `path`).
+    url: ref.local_path ? localFileUrl(ref.local_path) : ref.mxc_uri,
     contentType: ref.mime_type,
     fileName: ref.file_name,
     sizeBytes: ref.size,
@@ -319,6 +342,10 @@ export function createOpenClawMatrixPlugin(
           textForCommands: raw.text,
           raw,
         }),
+        // The turn's media facts belong on the documented preflight surface
+        // as well: admission/history code reads them there before resolveTurn
+        // runs, and a channel that advertises media must not leave it empty.
+        preflight: () => ({ media: inboundMediaFacts(frame) }),
         resolveTurn: (input) => {
           const ctxPayload = rt.channel.inbound.buildContext({
             channel: CHANNEL_ID,
@@ -340,6 +367,9 @@ export function createOpenClawMatrixPlugin(
               rawBody: input.rawText,
               commandBody: input.textForCommands,
               bodyForAgent: input.textForAgent,
+              ...inboundSourceModality(frame)
+                ? { sourceModality: inboundSourceModality(frame) }
+                : {},
             },
             media: inboundMediaFacts(frame),
             extra: {

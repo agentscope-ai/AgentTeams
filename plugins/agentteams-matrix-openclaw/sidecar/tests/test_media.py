@@ -101,6 +101,21 @@ def test_fetch_frame_media_adds_local_path(tmp_path, http_server):
         assert handle.read() == PNG
 
 
+def test_fetch_frame_media_sniffs_a_missing_content_type(tmp_path, http_server):
+    """The SDK decides image-ness from contentType/fileName; the bytes win."""
+
+    base, _ = http_server
+    frame = {
+        "event_id": "$evt-image",
+        "media": [{"mxc_uri": "mxc://example.org/AbCdEf"}],  # no mime_type, no name
+    }
+    fetched = media.fetch_frame_media(
+        base, "syt-token", frame, str(tmp_path / "media"), log=lambda _m: None
+    )
+    assert fetched == 1
+    assert frame["media"][0]["mime_type"] == "image/png"
+
+
 def test_fetch_frame_media_is_best_effort_on_failure(tmp_path, monkeypatch):
     frame = {
         "event_id": "$evt-image",
@@ -168,3 +183,79 @@ def test_bridge_enriches_frame_before_send(monkeypatch):
     _asyncio.run(bridge2.on_inbound(Event()))
     assert server2.sent, "a failing enricher must not drop the frame"
     assert "local_path" not in server2.sent[0]["media"][0]
+
+
+class _RedirectHandler(http.server.BaseHTTPRequestHandler):
+    """302 to ``target`` for the Matrix download path; records auth on /final."""
+
+    target = ""
+    seen: list = []
+
+    def do_GET(self):  # noqa: N802 - http.server API
+        type(self).seen.append(
+            {"path": self.path, "auth": self.headers.get("Authorization", "")}
+        )
+        if self.path.startswith("/_matrix/client/v1/media/download/"):
+            self.send_response(302)
+            self.send_header("Location", type(self).target)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if self.path == "/final":
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(PNG)))
+            self.end_headers()
+            self.wfile.write(PNG)
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def log_message(self, *_args):
+        pass
+
+
+def _serve(handler_cls):
+    server = http.server.HTTPServer(("127.0.0.1", 0), handler_cls)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server
+
+
+def test_redirect_same_origin_keeps_the_bearer():
+    handler = type("SameOrigin", (_RedirectHandler,), {"target": "/final", "seen": []})
+    server = _serve(handler)
+    try:
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        handler.target = "/final"
+        data = media.fetch_media_bytes(base, "syt-token", "mxc://example.org/AbCdEf")
+        assert data == PNG
+        final = [entry for entry in handler.seen if entry["path"] == "/final"]
+        assert final and final[0]["auth"] == "Bearer syt-token"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_redirect_cross_origin_strips_the_bearer():
+    """A homeserver must not be able to bounce the agent token off-origin."""
+
+    target_handler = type("Target", (_RedirectHandler,), {"target": "", "seen": []})
+    target_server = _serve(target_handler)
+    origin_handler = type("Origin", (_RedirectHandler,), {"target": "", "seen": []})
+    origin_server = _serve(origin_handler)
+    try:
+        target_url = f"http://127.0.0.1:{target_server.server_address[1]}/final"
+        origin_handler.target = target_url
+        base = f"http://127.0.0.1:{origin_server.server_address[1]}"
+        data = media.fetch_media_bytes(base, "syt-token", "mxc://example.org/AbCdEf")
+        # The bytes still arrive (the redirect is followed, just without the
+        # credential) …
+        assert data == PNG
+        # … and the other origin never saw the bearer.
+        assert target_handler.seen, "the redirect target must have been called"
+        assert all(entry["auth"] == "" for entry in target_handler.seen), target_handler.seen
+    finally:
+        origin_server.shutdown()
+        origin_server.server_close()
+        target_server.shutdown()
+        target_server.server_close()

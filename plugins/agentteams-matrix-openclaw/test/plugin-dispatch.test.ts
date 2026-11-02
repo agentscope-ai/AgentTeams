@@ -19,6 +19,7 @@
  * Node's built-in test runner + assert/strict only; no test framework.
  */
 
+import { pathToFileURL } from "node:url";
 import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
@@ -301,7 +302,7 @@ describe("agentteams-matrix inbound dispatch", () => {
     // fileName/sizeBytes/messageId), which is the path the core hydrates
     // the bytes through.
     const client = new FakeSidecarClient();
-    const { runtime, turns } = makeRuntime();
+    const { runtime, turns, calls } = makeRuntime();
     const plugin = makePlugin(client, runtime);
     await startAccount(plugin, CFG);
 
@@ -327,16 +328,34 @@ describe("agentteams-matrix inbound dispatch", () => {
     assert.deepEqual(imageCtx.media, [
       {
         path: "/var/lib/agentteams/media/inbound/$evt-image-0-reviewer-media-probe.png",
-        url: "mxc://matrix.example.org/AbCdEf123",
+        // The SDK's legacy projection keeps `url`; a local copy is projected
+        // as a file:// URL so MediaUrl stays readable (mxc:// is not).
+        url: pathToFileURL(
+          "/var/lib/agentteams/media/inbound/$evt-image-0-reviewer-media-probe.png",
+        ).href,
         contentType: "image/png",
         fileName: "reviewer-media-probe.png",
         sizeBytes: 8446,
         messageId: "$evt-image",
       },
     ]);
+    assert.equal(imageCtx.message.sourceModality, "image");
     // The text body still carries the caption/name; the attachment now
     // travels alongside it instead of being dropped.
     assert.equal(imageCtx.message.bodyForAgent, "reviewer-media-probe.png");
+
+    // The documented preflight surface carries the same facts (admission and
+    // history read them before resolveTurn runs).
+    const imageParams = (calls.find((c) => c.op === "run"))?.params as any;
+    const preflight = await imageParams.adapter.preflight(
+      { id: "$evt-image" },
+      { kind: "message", canStartAgentTurn: true },
+    );
+    assert.equal(preflight.media.length, 1);
+    assert.equal(
+      preflight.media[0].path,
+      "/var/lib/agentteams/media/inbound/$evt-image-0-reviewer-media-probe.png",
+    );
 
     // A text-only frame must not fabricate a media fact.
     client.emit("inbound", makeFrame({ event_id: "$evt-text" }));

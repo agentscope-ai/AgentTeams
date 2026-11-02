@@ -31,6 +31,31 @@ DEFAULT_TIMEOUT_S = 15.0
 _MXC_RE = re.compile(r"^mxc://([^/]+)/(.+)$")
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
+# Magic-byte sniffing for the media types the channel advertises. The core
+# frame may omit mime_type; the SDK decides "is this an image?" from the
+# MIME type / filename, so the bytes we just downloaded are the authoritative
+# signal and are cheaper than trusting the metadata.
+_MAGIC = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+    (b"RIFF", "image/webp"),  # refined below (WEBP at offset 8)
+    (b"%PDF-", "application/pdf"),
+)
+
+
+def sniff_content_type(data: bytes) -> Optional[str]:
+    """Best-effort MIME type from the first bytes (images, PDF)."""
+
+    for magic, mime in _MAGIC:
+        if data.startswith(magic):
+            if magic == b"RIFF":
+                return "image/webp" if data[8:12] == b"WEBP" else None
+            return mime
+    return None
+
+
 
 def _download_url(homeserver: str, mxc_uri: str) -> str:
     """Translate ``mxc://server/mediaId`` into the authenticated download URL.
@@ -88,6 +113,48 @@ def _read_limited(response: Any) -> bytes:
     return b"".join(chunks)
 
 
+def _origin(url: str):
+    """(scheme, host, port) of a URL — the tuple a credential may follow."""
+
+    parts = urllib.parse.urlsplit(url)
+    scheme = (parts.scheme or "").lower()
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    if port is None:
+        port = {"http": 80, "https": 443}.get(scheme)
+    return scheme, (parts.hostname or "").lower(), port
+
+
+class _CredentialSafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Follow redirects without carrying the Matrix bearer off-origin.
+
+    urllib re-sends the original headers on every redirected request, which
+    would forward ``Authorization: Bearer <agent token>`` to whatever host a
+    (compromised or misconfigured) homeserver redirects to. The agent's token
+    is a deployment credential: it may only ever travel to the origin that
+    was configured. A same-origin redirect keeps the header (the common
+    ``/_matrix/client/v1`` -> ``/media/v3`` legacy routes), everything else
+    (other host, other port, scheme downgrade) is followed *without* it.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new_request = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new_request is None:
+            return None
+        if _origin(req.full_url) != _origin(newurl):
+            new_request.remove_header("Authorization")
+            new_request.unredirected_hdrs.pop("Authorization", None)
+            new_request.headers.pop("Authorization", None)
+        return new_request
+
+
+def _open(request: urllib.request.Request, timeout: float):
+    opener = urllib.request.build_opener(_CredentialSafeRedirectHandler())
+    return opener.open(request, timeout=timeout)
+
+
 def fetch_media_bytes(
     homeserver: str,
     access_token: str,
@@ -95,14 +162,19 @@ def fetch_media_bytes(
     *,
     timeout: float = DEFAULT_TIMEOUT_S,
 ) -> bytes:
-    """Download one mxc reference with the agent's own credentials."""
+    """Download one mxc reference with the agent's own credentials.
+
+    The bearer is scoped to the configured origin: a redirect that leaves
+    it (different host/port/scheme) is followed without the credential, so a
+    homeserver cannot bounce the token to a third party.
+    """
 
     headers = {"Authorization": f"Bearer {access_token}"}
     last_error: Optional[Exception] = None
     for url in (_download_url(homeserver, mxc_uri), _legacy_url(homeserver, mxc_uri)):
         try:
             request = urllib.request.Request(url, headers=headers, method="GET")
-            with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - config-owned base URL
+            with _open(request, timeout) as response:  # noqa: S310 - config-owned base URL
                 return _read_limited(response)
         except urllib.error.HTTPError as exc:  # 404 on the v1 endpoint -> legacy
             last_error = exc
@@ -168,5 +240,9 @@ def fetch_frame_media(
             continue
         ref["local_path"] = path
         ref["local_size"] = len(data)
+        if not str(ref.get("mime_type") or "").strip():
+            sniffed = sniff_content_type(data)
+            if sniffed:
+                ref["mime_type"] = sniffed
         fetched += 1
     return fetched

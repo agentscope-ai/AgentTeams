@@ -44,10 +44,22 @@ class AgentBridge:
     harness passes its own so its log format stays unchanged.
     """
 
-    def __init__(self, server, agent_user: str, log: Optional[Callable[[str], None]] = None):
+    def __init__(
+        self,
+        server,
+        agent_user: str,
+        log: Optional[Callable[[str], None]] = None,
+        media_enricher: Optional[Callable[[dict], int]] = None,
+    ):
         self.server = server
         self._agent_user = agent_user
         self._log = log or _default_log
+        # Optional in-place enrich hook (sidecar.media.fetch_frame_media):
+        # the OpenClaw model pipeline only hydrates attachments it can read
+        # from disk, so the sidecar materializes each mxc reference and adds
+        # ``local_path`` before the frame leaves for the plugin. Best-effort:
+        # a failure logs and the frame is forwarded unchanged.
+        self._media_enricher = media_enricher
         self.seen: set = set()
         self.last_event = None
         self.forwarded = 0
@@ -69,7 +81,17 @@ class AgentBridge:
         self.last_event = event
         self.forwarded += 1
         core = _core.load_core().core
-        self.server.send(core.make_inbound(event))
+        frame = core.make_inbound(event)
+        if self._media_enricher is not None and frame.get("media"):
+            try:
+                fetched = self._media_enricher(frame)
+                if fetched:
+                    self._log(
+                        f"materialized {fetched} media attachment(s) for {event.event_id}"
+                    )
+            except Exception as exc:  # never drop an event over an attachment
+                self._log(f"media enrichment failed for {event.event_id}: {exc}")
+        self.server.send(frame)
         self._log(
             f"forwarded inbound {event.event_id} ({len(event.text)} chars) to sidecar"
         )

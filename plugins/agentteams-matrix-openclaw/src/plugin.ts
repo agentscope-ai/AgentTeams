@@ -201,6 +201,7 @@ function resolveAccount(
  * metadata the core needs to hydrate the bytes.
  */
 function inboundMediaFacts(frame: SidecarInboundFrame): Array<{
+  path?: string;
   url: string;
   contentType?: string;
   fileName?: string;
@@ -208,6 +209,12 @@ function inboundMediaFacts(frame: SidecarInboundFrame): Array<{
   messageId: string;
 }> {
   return (frame.media ?? []).map((ref) => ({
+    // The SDK hydrates a media fact only from something it can read on
+    // disk (`path`, `file:`, or `media://inbound/<id>`); an `mxc://` URL
+    // alone is treated as an unsupported scheme and dropped. The sidecar
+    // therefore downloads the bytes and hands us `local_path`, which is
+    // what actually produces the image block in the model request.
+    ...(ref.local_path ? { path: ref.local_path } : {}),
     url: ref.mxc_uri,
     contentType: ref.mime_type,
     fileName: ref.file_name,

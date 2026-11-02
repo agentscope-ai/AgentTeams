@@ -23,12 +23,22 @@ import threading
 from typing import Optional
 
 from sidecar import _core
+from sidecar import media as media_mod
 from sidecar.bridge import AgentBridge, run_outbound_worker
 from sidecar.config import ConfigError, load_config
 
 log = logging.getLogger("sidecar")
 
 SHUTDOWN_TIMEOUT = 10.0
+
+
+_bridge_logger = logging.getLogger("sidecar.bridge")
+
+
+def bridge_log(message: str) -> None:
+    """Line sink shared by the bridge and the media enricher."""
+
+    _bridge_logger.info(message)
 
 
 @dataclasses.dataclass
@@ -75,7 +85,22 @@ def build(config) -> SidecarRuntime:
     loop_thread = None
     try:
         server.start()
-        bridge = AgentBridge(server, config.agent_user)
+        media_dir = os.path.join(
+            os.path.dirname(os.path.abspath(config.socket_path)), "media", "inbound"
+        )
+
+        def _enrich_frame(frame: dict) -> int:
+            return media_mod.fetch_frame_media(
+                config.homeserver_url,
+                config.agent_access_token,
+                frame,
+                media_dir,
+                log=bridge_log,
+            )
+
+        bridge = AgentBridge(
+            server, config.agent_user, log=bridge_log, media_enricher=_enrich_frame
+        )
         transport = transport_mod.NioTransport(
             transport_mod.TransportConfig(
                 homeserver=config.homeserver_url,

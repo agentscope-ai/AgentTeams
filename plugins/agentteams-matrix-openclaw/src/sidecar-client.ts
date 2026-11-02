@@ -48,6 +48,15 @@ export type SidecarMediaRef = {
   mime_type?: string;
   file_name?: string;
   size?: number;
+  /**
+   * Local copy of the bytes, added by the sidecar for inbound frames
+   * (`sidecar/media.py`). The OpenClaw model pipeline can only hydrate
+   * attachments it can read from disk, so this is the path that turns a
+   * Matrix media reference into an actual image block; outbound frames
+   * never carry it.
+   */
+  local_path?: string;
+  local_size?: number;
 };
 
 /** `inbound` frame: a Matrix event the sidecar wants the agent to handle. */

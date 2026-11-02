@@ -34,8 +34,26 @@ one connection; a second concurrent connection is rejected.
 | `ack` | server → client | `event_id` | Handshake ack has an **empty** `event_id`; outbound acks carry the sent event id (correlated FIFO). |
 | `outbound` | client → server | `room_id`, `text`, `reply_to?`, `kind?` ∈ `final\|tool\|notice`, `media?` | One `ack` per outbound. |
 | `inbound` | server → client | `event_id`, `room_id`, `sender`, `text`, `media[]`, `mentions[]`, `thread_root?`, `ts` (ms), `kind?` ∈ `text\|media\|edit\|redaction` | Events the agent should handle. |
+| `inbound` media ref | server → client | `{mxc_uri, mime_type?, file_name?, size?, local_path?, local_size?}` | The sidecar downloads each reference with the agent's own credentials and adds `local_path` (see *Inbound media* below). |
 | `typing` | server → client | `room_id`, `state` ∈ `start\|stop` | Typing indicator state. |
 | `error` | server → client | `code`, `message` | `protocol_mismatch`, `connection_limit`, `handshake_timeout`, `connection_closed`, `invalid_json`, `invalid_frame`, `unknown_type`, `line_exceeds_limit`. Server sends an error frame and closes on handshake failure. |
+
+### Inbound media
+
+The OpenClaw model pipeline hydrates an attachment only when it can read the
+bytes from disk (`path`, `file:`, or the `media://inbound/<id>` store); a bare
+`mxc://` reference is an unsupported scheme and is dropped, so an image-capable
+model would receive no image block even though the channel advertises
+`capabilities.media`. The sidecar therefore downloads every inbound media
+reference (`sidecar/media.py`, Matrix client media endpoint, `Bearer` with the
+agent's token), writes it to `<state dir>/media/inbound/` (0600), and adds
+`local_path` + `local_size` to the frame. The plugin maps that onto the SDK's
+inbound media fact `path`, which is the field the pipeline actually reads.
+
+The download is best-effort: a failure logs and the frame is forwarded with the
+reference only (text handling is unaffected). Outbound media is unchanged, and
+encrypted media is a separate acceptance item.
+
 
 Client behavior: 5 s default handshake timeout; `SidecarHandshakeError` on
 timeout / mismatch / limit; FIFO outbound-ack correlation; unknown frame types

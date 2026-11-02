@@ -315,6 +315,8 @@ describe("agentteams-matrix inbound dispatch", () => {
           mime_type: "image/png",
           file_name: "reviewer-media-probe.png",
           size: 8446,
+          // The sidecar downloaded the bytes; this is what the SDK reads.
+          local_path: "/var/lib/agentteams/media/inbound/$evt-image-0-reviewer-media-probe.png",
         },
       ],
     }));
@@ -324,6 +326,7 @@ describe("agentteams-matrix inbound dispatch", () => {
     const imageCtx = turns[0].ctxPayload as Record<string, any>;
     assert.deepEqual(imageCtx.media, [
       {
+        path: "/var/lib/agentteams/media/inbound/$evt-image-0-reviewer-media-probe.png",
         url: "mxc://matrix.example.org/AbCdEf123",
         contentType: "image/png",
         fileName: "reviewer-media-probe.png",

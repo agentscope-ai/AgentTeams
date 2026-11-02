@@ -54,6 +54,14 @@ from .mentions import (
     text_mentions_worker,
     was_mentioned,
 )
+from .outcomes import (
+    DROP_REASONS,
+    DROPS_RELATIVE_PATH,
+    DETAIL_LIMIT,
+    drops_path,
+    read_drops,
+    record_drop,
+)
 from .session import resolve_session_id, to_handle_from_target
 from .sidecar import (
     FRAME_TYPES,
@@ -85,6 +93,9 @@ __all__ = [
     "CRYPTO_BACKENDS",
     "CURRENT_MESSAGE_MARKER",
     "DEFAULT_HISTORY_LIMIT",
+    "DETAIL_LIMIT",
+    "DROP_REASONS",
+    "DROPS_RELATIVE_PATH",
     "HISTORY_CONTEXT_MARKER",
     "INBOUND_KINDS",
     "OUTBOUND_KINDS",
@@ -115,6 +126,7 @@ __all__ = [
     "crypto_available",
     "decode_line",
     "detect_crypto_backend",
+    "drops_path",
     "e2ee_store_path",
     "encode_frame",
     "extract_mentions_from_text",
@@ -128,6 +140,8 @@ __all__ = [
     "make_typing",
     "mxc_to_http",
     "probe_olm",
+    "read_drops",
+    "record_drop",
     "resolve_session_id",
     "strip_mention_prefix",
     "text_mentions_worker",

@@ -897,6 +897,12 @@ jobs:
       - name: Run the Control UI pin-assertion regression (stubbed docker)
         run: bash manager/tests/test-control-ui-version-assert.sh
 
+      - name: Run the installer storage-env regression
+        run: bash install/tests/test-install-storage-env.sh
+
+      - name: Run the installer storage round-trip regression (writer -> loader -> resolver)
+        run: bash install/tests/test-install-storage-roundtrip.sh
+
   install-upgrade-cli:
     runs-on: ubuntu-latest
     timeout-minutes: 10

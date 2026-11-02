@@ -227,6 +227,56 @@ $env:AGENTTEAMS_LLM_API_KEY = "your-api-key"
 | `AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION` | Experimental DeepSeek Harness runtime image tag; released independently from AgentTeams | `v0.1.0` |
 | `AGENTTEAMS_REGISTRY` | Image registry | *(auto-detected by timezone)* |
 
+### External S3 backend (embedded)
+
+By default, an embedded installation stores agent files in the built-in
+MinIO (`http://127.0.0.1:9000`, bucket `agentteams-storage`). To point the
+controller at an external S3-compatible backend (e.g. RustFS) instead, set:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `AGENTTEAMS_STORAGE_PROVIDER` | Storage backend: `minio` or `s3` | `minio` |
+| `AGENTTEAMS_FS_ENDPOINT` | External S3 endpoint (must start with `http://` or `https://`) | `http://127.0.0.1:9000` |
+| `AGENTTEAMS_FS_BUCKET` | External S3 bucket | `agentteams-storage` |
+| `AGENTTEAMS_FS_ACCESS_KEY` | Access key (falls back to `AGENTTEAMS_MINIO_USER`) | *(required with `s3`)* |
+| `AGENTTEAMS_FS_SECRET_KEY` | Secret key (falls back to `AGENTTEAMS_MINIO_PASSWORD`) | *(required with `s3`)* |
+
+Example:
+
+```bash
+AGENTTEAMS_STORAGE_PROVIDER=s3 \
+AGENTTEAMS_FS_ENDPOINT=http://rustfs:9000 \
+AGENTTEAMS_FS_BUCKET=agentteams-storage \
+AGENTTEAMS_FS_ACCESS_KEY=... AGENTTEAMS_FS_SECRET_KEY=... \
+./install/agentteams-install.sh
+```
+
+**Network reachability:** the endpoint is resolved from *inside* the
+controller container, so `127.0.0.1` there refers to the container itself,
+not the host. Use an address reachable from the `agentteams-net` Docker
+network — e.g. a container name like `rustfs` on that network, or the
+host's gateway IP (`172.17.0.1` on the default bridge).
+
+**Switching an existing installation:** do *not* use reinstall to change
+the storage backend — reinstall removes the `agentteams-data` volume and
+everything in it. Instead, follow the cutover runbook from #1413 (recreate
+the controller, then recreate the members).
+
+**Preview without installing:** print exactly the storage env the installer
+would pass to the controller (no root, no Docker, no prompts):
+
+```bash
+AGENTTEAMS_STORAGE_PROVIDER=s3 \
+AGENTTEAMS_FS_ENDPOINT=http://rustfs:9000 \
+AGENTTEAMS_FS_BUCKET=agentteams-storage \
+AGENTTEAMS_FS_ACCESS_KEY=... AGENTTEAMS_FS_SECRET_KEY=... \
+./install/agentteams-install.sh --print-controller-env
+```
+
+The same mode can be triggered with `AGENTTEAMS_PRINT_CONTROLLER_ENV=1`;
+invalid storage configuration exits non-zero with the missing variables
+named.
+
 ## Platform Notes
 
 ### Windows

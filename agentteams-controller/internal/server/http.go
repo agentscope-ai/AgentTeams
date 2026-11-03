@@ -126,12 +126,36 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("PUT /api/v1/humans/{name}", mw.RequireAuthz(authpkg.ActionUpdate, "human", nameFn)(http.HandlerFunc(rh.UpdateHuman)))
 	mux.Handle("DELETE /api/v1/humans/{name}", mw.RequireAuthz(authpkg.ActionDelete, "human", nameFn)(http.HandlerFunc(rh.DeleteHuman)))
 
+	// Human file area (#1414 P1): per-human working files + recycle bin.
+	// Auth-only middleware: the handler performs its own authorization so
+	// non-access callers get 404 (no existence probing) and partial-access
+	// callers get 403 on admin-only operations.
+	hfh := NewHumanFilesHandler(deps.Client, deps.Namespace, deps.OSS, auditClient)
+	mux.Handle("GET /api/v1/humans/{name}/files/{path...}", mw.Authenticate(http.HandlerFunc(hfh.getFile)))
+	mux.Handle("PUT /api/v1/humans/{name}/files/{path...}", mw.Authenticate(http.HandlerFunc(hfh.putFile)))
+	mux.Handle("DELETE /api/v1/humans/{name}/files/{path...}", mw.Authenticate(http.HandlerFunc(hfh.deleteFile)))
+	mux.Handle("GET /api/v1/humans/{name}/trash", mw.Authenticate(http.HandlerFunc(hfh.listTrash)))
+	mux.Handle("POST /api/v1/humans/{name}/trash/{id}/restore", mw.Authenticate(http.HandlerFunc(hfh.restoreTrash)))
+	mux.Handle("DELETE /api/v1/humans/{name}/trash/{id}", mw.Authenticate(http.HandlerFunc(hfh.purgeTrash)))
+	mux.Handle("GET /api/v1/humans/{name}/quota", mw.Authenticate(http.HandlerFunc(hfh.getQuota)))
+	mux.Handle("PUT /api/v1/humans/{name}/quota", mw.Authenticate(http.HandlerFunc(hfh.putQuota)))
+
 	// Managers
 	mux.Handle("POST /api/v1/managers", mw.RequireAuthz(authpkg.ActionCreate, "manager", nil)(http.HandlerFunc(rh.CreateManager)))
 	mux.Handle("GET /api/v1/managers", mw.RequireAuthz(authpkg.ActionList, "manager", nil)(http.HandlerFunc(rh.ListManagers)))
 	mux.Handle("GET /api/v1/managers/{name}", mw.RequireAuthz(authpkg.ActionGet, "manager", nameFn)(http.HandlerFunc(rh.GetManager)))
 	mux.Handle("PUT /api/v1/managers/{name}", mw.RequireAuthz(authpkg.ActionUpdate, "manager", nameFn)(http.HandlerFunc(rh.UpdateManager)))
 	mux.Handle("DELETE /api/v1/managers/{name}", mw.RequireAuthz(authpkg.ActionDelete, "manager", nameFn)(http.HandlerFunc(rh.DeleteManager)))
+
+	// --- Loop control plane (#1402: pause state lives in the project meta) ---
+	// Pause/resume project the source into the project's loop.pause_sources;
+	// the Loop CRD is only read to resolve team/project and never patched.
+	// The middleware cannot resolve loop -> team, so the handler is the real
+	// team-scope boundary (same pattern as the project endpoints).
+	looph := NewLoopHandler(deps.Client, deps.Namespace, deps.OSS)
+	loopNameFn := func(r *http.Request) string { return r.PathValue("name") }
+	mux.Handle("POST /api/v1/loops/{name}/pause", mw.RequireAuthz(authpkg.ActionUpdate, "loop", loopNameFn)(http.HandlerFunc(looph.PauseLoop)))
+	mux.Handle("POST /api/v1/loops/{name}/resume", mw.RequireAuthz(authpkg.ActionUpdate, "loop", loopNameFn)(http.HandlerFunc(looph.ResumeLoop)))
 
 	// --- Audit (read-only view of the durable audit store, #1220 §8) ---
 	audh := NewAuditHandler(deps.OSS)
@@ -162,6 +186,10 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/projects/{id}/history", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectHistory)))
 	// Project event stream (transition engine history feed; read-only, L2 self-scope).
 	mux.Handle("GET /api/v1/projects/{id}/events", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectEvents)))
+	// S2 signal-event read surface (#1405 writes only; browsers need a read).
+	mux.Handle("GET /api/v1/projects/{id}/signal-events", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectSignalEvents)))
+	// Attention read surface (workbench decision modal; answers go to the room).
+	mux.Handle("GET /api/v1/projects/{id}/attention", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectAttention)))
 	mux.Handle("GET /api/v1/projects/{id}/history/{timestamp}", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectHistorySnapshot)))
 
 	// --- Coding runs (read-only coding-CLI transcript visibility, D12 路 A;
@@ -293,6 +321,12 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/projects/{id}/replan", mw.RequireAuthz(authpkg.ActionUpdate, "project", projectNameFn)(http.HandlerFunc(projh.ReplanProject)))
 	mux.Handle("POST /api/v1/projects/{id}/tasks/{taskId}/cancel", mw.RequireAuthz(authpkg.ActionUpdate, "project", projectTaskNameFn)(http.HandlerFunc(projh.CancelTask)))
 	mux.Handle("POST /api/v1/projects/{id}/complete", mw.RequireAuthz(authpkg.ActionUpdate, "project", projectNameFn)(http.HandlerFunc(projh.CompleteProject)))
+	// Conditional project meta commit (#1402): the worker sync path commits
+	// the full meta.json against a strict If-Match CAS. The resource kind is
+	// the dedicated "project-meta" — NOT "project" — so the authorizer can
+	// grant workers exactly this one write without opening
+	// pause/resume/replan/complete/cancel (see authorizeWorker).
+	mux.Handle("PUT /api/v1/projects/{id}/meta", mw.RequireAuthz(authpkg.ActionUpdate, "project-meta", projectNameFn)(http.HandlerFunc(projh.PutProjectMeta)))
 
 	// --- Gateway ---
 	gh := NewGatewayHandler(deps.Gateway)

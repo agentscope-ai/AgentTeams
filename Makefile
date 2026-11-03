@@ -136,8 +136,9 @@ build-openclaw-base: ## Build OpenClaw base image
 
 # build targets use the locally-built openclaw-base; push targets use the registry image
 # OPENCLAW_BASE_VERSION controls which base image tag manager/worker builds depend on.
-# Default: latest (for standalone builds). Override to use a versioned base (e.g. in build-all).
-OPENCLAW_BASE_VERSION ?= 20260423-8359cbc
+# Single source of truth: hack/versions.env (OPENCLAW_BASE_TAG, derived from the
+# OpenClaw pin). Override on the command line to use a different base.
+OPENCLAW_BASE_VERSION ?= $(shell sed -n 's/^OPENCLAW_BASE_TAG=//p' hack/versions.env)
 OPENCLAW_BASE_BUILD_ARG = --build-arg OPENCLAW_BASE_IMAGE=$(OPENCLAW_BASE_IMAGE):$(OPENCLAW_BASE_VERSION)
 OPENCLAW_BASE_PUSH_ARG  = --build-arg OPENCLAW_BASE_IMAGE=$(OPENCLAW_BASE_IMAGE):$(OPENCLAW_BASE_VERSION)
 

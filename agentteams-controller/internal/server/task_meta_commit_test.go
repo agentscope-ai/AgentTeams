@@ -1006,6 +1006,257 @@ func TestPutTaskMeta_WorkerWriteBackKeepsAttention(t *testing.T) {
 	}
 }
 
+// =====================================================================
+// #1467 r3 — the decision_class alias (decisionClass) spelling gap
+// =====================================================================
+//
+// checkDecisionClass protected only the canonical "decision_class"
+// spelling, but the W2 acceptance guard (Python _decision_class_of,
+// plugins/agentteams-teamharness/mcp/lifecycle/review.py L90-93) resolves
+// the effective decision class from EITHER spelling, canonical first:
+//
+//     return _first_text(task.get("decision_class"), task.get("decisionClass"))
+//             or DEFAULT_DECISION_CLASS
+//
+// so a same-team worker could rewrite just the alias (e.g. a stored
+// {decisionClass: "r1"} -> "r4"), or add/remove it, and the stored bytes'
+// effective approval requirement would change with the commit landing —
+// and the Python guard then reads the stored bytes and sees the downgraded
+// class with no approval record. The fix protects BOTH spellings as
+// field-level invariants for workers (key presence and value are
+// server-owned) and validates the r1-r6 vocabulary for every spelling a
+// leader or human sends.
+//
+// Cross-language parity note: these tests align with the effective
+// semantics of the Python _decision_class_of above (decision_class wins
+// over the decisionClass alias; an absent pair reads as the r4 default).
+// They assert that whatever bytes the Go guard lets a worker through keep
+// the Python-side effective value unchanged. The Python guard is the
+// reference and stays unchanged.
+
+// 16. Worker field-level invariants over both decision-class spellings.
+// Case (a) is the maintainer's probe: the stored task carries ONLY the
+// alias, the worker rewrites it, and the review verdict is kept — before
+// the fix the commit landed 200 and downgraded the effective class r1->r4.
+func TestPutTaskMeta_WorkerDecisionClassBothSpellings(t *testing.T) {
+	worker := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "alpha-dev", Team: "alpha-team"}
+
+	// base with the given keys overwritten/added in the body.
+	withFields := func(base, extra map[string]any) map[string]any {
+		body := map[string]any{}
+		for key, value := range base {
+			body[key] = value
+		}
+		for key, value := range extra {
+			body[key] = value
+		}
+		return body
+	}
+
+	// Alias-only stored task with a review verdict, so the write-back under
+	// test is a review-passing sync and the alias rewrite is the only thing
+	// the guard must catch.
+	aliasOnly := taskMeta(map[string]any{
+		"decisionClass": "r1",
+		"review":        map[string]any{"verdict": "pass", "reviewer": "alpha-lead"},
+	})
+	canonicalOnly := taskMeta(map[string]any{"decision_class": "r4"})
+	// Legacy dirty data: both spellings stored with differing values.
+	dirtyDual := taskMeta(map[string]any{
+		"decision_class": "r1",
+		"decisionClass":  "r2",
+	})
+	bare := taskMeta(nil)
+
+	for _, tc := range []struct {
+		name string
+		base map[string]any
+		body map[string]any
+		want int
+	}{
+		{
+			// (a) The probe: alias-only downgrade r1 -> r4, review kept.
+			"rewrite the alias r1 -> r4",
+			aliasOnly,
+			withFields(aliasOnly, map[string]any{"decisionClass": "r4"}),
+			http.StatusForbidden,
+		},
+		{
+			// (b) Write-back of an alias-only task, fields verbatim: legal.
+			"keep the alias verbatim",
+			aliasOnly,
+			withFields(aliasOnly, map[string]any{"progress": "done"}),
+			http.StatusOK,
+		},
+		{
+			// (c) The pre-existing canonical rewrite (also pinned by the r1
+			// tests; kept here so this group is self-contained).
+			"rewrite the canonical r1 -> r4",
+			taskMeta(map[string]any{"decision_class": "r1"}),
+			withFields(taskMeta(map[string]any{"decision_class": "r1"}), map[string]any{"decision_class": "r4"}),
+			http.StatusForbidden,
+		},
+		{
+			// (d) Add the alias on top of the canonical, differing value.
+			"add an alias with a different value",
+			canonicalOnly,
+			withFields(canonicalOnly, map[string]any{"decisionClass": "r1"}),
+			http.StatusForbidden,
+		},
+		{
+			// (e) Add the alias with the same value: the key itself is
+			// server-owned, so a presence change is still refused.
+			"add an alias with the same value",
+			canonicalOnly,
+			withFields(canonicalOnly, map[string]any{"decisionClass": "r4"}),
+			http.StatusForbidden,
+		},
+		{
+			// (f) Drop the only stored spelling (the alias): refused.
+			"drop the stored alias",
+			taskMeta(map[string]any{"decisionClass": "r4"}),
+			bare,
+			http.StatusForbidden,
+		},
+		{
+			// (g) Introduce the field from nothing: refused.
+			"introduce the alias from nothing",
+			bare,
+			taskMeta(map[string]any{"decisionClass": "r1"}),
+			http.StatusForbidden,
+		},
+		{
+			// (h) Legacy dirty dual-spelling data, kept verbatim: legal.
+			"keep the dirty dual spelling verbatim",
+			dirtyDual,
+			withFields(dirtyDual, map[string]any{"progress": "done"}),
+			http.StatusOK,
+		},
+		{
+			// (i) Dirty dual spelling, canonical side changed: refused.
+			"change the canonical of a dirty dual spelling",
+			dirtyDual,
+			withFields(dirtyDual, map[string]any{"decision_class": "r3"}),
+			http.StatusForbidden,
+		},
+		{
+			// (j) Dirty dual spelling, alias side changed: refused.
+			"change the alias of a dirty dual spelling",
+			dirtyDual,
+			withFields(dirtyDual, map[string]any{"decisionClass": "r6"}),
+			http.StatusForbidden,
+		},
+	} {
+		store := ossfake.NewMemory()
+		putTask(store, taskMetaKey, tc.base)
+		h := newProjectTestHandler(t, store, teamWithRoster("alpha-team"))
+		original, err := store.GetObject(context.Background(), taskMetaKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		rec := putTaskMetaRequest(t, h, "t1", taskMetaETag(t, store, taskMetaKey), taskMetaBody(tc.body), worker)
+		if rec.Code != tc.want {
+			t.Fatalf("%s -> %d %s, want %d", tc.name, rec.Code, rec.Body.String(), tc.want)
+		}
+		after, err := store.GetObject(context.Background(), taskMetaKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tc.want == http.StatusOK {
+			// The endpoint stores the committed body verbatim.
+			if !bytes.Equal(after, []byte(taskMetaBody(tc.body))) {
+				t.Fatalf("%s: stored meta != committed body\nbefore=%s\nstored=%s\nbody  =%s",
+					tc.name, original, after, taskMetaBody(tc.body))
+			}
+		} else if !bytes.Equal(after, original) {
+			t.Fatalf("%s: stored meta changed after the refused commit:\nbefore=%s\nafter =%s",
+				tc.name, original, after)
+		}
+	}
+}
+
+// 17. Leader / human vocabulary over both spellings: an out-of-vocabulary
+// value is refused under whichever spelling it arrives in (the message
+// names the actual key), an in-vocabulary value lands. Manager/admin are
+// not content-validated (mirroring the runtime) and stay out of scope.
+func TestPutTaskMeta_LeaderDecisionClassAliasVocabulary(t *testing.T) {
+	leader := &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team"}
+	human := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "luo", Teams: []string{"alpha-team"}}
+
+	for _, tc := range []struct {
+		name        string
+		body        map[string]any
+		caller      *authpkg.CallerIdentity
+		want        int
+		wantMessage string
+	}{
+		{
+			// The alias with an out-of-vocabulary value: refused, naming
+			// the alias key.
+			"alias out of vocabulary",
+			taskMeta(map[string]any{"decisionClass": "r9"}),
+			leader,
+			http.StatusForbidden,
+			"decisionClass must be one of r1, r2, r3, r4, r5 or r6",
+		},
+		{
+			// The canonical spelling keeps its pre-existing vocabulary rule
+			// (and its pre-existing message).
+			"canonical out of vocabulary",
+			taskMeta(map[string]any{"decision_class": "r9"}),
+			leader,
+			http.StatusForbidden,
+			"decision_class must be one of r1, r2, r3, r4, r5 or r6",
+		},
+		{
+			// The alias with a legal value: lands.
+			"alias in vocabulary",
+			taskMeta(map[string]any{"decisionClass": "r3"}),
+			leader,
+			http.StatusOK,
+			"",
+		},
+		{
+			// The same vocabulary rule applies to the human role.
+			"human alias out of vocabulary",
+			taskMeta(map[string]any{"decisionClass": "r0"}),
+			human,
+			http.StatusForbidden,
+			"decisionClass must be one of r1, r2, r3, r4, r5 or r6",
+		},
+	} {
+		store := ossfake.NewMemory()
+		putTask(store, taskMetaKey, taskMeta(nil))
+		h := newProjectTestHandler(t, store, teamWithRoster("alpha-team"))
+		original, err := store.GetObject(context.Background(), taskMetaKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		rec := putTaskMetaRequest(t, h, "t1", taskMetaETag(t, store, taskMetaKey), taskMetaBody(tc.body), tc.caller)
+		if rec.Code != tc.want {
+			t.Fatalf("%s -> %d %s, want %d", tc.name, rec.Code, rec.Body.String(), tc.want)
+		}
+		if tc.wantMessage != "" && !strings.Contains(rec.Body.String(), tc.wantMessage) {
+			t.Fatalf("%s: body=%s, want it to contain %q", tc.name, rec.Body.String(), tc.wantMessage)
+		}
+		after, err := store.GetObject(context.Background(), taskMetaKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tc.want == http.StatusOK {
+			if !bytes.Equal(after, []byte(taskMetaBody(tc.body))) {
+				t.Fatalf("%s: stored meta != committed body\nbefore=%s\nstored=%s\nbody  =%s",
+					tc.name, original, after, taskMetaBody(tc.body))
+			}
+		} else if !bytes.Equal(after, original) {
+			t.Fatalf("%s: stored meta changed after the refused commit:\nbefore=%s\nafter =%s",
+				tc.name, original, after)
+		}
+	}
+}
+
 func containsString(set []string, s string) bool {
 	for _, v := range set {
 		if v == s {

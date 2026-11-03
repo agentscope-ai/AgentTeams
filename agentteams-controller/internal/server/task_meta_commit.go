@@ -1010,32 +1010,51 @@ func (h *ProjectHandler) checkAttention(
 	return true
 }
 
-// checkDecisionClass enforces that a worker keeps decision_class semantically
-// unchanged, and that a leader/human does not introduce an out-of-vocabulary
-// value (manager/admin are not content-validated, mirroring the runtime).
+// decisionClassSpellings are the two spellings the runtimes read for the
+// decision class: the canonical decision_class and the camelCase alias. The
+// W2 acceptance guard (Python _decision_class_of,
+// plugins/agentteams-teamharness/mcp/lifecycle/review.py) resolves the
+// effective value canonical-first from either spelling, so the commit guard
+// must treat the stored bytes of BOTH as protected: a worker that rewrites
+// only the alias would otherwise change the effective approval requirement
+// without tripping a spelling-aware check.
+var decisionClassSpellings = []string{"decision_class", "decisionClass"}
+
+// checkDecisionClass enforces, per spelling, that a worker keeps the decision
+// class server-owned (the key's presence and value may not change), and that
+// a leader/human does not introduce an out-of-vocabulary value under any
+// spelling (manager/admin are not content-validated, mirroring the runtime).
 func (h *ProjectHandler) checkDecisionClass(
 	w http.ResponseWriter,
 	cur, bod map[string]json.RawMessage,
 	class commitActorClass,
 	caller *authpkg.CallerIdentity,
 ) bool {
-	curRaw, curHas := cur["decision_class"]
-	bodRaw, bodHas := bod["decision_class"]
 	if class == actorWorker {
-		if curHas != bodHas || (curHas && !sameJSONValue(curRaw, bodRaw)) {
-			writeError(w, http.StatusForbidden,
-				"worker may not change the W2 decision fields: decision_class is decision-authority owned")
-			return false
+		for _, key := range decisionClassSpellings {
+			curRaw, curHas := cur[key]
+			bodRaw, bodHas := bod[key]
+			if curHas != bodHas || (curHas && !sameJSONValue(curRaw, bodRaw)) {
+				writeError(w, http.StatusForbidden,
+					"worker may not change the W2 decision fields: decision_class / decisionClass is decision-authority owned")
+				return false
+			}
 		}
 		return true
 	}
-	if bodHas && (caller.Role == authpkg.RoleTeamLeader || caller.Role == authpkg.RoleHuman) {
-		var s string
-		if json.Unmarshal(bodRaw, &s) == nil {
-			if _, ok := decisionClassIDs[s]; !ok {
-				writeError(w, http.StatusForbidden,
-					"decision_class must be one of r1, r2, r3, r4, r5 or r6")
-				return false
+	if caller.Role == authpkg.RoleTeamLeader || caller.Role == authpkg.RoleHuman {
+		for _, key := range decisionClassSpellings {
+			bodRaw, bodHas := bod[key]
+			if !bodHas {
+				continue
+			}
+			var s string
+			if json.Unmarshal(bodRaw, &s) == nil {
+				if _, ok := decisionClassIDs[s]; !ok {
+					writeError(w, http.StatusForbidden,
+						key+" must be one of r1, r2, r3, r4, r5 or r6")
+					return false
+				}
 			}
 		}
 	}

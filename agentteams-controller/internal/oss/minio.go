@@ -35,6 +35,9 @@ type MinIOClient struct {
 	// sdkPutIfMatch overrides the SDK conditional write for tests; nil uses
 	// the real minio-go path.
 	sdkPutIfMatch func(ctx context.Context, key string, data []byte, matchETag string) error
+	// sdkPutIfNoneMatch overrides the SDK create-if-absent write for tests;
+	// nil uses the real minio-go path.
+	sdkPutIfNoneMatch func(ctx context.Context, key string, data []byte) error
 }
 
 // NewMinIOClient creates a StorageClient backed by the mc CLI.
@@ -143,6 +146,35 @@ func (c *MinIOClient) PutObjectIfMatchStrict(ctx context.Context, key string, da
 	return err
 }
 
+// PutObjectIfNoneMatchStrict is the create-if-absent (If-None-Match: *)
+// variant of PutObjectIfMatchStrict: the object is created only when it
+// does not exist, and an existing object (a concurrent create landed in
+// between) surfaces as ErrPreconditionFailed. A provider that cannot
+// honor If-None-Match (NotImplemented/501) surfaces as
+// ErrConditionalUnsupported — with NO write performed — so the
+// create-if-absent callers (the task meta first creation) fail closed
+// exactly like the If-Match strict path: a check-then-create would
+// reopen exactly the create/cancel race this method exists to close.
+func (c *MinIOClient) PutObjectIfNoneMatchStrict(ctx context.Context, key string, data []byte) error {
+	put := c.sdkPutIfNoneMatch
+	if put == nil {
+		put = c.sdkPutObjectIfNoneMatch
+	}
+	err := put(ctx, key, data)
+	if err == nil {
+		return nil
+	}
+
+	var resp minio.ErrorResponse
+	if errors.As(err, &resp) && (resp.Code == "PreconditionFailed" || resp.Code == "412") {
+		return ErrPreconditionFailed
+	}
+	if errors.As(err, &resp) && (resp.Code == "NotImplemented" || resp.Code == "501") {
+		return ErrConditionalUnsupported
+	}
+	return err
+}
+
 // ossFallbackWrite is the OSS degradation for providers without If-Match
 // (Alibaba Cloud OSS returns NotImplemented). It re-checks the read-bound
 // ETag immediately before a plain PutObject: an observed conflict is
@@ -179,6 +211,21 @@ func (c *MinIOClient) sdkPutObjectIfMatch(ctx context.Context, key string, data 
 	reader := bytes.NewReader(data)
 	opts := minio.PutObjectOptions{ContentType: "application/json"}
 	opts.SetMatchETag(matchETag)
+	_, err = sdk.PutObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), reader, int64(len(data)), opts)
+	return err
+}
+
+// sdkPutObjectIfNoneMatch is the MinIO SDK create-if-absent write
+// (If-None-Match: *). It is a separate function so tests can swap the
+// transport via sdkPutIfNoneMatch.
+func (c *MinIOClient) sdkPutObjectIfNoneMatch(ctx context.Context, key string, data []byte) error {
+	sdk, err := c.sdkClient()
+	if err != nil {
+		return err
+	}
+	reader := bytes.NewReader(data)
+	opts := minio.PutObjectOptions{ContentType: "application/json"}
+	opts.CustomHeaders.Set("If-None-Match", "*")
 	_, err = sdk.PutObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), reader, int64(len(data)), opts)
 	return err
 }

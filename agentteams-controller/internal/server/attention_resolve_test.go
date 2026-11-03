@@ -474,7 +474,7 @@ func TestResolveAttention_CASConflictRetriesOnLatest(t *testing.T) {
 	store := ossfake.NewMemory()
 	seedResolveBench(t, store, []any{pendingDecisionRecord()})
 	fx := &resolveFakeMatrix{}
-	ossStore := &conflictOSS{Memory: store, external: map[string]any{"progress_note": "external update"}}
+	ossStore := &conflictOSS{mcLikeOSS: &mcLikeOSS{Memory: store}, external: map[string]any{"progress_note": "external update"}}
 	h := newResolveTestHandlerWithStore(t, ossStore, fx, teamWithHumans("alpha-team", "alice"))
 
 	rec := resolveAttentionTestRequest(t, h, "p1", "t1", `{"resolution":"ship-a"}`, aliceCaller)
@@ -506,7 +506,7 @@ func TestResolveAttention_CASConflictRetriesOnLatest(t *testing.T) {
 func TestResolveAttention_CASExhaustion409(t *testing.T) {
 	store := ossfake.NewMemory()
 	seedResolveBench(t, store, []any{pendingDecisionRecord()})
-	ossStore := &conflictOSS{Memory: store, alwaysFail: true}
+	ossStore := &conflictOSS{mcLikeOSS: &mcLikeOSS{Memory: store}, alwaysFail: true}
 	h := newResolveTestHandlerWithStore(t, ossStore, nil, teamWithHumans("alpha-team", "alice"))
 
 	rec := resolveAttentionTestRequest(t, h, "p1", "t1", `{"resolution":"ship-a"}`, aliceCaller)

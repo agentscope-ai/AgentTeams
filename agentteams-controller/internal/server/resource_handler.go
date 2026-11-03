@@ -742,7 +742,7 @@ func (h *ResourceHandler) CreateHuman(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.ModelAccess != nil {
 		if err := h.validateModelAccess(r.Context(), req.ModelAccess); err != nil {
-			if errors.Is(err, errDanglingReference) {
+			if errors.Is(err, errDanglingReference) || errors.Is(err, errInvalidModelAccess) {
 				httputil.WriteError(w, http.StatusBadRequest, err.Error())
 				return
 			}
@@ -847,7 +847,7 @@ func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.ModelAccess != nil {
 			if err := h.validateModelAccess(ctx, req.ModelAccess); err != nil {
-				if errors.Is(err, errDanglingReference) {
+				if errors.Is(err, errDanglingReference) || errors.Is(err, errInvalidModelAccess) {
 					httputil.WriteError(w, http.StatusBadRequest, err.Error())
 					return
 				}
@@ -1075,6 +1075,11 @@ func validateCapabilities(caps *[]string) error {
 // failure (mapped to a server error).
 var errDanglingReference = errors.New("dangling reference")
 
+// errInvalidModelAccess marks a structural violation of Human.modelAccess
+// (bad role, table/inline XOR, duplicate scope, empty entry, …). It maps to
+// 400; backend failures stay 500.
+var errInvalidModelAccess = errors.New("invalid model access")
+
 // validateHumanReferences rejects permission grants that point at missing
 // Teams or Workers: a dangling reference silently widens nothing but leaves
 // the human unable to reach a resource they believe they can. Missing
@@ -1149,40 +1154,41 @@ var (
 )
 
 // validateModelAccess enforces the PR-A1a §6 invariants on the per-human
-// model-grant table. Structural violations are plain errors (400); a scope
-// referencing an unknown or out-of-scope ModelAccessTable is wrapped in
-// errDanglingReference (400, table name in the message); backend lookup
-// failures propagate unwrapped (500, per the reference-validation pattern).
+// model-grant table. Structural violations are wrapped in
+// errInvalidModelAccess (400); a scope referencing an unknown or
+// out-of-scope ModelAccessTable is wrapped in errDanglingReference (400,
+// table name in the message); backend lookup failures propagate unwrapped
+// (500, per the reference-validation pattern).
 func (h *ResourceHandler) validateModelAccess(ctx context.Context, spec *v1beta1.ModelAccessSpec) error {
 	if spec == nil {
 		return nil
 	}
 	if len(spec.Scopes) > 50 {
-		return fmt.Errorf("modelAccess.scopes: at most 50 scopes, got %d", len(spec.Scopes))
+		return fmt.Errorf("%w: modelAccess.scopes: at most 50 scopes, got %d", errInvalidModelAccess, len(spec.Scopes))
 	}
 	seenRoles := map[string]struct{}{}
 	for i := range spec.Scopes {
 		sc := &spec.Scopes[i]
 		if _, ok := modelAccessRoleSet[sc.Role]; !ok {
-			return fmt.Errorf("modelAccess.scopes[%d].role: %q is not one of \"\", \"*\", \"team_leader\", \"worker\"", i, sc.Role)
+			return fmt.Errorf("%w: modelAccess.scopes[%d].role: %q is not one of \"\", \"*\", \"team_leader\", \"worker\"", errInvalidModelAccess, i, sc.Role)
 		}
 		hasInline := sc.Main != nil || sc.Spawn != nil || len(sc.CodingCli) > 0
 		if sc.Table != "" && hasInline {
-			return fmt.Errorf("modelAccess.scopes[%d]: table and inline surfaces are mutually exclusive", i)
+			return fmt.Errorf("%w: modelAccess.scopes[%d]: table and inline surfaces are mutually exclusive", errInvalidModelAccess, i)
 		}
 		if sc.Table == "" && !hasInline {
-			return fmt.Errorf("modelAccess.scopes[%d]: a scope needs a table or at least one inline surface", i)
+			return fmt.Errorf("%w: modelAccess.scopes[%d]: a scope needs a table or at least one inline surface", errInvalidModelAccess, i)
 		}
 		roleKey := sc.Role
 		if roleKey == "" {
 			roleKey = "*"
 		}
 		if _, dup := seenRoles[roleKey]; dup {
-			return fmt.Errorf("modelAccess.scopes[%d]: duplicate role %q", i, sc.Role)
+			return fmt.Errorf("%w: modelAccess.scopes[%d]: duplicate role %q", errInvalidModelAccess, i, sc.Role)
 		}
 		seenRoles[roleKey] = struct{}{}
 		if err := validateModelAccessSurfaces(sc.Main, sc.Spawn, sc.CodingCli); err != nil {
-			return fmt.Errorf("modelAccess.scopes[%d]: %w", i, err)
+			return fmt.Errorf("%w: modelAccess.scopes[%d]: %w", errInvalidModelAccess, i, err)
 		}
 		if sc.Table != "" {
 			var table v1beta1.ModelAccessTable

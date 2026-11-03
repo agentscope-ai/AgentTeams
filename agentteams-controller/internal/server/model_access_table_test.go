@@ -174,6 +174,9 @@ func TestModelAccessTableCRUD(t *testing.T) {
 	req.SetPathValue("name", "shared")
 	rec = httptest.NewRecorder()
 	handler.GetModelAccessTable(rec, req)
+	// Reset before re-unmarshal: json.Unmarshal leaves fields absent from
+	// the new payload (main is omitempty) at their previous values.
+	got = ModelAccessTableResponse{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal get after update: %v", err)
 	}

@@ -69,6 +69,9 @@ func LoadSurface() (runtimeconfig.Surface, error) {
 			if !validFieldType(f.Type) {
 				return runtimeconfig.Surface{}, fmt.Errorf("openclaw surface: field %q has invalid type %q", f.Key, f.Type)
 			}
+			if !f.Class.Valid() {
+				return runtimeconfig.Surface{}, fmt.Errorf("openclaw surface: field %q has invalid class %q", f.Key, f.Class)
+			}
 			if _, dup := seen[f.Key]; dup {
 				return runtimeconfig.Surface{}, fmt.Errorf("openclaw surface: duplicate field key %q", f.Key)
 			}

@@ -11,7 +11,7 @@ import (
 // TestOpenClawSurfaceCoverage is the P8a coverage gate: the extracted
 // surface (surface.json) is checked against the zod-schema key snapshot
 // (zod-keys.json), with the allowlist (surface.allowlist.json) as the only
-// admitted escape hatch. Four assertions:
+// admitted escape hatch. Five assertions:
 //
 //	(a) every snapshot key is either covered by a declared field or by an
 //	    allowlist entry whose reason is non-empty — the coverage delta must
@@ -19,7 +19,9 @@ import (
 //	(b) every declared field key exists in the snapshot (exact match);
 //	(c) every allowlist key exists in the snapshot (exact match);
 //	(d) every field's applies value is in the closed vocabulary and field
-//	    keys are unique across all faces.
+//	    keys are unique across all faces;
+//	(e) every field's class is in the closed vocabulary, and the model
+//	    selection plane is classified exactly once.
 //
 // Coverage is literal string matching: `*` is a snapshot placeholder for a
 // dynamically-keyed section, not a glob. Field `storage.locations.*.provider`
@@ -89,6 +91,26 @@ func TestOpenClawSurfaceCoverage(t *testing.T) {
 			t.Errorf("(d) duplicate field key %q", f.Key)
 		}
 		seen[f.Key] = struct{}{}
+	}
+
+	// (e) every field's class is in the closed vocabulary, and the model
+	// selection plane is classified exactly once: 2 selection keys,
+	// 39 definition keys, 1 policy key.
+	classes := map[runtimeconfig.Class]int{}
+	for _, f := range fields {
+		if !f.Class.Valid() {
+			t.Errorf("field %q has invalid class %q", f.Key, f.Class)
+		}
+		classes[f.Class]++
+	}
+	if got, want := classes[runtimeconfig.ClassSelection], 2; got != want {
+		t.Errorf("selection-classed keys = %d, want %d", got, want)
+	}
+	if got, want := classes[runtimeconfig.ClassDefinition], 39; got != want {
+		t.Errorf("definition-classed keys = %d, want %d", got, want)
+	}
+	if got, want := classes[runtimeconfig.ClassPolicy], 1; got != want {
+		t.Errorf("policy-classed keys = %d, want %d", got, want)
 	}
 }
 

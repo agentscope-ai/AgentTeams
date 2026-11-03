@@ -504,6 +504,61 @@ func TestMemberConfigPut_GatewayDownStillWritesPending(t *testing.T) {
 	}
 }
 
+// stubNativeConfigPolicy is the test double for the native-config policy
+// seam: it records that it was consulted and returns a fixed error.
+type stubNativeConfigPolicy struct {
+	err   error
+	calls int
+}
+
+func (s *stubNativeConfigPolicy) CheckNativeWrite(_ context.Context, _ *authpkg.CallerIdentity, _, _ string,
+	_ map[string]any, _ func(context.Context) (map[string]any, error)) error {
+	s.calls++
+	return s.err
+}
+
+func TestMemberConfigPut_NativeConfigPolicySeam(t *testing.T) {
+	// A wired policy hook refuses a definition-plane write: the PUT is a
+	// 403 carrying the policy's machine-readable code, and the file is
+	// untouched (the hook runs before mgr.Write).
+	exec := newMemberExec()
+	stub := &stubNativeConfigPolicy{err: &NativeConfigPolicyError{
+		Code:    "native_config_definition_l1_only",
+		Message: "provider definition keys are L1-only",
+	}}
+	h := newTestMemberConfigHandler(t, "embedded", exec, ossfake.NewMemory(),
+		checkpointTeamWithWorkers("team-a", "daily-carol")...)
+	h.nativeConfigPolicy = stub
+	body := `{"patch":{"models":{"providers":{"custom":{"baseUrl":"http://gw"}}}}}`
+	rec := httptest.NewRecorder()
+	h.putConfig(rec, adminCaller(codingCliRequest(http.MethodPut, "/api/members/daily-carol/config", body, "name", "daily-carol")))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s, want 403 from the policy hook", rec.Code, rec.Body.String())
+	}
+	res := decodeJSON(t, rec.Body.String())
+	if res["error"] != "native_config_definition_l1_only" {
+		t.Fatalf("error=%v, want the policy code", res["error"])
+	}
+	if stub.calls != 1 {
+		t.Fatalf("hook calls=%d, want 1", stub.calls)
+	}
+	if exec.fs[memberConfigPath] != memberConfigInitial {
+		t.Fatalf("file modified by a policy-refused write")
+	}
+
+	// With no policy wired (nil), behaviour is unchanged: the standard
+	// success path from the existing write tests still goes through.
+	exec2 := newMemberExec()
+	h2 := newTestMemberConfigHandler(t, "embedded", exec2, ossfake.NewMemory(),
+		checkpointTeamWithWorkers("team-a", "daily-carol")...)
+	body2 := `{"patch":{"agents":{"defaults":{"subagents":{"model":"agentteams-gateway/qwen3.5-flash"}}}}}`
+	rec2 := httptest.NewRecorder()
+	h2.putConfig(rec2, adminCaller(codingCliRequest(http.MethodPut, "/api/members/daily-carol/config", body2, "name", "daily-carol")))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("nil-hook PUT status=%d body=%s, want 200 (current behaviour)", rec2.Code, rec2.Body.String())
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Rollback
 // ---------------------------------------------------------------------------

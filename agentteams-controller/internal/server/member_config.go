@@ -63,6 +63,10 @@ type MemberConfigHandler struct {
 	reg             *runtimeconfig.Registry
 	defaultRuntime  string
 	openclawAdapter *openclaw.Adapter
+
+	// nativeConfigPolicy is the model-access policy seam for native config
+	// writes (wired by PR-B). nil = not wired yet (current behaviour).
+	nativeConfigPolicy NativeConfigPolicy
 }
 
 // NewMemberConfigHandler creates the handler. runtimes is the registry of
@@ -274,6 +278,26 @@ func (h *MemberConfigHandler) putConfig(w http.ResponseWriter, r *http.Request) 
 		httputil.WriteError(w, http.StatusBadRequest, `the "patch" object is required`)
 		return
 	}
+	if h.nativeConfigPolicy != nil {
+		read := func(ctx context.Context) (map[string]any, error) {
+			st, err := mgr.Read(ctx, worker.Name)
+			if err != nil {
+				return nil, err
+			}
+			return st.Values, nil
+		}
+		if err := h.nativeConfigPolicy.CheckNativeWrite(r.Context(), caller, worker.Name, runtime, req.Patch, read); err != nil {
+			var pe *NativeConfigPolicyError
+			if errors.As(err, &pe) {
+				httputil.WriteJSON(w, http.StatusForbidden, map[string]any{
+					"error": pe.Code, "message": pe.Message,
+				})
+				return
+			}
+			httputil.WriteError(w, http.StatusForbidden, err.Error())
+			return
+		}
+	}
 	res, err := mgr.Write(r.Context(), worker.Name, req.Patch, r.URL.Query().Get("if-rev"))
 	if err != nil {
 		writeConfigStoreError(w, "write worker config", err)
@@ -315,6 +339,24 @@ func (h *MemberConfigHandler) rollbackConfig(w http.ResponseWriter, r *http.Requ
 		"worker", worker.Name, "rev", res.Rev, "actor", authzActor(caller))
 	httputil.WriteJSON(w, http.StatusOK, res)
 }
+
+// --- native config policy seam ------------------------------------------------
+
+// NativeConfigPolicy decides whether a caller may write a runtime's native
+// configuration. Implementations live in the model-access layer; nil means
+// "not wired yet" (current behaviour).
+type NativeConfigPolicy interface {
+	CheckNativeWrite(ctx context.Context, caller *authpkg.CallerIdentity, worker, runtime string,
+		patch map[string]any, readCurrent func(context.Context) (map[string]any, error)) error
+}
+
+// NativeConfigPolicyError carries a machine-readable code for 403 responses.
+type NativeConfigPolicyError struct {
+	Code    string
+	Message string
+}
+
+func (e *NativeConfigPolicyError) Error() string { return e.Code + ": " + e.Message }
 
 // --- errors / audit ---------------------------------------------------------
 

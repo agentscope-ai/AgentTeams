@@ -313,14 +313,14 @@ func (h *ProjectHandler) ResolveAttention(w http.ResponseWriter, r *http.Request
 // evaluateResolveAttempt runs the fixed validation order (steps 2-5) against
 // ONE version of the task meta:
 //
-//	2) no pending attention -> 409 attention_not_pending, or the
-//	   already-resolved sub-states: exact resolution+resolvedBy match ->
-//	   idempotent (returns the stored record), otherwise 409
-//	   attention_already_resolved
-//	3) caller not in the team's human roster -> 403 not_a_human_member
-//	4) decision kind: resolution not in options[].id without a freeform
-//	   declaration -> 400 resolution_not_an_option
-//	5) oversized comment / evidence -> 400
+//  2. no pending attention -> 409 attention_not_pending, or the
+//     already-resolved sub-states: exact resolution+resolvedBy match ->
+//     idempotent (returns the stored record), otherwise 409
+//     attention_already_resolved
+//  3. caller not in the team's human roster -> 403 not_a_human_member
+//  4. decision kind: resolution not in options[].id without a freeform
+//     declaration -> 400 resolution_not_an_option
+//  5. oversized comment / evidence -> 400
 //
 // On success it returns the pending record to mutate (a live reference into
 // taskData["attention"]); the caller mutates it and commits the whole meta.

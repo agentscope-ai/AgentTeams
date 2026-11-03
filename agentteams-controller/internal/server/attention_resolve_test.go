@@ -143,7 +143,7 @@ var (
 	outsiderCaller = &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "mallory", Teams: []string{"alpha-team"}}
 )
 
-func resolveAttentionRequest(t *testing.T, h *ProjectHandler, projectID, taskID, body string, caller *authpkg.CallerIdentity) *httptest.ResponseRecorder {
+func resolveAttentionTestRequest(t *testing.T, h *ProjectHandler, projectID, taskID, body string, caller *authpkg.CallerIdentity) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/"+projectID+"/attention/"+taskID+"/resolve", strings.NewReader(body))
 	req.SetPathValue("id", projectID)
@@ -222,7 +222,7 @@ func TestResolveAttention_HappyPathOption(t *testing.T) {
 	fx := &resolveFakeMatrix{}
 	h := newResolveTestHandler(t, store, fx, teamWithHumans("alpha-team", "alice"))
 
-	rec := resolveAttentionRequest(t, h, "p1", "t1", `{"resolution":"ship-a","comment":"go with A","evidence":{"freeform":false,"note":"cost analysis wins"}}`, aliceCaller)
+	rec := resolveAttentionTestRequest(t, h, "p1", "t1", `{"resolution":"ship-a","comment":"go with A","evidence":{"freeform":false,"note":"cost analysis wins"}}`, aliceCaller)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -269,7 +269,7 @@ func TestResolveAttention_Freeform(t *testing.T) {
 	seedResolveBench(t, store, []any{pendingDecisionRecord()})
 	fx := &resolveFakeMatrix{}
 	h := newResolveTestHandler(t, store, fx, teamWithHumans("alpha-team", "alice"))
-	rec := resolveAttentionRequest(t, h, "p1", "t1", `{"resolution":"defer to Q1","evidence":{"freeform":true}}`, aliceCaller)
+	rec := resolveAttentionTestRequest(t, h, "p1", "t1", `{"resolution":"defer to Q1","evidence":{"freeform":true}}`, aliceCaller)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("declared freeform status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -286,7 +286,7 @@ func TestResolveAttention_Freeform(t *testing.T) {
 	store2 := ossfake.NewMemory()
 	seedResolveBench(t, store2, []any{pendingDecisionRecord()})
 	h2 := newResolveTestHandler(t, store2, nil, teamWithHumans("alpha-team", "alice"))
-	rec2 := resolveAttentionRequest(t, h2, "p1", "t1", `{"resolution":"defer to Q1"}`, aliceCaller)
+	rec2 := resolveAttentionTestRequest(t, h2, "p1", "t1", `{"resolution":"defer to Q1"}`, aliceCaller)
 	if rec2.Code != http.StatusBadRequest || readResolveCode(t, rec2) != "resolution_not_an_option" {
 		t.Fatalf("undeclared freeform status=%d code=%s, want 400 resolution_not_an_option", rec2.Code, readResolveCode(t, rec2))
 	}
@@ -299,7 +299,7 @@ func TestResolveAttention_RosterGate(t *testing.T) {
 	store := ossfake.NewMemory()
 	seedResolveBench(t, store, []any{pendingDecisionRecord()})
 	h := newResolveTestHandler(t, store, nil, teamWithHumans("alpha-team", "alice"))
-	rec := resolveAttentionRequest(t, h, "p1", "t1", `{"resolution":"ship-a"}`, outsiderCaller)
+	rec := resolveAttentionTestRequest(t, h, "p1", "t1", `{"resolution":"ship-a"}`, outsiderCaller)
 	if rec.Code != http.StatusForbidden || readResolveCode(t, rec) != "not_a_human_member" {
 		t.Fatalf("outsider status=%d code=%s, want 403 not_a_human_member", rec.Code, readResolveCode(t, rec))
 	}
@@ -317,7 +317,7 @@ func TestResolveAttention_RosterGate(t *testing.T) {
 	seedResolveBench(t, store2, []any{pendingDecisionRecord()})
 	fx := &resolveFakeMatrix{}
 	h2 := newResolveTestHandler(t, store2, fx, teamWithHumans("alpha-team", "alice"))
-	rec2 := resolveAttentionRequest(t, h2, "p1", "t1", `{"resolution":"ship-a"}`, aliceCaller)
+	rec2 := resolveAttentionTestRequest(t, h2, "p1", "t1", `{"resolution":"ship-a"}`, aliceCaller)
 	if rec2.Code != http.StatusOK {
 		t.Fatalf("roster member status=%d body=%s, want 200", rec2.Code, rec2.Body.String())
 	}
@@ -342,11 +342,11 @@ func TestResolveAttention_TaskNotInProject(t *testing.T) {
 	})
 	h := newResolveTestHandler(t, store, nil, teamWithHumans("alpha-team", "alice"))
 
-	rec := resolveAttentionRequest(t, h, "p1", "t9", `{"resolution":"ship-a"}`, aliceCaller)
+	rec := resolveAttentionTestRequest(t, h, "p1", "t9", `{"resolution":"ship-a"}`, aliceCaller)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("absent task status=%d, want 404", rec.Code)
 	}
-	rec = resolveAttentionRequest(t, h, "p1", "t2", `{"resolution":"ship-a"}`, aliceCaller)
+	rec = resolveAttentionTestRequest(t, h, "p1", "t2", `{"resolution":"ship-a"}`, aliceCaller)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("foreign task status=%d, want 404", rec.Code)
 	}
@@ -361,13 +361,13 @@ func TestResolveAttention_IdempotentResubmit(t *testing.T) {
 	h := newResolveTestHandler(t, store, fx, teamWithHumans("alpha-team", "alice"))
 	body := `{"resolution":"ship-a","comment":"go with A"}`
 
-	rec1 := resolveAttentionRequest(t, h, "p1", "t1", body, aliceCaller)
+	rec1 := resolveAttentionTestRequest(t, h, "p1", "t1", body, aliceCaller)
 	if rec1.Code != http.StatusOK {
 		t.Fatalf("first status=%d body=%s", rec1.Code, rec1.Body.String())
 	}
 	resp1 := decodeResolveResp(t, rec1)
 
-	rec2 := resolveAttentionRequest(t, h, "p1", "t1", body, aliceCaller)
+	rec2 := resolveAttentionTestRequest(t, h, "p1", "t1", body, aliceCaller)
 	if rec2.Code != http.StatusOK {
 		t.Fatalf("second status=%d body=%s", rec2.Code, rec2.Body.String())
 	}
@@ -407,7 +407,7 @@ func TestResolveAttention_AlreadyResolved(t *testing.T) {
 	store := ossfake.NewMemory()
 	seedResolveBench(t, store, []any{resolvedRecord("ship-b", "bob")})
 	h := newResolveTestHandler(t, store, nil, teamWithHumans("alpha-team", "alice", "bob"))
-	rec := resolveAttentionRequest(t, h, "p1", "t1", `{"resolution":"ship-a"}`, aliceCaller)
+	rec := resolveAttentionTestRequest(t, h, "p1", "t1", `{"resolution":"ship-a"}`, aliceCaller)
 	if rec.Code != http.StatusConflict || readResolveCode(t, rec) != "attention_already_resolved" {
 		t.Fatalf("different resolution status=%d code=%s, want 409 attention_already_resolved", rec.Code, readResolveCode(t, rec))
 	}
@@ -417,7 +417,7 @@ func TestResolveAttention_AlreadyResolved(t *testing.T) {
 	store2 := ossfake.NewMemory()
 	seedResolveBench(t, store2, []any{resolvedRecord("ship-a", "bob")})
 	h2 := newResolveTestHandler(t, store2, nil, teamWithHumans("alpha-team", "alice", "bob"))
-	rec2 := resolveAttentionRequest(t, h2, "p1", "t1", `{"resolution":"ship-a"}`, aliceCaller)
+	rec2 := resolveAttentionTestRequest(t, h2, "p1", "t1", `{"resolution":"ship-a"}`, aliceCaller)
 	if rec2.Code != http.StatusConflict || readResolveCode(t, rec2) != "attention_already_resolved" {
 		t.Fatalf("same resolution different resolver status=%d code=%s, want 409 attention_already_resolved", rec2.Code, readResolveCode(t, rec2))
 	}
@@ -426,7 +426,7 @@ func TestResolveAttention_AlreadyResolved(t *testing.T) {
 	store3 := ossfake.NewMemory()
 	seedResolveBench(t, store3, nil)
 	h3 := newResolveTestHandler(t, store3, nil, teamWithHumans("alpha-team", "alice"))
-	rec3 := resolveAttentionRequest(t, h3, "p1", "t1", `{"resolution":"ship-a"}`, aliceCaller)
+	rec3 := resolveAttentionTestRequest(t, h3, "p1", "t1", `{"resolution":"ship-a"}`, aliceCaller)
 	if rec3.Code != http.StatusConflict || readResolveCode(t, rec3) != "attention_not_pending" {
 		t.Fatalf("not pending status=%d code=%s, want 409 attention_not_pending", rec3.Code, readResolveCode(t, rec3))
 	}
@@ -477,7 +477,7 @@ func TestResolveAttention_CASConflictRetriesOnLatest(t *testing.T) {
 	ossStore := &conflictOSS{Memory: store, external: map[string]any{"progress_note": "external update"}}
 	h := newResolveTestHandlerWithStore(t, ossStore, fx, teamWithHumans("alpha-team", "alice"))
 
-	rec := resolveAttentionRequest(t, h, "p1", "t1", `{"resolution":"ship-a"}`, aliceCaller)
+	rec := resolveAttentionTestRequest(t, h, "p1", "t1", `{"resolution":"ship-a"}`, aliceCaller)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s, want 200 after the conflict retry", rec.Code, rec.Body.String())
 	}
@@ -509,7 +509,7 @@ func TestResolveAttention_CASExhaustion409(t *testing.T) {
 	ossStore := &conflictOSS{Memory: store, alwaysFail: true}
 	h := newResolveTestHandlerWithStore(t, ossStore, nil, teamWithHumans("alpha-team", "alice"))
 
-	rec := resolveAttentionRequest(t, h, "p1", "t1", `{"resolution":"ship-a"}`, aliceCaller)
+	rec := resolveAttentionTestRequest(t, h, "p1", "t1", `{"resolution":"ship-a"}`, aliceCaller)
 	if rec.Code != http.StatusConflict || readResolveCode(t, rec) != "task_changed_during_resolve" {
 		t.Fatalf("status=%d code=%s, want 409 task_changed_during_resolve", rec.Code, readResolveCode(t, rec))
 	}
@@ -530,7 +530,7 @@ func TestResolveAttention_SizeLimits(t *testing.T) {
 	seedResolveBench(t, store, []any{pendingDecisionRecord()})
 	h := newResolveTestHandler(t, store, nil, teamWithHumans("alpha-team", "alice"))
 	body := `{"resolution":"ship-a","comment":"` + strings.Repeat("字", attentionResolveMaxCommentRunes+1) + `"}`
-	rec := resolveAttentionRequest(t, h, "p1", "t1", body, aliceCaller)
+	rec := resolveAttentionTestRequest(t, h, "p1", "t1", body, aliceCaller)
 	if rec.Code != http.StatusBadRequest || readResolveCode(t, rec) != "comment_too_long" {
 		t.Fatalf("long comment status=%d code=%s, want 400 comment_too_long", rec.Code, readResolveCode(t, rec))
 	}
@@ -540,7 +540,7 @@ func TestResolveAttention_SizeLimits(t *testing.T) {
 	seedResolveBench(t, store2, []any{pendingDecisionRecord()})
 	h2 := newResolveTestHandler(t, store2, nil, teamWithHumans("alpha-team", "alice"))
 	body2 := `{"resolution":"ship-a","evidence":{"pad":"` + strings.Repeat("x", 5*1024) + `"}}`
-	rec2 := resolveAttentionRequest(t, h2, "p1", "t1", body2, aliceCaller)
+	rec2 := resolveAttentionTestRequest(t, h2, "p1", "t1", body2, aliceCaller)
 	if rec2.Code != http.StatusBadRequest || readResolveCode(t, rec2) != "evidence_too_large" {
 		t.Fatalf("large evidence status=%d code=%s, want 400 evidence_too_large", rec2.Code, readResolveCode(t, rec2))
 	}
@@ -593,7 +593,7 @@ func TestResolveAttention_RoomFailureDoesNotFail(t *testing.T) {
 	defer log.SetLogger(old)
 
 	h := newResolveTestHandler(t, store, fx, teamWithHumans("alpha-team", "alice"))
-	rec := resolveAttentionRequest(t, h, "p1", "t1", `{"resolution":"ship-a"}`, aliceCaller)
+	rec := resolveAttentionTestRequest(t, h, "p1", "t1", `{"resolution":"ship-a"}`, aliceCaller)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s, want 200 (room delivery is best-effort)", rec.Code, rec.Body.String())
 	}

@@ -467,7 +467,7 @@ func (h *ProjectHandler) resolveAttentionNotify(ctx context.Context, roomID, ans
 	}
 	msg := fmt.Sprintf("✅ 已答复：%s（@%s，via dashboard）", answer, resolvedBy)
 	if err := h.matrix.SendMessageAsAdmin(ctx, roomID, msg); err != nil {
-		log.FromContext(ctx).Warn("attention resolve notification failed", "roomID", roomID, "error", err.Error())
+		log.FromContext(ctx).Error(err, "attention resolve notification failed", "roomID", roomID)
 	}
 }
 

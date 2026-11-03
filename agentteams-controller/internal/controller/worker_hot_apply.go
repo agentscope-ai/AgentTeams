@@ -70,7 +70,7 @@ func (r *WorkerReconciler) applySubagentModelHot(ctx context.Context, w *v1beta1
 		}
 	}
 	baseURL := urlFor(w, spec)
-	if err := patchSubagentModel(ctx, baseURL, subagentConsoleAgentID, resolved); err != nil {
+	if err := patchSubagentModel(ctx, baseURL, subagentConsoleAgentID, hotApplyProviderID(spec), resolved); err != nil {
 		log.FromContext(ctx).Error(err, "subagent model hot-apply failed, will retry on next reconcile", "worker", w.Name, "model", resolved)
 		return
 	}
@@ -125,7 +125,7 @@ func (r *WorkerReconciler) applyActiveModelHot(ctx context.Context, w *v1beta1.W
 	baseURL := urlFor(w, spec)
 	payload := map[string]any{
 		"active_model": map[string]string{
-			"provider_id": subagentModelProviderID,
+			"provider_id": hotApplyProviderID(spec),
 			"model":       resolved,
 		},
 	}
@@ -153,6 +153,15 @@ const subagentConsoleAgentID = "default"
 // (bridge.py writes it into the provider list at startup).
 const subagentModelProviderID = "agentteams-gateway"
 
+// hotApplyProviderID mirrors the model projection: the provider that serves
+// the worker's models, defaulting to the built-in gateway provider.
+func hotApplyProviderID(spec v1beta1.WorkerSpec) string {
+	if v := strings.TrimSpace(spec.ModelProvider); v != "" {
+		return v
+	}
+	return subagentModelProviderID
+}
+
 // patchSubagentModel calls the worker console's
 // PATCH /api/agents/{agentID}/model-settings with an explicit
 // subagent_model value (null clears it). The endpoint applies only the
@@ -161,11 +170,11 @@ const subagentModelProviderID = "agentteams-gateway"
 //
 // Trusted-network call: no auth, same trust model as the channel/skills/
 // approval proxies that dial the worker console.
-func patchSubagentModel(ctx context.Context, baseURL, agentID, model string) error {
+func patchSubagentModel(ctx context.Context, baseURL, agentID, providerID, model string) error {
 	var slot any
 	if model != "" {
 		slot = map[string]string{
-			"provider_id": subagentModelProviderID,
+			"provider_id": providerID,
 			"model":       model,
 		}
 	}

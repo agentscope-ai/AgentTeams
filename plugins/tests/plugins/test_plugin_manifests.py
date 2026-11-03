@@ -36,6 +36,11 @@ EXPECTED_TOOLS = [
 ]
 REQUIRED_KEYS = ("agentteams", "contracts", "tool_schema")
 
+# Optional requires.looprunner pin: "<semver> (sha256:<64 hex digits>)" —
+# same shape as the millforge requires.millforge pin. The semver part
+# follows the repo's plugin version convention (no build metadata).
+LOOPRUNNER_PIN_RE = re.compile(r"\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)? \(sha256:[0-9a-f]{64}\)")
+
 
 def _manifest_paths() -> list[Path]:
     paths = sorted(PLUGINS_ROOT.glob("*/plugin.yaml"))
@@ -63,18 +68,53 @@ def test_every_manifest_has_semver_metadata() -> None:
         )
 
 
+def _check_requires(path: Path, requires: object) -> None:
+    assert isinstance(requires, dict), f"{path}: requires must be a mapping"
+    for key in REQUIRED_KEYS:
+        value = requires.get(key)
+        assert value is not None and str(value).strip(), (
+            f"{path}: requires.{key} must be present and non-empty"
+        )
+    # The looprunner pin is optional: absent means "no loop runner
+    # dependency", which is the shipped default for both trees.
+    if "looprunner" in requires:
+        pin = str(requires["looprunner"]).strip()
+        assert LOOPRUNNER_PIN_RE.fullmatch(pin), (
+            f"{path}: requires.looprunner must look like "
+            f"'<semver> (sha256:<64 hex digits>)', got: {requires['looprunner']!r}"
+        )
+
+
 def test_requires_is_optional_and_wellformed() -> None:
     for path in _manifest_paths():
         manifest = _load(path)
         if "requires" not in manifest:
             continue
-        requires = manifest["requires"]
-        assert isinstance(requires, dict), f"{path}: requires must be a mapping"
-        for key in REQUIRED_KEYS:
-            value = requires.get(key)
-            assert value is not None and str(value).strip(), (
-                f"{path}: requires.{key} must be present and non-empty"
-            )
+        _check_requires(path, manifest["requires"])
+
+
+def test_requires_looprunner_is_optional_and_wellformed() -> None:
+    sentinel = Path("<looprunner-pin>")
+    base = {"agentteams": ">=1.2.6", "contracts": "1", "tool_schema": "1"}
+
+    # 1) Absent key: the default pass (the shipped state of both trees).
+    _check_requires(sentinel, dict(base))
+
+    # 2) A well-formed pin passes: "<semver> (sha256:<64 hex digits>)".
+    _check_requires(sentinel, {**base, "looprunner": "0.3.0 (sha256:" + "ab" * 32 + ")"})
+
+    # 3) Malformed pins are rejected: missing digest, truncated digest,
+    # wrong algorithm, non-semver version, missing space before the paren.
+    for bad in (
+        "0.3.0",  # no sha256 at all
+        "0.3.0 (sha256:abc)",  # truncated digest
+        "sha256:" + "cd" * 32,  # no semver, no parens
+        "0.3.0 (md5:" + "ab" * 16 + ")",  # wrong digest algorithm
+        "0.3 (sha256:" + "ab" * 32 + ")",  # not semver
+        "0.3.0(sha256:" + "ab" * 32 + ")",  # missing space before the paren
+    ):
+        with pytest.raises(AssertionError):
+            _check_requires(sentinel, {**base, "looprunner": bad})
 
 
 def test_teamharness_declares_requires() -> None:

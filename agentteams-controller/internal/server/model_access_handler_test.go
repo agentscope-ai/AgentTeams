@@ -205,11 +205,10 @@ func TestModelAccessWorkerResolution(t *testing.T) {
 		t.Errorf("codingCli must carry all three keys, got %v", got.Capabilities.CodingCli)
 	}
 
-	// Merged set (PR-B1 §2.2): the explicit row first, then the current
-	// value (its provider differs, so it is a distinct pair).
-	if len(got.Surfaces.Main.Entries) != 2 ||
-		got.Surfaces.Main.Entries[0] != (v1beta1.ModelAccessEntry{Provider: "agentteams-gateway", Model: "qwen3.6-27b"}) ||
-		got.Surfaces.Main.Entries[1] != (v1beta1.ModelAccessEntry{Provider: "", Model: "qwen3.6-27b"}) {
+	// Merged set (PR-B1 §2.2): the explicit row first; the current value is
+	// pinned to the default gateway provider, so it dedupes against the row.
+	if len(got.Surfaces.Main.Entries) != 1 ||
+		got.Surfaces.Main.Entries[0] != (v1beta1.ModelAccessEntry{Provider: "agentteams-gateway", Model: "qwen3.6-27b"}) {
 		t.Errorf("surfaces.main = %+v", got.Surfaces.Main)
 	}
 	if len(got.Surfaces.Spawn.Entries) != 0 || !got.Surfaces.Spawn.Inherit {
@@ -224,7 +223,7 @@ func TestModelAccessWorkerResolution(t *testing.T) {
 	}
 
 	// Empty entry slices must render as [] (the UI renders row lists).
-	if !strings.Contains(rec.Body.String(), `"main":{"entries":[{"provider":"agentteams-gateway","model":"qwen3.6-27b"},{"provider":"","model":"qwen3.6-27b"}]}`) {
+	if !strings.Contains(rec.Body.String(), `"main":{"entries":[{"provider":"agentteams-gateway","model":"qwen3.6-27b"}]}`) {
 		t.Errorf("surfaces.main entries missing from body: %s", rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), `"spawn":{"entries":[],"inherit":true}`) {
@@ -315,11 +314,11 @@ func TestModelAccessNoOwnerLockedView(t *testing.T) {
 	// No explicit/implicit rows: the merged sets carry only the current
 	// values (the current value is always available, PR-B1 §2.2).
 	if len(got.Surfaces.Main.Entries) != 1 ||
-		got.Surfaces.Main.Entries[0] != (v1beta1.ModelAccessEntry{Provider: "", Model: "qwen3.6-27b"}) {
+		got.Surfaces.Main.Entries[0] != (v1beta1.ModelAccessEntry{Provider: "agentteams-gateway", Model: "qwen3.6-27b"}) {
 		t.Errorf("surfaces.main = %+v, want the current value only", got.Surfaces.Main)
 	}
 	if len(got.Surfaces.Spawn.Entries) != 1 ||
-		got.Surfaces.Spawn.Entries[0] != (v1beta1.ModelAccessEntry{Provider: "", Model: "sub-m"}) ||
+		got.Surfaces.Spawn.Entries[0] != (v1beta1.ModelAccessEntry{Provider: "agentteams-gateway", Model: "sub-m"}) ||
 		got.Surfaces.Spawn.Inherit {
 		t.Errorf("surfaces.spawn = %+v, want the current subagent value only", got.Surfaces.Spawn)
 	}
@@ -865,9 +864,9 @@ func TestModelAccess_HumanSeesOwnGrants(t *testing.T) {
 		t.Errorf("main capabilities = %+v, want canEdit from dave's own scope", got.Capabilities.Main)
 	}
 	want := []v1beta1.ModelAccessEntry{
-		{Provider: "gw", Model: "qwen3.6-27b"}, // dave's explicit row (first)
-		{Provider: "gw", Model: "implicit-m"},  // the implicit grant (next)
-		{Provider: "", Model: "qwen3.6-27b"},   // the current value (last)
+		{Provider: "gw", Model: "qwen3.6-27b"},                 // dave's explicit row (first)
+		{Provider: "gw", Model: "implicit-m"},                  // the implicit grant (next)
+		{Provider: "agentteams-gateway", Model: "qwen3.6-27b"}, // the current value (last)
 	}
 	if len(got.Surfaces.Main.Entries) != len(want) {
 		t.Fatalf("surfaces.main = %+v, want %v", got.Surfaces.Main.Entries, want)

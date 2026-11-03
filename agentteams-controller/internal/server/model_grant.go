@@ -91,6 +91,19 @@ func readModelGrants(worker *v1beta1.Worker) []v1beta1.ModelAccessEntry {
 // mutation happens on the in-memory object before the Create/Update call —
 // a marshal failure is logged and swallowed so the annotation can never
 // block the underlying write.
+// modelGrantDefaultProvider is the provider id the controller materialises for
+// the cluster gateway; a worker with an empty ModelProvider is served by it.
+// Pinning the current-value entry to it keeps "same model, different provider"
+// from matching through the empty-provider wildcard.
+const modelGrantDefaultProvider = "agentteams-gateway"
+
+func modelGrantProviderOr(provider string) string {
+	if provider == "" {
+		return modelGrantDefaultProvider
+	}
+	return provider
+}
+
 func (h *ResourceHandler) appendModelGrant(ctx context.Context, worker *v1beta1.Worker, provider, model string) {
 	if model == "" {
 		return
@@ -168,11 +181,11 @@ func buildModelGrantSet(scope *v1beta1.ModelAccessScope, tableSpec *v1beta1.Mode
 	// (or subagent model) is the absence of a value, not a ("","") pair.
 	var currentMain []v1beta1.ModelAccessEntry
 	if worker.Spec.Model != "" {
-		currentMain = []v1beta1.ModelAccessEntry{{Provider: worker.Spec.ModelProvider, Model: worker.Spec.Model}}
+		currentMain = []v1beta1.ModelAccessEntry{{Provider: modelGrantProviderOr(worker.Spec.ModelProvider), Model: worker.Spec.Model}}
 	}
 	var currentSpawn []v1beta1.ModelAccessEntry
 	if worker.Spec.SubagentModel != "" {
-		currentSpawn = []v1beta1.ModelAccessEntry{{Provider: worker.Spec.ModelProvider, Model: worker.Spec.SubagentModel}}
+		currentSpawn = []v1beta1.ModelAccessEntry{{Provider: modelGrantProviderOr(worker.Spec.ModelProvider), Model: worker.Spec.SubagentModel}}
 	}
 
 	s := &modelGrantSet{
@@ -266,13 +279,21 @@ func (h *ResourceHandler) checkHumanModelUpdate(ctx context.Context, caller *aut
 	if err != nil {
 		return http.StatusInternalServerError, "resolve model grants: " + err.Error()
 	}
-	if req.Model != "" && req.Model != worker.Spec.Model {
+	// A change of EITHER half of the pair is a pair write: a same-name model
+	// with a different provider must not slip past the grant.
+	modelChanged := req.Model != "" && req.Model != worker.Spec.Model
+	providerChanged := req.ModelProvider != "" && req.ModelProvider != worker.Spec.ModelProvider
+	if modelChanged || providerChanged {
 		provider := worker.Spec.ModelProvider
 		if req.ModelProvider != "" {
 			provider = req.ModelProvider
 		}
-		if !grantAllows(set.main, provider, req.Model) {
-			return http.StatusForbidden, "model_not_allowed: " + provider + "/" + req.Model
+		model := worker.Spec.Model
+		if req.Model != "" {
+			model = req.Model
+		}
+		if !grantAllows(set.main, provider, model) {
+			return http.StatusForbidden, "model_not_allowed: " + provider + "/" + model
 		}
 	}
 	if req.SubagentModel != nil && *req.SubagentModel != worker.Spec.SubagentModel {

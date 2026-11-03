@@ -97,6 +97,29 @@ func TestModelGrant_HumanProviderOnlyRequiresPair(t *testing.T) {
 	}
 }
 
+// Changing only the provider (same model name) is still a pair write: the
+// resulting (provider, model) must be admitted. The current value is pinned to
+// the default gateway provider, so "same model, evil provider" cannot sneak in
+// through the empty-provider wildcard.
+func TestModelGrant_HumanProviderChangeChecksPair(t *testing.T) {
+	handler := grantRig(t)
+
+	rec := l2UpdateRequest(t, handler, "alpha-dev", `{"model":"qwen3.5-plus","modelProvider":"evil"}`, grantCaller())
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("provider swap: expected 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte("model_not_allowed")) {
+		t.Errorf("provider swap: error should carry model_not_allowed, got: %s", rec.Body.String())
+	}
+
+	// Naming the implicit default provider with the current model is a no-op
+	// pair and stays allowed.
+	rec = l2UpdateRequest(t, handler, "alpha-dev", `{"model":"qwen3.5-plus","modelProvider":"agentteams-gateway"}`, grantCaller())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("default provider: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 // Clearing subagentModel (returning to inheritance) needs the spawn inherit
 // grant: inherit=false rejects with inherit_not_granted, inherit=true allows.
 func TestModelGrant_HumanSubagentClearNeedsSpawnInherit(t *testing.T) {
@@ -220,8 +243,8 @@ func cliGrantRig(t *testing.T, cli v1beta1.ModelAccessCli) (*CodingCliHandler, *
 		Spec: v1beta1.HumanSpec{
 			AccessibleTeams: []string{"team-a"},
 			ModelAccess: &v1beta1.ModelAccessSpec{Scopes: []v1beta1.ModelAccessScope{{
-				Role:        "worker",
-				CodingCli:   []v1beta1.ModelAccessCli{cli},
+				Role:      "worker",
+				CodingCli: []v1beta1.ModelAccessCli{cli},
 			}}},
 		},
 	}

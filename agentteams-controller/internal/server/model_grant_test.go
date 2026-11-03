@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
@@ -59,10 +60,10 @@ func TestMergeGrantEntries_OrderDedupeCap(t *testing.T) {
 			t.Fatalf("merged[%d] = %v, want %v (full: %v)", i, merged[i], want[i], merged)
 		}
 	}
-	// No explicit/implicit rows at all: only the current value survives.
+	// No explicit/implicit rows at all: only the current values survive.
 	only := mergeGrantEntries(nil, nil, current)
-	if len(only) != 1 || only[0] != entry("gw", "m1") {
-		t.Errorf("current-only merge = %v, want the current pair", only)
+	if len(only) != 2 || only[0] != entry("gw", "m1") || only[1] != entry("gw", "m4") {
+		t.Errorf("current-only merge = %v, want both current pairs", only)
 	}
 	// Everything empty: a (non-nil) empty result, never nil.
 	empty := mergeGrantEntries(nil, nil, nil)
@@ -102,13 +103,13 @@ func TestModelGrantAnnotation_DedupeAndCap(t *testing.T) {
 	}
 
 	for i := 2; i < modelGrantMax; i++ {
-		h.appendModelGrant(context.Background(), w, "gw", "fill"+string(rune('a'+i)))
+		h.appendModelGrant(context.Background(), w, "gw", fmt.Sprintf("fill%d", i))
 	}
 	if got := readModelGrants(w); len(got) != modelGrantMax {
 		t.Fatalf("annotation at cap = %d entries, want %d", len(got), modelGrantMax)
 	}
 	h.appendModelGrant(context.Background(), w, "gw", "overflow") // skipped
-	if got := readModelGrants(w); len(got) != modelGrantMax || got[len(got)-1] != entry("gw", "filly") {
+	if got := readModelGrants(w); len(got) != modelGrantMax || got[len(got)-1] != entry("gw", fmt.Sprintf("fill%d", modelGrantMax-1)) {
 		t.Fatalf("overflow append must be skipped: %d entries, last=%v", len(got), got[len(got)-1])
 	}
 	// Malformed JSON degrades to an empty list (fail-closed).

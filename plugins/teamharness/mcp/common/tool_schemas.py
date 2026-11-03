@@ -235,8 +235,8 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "filesync": {
         "description": (
-            "Explicitly list, stat, pull, or push TeamHarness shared artifacts "
-            "under shared/ or read-only global-shared. "
+            "Explicitly list, stat, pull, push, or cat TeamHarness shared "
+            "artifacts under shared/ or read-only global-shared. "
             "Use this for deliberate shared file operations, not periodic "
             "workspace sync or runtime package updates."
         ),
@@ -245,8 +245,11 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["list", "stat", "pull", "push"],
-                    "description": "Shared artifact operation to perform.",
+                    "enum": ["list", "stat", "pull", "push", "cat"],
+                    "description": (
+                        "Shared artifact operation to perform. cat reads one "
+                        "remote object (content) without touching local state."
+                    ),
                 },
                 "path": {
                     "type": "string",

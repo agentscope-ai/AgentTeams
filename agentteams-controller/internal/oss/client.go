@@ -13,11 +13,22 @@ type ObjectMeta struct {
 	// ETag is the object's content hash (MD5 for single-part writes).
 	// Empty when the backend cannot report one.
 	ETag string
+	// ContentType is the stored object's media type ("" when the backend
+	// does not report one). The file API uses it to mark deleted files with
+	// a tombstone object instead of an unconditional delete.
+	ContentType string
 }
 
 // ErrPreconditionFailed is returned by PutObjectIfMatch when the object's
 // current ETag does not match the expected one — the write was NOT applied.
 var ErrPreconditionFailed = errors.New("oss: precondition failed (etag mismatch)")
+
+// ErrConditionalUnsupported is returned by a strict conditional write
+// (PutObjectIfMatchStrict) when the backend cannot honor If-Match at all
+// (the provider answers NotImplemented/501). The write is NOT performed and
+// the call never degrades to a compare-then-put: callers that need conflict
+// safety must fail closed on this error.
+var ErrConditionalUnsupported = errors.New("oss: backend cannot provide conditional writes")
 
 // StorageClient abstracts object storage operations.
 // Implementations: MinIOClient (mc CLI), future S3Client (aws-sdk-go).
@@ -45,6 +56,18 @@ type StorageClient interface {
 	// equals matchETag (conditional write). Returns ErrPreconditionFailed
 	// (without writing) on mismatch. matchETag must be non-empty.
 	PutObjectIfMatch(ctx context.Context, key string, data []byte, matchETag string) error
+
+	// PutObjectIfMatchWithType is PutObjectIfMatch plus an explicit content
+	// type. The file API writes deletion tombstones through it so a deleted
+	// path stays recognizable without reading every object.
+	PutObjectIfMatchWithType(ctx context.Context, key string, data []byte, contentType, matchETag string) error
+
+	// PutObjectIfAbsent creates the object only when no object exists at
+	// key. Returns ErrPreconditionFailed when the key already exists.
+	// Used for the per-human quota ledger's atomic first initialization;
+	// implementations must use a storage-level If-None-Match, not a
+	// Stat-then-Put fallback.
+	PutObjectIfAbsent(ctx context.Context, key string, data []byte) error
 
 	// PutFile uploads a local file to the given key path.
 	PutFile(ctx context.Context, localPath, key string) error

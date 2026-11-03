@@ -275,3 +275,30 @@ func TestEnumFieldsCarryEnum(t *testing.T) {
 		}
 	}
 }
+
+// The model face is an object container in hermes config.yaml, and its
+// subkeys are classified: default/provider are the selection plane,
+// base_url is provider definition.
+func TestModelIsObjectAndClassed(t *testing.T) {
+	s := mustSurface(t)
+	fld, ok := s.Field("model")
+	if !ok {
+		t.Fatal("model field missing")
+	}
+	if fld.Type != "object" {
+		t.Errorf("model type = %q, want object", fld.Type)
+	}
+	for key, want := range map[string]runtimeconfig.Class{
+		"model.default":  runtimeconfig.ClassSelection,
+		"model.provider": runtimeconfig.ClassSelection,
+		"model.base_url": runtimeconfig.ClassDefinition,
+	} {
+		fld, ok := s.Field(key)
+		if !ok {
+			t.Fatalf("field %q missing", key)
+		}
+		if fld.Class != want {
+			t.Errorf("%s class = %q, want %q", key, fld.Class, want)
+		}
+	}
+}

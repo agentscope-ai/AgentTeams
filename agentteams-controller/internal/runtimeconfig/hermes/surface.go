@@ -94,6 +94,9 @@ func parseSurface(data []byte) (runtimeconfig.Surface, error) {
 			if !validApplies[string(fld.Applies)] {
 				return runtimeconfig.Surface{}, fmt.Errorf("hermes surface: field %q has unknown applies %q", fld.Key, fld.Applies)
 			}
+			if !fld.Class.Valid() {
+				return runtimeconfig.Surface{}, fmt.Errorf("hermes surface: field %q has invalid class %q", fld.Key, fld.Class)
+			}
 			if faceID, dup := seenKey[fld.Key]; dup {
 				return runtimeconfig.Surface{}, fmt.Errorf("hermes surface: key %q declared by both faces %q and %q", fld.Key, faceID, face.ID)
 			}

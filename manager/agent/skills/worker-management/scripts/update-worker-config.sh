@@ -17,7 +17,7 @@
 #
 # Usage:
 #   update-worker-config.sh --name <NAME> [--model <MODEL_ID>] [--skills s1,s2] [--mcp-servers s1,s2] [--package-dir <DIR>]
-#   update-worker-config.sh --name <NAME> --runtime <openclaw|copaw|hermes|openhuman> [--model <MODEL_ID>] [--skills s1,s2] [--mcp-servers s1,s2]
+#   update-worker-config.sh --name <NAME> --runtime <openclaw|copaw|qwenpaw|hermes|openhuman> [--model <MODEL_ID>] [--skills s1,s2] [--mcp-servers s1,s2]
 #
 # Prerequisites:
 #   - Worker must already exist (created via create-worker.sh)
@@ -65,7 +65,7 @@ done
 
 if [ -z "${WORKER_NAME}" ]; then
     echo "Usage: update-worker-config.sh --name <NAME> [--model <MODEL>] [--skills s1,s2] [--mcp-servers s1,s2] [--package-dir <DIR>]"
-    echo "       update-worker-config.sh --name <NAME> --runtime <openclaw|copaw|hermes|openhuman> [--model <MODEL>] [--skills s1,s2] [--mcp-servers s1,s2]"
+    echo "       update-worker-config.sh --name <NAME> --runtime <openclaw|copaw|qwenpaw|hermes|openhuman> [--model <MODEL>] [--skills s1,s2] [--mcp-servers s1,s2]"
     exit 1
 fi
 
@@ -73,7 +73,7 @@ fi
 # Runtime switch mode: delegate to `agt update worker` and poll.
 #
 # Why: changing runtime requires destroying the old container and
-# starting a new one from a different image (openclaw vs copaw vs
+# starting a new one from a different image (openclaw vs copaw vs qwenpaw vs
 # hermes vs openhuman). The controller's reconcile loop is the only path that
 # does this correctly — see agentteams-controller/internal/controller/
 # member_reconcile.go::ensureMemberContainerPresent. Trying to do
@@ -82,8 +82,8 @@ fi
 # ============================================================
 if [ -n "${RUNTIME}" ]; then
     case "${RUNTIME}" in
-        openclaw|copaw|hermes|openhuman) ;;
-        *) _fail "Invalid --runtime '${RUNTIME}'. Must be one of: openclaw, copaw, hermes, openhuman." ;;
+        openclaw|copaw|qwenpaw|hermes|openhuman) ;;
+        *) _fail "Invalid --runtime '${RUNTIME}'. Must be one of: openclaw, copaw, qwenpaw, hermes, openhuman." ;;
     esac
 
     if [ -n "${PACKAGE_DIR}" ]; then
@@ -103,8 +103,8 @@ if [ -n "${RUNTIME}" ]; then
     [ -n "${WORKER_SKILLS}" ] && CLI_ARGS+=(--skills "${WORKER_SKILLS}")
     [ -n "${MCP_SERVERS}" ]   && CLI_ARGS+=(--mcp-servers "${MCP_SERVERS}")
 
-    log "Step 1: Calling: agentteams ${CLI_ARGS[*]}"
-    if ! CLI_OUT=$(agentteams "${CLI_ARGS[@]}" 2>&1); then
+    log "Step 1: Calling: agt ${CLI_ARGS[*]}"
+    if ! CLI_OUT=$(agt "${CLI_ARGS[@]}" 2>&1); then
         _fail "agt update worker failed: ${CLI_OUT}"
     fi
     log "  ${CLI_OUT}"

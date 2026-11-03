@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import filecmp
 import hashlib
+import json
 import logging
 import os
 from pathlib import Path
@@ -18,6 +20,7 @@ from typing import Optional
 from qwenpaw_worker.api import QwenPawApiClient
 from qwenpaw_worker.config import WorkerConfig, _relative_storage_prefix
 from qwenpaw_worker.heartbeat import WorkerHeartbeat, run_worker_heartbeat_loop
+from qwenpaw_worker.log import configure_worker_logging
 from qwenpaw_worker.sync import FileSync, push_loop
 from qwenpaw_worker.update import MemberRuntimeConfig, RuntimeUpdater
 
@@ -26,6 +29,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_AGENT_ID = "default"
 DEFAULT_BUILTIN_QWENPAW_PLUGINS_DIR = Path("/opt/agentteams/qwenpaw-builtin/plugins")
 BUILTIN_QWENPAW_PLUGIN_MARKER = ".agentteams-builtin-plugin.sha256"
+COPAW_MIGRATION_MARKER = ".copaw-migrated"
 SESSION_FILE_PROMPT_POLICY = """Do not read, list, grep, glob, summarize, copy, or expose files under sessions/.
 Session files are runtime-private state and may contain private conversation history.
 This rule applies to all channels, users, and sessions, not only DingTalk."""
@@ -64,10 +68,6 @@ def _safe_error_code(exc: Exception) -> str:
 class Worker:
     def __init__(self, config: WorkerConfig) -> None:
         self.config = config
-        # Migrate legacy .copaw state BEFORE any component (RuntimeUpdater,
-        # WorkerHeartbeat, …) creates the .qwenpaw directory — otherwise the
-        # migration would always be skipped.
-        self._migrate_legacy_working_dir()
         self.sync: Optional[FileSync] = None
         self.heartbeat = WorkerHeartbeat(config.qwenpaw_working_dir / "heartbeat.json")
         self.api_client = QwenPawApiClient(
@@ -76,6 +76,7 @@ class Worker:
         self.updater = RuntimeUpdater(
             config=config,
             adapter_apply=self._apply_runtime_adapter,
+            adapter_force_apply=self._force_apply_runtime_adapter,
             api_client=self.api_client,
             runtime_reconcile=self._reconcile_runtime_storage,
         )
@@ -86,6 +87,7 @@ class Worker:
         self._stopping = False
         self._workspace_shared_dir: Optional[Path] = None
         self._initial_runtime_config: Optional[MemberRuntimeConfig] = None
+        self._builtin_mcp_payload_identities: dict[str, str] = {}
 
     async def run(self) -> None:
         if not await self.start():
@@ -110,8 +112,6 @@ class Worker:
             self.config.console_port,
         )
         self._prepare_env()
-        self.config.default_workspace_dir.mkdir(parents=True, exist_ok=True)
-        self.heartbeat.persist()
 
         self.sync = FileSync(
             endpoint=self.config.fs_endpoint,
@@ -124,7 +124,6 @@ class Worker:
             remote_prefix=self.config.storage_prefix,
             shared_prefix=self.config.shared_prefix,
         )
-        self.updater.runtime_config_pull = lambda: self.sync.pull_runtime_config(self.config.runtime_config_path)
 
         try:
             stage_started = self._log_worker_stage_begin("mirror_all")
@@ -138,6 +137,22 @@ class Worker:
             )
             return False
         self._log_worker_stage_complete("mirror_all", stage_started)
+
+        try:
+            stage_started = self._log_worker_stage_begin("migrate_copaw_state")
+            migrated = self._migrate_legacy_state()
+        except Exception as exc:
+            self._log_worker_stage_failed("migrate_copaw_state", stage_started, exc)
+            return False
+        self._log_worker_stage_complete("migrate_copaw_state", stage_started, migrated=migrated)
+
+        # These operations create .qwenpaw and therefore must happen only
+        # after storage restore and CoPaw state migration.
+        configure_worker_logging(self.config.qwenpaw_working_dir)
+        self.config.default_workspace_dir.mkdir(parents=True, exist_ok=True)
+        self.heartbeat.persist()
+        self.updater.runtime_config_pull = lambda: self.sync.pull_runtime_config(self.config.runtime_config_path)
+        self.updater.skill_sync = self._sync_managed_skills
 
         try:
             stage_started = self._log_worker_stage_begin("load_runtime_config", path=self.config.runtime_config_path)
@@ -292,35 +307,191 @@ class Worker:
             _log_fields(**fields),
         )
 
-    def _migrate_legacy_working_dir(self) -> None:
-        """Migrate a legacy ``.copaw`` working dir to ``.qwenpaw`` on startup.
+    def _migrate_legacy_state(self) -> bool:
+        """Copy, verify, and persist legacy CoPaw state after storage restore."""
 
-        The legacy copaw_worker runtime wrote its workspace state under
-        ``.copaw``. When a Worker is switched to the QwenPaw runtime the
-        state must be carried over — the migration belongs to the target
-        (qwenpaw_worker) startup path, not the legacy one. Idempotent: when
-        ``.qwenpaw`` already exists the legacy dir is left untouched.
-        """
-        legacy_dir = self.config.install_dir / self.config.worker_name / ".copaw"
-        if not legacy_dir.exists():
-            return
+        if self.sync is None:
+            raise RuntimeError("storage sync is not initialized")
+
+        worker_home = self.config.worker_home
+        legacy_dir = worker_home / ".copaw"
+        legacy_secret_dir = worker_home / ".copaw.secret"
         target_dir = self.config.qwenpaw_working_dir
-        if target_dir.exists():
-            logger.warning(
-                "legacy .copaw working dir present but .qwenpaw already exists; "
-                "skipping migration component=worker worker=%s legacy=%s target=%s",
+        marker = target_dir / COPAW_MIGRATION_MARKER
+
+        if marker.is_file():
+            self._remove_legacy_state(legacy_dir, legacy_secret_dir)
+            logger.info(
+                "legacy CoPaw state migration already complete component=worker worker=%s marker=%s",
                 self.config.worker_name,
-                legacy_dir,
-                target_dir,
+                marker,
             )
-            return
-        legacy_dir.rename(target_dir)
+            return False
+        if not legacy_dir.exists() and not legacy_secret_dir.exists():
+            return False
+
+        target_secret_dir = self._qwenpaw_secret_dir()
+        if legacy_secret_dir.exists():
+            try:
+                target_secret_dir.relative_to(worker_home.expanduser().resolve())
+            except ValueError:
+                raise ValueError(
+                    f"QWENPAW_SECRET_DIR is outside worker storage root: {target_secret_dir}",
+                ) from None
+
+        copied_paths = []
+        migrated_directories = []
+        if legacy_dir.exists():
+            copied_paths.extend(self._copy_legacy_tree(legacy_dir, target_dir))
+            migrated_directories.append(target_dir)
+        if legacy_secret_dir.exists():
+            copied_paths.extend(self._copy_legacy_tree(legacy_secret_dir, target_secret_dir))
+            migrated_directories.append(target_secret_dir)
+
+        if legacy_dir.exists():
+            self._rebase_migrated_workspace_paths(target_dir)
+
+        # Persist migrated files before the completion marker. If any upload
+        # fails, the marker is not written and the next cold start retries
+        # from the authoritative legacy copy restored from object storage.
+        self.sync.push_directories(migrated_directories)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("copaw-to-qwenpaw\n", encoding="utf-8")
+        try:
+            self.sync.push_paths([marker])
+        except Exception:
+            # A local-only marker would make a same-container retry skip an
+            # incomplete migration. Only retain it after remote persistence.
+            marker.unlink(missing_ok=True)
+            raise
+        self._remove_legacy_state(legacy_dir, legacy_secret_dir)
         logger.info(
-            "migrated legacy .copaw working dir to .qwenpaw component=worker worker=%s legacy=%s target=%s",
+            "migrated legacy CoPaw state to QwenPaw component=worker worker=%s files=%s marker=%s",
             self.config.worker_name,
-            legacy_dir,
-            target_dir,
+            len(copied_paths),
+            marker,
         )
+        return True
+
+    def _qwenpaw_secret_dir(self) -> Path:
+        """Resolve the secret directory as the QwenPaw child process does."""
+
+        configured = os.environ.get(
+            "QWENPAW_SECRET_DIR",
+            f"{self.config.qwenpaw_working_dir}.secret",
+        )
+        secret_dir = Path(configured).expanduser()
+        if not secret_dir.is_absolute():
+            secret_dir = self.config.default_workspace_dir / secret_dir
+        return secret_dir.resolve()
+
+    def _rebase_migrated_workspace_paths(self, target_dir: Path) -> None:
+        """Point migrated CoPaw workspace metadata at the active QwenPaw tree."""
+
+        def rebase(value: object) -> object:
+            if not isinstance(value, str):
+                return value
+            marker = "/.copaw/workspaces/"
+            if marker in value:
+                relative = value.split(marker, 1)[1]
+                return str(target_dir / "workspaces" / relative)
+            if value.endswith("/.copaw/workspaces"):
+                return str(target_dir / "workspaces")
+            return value
+
+        def update_json(path: Path, update) -> None:
+            if not path.is_file():
+                return
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise RuntimeError(f"cannot rebase migrated workspace metadata: {path}") from exc
+            if update(data):
+                path.write_text(
+                    json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+
+        def update_config(data: object) -> bool:
+            if not isinstance(data, dict):
+                return False
+            profiles = data.get("agents", {}).get("profiles", {})
+            if not isinstance(profiles, dict):
+                return False
+            changed = False
+            for profile in profiles.values():
+                if not isinstance(profile, dict) or "workspace_dir" not in profile:
+                    continue
+                rebased = rebase(profile["workspace_dir"])
+                if rebased != profile["workspace_dir"]:
+                    profile["workspace_dir"] = rebased
+                    changed = True
+            return changed
+
+        def update_agent(data: object) -> bool:
+            if not isinstance(data, dict) or "workspace_dir" not in data:
+                return False
+            rebased = rebase(data["workspace_dir"])
+            if rebased == data["workspace_dir"]:
+                return False
+            data["workspace_dir"] = rebased
+            return True
+
+        update_json(target_dir / "config.json", update_config)
+        workspaces_dir = target_dir / "workspaces"
+        if workspaces_dir.is_dir():
+            for agent_config in workspaces_dir.glob("*/agent.json"):
+                update_json(agent_config, update_agent)
+
+    def _copy_legacy_tree(self, source: Path, target: Path) -> list[Path]:
+        """Merge one legacy tree with legacy files authoritative on conflict."""
+
+        copied_paths = []
+
+        def copy_path(source_path: Path, target_path: Path) -> None:
+            if source_path.is_symlink():
+                self._remove_path(target_path)
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                target_path.symlink_to(os.readlink(source_path), target_is_directory=source_path.is_dir())
+                if os.readlink(target_path) != os.readlink(source_path):
+                    raise RuntimeError(f"legacy symlink verification failed: {source_path}")
+                return
+            if source_path.is_dir():
+                if (target_path.exists() or target_path.is_symlink()) and (
+                    not target_path.is_dir() or target_path.is_symlink()
+                ):
+                    self._remove_path(target_path)
+                target_path.mkdir(parents=True, exist_ok=True)
+                for child in source_path.iterdir():
+                    copy_path(child, target_path / child.name)
+                return
+            if source_path.is_file():
+                if (target_path.exists() or target_path.is_symlink()) and (
+                    target_path.is_dir() or target_path.is_symlink()
+                ):
+                    self._remove_path(target_path)
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_path, target_path)
+                if not filecmp.cmp(source_path, target_path, shallow=False):
+                    raise RuntimeError(f"legacy file verification failed: {source_path}")
+                copied_paths.append(target_path)
+                return
+            raise RuntimeError(f"unsupported legacy state entry: {source_path}")
+
+        copy_path(source, target)
+        return copied_paths
+
+    @staticmethod
+    def _remove_path(path: Path) -> None:
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
+
+    def _remove_legacy_state(self, legacy_dir: Path, legacy_secret_dir: Path) -> None:
+        for path in (legacy_dir, legacy_secret_dir):
+            if path.exists() or path.is_symlink():
+                self._remove_path(path)
 
     def _prepare_env(self) -> None:
         os.environ["AGENTTEAMS_AGENT_NAME"] = self.config.agent_name
@@ -403,6 +574,17 @@ class Worker:
         self._configure_builtin_plugin_mcp_clients()
         self._configure_builtin_plugin_mcp_policies()
 
+    def _sync_managed_skills(self, skill_names: list[str]) -> None:
+        if self.sync is None:
+            raise RuntimeError("file sync is not initialized")
+        for name in skill_names:
+            if not name or name in {".", ".."} or "/" in name or "\\" in name:
+                raise ValueError(f"invalid assigned skill name: {name!r}")
+            self.sync.mirror_prefix(
+                f"{self.sync.remote_prefix}/skills/{name}",
+                self.config.default_workspace_dir / "skills" / name,
+            )
+
     def _runtime_shared_prefix(self, runtime_config) -> str:
         storage = getattr(runtime_config, "storage", {}) or {}
         prefix = str(storage.get("sharedPrefix") or "").strip() if isinstance(storage, dict) else ""
@@ -449,11 +631,17 @@ class Worker:
                 encoding="utf-8",
             )
 
-    def _apply_runtime_adapter(self) -> None:
+    def _apply_runtime_adapter(self, force: bool = False) -> None:
         self._prepare_default_plugins()
-        self._configure_builtin_plugin_mcp_clients()
+        if force:
+            self._configure_builtin_plugin_mcp_clients(force=True)
+        else:
+            self._configure_builtin_plugin_mcp_clients()
         self._configure_builtin_plugin_mcp_policies()
         self._ensure_session_file_prompt_policy()
+
+    def _force_apply_runtime_adapter(self) -> None:
+        self._apply_runtime_adapter(force=True)
 
     def _prepare_default_plugins(self) -> None:
         builtin_root = self._builtin_qwenpaw_plugins_dir()
@@ -670,10 +858,22 @@ class Worker:
                     "system_prompt_files": ["AGENTS.md", "SOUL.md", "TEAMS.md"],
                 },
             )
-            await asyncio.to_thread(
-                self.api_client.disable_agent_if_present,
-                "QwenPaw_QA_Agent_0.2",
-            )
+            # Disabling the demo agent is cosmetic: toggle returns 409 while
+            # the agent is still loading, and a failed disable only leaves an
+            # idle demo agent — warn and continue instead of crashing.
+            try:
+                await asyncio.to_thread(
+                    self.api_client.disable_agent_if_present,
+                    "QwenPaw_QA_Agent_0.2",
+                )
+            except Exception as exc:
+                logger.warning(
+                    "disable demo agent failed, continuing startup component=worker "
+                    "step=disable_demo_agent worker=%s agent=QwenPaw_QA_Agent_0.2 "
+                    "error_type=%s",
+                    self.config.worker_name,
+                    type(exc).__name__,
+                )
             await asyncio.to_thread(self._configure_builtin_plugin_mcp_clients)
             await asyncio.to_thread(self._configure_builtin_plugin_mcp_policies)
             runtime_config = self._initial_runtime_config or self.updater.load()
@@ -758,14 +958,19 @@ class Worker:
                     f"qwenpaw app exited before API readiness: {self._process.returncode}",
                 )
             try:
-                await asyncio.to_thread(self.api_client.require_version, "2.0.1")
+                await asyncio.to_thread(self.api_client.require_version, "2.2.1")
+                # Version readiness precedes the agent's MCP migration. Wait
+                # before changing agent.json to avoid invalidating its snapshot.
+                await asyncio.to_thread(
+                    self.api_client.require_agent_running, DEFAULT_AGENT_ID,
+                )
                 return
             except Exception as exc:
                 last_error = exc
                 await asyncio.sleep(0.5)
         raise RuntimeError(f"qwenpaw API did not become ready: {last_error}")
 
-    def _configure_builtin_plugin_mcp_clients(self) -> None:
+    def _configure_builtin_plugin_mcp_clients(self, force: bool = False) -> None:
         existing = {str(item.get("key")) for item in self.api_client.list_mcp()}
         for plugin_id in ("teamharness", "workerflow"):
             plugin_dir = self.config.qwenpaw_working_dir / "plugins" / plugin_id
@@ -800,10 +1005,27 @@ class Worker:
                 },
                 "cwd": str(asset_dir),
             }
-            if plugin_id in existing:
-                self.api_client.update_mcp(plugin_id, payload)
-            else:
+            identity = self._builtin_mcp_payload_identity(plugin_dir, payload)
+            if plugin_id not in existing:
                 self.api_client.create_mcp(plugin_id, payload)
+            elif force or self._builtin_mcp_payload_identities.get(plugin_id) != identity:
+                self.api_client.update_mcp(plugin_id, payload)
+            self._builtin_mcp_payload_identities[plugin_id] = identity
+
+    def _builtin_mcp_payload_identity(
+        self,
+        plugin_dir: Path,
+        payload: dict[str, object],
+    ) -> str:
+        marker = plugin_dir / BUILTIN_QWENPAW_PLUGIN_MARKER
+        plugin_digest = marker.read_text(encoding="utf-8").strip() if marker.is_file() else ""
+        serialized = json.dumps(
+            {"payload": payload, "pluginDigest": plugin_digest},
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
     def _configure_builtin_plugin_mcp_policies(self) -> None:
         allow_policy = {

@@ -134,7 +134,8 @@ YAMLEOF
 " 2>/dev/null
 
 APPLY_OUTPUT=$(exec_in_agent agt apply -f "/tmp/agentteams-test-${TEST_TEAM}.yaml" 2>&1)
-if echo "${APPLY_OUTPUT}" | grep -q "created\|configured"; then
+APPLY_TEAM_EXIT=$?
+if [ "${APPLY_TEAM_EXIT}" -eq 0 ] && echo "${APPLY_OUTPUT}" | grep -q "created\|configured"; then
     log_pass "Team YAML applied via agt CLI"
 else
     log_fail "Team YAML apply failed: ${APPLY_OUTPUT}"
@@ -167,8 +168,11 @@ done
 
 if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
     for w in "${TEST_LEADER}" "${TEST_W1}" "${TEST_W2}"; do
+        expected_role="worker"
+        [ "${w}" = "${TEST_LEADER}" ] && expected_role="team_leader"
+        # A generic team-context header may predate the role update.
         if wait_qwenpaw_api_matches "${w}" /api/teamharness/health '.ok == true and .adapter == "qwenpaw-2"' 240 && \
-            wait_worker_runtime_file_contains "${w}" "TEAMS.md" "BEGIN AGENTTEAMS RUNTIME TEAM CONTEXT" 240; then
+            wait_worker_runtime_file_contains "${w}" "TEAMS.md" "member.role: ${expected_role}" 240; then
             log_pass "QwenPaw TeamHarness plugin ready for ${w}"
         else
             log_fail "QwenPaw TeamHarness plugin not ready for ${w}"
@@ -242,6 +246,7 @@ log_section "Verify Leader AGENTS.md"
 if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
     LEADER_AGENTS=$(read_worker_runtime_file "${TEST_LEADER}" "TEAMS.md")
 else
+    wait_worker_runtime_file_contains "${TEST_LEADER}" "AGENTS.md" "agentteams-builtin-start" 180 || true
     LEADER_AGENTS=$(read_worker_runtime_file "${TEST_LEADER}" "AGENTS.md")
 fi
 assert_not_empty "${LEADER_AGENTS}" "Leader AGENTS.md exists in MinIO"
@@ -267,6 +272,7 @@ log_section "Verify Team Worker AGENTS.md"
 if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
     W1_AGENTS=$(read_worker_runtime_file "${TEST_W1}" "TEAMS.md")
 else
+    wait_worker_runtime_file_contains "${TEST_W1}" "AGENTS.md" "agentteams-builtin-start" 180 || true
     W1_AGENTS=$(read_worker_runtime_file "${TEST_W1}" "AGENTS.md")
 fi
 assert_not_empty "${W1_AGENTS}" "Worker 1 AGENTS.md exists in MinIO"

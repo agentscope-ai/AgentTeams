@@ -1,6 +1,6 @@
 # Worker Skills 仓库
 
-这个目录是所有可分配给 Worker 的 skills 的中央仓库。Manager 负责管理这些 skills 的定义，并通过 `push-worker-skills.sh` 将其分发给特定 Worker。
+这个目录是你管理所有可分配给 Worker 的 Skills 的中央仓库。你通过 `push-worker-skills.sh` 将其中的 Skill 分发给特定 Worker。
 
 ## 目录结构
 
@@ -14,26 +14,29 @@ worker-skills/
 
 ## SKILL.md 格式要求
 
-每个 `SKILL.md` **必须**以 YAML frontmatter 开头，包含 `assign_when` 字段：
+每个 `SKILL.md` **必须**以 YAML frontmatter 开头。`name` 和 `description` 必填，`assign_when` 可选：
 
 ```yaml
 ---
 name: <skill-name>
 description: <一句话说明这个 skill 做什么>
-assign_when: <描述：什么样的 Worker 应该拥有此 skill，Manager 据此自动决定是否分配>
+assign_when: <可选；描述什么样的 Worker 应该拥有此 Skill，Manager 据此自动决定是否分配>
 ---
 ```
 
 字段说明：
 - `description`：简要说明 skill 的功能，供 Manager 和 human 快速了解
-- `assign_when`：用自然语言描述 Worker 的**角色特征**或**职责范围**，Manager 在创建 Worker 时据此判断是否分配；不要写技术实现细节，只描述"什么样的人需要这个工具"
+- `assign_when`：可选。用自然语言描述 Worker 的**角色特征**或**职责范围**，你在创建 Worker 时据此自动判断是否分配；不要写技术实现细节，只描述“什么样的人需要这个工具”
+- 缺少 `assign_when` 的 Skill 不参与自动匹配，但管理员仍可将其明确分配给指定 Worker
 
 ## 如何新增自定义 Skill
 
 1. 在 `~/worker-skills/<skill-name>/` 下创建 skill 目录（Manager workspace 与 MinIO 通过 `push-worker-skills.sh` 同步，直接写这里即可持久化）
-2. 编写 `SKILL.md`，**开头必须包含 frontmatter**（`name` + `assign_when`），后续正文说明使用方式
+2. 编写 `SKILL.md`，**开头必须包含 frontmatter**（必填 `name` + `description`，可选 `assign_when`），后续正文说明使用方式
 3. 如需脚本，放在 `<skill-name>/scripts/` 下
 4. 使用 `push-worker-skills.sh --worker <name> --add-skill <skill-name>` 分配给 Worker
+
+如果新 Skill 来自聊天 ZIP 附件，应使用 `install-worker-skill.sh --worker <name> --archive <path>` 完成安全导入和明确分配，不要手工解压或直接写入 Worker 存储。
 
 ## 如何分配/更新 Skills
 

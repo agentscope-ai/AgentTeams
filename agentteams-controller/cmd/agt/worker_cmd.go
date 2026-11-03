@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"time"
 
@@ -152,10 +153,11 @@ func workerStatusCmd() *cobra.Command {
 				return nil
 			}
 
-			// --team: list all workers in team, show runtime summary table
-			var resp workerListResp
-			if err := client.DoJSON("GET", "/api/v1/workers?team="+team, nil, &resp); err != nil {
-				return fmt.Errorf("list team workers: %w", err)
+			// --team: resolve every member through the same runtime-status
+			// endpoint as --name so JSON and table output share one schema.
+			resp, err := getTeamWorkerStatuses(client, team)
+			if err != nil {
+				return err
 			}
 			if output == "json" {
 				printJSON(resp)
@@ -167,11 +169,7 @@ func workerStatusCmd() *cobra.Command {
 			}
 			headers := []string{"NAME", "PHASE", "STATE", "MODEL", "RUNTIME"}
 			var rows [][]string
-			for _, w := range resp.Workers {
-				var detail workerResp
-				if err := client.DoJSON("GET", "/api/v1/workers/"+w.Name+"/status", nil, &detail); err != nil {
-					return fmt.Errorf("worker %s status: %w", w.Name, err)
-				}
+			for _, detail := range resp.Workers {
 				rows = append(rows, []string{
 					detail.Name,
 					or(detail.Phase, "Pending"),
@@ -189,6 +187,21 @@ func workerStatusCmd() *cobra.Command {
 	cmd.Flags().StringVar(&team, "team", "", "Team name (show all workers in team)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "Output format (json)")
 	return cmd
+}
+
+func getTeamWorkerStatuses(client *APIClient, team string) (workerListResp, error) {
+	var resp workerListResp
+	if err := client.DoJSON("GET", "/api/v1/workers?team="+url.QueryEscape(team), nil, &resp); err != nil {
+		return workerListResp{}, fmt.Errorf("list team workers: %w", err)
+	}
+	for i := range resp.Workers {
+		var detail workerResp
+		if err := client.DoJSON("GET", "/api/v1/workers/"+url.PathEscape(resp.Workers[i].Name)+"/status", nil, &detail); err != nil {
+			return workerListResp{}, fmt.Errorf("worker %s status: %w", resp.Workers[i].Name, err)
+		}
+		resp.Workers[i] = detail
+	}
+	return resp, nil
 }
 
 // ---------------------------------------------------------------------------

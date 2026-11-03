@@ -1,13 +1,73 @@
 package oss
 
-import "context"
+import (
+	"context"
+	"errors"
+	"time"
+)
+
+// ObjectMeta describes an object in storage.
+type ObjectMeta struct {
+	Size    int64
+	ModTime time.Time
+	// ETag is the object's content hash (MD5 for single-part writes).
+	// Empty when the backend cannot report one.
+	ETag string
+	// ContentType is the stored object's media type ("" when the backend
+	// does not report one). The file API uses it to mark deleted files with
+	// a tombstone object instead of an unconditional delete.
+	ContentType string
+}
+
+// ErrPreconditionFailed is returned by PutObjectIfMatch when the object's
+// current ETag does not match the expected one — the write was NOT applied.
+var ErrPreconditionFailed = errors.New("oss: precondition failed (etag mismatch)")
+
+// ErrConditionalUnsupported is returned by a strict conditional write
+// (PutObjectIfMatchStrict) when the backend cannot honor If-Match at all
+// (the provider answers NotImplemented/501). The write is NOT performed and
+// the call never degrades to a compare-then-put: callers that need conflict
+// safety must fail closed on this error.
+var ErrConditionalUnsupported = errors.New("oss: backend cannot provide conditional writes")
 
 // StorageClient abstracts object storage operations.
 // Implementations: MinIOClient (mc CLI), future S3Client (aws-sdk-go).
+// ObjectInfo is a listing entry with the last-updated timestamp when the
+// backend can provide it.
+type ObjectInfo struct {
+	Name string
+	// UpdatedAt is RFC3339 UTC, or "" when the backend does not expose
+	// (or the parser cannot decode) a timestamp.
+	UpdatedAt string
+}
+
 type StorageClient interface {
+	// ListObjectsDetailed is like ListObjects but also reports each entry's
+	// last-updated timestamp when the backend exposes one (mc ls lines carry
+	// a date). Unparseable dates degrade to UpdatedAt == "" — a listing must
+	// never fail because of timestamp parsing.
+	ListObjectsDetailed(ctx context.Context, prefix string) ([]ObjectInfo, error)
+
 	// PutObject writes data to the given key path.
 	// Key is relative to the configured storage prefix.
 	PutObject(ctx context.Context, key string, data []byte) error
+
+	// PutObjectIfMatch writes data only when the object's current ETag
+	// equals matchETag (conditional write). Returns ErrPreconditionFailed
+	// (without writing) on mismatch. matchETag must be non-empty.
+	PutObjectIfMatch(ctx context.Context, key string, data []byte, matchETag string) error
+
+	// PutObjectIfMatchWithType is PutObjectIfMatch plus an explicit content
+	// type. The file API writes deletion tombstones through it so a deleted
+	// path stays recognizable without reading every object.
+	PutObjectIfMatchWithType(ctx context.Context, key string, data []byte, contentType, matchETag string) error
+
+	// PutObjectIfAbsent creates the object only when no object exists at
+	// key. Returns ErrPreconditionFailed when the key already exists.
+	// Used for the per-human quota ledger's atomic first initialization;
+	// implementations must use a storage-level If-None-Match, not a
+	// Stat-then-Put fallback.
+	PutObjectIfAbsent(ctx context.Context, key string, data []byte) error
 
 	// PutFile uploads a local file to the given key path.
 	PutFile(ctx context.Context, localPath, key string) error
@@ -17,6 +77,11 @@ type StorageClient interface {
 
 	// Stat checks if an object exists. Returns os.ErrNotExist if not found.
 	Stat(ctx context.Context, key string) error
+
+	// StatMeta returns object metadata (size, modification time). Returns
+	// os.ErrNotExist if the object does not exist. Used by W-PR-2 write
+	// endpoints for mtime optimistic-locking (compare-before-write).
+	StatMeta(ctx context.Context, key string) (ObjectMeta, error)
 
 	// DeleteObject removes the object at key.
 	DeleteObject(ctx context.Context, key string) error

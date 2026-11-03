@@ -5,6 +5,17 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/config"
 )
 
+const (
+	// WorkerConsolePortEnv carries the worker qwenpaw console port in the
+	// container environment.
+	WorkerConsolePortEnv = "AGENTTEAMS_CONSOLE_PORT"
+	// WorkerConsolePortDefault is the system-defined console port.
+	// WorkerEnvBuilder.Build always defines this key in the system env, so
+	// the system-wins user-env merge discards any conflicting user value:
+	// the container always listens on this port.
+	WorkerConsolePortDefault = "8088"
+)
+
 // WorkerEnvBuilder constructs environment variable maps for worker containers.
 // Configuration defaults are injected at construction time rather than read
 // from os.Getenv at call time, keeping the service layer test-friendly.
@@ -28,12 +39,42 @@ func (b *WorkerEnvBuilder) Build(workerName string, prov *WorkerProvisionResult)
 		"AGENTTEAMS_FS_SECRET_KEY":       prov.MinIOPassword,
 		"OPENCLAW_DISABLE_BONJOUR":       "1",
 		"OPENCLAW_MDNS_HOSTNAME":         "agentteams-w-" + workerName,
-		"AGENTTEAMS_CONSOLE_PORT":        "8088",
+		WorkerConsolePortEnv:             WorkerConsolePortDefault,
 		"HOME":                           "/root/agentteams-fs/agents/" + workerName,
 	}
 
 	b.applyClusterDefaults(env)
 	return env
+}
+
+// MergeUserEnv applies system-wins merge of user-declared env vars into
+// sysEnv: any key already present in sysEnv keeps the system value and the
+// user's value is discarded (returned in the result). sysEnv is mutated in
+// place and must be non-nil when userEnv is non-empty. This is the single
+// shared merge implementation — the reconciler (via mergeUserEnv) and
+// server-side address resolution (via EffectiveWorkerConsolePort) must use
+// the same semantics or proxy and container diverge.
+func MergeUserEnv(sysEnv, userEnv map[string]string) (ignored []string) {
+	for k, v := range userEnv {
+		if _, taken := sysEnv[k]; taken {
+			ignored = append(ignored, k)
+			continue
+		}
+		sysEnv[k] = v
+	}
+	return ignored
+}
+
+// EffectiveWorkerConsolePort resolves the port the worker container actually
+// listens on, mirroring the container-creation env chain (WorkerEnvBuilder
+// system env + system-wins user-env merge). The system env always defines
+// the console-port key, so a conflicting Worker.spec.env value is discarded
+// — callers resolving upstream worker addresses must use this (not the raw
+// spec.env) to stay aligned with the docker backend.
+func EffectiveWorkerConsolePort(userEnv map[string]string) string {
+	sysEnv := map[string]string{WorkerConsolePortEnv: WorkerConsolePortDefault}
+	MergeUserEnv(sysEnv, userEnv)
+	return sysEnv[WorkerConsolePortEnv]
 }
 
 // BuildManager returns the env map for a Manager container.
@@ -92,13 +133,14 @@ func (b *WorkerEnvBuilder) BuildManager(managerName string, prov *ManagerProvisi
 
 func (b *WorkerEnvBuilder) applyClusterDefaults(env map[string]string) {
 	for k, v := range map[string]string{
-		"AGENTTEAMS_MATRIX_DOMAIN":  b.defaults.MatrixDomain,
-		"AGENTTEAMS_FS_ENDPOINT":    b.defaults.FSEndpoint,
-		"AGENTTEAMS_FS_BUCKET":      b.defaults.FSBucket,
-		"AGENTTEAMS_STORAGE_PREFIX": b.defaults.StoragePrefix,
-		"AGENTTEAMS_CONTROLLER_URL": b.defaults.ControllerURL,
-		"AGENTTEAMS_AI_GATEWAY_URL": b.defaults.AIGatewayURL,
-		"AGENTTEAMS_MATRIX_URL":     b.defaults.MatrixURL,
+		"AGENTTEAMS_MATRIX_DOMAIN":    b.defaults.MatrixDomain,
+		"AGENTTEAMS_FS_ENDPOINT":      b.defaults.FSEndpoint,
+		"AGENTTEAMS_FS_BUCKET":        b.defaults.FSBucket,
+		"AGENTTEAMS_STORAGE_PREFIX":   b.defaults.StoragePrefix,
+		"AGENTTEAMS_STORAGE_PROVIDER": b.defaults.StorageProvider,
+		"AGENTTEAMS_CONTROLLER_URL":   b.defaults.ControllerURL,
+		"AGENTTEAMS_AI_GATEWAY_URL":   b.defaults.AIGatewayURL,
+		"AGENTTEAMS_MATRIX_URL":       b.defaults.MatrixURL,
 	} {
 		if v != "" {
 			env[k] = v

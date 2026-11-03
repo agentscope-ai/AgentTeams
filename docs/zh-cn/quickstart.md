@@ -1,338 +1,155 @@
-# AgentTeams 快速入门指南
+# AgentTeams 快速入门
 
-本指南带你完成 AgentTeams 的安装、创建第一个 Agent 团队，并完成第一个协作任务。每个步骤都包含验证检查点，确认一切正常运行。
+[English](../quickstart.md) | 中文
+
+本指南使用推荐的本地部署路径，带你安装 AgentTeams、创建第一个 Worker，并完成一个可以人工介入的任务。详细配置和 Kubernetes 部署将在专题文档中说明；完成本指南后，可以继续尝试 [AgentTeams 使用案例](usage/use-cases.md)。
+
+## 完成后你将获得什么
+
+- 一套运行在本机的 AgentTeams 实例。
+- 一个可以通过 Element Web 对话的 Manager。
+- 一个由 Manager 创建和管理的 Worker。
+- 一次 Human、Manager 与 Worker 共同参与的任务执行记录。
 
 ## 前置条件
 
-- 已安装并运行 Docker
-- 一个 LLM API Key。快速开始默认使用阿里云百炼/Qwen；如果使用 DeepSeek、自部署模型或其他 OpenAI 兼容服务，请在安装时选择手动配置，并填写对应 Base URL（通常以 `/v1` 结尾）、API Key 和模型 ID。
-- （可选）GitHub 个人访问令牌（PAT），用于 GitHub 协作功能
+- macOS 或 Linux。Windows 用户参见 [Windows 部署指南](usage/deployment/windows.md)。
+- Docker Desktop、Docker Engine，或兼容的 Podman 环境已经启动。
+- 至少 2 核 CPU 和 4 GB 可用内存；运行多个 Worker 时建议 4 核 CPU 和 8 GB 内存。
+- 一个可用的 LLM API Key。安装器支持阿里云百炼/Qwen，也支持 OpenAI 兼容服务。
+- 本机端口 `18080`、`18001`、`18088` 未被占用。默认启用 Dashboard 时还需要端口 `13000`。
 
----
+> 第一次体验建议使用安装器的“快速开始”模式。如果需要自定义模型地址、外部访问、端口、持久化、运行时或镜像，请选择“手动配置”。
 
-## 第一步：安装 Manager 并登录 IM
+## 第一步：安装 AgentTeams
 
-### 1.1 运行安装脚本
-
-**方式 A：一键安装**
+在终端中运行：
 
 ```bash
 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
-按照交互提示配置：
-- LLM 提供商和 API Key
-- DeepSeek、自部署模型或其他非默认服务商请选择手动配置；服务商要求 `/v1` 时，Base URL 需要包含该路径。
-- 管理员用户名和密码
-- 域名（直接回车使用默认值）
-- GitHub PAT（可选）
+按照提示完成配置：
 
-**方式 B：使用 Make（适合已克隆仓库的开发者）**
+1. 选择中文。
+2. 选择“快速开始”或“手动配置”。
+3. 填写 LLM API Key；手动配置其他 OpenAI 兼容服务时，还需要填写 Base URL 和模型 ID。
+4. 等待模型连通性检查和容器启动完成。
+
+如果使用 OpenAI 兼容服务，Base URL 通常需要包含 `/v1`，具体以服务商文档为准。
+
+安装成功后，终端会打印：
+
+- Element Web 登录地址。
+- 管理员用户名和密码。
+- Higress Console 地址。
+- Dashboard 地址（启用时）。
+- 配置文件、数据卷和 Manager 工作空间位置。
+
+请先保存安装器输出的登录信息。
+
+## 第二步：验证并登录
+
+检查主要容器：
 
 ```bash
-# 最简安装 —— 只需 LLM Key，其余全部使用默认值
-AGENTTEAMS_LLM_API_KEY="sk-xxx" make install
+docker ps --filter name=agentteams-controller
+docker ps --filter name=agentteams-manager
 ```
 
-此命令会在本地构建镜像、挂载容器运行时 socket（用于直接创建 Worker），并将配置保存到 `./agentteams-manager.env`。
-
-两种方式均支持通过环境变量覆盖所有配置项，完整列表见 `install/agentteams-install.sh` 文件头部注释。
-
-### 1.1a 多容器架构（v1.1.0+ 嵌入式安装）
-
-默认**嵌入式**安装会启动两个主容器（详见 [architecture.md](../architecture.md)）：
-
-| 容器 | 职责 |
-|------|------|
-| **`agentteams-controller`** | 内嵌 Higress、Tuwunel、MinIO、Element Web 与 Go controller（REST API 在容器网络内 **8090** 端口）。 |
-| **`agentteams-manager`** | 仅运行 Manager Agent（默认 OpenClaw；若安装时选择 `AGENTTEAMS_MANAGER_RUNTIME=copaw` 则为 QwenPaw Manager 镜像）。 |
-
-创建 Worker 后会出现 `agentteams-worker-*`、`agentteams-copaw-worker-*`、`agentteams-hermes-worker-*` 等容器。
-
-**声明式 CLI（无需在 IM 里打字）：** `agt` 在 **`agentteams-controller`** 与 **`agentteams-manager`** 内均可用。宿主机上快速示例：
+也可以通过 `agt` 检查 Manager 状态：
 
 ```bash
-docker exec agentteams-controller agt create worker --name alice --model qwen3.5-plus
+docker exec agentteams-controller agt get managers
+```
+
+默认情况下，在浏览器中打开：
+
+```text
+http://127.0.0.1:18088/#/login
+```
+
+使用安装器打印的管理员用户名和密码登录。登录后，你应该可以看到 Manager 的会话或房间。
+
+如果页面无法打开或 Manager 未就绪，先查看：
+
+```bash
+docker logs --tail 200 agentteams-controller
+docker logs --tail 200 agentteams-manager
+```
+
+更多排查方法参见 [FAQ](usage/troubleshooting/faq.md)。
+
+## 第三步：创建第一个 Worker
+
+在 Element Web 中打开与 Manager 的私聊，发送：
+
+> 请创建一个名为 alice 的 Worker，负责 Python 开发和代码测试。
+
+Manager 会根据当前配置询问或确认 Worker 的角色、模型、运行时和 Skills。第一次体验可以接受推荐选项；如果选择运行时，请优先使用安装时已经准备好默认镜像的运行时。
+
+创建过程通常需要几十秒。Manager 会调用 controller 完成以下工作：
+
+1. 创建 Worker 资源和 Matrix 身份。
+2. 准备网关权限与共享存储配置。
+3. 启动独立的 Worker 容器。
+4. 创建包含 Human、Manager 和 Worker 的 Matrix 房间。
+
+可以在终端检查状态：
+
+```bash
 docker exec agentteams-controller agt get workers
+docker ps --filter name=agentteams-worker
 ```
 
-YAML 批量管理请使用 `install/agentteams-apply.sh`（将文件拷入 `agentteams-manager` 后执行 `agt apply -f`）。详见 [Declarative Resource Management](../declarative-resource-management.md)。
+等待 `alice` 进入 `Running` 状态，并确认对应房间已经出现在 Element Web 中。
 
-### 1.2 登录 Element Web
+## 第四步：完成第一个任务
 
-在浏览器中打开 http://127.0.0.1:18088（直接访问端口）。如果已将域名添加到 `/etc/hosts`，也可通过网关访问 http://matrix-client-local.agentteams.io:18080。
+打开 Alice 所在的 Matrix 房间，发送：
 
-使用管理员凭据登录。
+> 请创建一个 Python 命令行程序：接收一个名字参数并输出问候语。请同时编写 README 和基础测试，并在完成后说明生成了哪些文件以及如何运行测试。
 
-### 验证清单
+执行期间，你可以在房间中看到任务分配、进度和结果。Alice 完成后，检查回复是否包含：
 
-- [ ] **`agentteams-controller`** 正在运行：`docker ps | grep agentteams-controller`
-- [ ] **`agentteams-manager`** 正在运行：`docker ps | grep agentteams-manager`
-- [ ] 浏览器可访问 Element Web：http://127.0.0.1:18088
-- [ ] 使用管理员凭据登录成功
-- [ ] Higress 控制台：http://localhost:18001（网关默认映射到宿主机 **18080**；Matrix / Element 的 `*-local.agentteams.io` 经该网关访问）
-- [ ] MinIO 在 **controller 容器内**可访问（嵌入式安装默认**不**把 MinIO 控制台端口发布到宿主机）：`docker exec agentteams-controller curl -sf http://127.0.0.1:9000/minio/health/live`
-- [ ] （仅 OpenClaw Manager）OpenClaw 控制 UI：http://127.0.0.1:18888
+- 实现文件。
+- README 或使用说明。
+- 测试文件与测试结果。
+- 产物位置或获取方式。
 
----
+## 第五步：体验人工介入
 
-## 第二步：创建 Worker Alice
+在 Worker 仍在执行时追加要求：
 
-### 2.1 与 Manager 对话
+> 补充要求：没有传入名字时默认使用 `World`，并为这个分支补充一个测试。
 
-**方式 A：通过 Element Web（图形界面）**
+确认 Worker 已理解补充要求，并在最终结果中同时覆盖原始任务和新增要求。这就是 AgentTeams 的 Human-in-the-loop 工作方式：Human 可以看到协作过程，并在任务完成前持续纠偏。
 
-在 Element Web 中，向 `manager` 用户发起私信（DM）。
+## 完成检查
 
-发送：
-> 请为我创建一个名为 alice 的 Worker，负责前端开发任务。她需要有 GitHub MCP 访问权限。
+- [ ] `agentteams-controller` 和 `agentteams-manager` 正在运行。
+- [ ] 可以登录 Element Web 并与 Manager 对话。
+- [ ] Alice 的状态为 `Running`。
+- [ ] Alice 的 Matrix 房间对 Human 可见。
+- [ ] Worker 返回了实现、说明和测试结果。
+- [ ] Worker 处理了执行期间追加的要求。
 
-**方式 B：通过命令行（make replay）**
+完成以上检查后，你已经跑通了 AgentTeams 的最小闭环。
 
-```bash
-make replay TASK="请为我创建一个名为 alice 的 Worker，负责前端开发任务。她需要有 GitHub MCP 访问权限。"
-```
+## 下一步
 
-此命令通过 Matrix API 发送消息，并在终端等待 Manager 的回复。
-
-### 2.2 等待 Manager 响应
-
-Manager Agent 将会：
-1. 注册 `alice` 的 Matrix 账号
-2. 在 Higress 中创建 `worker-alice` Consumer（含 key-auth 凭据）
-3. 在 MinIO 中生成 Alice 的配置文件
-4. 创建 Matrix 房间（你、Manager 和 Alice 三方）
-5. 启动 Worker（直接创建或输出安装命令，取决于是否挂载了容器运行时 socket）
-
-### 2.3 启动 Worker Alice
-
-有两种方式启动 Worker：
-
-**方式 A：直接创建（本地部署，推荐）**
-
-如果你要求 Manager "直接创建"，Manager 会通过挂载的容器运行时 socket 自动在宿主机上创建并启动 Worker 容器，无需手动操作。
-
-> 需要使用 `make install`（会自动挂载 socket），或在启动 Manager 容器时手动挂载 Docker/Podman socket。
-
-**方式 B：Docker Run 命令（远程或手动部署）**
-
-如果 Manager 没有容器运行时 socket 访问权限，它会回复一条 `docker run` 命令。将其复制到目标主机上运行：
-
-```bash
-docker run -d --name agentteams-worker-alice \
-  -e AGENTTEAMS_WORKER_NAME=alice \
-  -e AGENTTEAMS_FS_ENDPOINT=http://<MANAGER_HOST>:9000 \
-  -e AGENTTEAMS_FS_ACCESS_KEY=<ACCESS_KEY> \
-  -e AGENTTEAMS_FS_SECRET_KEY=<SECRET_KEY> \
-  agentteams/worker-agent:latest
-```
-
-Manager 的回复中会提供所有具体参数值。
-
-### 验证清单
-
-- [ ] Alice 的房间出现在 Element Web 中（3 名成员：你、manager、alice）
-- [ ] Higress 控制台显示 `worker-alice` Consumer（http://localhost:18001）
-- [ ] MinIO 中存在 `agents/alice/SOUL.md` 文件（可通过 MinIO 控制台或 `mc ls` 查看）
-- [ ] Worker 容器正在运行：`docker ps | grep agentteams-worker-alice`
-
----
-
-## 第三步：给 Alice 分配任务
-
-### 3.1 在 Alice 的房间发送任务
-
-在 Element Web 中打开 Alice 的房间，发送：
-
-> Alice，请为一个 hello-world 项目创建一个简单的 README.md，包含项目名称、描述和使用说明。将结果保存到共享任务文件夹。
-
-### 3.2 观察任务执行过程
-
-在房间中观察：
-1. Manager 接收并转发任务
-2. 任务元数据和规格出现在 MinIO（`shared/tasks/{task-id}/meta.json` 和 `spec.md`）
-3. Alice 开始处理任务
-4. Alice 写入结果（`shared/tasks/{task-id}/result.md`）
-5. Alice 在房间中通知完成
-6. Manager 将 `meta.json` 状态更新为 `completed`
-
-### 验证清单
-
-- [ ] Manager 在 MinIO 中创建了任务 `meta.json` 和 `spec.md`
-- [ ] Alice 确认并开始工作
-- [ ] Alice 在房间中发布进度更新
-- [ ] 结果文件出现在 MinIO 共享任务目录
-- [ ] Alice 在房间中通知完成
-- [ ] 任务 `meta.json` 状态更新为 `completed`
-
----
-
-## 第四步：人工介入进行中的任务
-
-### 4.1 分配新任务
-
-在 Alice 的房间中发送：
-
-> Alice，写一个打印 'Hello, World!' 的 Python 脚本，保存为 hello.py。
-
-### 4.2 发送补充指令
-
-在 Alice 工作期间，发送额外指令：
-
-> 补充需求：脚本还需要接受一个命令行参数作为名字，打印 'Hello, <name>!' 而不是固定的 World。
-
-### 4.3 观察整合结果
-
-Alice 和 Manager 应当将原始需求和补充需求都纳入最终结果。
-
-### 验证清单
-
-- [ ] Manager 转发了原始指令和补充指令
-- [ ] Alice 确认了补充需求
-- [ ] 最终结果同时包含原始功能和补充功能
-
----
-
-## 第五步：观察心跳机制
-
-### 5.1 分配一个耗时较长的任务
-
-发送一个需要一定时间完成的任务。
-
-### 5.2 等待心跳周期
-
-Manager Agent 会定期执行心跳检查（由 OpenClaw 内置心跳机制触发）。心跳期间：
-- Manager 检查每个 Worker 房间的最近活动
-- 对于有分配任务的 Worker，Manager 询问进度
-- 询问消息在房间中对所有人可见
-
-### 验证清单
-
-- [ ] Manager 在 Alice 的房间中发送了状态询问消息
-- [ ] Alice 回复了当前进度
-- [ ] 人工管理员可以在房间中看到完整的交流过程
-
----
-
-## 第六步：创建 Worker Bob 并协作
-
-### 6.1 创建 Worker Bob
-
-在与 Manager 的私信中发送：
-
-> 创建一个名为 bob 的 Worker，负责后端开发。他需要有 GitHub MCP 访问权限。
-
-### 6.2 启动 Bob
-
-按照与 Alice 相同的流程操作（参考第二步）。
-
-### 6.3 分配协作任务
-
-在与 Manager 的私信中发送：
-
-> 我需要 Alice 和 Bob 协作：Alice 负责创建前端 HTML 页面，Bob 负责创建后端 API。他们通过 MinIO 中的共享文件进行协调。
-
-### 验证清单
-
-- [ ] Bob 的房间出现在 Element Web 中（3 名成员）
-- [ ] Higress 控制台显示 `worker-bob` Consumer
-- [ ] Manager 将任务拆分给 Alice 和 Bob
-- [ ] 两个 Worker 分别在各自房间中汇报进度
-- [ ] MinIO 中出现共享协调文件
-
----
-
-## 第七步：通过 MCP 进行 GitHub 操作
-
-> **注意**：此步骤需要在 Manager 安装时配置 GitHub PAT。
-
-### 7.1 分配 GitHub 任务
-
-在 Alice 的房间中发送：
-
-> Alice，请执行以下 GitHub 操作：1）读取测试仓库的 README.md，2）创建名为 'feature/alice-update' 的分支，3）创建新文件 docs/quickstart-update.md，4）创建 Pull Request。
-
-### 7.2 观察 MCP 工具调用
-
-Alice 使用 `mcporter` 调用 Higress 托管的 GitHub MCP Server。MCP Server 集中保存 GitHub PAT —— Alice 永远看不到它。
-
-### 验证清单
-
-- [ ] Alice 报告已读取仓库内容
-- [ ] Alice 报告已创建分支
-- [ ] Alice 报告已创建文件
-- [ ] Alice 报告已创建 PR
-- [ ] 在 GitHub 上验证 PR 存在
-
----
-
-## 第八步：多 Worker GitHub 协作
-
-### 8.1 分配协作 GitHub 任务
-
-在与 Manager 的私信中发送：
-
-> Alice 和 Bob 在测试仓库上协作：Alice 创建 'feature/alice-docs' 分支并添加 docs/alice.md，Bob 创建 'feature/bob-api' 分支并添加 src/bob.py。两人分别创建独立的 PR。
-
-### 验证清单
-
-- [ ] Alice 创建了她的分支和文件
-- [ ] Bob 创建了他的分支和文件
-- [ ] GitHub 上存在两个独立的 PR
-- [ ] 两个 Worker 分别在各自房间中报告完成
-
----
-
-## 第九步：动态 MCP 权限控制
-
-### 9.1 撤销 Alice 的 GitHub 访问权限
-
-在与 Manager 的私信中发送：
-
-> 撤销 Alice 对 GitHub MCP Server 的访问权限。
-
-### 9.2 验证撤销效果
-
-让 Alice 执行一个 GitHub 操作，她应该收到 403 错误。
-
-### 9.3 恢复访问权限
-
-在与 Manager 的私信中发送：
-
-> 恢复 Alice 对 GitHub MCP Server 的访问权限。
-
-### 9.4 验证恢复效果
-
-再次让 Alice 执行 GitHub 操作，应该成功。
-
-### 验证清单
-
-- [ ] Manager 确认已撤销权限
-- [ ] Alice 尝试 GitHub 操作时收到 403 错误
-- [ ] Manager 确认已恢复权限
-- [ ] Alice 可以再次执行 GitHub 操作
-
----
-
-## 恭喜！
-
-你已成功完成 AgentTeams 的全部验证步骤。你的 Agent 团队已完全就绪，具备以下能力：
-
-- 基于 IM 的通信（Matrix 协议）
-- 人工监督（Human-in-the-Loop）
-- 多 Worker 协作
-- 集中式凭据管理
-- 基于 MCP 的外部工具集成
-- 动态权限控制
-
----
+- 先阅读 [AgentTeams 概览](overview.md)，了解角色、组件和部署方式。
+- 参考 [AgentTeams 使用案例](usage/use-cases.md)，尝试软件交付、研究分析、内容本地化、故障分析、长期项目协作，以及自定义 Skill 的添加与实际使用。
+- 使用 [本地部署指南](usage/deployment/local.md) 查看模型、端口、域名、存储、运行时和自动化安装选项。
+- 阅读 [Manager 指南](usage/manager-guide.md) 和 [Worker 指南](usage/worker-guide.md)。
+- 使用 [声明式资源管理](usage/resource-management.md) 学习 `agt` CLI 和 YAML。
+- 阅读 [架构说明](design/architecture.md)，了解 Matrix、Higress、对象存储和 controller 的关系。
+- 使用 [Kubernetes 部署指南](usage/deployment/kubernetes.md) 在集群中创建团队共享实例。
 
 ## 卸载
 
-彻底移除 AgentTeams 及其数据：
+以下操作会移除 AgentTeams 容器、网络、数据卷、配置文件和本地工作空间。确认不再需要其中的数据后再执行：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh) uninstall
 ```
-
-与 `install/agentteams-install.sh uninstall` 行为一致：停止并删除 **`agentteams-manager`**、所有 **`agentteams-worker-*`**（及其他 Worker）容器、**`agentteams-controller`**（内嵌 Higress / Tuwunel / MinIO / Element Web）、可选 **`agentteams-docker-proxy`**、**`agentteams-data`** 数据卷、**`agentteams-manager.env`**、工作空间目录、**`agentteams-net`** 网络及安装日志。

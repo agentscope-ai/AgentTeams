@@ -283,7 +283,7 @@ func (a *AIGatewayClient) EnsureServiceSource(_ context.Context, _, _ string, _ 
 	return ErrUnsupportedOp
 }
 
-func (a *AIGatewayClient) EnsureStaticServiceSource(_ context.Context, _, _ string, _ int) error {
+func (a *AIGatewayClient) EnsureStaticServiceSource(_ context.Context, _, _ string, _ int, _ string) error {
 	return ErrUnsupportedOp
 }
 
@@ -305,6 +305,13 @@ func (a *AIGatewayClient) EnsureStreamIdleTimeout(_ context.Context, _ int) erro
 
 func (a *AIGatewayClient) EnsureAIRoute(_ context.Context, _ AIRouteRequest) error {
 	return ErrUnsupportedOp
+}
+
+// ListAIRoutes is not supported by the ai-gateway provider: model APIs are
+// managed per-name (see ResolveModelProvider) and the SDK has no equivalent
+// of the self-hosted console's AI route list.
+func (a *AIGatewayClient) ListAIRoutes(_ context.Context) ([]AIRouteInfo, error) {
+	return nil, ErrUnsupportedOp
 }
 
 // Healthy makes a lightweight ListConsumers call to verify that both the

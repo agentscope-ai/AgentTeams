@@ -40,6 +40,7 @@ type SandboxConfig struct {
 	HermesWorkerImage            string
 	OpenHumanWorkerImage         string
 	QwenPawWorkerImage           string
+	DeepSeekHarnessWorkerImage   string
 	WorkerCPU                    string
 	WorkerMemory                 string
 	SandboxPrewarmSize           int
@@ -146,7 +147,7 @@ func (s *SandboxBackend) Create(ctx context.Context, req CreateRequest) (*Worker
 	workerImage := req.Image
 	if workerImage == "" {
 		switch {
-		case req.Runtime == RuntimeCopaw && s.config.CopawWorkerImage != "":
+		case req.Runtime == RuntimeCopaw:
 			workerImage = s.config.CopawWorkerImage
 		case req.Runtime == RuntimeHermes && s.config.HermesWorkerImage != "":
 			workerImage = s.config.HermesWorkerImage
@@ -154,6 +155,8 @@ func (s *SandboxBackend) Create(ctx context.Context, req CreateRequest) (*Worker
 			workerImage = s.config.OpenHumanWorkerImage
 		case req.Runtime == RuntimeQwenPaw && s.config.QwenPawWorkerImage != "":
 			workerImage = s.config.QwenPawWorkerImage
+		case req.Runtime == RuntimeDeepSeekHarness && s.config.DeepSeekHarnessWorkerImage != "":
+			workerImage = s.config.DeepSeekHarnessWorkerImage
 		case s.config.WorkerImage != "":
 			workerImage = s.config.WorkerImage
 		}

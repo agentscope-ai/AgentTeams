@@ -1,0 +1,1138 @@
+# Declarative Resource Management
+
+AgentTeams uses Kubernetes CRD-style declarative YAML to manage platform resources — **Worker**, **Team**, **Human**, and **Manager**. You describe the desired state, and the AgentTeams Controller handles creation, updates, and deletion automatically.
+
+## Core Concepts
+
+### Organization Structure
+
+AgentTeams uses a three-tier organization that maps to real enterprise team structures:
+
+```
+Admin (Human administrator)
+  │
+  ├── Manager (AI Agent, management entry point)
+  │     ├── Team Leader A (special Worker, coordinates team tasks)
+  │     │     ├── Worker A1
+  │     │     └── Worker A2
+  │     ├── Team Leader B
+  │     │     └── Worker B1
+  │     └── Worker C (standalone Worker, not part of any Team)
+  │
+  └── Human Users (real people, access based on permission level)
+        ├── Level 1: Admin-equivalent, can talk to all roles
+        ├── Level 2: Can talk to specified Teams' Leaders + Workers
+        └── Level 3: Can only talk to specified Workers
+```
+
+### Four Resource Types
+
+| Resource | Description | Underlying Entity |
+|----------|-------------|-------------------|
+| Worker | AI Agent execution unit | Docker container + Matrix account + MinIO space |
+| Team | Collaboration group referencing one Leader Worker and N member Workers | Worker references + Team Room |
+| Human | Real human user | Matrix account + Room permissions |
+| Manager | Coordinator Agent (task routing, Worker/Team orchestration) | Manager Agent runtime (same stack as Workers; reconciled like other CRs) |
+
+All resources share a unified API version: `apiVersion: agentteams.io/v1beta1`.
+
+**kubectl short names** (when CRDs are installed): `wk` (Worker), `tm` (Team), `hm` (Human), `mgr` (Manager).
+
+## Worker
+
+A Worker is the basic execution unit in AgentTeams — an AI Agent running in a Docker container with its own Matrix communication account and MinIO storage space.
+
+### Basic Configuration
+
+```yaml
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: alice
+spec:
+  model: claude-sonnet-4-6        # LLM model
+  identity: |                      # Worker public identity (generates IDENTITY.md)
+    - Name: Alice
+    - Specialization: DevOps, CI/CD pipeline management
+  soul: |                          # Worker personality and values (generates SOUL.md)
+    # Alice - DevOps Worker
+    ## Personality
+    - Methodical and detail-oriented, always double-checks before deploying
+    - Proactive about potential risks, raises concerns early
+    - Prefers automation over manual processes
+    ## Values
+    - Stability first: never sacrifice reliability for speed
+    - Transparency: always explain what you're doing and why
+  agents: |                        # Agent behavior rules (generates AGENTS.md)
+    ## Behavior
+    - Monitor CI/CD pipelines proactively
+    - Alert on failures immediately
+  skills:                          # AgentTeams built-in skills
+    - github-operations
+    - git-delegation
+  mcpServers:                      # MCP servers callable via mcporter (url = full gateway endpoint)
+    - name: github
+      url: https://gateway.example.com/mcp-servers/github/mcp
+      transport: http              # "http" (default, Streamable HTTP) or "sse"
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+```
+
+### Field Reference
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `metadata.name` | string | Yes | — | Worker name, globally unique |
+| `spec.model` | string | Yes | — | LLM model ID, e.g. `claude-sonnet-4-6`, `qwen3.5-plus` |
+| `spec.runtime` | string | No | `openclaw` | The current Worker CRD accepts `openclaw`, `qwenpaw`, `copaw` (legacy), or `hermes`. |
+| `spec.image` | string | No | — | Custom image. When empty, the controller selects `AGENTTEAMS_WORKER_IMAGE`, `AGENTTEAMS_COPAW_WORKER_IMAGE`, `AGENTTEAMS_QWENPAW_WORKER_IMAGE`, or `AGENTTEAMS_HERMES_WORKER_IMAGE` by runtime. The current chart has no `worker.defaultImage.qwenpaw`, so set this field explicitly for a QwenPaw Worker on Kubernetes. |
+| `spec.identity` | string | No | — | Worker public identity (OpenClaw: generates IDENTITY.md; QwenPaw: merged into SOUL.md per controller) |
+| `spec.soul` | string | No | — | Worker personality and values (generates SOUL.md) |
+| `spec.agents` | string | No | — | Agent behavior rules, used to generate AGENTS.md |
+| `spec.skills` | []string | No | — | Skill names declaratively assigned to the Worker through the Manager, Dashboard, or API |
+| `spec.mcpServers` | []object | No | — | MCP servers callable via mcporter. Each item: `name` (required, map key in mcporter-servers.json), `url` (required, full gateway endpoint), `transport` (`http` default or `sse`). The controller injects `Authorization: Bearer <gatewayKey>`; gateway-side authorization is out of scope. |
+| `spec.package` | string | No | — | Custom package URI: `file://`, `http(s)://`, `nacos://`, or controller-resolved `packages/{name}.zip` after upload |
+| `spec.expose` | []object | No | — | Ports to expose via Higress gateway (see [Service Publishing](#service-publishing)) |
+| `spec.channelPolicy` | object | No | — | Additive/deny-list overrides for group @mentions and DMs (see [Channel policy](#channel-policy-worker-and-team)) |
+| `spec.state` | string | No | `Running` | Desired lifecycle: `Running`, `Sleeping`, or `Stopped` — controller reconciles containers toward this |
+| `spec.resources` | object | No | install/backend defaults | CPU/memory requests and limits for this Worker Pod. Shape: `requests.cpu`, `requests.memory`, `limits.cpu`, `limits.memory` using Kubernetes quantity strings |
+
+Changing `spec.resources` updates the Worker spec and recreates the managed container/Pod. Avoid resource changes while a Worker is actively processing a task.
+
+The Controller already contains an OpenHuman backend and image configuration, but the shipped Worker CRD enum does not accept `openhuman`. Until a separate business-code change aligns that contract, do not set `spec.runtime: openhuman` in Worker YAML.
+
+### identity / soul / agents vs package
+
+There are two ways to configure a Worker's identity and behavior:
+
+- **Inline**: Define `spec.identity`, `spec.soul`, and `spec.agents` directly in the YAML. The Controller generates the corresponding IDENTITY.md, SOUL.md, and AGENTS.md. Best for lightweight configurations.
+- **Package**: Provide a ZIP via `spec.package` containing the full config (IDENTITY.md, SOUL.md, AGENTS.md, custom skills, Dockerfile, etc.). Best for complex setups requiring custom skills or system dependencies.
+
+When both are set, inline fields override the corresponding files in the package. This allows you to use a package as a base template while customizing specific aspects via YAML — for example, importing a shared package but overriding `soul` to give the Worker a unique role definition.
+
+### Worker Skills
+
+`spec.skills` records Skills declaratively assigned to a Worker through the Manager, Dashboard, or API. A referenced Skill can come from the AgentTeams Worker skill library, from a third-party Skill placed under `$AGENTTEAMS_WORKSPACE_DIR/worker-skills/<skill-name>/`, or from a complete package distributed by the Dashboard.
+
+For an existing Worker, either put the complete Skill directory in the Manager workspace or send the Manager a ZIP attachment containing one complete Skill root. Then ask the Manager to install it:
+
+> Install the `alert-fusion` skill from `~/worker-skills/alert-fusion/` for Worker `amy-ai`. Verify the upload and confirm that the Worker assignment includes the skill.
+
+For an attachment, ask the Manager to safely extract and validate the ZIP before it stages the Skill under `~/worker-skills/` and distributes it.
+
+The Manager uploads and verifies `SKILL.md` before updating `spec.skills`. QwenPaw Workers consume the resulting runtime assignment, synchronize the selected skill into their native workspace, then refresh and enable it automatically.
+
+The assignment can also be checked through conversation instead of a CLI command:
+
+> Check the skills assigned to Worker `amy-ai` and confirm whether `alert-fusion` is included.
+
+You can also distribute a Skill ZIP directly to one or more Workers through the Dashboard. The Dashboard validates `name` and `description` in `SKILL.md`, preserves the complete package under `agents/<worker-name>/skills/<skill-name>/`, updates `spec.skills`, and attempts to restart the Worker to trigger a reload. If the restart is not confirmed, the files and declarative assignment remain in place and the UI reports a partial failure; a subsequent Controller reconcile can still make the assignment effective without another upload. See [Worker Guide: Distribute through the Dashboard](worker-guide.md#method-2-distribute-through-the-dashboard) for the complete UI flow and ZIP constraints.
+
+All supported Dashboard distribution paths update `spec.skills`. The Controller may ask the Manager to restore a missing declared Skill later, but a Dashboard-distributed Skill does not need a Manager-side source copy. If the Worker copy still exists, Manager recovery failure is ignored. If the Worker copy is missing and the Manager cannot restore it, reconciliation continues and records a non-blocking warning in Worker status. Remote Skill assignments also keep reconciliation non-blocking when a requested version or label cannot be refreshed: an existing canonical copy is retained, and Worker status records a sanitized warning that identifies the Skill and requested version or label without exposing source credentials.
+
+You can also use `spec.package` to provide a Worker package containing a `skills/` directory. Package skills and assigned skills are merged without conflict.
+
+### Skill Catalog API
+
+`GET /api/v1/skills` returns the read-only catalog of skills available in the deployment:
+
+- **`source: "builtin"`** — the skills shipped with the agent templates, with the providing templates listed in `agents` and the supporting runtimes in `runtimes` (derived from the deployer's own template selection, so the catalog never drifts from what workers actually receive).
+- **`source: "plugin"`** — the skills shipped inside plugin packages (e.g. TeamHarness), discovered from each package's `plugin.yaml` manifest — the same source the plugin build packages into the worker images. Entries carry the `plugin` name; they are read-only and non-assignable (a worker has the skill iff it has the plugin — no `runtimes`/`agents`/per-worker assignment field).
+- **`source: "shared"`** — the skills staged under `agents/global/skills/` by the Dashboard's skill-upload flow, available for distribution to any worker. This prefix is a staging area, not a distribution channel: deleting an entry removes it from the catalog and the Dashboard's global area but never touches already-distributed per-worker copies or existing `spec.skills` assignments (no cascade).
+- **`source: "team"`** (only with `?team=`) — the team's own skills under `teams/<team>/skills/`, published through `POST /api/v1/skills` (see below).
+
+Output is sorted by name; the endpoint is metadata-only — no skill content, no registry calls, no credentials. Entries carry `name`/`description`/`source` plus `version`/`requirements` (builtin) and `updated_at` (shared). Without a team parameter the catalog is **admin (L1) only** — non-admin callers receive `400 team scope required`. With `?team=<name>` the catalog is team-scoped: admin reads any team, an L2 human or team leader reads their own team; a cross-team or unknown team reads `404` (indistinguishable from "no such team"). See [Skill Catalog API](../design/skill-catalog-api.md) and [Team Skills](../design/team-skills.md).
+
+### Team Skills
+
+A **team skill** belongs to one team (storage: `teams/<team>/skills/<name>/`) — the middle layer between deployment-wide skills and per-worker copies. Publishing and assigning:
+
+1. **Publish** (admin, any team; or the team's L2 human, own team only):
+
+   ```sh
+   curl -X POST "$CONTROLLER/api/v1/skills" \
+     -H "Authorization: Bearer $TOKEN" \
+     -F "scope=team" -F "team=marketing" \
+     -F "file=@./marketing-briefing.zip"
+   ```
+
+   The zip must contain exactly one top-level directory (the skill root,
+   named like the skill), with `SKILL.md` at its root whose frontmatter
+   `name` equals the directory name. Max 64 MB (zip and uncompressed).
+   The upload is content-scanned (best-effort): a blocked scan returns
+   `422` with the findings; an unavailable scan proceeds and reports
+   `scan.status: "skipped"`. Re-uploading the same skill replaces it
+   exactly (dropped files are deleted). `scope=deployment` (admin only)
+   publishes to `agents/global/skills/` instead.
+2. **Assign**: update the Worker's `spec.skills` (API, Dashboard, or
+   through the Manager). At the next reconcile the Controller scans the
+   skill **again, mandatorily** (a blocked or unavailable scan is not
+   copied and surfaces as a Worker warning), then copies it into
+   `agents/<worker>/skills/<name>/`; the Worker's sync loop materializes
+   it into its native workspace within the sync interval.
+
+Team leaders can browse their team's catalog (`GET /api/v1/skills?team=…`)
+as the assign surface but cannot publish; manager and worker principals
+cannot publish at all. On a name clash the **team layer wins** over the
+builtin library. See [Team Skills design](../design/team-skills.md) for
+the full contract, scan semantics, and the k8s-mode limitation.
+
+### Worker with Custom Package
+
+```yaml
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: devops-alice
+spec:
+  model: claude-sonnet-4-6
+  runtime: openclaw
+  skills: [github-operations]
+  mcpServers:
+    - name: github
+      url: https://gateway.example.com/mcp-servers/github/mcp
+  package: file://./devops-alice.zip    # Contains custom SOUL.md, skills, Dockerfile, etc.
+```
+
+### Worker Creation Flow
+
+When the Controller receives a Worker resource, it executes:
+
+1. Resolve `spec.package` (if present) — download and extract to a temp directory
+2. Register a Matrix account and create a communication Room (Manager + Admin + Worker)
+3. Create a MinIO user and bucket, configure Higress gateway authorization
+4. Generate `openclaw.json` config (including `groupAllowFrom` permission matrix)
+5. Push all config files (SOUL.md, skills, crons, etc.) to MinIO
+6. Update Worker status
+7. Reconcile the Worker container
+
+### Worker Status
+
+| Phase | Meaning |
+|-------|---------|
+| Pending | Resource created, waiting for Controller to process |
+| Running | Container running, Agent online (matches desired `spec.state` when healthy) |
+| Sleeping | Desired or actual sleep state — container stopped, can be woken |
+| Updating | Spec or infra change in progress |
+| Stopped | Desired stopped state reconciled |
+| Failed | Creation or runtime failure — check `status.message` |
+
+**Status fields (subset):** `status.observedGeneration`, `status.matrixUserID`, `status.roomID`, `status.containerState`, `status.lastHeartbeat`, `status.message`, `status.exposedPorts` (per-port `domain` after expose).
+
+### Worker Updates by Role (API)
+
+`PUT /api/v1/workers/{name}` is a merge-patch: only fields present in the body are changed. What each role may update:
+
+| Role | Scope | Fields |
+|------|-------|--------|
+| admin / manager | any worker | all fields |
+| team leader | workers in their team | all fields |
+| L2 human (`permissionLevel: 2`) | workers in `accessibleTeams` only | `skills` |
+
+L2 humans manage the built-in skill assignments of the workers they coordinate without escalating to the admin. `remoteSkills` and `mcpServers` are not L2-writable yet: the MCP path can exfiltrate the gateway consumer key (the generator attaches `Authorization: Bearer <gatewayKey>` to every MCP entry), so both fields return `400` for L2 callers until the elevated-capability design lands (see the L2 permission design issue #1220). Other fields — `model`, `image`, `soul`, `agents`, `runtime`, `package`, `expose`, `channelPolicy`, `resources`, `containerManaged`, `state` — stay in the team owner's domain; a body that touches them is rejected with `400`. Out-of-scope workers (cross-team or standalone) are invisible to L2 humans on both read and update (`404`), keeping the endpoint probe-resistant. See [L2 Human Worker-Scoped Write](../design/l2-worker-scoped-write.md).
+
+## Team
+
+A Team is AgentTeams's collaboration unit, consisting of one Team Leader and one or more Team Workers. The Manager delegates tasks to the Team Leader, who handles decomposition, assignment, and aggregation — achieving team-level autonomy.
+
+### Basic Configuration
+
+```yaml
+apiVersion: agentteams.io/v1beta1
+kind: Team
+metadata:
+  name: alpha-team
+spec:
+  description: Full-stack development team
+  heartbeatEvery: 30m
+  workerMembers:
+    - name: alpha-lead
+      role: team_leader
+    - name: alpha-dev
+      role: worker
+    - name: alpha-qa
+      role: worker
+```
+
+Create `alpha-lead`, `alpha-dev`, and `alpha-qa` as Worker resources first. Model, runtime, image, resources, identity, skills, MCP servers, package, channel policy, and lifecycle state belong only to each Worker CR.
+
+### Field Reference
+
+**Team-level fields:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `metadata.name` | string | Yes | Team name, globally unique |
+| `spec.description` | string | No | Team description |
+| `spec.peerMentions` | bool | No | If `true` (default), team Workers may @mention each other in group rooms |
+| `spec.channelPolicy` | object | No | Team-wide overrides for group/DM allow-deny lists (same shape as Worker `channelPolicy`) |
+| `spec.admin` | object | No | Team-specific human admin (`name` required; `matrixUserId` optional). Defaults to global Admin when omitted |
+| `spec.humanMembers` | []object | No | Additional human Team members. In this version, `role: coordinator` members join the Team Room and can assign work there like the Team Admin |
+| `spec.workerMembers` | []object | Yes | References to existing Worker resources; exactly one entry must have `role: team_leader` |
+| `spec.workerMembers[].name` | string | Yes | Referenced Worker resource name |
+| `spec.workerMembers[].role` | string | Yes | `team_leader` or `worker` |
+| `spec.heartbeatEvery` | string | No | Team Leader heartbeat interval hint |
+
+### What Makes Team Leader Special
+
+A Team Leader is essentially a Worker container, but with key differences:
+
+- Uses the `team-leader-agent` template (SOUL.md.tmpl + AGENTS.md + HEARTBEAT.md)
+- Has canonical Team Leader skills: `team-coordination` for strategy, `project-management` for Project state and ready-node resolution, and `task-management` for Worker task delegation
+- Does not install the older `team-project-management`, `team-task-coordination`, or `team-task-management` compatibility aliases into new Team Leader workspaces; existing workspaces that already copied those aliases keep their local files until explicitly upgraded or recreated
+- Does NOT have Manager-exclusive skills like `worker-management` or `mcp-server-management`
+- Referenced with `role: "team_leader"` in `Team.spec.workerMembers`
+- Follows a delegation-first principle — always assigns tasks to team Workers, never executes domain tasks itself
+
+### Team Leader AGENTS.md Assembly
+
+The Team Leader's AGENTS.md is assembled in three layers, each managed independently:
+
+```
+<!-- agentteams-builtin-start -->
+[Builtin: Team Leader workspace rules, task flow, skills reference]
+<!-- agentteams-builtin-end -->
+
+<!-- agentteams-team-context-start -->
+## Coordination
+- Upstream coordinator: @manager:{domain}
+- Team Admin: @admin:{domain}
+- Team: alpha-team
+- Team members: alpha-dev, alpha-qa
+<!-- agentteams-team-context-end -->
+
+[User-provided content from spec.agents (if any)]
+```
+
+- The builtin section is auto-managed by AgentTeams and updated on upgrades
+- The team context is auto-injected with the team name, members, coordinator info, heartbeat interval, and worker idle timeout
+- User-provided `spec.agents` content is placed after both sections and preserved across updates
+
+### Room Topology
+
+Creating a Team produces the following Matrix Rooms:
+
+```
+Leader Room:   Manager + Global Admin + Leader        ← Manager-to-Leader communication channel
+Team Room:     Leader + Team Admin + W1 + W2 + ...    ← Leader-to-Workers collaboration space
+Worker Room:   Leader + Team Admin + Worker           ← Leader-to-individual-Worker private chat
+Leader DM:     Team Admin ↔ Leader                    ← Team management channel
+```
+
+Key design: the Team Room does NOT include the Manager, establishing a delegation boundary. The Manager communicates with the Leader only through the Leader Room and never reaches into the team directly.
+
+### Task Flow
+
+```
+Admin assigns task → Manager
+  ↓
+Manager semantically chooses a matching Team from its name, description, Leader, and Workers
+  ↓
+Manager creates task spec, @mentions Leader
+  ↓
+Leader decomposes into sub-tasks, assigns to team Workers
+  ↓
+Workers complete execution, @mention Leader
+  ↓
+Leader aggregates results, @mentions Manager
+  ↓
+Manager notifies Admin
+```
+
+Team matching is not backed by structured team-level matching/filtering fields
+such as `domain`, `expertise`, or `capabilities` on the Team object. Worker-level
+`skills` can still describe individual members, but Manager delegation is based
+on semantic judgement over the Team name, `spec.description`, Leader name, and
+Worker names rather than a structured Team filter.
+
+### Team Status
+
+| Phase | Meaning |
+|-------|---------|
+| Pending | Resource created, waiting for Controller to process |
+| Active | Leader and Workers reconciled successfully |
+| Degraded | Some Workers unavailable or not ready; Leader may still run |
+| Failed | Reconciliation error — check `status.message` |
+
+**Status fields:** `teamRoomID`, `leaderDMRoomID`, `leaderReady`, `readyWorkers`, `totalWorkers`, `workerExposedPorts` (map of worker name → exposed port statuses).
+
+### Team Admin
+
+You can assign a dedicated admin (Team Admin) for a Team, replacing the global Admin for team management:
+
+```yaml
+spec:
+  admin:
+    name: pm-zhang
+    matrixUserId: "@pm-zhang:domain"
+```
+
+If not specified, the global Admin is used by default. The Team Admin is invited to the Team Room and Leader DM, and can communicate directly with the Leader on team matters.
+
+### Team Members
+
+Use `spec.humanMembers` to add human members who are part of the Team but are not Workers. The first supported member role is `coordinator`: the member is invited to the Team Room, and Leader/Workers accept their @mentions there as authorized task assignment. Leader DM remains limited to the Team Admin and Leader.
+
+```yaml
+spec:
+  admin:
+    name: pm-zhang
+    matrixUserId: "@pm-zhang:domain"
+  humanMembers:
+    - name: tech-lead-li
+      matrixUserId: "@tech-lead-li:domain"
+      role: coordinator
+```
+
+## Manager
+
+The **Manager** resource describes the AgentTeams Manager Agent — the coordinator that receives instructions from Admin and orchestrates Workers and Teams. It uses the same API group/version as other resources and is reconciled by `agentteams-controller` (update image, SOUL/AGENTS, MCP authorization, optional package, and desired `state`).
+
+### Basic configuration
+
+```yaml
+apiVersion: agentteams.io/v1beta1
+kind: Manager
+metadata:
+  name: default
+spec:
+  model: qwen3.5-plus
+  runtime: openclaw
+  soul: |
+    # Manager — coordination focus
+  agents: |
+    # Optional AGENTS.md overrides
+  mcpServers:
+    - name: github
+      url: https://gateway.example.com/mcp-servers/github/mcp
+  config:
+    heartbeatInterval: 15m
+    workerIdleTimeout: 720m
+    notifyChannel: admin-dm
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "3"
+      memory: 5Gi
+  # state: Running   # optional: Running | Sleeping | Stopped
+```
+
+### Field reference
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `metadata.name` | string | Yes | — | Manager resource name (often `default` for the primary instance) |
+| `spec.model` | string | Yes | — | LLM model ID |
+| `spec.runtime` | string | No | install/backend default | **OpenClaw** (`openclaw`) or **CoPaw/QwenPaw** (`qwenpaw`; `copaw` is a legacy compatibility alias). Hermes is **not** a supported Manager runtime. |
+| `spec.image` | string | No | — | Custom Manager image; empty uses deployment default |
+| `spec.soul` | string | No | — | Custom SOUL.md content |
+| `spec.agents` | string | No | — | Custom AGENTS.md content |
+| `spec.mcpServers` | []object | No | — | MCP servers callable via mcporter. Each item: `name`, `url`, `transport` (`http`/`sse`). Gateway-side authorization is out of scope. |
+| `spec.package` | string | No | — | Package URI (`file://`, `http(s)://`, `nacos://`) |
+| `spec.state` | string | No | `Running` | Desired lifecycle: `Running`, `Sleeping`, `Stopped` |
+| `spec.resources` | object | No | install/backend defaults | CPU/memory requests and limits for the Manager Pod. Shape: `requests.cpu`, `requests.memory`, `limits.cpu`, `limits.memory` |
+| `spec.config.heartbeatInterval` | string | No | — | Heartbeat check interval (e.g. `15m`) |
+| `spec.config.workerIdleTimeout` | string | No | — | Idle timeout before auto-sleep (e.g. `720m`) |
+| `spec.config.notifyChannel` | string | No | — | Notification channel (e.g. `admin-dm`) |
+
+### Manager status
+
+| Phase | Meaning |
+|-------|---------|
+| Pending | Awaiting first successful reconcile |
+| Running | Manager Agent healthy |
+| Sleeping / Stopped | Desired lifecycle states |
+| Updating | Spec or rollout in progress |
+| Failed | Error — see `status.message` |
+
+**Other status fields:** `observedGeneration`, `matrixUserID`, `roomID`, `containerState`, `version`.
+
+## Human
+
+A Human resource represents a real person. Upon creation, a Matrix account is automatically registered and the user is invited to the appropriate Rooms based on their permission level, enabling human-AI collaboration.
+
+### Basic Configuration
+
+```yaml
+apiVersion: agentteams.io/v1beta1
+kind: Human
+metadata:
+  name: john
+spec:
+  displayName: John Doe
+  email: john@example.com
+  permissionLevel: 2
+  accessibleTeams: [alpha-team]
+  accessibleWorkers: []
+  note: Frontend lead
+```
+
+### Field Reference
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `metadata.name` | string | Yes | — | User identifier, globally unique |
+| `spec.displayName` | string | Yes | — | Display name |
+| `spec.email` | string | No | — | Email for sending credentials |
+| `spec.permissionLevel` | int | Yes | — | Permission level: 1, 2, or 3 |
+| `spec.accessibleTeams` | []string | No | — | Accessible Team list (effective for L2) |
+| `spec.accessibleWorkers` | []string | No | — | Accessible standalone Worker list (effective for L2/L3) |
+| `spec.capabilities` | []string | No | — | Sensitive-surface privileges beyond the L2 baseline: `full_access`, `channel_secrets`, `external_sources`, `approval_policy`, `secret_reveal` (see [capability-foundation](../design/capability-foundation.md)) |
+| `spec.note` | string | No | — | Notes |
+
+### Three-Level Permission Model
+
+Permission levels are inclusive — higher levels include all permissions of lower levels.
+
+**Level 1 — Admin Equivalent**
+
+Can talk to all roles in the system, including Manager, all Team Leaders, and all Workers. `accessibleTeams` and `accessibleWorkers` fields are ignored.
+
+Use case: CTO, VP of Engineering.
+
+```yaml
+spec:
+  permissionLevel: 1
+```
+
+**Level 2 — Team-Scoped**
+
+Can talk to specified Teams' Leaders and all their Workers, plus specified standalone Workers.
+
+Use case: Product manager, team member.
+
+```yaml
+spec:
+  permissionLevel: 2
+  accessibleTeams: [alpha-team, beta-team]
+  accessibleWorkers: [standalone-dev]
+```
+
+**Level 3 — Worker-Only**
+
+Can only talk to specified Workers. `accessibleTeams` field is ignored.
+
+Use case: External collaborator, specialized staff.
+
+```yaml
+spec:
+  permissionLevel: 3
+  accessibleWorkers: [alice, bob]
+```
+
+### How Permissions Work
+
+Human permissions are enforced through two mechanisms:
+
+1. **Room invitations**: The Human is invited to the corresponding Matrix Rooms
+2. **groupAllowFrom**: The Human's Matrix ID is added to the `openclaw.json` config of the corresponding Agents — Agents only respond to @mentions from whitelisted users
+
+| Level | groupAllowFrom Changes | Room Invitations |
+|-------|----------------------|------------------|
+| L1 | Added to Manager + all Leaders + all Workers | All Rooms |
+| L2 | Added to specified Teams' Leaders + Workers + specified standalone Workers | Specified Team Rooms + Worker Rooms |
+| L3 | Added to specified Workers | Specified Worker Rooms |
+
+### Human Updates (API)
+
+`PUT /api/v1/humans/{name}` updates an existing human's permission profile. It is a merge-patch: only fields present in the body change; an absent field is kept, and an explicitly empty list clears it.
+
+- **Updatable:** `displayName`, `email`, `permissionLevel` (1/2/3), `accessibleTeams`, `accessibleWorkers`, `note`.
+- **Not updatable:** `name` and the Matrix identity (re-provisioning the account is a separate operation).
+- **Validation:** `permissionLevel` outside 1–3 → `400`; `accessibleTeams` / `accessibleWorkers` referencing missing Teams/Workers → `400` naming the references.
+- **Authorization:** admin / manager only. Team leaders, team-scoped humans, and worker accounts are denied — permission grants are an admin operation.
+
+The update is applied to the Human CR; the existing human reconcile then re-syncs Matrix invitations, room memberships, and `groupAllowFrom` to match the new scope. This endpoint does not change Matrix room power levels: a `permissionLevel` change affects API authorization immediately, but room administration privileges in existing rooms are not altered by the update.
+
+### Human Creation Flow
+
+1. Register a Matrix account (random password auto-generated)
+2. Calculate which Agents need modification based on permissionLevel
+3. Update `groupAllowFrom` in each affected Agent's `openclaw.json`
+4. Invite the Human to the corresponding Rooms
+5. Update Human status
+6. Push updated configs to MinIO
+7. Send a welcome email (if SMTP and email are configured)
+
+### Automatic Welcome Email
+
+When `spec.email` is set and SMTP is configured, a welcome email is automatically sent after the Human account is created, containing all the information needed to log in:
+
+```
+Subject: Welcome to AgentTeams - Your Account Details
+
+Hi {displayName},
+
+Your AgentTeams account has been created:
+
+  Username: {matrix_user_id}
+  Password: {generated_password}
+  Login URL: {element_web_url}
+
+Please log in and change your password immediately.
+
+— AgentTeams
+```
+
+SMTP is configured via environment variables in the Manager container:
+
+| Variable | Description |
+|----------|-------------|
+| `AGENTTEAMS_SMTP_HOST` | SMTP server address |
+| `AGENTTEAMS_SMTP_PORT` | SMTP port |
+| `AGENTTEAMS_SMTP_USER` | SMTP username |
+| `AGENTTEAMS_SMTP_PASS` | SMTP password |
+| `AGENTTEAMS_SMTP_FROM` | Sender address |
+
+If SMTP is not configured or `spec.email` is empty, email sending is skipped without affecting account creation. The initial password is still recorded in `status.initialPassword` and can be retrieved via `agt get human <name>`.
+
+### Notes
+
+- Humans don't need containers, MinIO spaces, or Higress authorization — only a Matrix account and Room permissions
+- Target Teams must exist before creating an L2 Human
+- Target Workers must exist before creating an L3 Human
+- Changing permissionLevel triggers a full recalculation of groupAllowFrom
+
+## Package URI
+
+Both Workers and Team Workers support custom configuration packages via `spec.package`. Three URI formats are supported:
+
+| Format | Example | Description |
+|--------|---------|-------------|
+| `file://` | `file://./alice.zip` | Local file, transferred via `docker cp` |
+| `http(s)://` | `https://example.com/worker.zip` | Remote download |
+| `nacos://` | `nacos://host:8848/ns/worker-xxx/v1` | Pulled from Nacos |
+| (upload) | `packages/<name>.zip` | After `POST /api/v1/packages`, the controller returns a URI under `packages/` consumed by `spec.package` |
+
+Nacos URI format: `nacos://[user:pass@]host:port/{namespace}/{agentspec-name}[/{version}|/label:{label}]`
+
+### Package Directory Structure
+
+Regardless of URI format, the extracted package follows a unified structure:
+
+```
+{package}/
+├── manifest.json           # Package metadata (required)
+├── Dockerfile              # Custom image build (optional)
+├── config/
+│   ├── SOUL.md             # Worker identity and role definition
+│   ├── AGENTS.md           # Agent behavior rules
+│   ├── MEMORY.md           # Long-term memory
+│   └── memory/             # Memory files directory
+├── skills/                 # Custom skills
+│   └── <skill-name>/
+│       └── SKILL.md
+└── crons/
+    └── jobs.json           # Scheduled tasks
+```
+
+### manifest.json
+
+```json
+{
+  "version": "1.0",
+  "source": {
+    "openclaw_version": "2026.3.x",
+    "hostname": "my-server",
+    "os": "Ubuntu 22.04",
+    "created_at": "2026-03-18T10:00:00Z"
+  },
+  "worker": {
+    "suggested_name": "my-worker",
+    "model": "qwen3.5-plus",
+    "runtime": "openclaw",
+    "base_image": "agentteams/worker-agent:latest",
+    "apt_packages": ["ffmpeg"],
+    "pip_packages": [],
+    "npm_packages": []
+  }
+}
+```
+
+`worker.runtime` (`openclaw`, `qwenpaw`, `copaw` (legacy), or `hermes`) is honored by `agt apply worker --zip`
+and overridden by an explicit `--runtime` flag.
+
+## Operations
+
+### agentteams-apply.sh — Declarative Apply (Recommended)
+
+Runs on the host, copying YAML into the Manager container and invoking `agt apply -f …`:
+
+```bash
+# Create/update resources (each document is POST or PUT in order)
+bash install/agentteams-apply.sh -f worker.yaml
+
+# Multi-document file (use --- separators)
+bash install/agentteams-apply.sh -f company-setup.yaml
+```
+
+| Option | Description |
+|--------|-------------|
+| `-f <path>` | YAML resource file (required); multiple `-f` flags allowed |
+
+`agt apply -f` walks YAML documents **in file order** and calls the REST API per kind (`Worker` → `/api/v1/workers`, `Team` → `/api/v1/teams`, `Human` → `/api/v1/humans`, `Manager` → `/api/v1/managers`). Put dependencies first yourself (e.g. define Teams before Humans that reference `accessibleTeams`). **`--prune` and `--dry-run` are not implemented** in the current CLI — remove extras with `agt delete …` or equivalent APIs.
+
+### agentteams-import.sh — Imperative Import
+
+For importing Workers from ZIP packages:
+
+```bash
+# Import from local ZIP
+bash install/agentteams-import.sh worker --name alice --zip ./alice.zip
+
+# Import from URL
+bash install/agentteams-import.sh worker --name alice --zip https://example.com/alice.zip
+
+# Import from Nacos
+bash install/agentteams-import.sh worker --name alice --package nacos://host:8848/ns/alice/v1
+bash install/agentteams-import.sh worker --name alice --package nacos://host:8848/ns/alice/label:latest
+
+# Create without a package
+bash install/agentteams-import.sh worker --name bob --model claude-sonnet-4-6 \
+    --skills github-operations,git-delegation
+
+# Note: mcpServers must be configured via YAML manifest (see Worker spec above).
+#       The --mcp-servers flag has been removed — the new schema requires
+#       {name, url, transport} per server and is not expressible as a CSV string.
+```
+
+### agt CLI — In-Container Management
+
+Operate directly inside the Manager container (or via `docker exec`):
+
+```bash
+# List all resources
+docker exec agentteams-manager agt get workers
+docker exec agentteams-manager agt get teams
+docker exec agentteams-manager agt get humans
+docker exec agentteams-manager agt get managers
+
+# View a single resource
+docker exec agentteams-manager agt get worker alice
+
+# Delete a resource
+docker exec agentteams-manager agt delete worker alice
+docker exec agentteams-manager agt delete team alpha-team
+docker exec agentteams-manager agt delete human john
+docker exec agentteams-manager agt delete manager default
+```
+
+### HTTP API — Cloud Management
+
+The `agentteams-controller` exposes a REST API (default `:8090`) used by the `agt` CLI. Typical resources:
+
+```
+GET    /api/v1/workers
+POST   /api/v1/workers
+PUT    /api/v1/workers/{name}
+DELETE /api/v1/workers/{name}
+
+GET    /api/v1/teams
+POST   /api/v1/teams
+...
+
+GET    /api/v1/managers
+POST   /api/v1/managers
+PUT    /api/v1/managers/{name}
+DELETE /api/v1/managers/{name}
+
+GET    /api/v1/projects
+GET    /api/v1/projects/{id}/workflow
+```
+
+The project endpoints are **read-only workflow inspection**. `GET /api/v1/projects` lists projects across team (`teams/{team}/shared/projects/`) and standalone (`shared/projects/`) prefixes, sorted with an optional `?team=` filter; `GET /api/v1/projects/{id}/workflow` returns a LangGraph-aligned workflow view (`nodes` / `edges` / `next` / `interrupts` / `values` / `loop`) derived from the project `meta.json`. Admin/Manager roles see all projects; a Team Leader sees only their own team's projects. `agt get projects <id> --mermaid` renders the workflow as a Mermaid flowchart.
+
+> **Note:** In typical embedded deployments, port 8090 is reachable from inside the Manager container (`localhost:8090`). In Kubernetes (`AGENTTEAMS_KUBE_MODE=incluster`), expose the controller via a Service as needed.
+
+## Batch Deployment
+
+Use `---` separators to define multiple resources in one file. **`agt apply -f` applies documents sequentially in the order they appear** — it does not sort by kind. Create every referenced Worker before its Team, then put Teams before Humans that list `accessibleTeams`.
+
+Deletion order is not automatic: use `agt delete` per resource (respect dependencies: e.g. delete Humans before Teams they reference, if your deployment requires it).
+
+```yaml
+# company-setup.yaml
+
+# --- Workers ---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: product-lead
+spec:
+  model: claude-sonnet-4-6
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: backend-dev
+spec:
+  model: claude-sonnet-4-6
+  skills: [github-operations, git-delegation]
+  mcpServers:
+    - name: github
+      url: https://gateway.example.com/mcp-servers/github/mcp
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: frontend-dev
+spec:
+  model: claude-sonnet-4-6
+  skills: [github-operations]
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: qa-engineer
+spec:
+  model: claude-sonnet-4-6
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: ops-lead
+spec:
+  model: claude-sonnet-4-6
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: monitor
+spec:
+  model: claude-sonnet-4-6
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: admin-assistant
+spec:
+  model: claude-sonnet-4-6
+---
+# --- Team definitions ---
+apiVersion: agentteams.io/v1beta1
+kind: Team
+metadata:
+  name: product-team
+spec:
+  description: Product development team
+  workerMembers:
+    - name: product-lead
+      role: team_leader
+    - name: backend-dev
+      role: worker
+    - name: frontend-dev
+      role: worker
+    - name: qa-engineer
+      role: worker
+---
+apiVersion: agentteams.io/v1beta1
+kind: Team
+metadata:
+  name: ops-team
+spec:
+  description: Operations team
+  workerMembers:
+    - name: ops-lead
+      role: team_leader
+    - name: monitor
+      role: worker
+---
+# --- Human users ---
+apiVersion: agentteams.io/v1beta1
+kind: Human
+metadata:
+  name: zhang-san
+spec:
+  displayName: Zhang San
+  email: zhangsan@example.com
+  permissionLevel: 2
+  accessibleTeams: [product-team]
+  note: Product manager
+---
+apiVersion: agentteams.io/v1beta1
+kind: Human
+metadata:
+  name: li-si
+spec:
+  displayName: Li Si
+  email: lisi@example.com
+  permissionLevel: 2
+  accessibleTeams: [product-team]
+  note: Backend developer
+---
+apiVersion: agentteams.io/v1beta1
+kind: Human
+metadata:
+  name: wang-wu
+spec:
+  displayName: Wang Wu
+  email: wangwu@example.com
+  permissionLevel: 3
+  accessibleWorkers: [admin-assistant]
+  note: Administrative staff
+```
+
+One-command deployment:
+
+```bash
+bash install/agentteams-apply.sh -f company-setup.yaml
+```
+
+For subsequent changes, edit the YAML and re-apply. To remove a resource, use `agt delete <kind> <name>` (or the REST API).
+
+## Controller Architecture
+
+### Processing Flow
+
+```
+Entry point (agentteams-apply.sh / HTTP API / agt CLI)
+  ↓
+YAML written to MinIO agentteams-config/{kind}/{name}.yaml
+  ↓
+mc mirror syncs to local filesystem (10-second interval)
+  ↓
+fsnotify detects file changes → parses YAML → writes to kine (SQLite)
+  ↓
+controller-runtime informer detects changes → triggers Reconciler
+  ↓
+Reconciler executes scripts (create-worker.sh / create-team.sh / create-human.sh)
+```
+
+### Reconciler Actions
+
+| Reconciler | CREATE | UPDATE | DELETE |
+|-----------|--------|--------|--------|
+| Worker | Create container + Matrix account + MinIO space | model change → regenerate config; skills change → re-push | Stop container + clean up resources |
+| Team | Validate and link existing Workers + create Team Room | `workerMembers` change → update membership and coordination context | Remove Team Room and coordination context; preserve Worker CRs and runtimes |
+| Human | Register Matrix account + configure permissions + send email | permissionLevel change → recalculate groupAllowFrom | Remove from all groupAllowFrom → kick from Rooms |
+| Manager | Provision/update Manager Agent config + runtime | model/package/state → reconcile | Tear down managed Manager resources per backend |
+
+All resources use the Kubernetes finalizer pattern to ensure cleanup before deletion.
+
+## Service Publishing
+
+Workers can expose HTTP services running inside their containers to the outside world via the Higress gateway. Add `spec.expose` to a Worker's configuration to publish container ports — the Controller automatically creates the necessary Higress domain, DNS service source, and route.
+
+### How It Works
+
+Each exposed port gets an auto-generated domain:
+
+```
+worker-{name}-{port}-local.agentteams.io
+```
+
+For example, worker `alice` exposing port `8080` becomes accessible at `worker-alice-8080-local.agentteams.io`.
+
+The Controller creates three Higress resources per exposed port:
+1. **Domain**: `worker-{name}-{port}-local.agentteams.io`
+2. **DNS Service Source**: points to the worker container via network alias `{name}.local`
+3. **Route**: forwards all requests on the domain to the worker's port
+
+When the expose configuration is removed or the Worker is deleted, all associated Higress resources are automatically cleaned up.
+
+### Configuration
+
+```yaml
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: alice
+spec:
+  model: qwen3.5-plus
+  expose:
+    - port: 8080
+    - port: 3000
+```
+
+**Expose field reference:**
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `expose[].port` | int | Yes | — | Container port to expose |
+| `expose[].protocol` | string | No | `http` | Protocol: `http` or `grpc` |
+
+### Workers referenced by a Team
+
+`expose` remains Worker-owned. Configure it on the Worker CRs, then reference those Workers from the Team:
+
+```yaml
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: lead
+spec:
+  model: qwen3.5-plus
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: backend
+spec:
+  model: qwen3.5-plus
+  expose:
+    - port: 8080
+---
+apiVersion: agentteams.io/v1beta1
+kind: Team
+metadata:
+  name: dev-team
+spec:
+  workerMembers:
+    - name: lead
+      role: team_leader
+    - name: backend
+      role: worker
+```
+
+### CLI Usage
+
+```bash
+# Expose ports via CLI flag
+agt apply worker --name alice --model qwen3.5-plus --expose 8080,3000
+
+# Remove exposed ports (re-apply without --expose)
+agt apply worker --name alice --model qwen3.5-plus
+```
+
+### Use Cases
+
+- **Web App Preview**: A Worker develops a web application and exposes it for the Admin or other team members to preview
+- **API Service**: A Worker runs a backend API that other Workers or external systems need to access
+- **Development Server**: Expose a dev server for real-time testing during development
+
+### Notes
+
+- The worker container must be running and the service must be listening on the specified port before it can be accessed
+- Domains are auto-generated; custom domains are not yet supported
+- No authentication is configured on exposed routes (public access within the network)
+- Removing a port from `spec.expose` and re-applying will clean up the corresponding Higress resources
+
+### Two Deployment Modes
+
+| Dimension | embedded (default) | incluster (K8s) |
+|-----------|--------------------|-----------------|
+| Config storage | MinIO `agentteams-config/` | K8s etcd (CRDs stored directly in K8s) |
+| Controller detection | fsnotify → kine → informer | controller-runtime watches K8s API directly |
+| Switch via | `AGENTTEAMS_KUBE_MODE=embedded` | `AGENTTEAMS_KUBE_MODE=incluster` |
+
+## Channel policy (Worker and Team)
+
+`channelPolicy` augments the default allow lists used when generating Agent configs (group @mentions and DMs). It is **additive and subtractive on top of defaults**, not a full replacement.
+
+| Field | Purpose |
+|-------|---------|
+| `groupAllowExtra` | Extra Matrix user IDs (or short names resolved by the controller) allowed for group @mentions |
+| `groupDenyExtra` | Deny list for group @mentions (deny wins over allow) |
+| `dmAllowExtra` | Extra IDs allowed for direct messages |
+| `dmDenyExtra` | Deny list for DMs |
+
+Set `spec.channelPolicy` on a Worker for per-member policy, and `spec.channelPolicy` on a Team for Team-wide policy.
+
+## Worker channel configuration (proxy)
+
+Each worker's qwenpaw app exposes a channel-configuration API (QQ / Matrix /
+DingTalk / ...). The Controller proxies it so admins and L2 humans configure
+channels through the API or a graphical frontend (workbench plugin /
+dashboard) instead of opening a shell on the worker container:
+
+```bash
+# List a worker's channel configs
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/channels \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+
+# Save a channel (body = the full channel config; takes effect immediately, no restart)
+curl -s -X PUT http://127.0.0.1:8090/api/v1/workers/{name}/channels/qq \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"enabled":true,"app_id":"...","client_secret":"***"}'
+# → 200, body verbatim, X-AgentTeams-MinIO-Persisted: true|false|skipped
+```
+
+The `schemas` route returns per-channel form definitions (field names,
+types, labels, options) so frontends render the connect form without
+per-channel code. The `conflict-check` route (POST) detects other agents
+holding the same channel credentials before you save a config — on a
+2.2.x worker it runs server-side; on an older build the upstream's own
+`404` is returned verbatim, so hide the entry when you see it (see the
+version-contract section of `docs/design/worker-channels-api.md`).
+
+| Role | Read | Write (`PUT` / `restart` / `conflict-check`) |
+|------|------|---------------------------|
+| L1 (admin / cli token) | any worker | any worker |
+| L2 (Matrix token) | own-team workers | own-team workers |
+| Team Leader | own-team workers | read-only (`403`) |
+
+Cross-team access returns `404` uniformly (existence is not probed).
+`embedded` mode only — `503` in kube mode. Full contract:
+[design/worker-channels-api.md](../design/worker-channels-api.md).
+
+## Worker session visibility (chats proxy)
+
+A worker's conversation history (its qwenpaw *chats* — one per
+user/channel: Matrix room, QQ DM, console sessions) is readable through
+three read-only proxy routes: list the sessions, open a transcript, and
+check the run status of one session (`idle` / `running`).
+
+```bash
+# L2 human lists the sessions of a worker in their team
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/chats \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+# full transcript of one session
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/chats/{chat_id} \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+# run status of one session (QwenPaw >= 2.2.1; 404 on older builds = hide the indicator)
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/chats/{chat_id}/status \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+```
+
+Same scope model as the channel and checkpoint proxies: L1 any worker,
+L2 / team leader own-team workers, cross-team `404` (existence not
+probed), `embedded` mode only. Read-only — no create/archive/delete
+route. Transcripts are the worker's conversation context verbatim;
+access is bounded by the worker's team scope. Full contract:
+[design/worker-chats-api.md](../design/worker-chats-api.md).
+
+## Communication Permission Matrix
+
+AgentTeams uses the `groupAllowFrom` field in `openclaw.json` to control which @mentions each Agent accepts, enabling fine-grained communication permissions.
+
+| Role | groupAllowFrom includes |
+|------|------------------------|
+| Manager | Admin, all Team Leaders, all standalone Workers, Human L1 |
+| Team Leader | Manager, Admin, all team Workers, Human L1, Human L2 for this Team |
+| Team Worker | Leader, Admin, Human L1, Human L2 for this Team, specified Human L3 |
+| Standalone Worker | Manager, Admin, Human L1, specified Human L2/L3 |
+
+Key rules:
+- Manager does not penetrate Teams — communicates only with the Leader, never directly with team Workers
+- Team Workers only recognize their Leader — groupAllowFrom does not include Manager
+- Permissions are inclusive — Human L1 > L2 > L3, higher levels include all lower-level permissions
+- Standalone Workers maintain the existing pattern — communicate directly with Manager
+
+## FAQ
+
+**Q: Can Teams and standalone Workers coexist?**
+
+Yes. Teams and standalone Workers coexist in the same AgentTeams instance. The Manager decides whether to delegate to a Team Leader or assign directly to a standalone Worker based on the task domain.
+
+**Q: What happens when a Human's permissionLevel is changed?**
+
+The Controller recalculates the Human's groupAllowFrom across all affected Agents, removes old permissions, adds new ones, and updates Room invitations.
+
+**Q: Can a Team Worker belong to multiple Teams?**
+
+No. Each Worker can only belong to one Team (or be a standalone Worker).
+
+**Q: What if the target Team doesn't exist yet when creating an L2 Human?**
+
+The Controller marks the Human as Pending and automatically backfills permissions once the target Team is created.
+
+**Q: Is there a `--prune` mode for declarative apply?**
+
+Not in the current `agt apply` CLI. List resources with `agt get …` and delete explicitly, or automate against the REST API.

@@ -105,10 +105,10 @@ Dir.mktmpdir("workerflow-qwenpaw-") do |tmp|
       "backend" => "plugin.py"
     },
     "dependencies" => [],
-    "min_version" => "2.0.1",
+    "min_version" => "2.2.0",
     "qwenpaw_version" => {
-      "min" => "2.0.1",
-      "max" => "2.1.0"
+      "min" => "2.2.0",
+      "max" => "2.3.0"
     },
     "meta" => {
       "category" => "workerflow",

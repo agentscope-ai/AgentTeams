@@ -27,6 +27,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/remoteclient"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/server"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/skillscan"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/store"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/watcher"
 	corev1 "k8s.io/api/core/v1"
@@ -86,8 +87,12 @@ type App struct {
 	remoteClientCache *remoteclient.Cache
 
 	// Service layer
-	provisioner   *service.Provisioner
-	deployer      *service.Deployer
+	provisioner *service.Provisioner
+	deployer    *service.Deployer
+	// skillScanner is shared by the skill upload endpoint (scan ①,
+	// best-effort) and the assign-time materialization (scan ②, mandatory)
+	// so both hit the same content-hash cache.
+	skillScanner  *skillscan.Client
 	envBuilder    *service.WorkerEnvBuilder
 	managerConfig *service.ManagerConfigStore
 }
@@ -348,6 +353,19 @@ func (a *App) initInfraClients(_ context.Context) error {
 		mcClient = mcClient.WithCredentialSource(&ossControllerCredSource{tm: tm})
 		a.oss = mcClient
 		logger.Info("storage provider: oss (external)", "bucket", cfg.OSSBucket)
+	} else if cfg.UsesExternalS3() {
+		// External S3-compatible backend (e.g. RustFS): fixed credentials
+		// from env, and — unlike external OSS — the MinIO-compatible admin
+		// API is available, so the controller keeps managing per-worker
+		// users/policies via mc.
+		if cfg.OSSConfig().Endpoint == "" {
+			return fmt.Errorf("s3 provider requires AGENTTEAMS_FS_ENDPOINT to be set")
+		}
+		a.oss = mcClient
+		if cfg.HasMinIOAdmin() {
+			a.ossAdmin = oss.NewMinIOAdminClient(cfg.OSSConfig())
+		}
+		logger.Info("storage provider: s3 (external)", "bucket", cfg.OSSBucket)
 	} else {
 		a.oss = mcClient
 		logger.Info("storage provider: minio (embedded)", "bucket", cfg.OSSBucket)
@@ -441,10 +459,16 @@ func (a *App) initAuth(ctx context.Context) error {
 		}
 		authenticator := authpkg.NewTokenReviewAuthenticator(a.k8sClient, a.cfg.AuthAudience, authpkg.ResourcePrefix(a.cfg.ResourcePrefix))
 		go authenticator.StartCleanup(ctx)
+		// A2: L2 human identities authenticate with their Matrix access token
+		// (whoami + Human CR accessibleTeams). The composite tries the SA path
+		// first so existing SA-based callers are unaffected; a Matrix token
+		// falls through to the Matrix authenticator.
+		matrixAuth := authpkg.NewMatrixTokenAuthenticator(a.mgr.GetClient(), a.namespace, a.matrix)
+		composite := authpkg.NewCompositeAuthenticator(authenticator, matrixAuth)
 		enricher := authpkg.NewCREnricher(a.mgr.GetClient(), a.namespace)
 		authorizer := authpkg.NewAuthorizer()
-		a.authMw = authpkg.NewMiddleware(authenticator, enricher, authorizer, a.mgr.GetClient(), a.namespace)
-		logger.Info("K8s SA token authentication enabled", "audience", a.cfg.AuthAudience)
+		a.authMw = authpkg.NewMiddleware(composite, enricher, authorizer, a.mgr.GetClient(), a.namespace)
+		logger.Info("K8s SA + Matrix token authentication enabled", "audience", a.cfg.AuthAudience)
 	} else {
 		a.authMw = authpkg.NewMiddleware(nil, nil, authpkg.NewAuthorizer(), nil, a.namespace)
 		logger.Info("authentication disabled (no REST config)")
@@ -517,6 +541,14 @@ func (a *App) initServiceLayer(_ context.Context) error {
 		})
 	}
 
+	a.skillScanner = skillscan.New(skillscan.Config{
+		KubeMode:       a.cfg.KubeMode,
+		Client:         a.mgr.GetClient(),
+		Namespace:      a.namespace,
+		ResourcePrefix: authpkg.ResourcePrefix(a.cfg.ResourcePrefix),
+		SocketPath:     a.cfg.SocketPath,
+	})
+
 	a.deployer = service.NewDeployer(service.DeployerConfig{
 		AgentConfig:     a.agentGen,
 		OSS:             a.oss,
@@ -527,6 +559,7 @@ func (a *App) initServiceLayer(_ context.Context) error {
 		WorkerAgentDir:  cfg.WorkerAgentDir(),
 		MatrixDomain:    cfg.MatrixDomain,
 		NacosCredClient: a.credProvider,
+		SkillScanner:    a.skillScanner,
 	})
 
 	return nil
@@ -557,6 +590,8 @@ func (a *App) initReconcilers(_ context.Context) error {
 		DefaultRuntime:              a.cfg.DefaultWorkerRuntime,
 		DefaultBackendRuntime:       a.cfg.WorkerBackendRuntime,
 		ControllerName:              a.cfg.ControllerName,
+		KubeMode:                    a.cfg.KubeMode,
+		ContainerPrefix:             a.cfg.ContainerPrefix,
 		GatewayClient:               a.gateway,
 		DynamicClient:               dynamicClient,
 		RemoteDynamicClientProvider: remoteDynamicClientProvider,
@@ -584,6 +619,7 @@ func (a *App) initReconcilers(_ context.Context) error {
 	if err := (&controller.HumanReconciler{
 		Client:      a.mgr.GetClient(),
 		Provisioner: a.provisioner,
+		Deployer:    a.deployer,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup HumanReconciler: %w", err)
 	}
@@ -631,20 +667,30 @@ func (a *App) initReconcilers(_ context.Context) error {
 
 func (a *App) initHTTPServer(_ context.Context) error {
 	a.httpServer = server.NewHTTPServer(a.cfg.HTTPAddr, server.ServerDeps{
-		Client:         a.mgr.GetClient(),
-		Backend:        a.registry,
-		Gateway:        a.gateway,
-		OSS:            a.oss,
-		STS:            a.stsService,
-		AuthMw:         a.authMw,
-		KubeMode:       a.cfg.KubeMode,
-		Namespace:      a.namespace,
-		ControllerName: a.cfg.ControllerName,
-		SocketPath:     a.cfg.SocketPath,
-		MatrixConfig:   a.cfg.MatrixConfig(),
-		Provisioner:    a.provisioner,
+		Client:          a.mgr.GetClient(),
+		APIReader:       a.mgr.GetAPIReader(),
+		Backend:         a.registry,
+		Gateway:         a.gateway,
+		OSS:             a.oss,
+		STS:             a.stsService,
+		AuthMw:          a.authMw,
+		KubeMode:        a.cfg.KubeMode,
+		Namespace:       a.namespace,
+		ControllerName:  a.cfg.ControllerName,
+		SocketPath:      a.cfg.SocketPath,
+		ContainerPrefix: a.cfg.ContainerPrefix,
+		ResourcePrefix:  a.cfg.ResourcePrefix,
+		MatrixConfig:    a.cfg.MatrixConfig(),
+		MatrixClient:    a.matrix,
+		Provisioner:     a.provisioner,
 
+		WorkerEnvBuilder:     a.envBuilder,
+		GatewayURL:           a.cfg.WorkerEnv.AIGatewayURL,
 		DefaultWorkerRuntime: a.cfg.DefaultWorkerRuntime,
+		DefaultModel:         a.cfg.DefaultModel,
+		WorkerAgentDir:       a.cfg.WorkerAgentDir(),
+		PluginDir:            a.cfg.PluginDir(),
+		SkillScanner:         a.skillScanner,
 	})
 	return nil
 }

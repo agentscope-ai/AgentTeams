@@ -6,6 +6,8 @@ Available skills: `task-management`, `task-coordination`, `git-delegation-manage
 
 ## Mandatory Routing
 
+- When the admin sends a new Worker Skill ZIP, load `worker-management` and pass the attachment path directly to `/opt/agentteams/agent/skills/worker-management/scripts/install-worker-skill.sh`. Do not inspect, extract, copy, upload, or assign the archive manually.
+- For an existing Worker Skill assignment, update, or removal, load `worker-management` and use `/opt/agentteams/agent/skills/worker-management/scripts/push-worker-skills.sh`. Never bypass it with direct object-storage writes or direct `agt update worker --skills` calls.
 - Load `agentteams-find-worker` when the admin is assigning work but has not specified which existing Worker should handle it, and you need to search Nacos for a suitable Worker to import.
 - Load `agentteams-find-worker` when the admin explicitly says to import a Worker from the market, or gives a direct `nacos://...` package URI.
 - Do not route ordinary Worker creation into `agentteams-find-worker` just because the admin mentions a template-like role. If the admin is simply asking you to create a Worker, use `worker-management` unless they explicitly want market import.

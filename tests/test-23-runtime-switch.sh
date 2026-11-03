@@ -2,14 +2,19 @@
 # test-23-runtime-switch.sh - Case 23: Switch worker runtime in-place
 #
 # Verifies the controller recreates a worker's container with the new
-# runtime image when spec.runtime changes, while preserving identity
-# (Matrix roomID, Higress consumer name) and user data in MinIO.
+# runtime image when spec.runtime changes between *supported* runtimes
+# (openclaw → qwenpaw), while preserving identity (Matrix roomID,
+# Higress consumer name) and user data in MinIO.
 #
 # The flow exercises:
 #   1. create worker runtime=openclaw → container image is openclaw
 #   2. write sentinel file to MinIO agents/<name>/
-#   3. apply worker runtime=copaw → SpecChanged triggers recreate
-#   4. new container image is copaw; sentinel preserved; consumer unchanged
+#   3. apply worker runtime=qwenpaw → SpecChanged triggers recreate
+#   4. new container image is qwenpaw; sentinel preserved; consumer unchanged
+#   5. apply worker runtime=copaw → must be REJECTED (CoPaw EOL, #1310)
+#
+# Upgrading an *existing* CoPaw worker to QwenPaw with a fixed old image
+# (CR-seeded legacy instance) is covered by test-29-legacy-copaw-upgrade.sh.
 #
 # This is a controller-cr style test — no LLM required.
 
@@ -126,20 +131,19 @@ else
 fi
 
 # ============================================================
-# Section 3: Switch runtime to copaw
+# Section 3: Switch runtime to qwenpaw
 # ============================================================
-log_section "Switch Runtime (openclaw → copaw)"
-
-SWITCH_OUTPUT=$(exec_in_agent agt apply worker --name "${TEST_WORKER}" --runtime copaw 2>&1)
+log_section "Switch Runtime (openclaw → qwenpaw)"
+SWITCH_OUTPUT=$(exec_in_agent agt apply worker --name "${TEST_WORKER}" --runtime qwenpaw 2>&1)
 SWITCH_EXIT=$?
 if [ "${SWITCH_EXIT}" -eq 0 ]; then
-    log_pass "agt apply (copaw) accepted"
+    log_pass "agt apply (qwenpaw) accepted"
 else
-    log_fail "agt apply (copaw) failed: ${SWITCH_OUTPUT}"
+    log_fail "agt apply (qwenpaw) failed: ${SWITCH_OUTPUT}"
 fi
 
-# Wait for the controller to recreate the container. We poll for either
-# (a) the container ID changes, or (b) the image label contains "copaw".
+# Wait for the controller to recreate the container. We poll for
+# (a) the container ID changing, and (b) the image containing "qwenpaw".
 log_info "Waiting for container recreation..."
 DEADLINE=$(( $(date +%s) + 240 ))
 NEW_CONTAINER_ID=""
@@ -150,7 +154,7 @@ while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
     NEW_IMAGE=$(docker inspect --format '{{.Config.Image}}' "${NEW_CONTAINER}" 2>/dev/null || echo "")
     if [ -n "${NEW_CONTAINER_ID}" ] \
         && [ "${NEW_CONTAINER_ID}" != "${OLD_CONTAINER_ID}" ] \
-        && [ -n "${NEW_IMAGE}" ]; then
+        && echo "${NEW_IMAGE}" | grep -qi "qwenpaw"; then
         break
     fi
     sleep 5
@@ -167,10 +171,10 @@ else
     log_fail "Container not recreated (id still ${OLD_CONTAINER_ID})"
 fi
 
-if echo "${NEW_IMAGE}" | grep -qi "copaw"; then
-    log_pass "Post-switch image is copaw: ${NEW_IMAGE}"
+if echo "${NEW_IMAGE}" | grep -qi "qwenpaw"; then
+    log_pass "Post-switch image is qwenpaw: ${NEW_IMAGE}"
 else
-    log_fail "Post-switch image does not look like copaw: ${NEW_IMAGE}"
+    log_fail "Post-switch image does not look like qwenpaw: ${NEW_IMAGE}"
 fi
 
 # Matrix room preserved
@@ -204,6 +208,18 @@ if minio_file_exists "agents/${TEST_WORKER}/openclaw.json"; then
     log_pass "openclaw.json present post-switch (controller-managed config)"
 else
     log_fail "openclaw.json missing post-switch"
+fi
+
+# ============================================================
+# Section 5: Switch to CoPaw must be rejected (EOL guard, #1310)
+# ============================================================
+log_section "Switch To CoPaw (must be rejected)"
+copaw_attempt=$(exec_in_agent agt apply worker --name "${TEST_WORKER}" --runtime copaw 2>&1)
+copaw_exit=$?
+if [ "${copaw_exit}" -ne 0 ] && echo "${copaw_attempt}" | grep -qi "qwenpaw"; then
+    log_pass "Legacy CoPaw switch rejected with QwenPaw guidance"
+else
+    log_fail "Legacy CoPaw switch was not rejected as expected: ${copaw_attempt}"
 fi
 
 # ============================================================

@@ -12,10 +12,10 @@ AgentTeams is an open-source Agent Teams system that uses IM (Matrix protocol) f
 AgentTeams/
 ├── agentteams-controller/   # Kubernetes operator (Go): reconciles Worker, Manager, Team, Human CRDs
 ├── helm/                # Helm chart (K8s): Higress, Tuwunel, MinIO, controller, Manager CR, defaults
-├── manager/             # Manager images: OpenClaw-based (Dockerfile) and CoPaw-based (Dockerfile.qwenpaw)
+├── manager/             # Manager images: OpenClaw-based (Dockerfile) and QwenPaw-based (Dockerfile.qwenpaw)
 ├── worker/              # OpenClaw Worker image (shared base pattern; runtime also selected at deploy time)
-├── copaw/               # CoPaw Python package source (published as e.g. copaw-worker on PyPI)
 ├── hermes/              # Hermes Python package source (Hermes Matrix worker runtime)
+├── deepseek-harness/    # Experimental headless DeepSeek Harness Worker image and Matrix bridge
 ├── openhuman/           # OpenHuman Worker image: Rust core + native Matrix (channel-matrix feature)
 ├── openclaw-base/       # Base image: Ubuntu + Node.js + bundled agent assets + mcporter
 ├── shared/lib/          # Shared shell libs copied into images (agentteams-env.sh, render-skills.sh, …)
@@ -24,7 +24,7 @@ AgentTeams/
 ├── tests/               # Automated integration tests
 ├── docs/                # User-facing documentation
 ├── design/              # Internal design notes and API specs
-├── changelog/           # Release notes fragments (current.md rolled into releases)
+├── changelog/           # Archived release notes from earlier releases
 ├── hack/                # Maintenance helpers (e.g. image mirror scripts)
 ├── migrate/             # Optional migration helpers
 ├── blog/                # Announcement / blog source
@@ -40,8 +40,9 @@ Logs and local artifacts (for example replay logs) stay out of git via `.gitigno
 | Runtime   | Stack | Role |
 |-----------|--------|------|
 | `openclaw` | Node.js / OpenClaw (default) | Primary worker agent runtime |
-| `copaw`    | Python / AgentScope via CoPaw | Alternative worker runtime |
+| `copaw` (legacy) | Python / AgentScope via CoPaw | Legacy workers only (EOL; do not use for new workers) |
 | `hermes`   | Python / `hermes-worker` package | Alternative worker runtime (Matrix bridge + policies under `hermes/src/`) |
+| `deepseek-harness` | Node.js / DeepSeek Harness | Experimental headless Worker runtime pinned to a tested DSH release |
 
 **Manager runtimes** (container env `AGENTTEAMS_MANAGER_RUNTIME`, CoPaw Manager CR / Helm `manager.runtime` where applicable):
 
@@ -50,7 +51,7 @@ Logs and local artifacts (for example replay logs) stay out of git via `.gitigno
 | `openclaw` | OpenClaw gateway; primary Matrix channel uses the **message** tool pattern (see upstream OpenClaw / AgentTeams manager config). |
 | `qwenpaw` (default) | Python QwenPaw workspace; Matrix traffic uses the **`copaw channels send`** CLI (see `start-qwenpaw-manager.sh`). |
 
-Hermes and OpenHuman are **Worker-only** runtimes in the API and Helm worker defaults; the Manager entrypoint in `start-manager-agent.sh` today starts **openclaw** or **qwenpaw** only.
+Hermes, DeepSeek Harness, and OpenHuman are **Worker-only** runtimes in the API and Helm worker defaults; the Manager entrypoint in `start-manager-agent.sh` today starts **openclaw** or **qwenpaw** only.
 
 **Deployment runtime** (`AGENTTEAMS_RUNTIME`): local embedded stack vs `aliyun` vs `k8s` changes which bootstrap steps run inside the Manager container (for example Matrix registration and Higress setup are skipped or reduced in `k8s` because the controller owns them).
 
@@ -89,7 +90,7 @@ manager/agent/
 
 ### To understand the architecture
 
-- Read [docs/architecture.md](docs/architecture.md) for system overview and component diagram
+- Read [docs/design/architecture.md](docs/design/architecture.md) for system overview and component diagram
 - Read [design/design.md](design/design.md) for full product design (Chinese)
 - Read [design/poc-design.md](design/poc-design.md) for detailed implementation specs
 
@@ -110,7 +111,7 @@ manager/agent/
 
 ### Local full build (from source)
 
-The image dependency chain is: `openclaw-base` → `manager` / `worker`. CoPaw and Hermes worker images and the controller image are additional build targets; see the `Makefile` for current image names.
+The image dependency chain is: `openclaw-base` → `manager` / `worker`. Hermes and DeepSeek Harness worker images and the controller image are additional build targets; see the `Makefile` for current image names.
 
 By default, `OPENCLAW_BASE_IMAGE` points to the remote registry (`higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/openclaw-base`). When building locally from a modified `openclaw-base`, you **must** override it to the local image name so that manager/worker actually use your local base:
 
@@ -118,8 +119,8 @@ By default, `OPENCLAW_BASE_IMAGE` points to the remote registry (`higress-regist
 # Step 1: Build openclaw-base
 make build-openclaw-base
 
-# Step 2: Build manager, worker, copaw-worker using the LOCAL base
-make build-manager build-worker build-copaw-worker \
+# Step 2: Build manager, worker using the LOCAL base
+make build-manager build-worker \
     OPENCLAW_BASE_IMAGE=agentteams/openclaw-base \
     OPENCLAW_BASE_VERSION=latest
 ```
@@ -134,7 +135,7 @@ PROXY_ARGS="--build-arg HTTP_PROXY=http://host.containers.internal:1087 \
     --build-arg http_proxy=http://host.containers.internal:1087 \
     --build-arg https_proxy=http://host.containers.internal:1087"
 
-make build-embedded build-manager build-worker build-copaw-worker DOCKER_BUILD_ARGS="${PROXY_ARGS}"
+make build-embedded build-manager build-worker DOCKER_BUILD_ARGS="${PROXY_ARGS}"
 ```
 
 Note: use `host.containers.internal` for Podman on macOS, `host.docker.internal` for Docker Desktop.
@@ -142,11 +143,11 @@ Note: use `host.containers.internal` for Podman on macOS, `host.docker.internal`
 **China build acceleration (without proxy)**: All Dockerfiles default to official sources. For builds in China without proxy, pass mirror args:
 
 ```bash
-# APT mirror (for Ubuntu/Debian-based images: openclaw-base, copaw, manager-qwenpaw, embedded)
+# APT mirror (for Ubuntu/Debian-based images: openclaw-base, manager-qwenpaw, embedded)
 make build-embedded DOCKER_BUILD_ARGS="--build-arg APT_MIRROR=mirrors.aliyun.com"
 
-# PIP mirror (for Python-based images: copaw, manager-qwenpaw)
-make build-copaw-worker DOCKER_BUILD_ARGS="--build-arg APT_MIRROR=mirrors.aliyun.com --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/"
+# PIP mirror (for Python-based images: manager-qwenpaw)
+make build-manager-qwenpaw DOCKER_BUILD_ARGS="--build-arg APT_MIRROR=mirrors.aliyun.com --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/"
 
 # NPM mirror (for Node.js-based images: openclaw-base)
 make build-openclaw-base DOCKER_BUILD_ARGS="--build-arg APT_MIRROR=mirrors.aliyun.com --build-arg NPM_REGISTRY=https://registry.npmmirror.com/"
@@ -155,7 +156,7 @@ make build-openclaw-base DOCKER_BUILD_ARGS="--build-arg APT_MIRROR=mirrors.aliyu
 ### To modify the Manager container
 
 - [manager/Dockerfile](manager/Dockerfile) — OpenClaw-based Manager (from `openclaw-base`; bundles `agt` CLI from controller image)
-- [manager/Dockerfile.qwenpaw](manager/Dockerfile.qwenpaw) — CoPaw-based Manager (Python venv + CoPaw from PyPI; same agent tree and scripts pattern)
+- [manager/Dockerfile.qwenpaw](manager/Dockerfile.qwenpaw) — QwenPaw-based Manager (Python venv + QwenPaw from PyPI; same agent tree and scripts pattern)
 - [manager/supervisord.conf](manager/supervisord.conf) — process orchestration (local embedded stack)
 - [manager/scripts/init/](manager/scripts/init/) — startup: `start-manager-agent.sh` (runtime + `AGENTTEAMS_RUNTIME`), `upgrade-builtins.sh`, Higress/Matrix bootstrap where applicable
 - [manager/scripts/lib/](manager/scripts/lib/) — shared libraries (`base.sh`, `container-api.sh`, …)
@@ -168,16 +169,14 @@ The Manager **image** is an agent runtime plus scripts; Higress, Tuwunel, MinIO,
 - [worker/Dockerfile](worker/Dockerfile) — build definition (Node.js from build stage / openclaw-base pattern)
 - [worker/scripts/worker-entrypoint.sh](worker/scripts/worker-entrypoint.sh) — startup logic
 
-### To modify the Worker container (CoPaw)
-
-- [copaw/Dockerfile](copaw/Dockerfile) — CoPaw worker image build
-- [copaw/scripts/copaw-worker-entrypoint.sh](copaw/scripts/copaw-worker-entrypoint.sh) — startup logic
-- [copaw/src/copaw_worker/](copaw/src/copaw_worker/) — CoPaw worker Python package
-- [copaw/README.md](copaw/README.md) — PyPI package `copaw-worker` install and CLI overview
-
 ### To modify the Hermes worker runtime
 
 - [hermes/](hermes/) — Python package layout under `hermes/src/` (`hermes_worker`, `hermes_matrix`, CLI)
+
+### To modify the DeepSeek Harness worker runtime
+
+- [deepseek-harness/](deepseek-harness/) — managed image, Matrix bridge, persisted room sessions, and runtime tests
+- [plugins/teamharness/adapters/deepseek-harness/](plugins/teamharness/adapters/deepseek-harness/) — DSH-native TeamHarness adapter and compatibility checks
 
 ### To modify the OpenHuman worker runtime
 
@@ -223,21 +222,13 @@ In `k8s` / `aliyun` modes, Workers are created via the controller API instead of
 | Agent Framework | OpenClaw (fork) | Default Manager/Worker runtime (Node.js gateway + Matrix plugin) |
 | Agent Framework | CoPaw (Python / AgentScope) | Alternative Manager and Worker runtime |
 | Agent Framework | Hermes (`hermes-worker`) | Alternative Python Worker runtime |
+| Agent Framework | DeepSeek Harness (`@deepseek-ai/dsh`) | Experimental headless Worker runtime with room-scoped session continuation |
 | Agent Framework | OpenHuman (`openhuman-core`) | Alternative Rust Worker runtime with native Matrix |
 | MCP CLI | mcporter | Worker calls MCP Server tools via CLI |
 
-## Changelog Policy
+## Release Notes Policy
 
-Any change that affects the content of a built image — i.e. modifications under `manager/`, `worker/`, `copaw/`, `hermes/`, `openclaw-base/`, or `agentteams-controller/` — **must** be recorded in [`changelog/current.md`](changelog/current.md) before committing.
-
-Format: one bullet per logical change, with a linked commit hash, e.g.:
-
-```
-- feat(manager): add task-management skill extracted from AGENTS.md ([a1b2c3d](https://github.com/agentscope-ai/AgentTeams/commit/a1b2c3d...))
-- fix(manager): fix upgrade-builtins idempotency (duplicate marker insertion) ([e4f5g6h](https://github.com/agentscope-ai/AgentTeams/commit/e4f5g6h...))
-```
-
-On release, the workflow automatically renames `current.md` → `vX.Y.Z.md` and creates a fresh `current.md`.
+Pull requests do not update a shared changelog file. When a release tag is published, the release workflow automatically generates the change list from pull requests merged since the previous release.
 
 ## Key Design Patterns
 

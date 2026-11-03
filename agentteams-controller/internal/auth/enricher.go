@@ -46,6 +46,13 @@ func (e *CREnricher) EnrichIdentity(ctx context.Context, identity *CallerIdentit
 		return nil
 	}
 
+	// L2 human identities already carry their accessible team set (resolved
+	// from the Human CR by the Matrix authenticator); there is no Worker CR to
+	// enrich from. Skipping the lookup also avoids a wasted K8s Get per request.
+	if len(identity.Teams) > 0 {
+		return nil
+	}
+
 	// Every Worker identity is backed by a Worker CR.
 	var worker v1beta1.Worker
 	key := client.ObjectKey{Name: identity.Username, Namespace: e.namespace}

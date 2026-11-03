@@ -8,13 +8,19 @@
 package ossfake
 
 import (
+	"crypto/md5"
+	"encoding/hex"
+	"sync/atomic"
+
 	"context"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 )
@@ -22,13 +28,30 @@ import (
 // Memory is an in-memory implementation of oss.StorageClient suitable for
 // tests. All methods are safe for concurrent use.
 type Memory struct {
-	mu      sync.RWMutex
-	objects map[string][]byte
+	mu           sync.RWMutex
+	objects      map[string][]byte
+	contentTypes map[string]string
+	modTime      time.Time
+	next         int64
+
+	// StrictUnsupported makes PutObjectIfMatchStrict answer 501, for tests.
+	StrictUnsupported atomic.Bool
+}
+
+// md5Hex returns the lowercase MD5 hex digest of data (MinIO single-part
+// ETag semantics).
+func md5Hex(data []byte) string {
+	sum := md5.Sum(data)
+	return hex.EncodeToString(sum[:])
 }
 
 // NewMemory constructs an empty in-memory storage client.
 func NewMemory() *Memory {
-	return &Memory{objects: make(map[string][]byte)}
+	return &Memory{
+		objects:      make(map[string][]byte),
+		contentTypes: make(map[string]string),
+		modTime:      time.Unix(1700000000, 0),
+	}
 }
 
 // PutObject stores data under key.
@@ -38,6 +61,31 @@ func (m *Memory) PutObject(_ context.Context, key string, data []byte) error {
 	buf := make([]byte, len(data))
 	copy(buf, data)
 	m.objects[key] = buf
+	delete(m.contentTypes, key)
+	m.modTime = m.modTime.Add(time.Second)
+	m.next++
+	return nil
+}
+
+// PutObjectIfMatchWithType stores data with an explicit content type when the
+// current ETag matches, mirroring the typed conditional write.
+func (m *Memory) PutObjectIfMatchWithType(_ context.Context, key string, data []byte, contentType, matchETag string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cur, ok := m.objects[key]
+	if !ok {
+		// S3 semantics: If-Match against a missing object fails.
+		return oss.ErrPreconditionFailed
+	}
+	if matchETag == "" || md5Hex(cur) != matchETag {
+		return oss.ErrPreconditionFailed
+	}
+	buf := make([]byte, len(data))
+	copy(buf, data)
+	m.objects[key] = buf
+	m.contentTypes[key] = contentType
+	m.modTime = m.modTime.Add(time.Second)
+	m.next++
 	return nil
 }
 
@@ -75,6 +123,87 @@ func (m *Memory) Stat(_ context.Context, key string) error {
 	return nil
 }
 
+// LastWriteTime returns the fake's global write clock (the mtime that
+// ListObjectsDetailed reports for every entry).
+func (m *Memory) LastWriteTime() time.Time {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.modTime
+}
+
+// StatMeta returns a monotonic mtime for the object. Writes advance the clock,
+// so a test can verify the optimistic-lock conflict path by writing after a
+// read. The ETag is the content MD5 (mirroring MinIO single-part semantics),
+// so a content-changing concurrent write also changes the ETag. Returns
+// os.ErrNotExist when the key is missing.
+func (m *Memory) StatMeta(_ context.Context, key string) (oss.ObjectMeta, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	data, ok := m.objects[key]
+	if !ok {
+		return oss.ObjectMeta{}, os.ErrNotExist
+	}
+	return oss.ObjectMeta{
+		Size:        int64(len(data)),
+		ModTime:     m.modTime,
+		ETag:        md5Hex(data),
+		ContentType: m.contentTypes[key],
+	}, nil
+}
+
+// PutObjectIfAbsent stores data only when the key does not exist. The check
+// and write happen under one lock so two handlers sharing a store cannot both
+// win; this mirrors the storage-level If-None-Match used by the real client.
+func (m *Memory) PutObjectIfAbsent(_ context.Context, key string, data []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.objects[key]; ok {
+		return oss.ErrPreconditionFailed
+	}
+	buf := make([]byte, len(data))
+	copy(buf, data)
+	m.objects[key] = buf
+	m.modTime = m.modTime.Add(time.Second)
+	m.next++
+	return nil
+}
+
+// PutObjectIfMatch writes only when the current object ETag equals matchETag.
+// Mirrors the MinIO conditional-write semantics: mismatch returns
+// oss.ErrPreconditionFailed and leaves the object untouched.
+func (m *Memory) PutObjectIfMatch(_ context.Context, key string, data []byte, matchETag string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cur, ok := m.objects[key]
+	if !ok {
+		// S3 semantics: If-Match against a missing object fails.
+		return oss.ErrPreconditionFailed
+	}
+	if matchETag == "" || md5Hex(cur) != matchETag {
+		return oss.ErrPreconditionFailed
+	}
+	buf := make([]byte, len(data))
+	copy(buf, data)
+	m.objects[key] = buf
+	m.modTime = m.modTime.Add(time.Second)
+	m.next++
+	return nil
+}
+
+// PutObjectIfMatchStrict is the strict conditional write (see
+// MinIOClient.PutObjectIfMatchStrict). In memory it is identical to
+// PutObjectIfMatch — the CAS already runs under the lock and never
+// degrades; the method exists so the fake advertises the conflict-safety
+// guarantee that a degraded backend (compare-then-put) does not offer.
+// With StrictUnsupported set it models a 501 provider and returns
+// oss.ErrConditionalUnsupported without writing.
+func (m *Memory) PutObjectIfMatchStrict(ctx context.Context, key string, data []byte, matchETag string) error {
+	if m.StrictUnsupported.Load() {
+		return oss.ErrConditionalUnsupported
+	}
+	return m.PutObjectIfMatch(ctx, key, data, matchETag)
+}
+
 // DeleteObject removes the object stored under key. Deleting a missing key
 // is a no-op.
 func (m *Memory) DeleteObject(_ context.Context, key string) error {
@@ -85,40 +214,114 @@ func (m *Memory) DeleteObject(_ context.Context, key string) error {
 }
 
 // Mirror copies every object under src to dst by swapping the src prefix for
-// dst. Local filesystem sources/destinations are not supported by the fake —
-// both src and dst must be in-memory prefixes. MirrorOptions.Exclude is
-// currently ignored; Overwrite=true is implicit (existing destination keys
-// are replaced).
-func (m *Memory) Mirror(_ context.Context, src, dst string, _ oss.MirrorOptions) error {
+// dst. src may be an in-memory prefix or a local directory ("/" prefix,
+// walked on disk — matching the minio backend's local-src semantics).
+// MirrorOptions.Exclude is currently ignored; Overwrite is implicit (existing
+// destination keys are replaced). With Remove=true, destination objects with
+// no counterpart at source are deleted (mc --remove, exact-copy semantics).
+func (m *Memory) Mirror(_ context.Context, src, dst string, opts oss.MirrorOptions) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	src = strings.TrimSuffix(src, "/")
 	dst = strings.TrimSuffix(dst, "/")
-	for key, data := range m.objects {
-		if key != src && !strings.HasPrefix(key, src+"/") {
-			continue
+
+	srcObjects := make(map[string][]byte)
+	if strings.HasPrefix(src, "/") {
+		// Local directory source.
+		if err := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() {
+				return err
+			}
+			rel, rerr := filepath.Rel(src, path)
+			if rerr != nil {
+				return rerr
+			}
+			data, derr := os.ReadFile(path)
+			if derr != nil {
+				return derr
+			}
+			// rel carries a leading slash (or is "" for the marker),
+			// uniformly, so newKey = dst + rel in both source kinds.
+			srcObjects["/"+filepath.ToSlash(rel)] = data
+			return nil
+		}); err != nil {
+			return err
 		}
-		rel := strings.TrimPrefix(key, src)
+	} else {
+		for key, data := range m.objects {
+			if key != src && !strings.HasPrefix(key, src+"/") {
+				continue
+			}
+			// TrimPrefix leaves the leading "/" (or "" for the marker).
+			srcObjects[strings.TrimPrefix(key, src)] = data
+		}
+	}
+
+	written := make(map[string]struct{}, len(srcObjects))
+	for rel, data := range srcObjects {
 		newKey := dst + rel
 		buf := make([]byte, len(data))
 		copy(buf, data)
 		m.objects[newKey] = buf
+		written[newKey] = struct{}{}
+	}
+
+	if opts.Remove {
+		for key := range m.objects {
+			if key == dst || strings.HasPrefix(key, dst+"/") {
+				if _, ok := written[key]; !ok {
+					delete(m.objects, key)
+				}
+			}
+		}
 	}
 	return nil
 }
 
-// ListObjects returns all keys whose names start with prefix, sorted.
+// ListObjects returns every object under prefix, sorted, as names RELATIVE
+// to the prefix — mirroring the production MinIOClient, whose ListObjects
+// wraps `mc ls <prefix>` and reports the bare child name of each output
+// line ("[date] [size] <name>"). Callers that need a full object key must
+// re-attach the prefix themselves (see project_handler's
+// metaKeyFromListResult); passing a listed name straight to GetObject reads
+// the bucket root instead of the prefixed path.
 func (m *Memory) ListObjects(_ context.Context, prefix string) ([]string, error) {
+	infos, err := m.ListObjectsDetailed(context.Background(), prefix)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(infos))
+	for _, info := range infos {
+		out = append(out, info.Name)
+	}
+	return out, nil
+}
+
+// ListObjectsDetailed reports the fake's single global write clock as every
+// entry's UpdatedAt (the fake has no per-object mtime; writes advance the
+// clock, so the value reflects the most recent write). Entry names are
+// RELATIVE to prefix, matching the production `mc ls` contract — the
+// previous full-key behavior let callers skip the prefix re-attach that
+// GetObject requires, silently reading the bucket root (see the
+// mcp-servers catalog regression). The fake lists the whole prefix subtree,
+// whereas non-recursive `mc ls` shows only the first level; consumers that
+// filter on flat child names are unaffected by that difference.
+func (m *Memory) ListObjectsDetailed(_ context.Context, prefix string) ([]oss.ObjectInfo, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	out := make([]string, 0)
+	keys := make([]string, 0)
 	for key := range m.objects {
 		if strings.HasPrefix(key, prefix) {
-			out = append(out, key)
+			keys = append(keys, key)
 		}
 	}
-	sort.Strings(out)
-	return out, nil
+	sort.Strings(keys)
+	updatedAt := m.modTime.UTC().Format(time.RFC3339)
+	infos := make([]oss.ObjectInfo, 0, len(keys))
+	for _, key := range keys {
+		infos = append(infos, oss.ObjectInfo{Name: strings.TrimPrefix(key, prefix), UpdatedAt: updatedAt})
+	}
+	return infos, nil
 }
 
 // DeletePrefix removes every object whose key starts with prefix.

@@ -430,9 +430,8 @@ def detect_runtime(container: str) -> tuple[str, str]:
 
     Returns (runtime_name, absolute_sessions_dir). Empty tuple if none found.
 
-    Layout reference (verified against worker/scripts/worker-entrypoint.sh,
-    copaw/scripts/copaw-worker-entrypoint.sh, copaw/AGENTS.md and
-    tests/lib/agent-metrics.sh):
+    Layout reference (verified against worker/scripts/worker-entrypoint.sh
+    and tests/lib/agent-metrics.sh):
 
       Manager (any runtime, HOME=/root/manager-workspace):
         openclaw -> /root/manager-workspace/.openclaw/agents/main/sessions

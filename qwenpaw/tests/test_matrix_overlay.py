@@ -7,9 +7,30 @@ import sys
 import types
 from types import SimpleNamespace
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 OVERLAY = ROOT / "plugins" / "agentteams-matrix-channel" / "agentteams_matrix" / "channel.py"
+
+
+@pytest.fixture(autouse=True)
+def _restore_sys_modules():
+    """Undo the fake modules this file installs once the test finishes.
+
+    ``_load_overlay_module`` puts stubs for the whole ``qwenpaw`` package
+    (including ``qwenpaw.constant``) into ``sys.modules`` so the overlay can be
+    imported without the real framework. Left in place they outlive this file
+    and break later modules that import the real ``qwenpaw`` — e.g.
+    ``test_worker_lifecycle``'s ``from qwenpaw.constant import EnvVarLoader``
+    fails with "cannot import name 'EnvVarLoader' ... (unknown location)".
+    """
+    saved = dict(sys.modules)
+    try:
+        yield
+    finally:
+        sys.modules.clear()
+        sys.modules.update(saved)
 
 
 def _overlay_source() -> str:
@@ -203,7 +224,11 @@ async def _noop_prepare(_room_id):
 def _make_thread_channel():
     module = _load_overlay_module()
     channel = module.AgentTeamsMatrixChannel.__new__(module.AgentTeamsMatrixChannel)
+    channel.show_thinking = True
+    channel.show_tool_calls = True
+    channel.show_tool_results = True
     channel._client = _FakeClient()
+    channel.encryption = False
     channel._user_id = "@bot:hs.local"
     channel._active_thread_roots = {}
     channel._send_typing = _noop_typing
@@ -229,8 +254,8 @@ def test_matrix_send_media_adds_attachment_relation(tmp_path) -> None:
     media_path = tmp_path / "report.md"
     media_path.write_text("report\n", encoding="utf-8")
 
-    async def _upload_file(_file_ref):
-        return "mxc://hs.local/report"
+    async def _upload_file(_file_ref, *, encrypt=False):
+        return ("mxc://hs.local/report", None)
 
     async def _flush_pending_thread_parts(_room_id, _meta):
         return None
@@ -262,8 +287,8 @@ def test_matrix_send_media_does_not_inherit_thread_relation(tmp_path) -> None:
     media_path = tmp_path / "report.md"
     media_path.write_text("report\n", encoding="utf-8")
 
-    async def _upload_file(_file_ref):
-        return "mxc://hs.local/report"
+    async def _upload_file(_file_ref, *, encrypt=False):
+        return ("mxc://hs.local/report", None)
 
     channel._upload_file = _upload_file
 
@@ -683,9 +708,9 @@ def test_matrix_long_text_uses_media_fallback(tmp_path: Path) -> None:
     channel._workspace_dir = tmp_path
     uploaded = []
 
-    async def _fake_upload(file_ref):
+    async def _fake_upload(file_ref, *, encrypt=False):
         uploaded.append(Path(file_ref))
-        return "mxc://hs.local/full-content"
+        return ("mxc://hs.local/full-content", None)
 
     channel._upload_file = _fake_upload
     long_text = "long-content\n" + ("x" * (module.MATRIX_TEXT_EVENT_SAFE_BYTES + 1000))
@@ -724,8 +749,8 @@ def test_matrix_long_text_fallback_summary_stays_under_threshold(tmp_path: Path)
     module, channel = _make_thread_channel()
     channel._workspace_dir = tmp_path
 
-    async def _fake_upload(_file_ref):
-        return None
+    async def _fake_upload(_file_ref, *, encrypt=False):
+        return (None, None)
 
     channel._upload_file = _fake_upload
     long_text = "z" * (module.MATRIX_TEXT_EVENT_SAFE_BYTES * 4)
@@ -752,9 +777,9 @@ def test_matrix_long_edit_uses_media_fallback(tmp_path: Path) -> None:
     channel._workspace_dir = tmp_path
     uploaded = []
 
-    async def _fake_upload(file_ref):
+    async def _fake_upload(file_ref, *, encrypt=False):
         uploaded.append(Path(file_ref))
-        return "mxc://hs.local/edited-full-content"
+        return ("mxc://hs.local/edited-full-content", None)
 
     channel._upload_file = _fake_upload
     long_text = "final\n" + ("y" * (module.MATRIX_TEXT_EVENT_SAFE_BYTES + 1000))
@@ -811,8 +836,8 @@ def test_matrix_long_edit_fallback_failure_does_not_block_completion_cleanup(
     async def _capture_typing(room_id, typing):
         typing_events.append((room_id, typing))
 
-    async def _fake_upload(_file_ref):
-        return "mxc://hs.local/edited-full-content"
+    async def _fake_upload(_file_ref, *, encrypt=False):
+        return ("mxc://hs.local/edited-full-content", None)
 
     async def _failing_prepare(room_id):
         if len(channel._client.sent) >= 2:
@@ -908,6 +933,9 @@ async def _noop_read_receipt(_room_id, _event_id):
 def _make_inbound_channel(command_registry=True):
     module = _load_overlay_module()
     channel = module.AgentTeamsMatrixChannel.__new__(module.AgentTeamsMatrixChannel)
+    channel.show_thinking = True
+    channel.show_tool_calls = True
+    channel.show_tool_results = True
     channel._user_id = "@copywriting-assistant:hs.local"
     channel._client = _FakeClient()
     channel.dm_disabled = False
@@ -915,6 +943,9 @@ def _make_inbound_channel(command_registry=True):
     channel.groups = {}
     channel.history_limit = 50
     channel._room_histories = {}
+    channel._room_history_gen = {}
+    channel._room_history_records = {}
+    channel._room_event_log = {}
     if command_registry:
         channel._command_registry = _FakeCommandRegistry()
     channel._is_dm_room = _false_dm

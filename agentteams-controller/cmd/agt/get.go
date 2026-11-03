@@ -1,11 +1,15 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/workflow"
 )
 
 func getCmd() *cobra.Command {
@@ -17,6 +21,7 @@ func getCmd() *cobra.Command {
 	cmd.AddCommand(getTeamsCmd())
 	cmd.AddCommand(getHumansCmd())
 	cmd.AddCommand(getManagersCmd())
+	cmd.AddCommand(getProjectsCmd())
 	return cmd
 }
 
@@ -92,8 +97,166 @@ func getWorkersCmd() *cobra.Command {
 }
 
 // ---------------------------------------------------------------------------
-// get teams
+// get projects
 // ---------------------------------------------------------------------------
+
+func getProjectsCmd() *cobra.Command {
+	var team string
+	var mermaid bool
+	var output string
+	var includeTasks bool
+
+	cmd := &cobra.Command{
+		Use:   "projects [name]",
+		Short: "Display projects / workflow",
+		Long: `List all projects or show the workflow detail of one project.
+
+  agt get projects
+  agt get projects --team alpha-team
+  agt get projects demo-project-001
+  agt get projects demo-project-001 -o json
+  agt get projects demo-project-001 --include-tasks -o json
+  agt get projects demo-project-001 --mermaid`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client := NewAPIClient()
+			if includeTasks && len(args) != 1 {
+				return fmt.Errorf("--include-tasks requires a project name")
+			}
+			if includeTasks && output != "json" {
+				return fmt.Errorf("--include-tasks requires -o json")
+			}
+
+			if len(args) == 1 {
+				var resp map[string]any
+				path := "/api/v1/projects/" + args[0] + "/workflow"
+				query := url.Values{}
+				if team != "" {
+					query.Set("team", team)
+				}
+				if includeTasks {
+					query.Set("includeTasks", "true")
+				}
+				if encoded := query.Encode(); encoded != "" {
+					path += "?" + encoded
+				}
+				if err := client.DoJSON("GET", path, nil, &resp); err != nil {
+					return fmt.Errorf("get project workflow: %w", err)
+				}
+				if mermaid {
+					var snap workflow.Snapshot
+					buf, err := json.Marshal(resp)
+					if err != nil {
+						return fmt.Errorf("encode workflow: %w", err)
+					}
+					if err := json.Unmarshal(buf, &snap); err != nil {
+						return fmt.Errorf("decode workflow: %w", err)
+					}
+					fmt.Println(workflow.RenderMermaid(&snap))
+					return nil
+				}
+				if output == "json" {
+					printJSON(resp)
+					return nil
+				}
+				fields := []KeyValue{
+					{"Project", toStr(resp["project_id"])},
+					{"Title", toStr(resp["title"])},
+					{"Status", toStr(resp["status"])},
+					{"Plan", toStr(resp["plan_type"])},
+					{"Team", or(toStr(resp["team_id"]), "-")},
+					{"Next", listStr(resp["next"])},
+					{"Nodes", listStr(resp["nodes"])},
+					{"Interrupts", listStr(resp["interrupts"])},
+				}
+				printDetail(fields)
+				return nil
+			}
+
+			path := "/api/v1/projects"
+			if team != "" {
+				path += "?team=" + team
+			}
+			var resp struct {
+				Projects []map[string]any `json:"projects"`
+				Total    int              `json:"total"`
+			}
+			if err := client.DoJSON("GET", path, nil, &resp); err != nil {
+				return fmt.Errorf("list projects: %w", err)
+			}
+			if output == "json" {
+				printJSON(resp)
+				return nil
+			}
+			if resp.Total == 0 {
+				fmt.Println("No projects found.")
+				return nil
+			}
+			headers := []string{"PROJECT", "TITLE", "STATUS", "PLAN", "TEAM"}
+			var rows [][]string
+			for _, p := range resp.Projects {
+				rows = append(rows, []string{
+					toStr(p["project_id"]),
+					toStr(p["title"]),
+					toStr(p["status"]),
+					toStr(p["plan_type"]),
+					or(toStr(p["team_id"]), "-"),
+				})
+			}
+			printTable(headers, rows)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&team, "team", "", "Filter by team name")
+	cmd.Flags().BoolVar(&mermaid, "mermaid", false, "Render workflow as a Mermaid flowchart")
+	cmd.Flags().BoolVar(&includeTasks, "include-tasks", false, "Include raw TaskMeta details for a named project")
+	cmd.Flags().StringVarP(&output, "output", "o", "", "Output format (json)")
+	return cmd
+}
+
+// listStr renders a JSON-decoded array as a comma-separated list for table
+// output (e.g. workflow nodes, next, interrupts).
+func listStr(v any) string {
+	arr, ok := v.([]any)
+	if !ok || len(arr) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(arr))
+	for _, item := range arr {
+		if m, ok := item.(map[string]any); ok {
+			if id := toStr(m["id"]); id != "" {
+				parts = append(parts, id)
+				continue
+			}
+		}
+		parts = append(parts, toStr(item))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// toStr converts a JSON-decoded value to its string form for table output.
+func toStr(v any) string {
+	if v == nil {
+		return ""
+	}
+	switch s := v.(type) {
+	case string:
+		return s
+	case float64:
+		return strconv.FormatFloat(s, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(s)
+	case []any, map[string]any:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return ""
+		}
+		return string(b)
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
 
 func getTeamsCmd() *cobra.Command {
 	var output string

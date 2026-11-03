@@ -1,0 +1,125 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: loops.agentteams.io
+spec:
+  group: agentteams.io
+  versions:
+    - name: v1beta1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [taskID, loopType]
+              properties:
+                taskID:
+                  type: string
+                  description: Id of the task this loop iterates over.
+                teamName:
+                  type: string
+                  description: Owning Team. Empty for standalone loops not tied to a Team.
+                loopType:
+                  type: string
+                  enum: [cron, interval, event]
+                  description: >
+                    Trigger kind. "cron": schedule is a cron expression.
+                    "interval": schedule is a seconds count. "event": triggered
+                    by external wakeups; schedule is ignored.
+                schedule:
+                  type: string
+                  description: >
+                    Trigger expression, interpreted by loopType: a cron
+                    expression for "cron", a seconds count for "interval"
+                    (e.g. "300"), ignored for "event". Validated by the
+                    loop reconciler.
+                timeoutSeconds:
+                  type: integer
+                  format: int32
+                  description: Per-iteration timeout in seconds. Absent = no per-iteration timeout.
+                maxIterations:
+                  type: integer
+                  format: int32
+                  description: >
+                    Cap on the total number of iterations. Absent or 0 =
+                    unlimited.
+                paused:
+                  type: boolean
+                  description: >
+                    Desired pause state (control-plane action). While true the
+                    reconciler holds the loop at status.state "paused" and
+                    skips scheduled iterations.
+            status:
+              type: object
+              properties:
+                state:
+                  type: string
+                  enum: [pending, active, paused, completed, failed]
+                  description: Observed lifecycle state, written by the loop reconciler.
+                currentIteration:
+                  type: integer
+                  format: int32
+                  description: Iterations started so far (0 before the first).
+                nextRunAt:
+                  type: string
+                  format: date-time
+                  description: When the next iteration is due, if any.
+                lastRunAt:
+                  type: string
+                  format: date-time
+                  description: When the most recent iteration started.
+                lastResult:
+                  type: string
+                  description: Terminal result or error message of the last iteration.
+                conditions:
+                  type: array
+                  description: Typed loop conditions following metav1.Condition semantics.
+                  items:
+                    type: object
+                    required: [type, status, reason, message, lastTransitionTime]
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                observedGeneration:
+                  type: integer
+                  format: int64
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: TaskID
+          type: string
+          jsonPath: .spec.taskID
+        - name: Type
+          type: string
+          jsonPath: .spec.loopType
+        - name: State
+          type: string
+          jsonPath: .status.state
+        - name: Iteration
+          type: integer
+          jsonPath: .status.currentIteration
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+  scope: Namespaced
+  names:
+    plural: loops
+    singular: loop
+    kind: Loop
+    shortNames: [lp]

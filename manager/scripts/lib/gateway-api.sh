@@ -285,3 +285,25 @@ _gateway_higress_authorize_mcp() {
 
     TARGET_MCP_LIST="${resolved_list}"
 }
+
+# When your Manager cannot read Controller-local worker credentials, let the
+# Controller persist the MCP assignment and generate the authenticated config.
+gateway_configure_worker_mcp() {
+    local worker_name="$1" server_name="$2" server_url="$3"
+    local worker_json manifest
+    worker_json=$(agt get workers "${worker_name}" -o json) || return 1
+    manifest=$(mktemp) || return 1
+    if ! printf '%s' "${worker_json}" | jq \
+        --arg worker "${worker_name}" --arg server "${server_name}" --arg url "${server_url}" \
+        '{apiVersion:"agentteams.io/v1beta1", kind:"Worker", metadata:{name:$worker},
+          spec:{mcpServers:((.mcpServers // [] | map(select(.name != $server))) +
+            [{name:$server, url:$url, transport:"http"}])}}' > "${manifest}"; then
+        rm -f "${manifest}"
+        return 1
+    fi
+    if ! agt apply -f "${manifest}"; then
+        rm -f "${manifest}"
+        return 1
+    fi
+    rm -f "${manifest}"
+}

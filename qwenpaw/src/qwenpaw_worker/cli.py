@@ -10,7 +10,7 @@ from typing import Optional
 import typer
 
 from qwenpaw_worker.config import WorkerConfig
-from qwenpaw_worker.log import configure_worker_logging
+from qwenpaw_worker.log import configure_worker_console_logging
 from qwenpaw_worker.worker import Worker
 
 
@@ -44,7 +44,10 @@ def main() -> None:
             runtime_config_path=Path(runtime_config) if runtime_config else None,
             console_port=console_port,
         )
-        configure_worker_logging(config.qwenpaw_working_dir)
+        # File logging is enabled by Worker.start only after object-storage
+        # restore and legacy-state migration. Creating .qwenpaw here would
+        # make a cold CoPaw -> QwenPaw migration look like a conflict.
+        configure_worker_console_logging()
         worker = Worker(config)
 
         async def _async_run() -> None:

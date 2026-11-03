@@ -34,7 +34,7 @@ curl -X POST ${MATRIX_URL}/_matrix/client/v3/login \
 
 ### Create room (3-party: Human + Manager + Worker)
 
-Use `trusted_private_chat` for auto-join. Override power levels: Admin + Manager = 100, Workers = 0.
+Use `trusted_private_chat` for a private room, then ensure each invited user accepts with `POST /join`. Override power levels: Admin + Manager = 100, Workers = 0.
 
 ```bash
 curl -X POST ${MATRIX_URL}/_matrix/client/v3/createRoom \

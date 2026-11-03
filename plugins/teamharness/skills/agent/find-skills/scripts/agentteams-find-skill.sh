@@ -153,11 +153,29 @@ run_skills_find() {
     printf '%s\n' "${output}"
 }
 
+validate_skill_name() {
+    _skill_name="${1:-}"
+    case "${_skill_name}" in
+        ""|-*)
+            echo "error: invalid skill name" >&2
+            return 1
+            ;;
+    esac
+    case "${_skill_name}" in
+        *[[:cntrl:]]*)
+            echo "error: invalid skill name (control character)" >&2
+            return 1
+            ;;
+    esac
+    return 0
+}
+
 run_skills_install() {
     if [ $# -lt 1 ]; then
         echo "error: skill name is required for install" >&2
         exit 1
     fi
+    validate_skill_name "$1" || exit 2
     exec skills add "$1" -g -y
 }
 
@@ -166,6 +184,7 @@ run_nacos_install() {
         echo "error: skill name is required for install" >&2
         exit 1
     fi
+    validate_skill_name "$1" || exit 2
     run_nacos_cli skill-get "$1"
 }
 

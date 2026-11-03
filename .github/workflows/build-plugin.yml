@@ -1,0 +1,60 @@
+# Release any yaml-manifest plugin. Tag convention: <metadata.name>-v<semver>;
+# the tag prefix always follows metadata.name, so a manifest rename (if one
+# ever happens) shifts the prefix without editing this file. Tag parsing and the
+# tag/manifest version integrity check both live in
+# plugins/scripts/resolve-plugin-release.sh (pre-release accepted, build
+# metadata rejected, exact string equality).
+
+name: build-plugin
+
+on:
+  workflow_dispatch:
+    inputs:
+      plugin:
+        description: "Plugin directory, e.g. plugins/teamharness"
+        required: true
+  push:
+    tags: ['*-v[0-9]*']
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler: none
+
+      - name: Resolve plugin release
+        id: resolve
+        env:
+          PLUGIN_INPUT: ${{ inputs.plugin }}
+          TAG_NAME: ${{ github.ref_name }}
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          set -euo pipefail
+          if [ "$IS_TAG" = "true" ]; then
+            bash plugins/scripts/resolve-plugin-release.sh --tag "$TAG_NAME" >> "$GITHUB_OUTPUT"
+          else
+            bash plugins/scripts/resolve-plugin-release.sh --plugin "$PLUGIN_INPUT" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate plugin manifest
+        run: ruby plugins/scripts/validate-plugin.rb "${{ steps.resolve.outputs.manifest }}"
+
+      - name: Package plugin
+        env:
+          OUT_DIR: dist
+        run: ruby plugins/scripts/package-plugin.rb "${{ steps.resolve.outputs.manifest }}"
+
+      - name: Upload plugin artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.resolve.outputs.name }}-${{ steps.resolve.outputs.version }}
+          path: dist/*.tar.gz

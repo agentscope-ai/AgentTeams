@@ -1,0 +1,4539 @@
+package server
+
+import (
+	"context"
+	"crypto/md5"
+	"database/sql"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"mime"
+	"net/http"
+	"os"
+	"path"
+	"path/filepath"
+	"reflect"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	_ "modernc.org/sqlite" // pure-Go SQLite driver; read-only queries here
+
+	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/matrix"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/workflow"
+	"github.com/google/uuid"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+)
+
+// ProjectHandler exposes project / workflow data stored in object storage
+// (shared/projects/{id}/meta.json) so humans and frontends can inspect and
+// (optionally) intervene in agent-orchestrated workflows.
+//
+// The TeamHarness MCP projectflow/taskflow actions run inside the worker
+// process (stdio JSON-RPC), so the Controller cannot call them directly.
+// Instead this handler reads the same MinIO objects the workers sync.
+//
+// Response schema is aligned with LangGraph Graph.to_json() / StateSnapshot
+// (MIT License, © LangChain, Inc.) — see the workflow API design doc.
+type ProjectHandler struct {
+	client    client.Client
+	namespace string
+	oss       oss.StorageClient
+	matrix    matrix.Client // for intervention notifications; nil to skip
+}
+
+// NewProjectHandler creates a handler reading project state from object storage.
+func NewProjectHandler(c client.Client, namespace string, o oss.StorageClient, m ...matrix.Client) *ProjectHandler {
+	h := &ProjectHandler{client: c, namespace: namespace, oss: o}
+	if len(m) > 0 {
+		h.matrix = m[0]
+	}
+	return h
+}
+
+// --- internal model (mirrors meta.json, tolerant to extra fields) ---
+
+type projectMeta struct {
+	ProjectID       string            `json:"project_id"`
+	Title           string            `json:"title"`
+	Status          string            `json:"status"`
+	PlanType        string            `json:"plan_type"`
+	TeamID          string            `json:"team_id"`
+	Mode            string            `json:"mode"`
+	Source          string            `json:"source,omitempty"`
+	Tasks           []projectTaskMeta `json:"tasks"`
+	Loop            *loopMeta         `json:"loop,omitempty"`
+	Requester       string            `json:"requester,omitempty"`
+	RequesterReport map[string]any    `json:"requester_report,omitempty"`
+	ReplyRoute      map[string]any    `json:"reply_route,omitempty"`
+	SourceRoomID    string            `json:"source_room_id,omitempty"`
+	// human-intervention audit fields (written by the lifecycle write API;
+	// tolerated by json.Unmarshal when absent, and passed through here so
+	// consumers can show who paused/resumed and why).
+	UpdatedBy   string `json:"updated_by,omitempty"`
+	UpdatedAt   string `json:"updated_at,omitempty"`
+	PauseReason string `json:"pause_reason,omitempty"`
+	// AuditSeq is the project's committed-operation revision (id_rule v1.2):
+	// a monotonically increasing counter advanced by markAuditFields on every
+	// committed intervention write. It is the persistent identity of a
+	// committed operation — two distinct operations never share a seq even
+	// when they land in the same wall-clock second and would otherwise write
+	// byte-identical state (same-actor pause→resume→pause with the same
+	// reason). It is hashed into the signal event id, which is what keeps
+	// same-second repeats distinct while a retry of the same operation
+	// (same seq, same bytes) re-lands on the same id. Always serialized (no
+	// omitempty) so the field is a stable part of the stored bytes.
+	AuditSeq int `json:"audit_seq"`
+	// Control-action audit ledger (dual ledger, audit side): one entry per
+	// control action (pause/resume/replan/cancel/complete), ok or error.
+	// Written by the same meta write as the intervention itself; capped at
+	// controlActionsLimit with the dropped count preserved.
+	ControlActions               []controlActionEntry `json:"controlActions,omitempty"`
+	ControlActionsTruncatedCount int                  `json:"controlActionsTruncatedCount,omitempty"`
+}
+
+type projectTaskMeta struct {
+	TaskID       string                    `json:"task_id"`
+	Title        string                    `json:"title"`
+	AssignedTo   string                    `json:"assigned_to"`
+	DependsOn    []string                  `json:"depends_on"`
+	Status       string                    `json:"status"`
+	Cancellation *taskCancellationDecision `json:"cancellation,omitempty"`
+}
+
+// taskCancellationDecision is written into the project node before TaskMeta.
+// It lets a retry validate the original human decision when the project write
+// succeeded but the following TaskMeta write failed.
+type taskCancellationDecision struct {
+	SubmissionID      string `json:"submission_id,omitempty"`
+	Reason            string `json:"reason"`
+	ReplacementTaskID string `json:"replacement_task_id,omitempty"`
+	CancelledAt       string `json:"cancelled_at"`
+}
+
+type loopMeta struct {
+	Goal              string            `json:"goal"`
+	StopCondition     string            `json:"stop_condition"`
+	IterationTemplate string            `json:"iteration_template,omitempty"`
+	CurrentIteration  int               `json:"current_iteration"`
+	MaxIterations     int               `json:"max_iterations"`
+	Status            string            `json:"status"`
+	PauseSources      []string          `json:"pause_sources,omitempty"`
+	Tasks             []projectTaskMeta `json:"tasks,omitempty"`
+	History           []json.RawMessage `json:"history,omitempty"`
+	// Extra keeps the loop keys this struct does not model. A project
+	// write must round-trip the durable loop block byte-for-byte — the
+	// worker-side pause veto (pause_sources, and any future field) is
+	// owned by the loop endpoints and the worker gate
+	// (_loop_pause_state), so dropping an unmodeled key here would
+	// silently clear state only the worker side understands (#1402).
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// loopModeled is loopMeta without its custom JSON methods, so
+// json.Unmarshal/Marshal on it cannot recurse into them.
+type loopModeled loopMeta
+
+// loopModeledKeys is the set of JSON keys the loopMeta struct models,
+// derived from the struct tags: a field added to the struct must never
+// also survive in Extra (that would emit the key twice), and drift in
+// the other direction would silently drop it.
+var loopModeledKeys = func() map[string]bool {
+	set := make(map[string]bool)
+	typ := reflect.TypeOf(loopMeta{})
+	for i := 0; i < typ.NumField(); i++ {
+		tag := typ.Field(i).Tag.Get("json")
+		if tag == "" || tag == "-" {
+			continue
+		}
+		if name := strings.Split(tag, ",")[0]; name != "" {
+			set[name] = true
+		}
+	}
+	return set
+}()
+
+// UnmarshalJSON decodes the modeled fields and keeps every unmodeled key
+// verbatim in Extra, so project writes preserve the loop block.
+func (m *loopMeta) UnmarshalJSON(data []byte) error {
+	var modeled loopModeled
+	if err := json.Unmarshal(data, &modeled); err != nil {
+		return err
+	}
+	*m = loopMeta(modeled)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	for key, value := range raw {
+		if !loopModeledKeys[key] {
+			if m.Extra == nil {
+				m.Extra = make(map[string]json.RawMessage)
+			}
+			m.Extra[key] = value
+		}
+	}
+	return nil
+}
+
+// MarshalJSON emits the modeled fields (struct order, exactly as before)
+// followed by the Extra keys sorted, with their stored bytes verbatim.
+// With no Extra keys the output is byte-identical to the plain struct
+// marshal, so stored JSON stays byte-stable for unchanged input.
+func (m loopMeta) MarshalJSON() ([]byte, error) {
+	base, err := json.Marshal(loopModeled(m))
+	if err != nil {
+		return nil, err
+	}
+	if len(m.Extra) == 0 {
+		return base, nil
+	}
+	keys := make([]string, 0, len(m.Extra))
+	for key := range m.Extra {
+		if !loopModeledKeys[key] {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	if len(keys) == 0 {
+		return base, nil
+	}
+	// A struct marshal is always an object: append the extra keys before
+	// the closing brace.
+	out := make([]byte, 0, len(base)+16*len(keys))
+	out = append(out, base[:len(base)-1]...)
+	// "{}" is the empty object; any other base already carries fields, so
+	// the first extra key needs a separator.
+	hasBase := len(base) > 2
+	for i, key := range keys {
+		quoted, err := json.Marshal(key)
+		if err != nil {
+			return nil, err
+		}
+		if hasBase || i > 0 {
+			out = append(out, ',')
+		}
+		out = append(out, quoted...)
+		out = append(out, ':')
+		out = append(out, m.Extra[key]...)
+	}
+	out = append(out, '}')
+	return out, nil
+}
+
+// loopPaused reports whether the loop block holds a pause source,
+// mirroring the worker-side _loop_pause_state veto: while any
+// pause_sources entry is non-empty (after trimming), dispatch stays
+// blocked even if the project itself is active.
+func loopPaused(loop *loopMeta) bool {
+	if loop == nil {
+		return false
+	}
+	for _, source := range loop.PauseSources {
+		if strings.TrimSpace(source) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// --- workflow response (LangGraph-aligned) ---
+
+type workflowResponse struct {
+	ProjectID       string              `json:"project_id"`
+	Title           string              `json:"title"`
+	Status          string              `json:"status"`
+	PlanType        string              `json:"plan_type"`
+	TeamID          string              `json:"team_id"`
+	Mode            string              `json:"mode"`
+	Source          string              `json:"source,omitempty"`
+	Nodes           []workflowNode      `json:"nodes"`
+	Edges           []workflowEdge      `json:"edges"`
+	Next            []string            `json:"next"`
+	Interrupts      []workflowInterrupt `json:"interrupts"`
+	Values          *workflowValues     `json:"values,omitempty"`
+	Loop            *loopMeta           `json:"loop,omitempty"`
+	Requester       string              `json:"requester,omitempty"`
+	RequesterReport map[string]any      `json:"requester_report,omitempty"`
+	ReplyRoute      map[string]any      `json:"reply_route,omitempty"`
+	SourceRoomID    string              `json:"source_room_id,omitempty"`
+	// TasksDetail is populated only when ?includeTasks=true; otherwise it is
+	// omitted so the default workflow response stays lightweight.
+	TasksDetail []taskDetail `json:"tasks_detail,omitempty"`
+	// W2: human-intervention audit fields.
+	UpdatedBy   string `json:"updated_by,omitempty"`
+	UpdatedAt   string `json:"updated_at,omitempty"`
+	PauseReason string `json:"pause_reason,omitempty"`
+
+	// INT-8: projection freshness. The view is computed on demand from the
+	// filesync mirror, so ProjectionAgeMs (now - newest mirror mtime among
+	// the objects actually read) is the observable for mirror lag (#1391).
+	// 0 means no anchor could be read (all stats failed); IsStale compares
+	// the age against env PROJECTION_STALE_MS (default 30000 ms).
+	ProjectionAgeMs int64 `json:"projection_age_ms"`
+	IsStale         bool  `json:"is_stale"`
+}
+
+// workflowValues is the current state summary (LangGraph StateSnapshot.values
+// analog): project-level fields plus a per-status task count.
+type workflowValues struct {
+	ProjectID string         `json:"project_id"`
+	Title     string         `json:"title"`
+	Status    string         `json:"status"`
+	PlanType  string         `json:"plan_type"`
+	TeamID    string         `json:"team_id"`
+	Mode      string         `json:"mode"`
+	TaskCount map[string]int `json:"task_count"`
+}
+
+type workflowNode struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Status   string `json:"status"`
+	Assignee string `json:"assignee,omitempty"`
+}
+
+type workflowEdge struct {
+	Source      string `json:"source"`
+	Target      string `json:"target"`
+	Conditional bool   `json:"conditional"`
+}
+
+type workflowInterrupt struct {
+	ID    string `json:"id"`
+	Value string `json:"value"`
+	// ActionRequest mirrors the LangChain Agent Inbox HumanInterrupt model:
+	// the action a human can take on this interrupt (e.g. resume a paused
+	// project). Consumers render a button/action from it; the actual write
+	// goes to the lifecycle write endpoints.
+	ActionRequest *interruptActionRequest `json:"action_request,omitempty"`
+	// Config mirrors HumanInterruptConfig: which response kinds the
+	// interrupt supports. For a paused project, allow_accept = the human can
+	// resume it.
+	Config *interruptConfig `json:"config,omitempty"`
+	// Description is a human-readable explanation of the interrupt.
+	Description string `json:"description,omitempty"`
+}
+
+type interruptActionRequest struct {
+	Action string         `json:"action"`
+	Args   map[string]any `json:"args,omitempty"`
+}
+
+type interruptConfig struct {
+	AllowIgnore  bool `json:"allow_ignore"`
+	AllowRespond bool `json:"allow_respond"`
+	AllowEdit    bool `json:"allow_edit"`
+	AllowAccept  bool `json:"allow_accept"`
+}
+
+// taskDetail is the per-task detail payload returned when
+// ?includeTasks=true. It surfaces TaskMeta (shared/tasks/{id}/meta.json)
+// fields that are not part of the project-level tasks[] node summary: the
+// spec path, submission summary/result status, deliverables list and result
+// path. TaskMeta is written by TeamHarness taskflow (delegate_task creates
+// spec.md + meta.json, submit_task adds summary/result_status/deliverables/
+// result_path) and pushed to shared storage via _sync_task. Reads stay in the
+// project's owning scope and never fall back across team/global boundaries.
+type taskDetail struct {
+	TaskID       string `json:"task_id"`
+	ProjectID    string `json:"project_id,omitempty"`
+	Status       string `json:"status,omitempty"`
+	SpecPath     string `json:"spec_path,omitempty"`
+	AssignedTo   string `json:"assigned_to,omitempty"`
+	Summary      string `json:"summary,omitempty"`
+	ResultStatus string `json:"result_status,omitempty"`
+	Deliverables []any  `json:"deliverables,omitempty"`
+	ResultPath   string `json:"result_path,omitempty"`
+	CancelReason string `json:"cancel_reason,omitempty"`
+	SubmissionID string `json:"submission_id,omitempty"`
+	// History carries the task's transition audit trail, passed through
+	// from the task meta (written by the TeamHarness transition engine).
+	History []taskTransition `json:"history,omitempty"`
+}
+
+// taskTransition is one auditable task state change recorded in the task
+// meta `history` array. The allowed transitions are defined by the shared
+// fixture plugins/teamharness/contracts/task-transitions.json, which both
+// the Python write side and these Go tests load as the single source of
+// truth.
+type taskTransition struct {
+	Ts     string `json:"ts"`
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Action string `json:"action"`
+	Actor  string `json:"actor,omitempty"`
+	Note   string `json:"note,omitempty"`
+	// Seq is the writer-persisted per-task sequence number: unique per
+	// task, stable across the 50-entry cap truncation. Zero for pre-seq
+	// legacy entries (they order by ts + position only).
+	Seq int64 `json:"seq,omitempty"`
+}
+
+// parseTaskHistory converts the task meta `history` array into the typed
+// audit trail. Malformed entries are skipped, never surfaced as an error:
+// the detail endpoints degrade gracefully (the node summary stays).
+func parseTaskHistory(value any) []taskTransition {
+	list, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	var out []taskTransition
+	for _, entry := range list {
+		m, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		t := taskTransition{
+			Ts:     str(m["ts"]),
+			From:   str(m["from"]),
+			To:     str(m["to"]),
+			Action: str(m["action"]),
+			Actor:  str(m["actor"]),
+			Note:   str(m["note"]),
+		}
+		// JSON numbers decode as float64; absent seq (legacy entries)
+		// stays 0.
+		if f, ok := m["seq"].(float64); ok {
+			t.Seq = int64(f)
+		}
+		// A lifecycle record must carry both a timestamp (so it can be
+		// ordered) and an action (so it is a real event). "from" stays
+		// optional: the "create" event has no prior state (from == "") and
+		// must still surface in the history (#1230 inspection contract).
+		if t.Ts == "" || t.Action == "" {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// taskInspection is the node-level inspection payload: the task's graph node
+// plus its TaskMeta, transition history, and a trace hint for deep-linking
+// into a tracing backend (worker entry spans are tagged with
+// agentteams.project.id / agentteams.task.id).
+type taskInspection struct {
+	taskDetail
+	Dependencies []string      `json:"dependencies,omitempty"`
+	Trace        taskTraceHint `json:"trace,omitempty"`
+}
+
+// taskTraceHint is a tracing-backend filter hint: project_id / task_id are
+// the values to match against the span attributes agentteams.project.id /
+// agentteams.task.id, which worker entry spans already carry. No URL is
+// constructed here: the tracing backend is deployment-specific.
+type taskTraceHint struct {
+	ProjectID string `json:"project_id"`
+	TaskID    string `json:"task_id"`
+}
+
+// normalizeTaskStatus maps ProjectMeta task status to the frontend-friendly
+// enum: pending | delegated | in-progress | completed | revision | blocked.
+//
+// Project task nodes are updated by TeamHarness taskflow through their full
+// lifecycle (server.py _update_project_task): planned (create/plan_dag) →
+// assigned (delegate_task) → in_progress (ack_task) → submitted (submit_task)
+// → completed/revision (accept_task_result), plus cancelled (cancel_task).
+func normalizeTaskStatus(status string) string {
+	switch status {
+	case "planned", "":
+		return "pending"
+	case "assigned":
+		return "delegated"
+	case "in_progress", "submitted":
+		return "in-progress"
+	case "completed":
+		return "completed"
+	case "revision":
+		return "revision"
+	case "blocked", "cancelled":
+		return "blocked"
+	default:
+		return "pending"
+	}
+}
+
+// --- prefix resolution ---
+
+// teamProjectPrefixes returns the MinIO prefixes that hold project metadata.
+// Team members sync shared/ to teams/{team}/shared/, standalone agents use the
+// global shared/ prefix (see sync.py and runtime_config.go SharedPrefix).
+//
+// The storage prefix uses TeamSpec.EffectiveTeamName (spec.teamName when set,
+// else the Team CR name) — the same value EnsureTeamStorage uses. However
+// workers resolve their team from the Worker API response (resp.Team = CR
+// name), so when spec.teamName differs from the CR name we enumerate BOTH
+// prefixes to tolerate the mismatch. The second return maps CR name →
+// effective team name for TeamLeader scoping.
+func (h *ProjectHandler) teamProjectPrefixes(ctx context.Context) ([]string, map[string]string, error) {
+	var teams v1beta1.TeamList
+	if err := h.client.List(ctx, &teams, client.InNamespace(h.namespace)); err != nil {
+		return nil, nil, err
+	}
+	prefixes := make([]string, 0, len(teams.Items)+1)
+	crToEffective := make(map[string]string, len(teams.Items))
+	seen := map[string]bool{}
+	for i := range teams.Items {
+		effective := teams.Items[i].Spec.EffectiveTeamName(teams.Items[i].Name)
+		crToEffective[teams.Items[i].Name] = effective
+		for _, name := range []string{effective, teams.Items[i].Name} {
+			prefix := "teams/" + name + "/shared/projects/"
+			if !seen[prefix] {
+				seen[prefix] = true
+				prefixes = append(prefixes, prefix)
+			}
+		}
+	}
+	prefixes = append(prefixes, "shared/projects/")
+	return prefixes, crToEffective, nil
+}
+
+// metaKeyFromListResult builds the full object key (relative to the storage
+// prefix) for a project's meta.json from an mc ls child entry.
+//
+// oss.ListObjects runs `mc ls <prefix>` and returns the bare child names —
+// project directories end with "/" (e.g. "demo-project-001/"). The meta.json
+// lives one level below, so the full key is prefix + dir + "meta.json".
+func metaKeyFromListResult(prefix, child string) (string, bool) {
+	if !strings.HasSuffix(child, "/") {
+		return "", false
+	}
+	return prefix + child + "meta.json", true
+}
+
+// projectMatch is one project id resolved at a specific storage prefix.
+type projectMatch struct {
+	meta *projectMeta
+	team string
+	key  string
+	// etag is the object's content hash at read time (from the stat that
+	// immediately follows the GetObject). Write endpoints use it for the
+	// conditional write — the read version is bound to the write.
+	etag string
+}
+
+// resolveProjectMeta locates and reads a project's meta.json across the given
+// prefixes and returns ALL matches (deduplicated by owning team). Project ids
+// are only unique per worker workspace upstream, so two teams may hold the
+// same id; handlers turn 1 match into a resolved project and >1 matches into
+// a 409 asking for an explicit ?team= qualifier (never a silent first-match
+// that would hide one team's project).
+//
+// teamFilter narrows the scan to one team's prefix (the ?team= query param).
+// Scoped callers (team leader / L2 human) additionally see only matches for
+// teams they may access; a scoped caller whose team shares the id is served
+// their own team's project without ambiguity.
+//
+// prefixes must come from teamProjectPrefixes so callers that also need the
+// crToEffective map (e.g. for access checks) can share a single K8s List call
+// instead of paying two round-trips per request.
+func (h *ProjectHandler) resolveProjectMeta(ctx context.Context, projectID string, prefixes []string, teamFilter string, caller *authpkg.CallerIdentity, crToEffective map[string]string) ([]projectMatch, error) {
+	var matches []projectMatch
+	seenTeam := map[string]bool{}
+	accessible := callerAccessiblePrefixes(caller, crToEffective)
+	for _, prefix := range prefixes {
+		if teamFilter != "" && teamFromPrefix(prefix) != teamFilter {
+			continue
+		}
+		if accessible != nil && !accessible[prefix] {
+			continue
+		}
+		children, err := h.oss.ListObjects(ctx, prefix)
+		if err != nil {
+			return nil, err
+		}
+		for _, child := range children {
+			key, ok := metaKeyFromListResult(prefix, child)
+			if !ok || child != projectID+"/" {
+				continue
+			}
+			data, err := h.oss.GetObject(ctx, key)
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					continue // project dir exists but meta.json not yet written
+				}
+				return nil, err
+			}
+			var meta projectMeta
+			if err := json.Unmarshal(data, &meta); err != nil {
+				// meta.json is written non-atomically upstream (write_text);
+				// a crash can leave truncated JSON. Treat as not found for
+				// this prefix and keep scanning rather than 500.
+				continue
+			}
+			team := teamFromPrefix(prefix)
+			if meta.TeamID == "" {
+				meta.TeamID = team
+			}
+			// The same team may be reachable under both its CR name and its
+			// effective name (teamProjectPrefixes emits both); dedupe by the
+			// team recorded in the meta so one project never looks like two.
+			if seenTeam[meta.TeamID] {
+				continue
+			}
+			seenTeam[meta.TeamID] = true
+			// The ETag is computed from the bytes actually returned by
+			// GetObject (MinIO single-part ETag == MD5 of content). This
+			// binds the version to the READ ITSELF: a Worker write between
+			// the read and the conditional write changes the remote ETag
+			// away from this value and the If-Match fails. Never empty when
+			// the read succeeded — fail closed, no unconditional fallback.
+			matches = append(matches, projectMatch{meta: &meta, team: team, key: key, etag: contentETag(data)})
+		}
+	}
+	return matches, nil
+}
+
+// resolveSingleProject applies the 0/1/many resolution of resolveProjectMeta
+// and writes the corresponding error responses. Returns (meta, team, true)
+// when exactly one match was resolved.
+func (h *ProjectHandler) resolveSingleProject(w http.ResponseWriter, matches []projectMatch) (*projectMeta, string, bool) {
+	match, ok := h.resolveSingleProjectMatch(w, matches)
+	if !ok {
+		return nil, "", false
+	}
+	return match.meta, match.team, true
+}
+
+// resolveSingleProjectMatch applies the same 0/1/many resolution but returns
+// the whole match (including the storage key), so handlers that need to
+// derive sibling paths (e.g. the project history/ directory) can do so.
+func (h *ProjectHandler) resolveSingleProjectMatch(w http.ResponseWriter, matches []projectMatch) (*projectMatch, bool) {
+	switch len(matches) {
+	case 0:
+		httputil.WriteError(w, http.StatusNotFound, "project not found")
+		return nil, false
+	case 1:
+		return &matches[0], true
+	default:
+		httputil.WriteError(w, http.StatusConflict, "project id is ambiguous across teams; retry with ?team=")
+		return nil, false
+	}
+}
+
+// teamFromPrefix extracts the team name from a project prefix, or "" for the
+// global shared/ prefix.
+func teamFromPrefix(prefix string) string {
+	if strings.HasPrefix(prefix, "teams/") {
+		parts := strings.SplitN(prefix, "/", 3)
+		if len(parts) == 3 {
+			return parts[1]
+		}
+	}
+	return ""
+}
+
+// checkProjectAccess performs the handler-side team check for scoped readers
+// (team leaders and L2 humans). They may only access projects owned by their
+// team(s) (team-scoped prefix). Global projects and other teams' projects are
+// denied.
+//
+// caller.Team is the legacy single Team CR name; caller.Teams is the L2 human
+// multi-team set (Human CR accessibleTeams, CR names). crToEffective
+// translates each to the effective storage team name (spec.teamName may
+// differ from the CR name), so both the CR name and the effective name match.
+func (h *ProjectHandler) checkProjectAccess(caller *authpkg.CallerIdentity, team string, crToEffective map[string]string) error {
+	if caller == nil || (caller.Role != authpkg.RoleTeamLeader && caller.Role != authpkg.RoleHuman) {
+		return nil
+	}
+	teams := caller.Teams
+	if len(teams) == 0 && caller.Team != "" {
+		teams = []string{caller.Team}
+	}
+	for _, t := range teams {
+		eff := t
+		if mapped, ok := crToEffective[t]; ok && mapped != "" {
+			eff = mapped
+		}
+		if eff == team {
+			return nil
+		}
+	}
+	return &accessDeniedError{msg: "team-leader cannot access project outside team " + caller.Team}
+}
+
+// callerAccessiblePrefixes expands a scoped reader's accessible teams (legacy
+// single Team or L2 human multi-team set) into the set of project prefixes
+// they may read. Projects live under the effective storage name
+// (TeamSpec.EffectiveTeamName via EnsureTeamStorage), so each accessible CR
+// name maps to its effective prefix; an unresolvable team falls back to its
+// own name.
+func callerAccessiblePrefixes(caller *authpkg.CallerIdentity, crToEffective map[string]string) map[string]bool {
+	if caller == nil || (caller.Role != authpkg.RoleTeamLeader && caller.Role != authpkg.RoleHuman) {
+		return nil
+	}
+	teams := caller.Teams
+	if len(teams) == 0 && caller.Team != "" {
+		teams = []string{caller.Team}
+	}
+	out := make(map[string]bool, len(teams))
+	for _, t := range teams {
+		eff := t
+		if mapped, ok := crToEffective[t]; ok && mapped != "" {
+			eff = mapped
+		}
+		out["teams/"+eff+"/shared/projects/"] = true
+	}
+	return out
+}
+
+type accessDeniedError struct{ msg string }
+
+func (e *accessDeniedError) Error() string { return e.msg }
+
+// --- handlers ---
+
+// GET /api/v1/projects
+func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
+	caller := authpkg.CallerFromContext(r.Context())
+	teamFilter := r.URL.Query().Get("team")
+
+	prefixes, crToEffective, err := h.teamProjectPrefixes(r.Context())
+	if err != nil {
+		writeK8sError(w, "list projects: resolve prefixes", err)
+		return
+	}
+
+	type projectSummary struct {
+		ProjectID string `json:"project_id"`
+		Title     string `json:"title"`
+		Status    string `json:"status"`
+		PlanType  string `json:"plan_type"`
+		TeamID    string `json:"team_id"`
+		Mode      string `json:"mode"`
+		// UpdatedAt surfaces projectMeta.UpdatedAt (written by the lifecycle
+		// write API) so list consumers can sort by real activity time. Empty
+		// for projects never touched by a lifecycle write — consumers fall
+		// back to their own heuristics (omitempty keeps the payload unchanged
+		// for such projects).
+		UpdatedAt string `json:"updated_at,omitempty"`
+	}
+	projects := make([]projectSummary, 0)
+	seen := map[string]bool{}
+
+	// Team leaders (legacy single-team SA or L2 human multi-team) only scan
+	// their accessible prefixes. The caller's Teams are Team CR names;
+	// crToEffective expands to the effective storage names too.
+	accessible := callerAccessiblePrefixes(caller, crToEffective)
+
+	// W7: collect all candidate keys first, then fetch meta.json concurrently.
+	// Each GetObject is a separate mc subprocess, so N projects would
+	// otherwise pay N process spawns serially. A small worker pool collapses
+	// that to ~ceil(N/concurrency) rounds.
+	type candidate struct {
+		prefix string
+		key    string
+	}
+	var cands []candidate
+	for _, prefix := range prefixes {
+		if accessible != nil && !accessible[prefix] {
+			continue
+		}
+		// ?team= filter: skip prefixes that cannot hold the requested team
+		// before hitting OSS (O2). teamFromPrefix("shared/projects/") is ""
+		// and standalone projects only match when no filter is set — identical
+		// to the meta-level filter below, so this is a pure early-exit.
+		if teamFilter != "" && teamFromPrefix(prefix) != teamFilter {
+			continue
+		}
+		children, err := h.oss.ListObjects(r.Context(), prefix)
+		if err != nil {
+			writeK8sError(w, "list projects", err)
+			return
+		}
+		for _, child := range children {
+			key, ok := metaKeyFromListResult(prefix, child)
+			if !ok {
+				continue
+			}
+			cands = append(cands, candidate{prefix: prefix, key: key})
+		}
+	}
+
+	const listConcurrency = 8
+	type result struct {
+		candidate
+		data []byte
+		err  error
+	}
+	results := make([]result, len(cands))
+	sem := make(chan struct{}, listConcurrency)
+	var wg sync.WaitGroup
+	for i, c := range cands {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, c candidate) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			data, err := h.oss.GetObject(r.Context(), c.key)
+			results[i] = result{candidate: c, data: data, err: err}
+		}(i, c)
+	}
+	wg.Wait()
+
+	for _, res := range results {
+		if res.err != nil {
+			if errors.Is(res.err, os.ErrNotExist) {
+				continue // project dir without meta.json yet; skip, not 500
+			}
+			// W5: a single project read failure must not fail the whole
+			// list (one bad/transient object would 500 everything else).
+			// Infrastructure-level failures (ListObjects) still 500;
+			// per-object data failures are skipped like malformed meta.
+			continue
+		}
+		var meta projectMeta
+		if err := json.Unmarshal(res.data, &meta); err != nil {
+			continue // skip malformed meta instead of failing the whole list
+		}
+		if meta.ProjectID == "" {
+			continue
+		}
+		team := teamFromPrefix(res.prefix)
+		if meta.TeamID == "" {
+			meta.TeamID = team
+		}
+		// Project ids are only unique per worker workspace upstream; two teams
+		// may hold the same id. Dedupe by (team, project_id) so both appear
+		// (disambiguated by team_id) instead of one hiding the other.
+		if seen[meta.TeamID+"\x00"+meta.ProjectID] {
+			continue
+		}
+		seen[meta.TeamID+"\x00"+meta.ProjectID] = true
+		// Optional ?team= filter (mirrors ListWorkers). Team leaders are
+		// already scoped by their own prefix; standalone projects have an
+		// empty team and are only matched when no filter is set.
+		if teamFilter != "" && meta.TeamID != teamFilter {
+			continue
+		}
+		projects = append(projects, projectSummary{
+			ProjectID: meta.ProjectID,
+			Title:     meta.Title,
+			Status:    meta.Status,
+			PlanType:  meta.PlanType,
+			TeamID:    meta.TeamID,
+			Mode:      meta.Mode,
+			UpdatedAt: meta.UpdatedAt,
+		})
+	}
+
+	// Deterministic ordering across prefixes.
+	sort.Slice(projects, func(i, j int) bool { return projects[i].ProjectID < projects[j].ProjectID })
+
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"projects": projects, "total": len(projects)})
+}
+
+// GET /api/v1/projects/{id}/workflow
+func (h *ProjectHandler) GetProjectWorkflow(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	if projectID == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "project id is required")
+		return
+	}
+	caller := authpkg.CallerFromContext(r.Context())
+	includeTasks := r.URL.Query().Get("includeTasks") == "true"
+	format := r.URL.Query().Get("format")
+	teamFilter := r.URL.Query().Get("team")
+
+	// Single K8s List for both meta resolution and the access check (O1).
+	prefixes, crToEffective, err := h.teamProjectPrefixes(r.Context())
+	if err != nil {
+		writeK8sError(w, "get project workflow: resolve prefixes", err)
+		return
+	}
+	matches, err := h.resolveProjectMeta(r.Context(), projectID, prefixes, teamFilter, caller, crToEffective)
+	if err != nil {
+		writeK8sError(w, "get project workflow", err)
+		return
+	}
+	match, ok := h.resolveSingleProjectMatch(w, matches)
+	if !ok {
+		return
+	}
+	meta, team := match.meta, match.team
+	// W4: hide project existence from scoped callers (L2 / team leader) who
+	// do not own this project. resolveProjectMeta scans all prefixes, so a
+	// cross-team project is found; returning 403 would let callers enumerate
+	// other teams' project ids. Return 404 to hide existence (same as a
+	// non-existent id). Admin/Manager (checkProjectAccess returns nil) are
+	// unaffected.
+	if err := h.checkProjectAccess(caller, team, crToEffective); err != nil {
+		if _, ok := err.(*accessDeniedError); ok {
+			httputil.WriteError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		httputil.WriteError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if format == "mermaid" {
+		// Pure rendering of the same snapshot (buildWorkflow); per-task
+		// TaskMeta is not needed, so includeTasks is ignored.
+		resp := h.buildWorkflow(meta, team, false, time.Time{})
+		snap := workflow.Snapshot{Next: resp.Next}
+		snap.Nodes = make([]workflow.Node, len(resp.Nodes))
+		for i, n := range resp.Nodes {
+			snap.Nodes[i] = workflow.Node{ID: n.ID, Name: n.Name, Status: n.Status, Assignee: n.Assignee}
+		}
+		snap.Edges = make([]workflow.Edge, len(resp.Edges))
+		for i, e := range resp.Edges {
+			snap.Edges[i] = workflow.Edge{Source: e.Source, Target: e.Target, Conditional: e.Conditional}
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, workflow.RenderMermaid(&snap))
+		return
+	}
+	if format != "" {
+		httputil.WriteError(w, http.StatusBadRequest, fmt.Sprintf("unsupported format %q: allowed: mermaid", format))
+		return
+	}
+
+	// INT-8: freshness anchor bound to the snapshot actually read. The
+	// anchor stat samples the mirror AFTER the content read, so
+	// verifyProjectMetaSnapshot checks the object's current ETag against
+	// the read bytes (with one bounded re-read on mismatch) before the
+	// anchor — and anything derived from it, e.g. projection_age_ms — is
+	// used.
+	meta, mtime, servedETag, verified := h.verifyProjectMetaSnapshot(r.Context(), match)
+	resp := h.buildWorkflow(meta, team, includeTasks, mtime)
+	if r.URL.Query().Get("consistency") == "strong" {
+		// Close the bracket: the verifying stat only proves the snapshot
+		// was stable at its instant. When storage has moved on, one
+		// bounded re-read (verifyProjectMetaSnapshot) is attempted and the
+		// bracket checked once more. X-Consistency: strong is set only
+		// when a stat confirms storage still holds the exact bytes being
+		// served — a failed re-read or an advance racing the re-read
+		// serves the content at hand WITHOUT the claim.
+		strong := false
+		for i := 0; i < 2 && !strong && verified; i++ {
+			m2, serr := h.oss.StatMeta(r.Context(), match.key)
+			if serr != nil || m2.ETag != servedETag {
+				meta, mtime, servedETag, verified = h.verifyProjectMetaSnapshot(r.Context(), match)
+				resp = h.buildWorkflow(meta, team, includeTasks, mtime)
+				continue
+			}
+			strong = true
+		}
+		if strong {
+			w.Header().Set("X-Consistency", "strong")
+		}
+	}
+
+	httputil.WriteJSON(w, http.StatusOK, resp)
+}
+
+// verifyProjectMetaSnapshot binds the freshness anchor to the project meta
+// snapshot actually served.
+//
+// The anchor StatMeta samples the mirror AFTER resolveProjectMeta's
+// GetObject. A filesync mirror advance landing in between makes the anchor
+// describe a newer version than the bytes actually read — the round-2
+// advanceAt=1 repro: stale content served with a fresh anchor and, on the
+// ?consistency=strong path, an unverified X-Consistency: strong header.
+//
+// Binding the version token to the read itself: the object's current ETag
+// (content hash — MinIO single-part ETag == MD5 of content, as in the
+// in-memory fake) must equal the ETag computed from the bytes we read
+// (match.etag). When it does not, the held snapshot is superseded and one
+// bounded re-read is attempted under the same verification (the post-read
+// stat's ETag must equal the re-read bytes' own hash). A failed re-read, an
+// unparseable re-read, or an advance racing the re-read serves the content
+// at hand with NO anchor and verified=false: the response degrades rather
+// than claiming freshness it cannot prove — a failed re-read must never be
+// reported as strong. When a backend cannot report an ETag the held
+// snapshot is assumed current (no re-read), but callers must still obtain a
+// positive ETag match before claiming strong consistency.
+//
+// A stat error degrades to "no anchor" and never fails the request
+// (audit.go idiom).
+func (h *ProjectHandler) verifyProjectMetaSnapshot(ctx context.Context, match *projectMatch) (*projectMeta, time.Time, string, bool) {
+	m, serr := h.oss.StatMeta(ctx, match.key)
+	if serr != nil {
+		return match.meta, time.Time{}, match.etag, false
+	}
+	if m.ETag == "" || m.ETag == match.etag {
+		return match.meta, m.ModTime, match.etag, true
+	}
+	// The mirror advanced between the read and the anchor stat: the held
+	// snapshot is superseded. One bounded re-read, verified the same way.
+	data, gerr := h.oss.GetObject(ctx, match.key)
+	if gerr != nil {
+		return match.meta, time.Time{}, match.etag, false
+	}
+	var newMeta projectMeta
+	if uerr := json.Unmarshal(data, &newMeta); uerr != nil {
+		return match.meta, time.Time{}, match.etag, false
+	}
+	if newMeta.TeamID == "" {
+		newMeta.TeamID = match.team
+	}
+	reETag := contentETag(data)
+	m2, serr := h.oss.StatMeta(ctx, match.key)
+	if serr != nil {
+		return &newMeta, time.Time{}, reETag, false
+	}
+	if m2.ETag != "" && m2.ETag != reETag {
+		// An advance raced the re-read: serve the fresher re-read bytes,
+		// but no anchor can be bound to them.
+		return &newMeta, time.Time{}, reETag, false
+	}
+	return &newMeta, m2.ModTime, reETag, true
+}
+
+// buildWorkflow converts project meta into the LangGraph-aligned response.
+// When includeTasks is true it additionally reads per-task TaskMeta from
+// shared storage and attaches tasks_detail. projectMtime is the StatMeta
+// mtime of the project meta object backing this read (zero time = no
+// anchor); together with the newest task-meta mtime it drives the
+// projection_age_ms / is_stale response fields.
+func (h *ProjectHandler) buildWorkflow(meta *projectMeta, team string, includeTasks bool, projectMtime time.Time) *workflowResponse {
+	nodes := make([]workflowNode, 0, len(meta.Tasks))
+	edges := make([]workflowEdge, 0)
+	next := make([]string, 0)
+	interrupts := make([]workflowInterrupt, 0)
+
+	// For loop plans the executable graph lives in loop.tasks; otherwise in
+	// project.tasks. Mirrors _ready_nodes / _ready_loop_nodes semantics.
+	graphTasks := meta.Tasks
+	if meta.PlanType == "loop" && meta.Loop != nil {
+		graphTasks = meta.Loop.Tasks
+	}
+
+	completed := map[string]bool{}
+	for _, t := range graphTasks {
+		if t.Status == "completed" {
+			completed[t.TaskID] = true
+		}
+		if t.Status == "blocked" || t.Status == "cancelled" {
+			interrupts = append(interrupts, workflowInterrupt{ID: t.TaskID, Value: "blocked"})
+		}
+		nodes = append(nodes, workflowNode{
+			ID:       t.TaskID,
+			Name:     t.Title,
+			Status:   normalizeTaskStatus(t.Status),
+			Assignee: t.AssignedTo,
+		})
+		for _, dep := range t.DependsOn {
+			edges = append(edges, workflowEdge{Source: dep, Target: t.TaskID, Conditional: false})
+		}
+	}
+
+	// Ready nodes: only for active projects (and an active loop); tasks
+	// pending/delegated whose dependencies are all completed (mirrors
+	// _ready_nodes / _ready_loop_nodes semantics).
+	loopBlocked := false
+	if meta.Loop != nil {
+		if meta.Loop.Status == "completed" || meta.Loop.Status == "blocked" || meta.Loop.Status == "waiting_user" {
+			loopBlocked = true
+		}
+		// The pause veto is independent of the loop status: a loop paused
+		// by a human keeps its "running" status but must not dispatch
+		// until every pause source is released. Mirrors _ready_loop_nodes,
+		// which checks _loop_pause_state before computing ready nodes.
+		if !loopBlocked && loopPaused(meta.Loop) {
+			loopBlocked = true
+		}
+	}
+	if !loopBlocked && (meta.Status == "" || meta.Status == "active") {
+		for _, t := range graphTasks {
+			// Mirror upstream _ready_nodes/_ready_loop_nodes exactly: only
+			// tasks whose raw status is planned/assigned can be ready.
+			// Checking the raw status (not the normalized output) avoids
+			// treating "" or unknown statuses as pending — upstream skips
+			// those, so a consumer must not see them as executable.
+			if t.Status != "planned" && t.Status != "assigned" {
+				continue
+			}
+			allDone := true
+			for _, dep := range t.DependsOn {
+				if !completed[dep] {
+					allDone = false
+					break
+				}
+			}
+			if allDone {
+				next = append(next, t.TaskID)
+			}
+		}
+	}
+
+	// Loop interrupts mirror _ready_loop_nodes: a loop waiting on a human
+	// decision or blocked surfaces as an interrupt.
+	if meta.Loop != nil {
+		if meta.Loop.Status == "waiting_user" {
+			interrupts = append(interrupts, workflowInterrupt{ID: "loop", Value: "waiting for human decision"})
+		} else if meta.Loop.Status == "blocked" {
+			interrupts = append(interrupts, workflowInterrupt{ID: "loop", Value: "blocked"})
+		}
+	}
+
+	// W1: a paused project is a human interrupt in LangGraph terms — the
+	// workflow is suspended awaiting a human decision (resume). Surfacing it
+	// as an interrupt (in addition to status=paused) lets consumers show
+	// "paused by human" without parsing project status separately. The
+	// action_request/config fields align with the LangChain Agent Inbox
+	// HumanInterrupt model so a dashboard/plugin can render a "Resume"
+	// button directly (lifecycle write endpoint POST /pause|/resume).
+	if meta.Status == "paused" {
+		interrupt := workflowInterrupt{ID: "project", Value: "paused"}
+		interrupt.ActionRequest = &interruptActionRequest{Action: "resume", Args: map[string]any{"project_id": meta.ProjectID}}
+		interrupt.Config = &interruptConfig{AllowAccept: true}
+		desc := "project is paused"
+		if meta.PauseReason != "" {
+			desc += ": " + meta.PauseReason
+		}
+		interrupt.Description = desc
+		interrupts = append(interrupts, interrupt)
+	}
+
+	// values: current state summary (LangGraph StateSnapshot.values analog).
+	taskCount := map[string]int{}
+	for _, n := range nodes {
+		taskCount[n.Status]++
+	}
+
+	// includeTasks: read per-task TaskMeta (shared/tasks/{id}/meta.json)
+	// from the same dual-prefix layout as projects and attach tasks_detail.
+	// Tasks without a TaskMeta file are skipped (the node summary remains
+	// authoritative); per-task read errors are skipped too so one bad task
+	// does not fail the whole workflow response.
+	var tasksDetail []taskDetail
+	var taskMaxMtime time.Time
+	if includeTasks {
+		tasksDetail, taskMaxMtime = h.readTasksDetail(meta, team)
+	}
+
+	// INT-8: freshness from the mirror mtimes of the objects this view used
+	// (project meta always; task metas when includeTasks).
+	ageMs, isStale := projectionFreshness(projectMtime, taskMaxMtime)
+
+	return &workflowResponse{
+		ProjectID:  meta.ProjectID,
+		Title:      meta.Title,
+		Status:     meta.Status,
+		PlanType:   meta.PlanType,
+		TeamID:     meta.TeamID,
+		Mode:       meta.Mode,
+		Source:     meta.Source,
+		Nodes:      nodes,
+		Edges:      edges,
+		Next:       next,
+		Interrupts: interrupts,
+		Values: &workflowValues{
+			ProjectID: meta.ProjectID,
+			Title:     meta.Title,
+			Status:    meta.Status,
+			PlanType:  meta.PlanType,
+			TeamID:    meta.TeamID,
+			Mode:      meta.Mode,
+			TaskCount: taskCount,
+		},
+		Loop:            meta.Loop,
+		Requester:       meta.Requester,
+		RequesterReport: meta.RequesterReport,
+		ReplyRoute:      meta.ReplyRoute,
+		SourceRoomID:    meta.SourceRoomID,
+		TasksDetail:     tasksDetail,
+		UpdatedBy:       meta.UpdatedBy,
+		UpdatedAt:       meta.UpdatedAt,
+		PauseReason:     meta.PauseReason,
+		ProjectionAgeMs: ageMs,
+		IsStale:         isStale,
+	}
+}
+
+// readTasksDetail reads TaskMeta (shared/tasks/{id}/meta.json) for every task
+// in the project's graph and returns the detail list in node order.
+//
+// TaskMeta is read only from the project's owning scope:
+// teams/{team}/shared/tasks/{id}/meta.json for team projects, or
+// shared/tasks/{id}/meta.json for standalone projects. Reads are concurrent
+// (W7 pattern) so N tasks cost ~ceil(N/8) storage rounds instead of N serial
+// reads.
+func (h *ProjectHandler) readTasksDetail(meta *projectMeta, team string) ([]taskDetail, time.Time) {
+	// Collect unique task ids from the graph (project tasks, or loop tasks
+	// for loop plans — same set buildWorkflow renders).
+	graphTasks := meta.Tasks
+	if meta.PlanType == "loop" && meta.Loop != nil {
+		graphTasks = meta.Loop.Tasks
+	}
+	taskIDs := make([]string, 0, len(graphTasks))
+	seen := map[string]bool{}
+	for _, t := range graphTasks {
+		if t.TaskID == "" || seen[t.TaskID] {
+			continue
+		}
+		seen[t.TaskID] = true
+		taskIDs = append(taskIDs, t.TaskID)
+	}
+	if len(taskIDs) == 0 {
+		return nil, time.Time{}
+	}
+
+	// Candidate TaskMeta keys: the project's owning scope ONLY, via
+	// taskMetaKeys — no cross-scope fallback (reviewer feedback: a team
+	// project whose TaskMeta is missing must not leak a global TaskMeta for
+	// the same task id).
+	var keys []string
+	for _, id := range taskIDs {
+		keys = append(keys, taskMetaKeys(id, team)...)
+	}
+
+	const detailConcurrency = 8
+	type keyResult struct {
+		taskID string
+		key    string
+		data   []byte
+	}
+	results := make([]keyResult, len(keys))
+	sem := make(chan struct{}, detailConcurrency)
+	var wg sync.WaitGroup
+	for i, key := range keys {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, taskID, key string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			data, err := h.oss.GetObject(context.Background(), key)
+			if err != nil {
+				results[i] = keyResult{taskID: taskID, key: key}
+				return
+			}
+			results[i] = keyResult{taskID: taskID, key: key, data: data}
+		}(i, keyForTaskID(key, taskIDs), key)
+	}
+	wg.Wait()
+
+	// First non-empty match per task id wins (team prefix takes precedence
+	// because it is listed first; a task published to the global prefix is a
+	// fallback for standalone projects).
+	detailByTask := make(map[string]taskDetail, len(taskIDs))
+	winningKeys := make(map[string]bool, len(taskIDs))
+	for _, res := range results {
+		if len(res.data) == 0 {
+			continue
+		}
+		if _, ok := detailByTask[res.taskID]; ok {
+			continue
+		}
+		var raw map[string]any
+		if err := json.Unmarshal(res.data, &raw); err != nil {
+			continue // malformed TaskMeta; keep node summary only
+		}
+		// Ownership check: TaskMeta must name exactly this project's graph
+		// task — both task_id and project_id must match; absent or mismatched
+		// fields are rejected, never mixed in.
+		if str(raw["task_id"]) != res.taskID || str(raw["project_id"]) != meta.ProjectID {
+			continue
+		}
+		detail := taskDetail{
+			TaskID:       str(taskIDFromRaw(raw, res.taskID)),
+			Status:       str(raw["status"]),
+			SpecPath:     str(raw["spec_path"]),
+			AssignedTo:   str(raw["assigned_to"]),
+			Summary:      str(raw["summary"]),
+			ResultStatus: str(raw["result_status"]),
+			ResultPath:   str(raw["result_path"]),
+			CancelReason: str(raw["cancel_reason"]),
+			SubmissionID: str(raw["submission_id"]),
+		}
+		if raw["project_id"] != nil {
+			detail.ProjectID = str(raw["project_id"])
+		}
+		if raw["deliverables"] != nil {
+			if list, ok := raw["deliverables"].([]any); ok {
+				detail.Deliverables = list
+			}
+		}
+		detail.History = parseTaskHistory(raw["history"])
+		detailByTask[res.taskID] = detail
+		winningKeys[res.key] = true
+	}
+
+	// Return in graph order for stable output.
+	out := make([]taskDetail, 0, len(taskIDs))
+	for _, id := range taskIDs {
+		if d, ok := detailByTask[id]; ok {
+			out = append(out, d)
+		}
+	}
+
+	// INT-8: freshness anchors — best-effort StatMeta on every task meta the
+	// detail actually came from (sequential after the concurrent GetObject
+	// phase; stat errors degrade to the remaining anchors, never fail the
+	// read).
+	var maxMtime time.Time
+	for key := range winningKeys {
+		if m, err := h.oss.StatMeta(context.Background(), key); err == nil && m.ModTime.After(maxMtime) {
+			maxMtime = m.ModTime
+		}
+	}
+	return out, maxMtime
+}
+
+// projectionFreshness derives the workflow response freshness fields from
+// the mirror mtimes of the objects the view was computed from: the newest
+// anchor wins, age is clamped at zero (clock-skew safe), and zero anchors
+// (every stat failed) degrade to (0, false).
+func projectionFreshness(anchors ...time.Time) (int64, bool) {
+	var newest time.Time
+	for _, a := range anchors {
+		if a.After(newest) {
+			newest = a
+		}
+	}
+	if newest.IsZero() {
+		return 0, false
+	}
+	age := time.Since(newest).Milliseconds()
+	if age < 0 {
+		age = 0
+	}
+	return age, age > staleThresholdMs()
+}
+
+// staleThresholdMs reads PROJECTION_STALE_MS (milliseconds); an invalid or
+// non-positive value falls back to the 30s default.
+func staleThresholdMs() int64 {
+	if v, err := strconv.Atoi(os.Getenv("PROJECTION_STALE_MS")); err == nil && v > 0 {
+		return int64(v)
+	}
+	return 30000
+}
+
+// keyForTaskID maps a candidate key back to the task id by extracting the
+// directory component after ".../tasks/". All keys are built from taskIDs in
+// readTasksDetail, so a simple suffix search is sufficient; if the lookup
+// fails the key index order (team-first) still yields the right task id.
+func keyForTaskID(key string, taskIDs []string) string {
+	for _, id := range taskIDs {
+		if strings.Contains(key, "/tasks/"+id+"/") {
+			return id
+		}
+	}
+	return ""
+}
+
+// GetTaskInspection serves node-level state for one task.
+//
+// GET /api/v1/projects/{id}/tasks/{taskId}
+//
+// Aggregates the task's graph node (status/assignee/dependencies), its
+// TaskMeta (spec/summary/deliverables/result), the append-only transition
+// history, and a trace hint (worker entry spans carry agentteams.project.id
+// / agentteams.task.id attributes). TaskMeta is read from the project's
+// owning scope only — same no-cross-scope-fallback rule as readTasksDetail.
+func (h *ProjectHandler) GetTaskInspection(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	taskID := r.PathValue("taskId")
+	if projectID == "" || taskID == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "project id and task id are required")
+		return
+	}
+	if !isSafeTaskID(taskID) {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid task id")
+		return
+	}
+	caller := authpkg.CallerFromContext(r.Context())
+	teamFilter := r.URL.Query().Get("team")
+
+	// Single K8s List for both meta resolution and the access check (O1
+	// pattern). Reuse the same dual-prefix layout as GetProjectWorkflow.
+	prefixes, crToEffective, err := h.teamProjectPrefixes(r.Context())
+	if err != nil {
+		writeK8sError(w, "get task inspection: resolve prefixes", err)
+		return
+	}
+	matches, err := h.resolveProjectMeta(r.Context(), projectID, prefixes, teamFilter, caller, crToEffective)
+	if err != nil {
+		writeK8sError(w, "get task inspection", err)
+		return
+	}
+	meta, team, ok := h.resolveSingleProject(w, matches)
+	if !ok {
+		return
+	}
+	// W4: hide project existence from scoped callers who do not own this
+	// project (L2 / team leader). Same 404 semantics as GetProjectWorkflow.
+	if err := h.checkProjectAccess(caller, team, crToEffective); err != nil {
+		if _, ok := err.(*accessDeniedError); ok {
+			httputil.WriteError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		httputil.WriteError(w, http.StatusForbidden, err.Error())
+		return
+	}
+
+	// The task must belong to this project's graph (project.tasks, or
+	// loop.tasks for loop plans) — same membership rule as GetTaskArtifact.
+	graphTasks := meta.Tasks
+	if meta.PlanType == "loop" && meta.Loop != nil {
+		graphTasks = meta.Loop.Tasks
+	}
+	var node *projectTaskMeta
+	for i := range graphTasks {
+		if graphTasks[i].TaskID == taskID {
+			node = &graphTasks[i]
+			break
+		}
+	}
+	if node == nil {
+		httputil.WriteError(w, http.StatusNotFound, "task not found")
+		return
+	}
+
+	// TaskMeta from the owning scope only (team prefix first, then global —
+	// the global prefix is a fallback for standalone projects, mirroring
+	// readTasksDetail; a team project never leaks a global TaskMeta).
+	detail := taskDetail{TaskID: node.TaskID, ProjectID: meta.ProjectID, Status: normalizeTaskStatus(node.Status), AssignedTo: node.AssignedTo}
+	for _, key := range taskMetaKeys(taskID, team) {
+		data, err := h.oss.GetObject(r.Context(), key)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			httputil.WriteError(w, http.StatusInternalServerError, "read task meta: "+err.Error())
+			return
+		}
+		var raw map[string]any
+		if err := json.Unmarshal(data, &raw); err != nil {
+			continue // malformed TaskMeta; keep node summary only
+		}
+		// Ownership check: TaskMeta must name exactly this project's graph
+		// task (same rule as readTasksDetail).
+		if str(raw["task_id"]) != taskID || str(raw["project_id"]) != meta.ProjectID {
+			continue
+		}
+		detail.Status = str(raw["status"])
+		detail.SpecPath = str(raw["spec_path"])
+		if a := str(raw["assigned_to"]); a != "" {
+			detail.AssignedTo = a
+		}
+		detail.Summary = str(raw["summary"])
+		detail.ResultStatus = str(raw["result_status"])
+		detail.ResultPath = str(raw["result_path"])
+		detail.CancelReason = str(raw["cancel_reason"])
+		detail.SubmissionID = str(raw["submission_id"])
+		if raw["deliverables"] != nil {
+			if list, ok := raw["deliverables"].([]any); ok {
+				detail.Deliverables = list
+			}
+		}
+		if raw["history"] != nil {
+			if list, ok := raw["history"].([]any); ok {
+				detail.History = parseTaskHistory(list)
+			}
+		}
+		break // first non-empty match wins (team prefix takes precedence)
+	}
+
+	insp := taskInspection{
+		taskDetail:   detail,
+		Dependencies: node.DependsOn,
+		Trace:        taskTraceHint{ProjectID: meta.ProjectID, TaskID: taskID},
+	}
+	httputil.WriteJSON(w, http.StatusOK, insp)
+}
+
+// GetTaskArtifact serves the result artifact of one task.
+//
+// GET /api/v1/projects/{id}/tasks/{taskId}/artifact
+//
+// The artifact path is NOT taken from the client: it is read from the task's
+// TaskMeta (shared/tasks/{id}/meta.json) `result_path` field, which is written
+// by TeamHarness submit_task when the worker publishes a result. This keeps
+// the endpoint read-only and prevents callers from downloading arbitrary
+// objects. The path is then validated against a strict allowlist of prefixes
+// so a malicious/compromised worker cannot craft a path that escapes the
+// project/task storage area (path traversal / arbitrary file read).
+func (h *ProjectHandler) GetTaskArtifact(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	taskID := r.PathValue("taskId")
+	if projectID == "" || taskID == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "project id and task id are required")
+		return
+	}
+	caller := authpkg.CallerFromContext(r.Context())
+	requestedPath := r.URL.Query().Get("path")
+	teamFilter := r.URL.Query().Get("team")
+
+	// Single K8s List for both meta resolution and the access check (O1
+	// pattern). Reuse the same dual-prefix layout as GetProjectWorkflow.
+	prefixes, crToEffective, err := h.teamProjectPrefixes(r.Context())
+	if err != nil {
+		writeK8sError(w, "get task artifact: resolve prefixes", err)
+		return
+	}
+	matches, err := h.resolveProjectMeta(r.Context(), projectID, prefixes, teamFilter, caller, crToEffective)
+	if err != nil {
+		writeK8sError(w, "get task artifact", err)
+		return
+	}
+	meta, team, ok := h.resolveSingleProject(w, matches)
+	if !ok {
+		return
+	}
+	// W4: hide project existence from scoped callers who do not own this
+	// project (L2 / team leader). Same 404 semantics as GetProjectWorkflow.
+	if err := h.checkProjectAccess(caller, team, crToEffective); err != nil {
+		if _, ok := err.(*accessDeniedError); ok {
+			httputil.WriteError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		httputil.WriteError(w, http.StatusForbidden, err.Error())
+		return
+	}
+
+	// The task must belong to this project's graph (project.tasks, or
+	// loop.tasks for loop plans). This prevents downloading a result from a
+	// task id that exists in shared storage but belongs to another project.
+	graphTasks := meta.Tasks
+	if meta.PlanType == "loop" && meta.Loop != nil {
+		graphTasks = meta.Loop.Tasks
+	}
+	belongsToProject := false
+	for _, t := range graphTasks {
+		if t.TaskID == taskID {
+			belongsToProject = true
+			break
+		}
+	}
+	if !belongsToProject {
+		httputil.WriteError(w, http.StatusNotFound, "task not found")
+		return
+	}
+
+	// Read TaskMeta from the dual-prefix layout (team first, global
+	// fallback), mirroring readTasksDetail. Collect the artifact paths the
+	// task declares: result_path (published result), spec_path (task spec)
+	// and deliverables (published artifact list). The client may request any
+	// of them via ?path=; without ?path= the result_path is served (default).
+	resultPath, specPath := "", ""
+	deliverables := []string{}
+	for _, key := range taskMetaKeys(taskID, team) {
+		data, err := h.oss.GetObject(r.Context(), key)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			httputil.WriteError(w, http.StatusInternalServerError, "read task meta: "+err.Error())
+			return
+		}
+		var raw map[string]any
+		if err := json.Unmarshal(data, &raw); err != nil {
+			continue // malformed TaskMeta; keep scanning other prefixes
+		}
+		// Ownership check: TaskMeta must name exactly the requested task —
+		// task_id and project_id must both match; absent or mismatched fields
+		// never serve artifacts.
+		if str(raw["task_id"]) != taskID || str(raw["project_id"]) != projectID {
+			continue
+		}
+		resultPath = str(raw["result_path"])
+		specPath = str(raw["spec_path"])
+		deliverables = nil
+		if list, ok := raw["deliverables"].([]any); ok {
+			for _, item := range list {
+				if s := str(item); s != "" {
+					deliverables = append(deliverables, s)
+				}
+			}
+		}
+		break // first readable TaskMeta wins (team prefix listed first)
+	}
+
+	// Decide which artifact to serve. Without ?path= we serve result_path
+	// (the default published result); with ?path= the requested path must be
+	// one of the task's declared artifacts — this prevents downloading files
+	// that live in the task dir but were never published (defense in depth
+	// beyond the prefix allowlist).
+	artifactRelative := ""
+	switch {
+	case requestedPath == "":
+		if resultPath == "" {
+			httputil.WriteError(w, http.StatusNotFound, "task has no artifact")
+			return
+		}
+		artifactRelative = resultPath
+	default:
+		allowed := map[string]bool{resultPath: resultPath != "", specPath: specPath != ""}
+		for _, d := range deliverables {
+			allowed[d] = true
+		}
+		if !allowed[requestedPath] {
+			httputil.WriteError(w, http.StatusNotFound, "task has no such artifact")
+			return
+		}
+		artifactRelative = requestedPath
+	}
+
+	// Path safety: the artifact path is worker-written (result_path /
+	// spec_path / deliverables); validate it against the project/task
+	// storage area so a bad path cannot escape to arbitrary MinIO objects.
+	// Allowed: shared/tasks/{taskID}/... and shared/projects/{projectID}/...
+	// (result files live in the task dir, but accept_task_result may also
+	// publish a project-level result.md). Reject any path with `..` or an
+	// absolute path outright.
+	switch {
+	case strings.HasPrefix(artifactRelative, "shared/tasks/"+taskID+"/"):
+		// OK
+	case strings.HasPrefix(artifactRelative, "shared/projects/"+projectID+"/"):
+		// OK
+	default:
+		httputil.WriteError(w, http.StatusNotFound, "task has no artifact")
+		return
+	}
+	if strings.Contains(artifactRelative, "..") || strings.HasPrefix(artifactRelative, "/") {
+		httputil.WriteError(w, http.StatusNotFound, "task has no artifact")
+		return
+	}
+
+	// The artifact lives under the same dual-prefix layout as TaskMeta: a
+	// team member's files sync to teams/{team}/shared/..., a standalone
+	// worker's to global shared/.... Try the team-scoped key first, then the
+	// global one (mirrors taskMetaKeys ordering).
+	var data []byte
+	var readErr error
+	for _, key := range artifactKeys(artifactRelative, team) {
+		d, err := h.oss.GetObject(r.Context(), key)
+		if err == nil {
+			data = d
+			break
+		}
+		readErr = err
+	}
+	if data == nil {
+		if errors.Is(readErr, os.ErrNotExist) {
+			httputil.WriteError(w, http.StatusNotFound, "artifact not found")
+			return
+		}
+		httputil.WriteError(w, http.StatusInternalServerError, "read artifact: "+errStr(readErr))
+		return
+	}
+
+	// Stream back with an attachment disposition so the file downloads
+	// rather than rendering inline. The filename is the basename of the
+	// artifact path; Content-Type is inferred from the extension.
+	//
+	// mime.FormatMediaType produces RFC 5987 filename*=utf-8''... for
+	// non-ASCII names (Chinese etc.) and plain filename="..." for ASCII, so
+	// browsers decode the download name correctly in both cases.
+	fileName := path.Base(artifactRelative)
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": fileName}))
+	w.Header().Set("Content-Type", contentTypeFor(fileName))
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+// artifactKeys returns candidate object keys for an artifact relative path
+// under the given team ("" for global), team-scoped prefix first. Mirrors
+// taskMetaKeys: team members sync to teams/{team}/shared/..., standalone
+// workers to global shared/...
+func artifactKeys(relative, team string) []string {
+	keys := make([]string, 0, 2)
+	if team != "" && strings.HasPrefix(relative, "shared/") {
+		keys = append(keys, "teams/"+team+"/"+relative)
+	}
+	keys = append(keys, relative)
+	return keys
+}
+
+// errStr returns err's message or "" for nil, avoiding a nil deref in error
+// paths where the last read error may be nil when the key list is empty.
+func errStr(err error) string {
+	if err == nil {
+		return "unknown error"
+	}
+	return err.Error()
+}
+
+// taskMetaKeys returns the candidate TaskMeta keys for a task in the given
+// team ("" for global), team-scoped prefix first. Mirrors readTasksDetail.
+// taskMetaKeys returns the TaskMeta object keys for a task under the project's
+// owning scope. Team-scoped projects read ONLY their team prefix; standalone
+// projects read ONLY the global prefix. There is deliberately no cross-scope
+// fallback: a team project must never mix in an unrelated global task that
+// happens to share the task id (reviewer feedback — ownership must be
+// verified, not guessed across scopes).
+func taskMetaKeys(taskID, team string) []string {
+	if team != "" {
+		return []string{"teams/" + team + "/shared/tasks/" + taskID + "/meta.json"}
+	}
+	return []string{"shared/tasks/" + taskID + "/meta.json"}
+}
+
+// contentTypeFor maps a file extension to a Content-Type for artifact
+// downloads. Unknown extensions fall back to application/octet-stream.
+func contentTypeFor(name string) string {
+	ext := strings.ToLower(path.Ext(name))
+	switch ext {
+	case ".md", ".markdown", ".txt":
+		return "text/markdown; charset=utf-8"
+	case ".pdf":
+		return "application/pdf"
+	case ".json":
+		return "application/json"
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".svg":
+		return "image/svg+xml"
+	case ".doc", ".docx":
+		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	case ".xls", ".xlsx":
+		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+	case ".ppt", ".pptx":
+		return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+	case ".zip":
+		return "application/zip"
+	case ".csv":
+		return "text/csv; charset=utf-8"
+	case ".html", ".htm":
+		return "text/html; charset=utf-8"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+// str is a small helper to coerce a JSON value to string ("" for nil).
+func str(v any) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprintf("%v", v)
+}
+
+// taskIDFromRaw prefers the raw task_id field, falling back to the key-derived id.
+func taskIDFromRaw(raw map[string]any, fallback string) string {
+	if s := str(raw["task_id"]); s != "" {
+		return s
+	}
+	return fallback
+}
+
+// --- spawn aggregation (GET /api/v1/projects/{id}/spawns) ---
+//
+// Spawn subagents (spawn_subagent) are the primary workhorses of the
+// AgentTeam architecture: workers schedule, spawns execute. The TeamHarness
+// meta.json only tracks the team-level task state, so this endpoint reads
+// each team worker's chats.json (mirrored into object storage by the
+// worker's FileSync) and aggregates the spawn sessions.
+//
+// Parent-child linkage (meta.root_session_id / meta.spawn) is persisted by
+// the QwenPaw spawn-linkage feature (2.1+). On 2.0.1 workers those fields
+// are absent; the endpoint degrades gracefully (root_session_id null, sub-
+// prefix detection) so the client can fall back to a flat list.
+
+// workerChatsFile mirrors the worker-side chats.json written by QwenPaw's
+// JsonChatRepository. Both 2.0.1 and 2.1 write {version, chats: [...]}.
+type workerChatsFile struct {
+	Version int          `json:"version"`
+	Chats   []workerChat `json:"chats"`
+}
+
+// workerChat is the per-chat subset needed for spawn aggregation.
+type workerChat struct {
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
+	SessionID string         `json:"session_id"`
+	UserID    string         `json:"user_id"`
+	Channel   string         `json:"channel"`
+	CreatedAt string         `json:"created_at"`
+	UpdatedAt string         `json:"updated_at"`
+	Meta      map[string]any `json:"meta"`
+	Status    string         `json:"status"`
+	Source    string         `json:"source"`
+}
+
+// projectSpawnsResponse is the GET /api/v1/projects/{id}/spawns payload.
+type projectSpawnsResponse struct {
+	ProjectID string         `json:"project_id"`
+	Workers   []workerSpawns `json:"workers"`
+}
+
+type workerSpawns struct {
+	Worker string      `json:"worker"`
+	Spawns []spawnInfo `json:"spawns"`
+}
+
+type spawnInfo struct {
+	SessionID     string   `json:"session_id"`
+	Name          string   `json:"name,omitempty"`
+	Status        string   `json:"status"`
+	CreatedAt     string   `json:"created_at,omitempty"`
+	UpdatedAt     string   `json:"updated_at,omitempty"`
+	RootSessionID *string  `json:"root_session_id"` // null on 2.0.1 workers
+	Spawn         bool     `json:"spawn"`
+	AllowedTools  []string `json:"subagent_allowed_tools,omitempty"`
+	Skills        []string `json:"subagent_skills,omitempty"`
+}
+
+// normalizeSessionKey canonicalizes a Matrix room id or channel session id
+// into the chats.json session_id form. Bare room ids (!abc:server) gain the
+// canonical lowercase `matrix:` prefix; full session keys keep their channel
+// prefix but fold it to lowercase (Matrix:!abc -> matrix:!abc). Empty stays
+// empty. This lets room_id values from TaskMeta and session_id values from
+// chats.json be compared reliably.
+//
+// A leading "!" disambiguates a bare Matrix room id (which itself contains
+// a ":" domain separator) from a channel session key.
+func normalizeSessionKey(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if strings.HasPrefix(s, "!") {
+		return "matrix:" + s
+	}
+	if i := strings.Index(s, ":"); i > 0 {
+		return strings.ToLower(s[:i]) + s[i:]
+	}
+	return "matrix:" + s
+}
+
+// isSpawnChat reports whether a chat entry represents a spawn subagent
+// session. 2.1 persists meta.spawn; 2.0.1 only leaves the `sub-` session id
+// prefix as a signal. Both are accepted (plus a future source="spawn").
+func isSpawnChat(c workerChat) bool {
+	if b, ok := c.Meta["spawn"].(bool); ok && b {
+		return true
+	}
+	if c.Source == "spawn" {
+		return true
+	}
+	return strings.HasPrefix(c.SessionID, "sub-")
+}
+
+// spawnRootSession returns the persisted root session id (normalized) or
+// nil when absent (2.0.1 workers).
+func spawnRootSession(c workerChat) *string {
+	if s := str(c.Meta["root_session_id"]); s != "" {
+		normalized := normalizeSessionKey(s)
+		return &normalized
+	}
+	return nil
+}
+
+// spawnAllowedTools returns the tool whitelist persisted in the chat meta
+// (absent on 2.0.1). spawnSkills is the same for the skill whitelist; both
+// are written by the QwenPaw spawn linkage feature from the spawn's
+// request_context.
+func spawnAllowedTools(c workerChat) []string {
+	return spawnMetaList(c, "subagent_allowed_tools")
+}
+
+func spawnSkills(c workerChat) []string {
+	return spawnMetaList(c, "subagent_skills")
+}
+
+func spawnMetaList(c workerChat, key string) []string {
+	raw, ok := c.Meta[key].([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		if s := str(v); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// teamWorkerNames resolves the Worker CRs referenced by the team's
+// WorkerMembers into their MinIO storage names (WorkerSpec.WorkerName is the
+// OSS path key; fall back to the CR name).
+func (h *ProjectHandler) teamWorkerNames(ctx context.Context, team string) []string {
+	var teams v1beta1.TeamList
+	if err := h.client.List(ctx, &teams, client.InNamespace(h.namespace)); err != nil {
+		return nil
+	}
+	var memberNames []string
+	for i := range teams.Items {
+		if teams.Items[i].Spec.EffectiveTeamName(teams.Items[i].Name) != team {
+			continue
+		}
+		for _, m := range teams.Items[i].Spec.WorkerMembers {
+			memberNames = append(memberNames, m.Name)
+		}
+		break
+	}
+	if len(memberNames) == 0 {
+		return nil
+	}
+
+	byName := map[string]string{}
+	var workers v1beta1.WorkerList
+	if err := h.client.List(ctx, &workers, client.InNamespace(h.namespace)); err == nil {
+		for i := range workers.Items {
+			name := workers.Items[i].Spec.WorkerName
+			if name == "" {
+				name = workers.Items[i].Name
+			}
+			byName[workers.Items[i].Name] = name
+		}
+	}
+	out := make([]string, 0, len(memberNames))
+	for _, n := range memberNames {
+		if storage, ok := byName[n]; ok {
+			out = append(out, storage)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// collectProjectRooms derives the set of session/room ids that belong to
+// this project: the project's source_room_id plus every graph task's
+// TaskMeta.room_id. Spawn association is derived through this set — a spawn's
+// persisted root_session_id (QwenPaw 2.1+) is the session that called
+// spawn_subagent, i.e. one of these rooms. Reads are best-effort: an
+// unreadable TaskMeta just contributes nothing, never a 500.
+func (h *ProjectHandler) collectProjectRooms(ctx context.Context, meta *projectMeta, team string) map[string]bool {
+	rooms := map[string]bool{}
+	if r := normalizeSessionKey(meta.SourceRoomID); r != "" {
+		rooms[r] = true
+	}
+	graphTasks := meta.Tasks
+	if meta.PlanType == "loop" && meta.Loop != nil {
+		graphTasks = meta.Loop.Tasks
+	}
+	seen := map[string]bool{}
+	for _, t := range graphTasks {
+		if t.TaskID == "" || seen[t.TaskID] {
+			continue
+		}
+		seen[t.TaskID] = true
+		for _, key := range taskMetaKeys(t.TaskID, team) {
+			data, err := h.oss.GetObject(ctx, key)
+			if err != nil {
+				continue
+			}
+			var raw map[string]any
+			if err := json.Unmarshal(data, &raw); err != nil {
+				continue
+			}
+			if str(raw["task_id"]) != t.TaskID || str(raw["project_id"]) != meta.ProjectID {
+				continue // another task/project sharing this id
+			}
+			if r := normalizeSessionKey(str(raw["room_id"])); r != "" {
+				rooms[r] = true
+			}
+			break
+		}
+	}
+	return rooms
+}
+
+// spawnBelongsToProject reports whether a spawn chat belongs to the project's
+// room set. A spawn without a persisted root_session_id (2.0.1 legacy) cannot
+// be associated safely and is omitted; a root outside the project's rooms is
+// another project's activity (same team, different project) and is omitted
+// too. Reviewer feedback: never attach a spawn to every project of its team.
+func spawnBelongsToProject(c workerChat, rooms map[string]bool) bool {
+	root := spawnRootSession(c)
+	if root == nil {
+		return false
+	}
+	return rooms[*root]
+}
+
+// workerChatsPath is the workspace-relative path of a worker's chats.json.
+// The worker FileSync mirrors its workspace (including .qwenpaw/workspaces/
+// default/chats.json — not in the background-push exclusion list) under
+// agents/{worker}/.
+const workerChatsPath = ".qwenpaw/workspaces/default/chats.json"
+
+func (h *ProjectHandler) readWorkerSpawns(ctx context.Context, worker string, rooms map[string]bool) []spawnInfo {
+	out := make([]spawnInfo, 0)
+	data, err := h.oss.GetObject(ctx, "agents/"+worker+"/"+workerChatsPath)
+	if err != nil {
+		return out // chats.json missing/unreadable: skip worker, don't 500
+	}
+	var file workerChatsFile
+	if err := json.Unmarshal(data, &file); err != nil {
+		return out // truncated/legacy shape: skip worker
+	}
+	for _, c := range file.Chats {
+		if !isSpawnChat(c) {
+			continue
+		}
+		if !spawnBelongsToProject(c, rooms) {
+			continue // unassociated (legacy) or another project's spawn
+		}
+		out = append(out, spawnInfo{
+			SessionID:     c.SessionID,
+			Name:          c.Name,
+			Status:        c.Status,
+			CreatedAt:     c.CreatedAt,
+			UpdatedAt:     c.UpdatedAt,
+			RootSessionID: spawnRootSession(c),
+			Spawn:         true,
+			AllowedTools:  spawnAllowedTools(c),
+			Skills:        spawnSkills(c),
+		})
+	}
+	return out
+}
+
+// GetProjectSpawns handles GET /api/v1/projects/{id}/spawns.
+// Auth/RBAC mirrors GetProjectWorkflow: RoleHuman read + team-scope check,
+// cross-team access hidden as 404.
+func (h *ProjectHandler) GetProjectSpawns(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	if projectID == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "project id is required")
+		return
+	}
+	caller := authpkg.CallerFromContext(r.Context())
+	teamFilter := r.URL.Query().Get("team")
+
+	prefixes, crToEffective, err := h.teamProjectPrefixes(r.Context())
+	if err != nil {
+		writeK8sError(w, "get project spawns: resolve prefixes", err)
+		return
+	}
+	matches, err := h.resolveProjectMeta(r.Context(), projectID, prefixes, teamFilter, caller, crToEffective)
+	if err != nil {
+		writeK8sError(w, "get project spawns", err)
+		return
+	}
+	meta, team, ok := h.resolveSingleProject(w, matches)
+	if !ok {
+		return
+	}
+	// W4: hide existence from scoped callers who do not own this project.
+	if err := h.checkProjectAccess(caller, team, crToEffective); err != nil {
+		if _, ok := err.(*accessDeniedError); ok {
+			httputil.WriteError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		httputil.WriteError(w, http.StatusForbidden, err.Error())
+		return
+	}
+
+	rooms := h.collectProjectRooms(r.Context(), meta, team)
+	workers := h.teamWorkerNames(r.Context(), team)
+	resp := projectSpawnsResponse{ProjectID: projectID, Workers: make([]workerSpawns, 0, len(workers))}
+	for _, worker := range workers {
+		resp.Workers = append(resp.Workers, workerSpawns{
+			Worker: worker,
+			Spawns: h.readWorkerSpawns(r.Context(), worker, rooms),
+		})
+	}
+	httputil.WriteJSON(w, http.StatusOK, resp)
+}
+
+// --- spawn messages (GET /api/v1/projects/{id}/spawns/{sessionId}/messages) ---
+//
+// The aggregation endpoint above returns per-session metadata only. This
+// endpoint drills into one spawn session and returns its conversation stream
+// from the worker's history.db (QwenPaw's scroll HistoryStore, mirrored into
+// object storage by FileSync). The schema is stable across 2.0.1 and 2.1
+// (verified against both tags): the same conversation_history table with
+// seq/session_id/kind/role/name/content/tool_state/headline/created_at.
+//
+// Reading is strictly read-only against a temp copy: the db (plus -wal/-shm
+// when present) is pulled from object storage and opened with mode=ro,
+// falling back to immutable=1 when the WAL sidecars are missing or
+// inconsistent (a worker-side snapshot may capture the main file between
+// checkpoints; immutable reads the checkpointed portion only).
+//
+// The stream keeps user context messages, model turns and tool results in
+// ascending order, most recent limit items; has_more reports whether older
+// rows exist. task carries the first user message — the spawn task text.
+
+// workerHistoryDBPath is the workspace-relative path of a worker's
+// history.db (QwenPaw scroll HistoryStore).
+const workerHistoryDBPath = ".qwenpaw/workspaces/default/history.db"
+
+const (
+	defaultSpawnMessagesLimit = 20
+	maxSpawnMessagesLimit     = 50
+)
+
+type spawnMessage struct {
+	Seq       int64  `json:"seq"`
+	Kind      string `json:"kind"`
+	Role      string `json:"role,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Content   string `json:"content,omitempty"`
+	ToolState string `json:"tool_state,omitempty"`
+	Headline  string `json:"headline,omitempty"`
+	CreatedAt string `json:"created_at,omitempty"`
+}
+
+type spawnMessagesResponse struct {
+	SessionID string         `json:"session_id"`
+	Task      string         `json:"task,omitempty"`
+	Messages  []spawnMessage `json:"messages"`
+	HasMore   bool           `json:"has_more"`
+}
+
+// findSpawnWorker returns the worker whose chats.json contains the spawn
+// session plus the chat's raw session id (the value history.db rows are
+// keyed by), or "" when no team worker owns it. Session keys are normalized
+// on both sides so bare room ids and channel-prefixed keys compare reliably;
+// the raw value is kept for the SQL lookup because history.db stores the
+// original key.
+func (h *ProjectHandler) findSpawnWorker(ctx context.Context, workers []string, sessionID string) (string, string, *string) {
+	for _, worker := range workers {
+		data, err := h.oss.GetObject(ctx, "agents/"+worker+"/"+workerChatsPath)
+		if err != nil {
+			continue
+		}
+		var file workerChatsFile
+		if err := json.Unmarshal(data, &file); err != nil {
+			continue
+		}
+		for _, c := range file.Chats {
+			if !isSpawnChat(c) {
+				continue
+			}
+			if normalizeSessionKey(c.SessionID) == sessionID {
+				return worker, c.SessionID, spawnRootSession(c)
+			}
+		}
+	}
+	return "", "", nil
+}
+
+// openReadOnlySQLite opens a SQLite database read-only, falling back to
+// immutable mode (skips WAL/lock handling) when the normal open fails —
+// e.g. a worker snapshot whose -wal/-shm sidecars are missing or stale.
+func openReadOnlySQLite(path string) (*sql.DB, error) {
+	for _, uri := range []string{
+		"file:" + path + "?mode=ro",
+		"file:" + path + "?mode=ro&immutable=1",
+	} {
+		db, err := sql.Open("sqlite", uri)
+		if err == nil {
+			if err = db.Ping(); err == nil {
+				return db, nil
+			}
+			_ = db.Close()
+		}
+	}
+	return nil, fmt.Errorf("open %s: not a readable sqlite database", path)
+}
+
+// readSpawnMessages pulls the worker's history.db from object storage and
+// returns the spawn session's conversation stream. Failures degrade to a
+// non-200 status (never a 500): the db is missing/unreadable on the object
+// store, or the copy cannot be opened as SQLite.
+func (h *ProjectHandler) readSpawnMessages(ctx context.Context, worker, sessionID string, limit int) (spawnMessagesResponse, int) {
+	resp := spawnMessagesResponse{SessionID: sessionID, Messages: make([]spawnMessage, 0)}
+	unavailable := func() (spawnMessagesResponse, int) {
+		return resp, http.StatusNotFound
+	}
+
+	dbData, err := h.oss.GetObject(ctx, "agents/"+worker+"/"+workerHistoryDBPath)
+	if err != nil {
+		return unavailable()
+	}
+	tmp, err := os.MkdirTemp("", "spawn-msgs-")
+	if err != nil {
+		return resp, http.StatusInternalServerError
+	}
+	defer os.RemoveAll(tmp)
+	dbPath := filepath.Join(tmp, "history.db")
+	if err := os.WriteFile(dbPath, dbData, 0o600); err != nil {
+		return resp, http.StatusInternalServerError
+	}
+	// Best-effort WAL sidecars: the most recent rows live in -wal until a
+	// checkpoint; without them (or when stale) the immutable fallback below
+	// still serves the checkpointed portion.
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if sidecar, err := h.oss.GetObject(ctx, "agents/"+worker+"/"+workerHistoryDBPath+suffix); err == nil {
+			_ = os.WriteFile(dbPath+suffix, sidecar, 0o600)
+		}
+	}
+
+	db, err := openReadOnlySQLite(dbPath)
+	if err != nil {
+		return unavailable()
+	}
+	defer db.Close()
+
+	// task: the first user message is the spawn task text.
+	_ = db.QueryRow(
+		"SELECT content FROM conversation_history WHERE session_id=? AND role='user' ORDER BY seq ASC LIMIT 1",
+		sessionID,
+	).Scan(&resp.Task)
+
+	rows, err := db.Query(
+		"SELECT seq, kind, role, name, content, tool_state, headline, created_at "+
+			"FROM conversation_history WHERE session_id=? ORDER BY seq DESC LIMIT ?",
+		sessionID, limit+1,
+	)
+	if err != nil {
+		return unavailable()
+	}
+	defer rows.Close()
+
+	desc := make([]spawnMessage, 0, limit)
+	for rows.Next() {
+		var m spawnMessage
+		var role, name, content, toolState, headline, createdAt sql.NullString
+		if err := rows.Scan(&m.Seq, &m.Kind, &role, &name, &content, &toolState, &headline, &createdAt); err != nil {
+			continue
+		}
+		m.Role, m.Name, m.Content = role.String, name.String, content.String
+		m.ToolState, m.Headline, m.CreatedAt = toolState.String, headline.String, createdAt.String
+		desc = append(desc, m)
+	}
+	if len(desc) > limit {
+		resp.HasMore = true
+		desc = desc[:limit]
+	}
+	resp.Messages = make([]spawnMessage, len(desc))
+	for i := range desc {
+		resp.Messages[len(desc)-1-i] = desc[i]
+	}
+	return resp, http.StatusOK
+}
+
+// GetProjectSpawnMessages handles GET /api/v1/projects/{id}/spawns/{sessionId}/messages.
+// Auth/RBAC mirrors GetProjectSpawns: RoleHuman read + team-scope check,
+// cross-team access and unknown sessions hidden as 404.
+func (h *ProjectHandler) GetProjectSpawnMessages(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	sessionID := normalizeSessionKey(r.PathValue("sessionId"))
+	if projectID == "" || sessionID == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "project id and session id are required")
+		return
+	}
+	caller := authpkg.CallerFromContext(r.Context())
+	teamFilter := r.URL.Query().Get("team")
+
+	prefixes, crToEffective, err := h.teamProjectPrefixes(r.Context())
+	if err != nil {
+		writeK8sError(w, "get spawn messages: resolve prefixes", err)
+		return
+	}
+	matches, err := h.resolveProjectMeta(r.Context(), projectID, prefixes, teamFilter, caller, crToEffective)
+	if err != nil {
+		writeK8sError(w, "get spawn messages", err)
+		return
+	}
+	meta, team, ok := h.resolveSingleProject(w, matches)
+	if !ok {
+		return
+	}
+	// W4: hide existence from scoped callers who do not own this project.
+	if err := h.checkProjectAccess(caller, team, crToEffective); err != nil {
+		if _, ok := err.(*accessDeniedError); ok {
+			httputil.WriteError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		httputil.WriteError(w, http.StatusForbidden, err.Error())
+		return
+	}
+
+	limit := defaultSpawnMessagesLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			limit = n
+			if limit > maxSpawnMessagesLimit {
+				limit = maxSpawnMessagesLimit
+			}
+		}
+	}
+
+	worker, rawSessionID, root := h.findSpawnWorker(r.Context(), h.teamWorkerNames(r.Context(), team), sessionID)
+	if worker == "" {
+		httputil.WriteError(w, http.StatusNotFound, "spawn session not found")
+		return
+	}
+	// Project scoping: the spawn must belong to this project (root session in
+	// the project's room set). Legacy spawns without a root and other
+	// projects' spawns are hidden as 404.
+	rooms := h.collectProjectRooms(r.Context(), meta, team)
+	spawnChat := workerChat{Meta: map[string]any{}}
+	if root != nil {
+		spawnChat.Meta["root_session_id"] = *root
+	}
+	if !spawnBelongsToProject(spawnChat, rooms) {
+		httputil.WriteError(w, http.StatusNotFound, "spawn session not found")
+		return
+	}
+	resp, status := h.readSpawnMessages(r.Context(), worker, rawSessionID, limit)
+	if status != http.StatusOK {
+		httputil.WriteError(w, status, "spawn messages unavailable")
+		return
+	}
+	httputil.WriteJSON(w, http.StatusOK, resp)
+}
+
+// ============================================================================
+// human intervention + lifecycle write endpoints
+//
+// All write endpoints follow the same pattern: resolve the project meta and
+// its exact object key (resolveProjectMeta + projectMatch.key), run the
+// handler-side team
+// check (checkProjectAccess — the middleware cannot resolve project -> team,
+// so requireSameTeam short-circuits on an empty ResourceTeam; this explicit
+// call is the real cross-team write boundary), apply the state-machine
+// validation, then write back with an mtime optimistic lock (StatMeta
+// compare-before-write → 409 on conflict).
+// ============================================================================
+
+// --- project history (GET /api/v1/projects/{id}/history) ---
+//
+// The write side (snapshotProjectMeta below) stores a meta.json copy into
+// history/{unixNano}.json before every intervention. These endpoints read
+// the timeline back so humans and frontends can inspect the intervention
+// audit trail (who paused/resumed/replanned and why, via the snapshot's
+// updated_by / pause_reason fields).
+
+// historyTimestampPattern accepts exactly 19 digits (a unixNano timestamp) —
+// the snapshot filename. It also doubles as the path-traversal guard: the
+// only characters accepted are digits.
+var historyTimestampPattern = regexp.MustCompile(`^[0-9]{19}$`)
+
+// projectHistoryResponse is the GET /api/v1/projects/{id}/history payload.
+type projectHistoryResponse struct {
+	ProjectID string            `json:"project_id"`
+	Snapshots []projectSnapshot `json:"snapshots"`
+}
+
+// projectSnapshot is one history entry. Timestamp is the unixNano filename,
+// kept as a string because 19-digit nanoseconds exceed the JS Number
+// safe-integer range (clients would silently lose precision as a number).
+type projectSnapshot struct {
+	Timestamp string `json:"timestamp"`
+}
+
+// GetProjectHistory handles GET /api/v1/projects/{id}/history.
+// Auth/RBAC mirrors GetProjectWorkflow: RoleHuman read + team-scope check,
+// cross-team access hidden as 404.
+func (h *ProjectHandler) GetProjectHistory(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	if projectID == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "project id is required")
+		return
+	}
+	caller := authpkg.CallerFromContext(r.Context())
+	teamFilter := r.URL.Query().Get("team")
+
+	prefixes, crToEffective, err := h.teamProjectPrefixes(r.Context())
+	if err != nil {
+		writeK8sError(w, "get project history: resolve prefixes", err)
+		return
+	}
+	matches, err := h.resolveProjectMeta(r.Context(), projectID, prefixes, teamFilter, caller, crToEffective)
+	if err != nil {
+		writeK8sError(w, "get project history", err)
+		return
+	}
+	match, ok := h.resolveSingleProjectMatch(w, matches)
+	if !ok {
+		return
+	}
+	if err := h.checkProjectAccess(caller, match.team, crToEffective); err != nil {
+		if _, ok := err.(*accessDeniedError); ok {
+			httputil.WriteError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		httputil.WriteError(w, http.StatusForbidden, err.Error())
+		return
+	}
+
+	historyPrefix := strings.TrimSuffix(match.key, "meta.json") + "history/"
+	children, err := h.oss.ListObjects(r.Context(), historyPrefix)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "list project history: "+err.Error())
+		return
+	}
+	snapshots := make([]projectSnapshot, 0, len(children))
+	for _, child := range children {
+		base := strings.TrimSuffix(child, ".json")
+		// Defensive filter: the history directory only ever contains
+		// snapshot files, but ignore anything unexpected instead of
+		// surfacing garbage.
+		if base == child || !historyTimestampPattern.MatchString(base) {
+			continue
+		}
+		snapshots = append(snapshots, projectSnapshot{Timestamp: base})
+	}
+	// Newest first. Numeric string sort == chronological order for fixed
+	// 19-digit unixNano names (same reasoning as the write-side gc).
+	sort.Slice(snapshots, func(i, j int) bool {
+		return snapshots[i].Timestamp > snapshots[j].Timestamp
+	})
+	httputil.WriteJSON(w, http.StatusOK, projectHistoryResponse{ProjectID: projectID, Snapshots: snapshots})
+}
+
+// GetProjectHistorySnapshot handles GET /api/v1/projects/{id}/history/{timestamp}.
+// Returns one snapshot's raw meta JSON verbatim — the read side stays
+// decoupled from the meta schema.
+func (h *ProjectHandler) GetProjectHistorySnapshot(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	timestamp := r.PathValue("timestamp")
+	if projectID == "" || !historyTimestampPattern.MatchString(timestamp) {
+		httputil.WriteError(w, http.StatusBadRequest, "project id and a 19-digit nanosecond timestamp are required")
+		return
+	}
+	caller := authpkg.CallerFromContext(r.Context())
+	teamFilter := r.URL.Query().Get("team")
+
+	prefixes, crToEffective, err := h.teamProjectPrefixes(r.Context())
+	if err != nil {
+		writeK8sError(w, "get project history snapshot: resolve prefixes", err)
+		return
+	}
+	matches, err := h.resolveProjectMeta(r.Context(), projectID, prefixes, teamFilter, caller, crToEffective)
+	if err != nil {
+		writeK8sError(w, "get project history snapshot", err)
+		return
+	}
+	match, ok := h.resolveSingleProjectMatch(w, matches)
+	if !ok {
+		return
+	}
+	if err := h.checkProjectAccess(caller, match.team, crToEffective); err != nil {
+		if _, ok := err.(*accessDeniedError); ok {
+			httputil.WriteError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		httputil.WriteError(w, http.StatusForbidden, err.Error())
+		return
+	}
+
+	historyKey := strings.TrimSuffix(match.key, "meta.json") + "history/" + timestamp + ".json"
+	data, err := h.oss.GetObject(r.Context(), historyKey)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			httputil.WriteError(w, http.StatusNotFound, "snapshot not found")
+			return
+		}
+		httputil.WriteError(w, http.StatusInternalServerError, "read project history snapshot: "+err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+// projectEvent is one task transition surfaced by the events endpoint.
+type projectEvent struct {
+	Ts     string `json:"ts"`
+	TaskID string `json:"task_id"`
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Actor  string `json:"actor,omitempty"`
+	Action string `json:"action"`
+	Note   string `json:"note,omitempty"`
+	// Seq: the writer-persisted event identity (see taskTransition).
+	Seq int64 `json:"seq,omitempty"`
+}
+
+// projectEventsResponse is the GET /api/v1/projects/{id}/events payload.
+//
+// next_cursor is an opaque, URL-safe string encoding the page's last
+// event identity: (ts, task_id, seq), where seq is the writer-persisted
+// per-task sequence number. Pass it back as cursor to continue. The
+// anchor is located by exact identity in the freshly rebuilt list, so
+// the cursor stays valid while new transitions are appended at the tail
+// and even while the per-task history cap (50 entries, oldest dropped)
+// truncates events the client already read. Duplicates (same second,
+// same task, same content — permitted by the writer) carry distinct seq
+// values and are never skipped or repeated. An empty next_cursor means
+// the tail was reached.
+//
+// A bare offset cursor cannot be used: truncation shifts every offset
+// and silently skips unread events. A content-tuple cursor cannot be
+// used either: timestamps are second-resolution and repeated progress
+// entries are allowed, so content equality is not event identity — a
+// content anchor silently skips or repeats duplicates. Cursors in the
+// pre-seq content-tuple format (no version field) are answered with
+// cursor_expired: the client re-fetches from the start.
+//
+// Seq-less legacy entries are the one identity the exact-match contract
+// cannot name uniquely: several duplicates written in the same second
+// share (ts, task_id, seq=0). Cursors anchored inside such a group
+// additionally carry the event's occurrence index and the list length
+// as a snapshot marker, so they advance exactly one event at a time
+// over stable or read-only histories — including completed projects
+// whose history will never be backfilled with seq — and answer
+// cursor_expired if the snapshot truncates before the client catches
+// up. No cursor can ever be issued that fails to advance.
+type projectEventsResponse struct {
+	ProjectID  string         `json:"project_id"`
+	Events     []projectEvent `json:"events"`
+	NextCursor string         `json:"next_cursor,omitempty"`
+	// CursorExpired is true when the presented cursor is well-formed but
+	// its anchor event no longer exists in the retained history (the
+	// writer's 50-entry cap truncated it away), its seq-less duplicate
+	// snapshot was truncated (its occurrence index may have shifted),
+	// or the cursor predates the sequence format (its content anchor has
+	// no unambiguous identity). Events is empty on such a response: the
+	// client must discard the cursor and re-fetch from the start.
+	// Offsets would instead silently skip unread events here.
+	CursorExpired bool `json:"cursor_expired,omitempty"`
+}
+
+// eventsCursorAnchor identifies the last event of a page — the position a
+// client cursor points at. Identity is (ts, task_id, seq): seq is the
+// writer-persisted per-task sequence number (plugins/teamharness
+// _append_transition_history), unique per task and stable across the
+// 50-entry cap truncation. Content (from/to/actor/action/note) is not
+// part of the identity: timestamps are second-resolution and repeated
+// progress entries are allowed, so content equality cannot identify an
+// event. V marks the cursor format; anchors without it (pre-seq
+// content-tuple cursors) are answered with cursor_expired.
+//
+// Kind records the ledger family the cursor was issued from: "" for the
+// default task-transition feed, "control_action" for the audit feed. The
+// two feeds share no positions, so a cursor presented to a feed of a
+// different kind is rejected with 400 cursor_kind_mismatch. Cursors
+// issued before the kind field existed carry no Kind (format upgrade):
+// they stay valid on the default feed and are rejected on the
+// control-action feed.
+//
+// Occ and N only concern seq-less legacy entries, whose identity
+// (ts, task_id, seq=0) is shared by every duplicate written in the same
+// second:
+//   - Occ is the 0-based index of the anchored event within that
+//     same-identity group of the ascending list, so a cursor can always
+//     resume strictly past the event it names.
+//   - N is the length of the aggregated list when the cursor was issued
+//     (a snapshot marker). While the list only grows — new transitions
+//     append at the tail — the occurrences keep their positions. Once
+//     the writer's cap truncates anything (len < N) the occurrence index
+//     may no longer name the anchored event, and the cursor is answered
+//     with cursor_expired instead of resuming at a shifted position.
+//
+// Cursors anchored at a unique identity carry neither field.
+type eventsCursorAnchor struct {
+	V      int    `json:"v"`
+	Kind   string `json:"kind,omitempty"`
+	Ts     string `json:"ts"`
+	TaskID string `json:"task_id"`
+	Seq    int64  `json:"seq"`
+	Occ    int64  `json:"occ,omitempty"`
+	N      int64  `json:"n,omitempty"`
+}
+
+const eventsCursorVersion = 1
+
+func anchorOfEvent(e projectEvent, occ, n int64, kind string) eventsCursorAnchor {
+	return eventsCursorAnchor{
+		V:      eventsCursorVersion,
+		Kind:   kind,
+		Ts:     e.Ts,
+		TaskID: e.TaskID,
+		Seq:    e.Seq,
+		Occ:    occ,
+		N:      n,
+	}
+}
+
+// encodeEventsCursorFor encodes the event at pos as the page's
+// next_cursor. A seq-less legacy event can share its (ts, task_id,
+// seq=0) identity with other events of the same second; the cursor then
+// carries the event's occurrence index within that group plus the list
+// length as a snapshot marker, so the next request resumes exactly past
+// this event — and expires explicitly if the snapshot truncated —
+// instead of issuing a cursor that cannot advance.
+func encodeEventsCursorFor(events []projectEvent, pos int, kind string) string {
+	e := events[pos]
+	total, occ := int64(0), int64(0)
+	for i, f := range events {
+		if f.Ts != e.Ts || f.TaskID != e.TaskID || f.Seq != e.Seq {
+			continue
+		}
+		total++
+		if i < pos {
+			occ++
+		}
+	}
+	if total <= 1 {
+		return encodeEventsCursor(e, 0, 0, kind)
+	}
+	return encodeEventsCursor(e, occ, int64(len(events)), kind)
+}
+
+// encodeEventsCursor packs an anchor as an opaque cursor. Raw URL-safe
+// base64 keeps it free to pass as a query parameter unescaped.
+func encodeEventsCursor(e projectEvent, occ, n int64, kind string) string {
+	b, err := json.Marshal(anchorOfEvent(e, occ, n, kind))
+	if err != nil {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// decodeEventsCursor parses a client cursor. ok=false means the value is
+// not well-formed (400); a well-formed cursor whose anchor has been
+// truncated out of the retained history — or whose format predates the
+// sequence version — is reported separately as CursorExpired.
+func decodeEventsCursor(raw string) (eventsCursorAnchor, bool) {
+	b, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return eventsCursorAnchor{}, false
+	}
+	var a eventsCursorAnchor
+	if err := json.Unmarshal(b, &a); err != nil {
+		return eventsCursorAnchor{}, false
+	}
+	// ts is the minimum identity of a transition. task_id is NOT required:
+	// the control-action feed has no task (events carry task_id ""), and
+	// pre-kind cursors may legitimately omit it. from/to/action would be
+	// empty only for a malformed event that collectProjectEvents never
+	// produces; an unknown kind is rejected because it cannot bind to any
+	// feed.
+	if a.Ts == "" || a.Occ < 0 || a.N < 0 {
+		return eventsCursorAnchor{}, false
+	}
+	if a.Kind != "" && a.Kind != "control_action" {
+		return eventsCursorAnchor{}, false
+	}
+	return a, true
+}
+
+const (
+	projectEventsDefaultLimit = 50
+	projectEventsMaxLimit     = 200
+)
+
+// GetProjectEvents handles GET /api/v1/projects/{id}/events?limit=&cursor=.
+//
+// Read-time aggregation of the per-task transition history: every task
+// meta of the project graph is read (same scope rules as readTasksDetail —
+// the project's owning prefix only, no cross-scope fallback) and its
+// `history` entries are merged into one ascending list. No new storage and
+// no write-side hook.
+//
+// The kind query parameter selects the ledger family: absent (default)
+// serves the task-transition aggregation exactly as before;
+// "control_action" serves the control-action audit ledger derived from the
+// project meta's controlActions entries (action values "control.pause" /
+// "control.resume" / "control.replan" / "control.cancel" / "control.complete").
+// Any other value is rejected with 400. Cursors are bound to the feed
+// they were issued from via the anchor's kind field: presenting a
+// cursor issued for one feed on the other is rejected with 400
+// cursor_kind_mismatch, and a cursor issued before the kind field
+// existed (no kind) is only valid on the default feed.
+//
+// Auth mirrors GetProjectHistory: cross-team access is hidden as 404.
+func (h *ProjectHandler) GetProjectEvents(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	if projectID == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "project id is required")
+		return
+	}
+	caller := authpkg.CallerFromContext(r.Context())
+	teamFilter := r.URL.Query().Get("team")
+
+	prefixes, crToEffective, err := h.teamProjectPrefixes(r.Context())
+	if err != nil {
+		writeK8sError(w, "get project events: resolve prefixes", err)
+		return
+	}
+	matches, err := h.resolveProjectMeta(r.Context(), projectID, prefixes, teamFilter, caller, crToEffective)
+	if err != nil {
+		writeK8sError(w, "get project events", err)
+		return
+	}
+	match, ok := h.resolveSingleProjectMatch(w, matches)
+	if !ok {
+		return
+	}
+	if err := h.checkProjectAccess(caller, match.team, crToEffective); err != nil {
+		if _, ok := err.(*accessDeniedError); ok {
+			httputil.WriteError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		httputil.WriteError(w, http.StatusForbidden, err.Error())
+		return
+	}
+
+	limit := projectEventsDefaultLimit
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 {
+			httputil.WriteError(w, http.StatusBadRequest, "limit must be a positive integer")
+			return
+		}
+		limit = n
+	}
+	if limit > projectEventsMaxLimit {
+		limit = projectEventsMaxLimit
+	}
+	// kind selects the ledger family; anything but "" / "control_action"
+	// is rejected so a typo cannot silently filter the wrong ledger.
+	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
+	switch kind {
+	case "", "control_action":
+	default:
+		httputil.WriteError(w, http.StatusBadRequest, "kind must be empty or control_action")
+		return
+	}
+	anchor := eventsCursorAnchor{}
+	hasCursor := false
+	if raw := strings.TrimSpace(r.URL.Query().Get("cursor")); raw != "" {
+		a, ok := decodeEventsCursor(raw)
+		if !ok {
+			httputil.WriteError(w, http.StatusBadRequest, "invalid cursor")
+			return
+		}
+		// Cursors are bound to the feed they were issued from: the anchor
+		// records the issuing kind ("" = default task-transition feed)
+		// and the two feeds share no positions, so a cross-feed cursor
+		// would resume at a meaningless offset. Cursors issued before the
+		// kind field existed carry no Kind (format upgrade); they are
+		// only meaningful for the default feed, so a non-empty kind
+		// rejects them exactly like any other mismatch.
+		if a.Kind != kind {
+			httputil.WriteError(w, http.StatusBadRequest, "cursor_kind_mismatch")
+			return
+		}
+		anchor = a
+		hasCursor = true
+	}
+
+	events := h.collectProjectEvents(r.Context(), match.meta, match.team)
+	if kind == "control_action" {
+		// Audit ledger family: replace the task-transition aggregation with
+		// the control-actions derived from the project meta. The cursor and
+		// pagination machinery below is reused unchanged.
+		events = controlActionEvents(match.meta)
+	}
+	resp := projectEventsResponse{ProjectID: projectID, Events: []projectEvent{}}
+	if hasCursor && anchor.V != eventsCursorVersion {
+		// A pre-seq (content-tuple) cursor has no unambiguous identity
+		// under the new contract; answer an explicit reset instead of
+		// matching by ambiguous content.
+		resp.CursorExpired = true
+		httputil.WriteJSON(w, http.StatusOK, resp)
+		return
+	}
+	offset := 0
+	if hasCursor {
+		resume, ok := resumeAfterAnchor(events, anchor)
+		if !ok {
+			// The anchor cannot be located unambiguously: it was
+			// truncated out of the retained history, it never existed,
+			// or it points into a seq-less duplicate group whose snapshot
+			// was truncated (its occurrence index may have shifted).
+			// Resuming would silently skip or repeat events, so signal an
+			// explicit reset instead.
+			resp.CursorExpired = true
+			httputil.WriteJSON(w, http.StatusOK, resp)
+			return
+		}
+		offset = resume
+	}
+	if offset < len(events) {
+		pageEnd := offset + limit
+		if pageEnd > len(events) {
+			pageEnd = len(events)
+		}
+		resp.Events = events[offset:pageEnd]
+		if pageEnd < len(events) {
+			resp.NextCursor = encodeEventsCursorFor(events, pageEnd-1, kind)
+		}
+	}
+	httputil.WriteJSON(w, http.StatusOK, resp)
+}
+
+// resumeAfterAnchor maps a decoded cursor to the position immediately
+// after its anchored event in the freshly rebuilt list. ok=false means
+// the anchor cannot be resumed unambiguously; the caller answers
+// cursor_expired.
+//
+// An identity with exactly one occurrence resumes by exact match —
+// robust while the per-task cap truncates already-read events and new
+// events append at the tail (the documented cursor-validity contract).
+// A seq-less legacy identity can occur several times (duplicates in one
+// second share seq=0); those cursors carry Occ (which occurrence) and N
+// (list length at issuance) and resume only while the snapshot has not
+// shrunk, so the occurrence index still names the anchored event.
+func resumeAfterAnchor(events []projectEvent, a eventsCursorAnchor) (int, bool) {
+	if a.N > 0 && int64(len(events)) < a.N {
+		// The snapshot truncated: the oldest entries dropped, and a
+		// legacy occurrence index may have shifted. Refuse rather than
+		// guess.
+		return 0, false
+	}
+	occ := int64(0)
+	lastPos := -1
+	for i, e := range events {
+		if e.Ts != a.Ts || e.TaskID != a.TaskID || e.Seq != a.Seq {
+			continue
+		}
+		if a.N > 0 {
+			if occ == a.Occ {
+				return i + 1, true
+			}
+		} else {
+			lastPos = i
+		}
+		occ++
+	}
+	if a.N > 0 {
+		return 0, false // the anchored occurrence is gone (truncated)
+	}
+	if lastPos == -1 {
+		return 0, false // anchor truncated away or never existed
+	}
+	if occ != 1 {
+		// Became ambiguous (a seq-less duplicate group without a
+		// snapshot marker — a cursor issued before the occurrence
+		// format). Refuse rather than guess an occurrence direction.
+		return 0, false
+	}
+	return lastPos + 1, true
+}
+
+// collectProjectEvents reads every task meta of the project graph and
+// merges their transition histories into one ascending list (ts, then
+// task_id, then action for a stable order within a shared timestamp).
+func (h *ProjectHandler) collectProjectEvents(ctx context.Context, meta *projectMeta, team string) []projectEvent {
+	graphTasks := meta.Tasks
+	if meta.PlanType == "loop" && meta.Loop != nil {
+		graphTasks = meta.Loop.Tasks
+	}
+	taskIDs := make([]string, 0, len(graphTasks))
+	seen := map[string]bool{}
+	for _, t := range graphTasks {
+		if t.TaskID == "" || seen[t.TaskID] {
+			continue
+		}
+		seen[t.TaskID] = true
+		taskIDs = append(taskIDs, t.TaskID)
+	}
+	if len(taskIDs) == 0 {
+		return nil
+	}
+	var keys []string
+	for _, id := range taskIDs {
+		keys = append(keys, taskMetaKeys(id, team)...)
+	}
+	type histResult struct {
+		taskID  string
+		history []taskTransition
+	}
+	results := make([]histResult, len(keys))
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	for i, key := range keys {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, key string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			data, err := h.oss.GetObject(ctx, key)
+			if err != nil || len(data) == 0 {
+				return
+			}
+			var raw map[string]any
+			if json.Unmarshal(data, &raw) != nil {
+				return
+			}
+			// Ownership check, mirroring readTasksDetail: the meta must
+			// name this graph task and this project, or it is not mixed in.
+			taskID := keyForTaskID(key, taskIDs)
+			if str(raw["task_id"]) != taskID || str(raw["project_id"]) != meta.ProjectID {
+				return
+			}
+			results[i] = histResult{taskID: taskID, history: parseTaskHistory(raw["history"])}
+		}(i, key)
+	}
+	wg.Wait()
+
+	// First non-empty match per task id wins (team prefix first, same
+	// precedence as readTasksDetail).
+	byTask := make(map[string][]taskTransition, len(taskIDs))
+	for _, res := range results {
+		if res.taskID == "" || len(res.history) == 0 {
+			continue
+		}
+		if _, ok := byTask[res.taskID]; ok {
+			continue
+		}
+		byTask[res.taskID] = res.history
+	}
+	var events []projectEvent
+	for id, history := range byTask {
+		for _, t := range history {
+			events = append(events, projectEvent{
+				Ts:     t.Ts,
+				TaskID: id,
+				From:   t.From,
+				To:     t.To,
+				Actor:  t.Actor,
+				Action: t.Action,
+				Note:   t.Note,
+				Seq:    t.Seq,
+			})
+		}
+	}
+	sort.SliceStable(events, func(i, j int) bool {
+		if events[i].Ts != events[j].Ts {
+			return events[i].Ts < events[j].Ts
+		}
+		if events[i].TaskID != events[j].TaskID {
+			return events[i].TaskID < events[j].TaskID
+		}
+		return events[i].Action < events[j].Action
+	})
+	return events
+}
+
+// controlActionEvents derives the project's control-action audit ledger as
+// projectEvent values for the ?kind=control_action feed. Each entry is
+// project-level (task_id empty, no writer-persisted seq), so cursors
+// anchored inside this feed use the occurrence/snapshot mechanism the
+// feed already provides for seq-less identities.
+func controlActionEvents(meta *projectMeta) []projectEvent {
+	if len(meta.ControlActions) == 0 {
+		return nil
+	}
+	events := make([]projectEvent, 0, len(meta.ControlActions))
+	for _, a := range meta.ControlActions {
+		events = append(events, projectEvent{
+			Ts:     a.At,
+			TaskID: "",
+			Actor:  a.Actor,
+			Action: "control." + a.Action,
+			Note:   a.Reason,
+		})
+	}
+	sort.SliceStable(events, func(i, j int) bool {
+		if events[i].Ts != events[j].Ts {
+			return events[i].Ts < events[j].Ts
+		}
+		return events[i].Action < events[j].Action
+	})
+	return events
+}
+
+// projectHistoryLimit caps the retained meta.json snapshots per project.
+// Snapshots are written on every human intervention (pause/resume/replan/
+// cancel/complete), so the limit bounds storage growth while keeping a
+// meaningful timeline window for inspection and rollback.
+const projectHistoryLimit = 50
+
+// snapshotProjectMeta stores a best-effort copy of the current meta.json
+// into the project's history/ directory before writeProjectMeta overwrites
+// it. Every intervention therefore leaves a recoverable point in the
+// project timeline (checkpoint-inspired: immutable history files, like the
+// QwenPaw workspace checkpoint model).
+//
+// Everything here is best-effort: failures (unreadable meta, put error,
+// gc error) are logged and swallowed — history bookkeeping must never block
+// or fail the intervention write itself.
+func (h *ProjectHandler) snapshotProjectMeta(ctx context.Context, key string) {
+	if !strings.HasSuffix(key, "meta.json") {
+		return
+	}
+	historyPrefix := strings.TrimSuffix(key, "meta.json") + "history/"
+	historyKey := historyPrefix + strconv.FormatInt(time.Now().UnixNano(), 10) + ".json"
+
+	data, err := h.oss.GetObject(ctx, key)
+	if err != nil {
+		log.FromContext(ctx).Info("snapshot project meta: read current failed", "key", key, "error", err.Error())
+		return
+	}
+	if err := h.oss.PutObject(ctx, historyKey, data); err != nil {
+		log.FromContext(ctx).Info("snapshot project meta: write history failed", "key", historyKey, "error", err.Error())
+		return
+	}
+
+	// Best-effort gc: keep the most recent projectHistoryLimit snapshots.
+	// Timestamp names sort lexically == chronologically.
+	children, err := h.oss.ListObjects(ctx, historyPrefix)
+	if err != nil || len(children) <= projectHistoryLimit {
+		return
+	}
+	sort.Strings(children)
+	for _, old := range children[:len(children)-projectHistoryLimit] {
+		if err := h.oss.DeleteObject(ctx, historyPrefix+old); err != nil {
+			log.FromContext(ctx).Info("snapshot project meta: gc delete failed", "key", historyPrefix+old, "error", err.Error())
+			return
+		}
+	}
+}
+
+// writeProjectMeta is the shared write-back helper. It applies the mtime
+// optimistic lock: if expectedMeta (the ModTime read at resolve time) is
+// non-zero, it re-stats the object and returns a 409 conflict when the
+// remote mtime has advanced — meaning a worker _sync_project pushed a newer
+// version while we were editing.
+// writeProjectMeta writes the updated meta back with a conditional write
+// bound to the ETag read at resolve time. A concurrent modification between
+// read and write (Worker _sync_project, another Controller request) changes
+// the ETag and the write fails with 409 — never silently overwritten. When
+// the backend reported no ETag (empty), it falls back to a plain write.
+func (h *ProjectHandler) writeProjectMeta(ctx context.Context, w http.ResponseWriter, key string, meta *projectMeta, etag string) bool {
+	data, err := json.Marshal(meta)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "marshal project meta: "+err.Error())
+		return false
+	}
+
+	// Timeline: persist the pre-intervention version before overwriting.
+	// Best-effort — never blocks the write.
+	h.snapshotProjectMeta(ctx, key)
+
+	if etag != "" {
+		// Strict: project meta is critical metadata — a 501 provider must
+		// fail the write closed (503) rather than degrade to the racy
+		// Stat-then-Put, which could clobber a concurrent _sync_project
+		// version (#1426 P1).
+		err = strictPut(ctx, h.oss, key, data, etag)
+		if err == nil {
+			return true
+		}
+		if errors.Is(err, oss.ErrPreconditionFailed) {
+			httputil.WriteError(w, http.StatusConflict, "conflict: project was modified concurrently")
+			return false
+		}
+		if errors.Is(err, oss.ErrConditionalUnsupported) {
+			httputil.WriteError(w, http.StatusServiceUnavailable,
+				"conditional_write_unsupported: storage provider does not support conditional writes")
+			return false
+		}
+		httputil.WriteError(w, http.StatusInternalServerError, "write project meta: "+err.Error())
+		return false
+	}
+	if err := h.oss.PutObject(ctx, key, data); err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "write project meta: "+err.Error())
+		return false
+	}
+	return true
+}
+
+// projectMetaCommitMaxBytes caps the commit body at 1 MiB: a project meta is
+// small by construction, and the cap bounds the request before it reaches
+// storage.
+const projectMetaCommitMaxBytes = 1 << 20
+
+// pauseSourcesField is the exact JSON key the task runtime persists and
+// reads. Go's struct decoding matches JSON names case-insensitively, so a
+// struct-based presence check accepts "PAUSE_SOURCES":["user"] while the
+// runtime reads the exact lowercase key (the round-11 maintainer repro:
+// the check passed and the durable pause stayed cleared). The helpers below
+// therefore parse the object maps and bind to the exact key; a case variant
+// is reported as an ambiguity the caller rejects.
+const pauseSourcesField = "pause_sources"
+
+// exactPauseSources returns the exact-key loop.pause_sources list and
+// whether any case-variant alias of "loop" or "pause_sources" is present.
+// The task runtime reads the exact lowercase keys, so only the exact value
+// decides the durable state; an alias can only shadow it.
+func exactPauseSources(meta []byte) (sources []string, hasAlias bool) {
+	if len(meta) == 0 {
+		return nil, false
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(meta, &top); err != nil {
+		return nil, false
+	}
+	var loopRaw json.RawMessage
+	for key, raw := range top {
+		switch {
+		case key == "loop":
+			loopRaw = raw
+		case strings.EqualFold(key, "loop"):
+			hasAlias = true
+		}
+	}
+	if len(loopRaw) == 0 {
+		return nil, hasAlias
+	}
+	var loop map[string]json.RawMessage
+	if err := json.Unmarshal(loopRaw, &loop); err != nil {
+		return nil, hasAlias
+	}
+	for key, raw := range loop {
+		switch {
+		case key == pauseSourcesField:
+			_ = json.Unmarshal(raw, &sources)
+		case strings.EqualFold(key, pauseSourcesField):
+			hasAlias = true
+		}
+	}
+	return sources, hasAlias
+}
+
+// exactProjectStatus returns the exact-key top-level “status“ and whether
+// the key is present at all. A case-variant alias is reported separately:
+// the handler treats an alias-only status as "no status", the same way the
+// task runtime does (it reads the exact lowercase key).
+func exactProjectStatus(meta []byte) (status string, present bool, hasAlias bool) {
+	if len(meta) == 0 {
+		return "", false, false
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(meta, &top); err != nil {
+		return "", false, false
+	}
+	for key, raw := range top {
+		switch {
+		case key == "status":
+			present = true
+			_ = json.Unmarshal(raw, &status)
+		case strings.EqualFold(key, "status"):
+			hasAlias = true
+		}
+	}
+	return status, present, hasAlias
+}
+
+// canonicalProjectStatuses are the exact project-status values the rest of
+// the system reads: the Controller's own PauseProject / ResumeProject /
+// ReplanProject compare with ==, and the TeamHarness gate treats exactly
+// "paused" as paused and exactly "active" as runnable. The metadata
+// endpoint stores the body byte-for-byte, so any other spelling — " paused ",
+// "PAUSED", "" — would persist a value no reader interprets the way the
+// writer meant (round 15).
+var canonicalProjectStatuses = map[string]struct{}{
+	"active":    {},
+	"paused":    {},
+	"completed": {},
+}
+
+// canonicalProjectStatus reports whether status is one of the exact values
+// above. An empty or padded string is NOT canonical.
+func canonicalProjectStatus(status string) bool {
+	_, ok := canonicalProjectStatuses[status]
+	return ok
+}
+
+// normalizedProjectStatus is the comparison view used by the AUTHORITY
+// decision only (never for what gets stored): legacy data written before
+// the canonical rule may carry " Paused ", and a canonical rewrite of it
+// must not be mistaken for a release attempt.
+func normalizedProjectStatus(status string) string {
+	return strings.ToLower(strings.TrimSpace(status))
+}
+
+// canonicalPauseSource reports whether source is already in the form both
+// readers produce (Go parsePauseSourcesMeta and the Python gate lowercase
+// and trim). A non-canonical entry is an equivalent-but-unstable spelling:
+// the runtime treats it as the canonical source while the control plane
+// compares exactly, so it must not be introduced by a commit.
+func canonicalPauseSource(source string) bool {
+	return source != "" && source == strings.ToLower(strings.TrimSpace(source))
+}
+
+// writeMetaConflict writes the standard 409 body for a stale meta commit:
+// the caller must re-read, merge and retry (#1402).
+func writeMetaConflict(w http.ResponseWriter) {
+	httputil.WriteJSON(w, http.StatusConflict, struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}{Code: "conflict", Message: "project meta changed since the read; re-read, merge and retry"})
+}
+
+// pauseSourcesContain reports whether the exact-key list contains source.
+func pauseSourcesContain(sources []string, source string) bool {
+	for _, entry := range sources {
+		if entry == source {
+			return true
+		}
+	}
+	return false
+}
+
+// PutProjectMeta conditionally commits a project's full meta.json against
+// the version the caller read (the controller-side conditional commit
+// endpoint, #1402). The worker's filesync path used to `mc stat` and then
+// `mc cp` unconditionally: when a Controller handler committed a pause into
+// the meta in between, the blind copy clobbered it (remote
+// pause_sources=[], gate unpaused) while the sync still reported
+// ok=true/synced=true. This endpoint removes the blind write — the commit
+// is a strict If-Match CAS (PutObjectIfMatchStrict) bound to the ETag the
+// caller passes, and a mismatch is a 409 the client must resolve by
+// re-reading, merging and retrying.
+//
+// PUT /api/v1/projects/{id}/meta
+//
+//	Header If-Match: <ETag from the read / previous commit> (required)
+//	Body: the full meta.json as a JSON object (<= 1 MiB), written through
+//	byte-for-byte (no re-marshal, so the stored bytes equal the commit).
+//
+// Responses: 428 missing If-Match · 413 body > 1 MiB · 400 body not a JSON
+// object · 404 unknown project · 403 worker outside its team · 409 ETag
+// mismatch · 503 backend without strict conditional writes ·
+// 200 {"etag": <new ETag of the committed version>}.
+//
+// No history snapshot and no control-action audit entry: this is the
+// worker's high-frequency commit path, and amplifying every commit with
+// extra writes would widen the write storm this endpoint exists to close.
+// The intervention audit trail stays on the lifecycle endpoints.
+// Idempotency is intrinsic to If-Match: re-sending the same body against
+// the same version succeeds once; the second attempt sees the new ETag and
+// fails with 409 until it re-reads.
+func (h *ProjectHandler) PutProjectMeta(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	if projectID == "" {
+		writeError(w, http.StatusBadRequest, "project id is required")
+		return
+	}
+
+	// The commit is conditional by construction: without an If-Match there
+	// is no read version to bind, and this endpoint never blind-writes.
+	ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
+	if ifMatch == "" {
+		writeError(w, http.StatusPreconditionRequired,
+			"If-Match is required: read the meta and pass its ETag; this endpoint never blind-writes")
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, projectMetaCommitMaxBytes))
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "project meta commit body exceeds 1 MiB")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "read project meta commit body: "+err.Error())
+		return
+	}
+	// The body must be a JSON object. The decode is validation only — the
+	// raw bytes are what get written (byte-identical round-trip).
+	var asObject map[string]json.RawMessage
+	if err := json.Unmarshal(body, &asObject); err != nil {
+		writeError(w, http.StatusBadRequest, "project meta commit body must be a JSON object: "+err.Error())
+		return
+	}
+	// A bare JSON null unmarshals into a nil map WITHOUT an error, and the
+	// raw bytes are what get written — a "null" commit would replace the
+	// whole project meta (including the durable loop.pause_sources) with
+	// the literal null. Reject it before the conditional write (#1402
+	// round 9).
+	if asObject == nil {
+		writeError(w, http.StatusBadRequest, "project meta commit body must be a JSON object, not null")
+		return
+	}
+
+	pwc, failed := h.readProjectWriteContext(w, r)
+	if failed {
+		return
+	}
+
+	// Worker team-scope boundary (the real one): the middleware cannot
+	// resolve project -> team (projectNameFn returns only the id), so the
+	// authorizer's requireSameTeam short-circuits on an empty ResourceTeam.
+	// A worker may commit only the meta of a project in its own team; the
+	// global prefix resolves to team "" and is therefore unreachable for
+	// workers. Admin/manager skip (full access); team leaders and L2 humans
+	// were already scoped above by checkProjectAccess (W4: 404, never 403).
+	if caller := authpkg.CallerFromContext(r.Context()); caller != nil && caller.Role == authpkg.RoleWorker {
+		if !caller.TeamMatches(pwc.team) {
+			writeError(w, http.StatusForbidden, "worker can only commit the meta of a project in its own team")
+			return
+		}
+	}
+
+	// The human pause source is server-owned state for EVERY non-admin
+	// caller (#1402 round 10, widened in round 12): If-Match binds the
+	// version, not the field authority. A commit from a worker, manager,
+	// team leader or L2 human that drops loop.pause_sources=["user"] — or
+	// omits the loop object entirely — must not clear a pause the admin
+	// placed; only the admin and the dedicated resume endpoint may. The
+	// earlier worker-only gate left the other three identities able to
+	// clear the veto through the metadata path while ResumeLoop still
+	// returned 403.
+	//
+	// Ordinary task-progress commits keep the source and stay on the
+	// no-extra-read path; only a body that lacks the source pays the read
+	// that decides whether protecting it is required.
+	// Field-authority + canonical-spelling rules for the metadata commit
+	// (#1402 rounds 10-15). The body is stored byte-for-byte, so everything
+	// here must agree with what the READERS do with those bytes:
+	//
+	//   * a case-variant alias of "loop"/"pause_sources"/"status" is
+	//     rejected: the readers only look at the exact lowercase keys, so
+	//     an alias would silently empty the real field (round 11);
+	//   * a non-canonical spelling of a pause-relevant value is rejected
+	//     unless it is a byte-identical echo of what is already stored: a
+	//     padded/cased "status" or a " user " source reads differently in
+	//     the runtime than in this check, which is exactly how a manager
+	//     released a pause by writing " paused " (round 15);
+	//   * non-admin callers may not release the human pause source or a
+	//     stored paused status (rounds 10/14), and escalating to paused
+	//     stays allowed (a pause is fail-closed).
+	caller := authpkg.CallerFromContext(r.Context())
+	isAdmin := caller != nil && caller.Role == authpkg.RoleAdmin
+	bodySources, bodySourcesAlias := exactPauseSources(body)
+	bodyStatus, bodyStatusPresent, bodyStatusAlias := exactProjectStatus(body)
+	if bodySourcesAlias {
+		writeError(w, http.StatusBadRequest,
+			"ambiguous case alias for loop."+pauseSourcesField+
+				": the task runtime persists and reads the exact lowercase key")
+		return
+	}
+	if bodyStatusAlias {
+		writeError(w, http.StatusBadRequest,
+			`ambiguous case alias for "status": the task runtime persists and reads the exact lowercase key`)
+		return
+	}
+	statusCanonical := !bodyStatusPresent || canonicalProjectStatus(bodyStatus)
+	sourcesCanonical := true
+	for _, source := range bodySources {
+		if !canonicalPauseSource(source) {
+			sourcesCanonical = false
+			break
+		}
+	}
+	// The read is needed when a non-admin commit might release a pause,
+	// and whenever a canonicality question must be answered against the
+	// stored bytes (the byte-identical-echo exception).
+	needsRead := !isAdmin &&
+		(!pauseSourcesContain(bodySources, pauseSourceUser) ||
+			normalizedProjectStatus(bodyStatus) != "paused")
+	needsRead = needsRead || !statusCanonical || !sourcesCanonical
+	if needsRead {
+		current, readErr := h.oss.GetObject(r.Context(), pwc.key)
+		switch {
+		case readErr == nil:
+			currentStatus, currentStatusPresent, _ := exactProjectStatus(current)
+			currentSources, _ := exactPauseSources(current)
+			if !statusCanonical {
+				if !(currentStatusPresent && bodyStatus == currentStatus) {
+					writeError(w, http.StatusBadRequest,
+						"noncanonical project status "+strconv.Quote(bodyStatus)+
+							": the runtime compares the exact string, so the stored value would not mean what it spells (use one of active, paused, completed)")
+					return
+				}
+			}
+			if !sourcesCanonical {
+				for _, source := range bodySources {
+					if canonicalPauseSource(source) {
+						continue
+					}
+					if !pauseSourcesContain(currentSources, source) {
+						writeError(w, http.StatusBadRequest,
+							"noncanonical pause source "+strconv.Quote(source)+
+								": the runtime lowercases and trims sources, so this entry would pause the project under a spelling the resume endpoint cannot address")
+						return
+					}
+				}
+			}
+			if !isAdmin {
+				// A stale If-Match is a version conflict, not a permanent
+				// refusal: the client must re-read and merge (which keeps
+				// the server-owned values) and retry. Only a caller bound
+				// to the CURRENT version gets the field-authority 403.
+				stale := ifMatch != pwc.etag
+				if !pauseSourcesContain(bodySources, pauseSourceUser) &&
+					pauseSourcesContain(currentSources, pauseSourceUser) {
+					if stale {
+						writeMetaConflict(w)
+						return
+					}
+					writeError(w, http.StatusForbidden,
+						"the human pause source is server-owned; a meta commit cannot clear it (use the resume endpoint)")
+					return
+				}
+				if normalizedProjectStatus(bodyStatus) != "paused" &&
+					currentStatusPresent && normalizedProjectStatus(currentStatus) == "paused" {
+					if stale {
+						writeMetaConflict(w)
+						return
+					}
+					writeError(w, http.StatusForbidden,
+						"the paused project status is server-owned; a meta commit cannot release it (use the resume endpoint)")
+					return
+				}
+			}
+		case errors.Is(readErr, os.ErrNotExist):
+			// No stored meta yet: there is no pause to protect, and a
+			// non-canonical body has no echo to be identical to.
+			if !statusCanonical || !sourcesCanonical {
+				writeError(w, http.StatusBadRequest,
+					"noncanonical pause value: the runtime compares exact strings, so the stored value would not mean what it spells")
+				return
+			}
+		default:
+			writeError(w, http.StatusInternalServerError,
+				"verify the server-owned pause state: "+readErr.Error())
+			return
+		}
+	}
+
+	// The unified exit is the STRICT conditional write (loop_handler's
+	// conditionalWriter): a backend whose If-Match can degrade to
+	// compare-then-put — or that does not implement it at all — is rejected
+	// with 503, never an unconditional write.
+	strict, ok := h.oss.(conditionalWriter)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable,
+			"project meta commit requires a backend with strict conditional writes: "+oss.ErrConditionalUnsupported.Error())
+		return
+	}
+	if err := strict.PutObjectIfMatchStrict(r.Context(), pwc.key, body, ifMatch); err != nil {
+		switch {
+		case errors.Is(err, oss.ErrPreconditionFailed):
+			// The meta changed since the caller's read: the write did NOT
+			// land. The client re-reads, merges and retries with the new
+			// ETag — this endpoint never guesses.
+			httputil.WriteJSON(w, http.StatusConflict, struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			}{Code: "conflict", Message: "project meta changed since the read; re-read, merge and retry"})
+		case errors.Is(err, oss.ErrConditionalUnsupported):
+			// The backend cannot honor If-Match at all: fail closed.
+			writeError(w, http.StatusServiceUnavailable,
+				"backend cannot provide conditional writes: "+oss.ErrConditionalUnsupported.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, "commit project meta: "+err.Error())
+		}
+		return
+	}
+
+	// Report the ETag of the version that actually landed (re-stat, not
+	// computed): the client binds its next commit to it.
+	committed, err := h.oss.StatMeta(r.Context(), pwc.key)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "stat project meta after commit: "+err.Error())
+		return
+	}
+	httputil.WriteJSON(w, http.StatusOK, struct {
+		ETag string `json:"etag"`
+	}{ETag: committed.ETag})
+}
+
+// interventionNotify sends an admin message to the project's source room so
+// agents there learn about a human intervention without polling. Best-effort:
+// failures (no source room, no matrix client, send error) are logged and
+// swallowed — the write already succeeded; the notification is a convenience.
+func (h *ProjectHandler) interventionNotify(ctx context.Context, meta *projectMeta, message string) {
+	if h.matrix == nil {
+		return
+	}
+	roomID := strings.TrimSpace(meta.SourceRoomID)
+	if roomID == "" {
+		if rr, ok := meta.ReplyRoute["target_session"].(string); ok && rr != "" {
+			roomID = strings.TrimSpace(rr)
+		}
+	}
+	if roomID == "" {
+		return
+	}
+	if err := h.matrix.SendMessageAsAdmin(ctx, roomID, message); err != nil {
+		ctrlLog := log.FromContext(ctx)
+		ctrlLog.Error(err, "project intervention notification failed", "roomID", roomID)
+	}
+}
+
+// teamHarnessSafeProjectID generates a default project id accepted by
+// TeamHarness _safe_id ([A-Za-z0-9][A-Za-z0-9._-]*). A UUID guarantees
+// uniqueness (crypto/rand), unlike a clock-based suffix whose resolution can
+// repeat across consecutive calls. RFC3339 timestamps contain ':' and are
+// rejected upstream, so the default cannot use utcTimestamp.
+func teamHarnessSafeProjectID() string {
+	return "proj-" + uuid.NewString()
+}
+
+// contentETag returns the MD5 hex digest of data — the ETag MinIO assigns
+// to a single-part PutObject. Computing it from the read bytes (rather than
+// a separate stat) binds the write's precondition to exactly the version
+// that was read.
+func contentETag(data []byte) string {
+	sum := md5.Sum(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// nowFunc is the clock behind utcTimestamp. It is a package-level var (not a
+// let-bound function) so tests can pin it to a fixed instant and exercise
+// operation sequences inside a single wall-clock second deterministically —
+// the id_rule v1.2 regression, where pause→resume→pause within one second
+// must still yield three distinct events because the identity is the
+// committed audit_seq, never the clock.
+var nowFunc = time.Now
+
+// utcTimestamp returns an RFC3339 UTC timestamp for the audit fields
+// (updated_at / created_at).
+func utcTimestamp() string {
+	return nowFunc().UTC().Format(time.RFC3339)
+}
+
+// authzActor returns the human-readable identity of the caller for the audit
+// fields (updated_by). Admin/Manager use their username; team leaders and L2
+// humans use "username (role)".
+func authzActor(caller *authpkg.CallerIdentity) string {
+	if caller == nil || caller.Username == "" {
+		return "unknown"
+	}
+	if caller.Role == authpkg.RoleAdmin || caller.Role == authpkg.RoleManager {
+		return caller.Username
+	}
+	return fmt.Sprintf("%s (%s)", caller.Username, caller.Role)
+}
+
+// markAuditFields stamps the human-intervention audit fields on a
+// project before writing it back. It also advances the project's committed
+// operation revision (AuditSeq) in the same step: the increment only becomes
+// persistent when the caller's conditional write succeeds (the ETag binds it
+// to the read version — a concurrent writer wins, the write 409s, and the
+// in-memory increment is discarded with the meta), so a committed operation
+// always consumes exactly one seq and a failed/retried attempt consumes none.
+// Callers on a convergence path that does NOT commit a project write must not
+// call this — see CancelTask.
+func markAuditFields(meta *projectMeta, actor, reason string) {
+	meta.UpdatedBy = actor
+	meta.UpdatedAt = utcTimestamp()
+	meta.AuditSeq++
+	if reason != "" {
+		meta.PauseReason = reason
+	}
+}
+
+// controlActionEntry is one record in the project's control-action audit
+// ledger (meta.json controlActions). One entry is written per control
+// action — pause/resume/replan/cancel/complete — on both the success and
+// the failure path of the write endpoint.
+type controlActionEntry struct {
+	ActionID  string `json:"action_id"`
+	ProjectID string `json:"project_id"`
+	Action    string `json:"action"` // pause|resume|replan|cancel|complete
+	Actor     string `json:"actor"`
+	Role      string `json:"role"`
+	At        string `json:"at"`
+	Reason    string `json:"reason,omitempty"`
+	Result    string `json:"result"` // ok|error
+}
+
+// controlActionsLimit caps the retained control-action audit entries per
+// project (oldest dropped, count preserved) so a long-running project's
+// meta.json cannot grow unbounded.
+const controlActionsLimit = 200
+
+// appendControlAction records one control action on the project's audit
+// ledger. On the success path the entry rides the same meta write as the
+// intervention (no extra write, no concurrent-overwrite window); overflow
+// past controlActionsLimit drops the oldest entries and accumulates the
+// dropped count in ControlActionsTruncatedCount.
+func appendControlAction(meta *projectMeta, action, actor, role, reason, result string) {
+	meta.ControlActions = append(meta.ControlActions, controlActionEntry{
+		ActionID:  uuid.NewString(),
+		ProjectID: meta.ProjectID,
+		Action:    action,
+		Actor:     actor,
+		Role:      role,
+		At:        utcTimestamp(),
+		Reason:    reason,
+		Result:    result,
+	})
+	if len(meta.ControlActions) > controlActionsLimit {
+		dropped := len(meta.ControlActions) - controlActionsLimit
+		meta.ControlActionsTruncatedCount += dropped
+		meta.ControlActions = meta.ControlActions[dropped:]
+	}
+}
+
+// auditCaller resolves the (actor, role) pair for the control-action audit
+// ledger. The project write endpoints carry no authenticated identity in
+// the current configuration (the authz middleware exists but no auth layer
+// is wired), so an absent caller is attributed to the system with the
+// unauthenticated role; the pair fills in automatically once the auth
+// layer lands.
+func auditCaller(caller *authpkg.CallerIdentity) (actor, role string) {
+	if caller != nil && caller.Username != "" {
+		if caller.Role == "" {
+			return caller.Username, "unauthenticated"
+		}
+		return caller.Username, caller.Role
+	}
+	return "system", "unauthenticated"
+}
+
+// persistControlActionAudit is the best-effort audit write for the failure
+// path: the HTTP error response has already been sent, so the updated meta
+// is pushed directly to storage bound to the resolve-time ETag. A
+// concurrent modification (etag mismatch) or a storage failure drops the
+// entry (logged) — the audit must never mask or replace the primary error
+// response. No history snapshot is taken: the audit write changes no
+// lifecycle state.
+func (h *ProjectHandler) persistControlActionAudit(ctx context.Context, key, etag string, meta *projectMeta) {
+	data, err := json.Marshal(meta)
+	if err != nil {
+		log.FromContext(ctx).Info("control action audit: marshal failed", "key", key, "error", err.Error())
+		return
+	}
+	if etag != "" {
+		// Strict: the audit write re-binds the whole meta to the resolve-time
+		// ETag, so on a 501 provider the degraded Stat-then-Put could clobber
+		// a concurrent meta version. Dropping the audit entry (logged) is the
+		// designed best-effort loss; clobbering meta is not.
+		err = strictPut(ctx, h.oss, key, data, etag)
+	} else {
+		err = h.oss.PutObject(ctx, key, data)
+	}
+	if err != nil {
+		log.FromContext(ctx).Info("control action audit: best-effort write failed", "key", key, "error", err.Error())
+	}
+}
+
+// projectWriteContext is the resolved write target: the project meta, its
+// owning team, its exact object key, and the object's ETag at read time.
+// The ETag binds the read version to the write — writeProjectMeta performs
+// a conditional write against it, so any concurrent modification between
+// read and write fails with 409 instead of being silently overwritten.
+type projectWriteContext struct {
+	meta *projectMeta
+	team string
+	key  string
+	etag string
+}
+
+// readProjectWriteContext resolves the project + key + access check for a
+// write endpoint. Returns (meta, team, key, false) on success; on failure it
+// writes the HTTP error response and returns (nil, "", "", true).
+func (h *ProjectHandler) readProjectWriteContext(w http.ResponseWriter, r *http.Request) (*projectWriteContext, bool) {
+	projectID := r.PathValue("id")
+	if projectID == "" {
+		writeError(w, http.StatusBadRequest, "project id is required")
+		return nil, true
+	}
+	caller := authpkg.CallerFromContext(r.Context())
+	teamFilter := r.URL.Query().Get("team")
+	prefixes, crToEffective, err := h.teamProjectPrefixes(r.Context())
+	if err != nil {
+		writeK8sError(w, "resolve prefixes", err)
+		return nil, true
+	}
+	// Same resolution rules as the read endpoints: all matches collected,
+	// ambiguous id → 409 with ?team= qualifier. Writing through a silent
+	// first-match would let an id collision mutate the wrong team's project.
+	matches, err := h.resolveProjectMeta(r.Context(), projectID, prefixes, teamFilter, caller, crToEffective)
+	if err != nil {
+		writeK8sError(w, "resolve project meta", err)
+		return nil, true
+	}
+	meta, team, ok := h.resolveSingleProject(w, matches)
+	if !ok {
+		return nil, true
+	}
+	pwc := &projectWriteContext{meta: meta, team: team}
+	for _, m := range matches {
+		if m.meta == meta {
+			pwc.key = m.key
+			pwc.etag = m.etag
+			break
+		}
+	}
+	// W4: hide project existence from scoped callers (L2 / team leader) who
+	// do not own this project — same 404 semantics as GetProjectWorkflow.
+	if err := h.checkProjectAccess(caller, team, crToEffective); err != nil {
+		if _, ok := err.(*accessDeniedError); ok {
+			writeError(w, http.StatusNotFound, "project not found")
+			return nil, true
+		}
+		writeError(w, http.StatusForbidden, err.Error())
+		return nil, true
+	}
+	return pwc, false
+}
+
+// writeError is a local alias helper for handlers in this file to keep the
+// write endpoints readable.
+func writeError(w http.ResponseWriter, status int, message string) {
+	httputil.WriteError(w, status, message)
+}
+
+// PauseProject sets a project's status to paused. Pausing stops new task
+// dispatch (ready_nodes/ready_loop_nodes return empty) but does not interrupt
+// in-flight tasks. Pausing an already-paused project is rejected with 409
+// (idempotency guard, aligned with the API boundary vs the MCP tool which is
+// idempotent by design).
+//
+// POST /api/v1/projects/{id}/pause  body: {"reason": "optional note"}
+func (h *ProjectHandler) PauseProject(w http.ResponseWriter, r *http.Request) {
+	pwc, failed := h.readProjectWriteContext(w, r)
+	if failed {
+		return
+	}
+	meta := pwc.meta
+	caller := authpkg.CallerFromContext(r.Context())
+	actor, role := auditCaller(caller)
+	var reqBody struct {
+		Reason string `json:"reason"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&reqBody)
+
+	// Legacy data may carry a padded/cased status (written before the
+	// canonical rule, round 15). The control plane reads it the way the
+	// pause gate does, and both writes below store a canonical value.
+	if normalizedProjectStatus(meta.Status) == "paused" {
+		writeError(w, http.StatusConflict, "project is already paused")
+		appendControlAction(meta, "pause", actor, role, "project is already paused", "error")
+		h.persistControlActionAudit(r.Context(), pwc.key, pwc.etag, meta)
+		return
+	}
+	if meta.Status == "completed" {
+		writeError(w, http.StatusConflict, "cannot pause a completed project")
+		appendControlAction(meta, "pause", actor, role, "cannot pause a completed project", "error")
+		h.persistControlActionAudit(r.Context(), pwc.key, pwc.etag, meta)
+		return
+	}
+	meta.Status = "paused"
+	markAuditFields(meta, authzActor(caller), reqBody.Reason)
+	appendControlAction(meta, "pause", actor, role, reqBody.Reason, "ok")
+	if !h.writeProjectMeta(r.Context(), w, pwc.key, meta, pwc.etag) {
+		return
+	}
+	h.emitSignalEvent(r.Context(), signalEmitters["PauseProject"], pwc.team, signalTeamID(meta, pwc.team), meta.ProjectID, "", nil, pwc.key, refBytes(meta), map[string]any{
+		"project_id": meta.ProjectID,
+		"reason":     reqBody.Reason,
+		"actor":      authzActor(caller),
+	}, meta.AuditSeq)
+	h.interventionNotify(r.Context(), meta, fmt.Sprintf("⏸️ 项目 %s 已被暂停%s", meta.ProjectID, pauseReasonSuffix(reqBody.Reason)))
+	httputil.WriteJSON(w, http.StatusOK, h.buildWorkflow(meta, pwc.team, false, time.Time{}))
+}
+
+// ResumeProject sets a paused project back to active.
+//
+// POST /api/v1/projects/{id}/resume
+func (h *ProjectHandler) ResumeProject(w http.ResponseWriter, r *http.Request) {
+	pwc, failed := h.readProjectWriteContext(w, r)
+	if failed {
+		return
+	}
+	meta := pwc.meta
+	caller := authpkg.CallerFromContext(r.Context())
+	actor, role := auditCaller(caller)
+	if normalizedProjectStatus(meta.Status) != "paused" {
+		writeError(w, http.StatusConflict, "project is not paused")
+		appendControlAction(meta, "resume", actor, role, "project is not paused", "error")
+		h.persistControlActionAudit(r.Context(), pwc.key, pwc.etag, meta)
+		return
+	}
+	meta.Status = "active"
+	markAuditFields(meta, authzActor(caller), "")
+	appendControlAction(meta, "resume", actor, role, "", "ok")
+	if !h.writeProjectMeta(r.Context(), w, pwc.key, meta, pwc.etag) {
+		return
+	}
+	h.emitSignalEvent(r.Context(), signalEmitters["ResumeProject"], pwc.team, signalTeamID(meta, pwc.team), meta.ProjectID, "", nil, pwc.key, refBytes(meta), map[string]any{
+		"project_id": meta.ProjectID,
+		"actor":      authzActor(caller),
+	}, meta.AuditSeq)
+	h.interventionNotify(r.Context(), meta, fmt.Sprintf("▶️ 项目 %s 已恢复", meta.ProjectID))
+	httputil.WriteJSON(w, http.StatusOK, h.buildWorkflow(meta, pwc.team, false, time.Time{}))
+}
+
+// pauseReasonSuffix formats an optional pause reason for the notification.
+func pauseReasonSuffix(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return ""
+	}
+	return "（原因：" + reason + "）"
+}
+
+// ReplanProject replaces a project's DAG plan. The new tasks are validated
+// with the same semantics as TeamHarness _validate_task_graph: duplicate
+// task ids, unknown dependencies and dependency cycles are rejected. Fields
+// are normalized like _normalize_task (taskId/task_id, assignedTo/
+// assigned_to, dependsOn/depends_on, status default planned, pending→
+// planned) and previous values are preserved when a task id already exists.
+//
+// Preconditions (409): plan_type must be "dag" (loop replans go through
+// record_loop_iteration's replan decision), status must be "active", and no
+// task may be in_progress/submitted (replanning while tasks run would
+// silently orphan the executing workers).
+//
+// POST /api/v1/projects/{id}/replan  body: {"tasks": [{taskId,title,
+// assignedTo,dependsOn,status}]}
+func (h *ProjectHandler) ReplanProject(w http.ResponseWriter, r *http.Request) {
+	pwc, failed := h.readProjectWriteContext(w, r)
+	if failed {
+		return
+	}
+	meta := pwc.meta
+	caller := authpkg.CallerFromContext(r.Context())
+	actor, role := auditCaller(caller)
+	replanFail := func(message string) {
+		appendControlAction(meta, "replan", actor, role, message, "error")
+		h.persistControlActionAudit(r.Context(), pwc.key, pwc.etag, meta)
+	}
+	var reqBody struct {
+		Tasks []json.RawMessage `json:"tasks"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		replanFail("invalid request body: " + err.Error())
+		return
+	}
+
+	if meta.PlanType != "" && meta.PlanType != "dag" {
+		writeError(w, http.StatusConflict, "replan is only supported for dag plans")
+		replanFail("replan is only supported for dag plans")
+		return
+	}
+	if meta.Status != "active" {
+		writeError(w, http.StatusConflict, "replan requires an active project")
+		replanFail("replan requires an active project")
+		return
+	}
+	for _, t := range meta.Tasks {
+		if t.Status == "in_progress" || t.Status == "submitted" {
+			writeError(w, http.StatusConflict, "project has in-flight tasks; replan is only safe before execution")
+			replanFail("project has in-flight tasks; replan is only safe before execution")
+			return
+		}
+	}
+	if meta.Loop != nil {
+		for _, t := range meta.Loop.Tasks {
+			if t.Status == "in_progress" || t.Status == "submitted" {
+				writeError(w, http.StatusConflict, "project has in-flight tasks; replan is only safe before execution")
+				replanFail("project has in-flight tasks; replan is only safe before execution")
+				return
+			}
+		}
+	}
+
+	previous := map[string]projectTaskMeta{}
+	for _, t := range meta.Tasks {
+		previous[t.TaskID] = t
+	}
+	if meta.Loop != nil {
+		for _, t := range meta.Loop.Tasks {
+			previous[t.TaskID] = t
+		}
+	}
+
+	planned, err := normalizeReplanTasks(reqBody.Tasks, previous)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		replanFail(err.Error())
+		return
+	}
+	if err := validateTaskGraph(planned); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		replanFail(err.Error())
+		return
+	}
+
+	meta.Tasks = planned
+	meta.PlanType = "dag"
+	markAuditFields(meta, authzActor(caller), "")
+	appendControlAction(meta, "replan", actor, role, "", "ok")
+	if !h.writeProjectMeta(r.Context(), w, pwc.key, meta, pwc.etag) {
+		return
+	}
+	h.emitSignalEvent(r.Context(), signalEmitters["ReplanProject"], pwc.team, signalTeamID(meta, pwc.team), meta.ProjectID, "", nil, pwc.key, refBytes(meta), map[string]any{
+		"project_id": meta.ProjectID,
+		"task_count": len(planned),
+		"actor":      authzActor(caller),
+	}, meta.AuditSeq)
+	h.interventionNotify(r.Context(), meta, fmt.Sprintf("📋 项目 %s 已重规划（%d 个任务）", meta.ProjectID, len(planned)))
+	httputil.WriteJSON(w, http.StatusOK, h.buildWorkflow(meta, pwc.team, false, time.Time{}))
+}
+
+// isSafeTaskID mirrors TeamHarness _safe_id ([A-Za-z0-9][A-Za-z0-9._-]*).
+// Task ids become segments of TaskMeta object keys
+// (shared/tasks/{id}/meta.json) and are embedded in the GetTaskArtifact
+// path allowlist, so separators and traversal characters must be rejected.
+func isSafeTaskID(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case i > 0 && (r == '.' || r == '_' || r == '-'):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// normalizeReplanTasks converts raw plan tasks into projectTaskMeta with the
+// same field normalization as TeamHarness _normalize_task: it accepts
+// taskId/task_id, assignedTo/assigned_to, dependsOn/depends_on; status
+// defaults to "planned" and "pending" maps to "planned"; fields missing from
+// a raw task are preserved from the previous value when the task id already
+// exists.
+func normalizeReplanTasks(raw []json.RawMessage, previous map[string]projectTaskMeta) ([]projectTaskMeta, error) {
+	out := make([]projectTaskMeta, 0, len(raw))
+	included := make(map[string]bool, len(raw))
+	for _, item := range raw {
+		var m map[string]any
+		if err := json.Unmarshal(item, &m); err != nil {
+			return nil, fmt.Errorf("invalid task entry: %v", err)
+		}
+		taskID := strings.TrimSpace(firstString(m["taskId"], m["task_id"]))
+		if taskID == "" {
+			return nil, fmt.Errorf("taskId is required")
+		}
+		if !isSafeTaskID(taskID) {
+			return nil, fmt.Errorf("taskId must be a safe id: %s", taskID)
+		}
+		included[taskID] = true
+		prev, hasPrev := previous[taskID]
+		status := firstString(m["status"])
+		if status == "" && hasPrev {
+			status = prev.Status
+		}
+		if status == "" {
+			status = "planned"
+		}
+		if status == "pending" {
+			status = "planned"
+		}
+		if hasPrev && prev.Cancellation != nil && status != prev.Status {
+			return nil, fmt.Errorf("task %s has a committed cancellation and cannot be reopened", taskID)
+		}
+		title := firstString(m["title"])
+		if title == "" && hasPrev {
+			title = prev.Title
+		}
+		if title == "" {
+			title = taskID
+		}
+		assignee := firstString(m["assignedTo"], m["assigned_to"])
+		if assignee == "" && hasPrev {
+			assignee = prev.AssignedTo
+		}
+		deps := make([]string, 0)
+		switch d := m["dependsOn"].(type) {
+		case []any:
+			for _, item := range d {
+				deps = append(deps, str(item))
+			}
+		case []string:
+			deps = append(deps, d...)
+		}
+		if len(deps) == 0 && hasPrev {
+			deps = prev.DependsOn
+		}
+		// also accept depends_on
+		if d, ok := m["depends_on"].([]any); ok && len(d) > 0 {
+			deps = deps[:0]
+			for _, item := range d {
+				deps = append(deps, str(item))
+			}
+		}
+		out = append(out, projectTaskMeta{
+			TaskID:       taskID,
+			Title:        title,
+			AssignedTo:   assignee,
+			DependsOn:    deps,
+			Status:       status,
+			Cancellation: prev.Cancellation,
+		})
+	}
+	for taskID, prev := range previous {
+		if prev.Cancellation != nil && !included[taskID] {
+			return nil, fmt.Errorf("task %s has a committed cancellation and cannot be removed", taskID)
+		}
+	}
+	return out, nil
+}
+
+// validateTaskGraph mirrors TeamHarness _validate_task_graph: rejects
+// duplicate task ids, unknown dependencies, and dependency cycles (with the
+// cycle path in the message).
+func validateTaskGraph(tasks []projectTaskMeta) error {
+	seen := map[string]bool{}
+	ids := map[string]bool{}
+	for _, t := range tasks {
+		if seen[t.TaskID] {
+			return fmt.Errorf("duplicate task id: %s", t.TaskID)
+		}
+		seen[t.TaskID] = true
+		ids[t.TaskID] = true
+	}
+	for _, t := range tasks {
+		for _, dep := range t.DependsOn {
+			if dep == "" {
+				continue
+			}
+			if !ids[dep] {
+				return fmt.Errorf("task %s depends on unknown task: %s", t.TaskID, dep)
+			}
+		}
+	}
+	depsByID := map[string][]string{}
+	for _, t := range tasks {
+		depsByID[t.TaskID] = t.DependsOn
+	}
+	visiting := map[string]bool{}
+	visited := map[string]bool{}
+	var visit func(taskID string, path []string) error
+	visit = func(taskID string, path []string) error {
+		if visited[taskID] {
+			return nil
+		}
+		if visiting[taskID] {
+			return fmt.Errorf("task dependency cycle detected: %s -> %s", strings.Join(path, " -> "), taskID)
+		}
+		visiting[taskID] = true
+		for _, dep := range depsByID[taskID] {
+			if dep == "" {
+				continue
+			}
+			if err := visit(dep, append(path, taskID)); err != nil {
+				return err
+			}
+		}
+		delete(visiting, taskID)
+		visited[taskID] = true
+		return nil
+	}
+	for id := range depsByID {
+		if err := visit(id, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// firstString returns the first non-empty string among values.
+func firstString(values ...any) string {
+	for _, v := range values {
+		if s := str(v); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// CancelTask cancels a single task in a project. The task must be mutable
+// (not in a terminal status: completed/revision/blocked/cancelled); a reason
+// is required. The cancellation is written to the task's TaskMeta
+// (shared/tasks/{id}/meta.json) and the project node status is updated to
+// cancelled.
+//
+// POST /api/v1/projects/{id}/tasks/{taskId}/cancel
+// body: {"reason":"...","replacementTaskId":"...","submissionId":"..."}
+func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	taskID := r.PathValue("taskId")
+	if projectID == "" || taskID == "" {
+		writeError(w, http.StatusBadRequest, "project id and task id are required")
+		return
+	}
+	caller := authpkg.CallerFromContext(r.Context())
+	actor, role := auditCaller(caller)
+	teamFilter := r.URL.Query().Get("team")
+	prefixes, crToEffective, err := h.teamProjectPrefixes(r.Context())
+	if err != nil {
+		writeK8sError(w, "resolve prefixes", err)
+		return
+	}
+	matches, err := h.resolveProjectMeta(r.Context(), projectID, prefixes, teamFilter, caller, crToEffective)
+	if err != nil {
+		writeK8sError(w, "resolve project meta", err)
+		return
+	}
+	meta, team, ok := h.resolveSingleProject(w, matches)
+	if !ok {
+		return
+	}
+	key := ""
+	etag := ""
+	for _, m := range matches {
+		if m.meta == meta {
+			key = m.key
+			etag = m.etag
+			break
+		}
+	}
+	if err := h.checkProjectAccess(caller, team, crToEffective); err != nil {
+		// Denied access is not audited: the 404/403 must stay side-effect
+		// free (writing the meta would betray the project's existence).
+		if _, ok := err.(*accessDeniedError); ok {
+			writeError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	cancelFail := func(message string) {
+		appendControlAction(meta, "cancel", actor, role, message, "error")
+		h.persistControlActionAudit(r.Context(), key, etag, meta)
+	}
+
+	var reqBody struct {
+		Reason            string `json:"reason"`
+		ReplacementTaskID string `json:"replacementTaskId"`
+		SubmissionID      string `json:"submissionId"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&reqBody)
+	reason := strings.TrimSpace(reqBody.Reason)
+	if reason == "" {
+		writeError(w, http.StatusBadRequest, "reason is required")
+		cancelFail("reason is required")
+		return
+	}
+	replacementTaskID := strings.TrimSpace(reqBody.ReplacementTaskID)
+	if replacementTaskID != "" && !isPlainToken(replacementTaskID) {
+		writeError(w, http.StatusBadRequest, "replacementTaskId must be a plain token (letters, digits, '-', '_', '.')")
+		cancelFail("replacementTaskId must be a plain token (letters, digits, '-', '_', '.')")
+		return
+	}
+
+	// Verify the task belongs to this project's graph and find its current
+	// status from the project node.
+	graphTasks := meta.Tasks
+	if meta.PlanType == "loop" && meta.Loop != nil {
+		graphTasks = meta.Loop.Tasks
+	}
+	nodeStatus := ""
+	var projectCancellation *taskCancellationDecision
+	found := false
+	for _, t := range graphTasks {
+		if t.TaskID == taskID {
+			found = true
+			nodeStatus = t.Status
+			projectCancellation = t.Cancellation
+			break
+		}
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "task not found in project")
+		cancelFail("task not found in project")
+		return
+	}
+	// A node already cancelled is NOT rejected: it is the retry-convergence
+	// path — the first attempt may have written the project but failed the
+	// task-meta write, and the retry re-writes the idempotent task meta.
+	if isTerminalTaskStatus(nodeStatus) && nodeStatus != "cancelled" {
+		writeError(w, http.StatusConflict, "cannot cancel terminal task: "+nodeStatus)
+		cancelFail("cannot cancel terminal task: " + nodeStatus)
+		return
+	}
+
+	// Read the task's TaskMeta from the project's owning scope to preserve fields
+	// when writing back, then apply the submission fence and cancellation.
+	taskData, err := readTaskMetaFirst(h, r.Context(), taskID, team)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "read task meta: "+err.Error())
+		cancelFail("read task meta: " + err.Error())
+		return
+	}
+	if taskData == nil {
+		writeError(w, http.StatusNotFound, "task meta not found")
+		cancelFail("task meta not found")
+		return
+	}
+	if str(taskData["task_id"]) != taskID || str(taskData["project_id"]) != projectID {
+		writeError(w, http.StatusNotFound, "task meta not found")
+		cancelFail("task meta not found (ownership mismatch)")
+		return
+	}
+	persistedSubmissionID, _ := taskData["submission_id"].(string)
+	persistedSubmissionID = strings.TrimSpace(persistedSubmissionID)
+	requestedSubmissionID := strings.TrimSpace(reqBody.SubmissionID)
+	if persistedSubmissionID != "" && requestedSubmissionID == "" {
+		writeError(w, http.StatusConflict, "submissionId is required for the current task submission")
+		cancelFail("submissionId is required for the current task submission")
+		return
+	}
+	if requestedSubmissionID != "" && requestedSubmissionID != persistedSubmissionID {
+		writeError(w, http.StatusConflict, "submissionId does not match the current task submission")
+		cancelFail("submissionId does not match the current task submission")
+		return
+	}
+	if projectCancellation != nil &&
+		(strings.TrimSpace(projectCancellation.SubmissionID) != requestedSubmissionID ||
+			strings.TrimSpace(projectCancellation.Reason) != reason ||
+			strings.TrimSpace(projectCancellation.ReplacementTaskID) != replacementTaskID) {
+		writeError(w, http.StatusConflict, "cancel task conflicts with persisted project cancellation")
+		cancelFail("cancel task conflicts with persisted project cancellation")
+		return
+	}
+	taskStatus, _ := taskData["status"].(string)
+	taskStatus = strings.TrimSpace(taskStatus)
+	if isTerminalTaskStatus(taskStatus) && taskStatus != "cancelled" {
+		writeError(w, http.StatusConflict, "cannot cancel terminal task: "+taskStatus)
+		cancelFail("cannot cancel terminal task: " + taskStatus)
+		return
+	}
+	persistedReason, _ := taskData["cancel_reason"].(string)
+	persistedReplacementTaskID, _ := taskData["replacement_task_id"].(string)
+	persistedCancelledAt, _ := taskData["cancelled_at"].(string)
+	continuation, hasContinuation := taskData["continuation"].(map[string]any)
+	continuationStatus, _ := continuation["status"].(string)
+	continuationResolution, _ := continuation["resolution"].(string)
+	continuationStatus = strings.TrimSpace(continuationStatus)
+	continuationResolution = strings.TrimSpace(continuationResolution)
+	if hasContinuation && continuationStatus == "resolved" && continuationResolution != "cancelled" {
+		writeError(w, http.StatusConflict, "task continuation already resolved as a different decision")
+		cancelFail("task continuation already resolved as a different decision")
+		return
+	}
+	if taskStatus == "cancelled" && (strings.TrimSpace(persistedReason) != reason ||
+		strings.TrimSpace(persistedReplacementTaskID) != replacementTaskID) {
+		writeError(w, http.StatusConflict, "cancel task conflicts with existing cancellation")
+		cancelFail("cancel task conflicts with existing cancellation")
+		return
+	}
+	fullyResolved := taskStatus == "cancelled" && nodeStatus == "cancelled" &&
+		strings.TrimSpace(persistedCancelledAt) != "" &&
+		(!hasContinuation || (continuationStatus == "resolved" && continuationResolution == "cancelled"))
+	if fullyResolved {
+		httputil.WriteJSON(w, http.StatusOK, h.buildWorkflow(meta, team, false, time.Time{}))
+		return
+	}
+	taskData["status"] = "cancelled"
+	taskData["cancel_reason"] = reason
+	cancelledAt := persistedCancelledAt
+	if strings.TrimSpace(cancelledAt) == "" {
+		if projectCancellation != nil {
+			cancelledAt = strings.TrimSpace(projectCancellation.CancelledAt)
+		}
+		if hasContinuation {
+			if cancelledAt == "" {
+				resolvedAt, _ := continuation["resolved_at"].(string)
+				cancelledAt = strings.TrimSpace(resolvedAt)
+			}
+		}
+		if cancelledAt == "" {
+			cancelledAt = utcTimestamp()
+		}
+		taskData["cancelled_at"] = cancelledAt
+	}
+	// Transition audit trail: record the human cancellation in the same
+	// read-modify-write batch (the meta is rewritten anyway — no extra
+	// write amplification). Skipped on the retry-convergence path where
+	// the task meta is already cancelled, so no no-op entry is recorded.
+	if taskStatus != "cancelled" {
+		history := make([]any, 0, 1)
+		if existing, ok := taskData["history"].([]any); ok {
+			history = append(history, existing...)
+		}
+		history = append(history, map[string]any{
+			"ts":     cancelledAt,
+			"from":   taskStatus,
+			"to":     "cancelled",
+			"action": "cancel_task",
+			"actor":  authzActor(caller),
+			"note":   reason,
+		})
+		taskData["history"] = history
+	}
+	if hasContinuation && len(continuation) > 0 {
+		continuation["status"] = "resolved"
+		continuation["resolution"] = "cancelled"
+		if resolvedAt, _ := continuation["resolved_at"].(string); strings.TrimSpace(resolvedAt) == "" {
+			continuation["resolved_at"] = cancelledAt
+		}
+		taskData["continuation"] = continuation
+	}
+	if replacementTaskID != "" {
+		taskData["replacement_task_id"] = replacementTaskID
+	} else {
+		delete(taskData, "replacement_task_id")
+	}
+	cancellationDecision := projectCancellation
+	if cancellationDecision == nil {
+		cancellationDecision = &taskCancellationDecision{
+			SubmissionID:      requestedSubmissionID,
+			Reason:            reason,
+			ReplacementTaskID: replacementTaskID,
+			CancelledAt:       cancelledAt,
+		}
+	}
+	taskJSON, err := json.Marshal(taskData)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "marshal task meta: "+err.Error())
+		return
+	}
+
+	// Update the project node status to cancelled.
+	for i := range meta.Tasks {
+		if meta.Tasks[i].TaskID == taskID {
+			meta.Tasks[i].Status = "cancelled"
+			meta.Tasks[i].Cancellation = cancellationDecision
+		}
+	}
+	if meta.Loop != nil {
+		for i := range meta.Loop.Tasks {
+			if meta.Loop.Tasks[i].TaskID == taskID {
+				meta.Loop.Tasks[i].Status = "cancelled"
+				meta.Loop.Tasks[i].Cancellation = cancellationDecision
+			}
+		}
+	}
+	// The audit stamp — including the audit_seq increment — happens only when
+	// THIS request commits the project write. On the retry-convergence path
+	// (project node already cancelled by the first attempt) the intervention
+	// was already committed with the persisted revision; re-stamping here
+	// would advance the in-memory seq for a write that never happens, and the
+	// re-emit would then hash a revision the store never contained, breaking
+	// the same-operation retry idempotency the deterministic id provides.
+	if nodeStatus != "cancelled" {
+		// First attempt: stamp the audit fields, write the project node,
+		// then the task meta.
+		markAuditFields(meta, authzActor(caller), reason)
+		// Success audit: on the first attempt the entry rides the project-node
+		// write below. The retry-convergence branch (nodeStatus already
+		// "cancelled") performs no project write — the first attempt already
+		// recorded the entry — so nothing is appended there (same no-op
+		// discipline as the transition history above).
+		appendControlAction(meta, "cancel", actor, role, reason, "ok")
+		if !h.writeProjectMeta(r.Context(), w, key, meta, etag) {
+			return
+		}
+	}
+	if err := h.oss.PutObject(r.Context(), taskMetaKeys(taskID, team)[0], taskJSON); err != nil {
+		writeError(w, http.StatusInternalServerError, "write task meta: "+err.Error())
+		return
+	}
+	h.emitSignalEvent(r.Context(), signalEmitters["CancelTask"], team, signalTeamID(meta, team), meta.ProjectID, taskID, nil, taskMetaKeys(taskID, team)[0], taskJSON, map[string]any{
+		"project_id": meta.ProjectID,
+		"reason":     reason,
+		"actor":      authzActor(caller),
+	}, meta.AuditSeq)
+	h.interventionNotify(r.Context(), meta, fmt.Sprintf("🚫 任务 %s 已取消（项目 %s）", taskID, meta.ProjectID))
+	httputil.WriteJSON(w, http.StatusOK, h.buildWorkflow(meta, team, false, time.Time{}))
+}
+
+// isTerminalTaskStatus reports whether a project task node status is terminal
+// (cannot be cancelled/updated). Mirrors TERMINAL_TASK_STATUSES in server.py.
+func isTerminalTaskStatus(status string) bool {
+	switch status {
+	case "completed", "revision", "blocked", "cancelled":
+		return true
+	default:
+		return false
+	}
+}
+
+// readTaskMetaFirst reads a task's TaskMeta from the project's owning scope
+// and returns it as a mutable map. Returns nil when no readable TaskMeta
+// exists in that scope.
+func readTaskMetaFirst(h *ProjectHandler, ctx context.Context, taskID, team string) (map[string]any, error) {
+	for _, key := range taskMetaKeys(taskID, team) {
+		data, err := h.oss.GetObject(ctx, key)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, err
+		}
+		var raw map[string]any
+		if err := json.Unmarshal(data, &raw); err != nil {
+			continue
+		}
+		return raw, nil
+	}
+	return nil, nil
+}
+
+// CreateProject creates a project by writing shared/projects/{id}/meta.json.
+// The id is auto-generated unless provided (validated as a plain token).
+// team_id defaults to the caller's single team when omitted (required for
+// L2 humans with multiple teams). After a successful write an admin
+// notification is sent to the project's source room if one was provided.
+//
+// POST /api/v1/projects  body: {"title","source","requester","team_id",
+// "project_id"(optional),"source_room_id"(optional),"reply_route"(optional)}
+func (h *ProjectHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
+	caller := authpkg.CallerFromContext(r.Context())
+	var reqBody struct {
+		ProjectID    string         `json:"project_id"`
+		Title        string         `json:"title"`
+		Source       string         `json:"source"`
+		Requester    string         `json:"requester"`
+		TeamID       string         `json:"team_id"`
+		SourceRoomID string         `json:"source_room_id"`
+		ReplyRoute   map[string]any `json:"reply_route"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	title := strings.TrimSpace(reqBody.Title)
+	if title == "" {
+		writeError(w, http.StatusBadRequest, "title is required")
+		return
+	}
+	projectID := strings.TrimSpace(reqBody.ProjectID)
+	if projectID == "" {
+		// TeamHarness _safe_id only accepts [A-Za-z0-9][A-Za-z0-9._-]* —
+		// an RFC3339 timestamp (with ':') would be rejected by every
+		// subsequent projectflow operation. Generate a safe id instead.
+		projectID = teamHarnessSafeProjectID()
+	} else if !isPlainToken(projectID) {
+		writeError(w, http.StatusBadRequest, "project_id must be a plain token (letters, digits, '-', '_', '.')")
+		return
+	}
+	teamID := strings.TrimSpace(reqBody.TeamID)
+	if teamID == "" {
+		// Default to the caller's single team when unambiguous.
+		if caller != nil && len(caller.Teams) == 1 && caller.Team == "" {
+			teamID = caller.Teams[0]
+		} else if caller != nil && caller.Team != "" {
+			teamID = caller.Team
+		}
+	}
+	// Admin/Manager may create a standalone project without a team (global
+	// shared/ prefix); scoped callers (L2 / team leader) must specify a team
+	// they can access.
+	if teamID == "" && caller != nil && caller.Role != authpkg.RoleAdmin && caller.Role != authpkg.RoleManager {
+		writeError(w, http.StatusBadRequest, "team_id is required")
+		return
+	}
+
+	// L2 humans / team leaders may only create in their accessible teams
+	// (code-level). Admin/Manager pass through. checkProjectAccess expects an
+	// already-resolved owning team; construct the same caller + team check.
+	if caller != nil && (caller.Role == authpkg.RoleHuman || caller.Role == authpkg.RoleTeamLeader) {
+		_, crToEffective, err := h.teamProjectPrefixes(r.Context())
+		if err != nil {
+			writeK8sError(w, "resolve prefixes", err)
+			return
+		}
+		if err := h.checkProjectAccess(caller, teamID, crToEffective); err != nil {
+			if _, ok := err.(*accessDeniedError); ok {
+				writeError(w, http.StatusNotFound, "team not accessible")
+				return
+			}
+			writeError(w, http.StatusForbidden, err.Error())
+			return
+		}
+	}
+
+	// Write to the team-scoped prefix when a team is known; standalone
+	// projects live under global shared/. A project id collision (same id
+	// already exists) is rejected with 409.
+	key := "shared/projects/" + projectID + "/meta.json"
+	if teamID != "" {
+		key = "teams/" + teamID + "/shared/projects/" + projectID + "/meta.json"
+	}
+	if err := h.oss.Stat(r.Context(), key); err == nil {
+		writeError(w, http.StatusConflict, "project already exists: "+projectID)
+		return
+	} else if !errors.Is(err, os.ErrNotExist) {
+		writeError(w, http.StatusInternalServerError, "stat project meta: "+err.Error())
+		return
+	}
+
+	meta := &projectMeta{
+		ProjectID: projectID,
+		Title:     title,
+		Status:    "active",
+		PlanType:  "dag",
+		TeamID:    teamID,
+		Mode:      "dag",
+		Source:    reqBody.Source,
+		Requester: reqBody.Requester,
+		Tasks:     []projectTaskMeta{},
+		UpdatedBy: authzActor(caller),
+		UpdatedAt: utcTimestamp(),
+	}
+	if reqBody.SourceRoomID != "" {
+		meta.SourceRoomID = reqBody.SourceRoomID
+	}
+	if len(reqBody.ReplyRoute) > 0 {
+		meta.ReplyRoute = reqBody.ReplyRoute
+	}
+	data, err := json.Marshal(meta)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "marshal project meta: "+err.Error())
+		return
+	}
+	if err := h.oss.PutObject(r.Context(), key, data); err != nil {
+		writeError(w, http.StatusInternalServerError, "write project meta: "+err.Error())
+		return
+	}
+	h.interventionNotify(r.Context(), meta, fmt.Sprintf("🆕 项目 %s 已创建", projectID))
+	httputil.WriteJSON(w, http.StatusCreated, map[string]any{
+		"project_id": projectID,
+		"title":      title,
+		"status":     "active",
+		"team_id":    teamID,
+		"plan_type":  "dag",
+	})
+}
+
+// isPlainToken reports whether s matches TeamHarness's safe-id contract:
+// [A-Za-z0-9][A-Za-z0-9._-]*.
+func isPlainToken(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		alphaNumeric := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'
+		if i == 0 && !alphaNumeric {
+			return false
+		}
+		switch {
+		case alphaNumeric:
+		case r == '-', r == '_', r == '.':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// CompleteProject marks a project completed. All tasks must be in a terminal
+// state (completed/revision/blocked/cancelled — no in_progress/submitted/
+// planned pending execution) before completion is allowed; otherwise 409.
+//
+// POST /api/v1/projects/{id}/complete
+func (h *ProjectHandler) CompleteProject(w http.ResponseWriter, r *http.Request) {
+	pwc, failed := h.readProjectWriteContext(w, r)
+	if failed {
+		return
+	}
+	meta := pwc.meta
+	caller := authpkg.CallerFromContext(r.Context())
+	actor, role := auditCaller(caller)
+	if meta.Status == "completed" {
+		writeError(w, http.StatusConflict, "project is already completed")
+		appendControlAction(meta, "complete", actor, role, "project is already completed", "error")
+		h.persistControlActionAudit(r.Context(), pwc.key, pwc.etag, meta)
+		return
+	}
+	graphTasks := meta.Tasks
+	if meta.PlanType == "loop" && meta.Loop != nil {
+		graphTasks = meta.Loop.Tasks
+	}
+	for _, t := range graphTasks {
+		if !isTerminalTaskStatus(t.Status) {
+			message := "project has non-terminal tasks (status: " + t.Status + ")"
+			writeError(w, http.StatusConflict, message)
+			appendControlAction(meta, "complete", actor, role, message, "error")
+			h.persistControlActionAudit(r.Context(), pwc.key, pwc.etag, meta)
+			return
+		}
+	}
+	meta.Status = "completed"
+	if meta.Loop != nil {
+		meta.Loop.Status = "completed"
+	}
+	markAuditFields(meta, authzActor(caller), "")
+	appendControlAction(meta, "complete", actor, role, "", "ok")
+	if !h.writeProjectMeta(r.Context(), w, pwc.key, meta, pwc.etag) {
+		return
+	}
+	h.emitSignalEvent(r.Context(), signalEmitters["CompleteProject"], pwc.team, signalTeamID(meta, pwc.team), meta.ProjectID, "", nil, pwc.key, refBytes(meta), map[string]any{
+		"project_id": meta.ProjectID,
+		"actor":      authzActor(caller),
+	}, meta.AuditSeq)
+	h.interventionNotify(r.Context(), meta, fmt.Sprintf("✅ 项目 %s 已完成", meta.ProjectID))
+	httputil.WriteJSON(w, http.StatusOK, h.buildWorkflow(meta, pwc.team, false, time.Time{}))
+}

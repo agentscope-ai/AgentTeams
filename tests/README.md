@@ -34,6 +34,44 @@ Test Script                     AgentTeams System
 | test-10 | Case 10 | MCP permission dynamic revoke/restore |
 | test-11 | Feature | Multi-round GitHub PR collaboration |
 
+## CI coverage and duplicate execution
+
+The CI matrix keeps runtime-dependent worker checks (`15`, `17`–`20`, `22`,
+`24`) on OpenClaw, QwenPaw, and Hermes. Similar setup does not make
+these scenarios redundant: they verify different import/update paths,
+runtime-consumed files, team permissions, skills, and deletion behavior.
+
+| Scenarios | CI placement | Reason |
+|-----------|--------------|--------|
+| `23` runtime switch | QwenPaw controller shard | The scenario explicitly switches OpenClaw → CoPaw → QwenPaw; the matrix worker default does not change its coverage. |
+| `25` name validation | QwenPaw controller shard | Shared `agt` validation and Higress leak checks do not depend on worker runtime. |
+| `27`, `28` Manager startup/migration | QwenPaw controller shard | The QwenPaw + Hermes entry uses the same Manager image and adds no Manager coverage. |
+| `100` cleanup | Each controller shard, last | Each installation has its own resources to verify and clean up. |
+
+CoPaw standalone interaction, controller, and legacy Team DAG shards are
+retired as CoPaw moves to QwenPaw. QwenPaw team orchestration runs in `26`;
+the legacy `21` scenario directly imports CoPaw tools and remains available
+for manual diagnostics against a CoPaw installation. It is no longer in the
+CI matrix or the default release-baseline filter.
+
+Migration coverage remains: `23` exercises an actual CoPaw worker before
+switching to QwenPaw, and `28` checks Manager state migration. Keep building
+`copaw-worker` for `23`; retiring CoPaw regression does not retire migration
+validation.
+
+The integration matrix now has 7 jobs instead of 10, and controller-shard
+script invocations fall from the original 48 to 28. All scenario files remain
+available through `--test-filter`. OpenClaw, QwenPaw, and Hermes LLM interaction
+coverage stays in place. Controller-only scenarios use their own readiness
+checks instead of waiting for an unrelated Manager session to stabilize.
+No-LLM runs skip session stabilization entirely.
+
+Run the lightweight scheduling regression checks without containers or keys:
+
+```bash
+python3 tests/check-integration-scheduling.py
+```
+
 ## Running Tests
 
 ### Via Makefile (Recommended)

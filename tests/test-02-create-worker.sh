@@ -109,12 +109,12 @@ fi
 
 log_section "Verify Infrastructure"
 
-# Check Worker openclaw.json has memorySearch config (only if embedding model is configured)
+# Check Worker openclaw.json has memory.search config (only if embedding model is configured)
 minio_setup
 ALICE_OPENCLAW=$(minio_read_file "agents/alice/openclaw.json" 2>/dev/null || echo "{}")
-MEMORY_SEARCH_MODEL=$(echo "${ALICE_OPENCLAW}" | jq -r '.agents.defaults.memorySearch.model // empty' 2>/dev/null)
+MEMORY_SEARCH_MODEL=$(echo "${ALICE_OPENCLAW}" | jq -r '.memory.search.model // empty' 2>/dev/null)
 if [ -n "${AGENTTEAMS_EMBEDDING_MODEL}" ] && [ -n "${ALICE_OPENCLAW}" ] && [ "${ALICE_OPENCLAW}" != "{}" ]; then
-    assert_not_empty "${MEMORY_SEARCH_MODEL}" "Worker openclaw.json has memorySearch.model configured"
+    assert_not_empty "${MEMORY_SEARCH_MODEL}" "Worker openclaw.json has memory.search.model configured"
     log_info "Worker embedding model: ${MEMORY_SEARCH_MODEL}"
 fi
 
@@ -139,6 +139,16 @@ for i in $(seq 1 180); do
     sleep 1
 done
 assert_contains "${CONSUMERS}" "worker-alice" "Higress consumer 'worker-alice' exists"
+
+# A conversational acknowledgement (including an approval prompt) is not proof
+# that the Worker started. Require the runtime readiness report as well.
+ALICE_PHASE=""
+for _ in $(seq 1 60); do
+    ALICE_PHASE=$(exec_in_agent agt worker status --name alice -o json 2>/dev/null | jq -r '.phase // empty')
+    [ "${ALICE_PHASE}" = "Ready" ] && break
+    sleep 3
+done
+assert_eq "Ready" "${ALICE_PHASE}" "Worker Alice reports runtime readiness"
 
 # Check MinIO files
 minio_setup

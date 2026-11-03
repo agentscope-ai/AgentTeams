@@ -1,6 +1,6 @@
 # Proxy an Existing MCP Server
 
-> **Cloud deployment (SAE) note:** The `setup-mcp-proxy.sh` script is only available in local deployment mode. In cloud mode (`AGENTTEAMS_RUNTIME=aliyun`), direct admin to the Alibaba Cloud AI Gateway console.
+> **Deployment note:** You can use `setup-mcp-proxy.sh` with self-hosted Higress, including a separate Console container. Set `HIGRESS_CONSOLE_URL` to its reachable address and supply an existing `HIGRESS_COOKIE_FILE` or your Console admin credentials. In cloud mode (`AGENTTEAMS_RUNTIME=aliyun`), direct admin to the Alibaba Cloud AI Gateway console.
 
 ## Setup Script
 

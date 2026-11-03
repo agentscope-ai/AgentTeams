@@ -20,7 +20,7 @@ AgentTeams does not compete with other Agent runtimes. Instead of implementing A
 
 - 🧬 **Manager-Workers Architecture**: Eliminates the need for human oversight of individual Worker Claws by enabling Agents to manage other Agents.
 
-- 🤝 **Multi-Runtime Collaboration**: OpenClaw, QwenPaw, and Hermes Workers coexist in the same IM room. Use deterministic agents (OpenClaw/QwenPaw) as Leaders to orchestrate tasks, and Hermes Workers for autonomous code execution — each runtime does what it's best at.
+- 🤝 **Multi-Runtime Collaboration**: OpenClaw, QwenPaw, Hermes, and experimental DeepSeek Harness Workers coexist in the same IM room. Use the runtime that best fits each role while keeping collaboration visible in Matrix.
 
 - 📦 **MinIO Shared File System**: Introduces a shared file system for inter-Agent information exchange, significantly reducing token consumption in multi-Agent collaboration scenarios.
 
@@ -31,13 +31,18 @@ AgentTeams does not compete with other Agent runtimes. Instead of implementing A
 
 ## News
 
+- **2026-10-16**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.5) — AgentTeams v1.2.5: strengthens coding-tool delegation, Worker configuration management, and in-place QwenPaw runtime upgrades; ships with Dashboard v1.3.1 by default; and fixes multiple issues in MCP registration, Matrix message collaboration, and Worker recovery.
+- **2026-09-20**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.4) — AgentTeams v1.2.4: adds TeamHarness task state history, progress tracking, and completion notifications; upgrades to QwenPaw 2.2.1 and Dashboard v1.2.4.9; expands team permissions, auditing, and skill management; introduces the experimental DeepSeek Harness Worker; and improves Worker state persistence and installation reliability.
+- **2026-08-22**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.3) — AgentTeams v1.2.3: makes long-running Project workflows visible and controllable through new Controller APIs, `agt` commands, and Dashboard v1.2.4; adds audited human interventions, Project history, and QwenPaw Worker checkpoints; promotes QwenPaw as the recommended local Manager and Worker runtime; and improves Skill recovery, Windows AppService startup, and runtime reliability.
+- **2026-08-08**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.2) — AgentTeams v1.2.2: adds Manager-to-Worker custom Skill delivery with validation, storage upload, `Worker.spec.skills` assignment, and QwenPaw hot refresh and enablement without a restart; hardens Manager and Worker Skill loading; and ensures Team Leaders and Workers explicitly join Team Rooms after invitation.
+- **2026-08-06**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.1) — AgentTeams v1.2.1: unifies the Manager and Worker runtime stack on QwenPaw 2.0.1, publishes the QwenPaw Worker multi-architecture image, strengthens atomic Matrix and TeamHarness task assignment and CoPaw-to-QwenPaw state migration, adds custom model vision and reasoning capability overrides, and improves Worker lifecycle and runtime management reliability.
 - **2026-07-30**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.0) — AgentTeams v1.2.0 (stable): establishes AgentTeams naming and the final Team/Worker resource contracts end to end; adds the optional AgentTeams Dashboard; and improves Worker storage sync, Team routing and lifecycle convergence, installer support for deploying v1.1.2 with its legacy environment and storage contract (earlier releases still require the matching legacy installer), Dashboard reliability, and tooling and diagnostic safety.
 - **2026-07-17**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.0-beta.1) — AgentTeams v1.2.0-beta.1 (prerelease): completes the public rename from the retired predecessor across images, Kubernetes APIs, Helm, Matrix, storage, and runtime contracts; adds the plugin platform, TeamHarness and WorkerFlow integrations, Matrix AppService and Human SSO, model-provider routing and LLM preflight, plus richer controller observability. Beta installation requires explicit opt-in, while the stable default remains v1.1.2.
 - **2026-05-27**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.1.2) — AgentTeams v1.1.2: QwenPaw-first installer with keep-all upgrade flow, Team human coordinators and refreshed Team Leader coordination tools, Nacos remote skills with `sts-agentteams` / `ai-registry` STS scope, Worker CR-name decoupled from runtime name, controller reconcile metrics and graceful shutdown.
 - **2026-05-07**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.1.1) | [Changelog](changelog/v1.1.1.md) — AgentTeams v1.1.1: declarative MCP on Worker/Manager/Team CRDs (breaking) and on Team Leader, custom `spec.env` for CRs, Token Plan + Qwen Cloud international + `qwen3.6-plus`, namespace-scoped controller RBAC, optional `SOUL.md` in Worker packages.
 - **2026-04-24**: [English](blog/agentteams-1.1.0-release.md) | [中文](blog/zh-cn/agentteams-1.1.0-release.md) — AgentTeams v1.1.0: Kubernetes-native control plane, Hermes autonomous coding agent runtime, 1.7 GB image shrink, agt CLI replaces shell scripts.
 - **2026-04-14**: [English](blog/agentteams-k8s-native-multi-agent-collaboration.md) | [中文](blog/zh-cn/agentteams-k8s-native-multi-agent-collaboration.zh-CN.md) — Deep dive: AgentTeams as a Kubernetes-native multi-agent collaboration orchestration system.
-- **2026-04-03**: [English](docs/declarative-resource-management.md) | [中文](docs/zh-cn/declarative-resource-management.md) — AgentTeams 1.0.9: Kubernetes-style declarative resource management (YAML for Worker, Team, Human); Worker Template Marketplace; Manager QwenPaw runtime; Nacos Skills Registry and more.
+- **2026-04-03**: [English](docs/usage/resource-management.md) | [中文](docs/zh-cn/usage/resource-management.md) — AgentTeams 1.0.9: Kubernetes-style declarative resource management (YAML for Worker, Team, Human); Worker Template Marketplace; Manager QwenPaw runtime; Nacos Skills Registry and more.
 - **2026-03-14**: [English](blog/agentteams-1.0.6-release.md) | [中文](blog/zh-cn/agentteams-1.0.6-release.md) — AgentTeams 1.0.6: enterprise-grade MCP Server management, zero credential exposure.
 - **2026-03-10**: [English](blog/agentteams-1.0.4-release.md) | [中文](blog/zh-cn/agentteams-1.0.4-release.md) — AgentTeams 1.0.4: QwenPaw (formerly CoPaw) Worker support, 80% less memory.
 - **2026-03-04**: [English](blog/agentteams-announcement.md) | [中文](blog/zh-cn/agentteams-announcement.md) — AgentTeams open sourced under its former name.
@@ -95,7 +100,7 @@ Open http://127.0.0.1:18088 in your browser and log in to Element Web. The Manag
 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 
 # Upgrade to specific version
-AGENTTEAMS_VERSION=v1.0.5 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+AGENTTEAMS_VERSION=v1.2.5 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 ## Uninstall
@@ -115,6 +120,8 @@ This removes all AgentTeams containers (Manager, Workers, docker-proxy), Docker 
 ## Install on Kubernetes (Helm)
 
 For shared / production deployments you can install AgentTeams on any Kubernetes cluster via the official Helm chart. The default profile bundles the Higress AI gateway, Tuwunel (Matrix), MinIO and the AgentTeams controller — no external dependencies required.
+
+The commands below provide a quick installation path. See the [Kubernetes Deployment Guide](docs/usage/deployment/kubernetes.md) for cluster planning, values files, model services, runtimes, persistence, Ingress, and operations.
 
 **Prerequisites**
 
@@ -179,8 +186,8 @@ helm install agentteams higress.io/agentteams \
 | `preflight.llm.retries` | no | Retry count for transient LLM preflight failures such as rate limits and provider 5xx responses. Defaults to `2` |
 | `preflight.llm.activeDeadlineSeconds` | no | Kubernetes Job active deadline for the preflight hook. Defaults to `120` |
 | `preflight.llm.resources` | no | Optional Kubernetes resource requests/limits for the preflight hook container |
-| `manager.runtime` | no | Manager agent runtime: `openclaw` (default), `copaw`, or `hermes` |
-| `worker.defaultRuntime` | no | Default Worker runtime: `openclaw` (default), `copaw`, or `hermes` |
+| `manager.runtime` | no | Manager runtime: OpenClaw uses `openclaw` (default); CoPaw uses `qwenpaw` in the current chart, with `copaw` retained as a compatibility alias. Managers do not support Hermes or DeepSeek Harness |
+| `worker.defaultRuntime` | no | The chart provides default image values for `openclaw` (default), `copaw`, `hermes`, experimental `deepseek-harness`, and `openhuman`; the current CRD rejects an explicit `spec.runtime: openhuman`, and QwenPaw Workers require an explicit `spec.image` |
 
 Helm installs run an LLM preflight hook by default. The hook sends a minimal OpenAI-compatible `/chat/completions` request using `credentials.llmApiKey`, `credentials.llmBaseUrl`, and `credentials.defaultModel`; invalid keys, unreachable base URLs, unsupported models, quota errors, and provider outages fail the install before the controller starts. To bypass this check for restricted or offline clusters:
 
@@ -194,12 +201,13 @@ helm install agentteams higress.io/agentteams \
 ```
 
 <details>
-<summary>Using alternative runtimes (QwenPaw Manager + Hermes Workers)</summary>
+<summary>Using alternative runtimes (CoPaw Manager + Hermes Workers)</summary>
 
 ```bash
 helm install agentteams higress.io/agentteams \
   -n agentteams-system --create-namespace --devel \
-  --set manager.runtime=copaw \
+  --set manager.runtime=qwenpaw \
+  --set manager.image.repository=higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager-qwenpaw \
   --set worker.defaultRuntime=hermes \
   --set credentials.llmApiKey=<your-api-key> \
   --set credentials.llmBaseUrl=https://your-provider.example.com/v1 \
@@ -208,13 +216,13 @@ helm install agentteams higress.io/agentteams \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-The image for each component is automatically selected based on the runtime (`agentteams-manager` / `agentteams-manager-qwenpaw` for Manager; `agentteams-worker` / `agentteams-copaw-worker` / `agentteams-hermes-worker` for Workers).
+When selecting the CoPaw Manager, set both `manager.runtime=qwenpaw` and the `agentteams-manager-qwenpaw` image. Configure Worker default images through `worker.defaultImage.<runtime>`.
 
 </details>
 
 **Multi-Region Image Registry**
 
-The default `global.imageRegistry` points to the China region (`higress-registry.cn-hangzhou.cr.aliyuncs.com/higress`). If you are deploying outside China, override it for faster image pulls:
+Images point to the China region by default. When deploying outside China, use a nearby registry for faster pulls:
 
 | Region | Registry |
 |---|---|
@@ -222,18 +230,7 @@ The default `global.imageRegistry` points to the China region (`higress-registry
 | North America | `higress-registry.us-west-1.cr.aliyuncs.com/higress` |
 | Southeast Asia | `higress-registry.ap-southeast-7.cr.aliyuncs.com/higress` |
 
-```bash
-# Example: deploy from the North America registry
-helm install agentteams higress.io/agentteams \
-  -n agentteams-system --create-namespace \
-  --render-subchart-notes \
-  --set global.imageRegistry=higress-registry.us-west-1.cr.aliyuncs.com/higress \
-  --set credentials.llmApiKey=<your-api-key> \
-  --set credentials.adminPassword=<your-admin-password> \
-  --set gateway.publicURL=http://localhost:18080
-```
-
-For all configurable values (gateway/storage providers, image tags, resources, persistence, etc.) see [`helm/agentteams/values.yaml`](helm/agentteams/values.yaml).
+`global.imageRegistry` affects only subcharts that consume that global value. The Controller, Manager, Workers, Tuwunel, MinIO, and Element Web use their own complete `image.repository` values. Override every relevant image in a values file when switching regions or using a private registry. See the [Kubernetes Deployment Guide](docs/usage/deployment/kubernetes.md) and [`helm/agentteams/values.yaml`](helm/agentteams/values.yaml) for the complete configuration.
 
 **Access**
 
@@ -317,7 +314,7 @@ helm uninstall agentteams -n agentteams-system
 kubectl delete namespace agentteams-system
 ```
 
-For the Kubernetes-native architecture (CRDs, controller, declarative `Worker` / `Team` / `Human` resources), see [docs/k8s-native-agent-orch.md](docs/k8s-native-agent-orch.md).
+For the Kubernetes-native architecture (CRDs, controller, declarative `Worker` / `Team` / `Human` resources), see [docs/design/k8s-native-orchestration.md](docs/design/k8s-native-orchestration.md).
 
 ## How It Works
 
@@ -371,13 +368,14 @@ No hidden agent-to-agent calls. Everything is visible and intervenable.
 
 ## Multi-Runtime Collaboration
 
-AgentTeams supports three Worker runtimes that can **coexist in the same IM room**, collaborating on tasks together:
+AgentTeams provides multiple Worker runtime families that can **coexist in the same IM room**, collaborating on tasks together:
 
 - **OpenClaw** (Node.js) — General-purpose agent with rich skills ecosystem, ideal for task orchestration and tool calling
 - **QwenPaw** (Python) — Lightweight runtime, suited for browser automation and quick tasks
 - **Hermes** ([hermes-agent](https://github.com/NousResearch/hermes-agent)) — Autonomous coding agent with terminal sandbox, self-improving skills, and persistent memory
+- **DeepSeek Harness** (experimental) — Headless coding agent with room-scoped session continuation, Matrix file exchange, and restart recovery; currently pinned to a tested DSH release candidate
 
-Each runtime excels at different tasks. A common pattern: use deterministic agents (OpenClaw/QwenPaw) as Leaders to decompose and assign work, and Hermes Workers for autonomous code execution. All runtimes communicate via Matrix `m.mentions` in the same room — fully visible, fully intervenable.
+The `copaw` value remains available for compatibility with existing CoPaw Workers; the current CRD accepts both `copaw` and `qwenpaw`. Each runtime excels at different tasks. A common pattern is to use deterministic agents (OpenClaw/QwenPaw) as Leaders to decompose and assign work, and Hermes Workers for autonomous code execution. All runtimes communicate through Matrix rooms—fully visible and fully intervenable.
 
 ```bash
 # Switch any worker's runtime in place
@@ -426,13 +424,24 @@ Worker Alice    Worker Bob              Worker Charlie
 
 ## Documentation
 
+Browse the [documentation directory](docs/), or start with the overview and quickstart:
+
 | | |
 |---|---|
+| [docs/overview.md](docs/overview.md) | Product overview, core concepts, and documentation map |
 | [docs/quickstart.md](docs/quickstart.md) | Step-by-step guide |
-| [docs/architecture.md](docs/architecture.md) | System architecture deep dive |
-| [docs/manager-guide.md](docs/manager-guide.md) | Manager configuration |
-| [docs/worker-guide.md](docs/worker-guide.md) | Worker deployment |
-| [docs/development.md](docs/development.md) | Contributing and local dev |
+| [docs/usage/use-cases.md](docs/usage/use-cases.md) | Software delivery, research, content, incident analysis, and long-running project collaboration examples |
+| [docs/usage/deployment/local.md](docs/usage/deployment/local.md) | Local instance creation, installation options, upgrades, and uninstalling |
+| [docs/design/architecture.md](docs/design/architecture.md) | System architecture deep dive (also available in [中文](docs/zh-cn/design/architecture.md)) |
+| [docs/design/k8s-native-orchestration.md](docs/design/k8s-native-orchestration.md) | Kubernetes-native multi-Agent orchestration: CRDs, controller, declarative resources (also available in [中文](docs/zh-cn/design/k8s-native-orchestration.md)) |
+| [docs/usage/manager-guide.md](docs/usage/manager-guide.md) | Manager configuration |
+| [docs/usage/worker-guide.md](docs/usage/worker-guide.md) | Worker deployment |
+| [docs/usage/single-and-multi-user.md](docs/usage/single-and-multi-user.md) | One deployment for one person or many: roles, permission levels, and what changes when you add people (also available in [中文](docs/zh-cn/usage/single-and-multi-user.md)) |
+| [docs/usage/project-workflow-api.md](docs/usage/project-workflow-api.md) | Project / workflow inspection API (also available in [中文](docs/zh-cn/usage/project-workflow-api.md)) |
+| [docs/usage/higress-gateway-api.md](docs/usage/higress-gateway-api.md) | Higress gateway external API reference (LLM / MCP / exposed ports / Console) (also available in [中文](docs/zh-cn/usage/higress-gateway-api.md)) |
+| [docs/usage/development.md](docs/usage/development.md) | Contributing and local dev (also available in [中文](docs/zh-cn/usage/development.md)) |
+
+The remaining design documents (skill catalog, worker channels/chats APIs, room power levels, capability foundation, human update / audit / AI-routes APIs, L2/L3 scoped access, member runtime config contract, team skills, agent pod template, TeamHarness v0.1 boundary) are indexed in the [中文 documentation table](README.zh-CN.md) — all are also available under `docs/zh-cn/design/`, except a few (`docs/design/internal/`, part of `docs/design/teamharness/`) that are natively written in Chinese upstream.
 
 ## Troubleshooting
 
@@ -440,7 +449,7 @@ Worker Alice    Worker Bob              Worker Charlie
 docker exec -it agentteams-manager cat /var/log/agentteams/manager-agent.log
 ```
 
-See [docs/zh-cn/faq.md](docs/zh-cn/faq.md) for common issues.
+See [docs/usage/troubleshooting/faq.md](docs/usage/troubleshooting/faq.md) for common issues (also available in [中文](docs/zh-cn/usage/troubleshooting/faq.md)).
 
 ### Reporting Bugs
 

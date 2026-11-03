@@ -6,9 +6,9 @@
 #
 # Usage:
 #   ./agentteams-apply.sh -f resource.yaml              # incremental apply
-#   ./agentteams-apply.sh -f resource.yaml --prune      # full sync (delete extras)
-#   ./agentteams-apply.sh -f resource.yaml --dry-run    # show diff only
-#   ./agentteams-apply.sh -f resource.yaml --watch      # watch file changes
+#
+# The current `agt apply` CLI does not implement --prune, --dry-run, or
+# --watch. Delete resources explicitly with `agt delete` when needed.
 #
 # Environment:
 #   AGENTTEAMS_CONTAINER_CMD   Override container runtime (docker/podman)
@@ -27,6 +27,17 @@ die() {
     error "$1"
     exit 1
 }
+
+# Fail before contacting the container runtime so stale examples return a clear
+# error without unnecessary container checks or file copies. Keep this list
+# aligned with `agt apply`.
+for arg in "$@"; do
+    case "${arg}" in
+        --prune|--dry-run|--watch)
+            die "${arg} is not supported by the current 'agt apply' CLI"
+            ;;
+    esac
+done
 
 # ============================================================
 # Detect container runtime

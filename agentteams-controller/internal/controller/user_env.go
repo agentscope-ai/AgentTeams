@@ -3,6 +3,7 @@ package controller
 import (
 	"sort"
 
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	"github.com/go-logr/logr"
 )
 
@@ -12,23 +13,15 @@ import (
 // per ignored key. Collisions are sorted before logging so identical
 // inputs produce identical log output (makes tests deterministic).
 //
+// The merge semantics live in service.MergeUserEnv so that server-side
+// address resolution (EffectiveWorkerConsolePort) shares the exact same
+// rule as container creation.
+//
 // Both maps may be nil. sysEnv is mutated in place and must be non-nil
 // when userEnv is non-empty; callers always pass the builder's output,
 // which is guaranteed non-nil.
 func mergeUserEnv(sysEnv, userEnv map[string]string, logger logr.Logger, subject string) {
-	if len(userEnv) == 0 {
-		return
-	}
-
-	var ignored []string
-	for k, v := range userEnv {
-		if _, taken := sysEnv[k]; taken {
-			ignored = append(ignored, k)
-			continue
-		}
-		sysEnv[k] = v
-	}
-
+	ignored := service.MergeUserEnv(sysEnv, userEnv)
 	if len(ignored) == 0 {
 		return
 	}

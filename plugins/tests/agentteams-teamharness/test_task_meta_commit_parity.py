@@ -101,6 +101,14 @@ def test_bundle_falls_back_to_unconditional_push_when_endpoint_missing(
     )
 
 
+def test_bundle_sync_task_falls_back_when_controller_url_unset(
+    server: Any, tmp_path: Path, monkeypatch: Any, capfd: Any
+) -> None:
+    _load_legacy_tests().test_sync_task_falls_back_when_controller_url_unset(
+        server, tmp_path, monkeypatch, capfd
+    )
+
+
 def test_bundle_commit_task_meta_maps_old_controller_responses(server: Any, monkeypatch: Any) -> None:
     _load_legacy_tests().test_commit_task_meta_maps_old_controller_responses(server, monkeypatch)
 

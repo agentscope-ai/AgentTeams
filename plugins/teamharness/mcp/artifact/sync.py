@@ -87,10 +87,13 @@ def _sync_task(
 
     Rolling upgrade: when the controller predates the task meta commit
     endpoint (a 404/405 whose body is not the endpoint's own JSON
-    refusal — the old controller's mux default), the sync degrades to
-    the pre-#1471 unconditional push (meta.json included) and logs the
-    degradation on stderr, so a normal task sync is not lost against an
-    old controller. No version binding exists there to preserve.
+    refusal — the old controller's mux default), or when
+    AGENTTEAMS_CONTROLLER_URL is not set at all (the pre-endpoint
+    deployment — the commit client signals endpoint_missing in both
+    cases), the sync degrades to the pre-#1471 unconditional push
+    (meta.json included) and logs the degradation on stderr, so a normal
+    task sync is not lost against an old or absent controller. No
+    version binding exists there to preserve.
 
     Returns True only when the meta commit is verified (or the task
     carries no local meta.json, in which case the file push is the whole
@@ -762,11 +765,13 @@ def _commit_task_meta(
     - {"ok": False, "conflict"}    -> 409: the meta changed after the
       read, or it appeared for a create-if-absent (a cancellation or
       another writer landed); re-snapshot, re-merge and retry;
-    - {"ok": False, "endpoint_missing"} -> 404/405 whose body is NOT
-      the endpoint's own JSON refusal (the old controller's mux default:
-      the route does not exist — rolling upgrade). The caller falls back
-      to the old unconditional push (meta.json included) and logs the
-      degradation; no version binding exists to preserve;
+    - {"ok": False, "endpoint_missing"} -> AGENTTEAMS_CONTROLLER_URL is
+      not set (no controller endpoint at all — the pre-endpoint
+      deployment), or a 404/405 whose body is NOT the endpoint's own
+      JSON refusal (the old controller's mux default: the route does not
+      exist — rolling upgrade). In both cases no version binding exists
+      to preserve, so the caller falls back to the old unconditional
+      push (meta.json included) and logs the degradation;
     - {"ok": False, ...}           -> everything else, fail-closed: 400
       (noncanonical or missing status), 403 (the cancellation is
       server-owned / the task is outside this caller's team), 404 with
@@ -779,6 +784,13 @@ def _commit_task_meta(
     if not base:
         return {
             "ok": False,
+            # No controller endpoint at all: the pre-endpoint
+            # deployment, which cannot have a version binding — the
+            # same rolling-upgrade signal as the old controller's mux
+            # 404/405, so the caller degrades to the old unconditional
+            # push (meta.json included) with a log instead of failing
+            # closed and losing the task sync.
+            "endpoint_missing": True,
             "error": "AGENTTEAMS_CONTROLLER_URL is not set; the conditional task meta commit is unavailable",
         }
     url = f"{base}/api/v1/tasks/{urllib.parse.quote(task_id, safe='')}/meta"

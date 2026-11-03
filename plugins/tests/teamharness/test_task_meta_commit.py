@@ -23,7 +23,11 @@ Covers:
 7. rolling upgrade: a controller that predates the task-meta endpoint
    (404/405 with a non-endpoint body) is recognized by the commit client and
    the sync falls back to the old unconditional push with an explicit log,
-   while the endpoint's own JSON 404 stays a fail-closed refusal.
+   while the endpoint's own JSON 404 stays a fail-closed refusal;
+8. no AGENTTEAMS_CONTROLLER_URL at all (a pre-endpoint deployment — the
+   CI delegate_task environment): the commit client signals
+   endpoint_missing for the unset URL and the same fallback applies, so
+   a normal task sync is never lost to a missing controller.
 """
 
 from __future__ import annotations
@@ -403,6 +407,41 @@ def test_sync_task_falls_back_to_unconditional_push_when_endpoint_missing(
     assert len(commits) == 1
     captured = capfd.readouterr()
     assert "endpoint" in captured.err
+
+
+def test_sync_task_falls_back_when_controller_url_unset(
+    server: Any, tmp_path: Path, monkeypatch: Any, capfd: Any
+) -> None:
+    """No AGENTTEAMS_CONTROLLER_URL at all (a pre-endpoint deployment —
+    the CI delegate_task repro): the commit client must signal
+    endpoint_missing for the unset URL, so the sync degrades to the old
+    unconditional push (meta.json included) with a stderr log instead of
+    failing closed and losing the task sync. The REAL _commit_task_meta
+    runs here — faking it would hide the exact bug."""
+    monkeypatch.delenv("AGENTTEAMS_CONTROLLER_URL", raising=False)
+    storage = FakeTaskStorage()
+    storage.put("shared/tasks/t1/meta.json", _task_meta(status="submitted"))
+    _write_task(tmp_path, _task_meta(), {"result.md": "done"})
+
+    monkeypatch.setattr(server, "_filesync", storage)
+
+    # The commit client's contract for an unset URL: a fail-closed
+    # refusal that is ALSO the endpoint_missing rolling-upgrade signal.
+    commit = server.sync._commit_task_meta("t1", {}, "v1")
+    assert commit.get("ok") is False, commit
+    assert commit.get("endpoint_missing") is True, commit
+    assert "AGENTTEAMS_CONTROLLER_URL is not set" in commit["error"], commit
+
+    assert server._sync_task(_arguments(tmp_path), "t1") is True
+
+    # The fallback directory push (meta.json included) landed the local
+    # truth in storage — the pre-#1471 semantics, restored on purpose.
+    final = storage.body("shared/tasks/t1/meta.json")
+    assert final["status"] == "in_progress"
+    directory_pushes = [c for c in storage.calls if c == ("push", "shared/tasks/t1")]
+    assert len(directory_pushes) == 2
+    captured = capfd.readouterr()
+    assert "AGENTTEAMS_CONTROLLER_URL is not set" in captured.err
 
 
 def test_commit_task_meta_maps_old_controller_responses(server: Any, monkeypatch: Any) -> None:

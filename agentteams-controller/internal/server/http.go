@@ -125,6 +125,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/model-access-tables/{name}", mw.RequireAuthz(authpkg.ActionGet, "model-access-table", nameFn)(http.HandlerFunc(rh.GetModelAccessTable)))
 	mux.Handle("PUT /api/v1/model-access-tables/{name}", mw.RequireAuthz(authpkg.ActionUpdate, "model-access-table", nameFn)(http.HandlerFunc(rh.UpdateModelAccessTable)))
 	mux.Handle("DELETE /api/v1/model-access-tables/{name}", mw.RequireAuthz(authpkg.ActionDelete, "model-access-table", nameFn)(http.HandlerFunc(rh.DeleteModelAccessTable)))
+	mux.Handle("GET /api/v1/model-access", mw.RequireAuthz(authpkg.ActionGet, "worker", nil)(http.HandlerFunc(rh.GetModelAccess)))
 
 	// Human file area (#1414 P1): per-human working files + recycle bin.
 	// Auth-only middleware: the handler performs its own authorization so

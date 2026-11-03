@@ -127,6 +127,13 @@ def side_effects(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[Any]]:
         "_validate_assignee_membership",
         lambda *_a, **_k: {"ok": True},
     )
+
+    def no_matrix_membership(*_a: Any, **_k: Any) -> Any:
+        raise ValueError("matrix membership unavailable in tests")
+
+    # Deterministic default: roster-gate tests that fall through to the
+    # invited-recipient check must not hit a live Matrix homeserver.
+    monkeypatch.setattr(server, "_matrix_room_member_user_ids", no_matrix_membership)
     return calls
 
 
@@ -226,6 +233,75 @@ def test_delegate_unknown_short_name_fails_closed(
     entry = next(t for t in project["tasks"] if t.get("task_id") == TASK_ID)
     assert entry["status"] == "planned"
     assert "assigned_to" not in entry
+
+
+def test_delegate_invited_but_not_joined_is_retryable(
+    tmp_path: Path,
+    side_effects: dict[str, list[Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A recipient the room has invited (membership=invite) gets the same
+    retryable "not a joined member" failure as the membership gate: no
+    notification, no assignment, project node not advanced."""
+    _write_project(tmp_path)
+    config = _write_roster(
+        tmp_path,
+        [{"role": "worker", "name": "alice", "matrixUserId": WORKER_A}],
+    )
+    monkeypatch.setenv("TEAMHARNESS_RUNTIME_CONFIG", str(config))
+    invited = "@worker-invited:example.test"
+    monkeypatch.setattr(
+        server,
+        "_matrix_room_member_user_ids",
+        lambda room_id, memberships=None: (
+            [invited] if memberships == {"invite"} else [WORKER_A, ADMIN]
+        ),
+    )
+
+    result = _delegate(tmp_path, invited)
+
+    assert result["ok"] is False
+    assert result["retryable"] is True
+    assert (
+        f"assignee {invited} is not a joined member of room {ROOM}" in result["error"]
+    )
+    # Fail closed before any write: no notification, no task meta, and the
+    # project node was not advanced either.
+    assert side_effects["notify"] == []
+    assert not _task_meta_path(tmp_path).exists()
+    project = server._read_json(tmp_path / "shared" / "projects" / PROJECT_ID / "meta.json")
+    entry = next(t for t in project["tasks"] if t.get("task_id") == TASK_ID)
+    assert entry["status"] == "planned"
+    assert "assigned_to" not in entry
+
+
+def test_delegate_unknown_recipient_not_in_room_stays_non_retryable(
+    tmp_path: Path,
+    side_effects: dict[str, list[Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A recipient nobody knows (not in the roster and not invited to the
+    room) keeps the fail-closed unknown-recipient error: not retryable."""
+    _write_project(tmp_path)
+    config = _write_roster(
+        tmp_path,
+        [{"role": "worker", "name": "alice", "matrixUserId": WORKER_A}],
+    )
+    monkeypatch.setenv("TEAMHARNESS_RUNTIME_CONFIG", str(config))
+    monkeypatch.setattr(
+        server,
+        "_matrix_room_member_user_ids",
+        lambda room_id, memberships=None: [WORKER_A, ADMIN],
+    )
+
+    result = _delegate(tmp_path, "@stranger:example.test")
+
+    assert result["ok"] is False
+    assert result.get("retryable") is not True
+    assert "unknown recipient: @stranger:example.test" in result["error"]
+    assert "available:" in result["error"]
+    assert side_effects["notify"] == []
+    assert not _task_meta_path(tmp_path).exists()
 
 
 def test_delegate_without_roster_keeps_legacy_passthrough(

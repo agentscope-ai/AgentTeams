@@ -212,6 +212,13 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusConflict, "team leaders cannot create Worker resources")
 		return
 	}
+	// Create-grant (PR-B1 §2.1): an L1 create carries the chosen model into
+	// the worker's implicit grant list before the object exists.
+	if caller != nil &&
+		(caller.Role == authpkg.RoleAdmin || caller.Role == authpkg.RoleManager) &&
+		worker.Spec.Model != "" {
+		h.appendModelGrant(r.Context(), worker, worker.Spec.ModelProvider, worker.Spec.Model)
+	}
 	h.stampControllerLabel(&worker.ObjectMeta)
 
 	if err := h.client.Create(r.Context(), worker); err != nil {
@@ -446,7 +453,8 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	if caller := authpkg.CallerFromContext(ctx); caller != nil &&
+	caller := authpkg.CallerFromContext(ctx)
+	if caller != nil &&
 		(caller.Role == authpkg.RoleHuman || caller.Role == authpkg.RoleTeamLeader) {
 		if status, msg := h.checkScopedWorkerUpdate(ctx, caller, name, &req); status != 0 {
 			httputil.WriteError(w, status, msg)
@@ -459,6 +467,11 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 			writeK8sError(w, "get worker for update", err)
 			return
 		}
+
+		// Pre-mutation model values: the update-grant comparison (and the
+		// implicit grant append) must see the state this attempt starts from.
+		oldModel := worker.Spec.Model
+		oldProvider := worker.Spec.ModelProvider
 
 		if req.Env != nil {
 			worker.Spec.Env = req.Env
@@ -567,6 +580,15 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.State != nil {
 			worker.Spec.State = req.State
+		}
+
+		// Update-grant (PR-B1 §2.1): an L1 model/provider change appends the
+		// resulting pair to the worker's implicit grant list.
+		if caller != nil &&
+			(caller.Role == authpkg.RoleAdmin || caller.Role == authpkg.RoleManager) &&
+			worker.Spec.Model != "" &&
+			(worker.Spec.Model != oldModel || worker.Spec.ModelProvider != oldProvider) {
+			h.appendModelGrant(ctx, &worker, worker.Spec.ModelProvider, worker.Spec.Model)
 		}
 
 		if err := h.client.Update(ctx, &worker); err != nil {
@@ -1869,8 +1891,11 @@ func (h *ResourceHandler) findTeamForMember(ctx context.Context, name string) (s
 // mcpServers is no longer a credential-exfiltration path. remoteSkills
 // (arbitrary external registries whose source URIs may embed tokens) is
 // gated on the external_sources capability; team leaders are
-// service-account scoped and never carry it. Everything else (model, image,
-// identity, resources, ...) is the team owner's / admin's domain.
+// service-account scoped and never carry it. The model slot is grant-gated
+// for L2 humans (PR-B1 §2.3: value-changing writes are checked against the
+// caller's effective grant set; team leaders stay hard-forbidden).
+// Everything else (image, identity, resources, ...) is the team owner's /
+// admin's domain.
 // The worker must be a member of one of the caller's accessibleTeams —
 // standalone workers are hidden from scoped readers (ListWorkers), so they
 // are hidden here as well (404 keeps the endpoint probe-resistant, W8).
@@ -1899,14 +1924,20 @@ func (h *ResourceHandler) checkScopedWorkerUpdate(ctx context.Context, caller *a
 	if req.WorkerName != "" {
 		forbidden = append(forbidden, "workerName")
 	}
-	if req.Model != "" {
-		forbidden = append(forbidden, "model")
-	}
-	// subagentModel sits with model: the model slot is a decision-layer
-	// field owned by the team owner / admin (L1), not by scoped L2 writers.
-	// The pointer check also covers an explicit clear ("" present).
-	if req.SubagentModel != nil {
-		forbidden = append(forbidden, "subagentModel")
+	// model / subagentModel: for team leaders the model slot remains a
+	// decision-layer field owned by the team owner / admin (L1). For L2
+	// humans it is grant-gated instead (PR-B1 §2.3): only a value change is
+	// checked against the caller's effective set, so identical writes pass —
+	// enforced in checkHumanModelUpdate, not in this forbidden list.
+	if caller.Role != authpkg.RoleHuman {
+		if req.Model != "" {
+			forbidden = append(forbidden, "model")
+		}
+		// subagentModel sits with model: the pointer check also covers an
+		// explicit clear ("" present).
+		if req.SubagentModel != nil {
+			forbidden = append(forbidden, "subagentModel")
+		}
 	}
 	// llmStream* sit with model: LLM behavior tuning is a decision-layer
 	// field of the team owner / admin (L1). Same pointer check covers the
@@ -1941,7 +1972,10 @@ func (h *ResourceHandler) checkScopedWorkerUpdate(ctx context.Context, caller *a
 	if req.LlmAcquireTimeout != nil {
 		forbidden = append(forbidden, "llmAcquireTimeout")
 	}
-	if req.ModelProvider != "" {
+	// modelProvider is grant-gated for L2 humans too (PR-B1 §2.3): it must
+	// travel with model (model_pair_required), so it never lands in this
+	// forbidden list for humans — checkHumanModelUpdate owns both outcomes.
+	if req.ModelProvider != "" && caller.Role != authpkg.RoleHuman {
 		forbidden = append(forbidden, "modelProvider")
 	}
 	if req.Runtime != "" {
@@ -1992,7 +2026,12 @@ func (h *ResourceHandler) checkScopedWorkerUpdate(ctx context.Context, caller *a
 	}
 	if len(forbidden) > 0 {
 		return http.StatusBadRequest,
-			"L2 humans and team leaders may only update the skills and mcpServers fields; remoteSkills requires the external_sources capability; not allowed: " + strings.Join(forbidden, ", ")
+			"L2 humans and team leaders may only update the skills and mcpServers fields; model slots follow the caller's model grants (PR-B1); remoteSkills requires the external_sources capability; not allowed: " + strings.Join(forbidden, ", ")
+	}
+	// PR-B1 §2.3: an L2 human's model-slot write is grant-gated, with
+	// same-value writes always allowed ("lock ≠ unavailable").
+	if caller.Role == authpkg.RoleHuman {
+		return h.checkHumanModelUpdate(ctx, caller, team, name, req)
 	}
 	return 0, ""
 }

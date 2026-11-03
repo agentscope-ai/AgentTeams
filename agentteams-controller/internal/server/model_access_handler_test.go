@@ -205,7 +205,11 @@ func TestModelAccessWorkerResolution(t *testing.T) {
 		t.Errorf("codingCli must carry all three keys, got %v", got.Capabilities.CodingCli)
 	}
 
-	if len(got.Surfaces.Main.Entries) != 1 || got.Surfaces.Main.Entries[0].Model != "qwen3.6-27b" {
+	// Merged set (PR-B1 §2.2): the explicit row first, then the current
+	// value (its provider differs, so it is a distinct pair).
+	if len(got.Surfaces.Main.Entries) != 2 ||
+		got.Surfaces.Main.Entries[0] != (v1beta1.ModelAccessEntry{Provider: "agentteams-gateway", Model: "qwen3.6-27b"}) ||
+		got.Surfaces.Main.Entries[1] != (v1beta1.ModelAccessEntry{Provider: "", Model: "qwen3.6-27b"}) {
 		t.Errorf("surfaces.main = %+v", got.Surfaces.Main)
 	}
 	if len(got.Surfaces.Spawn.Entries) != 0 || !got.Surfaces.Spawn.Inherit {
@@ -220,7 +224,7 @@ func TestModelAccessWorkerResolution(t *testing.T) {
 	}
 
 	// Empty entry slices must render as [] (the UI renders row lists).
-	if !strings.Contains(rec.Body.String(), `"main":{"entries":[{"provider":"agentteams-gateway","model":"qwen3.6-27b"}]}`) {
+	if !strings.Contains(rec.Body.String(), `"main":{"entries":[{"provider":"agentteams-gateway","model":"qwen3.6-27b"},{"provider":"","model":"qwen3.6-27b"}]}`) {
 		t.Errorf("surfaces.main entries missing from body: %s", rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), `"spawn":{"entries":[],"inherit":true}`) {
@@ -308,9 +312,20 @@ func TestModelAccessNoOwnerLockedView(t *testing.T) {
 	if !got.CatalogUnavailable {
 		t.Errorf("catalogUnavailable = false, want true")
 	}
+	// No explicit/implicit rows: the merged sets carry only the current
+	// values (the current value is always available, PR-B1 §2.2).
+	if len(got.Surfaces.Main.Entries) != 1 ||
+		got.Surfaces.Main.Entries[0] != (v1beta1.ModelAccessEntry{Provider: "", Model: "qwen3.6-27b"}) {
+		t.Errorf("surfaces.main = %+v, want the current value only", got.Surfaces.Main)
+	}
+	if len(got.Surfaces.Spawn.Entries) != 1 ||
+		got.Surfaces.Spawn.Entries[0] != (v1beta1.ModelAccessEntry{Provider: "", Model: "sub-m"}) ||
+		got.Surfaces.Spawn.Inherit {
+		t.Errorf("surfaces.spawn = %+v, want the current subagent value only", got.Surfaces.Spawn)
+	}
 	// No granted CLI rows: the codingCli surface map is empty.
-	if len(got.Surfaces.CodingCli) != 0 || len(got.Surfaces.Main.Entries) != 0 {
-		t.Errorf("surfaces = %+v, want empty", got.Surfaces)
+	if len(got.Surfaces.CodingCli) != 0 {
+		t.Errorf("surfaces.codingCli = %+v, want empty", got.Surfaces.CodingCli)
 	}
 }
 
@@ -809,5 +824,63 @@ func TestModelAccessMiddleware_ScopedReads(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// PR-B1 §2.4: an L2 human caller sees their OWN grant set — capabilities
+// come from the caller's scope (not the owner's), and the surfaces carry
+// the caller's merged set: explicit rows first, implicit grants next, the
+// current value last.
+func TestModelAccess_HumanSeesOwnGrants(t *testing.T) {
+	w := maWorker("w1", "qwen3.6-27b", "", "", "openclaw")
+	w.Annotations = map[string]string{modelGrantAnnotation: `[{"provider":"gw","model":"implicit-m"}]`}
+	h := maRig(t,
+		maTeam("alpha", v1beta1.TeamWorkerRef{Name: "w1", Role: "worker"}),
+		w,
+		// The team owner's table must NOT leak into dave's view.
+		maHuman("alice", []string{"alpha"}, nil, &v1beta1.ModelAccessSpec{Scopes: []v1beta1.ModelAccessScope{{
+			Role: "worker",
+			Main: &v1beta1.ModelAccessSurface{Entries: []v1beta1.ModelAccessEntry{{Provider: "gw", Model: "owner-m"}}},
+		}}}),
+		// dave's own rows are what he must see.
+		maHuman("dave", []string{"alpha"}, nil, &v1beta1.ModelAccessSpec{Scopes: []v1beta1.ModelAccessScope{{
+			Role: "worker",
+			Main: &v1beta1.ModelAccessSurface{Entries: []v1beta1.ModelAccessEntry{{Provider: "gw", Model: "qwen3.6-27b"}}},
+		}}}),
+	)
+	dave := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "dave", Teams: []string{"alpha"}}
+	rec := httptest.NewRecorder()
+	h.GetModelAccess(rec, maReq(t, "/api/v1/model-access?worker=w1", dave))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got modelAccessWorkerResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Locked {
+		t.Fatalf("locked = true, want false (dave carries a grant)")
+	}
+	if !got.Capabilities.Main.CanEdit {
+		t.Errorf("main capabilities = %+v, want canEdit from dave's own scope", got.Capabilities.Main)
+	}
+	want := []v1beta1.ModelAccessEntry{
+		{Provider: "gw", Model: "qwen3.6-27b"}, // dave's explicit row (first)
+		{Provider: "gw", Model: "implicit-m"},  // the implicit grant (next)
+		{Provider: "", Model: "qwen3.6-27b"},   // the current value (last)
+	}
+	if len(got.Surfaces.Main.Entries) != len(want) {
+		t.Fatalf("surfaces.main = %+v, want %v", got.Surfaces.Main.Entries, want)
+	}
+	for i := range want {
+		if got.Surfaces.Main.Entries[i] != want[i] {
+			t.Fatalf("surfaces.main[%d] = %+v, want %+v", i, got.Surfaces.Main.Entries[i], want[i])
+		}
+	}
+	if strings.Contains(rec.Body.String(), "owner-m") {
+		t.Errorf("owner grant row leaked into the human's view: %s", rec.Body.String())
+	}
+	if got.Current.Model != "qwen3.6-27b" || got.Current.ModelProvider != "" {
+		t.Errorf("current = %+v", got.Current)
 	}
 }

@@ -59,17 +59,24 @@ func TestUpdateWorker_SubagentModelL1SetOmitClear(t *testing.T) {
 	}
 }
 
-// An explicit clear must stay L1-only: scoped callers are rejected on the
-// field even when the value is the empty string (the pointer is present).
+// PR-B1 §2.3: an L2 human clearing subagentModel (returning to inheritance)
+// needs the spawn inherit grant — without one, 403 inherit_not_granted.
+// (Writing the current value is always allowed, so the rig's empty current
+// value is set by L1 first to make the clear a real value change.)
 func TestUpdateWorker_SubagentModelL2ClearRejected(t *testing.T) {
 	handler, _ := newL2UpdateRig(t)
 	caller := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"alpha-team"}}
 
-	rec := l2UpdateRequest(t, handler, "alpha-dev", `{"subagentModel":""}`, caller)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 (scoped caller must not clear), got %d: %s", rec.Code, rec.Body.String())
+	rec := l2UpdateRequest(t, handler, "alpha-dev", `{"subagentModel":"sub-x"}`, nil) // L1: no scoped check
+	if rec.Code != http.StatusOK {
+		t.Fatalf("L1 set: expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if !bytes.Contains(rec.Body.Bytes(), []byte("subagentModel")) {
-		t.Fatalf("error should name the offending field, got: %s", rec.Body.String())
+
+	rec = l2UpdateRequest(t, handler, "alpha-dev", `{"subagentModel":""}`, caller)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 (clearing the model slot needs the spawn inherit grant), got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte("inherit_not_granted")) {
+		t.Fatalf("error should name the missing grant, got: %s", rec.Body.String())
 	}
 }

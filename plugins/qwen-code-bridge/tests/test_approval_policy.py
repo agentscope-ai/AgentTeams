@@ -514,3 +514,150 @@ def test_equals_value_secret_name_deny(tmp_path):
         [str(root)],
     )
     assert d["behavior"] == "deny" and d["rule"] == "secret-path"
+
+
+# ---------------------------------------------------------------------------
+# F4-end-of-options — the end-of-options delimiter (``--``) ends flag
+# parsing: every token after it is a literal operand (a leading ``-``
+# or an embedded ``=`` is part of the file name, never flag syntax),
+# guarded with the same two checks as any bare operand.
+# ---------------------------------------------------------------------------
+
+
+def _make_end_of_options_root(tmp_path) -> "Path":
+    """A run root for the end-of-options tests: dashed names (real
+    files, a credential-marked file, symlinks escaping the root), a
+    file literally named ``--``, and plain names."""
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = tmp_path / "outside-dash.txt"
+    outside.write_text("outside", encoding="utf-8")
+    (root / "-evil.txt").symlink_to(outside)
+    (root / "-x=1").symlink_to(outside)
+    (root / "-id_rsa").write_text("key", encoding="utf-8")
+    (root / "-normal.txt").write_text("n", encoding="utf-8")
+    (root / "-dashfile").write_text("d", encoding="utf-8")
+    (root / "--").write_text("sep", encoding="utf-8")
+    (root / "normal.txt").write_text("n", encoding="utf-8")
+    (root / "notes.md").write_text("notes", encoding="utf-8")
+    return root
+
+
+def test_end_of_options_symlink_escape_deny(tmp_path):
+    """N1: after ``--`` a dashed name that is a symlink escaping the
+    root is still a literal operand -> outside-root."""
+    root = _make_end_of_options_root(tmp_path)
+    d = approval.decide(
+        "run_shell_command",
+        {"command": "cat -- -evil.txt", "cwd": str(root)},
+        [str(root)],
+    )
+    assert d["behavior"] == "deny" and d["rule"] == "outside-root"
+
+
+def test_end_of_options_secret_name_deny(tmp_path):
+    """N2: after ``--`` a dashed credential-marked real file is a
+    literal operand -> secret-path."""
+    root = _make_end_of_options_root(tmp_path)
+    d = approval.decide(
+        "run_shell_command",
+        {"command": "cat -- -id_rsa", "cwd": str(root)},
+        [str(root)],
+    )
+    assert d["behavior"] == "deny" and d["rule"] == "secret-path"
+
+
+def test_end_of_options_equals_not_split_deny(tmp_path):
+    """N3: after ``--`` the whole token is the file name — never
+    split on ``=``.  ``-x=1`` (a symlink escaping the root) must be
+    checked as a unit -> outside-root."""
+    root = _make_end_of_options_root(tmp_path)
+    d = approval.decide(
+        "run_shell_command",
+        {"command": "cat -- -x=1", "cwd": str(root)},
+        [str(root)],
+    )
+    assert d["behavior"] == "deny" and d["rule"] == "outside-root"
+
+
+def test_end_of_options_normal_files_allow(tmp_path):
+    """P1/P2: dashed and plain existing files after ``--`` stay
+    auto-approved (no false positive on a leading dash)."""
+    root = _make_end_of_options_root(tmp_path)
+    for command in ("cat -- -normal.txt", "cat -- normal.txt"):
+        d = approval.decide(
+            "run_shell_command",
+            {"command": command, "cwd": str(root)},
+            [str(root)],
+        )
+        assert d["behavior"] == "allow", command
+
+
+def test_git_add_end_of_options_dash_pathspec_allow(tmp_path):
+    """P3: ``git add -- -dashfile`` — a dashed pathspec after the
+    delimiter is legal git syntax; git passes and the operand is
+    checked and inside the root -> allow."""
+    root = _make_end_of_options_root(tmp_path)
+    d = approval.decide(
+        "run_shell_command",
+        {"command": "git add -- -dashfile", "cwd": str(root)},
+        [str(root)],
+    )
+    assert d["behavior"] == "allow"
+
+
+def test_git_add_end_of_options_missing_pathspec_allow(tmp_path):
+    """P4: a missing pathspec after ``--`` is left to git itself."""
+    root = _make_end_of_options_root(tmp_path)
+    d = approval.decide(
+        "run_shell_command",
+        {"command": "git add -- newfile.txt", "cwd": str(root)},
+        [str(root)],
+    )
+    assert d["behavior"] == "allow"
+
+
+def test_end_of_options_file_named_separator_allow(tmp_path):
+    """P5: a file literally named ``--`` in the root: the second
+    ``--`` token is a literal operand that resolves inside -> allow."""
+    root = _make_end_of_options_root(tmp_path)
+    d = approval.decide(
+        "run_shell_command",
+        {"command": "cat -- --", "cwd": str(root)},
+        [str(root)],
+    )
+    assert d["behavior"] == "allow"
+
+
+def test_git_add_all_flag_deny():
+    """R1 (regression): ``git add -A`` is still rejected."""
+    d = approval.decide("shell", {"command": "git add -A"}, [ROOT])
+    assert d["behavior"] == "deny" and d["rule"] == "git-disallowed"
+
+
+def test_git_add_flag_before_separator_deny(tmp_path):
+    """R2 (regression): a flag before the end-of-options delimiter is
+    still rejected.  (Spec note: the task book wrote this case as
+    ``git add -- -x`` annotated "flag before ``--``", but that literal
+    form has no token before ``--`` — the same shape as P3/P4, which
+    the fix design requires to allow — so the test uses the annotated
+    shape.)"""
+    root = _make_end_of_options_root(tmp_path)
+    d = approval.decide(
+        "run_shell_command",
+        {"command": "git add -A -- -x", "cwd": str(root)},
+        [str(root)],
+    )
+    assert d["behavior"] == "deny" and d["rule"] == "git-disallowed"
+
+
+def test_bare_flag_before_separator_unchanged(tmp_path):
+    """R3 (regression): before the delimiter, bare flags keep their
+    old meaning (skipped), so ``head -n 1 notes.md`` stays allowed."""
+    root = _make_end_of_options_root(tmp_path)
+    d = approval.decide(
+        "run_shell_command",
+        {"command": "head -n 1 notes.md", "cwd": str(root)},
+        [str(root)],
+    )
+    assert d["behavior"] == "allow"

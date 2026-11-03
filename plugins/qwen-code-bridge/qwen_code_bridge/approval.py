@@ -42,7 +42,10 @@ Shell policy (fail closed, #1411):
    tokens (leading ``-`` without ``=``) are never path operands, but
    the value part of an equals-form flag (``--files0-from=<file>``) is
    data the program actually opens and is guarded like a bare
-   operand.  Secret-ish operands are
+   operand.  The end-of-options delimiter (``--``) ends flag parsing:
+   every token after it is a literal operand — a leading ``-`` or an
+   embedded ``=`` is part of the file name, never flag syntax — and
+   is checked the same way.  Secret-ish operands are
    refused everywhere.  Programs whose arguments are a program (``sed``)
    are denied outright: their scripts can execute commands
    (``e``/``s///e``) or write files (``w``/``W``/``s///w``, ``-f``),
@@ -276,7 +279,15 @@ def _git_verdict(args: list[str]) -> tuple[str, str, str] | None:
             "git checkout only allows: checkout -- <path>",
         )
     if sub == "add":
-        if all(a == "--" or not a.startswith("-") for a in rest):
+        if "--" in rest:
+            # End-of-options delimiter: every token before it must be
+            # a pathspec (no flags); after it any spelling is a
+            # pathspec — the real guard is the shared operand loop.
+            pre = rest[: rest.index("--")]
+            ok = not any(a.startswith("-") for a in pre)
+        else:
+            ok = not any(a.startswith("-") for a in rest)
+        if ok:
             return None
         return (
             RISK_DENY,
@@ -436,12 +447,35 @@ def _classify_shell(tool_input: Any, root_list: list[str]) -> dict[str, Any]:
             )
         return None
 
+    after_sep = False
     for i, arg in enumerate(argv[1:]):
         if skip_message and i == 2:
             continue
+        if not after_sep and arg == "--":
+            # End-of-options delimiter: not an operand itself; every
+            # token after it is a literal operand, never a flag.
+            after_sep = True
+            continue
+        if after_sep:
+            # After the delimiter a leading ``-`` and an embedded
+            # ``=`` are part of the file name — never flag syntax, so
+            # the token is never split on ``=``.  Same existence gate
+            # as a bare operand: a present (or path-like) name is a
+            # real file (or a symlink to one) and gets the same two
+            # checks; a missing bare name is a pattern or argument
+            # left to the command itself.
+            resolved = os.path.join(base_dir, os.path.expanduser(arg))
+            if not (_path_like(arg) or os.path.lexists(resolved)):
+                continue
+            verdict = _guard_operand(arg)
+            if verdict is not None:
+                return verdict
+            continue
         if arg.startswith("-"):
             # A bare flag (``tail -f``, ``-n`` …): never a path
-            # operand.  The value part of an equals-form flag
+            # operand.  (Only before the end-of-options delimiter —
+            # after ``--`` a dashed token is a file name, handled
+            # above.)  The value part of an equals-form flag
             # (``--files0-from=<file>``) is different: it is data the
             # program actually opens (a file, a NUL-separated file
             # list), so it is an operand exactly like a bare one and

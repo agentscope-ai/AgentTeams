@@ -536,6 +536,19 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "description": "Shared deliverable paths included in submit_task.",
                     "items": {"type": "string"},
                 },
+                "conclusions": {
+                    "type": "array",
+                    "description": (
+                        "Completion-report conclusions for submit_task: 3-5 "
+                        "short one-line strings (what was done, verified, or "
+                        "left open). Fewer than 3 warns by default and is "
+                        "rejected when AGENTTEAMS_TASK_CONCLUSIONS_STRICT is "
+                        "on; more than 5 are all recorded on the task meta, "
+                        "but the completion event shows the first 5 with a "
+                        "pointer to shared/tasks/{taskId}/meta.json."
+                    ),
+                    "items": {"type": "string"},
+                },
                 "reason": {
                     "type": "string",
                     "description": "Required cancellation reason for cancel_task.",

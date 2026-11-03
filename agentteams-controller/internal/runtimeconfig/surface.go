@@ -14,6 +14,31 @@ const (
 	AppliesRestart  Applies = "restart"   // needs a process restart
 )
 
+// Class tells a policy layer how a field participates in model selection.
+// Empty means the field is not part of the model-selection plane.
+type Class string
+
+const (
+	// ClassSelection marks a key that selects which provider/model is active.
+	ClassSelection Class = "selection"
+	// ClassDefinition marks a key that defines a provider, its endpoint,
+	// its credentials, or the model catalog itself.
+	ClassDefinition Class = "definition"
+	// ClassPolicy marks a key that constrains model selection (a policy
+	// applied on top of a policy).
+	ClassPolicy Class = "policy"
+)
+
+// Valid reports whether c is a known class; the empty string is valid and
+// means "not classified".
+func (c Class) Valid() bool {
+	switch c {
+	case "", ClassSelection, ClassDefinition, ClassPolicy:
+		return true
+	}
+	return false
+}
+
 // Field describes one configurable key of a runtime.
 type Field struct {
 	Key       string   `json:"key"`
@@ -22,6 +47,7 @@ type Field struct {
 	Default   any      `json:"default,omitempty"`
 	Unit      string   `json:"unit,omitempty"`
 	Applies   Applies  `json:"applies"`
+	Class     Class    `json:"class,omitempty"`
 	Sensitive bool     `json:"sensitive,omitempty"`
 	Group     string   `json:"group,omitempty"`
 	Enum      []string `json:"enum,omitempty"`

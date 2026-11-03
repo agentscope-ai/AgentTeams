@@ -225,7 +225,7 @@ func (c *MinIOClient) sdkPutObjectIfNoneMatch(ctx context.Context, key string, d
 	}
 	reader := bytes.NewReader(data)
 	opts := minio.PutObjectOptions{ContentType: "application/json"}
-	opts.CustomHeaders.Set("If-None-Match", "*")
+	opts.SetMatchETagExcept("*")
 	_, err = sdk.PutObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), reader, int64(len(data)), opts)
 	return err
 }

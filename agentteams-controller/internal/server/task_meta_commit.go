@@ -283,7 +283,7 @@ func (h *ProjectHandler) PutTaskMeta(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusPreconditionRequired,
 			"If-Match is required: read the task meta and pass its ETag; this endpoint never blind-writes")
 		return
-	case ifNoneMatch != "*":
+	case ifNoneMatch != "" && ifNoneMatch != "*":
 		writeError(w, http.StatusBadRequest,
 			`If-None-Match must be the literal "*" (create-if-absent); a specific ETag is not supported`)
 		return

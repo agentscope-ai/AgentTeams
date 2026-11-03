@@ -118,6 +118,14 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("PUT /api/v1/humans/{name}", mw.RequireAuthz(authpkg.ActionUpdate, "human", nameFn)(http.HandlerFunc(rh.UpdateHuman)))
 	mux.Handle("DELETE /api/v1/humans/{name}", mw.RequireAuthz(authpkg.ActionDelete, "human", nameFn)(http.HandlerFunc(rh.DeleteHuman)))
 
+	// ModelAccessTable (PR-A1a): shared model-grant tables. Humans are
+	// denied by the authorizer default branch (403); admin/manager full.
+	mux.Handle("GET /api/v1/model-access-tables", mw.RequireAuthz(authpkg.ActionList, "model-access-table", nil)(http.HandlerFunc(rh.ListModelAccessTables)))
+	mux.Handle("POST /api/v1/model-access-tables", mw.RequireAuthz(authpkg.ActionCreate, "model-access-table", nil)(http.HandlerFunc(rh.CreateModelAccessTable)))
+	mux.Handle("GET /api/v1/model-access-tables/{name}", mw.RequireAuthz(authpkg.ActionGet, "model-access-table", nameFn)(http.HandlerFunc(rh.GetModelAccessTable)))
+	mux.Handle("PUT /api/v1/model-access-tables/{name}", mw.RequireAuthz(authpkg.ActionUpdate, "model-access-table", nameFn)(http.HandlerFunc(rh.UpdateModelAccessTable)))
+	mux.Handle("DELETE /api/v1/model-access-tables/{name}", mw.RequireAuthz(authpkg.ActionDelete, "model-access-table", nameFn)(http.HandlerFunc(rh.DeleteModelAccessTable)))
+
 	// Human file area (#1414 P1): per-human working files + recycle bin.
 	// Auth-only middleware: the handler performs its own authorization so
 	// non-access callers get 404 (no existence probing) and partial-access

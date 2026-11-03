@@ -12,6 +12,7 @@ Field layout follows the P9 detailed design
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
@@ -181,6 +182,10 @@ class CoreConfig:
     reconnect_initial_delay: float = 1.0
     reconnect_max_delay: float = 60.0
     reconnect_backoff_factor: float = 2.0
+    # Declared runtime capabilities (name -> supported), e.g. from a
+    # sidecar hello.  Absent means unsupported; consumers degrade
+    # (e.g. wait for the next turn) instead of raising.
+    capabilities: Mapping[str, bool] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "state_dir", Path(self.state_dir))
@@ -188,6 +193,17 @@ class CoreConfig:
             object.__setattr__(self, "socket_path", Path(self.socket_path))
         if not self.agent_id:
             raise ValueError("CoreConfig.agent_id must be non-empty")
+        for cap, supported in self.capabilities.items():
+            if not isinstance(cap, str) or not cap:
+                raise ValueError(
+                    f"CoreConfig.capabilities keys must be non-empty strings, got {cap!r}"
+                )
+            if not isinstance(supported, bool):
+                raise ValueError(
+                    f"CoreConfig.capabilities values must be bool, "
+                    f"got {supported!r} for {cap!r}"
+                )
+        object.__setattr__(self, "capabilities", dict(self.capabilities))
         if self.reconnect_initial_delay <= 0:
             raise ValueError("CoreConfig.reconnect_initial_delay must be > 0")
         if self.reconnect_max_delay < self.reconnect_initial_delay:

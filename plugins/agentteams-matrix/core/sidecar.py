@@ -32,6 +32,14 @@ Note: the design sample inbound frame carries no ``kind``; when absent,
 :func:`frame_to_inbound` derives it (``media`` if the frame has media,
 else ``text``).  An explicit ``kind`` field is accepted for forward
 compatibility.
+
+Capabilities: a ``hello`` ``capabilities`` entry is either a non-empty
+string (the capability is supported) or a single-key object carrying an
+explicit value, e.g. ``{"steer": false}`` (declared, currently
+unsupported).  A capability absent from the list is unsupported
+(:func:`capability_supported` returns ``False``); consumers must
+degrade (e.g. wait for the next turn), never raise.  See
+:func:`parse_capabilities`.
 """
 
 from __future__ import annotations
@@ -42,6 +50,7 @@ import os
 import socket
 import stat
 import threading
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Union
 
@@ -153,6 +162,8 @@ def _validate_frame(frame: dict[str, Any]) -> None:
             raise SidecarProtocolError("hello.agent must be a non-empty string", "invalid_frame")
         if not isinstance(frame["capabilities"], list):
             raise SidecarProtocolError("hello.capabilities must be a list", "invalid_frame")
+        # Entry shapes: non-empty str, or a single-key {name: bool} dict.
+        parse_capabilities(frame["capabilities"])
     elif ftype == INBOUND:
         _require(
             frame, "event_id", "room_id", "sender", "text", "media", "mentions", "thread_root", "ts"
@@ -182,6 +193,78 @@ def _validate_frame(frame: dict[str, Any]) -> None:
         _require(frame, "event_id")
     elif ftype == ERROR:
         _require(frame, "code", "message")
+
+
+# ---------------------------------------------------------------------------
+# Capability negotiation (hello entries: str = supported, {name: bool} =
+# explicit value; missing = False, consumers degrade rather than raise)
+# ---------------------------------------------------------------------------
+
+
+def parse_capabilities(entries: list) -> dict[str, bool]:
+    """Normalise a hello ``capabilities`` list into a name→bool mapping.
+
+    A bare non-empty string names a supported capability (``True``); a
+    single-key dict carries an explicit value, e.g. ``{"steer": False}``.
+    Raises :class:`SidecarProtocolError` (``invalid_frame``) for any
+    entry that is neither form — the same validation the wire path runs
+    in :func:`decode_line`.
+    """
+    if not isinstance(entries, list):
+        raise SidecarProtocolError("capabilities must be a list", "invalid_frame")
+    caps: dict[str, bool] = {}
+    for entry in entries:
+        if isinstance(entry, str):
+            if not entry:
+                raise SidecarProtocolError(
+                    "hello.capabilities string entries must be non-empty",
+                    "invalid_frame",
+                )
+            caps[entry] = True
+        elif isinstance(entry, dict):
+            if len(entry) != 1:
+                raise SidecarProtocolError(
+                    "hello.capabilities dict entries must have exactly one key",
+                    "invalid_frame",
+                )
+            (name, value), = entry.items()
+            if not isinstance(name, str) or not name:
+                raise SidecarProtocolError(
+                    "hello.capabilities dict key must be a non-empty string",
+                    "invalid_frame",
+                )
+            if not isinstance(value, bool):
+                raise SidecarProtocolError(
+                    f"hello.capabilities value for {name!r} must be a bool",
+                    "invalid_frame",
+                )
+            caps[name] = value
+        else:
+            raise SidecarProtocolError(
+                "hello.capabilities entries must be a non-empty string or a "
+                f"single-key {{name: bool}} object, got {type(entry).__name__}",
+                "invalid_frame",
+            )
+    return caps
+
+
+def capability_supported(capabilities, name: str) -> bool:
+    """Whether *name* is declared supported (explicit ``True``).
+
+    Accepts the raw hello entry list (str / single-key dict) or an
+    already-parsed ``dict[str, bool]``.  A missing capability is
+    ``False``; this is a degradation gate, not a validation gate, so it
+    never raises — malformed input degrades to ``False`` (malformed
+    hello frames are already rejected on the wire).
+    """
+    if isinstance(capabilities, Mapping):
+        value = capabilities.get(name)
+    else:
+        try:
+            value = parse_capabilities(list(capabilities)).get(name)
+        except SidecarProtocolError:
+            return False
+    return value is True
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +432,9 @@ class SidecarServer:
         self._stopped = threading.Event()
         self._accept_thread: threading.Thread | None = None
         self.agent: str | None = None
-        self.capabilities: list[str] = []
+        # Raw hello entries: non-empty str (supported) or a single-key
+        # {name: bool} dict (explicit value, e.g. {"steer": False}).
+        self.capabilities: list[Any] = []
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -407,6 +492,15 @@ class SidecarServer:
     def wait_connected(self, timeout: float = 5.0) -> bool:
         """Wait until a peer completes the handshake (test/ops helper)."""
         return self._connected.wait(timeout)
+
+    def capability_supported(self, name: str) -> bool:
+        """Whether the connected agent declared *name* as supported.
+
+        False when disconnected or when the capability is absent —
+        consumers degrade (e.g. wait for the next turn) instead of
+        raising.
+        """
+        return capability_supported(self.capabilities, name)
 
     # -- framing -----------------------------------------------------------
 

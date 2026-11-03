@@ -885,6 +885,127 @@ func TestStatusTransitionTableParity(t *testing.T) {
 	}
 }
 
+// =====================================================================
+// #1467 r2 — the duplicate attention-record identity gap
+// =====================================================================
+//
+// checkAttention indexed the proposed records by stable identity with a map
+// overwrite, so a body carrying two records with the same (kind, attempt)
+// identity only checked the LAST of them and silently stored the sibling:
+// a worker could smuggle in a forged resolved twin of an open approval and
+// the r1 gate would then see the approval as approved. The stored side had
+// the same ambiguity. Duplicates are now refused on both sides, for every
+// caller class (fail closed). The r2 positive controls C2 (a human closes
+// in their own name -> 200) and C3 (a worker's single forged close -> 403)
+// are the existing tests 8 and 1 above, which stay green.
+
+// 13. Duplicate identity in the PROPOSED body: D1 (worker, forged first —
+// the ordering the old map overwrite was fooled by), D2 (worker, open
+// first), D3 (leader, a provenance-legal close as the second record).
+func TestPutTaskMeta_DuplicateIdentityInBody(t *testing.T) {
+	base := approvalTaskMeta()
+	openRec := base["attention"].([]any)[0]
+	forged := map[string]any{
+		"kind":          "approval",
+		"question":      "approve the submitted result?",
+		"attempt":       1,
+		"requestedAt":   "2026-11-01T10:00:00Z",
+		"resolved":      true,
+		"resolvedRole":  "human",
+		"resolvedVia":   "im_reply",
+		"resolvedActor": "human:luo",
+		"resolvedAt":    "2026-11-01T11:00:00Z",
+	}
+	legalClose := map[string]any{
+		"kind":          "approval",
+		"question":      "approve the submitted result?",
+		"attempt":       1,
+		"requestedAt":   "2026-11-01T10:00:00Z",
+		"resolved":      true,
+		"resolvedRole":  "human",
+		"resolvedVia":   "im_reply",
+		"resolvedActor": "human:zhang",
+		"resolvedAt":    "2026-11-01T11:00:00Z",
+	}
+
+	worker := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "alpha-dev", Team: "alpha-team"}
+	leader := &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team"}
+
+	withAttention := func(records ...any) map[string]any {
+		body := map[string]any{}
+		for key, value := range base {
+			body[key] = value
+		}
+		body["attention"] = records
+		return body
+	}
+
+	for _, tc := range []struct {
+		name   string
+		body   map[string]any
+		caller *authpkg.CallerIdentity
+	}{
+		{"worker, forged first then open", withAttention(forged, openRec), worker},
+		{"worker, open first then forged", withAttention(openRec, forged), worker},
+		{"leader, open first then a legal close", withAttention(openRec, legalClose), leader},
+	} {
+		store := ossfake.NewMemory()
+		putTask(store, taskMetaKey, base)
+		h := newProjectTestHandler(t, store, teamWithRoster("alpha-team"))
+		rec := putTaskMetaRequest(t, h, "t1", taskMetaETag(t, store, taskMetaKey), taskMetaBody(tc.body), tc.caller)
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "duplicate identity") {
+			t.Fatalf("%s -> %d %s, want 403 naming the duplicate identity", tc.name, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// 14. Duplicate identity in the STORED meta: the stored attention already
+// carries two records with the same (kind, attempt) identity, so even a
+// pure worker write-back (attention verbatim) is refused — the corrupt
+// stored record must be fixed out of band, not written through.
+func TestPutTaskMeta_DuplicateIdentityInStored(t *testing.T) {
+	base := approvalTaskMeta()
+	stored := map[string]any{}
+	for key, value := range base {
+		stored[key] = value
+	}
+	stored["attention"] = []any{
+		base["attention"].([]any)[0],
+		map[string]any{
+			"kind":        "approval",
+			"question":    "a stale twin reusing the same attempt",
+			"attempt":     1,
+			"requestedAt": "2026-11-01T09:55:00Z",
+			"resolved":    false,
+		},
+	}
+
+	store := ossfake.NewMemory()
+	putTask(store, taskMetaKey, stored)
+	h := newProjectTestHandler(t, store, teamWithRoster("alpha-team"))
+	worker := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "alpha-dev", Team: "alpha-team"}
+
+	rec := putTaskMetaRequest(t, h, "t1", taskMetaETag(t, store, taskMetaKey), taskMetaBody(stored), worker)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "stored attention records contain an ambiguous duplicate identity") {
+		t.Fatalf("stored duplicate, worker write-back -> %d %s, want 403 naming the stored duplicate identity", rec.Code, rec.Body.String())
+	}
+}
+
+// 15. Positive control (r2 C1): an ordinary worker write-back keeps the
+// attention records verbatim (the open approval stays open) — it lands.
+func TestPutTaskMeta_WorkerWriteBackKeepsAttention(t *testing.T) {
+	base := approvalTaskMeta()
+	store := ossfake.NewMemory()
+	putTask(store, taskMetaKey, base)
+	h := newProjectTestHandler(t, store, teamWithRoster("alpha-team"))
+	worker := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "alpha-dev", Team: "alpha-team"}
+
+	rec := putTaskMetaRequest(t, h, "t1", taskMetaETag(t, store, taskMetaKey), taskMetaBody(base), worker)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("worker write-back of the identical meta -> %d %s, want 200", rec.Code, rec.Body.String())
+	}
+}
+
 func containsString(set []string, s string) bool {
 	for _, v := range set {
 		if v == s {

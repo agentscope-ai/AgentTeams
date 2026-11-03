@@ -906,6 +906,12 @@ func (h *ProjectHandler) validateApprovalClose(
 // authoritative fields of an existing approval record, a decider may only close
 // one through a provenance-legal close, and any newly added approval record
 // must be raised open. It counts new closes into *newlyClosed.
+//
+// Invariant: a duplicate stable identity is refused on the stored side and on
+// the proposed side alike, so the stored and proposed records correspond
+// one-to-one by identity and the loops below check every record — a matched
+// one through the authority-field / close rules, a new one through the open
+// rule — with no proposed record ever skipped unchecked.
 func (h *ProjectHandler) checkAttention(
 	w http.ResponseWriter,
 	ctx context.Context,
@@ -927,11 +933,21 @@ func (h *ProjectHandler) checkAttention(
 	curIDs := make(map[string]struct{}, len(curRecs))
 	for _, cRec := range curRecs {
 		if id, stable := recordIdentity(cRec); stable {
+			if _, seen := curIDs[id]; seen {
+				writeError(w, http.StatusForbidden,
+					"stored attention records contain an ambiguous duplicate identity (kind, attempt)")
+				return false
+			}
 			curIDs[id] = struct{}{}
 		}
 	}
 	for _, bRec := range bodRecs {
 		if id, stable := recordIdentity(bRec); stable {
+			if _, seen := bodByID[id]; seen {
+				writeError(w, http.StatusForbidden,
+					"proposed attention records contain an ambiguous duplicate identity (kind, attempt)")
+				return false
+			}
 			bodByID[id] = bRec
 		}
 	}

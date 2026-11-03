@@ -20,6 +20,9 @@ on:
       - 'tests/check-installer-pre-1.2-env-compat.sh'
       - 'tests/check-installer-wasm-registry.sh'
       - 'tests/check-installer-wasm-registry.ps1'
+      - 'tests/check-custom-llm-endpoint.sh'
+      - 'tests/check-custom-llm-endpoint.ps1'
+      - 'manager/scripts/init/setup-higress.sh'
       - 'tests/check-installer-username-validation.sh'
       - 'tests/check-installer-username-validation.ps1'
       - 'tests/check-installer-env-data-dir-readback.sh'
@@ -76,6 +79,13 @@ jobs:
       - name: Check PowerShell installer WASM registry
         shell: pwsh
         run: ./tests/check-installer-wasm-registry.ps1
+
+      - name: Check Shell custom LLM endpoints
+        run: bash tests/check-custom-llm-endpoint.sh
+
+      - name: Check PowerShell custom LLM endpoints
+        shell: pwsh
+        run: ./tests/check-custom-llm-endpoint.ps1
 
       - name: Check Bash installer username validation
         run: bash tests/check-installer-username-validation.sh

@@ -288,9 +288,11 @@ class OutboundQueue:
         )
 
     def _ensure_dir(self) -> None:
-        self._dir.mkdir(mode=0o600, parents=True, exist_ok=True)
-        # Holds message payloads: keep the dir 0600 regardless of umask.
-        os.chmod(self._dir, 0o600)
+        self._dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # Holds message payloads: keep the dir 0700 regardless of umask
+        # (owner-only but traversable — non-root needs the exec bit to
+        # enter it) — queue.json itself stays 0600.
+        os.chmod(self._dir, 0o700)
 
     # -- lookup -------------------------------------------------------------
 

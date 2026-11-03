@@ -13,7 +13,7 @@ Acceptance list (MX-1 §4):
   7. restart replay: pending rows replay, completed rows not re-sent
   8. duplicate suppression: deterministic tx_id across restart, one send
   9. same-room ordering: the second waits for the first
-  10. outbox dir/file permissions are 0600
+  10. outbox dir is 0700 (traversable), queue file 0600
   11. dropped rows are permanent and never re-queued
 """
 
@@ -534,10 +534,12 @@ def test_same_room_ordering_second_waits_for_first(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_outbox_permissions_0600(tmp_path):
+def test_outbox_permissions_0700_dir_0600_file(tmp_path):
     layout = StateLayout(tmp_path / "state")
     layout.ensure()
-    assert stat.S_IMODE(layout.outbox.stat().st_mode) == 0o600
+    # The dir must be traversable (0700): non-root processes need the
+    # exec bit to enter it and create queue.json.
+    assert stat.S_IMODE(layout.outbox.stat().st_mode) == 0o700
     q = OutboundQueue(layout.outbox)
     q.enqueue("final", "k", OutboundMessage(room_id="!r", text="secret"), now=NOW)
     assert stat.S_IMODE(q.file_path.stat().st_mode) == 0o600

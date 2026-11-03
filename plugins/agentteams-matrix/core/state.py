@@ -9,7 +9,7 @@ default ``<agent workspace>/.agentteams/matrix/``)::
       session_keys.json per-(room, sender) session keys (stable JSON)
       media_cache/      downloaded media cache
       history.json      persisted room history (populated from M2 on)
-      outbox/           persistent outbound queue (0600, MX-1)
+      outbox/           persistent outbound queue (0700 dir / 0600 file, MX-1)
       core.lock         single-writer lock (flock)
 
 Writes go through a temp file + :func:`os.replace` so a crash mid-write
@@ -57,13 +57,15 @@ class StateLayout:
         """Create the state directory tree (idempotent).
 
         ``outbox`` (the persistent outbound queue, MX-1) holds message
-        payloads, so it is 0600 like the E2EE store.
+        payloads, so it is owner-only: 0700 for the directory
+        (traversable — non-root needs the exec bit to enter it) with
+        ``queue.json`` itself 0600.
         """
         self.root.mkdir(parents=True, exist_ok=True)
         self.e2ee.mkdir(parents=True, exist_ok=True)
         self.media_cache.mkdir(parents=True, exist_ok=True)
-        self.outbox.mkdir(mode=0o600, parents=True, exist_ok=True)
-        os.chmod(self.outbox, 0o600)
+        self.outbox.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(self.outbox, 0o700)
 
 
 def _atomic_write(path: Union[str, Path], data: Union[str, bytes]) -> None:

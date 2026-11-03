@@ -33,8 +33,8 @@ func maReq(t *testing.T, target string, caller *authpkg.CallerIdentity) *http.Re
 	return r.WithContext(context.WithValue(r.Context(), authpkg.CallerKeyForTest(), caller))
 }
 
-func maWorker(name, model, provider, subagent, runtime string) v1beta1.Worker {
-	return v1beta1.Worker{
+func maWorker(name, model, provider, subagent, runtime string) *v1beta1.Worker {
+	return &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
 		Spec: v1beta1.WorkerSpec{
 			Model:         model,
@@ -47,15 +47,15 @@ func maWorker(name, model, provider, subagent, runtime string) v1beta1.Worker {
 
 func maTestBool(b bool) *bool { return &b }
 
-func maTeam(name string, members ...v1beta1.TeamWorkerRef) v1beta1.Team {
-	return v1beta1.Team{
+func maTeam(name string, members ...v1beta1.TeamWorkerRef) *v1beta1.Team {
+	return &v1beta1.Team{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
 		Spec:       v1beta1.TeamSpec{WorkerMembers: members},
 	}
 }
 
-func maHuman(name string, teams, workers []string, modelAccess *v1beta1.ModelAccessSpec) v1beta1.Human {
-	return v1beta1.Human{
+func maHuman(name string, teams, workers []string, modelAccess *v1beta1.ModelAccessSpec) *v1beta1.Human {
+	return &v1beta1.Human{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
 		Spec: v1beta1.HumanSpec{
 			DisplayName:       name,
@@ -68,8 +68,8 @@ func maHuman(name string, teams, workers []string, modelAccess *v1beta1.ModelAcc
 
 func TestModelAccessNoParamByRole(t *testing.T) {
 	grant := &v1beta1.ModelAccessSpec{Scopes: []v1beta1.ModelAccessScope{{
-		Role:  "worker",
-		Main:  &v1beta1.ModelAccessSurface{Entries: []v1beta1.ModelAccessEntry{{Provider: "gw", Model: "m1"}}},
+		Role: "worker",
+		Main: &v1beta1.ModelAccessSurface{Entries: []v1beta1.ModelAccessEntry{{Provider: "gw", Model: "m1"}}},
 	}}}
 	h := maRig(t, maHuman("alice", []string{"alpha"}, nil, grant))
 
@@ -131,7 +131,7 @@ func TestModelAccessNoParamByRole(t *testing.T) {
 			t.Fatalf("%s: expected 200, got %d: %s", role, rec.Code, rec.Body.String())
 		}
 		var lockedBody struct {
-			Locked       bool                   `json:"locked"`
+			Locked       bool                       `json:"locked"`
 			Capabilities map[string]json.RawMessage `json:"capabilities"`
 		}
 		if err := json.Unmarshal(rec.Body.Bytes(), &lockedBody); err != nil {

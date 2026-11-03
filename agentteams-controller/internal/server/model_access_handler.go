@@ -46,20 +46,20 @@ type modelAccessLockedResponse struct {
 }
 
 type modelAccessWorkerResponse struct {
-	Worker             string                     `json:"worker"`
-	Role               string                     `json:"role"`
-	Team               string                     `json:"team"`
-	Runtime            string                     `json:"runtime"`
-	Locked             bool                       `json:"locked"`
-	Capabilities       modelAccessCapabilities    `json:"capabilities"`
-	Surfaces           modelAccessSurfaces        `json:"surfaces"`
-	Current            modelAccessCurrent         `json:"current"`
-	CatalogUnavailable bool                       `json:"catalogUnavailable"`
+	Worker             string                  `json:"worker"`
+	Role               string                  `json:"role"`
+	Team               string                  `json:"team"`
+	Runtime            string                  `json:"runtime"`
+	Locked             bool                    `json:"locked"`
+	Capabilities       modelAccessCapabilities `json:"capabilities"`
+	Surfaces           modelAccessSurfaces     `json:"surfaces"`
+	Current            modelAccessCurrent      `json:"current"`
+	CatalogUnavailable bool                    `json:"catalogUnavailable"`
 }
 
 type modelAccessCapabilities struct {
-	Main      modelAccessSurfaceCapabilities `json:"main"`
-	Spawn     modelAccessSurfaceCapabilities `json:"spawn"`
+	Main      modelAccessSurfaceCapabilities        `json:"main"`
+	Spawn     modelAccessSurfaceCapabilities        `json:"spawn"`
 	CodingCli map[string]modelAccessCLICapabilities `json:"codingCli"`
 }
 
@@ -71,16 +71,16 @@ type modelAccessSurfaceCapabilities struct {
 }
 
 type modelAccessCLICapabilities struct {
-	CanEdit       bool               `json:"canEdit"`
-	Inherit       bool               `json:"inherit,omitempty"`
-	Reason        string             `json:"reason,omitempty"`
-	WriteVia      []string           `json:"writeVia"`
-	InheritedFrom *authpkg.ModelRef  `json:"inheritedFrom,omitempty"`
+	CanEdit       bool              `json:"canEdit"`
+	Inherit       bool              `json:"inherit,omitempty"`
+	Reason        string            `json:"reason,omitempty"`
+	WriteVia      []string          `json:"writeVia"`
+	InheritedFrom *authpkg.ModelRef `json:"inheritedFrom,omitempty"`
 }
 
 type modelAccessSurfaces struct {
-	Main      modelAccessSurfaceView `json:"main"`
-	Spawn     modelAccessSurfaceView `json:"spawn"`
+	Main      modelAccessSurfaceView            `json:"main"`
+	Spawn     modelAccessSurfaceView            `json:"spawn"`
 	CodingCli map[string]modelAccessSurfaceView `json:"codingCli"`
 }
 
@@ -234,9 +234,9 @@ func (h *ResourceHandler) writeWorkerModelAccess(ctx context.Context, w http.Res
 	}
 
 	resp := modelAccessWorkerResponse{
-		Worker: workerName,
-		Role:   role,
-		Team:   team,
+		Worker:  workerName,
+		Role:    role,
+		Team:    team,
 		Runtime: runtime,
 		Locked:  eff.Locked,
 		Capabilities: modelAccessCapabilities{

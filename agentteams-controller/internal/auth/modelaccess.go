@@ -146,12 +146,15 @@ func Resolve(scope *v1beta1.ModelAccessScope, table *v1beta1.ModelAccessTableSpe
 		}
 		acc := CLIAccess{SurfaceAccess: SurfaceAccess{Entries: c.Entries}}
 		inherit := c.Inherit != nil && *c.Inherit
-		acc.Inherit = inherit
 		switch {
 		case len(c.Entries) > 0:
+			// inherit stays reportable next to explicit rows: the caller
+			// may leave the value empty and follow the spawn model.
 			acc.CanEdit = true
+			acc.Inherit = inherit
 		case inherit && inheritedFrom != nil:
 			acc.CanEdit = true
+			acc.Inherit = true
 			acc.InheritedFrom = inheritedFrom
 		default:
 			// inherit=true but nothing to inherit from (spawn and main

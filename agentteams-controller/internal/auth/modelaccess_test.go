@@ -78,15 +78,15 @@ func TestModelAccessResolve(t *testing.T) {
 	}
 
 	cases := []struct {
-		name        string
-		scope       *v1beta1.ModelAccessScope
-		table       *v1beta1.ModelAccessTableSpec
-		locked      bool
-		mainEdit    bool
-		mainModel   string
-		spawnEdit   bool
+		name         string
+		scope        *v1beta1.ModelAccessScope
+		table        *v1beta1.ModelAccessTableSpec
+		locked       bool
+		mainEdit     bool
+		mainModel    string
+		spawnEdit    bool
 		spawnInherit bool
-		cli         map[string]maCLIWant
+		cli          map[string]maCLIWant
 	}{
 		{
 			name:   "nil scope is fully locked",
@@ -94,12 +94,12 @@ func TestModelAccessResolve(t *testing.T) {
 			cli:    maDeniedCLIs(),
 		},
 		{
-			name:     "inline main grant",
-			scope:    &v1beta1.ModelAccessScope{Main: &v1beta1.ModelAccessSurface{Entries: []v1beta1.ModelAccessEntry{maEntry("mp", "mm")}}},
-			locked:   false,
-			mainEdit: true,
+			name:      "inline main grant",
+			scope:     &v1beta1.ModelAccessScope{Main: &v1beta1.ModelAccessSurface{Entries: []v1beta1.ModelAccessEntry{maEntry("mp", "mm")}}},
+			locked:    false,
+			mainEdit:  true,
 			mainModel: "mm",
-			cli:      maDeniedCLIs(),
+			cli:       maDeniedCLIs(),
 		},
 		{
 			name: "table wins over inline",
@@ -108,13 +108,13 @@ func TestModelAccessResolve(t *testing.T) {
 				// Inline surfaces must be ignored when the table is loaded.
 				Main: &v1beta1.ModelAccessSurface{Entries: []v1beta1.ModelAccessEntry{maEntry("inline-p", "inline-m")}},
 			},
-			table:       sharedTable,
-			locked:      false,
-			mainEdit:    true,
-			mainModel:   "tm",
-			spawnEdit:   true,
+			table:        sharedTable,
+			locked:       false,
+			mainEdit:     true,
+			mainModel:    "tm",
+			spawnEdit:    true,
 			spawnInherit: true,
-			cli:         maDeniedCLIs(),
+			cli:          maDeniedCLIs(),
 		},
 		{
 			name:   "table reference with missing table fails closed",
@@ -144,9 +144,9 @@ func TestModelAccessResolve(t *testing.T) {
 					{CLI: "qwen-code", Inherit: maBool(true)},
 				},
 			},
-			locked:       false,
-			mainEdit:     true,
-			spawnEdit:    true,
+			locked:    false,
+			mainEdit:  true,
+			spawnEdit: true,
 			cli: map[string]maCLIWant{
 				"qwen-code": {canEdit: true, inherit: true, from: &ModelRef{Provider: "sp", Model: "s1"}},
 				"opencode":  {reason: ReasonCLINotGranted},

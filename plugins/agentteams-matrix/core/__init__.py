@@ -54,6 +54,14 @@ from .mentions import (
     text_mentions_worker,
     was_mentioned,
 )
+from .outbox import (
+    OUTBOX_STATUSES,
+    OutboundQueue,
+    OutboxRow,
+    deterministic_tx_id,
+    outbox_marker,
+    with_marker,
+)
 from .session import resolve_session_id, to_handle_from_target
 from .sidecar import (
     FRAME_TYPES,
@@ -88,6 +96,7 @@ __all__ = [
     "HISTORY_CONTEXT_MARKER",
     "INBOUND_KINDS",
     "OUTBOUND_KINDS",
+    "OUTBOX_STATUSES",
     "TYPING_STATES",
     "CoreConfig",
     "CoreLockedError",
@@ -102,6 +111,8 @@ __all__ = [
     "MediaCache",
     "MediaRef",
     "OutboundMessage",
+    "OutboundQueue",
+    "OutboxRow",
     "PROTOCOL_VERSION",
     "RoomHistory",
     "RuntimeBridge",
@@ -116,6 +127,7 @@ __all__ = [
     "decode_line",
     "detect_crypto_backend",
     "e2ee_store_path",
+    "deterministic_tx_id",
     "encode_frame",
     "extract_mentions_from_text",
     "frame_to_inbound",
@@ -127,10 +139,12 @@ __all__ = [
     "make_outbound",
     "make_typing",
     "mxc_to_http",
+    "outbox_marker",
     "probe_olm",
     "resolve_session_id",
     "strip_mention_prefix",
     "text_mentions_worker",
     "to_handle_from_target",
     "was_mentioned",
+    "with_marker",
 ]

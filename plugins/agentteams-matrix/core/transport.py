@@ -649,7 +649,13 @@ class NioTransport:
         return self._client
 
     async def send(self, msg: OutboundMessage) -> str:
-        """Send a message and return the resulting Matrix event id."""
+        """Send a message and return the resulting Matrix event id.
+
+        Uses the message's ``tx_id`` when set (the outbox worker's
+        deterministic id, MX-1 — Matrix deduplicates per (room, tx_id)
+        so a restart replay cannot double-post); otherwise a random
+        one as before.
+        """
         client = self._require_client()
         msgtype = "m.notice" if msg.kind == "tool" else "m.text"
         content: Dict[str, Any] = {"msgtype": msgtype, "body": msg.text}
@@ -661,7 +667,7 @@ class NioTransport:
             msg.room_id,
             "m.room.message",
             content,
-            tx_id=str(uuid4()),
+            tx_id=msg.tx_id if msg.tx_id else str(uuid4()),
             ignore_unverified_devices=True,
         )
         if not isinstance(resp, RoomSendResponse):

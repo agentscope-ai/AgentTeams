@@ -1,13 +1,15 @@
-"""TH18: delegate_task injects a restart-recovery note for cross-restart
-leftover tasks.
+"""TH18: delegate_task injects a recovery note for tasks assigned by an
+earlier session of the dispatch process.
 
-This MCP process runs in the Worker container, so its (re)start is the only
-observable Worker-restart signal: ``taskflow._SESSION_STARTED_AT`` is
-computed once at import time. When delegate_task (re)dispatches a task
-whose assignment predates the current session, the notification must carry
-the fixed recovery note after the spec preview, and the task meta records
-``recoveryNoteAt`` so the note is not re-injected within the same session
-— but IS re-injected after the next restart.
+delegate_task runs with the leader role, so ``taskflow._SESSION_STARTED_AT``
+(computed once at import time) is the start of the MCP process issuing the
+dispatch — NOT of the receiving Worker's host: when delegate_task
+(re)dispatches a task whose assignment predates the current session, the
+session that assigned it is gone, and the notification must carry the fixed
+recovery note after the spec preview. The task meta records ``recoveryNoteAt``
+ONLY once the note has actually been delivered (a failed send must not count
+as injected, so a same-session retry re-sends the note) — and the note IS
+re-injected after the next restart of the dispatch process.
 
 The session start is monkeypatched on ``server.taskflow._SESSION_STARTED_AT``
 with a value derived from the current UTC second (no real sleep or
@@ -41,10 +43,11 @@ WORKER_B = "@bob:example.test"
 ROOM = "!taskroom:example.test"
 
 NOTE = (
-    "The host restarted during this ticket. Inspect the current worktree, git history\n"
-    "and external state (task record, PRs, sent messages) before continuing. Do not\n"
-    "repeat an already completed external operation. Finish the original assignment\n"
-    "and report its status."
+    "The MCP process issuing this dispatch (re)started after this task was\n"
+    "assigned, so the session that assigned it is gone. Inspect the current\n"
+    "worktree, git history and external state (task record, PRs, sent messages)\n"
+    "before continuing. Do not repeat an already completed external operation.\n"
+    "Finish the original assignment and report its status."
 )
 
 
@@ -323,3 +326,84 @@ def test_created_at_fallback_marks_the_leftover(
     assert result["ok"] is True
     assert result["recoveryNote"] is True
     assert NOTE in matrix_capture["bodies"][0]["body"]
+
+
+def test_failed_send_retry_keeps_recovery_note(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R1. A delegate send that FAILS (Matrix error) must not count as
+    "already injected": the failed attempt leaves the task prepared with
+    the persisted transaction nonce but NO recoveryNoteAt, and a same-
+    session retry of the same logical delegation (same assignee) re-sends
+    the note — reusing the persisted transaction id, so the retry's Matrix
+    PUT path (txid) and body are identical to the failed attempt's."""
+    clock = _fake_clock()
+    _start_session(monkeypatch, clock)
+    _write_task(tmp_path, assigned_at=clock["before"])
+
+    sends: dict[str, Any] = {"puts": [], "fail_first": True}
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_PUT(self) -> None:  # noqa: N802
+            length = int(self.headers.get("Content-Length") or 0)
+            sends["puts"].append(
+                {"path": self.path, "body": json.loads(self.rfile.read(length).decode("utf-8"))}
+            )
+            if sends["fail_first"]:
+                sends["fail_first"] = False
+                status = 500
+                payload = {"errcode": "M_UNKNOWN", "error": "simulated network failure"}
+            else:
+                status = 200
+                payload = {"event_id": f"$evt-{len(sends['puts'])}"}
+            data = json.dumps(payload).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *args: Any) -> None:  # silence
+            pass
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_URL", f"http://127.0.0.1:{httpd.server_address[1]}")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "test-token")
+    monkeypatch.setattr(server, "_pull_project", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(server, "_sync_task", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(server, "_validate_assignee_membership", lambda *_args, **_kwargs: {"ok": True})
+    try:
+        first = _delegate(tmp_path, "recov-project-01", WORKER_A)
+        assert first["ok"] is False
+        assert first["retryable"] is True
+        assert first["notification"]["sent"] is False
+
+        # The failed attempt must NOT count as "already injected": the
+        # prepared meta carries the retry nonce but no recoveryNoteAt.
+        meta = server._read_json(tmp_path / "shared" / "tasks" / "recov-project-01" / "meta.json")
+        assert meta["status"] == "prepared"
+        assert meta.get("notifyTxn")
+        assert "recoveryNoteAt" not in meta
+
+        retry = _delegate(tmp_path, "recov-project-01", WORKER_A)
+    finally:
+        httpd.shutdown()
+
+    assert retry["ok"] is True
+    assert retry["recoveryNote"] is True
+    assert len(sends["puts"]) == 2
+    failed_put, retry_put = sends["puts"]
+    # Same logical notification on retry: identical transaction id (the
+    # homeserver deduplicates) and byte-identical body, and the retry's
+    # body still carries the recovery note.
+    assert failed_put["path"] == retry_put["path"]
+    assert failed_put["body"] == retry_put["body"]
+    assert retry_put["body"]["body"] == (
+        f"{WORKER_A} You are assigned task **recov-project-01**: Produce a result\n\n"
+        f"Do the thing.\n\n{NOTE}"
+    )
+    meta = server._read_json(tmp_path / "shared" / "tasks" / "recov-project-01" / "meta.json")
+    assert meta["recoveryNoteAt"]
+    assert meta["recoveryNoteAt"] >= clock["start"]

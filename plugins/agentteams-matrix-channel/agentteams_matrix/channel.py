@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import html
 import importlib
 import inspect
@@ -481,6 +482,20 @@ class AgentTeamsMatrixChannel(BaseChannel):
         # Thread tracking (ported from CoPaw overlay)
         self._active_thread_roots: Dict[str, str] = {}
         self._proactive_send_state: Dict[str, Dict[str, Any]] = {}
+
+    async def _access_control_gate(self, payload: Any) -> bool:
+        # Denials are bot notices, not new requests. Keep this metadata local
+        # to the ACL check so allowed messages retain their normal reply type.
+        if isinstance(payload, dict):
+            meta = dict(payload.get("meta") or {})
+            meta[_MATRIX_FORCE_NOTICE_KEY] = True
+            payload = {**payload, "meta": meta}
+        else:
+            payload = copy.copy(payload)
+            meta = dict(getattr(payload, "channel_meta", None) or {})
+            meta[_MATRIX_FORCE_NOTICE_KEY] = True
+            payload.channel_meta = meta
+        return await super()._access_control_gate(payload)
 
     # ------------------------------------------------------------------
     # Debounce key — serialize by room_id (avoid concurrent session access)

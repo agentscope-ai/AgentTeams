@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import threading
+import time
 import types
 from pathlib import Path
 
@@ -1043,7 +1044,9 @@ class _FlushFakeRemote:
                     target.write_bytes(data)
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    def cat(self, key: str):
+    def cat(self, key: str, timeout: float | None = None):
+        # #1500: stands in for _cat_bytes, which now forwards a per-call
+        # timeout — the signature must accept it.
         return self.objects.get(self.full(key))
 
 
@@ -1175,6 +1178,128 @@ def test_flush_is_idempotent(tmp_path: Path, monkeypatch) -> None:
     assert second["uploaded"] == []
     assert second["skipped"] == ["unchanged:a.md"]
     assert second["pending"] == 0
+
+
+# ---------------------------------------------------------------------------
+# #1500: flush failure semantics + bounded shutdown upload
+# ---------------------------------------------------------------------------
+
+
+def test_flush_conflict_reports_failure(tmp_path: Path, monkeypatch) -> None:
+    """#1500: a conflict (both sides changed) must not report ok:true."""
+    sync = _sync(tmp_path)
+    sync.local_dir.mkdir(parents=True)
+    state = sync.local_dir / "state.txt"
+    state.write_text("v1", encoding="utf-8")
+    remote = _FlushFakeRemote()
+
+    monkeypatch.setattr(sync, "ensure_alias", lambda: None)
+    monkeypatch.setattr(sync, "_mc", remote.mc)
+    monkeypatch.setattr(sync, "_cat_bytes", remote.cat)
+
+    # Baseline: v1 is pushed once and recorded in the manifest.
+    baseline = sync.flush()
+    assert baseline["ok"] is True
+    assert baseline["uploaded"] == ["state.txt"]
+
+    # Local and remote both change since the baseline.
+    state.write_text("v2-local", encoding="utf-8")
+    remote.objects[_FlushFakeRemote.full("agents/worker-a/state.txt")] = (
+        b"v2-remote"
+    )
+    cp_commands: list = []
+
+    def recording_mc(*args, **_kwargs):
+        if args and args[0] == "cp":
+            cp_commands.append(args)
+        return remote.mc(*args)
+
+    monkeypatch.setattr(sync, "_mc", recording_mc)
+
+    result = sync.flush()
+
+    assert result["ok"] is False
+    assert "conflict:state.txt" in result["skipped"]
+    assert result["pending"] == 1
+    assert result["conflicts"] == 1
+    assert result["complete"] is False
+    assert result["uploaded"] == []
+    # The conflict was detected, not uploaded: the remote copy is kept.
+    assert cp_commands == []
+    assert remote.objects[_FlushFakeRemote.full("agents/worker-a/state.txt")] == (
+        b"v2-remote"
+    )
+
+
+def test_flush_stalled_storage_call_is_bounded(tmp_path: Path, monkeypatch) -> None:
+    """#1500: a stalled storage call must not outrun the flush deadline."""
+    sync = _sync(tmp_path)
+    sync.local_dir.mkdir(parents=True)
+    (sync.local_dir / "a.md").write_text("ay", encoding="utf-8")
+
+    monkeypatch.setattr(sync, "ensure_alias", lambda **_kwargs: None)
+
+    def stalled_mc(*args, **kwargs):
+        timeout = kwargs.get("timeout")
+        if timeout is not None:
+            time.sleep(timeout)
+            raise subprocess.TimeoutExpired(cmd=list(args), timeout=timeout)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(sync, "_mc", stalled_mc)
+
+    start = time.monotonic()
+    result = sync.flush(1.0)
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 2.0
+    assert result["ok"] is False
+    assert result["timedOut"] is True
+    assert result["complete"] is False
+    assert any("timed out" in item["error"] for item in result["errors"])
+
+
+def test_flush_lock_timeout_reports_failure(tmp_path: Path, monkeypatch) -> None:
+    """#1500: losing the lock race is a failure with a bounded estimate, not success."""
+    sync = _sync(tmp_path)
+    sync.local_dir.mkdir(parents=True)
+    (sync.local_dir / "a.md").write_text("ay", encoding="utf-8")
+    monkeypatch.setattr(sync, "ensure_alias", lambda **_kwargs: None)
+
+    sync._push_lock.acquire()
+    try:
+        start = time.monotonic()
+        result = sync.flush(0.1)
+        elapsed = time.monotonic() - start
+    finally:
+        sync._push_lock.release()
+
+    assert elapsed < 1.0
+    assert result["ok"] is False
+    assert result["timedOut"] is True
+    assert result["complete"] is False
+    assert result["conflicts"] == 0
+    assert any("waiting for the background push lock" in e["error"] for e in result["errors"])
+
+
+def test_flush_success_reports_complete(tmp_path: Path, monkeypatch) -> None:
+    """#1500: a clean flush reports complete alongside ok."""
+    sync = _sync(tmp_path)
+    sync.local_dir.mkdir(parents=True)
+    (sync.local_dir / "a.md").write_text("ay", encoding="utf-8")
+    remote = _FlushFakeRemote()
+
+    monkeypatch.setattr(sync, "ensure_alias", lambda: None)
+    monkeypatch.setattr(sync, "_mc", remote.mc)
+    monkeypatch.setattr(sync, "_cat_bytes", remote.cat)
+
+    result = sync.flush()
+
+    assert result["ok"] is True
+    assert result["timedOut"] is False
+    assert result["conflicts"] == 0
+    assert result["complete"] is True
+    assert result["uploaded"] == ["a.md"]
 
 
 # ---------------------------------------------------------------------------

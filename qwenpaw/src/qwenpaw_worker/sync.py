@@ -112,7 +112,13 @@ class FileSync:
         # from two threads.
         self._push_lock = threading.Lock()
 
-    def _mc(self, *args: str, check: bool = True, text: bool = True) -> subprocess.CompletedProcess:
+    def _mc(
+        self,
+        *args: str,
+        check: bool = True,
+        text: bool = True,
+        timeout: float | None = None,
+    ) -> subprocess.CompletedProcess:
         mc_bin = shutil.which("mc")
         if not mc_bin:
             raise RuntimeError("mc binary not found")
@@ -121,9 +127,10 @@ class FileSync:
             check=check,
             capture_output=True,
             text=text,
+            timeout=timeout,
         )
 
-    def ensure_alias(self) -> None:
+    def ensure_alias(self, timeout: float | None = None) -> None:
         if self._alias_set:
             return
         if os.getenv(f"MC_HOST_{self.mc_alias}"):
@@ -159,7 +166,15 @@ class FileSync:
             self.bucket,
         )
         try:
-            self._mc("alias", "set", self.mc_alias, endpoint, self.access_key, self.secret_key)
+            self._mc(
+                "alias",
+                "set",
+                self.mc_alias,
+                endpoint,
+                self.access_key,
+                self.secret_key,
+                timeout=timeout,
+            )
         except subprocess.CalledProcessError as exc:
             raise RuntimeError(f"configure storage alias failed: {_mc_error_message(exc)}") from None
         self._alias_set = True
@@ -178,10 +193,15 @@ class FileSync:
         logger.debug("mc cat failed component=sync key=%s returncode=%s", key, result.returncode)
         return None
 
-    def _cat_bytes(self, key: str) -> Optional[bytes]:
+    def _cat_bytes(self, key: str, timeout: float | None = None) -> Optional[bytes]:
         self.ensure_alias()
         try:
-            result = self._mc("cat", self._object_path(key), check=False, text=False)
+            result = self._mc("cat", self._object_path(key), check=False, text=False, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # #1500: a stalled read is a flush failure, not a missing
+            # object — swallowing it as None would spend the rest of the
+            # deadline on the upload that follows.
+            raise
         except Exception as exc:
             logger.debug("mc cat failed component=sync key=%s error_type=%s", key, type(exc).__name__)
             return None
@@ -597,9 +617,16 @@ class FileSync:
         push loop never upload the same object concurrently.  A per-file
         failure is recorded as a receipt and does not abort the rest of
         the scan; with nothing pending the call is an idempotent no-op.
+
+        #1500: ``timeout`` bounds the whole call — the lock wait and every
+        storage command share one deadline — and ``ok`` is only true when
+        nothing is left behind: a conflict or an exhausted deadline is
+        reported as ``ok: false`` with ``conflicts`` / ``timedOut`` set,
+        never as a bare success.
         """
         started_at = time.monotonic()
-        if timeout is None:
+        deadline = started_at + timeout if timeout is not None else None
+        if deadline is None:
             acquired = self._push_lock.acquire()
         else:
             acquired = self._push_lock.acquire(timeout=timeout)
@@ -619,24 +646,45 @@ class FileSync:
                         ),
                     }
                 ],
-                "pending": self._count_dirty_files(),
+                "conflicts": 0,
+                "timedOut": True,
+                "complete": False,
+                # Bounded estimate: the window is spent, so hash at most
+                # a short slice instead of stalling the exit on the tree.
+                "pending": self._count_dirty_files(budget=0.25),
                 "lastPushAt": self._last_push_at(),
                 "durationMs": max(0, int((time.monotonic() - started_at) * 1000)),
             }
         try:
-            return self._flush_locked()
+            return self._flush_locked(deadline)
         finally:
             self._push_lock.release()
 
-    def _flush_locked(self) -> dict:
+    def _flush_locked(self, deadline: float | None = None) -> dict:
         started_at = time.monotonic()
-        self.ensure_alias()
         uploaded: List[str] = []
         skipped: List[str] = []
         errors: List[dict] = []
+        timed_out = False
+        # #1500: the deadline is set in flush() before the lock wait, so
+        # it covers the whole call — every storage command below receives
+        # the remaining budget instead of running unbounded.
+        call_timeout: float | None = None
+        if deadline is not None:
+            call_timeout = max(0.5, deadline - time.monotonic())
+            try:
+                self.ensure_alias(timeout=call_timeout)
+            except subprocess.TimeoutExpired:
+                errors.append({
+                    "path": "",
+                    "error": f"storage call timed out after {call_timeout:g}s",
+                })
+                timed_out = True
+        else:
+            self.ensure_alias()
 
         local_dir = self.local_dir
-        if local_dir.is_dir():
+        if local_dir.is_dir() and not timed_out:
             state = self._load_sync_state()
             tracked = (state.get("roots") or {}).get("worker") or {}
             for path in sorted(local_dir.rglob("*")):
@@ -649,6 +697,19 @@ class FileSync:
                 rel = rel_path.as_posix()
                 if _skip_background_push(rel_path):
                     continue
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0.5:
+                        # #1500: the shutdown window takes priority over
+                        # the tail of the scan — stop before starting a
+                        # file the deadline cannot cover.
+                        errors.append({
+                            "path": "",
+                            "error": f"flush deadline exhausted before {rel}",
+                        })
+                        timed_out = True
+                        break
+                    call_timeout = max(0.5, remaining)
                 key = f"{self.remote_prefix}/{rel}"
                 try:
                     data: Optional[bytes] = None
@@ -664,7 +725,7 @@ class FileSync:
                         # apply via the size threshold.
                         local_sha = _sha256_file(path)
                     if data is not None:
-                        remote = self._cat_bytes(key)
+                        remote = self._cat_bytes(key, timeout=call_timeout)
                         if remote == data:
                             # The remote already holds this exact content:
                             # no upload, but the manifest still needs the
@@ -689,16 +750,29 @@ class FileSync:
                             # push_directories applies via conflicts.
                             skipped.append(f"conflict:{rel}")
                             continue
-                    self._mc("cp", str(path), self._object_path(key), check=True)
+                    self._mc(
+                        "cp", str(path), self._object_path(key),
+                        check=True, timeout=call_timeout,
+                    )
                     if data is not None:
                         # Bind the baseline to what the remote actually
                         # holds after the upload; a failed or empty
                         # read-back falls back to the pre-upload snapshot.
-                        remote_after = self._cat_bytes(key)
+                        remote_after = self._cat_bytes(key, timeout=call_timeout)
                         if remote_after is not None and remote_after != data:
                             local_sha = hashlib.sha256(remote_after).hexdigest()
                     uploaded.append(rel)
                     self._record_pushed("worker", rel, local_sha)
+                except subprocess.TimeoutExpired:
+                    # #1500: one stalled storage call ends the flush —
+                    # retrying the next file would only spend the
+                    # remaining shutdown window on more stalls.
+                    errors.append({
+                        "path": rel,
+                        "error": f"storage call timed out after {call_timeout:g}s",
+                    })
+                    timed_out = True
+                    break
                 except Exception as exc:
                     if isinstance(exc, subprocess.CalledProcessError):
                         message = _mc_error_message(exc)
@@ -706,21 +780,33 @@ class FileSync:
                         message = str(exc) or type(exc).__name__
                     errors.append({"path": rel, "error": message})
 
-        pending = len(errors) + sum(
-            1 for item in skipped if item.startswith("conflict:")
-        )
+        # #1500: ok means nothing is left behind — a conflict or a
+        # deadline-aborted scan is a failure even with zero errors.
+        conflicts = sum(1 for item in skipped if item.startswith("conflict:"))
+        pending = len(errors) + conflicts
+        ok = not errors and conflicts == 0 and not timed_out
         return {
-            "ok": not errors,
+            "ok": ok,
             "uploaded": sorted(set(uploaded)),
             "skipped": sorted(skipped),
             "errors": errors,
+            "conflicts": conflicts,
+            "timedOut": timed_out,
+            "complete": ok,
             "pending": pending,
             "lastPushAt": self._last_push_at(),
             "durationMs": max(0, int((time.monotonic() - started_at) * 1000)),
         }
 
-    def _count_dirty_files(self) -> int:
-        """Read-only estimate of local files ahead of the push manifest."""
+    def _count_dirty_files(self, budget: float | None = None) -> int:
+        """Read-only estimate of local files ahead of the push manifest.
+
+        ``budget`` (seconds) bounds the scan. The lock-timeout path reports
+        this number after the flush window is already spent, so it must not
+        hash a large tree unbounded — it stops at the budget and reports
+        what it has seen so far (the value is advisory, for logs).
+        """
+        deadline = time.monotonic() + budget if budget else None
         state = self._load_sync_state()
         files = (state.get("roots") or {}).get("worker") or {}
         local_dir = self.local_dir
@@ -728,6 +814,8 @@ class FileSync:
             return 0
         count = 0
         for path in local_dir.rglob("*"):
+            if deadline is not None and time.monotonic() >= deadline:
+                break
             if not path.is_file() or path.is_symlink():
                 continue
             try:

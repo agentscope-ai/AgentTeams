@@ -1,0 +1,42 @@
+{
+  "version": "1.0.0",
+  "status": "defined-not-enforced",
+  "description": "Retry policy for TeamHarness MCP actions. Data only. mcp/server.py @ d8332e0a has NO automatic retry loop: failures that are safe to retry return retryable:true and the caller (the agent) re-invokes; safety comes from idempotency, not from backoff.",
+  "current": {
+    "automatic_retry_in_code": false,
+    "evidence": "retryable:true markers plus caller-driven re-invocation; idempotency anchors: pre-minted delegation transaction id (delegate-{task_id}-{nonce} persisted on the task before send), deterministic signal event ids (id_rule v1.2), submission fences, the 'assigned + eventId' idempotent return, and committed-cancellation retry fencing",
+    "retryable_error_markers": [
+      "cannot pull authoritative project state from shared storage; retry",
+      "state persisted locally but shared-storage sync failed; retry to complete",
+      "state persisted locally but follow-up state update failed",
+      "could not persist local state",
+      "task is assigned but shared-storage sync failed",
+      "task assigned but shared-storage sync failed; retry to complete",
+      "room membership validation failed",
+      "failed to publish task files to shared storage",
+      "filesync process failed",
+      "shared storage sync failed after complete_project"
+    ]
+  },
+  "recommended": {
+    "initial_interval": 2,
+    "backoff_factor": 2,
+    "max_interval": 60,
+    "max_attempts": 5,
+    "jitter": "full",
+    "jitter_note": "uniform random delay in [0, interval] added to each computed backoff delay",
+    "retry_on": [
+      "cannot pull authoritative project state from shared storage; retry",
+      "state persisted locally but shared-storage sync failed; retry to complete",
+      "state persisted locally but follow-up state update failed",
+      "could not persist local state",
+      "task is assigned but shared-storage sync failed",
+      "task assigned but shared-storage sync failed; retry to complete",
+      "room membership validation failed",
+      "failed to publish task files to shared storage",
+      "filesync process failed",
+      "shared storage sync failed after complete_project"
+    ]
+  },
+  "note": "initial_interval / backoff_factor / max_interval / max_attempts / jitter are W1 proposals (no code source); retry_on lists the retryable error strings that actually exist in mcp/server.py"
+}

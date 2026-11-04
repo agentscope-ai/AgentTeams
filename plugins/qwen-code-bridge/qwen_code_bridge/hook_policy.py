@@ -92,17 +92,61 @@ def _tool_input_for_policy(payload: dict) -> dict:
     return ti
 
 
+def _write_receipt(payload: dict, decision: dict) -> None:
+    """Append one ``source=hook`` receipt line (best-effort, never raises).
+
+    The dispatch spawn environment carries ``QWEN_CODE_BRIDGE_TASK_ID``
+    and ``QWEN_CODE_BRIDGE_RECEIPTS`` (the same receipts file the
+    ``can_use_tool`` path writes), so a hook denial — which the host never
+    sees as a control request — still leaves an audit line and can wake
+    the origin.  Missing env (e.g. the hook ran outside a dispatch) or
+    any write failure is silently dropped: the decision stands either way.
+    """
+    task_id = str(os.environ.get("QWEN_CODE_BRIDGE_TASK_ID", "") or "").strip()
+    receipts = str(
+        os.environ.get("QWEN_CODE_BRIDGE_RECEIPTS", "") or ""
+    ).strip()
+    if not task_id or not receipts:
+        return
+    try:
+        from qwen_code_bridge import approval
+
+        tool_input = (
+            payload.get("tool_input") if isinstance(payload, dict) else None
+        )
+        approval.append_receipt(
+            Path(receipts),
+            approval.receipt_entry(
+                task_id,
+                str(payload.get("tool_name") or ""),
+                tool_input,
+                decision,
+                "",
+                source="hook",
+            ),
+        )
+    except Exception:
+        pass
+
+
 def evaluate(payload: dict) -> dict:
     """One hook call → one PreToolUse output.  Raises on faults."""
     from qwen_code_bridge import approval
 
     roots = _load_roots()
     if not roots:
-        return _output(
-            "deny",
-            "hook-config",
-            f"{ROOTS_ENV} missing or empty (fail closed)",
+        reason = f"{ROOTS_ENV} missing or empty (fail closed)"
+        _write_receipt(
+            payload,
+            {
+                "risk": "deny",
+                "rule": "hook-config",
+                "reason": reason,
+                "behavior": "deny",
+                "requires_human": False,
+            },
         )
+        return _output("deny", "hook-config", reason)
     decision = approval.decide(
         str(payload.get("tool_name") or ""),
         _tool_input_for_policy(payload),
@@ -114,6 +158,7 @@ def evaluate(payload: dict) -> dict:
             str(decision.get("rule") or "policy"),
             str(decision.get("reason") or "allowed"),
         )
+    _write_receipt(payload, decision)
     return _output(
         "deny",
         str(decision.get("rule") or "policy"),

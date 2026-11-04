@@ -654,8 +654,14 @@ def receipt_entry(
     tool_input: Any,
     decision: dict[str, Any],
     request_id: str,
+    source: str = "control",
 ) -> dict[str, Any]:
-    """One append-only audit record for a proxy-approval decision."""
+    """One append-only audit record for a proxy-approval decision.
+
+    ``source`` names the deciding path: ``"control"`` (the host answered
+    a ``can_use_tool`` control request) or ``"hook"`` (the PreToolUse
+    command hook decided — no control request reaches the host).
+    """
     return {
         "ts": __import__("datetime").datetime.utcnow().isoformat() + "Z",
         "task_id": task_id,
@@ -668,6 +674,7 @@ def receipt_entry(
         "reason": decision.get("reason"),
         "behavior": decision.get("behavior"),
         "requires_human": bool(decision.get("requires_human")),
+        "source": source,
     }
 
 

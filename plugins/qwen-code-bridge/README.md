@@ -153,7 +153,7 @@ curl -X POST http://127.0.0.1:8088/api/qwen-code-bridge/dispatch \
 
 - `origin` = **源会话三元组**（终态唤醒原样回放；与频道无关）
 - 无 gates：并发/冲突闸已按 10/22 定案删除（模型侧排队）
-- 观测：`GET /dispatch/{task}`（状态）、`/dispatch/{task}/log`（日志）、`/dispatch/{task}/progress`（phase/工具/测试/停滞）、`/dispatch?format=table`（一张状态表）、`<state>/dispatch/<task>.receipts.jsonl`（审批审计）、`<state>/web-proxy.log`（反代诊断，200 KB 上限）
+- 观测：`GET /dispatch/{task}`（状态）、`/dispatch/{task}/log`（日志）、`/dispatch/{task}/progress`（phase/工具/测试/停滞）、`/dispatch?format=table`（一张状态表）、`GET /approvals?task_id=&behavior=deny|escalate|allow|all&since=&limit=`（跨任务审批回执审计，`source=control|hook`，政策审批即时判定无 pending——pending 问题走 `/dispatch/{task}/pending` + `/answer`）、`<state>/dispatch/<task>.receipts.jsonl`（审批审计）、`<state>/web-proxy.log`（反代诊断，200 KB 上限）
 
 ### 审批映射（worker 代审批）
 

@@ -21,6 +21,18 @@
 - `scripts/package.sh` also emits `sha256sums.txt` and
   `release-manifest.json` (`module`/`version`/`commit`/`files`/`sha256`/
   `built_at`)
+- Approval observability (#1411): the PreToolUse hook path now appends a
+  `source=hook` receipt line per deny (spawn env carries
+  `QWEN_CODE_BRIDGE_TASK_ID` / `QWEN_CODE_BRIDGE_RECEIPTS`, same receipts
+  file as the `can_use_tool` path, which now records `source=control`)
+- `GET /api/qwen-code-bridge/approvals?task_id=&behavior=deny|escalate|
+  allow|all&since=&limit=` — cross-task receipt audit over
+  `*.receipts.jsonl` (newest mtime first, limit cap 1000,
+  `{approvals,total,truncated}`)
+- Mid-run denial wake: a proxy deny/escalate (`can_use_tool` or hook,
+  observed by the watchdog) wakes the origin session via the durable
+  queue — deduped per rule (300 s window, 10 rules per task), never
+  touching `wake_status`; no decision logic changes
 
 ### Changed
 

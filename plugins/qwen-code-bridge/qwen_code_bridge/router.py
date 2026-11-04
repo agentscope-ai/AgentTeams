@@ -17,7 +17,10 @@ patterns. Deltas vs upstream:
 
 from __future__ import annotations
 
-from typing import Any
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -469,6 +472,142 @@ async def get_dispatch_progress(
         "total_events": total_events,
         "limit": limit_eff,
     }
+
+
+APPROVALS_LIMIT_MAX = 1000
+
+
+def _approval_ts_epoch(value: Any) -> float | None:
+    """Receipt ``ts`` (ISO-8601 UTC with ``Z``) or unix epoch -> seconds."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    try:
+        parsed = datetime.fromisoformat(
+            text[:-1] + "+00:00" if text.endswith("Z") else text
+        )
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def _scan_approvals(
+    dispatch_dir: Path,
+    task_id: str = "",
+    behavior: str = "all",
+    since: float | None = None,
+    limit: int = 200,
+) -> dict[str, Any]:
+    """Aggregate ``*.receipts.jsonl`` into one auditable approval list.
+
+    Files are scanned newest mtime first; malformed lines are skipped.
+    ``behavior`` filters on the decision: ``deny``/``allow`` match the
+    ``behavior`` field, ``escalate`` matches the denied subset that needs
+    a human (``requires_human``).
+    """
+    cap = max(1, min(int(limit), APPROVALS_LIMIT_MAX))
+    wanted_task = str(task_id or "").strip()
+    mode = str(behavior or "all").strip().lower() or "all"
+
+    def _mtime(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    def _matches(entry: dict[str, Any]) -> bool:
+        if wanted_task and str(entry.get("task_id") or "") != wanted_task:
+            return False
+        entry_behavior = str(entry.get("behavior") or "")
+        if mode == "escalate":
+            if entry_behavior != "deny" or not entry.get("requires_human"):
+                return False
+        elif mode in ("allow", "deny") and entry_behavior != mode:
+            return False
+        if since is not None:
+            ts = _approval_ts_epoch(entry.get("ts"))
+            if ts is None or ts < since:
+                return False
+        return True
+
+    rows: list[dict[str, Any]] = []
+    total = 0
+    files = sorted(
+        Path(dispatch_dir).glob("*.receipts.jsonl"),
+        key=_mtime,
+        reverse=True,
+    )
+    for path in files:
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(entry, dict) or not _matches(entry):
+                continue
+            total += 1
+            if len(rows) < cap:
+                rows.append(
+                    {
+                        "ts": entry.get("ts"),
+                        "task_id": entry.get("task_id"),
+                        "tool_name": entry.get("tool_name"),
+                        "behavior": entry.get("behavior"),
+                        "rule": entry.get("rule"),
+                        "reason": entry.get("reason"),
+                        "request_id": entry.get("request_id"),
+                        "source": entry.get("source"),
+                    }
+                )
+    return {
+        "approvals": rows,
+        "total": total,
+        "truncated": total > len(rows),
+    }
+
+
+@router.get("/approvals")
+async def list_approvals(
+    task_id: str = "",
+    behavior: Literal["deny", "escalate", "allow", "all"] = "all",
+    since: str = "",
+    limit: int = 200,
+    service: DispatchService = Depends(_get_dispatch_service),
+) -> dict:
+    """Cross-task approval receipts (audit over ``*.receipts.jsonl``).
+
+    ``?task_id=`` one task; ``?behavior=`` ``deny`` / ``escalate`` /
+    ``allow`` / ``all``; ``?since=`` unix epoch or ISO-8601 timestamp;
+    ``?limit=`` row cap (1000).  Returns
+    ``{"approvals": [{ts, task_id, tool_name, behavior, rule, reason,
+    request_id, source}], "total", "truncated"}`` — files scanned newest
+    mtime first.
+
+    Policy approvals are decided **immediately** (``can_use_tool`` control
+    path, ``source=control``; or the PreToolUse hook, ``source=hook``) —
+    there is no pending state here.  Pending human questions use the
+    existing ``GET /dispatch/{task_id}/pending`` + ``POST /answer``.
+    """
+    return _scan_approvals(
+        service._dispatch_dir,
+        task_id=task_id,
+        behavior=behavior,
+        since=_approval_ts_epoch(since),
+        limit=limit,
+    )
 
 
 @router.get("/version")

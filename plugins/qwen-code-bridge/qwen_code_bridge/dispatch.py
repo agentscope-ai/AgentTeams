@@ -135,6 +135,14 @@ APPROVAL_LEVEL_MAP: dict[str, str] = {
     "OFF": "yolo",
 }
 
+#: Denial-wake dedupe (#1411): one wake per rule within this window (s),
+#: so a policy that denies a repeated pattern (e.g. every compound shell
+#: command) cannot spam the origin session.
+DENIAL_WAKE_COOLDOWN_S = 300.0
+#: ...and at most this many distinct rules wake per task, so a run that
+#: hits the whole deny table still bounds its mid-run noise.
+DENIAL_WAKE_MAX_RULES = 10
+
 
 def map_level_to_mode(level: str | None) -> str:
     """Map a QwenPaw approval level to a Qwen Code approval tier."""
@@ -887,6 +895,121 @@ class DispatchService:
             task.update(fields)
             self._write_task(task)
 
+    # ---- mid-run denial observation (#1411) ----
+
+    def _note_denial(
+        self, task_id: str, tool: str, decision: dict[str, Any]
+    ) -> None:
+        """Wake the origin once when a proxy decision denies a tool call.
+
+        Denial dedupe lives in the task file (``denial_wakes`` =
+        ``{rule: last_ts}``): the same rule wakes at most once per
+        :data:`DENIAL_WAKE_COOLDOWN_S` and at most
+        :data:`DENIAL_WAKE_MAX_RULES` distinct rules per task.  The wake
+        goes through the durable queue but never touches
+        ``wake_status`` — the terminal wake keeps ownership of that
+        field.  Never raises: observing a denial must not break the run.
+        """
+        try:
+            task = self._read_task(task_id)
+            if task is None:
+                return
+            if str(task.get("wake_status") or "") == "sent":
+                return
+            rule = str(decision.get("rule") or "policy")
+            reason = str(decision.get("reason") or "denied by policy")
+            now = time.time()
+            wakes = task.get("denial_wakes")
+            if not isinstance(wakes, dict):
+                wakes = {}
+            last = wakes.get(rule)
+            if last is not None:
+                try:
+                    if now - float(last) < DENIAL_WAKE_COOLDOWN_S:
+                        return
+                except (TypeError, ValueError):
+                    pass
+            elif len(wakes) >= DENIAL_WAKE_MAX_RULES:
+                return
+            origin = task.get("origin") or {}
+            wake = task.get("wake") or {}
+            sid = str(
+                origin.get("session_id") or wake.get("session_id") or ""
+            ).strip()
+            if not sid:
+                return
+            text = (
+                f"[bridge] approval denied: {rule} — {reason}"
+                f"（task {task_id}, tool {tool}）"
+            )
+            _queue_wake(task, wake, origin, text, sid, "")
+            wakes[rule] = now
+            self._update_task(task_id, {"denial_wakes": wakes})
+        except Exception:
+            pass
+
+    def _note_hook_denials(self, task: dict[str, Any]) -> None:
+        """Scan one running task's receipts for new hook denials.
+
+        The PreToolUse hook decides without any control request reaching
+        the host, so the host observes those denials here, once per
+        watchdog round: every not-yet-seen ``source=hook`` deny line
+        becomes one :meth:`_note_denial` call (same rule dedupe).  The
+        scan watermark (byte offset, ``hook_denial_offset``) persists in
+        the task file, so a restarted watcher never re-wakes for an old
+        denial.  Never raises.
+        """
+        try:
+            task_id = str(task.get("task_id") or "")
+            if not task_id:
+                return
+            receipts_path = self._dispatch_dir / f"{task_id}.receipts.jsonl"
+            try:
+                size = receipts_path.stat().st_size
+            except OSError:
+                return
+            try:
+                offset = int(task.get("hook_denial_offset") or 0)
+            except (TypeError, ValueError):
+                offset = 0
+            if offset > size:
+                offset = 0  # the file was truncated or rotated
+            if offset == size:
+                return
+            with receipts_path.open("rb") as fh:
+                fh.seek(offset)
+                chunk = fh.read()
+            if not chunk:
+                return
+            if not chunk.endswith(b"\n"):
+                cut = chunk.rfind(b"\n")
+                if cut < 0:
+                    return  # no complete line yet; the next round retries
+                chunk = chunk[: cut + 1]
+            for raw in chunk.split(b"\n"):
+                if not raw.strip():
+                    continue
+                try:
+                    entry = json.loads(raw)
+                except ValueError:
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("source") != "hook":
+                    continue
+                if str(entry.get("behavior") or "") != "deny":
+                    continue
+                self._note_denial(
+                    task_id,
+                    str(entry.get("tool_name") or ""),
+                    entry,
+                )
+            self._update_task(
+                task_id, {"hook_denial_offset": offset + len(chunk)}
+            )
+        except Exception:
+            pass
+
     # ---- queries ----
 
     @staticmethod
@@ -1144,6 +1267,9 @@ class DispatchService:
                 continue
             if task.get("state") != "running":
                 continue
+            # The hook path decides without a control request: observe its
+            # new denials here (deduped by rule) so the origin hears them.
+            self._note_hook_denials(task)
             pid = task.get("pid")
             if pid is None:
                 # Lost spawn window (plugin died before the pid was
@@ -1917,6 +2043,14 @@ class DispatchService:
             env[APPROVAL_ROOTS_ENV] = json.dumps(
                 [cwd] if cwd else [os.getcwd()]
             )
+            # Hook receipts (#1411): the PreToolUse hook appends one
+            # source=hook line per deny to the same receipts file the
+            # can_use_tool path writes — the env names the task and the
+            # file, so the host never needs the control request.
+            env["QWEN_CODE_BRIDGE_TASK_ID"] = task_id
+            env["QWEN_CODE_BRIDGE_RECEIPTS"] = str(
+                self._dispatch_dir / f"{task_id}.receipts.jsonl"
+            )
             _home = cli_home()
             if _home:
                 env["HOME"] = _home
@@ -2342,6 +2476,13 @@ class DispatchService:
                         )
                     except Exception:
                         pass
+                    if (
+                        decision.get("behavior") == "deny"
+                        or decision.get("requires_human")
+                    ):
+                        # Mid-run denial: let the origin know now instead
+                        # of at terminal state (deduped by rule).
+                        self._note_denial(task_id, tool_name, decision)
                     self._update_task(
                         task_id,
                         {

@@ -31,6 +31,7 @@ AgentTeams does not compete with other Agent runtimes. Instead of implementing A
 
 ## News
 
+- **2026-10-16**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.5) — AgentTeams v1.2.5: strengthens coding-tool delegation, Worker configuration management, and in-place QwenPaw runtime upgrades; ships with Dashboard v1.3.1 by default; and fixes multiple issues in MCP registration, Matrix message collaboration, and Worker recovery.
 - **2026-09-20**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.4) — AgentTeams v1.2.4: adds TeamHarness task state history, progress tracking, and completion notifications; upgrades to QwenPaw 2.2.1 and Dashboard v1.2.4.9; expands team permissions, auditing, and skill management; introduces the experimental DeepSeek Harness Worker; and improves Worker state persistence and installation reliability.
 - **2026-08-22**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.3) — AgentTeams v1.2.3: makes long-running Project workflows visible and controllable through new Controller APIs, `agt` commands, and Dashboard v1.2.4; adds audited human interventions, Project history, and QwenPaw Worker checkpoints; promotes QwenPaw as the recommended local Manager and Worker runtime; and improves Skill recovery, Windows AppService startup, and runtime reliability.
 - **2026-08-08**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.2) — AgentTeams v1.2.2: adds Manager-to-Worker custom Skill delivery with validation, storage upload, `Worker.spec.skills` assignment, and QwenPaw hot refresh and enablement without a restart; hardens Manager and Worker Skill loading; and ensures Team Leaders and Workers explicitly join Team Rooms after invitation.
@@ -99,7 +100,7 @@ Open http://127.0.0.1:18088 in your browser and log in to Element Web. The Manag
 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 
 # Upgrade to specific version
-AGENTTEAMS_VERSION=v1.2.2 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+AGENTTEAMS_VERSION=v1.2.5 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 ## Uninstall
@@ -435,6 +436,7 @@ Browse the [documentation directory](docs/), or start with the overview and quic
 | [docs/design/k8s-native-orchestration.md](docs/design/k8s-native-orchestration.md) | Kubernetes-native multi-Agent orchestration: CRDs, controller, declarative resources (also available in [中文](docs/zh-cn/design/k8s-native-orchestration.md)) |
 | [docs/usage/manager-guide.md](docs/usage/manager-guide.md) | Manager configuration |
 | [docs/usage/worker-guide.md](docs/usage/worker-guide.md) | Worker deployment |
+| [docs/usage/single-and-multi-user.md](docs/usage/single-and-multi-user.md) | One deployment for one person or many: roles, permission levels, and what changes when you add people (also available in [中文](docs/zh-cn/usage/single-and-multi-user.md)) |
 | [docs/usage/project-workflow-api.md](docs/usage/project-workflow-api.md) | Project / workflow inspection API (also available in [中文](docs/zh-cn/usage/project-workflow-api.md)) |
 | [docs/usage/higress-gateway-api.md](docs/usage/higress-gateway-api.md) | Higress gateway external API reference (LLM / MCP / exposed ports / Console) (also available in [中文](docs/zh-cn/usage/higress-gateway-api.md)) |
 | [docs/usage/development.md](docs/usage/development.md) | Contributing and local dev (also available in [中文](docs/zh-cn/usage/development.md)) |

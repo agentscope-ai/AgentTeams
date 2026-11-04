@@ -36,6 +36,13 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 MCP_DIR = REPO_ROOT / "plugins" / "teamharness" / "mcp"
 SERVER_PATH = MCP_DIR / "server.py"
 
+# W1-a2 (issue #1451 P6): the split moved _accept_task_result (the second
+# whitelisted status-write site) into project/flow.py while _transition_task
+# stays pinned in server.py. The static audit therefore scans the
+# concatenated sources of both files; the detector and whitelist are
+# unchanged.
+SCAN_PATHS = (MCP_DIR / "server.py", MCP_DIR / "project" / "flow.py")
+
 EVENT_FIELDS = {
     "event_id", "task_id", "loop_id", "event_type", "is_signal",
     "source_event", "ref", "fingerprint", "iteration_index", "payload",
@@ -262,10 +269,10 @@ def _status_write_violations(source: str) -> list[tuple[int, str, str | None]]:
 
 
 def test_status_write_coverage_audit() -> None:
-    source = SERVER_PATH.read_text(encoding="utf-8")
+    source = "".join(path.read_text(encoding="utf-8") + "\n" for path in SCAN_PATHS)
     lines = source.splitlines()
     write_lines = [i + 1 for i, line in enumerate(lines) if STATUS_WRITE_RE.search(line)]
-    assert write_lines, "expected status write points in server.py"
+    assert write_lines, "expected status write points in the scanned sources"
     # Every write point sits in a whitelisted function.
     assert _status_write_violations(source) == []
     # QC self-proof: an injected bypass write is detected (would go red).

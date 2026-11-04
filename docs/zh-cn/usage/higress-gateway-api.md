@@ -44,7 +44,7 @@ Higress 的 `ai-proxy` 插件暴露 OpenAI 兼容的 LLM 端点。请求必须�
 
 ```
 POST /v1/chat/completions   # 对话补全（支持流式）
-POST /v1/embeddings         # 向量化（配置 memorySearch 时使用）
+POST /v1/embeddings         # 向量化（配置 memory.search 时使用）
 ```
 
 `GET /v1/models` 在 Higress 中并不是完整的 OpenAI 模型列表端点——`ai-proxy` 插件只匹配

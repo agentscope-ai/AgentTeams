@@ -136,8 +136,9 @@ build-openclaw-base: ## Build OpenClaw base image
 
 # build targets use the locally-built openclaw-base; push targets use the registry image
 # OPENCLAW_BASE_VERSION controls which base image tag manager/worker builds depend on.
-# Default: latest (for standalone builds). Override to use a versioned base (e.g. in build-all).
-OPENCLAW_BASE_VERSION ?= 20260423-8359cbc
+# Single source of truth: hack/versions.env (OPENCLAW_BASE_TAG, derived from the
+# OpenClaw pin). Override on the command line to use a different base.
+OPENCLAW_BASE_VERSION ?= $(shell sed -n 's/^OPENCLAW_BASE_TAG=//p' hack/versions.env)
 OPENCLAW_BASE_BUILD_ARG = --build-arg OPENCLAW_BASE_IMAGE=$(OPENCLAW_BASE_IMAGE):$(OPENCLAW_BASE_VERSION)
 OPENCLAW_BASE_PUSH_ARG  = --build-arg OPENCLAW_BASE_IMAGE=$(OPENCLAW_BASE_IMAGE):$(OPENCLAW_BASE_VERSION)
 
@@ -799,6 +800,10 @@ sync-crds: ## Sync CRDs from agentteams-controller/config/crd/ to helm/agentteam
 	@echo "==> Syncing CRDs to Helm chart..."
 	@cp agentteams-controller/config/crd/*.yaml helm/agentteams/crds/
 	@echo "==> CRDs synced"
+
+check-node-pins: ## Verify Node.js 24.22.1 pins across images
+	bash hack/check-node-pins.sh
+	bash hack/tests/test-node-version-guard.sh
 
 check-crd-sync: ## Verify CRDs are in sync between controller and Helm chart
 	@if ! diff -r agentteams-controller/config/crd/ helm/agentteams/crds/ >/dev/null 2>&1; then \

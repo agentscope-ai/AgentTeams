@@ -207,6 +207,16 @@ def _is_in_container() -> bool:
     return Path("/.dockerenv").exists() or Path("/run/.containerenv").exists()
 
 
+def _acl_enabled(policy: Any) -> bool:
+    """Runtime ACL switch for one policy (#1388).
+
+    The Matrix channel enforces its allowlist only when
+    ``access_control_dm`` / ``access_control_group`` are on. Only the
+    ``allowlist`` policy gates; anything else (``open``) stays ungated.
+    """
+    return str(policy or "").strip().lower() == "allowlist"
+
+
 def _secret_dir(working_dir: Path) -> Path:
     """Return the secret dir path that copaw uses alongside working_dir."""
     return Path(str(working_dir) + ".secret")
@@ -426,6 +436,15 @@ def _write_config_json(
         "allow_from": dm_allow_from,
         "group_policy": group_policy,
         "group_allow_from": group_allow_from,
+        # Runtime ACL switches (#1388). The allowlists above are only
+        # enforced when these are on; the Matrix channel defaults both to
+        # False. The native Worker path enables them from the roster
+        # policy (qwenpaw update.py::_apply_matrix_channel_access_flags),
+        # so a bridge-generated Manager workspace must project the same
+        # flags — otherwise the controller's allowlist policy is only
+        # advisory and its human entries are never enforced.
+        "access_control_dm": _acl_enabled(dm_policy),
+        "access_control_group": _acl_enabled(group_policy),
         "groups": groups,
         "filter_tool_messages": True,
         "filter_thinking": True,
@@ -541,7 +560,9 @@ def _write_agent_json(
     user_id = _resolve_matrix_user_id(matrix_raw, profile=profile)
 
     dm_cfg = matrix_raw.get("dm", {})
+    dm_policy = dm_cfg.get("policy", "allowlist")
     dm_allow_from: list[str] = dm_cfg.get("allowFrom", [])
+    group_policy = matrix_raw.get("groupPolicy", "allowlist")
     group_allow_from: list[str] = matrix_raw.get("groupAllowFrom", [])
     groups = matrix_raw.get("groups", {})
 
@@ -559,6 +580,12 @@ def _write_agent_json(
     # openclaw.json is effective on the next re-bridge.
     matrix_ch["allow_from"] = dm_allow_from
     matrix_ch["group_allow_from"] = group_allow_from
+    # Runtime ACL switches (#1388): a fresh Manager workspace must enforce
+    # the controller's allowlist policy exactly like the native Worker
+    # roster -> ACL path does. Without these flags the channel keeps
+    # access_control_* = False and the allowlists are advisory only.
+    matrix_ch["access_control_dm"] = _acl_enabled(dm_policy)
+    matrix_ch["access_control_group"] = _acl_enabled(group_policy)
     matrix_ch["groups"] = groups
     matrix_ch["filter_tool_messages"] = True
     matrix_ch["filter_thinking"] = True

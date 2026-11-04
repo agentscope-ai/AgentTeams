@@ -31,7 +31,9 @@ Checks:
                     to the target version's ``qwenpaw/drivers/manager.py``
                     (extracted from a wheel).
 * C4 dependencies - optional ``uv pip install --dry-run`` against the target
-                    version (requires network; opt-in via --check-deps).
+                    version (requires network; opt-in via --check-deps). When
+                    explicitly requested, an unrunnable dry-run (missing tool,
+                    timeout, network failure) is upgrade-blocking (FAIL).
 
 The checker never modifies the repository; it only reads files and (with
 --download / --check-deps) performs network reads.

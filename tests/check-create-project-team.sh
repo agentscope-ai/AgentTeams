@@ -1,104 +1,171 @@
 #!/usr/bin/env bash
-# check-create-project-team.sh - create-project.sh --team expands a Team, each
-# member is invited once, and lookup and join failures are reported (#1389).
-#
-# create-project.sh itself needs the Manager container, so the member-list
-# helpers it sources run here against stub agt, curl and mc on PATH.
-
+# Exercise the full create-project flow with real jq and isolated API/Matrix/
+# storage fixtures. No Manager paths or live services are changed.
 set -euo pipefail
-
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SCRIPT_DIR="${ROOT_DIR}/manager/agent/skills/project-management/scripts"
-SCRIPT="${SCRIPT_DIR}/create-project.sh"
-HELPERS="${SCRIPT_DIR}/project-members.sh"
-REFERENCE="${ROOT_DIR}/manager/agent/skills/project-management/references/create-project.md"
+python3 - "${ROOT_DIR}" <<'PY'
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
 
-fail() {
-    echo "FAIL: $*" >&2
-    exit 1
-}
+ROOT = Path(sys.argv.pop())
+SCRIPTS = ROOT / 'manager/agent/skills/project-management/scripts'
 
-[ -f "${HELPERS}" ] || fail "project-members.sh not found at ${HELPERS}"
+AGT = '''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+p = Path(os.environ['CASE'])
+with (p / 'agt.log').open('a') as f: f.write(' '.join(sys.argv[1:]) + '\\n')
+data = json.loads((p / 'fixtures.json').read_text())
+value = data.get(sys.argv[2], {}).get(sys.argv[3])
+if value is None: sys.exit(1)
+print(value if isinstance(value, str) else json.dumps(value))
+'''
+CURL = '''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+p = Path(os.environ['CASE']); a = sys.argv[1:]
+url = next(x for x in a if x.startswith('http'))
+body = json.loads(a[a.index('-d') + 1]) if '-d' in a else None
+headers = [a[i+1] for i,x in enumerate(a) if x == '-H']
+with (p / 'curl.log').open('a') as f: f.write(json.dumps({'url':url,'body':body,'headers':headers}) + '\\n')
+if url.endswith('/createRoom'): print('{"room_id":"!project:matrix.test"}')
+elif url.endswith('/login'): print(json.dumps({'access_token':'tok-' + body['identifier']['user']}))
+elif url.endswith('/join'): print('403' if 'Authorization: Bearer tok-runtime-alice' in headers and os.environ.get('JOIN_FAIL') else '200', end='')
+else: print('{}')
+'''
+MC = '''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+p = Path(os.environ['CASE']); a = sys.argv[1:]
+with (p / 'mc.log').open('a') as f: f.write(' '.join(a) + '\\n')
+if a[0] == 'cat':
+    value = json.loads((p / 'fixtures.json').read_text()).get('passwords', {}).get(a[1])
+    if value is None: sys.exit(1)
+    print(value)
+'''
 
-STUB_DIR="$(mktemp -d)"
-trap 'rm -rf "${STUB_DIR}"' EXIT
+class ProjectTeamTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.p = Path(self.temp.name)
+        for name in ('bin', 'data/worker-creds', 'tmp', 'home/.copaw/workspaces/default', 'fs/agents/manager'):
+            (self.p / name).mkdir(parents=True)
+        for name, text in [('agt', AGT), ('curl', CURL), ('mc', MC)]:
+            f = self.p / 'bin' / name; f.write_text(text); f.chmod(0o755)
+        for name in ('create-project.sh', 'project-members.sh'):
+            text = (SCRIPTS / name).read_text()
+            for old, new in [('/opt/agentteams/scripts/lib/agentteams-env.sh', str(self.p / 'env.sh')),
+                             ('/root/agentteams-fs', str(self.p / 'fs')),
+                             ('/data/', str(self.p / 'data') + '/'),
+                             ('/tmp/', str(self.p / 'tmp') + '/')]:
+                text = text.replace(old, new)
+            (self.p / name).write_text(text)
+        (self.p / 'env.sh').write_text('log() { echo "$*" >&2; }\n')
+        for name in ('fs/agents/manager/openclaw.json', 'home/openclaw.json', 'home/.copaw/workspaces/default/agent.json'):
+            (self.p / name).write_text('{}')
+        self.fixtures = {
+            'teams': {'alpha': {'leaderName': 'leader-cr', 'workerNames': ['worker-cr', 'worker-cr']}},
+            'workers': {'leader-cr': {'name': 'leader-cr', 'workerName': 'runtime-lead'},
+                        'worker-cr': {'name': 'worker-cr', 'workerName': 'runtime-alice'}},
+            'passwords': {'storage/agents/runtime-alice/credentials/matrix/password': 'alice-pass',
+                          'storage/agents/extra/credentials/matrix/password': 'extra-pass'}}
+        (self.p / 'data/worker-creds/leader-cr.env').write_text('WORKER_PASSWORD="leader-pass"\n')
+        self.env = dict(os.environ, CASE=str(self.p), HOME=str(self.p / 'home'),
+                        PATH=str(self.p / 'bin') + ':' + os.environ['PATH'],
+                        AGENTTEAMS_MATRIX_URL='http://matrix.test', AGENTTEAMS_MATRIX_DOMAIN='matrix.test',
+                        AGENTTEAMS_STORAGE_PREFIX='storage', MANAGER_MATRIX_TOKEN='manager-token',
+                        AGENTTEAMS_ADMIN_PASSWORD='', AGENTTEAMS_ADMIN_USER='admin',
+                        AGENTTEAMS_JOIN_STATUS_FILE=str(self.p / 'tmp/status.json'))
 
-# agt: two Teams, one with a leader only, one with nobody; anything else fails.
-cat > "${STUB_DIR}/agt" << 'EOF'
-#!/usr/bin/env bash
-case "$*" in
-    "get teams alpha -o json") echo '{"name":"alpha","leaderName":"lead","workerNames":["w1","w2"]}' ;;
-    "get teams solo -o json")  echo '{"name":"solo","leaderName":"lead"}' ;;
-    "get teams empty -o json") echo '{"name":"empty","workerNames":[]}' ;;
-    *) echo "Error: teams.agentteams.io not found" >&2; exit 1 ;;
-esac
-EOF
-# mc: every worker but "nopass" has a stored password.
-cat > "${STUB_DIR}/mc" << 'EOF'
-#!/usr/bin/env bash
-case "$*" in
-    *"/agents/nopass/"*) exit 1 ;;
-    "cat "*) echo "secret" ;;
-esac
-EOF
-# curl: login always succeeds; joining fails for the worker named in JOIN_FAIL.
-cat > "${STUB_DIR}/curl" << 'EOF'
-#!/usr/bin/env bash
-args="$*"
-case "${args}" in
-    *"/login"*) echo '{"access_token":"tok"}' ;;
-    *"/join"*)
-        if [ -n "${JOIN_FAIL:-}" ] && [ "${LAST_WORKER:-}" = "${JOIN_FAIL}" ]; then exit 22; fi
-        echo '{}' ;;
-esac
-EOF
-chmod +x "${STUB_DIR}/agt" "${STUB_DIR}/mc" "${STUB_DIR}/curl"
-export PATH="${STUB_DIR}:${PATH}"
-export AGENTTEAMS_MATRIX_URL="http://matrix.test" AGENTTEAMS_STORAGE_PREFIX="minio/agentteams"
-log() { :; }
+    def run_project(self, *args, ok=True):
+        (self.p / 'fixtures.json').write_text(json.dumps(self.fixtures))
+        r = subprocess.run(['bash', str(self.p / 'create-project.sh'), '--id', 'project', '--title', 'Team project', *args],
+                           env=self.env, text=True, capture_output=True)
+        if not ok:
+            self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertFalse((self.p / 'fs/shared/projects').exists())
+            self.assertFalse((self.p / 'curl.log').exists())
+            self.assertFalse((self.p / 'mc.log').exists())
+            return
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.result = json.loads(r.stdout.split('---RESULT---\n')[1])
+        self.requests = [json.loads(x) for x in (self.p / 'curl.log').read_text().splitlines()]
+        self.room = next(x['body'] for x in self.requests if x['url'].endswith('/createRoom'))
+        self.status = json.loads((self.p / 'tmp/status.json').read_text())
 
-# shellcheck source=../manager/agent/skills/project-management/scripts/project-members.sh
-source "${HELPERS}"
+    def test_team_resolves_runtime_and_credential_names_and_deduplicates(self):
+        self.run_project('--team', 'alpha', '--workers', 'runtime-alice, extra,extra', '--grant-admin', 'bob')
+        names = ['runtime-lead', 'runtime-alice', 'extra']
+        self.assertEqual(self.result['workers'], names)
+        self.assertEqual(self.result['joined'], names)
+        self.assertEqual(self.result['join_pending'], [])
+        self.assertEqual(self.result['join_failed'], [])
+        self.assertEqual(self.room['invite'], ['@admin:matrix.test'] + ['@'+n+':matrix.test' for n in names] + ['@bob:matrix.test'])
+        levels = self.room['power_level_content_override']['users']
+        self.assertEqual(levels['@bob:matrix.test'], 100)
+        self.assertTrue(all(levels['@'+n+':matrix.test'] == 0 for n in names))
+        logins = [x['body'] for x in self.requests if x['url'].endswith('/login')]
+        self.assertEqual([(x['identifier']['user'], x['password']) for x in logins],
+                         [('runtime-lead', 'leader-pass'), ('runtime-alice', 'alice-pass'), ('extra', 'extra-pass')])
+        joins = [x for x in self.requests if x['url'].endswith('/join')]
+        self.assertEqual(len(joins), 3)
+        self.assertTrue(all('Authorization: Bearer tok-'+n in joins[i]['headers'] for i,n in enumerate(names)))
+        self.assertEqual([x['status'] for x in self.status['workers']], ['joined']*3)
+        mc = (self.p / 'mc.log').read_text()
+        self.assertNotIn('/agents/worker-cr/', mc)
+        self.assertNotIn('/agents/leader-cr/', mc)
+        for file, key in [('home/openclaw.json', 'groupAllowFrom'), ('home/.copaw/workspaces/default/agent.json', 'group_allow_from')]:
+            cfg = json.loads((self.p / file).read_text())['channels']['matrix']
+            self.assertEqual(set(cfg[key]), {'@'+n+':matrix.test' for n in names} | {'@bob:matrix.test'})
+        meta = json.loads((self.p / 'fs/shared/projects/project/meta.json').read_text())
+        self.assertEqual(meta['workers'], names)
 
-# 1. A Team expands to its leader and then all its workers.
-[ "$(project_team_roster alpha | paste -sd, -)" = "lead,w1,w2" ] ||
-    fail "--team alpha must expand to lead,w1,w2"
-[ "$(project_team_roster solo | paste -sd, -)" = "lead" ] ||
-    fail "a Team with no workers must expand to its leader"
+    def test_empty_worker_name_falls_back_to_cr_name(self):
+        self.fixtures['teams']['alpha'] = {'leaderName': 'leader-cr'}
+        self.fixtures['workers']['leader-cr']['workerName'] = ''
+        self.run_project('--team', 'alpha')
+        self.assertEqual(self.result['workers'], ['leader-cr'])
+        self.assertEqual(self.result['joined'], ['leader-cr'])
 
-# 2. Lookup failures stop with a message instead of an empty member list.
-if out=$(project_team_roster missing 2>&1); then fail "an unknown Team must fail"; fi
-grep -q "Team missing not found" <<< "${out}" || fail "an unknown Team must be named in the error: ${out}"
-if out=$(project_team_roster empty 2>&1); then fail "a Team naming nobody must fail"; fi
-grep -q "has no leader or workers" <<< "${out}" || fail "an empty Team must say so: ${out}"
+    def test_workers_alone_still_means_explicit_runtime_names(self):
+        self.run_project('--workers', 'extra,extra')
+        self.assertEqual(self.result['workers'], ['extra'])
+        self.assertFalse((self.p / 'agt.log').exists())
 
-# 3. Each member once, in first-seen order; spaces and empty entries dropped.
-[ "$(project_merge_members "lead,w1,w2" "w2, w3,lead,,")" = "lead,w1,w2,w3" ] ||
-    fail "the union of --team and --workers must list each member once"
-[ "$(project_merge_members "w1,w1, w1")" = "w1" ] || fail "a repeated --workers entry must be invited once"
+    def test_pending_and_failed_joins_remain_distinct(self):
+        self.env['JOIN_FAIL'] = '1'
+        self.run_project('--team', 'alpha', '--workers', 'no-creds')
+        self.assertEqual(self.result['joined'], ['runtime-lead'])
+        self.assertEqual(self.result['join_pending'], ['no-creds'])
+        self.assertEqual(self.result['join_failed'], ['runtime-alice'])
+        self.assertEqual(self.status['summary'], 'joined=1 pending=1 failed=1')
+        self.assertEqual([(x['status'], x['detail']) for x in self.status['workers']],
+                         [('joined', 'http-200'), ('failed', 'http-403'), ('pending', 'no-credentials')])
 
-# 4. --workers alone keeps its meaning: a leader passed alone is just the leader.
-[ "$(project_merge_members "lead")" = "lead" ] || fail "--workers lead must stay lead"
-grep -q -- '--team)        TEAM_NAME="$2"' "${SCRIPT}" || fail "create-project.sh must parse --team"
-grep -q 'if \[ -n "${TEAM_NAME}" \]; then' "${SCRIPT}" ||
-    fail "the Team lookup must run only when --team is given"
+    def test_unknown_team_has_no_side_effects(self):
+        self.run_project('--team', 'missing', ok=False)
 
-# 5. A join is reported only when it happened.
-project_worker_auto_join w1 '!room:test' || fail "a worker that joins must report success"
-if LAST_WORKER=w2 JOIN_FAIL=w2 project_worker_auto_join w2 '!room:test'; then
-    fail "a failed join must not count as membership"
-fi
-if project_worker_auto_join nopass '!room:test'; then
-    fail "a worker with no credentials was only invited, not joined"
-fi
+    def test_empty_team_has_no_side_effects(self):
+        self.fixtures['teams']['alpha'] = {'workerNames': []}
+        self.run_project('--team', 'alpha', ok=False)
 
-# 6. create-project.sh reports the joins in its result, and documents --team.
-grep -q 'source "${SCRIPT_DIR}/project-members.sh"' "${SCRIPT}" ||
-    fail "create-project.sh must source project-members.sh"
-grep -q 'join_failed: (\$join_failed' "${SCRIPT}" ||
-    fail "the result JSON must list the workers that did not join"
-! grep -q '^_worker_auto_join()' "${SCRIPT}" || fail "the join must go through project_worker_auto_join"
-grep -Fq -- '--team' "${REFERENCE}" || fail "create-project.md must document --team for the Manager"
-grep -Fq -- 'join_failed' "${REFERENCE}" || fail "create-project.md must say what join_failed means"
+    def test_unreadable_worker_after_leader_has_no_side_effects(self):
+        del self.fixtures['workers']['worker-cr']
+        self.run_project('--team', 'alpha', ok=False)
 
-echo "PASS: create-project.sh --team expands the roster once and reports lookup and join failures"
+    def test_malformed_worker_has_no_side_effects(self):
+        self.fixtures['workers']['worker-cr'] = 'invalid JSON'
+        self.run_project('--team', 'alpha', ok=False)
+
+    def test_wrong_worker_response_has_no_side_effects(self):
+        self.fixtures['workers']['worker-cr']['name'] = 'some-other-worker'
+        self.run_project('--team', 'alpha', ok=False)
+
+unittest.main(verbosity=2)
+PY

@@ -113,7 +113,6 @@ def mcp_server(otel_env):
     old_env = {}
     env_overrides = {
         "QWENPAW_WORKING_DIR": str(otel_env.workspace.parent.parent),
-        "AGENTTEAMS_AGENT_ROLE": "worker",
         "AGENTTEAMS_WORKER_NAME": "worker-a",
         # Simulate a configured Matrix environment (unreachable URL is fine —
         # the automatic assignment notification is patched below).
@@ -126,6 +125,12 @@ def mcp_server(otel_env):
         "TEAMHARNESS_SHARED_DIR",
         "AGENTTEAMS_SHARED_STORAGE_PREFIX",
         "AGENTTEAMS_MATRIX_USER_ID",
+        # AGENTTEAMS_AGENT_ROLE shadows arguments["role"] inside _role()
+        # and would silently downgrade delegate/leader tests (which pass
+        # role="leader" via arguments) to a non-leader, making the
+        # notification path a no-op and delegate_result["ok"] False.
+        # Clear it so arguments wins.
+        "AGENTTEAMS_AGENT_ROLE",
     ]
     for k, v in env_overrides.items():
         old_env[k] = os.environ.get(k)
@@ -139,9 +144,13 @@ def mcp_server(otel_env):
     # Stub out MinIO sync operations — we only care about local meta.json changes
     server._sync_task = lambda *a, **kw: True
     server._pull_task = lambda *a, **kw: True
+    server._sync_project = lambda *a, **kw: True
     # The authoritative project pull must succeed so mutating actions do not
     # take the retryable pull-failure path (this fixture has no real MinIO).
     server._pull_project = lambda *a, **kw: True
+    # Room-membership validation would otherwise hit the unreachable Matrix
+    # URL configured below (AGENTTEAMS_MATRIX_URL=http://127.0.0.1:1).
+    server._validate_assignee_membership = lambda *a, **kw: {"ok": True}
     # The automatic delegate_task notification must succeed (no real Matrix
     # server in this unit-test fixture) so the delegation commits assigned.
     server._send_delegate_notification = lambda *a, **kw: {

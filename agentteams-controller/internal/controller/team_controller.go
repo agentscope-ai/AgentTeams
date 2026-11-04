@@ -283,9 +283,10 @@ func (r *TeamReconciler) handleDelete(ctx context.Context, t *v1beta1.Team) erro
 // ---------------------------------------------------------------------------
 
 type teamWorkerMember struct {
-	ref         v1beta1.TeamWorkerRef
-	worker      v1beta1.Worker
-	runtimeName string
+	humanMatrixIDs []string
+	ref            v1beta1.TeamWorkerRef
+	worker         v1beta1.Worker
+	runtimeName    string
 }
 
 func (r *TeamReconciler) teamMemberRuntime(member teamWorkerMember) string {
@@ -425,6 +426,16 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 				logger.Error(err, "leader heartbeat config injection failed (non-fatal)")
 			}
 		}
+	}
+
+	// Keep direct Human grants in the Team-owned policy projection without
+	// writing derived permissions back into the referenced Worker CRs.
+	grants, err := humanWorkerGrants(ctx, r.Client, t.Namespace)
+	if err != nil {
+		return r.failTeam(ctx, t, patchBase, err.Error())
+	}
+	for i := range members {
+		members[i].humanMatrixIDs = grants[members[i].ref.Name]
 	}
 
 	// Worker coordination context
@@ -676,6 +687,7 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 		if backend.UsesMemberRuntimeConfig(runtime) {
 			spec.ChannelPolicy = mergeChannelPolicy(t.Spec.ChannelPolicy, member.worker.Spec.ChannelPolicy)
 		}
+		spec = withHumanWorkerGrants(spec, member.humanMatrixIDs)
 		req := service.MemberRuntimeConfigDeployRequest{
 			Name:              member.ref.Name,
 			RuntimeName:       member.runtimeName,
@@ -928,6 +940,9 @@ func (r *TeamReconciler) teamChannelPolicy(t *v1beta1.Team, members []teamWorker
 		dmAllow = append(dmAllow, leaderMatrixID, systemAdminID)
 		dmAllow = appendResolved(dmAllow, resolve, coordinatorIDs...)
 	}
+
+	groupAllow = append(groupAllow, current.humanMatrixIDs...)
+	dmAllow = append(dmAllow, current.humanMatrixIDs...)
 
 	policy := mergeChannelPolicy(t.Spec.ChannelPolicy, individualTeamChannelPolicy(t, current, role))
 	if policy != nil {
@@ -1405,7 +1420,16 @@ func (r *TeamReconciler) humanToTeamRequests(ctx context.Context, obj client.Obj
 	reqs := make([]reconcile.Request, 0, len(teamList.Items))
 	for i := range teamList.Items {
 		t := &teamList.Items[i]
-		if !containsString(human.Spec.AccessibleTeams, t.Name) {
+		directWorker := false
+		for _, member := range t.Spec.WorkerMembers {
+			if containsString(human.Spec.AccessibleWorkers, member.Name) {
+				directWorker = true
+				break
+			}
+		}
+		// A revoke must also enqueue the old team: updates are mapped for
+		// both old and new Human objects by the controller-runtime handler.
+		if !directWorker && !containsString(human.Spec.AccessibleTeams, t.Name) {
 			explicit := false
 			for _, hm := range t.Spec.HumanMembers {
 				if hm.Name == human.Name {

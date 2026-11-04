@@ -1,4 +1,10 @@
 #!/bin/bash
+
+# Coding-CLI home: QwenPaw persists QWENPAW_WORKING_DIR (not $HOME);
+# OpenClaw/Hermes use their MinIO-synced $HOME.
+if [ -n "${QWENPAW_WORKING_DIR:-}" ]; then HOME="$QWENPAW_WORKING_DIR"; export HOME; fi
+_cli_prefix="${AGENTTEAMS_CODING_CLI_PREFIX:-${QWENPAW_WORKING_DIR:-$HOME}/.coding-cli}"
+if [ -d "$_cli_prefix/bin" ]; then PATH="$_cli_prefix/bin:$PATH"; export PATH; fi
 # Detect available AI coding CLI tools and their config/auth surfaces
 # Output: JSON with available tools and details
 # Usage: bash detect-available-cli.sh

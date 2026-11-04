@@ -402,6 +402,17 @@ type ChannelPolicySpec struct {
 
 type ChannelsSpec struct {
 	DingTalk *DingTalkChannelSpec `json:"dingtalk,omitempty"`
+	Matrix   *MatrixChannelSpec   `json:"matrix,omitempty"`
+}
+
+// MatrixChannelSpec holds display flags for the worker's Matrix channel.
+// Declarative source of truth for Matrix display flags; runtime channel-API
+// writes are not persisted to the CRD and survive only until this section
+// is set. When the section is present, unset flags default to false
+// (hidden), mirroring DingTalk semantics.
+type MatrixChannelSpec struct {
+	ShowThinking  bool `json:"showThinking,omitempty"`
+	ShowToolCalls bool `json:"showToolCalls,omitempty"`
 }
 
 type DingTalkChannelSpec struct {
@@ -693,6 +704,11 @@ type HumanSpec struct {
 	// are rejected at admission by the human-update API. Team leaders and
 	// other SA-based identities never hold capabilities (#1220 §5).
 	Capabilities []string `json:"capabilities,omitempty"`
+	// WorkspaceQuotaBytes is the total byte budget for this human's file
+	// area (#1414 P1): files/** plus .trash/**. nil = unlimited. Enforced
+	// before writes and trash restores (413 quota_exceeded); usage is
+	// computed live, never persisted.
+	WorkspaceQuotaBytes *int64 `json:"workspaceQuotaBytes,omitempty"`
 }
 
 type IdentitySourceSpec struct {

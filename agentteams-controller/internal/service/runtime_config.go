@@ -107,6 +107,12 @@ type memberRuntimeConfigSkillRegistry struct {
 
 type memberRuntimeConfigChannels struct {
 	DingTalk *memberRuntimeConfigDingTalkChannel `json:"dingtalk,omitempty"`
+	Matrix   *memberRuntimeConfigMatrixChannel   `json:"matrix,omitempty"`
+}
+
+type memberRuntimeConfigMatrixChannel struct {
+	FilterThinking     bool `json:"filter_thinking"`
+	FilterToolMessages bool `json:"filter_tool_messages"`
 }
 
 type memberRuntimeConfigDingTalkChannel struct {
@@ -379,14 +385,31 @@ func isNativeConfigModel(model string) bool {
 }
 
 func memberRuntimeConfigChannelsFromSpec(spec v1beta1.WorkerSpec) (*memberRuntimeConfigChannels, error) {
-	if spec.Channels == nil || spec.Channels.DingTalk == nil {
+	if spec.Channels == nil {
 		return nil, nil
 	}
-	dingtalk, err := memberRuntimeConfigDingTalkFromSpec(spec.Channels.DingTalk)
-	if err != nil {
-		return nil, err
+	channels := &memberRuntimeConfigChannels{}
+	if spec.Channels.DingTalk != nil {
+		dingtalk, err := memberRuntimeConfigDingTalkFromSpec(spec.Channels.DingTalk)
+		if err != nil {
+			return nil, err
+		}
+		channels.DingTalk = dingtalk
 	}
-	return &memberRuntimeConfigChannels{DingTalk: dingtalk}, nil
+	if spec.Channels.Matrix != nil {
+		channels.Matrix = memberRuntimeConfigMatrixFromSpec(spec.Channels.Matrix)
+	}
+	if channels.DingTalk == nil && channels.Matrix == nil {
+		return nil, nil
+	}
+	return channels, nil
+}
+
+func memberRuntimeConfigMatrixFromSpec(spec *v1beta1.MatrixChannelSpec) *memberRuntimeConfigMatrixChannel {
+	return &memberRuntimeConfigMatrixChannel{
+		FilterThinking:     !spec.ShowThinking,
+		FilterToolMessages: !spec.ShowToolCalls,
+	}
 }
 
 func memberRuntimeConfigDingTalkFromSpec(spec *v1beta1.DingTalkChannelSpec) (*memberRuntimeConfigDingTalkChannel, error) {

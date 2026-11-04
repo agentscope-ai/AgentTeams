@@ -44,7 +44,7 @@ from agentteams_manager.bridge import (
 # ---------------------------------------------------------------------------
 
 def _make_openclaw_cfg(**memory_search_overrides):
-    """Helper to build an openclaw config with optional memorySearch overrides."""
+    """Helper to build an openclaw config with optional memory.search overrides."""
     base = {
         "channels": {
             "matrix": {
@@ -65,7 +65,7 @@ def _make_openclaw_cfg(**memory_search_overrides):
         "agents": {"defaults": {"model": {"primary": "gw/qwen3.5-plus"}}},
     }
     if memory_search_overrides is not None:
-        base["agents"]["defaults"]["memorySearch"] = {
+        base["memory"] = {"search": {
             "provider": "openai",
             "model": "text-embedding-v4",
             "remote": {
@@ -73,7 +73,7 @@ def _make_openclaw_cfg(**memory_search_overrides):
                 "apiKey": "key123",
             },
             **memory_search_overrides,
-        }
+        }}
     return base
 
 
@@ -862,3 +862,83 @@ def test_agent_json_clears_subagent_model_when_unset():
             json.dump(stale, f)
         _run_bridge(_make_openclaw_cfg(), working_dir)
         assert "subagent_model" not in _read_agent(working_dir)
+
+
+# ---------------------------------------------------------------------------
+# #1388: runtime ACL projection for a bridge-generated Manager workspace
+# ---------------------------------------------------------------------------
+
+def _make_roster_cfg(
+    *,
+    dm_policy: str = "allowlist",
+    group_policy: str = "allowlist",
+    dm_allow: list[str] | None = None,
+    group_allow: list[str] | None = None,
+):
+    """Controller-shaped source config: policy + roster allowlists."""
+    cfg = _make_openclaw_cfg()
+    matrix = cfg["channels"]["matrix"]
+    matrix["dm"] = {
+        "policy": dm_policy,
+        "allowFrom": dm_allow if dm_allow is not None else ["@manager:t", "@luo:t"],
+    }
+    matrix["groupPolicy"] = group_policy
+    matrix["groupAllowFrom"] = (
+        group_allow if group_allow is not None else ["@manager:t", "@luo:t"]
+    )
+    return cfg
+
+
+def test_acl_flags_follow_allowlist_policy_on_fresh_workspace():
+    """The Manager bridge must activate the runtime ACL switches for the
+    controller's allowlist policy (native Worker roster -> ACL does)."""
+    agent = _bridge_and_read_agent(_make_roster_cfg())
+    matrix = agent["channels"]["matrix"]
+    assert matrix["access_control_dm"] is True
+    assert matrix["access_control_group"] is True
+    # The controller's human entries are projected and now actually enforced.
+    assert "@luo:t" in matrix["allow_from"]
+    assert "@luo:t" in matrix["group_allow_from"]
+
+
+def test_acl_flags_off_for_open_policy():
+    agent = _bridge_and_read_agent(
+        _make_roster_cfg(dm_policy="open", group_policy="open")
+    )
+    matrix = agent["channels"]["matrix"]
+    assert matrix["access_control_dm"] is False
+    assert matrix["access_control_group"] is False
+
+
+def test_config_json_carries_acl_flags_too():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        working_dir = Path(tmpdir) / "agent"
+        _run_bridge(_make_roster_cfg(), working_dir)
+        cfg = json.loads((working_dir / "config.json").read_text())
+        matrix = cfg["channels"]["matrix"]
+        assert matrix["access_control_dm"] is True
+        assert matrix["access_control_group"] is True
+
+
+def test_acl_flags_survive_restart_and_revocation():
+    """Restart (re-bridge) keeps the flags; removing a human from the source
+    roster revokes the ACL entry on the next bridge."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        working_dir = Path(tmpdir) / "agent"
+        _run_bridge(_make_roster_cfg(), working_dir)
+        _run_bridge(_make_roster_cfg(), working_dir)  # restart / re-bridge
+        matrix = _read_agent(working_dir)["channels"]["matrix"]
+        assert matrix["access_control_dm"] is True
+        assert matrix["access_control_group"] is True
+        assert matrix["allow_from"].count("@luo:t") == 1
+
+        _run_bridge(
+            _make_roster_cfg(
+                dm_allow=["@manager:t"], group_allow=["@manager:t"]
+            ),
+            working_dir,
+        )
+        matrix = _read_agent(working_dir)["channels"]["matrix"]
+        assert "@luo:t" not in matrix["allow_from"]
+        assert "@luo:t" not in matrix["group_allow_from"]
+        assert matrix["access_control_dm"] is True

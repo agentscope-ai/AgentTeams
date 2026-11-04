@@ -1,0 +1,78 @@
+apiVersion: agentteams.agentteam/v1alpha1
+kind: AgentTeamPlugin
+metadata:
+  name: agentteams-teamharness
+  version: 0.1.0
+requires:
+  agentteams: ">=1.2.6"   # minimum compatible core version
+  contracts: "1"          # major version of contracts/*.json
+  tool_schema: "1"        # wire version of the 7 tool/action names; pinned to 1
+prompts:
+  team: prompts/team/TEAMS.md
+  agent:
+    leader: prompts/agent/leader.md
+    worker: prompts/agent/worker.md
+    remoteMember: prompts/agent/remote-member.md
+  manager:
+    agents: prompts/manager/AGENTS.md
+    tools: prompts/manager/TOOLS.md
+    heartbeat: prompts/manager/HEARTBEAT.md
+skills:
+  agent:
+    - id: mcporter
+      path: skills/agent/mcporter
+      roles: [leader, worker, manager, remote-member]
+    - id: find-skills
+      path: skills/agent/find-skills
+      roles: [leader, worker, manager, remote-member]
+  team:
+    - id: communication
+      path: skills/team/communication
+      roles: [leader, worker, manager, remote-member]
+    - id: file-sharing
+      path: skills/team/file-sharing
+      roles: [leader, worker, manager, remote-member]
+    - id: roomflow
+      path: skills/team/roomflow
+      roles: [leader]
+    - id: team-coordination
+      path: skills/team/team-coordination
+      roles: [leader]
+    - id: project-management
+      path: skills/team/project-management
+      roles: [leader]
+    - id: task-delegation
+      path: skills/team/task-delegation
+      roles: [leader]
+    - id: task-execution
+      path: skills/team/task-execution
+      roles: [worker, remote-member]
+mcp:
+  servers:
+    - id: teamharness
+      transport: stdio
+      command: python
+      args:
+        - mcp/server.py
+      tools:
+        - health
+        - message
+        - roomflow
+        - filesync
+        - artifact
+        - projectflow
+        - taskflow
+adapters:
+  - id: qwenpaw
+    path: adapters/qwenpaw
+package:
+  include:
+    - plugin.yaml
+    - plugin.json
+    - contract.yaml
+    - prompts/
+    - skills/
+    - mcp/
+    - contracts/
+    - adapters/
+    - scripts/

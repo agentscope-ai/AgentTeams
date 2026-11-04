@@ -33,6 +33,9 @@ SKIP_BUILD="${AGENTTEAMS_SKIP_BUILD:-0}"
 BUILD_K8S_IMAGE="${AGENTTEAMS_BUILD_K8S_IMAGE:-0}"
 CONTROLLER_REPLICAS="${AGENTTEAMS_CONTROLLER_REPLICAS:-1}"
 
+# Immutable openclaw-base tag, derived from the OpenClaw pin (hack/versions.env).
+OPENCLAW_BASE_TAG="$(sed -n 's/^OPENCLAW_BASE_TAG=//p' "$(dirname "$0")/../hack/versions.env")"
+
 LLM_API_KEY="${AGENTTEAMS_LLM_API_KEY:-}"
 REGISTRATION_TOKEN="${AGENTTEAMS_REGISTRATION_TOKEN:-}"
 ADMIN_PASSWORD="${AGENTTEAMS_ADMIN_PASSWORD:-}"
@@ -85,13 +88,13 @@ if [ "$SKIP_BUILD" = "0" ]; then
     if [ "$BUILD_K8S_IMAGE" = "1" ]; then
         log "Building manager image (lightweight k8s)..."
         docker build -t "$MANAGER_IMAGE" \
-            --build-arg OPENCLAW_BASE_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/openclaw-base:20260423-8359cbc \
+            --build-arg OPENCLAW_BASE_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/openclaw-base:${OPENCLAW_BASE_TAG} \
             --build-arg AGENTTEAMS_CONTROLLER_IMAGE="$CONTROLLER_IMAGE" \
             -f "${PROJECT_ROOT}/manager/Dockerfile.k8s" "${PROJECT_ROOT}"
     else
         log "Building manager image (all-in-one)..."
         docker build -t "$MANAGER_IMAGE" \
-            --build-arg OPENCLAW_BASE_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/openclaw-base:20260423-8359cbc \
+            --build-arg OPENCLAW_BASE_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/openclaw-base:${OPENCLAW_BASE_TAG} \
             --build-arg AGENTTEAMS_CONTROLLER_IMAGE="$CONTROLLER_IMAGE" \
             -f "${PROJECT_ROOT}/manager/Dockerfile" "${PROJECT_ROOT}"
     fi
@@ -105,7 +108,7 @@ if [ "$SKIP_BUILD" = "0" ]; then
     # Worker images
     log "Building worker image (openclaw)..."
     docker build -t "$WORKER_IMAGE" \
-        --build-arg OPENCLAW_BASE_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/openclaw-base:20260423-8359cbc \
+        --build-arg OPENCLAW_BASE_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/openclaw-base:${OPENCLAW_BASE_TAG} \
         --build-arg AGENTTEAMS_CONTROLLER_IMAGE="$CONTROLLER_IMAGE" \
         --build-context shared="${PROJECT_ROOT}/shared/lib" \
         -f "${PROJECT_ROOT}/worker/Dockerfile" "${PROJECT_ROOT}/worker"

@@ -253,6 +253,20 @@ spec:
                         cardTemplateId:
                           type: string
                           description: "DingTalk card template ID, required for card message type."
+                    matrix:
+                      type: object
+                      description: >
+                        Matrix channel display flags. When the whole section
+                        is omitted, the worker keeps showing thinking and tool
+                        output; when present, unset flags default to false
+                        (hidden).
+                      properties:
+                        showThinking:
+                          type: boolean
+                          description: "Whether Matrix replies may include thinking content."
+                        showToolCalls:
+                          type: boolean
+                          description: "Whether Matrix replies may include tool-call content."
                 containerManaged:
                   type: boolean
                   description: >

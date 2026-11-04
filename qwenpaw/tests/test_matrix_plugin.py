@@ -36,5 +36,5 @@ def test_matrix_plugin_uses_qwenpaw_2_display_config_renderer_contract():
     assert "filter_tool_messages" not in source
     assert "self._render_style.display_config" in source
     assert "display_config=display_config" in source
-    assert "show_tool_calls=True" in source
-    assert "show_tool_results=False" in source
+    assert "show_tool_calls=self.show_tool_calls" in source
+    assert "show_tool_results=self.show_tool_results" in source

@@ -430,6 +430,31 @@ http://<局域网IP>:18080
 
 ---
 
+## 升级后控制台报 CONTROL_UI_DEVICE_IDENTITY_REQUIRED
+
+自 OpenClaw v2026.10.9 起，Control UI 的 gateway WebSocket 握手要求设备身份
+（device identity）。浏览器用纯 JavaScript 自动生成——不需要 TLS 或安全上下文，
+纯 HTTP 的控制台保持可用、无需改动。
+
+具体表现取决于你如何访问控制台：
+
+- **宿主机 localhost**（如 `http://127.0.0.1:18888`）：无需任何操作。manager
+  内置的 nginx loopback 反代不带转发头转发到 `127.0.0.1:18799`，gateway 视为
+  loopback 连接，认证后配对自动批准。
+- **容器 IP、局域网地址、自定义域名，或添加转发头的代理**：设备需要一次性审批。
+  批准待处理的配对请求：
+
+  ```bash
+  docker exec agentteams-manager openclaw devices list   # 取得待批 requestId
+  docker exec agentteams-manager openclaw devices approve <requestId>
+  ```
+
+  也可以在控制台 Devices 界面中批准。审批是一次性的——该入口只需做一次。
+- **仅带 token 的程序化 WS 客户端**：不再被接受——必须像其它客户端一样携带
+  设备身份。
+
+---
+
 ## Element 提示 homeserver 不是有效的 Matrix 服务器
 
 Element 要求填写自定义 homeserver 时，不要填写 Element Web UI 的地址或端口。这两个地址对应不同组件：
@@ -903,6 +928,8 @@ OpenClaw Control UI（可视化 session 检查），打开：
 ```
 http://localhost:18888
 ```
+
+自 OpenClaw v2026.10.9 起，Control UI 要求设备身份（device identity）。经内置 nginx loopback 反代时，浏览器会自动生成设备身份且配对自动批准，无需手动步骤。若直连 gateway 端口或经会添加转发头的代理访问，需一次性执行 `openclaw devices approve <requestId>` 批准设备（或使用 Devices UI）。
 
 ---
 

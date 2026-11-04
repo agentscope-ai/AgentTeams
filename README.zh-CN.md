@@ -22,9 +22,8 @@ AgentTeams 不再实现 Agent 运行时本身，而是编排和管理多个 Agen
 - 🎨 **使用 Element IM 客户端+Tuwunel IM 服务器（均基于 Matrix 实时通信协议）**：节省钉钉、飞书 IM 的接入和企业内的审批成本，方便用户快速体验在 IM 的交互环境中体验模型服务的"爽感"，同时支持以 OpenClaw 原生的方式接入 IM。
 - 🧬 **集成** [AgentLoop](https://www.aliyun.com/product/agentloop?spm=at.readme.0.0.0) ：提供 Agent 全栈观测与审计、Agent 评估与实验、Agent 资产管理与持续优化等能力。
 
-![架构](https://img.alicdn.com/imgextra/i4/O1CN01c1VlDE1zYZ46EW3OA_!!6000000006726-49-tps-9895-8231.webp)
-
 ## 动态
+- **2026-10-16:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.5) — AgentTeams 1.2.5 重点增强编码工具委派、Worker 配置管理和 QwenPaw 运行时升级，默认搭配 Dashboard v1.3.1，并修复 MCP 注册、Matrix 消息协作及 Worker 恢复中的多项问题。
 - **2026-09-20:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.4) — AgentTeams v1.2.4：新增 TeamHarness 任务状态历史、进度跟踪与完成通知；升级至 QwenPaw 2.2.1 和 Dashboard v1.2.4.9；完善团队权限、审计与技能管理；引入实验性 DeepSeek Harness Worker；并改进 Worker 状态持久化与安装可靠性。
 - **2026-08-22:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.3) — AgentTeams v1.2.3：通过新增 Controller API、`agt` 命令和 Dashboard v1.2.4，让长时运行的 Project 工作流可见、可控；新增带审计记录的人工干预、Project 历史和 QwenPaw Worker 检查点；将 QwenPaw 提升为本地 Manager 和 Worker 的推荐默认运行时；并增强 Skill 恢复、Windows AppService 启动及运行可靠性。
 - **2026-08-08:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.2) — AgentTeams v1.2.2：新增 Manager 向 Worker 下发自定义 Skill，支持校验、上传存储、更新 `Worker.spec.skills`，并由 QwenPaw 无需重启即可热刷新和启用；增强 Manager 与 Worker 的 Skill 加载保护；同时确保 Team Leader 和 Worker 在受邀后显式加入 Team Room。
@@ -124,7 +123,7 @@ bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main
 若要升级到指定版本，请使用以下命令：
 
 ```bash
-AGENTTEAMS_VERSION=v1.2.2 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+AGENTTEAMS_VERSION=v1.2.5 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 
@@ -498,6 +497,7 @@ python scripts/export-debug-log.py --range 1h
 | [docs/zh-cn/usage/deployment/windows.md](docs/zh-cn/usage/deployment/windows.md) | AgentTeams Windows 部署手册 |
 | [docs/zh-cn/usage/manager-guide.md](docs/zh-cn/usage/manager-guide.md) | Manager 使用指南 |
 | [docs/zh-cn/usage/worker-guide.md](docs/zh-cn/usage/worker-guide.md) | Worker 使用指南（含部署与故障排查） |
+| [docs/zh-cn/usage/single-and-multi-user.md](docs/zh-cn/usage/single-and-multi-user.md) | 单人与多人部署：同一套部署模型、角色与权限级别、接入更多人时什么会变（[English](docs/usage/single-and-multi-user.md)） |
 | [docs/zh-cn/usage/import-worker.md](docs/zh-cn/usage/import-worker.md) | 导入 Worker 指南 |
 | [docs/zh-cn/usage/resource-management.md](docs/zh-cn/usage/resource-management.md) | 声明式资源管理（Worker / Team / Human YAML）、模板市场与 API 参考 |
 | [docs/zh-cn/usage/project-workflow-api.md](docs/zh-cn/usage/project-workflow-api.md) | 项目 / 工作流查看 API |

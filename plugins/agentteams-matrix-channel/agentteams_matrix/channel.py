@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import html
 import importlib
 import inspect
@@ -93,6 +94,12 @@ TASK_ROOM_CACHE_TTL_MS = 30_000
 MATRIX_EVENT_PROTOCOL_LIMIT_BYTES = 64 * 1024
 MATRIX_TEXT_EVENT_SAFE_BYTES = (MATRIX_EVENT_PROTOCOL_LIMIT_BYTES * 3) // 4
 MATRIX_TEXT_EVENT_FALLBACK_BUDGET_BYTES = MATRIX_TEXT_EVENT_SAFE_BYTES - 1024
+#: A long-text summary is only a preview, so an encrypted room gets a much
+#: smaller plaintext budget: encryption adds base64 (4/3) plus the megolm
+#: envelope and the outer event fields, and the server rejects PDUs over
+#: 65535 bytes outright (M_TOO_LARGE). A 105 KB message must still leave room
+#: for the envelope; 16 KiB of preview is plenty for a summary.
+MATRIX_TEXT_EVENT_ENCRYPTED_BUDGET_BYTES = 16 * 1024
 MATRIX_LONG_MESSAGE_METADATA_KEY = "com.agentteams.long_message"
 TEAMHARNESS_TRIGGER_CONTENT_KEY = "m.teamharness.trigger"
 TEAMHARNESS_SELF_TRIGGER_TYPES = frozenset({"PROJECT_REQUESTED"})
@@ -308,6 +315,12 @@ def _attach_long_message_metadata(
 HISTORY_CONTEXT_MARKER = "[Chat messages since your last reply - for context]"
 CURRENT_MESSAGE_MARKER = "[Current message - respond to this]"
 DEFAULT_HISTORY_LIMIT = 50
+# Lower bound for `sync_timeout_ms`: a value of `0` would turn the
+# nio `sync()` loop into a busy-spin and a negative value would feed
+# `max(sync_s + 30, 60)` a nonsense duration downstream. 1 second is
+# the smallest value that still gives the homeserver a chance to
+# return at least one long-poll iteration.
+_MIN_SYNC_TIMEOUT_MS = 1000
 
 
 class QwenPawMatrixClient(AsyncClient):
@@ -426,8 +439,14 @@ class AgentTeamsMatrixChannel(BaseChannel):
         # Media / history
         self.vision_enabled: bool = vision_enabled
         self.history_limit: int = max(0, history_limit)
-        self.sync_timeout_ms: int = sync_timeout_ms
+        # Clamp sync_timeout_ms to a sane minimum so a misconfigured
+        # `0` does not turn the sync loop into a busy-spin and a
+        # negative value does not produce a nonsense request_timeout
+        # downstream (`max(sync_s + 30, 60)`).
+        self.sync_timeout_ms: int = max(_MIN_SYNC_TIMEOUT_MS, int(sync_timeout_ms))
         self.show_thinking: bool = show_thinking
+        self.show_tool_calls: bool = show_tool_calls
+        self.show_tool_results: bool = show_tool_results
 
         self._workspace_dir = (
             Path(workspace_dir).expanduser() if workspace_dir else None
@@ -463,6 +482,20 @@ class AgentTeamsMatrixChannel(BaseChannel):
         # Thread tracking (ported from CoPaw overlay)
         self._active_thread_roots: Dict[str, str] = {}
         self._proactive_send_state: Dict[str, Dict[str, Any]] = {}
+
+    async def _access_control_gate(self, payload: Any) -> bool:
+        # Denials are bot notices, not new requests. Keep this metadata local
+        # to the ACL check so allowed messages retain their normal reply type.
+        if isinstance(payload, dict):
+            meta = dict(payload.get("meta") or {})
+            meta[_MATRIX_FORCE_NOTICE_KEY] = True
+            payload = {**payload, "meta": meta}
+        else:
+            payload = copy.copy(payload)
+            meta = dict(getattr(payload, "channel_meta", None) or {})
+            meta[_MATRIX_FORCE_NOTICE_KEY] = True
+            payload.channel_meta = meta
+        return await super()._access_control_gate(payload)
 
     # ------------------------------------------------------------------
     # Debounce key — serialize by room_id (avoid concurrent session access)
@@ -628,14 +661,16 @@ class AgentTeamsMatrixChannel(BaseChannel):
             return
         try:
             importlib.import_module("olm")
-        except ImportError:
-            logger.error(
-                "MatrixChannel: olm not installed — falling back to "
-                "non-encrypted mode. "
-                "To enable E2EE: pip install matrix-nio[e2e] && "
-                "apt/dnf install libolm-dev",
-            )
-            self.encryption = False
+        except ImportError as exc:
+            # Fail closed (#1469 round 13): the channel asked for E2EE; a
+            # plaintext fallback would send m.room.message into a room whose
+            # state says encrypted. Refuse to start instead of demoting.
+            raise RuntimeError(
+                "MatrixChannel: olm is not installed while encryption is "
+                "enabled — refusing to start in plaintext. To enable E2EE: "
+                "pip install matrix-nio[e2e] && apt/dnf install libolm-dev "
+                "(or disable encryption explicitly)"
+            ) from exc
 
     def _init_async_client(self, resolved_device_id: str) -> None:
         # E2EE: when encryption is enabled, provide store_path so matrix-nio
@@ -2532,10 +2567,17 @@ class AgentTeamsMatrixChannel(BaseChannel):
     # send_media outbound path (same role as worker _upload_file).
     # ------------------------------------------------------------------
 
-    async def _upload_file(self, file_ref: str) -> Optional[str]:
-        """Upload a local file to Matrix; return mxc:// URI or None."""
+    async def _upload_file(
+        self, file_ref: str, *, encrypt: bool = False
+    ) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
+        """Upload a local file; return ``(mxc:// URI, decryption info)``.
+
+        ``encrypt=True`` asks matrix-nio to encrypt the bytes and returns the
+        decryption descriptor the event's ``file`` object must carry; the
+        plaintext path returns ``(uri, None)`` unchanged.
+        """
         if not self._client:
-            return None
+            return None, None
         try:
             # file_ref may be a file:// URI or a plain path
             path = Path(file_url_to_local_path(file_ref) or file_ref)
@@ -2544,15 +2586,16 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     "MatrixChannel: upload source not found: %s",
                     file_ref,
                 )
-                return None
+                return None, None
             mime_type, _ = mimetypes.guess_type(str(path))
             mime_type = mime_type or "application/octet-stream"
             data = path.read_bytes()
-            resp, _ = await self._client.upload(
+            resp, decryption = await self._client.upload(
                 io.BytesIO(data),
                 content_type=mime_type,
                 filename=path.name,
                 filesize=len(data),
+                encrypt=encrypt,
             )
             if isinstance(resp, UploadResponse):
                 logger.debug(
@@ -2560,16 +2603,16 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     path.name,
                     resp.content_uri,
                 )
-                return resp.content_uri
+                return resp.content_uri, (decryption if encrypt else None)
             logger.warning("MatrixChannel: upload failed: %s", resp)
-            return None
+            return None, None
         except Exception as exc:
             logger.warning(
                 "MatrixChannel: upload error for %s: %s",
                 file_ref,
                 exc,
             )
-            return None
+            return None, None
 
     # ------------------------------------------------------------------
     # DM room detection (joined_members API + short-lived cache)
@@ -3855,6 +3898,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         file_ref: str,
         matrix_msgtype: str,
         mxc_uri: str,
+        decryption: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         path_str = file_url_to_local_path(file_ref) or file_ref
         filename = os.path.basename(path_str) or "file"
@@ -3864,15 +3908,31 @@ class AgentTeamsMatrixChannel(BaseChannel):
             file_size = os.path.getsize(path_str)
         except OSError:
             file_size = 0
-        return {
+        content: Dict[str, Any] = {
             "msgtype": matrix_msgtype,
             "body": filename,
-            "url": mxc_uri,
             "info": {
                 "mimetype": mime_type,
                 "size": file_size,
             },
         }
+        if decryption:
+            # Encrypted rooms carry the file descriptor (url + key/iv/hashes/
+            # v): a receiving client decrypts the room event and then requires
+            # `file`; a bare `url` is a BadEvent and the repository stored the
+            # plaintext bytes.
+            file_info: Dict[str, Any] = dict(decryption)
+            file_info.update(
+                {
+                    "url": mxc_uri,
+                    "mimetype": mime_type,
+                    "size": file_size,
+                }
+            )
+            content["file"] = file_info
+        else:
+            content["url"] = mxc_uri
+        return content
 
     async def _send_uploaded_media_event(
         self,
@@ -3881,11 +3941,13 @@ class AgentTeamsMatrixChannel(BaseChannel):
         matrix_msgtype: str,
         mxc_uri: str,
         meta: Optional[Dict[str, Any]],
+        decryption: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
         event_content = self._matrix_media_event_content(
             file_ref,
             matrix_msgtype,
             mxc_uri,
+            decryption,
         )
         meta_dict = meta or {}
         sender_id = meta_dict.get("sender_id") or meta_dict.get("user_id")
@@ -3970,6 +4032,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         path: Path,
         media_uri: Optional[str],
         build_content: Callable[[str], Dict[str, Any]],
+        budget_bytes: int = MATRIX_TEXT_EVENT_FALLBACK_BUDGET_BYTES,
     ) -> Dict[str, Any]:
         low = 0
         high = len(text or "")
@@ -3983,7 +4046,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 preview_chars,
             )
             content = build_content(summary)
-            if _matrix_event_payload_size(content) <= MATRIX_TEXT_EVENT_FALLBACK_BUDGET_BYTES:
+            if _matrix_event_payload_size(content) <= budget_bytes:
                 best_content = content
                 low = preview_chars + 1
             else:
@@ -4005,13 +4068,31 @@ class AgentTeamsMatrixChannel(BaseChannel):
             return None
         path = self._write_long_message_file(text)
         file_ref = str(path)
-        media_uri = await self._upload_file(file_ref)
+        # #1469 P1: the long-text fallback follows the same room-aware
+        # attachment rule as send_media — an encrypted room never receives the
+        # full text as a plaintext upload behind a bare MXC URL.
+        if getattr(self, "encryption", False):
+            await self._prepare_room_send(room_id)
+        encrypted = self._room_will_encrypt(room_id)
+        media_uri, decryption = await self._upload_file(file_ref, encrypt=encrypted)
         if not media_uri:
             logger.warning(
                 "MatrixChannel: long text fallback upload failed for %s",
                 file_ref,
             )
-        long_message_metadata = _long_message_metadata(path, media_uri)
+        elif encrypted and not decryption:
+            logger.warning(
+                "MatrixChannel: encrypted long-text upload returned no "
+                "decryption metadata for %s; refusing to send a plaintext "
+                "attachment",
+                file_ref,
+            )
+            return None
+        # An encrypted room cannot use a bare MXC URL: the summary carries no
+        # media metadata and the file event below carries the descriptor.
+        long_message_metadata = _long_message_metadata(
+            path, None if encrypted else media_uri
+        )
 
         def build_content(summary: str) -> Dict[str, Any]:
             if edit_event_id:
@@ -4040,22 +4121,62 @@ class AgentTeamsMatrixChannel(BaseChannel):
             _attach_long_message_metadata(content, long_message_metadata)
             return content
 
+        budget = (
+            MATRIX_TEXT_EVENT_ENCRYPTED_BUDGET_BYTES
+            if encrypted
+            else MATRIX_TEXT_EVENT_FALLBACK_BUDGET_BYTES
+        )
         content = self._bounded_long_message_content(
             text,
             path,
             media_uri,
             build_content,
+            budget_bytes=budget,
         )
         resp = await self._room_send_with_retry(
             room_id,
             "m.room.message",
             content,
         )
+        if isinstance(resp, RoomSendError):
+            # M_TOO_LARGE (and friends) mean the server rejected the summary
+            # event. The attachment is the deliverable, so retry once with the
+            # smallest preview and never abandon the file event.
+            logger.warning(
+                "MatrixChannel: long-text summary rejected (%s %s) "
+                "room_id=%s; retrying with a minimal summary component=matrix",
+                getattr(resp, "status_code", "?"),
+                getattr(resp, "message", ""),
+                room_id,
+            )
+            content = self._bounded_long_message_content(
+                text,
+                path,
+                media_uri,
+                build_content,
+                budget_bytes=1024,
+            )
+            resp = await self._room_send_with_retry(
+                room_id,
+                "m.room.message",
+                content,
+            )
         event_id = getattr(resp, "event_id", None)
+        if isinstance(resp, RoomSendError):
+            logger.error(
+                "MatrixChannel: long-text summary still rejected (%s %s) "
+                "room_id=%s; delivering the attachment without a summary "
+                "component=matrix",
+                getattr(resp, "status_code", "?"),
+                getattr(resp, "message", ""),
+                room_id,
+            )
+            event_id = None
         parent_event_id = edit_event_id or event_id
-        if media_uri and parent_event_id:
+        if media_uri:
             file_meta = dict(meta or {})
-            file_meta["matrixAttachmentParentEventId"] = parent_event_id
+            if parent_event_id:
+                file_meta["matrixAttachmentParentEventId"] = parent_event_id
             try:
                 await self._send_uploaded_media_event(
                     room_id,
@@ -4063,6 +4184,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     "m.file",
                     media_uri,
                     file_meta,
+                    decryption,
                 )
             except Exception as exc:
                 logger.warning(
@@ -4123,12 +4245,12 @@ class AgentTeamsMatrixChannel(BaseChannel):
         return _enum_name(message_type) == "MESSAGE"
 
     def _thread_content_parts(self, event: Any) -> List[Any]:
-        """Render event for thread display with tool messages enabled."""
+        """Render event for thread display with the channel's tool visibility flags."""
         from dataclasses import replace as dc_replace
         display_config = dc_replace(
             self._render_style.display_config,
-            show_tool_calls=True,
-            show_tool_results=True,
+            show_tool_calls=self.show_tool_calls,
+            show_tool_results=self.show_tool_results,
         )
         style = dc_replace(self._render_style, display_config=display_config)
         renderer = self._renderer.__class__(style)
@@ -4194,6 +4316,12 @@ class AgentTeamsMatrixChannel(BaseChannel):
         message_type = getattr(event, "type", None)
         if self._is_reasoning_message(message_type) and not self.show_thinking:
             # show_thinking disabled: reasoning is never rendered to the room.
+            return
+        if self._is_tool_call_message(message_type) and not self.show_tool_calls:
+            # show_tool_calls disabled: tool calls are never rendered to the room.
+            return
+        if self._is_tool_output_message(message_type) and not self.show_tool_results:
+            # show_tool_results disabled: tool output is never rendered to the room.
             return
         if self._is_reasoning_message(
             message_type,
@@ -4717,7 +4845,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
         # 1. Check Matrix errcode (string)
         errcode = getattr(resp, "status_code", None)
-        if errcode in MatrixChannel._RETRYABLE_MATRIX_ERRCODES:
+        if errcode in AgentTeamsMatrixChannel._RETRYABLE_MATRIX_ERRCODES:
             return True
 
         # 2. Fall back to HTTP status via transport_response
@@ -4973,11 +5101,28 @@ class AgentTeamsMatrixChannel(BaseChannel):
         if not file_ref:
             return None
 
+        # The destination room decides whether the attachment is encrypted
+        # (#1469 P1): an encrypted room's upload must store ciphertext and the
+        # event must carry the file descriptor. _prepare_room_send aligns the
+        # client's local encryption flags with the server first (the same
+        # helper the text path uses).
+        if getattr(self, "encryption", False):
+            await self._prepare_room_send(room_id)
+        encrypted = self._room_will_encrypt(room_id)
+
         # Upload to Matrix media repository
-        mxc_uri = await self._upload_file(file_ref)
+        mxc_uri, decryption = await self._upload_file(file_ref, encrypt=encrypted)
         if not mxc_uri:
             logger.warning(
                 "MatrixChannel: send_media upload failed for %s",
+                file_ref,
+            )
+            return None
+        if encrypted and not decryption:
+            logger.warning(
+                "MatrixChannel: encrypted upload returned no decryption "
+                "metadata for %s; refusing to send it as a plaintext "
+                "attachment",
                 file_ref,
             )
             return None
@@ -4990,6 +5135,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 matrix_msgtype,
                 mxc_uri,
                 meta,
+                decryption,
             )
             logger.debug(
                 "MatrixChannel: sent %s %s to %s",

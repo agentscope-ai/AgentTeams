@@ -15,7 +15,9 @@ Checks:
                     the target version's ``qwenpaw/drivers/manager.py``
                     (extracted from a wheel).
 * C4 dependencies - optional ``uv pip install --dry-run`` against the target
-                    version (requires network; opt-in).
+                    version (requires network; opt-in). When explicitly
+                    requested, an unrunnable dry-run (missing tool, timeout,
+                    network failure) is upgrade-blocking (FAIL).
 
 Two execution contexts:
 
@@ -482,8 +484,15 @@ def check_deps(target: str) -> Check:
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return Check("C4", "dependencies", STATUS_WARN,
-                     evidence=f"could not run {runner}: {exc}")
+        # --check-deps is explicitly opt-in: once requested, an unrunnable
+        # dry-run is a failed required stage, not a warning (maintainer gate
+        # detail, AgentTeams#1341, 2026-10-09).
+        return Check("C4", "dependencies", STATUS_FAIL,
+                     evidence=(f"explicitly requested dry-run could not run: "
+                               f"{exc}"),
+                     advice=("resolve the tooling/network failure and re-run; "
+                             "do not upgrade while a requested pre-flight "
+                             "stage is unverifiable"))
     if proc.returncode == 0:
         return Check("C4", "dependencies", STATUS_PASS,
                      evidence=f"{runner} dry-run resolved {target}: {_tail(proc.stdout)}")

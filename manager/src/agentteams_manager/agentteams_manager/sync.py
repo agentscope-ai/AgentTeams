@@ -85,6 +85,101 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return result
 
 
+def _migrate_openclaw_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Canonicalize OpenClaw v2026.10.6 keys.
+
+    Mirrors shared/lib/migrate-openclaw-config.sh.  Existing workspaces may
+    carry keys emitted by older AgentTeams templates; normalize the merged
+    result before it is written back to the workspace.
+    """
+    def as_dict(value: Any) -> dict[str, Any]:
+        return value if isinstance(value, dict) else {}
+
+    agents = as_dict(config.get("agents"))
+    defaults = as_dict(agents.get("defaults"))
+
+    legacy_mem = defaults.pop("memorySearch", None)
+    if legacy_mem is None:
+        legacy_mem = config.pop("memorySearch", None)
+    else:
+        config.pop("memorySearch", None)
+    if isinstance(legacy_mem, dict):
+        memory = as_dict(config.get("memory"))
+        search = as_dict(memory.get("search"))
+        for key, value in legacy_mem.items():
+            search.setdefault(key, value)
+        memory["search"] = search
+        config["memory"] = memory
+
+    session = as_dict(config.get("session"))
+    reset_by_type = as_dict(session.get("resetByType"))
+    if "dm" in reset_by_type:
+        direct = as_dict(reset_by_type.get("direct"))
+        for key, value in as_dict(reset_by_type.pop("dm")).items():
+            direct.setdefault(key, value)
+        reset_by_type["direct"] = direct
+        session["resetByType"] = reset_by_type
+        config["session"] = session
+
+    gateway = as_dict(config.get("gateway"))
+    control_ui = as_dict(gateway.get("controlUi"))
+    control_ui.pop("allowInsecureAuth", None)
+    control_ui.pop("dangerouslyDisableDeviceAuth", None)
+    if control_ui:
+        gateway["controlUi"] = control_ui
+    if gateway:
+        config["gateway"] = gateway
+
+    channels = as_dict(config.get("channels"))
+    matrix = as_dict(channels.get("matrix"))
+    if matrix:
+        streaming = matrix.get("streaming")
+        if isinstance(streaming, str):
+            matrix["streaming"] = {"mode": streaming}
+        elif isinstance(streaming, bool):
+            matrix["streaming"] = {"mode": "partial" if streaming else "off"}
+        elif not isinstance(streaming, dict):
+            matrix["streaming"] = {}
+        stream = as_dict(matrix.get("streaming"))
+        if "streamMode" in matrix:
+            stream.setdefault("mode", matrix.pop("streamMode"))
+        if "chunkMode" in matrix:
+            stream.setdefault("chunkMode", matrix.pop("chunkMode"))
+        if "blockStreaming" in matrix:
+            block = as_dict(stream.get("block"))
+            block.setdefault("enabled", matrix.pop("blockStreaming"))
+            stream["block"] = block
+        if "blockStreamingCoalesce" in matrix:
+            block = as_dict(stream.get("block"))
+            block.setdefault("coalesce", matrix.pop("blockStreamingCoalesce"))
+            stream["block"] = block
+        matrix["streaming"] = stream
+        channels["matrix"] = matrix
+        config["channels"] = channels
+
+        # Retired fork-only matrix group switch: groups.<room>.allow.
+        # Upstream's room entry schema accepts requireMention/enabled/... but
+        # not "allow". allow=true meant "the default" (room enabled), so drop
+        # it; allow=false meant "do not answer in this room", which upstream
+        # spells enabled=false, so keep the deny.
+        groups = matrix.get("groups")
+        if isinstance(groups, dict):
+            for entry in groups.values():
+                if not isinstance(entry, dict):
+                    continue
+                allow = entry.pop("allow", None)
+                if allow is False and "enabled" not in entry:
+                    entry["enabled"] = False
+            matrix["groups"] = groups
+    if isinstance(defaults.get("models"), dict) and defaults.get("modelPolicy") is None:
+        defaults["modelPolicy"] = {"allow": list(defaults["models"].keys())}
+    if defaults:
+        agents["defaults"] = defaults
+    if agents:
+        config["agents"] = agents
+    return config
+
+
 def _merge_openclaw_config(remote_text: str, local_text: str) -> str:
     """Merge remote and local openclaw.json (local-first, same as hermes_worker).
 
@@ -103,6 +198,12 @@ def _merge_openclaw_config(remote_text: str, local_text: str) -> str:
         merged["models"] = remote["models"]
     if remote.get("gateway") is not None:
         merged["gateway"] = remote["gateway"]
+    r_memory = remote.get("memory")
+    if isinstance(r_memory, dict) and isinstance(r_memory.get("search"), dict):
+        local_memory = merged.get("memory") if isinstance(merged.get("memory"), dict) else {}
+        local_search = local_memory.get("search") if isinstance(local_memory.get("search"), dict) else {}
+        local_memory["search"] = _deep_merge(dict(local_search), dict(r_memory["search"]))
+        merged["memory"] = local_memory
 
     r_channels = remote.get("channels") or {}
     l_channels = local.get("channels") or {}
@@ -132,6 +233,7 @@ def _merge_openclaw_config(remote_text: str, local_text: str) -> str:
             out_plugins["load"] = out_load
         merged["plugins"] = out_plugins
 
+    merged = _migrate_openclaw_config(merged)
     return json.dumps(merged, indent=2, ensure_ascii=False)
 
 

@@ -55,7 +55,7 @@ source "${SCRIPT_DIR}/project-members.sh"
 # read stops here, not after a half-built project.
 if [ -n "${TEAM_NAME}" ]; then
     TEAM_ROSTER=$(project_team_roster "${TEAM_NAME}" 2>&1) || _fail "${TEAM_ROSTER}"
-    TEAM_CSV=$(project_merge_members "$(printf '%s\n' "${TEAM_ROSTER}" | paste -sd, -)")
+    TEAM_CSV=$(project_merge_members "$(printf '%s\n' "${TEAM_ROSTER}" | cut -f1 | paste -sd, -)")
     log "Team ${TEAM_NAME} roster: ${TEAM_CSV}"
     [ -z "${WORKERS_CSV}" ] || log "  plus --workers: ${WORKERS_CSV}"
     WORKERS_CSV=$(project_merge_members "${TEAM_CSV}" "${WORKERS_CSV}")
@@ -219,6 +219,122 @@ else
     log "  WARNING: Could not obtain admin token — admin will need to accept invite manually"
 fi
 
+# Per-worker auto-join outcome ledger (#1390). Rows are
+# "<worker>\t<status>\t<detail>" with status one of joined|pending|failed,
+# so the caller can surface a result instead of only a warning.
+WORKER_JOIN_STATUS_ROWS=""
+
+_record_worker_join() { # _record_worker_join <worker> <status> <detail>
+    WORKER_JOIN_STATUS_ROWS="${WORKER_JOIN_STATUS_ROWS}${1}"$'\t'"${2}"$'\t'"${3}"$'\n'
+}
+
+_worker_join_summary() { # prints "joined=N pending=N failed=N"
+    local joined=0 pending=0 failed=0 status
+    while IFS=$'\t' read -r _worker status _detail; do
+        case "${status}" in
+            joined) joined=$((joined + 1)) ;;
+            pending) pending=$((pending + 1)) ;;
+            failed) failed=$((failed + 1)) ;;
+        esac
+    done <<< "${WORKER_JOIN_STATUS_ROWS}"
+    printf 'joined=%s pending=%s failed=%s' "${joined}" "${pending}" "${failed}"
+}
+
+_write_worker_join_status() { # _write_worker_join_status <path>
+    local out="${1:-/tmp/agentteams-project-join-status.json}"
+    local tmp="${out}.tmp"
+    {
+        printf '{\n'
+        printf '  "room_id": %s,\n' "$(printf '%s' "${ROOM_ID}" | jq -R .)"
+        printf '  "generated_at": %s,\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ | jq -R .)"
+        printf '  "summary": %s,\n' "$(_worker_join_summary | jq -R .)"
+        printf '  "workers": [\n'
+        local first=1 worker status detail
+        while IFS=$'\t' read -r worker status detail; do
+            [ -z "${worker}" ] && continue
+            [ "${first}" -eq 1 ] || printf ',\n'
+            first=0
+            printf '    {"worker": %s, "status": %s, "detail": %s}' \
+                "$(printf '%s' "${worker}" | jq -R .)" \
+                "$(printf '%s' "${status}" | jq -R .)" \
+                "$(printf '%s' "${detail}" | jq -R .)"
+        done <<< "${WORKER_JOIN_STATUS_ROWS}"
+        printf '\n  ]\n}\n'
+    } > "${tmp}" && mv "${tmp}" "${out}" && log "  Worker join status written to ${out}"
+}
+
+# Returns 0 = joined, 2 = pending (no credentials/token), 3 = join failed.
+# The ledger above records the detail either way, so the caller can report
+# `joined/pending/failed` instead of relying on a log line alone (#1390).
+_worker_auto_join() {
+    local worker="$1"
+    local room_id="$2"
+    # Controller credentials are keyed by the Worker CR; workspace passwords
+    # and Matrix login use its effective runtime name. Explicit --workers keep
+    # their existing runtime-name semantics.
+    local credential_name="${worker}"
+    if [ -n "${TEAM_ROSTER:-}" ]; then
+        credential_name=$(printf '%s\n' "${TEAM_ROSTER}" | awk -F '\t' -v name="${worker}" '$1 == name {print $2; exit}')
+        credential_name="${credential_name:-${worker}}"
+    fi
+    local creds_file="/data/worker-creds/${credential_name}.env"
+    local worker_token=""
+    local room_enc=""
+    local WORKER_PASSWORD=""
+    local WORKER_MATRIX_TOKEN=""
+
+    if [ -z "${worker}" ] || [ -z "${room_id}" ]; then
+        _record_worker_join "${worker:-?}" "pending" "invalid-arguments"
+        return 2
+    fi
+
+    if [ -f "${creds_file}" ]; then
+        # shellcheck disable=SC1090
+        source "${creds_file}"
+    fi
+
+    if [ -z "${WORKER_PASSWORD}" ]; then
+        WORKER_PASSWORD=$(mc cat "${AGENTTEAMS_STORAGE_PREFIX}/agents/${worker}/credentials/matrix/password" 2>/dev/null || true)
+    fi
+    if [ -z "${WORKER_PASSWORD}" ] && [ -f "/root/agentteams-fs/agents/${worker}/credentials/matrix/password" ]; then
+        WORKER_PASSWORD=$(cat "/root/agentteams-fs/agents/${worker}/credentials/matrix/password" 2>/dev/null || true)
+    fi
+
+    if [ -n "${WORKER_PASSWORD}" ]; then
+        worker_token=$(curl -sf -X POST ${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/login \
+            -H 'Content-Type: application/json' \
+            -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"'"${worker}"'"},"password":"'"${WORKER_PASSWORD}"'"}' \
+            2>/dev/null | jq -r '.access_token // empty')
+    elif [ -n "${WORKER_MATRIX_TOKEN}" ]; then
+        worker_token="${WORKER_MATRIX_TOKEN}"
+    fi
+
+    if [ -z "${worker_token}" ]; then
+        log "  WARNING: Could not obtain Matrix token for worker ${worker} — worker will need to accept project room invite"
+        _record_worker_join "${worker}" "pending" "no-credentials"
+        return 2
+    fi
+
+    room_enc=$(echo "${room_id}" | sed 's/!/%21/g')
+    local join_http
+    join_http=$(curl -s -o /dev/null -w '%{http_code}' -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${room_enc}/join" \
+        -H "Authorization: Bearer ${worker_token}" \
+        -H 'Content-Type: application/json' \
+        -d '{}' 2>/dev/null || true)
+    case "${join_http}" in
+        200|201)
+            log "  Worker ${worker} auto-joined project room"
+            _record_worker_join "${worker}" "joined" "http-${join_http}"
+            return 0
+            ;;
+        *)
+            log "  WARNING: Worker ${worker} failed to auto-join project room (http ${join_http:-no-response})"
+            _record_worker_join "${worker}" "failed" "http-${join_http:-no-response}"
+            return 3
+            ;;
+    esac
+}
+
 # Builds the project-room member list (workers + --grant-admin humans) as a
 # JSON array. Granted humans must be on the allowlists too: in allowlist
 # mode the Manager silently drops messages from users not listed, and the
@@ -267,21 +383,16 @@ _patch_copaw_project_room_config() {
     mv /tmp/project-copaw-agent.json "${agent_json}"
 }
 
-# An invite is not membership: record who actually joined, and report the
-# rest instead of listing them as in the room.
-JOINED=()
-JOIN_FAILED=()
 for worker in "${WORKER_ARR[@]}"; do
     worker=$(echo "${worker}" | tr -d ' ')
     [ -z "${worker}" ] && continue
-    if project_worker_auto_join "${worker}" "${ROOM_ID}"; then
-        JOINED+=("${worker}")
-    else
-        JOIN_FAILED+=("${worker}")
-    fi
+    # set -e is on: a pending/failed join must not abort room creation, so
+    # the per-worker outcome is recorded and reported instead (#1390).
+    _worker_auto_join "${worker}" "${ROOM_ID}" || true
 done
-if [ "${#JOIN_FAILED[@]}" -gt 0 ]; then
-    log "  WARNING: invited but not joined: ${JOIN_FAILED[*]}"
+if [ -n "${WORKER_JOIN_STATUS_ROWS}" ]; then
+    log "Worker auto-join: $(_worker_join_summary)"
+    _write_worker_join_status "${AGENTTEAMS_JOIN_STATUS_FILE:-/tmp/agentteams-project-join-status.json}"
 fi
 
 # ============================================================
@@ -320,8 +431,9 @@ RESULT=$(jq -n \
     --arg room_id "${ROOM_ID}" \
     --arg status "planning" \
     --arg workers "${WORKERS_CSV}" \
-    --arg joined "$(IFS=,; echo "${JOINED[*]}")" \
-    --arg join_failed "$(IFS=,; echo "${JOIN_FAILED[*]}")" \
+    --arg joined "$(printf '%s' "${WORKER_JOIN_STATUS_ROWS}" | awk -F '\t' '$2 == "joined" {print $1}' | paste -sd, -)" \
+    --arg join_pending "$(printf '%s' "${WORKER_JOIN_STATUS_ROWS}" | awk -F '\t' '$2 == "pending" {print $1}' | paste -sd, -)" \
+    --arg join_failed "$(printf '%s' "${WORKER_JOIN_STATUS_ROWS}" | awk -F '\t' '$2 == "failed" {print $1}' | paste -sd, -)" \
     '{
         project_id: $id,
         title: $title,
@@ -329,6 +441,7 @@ RESULT=$(jq -n \
         status: $status,
         workers: ($workers | split(",")),
         joined: ($joined | split(",") | map(select(. != ""))),
+        join_pending: ($join_pending | split(",") | map(select(. != ""))),
         join_failed: ($join_failed | split(",") | map(select(. != "")))
     }')
 

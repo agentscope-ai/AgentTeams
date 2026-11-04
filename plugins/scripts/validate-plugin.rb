@@ -59,38 +59,52 @@ includes = package.fetch("include") { fail!("package.include is required") }
 fail!("package.include must be an array") unless includes.is_a?(Array)
 includes.each { |entry| fail!("package include missing: #{plugin_root / entry}") unless (plugin_root / entry).exist? }
 
-prompts = manifest.fetch("prompts") { fail!("prompts is required") }
-assert_file(plugin_root / prompts.fetch("team") { fail!("prompts.team is required") })
-agent_prompts = prompts.fetch("agent") { fail!("prompts.agent is required") }
-fail!("prompts.agent must be a map") unless agent_prompts.is_a?(Hash)
-agent_prompts.each_value { |path| assert_file(plugin_root / path) }
-manager_prompts = prompts.fetch("manager") { fail!("prompts.manager is required") }
-fail!("prompts.manager must be a map") unless manager_prompts.is_a?(Hash)
-manager_prompts.each_value { |path| assert_file(plugin_root / path) }
+bundle_form = manifest.key?("adapters") && !%w[prompts skills mcp].any? { |key| manifest.key?(key) }
 
-skill_ids = []
-skills = manifest.fetch("skills") { fail!("skills is required") }
-fail!("skills must be a map") unless skills.is_a?(Hash)
-skills.each do |group, entries|
-  fail!("skills.#{group} must be an array") unless entries.is_a?(Array)
-  entries.each do |entry|
-    id = entry.fetch("id") { fail!("skill id is required in #{group}") }
-    path = plugin_root / entry.fetch("path") { fail!("skill path is required for #{id}") }
-    assert_dir(path)
-    assert_file(path / "SKILL.md")
-    skill_ids << id
+if bundle_form
+  bundle_requires = manifest.fetch("requires") { fail!("requires is required for bundle plugins") }
+  fail!("requires must be a map") unless bundle_requires.is_a?(Hash)
+  %w[agentteams contracts tool_schema].each do |key|
+    value = bundle_requires[key].to_s
+    fail!("requires.#{key} is required and must be non-empty") if value.empty?
   end
-end
-duplicates = skill_ids.group_by { |id| id }.select { |_id, values| values.size > 1 }.keys
-fail!("duplicate skill ids: #{duplicates.join(', ')}") unless duplicates.empty?
+  bundle_adapters = manifest["adapters"]
+  fail!("adapters must be an array") unless bundle_adapters.is_a?(Array)
+  fail!("bundle plugins must declare at least one adapter") if bundle_adapters.empty?
+else
+  prompts = manifest.fetch("prompts") { fail!("prompts is required") }
+  assert_file(plugin_root / prompts.fetch("team") { fail!("prompts.team is required") })
+  agent_prompts = prompts.fetch("agent") { fail!("prompts.agent is required") }
+  fail!("prompts.agent must be a map") unless agent_prompts.is_a?(Hash)
+  agent_prompts.each_value { |path| assert_file(plugin_root / path) }
+  manager_prompts = prompts.fetch("manager") { fail!("prompts.manager is required") }
+  fail!("prompts.manager must be a map") unless manager_prompts.is_a?(Hash)
+  manager_prompts.each_value { |path| assert_file(plugin_root / path) }
 
-mcp = manifest.fetch("mcp") { fail!("mcp is required") }
-servers = mcp.fetch("servers") { fail!("mcp.servers is required") }
-fail!("mcp.servers must be an array") unless servers.is_a?(Array)
-servers.each do |server|
-  server_id = server.fetch("id") { fail!("mcp server id is required") }
-  server.fetch("args") { fail!("mcp server #{server_id} args are required") }.each do |arg|
-    assert_file(plugin_root / arg) if arg.end_with?(".py")
+  skill_ids = []
+  skills = manifest.fetch("skills") { fail!("skills is required") }
+  fail!("skills must be a map") unless skills.is_a?(Hash)
+  skills.each do |group, entries|
+    fail!("skills.#{group} must be an array") unless entries.is_a?(Array)
+    entries.each do |entry|
+      id = entry.fetch("id") { fail!("skill id is required in #{group}") }
+      path = plugin_root / entry.fetch("path") { fail!("skill path is required for #{id}") }
+      assert_dir(path)
+      assert_file(path / "SKILL.md")
+      skill_ids << id
+    end
+  end
+  duplicates = skill_ids.group_by { |id| id }.select { |_id, values| values.size > 1 }.keys
+  fail!("duplicate skill ids: #{duplicates.join(', ')}") unless duplicates.empty?
+
+  mcp = manifest.fetch("mcp") { fail!("mcp is required") }
+  servers = mcp.fetch("servers") { fail!("mcp.servers is required") }
+  fail!("mcp.servers must be an array") unless servers.is_a?(Array)
+  servers.each do |server|
+    server_id = server.fetch("id") { fail!("mcp server id is required") }
+    server.fetch("args") { fail!("mcp server #{server_id} args are required") }.each do |arg|
+      assert_file(plugin_root / arg) if arg.end_with?(".py")
+    end
   end
 end
 

@@ -21,6 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 PLUGINS_ROOT = REPO_ROOT / "plugins"
 TEAMHARNESS_MANIFEST = PLUGINS_ROOT / "teamharness" / "plugin.yaml"
 WORKERFLOW_MANIFEST = PLUGINS_ROOT / "workerflow" / "plugin.yaml"
+MATRIX_MANIFEST = PLUGINS_ROOT / "agentteams-matrix" / "plugin.yaml"
 CONTRACTS_DIR = PLUGINS_ROOT / "teamharness" / "contracts"
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "build-plugin.yml"
 LEGACY_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "build-teamharness-plugin.yml"
@@ -96,6 +97,56 @@ def test_workerflow_has_no_requires() -> None:
         "workerflow plugin.yaml declared a top-level `requires` — re-check "
         "its compatibility range before letting validation enforce it"
     )
+
+
+def test_matrix_bundle_manifest_form() -> None:
+    manifest = _load(MATRIX_MANIFEST)
+    matrix_root = PLUGINS_ROOT / "agentteams-matrix"
+
+    metadata = manifest.get("metadata")
+    assert isinstance(metadata, dict), "agentteams-matrix manifest must have metadata"
+    assert metadata.get("name") == "agentteams-matrix"
+    assert metadata.get("version") == "0.1.0"
+
+    # Bundle form is detected by adapters present and surface keys absent.
+    for surface_key in ("prompts", "skills", "mcp"):
+        assert surface_key not in manifest, (
+            f"agentteams-matrix manifest must stay bundle form, not surface form ({surface_key})"
+        )
+
+    requires = manifest.get("requires")
+    assert isinstance(requires, dict), (
+        "agentteams-matrix plugin.yaml must declare a top-level `requires` mapping"
+    )
+    for key in REQUIRED_KEYS:
+        value = requires.get(key)
+        assert value is not None and str(value).strip(), (
+            f"agentteams-matrix requires.{key} must be present and non-empty"
+        )
+
+    adapters = manifest.get("adapters")
+    assert isinstance(adapters, list), "agentteams-matrix adapters must be a list"
+    expected = [
+        ("qwenpaw", "adapters/qwenpaw"),
+        ("openclaw", "adapters/openclaw"),
+        ("hermes", "adapters/hermes"),
+    ]
+    assert [(adapter.get("id"), adapter.get("path")) for adapter in adapters] == expected
+    for _adapter_id, path in expected:
+        assert (matrix_root / path).is_dir(), f"missing adapter dir: {path}"
+        assert (matrix_root / path / "README.md").is_file(), f"missing adapter README: {path}"
+
+    assert (matrix_root / "scripts" / "install.sh").is_file()
+    assert (matrix_root / "scripts" / "uninstall.sh").is_file()
+
+    assert manifest.get("package", {}).get("include") == [
+        "plugin.json",
+        "contract.yaml",
+        "core",
+        "adapters",
+        "scripts",
+        "DEDUPE.md",
+    ]
 
 
 def test_teamharness_mcp_tool_names_unchanged() -> None:

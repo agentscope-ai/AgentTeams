@@ -39,6 +39,9 @@
 - Release/install wording: AT (AgentTeams) = stable channel (source +
   upstream tag); 千锻 (millforge) = beta channel
   (`releases/channels.json`); plugin identity and install path unchanged
+- `requires.qwenpaw` in `plugin.yaml` aligned with `plugin.json`
+  (`qwenpaw_version.min/max = 2.2.0/2.3.0`): now `">=2.2.0 <2.3.0"`;
+  QwenPaw 2.3 support is pending verification
 
 ## 0.2.0 (2026-10-28)
 

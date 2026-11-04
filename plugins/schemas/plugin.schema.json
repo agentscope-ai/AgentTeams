@@ -1,19 +1,87 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "AgentTeams TeamHarness Plugin",
+  "title": "AgentTeams Plugin",
+  "description": "A plugin manifest in either the TeamHarness surface form (prompts/skills/mcp/adapters) or the entry form (a runtime entry point, e.g. qwen-code-bridge). Mirrors the two branches of plugins/scripts/validate-plugin.rb.",
   "type": "object",
-  "required": ["apiVersion", "kind", "metadata", "prompts", "skills", "mcp", "adapters", "package"],
-  "properties": {
-    "apiVersion": { "const": "agentteams.agentteam/v1alpha1" },
-    "kind": { "const": "AgentTeamPlugin" },
-    "metadata": {
+  "oneOf": [
+    {
+      "title": "surface",
+      "description": "TeamHarness-style plugin: a prompts/skills/mcp/adapters surface instead of a runtime entry point.",
       "type": "object",
-      "required": ["name", "version"],
+      "required": [
+        "apiVersion",
+        "kind",
+        "metadata",
+        "prompts",
+        "skills",
+        "mcp",
+        "adapters",
+        "package"
+      ],
       "properties": {
-        "name": { "type": "string" },
-        "version": { "type": "string" }
-      }
+        "apiVersion": { "const": "agentteams.agentteam/v1alpha1" },
+        "kind": { "const": "AgentTeamPlugin" },
+        "metadata": {
+          "type": "object",
+          "required": ["name", "version"],
+          "properties": {
+            "name": { "type": "string" },
+            "version": { "type": "string" }
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    {
+      "title": "entry",
+      "description": "Entry-form plugin (qwen-code-bridge): a runtime entry point instead of the TeamHarness surface.",
+      "type": "object",
+      "required": [
+        "apiVersion",
+        "kind",
+        "metadata",
+        "runtime",
+        "entry",
+        "requires",
+        "package"
+      ],
+      "properties": {
+        "apiVersion": { "const": "agentteams.agentteam/v1alpha1" },
+        "kind": { "const": "AgentTeamPlugin" },
+        "metadata": {
+          "type": "object",
+          "required": ["name", "version"],
+          "properties": {
+            "name": { "type": "string" },
+            "version": { "type": "string" }
+          }
+        },
+        "runtime": { "type": "string", "minLength": 1 },
+        "entry": {
+          "type": "object",
+          "required": ["backend", "frontend"],
+          "properties": {
+            "backend": { "type": "string", "minLength": 1 },
+            "frontend": { "type": "string", "minLength": 1 }
+          }
+        },
+        "requires": {
+          "type": "object",
+          "required": ["qwenpaw"],
+          "properties": {
+            "qwenpaw": { "type": "string", "minLength": 1 }
+          }
+        },
+        "package": {
+          "type": "object",
+          "required": ["include"],
+          "properties": {
+            "include": { "type": "array" }
+          }
+        }
+      },
+      "additionalProperties": true
     }
-  },
+  ],
   "additionalProperties": true
 }

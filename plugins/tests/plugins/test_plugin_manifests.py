@@ -22,9 +22,29 @@ PLUGINS_ROOT = REPO_ROOT / "plugins"
 TEAMHARNESS_MANIFEST = PLUGINS_ROOT / "teamharness" / "plugin.yaml"
 WORKERFLOW_MANIFEST = PLUGINS_ROOT / "workerflow" / "plugin.yaml"
 BRIDGE_MANIFEST = PLUGINS_ROOT / "qwen-code-bridge" / "plugin.yaml"
+SCHEMA_PATH = PLUGINS_ROOT / "schemas" / "plugin.schema.json"
 CONTRACTS_DIR = PLUGINS_ROOT / "teamharness" / "contracts"
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "build-plugin.yml"
 LEGACY_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "build-teamharness-plugin.yml"
+SURFACE_BRANCH_REQUIRED = (
+    "apiVersion",
+    "kind",
+    "metadata",
+    "prompts",
+    "skills",
+    "mcp",
+    "adapters",
+    "package",
+)
+ENTRY_BRANCH_REQUIRED = (
+    "apiVersion",
+    "kind",
+    "metadata",
+    "runtime",
+    "entry",
+    "requires",
+    "package",
+)
 
 EXPECTED_TOOLS = [
     "health",
@@ -150,6 +170,95 @@ def test_bridge_manifest_entry_form() -> None:
         assert surface not in manifest, (
             f"entry-form manifest must not declare {surface}"
         )
+
+
+def _load_schema() -> dict:
+    assert SCHEMA_PATH.is_file(), f"missing schema: {SCHEMA_PATH}"
+    with SCHEMA_PATH.open(encoding="utf-8") as fh:
+        schema = json.load(fh)
+    assert isinstance(schema, dict), "plugin.schema.json must be a JSON object"
+    return schema
+
+
+def _entry_branch(schema: dict) -> dict:
+    branches = schema.get("oneOf")
+    assert isinstance(branches, list), (
+        "plugin.schema.json must branch via a top-level oneOf"
+    )
+    for branch in branches:
+        if branch.get("title") == "entry":
+            return branch
+    raise AssertionError("plugin.schema.json is missing the 'entry' oneOf branch")
+
+
+def test_plugin_schema_has_surface_and_entry_branches() -> None:
+    """The schema must accept both manifest forms via a top-level oneOf,
+    mirroring the entry branch in plugins/scripts/validate-plugin.rb."""
+    schema = _load_schema()
+    branches = schema.get("oneOf")
+    assert isinstance(branches, list) and len(branches) == 2, (
+        "plugin.schema.json must have exactly two oneOf branches, got: "
+        f"{len(branches) if isinstance(branches, list) else type(branches)!r}"
+    )
+    by_title = {branch.get("title"): branch for branch in branches}
+    surface = by_title.get("surface")
+    entry = by_title.get("entry")
+    assert surface is not None and entry is not None, (
+        "oneOf branches must be titled 'surface' and 'entry', got: "
+        f"{sorted(str(t) for t in by_title)}"
+    )
+    assert tuple(surface.get("required", [])) == SURFACE_BRANCH_REQUIRED, (
+        f"surface branch required keys drifted: {surface.get('required')!r}"
+    )
+    assert tuple(entry.get("required", [])) == ENTRY_BRANCH_REQUIRED, (
+        f"entry branch required keys drifted: {entry.get('required')!r}"
+    )
+    entry_props = entry.get("properties", {})
+    assert tuple(entry_props.get("entry", {}).get("required", [])) == (
+        "backend",
+        "frontend",
+    ), "entry branch: entry must require backend and frontend"
+    requires_spec = entry_props.get("requires", {})
+    assert "qwenpaw" in requires_spec.get("required", []), (
+        "entry branch: requires must require qwenpaw"
+    )
+    qwenpaw_spec = requires_spec.get("properties", {}).get("qwenpaw", {})
+    assert qwenpaw_spec.get("type") == "string" and qwenpaw_spec.get("minLength", 0) >= 1, (
+        "entry branch: requires.qwenpaw must be a non-empty string"
+    )
+    include_spec = (
+        entry_props.get("package", {}).get("properties", {}).get("include", {})
+    )
+    assert include_spec.get("type") == "array", (
+        "entry branch: package.include must be declared as an array"
+    )
+
+
+def test_bridge_manifest_covers_entry_branch_keys() -> None:
+    """The bridge manifest must carry every key the entry branch requires."""
+    entry = _entry_branch(_load_schema())
+    manifest = _load(BRIDGE_MANIFEST)
+    missing = [key for key in entry.get("required", []) if key not in manifest]
+    assert not missing, f"bridge manifest missing entry-branch keys: {missing}"
+    for key in ("backend", "frontend"):
+        value = manifest.get("entry", {}).get(key)
+        assert isinstance(value, str) and value.strip(), (
+            f"bridge manifest entry.{key} must be a non-empty string"
+        )
+    assert str(manifest["requires"]["qwenpaw"]).strip(), (
+        "bridge manifest requires.qwenpaw must be non-empty"
+    )
+    assert isinstance(manifest.get("package", {}).get("include"), list), (
+        "bridge manifest package.include must be an array"
+    )
+
+
+def test_bridge_manifest_validates_against_entry_schema() -> None:
+    """Full JSON-Schema validation of the bridge manifest against the entry
+    branch — only when jsonschema happens to be installed (no new dependency)."""
+    jsonschema = pytest.importorskip("jsonschema")
+    entry = _entry_branch(_load_schema())
+    jsonschema.validate(instance=_load(BRIDGE_MANIFEST), schema=entry)
 
 
 def test_teamharness_manifest_still_teamharness_form() -> None:

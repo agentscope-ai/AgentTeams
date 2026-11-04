@@ -380,43 +380,47 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             # other unknown recipient fails closed (no case/fuzzy match).
             # Standalone runs have no roster and keep the legacy
             # pass-through.
-            by_id, by_name = _team_member_lookup()
-            if by_id or by_name:
-                matrix_id = assigned_to if assigned_to in by_id else ""
-                if not matrix_id and assigned_to in by_name:
-                    matrix_id = str(by_name[assigned_to].get("matrixUserId") or "").strip()
-                if not matrix_id:
-                    # Invited-but-not-joined: the room knows the recipient
-                    # with membership "invite" — same retryable "not a
-                    # joined member" failure as the membership gate below
-                    # (no notification, no assignment) instead of a
-                    # dead-end unknown-recipient error. Anything the room
-                    # does not know about (or a membership lookup that
-                    # failed) keeps the fail-closed unknown-recipient path.
-                    invited = _invited_room_user_ids(room_id)
-                    if invited is not None and assigned_to in invited:
-                        return {
-                            "ok": False,
-                            "tool": "taskflow",
-                            "action": action,
-                            "task": existing_task,
-                            "error": (
-                                f"assignee {assigned_to} is not a joined "
-                                f"member of room {_canonical_room_id(room_id)}"
-                            ),
-                            "retryable": True,
-                            "notificationNeeded": _notification_needed(
-                                "delegate_task",
-                                project or {"project_id": project_id},
-                                existing_task,
-                                summary=f"delegate_task: {task_id} blocked before assignment",
-                            ),
-                        }
-                    available = ", ".join(sorted(by_id)) or "(none)"
-                    raise ValueError(
-                        f"unknown recipient: {assigned_to}; available: {available}"
-                    )
-                assigned_to = matrix_id
+            # Only a provided recipient is validated; an empty assignee
+            # keeps the legacy "prepare, then fail retryably" path (an
+            # unnotified delegation must leave the task prepared).
+            if assigned_to:
+                by_id, by_name = _team_member_lookup()
+                if by_id or by_name:
+                    matrix_id = assigned_to if assigned_to in by_id else ""
+                    if not matrix_id and assigned_to in by_name:
+                        matrix_id = str(by_name[assigned_to].get("matrixUserId") or "").strip()
+                    if not matrix_id:
+                        # Invited-but-not-joined: the room knows the recipient
+                        # with membership "invite" — same retryable "not a
+                        # joined member" failure as the membership gate below
+                        # (no notification, no assignment) instead of a
+                        # dead-end unknown-recipient error. Anything the room
+                        # does not know about (or a membership lookup that
+                        # failed) keeps the fail-closed unknown-recipient path.
+                        invited = _invited_room_user_ids(room_id)
+                        if invited is not None and assigned_to in invited:
+                            return {
+                                "ok": False,
+                                "tool": "taskflow",
+                                "action": action,
+                                "task": existing_task,
+                                "error": (
+                                    f"assignee {assigned_to} is not a joined "
+                                    f"member of room {_canonical_room_id(room_id)}"
+                                ),
+                                "retryable": True,
+                                "notificationNeeded": _notification_needed(
+                                    "delegate_task",
+                                    project or {"project_id": project_id},
+                                    existing_task,
+                                    summary=f"delegate_task: {task_id} blocked before assignment",
+                                ),
+                            }
+                        available = ", ".join(sorted(by_id)) or "(none)"
+                        raise ValueError(
+                            f"unknown recipient: {assigned_to}; available: {available}"
+                        )
+                    assigned_to = matrix_id
             assignment_mxid = str(assigned_to or "").strip()
 
             # Idempotent retry of a fully assigned task: the automatic

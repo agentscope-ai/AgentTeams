@@ -296,7 +296,11 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 		mw.RequireAuthz(authpkg.ActionGet, "status", nil)(http.HandlerFunc(mfh.GetIndex)))
 
 	// --- Worker plugin install (module-update UI) ---
-	mux.Handle("POST /api/v1/workers/{name}/plugins/install", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(rh.InstallWorkerPlugin(deps.KubeMode, deps.ContainerPrefix, deps.ResourcePrefix))))
+	// Module install is a deployment operation: use the dedicated "module"
+	// resource kind so only admin/manager pass (unknown kinds are denied for
+	// humans, team leaders and workers by the authorizer). Using ActionUpdate
+	// on "worker" would silently grant L2 humans a new code-install path.
+	mux.Handle("POST /api/v1/workers/{name}/plugins/install", mw.RequireAuthz(authpkg.ActionUpdate, "module", nameFn)(http.HandlerFunc(rh.InstallWorkerPlugin(deps.KubeMode, deps.ContainerPrefix, deps.ResourcePrefix))))
 	// --- Worker plugin registry (the worker's installed qwenpaw plugins;
 	// read-only registry, embedded-only — the qwenpaw runtime guard and
 	// the W8 team boundary live in the handler). ---

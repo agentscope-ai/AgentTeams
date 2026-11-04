@@ -89,11 +89,11 @@ func TestInstallOneArtifactMismatch(t *testing.T) {
 
 func TestIndexArtifact(t *testing.T) {
 	modules := []byte(`{"teamharness":{"latest":"0.1.0","versions":{"0.1.0":{"artifacts":[{"name":"a.zip","sha256":"abc"}]}}}}`)
-	name, sha, status, _ := indexArtifact(modules, "teamharness", "", "")
+	name, sha, _, _, status, _ := indexArtifact(modules, "teamharness", "", "")
 	if status != 200 || name != "a.zip" || sha != "abc" {
 		t.Fatalf("name=%q sha=%q status=%d", name, sha, status)
 	}
-	if _, _, status, _ = indexArtifact(modules, "missing", "", ""); status != 404 {
+	if _, _, _, _, status, _ = indexArtifact(modules, "missing", "", ""); status != 404 {
 		t.Fatalf("missing module status=%d", status)
 	}
 }
@@ -168,7 +168,7 @@ func TestInstallTeamStopsOnRuntimeMismatch(t *testing.T) {
 	m.rh = &ResourceHandler{client: cl, namespace: "default"}
 	m.workerBaseURL = func(string, map[string]string) string { return "http://worker.test" }
 
-	updated, failed, _, status, _ := m.installTeam(context.Background(), team, "teamharness", moduleInstallRequest{
+	updated, failed, _, _, status, _ := m.installTeam(context.Background(), team, "teamharness", moduleInstallRequest{
 		Source: "github", Repo: "o/r", Ref: "main", Version: "0.1.0",
 	})
 	if status != 400 || len(updated) != 1 || updated[0] != "w1" || failed["worker"] != "w2" {
@@ -195,5 +195,25 @@ func TestManagerBaseURLUsesResourcePrefix(t *testing.T) {
 	}
 	if got := m.managerBaseURL("staging"); got != "http://agentteams-manager-staging:18799" {
 		t.Fatalf("named manager URL = %s", got)
+	}
+}
+
+func TestIndexArtifactPluginIDAndKind(t *testing.T) {
+	modules := []byte(`{"agentteams-matrix":{"latest":"0.1.0","pluginId":"agentteams-matrix-channel","kind":"bundle","versions":{"0.1.0":{"artifacts":[{"name":"agentteams-matrix-channel-0.1.0-qwenpaw.zip","sha256":"abc"}]}}}}`)
+	name, _, pluginID, kind, status, _ := indexArtifact(modules, "agentteams-matrix", "", "")
+	if status != 200 || name == "" || pluginID != "agentteams-matrix-channel" || kind != "bundle" {
+		t.Fatalf("name=%q pluginID=%q kind=%q status=%d", name, pluginID, kind, status)
+	}
+	bundleSameID := []byte(`{"m":{"latest":"1.0.0","kind":"bundle","versions":{"1.0.0":{"artifacts":[{"name":"m.zip","sha256":"abc"}]}}}}`)
+	if _, _, _, _, status, _ = indexArtifact(bundleSameID, "m", "", ""); status != 400 {
+		t.Fatalf("bundle without adapter pluginId: status=%d, want 400", status)
+	}
+	runner := []byte(`{"r":{"latest":"1.0.0","kind":"runner","versions":{"1.0.0":{"artifacts":[{"name":"r.zip","sha256":"abc"}]}}}}`)
+	if _, _, _, _, status, _ = indexArtifact(runner, "r", "", ""); status != 400 {
+		t.Fatalf("runner install: status=%d, want 400", status)
+	}
+	nonZip := []byte(`{"p":{"latest":"1.0.0","versions":{"1.0.0":{"artifacts":[{"name":"p.tar.gz","sha256":"abc"}]}}}}`)
+	if _, _, _, _, status, _ = indexArtifact(nonZip, "p", "", ""); status != 400 {
+		t.Fatalf("non-zip artifact: status=%d, want 400", status)
 	}
 }

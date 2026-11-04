@@ -163,10 +163,10 @@ func (h *ResourceHandler) aggregateTeamModules(r *http.Request, team *v1beta1.Te
 
 // aggregateTeamModule isolates one module from the aggregate (used by the
 // install response so the caller sees the post-install consistency).
-func (h *ResourceHandler) aggregateTeamModule(r *http.Request, team *v1beta1.Team, module string, p *workerPluginsProxy) (teamModuleView, bool, []teamModuleError) {
+func (h *ResourceHandler) aggregateTeamModule(r *http.Request, team *v1beta1.Team, module, pluginID string, p *workerPluginsProxy) (teamModuleView, bool, []teamModuleError) {
 	modules, memberErrors := h.aggregateTeamModules(r, team, p)
 	for _, m := range modules {
-		if m.Module == module {
+		if m.Module == module || (pluginID != "" && m.Module == pluginID) {
 			return m, true, memberErrors
 		}
 	}

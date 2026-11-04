@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strings"
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
@@ -81,17 +82,19 @@ func newModuleInstaller(rh *ResourceHandler, kubeMode, containerPrefix, resource
 }
 
 // indexArtifact resolves the artifact checksum from the re-read index.
-func indexArtifact(modules json.RawMessage, module, version, artifact string) (string, string, int, string) {
+func indexArtifact(modules json.RawMessage, module, version, artifact string) (name, sha, pluginID, kind string, status int, msg string) {
 	var mods map[string]json.RawMessage
 	if err := json.Unmarshal(modules, &mods); err != nil {
-		return "", "", http.StatusBadGateway, "millforge index: modules is not an object"
+		return "", "", "", "", http.StatusBadGateway, "millforge index: modules is not an object"
 	}
 	raw, ok := mods[module]
 	if !ok {
-		return "", "", http.StatusNotFound, "module not found in index"
+		return "", "", "", "", http.StatusNotFound, "module not found in index"
 	}
 	var entry struct {
 		Latest   string `json:"latest"`
+		PluginID string `json:"pluginId"`
+		Kind     string `json:"kind"`
 		Versions map[string]struct {
 			Artifacts []struct {
 				Name   string `json:"name"`
@@ -100,27 +103,41 @@ func indexArtifact(modules json.RawMessage, module, version, artifact string) (s
 		} `json:"versions"`
 	}
 	if err := json.Unmarshal(raw, &entry); err != nil {
-		return "", "", http.StatusBadGateway, "millforge index: module entry malformed"
+		return "", "", "", "", http.StatusBadGateway, "millforge index: module entry malformed"
+	}
+	pluginID = entry.PluginID
+	if pluginID == "" {
+		pluginID = module
+	}
+	kind = entry.Kind
+	if kind == "runner" {
+		return "", "", "", "", http.StatusBadRequest, "runner modules are not installed as qwenpaw plugins"
+	}
+	if kind == "bundle" && pluginID == module {
+		return "", "", "", "", http.StatusBadRequest, "bundle modules require an adapter artifact with a distinct pluginId"
 	}
 	if version == "" {
 		version = entry.Latest
 	}
 	ver, ok := entry.Versions[version]
 	if !ok {
-		return "", "", http.StatusNotFound, "module version not found in index"
+		return "", "", "", "", http.StatusNotFound, "module version not found in index"
 	}
 	for _, a := range ver.Artifacts {
 		if artifact == "" || a.Name == artifact {
 			if a.SHA256 == "" {
-				return "", "", http.StatusBadGateway, "millforge index: artifact checksum missing"
+				return "", "", "", "", http.StatusBadGateway, "millforge index: artifact checksum missing"
 			}
 			if !validModuleToken(version) || !validModuleToken(a.Name) {
-				return "", "", http.StatusBadGateway, "millforge index: invalid version/artifact token"
+				return "", "", "", "", http.StatusBadGateway, "millforge index: invalid version/artifact token"
 			}
-			return a.Name, a.SHA256, http.StatusOK, ""
+			if !strings.HasSuffix(a.Name, ".zip") {
+				return "", "", "", "", http.StatusBadRequest, "install artifact must be a zip package"
+			}
+			return a.Name, a.SHA256, pluginID, kind, http.StatusOK, ""
 		}
 	}
-	return "", "", http.StatusNotFound, "module artifact not found in index"
+	return "", "", "", "", http.StatusNotFound, "module artifact not found in index"
 }
 
 // artifactURL composes the raw artifact URL for the selected source.
@@ -225,47 +242,47 @@ func (m *moduleInstaller) previousVersion(ctx context.Context, base, module stri
 // prepareArtifact validates the request, re-reads the index and returns the
 // verified artifact bytes once per install operation (a team install
 // downloads once and pushes the same bytes to every member).
-func (m *moduleInstaller) prepareArtifact(ctx context.Context, module string, body moduleInstallRequest) (version, name string, data []byte, status int, msg string) {
+func (m *moduleInstaller) prepareArtifact(ctx context.Context, module string, body moduleInstallRequest) (version, name, pluginID string, data []byte, status int, msg string) {
 	if body.Source != "github" && body.Source != "gitcode" {
-		return "", "", nil, http.StatusBadRequest, "source must be github or gitcode"
+		return "", "", "", nil, http.StatusBadRequest, "source must be github or gitcode"
 	}
 	repo := body.Repo
 	if repo == "" {
 		repo = millforgeIndexDefaultRepo
 	}
 	if !millforgeRepoRE.MatchString(repo) {
-		return "", "", nil, http.StatusBadRequest, "invalid repo"
+		return "", "", "", nil, http.StatusBadRequest, "invalid repo"
 	}
 	ref := body.Ref
 	if ref == "" {
 		ref = millforgeIndexDefaultRef
 	}
 	if !millforgeRefRE.MatchString(ref) {
-		return "", "", nil, http.StatusBadRequest, "invalid ref"
+		return "", "", "", nil, http.StatusBadRequest, "invalid ref"
 	}
 	channel := body.Channel
 	if channel == "" {
 		channel = millforgeIndexDefaultChannel
 	}
 	if !validModuleToken(module) {
-		return "", "", nil, http.StatusBadRequest, "invalid module token"
+		return "", "", "", nil, http.StatusBadRequest, "invalid module token"
 	}
 	for _, token := range []string{body.Version, body.Artifact} {
 		if token != "" && !validModuleToken(token) {
-			return "", "", nil, http.StatusBadRequest, "invalid version/artifact token"
+			return "", "", "", nil, http.StatusBadRequest, "invalid version/artifact token"
 		}
 	}
 
 	doc, status, msg := m.index.fetchIndex(ctx, body.Source, repo, ref, channel)
 	if doc == nil {
-		return "", "", nil, status, msg
+		return "", "", "", nil, status, msg
 	}
-	name, wantSHA, status, msg := indexArtifact(doc.Modules, module, body.Version, body.Artifact)
+	name, wantSHA, pluginID, _, status, msg := indexArtifact(doc.Modules, module, body.Version, body.Artifact)
 	if name == "" {
-		return "", "", nil, status, msg
+		return "", "", "", nil, status, msg
 	}
 	if body.SHA256 != "" && !equalHex(body.SHA256, wantSHA) {
-		return "", "", nil, http.StatusConflict, "sha256 does not match the index"
+		return "", "", "", nil, http.StatusConflict, "sha256 does not match the index"
 	}
 	version = body.Version
 	if version == "" {
@@ -278,19 +295,19 @@ func (m *moduleInstaller) prepareArtifact(ctx context.Context, module string, bo
 		version = entry.Latest
 	}
 	if !validModuleToken(version) {
-		return "", "", nil, http.StatusBadGateway, "millforge index: invalid version"
+		return "", "", "", nil, http.StatusBadGateway, "millforge index: invalid version"
 	}
 
 	data, status, msg = m.downloadArtifact(ctx, artifactURL(body.Source, repo, ref, module, version, name), wantSHA)
 	if data == nil {
-		return "", "", nil, status, msg
+		return "", "", "", nil, status, msg
 	}
-	return version, name, data, http.StatusOK, ""
+	return version, name, pluginID, data, http.StatusOK, ""
 }
 
 // installPrepared pushes already-verified bytes to one target.
-func (m *moduleInstaller) installPrepared(ctx context.Context, base, module, name string, data []byte) (bool, string, int, string) {
-	prev := m.previousVersion(ctx, base, module)
+func (m *moduleInstaller) installPrepared(ctx context.Context, base, pluginID, name string, data []byte) (bool, string, int, string) {
+	prev := m.previousVersion(ctx, base, pluginID)
 	loaded, status, msg := m.uploadPlugin(ctx, base, name, data)
 	if status != http.StatusOK {
 		return false, prev, status, msg
@@ -303,11 +320,11 @@ func (m *moduleInstaller) installPrepared(ctx context.Context, base, module, nam
 
 // installOne performs the shared single-target pipeline.
 func (m *moduleInstaller) installOne(ctx context.Context, base, module string, body moduleInstallRequest) (bool, string, int, string) {
-	_, name, data, status, msg := m.prepareArtifact(ctx, module, body)
+	_, name, pluginID, data, status, msg := m.prepareArtifact(ctx, module, body)
 	if data == nil {
 		return false, "", status, msg
 	}
-	return m.installPrepared(ctx, base, module, name, data)
+	return m.installPrepared(ctx, base, pluginID, name, data)
 }
 
 func equalHex(a, b string) bool {
@@ -477,7 +494,7 @@ func (h *ResourceHandler) InstallTeamModule(kubeMode, containerPrefix, resourceP
 			httputil.WriteError(w, status, msg)
 			return
 		}
-		updated, failed, target, status, msg := m.installTeam(r.Context(), &team, module, body)
+		updated, failed, target, pluginID, status, msg := m.installTeam(r.Context(), &team, module, body)
 		if status != http.StatusOK {
 			resp := map[string]any{"error": msg, "updated": updated, "target_version": target}
 			if failed != nil {
@@ -488,7 +505,7 @@ func (h *ResourceHandler) InstallTeamModule(kubeMode, containerPrefix, resourceP
 			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
-		view, found, _ := m.rh.aggregateTeamModule(r, &team, module, m.proxy)
+		view, found, _ := m.rh.aggregateTeamModule(r, &team, module, pluginID, m.proxy)
 		resp := map[string]any{"updated": updated, "target_version": target}
 		if failed != nil {
 			resp["failed"] = failed
@@ -506,26 +523,26 @@ func (h *ResourceHandler) InstallTeamModule(kubeMode, containerPrefix, resourceP
 
 // installTeam rolls the module through the team's workerMembers in order and
 // stops at the first failure.
-func (m *moduleInstaller) installTeam(ctx context.Context, team *v1beta1.Team, module string, body moduleInstallRequest) ([]string, map[string]string, string, int, string) {
+func (m *moduleInstaller) installTeam(ctx context.Context, team *v1beta1.Team, module string, body moduleInstallRequest) ([]string, map[string]string, string, string, int, string) {
 	updated := []string{}
-	version, name, data, status, msg := m.prepareArtifact(ctx, module, body)
+	version, name, pluginID, data, status, msg := m.prepareArtifact(ctx, module, body)
 	if data == nil {
-		return updated, nil, body.Version, status, msg
+		return updated, nil, body.Version, "", status, msg
 	}
 	for _, member := range team.Spec.WorkerMembers {
 		var worker v1beta1.Worker
 		if err := m.rh.client.Get(ctx, client.ObjectKey{Name: member.Name, Namespace: m.rh.namespace}, &worker); err != nil {
-			return updated, map[string]string{"worker": member.Name, "error": "worker not found"}, version, http.StatusBadGateway, "member worker not found"
+			return updated, map[string]string{"worker": member.Name, "error": "worker not found"}, version, pluginID, http.StatusBadGateway, "member worker not found"
 		}
 		if rt := worker.Spec.Runtime; rt != "" && rt != "qwenpaw" {
-			return updated, map[string]string{"worker": member.Name, "error": "worker runtime is not qwenpaw"}, version, http.StatusBadRequest, "worker runtime is not qwenpaw"
+			return updated, map[string]string{"worker": member.Name, "error": "worker runtime is not qwenpaw"}, version, pluginID, http.StatusBadRequest, "worker runtime is not qwenpaw"
 		}
 		base := m.workerBaseURL(worker.Spec.EffectiveWorkerName(worker.Name), worker.Spec.Env)
-		_, _, status, msg := m.installPrepared(ctx, base, module, name, data)
+		_, _, status, msg := m.installPrepared(ctx, base, pluginID, name, data)
 		if status != http.StatusOK {
-			return updated, map[string]string{"worker": member.Name, "error": msg}, version, status, msg
+			return updated, map[string]string{"worker": member.Name, "error": msg}, version, pluginID, status, msg
 		}
 		updated = append(updated, member.Name)
 	}
-	return updated, nil, version, http.StatusOK, ""
+	return updated, nil, version, pluginID, http.StatusOK, ""
 }

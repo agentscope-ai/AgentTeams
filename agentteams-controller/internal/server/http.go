@@ -284,6 +284,13 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// uniform 503 in kube mode, embedded only. ---
 	mux.Handle("GET /api/v1/workers/{name}/mcp", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(rh.WorkerMCP(deps.KubeMode, deps.ContainerPrefix)))
 
+	// --- Worker plugin registry (the worker's installed qwenpaw plugins;
+	// read-only registry, embedded-only — the qwenpaw runtime guard and
+	// the W8 team boundary live in the handler). ---
+	mux.Handle("GET /api/v1/workers/{name}/plugins",
+		mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(
+			http.HandlerFunc(rh.WorkerPlugins(deps.KubeMode, deps.ContainerPrefix))))
+
 	// --- Worker coding CLIs (qwen-code / opencode / qoder; controller-side
 	// management via container exec — runtime-agnostic, works for any
 	// current runtime without worker-side cooperation or a QwenPaw

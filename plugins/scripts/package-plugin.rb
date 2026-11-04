@@ -9,7 +9,6 @@ require "pathname"
 require "rbconfig"
 require "tmpdir"
 require "yaml"
-require "zlib"
 
 manifest_path = Pathname.new(ARGV[0] || "plugins/teamharness/plugin.yaml").expand_path
 plugin_root = manifest_path.dirname
@@ -27,8 +26,6 @@ requires = metadata["requires"] || manifest["requires"] || {}
 out_dir.mkpath
 out_path = out_dir / "#{name}.tar.gz"
 FileUtils.rm_f(out_path)
-zip_path = out_dir / "#{name}-#{version}-qwenpaw.zip"
-FileUtils.rm_f(zip_path)
 
 includes = manifest.fetch("package").fetch("include")
 
@@ -67,40 +64,18 @@ end
 
 # Minimal deterministic ZIP writer (stored entries, fixed 1980-01-01 timestamps)
 # so the qwenpaw zip needs no gems beyond the stdlib.
-def write_zip(path, entries)
-  dos_time = 0
-  dos_date = 0x0021 # 1980-01-01
-  local = String.new(encoding: Encoding::BINARY)
-  central = String.new(encoding: Encoding::BINARY)
-  offset = 0
-  entries.each do |entry_name, data|
-    name_bytes = entry_name.b
-    crc = Zlib.crc32(data)
-    local << [0x04034b50, 20, 0, 0, dos_time, dos_date, crc, data.bytesize, data.bytesize,
-              name_bytes.bytesize, 0].pack("VvvvvvVVVvv")
-    local << name_bytes << data
-    central << [0x02014b50, 20, 20, 0, 0, dos_time, dos_date, crc, data.bytesize, data.bytesize,
-                name_bytes.bytesize, 0, 0, 0, 0, 0, offset].pack("VvvvvvvVVVvvvvvVV")
-    central << name_bytes
-    offset += local.bytesize
-  end
-  eocd = [0x06054b50, 0, 0, entries.size, entries.size, central.bytesize, offset, 0].pack("VvvvvVVv")
-  File.binwrite(path, local + central + eocd)
-end
-
-zip_entries = []
+file_count = 0
 Dir.mktmpdir("teamharness-plugin-") do |tmp|
   staging = Pathname.new(tmp) / name
   staging.mkpath
   includes.each { |entry| copy_entry(plugin_root, staging, entry) }
   prune_generated(staging)
 
-  zip_entries = Dir.glob((staging / "**/*").to_s, File::FNM_DOTMATCH).sort.map do |item|
-    next if File.directory?(item)
+  file_count = Dir.glob((staging / "**/*").to_s, File::FNM_DOTMATCH).count do |item|
+    next false if File.directory?(item)
     rel = Pathname.new(item).relative_path_from(staging).to_s
-    next if zip_excluded?(rel)
-    ["#{name}/#{rel}", File.binread(item)]
-  end.compact
+    !zip_excluded?(rel)
+  end
 
   python = <<~PY
     import os, tarfile
@@ -120,7 +95,16 @@ Dir.mktmpdir("teamharness-plugin-") do |tmp|
   abort("python tar failed: #{stderr}#{stdout}") unless status.success?
 end
 
-write_zip(zip_path, zip_entries)
+# The bundle tar.gz is runtime-neutral; the QwenPaw-installable artifact is
+# produced by the adapter build script (plugin id + adapter payload + core).
+adapter_build = plugin_root / "adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb"
+if adapter_build.file?
+  stdout, stderr, status = Open3.capture3(
+    { "OUT_DIR" => out_dir.to_s },
+    "ruby", adapter_build.to_s
+  )
+  abort("qwenpaw adapter build failed: #{stderr}#{stdout}") unless status.success?
+end
 
 commit = begin
   stdout, _stderr, status = Open3.capture3("git", "-C", repo_root.to_s, "rev-parse", "HEAD")
@@ -129,8 +113,10 @@ rescue StandardError
   ""
 end
 
-artifacts = [out_path, zip_path].map do |path|
-  { name: path.basename.to_s, sha256: Digest::SHA256.file(path.to_s).hexdigest }
+artifacts = Dir.glob((out_dir / "*").to_s).sort.select do |path|
+  File.file?(path) && (path.end_with?(".tar.gz") || path.end_with?(".zip"))
+end.map do |path|
+  { name: File.basename(path), sha256: Digest::SHA256.file(path).hexdigest }
 end
 
 File.write(
@@ -142,7 +128,7 @@ release_manifest = {
   name: name,
   version: version,
   commit: commit,
-  files: zip_entries.size,
+  files: file_count,
   artifacts: artifacts,
   requires: requires
 }

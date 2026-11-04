@@ -41,15 +41,6 @@ fail!("metadata.name is required") if name.empty?
 fail!("build metadata is not supported for plugin releases") if version.include?("+")
 fail!("metadata.version must be semver") unless version.match?(/\A\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?\z/)
 
-if manifest.key?("requires")
-  requires = manifest["requires"]
-  fail!("requires must be a map") unless requires.is_a?(Hash)
-  %w[agentteams contracts tool_schema].each do |key|
-    value = requires[key].to_s
-    fail!("requires.#{key} is required and must be non-empty") if value.empty?
-  end
-end
-
 schema_path = plugins_root / "schemas/plugin.schema.json"
 assert_file(schema_path)
 JSON.parse(schema_path.read)
@@ -59,9 +50,25 @@ includes = package.fetch("include") { fail!("package.include is required") }
 fail!("package.include must be an array") unless includes.is_a?(Array)
 includes.each { |entry| fail!("package include missing: #{plugin_root / entry}") unless (plugin_root / entry).exist? }
 
-bundle_form = manifest.key?("adapters") && !%w[prompts skills mcp].any? { |key| manifest.key?(key) }
+if manifest.key?("entry")
+  entry_requires = manifest.fetch("requires") { fail!("requires is required for entry plugins") }
+  fail!("requires must be a map") unless entry_requires.is_a?(Hash)
+  fail!("requires.qwenpaw is required and must be non-empty") if entry_requires["qwenpaw"].to_s.empty?
 
-if bundle_form
+  entry = manifest["entry"]
+  fail!("entry must be a map") unless entry.is_a?(Hash)
+  backend = entry["backend"].to_s
+  fail!("entry.backend is required and must be non-empty") if backend.empty?
+  frontend = entry["frontend"].to_s
+  fail!("entry.frontend is required and must be non-empty") if frontend.empty?
+  assert_file(plugin_root / backend)
+  assert_file(plugin_root / frontend)
+
+  fail!("runtime is required and must be non-empty") if manifest["runtime"].to_s.empty?
+
+  puts "ok: #{name} #{version}"
+  exit 0
+elsif manifest.key?("adapters") && !%w[prompts skills mcp].any? { |key| manifest.key?(key) }
   bundle_requires = manifest.fetch("requires") { fail!("requires is required for bundle plugins") }
   fail!("requires must be a map") unless bundle_requires.is_a?(Hash)
   %w[agentteams contracts tool_schema].each do |key|
@@ -72,6 +79,15 @@ if bundle_form
   fail!("adapters must be an array") unless bundle_adapters.is_a?(Array)
   fail!("bundle plugins must declare at least one adapter") if bundle_adapters.empty?
 else
+  if manifest.key?("requires")
+    requires = manifest["requires"]
+    fail!("requires must be a map") unless requires.is_a?(Hash)
+    %w[agentteams contracts tool_schema].each do |key|
+      value = requires[key].to_s
+      fail!("requires.#{key} is required and must be non-empty") if value.empty?
+    end
+  end
+
   prompts = manifest.fetch("prompts") { fail!("prompts is required") }
   assert_file(plugin_root / prompts.fetch("team") { fail!("prompts.team is required") })
   agent_prompts = prompts.fetch("agent") { fail!("prompts.agent is required") }

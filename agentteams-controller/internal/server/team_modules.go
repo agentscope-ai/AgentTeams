@@ -21,7 +21,7 @@ type teamModuleMember struct {
 
 // teamModuleView is one module aggregated over the team's workers.
 type teamModuleView struct {
-	ID         string             `json:"id"`
+	Module     string             `json:"module"`
 	Name       string             `json:"name,omitempty"`
 	Kind       string             `json:"kind,omitempty"`
 	Versions   map[string]int     `json:"versions"`
@@ -83,62 +83,101 @@ func (h *ResourceHandler) getTeamModulesWithProxy(p *workerPluginsProxy, kubeMod
 			return
 		}
 
-		modules := make(map[string]*teamModuleView)
-		var memberErrors []teamModuleError
-
-		for _, member := range team.Spec.WorkerMembers {
-			var worker v1beta1.Worker
-			if err := h.client.Get(r.Context(), client.ObjectKey{Name: member.Name, Namespace: h.namespace}, &worker); err != nil {
-				memberErrors = append(memberErrors, teamModuleError{Worker: member.Name, Error: "worker not found"})
-				continue
-			}
-			base := p.workerBaseURL(worker.Spec.EffectiveWorkerName(worker.Name), worker.Spec.Env)
-			entries, ferr := p.fetchProjection(r.Context(), base)
-			if ferr != nil {
-				memberErrors = append(memberErrors, teamModuleError{Worker: member.Name, Error: ferr.message})
-				continue
-			}
-			for _, entry := range entries {
-				id, _ := entry["id"].(string)
-				if id == "" {
-					id, _ = entry["name"].(string)
-				}
-				if id == "" {
-					continue
-				}
-				view, ok := modules[id]
-				if !ok {
-					view = &teamModuleView{ID: id, Versions: map[string]int{}, Members: []teamModuleMember{}}
-					if n, ok := entry["name"].(string); ok {
-						view.Name = n
-					}
-					if k, ok := entry["plugin_type"].(string); ok {
-						view.Kind = k
-					}
-					modules[id] = view
-				}
-				version, _ := entry["version"].(string)
-				loaded, _ := entry["loaded"].(bool)
-				view.Versions[version]++
-				view.Members = append(view.Members, teamModuleMember{Worker: member.Name, Version: version, Loaded: loaded})
-			}
-		}
-
-		out := make([]teamModuleView, 0, len(modules))
-		for _, view := range modules {
-			sort.Slice(view.Members, func(i, j int) bool { return view.Members[i].Worker < view.Members[j].Worker })
-			view.Consistent = len(view.Versions) == 1
-			for _, m := range view.Members {
-				if !m.Loaded {
-					view.Consistent = false
-				}
-			}
-			out = append(out, *view)
-		}
-		sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-
+		modules, memberErrors := h.aggregateTeamModules(r, &team, p)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(teamModulesResponse{Team: name, Modules: out, Errors: memberErrors})
+		_ = json.NewEncoder(w).Encode(teamModulesResponse{Team: name, Modules: modules, Errors: memberErrors})
 	}
+}
+
+// collectTeamMemberEntries reads every member's plugin registry, keeping
+// member failures separate so the aggregate can still report the rest.
+func (h *ResourceHandler) collectTeamMemberEntries(r *http.Request, team *v1beta1.Team, p *workerPluginsProxy) (map[string][]map[string]any, []teamModuleError) {
+	entries := make(map[string][]map[string]any, len(team.Spec.WorkerMembers))
+	var memberErrors []teamModuleError
+	for _, member := range team.Spec.WorkerMembers {
+		var worker v1beta1.Worker
+		if err := h.client.Get(r.Context(), client.ObjectKey{Name: member.Name, Namespace: h.namespace}, &worker); err != nil {
+			memberErrors = append(memberErrors, teamModuleError{Worker: member.Name, Error: "worker not found"})
+			continue
+		}
+		if rt := worker.Spec.Runtime; rt != "" && rt != "qwenpaw" {
+			memberErrors = append(memberErrors, teamModuleError{Worker: member.Name, Error: "worker runtime is not qwenpaw"})
+			continue
+		}
+		base := p.workerBaseURL(worker.Spec.EffectiveWorkerName(worker.Name), worker.Spec.Env)
+		list, ferr := p.fetchProjection(r.Context(), base)
+		if ferr != nil {
+			memberErrors = append(memberErrors, teamModuleError{Worker: member.Name, Error: ferr.message})
+			continue
+		}
+		entries[member.Name] = list
+	}
+	return entries, memberErrors
+}
+
+// aggregateTeamModules groups the collected entries by module id.
+func (h *ResourceHandler) aggregateTeamModules(r *http.Request, team *v1beta1.Team, p *workerPluginsProxy) ([]teamModuleView, []teamModuleError) {
+	entries, memberErrors := h.collectTeamMemberEntries(r, team, p)
+
+	modules := make(map[string]*teamModuleView)
+	for member, list := range entries {
+		for _, entry := range list {
+			id := pluginEntryID(entry)
+			if id == "" {
+				continue
+			}
+			view, ok := modules[id]
+			if !ok {
+				view = &teamModuleView{Module: id, Versions: map[string]int{}, Members: []teamModuleMember{}}
+				if n, ok := entry["name"].(string); ok {
+					view.Name = n
+				}
+				if k, ok := entry["plugin_type"].(string); ok {
+					view.Kind = k
+				}
+				modules[id] = view
+			}
+			version, _ := entry["version"].(string)
+			loaded, _ := entry["loaded"].(bool)
+			view.Versions[version]++
+			view.Members = append(view.Members, teamModuleMember{Worker: member, Version: version, Loaded: loaded})
+		}
+	}
+
+	out := make([]teamModuleView, 0, len(modules))
+	for _, view := range modules {
+		sort.Slice(view.Members, func(i, j int) bool { return view.Members[i].Worker < view.Members[j].Worker })
+		view.Consistent = len(view.Versions) == 1
+		for _, m := range view.Members {
+			if !m.Loaded {
+				view.Consistent = false
+			}
+		}
+		out = append(out, *view)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Module < out[j].Module })
+	return out, memberErrors
+}
+
+// aggregateTeamModule isolates one module from the aggregate (used by the
+// install response so the caller sees the post-install consistency).
+func (h *ResourceHandler) aggregateTeamModule(r *http.Request, team *v1beta1.Team, module string, p *workerPluginsProxy) (teamModuleView, bool, []teamModuleError) {
+	modules, memberErrors := h.aggregateTeamModules(r, team, p)
+	for _, m := range modules {
+		if m.Module == module {
+			return m, true, memberErrors
+		}
+	}
+	return teamModuleView{Module: module, Versions: map[string]int{}, Members: []teamModuleMember{}}, false, memberErrors
+}
+
+func pluginEntryID(entry map[string]any) string {
+	if id, _ := entry["id"].(string); id != "" {
+		return id
+	}
+	if name, _ := entry["name"].(string); name != "" {
+		return name
+	}
+	return ""
 }

@@ -73,7 +73,7 @@ func TestTeamModulesAggregation(t *testing.T) {
 		t.Fatalf("unexpected response: %+v", out)
 	}
 	m := out.Modules[0]
-	if m.ID != "teamharness" || m.Consistent {
+	if m.Module != "teamharness" || m.Consistent {
 		t.Fatalf("expected inconsistent teamharness, got %+v", m)
 	}
 	if m.Versions["0.1.0"] != 1 || m.Versions["0.2.0"] != 1 {

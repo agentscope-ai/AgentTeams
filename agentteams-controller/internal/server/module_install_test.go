@@ -10,6 +10,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 type rtFunc func(*http.Request) (*http.Response, error)
@@ -125,5 +129,49 @@ func TestInstallRoutesKubeMode(t *testing.T) {
 		if rec.Code != http.StatusServiceUnavailable {
 			t.Fatalf("%s: status=%d, want 503", name, rec.Code)
 		}
+	}
+}
+
+func TestInstallOneChannelMismatch(t *testing.T) {
+	artifact := []byte("zip-bytes")
+	sum := sha256.Sum256(artifact)
+	m, _ := testInstaller(artifact, hex.EncodeToString(sum[:]))
+	_, _, status, _ := m.installOne(context.Background(), "http://worker.test", "teamharness", moduleInstallRequest{
+		Source: "github", Repo: "o/r", Ref: "main", Channel: "stable", Version: "0.1.0",
+	})
+	if status != 404 {
+		t.Fatalf("status=%d, want 404", status)
+	}
+}
+
+func TestInstallTeamStopsOnRuntimeMismatch(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	team := &v1beta1.Team{}
+	team.Name = "alpha"
+	team.Namespace = "default"
+	team.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{{Name: "w1", Role: "worker"}, {Name: "w2", Role: "worker"}}
+	w1 := &v1beta1.Worker{}
+	w1.Name = "w1"
+	w1.Namespace = "default"
+	w2 := &v1beta1.Worker{}
+	w2.Name = "w2"
+	w2.Namespace = "default"
+	w2.Spec.Runtime = "openclaw"
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(w1, w2).Build()
+
+	artifact := []byte("zip-bytes")
+	sum := sha256.Sum256(artifact)
+	m, _ := testInstaller(artifact, hex.EncodeToString(sum[:]))
+	m.rh = &ResourceHandler{client: cl, namespace: "default"}
+	m.workerBaseURL = func(string, map[string]string) string { return "http://worker.test" }
+
+	updated, failed, _, status, _ := m.installTeam(context.Background(), team, "teamharness", moduleInstallRequest{
+		Source: "github", Repo: "o/r", Ref: "main", Version: "0.1.0",
+	})
+	if status != 400 || len(updated) != 1 || updated[0] != "w1" || failed["worker"] != "w2" {
+		t.Fatalf("status=%d updated=%v failed=%v", status, updated, failed)
 	}
 }

@@ -51,7 +51,7 @@ const (
 
 	// Defaults for the module-update UI's own channel feed.
 	millforgeIndexDefaultRepo    = "LUOSENGWA/millforge"
-	millforgeIndexDefaultRef      = "main"
+	millforgeIndexDefaultRef     = "main"
 	millforgeIndexDefaultChannel = "beta"
 )
 
@@ -72,7 +72,7 @@ var (
 // in the client transport, leaving this map untouched.
 var millforgeIndexAllowedHosts = map[string]bool{
 	"raw.githubusercontent.com": true,
-	"raw.gitcode.com":            true,
+	"raw.gitcode.com":           true,
 }
 
 // newMillforgeIndexClient builds the production upstream client: a 10s
@@ -166,7 +166,7 @@ func (h *MillforgeIndexHandler) GetIndex(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	doc, status, message := h.fetchIndex(r.Context(), source, repo, ref)
+	doc, status, message := h.fetchIndex(r.Context(), source, repo, ref, channel)
 	if doc == nil {
 		httputil.WriteError(w, status, message)
 		return
@@ -192,7 +192,7 @@ type millforgeIndexDoc struct {
 
 // fetchIndex performs the validated fetch shared by the read route and the
 // install routes (which re-read the index to pin the artifact checksum).
-func (h *MillforgeIndexHandler) fetchIndex(ctx context.Context, source, repo, ref string) (*millforgeIndexDoc, int, string) {
+func (h *MillforgeIndexHandler) fetchIndex(ctx context.Context, source, repo, ref, channel string) (*millforgeIndexDoc, int, string) {
 	rawURL := millforgeIndexURL(source, repo, ref)
 
 	u, err := url.Parse(rawURL)
@@ -239,6 +239,9 @@ func (h *MillforgeIndexHandler) fetchIndex(ctx context.Context, source, repo, re
 	}
 	if upstream.Channel == "" {
 		return nil, http.StatusBadGateway, "millforge index: upstream channel missing"
+	}
+	if channel != "" && upstream.Channel != channel {
+		return nil, http.StatusNotFound, "millforge index: requested channel not present in the index"
 	}
 	modules := bytes.TrimSpace(upstream.Modules)
 	if len(modules) == 0 || modules[0] != '{' {

@@ -46,6 +46,7 @@ type moduleInstaller struct {
 	kubeMode        string
 	containerPrefix string
 	index           *MillforgeIndexHandler
+	proxy           *workerPluginsProxy
 	http            *http.Client
 	workerBaseURL   func(name string, env map[string]string) string
 	managerBaseURL  func(name string) string
@@ -58,6 +59,7 @@ func newModuleInstaller(rh *ResourceHandler, kubeMode, containerPrefix string) *
 		kubeMode:        kubeMode,
 		containerPrefix: containerPrefix,
 		index:           NewMillforgeIndexHandler(),
+		proxy:           wp,
 		http: &http.Client{
 			Timeout: moduleArtifactTimeout,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -242,7 +244,7 @@ func (m *moduleInstaller) installOne(ctx context.Context, base, module string, b
 		}
 	}
 
-	doc, status, msg := m.index.fetchIndex(ctx, body.Source, repo, ref)
+	doc, status, msg := m.index.fetchIndex(ctx, body.Source, repo, ref, channel)
 	if doc == nil {
 		return false, "", status, msg
 	}
@@ -273,7 +275,10 @@ func (m *moduleInstaller) installOne(ctx context.Context, base, module string, b
 	if status != http.StatusOK {
 		return false, prev, status, msg
 	}
-	return loaded, prev, http.StatusOK, ""
+	if !loaded {
+		return false, prev, http.StatusBadGateway, "qwenpaw did not report the plugin as loaded"
+	}
+	return true, prev, http.StatusOK, ""
 }
 
 func equalHex(a, b string) bool {
@@ -283,7 +288,6 @@ func equalHex(a, b string) bool {
 func decodeInstallBody(r *http.Request) (moduleInstallRequest, int, string) {
 	var body moduleInstallRequest
 	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
-	dec.DisallowUnknownFields()
 	if err := dec.Decode(&body); err != nil {
 		return body, http.StatusBadRequest, "invalid JSON body"
 	}
@@ -449,8 +453,16 @@ func (h *ResourceHandler) InstallTeamModule(kubeMode, containerPrefix string) ht
 			httputil.WriteError(w, status, msg)
 			return
 		}
+		view, found, _ := m.rh.aggregateTeamModule(r, &team, module, m.proxy)
+		resp := map[string]any{"updated": updated, "failed": failed, "target_version": target}
+		if found {
+			resp["module"] = view.Module
+			resp["members"] = view.Members
+			resp["versions"] = view.Versions
+			resp["consistent"] = view.Consistent
+		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"updated": updated, "failed": failed, "target_version": target})
+		json.NewEncoder(w).Encode(resp)
 	}
 }
 
@@ -463,6 +475,9 @@ func (m *moduleInstaller) installTeam(ctx context.Context, team *v1beta1.Team, m
 		var worker v1beta1.Worker
 		if err := m.rh.client.Get(ctx, client.ObjectKey{Name: member.Name, Namespace: m.rh.namespace}, &worker); err != nil {
 			return updated, map[string]string{"worker": member.Name, "error": "worker not found"}, target, http.StatusBadGateway, "member worker not found"
+		}
+		if rt := worker.Spec.Runtime; rt != "" && rt != "qwenpaw" {
+			return updated, map[string]string{"worker": member.Name, "error": "worker runtime is not qwenpaw"}, target, http.StatusBadRequest, "worker runtime is not qwenpaw"
 		}
 		base := m.workerBaseURL(worker.Spec.EffectiveWorkerName(worker.Name), worker.Spec.Env)
 		_, _, status, msg := m.installOne(ctx, base, module, body)

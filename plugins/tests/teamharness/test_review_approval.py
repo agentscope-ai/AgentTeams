@@ -40,7 +40,7 @@ if str(MCP_DIR) not in sys.path:
 
 import server  # noqa: E402
 
-review = server.review
+approval = server.approval
 
 T0 = "2026-11-04T10:00:00Z"
 T_DEADLINE = "2026-11-04T10:30:00Z"  # T0 + the 30-minute default wait
@@ -54,12 +54,12 @@ def _task(task_id: str = "t-20") -> dict:
 
 def _ask(tmp_path: Path, task: dict | None = None, task_id: str = "t-20", **kwargs):
     task = task if task is not None else _task(task_id)
-    result = review.ask_approval(task, tmp_path, task_id, now=T0, **kwargs)
+    result = approval.ask_approval(task, tmp_path, task_id, now=T0, **kwargs)
     return task, result
 
 
 def _journal(tmp_path: Path, task_id: str = "t-20") -> list:
-    return review.read_approval_audit(tmp_path, task_id)
+    return approval.read_approval_audit(tmp_path, task_id)
 
 
 def _decided_events(tmp_path: Path, task_id: str = "t-20") -> list:
@@ -73,7 +73,7 @@ class TestBoundedWait:
     def test_default_deadline_is_bounded(self, tmp_path):
         task, res = _ask(tmp_path)
         assert res["deadline_at"] == T_DEADLINE
-        state = review.approval_state(task, now=T0)
+        state = approval.approval_state(task, now=T0)
         assert state["status"] == "pending"
         assert state["expired"] is False
 
@@ -84,24 +84,24 @@ class TestBoundedWait:
     def test_explicit_deadline_wins_over_default(self, tmp_path):
         task, res = _ask(tmp_path, deadline_at="2026-11-04T10:05:00Z")
         assert res["deadline_at"] == "2026-11-04T10:05:00Z"
-        review.check_approval_bounded_wait(
+        approval.check_approval_bounded_wait(
             task, tmp_path, "t-20", now="2026-11-04T10:06:00Z"
         )
         assert task["attention"][-1]["approvalStatus"] == "unavailable"
 
     def test_check_before_deadline_keeps_pending(self, tmp_path):
         task, res = _ask(tmp_path)
-        transitions = review.check_approval_bounded_wait(
+        transitions = approval.check_approval_bounded_wait(
             task, tmp_path, "t-20", now=T_BEFORE
         )
         assert transitions == []
-        assert review.approval_state(task, now=T_BEFORE)["status"] == "pending"
+        assert approval.approval_state(task, now=T_BEFORE)["status"] == "pending"
         # No decision of any kind was recorded:
         assert _decided_events(tmp_path) == []
 
     def test_lapse_marks_unavailable(self, tmp_path):
         task, res = _ask(tmp_path)
-        transitions = review.check_approval_bounded_wait(
+        transitions = approval.check_approval_bounded_wait(
             task, tmp_path, "t-20", now=T_LATE
         )
         assert len(transitions) == 1
@@ -113,7 +113,7 @@ class TestBoundedWait:
 
     def test_lapse_is_never_an_approval(self, tmp_path):
         task, res = _ask(tmp_path)
-        review.check_approval_bounded_wait(task, tmp_path, "t-20", now=T_LATE)
+        approval.check_approval_bounded_wait(task, tmp_path, "t-20", now=T_LATE)
         record = task["attention"][-1]
         # Fail closed: the loop is NOT resolved and nothing approved —
         # the wait simply ended with "approver unavailable".
@@ -129,16 +129,16 @@ class TestBoundedWait:
 
     def test_check_is_idempotent_after_lapse(self, tmp_path):
         task, res = _ask(tmp_path)
-        review.check_approval_bounded_wait(task, tmp_path, "t-20", now=T_LATE)
-        again = review.check_approval_bounded_wait(task, tmp_path, "t-20", now=T_LATE)
+        approval.check_approval_bounded_wait(task, tmp_path, "t-20", now=T_LATE)
+        again = approval.check_approval_bounded_wait(task, tmp_path, "t-20", now=T_LATE)
         assert again == []
         # One lapse, one decided event — never two:
         assert len(_decided_events(tmp_path)) == 1
 
     def test_resolve_after_deadline_is_rejected_and_lapses(self, tmp_path):
         task, res = _ask(tmp_path)
-        with pytest.raises(review.ApprovalGuardError) as excinfo:
-            review.resolve_approval(
+        with pytest.raises(approval.ApprovalGuardError) as excinfo:
+            approval.resolve_approval(
                 task, tmp_path, "t-20", res["call_id"], "approve", now=T_LATE
             )
         assert excinfo.value.error_code == "approval_unavailable"
@@ -154,11 +154,11 @@ class TestBoundedWait:
         # Past the deadline but the check has not run yet: the state is
         # still pending AND flagged expired — a late gate read sees the
         # true position, not a zombie "waiting forever".
-        state = review.approval_state(task, now=T_LATE)
+        state = approval.approval_state(task, now=T_LATE)
         assert state["status"] == "pending"
         assert state["expired"] is True
-        review.check_approval_bounded_wait(task, tmp_path, "t-20", now=T_LATE)
-        assert review.approval_state(task, now=T_LATE)["status"] == "unavailable"
+        approval.check_approval_bounded_wait(task, tmp_path, "t-20", now=T_LATE)
+        assert approval.approval_state(task, now=T_LATE)["status"] == "unavailable"
 
 
 class TestAuditPair:
@@ -180,7 +180,7 @@ class TestAuditPair:
 
     def test_approve_closes_the_pair(self, tmp_path):
         task, res = _ask(tmp_path)
-        review.resolve_approval(
+        approval.resolve_approval(
             task, tmp_path, "t-20", res["call_id"], "approve",
             decided_by="@admin:example.test", via="im_reply", now=T_BEFORE,
         )
@@ -195,7 +195,7 @@ class TestAuditPair:
 
     def test_deny_closes_the_pair(self, tmp_path):
         task, res = _ask(tmp_path)
-        review.resolve_approval(
+        approval.resolve_approval(
             task, tmp_path, "t-20", res["call_id"], "deny", now=T_BEFORE
         )
         entries = _journal(tmp_path)
@@ -205,7 +205,7 @@ class TestAuditPair:
 
     def test_lapse_closes_the_pair(self, tmp_path):
         task, res = _ask(tmp_path)
-        review.check_approval_bounded_wait(task, tmp_path, "t-20", now=T_LATE)
+        approval.check_approval_bounded_wait(task, tmp_path, "t-20", now=T_LATE)
         entries = _journal(tmp_path)
         assert [e["event"] for e in entries] == ["asked", "decided"]
         assert entries[1]["callId"] == res["call_id"]
@@ -213,10 +213,10 @@ class TestAuditPair:
 
     def test_audit_pairs_report_paired_journal(self, tmp_path):
         task, res = _ask(tmp_path)
-        review.resolve_approval(
+        approval.resolve_approval(
             task, tmp_path, "t-20", res["call_id"], "approve", now=T_BEFORE
         )
-        report = review.audit_pairs(_journal(tmp_path))
+        report = approval.audit_pairs(_journal(tmp_path))
         assert set(report["pairs"]) == {res["call_id"]}
         assert report["pairs"][res["call_id"]]["asked"]["callId"] == res["call_id"]
         assert report["pairs"][res["call_id"]]["decided"]["outcome"] == "approved"
@@ -235,7 +235,7 @@ class TestAuditPair:
             {"seq": 4, "event": "decided", "callId": "call_c",
              "outcome": "denied", "at": T_BEFORE},
         ]
-        report = review.audit_pairs(entries)
+        report = approval.audit_pairs(entries)
         assert set(report["pairs"]) == {"call_a"}
         assert report["unpaired_asked"] == ["call_b"]
         assert report["unpaired_decided"] == ["call_c"]
@@ -251,13 +251,13 @@ class TestAuditPair:
             {"seq": 3, "event": "decided", "callId": "call_a",
              "outcome": "approved", "at": T_LATE},
         ]
-        report = review.audit_pairs(entries)
+        report = approval.audit_pairs(entries)
         assert "call_a" in report["pairs"]
         assert report["duplicate_decided"] == {"call_a": 2}
 
     def test_journal_is_a_separate_file_from_task_meta(self, tmp_path):
         task, res = _ask(tmp_path)
-        review.resolve_approval(
+        approval.resolve_approval(
             task, tmp_path, "t-20", res["call_id"], "approve", now=T_BEFORE
         )
         # The audit pair exists ONLY in the separate append-only
@@ -269,7 +269,7 @@ class TestAuditPair:
             assert "seq" not in record
             assert "asked" not in record
             assert "decided" not in record
-        journal = review.approval_audit_path(tmp_path, "t-20")
+        journal = approval.approval_audit_path(tmp_path, "t-20")
         assert journal == (
             tmp_path / "shared" / "tasks" / "t-20" / "approval_audit.jsonl"
         )
@@ -281,10 +281,10 @@ class TestAuditPair:
 
     def test_read_approval_audit_skips_malformed_lines(self, tmp_path):
         task, res = _ask(tmp_path)
-        journal = review.approval_audit_path(tmp_path, "t-20")
+        journal = approval.approval_audit_path(tmp_path, "t-20")
         with journal.open("a", encoding="utf-8") as handle:
             handle.write("{not json}\n")
-        entries = review.read_approval_audit(tmp_path, "t-20")
+        entries = approval.read_approval_audit(tmp_path, "t-20")
         assert len(entries) == 1
         assert entries[0]["event"] == "asked"
 
@@ -296,7 +296,7 @@ class TestCallIdDedup:
 
     def test_second_resolve_same_call_id_is_idempotent(self, tmp_path):
         task, res = _ask(tmp_path)
-        first = review.resolve_approval(
+        first = approval.resolve_approval(
             task, tmp_path, "t-20", res["call_id"], "approve",
             decided_by="@admin:example.test", now=T_BEFORE,
         )
@@ -304,7 +304,7 @@ class TestCallIdDedup:
         first_decided_at = task["attention"][-1]["decidedAt"]
         # The retry (same callId, same decision — e.g. after a lost
         # response) replays the original decision:
-        second = review.resolve_approval(
+        second = approval.resolve_approval(
             task, tmp_path, "t-20", res["call_id"], "approve",
             decided_by="@admin:example.test", now=T_LATE,
         )
@@ -317,11 +317,11 @@ class TestCallIdDedup:
 
     def test_conflicting_retry_same_call_id_is_rejected(self, tmp_path):
         task, res = _ask(tmp_path)
-        review.resolve_approval(
+        approval.resolve_approval(
             task, tmp_path, "t-20", res["call_id"], "approve", now=T_BEFORE
         )
-        with pytest.raises(review.ApprovalGuardError) as excinfo:
-            review.resolve_approval(
+        with pytest.raises(approval.ApprovalGuardError) as excinfo:
+            approval.resolve_approval(
                 task, tmp_path, "t-20", res["call_id"], "deny", now=T_BEFORE
             )
         assert excinfo.value.error_code == "approval_already_decided"
@@ -332,27 +332,27 @@ class TestCallIdDedup:
 
     def test_unknown_call_id_is_rejected(self, tmp_path):
         task, res = _ask(tmp_path)
-        with pytest.raises(review.ApprovalGuardError) as excinfo:
-            review.resolve_approval(
+        with pytest.raises(approval.ApprovalGuardError) as excinfo:
+            approval.resolve_approval(
                 task, tmp_path, "t-20", "call-other", "approve", now=T_BEFORE
             )
         assert excinfo.value.error_code == "approval_not_found"
         # Nothing was decided:
         assert [e["event"] for e in _journal(tmp_path)] == ["asked"]
-        assert review.approval_state(task, now=T_BEFORE)["status"] == "pending"
+        assert approval.approval_state(task, now=T_BEFORE)["status"] == "pending"
 
     def test_empty_call_id_is_rejected(self, tmp_path):
         task, res = _ask(tmp_path)
-        with pytest.raises(review.ApprovalGuardError) as excinfo:
-            review.resolve_approval(
+        with pytest.raises(approval.ApprovalGuardError) as excinfo:
+            approval.resolve_approval(
                 task, tmp_path, "t-20", "", "approve", now=T_BEFORE
             )
         assert excinfo.value.error_code == "invalid_call_id"
 
     def test_invalid_decision_is_rejected(self, tmp_path):
         task, res = _ask(tmp_path)
-        with pytest.raises(review.ApprovalGuardError) as excinfo:
-            review.resolve_approval(
+        with pytest.raises(approval.ApprovalGuardError) as excinfo:
+            approval.resolve_approval(
                 task, tmp_path, "t-20", res["call_id"], "maybe", now=T_BEFORE
             )
         assert excinfo.value.error_code == "invalid_decision"
@@ -360,31 +360,31 @@ class TestCallIdDedup:
 
     def test_late_resolve_after_lapse_is_rejected(self, tmp_path):
         task, res = _ask(tmp_path)
-        review.check_approval_bounded_wait(task, tmp_path, "t-20", now=T_LATE)
-        with pytest.raises(review.ApprovalGuardError) as excinfo:
-            review.resolve_approval(
+        approval.check_approval_bounded_wait(task, tmp_path, "t-20", now=T_LATE)
+        with pytest.raises(approval.ApprovalGuardError) as excinfo:
+            approval.resolve_approval(
                 task, tmp_path, "t-20", res["call_id"], "approve", now=T_LATE
             )
         assert excinfo.value.error_code == "approval_unavailable"
 
     def test_reask_after_unavailable_starts_a_fresh_pair(self, tmp_path):
         task, first = _ask(tmp_path)
-        review.check_approval_bounded_wait(task, tmp_path, "t-20", now=T_LATE)
+        approval.check_approval_bounded_wait(task, tmp_path, "t-20", now=T_LATE)
         # The bounded wait ended; asking again is a NEW attempt with a
         # fresh callId and a fresh deadline (the old pair stays intact):
-        second = review.ask_approval(task, tmp_path, "t-20", now=T_LATE)
+        second = approval.ask_approval(task, tmp_path, "t-20", now=T_LATE)
         assert second["call_id"] != first["call_id"]
         assert second["record"]["attempt"] == 2
         assert second["deadline_at"] == "2026-11-04T11:01:00Z"
-        assert review.approval_state(task, now=T_LATE)["status"] == "pending"
+        assert approval.approval_state(task, now=T_LATE)["status"] == "pending"
         entries = _journal(tmp_path)
         assert [e["event"] for e in entries] == ["asked", "decided", "asked"]
         assert entries[2]["callId"] == second["call_id"]
-        review.resolve_approval(
+        approval.resolve_approval(
             task, tmp_path, "t-20", second["call_id"], "approve",
             now="2026-11-04T11:00:00Z",
         )
-        report = review.audit_pairs(_journal(tmp_path))
+        report = approval.audit_pairs(_journal(tmp_path))
         assert set(report["pairs"]) == {first["call_id"], second["call_id"]}
         assert report["unpaired_asked"] == []
         assert report["unpaired_decided"] == []
@@ -392,7 +392,7 @@ class TestCallIdDedup:
 
     def test_idempotent_ask_same_call_id(self, tmp_path):
         task, first = _ask(tmp_path)
-        again = review.ask_approval(
+        again = approval.ask_approval(
             task, tmp_path, "t-20", call_id=first["call_id"], now=T0
         )
         assert again["duplicate"] is True
@@ -414,7 +414,7 @@ class TestCallIdDedup:
             {"kind": "approval", "question": "legacy", "attempt": 1,
              "requestedAt": T0, "resolved": False}
         ]
-        transitions = review.check_approval_bounded_wait(
+        transitions = approval.check_approval_bounded_wait(
             task, tmp_path, "t-20", now=T_LATE
         )
         assert transitions == []

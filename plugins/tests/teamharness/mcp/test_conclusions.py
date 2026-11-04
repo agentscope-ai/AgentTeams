@@ -100,6 +100,7 @@ def _write_project_and_task(workspace: Path, task_id: str) -> str:
 
 def _prepare(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> _SendCapture:
     monkeypatch.setattr(server, "_pull_project", lambda *a, **k: True)
+    monkeypatch.setattr(server, "_pull_task", lambda *a, **k: True)
     monkeypatch.setattr(server, "_sync_task", lambda *a, **k: True)
     monkeypatch.setattr(server, "_sync_project", lambda *a, **k: True)
     monkeypatch.setattr(server, "_publish_task_artifacts", lambda *a, **k: [])

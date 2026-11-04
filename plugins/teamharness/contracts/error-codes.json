@@ -1,0 +1,273 @@
+{
+  "version": "1.0.0",
+  "status": "defined-not-enforced",
+  "description": "Error vocabulary of the TeamHarness MCP server, extracted as data from plugins/teamharness/mcp/server.py @ d8332e0a. 'message' is the stable substring actually present in server.py (for f-string messages, the fixed prefix/suffix without the interpolated value); 'code' is a stable snake_case identifier; 'hint' is recovery guidance. Data only - the server does not read this file.",
+  "source": "plugins/teamharness/mcp/server.py",
+  "errors": [
+    {
+      "code": "task_not_found",
+      "message": "task not found",
+      "hint": "taskId must reference an existing shared/tasks/{taskId}/meta.json"
+    },
+    {
+      "code": "project_not_found",
+      "message": "project not found",
+      "hint": "projectId must reference an existing shared/projects/{projectId}/meta.json; resolve_project recovers the project from a taskId"
+    },
+    {
+      "code": "task_already_exists",
+      "message": "task already exists",
+      "hint": "task ids are stable anchors; delegate a different task or reuse the existing one"
+    },
+    {
+      "code": "project_already_exists",
+      "message": "project already exists",
+      "hint": "project ids are unique; create_project generates a fresh id"
+    },
+    {
+      "code": "task_not_in_project_plan",
+      "message": "task not found in project plan",
+      "hint": "the task meta must be part of the project plan (DAG/loop tasks) before plan-level operations"
+    },
+    {
+      "code": "task_not_in_project",
+      "message": "task does not belong to project",
+      "hint": "taskId and projectId must reference the same project"
+    },
+    {
+      "code": "accept_task_result_requires_leader",
+      "message": "accept_task_result requires leader role",
+      "hint": "result acceptance is reserved for the trusted Leader"
+    },
+    {
+      "code": "delegate_task_requires_leader",
+      "message": "delegate_task requires leader role",
+      "hint": "only the Leader assigns work"
+    },
+    {
+      "code": "cancel_task_requires_leader",
+      "message": "cancel_task requires leader role",
+      "hint": "only the Leader cancels tasks"
+    },
+    {
+      "code": "check_task_requires_leader",
+      "message": "check_task requires leader role",
+      "hint": "only the Leader inspects submitted results"
+    },
+    {
+      "code": "ack_task_requires_worker",
+      "message": "ack_task requires worker or remote-member role",
+      "hint": "only the assigned worker/remote member acknowledges a task"
+    },
+    {
+      "code": "submit_task_requires_worker",
+      "message": "submit_task requires worker or remote-member role",
+      "hint": "only the assigned worker/remote member submits a result"
+    },
+    {
+      "code": "report_progress_requires_worker",
+      "message": "report_progress requires worker or remote-member role",
+      "hint": "only the assigned worker/remote member reports progress"
+    },
+    {
+      "code": "request_attention_requires_worker_or_leader",
+      "message": "request_attention requires worker, leader, or remote-member role",
+      "hint": "attention may be raised by any working member or the leader"
+    },
+    {
+      "code": "message_tool_blocked",
+      "message": "message tool is not available to worker roles",
+      "hint": "worker/remote-member report in the task room instead of using the message tool"
+    },
+    {
+      "code": "pull_failed",
+      "message": "cannot pull authoritative project state from shared storage; retry",
+      "hint": "retryable; mutating actions refuse stale local state on purpose, read actions tolerate it"
+    },
+    {
+      "code": "submission_identity_required",
+      "message": "submissionId is required for the current task submission",
+      "hint": "pass the exact task.submission_id returned by check_task"
+    },
+    {
+      "code": "submission_identity_mismatch",
+      "message": "submissionId does not match the current task submission",
+      "hint": "the task was re-submitted; re-run check_task to fetch the current submission identity"
+    },
+    {
+      "code": "accept_requires_submission_identity",
+      "message": "accept_task_result requires a submission identity",
+      "hint": "the submitted task meta must carry submission_id before acceptance"
+    },
+    {
+      "code": "submission_conflict",
+      "message": "submit_task conflicts with existing submission",
+      "hint": "a result was already submitted for this task state; do not resubmit"
+    },
+    {
+      "code": "cancellation_conflict",
+      "message": "cancel_task conflicts with existing cancellation",
+      "hint": "the task was already cancelled; a committed-cancellation retry with the matching reason stays ok"
+    },
+    {
+      "code": "result_digest_mismatch",
+      "message": "persisted task result digest does not match its structured result",
+      "hint": "the stored result was tampered with or corrupted; reject and ask for a resubmission"
+    },
+    {
+      "code": "result_status_mismatch",
+      "message": "resultStatus does not match the submitted task result",
+      "hint": "the acceptance decision must reference the status the worker actually submitted"
+    },
+    {
+      "code": "illegal_transition",
+      "message": "illegal_transition",
+      "hint": "state change not in the task transition table (task-transitions.json); the response carries from/to and a SIG-MISMATCH event was emitted"
+    },
+    {
+      "code": "terminal_state_immutable",
+      "message": "terminal state",
+      "hint": "completed/revision/blocked/cancelled tasks are immutable; start a new task instead"
+    },
+    {
+      "code": "unexpected_state",
+      "message": "unexpected state",
+      "hint": "the task meta carries a status outside the transition table; repair the state, do not force a transition"
+    },
+    {
+      "code": "loop_id_mismatch",
+      "message": "loop_id_mismatch",
+      "hint": "the loop's task mapping disagrees with the task meta identity; align project.loop.task_id before plan_loop"
+    },
+    {
+      "code": "legacy_resubmit_blocked",
+      "message": "legacy submitted task has no submission identity and cannot be resubmitted",
+      "hint": "pre-identity legacy submissions are adopted once and never resubmitted"
+    },
+    {
+      "code": "sync_failed",
+      "message": "state persisted locally but shared-storage sync failed; retry to complete",
+      "hint": "retryable; the local state is already advanced, the retry completes the shared-storage projection"
+    },
+    {
+      "code": "assignment_sync_failed",
+      "message": "task assigned but shared-storage sync failed; retry to complete",
+      "hint": "retryable; the idempotent retry (assigned + eventId) finishes the assignment"
+    },
+    {
+      "code": "task_files_publish_failed",
+      "message": "failed to publish task files to shared storage",
+      "hint": "retryable; the task stays prepared, so a retry cannot produce a duplicate assignment"
+    },
+    {
+      "code": "room_membership_validation_failed",
+      "message": "room membership validation failed",
+      "hint": "retryable; verify the assignee's Matrix membership in the task room"
+    },
+    {
+      "code": "complete_project_sync_failed",
+      "message": "shared storage sync failed after complete_project",
+      "hint": "retryable; local state is already completed and retrying complete_project is idempotent"
+    },
+    {
+      "code": "filesync_process_failed",
+      "message": "filesync process failed",
+      "hint": "retryable; check the shared-storage backend (MinIO/OSS) connectivity"
+    },
+    {
+      "code": "workspace_dir_required",
+      "message": "workspaceDir is required",
+      "hint": "pass the runtime workspace containing shared/"
+    },
+    {
+      "code": "filesync_global_shared_read_only",
+      "message": "global-shared is read-only for TeamHarness filesync",
+      "hint": "only shared/ may be pushed; global-shared/ is controller-owned"
+    },
+    {
+      "code": "filesync_action_required",
+      "message": "action is required; use pull, push, stat, or list",
+      "hint": "filesync supports exactly pull, push, stat, list"
+    },
+    {
+      "code": "artifact_file_not_found",
+      "message": "artifact file not found",
+      "hint": "the path must exist under the workspace shared/ tree"
+    },
+    {
+      "code": "team_leader_id_missing",
+      "message": "team leader Matrix ID not found in runtime config",
+      "hint": "the controller must project a leader member with a Matrix user id into runtime.yaml"
+    },
+    {
+      "code": "matrix_env_required",
+      "message": "AGENTTEAMS_MATRIX_URL and AGENTTEAMS_WORKER_MATRIX_TOKEN are required",
+      "hint": "the Matrix homeserver URL and worker token must be configured"
+    },
+    {
+      "code": "unknown_tool",
+      "message": "unknown_tool",
+      "hint": "the MCP server exposes health, message, roomflow, filesync, artifact, projectflow, taskflow"
+    },
+    {
+      "code": "forbidden_tool",
+      "message": "forbidden_tool",
+      "hint": "the tool is not available to the caller's role (see team-protocol.json message_tool)"
+    },
+    {
+      "code": "cancel_reason_required",
+      "message": "reason is required",
+      "hint": "cancellation is durable and audited; it always carries a reason"
+    },
+    {
+      "code": "attention_kind_invalid",
+      "message": "kind must be one of approval, decision, escalation, other",
+      "hint": "request_attention kinds are approval | decision | escalation | other"
+    },
+    {
+      "code": "iteration_exceeds_max",
+      "message": "currentIteration cannot exceed maxIterations",
+      "hint": "the loop plan's currentIteration must stay within maxIterations"
+    },
+    {
+      "code": "task_id_not_in_project",
+      "message": "taskId must belong to projectId",
+      "hint": "create_quick_project ties the generated task to the generated project"
+    },
+    {
+      "code": "target_must_be_room",
+      "message": "target must be a Matrix room target such as room:!room:domain",
+      "hint": "messages target Matrix rooms, not users or role names"
+    },
+    {
+      "code": "missing_decision_class",
+      "message": "decision_class is required (r1..r6, see contracts/decision-classes.json)",
+      "hint": "W2 protocol guard (protocol.enforce on): delegate_task must carry payload.decisionClass r1..r6"
+    },
+    {
+      "code": "unknown_decision_class",
+      "message": "decision_class must be one of r1, r2, r3, r4, r5, r6 (see contracts/decision-classes.json)",
+      "hint": "W2 protocol guard: the decision classes are r1..r6; an absent field reads as r4"
+    },
+    {
+      "code": "self_review_forbidden",
+      "message": "reviewer must differ from submitted_by",
+      "hint": "W2 review gate: the reviewer (role:account) must not be the same identity or account as the submitting identity"
+    },
+    {
+      "code": "review_not_passed",
+      "message": "accept_task_result requires a passing review verdict (current verdict:",
+      "hint": "W2 accept gate: run review_task with verdict pass before accepting the result"
+    },
+    {
+      "code": "approval_required",
+      "message": "r1 task result requires a resolved approval record before it can be decided",
+      "hint": "W2 accept gate: resolve an attention record of kind=approval before deciding an r1 result"
+    },
+    {
+      "code": "frozen_unfreeze_requires_approval",
+      "message": "task is frozen; only a resolved approval record (kind=approval) can unfreeze it",
+      "hint": "W2 stall chain: the task reached decision_status frozen (3 unanswered stalls); resolve the open approval record to unfreeze"
+    }
+  ]
+}

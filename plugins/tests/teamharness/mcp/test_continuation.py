@@ -122,6 +122,20 @@ def authoritative_project_pull(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "_pull_project", lambda *_args, **_kwargs: True)
 
 
+@pytest.fixture(autouse=True)
+def authoritative_task_pull(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep continuation tests focused on the post-pull state contract.
+
+    Task pull success/failure semantics are covered by
+    ``test_protocol_guard.py`` (round 9 regressions). The guarded
+    cross-actor writes (cancel_task / accept_task_result) now load the
+    authoritative task before writing, so every test gets a successful
+    pull (the local state is authoritative) unless a test explicitly
+    fails the pull to assert the fail-closed path.
+    """
+    monkeypatch.setattr(server, "_pull_task", lambda *_args, **_kwargs: True)
+
+
 @pytest.fixture
 def successful_side_effects(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[Any]]:
     calls: dict[str, list[Any]] = {"publish": [], "sync": [], "project_sync": []}
@@ -1159,24 +1173,37 @@ def test_cancel_sync_failure_is_retryable_and_repairs_without_changing_reason(
 
 
 @pytest.mark.parametrize(
-    ("result_status", "expected_node_status"),
+    "result_status",
     [
-        ("SUCCESS", "completed"),
-        ("SUCCESS_WITH_NOTES", "completed"),
-        ("REVISION_NEEDED", "revision"),
-        ("BLOCKED", "blocked"),
-        ("INTERRUPTED", "blocked"),
+        "SUCCESS",
+        "SUCCESS_WITH_NOTES",
+        "REVISION_NEEDED",
+        "BLOCKED",
+        "INTERRUPTED",
     ],
 )
-def test_supported_result_status_round_trips_through_submit_check_and_accept(
+def test_failed_pull_fails_closed_for_submit_and_accept_but_check_still_reads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     successful_side_effects: dict[str, list[Any]],
     result_status: str,
-    expected_node_status: str,
 ) -> None:
+    """Round 11 (#1467) extends the W2 invariant to every whole-task
+    writer: submit_task loads the authoritative task before its write and
+    fails closed on a failed pull (round 9 left it on the local copy), and
+    the cross-actor accept keeps the same fail-closed behaviour.
+    check_task stays a read, so it still succeeds and surfaces
+    ``pulled`` — a reader may tolerate a failed pull, a writer may not."""
     project_id, task_id = _write_project_and_task(tmp_path)
     monkeypatch.setattr(server, "_pull_task", lambda *_args, **_kwargs: False)
+
+    task_path = tmp_path / "shared" / "tasks" / task_id / "meta.json"
+    project_path = tmp_path / "shared" / "projects" / project_id / "meta.json"
+    before_task = task_path.read_bytes()
+    before_project = project_path.read_bytes()
+    before_side_effect_counts = {
+        name: len(calls) for name, calls in successful_side_effects.items()
+    }
 
     submitted = _submit(tmp_path, task_id, status=result_status)
     checked = _tool_payload(
@@ -1196,21 +1223,34 @@ def test_supported_result_status_round_trips_through_submit_check_and_accept(
             "payload": {
                 "projectId": project_id,
                 "taskId": task_id,
-                "submissionId": submitted["task"]["submission_id"],
                 "resultStatus": result_status,
                 "summary": "Review the submitted result.",
             },
         },
     )
 
-    assert submitted["ok"] is True
-    assert submitted["task"]["result_status"] == result_status
+    # Round 11: the submit is a whole-task write, so a failed authoritative
+    # pull fails closed instead of writing the stale local copy back.
+    assert submitted["ok"] is False
+    assert "stale local copy" in submitted["error"]
+    # The read-only check still succeeds (it may read the local copy) and
+    # reports that the pull did not land: the task is not submitted because
+    # the submit itself failed closed.
     assert checked["ok"] is True
-    assert checked["effective"] is True
-    assert checked["validationErrors"] == []
-    assert checked["result"]["status"] == result_status
-    assert accepted["ok"] is True
-    assert accepted["nodeStatus"] == expected_node_status
+    assert checked["pulled"] is False
+    assert checked["effective"] is False
+    # The cross-actor accept fails closed on the failed authoritative
+    # pull (the ValueError raised by _load_authoritative_task, surfaced
+    # through the projectflow error wrapper) ...
+    assert accepted["ok"] is False
+    assert "stale local copy" in accepted["error"]
+    # ... and every writer wrote nothing back: local state untouched,
+    # nothing committed to shared storage.
+    assert task_path.read_bytes() == before_task
+    assert project_path.read_bytes() == before_project
+    assert {
+        name: len(calls) for name, calls in successful_side_effects.items()
+    } == before_side_effect_counts
 
 
 @pytest.mark.parametrize("result_status", ["FAILED", "PARTIAL"])

@@ -9,7 +9,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # Cross-group imports are top-level absolutes (see lifecycle/transitions.py
 # note): mcp/ on sys.path keeps one module identity in both load modes.
@@ -1067,6 +1067,294 @@ def _pull_task(arguments: dict[str, Any], task_id: str) -> bool:
     return True
 
 
+# mc phrases an absent object/prefix with these markers; every other
+# failure (network, auth, backend) must stay fail-closed.
+_ABSENT_STORAGE_MARKERS = (
+    "does not exist",
+    "not found",
+    "no such key",
+    "no such object",
+    "nosuchkey",
+)
+
+
+def _remote_task_absent(arguments: dict[str, Any], task_id: str) -> bool:
+    """True only when shared storage CONFIRMS the task meta is absent.
+
+    ``pull`` (mc mirror of the task directory) fails for a missing source
+    exactly like it fails for a storage outage, so a failed pull on its own
+    cannot tell "brand-new task" from "unreadable task". A stat probe on the
+    meta object separates them: mc's absence phrasings mean the caller is
+    creating the task (first delegation), anything else stays fail-closed.
+    """
+    probe = dict(arguments)
+    probe.update({"action": "stat", "path": f"shared/tasks/{task_id}/meta.json"})
+    result = _filesync(probe)
+    if result.get("ok"):
+        return False
+    error = str(result.get("error") or "").lower()
+    return any(marker in error for marker in _ABSENT_STORAGE_MARKERS)
+
+
+def _load_authoritative_task_optional(
+    arguments: dict[str, Any], task_id: str
+) -> dict[str, Any] | None:
+    """W2 round 10 (issue #1467): pull, then read; None when no task exists.
+
+    Same fail-closed pull as ``_load_authoritative_task``: a failed pull
+    raises (the caller must not write on a stale local copy). A task that
+    is genuinely absent from shared storage is NOT an error here — the
+    caller keeps the legacy no-task compatibility while protocol
+    enforcement is off — so the absence is reported as ``None`` instead of
+    raising.
+    """
+    if not _pull_task(arguments, task_id):
+        # A failed pull is ambiguous: a brand-new task has no remote prefix
+        # at all (the first delegation), while a storage failure has a
+        # remote copy the caller must not overwrite. Only a CONFIRMED
+        # absence takes the creation path; everything else fails closed.
+        if _remote_task_absent(arguments, task_id):
+            return None
+        raise ValueError(
+            "cannot pull the authoritative task state from shared storage; "
+            "refusing to write on a stale local copy (retry)"
+        )
+    task = _read_json(_task_state_path(arguments, task_id))
+    if not task:
+        return None
+    if not task.get("task_id") and task.get("taskId"):
+        task["task_id"] = str(task["taskId"])
+    return task
+
+
+def _load_authoritative_task(arguments: dict[str, Any], task_id: str) -> dict[str, Any]:
+    """W2 round 9 (issue #1467): authoritative task read for a
+    cross-actor task write.
+
+    _sync_task pushes the WHOLE local task directory (mc mirror), so
+    writing on a stale local copy overwrites whatever a newer writer
+    persisted: a review written onto a leader's cached submitted/open
+    task clobbered a decision_status=frozen with its approval records
+    and decision_status_history (the maintainer's round-9 repro). The
+    guarded entries (review_task / cancel_task / accept_task_result)
+    only ever write a task that already exists in shared storage
+    (submitted or in flight), so the pull must succeed: on any failure
+    the caller fails closed instead of writing the stale copy back.
+    """
+    task = _load_authoritative_task_optional(arguments, task_id)
+    if task is None:
+        raise ValueError("task not found")
+    return task
+
+
+def _remote_task_meta_etag(
+    arguments: dict[str, Any], task_id: str
+) -> tuple[str | None, str | None]:
+    """The ETag of the task meta object (filesync ``etag`` = ``mc stat``).
+
+    (etag, None) present · (None, None) absent · (None, reason) probe
+    failure. The task meta is the object every cross-actor task write
+    rewrites, so the commit guard compares the version it read with the
+    version present immediately before the mirror.
+    """
+    stat_args = dict(arguments)
+    stat_args.update({"action": "etag", "path": f"shared/tasks/{task_id}/meta.json"})
+    result = _filesync(stat_args)
+    if result.get("ok"):
+        etag = result.get("etag")
+        if etag:
+            return str(etag), None
+        return None, "the remote task meta stat returned no etag"
+    error = str(result.get("error") or "")
+    if "does not exist" in error.lower():
+        return None, None
+    return None, error
+
+
+def _remote_task_meta_body(arguments: dict[str, Any], task_id: str) -> dict[str, Any] | None:
+    """Read the committed task meta without touching local state."""
+    cat_args = dict(arguments)
+    cat_args.update({"action": "cat", "path": f"shared/tasks/{task_id}/meta.json"})
+    result = _filesync(cat_args)
+    if not result.get("ok"):
+        return None
+    content = result.get("content")
+    if not content:
+        return None
+    try:
+        body = json.loads(content)
+    except ValueError:
+        return None
+    return body if isinstance(body, dict) else None
+
+
+_TASK_META_READ_ATTEMPTS = 3
+
+
+def _load_authoritative_task_versioned(
+    arguments: dict[str, Any], task_id: str
+) -> tuple[dict[str, Any], str | None]:
+    """Authoritative task plus the ETag of the version it was read under,
+    bound together by a bracket read (stat -> pull -> stat).
+
+    The bracket invariant (#1467 round 17 window): ``mc`` has no atomic
+    read-with-version, so the pulled body is bracketed by two version
+    reads that must agree. Only when the trailing stat repeats the
+    leading one is the pulled body the object of that exact version —
+    on MinIO every put is a new object version with a new etag, so an
+    unchanged etag across the pull proves the body came from that
+    version. A body read under a version the trailing stat no longer
+    reports is discarded, and the whole bracket is re-read, bounded to
+    _TASK_META_READ_ATTEMPTS (a writer in flight on every attempt must
+    not loop the read forever).
+
+    This closes the window the previous order left open: the body was
+    pulled FIRST and stat-ed AFTER, so a freeze committed between the
+    pull and the stat bound the OLD body to the NEW etag — the pre-write
+    stat and the post-write read-back both then matched the peer's
+    version, and the whole-directory mirror erased the freeze with a
+    silent success.
+
+    Every failure is fail-closed — there is no unbound fallback, because
+    the guarded commit path writes the whole task directory on top of
+    whatever the base is:
+
+    - stat #1 probe error -> refuse: the remote version is unknown, so
+      the base cannot be verified (transport errors included);
+    - stat #1 confirms the meta absent -> "task not found" (the guarded
+      commit path only writes a task that already exists in shared
+      storage);
+    - pull failure -> refuse: writing on a stale local copy would
+      clobber whatever a newer writer persisted;
+    - stat #2 probe error -> refuse (same as stat #1);
+    - stat #2 != stat #1 (or the object disappeared) -> discard this
+      body and re-run the bracket.
+    """
+    for _ in range(_TASK_META_READ_ATTEMPTS):
+        first, error = _remote_task_meta_etag(arguments, task_id)
+        if error:
+            raise ValueError(
+                "cannot read the authoritative task version from shared storage; "
+                "refusing to write on an unverified base (retry)"
+            )
+        if first is None:
+            raise ValueError("task not found")
+        if not _pull_task(arguments, task_id):
+            raise ValueError(
+                "cannot pull the authoritative task state from shared storage; "
+                "refusing to write on a stale local copy (retry)"
+            )
+        second, error = _remote_task_meta_etag(arguments, task_id)
+        if error:
+            raise ValueError(
+                "cannot read the authoritative task version from shared storage; "
+                "refusing to write on an unverified base (retry)"
+            )
+        if second is None or second != first:
+            # A peer committed between the bracketing stats (the object
+            # can even disappear): the pulled body is not bound to any
+            # version — discard it and re-read the whole bracket.
+            continue
+        task = _read_json(_task_state_path(arguments, task_id))
+        if not task:
+            raise ValueError("task not found")
+        if not task.get("task_id") and task.get("taskId"):
+            task["task_id"] = str(task["taskId"])
+        return task, second
+    raise ValueError(
+        "cannot bind the task body to the version it was read from: "
+        "the task changed concurrently on every read attempt; refusing "
+        "to write on an unverified base (retry)"
+    )
+
+
+def _task_meta_commit_landed(
+    arguments: dict[str, Any], task_id: str, task: dict[str, Any]
+) -> bool:
+    """True when the committed remote meta carries exactly this task.
+
+    Directory mirroring is not atomic, so a peer commit can land between
+    the guard stat and the mirror. The post-commit read is the only place
+    that can tell whose write is the current one: a mismatch means this
+    attempt did not land and the caller must reload, re-apply and retry.
+    """
+    remote = _remote_task_meta_body(arguments, task_id)
+    if remote is None:
+        return False
+    return json.dumps(remote, sort_keys=True, ensure_ascii=False) == json.dumps(
+        task, sort_keys=True, ensure_ascii=False
+    )
+
+
+_TASK_COMMIT_ATTEMPTS = 3
+
+
+def _commit_task_guarded(
+    arguments: dict[str, Any],
+    task_id: str,
+    mutate: Callable[[dict[str, Any]], Any],
+    *,
+    action: str,
+    exclude: list[str] | None = None,
+    result_paths: list[str] | None = None,
+) -> tuple[dict[str, Any], Any, bool]:
+    """Load → mutate → commit a task with a version guard (#1467 round 17,
+    round 19: the commit itself is conditional).
+
+    The commit mirrors the WHOLE task directory, so writing on a base a
+    peer has already replaced erases that peer's write — the reported case
+    is a freeze committed between the authoritative pull and the mirror.
+    Every attempt reloads the authoritative task (the stat -> pull -> stat
+    bracket binds the body to the version it was read under), re-applies
+    the caller's mutation on the fresh base, refuses to proceed when the
+    base moved before the write (the pre-write stat, kept as a fast
+    signal), pushes the derived files WITHOUT the meta, and commits the
+    meta conditionally against the version the bracket read observed
+    (``_commit_task_meta``, If-Match). The conditional commit is the
+    authoritative landing check — there is no post-write read-back: a 409
+    means a peer committed during the commit window (from the pre-write
+    stat to the endpoint), so the attempt re-reads and re-applies on the
+    peer's version; any other refusal fails closed instead of degrading
+    to an unconditional push. Exhausted attempts fail closed; a silent
+    overwrite is never an outcome.
+    """
+    team = str(_runtime_team_name() or "").strip()
+    last_conflict = "the task changed concurrently"
+    for _attempt in range(1, _TASK_COMMIT_ATTEMPTS + 1):
+        task, base_etag = _load_authoritative_task_versioned(arguments, task_id)
+        result = mutate(task)
+        current, error = _remote_task_meta_etag(arguments, task_id)
+        if error:
+            raise ValueError(
+                f"{action}: cannot verify the authoritative task version before "
+                "the commit; refusing to write (retry)"
+            )
+        if base_etag is not None and current != base_etag:
+            last_conflict = "a peer committed a newer task version during the commit window"
+            continue
+        _write_task(arguments, task)
+        if not _push_task_files(
+            arguments,
+            task_id,
+            exclude=exclude or [],
+            result_paths=result_paths,
+            include_meta=False,
+        ):
+            raise ValueError(f"{action}: task sync failed (retry)")
+        commit = _commit_task_meta(task_id, task, base_etag, team)
+        if not commit.get("ok"):
+            if commit.get("conflict"):
+                last_conflict = "a peer committed a newer task version during the commit window"
+                continue
+            raise ValueError(
+                f"{action}: the conditional task meta commit failed: "
+                f"{commit.get('error') or 'unknown controller error'}; failing "
+                "closed (never degrading to an unconditional push)"
+            )
+        return task, result, True
+    raise ValueError(f"{action}: {last_conflict}; reload and retry")
+
+
 def _pull_project(arguments: dict[str, Any], project_id: str) -> bool:
     """Pull a project's meta.json from shared storage (single file) so a
     Controller-level write (pause / resume / replan) takes effect on the next
@@ -1132,5 +1420,11 @@ refs.define("_sync_task", _sync_task)
 refs.define("_sync_project", _sync_project)
 refs.define("_pull_task", _pull_task)
 refs.define("_pull_project", _pull_project)
+refs.define("_load_authoritative_task", _load_authoritative_task)
+refs.define("_load_authoritative_task_optional", _load_authoritative_task_optional)
+
+# Rebind to a proxy so a test monkeypatch of server._pull_task is visible
+# inside this module (same pattern as taskflow's _write_task).
+_pull_task = refs.proxy("_pull_task")
 
 

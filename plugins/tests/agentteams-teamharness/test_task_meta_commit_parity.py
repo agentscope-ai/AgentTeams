@@ -30,16 +30,32 @@ def _load_legacy_tests() -> Any:
     return module
 
 
-def _load_bundle_server() -> Any:
-    legacy_root = LEGACY_MCP_DIR.as_posix() + "/"
+def _evict_mcp_modules() -> None:
+    """Evict every cached ``mcp`` module — from BOTH trees.
+
+    The mcp subpackages (artifact / common / lifecycle / project / room /
+    transport) are namespace packages WITHOUT ``__file__``, so the old
+    ``__file__``-prefix filter left them behind: the surviving package
+    objects kept their stale submodule attributes, and the re-exec'd
+    bundle server's ``from mcp.artifact import sync`` bound the STALE
+    sync module while the later submodule imports re-registered the
+    fresh one — monkeypatches on ``server.sync`` then missed the module
+    actually executing. Evicting by name (plus the import-cache
+    invalidation) makes every ``mcp.*`` import a fresh one resolved from
+    the tree at the front of sys.path.
+    """
+    importlib.invalidate_caches()
     for name in [
-        name
-        for name, module in sys.modules.items()
-        if name == "mcp" or name.startswith("mcp.")
+        name for name in sys.modules if name == "mcp" or name.startswith("mcp.")
     ]:
-        file = getattr(sys.modules[name], "__file__", None)
-        if file and file.replace("\\", "/").startswith(legacy_root):
-            del sys.modules[name]
+        del sys.modules[name]
+
+
+def _load_bundle_server() -> Any:
+    # The legacy suite (run first in the gate) leaves its own mcp.* in
+    # sys.modules; evicting ALL of them (namespace packages included) is
+    # safe — nothing later in the gate needs the legacy modules.
+    _evict_mcp_modules()
     spec = importlib.util.spec_from_file_location(
         "teamharness_bundle_server_task_meta_test",
         BUNDLE_MCP_DIR / "server.py",
@@ -51,22 +67,24 @@ def _load_bundle_server() -> Any:
         spec.loader.exec_module(module)
     finally:
         sys.path.remove(str(BUNDLE_MCP_DIR))
+    # The tests patch server.sync; the executing code must come from the
+    # SAME module. This identity check is the guard against the loader
+    # bug above: a stale sync from the other tree makes every
+    # monkeypatch a no-op and the real _commit_task_meta fail closed on
+    # the missing AGENTTEAMS_CONTROLLER_URL.
+    sync_file = str(getattr(module.sync, "__file__", "") or "")
+    assert sync_file.startswith(BUNDLE_MCP_DIR.as_posix() + "/"), (
+        f"the bundle server bound a stale sync module: {sync_file!r} "
+        f"(expected under {BUNDLE_MCP_DIR.as_posix()})"
+    )
     return module
 
 
 @pytest.fixture()
-def server(monkeypatch: pytest.MonkeyPatch) -> Any:
+def server() -> Any:
     module = _load_bundle_server()
     yield module
-    legacy_root = BUNDLE_MCP_DIR.as_posix() + "/"
-    for name in [
-        name
-        for name, module in sys.modules.items()
-        if name == "mcp" or name.startswith("mcp.")
-    ]:
-        file = getattr(sys.modules[name], "__file__", None)
-        if file and file.replace("\\", "/").startswith(legacy_root):
-            del sys.modules[name]
+    _evict_mcp_modules()
 
 
 def test_bundle_commits_meta_conditionally(server: Any, tmp_path: Path, monkeypatch: Any) -> None:

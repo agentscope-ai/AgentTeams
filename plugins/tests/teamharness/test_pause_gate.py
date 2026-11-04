@@ -378,8 +378,16 @@ def _install_sync_fakes(
     controller's conditional commit (module global on server.sync)."""
     monkeypatch.setattr(server, "_filesync", storage)
     monkeypatch.setattr(server.sync, "_commit_project_meta", storage.commit)
-    # #1471: the task meta commit is the conditional, version-bound path too;
-    # the fake models both endpoints so a delegate/ack/submit in these tests
+    # The W2 Task guards pull the authoritative task before a cross-actor
+    # write (ack/submit/review). These tests model a task that already
+    # exists in shared storage, so the pull succeeds as a no-op and the
+    # local copy stays authoritative: the pause semantics under test are
+    # the project gate, not the task-read failure path (covered by the
+    # protocol-guard suite).
+    monkeypatch.setattr(server, "_pull_task", lambda arguments, task_id: True)
+    monkeypatch.setattr(server, "_remote_task_absent", lambda arguments, task_id: False)
+    # The task meta commit is the conditional, version-bound path too; the
+    # fake models both endpoints so a delegate/ack/submit in these tests
     # never reaches the real controller client.
     monkeypatch.setattr(server.sync, "_commit_task_meta", storage.commit_task)
 

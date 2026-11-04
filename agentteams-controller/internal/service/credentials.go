@@ -92,7 +92,19 @@ func (s *FileCredentialStore) Save(_ context.Context, workerName string, creds *
 		"WORKER_PASSWORD=%q\nWORKER_MINIO_PASSWORD=%q\nWORKER_GATEWAY_KEY=%q\nWORKER_MATRIX_TOKEN=%q\n",
 		creds.MatrixPassword, creds.MinIOPassword, creds.GatewayKey, creds.MatrixToken,
 	)
-	return os.WriteFile(path, []byte(content), 0600)
+	f, err := os.CreateTemp(s.Dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.WriteString(content); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
 }
 
 func (s *FileCredentialStore) Delete(_ context.Context, workerName string) error {

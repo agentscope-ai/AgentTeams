@@ -109,6 +109,9 @@ func indexArtifact(modules json.RawMessage, module, version, artifact string) (n
 	if pluginID == "" {
 		pluginID = module
 	}
+	if !validModuleToken(pluginID) {
+		return "", "", "", "", http.StatusBadGateway, "millforge index: invalid pluginId"
+	}
 	kind = entry.Kind
 	if kind == "runner" {
 		return "", "", "", "", http.StatusBadRequest, "runner modules are not installed as qwenpaw plugins"

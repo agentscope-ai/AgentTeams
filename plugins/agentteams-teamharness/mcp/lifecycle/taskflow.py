@@ -1496,12 +1496,18 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                             "is recorded — retry request_attention (idempotent)."
                         ),
                     }
+            # Every skip path carries an explicit delivery receipt
+            # (recipients/gaps, NOTIFICATION_GAP_REASONS vocabulary) so
+            # the notification_log entry below is never "sent without a
+            # record": a skip is a gap, not a silence.
             room_id = str(task.get("room_id") or "").strip()
             if not room_id:
                 notification = {
                     "sent": False,
                     "skipped": True,
                     "error": "task has no room_id",
+                    "recipients": [],
+                    "gaps": [{"reason": "no_room_id"}],
                 }
             else:
                 leader = _team_leader_matrix_id()
@@ -1510,14 +1516,28 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                         "sent": False,
                         "skipped": True,
                         "error": "team leader Matrix ID not found in runtime config",
+                        "recipients": [],
+                        "gaps": [{"reason": "no_leader_mxid"}],
                     }
                 else:
                     membership = _validate_assignee_membership(room_id, leader)
                     if not membership.get("ok"):
+                        membership_error = str(
+                            membership.get("error") or "room membership check failed"
+                        )
                         notification = {
                             "sent": False,
                             "skipped": True,
-                            "error": str(membership.get("error") or "room membership check failed"),
+                            "error": membership_error,
+                            "recipients": [],
+                            "gaps": [
+                                {
+                                    "recipient": leader,
+                                    "role": "leader",
+                                    "reason": "leader_not_in_room",
+                                    "error": membership_error[:300],
+                                }
+                            ],
                         }
                     else:
                         notification = _send_attention_notification(
@@ -1538,11 +1558,14 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             # `room_accepted` is Matrix's acceptance of the room event;
             # `channel_accepted` is the per-recipient receipt and stays
             # null unless an adapter reports it — never inferred from room
-            # acceptance. A first request appends the entry; a retry of
-            # the same pending record (same attempt) re-uses it — the
-            # entry's previous physical outcome is demoted into
-            # `retries` and the entry is re-pointed at the new outcome,
-            # so the log never grows a second entry per attempt.
+            # acceptance. `recipients`/`gaps` is the per-recipient
+            # delivery receipt from the send result (a gap is not a
+            # failure; only room_accepted=false is). A first request
+            # appends the entry; a retry of the same pending record
+            # (same attempt) re-uses it — the entry's previous physical
+            # outcome (including its receipt) is demoted into `retries`
+            # and the entry is re-pointed at the new outcome, so the log
+            # never grows a second entry per attempt.
             outcome_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
             log_entries = record.setdefault("notification_log", [])
             folded_entry = None
@@ -1556,12 +1579,18 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     "room_accepted": bool(folded_entry.get("room_accepted")),
                     "channel_accepted": folded_entry.get("channel_accepted"),
                 }
+                if "recipients" in folded_entry:
+                    previous_outcome["recipients"] = list(folded_entry["recipients"])
+                if "gaps" in folded_entry:
+                    previous_outcome["gaps"] = list(folded_entry["gaps"])
                 if folded_entry.get("error"):
                     previous_outcome["error"] = str(folded_entry["error"])[:300]
                 folded_entry.setdefault("retries", []).append(previous_outcome)
                 folded_entry["ts"] = outcome_ts
                 folded_entry["room_accepted"] = bool(notification.get("sent"))
                 folded_entry["channel_accepted"] = notification.get("channel_accepted")
+                folded_entry["recipients"] = list(notification.get("recipients") or [])
+                folded_entry["gaps"] = list(notification.get("gaps") or [])
                 folded_entry.pop("error", None)
                 if notification.get("error"):
                     folded_entry["error"] = str(notification["error"])[:300]
@@ -1571,6 +1600,8 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     "ts": outcome_ts,
                     "room_accepted": bool(notification.get("sent")),
                     "channel_accepted": notification.get("channel_accepted"),
+                    "recipients": list(notification.get("recipients") or []),
+                    "gaps": list(notification.get("gaps") or []),
                     "retries": list(notification.get("retries") or []),
                 }
                 if notification.get("error"):

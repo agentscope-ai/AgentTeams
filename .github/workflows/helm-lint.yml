@@ -20,6 +20,9 @@ on:
       - 'tests/check-installer-pre-1.2-env-compat.sh'
       - 'tests/check-installer-wasm-registry.sh'
       - 'tests/check-installer-wasm-registry.ps1'
+      - 'tests/check-custom-llm-endpoint.sh'
+      - 'tests/check-custom-llm-endpoint.ps1'
+      - 'manager/scripts/init/setup-higress.sh'
       - 'tests/check-installer-username-validation.sh'
       - 'tests/check-installer-username-validation.ps1'
       - 'tests/check-installer-env-data-dir-readback.sh'
@@ -44,6 +47,7 @@ on:
       - 'tests/lib/test29-readiness.sh'
       - 'hack/local-k8s-up.sh'
       - 'tests/check-create-project-grant-admin.sh'
+      - 'tests/check-create-project-team.sh'
       - 'manager/agent/skills/project-management/**'
       - 'manager/agent/skills/coding-cli-management/**'
       - 'manager/agent/worker-skills/coding-cli/**'
@@ -76,6 +80,13 @@ jobs:
       - name: Check PowerShell installer WASM registry
         shell: pwsh
         run: ./tests/check-installer-wasm-registry.ps1
+
+      - name: Check Shell custom LLM endpoints
+        run: bash tests/check-custom-llm-endpoint.sh
+
+      - name: Check PowerShell custom LLM endpoints
+        shell: pwsh
+        run: ./tests/check-custom-llm-endpoint.ps1
 
       - name: Check Bash installer username validation
         run: bash tests/check-installer-username-validation.sh
@@ -122,6 +133,9 @@ jobs:
 
       - name: Check create-project grant-admin wiring
         run: bash tests/check-create-project-grant-admin.sh
+
+      - name: Check create-project --team roster and join reporting
+        run: bash tests/check-create-project-team.sh
 
       - name: Check coding-cli Qoder PAT and .processing guard
         run: bash tests/check-coding-cli-qoder-pat-processing.sh

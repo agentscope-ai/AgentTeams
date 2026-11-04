@@ -217,3 +217,11 @@ func TestIndexArtifactPluginIDAndKind(t *testing.T) {
 		t.Fatalf("non-zip artifact: status=%d, want 400", status)
 	}
 }
+
+func TestIndexArtifactPrefersZip(t *testing.T) {
+	modules := []byte(`{"p":{"latest":"1.0.0","versions":{"1.0.0":{"artifacts":[{"name":"p.tar.gz","sha256":"aaa"},{"name":"p-qwenpaw-1.0.0.zip","sha256":"bbb"}]}}}}`)
+	name, sha, _, _, status, _ := indexArtifact(modules, "p", "", "")
+	if status != 200 || name != "p-qwenpaw-1.0.0.zip" || sha != "bbb" {
+		t.Fatalf("name=%q sha=%q status=%d", name, sha, status)
+	}
+}

@@ -123,21 +123,42 @@ func indexArtifact(modules json.RawMessage, module, version, artifact string) (n
 	if !ok {
 		return "", "", "", "", http.StatusNotFound, "module version not found in index"
 	}
-	for _, a := range ver.Artifacts {
-		if artifact == "" || a.Name == artifact {
-			if a.SHA256 == "" {
-				return "", "", "", "", http.StatusBadGateway, "millforge index: artifact checksum missing"
+	// Prefer the qwenpaw zip when the caller did not pin an artifact: a
+	// release may also carry the runtime-neutral tar.gz and a stable-name
+	// duplicate of the zip.
+	selected := -1
+	if artifact != "" {
+		for i, a := range ver.Artifacts {
+			if a.Name == artifact {
+				selected = i
+				break
 			}
-			if !validModuleToken(version) || !validModuleToken(a.Name) {
-				return "", "", "", "", http.StatusBadGateway, "millforge index: invalid version/artifact token"
+		}
+	} else {
+		for i, a := range ver.Artifacts {
+			if strings.HasSuffix(a.Name, ".zip") {
+				selected = i
+				break
 			}
-			if !strings.HasSuffix(a.Name, ".zip") {
-				return "", "", "", "", http.StatusBadRequest, "install artifact must be a zip package"
-			}
-			return a.Name, a.SHA256, pluginID, kind, http.StatusOK, ""
+		}
+		if selected < 0 && len(ver.Artifacts) > 0 {
+			selected = 0
 		}
 	}
-	return "", "", "", "", http.StatusNotFound, "module artifact not found in index"
+	if selected < 0 {
+		return "", "", "", "", http.StatusNotFound, "module artifact not found in index"
+	}
+	a := ver.Artifacts[selected]
+	if a.SHA256 == "" {
+		return "", "", "", "", http.StatusBadGateway, "millforge index: artifact checksum missing"
+	}
+	if !validModuleToken(version) || !validModuleToken(a.Name) {
+		return "", "", "", "", http.StatusBadGateway, "millforge index: invalid version/artifact token"
+	}
+	if !strings.HasSuffix(a.Name, ".zip") {
+		return "", "", "", "", http.StatusBadRequest, "install artifact must be a zip package"
+	}
+	return a.Name, a.SHA256, pluginID, kind, http.StatusOK, ""
 }
 
 // artifactURL composes the raw artifact URL for the selected source.

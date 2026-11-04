@@ -1,4 +1,4 @@
-# TOOL_SCHEMAS registration table for the 7 MCP tools (W1-a2: real module)
+# TOOL_SCHEMAS registration table for the 8 MCP tools (W1-a2: real module)
 from __future__ import annotations
 
 from typing import Any
@@ -564,6 +564,35 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "workspaceDir": {
                     "type": "string",
                     "description": "Runtime workspace containing shared/tasks.",
+                },
+            },
+            "additionalProperties": True,
+        },
+    },
+    "build_review_context": {
+        "description": (
+            "Assemble the review context for one task: exactly two ref "
+            "classes — S2 signal refs (the closed SIG-* event types "
+            "emitted for this task, read from the local events mirror) "
+            "and artifact refs (the task's deliverables and result_path). "
+            "Group history and chat noise are never included; a task with "
+            "no refs returns an empty set, not an error. Read-only and "
+            "local: this tool never contacts Matrix."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "taskId": {
+                    "type": "string",
+                    "description": "Safe task id used under shared/tasks/{taskId}.",
+                },
+                "team": {
+                    "type": "string",
+                    "description": "Team whose S2 event stream to read (default: the current runtime team).",
+                },
+                "workspaceDir": {
+                    "type": "string",
+                    "description": "Runtime workspace containing shared/; usually inferred.",
                 },
             },
             "additionalProperties": True,

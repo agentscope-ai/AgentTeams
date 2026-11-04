@@ -235,8 +235,13 @@ func (m *moduleInstaller) uploadPlugin(ctx context.Context, base, filename strin
 	var out struct {
 		Loaded bool `json:"loaded"`
 	}
-	_ = json.Unmarshal(body, &out)
-	return out.Loaded, http.StatusOK, ""
+	if err := json.Unmarshal(body, &out); err != nil {
+		return false, http.StatusBadGateway, "qwenpaw plugin upload returned an invalid response"
+	}
+	if !out.Loaded {
+		return false, http.StatusBadGateway, "qwenpaw installed the plugin but did not load it"
+	}
+	return true, http.StatusOK, ""
 }
 
 // previousVersion reads the target's installed version for the module.

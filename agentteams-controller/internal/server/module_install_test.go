@@ -252,3 +252,30 @@ func TestInstallOneUsesIndexPluginID(t *testing.T) {
 		t.Fatalf("status=%d loaded=%v prev=%q msg=%s", status, loaded, prev, msg)
 	}
 }
+
+func TestInstallOneFailsWhenNotLoaded(t *testing.T) {
+	artifact := []byte("zip-bytes")
+	sum := sha256.Sum256(artifact)
+	index := fmt.Sprintf(`{"schema":1,"channel":"beta","modules":{"teamharness":{"latest":"0.1.0","versions":{"0.1.0":{"artifacts":[{"name":"teamharness-0.1.0-qwenpaw.zip","sha256":"%s"}]}}}}}`, hex.EncodeToString(sum[:]))
+	c := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/releases/channels.json"):
+			return testResp(200, index), nil
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/releases/teamharness/0.1.0/"):
+			return testResp(200, string(artifact)), nil
+		case r.Method == http.MethodGet && r.URL.Path == "/api/plugins":
+			return testResp(200, `[{"id":"teamharness","version":"0.0.9"}]`), nil
+		case r.Method == http.MethodPost && r.URL.Path == "/api/plugins/upload":
+			return testResp(200, `{"id":"teamharness","loaded":false}`), nil
+		default:
+			return testResp(404, "not found"), nil
+		}
+	})}
+	m := &moduleInstaller{index: &MillforgeIndexHandler{client: c}, http: c}
+	_, _, status, msg := m.installOne(context.Background(), "http://worker.test", "teamharness", moduleInstallRequest{
+		Source: "github", Repo: "o/r", Ref: "main", Version: "0.1.0",
+	})
+	if status != 502 || !strings.Contains(msg, "did not load") {
+		t.Fatalf("status=%d msg=%q", status, msg)
+	}
+}

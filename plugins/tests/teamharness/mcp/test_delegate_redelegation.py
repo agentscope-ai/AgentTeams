@@ -114,6 +114,7 @@ def delegate_side_effects(
     monkeypatch.setenv("AGENTTEAMS_MATRIX_URL", "http://matrix.example.test")
     monkeypatch.setenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "test-token")
     monkeypatch.setattr(server, "_pull_project", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(server, "_pull_task", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(server, "_sync_task", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(server, "_send_delegate_notification", notify)
     monkeypatch.setattr(
@@ -335,6 +336,7 @@ def _make_lost_response_server(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("AGENTTEAMS_MATRIX_URL", f"http://127.0.0.1:{port}")
     monkeypatch.setenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "test-token")
     monkeypatch.setattr(server, "_pull_project", lambda *_a, **_k: True)
+    monkeypatch.setattr(server, "_pull_task", lambda *_a, **_k: True)
     monkeypatch.setattr(server, "_sync_task", lambda *_a, **_k: True)
     monkeypatch.setattr(server, "_validate_assignee_membership", lambda *_a, **_k: {"ok": True})
     return httpd, state

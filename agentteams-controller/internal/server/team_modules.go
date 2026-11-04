@@ -146,9 +146,10 @@ func (h *ResourceHandler) aggregateTeamModules(r *http.Request, team *v1beta1.Te
 	}
 
 	out := make([]teamModuleView, 0, len(modules))
+	expected := len(entries)
 	for _, view := range modules {
 		sort.Slice(view.Members, func(i, j int) bool { return view.Members[i].Worker < view.Members[j].Worker })
-		view.Consistent = len(view.Versions) == 1
+		view.Consistent = len(view.Versions) == 1 && len(view.Members) == expected && len(memberErrors) == 0
 		for _, m := range view.Members {
 			if !m.Loaded {
 				view.Consistent = false

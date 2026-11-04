@@ -460,7 +460,13 @@ func (h *ResourceHandler) InstallTeamModule(kubeMode, containerPrefix string) ht
 		}
 		updated, failed, target, status, msg := m.installTeam(r.Context(), &team, module, body)
 		if status != http.StatusOK {
-			httputil.WriteError(w, status, msg)
+			resp := map[string]any{"error": msg, "updated": updated, "target_version": target}
+			if failed != nil {
+				resp["failed"] = failed
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
 		view, found, _ := m.rh.aggregateTeamModule(r, &team, module, m.proxy)

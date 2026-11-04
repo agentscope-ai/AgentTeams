@@ -96,3 +96,53 @@ func TestTeamModulesKubeMode(t *testing.T) {
 		t.Fatalf("status=%d, want 503", rec.Code)
 	}
 }
+
+func TestTeamModulesInconsistentWhenMemberMissingModule(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	team := &v1beta1.Team{}
+	team.Name = "alpha"
+	team.Namespace = "default"
+	team.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{{Name: "w1", Role: "worker"}, {Name: "w2", Role: "worker"}}
+	w1 := &v1beta1.Worker{}
+	w1.Name = "w1"
+	w1.Namespace = "default"
+	w2 := &v1beta1.Worker{}
+	w2.Name = "w2"
+	w2.Namespace = "default"
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(team, w1, w2).Build()
+	rh := &ResourceHandler{client: cl, namespace: "default"}
+
+	w1srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"id":"teamharness","version":"0.1.0","loaded":true}]`))
+	}))
+	defer w1srv.Close()
+	w2srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer w2srv.Close()
+	p := newWorkerPluginsProxy(rh, "embedded", "unused-")
+	p.workerBaseURL = func(name string, _ map[string]string) string {
+		if name == "w1" {
+			return w1srv.URL
+		}
+		return w2srv.URL
+	}
+	h := rh.getTeamModulesWithProxy(p, "embedded")
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/teams/alpha/modules", nil)
+	req.SetPathValue("name", "alpha")
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	var out teamModulesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Modules) != 1 || out.Modules[0].Consistent {
+		t.Fatalf("expected inconsistent module, got %+v", out)
+	}
+}

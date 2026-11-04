@@ -225,3 +225,30 @@ func TestIndexArtifactPrefersZip(t *testing.T) {
 		t.Fatalf("name=%q sha=%q status=%d", name, sha, status)
 	}
 }
+
+func TestInstallOneUsesIndexPluginID(t *testing.T) {
+	artifact := []byte("zip-bytes")
+	sum := sha256.Sum256(artifact)
+	index := fmt.Sprintf(`{"schema":1,"channel":"beta","modules":{"agentteams-matrix":{"latest":"0.1.0","pluginId":"agentteams-matrix-channel","kind":"bundle","versions":{"0.1.0":{"artifacts":[{"name":"agentteams-matrix-channel-0.1.0.zip","sha256":"%s"}]}}}}}`, hex.EncodeToString(sum[:]))
+	c := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/releases/channels.json"):
+			return testResp(200, index), nil
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/releases/agentteams-matrix/0.1.0/"):
+			return testResp(200, string(artifact)), nil
+		case r.Method == http.MethodGet && r.URL.Path == "/api/plugins":
+			return testResp(200, `[{"id":"agentteams-matrix-channel","version":"0.0.9","loaded":true}]`), nil
+		case r.Method == http.MethodPost && r.URL.Path == "/api/plugins/upload":
+			return testResp(200, `{"installed":true,"loaded":true}`), nil
+		default:
+			return testResp(404, "not found"), nil
+		}
+	})}
+	m := &moduleInstaller{index: &MillforgeIndexHandler{client: c}, http: c}
+	loaded, prev, status, msg := m.installOne(context.Background(), "http://worker.test", "agentteams-matrix", moduleInstallRequest{
+		Source: "github", Repo: "o/r", Ref: "main", Version: "0.1.0",
+	})
+	if status != 200 || !loaded || prev != "0.0.9" {
+		t.Fatalf("status=%d loaded=%v prev=%q msg=%s", status, loaded, prev, msg)
+	}
+}

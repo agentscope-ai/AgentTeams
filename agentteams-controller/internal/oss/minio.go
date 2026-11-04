@@ -505,6 +505,69 @@ func (c *MinIOClient) ListObjectsDetailed(ctx context.Context, prefix string) ([
 	return c.parseMCFind(out, prefix)
 }
 
+// ListObjectsRecursive walks every object under prefix at all levels, one
+// page at a time. It drives the SDK ListObjects channel with Recursive and
+// StartAfter instead of the mc CLI: the cursor (StartAfter) and the page
+// bound (MaxKeys) are storage parameters, so a page is one storage request
+// and the cursor is the last returned key — re-passing it as startAfter
+// walks the prefix with no gaps and no duplicates. (The mc CLI has no
+// StartAfter equivalent; mc ls --recursive cannot be paged.)
+//
+// prefix and startAfter are storage-relative keys (the same key space as
+// the rest of StorageClient); both are lifted through fullPath for the SDK,
+// which lists bucket keys. Entries are returned with Name relative to
+// prefix (the same contract as ListObjectsDetailed), and nextKey is the
+// storage-relative key of the last returned entry — empty when the prefix
+// is exhausted, so the caller can pass it back verbatim as ?cursor=.
+func (c *MinIOClient) ListObjectsRecursive(ctx context.Context, prefix, startAfter string, limit int) ([]ObjectInfo, string, error) {
+	if limit <= 0 {
+		return nil, "", fmt.Errorf("recursive list limit must be positive, got %d", limit)
+	}
+	sdk, err := c.sdkClient()
+	if err != nil {
+		return nil, "", err
+	}
+	p := strings.TrimPrefix(c.fullPath(prefix), "/")
+	opts := minio.ListObjectsOptions{
+		Prefix:    p,
+		Recursive: true,
+		MaxKeys:   limit,
+	}
+	if startAfter != "" {
+		opts.StartAfter = strings.TrimPrefix(c.fullPath(startAfter), "/")
+	}
+	storagePrefix := c.config.StoragePrefix + "/"
+	infos := make([]ObjectInfo, 0, limit)
+	lastKey := ""
+	for o := range sdk.ListObjects(ctx, c.config.Bucket, opts) {
+		if o.Err != nil {
+			return nil, "", fmt.Errorf("list objects (recursive): %w", o.Err)
+		}
+		rel := strings.TrimPrefix(o.Key, p)
+		if rel == "" {
+			continue // the prefix marker object itself (e.g. "files/")
+		}
+		infos = append(infos, ObjectInfo{
+			Name:      rel,
+			Size:      o.Size,
+			ETag:      o.ETag,
+			UpdatedAt: o.LastModified.UTC().Format(time.RFC3339),
+		})
+		lastKey = strings.TrimPrefix(o.Key, storagePrefix)
+		if len(infos) == limit {
+			break
+		}
+	}
+	nextKey := ""
+	// A full page always yields its last key as the cursor: the caller
+	// resumes strictly after it and gets an empty page when exhausted
+	// (the same contract the fake and the handler tests pin).
+	if len(infos) == limit {
+		nextKey = lastKey
+	}
+	return infos, nextKey, nil
+}
+
 // lsFormatProbe caches the answer of the one-time `mc ls --json` capability
 // probe for the life of the client.
 type lsFormatProbe struct {
@@ -565,9 +628,10 @@ func isMCUnknownFlag(err error) bool {
 //     undercount the quota exactly the way the old space-truncating parser
 //     did.
 //
-// size and etag are intentionally not read: ObjectInfo is unchanged and
-// callers stat each key for the exact bytes. Extracted so the contract is
-// testable without the mc binary.
+// size and etag are carried on direct file entries (directory entries —
+// real or synthesized from a nested key — always report 0/"" so they never
+// inherit a nested object's numbers). Extracted so the contract is testable
+// without the mc binary.
 // parseMCLsJSON parses `mc ls --json`. The structured field is "key" (the full
 // path, e.g. "bucket/alice/dir with space/f.txt"); "title" only exists in some
 // mc builds and was read here, which yielded empty names and silently dropped
@@ -613,6 +677,8 @@ func parseMCLsJSON(out, prefix string) ([]ObjectInfo, error) {
 			Key      string `json:"key"`
 			Title    string `json:"title"`
 			Modified string `json:"modified"`
+			Size     int64  `json:"size"`
+			ETag     string `json:"etag"`
 		}
 		if err := json.Unmarshal([]byte(line), &entry); err != nil {
 			return nil, fmt.Errorf("parse mc ls --json line %q: %w", line, err)
@@ -650,7 +716,15 @@ func parseMCLsJSON(out, prefix string) ([]ObjectInfo, error) {
 		if t, perr := time.Parse(time.RFC3339Nano, entry.Modified); perr == nil {
 			updated = t.UTC().Format(time.RFC3339) // callers expect RFC3339 UTC
 		}
-		infos = append(infos, ObjectInfo{Name: name, UpdatedAt: updated})
+		// Only a direct file entry (no slash left in the name) carries the
+		// object's own size/etag; a directory entry — real or synthesized
+		// from a nested key — must not inherit a nested object's numbers.
+		var size int64
+		etag := ""
+		if !strings.ContainsRune(name, '/') {
+			size, etag = entry.Size, entry.ETag
+		}
+		infos = append(infos, ObjectInfo{Name: name, UpdatedAt: updated, Size: size, ETag: etag})
 	}
 	return infos, nil
 }

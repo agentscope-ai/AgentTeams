@@ -1,7 +1,7 @@
 # Per-Human File Area, Recycle Bin, and Workspace Quota
 
 Status: implemented (P1 of #1414)
-APIs: `GET/PUT/DELETE /api/v1/humans/{name}/files/{path...}`, `GET /api/v1/humans/{name}/trash`, `POST /api/v1/humans/{name}/trash/{id}/restore`, `DELETE /api/v1/humans/{name}/trash/{id}`, `GET/PUT /api/v1/humans/{name}/quota`
+APIs: `GET /api/v1/humans/{name}/files` (root listing, `?recursive=1` flat listing), `GET/PUT/DELETE /api/v1/humans/{name}/files/{path...}`, `GET /api/v1/humans/{name}/trash`, `POST /api/v1/humans/{name}/trash/{id}/restore`, `DELETE /api/v1/humans/{name}/trash/{id}`, `GET/PUT /api/v1/humans/{name}/quota`
 
 ## Scope
 
@@ -78,7 +78,34 @@ file layout to strangers.
 ```
 
   Directory entries are synthesized from nested keys; `.keep` markers are
-  hidden; entries are sorted by name.
+  hidden; entries are sorted by name. File entries carry their byte size
+  from the listing itself; only zero-byte entries are stat'ed (a zero-byte
+  entry may be a deletion tombstone, which is dropped).
+
+### `GET /api/v1/humans/{name}/files` (recursive flat listing)
+
+An exact route (no trailing slash) with no path component. Without
+`?recursive=1` it serves the root directory listing (same shape as the
+directory case above with the empty path).
+
+- **Recursive** (`?recursive=1`): one flat, key-ordered listing of every
+  file in the area at all levels.
+  - `limit` (default **1000**, capped at **10000**; non-integer or `< 1`
+    → `400`) bounds the store page, not the entry count — objects hidden
+    from the response (tombstones, `.keep`, `.sync`/`.control`/`.trash`)
+    still consume page slots, so a page can carry fewer than `limit`
+    entries, possibly zero.
+  - `cursor=<key>` resumes the walk: the full storage key the store
+    returned as the previous page's `nextKey`. It must live inside this
+    area's prefix or the request is rejected with `400`.
+  - Response: `{"entries":[{"path":"files/<rel>","size":N,"etag":"...","updatedAt":"..."}],"nextKey":"..."}`.
+    `path` is prefixed `files/`; `nextKey` is the page's last full key,
+    or `null` when the listing is exhausted.
+  - Deleted files (tombstones) are never listed: they are zero-byte
+    objects, so only zero-byte entries get stat'ed to check for the
+    tombstone content type; a stat failure keeps the entry.
+  - `.keep`, directory markers, and the reserved `.sync`/`.control`/
+    `.trash` top levels are hidden from the entries.
 
 ### `PUT /api/v1/humans/{name}/files/{path...}`
 
@@ -152,7 +179,8 @@ Paths are relative to `files/`, NFC-normalized, and validated before any
 storage access. Rejected with `400`: absolute paths, `..` / `.` segments,
 empty segments, backslashes, control characters, non-UTF-8 input, total
 length over 1024 bytes, any segment over 255 bytes, the reserved
-top-level names `.trash` and `.sync`, and Windows reserved device names
+top-level names `.trash`, `.sync`, and `.control`, and Windows reserved
+device names
 (`CON`, `NUL`, `COM1-9`, `LPT1-9`, with or without an extension).
 
 ## Audit

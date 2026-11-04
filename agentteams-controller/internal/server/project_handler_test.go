@@ -4128,6 +4128,10 @@ func (c *conflictInjectingOSS) ListObjectsDetailed(ctx context.Context, prefix s
 	return c.mcLike.ListObjectsDetailed(ctx, prefix)
 }
 
+func (c *conflictInjectingOSS) ListObjectsRecursive(ctx context.Context, prefix, startAfter string, limit int) ([]oss.ObjectInfo, string, error) {
+	return c.mcLike.ListObjectsRecursive(ctx, prefix, startAfter, limit)
+}
+
 func (c *conflictInjectingOSS) GetObject(ctx context.Context, key string) ([]byte, error) {
 	data, err := c.mcLike.GetObject(ctx, key)
 	c.getCalls++

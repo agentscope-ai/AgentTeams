@@ -91,6 +91,33 @@ func TestParseMCLsJSONBadModifiedDegradesToEmpty(t *testing.T) {
 	}
 }
 
+// TestParseMCLsJSONCarriesSizeAndETag pins which listing entries carry the
+// object's own size/etag: direct files do; directory entries — real and
+// the ones synthesized from nested keys — always report 0/"".
+func TestParseMCLsJSONCarriesSizeAndETag(t *testing.T) {
+	out := strings.Join([]string{
+		`{"type":"file","size":5,"key":"humans/alice/files/a.txt","title":"humans/alice/files/a.txt","modified":"2026-11-01T02:33:00.000Z","etag":"d41d8cd98f00b204e9800998ecf8427e"}`,
+		`{"type":"dir","size":0,"title":"my dir/","modified":"2026-11-01T02:33:00Z"}`,
+		`{"type":"file","size":42,"key":"humans/alice/files/docs/b.txt","title":"humans/alice/files/docs/b.txt","modified":"2026-11-01T02:33:00Z","etag":"abc123"}`,
+	}, "\n")
+	infos, err := parseMCLsJSON(out, "humans/alice/files/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 3 {
+		t.Fatalf("len = %d, want 3: %+v", len(infos), infos)
+	}
+	if infos[0].Name != "a.txt" || infos[0].Size != 5 || infos[0].ETag != "d41d8cd98f00b204e9800998ecf8427e" {
+		t.Fatalf("direct file entry = %+v, want its own size and etag", infos[0])
+	}
+	if infos[1].Name != "my dir/" || infos[1].Size != 0 || infos[1].ETag != "" {
+		t.Fatalf("directory entry = %+v, want 0/\"\"", infos[1])
+	}
+	if infos[2].Name != "docs/" || infos[2].Size != 0 || infos[2].ETag != "" {
+		t.Fatalf("synthesized directory entry = %+v, must not inherit the nested file's numbers", infos[2])
+	}
+}
+
 func TestParseMCLsJSONKeepsEntryOrder(t *testing.T) {
 	out := strings.Join([]string{
 		mcLsSpaceFileLine,

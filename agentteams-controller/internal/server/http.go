@@ -284,6 +284,11 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// uniform 503 in kube mode, embedded only. ---
 	mux.Handle("GET /api/v1/workers/{name}/mcp", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(rh.WorkerMCP(deps.KubeMode, deps.ContainerPrefix)))
 
+	// --- Millforge module index (read-only proxy; module-update UI) ---
+	mfh := NewMillforgeIndexHandler()
+	mux.Handle("GET /api/v1/millforge/index",
+		mw.RequireAuthz(authpkg.ActionGet, "millforge", nil)(http.HandlerFunc(mfh.GetIndex)))
+
 	// --- Worker plugin registry (the worker's installed qwenpaw plugins;
 	// read-only registry, embedded-only — the qwenpaw runtime guard and
 	// the W8 team boundary live in the handler). ---

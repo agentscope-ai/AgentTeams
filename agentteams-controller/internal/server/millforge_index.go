@@ -1,0 +1,246 @@
+// The millforge index proxy serves a read-only view of the Millforge
+// release index (releases/channels.json) to the module-update UI. The
+// index lives in a git repository on a public raw-content host (github
+// or gitcode); an intranet deployment cannot reach those hosts from the
+// browser, so the controller fetches the file and re-serves it.
+//
+// The handler is a re-wrapping proxy, not a pass-through: the upstream
+// body is fetched with a 1 MiB cap, parsed as a JSON object, and its
+// envelope fields validated (schema must be 1, channel must be
+// non-empty, modules must be a JSON object). Only the validated fields
+// are re-emitted, plus the request parameters (source, repo) and a
+// fetched_at stamp. The whitelist IS the surface — any extra top-level
+// field the upstream file gains is dropped, so a hostile or drifted
+// upstream file cannot widen what the UI sees.
+//
+// The upstream host is allowlisted (raw.githubusercontent.com and
+// raw.gitcode.com) and the composed URL is re-checked against the
+// allowlist BEFORE anything is dialed: the source/repo/ref/channel
+// parameters are regex-pinned, and the check is the last line of
+// defense so a crafted parameter can never point the fetch at another
+// host. Redirects off the original host are refused (CheckRedirect).
+// Upstream faults are uniform and echo-free: a 404 maps to 404, every
+// other non-200 maps to 502, a body over the cap is 502, malformed or
+// off-schema JSON is 502 — in all cases the upstream body is discarded,
+// never forwarded (it is an open upstream namespace; same discipline as
+// the worker plugins proxy).
+package server
+
+import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/url"
+	"regexp"
+	"time"
+
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
+)
+
+const (
+	// millforgeIndexTimeout bounds each upstream channels.json fetch.
+	millforgeIndexTimeout = 10 * time.Second
+
+	// millforgeIndexMaxBody caps the upstream channels.json body. The
+	// read is capped at max+1 bytes so the (max+1)th byte is the
+	// evidence for a 502; a silent truncation would hand the UI a broken
+	// index as success.
+	millforgeIndexMaxBody = 1 << 20
+
+	// Defaults for the module-update UI's own channel feed.
+	millforgeIndexDefaultRepo    = "LUOSENGWA/millforge"
+	millforgeIndexDefaultRef      = "main"
+	millforgeIndexDefaultChannel = "beta"
+)
+
+var (
+	// millforgeRepoRE pins repo to `org/name`; each part is only
+	// alphanumerics, dot, underscore, dash — no host metacharacters can
+	// survive into the composed URL.
+	millforgeRepoRE = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+
+	// millforgeRefRE pins ref and channel names to a path-ish token.
+	millforgeRefRE = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
+)
+
+// millforgeIndexAllowedHosts is the production allowlist of raw-content
+// hosts the index proxy may dial. GetIndex re-checks the composed URL
+// against this map before issuing the request; a URL landing on any
+// other host is refused. Tests retarget the fetch at an httptest server
+// in the client transport, leaving this map untouched.
+var millforgeIndexAllowedHosts = map[string]bool{
+	"raw.githubusercontent.com": true,
+	"raw.gitcode.com":            true,
+}
+
+// newMillforgeIndexClient builds the production upstream client: a 10s
+// deadline per fetch plus a CheckRedirect that refuses any redirect off
+// the original host (the raw-content hosts serve the file directly; a
+// cross-host hop would smuggle the fetch past the allowlist).
+func newMillforgeIndexClient() *http.Client {
+	return &http.Client{
+		Timeout: millforgeIndexTimeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) > 0 && req.URL.Host != via[0].URL.Host {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
+}
+
+// millforgeIndexClient is the shared production upstream client; NewMillforgeIndexHandler
+// wires it into the handler. Tests inject their own client via the
+// handler's client field.
+var millforgeIndexClient = newMillforgeIndexClient()
+
+// MillforgeIndexHandler serves GET /api/v1/millforge/index (see the file
+// header for the contract).
+type MillforgeIndexHandler struct {
+	client *http.Client
+}
+
+// NewMillforgeIndexHandler wires the production upstream client. Tests
+// may replace client with one whose transport retargets the fetch at an
+// httptest.Server.
+func NewMillforgeIndexHandler() *MillforgeIndexHandler {
+	return &MillforgeIndexHandler{client: millforgeIndexClient}
+}
+
+// millforgeIndexURL composes the raw-content URL for the index file.
+// source must already be validated to github|gitcode.
+func millforgeIndexURL(source, repo, ref string) string {
+	if source == "gitcode" {
+		return "https://raw.gitcode.com/" + repo + "/raw/" + ref + "/releases/channels.json"
+	}
+	return "https://raw.githubusercontent.com/" + repo + "/" + ref + "/releases/channels.json"
+}
+
+// millforgeIndexResponse is the exact response envelope: the validated
+// upstream fields plus the request parameters and a fetch stamp.
+type millforgeIndexResponse struct {
+	Schema    int             `json:"schema"`
+	Channel   string          `json:"channel"`
+	Modules   json.RawMessage `json:"modules"`
+	Source    string          `json:"source"`
+	Repo      string          `json:"repo"`
+	FetchedAt string          `json:"fetched_at"`
+}
+
+// GetIndex handles GET /api/v1/millforge/index.
+func (h *MillforgeIndexHandler) GetIndex(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+
+	source := q.Get("source")
+	if source != "github" && source != "gitcode" {
+		httputil.WriteError(w, http.StatusBadRequest, "millforge index: source must be github or gitcode")
+		return
+	}
+
+	repo := q.Get("repo")
+	if repo == "" {
+		repo = millforgeIndexDefaultRepo
+	}
+	if !millforgeRepoRE.MatchString(repo) {
+		httputil.WriteError(w, http.StatusBadRequest, "millforge index: invalid repo (expected org/name)")
+		return
+	}
+
+	ref := q.Get("ref")
+	if ref == "" {
+		ref = millforgeIndexDefaultRef
+	}
+	if !millforgeRefRE.MatchString(ref) {
+		httputil.WriteError(w, http.StatusBadRequest, "millforge index: invalid ref")
+		return
+	}
+
+	channel := q.Get("channel")
+	if channel == "" {
+		channel = millforgeIndexDefaultChannel
+	}
+	if !millforgeRefRE.MatchString(channel) {
+		httputil.WriteError(w, http.StatusBadRequest, "millforge index: invalid channel")
+		return
+	}
+
+	rawURL := millforgeIndexURL(source, repo, ref)
+
+	// Allowlist gate: the composed URL must land on an allowlisted host.
+	// The parameter regexes already pin the shape; this is the last line
+	// of defense before anything is dialed.
+	u, err := url.Parse(rawURL)
+	if err != nil || !millforgeIndexAllowedHosts[u.Host] {
+		httputil.WriteError(w, http.StatusBadGateway, "millforge index: upstream host not allowed")
+		return
+	}
+
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, rawURL, nil)
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadGateway, "millforge index: upstream fetch failed")
+		return
+	}
+	resp, err := h.client.Do(req)
+	if err != nil {
+		// Dial error (DNS, refused, timeout, refused redirect): uniform
+		// 502 — the upstream state is not worth echoing.
+		httputil.WriteError(w, http.StatusBadGateway, "millforge index: upstream fetch failed")
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		status := http.StatusBadGateway
+		if resp.StatusCode == http.StatusNotFound {
+			status = http.StatusNotFound
+		}
+		httputil.WriteError(w, status, "millforge index: upstream unavailable")
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, millforgeIndexMaxBody+1))
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadGateway, "millforge index: upstream body read failed")
+		return
+	}
+	if len(body) > millforgeIndexMaxBody {
+		httputil.WriteError(w, http.StatusBadGateway, "millforge index: upstream body too large")
+		return
+	}
+
+	var upstream struct {
+		Schema  *int            `json:"schema"`
+		Channel string          `json:"channel"`
+		Modules json.RawMessage `json:"modules"`
+	}
+	if err := json.Unmarshal(body, &upstream); err != nil {
+		// Covers both malformed JSON and the wrong top-level shape
+		// (array or scalar instead of an object).
+		httputil.WriteError(w, http.StatusBadGateway, "millforge index: upstream body is not a JSON object")
+		return
+	}
+	if upstream.Schema == nil || *upstream.Schema != 1 {
+		httputil.WriteError(w, http.StatusBadGateway, "millforge index: unsupported upstream schema")
+		return
+	}
+	if upstream.Channel == "" {
+		httputil.WriteError(w, http.StatusBadGateway, "millforge index: upstream channel missing")
+		return
+	}
+	modules := bytes.TrimSpace(upstream.Modules)
+	if len(modules) == 0 || modules[0] != '{' {
+		httputil.WriteError(w, http.StatusBadGateway, "millforge index: upstream modules is not an object")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(millforgeIndexResponse{
+		Schema:    *upstream.Schema,
+		Channel:   upstream.Channel,
+		Modules:   modules,
+		Source:    source,
+		Repo:      repo,
+		FetchedAt: time.Now().UTC().Format(time.RFC3339),
+	})
+}

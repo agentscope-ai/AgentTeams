@@ -36,6 +36,15 @@ SURFACE_BRANCH_REQUIRED = (
     "adapters",
     "package",
 )
+BUNDLE_BRANCH_REQUIRED = (
+    "apiVersion",
+    "kind",
+    "metadata",
+    "requires",
+    "adapters",
+    "package",
+)
+
 ENTRY_BRANCH_REQUIRED = (
     "apiVersion",
     "kind",
@@ -191,24 +200,28 @@ def _entry_branch(schema: dict) -> dict:
     raise AssertionError("plugin.schema.json is missing the 'entry' oneOf branch")
 
 
-def test_plugin_schema_has_surface_and_entry_branches() -> None:
-    """The schema must accept both manifest forms via a top-level oneOf,
-    mirroring the entry branch in plugins/scripts/validate-plugin.rb."""
+def test_plugin_schema_has_surface_entry_and_bundle_branches() -> None:
+    """The schema must accept the surface, entry and bundle manifest forms via
+    a top-level oneOf, mirroring the branches in validate-plugin.rb."""
     schema = _load_schema()
     branches = schema.get("oneOf")
-    assert isinstance(branches, list) and len(branches) == 2, (
-        "plugin.schema.json must have exactly two oneOf branches, got: "
+    assert isinstance(branches, list) and len(branches) == 3, (
+        "plugin.schema.json must have exactly three oneOf branches, got: "
         f"{len(branches) if isinstance(branches, list) else type(branches)!r}"
     )
     by_title = {branch.get("title"): branch for branch in branches}
     surface = by_title.get("surface")
     entry = by_title.get("entry")
-    assert surface is not None and entry is not None, (
-        "oneOf branches must be titled 'surface' and 'entry', got: "
+    bundle = by_title.get("bundle")
+    assert surface is not None and entry is not None and bundle is not None, (
+        "oneOf branches must be titled 'surface', 'entry' and 'bundle', got: "
         f"{sorted(str(t) for t in by_title)}"
     )
     assert tuple(surface.get("required", [])) == SURFACE_BRANCH_REQUIRED, (
         f"surface branch required keys drifted: {surface.get('required')!r}"
+    )
+    assert tuple(bundle.get("required", [])) == BUNDLE_BRANCH_REQUIRED, (
+        "bundle oneOf branch required fields drifted: " + repr(bundle.get("required"))
     )
     assert tuple(entry.get("required", [])) == ENTRY_BRANCH_REQUIRED, (
         f"entry branch required keys drifted: {entry.get('required')!r}"

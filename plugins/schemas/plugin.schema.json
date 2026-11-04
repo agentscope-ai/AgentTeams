@@ -19,14 +19,25 @@
         "package"
       ],
       "properties": {
-        "apiVersion": { "const": "agentteams.agentteam/v1alpha1" },
-        "kind": { "const": "AgentTeamPlugin" },
+        "apiVersion": {
+          "const": "agentteams.agentteam/v1alpha1"
+        },
+        "kind": {
+          "const": "AgentTeamPlugin"
+        },
         "metadata": {
           "type": "object",
-          "required": ["name", "version"],
+          "required": [
+            "name",
+            "version"
+          ],
           "properties": {
-            "name": { "type": "string" },
-            "version": { "type": "string" }
+            "name": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
           }
         }
       },
@@ -46,41 +57,166 @@
         "package"
       ],
       "properties": {
-        "apiVersion": { "const": "agentteams.agentteam/v1alpha1" },
-        "kind": { "const": "AgentTeamPlugin" },
+        "apiVersion": {
+          "const": "agentteams.agentteam/v1alpha1"
+        },
+        "kind": {
+          "const": "AgentTeamPlugin"
+        },
         "metadata": {
           "type": "object",
-          "required": ["name", "version"],
+          "required": [
+            "name",
+            "version"
+          ],
           "properties": {
-            "name": { "type": "string" },
-            "version": { "type": "string" }
+            "name": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
           }
         },
-        "runtime": { "type": "string", "minLength": 1 },
+        "runtime": {
+          "type": "string",
+          "minLength": 1
+        },
         "entry": {
           "type": "object",
-          "required": ["backend", "frontend"],
+          "required": [
+            "backend",
+            "frontend"
+          ],
           "properties": {
-            "backend": { "type": "string", "minLength": 1 },
-            "frontend": { "type": "string", "minLength": 1 }
+            "backend": {
+              "type": "string",
+              "minLength": 1
+            },
+            "frontend": {
+              "type": "string",
+              "minLength": 1
+            }
           }
         },
         "requires": {
           "type": "object",
-          "required": ["qwenpaw"],
+          "required": [
+            "qwenpaw"
+          ],
           "properties": {
-            "qwenpaw": { "type": "string", "minLength": 1 }
+            "qwenpaw": {
+              "type": "string",
+              "minLength": 1
+            }
           }
         },
         "package": {
           "type": "object",
-          "required": ["include"],
+          "required": [
+            "include"
+          ],
           "properties": {
-            "include": { "type": "array" }
+            "include": {
+              "type": "array"
+            }
           }
         }
       },
       "additionalProperties": true
+    },
+    {
+      "title": "bundle",
+      "description": "Bundle-form plugin (agentteams-matrix): runtime adapters over a runtime-neutral contract.",
+      "type": "object",
+      "required": [
+        "apiVersion",
+        "kind",
+        "metadata",
+        "requires",
+        "adapters",
+        "package"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "agentteams.agentteam/v1alpha1"
+        },
+        "kind": {
+          "const": "AgentTeamPlugin"
+        },
+        "metadata": {
+          "type": "object",
+          "required": [
+            "name",
+            "version"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          }
+        },
+        "requires": {
+          "type": "object",
+          "required": [
+            "agentteams",
+            "contracts",
+            "tool_schema"
+          ],
+          "properties": {
+            "agentteams": {
+              "type": "string",
+              "minLength": 1
+            },
+            "contracts": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tool_schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "adapters": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "path"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "package": {
+          "type": "object",
+          "required": [
+            "include"
+          ],
+          "properties": {
+            "include": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
     }
   ],
   "additionalProperties": true

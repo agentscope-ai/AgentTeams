@@ -3,7 +3,7 @@ package config
 import "testing"
 
 func TestMiniMaxRoutePropagation(t *testing.T) {
-	for _, endpoint := range []string{"https://api.minimax.io/v1", "https://api.minimax.cn/v1/"} {
+	for _, endpoint := range []string{"https://api.minimax.io/v1", "https://api.minimaxi.com/v1/"} {
 		for _, selected := range []string{"", "MiniMax-M3", "MiniMax-M2.7", "saved-custom"} {
 			t.Setenv("AGENTTEAMS_LLM_PROVIDER", "openai-compat")
 			t.Setenv("AGENTTEAMS_OPENAI_BASE_URL", endpoint)

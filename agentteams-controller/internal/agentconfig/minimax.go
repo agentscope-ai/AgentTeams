@@ -11,7 +11,7 @@ func IsMiniMaxOpenAI(provider, baseURL string) bool {
 		return false
 	}
 	switch strings.TrimSuffix(baseURL, "/") {
-	case "https://api.minimax.io/v1", "https://api.minimax.cn/v1":
+	case "https://api.minimax.io/v1", "https://api.minimaxi.com/v1":
 		return true
 	}
 	return false

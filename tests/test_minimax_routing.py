@@ -44,7 +44,7 @@ class MiniMaxRouting(unittest.TestCase):
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
-            for endpoint in ['https://api.minimax.io/v1', 'https://api.minimax.cn/v1/']:
+            for endpoint in ['https://api.minimax.io/v1', 'https://api.minimaxi.com/v1/']:
                 for selected in ['', 'MiniMax-M3', 'MiniMax-M2.7', 'saved-custom']:
                     for language in ['en', 'zh']:
                         helpers = '\n'.join(function(INSTALL, name) for name in [
@@ -54,7 +54,7 @@ class MiniMaxRouting(unittest.TestCase):
                         curl() {
                             local args=() arg
                             for arg in "$@"; do
-                                case "$arg" in https://api.minimax.*/v1/chat/completions)
+                                case "$arg" in https://api.minimax.io/v1/chat/completions|https://api.minimaxi.com/v1/chat/completions)
                                     arg="$FIXTURE_URL/v1/chat/completions";; esac
                                 args+=("$arg")
                             done
@@ -72,7 +72,7 @@ class MiniMaxRouting(unittest.TestCase):
             # Exercise production Higress provider JSON and its actual console HTTP helper.
             block = HIGRESS[HIGRESS.index('    case "${LLM_PROVIDER}" in', HIGRESS.index('# NON-IDEMPOTENT SECTION')):]
             block = block[:block.index('\n    esac') + len('\n    esac')]
-            for endpoint in ['https://api.minimax.io/v1', 'https://api.minimax.cn/v1']:
+            for endpoint in ['https://api.minimax.io/v1', 'https://api.minimaxi.com/v1']:
                 bash('log() { :; }; higress_get() { :; };\n' + function(HIGRESS,'higress_api') + '\n' + block,
                      {'LLM_PROVIDER':'openai-compat', 'AGENTTEAMS_OPENAI_BASE_URL':endpoint,
                       'AGENTTEAMS_LLM_API_KEY':'fixture', 'HIGRESS_COOKIE_FILE':'',
@@ -108,7 +108,7 @@ class MiniMaxRouting(unittest.TestCase):
                       'agents':{'defaults':{'model':{'primary':'agentteams-gateway/'+selected},
                                             'models':{'agentteams-gateway/MiniMax-M2.7':{'alias':'MiniMax-M2.7'}}}},
                       'tools':{'media':{'image':{'enabled':True},'audio':{'model':'speech-fixture'}}}}
-            for endpoint in ['https://api.minimax.io/v1', 'https://api.minimax.cn/v1/']:
+            for endpoint in ['https://api.minimax.io/v1', 'https://api.minimaxi.com/v1/']:
                 result = json.loads(bash(helper+'\nagentteams_minimax_config', {
                     'AGENTTEAMS_LLM_PROVIDER':'openai-compat','AGENTTEAMS_OPENAI_BASE_URL':endpoint,
                     'AGENTTEAMS_DEFAULT_MODEL':selected},json.dumps(config)))

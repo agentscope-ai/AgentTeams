@@ -83,6 +83,6 @@ When the human admin requests switching to a model you don't recognize, you MUST
 | MiniMax-M3.1-Flash (direct MiniMax only) | 1,000,000 | 524,288 |
 | MiniMax-M3 | 1,000,000 | 128,000 |
 
-For `openai-compat` with `https://api.minimax.io/v1` or `https://api.minimax.cn/v1`, new configurations default to MiniMax-M3.1-Flash and list it before MiniMax-M3. Explicit saved, legacy, and custom model IDs remain valid selections. Other endpoints retain their existing catalogs; these direct API choices do not establish Alibaba Coding Plan availability.
+For `openai-compat` with `https://api.minimax.io/v1` or `https://api.minimaxi.com/v1`, new configurations default to MiniMax-M3.1-Flash and list it before MiniMax-M3. Explicit saved, legacy, and custom model IDs remain valid selections. Other endpoints retain their existing catalogs; these direct API choices do not establish Alibaba Coding Plan availability.
 
 Flash requires adaptive thinking. Do not use `--no-reasoning`. The pinned OpenClaw transport omits effort for Flash to use its default `max` effort, avoiding unsupported `none`/`minimal` effort values. M3 and other model request behavior is unchanged. See the [MiniMax OpenAI API reference](https://platform.minimax.io/docs/api-reference/text-openai-api.md).

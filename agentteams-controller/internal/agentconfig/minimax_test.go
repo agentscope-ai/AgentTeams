@@ -7,7 +7,7 @@ import (
 )
 
 func TestMiniMaxEndpointCatalog(t *testing.T) {
-	for _, endpoint := range []string{"https://api.minimax.io/v1", "https://api.minimax.cn/v1/"} {
+	for _, endpoint := range []string{"https://api.minimax.io/v1", "https://api.minimaxi.com/v1/"} {
 		for _, selected := range []string{"", "MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5", "custom-model"} {
 			t.Run(endpoint+"/"+selected, func(t *testing.T) {
 				g := NewGenerator(Config{LLMProvider: "openai-compat", OpenAIBaseURL: endpoint, DefaultModel: selected})

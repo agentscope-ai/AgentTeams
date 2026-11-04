@@ -222,7 +222,7 @@ agentteams_is_official_minimax() {
     [ "${AGENTTEAMS_LLM_PROVIDER:-}" = "openai-compat" ] || return 1
     local base_url="${AGENTTEAMS_OPENAI_BASE_URL:-}"
     case "${base_url%/}" in
-        https://api.minimax.io/v1|https://api.minimax.cn/v1) return 0 ;;
+        https://api.minimax.io/v1|https://api.minimaxi.com/v1) return 0 ;;
         *) return 1 ;;
     esac
 }

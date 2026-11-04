@@ -14,7 +14,7 @@ type miniMaxTransport func(*http.Request) (*http.Response, error)
 func (f miniMaxTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestMiniMaxPreflightSerializedBoundary(t *testing.T) {
-	for _, endpoint := range []string{"https://api.minimax.io/v1", "https://api.minimax.cn/v1/"} {
+	for _, endpoint := range []string{"https://api.minimax.io/v1", "https://api.minimaxi.com/v1/"} {
 		for _, selected := range []string{"", "MiniMax-M3", "MiniMax-M2.7", "saved-custom"} {
 			t.Run(endpoint+"/"+selected, func(t *testing.T) {
 				calls := 0

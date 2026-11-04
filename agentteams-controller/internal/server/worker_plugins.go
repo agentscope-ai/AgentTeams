@@ -39,6 +39,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -115,14 +116,21 @@ type workerPluginsProxy struct {
 // the plugins-specific contract on top: oversize 502, malformed-JSON
 // 502, and a uniform echo-free 502 for every non-200 upstream status.
 func (h *ResourceHandler) WorkerPlugins(kubeMode, containerPrefix string) http.HandlerFunc {
+	p := newWorkerPluginsProxy(h, kubeMode, containerPrefix)
+	return p.serve
+}
+
+// newWorkerPluginsProxy builds the proxy shared by the worker registry route
+// and the team module aggregation (which dials each member's registry).
+func newWorkerPluginsProxy(rh *ResourceHandler, kubeMode, containerPrefix string) *workerPluginsProxy {
 	p := &workerPluginsProxy{
-		rh:              h,
+		rh:              rh,
 		kubeMode:        kubeMode,
 		containerPrefix: containerPrefix,
 		http:            &http.Client{Timeout: workerPluginsProxyTimeout},
 	}
 	p.workerBaseURL = p.defaultWorkerBaseURL
-	return p.serve
+	return p
 }
 
 // defaultWorkerBaseURL resolves the worker's qwenpaw app base URL via the
@@ -203,61 +211,11 @@ func (p *workerPluginsProxy) serve(w http.ResponseWriter, r *http.Request) {
 	// the container for imported/renamed workers. The authorization checks
 	// above deliberately stay on the original resource/team identity.
 	base := p.workerBaseURL(worker.Spec.EffectiveWorkerName(worker.Name), worker.Spec.Env)
-
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, base+"/api/plugins", nil)
-	if err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, "build worker plugins request: "+err.Error())
+	entries, ferr := p.fetchProjection(r.Context(), base)
+	if ferr != nil {
+		httputil.WriteError(w, ferr.status, ferr.message)
 		return
 	}
-	resp, err := p.http.Do(req)
-	if err != nil {
-		// Connection refused (worker stopped), DNS failure, timeout.
-		httputil.WriteError(w, http.StatusBadGateway, "worker plugins API unreachable")
-		return
-	}
-	defer resp.Body.Close()
-
-	// cap+1 read: a body strictly longer than the cap keeps the
-	// (cap+1)th byte as evidence and is answered 502 — a silent
-	// truncation would hand back a broken array as success (#1454).
-	upstreamBody, err := io.ReadAll(io.LimitReader(resp.Body, workerPluginsBodyCap+1))
-	if err != nil {
-		httputil.WriteError(w, http.StatusBadGateway, "read worker plugins response: "+err.Error())
-		return
-	}
-	if len(upstreamBody) > workerPluginsBodyCap {
-		httputil.WriteError(w, http.StatusBadGateway, "worker plugin registry response exceeds 64 KiB")
-		return
-	}
-	// Only a 200 is success for this proxy. Any other upstream status is
-	// a uniform 502 that does NOT echo the upstream body (the body is an
-	// open upstream namespace — fail-closed: its bytes never enter the
-	// response; the old pass-through of 400/404/409/422 details is gone,
-	// #1454).
-	if resp.StatusCode != http.StatusOK {
-		httputil.WriteError(w, http.StatusBadGateway, "worker plugins API error")
-		return
-	}
-	// The JSON array shape is the contract for EVERY reader: a 200 body
-	// that does not parse as an array of plugin objects is a broken
-	// upstream, answered 502 — never passed through raw, never degraded
-	// to an empty array (#1454). A non-object entry (or a JSON null,
-	// which unmarshals to a nil slice without error) is not the
-	// array-of-entries shape and is refused the same way.
-	var entries []map[string]any
-	if err := json.Unmarshal(upstreamBody, &entries); err != nil {
-		httputil.WriteError(w, http.StatusBadGateway, "worker plugins API returned malformed JSON")
-		return
-	}
-	if entries == nil {
-		// json.Unmarshal leaves a JSON null as a nil slice without
-		// erroring; the contract is an array (an empty [] — a worker
-		// with no plugins — is fine, null is not).
-		httputil.WriteError(w, http.StatusBadGateway, "worker plugins API returned malformed JSON")
-		return
-	}
-	// Every reader — L1 admin/manager included — gets the whitelist
-	// projection; the pinned metadata surface is the contract (#1454).
 	projected, err := json.Marshal(projectPluginMetadata(entries))
 	if err != nil { // unreachable: entries came from json.Unmarshal
 		httputil.WriteError(w, http.StatusInternalServerError, "project worker plugins metadata")
@@ -266,6 +224,46 @@ func (p *workerPluginsProxy) serve(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(projected)
+}
+
+// pluginsFetchError is the status+message pair a failed upstream registry
+// fetch maps to. Callers write it verbatim (never the upstream body).
+type pluginsFetchError struct {
+	status  int
+	message string
+}
+
+// fetchProjection dials <base>/api/plugins and returns the raw entry array
+// after the same bounded-read / status / shape checks the worker route uses.
+func (p *workerPluginsProxy) fetchProjection(ctx context.Context, base string) ([]map[string]any, *pluginsFetchError) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/plugins", nil)
+	if err != nil {
+		return nil, &pluginsFetchError{http.StatusInternalServerError, "build worker plugins request: " + err.Error()}
+	}
+	resp, err := p.http.Do(req)
+	if err != nil {
+		return nil, &pluginsFetchError{http.StatusBadGateway, "worker plugins API unreachable"}
+	}
+	defer resp.Body.Close()
+
+	upstreamBody, err := io.ReadAll(io.LimitReader(resp.Body, workerPluginsBodyCap+1))
+	if err != nil {
+		return nil, &pluginsFetchError{http.StatusBadGateway, "read worker plugins response: " + err.Error()}
+	}
+	if len(upstreamBody) > workerPluginsBodyCap {
+		return nil, &pluginsFetchError{http.StatusBadGateway, "worker plugin registry response exceeds 64 KiB"}
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, &pluginsFetchError{http.StatusBadGateway, "worker plugins API error"}
+	}
+	var entries []map[string]any
+	if err := json.Unmarshal(upstreamBody, &entries); err != nil {
+		return nil, &pluginsFetchError{http.StatusBadGateway, "worker plugins API returned malformed JSON"}
+	}
+	if entries == nil {
+		return nil, &pluginsFetchError{http.StatusBadGateway, "worker plugins API returned malformed JSON"}
+	}
+	return entries, nil
 }
 
 // projectPluginMetadata is the whitelist projection every reader gets

@@ -62,6 +62,16 @@ from .outbox import (
     outbox_marker,
     with_marker,
 )
+from .outcomes import (
+    DROP_REASONS,
+    DROPS_RELATIVE_PATH,
+    DETAIL_LIMIT,
+    describe_exception,
+    drops_path,
+    read_drops,
+    record_drop,
+    redact_detail,
+)
 from .session import resolve_session_id, to_handle_from_target
 from .sidecar import (
     FRAME_TYPES,
@@ -93,6 +103,9 @@ __all__ = [
     "CRYPTO_BACKENDS",
     "CURRENT_MESSAGE_MARKER",
     "DEFAULT_HISTORY_LIMIT",
+    "DETAIL_LIMIT",
+    "DROP_REASONS",
+    "DROPS_RELATIVE_PATH",
     "HISTORY_CONTEXT_MARKER",
     "INBOUND_KINDS",
     "OUTBOUND_KINDS",
@@ -126,6 +139,8 @@ __all__ = [
     "crypto_available",
     "decode_line",
     "detect_crypto_backend",
+    "describe_exception",
+    "drops_path",
     "e2ee_store_path",
     "deterministic_tx_id",
     "encode_frame",
@@ -141,6 +156,9 @@ __all__ = [
     "mxc_to_http",
     "outbox_marker",
     "probe_olm",
+    "read_drops",
+    "record_drop",
+    "redact_detail",
     "resolve_session_id",
     "strip_mention_prefix",
     "text_mentions_worker",

@@ -317,6 +317,14 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// pause/resume/replan/complete/cancel (see authorizeWorker).
 	mux.Handle("PUT /api/v1/projects/{id}/meta", mw.RequireAuthz(authpkg.ActionUpdate, "project-meta", projectNameFn)(http.HandlerFunc(projh.PutProjectMeta)))
 
+	// Task meta conditional commit (#1471, follow-up to #1402): the task-level
+	// counterpart of the project commit. Workers own the task record they are
+	// executing, so this is the second write opened to them — the handler
+	// enforces the team boundary (the middleware cannot resolve task -> team)
+	// and refuses to release the Controller's cancellation.
+	taskNameFn := func(r *http.Request) string { return r.PathValue("id") }
+	mux.Handle("PUT /api/v1/tasks/{id}/meta", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.PutTaskMeta)))
+
 	// --- Gateway ---
 	gh := NewGatewayHandler(deps.Gateway)
 	mux.Handle("POST /api/v1/gateway/consumers", mw.RequireAuthz(authpkg.ActionCreate, "gateway", nil)(http.HandlerFunc(gh.CreateConsumer)))

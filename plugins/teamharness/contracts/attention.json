@@ -1,0 +1,35 @@
+{
+  "version": "1.0.0",
+  "status": "enforced-when-protocol-enforce-on",
+  "description": "Attention stall chain and the decision_status sub-state (W2, issue #1451). An unanswered re-request of an open attention record bumps the record's stall_count; the task's decision_status sub-state escalates at the thresholds below and returns to open when the answer arrives. The sub-state overlays the nine runtime states (task-transitions.json) and is written only by the protocol layer: the stall chain is the convergence point that writes 'blocked', and 'frozen' is released only by a resolved approval record. Enforced while the protocol.enforce switch is on (TEAMHARNESS_RUNTIME_CONFIG protocol section, TEAMHARNESS_PROTOCOL_ENFORCE env override); with the switch off request_attention keeps its pre-W2 idempotent-reuse behaviour and no stall or decision_status fields are written.",
+  "switch": {
+    "config": "TEAMHARNESS_RUNTIME_CONFIG (JSON or YAML) protocol.enforce",
+    "env_override": "TEAMHARNESS_PROTOCOL_ENFORCE (1/true/yes/on) wins when set",
+    "default": false
+  },
+  "stall_thresholds": {
+    "blocked": 2,
+    "frozen": 3
+  },
+  "attention_record_fields": {
+    "stall_count": "integer; written 0 on record creation (switch on), +1 per unanswered re-request of the open same-kind record (the idempotent reuse path), 0 again when the record is resolved; never written with the switch off"
+  },
+  "decision_status": {
+    "field": "decision_status",
+    "default": "open",
+    "values": ["open", "blocked", "frozen", "paused", "spec_conflict"],
+    "history_field": "decision_status_history",
+    "history_entry": {
+      "ts": "utc timestamp",
+      "from": "previous sub-state",
+      "to": "new sub-state",
+      "reason": "human-readable cause",
+      "source": "attention:<kind>",
+      "actor": "role:account of the resolving call (when known)"
+    },
+    "history_written": "on entering blocked/frozen, on leaving them back to open, and on a refused attempt to leave frozen (a refused entry carries from='frozen', to='frozen', refused=<attempted status>)",
+    "blocked_writer": "protocol layer only: the attention stall chain is the single convergence point",
+    "frozen_release": "frozen is an absorbing state (issue #1467): it is left only by the authorized approval close — a resolved attention record of kind=approval through the trusted-human path (the only _set_decision_status call that carries unfreeze_authority='approval'). Every other writer — a stall escalation, a non-approval resolve, a tool close, any future writer — is refused at the single decision_status writer: the state stays frozen and the attempt is audited as a refused decision_status_history entry (from='frozen', to='frozen', refused=<attempted status>). The refusal is a state invariant, not a policy gate — it holds with the protocol switch off too"
+  },
+  "constants_ref": "mcp/common/constants.py: ATTENTION_STALL_BLOCKED / ATTENTION_STALL_FROZEN / DECISION_STATUS_VALUES / DEFAULT_DECISION_STATUS (test_protocol_guard.py asserts the two agree)"
+}

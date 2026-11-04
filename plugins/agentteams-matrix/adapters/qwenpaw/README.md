@@ -81,3 +81,16 @@ plugins/agentteams-matrix/scripts/uninstall.sh
 Removes exactly the files recorded in the marker, prunes the directories that
 become empty, and deletes the bundle's installer state. Without a marker the
 uninstall is a no-op, so re-running it leaves no residue.
+
+## Drop ledger
+
+Every silent drop (mention-gated group chatter, `NO_REPLY`, self-trigger
+suppression, final send failure, missing Matrix configuration) is recorded
+as one JSON line in `<workspace>/shared/matrix/drops.jsonl` via
+`core.outcomes.record_drop` (append-only, write failures are warn-only and
+never disturb the message path). Reason vocabulary:
+`core.outcomes.DROP_REASONS`. The `allowlist` code is a *reporting entry
+only*: allowlist interception lives in the QwenPaw runtime (agent.json),
+not in this bundle — the runtime must call
+`record_drop(reason="allowlist", ...)` itself, otherwise that code stays
+empty.

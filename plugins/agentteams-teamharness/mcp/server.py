@@ -30,7 +30,7 @@ from mcp.artifact import filesync, publish, sync
 
 from mcp.common import config, constants, errors, identity, io, payload, paths, refs, tool_schemas
 
-from mcp.lifecycle import policy_effects, signal_events, taskflow, transitions
+from mcp.lifecycle import policy_effects, review, signal_events, taskflow, transitions
 
 from mcp.project import flow, state
 

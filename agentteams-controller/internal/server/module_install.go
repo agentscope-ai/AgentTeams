@@ -222,50 +222,52 @@ func (m *moduleInstaller) previousVersion(ctx context.Context, base, module stri
 	return ""
 }
 
-// installOne performs the shared single-target pipeline.
-func (m *moduleInstaller) installOne(ctx context.Context, base, module string, body moduleInstallRequest) (bool, string, int, string) {
+// prepareArtifact validates the request, re-reads the index and returns the
+// verified artifact bytes once per install operation (a team install
+// downloads once and pushes the same bytes to every member).
+func (m *moduleInstaller) prepareArtifact(ctx context.Context, module string, body moduleInstallRequest) (version, name string, data []byte, status int, msg string) {
 	if body.Source != "github" && body.Source != "gitcode" {
-		return false, "", http.StatusBadRequest, "source must be github or gitcode"
+		return "", "", nil, http.StatusBadRequest, "source must be github or gitcode"
 	}
 	repo := body.Repo
 	if repo == "" {
 		repo = millforgeIndexDefaultRepo
 	}
 	if !millforgeRepoRE.MatchString(repo) {
-		return false, "", http.StatusBadRequest, "invalid repo"
+		return "", "", nil, http.StatusBadRequest, "invalid repo"
 	}
 	ref := body.Ref
 	if ref == "" {
 		ref = millforgeIndexDefaultRef
 	}
 	if !millforgeRefRE.MatchString(ref) {
-		return false, "", http.StatusBadRequest, "invalid ref"
+		return "", "", nil, http.StatusBadRequest, "invalid ref"
 	}
 	channel := body.Channel
 	if channel == "" {
 		channel = millforgeIndexDefaultChannel
 	}
 	if !validModuleToken(module) {
-		return false, "", http.StatusBadRequest, "invalid module token"
+		return "", "", nil, http.StatusBadRequest, "invalid module token"
 	}
 	for _, token := range []string{body.Version, body.Artifact} {
 		if token != "" && !validModuleToken(token) {
-			return false, "", http.StatusBadRequest, "invalid version/artifact token"
+			return "", "", nil, http.StatusBadRequest, "invalid version/artifact token"
 		}
 	}
 
 	doc, status, msg := m.index.fetchIndex(ctx, body.Source, repo, ref, channel)
 	if doc == nil {
-		return false, "", status, msg
+		return "", "", nil, status, msg
 	}
 	name, wantSHA, status, msg := indexArtifact(doc.Modules, module, body.Version, body.Artifact)
 	if name == "" {
-		return false, "", status, msg
+		return "", "", nil, status, msg
 	}
 	if body.SHA256 != "" && !equalHex(body.SHA256, wantSHA) {
-		return false, "", http.StatusConflict, "sha256 does not match the index"
+		return "", "", nil, http.StatusConflict, "sha256 does not match the index"
 	}
-	version := body.Version
+	version = body.Version
 	if version == "" {
 		var mods map[string]json.RawMessage
 		_ = json.Unmarshal(doc.Modules, &mods)
@@ -275,12 +277,20 @@ func (m *moduleInstaller) installOne(ctx context.Context, base, module string, b
 		_ = json.Unmarshal(mods[module], &entry)
 		version = entry.Latest
 	}
-
-	prev := m.previousVersion(ctx, base, module)
-	data, status, msg := m.downloadArtifact(ctx, artifactURL(body.Source, repo, ref, module, version, name), wantSHA)
-	if data == nil {
-		return false, "", status, msg
+	if !validModuleToken(version) {
+		return "", "", nil, http.StatusBadGateway, "millforge index: invalid version"
 	}
+
+	data, status, msg = m.downloadArtifact(ctx, artifactURL(body.Source, repo, ref, module, version, name), wantSHA)
+	if data == nil {
+		return "", "", nil, status, msg
+	}
+	return version, name, data, http.StatusOK, ""
+}
+
+// installPrepared pushes already-verified bytes to one target.
+func (m *moduleInstaller) installPrepared(ctx context.Context, base, module, name string, data []byte) (bool, string, int, string) {
+	prev := m.previousVersion(ctx, base, module)
 	loaded, status, msg := m.uploadPlugin(ctx, base, name, data)
 	if status != http.StatusOK {
 		return false, prev, status, msg
@@ -289,6 +299,15 @@ func (m *moduleInstaller) installOne(ctx context.Context, base, module string, b
 		return false, prev, http.StatusBadGateway, "qwenpaw did not report the plugin as loaded"
 	}
 	return true, prev, http.StatusOK, ""
+}
+
+// installOne performs the shared single-target pipeline.
+func (m *moduleInstaller) installOne(ctx context.Context, base, module string, body moduleInstallRequest) (bool, string, int, string) {
+	_, name, data, status, msg := m.prepareArtifact(ctx, module, body)
+	if data == nil {
+		return false, "", status, msg
+	}
+	return m.installPrepared(ctx, base, module, name, data)
 }
 
 func equalHex(a, b string) bool {
@@ -489,21 +508,24 @@ func (h *ResourceHandler) InstallTeamModule(kubeMode, containerPrefix string) ht
 // stops at the first failure.
 func (m *moduleInstaller) installTeam(ctx context.Context, team *v1beta1.Team, module string, body moduleInstallRequest) ([]string, map[string]string, string, int, string) {
 	updated := []string{}
-	target := body.Version
+	version, name, data, status, msg := m.prepareArtifact(ctx, module, body)
+	if data == nil {
+		return updated, nil, body.Version, status, msg
+	}
 	for _, member := range team.Spec.WorkerMembers {
 		var worker v1beta1.Worker
 		if err := m.rh.client.Get(ctx, client.ObjectKey{Name: member.Name, Namespace: m.rh.namespace}, &worker); err != nil {
-			return updated, map[string]string{"worker": member.Name, "error": "worker not found"}, target, http.StatusBadGateway, "member worker not found"
+			return updated, map[string]string{"worker": member.Name, "error": "worker not found"}, version, http.StatusBadGateway, "member worker not found"
 		}
 		if rt := worker.Spec.Runtime; rt != "" && rt != "qwenpaw" {
-			return updated, map[string]string{"worker": member.Name, "error": "worker runtime is not qwenpaw"}, target, http.StatusBadRequest, "worker runtime is not qwenpaw"
+			return updated, map[string]string{"worker": member.Name, "error": "worker runtime is not qwenpaw"}, version, http.StatusBadRequest, "worker runtime is not qwenpaw"
 		}
 		base := m.workerBaseURL(worker.Spec.EffectiveWorkerName(worker.Name), worker.Spec.Env)
-		_, _, status, msg := m.installOne(ctx, base, module, body)
+		_, _, status, msg := m.installPrepared(ctx, base, module, name, data)
 		if status != http.StatusOK {
-			return updated, map[string]string{"worker": member.Name, "error": msg}, target, status, msg
+			return updated, map[string]string{"worker": member.Name, "error": msg}, version, status, msg
 		}
 		updated = append(updated, member.Name)
 	}
-	return updated, nil, target, http.StatusOK, ""
+	return updated, nil, version, http.StatusOK, ""
 }

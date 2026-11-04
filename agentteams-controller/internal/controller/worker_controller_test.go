@@ -230,7 +230,7 @@ func (g *workerTestGateway) UnexposePort(context.Context, gateway.PortExposeRequ
 func (g *workerTestGateway) EnsureServiceSource(context.Context, string, string, int, string) error {
 	return nil
 }
-func (g *workerTestGateway) EnsureStaticServiceSource(context.Context, string, string, int) error {
+func (g *workerTestGateway) EnsureStaticServiceSource(context.Context, string, string, int, string) error {
 	return nil
 }
 func (g *workerTestGateway) EnsureRoute(context.Context, string, []string, string, int, string) error {

@@ -1,90 +1,85 @@
-# Approval lifecycle: bounded wait, asked/decided audit pair, and callId
-# resolve dedup (TH-20, the three approval items).
+# W2 review gate and protocol guards (issue #1451 W2): the review_task
+# record, the accept_task_result acceptance gates, and the structured
+# rejection type shared by the taskflow / projectflow dispatch layers.
 #
-# Layering (DSH comparison audit, 11-team-coordination line 05): our
-# approval gate is the TASK-DECISION layer — the r1-style gate that asks
-# a human before a task result can be decided — not the tool-call layer.
-# These three are that layer's natural extensions, and they close the
-# gaps the audit named:
+# Round 6 (issue #1467) — trusted review identity: the account part of
+# a transition actor is the trusted runtime member identity (the
+# operator-set AGENTTEAMS_WORKER_NAME env / runtime config member block:
+# member.name -> member.runtimeName -> matrixUserId localpart), never a
+# tool payload field. The payload's account_id is provenance only: it
+# is used when no trusted identity exists (local / test runs) and can
+# never override one — two different members must never collapse into
+# one identity. The self-review comparison therefore normalizes the
+# accounts and treats "default" / "unknown" / empty as UNKNOWN: an
+# unknown (legacy) submitter account is not a self-review match, while
+# a concrete trusted identity on both sides that matches — or a full
+# reviewer == submitted_by — is still self_review_forbidden.
 #
-# ① bounded wait — an approval ask carries a deadline (explicit
-#    ``deadline_at``, a ``wait_seconds`` duration, or the 30-minute
-#    default). When the deadline lapses without a human decision the ask
-#    transitions to ``unavailable``. The wait is bounded — the task is
-#    never permanently frozen on a silent approver — and the lapse is
-#    never an approval: no auto-release, fail closed, no late decision
-#    after the deadline. Asking again is a NEW attempt with a fresh
-#    callId and a fresh deadline.
+# Round 7 (issue #1467) — identity provenance: round 6 encoded
+# "unknown" as the VALUE "default", so a real trusted member literally
+# named "default" was indistinguishable from the legacy sentinel. The
+# record now carries where its account came from — submitted_by_source
+# on the task meta, reviewer_source on the review object: "runtime" for
+# the trusted runtime member identity, "payload" for the account_id
+# fallback. The self-review rule compares identity + provenance: when
+# BOTH sides are runtime-sourced the normalized accounts compare
+# strictly, "default" included (a trusted name is an identity, never
+# the sentinel); a legacy record without the marker — or a
+# payload-sourced side — keeps the unknown-sentinel rule for
+# compatibility ("default" / "unknown" / empty never match, concrete
+# accounts still compare).
 #
-# ② asked/decided audit pair — every ask appends an ``asked`` event and
-#    every terminal outcome (approved / denied / unavailable) appends
-#    the ``decided`` event carrying the same callId, so the pair is
-#    correlatable and every asked has exactly one decided. The journal
-#    is a SEPARATE append-only file (``approval_audit.jsonl`` in the
-#    task directory), stored apart from the task meta attention list
-#    (the loop record's home) and the conversation transcript.
-#
-# ③ callId dedup — the callId is the approval attempt identity:
-#    assigned at ask time (or caller-supplied for an idempotent re-ask),
-#    carried by both audit events, and the dedup key of resolve. A
-#    second resolve with the same callId is an idempotent replay (same
-#    decision) or a rejection (conflicting decision) — never a second
-#    decision, never a second journal entry.
-#
-# Contract boundaries (kept deliberately narrow): this module emits no
-# SIG-* signal events (the signal-mapping vocabulary is untouched),
-# touches no NOTIFICATION_GAP_REASONS field, and writes ``resolvedVia``
-# only from the pre-existing five-value taskflow vocabulary.
-# Pre-TH-20 attention records (no callId) are out of scope: they keep
-# their existing behaviour and are never force-migrated.
+# Round 8 (issue #1467) — the trusted decider: the r1 approval gate
+# reads the decider from the server-written resolvedActor marker ONLY.
+# resolvedBy is display provenance written from the caller's payload
+# and must never influence the decision: a record without the
+# server-written marker is not an approval (fail closed), whatever its
+# display fields claim. The self-approval comparison canonicalizes one
+# way on both sides (the shared _canonical_account): the MXID
+# localpart and the runtimeName of the same member are the same
+# identity, so the display spelling can no longer decide.
 from __future__ import annotations
-
-import datetime
-
-import json
-
-import uuid
-
-from pathlib import Path
 
 from typing import Any
 
-# The approval wait bound: the default deadline when an ask carries no
-# explicit one — 30 minutes, the reversible-decision bound (MF-3 R6
-# keeps the irreversible bound at 2h).
-DEFAULT_APPROVAL_WAIT_SECONDS = 1800
+from mcp.common import refs
+from mcp.common.config import _protocol_enforce_enabled, _runtime_team_name
+from mcp.common.constants import DECISION_CLASS_IDS, DEFAULT_DECISION_CLASS
+from mcp.common.identity import _canonical_account
+from mcp.common.io import _utc_timestamp
+from mcp.common.payload import _first_text, _safe_id
+from mcp.artifact.sync import (
+    _TASK_COMMIT_ATTEMPTS,
+    _commit_task_guarded,
+    _load_authoritative_task,
+)
+from .transitions import (
+    _reject_task_transition,
+    _require_task_mutable,
+    _transition_actor,
+    _transition_actor_source,
+)
 
-# The separate audit journal, one JSONL line per event, in the task
-# directory NEXT TO meta.json — the pair is stored apart from the
-# attention list (the loop record's home) and the transcript.
-APPROVAL_AUDIT_FILENAME = "approval_audit.jsonl"
+# Call-time lookups (common.refs): these names resolve against the bound
+# mcp/server.py namespace, so test monkeypatches of server attributes stay
+# visible to this module.
+# The trusted runtime role (server.py): it reads the operator-set
+# environment / runtime config, never the tool payload, so a caller cannot
+# spoof it. Call-time proxy so tests can monkeypatch it.
+_runtime_role = refs.proxy("_runtime_role")
 
-# Approval record states (approvalStatus on the attention record).
-APPROVAL_PENDING = "pending"
-APPROVAL_APPROVED = "approved"
-APPROVAL_DENIED = "denied"
-APPROVAL_UNAVAILABLE = "unavailable"
-
-# Decision verbs a human (or a human-authorized integration) submits.
-DECISION_APPROVE = "approve"
-DECISION_DENY = "deny"
-
-# Terminal outcomes (decided events / record states).
-OUTCOME_APPROVED = "approved"
-OUTCOME_DENIED = "denied"
-OUTCOME_UNAVAILABLE = "unavailable"
-
-# The resolve-channel vocabulary the taskflow close path already
-# validates (request_attention resolvedVia) — reused, never extended.
-RESOLVE_VIA_CHANNELS = {"tool", "dashboard", "im_reply", "im_command", "api"}
+# Resolve channels that carry a human decision: a reply or a command in
+# the IM room, or the dashboard. "tool" and "api" are agent/automation
+# channels — they may close an attention loop, but they can never
+# authorize an approval (#1467 round 3: verifiable decision authority).
+_HUMAN_RESOLVE_CHANNELS = {"im_reply", "im_command", "dashboard"}
 
 
-class ApprovalGuardError(Exception):
-    """Structured approval rejection: a stable error_code plus the
+class ProtocolGuardError(Exception):
+    """Structured W2 protocol rejection: a stable error_code plus the
     stable message. Deliberately NOT a ValueError subclass so the
-    dispatch layers can return the {ok, error_code, message} surface
-    instead of a bare error string (same shape as the W2
-    ProtocolGuardError vocabulary this branch predates)."""
+    dispatch layers return the {ok, error_code, message} surface instead
+    of a bare error string."""
 
     def __init__(self, error_code: str, message: str) -> None:
         super().__init__(message)
@@ -92,558 +87,387 @@ class ApprovalGuardError(Exception):
         self.message = message
 
 
-def _parse_iso8601(value: str, field: str) -> datetime.datetime:
-    """Parse an ISO-8601 timestamp (Z tolerated); naive reads as UTC."""
-    try:
-        parsed = datetime.datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ValueError(f"{field} must be an ISO-8601 timestamp") from exc
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=datetime.timezone.utc)
+def _decision_class_of(task: dict[str, Any]) -> str:
+    """Read the task's decision class; an absent field reads as the r4
+    default (compat rule: pre-W2 tasks have no decision class)."""
+    return _first_text(task.get("decision_class"), task.get("decisionClass")) or DEFAULT_DECISION_CLASS
 
 
-def _as_datetime(now: Any) -> datetime.datetime:
-    """The evaluation clock: an explicit ISO string / datetime (tests,
-    replay) or the real UTC clock. Naive datetimes read as UTC."""
-    if now is None:
-        return datetime.datetime.now(datetime.timezone.utc)
-    if isinstance(now, datetime.datetime):
-        return now if now.tzinfo else now.replace(tzinfo=datetime.timezone.utc)
-    return _parse_iso8601(now, "now")
+def _decider_identity(decider: str) -> tuple[str, str]:
+    """Parse a recorded decider into (role, account): the leading role
+    prefix up to the first colon, plus the account behind it (colons
+    preserved — Matrix identities @user:server). A decider without a
+    colon is a bare claim with no identity and parses to (text, "")."""
+    text = str(decider or "").strip()
+    role, sep, account = text.partition(":")
+    if not sep or not account:
+        return (text, "")
+    return (role, account)
 
 
-def _iso(moment: datetime.datetime) -> str:
-    """The canonical timestamp form (second precision, Z suffix) — the
-    same shape _utc_timestamp emits."""
-    return (
-        moment.astimezone(datetime.timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
+def _has_approval_record(task: dict[str, Any], submitter_account: str = "") -> bool:
+    """An approval record is a RESOLVED attention record of kind
+    'approval' that carries the trusted-authority marker: the
+    server-written resolvedRole must be "human" (only the authorized
+    close path writes it — a payload-supplied resolvedRole is never
+    copied), the close went through a human channel (im_reply /
+    im_command / dashboard — never tool or api), and the server-written
+    decider (resolvedActor) carries an account that, when the
+    submitter's account is known, differs from it: self-approval never
+    counts. The role is read from the marker only — never inferred from
+    the decider strings (#1467 round 4: the marker is the authority;
+    record presence alone is not an approval).
 
-
-def _new_call_id() -> str:
-    return "call_" + uuid.uuid4().hex[:16]
-
-
-def approval_audit_path(workspace: Path | str, task_id: str) -> Path:
-    """The separate audit journal for one task (task directory, next to
-    meta.json — apart from the attention list and the transcript)."""
-    return (
-        Path(workspace).expanduser()
-        / "shared"
-        / "tasks"
-        / str(task_id)
-        / APPROVAL_AUDIT_FILENAME
-    )
-
-
-def _is_approval_record(record: Any) -> bool:
-    return (
-        isinstance(record, dict)
-        and str(record.get("kind") or "") == "approval"
-    )
-
-
-def _approval_records(task: dict[str, Any]) -> list[dict[str, Any]]:
+    The decider is the server-written marker ONLY (#1467 round 8):
+    resolvedBy is display provenance written from the caller's payload
+    and must never influence the decision. A record without the
+    server-written resolvedActor marker is not an approval — fail
+    closed, whatever its display fields claim. The identity comparison
+    canonicalizes one way on both sides (the shared _canonical_account):
+    the MXID localpart and the runtimeName of the same member are the
+    same identity, so the display spelling can no longer decide whether
+    the decider is the submitter."""
     attention = task.get("attention")
     if not isinstance(attention, list):
-        return []
-    return [r for r in attention if _is_approval_record(r)]
-
-
-def _find_record(task: dict[str, Any], call_id: str) -> dict[str, Any] | None:
-    """The approval record carrying this callId (the last one — an
-    idempotent ask makes duplicates impossible)."""
-    found = None
-    for record in _approval_records(task):
-        if str(record.get("callId") or "") == call_id:
-            found = record
-    return found
-
-
-def _read_journal(path: Path) -> list[dict[str, Any]]:
-    """The journal entries, in append order. Malformed lines (a torn
-    write) are skipped, never fatal — the journal is an audit mirror,
-    and the record state on the task meta stays authoritative."""
-    if not path.is_file():
-        return []
-    entries: list[dict[str, Any]] = []
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
+        return False
+    for record in attention:
+        if not isinstance(record, dict):
             continue
-        try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:
+        if str(record.get("kind") or "") != "approval":
             continue
-        if isinstance(entry, dict):
-            entries.append(entry)
-    return entries
+        if not record.get("resolved"):
+            continue
+        if record.get("resolvedRole") != "human":
+            continue
+        if str(record.get("resolvedVia") or "") not in _HUMAN_RESOLVE_CHANNELS:
+            continue
+        # The decider is the server-written marker only (#1467 round
+        # 8): resolvedBy is display provenance and never decides — a
+        # record without the server marker is not an approval (fail
+        # closed).
+        _decider_role, account = _decider_identity(
+            str(record.get("resolvedActor") or "")
+        )
+        if not account:
+            continue
+        if submitter_account and _canonical_account(
+            account
+        ) == _canonical_account(submitter_account):
+            continue
+        return True
+    return False
 
 
-def _load_journal(workspace: Path | str, task_id: str) -> list[dict[str, Any]]:
-    return _read_journal(approval_audit_path(workspace, task_id))
+def _approval_authorized(
+    actor: str,
+    resolve_via: str,
+    resolved_by: str = "",
+    resolve_evidence: Any = None,
+) -> bool:
+    """Only the trusted runtime role can authorize an approval close.
+
+    Every field a tool caller controls (role, account, channel, decider,
+    evidence) is provenance, never authority: with no trusted role there
+    is no verified human identity, so the close fails closed. The
+    parameters are accepted for call-site compatibility and are
+    deliberately ignored by the decision. A human integration
+    (dashboard / API bridge) must run with the runtime role 'human'
+    (AGENTTEAMS_AGENT_ROLE=human or member.role in the runtime config);
+    that value comes from the operator, not the payload (#1467 round 4:
+    trusted authority only)."""
+    return _runtime_role() == "human"
 
 
-def _append_event(
-    workspace: Path | str,
-    task_id: str,
-    event: dict[str, Any],
-) -> dict[str, Any]:
-    """Append one journal line with its monotonically increasing seq."""
-    path = approval_audit_path(workspace, task_id)
-    entries = _read_journal(path)
-    event = dict(event)
-    event["seq"] = max((int(e.get("seq") or 0) for e in entries), default=0) + 1
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event, ensure_ascii=False) + "\n")
-    return event
+def _guard_delegate_decision_class(payload: dict[str, Any]) -> str:
+    """W2: with the protocol switch on, delegate_task requires a known
+    decision class (r1..r6, contracts/decision-classes.json). Returns the
+    class to persist on the task meta; with the switch off the field is
+    ignored entirely (pre-W2 behaviour, byte-for-byte)."""
+    if not _protocol_enforce_enabled():
+        return ""
+    decision_class = _first_text(payload.get("decision_class"), payload.get("decisionClass"))
+    if not decision_class:
+        raise ProtocolGuardError(
+            "missing_decision_class",
+            "decision_class is required (r1..r6, see contracts/decision-classes.json)",
+        )
+    if decision_class not in DECISION_CLASS_IDS:
+        raise ProtocolGuardError(
+            "unknown_decision_class",
+            "decision_class must be one of r1, r2, r3, r4, r5, r6 (see contracts/decision-classes.json)",
+        )
+    return decision_class
 
 
-def _find_event(
-    entries: list[dict[str, Any]],
-    kind: str,
-    call_id: str,
-) -> dict[str, Any] | None:
-    for entry in entries:
-        if (
-            str(entry.get("event") or "") == kind
-            and str(entry.get("callId") or "") == call_id
-        ):
-            return entry
-    return None
-
-
-def ask_approval(
-    task: dict[str, Any],
-    workspace: Path | str,
-    task_id: str,
-    *,
-    question: str = "",
-    deadline_at: str | None = None,
-    wait_seconds: float | int | None = None,
-    call_id: str | None = None,
-    now: str | datetime.datetime | None = None,
-) -> dict[str, Any]:
-    """Ask a human for a bounded approval decision (②: the ``asked``
-    half of the audit pair).
-
-    Appends a kind='approval' attention record (the loop) carrying the
-    TH-20 fields — callId, approvalStatus 'pending', approvalDeadlineAt
-    — and appends the ``asked`` event to the separate journal. The
-    deadline is the explicit ``deadline_at`` (ISO-8601), else
-    ``wait_seconds`` from now, else the 30-minute default.
-
-    Idempotent per callId: an OPEN (pending) approval with the same
-    callId is reused as-is — no second record, no second asked event
-    (a retry of a failed ask must not ping twice). A callId whose
-    previous ask already reached a terminal state is NOT reused: a
-    re-ask after a decision or a lapse must come with a fresh callId.
+def _protocol_guard_for_accept(task: dict[str, Any], accepted: bool) -> None:
+    """W2 acceptance gates for projectflow accept_task_result (skipped
+    entirely with the protocol switch off). The gate applies to a
+    POSITIVE acceptance only: a rejection / return-for-revision
+    (accepted=False) must always be possible, so it returns immediately
+    for those. With accepted=True:
+    - a missing or malformed review record blocks the acceptance
+      (review_missing);
+    - a review record with a non-passing verdict blocks the acceptance
+      (review_not_passed);
+    - an r1 task result (task_result_acceptance class; an absent
+      decision_class reads as r4) cannot be decided without a resolved
+      approval record carrying the trusted-authority marker
+      (approval_required): the record must have been closed by the
+      authorized path (server-written resolvedRole "human") through a
+      human channel by a decider — the server-written resolvedActor
+      only; the display field resolvedBy never decides (#1467 round 8)
+      — whose account differs from the task's assignee (self-approval
+      never counts; the role is never inferred from the decider
+      strings, and record presence alone is not an approval).
     """
-    if not isinstance(task, dict):
-        raise ValueError("task must be the task meta dict")
-    attention = task.get("attention")
-    if attention is None:
-        attention = []
-        task["attention"] = attention
-    if not isinstance(attention, list):
-        raise ValueError("task['attention'] must be a list")
-    now_dt = _as_datetime(now)
-    now_iso = _iso(now_dt)
-
-    call_id = str(call_id or "").strip() or _new_call_id()
-    existing = _find_record(task, call_id)
-    if (
-        existing is not None
-        and str(existing.get("approvalStatus") or APPROVAL_PENDING) == APPROVAL_PENDING
+    if not _protocol_enforce_enabled():
+        return
+    if not accepted:
+        return
+    review = task.get("review")
+    verdict = ""
+    if isinstance(review, dict):
+        verdict = str(review.get("verdict") or "").strip().lower()
+    if verdict not in {"pass", "fail"}:
+        raise ProtocolGuardError(
+            "review_missing",
+            "accept_task_result requires a review record before accepting a result "
+            "(missing or malformed)",
+        )
+    if verdict != "pass":
+        raise ProtocolGuardError(
+            "review_not_passed",
+            f"accept_task_result requires a passing review verdict "
+            f"(current verdict: '{review.get('verdict')}')",
+        )
+    if _decision_class_of(task) == "r1" and not _has_approval_record(
+        task, submitter_account=_account_of(task.get("assigned_to") or "")
     ):
-        asked = _find_event(_load_journal(workspace, task_id), "asked", call_id)
-        return {
-            "ok": True,
-            "duplicate": True,
-            "call_id": call_id,
-            "record": existing,
-            "asked": asked,
-            "deadline_at": str(existing.get("approvalDeadlineAt") or ""),
-        }
+        raise ProtocolGuardError(
+            "approval_required",
+            "r1 task result requires a resolved approval record before it can be decided",
+        )
 
-    if deadline_at is not None:
-        deadline_dt = _parse_iso8601(deadline_at, "deadline_at")
-    elif wait_seconds is not None:
+
+# The role prefix a transition actor can carry (see _transition_actor:
+# the canonical _normalize_role output, plus its "unknown" fallback).
+# The vocabulary is the union of this tree's role checks — taskflow
+# (worker / remote-member / leader), review_task (critic / leader), the
+# trusted runtime role (human — a human integration's runtime role
+# surfaces in the actor, #1467 round 4) and constants (worker /
+# remote-member). Accounts may themselves contain a colon (Matrix
+# identities @user:server), so only a leading known role prefix may be
+# stripped — never the last colon segment.
+_ACTOR_ROLE_PREFIXES = {
+    "leader",
+    "worker",
+    "critic",
+    "remote-member",
+    "human",
+    "unknown",
+}
+
+
+def _account_of(actor: str) -> str:
+    """The account identity behind a ``role:account`` actor string.
+
+    Strips only a leading known role prefix; everything after the first
+    colon is the account, including any further colons. An actor whose
+    prefix is not a known role is returned unchanged."""
+    text = str(actor)
+    prefix, sep, rest = text.partition(":")
+    if sep and rest and prefix in _ACTOR_ROLE_PREFIXES:
+        return rest
+    return text
+
+
+# Accounts that mean "the caller did not (or could not) identify
+# itself": the shared 'default' fallback, an explicit 'unknown', or
+# empty. Records written by older builds (pre trusted-identity, every
+# member collapsed to 'default') carry such accounts; they are unknown,
+# not an identity (#1467 round 6: unknown is unknown — no false
+# positive — and a concrete identity can never collide with one).
+#
+# UNKNOWN-SENTINEL VALUES ONLY (#1467 round 7): this set is the
+# vocabulary of records WITHOUT runtime provenance. A runtime-sourced
+# account is an identity and is never mapped through it — a trusted
+# member literally named 'default' is compared as 'default'.
+_UNKNOWN_ACCOUNTS = {"", "default", "unknown"}
+
+
+def _known_account_of(actor: str) -> str:
+    """The UNKNOWN-SENTINEL rule (not the identity rule, #1467
+    round 7): the normalized account behind a ``role:account`` actor
+    string, or '' when the account is the unknown sentinel (empty /
+    'default' / 'unknown').
+
+    It applies only to the side of a comparison that has no runtime
+    provenance — a legacy record without the submitted_by_source /
+    reviewer_source marker, or a payload-sourced side. A
+    runtime-sourced account is compared strictly by the self-review
+    rule and never passes through here, so a trusted member literally
+    named 'default' is never discarded as a sentinel.
+
+    Normalized (strip, lowercase) so only real identity matches count;
+    an unknown account returns '' and can never match — a legacy
+    'worker:default' submission must not block review by a distinct
+    trusted member, and two unknown accounts must not read as the same
+    identity."""
+    account = _account_of(actor).strip().lower()
+    return "" if account in _UNKNOWN_ACCOUNTS else account
+
+
+class _TaskCommitConflict(RuntimeError):
+    """The task base moved between the authoritative read and the commit."""
+
+
+def _review_task_action(
+    arguments: dict[str, Any],
+    payload: dict[str, Any],
+    role: str,
+) -> dict[str, Any]:
+    """review_task with a bounded version-guarded commit (#1467 round 17).
+
+    A peer commit (a freeze with its approval record and
+    decision_status_history) can land after the authoritative pull and
+    before the whole-directory mirror. Each attempt reloads the fresh base
+    and re-applies the review, so the peer's record survives; an exhausted
+    retry fails closed instead of overwriting.
+    """
+    last_error: Exception | None = None
+    for _attempt in range(1, _TASK_COMMIT_ATTEMPTS + 1):
         try:
-            seconds = float(wait_seconds)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("wait_seconds must be a number") from exc
-        if seconds <= 0:
-            raise ValueError("wait_seconds must be > 0")
-        deadline_dt = now_dt + datetime.timedelta(seconds=seconds)
-    else:
-        deadline_dt = now_dt + datetime.timedelta(seconds=DEFAULT_APPROVAL_WAIT_SECONDS)
-    deadline_iso = _iso(deadline_dt)
-
-    record: dict[str, Any] = {
-        "kind": "approval",
-        "question": str(question or "").strip()[:500],
-        # Same attempt counting as the taskflow loop: the 1-based
-        # position among ALL approval records, resolved or not.
-        "attempt": len(_approval_records(task)) + 1,
-        "requestedAt": now_iso,
-        # The loop is open until a decision closes it — a lapse never
-        # resolves it (①: the unavailable state is not a resolution).
-        "resolved": False,
-        "callId": call_id,
-        "approvalStatus": APPROVAL_PENDING,
-        "approvalDeadlineAt": deadline_iso,
-    }
-    attention.append(record)
-    asked_event = _append_event(
-        workspace,
-        task_id,
-        {
-            "event": "asked",
-            "callId": call_id,
-            "taskId": str(task_id),
-            "attempt": record["attempt"],
-            "question": record["question"],
-            "deadlineAt": deadline_iso,
-            "at": now_iso,
-        },
-    )
-    return {
-        "ok": True,
-        "duplicate": False,
-        "call_id": call_id,
-        "record": record,
-        "asked": asked_event,
-        "deadline_at": deadline_iso,
-    }
+            return _review_task_attempt(arguments, payload, role)
+        except _TaskCommitConflict as exc:
+            last_error = exc
+    raise ValueError(f"review_task: {last_error}; reload and retry")
 
 
-def _lapse_record(
-    task: dict[str, Any],
-    workspace: Path | str,
-    task_id: str,
-    record: dict[str, Any],
-    now_dt: datetime.datetime,
+def _review_task_attempt(
+    arguments: dict[str, Any],
+    payload: dict[str, Any],
+    role: str,
 ) -> dict[str, Any]:
-    """Move ONE expired pending approval record to ``unavailable`` and
-    close its audit pair with the lapse outcome (① + ②). Never sets
-    resolved — the lapse is not a decision (no auto-release)."""
-    now_iso = _iso(now_dt)
-    deadline_iso = str(record.get("approvalDeadlineAt") or "")
-    record["approvalStatus"] = APPROVAL_UNAVAILABLE
-    record["unavailableAt"] = now_iso
-    event = _append_event(
-        workspace,
-        task_id,
-        {
-            "event": "decided",
-            "callId": str(record.get("callId") or ""),
-            "taskId": str(task_id),
-            "outcome": OUTCOME_UNAVAILABLE,
-            "reason": "bounded_wait_expired",
-            "deadlineAt": deadline_iso,
-            "at": now_iso,
-        },
-    )
-    return {
-        "call_id": str(record.get("callId") or ""),
-        "deadline_at": deadline_iso,
-        "unavailable_at": now_iso,
-        "decided": event,
-    }
+    """W2: review_task — the critic/leader review of a submitted task
+    result. Only 'submitted' tasks are reviewable; the reviewer must
+    differ from the submitting identity (self_review_forbidden). The
+    record shape follows the design doc §3.3 review object.
 
+    The self-review rule compares identity + provenance (#1467
+    round 7): the reviewer's account is the transition actor's — the
+    trusted runtime member identity when one exists, the payload's
+    account_id otherwise — and its source is recorded on the review
+    object (reviewer_source: "runtime" / "payload"); the submitter's
+    source is the record's submitted_by_source. The exact
+    reviewer == submitted_by match always holds. When both sides are
+    runtime-sourced the normalized accounts compare strictly,
+    "default" included — a trusted name is never treated as unknown
+    just because it equals a sentinel. A legacy record without
+    provenance (or a payload-sourced side) is treated as unknown for
+    compatibility: "default" / "unknown" / empty never match, concrete
+    accounts still compare."""
+    if role not in {"critic", "leader"}:
+        raise ValueError("review_task requires critic or leader role")
+    task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
+    verdict = str(payload.get("verdict") or "").strip().lower()
+    if verdict not in {"pass", "fail"}:
+        raise ValueError("verdict must be one of pass, fail")
+    note = str(payload.get("note") or "").strip()
+    scorecard = payload.get("scorecard")
+    if scorecard is not None and not isinstance(scorecard, dict):
+        raise ValueError("scorecard must be an object")
+    reviewer = _transition_actor(arguments)
+    reviewer_source = _transition_actor_source(arguments)
+    reviewed_at = _utc_timestamp()
 
-def check_approval_bounded_wait(
-    task: dict[str, Any],
-    workspace: Path | str,
-    task_id: str,
-    *,
-    now: str | datetime.datetime | None = None,
-) -> list[dict[str, Any]]:
-    """Evaluate the bounded waits (①): every pending approval record
-    whose deadline has passed (``now >= deadline``, inclusive) lapses to
-    ``unavailable`` and its audit pair closes with the lapse outcome.
+    def apply_review(task: dict[str, Any]) -> dict[str, Any]:
+        """Validate the task against THIS attempt's authoritative base and
+        stamp the review onto it.
 
-    The check is lazy — the MCP runtime has no timer thread, so the
-    wait is evaluated on the next approval-facing operation (this
-    function, or resolve_approval, which runs it itself). Idempotent: a
-    record already in a terminal state is never re-lapsed, and the
-    journal gains at most one decided event per ask. Returns the
-    transitions (one per record that lapsed on this call).
-
-    Legacy records without a callId are skipped: the bounded wait and
-    the audit pair apply to callId-carrying records only.
-    """
-    if not isinstance(task, dict):
-        raise ValueError("task must be the task meta dict")
-    now_dt = _as_datetime(now)
-    transitions: list[dict[str, Any]] = []
-    for record in _approval_records(task):
-        if str(record.get("approvalStatus") or APPROVAL_PENDING) != APPROVAL_PENDING:
-            continue
-        deadline_iso = str(record.get("approvalDeadlineAt") or "")
-        if not deadline_iso or not str(record.get("callId") or ""):
-            continue
-        deadline_dt = _parse_iso8601(deadline_iso, "approvalDeadlineAt")
-        if now_dt < deadline_dt:
-            continue
-        transitions.append(
-            _lapse_record(task, workspace, task_id, record, now_dt)
-        )
-    return transitions
-
-
-def resolve_approval(
-    task: dict[str, Any],
-    workspace: Path | str,
-    task_id: str,
-    call_id: str,
-    decision: str,
-    *,
-    decided_by: str = "",
-    via: str = "tool",
-    evidence: dict[str, Any] | None = None,
-    now: str | datetime.datetime | None = None,
-) -> dict[str, Any]:
-    """Record a human decision on a bounded approval (②: the
-    ``decided`` half of the pair; ③: the callId-deduped resolve).
-
-    ``decision`` is 'approve' or 'deny'. The outcome closes the loop
-    the same way the taskflow close path does (resolved +
-    resolvedVia/resolvedBy/resolvedAt, plus resolveEvidence when
-    given) and appends exactly one ``decided`` event carrying the
-    callId.
-
-    Dedup (③): a second resolve with the SAME callId and the same
-    decision is an idempotent replay — the original outcome is
-    returned with ``duplicate: True``, no new journal entry, no state
-    change (a retry after a lost response must not decide twice). A
-    same-callId CONFLICT (a different decision) is rejected — the
-    first decision wins. A callId that never asked is rejected.
-
-    Bound (①): the deadline is evaluated HERE as well as in
-    check_approval_bounded_wait — a decision after the deadline is
-    rejected (approval_unavailable): the wait ended, the approver was
-    unavailable, and neither auto-release nor a late approval is
-    honored. Re-ask with a fresh callId instead.
-    """
-    if not isinstance(task, dict):
-        raise ValueError("task must be the task meta dict")
-    call_id = str(call_id or "").strip()
-    if not call_id:
-        raise ApprovalGuardError(
-            "invalid_call_id", "callId is required to resolve an approval"
-        )
-    decision = str(decision or "").strip().lower()
-    if decision not in {DECISION_APPROVE, DECISION_DENY}:
-        raise ApprovalGuardError(
-            "invalid_decision", "decision must be one of approve, deny"
-        )
-    via = str(via or "").strip().lower() or "tool"
-    if via not in RESOLVE_VIA_CHANNELS:
-        raise ValueError(
-            "resolvedVia must be one of tool, dashboard, im_reply, im_command, api"
-        )
-    now_dt = _as_datetime(now)
-    now_iso = _iso(now_dt)
-
-    entries = _load_journal(workspace, task_id)
-    record = _find_record(task, call_id)
-
-    # ③ first-decision-wins: the journal is the dedup authority.
-    prior = _find_event(entries, "decided", call_id)
-    if prior is not None:
-        prior_outcome = str(prior.get("outcome") or "")
-        if prior_outcome == OUTCOME_UNAVAILABLE:
-            # ① the wait already ended with the approver unavailable —
-            # a late decision is not honored under any decision verb.
-            raise ApprovalGuardError(
-                "approval_unavailable",
-                "the bounded wait expired (approver unavailable); "
-                "re-ask with a fresh callId",
+        Re-run on every attempt (#1467 round 20): a 409 means a peer
+        committed inside the commit window, so the mutation has to land on
+        the peer's version — never on the body this attempt read before
+        the conflict.
+        """
+        _require_task_mutable(arguments, task, task_id, "review_task")
+        status = str(task.get("status") or "")
+        if status != "submitted":
+            _reject_task_transition(
+                status,
+                status,
+                "review_task",
+                (
+                    f"illegal_transition: review_task: task is '{status}'; "
+                    "wait for submit_task"
+                ),
+                arguments=arguments,
+                task_id=task_id,
             )
-        expected = OUTCOME_APPROVED if decision == DECISION_APPROVE else OUTCOME_DENIED
-        if prior_outcome == expected:
-            return {
-                "ok": True,
-                "duplicate": True,
-                "outcome": prior_outcome,
-                "call_id": call_id,
-                "record": record,
-                "decided": prior,
-            }
-        raise ApprovalGuardError(
-            "approval_already_decided",
-            f"callId '{call_id}' was already decided as '{prior_outcome}' "
-            "(first decision wins)",
-        )
-
-    if record is None:
-        raise ApprovalGuardError(
-            "approval_not_found",
-            f"no approval request with callId '{call_id}'",
-        )
-
-    # ① the bound, evaluated on every path: a late decision is not
-    # honored — the wait already ended with the approver unavailable.
-    if str(record.get("approvalStatus") or APPROVAL_PENDING) == APPROVAL_UNAVAILABLE:
-        raise ApprovalGuardError(
-            "approval_unavailable",
-            "the bounded wait expired (approver unavailable); "
-            "re-ask with a fresh callId",
-        )
-    if str(record.get("approvalStatus") or APPROVAL_PENDING) in {
-        OUTCOME_APPROVED,
-        OUTCOME_DENIED,
-    }:
-        # Decided outside this module's journal (legacy close): the
-        # record state is still authoritative — never decide twice.
-        raise ApprovalGuardError(
-            "approval_already_decided",
-            "the approval record is already decided",
-        )
-    deadline_iso = str(record.get("approvalDeadlineAt") or "")
-    if deadline_iso:
-        deadline_dt = _parse_iso8601(deadline_iso, "approvalDeadlineAt")
-        if now_dt >= deadline_dt:
-            _lapse_record(task, workspace, task_id, record, now_dt)
-            raise ApprovalGuardError(
-                "approval_unavailable",
-                "the bounded wait expired (approver unavailable); "
-                "re-ask with a fresh callId",
+        submitted_by = _first_text(task.get("submitted_by"), task.get("submittedBy"))
+        # Self-review compares identity + provenance (#1467 round 7). The
+        # exact actor-string match always holds. When BOTH sides are
+        # runtime-sourced — the record carries submitted_by_source
+        # "runtime" and the reviewer has a trusted runtime identity — the
+        # normalized accounts compare strictly, "default" included: a
+        # trusted member literally named "default" is an identity, never
+        # the legacy sentinel. Otherwise — a legacy record without the
+        # provenance marker, or a payload-sourced side — the
+        # unknown-sentinel rule applies for compatibility: "default" /
+        # "unknown" / empty never match, concrete accounts still compare
+        # (#1467 round 6).
+        reviewer_account = _account_of(reviewer).strip().lower()
+        submitter_account = _account_of(submitted_by).strip().lower()
+        submitter_source = str(task.get("submitted_by_source") or "")
+        both_runtime = submitter_source == "runtime" and reviewer_source == "runtime"
+        if submitted_by and (
+            reviewer == submitted_by
+            or (both_runtime and reviewer_account == submitter_account)
+            or (
+                not both_runtime
+                and _known_account_of(reviewer)
+                and _known_account_of(reviewer) == _known_account_of(submitted_by)
             )
-
-    outcome = OUTCOME_APPROVED if decision == DECISION_APPROVE else OUTCOME_DENIED
-    record["approvalStatus"] = outcome
-    record["decidedAt"] = now_iso
-    # Close the loop the way the taskflow close path does (S0 resolve
-    # provenance): the decision IS the resolution of the loop.
-    record["resolved"] = True
-    record["resolvedVia"] = via
-    decided_by = str(decided_by or "").strip()[:200]
-    if decided_by:
-        record["resolvedBy"] = decided_by
-    record["resolvedAt"] = now_iso
-    if isinstance(evidence, dict) and evidence:
-        record["resolveEvidence"] = evidence
-    decided_event = _append_event(
-        workspace,
-        task_id,
-        {
-            "event": "decided",
-            "callId": call_id,
-            "taskId": str(task_id),
-            "outcome": outcome,
-            "decision": decision,
-            "decidedBy": decided_by,
-            "via": via,
-            "at": now_iso,
-        },
-    )
-    return {
-        "ok": True,
-        "duplicate": False,
-        "outcome": outcome,
-        "call_id": call_id,
-        "record": record,
-        "decided": decided_event,
-    }
-
-
-def approval_state(
-    task: dict[str, Any],
-    *,
-    now: str | datetime.datetime | None = None,
-) -> dict[str, Any]:
-    """The live position of the task's most recent callId-carrying
-    approval request: its state (pending / approved / denied /
-    unavailable / None when none), its callId and deadline, and — for a
-    pending record — whether the deadline has already passed without
-    the lapse check having run yet (expired=True: past due, not yet
-    audited). Legacy records without a callId are out of scope and are
-    never reported here."""
-    managed = [
-        r for r in _approval_records(task) if str(r.get("callId") or "")
-    ]
-    if not managed:
-        return {
-            "status": None,
-            "call_id": None,
-            "deadline_at": None,
-            "expired": False,
+        ):
+            raise ProtocolGuardError(
+                "self_review_forbidden",
+                "reviewer must differ from submitted_by",
+            )
+        review: dict[str, Any] = {
+            "verdict": verdict,
+            "reviewer": reviewer,
+            "reviewer_source": reviewer_source,
+            "reviewer_team": _runtime_team_name(),
+            "reviewed_at": reviewed_at,
+            "note": note,
         }
-    record = managed[-1]
-    status = str(record.get("approvalStatus") or APPROVAL_PENDING)
-    deadline_iso = str(record.get("approvalDeadlineAt") or "")
-    expired = False
-    if status == APPROVAL_PENDING and deadline_iso and now is not None:
-        now_dt = _as_datetime(now)
-        deadline_dt = _parse_iso8601(deadline_iso, "approvalDeadlineAt")
-        expired = now_dt >= deadline_dt
+        if scorecard is not None:
+            review["scorecard"] = scorecard
+        task["review"] = review
+        return review
+
+    # #1467 round 20: this caller's body must be bound to the version it
+    # read. The old tail re-read the peer's ETag but still committed through
+    # _sync_task, which merges only cancellation fields — so a freeze that
+    # landed after the pre-write stat was silently erased even though the
+    # guard had "seen" the newer version. _commit_task_guarded does the whole
+    # job: versioned bracket read -> pre-write stat -> derived-file push
+    # (never meta.json) -> If-Match meta commit; a 409 re-reads the bracket
+    # and replays apply_review on the peer's version, and any other refusal
+    # fails closed instead of degrading to an unconditional push.
+    task, review, committed = _commit_task_guarded(
+        arguments,
+        task_id,
+        apply_review,
+        action="review_task",
+        exclude=["spec.md", "base/"],
+    )
+    if not committed:
+        raise ValueError("review_task: task sync failed (retry)")
     return {
-        "status": status,
-        "call_id": str(record.get("callId") or ""),
-        "deadline_at": deadline_iso,
-        "expired": expired,
-    }
-
-
-def read_approval_audit(workspace: Path | str, task_id: str) -> list[dict[str, Any]]:
-    """The task's audit journal (separate file, append order)."""
-    return _load_journal(workspace, task_id)
-
-
-def audit_pairs(entries: list[dict[str, Any]]) -> dict[str, Any]:
-    """Pair the journal into asked/decided pairs (②), by callId.
-
-    Every callId with an asked AND a decided entry is a pair (the first
-    of each, in append order). A callId with an asked but no decided is
-    an open (or abandoned) wait — reported, not averaged away. A
-    decided without an asked is a corrupt or foreign event; TWO decided
-    events for one callId is a dedup violation the report surfaces in
-    ``duplicate_decided`` instead of hiding.
-    """
-    asked: dict[str, dict[str, Any]] = {}
-    decided: dict[str, list[dict[str, Any]]] = {}
-    for entry in entries or []:
-        if not isinstance(entry, dict):
-            continue
-        call_id = str(entry.get("callId") or "")
-        if not call_id:
-            continue
-        kind = str(entry.get("event") or "")
-        if kind == "asked" and call_id not in asked:
-            asked[call_id] = entry
-        elif kind == "decided":
-            decided.setdefault(call_id, []).append(entry)
-    pairs: dict[str, dict[str, Any]] = {}
-    unpaired_asked: list[str] = []
-    unpaired_decided: list[str] = []
-    duplicate_decided: dict[str, int] = {}
-    for call_id in sorted(set(asked) | set(decided)):
-        has_asked = call_id in asked
-        count_decided = len(decided.get(call_id, ()))
-        if has_asked and count_decided >= 1:
-            pairs[call_id] = {
-                "asked": asked[call_id],
-                "decided": decided[call_id][0],
-            }
-        if not has_asked and count_decided >= 1:
-            unpaired_decided.append(call_id)
-        if has_asked and count_decided == 0:
-            unpaired_asked.append(call_id)
-        if count_decided >= 2:
-            duplicate_decided[call_id] = count_decided
-    return {
-        "pairs": pairs,
-        "unpaired_asked": unpaired_asked,
-        "unpaired_decided": unpaired_decided,
-        "duplicate_decided": duplicate_decided,
+        "ok": True,
+        "tool": "taskflow",
+        "action": "review_task",
+        "task": task,
+        "review": review,
+        "synced": committed,
     }

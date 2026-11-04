@@ -86,6 +86,21 @@ def _section(data: dict[str, Any], name: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _protocol_enforce_enabled() -> bool:
+    """W2 protocol guard switch (issue #1451 W2).
+
+    The ``protocol.enforce`` key of the TEAMHARNESS_RUNTIME_CONFIG (JSON or
+    YAML) decides; the TEAMHARNESS_PROTOCOL_ENFORCE environment variable
+    overrides when set to a non-empty value. Default off: with the switch
+    off every W2 guard is skipped and the behaviour is byte-for-byte the
+    pre-W2 behaviour.
+    """
+    override = os.getenv("TEAMHARNESS_PROTOCOL_ENFORCE", "").strip().lower()
+    if override:
+        return override in {"1", "true", "yes", "on"}
+    return bool(_section(_load_runtime_config(), "protocol").get("enforce"))
+
+
 def _runtime_team_name() -> str:
     """Return the runtime team name from TEAMHARNESS_RUNTIME_CONFIG, if any.
 

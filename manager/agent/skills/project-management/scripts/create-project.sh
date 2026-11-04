@@ -3,6 +3,12 @@
 #
 # Usage:
 #   create-project.sh --id <PROJECT_ID> --title <TITLE> --workers <w1,w2,...>
+#   create-project.sh --id <PROJECT_ID> --title <TITLE> --team <TEAM> [--workers <w1,...>]
+#
+# --team expands to the Team's leader and all its workers, read from the
+# controller; --workers adds to that (union, each member once). --workers alone
+# is the member list exactly as given, so passing only a leader invites only
+# the leader.
 #
 # Prerequisites:
 #   - Worker SOUL.md files must already exist
@@ -14,6 +20,7 @@ source /opt/agentteams/scripts/lib/agentteams-env.sh
 PROJECT_ID=""
 PROJECT_TITLE=""
 WORKERS_CSV=""
+TEAM_NAME=""
 GRANT_ADMIN_CSV=""
 
 while [ $# -gt 0 ]; do
@@ -21,13 +28,14 @@ while [ $# -gt 0 ]; do
         --id)          PROJECT_ID="$2"; shift 2 ;;
         --title)       PROJECT_TITLE="$2"; shift 2 ;;
         --workers)     WORKERS_CSV="$2"; shift 2 ;;
+        --team)        TEAM_NAME="$2"; shift 2 ;;
         --grant-admin) GRANT_ADMIN_CSV="$2"; shift 2 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
 
-if [ -z "${PROJECT_ID}" ] || [ -z "${PROJECT_TITLE}" ] || [ -z "${WORKERS_CSV}" ]; then
-    echo "Usage: create-project.sh --id <PROJECT_ID> --title <TITLE> --workers <w1,w2,...> [--grant-admin <u1,u2,...>]"
+if [ -z "${PROJECT_ID}" ] || [ -z "${PROJECT_TITLE}" ] || { [ -z "${WORKERS_CSV}" ] && [ -z "${TEAM_NAME}" ]; }; then
+    echo "Usage: create-project.sh --id <PROJECT_ID> --title <TITLE> (--workers <w1,w2,...> | --team <TEAM> [--workers <w1,...>]) [--grant-admin <u1,u2,...>]"
     exit 1
 fi
 
@@ -38,6 +46,24 @@ _fail() {
     echo '{"error": "'"$1"'"}'
     exit 1
 }
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=project-members.sh
+source "${SCRIPT_DIR}/project-members.sh"
+
+# Resolve the member list before anything is created: a Team that cannot be
+# read stops here, not after a half-built project.
+if [ -n "${TEAM_NAME}" ]; then
+    TEAM_ROSTER=$(project_team_roster "${TEAM_NAME}" 2>&1) || _fail "${TEAM_ROSTER}"
+    TEAM_CSV=$(project_merge_members "$(printf '%s\n' "${TEAM_ROSTER}" | cut -f1 | paste -sd, -)")
+    log "Team ${TEAM_NAME} roster: ${TEAM_CSV}"
+    [ -z "${WORKERS_CSV}" ] || log "  plus --workers: ${WORKERS_CSV}"
+    WORKERS_CSV=$(project_merge_members "${TEAM_CSV}" "${WORKERS_CSV}")
+else
+    WORKERS_CSV=$(project_merge_members "${WORKERS_CSV}")
+fi
+[ -n "${WORKERS_CSV}" ] || _fail "No project members to invite"
+log "Project members: ${WORKERS_CSV}"
 
 # Ensure Manager Matrix token is available
 SECRETS_FILE="/data/agentteams-secrets.env"
@@ -243,7 +269,15 @@ _write_worker_join_status() { # _write_worker_join_status <path>
 _worker_auto_join() {
     local worker="$1"
     local room_id="$2"
-    local creds_file="/data/worker-creds/${worker}.env"
+    # Controller credentials are keyed by the Worker CR; workspace passwords
+    # and Matrix login use its effective runtime name. Explicit --workers keep
+    # their existing runtime-name semantics.
+    local credential_name="${worker}"
+    if [ -n "${TEAM_ROSTER:-}" ]; then
+        credential_name=$(printf '%s\n' "${TEAM_ROSTER}" | awk -F '\t' -v name="${worker}" '$1 == name {print $2; exit}')
+        credential_name="${credential_name:-${worker}}"
+    fi
+    local creds_file="/data/worker-creds/${credential_name}.env"
     local worker_token=""
     local room_enc=""
     local WORKER_PASSWORD=""
@@ -397,12 +431,18 @@ RESULT=$(jq -n \
     --arg room_id "${ROOM_ID}" \
     --arg status "planning" \
     --arg workers "${WORKERS_CSV}" \
+    --arg joined "$(printf '%s' "${WORKER_JOIN_STATUS_ROWS}" | awk -F '\t' '$2 == "joined" {print $1}' | paste -sd, -)" \
+    --arg join_pending "$(printf '%s' "${WORKER_JOIN_STATUS_ROWS}" | awk -F '\t' '$2 == "pending" {print $1}' | paste -sd, -)" \
+    --arg join_failed "$(printf '%s' "${WORKER_JOIN_STATUS_ROWS}" | awk -F '\t' '$2 == "failed" {print $1}' | paste -sd, -)" \
     '{
         project_id: $id,
         title: $title,
         project_room_id: $room_id,
         status: $status,
-        workers: ($workers | split(","))
+        workers: ($workers | split(",")),
+        joined: ($joined | split(",") | map(select(. != ""))),
+        join_pending: ($join_pending | split(",") | map(select(. != ""))),
+        join_failed: ($join_failed | split(",") | map(select(. != "")))
     }')
 
 echo "---RESULT---"

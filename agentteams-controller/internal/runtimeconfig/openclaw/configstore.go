@@ -633,7 +633,7 @@ func (m *ConfigManager) Write(ctx context.Context, worker string, values map[str
 		return WriteResult{}, fmt.Errorf("worker %s openclaw.json is not a valid JSON object: %w", worker, err)
 	}
 
-	leaves := collectLeaves("", values)
+	leaves := collectLeaves("", values, m.adapter.isAtomicSecretLeaf)
 	var unknown []string
 	var validation *ValidationError
 	sensitiveLeaves := map[string]SecretRef{}
@@ -739,7 +739,7 @@ func (m *ConfigManager) Write(ctx context.Context, worker string, values map[str
 		return WriteResult{}, errors.New("read-back after write does not match the intended content; state unknown")
 	}
 
-	writtenKeys := collectLeafKeys("", pruned)
+	writtenKeys := collectLeafKeys("", pruned, m.adapter.isAtomicSecretLeaf)
 	restartKeys := make([]string, 0)
 	for _, k := range writtenKeys {
 		// Opaque leaves inherit the applies level of their declared
@@ -786,17 +786,39 @@ type leaf struct {
 	value any
 }
 
+// isAtomicSecretLeaf reports whether v at key is the value of a declared
+// secret field. Such a value is an OpenClaw SecretRef object and must stay
+// atomic: decomposing it into .source/.provider/.id would make those keys
+// unknown fields before ValidateSecretRef ever runs.
+func (a *Adapter) isAtomicSecretLeaf(key string, v any) bool {
+	if _, ok := v.(map[string]any); !ok {
+		return false
+	}
+	f, mode, ok := a.ResolveKey(key)
+	// Only a field declared with type "secret" carries a SecretRef value.
+	// A sensitive *object* container (e.g. agents.defaults.sandbox) stays
+	// decomposed on purpose: nested writes below it must keep failing
+	// closed at their own key rather than being read as a malformed ref.
+	return ok && mode == KeyExact && f.Type == "secret"
+}
+
 // collectLeaves walks a partial document to its concrete leaves (non-map
-// values). Empty objects contribute no leaves.
-func collectLeaves(prefix string, doc map[string]any) []leaf {
+// values). Empty objects contribute no leaves. When atomic is non-nil, a
+// value for which atomic(key, v) holds stays a single leaf at its full key
+// instead of being decomposed (declared secret refs).
+func collectLeaves(prefix string, doc map[string]any, atomic func(string, any) bool) []leaf {
 	var out []leaf
 	for k, v := range doc {
 		key := k
 		if prefix != "" {
 			key = prefix + "." + k
 		}
+		if atomic != nil && atomic(key, v) {
+			out = append(out, leaf{key: key, value: v})
+			continue
+		}
 		if sub, ok := v.(map[string]any); ok {
-			out = append(out, collectLeaves(key, sub)...)
+			out = append(out, collectLeaves(key, sub, atomic)...)
 			continue
 		}
 		out = append(out, leaf{key: key, value: v})
@@ -805,15 +827,21 @@ func collectLeaves(prefix string, doc map[string]any) []leaf {
 	return out
 }
 
-func collectLeafKeys(prefix string, doc map[string]any) []string {
+// collectLeafKeys is the key projection of collectLeaves: same walk, same
+// atomicity (atomic(key, v) values are reported under their full key).
+func collectLeafKeys(prefix string, doc map[string]any, atomic func(string, any) bool) []string {
 	out := make([]string, 0)
 	for k, v := range doc {
 		key := k
 		if prefix != "" {
 			key = prefix + "." + k
 		}
+		if atomic != nil && atomic(key, v) {
+			out = append(out, key)
+			continue
+		}
 		if sub, ok := v.(map[string]any); ok {
-			out = append(out, collectLeafKeys(key, sub)...)
+			out = append(out, collectLeafKeys(key, sub, atomic)...)
 			continue
 		}
 		out = append(out, key)
@@ -826,6 +854,8 @@ func collectLeafKeys(prefix string, doc map[string]any) []string {
 // ref does not resolve in the container. Returns nil when nothing remains.
 // Env resolution uses a direct `printenv <id>` exec (no shell: the id is a
 // validated [A-Z][A-Z0-9_]* token and is passed as a single argument).
+// Sensitive keys are checked BEFORE map recursion: a secret ref's value is
+// itself a map (source/provider/id) that must never be decomposed.
 func (m *ConfigManager) pruneUnsupported(ctx context.Context, worker, prefix string, doc map[string]any, sensitive map[string]SecretRef, unsupported *[]UnsupportedKey, clone func(map[string]any) map[string]any) map[string]any {
 	out := clone(doc)
 	empty := true
@@ -833,6 +863,18 @@ func (m *ConfigManager) pruneUnsupported(ctx context.Context, worker, prefix str
 		key := k
 		if prefix != "" {
 			key = prefix + "." + k
+		}
+		if ref, isSensitive := sensitive[key]; isSensitive {
+			if ref.Source == "env" && !m.envResolves(ctx, worker, ref.ID) {
+				*unsupported = append(*unsupported, UnsupportedKey{
+					Key:    key,
+					Reason: "env secret ref " + ref.ID + " does not resolve in the worker container; key skipped (plaintext fallback is forbidden)",
+				})
+				delete(out, k)
+				continue
+			}
+			empty = false
+			continue // atomic: never recurse into the ref
 		}
 		if sub, ok := v.(map[string]any); ok {
 			child := m.pruneUnsupported(ctx, worker, key, sub, sensitive, unsupported, clone)
@@ -842,19 +884,6 @@ func (m *ConfigManager) pruneUnsupported(ctx context.Context, worker, prefix str
 			}
 			out[k] = child
 			empty = false
-			continue
-		}
-		ref, isSensitive := sensitive[key]
-		if !isSensitive {
-			empty = false
-			continue
-		}
-		if ref.Source == "env" && !m.envResolves(ctx, worker, ref.ID) {
-			*unsupported = append(*unsupported, UnsupportedKey{
-				Key:    key,
-				Reason: "env secret ref " + ref.ID + " does not resolve in the worker container; key skipped (plaintext fallback is forbidden)",
-			})
-			delete(out, k)
 			continue
 		}
 		empty = false
@@ -952,7 +981,7 @@ func (m *ConfigManager) Rollback(ctx context.Context, worker, rev string) (Write
 		return WriteResult{}, errors.New("read-back after rollback does not match the snapshot; state unknown")
 	}
 
-	writtenKeys := collectLeafKeys("", doc)
+	writtenKeys := collectLeafKeys("", doc, m.adapter.isAtomicSecretLeaf)
 	restartKeys := make([]string, 0)
 	for _, k := range writtenKeys {
 		if f, _, ok := m.adapter.ResolveKey(k); ok && f.Applies == runtimeconfig.AppliesRestart {

@@ -30,6 +30,9 @@ type fakeExec struct {
 	gwHash         *string
 	gwErr          error
 	gwApplyOnWrite bool
+	// env is the worker's environment for printenv: a hit returns the
+	// value (exit 0), a miss stays "not defined" (exit 1).
+	env map[string]string
 }
 
 func (b *fakeExec) Exec(_ context.Context, _ string, command []string, _ time.Duration) (string, string, int, error) {
@@ -61,6 +64,9 @@ func (b *fakeExec) Exec(_ context.Context, _ string, command []string, _ time.Du
 		}
 		return `{"appliedConfigHash":` + h + `}`, "", 0, nil
 	case len(command) == 2 && command[0] == "printenv":
+		if v, ok := b.env[command[1]]; ok {
+			return v, "", 0, nil
+		}
 		return "", "not defined", 1, nil
 	}
 	return "", "unhandled: " + strings.Join(command, " "), 127, nil
@@ -303,5 +309,250 @@ func TestRead_GatewayDownIsError(t *testing.T) {
 	exec.gwErr = errors.New("gateway not running")
 	if _, err := m.Read(context.Background(), "w1"); err == nil {
 		t.Fatalf("Read must fail when the gateway is unreachable with a known baseline")
+	}
+}
+
+// --- declared secret refs stay atomic across the write walkers (#1493) ---
+
+// secretRefValue is the canonical resolvable env ref used by the
+// secret-atomicity tests.
+func secretRefValue() map[string]any {
+	return map[string]any{"source": "env", "provider": "default", "id": "TRACKER_TEST_TOKEN"}
+}
+
+// payloadFor wraps a dotted key as a nested partial document
+// ("gateway.auth.token" -> {"gateway":{"auth":{"token":v}}}).
+func payloadFor(key string, v any) map[string]any {
+	segs := strings.Split(key, ".")
+	var doc any = v
+	for i := len(segs) - 1; i >= 0; i-- {
+		doc = map[string]any{segs[i]: doc}
+	}
+	return doc.(map[string]any)
+}
+
+// docAt walks a nested document along a dotted key.
+func docAt(doc map[string]any, key string) (any, bool) {
+	cur := any(doc)
+	for _, seg := range strings.Split(key, ".") {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		cur, ok = m[seg]
+		if !ok {
+			return nil, false
+		}
+	}
+	return cur, true
+}
+
+// secretRefEquals reports whether got equals the want ref object field by
+// field (both must be maps of the same size and content).
+func secretRefEquals(got, want any) bool {
+	gm, ok := got.(map[string]any)
+	if !ok {
+		return false
+	}
+	wm, ok := want.(map[string]any)
+	if !ok || len(gm) != len(wm) {
+		return false
+	}
+	for k, v := range wm {
+		if gm[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// secretRefKeys is the set of declared secret fields the #1493 fix must
+// keep atomic (surface.json, all type: secret + sensitive).
+var secretRefKeys = []string{
+	"gateway.auth.token",
+	"models.providers.example.apiKey",
+	"hooks.token",
+	"skills.entries.demo.apiKey",
+}
+
+// TestWrite_SecretRefEnvResolves: a declared secret field's legal value is
+// a SecretRef object; the write walkers must keep it whole. Before the
+// fix, collectLeaves decomposed it into .source/.provider/.id, which
+// ResolveKey reported as unknown fields (422) before ValidateSecretRef
+// ever ran.
+func TestWrite_SecretRefEnvResolves(t *testing.T) {
+	ref := secretRefValue()
+	for _, key := range secretRefKeys {
+		t.Run(key, func(t *testing.T) {
+			exec := newFakeExec(pluginsDiscordUp)
+			exec.env = map[string]string{"TRACKER_TEST_TOKEN": "s3cret"}
+			m := newTestManager(t, exec)
+
+			res, err := m.Write(context.Background(), "w1", payloadFor(key, ref), "")
+			if err != nil {
+				t.Fatalf("Write: %v", err)
+			}
+			if len(res.Unsupported) != 0 {
+				t.Fatalf("unsupported=%v, want none", res.Unsupported)
+			}
+			for _, k := range res.PendingRestart {
+				if strings.HasSuffix(k, ".source") || strings.HasSuffix(k, ".provider") || strings.HasSuffix(k, ".id") {
+					t.Fatalf("pendingRestart contains decomposed ref fragment %q", k)
+				}
+			}
+			// The ref lands on disk verbatim, at the full key.
+			var doc map[string]any
+			if err := json.Unmarshal([]byte(exec.fs[testConfigPath]), &doc); err != nil {
+				t.Fatalf("parse written file: %v", err)
+			}
+			got, ok := docAt(doc, key)
+			if !ok {
+				t.Fatalf("key %q missing from the written file", key)
+			}
+			if !secretRefEquals(got, ref) {
+				t.Fatalf("file value at %q = %v, want the ref verbatim", key, got)
+			}
+			// writtenKeys (read back from the desired state) keeps the
+			// full key, not ref fragments.
+			raw, err := m.store.GetObject(context.Background(), desiredKey("w1"))
+			if err != nil {
+				t.Fatalf("read desired state: %v", err)
+			}
+			var d DesiredState
+			if err := json.Unmarshal(raw, &d); err != nil {
+				t.Fatalf("unmarshal desired state: %v", err)
+			}
+			if len(d.WrittenKeys) != 1 || d.WrittenKeys[0] != key {
+				t.Fatalf("writtenKeys=%v, want [%s]", d.WrittenKeys, key)
+			}
+		})
+	}
+}
+
+// TestWrite_SecretRefEnvUnresolvable: an env ref that does not resolve in
+// the worker container makes the key unsupported — skipped and reported,
+// never written, never downgraded to plaintext. With a regular key in the
+// same payload the write still succeeds; with the secret as the only key
+// it is a NoWritableKeysError.
+func TestWrite_SecretRefEnvUnresolvable(t *testing.T) {
+	ref := secretRefValue()
+	for _, key := range secretRefKeys {
+		t.Run(key, func(t *testing.T) {
+			exec := newFakeExec(pluginsDiscordUp) // env left empty: unresolvable
+			m := newTestManager(t, exec)
+
+			// Mixed payload: the regular key is written, the secret ref
+			// is skipped and reported.
+			partial := deepMerge(
+				payloadFor("gateway.publicOrigin", "https://gw.test"),
+				payloadFor(key, ref),
+			)
+			res, err := m.Write(context.Background(), "w1", partial, "")
+			if err != nil {
+				t.Fatalf("Write (mixed): %v", err)
+			}
+			if len(res.Unsupported) != 1 || res.Unsupported[0].Key != key {
+				t.Fatalf("unsupported=%v, want exactly one entry for %s", res.Unsupported, key)
+			}
+			if !strings.Contains(res.Unsupported[0].Reason, "plaintext fallback is forbidden") {
+				t.Fatalf("reason=%q, want the no-plaintext-fallback explanation", res.Unsupported[0].Reason)
+			}
+			// No trace of the ref (or any fragment of it) on disk, while
+			// the regular key landed.
+			rawFile := exec.fs[testConfigPath]
+			if strings.Contains(rawFile, "TRACKER_TEST_TOKEN") {
+				t.Fatalf("written file still carries secret ref material")
+			}
+			var doc map[string]any
+			if err := json.Unmarshal([]byte(rawFile), &doc); err != nil {
+				t.Fatalf("parse written file: %v", err)
+			}
+			if _, ok := docAt(doc, key); ok {
+				t.Fatalf("key %q written despite the unresolvable ref", key)
+			}
+			if v, ok := docAt(doc, "gateway.publicOrigin"); !ok || v != "https://gw.test" {
+				t.Fatalf("regular key missing from the written file (doc=%v)", doc)
+			}
+
+			// Secret-only payload: no writable keys remain.
+			exec2 := newFakeExec(pluginsDiscordUp)
+			m2 := newTestManager(t, exec2)
+			_, err = m2.Write(context.Background(), "w1", payloadFor(key, ref), "")
+			var noKeys *NoWritableKeysError
+			if !errors.As(err, &noKeys) {
+				t.Fatalf("Write (secret-only) error = %v, want NoWritableKeysError", err)
+			}
+			if len(noKeys.Unsupported) != 1 || noKeys.Unsupported[0].Key != key {
+				t.Fatalf("unsupported=%v, want exactly one entry for %s", noKeys.Unsupported, key)
+			}
+		})
+	}
+}
+
+// TestWrite_SecretRefPlaintextRejected: a secret field never accepts a
+// plaintext scalar — ValidationError, and the file is untouched.
+func TestWrite_SecretRefPlaintextRejected(t *testing.T) {
+	exec := newFakeExec(pluginsDiscordUp)
+	m := newTestManager(t, exec)
+	_, err := m.Write(context.Background(), "w1", payloadFor("gateway.auth.token", "plaintext-token"), "")
+	var vErr *ValidationError
+	if !errors.As(err, &vErr) {
+		t.Fatalf("Write error = %v, want ValidationError", err)
+	}
+	if vErr.Key != "gateway.auth.token" {
+		t.Fatalf("error key = %q, want gateway.auth.token", vErr.Key)
+	}
+	if exec.fs[testConfigPath] != testConfigInitial {
+		t.Fatalf("file changed despite the rejected plaintext write")
+	}
+}
+
+// TestCollectLeaves_SecretRefStaysAtomic: the walker keeps a declared
+// secret ref as one leaf at its full key and still decomposes ordinary
+// nested objects.
+func TestCollectLeaves_SecretRefStaysAtomic(t *testing.T) {
+	a := New()
+	ref := secretRefValue()
+	doc := deepMerge(payloadFor("gateway.auth.token", ref), payloadFor("hooks.enabled", true))
+	leaves := collectLeaves("", doc, a.isAtomicSecretLeaf)
+	want := []string{"gateway.auth.token", "hooks.enabled"}
+	if len(leaves) != len(want) {
+		t.Fatalf("got %d leaves, want %d", len(leaves), len(want))
+	}
+	for i, l := range leaves {
+		for _, suffix := range []string{".source", ".provider", ".id"} {
+			if strings.HasSuffix(l.key, suffix) {
+				t.Fatalf("leaf %q is a decomposed ref fragment", l.key)
+			}
+		}
+		if l.key != want[i] {
+			t.Fatalf("leaf[%d] = %q, want %q", i, l.key, want[i])
+		}
+	}
+	if !secretRefEquals(leaves[0].value, ref) {
+		t.Fatalf("secret leaf value = %v, want the ref verbatim", leaves[0].value)
+	}
+}
+
+// TestCollectLeafKeys_SecretRefStaysAtomic: the key walker carries the same
+// atomicity guarantee as collectLeaves.
+func TestCollectLeafKeys_SecretRefStaysAtomic(t *testing.T) {
+	a := New()
+	ref := secretRefValue()
+	doc := deepMerge(payloadFor("gateway.auth.token", ref), payloadFor("hooks.enabled", true))
+	got := collectLeafKeys("", doc, a.isAtomicSecretLeaf)
+	want := []string{"gateway.auth.token", "hooks.enabled"}
+	if len(got) != len(want) {
+		t.Fatalf("leaf keys = %v, want %v", got, want)
+	}
+	for i, k := range got {
+		for _, suffix := range []string{".source", ".provider", ".id"} {
+			if strings.HasSuffix(k, suffix) {
+				t.Fatalf("leaf key %q is a decomposed ref fragment", k)
+			}
+		}
+		if k != want[i] {
+			t.Fatalf("leaf keys = %v, want %v", got, want)
+		}
 	}
 }

@@ -511,7 +511,10 @@ func (h *ResourceHandler) InstallTeamModule(kubeMode, containerPrefix, resourceP
 			resp["failed"] = failed
 		}
 		if found {
-			resp["module"] = view.Module
+			resp["module"] = module
+			if view.Module != module {
+				resp["pluginId"] = view.Module
+			}
 			resp["members"] = view.Members
 			resp["versions"] = view.Versions
 			resp["consistent"] = view.Consistent

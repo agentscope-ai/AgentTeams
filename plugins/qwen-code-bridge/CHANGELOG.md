@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.3.0 (2026-11-04)
+
+### Security
+
+- `ensure_approval_hook` now preserves same-user hooks of the same group
+  (f2e46048)
+- `verify-bridge.sh` reports real exit codes (eba83796)
+- Restore/upgrade paths verify process identity (2917de34)
+- Path guard for bare relative operands (598d985a)
+- Path guard for equals-form flag values (1051a12f)
+- Path guard for end-shell paths (a1a3562c)
+- Operand guard after the end-of-options delimiter (083423d0)
+
+### Added
+
+- Module manifest `plugin.yaml` (bridge form: `runtime` / `entry` /
+  `package.include`); `plugins/scripts/validate-plugin.rb` gains the
+  entry-form validation branch
+- `scripts/package.sh` also emits `sha256sums.txt` and
+  `release-manifest.json` (`module`/`version`/`commit`/`files`/`sha256`/
+  `built_at`)
+
+### Changed
+
+- Release/install wording: AT (AgentTeams) = stable channel (source +
+  upstream tag); 千锻 (millforge) = beta channel
+  (`releases/channels.json`); plugin identity and install path unchanged
+
 ## 0.2.0 (2026-10-28)
 
 ### Added

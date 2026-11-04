@@ -1,8 +1,10 @@
 #!/bin/sh
-# Build the distributable plugin zip (v0.2.0 B6).
+# Build the distributable plugin zip (v0.2.0 B6; release metadata v0.3.0).
 #
 # Usage: sh scripts/package.sh [output_dir]   (default: /tmp)
 # Produces: <output_dir>/qwen-code-bridge-<version>.zip
+#           <output_dir>/sha256sums.txt
+#           <output_dir>/release-manifest.json
 #
 # Excludes: __pycache__/, tests/, state/, web-shell/dist/, *.pyc, *.log
 # (the zip is rooted at qwen-code-bridge/ so `upload` sees a single plugin).
@@ -57,4 +59,50 @@ with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
 print(f"packaged {count} files")
 PYEOF
 
-ls -l "$ZIP"
+SUMS="$OUT/sha256sums.txt"
+MANIFEST="$OUT/release-manifest.json"
+
+COMMIT="$(git rev-parse HEAD 2>/dev/null || true)"
+if [ -z "$COMMIT" ]; then
+    echo "package.sh: warning: git rev-parse HEAD failed; release-manifest.json commit left empty" >&2
+fi
+
+PYZIP="$ZIP" PYSUMS="$SUMS" PYMANIFEST="$MANIFEST" PYNAME="$NAME" \
+PYVERSION="$VERSION" PYCOMMIT="$COMMIT" "$PY" - <<'PYEOF'
+import datetime
+import hashlib
+import json
+import os
+import zipfile
+
+zip_path = os.environ["PYZIP"]
+sha = hashlib.sha256()
+with open(zip_path, "rb") as fh:
+    for chunk in iter(lambda: fh.read(65536), b""):
+        sha.update(chunk)
+sha = sha.hexdigest()
+
+with open(os.environ["PYSUMS"], "w", encoding="utf-8") as fh:
+    fh.write(f"{sha}  {os.path.basename(zip_path)}\n")
+
+with zipfile.ZipFile(zip_path) as zf:
+    files = sorted(zf.namelist())
+
+manifest = {
+    "module": os.environ["PYNAME"],
+    "version": os.environ["PYVERSION"],
+    "commit": os.environ.get("PYCOMMIT", ""),
+    "files": files,
+    "sha256": sha,
+    "built_at": datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    ),
+}
+with open(os.environ["PYMANIFEST"], "w", encoding="utf-8") as fh:
+    json.dump(manifest, fh, indent=2)
+    fh.write("\n")
+
+print(f"release metadata -> {os.path.basename(os.environ['PYSUMS'])}, {os.path.basename(os.environ['PYMANIFEST'])}")
+PYEOF
+
+ls -l "$ZIP" "$SUMS" "$MANIFEST"

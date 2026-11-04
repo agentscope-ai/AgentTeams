@@ -21,6 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 PLUGINS_ROOT = REPO_ROOT / "plugins"
 TEAMHARNESS_MANIFEST = PLUGINS_ROOT / "teamharness" / "plugin.yaml"
 WORKERFLOW_MANIFEST = PLUGINS_ROOT / "workerflow" / "plugin.yaml"
+BRIDGE_MANIFEST = PLUGINS_ROOT / "qwen-code-bridge" / "plugin.yaml"
 CONTRACTS_DIR = PLUGINS_ROOT / "teamharness" / "contracts"
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "build-plugin.yml"
 LEGACY_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "build-teamharness-plugin.yml"
@@ -70,6 +71,14 @@ def test_requires_is_optional_and_wellformed() -> None:
             continue
         requires = manifest["requires"]
         assert isinstance(requires, dict), f"{path}: requires must be a mapping"
+        if "entry" in manifest:
+            # entry-form (bridge) manifest pins the host runtime instead of
+            # the TeamHarness triple
+            value = requires.get("qwenpaw")
+            assert value is not None and str(value).strip(), (
+                f"{path}: requires.qwenpaw must be present and non-empty"
+            )
+            continue
         for key in REQUIRED_KEYS:
             value = requires.get(key)
             assert value is not None and str(value).strip(), (
@@ -118,6 +127,37 @@ def test_teamharness_contract_json_files_parse() -> None:
         assert isinstance(data, (dict, list)), (
             f"{path.name} must contain a JSON object or array"
         )
+
+
+def test_bridge_manifest_entry_form() -> None:
+    """Golden: the bridge manifest passes entry-form validation."""
+    manifest = _load(BRIDGE_MANIFEST)
+    assert "entry" in manifest, "bridge manifest must be entry-form"
+    assert str(manifest.get("runtime", "")).strip() == "qwenpaw"
+    root = BRIDGE_MANIFEST.parent
+    entry = manifest["entry"]
+    assert isinstance(entry, dict), "entry must be a mapping"
+    assert (root / str(entry["backend"])).is_file(), "entry.backend must exist"
+    assert (root / str(entry["frontend"])).is_file(), "entry.frontend must exist"
+    includes = manifest.get("package", {}).get("include")
+    assert isinstance(includes, list) and includes
+    for item in includes:
+        assert (root / str(item)).exists(), f"package.include missing: {item}"
+    assert str(manifest["requires"]["qwenpaw"]).strip(), (
+        "requires.qwenpaw must be non-empty"
+    )
+    for surface in ("prompts", "skills", "mcp", "hooks"):
+        assert surface not in manifest, (
+            f"entry-form manifest must not declare {surface}"
+        )
+
+
+def test_teamharness_manifest_still_teamharness_form() -> None:
+    """Golden: the TeamHarness manifest keeps its prompts/skills/mcp form."""
+    manifest = _load(TEAMHARNESS_MANIFEST)
+    assert "entry" not in manifest, "teamharness must stay entry-free"
+    for surface in ("prompts", "skills", "mcp"):
+        assert surface in manifest, f"teamharness must keep its {surface} surface"
 
 
 def test_release_workflow_triggers() -> None:

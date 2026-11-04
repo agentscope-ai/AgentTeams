@@ -41,6 +41,32 @@ fail!("metadata.name is required") if name.empty?
 fail!("build metadata is not supported for plugin releases") if version.include?("+")
 fail!("metadata.version must be semver") unless version.match?(/\A\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?\z/)
 
+if manifest.key?("entry")
+  # Entry-form plugin (qwen-code-bridge): a runtime entry point instead of
+  # the TeamHarness prompts/skills/mcp/hooks surface.
+  fail!("runtime is required for entry-form plugins") if manifest["runtime"].to_s.empty?
+  entry = manifest["entry"]
+  fail!("entry must be a map") unless entry.is_a?(Hash)
+  backend = entry["backend"].to_s
+  fail!("entry.backend is required") if backend.empty?
+  fail!("entry.backend missing: #{plugin_root / backend}") unless (plugin_root / backend).file?
+  frontend = entry["frontend"].to_s
+  fail!("entry.frontend is required") if frontend.empty?
+  fail!("entry.frontend missing: #{plugin_root / frontend}") unless (plugin_root / frontend).file?
+  requires = manifest.fetch("requires") { fail!("requires is required for entry-form plugins") }
+  fail!("requires must be a map") unless requires.is_a?(Hash)
+  fail!("requires.qwenpaw is required and must be non-empty") if requires["qwenpaw"].to_s.empty?
+  schema_path = plugins_root / "schemas/plugin.schema.json"
+  assert_file(schema_path)
+  JSON.parse(schema_path.read)
+  package = manifest.fetch("package") { fail!("package is required") }
+  includes = package.fetch("include") { fail!("package.include is required") }
+  fail!("package.include must be an array") unless includes.is_a?(Array)
+  includes.each { |item| fail!("package include missing: #{plugin_root / item}") unless (plugin_root / item).exist? }
+  puts "ok: #{name} #{version}"
+  exit 0
+end
+
 if manifest.key?("requires")
   requires = manifest["requires"]
   fail!("requires must be a map") unless requires.is_a?(Hash)

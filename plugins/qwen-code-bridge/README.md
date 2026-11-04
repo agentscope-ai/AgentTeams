@@ -3,8 +3,8 @@
 把 **Qwen Code CLI** 接进 **QwenPaw**：派单、状态、唤醒、原生 Web 控制台、直聊、审批等级映射——一个本地插件，**与 AgentTeams 无关**（裸 QwenPaw、AgentTeams 里的 QwenPaw 都能用）。
 
 - plugin id：`qwen-code-bridge`　后端包：`qwen_code_bridge`　HTTP 前缀：`/api/qwen-code-bridge`
-- 版本矩阵：QwenPaw **2.2.x**（旧插件框架）与 **#7565 新框架**双绿；Qwen Code CLI **0.26.0**（web shell 按同版本重建，见 `web-shell/`）
-- 测试：`78 passed + 1 skipped`（旧框架）/ `78 passed`（#7565）；发布门 `scripts/verify-bridge.sh`（双框架 + 4 项 live 检查 + evidence JSON）
+- 版本矩阵：QwenPaw **2.2.x**（旧插件框架）与 **#7565 新框架**双绿；Qwen Code CLI **0.26.x**（实测 0.26.3，web shell 按同版本重建，见 `web-shell/`）
+- 测试：`252 passed / 1 skipped`（`pytest tests -q`）；发布门 `scripts/verify-bridge.sh`（双框架 + 4 项 live 检查 + evidence JSON）
 
 ## 目录
 
@@ -26,7 +26,7 @@ qwen-code-bridge/
 ├─ frontend/index.js        # 控制台路由 /qwen-code + core.chat 包装 + 主题同步
 ├─ web-shell/               # 重建 base 版 Qwen Code web shell 的补丁与构建脚本
 ├─ scripts/verify-bridge.sh # 发布门
-└─ tests/                   # 76+1 / 77（见上）
+└─ tests/                   # 252+1（见上）
 ```
 
 ## 安装
@@ -50,7 +50,7 @@ curl -s http://127.0.0.1:8088/api/plugins -H "X-Agent-Id: $AGENT" | grep qwen-co
 
 插件本身零耦合；AgentTeams 只是把它列为 builtin：
 
-1. 插件目录位于 `AgentTeams/plugins/qwen-code-bridge/`（当前在分支 `agentteams/coding-cli-plugin`，ahead 36 未推）
+1. 插件目录位于 `AgentTeams/plugins/qwen-code-bridge/`
 2. 镜像：`qwenpaw/Dockerfile` 增加
    `COPY plugins/qwen-code-bridge/ /opt/agentteams/plugins/qwen-code-bridge/`，
    并把该路径加入 `install-builtin-qwenpaw-plugins.py` 的参数列表
@@ -94,11 +94,18 @@ curl -s http://127.0.0.1:8088/api/qwen-code-bridge/version -H "X-Agent-Id: $AGEN
 - 0.2.0 任务文件是 0.1.0 的**字段超集**（新增 `timeout_s`/`cancel_requested_at`/`signals`/`cancelled_at`），旧版忽略未知字段，回滚无损。
 - 唯一例外：升级期间处于 `cancelling` 的在途任务，0.1.0 不识别该状态——但子进程已收到 SIGTERM（grace 后 SIGKILL），会很快自行结束，不会卡死。
 
-**自打包**（产出 `qwen-code-bridge-<version>.zip`，不含 `__pycache__`/`tests`/`state`/`web-shell/dist`/`*.pyc`/`*.log`）：
+**自打包**（产出 `qwen-code-bridge-<version>.zip` + `sha256sums.txt` + `release-manifest.json`，zip 不含 `__pycache__`/`tests`/`state`/`web-shell/dist`/`*.pyc`/`*.log`）：
 
 ```bash
 sh scripts/package.sh [输出目录]   # 缺省输出到 /tmp
 ```
+
+## 模块化/发布
+
+- 模块清单 `plugin.yaml`（bridge 形态：`runtime` / `entry` / `package.include`），由 `plugins/scripts/validate-plugin.rb` 校验（含 entry 走 bridge 分支，无 entry 走 TeamHarness 路径）。
+- **AT（AgentTeams）** = 稳定版通道：随源码发布，跟上游 tag。
+- **千锻（millforge）** = beta 通道：走 `releases/channels.json` 拉取发布元数据。
+- 两条通道的插件身份（`qwen-code-bridge`）与安装路径不变（同一 zip 上传/热加载路径）。
 
 ### 3) 原生 Web 控制台（可选但推荐）
 

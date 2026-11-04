@@ -6,6 +6,8 @@ This guide explains how to create and maintain an AgentTeams instance on a singl
 
 If you only want to complete your first task as quickly as possible, start with the [Quickstart](../../quickstart.md). Windows users should follow the separate [Windows Deployment Guide](windows.md).
 
+If an agent helps you set up the instance, follow the [SETUP Playbook](setup-playbook.md): it collects the decisions one question at a time, produces a reviewable plan, and then executes with per-step pre-checks and explicit failure recovery.
+
 ## What local deployment creates
 
 The current local installer uses the embedded architecture by default:

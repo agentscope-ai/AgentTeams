@@ -6,6 +6,8 @@
 
 如果你只想尽快完成第一个任务，请先阅读[快速入门](../../quickstart.md)。Windows 用户请使用独立的 [Windows 部署指南](windows.md)。
 
+如果由 agent 协助完成安装，请遵循 [SETUP 剧本](setup-playbook.md)：它一次只问一个问题收集决策，生成可审阅的计划，再按每步的前置检查与明确的失败恢复执行。
+
 ## 本地部署会创建什么
 
 当前本地安装默认使用 embedded 架构：

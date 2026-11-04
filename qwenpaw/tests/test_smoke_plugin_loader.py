@@ -6,11 +6,18 @@ package and proves the smoke turns red on it — the reproducible
 negative control the CI job asserts. Both runs are offline: no network,
 credentials, or services are touched (the package ships no
 requirements.txt, so the loader performs no pip install).
+
+The harness is invoked as a subprocess, exactly like the
+plugin-loader-smoke CI job: the loader's import chain (qwenpaw, which
+pulls in the PyPI ``mcp`` package) must stay out of the pytest process,
+or it shadows TeamHarness' own top-level ``mcp`` package for any suite
+run later in the same process.
 """
 from __future__ import annotations
 
-import importlib.util
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,13 +27,18 @@ SCRIPT = REPO / "qwenpaw" / "scripts" / "smoke_plugin_loader.py"
 PLUGIN_DIR = REPO / "plugins" / "agentteams-matrix-channel"
 
 
-def _load_script():
-    spec = importlib.util.spec_from_file_location(
-        "smoke_plugin_loader", SCRIPT
+def _run_smoke(*args: str) -> int:
+    """Run the harness in a child process and return its exit code."""
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), *args],
+        capture_output=True,
+        text=True,
     )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    if proc.returncode not in (0, 1, 2):
+        raise AssertionError(
+            f"smoke harness crashed (rc {proc.returncode}): {proc.stderr}"
+        )
+    return proc.returncode
 
 
 def _broken_copy(source: Path, target_root: Path) -> Path:
@@ -47,58 +59,49 @@ def _broken_copy(source: Path, target_root: Path) -> Path:
 
 class SmokePluginLoaderTest(unittest.TestCase):
     def test_real_package_loads_green(self):
-        smoke = _load_script()
         with tempfile.TemporaryDirectory(prefix="smoke-green-") as tmp:
-            rc = smoke.main(
-                ["--plugin-dir", str(PLUGIN_DIR), "--working-dir", tmp]
+            rc = _run_smoke(
+                "--plugin-dir", str(PLUGIN_DIR), "--working-dir", tmp
             )
         self.assertEqual(rc, 0)
 
     def test_broken_package_is_red(self):
-        smoke = _load_script()
         with tempfile.TemporaryDirectory(prefix="smoke-broken-") as tmp:
             root = Path(tmp)
             broken = _broken_copy(PLUGIN_DIR, root / "packages")
             workdir = root / "workdir"
             # A plain run must fail on the broken package...
             self.assertEqual(
-                smoke.main(
-                    [
-                        "--plugin-dir",
-                        str(broken),
-                        "--working-dir",
-                        str(workdir),
-                    ]
+                _run_smoke(
+                    "--plugin-dir",
+                    str(broken),
+                    "--working-dir",
+                    str(workdir),
                 ),
                 1,
             )
             # ...and the negative control must accept that failure.
             self.assertEqual(
-                smoke.main(
-                    [
-                        "--plugin-dir",
-                        str(broken),
-                        "--working-dir",
-                        str(workdir),
-                        "--expect-failure",
-                    ]
+                _run_smoke(
+                    "--plugin-dir",
+                    str(broken),
+                    "--working-dir",
+                    str(workdir),
+                    "--expect-failure",
                 ),
                 0,
             )
 
     def test_missing_manifest_is_usage_error(self):
-        smoke = _load_script()
         with tempfile.TemporaryDirectory(prefix="smoke-nomanifest-") as tmp:
             empty = Path(tmp) / "not-a-plugin"
             empty.mkdir()
             self.assertEqual(
-                smoke.main(
-                    [
-                        "--plugin-dir",
-                        str(empty),
-                        "--working-dir",
-                        str(Path(tmp) / "workdir"),
-                    ]
+                _run_smoke(
+                    "--plugin-dir",
+                    str(empty),
+                    "--working-dir",
+                    str(Path(tmp) / "workdir"),
                 ),
                 2,
             )

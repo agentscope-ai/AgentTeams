@@ -293,7 +293,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// --- Millforge module index (read-only proxy; module-update UI) ---
 	mfh := NewMillforgeIndexHandler()
 	mux.Handle("GET /api/v1/millforge/index",
-		mw.RequireAuthz(authpkg.ActionGet, "millforge", nil)(http.HandlerFunc(mfh.GetIndex)))
+		mw.RequireAuthz(authpkg.ActionGet, "status", nil)(http.HandlerFunc(mfh.GetIndex)))
 
 	// --- Worker plugin install (module-update UI) ---
 	mux.Handle("POST /api/v1/workers/{name}/plugins/install", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(rh.InstallWorkerPlugin(deps.KubeMode, deps.ContainerPrefix))))

@@ -140,6 +140,8 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/managers/{name}", mw.RequireAuthz(authpkg.ActionGet, "manager", nameFn)(http.HandlerFunc(rh.GetManager)))
 	mux.Handle("PUT /api/v1/managers/{name}", mw.RequireAuthz(authpkg.ActionUpdate, "manager", nameFn)(http.HandlerFunc(rh.UpdateManager)))
 	mux.Handle("DELETE /api/v1/managers/{name}", mw.RequireAuthz(authpkg.ActionDelete, "manager", nameFn)(http.HandlerFunc(rh.DeleteManager)))
+	// --- Manager plugin registry (read-only; module-update UI) ---
+	mux.Handle("GET /api/v1/managers/{name}/plugins", mw.RequireAuthz(authpkg.ActionGet, "manager", nameFn)(http.HandlerFunc(rh.GetManagerPlugins(deps.KubeMode, deps.ContainerPrefix))))
 
 	// --- Loop control plane (#1402: pause state lives in the project meta) ---
 	// Pause/resume project the source into the project's loop.pause_sources;

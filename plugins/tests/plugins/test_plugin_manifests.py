@@ -106,7 +106,10 @@ def test_matrix_bundle_manifest_form() -> None:
     metadata = manifest.get("metadata")
     assert isinstance(metadata, dict), "agentteams-matrix manifest must have metadata"
     assert metadata.get("name") == "agentteams-matrix"
-    assert metadata.get("version") == "0.1.0"
+    plugin_json = json.loads((matrix_root / "plugin.json").read_text())
+    assert metadata.get("version") == plugin_json.get("version"), (
+        "agentteams-matrix plugin.yaml version must match plugin.json"
+    )
 
     # Bundle form is detected by adapters present and surface keys absent.
     for surface_key in ("prompts", "skills", "mcp"):

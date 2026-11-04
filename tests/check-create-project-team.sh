@@ -60,10 +60,11 @@ class ProjectTeamTest(unittest.TestCase):
             f = self.p / 'bin' / name; f.write_text(text); f.chmod(0o755)
         for name in ('create-project.sh', 'project-members.sh'):
             text = (SCRIPTS / name).read_text()
-            for old, new in [('/opt/agentteams/scripts/lib/agentteams-env.sh', str(self.p / 'env.sh')),
+            # Rewrite existing /tmp paths first, before inserting temporary paths.
+            for old, new in [('/tmp/', str(self.p / 'tmp') + '/'),
+                             ('/opt/agentteams/scripts/lib/agentteams-env.sh', str(self.p / 'env.sh')),
                              ('/root/agentteams-fs', str(self.p / 'fs')),
-                             ('/data/', str(self.p / 'data') + '/'),
-                             ('/tmp/', str(self.p / 'tmp') + '/')]:
+                             ('/data/', str(self.p / 'data') + '/')]:
                 text = text.replace(old, new)
             (self.p / name).write_text(text)
         (self.p / 'env.sh').write_text('log() { echo "$*" >&2; }\n')
@@ -83,12 +84,14 @@ class ProjectTeamTest(unittest.TestCase):
                         AGENTTEAMS_ADMIN_PASSWORD='', AGENTTEAMS_ADMIN_USER='admin',
                         AGENTTEAMS_JOIN_STATUS_FILE=str(self.p / 'tmp/status.json'))
 
-    def run_project(self, *args, ok=True):
+    def run_project(self, *args, ok=True, error=None):
         (self.p / 'fixtures.json').write_text(json.dumps(self.fixtures))
         r = subprocess.run(['bash', str(self.p / 'create-project.sh'), '--id', 'project', '--title', 'Team project', *args],
                            env=self.env, text=True, capture_output=True)
         if not ok:
             self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIsNotNone(error)
+            self.assertIn(error, r.stdout + r.stderr)
             self.assertFalse((self.p / 'fs/shared/projects').exists())
             self.assertFalse((self.p / 'curl.log').exists())
             self.assertFalse((self.p / 'mc.log').exists())
@@ -149,23 +152,23 @@ class ProjectTeamTest(unittest.TestCase):
                          [('joined', 'http-200'), ('failed', 'http-403'), ('pending', 'no-credentials')])
 
     def test_unknown_team_has_no_side_effects(self):
-        self.run_project('--team', 'missing', ok=False)
+        self.run_project('--team', 'missing', ok=False, error='Team missing not found or not readable')
 
     def test_empty_team_has_no_side_effects(self):
         self.fixtures['teams']['alpha'] = {'workerNames': []}
-        self.run_project('--team', 'alpha', ok=False)
+        self.run_project('--team', 'alpha', ok=False, error='Team alpha has no leader or workers')
 
     def test_unreadable_worker_after_leader_has_no_side_effects(self):
         del self.fixtures['workers']['worker-cr']
-        self.run_project('--team', 'alpha', ok=False)
+        self.run_project('--team', 'alpha', ok=False, error='Worker worker-cr in Team alpha not found or not readable')
 
     def test_malformed_worker_has_no_side_effects(self):
         self.fixtures['workers']['worker-cr'] = 'invalid JSON'
-        self.run_project('--team', 'alpha', ok=False)
+        self.run_project('--team', 'alpha', ok=False, error='Worker worker-cr in Team alpha returned no readable runtime identity')
 
     def test_wrong_worker_response_has_no_side_effects(self):
         self.fixtures['workers']['worker-cr']['name'] = 'some-other-worker'
-        self.run_project('--team', 'alpha', ok=False)
+        self.run_project('--team', 'alpha', ok=False, error='Worker worker-cr in Team alpha returned no readable runtime identity')
 
 unittest.main(verbosity=2)
 PY

@@ -1,0 +1,475 @@
+package server
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"mime/multipart"
+	"net/http"
+	"net/url"
+	"regexp"
+	"time"
+
+	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+)
+
+const (
+	moduleArtifactTimeout = 60 * time.Second
+	moduleArtifactMaxBody = 64 << 20 // 64 MiB
+)
+
+var moduleTokenRE = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// moduleInstallRequest is the install body shared by the three planes.
+type moduleInstallRequest struct {
+	Module   string `json:"module"`
+	Source   string `json:"source"`
+	Repo     string `json:"repo"`
+	Ref      string `json:"ref"`
+	Channel  string `json:"channel"`
+	Version  string `json:"version"`
+	Artifact string `json:"artifact"`
+	SHA256   string `json:"sha256"`
+}
+
+// moduleInstaller owns the download/verify/upload pipeline for one request.
+type moduleInstaller struct {
+	rh              *ResourceHandler
+	kubeMode        string
+	containerPrefix string
+	index           *MillforgeIndexHandler
+	http            *http.Client
+	workerBaseURL   func(name string, env map[string]string) string
+	managerBaseURL  func(name string) string
+}
+
+func newModuleInstaller(rh *ResourceHandler, kubeMode, containerPrefix string) *moduleInstaller {
+	wp := newWorkerPluginsProxy(rh, kubeMode, containerPrefix)
+	return &moduleInstaller{
+		rh:              rh,
+		kubeMode:        kubeMode,
+		containerPrefix: containerPrefix,
+		index:           NewMillforgeIndexHandler(),
+		http: &http.Client{
+			Timeout: moduleArtifactTimeout,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) > 0 && req.URL.Host != via[0].URL.Host {
+					return http.ErrUseLastResponse
+				}
+				return nil
+			},
+		},
+		workerBaseURL: wp.defaultWorkerBaseURL,
+		managerBaseURL: func(name string) string {
+			return fmt.Sprintf("http://%s:18799", authpkg.ResourcePrefix(containerPrefix).ManagerPodName(name))
+		},
+	}
+}
+
+// indexArtifact resolves the artifact checksum from the re-read index.
+func indexArtifact(modules json.RawMessage, module, version, artifact string) (string, string, int, string) {
+	var mods map[string]json.RawMessage
+	if err := json.Unmarshal(modules, &mods); err != nil {
+		return "", "", http.StatusBadGateway, "millforge index: modules is not an object"
+	}
+	raw, ok := mods[module]
+	if !ok {
+		return "", "", http.StatusNotFound, "module not found in index"
+	}
+	var entry struct {
+		Latest   string `json:"latest"`
+		Versions map[string]struct {
+			Artifacts []struct {
+				Name   string `json:"name"`
+				SHA256 string `json:"sha256"`
+			} `json:"artifacts"`
+		} `json:"versions"`
+	}
+	if err := json.Unmarshal(raw, &entry); err != nil {
+		return "", "", http.StatusBadGateway, "millforge index: module entry malformed"
+	}
+	if version == "" {
+		version = entry.Latest
+	}
+	ver, ok := entry.Versions[version]
+	if !ok {
+		return "", "", http.StatusNotFound, "module version not found in index"
+	}
+	for _, a := range ver.Artifacts {
+		if artifact == "" || a.Name == artifact {
+			if a.SHA256 == "" {
+				return "", "", http.StatusBadGateway, "millforge index: artifact checksum missing"
+			}
+			return a.Name, a.SHA256, http.StatusOK, ""
+		}
+	}
+	return "", "", http.StatusNotFound, "module artifact not found in index"
+}
+
+// artifactURL composes the raw artifact URL for the selected source.
+func artifactURL(source, repo, ref, module, version, name string) string {
+	base := "https://raw.githubusercontent.com/" + repo + "/" + ref
+	if source == "gitcode" {
+		base = "https://raw.gitcode.com/" + repo + "/raw/" + ref
+	}
+	return base + "/releases/" + module + "/" + version + "/" + name
+}
+
+func (m *moduleInstaller) downloadArtifact(ctx context.Context, u, wantSHA string) ([]byte, int, string) {
+	parsed, err := url.Parse(u)
+	if err != nil || !millforgeIndexAllowedHosts[parsed.Host] {
+		return nil, http.StatusBadGateway, "artifact host not allowed"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, http.StatusBadGateway, "artifact request failed"
+	}
+	resp, err := m.http.Do(req)
+	if err != nil {
+		return nil, http.StatusBadGateway, "artifact download failed"
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, http.StatusBadGateway, "artifact download failed"
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, moduleArtifactMaxBody+1))
+	if err != nil {
+		return nil, http.StatusBadGateway, "artifact read failed"
+	}
+	if len(body) > moduleArtifactMaxBody {
+		return nil, http.StatusBadGateway, "artifact too large"
+	}
+	sum := sha256.Sum256(body)
+	if !bytes.EqualFold([]byte(hex.EncodeToString(sum[:])), []byte(wantSHA)) {
+		return nil, http.StatusBadGateway, "artifact checksum mismatch"
+	}
+	return body, http.StatusOK, ""
+}
+
+// uploadPlugin pushes the verified bytes to a qwenpaw app and hot-loads them.
+func (m *moduleInstaller) uploadPlugin(ctx context.Context, base, filename string, data []byte) (bool, int, string) {
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	part, err := w.CreateFormFile("file", filename)
+	if err != nil {
+		return false, http.StatusInternalServerError, "build upload form failed"
+	}
+	if _, err := part.Write(data); err != nil {
+		return false, http.StatusInternalServerError, "build upload form failed"
+	}
+	if err := w.Close(); err != nil {
+		return false, http.StatusInternalServerError, "build upload form failed"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/plugins/upload?force=true", &buf)
+	if err != nil {
+		return false, http.StatusInternalServerError, "build upload request failed"
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	resp, err := m.http.Do(req)
+	if err != nil {
+		return false, http.StatusBadGateway, "qwenpaw plugin upload unreachable"
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusOK {
+		return false, http.StatusBadGateway, "qwenpaw plugin upload failed"
+	}
+	var out struct {
+		Loaded bool `json:"loaded"`
+	}
+	_ = json.Unmarshal(body, &out)
+	return out.Loaded, http.StatusOK, ""
+}
+
+// previousVersion reads the target's installed version for the module.
+func (m *moduleInstaller) previousVersion(ctx context.Context, base, module string) string {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/plugins", nil)
+	if err != nil {
+		return ""
+	}
+	resp, err := m.http.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	var entries []map[string]any
+	if json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&entries) != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if id, _ := e["id"].(string); id == module {
+			v, _ := e["version"].(string)
+			return v
+		}
+	}
+	return ""
+}
+
+// installOne performs the shared single-target pipeline.
+func (m *moduleInstaller) installOne(ctx context.Context, base, module string, body moduleInstallRequest) (bool, string, int, string) {
+	if body.Source != "github" && body.Source != "gitcode" {
+		return false, "", http.StatusBadRequest, "source must be github or gitcode"
+	}
+	repo := body.Repo
+	if repo == "" {
+		repo = millforgeIndexDefaultRepo
+	}
+	if !millforgeRepoRE.MatchString(repo) {
+		return false, "", http.StatusBadRequest, "invalid repo"
+	}
+	ref := body.Ref
+	if ref == "" {
+		ref = millforgeIndexDefaultRef
+	}
+	if !millforgeRefRE.MatchString(ref) {
+		return false, "", http.StatusBadRequest, "invalid ref"
+	}
+	channel := body.Channel
+	if channel == "" {
+		channel = millforgeIndexDefaultChannel
+	}
+	for _, token := range []string{module, body.Version, body.Artifact} {
+		if token != "" && !moduleTokenRE.MatchString(token) {
+			return false, "", http.StatusBadRequest, "invalid module/version/artifact token"
+		}
+	}
+
+	doc, status, msg := m.index.fetchIndex(ctx, body.Source, repo, ref)
+	if doc == nil {
+		return false, "", status, msg
+	}
+	name, wantSHA, status, msg := indexArtifact(doc.Modules, module, body.Version, body.Artifact)
+	if name == "" {
+		return false, "", status, msg
+	}
+	if body.SHA256 != "" && !equalHex(body.SHA256, wantSHA) {
+		return false, "", http.StatusConflict, "sha256 does not match the index"
+	}
+	version := body.Version
+	if version == "" {
+		var mods map[string]json.RawMessage
+		_ = json.Unmarshal(doc.Modules, &mods)
+		var entry struct {
+			Latest string `json:"latest"`
+		}
+		_ = json.Unmarshal(mods[module], &entry)
+		version = entry.Latest
+	}
+
+	prev := m.previousVersion(ctx, base, module)
+	data, status, msg := m.downloadArtifact(ctx, artifactURL(body.Source, repo, ref, module, version, name), wantSHA)
+	if data == nil {
+		return false, "", status, msg
+	}
+	loaded, status, msg := m.uploadPlugin(ctx, base, name, data)
+	if status != http.StatusOK {
+		return false, prev, status, msg
+	}
+	return loaded, prev, http.StatusOK, ""
+}
+
+func equalHex(a, b string) bool {
+	return len(a) == len(b) && bytes.EqualFold([]byte(a), []byte(b))
+}
+
+func decodeInstallBody(r *http.Request) (moduleInstallRequest, int, string) {
+	var body moduleInstallRequest
+	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		return body, http.StatusBadRequest, "invalid JSON body"
+	}
+	if body.Source == "" {
+		return body, http.StatusBadRequest, "source is required"
+	}
+	return body, http.StatusOK, ""
+}
+
+// InstallWorkerPlugin handles POST /api/v1/workers/{name}/plugins/install.
+func (h *ResourceHandler) InstallWorkerPlugin(kubeMode, containerPrefix string) http.HandlerFunc {
+	m := newModuleInstaller(h, kubeMode, containerPrefix)
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		if name == "" || !workerNamePattern.MatchString(name) {
+			httputil.WriteError(w, http.StatusBadRequest, "worker name is required and must be a valid DNS label")
+			return
+		}
+		if m.kubeMode != "embedded" {
+			httputil.WriteError(w, http.StatusServiceUnavailable, "worker plugin install requires embedded mode")
+			return
+		}
+		var worker v1beta1.Worker
+		if err := h.client.Get(r.Context(), client.ObjectKey{Name: name, Namespace: h.namespace}, &worker); err != nil {
+			if apierrors.IsNotFound(err) {
+				httputil.WriteError(w, http.StatusNotFound, "worker not found")
+				return
+			}
+			writeK8sError(w, "install worker plugin", err)
+			return
+		}
+		teamObj, _, _, err := findTeamMember(r.Context(), h.client, h.namespace, name)
+		if err != nil {
+			writeK8sError(w, "install worker plugin", err)
+			return
+		}
+		teamName := ""
+		if teamObj != nil {
+			teamName = teamObj.Name
+		}
+		if caller := authpkg.CallerFromContext(r.Context()); caller != nil &&
+			(caller.Role == authpkg.RoleTeamLeader || caller.Role == authpkg.RoleHuman) {
+			allowed := caller.TeamMatches(teamName)
+			if !allowed {
+				allowed = caller.WorkerReadable(teamName, name)
+			}
+			if !allowed {
+				httputil.WriteError(w, http.StatusNotFound, "worker not found")
+				return
+			}
+		}
+		if rt := worker.Spec.Runtime; rt != "" && rt != "qwenpaw" {
+			httputil.WriteError(w, http.StatusBadRequest, "worker plugin install is only supported for qwenpaw workers")
+			return
+		}
+		body, status, msg := decodeInstallBody(r)
+		if status != http.StatusOK {
+			httputil.WriteError(w, status, msg)
+			return
+		}
+		module := body.Module
+		if module == "" {
+			httputil.WriteError(w, http.StatusBadRequest, "module is required")
+			return
+		}
+		base := m.workerBaseURL(worker.Spec.EffectiveWorkerName(worker.Name), worker.Spec.Env)
+		loaded, prev, status, msg := m.installOne(r.Context(), base, module, body)
+		if status != http.StatusOK {
+			httputil.WriteError(w, status, msg)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"installed": true, "loaded": loaded, "previous_version": prev})
+	}
+}
+
+// InstallManagerPlugin handles POST /api/v1/managers/{name}/plugins/install.
+func (h *ResourceHandler) InstallManagerPlugin(kubeMode, containerPrefix string) http.HandlerFunc {
+	m := newModuleInstaller(h, kubeMode, containerPrefix)
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		if name == "" || !workerNamePattern.MatchString(name) {
+			httputil.WriteError(w, http.StatusBadRequest, "manager name is required and must be a valid DNS label")
+			return
+		}
+		if m.kubeMode != "embedded" {
+			httputil.WriteError(w, http.StatusServiceUnavailable, "manager plugin install requires embedded mode")
+			return
+		}
+		var manager v1beta1.Manager
+		if err := h.client.Get(r.Context(), client.ObjectKey{Name: name, Namespace: h.namespace}, &manager); err != nil {
+			if apierrors.IsNotFound(err) {
+				httputil.WriteError(w, http.StatusNotFound, "manager not found")
+				return
+			}
+			writeK8sError(w, "install manager plugin", err)
+			return
+		}
+		if rt := manager.Spec.Runtime; rt != "" && rt != "qwenpaw" {
+			httputil.WriteError(w, http.StatusBadRequest, "manager plugin install is only supported for qwenpaw managers")
+			return
+		}
+		body, status, msg := decodeInstallBody(r)
+		if status != http.StatusOK {
+			httputil.WriteError(w, status, msg)
+			return
+		}
+		module := body.Module
+		if module == "" {
+			httputil.WriteError(w, http.StatusBadRequest, "module is required")
+			return
+		}
+		loaded, prev, status, msg := m.installOne(r.Context(), m.managerBaseURL(name), module, body)
+		if status != http.StatusOK {
+			httputil.WriteError(w, status, msg)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"installed": true, "loaded": loaded, "previous_version": prev})
+	}
+}
+
+// InstallTeamModule handles POST /api/v1/teams/{name}/modules/{module}/install.
+func (h *ResourceHandler) InstallTeamModule(kubeMode, containerPrefix string) http.HandlerFunc {
+	m := newModuleInstaller(h, kubeMode, containerPrefix)
+	return func(w http.ResponseWriter, r *http.Request) {
+		teamName := r.PathValue("name")
+		module := r.PathValue("module")
+		if teamName == "" || !workerNamePattern.MatchString(teamName) {
+			httputil.WriteError(w, http.StatusBadRequest, "team name is required and must be a valid DNS label")
+			return
+		}
+		if module == "" || !moduleTokenRE.MatchString(module) {
+			httputil.WriteError(w, http.StatusBadRequest, "module is required and must be a valid token")
+			return
+		}
+		if m.kubeMode != "embedded" {
+			httputil.WriteError(w, http.StatusServiceUnavailable, "team module install requires embedded mode")
+			return
+		}
+		var team v1beta1.Team
+		if err := h.client.Get(r.Context(), client.ObjectKey{Name: teamName, Namespace: h.namespace}, &team); err != nil {
+			if apierrors.IsNotFound(err) {
+				httputil.WriteError(w, http.StatusNotFound, "team not found")
+				return
+			}
+			writeK8sError(w, "install team module", err)
+			return
+		}
+		if caller := authpkg.CallerFromContext(r.Context()); caller != nil &&
+			(caller.Role == authpkg.RoleTeamLeader || caller.Role == authpkg.RoleHuman) &&
+			!caller.TeamMatches(teamName) {
+			httputil.WriteError(w, http.StatusNotFound, "team not found")
+			return
+		}
+		body, status, msg := decodeInstallBody(r)
+		if status != http.StatusOK {
+			httputil.WriteError(w, status, msg)
+			return
+		}
+		updated, failed, target, status, msg := m.installTeam(r.Context(), &team, module, body)
+		if status != http.StatusOK {
+			httputil.WriteError(w, status, msg)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"updated": updated, "failed": failed, "target_version": target})
+	}
+}
+
+// installTeam rolls the module through the team's workerMembers in order and
+// stops at the first failure.
+func (m *moduleInstaller) installTeam(ctx context.Context, team *v1beta1.Team, module string, body moduleInstallRequest) ([]string, map[string]string, string, int, string) {
+	updated := []string{}
+	target := body.Version
+	for _, member := range team.Spec.WorkerMembers {
+		var worker v1beta1.Worker
+		if err := m.rh.client.Get(ctx, client.ObjectKey{Name: member.Name, Namespace: m.rh.namespace}, &worker); err != nil {
+			return updated, map[string]string{"worker": member.Name, "error": "worker not found"}, target, http.StatusBadGateway, "member worker not found"
+		}
+		base := m.workerBaseURL(worker.Spec.EffectiveWorkerName(worker.Name), worker.Spec.Env)
+		_, _, status, msg := m.installOne(ctx, base, module, body)
+		if status != http.StatusOK {
+			return updated, map[string]string{"worker": member.Name, "error": msg}, target, status, msg
+		}
+		updated = append(updated, member.Name)
+	}
+	return updated, nil, target, http.StatusOK, ""
+}

@@ -28,6 +28,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -165,28 +166,47 @@ func (h *MillforgeIndexHandler) GetIndex(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	rawURL := millforgeIndexURL(source, repo, ref)
-
-	// Allowlist gate: the composed URL must land on an allowlisted host.
-	// The parameter regexes already pin the shape; this is the last line
-	// of defense before anything is dialed.
-	u, err := url.Parse(rawURL)
-	if err != nil || !millforgeIndexAllowedHosts[u.Host] {
-		httputil.WriteError(w, http.StatusBadGateway, "millforge index: upstream host not allowed")
+	doc, status, message := h.fetchIndex(r.Context(), source, repo, ref)
+	if doc == nil {
+		httputil.WriteError(w, status, message)
 		return
 	}
 
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, rawURL, nil)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(millforgeIndexResponse{
+		Schema:    doc.Schema,
+		Channel:   doc.Channel,
+		Modules:   doc.Modules,
+		Source:    source,
+		Repo:      repo,
+		FetchedAt: time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+// millforgeIndexDoc is the validated upstream index (schema/channel/modules).
+type millforgeIndexDoc struct {
+	Schema  int
+	Channel string
+	Modules json.RawMessage
+}
+
+// fetchIndex performs the validated fetch shared by the read route and the
+// install routes (which re-read the index to pin the artifact checksum).
+func (h *MillforgeIndexHandler) fetchIndex(ctx context.Context, source, repo, ref string) (*millforgeIndexDoc, int, string) {
+	rawURL := millforgeIndexURL(source, repo, ref)
+
+	u, err := url.Parse(rawURL)
+	if err != nil || !millforgeIndexAllowedHosts[u.Host] {
+		return nil, http.StatusBadGateway, "millforge index: upstream host not allowed"
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		httputil.WriteError(w, http.StatusBadGateway, "millforge index: upstream fetch failed")
-		return
+		return nil, http.StatusBadGateway, "millforge index: upstream fetch failed"
 	}
 	resp, err := h.client.Do(req)
 	if err != nil {
-		// Dial error (DNS, refused, timeout, refused redirect): uniform
-		// 502 — the upstream state is not worth echoing.
-		httputil.WriteError(w, http.StatusBadGateway, "millforge index: upstream fetch failed")
-		return
+		return nil, http.StatusBadGateway, "millforge index: upstream fetch failed"
 	}
 	defer resp.Body.Close()
 
@@ -195,18 +215,15 @@ func (h *MillforgeIndexHandler) GetIndex(w http.ResponseWriter, r *http.Request)
 		if resp.StatusCode == http.StatusNotFound {
 			status = http.StatusNotFound
 		}
-		httputil.WriteError(w, status, "millforge index: upstream unavailable")
-		return
+		return nil, status, "millforge index: upstream unavailable"
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, millforgeIndexMaxBody+1))
 	if err != nil {
-		httputil.WriteError(w, http.StatusBadGateway, "millforge index: upstream body read failed")
-		return
+		return nil, http.StatusBadGateway, "millforge index: upstream body read failed"
 	}
 	if len(body) > millforgeIndexMaxBody {
-		httputil.WriteError(w, http.StatusBadGateway, "millforge index: upstream body too large")
-		return
+		return nil, http.StatusBadGateway, "millforge index: upstream body too large"
 	}
 
 	var upstream struct {
@@ -215,32 +232,17 @@ func (h *MillforgeIndexHandler) GetIndex(w http.ResponseWriter, r *http.Request)
 		Modules json.RawMessage `json:"modules"`
 	}
 	if err := json.Unmarshal(body, &upstream); err != nil {
-		// Covers both malformed JSON and the wrong top-level shape
-		// (array or scalar instead of an object).
-		httputil.WriteError(w, http.StatusBadGateway, "millforge index: upstream body is not a JSON object")
-		return
+		return nil, http.StatusBadGateway, "millforge index: upstream body is not a JSON object"
 	}
 	if upstream.Schema == nil || *upstream.Schema != 1 {
-		httputil.WriteError(w, http.StatusBadGateway, "millforge index: unsupported upstream schema")
-		return
+		return nil, http.StatusBadGateway, "millforge index: unsupported upstream schema"
 	}
 	if upstream.Channel == "" {
-		httputil.WriteError(w, http.StatusBadGateway, "millforge index: upstream channel missing")
-		return
+		return nil, http.StatusBadGateway, "millforge index: upstream channel missing"
 	}
 	modules := bytes.TrimSpace(upstream.Modules)
 	if len(modules) == 0 || modules[0] != '{' {
-		httputil.WriteError(w, http.StatusBadGateway, "millforge index: upstream modules is not an object")
-		return
+		return nil, http.StatusBadGateway, "millforge index: upstream modules is not an object"
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(millforgeIndexResponse{
-		Schema:    *upstream.Schema,
-		Channel:   upstream.Channel,
-		Modules:   modules,
-		Source:    source,
-		Repo:      repo,
-		FetchedAt: time.Now().UTC().Format(time.RFC3339),
-	})
+	return &millforgeIndexDoc{Schema: *upstream.Schema, Channel: upstream.Channel, Modules: modules}, http.StatusOK, ""
 }

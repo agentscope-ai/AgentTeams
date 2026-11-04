@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -119,12 +120,19 @@ func rawJSONField(meta []byte, keys ...string) (json.RawMessage, bool) {
 // sameJSONValue reports whether two raw JSON values are semantically equal
 // (key order and whitespace do not matter).
 func sameJSONValue(a, b json.RawMessage) bool {
-	ca, errA := compactJSON(a)
-	cb, errB := compactJSON(b)
-	if errA != nil || errB != nil {
-		return false
+	var values [2]any
+	for i, raw := range []json.RawMessage{a, b} {
+		if !json.Valid(raw) {
+			return false
+		}
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		// Keep large integers distinct when comparing authority fields.
+		decoder.UseNumber()
+		if err := decoder.Decode(&values[i]); err != nil {
+			return false
+		}
 	}
-	return bytes.Equal(ca, cb)
+	return reflect.DeepEqual(values[0], values[1])
 }
 
 func compactJSON(raw json.RawMessage) ([]byte, error) {

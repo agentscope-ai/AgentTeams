@@ -27,6 +27,51 @@ import (
 
 const taskMetaKey = "teams/alpha-team/shared/tasks/t1/meta.json"
 
+func TestSameJSONValueObjectOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name, a, b string
+		want       bool
+	}{
+		{"object order", `{"verdict":"pass","reviewer":"leader"}`, `{"reviewer":"leader","verdict":"pass"}`, true},
+		{"nested order", `{"scorecard":{"b":2,"a":1}}`, ` { "scorecard": {"a":1,"b":2} } `, true},
+		{"changed verdict", `{"verdict":"pass"}`, `{"verdict":"fail"}`, false},
+		{"array order", `[1,2]`, `[2,1]`, false},
+		{"large integers", `9007199254740992`, `9007199254740993`, false},
+		{"value type", `1`, `"1"`, false},
+		{"trailing JSON", `1 2`, `1`, false},
+		{"malformed", `{`, `{`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sameJSONValue(json.RawMessage(tc.a), json.RawMessage(tc.b)); got != tc.want {
+				t.Fatalf("sameJSONValue(%s, %s)=%v, want %v", tc.a, tc.b, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPutTaskMeta_WorkerPreservesReorderedReview(t *testing.T) {
+	store := ossfake.NewMemory()
+	base := `{"task_id":"t1","project_id":"p1","status":"submitted","review":{"verdict":"pass","reviewer":"leader"}}`
+	if err := store.PutObject(context.Background(), taskMetaKey, []byte(base)); err != nil {
+		t.Fatal(err)
+	}
+	h := newProjectTestHandler(t, store, teamWithRoster("alpha-team"))
+	worker := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "alpha-dev", Team: "alpha-team"}
+	for _, tc := range []struct {
+		verdict string
+		want    int
+	}{
+		{"pass", http.StatusOK},
+		{"fail", http.StatusForbidden},
+	} {
+		body := `{"task_id":"t1","project_id":"p1","status":"submitted","review":{"reviewer":"leader","verdict":"` + tc.verdict + `"},"attention":[{"kind":"approval","attempt":1,"resolved":false}]}`
+		rec := putTaskMetaRequest(t, h, "t1", taskMetaETag(t, store, taskMetaKey), body, worker)
+		if rec.Code != tc.want {
+			t.Fatalf("verdict=%s -> %d %s, want %d", tc.verdict, rec.Code, rec.Body.String(), tc.want)
+		}
+	}
+}
+
 func taskMeta(extra map[string]any) map[string]any {
 	meta := map[string]any{
 		"task_id":    "t1",

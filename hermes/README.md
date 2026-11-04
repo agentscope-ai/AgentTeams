@@ -6,7 +6,10 @@
 
 Python: `v0.22.7` accepts `>=3.11,<3.15`, but its core dependencies are
 marker-gated to `python_version >= '3.14'` (the upstream lock covers 3.14
-only), so the image runs on `python:3.14-slim`.
+only), so the image runs on `python:3.14-slim`. Installation goes through
+`uv sync --frozen --extra matrix` against the upstream `uv.lock` (with its
+`[tool.uv] override-dependencies`), because pip cannot resolve the Pillow 13 /
+browser-harness 12.3.0 conflict on 3.14.
 
 It plays the same role as `copaw-worker`:
 

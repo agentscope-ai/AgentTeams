@@ -34,6 +34,7 @@ FROM ${HIGRESS_REGISTRY}/higress/python:3.14-slim
 
 ARG APT_MIRROR=
 ARG PIP_INDEX_URL=https://pypi.org/simple/
+ARG UV_VERSION=0.12.3
 ARG NPM_REGISTRY=https://registry.npmjs.org/
 # Pinned checkout ref. Docker cannot source env files, so this default
 # must stay in sync with HERMES_GIT_REF in hack/versions.env.
@@ -154,28 +155,34 @@ RUN mkdir -p /tmp/hermes-worker/src/hermes_worker \
 # when only hermes-worker source changes.
 RUN git clone --depth 1 --branch "${HERMES_GIT_REF}" "${HERMES_REPO_URL}" /opt/hermes-src
 
-# hermes-agent rejects wheel/sdist builds by design (setup.py guard) and its
-# pyproject pins every direct dependency exactly; an editable install is the
-# supported path and resolves those pins as-is. The ``matrix`` extra carries
-# the mautrix/aiosqlite/asyncpg/aiohttp-socks set the AgentTeams overlay needs,
-# so the hand-maintained transport pins are gone. ``typer`` is
-# for our own worker CLI (rich/httpx/pyyaml already come from hermes-agent).
-RUN python -m venv /opt/venv/hermes \
-    && /opt/venv/hermes/bin/pip install --upgrade pip setuptools wheel \
+# uv is the supported installer for hermes-agent: its pyproject pins every
+# direct dependency exactly and resolves two metadata conflicts through
+# [tool.uv] override-dependencies (Pillow 13 vs browser-harness 0.1.13,
+# cryptography vs alibabacloud-tea-openapi). pip cannot apply overrides, so
+# a pip install of the matrix extra fails with ResolutionImpossible on 3.14.
+# The upstream uv.lock covers python 3.14 only and already carries the
+# matrix extra, so --frozen reproduces their vetted resolution. uv is
+# build-only: it is uninstalled at the end of the layer, and its wheel
+# cache is kept out of the image (UV_CACHE_DIR + removal), while pip stays
+# in the app venv for the runtime upgrade path.
+RUN python -m pip install --no-cache-dir \
         --index-url "${PIP_INDEX_URL}" \
         --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
-    && /opt/venv/hermes/bin/pip install --no-cache-dir \
-        --index-url "${PIP_INDEX_URL}" \
-        --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
-        --editable "/opt/hermes-src[matrix]" \
-    && /opt/venv/hermes/bin/pip install --no-cache-dir \
-        --index-url "${PIP_INDEX_URL}" \
-        --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
-        "typer>=0.9" \
-    && /opt/venv/hermes/bin/pip install --no-cache-dir \
-        --index-url "${PIP_INDEX_URL}" \
-        --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
-        /tmp/hermes-worker/
+        "uv==${UV_VERSION}" \
+    && UV_PROJECT_ENVIRONMENT=/opt/venv/hermes \
+       UV_INDEX_URL="${PIP_INDEX_URL}" \
+       UV_CACHE_DIR=/tmp/uv-cache \
+       uv sync --frozen --no-dev --extra matrix \
+           --project /opt/hermes-src \
+           --python /usr/local/bin/python3 \
+    && UV_INDEX_URL="${PIP_INDEX_URL}" \
+       UV_CACHE_DIR=/tmp/uv-cache \
+       uv pip install --python /opt/venv/hermes/bin/python \
+           pip \
+           "typer>=0.9" \
+           /tmp/hermes-worker/ \
+    && rm -rf /tmp/uv-cache \
+    && python -m pip uninstall -y uv
 
 # --- Overlay real hermes-worker source (high-frequency changes) ---
 # This layer is rebuilt on every src/ change but does NOT invalidate the

@@ -21,6 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    if: ${{ !startsWith(github.ref_name, 'qwen-code-bridge-v') && !(github.event_name == 'workflow_dispatch' && inputs.plugin == 'plugins/qwen-code-bridge') }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -57,4 +58,34 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.resolve.outputs.name }}-${{ steps.resolve.outputs.version }}
-          path: dist/*.tar.gz
+          path: dist/*
+
+  bridge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    if: ${{ startsWith(github.ref_name, 'qwen-code-bridge-v') || (github.event_name == 'workflow_dispatch' && inputs.plugin == 'plugins/qwen-code-bridge') }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler: none
+
+      - name: Validate plugin manifest
+        run: ruby plugins/scripts/validate-plugin.rb plugins/qwen-code-bridge/plugin.yaml
+
+      - name: Package bridge plugin
+        run: sh plugins/qwen-code-bridge/scripts/package.sh dist
+
+      - name: Upload bridge artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen-code-bridge
+          path: |
+            dist/qwen-code-bridge-*.zip
+            dist/sha256sums.txt
+            dist/release-manifest.json

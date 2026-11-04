@@ -289,3 +289,85 @@ def _list_events(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[str
     }
 
 
+# ---------------------------------------------------------------------------
+# TH-23: source_event vocabulary and Manager by-code aggregation.
+# The contract's source_event codes (15 -> 20 with TH-23) form the CLOSED
+# vocabulary: the Manager aggregates signal events by code only; free text
+# is never aggregated; a code outside the vocabulary is rejected (reported,
+# never silently accepted).
+# ---------------------------------------------------------------------------
+
+_LEVEL_ORDER = {"info": 0, "warn": 1, "error": 2, "critical": 3}
+
+
+def _contract_source_codes() -> tuple[str, ...]:
+    """All source_event codes the contract vocabulary accepts (20 as of TH-23).
+
+    Read from the golden fixture (single source of truth). An empty tuple
+    when the fixture is unreadable — aggregation then reports every code as
+    unknown rather than inventing a vocabulary.
+    """
+    try:
+        contract = json.loads(SIGNAL_CONTRACT_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ()
+    codes: list[str] = []
+    for row in contract.get("events") or []:
+        if not isinstance(row, dict):
+            continue
+        for code in row.get("source_events") or []:
+            if isinstance(code, str) and code and code not in codes:
+                codes.append(code)
+    return tuple(codes)
+
+
+def aggregate_signal_events(entries: list[str] | list[dict[str, Any]]) -> dict[str, Any]:
+    """Manager by-code aggregation of signal events (TH-23).
+
+    Groups events by contract source_event code: each code aggregates to
+    count + max level (contract level order info < warn < error <
+    critical) + latest ts. Entries are codes (str) or code-carrying
+    records (dicts with ``code`` plus optional ``ts`` / ``occurred_at`` /
+    ``level``).
+
+    Code-only: an entry carrying no code (a free-text carrier) is never
+    aggregated — the free text stays on the individual event objects and
+    is only reachable by reading those events. A non-empty code outside
+    the contract vocabulary is REJECTED: it is reported in ``unknown``
+    and never enters ``by_code``.
+    """
+    known = _contract_source_codes()
+    known_set = set(known)
+    groups: dict[str, dict[str, Any]] = {}
+    unknown: list[str] = []
+    for entry in entries or []:
+        if isinstance(entry, str):
+            code = entry.strip()
+            ts = ""
+            level = "info"
+        elif isinstance(entry, dict):
+            code = str(entry.get("code") or "").strip()
+            ts = str(entry.get("ts") or entry.get("occurred_at") or "")
+            level = str(entry.get("level") or "info")
+        else:
+            continue
+        if not code:
+            continue  # free-text carrier: no code, never aggregated
+        if code not in known_set:
+            unknown.append(code)  # reject + report, never silently accept
+            continue
+        group = groups.setdefault(code, {"count": 0, "level": "info", "latest_ts": ""})
+        group["count"] += 1
+        if _LEVEL_ORDER.get(level, 0) > _LEVEL_ORDER.get(group["level"], 0):
+            group["level"] = level
+        if ts > group["latest_ts"]:
+            group["latest_ts"] = ts
+    by_code = {code: groups[code] for code in known if code in groups}
+    return {
+        "ok": True,
+        "codes": list(known),
+        "by_code": by_code,
+        "unknown": unknown,
+    }
+
+

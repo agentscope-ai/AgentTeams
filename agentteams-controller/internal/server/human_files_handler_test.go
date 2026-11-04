@@ -3,6 +3,8 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -3462,5 +3464,369 @@ func TestHumanFiles_QuotaUnverifiableUsageFailsClosed(t *testing.T) {
 	}
 	if rec := hfPutFile(t, h2, "alice", "victim.txt", hfSelf(), "012345"); rec.Code != http.StatusOK {
 		t.Fatalf("put after recovery: got %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// --- Presigned (direct) uploads, #P4a ---------------------------------------
+
+// hfPostFile runs a POST through the files dispatcher (postFile),
+// optionally with a query string (presign=1 / ttl / sha256).
+func hfPostFile(t *testing.T, hfh *humanFilesHandler, name, path string, caller *authpkg.CallerIdentity, query string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := hfReq(t, http.MethodPost, name, path, caller, nil)
+	if query != "" {
+		req.URL.RawQuery = query
+	}
+	rec := httptest.NewRecorder()
+	hfh.postFile(rec, req)
+	return rec
+}
+
+// hfGetUsed returns GET /quota's live usedBytes for alice.
+func hfGetUsed(t *testing.T, hfh *humanFilesHandler, name string) int64 {
+	t.Helper()
+	rec := hfGetQuota(t, hfh, name, hfSelf())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get quota: %d %s", rec.Code, rec.Body.String())
+	}
+	var q humanQuotaResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &q); err != nil {
+		t.Fatal(err)
+	}
+	return q.UsedBytes
+}
+
+func TestHumanFiles_PresignAccessControl(t *testing.T) {
+	hfh, _, _ := newHumanFilesRig(t)
+	for _, tc := range []struct {
+		name   string
+		caller *authpkg.CallerIdentity
+	}{
+		{"another human", hfBob()},
+		{"team leader", hfLeader()},
+		{"worker", hfWorker()},
+		{"ghost human", hfCaller(authpkg.RoleHuman, "ghost")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := hfPostFile(t, hfh, "alice", "big.bin", tc.caller, "presign=1")
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("presign: got %d, want 404: %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestHumanFiles_PresignIssue(t *testing.T) {
+	hfh, _, _ := newHumanFilesRig(t)
+
+	// Default TTL: the fake store answers a deterministic PUT URL, the
+	// 5 GiB default cap, and an expiry about five minutes out.
+	rec := hfPostFile(t, hfh, "alice", "big.bin", hfSelf(), "presign=1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("presign: %d %s", rec.Code, rec.Body.String())
+	}
+	var pr humanPresignResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &pr); err != nil {
+		t.Fatal(err)
+	}
+	if pr.Method != "PUT" {
+		t.Fatalf("method = %q, want PUT", pr.Method)
+	}
+	if pr.URL != "https://fake.example/humans/alice/files/big.bin" {
+		t.Fatalf("url = %q", pr.URL)
+	}
+	if pr.MaxBytes != defaultHumanFilePresignMaxBytes {
+		t.Fatalf("maxBytes = %d, want %d", pr.MaxBytes, defaultHumanFilePresignMaxBytes)
+	}
+	if pr.Fields == nil {
+		t.Fatal("fields must be a (possibly empty) object, not null")
+	}
+	expiresAt, err := time.Parse(time.RFC3339, pr.ExpiresAt)
+	if err != nil {
+		t.Fatalf("expiresAt %q is not RFC3339: %v", pr.ExpiresAt, err)
+	}
+	if d := expiresAt.Sub(time.Now().UTC()); d < 4*time.Minute || d > 6*time.Minute {
+		t.Fatalf("default ttl = %v, want ~5m", d)
+	}
+
+	// A custom ?ttl= is honored within the cap.
+	rec = hfPostFile(t, hfh, "alice", "other.bin", hfSelf(), "presign=1&ttl=120")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("presign ttl=120: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &pr); err != nil {
+		t.Fatal(err)
+	}
+	expiresAt, err = time.Parse(time.RFC3339, pr.ExpiresAt)
+	if err != nil {
+		t.Fatalf("expiresAt %q is not RFC3339: %v", pr.ExpiresAt, err)
+	}
+	if d := expiresAt.Sub(time.Now().UTC()); d < 110*time.Second || d > 130*time.Second {
+		t.Fatalf("requested ttl = %v, want ~2m", d)
+	}
+}
+
+func TestHumanFiles_PresignParamValidation(t *testing.T) {
+	hfh, _, _ := newHumanFilesRig(t)
+	for _, q := range []string{
+		"presign=1&ttl=abc",
+		"presign=1&ttl=0",
+		"presign=1&ttl=-5",
+		"presign=1&ttl=999999", // above the 60m cap
+		"presign=1&sha256=zzz",
+		"presign=1&sha256=" + strings.Repeat("a", 63), // 63 hex chars
+	} {
+		rec := hfPostFile(t, hfh, "alice", "big.bin", hfSelf(), q)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("presign %q: got %d, want 400: %s", q, rec.Code, rec.Body.String())
+		}
+	}
+	// A POST that is neither a presign nor a commit is a 404.
+	if rec := hfPostFile(t, hfh, "alice", "big.bin", hfSelf(), ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("plain POST: got %d, want 404: %s", rec.Code, rec.Body.String())
+	}
+	// A trailing slash names a directory, not a file.
+	if rec := hfPostFile(t, hfh, "alice", "dir/", hfSelf(), "presign=1"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("dir presign: got %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHumanFiles_PresignQuotaFull(t *testing.T) {
+	hfh, _, _ := newHumanFilesRig(t)
+	if rec := hfPutQuota(t, hfh, "alice", hfAdmin(), `{"quotaBytes":10}`); rec.Code != http.StatusOK {
+		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPutFile(t, hfh, "alice", "full.txt", hfSelf(), "0123456789"); rec.Code != http.StatusOK {
+		t.Fatalf("seed: %d %s", rec.Code, rec.Body.String())
+	}
+	// used == quota: no room left, so no URL is issued.
+	rec := hfPostFile(t, hfh, "alice", "more.bin", hfSelf(), "presign=1")
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("presign at quota: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+	var coded humanFileCodedError
+	if err := json.Unmarshal(rec.Body.Bytes(), &coded); err != nil {
+		t.Fatal(err)
+	}
+	if coded.Code != "quota_exceeded" {
+		t.Fatalf("code = %q, want quota_exceeded", coded.Code)
+	}
+}
+
+func TestHumanFiles_PresignUnsupportedStore(t *testing.T) {
+	hfh, store, _ := newHumanFilesRig(t)
+	hfh.oss = ossfake.NewNoPresign(store)
+	rec := hfPostFile(t, hfh, "alice", "big.bin", hfSelf(), "presign=1")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("presign on non-presign store: got %d, want 500: %s", rec.Code, rec.Body.String())
+	}
+	var coded humanFileCodedError
+	if err := json.Unmarshal(rec.Body.Bytes(), &coded); err != nil {
+		t.Fatal(err)
+	}
+	if coded.Code != "presign_unsupported" {
+		t.Fatalf("code = %q, want presign_unsupported", coded.Code)
+	}
+}
+
+func TestHumanFiles_CommitNormalAndIdempotent(t *testing.T) {
+	hfh, store, _ := newHumanFilesRig(t)
+	ctx := context.Background()
+	if rec := hfPutQuota(t, hfh, "alice", hfAdmin(), `{"quotaBytes":100}`); rec.Code != http.StatusOK {
+		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
+	}
+	// Issue, then simulate the client's direct upload landing in the store.
+	if rec := hfPostFile(t, hfh, "alice", "big.bin", hfSelf(), "presign=1"); rec.Code != http.StatusOK {
+		t.Fatalf("presign: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := store.PutObject(ctx, "humans/alice/files/big.bin", []byte(strings.Repeat("x", 40))); err != nil {
+		t.Fatal(err)
+	}
+	rec := hfPostFile(t, hfh, "alice", "big.bin/commit", hfSelf(), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("commit: %d %s", rec.Code, rec.Body.String())
+	}
+	var cr humanPresignCommitResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &cr); err != nil {
+		t.Fatal(err)
+	}
+	if cr.Path != "files/big.bin" || cr.Size != 40 || cr.ETag == "" {
+		t.Fatalf("commit response = %+v", cr)
+	}
+	if got := hfGetUsed(t, hfh, "alice"); got != 40 {
+		t.Fatalf("usedBytes after commit = %d, want 40", got)
+	}
+	// A repeated commit of the same version is a no-op: 200 again, and
+	// the charge is not doubled.
+	rec = hfPostFile(t, hfh, "alice", "big.bin/commit", hfSelf(), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("repeat commit: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := hfGetUsed(t, hfh, "alice"); got != 40 {
+		t.Fatalf("usedBytes after repeat commit = %d, want 40", got)
+	}
+	// Pin the idempotent path itself, not just its accounting effect: the
+	// repeat is audited as the idempotent action and the accounting action
+	// appears exactly once (the ledger baseline alone would also keep the
+	// charge flat, which is why this assertion exists).
+	var commits, idempotent int
+	for _, line := range auditEvents(t, store) {
+		switch eventFields(t, line)["action"] {
+		case "human_file_presign_commit":
+			commits++
+		case "human_file_presign_commit_idempotent":
+			idempotent++
+		}
+	}
+	if commits != 1 || idempotent != 1 {
+		t.Fatalf("audit accounting=%d idempotent=%d, want 1 and 1", commits, idempotent)
+	}
+}
+
+func TestHumanFiles_CommitSizeExceededDeletesObject(t *testing.T) {
+	t.Setenv("HUMAN_FILE_PRESIGN_MAX_BYTES", "100")
+	hfh, store, _ := newHumanFilesRig(t)
+	ctx := context.Background()
+
+	rec := hfPostFile(t, hfh, "alice", "big.bin", hfSelf(), "presign=1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("presign: %d %s", rec.Code, rec.Body.String())
+	}
+	var pr humanPresignResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &pr); err != nil {
+		t.Fatal(err)
+	}
+	if pr.MaxBytes != 100 {
+		t.Fatalf("maxBytes = %d, want 100 (env override)", pr.MaxBytes)
+	}
+	// The direct upload lands over the limit.
+	if err := store.PutObject(ctx, "humans/alice/files/big.bin", []byte(strings.Repeat("y", 150))); err != nil {
+		t.Fatal(err)
+	}
+	rec = hfPostFile(t, hfh, "alice", "big.bin/commit", hfSelf(), "")
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("commit over-limit: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+	var coded humanFileCodedError
+	if err := json.Unmarshal(rec.Body.Bytes(), &coded); err != nil {
+		t.Fatal(err)
+	}
+	if coded.Code != "size_exceeded" {
+		t.Fatalf("code = %q, want size_exceeded", coded.Code)
+	}
+	// The over-limit object is removed, not accounted.
+	if _, err := store.StatMeta(ctx, "humans/alice/files/big.bin"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("over-limit object must be deleted, stat = %v", err)
+	}
+}
+
+func TestHumanFiles_CommitObjectMissing(t *testing.T) {
+	hfh, _, _ := newHumanFilesRig(t)
+	rec := hfPostFile(t, hfh, "alice", "ghost.bin/commit", hfSelf(), "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("commit missing: got %d, want 404: %s", rec.Code, rec.Body.String())
+	}
+	var coded humanFileCodedError
+	if err := json.Unmarshal(rec.Body.Bytes(), &coded); err != nil {
+		t.Fatal(err)
+	}
+	if coded.Code != "object_missing" {
+		t.Fatalf("code = %q, want object_missing", coded.Code)
+	}
+}
+
+func TestHumanFiles_CommitQuotaExceeded(t *testing.T) {
+	hfh, store, _ := newHumanFilesRig(t)
+	ctx := context.Background()
+	if rec := hfPutQuota(t, hfh, "alice", hfAdmin(), `{"quotaBytes":100}`); rec.Code != http.StatusOK {
+		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPostFile(t, hfh, "alice", "big.bin", hfSelf(), "presign=1"); rec.Code != http.StatusOK {
+		t.Fatalf("presign: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := store.PutObject(ctx, "humans/alice/files/big.bin", []byte(strings.Repeat("z", 150))); err != nil {
+		t.Fatal(err)
+	}
+	rec := hfPostFile(t, hfh, "alice", "big.bin/commit", hfSelf(), "")
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("commit over quota: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+	var coded humanFileCodedError
+	if err := json.Unmarshal(rec.Body.Bytes(), &coded); err != nil {
+		t.Fatal(err)
+	}
+	if coded.Code != "quota_exceeded" {
+		t.Fatalf("code = %q, want quota_exceeded", coded.Code)
+	}
+	// A quota rejection is not a size rejection: the object stays so the
+	// caller can retry or clean it up.
+	if _, err := store.StatMeta(ctx, "humans/alice/files/big.bin"); err != nil {
+		t.Fatalf("object must survive a quota rejection: %v", err)
+	}
+}
+
+func TestHumanFiles_CommitDeltaAccounting(t *testing.T) {
+	hfh, store, _ := newHumanFilesRig(t)
+	ctx := context.Background()
+	// Quota 100 with 10 bytes already used: a replacement with 95 bytes
+	// must be gated on the delta (10 - 10 + 95 = 95 <= 100). Charging the
+	// full new size (10 + 95 = 105 > 100) would wrongly reject it.
+	if rec := hfPutQuota(t, hfh, "alice", hfAdmin(), `{"quotaBytes":100}`); rec.Code != http.StatusOK {
+		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPutFile(t, hfh, "alice", "a.txt", hfSelf(), "0123456789"); rec.Code != http.StatusOK {
+		t.Fatalf("seed: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPostFile(t, hfh, "alice", "a.txt", hfSelf(), "presign=1"); rec.Code != http.StatusOK {
+		t.Fatalf("presign: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := store.PutObject(ctx, "humans/alice/files/a.txt", []byte(strings.Repeat("r", 95))); err != nil {
+		t.Fatal(err)
+	}
+	rec := hfPostFile(t, hfh, "alice", "a.txt/commit", hfSelf(), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delta commit: got %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if got := hfGetUsed(t, hfh, "alice"); got != 95 {
+		t.Fatalf("usedBytes after replacement = %d, want 95", got)
+	}
+}
+
+func TestHumanFiles_CommitChecksumVerification(t *testing.T) {
+	hfh, store, _ := newHumanFilesRig(t)
+	ctx := context.Background()
+	content := []byte(strings.Repeat("c", 40))
+	sum := sha256.Sum256(content)
+	digest := hex.EncodeToString(sum[:])
+
+	if rec := hfPostFile(t, hfh, "alice", "bin.dat", hfSelf(), "presign=1"); rec.Code != http.StatusOK {
+		t.Fatalf("presign: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := store.PutObject(ctx, "humans/alice/files/bin.dat", content); err != nil {
+		t.Fatal(err)
+	}
+	// A digest that does not match the stored bytes: 409, and the object
+	// is removed (it cannot be trusted).
+	rec := hfPostFile(t, hfh, "alice", "bin.dat/commit", hfSelf(), "sha256="+strings.Repeat("ab", 32))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("commit with bad digest: got %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	var coded humanFileCodedError
+	if err := json.Unmarshal(rec.Body.Bytes(), &coded); err != nil {
+		t.Fatal(err)
+	}
+	if coded.Code != "checksum_mismatch" {
+		t.Fatalf("code = %q, want checksum_mismatch", coded.Code)
+	}
+	if _, err := store.StatMeta(ctx, "humans/alice/files/bin.dat"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("mismatched object must be deleted, stat = %v", err)
+	}
+	// The matching digest passes and books the charge.
+	if err := store.PutObject(ctx, "humans/alice/files/bin.dat", content); err != nil {
+		t.Fatal(err)
+	}
+	rec = hfPostFile(t, hfh, "alice", "bin.dat/commit", hfSelf(), "sha256="+digest)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("commit with good digest: got %d, want 200: %s", rec.Code, rec.Body.String())
 	}
 }

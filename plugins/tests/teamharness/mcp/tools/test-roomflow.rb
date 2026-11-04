@@ -76,6 +76,8 @@ Dir.mktmpdir("teamharness-roomflow-") do |dir|
             })
             if self.path == "/_matrix/client/v3/createRoom":
                 payload = json.dumps({"room_id": "!created:example.test"}).encode("utf-8")
+            elif self.path == "/_matrix/client/v3/rooms/%21created%3Aexample.test/invite":
+                payload = json.dumps({}).encode("utf-8")
             elif self.path == "/_matrix/client/v3/rooms/%21created%3Aexample.test/leave":
                 payload = b"{}"
             else:
@@ -180,8 +182,10 @@ Dir.mktmpdir("teamharness-roomflow-") do |dir|
         "invite": ["@worker:example.test"],
         "dryRun": True,
     })
-    if dry_runtime_admin.get("invite") != ["@worker:example.test", "@runtime-admin:example.test"]:
-        raise AssertionError(f"runtime admin was not auto-invited: {dry_runtime_admin!r}")
+    # TH-10: the accountable users (team leader + human members) join the
+    # createRoom invite after the admin.
+    if dry_runtime_admin.get("invite") != ["@worker:example.test", "@runtime-admin:example.test", "@leader-runtime:example.test", "@human:example.test"]:
+        raise AssertionError(f"runtime admin / accountable users were not auto-invited: {dry_runtime_admin!r}")
     if dry_runtime_admin["content"].get("power_level_content_override", {}).get("users", {}).get("@runtime-admin:example.test") != 100:
         raise AssertionError(f"runtime admin power level missing: {dry_runtime_admin!r}")
     os.environ.pop("TEAMHARNESS_RUNTIME_CONFIG", None)
@@ -217,8 +221,13 @@ Dir.mktmpdir("teamharness-roomflow-") do |dir|
         raise AssertionError(f"auth mismatch: {captured!r}")
     if create_call["body"].get("name") != "TASK：demo-project-001":
         raise AssertionError(f"room name mismatch: {captured!r}")
-    if create_call["body"].get("invite") != ["@worker:example.test", "@human:example.test", "@runtime-admin:example.test"]:
+    if create_call["body"].get("invite") != ["@worker:example.test", "@human:example.test", "@runtime-admin:example.test", "@leader-runtime:example.test"]:
         raise AssertionError(f"real invite mismatch: {captured!r}")
+    # TH-10: post-create member check. The fake /members response does not
+    # reflect the createRoom invite, so every accountable user is missing
+    # and gets re-invited; the outcome is recorded on the result.
+    if created.get("accountable") != {"invited": ["@leader-runtime:example.test", "@runtime-admin:example.test", "@human:example.test"], "verified": True, "reInvited": ["@leader-runtime:example.test", "@runtime-admin:example.test", "@human:example.test"]}:
+        raise AssertionError(f"accountable verification mismatch: {created!r}")
     room_meta_calls = [put for put in captured["puts"] if put["path"] == "/_matrix/client/v3/rooms/%21created%3Aexample.test/state/room.meta/"]
     if len(room_meta_calls) != 1:
         raise AssertionError(f"room.meta should be written after room creation: {captured!r}")

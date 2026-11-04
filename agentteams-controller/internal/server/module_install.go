@@ -56,7 +56,7 @@ type moduleInstaller struct {
 	managerBaseURL  func(name string) string
 }
 
-func newModuleInstaller(rh *ResourceHandler, kubeMode, containerPrefix string) *moduleInstaller {
+func newModuleInstaller(rh *ResourceHandler, kubeMode, containerPrefix, resourcePrefix string) *moduleInstaller {
 	wp := newWorkerPluginsProxy(rh, kubeMode, containerPrefix)
 	return &moduleInstaller{
 		rh:              rh,
@@ -75,7 +75,7 @@ func newModuleInstaller(rh *ResourceHandler, kubeMode, containerPrefix string) *
 		},
 		workerBaseURL: wp.defaultWorkerBaseURL,
 		managerBaseURL: func(name string) string {
-			return fmt.Sprintf("http://%s:18799", authpkg.ResourcePrefix(containerPrefix).ManagerPodName(name))
+			return fmt.Sprintf("http://%s:18799", authpkg.ResourcePrefix(resourcePrefix).ManagerPodName(name))
 		},
 	}
 }
@@ -327,8 +327,8 @@ func decodeInstallBody(r *http.Request) (moduleInstallRequest, int, string) {
 }
 
 // InstallWorkerPlugin handles POST /api/v1/workers/{name}/plugins/install.
-func (h *ResourceHandler) InstallWorkerPlugin(kubeMode, containerPrefix string) http.HandlerFunc {
-	m := newModuleInstaller(h, kubeMode, containerPrefix)
+func (h *ResourceHandler) InstallWorkerPlugin(kubeMode, containerPrefix, resourcePrefix string) http.HandlerFunc {
+	m := newModuleInstaller(h, kubeMode, containerPrefix, resourcePrefix)
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
 		if name == "" || !workerNamePattern.MatchString(name) {
@@ -394,8 +394,8 @@ func (h *ResourceHandler) InstallWorkerPlugin(kubeMode, containerPrefix string) 
 }
 
 // InstallManagerPlugin handles POST /api/v1/managers/{name}/plugins/install.
-func (h *ResourceHandler) InstallManagerPlugin(kubeMode, containerPrefix string) http.HandlerFunc {
-	m := newModuleInstaller(h, kubeMode, containerPrefix)
+func (h *ResourceHandler) InstallManagerPlugin(kubeMode, resourcePrefix string) http.HandlerFunc {
+	m := newModuleInstaller(h, kubeMode, resourcePrefix, resourcePrefix)
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
 		if name == "" || !workerNamePattern.MatchString(name) {
@@ -440,8 +440,8 @@ func (h *ResourceHandler) InstallManagerPlugin(kubeMode, containerPrefix string)
 }
 
 // InstallTeamModule handles POST /api/v1/teams/{name}/modules/{module}/install.
-func (h *ResourceHandler) InstallTeamModule(kubeMode, containerPrefix string) http.HandlerFunc {
-	m := newModuleInstaller(h, kubeMode, containerPrefix)
+func (h *ResourceHandler) InstallTeamModule(kubeMode, containerPrefix, resourcePrefix string) http.HandlerFunc {
+	m := newModuleInstaller(h, kubeMode, containerPrefix, resourcePrefix)
 	return func(w http.ResponseWriter, r *http.Request) {
 		teamName := r.PathValue("name")
 		module := r.PathValue("module")

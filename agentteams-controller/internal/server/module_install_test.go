@@ -119,9 +119,9 @@ func newRecorder() *httptest.ResponseRecorder { return httptest.NewRecorder() }
 func TestInstallRoutesKubeMode(t *testing.T) {
 	rh := &ResourceHandler{}
 	for name, h := range map[string]http.HandlerFunc{
-		"worker":  rh.InstallWorkerPlugin("kubernetes", ""),
+		"worker":  rh.InstallWorkerPlugin("kubernetes", "", ""),
 		"manager": rh.InstallManagerPlugin("kubernetes", ""),
-		"team":    rh.InstallTeamModule("kubernetes", ""),
+		"team":    rh.InstallTeamModule("kubernetes", "", ""),
 	} {
 		req := httptestNewRequest(http.MethodPost, "/x", nil, name)
 		rec := newRecorder()
@@ -185,5 +185,15 @@ func TestInstallOneRejectsDotDotModule(t *testing.T) {
 	})
 	if status != 400 {
 		t.Fatalf("status=%d, want 400", status)
+	}
+}
+
+func TestManagerBaseURLUsesResourcePrefix(t *testing.T) {
+	m := newModuleInstaller(&ResourceHandler{}, "embedded", "agentteams-worker-", "agentteams-")
+	if got := m.managerBaseURL("default"); got != "http://agentteams-manager:18799" {
+		t.Fatalf("default manager URL = %s", got)
+	}
+	if got := m.managerBaseURL("staging"); got != "http://agentteams-manager-staging:18799" {
+		t.Fatalf("named manager URL = %s", got)
 	}
 }

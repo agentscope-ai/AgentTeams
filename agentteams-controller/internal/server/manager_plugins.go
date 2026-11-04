@@ -27,14 +27,14 @@ type managerPluginsHandler struct {
 // GetManagerPlugins returns the read-only handler for
 //
 //	GET /api/v1/managers/{name}/plugins
-func (h *ResourceHandler) GetManagerPlugins(kubeMode, containerPrefix string) http.HandlerFunc {
+func (h *ResourceHandler) GetManagerPlugins(kubeMode, resourcePrefix string) http.HandlerFunc {
 	return (&managerPluginsHandler{
 		rh:       h,
 		kubeMode: kubeMode,
 		baseURL: func(name string) string {
-			return fmt.Sprintf("http://%s:18799", authpkg.ResourcePrefix(containerPrefix).ManagerPodName(name))
+			return fmt.Sprintf("http://%s:18799", authpkg.ResourcePrefix(resourcePrefix).ManagerPodName(name))
 		},
-		p: newWorkerPluginsProxy(h, kubeMode, containerPrefix),
+		p: newWorkerPluginsProxy(h, kubeMode, ""),
 	}).serve
 }
 

@@ -25,6 +25,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/test-helpers.sh"
 source "${SCRIPT_DIR}/lib/minio-client.sh"
 source "${SCRIPT_DIR}/lib/higress-client.sh"
+source "${SCRIPT_DIR}/lib/test29-evidence.sh"
+source "${SCRIPT_DIR}/lib/test29-readiness.sh"
 
 test_setup "29-legacy-copaw-upgrade"
 
@@ -37,8 +39,41 @@ LEGACY_IMAGE="${COPAW_LEGACY_IMAGE:-higress-registry.cn-hangzhou.cr.aliyuncs.com
 
 CTRL=agentteams-controller
 
+# CI test-artifact directory (the workflow copies tests/output/* into the
+# uploaded artifacts); failure evidence is written under it.
+TEST_OUTPUT_DIR="${TEST_OUTPUT_DIR:-${SCRIPT_DIR%/*}/tests/output}"
+
+# ============================================================
+# Failure evidence collector (credential-safe; implementation in
+# lib/test29-evidence.sh: diagnostic-field projection + unified
+# redaction applied before any artifact is written)
+# ============================================================
+# When the test has failed, persist diagnostics for the failing Worker
+# under ${TEST_OUTPUT_DIR}/test-29-evidence/ *before* cleanup deletes
+# the Worker/CR/storage, so the CI artifacts contain the evidence.
+# Never fails the test itself: every command is guarded.
+EVIDENCE_DIR="${TEST_OUTPUT_DIR}/test-29-evidence"
+EVIDENCE_COLLECTED=0
+
+# One pass/fail line for a migrated object's presence in MinIO
+# (expected vs actual), used by the per-file report below.
+minio_presence_check() {
+    local label="$1"
+    local state="$2"
+    if [ "${state}" = "present" ]; then
+        log_pass "MinIO: ${label} present"
+    else
+        log_fail "MinIO: ${label} missing after migration (expected: present, got: absent)"
+    fi
+}
+
 _cleanup() {
     log_info "Cleaning up: ${TEST_WORKER}"
+    # Capture failure evidence while the Worker still exists; the deletes
+    # below would make it unrecoverable.
+    if [ "${TESTS_FAILED:-0}" -gt 0 ]; then
+        collect_test29_evidence "${TEST_WORKER}"
+    fi
     exec_in_agent agt delete worker "${TEST_WORKER}" 2>/dev/null || true
     sleep 5
     remove_worker_container "${TEST_WORKER}"
@@ -157,6 +192,28 @@ if [ "${LEGACY_ACTUAL_IMAGE}" = "${LEGACY_IMAGE}" ]; then
     log_pass "Container runs the pinned legacy image (existing instance fingerprint)"
 else
     log_fail "Container image is not the pinned legacy image (expected: ${LEGACY_IMAGE}, got: ${LEGACY_ACTUAL_IMAGE})"
+    test_teardown "29-legacy-copaw-upgrade"; test_summary; exit 1
+fi
+
+# ------------------------------------------------------------
+# Readiness before seeding: CR "provisioned" only means the room and
+# Matrix user were persisted — the application (and its first Matrix
+# sync) may still be starting. Wait (bounded) until BOTH hold:
+#   (a) the adapter probes report ready
+#   (b) the Worker's Matrix room ID is available and stable
+#       (identical across two consecutive observations)
+# On timeout: fail with the last observed value and collect evidence.
+# ------------------------------------------------------------
+READINESS_TIMEOUT=240
+# The gate lives in lib/test29-readiness.sh so the poll sequence can be driven
+# deterministically (see tests/check-test29-readiness.sh).
+log_info "Waiting for Worker readiness (probes ready + stable roomID) (timeout: ${READINESS_TIMEOUT}s)..."
+if test29_wait_worker_ready "${TEST_WORKER}" "${READINESS_TIMEOUT}"; then
+    log_pass "Worker ready before seeding (probes ready; stable roomID: ${TEST29_READY_ROOM})"
+else
+    PROBE_TAIL=$(printf '%s\n' "${TEST29_PROBE_LAST}" | tail -n 2 | tr '\n' ' ')
+    log_fail "Worker not ready before seeding (timeout: ${READINESS_TIMEOUT}s; probes: not ready [last probe: ${PROBE_TAIL:-<no probe output>}] roomID: stable=no last_observed='${TEST29_LAST_ROOM:-<empty>}'"
+    collect_test29_evidence "${TEST_WORKER}"
     test_teardown "29-legacy-copaw-upgrade"; test_summary; exit 1
 fi
 
@@ -287,35 +344,122 @@ if _get_higress_consumers_or_fail "QwenPaw migration assertion"; then
     fi
 fi
 
-if docker exec "${QWEN_CONTAINER}" sh -c "
-    set -e
-    worker_root=\"/root/agentteams-fs/agents/${TEST_WORKER}\"
-    qwen_root=\"\${worker_root}/.qwenpaw\"
-    qwen_secret=\"\${worker_root}/.qwenpaw.secret\"
-    test \"\$(cat \"\${qwen_root}/workspaces/default/runtime-switch-state.txt\")\" = \"COPAW_WORKSPACE_STATE_23\"
-    jq -e '.chats | type == \"array\"' \"\${qwen_root}/workspaces/default/chats.json\" >/dev/null
-    test \"\$(cat \"\${qwen_root}/workspaces/default/sessions/runtime-switch.jsonl\")\" = \"COPAW_SESSION_STATE_23\"
-    test \"\$(cat \"\${qwen_secret}/runtime-switch-secret.txt\")\" = \"COPAW_SECRET_STATE_23\"
-    expected_workspace=\"\${qwen_root}/workspaces/default\"
-    test \"\$(jq -r '.workspace_dir' \"\${qwen_root}/workspaces/default/agent.json\")\" = \"\${expected_workspace}\"
-    test \"\$(jq -r '.agents.profiles.default.workspace_dir' \"\${qwen_root}/config.json\")\" = \"\${expected_workspace}\"
-    test -f \"\${qwen_root}/.copaw-migrated\"
-    test ! -e \"\${worker_root}/.copaw\"
-    test ! -e \"\${worker_root}/.copaw.secret\"
-"; then
-    log_pass "CoPaw workspace, session, and secret state is active in QwenPaw"
+# ------------------------------------------------------------
+# Migrated state in the QwenPaw container — bounded poll, then one
+# pass/fail line per file/predicate (expected vs actual). Migration
+# runs during container startup, so do not assert on the first tick.
+# ------------------------------------------------------------
+QWEN_WORKER_ROOT="/root/agentteams-fs/agents/${TEST_WORKER}"
+QWEN_STATE_ROOT="${QWEN_WORKER_ROOT}/.qwenpaw"
+QWEN_SECRET_ROOT="${QWEN_WORKER_ROOT}/.qwenpaw.secret"
+EXPECTED_WORKSPACE="${QWEN_STATE_ROOT}/workspaces/default"
+
+MIG_STATE=""
+MIG_CHATS_TYPE=""
+MIG_SESSIONS=""
+MIG_SECRET=""
+MIG_AGENT_WS=""
+MIG_CONFIG_WS=""
+MIG_MARKER="absent"
+MIG_LEGACY_COPAW="absent"
+MIG_LEGACY_SECRET="absent"
+MIG_ALL_OK=0
+
+MIGRATION_TIMEOUT=180
+MIGRATION_DEADLINE=$(( $(date +%s) + MIGRATION_TIMEOUT ))
+while [ "$(date +%s)" -lt "${MIGRATION_DEADLINE}" ]; do
+    MIG_STATE=$(docker exec "${QWEN_CONTAINER}" cat "${QWEN_STATE_ROOT}/workspaces/default/runtime-switch-state.txt" 2>/dev/null || true)
+    MIG_CHATS_TYPE=$(docker exec "${QWEN_CONTAINER}" jq -r '.chats | type' "${QWEN_STATE_ROOT}/workspaces/default/chats.json" 2>/dev/null || true)
+    MIG_SESSIONS=$(docker exec "${QWEN_CONTAINER}" cat "${QWEN_STATE_ROOT}/workspaces/default/sessions/runtime-switch.jsonl" 2>/dev/null || true)
+    MIG_SECRET=$(docker exec "${QWEN_CONTAINER}" cat "${QWEN_SECRET_ROOT}/runtime-switch-secret.txt" 2>/dev/null || true)
+    MIG_AGENT_WS=$(docker exec "${QWEN_CONTAINER}" jq -r '.workspace_dir' "${QWEN_STATE_ROOT}/workspaces/default/agent.json" 2>/dev/null || true)
+    MIG_CONFIG_WS=$(docker exec "${QWEN_CONTAINER}" jq -r '.agents.profiles.default.workspace_dir' "${QWEN_STATE_ROOT}/config.json" 2>/dev/null || true)
+    docker exec "${QWEN_CONTAINER}" test -f "${QWEN_STATE_ROOT}/.copaw-migrated" 2>/dev/null && MIG_MARKER="present" || MIG_MARKER="absent"
+    docker exec "${QWEN_CONTAINER}" test ! -e "${QWEN_WORKER_ROOT}/.copaw" 2>/dev/null && MIG_LEGACY_COPAW="absent" || MIG_LEGACY_COPAW="present"
+    docker exec "${QWEN_CONTAINER}" test ! -e "${QWEN_WORKER_ROOT}/.copaw.secret" 2>/dev/null && MIG_LEGACY_SECRET="absent" || MIG_LEGACY_SECRET="present"
+
+    MIG_ALL_OK=1
+    [ "${MIG_STATE}" = "COPAW_WORKSPACE_STATE_23" ] || MIG_ALL_OK=0
+    [ "${MIG_CHATS_TYPE}" = "array" ] || MIG_ALL_OK=0
+    [ "${MIG_SESSIONS}" = "COPAW_SESSION_STATE_23" ] || MIG_ALL_OK=0
+    [ "${MIG_SECRET}" = "COPAW_SECRET_STATE_23" ] || MIG_ALL_OK=0
+    [ "${MIG_AGENT_WS}" = "${EXPECTED_WORKSPACE}" ] || MIG_ALL_OK=0
+    [ "${MIG_CONFIG_WS}" = "${EXPECTED_WORKSPACE}" ] || MIG_ALL_OK=0
+    [ "${MIG_MARKER}" = "present" ] || MIG_ALL_OK=0
+    [ "${MIG_LEGACY_COPAW}" = "absent" ] || MIG_ALL_OK=0
+    [ "${MIG_LEGACY_SECRET}" = "absent" ] || MIG_ALL_OK=0
+    if [ "${MIG_ALL_OK}" -eq 1 ]; then
+        break
+    fi
+    sleep 5
+done
+
+# Per-predicate report: one pass/fail line per file/predicate,
+# each with expected vs actual (the last observed value).
+assert_eq "COPAW_WORKSPACE_STATE_23" "${MIG_STATE}" "Migrated workspace state: .qwenpaw/workspaces/default/runtime-switch-state.txt"
+assert_eq "array" "${MIG_CHATS_TYPE}" "Migrated workspace state: .qwenpaw/workspaces/default/chats.json (.chats type)"
+assert_eq "COPAW_SESSION_STATE_23" "${MIG_SESSIONS}" "Migrated session state: .qwenpaw/workspaces/default/sessions/runtime-switch.jsonl"
+assert_eq "COPAW_SECRET_STATE_23" "${MIG_SECRET}" "Migrated secret state: .qwenpaw.secret/runtime-switch-secret.txt"
+assert_eq "${EXPECTED_WORKSPACE}" "${MIG_AGENT_WS}" "Migrated workspace pointer: .qwenpaw/workspaces/default/agent.json (.workspace_dir)"
+assert_eq "${EXPECTED_WORKSPACE}" "${MIG_CONFIG_WS}" "Migrated config pointer: .qwenpaw/config.json (.agents.profiles.default.workspace_dir)"
+if [ "${MIG_MARKER}" = "present" ]; then
+    log_pass "Migration completion marker present: .qwenpaw/.copaw-migrated"
 else
-    log_fail "Migrated CoPaw state is not fully active in QwenPaw"
+    log_fail "Migration completion marker missing: .qwenpaw/.copaw-migrated (expected: present, got: absent)"
+fi
+if [ "${MIG_LEGACY_COPAW}" = "absent" ]; then
+    log_pass "Legacy .copaw removed from worker root"
+else
+    log_fail "Legacy .copaw still present in worker root (expected: absent, got: present)"
+fi
+if [ "${MIG_LEGACY_SECRET}" = "absent" ]; then
+    log_pass "Legacy .copaw.secret removed from worker root"
+else
+    log_fail "Legacy .copaw.secret still present in worker root (expected: absent, got: present)"
+fi
+if [ "${MIG_ALL_OK}" -ne 1 ]; then
+    log_fail "Migrated CoPaw state not fully active in QwenPaw after ${MIGRATION_TIMEOUT}s (last observed: state='${MIG_STATE}' chats='${MIG_CHATS_TYPE}' sessions='${MIG_SESSIONS}' secret='${MIG_SECRET}' agent_ws='${MIG_AGENT_WS}' config_ws='${MIG_CONFIG_WS}' marker='${MIG_MARKER}' legacy_copaw='${MIG_LEGACY_COPAW}' legacy_secret='${MIG_LEGACY_SECRET}')"
 fi
 
-if minio_file_exists "agents/${TEST_WORKER}/.qwenpaw/workspaces/default/runtime-switch-state.txt" \
-    && minio_file_exists "agents/${TEST_WORKER}/.qwenpaw/workspaces/default/chats.json" \
-    && minio_file_exists "agents/${TEST_WORKER}/.qwenpaw/workspaces/default/sessions/runtime-switch.jsonl" \
-    && minio_file_exists "agents/${TEST_WORKER}/.qwenpaw.secret/runtime-switch-secret.txt" \
-    && minio_file_exists "agents/${TEST_WORKER}/.qwenpaw/.copaw-migrated"; then
-    log_pass "Migrated QwenPaw state and completion marker persisted to MinIO"
-else
-    log_fail "Migrated QwenPaw state is incomplete in MinIO"
+# ------------------------------------------------------------
+# Migrated state in MinIO — bounded poll, then one pass/fail line
+# per object (expected vs actual).
+# ------------------------------------------------------------
+MINIO_MIGRATION_TIMEOUT=120
+MINIO_M_STATE="absent"
+MINIO_M_CHATS="absent"
+MINIO_M_SESSIONS="absent"
+MINIO_M_SECRET="absent"
+MINIO_M_MARKER="absent"
+MINIO_M_ALL_OK=0
+
+MINIO_MIGRATION_DEADLINE=$(( $(date +%s) + MINIO_MIGRATION_TIMEOUT ))
+while [ "$(date +%s)" -lt "${MINIO_MIGRATION_DEADLINE}" ]; do
+    minio_file_exists "agents/${TEST_WORKER}/.qwenpaw/workspaces/default/runtime-switch-state.txt" && MINIO_M_STATE="present" || MINIO_M_STATE="absent"
+    minio_file_exists "agents/${TEST_WORKER}/.qwenpaw/workspaces/default/chats.json" && MINIO_M_CHATS="present" || MINIO_M_CHATS="absent"
+    minio_file_exists "agents/${TEST_WORKER}/.qwenpaw/workspaces/default/sessions/runtime-switch.jsonl" && MINIO_M_SESSIONS="present" || MINIO_M_SESSIONS="absent"
+    minio_file_exists "agents/${TEST_WORKER}/.qwenpaw.secret/runtime-switch-secret.txt" && MINIO_M_SECRET="present" || MINIO_M_SECRET="absent"
+    minio_file_exists "agents/${TEST_WORKER}/.qwenpaw/.copaw-migrated" && MINIO_M_MARKER="present" || MINIO_M_MARKER="absent"
+
+    MINIO_M_ALL_OK=1
+    [ "${MINIO_M_STATE}" = "present" ] || MINIO_M_ALL_OK=0
+    [ "${MINIO_M_CHATS}" = "present" ] || MINIO_M_ALL_OK=0
+    [ "${MINIO_M_SESSIONS}" = "present" ] || MINIO_M_ALL_OK=0
+    [ "${MINIO_M_SECRET}" = "present" ] || MINIO_M_ALL_OK=0
+    [ "${MINIO_M_MARKER}" = "present" ] || MINIO_M_ALL_OK=0
+    if [ "${MINIO_M_ALL_OK}" -eq 1 ]; then
+        break
+    fi
+    sleep 5
+done
+
+minio_presence_check "agents/${TEST_WORKER}/.qwenpaw/workspaces/default/runtime-switch-state.txt" "${MINIO_M_STATE}"
+minio_presence_check "agents/${TEST_WORKER}/.qwenpaw/workspaces/default/chats.json" "${MINIO_M_CHATS}"
+minio_presence_check "agents/${TEST_WORKER}/.qwenpaw/workspaces/default/sessions/runtime-switch.jsonl" "${MINIO_M_SESSIONS}"
+minio_presence_check "agents/${TEST_WORKER}/.qwenpaw.secret/runtime-switch-secret.txt" "${MINIO_M_SECRET}"
+minio_presence_check "agents/${TEST_WORKER}/.qwenpaw/.copaw-migrated" "${MINIO_M_MARKER}"
+if [ "${MINIO_M_ALL_OK}" -ne 1 ]; then
+    log_fail "Migrated QwenPaw state incomplete in MinIO after ${MINIO_MIGRATION_TIMEOUT}s (last observed: state='${MINIO_M_STATE}' chats='${MINIO_M_CHATS}' sessions='${MINIO_M_SESSIONS}' secret='${MINIO_M_SECRET}' marker='${MINIO_M_MARKER}')"
 fi
 
 # ============================================================

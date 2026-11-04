@@ -39,6 +39,9 @@ from mcp.common.payload import (
 )
 from mcp.common.paths import _project_dir, _project_state_path, _task_dir, _task_state_path
 from mcp.artifact.publish import _attachment_parent_event_id
+from mcp.artifact.sync import _load_authoritative_task_optional
+from mcp.common.config import _protocol_enforce_enabled
+from mcp.lifecycle.review import ProtocolGuardError, _protocol_guard_for_accept
 from mcp.lifecycle.signal_events import _emit_signal_event, _list_events, _project_audit_seq
 # taskflow keeps NO module-level import of this module (its 9 flow names
 # are refs proxies), so this direction of the pair is cycle-free.
@@ -48,6 +51,7 @@ from mcp.room.notify import _send_project_completion_notification
 from mcp.room.rooms import _runtime_team_room_id
 from mcp.transport.route import _normalize_reply_route, _reply_route_from_requester
 from .state import (
+    _loop_pause_state,
     _mark_requester_report_sent,
     _normalize_tasks,
     _project_id_from_payload,
@@ -228,6 +232,24 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
     if not project:
         raise ValueError("project not found")
     task_meta = _read_json(_task_state_path(arguments, task_id))
+    # W2 round 10 (#1467): resolve the authoritative task INDEPENDENTLY of
+    # the local cache. Round 9 pulled only when a local copy existed, so a
+    # fresh Leader workspace skipped the pull — and every acceptance gate
+    # below — while the task existed in shared storage: an r1 task with no
+    # review and no human approval was accepted with nodeStatus completed
+    # while the Task stayed submitted (the maintainer's round-10 repro).
+    # A failed pull still fails closed; a genuinely absent task keeps the
+    # legacy no-task path ONLY while protocol enforcement is off — under
+    # enforcement the acceptance must not bypass the gates.
+    authoritative = _load_authoritative_task_optional(arguments, task_id)
+    if authoritative is not None:
+        task_meta = authoritative
+    elif _protocol_enforce_enabled():
+        raise ProtocolGuardError(
+            "task_not_found",
+            "accept_task_result requires an authoritative task record while "
+            "protocol enforcement is enabled",
+        )
     task_project_id = _first_text(task_meta.get("project_id"), task_meta.get("projectId"))
     if task_project_id and task_project_id != project_id:
         raise ValueError("task does not belong to project")
@@ -277,11 +299,16 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
                 )
             legacy_identity_persisted = True
     result_status_value = payload.get("resultStatus") or payload.get("result_status")
+    accepted = _payload_bool(payload.get("accepted"), True)
     if task_meta:
         persisted_result_status = str(task_meta.get("result_status") or "")
         if str(result_status_value or "SUCCESS").strip() != persisted_result_status:
             raise ValueError("resultStatus does not match the submitted task result")
-    accepted = _payload_bool(payload.get("accepted"), True)
+        # W2 protocol gates (protocol.enforce switch, default off): a
+        # missing / non-passing review record or a missing r1 approval
+        # record refuses a POSITIVE acceptance (error_code surface); a
+        # rejection / return-for-revision (accepted=False) is never gated.
+        _protocol_guard_for_accept(task_meta, accepted)
     node_status = _accepted_node_status(result_status_value)
     if not accepted and node_status == "completed":
         result_status_value = "REVISION_NEEDED"
@@ -767,6 +794,9 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project_id = _safe_id(payload.get("projectId") or payload.get("project_id"), "projectId")
             state_path = _project_state_path(arguments, project_id)
             project = _read_json(state_path, {"project_id": project_id, "title": project_id, "status": "active", "tasks": []})
+            paused, pause_sources = _loop_pause_state(project)
+            if paused:
+                raise ValueError(f"project is paused (sources: {', '.join(pause_sources)})")
             previous_loop = project.get("loop") if isinstance(project.get("loop"), dict) else {}
             previous_tasks = {
                 task.get("task_id"): task
@@ -862,6 +892,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project = _read_json(_project_state_path(arguments, project_id))
             if not project:
                 raise ValueError("project not found")
+            paused, pause_sources = _loop_pause_state(project)
             return {
                 "ok": True,
                 "tool": "projectflow",
@@ -869,6 +900,8 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "project": project,
                 "loop": project.get("loop", {}),
                 "readyLoopNodes": _ready_loop_nodes(project),
+                "paused": paused,
+                "pauseSources": pause_sources,
             }
 
         if action == "record_loop_iteration":
@@ -879,6 +912,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             loop = project.get("loop") if isinstance(project.get("loop"), dict) else {}
             if not loop:
                 raise ValueError(f"project has no loop plan: {project_id}")
+            paused, pause_sources = _loop_pause_state(project)
             iteration = _positive_int(payload.get("iteration"), "iteration")
             max_iterations = _positive_int(loop.get("max_iterations"), "maxIterations")
             if iteration > max_iterations:
@@ -1045,7 +1079,13 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "action": action,
                 "project": project,
                 "loop": loop,
-                "readyLoopNodes": _ready_loop_nodes(project),
+                # Paused: the iteration still lands (in-flight work may
+                # finish), but nothing is released downstream and no next
+                # round opens — readyLoopNodes stays empty until the Go API
+                # clears loop.pause_sources.
+                "readyLoopNodes": [] if paused else _ready_loop_nodes(project),
+                "paused": paused,
+                "pauseSources": pause_sources,
                 "notificationNeeded": _notification_needed(
                     action, project, summary=f"record_loop_iteration: iteration {iteration} -> {decision}",
                 ),
@@ -1094,7 +1134,22 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             # and returns a retryable failure — the leader is never woken
             # by a completion whose state it cannot read, and no
             # projectCompletionEventId is recorded without durable state.
-            synced = _sync_project(arguments, project_id)
+            #
+            # authored_status: only the two deliberate FORWARD transitions
+            # may move the Controller-owned status — pause_project escalates
+            # to paused, complete_project lands the terminal state. An
+            # ordinary progress sync (and resume_project, which only clears
+            # the local legacy status: an agent cannot release a durable
+            # pause) never authors it, so a cache pulled before an admin
+            # resume cannot write the old ``paused`` back (#1402 round 14).
+            authored_status = None
+            if action == "pause_project":
+                authored_status = "paused"
+            elif action == "complete_project":
+                authored_status = "completed"
+            synced = _sync_project(
+                arguments, project_id, authored_status=authored_status
+            )
             if action == "complete_project" and not synced:
                 return {
                     "ok": False,
@@ -1147,6 +1202,14 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 )
             result["notificationNeeded"] = _notification_needed(action, project)
             return result
+    except ProtocolGuardError as exc:
+        return {
+            "ok": False,
+            "tool": "projectflow",
+            "action": action,
+            "error_code": exc.error_code,
+            "message": exc.message,
+        }
     except ValueError as exc:
         return {"ok": False, "tool": "projectflow", "action": action, "error": str(exc)}
 

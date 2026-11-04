@@ -6,9 +6,9 @@ installs to editable mode; its pyproject pins every direct dependency exactly.
 The image must therefore keep the path attached to ``--editable`` (pip parses
 ``--editable --index-url ... /path`` as an editable requirement named
 ``--index-url``), take the matrix transport from the upstream ``matrix`` extra
-rather than hand-maintained pins, stay on the 3.11 image the pinned tag
-supports (``requires-python >=3.11,<3.14``), and keep ``hack/versions.env`` in
-sync with the Dockerfile ARG.
+rather than hand-maintained pins, run the python:3.14 interpreter required
+by the pinned tag's marker-gated core dependencies, and keep
+``hack/versions.env`` in sync with the Dockerfile ARG.
 """
 
 from __future__ import annotations
@@ -80,9 +80,13 @@ def test_hermes_install_uses_the_upstream_matrix_extra() -> None:
     assert "matrix-nio" not in text, "matrix-nio is not used by the plugin overlay"
 
 
-def test_hermes_image_stays_on_the_supported_python() -> None:
+def test_hermes_image_runs_the_pinned_tag_python() -> None:
     text = HERMES_DOCKERFILE.read_text(encoding="utf-8")
-    assert "python:3.14" not in text, "v2026.9.24 requires Python <3.14"
-    assert re.search(r"^FROM .*python:3\.11", text, re.MULTILINE), (
-        "the image must run the pinned tag's supported 3.11 interpreter"
+    # v0.22.7's core dependencies are marker-gated to python_version >= 3.14,
+    # so the runtime interpreter must be 3.14.
+    assert re.search(r"^FROM .*python:3\.14-slim", text, re.MULTILINE), (
+        "the image must run the 3.14 interpreter the pinned tag requires"
+    )
+    assert "python3.14/site-packages" in text, (
+        "the src overlay must target the 3.14 site-packages"
     )

@@ -152,7 +152,7 @@ def test_dot_git_is_kept_for_online_upgrade() -> None:
 
 
 # --- Hermes pin (#1472) -----------------------------------------------------
-HERMES_GIT_REF = "v2026.9.24"
+HERMES_GIT_REF = "v0.22.7"
 
 # Every pin in hack/versions.env must mirror the matching Dockerfile ARG
 # default (Docker cannot source env files).

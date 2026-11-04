@@ -2,12 +2,11 @@
 
 `hermes-worker` is the AgentTeams Worker runtime built on top of
 [hermes-agent](https://github.com/NousResearch/hermes-agent) (git tag
-`v2026.9.24`).
+`v0.22.7`).
 
-Python: `v2026.9.24` requires `>=3.11,<3.14`; the image runs on
-`python:3.11-slim`. (Do not port the Oct-2026 upstream line's 3.14-only
-runtime contract here — that tag's core dependencies are marker-gated
-to 3.14.)
+Python: `v0.22.7` accepts `>=3.11,<3.15`, but its core dependencies are
+marker-gated to `python_version >= '3.14'` (the upstream lock covers 3.14
+only), so the image runs on `python:3.14-slim`.
 
 It plays the same role as `copaw-worker`:
 

@@ -1,7 +1,7 @@
 # ============================================================
 # AgentTeams Hermes Worker Agent - Python-based Container
 # ============================================================
-# Lightweight Python container running hermes-agent v2026.9.24 as a
+# Lightweight Python container running hermes-agent v0.22.7 as a
 # AgentTeams Worker. Uses the same MinIO-backed config/sync model as the
 # OpenClaw / CoPaw workers, with hermes-agent providing the agent loop
 # and tools. The Matrix gateway adapter keeps hermes-agent's native
@@ -15,7 +15,7 @@
 #   PIP_INDEX_URL           - PyPI mirror (default: official PyPI)
 #   NPM_REGISTRY            - npm registry (default: official)
 #   HERMES_GIT_REF          - git ref of hermes-agent to install
-#                             (default: v2026.9.24; keep in sync with
+#                             (default: v0.22.7; keep in sync with
 #                             HERMES_GIT_REF in hack/versions.env)
 #   HERMES_REPO_URL         - hermes-agent git repo URL
 # ============================================================
@@ -30,20 +30,21 @@ FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
 FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS agentteams-controller
 
 # ============ Final Image ============
-FROM ${HIGRESS_REGISTRY}/higress/python:3.11-slim
+FROM ${HIGRESS_REGISTRY}/higress/python:3.14-slim
 
 ARG APT_MIRROR=
 ARG PIP_INDEX_URL=https://pypi.org/simple/
 ARG NPM_REGISTRY=https://registry.npmjs.org/
 # Pinned checkout ref. Docker cannot source env files, so this default
 # must stay in sync with HERMES_GIT_REF in hack/versions.env.
-# v2026.9.24 requires Python >=3.11,<3.14, so the python:3.11-slim base
-# stands; do NOT port the Oct-2026 upstream line's 3.14-only runtime
-# contract (that tag's core dependencies are marker-gated to >=3.14).
-ARG HERMES_GIT_REF=v2026.9.24
+# v0.22.7 accepts Python >=3.11,<3.15, but its core dependencies are
+# marker-gated to python_version >= '3.14' (the upstream lock covers 3.14
+# only; "3.11 is an install bridge, never a runtime"), so the image must
+# run the python:3.14-slim interpreter.
+ARG HERMES_GIT_REF=v0.22.7
 ARG HERMES_REPO_URL=https://github.com/NousResearch/hermes-agent.git
 
-# python:3.11-slim is Debian-based, uses /etc/apt/sources.list.d/debian.sources
+# python:3.14-slim is Debian-based, uses /etc/apt/sources.list.d/debian.sources
 RUN if [ -n "${APT_MIRROR}" ]; then \
         sed -i "s|deb.debian.org|${APT_MIRROR}|g" \
             /etc/apt/sources.list.d/debian.sources 2>/dev/null || true; \
@@ -180,13 +181,13 @@ RUN python -m venv /opt/venv/hermes \
 # This layer is rebuilt on every src/ change but does NOT invalidate the
 # heavy install layers above, saving ~1-2 GB of re-download on typical edits.
 COPY src/ /tmp/hermes-worker/src/
-RUN SITE=/opt/venv/hermes/lib/python3.11/site-packages \
+RUN SITE=/opt/venv/hermes/lib/python3.14/site-packages \
     && cp -a /tmp/hermes-worker/src/hermes_worker/* "$SITE/hermes_worker/" \
     && cp -a /tmp/hermes-worker/src/hermes_matrix/* "$SITE/hermes_matrix/" \
     && rm -rf /tmp/hermes-worker/
 
 # --- AgentTeams Matrix platform plugin ---
-# hermes-agent v2026.9.24 ships Matrix as plugins/platforms/matrix/ into the
+# hermes-agent v0.22.7 ships Matrix as plugins/platforms/matrix/ into the
 # plugins/platforms/matrix/ bundled plugin.  The image ships a user plugin
 # under the same path-derived key (platforms/matrix); Hermes gives user
 # plugins precedence, and its register() subclasses the bundled adapter with

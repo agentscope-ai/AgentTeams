@@ -8,6 +8,7 @@
 project_team_roster() {
     local team="$1"
     local team_json="" roster="" worker_json="" runtime_name="" worker=""
+    local resolved_roster=""
 
     if ! team_json=$(agt get teams "${team}" -o json 2>/dev/null); then
         echo "Team ${team} not found or not readable" >&2
@@ -33,8 +34,10 @@ project_team_roster() {
             echo "Worker ${worker} in Team ${team} returned no readable runtime identity" >&2
             return 1
         fi
-        printf '%s\t%s\n' "${runtime_name}" "${worker}"
+        resolved_roster="${resolved_roster}${runtime_name}"$'\t'"${worker}"$'\n'
     done <<< "${roster}"
+    # A later lookup may fail: never mix a partial roster into the error JSON.
+    printf '%s' "${resolved_roster}"
 }
 
 # project_merge_members CSV [CSV ...]

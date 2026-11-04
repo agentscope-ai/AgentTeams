@@ -92,11 +92,13 @@ class ProjectTeamTest(unittest.TestCase):
             self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertIsNotNone(error)
             self.assertIn(error, r.stdout + r.stderr)
+            self.assertIn(error, json.loads(r.stdout)["error"])
             self.assertFalse((self.p / 'fs/shared/projects').exists())
             self.assertFalse((self.p / 'curl.log').exists())
             self.assertFalse((self.p / 'mc.log').exists())
             return
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.logs = r.stderr
         self.result = json.loads(r.stdout.split('---RESULT---\n')[1])
         self.requests = [json.loads(x) for x in (self.p / 'curl.log').read_text().splitlines()]
         self.room = next(x['body'] for x in self.requests if x['url'].endswith('/createRoom'))
@@ -128,6 +130,19 @@ class ProjectTeamTest(unittest.TestCase):
             self.assertEqual(set(cfg[key]), {'@'+n+':matrix.test' for n in names} | {'@bob:matrix.test'})
         meta = json.loads((self.p / 'fs/shared/projects/project/meta.json').read_text())
         self.assertEqual(meta['workers'], names)
+
+    def test_team_with_three_workers_invites_and_joins_all_four(self):
+        self.fixtures['teams']['alpha']['workerNames'] = ['worker-cr', 'bob-cr', 'carol-cr']
+        for name in ('bob', 'carol'):
+            self.fixtures['workers'][name+'-cr'] = {'name': name+'-cr', 'workerName': 'runtime-'+name}
+            self.fixtures['passwords']['storage/agents/runtime-'+name+'/credentials/matrix/password'] = name+'-pass'
+        self.run_project('--team', 'alpha')
+        names = ['runtime-lead', 'runtime-alice', 'runtime-bob', 'runtime-carol']
+        self.assertEqual(self.result['workers'], names)
+        self.assertEqual(self.result['joined'], names)
+        self.assertEqual(self.room['invite'], ['@admin:matrix.test'] + ['@'+n+':matrix.test' for n in names])
+        self.assertEqual(self.status['summary'], 'joined=4 pending=0 failed=0')
+        self.assertLess(self.logs.index('Team alpha roster:'), self.logs.index('Step 1:'))
 
     def test_empty_worker_name_falls_back_to_cr_name(self):
         self.fixtures['teams']['alpha'] = {'leaderName': 'leader-cr'}

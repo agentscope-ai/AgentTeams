@@ -6,6 +6,11 @@ Covers the silent-drop trace contract:
   ``<workspace>/shared/matrix/drops.jsonl`` (append-only, detail cap,
   ``since``/``limit`` filters, malformed-line tolerance);
 * write failures are warn-only and never raise;
+* credential redaction — the ledger never retains an ``access_token``
+  (``redact_detail`` / ``describe_exception`` unit cases, the
+  end-to-end maintainer repro on a real query-token client against a
+  redirecting local server, and the red control proving the
+  assertions catch the leak);
 * the frozen ``DROP_REASONS`` vocabulary (including the shared subset
   that must stay verbatim identical to the TeamHarness side's
   ``NOTIFICATION_GAP_REASONS``);
@@ -22,11 +27,14 @@ import importlib.util
 import json
 import logging
 import sys
+import threading
 import time
 from datetime import datetime, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 
+import aiohttp
 import httpx
 import pytest
 from nio.responses import RoomSendError
@@ -41,14 +49,17 @@ for _p in (
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+from core import outcomes as _outcomes  # noqa: E402
 from core.history import RoomHistory  # noqa: E402
 from core.outcomes import (  # noqa: E402
     DETAIL_LIMIT,
     DROP_REASONS,
     DROPS_RELATIVE_PATH,
+    describe_exception,
     drops_path,
     read_drops,
     record_drop,
+    redact_detail,
 )
 from agentteams_matrix.channel import AgentTeamsMatrixChannel  # noqa: E402
 from test_adapter_hermes import (  # noqa: E402
@@ -593,3 +604,250 @@ def test_same_input_same_reason_across_adapters(
     # The OpenClaw runtime is TypeScript (separate repo); parity there is
     # a documented TODO in adapters/openclaw/README.md.
     assert qp_reasons[0] in DROP_REASONS
+
+
+# ── 7. credential redaction (the ledger must never hold a token) ─────
+#
+# #1497 merge blocker: ``QwenPawMatrixClient.send`` (``query_token=True``)
+# puts the ``access_token`` in the request query, and transport
+# exceptions (aiohttp ``TooManyRedirects``) embed the full request URL
+# in ``str(exc)``.  The maintainer's repro showed the complete message
+# (182 chars) fits inside ``DETAIL_LIMIT`` — the 200-char cap alone
+# cannot protect the credential, so redaction must run BEFORE it.
+
+
+# Synthetic credential: long enough to be a real token, sized so the
+# whole URL-bearing exception message stays under ``DETAIL_LIMIT``
+# (the repro precondition asserted in the integration test below).
+SYNTHETIC_SECRET = "syt_synthetic_16"
+
+
+class _AlwaysRedirectHandler(BaseHTTPRequestHandler):
+    """Homeserver stand-in that answers 307 forever, echoing the request
+    path (query included) back in ``Location`` so the ``access_token``
+    query parameter survives every redirect hop."""
+
+    port = 0
+
+    def _redirect(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        if length:
+            self.rfile.read(length)
+        self.send_response(307)
+        self.send_header(
+            "Location",
+            "http://127.0.0.1:{0}{1}".format(self.__class__.port, self.path),
+        )
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    do_GET = do_PUT = do_POST = _redirect
+
+    def log_message(self, *args):
+        pass  # keep pytest output clean
+
+
+def _run_qwenpaw_redirect_repro(channel):
+    """Maintainer repro: a REAL ``QwenPawMatrixClient``
+    (``build_client(TransportConfig(query_token=True, ...))``) sends
+    through the channel's real ``_room_send_with_retry`` against a local
+    ``ThreadingHTTPServer`` that redirects forever.
+
+    Returns ``(raised, rows)`` — the transport exception (expected
+    ``aiohttp.TooManyRedirects``) and the ledger records it produced.
+    The server and the client are closed here (same event loop).
+    """
+    from core.transport import TransportConfig, build_client
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _AlwaysRedirectHandler)
+    port = server.server_address[1]
+    _AlwaysRedirectHandler.port = port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    client = build_client(
+        TransportConfig(
+            homeserver="http://127.0.0.1:{0}".format(port),
+            access_token=SYNTHETIC_SECRET,
+            query_token=True,
+        )
+    )
+    channel._client = client
+
+    async def _scenario():
+        raised = None
+        try:
+            await channel._room_send_with_retry(
+                GROUP_ROOM,
+                "m.room.message",
+                {"msgtype": "m.text", "body": "x"},
+                max_retries=1,
+                base_delay=0.01,
+            )
+        except BaseException as exc:  # captured, not swallowed
+            raised = exc
+        await client.close()
+        return raised
+
+    try:
+        raised = asyncio.run(_scenario())
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    return raised, read_drops(channel._workspace_dir)
+
+
+def _url_bearing_exception():
+    """A send-failure exception whose message embeds the request URL
+    carrying the query token (the shape transport exceptions have)."""
+    return RuntimeError(
+        "TooManyRedirects: GET https://hs/_matrix/client/v3/rooms"
+        "?access_token={0}&x=1".format(SYNTHETIC_SECRET)
+    )
+
+
+# ── unit: redact_detail / describe_exception ──────────────────────────
+
+
+def test_redact_detail_query_token_redacted_before_persist(tmp_path):
+    record_drop(
+        tmp_path,
+        reason="room_send_failed",
+        room_id="!r:hs",
+        detail="GET https://hs/_matrix/x?access_token=SECRET123&x=1",
+    )
+    row = read_drops(tmp_path)[0]
+    assert "SECRET123" not in row["detail"]
+    assert "access_token=***" in row["detail"]
+    # Non-credential parameters keep their diagnostic value.
+    assert "x=1" in row["detail"]
+
+
+def test_redact_detail_safe_text_untouched(tmp_path):
+    safe = "ConnectionError: homeserver unreachable"
+    assert redact_detail(safe) == safe
+    record_drop(
+        tmp_path, reason="room_send_failed", room_id="!r:hs", detail=safe
+    )
+    # Safe diagnostic text survives the ledger round-trip verbatim.
+    assert read_drops(tmp_path)[0]["detail"] == safe
+
+
+def test_redact_detail_url_userinfo_redacted():
+    assert (
+        redact_detail("GET https://alice:pass123@hs/_matrix/client/v3/rooms")
+        == "GET https://alice:***@hs/_matrix/client/v3/rooms"
+    )
+
+
+def test_redact_detail_bearer_redacted():
+    assert (
+        redact_detail("request failed: Authorization: Bearer abc.def.ghi123")
+        == "request failed: Authorization: Bearer ***"
+    )
+
+
+def test_describe_exception_keeps_type_name_and_redacts():
+    exc = RuntimeError("GET https://hs/_matrix/x?access_token=SECRET123&x=1")
+    out = describe_exception(exc)
+    assert out.startswith("RuntimeError: ")
+    assert "SECRET123" not in out
+    assert "access_token=***" in out
+
+
+# ── integration: the maintainer repro (query-token send path) ────────
+
+
+def test_qwenpaw_query_token_send_failure_never_leaks_token(qp_channel):
+    """End-to-end regression for the #1497 merge blocker.
+
+    Real client + real ``_room_send_with_retry`` + a local server that
+    redirects forever: the ``TooManyRedirects`` message embeds the
+    request URL carrying ``access_token=<SYNTHETIC_SECRET>``, and the
+    repro precondition below asserts the whole raw message fits inside
+    ``DETAIL_LIMIT`` with the token intact — truncation alone cannot
+    keep it out.  The persisted line must be redacted.
+    """
+    raised, rows = _run_qwenpaw_redirect_repro(qp_channel)
+    assert isinstance(raised, aiohttp.TooManyRedirects)
+    assert len(rows) == 1  # not retryable: one attempt, one record
+    row = rows[0]
+    assert row["reason"] == "room_send_failed"
+    assert row["room_id"] == GROUP_ROOM
+    # The exception type name is retained for diagnosis...
+    assert "TooManyRedirects" in row["detail"]
+    # ...the credential never lands on disk...
+    assert SYNTHETIC_SECRET not in row["detail"]
+    ledger_text = drops_path(qp_channel._workspace_dir).read_text(
+        encoding="utf-8"
+    )
+    assert SYNTHETIC_SECRET not in ledger_text
+    # ...and the marker shows the URL really did carry the token.
+    assert "access_token=***" in row["detail"]
+    # Repro precondition: the unredacted detail fits under DETAIL_LIMIT
+    # with the token intact — the cap is not what keeps it out.
+    raw = "{0}: {1}".format(type(raised).__name__, raised)
+    assert SYNTHETIC_SECRET in raw
+    assert len(raw) <= DETAIL_LIMIT
+
+
+def test_red_repro_identity_redaction_leaks_token(qp_channel, monkeypatch):
+    """Red control for the maintainer repro.
+
+    Swaps ``redact_detail`` back to the identity function — disabling
+    BOTH layers at once, since ``record_drop``'s central backstop and
+    ``describe_exception`` (used by the call sites) resolve it from the
+    same module globals — and runs the identical scenario: the raw
+    token must then land in the ledger.  Proves the scenario truly
+    reproduces the leak, i.e. the assertions in
+    ``test_qwenpaw_query_token_send_failure_never_leaks_token`` (the
+    exact opposite) go red without the fix.
+    """
+    monkeypatch.setattr(_outcomes, "redact_detail", lambda text: text)
+    raised, rows = _run_qwenpaw_redirect_repro(qp_channel)
+    assert isinstance(raised, aiohttp.TooManyRedirects)
+    assert len(rows) == 1
+    detail = rows[0]["detail"]
+    assert SYNTHETIC_SECRET in detail  # the leak is present without redaction
+    assert "access_token=***" not in detail
+
+
+# ── integration: the Hermes send-failure sites ───────────────────────
+
+
+def test_hermes_send_url_bearing_exception_never_leaks_token(
+    hermes_mod, monkeypatch, tmp_path
+):
+    adapter, _, transport, _ = _hermes(hermes_mod, monkeypatch, tmp_path)
+    transport.send_exc = _url_bearing_exception()
+    result = asyncio.run(adapter.send(GROUP_ROOM, "hello"))
+    assert result.success is False
+    rows = read_drops(adapter.state_dir)
+    assert [r["reason"] for r in rows] == ["room_send_failed"]
+    assert "RuntimeError" in rows[0]["detail"]
+    assert SYNTHETIC_SECRET not in rows[0]["detail"]
+    assert "access_token=***" in rows[0]["detail"]
+
+
+def test_hermes_media_send_url_bearing_exception_never_leaks_token(
+    hermes_mod, monkeypatch, tmp_path
+):
+    exc = _url_bearing_exception()
+
+    class _RaisingSendClient(FakeClient):
+        async def room_send(self, *args, **kwargs):
+            raise exc
+
+    client = _RaisingSendClient(member_map={GROUP_ROOM: [SELF, USER]})
+    adapter, _, _, _ = _hermes(
+        hermes_mod, monkeypatch, tmp_path, client=client
+    )
+    image = tmp_path / "shot.png"
+    image.write_bytes(b"\x89PNG fake")
+    result = asyncio.run(
+        adapter._send_media_file(GROUP_ROOM, str(image), "m.image", "cap")
+    )
+    assert result.success is False
+    rows = read_drops(adapter.state_dir)
+    assert [r["reason"] for r in rows] == ["room_send_failed"]
+    assert SYNTHETIC_SECRET not in rows[0]["detail"]
+    assert "access_token=***" in rows[0]["detail"]

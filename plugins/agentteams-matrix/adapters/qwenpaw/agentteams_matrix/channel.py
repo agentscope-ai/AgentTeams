@@ -108,7 +108,7 @@ from core.mentions import (  # noqa: E402
     text_mentions_worker,
     was_mentioned,
 )
-from core.outcomes import record_drop  # noqa: E402
+from core.outcomes import describe_exception, record_drop  # noqa: E402
 from core.session import resolve_session_id, to_handle_from_target  # noqa: E402
 from core.sync import SyncEngine  # noqa: E402
 from core.transport import (  # noqa: E402
@@ -4688,7 +4688,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     self._drop_workspace(),
                     reason="room_send_failed",
                     room_id=room_id,
-                    detail=f"{type(exc).__name__}: {exc}",
+                    detail=describe_exception(exc),
                 )
                 raise
 

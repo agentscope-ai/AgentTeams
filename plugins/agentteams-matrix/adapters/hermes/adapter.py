@@ -89,7 +89,7 @@ from core.history import (  # noqa: E402
 )
 from core.interfaces import InboundEvent, OutboundMessage  # noqa: E402
 from core.mentions import strip_mention_prefix, text_mentions_worker  # noqa: E402
-from core.outcomes import record_drop  # noqa: E402
+from core.outcomes import describe_exception, record_drop  # noqa: E402
 from core.state import FileSessionStore, StateLayout  # noqa: E402
 from core.transport import (  # noqa: E402
     E2EEInitError,
@@ -487,7 +487,7 @@ class AgentTeamsMatrixAdapter(BasePlatformAdapter):
                 self.state_dir,
                 reason="room_send_failed",
                 room_id=chat_id,
-                detail=f"{type(e).__name__}: {e}",
+                detail=describe_exception(e),
             )
             return SendResult(success=False, error=str(e))
         return SendResult(success=True, message_id=event_id)
@@ -644,7 +644,7 @@ class AgentTeamsMatrixAdapter(BasePlatformAdapter):
                 self.state_dir,
                 reason="room_send_failed",
                 room_id=chat_id,
-                detail=f"{type(e).__name__}: {e}",
+                detail=describe_exception(e),
             )
             return SendResult(success=False, error=str(e))
         if not isinstance(resp, RoomSendResponse):

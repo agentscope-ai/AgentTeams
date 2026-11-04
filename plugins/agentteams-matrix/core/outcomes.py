@@ -18,6 +18,12 @@ On-disk format: one JSON object per line, appended to
 (QwenPaw: the workspace directory; Hermes: the adapter state dir).
 The file is append-only; rotation is deliberately out of scope here.
 
+``detail`` is redacted before it is persisted: credential material
+(query parameters such as ``access_token``, the password half of URL
+userinfo, ``Bearer`` values) is replaced with ``***`` by
+:func:`redact_detail` — a URL-bearing transport exception must never
+reach the ledger carrying its request token.
+
 Write failures are warn-only and never raised: recording a drop must
 not disturb the message path (same policy as event emission).
 
@@ -35,6 +41,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -63,6 +70,76 @@ DROPS_RELATIVE_PATH = Path("shared") / "matrix" / "drops.jsonl"
 DETAIL_LIMIT = 200
 
 DEFAULT_LIMIT = 200
+
+# ---------------------------------------------------------------------------
+# Credential redaction (merge blocker for #1497)
+#
+# Transport-layer exceptions (aiohttp ``TooManyRedirects`` & co.) embed the
+# full request URL in ``str(exc)`` — and the production QwenPaw client
+# deliberately keeps ``access_token`` in the request *query* (see
+# ``QwenPawMatrixClient.send``).  Persisting the raw message would write
+# the Matrix credential into ``drops.jsonl``, where truncation to
+# :data:`DETAIL_LIMIT` is no protection (a URL-bearing message fits under
+# the cap with the token intact).  :func:`redact_detail` is the single
+# redaction choke point: every ledger detail is passed through it BEFORE
+# truncation, in :func:`record_drop`, so any present or future call site
+# is covered even when it keeps its own message format.
+# ---------------------------------------------------------------------------
+
+#: Query-string keys whose values are credentials.  Case-insensitive; the
+#: lookbehind keeps only keys standing on their own (``x-access-token`` or
+#: ``token_count`` keep their values).  The key name is preserved in the
+#: output (``access_token=***``) so the line stays grep-able/diagnosable.
+_CREDENTIAL_QUERY = re.compile(
+    r"(?i)(?<![A-Za-z0-9_-])"
+    r"(access_token|token|password|secret|api[-_]?key|authorization)"
+    r"=([^&\s'\"<>\\]*)",
+)
+
+#: URL userinfo (``scheme://user:pass@host``) — the password half only.
+_URL_USERINFO = re.compile(
+    r"([a-zA-Z][a-zA-Z0-9+.\-]*)://([^:/@\s]+):([^@/\s]+)@",
+)
+
+#: ``Authorization: Bearer <token>`` style header values.
+_BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
+
+
+def redact_detail(text: str) -> str:
+    """Replace credential material in diagnostic *text* with ``***``.
+
+    Redacts, case-insensitively: query-parameter values for
+    ``access_token``/``token``/``password``/``secret``/
+    ``api_key``(``apikey``/``api-key``)/``authorization`` (key name kept,
+    e.g. ``access_token=***``), the password half of a URL userinfo
+    (``https://user:***@host``) and ``Bearer <token>`` values.  Everything
+    else (error text, errcodes, statuses, room ids) passes through
+    unchanged, so diagnostic value is preserved.
+
+    This is the central backstop for :func:`record_drop`; call sites that
+    format exception text into a ``detail`` are expected to use
+    :func:`describe_exception` as well, but the ledger is safe even if a
+    future site forgets.
+    """
+    if not text:
+        return text
+    text = _CREDENTIAL_QUERY.sub(r"\1=***", text)
+    text = _URL_USERINFO.sub(
+        lambda m: f"{m.group(1)}://{m.group(2)}:***@", text
+    )
+    text = _BEARER.sub("Bearer ***", text)
+    return text
+
+
+def describe_exception(exc: BaseException) -> str:
+    """``<ExceptionType>: <redacted message>`` for a drop-ledger detail.
+
+    The replacement for the former ``f"{type(exc).__name__}: {exc}"``
+    format at send-failure recording sites: identical shape, but the
+    message half is passed through :func:`redact_detail` so a URL-bearing
+    transport exception never persists its ``access_token``.
+    """
+    return f"{type(exc).__name__}: {redact_detail(str(exc))}"
 
 
 def drops_path(workspace: Union[str, Path, None]) -> Path:
@@ -111,6 +188,11 @@ def record_drop(
     the message path must continue.  Unknown *reason* values are
     recorded as well (data must not be lost) but warn, so vocabulary
     drift stays visible.
+
+    *detail* is redacted (:func:`redact_detail`) **before** the
+    :data:`DETAIL_LIMIT` truncation: a URL-bearing transport exception
+    carries the query-token within the cap, so truncating first would
+    persist the credential.
     """
     if reason not in DROP_REASONS:
         logger.warning(
@@ -123,7 +205,7 @@ def record_drop(
         "reason": reason,
         "room_id": str(room_id or ""),
         "event_id": str(event_id or ""),
-        "detail": str(detail or "")[:DETAIL_LIMIT],
+        "detail": redact_detail(str(detail or ""))[:DETAIL_LIMIT],
     }
     path = drops_path(workspace)
     try:

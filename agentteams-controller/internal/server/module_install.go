@@ -28,6 +28,10 @@ const (
 
 var moduleTokenRE = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
+func validModuleToken(token string) bool {
+	return moduleTokenRE.MatchString(token) && token != "." && token != ".."
+}
+
 // moduleInstallRequest is the install body shared by the three planes.
 type moduleInstallRequest struct {
 	Module   string `json:"module"`
@@ -109,6 +113,9 @@ func indexArtifact(modules json.RawMessage, module, version, artifact string) (s
 		if artifact == "" || a.Name == artifact {
 			if a.SHA256 == "" {
 				return "", "", http.StatusBadGateway, "millforge index: artifact checksum missing"
+			}
+			if !validModuleToken(version) || !validModuleToken(a.Name) {
+				return "", "", http.StatusBadGateway, "millforge index: invalid version/artifact token"
 			}
 			return a.Name, a.SHA256, http.StatusOK, ""
 		}
@@ -238,9 +245,12 @@ func (m *moduleInstaller) installOne(ctx context.Context, base, module string, b
 	if channel == "" {
 		channel = millforgeIndexDefaultChannel
 	}
-	for _, token := range []string{module, body.Version, body.Artifact} {
-		if token != "" && !moduleTokenRE.MatchString(token) {
-			return false, "", http.StatusBadRequest, "invalid module/version/artifact token"
+	if !validModuleToken(module) {
+		return false, "", http.StatusBadRequest, "invalid module token"
+	}
+	for _, token := range []string{body.Version, body.Artifact} {
+		if token != "" && !validModuleToken(token) {
+			return false, "", http.StatusBadRequest, "invalid version/artifact token"
 		}
 	}
 
@@ -454,7 +464,10 @@ func (h *ResourceHandler) InstallTeamModule(kubeMode, containerPrefix string) ht
 			return
 		}
 		view, found, _ := m.rh.aggregateTeamModule(r, &team, module, m.proxy)
-		resp := map[string]any{"updated": updated, "failed": failed, "target_version": target}
+		resp := map[string]any{"updated": updated, "target_version": target}
+		if failed != nil {
+			resp["failed"] = failed
+		}
 		if found {
 			resp["module"] = view.Module
 			resp["members"] = view.Members

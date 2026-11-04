@@ -175,3 +175,15 @@ func TestInstallTeamStopsOnRuntimeMismatch(t *testing.T) {
 		t.Fatalf("status=%d updated=%v failed=%v", status, updated, failed)
 	}
 }
+
+func TestInstallOneRejectsDotDotModule(t *testing.T) {
+	artifact := []byte("zip-bytes")
+	sum := sha256.Sum256(artifact)
+	m, _ := testInstaller(artifact, hex.EncodeToString(sum[:]))
+	_, _, status, _ := m.installOne(context.Background(), "http://worker.test", "..", moduleInstallRequest{
+		Source: "github", Repo: "o/r", Ref: "main", Version: "0.1.0",
+	})
+	if status != 400 {
+		t.Fatalf("status=%d, want 400", status)
+	}
+}

@@ -80,7 +80,7 @@ out_zip = out_dir / "#{package_name}.zip"
 
 Dir.mktmpdir("agentteams-matrix-qwenpaw-") do |tmp|
   tmp_root = Pathname.new(tmp)
-  staging = tmp_root / package_name
+  staging = tmp_root / plugin_id
   staging.mkpath
 
   excluded_files = %w[install.sh uninstall.sh README.md]
@@ -118,7 +118,7 @@ Dir.mktmpdir("agentteams-matrix-qwenpaw-") do |tmp|
     abort("py_compile failed for #{file}: #{stderr}#{stdout}") unless status.success?
   end
 
-  zip_dir(tmp_root, package_name, out_zip)
+  zip_dir(tmp_root, plugin_id, out_zip)
 end
 
 puts out_zip

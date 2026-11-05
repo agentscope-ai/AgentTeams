@@ -794,11 +794,11 @@ func TestResolveAttention_ApprovalGoldenRecord(t *testing.T) {
 	// fail this equality too).
 	entry := readResolveTaskRecord(t, store)
 	want := map[string]any{
-		"kind":          "approval",
-		"question":      "Approve the submitted result?",
-		"attempt":       float64(1),
-		"requestedAt":   "2026-11-03T08:00:00Z",
-		"eventId":       "att-approval-1",
+		"kind":        "approval",
+		"question":    "Approve the submitted result?",
+		"attempt":     float64(1),
+		"requestedAt": "2026-11-03T08:00:00Z",
+		"eventId":     "att-approval-1",
 		"options": []any{
 			map[string]any{"id": "approve", "label": "Approve"},
 			map[string]any{"id": "deny", "label": "Deny"},

@@ -529,20 +529,6 @@ func truncateRunes(s string, n int) string {
 	return string([]rune(s)[:n])
 }
 
-// canonicalAccount mirrors the consumer's _canonical_account (teamharness
-// mcp/common/identity.py, #1467 round 8): a Matrix MXID
-// (@localpart:server) reduces to its localpart and the result is
-// casefolded, so the MXID localpart and the runtimeName of the same member
-// are one identity. It is the single identity form shared by this write
-// path and the consumer's r1 self-approval comparison. Dashboard accounts
-// are ASCII identifiers (Human CR names, Matrix localparts), where
-// ToLower is the casefold.
-func canonicalAccount(account string) string {
-	text := strings.TrimSpace(account)
-	if strings.HasPrefix(text, "@") {
-		if localpart, _, ok := strings.Cut(text[1:], ":"); ok {
-			text = localpart
-		}
-	}
-	return strings.ToLower(text)
-}
+// canonicalAccount (identity spelling: MXID localpart, casefolded) lives in
+// task_meta_commit.go — the conditional task-meta commit path and this resolve
+// write path share the one definition.

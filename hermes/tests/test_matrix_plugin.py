@@ -45,3 +45,20 @@ def test_register_swaps_bundled_adapter_and_delegates(monkeypatch) -> None:
 
     assert calls == [("register", overlay_adapter_class)]
     assert native.MatrixAdapter is overlay_adapter_class
+
+
+def test_matrix_plugin_package_exports_register(monkeypatch):
+    """Hermes loads directory plugins through __init__.py, not adapter.py."""
+    import importlib.util
+    import sys
+
+    package = Path(__file__).resolve().parents[1] / "plugins" / "platforms" / "matrix"
+    spec = importlib.util.spec_from_file_location(
+        "agentteams_matrix_plugin_test", package / "__init__.py",
+        submodule_search_locations=[str(package)],
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
+    assert callable(module.register)

@@ -102,10 +102,19 @@ Dir.mktmpdir("agentteams-matrix-qwenpaw-") do |tmp|
   abort("plugin id mismatch: #{generated['id']}") unless generated["id"] == plugin_id
   abort("plugin entry must be plugin.py") unless generated.dig("entry", "backend") == "plugin.py"
 
+  # Syntax-check the payload with the bytecode written OUTSIDE staging, so
+  # the packaged ZIP can never contain __pycache__ or .pyc entries.
+  compile_dir = tmp_root / "compile-check"
+  compile_dir.mkpath
   %w[plugin.py].each do |file|
     path = staging / file
     next unless path.file?
-    stdout, stderr, status = Open3.capture3("python3", "-m", "py_compile", path.to_s)
+    cfile = compile_dir / "#{file}.pyc"
+    python = <<~PY
+      import py_compile
+      py_compile.compile(#{path.to_s.dump}, cfile=#{cfile.to_s.dump}, doraise=True)
+    PY
+    stdout, stderr, status = Open3.capture3("python3", "-c", python)
     abort("py_compile failed for #{file}: #{stderr}#{stdout}") unless status.success?
   end
 

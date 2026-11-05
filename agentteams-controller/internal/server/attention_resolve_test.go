@@ -8,9 +8,11 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-logr/logr"
 
@@ -111,6 +113,24 @@ func pendingDecisionRecord() map[string]any {
 			map[string]any{"id": "ship-b", "label": "Ship B"},
 		},
 		"suggested": "ship-a",
+	}
+}
+
+// pendingApprovalRecord is the pending kind=approval record as the worker's
+// request_attention raises it (W2 r1 shape: options + suggested).
+func pendingApprovalRecord() map[string]any {
+	return map[string]any{
+		"kind":        "approval",
+		"question":    "Approve the submitted result?",
+		"attempt":     1,
+		"requestedAt": "2026-11-03T08:00:00Z",
+		"resolved":    false,
+		"eventId":     "att-approval-1",
+		"options": []any{
+			map[string]any{"id": "approve", "label": "Approve"},
+			map[string]any{"id": "deny", "label": "Deny"},
+		},
+		"suggested": "approve",
 	}
 }
 
@@ -672,5 +692,231 @@ func TestResolveAttention_HTTPChainRouteAndWorkerDeny(t *testing.T) {
 	srvW.Mux.ServeHTTP(recW, reqW)
 	if recW.Code != http.StatusForbidden {
 		t.Fatalf("worker status=%d, want 403 (authorizer denial)", recW.Code)
+	}
+}
+
+// --- (12) consumer contract: server-owned approval markers (#1515) ---
+//
+// The Go half of the combined acceptance for the #1506 approval contract.
+// The consumer (teamharness mcp/lifecycle/review.py, #1506 db9a5117)
+// accepts an approval record only in the shape these tests pin field for
+// field; the consumer-side half (frozen task + this record shape -> r1
+// acceptance + unfreeze) lands with #1506.
+
+func readResolveTaskMeta(t *testing.T, store *ossfake.Memory) map[string]any {
+	t.Helper()
+	data, err := store.GetObject(context.Background(), resolveTaskKey)
+	if err != nil {
+		t.Fatalf("read task meta: %v", err)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(data, &meta); err != nil {
+		t.Fatalf("decode task meta: %v", err)
+	}
+	return meta
+}
+
+// deciderIdentity mirrors the consumer's review._decider_identity: the role
+// prefix up to the first colon plus the account behind it (colons
+// preserved — Matrix identities @user:server). A decider without a colon
+// (or with an empty account) parses to (text, ""): a bare claim with no
+// identity.
+func deciderIdentity(decider string) (role, account string) {
+	text := strings.TrimSpace(decider)
+	prefix, account, found := strings.Cut(text, ":")
+	if !found || account == "" {
+		return text, ""
+	}
+	return prefix, account
+}
+
+// consumerHasApprovalRecord is a Go port of the #1506 consumer predicate
+// (review._has_approval_record, read from db9a5117) — the ONE record shape
+// the consumer accepts as a human approval: kind "approval" + resolved +
+// the server-owned resolvedRole "human" + a human resolve channel
+// (im_reply / im_command / dashboard) + the server-written resolvedActor
+// decider carrying an account that, when the submitter's account is known,
+// differs from it (canonicalized — self-approval never counts). resolvedBy
+// is display provenance and never participates.
+func consumerHasApprovalRecord(meta map[string]any, submitterAccount string) bool {
+	attention, _ := meta["attention"].([]any)
+	for _, item := range attention {
+		record, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if str(record["kind"]) != "approval" || record["resolved"] != true {
+			continue
+		}
+		if str(record["resolvedRole"]) != "human" {
+			continue
+		}
+		switch str(record["resolvedVia"]) {
+		case "im_reply", "im_command", "dashboard":
+		default:
+			continue
+		}
+		_, account := deciderIdentity(str(record["resolvedActor"]))
+		if account == "" {
+			continue
+		}
+		if submitterAccount != "" && canonicalAccount(account) == canonicalAccount(submitterAccount) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// TestResolveAttention_ApprovalGoldenRecord: the real ResolveAttention
+// handler (authenticated roster human closing a kind=approval record) must
+// persist a record whose JSON matches the #1506 consumer contract field for
+// field — kind / resolved / resolvedRole / resolvedVia / resolvedActor /
+// resolvedBy / resolvedAt — and the ported consumer predicate must accept
+// it for a different submitter and self-approval-skip it for the decider.
+func TestResolveAttention_ApprovalGoldenRecord(t *testing.T) {
+	store := ossfake.NewMemory()
+	seedResolveBench(t, store, []any{pendingApprovalRecord()})
+	fx := &resolveFakeMatrix{}
+	h := newResolveTestHandler(t, store, fx, teamWithHumans("alpha-team", "alice"))
+
+	rec := resolveAttentionTestRequest(t, h, "p1", "t1", `{"resolution":"approve"}`, aliceCaller)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	resp := decodeResolveResp(t, rec)
+	if _, err := time.Parse(time.RFC3339, resp.ResolvedAt); err != nil {
+		t.Fatalf("resolvedAt=%q is not an RFC3339 UTC timestamp: %v", resp.ResolvedAt, err)
+	}
+
+	// Field for field: the persisted record IS the consumer contract shape
+	// — no missing marker, no foreign key (a payload-injected field would
+	// fail this equality too).
+	entry := readResolveTaskRecord(t, store)
+	want := map[string]any{
+		"kind":          "approval",
+		"question":      "Approve the submitted result?",
+		"attempt":       float64(1),
+		"requestedAt":   "2026-11-03T08:00:00Z",
+		"eventId":       "att-approval-1",
+		"options": []any{
+			map[string]any{"id": "approve", "label": "Approve"},
+			map[string]any{"id": "deny", "label": "Deny"},
+		},
+		"suggested":     "approve",
+		"resolved":      true,
+		"resolution":    "approve",
+		"freeform":      false,
+		"resolvedVia":   "dashboard",
+		"resolvedBy":    "alice",
+		"resolvedAt":    resp.ResolvedAt,
+		"resolvedRole":  "human",
+		"resolvedActor": "human:alice",
+	}
+	if !reflect.DeepEqual(entry, want) {
+		got, _ := json.MarshalIndent(entry, "", "  ")
+		w, _ := json.MarshalIndent(want, "", "  ")
+		t.Fatalf("persisted record\n%s\nwant consumer contract shape\n%s", got, w)
+	}
+
+	// The consumer predicate (ported) accepts the record for a submitter
+	// other than the decider…
+	meta := readResolveTaskMeta(t, store)
+	if !consumerHasApprovalRecord(meta, "bob") {
+		t.Fatalf("consumer predicate rejected the golden record: %v", entry)
+	}
+	// …and skips it when the submitter IS the decider (self-approval never
+	// counts — the consumer-side decision, asserted here on the Go half).
+	if consumerHasApprovalRecord(meta, "alice") {
+		t.Fatalf("consumer predicate must self-approval-skip the golden record: %v", entry)
+	}
+}
+
+// TestResolveAttention_ApprovalPayloadMarkersIgnored: a request payload that
+// spoofs the server-owned marker keys must not reach the record —
+// resolveAttentionRequest has no such fields, so decode drops them and the
+// persisted record carries ONLY the server-derived values.
+func TestResolveAttention_ApprovalPayloadMarkersIgnored(t *testing.T) {
+	store := ossfake.NewMemory()
+	seedResolveBench(t, store, []any{pendingApprovalRecord()})
+	fx := &resolveFakeMatrix{}
+	h := newResolveTestHandler(t, store, fx, teamWithHumans("alpha-team", "alice"))
+
+	body := `{"resolution":"approve","resolvedRole":"admin","resolvedActor":"admin:mallory"}`
+	rec := resolveAttentionTestRequest(t, h, "p1", "t1", body, aliceCaller)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200 (spoofed keys are ignored, not rejected)", rec.Code, rec.Body.String())
+	}
+	entry := readResolveTaskRecord(t, store)
+	if entry["resolvedRole"] != "human" {
+		t.Fatalf("resolvedRole=%v, want the server-owned %q — the payload value must not appear", entry["resolvedRole"], "human")
+	}
+	if entry["resolvedActor"] != "human:alice" {
+		t.Fatalf("resolvedActor=%v, want the server-owned %q — the payload value must not appear", entry["resolvedActor"], "human:alice")
+	}
+	raw, _ := json.Marshal(entry)
+	if strings.Contains(string(raw), "mallory") {
+		t.Fatalf("spoofed payload value leaked into the record: %s", raw)
+	}
+}
+
+// TestResolveAttention_ApprovalSelfApproverShape: the decider may be the
+// SAME identity as the task submitter (assigned_to) — the Go side never
+// blocks self-approval, it only guarantees the record carries the REAL
+// authenticated decider, so the self-approval shape is constructible. The
+// skip decision belongs to the consumer (review._has_approval_record
+// canonicalizes both accounts and skips the record); the consumer-side
+// combined test lands with #1506.
+func TestResolveAttention_ApprovalSelfApproverShape(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, resolveProjectKey, map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag", "team_id": "alpha-team",
+		"tasks": []map[string]any{{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}}},
+	})
+	// The submitter (assigned_to) is the same human as the roster approver.
+	putTaskMeta(store, "alpha-team", "t1", resolveTaskMeta(map[string]any{
+		"attention":   []any{pendingApprovalRecord()},
+		"assigned_to": "alice",
+	}))
+	fx := &resolveFakeMatrix{}
+	h := newResolveTestHandler(t, store, fx, teamWithHumans("alpha-team", "alice"))
+
+	rec := resolveAttentionTestRequest(t, h, "p1", "t1", `{"resolution":"approve"}`, aliceCaller)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200 (self-approval is not a Go-side block)", rec.Code, rec.Body.String())
+	}
+	entry := readResolveTaskRecord(t, store)
+	// The record carries the real decider even where it equals the submitter.
+	if entry["resolvedRole"] != "human" || entry["resolvedActor"] != "human:alice" {
+		t.Fatalf("record=%v, want the real decider markers human / human:alice", entry)
+	}
+	// And the consumer predicate skips exactly this shape (decider ==
+	// submitter, canonicalized): the Go side wrote the truth, the consumer
+	// decides it does not count.
+	meta := readResolveTaskMeta(t, store)
+	if consumerHasApprovalRecord(meta, str(meta["assigned_to"])) {
+		t.Fatalf("consumer predicate must skip the self-approver record: %v", entry)
+	}
+}
+
+// TestCanonicalAccount_MirrorsConsumer pins the one identity form shared by
+// the Go write path and the consumer's _canonical_account (mcp/common/
+// identity.py, #1467 round 8): the MXID localpart reduction plus casefold
+// on ASCII identifiers.
+func TestCanonicalAccount_MirrorsConsumer(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"alice", "alice"},
+		{"Alice", "alice"},
+		{"@alice:matrix.local", "alice"},
+		{"@Alice:matrix.local", "alice"},
+		{"@worker:review.test", "worker"},
+		{"@nocolon", "@nocolon"}, // no server part: not an MXID, kept as-is
+		{"  spaced  ", "spaced"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := canonicalAccount(c.in); got != c.want {
+			t.Errorf("canonicalAccount(%q)=%q, want %q", c.in, got, c.want)
+		}
 	}
 }

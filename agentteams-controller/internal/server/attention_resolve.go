@@ -33,6 +33,23 @@ import (
 // line to the task room (best-effort) and emits the attention_resolved S2
 // signal event.
 //
+// kind=approval closes additionally persist the SERVER-OWNED authority
+// markers the #1506 consumer reads (teamharness review._has_approval_record
+// and the frozen-task release in taskflow): resolvedRole = the caller's
+// authenticated role, resolvedActor = "role:account" with the account in
+// the consumer's canonical form. Both derive from the authenticated
+// CallerIdentity — a payload key of either name has no field in
+// resolveAttentionRequest and is dropped at decode, never copied — and
+// resolvedBy stays display provenance: the consumer never decides on it,
+// and a record without the server markers is not an approval (fail closed).
+//
+// The handler never touches decision_status: the stall-driven "frozen"
+// state is released by the consumer DERIVING it from this marked resolved
+// approval record (the taskflow frozen-unfreeze guard), so writing the
+// record shape correctly is this side's whole obligation. The consumer-side
+// combined test (frozen task + this record shape -> r1 acceptance +
+// unfreeze) lands with #1506.
+//
 // The validation order is fixed (spec):
 //
 //	1) project / task not found                 -> 404
@@ -203,6 +220,15 @@ func (h *ProjectHandler) ResolveAttention(w http.ResponseWriter, r *http.Request
 
 	resolvedBy := truncateRunes(caller.Username, attentionResolveByMaxRunes)
 	resolvedAt := utcTimestamp()
+	// Server-owned approval authority markers (#1515, consumer contract
+	// #1467 round 8): derived from the authenticated identity, never from
+	// the request payload (resolveAttentionRequest has no such fields).
+	// The account is written in the consumer's canonical form
+	// (canonicalAccount mirrors the teamharness _canonical_account), so
+	// this dashboard close and the IM/room close mark the same decider
+	// identically.
+	resolvedRole := caller.Role
+	resolvedActor := caller.Role + ":" + canonicalAccount(caller.Username)
 	em := signalEmitters["ResolveAttention"]
 	teamID := signalTeamID(match.meta, match.team)
 
@@ -266,6 +292,18 @@ func (h *ProjectHandler) ResolveAttention(w http.ResponseWriter, r *http.Request
 		record["resolvedVia"] = "dashboard"
 		record["resolvedBy"] = resolvedBy
 		record["resolvedAt"] = resolvedAt
+		if str(record["kind"]) == "approval" {
+			// Server-owned authority markers (#1515): written from the
+			// authenticated identity, never from the request payload — a
+			// payload-supplied resolvedRole / resolvedActor cannot reach
+			// the record (no such struct field, dropped at decode). The
+			// #1506 r1 gate decides ONLY on these: resolvedRole "human"
+			// plus the resolvedActor account; resolvedBy is display
+			// provenance, and a record without the markers is not an
+			// approval (fail closed).
+			record["resolvedRole"] = resolvedRole
+			record["resolvedActor"] = resolvedActor
+		}
 		out, err := json.Marshal(taskData)
 		if err != nil {
 			writeResolveError(w, http.StatusInternalServerError, "marshal_failed", "marshal task meta: "+err.Error())
@@ -489,4 +527,22 @@ func truncateRunes(s string, n int) string {
 		return s
 	}
 	return string([]rune(s)[:n])
+}
+
+// canonicalAccount mirrors the consumer's _canonical_account (teamharness
+// mcp/common/identity.py, #1467 round 8): a Matrix MXID
+// (@localpart:server) reduces to its localpart and the result is
+// casefolded, so the MXID localpart and the runtimeName of the same member
+// are one identity. It is the single identity form shared by this write
+// path and the consumer's r1 self-approval comparison. Dashboard accounts
+// are ASCII identifiers (Human CR names, Matrix localparts), where
+// ToLower is the casefold.
+func canonicalAccount(account string) string {
+	text := strings.TrimSpace(account)
+	if strings.HasPrefix(text, "@") {
+		if localpart, _, ok := strings.Cut(text[1:], ":"); ok {
+			text = localpart
+		}
+	}
+	return strings.ToLower(text)
 }

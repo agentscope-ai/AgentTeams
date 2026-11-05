@@ -122,12 +122,23 @@ func logEnvWarn(name, value string) {
 //	humans/<username>/.trash/<id>/     recycle bin entries (this API)
 //	    ├── meta.json                  original path, deleted-at, caller, size
 //	    └── content                    the deleted file's bytes
+//	humans/<username>/.uploads/<session>/<rel>
+//	                                 staging objects for direct uploads
+//	                                 (this API): invisible to the file API
+//	                                 and the quota, published to files/
+//	                                 only by a successful commit
 //
 // memory/ and digest/ are intentionally not part of P1.
+//
+// .uploads/ and .trash/ are hidden area prefixes: the file API serves and
+// lists only files/, and the quota walks only files/ plus .trash/, so both
+// stay out of ordinary reads, listings, and usage accounting by
+// construction.
 
-func humanAreaPrefix(username string) string  { return "humans/" + username + "/" }
-func humanFilesPrefix(username string) string { return humanAreaPrefix(username) + "files/" }
-func humanTrashPrefix(username string) string { return humanAreaPrefix(username) + ".trash/" }
+func humanAreaPrefix(username string) string    { return "humans/" + username + "/" }
+func humanFilesPrefix(username string) string   { return humanAreaPrefix(username) + "files/" }
+func humanTrashPrefix(username string) string   { return humanAreaPrefix(username) + ".trash/" }
+func humanUploadsPrefix(username string) string { return humanAreaPrefix(username) + ".uploads/" }
 
 // trashID form: <UTC yyyymmddThhmmssZ>-<8 hex>, e.g.
 // 20261024T123045Z-abcd1234.
@@ -1390,25 +1401,36 @@ func (h *humanFilesHandler) putQuota(w http.ResponseWriter, r *http.Request) {
 // Large files bypass the controller's request body: the API issues a
 // short-lived direct upload URL (presign), the client uploads straight to
 // the object store, and a follow-up commit performs server-side
-// verification and quota accounting. The direct upload itself is invisible
-// to the ledger — accounting happens only at commit, when the object exists
-// and can be measured.
+// verification, quota accounting, and the publish.
 //
-// Because the commit cannot observe the version being replaced (the
-// presigned upload already overwrote it), the presign step records a
-// baseline (etag + size) of the current version in a per-human state object
-// under .control/, outside the walked prefixes so it never counts toward
-// usage:
+// The presigned URL targets a STAGING key, not the final path:
+//
+//	humans/<username>/.uploads/<session>/<rel>
+//
+// so the upload is invisible to ordinary GET/list (which serve only files/)
+// and to the quota (which walks only files/ plus .trash/) until a commit
+// explicitly publishes it. A commit that is rejected — or never made —
+// leaves the bytes in the staging area only: the previously live file is
+// untouched.
+//
+// The per-human state object under .control/ (outside the walked prefixes)
+// binds the session to the target path:
 //
 //	humans/<username>/.control/presign-commits.json
 //
-// Commit semantics keyed on that baseline:
+//   - presign records {Session} for the rel: only the session this API
+//     signed is committable, and only to the path it was signed for;
+//   - commit verifies the staged object (size gate, declared sha256) and
+//     publishes its content-bound snapshot to the final path under the
+//     same per-path lease and quota reservation/commit as the in-body PUT;
+//   - a commit with no in-flight session whose final object still carries
+//     the last published ETag is a retry: idempotent 200, no re-charge.
 //
-//   - committed etag == current etag: this exact version was already
-//     committed (client retry) -> idempotent 200, no re-charge;
-//   - baseline present: the charge is the delta (reserveQuota's oldSize is
-//     the baseline's size);
-//   - no baseline: a fresh object, charged in full.
+// Cleanup of uncommitted staging objects is a TTL, not an in-repo task:
+// the objects are orphaned and invisible, and an operator-configured
+// bucket lifecycle expiration on humans/*/.uploads/ reclaims them (the
+// presign TTL bounds when new bytes can still land). No background job is
+// introduced by this API.
 
 // humanPresignResponse is the presign (issue) body: the direct upload
 // recipe for the client and the limit the upload must respect.
@@ -1428,25 +1450,37 @@ type humanPresignCommitResponse struct {
 }
 
 // humanPresignStatePath is the per-human state object recording, for each
-// path with an in-flight direct upload, the baseline — see the section
-// comment.
+// path, which direct upload session is in flight and which version a commit
+// last published — see the section comment.
 const humanPresignStatePath = ".control/presign-commits.json"
 
 func humanPresignStateKey(username string) string {
 	return humanAreaPrefix(username) + humanPresignStatePath
 }
 
-// presignCommittedVersion is one recorded direct upload: the etag of the
-// version recorded (idempotency key at commit) and the size of the version
-// being replaced (the delta baseline).
-type presignCommittedVersion struct {
-	ETag string `json:"etag"`
-	Size int64  `json:"size"`
+// presignCommitEntry is the per-path state of the direct upload flow.
+type presignCommitEntry struct {
+	// Session is the staging session of the in-flight direct upload: the
+	// bytes land at .uploads/<Session>/<rel> and reach the final path only
+	// through a successful commit of that session. Empty when no upload is
+	// in flight.
+	Session string `json:"session,omitempty"`
+	// Committed is the ETag of the version a commit last published to the
+	// final path ("" when none). A commit with no in-flight session whose
+	// final object still carries it is a retry: idempotent 200, no
+	// re-charge.
+	Committed string `json:"committed,omitempty"`
 }
 
 // presignCommitState is the whole per-human state object.
 type presignCommitState struct {
-	Commits map[string]presignCommittedVersion `json:"commits"`
+	Commits map[string]presignCommitEntry `json:"commits"`
+}
+
+// newUploadSessionID builds a staging session id in the same shape as a
+// trash id (sortable, unique within the same second).
+func newUploadSessionID() (string, error) {
+	return newTrashID()
 }
 
 // parseHumanPresignTTL decodes ?ttl=<seconds>: empty uses the default, and a
@@ -1522,7 +1556,7 @@ func (h *humanFilesHandler) writePresignCommitState(ctx context.Context, usernam
 			return err
 		}
 		if state.Commits == nil {
-			state.Commits = make(map[string]presignCommittedVersion)
+			state.Commits = make(map[string]presignCommitEntry)
 		}
 		mutate(&state)
 		payload, merr := json.Marshal(state)
@@ -1637,23 +1671,18 @@ func (h *humanFilesHandler) presignFile(w http.ResponseWriter, r *http.Request, 
 			"the object store backend cannot issue direct upload URLs")
 		return
 	}
-	// Baseline: the version the direct upload will replace, captured while
-	// it is still observable. Commit uses its etag for idempotency and its
-	// size for the delta charge.
-	key := humanFilesPrefix(username) + rel
-	var baseline presignCommittedVersion
-	exists := false
-	switch meta, merr := h.oss.StatMeta(ctx, key); {
-	case merr == nil:
-		if !isHumanFileTombstone(meta) {
-			exists = true
-			baseline = presignCommittedVersion{ETag: meta.ETag, Size: meta.Size}
-		}
-	case !errors.Is(merr, os.ErrNotExist):
-		httputil.WriteError(w, http.StatusInternalServerError, "stat file failed")
+	// The URL targets a staging key, not the final path: bytes the client
+	// uploads land in the hidden .uploads/ area, where they are invisible to
+	// the file API and the quota until a commit publishes them. A presign
+	// for a path supersedes any earlier in-flight session for it (its
+	// staging object is simply orphaned and ages out with the staging TTL).
+	session, err := newUploadSessionID()
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "generate upload session failed")
 		return
 	}
-	method, url, fields, err := up.PresignUpload(ctx, key, h.presignMaxBytes, contentTypeForName(rel), sha256Hex, ttl)
+	stageKey := humanUploadsPrefix(username) + session + "/" + rel
+	method, url, fields, err := up.PresignUpload(ctx, stageKey, h.presignMaxBytes, contentTypeForName(rel), sha256Hex, ttl)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "issue presigned upload failed")
 		return
@@ -1662,17 +1691,17 @@ func (h *humanFilesHandler) presignFile(w http.ResponseWriter, r *http.Request, 
 		fields = map[string]string{}
 	}
 	if err := h.writePresignCommitState(ctx, username, func(s *presignCommitState) {
-		if exists {
-			s.Commits[rel] = baseline
-		} else {
-			delete(s.Commits, rel)
-		}
+		// Keep Committed: the last published version is still the last
+		// published one while a new upload is in flight, and the retry
+		// check at commit compares against it.
+		prev := s.Commits[rel]
+		s.Commits[rel] = presignCommitEntry{Session: session, Committed: prev.Committed}
 	}); err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, "record presign baseline failed")
+		httputil.WriteError(w, http.StatusInternalServerError, "record presign session failed")
 		return
 	}
 	h.recordAudit(ctx, a, "human_file_presign_issue",
-		humanFileDetail("path", "files/"+rel, "maxBytes", h.presignMaxBytes, "ttlSeconds", int64(ttl.Seconds())))
+		humanFileDetail("path", "files/"+rel, "session", session, "maxBytes", h.presignMaxBytes, "ttlSeconds", int64(ttl.Seconds())))
 	httputil.WriteJSON(w, http.StatusOK, humanPresignResponse{
 		Method:    method,
 		URL:       url,
@@ -1684,8 +1713,14 @@ func (h *humanFilesHandler) presignFile(w http.ResponseWriter, r *http.Request, 
 
 // commitPresignedFile handles POST .../files/{rel}/commit: the server-side
 // half of a direct upload. The object already exists (the client uploaded
-// straight to storage); this request verifies it and books the quota
-// charge.
+// straight to the staging key); this request verifies the staged object,
+// books the quota charge, and publishes the bytes to the final path.
+//
+// Rejection and skip are both invisible: a rejected (or never made) commit
+// leaves the bytes at the staging key only — invisible to GET/list and the
+// quota, and the previously live file is never touched, because the
+// publish happens after every check and under the same per-path lease the
+// in-body PUT uses.
 func (h *humanFilesHandler) commitPresignedFile(w http.ResponseWriter, r *http.Request, rawPath string) {
 	name := r.PathValue("name")
 	if strings.HasSuffix(rawPath, "/") {
@@ -1709,7 +1744,27 @@ func (h *humanFilesHandler) commitPresignedFile(w http.ResponseWriter, r *http.R
 		return
 	}
 	key := humanFilesPrefix(username) + rel
-	meta, merr := h.oss.StatMeta(ctx, key)
+	state, _, serr := h.readPresignCommitState(ctx, username)
+	if serr != nil && !errors.Is(serr, os.ErrNotExist) {
+		httputil.WriteError(w, http.StatusInternalServerError, "read presign commit state failed")
+		return
+	}
+	entry := state.Commits[rel]
+	// Session binding: only the session this API signed for this exact
+	// path is committable, and only to that path.
+	if entry.Session == "" {
+		// No in-flight upload: a commit can only be a retry of one that
+		// already published.
+		if entry.Committed == "" {
+			writeHumanFileCodedError(w, http.StatusNotFound, "object_missing",
+				"no direct upload was signed for this path; issue a presign first")
+			return
+		}
+		h.finishCommittedRetry(w, r, a, username, rel, key, entry.Committed)
+		return
+	}
+	stageKey := humanUploadsPrefix(username) + entry.Session + "/" + rel
+	meta, merr := h.oss.StatMeta(ctx, stageKey)
 	switch {
 	case errors.Is(merr, os.ErrNotExist):
 		writeHumanFileCodedError(w, http.StatusNotFound, "object_missing",
@@ -1718,76 +1773,106 @@ func (h *humanFilesHandler) commitPresignedFile(w http.ResponseWriter, r *http.R
 	case merr != nil:
 		httputil.WriteError(w, http.StatusInternalServerError, "stat file failed")
 		return
-	case isHumanFileTombstone(meta):
-		writeHumanFileCodedError(w, http.StatusNotFound, "object_missing",
-			"no object at this path; the direct upload has not landed")
-		return
 	}
-	// Hard size gate: an over-limit upload is removed, not accounted.
+	// Hard size gate: an over-limit upload is rejected, not accounted. The
+	// staged object is kept (it is invisible to the file API and ages out
+	// with the staging TTL); the live file is untouched.
 	if meta.Size > h.presignMaxBytes {
-		if derr := h.oss.DeleteObject(ctx, key); derr != nil {
-			httputil.WriteError(w, http.StatusInternalServerError, "remove over-limit object failed")
-			return
-		}
 		writeHumanFileCodedError(w, http.StatusRequestEntityTooLarge, "size_exceeded",
-			fmt.Sprintf("file size %d exceeds the %d byte direct upload limit; the object was removed", meta.Size, h.presignMaxBytes))
+			fmt.Sprintf("file size %d exceeds the %d byte direct upload limit", meta.Size, h.presignMaxBytes))
 		h.recordAudit(ctx, a, "human_file_presign_commit_rejected",
 			humanFileDetail("path", "files/"+rel, "size", meta.Size, "reason", "size_exceeded"))
 		return
 	}
+	// The per-path lease serializes the publish against in-API writers on
+	// the same rel (the same protection putFile uses): while it is held,
+	// the live file cannot be half-written or deleted out from under the
+	// publish.
+	lock, err := h.acquireHumanPathLock(ctx, username, rel, h.pathLockTTL)
+	if err != nil {
+		if errors.Is(err, errHumanPathBusy) {
+			writeHumanFileCodedError(w, http.StatusConflict, "file_busy",
+				"another operation is in flight on this file; retry shortly")
+			return
+		}
+		if errors.Is(err, oss.ErrConditionalUnsupported) {
+			writeHumanFileCodedError(w, http.StatusServiceUnavailable, "conditional_write_unsupported",
+				"storage provider does not support conditional writes; the path lease cannot be taken (fail closed)")
+			return
+		}
+		httputil.WriteError(w, http.StatusInternalServerError, "acquire path lease failed")
+		return
+	}
+	defer lock.Release(ctx)
+	// Re-check the session under the lease: the pre-lease read and the
+	// publish are not one transaction. A concurrent commit of the same
+	// session may have settled in between (publish, staging delete,
+	// session clear), and a newer presign supersedes this session.
+	freshState, _, fserr := h.readPresignCommitState(ctx, username)
+	if fserr != nil && !errors.Is(fserr, os.ErrNotExist) {
+		httputil.WriteError(w, http.StatusInternalServerError, "read presign commit state failed")
+		return
+	}
+	fresh := freshState.Commits[rel]
+	if fresh.Session != entry.Session {
+		if fresh.Session == "" {
+			// Settled by a concurrent commit of this session: answer the
+			// same way a plain retry would.
+			h.finishCommittedRetry(w, r, a, username, rel, key, fresh.Committed)
+			return
+		}
+		writeHumanFileCodedError(w, http.StatusConflict, "version_conflict",
+			"a newer upload was signed for this path; this session is stale")
+		return
+	}
+	// Content-bound snapshot of the staged bytes: the size we gate and the
+	// ETag we report describe exactly the bytes we publish.
+	data, _, err := h.readFileSnapshot(ctx, stageKey)
+	if err != nil {
+		writeHumanFileSnapshotError(w, err)
+		return
+	}
+	// The client may re-upload to the staging key while the presigned URL
+	// is still valid, so the gate runs on the snapshot, not the earlier
+	// stat.
+	if int64(len(data)) > h.presignMaxBytes {
+		writeHumanFileCodedError(w, http.StatusRequestEntityTooLarge, "size_exceeded",
+			fmt.Sprintf("file size %d exceeds the %d byte direct upload limit", len(data), h.presignMaxBytes))
+		h.recordAudit(ctx, a, "human_file_presign_commit_rejected",
+			humanFileDetail("path", "files/"+rel, "size", len(data), "reason", "size_exceeded"))
+		return
+	}
 	// Content verification: the sha256 the caller passes is checked against
-	// the bytes actually stored. The ETag is deliberately NOT used as a
-	// digest (multipart etags are not content hashes).
+	// the exact bytes about to be published. The ETag is deliberately NOT
+	// used as a digest (multipart etags are not content hashes).
 	if want := r.URL.Query().Get("sha256"); want != "" {
 		digest, perr := parseHumanPresignSHA256(want)
 		if perr != nil {
 			httputil.WriteError(w, http.StatusBadRequest, perr.Error())
 			return
 		}
-		data, gerr := h.oss.GetObject(ctx, key)
-		if gerr != nil {
-			if errors.Is(gerr, os.ErrNotExist) {
-				writeHumanFileCodedError(w, http.StatusNotFound, "object_missing",
-					"no object at this path; the direct upload has not landed")
-				return
-			}
-			httputil.WriteError(w, http.StatusInternalServerError, "read file failed")
-			return
-		}
 		sum := sha256.Sum256(data)
 		if hex.EncodeToString(sum[:]) != digest {
-			if derr := h.oss.DeleteObject(ctx, key); derr != nil {
-				httputil.WriteError(w, http.StatusInternalServerError, "remove mismatched object failed")
-				return
-			}
 			writeHumanFileCodedError(w, http.StatusConflict, "checksum_mismatch",
-				"the stored content does not match the declared sha256; the object was removed")
+				"the staged content does not match the declared sha256; the upload was rejected")
 			h.recordAudit(ctx, a, "human_file_presign_commit_rejected",
-				humanFileDetail("path", "files/"+rel, "size", meta.Size, "reason", "checksum_mismatch"))
+				humanFileDetail("path", "files/"+rel, "size", len(data), "reason", "checksum_mismatch"))
 			return
 		}
 	}
-	// Idempotency + delta baseline from the state recorded at presign:
-	// committed etag == current etag means this exact version was already
-	// committed (a client retry) -> no re-charge.
-	state, _, serr := h.readPresignCommitState(ctx, username)
-	if serr != nil && !errors.Is(serr, os.ErrNotExist) {
-		httputil.WriteError(w, http.StatusInternalServerError, "read presign commit state failed")
+	// Delta baseline: the version actually being replaced, statted under
+	// the lease (the same source putFile uses; a missing or tombstoned
+	// target is a fresh object charged in full).
+	var oldSize int64
+	if fmeta, ferr := h.oss.StatMeta(ctx, key); ferr == nil {
+		if !isHumanFileTombstone(fmeta) {
+			oldSize = fmeta.Size
+		}
+	} else if !errors.Is(ferr, os.ErrNotExist) {
+		httputil.WriteError(w, http.StatusInternalServerError, "stat file failed")
 		return
 	}
-	committed := state.Commits[rel]
-	if committed.ETag != "" && strings.EqualFold(committed.ETag, meta.ETag) {
-		h.recordAudit(ctx, a, "human_file_presign_commit_idempotent",
-			humanFileDetail("path", "files/"+rel, "size", meta.Size, "etag", meta.ETag))
-		httputil.WriteJSON(w, http.StatusOK, humanPresignCommitResponse{
-			Path: "files/" + rel,
-			Size: meta.Size,
-			ETag: meta.ETag,
-		})
-		return
-	}
-	oldSize := committed.Size // 0 when no baseline was recorded
-	token, status, msg := h.reserveQuota(ctx, a, username, rel, oldSize, meta.Size)
+	token, status, msg := h.reserveQuota(ctx, a, username, rel, oldSize, int64(len(data)))
 	if status != 0 {
 		switch status {
 		case http.StatusRequestEntityTooLarge:
@@ -1799,23 +1884,80 @@ func (h *humanFilesHandler) commitPresignedFile(w http.ResponseWriter, r *http.R
 		}
 		return
 	}
-	// The object already exists, so a failed settlement must NOT release
-	// the reservation: the bytes are real. An outstanding reservation is a
-	// conservative overstatement that the next sync corrects (I4).
+	// Release the reservation only while the publish has not landed: after
+	// the write, the bytes are real and an outstanding reservation is a
+	// conservative overstatement the next sync corrects (I4).
+	committed := false
+	if token != "" {
+		defer func() {
+			if !committed {
+				h.releaseQuota(ctx, username, rel, token)
+			}
+		}()
+	}
+	// Fence: an expired holder whose lease was taken over must not keep
+	// mutating the file.
+	if verr := lock.Verify(ctx); verr != nil {
+		writeHumanFileCodedError(w, http.StatusConflict, "lease_lost",
+			"the path lease was taken over by another operation; nothing was written")
+		return
+	}
+	// Publish: the same write path putFile uses without If-Match. Under
+	// the lease the target cannot change in-API, so a plain put is safe;
+	// the confirm snapshot below re-verifies the bytes that landed.
+	if err := h.oss.PutObject(ctx, key, data); err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "write file failed")
+		return
+	}
+	committed = true
 	h.commitQuota(ctx, username, rel, token)
-	// Remember the committed version so retries are no-ops and a
-	// follow-up presign sees the correct baseline.
+	snapData, finalMeta, cerr := h.readFileSnapshot(ctx, key)
+	if cerr != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "confirm file write failed")
+		return
+	}
+	if !bytes.Equal(snapData, data) {
+		writeHumanFileCodedError(w, http.StatusConflict, "version_conflict",
+			"the stored content does not match the bytes we wrote")
+		return
+	}
+	// The staging object has served its purpose; removal is best effort —
+	// a failure leaves an orphan that ages out with the staging TTL.
+	_ = h.oss.DeleteObject(ctx, stageKey)
+	// Remember the published version: retries are no-ops and a follow-up
+	// presign keeps it as the Committed baseline.
 	if err := h.writePresignCommitState(ctx, username, func(s *presignCommitState) {
-		s.Commits[rel] = presignCommittedVersion{ETag: meta.ETag, Size: meta.Size}
+		s.Commits[rel] = presignCommitEntry{Committed: finalMeta.ETag}
 	}); err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "record presign commit failed")
 		return
 	}
 	h.recordAudit(ctx, a, "human_file_presign_commit",
-		humanFileDetail("path", "files/"+rel, "size", meta.Size, "oldSize", oldSize, "etag", meta.ETag))
+		humanFileDetail("path", "files/"+rel, "size", len(data), "oldSize", oldSize, "etag", finalMeta.ETag))
 	httputil.WriteJSON(w, http.StatusOK, humanPresignCommitResponse{
 		Path: "files/" + rel,
-		Size: meta.Size,
-		ETag: meta.ETag,
+		Size: int64(len(data)),
+		ETag: finalMeta.ETag,
 	})
+}
+
+// finishCommittedRetry answers a commit whose session is already settled:
+// idempotent 200 (no re-charge) while the final object is still the version
+// the original commit published, 409 once that version is gone or replaced
+// (a retry of a lost response must not re-publish or re-charge).
+func (h *humanFilesHandler) finishCommittedRetry(w http.ResponseWriter, r *http.Request, a *humanFileAccess, username, rel, key, committedETag string) {
+	ctx := r.Context()
+	meta, merr := h.oss.StatMeta(ctx, key)
+	if merr == nil && !isHumanFileTombstone(meta) && strings.EqualFold(meta.ETag, committedETag) {
+		h.recordAudit(ctx, a, "human_file_presign_commit_idempotent",
+			humanFileDetail("path", "files/"+rel, "size", meta.Size, "etag", meta.ETag))
+		httputil.WriteJSON(w, http.StatusOK, humanPresignCommitResponse{
+			Path: "files/" + rel,
+			Size: meta.Size,
+			ETag: meta.ETag,
+		})
+		return
+	}
+	writeHumanFileCodedError(w, http.StatusConflict, "version_conflict",
+		"the committed version is no longer at this path; issue a presign to upload again")
 }

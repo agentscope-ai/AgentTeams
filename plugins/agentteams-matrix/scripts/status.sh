@@ -132,6 +132,7 @@ PY
 hermes_status() {
   local cfg="${HERMES_HOME:-$HOME/.hermes}/config.yaml"
   python3 - "$cfg" "$PLUGIN_ID" "$CHANNEL" <<'PY'
+import json
 import sys
 from pathlib import Path
 cfg, plugin_id, channel = Path(sys.argv[1]), sys.argv[2], sys.argv[3]

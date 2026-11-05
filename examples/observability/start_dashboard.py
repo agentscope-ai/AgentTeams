@@ -22,6 +22,7 @@ def main():
         "AGENTTEAMS_TRACING_DEMO": "true",
         "AGENTTEAMS_AUTH_DISABLED": "true",
         "DASHBOARD_CONFIG_FILE": "/data/config.json",
+        "DASHBOARD_BUILD_ID": (source / ".next" / "BUILD_ID").read_text().strip(),
         "HOSTNAME": "0.0.0.0", "PORT": "3000",
     }
     command = ["docker", "run", "-d", "--name", "at-tracing-demo-dashboard",

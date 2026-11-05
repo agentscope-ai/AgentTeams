@@ -40,7 +40,7 @@ bash examples/observability/run_workers.sh
 python3 examples/observability/verify.py
 ```
 
-Dashboard 已运行时不需要再创建容器。重启使用 `docker restart at-tracing-demo-dashboard`。首次创建：
+Dashboard 已运行时不需要再创建容器。仅重启 Dashboard 使用 `docker restart at-tracing-demo-dashboard`。若执行过下方的 `compose down`，先 `docker rm at-tracing-demo-dashboard` 再创建，以重新连接新建的隔离网络。首次创建：
 
 ```bash
 cd ../dashboard
@@ -81,9 +81,20 @@ SDK 依赖固定在 `shared/lib/telemetry/requirements.txt`。Langfuse v3/Collec
 
 ## 验证状态与边界
 
+2026-11-06 本机验收已完成 Langfuse 入库和 Dashboard BFF 回读：
+
+| 运行时 | Trace ID | Spans / 模型调用 | 用量来源 |
+| --- | --- | --- | --- |
+| QwenPaw | `8294d4f4d0641a799623045e330486b0` | 3 / 1 | fixture 响应 48 input + 18 output |
+| Hermes | `30844ca0e20363722837968ac7100c06` | 3 / 1 | fixture 响应 48 input + 18 output |
+
+两条 ID 均是在 Collector 重启前生成，恢复后可以从 Langfuse 和 Dashboard 查到全部 6 个 span。按 Worker、运行时、Task ID 联合筛选分别返回 1 条；模型输入和输出均已回读。Langfuse `3.227.0` 健康检查与项目 API 均返回 200。未知模型的 Langfuse v3 汇总费用会返回 0，Dashboard 根据空 `costDetails` 显示“未计价”，没有据此显示免费。
+
+证据保存在 AT 工作树 `output/observability-demo/`：`langfuse-readback.json`、`dashboard-readback.json`、`collector.log`、`runtime-images.json`、`backend-images.json`。
+
 - Dashboard：43 项相关测试（含组件交互、管理员权限、API 边界、导航和瀑布坐标）通过；类型检查、lint 和生产构建通过。
 - Python：并发房间/任务上下文、父子 span、错误状态、清理，以及已有 QwenPaw 启动契约测试通过。
 - 镜像：两种运行时 overlay 已构建；QwenPaw 共享环境入口可自动创建 TracerProvider。Hermes 原始镜像已有 browser-harness/Pillow 版本冲突，本次未修改这项无关依赖。
 - 协议：两种真实原生 Agent 已向 OTLP protobuf 探针输出三层 trace 和模型 usage；探针仅用于诊断，不是 Langfuse 替代品。
-- 完整 Langfuse / Dashboard 回读：以 `verify.py` 实际输出及 `output/observability-demo/` 验收记录为准，不能用运行时 stdout 或导出 HTTP 200 替代查询验证。
+- 完整 Langfuse / Dashboard 回读：已通过，`verify.py` 返回两个运行时且 `missing=[]`；验收记录如上。
 - 浏览器视觉验收：当前 Work 设置禁用了本地浏览器自动化；已完成组件交互测试与页面 HTTP 检查，尚未完成浏览器视觉验收。

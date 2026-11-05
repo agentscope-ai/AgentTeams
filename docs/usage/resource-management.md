@@ -600,6 +600,28 @@ If SMTP is not configured or `spec.email` is empty, email sending is skipped wit
 - Target Workers must exist before creating an L3 Human
 - Changing permissionLevel triggers a full recalculation of groupAllowFrom
 
+### File Area Downloads (Presigned URLs)
+
+Each Human's file area supports two download modes:
+
+| Mode | Request | Behavior |
+|------|---------|----------|
+| Streamed (always available) | `GET /api/v1/humans/{name}/files/{path}` | The Controller streams the object through its own API response |
+| Presigned (opt-in) | `GET .../files/{path}?presign=1` | The Controller returns a time-limited URL; the client fetches the object **directly from storage** without going through the Controller |
+
+**Enabling presigned downloads.** Set `AGENTTEAMS_FS_PUBLIC_ENDPOINT` (Helm: `storage.publicEndpoint`) to a storage origin that is **reachable from your clients** — the host in every returned URL is exactly this value. Point it at the public address of your MinIO/RustFS, typically an Ingress or a dedicated domain fronting the S3 endpoint (e.g. `https://files.example.com`), and make sure that origin serves the same bucket as `AGENTTEAMS_FS_ENDPOINT`. The embedded Docker Compose install publishes MinIO on the host at `127.0.0.1:9000`; the installer syncs that value automatically.
+
+**When no public endpoint is configured**, presigning is disabled and `?presign=1` answers:
+
+```
+501 Not Implemented
+{"error":"presign_unsupported","reason":"storage endpoint is not caller-reachable; set AGENTTEAMS_FS_PUBLIC_ENDPOINT or use the streamed GET"}
+```
+
+Clients should treat this as a capability signal and fall back to the streamed GET on the same path — that mode works regardless of storage reachability.
+
+**Presigned URL semantics.** A returned URL is anonymous (no credentials needed), valid for `AGENTTEAMS_PRESIGN_TTL` (Go duration, default 5 minutes, max 60 minutes), and bound to the public endpoint's host: the S3 V4 signature covers the `Host` header, so fetch the URL exactly as returned — rewriting the hostname (even to an alias of the same host) makes storage reject it with `403 SignatureDoesNotMatch`.
+
 ## Package URI
 
 Both Workers and Team Workers support custom configuration packages via `spec.package`. Three URI formats are supported:

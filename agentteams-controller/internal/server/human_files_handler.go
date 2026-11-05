@@ -262,6 +262,17 @@ type humanFilePresignResponse struct {
 	ExpiresAt string `json:"expiresAt"`
 }
 
+// humanFilePresignUnsupportedResponse is the explicit capability boundary
+// for ?presign=1 (#1501): the deployment has no caller-reachable storage
+// origin (AGENTTEAMS_FS_PUBLIC_ENDPOINT unset), so no URL is minted — a
+// URL signed for the internal endpoint is unusable from the caller. The
+// stable error code lets clients detect the boundary and fall back to the
+// streamed GET on the same path.
+type humanFilePresignUnsupportedResponse struct {
+	Error  string `json:"error"`
+	Reason string `json:"reason"`
+}
+
 func writeHumanFileCodedError(w http.ResponseWriter, status int, code, message string) {
 	httputil.WriteJSON(w, status, humanFileCodedError{Code: code, Message: message})
 }
@@ -469,6 +480,12 @@ func (h *humanFilesHandler) readSingleFile(w http.ResponseWriter, r *http.Reques
 // this method checks existence and the tombstone marker, mints the URL, and
 // records the issuance in the audit trail. The object content is never read
 // and the signing credentials are never part of the response.
+//
+// When the deployment has no caller-reachable storage origin
+// (AGENTTEAMS_FS_PUBLIC_ENDPOINT unset, #1501) no URL is minted: the
+// response is 501 with a stable {"error":"presign_unsupported"} body so
+// clients detect the capability boundary and fall back to the streamed GET
+// on the same path.
 func (h *humanFilesHandler) presignFile(w http.ResponseWriter, r *http.Request, a *humanFileAccess, username, rel string) {
 	ctx := r.Context()
 	key := humanFilesPrefix(username) + rel
@@ -495,6 +512,13 @@ func (h *humanFilesHandler) presignFile(w http.ResponseWriter, r *http.Request, 
 	ttl := h.presignTTL
 	downloadURL, err := presigner.PresignGet(ctx, key, ttl)
 	if err != nil {
+		if errors.Is(err, oss.ErrPresignUnsupported) {
+			httputil.WriteJSON(w, http.StatusNotImplemented, humanFilePresignUnsupportedResponse{
+				Error:  "presign_unsupported",
+				Reason: "storage endpoint is not caller-reachable; set AGENTTEAMS_FS_PUBLIC_ENDPOINT or use the streamed GET",
+			})
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "presign failed")
 		return
 	}

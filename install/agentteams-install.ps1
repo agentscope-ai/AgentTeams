@@ -3239,6 +3239,11 @@ function Install-Manager {
             "-e", "AGENTTEAMS_MINIO_BUCKET=agentteams-storage",
             "-e", "AGENTTEAMS_STORAGE_PREFIX=agentteams/agentteams-storage",
             "-e", "AGENTTEAMS_FS_ENDPOINT=http://127.0.0.1:9000",
+            # Presigned download origin (#1501): the embedded in-container
+            # MinIO is published to the host at 127.0.0.1:9000 — the origin
+            # the caller's browser can reach — so presign works out of the
+            # box in embedded mode.
+            "-e", "AGENTTEAMS_FS_PUBLIC_ENDPOINT=http://127.0.0.1:9000",
             "-e", "AGENTTEAMS_AI_GATEWAY_URL=http://$aigwDomain",
             "-e", "AGENTTEAMS_CONTROLLER_URL=http://agentteams-controller:8090",
             "-e", "AGENTTEAMS_DOCKER_NETWORK=agentteams-net",

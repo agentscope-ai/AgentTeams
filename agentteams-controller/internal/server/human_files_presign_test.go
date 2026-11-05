@@ -41,6 +41,9 @@ if [ "$FAKE_MC_FAIL" = "1" ]; then
   exit 1
 fi
 case "$1" in
+  alias)
+    echo "Added fake-alias successfully."
+    ;;
   share)
     cat "$FAKE_MC_SHARE_JSON"
     ;;
@@ -56,7 +59,10 @@ esac
 
 // fakePresignURL is the canned signed URL the fake mc reports; it must not
 // look like a credential (it is what the response should echo verbatim).
-const fakePresignURL = "http://fake-oss:9000/agentteams/agentteams-storage/humans/alice/files/a.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=300&X-Amz-Signature=fake"
+// Its host is the caller-reachable public endpoint (#1501), not the
+// internal one, and its path is <bucket>/<key> (the mc alias never appears
+// in the HTTP URL).
+const fakePresignURL = "http://fake-pub:9000/agentteams-storage/humans/alice/files/a.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=300&X-Amz-Signature=fake"
 
 const fakePresignShareJSON = `{"status":"success","share":"` + fakePresignURL + `"}`
 
@@ -95,6 +101,14 @@ func writeFakeMCServer(t *testing.T, dir string) string {
 // and a live audit client on a separate in-memory store. It returns the
 // handler, the audit store, and the fake-mc temp dir (marker / args log).
 func newHumanPresignRig(t *testing.T) (*humanFilesHandler, *ossfake.Memory, string) {
+	return newHumanPresignRigWithPublic(t, "http://fake-pub:9000")
+}
+
+// newHumanPresignRigWithPublic is the same rig with an explicit
+// caller-reachable public endpoint (#1501); "" models the unconfigured
+// capability boundary where presign must answer 501 instead of minting a
+// URL.
+func newHumanPresignRigWithPublic(t *testing.T, publicEndpoint string) (*humanFilesHandler, *ossfake.Memory, string) {
 	t.Helper()
 	scheme := newServerTestScheme(t)
 	alice := &v1beta1.Human{
@@ -111,12 +125,13 @@ func newHumanPresignRig(t *testing.T) (*humanFilesHandler, *ossfake.Memory, stri
 		Build()
 	dir := t.TempDir()
 	sc := oss.NewMinIOClient(oss.Config{
-		MCBinary:      writeFakeMCServer(t, dir),
-		Alias:         "agentteams",
-		StoragePrefix: "agentteams/agentteams-storage",
-		Bucket:        "agentteams-storage",
-		AccessKey:     "test-access-key",
-		SecretKey:     "test-secret-key",
+		MCBinary:       writeFakeMCServer(t, dir),
+		Alias:          "agentteams",
+		StoragePrefix:  "agentteams/agentteams-storage",
+		Bucket:         "agentteams-storage",
+		AccessKey:      "test-access-key",
+		SecretKey:      "test-secret-key",
+		PublicEndpoint: publicEndpoint,
 	})
 	store := ossfake.NewMemory()
 	hfh := NewHumanFilesHandler(k8s, "default", sc, audit.NewClient(store))
@@ -203,14 +218,19 @@ func TestHumanFiles_PresignIssuesURL(t *testing.T) {
 		t.Fatalf("detail expiresAt = %v, want %v", v, body.ExpiresAt)
 	}
 
-	// The configured TTL must actually reach mc.
+	// The configured TTL must actually reach mc, and — the core of #1501 —
+	// the share path must be bound to the public alias (the
+	// caller-reachable origin), while the one-time alias registration
+	// points at that public endpoint.
 	args, err := os.ReadFile(filepath.Join(dir, "mc-args.log"))
 	if err != nil {
 		t.Fatalf("read args log: %v", err)
 	}
-	wantArgs := "share download --expire 5m0s --json agentteams/agentteams-storage/humans/alice/files/a.txt"
-	if !strings.Contains(string(args), wantArgs) {
-		t.Fatalf("args = %q, want it to contain %q", string(args), wantArgs)
+	if want := "alias set agentteams-public http://fake-pub:9000 test-access-key test-secret-key"; !strings.Contains(string(args), want) {
+		t.Fatalf("args = %q, want it to contain the public-alias registration %q", string(args), want)
+	}
+	if want := "share download --expire 5m0s --json agentteams-public/agentteams-storage/humans/alice/files/a.txt"; !strings.Contains(string(args), want) {
+		t.Fatalf("args = %q, want it to contain %q", string(args), want)
 	}
 }
 
@@ -337,6 +357,42 @@ func TestHumanFiles_PresignUnsupportedBackend(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "presign failed") {
 		t.Fatalf("body = %q, want the presign-failed message", rec.Body.String())
+	}
+}
+
+// The explicit capability boundary (#1501): with no caller-reachable
+// public endpoint configured, ?presign=1 answers 501 with a stable
+// machine-readable {"error":"presign_unsupported"} body — never a 200 with
+// a URL the caller cannot reach, never an opaque 500. No URL is minted, so
+// the share command must never reach mc, and the failed issuance is not
+// audited. Clients detect the code and fall back to the streamed GET on
+// the same path.
+func TestHumanFiles_PresignUnconfiguredEndpoint_Unsupported(t *testing.T) {
+	t.Setenv("AGENTTEAMS_PRESIGN_TTL", "")
+	hfh, store, dir := newHumanPresignRigWithPublic(t, "")
+
+	rec := httptest.NewRecorder()
+	hfh.getFile(rec, presignReq(t, "alice", "a.txt", hfSelf()))
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want 501: %s", rec.Code, rec.Body.String())
+	}
+	var body humanFilePresignUnsupportedResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v: %s", err, rec.Body.String())
+	}
+	if body.Error != "presign_unsupported" {
+		t.Fatalf("error = %q, want presign_unsupported", body.Error)
+	}
+	if !strings.Contains(body.Reason, "AGENTTEAMS_FS_PUBLIC_ENDPOINT") {
+		t.Fatalf("reason = %q, want it to point at the public endpoint config", body.Reason)
+	}
+	// No URL was minted: the share command must never have reached mc.
+	if args, err := os.ReadFile(filepath.Join(dir, "mc-args.log")); err == nil &&
+		strings.Contains(string(args), "share download") {
+		t.Fatalf("share download reached mc although presign is unsupported: %q", string(args))
+	}
+	if len(readPresignAuditLines(t, store)) != 0 {
+		t.Fatal("a 501 presign must not be audited")
 	}
 }
 

@@ -3549,6 +3549,13 @@ _start_dashboard() {
             env_args+=(-e AGENTTEAMS_FS_ENDPOINT="http://${CTRL_CONTAINER}:9000")
         fi
 
+        # Presigned download origin (#1501): pass through the controller's
+        # value verbatim — unlike AGENTTEAMS_FS_ENDPOINT it must stay
+        # host-reachable (the caller's browser is the consumer), so the
+        # container-name rewrite above does NOT apply.
+        local fs_public_endpoint; fs_public_endpoint=$(_env AGENTTEAMS_FS_PUBLIC_ENDPOINT)
+        [ -n "${fs_public_endpoint}" ] && env_args+=(-e AGENTTEAMS_FS_PUBLIC_ENDPOINT="${fs_public_endpoint}")
+
         local fs_bucket; fs_bucket=$(_env AGENTTEAMS_FS_BUCKET)
         [ -z "${fs_bucket}" ] && fs_bucket=$(_env AGENTTEAMS_MINIO_BUCKET)
         [ -n "${fs_bucket}" ] && env_args+=(-e AGENTTEAMS_FS_BUCKET="${fs_bucket}")
@@ -4532,6 +4539,11 @@ CREDEOF
             -e "${_ctrl_env_prefix}MINIO_BUCKET=agentteams-storage"
             -e "${_ctrl_env_prefix}STORAGE_PREFIX=${_storage_prefix}"
             -e "${_ctrl_env_prefix}FS_ENDPOINT=http://127.0.0.1:9000"
+            # Presigned download origin (#1501): the embedded in-container
+            # MinIO is published to the host at 127.0.0.1:9000, which is
+            # exactly the origin the caller's browser can reach, so presign
+            # is supported out of the box in embedded mode.
+            -e "${_ctrl_env_prefix}FS_PUBLIC_ENDPOINT=http://127.0.0.1:9000"
             -e "${_ctrl_env_prefix}AI_GATEWAY_URL=${_ai_gateway_url}"
             -e "${_ctrl_env_prefix}CONTROLLER_URL=http://agentteams-controller:8090"
             -e "${_ctrl_env_prefix}DOCKER_NETWORK=agentteams-net"

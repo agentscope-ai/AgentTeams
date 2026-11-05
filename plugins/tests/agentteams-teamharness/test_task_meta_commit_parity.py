@@ -111,18 +111,18 @@ def test_bundle_create_cancel_interleaving_keeps_cancellation(server: Any, tmp_p
     _load_legacy_tests().test_sync_task_create_cancel_interleaving_keeps_cancellation(server, tmp_path, monkeypatch)
 
 
-def test_bundle_falls_back_to_unconditional_push_when_endpoint_missing(
+def test_bundle_fails_closed_when_endpoint_missing(
     server: Any, tmp_path: Path, monkeypatch: Any, capfd: Any
 ) -> None:
-    _load_legacy_tests().test_sync_task_falls_back_to_unconditional_push_when_endpoint_missing(
+    _load_legacy_tests().test_sync_task_fails_closed_when_endpoint_missing(
         server, tmp_path, monkeypatch, capfd
     )
 
 
-def test_bundle_sync_task_falls_back_when_controller_url_unset(
+def test_bundle_sync_task_fails_closed_when_controller_url_unset(
     server: Any, tmp_path: Path, monkeypatch: Any, capfd: Any
 ) -> None:
-    _load_legacy_tests().test_sync_task_falls_back_when_controller_url_unset(
+    _load_legacy_tests().test_sync_task_fails_closed_when_controller_url_unset(
         server, tmp_path, monkeypatch, capfd
     )
 

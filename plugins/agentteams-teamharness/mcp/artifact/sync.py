@@ -85,21 +85,27 @@ def _sync_task(
     clobber a concurrent cancellation, and an unbound body is never
     committed.
 
-    Rolling upgrade: when the controller predates the task meta commit
-    endpoint (a 404/405 whose body is not the endpoint's own JSON
-    refusal — the old controller's mux default), or when
-    AGENTTEAMS_CONTROLLER_URL is not set at all (the pre-endpoint
+    Rolling upgrade (fail closed, #1498): when the controller predates
+    the task meta commit endpoint (a 404/405 whose body is not the
+    endpoint's own JSON refusal — the old controller's mux default), or
+    when AGENTTEAMS_CONTROLLER_URL is not set at all (the pre-endpoint
     deployment — the commit client signals endpoint_missing in both
-    cases), the sync degrades to the pre-#1471 unconditional push
-    (meta.json included) and logs the degradation on stderr, so a normal
-    task sync is not lost against an old or absent controller. No
-    version binding exists there to preserve.
+    cases, with the controller_upgrade_required error code), the sync
+    fails closed: meta.json is NOT written or overwritten by an
+    unguarded push — a version-less push would clobber a concurrent
+    cancellation with the local state and report success, exactly the
+    clobber #1471 closed on the versioned path — and the stderr log
+    carries the Controller-first upgrade requirement (upgrade the
+    Controller to a version that supports the conditional task metadata
+    endpoint before task meta can be committed). The derived files
+    pushed earlier in the attempt carry no cancellation state, so they
+    are not a clobber.
 
     Returns True only when the meta commit is verified (or the task
     carries no local meta.json, in which case the file push is the whole
-    commit; or the controller predates the endpoint, in which case the
-    fallback push is the commit). An exhausted retry or a fail-closed
-    read/commit returns False — never a silent success.
+    commit). An exhausted retry, a fail-closed read, or an
+    endpoint-missing commit (controller_upgrade_required) returns False
+    — never a silent success.
     """
     meta_path = f"shared/tasks/{task_id}/meta.json"
     state_path = _task_state_path(arguments, task_id)
@@ -147,21 +153,24 @@ def _sync_task(
         commit = _commit_task_meta(task_id, merged, etag, team, if_none_match=create_if_absent)
         if not commit.get("ok"):
             if commit.get("endpoint_missing"):
-                # Rolling upgrade: the controller predates the task meta
-                # commit endpoint, so no version binding can be
-                # preserved at all.  Degrade to the pre-#1471
-                # unconditional push (meta.json included) so a normal
-                # task sync is not lost, and say so on stderr.
+                # The controller predates the task meta commit endpoint
+                # (a plain-text 404/405), or AGENTTEAMS_CONTROLLER_URL
+                # is not set: no conditional commit is possible, and an
+                # unguarded push of meta.json would clobber a concurrent
+                # cancellation with a version-less write (#1471).  Fail
+                # closed — meta.json is NOT written or overwritten —
+                # with the Controller-first upgrade requirement on
+                # stderr; a rolling upgrade is an explicit operator
+                # action, not a silent clobber that reports success.
                 print(
-                    "teamharness: the controller predates the task meta commit "
-                    "endpoint (PUT /api/v1/tasks/<id>/meta); falling back to "
-                    "the unconditional task file push (meta.json included) "
-                    f"for task {task_id}: {commit.get('error')}",
+                    f"teamharness: controller_upgrade_required for task "
+                    f"{task_id}: the Controller must be upgraded first to a "
+                    "version that supports the conditional task metadata "
+                    f"endpoint (PUT /api/v1/tasks/<id>/meta); meta.json was "
+                    f"not written: {commit.get('error')}",
                     file=sys.stderr,
                 )
-                return _push_task_files(
-                    arguments, task_id, exclude, result_paths, include_meta=True
-                )
+                return False
             if commit.get("conflict"):
                 # The meta changed after the read (a cancellation or
                 # another writer, or it appeared for a create):
@@ -204,12 +213,15 @@ def _push_task_files(
     storage only through ``_commit_task_meta`` (create-if-absent for
     the first creation, If-Match otherwise).
 
-    ``include_meta=True`` is the rolling-upgrade fallback ONLY: when
-    the controller predates the conditional commit endpoint there is no
-    version binding to preserve, and the sync degrades to the pre-#1471
-    unconditional push (meta.json included) — ``_sync_task`` logs the
-    degradation before calling this.  It is never the first-push
-    commit.
+    ``include_meta=True`` has NO production caller since #1498: the
+    rolling-upgrade fallback it served (degrading to the pre-#1471
+    unconditional push of meta.json against an old or absent controller)
+    was removed in favour of a fail-closed controller_upgrade_required
+    error, because the version-less meta write clobbered a concurrent
+    cancellation and reported success.  The mode is retained as the
+    regression surface for that clobber — the fail-closed tests go red
+    the moment any production path pushes meta through it again.  It is
+    never the first-push commit.
     """
     task_prefix = f"shared/tasks/{task_id}"
     if result_paths is not None:
@@ -765,13 +777,14 @@ def _commit_task_meta(
     - {"ok": False, "conflict"}    -> 409: the meta changed after the
       read, or it appeared for a create-if-absent (a cancellation or
       another writer landed); re-snapshot, re-merge and retry;
-    - {"ok": False, "endpoint_missing"} -> AGENTTEAMS_CONTROLLER_URL is
-      not set (no controller endpoint at all — the pre-endpoint
+    - {"ok": False, "endpoint_missing",
+      "code": "controller_upgrade_required"} -> AGENTTEAMS_CONTROLLER_URL
+      is not set (no controller endpoint at all — the pre-endpoint
       deployment), or a 404/405 whose body is NOT the endpoint's own
       JSON refusal (the old controller's mux default: the route does not
-      exist — rolling upgrade). In both cases no version binding exists
-      to preserve, so the caller falls back to the old unconditional
-      push (meta.json included) and logs the degradation;
+      exist — rolling upgrade). In both cases the caller fails closed
+      (meta.json is not written or overwritten) and reports the
+      Controller-first upgrade requirement;
     - {"ok": False, ...}           -> everything else, fail-closed: 400
       (noncanonical or missing status), 403 (the cancellation is
       server-owned / the task is outside this caller's team), 404 with
@@ -787,11 +800,19 @@ def _commit_task_meta(
             # No controller endpoint at all: the pre-endpoint
             # deployment, which cannot have a version binding — the
             # same rolling-upgrade signal as the old controller's mux
-            # 404/405, so the caller degrades to the old unconditional
-            # push (meta.json included) with a log instead of failing
-            # closed and losing the task sync.
+            # 404/405.  The caller fails closed (meta.json not written)
+            # with the Controller-first upgrade requirement instead of
+            # degrading to the pre-#1471 unconditional push that
+            # clobbered a concurrent cancellation (#1498).
+            "code": "controller_upgrade_required",
             "endpoint_missing": True,
-            "error": "AGENTTEAMS_CONTROLLER_URL is not set; the conditional task meta commit is unavailable",
+            "error": (
+                "AGENTTEAMS_CONTROLLER_URL is not set; the conditional task "
+                "meta commit is unavailable — the Controller must be "
+                "upgraded first to a version that supports the conditional "
+                "task metadata endpoint; failing closed without writing "
+                "meta.json"
+            ),
         }
     url = f"{base}/api/v1/tasks/{urllib.parse.quote(task_id, safe='')}/meta"
     if team:
@@ -859,9 +880,10 @@ def _commit_task_meta(
         #   task is genuinely unknown or out of scope.  Fail closed.
         # - the old controller's Go mux default — plain text "404 page
         #   not found" / "405 method not allowed": the route does not
-        #   exist yet (rolling upgrade).  Signal endpoint_missing so
-        #   the caller falls back to the old sync path with an
-        #   explicit log instead of losing the task sync.
+        #   exist yet (rolling upgrade).  Signal endpoint_missing +
+        #   controller_upgrade_required so the caller fails closed
+        #   (meta.json not written or overwritten) with the
+        #   Controller-first upgrade requirement on stderr (#1498).
         try:
             payload = json.loads(text)
         except ValueError:
@@ -873,11 +895,15 @@ def _commit_task_meta(
             }
         return {
             "ok": False,
+            "code": "controller_upgrade_required",
             "endpoint_missing": True,
             "error": (
                 f"the controller answered {status} with a non-endpoint body for "
                 "PUT /api/v1/tasks/<id>/meta; it predates the conditional task "
-                "meta commit endpoint (rolling upgrade)"
+                "meta commit endpoint (rolling upgrade) — the Controller must "
+                "be upgraded first to a version that supports the conditional "
+                "task metadata endpoint; failing closed without writing "
+                "meta.json"
             ),
         }
     if status in (400, 403, 428, 503):

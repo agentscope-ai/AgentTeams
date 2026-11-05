@@ -20,14 +20,19 @@ Covers:
    create/cancel interleave loses the create (409) and converges on the
    cancelled record via a versioned re-read;
 6. a failed version read fails closed before anything is pushed;
-7. rolling upgrade: a controller that predates the task-meta endpoint
-   (404/405 with a non-endpoint body) is recognized by the commit client and
-   the sync falls back to the old unconditional push with an explicit log,
-   while the endpoint's own JSON 404 stays a fail-closed refusal;
-8. no AGENTTEAMS_CONTROLLER_URL at all (a pre-endpoint deployment — the
-   CI delegate_task environment): the commit client signals
-   endpoint_missing for the unset URL and the same fallback applies, so
-   a normal task sync is never lost to a missing controller.
+7. rolling upgrade (fail closed, #1498): a controller that predates the
+   task-meta endpoint (404/405 with a non-endpoint body) is recognized by
+   the commit client with the controller_upgrade_required error code and
+   the sync FAILS closed — meta.json is not written or overwritten, the
+   concurrent cancellation survives verbatim, and the stderr log carries
+   the Controller-first upgrade requirement — while the endpoint's own
+   JSON 404 stays a fail-closed refusal;
+8. no AGENTTEAMS_CONTROLLER_URL at all (a pre-endpoint deployment): the
+   commit client signals endpoint_missing + controller_upgrade_required
+   for the unset URL and the same fail-closed path applies — the sync
+   reports the error instead of degrading to the pre-#1471 unconditional
+   push, which clobbered a concurrent cancellation with in_progress and
+   reported success.
 """
 
 from __future__ import annotations
@@ -78,6 +83,12 @@ class FakeTaskStorage:
         self.versions: dict[str, int] = {}
         self.calls: list[tuple[str, str]] = []
         self.read_error: str | None = None
+        # A concurrent Controller write (e.g. CancelTask) that lands while
+        # the sync is in flight: applied to the remote meta at the first
+        # push — after the versioned read, before any meta write. That is
+        # the read→commit window a conditional commit would have closed
+        # with a 409; an old controller's unconditional push clobbers it.
+        self.pending_concurrent_meta: tuple[str, dict[str, Any]] | None = None
 
     # -- helpers ---------------------------------------------------------
     def put(self, path: str, payload: dict[str, Any]) -> str:
@@ -114,6 +125,11 @@ class FakeTaskStorage:
         return {"ok": False, "error": f"unsupported action {action}"}
 
     def _push(self, arguments: dict[str, Any], path: str) -> None:
+        if self.pending_concurrent_meta is not None:
+            meta_path, payload = self.pending_concurrent_meta
+            self.remote[meta_path] = json.dumps(payload).encode("utf-8")
+            self.versions[meta_path] = self.versions.get(meta_path, 0) + 1
+            self.pending_concurrent_meta = None
         workspace = Path(str(arguments["workspaceDir"]))
         exclude = set(arguments.get("exclude") or [])
         local = workspace / path
@@ -375,72 +391,122 @@ def test_sync_task_create_cancel_interleaving_keeps_cancellation(
     assert storage.pushed_meta() == []
 
 
-def test_sync_task_falls_back_to_unconditional_push_when_endpoint_missing(
+def test_sync_task_fails_closed_when_endpoint_missing(
     server: Any, tmp_path: Path, monkeypatch: Any, capfd: Any
 ) -> None:
-    """Rolling upgrade: the controller predates the task-meta endpoint. The
-    sync must NOT lose the task sync — it degrades to the old unconditional
-    push (meta.json included) and logs the degradation explicitly."""
-    storage = FakeTaskStorage()
-    # A remote record the local copy has diverged from: the old sync path
-    # re-writes the local truth (the pre-#1471 semantics the fallback
-    # restores).
-    storage.put("shared/tasks/t1/meta.json", _task_meta(status="submitted"))
-    _write_task(tmp_path, _task_meta(), {"result.md": "done"})
-    commits: list[dict[str, Any]] = []
-    _install(
-        monkeypatch,
-        server,
-        storage,
-        commits,
-        commit_result=[{"ok": False, "endpoint_missing": True, "error": "controller answered 404"}],
+    """Rolling upgrade (fail closed, #1498): the controller predates the
+    task-meta endpoint and answers the conditional commit with the old
+    mux's plain-text 404. The sync must FAIL closed: it reports False,
+    the commit client's error code is controller_upgrade_required, and
+    meta.json is NOT written or overwritten — the Controller's
+    cancellation, which lands after the versioned read (the window a
+    conditional commit would have closed with a 409), must survive
+    verbatim. The pre-#1471 fallback (an unconditional push that
+    re-wrote the cancelled record with in_progress and reported success)
+    is gone. The REAL _commit_task_meta runs against the faked HTTP
+    layer — faking the commit client would hide the exact regression."""
+    monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", "http://controller.invalid:8080")
+    monkeypatch.delenv("AGENTTEAMS_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("AGENTTEAMS_AUTH_TOKEN_FILE", raising=False)
+
+    def plain_text_404(request: Any, timeout: float | None = None) -> Any:
+        raise urllib.error.HTTPError(
+            "http://controller.invalid:8080/api/v1/tasks/t1/meta",
+            404, "404 page not found", {}, io.BytesIO(b"404 page not found\n"),
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", plain_text_404)
+
+    cancelled = _task_meta(
+        status="cancelled",
+        cancel_reason="operator stop",
+        cancelled_at="2026-11-01T00:00:00Z",
+        continuation={"status": "resolved", "resolution": "cancelled"},
     )
+    storage = FakeTaskStorage()
+    # The versioned read sees the task in flight (pre-cancellation)...
+    storage.put("shared/tasks/t1/meta.json", _task_meta())
+    # ...and the Controller's CancelTask lands while the sync is in
+    # flight (after the read, before any meta write): the removed
+    # fallback's version-less push clobbered exactly this write with
+    # the local in_progress state.
+    storage.pending_concurrent_meta = ("shared/tasks/t1/meta.json", cancelled)
+    _write_task(tmp_path, _task_meta(), {"result.md": "done"})
 
-    assert server._sync_task(_arguments(tmp_path), "t1") is True
+    # The error code: the real commit client against the plain-text 404.
+    commit = server.sync._commit_task_meta("t1", {}, "v1")
+    assert commit.get("ok") is False, commit
+    assert commit.get("code") == "controller_upgrade_required", commit
+    assert commit.get("endpoint_missing") is True, commit
 
-    # The old sync path ran: a second, unconditional directory push landed
-    # meta.json in storage.
+    # The same controller behaviour, seen through the whole sync.
+    monkeypatch.setattr(server, "_filesync", storage)
+    assert server._sync_task(_arguments(tmp_path), "t1") is False
+
+    # meta.json was not written or overwritten: the concurrent
+    # cancellation survives verbatim (status and fields).
     final = storage.body("shared/tasks/t1/meta.json")
-    assert final["status"] == "in_progress"
-    directory_pushes = [c for c in storage.calls if c == ("push", "shared/tasks/t1")]
-    assert len(directory_pushes) == 2
-    assert len(commits) == 1
+    assert final == cancelled
+    assert final["status"] == "cancelled"
+    # The plain push never carried meta.json (derived files only).
+    assert storage.pushed_meta() == []
+    # The Controller-first upgrade requirement is on stderr, with the
+    # error code.
     captured = capfd.readouterr()
-    assert "endpoint" in captured.err
+    assert "controller_upgrade_required" in captured.err
+    assert "upgraded first" in captured.err
 
 
-def test_sync_task_falls_back_when_controller_url_unset(
+def test_sync_task_fails_closed_when_controller_url_unset(
     server: Any, tmp_path: Path, monkeypatch: Any, capfd: Any
 ) -> None:
-    """No AGENTTEAMS_CONTROLLER_URL at all (a pre-endpoint deployment —
-    the CI delegate_task repro): the commit client must signal
-    endpoint_missing for the unset URL, so the sync degrades to the old
-    unconditional push (meta.json included) with a stderr log instead of
-    failing closed and losing the task sync. The REAL _commit_task_meta
-    runs here — faking it would hide the exact bug."""
+    """No AGENTTEAMS_CONTROLLER_URL at all (a pre-endpoint deployment):
+    the commit client signals endpoint_missing +
+    controller_upgrade_required for the unset URL and the sync FAILS
+    closed — meta.json is not written or overwritten, the concurrent
+    cancellation survives verbatim, and the stderr log carries the
+    Controller-first upgrade requirement. The pre-#1471 fallback (the
+    unconditional push that clobbered a cancelled record with
+    in_progress and reported success) is gone. The REAL
+    _commit_task_meta runs here — faking it would hide the exact bug."""
     monkeypatch.delenv("AGENTTEAMS_CONTROLLER_URL", raising=False)
+    cancelled = _task_meta(
+        status="cancelled",
+        cancel_reason="operator stop",
+        cancelled_at="2026-11-01T00:00:00Z",
+        continuation={"status": "resolved", "resolution": "cancelled"},
+    )
     storage = FakeTaskStorage()
-    storage.put("shared/tasks/t1/meta.json", _task_meta(status="submitted"))
+    # The versioned read sees the task in flight (pre-cancellation)...
+    storage.put("shared/tasks/t1/meta.json", _task_meta())
+    # ...and the Controller's CancelTask lands while the sync is in
+    # flight (after the read, before any meta write) — the window the
+    # removed fallback's version-less push clobbered with the local
+    # in_progress state.
+    storage.pending_concurrent_meta = ("shared/tasks/t1/meta.json", cancelled)
     _write_task(tmp_path, _task_meta(), {"result.md": "done"})
 
     monkeypatch.setattr(server, "_filesync", storage)
 
-    # The commit client's contract for an unset URL: a fail-closed
-    # refusal that is ALSO the endpoint_missing rolling-upgrade signal.
+    # The commit client's contract for an unset URL: the
+    # controller_upgrade_required fail-closed signal.
     commit = server.sync._commit_task_meta("t1", {}, "v1")
     assert commit.get("ok") is False, commit
+    assert commit.get("code") == "controller_upgrade_required", commit
     assert commit.get("endpoint_missing") is True, commit
     assert "AGENTTEAMS_CONTROLLER_URL is not set" in commit["error"], commit
 
-    assert server._sync_task(_arguments(tmp_path), "t1") is True
+    assert server._sync_task(_arguments(tmp_path), "t1") is False
 
-    # The fallback directory push (meta.json included) landed the local
-    # truth in storage — the pre-#1471 semantics, restored on purpose.
+    # meta.json was not written or overwritten: the concurrent
+    # cancellation survives verbatim (status and fields).
     final = storage.body("shared/tasks/t1/meta.json")
-    assert final["status"] == "in_progress"
-    directory_pushes = [c for c in storage.calls if c == ("push", "shared/tasks/t1")]
-    assert len(directory_pushes) == 2
+    assert final == cancelled
+    assert final["status"] == "cancelled"
+    # The plain push never carried meta.json (derived files only).
+    assert storage.pushed_meta() == []
     captured = capfd.readouterr()
+    assert "controller_upgrade_required" in captured.err
     assert "AGENTTEAMS_CONTROLLER_URL is not set" in captured.err
 
 
@@ -448,8 +514,9 @@ def test_commit_task_meta_maps_old_controller_responses(server: Any, monkeypatch
     """The commit client must tell the two 404s apart: the endpoint's own
     JSON refusal (task not found / unknown team) is a fail-closed
     permanent refusal, while the old controller's mux 404/405 (plain text,
-    the route does not exist) is the rolling-upgrade signal the sync uses
-    to fall back to the old sync path."""
+    the route does not exist) is the rolling-upgrade signal the sync
+    fails closed on — controller_upgrade_required, meta.json not
+    written, Controller-first upgrade requirement logged."""
     monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", "http://controller.invalid:8080")
     monkeypatch.delenv("AGENTTEAMS_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("AGENTTEAMS_AUTH_TOKEN_FILE", raising=False)
@@ -493,6 +560,9 @@ def test_commit_task_meta_maps_old_controller_responses(server: Any, monkeypatch
         result = server.sync._commit_task_meta("t1", body, None, if_none_match=True)
         assert result.get("ok") is False, result
         assert bool(result.get("endpoint_missing")) is want_missing, result
+        # The endpoint-missing signal carries the controller_upgrade_required
+        # error code; every other refusal carries none.
+        assert (result.get("code") == "controller_upgrade_required") is want_missing, result
         assert "error" in result, result
 
     # 200: the commit lands and carries the new etag.

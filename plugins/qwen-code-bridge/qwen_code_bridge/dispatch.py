@@ -491,12 +491,18 @@ def load_task(task_id: str) -> dict[str, Any] | None:
         return None
 
 
-def mark_wake_delivered(task_id: str) -> None:
+def mark_wake_delivered(task_id: str, kind: str = "terminal") -> None:
     """Queue callback: flip a task's ``wake_status`` to ``sent``.
 
     Called from the durable wake queue after a delayed delivery; the task
     file is written with the same tmp+rename atomicity as the service.
+    Only the **terminal** wake owns ``wake_status``: delivering a ``denial``
+    record (a one-shot mid-run notice deduped by the per-rule
+    ``denial_wakes`` cooldown) leaves the task file untouched, so it can
+    never mask the terminal wake's own "not sent yet" state.
     """
+    if kind == "denial":
+        return
     task = load_task(task_id)
     if not task:
         return
@@ -516,11 +522,17 @@ def mark_wake_delivered(task_id: str) -> None:
         pass
 
 
-def wake_is_delivered(task_id: str) -> bool:
+def wake_is_delivered(task_id: str, kind: str = "terminal") -> bool:
     """Queue callback: has this task's wake already been delivered?
 
     Read from the task file (the durable state), so a record that survived a
-    crash after delivery is dropped instead of re-injecting the text."""
+    crash after delivery is dropped instead of re-injecting the text.  The
+    durable sent state belongs to the **terminal** wake: a ``denial`` record
+    is a one-shot notice whose dedupe is the per-rule ``denial_wakes``
+    cooldown, so the sent marker must never drop one.
+    """
+    if kind == "denial":
+        return False
     task = load_task(task_id) or {}
     return str(task.get("wake_status") or "") == "sent"
 
@@ -532,8 +544,16 @@ def _queue_wake(
     text: str,
     session_id: str,
     error: str,
+    kind: str = "terminal",
 ) -> None:
-    """Persist one wake into the durable queue (shared by both call sites)."""
+    """Persist one wake into the durable queue (shared by both call sites).
+
+    ``kind`` is the record's identity: ``"terminal"`` (the task finished —
+    the record owns the task file's ``wake_status``) or ``"denial"`` (a
+    one-shot mid-run notice — the per-rule ``denial_wakes`` cooldown is its
+    only dedupe).  Records written before this field existed read back as
+    ``"terminal"``.
+    """
     # A task whose wake was already delivered must never be queued again: the
     # durable retry would re-inject the same text (the duplicate-wake reports).
     if str(task.get("wake_status") or "") == "sent":
@@ -541,6 +561,7 @@ def _queue_wake(
     wake_queue.enqueue(
         {
             "task_id": str(task.get("task_id") or ""),
+            "kind": kind,
             "text": text,
             "session_id": session_id,
             "chat_id": str(task.get("chat_id") or ""),
@@ -942,7 +963,7 @@ class DispatchService:
                 f"[bridge] approval denied: {rule} — {reason}"
                 f"（task {task_id}, tool {tool}）"
             )
-            _queue_wake(task, wake, origin, text, sid, "")
+            _queue_wake(task, wake, origin, text, sid, "", kind="denial")
             wakes[rule] = now
             self._update_task(task_id, {"denial_wakes": wakes})
         except Exception:

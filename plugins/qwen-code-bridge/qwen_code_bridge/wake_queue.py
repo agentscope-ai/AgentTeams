@@ -22,17 +22,23 @@ Design
   documented tens-of-minutes runs.
 * Duplicates are suppressed by the **durable sent state**, not by
   retry counts: ``is_delivered`` (``dispatch.wake_is_delivered``)
-  reads ``wake_status == "sent"`` from the task file, and a record
-  that already reports sent is dropped without a send.
+  reads ``wake_status == "sent"`` from the task file and drops a
+  record without a send — for **terminal** records only.  A
+  ``denial`` record is a one-shot mid-run notice whose dedupe is the
+  task file's per-rule ``denial_wakes`` cooldown, so the sent state
+  must never drop one.  Records without a ``kind`` (pre-upgrade queue
+  files) read as ``terminal``.
 * Exactly three end conditions terminate a record: **delivered**
-  (durable sent state — dropped without sending), **stale**
+  (the send succeeded — dropped after the callback), **stale**
   (``now - created_at > MAX_AGE_S``, 24h), and **hard failure**
   (``attempts >= MAX_ATTEMPTS``, incremented only by real send
   exceptions; busy and 409 never touch ``attempts``).
 * Delivery calls the same ``default_wake_sender`` used inline, so the
   payload/approval-level/room-bell semantics are unchanged.
-* On success the task file's ``wake_status`` flips to ``sent`` via the
-  ``on_delivered`` callback (wired in ``dispatch.mark_wake_delivered``).
+* On success the ``on_delivered`` callback (wired in
+  ``dispatch.mark_wake_delivered``) receives ``(task_id, kind)`` and
+  flips the task file's ``wake_status`` to ``sent`` for ``terminal``
+  records only; a ``denial`` delivery leaves the task file alone.
 
 All failures here are swallowed and logged — the queue must never break
 a dispatch or a request.
@@ -70,8 +76,8 @@ BUSY_RETRY_S = 15.0
 _lock: Optional[asyncio.Lock] = None
 _loop_task: Optional[asyncio.Task] = None
 _sender: Optional[Callable[..., None]] = None
-_on_delivered: Optional[Callable[[str], None]] = None
-_is_delivered: Callable[[str], bool] | None = None
+_on_delivered: Optional[Callable[[str, str], None]] = None
+_is_delivered: Callable[[str, str], bool] | None = None
 
 
 def _path() -> Path:
@@ -243,12 +249,15 @@ def _reschedule(record: dict[str, Any], now: float, error: str) -> None:
 
 async def drain_once(
     sender: Callable[..., None] | None = None,
-    is_delivered: Callable[[str], bool] | None = None,
+    is_delivered: Callable[[str, str], bool] | None = None,
 ) -> dict[str, int]:
     """Try every due record once; returns counters (mostly for tests).
 
-    ``is_delivered`` (or the wired callback) drops records whose task already
-    reports its wake as sent — the durable-retry duplicate guard."""
+    ``is_delivered`` (or the wired callback) receives ``(task_id, kind)``
+    and drops records the task file already reports as delivered — the
+    durable-retry duplicate guard, which applies to ``terminal`` records
+    only.  A missing ``kind`` (pre-upgrade queue file) reads as
+    ``terminal``."""
     check_delivered = is_delivered if is_delivered is not None else _is_delivered
     stats = {"sent": 0, "failed": 0, "dropped": 0, "busy": 0}
     now = time.time()
@@ -261,9 +270,10 @@ async def drain_once(
         due = _due(time.time())
         for record in due:
             task_id = str(record.get("task_id") or "")
+            kind = str(record.get("kind") or "terminal")
             if check_delivered is not None:
                 try:
-                    if check_delivered(task_id):
+                    if check_delivered(task_id, kind):
                         _remove(task_id)
                         stats["dropped"] += 1
                         logger.info(
@@ -338,7 +348,7 @@ async def drain_once(
                 logger.info("wake delivered from queue: task=%s", task_id)
                 if _on_delivered is not None:
                     try:
-                        _on_delivered(task_id)
+                        _on_delivered(task_id, kind)
                     except Exception as exc:
                         logger.warning(
                             "wake on_delivered failed: task=%s err=%s",
@@ -367,8 +377,8 @@ def _default_sender() -> Callable[..., None]:
 
 def ensure_running(
     sender: Callable[..., None] | None = None,
-    on_delivered: Callable[[str], None] | None = None,
-    is_delivered: Callable[[str], bool] | None = None,
+    on_delivered: Callable[[str, str], None] | None = None,
+    is_delivered: Callable[[str, str], bool] | None = None,
 ) -> None:
     """Start the drain loop once (no-op when already running / no loop)."""
     global _loop_task, _sender, _on_delivered, _is_delivered

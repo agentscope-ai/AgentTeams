@@ -43,7 +43,7 @@ def test_drain_success_removes_and_calls_callback() -> None:
                approval_level=""):
         calls.append((session_id, text, approval_level))
 
-    wake_queue._on_delivered = lambda task_id: delivered.append(task_id)
+    wake_queue._on_delivered = lambda task_id, kind: delivered.append(task_id)
     wake_queue.enqueue(
         {
             "task_id": _task("b"),
@@ -104,7 +104,8 @@ def test_drain_drops_an_already_delivered_wake() -> None:
 
     stats = asyncio.run(
         wake_queue.drain_once(
-            lambda *a, **k: calls.append(a), is_delivered=lambda task_id: True
+            lambda *a, **k: calls.append(a),
+            is_delivered=lambda task_id, kind: True,
         )
     )
 
@@ -323,7 +324,8 @@ def test_sent_state_suppresses_duplicates() -> None:
 
     stats = asyncio.run(
         wake_queue.drain_once(
-            lambda *a, **k: injected.append(a), is_delivered=lambda tid: False
+            lambda *a, **k: injected.append(a),
+            is_delivered=lambda tid, kind: False,
         )
     )
     assert stats["sent"] == 1
@@ -334,7 +336,8 @@ def test_sent_state_suppresses_duplicates() -> None:
     wake_queue.enqueue({"task_id": _task("u"), "text": "done", "session_id": "s"})
     stats = asyncio.run(
         wake_queue.drain_once(
-            lambda *a, **k: injected.append(a), is_delivered=lambda tid: True
+            lambda *a, **k: injected.append(a),
+            is_delivered=lambda tid, kind: True,
         )
     )
     assert stats == {"sent": 0, "failed": 0, "dropped": 1, "busy": 0}

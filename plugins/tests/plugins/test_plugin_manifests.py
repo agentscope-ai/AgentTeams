@@ -37,6 +37,9 @@ EXPECTED_TOOLS = [
 ]
 REQUIRED_KEYS = ("agentteams", "contracts", "tool_schema")
 
+# SemVer 2.0.0: pre-release (-alpha.1) and build metadata (+sha) are valid.
+_SEMVER = r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?"
+
 
 def _manifest_paths() -> list[Path]:
     paths = sorted(PLUGINS_ROOT.glob("*/plugin.yaml"))
@@ -59,9 +62,65 @@ def test_every_manifest_has_semver_metadata() -> None:
         name = str(metadata.get("name", "")).strip()
         assert name, f"{path}: metadata.name is required"
         version = str(metadata.get("version", ""))
-        assert re.fullmatch(r"\d+\.\d+\.\d+", version), (
+        assert re.fullmatch(_SEMVER, version), (
             f"{path}: metadata.version must match semver, got: {version!r}"
         )
+
+
+def _manifest_version(path: Path) -> str:
+    if path.suffix == ".json":
+        data = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        data = _load(path)
+    return str(data.get("version") or (data.get("metadata") or {}).get("version") or "")
+
+
+def test_adapter_manifests_share_the_bundle_version() -> None:
+    """Every manifest that tracks the bundle carries the bundle's version.
+
+    A pre-release bump that only touches the bundle leaves the adapters on the
+    previous version — the packaged zip then advertises one version in its
+    bundle manifest and another in its adapter manifests. The hermes *platform*
+    plugins are deliberately out of scope: they version their own platform
+    contract (``kind: platform`` + ``requires_hermes``), so the exemption is
+    asserted rather than assumed.
+    """
+    tracked = 0
+    for bundle in ("agentteams-matrix", "agentteams-teamharness"):
+        bundle_dir = PLUGINS_ROOT / bundle
+        bundle_version = _manifest_version(bundle_dir / "plugin.json")
+        assert re.fullmatch(_SEMVER, bundle_version), (
+            f"{bundle}: plugin.json version is not semver: {bundle_version!r}"
+        )
+        assert _manifest_version(bundle_dir / "plugin.yaml") == bundle_version, (
+            f"{bundle}: plugin.yaml version differs from plugin.json"
+        )
+        for manifest in sorted(bundle_dir.glob("adapters/*/plugin.json")):
+            assert _manifest_version(manifest) == bundle_version, (
+                f"{manifest}: adapter version must match bundle {bundle_version}"
+            )
+            tracked += 1
+        for manifest in sorted(bundle_dir.glob("adapters/*/openclaw.plugin.json")):
+            assert _manifest_version(manifest) == bundle_version, (
+                f"{manifest}: openclaw adapter version must match bundle "
+                f"{bundle_version}"
+            )
+            tracked += 1
+        for manifest in sorted(bundle_dir.glob("adapters/*/plugin.yaml")):
+            data = _load(manifest)
+            if data.get("kind") == "platform":
+                assert str(data.get("requires_hermes", "")).startswith(">="), (
+                    f"{manifest}: a platform plugin must pin requires_hermes"
+                )
+                continue
+            assert _manifest_version(manifest) == bundle_version, (
+                f"{manifest}: adapter version must match bundle {bundle_version}"
+            )
+            tracked += 1
+    assert tracked >= 4, (
+        "expected at least the four adapter manifests to be covered, "
+        f"checked {tracked}"
+    )
 
 
 def test_requires_is_optional_and_wellformed() -> None:

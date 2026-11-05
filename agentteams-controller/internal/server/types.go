@@ -96,6 +96,10 @@ type WorkerResponse struct {
 	ContainerManaged bool              `json:"containerManaged"`
 	State            string            `json:"state,omitempty"` // desired lifecycle state
 	Model            string            `json:"model,omitempty"`
+	// ModelProvider is the worker's LLM provider (WorkerSpec.ModelProvider,
+	// an APIG Model API name). The model alias alone does not select the
+	// upstream when the deployment has several Higress providers.
+	ModelProvider string `json:"modelProvider,omitempty"`
 	// SubagentModel is the model used by spawned subagents ("" = inherit
 	// the worker's primary model). See WorkerSpec.SubagentModel.
 	SubagentModel string `json:"subagentModel,omitempty"`
@@ -325,6 +329,8 @@ type ManagerResponse struct {
 	Phase   string `json:"phase"`
 	State   string `json:"state,omitempty"` // desired lifecycle state
 	Model   string `json:"model,omitempty"`
+	// ModelProvider mirrors ManagerSpec.ModelProvider (APIG Model API name).
+	ModelProvider string `json:"modelProvider,omitempty"`
 	Runtime string `json:"runtime,omitempty"`
 	// RuntimeDeprecated marks legacy runtimes that are upgrade-compat
 	// only (CoPaw): new creation is rejected; migrate to QwenPaw.

@@ -107,3 +107,18 @@ def test_bridge_enables_debug_logging_when_matrix_debug_set(monkeypatch) -> None
     assert config["logging"]["level"] == "DEBUG"
     assert config["logging"]["max_size_mb"] == 12
     assert config["logging"]["backup_count"] == 9
+
+
+def test_bridge_enables_agentteams_matrix_plugin() -> None:
+    config = _bridge_and_read(
+        _make_openclaw_cfg(vision=False),
+        initial_config={
+            "plugins": {
+                "enabled": ["other-plugin"],
+                "disabled": ["platforms/matrix", "matrix-platform", "legacy-plugin"],
+            }
+        },
+    )
+
+    assert config["plugins"]["enabled"] == ["other-plugin", "platforms/matrix"]
+    assert config["plugins"]["disabled"] == ["legacy-plugin"]

@@ -180,3 +180,82 @@ func TestReadRedactsUndeclaredCredentialFields(t *testing.T) {
 		t.Fatal("non-credential channel field changed")
 	}
 }
+
+type pauseAfterConfigWrite struct {
+	*concurrentConfigExec
+}
+
+func (e *pauseAfterConfigWrite) WriteFile(ctx context.Context, worker, path, content string) error {
+	e.mu.Lock()
+	err := e.exec.WriteFile(ctx, worker, path, content)
+	e.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	close(e.entered)
+	select {
+	case <-e.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func TestReadDoesNotReportUncommittedConfigApplied(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	virtual := newFakeExec(pluginsDiscordUp)
+	virtual.gwApplyOnWrite = false
+	exec := &pauseAfterConfigWrite{&concurrentConfigExec{exec: virtual, entered: make(chan struct{}), release: make(chan struct{})}}
+	store := ossfake.NewMemory()
+	opts := []Option{WithReconcileWindow(time.Millisecond), WithReconcileInterval(time.Millisecond)}
+	writer := NewConfigManager(New(), exec, store, opts...)
+	reader := NewConfigManager(New(), exec, store, opts...)
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := writer.Write(ctx, "w1", map[string]any{"hooks": map[string]any{"enabled": true}}, "")
+		writeDone <- err
+	}()
+	select {
+	case <-exec.entered:
+	case <-ctx.Done():
+		t.Fatal("write did not reach commit")
+	}
+	type result struct {
+		state ConfigState
+		err   error
+	}
+	readDone := make(chan result, 1)
+	go func() { state, err := reader.Read(ctx, "w1"); readDone <- result{state, err} }()
+	var early *result
+	select {
+	case r := <-readDone:
+		early = &r
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(exec.release)
+	select {
+	case err := <-writeDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("write did not finish")
+	}
+	var r result
+	if early != nil {
+		r = *early
+	} else {
+		select {
+		case r = <-readDone:
+		case <-ctx.Done():
+			t.Fatal("read did not finish")
+		}
+	}
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	if r.state.Applied != StatePending {
+		t.Fatalf("unapplied on-disk edit was reported %q before desired-state commit", r.state.Applied)
+	}
+}

@@ -351,6 +351,12 @@ func (m *ConfigManager) readConfigFile(ctx context.Context, worker, path string)
 //     controller write (the frontend shows the restart banner; the
 //     controller cannot observe a manual restart and never performs one).
 func (m *ConfigManager) Read(ctx context.Context, worker string) (ConfigState, error) {
+	unlock := lockConfigMutation(worker)
+	defer unlock()
+	return m.read(ctx, worker)
+}
+
+func (m *ConfigManager) read(ctx context.Context, worker string) (ConfigState, error) {
 	path, err := m.resolveConfigPath(ctx, worker)
 	if err != nil {
 		return ConfigState{}, err
@@ -993,7 +999,7 @@ func (m *ConfigManager) Rollback(ctx context.Context, worker, rev string) (Write
 	// A rollback to the current state is a no-op (still verified +
 	// reported, but no snapshot churn).
 	if curRev == rev {
-		st, err := m.Read(ctx, worker)
+		st, err := m.read(ctx, worker)
 		if err != nil {
 			return WriteResult{}, err
 		}

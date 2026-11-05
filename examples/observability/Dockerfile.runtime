@@ -1,0 +1,11 @@
+# Build a small telemetry overlay on a tested Worker image for local demos.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+ARG VENV_PATH
+ARG RUNTIME
+COPY shared/lib/ /opt/agentteams/scripts/lib/
+COPY ${RUNTIME}/scripts/${RUNTIME}-worker-entrypoint.sh /opt/agentteams/scripts/${RUNTIME}-worker-entrypoint.sh
+RUN ${VENV_PATH}/bin/pip install --index-url https://pypi.org/simple \
+    -r /opt/agentteams/scripts/lib/telemetry/requirements.txt
+RUN chmod +x /opt/agentteams/scripts/${RUNTIME}-worker-entrypoint.sh
+ENV PYTHONPATH=/opt/agentteams/scripts/lib/telemetry

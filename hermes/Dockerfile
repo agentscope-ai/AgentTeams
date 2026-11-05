@@ -216,6 +216,8 @@ COPY --chmod=755 scripts/hermes-worker-entrypoint.sh /opt/agentteams/scripts/her
 # Shared environment bootstrap and credential management
 # (agentteams-env.sh, oss-credentials.sh) — same named build-context as copaw.
 COPY --from=shared . /opt/agentteams/scripts/lib/
+RUN /opt/venv/hermes/bin/pip install --index-url "${PIP_INDEX_URL}" \
+    -r /opt/agentteams/scripts/lib/telemetry/requirements.txt
 
 # mc wrapper: auto-refreshes STS credentials before every mc invocation
 # (no-op in local mode).

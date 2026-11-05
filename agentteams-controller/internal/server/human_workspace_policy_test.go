@@ -257,7 +257,7 @@ func TestHumanFiles_PolicyGrantRevocation(t *testing.T) {
 
 	// Revoke the grant: the workspaceAccess object is replaced whole, so
 	// the body clears grants and re-states the restriction.
-	body := `{"workspaceAccess":{"grants":[],"restrictions":[{"team":"team-a","paths":["files/shared/**"],"mode":"read"}]}`
+	body := `{"workspaceAccess":{"grants":[],"restrictions":[{"team":"team-a","paths":["files/shared/**"],"mode":"read"}]}}`
 	if rec := putHuman(t, rh, "alice", body); rec.Code != http.StatusOK {
 		t.Fatalf("revoke grant: got %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
@@ -279,8 +279,11 @@ func TestHumanFiles_PolicyPrivatePrefixesNeverAuthorized(t *testing.T) {
 	h, rh, store := newPolicyRig(t,
 		v1beta1.HumanSpec{
 			DisplayName: "Alice",
-			// No default membership: the grants below are the only
-			// possible source of access for the caller.
+			// No accessibleTeams: team-a lists alice in humanMembers (below),
+			// making it her default team — what makes her resolvable to the
+			// team-a caller and keeps the normal path at 200. Default
+			// membership covers files/** only, so the grants below remain the
+			// only possible source of access to the private prefixes.
 			WorkspaceAccess: &v1beta1.HumanWorkspaceAccess{
 				Grants: []v1beta1.HumanWorkspaceAccessRule{
 					wsRule("team-a", "readwrite", "files/memory/**"),
@@ -293,7 +296,7 @@ func TestHumanFiles_PolicyPrivatePrefixesNeverAuthorized(t *testing.T) {
 				},
 			},
 		},
-		wsTeam("team-a"),
+		wsTeam("team-a", "alice"),
 	)
 	// Objects that exist in storage: without the decision-time gate the
 	// grants above would serve them (200/201) instead of denying.

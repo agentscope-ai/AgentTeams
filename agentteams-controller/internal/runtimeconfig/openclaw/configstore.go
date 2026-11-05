@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/runtimeconfig"
@@ -213,6 +214,40 @@ func NewConfigManager(adapter *Adapter, exec ExecBackend, store KeyStore, opts .
 		o(m)
 	}
 	return m
+}
+
+// Each HTTP request constructs a ConfigManager. Share the mutation lock
+// across managers so revision checks, snapshots, file replacement and desired
+// state are one transaction per worker within the controller process.
+var configMutationLocks = struct {
+	sync.Mutex
+	workers map[string]*configMutationLock
+}{workers: make(map[string]*configMutationLock)}
+
+type configMutationLock struct {
+	sync.Mutex
+	users int
+}
+
+func lockConfigMutation(worker string) func() {
+	configMutationLocks.Lock()
+	lock := configMutationLocks.workers[worker]
+	if lock == nil {
+		lock = &configMutationLock{}
+		configMutationLocks.workers[worker] = lock
+	}
+	lock.users++
+	configMutationLocks.Unlock()
+	lock.Lock()
+	return func() {
+		lock.Unlock()
+		configMutationLocks.Lock()
+		lock.users--
+		if lock.users == 0 {
+			delete(configMutationLocks.workers, worker)
+		}
+		configMutationLocks.Unlock()
+	}
 }
 
 // Runtime is the runtime id this manager writes.
@@ -575,6 +610,18 @@ func (m *ConfigManager) redactSensitive(doc map[string]any) map[string]any {
 
 func (m *ConfigManager) redactNode(path string, v any) any {
 	f, declared := m.adapter.FieldForKey(path)
+	// Runtime plugins may add credentials outside the static surface (for
+	// example channels.matrix.accessToken). Do not expose those strings on GET.
+	if !declared {
+		key := strings.ToLower(path[strings.LastIndex(path, ".")+1:])
+		credential := key == "authorization" || key == "proxy-authorization" || key == "cookie" || key == "set-cookie"
+		for _, part := range []string{"api_key", "apikey", "api-key", "token", "secret", "password", "access_key"} {
+			credential = credential || strings.Contains(key, part)
+		}
+		if value, ok := v.(string); credential && ok && value != "" {
+			return "***"
+		}
+	}
 	if declared && IsSecret(f) {
 		if _, err := ValidateSecretRef(v); err != nil {
 			return "***"
@@ -616,6 +663,9 @@ func (m *ConfigManager) redactNode(path string, v any) any {
 //     §5.2); written channels refine "applied" to "applied-but-inactive"
 //     when their plugin is not loaded (§8.4)
 func (m *ConfigManager) Write(ctx context.Context, worker string, values map[string]any, ifRev string) (WriteResult, error) {
+	unlock := lockConfigMutation(worker)
+	defer unlock()
+
 	path, err := m.resolveConfigPath(ctx, worker)
 	if err != nil {
 		return WriteResult{}, err
@@ -913,6 +963,9 @@ func (m *ConfigManager) envResolves(ctx context.Context, worker, id string) bool
 // Reload: OpenClaw's gateway watches openclaw.json and hot-applies
 // writable sections automatically; restart keys stay pendingRestart.
 func (m *ConfigManager) Rollback(ctx context.Context, worker, rev string) (WriteResult, error) {
+	unlock := lockConfigMutation(worker)
+	defer unlock()
+
 	if !revPattern.MatchString(rev) {
 		return WriteResult{}, fmt.Errorf("rev must be a 64-char sha256 hex string, got %q", rev)
 	}

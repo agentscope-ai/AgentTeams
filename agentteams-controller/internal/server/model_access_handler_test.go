@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -175,8 +176,12 @@ func TestModelAccessWorkerResolution(t *testing.T) {
 		t.Fatalf("locked=%v catalogUnavailable=%v", got.Locked, got.CatalogUnavailable)
 	}
 
-	if !got.Capabilities.Main.CanEdit || got.Capabilities.Main.Inherit || len(got.Capabilities.Main.WriteVia) != 2 {
+	if !got.Capabilities.Main.CanEdit || got.Capabilities.Main.Inherit ||
+		len(got.Capabilities.Main.WriteVia) != 1 || got.Capabilities.Main.WriteVia[0] != "direct" {
 		t.Errorf("main capabilities = %+v", got.Capabilities.Main)
+	}
+	if len(got.Capabilities.Spawn.WriteVia) != 1 || got.Capabilities.Spawn.WriteVia[0] != "direct" {
+		t.Errorf("spawn writeVia = %v, want [direct] (admin)", got.Capabilities.Spawn.WriteVia)
 	}
 	if !got.Capabilities.Spawn.CanEdit || !got.Capabilities.Spawn.Inherit {
 		t.Errorf("spawn capabilities = %+v", got.Capabilities.Spawn)
@@ -186,7 +191,8 @@ func TestModelAccessWorkerResolution(t *testing.T) {
 		t.Fatalf("codingCli keys = %v", got.Capabilities.CodingCli)
 	}
 	if !cli.CanEdit || !cli.Inherit || cli.InheritedFrom == nil ||
-		cli.InheritedFrom.Provider != "agentteams-gateway" || cli.InheritedFrom.Model != "qwen3.6-27b" {
+		cli.InheritedFrom.Provider != "agentteams-gateway" || cli.InheritedFrom.Model != "qwen3.6-27b" ||
+		len(cli.WriteVia) != 1 || cli.WriteVia[0] != "direct" {
 		t.Errorf("qwen-code capabilities = %+v", cli)
 	}
 	if opencode := got.Capabilities.CodingCli["opencode"]; opencode.CanEdit || opencode.Reason != "cli_not_granted" {
@@ -290,8 +296,8 @@ func TestModelAccessNoOwnerLockedView(t *testing.T) {
 	if got.Capabilities.Main.CanEdit || got.Capabilities.Main.Reason != "not_granted" {
 		t.Errorf("main = %+v", got.Capabilities.Main)
 	}
-	if len(got.Capabilities.Main.WriteVia) != 1 || got.Capabilities.Main.WriteVia[0] != "crd" {
-		t.Errorf("qwenpaw writeVia = %v, want [crd]", got.Capabilities.Main.WriteVia)
+	if len(got.Capabilities.Main.WriteVia) != 1 || got.Capabilities.Main.WriteVia[0] != "direct" {
+		t.Errorf("admin writeVia = %v, want [direct]", got.Capabilities.Main.WriteVia)
 	}
 	if len(got.Capabilities.CodingCli) != 3 {
 		t.Errorf("codingCli keys = %v", got.Capabilities.CodingCli)
@@ -327,5 +333,400 @@ func TestModelAccessWorkerScopedHumanStandaloneWorker(t *testing.T) {
 	}
 	if got.Team != "" || got.Role != "worker" || !got.Locked {
 		t.Fatalf("team/role/locked = %q/%q/%v", got.Team, got.Role, got.Locked)
+	}
+	if got.Capabilities.Main.Reason != "no_write_access" {
+		t.Errorf("L3 main reason = %q, want no_write_access", got.Capabilities.Main.Reason)
+	}
+	if len(got.Capabilities.Main.WriteVia) != 1 || got.Capabilities.Main.WriteVia[0] != "admin" {
+		t.Errorf("L3 main writeVia = %v, want [admin]", got.Capabilities.Main.WriteVia)
+	}
+}
+
+// TestModelAccess_TwoHumansOwnViews is the caller-view guard (PR-A1b §4.1,
+// #1514 port): two humans in the same team with different grants on the same
+// worker each see their OWN grant view — the worker owner's rows must not
+// leak into a teammate's preview.
+//
+// Mutation target: reverting the human resolution to findWorkerOwner (owner
+// = first human by name) makes dave preview alice's rows, so his view
+// collapses onto the owner view and this test goes red.
+func TestModelAccess_TwoHumansOwnViews(t *testing.T) {
+	aliceGrant := &v1beta1.ModelAccessSpec{Scopes: []v1beta1.ModelAccessScope{{
+		Role: "worker",
+		Main: &v1beta1.ModelAccessSurface{Entries: []v1beta1.ModelAccessEntry{{Provider: "gw", Model: "alice-m"}}},
+	}}}
+	daveGrant := &v1beta1.ModelAccessSpec{Scopes: []v1beta1.ModelAccessScope{{
+		Role: "worker",
+		Main: &v1beta1.ModelAccessSurface{Entries: []v1beta1.ModelAccessEntry{{Provider: "gw", Model: "dave-m"}}},
+	}}}
+	h := maRig(t,
+		maTeam("alpha", v1beta1.TeamWorkerRef{Name: "w1", Role: "worker"}),
+		maWorker("w1", "qwen3.6-27b", "", "", "openclaw"),
+		// alice is first by name — under the old findWorkerOwner lookup she
+		// is the "owner" for every caller on this team.
+		maHuman("alice", []string{"alpha"}, nil, aliceGrant),
+		maHuman("dave", []string{"alpha"}, nil, daveGrant),
+	)
+	alice := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"alpha"}}
+	dave := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "dave", Teams: []string{"alpha"}}
+
+	var aliceBody, daveBody modelAccessWorkerResponse
+
+	rec := httptest.NewRecorder()
+	h.GetModelAccess(rec, maReq(t, "/api/v1/model-access?worker=w1", dave))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("dave: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &daveBody); err != nil {
+		t.Fatalf("dave: unmarshal: %v", err)
+	}
+	if len(daveBody.Surfaces.Main.Entries) != 1 || daveBody.Surfaces.Main.Entries[0].Model != "dave-m" {
+		t.Errorf("dave surfaces.main = %+v, want own row dave-m", daveBody.Surfaces.Main)
+	}
+	if !daveBody.Capabilities.Main.CanEdit || daveBody.Capabilities.Main.Reason != "" {
+		t.Errorf("dave main capabilities = %+v, want canEdit=true (own team, own rows)", daveBody.Capabilities.Main)
+	}
+	if daveBody.Locked {
+		t.Errorf("dave locked = true, want false (own rows open the main surface)")
+	}
+	// The model fields stay L1-only in this release: the write routes
+	// through an L1, but the coding-CLI surface is dave's own API write.
+	if len(daveBody.Capabilities.Main.WriteVia) != 1 || daveBody.Capabilities.Main.WriteVia[0] != "admin" {
+		t.Errorf("dave main writeVia = %v, want [admin]", daveBody.Capabilities.Main.WriteVia)
+	}
+	if got := daveBody.Capabilities.CodingCli["qwen-code"]; len(got.WriteVia) != 1 || got.WriteVia[0] != "direct" {
+		t.Errorf("dave codingCli writeVia = %v, want [direct]", got.WriteVia)
+	}
+	if strings.Contains(rec.Body.String(), "alice-m") {
+		t.Errorf("dave body leaks the owner's row: %s", rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	h.GetModelAccess(rec, maReq(t, "/api/v1/model-access?worker=w1", alice))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("alice: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &aliceBody); err != nil {
+		t.Fatalf("alice: unmarshal: %v", err)
+	}
+	if len(aliceBody.Surfaces.Main.Entries) != 1 || aliceBody.Surfaces.Main.Entries[0].Model != "alice-m" {
+		t.Errorf("alice surfaces.main = %+v, want own row alice-m", aliceBody.Surfaces.Main)
+	}
+	if strings.Contains(rec.Body.String(), "dave-m") {
+		t.Errorf("alice body leaks dave's row: %s", rec.Body.String())
+	}
+
+	if reflect.DeepEqual(aliceBody, daveBody) {
+		t.Fatalf("alice and dave got the same preview — the caller view collapsed to the owner view")
+	}
+}
+
+// TestModelAccess_HumanWithoutGrantNoLeak: a human in the worker's team with
+// no grant (CR without modelAccess, or no CR at all) sees a locked, empty
+// view — and never the owner's rows.
+func TestModelAccess_HumanWithoutGrantNoLeak(t *testing.T) {
+	ownerGrant := &v1beta1.ModelAccessSpec{Scopes: []v1beta1.ModelAccessScope{{
+		Role: "worker",
+		Main: &v1beta1.ModelAccessSurface{Entries: []v1beta1.ModelAccessEntry{{Provider: "gw", Model: "alice-m"}}},
+	}}}
+	h := maRig(t,
+		maTeam("alpha", v1beta1.TeamWorkerRef{Name: "w1", Role: "worker"}),
+		maWorker("w1", "qwen3.6-27b", "", "", "openclaw"),
+		maHuman("alice", []string{"alpha"}, nil, ownerGrant),
+		// bob is in the team but carries no grant.
+		maHuman("bob", []string{"alpha"}, nil, nil),
+	)
+
+	for _, caller := range []*authpkg.CallerIdentity{
+		{Role: authpkg.RoleHuman, Username: "bob", Teams: []string{"alpha"}},
+		// ghost has no Human CR at all: deleted mid-session, fail closed.
+		{Role: authpkg.RoleHuman, Username: "ghost", Teams: []string{"alpha"}},
+	} {
+		rec := httptest.NewRecorder()
+		h.GetModelAccess(rec, maReq(t, "/api/v1/model-access?worker=w1", caller))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200 (locked view, never 404/500), got %d: %s", caller.Username, rec.Code, rec.Body.String())
+		}
+		var got modelAccessWorkerResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("%s: unmarshal: %v", caller.Username, err)
+		}
+		if !got.Locked {
+			t.Errorf("%s: locked = false, want true", caller.Username)
+		}
+		if got.Capabilities.Main.CanEdit || got.Capabilities.Main.Reason != "not_granted" {
+			t.Errorf("%s: main = %+v, want canEdit=false not_granted", caller.Username, got.Capabilities.Main)
+		}
+		if got.Capabilities.CodingCli["qwen-code"].CanEdit || got.Capabilities.CodingCli["qoder"].CanEdit {
+			t.Errorf("%s: CLI surfaces must stay closed, got %+v", caller.Username, got.Capabilities.CodingCli)
+		}
+		if len(got.Surfaces.Main.Entries) != 0 {
+			t.Errorf("%s: surfaces.main = %+v, want no rows", caller.Username, got.Surfaces.Main)
+		}
+		if strings.Contains(rec.Body.String(), "alice-m") {
+			t.Errorf("%s: body leaks the owner's rows: %s", caller.Username, rec.Body.String())
+		}
+	}
+}
+
+// TestModelAccess_L3HumanReadOnly: an L3 (worker-scoped) human sees their
+// OWN grant rows (rendering them leaks nothing) but the write entry's
+// team-scope decision denies every write: canEdit=false + no_write_access,
+// whatever the grant says.
+func TestModelAccess_L3HumanReadOnly(t *testing.T) {
+	bobGrant := &v1beta1.ModelAccessSpec{Scopes: []v1beta1.ModelAccessScope{{
+		Role: "worker",
+		Main: &v1beta1.ModelAccessSurface{Entries: []v1beta1.ModelAccessEntry{{Provider: "gw", Model: "bob-m"}}},
+	}}}
+	h := maRig(t,
+		maTeam("alpha", v1beta1.TeamWorkerRef{Name: "w1", Role: "worker"}),
+		maWorker("w1", "qwen3.6-27b", "", "", "openclaw"),
+		// L3: no teams, an explicit assignment to w1, and a grant.
+		maHuman("bob", nil, []string{"w1"}, bobGrant),
+	)
+	bob := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "bob", AccessibleWorkers: []string{"w1"}}
+	rec := httptest.NewRecorder()
+	h.GetModelAccess(rec, maReq(t, "/api/v1/model-access?worker=w1", bob))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("L3 human on assigned team worker: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got modelAccessWorkerResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !got.Locked {
+		t.Fatalf("locked = false, want true (L3 is read-only)")
+	}
+	if got.Capabilities.Main.CanEdit || got.Capabilities.Main.Reason != "no_write_access" {
+		t.Errorf("main = %+v, want canEdit=false no_write_access", got.Capabilities.Main)
+	}
+	if got.Capabilities.Spawn.CanEdit || got.Capabilities.Spawn.Reason != "no_write_access" {
+		t.Errorf("spawn = %+v, want canEdit=false no_write_access", got.Capabilities.Spawn)
+	}
+	if got.Capabilities.CodingCli["qwen-code"].CanEdit || got.Capabilities.CodingCli["qoder"].CanEdit {
+		t.Errorf("CLI = %+v, want all closed", got.Capabilities.CodingCli)
+	}
+	// The human's OWN rows still render (their table, not a leak) — the
+	// denial is the write access, not the view.
+	if len(got.Surfaces.Main.Entries) != 1 || got.Surfaces.Main.Entries[0].Model != "bob-m" {
+		t.Errorf("surfaces.main = %+v, want the caller's own row", got.Surfaces.Main)
+	}
+}
+
+// TestModelAccess_HumanWriteEntryConsistency: the preview and the real write
+// entry agree. An L2 human of the worker's team previews coding-cli
+// canEdit=true (writeVia direct), then writes the CLI settings (200) and
+// reads the merged value back. A cross-team human is hidden as 404 (W8) and
+// no write lands. (The model fields stay L1-only in this release, so the
+// coding-CLI settings surface is the one a human actually writes.)
+func TestModelAccess_HumanWriteEntryConsistency(t *testing.T) {
+	grant := &v1beta1.ModelAccessSpec{Scopes: []v1beta1.ModelAccessScope{{
+		Role: "worker",
+		CodingCli: []v1beta1.ModelAccessCli{
+			{CLI: "qwen-code", Entries: []v1beta1.ModelAccessEntry{{Provider: "gw", Model: "m-dave"}}},
+		},
+	}}}
+	// The exec fake reports the effective home and the CURRENT contents of
+	// the settings file (seeded once, re-read after the write), so the
+	// read-back sees exactly what the PUT stored.
+	exec := &fakeExecBackend{fileWrites: map[string]string{
+		"/root/.qwen/settings.json": `{"keepme":1}`,
+	}}
+	exec.respond = func(cmd []string) (string, string, int, error) {
+		if cmd[0] == "sh" {
+			switch {
+			case strings.Contains(cmd[2], "printf %s"):
+				return "/root", "", 0, nil
+			case strings.Contains(cmd[2], "cat "):
+				c, ok := exec.written("/root/.qwen/settings.json")
+				if !ok {
+					return "", "cat: no such file", 1, nil
+				}
+				return c, "", 0, nil
+			}
+		}
+		return "", "", 1, nil
+	}
+	k8s := fake.NewClientBuilder().WithScheme(newServerTestScheme(t)).WithObjects(
+		maTeam("alpha", v1beta1.TeamWorkerRef{Name: "w1", Role: "worker"}),
+		maWorker("w1", "qwen3.6-27b", "", "", "openclaw"),
+		maHuman("dave", []string{"alpha"}, nil, grant),
+	).Build()
+	rh := NewResourceHandler(k8s, "default", nil, "", nil)
+	ch := NewCodingCliHandler(k8s, "default", "embedded", nil, nil)
+	ch.execBackend = func(context.Context, string) (codingCliExecer, error) { return exec, nil }
+
+	dave := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "dave", Teams: []string{"alpha"}}
+
+	// 1) Preview: dave's own grant opens the qwen-code surface via his own
+	//    API write; the main surface stays closed (he has no main rows).
+	rec := httptest.NewRecorder()
+	rh.GetModelAccess(rec, maReq(t, "/api/v1/model-access?worker=w1", dave))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got modelAccessWorkerResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("preview unmarshal: %v", err)
+	}
+	cli := got.Capabilities.CodingCli["qwen-code"]
+	if !cli.CanEdit || cli.Reason != "" || len(cli.WriteVia) != 1 || cli.WriteVia[0] != "direct" {
+		t.Fatalf("preview qwen-code = %+v, want canEdit=true writeVia=[direct]", cli)
+	}
+	if got.Capabilities.Main.CanEdit || got.Capabilities.Main.Reason != "not_granted" {
+		t.Errorf("preview main = %+v, want not_granted (no main rows)", got.Capabilities.Main)
+	}
+	if len(got.Capabilities.Main.WriteVia) != 1 || got.Capabilities.Main.WriteVia[0] != "admin" {
+		t.Errorf("preview main writeVia = %v, want [admin] (model fields are L1-only)", got.Capabilities.Main.WriteVia)
+	}
+
+	// 2) Write entry: the PUT the preview promised is accepted (merge).
+	putReq := withCaller(codingCliRequest(http.MethodPut, "/api/v1/workers/w1/coding-cli/qwen-code/settings", `{"model":"m-dave"}`, "name", "w1", "cli", "qwen-code"), dave)
+	rec = httptest.NewRecorder()
+	ch.putCliSettings(rec, putReq)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT settings: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 3) Read back: the merged value is what the preview promised — the
+	//    pre-existing key survived the read-modify-merge.
+	getReq := withCaller(codingCliRequest(http.MethodGet, "/api/v1/workers/w1/coding-cli/qwen-code/settings", "", "name", "w1", "cli", "qwen-code"), dave)
+	rec = httptest.NewRecorder()
+	ch.getCliSettings(rec, getReq)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET settings: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var readBack struct {
+		Settings map[string]interface{} `json:"settings"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &readBack); err != nil {
+		t.Fatalf("read-back unmarshal: %v", err)
+	}
+	if readBack.Settings["model"] != "m-dave" || readBack.Settings["keepme"] != float64(1) {
+		t.Errorf("read-back settings = %v, want model=m-dave + keepme=1", readBack.Settings)
+	}
+
+	// 4) Cross-team human: hidden as 404 (W8), state unchanged.
+	erin := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "erin", Teams: []string{"beta"}}
+	erinReq := withCaller(codingCliRequest(http.MethodPut, "/api/v1/workers/w1/coding-cli/qwen-code/settings", `{"model":"m-erin"}`, "name", "w1", "cli", "qwen-code"), erin)
+	rec = httptest.NewRecorder()
+	ch.putCliSettings(rec, erinReq)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-team PUT: expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if n := len(exec.fileWrites); n != 1 {
+		t.Errorf("file writes after cross-team attempt = %d, want 1 (state unchanged)", n)
+	}
+}
+
+// TestModelAccess_ManagerOwnerView: the manager keeps the resource (owner)
+// view — the owner's rows, unchanged semantics, and L1 "direct" writes.
+func TestModelAccess_ManagerOwnerView(t *testing.T) {
+	ownerGrant := &v1beta1.ModelAccessSpec{Scopes: []v1beta1.ModelAccessScope{{
+		Role: "worker",
+		Main: &v1beta1.ModelAccessSurface{Entries: []v1beta1.ModelAccessEntry{{Provider: "gw", Model: "owner-m"}}},
+	}}}
+	h := maRig(t,
+		maTeam("alpha", v1beta1.TeamWorkerRef{Name: "w1", Role: "worker"}),
+		maWorker("w1", "qwen3.6-27b", "", "", "openclaw"),
+		maHuman("alice", []string{"alpha"}, nil, ownerGrant),
+	)
+	manager := &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "manager"}
+	rec := httptest.NewRecorder()
+	h.GetModelAccess(rec, maReq(t, "/api/v1/model-access?worker=w1", manager))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("manager: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got modelAccessWorkerResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.Surfaces.Main.Entries) != 1 || got.Surfaces.Main.Entries[0].Model != "owner-m" {
+		t.Errorf("manager surfaces.main = %+v, want the owner's row", got.Surfaces.Main)
+	}
+	if !got.Capabilities.Main.CanEdit || got.Locked {
+		t.Errorf("manager main/locked = %+v/%v", got.Capabilities.Main, got.Locked)
+	}
+	if len(got.Capabilities.Main.WriteVia) != 1 || got.Capabilities.Main.WriteVia[0] != "direct" {
+		t.Errorf("manager main writeVia = %v, want [direct]", got.Capabilities.Main.WriteVia)
+	}
+	if got := got.Capabilities.CodingCli["qwen-code"]; len(got.WriteVia) != 1 || got.WriteVia[0] != "direct" {
+		t.Errorf("manager codingCli writeVia = %v, want [direct]", got.WriteVia)
+	}
+}
+
+// TestModelAccess_LeaderViews: team leaders are not grant-bound. Own team:
+// canEdit mirrors the leader worker-write rule (true, routed via admin in
+// this release) and the leader NEVER sees the owner's grant rows. Cross
+// team: the write rule denies — canEdit=false + no_write_access.
+func TestModelAccess_LeaderViews(t *testing.T) {
+	ownerGrant := &v1beta1.ModelAccessSpec{Scopes: []v1beta1.ModelAccessScope{{
+		Role: "worker",
+		Main: &v1beta1.ModelAccessSurface{Entries: []v1beta1.ModelAccessEntry{{Provider: "gw", Model: "owner-m"}}},
+	}}}
+	h := maRig(t,
+		maTeam("alpha", v1beta1.TeamWorkerRef{Name: "w1", Role: "worker"}),
+		maWorker("w1", "qwen3.6-27b", "", "", "openclaw"),
+		maHuman("alice", []string{"alpha"}, nil, ownerGrant),
+	)
+
+	// Own team: editable (write rule), no grant rows, BYOK qoder closed.
+	lead := &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "alpha-lead", Team: "alpha"}
+	rec := httptest.NewRecorder()
+	h.GetModelAccess(rec, maReq(t, "/api/v1/model-access?worker=w1", lead))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("own-team leader: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var own modelAccessWorkerResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &own); err != nil {
+		t.Fatalf("own-team unmarshal: %v", err)
+	}
+	if own.Locked {
+		t.Errorf("own-team locked = true, want false (own-team write rule opens the surfaces)")
+	}
+	if !own.Capabilities.Main.CanEdit || own.Capabilities.Main.Reason != "" {
+		t.Errorf("own-team main = %+v, want canEdit=true", own.Capabilities.Main)
+	}
+	if !own.Capabilities.Spawn.CanEdit || own.Capabilities.Spawn.Reason != "" {
+		t.Errorf("own-team spawn = %+v, want canEdit=true", own.Capabilities.Spawn)
+	}
+	if qwen := own.Capabilities.CodingCli["qwen-code"]; !qwen.CanEdit || qwen.Reason != "" {
+		t.Errorf("own-team qwen-code = %+v, want canEdit=true", qwen)
+	}
+	if qoder := own.Capabilities.CodingCli["qoder"]; qoder.CanEdit || qoder.Reason != "byok_unsupported" {
+		t.Errorf("own-team qoder = %+v, want byok_unsupported", qoder)
+	}
+	// The write routes through an L1 in this release (leader model writes
+	// are 400 and CLI writes 403 on the real write entries).
+	if len(own.Capabilities.Main.WriteVia) != 1 || own.Capabilities.Main.WriteVia[0] != "admin" {
+		t.Errorf("own-team main writeVia = %v, want [admin]", own.Capabilities.Main.WriteVia)
+	}
+	// No grant table: empty rows, and the owner's rows never render.
+	if len(own.Surfaces.Main.Entries) != 0 || strings.Contains(rec.Body.String(), "owner-m") {
+		t.Errorf("own-team leader leaked grant rows: %s", rec.Body.String())
+	}
+
+	// Cross team: the write rule denies.
+	otherLead := &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "beta-lead", Team: "beta"}
+	rec = httptest.NewRecorder()
+	h.GetModelAccess(rec, maReq(t, "/api/v1/model-access?worker=w1", otherLead))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("cross-team leader: expected 200 (denied view), got %d: %s", rec.Code, rec.Body.String())
+	}
+	var cross modelAccessWorkerResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &cross); err != nil {
+		t.Fatalf("cross-team unmarshal: %v", err)
+	}
+	if !cross.Locked {
+		t.Errorf("cross-team locked = false, want true")
+	}
+	if cross.Capabilities.Main.CanEdit || cross.Capabilities.Main.Reason != "no_write_access" {
+		t.Errorf("cross-team main = %+v, want canEdit=false no_write_access", cross.Capabilities.Main)
+	}
+	if cross.Capabilities.CodingCli["qwen-code"].CanEdit || cross.Capabilities.CodingCli["qoder"].CanEdit {
+		t.Errorf("cross-team CLI = %+v, want all closed", cross.Capabilities.CodingCli)
+	}
+	if len(cross.Surfaces.Main.Entries) != 0 || strings.Contains(rec.Body.String(), "owner-m") {
+		t.Errorf("cross-team leader leaked grant rows: %s", rec.Body.String())
 	}
 }

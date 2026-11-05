@@ -17,19 +17,21 @@ import (
 // never appear in a constructed URL.
 func TestMillforgeIndexURL(t *testing.T) {
 	tests := []struct {
-		source, repo, ref, want string
+		source, repo, ref, channel, want string
 	}{
-		{"github", "LUOSENGWA/millforge", "main",
-			"https://raw.githubusercontent.com/LUOSENGWA/millforge/main/releases/channels.json"},
-		{"github", "acme/forge-x", "v1.2.0",
-			"https://raw.githubusercontent.com/acme/forge-x/v1.2.0/releases/channels.json"},
-		{"gitcode", "LUOSENGWA/millforge", "main",
-			"https://raw.gitcode.com/LUOSENGWA/millforge/raw/main/releases/channels.json"},
-		{"gitcode", "acme/forge-x", "refs/tags/v1.2.0",
-			"https://raw.gitcode.com/acme/forge-x/raw/refs/tags/v1.2.0/releases/channels.json"},
+		{"github", "LUOSENGWA/millforge", "main", "beta",
+			"https://raw.githubusercontent.com/LUOSENGWA/millforge/main/releases/beta/channels.json"},
+		{"github", "acme/forge-x", "v1.2.0", "alpha",
+			"https://raw.githubusercontent.com/acme/forge-x/v1.2.0/releases/alpha/channels.json"},
+		{"github", "acme/forge-x", "v1.2.0", "stable",
+			"https://raw.githubusercontent.com/acme/forge-x/v1.2.0/releases/stable/channels.json"},
+		{"gitcode", "LUOSENGWA/millforge", "main", "beta",
+			"https://raw.gitcode.com/LUOSENGWA/millforge/raw/main/releases/beta/channels.json"},
+		{"gitcode", "acme/forge-x", "refs/tags/v1.2.0", "stable",
+			"https://raw.gitcode.com/acme/forge-x/raw/refs/tags/v1.2.0/releases/stable/channels.json"},
 	}
 	for _, tt := range tests {
-		got := millforgeIndexURL(tt.source, tt.repo, tt.ref)
+		got := millforgeIndexURL(tt.source, tt.repo, tt.ref, tt.channel)
 		if got != tt.want {
 			t.Fatalf("%s %s@%s: got %s, want %s", tt.source, tt.repo, tt.ref, got, tt.want)
 		}
@@ -101,11 +103,27 @@ func TestMillforgeIndexHandler(t *testing.T) {
 			wantStatus: http.StatusOK,
 		},
 		{
+			name:  "alpha channel uses its own index path",
+			query: "source=github&channel=alpha",
+			upstream: func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/LUOSENGWA/millforge/main/releases/alpha/channels.json" {
+					t.Errorf("alpha path: got %q", r.URL.Path)
+				}
+				io.WriteString(w, `{"schema":1,"channel":"alpha","modules":{}}`)
+			},
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "unsupported channel is rejected",
+			query:      "source=github&channel=nightly",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
 			name:  "gitcode layout reaches the right path",
 			query: "source=gitcode",
 			upstream: func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != "/LUOSENGWA/millforge/raw/main/releases/channels.json" {
-					t.Errorf("upstream path: got %q, want /LUOSENGWA/millforge/raw/main/releases/channels.json", r.URL.Path)
+				if r.URL.Path != "/LUOSENGWA/millforge/raw/main/releases/beta/channels.json" {
+					t.Errorf("upstream path: got %q, want /LUOSENGWA/millforge/raw/main/releases/beta/channels.json", r.URL.Path)
 				}
 				io.WriteString(w, validBody)
 			},
@@ -118,9 +136,11 @@ func TestMillforgeIndexHandler(t *testing.T) {
 			wantStatus: http.StatusBadGateway,
 		},
 		{
-			name:       "malformed json",
-			query:      "source=github",
-			upstream:   func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, `{"schema":1,"channel":"beta","modules":{`) },
+			name:  "malformed json",
+			query: "source=github",
+			upstream: func(w http.ResponseWriter, _ *http.Request) {
+				io.WriteString(w, `{"schema":1,"channel":"beta","modules":{`)
+			},
 			wantStatus: http.StatusBadGateway,
 		},
 		{
@@ -170,6 +190,12 @@ func assertMillforgeEnvelope(t *testing.T, query string, body []byte) {
 	if strings.Contains(query, "source=gitcode") {
 		wantSource = "gitcode"
 	}
+	wantChannel := "beta"
+	for _, c := range []string{"alpha", "stable"} {
+		if strings.Contains(query, "channel="+c) {
+			wantChannel = c
+		}
+	}
 	var got struct {
 		Schema    int             `json:"schema"`
 		Channel   string          `json:"channel"`
@@ -184,8 +210,8 @@ func assertMillforgeEnvelope(t *testing.T, query string, body []byte) {
 	if got.Schema != 1 {
 		t.Fatalf("schema: got %d, want 1", got.Schema)
 	}
-	if got.Channel != "beta" {
-		t.Fatalf("channel: got %q, want beta", got.Channel)
+	if got.Channel != wantChannel {
+		t.Fatalf("channel: got %q, want %q", got.Channel, wantChannel)
 	}
 	if len(got.Modules) == 0 || got.Modules[0] != '{' {
 		t.Fatalf("modules: not a JSON object: %s", got.Modules)

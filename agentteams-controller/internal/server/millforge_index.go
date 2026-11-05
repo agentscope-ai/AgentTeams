@@ -56,6 +56,15 @@ const (
 )
 
 var (
+	// millforgeChannels are the release channels the index proxy may
+	// serve. Each channel has its own releases/<channel>/channels.json;
+	// the artifact layout remains releases/<module>/<version>/<name>.
+	millforgeChannels = map[string]bool{
+		"alpha":  true,
+		"beta":   true,
+		"stable": true,
+	}
+
 	// millforgeRepoRE pins repo to `org/name`; each part is only
 	// alphanumerics, dot, underscore, dash — no host metacharacters can
 	// survive into the composed URL.
@@ -111,11 +120,11 @@ func NewMillforgeIndexHandler() *MillforgeIndexHandler {
 
 // millforgeIndexURL composes the raw-content URL for the index file.
 // source must already be validated to github|gitcode.
-func millforgeIndexURL(source, repo, ref string) string {
+func millforgeIndexURL(source, repo, ref, channel string) string {
 	if source == "gitcode" {
-		return "https://raw.gitcode.com/" + repo + "/raw/" + ref + "/releases/channels.json"
+		return "https://raw.gitcode.com/" + repo + "/raw/" + ref + "/releases/" + channel + "/channels.json"
 	}
-	return "https://raw.githubusercontent.com/" + repo + "/" + ref + "/releases/channels.json"
+	return "https://raw.githubusercontent.com/" + repo + "/" + ref + "/releases/" + channel + "/channels.json"
 }
 
 // millforgeIndexResponse is the exact response envelope: the validated
@@ -161,8 +170,8 @@ func (h *MillforgeIndexHandler) GetIndex(w http.ResponseWriter, r *http.Request)
 	if channel == "" {
 		channel = millforgeIndexDefaultChannel
 	}
-	if !millforgeRefRE.MatchString(channel) {
-		httputil.WriteError(w, http.StatusBadRequest, "millforge index: invalid channel")
+	if !millforgeRefRE.MatchString(channel) || !millforgeChannels[channel] {
+		httputil.WriteError(w, http.StatusBadRequest, "millforge index: channel must be alpha, beta or stable")
 		return
 	}
 
@@ -193,7 +202,10 @@ type millforgeIndexDoc struct {
 // fetchIndex performs the validated fetch shared by the read route and the
 // install routes (which re-read the index to pin the artifact checksum).
 func (h *MillforgeIndexHandler) fetchIndex(ctx context.Context, source, repo, ref, channel string) (*millforgeIndexDoc, int, string) {
-	rawURL := millforgeIndexURL(source, repo, ref)
+	if !millforgeChannels[channel] {
+		return nil, http.StatusBadRequest, "millforge index: channel must be alpha, beta or stable"
+	}
+	rawURL := millforgeIndexURL(source, repo, ref, channel)
 
 	u, err := url.Parse(rawURL)
 	if err != nil || !millforgeIndexAllowedHosts[u.Host] {

@@ -28,7 +28,7 @@ func testInstaller(artifact []byte, sha string) (*moduleInstaller, *http.Client)
 	index := fmt.Sprintf(`{"schema":1,"channel":"beta","modules":{"teamharness":{"latest":"0.1.0","versions":{"0.1.0":{"artifacts":[{"name":"teamharness-0.1.0-qwenpaw.zip","sha256":"%s"}]}}}}}`, sha)
 	c := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
 		switch {
-		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/releases/channels.json"):
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/releases/beta/channels.json"):
 			return testResp(200, index), nil
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/releases/teamharness/0.1.0/"):
 			return testResp(200, string(artifact)), nil
@@ -232,7 +232,7 @@ func TestInstallOneUsesIndexPluginID(t *testing.T) {
 	index := fmt.Sprintf(`{"schema":1,"channel":"beta","modules":{"agentteams-matrix":{"latest":"0.1.0","pluginId":"agentteams-matrix-channel","kind":"bundle","versions":{"0.1.0":{"artifacts":[{"name":"agentteams-matrix-channel-0.1.0.zip","sha256":"%s"}]}}}}}`, hex.EncodeToString(sum[:]))
 	c := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
 		switch {
-		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/releases/channels.json"):
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/releases/beta/channels.json"):
 			return testResp(200, index), nil
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/releases/agentteams-matrix/0.1.0/"):
 			return testResp(200, string(artifact)), nil
@@ -259,7 +259,7 @@ func TestInstallOneFailsWhenNotLoaded(t *testing.T) {
 	index := fmt.Sprintf(`{"schema":1,"channel":"beta","modules":{"teamharness":{"latest":"0.1.0","versions":{"0.1.0":{"artifacts":[{"name":"teamharness-0.1.0-qwenpaw.zip","sha256":"%s"}]}}}}}`, hex.EncodeToString(sum[:]))
 	c := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
 		switch {
-		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/releases/channels.json"):
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/releases/beta/channels.json"):
 			return testResp(200, index), nil
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/releases/teamharness/0.1.0/"):
 			return testResp(200, string(artifact)), nil

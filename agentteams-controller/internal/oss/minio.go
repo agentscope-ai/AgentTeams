@@ -41,6 +41,12 @@ type MinIOClient struct {
 	// the real minio-go path.
 	sdkPutIfMatch  func(ctx context.Context, key string, data []byte, matchETag string) error
 	sdkPutIfAbsent func(ctx context.Context, key string, data []byte) error
+	// sdkListObjects overrides the SDK ListObjects channel for tests; nil
+	// uses the real minio-go path. It receives the exact bucket and options
+	// the production path builds, so a coordinate bug (a request prefix
+	// wrapped with the mc StoragePrefix) surfaces as an empty walk against
+	// an S3-faithful store.
+	sdkListObjects func(ctx context.Context, bucket string, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo
 }
 
 // NewMinIOClient creates a StorageClient backed by the mc CLI.
@@ -514,32 +520,42 @@ func (c *MinIOClient) ListObjectsDetailed(ctx context.Context, prefix string) ([
 // StartAfter equivalent; mc ls --recursive cannot be paged.)
 //
 // prefix and startAfter are storage-relative keys (the same key space as
-// the rest of StorageClient); both are lifted through fullPath for the SDK,
-// which lists bucket keys. Entries are returned with Name relative to
-// prefix (the same contract as ListObjectsDetailed), and nextKey is the
-// storage-relative key of the last returned entry — empty when the prefix
-// is exhausted, so the caller can pass it back verbatim as ?cursor=.
+// the rest of StorageClient). The SDK lists bucket keys and receives the
+// bucket separately, so both are passed as bucket-relative coordinates:
+// wrapping them with fullPath would lift them into the mc alias/bucket
+// path no bucket key carries, and the walk would come up empty on a real
+// backend. Entries are returned with Name relative to prefix (the same
+// contract as ListObjectsDetailed), and nextKey is the storage-relative
+// key of the last returned entry — empty when the prefix is exhausted, so
+// the caller can pass it back verbatim as ?cursor=.
 func (c *MinIOClient) ListObjectsRecursive(ctx context.Context, prefix, startAfter string, limit int) ([]ObjectInfo, string, error) {
 	if limit <= 0 {
 		return nil, "", fmt.Errorf("recursive list limit must be positive, got %d", limit)
 	}
-	sdk, err := c.sdkClient()
-	if err != nil {
-		return nil, "", err
-	}
-	p := strings.TrimPrefix(c.fullPath(prefix), "/")
+	// Bucket-relative coordinates: the bucket rides on the SDK call, and
+	// fullPath's mc alias/bucket wrapper is not part of any bucket key.
+	p := strings.TrimPrefix(prefix, "/")
 	opts := minio.ListObjectsOptions{
 		Prefix:    p,
 		Recursive: true,
 		MaxKeys:   limit,
 	}
 	if startAfter != "" {
-		opts.StartAfter = strings.TrimPrefix(c.fullPath(startAfter), "/")
+		opts.StartAfter = strings.TrimPrefix(startAfter, "/")
 	}
-	storagePrefix := c.config.StoragePrefix + "/"
+	var ch <-chan minio.ObjectInfo
+	if list := c.sdkListObjects; list != nil {
+		ch = list(ctx, c.config.Bucket, opts)
+	} else {
+		sdk, err := c.sdkClient()
+		if err != nil {
+			return nil, "", err
+		}
+		ch = sdk.ListObjects(ctx, c.config.Bucket, opts)
+	}
 	infos := make([]ObjectInfo, 0, limit)
 	lastKey := ""
-	for o := range sdk.ListObjects(ctx, c.config.Bucket, opts) {
+	for o := range ch {
 		if o.Err != nil {
 			return nil, "", fmt.Errorf("list objects (recursive): %w", o.Err)
 		}
@@ -553,7 +569,9 @@ func (c *MinIOClient) ListObjectsRecursive(ctx context.Context, prefix, startAft
 			ETag:      o.ETag,
 			UpdatedAt: o.LastModified.UTC().Format(time.RFC3339),
 		})
-		lastKey = strings.TrimPrefix(o.Key, storagePrefix)
+		// o.Key is already bucket-relative — the same coordinate the
+		// cursor resumes from and the key the caller stats or gets.
+		lastKey = o.Key
 		if len(infos) == limit {
 			break
 		}

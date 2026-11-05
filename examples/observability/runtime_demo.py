@@ -14,18 +14,28 @@ from pathlib import Path
 import threading
 import time
 
-from at_telemetry import flush, operation, set_io
+from at_telemetry import flush
+from at_runtime_adapters import bind
 
 RUNTIME = os.environ["AGENTTEAMS_OTEL_RUNTIME"]
 PROMPT = "Reply with a short sentence describing why OpenTelemetry helps multi-runtime agents."
 
 
 class ModelFixture(BaseHTTPRequestHandler):
+    failed_once = False
     def log_message(self, *_):
         pass
 
     def do_POST(self):
         request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        if os.getenv("DEMO_FAIL_FIRST_REQUEST") == "429" and not ModelFixture.failed_once:
+            ModelFixture.failed_once = True
+            self.send_response(429)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Retry-After", "0")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": {"message": "isolated retry acceptance", "type": "rate_limit_error"}}).encode())
+            return
         time.sleep(0.15)
         content = "OpenTelemetry gives QwenPaw and Hermes a shared trace format for AgentTeams."
         message = {"role": "assistant", "content": content}
@@ -63,7 +73,7 @@ async def qwenpaw(base_url, api_key, model):
     agent = QwenPawAgent(
         name="qwenpaw-tracing-demo",
         model=OpenAIChatModel(credential=OpenAICredential(api_key=api_key, base_url=base_url),
-                              model=model, stream=False, max_retries=0),
+                              model=model, stream=False, max_retries=1),
         system_prompt="You are a concise assistant.", toolkit=Toolkit(),
         react_config=ReActConfig(max_iters=2), middlewares=[],
         agent_config=AgentProfileConfig(id="demo", name="tracing-demo"), workspace_dir=Path("/tmp/at-tracing-workspace"),
@@ -99,19 +109,13 @@ def main():
     model = os.getenv("DEMO_LLM_MODEL", "at-demo-fixture")
     task = os.getenv("DEMO_TASK_ID", f"demo-{RUNTIME}-{int(time.time())}")
     try:
-        with operation(f"{RUNTIME} / worker.turn", task_id=task, room_id="!tracing-demo:agentteams.local",
-                       project_id="observability-demo", attributes={
-                           "agentteams.demo.fixture": fixture,
-                           "langfuse.trace.metadata.model_source": "fixture" if fixture else "live",
-                       }) as span:
-            set_io(span, input=PROMPT)
-            with operation("runtime.invoke", attributes={"langfuse.observation.type": "agent"}):
-                result = asyncio.run(qwenpaw(base, api_key, model)) if RUNTIME == "qwenpaw" else hermes(base, api_key, model)
+        with bind({"agentteams.task.id": task, "agentteams.room.id": "!tracing-demo:agentteams.local",
+                   "agentteams.project.id": "observability-demo", "agentteams.demo.fixture": fixture,
+                   "model_source": "fixture" if fixture else "live"}):
+            result = asyncio.run(qwenpaw(base, api_key, model)) if RUNTIME == "qwenpaw" else hermes(base, api_key, model)
             if "OpenTelemetry" not in result and fixture:
                 raise RuntimeError(f"Native runtime did not return the fixture response: {result[:500]}")
-            set_io(span, output=result)
             print(json.dumps({"runtime": RUNTIME, "task": task,
-                              "traceId": f"{span.get_span_context().trace_id:032x}",
                               "model_source": "fixture" if fixture else "live", "result": result}, ensure_ascii=False))
     finally:
         if not flush():

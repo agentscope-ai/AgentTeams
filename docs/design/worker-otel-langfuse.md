@@ -1,143 +1,111 @@
-# Worker OpenTelemetry 与 Langfuse / Dashboard 集成
+# Worker 会话追踪：OpenTelemetry → Langfuse → Dashboard
 
-## 一、目标与验收
+## 目标与选型
 
-AT 的不同 Worker 使用标准 OTLP 上报，Collector 负责接收和转发，Langfuse 负责保存与查询，Dashboard 提供统一的 trace 列表、时间线和 span 详情。Worker 不依赖 Langfuse SDK，也不携带 Langfuse 项目密钥。
+从一个 Worker 会话回看每轮请求、模型上下文、工具执行、异常和消息交接，定位链路问题，并为后续 Team 协作质量分析保留数据。采用 **运行时原生钩子 → 共享 OTel 适配层 → Collector → Langfuse v3 → Dashboard BFF**。Worker 不依赖 Langfuse SDK、不携带项目密钥。
 
-第一版验收：QwenPaw、Hermes 原生 Agent 执行可以产生包含模型调用的 trace；Dashboard 能按 Worker、运行时、Task ID 和时间筛选，显示 span 父子关系、耗时、模型、用量与错误。配置关闭时保持原启动路径。本文将演示代码和正式接入的边界分开说明。
+网关 LLM 日志无法覆盖本地工具和会话；各运行时直接使用 Langfuse SDK 会分散字段规则和凭证。共享层负责身份、内容处理、协议和查询，运行时只适配执行边界。本次实现 QwenPaw 和 Hermes；其他运行时未实现，不以环境变量配置代替原生验收。
 
-## 二、源码现状
+## 执行路径与采集点
 
-本方案基于 AT `65d4d7d1` 与 Dashboard `a36dd2a`：
+| 接入点 | 实现 |
+| --- | --- |
+| Python 启动 | 通用开关启用 sitecustomize 和标准 OTel SDK；通用模式优先，原 CMS 模式保留 |
+| QwenPaw | 真正的 Runtime.run 入口；AgentScope 公开 middleware 记录 Agent、模型、工具、权限检查、上下文压缩 |
+| 直接 Agent 调用 | Agent.reply 在没有外层 turn 时补入口，避免重复 turn |
+| Hermes | TurnFacadeMixin.run_conversation 记录原生 session 与结果；顺序/并行工具共用执行边界，包含阻断和错误结果 |
+| 模型 | QwenPaw 复用原生模型 span，禁用重复 OpenAI 埋点；Hermes 使用 OpenAI instrumentation 并补实际 SDK 请求 |
+| HTTP | HTTPX 每次请求记录状态码、耗时、request ID 和 W3C context；本机消息 API 恢复同 Worker 的业务 baggage，模型服务不接收业务 baggage。不记录 Authorization 或 URL 查询串 |
+| Matrix | 文本、命令、媒体接收元数据带 event ID / W3C carrier；nio、mautrix 发送时注入 carrier 并记录发送 event ID |
+| 子进程 | 复制 child env 传播 traceparent/tracestate/baggage，不逐轮修改全局环境变量 |
+| Task | 两种镜像复用现有 TeamHarness find_task_trace_context，按 Room、Project、Worker、活动状态唯一匹配，歧义时留空并说明原因 |
 
-| 接入点 | 当前实现 | 本次处理 |
-| --- | --- | --- |
-| `qwenpaw/scripts/qwenpaw-worker-entrypoint.sh` | CMS 环境变量生成 LoongSuite bootstrap JSON，镜像已有 OTel 依赖 | 增加通用 OTel 模式；不再要求 CMS 许可字段 |
-| `hermes/scripts/hermes-worker-entrypoint.sh` | CMS 开关转换成 OTEL 环境变量；环境变量本身不能证明 SDK 已埋点 | 提供同一份 Python OTel / OpenAI SDK 采集代码 |
-| `worker/scripts/worker-entrypoint.sh` | OpenClaw 支持原生 diagnostics-otel，已有插件依赖准备逻辑 | 方案复用原生插件；本次未实现和验证 OpenClaw 适配 |
-| `plugins/teamharness/adapters/qwenpaw/task_trace.py` | 已有基于 room context 的任务关联处理器，入口 span 匹配任务 | 保留现有逻辑；通用适配器提供明确 task/room/project 参数，不从进程中随意猜测当前任务 |
-| Worker CR `spec.env` | 已可将附加环境变量注入 Worker | 第一版复用现有 API，不新增 tokenUsage 状态字段或 CRD |
-| Dashboard | Next.js BFF + 会话/RBAC + 懒加载 section | 新增管理员 Tracing section 与两个只读 API |
+缓存 QwenPaw 镜像的旧 LoongSuite 插件依赖已移除的 agentscope._config。本方案使用实际 AgentScope 版本的原生 middleware。代码位于 shared/lib/telemetry/；Hermes 工具执行边界有签名兼容检查，升级时需重跑原生验收。
 
-仓库历史上还存在 CoPaw 名称和目录；快速适配应以当前镜像实际使用的 SDK 为准，而不是仅以运行时标签判断能否自动埋点。
+## 会话与跨 Worker 因果关系
 
-实测缓存 QwenPaw 2.x 镜像中，现有 `loongsuite-instrumentation-agentscope==0.6.1` 导入时依赖已不存在的 `agentscope._config` 并报错。因此这一版先使用已验证的 OpenAI SDK 埋点，不把镜像已有 LoongSuite 包等同于当前 AgentScope 版本可用的完整框架埋点。
-
-## 三、方案选择
-
-| 方案 | 收益 | 代价与边界 |
-| --- | --- | --- |
-| 每个运行时直接使用 Langfuse SDK | 单个运行时开发快 | 各语言和运行时分别处理供应商 SDK、密钥、字段和版本 |
-| Worker → OTLP → Langfuse | 组件少，可用作个人测试 | 项目密钥分散到每个 Worker；跨运行时归一化和切换后端困难 |
-| **Worker → OTel Collector → Langfuse（选用）** | Worker 保持标准协议；集中凭证、队列、后端配置；便于多运行时共用 | 增加 Collector；需要显式定义运行时能采到的层级 |
-| 仅在 LLM 网关记录请求 | 无需修改运行时 | 无法覆盖 Agent turn、工具、任务关联和本地失败 |
-
-## 四、推荐架构与实现
-
-```mermaid
+~~~mermaid
 flowchart LR
-  Q[QwenPaw / AgentScope] --> P[共享 Python OTel adapter]
-  H[Hermes / OpenAI SDK] --> P
-  O[OpenClaw diagnostics-otel] -. 原生适配 .-> C[OTel Collector]
-  P -->|OTLP HTTP protobuf| C
-  C -->|OTLP HTTP + Basic Auth| L[Langfuse v3]
-  D[AT Dashboard] -->|已认证 BFF，只读| L
-```
+  A[Worker A session] --> A1[Turn 1: model / tools / errors]
+  A --> A2[Turn 2: model / tools]
+  A2 --> M[Matrix event + W3C carrier]
+  M --> B[Worker B turn + SpanLink]
+  A1 --> C[Collector: persistent queue]
+  A2 --> C
+  B --> C
+  C --> L[Langfuse v3]
+  D[Dashboard: admin BFF] --> L
+~~~
 
-### 1. 共享配置和运行时适配
+**一个 session 包含多个 turn trace。** session ID 由 Worker、runtime、真实 runtime session ID 和用户隔离键生成稳定标识。不同 Worker 不会混合；QwenPaw 用户隔离键被保留，Hermes 沿用原生 session 的用户/Room 共享策略。原始 session ID、turn ID 和事件 ID 同时保留。
 
-Python 适配器位于 `shared/lib/telemetry/`，由现有 shared build context 进入镜像。开启时公共环境脚本设置 `PYTHONPATH`，Python 的 `sitecustomize` 初始化 OTel SDK，并通过已有的 OpenAI instrumentation 采集同步、异步 SDK 请求。关闭时不加载 OTel 适配器。
+跨 Worker 创建各自 trace/session，通过 OTel SpanLink、agentteams.upstream.trace_id/span_id/task_id 和 Matrix event ID 关联。上游 Task ID 不覆盖接收 Worker 自身任务归属，避免 Langfuse 的 Worker/session 属性相互覆盖。Dashboard 可回到上游 trace，也可按 Team/Project/Room 组合分析。
 
-```yaml
+协作演示通过 Worker 自己的主动消息 API 发送新 Matrix 消息。QwenPaw 最终回复可能编辑已有消息，而 Hermes 默认跳过编辑事件；因此不能把“界面上出现一条编辑后的回复”当作对方已接收任务。发送与接收政策仍由各运行时负责，此分支不改变这些政策。
+
+异步生成器只在推进与关闭时 attach context，yield 前 detach，支持跨任务关闭。Hermes 原生线程池复制 ContextVars。回复可能发生在 turn generator 返回以后，使用请求级 reply context 恢复所属链路，不使用全局“最近会话”。
+
+| 数据 | 排障及分析用途 |
+| --- | --- |
+| Worker/runtime/package versions/schema/capture policy | 比较版本和配置，识别采集覆盖 |
+| session/turn/Task/Team/Project/Room/event ID | 会话回看、任务归属、跨 Worker 交接 |
+| Agent 输入输出、模型上下文、工具定义及参数 | 上下文缺失、工具选择与交接信息分析 |
+| model/usage/finish reason/模型与 HTTP 耗时 | 模型慢、调用量、输入膨胀、失败后重试 |
+| tool call ID、输入输出、阻断/执行状态 | 参数错误、权限问题、执行失败、重复调用 |
+| 接收时间、dispatch delay | 进入运行时前的等待，不代表所有上游排队时间 |
+| 活动 span 下的警告、错误日志及取消状态 | 将错误和恢复路径留在同一执行上下文 |
+
+标准 gen_ai.* 映射为 Langfuse GENERATION/TOOL/AGENT、输入输出与 usage，原始属性保留。身份、session、标签和业务元数据传播到每个 span。worker-turn 标签将真实执行与后台健康检查区分。
+
+## Dashboard 与质量分析
+
+支持 Worker、runtime、Task、Team、Room、session、时间筛选；session 查询覆盖所有时间范围并可逐页浏览。详情提供父子瀑布、模型/工具内容、错误、耗时、token、上游跳转与 Langfuse 链接。会话 JSON 导出读取全部分页和每轮 observations，供后续离线标注、评估和比较。
+
+错误数、HTTP 失败、重复工具参数、最长子步骤是排查线索，不是自动质量评分。后续可比较任务的调用量、重复工具、失败恢复、耗时、token 和交接前后输入输出，再结合人工验收与产物质量构建评估集。Trace 本身不能证明答案正确或任务完成。
+
+用量来自实际响应 usage，缺失显示未上报；费用只使用 Langfuse 已知模型计价，空计价明细显示“未计价”，不把零汇总值视为免费。
+
+列表/详情 BFF 均要求管理员 level 3，固定服务端地址、禁止重定向、限制超时，不向浏览器暴露项目密钥或上游原文错误。未实现租户访问范围前不向普通用户开放。
+
+## 内容与可靠性边界
+
+启用通用开关时默认采集内容，AGENTTEAMS_OTEL_CAPTURE_CONTENT=false 关闭输入输出字段。写入和导出时脱敏结构化凭证键、Bearer token 和进程中已知密钥环境变量值。单字段 256 KiB 上限，超限保留 truncated、原长度、SHA-256 和预览；采集失败记录 capture_error，不能打断业务。
+
+Collector 使用内存保护、批处理、重试和独立持久卷队列。它保护已接收的待发送数据，不能承诺 SDK 未导出的内存数据、未结束 span、进程强杀、磁盘满、后端拒绝绝不丢失。运行时已截断的工具输出和模型未返回的内部推理无法恢复。
+
+本地验证使用独立 Matrix、账号、存储桶、Langfuse。经用户授权仅复用原 AT 模型配置，通过固定接口和指定模型的代理访问；Worker 不接入原 AT 网络，原模型密钥仅保留在代理中，其他 API 路径被拒绝。
+
+## 配置与扩展契约
+
+~~~yaml
 spec:
   env:
     AGENTTEAMS_OTEL_ENABLED: "true"
+    AGENTTEAMS_OTEL_CAPTURE_CONTENT: "true"
     OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
     OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf"
-```
+~~~
 
-Collector 地址必须能从 Worker 网络访问；本机浏览器使用的 `localhost` 不能直接作为其他容器里的 Collector 地址。镜像构建本身只提供代码与依赖，开启配置后需要重建/重启 Worker 才会应用。
+复用 Worker CR 的 spec.env，不新增 tokenUsage 状态字段。Collector 地址必须从 Worker 网络可达。关闭通用开关并重启 Worker 即回到原启动路径。
 
-通用模式优先于 QwenPaw/Hermes 入口里的 CMS exporter 配置。原有 CMS 模式在通用模式关闭时继续使用。迁移时应停用旧的 runtime 自动埋点配置，避免同一个 SDK 被两个 instrumentation 重复包装。
-
-### 2. 快速接入更多运行时的契约
-
-| 运行时类型 | 最小适配方式 | 可观察范围 |
+| Runtime | 本次范围 | 扩展/升级验证 |
 | --- | --- | --- |
-| Python + OpenAI SDK（QwenPaw、Hermes） | 共用依赖、环境启动和身份处理器 | 自动采集模型 SDK 请求；Agent/工具树需要挂接原生 turn/tool hook |
-| 已有 OTel（如 QwenPaw LoongSuite） | 保留原生埋点，将 exporter 指向 Collector；增加身份处理器 | 原生框架所提供的 Agent、工具、模型 spans；需验证重复采集与语义版本 |
-| OpenClaw | 配置原生 `diagnostics.otel` 和 Collector 地址 | 原生诊断事件粒度；不能假定与 Python Agent/tool 树完全一致 |
-| DeepSeek Harness / OpenHuman | 使用各自 Node/Rust OTel SDK 或原生 hook，发到同一 Collector | 本次未实现；仅设置环境变量不会产生 trace |
-| 不使用 OpenAI SDK 的 Python 模型客户端 | 增加该客户端的官方 instrumentation 或封装其模型 hook | 本次不会自动采集 Anthropic/DashScope 自有 SDK |
+| QwenPaw/AgentScope | 真正 Matrix turn、Agent/model/tool middleware | middleware、流式结束、权限、任务归属 |
+| Hermes | 原生 turn、共用工具边界、OpenAI chat、Matrix | 执行签名；其他模型协议分别验证输入输出和 usage |
+| OpenClaw | 未实现本分支完整适配 | 原生 diagnostics-otel 加 session/tool/Matrix 验收 |
+| DeepSeek Harness/OpenHuman | 未实现 | 原生 Node/Rust OTel SDK，遵守同一字段与 W3C 契约 |
 
-每个新运行时只负责三个边界：初始化 SDK/原生 exporter，在 turn 入口传入上下文，在原生工具 hook 创建 child span。公共部分负责身份字段、OTLP、Langfuse 映射和 Dashboard。
+新运行时只实现 turn/model/tool 钩子、真实 session 标识、消息 carrier 和退出 flush；协议、后端和 Dashboard 共用。Python 可使用 operation/set_io，异步 generator 使用 trace_stream，不能用 demo wrapper 替代真正入口验收。
 
-```python
-from at_telemetry import operation
+标准构建使用 make build-qwenpaw-worker build-hermes-worker。Hermes 增加 teamharness_trace build context，复用同一个任务匹配文件；直接 Docker build 需同时提供它和既有 shared context。演示构建和证据见 [运行说明](../../examples/observability/README.md)。
 
-# Place this around your native turn handler, with request-local identifiers.
-with operation("worker.turn", task_id=task_id, room_id=room_id, project_id=project_id):
-    await native_agent.reply(message)
-```
+## 验收与依据
 
-同一异步任务内用 ContextVar 传播身份字段，结束时 reset，防止并发房间串线。后台线程/子进程要显式传递 OTel context。演示脚本用这个三行接入契约包裹真实原生 Agent 循环；正式 Matrix 消息入口的 turn/tool hook 尚需逐运行时接入，不能把演示 wrapper 当成已经覆盖所有线上消息入口。
+分别验收代码/测试、镜像、标准入口、真实模型工具、Langfuse 入库、Dashboard 回读及浏览器视觉检查。覆盖同会话多轮、返回错误后恢复、W3C 交接、并发隔离、取消、脱敏、费用缺失和导出分页。浏览器受 Work 设置限制时明确保留未做视觉验收的边界。
 
-### 3. 字段、关联和用量
+- [Langfuse OTel 属性映射](https://langfuse.com/integrations/native/opentelemetry)
+- [Langfuse Docker Compose](https://langfuse.com/self-hosting/deployment/docker-compose)
+- [Collector 配置](https://opentelemetry.io/docs/collector/configuration/)
+- [OTLP 配置](https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/)
 
-| 字段 | 含义 |
-| --- | --- |
-| OTel trace_id / span_id / parent_span_id | 标准父子关系，供 Dashboard 瀑布展示 |
-| `service.name` | Worker 服务名 |
-| `agentteams.worker.name`, `agentteams.runtime` | Worker 与运行时身份 |
-| `agentteams.task.id`, `.room.id`, `.project.id` | 从当前请求入口传入的业务关联 |
-| `gen_ai.*` / instrumentation 的模型语义字段 | 模型、输入/输出 token、请求错误 |
-| `langfuse.user.id`, `.session.id` | Worker 列表过滤与房间关联 |
-| `langfuse.trace.tags` | `agentteams`、运行时、`task:<id>`；v3 API 可服务器端过滤 |
-
-AT 字段也映射到 Langfuse metadata，原生 OTel 字段保留。Token 来自模型服务响应中的 usage，缺失则显示未上报；fixture 返回的 token 只能证明协议和展示，不代表真实计费。费用由 Langfuse 对识别的模型计价，未知模型不推算价格。
-
-跨 Worker 的 Matrix 协作默认是多个 trace，使用 task/room/project 关联。完整分布式父子链需要在受控 Matrix 自定义 content 中传递 W3C `traceparent`/`tracestate`，并在接收入口 extract；这一步尚未实现，不把同一 Task ID 伪装成同一 trace。对不可信消息来源的采样与上下文接收规则应由平台入口控制。
-
-### 4. Collector、凭证和失败行为
-
-演示 Collector 开放容器内 4317/4318，通过 OTLP HTTP 将 traces 转发至 Langfuse `/api/public/otel`，由 exporter 自动追加 `/v1/traces`。Langfuse v3 使用项目公私钥 Basic Auth；演示固定本地账号只用于这个 localhost 实例。
-
-Collector 使用 memory_limiter、batch、重试与磁盘发送队列。队列在独立 Docker volume 中，重启 Collector 后可继续处理已接收的队列内容。SDK 进程内队列仍有容量和退出丢失边界，Langfuse 拒绝数据、磁盘满、进程强杀不能承诺无丢失。采集失败不能阻止 Worker 执行业务。
-
-正式环境应在内部网络部署 Collector，并配置入口认证、TLS、租户隔离与密钥轮换；Worker 不应提交可覆盖平台租户身份的任意字段。演示凭证不能复用到正式环境。
-
-### 5. Dashboard 查询与权限
-
-新增控制台 → 治理 → Tracing。服务端通过环境变量保存 Langfuse 地址和密钥：
-
-```dotenv
-LANGFUSE_BASE_URL=http://127.0.0.1:13100
-LANGFUSE_PUBLIC_KEY=pk-lf-at-local-demo
-LANGFUSE_SECRET_KEY=sk-lf-at-local-demo
-LANGFUSE_PUBLIC_URL=http://localhost:13100
-LANGFUSE_PROJECT_ID=at-workers
-```
-
-列表查询 `GET /api/agentteams/traces`，详情查询 `GET /api/agentteams/traces/:traceId`。BFF 固定服务端目的地，不接受浏览器提供 upstream URL，禁止转发重定向，设置请求超时，不向浏览器返回上游错误原文。列表不返回大段输入输出；点击 trace/span 后才读取详情。
-
-项目密钥可读取整个项目，因此第一版仅允许管理员（level 3），隐藏导航的同时在两个服务端接口执行权限判断。团队用户返回 403。在实现基于 Controller 的访问范围校验之前，不向普通用户开放此接口。
-
-## 五、开发与验证
-
-1. 本次交付：共享 Python adapter、两运行时镜像入口、隔离 Langfuse/Collector、本地原生运行时演示、Dashboard 查询与时间线。
-2. 自动验证：并发 ContextVar 隔离、span 父子关系、Task 标签、API 管理员权限、目的地固定、路径校验、错误响应脱敏、瀑布时间坐标；Dashboard 类型检查、lint、生产构建。
-3. 实际链路验证：运行两种原生 Agent，确认 Collector 收到数据，再轮询 Langfuse 查询 API 校验模型 span 和 usage，最后在 Dashboard 选择 trace 查看。
-4. 后续正式接入：将相同 operation 契约挂到真实 Matrix turn/tool hook，复用 QwenPaw 原生 AgentScope spans，补跨进程上下文、OpenClaw/DSH/OpenHuman 的独立运行时验收。不会用本次 Python 演示证明这些尚未实现的能力。
-5. 回退：关闭 `AGENTTEAMS_OTEL_ENABLED` 并重启 Worker；Dashboard 未配置 Langfuse 时显示可操作的配置提示；演示栈可 `docker compose down` 停止，保留数据卷。
-
-本地启动与验收脚本见 [`examples/observability/`](../../examples/observability/)。实际版本、测试结果和演示地址在该目录 README 中记录。
-
-## 六、官方依据
-
-- [Langfuse 原生 OpenTelemetry 接入与属性映射](https://langfuse.com/integrations/native/opentelemetry)
-- [Langfuse Docker Compose 部署](https://langfuse.com/self-hosting/deployment/docker-compose)
-- [Langfuse Headless Initialization](https://langfuse.com/self-hosting/administration/headless-initialization)
-- [OpenTelemetry Collector 配置](https://opentelemetry.io/docs/collector/configuration/)
-- [OTLP exporter 环境变量](https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/)
-
-本文演示固定 v3 读 API，不直接套用当前 v4 ingestion header / v2 observations 方案；升级时需一起验证写入语义与查询 API。
+本次固定 Langfuse v3 ingestion 与 v1 查询 API，升级后端需一起验证属性、费用和分页语义。

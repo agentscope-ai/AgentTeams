@@ -1,100 +1,94 @@
-# 本机 Worker Tracing 演示
+# 本机 Worker 完整会话 Tracing 演示
 
-两个仓库均使用 `codex/worker-otel-langfuse-demo` 分支：
+AT 与 Dashboard 均使用本地分支 codex/worker-otel-langfuse-demo，工作树分别为 output/otel-langfuse-demo/core 和 output/otel-langfuse-demo/dashboard。[技术方案](../../docs/design/worker-otel-langfuse.md)说明了原生采集点、扩展契约和覆盖边界。
 
-- AT 工作树：`output/otel-langfuse-demo/core`
-- Dashboard 工作树：`output/otel-langfuse-demo/dashboard`
-- [技术方案](../../docs/design/worker-otel-langfuse.md)
-
-## 明早演示入口
+## 演收入口
 
 - Dashboard：<http://localhost:13003/tracing-demo/>
-- Langfuse：<http://localhost:13100>
-- Langfuse 登录：`demo@agentteams.local` / `AgentTeams-demo-2026`
-- Langfuse 项目：`AT Worker Tracing`（ID `at-workers`）
+- Langfuse：<http://localhost:13100>，项目 AT Worker Tracing / at-workers
+- 登录：demo@agentteams.local / AgentTeams-demo-2026
+- 独立 Matrix：<http://localhost:16167>；账号和 Room ID 保存在本机 output/observability-demo/matrix-private.json，不提交 Git。
 
-Dashboard 使用与正式导航“控制台 → 治理 → Tracing”相同的组件和 BFF。独立演示入口需要显式 `AGENTTEAMS_TRACING_DEMO=true`；演示容器仅绑定 localhost，并启用现有本地开发身份模式。它只持有本次演示 Langfuse 项目密钥，未复制既有 AT 的凭证或加入既有 AT 网络。
+在 Dashboard 选择 trace-qwenpaw 或 trace-hermes，打开执行记录，点“查看整个会话”，逐轮查看模型、工具、错误和 Matrix 回复。点击“查看上游 Worker Trace”回到交接源；“导出会话 JSON”读取所有分页和每轮 observations。Task 为 matrix-qwenpaw-acceptance / matrix-hermes-acceptance，Project 为 tracing-demo，Team 为 tracing-team。
 
-选择 QwenPaw / Hermes 记录，查看 `worker.turn → runtime.invoke → openai.chat` 瀑布，点击模型 span 查看输入、输出、模型与 token，点击 Langfuse 打开原始详情。Worker、运行时、Task ID 和时间均可查询。
+Dashboard 使用正式“控制台 → 治理 → Tracing”同一组件和管理员 BFF。独立入口由 AGENTTEAMS_TRACING_DEMO=true 启用；演示仅绑定 localhost，使用本地开发身份，仅持有这个隔离 Langfuse 项目密钥。
 
-## 新增两条记录
+## 本次覆盖
 
-在 AT 演示工作树执行：
+| 层级 | 可查看的数据 |
+| --- | --- |
+| session / turn | 真实 runtime session、用户隔离、每次原生执行独立 trace；后台常驻消费者不串线 |
+| 模型 | 实际输入上下文、输出、模型名、usage、finish reason、HTTP 请求状态/耗时 |
+| 工具 | 原生调用 ID、参数、结果、失败、阻断；返回错误也记为 ERROR |
+| 消息 | 接收/发送事件 ID、W3C carrier、流结束后的回复、编辑消息、上游链接 |
+| 发送门控 | 新消息导致重触发时保留 delivery decision、前后执行链接，区别于模型失败 |
+| 任务 | 复用 TeamHarness 唯一匹配规则，歧义或缺失原因保留，不猜任务 |
+| 运行诊断 | 版本、采集策略、警告/错误事件、取消、父子关系、耗时与用量 |
 
-```bash
-bash examples/observability/run_workers.sh
-python3 examples/observability/verify.py
-```
+本次真实模型为用户授权复用的 qwen3.6-plus。Worker、Matrix、存储和 Langfuse 均独立；Worker 只连接 at-tracing-demo_default。原模型密钥仅放在受限代理中，代理只开放指定模型接口，不能访问 AT 其他 API。
 
-`runtime_demo.py` 执行真实 `QwenPawAgent.reply` 与 `Hermes AIAgent.run_conversation`，OpenAI instrumentation 采集真实 SDK 的 HTTP/流式调用。默认使用确定性本地模型响应，因此 trace 标记 `fixture`，usage=66 来自测试服务响应，不能当成真实模型消耗或计费。
+完整采集有明确边界：单字段 256 KiB 超限标记长度/哈希/预览；脱敏凭证；不能恢复运行时已经截断的输出或模型未返回的内部推理。Collector 持久队列保护已接收数据，SDK 未导出/未结束 span 和强杀不能承诺不丢。OpenClaw、DSH、OpenHuman 尚未完成本分支适配。不同架构/历史上下文的示例不能直接当作 runtime 性能排名。
 
-根 span、runtime.invoke 和 task/room/project 的关联由演示 wrapper 提供。实际 Worker 的 SDK 调用可以自动采集；正式 Matrix turn/tool hook、跨 Worker W3C 传播，以及 OpenClaw/DSH/OpenHuman 的完整适配尚未完成，详见方案的运行时矩阵。
+## 重复验收
 
-## 停止后重新启动
+服务已运行时，无需重新创建账号或镜像。以下命令均在 AT 演示工作树执行。每步等 Worker 实际回复后继续，可在 Dashboard 刷新查看：
 
-```bash
+~~~bash
+# 新会话保留此前的排障与 trace 历史
+python3 examples/observability/prepare_matrix_workers.py --new-room
+
+# 全部步骤使用同一个全新 run 名，确保首次读取不存在的文件
+python3 examples/observability/matrix_acceptance.py qwenpaw 1 --run morning-demo
+python3 examples/observability/matrix_acceptance.py qwenpaw 2 --run morning-demo
+python3 examples/observability/matrix_acceptance.py hermes 1 --run morning-demo
+python3 examples/observability/matrix_acceptance.py hermes 2 --run morning-demo
+python3 examples/observability/matrix_acceptance.py qwenpaw handoff --run morning-demo
+
+# 从 Langfuse 和 Dashboard 回读并断言，不能只看 exporter HTTP 成功
+python3 examples/observability/verify_full.py --run morning-demo
+~~~
+
+第一轮先读取不存在的文件，失败后真实写入并回读；第二轮在同一会话追加另一行并回读；handoff 由 QwenPaw 的真实 Shell 工具调用本机主动消息 API 发新消息给 Hermes，Hermes 用自己的真实工具校验文件。每轮 trace 独立，同一调用者的 session 稳定；跨 Worker 保留各自原生用户隔离策略，通过 SpanLink 与元数据关联。
+
+verify_full.py 检查两个 runtime 的独立轮次、session、Task、模型/工具输入输出、usage、模型 response ID 去重、span 父子关系、发送/重触发、跨 Worker 链接，以及 Dashboard 回读一致性。产物写入 output/observability-demo/full-session-acceptance.json 和 full-session-readback.json。
+
+另有 full_session_demo.py / run_live_acceptance.py 用于不经过 Matrix 的原生循环验证；旧 runtime_demo.py / run_workers.sh / verify.py 仅作协议烟测，其 fixture usage 来自测试响应。429 夹具故障注入设置 DEMO_FAIL_FIRST_REQUEST=429，可验证失败请求与成功重试，不能当作线上限流事件。
+
+## 启停与镜像
+
+~~~bash
 bash examples/observability/start.sh
-# 确认 Langfuse 健康检查就绪后，再运行 Worker。
 curl -f http://localhost:13100/api/public/health
-bash examples/observability/run_workers.sh
-python3 examples/observability/verify.py
-```
-
-Dashboard 已运行时不需要再创建容器。仅重启 Dashboard 使用 `docker restart at-tracing-demo-dashboard`。若执行过下方的 `compose down`，先 `docker rm at-tracing-demo-dashboard` 再创建，以重新连接新建的隔离网络。首次创建：
-
-```bash
-cd ../dashboard
-npm ci
-npm run build
-cd ../core
+python3 examples/observability/prepare_matrix_workers.py
+# Dashboard 已存在时可重启；首次创建前需构建 ../dashboard
 python3 examples/observability/start_dashboard.py ../dashboard
-```
 
-停止演示并保留 trace 数据：
+# 仅停止本次演示，保留数据卷
+bash examples/observability/stop.sh
+~~~
 
-```bash
-docker stop at-tracing-demo-dashboard
-docker compose -f examples/observability/compose.yaml down
-```
+Dashboard 源码构建：在 ../dashboard 执行 npm ci、npm run build。重建后用 docker rm -f at-tracing-demo-dashboard，再运行 start_dashboard.py；不停止其他 AT Dashboard。
 
-这套环境使用 `at-tracing-demo` 项目名和独立数据卷，不需要停止已有的 AT 环境。
+本次在已缓存 Worker 上构建 telemetry overlay，不等同于重新构建整个发行镜像。QwenPaw 为 arm64，Hermes 为 amd64：
 
-## 镜像构建与来源
-
-本次仅在已有缓存 Worker 镜像上构建 telemetry overlay，包含最终的共享环境脚本、Worker 入口和采集依赖，未重新构建整个 AT 发行镜像。默认 Hermes 缓存镜像为 amd64，QwenPaw 为 arm64。
-
-```bash
+~~~bash
 docker build -f examples/observability/Dockerfile.runtime \
-  --build-arg BASE_IMAGE=agentteams/agentteams-qwenpaw-worker:local-20261104120000 \
+  --build-arg BASE_IMAGE=agentteams/qwenpaw-worker:local-20261106003000-otel \
   --build-arg VENV_PATH=/opt/venv/qwenpaw --build-arg RUNTIME=qwenpaw \
-  -t agentteams/qwenpaw-worker:local-20261106003000-otel .
+  -t agentteams/qwenpaw-worker:local-20261106023000-full-otel .
 
 docker build --platform linux/amd64 -f examples/observability/Dockerfile.runtime \
-  --build-arg BASE_IMAGE=agentteams/hermes-worker:latest \
+  --build-arg BASE_IMAGE=agentteams/hermes-worker:local-20261106003000-otel \
   --build-arg VENV_PATH=/opt/venv/hermes --build-arg RUNTIME=hermes \
-  -t agentteams/hermes-worker:local-20261106003000-otel .
-```
+  -t agentteams/hermes-worker:local-20261106023000-full-otel .
+~~~
 
-SDK 依赖固定在 `shared/lib/telemetry/requirements.txt`。Langfuse v3/Collector 使用官方 GHCR 镜像，ClickHouse 使用官方 Docker Hub 镜像，S3 存储使用与本机 AT 同类的 RustFS。Collector 的独立队列卷归 UID 10001 所有，启动脚本负责初始化权限。
+SDK 依赖固定在 shared/lib/telemetry/requirements.txt。完整构建走 Makefile，两种运行时复用同一 TeamHarness task resolver。演示固定本地账号/密码仅用于此隔离栈，正式部署使用独立凭证、内部 Collector 和正常管理员会话。
 
-演示账号、密码和 API key 是固定的本地测试值，仅适用于此隔离环境。正式部署替换凭证和服务地址，并保留 Dashboard 的正常管理员会话校验。
+## 证据与验证边界
 
-## 验证状态与边界
+验收记录、真实回读、镜像 digest 和构建/测试日志保存在 output/observability-demo/。此前排障数据也保留在 Langfuse，不删除失败样本；演收以 full-session-acceptance.json 指定的会话/trace 为准。
 
-2026-11-06 本机验收已完成 Langfuse 入库和 Dashboard BFF 回读：
+已验证的层次包括：Python 与 Matrix 通道回归、Dashboard API/组件交互、会话分页导出、类型检查、lint、标准生产构建、两种标准 Worker 入口与真实模型/工具、Langfuse/Dashboard 回读。故障夹具能保留 HTTP 429 和随后 200 的两个请求。
 
-| 运行时 | Trace ID | Spans / 模型调用 | 用量来源 |
-| --- | --- | --- | --- |
-| QwenPaw | `8294d4f4d0641a799623045e330486b0` | 3 / 1 | fixture 响应 48 input + 18 output |
-| Hermes | `30844ca0e20363722837968ac7100c06` | 3 / 1 | fixture 响应 48 input + 18 output |
-
-两条 ID 均是在 Collector 重启前生成，恢复后可以从 Langfuse 和 Dashboard 查到全部 6 个 span。按 Worker、运行时、Task ID 联合筛选分别返回 1 条；模型输入和输出均已回读。Langfuse `3.227.0` 健康检查与项目 API 均返回 200。未知模型的 Langfuse v3 汇总费用会返回 0，Dashboard 根据空 `costDetails` 显示“未计价”，没有据此显示免费。
-
-证据保存在 AT 工作树 `output/observability-demo/`：`langfuse-readback.json`、`dashboard-readback.json`、`collector.log`、`runtime-images.json`、`backend-images.json`。
-
-- Dashboard：43 项相关测试（含组件交互、管理员权限、API 边界、导航和瀑布坐标）通过；类型检查、lint 和生产构建通过。
-- Python：并发房间/任务上下文、父子 span、错误状态、清理，以及已有 QwenPaw 启动契约测试通过。
-- 镜像：两种运行时 overlay 已构建；QwenPaw 共享环境入口可自动创建 TracerProvider。Hermes 原始镜像已有 browser-harness/Pillow 版本冲突，本次未修改这项无关依赖。
-- 协议：两种真实原生 Agent 已向 OTLP protobuf 探针输出三层 trace 和模型 usage；探针仅用于诊断，不是 Langfuse 替代品。
-- 完整 Langfuse / Dashboard 回读：已通过，`verify.py` 返回两个运行时且 `missing=[]`；验收记录如上。
-- 浏览器视觉验收：当前 Work 设置禁用了本地浏览器自动化；已完成组件交互测试与页面 HTTP 检查，尚未完成浏览器视觉验收。
+当前 Work 设置禁用本地浏览器自动化，未完成浏览器视觉验收；已做组件交互与实际页面/API HTTP 检查。没有推送分支、发布镜像或改动现有 AT 部署。

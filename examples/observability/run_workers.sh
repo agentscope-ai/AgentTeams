@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 DEMO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-QWENPAW_IMAGE="${QWENPAW_IMAGE:-agentteams/qwenpaw-worker:local-20261106003000-otel}"
-HERMES_IMAGE="${HERMES_IMAGE:-agentteams/hermes-worker:local-20261106003000-otel}"
+QWENPAW_IMAGE="${QWENPAW_IMAGE:-agentteams/qwenpaw-worker:local-20261106023000-full-otel}"
+HERMES_IMAGE="${HERMES_IMAGE:-agentteams/hermes-worker:local-20261106023000-full-otel}"
 for runtime in qwenpaw hermes; do
     image="${QWENPAW_IMAGE}"
     platform=linux/arm64

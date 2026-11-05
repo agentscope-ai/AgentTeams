@@ -70,3 +70,7 @@ htmlcov/
 
 # dev build artifacts
 build-manifest.json
+
+# Local Worker tracing evidence and runtime reference sources
+/output/observability-demo/
+/output/native/

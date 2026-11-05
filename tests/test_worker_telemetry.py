@@ -40,7 +40,7 @@ def test_concurrent_turns_do_not_share_identity(monkeypatch):
         root = next(s for s in own if not s.parent)
         child = next(s for s in own if s.parent)
         assert child.parent.span_id == root.context.span_id
-        assert root.attributes["langfuse.session.id"] == f"!{task}:matrix"
+        assert root.attributes["langfuse.session.id"] == telemetry.session_key(f"!{task}:matrix")
         assert f"task:{task}" in root.attributes["langfuse.trace.tags"]
     assert telemetry._correlation.get() == {}
     try:

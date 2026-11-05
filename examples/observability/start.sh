@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 DEMO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-QWENPAW_IMAGE="${QWENPAW_IMAGE:-agentteams/qwenpaw-worker:local-20261106003000-otel}"
+QWENPAW_IMAGE="${QWENPAW_IMAGE:-agentteams/qwenpaw-worker:local-20261106023000-full-otel}"
 docker volume create at-tracing-demo_collector >/dev/null
 docker compose -f "${DEMO_DIR}/compose.yaml" up -d --wait --wait-timeout 120 postgres redis minio clickhouse
 docker run --rm -v at-tracing-demo_collector:/queue --entrypoint /bin/sh \

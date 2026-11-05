@@ -13,6 +13,8 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/matrix"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/proxy"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/runtimeconfig"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/runtimeconfig/openclaw"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/skillscan"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -303,6 +305,23 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("PUT /api/v1/workers/{name}/coding-cli/{cli}/settings", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(cci.putCliSettings)))
 	mux.Handle("POST /api/v1/workers/{name}/coding-cli/{cli}/install", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(cci.startInstall)))
 	mux.Handle("GET /api/v1/workers/{name}/coding-cli/{cli}/install/{task_id}", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(cci.getInstallStatus)))
+
+	// --- Per-runtime member config surface (P8: each runtime's OWN native
+	// config schema; the controller only routes/permits/persists desired
+	// state, never translates fields; see member_config.go) ---
+	// The surface route is a runtime-level static resource: login only, no
+	// team scope, strongly cached with an ETag. The member routes carry the
+	// standing authorizer's worker-scoped policy (ActionGet/ActionUpdate)
+	// plus the handler's W8 team scope, embedded-mode gate, and the
+	// leader-read-only rule.
+	runtimeReg := runtimeconfig.NewRegistry()
+	runtimeReg.Register(openclaw.New())
+	// P8b: runtimeReg.Register(hermes.New())
+	mch := NewMemberConfigHandler(deps.Client, deps.Namespace, deps.KubeMode, auditClient, deps.Backend, deps.OSS, runtimeReg, deps.DefaultWorkerRuntime)
+	mux.Handle("GET /api/runtimes/{runtime}/surface", mw.Authenticate(http.HandlerFunc(mch.getSurface)))
+	mux.Handle("GET /api/members/{name}/config", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(mch.getConfig)))
+	mux.Handle("PUT /api/members/{name}/config", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(mch.putConfig)))
+	mux.Handle("POST /api/members/{name}/config/rollback", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(mch.rollbackConfig)))
 
 	// W-PR-2: human intervention + lifecycle (write endpoints). All writes go
 	// through RequireAuthz ActionUpdate + "project" so the authorizer's

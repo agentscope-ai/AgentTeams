@@ -610,20 +610,24 @@ func TestGenerateOpenClawConfig_SubagentModel(t *testing.T) {
 	if err := json.Unmarshal(data, &config); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	modelCfg := config["agents"].(map[string]interface{})["defaults"].(map[string]interface{})["model"].(map[string]interface{})
-	sub, ok := modelCfg["subagent"].(map[string]interface{})
+	defaults := config["agents"].(map[string]interface{})["defaults"].(map[string]interface{})
+	subagents, ok := defaults["subagents"].(map[string]interface{})
 	if !ok {
-		t.Fatalf("agents.defaults.model.subagent missing, want dict; got %v", modelCfg["subagent"])
+		t.Fatalf("agents.defaults.subagents missing, want object; got %v", defaults["subagents"])
 	}
-	if sub["provider_id"] != "agentteams-gateway" {
-		t.Errorf("subagent.provider_id = %v, want agentteams-gateway", sub["provider_id"])
-	}
-	if sub["model"] != "qwen3.5-flash" {
-		t.Errorf("subagent.model = %v, want qwen3.5-flash", sub["model"])
+	// OpenClaw zod schema: subagents.model is a single "provider/model"
+	// string (or {primary, fallbacks}); no provider_id key.
+	if subagents["model"] != "agentteams-gateway/qwen3.5-flash" {
+		t.Errorf("subagents.model = %v, want agentteams-gateway/qwen3.5-flash", subagents["model"])
 	}
 	// primary must stay the historical "provider/model" string form
+	modelCfg := defaults["model"].(map[string]interface{})
 	if modelCfg["primary"] != "agentteams-gateway/qwen3.5-plus" {
 		t.Errorf("primary = %v, want agentteams-gateway/qwen3.5-plus", modelCfg["primary"])
+	}
+	// the old QwenPaw-shape key must not come back
+	if _, present := modelCfg["subagent"]; present {
+		t.Errorf("agents.defaults.model.subagent = %v, want absent", modelCfg["subagent"])
 	}
 }
 
@@ -648,8 +652,13 @@ func TestGenerateOpenClawConfig_SubagentModelOmittedWhenEmpty(t *testing.T) {
 	if err := json.Unmarshal(data, &config); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	modelCfg := config["agents"].(map[string]interface{})["defaults"].(map[string]interface{})["model"].(map[string]interface{})
-	if _, present := modelCfg["subagent"]; present {
-		t.Errorf("agents.defaults.model.subagent = %v, want absent when SubagentModelName is empty", modelCfg["subagent"])
+	defaults := config["agents"].(map[string]interface{})["defaults"].(map[string]interface{})
+	subagents := defaults["subagents"].(map[string]interface{})
+	if _, present := subagents["model"]; present {
+		t.Errorf("agents.defaults.subagents.model = %v, want absent when SubagentModelName is empty", subagents["model"])
+	}
+	// subagents itself stays present with its non-model settings
+	if subagents["maxConcurrent"] != float64(8) {
+		t.Errorf("subagents.maxConcurrent = %v, want 8", subagents["maxConcurrent"])
 	}
 }

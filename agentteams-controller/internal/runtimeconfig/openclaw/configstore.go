@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/runtimeconfig"
@@ -215,6 +216,40 @@ func NewConfigManager(adapter *Adapter, exec ExecBackend, store KeyStore, opts .
 	return m
 }
 
+// Each HTTP request constructs a ConfigManager. Share the mutation lock
+// across managers so revision checks, snapshots, file replacement and desired
+// state are one transaction per worker within the controller process.
+var configMutationLocks = struct {
+	sync.Mutex
+	workers map[string]*configMutationLock
+}{workers: make(map[string]*configMutationLock)}
+
+type configMutationLock struct {
+	sync.Mutex
+	users int
+}
+
+func lockConfigMutation(worker string) func() {
+	configMutationLocks.Lock()
+	lock := configMutationLocks.workers[worker]
+	if lock == nil {
+		lock = &configMutationLock{}
+		configMutationLocks.workers[worker] = lock
+	}
+	lock.users++
+	configMutationLocks.Unlock()
+	lock.Lock()
+	return func() {
+		lock.Unlock()
+		configMutationLocks.Lock()
+		lock.users--
+		if lock.users == 0 {
+			delete(configMutationLocks.workers, worker)
+		}
+		configMutationLocks.Unlock()
+	}
+}
+
 // Runtime is the runtime id this manager writes.
 func (m *ConfigManager) Runtime() string { return m.adapter.Surface().Runtime }
 
@@ -316,6 +351,12 @@ func (m *ConfigManager) readConfigFile(ctx context.Context, worker, path string)
 //     controller write (the frontend shows the restart banner; the
 //     controller cannot observe a manual restart and never performs one).
 func (m *ConfigManager) Read(ctx context.Context, worker string) (ConfigState, error) {
+	unlock := lockConfigMutation(worker)
+	defer unlock()
+	return m.read(ctx, worker)
+}
+
+func (m *ConfigManager) read(ctx context.Context, worker string) (ConfigState, error) {
 	path, err := m.resolveConfigPath(ctx, worker)
 	if err != nil {
 		return ConfigState{}, err
@@ -575,6 +616,18 @@ func (m *ConfigManager) redactSensitive(doc map[string]any) map[string]any {
 
 func (m *ConfigManager) redactNode(path string, v any) any {
 	f, declared := m.adapter.FieldForKey(path)
+	// Runtime plugins may add credentials outside the static surface (for
+	// example channels.matrix.accessToken). Do not expose those strings on GET.
+	if !declared {
+		key := strings.ToLower(path[strings.LastIndex(path, ".")+1:])
+		credential := key == "authorization" || key == "proxy-authorization" || key == "cookie" || key == "set-cookie"
+		for _, part := range []string{"api_key", "apikey", "api-key", "token", "secret", "password", "access_key"} {
+			credential = credential || strings.Contains(key, part)
+		}
+		if value, ok := v.(string); credential && ok && value != "" {
+			return "***"
+		}
+	}
 	if declared && IsSecret(f) {
 		if _, err := ValidateSecretRef(v); err != nil {
 			return "***"
@@ -616,6 +669,9 @@ func (m *ConfigManager) redactNode(path string, v any) any {
 //     §5.2); written channels refine "applied" to "applied-but-inactive"
 //     when their plugin is not loaded (§8.4)
 func (m *ConfigManager) Write(ctx context.Context, worker string, values map[string]any, ifRev string) (WriteResult, error) {
+	unlock := lockConfigMutation(worker)
+	defer unlock()
+
 	path, err := m.resolveConfigPath(ctx, worker)
 	if err != nil {
 		return WriteResult{}, err
@@ -633,7 +689,7 @@ func (m *ConfigManager) Write(ctx context.Context, worker string, values map[str
 		return WriteResult{}, fmt.Errorf("worker %s openclaw.json is not a valid JSON object: %w", worker, err)
 	}
 
-	leaves := collectLeaves("", values)
+	leaves := collectLeaves("", values, m.adapter.isAtomicSecretLeaf)
 	var unknown []string
 	var validation *ValidationError
 	sensitiveLeaves := map[string]SecretRef{}
@@ -739,7 +795,7 @@ func (m *ConfigManager) Write(ctx context.Context, worker string, values map[str
 		return WriteResult{}, errors.New("read-back after write does not match the intended content; state unknown")
 	}
 
-	writtenKeys := collectLeafKeys("", pruned)
+	writtenKeys := collectLeafKeys("", pruned, m.adapter.isAtomicSecretLeaf)
 	restartKeys := make([]string, 0)
 	for _, k := range writtenKeys {
 		// Opaque leaves inherit the applies level of their declared
@@ -786,17 +842,39 @@ type leaf struct {
 	value any
 }
 
+// isAtomicSecretLeaf reports whether v at key is the value of a declared
+// secret field. Such a value is an OpenClaw SecretRef object and must stay
+// atomic: decomposing it into .source/.provider/.id would make those keys
+// unknown fields before ValidateSecretRef ever runs.
+func (a *Adapter) isAtomicSecretLeaf(key string, v any) bool {
+	if _, ok := v.(map[string]any); !ok {
+		return false
+	}
+	f, mode, ok := a.ResolveKey(key)
+	// Only a field declared with type "secret" carries a SecretRef value.
+	// A sensitive *object* container (e.g. agents.defaults.sandbox) stays
+	// decomposed on purpose: nested writes below it must keep failing
+	// closed at their own key rather than being read as a malformed ref.
+	return ok && mode == KeyExact && f.Type == "secret"
+}
+
 // collectLeaves walks a partial document to its concrete leaves (non-map
-// values). Empty objects contribute no leaves.
-func collectLeaves(prefix string, doc map[string]any) []leaf {
+// values). Empty objects contribute no leaves. When atomic is non-nil, a
+// value for which atomic(key, v) holds stays a single leaf at its full key
+// instead of being decomposed (declared secret refs).
+func collectLeaves(prefix string, doc map[string]any, atomic func(string, any) bool) []leaf {
 	var out []leaf
 	for k, v := range doc {
 		key := k
 		if prefix != "" {
 			key = prefix + "." + k
 		}
+		if atomic != nil && atomic(key, v) {
+			out = append(out, leaf{key: key, value: v})
+			continue
+		}
 		if sub, ok := v.(map[string]any); ok {
-			out = append(out, collectLeaves(key, sub)...)
+			out = append(out, collectLeaves(key, sub, atomic)...)
 			continue
 		}
 		out = append(out, leaf{key: key, value: v})
@@ -805,15 +883,21 @@ func collectLeaves(prefix string, doc map[string]any) []leaf {
 	return out
 }
 
-func collectLeafKeys(prefix string, doc map[string]any) []string {
+// collectLeafKeys is the key projection of collectLeaves: same walk, same
+// atomicity (atomic(key, v) values are reported under their full key).
+func collectLeafKeys(prefix string, doc map[string]any, atomic func(string, any) bool) []string {
 	out := make([]string, 0)
 	for k, v := range doc {
 		key := k
 		if prefix != "" {
 			key = prefix + "." + k
 		}
+		if atomic != nil && atomic(key, v) {
+			out = append(out, key)
+			continue
+		}
 		if sub, ok := v.(map[string]any); ok {
-			out = append(out, collectLeafKeys(key, sub)...)
+			out = append(out, collectLeafKeys(key, sub, atomic)...)
 			continue
 		}
 		out = append(out, key)
@@ -826,6 +910,8 @@ func collectLeafKeys(prefix string, doc map[string]any) []string {
 // ref does not resolve in the container. Returns nil when nothing remains.
 // Env resolution uses a direct `printenv <id>` exec (no shell: the id is a
 // validated [A-Z][A-Z0-9_]* token and is passed as a single argument).
+// Sensitive keys are checked BEFORE map recursion: a secret ref's value is
+// itself a map (source/provider/id) that must never be decomposed.
 func (m *ConfigManager) pruneUnsupported(ctx context.Context, worker, prefix string, doc map[string]any, sensitive map[string]SecretRef, unsupported *[]UnsupportedKey, clone func(map[string]any) map[string]any) map[string]any {
 	out := clone(doc)
 	empty := true
@@ -833,6 +919,18 @@ func (m *ConfigManager) pruneUnsupported(ctx context.Context, worker, prefix str
 		key := k
 		if prefix != "" {
 			key = prefix + "." + k
+		}
+		if ref, isSensitive := sensitive[key]; isSensitive {
+			if ref.Source == "env" && !m.envResolves(ctx, worker, ref.ID) {
+				*unsupported = append(*unsupported, UnsupportedKey{
+					Key:    key,
+					Reason: "env secret ref " + ref.ID + " does not resolve in the worker container; key skipped (plaintext fallback is forbidden)",
+				})
+				delete(out, k)
+				continue
+			}
+			empty = false
+			continue // atomic: never recurse into the ref
 		}
 		if sub, ok := v.(map[string]any); ok {
 			child := m.pruneUnsupported(ctx, worker, key, sub, sensitive, unsupported, clone)
@@ -842,19 +940,6 @@ func (m *ConfigManager) pruneUnsupported(ctx context.Context, worker, prefix str
 			}
 			out[k] = child
 			empty = false
-			continue
-		}
-		ref, isSensitive := sensitive[key]
-		if !isSensitive {
-			empty = false
-			continue
-		}
-		if ref.Source == "env" && !m.envResolves(ctx, worker, ref.ID) {
-			*unsupported = append(*unsupported, UnsupportedKey{
-				Key:    key,
-				Reason: "env secret ref " + ref.ID + " does not resolve in the worker container; key skipped (plaintext fallback is forbidden)",
-			})
-			delete(out, k)
 			continue
 		}
 		empty = false
@@ -884,6 +969,9 @@ func (m *ConfigManager) envResolves(ctx context.Context, worker, id string) bool
 // Reload: OpenClaw's gateway watches openclaw.json and hot-applies
 // writable sections automatically; restart keys stay pendingRestart.
 func (m *ConfigManager) Rollback(ctx context.Context, worker, rev string) (WriteResult, error) {
+	unlock := lockConfigMutation(worker)
+	defer unlock()
+
 	if !revPattern.MatchString(rev) {
 		return WriteResult{}, fmt.Errorf("rev must be a 64-char sha256 hex string, got %q", rev)
 	}
@@ -911,7 +999,7 @@ func (m *ConfigManager) Rollback(ctx context.Context, worker, rev string) (Write
 	// A rollback to the current state is a no-op (still verified +
 	// reported, but no snapshot churn).
 	if curRev == rev {
-		st, err := m.Read(ctx, worker)
+		st, err := m.read(ctx, worker)
 		if err != nil {
 			return WriteResult{}, err
 		}
@@ -952,7 +1040,7 @@ func (m *ConfigManager) Rollback(ctx context.Context, worker, rev string) (Write
 		return WriteResult{}, errors.New("read-back after rollback does not match the snapshot; state unknown")
 	}
 
-	writtenKeys := collectLeafKeys("", doc)
+	writtenKeys := collectLeafKeys("", doc, m.adapter.isAtomicSecretLeaf)
 	restartKeys := make([]string, 0)
 	for _, k := range writtenKeys {
 		if f, _, ok := m.adapter.ResolveKey(k); ok && f.Applies == runtimeconfig.AppliesRestart {

@@ -109,6 +109,13 @@ All reads go through `gateway.platforms._shared.get_scoped_secret`
   `NioTransport.typing`.
 - Cron delivery: `cron_deliver_env_var` = `AGENTTEAMS_MATRIX_HOME_ROOM`
   plus a standalone sender (ephemeral client, one `room_send`, close).
+- Drop ledger: every silent drop (mention-gated group chatter, `NO_REPLY`,
+  self-trigger suppression, final send failure, missing Matrix
+  configuration) is recorded as one JSON line in
+  `<state_dir>/shared/matrix/drops.jsonl` via
+  `core.outcomes.record_drop` (append-only, write failures are warn-only).
+  Reason vocabulary: `core.outcomes.DROP_REASONS`; Hermes has no
+  workspace concept, so the adapter state dir is the ledger root.
 
 ## Install
 

@@ -224,15 +224,18 @@ func TestApplySubagentModelHotResolvesTeamDefault(t *testing.T) {
 	}
 }
 
-// spec.modelProvider must be projected into the model-settings dial: both
-// the subagent_model and the active_model payload carry the configured
-// provider_id, not the built-in gateway provider.
+// Both native model APIs must carry the configured provider_id.
 func TestHotApplyProviderProjection(t *testing.T) {
 	var bodies []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
-		bodies = append(bodies, string(b))
+		if len(b) > 0 {
+			bodies = append(bodies, string(b))
+		}
 		w.WriteHeader(http.StatusOK)
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"active_llm":{"provider_id":"custom-gw","model":"qwen3.6-plus"}}`))
+		}
 	}))
 	defer srv.Close()
 
@@ -267,10 +270,9 @@ func TestHotApplyProviderProjection(t *testing.T) {
 			if slot["provider_id"] != "custom-gw" {
 				t.Errorf("subagent_model.provider_id = %v, want custom-gw", slot["provider_id"])
 			}
-		case payload["active_model"] != nil:
-			slot, _ := payload["active_model"].(map[string]any)
-			if slot["provider_id"] != "custom-gw" {
-				t.Errorf("active_model.provider_id = %v, want custom-gw", slot["provider_id"])
+		case payload["scope"] == "agent":
+			if payload["provider_id"] != "custom-gw" || payload["agent_id"] != "default" {
+				t.Errorf("wrong primary model scope/provider: %v", payload)
 			}
 		default:
 			t.Fatalf("unexpected model-settings payload: %s", body)

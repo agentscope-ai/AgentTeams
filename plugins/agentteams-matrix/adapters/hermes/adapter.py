@@ -89,6 +89,7 @@ from core.history import (  # noqa: E402
 )
 from core.interfaces import InboundEvent, OutboundMessage  # noqa: E402
 from core.mentions import strip_mention_prefix, text_mentions_worker  # noqa: E402
+from core.outcomes import describe_exception, record_drop  # noqa: E402
 from core.state import FileSessionStore, StateLayout  # noqa: E402
 from core.transport import (  # noqa: E402
     E2EEInitError,
@@ -345,6 +346,12 @@ class AgentTeamsMatrixAdapter(BasePlatformAdapter):
                 "AgentTeams Matrix: homeserver, user id and access token "
                 "must be configured"
             )
+            record_drop(
+                self.state_dir,
+                reason="matrix_env_missing",
+                room_id="",
+                detail=f"{ENV_SERVER}, {ENV_USER_ID} and {ENV_TOKEN} must be set",
+            )
             return self._fail(
                 "config_missing",
                 f"{ENV_SERVER}, {ENV_USER_ID} and {ENV_TOKEN} must be set",
@@ -476,6 +483,12 @@ class AgentTeamsMatrixAdapter(BasePlatformAdapter):
             )
         except Exception as e:
             logger.warning("AgentTeams Matrix: send failed to %s: %s", chat_id, e)
+            record_drop(
+                self.state_dir,
+                reason="room_send_failed",
+                room_id=chat_id,
+                detail=describe_exception(e),
+            )
             return SendResult(success=False, error=str(e))
         return SendResult(success=True, message_id=event_id)
 
@@ -627,8 +640,23 @@ class AgentTeamsMatrixAdapter(BasePlatformAdapter):
             )
         except Exception as e:
             logger.warning("AgentTeams Matrix: media send failed to %s: %s", chat_id, e)
+            record_drop(
+                self.state_dir,
+                reason="room_send_failed",
+                room_id=chat_id,
+                detail=describe_exception(e),
+            )
             return SendResult(success=False, error=str(e))
         if not isinstance(resp, RoomSendResponse):
+            record_drop(
+                self.state_dir,
+                reason="room_send_failed",
+                room_id=chat_id,
+                detail=(
+                    f"status={getattr(resp, 'status_code', '?')} "
+                    f"{type(resp).__name__}"
+                ),
+            )
             return SendResult(
                 success=False, error=f"room_send failed: {type(resp).__name__}"
             )
@@ -725,6 +753,13 @@ class AgentTeamsMatrixAdapter(BasePlatformAdapter):
         sender_id = inbound.sender
         # Skip own messages early (prevent reply loops).
         if sender_id == self.user_id:
+            record_drop(
+                self.state_dir,
+                reason="ping_pong",
+                room_id=room_id,
+                event_id=inbound.event_id,
+                detail="self-trigger suppressed",
+            )
             return
         if inbound.kind not in ("text", "media"):
             return  # edits / redactions are not agent triggers
@@ -744,6 +779,13 @@ class AgentTeamsMatrixAdapter(BasePlatformAdapter):
             # Thread events that don't mention us are silently ignored
             # (qwenpaw parity); plain group events go to history.
             if is_thread:
+                record_drop(
+                    self.state_dir,
+                    reason="not_mentioned",
+                    room_id=room_id,
+                    event_id=inbound.event_id,
+                    detail="thread event without mention",
+                )
                 return
             logger.info(
                 "AgentTeams Matrix: group %s not mentioned, cached to "
@@ -753,6 +795,13 @@ class AgentTeamsMatrixAdapter(BasePlatformAdapter):
                 sender_id,
             )
             self._record_history(room_id, sender_id, inbound)
+            record_drop(
+                self.state_dir,
+                reason="not_mentioned",
+                room_id=room_id,
+                event_id=inbound.event_id,
+                detail="group message without mention cached to history",
+            )
             return
 
         # Mark as read + start typing immediately so the sender sees feedback.
@@ -770,6 +819,13 @@ class AgentTeamsMatrixAdapter(BasePlatformAdapter):
                 "AgentTeams Matrix: received NO_REPLY from %s in %s, ignoring",
                 sender_id,
                 room_id,
+            )
+            record_drop(
+                self.state_dir,
+                reason="no_reply",
+                room_id=room_id,
+                event_id=inbound.event_id,
+                detail="NO_REPLY protocol",
             )
             await self._notify_typing(room_id, False)
             return

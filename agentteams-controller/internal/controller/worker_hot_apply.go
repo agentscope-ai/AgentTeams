@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 // last successfully hot-applied to the worker's running process. Presence
 // means "applied"; an absent annotation means "never applied (or cleared)".
 const annotationSubagentModelApplied = "agentteams.io/subagent-model-applied"
+const annotationSubagentModelProviderApplied = "agentteams.io/subagent-model-provider-applied"
 
 // subagentModelDialTimeout bounds one model-settings dial. The worker
 // console is on the same docker network; anything slower indicates the
@@ -58,7 +60,8 @@ func (r *WorkerReconciler) applySubagentModelHot(ctx context.Context, w *v1beta1
 	if resolved == "" {
 		resolved = configCtx.TeamSubagentModel
 	}
-	if w.Annotations[annotationSubagentModelApplied] == resolved {
+	providerID := hotApplyProviderID(spec)
+	if w.Annotations[annotationSubagentModelApplied] == resolved && (resolved == "" || w.Annotations[annotationSubagentModelProviderApplied] == providerID) {
 		return // already applied (or nothing to apply)
 	}
 
@@ -70,7 +73,7 @@ func (r *WorkerReconciler) applySubagentModelHot(ctx context.Context, w *v1beta1
 		}
 	}
 	baseURL := urlFor(w, spec)
-	if err := patchSubagentModel(ctx, baseURL, subagentConsoleAgentID, hotApplyProviderID(spec), resolved); err != nil {
+	if err := patchSubagentModel(ctx, baseURL, subagentConsoleAgentID, providerID, resolved); err != nil {
 		log.FromContext(ctx).Error(err, "subagent model hot-apply failed, will retry on next reconcile", "worker", w.Name, "model", resolved)
 		return
 	}
@@ -81,21 +84,20 @@ func (r *WorkerReconciler) applySubagentModelHot(ctx context.Context, w *v1beta1
 	}
 	if resolved == "" {
 		delete(w.Annotations, annotationSubagentModelApplied)
+		delete(w.Annotations, annotationSubagentModelProviderApplied)
 	} else {
 		w.Annotations[annotationSubagentModelApplied] = resolved
+		w.Annotations[annotationSubagentModelProviderApplied] = providerID
 	}
 	if err := r.Patch(ctx, w, client.MergeFrom(base)); err != nil {
 		log.FromContext(ctx).Error(err, "failed to record subagent model hot-apply annotation", "worker", w.Name)
 	}
 }
 
-// annotationActiveModelApplied records the primary model value that was last
-// successfully hot-applied to the worker's running process. The active model
-// used to be config-only (written to the runtime config, requiring a
-// container recreate to take effect); it now goes through the same
-// model-settings endpoint as the subagent model, which mutates agent.json
-// and schedules an in-process agent reload.
+// annotationActiveModelApplied records the primary model successfully applied
+// through QwenPaw's scoped models/active endpoint and read back afterward.
 const annotationActiveModelApplied = "agentteams.io/active-model-applied"
+const annotationActiveModelProviderApplied = "agentteams.io/active-model-provider-applied"
 
 // applyActiveModelHot makes a changed primary model effective without a
 // restart. Same guard rails as applySubagentModelHot; an empty spec.Model is
@@ -111,7 +113,8 @@ func (r *WorkerReconciler) applyActiveModelHot(ctx context.Context, w *v1beta1.W
 	if resolved == "" {
 		return
 	}
-	if w.Annotations[annotationActiveModelApplied] == resolved {
+	providerID := hotApplyProviderID(spec)
+	if w.Annotations[annotationActiveModelApplied] == resolved && w.Annotations[annotationActiveModelProviderApplied] == providerID {
 		return // already applied
 	}
 
@@ -123,13 +126,7 @@ func (r *WorkerReconciler) applyActiveModelHot(ctx context.Context, w *v1beta1.W
 		}
 	}
 	baseURL := urlFor(w, spec)
-	payload := map[string]any{
-		"active_model": map[string]string{
-			"provider_id": hotApplyProviderID(spec),
-			"model":       resolved,
-		},
-	}
-	if err := patchModelSettings(ctx, baseURL, subagentConsoleAgentID, payload); err != nil {
+	if err := patchActiveModel(ctx, baseURL, subagentConsoleAgentID, providerID, resolved); err != nil {
 		log.FromContext(ctx).Error(err, "active model hot-apply failed, will retry on next reconcile", "worker", w.Name, "model", resolved)
 		return
 	}
@@ -139,6 +136,7 @@ func (r *WorkerReconciler) applyActiveModelHot(ctx context.Context, w *v1beta1.W
 		w.Annotations = map[string]string{}
 	}
 	w.Annotations[annotationActiveModelApplied] = resolved
+	w.Annotations[annotationActiveModelProviderApplied] = providerID
 	if err := r.Patch(ctx, w, client.MergeFrom(base)); err != nil {
 		log.FromContext(ctx).Error(err, "failed to record active model hot-apply annotation", "worker", w.Name)
 	}
@@ -206,6 +204,58 @@ func patchModelSettings(ctx context.Context, baseURL, agentID string, payload ma
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return fmt.Errorf("model-settings status %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	return nil
+}
+
+// patchActiveModel uses the native primary-model API. QwenPaw 2.2.1 ignores
+// active_model in model-settings, so a 2xx from that endpoint is insufficient.
+func patchActiveModel(ctx context.Context, baseURL, agentID, providerID, model string) error {
+	body, err := json.Marshal(map[string]string{"scope": "agent", "agent_id": agentID, "provider_id": providerID, "model": model})
+	if err != nil {
+		return err
+	}
+	client := &http.Client{Timeout: subagentModelDialTimeout}
+	query := url.Values{"scope": {"agent"}, "agent_id": {agentID}}
+	for _, method := range []string{http.MethodPut, http.MethodGet} {
+		endpoint := baseURL + "/api/models/active"
+		var payload io.Reader
+		if method == http.MethodPut {
+			payload = bytes.NewReader(body)
+		} else {
+			endpoint += "?" + query.Encode()
+		}
+		req, err := http.NewRequestWithContext(ctx, method, endpoint, payload)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("active model %s: %w", method, err)
+		}
+		data, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		resp.Body.Close()
+		if readErr != nil {
+			return readErr
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return fmt.Errorf("active model %s status %d", method, resp.StatusCode)
+		}
+		if method == http.MethodGet {
+			var result struct {
+				ActiveLLM struct {
+					ProviderID string `json:"provider_id"`
+					Model      string `json:"model"`
+				} `json:"active_llm"`
+			}
+			if err := json.Unmarshal(data, &result); err != nil {
+				return fmt.Errorf("active model readback: %w", err)
+			}
+			if result.ActiveLLM.ProviderID != providerID || result.ActiveLLM.Model != model {
+				return fmt.Errorf("active model readback mismatch")
+			}
+		}
 	}
 	return nil
 }

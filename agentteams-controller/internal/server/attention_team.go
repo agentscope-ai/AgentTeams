@@ -104,6 +104,18 @@ type teamAttentionProject struct {
 // would confirm existence). The response is the team's live rows, sorted
 // by urgency: `overdue` by deadline ascending, every other filter by
 // requestedAt descending.
+//
+// Partial results: when the filter matches more rows than `limit`, the
+// response carries the first `limit` rows with `"truncated": true` in the
+// body and the `X-Attention-Truncated: 1` header (absent otherwise).
+// `X-Attention-Skipped` (present only when > 0) counts the projects
+// skipped because a project meta or one of its task metas could not be
+// read or parsed — it never includes truncated rows, so the caller can
+// tell a limited result, a degraded result, and a genuinely empty inbox
+// apart. `limit` bounds returned rows only: every project and task meta
+// of the team is read before the cap is applied (the read cost of a
+// truncated result is a full-team read — see the "Current read cost"
+// section of docs/usage/project-workflow-api.md).
 func (h *ProjectHandler) GetTeamAttention(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if name == "" {
@@ -171,17 +183,25 @@ func (h *ProjectHandler) GetTeamAttention(w http.ResponseWriter, r *http.Request
 
 	filtered := filterTeamAttentionRows(rows, status, now)
 	sortTeamAttentionRows(filtered, status)
-	if len(filtered) > limit {
+	// `limit` is applied last, after every object of the team has been
+	// read: it caps returned rows, never the object-store work (the read
+	// fan-out is pinned by BenchmarkGetTeamAttention).
+	truncated := len(filtered) > limit
+	if truncated {
 		filtered = filtered[:limit]
 	}
 
 	if skipped > 0 {
 		w.Header().Set("X-Attention-Skipped", strconv.Itoa(skipped))
 	}
+	if truncated {
+		w.Header().Set("X-Attention-Truncated", "1")
+	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
-		"team_id": name,
-		"items":   filtered,
-		"count":   len(filtered),
+		"team_id":   name,
+		"items":     filtered,
+		"count":     len(filtered),
+		"truncated": truncated,
 	})
 }
 

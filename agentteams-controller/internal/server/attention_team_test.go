@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -24,9 +25,10 @@ import (
 // verbatim) and on the stored event object (the lazy overdue sweep).
 
 type teamAttentionResp struct {
-	TeamID string             `json:"team_id"`
-	Items  []teamAttentionRow `json:"items"`
-	Count  int                `json:"count"`
+	TeamID    string             `json:"team_id"`
+	Items     []teamAttentionRow `json:"items"`
+	Count     int                `json:"count"`
+	Truncated bool               `json:"truncated"`
 }
 
 func getTeamAttention(t *testing.T, h *ProjectHandler, team, query string) *httptest.ResponseRecorder {
@@ -496,15 +498,221 @@ func TestGetTeamAttention_Limit(t *testing.T) {
 	}
 	h := newTeamAttentionHandler(t, &mcLikeOSS{Memory: store}, team("alpha-team"))
 
-	if got := decodeTeamAttention(t, getTeamAttention(t, h, "alpha-team", "")); got.Count != teamAttentionDefaultLimit {
-		t.Fatalf("default limit: got %d, want %d", got.Count, teamAttentionDefaultLimit)
+	// 205 rows against the default limit: capped AND flagged truncated.
+	got := decodeTeamAttention(t, getTeamAttention(t, h, "alpha-team", ""))
+	if got.Count != teamAttentionDefaultLimit || !got.Truncated {
+		t.Fatalf("default limit: count=%d truncated=%v, want %d/true", got.Count, got.Truncated, teamAttentionDefaultLimit)
 	}
-	if got := decodeTeamAttention(t, getTeamAttention(t, h, "alpha-team", "?limit=1000")); got.Count != 205 {
-		t.Fatalf("explicit limit under the data size: got %d", got.Count)
+	if got := decodeTeamAttention(t, getTeamAttention(t, h, "alpha-team", "?limit=1000")); got.Count != 205 || got.Truncated {
+		t.Fatalf("explicit limit under the data size: count=%d truncated=%v, want 205/false", got.Count, got.Truncated)
 	}
 	for _, q := range []string{"?limit=1001", "?limit=0", "?limit=-2", "?limit=abc"} {
 		if rec := getTeamAttention(t, h, "alpha-team", q); rec.Code != http.StatusBadRequest {
 			t.Fatalf("%s must be 400, got %d", q, rec.Code)
 		}
+	}
+}
+
+// TestGetTeamAttention_TruncatedFlag pins the partial-result contract:
+// limit < total -> count==limit, truncated==true, X-Attention-Truncated: 1;
+// limit >= total -> truncated==false and the header absent; a genuinely
+// empty inbox is count==0 with truncated==false, distinguishable from a
+// truncated result (count==limit with truncated==true).
+func TestGetTeamAttention_TruncatedFlag(t *testing.T) {
+	store := ossfake.NewMemory()
+	taskIDs := []string{"t1", "t2", "t3", "t4"}
+	seedTeamAttentionProject(store, "alpha-team", "p1", taskIDs, "alpha-team")
+	for i, id := range taskIDs {
+		putTaskAttention(store, "alpha-team", id, map[string]any{
+			"attention": []any{
+				map[string]any{"kind": "decision", "question": "q-a", "attempt": 1,
+					"requestedAt": fmt.Sprintf("2026-11-02T09:0%d:00Z", i), "resolved": false},
+				map[string]any{"kind": "decision", "question": "q-b", "attempt": 2,
+					"requestedAt": fmt.Sprintf("2026-11-02T09:0%d:00Z", i), "resolved": false},
+			},
+		})
+	}
+	h := newTeamAttentionHandler(t, &mcLikeOSS{Memory: store}, team("alpha-team"))
+
+	// 8 rows against limit=3: capped at limit and flagged truncated.
+	rec := getTeamAttention(t, h, "alpha-team", "?limit=3")
+	resp := decodeTeamAttention(t, rec)
+	if resp.Count != 3 || len(resp.Items) != 3 || !resp.Truncated {
+		t.Fatalf("limit<total: count=%d items=%d truncated=%v, want 3/3/true", resp.Count, len(resp.Items), resp.Truncated)
+	}
+	if got := rec.Header().Get("X-Attention-Truncated"); got != "1" {
+		t.Fatalf("X-Attention-Truncated = %q, want 1", got)
+	}
+
+	// limit == total, limit > total, and the default (200): complete reads
+	// never set the flag or the header.
+	for _, q := range []string{"?limit=8", "?limit=100", ""} {
+		rec := getTeamAttention(t, h, "alpha-team", q)
+		resp := decodeTeamAttention(t, rec)
+		if resp.Count != 8 || resp.Truncated {
+			t.Fatalf("%s: count=%d truncated=%v, want 8/false", q, resp.Count, resp.Truncated)
+		}
+		if got := rec.Header().Get("X-Attention-Truncated"); got != "" {
+			t.Fatalf("%s: X-Attention-Truncated = %q, want absent", q, got)
+		}
+	}
+
+	// Empty inbox (tasks exist but none carries an attention record):
+	// count=0 AND truncated=false — a different state than count=limit
+	// with truncated=true.
+	empty := ossfake.NewMemory()
+	seedTeamAttentionProject(empty, "beta-team", "p1", []string{"t1"}, "beta-team")
+	hb := newTeamAttentionHandler(t, &mcLikeOSS{Memory: empty}, team("beta-team"))
+	rec = getTeamAttention(t, hb, "beta-team", "")
+	resp = decodeTeamAttention(t, rec)
+	if resp.Count != 0 || resp.Truncated {
+		t.Fatalf("empty inbox: count=%d truncated=%v, want 0/false", resp.Count, resp.Truncated)
+	}
+	if got := rec.Header().Get("X-Attention-Truncated"); got != "" {
+		t.Fatalf("empty inbox must not carry X-Attention-Truncated, got %q", got)
+	}
+}
+
+// TestGetTeamAttention_TruncatedIndependentOfSkipped pins that truncation
+// and read degradation are separate signals: X-Attention-Skipped counts
+// unreadable projects and never absorbs truncated rows, so both headers
+// can appear at once — and each is absent when only the other holds.
+func TestGetTeamAttention_TruncatedIndependentOfSkipped(t *testing.T) {
+	store := ossfake.NewMemory()
+	seedTeamAttentionProject(store, "alpha-team", "p1", []string{"t1", "t2", "t3", "t4"}, "alpha-team")
+	for _, id := range []string{"t1", "t2", "t3", "t4"} {
+		putTaskAttention(store, "alpha-team", id, map[string]any{
+			"attention": []any{map[string]any{"kind": "decision", "question": "q", "attempt": 1,
+				"requestedAt": "2026-11-02T09:00:00Z", "resolved": false}},
+		})
+	}
+	// p2 is healthy at the meta level but its only task meta is not JSON:
+	// the project is skipped and counted, contributing no rows.
+	putProject(store, "teams/alpha-team/shared/projects/p2/meta.json", map[string]any{
+		"project_id": "p2", "title": "p2", "status": "active", "plan_type": "dag", "team_id": "alpha-team",
+		"tasks": []any{map[string]any{"task_id": "t9", "title": "t9", "status": "active"}},
+	})
+	_ = store.PutObject(t.Context(), "teams/alpha-team/shared/tasks/t9/meta.json", []byte("{not json"))
+	h := newTeamAttentionHandler(t, &mcLikeOSS{Memory: store}, team("alpha-team"))
+
+	// 4 healthy rows + 1 skipped project, limit=2: limited AND degraded.
+	rec := getTeamAttention(t, h, "alpha-team", "?limit=2")
+	resp := decodeTeamAttention(t, rec)
+	if resp.Count != 2 || !resp.Truncated {
+		t.Fatalf("truncated+degraded: count=%d truncated=%v, want 2/true", resp.Count, resp.Truncated)
+	}
+	if got := rec.Header().Get("X-Attention-Truncated"); got != "1" {
+		t.Fatalf("X-Attention-Truncated = %q, want 1", got)
+	}
+	if got := rec.Header().Get("X-Attention-Skipped"); got != "1" {
+		t.Fatalf("X-Attention-Skipped = %q, want 1", got)
+	}
+
+	// Same degradation, limit above the total: complete but degraded —
+	// the skipped count is reported without any truncation flag.
+	rec = getTeamAttention(t, h, "alpha-team", "?limit=10")
+	resp = decodeTeamAttention(t, rec)
+	if resp.Count != 4 || resp.Truncated {
+		t.Fatalf("degraded complete: count=%d truncated=%v, want 4/false", resp.Count, resp.Truncated)
+	}
+	if got := rec.Header().Get("X-Attention-Truncated"); got != "" {
+		t.Fatalf("X-Attention-Truncated must be absent, got %q", got)
+	}
+	if got := rec.Header().Get("X-Attention-Skipped"); got != "1" {
+		t.Fatalf("X-Attention-Skipped = %q, want 1", got)
+	}
+}
+
+// countingAttentionOSS wraps mcLikeOSS with a GetObject call counter so
+// the team inbox read fan-out can be pinned: a layout change that adds or
+// drops object reads fails the benchmark's count assertions.
+type countingAttentionOSS struct {
+	*mcLikeOSS
+	getCalls int
+}
+
+func (c *countingAttentionOSS) GetObject(ctx context.Context, key string) ([]byte, error) {
+	c.getCalls++
+	return c.mcLikeOSS.GetObject(ctx, key)
+}
+
+// BenchmarkGetTeamAttention measures the team inbox read at a
+// representative large-team scale: 200 projects x 10 attention items each
+// (2000 rows, 10x the default limit of 200). It pins the read-cost model
+// the docs record: exactly 1 ListObjects call (the team project prefix)
+// and 2200 GetObject calls (200 project metas + 2000 task metas) per
+// request — the limit caps returned rows (200, truncated=true), never the
+// object reads. The wall time per op is the latency evidence for the same
+// scale (docs/usage/project-workflow-api.md, "Current read cost").
+func BenchmarkGetTeamAttention(b *testing.B) {
+	const (
+		projectsPerTeam = 200
+		tasksPerProject = 10 // one attention item per task
+	)
+	store := ossfake.NewMemory()
+	for i := 0; i < projectsPerTeam; i++ {
+		proj := fmt.Sprintf("p%03d", i)
+		taskIDs := make([]string, 0, tasksPerProject)
+		for j := 0; j < tasksPerProject; j++ {
+			id := fmt.Sprintf("%st%02d", proj, j)
+			taskIDs = append(taskIDs, id)
+		}
+		seedTeamAttentionProject(store, "bench-team", proj, taskIDs, "bench-team")
+		for _, id := range taskIDs {
+			putTaskAttention(store, "bench-team", id, map[string]any{
+				"attention": []any{map[string]any{
+					"kind": "decision", "question": "q", "attempt": 1,
+					"requestedAt": "2026-11-02T09:00:00Z",
+					"timeoutAt":   "2099-01-01T00:00:00Z",
+					"resolved":    false,
+				}},
+			})
+		}
+	}
+
+	counting := &countingAttentionOSS{mcLikeOSS: &mcLikeOSS{Memory: store}}
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		b.Fatalf("add v1beta1 scheme: %v", err)
+	}
+	k8s := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(team("bench-team")).Build()
+	h := NewProjectHandler(k8s, "default", counting)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	var rec *httptest.ResponseRecorder
+	for i := 0; i < b.N; i++ {
+		counting.listCalls = 0
+		counting.getCalls = 0
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/teams/bench-team/attention", nil)
+		req.SetPathValue("name", "bench-team")
+		req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+		rec = httptest.NewRecorder()
+		h.GetTeamAttention(rec, req)
+		if rec.Code != http.StatusOK {
+			b.Fatalf("bench read: %d %s", rec.Code, rec.Body.String())
+		}
+	}
+	b.StopTimer()
+
+	// The counters hold the last iteration: every request reads the whole
+	// team even though the response is capped at the default limit.
+	if counting.listCalls != 1 {
+		b.Fatalf("list calls = %d, want 1", counting.listCalls)
+	}
+	wantGets := projectsPerTeam + projectsPerTeam*tasksPerProject
+	if counting.getCalls != wantGets {
+		b.Fatalf("object reads = %d, want %d (%d project + %d task metas)",
+			counting.getCalls, wantGets, projectsPerTeam, projectsPerTeam*tasksPerProject)
+	}
+	var resp struct {
+		Count     int `json:"count"`
+		Truncated bool `json:"truncated"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		b.Fatalf("decode bench response: %v", err)
+	}
+	if resp.Count != teamAttentionDefaultLimit || !resp.Truncated {
+		b.Fatalf("bench response: count=%d truncated=%v, want %d/true", resp.Count, resp.Truncated, teamAttentionDefaultLimit)
 	}
 }

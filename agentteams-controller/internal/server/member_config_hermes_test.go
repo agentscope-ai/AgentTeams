@@ -55,6 +55,10 @@ foreign_key:
 type hermesExecBackend struct {
 	fs       map[string]string
 	commands [][]string
+	// driftAfterActivate, when set, overwrites the target right after the
+	// activation rename — another writer touching the file between
+	// activation and the controller's read-back.
+	driftAfterActivate string
 }
 
 func newHermesExec() *hermesExecBackend {
@@ -66,7 +70,7 @@ func newHermesExec() *hermesExecBackend {
 func (b *hermesExecBackend) Exec(_ context.Context, _ string, command []string, _ time.Duration) (string, string, int, error) {
 	b.commands = append(b.commands, append([]string{}, command...))
 	if len(command) < 3 || command[0] != "/bin/sh" || command[1] != "-c" {
-		return "", "unhandled command: "+strings.Join(command, " "), 127, nil
+		return "", "unhandled command: " + strings.Join(command, " "), 127, nil
 	}
 	script := command[2]
 	switch {
@@ -93,9 +97,12 @@ func (b *hermesExecBackend) Exec(_ context.Context, _ string, command []string, 
 		}
 		b.fs[target] = content
 		delete(b.fs, tmp)
+		if b.driftAfterActivate != "" {
+			b.fs[target] = b.driftAfterActivate
+		}
 		return "", "", 0, nil
 	}
-	return "", "unhandled command: "+strings.Join(command, " "), 127, nil
+	return "", "unhandled command: " + strings.Join(command, " "), 127, nil
 }
 
 func (b *hermesExecBackend) WriteFile(_ context.Context, _, path, content string) error {
@@ -375,6 +382,110 @@ func yamlEq(a, b any) bool {
 		return true
 	default:
 		return a == b
+	}
+}
+
+// driftAfterActivation is the config another writer leaves behind between
+// the controller's activation and its read-back: valid YAML, a different
+// model, and not what was requested.
+const hermesConfigDrifted = `_config_version: 51
+model:
+  default: agentteams-gateway/other-model
+  provider: agentteams-gateway
+providers:
+  openai:
+    enabled: true
+    api_key: sk-live-secret
+platforms:
+  matrix:
+    enabled: true
+    token: matrix-token-secret
+foreign_key:
+  nested: 1
+`
+
+// A drifted read-back must keep the write pending on every later GET: the
+// desired state records the content the controller meant to write, not the
+// hash it observed, so a file that still differs is never reported applied.
+func TestMemberConfigHermes_PutDriftAfterActivationStaysPending(t *testing.T) {
+	exec := newHermesExec()
+	exec.driftAfterActivate = hermesConfigDrifted
+	h := newTestMemberConfigHandler(t, "embedded", exec, ossfake.NewMemory(),
+		hermesTeamWithWorkers("team-a", "hermes-worker")...)
+	body := `{"patch":{"model":{"default":"agentteams-gateway/qwen3.5-flash"}}}`
+	rec := httptest.NewRecorder()
+	h.putConfig(rec, adminCaller(codingCliRequest(http.MethodPut, "/api/members/hermes-worker/config", body, "name", "hermes-worker")))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	res := decodeJSON(t, rec.Body.String())
+	if res["applied"] != "pending" {
+		t.Fatalf("PUT applied=%v, want pending (the read-back saw drift)", res["applied"])
+	}
+	// The regression: the drifted bytes are the file's rev, so a desired
+	// state saved from the observation would compare equal here.
+	rec2 := httptest.NewRecorder()
+	h.getConfig(rec2, adminCaller(codingCliRequest(http.MethodGet, "/api/members/hermes-worker/config", "", "name", "hermes-worker")))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("GET status=%d body=%s", rec2.Code, rec2.Body.String())
+	}
+	got := decodeJSON(t, rec2.Body.String())
+	if got["applied"] != "pending" {
+		t.Fatalf("GET applied=%v, want pending while the file differs from the request", got["applied"])
+	}
+	// Settling: a later write with no drift applies and stays applied.
+	exec.driftAfterActivate = ""
+	rec3 := httptest.NewRecorder()
+	h.putConfig(rec3, adminCaller(codingCliRequest(http.MethodPut, "/api/members/hermes-worker/config", body, "name", "hermes-worker")))
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("settle PUT status=%d body=%s", rec3.Code, rec3.Body.String())
+	}
+	if applied := decodeJSON(t, rec3.Body.String())["applied"]; applied != "applied" {
+		t.Fatalf("settle PUT applied=%v, want applied", applied)
+	}
+	rec4 := httptest.NewRecorder()
+	h.getConfig(rec4, adminCaller(codingCliRequest(http.MethodGet, "/api/members/hermes-worker/config", "", "name", "hermes-worker")))
+	if applied := decodeJSON(t, rec4.Body.String())["applied"]; applied != "applied" {
+		t.Fatalf("GET after settle applied=%v, want applied", applied)
+	}
+}
+
+// The rollback path has the same shape: the snapshot is the intended
+// content, so drift after activation keeps every later GET pending.
+func TestMemberConfigHermes_RollbackDriftAfterActivationStaysPending(t *testing.T) {
+	exec := newHermesExec()
+	h := newTestMemberConfigHandler(t, "embedded", exec, ossfake.NewMemory(),
+		hermesTeamWithWorkers("team-a", "hermes-worker")...)
+	body := `{"patch":{"model":{"default":"agentteams-gateway/qwen3.5-flash"}}}`
+	rec := httptest.NewRecorder()
+	h.putConfig(rec, adminCaller(codingCliRequest(http.MethodPut, "/api/members/hermes-worker/config", body, "name", "hermes-worker")))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("setup PUT status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	preRev := revOfBytes(t, hermesConfigInitial)
+	exec.driftAfterActivate = hermesConfigDrifted
+	rec2 := httptest.NewRecorder()
+	h.rollbackConfig(rec2, adminCaller(codingCliRequest(http.MethodPost,
+		"/api/members/hermes-worker/config/rollback?rev="+preRev, "", "name", "hermes-worker")))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("rollback status=%d body=%s", rec2.Code, rec2.Body.String())
+	}
+	if applied := decodeJSON(t, rec2.Body.String())["applied"]; applied != "pending" {
+		t.Fatalf("rollback applied=%v, want pending (the read-back saw drift)", applied)
+	}
+	rec3 := httptest.NewRecorder()
+	h.getConfig(rec3, adminCaller(codingCliRequest(http.MethodGet, "/api/members/hermes-worker/config", "", "name", "hermes-worker")))
+	got := decodeJSON(t, rec3.Body.String())
+	if got["applied"] != "pending" {
+		t.Fatalf("GET applied=%v, want pending while the file differs from the snapshot", got["applied"])
+	}
+	// Restoring the snapshot bytes settles it.
+	exec.driftAfterActivate = ""
+	exec.fs[hermesConfigPath] = hermesConfigInitial
+	rec4 := httptest.NewRecorder()
+	h.getConfig(rec4, adminCaller(codingCliRequest(http.MethodGet, "/api/members/hermes-worker/config", "", "name", "hermes-worker")))
+	if applied := decodeJSON(t, rec4.Body.String())["applied"]; applied != "applied" {
+		t.Fatalf("GET applied=%v, want applied once the file matches the snapshot", applied)
 	}
 }
 

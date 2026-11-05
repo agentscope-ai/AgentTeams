@@ -46,7 +46,9 @@ type (
 	StaleRevisionError struct{ Current, Expected string }
 	// NoWritableKeysError is the 422 write rejection: the patch contains
 	// no concrete leaf at all.
-	NoWritableKeysError struct{ Unsupported []runtimeconfig.UnsupportedKey }
+	NoWritableKeysError struct {
+		Unsupported []runtimeconfig.UnsupportedKey
+	}
 	// ValidationError is the 422 write rejection: a declared key whose
 	// value fails type/enum validation against the surface.
 	ValidationError struct {
@@ -67,10 +69,17 @@ func (e *ValidationError) Unwrap() error     { return e.Err }
 // persisted under agents/{worker}/config/desired.json — the same key
 // openclaw uses: a worker has one config file and one runtime at a time.
 // Hermes carries no gateway appliedConfigHash, so there is no baseline
-// here; the weak read-back reconcile compares Rev against the on-disk
-// bytes.
+// here; the weak read-back reconcile compares TargetRev (the hash of the
+// content the controller meant to write) against the on-disk bytes.
+//
+// Rev is the revision observed by the post-write read-back, which can
+// differ from TargetRev when another writer touched the file between
+// activation and read-back (drift). Persisting the observed revision as
+// the desired one would make the next GET compare the drifted file with
+// itself and wrongly report "applied", so the two are kept apart.
 type DesiredState struct {
-	Rev         string         `json:"rev"` // sha256 hex of the written content bytes
+	Rev         string         `json:"rev"`                 // sha256 hex observed by the post-write read-back
+	TargetRev   string         `json:"targetRev,omitempty"` // sha256 hex of the intended content (what "applied" means)
 	UpdatedAt   string         `json:"updatedAt"`
 	WrittenKeys []string       `json:"writtenKeys"`
 	RestartKeys []string       `json:"restartKeys,omitempty"`
@@ -216,9 +225,14 @@ func (m *ConfigManager) read(ctx context.Context, worker string) (runtimeconfig.
 	}
 	// Weak read-back reconcile (no applied hash in Hermes): the write is
 	// "applied" only while the on-disk bytes still match what the
-	// controller last wrote; any drift keeps it "pending" until the next
-	// write settles it.
-	if desired.Rev == st.Rev {
+	// controller meant to write (TargetRev); any drift keeps it "pending"
+	// until a later write settles it. Legacy desired records predate
+	// TargetRev and fall back to the observed Rev.
+	targetRev := desired.TargetRev
+	if targetRev == "" {
+		targetRev = desired.Rev
+	}
+	if targetRev == st.Rev {
 		st.Applied = runtimeconfig.StateApplied
 	}
 	return st, nil
@@ -325,6 +339,7 @@ func (m *ConfigManager) Write(ctx context.Context, worker string, values map[str
 	}
 	desired := DesiredState{
 		Rev:         newRev,
+		TargetRev:   revOf(newContent),
 		UpdatedAt:   time.Now().UTC().Format(time.RFC3339),
 		WrittenKeys: writtenKeys,
 		RestartKeys: restartKeys,
@@ -428,6 +443,7 @@ func (m *ConfigManager) Rollback(ctx context.Context, worker, rev string) (runti
 	}
 	desired := DesiredState{
 		Rev:         newRev,
+		TargetRev:   rev,
 		UpdatedAt:   time.Now().UTC().Format(time.RFC3339),
 		WrittenKeys: writtenKeys,
 		RestartKeys: restartKeys,

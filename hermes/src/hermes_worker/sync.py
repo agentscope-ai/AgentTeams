@@ -25,6 +25,9 @@ import json
 import logging
 import os
 import shutil
+import sqlite3
+import tempfile
+from contextlib import closing
 import subprocess
 import time
 from pathlib import Path
@@ -596,6 +599,11 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
     )
     # Runtime-derived Hermes state that must not be pushed back.
     _HERMES_RUNTIME_PATHS = (Path(".hermes/platforms"),)
+    # Native mautrix crypto state is durable, not a runtime-derived cache.
+    _MATRIX_CRYPTO_DATABASES = {
+        Path(".hermes/platforms/matrix/store/crypto.db"),
+        Path(".hermes/matrix/store/crypto.db"),  # pre-plugin layout
+    }
 
     pushed: list[str] = []
     local_dir = sync.local_dir
@@ -633,12 +641,18 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
     for path in local_dir.rglob("*"):
         if not path.is_file():
             continue
+        rel = path.relative_to(local_dir)
+        matrix_crypto = rel in _MATRIX_CRYPTO_DATABASES
         try:
-            if path.stat().st_mtime <= since:
+            modified = path.stat().st_mtime
+            if matrix_crypto:
+                wal = Path(str(path) + "-wal")
+                if wal.exists():
+                    modified = max(modified, wal.stat().st_mtime)
+            if modified <= since:
                 continue
         except OSError:
             continue
-        rel = path.relative_to(local_dir)
         if len(rel.parts) == 1 and rel.name in _EXCLUDE_FILES:
             continue
         if rel.as_posix() in _EXCLUDE_PATHS:
@@ -654,7 +668,7 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
             for image_path in _HERMES_IMAGE_PLUGIN_PATHS
         ):
             continue
-        if any(
+        if not matrix_crypto and any(
             rel == hermes_path or hermes_path in rel.parents
             for hermes_path in _HERMES_RUNTIME_PATHS
         ):
@@ -671,6 +685,18 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
 
         key = f"{sync._prefix}/{rel.as_posix()}"
         try:
+            if matrix_crypto:
+                # Copying a live SQLite main file alone drops committed WAL
+                # rows. The backup API produces one consistent standalone DB.
+                with tempfile.TemporaryDirectory(prefix="hermes-crypto-") as directory:
+                    backup = Path(directory) / "crypto.db"
+                    with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as source:
+                        with closing(sqlite3.connect(backup)) as target:
+                            source.backup(target)
+                    backup.chmod(0o600)
+                    _mc("cp", str(backup), sync._object_path(key), check=True)
+                pushed.append(str(rel))
+                continue
             remote = sync._cat(key)
             local_content = path.read_text(errors="replace")
             if remote == local_content:

@@ -105,3 +105,44 @@ def test_push_local_persists_user_plugins_but_skips_image_overlay(
     assert ".hermes/plugins/custom-review/plugin.yaml" in pushed
     assert ".hermes/plugins/custom-review/adapter.py" in pushed
     assert ".hermes/plugins/platforms/matrix/adapter.py" not in pushed
+
+
+def test_push_local_preserves_matrix_crypto_database_with_uncheckpointed_wal(tmp_path, monkeypatch):
+    """A recreated worker needs the committed crypto state, including WAL rows."""
+    import os
+    import shutil
+    import sqlite3
+
+    sync = FileSync(endpoint="http://minio:9000", access_key="minio", secret_key="synthetic",
+                    bucket="agentteams-storage", worker_name="worker-a", local_dir=tmp_path / "worker")
+    db = sync.local_dir / ".hermes/platforms/matrix/store/crypto.db"
+    db.parent.mkdir(parents=True)
+    remote = tmp_path / "restored-crypto.db"
+    connection = sqlite3.connect(db)
+    try:
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA wal_autocheckpoint=0")
+        connection.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY)")
+        connection.commit()
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        connection.execute("INSERT INTO sessions VALUES ('persisted-session')")
+        connection.commit()
+        # The main DB is old; a committed WAL change alone must trigger backup.
+        os.utime(db, (1, 1))
+        monkeypatch.setattr(sync, "_ensure_alias", lambda: None)
+        monkeypatch.setattr(sync, "_cat", lambda _key: None)
+        copies = []
+        def fake_mc(*args, **_kwargs):
+            copies.append(args)
+            if args[0] == "cp":
+                shutil.copyfile(args[1], remote)
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        monkeypatch.setattr(sync_module, "_mc", fake_mc)
+        pushed = push_local(sync, since=2)
+        assert ".hermes/platforms/matrix/store/crypto.db" in pushed
+        assert len(copies) == 1
+        with sqlite3.connect(remote) as restored:
+            assert restored.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            assert restored.execute("SELECT id FROM sessions").fetchone() == ("persisted-session",)
+    finally:
+        connection.close()

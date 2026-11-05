@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require "json"
+require "open3"
 require "pathname"
 require "yaml"
 
@@ -41,9 +41,19 @@ fail!("metadata.name is required") if name.empty?
 fail!("build metadata is not supported for plugin releases") if version.include?("+")
 fail!("metadata.version must be semver") unless version.match?(/\A\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?\z/)
 
-schema_path = plugins_root / "schemas/plugin.schema.json"
-assert_file(schema_path)
-JSON.parse(schema_path.read)
+# Real Draft 2020-12 schema validation: validate_manifest.py applies the
+# shared form rule (adapters + requires => bundle.schema.json, otherwise
+# plugin.schema.json) and reports every violation verbatim.
+schemas_dir = plugins_root / "schemas"
+assert_file(schemas_dir / "plugin.schema.json")
+assert_file(schemas_dir / "bundle.schema.json")
+stdout, stderr, status = Open3.capture3(
+  "python3",
+  (Pathname.new(__dir__) / "validate_manifest.py").to_s,
+  manifest_path.to_s,
+  schemas_dir.to_s
+)
+fail!("schema validation failed:\n#{stdout}#{stderr}") unless status.success?
 
 package = manifest.fetch("package") { fail!("package is required") }
 includes = package.fetch("include") { fail!("package.include is required") }

@@ -1302,6 +1302,129 @@ def test_flush_success_reports_complete(tmp_path: Path, monkeypatch) -> None:
     assert result["uploaded"] == ["a.md"]
 
 
+class _FakeMonotonic:
+    """Deterministic stand-in for time.monotonic.
+
+    The flush deadline arithmetic is driven by the test advancing the
+    clock explicitly, so the regression does not depend on real sleeps
+    or CI scheduling jitter.
+    """
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self.now = start
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def _latency_mc(objects: dict, clock: _FakeMonotonic, per_command: float):
+    """Fake mc that spends ``per_command`` seconds of flush budget on
+    every call, so cumulative latency is injectable and deterministic.
+
+    Stands in for the external mc executable: cp stores the object,
+    cat only finds objects that were already stored.
+    """
+
+    def latency_mc(*args, **_kwargs):
+        clock.advance(per_command)
+        if args and args[0] == "cp":
+            objects[args[2]] = Path(args[1]).read_bytes()
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        if args and args[0] == "cat":
+            data = objects.get(args[1])
+            if data is None:
+                return subprocess.CompletedProcess(args, 1, stdout=b"", stderr="")
+            return subprocess.CompletedProcess(args, 0, stdout=data, stderr=b"")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    return latency_mc
+
+
+def _patch_sync_clock(monkeypatch, clock: _FakeMonotonic) -> None:
+    """Point qwenpaw_worker.sync's time module at the fake clock.
+
+    Only sync's own ``time`` binding is replaced (every other attribute
+    still forwards to the real time module), so the rest of the process
+    keeps the real monotonic clock.
+    """
+    fake = types.SimpleNamespace(
+        monotonic=clock.monotonic,
+        time=time.time,
+        strftime=time.strftime,
+        gmtime=time.gmtime,
+    )
+    monkeypatch.setattr("qwenpaw_worker.sync.time", fake)
+
+
+def test_flush_cumulative_latency_reports_incomplete(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """#1500: several commands, each finishing inside its own (stale)
+    timeout, can still push the flush total past the deadline.
+
+    Budget 1.2s, three storage commands of 0.8s each: the read-back cat
+    starts after the budget is exhausted, so the flush must report
+    incomplete — not ok:true / complete:true / timedOut:false.
+    """
+    sync = _sync(tmp_path)
+    sync.local_dir.mkdir(parents=True)
+    (sync.local_dir / "a.md").write_text("ay", encoding="utf-8")
+
+    clock = _FakeMonotonic()
+    _patch_sync_clock(monkeypatch, clock)
+    monkeypatch.setattr(sync, "ensure_alias", lambda **_kwargs: None)
+    objects: dict = {}
+    monkeypatch.setattr(sync, "_mc", _latency_mc(objects, clock, 0.8))
+
+    result = sync.flush(1.2)
+
+    assert result["ok"] is False
+    assert result["complete"] is False
+    assert result["timedOut"] is True
+    # The cp really did land past the deadline — the receipts must still
+    # say nothing was completed, with the file left pending.
+    assert result["durationMs"] >= 1200
+    assert result["uploaded"] == []
+    assert result["pending"] == 1
+    assert any(
+        item["path"] == "a.md" and "deadline exhausted" in item["error"]
+        for item in result["errors"]
+    )
+
+
+def test_flush_per_command_budget_completes_within_deadline(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """#1500: commands that fit the shared budget per call complete as
+    before — the per-command re-read must not break a clean flush."""
+    sync = _sync(tmp_path)
+    sync.local_dir.mkdir(parents=True)
+    (sync.local_dir / "a.md").write_text("ay", encoding="utf-8")
+
+    clock = _FakeMonotonic()
+    _patch_sync_clock(monkeypatch, clock)
+    monkeypatch.setattr(sync, "ensure_alias", lambda **_kwargs: None)
+    objects: dict = {}
+    monkeypatch.setattr(sync, "_mc", _latency_mc(objects, clock, 0.3))
+
+    result = sync.flush(1.2)
+
+    assert result["ok"] is True
+    assert result["complete"] is True
+    assert result["timedOut"] is False
+    assert result["errors"] == []
+    assert result["pending"] == 0
+    assert result["uploaded"] == ["a.md"]
+    # The read-back verified the upload; the manifest holds the hash.
+    manifest = json.loads(sync.sync_state_path.read_text(encoding="utf-8"))
+    assert manifest["roots"]["worker"]["a.md"]["sha256"] == (
+        hashlib.sha256(b"ay").hexdigest()
+    )
+
+
 # ---------------------------------------------------------------------------
 # #1391: push_directories shares the push lock
 # ---------------------------------------------------------------------------

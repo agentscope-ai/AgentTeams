@@ -667,19 +667,44 @@ class FileSync:
         errors: List[dict] = []
         timed_out = False
         # #1500: the deadline is set in flush() before the lock wait, so
-        # it covers the whole call — every storage command below receives
-        # the remaining budget instead of running unbounded.
-        call_timeout: float | None = None
-        if deadline is not None:
-            call_timeout = max(0.5, deadline - time.monotonic())
-            try:
-                self.ensure_alias(timeout=call_timeout)
-            except subprocess.TimeoutExpired:
+        # it covers the whole call.  The budget is shared by every
+        # blocking storage command below, so each one re-reads the clock
+        # right before it runs: a command that finishes inside its own
+        # timeout can still push the flush total past the deadline,
+        # which a timeout computed once up front would never catch.
+        def storage_timeout(path_label: str) -> float | None:
+            """Remaining flush budget for the next blocking storage call.
+
+            Returns None either when there is no deadline (the call runs
+            unbounded) or when the budget is exhausted; in the second
+            case the incomplete outcome is recorded here and the caller
+            must stop the flush instead of starting the call.
+            """
+            nonlocal timed_out
+            if deadline is None:
+                return None
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 errors.append({
-                    "path": "",
-                    "error": f"storage call timed out after {call_timeout:g}s",
+                    "path": path_label,
+                    "error": f"flush deadline exhausted before {path_label}",
                 })
                 timed_out = True
+                return None
+            return remaining
+
+        call_timeout: float | None = None
+        if deadline is not None:
+            call_timeout = storage_timeout("storage setup")
+            if call_timeout is not None:
+                try:
+                    self.ensure_alias(timeout=call_timeout)
+                except subprocess.TimeoutExpired:
+                    errors.append({
+                        "path": "",
+                        "error": f"storage call timed out after {call_timeout:g}s",
+                    })
+                    timed_out = True
         else:
             self.ensure_alias()
 
@@ -697,19 +722,12 @@ class FileSync:
                 rel = rel_path.as_posix()
                 if _skip_background_push(rel_path):
                     continue
-                if deadline is not None:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0.5:
-                        # #1500: the shutdown window takes priority over
-                        # the tail of the scan — stop before starting a
-                        # file the deadline cannot cover.
-                        errors.append({
-                            "path": "",
-                            "error": f"flush deadline exhausted before {rel}",
-                        })
-                        timed_out = True
-                        break
-                    call_timeout = max(0.5, remaining)
+                call_timeout = storage_timeout(rel)
+                if deadline is not None and call_timeout is None:
+                    # #1500: the shutdown window takes priority over
+                    # the tail of the scan — stop before starting a
+                    # file the deadline cannot cover.
+                    break
                 key = f"{self.remote_prefix}/{rel}"
                 try:
                     data: Optional[bytes] = None
@@ -725,6 +743,9 @@ class FileSync:
                         # apply via the size threshold.
                         local_sha = _sha256_file(path)
                     if data is not None:
+                        call_timeout = storage_timeout(rel)
+                        if deadline is not None and call_timeout is None:
+                            break
                         remote = self._cat_bytes(key, timeout=call_timeout)
                         if remote == data:
                             # The remote already holds this exact content:
@@ -750,11 +771,17 @@ class FileSync:
                             # push_directories applies via conflicts.
                             skipped.append(f"conflict:{rel}")
                             continue
+                    call_timeout = storage_timeout(rel)
+                    if deadline is not None and call_timeout is None:
+                        break
                     self._mc(
                         "cp", str(path), self._object_path(key),
                         check=True, timeout=call_timeout,
                     )
                     if data is not None:
+                        call_timeout = storage_timeout(rel)
+                        if deadline is not None and call_timeout is None:
+                            break
                         # Bind the baseline to what the remote actually
                         # holds after the upload; a failed or empty
                         # read-back falls back to the pre-upload snapshot.

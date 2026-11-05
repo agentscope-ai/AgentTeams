@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -54,6 +55,76 @@ func grantRigWith(t *testing.T, spawnInherit bool) *ResourceHandler {
 }
 
 func grantRig(t *testing.T) *ResourceHandler { return grantRigWith(t, false) }
+
+// grantRigWithImplicit is grantRig with n rows on the worker's implicit
+// grant annotation (reachable in practice only by writing the annotation
+// directly — the L1 append path keeps the list at the cap).
+func grantRigWithImplicit(t *testing.T, n int) *ResourceHandler {
+	t.Helper()
+	scheme := newServerTestScheme(t)
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-team", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{WorkerMembers: []v1beta1.TeamWorkerRef{
+			{Name: "alpha-lead", Role: "team_leader"},
+			{Name: "alpha-dev", Role: "worker"},
+		}},
+	}
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default",
+			Annotations: map[string]string{modelGrantAnnotation: implicitAnnotationJSON(n)}},
+		Spec: v1beta1.WorkerSpec{Model: "qwen3.5-plus"},
+	}
+	grant := &v1beta1.ModelAccessSpec{Scopes: []v1beta1.ModelAccessScope{{
+		Role: "worker",
+		Main: &v1beta1.ModelAccessSurface{Entries: []v1beta1.ModelAccessEntry{{Provider: "gw", Model: "granted-m"}}},
+	}}}
+	alice := &v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
+		Spec: v1beta1.HumanSpec{
+			DisplayName:     "alice",
+			AccessibleTeams: []string{"alpha-team"},
+			ModelAccess:     grant,
+		},
+	}
+	k8s := fake.NewClientBuilder().WithScheme(scheme).WithObjects(team, worker, alice).Build()
+	return NewResourceHandler(k8s, "default", nil, "", nil)
+}
+
+// grantRigWithExplicitMain is grantRig with alice's main surface holding
+// n rows {provider, m0..m(n-1)} — for the 33/200-row truncation boundary.
+func grantRigWithExplicitMain(t *testing.T, n int, provider string) *ResourceHandler {
+	t.Helper()
+	entries := make([]v1beta1.ModelAccessEntry, n)
+	for i := range entries {
+		entries[i] = entry(provider, fmt.Sprintf("m%d", i))
+	}
+	scheme := newServerTestScheme(t)
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-team", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{WorkerMembers: []v1beta1.TeamWorkerRef{
+			{Name: "alpha-lead", Role: "team_leader"},
+			{Name: "alpha-dev", Role: "worker"},
+		}},
+	}
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{Model: "qwen3.5-plus"},
+	}
+	grant := &v1beta1.ModelAccessSpec{Scopes: []v1beta1.ModelAccessScope{{
+		Role: "worker",
+		Main: &v1beta1.ModelAccessSurface{Entries: entries},
+	}}}
+	alice := &v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
+		Spec: v1beta1.HumanSpec{
+			DisplayName:     "alice",
+			AccessibleTeams: []string{"alpha-team"},
+			ModelAccess:     grant,
+		},
+	}
+	k8s := fake.NewClientBuilder().WithScheme(scheme).WithObjects(team, worker, alice).Build()
+	return NewResourceHandler(k8s, "default", nil, "", nil)
+}
 
 func grantCaller() *authpkg.CallerIdentity {
 	return &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"alpha-team"}}
@@ -158,6 +229,65 @@ func TestModelGrant_HumanSameValueAlwaysAllowed(t *testing.T) {
 	rec := l2UpdateRequest(t, handler, "alpha-dev", `{"model":"qwen3.5-plus"}`, grantCaller())
 	if rec.Code != http.StatusOK {
 		t.Fatalf("same-value write: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestModelGrant_WritePath_ImplicitCapBoundary (write path, 32/33
+// boundary): 32 implicit rows pass the shared boundary check (the
+// in-table write is allowed); 33 rows reject the write with
+// model_grant_overflow — 409, count in the message, fail closed rather
+// than a truncated grant set.
+func TestModelGrant_WritePath_ImplicitCapBoundary(t *testing.T) {
+	handler := grantRigWithImplicit(t, modelGrantMax+1)
+	rec := l2UpdateRequest(t, handler, "alpha-dev",
+		`{"model":"granted-m","modelProvider":"gw"}`, grantCaller())
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("33 implicit: expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "model_grant_overflow") {
+		t.Errorf("33 implicit: error must carry model_grant_overflow: %s", body)
+	}
+	if !strings.Contains(body, fmt.Sprintf("%d implicit model grants", modelGrantMax+1)) {
+		t.Errorf("33 implicit: error must carry the count: %s", body)
+	}
+
+	handler = grantRigWithImplicit(t, modelGrantMax)
+	rec = l2UpdateRequest(t, handler, "alpha-dev",
+		`{"model":"granted-m","modelProvider":"gw"}`, grantCaller())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("32 implicit: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestModelGrant_WritePath_ExplicitRowsNotTruncated (write path): the
+// maintainer's 33-row regression {p, m0..m32} stays fully writable — the
+// old union-wide cap 32 dropped m32 and denied it with model_not_allowed.
+func TestModelGrant_WritePath_ExplicitRowsNotTruncated(t *testing.T) {
+	handler := grantRigWithExplicitMain(t, modelGrantMax+1, "p")
+	rec := l2UpdateRequest(t, handler, "alpha-dev",
+		`{"model":"m32","modelProvider":"p"}`, grantCaller())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("33 explicit rows: m32 write expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Row order must not matter: the first row is writable too.
+	rec = l2UpdateRequest(t, handler, "alpha-dev",
+		`{"model":"m0","modelProvider":"p"}`, grantCaller())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("33 explicit rows: m0 write expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestModelGrant_WritePath_200ExplicitRows (write path): a grant at the
+// 200-row validation ceiling (validateModelAccessSurfaceEntries) stays
+// fully writable — the last row included.
+func TestModelGrant_WritePath_200ExplicitRows(t *testing.T) {
+	handler := grantRigWithExplicitMain(t, 200, "p")
+	rec := l2UpdateRequest(t, handler, "alpha-dev",
+		`{"model":"m199","modelProvider":"p"}`, grantCaller())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("200 explicit rows: m199 write expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -355,5 +485,63 @@ func TestModelGrant_CLI_HumanClearAndNonModelPatch(t *testing.T) {
 	rec = cliPut(t, h, `{"foo":"bar"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("non-model patch: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestModelGrant_CLI_WritePath_ImplicitCapBoundary (write path, coding
+// CLI, 32/33 boundary): the settings write runs the same shared boundary
+// check as the worker-update path — an over-cap implicit annotation
+// rejects the write with 409 (model_grant_overflow, count in the message)
+// and no settings file is written.
+func TestModelGrant_CLI_WritePath_ImplicitCapBoundary(t *testing.T) {
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{WorkerMembers: []v1beta1.TeamWorkerRef{
+			{Name: "daily-carol", Role: "worker"},
+		}},
+	}
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "daily-carol", Namespace: "default",
+			Annotations: map[string]string{modelGrantAnnotation: implicitAnnotationJSON(modelGrantMax + 1)}},
+		Spec: v1beta1.WorkerSpec{Model: "qwen3.5-plus"},
+	}
+	human := &v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "luo", Namespace: "default"},
+		Spec: v1beta1.HumanSpec{
+			AccessibleTeams: []string{"team-a"},
+			ModelAccess: &v1beta1.ModelAccessSpec{Scopes: []v1beta1.ModelAccessScope{{
+				Role: "worker",
+				CodingCli: []v1beta1.ModelAccessCli{{
+					CLI:     "qwen-code",
+					Entries: []v1beta1.ModelAccessEntry{{Provider: "gw", Model: "cli-m1"}},
+				}},
+			}}},
+		},
+	}
+	exec := &fakeExecBackend{fileWrites: map[string]string{}}
+	exec.respond = func(cmd []string) (string, string, int, error) {
+		if cmd[0] == "sh" && len(cmd) > 2 {
+			switch {
+			case strings.Contains(cmd[2], "printf %s"):
+				return "/root", "", 0, nil // $HOME
+			case strings.Contains(cmd[2], "cat "):
+				return `{"model":"cur-m"}`, "", 0, nil
+			}
+		}
+		return "", "", 1, nil
+	}
+	h := newTestCodingCliHandler(t, "embedded", exec, nil, team, worker, human)
+
+	rec := cliPut(t, h, `{"model":"cli-m1"}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("33 implicit: expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "model_grant_overflow") ||
+		!strings.Contains(body, fmt.Sprintf("%d implicit model grants", modelGrantMax+1)) {
+		t.Errorf("33 implicit: error must carry the code and the count: %s", body)
+	}
+	if len(exec.fileWrites) != 0 {
+		t.Errorf("overflow rejection must not write settings: %v", exec.fileWrites)
 	}
 }

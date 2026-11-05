@@ -41,6 +41,7 @@ import (
 	"crypto/rand"
 	"encoding/base32"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -961,7 +962,10 @@ func providerModel(cliID, value string) (string, string) {
 // coding-CLI model change (PR-B1 §2.3). The effective value is the merged
 // "model" key; an explicit clear ("") needs the CLI grant's inherit flag,
 // and a non-empty value must be admitted by the CLI's effective entries.
-// Returns (0, "") when the write is allowed.
+// An over-cap implicit annotation fails closed with 409
+// (model_grant_overflow, count in the message) — the same boundary check
+// the worker-update write path runs. Returns (0, "") when the write is
+// allowed.
 func (h *CodingCliHandler) checkHumanCLIModel(r *http.Request, cliID, workerName, model string) (int, string) {
 	ctx := r.Context()
 	caller := authpkg.CallerFromContext(ctx)
@@ -984,6 +988,11 @@ func (h *CodingCliHandler) checkHumanCLIModel(r *http.Request, cliID, workerName
 	}
 	set, err := resolveCallerGrant(ctx, h.client, h.namespace, caller, &worker, teamName, role)
 	if err != nil {
+		// An over-cap implicit annotation is worker state to fix (409),
+		// not a server bug: the count stays in the message.
+		if errors.Is(err, errModelGrantOverflow) {
+			return http.StatusConflict, err.Error()
+		}
 		return http.StatusInternalServerError, "resolve model grants: " + err.Error()
 	}
 	grant := set.cliSet(cliID)

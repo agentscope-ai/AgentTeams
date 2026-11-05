@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -881,5 +882,90 @@ func TestModelAccess_HumanSeesOwnGrants(t *testing.T) {
 	}
 	if got.Current.Model != "qwen3.6-27b" || got.Current.ModelProvider != "" {
 		t.Errorf("current = %+v", got.Current)
+	}
+}
+
+// TestModelAccess_PreviewPath_ImplicitCapBoundary (preview path, 32/33
+// boundary): the preview runs the same shared boundary check as the
+// write paths — both the L1 owner-preview branch (direct
+// buildModelGrantSet) and the human self-preview branch (resolveCallerGrant)
+// answer 409 with model_grant_overflow and the count for an over-cap
+// implicit annotation, and 200 at the cap.
+func TestModelAccess_PreviewPath_ImplicitCapBoundary(t *testing.T) {
+	cases := []struct {
+		name   string
+		n      int
+		code   int
+		caller *authpkg.CallerIdentity
+	}{
+		{"l1 at cap", modelGrantMax, http.StatusOK, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"}},
+		{"l1 over cap", modelGrantMax + 1, http.StatusConflict, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"}},
+		{"human at cap", modelGrantMax, http.StatusOK, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"alpha"}}},
+		{"human over cap", modelGrantMax + 1, http.StatusConflict, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"alpha"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := maWorker("w1", "qwen3.6-27b", "", "", "openclaw")
+			w.Annotations = map[string]string{modelGrantAnnotation: implicitAnnotationJSON(tc.n)}
+			h := maRig(t,
+				maTeam("alpha", v1beta1.TeamWorkerRef{Name: "w1", Role: "worker"}),
+				w,
+				maHuman("alice", []string{"alpha"}, nil, nil),
+			)
+			rec := httptest.NewRecorder()
+			h.GetModelAccess(rec, maReq(t, "/api/v1/model-access?worker=w1", tc.caller))
+			if rec.Code != tc.code {
+				t.Fatalf("expected %d, got %d: %s", tc.code, rec.Code, rec.Body.String())
+			}
+			if tc.code == http.StatusConflict {
+				body := rec.Body.String()
+				if !strings.Contains(body, "model_grant_overflow") {
+					t.Errorf("error must carry the model_grant_overflow code: %s", body)
+				}
+				if !strings.Contains(body, fmt.Sprintf("%d implicit model grants", tc.n)) ||
+					!strings.Contains(body, fmt.Sprintf("cap is %d", modelGrantMax)) {
+					t.Errorf("error must carry the actual count and the cap: %s", body)
+				}
+			}
+		})
+	}
+}
+
+// TestModelAccess_PreviewPath_200ExplicitRows (preview path, 200
+// boundary): a grant at the 200-row validation ceiling renders fully in
+// the preview — every explicit row stays in surfaces.main (the old
+// union-wide cap 32 truncated the view to 32 rows).
+func TestModelAccess_PreviewPath_200ExplicitRows(t *testing.T) {
+	entries := make([]v1beta1.ModelAccessEntry, 0, 200)
+	for i := 0; i < 200; i++ {
+		entries = append(entries, v1beta1.ModelAccessEntry{Provider: "p", Model: fmt.Sprintf("m%d", i)})
+	}
+	grant := &v1beta1.ModelAccessSpec{Scopes: []v1beta1.ModelAccessScope{{
+		Role: "worker",
+		Main: &v1beta1.ModelAccessSurface{Entries: entries},
+	}}}
+	// The current value (p/m0) dedupes against the first explicit row, so
+	// the view carries exactly the 200 validated rows.
+	h := maRig(t,
+		maTeam("alpha", v1beta1.TeamWorkerRef{Name: "w1", Role: "worker"}),
+		maWorker("w1", "m0", "p", "", "openclaw"),
+		maHuman("alice", []string{"alpha"}, nil, grant),
+	)
+	rec := httptest.NewRecorder()
+	h.GetModelAccess(rec, maReq(t, "/api/v1/model-access?worker=w1", &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got modelAccessWorkerResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.Surfaces.Main.Entries) != 200 {
+		t.Fatalf("surfaces.main = %d entries, want all 200", len(got.Surfaces.Main.Entries))
+	}
+	if got.Surfaces.Main.Entries[0] != (v1beta1.ModelAccessEntry{Provider: "p", Model: "m0"}) ||
+		got.Surfaces.Main.Entries[199] != (v1beta1.ModelAccessEntry{Provider: "p", Model: "m199"}) {
+		t.Errorf("explicit rows truncated or reordered: first=%+v last=%+v",
+			got.Surfaces.Main.Entries[0], got.Surfaces.Main.Entries[199])
 	}
 }

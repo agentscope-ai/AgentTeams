@@ -3,10 +3,13 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -21,6 +24,16 @@ import (
 //     the worker's current value (§2.2). The current value is what makes
 //     "lock ≠ unavailable" true: an identical value is always writable.
 //
+// Size bound (modelGrantMax = 32): it applies to the implicit annotation
+// ONLY. The explicit table rows (up to 200 per surface, validated at
+// write time) and the worker's current value are legitimate CRD data and
+// are never truncated — the effective set keeps every validated row, so
+// a legitimate grant can never degrade into model_not_allowed. An
+// annotation that exceeds the cap fails closed (error code
+// model_grant_overflow, count in the message) on both the preview
+// (GET /api/v1/model-access) and the write paths — a row is never
+// silently dropped.
+//
 // grantAllows is the single matching predicate used by every write check
 // and by no other component: an entry matches when the model is equal and
 // at least one side's provider is empty (provider-agnostic row);
@@ -30,10 +43,35 @@ import (
 // array of {"provider","model"} pairs (provider may be "" = unspecified).
 const modelGrantAnnotation = "agentteams.io/model-grants"
 
-// modelGrantMax bounds the implicit grant list. Overflow appends are
-// skipped (the list never exceeds the cap); growing beyond it is an
-// explicit-table concern, not an annotation concern.
+// modelGrantMax bounds the implicit grant list (the worker annotation)
+// ONLY — never the union of explicit rows and current values. The L1
+// append path keeps the list at the cap; an annotation that exceeds it
+// (only possible by writing the annotation directly) is rejected by
+// checkImplicitGrantCap with the count in the message — never silently
+// truncated. Growing past the cap is an explicit-table concern (200 rows
+// per surface), not an annotation concern.
 const modelGrantMax = 32
+
+// errModelGrantOverflow marks a worker whose implicit grant annotation
+// exceeds modelGrantMax. Error code: model_grant_overflow.
+var errModelGrantOverflow = errors.New("model_grant_overflow")
+
+// checkImplicitGrantCap is the single size-boundary check for the
+// implicit grant list: modelGrantMax (32) applies to the annotation
+// only. The explicit table rows (up to 200 per surface, validated at
+// write time) and the worker's current value are legitimate data and
+// are never truncated. Both the preview (GET /api/v1/model-access) and
+// the write checks run this same check through buildModelGrantSet, so
+// the two paths can never disagree on the boundary. An over-cap
+// annotation fails closed — the count stays in the message, no row is
+// silently dropped.
+func checkImplicitGrantCap(worker *v1beta1.Worker) error {
+	if n := len(readModelGrants(worker)); n > modelGrantMax {
+		return fmt.Errorf("%w: worker %q carries %d implicit model grants, the annotation cap is %d; reduce the %s annotation",
+			errModelGrantOverflow, worker.Name, n, modelGrantMax, modelGrantAnnotation)
+	}
+	return nil
+}
 
 // grantAllows reports whether any entry admits (provider, model) under the
 // single matching rule above.
@@ -51,16 +89,17 @@ func grantAllows(entries []v1beta1.ModelAccessEntry, provider, model string) boo
 
 // mergeGrantEntries unions the given entry groups in the given order
 // (explicit table rows, implicit grants, current value): the first
-// occurrence of a (provider, model) pair wins, and the result never
-// exceeds modelGrantMax.
+// occurrence of a (provider, model) pair wins. The union is never
+// truncated — explicit rows (validated, up to 200 per surface) and the
+// current value are legitimate CRD data and must stay fully writable.
+// modelGrantMax (32) bounds the implicit group only, and that bound is
+// enforced upstream in checkImplicitGrantCap, which both the preview and
+// the write paths run before merging.
 func mergeGrantEntries(groups ...[]v1beta1.ModelAccessEntry) []v1beta1.ModelAccessEntry {
-	out := make([]v1beta1.ModelAccessEntry, 0, modelGrantMax)
-	seen := make(map[v1beta1.ModelAccessEntry]struct{}, modelGrantMax)
+	out := []v1beta1.ModelAccessEntry{}
+	seen := make(map[v1beta1.ModelAccessEntry]struct{})
 	for _, g := range groups {
 		for _, e := range g {
-			if len(out) >= modelGrantMax {
-				return out
-			}
 			if _, dup := seen[e]; dup {
 				continue
 			}
@@ -157,8 +196,15 @@ func (s *modelGrantSet) cliSet(id string) modelGrantCLISet {
 // buildModelGrantSet merges the explicit grant (the selected scope plus the
 // resolved table) with the worker's implicit grants and current model
 // values into the per-surface effective sets. A dangling table reference
-// (scope.Table set, tableSpec nil) degrades to no explicit rows.
-func buildModelGrantSet(scope *v1beta1.ModelAccessScope, tableSpec *v1beta1.ModelAccessTableSpec, worker *v1beta1.Worker) *modelGrantSet {
+// (scope.Table set, tableSpec nil) degrades to no explicit rows. It
+// returns an error only when the implicit annotation exceeds
+// modelGrantMax (checkImplicitGrantCap, error code
+// model_grant_overflow): the caller — the preview endpoint or a write
+// check — must reject the request instead of serving a truncated set.
+func buildModelGrantSet(scope *v1beta1.ModelAccessScope, tableSpec *v1beta1.ModelAccessTableSpec, worker *v1beta1.Worker) (*modelGrantSet, error) {
+	if err := checkImplicitGrantCap(worker); err != nil {
+		return nil, err
+	}
 	var (
 		mainSurf  *v1beta1.ModelAccessSurface
 		spawnSurf *v1beta1.ModelAccessSurface
@@ -205,7 +251,7 @@ func buildModelGrantSet(scope *v1beta1.ModelAccessScope, tableSpec *v1beta1.Mode
 			inherit: c.Inherit != nil && *c.Inherit,
 		}
 	}
-	return s
+	return s, nil
 }
 
 func mainSurfEntries(s *v1beta1.ModelAccessSurface) []v1beta1.ModelAccessEntry {
@@ -224,9 +270,11 @@ func spawnSurfEntries(s *v1beta1.ModelAccessSurface) []v1beta1.ModelAccessEntry 
 
 // resolveCallerGrant resolves the caller's effective grant set for the
 // worker (§4.1). A missing Human CR (NotFound) fails closed to an empty
-// grant set — never a 500; any other Human or table read error is returned
-// for the handler to map to 500. Both write paths (worker updates and
-// coding-CLI settings) resolve through the same function.
+// grant set — never a 500; an over-cap implicit annotation surfaces as
+// errModelGrantOverflow (model_grant_overflow) for the handler to map to
+// 409; any other Human or table read error is returned for the handler to
+// map to 500. Both write paths (worker updates and coding-CLI settings)
+// resolve through the same function.
 func (h *ResourceHandler) resolveCallerGrant(ctx context.Context, caller *authpkg.CallerIdentity, worker *v1beta1.Worker, team, role string) (*modelGrantSet, error) {
 	return resolveCallerGrant(ctx, h.client, h.namespace, caller, worker, team, role)
 }
@@ -253,7 +301,7 @@ func resolveCallerGrant(ctx context.Context, c client.Client, namespace string, 
 			tableSpec = &table.Spec
 		}
 	}
-	return buildModelGrantSet(scope, tableSpec, worker), nil
+	return buildModelGrantSet(scope, tableSpec, worker)
 }
 
 // checkHumanModelUpdate enforces the grant-based model policy on an L2
@@ -277,6 +325,11 @@ func (h *ResourceHandler) checkHumanModelUpdate(ctx context.Context, caller *aut
 	}
 	set, err := h.resolveCallerGrant(ctx, caller, &worker, team.Name, teamMemberRole(team, name))
 	if err != nil {
+		// An over-cap implicit annotation is worker state to fix (409),
+		// not a server bug: the count stays in the message.
+		if errors.Is(err, errModelGrantOverflow) {
+			return http.StatusConflict, err.Error()
+		}
 		return http.StatusInternalServerError, "resolve model grants: " + err.Error()
 	}
 	// A change of EITHER half of the pair is a pair write: a same-name model
@@ -308,4 +361,16 @@ func (h *ResourceHandler) checkHumanModelUpdate(ctx context.Context, caller *aut
 		}
 	}
 	return 0, ""
+}
+
+// writeGrantResolutionError renders a grant-resolution error on the
+// preview path: an over-cap implicit annotation is worker state to fix
+// (409, count in the message) — never a 500; any other error keeps the
+// usual K8s mapping.
+func writeGrantResolutionError(w http.ResponseWriter, op string, err error) {
+	if errors.Is(err, errModelGrantOverflow) {
+		httputil.WriteError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeK8sError(w, op, err)
 }

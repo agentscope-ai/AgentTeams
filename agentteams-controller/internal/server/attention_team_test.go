@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -626,24 +627,40 @@ func TestGetTeamAttention_TruncatedIndependentOfSkipped(t *testing.T) {
 // countingAttentionOSS wraps mcLikeOSS with a GetObject call counter so
 // the team inbox read fan-out can be pinned: a layout change that adds or
 // drops object reads fails the benchmark's count assertions.
+//
+// getCalls is an atomic counter, deliberately not a plain int. The team read
+// fans its project-meta reads out over 8 concurrent goroutines
+// (readTeamAttentionProjects), so a plain `getCalls++` in this wrapper is a
+// data race that silently loses increments. That race — not a fixture
+// shortage — is why this benchmark once reported "object reads = 2196" for
+// a fixture that holds 2200 attention objects: the 2000 sequential task-meta
+// reads were always counted, but the concurrent project-meta fan-out dropped
+// a few increments (4 in the observed failure). The atomic counter pins the
+// true, machine-independent count.
 type countingAttentionOSS struct {
 	*mcLikeOSS
-	getCalls int
+	getCalls atomic.Int64
 }
 
 func (c *countingAttentionOSS) GetObject(ctx context.Context, key string) ([]byte, error) {
-	c.getCalls++
+	c.getCalls.Add(1)
 	return c.mcLikeOSS.GetObject(ctx, key)
 }
 
 // BenchmarkGetTeamAttention measures the team inbox read at a
 // representative large-team scale: 200 projects x 10 attention items each
 // (2000 rows, 10x the default limit of 200). It pins the read-cost model
-// the docs record: exactly 1 ListObjects call (the team project prefix)
-// and 2200 GetObject calls (200 project metas + 2000 task metas) per
-// request — the limit caps returned rows (200, truncated=true), never the
-// object reads. The wall time per op is the latency evidence for the same
-// scale (docs/usage/project-workflow-api.md, "Current read cost").
+// the docs record: exactly 1 ListObjects call (the team project prefix) and
+// one GetObject per attention object the fixture places in the store — 2200
+// at this scale (200 project metas + 2000 task metas; every task id is
+// distinct, so no object is shared or skipped) — per request. The limit
+// caps returned rows (200, truncated=true), never the object reads.
+//
+// The expected object-read count is DERIVED from the store (the project and
+// task metas the fixture actually wrote), not recomputed from the 200 x 10
+// arithmetic, so a fixture-scale change moves the expectation with it. The
+// wall time per op is the latency evidence for the same scale
+// (docs/usage/project-workflow-api.md, "Current read cost").
 func BenchmarkGetTeamAttention(b *testing.B) {
 	const (
 		projectsPerTeam = 200
@@ -683,7 +700,7 @@ func BenchmarkGetTeamAttention(b *testing.B) {
 	var rec *httptest.ResponseRecorder
 	for i := 0; i < b.N; i++ {
 		counting.listCalls = 0
-		counting.getCalls = 0
+		counting.getCalls.Store(0)
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/teams/bench-team/attention", nil)
 		req.SetPathValue("name", "bench-team")
 		req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
@@ -700,10 +717,26 @@ func BenchmarkGetTeamAttention(b *testing.B) {
 	if counting.listCalls != 1 {
 		b.Fatalf("list calls = %d, want 1", counting.listCalls)
 	}
-	wantGets := projectsPerTeam + projectsPerTeam*tasksPerProject
-	if counting.getCalls != wantGets {
+	// Derive the expected object-read count from the fixture itself, not from
+	// the 200 x 10 arithmetic: count the attention objects the fixture actually
+	// placed in the store (project metas under the team's project prefix, task
+	// metas under its task prefix). The read performs exactly one GetObject per
+	// such object, so the count must equal their total. (2200 at this scale:
+	// 200 project + 2000 task metas, all distinct keys.)
+	projKeys, err := store.ListObjects(context.Background(), "teams/bench-team/shared/projects/")
+	if err != nil {
+		b.Fatalf("list bench project objects: %v", err)
+	}
+	taskKeys, taskErr := store.ListObjects(context.Background(), "teams/bench-team/shared/tasks/")
+	if taskErr != nil {
+		b.Fatalf("list bench task objects: %v", taskErr)
+	}
+	projectMetas := len(projKeys)
+	taskMetas := len(taskKeys)
+	wantGets := projectMetas + taskMetas
+	if got := counting.getCalls.Load(); got != int64(wantGets) {
 		b.Fatalf("object reads = %d, want %d (%d project + %d task metas)",
-			counting.getCalls, wantGets, projectsPerTeam, projectsPerTeam*tasksPerProject)
+			got, wantGets, projectMetas, taskMetas)
 	}
 	var resp struct {
 		Count     int `json:"count"`

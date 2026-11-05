@@ -383,8 +383,10 @@ attention（2000 行，是默认 `limit` 200 的 10 倍）——并断言下表�
 | 对象读取 | 2200——200 个项目 meta + 2000 个 task meta |
 | 返回行数 | 200（默认 `limit`），`truncated=true` |
 
-计数与机器无关。每请求墙钟时间由基准运行自身报告（在 `agentteams-controller`
-目录下执行）：
+list 调用与对象读取计数是确定性的、与机器无关的：它们在该基准的 fixture
+规模（200 个项目 × 10 个任务）下实测，并断言于 fixture 实际放入存储的
+attention 对象——因此计数跟随 fixture，而非手工相乘的结果。每请求墙钟时间
+与机器相关，由基准运行自身报告（在 `agentteams-controller` 目录下执行）：
 
     go test -run xxx -bench BenchmarkGetTeamAttention -benchtime 1x ./internal/server/
 

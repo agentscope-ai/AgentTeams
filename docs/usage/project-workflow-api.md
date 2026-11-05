@@ -701,9 +701,12 @@ fails the benchmark instead of regressing silently:
 | Object reads | 2200 — 200 project metas + 2000 task metas |
 | Rows returned | 200 (the default `limit`), `truncated=true` |
 
-The counts are machine-independent. The wall time per request is reported
-by the benchmark run itself (run from the `agentteams-controller`
-directory):
+The list and object-read counts are deterministic and machine-independent:
+they are measured on the benchmark's fixture scale (200 projects × 10 tasks)
+and asserted against the attention objects the fixture actually places in
+the store, so the count follows the fixture rather than a hand-computed
+product. The wall time per request is machine-dependent and is reported by
+the benchmark run itself (run from the `agentteams-controller` directory):
 
     go test -run xxx -bench BenchmarkGetTeamAttention -benchtime 1x ./internal/server/
 

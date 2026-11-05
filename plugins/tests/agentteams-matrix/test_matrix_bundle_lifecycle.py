@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from unittest import mock
 import sys
 from pathlib import Path
 
@@ -55,7 +56,7 @@ def _fake_runtime(bin_dir: Path, name: str) -> None:
     binary.chmod(0o755)
 
 
-def _import_installed_channel(plugin_dir: Path) -> None:
+def _import_installed_channel(plugin_dir: Path, env: dict) -> None:
     """Import the installed channel module, as the runtime does at load time.
 
     A missing third-party runtime dependency (matrix-nio) is an environment
@@ -65,7 +66,7 @@ def _import_installed_channel(plugin_dir: Path) -> None:
     imported = subprocess.run(
         [sys.executable, "-c", "import agentteams_matrix.channel"],
         cwd=str(plugin_dir),
-        env={**os.environ, "PYTHONPATH": str(plugin_dir)},
+        env={**env, "PYTHONPATH": str(plugin_dir)},
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -93,17 +94,25 @@ def _qwenpaw_env(home: Path, work: Path, bin_dir: Path) -> dict:
     )
 
 
-def _installer_residue(root: Path) -> list:
-    """Files left behind, ignoring bytecode the runtime generated itself.
+# Runtime artefacts the QwenPaw bootstrap/import creates inside the working
+# dir. They are not installer-owned, so uninstall neither knows nor removes
+# them; the residue check must not mistake them for installer debris.
+_RUNTIME_ARTEFACTS = {".qwenpaw_restore.lock"}
 
-    ``__pycache__`` appears when the runtime imports the installed plugin; it
-    is runtime output, not an installer-owned file, so uninstall is not
-    expected to remove it (the marker only ever lists installer-owned files).
+
+def _installer_residue(root: Path) -> list:
+    """Files left behind, ignoring artefacts the runtime generated itself.
+
+    ``__pycache__`` appears when the runtime imports the installed plugin and
+    ``.qwenpaw_restore.lock`` when QwenPaw bootstraps persisted state; both are
+    runtime output, not installer-owned files (the marker only ever lists
+    installer-owned files, so uninstall cannot own them).
     """
     return [
         path
         for path in residue(root)
         if "__pycache__" not in Path(path).parts
+        and Path(path).name not in _RUNTIME_ARTEFACTS
     ]
 
 
@@ -143,7 +152,22 @@ def test_l3_qwenpaw_install_load_uninstall(tmp_path: Path) -> None:
     _assert_marker_matches_tree(work / MARKER, plugin_dir)
 
     # Load: the installed channel module imports from the installed layout.
-    _import_installed_channel(plugin_dir)
+    # The child must inherit the isolated env: QwenPaw bootstraps persisted
+    # state during package import, and inheriting the caller's runtime would
+    # write its lock/config into the caller's directory.
+    caller_runtime = tmp_path / "caller-runtime"
+    caller_runtime.mkdir()
+    (caller_runtime / ".env").write_text("CALLER=1\n", encoding="utf-8")
+    before_caller = files(caller_runtime)
+    with mock.patch.dict(
+        os.environ,
+        {"QWENPAW_WORKING_DIR": str(caller_runtime), "HOME": str(caller_runtime)},
+    ):
+        _import_installed_channel(plugin_dir, env)
+    assert files(caller_runtime) == before_caller, (
+        "the load step bootstrapped against the caller's runtime instead of "
+        "the isolated env"
+    )
 
     run(UNINSTALL, "--adapter", "qwenpaw", env=env)
     assert _installer_residue(work) == [], (

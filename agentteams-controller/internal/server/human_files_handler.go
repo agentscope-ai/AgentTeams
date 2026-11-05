@@ -154,14 +154,16 @@ type humanFileAccess struct {
 //   - RoleManager: read, write, trash restore (any human's area)
 //   - the human themself (RoleHuman whose Username equals the area's
 //     EffectiveUsername): read and write their own area
-//   - team leaders / workers / other humans: per-team rules — a caller
-//     team in the human's default set (spec.accessibleTeams ∪ teams that
-//     list the human in spec.humanMembers) has readwrite on files/**;
-//     spec.workspaceAccess grants add access for other teams and
-//     restrictions narrow the default set (a restriction always wins,
-//     fail closed). A caller whose teams grant no access at all receives
-//     404 — the same response as a non-existent Human, to avoid
-//     existence probing.
+//   - team leaders / workers / other humans: per-team rules — default
+//     access follows membership: a caller team in the human's default set
+//     (spec.accessibleTeams ∪ teams that list the human in
+//     spec.humanMembers) has readwrite on files/**;
+//     spec.workspaceAccess grants raise the mode for the teams they name,
+//     and restrictions are a global deny: a restriction from any of the
+//     caller's teams applies across all of the caller's teams (deny-wins,
+//     fail closed), so a second, unrestricted team cannot override it. A
+//     caller whose teams grant no access at all receives 404 — the same
+//     response as a non-existent Human, to avoid existence probing.
 //
 // path is the files-relative path being authorized ("" = the files root,
 // used by area-level endpoints). isWrite marks mutating operations; a

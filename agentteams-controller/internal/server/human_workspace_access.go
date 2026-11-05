@@ -10,8 +10,28 @@ import (
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 )
 
-// Effective access modes for a caller against a human's file area
-// (#1414 P2). The string values are the wire values used by the
+// Team-scoped access to a human's file area (#1414 P2).
+//
+// The access policy, as composed in humanWorkspaceEffectiveMode:
+//
+//   - default access follows membership: a team in the human's default
+//     set (spec.accessibleTeams ∪ the teams that list the human in
+//     spec.humanMembers) has readwrite on files/**;
+//   - workspaceAccess grants raise the mode for the teams they name
+//     (maximum across the caller's teams);
+//   - workspaceAccess restrictions are a global deny: a restriction from
+//     any of the caller's teams applies to the path across ALL of the
+//     caller's teams — the strongest wins ("none" revokes, "read" caps) —
+//     and it is applied after the baseline/grant maximum, so membership
+//     in a second, unrestricted team cannot override it (fail closed);
+//   - memory/, digest/ and the control prefixes .control/, .sync/,
+//     .trash/ are never addressable through the files API, no matter what
+//     the rules say.
+//
+// Write attribution is audited against the team that produced the final
+// effective mode (the restricting team when a restriction lowered it).
+//
+// The mode string values are the wire values used by the
 // HumanSpec.WorkspaceAccess rule modes.
 const (
 	humanWorkspaceModeNone      = "none"
@@ -34,13 +54,6 @@ func humanWorkspaceModeRank(mode string) int {
 
 func humanWorkspaceMaxMode(a, b string) string {
 	if humanWorkspaceModeRank(b) > humanWorkspaceModeRank(a) {
-		return b
-	}
-	return a
-}
-
-func humanWorkspaceMinMode(a, b string) string {
-	if humanWorkspaceModeRank(b) < humanWorkspaceModeRank(a) {
 		return b
 	}
 	return a
@@ -244,64 +257,109 @@ func humanWorkspaceSegmentMatch(pattern, seg string) bool {
 	return pi == len(pattern)
 }
 
+// humanWorkspacePrivatePrefixes are the files-relative top-level prefixes
+// that no workspaceAccess rule can ever authorize: the personal memory
+// and digest areas, plus the control prefixes (the .control quota ledger,
+// .sync state, and the .trash recycle bin). Validation already rejects
+// rule paths inside them (memory/ and digest/ are not files/ paths at
+// all); the set is re-checked at decision time so a hand-written or
+// stale spec can never grant access to them through the files API.
+var humanWorkspacePrivatePrefixes = append([]string{"memory", "digest"}, reservedHumanFilePrefixes...)
+
+// humanWorkspacePrefixDenied reports whether the files-relative path
+// ("" = the files root) is the prefix itself or lies under it.
+func humanWorkspacePrefixDenied(rel string) bool {
+	for _, p := range humanWorkspacePrivatePrefixes {
+		if rel == p || strings.HasPrefix(rel, p+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // humanWorkspaceEffectiveMode composes the caller's effective mode on one
 // files-relative path across all of the caller's teams, in the decision
 // order baseline -> grants -> restrictions:
 //
-//  1. baseline: a team in defaultTeams has readwrite on files/**;
-//  2. grants: a matching rule raises the mode (max);
-//  3. restrictions: for default teams only, a matching rule lowers it —
-//     "none" revokes, "read" caps. A restriction therefore always wins
-//     over a grant on the same path (fail closed).
+//  1. baseline (membership): the caller is in at least one of the
+//     human's default teams and therefore has readwrite on files/**;
+//  2. grants: a matching rule from any of the caller's teams raises the
+//     mode (maximum across teams);
+//  3. restrictions (global deny): after the maximum above is known, every
+//     matching restriction from any of the caller's teams lowers it — the
+//     strongest wins ("none" revokes, "read" caps). A restriction is not
+//     confined to its own team: it denies access the caller could
+//     otherwise get through another team, so membership in a second,
+//     unrestricted default team cannot override it (fail closed).
 //
-// The returned team is the one that produced the winning mode (the
-// lexicographically first among ties — deterministic), for write-
-// attribution auditing. Callers pass the human's spec, their own team
-// set, and the human's default team set.
+// Private and control prefixes (memory/, digest/, .control/, .sync/,
+// .trash/) are never addressable through the files API: the entry returns
+// "none" for them no matter what the rules say.
+//
+// The returned team is the one that produced the final mode, for
+// write-attribution auditing: the default team for the baseline, the
+// granting team for a grant-raised mode, and — when a restriction
+// lowered the mode — the team the restriction belongs to, so a capped
+// write is traceable to the restriction that produced it. Ties resolve
+// to the lexicographically first team (deterministic). Callers pass the
+// human's spec, their own team set, and the human's default team set.
 func humanWorkspaceEffectiveMode(spec *v1beta1.HumanSpec, teams []string, defaultTeams map[string]struct{}, rel string) (string, string) {
-	mode, team := humanWorkspaceModeNone, ""
+	if humanWorkspacePrefixDenied(rel) {
+		return humanWorkspaceModeNone, ""
+	}
 	sorted := append([]string(nil), teams...)
 	sort.Strings(sorted)
-	for _, t := range sorted {
-		_, isDefault := defaultTeams[t]
-		m := humanWorkspaceTeamMode(spec, t, isDefault, rel)
-		if humanWorkspaceModeRank(m) > humanWorkspaceModeRank(mode) {
-			mode, team = m, t
-		}
-	}
-	return mode, team
-}
 
-// humanWorkspaceTeamMode is the per-team composition described by
-// humanWorkspaceEffectiveMode.
-func humanWorkspaceTeamMode(spec *v1beta1.HumanSpec, team string, isDefault bool, rel string) string {
-	mode := humanWorkspaceModeNone
-	if isDefault {
-		mode = humanWorkspaceModeReadWrite
-	}
-	wa := spec.WorkspaceAccess
-	if wa == nil {
-		return mode
-	}
-	for _, g := range wa.Grants {
-		if g.Team == team && humanWorkspacePathMatches(g.Paths, rel) {
-			mode = humanWorkspaceMaxMode(mode, g.Mode)
+	// 1. Baseline: membership in any default team gives readwrite.
+	mode, sourceTeam := humanWorkspaceModeNone, ""
+	for _, t := range sorted {
+		if _, ok := defaultTeams[t]; ok {
+			mode = humanWorkspaceModeReadWrite
+			sourceTeam = t
+			break
 		}
 	}
-	if isDefault {
-		// Restrictions apply only to default teams (the intersection of
-		// the human's default set and the caller's teams is exactly
-		// "isDefault" here, since the caller's own team is t).
-		for _, r := range wa.Restrictions {
-			if r.Team != team || !humanWorkspacePathMatches(r.Paths, rel) {
-				continue
-			}
-			if r.Mode == humanWorkspaceModeNone {
-				mode = humanWorkspaceModeNone
-			} else {
-				mode = humanWorkspaceMinMode(mode, humanWorkspaceModeRead)
+
+	// 2. Grants: any matching rule from a caller team raises the mode.
+	if wa := spec.WorkspaceAccess; wa != nil {
+		for _, t := range sorted {
+			for _, g := range wa.Grants {
+				if g.Team != t || !humanWorkspacePathMatches(g.Paths, rel) {
+					continue
+				}
+				if m := humanWorkspaceMaxMode(mode, g.Mode); m != mode {
+					mode, sourceTeam = m, t
+				}
 			}
 		}
 	}
-	return mode
+
+	// 3. Restrictions: global deny-wins, applied after the maximum above.
+	//    restrictedBy is set only when the restriction actually lowered
+	//    the mode, so attribution still points at the team that produced
+	//    an unchanged mode.
+	restrictedBy := ""
+	if wa := spec.WorkspaceAccess; wa != nil {
+		for _, t := range sorted {
+			for _, r := range wa.Restrictions {
+				if r.Team != t || !humanWorkspacePathMatches(r.Paths, rel) {
+					continue
+				}
+				switch r.Mode {
+				case humanWorkspaceModeNone:
+					if mode != humanWorkspaceModeNone {
+						mode, restrictedBy = humanWorkspaceModeNone, t
+					}
+				case humanWorkspaceModeRead:
+					if humanWorkspaceModeRank(mode) > humanWorkspaceModeRank(humanWorkspaceModeRead) {
+						mode, restrictedBy = humanWorkspaceModeRead, t
+					}
+				}
+			}
+		}
+	}
+	if restrictedBy != "" {
+		return mode, restrictedBy
+	}
+	return mode, sourceTeam
 }

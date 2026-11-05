@@ -257,9 +257,10 @@ func TestHumanFiles_WorkspaceAccessMatrix(t *testing.T) {
 			},
 		},
 		{
-			// 8. Restrictions apply to default teams only: a restriction on
-			//    a non-member team is ignored, the grant stands.
-			name: "restriction ignored for non-default team",
+			// 8. Restrictions are a global deny: a restriction on a
+			//    non-member team caps the access its own grant raises
+			//    (deny-wins), and an ungranted path still 404s.
+			name: "global deny: restriction caps a non-member grant",
 			spec: v1beta1.HumanSpec{
 				DisplayName: "Alice",
 				WorkspaceAccess: &v1beta1.HumanWorkspaceAccess{
@@ -272,8 +273,10 @@ func TestHumanFiles_WorkspaceAccessMatrix(t *testing.T) {
 				},
 			},
 			teams: []*v1beta1.Team{wsTeam("team-b")},
+			seed:  []string{"shared/x.txt=x"},
 			ops: []wsOp{
-				{"grant write", http.MethodPut, "shared/x.txt", wsLeader("team-b", "tb-leader"), "x", http.StatusOK},
+				{"capped read", http.MethodGet, "shared/x.txt", wsLeader("team-b", "tb-leader"), "", http.StatusOK},
+				{"capped write 403", http.MethodPut, "shared/y.txt", wsLeader("team-b", "tb-leader"), "x", http.StatusForbidden},
 				{"ungranted 404", http.MethodPut, "outside.txt", wsLeader("team-b", "tb-leader"), "x", http.StatusNotFound},
 			},
 		},

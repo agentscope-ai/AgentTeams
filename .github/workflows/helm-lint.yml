@@ -20,6 +20,8 @@ on:
       - 'tests/check-installer-pre-1.2-env-compat.sh'
       - 'tests/check-installer-controller-url.sh'
       - 'tests/check-installer-presign-endpoint.sh'
+      - 'tests/check-plugin-release-tag.sh'
+      - 'plugins/scripts/check-release-tag.sh'
       - 'tests/check-installer-wasm-registry.sh'
       - 'tests/check-installer-wasm-registry.ps1'
       - 'tests/check-custom-llm-endpoint.sh'
@@ -80,6 +82,8 @@ jobs:
         run: bash tests/check-installer-controller-url.sh
       - name: Check installer presign endpoint contract
         run: bash tests/check-installer-presign-endpoint.sh
+      - name: Check plugin release tag controls
+        run: bash tests/check-plugin-release-tag.sh
 
       - name: Check Bash installer WASM registry
         run: bash tests/check-installer-wasm-registry.sh

@@ -78,6 +78,23 @@ jobs:
       - name: Validate plugin manifest
         run: ruby plugins/scripts/validate-plugin.rb plugins/qwen-code-bridge/plugin.yaml
 
+      - name: Validate release tag against the bridge manifests
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          bash plugins/scripts/check-release-tag.sh \
+            --tag "$TAG_NAME" \
+            --yaml plugins/qwen-code-bridge/plugin.yaml \
+            --json plugins/qwen-code-bridge/plugin.json \
+            --expect-name qwen-code-bridge
+
+      - name: Skip tag validation on manual dispatch
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          echo "manual dispatch: no release tag to validate"
+
       - name: Package bridge plugin
         run: sh plugins/qwen-code-bridge/scripts/package.sh dist
 

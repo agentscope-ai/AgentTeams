@@ -124,9 +124,9 @@ func (h *ProjectHandler) ResolveAttention(w http.ResponseWriter, r *http.Request
 		return
 	}
 	caller := authpkg.CallerFromContext(r.Context())
-	if caller == nil {
-		// Unreachable behind the RequireAuthz route; kept so a direct call
-		// denies (human-only surface) instead of dereferencing.
+	if caller == nil || caller.Role != authpkg.RoleHuman {
+		// A matching roster name is not a human identity: task-coordination
+		// service accounts must not answer as a same-named Human.
 		writeResolveError(w, http.StatusForbidden, "not_a_human_member", "caller is not a human member of the team")
 		return
 	}
@@ -303,6 +303,24 @@ func (h *ProjectHandler) ResolveAttention(w http.ResponseWriter, r *http.Request
 			// approval (fail closed).
 			record["resolvedRole"] = resolvedRole
 			record["resolvedActor"] = resolvedActor
+		}
+		// Match the protocol's attention-answer transition without adding
+		// protocol fields to legacy records that never tracked stall state.
+		decisionState := str(taskData["decision_status"])
+		if _, tracked := record["stall_count"]; tracked || decisionState != "" {
+			record["stall_count"] = 0
+		}
+		if decisionState == "blocked" || (decisionState == "frozen" && str(record["kind"]) == "approval") {
+			reason := "attention answer received"
+			if decisionState == "frozen" {
+				reason = "unfrozen by approval record"
+			}
+			taskData["decision_status"] = "open"
+			history, _ := taskData["decision_status_history"].([]any)
+			taskData["decision_status_history"] = append(history, map[string]any{
+				"ts": resolvedAt, "from": decisionState, "to": "open",
+				"reason": reason, "source": "attention:" + str(record["kind"]), "actor": resolvedActor,
+			})
 		}
 		out, err := json.Marshal(taskData)
 		if err != nil {

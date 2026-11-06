@@ -77,6 +77,9 @@ case "\${1:-}" in
           fi
         elif [ -f "$enabled" ]; then
           echo "$ID"
+          if [ "\${FAKE_LONG_ENABLED:-0}" = "1" ]; then
+            printf '%1048576s\\n' ''
+          fi
         fi
         ;;
     esac
@@ -170,6 +173,12 @@ describe("install order", () => {
 
     assert.equal(readFileSync(box.config, "utf-8"), before);
     assert.equal(configOf(box.config).channels["agentteams-matrix"], undefined);
+  });
+
+  it("accepts a large enabled-plugin inventory under pipefail", () => {
+    const box = sandbox();
+    runInstall(box.env, { FAKE_LONG_ENABLED: "1" });
+    assert.equal(configOf(box.config).channels["agentteams-matrix"].enabled, true);
   });
 
   it("keeps unrelated channels on success", () => {

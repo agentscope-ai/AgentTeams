@@ -351,7 +351,7 @@ lifecycle_install_release() {
     printf '%s\n' "$enabled_out" >&2
     lifecycle_fail "could not read the enabled-plugin list ('openclaw plugins list --enabled' exited ${enabled_rc}); the install is not verified"
   fi
-  if printf '%s\n' "$enabled_out" | grep -Fq "$PLUGIN_ID"; then
+  if [[ "$enabled_out" == *"$PLUGIN_ID"* ]]; then
     lifecycle_log "OK: ${PLUGIN_ID} is installed and enabled"
   else
     lifecycle_fail "plugin ${PLUGIN_ID} is installed but not enabled ('openclaw plugins list --enabled')"

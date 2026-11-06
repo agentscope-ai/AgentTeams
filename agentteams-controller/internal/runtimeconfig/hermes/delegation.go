@@ -6,19 +6,17 @@ package hermes
 type SubagentModel struct {
 	Model    string
 	Provider string
-	Fallback []string
+	Fallback []map[string]any
 }
 
 // ProjectDelegation maps a SubagentModel to the delegation.* keys to
 // write into the worker's config.yaml.
 //
-// An unset field omits its key entirely; the key is never written with
-// an empty value. Omission is the only form that preserves Hermes'
-// inheritance semantics: delegation.model and delegation.provider fall
-// back to the parent's route when empty (plugins/delegation/default),
-// and delegation.fallback_providers inherits the parent's chain when
-// absent - while an explicit [] disables fallback, a different meaning
-// (tools/delegate_tool_routes, _with_inherited_fallback).
+// Unset selections omit their keys; empty model/provider strings are
+// not written. This preserves native routing: delegation.model and
+// delegation.provider fall back to the parent's route when empty. An absent fallback leaves Hermes
+// to inherit only for an unpinned route; an explicit [] disables fallback.
+// Non-empty fallbacks use native provider/model route objects.
 //
 // The projection writes exactly these three keys: fallback entries
 // never mix into delegation.model, and delegation.backend /
@@ -32,7 +30,7 @@ func ProjectDelegation(m SubagentModel) map[string]any {
 	if m.Provider != "" {
 		out["delegation.provider"] = m.Provider
 	}
-	if len(m.Fallback) > 0 {
+	if m.Fallback != nil {
 		out["delegation.fallback_providers"] = m.Fallback
 	}
 	return out

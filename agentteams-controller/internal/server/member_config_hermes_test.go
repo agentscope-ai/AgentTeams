@@ -7,6 +7,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -34,6 +35,7 @@ const hermesConfigInitial = `_config_version: 51
 model:
   default: agentteams-gateway/qwen3-max
   provider: agentteams-gateway
+  api_key: inline-model-secret
 providers:
   openai:
     enabled: true
@@ -146,6 +148,9 @@ func TestMemberConfigHermes_GetProjectsSurfaceAndRedacts(t *testing.T) {
 	model, _ := values["model"].(map[string]interface{})
 	if model["default"] != "agentteams-gateway/qwen3-max" {
 		t.Fatalf("model.default=%v", model)
+	}
+	if model["api_key"] != "***" || strings.Contains(rec.Body.String(), "inline-model-secret") {
+		t.Fatal("model.api_key must be redacted from the config response")
 	}
 	openai, _ := values["providers"].(map[string]interface{})["openai"].(map[string]interface{})
 	if openai["api_key"] != "***" {
@@ -323,7 +328,7 @@ func TestMemberConfigHermes_PutSubagentModelProjectsDelegation(t *testing.T) {
 		hermesTeamWithWorkers("team-a", "hermes-worker")...)
 	// A subagent-model patch projects through ProjectDelegation: the YAML
 	// delegation keys must equal the projection's output exactly.
-	body := `{"patch":{"delegation":{"model":"m1","provider":"p1","fallback_providers":["f1","f2"]}}}`
+	body := `{"patch":{"delegation":{"model":"m1","provider":"p1","fallback_providers":[{"provider":"f1","model":"fm1"},{"provider":"f2","model":"fm2"}]}}}`
 	rec := httptest.NewRecorder()
 	h.putConfig(rec, adminCaller(codingCliRequest(http.MethodPut, "/api/members/hermes-worker/config", body, "name", "hermes-worker")))
 	if rec.Code != http.StatusOK {
@@ -334,7 +339,7 @@ func TestMemberConfigHermes_PutSubagentModelProjectsDelegation(t *testing.T) {
 		t.Fatalf("written file is not YAML: %v", err)
 	}
 	del, _ := doc["delegation"].(map[string]any)
-	want := hermes.ProjectDelegation(hermes.SubagentModel{Model: "m1", Provider: "p1", Fallback: []string{"f1", "f2"}})
+	want := hermes.ProjectDelegation(hermes.SubagentModel{Model: "m1", Provider: "p1", Fallback: []map[string]any{{"provider": "f1", "model": "fm1"}, {"provider": "f2", "model": "fm2"}}})
 	for _, full := range []string{"delegation.model", "delegation.provider", "delegation.fallback_providers"} {
 		short := strings.TrimPrefix(full, "delegation.")
 		got, present := del[short]
@@ -368,21 +373,9 @@ func TestMemberConfigHermes_PutSubagentModelProjectsDelegation(t *testing.T) {
 // yamlEq compares two decoded-YAML values (a []string written by the
 // projection decodes back as []interface{}).
 func yamlEq(a, b any) bool {
-	switch av := a.(type) {
-	case []interface{}:
-		bv, ok := b.([]string)
-		if !ok || len(av) != len(bv) {
-			return false
-		}
-		for i := range av {
-			if av[i] != bv[i] {
-				return false
-			}
-		}
-		return true
-	default:
-		return a == b
-	}
+	left, leftErr := json.Marshal(a)
+	right, rightErr := json.Marshal(b)
+	return leftErr == nil && rightErr == nil && string(left) == string(right)
 }
 
 // driftAfterActivation is the config another writer leaves behind between
@@ -520,4 +513,99 @@ func TestMemberConfigHermes_RollbackRestoresSnapshot(t *testing.T) {
 	if !auditActionPresent(t, store, "member_config_rollback") {
 		t.Fatalf("rollback was not audit-logged")
 	}
+}
+
+func TestMemberConfigHermes_FallbackNativeShape(t *testing.T) {
+	for _, tc := range []struct {
+		name, value string
+		status      int
+	}{
+		{"native routes", `[{"provider":"openai","model":"gpt-4.1","api_key":"review-fallback-inline"}]`, http.StatusOK},
+		{"disable fallback", `[]`, http.StatusOK},
+		{"inherit fallback", `null`, http.StatusOK},
+		{"provider strings are ignored by Hermes", `["openai","anthropic"]`, http.StatusUnprocessableEntity},
+		{"route requires model", `[{"provider":"openai"}]`, http.StatusUnprocessableEntity},
+		{"route list must not be a mapping", `{"first":{"provider":"openai","model":"gpt-4.1"}}`, http.StatusUnprocessableEntity},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exec := newHermesExec()
+			h := newTestMemberConfigHandler(t, "embedded", exec, ossfake.NewMemory(), hermesTeamWithWorkers("team-a", "hermes-worker")...)
+			rec := httptest.NewRecorder()
+			body := `{"patch":{"delegation":{"fallback_providers":` + tc.value + `}}}`
+			h.putConfig(rec, adminCaller(codingCliRequest(http.MethodPut, "/api/members/hermes-worker/config", body, "name", "hermes-worker")))
+			if rec.Code != tc.status {
+				t.Fatalf("status=%d want%d: %s", rec.Code, tc.status, rec.Body.String())
+			}
+			if tc.status != http.StatusOK {
+				if exec.fs[hermesConfigPath] != hermesConfigInitial {
+					t.Fatal("rejected patch changed native file")
+				}
+				return
+			}
+			var doc map[string]any
+			if err := yaml.Unmarshal([]byte(exec.fs[hermesConfigPath]), &doc); err != nil {
+				t.Fatal(err)
+			}
+			delegation, _ := doc["delegation"].(map[string]any)
+			value, present := delegation["fallback_providers"]
+			if tc.value == `null` {
+				if present {
+					t.Fatal("null must remove the fallback key")
+				}
+				return
+			}
+			entries, ok := value.([]any)
+			if !present || !ok {
+				t.Fatal("native fallback list must remain in config.yaml")
+			}
+			if tc.value == `[]` {
+				if len(entries) != 0 {
+					t.Fatal("explicit empty fallback must stay empty")
+				}
+				return
+			}
+			if len(entries) != 1 {
+				t.Fatal("native route lost")
+			}
+			route, _ := entries[0].(map[string]any)
+			if route["provider"] != "openai" || route["model"] != "gpt-4.1" || route["api_key"] != "review-fallback-inline" {
+				t.Fatal("native route/credential not preserved")
+			}
+			read := httptest.NewRecorder()
+			h.getConfig(read, adminCaller(codingCliRequest(http.MethodGet, "/api/members/hermes-worker/config", "", "name", "hermes-worker")))
+			if read.Code != 200 || strings.Contains(read.Body.String(), "review-fallback-inline") {
+				t.Fatal("fallback credential leaked in GET")
+			}
+		})
+	}
+}
+
+func TestMemberConfigHermes_RootFallbackNativeRoutes(t *testing.T) {
+	t.Run("read hides an existing native fallback credential", func(t *testing.T) {
+		exec := newHermesExec()
+		exec.fs[hermesConfigPath] += "fallback_providers:\n  - provider: openai\n    model: gpt-4.1\n    api_key: review-root-fallback-key\n"
+		h := newTestMemberConfigHandler(t, "embedded", exec, ossfake.NewMemory(), hermesTeamWithWorkers("team-a", "hermes-worker")...)
+		rec := httptest.NewRecorder()
+		h.getConfig(rec, adminCaller(codingCliRequest(http.MethodGet, "/api/members/hermes-worker/config", "", "name", "hermes-worker")))
+		if rec.Code != 200 || strings.Contains(rec.Body.String(), "review-root-fallback-key") {
+			t.Fatal("native root fallback credential must be redacted")
+		}
+	})
+	t.Run("write native fallback list", func(t *testing.T) {
+		exec := newHermesExec()
+		h := newTestMemberConfigHandler(t, "embedded", exec, ossfake.NewMemory(), hermesTeamWithWorkers("team-a", "hermes-worker")...)
+		rec := httptest.NewRecorder()
+		h.putConfig(rec, adminCaller(codingCliRequest(http.MethodPut, "/api/members/hermes-worker/config", `{"patch":{"fallback_providers":[{"provider":"openai","model":"gpt-4.1"}]}}`, "name", "hermes-worker")))
+		if rec.Code != 200 {
+			t.Fatalf("native root route: %d %s", rec.Code, rec.Body.String())
+		}
+		var doc map[string]any
+		if err := yaml.Unmarshal([]byte(exec.fs[hermesConfigPath]), &doc); err != nil {
+			t.Fatal(err)
+		}
+		routes, ok := doc["fallback_providers"].([]any)
+		if !ok || len(routes) != 1 {
+			t.Fatal("native root route lost")
+		}
+	})
 }

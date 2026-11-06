@@ -7,6 +7,7 @@
       {"key": "model.default", "label": "default model", "type": "string", "default": "", "applies": "next-turn", "group": "model", "class": "selection"},
       {"key": "model.provider", "label": "provider", "type": "string", "default": "", "applies": "next-turn", "group": "model", "class": "selection"},
       {"key": "model.base_url", "label": "base url", "type": "string", "default": "", "applies": "next-turn", "group": "model", "class": "definition"},
+      {"key": "model.api_key", "label": "api key", "type": "string", "default": "", "applies": "next-turn", "group": "model", "class": "definition", "sensitive": true},
       {"key": "model.context_length", "label": "context length", "type": "int", "default": null, "applies": "next-turn", "group": "model"}
     ]},
     {"id": "providers", "label": "Custom providers (entry schema; key = providers.<name>.*)", "fields": [
@@ -40,7 +41,8 @@
       {"key": "providers.*.session_affinity_header", "class": "definition", "label": "session affinity header", "type": "string", "default": null, "applies": "next-turn", "group": "providers"}
     ]},
     {"id": "fallback_providers", "label": "Fallback providers", "fields": [
-      {"key": "fallback_providers", "class": "definition", "label": "fallback providers", "type": "string-list", "default": [], "applies": "next-turn", "group": "fallback_providers"}
+      {"key": "fallback_providers", "class": "definition", "label": "fallback providers", "type": "object", "default": [], "applies": "next-turn", "group": "fallback_providers"},
+      {"key": "fallback_providers.*.api_key", "class": "definition", "label": "fallback api key", "type": "string", "default": "", "applies": "next-turn", "group": "fallback_providers", "sensitive": true}
     ]},
     {"id": "fallback", "label": "Fallback", "fields": [
       {"key": "fallback.min_switch_reset_seconds", "label": "min switch reset seconds", "type": "int", "default": 0, "applies": "next-turn", "group": "fallback"}
@@ -681,7 +683,8 @@
       {"key": "delegation.backends", "label": "backends (dynamic map)", "type": "object", "default": {}, "applies": "next-turn", "group": "delegation"},
       {"key": "delegation.model", "class": "selection", "label": "model (empty = inherit parent)", "type": "string", "default": "", "applies": "next-turn", "group": "delegation"},
       {"key": "delegation.provider", "class": "selection", "label": "provider (empty = inherit parent)", "type": "string", "default": "", "applies": "next-turn", "group": "delegation"},
-      {"key": "delegation.fallback_providers", "label": "fallback providers (null = inherit parent chain, [] = disable)", "type": "string-list", "default": null, "applies": "next-turn", "group": "delegation"},
+      {"key": "delegation.fallback_providers", "label": "fallback provider/model routes (null = native inheritance, [] = disable)", "type": "object", "default": null, "applies": "next-turn", "group": "delegation", "class": "definition"},
+      {"key": "delegation.fallback_providers.*.api_key", "label": "fallback api key", "type": "string", "default": "", "applies": "next-turn", "group": "delegation", "class": "definition", "sensitive": true},
       {"key": "delegation.base_url", "class": "definition", "label": "base url", "type": "string", "default": "", "applies": "next-turn", "group": "delegation"},
       {"key": "delegation.api_key", "class": "definition", "label": "api key", "type": "string", "default": "", "applies": "next-turn", "group": "delegation", "sensitive": true},
       {"key": "delegation.api_mode", "label": "api mode", "type": "enum", "default": "", "applies": "next-turn", "group": "delegation", "enum": ["chat_completions", "codex_responses", "anthropic_messages"]},

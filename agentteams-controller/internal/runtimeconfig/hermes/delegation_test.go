@@ -24,6 +24,7 @@ func TestProjectDelegation(t *testing.T) {
 			in:   SubagentModel{},
 			want: map[string]any{},
 		},
+		{name: "explicit fallback disabled", in: SubagentModel{Fallback: []map[string]any{}}, want: map[string]any{"delegation.fallback_providers": []map[string]any{}}},
 		{
 			name: "model only",
 			in:   SubagentModel{Model: "claude-sonnet-4"},
@@ -36,19 +37,19 @@ func TestProjectDelegation(t *testing.T) {
 		},
 		{
 			name: "model and fallback",
-			in:   SubagentModel{Model: "claude-sonnet-4", Fallback: []string{"openai", "anthropic"}},
+			in:   SubagentModel{Model: "claude-sonnet-4", Fallback: []map[string]any{{"provider": "openai", "model": "gpt-4.1"}, {"provider": "anthropic", "model": "claude-sonnet-4"}}},
 			want: map[string]any{
 				"delegation.model":              "claude-sonnet-4",
-				"delegation.fallback_providers": []string{"openai", "anthropic"},
+				"delegation.fallback_providers": []map[string]any{{"provider": "openai", "model": "gpt-4.1"}, {"provider": "anthropic", "model": "claude-sonnet-4"}},
 			},
 		},
 		{
 			name: "all set",
-			in:   SubagentModel{Model: "claude-sonnet-4", Provider: "anthropic", Fallback: []string{"openai"}},
+			in:   SubagentModel{Model: "claude-sonnet-4", Provider: "anthropic", Fallback: []map[string]any{{"provider": "openai", "model": "gpt-4.1"}}},
 			want: map[string]any{
 				"delegation.model":              "claude-sonnet-4",
 				"delegation.provider":           "anthropic",
-				"delegation.fallback_providers": []string{"openai"},
+				"delegation.fallback_providers": []map[string]any{{"provider": "openai", "model": "gpt-4.1"}},
 			},
 		},
 	}

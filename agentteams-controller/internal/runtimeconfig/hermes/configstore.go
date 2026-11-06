@@ -270,6 +270,18 @@ func (m *ConfigManager) Write(ctx context.Context, worker string, values map[str
 		doc = map[string]any{}
 	}
 
+	if fallback, present := values["fallback_providers"]; present {
+		if err := validateFallbackRoutes(fallback); err != nil {
+			return runtimeconfig.WriteResult{}, &ValidationError{Key: "fallback_providers", Err: err}
+		}
+	}
+	if delegation, ok := values["delegation"].(map[string]any); ok {
+		if fallback, present := delegation["fallback_providers"]; present {
+			if err := validateFallbackRoutes(fallback); err != nil {
+				return runtimeconfig.WriteResult{}, &ValidationError{Key: "delegation.fallback_providers", Err: err}
+			}
+		}
+	}
 	leaves := collectLeaves("", values)
 	if len(leaves) == 0 {
 		return runtimeconfig.WriteResult{}, &NoWritableKeysError{}
@@ -548,7 +560,7 @@ func (m *ConfigManager) atomicReplace(ctx context.Context, worker, path, content
 // only keys the surface declares (exact key or wildcard pattern for the
 // dynamic maps) appear in Values — unknown/foreign keys stay in the file
 // but never in the GET projection. A declared sensitive value is replaced
-// with the fixed placeholder; declared containers pass through verbatim.
+// with the fixed placeholder; declared containers retain their contents with sensitive descendants masked.
 func (m *ConfigManager) projectValues(doc map[string]any) map[string]any {
 	out, _ := m.projectNode("", doc)
 	if out == nil {
@@ -573,7 +585,7 @@ func (m *ConfigManager) projectNode(prefix string, v any) (map[string]any, bool)
 		case declared && f.Sensitive:
 			out[k] = redactedValue
 		case declared:
-			out[k] = cv
+			out[k] = m.redactDeclaredValue(key, cv)
 		default:
 			if sub, ok := m.projectNode(key, cv); ok {
 				out[k] = sub
@@ -586,10 +598,39 @@ func (m *ConfigManager) projectNode(prefix string, v any) (map[string]any, bool)
 	return out, true
 }
 
+// redactDeclaredValue preserves declared object values while masking any
+// sensitive descendant; a declared parent must not bypass child redaction.
+func (m *ConfigManager) redactDeclaredValue(prefix string, value any) any {
+	switch node := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(node))
+		for key, child := range node {
+			path := prefix + "." + key
+			if field, ok := FieldFor(m.surface, path); ok && field.Sensitive {
+				out[key] = redactedValue
+			} else {
+				out[key] = m.redactDeclaredValue(path, child)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, len(node))
+		for i, child := range node {
+			out[i] = m.redactDeclaredValue(fmt.Sprintf("%s.%d", prefix, i), child)
+		}
+		return out
+	default:
+		return value
+	}
+}
+
 // validateValue checks one concrete key/value pair against the declared
 // hermes field (the surface's own type vocabulary:
 // string|int|float|bool|enum|string-list|object).
 func validateValue(s runtimeconfig.Surface, key string, value any) error {
+	if key == "delegation.fallback_providers" || key == "fallback_providers" {
+		return validateFallbackRoutes(value)
+	}
 	f, ok := FieldFor(s, key)
 	if !ok {
 		return fmt.Errorf("key %q is not declared in the hermes surface", key)
@@ -647,6 +688,31 @@ func validateValue(s runtimeconfig.Surface, key string, value any) error {
 		}
 	default:
 		return fmt.Errorf("key %q has undeclared type %q", key, f.Type)
+	}
+	return nil
+}
+
+// validateFallbackRoutes accepts Hermes' native provider/model route list.
+// null means no override; an explicit empty list disables fallback.
+func validateFallbackRoutes(value any) error {
+	if value == nil {
+		return nil
+	}
+	entries, ok := value.([]any)
+	if !ok {
+		return fmt.Errorf("fallback_providers must be a list of provider/model routes")
+	}
+	for _, entry := range entries {
+		route, ok := entry.(map[string]any)
+		if !ok {
+			return fmt.Errorf("fallback_providers entries must be provider/model objects")
+		}
+		for _, key := range []string{"provider", "model"} {
+			name, ok := route[key].(string)
+			if !ok || strings.TrimSpace(name) == "" {
+				return fmt.Errorf("fallback_providers route requires %s", key)
+			}
+		}
 	}
 	return nil
 }
@@ -806,7 +872,7 @@ func applyDelegationProjection(doc map[string]any) []string {
 	m := SubagentModel{
 		Model:    asString(del["model"]),
 		Provider: asString(del["provider"]),
-		Fallback: asStringList(del["fallback_providers"]),
+		Fallback: asFallbackRoutes(del["fallback_providers"]),
 	}
 	proj := ProjectDelegation(m)
 	set := make([]string, 0, len(proj))
@@ -827,21 +893,20 @@ func asString(v any) string {
 	return s
 }
 
-func asStringList(v any) []string {
-	items, ok := v.([]any)
+func asFallbackRoutes(value any) []map[string]any {
+	entries, ok := value.([]any)
 	if !ok {
 		return nil
 	}
-	out := make([]string, 0, len(items))
-	for _, it := range items {
-		if s, ok := it.(string); ok {
-			out = append(out, s)
+	routes := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		route, ok := entry.(map[string]any)
+		if !ok {
+			return nil
 		}
+		routes = append(routes, route)
 	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
+	return routes
 }
 
 // ---- desired state ----

@@ -366,6 +366,39 @@ func TestStorageFault_ListingIs503(t *testing.T) {
 	assertStorageUnavailable(t, rec, "trash listing")
 }
 
+// TestStorageFault_TrashMetaReadIs503: a per-entry meta.json read that
+// faults must fail the whole listing with the availability fault, not a
+// 200 whose entry carries empty Path/Size (the ignored GetObject error).
+func TestStorageFault_TrashMetaReadIs503(t *testing.T) {
+	hfh, store, _ := newHumanFilesRig(t)
+
+	// A real trash entry through the handlers: put, then soft delete.
+	if rec := hfPutFile(t, hfh, "alice", "a.txt", hfSelf(), "hello"); rec.Code != http.StatusOK {
+		t.Fatalf("put: %d %s", rec.Code, rec.Body.String())
+	}
+	rec := httptest.NewRecorder()
+	hfh.deleteFile(rec, hfReq(t, http.MethodDelete, "alice", "a.txt", hfSelf(), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body.String())
+	}
+	var delResp struct {
+		TrashID string `json:"trashId"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &delResp); err != nil {
+		t.Fatalf("decode delete: %v", err)
+	}
+
+	// Fault only the per-entry meta read; the trash listing itself stays up.
+	hfh.oss = newFaultOSS(t, store, humanTrashPrefix("alice")+delResp.TrashID+"/meta.json", "GetObject")
+	if _, err := hfh.oss.ListObjectsDetailed(context.Background(), humanTrashPrefix("alice")); err != nil {
+		t.Fatalf("outer trash listing must not be faulted: %v", err)
+	}
+
+	rec = httptest.NewRecorder()
+	hfh.listTrash(rec, hfReq(t, http.MethodGet, "alice", "", hfSelf(), nil))
+	assertStorageUnavailable(t, rec, "trash meta read")
+}
+
 // TestStorageFault_RecursiveListingIs503: the recursive flat listing
 // answers 503 when its walk faults. The root's ?recursive=1 listing is
 // served by listFiles (the GET .../files route), not getFile — getFile

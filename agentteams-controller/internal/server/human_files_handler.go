@@ -1412,7 +1412,16 @@ func (h *humanFilesHandler) listTrash(w http.ResponseWriter, r *http.Request) {
 	out := make([]trashEntry, 0, len(ids))
 	for id := range ids {
 		e := trashEntry{ID: id}
-		if data, gerr := h.oss.GetObject(ctx, prefix+id+"/meta.json"); gerr == nil {
+		data, gerr := h.oss.GetObject(ctx, prefix+id+"/meta.json")
+		if gerr != nil {
+			if errors.Is(gerr, oss.ErrStorageUnavailable) {
+				// A listing whose entries cannot be verified answers
+				// the availability fault, not a 200 with empty fields.
+				writeStorageUnavailable(w)
+				return
+			}
+			// Any other read error keeps the entry with empty fields.
+		} else {
 			var m trashMeta
 			if json.Unmarshal(data, &m) == nil {
 				e.Path, e.Size, e.DeletedAt, e.Caller, e.Role = m.Path, m.Size, m.DeletedAt, m.Caller, m.Role

@@ -572,6 +572,69 @@ def test_runtime_updater_text_only_input_does_not_probe(
     assert api.active_model["probe_source"] == "manual"
 
 
+def test_runtime_updater_reapplies_model_on_model_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Upgrade regression (model dimension): when a controller config
+    update changes the model, the worker must re-apply the model config —
+    the new model's modality-derived capabilities must reach the
+    active-model path — and an unchanged config must not re-apply."""
+    monkeypatch.setenv("AGENTTEAMS_WORKER_GATEWAY_KEY", "gateway-secret")
+    updater = _runtime_updater(
+        config=_config(tmp_path),
+        package_manager=_NoopPackageManager(),
+    )
+
+    def _raw(generation: str, model: str, input_modalities: list[str]) -> dict:
+        return {
+            "metadata": {"generation": generation},
+            "member": {"runtime": "qwenpaw"},
+            "credentials": {"gatewayKeyEnv": "AGENTTEAMS_WORKER_GATEWAY_KEY"},
+            "desired": {
+                "model": {
+                    "providerId": "agentteams-gateway",
+                    "model": model,
+                    "gatewayUrl": "https://gateway.example.com",
+                    "input": input_modalities,
+                },
+            },
+        }
+
+    # Initial apply: a vision-capable model.
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw=_raw("1", "qwen3.6-plus", ["text", "image"]),
+        ),
+    )
+    # Same config again: model identity unchanged -> no model re-apply.
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw=_raw("1", "qwen3.6-plus", ["text", "image"]),
+        ),
+    )
+    # Upgrade: the controller switches the model to a text-only one.
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=updater.config.runtime_config_path,
+            raw=_raw("2", "deepseek-chat", ["text"]),
+        ),
+    )
+
+    api = updater.api_client
+    assert api.model_events == [
+        ("agentteams-gateway", "qwen3.6-plus"),
+        ("agentteams-gateway", "deepseek-chat"),
+    ]
+    assert api.active_model["model"] == "deepseek-chat"
+    assert api.active_model["supports_image"] is False
+    assert api.active_model["supports_video"] is False
+    assert api.active_model["supports_multimodal"] is False
+    assert api.active_model["probe_source"] == "manual"
+
+
 def test_runtime_updater_matrix_payload_share_session_isolation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

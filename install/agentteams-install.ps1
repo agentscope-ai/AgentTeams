@@ -3248,6 +3248,15 @@ function Install-Manager {
             "-e", "AGENTTEAMS_PORT_MANAGER_CONSOLE=$($config.PORT_MANAGER_CONSOLE)"
         )
 
+        # Presigned download origin (#1501): every URL handed to a client
+        # carries this host, so it must be reachable from the CALLER's
+        # browser. The embedded Controller publishes only 8080/8001/8088,
+        # so the in-container 127.0.0.1:9000 is not a browser endpoint —
+        # presign stays disabled (501) unless the operator supplies one.
+        if ($env:AGENTTEAMS_FS_PUBLIC_ENDPOINT) {
+            $ctrlArgs += @("-e", "AGENTTEAMS_FS_PUBLIC_ENDPOINT=$($env:AGENTTEAMS_FS_PUBLIC_ENDPOINT)")
+        }
+
         if ($script:AGENTTEAMS_TIMEZONE) {
             $ctrlArgs += @("-e", "TZ=$($script:AGENTTEAMS_TIMEZONE)")
         }

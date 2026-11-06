@@ -32,6 +32,7 @@ func getCmd() *cobra.Command {
 func getWorkersCmd() *cobra.Command {
 	var team string
 	var output string
+	var fields string
 
 	cmd := &cobra.Command{
 		Use:   "workers [name]",
@@ -41,35 +42,65 @@ func getWorkersCmd() *cobra.Command {
   agt get workers
   agt get workers alice
   agt get workers --team alpha-team
-  agt get workers alice -o json`,
+  agt get workers -o json
+  agt get workers --fields=status -o json
+
+The list accepts --fields to select the row view (issue #1477): all,
+spec, status, or spec,status. The default "all" sends fields=all and
+keeps the full response, so scripts that read skills, env, or mcpServers
+from the list keep working unchanged. A named worker always returns the
+full detail, regardless of --fields.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client := NewAPIClient()
 
 			if len(args) == 1 {
-				var resp workerResp
-				if err := client.DoJSON("GET", "/api/v1/workers/"+args[0], nil, &resp); err != nil {
-					return fmt.Errorf("get worker: %w", err)
-				}
+				path := "/api/v1/workers/" + args[0]
 				if output == "json" {
-					printJSON(resp)
+					// Verbatim pass-through: the detail response carries
+					// fields (agentStatus, runningTaskCount, ...) the CLI's
+					// workerResp type would drop on a round-trip.
+					data, err := client.DoRaw("GET", path)
+					if err != nil {
+						return fmt.Errorf("get worker: %w", err)
+					}
+					printRawJSON(data)
 					return nil
+				}
+				var resp workerResp
+				if err := client.DoJSON("GET", path, nil, &resp); err != nil {
+					return fmt.Errorf("get worker: %w", err)
 				}
 				printDetail(workerDetail(resp))
 				return nil
 			}
 
-			path := "/api/v1/workers"
+			query := url.Values{}
 			if team != "" {
-				path += "?team=" + team
+				query.Set("team", team)
+			}
+			if fields != "" {
+				query.Set("fields", fields)
+			}
+			path := "/api/v1/workers"
+			if encoded := query.Encode(); encoded != "" {
+				path += "?" + encoded
+			}
+			if output == "json" {
+				// Verbatim pass-through of the selected view (issue #1477):
+				// re-encoding workerListResp would drop the view's fields
+				// (agentStatus, runningTaskCount, ...) and invent defaults
+				// (containerManaged, phase:"").
+				data, err := client.DoRaw("GET", path)
+				if err != nil {
+					return fmt.Errorf("list workers: %w", err)
+				}
+				printRawJSON(data)
+				return nil
 			}
 			var resp workerListResp
 			if err := client.DoJSON("GET", path, nil, &resp); err != nil {
 				return fmt.Errorf("list workers: %w", err)
-			}
-			if output == "json" {
-				printJSON(resp)
-				return nil
 			}
 			if resp.Total == 0 {
 				fmt.Println("No workers found.")
@@ -78,12 +109,14 @@ func getWorkersCmd() *cobra.Command {
 			headers := []string{"NAME", "PHASE", "MODEL", "TEAM", "RUNTIME"}
 			var rows [][]string
 			for _, w := range resp.Workers {
+				// Fields the selected view does not carry render as "-"
+				// (like the TEAM column) — never an assumed default.
 				rows = append(rows, []string{
 					w.Name,
-					or(w.Phase, "Pending"),
+					or(w.Phase, "-"),
 					w.Model,
 					or(w.Team, "-"),
-					or(w.Runtime, "openclaw"),
+					or(w.Runtime, "-"),
 				})
 			}
 			printTable(headers, rows)
@@ -92,6 +125,7 @@ func getWorkersCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&team, "team", "", "Filter by team name")
+	cmd.Flags().StringVar(&fields, "fields", "all", "List row view: all, spec, status, or spec,status (default: all, the full response)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "Output format (json)")
 	return cmd
 }

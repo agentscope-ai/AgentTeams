@@ -129,12 +129,12 @@ func (a *Authorizer) authorizeHuman(caller *CallerIdentity, req AuthzRequest) er
 			return deny(caller, req)
 		}
 
-	case "project-meta":
-		// Conditional project meta commit (#1402): same criteria as the
-		// "project" Update — L2 humans commit meta only within their
-		// accessibleTeams scope. The middleware cannot resolve project ->
-		// team (empty ResourceTeam short-circuits requireSameTeam); the
-		// handler is the real team boundary.
+	case "project-meta", "task-meta":
+		// Conditional commit endpoints (#1402 project, #1471 task): same
+		// criteria as the "project" Update — L2 humans commit meta only
+		// within their accessibleTeams scope. The middleware cannot resolve
+		// project/task -> team (empty ResourceTeam short-circuits
+		// requireSameTeam); the handler is the real team boundary.
 		if req.Action == ActionUpdate {
 			return a.requireSameTeam(caller, req)
 		}
@@ -317,11 +317,12 @@ func (a *Authorizer) authorizeTeamLeader(caller *CallerIdentity, req AuthzReques
 			return deny(caller, req)
 		}
 
-	case "project-meta":
-		// Conditional project meta commit (#1402): same criteria as the
-		// "project" Update — own team only. The middleware cannot resolve
-		// project -> team (empty ResourceTeam short-circuits requireSameTeam);
-		// the handler enforces team equality after resolving the project.
+	case "project-meta", "task-meta":
+		// Conditional commit endpoints (#1402 project, #1471 task): same
+		// criteria as the "project" Update — own team only. The middleware
+		// cannot resolve project/task -> team (empty ResourceTeam
+		// short-circuits requireSameTeam); the handler enforces team
+		// equality after resolving the record.
 		if req.Action == ActionUpdate {
 			return a.requireSameTeam(caller, req)
 		}
@@ -389,18 +390,19 @@ func (a *Authorizer) authorizeWorker(caller *CallerIdentity, req AuthzRequest) e
 		}
 		return deny(caller, req)
 
-	case "project-meta":
-		// The single project-kind write opened to workers (#1402): committing
-		// the project meta through the controller's strict conditional
-		// endpoint (PUT /api/v1/projects/{id}/meta). requireSameTeam rejects
-		// team-less workers here; team EQUALITY is enforced in the handler —
-		// the middleware cannot resolve project -> team, so ResourceTeam is
-		// empty and the check would otherwise short-circuit.
+	case "project-meta", "task-meta":
+		// The two record writes opened to workers (#1402 project meta,
+		// #1471 task meta): committing through the controller's strict
+		// conditional endpoints (PUT /api/v1/projects/{id}/meta,
+		// PUT /api/v1/tasks/{id}/meta). requireSameTeam rejects team-less
+		// workers here; team EQUALITY is enforced in the handler — the
+		// middleware cannot resolve record -> team, so ResourceTeam is empty
+		// and the check would otherwise short-circuit.
 		//
-		// INVARIANT: "project" must never gain a case in this switch — that
-		// would open pause/resume/replan/complete/cancel (all registered as
-		// ActionUpdate + "project") to every worker. Pinned by
-		// TestAuthorizer_ProjectMetaCommit (worker "project" Update denied).
+		// INVARIANT: "project"/"task" must never gain a case in this switch —
+		// that would open pause/resume/replan/complete/cancel (registered as
+		// ActionUpdate + "project" / "task") to every worker. Pinned by
+		// TestAuthorizer_ProjectMetaCommit.
 		if req.Action == ActionUpdate {
 			return a.requireSameTeam(caller, req)
 		}

@@ -122,6 +122,20 @@ def authoritative_project_pull(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "_pull_project", lambda *_args, **_kwargs: True)
 
 
+@pytest.fixture(autouse=True)
+def authoritative_task_pull(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep continuation tests focused on the post-pull state contract.
+
+    Task pull success/failure semantics are covered by
+    ``test_protocol_guard.py`` (round 9 regressions). The guarded
+    cross-actor writes (cancel_task / accept_task_result) now load the
+    authoritative task before writing, so every test gets a successful
+    pull (the local state is authoritative) unless a test explicitly
+    fails the pull to assert the fail-closed path.
+    """
+    monkeypatch.setattr(server, "_pull_task", lambda *_args, **_kwargs: True)
+
+
 @pytest.fixture
 def successful_side_effects(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[Any]]:
     calls: dict[str, list[Any]] = {"publish": [], "sync": [], "project_sync": []}
@@ -1159,24 +1173,37 @@ def test_cancel_sync_failure_is_retryable_and_repairs_without_changing_reason(
 
 
 @pytest.mark.parametrize(
-    ("result_status", "expected_node_status"),
+    "result_status",
     [
-        ("SUCCESS", "completed"),
-        ("SUCCESS_WITH_NOTES", "completed"),
-        ("REVISION_NEEDED", "revision"),
-        ("BLOCKED", "blocked"),
-        ("INTERRUPTED", "blocked"),
+        "SUCCESS",
+        "SUCCESS_WITH_NOTES",
+        "REVISION_NEEDED",
+        "BLOCKED",
+        "INTERRUPTED",
     ],
 )
-def test_supported_result_status_round_trips_through_submit_check_and_accept(
+def test_failed_pull_fails_closed_for_submit_and_accept_but_check_still_reads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     successful_side_effects: dict[str, list[Any]],
     result_status: str,
-    expected_node_status: str,
 ) -> None:
+    """Round 11 (#1467) extends the W2 invariant to every whole-task
+    writer: submit_task loads the authoritative task before its write and
+    fails closed on a failed pull (round 9 left it on the local copy), and
+    the cross-actor accept keeps the same fail-closed behaviour.
+    check_task stays a read, so it still succeeds and surfaces
+    ``pulled`` — a reader may tolerate a failed pull, a writer may not."""
     project_id, task_id = _write_project_and_task(tmp_path)
     monkeypatch.setattr(server, "_pull_task", lambda *_args, **_kwargs: False)
+
+    task_path = tmp_path / "shared" / "tasks" / task_id / "meta.json"
+    project_path = tmp_path / "shared" / "projects" / project_id / "meta.json"
+    before_task = task_path.read_bytes()
+    before_project = project_path.read_bytes()
+    before_side_effect_counts = {
+        name: len(calls) for name, calls in successful_side_effects.items()
+    }
 
     submitted = _submit(tmp_path, task_id, status=result_status)
     checked = _tool_payload(
@@ -1196,21 +1223,34 @@ def test_supported_result_status_round_trips_through_submit_check_and_accept(
             "payload": {
                 "projectId": project_id,
                 "taskId": task_id,
-                "submissionId": submitted["task"]["submission_id"],
                 "resultStatus": result_status,
                 "summary": "Review the submitted result.",
             },
         },
     )
 
-    assert submitted["ok"] is True
-    assert submitted["task"]["result_status"] == result_status
+    # Round 11: the submit is a whole-task write, so a failed authoritative
+    # pull fails closed instead of writing the stale local copy back.
+    assert submitted["ok"] is False
+    assert "stale local copy" in submitted["error"]
+    # The read-only check still succeeds (it may read the local copy) and
+    # reports that the pull did not land: the task is not submitted because
+    # the submit itself failed closed.
     assert checked["ok"] is True
-    assert checked["effective"] is True
-    assert checked["validationErrors"] == []
-    assert checked["result"]["status"] == result_status
-    assert accepted["ok"] is True
-    assert accepted["nodeStatus"] == expected_node_status
+    assert checked["pulled"] is False
+    assert checked["effective"] is False
+    # The cross-actor accept fails closed on the failed authoritative
+    # pull (the ValueError raised by _load_authoritative_task, surfaced
+    # through the projectflow error wrapper) ...
+    assert accepted["ok"] is False
+    assert "stale local copy" in accepted["error"]
+    # ... and every writer wrote nothing back: local state untouched,
+    # nothing committed to shared storage.
+    assert task_path.read_bytes() == before_task
+    assert project_path.read_bytes() == before_project
+    assert {
+        name: len(calls) for name, calls in successful_side_effects.items()
+    } == before_side_effect_counts
 
 
 @pytest.mark.parametrize("result_status", ["FAILED", "PARTIAL"])
@@ -1760,17 +1800,46 @@ def test_submit_pushes_and_verifies_result_payload_before_the_meta_commit_point(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """#1471: the payload files land BEFORE the meta commit, and the meta
+    never travels through the plain filesync push."""
     _project_id, task_id = _write_project_and_task(tmp_path)
     task_dir = tmp_path / "shared" / "tasks" / task_id
     (task_dir / "result.md").write_text("result", encoding="utf-8")
     (task_dir / "output.txt").write_text("output", encoding="utf-8")
+    meta_path = f"shared/tasks/{task_id}/meta.json"
+    remote: dict[str, dict[str, Any]] = {
+        meta_path: json.loads((task_dir / "meta.json").read_text(encoding="utf-8"))
+    }
+    state = {"etag": "v1"}
     calls: list[tuple[str, str]] = []
 
     def filesync(arguments: dict[str, Any]) -> dict[str, Any]:
-        calls.append((str(arguments["action"]), str(arguments["path"])))
+        action = str(arguments["action"])
+        path = str(arguments["path"])
+        calls.append((action, path))
+        if action == "etag":
+            if path not in remote:
+                return {"ok": False, "error": f"<ERROR> The object {path} does not exist."}
+            return {"ok": True, "etag": state["etag"]}
+        if action == "cat":
+            if path not in remote:
+                return {"ok": False, "error": f"<ERROR> The object {path} does not exist."}
+            return {"ok": True, "content": json.dumps(remote[path])}
+        if action == "push":
+            local = tmp_path / path
+            if local.is_file() and path.endswith("meta.json"):
+                remote[path] = json.loads(local.read_text(encoding="utf-8"))
+            return {"ok": True}
         return {"ok": True}
 
+    def commit_task(task_id_: str, meta: dict[str, Any], etag: str, team: str = "") -> dict[str, Any]:
+        calls.append(("commit", meta_path))
+        remote[meta_path] = dict(meta)
+        state["etag"] = "v2"
+        return {"ok": True, "etag": "v2"}
+
     monkeypatch.setattr(server, "_filesync", filesync)
+    monkeypatch.setattr(server.sync, "_commit_task_meta", commit_task)
     monkeypatch.setattr(server, "_sync_project", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(server, "_publish_task_artifacts", lambda *_args, **_kwargs: [])
 
@@ -1781,16 +1850,19 @@ def test_submit_pushes_and_verifies_result_payload_before_the_meta_commit_point(
     )
 
     assert submitted["ok"] is True
-    assert calls == [
+    commit_index = calls.index(("commit", meta_path))
+    payload_calls = [
         ("push", f"shared/tasks/{task_id}/result.md"),
         ("stat", f"shared/tasks/{task_id}/result.md"),
         ("push", f"shared/tasks/{task_id}/output.txt"),
         ("stat", f"shared/tasks/{task_id}/output.txt"),
-        ("push", f"shared/tasks/{task_id}/meta.json"),
-        ("stat", f"shared/tasks/{task_id}/meta.json"),
-        # S2 SIG-COMPLETE (task_submitted) event mirror push — deterministic id.
-        ("push", _signal_event_path(tmp_path, task_id)),
     ]
+    for call in payload_calls:
+        assert call in calls, calls
+        assert calls.index(call) < commit_index, calls
+    # The meta reaches storage ONLY through the conditional commit endpoint.
+    assert ("push", meta_path) not in calls
+    assert calls.count(("commit", meta_path)) == 1
 
 
 def test_plan_dag_preserves_a_committed_cancellation_decision(
@@ -1894,27 +1966,46 @@ def test_submit_meta_commit_must_be_remotely_verified_before_success(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """#1471: a commit the remote never reflects is a failed sync (submit
+    reports synced=false, retryable), and the retry converges with the
+    same submission identity."""
     _project_id, task_id = _write_project_and_task(tmp_path)
     task_dir = tmp_path / "shared" / "tasks" / task_id
     (task_dir / "result.md").write_text("result", encoding="utf-8")
-    calls: list[tuple[str, str]] = []
-    meta_stat_failed = False
     meta_path = f"shared/tasks/{task_id}/meta.json"
+    remote: dict[str, dict[str, Any]] = {
+        meta_path: json.loads((task_dir / "meta.json").read_text(encoding="utf-8"))
+    }
+    state = {"etag": "v1", "landed": False}
+    calls: list[tuple[str, str]] = []
 
     def filesync(arguments: dict[str, Any]) -> dict[str, Any]:
-        nonlocal meta_stat_failed
-        call = (str(arguments["action"]), str(arguments["path"]))
-        calls.append(call)
-        if call == ("stat", meta_path) and not meta_stat_failed:
-            meta_stat_failed = True
-            return {"ok": False, "error": "remote meta commit is not visible"}
+        action = str(arguments["action"])
+        path = str(arguments["path"])
+        calls.append((action, path))
+        if action == "etag" and path == meta_path:
+            return {"ok": True, "etag": state["etag"]}
+        if action == "cat" and path == meta_path:
+            return {"ok": True, "content": json.dumps(remote[path])}
         return {"ok": True}
 
+    def commit_task(task_id_: str, meta: dict[str, Any], etag: str, team: str = "") -> dict[str, Any]:
+        calls.append(("commit", meta_path))
+        if not state["landed"]:
+            # Claims success, but the store never receives it: the verify
+            # re-read must catch that.
+            return {"ok": True, "etag": "never-lands"}
+        remote[meta_path] = dict(meta)
+        state["etag"] = "v2"
+        return {"ok": True, "etag": "v2"}
+
     monkeypatch.setattr(server, "_filesync", filesync)
+    monkeypatch.setattr(server.sync, "_commit_task_meta", commit_task)
     monkeypatch.setattr(server, "_sync_project", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(server, "_publish_task_artifacts", lambda *_args, **_kwargs: [])
 
     first = _submit(tmp_path, task_id, deliverables=[])
+    state["landed"] = True
     second = _submit(tmp_path, task_id, deliverables=[])
 
     assert first["ok"] is False
@@ -1924,36 +2015,49 @@ def test_submit_meta_commit_must_be_remotely_verified_before_success(
     assert second["ok"] is True
     assert second["reused"] is True
     assert second["task"]["submission_id"] == first["task"]["submission_id"]
-    assert calls.count(("push", meta_path)) == 2
-    assert calls.count(("stat", meta_path)) == 2
-    assert calls[-3:] == [
-        ("push", meta_path),
-        ("stat", meta_path),
-        # S2 SIG-COMPLETE (task_submitted) event mirror push from the resubmit.
-        ("push", _signal_event_path(tmp_path, task_id)),
-    ]
+    assert calls.count(("commit", meta_path)) == 4   # 3 attempts + the retry
+    assert ("push", meta_path) not in calls
 
 
 def test_submit_retry_repairs_interrupted_payload_publish_without_rotating_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """#1471: a failed payload publish fails the sync before any meta
+    commit; the retry repairs it without rotating the submission id."""
     _project_id, task_id = _write_project_and_task(tmp_path)
     task_dir = tmp_path / "shared" / "tasks" / task_id
     (task_dir / "result.md").write_text("result", encoding="utf-8")
+    meta_path = f"shared/tasks/{task_id}/meta.json"
+    remote: dict[str, dict[str, Any]] = {
+        meta_path: json.loads((task_dir / "meta.json").read_text(encoding="utf-8"))
+    }
+    state = {"stat_failed": False, "etag": "v1"}
     calls: list[tuple[str, str]] = []
-    failed = False
 
     def filesync(arguments: dict[str, Any]) -> dict[str, Any]:
-        nonlocal failed
-        call = (str(arguments["action"]), str(arguments["path"]))
-        calls.append(call)
-        if call[0] == "stat" and not failed:
-            failed = True
+        action = str(arguments["action"])
+        path = str(arguments["path"])
+        calls.append((action, path))
+        if action == "etag" and path == meta_path:
+            return {"ok": True, "etag": state["etag"]}
+        if action == "cat" and path == meta_path:
+            return {"ok": True, "content": json.dumps(remote[path])}
+        if action == "stat" and path.endswith("result.md") and not state["stat_failed"]:
+            state["stat_failed"] = True
             return {"ok": False, "error": "remote stat unavailable"}
         return {"ok": True}
 
+    commits: list[str] = []
+
+    def commit_task(task_id_: str, meta: dict[str, Any], etag: str, team: str = "") -> dict[str, Any]:
+        commits.append(etag)
+        remote[meta_path] = dict(meta)
+        state["etag"] = "v2"
+        return {"ok": True, "etag": "v2"}
+
     monkeypatch.setattr(server, "_filesync", filesync)
+    monkeypatch.setattr(server.sync, "_commit_task_meta", commit_task)
     monkeypatch.setattr(server, "_sync_project", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(server, "_publish_task_artifacts", lambda *_args, **_kwargs: [])
 
@@ -1966,11 +2070,8 @@ def test_submit_retry_repairs_interrupted_payload_publish_without_rotating_ident
     assert second["ok"] is True
     assert second["reused"] is True
     assert second["task"]["submission_id"] == first["task"]["submission_id"]
-    meta_push = ("push", f"shared/tasks/{task_id}/meta.json")
-    assert calls.count(meta_push) == 1
-    assert calls[-3:] == [
-        meta_push,
-        ("stat", f"shared/tasks/{task_id}/meta.json"),
-        # S2 SIG-COMPLETE (task_submitted) event mirror push from the resubmit.
-        ("push", _signal_event_path(tmp_path, task_id)),
-    ]
+    # The interrupted publish committed nothing; the retry committed once.
+    assert len(commits) == 1
+    assert ("push", meta_path) not in calls
+
+

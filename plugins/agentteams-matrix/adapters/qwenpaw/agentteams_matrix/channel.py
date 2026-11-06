@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import html
 import inspect
 import io
@@ -108,6 +109,7 @@ from core.mentions import (  # noqa: E402
     text_mentions_worker,
     was_mentioned,
 )
+from core.outcomes import describe_exception, record_drop  # noqa: E402
 from core.session import resolve_session_id, to_handle_from_target  # noqa: E402
 from core.sync import SyncEngine  # noqa: E402
 from core.transport import (  # noqa: E402
@@ -523,6 +525,20 @@ class AgentTeamsMatrixChannel(BaseChannel):
         # Thread tracking (ported from CoPaw overlay)
         self._active_thread_roots: Dict[str, str] = {}
         self._proactive_send_state: Dict[str, Dict[str, Any]] = {}
+
+    async def _access_control_gate(self, payload: Any) -> bool:
+        # Denials are bot notices, not new requests. Keep this metadata local
+        # to the ACL check so allowed messages retain their normal reply type.
+        if isinstance(payload, dict):
+            meta = dict(payload.get("meta") or {})
+            meta[_MATRIX_FORCE_NOTICE_KEY] = True
+            payload = {**payload, "meta": meta}
+        else:
+            payload = copy.copy(payload)
+            meta = dict(getattr(payload, "channel_meta", None) or {})
+            meta[_MATRIX_FORCE_NOTICE_KEY] = True
+            payload.channel_meta = meta
+        return await super()._access_control_gate(payload)
 
     # Read-only views over the core buffer's per-room state (P9/PR1 M3):
     # kept for the send-gate's dict-shaped reads and for the core-parity
@@ -971,6 +987,12 @@ class AgentTeamsMatrixChannel(BaseChannel):
         if not self.homeserver:
             logger.warning(
                 "MatrixChannel: homeserver not configured, skipping component=matrix",
+            )
+            record_drop(
+                self._drop_workspace(),
+                reason="matrix_env_missing",
+                room_id="",
+                detail="homeserver not configured",
             )
             return
         self._preflight_e2ee_dependencies()
@@ -2476,6 +2498,16 @@ class AgentTeamsMatrixChannel(BaseChannel):
             return fallback
 
     # ------------------------------------------------------------------
+    # Drop ledger (core.outcomes): silent drops are traced to
+    # <workspace>/shared/matrix/drops.jsonl via record_drop (warn-only).
+    # ------------------------------------------------------------------
+
+    def _drop_workspace(self) -> Path:
+        """Workspace root for the drop ledger (``shared/matrix``)."""
+        root = getattr(self, "_workspace_dir", None)
+        return Path(root).expanduser() if root else Path(WORKING_DIR)
+
+    # ------------------------------------------------------------------
     # Incoming message handling — text
     # text receive; allowlist + per-room rules +
     # mention gating; history buffer when no mention; enqueue AgentRequest
@@ -2495,6 +2527,13 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
         # Skip own messages early
         if sender_id == self._user_id and teamharness_self_trigger is None:
+            record_drop(
+                self._drop_workspace(),
+                reason="ping_pong",
+                room_id=room_id,
+                event_id=event.event_id,
+                detail="self-trigger suppressed",
+            )
             return
 
         text = event.body or ""
@@ -2540,6 +2579,13 @@ class AgentTeamsMatrixChannel(BaseChannel):
             ):
                 # Thread events that don't mention us are silently ignored
                 if is_thread_event:
+                    record_drop(
+                        self._drop_workspace(),
+                        reason="not_mentioned",
+                        room_id=room_id,
+                        event_id=event.event_id,
+                        detail="thread event without mention",
+                    )
                     return
                 logger.info(
                     "MatrixChannel: group text not mentioned, cached to "
@@ -2557,6 +2603,13 @@ class AgentTeamsMatrixChannel(BaseChannel):
                         message_id=event.event_id,
                         sender_id=sender_id,
                     ),
+                )
+                record_drop(
+                    self._drop_workspace(),
+                    reason="not_mentioned",
+                    room_id=room_id,
+                    event_id=event.event_id,
+                    detail="group text without mention cached to history",
                 )
                 return
 
@@ -2576,6 +2629,13 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 "MatrixChannel: received NO_REPLY from %s in %s, ignoring",
                 sender_id,
                 room_id,
+            )
+            record_drop(
+                self._drop_workspace(),
+                reason="no_reply",
+                room_id=room_id,
+                event_id=event.event_id,
+                detail="NO_REPLY protocol",
             )
             await self._send_typing(room_id, False)
             return
@@ -4586,6 +4646,21 @@ class AgentTeamsMatrixChannel(BaseChannel):
                             getattr(resp, "status_code", "?"),
                             getattr(resp, "message", ""),
                         )
+                    http_status = getattr(
+                        getattr(resp, "transport_response", None),
+                        "status_code",
+                        None,
+                    )
+                    detail = f"status={getattr(resp, 'status_code', '?')}"
+                    if isinstance(http_status, int):
+                        detail += f" http={http_status}"
+                    detail += f" message={getattr(resp, 'message', '')}"
+                    record_drop(
+                        self._drop_workspace(),
+                        reason="room_send_failed",
+                        room_id=room_id,
+                        detail=detail,
+                    )
                     return resp
 
                 # Success
@@ -4624,6 +4699,12 @@ class AgentTeamsMatrixChannel(BaseChannel):
                         room_id,
                         exc,
                     )
+                record_drop(
+                    self._drop_workspace(),
+                    reason="room_send_failed",
+                    room_id=room_id,
+                    detail=describe_exception(exc),
+                )
                 raise
 
         # Should not reach here, but guard against it

@@ -78,6 +78,9 @@ def _prepare(
     )
     # Proxy names resolve against the assembled server's globals.
     monkeypatch.setattr(server, "_pull_project", lambda *a, **k: True)
+    # Round 11 (#1467): request_attention loads the authoritative task
+    # before writing; these tests model healthy shared storage.
+    monkeypatch.setattr(server, "_pull_task", lambda *a, **k: True)
     monkeypatch.setattr(server, "_sync_task", lambda *a, **k: True)
     monkeypatch.setattr(
         server, "_validate_assignee_membership", lambda *a, **k: {"ok": True}

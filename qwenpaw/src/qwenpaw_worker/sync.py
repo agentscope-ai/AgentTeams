@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import threading
 import time
 from typing import Iterable, List, Optional
 
@@ -105,8 +106,19 @@ class FileSync:
         self.sync_state_path = Path(local_dir).parent / (
             f".{worker_name}-sync-state.json"
         )
+        # #1391: every local->remote push path (the blocking flush, the
+        # background push_local, and the on-demand push_directories) takes
+        # this lock, so the same object is never uploaded concurrently
+        # from two threads.
+        self._push_lock = threading.Lock()
 
-    def _mc(self, *args: str, check: bool = True, text: bool = True) -> subprocess.CompletedProcess:
+    def _mc(
+        self,
+        *args: str,
+        check: bool = True,
+        text: bool = True,
+        timeout: float | None = None,
+    ) -> subprocess.CompletedProcess:
         mc_bin = shutil.which("mc")
         if not mc_bin:
             raise RuntimeError("mc binary not found")
@@ -115,9 +127,10 @@ class FileSync:
             check=check,
             capture_output=True,
             text=text,
+            timeout=timeout,
         )
 
-    def ensure_alias(self) -> None:
+    def ensure_alias(self, timeout: float | None = None) -> None:
         if self._alias_set:
             return
         if os.getenv(f"MC_HOST_{self.mc_alias}"):
@@ -153,7 +166,15 @@ class FileSync:
             self.bucket,
         )
         try:
-            self._mc("alias", "set", self.mc_alias, endpoint, self.access_key, self.secret_key)
+            self._mc(
+                "alias",
+                "set",
+                self.mc_alias,
+                endpoint,
+                self.access_key,
+                self.secret_key,
+                timeout=timeout,
+            )
         except subprocess.CalledProcessError as exc:
             raise RuntimeError(f"configure storage alias failed: {_mc_error_message(exc)}") from None
         self._alias_set = True
@@ -172,10 +193,15 @@ class FileSync:
         logger.debug("mc cat failed component=sync key=%s returncode=%s", key, result.returncode)
         return None
 
-    def _cat_bytes(self, key: str) -> Optional[bytes]:
+    def _cat_bytes(self, key: str, timeout: float | None = None) -> Optional[bytes]:
         self.ensure_alias()
         try:
-            result = self._mc("cat", self._object_path(key), check=False, text=False)
+            result = self._mc("cat", self._object_path(key), check=False, text=False, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # #1500: a stalled read is a flush failure, not a missing
+            # object — swallowing it as None would spend the rest of the
+            # deadline on the upload that follows.
+            raise
         except Exception as exc:
             logger.debug("mc cat failed component=sync key=%s error_type=%s", key, type(exc).__name__)
             return None
@@ -512,7 +538,13 @@ class FileSync:
 
     def push_directories(self, directories: Iterable[Path]) -> List[str]:
         """Persist selected worker directories with one mirror per directory."""
+        # #1391: a directory push is a local->remote push path too; take
+        # the same lock as flush and the background push_local so the
+        # three never upload the same object concurrently.
+        with self._push_lock:
+            return self._push_directories_locked(directories)
 
+    def _push_directories_locked(self, directories: Iterable[Path]) -> List[str]:
         self.ensure_alias()
         mirrored = []
         local_root = self.local_dir.resolve()
@@ -575,6 +607,267 @@ class FileSync:
             mirrored.append(rel.as_posix())
         return mirrored
 
+    # ---- blocking flush barrier (#1391) --------------------------------
+
+    def flush(self, timeout: float | None = None) -> dict:
+        """Blocking push of every pending local change; returns per-file receipts.
+
+        Covers the same ground as ``push_local(sync, since=0)`` but runs as
+        a class method under the push lock, so a flush and the background
+        push loop never upload the same object concurrently.  A per-file
+        failure is recorded as a receipt and does not abort the rest of
+        the scan; with nothing pending the call is an idempotent no-op.
+
+        #1500: ``timeout`` bounds the whole call — the lock wait and every
+        storage command share one deadline — and ``ok`` is only true when
+        nothing is left behind: a conflict or an exhausted deadline is
+        reported as ``ok: false`` with ``conflicts`` / ``timedOut`` set,
+        never as a bare success.
+        """
+        started_at = time.monotonic()
+        deadline = started_at + timeout if timeout is not None else None
+        if deadline is None:
+            acquired = self._push_lock.acquire()
+        else:
+            acquired = self._push_lock.acquire(timeout=timeout)
+        if not acquired:
+            # The background push still holds the lock.  Report a failure
+            # receipt instead of racing it on the same objects.
+            return {
+                "ok": False,
+                "uploaded": [],
+                "skipped": [],
+                "errors": [
+                    {
+                        "path": "",
+                        "error": (
+                            f"flush timed out after {timeout:g}s waiting "
+                            "for the background push lock"
+                        ),
+                    }
+                ],
+                "conflicts": 0,
+                "timedOut": True,
+                "complete": False,
+                # Bounded estimate: the window is spent, so hash at most
+                # a short slice instead of stalling the exit on the tree.
+                "pending": self._count_dirty_files(budget=0.25),
+                "lastPushAt": self._last_push_at(),
+                "durationMs": max(0, int((time.monotonic() - started_at) * 1000)),
+            }
+        try:
+            return self._flush_locked(deadline)
+        finally:
+            self._push_lock.release()
+
+    def _flush_locked(self, deadline: float | None = None) -> dict:
+        started_at = time.monotonic()
+        uploaded: List[str] = []
+        skipped: List[str] = []
+        errors: List[dict] = []
+        timed_out = False
+        # #1500: the deadline is set in flush() before the lock wait, so
+        # it covers the whole call.  The budget is shared by every
+        # blocking storage command below, so each one re-reads the clock
+        # right before it runs: a command that finishes inside its own
+        # timeout can still push the flush total past the deadline,
+        # which a timeout computed once up front would never catch.
+        def storage_timeout(path_label: str) -> float | None:
+            """Remaining flush budget for the next blocking storage call.
+
+            Returns None either when there is no deadline (the call runs
+            unbounded) or when the budget is exhausted; in the second
+            case the incomplete outcome is recorded here and the caller
+            must stop the flush instead of starting the call.
+            """
+            nonlocal timed_out
+            if deadline is None:
+                return None
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                errors.append({
+                    "path": path_label,
+                    "error": f"flush deadline exhausted before {path_label}",
+                })
+                timed_out = True
+                return None
+            return remaining
+
+        call_timeout: float | None = None
+        if deadline is not None:
+            call_timeout = storage_timeout("storage setup")
+            if call_timeout is not None:
+                try:
+                    self.ensure_alias(timeout=call_timeout)
+                except subprocess.TimeoutExpired:
+                    errors.append({
+                        "path": "",
+                        "error": f"storage call timed out after {call_timeout:g}s",
+                    })
+                    timed_out = True
+        else:
+            self.ensure_alias()
+
+        local_dir = self.local_dir
+        if local_dir.is_dir() and not timed_out:
+            state = self._load_sync_state()
+            tracked = (state.get("roots") or {}).get("worker") or {}
+            for path in sorted(local_dir.rglob("*")):
+                if not path.is_file() or path.is_symlink():
+                    continue
+                try:
+                    rel_path = path.relative_to(local_dir)
+                except ValueError:
+                    continue
+                rel = rel_path.as_posix()
+                if _skip_background_push(rel_path):
+                    continue
+                call_timeout = storage_timeout(rel)
+                if deadline is not None and call_timeout is None:
+                    # #1500: the shutdown window takes priority over
+                    # the tail of the scan — stop before starting a
+                    # file the deadline cannot cover.
+                    break
+                key = f"{self.remote_prefix}/{rel}"
+                try:
+                    data: Optional[bytes] = None
+                    if path.stat().st_size <= COMPARE_CONTENT_MAX_BYTES:
+                        # Snapshot the bytes before any compare or upload;
+                        # the baseline is derived from this content, never
+                        # from a re-read at record time.
+                        data = path.read_bytes()
+                        local_sha = hashlib.sha256(data).hexdigest()
+                    else:
+                        # Large file: no remote download for the compare,
+                        # the same rule push_local and _directory_conflicts
+                        # apply via the size threshold.
+                        local_sha = _sha256_file(path)
+                    if data is not None:
+                        call_timeout = storage_timeout(rel)
+                        if deadline is not None and call_timeout is None:
+                            break
+                        remote = self._cat_bytes(key, timeout=call_timeout)
+                        if remote == data:
+                            # The remote already holds this exact content:
+                            # no upload, but the manifest still needs the
+                            # baseline.
+                            self._record_pushed("worker", rel, local_sha)
+                            skipped.append(f"unchanged:{rel}")
+                            continue
+                        baseline_entry = tracked.get(rel)
+                        baseline = (
+                            baseline_entry.get("sha256")
+                            if isinstance(baseline_entry, dict)
+                            else None
+                        )
+                        if (
+                            baseline
+                            and local_sha != baseline
+                            and remote is not None
+                            and hashlib.sha256(remote).hexdigest() != baseline
+                        ):
+                            # Changed on both sides since the last push:
+                            # keep the newer remote object, the same rule
+                            # push_directories applies via conflicts.
+                            skipped.append(f"conflict:{rel}")
+                            continue
+                    call_timeout = storage_timeout(rel)
+                    if deadline is not None and call_timeout is None:
+                        break
+                    self._mc(
+                        "cp", str(path), self._object_path(key),
+                        check=True, timeout=call_timeout,
+                    )
+                    if data is not None:
+                        call_timeout = storage_timeout(rel)
+                        if deadline is not None and call_timeout is None:
+                            break
+                        # Bind the baseline to what the remote actually
+                        # holds after the upload; a failed or empty
+                        # read-back falls back to the pre-upload snapshot.
+                        remote_after = self._cat_bytes(key, timeout=call_timeout)
+                        if remote_after is not None and remote_after != data:
+                            local_sha = hashlib.sha256(remote_after).hexdigest()
+                    uploaded.append(rel)
+                    self._record_pushed("worker", rel, local_sha)
+                except subprocess.TimeoutExpired:
+                    # #1500: one stalled storage call ends the flush —
+                    # retrying the next file would only spend the
+                    # remaining shutdown window on more stalls.
+                    errors.append({
+                        "path": rel,
+                        "error": f"storage call timed out after {call_timeout:g}s",
+                    })
+                    timed_out = True
+                    break
+                except Exception as exc:
+                    if isinstance(exc, subprocess.CalledProcessError):
+                        message = _mc_error_message(exc)
+                    else:
+                        message = str(exc) or type(exc).__name__
+                    errors.append({"path": rel, "error": message})
+
+        # #1500: ok means nothing is left behind — a conflict or a
+        # deadline-aborted scan is a failure even with zero errors.
+        conflicts = sum(1 for item in skipped if item.startswith("conflict:"))
+        pending = len(errors) + conflicts
+        ok = not errors and conflicts == 0 and not timed_out
+        return {
+            "ok": ok,
+            "uploaded": sorted(set(uploaded)),
+            "skipped": sorted(skipped),
+            "errors": errors,
+            "conflicts": conflicts,
+            "timedOut": timed_out,
+            "complete": ok,
+            "pending": pending,
+            "lastPushAt": self._last_push_at(),
+            "durationMs": max(0, int((time.monotonic() - started_at) * 1000)),
+        }
+
+    def _count_dirty_files(self, budget: float | None = None) -> int:
+        """Read-only estimate of local files ahead of the push manifest.
+
+        ``budget`` (seconds) bounds the scan. The lock-timeout path reports
+        this number after the flush window is already spent, so it must not
+        hash a large tree unbounded — it stops at the budget and reports
+        what it has seen so far (the value is advisory, for logs).
+        """
+        deadline = time.monotonic() + budget if budget else None
+        state = self._load_sync_state()
+        files = (state.get("roots") or {}).get("worker") or {}
+        local_dir = self.local_dir
+        if not local_dir.is_dir():
+            return 0
+        count = 0
+        for path in local_dir.rglob("*"):
+            if deadline is not None and time.monotonic() >= deadline:
+                break
+            if not path.is_file() or path.is_symlink():
+                continue
+            try:
+                rel_path = path.relative_to(local_dir)
+            except ValueError:
+                continue
+            if _skip_background_push(rel_path):
+                continue
+            try:
+                sha = _sha256_file(path)
+            except OSError:
+                continue
+            entry = files.get(rel_path.as_posix())
+            baseline = entry.get("sha256") if isinstance(entry, dict) else None
+            if baseline != sha:
+                count += 1
+        return count
+
+    def _last_push_at(self) -> str:
+        state = self._load_sync_state()
+        timestamp = state.get("updated_at")
+        if not isinstance(timestamp, (int, float)) or timestamp <= 0:
+            timestamp = time.time()
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(timestamp))
+
 
 def _skip_background_push(rel: Path) -> bool:
     rel_path = rel.as_posix()
@@ -602,6 +895,13 @@ def _skip_background_push(rel: Path) -> bool:
 
 
 def push_local(sync: FileSync, since: float = 0) -> List[str]:
+    # #1391: the background push and FileSync.flush share this lock, so the
+    # two never upload the same object concurrently.
+    with sync._push_lock:
+        return _push_local_locked(sync, since)
+
+
+def _push_local_locked(sync: FileSync, since: float = 0) -> List[str]:
     pushed = []
     local_dir = sync.local_dir
     if not local_dir.exists():

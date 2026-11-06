@@ -572,6 +572,152 @@ Error responses:
 | `409` | Ambiguous project id across teams; retry with `?team=`. |
 | `500` | K8s or object-store failure. |
 
+## Team attention inbox (read-only)
+
+`GET /api/v1/teams/{name}/attention` aggregates the in-flight human
+questions (approval / decision / escalation) of a team's projects into one
+read — the data source of the dashboard inbox. It reads the same per-task
+`meta.json` objects the project-scoped `GET /api/v1/projects/{id}/attention`
+reads, one level up: every project of the team, then every graph task of
+every project. Auth is team-scoped (same policy as the other team reads):
+a caller who cannot read the team gets a `404` that does not confirm the
+team exists.
+
+Query parameters:
+
+| Param | Type | Default | Meaning |
+|:--|:--|:--|:--|
+| `status` | string | `open` | `open` (pending, not yet overdue) \| `overdue` (pending, past deadline) \| `resolved` \| `all`. Anything else is a `400`. |
+| `limit` | int | `200` | Maximum rows returned. `1..1000`; above `1000` or below `1` is a `400` (never a clamp). |
+
+Response `200 OK`:
+
+```json
+{
+  "team_id": "biz-team",
+  "items": [
+    {
+      "taskId": "t1",
+      "eventId": "$matrix-event-id",
+      "teamId": "biz-team",
+      "projectId": "demo-project-001",
+      "kind": "approval",
+      "question": "Proceed with deploy?",
+      "options": [{ "id": "yes", "label": "Yes", "description": "ship it" }],
+      "requestedAt": "2026-11-02T09:00:00Z",
+      "timeoutAt": "2099-01-01T00:00:00Z",
+      "overdue": false,
+      "resolved": false,
+      "resolvedVia": null,
+      "resolvedBy": null,
+      "resolvedAt": null,
+      "resolution": null,
+      "freeform": false,
+      "notified": null,
+      "roomId": "!room:host",
+      "url": "/projects/demo-project-001/tasks/t1"
+    }
+  ],
+  "count": 1,
+  "truncated": false
+}
+```
+
+Response body:
+
+| Field | Meaning |
+|:--|:--|
+| `team_id` | The team name from the URL (the CR name). |
+| `items` | Inbox rows, sorted by urgency: `status=overdue` by `timeoutAt` ascending, every other status by `requestedAt` descending (stable tie-breakers: task id, kind, question). Row fields follow the workbench contract (camelCase); `eventId` is the Matrix event id of the room message that raised the record (`null` when the notification was withheld), `resolvedVia` / `resolvedBy` / `resolvedAt` / `resolution` are `null` until the record is resolved, and `notified` is `null` when the record has no `notification_log`. |
+| `count` | `len(items)` — the rows actually returned, not the rows that matched the filter. |
+| `truncated` | `true` when the filter matched more rows than `limit` and `items` was cut to the first `limit` rows. Always present. |
+
+Response headers (each absent when its condition does not hold):
+
+| Header | Meaning |
+|:--|:--|
+| `X-Attention-Truncated: 1` | Set iff `truncated` is `true` — the inbox holds more matching rows than were returned. |
+| `X-Attention-Skipped: N` | `N` of the team's projects were **degraded**: a project `meta.json`, or one of its task metas, could not be read or parsed. A degraded project still contributes the rows of its healthy tasks — only the unreadable task's rows are missing. Counts degraded projects only (once per project) — never truncated rows. |
+
+The three signals are independent, so a caller can tell the three
+looks-alike states apart: `count=0` + `truncated=false` is a genuinely
+empty inbox; `count=limit` + `truncated=true` is a limited (but healthy)
+inbox; `X-Attention-Skipped > 0` marks a degraded read: the affected tasks
+contributed no rows, while the rest of those projects' healthy tasks are
+still returned (a degraded project is not excluded wholesale).
+
+Read order and what `limit` costs: the read lists the team's projects,
+then reads every project meta and every task meta of the team; only then
+are the rows filtered, sorted, and capped at `limit`. **`limit` bounds
+the number of returned rows, not the object-store work** — a truncated
+response still paid a full-team read. Stopping the reads early is a
+possible future optimization and is deliberately not done today.
+
+### Storage layout behind the read
+
+All state lives in the configured object store (MinIO or OSS) as JSON
+objects, keys relative to the configured storage prefix:
+
+| Object | Key | Role in the read |
+|:--|:--|:--|
+| Team project list | `teams/{team}/shared/projects/` | The request's one list call; direct children are the team's project directories. |
+| Project meta | `teams/{team}/shared/projects/{project_id}/meta.json` | One read per listed project: identity plus the graph task list (`tasks`, or `loop.tasks` for loop plans). |
+| Task meta | `teams/{team}/shared/tasks/{task_id}/meta.json` | One read per graph task; its `attention` array is the inbox source. A missing object contributes nothing; an unreadable or unparsable one drops that task's rows and marks its project degraded (counted once in `X-Attention-Skipped`); the project's other tasks still contribute. |
+| Overdue signal event | `teams/{team}/shared/events/{team_id}/ev_*.json` | The only write of the read: a pending item past its `timeoutAt` gets one idempotent `attention_overdue` signal event; a failed event write never fails the read. |
+
+Two naming subtleties, both handled by the read:
+
+* When `spec.teamName` overrides the CR name, both
+  `teams/{crName}/shared/projects/` and `teams/{effectiveName}/shared/projects/`
+  are listed and the projects are de-duplicated by `(team_id, project_id)`
+  — workers may resolve either spelling.
+* The team endpoint never lists the global `shared/projects/` prefix:
+  standalone (team-less) projects are out of scope by design.
+
+### Record identity and the DB migration boundary
+
+An attention record's identity is `(project, eventId)`: the project it
+belongs to plus the Matrix event id of the room message that raised it.
+`eventId` is written into the record when the notification is sent and is
+**returned on the row** (see the `items` fields above), so two records that
+differ only in that id never serialize identically. A record whose
+notification was withheld carries no `eventId`; until one is sent, dedupe
+must fall back to `(project, taskId, kind, requestedAt)`.
+
+**Future work, not a delivered guarantee:** if attention state moves from
+these `meta.json` objects into a database later, `(project, eventId)` — and
+the surface above it (endpoint, query parameters, row fields, the two
+headers) — is the boundary intended to stay unchanged. That migration does
+not exist today; this section pins the current layout, the truncation
+semantics and the read-cost evidence so a later migration has a documented
+contract to move against.
+
+### Current read cost (measured)
+
+`BenchmarkGetTeamAttention` (in `agentteams-controller/internal/server`)
+measures the read at a representative large-team scale — 200 projects ×
+10 attention items each (2000 rows, 10× the default `limit` of 200) — and
+asserts the counts below, so a layout change that alters the fan-out
+fails the benchmark instead of regressing silently:
+
+| Operation | Count per request |
+|:--|:--|
+| List calls | 1 (the team project prefix) |
+| Object reads | 2200 — 200 project metas + 2000 task metas |
+| Rows returned | 200 (the default `limit`), `truncated=true` |
+
+The list and object-read counts are deterministic and machine-independent:
+they are measured on the benchmark's fixture scale (200 projects × 10 tasks)
+and asserted against the attention objects the fixture actually places in
+the store, so the count follows the fixture rather than a hand-computed
+product. The wall time per request is machine-dependent and is reported by
+the benchmark run itself (run from the `agentteams-controller` directory):
+
+    go test -run xxx -bench BenchmarkGetTeamAttention -benchtime 1x ./internal/server/
+
+Latency is machine-dependent, so no fixed number is recorded here — the
+gate run's output is the evidence.
+
 ## Project identity & disambiguation
 
 Project ids are only unique within a worker workspace upstream: two teams can

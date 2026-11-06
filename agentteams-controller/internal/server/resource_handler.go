@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -272,9 +273,90 @@ func (h *ResourceHandler) GetWorker(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteError(w, http.StatusNotFound, "get worker: not found")
 }
 
+// teamMemberHit is one entry of ListWorkers' per-request team index: the
+// first team (in list order) that references a worker, and that worker's
+// member ref within it — findTeamMember's first-hit result, precomputed
+// from a single Team list (issue #1475).
+type teamMemberHit struct {
+	team   *v1beta1.Team
+	member string
+}
+
+// workerFields is the parsed ?fields= selection of GET /api/v1/workers
+// (issue #1475): which projection each list row carries.
+type workerFields int
+
+const (
+	// workerFieldsAll is the default: the full WorkerResponse, serialized
+	// byte-identically to the pre-projection implementation.
+	workerFieldsAll workerFields = iota
+	workerFieldsSpec
+	workerFieldsStatus
+	workerFieldsSpecStatus
+)
+
+// parseWorkerListFields parses the ?fields= query parameter of
+// GET /api/v1/workers (issue #1475). An empty value (or only empty
+// tokens) selects the default full response. Otherwise it must be a
+// comma-separated selection from "spec" and "status" — token order and
+// duplicates do not matter. "all" names the default full response and
+// cannot be combined with a subset. Unknown tokens are rejected so a
+// typo cannot silently change the payload (same fail-closed stance as
+// the kind parameter on the project events endpoint).
+func parseWorkerListFields(raw string) (workerFields, error) {
+	const valid = "spec, status, all"
+	spec, status, all := false, false, false
+	for _, token := range strings.Split(raw, ",") {
+		token = strings.TrimSpace(token)
+		switch token {
+		case "":
+		case "spec":
+			spec = true
+		case "status":
+			status = true
+		case "all":
+			all = true
+		default:
+			return 0, fmt.Errorf("invalid fields value %q: valid values are %s", token, valid)
+		}
+	}
+	if all && (spec || status) {
+		return 0, fmt.Errorf("invalid fields value: %q cannot be combined with other values; valid values are %s", "all", valid)
+	}
+	switch {
+	case spec && status:
+		return workerFieldsSpecStatus, nil
+	case spec:
+		return workerFieldsSpec, nil
+	case status:
+		return workerFieldsStatus, nil
+	default:
+		return workerFieldsAll, nil
+	}
+}
+
+// projectWorkerListRow reduces one list row to the requested view.
+func projectWorkerListRow(resp WorkerResponse, views workerFields) any {
+	switch views {
+	case workerFieldsSpec:
+		return resp.SpecView()
+	case workerFieldsStatus:
+		return resp.StatusView()
+	default: // workerFieldsSpecStatus
+		return resp.SpecStatusView()
+	}
+}
+
 func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 	caller := authpkg.CallerFromContext(r.Context())
 	teamFilter := r.URL.Query().Get("team")
+	// fields selects a slim projection of each list row (issue #1475);
+	// absent (or "all") keeps the default full response byte-identical.
+	fieldViews, err := parseWorkerListFields(r.URL.Query().Get("fields"))
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	workers := make([]WorkerResponse, 0)
 
@@ -283,17 +365,37 @@ func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 		writeK8sError(w, "list workers", err)
 		return
 	}
+	// Index team membership once per request instead of once per worker
+	// (issue #1475: findTeamMember re-listed every Team CR per worker, so
+	// an N-worker list cost 1 WorkerList + N TeamList round-trips). The
+	// first team in list order referencing a worker wins, matching
+	// findTeamMember's first-hit traversal. An empty worker list skips the
+	// Team list entirely, exactly as the per-worker lookups did.
+	var teams v1beta1.TeamList
+	var teamIndex map[string]teamMemberHit
+	if len(list.Items) > 0 {
+		if err := h.client.List(r.Context(), &teams, client.InNamespace(h.namespace)); err != nil {
+			writeK8sError(w, "list workers: lookup team member", err)
+			return
+		}
+		teamIndex = make(map[string]teamMemberHit, len(teams.Items))
+		for i := range teams.Items {
+			team := &teams.Items[i]
+			for _, ref := range team.Spec.WorkerMembers {
+				if _, seen := teamIndex[ref.Name]; !seen {
+					teamIndex[ref.Name] = teamMemberHit{team: team, member: ref.Name}
+				}
+			}
+		}
+	}
 	for i := range list.Items {
 		resp := workerToResponse(&list.Items[i])
 		if !canManageWorkerEnv(r) {
 			resp.Env = nil
 			resp.EnvEditable = false
 		}
-		if team, member, ok, terr := findTeamMember(r.Context(), h.client, h.namespace, list.Items[i].Name); terr != nil {
-			writeK8sError(w, "list workers: lookup team member", terr)
-			return
-		} else if ok {
-			applyTeamMember(&resp, team, member)
+		if hit, ok := teamIndex[list.Items[i].Name]; ok {
+			applyTeamMember(&resp, hit.team, hit.member)
 		}
 		// Scoped readers (team leaders or humans) only see the workers in
 		// the teams they control; L3 (worker-scoped) humans only see their
@@ -313,7 +415,17 @@ func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 		workers = append(workers, resp)
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, WorkerListResponse{Workers: workers, Total: len(workers)})
+	if fieldViews == workerFieldsAll {
+		httputil.WriteJSON(w, http.StatusOK, WorkerListResponse{Workers: workers, Total: len(workers)})
+		return
+	}
+	// Projected rows share the envelope shape (workers/total) but carry
+	// only the selected view per row.
+	projected := make([]any, 0, len(workers))
+	for i := range workers {
+		projected = append(projected, projectWorkerListRow(workers[i], fieldViews))
+	}
+	httputil.WriteJSON(w, http.StatusOK, workerListProjection{Workers: projected, Total: len(workers)})
 }
 
 func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
@@ -740,6 +852,16 @@ func (h *ResourceHandler) CreateHuman(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, "name is required")
 		return
 	}
+	if req.ModelAccess != nil {
+		if err := h.validateModelAccess(r.Context(), req.ModelAccess); err != nil {
+			if errors.Is(err, errDanglingReference) || errors.Is(err, errInvalidModelAccess) {
+				httputil.WriteError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeK8sError(w, "validate model access", err)
+			return
+		}
+	}
 
 	human := &v1beta1.Human{
 		ObjectMeta: metav1.ObjectMeta{
@@ -753,6 +875,7 @@ func (h *ResourceHandler) CreateHuman(w http.ResponseWriter, r *http.Request) {
 			AccessibleTeams:   req.AccessibleTeams,
 			AccessibleWorkers: req.AccessibleWorkers,
 			Note:              req.Note,
+			ModelAccess:       req.ModelAccess,
 		},
 	}
 
@@ -812,6 +935,7 @@ func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
 		plBefore := human.Spec.PermissionLevel
 		teamsBefore := human.Spec.AccessibleTeams
 		workersBefore := human.Spec.AccessibleWorkers
+		modelAccessBefore := human.Spec.ModelAccess
 
 		if req.PermissionLevel != nil && (*req.PermissionLevel < 1 || *req.PermissionLevel > 3) {
 			httputil.WriteError(w, http.StatusBadRequest, "permissionLevel must be 1 (admin), 2 (team), or 3 (worker)")
@@ -830,6 +954,16 @@ func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
 		if req.Capabilities != nil {
 			if err := validateCapabilities(req.Capabilities); err != nil {
 				httputil.WriteError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+		if req.ModelAccess != nil {
+			if err := h.validateModelAccess(ctx, req.ModelAccess); err != nil {
+				if errors.Is(err, errDanglingReference) || errors.Is(err, errInvalidModelAccess) {
+					httputil.WriteError(w, http.StatusBadRequest, err.Error())
+					return
+				}
+				writeK8sError(w, "validate model access", err)
 				return
 			}
 		}
@@ -854,6 +988,11 @@ func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
 			// already rejected values outside the closed set.
 			human.Spec.Capabilities = authpkg.NormalizeCapabilities(*req.Capabilities)
 		}
+		if req.ModelAccess != nil {
+			// Full replace (merge-patch): a present table — including an
+			// empty object — replaces the whole grant table.
+			human.Spec.ModelAccess = req.ModelAccess
+		}
 		if req.Note != nil {
 			human.Spec.Note = *req.Note
 		}
@@ -872,6 +1011,12 @@ func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
 		// both audit layers.
 		if req.Capabilities != nil {
 			h.auditCapabilityChange(ctx, name, caller, capsBefore, human.Spec.Capabilities)
+		}
+
+		// Audit wiring point: a model-grant change is a sensitive-surface
+		// change and is recorded on both audit layers.
+		if req.ModelAccess != nil {
+			h.auditModelAccessChange(ctx, name, caller, modelAccessBefore, human.Spec.ModelAccess)
 		}
 
 		// Audit wiring point (#1220 §8 event table, line 6): human scope
@@ -1042,6 +1187,11 @@ func validateCapabilities(caps *[]string) error {
 // failure (mapped to a server error).
 var errDanglingReference = errors.New("dangling reference")
 
+// errInvalidModelAccess marks a structural violation of Human.modelAccess
+// (bad role, table/inline XOR, duplicate scope, empty entry, …). It maps to
+// 400; backend failures stay 500.
+var errInvalidModelAccess = errors.New("invalid model access")
+
 // validateHumanReferences rejects permission grants that point at missing
 // Teams or Workers: a dangling reference silently widens nothing but leaves
 // the human unable to reach a resource they believe they can. Missing
@@ -1097,6 +1247,190 @@ func (h *ResourceHandler) validateHumanReferences(ctx context.Context, teams *[]
 		}
 	}
 	return nil
+}
+
+// modelAccessRoleSet / modelAccessCLISet are the closed value sets of
+// PR-A1a §6.
+var (
+	modelAccessRoleSet = map[string]struct{}{
+		"":            {},
+		"*":           {},
+		"team_leader": {},
+		"worker":      {},
+	}
+	modelAccessCLISet = map[string]struct{}{
+		"qwen-code": {},
+		"opencode":  {},
+		"qoder":     {},
+	}
+)
+
+// validateModelAccess enforces the PR-A1a §6 invariants on the per-human
+// model-grant table. Structural violations are wrapped in
+// errInvalidModelAccess (400); a scope referencing an unknown or
+// out-of-scope ModelAccessTable is wrapped in errDanglingReference (400,
+// table name in the message); backend lookup failures propagate unwrapped
+// (500, per the reference-validation pattern).
+func (h *ResourceHandler) validateModelAccess(ctx context.Context, spec *v1beta1.ModelAccessSpec) error {
+	if spec == nil {
+		return nil
+	}
+	if len(spec.Scopes) > 50 {
+		return fmt.Errorf("%w: modelAccess.scopes: at most 50 scopes, got %d", errInvalidModelAccess, len(spec.Scopes))
+	}
+	seenRoles := map[string]struct{}{}
+	for i := range spec.Scopes {
+		sc := &spec.Scopes[i]
+		if _, ok := modelAccessRoleSet[sc.Role]; !ok {
+			return fmt.Errorf("%w: modelAccess.scopes[%d].role: %q is not one of \"\", \"*\", \"team_leader\", \"worker\"", errInvalidModelAccess, i, sc.Role)
+		}
+		hasInline := sc.Main != nil || sc.Spawn != nil || len(sc.CodingCli) > 0
+		if sc.Table != "" && hasInline {
+			return fmt.Errorf("%w: modelAccess.scopes[%d]: table and inline surfaces are mutually exclusive", errInvalidModelAccess, i)
+		}
+		if sc.Table == "" && !hasInline {
+			return fmt.Errorf("%w: modelAccess.scopes[%d]: a scope needs a table or at least one inline surface", errInvalidModelAccess, i)
+		}
+		roleKey := sc.Role
+		if roleKey == "" {
+			roleKey = "*"
+		}
+		if _, dup := seenRoles[roleKey]; dup {
+			return fmt.Errorf("%w: modelAccess.scopes[%d]: duplicate role %q", errInvalidModelAccess, i, sc.Role)
+		}
+		seenRoles[roleKey] = struct{}{}
+		if err := validateModelAccessSurfaces(sc.Main, sc.Spawn, sc.CodingCli); err != nil {
+			return fmt.Errorf("%w: modelAccess.scopes[%d]: %w", errInvalidModelAccess, i, err)
+		}
+		if sc.Table != "" {
+			var table v1beta1.ModelAccessTable
+			if err := h.referenceReader().Get(ctx, client.ObjectKey{Name: sc.Table, Namespace: h.namespace}, &table); err != nil {
+				if apierrors.IsNotFound(err) || h.referenceOutOfScope(table.Labels) {
+					return fmt.Errorf("%w: unknown model access table %q", errDanglingReference, sc.Table)
+				}
+				return fmt.Errorf("get model access table %s: %w", sc.Table, err)
+			}
+		}
+	}
+	return nil
+}
+
+// validateModelAccessSurfaces checks the inline surfaces of one scope or
+// one table spec: per-surface entry limits, non-empty (provider, model),
+// duplicate models within a surface, and the closed CLI set.
+func validateModelAccessSurfaces(main, spawn *v1beta1.ModelAccessSurface, cli []v1beta1.ModelAccessCli) error {
+	if err := validateModelAccessSurface(main, "main"); err != nil {
+		return err
+	}
+	if err := validateModelAccessSurface(spawn, "spawn"); err != nil {
+		return err
+	}
+	if len(cli) > 3 {
+		return fmt.Errorf("codingCli: at most 3 entries, got %d", len(cli))
+	}
+	seen := map[string]struct{}{}
+	for i := range cli {
+		c := &cli[i]
+		if _, ok := modelAccessCLISet[c.CLI]; !ok {
+			return fmt.Errorf("codingCli[%d].cli: %q is not one of qwen-code, opencode, qoder", i, c.CLI)
+		}
+		if _, dup := seen[c.CLI]; dup {
+			return fmt.Errorf("codingCli[%d]: duplicate cli %q", i, c.CLI)
+		}
+		seen[c.CLI] = struct{}{}
+		if err := validateModelAccessSurfaceEntries(c.Entries, "codingCli["+c.CLI+"]"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateModelAccessSurface checks one optional surface wrapper.
+func validateModelAccessSurface(s *v1beta1.ModelAccessSurface, label string) error {
+	if s == nil {
+		return nil
+	}
+	return validateModelAccessSurfaceEntries(s.Entries, label)
+}
+
+// validateModelAccessSurfaceEntries is the per-entry rule set (PR-A1a §6.6):
+// at most 200 entries, non-empty provider/model after TrimSpace, and no
+// duplicate model within the same surface.
+func validateModelAccessSurfaceEntries(entries []v1beta1.ModelAccessEntry, label string) error {
+	if len(entries) > 200 {
+		return fmt.Errorf("%s: at most 200 entries, got %d", label, len(entries))
+	}
+	seen := map[string]struct{}{}
+	for _, e := range entries {
+		provider := strings.TrimSpace(e.Provider)
+		model := strings.TrimSpace(e.Model)
+		if provider == "" {
+			return fmt.Errorf("%s: entry with empty provider", label)
+		}
+		if model == "" {
+			return fmt.Errorf("%s: entry with empty model", label)
+		}
+		if _, dup := seen[model]; dup {
+			return fmt.Errorf("%s: duplicate model %q", label, model)
+		}
+		seen[model] = struct{}{}
+	}
+	return nil
+}
+
+// validateModelAccessTableSpec reuses the scope surface checks for the body
+// of a shared ModelAccessTable.
+func validateModelAccessTableSpec(spec *v1beta1.ModelAccessTableSpec) error {
+	return validateModelAccessSurfaces(spec.Main, spec.Spawn, spec.CodingCli)
+}
+
+// modelAccessSummary renders a one-line per-scope role/table/row-count
+// summary for the audit trail — never the full entry list.
+func modelAccessSummary(spec *v1beta1.ModelAccessSpec) string {
+	if spec == nil {
+		return "(none)"
+	}
+	parts := make([]string, 0, len(spec.Scopes))
+	for _, sc := range spec.Scopes {
+		role := sc.Role
+		if role == "" {
+			role = "*"
+		}
+		part := role
+		if sc.Table != "" {
+			part += " table=" + sc.Table
+		}
+		if sc.Main != nil {
+			part += fmt.Sprintf(" main=%d", len(sc.Main.Entries))
+		}
+		if sc.Spawn != nil {
+			part += fmt.Sprintf(" spawn=%d", len(sc.Spawn.Entries))
+		}
+		for _, c := range sc.CodingCli {
+			part += fmt.Sprintf(" %s=%d", c.CLI, len(c.Entries))
+		}
+		parts = append(parts, part)
+	}
+	return strings.Join(parts, "; ")
+}
+
+// auditModelAccessChange records a model-grant change on both audit layers.
+// Before/After carry the compact per-scope summaries; a no-op rewrite
+// (identical policy) emits no event. Audit failures never break the
+// update: the audit client logs durable-layer errors internally.
+func (h *ResourceHandler) auditModelAccessChange(ctx context.Context, name string, caller *authpkg.CallerIdentity, before, after *v1beta1.ModelAccessSpec) {
+	if h.audit == nil || caller == nil || reflect.DeepEqual(before, after) {
+		return
+	}
+	beforeSummary := modelAccessSummary(before)
+	afterSummary := modelAccessSummary(after)
+	h.audit.Record(ctx, audit.Event{
+		Who: caller.Username, Role: caller.Role, Target: name,
+		Action: "model_access_update",
+		Before: []string{beforeSummary},
+		After:  []string{afterSummary},
+		Detail: "model_access " + beforeSummary + " -> " + afterSummary,
+	})
 }
 
 func (h *ResourceHandler) ListHumans(w http.ResponseWriter, r *http.Request) {
@@ -1325,6 +1659,7 @@ func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 		Phase:                        w.Status.Phase,
 		State:                        w.Spec.DesiredState(),
 		Model:                        w.Spec.Model,
+		ModelProvider:                w.Spec.ModelProvider,
 		SubagentModel:                w.Spec.SubagentModel,
 		LlmStreamFirstContentTimeout: w.Spec.LlmStreamFirstContentTimeout,
 		LlmStreamIdleTimeout:         w.Spec.LlmStreamIdleTimeout,
@@ -1476,6 +1811,7 @@ func managerToResponse(m *v1beta1.Manager) ManagerResponse {
 		Phase:        m.Status.Phase,
 		State:        m.Spec.DesiredState(),
 		Model:        m.Spec.Model,
+		ModelProvider: m.Spec.ModelProvider,
 		Runtime:      m.Spec.Runtime,
 		Image:        m.Spec.Image,
 		MatrixUserID: m.Status.MatrixUserID,
@@ -1506,6 +1842,7 @@ func humanToResponse(h *v1beta1.Human) HumanResponse {
 		InitialPassword:   h.Status.InitialPassword,
 		Rooms:             h.Status.Rooms,
 		Message:           h.Status.Message,
+		ModelAccess:       h.Spec.ModelAccess,
 	}
 	if resp.Phase == "" {
 		resp.Phase = "Pending"

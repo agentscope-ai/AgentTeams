@@ -76,6 +76,10 @@ SOCKET_MODE = 0o600
 # Handshake read timeout (seconds) — a client that connects and sends
 # nothing must not wedge the accept loop.
 HANDSHAKE_TIMEOUT = 10.0
+# A rejected connection is drained (not closed immediately): closing a unix
+# socket with unread bytes makes the peer's in-flight write fail with
+# EPIPE/ECONNRESET and can drop the queued error frame (see #1522 CI).
+REJECT_DRAIN_TIMEOUT = 1.0
 
 # Frame types.
 HELLO = "hello"
@@ -634,6 +638,18 @@ class SidecarServer:
             conn.sendall(encode_frame(make_error(code, message)))
         except OSError:
             pass
+        # Drain whatever the rejected peer writes before closing. Closing a
+        # unix socket with unread bytes makes the peer's in-flight hello fail
+        # with EPIPE/ECONNRESET, and that reset can discard the error frame
+        # queued above — the rejection then degrades to a bare close instead
+        # of the protocol error the client must see (one agent = one
+        # connection, fail closed with the reason).
+        try:
+            conn.settimeout(REJECT_DRAIN_TIMEOUT)
+            while conn.recv(4096):
+                pass
+        except OSError:
+            pass
         try:
             conn.close()
         except OSError:
@@ -682,7 +698,16 @@ class SidecarClient:
         reader = LineReader()
         try:
             sock.connect(str(self._socket_path))
-            sock.sendall(encode_frame(make_hello(agent, protocol, capabilities)))
+            try:
+                sock.sendall(encode_frame(make_hello(agent, protocol, capabilities)))
+            except OSError as exc:
+                # The server may have closed the connection before this write
+                # (rejected handshake). That is a protocol-level rejection,
+                # not a raw socket error: fail closed with the stable code.
+                raise SidecarProtocolError(
+                    f"sidecar closed the connection during handshake: {exc}",
+                    "connection_closed",
+                ) from exc
             sock.settimeout(self._handshake_timeout)
             line = reader.read_line(sock)
             if line == b"":

@@ -58,7 +58,7 @@ type signalEmitter struct {
 	Level       string // contract levels[] value (contract cross-check only)
 }
 
-// signalEmitters — the six Go write endpoints (#1172, TH-4). source_event
+// signalEmitters — the Go write endpoints and overdue sweep. source_event
 // values must match the contract rows' source_events (the id_rule hash input).
 var signalEmitters = map[string]signalEmitter{
 	"PauseProject":     {SourceEvent: "project_paused", EventType: "SIG-DECISION", Origin: "decision_lock", Level: "warn"},
@@ -67,6 +67,11 @@ var signalEmitters = map[string]signalEmitter{
 	"CancelTask":       {SourceEvent: "task_cancelled", EventType: "SIG-DECISION", Origin: "decision_lock", Level: "error"},
 	"CompleteProject":  {SourceEvent: "project_completed", EventType: "SIG-COMPLETE", Origin: "submit", Level: "info"},
 	"ResolveAttention": {SourceEvent: "attention_resolved", EventType: "SIG-ATTENTION", Origin: "attention_resolved", Level: "info"},
+	// Attention overdue sweep (#1394 S1): the read path emits the
+	// event for an item whose deadline has passed, so the stream stays
+	// complete without a background writer. The contract row owns the
+	// emitter (replacing the #1394:S2 placeholder) and pins level=error.
+	"AttentionOverdueSweep": {SourceEvent: "attention_overdue", EventType: "SIG-ATTENTION", Origin: "attention_overdue", Level: "error"},
 }
 
 // signalEventID = "ev_" + first 16 hex of sha256(teamID|projectID|taskID|

@@ -1,0 +1,40 @@
+name: matrix-platform
+label: Matrix (AgentTeams)
+kind: platform
+version: 1.0.0
+description: >
+  AgentTeams Matrix adapter. Reuses hermes-agent's mautrix-based Matrix
+  platform and overlays Worker policy hooks: AgentTeams allowlists, history
+  buffering for unmentioned group chatter, outbound mention enrichment, and
+  vision gating.
+author: AgentTeams
+requires_env:
+  - name: MATRIX_HOMESERVER
+    description: "Matrix homeserver URL (e.g. http://manager:8008)"
+    prompt: "Matrix homeserver URL"
+    password: false
+  - name: MATRIX_ACCESS_TOKEN
+    description: "Matrix access token (or use MATRIX_PASSWORD for password login)"
+    prompt: "Matrix access token"
+    password: true
+optional_env:
+  - name: MATRIX_PASSWORD
+    description: "Matrix account password (alternative to MATRIX_ACCESS_TOKEN)"
+    prompt: "Matrix password"
+    password: true
+  - name: MATRIX_ALLOWED_USERS
+    description: "Comma-separated Matrix user IDs allowed to talk to the bot"
+    prompt: "Allowed users (comma-separated)"
+    password: false
+  - name: MATRIX_ALLOW_ALL_USERS
+    description: "Allow any Matrix user to trigger the bot (dev only)"
+    prompt: "Allow all users? (true/false)"
+    password: false
+  - name: MATRIX_HOME_CHANNEL
+    description: "Default room ID for cron / notification delivery"
+    prompt: "Home room ID"
+    password: false
+  - name: MATRIX_HOME_CHANNEL_NAME
+    description: "Display name for the Matrix home room"
+    prompt: "Home room display name"
+    password: false

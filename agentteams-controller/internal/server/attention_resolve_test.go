@@ -748,6 +748,9 @@ func consumerHasApprovalRecord(meta map[string]any, submitterAccount string) boo
 		if str(record["kind"]) != "approval" || record["resolved"] != true {
 			continue
 		}
+		if answer, present := record["resolution"]; present && answer != "approve" {
+			continue
+		}
 		if str(record["resolvedRole"]) != "human" {
 			continue
 		}
@@ -918,5 +921,22 @@ func TestCanonicalAccount_MirrorsConsumer(t *testing.T) {
 		if got := canonicalAccount(c.in); got != c.want {
 			t.Errorf("canonicalAccount(%q)=%q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+func TestResolveAttention_DeclineIsNotApproval(t *testing.T) {
+	store := ossfake.NewMemory()
+	seedResolveBench(t, store, []any{pendingApprovalRecord()})
+	h := newResolveTestHandler(t, store, &resolveFakeMatrix{}, teamWithHumans("alpha-team", "alice"))
+	rec := resolveAttentionTestRequest(t, h, "p1", "t1", `{"resolution":"deny"}`, aliceCaller)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("decline must be recorded: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	entry := readResolveTaskRecord(t, store)
+	if entry["resolved"] != true || entry["resolution"] != "deny" {
+		t.Fatalf("decline was not retained: %v", entry)
+	}
+	if consumerHasApprovalRecord(readResolveTaskMeta(t, store), "bob") {
+		t.Fatal("a declined Dashboard answer must not authorize acceptance")
 	}
 }

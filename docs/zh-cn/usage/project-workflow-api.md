@@ -266,6 +266,136 @@ GET /api/v1/projects/{id}/tasks/{taskId}?team=alpha-team
 | `409` | 跨 team 项目 id 歧义；带 `?team=` 重试。 |
 | `500` | K8s 或对象存储故障。 |
 
+## 团队关注收件箱（只读）
+
+`GET /api/v1/teams/{name}/attention` 把一个团队各项目下进行中的
+人类问题（approval / decision / escalation）聚合成一次读取——dashboard
+收件箱的数据源。它读的是项目级 `GET /api/v1/projects/{id}/attention`
+读的同批逐任务 `meta.json` 对象，只是高一层：先读团队的全部项目，再读
+每个项目的全部图任务。授权是团队作用域（与其他团队读取同策略）：不能
+读该团队的调用者得到 `404`，不确认团队存在。
+
+查询参数：
+
+| 参数 | 类型 | 默认 | 含义 |
+|:--|:--|:--|:--|
+| `status` | string | `open` | `open`（未决、未超时）\| `overdue`（未决、已过期限）\| `resolved` \| `all`。其他值返回 `400`。 |
+| `limit` | int | `200` | 返回行数上限。`1..1000`；超过 `1000` 或小于 `1` 返回 `400`（不做钳制）。 |
+
+响应 `200 OK`：
+
+```json
+{
+  "team_id": "biz-team",
+  "items": [
+    {
+      "taskId": "t1",
+      "eventId": "$matrix-event-id",
+      "teamId": "biz-team",
+      "projectId": "demo-project-001",
+      "kind": "approval",
+      "question": "Proceed with deploy?",
+      "options": [{ "id": "yes", "label": "Yes", "description": "ship it" }],
+      "requestedAt": "2026-11-02T09:00:00Z",
+      "timeoutAt": "2099-01-01T00:00:00Z",
+      "overdue": false,
+      "resolved": false,
+      "resolvedVia": null,
+      "resolvedBy": null,
+      "resolvedAt": null,
+      "resolution": null,
+      "freeform": false,
+      "notified": null,
+      "roomId": "!room:host",
+      "url": "/projects/demo-project-001/tasks/t1"
+    }
+  ],
+  "count": 1,
+  "truncated": false
+}
+```
+
+响应体：
+
+| 字段 | 含义 |
+|:--|:--|
+| `team_id` | URL 中的团队名（CR 名）。 |
+| `items` | 收件箱行，按紧迫度排序：`status=overdue` 按 `timeoutAt` 升序，其他状态按 `requestedAt` 降序（同值稳定 tie-break：task id、kind、question）。行字段遵循 workbench 契约（camelCase）；`eventId` 是提出该记录的 Matrix 房间消息 id（通知被搁置时为 `null`），`resolvedVia` / `resolvedBy` / `resolvedAt` / `resolution` 在记录解决前为 `null`，记录没有 `notification_log` 时 `notified` 为 `null`。 |
+| `count` | `len(items)`——实际返回的行数，不是匹配过滤条件的行数。 |
+| `truncated` | 匹配行数超过 `limit`、`items` 被截到前 `limit` 行时为 `true`。恒存在。 |
+
+响应头（条件不满足时缺省）：
+
+| 响应头 | 含义 |
+|:--|:--|
+| `X-Attention-Truncated: 1` | 仅当 `truncated` 为 `true` 时设置——收件箱里还有未返回的匹配行。 |
+| `X-Attention-Skipped: N` | 该团队有 `N` 个项目**降级**：某项目的 `meta.json` 或其中一个 task meta 读取/解析失败。降级项目仍会贡献其健康任务的行——只缺不可读那条任务的行。按项目计一次，绝不包含被截断的行。 |
+
+三个信号相互独立，调用者据此区分三种易混状态：`count=0` + `truncated=false`
+是真空收件箱；`count=limit` + `truncated=true` 是被截断（但读取健康）的
+收件箱；`X-Attention-Skipped > 0` 表示降级读取：受影响的任务没有贡献行，而同一项目中其余健康任务的行仍会返回（降级项目不会被整项目排除）。
+
+读取顺序与 `limit` 的成本：读取先列出团队的项目，再读该团队每个项目
+meta 和每个 task meta，之后才过滤、排序并按 `limit` 截断。**`limit`
+限制的是返回行数，不是对象存储工作量**——被截断的响应同样付出了
+全团队的读取成本。提前终止读取是可能的后续优化，当前有意不做。
+
+### 读取背后的对象存储布局
+
+全部状态以 JSON 对象存放在配置的对象存储（MinIO 或 OSS）中，key 相对
+配置的存储前缀：
+
+| 对象 | Key | 在读取中的角色 |
+|:--|:--|:--|
+| 团队项目列表 | `teams/{team}/shared/projects/` | 本请求唯一一次 list 调用；直接子项是团队的项目目录。 |
+| 项目 meta | `teams/{team}/shared/projects/{project_id}/meta.json` | 每个列出的项目读一次：身份 + 图任务列表（`tasks`，loop 计划为 `loop.tasks`）。 |
+| 任务 meta | `teams/{team}/shared/tasks/{task_id}/meta.json` | 每个图任务读一次；其中的 `attention` 数组即收件箱数据源。对象缺失不贡献任何行；不可读/不可解析则丢弃该任务的行并把其项目标记为降级（计入 `X-Attention-Skipped`，按项目计一次）；项目内其它任务仍贡献行。 |
+| 超时信号事件 | `teams/{team}/shared/events/{team_id}/ev_*.json` | 本读取唯一的写入：对已过 `timeoutAt` 的未决条目写一个幂等的 `attention_overdue` 信号事件；事件写失败不会使读取失败。 |
+
+两个命名细节（读取端都已处理）：
+
+* `spec.teamName` 覆盖 CR 名时，同时列出 `teams/{crName}/shared/projects/`
+  与 `teams/{effectiveName}/shared/projects/`，并按 `(team_id, project_id)`
+  去重——worker 可能解析任一拼写。
+* 团队端点从不列全局 `shared/projects/` 前缀：独立（无团队）项目按设计
+  不在范围内。
+
+### 记录身份与 DB 迁移边界
+
+一条 attention 记录的身份是 `(project, eventId)`：所属项目，加上提出该
+问题的房间消息的 Matrix event id。`eventId` 在通知成功发送后写入记录，并
+**随行一起返回**（见上文 `items` 字段），因此两条仅 event id 不同的记录
+不会序列化成相同的行。通知被搁置的记录没有 `eventId`；在补发之前，去重
+需回退到 `(project, taskId, kind, requestedAt)`。
+
+**未来方案，不是已交付的保证**：若日后 attention 状态从这些 `meta.json`
+对象迁入数据库，`(project, eventId)`——及其上方的整个接口（端点、查询
+参数、行字段、两个响应头）——是预期保持不变的边界。该迁移目前并不存在；
+本节只钉死当前布局、截断语义与读取成本证据，让后续迁移有一份可对照的
+文档化契约。
+
+### 当前读取成本（实测）
+
+`BenchmarkGetTeamAttention`（位于 `agentteams-controller/internal/server`）
+在代表性的大团队规模下度量本次读取——200 个项目 × 每项目 10 条
+attention（2000 行，是默认 `limit` 200 的 10 倍）——并断言下表计数，
+布局变更若改变 fan-out 会让基准测试转红，而不是静默退化：
+
+| 操作 | 每请求次数 |
+|:--|:--|
+| list 调用 | 1（团队项目前缀） |
+| 对象读取 | 2200——200 个项目 meta + 2000 个 task meta |
+| 返回行数 | 200（默认 `limit`），`truncated=true` |
+
+list 调用与对象读取计数是确定性的、与机器无关的：它们在该基准的 fixture
+规模（200 个项目 × 10 个任务）下实测，并断言于 fixture 实际放入存储的
+attention 对象——因此计数跟随 fixture，而非手工相乘的结果。每请求墙钟时间
+与机器相关，由基准运行自身报告（在 `agentteams-controller` 目录下执行）：
+
+    go test -run xxx -bench BenchmarkGetTeamAttention -benchtime 1x ./internal/server/
+
+时延与机器相关，此处不记录固定数值——门控运行的输出即证据。
+
 ## 人类干预与生命周期端点（写 API）
 
 上面的只读端点之外，还有让人类干预 agent 编排工作流的写端点。所有写入都经过

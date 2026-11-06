@@ -549,6 +549,7 @@ push-native-deepseek-harness-worker: build-deepseek-harness-worker ## Push nativ
 # Wait for Manager services to be ready (used internally by test target)
 # Uses docker exec to check health inside container (works regardless of port mappings)
 # Usage: make wait-ready [CONTAINER=name]
+.PHONY: verify-bundle
 .PHONY: wait-ready
 wait-ready:
 	@echo "==> Waiting for Manager services to be ready (container: $(or $(CONTAINER),agentteams-controller))..."
@@ -748,6 +749,20 @@ replay-log: ## View the latest replay conversation log
 
 verify: ## Run post-install verification against the running Manager container
 	@bash ./install/agentteams-verify.sh $(or $(CONTAINER),agentteams-controller)
+
+BUNDLE ?=
+RUNTIME ?=
+
+verify-bundle: ## Bundle L3/L4 conformance: isolated install/load/uninstall, upgrade + rollback (P-b/P-c); narrow with BUNDLE=matrix|teamharness and RUNTIME=<adapter>
+	@set -e; \
+	case "$(BUNDLE)" in \
+	  ""|all) paths="plugins/tests/agentteams-matrix/test_matrix_bundle_lifecycle.py plugins/tests/teamharness/test_teamharness_bundle_lifecycle.py" ;; \
+	  matrix|agentteams-matrix) paths="plugins/tests/agentteams-matrix/test_matrix_bundle_lifecycle.py" ;; \
+	  teamharness|agentteams-teamharness) paths="plugins/tests/teamharness/test_teamharness_bundle_lifecycle.py" ;; \
+	  *) echo "unknown BUNDLE=$(BUNDLE) (use matrix, teamharness or empty)" >&2; exit 2 ;; \
+	esac; \
+	echo "==> Bundle lifecycle conformance (L3 isolation + L4 upgrade/rollback)"; \
+	python3 -m pytest -q $$paths $(if $(RUNTIME),-k $(RUNTIME))
 
 # ---------- Dev utils ----------
 

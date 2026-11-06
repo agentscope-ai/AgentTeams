@@ -3388,3 +3388,22 @@ def test_commit_task_guarded_preserves_freeze_committed_between_stat_and_commit(
     assert commits[0]["meta"].get("decision_status") != "frozen"
     assert not any(key.endswith("meta.json") for key in state["pushed"])
     assert state["version"] == 3
+
+
+@pytest.mark.parametrize("resolution,allowed", [("approve", True), ("deny", False), ("cancel", False), ("later", False), ("", False)])
+def test_dashboard_approval_requires_an_affirmative_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None,
+    resolution: str, allowed: bool,
+) -> None:
+    _enforce_on(monkeypatch)
+    record = _r8_record("human:other", "other")
+    record.update(resolvedVia="dashboard", resolution=resolution)
+    _write_submitted_task(
+        tmp_path, decision_class="r1", assigned_to="@worker:review.test",
+        submitted_by="worker:worker", review=dict(_R8_REVIEW), attention=[record],
+    )
+    result = _accept(tmp_path)
+    assert result["ok"] is allowed, result
+    if not allowed:
+        assert result["error_code"] == "approval_required"
+        assert _task_meta(tmp_path)["status"] == "submitted"

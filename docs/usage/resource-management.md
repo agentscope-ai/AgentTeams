@@ -484,7 +484,7 @@ spec:
 | `spec.permissionLevel` | int | Yes | — | Permission level: 1, 2, or 3 |
 | `spec.accessibleTeams` | []string | No | — | Accessible Team list (effective for L2) |
 | `spec.accessibleWorkers` | []string | No | — | Accessible standalone Worker list (effective for L2/L3) |
-| `spec.capabilities` | []string | No | — | Sensitive-surface privileges beyond the L2 baseline: `full_access`, `channel_secrets`, `external_sources`, `approval_policy`, `secret_reveal` (see [capability-foundation](../design/capability-foundation.md)) |
+| `spec.capabilities` | []string | No | — | Sensitive-surface privileges beyond the L2 baseline: `full_access`, `channel_secrets`, `external_sources`, `approval_policy`, `secret_reveal`, `file_sync` (see [capability-foundation](../design/capability-foundation.md); `file_sync` is described in [Human file sync (server half)](#human-file-sync-server-half)) |
 | `spec.note` | string | No | — | Notes |
 
 ### Three-Level Permission Model
@@ -599,6 +599,52 @@ If SMTP is not configured or `spec.email` is empty, email sending is skipped wit
 - Target Teams must exist before creating an L2 Human
 - Target Workers must exist before creating an L3 Human
 - Changing permissionLevel triggers a full recalculation of groupAllowFrom
+
+## Human file sync (server half)
+
+1.2.6 ships the **server half** of the per-human file sync protocol (#1414 P3). The controller exposes a per-human sync manifest that a sync client can read and write; **clients drive the sync** — local scanning, byte transfer, and conflict resolution all happen client-side. The server stores the manifest and never merges it.
+
+### What 1.2.6 delivers (server side only)
+
+| Endpoint | Behavior |
+|----------|----------|
+| `GET /api/v1/humans/{name}/sync/manifest` | The stored manifest verbatim, with an `ETag` header. `404` before the first write. |
+| `PUT /api/v1/humans/{name}/sync/manifest` | Conditional writes only: `If-Match <etag>` for updates, `If-None-Match: *` for the first write. |
+| `GET /api/v1/humans/{name}/sync/status` | Entry/tombstone counts, generation, last update. `200` with a zero summary before the first write. |
+
+The manifest is the client's sync state: `entries` maps `files/**` paths to opaque per-file records (the server stores them verbatim, never interprets them), and `tombstones` records files the client deleted. The server validates that the body is version 1, stays inside `files/**` (`memory/`, `digest/`, `.trash/`, `.sync/`, and path traversal are rejected), and is at most 2 MiB, then stores it at `humans/<u>/.sync/manifest.json` in object storage.
+
+**Not included in 1.2.6:** no local directory scan, no file byte transfer, and no client conflict loop. The server provides the state and the conditional write; it does not sync anything by itself.
+
+### Who does the sync
+
+**No sync client ships with 1.2.6 — only the server-side protocol above.** The client side is planned as #1414 P4 (the sync carriers: a host CLI `agt human files sync`, browser presigned upload, and a Matrix small-file fallback for ≤5 MiB), tracked in the F10 optional file sync research. No release timing is committed; until a client lands, any conforming client can use the protocol below directly.
+
+### Conflict semantics (client read-modify-write)
+
+Sync is a client read-modify-write loop against the conditional PUT:
+
+1. `GET …/sync/manifest` → current state + `ETag`.
+2. Compute the merged manifest locally — scan, diff, and the conflict decision are the client's.
+3. `PUT …/sync/manifest` with `If-Match: <etag from step 1>`.
+4. On `412 etag_mismatch` — the manifest changed since the read (the code also covers a manifest that does not exist yet) — re-read from step 1 and merge again. Bound the retries; if the conflict persists, stop and report instead of overwriting.
+5. On `409 manifest_exists` — a first-write race on `If-None-Match: *` — re-read and switch to `If-Match`.
+
+The server never mediates a conflict and returns no merge result: a `412` body carries only the coded error, so the client re-reads for the current state.
+
+`generation` is **server-owned**: every accepted write bumps it under a per-human path lease, so two devices cannot both read the same base and silently lose an update. Client-supplied `generation`, `updatedAt`, and `updatedBy` are ignored and rewritten by the server.
+
+| Condition | Response |
+|-----------|----------|
+| `If-Match` stale, or the manifest does not exist yet | `412 etag_mismatch` |
+| First write (`If-None-Match: *`) but a manifest already exists | `409 manifest_exists` |
+| No conditional header (or both) | `400 conditional_write_required` |
+| Body over 2 MiB | `413 manifest_too_large` |
+| Invalid version, out-of-scope path, malformed tombstone | `400 invalid_manifest` |
+
+### The `file_sync` capability
+
+Granting `spec.capabilities: [file_sync]` to an L2 human only unlocks the three sync endpoints for that human. It is **not a switch that completes bidirectional sync**: without a sync client (P4) the endpoints stay unused, and the files themselves remain governed by the human file area's own access and quota rules. Team identities (team leaders, workers) are never granted the sync surface — sync is per person, not per team.
 
 ## Package URI
 

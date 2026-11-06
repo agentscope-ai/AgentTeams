@@ -82,12 +82,23 @@ jobs:
         working-directory: agentteams-controller
         env:
           HUMAN_FILES_S3_ENDPOINT: http://127.0.0.1:9000
+          # The presign anonymous-download regression signs against a
+          # caller-reachable origin. RustFS is the only storage here, so the
+          # public endpoint is the same instance reached through a different
+          # hostname (localhost vs 127.0.0.1) — both resolvable from the test
+          # process, but the public host is distinct from the internal one, so
+          # the contract stays fully exercised: anonymous 200 with correct
+          # bytes/ETag, unsigned 403, TTL expiry 200->403, and the
+          # host-in-signature reverse proof (signing for localhost must not
+          # yield a working 127.0.0.1 request).
+          HUMAN_FILES_S3_PUBLIC_ENDPOINT: http://localhost:9000
           HUMAN_FILES_S3_ACCESS_KEY: minioadmin
           HUMAN_FILES_S3_SECRET_KEY: minioadmin
           HUMAN_FILES_S3_BUCKET: human-files-test
         run: |
-          # TestHumanFiles_S3 matches both S3-gated regressions in the server
-          # package: the lifecycle and the trash restore/purge quota race.
+          # TestHumanFiles_S3 matches all S3-gated regressions in the server
+          # package: the lifecycle, the trash restore/purge quota races, and
+          # the presign anonymous-download / capability-boundary pair.
           go test ./internal/server -run 'TestHumanFiles_S3' -count=1 -v
           go test ./internal/oss -run TestS3FallbackLifecycle -count=1 -v
 

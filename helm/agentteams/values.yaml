@@ -104,6 +104,14 @@ storage:
   provider: minio             # minio | oss | s3
   mode: managed               # managed | existing
   bucket: "agentteams-storage"
+  # Caller-reachable origin of the same storage, e.g. "https://files.example.com"
+  # (Ingress/LoadBalancer in front of the storage service). Used ONLY to mint
+  # presigned download URLs (?presign=1 on the human file API): the S3 V4
+  # signature binds the Host header, so the URL must be signed for the origin
+  # the caller can reach, not the internal cluster endpoint. Leave empty to
+  # disable presign: ?presign=1 then answers 501 presign_unsupported and
+  # clients fall back to the streamed GET.
+  publicEndpoint: ""
   # Required when provider=oss:
   oss:
     region: ""                # e.g. "cn-hangzhou"

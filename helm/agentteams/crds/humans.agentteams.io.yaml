@@ -112,6 +112,69 @@ spec:
                           mode:
                             type: string
                             enum: [none, read]
+                modelAccess:
+                  description: >-
+                    Per-human model grants. Absent means every model surface is
+                    locked (fail-closed). A scope targets one role and either
+                    references a ModelAccessTable or carries inline surfaces.
+                  type: object
+                  properties:
+                    scopes:
+                      type: array
+                      maxItems: 50
+                      items:
+                        type: object
+                        properties:
+                          role:
+                            type: string
+                            enum: ["", "*", "team_leader", "worker"]
+                          table:
+                            type: string
+                            maxLength: 253
+                          main:
+                            type: object
+                            properties:
+                              entries:
+                                type: array
+                                maxItems: 200
+                                items:
+                                  type: object
+                                  required: [provider, model]
+                                  properties:
+                                    provider: {type: string, minLength: 1, maxLength: 253}
+                                    model: {type: string, minLength: 1, maxLength: 253}
+                              inherit: {type: boolean}
+                          spawn:
+                            type: object
+                            properties:
+                              entries:
+                                type: array
+                                maxItems: 200
+                                items:
+                                  type: object
+                                  required: [provider, model]
+                                  properties:
+                                    provider: {type: string, minLength: 1, maxLength: 253}
+                                    model: {type: string, minLength: 1, maxLength: 253}
+                              inherit: {type: boolean}
+                          codingCli:
+                            type: array
+                            maxItems: 3
+                            items:
+                              type: object
+                              required: [cli]
+                              properties:
+                                cli: {type: string, enum: ["qwen-code", "opencode", "qoder"]}
+                                entries:
+                                  type: array
+                                  maxItems: 200
+                                  items:
+                                    type: object
+                                    required: [provider, model]
+                                    properties:
+                                      provider: {type: string, minLength: 1, maxLength: 253}
+                                      model: {type: string, minLength: 1, maxLength: 253}
+                                inherit: {type: boolean}
             status:
               type: object
               properties:

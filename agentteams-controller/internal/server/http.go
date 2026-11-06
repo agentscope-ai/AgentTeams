@@ -15,6 +15,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/proxy"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/runtimeconfig"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/runtimeconfig/hermes"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/runtimeconfig/openclaw"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/skillscan"
@@ -58,6 +59,17 @@ type HTTPServer struct {
 	Addr   string
 	Mux    *http.ServeMux
 	server *http.Server
+}
+
+// newRuntimeRegistry builds the registry of runtime adapters compiled into
+// this binary. It is the single wiring site: a runtime whose adapter is not
+// registered here 404s as an unknown runtime even though its package builds,
+// so TestNewRuntimeRegistry_RegistersEveryCompiledRuntime pins it.
+func newRuntimeRegistry() *runtimeconfig.Registry {
+	reg := runtimeconfig.NewRegistry()
+	reg.Register(openclaw.New())
+	reg.Register(hermes.New())
+	return reg
 }
 
 func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
@@ -120,6 +132,9 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/teams/{name}", mw.RequireAuthz(authpkg.ActionGet, "team", nameFn)(http.HandlerFunc(rh.GetTeam)))
 	mux.Handle("PUT /api/v1/teams/{name}", mw.RequireAuthz(authpkg.ActionUpdate, "team", nameFn)(http.HandlerFunc(rh.UpdateTeam)))
 	mux.Handle("DELETE /api/v1/teams/{name}", mw.RequireAuthz(authpkg.ActionDelete, "team", nameFn)(http.HandlerFunc(rh.DeleteTeam)))
+	// --- Team module aggregation (read-only; module-update UI) ---
+	mux.Handle("GET /api/v1/teams/{name}/modules", mw.RequireAuthz(authpkg.ActionGet, "team", nameFn)(http.HandlerFunc(rh.GetTeamModules(deps.KubeMode, deps.ContainerPrefix))))
+	mux.Handle("POST /api/v1/teams/{name}/modules/{module}/install", mw.RequireAuthz(authpkg.ActionUpdate, "team", nameFn)(http.HandlerFunc(rh.InstallTeamModule(deps.KubeMode, deps.ContainerPrefix, deps.ResourcePrefix))))
 
 	// Humans
 	mux.Handle("POST /api/v1/humans", mw.RequireAuthz(authpkg.ActionCreate, "human", nil)(http.HandlerFunc(rh.CreateHuman)))
@@ -128,14 +143,39 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("PUT /api/v1/humans/{name}", mw.RequireAuthz(authpkg.ActionUpdate, "human", nameFn)(http.HandlerFunc(rh.UpdateHuman)))
 	mux.Handle("DELETE /api/v1/humans/{name}", mw.RequireAuthz(authpkg.ActionDelete, "human", nameFn)(http.HandlerFunc(rh.DeleteHuman)))
 
+	// ModelAccessTable (PR-A1a): shared model-grant tables. Humans are
+	// denied by the authorizer default branch (403); admin/manager full.
+	mux.Handle("GET /api/v1/model-access-tables", mw.RequireAuthz(authpkg.ActionList, "model-access-table", nil)(http.HandlerFunc(rh.ListModelAccessTables)))
+	mux.Handle("POST /api/v1/model-access-tables", mw.RequireAuthz(authpkg.ActionCreate, "model-access-table", nil)(http.HandlerFunc(rh.CreateModelAccessTable)))
+	mux.Handle("GET /api/v1/model-access-tables/{name}", mw.RequireAuthz(authpkg.ActionGet, "model-access-table", nameFn)(http.HandlerFunc(rh.GetModelAccessTable)))
+	mux.Handle("PUT /api/v1/model-access-tables/{name}", mw.RequireAuthz(authpkg.ActionUpdate, "model-access-table", nameFn)(http.HandlerFunc(rh.UpdateModelAccessTable)))
+	mux.Handle("DELETE /api/v1/model-access-tables/{name}", mw.RequireAuthz(authpkg.ActionDelete, "model-access-table", nameFn)(http.HandlerFunc(rh.DeleteModelAccessTable)))
+	// The preview's read scope is enforced in the handler, not by the
+	// middleware: the authorizer resolves worker targets to 403 for the
+	// leader/worker legs, and this surface must hide out-of-scope targets as
+	// 404 (anti-probing). The handler applies the same boundary the worker
+	// GET entry uses: leader same-team, worker self, human accessibleTeams.
+	mux.Handle("GET /api/v1/model-access", mw.RequireAuthz(authpkg.ActionGet, "worker", nil)(http.HandlerFunc(rh.GetModelAccess)))
+
 	// Human file area (#1414 P1): per-human working files + recycle bin.
 	// Auth-only middleware: the handler performs its own authorization so
 	// non-access callers get 404 (no existence probing) and partial-access
 	// callers get 403 on admin-only operations.
 	hfh := NewHumanFilesHandler(deps.Client, deps.Namespace, deps.OSS, auditClient)
+	// The files root is its own exact route (registered before the
+	// wildcard, which outranks it and also suppresses the wildcard's
+	// auto-redirect of the bare path): it serves the root directory
+	// listing and the recursive flat listing (?recursive=1).
+	mux.Handle("GET /api/v1/humans/{name}/files", mw.Authenticate(http.HandlerFunc(hfh.listFiles)))
 	mux.Handle("GET /api/v1/humans/{name}/files/{path...}", mw.Authenticate(http.HandlerFunc(hfh.getFile)))
 	mux.Handle("PUT /api/v1/humans/{name}/files/{path...}", mw.Authenticate(http.HandlerFunc(hfh.putFile)))
 	mux.Handle("DELETE /api/v1/humans/{name}/files/{path...}", mw.Authenticate(http.HandlerFunc(hfh.deleteFile)))
+	// Presigned (direct) uploads, #P4a. One POST route serves both the
+	// issuer (?presign=1) and the accounting commit (a path ending in
+	// "/commit"): Go's ServeMux requires the wildcard to be the final
+	// pattern segment, so .../files/{path...}/commit cannot be registered
+	// alongside — postFile dispatches between the two forms.
+	mux.Handle("POST /api/v1/humans/{name}/files/{path...}", mw.Authenticate(http.HandlerFunc(hfh.postFile)))
 	mux.Handle("GET /api/v1/humans/{name}/trash", mw.Authenticate(http.HandlerFunc(hfh.listTrash)))
 	mux.Handle("POST /api/v1/humans/{name}/trash/{id}/restore", mw.Authenticate(http.HandlerFunc(hfh.restoreTrash)))
 	mux.Handle("DELETE /api/v1/humans/{name}/trash/{id}", mw.Authenticate(http.HandlerFunc(hfh.purgeTrash)))
@@ -157,6 +197,9 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/managers/{name}", mw.RequireAuthz(authpkg.ActionGet, "manager", nameFn)(http.HandlerFunc(rh.GetManager)))
 	mux.Handle("PUT /api/v1/managers/{name}", mw.RequireAuthz(authpkg.ActionUpdate, "manager", nameFn)(http.HandlerFunc(rh.UpdateManager)))
 	mux.Handle("DELETE /api/v1/managers/{name}", mw.RequireAuthz(authpkg.ActionDelete, "manager", nameFn)(http.HandlerFunc(rh.DeleteManager)))
+	// --- Manager plugin registry (read-only; module-update UI) ---
+	mux.Handle("GET /api/v1/managers/{name}/plugins", mw.RequireAuthz(authpkg.ActionGet, "manager", nameFn)(http.HandlerFunc(rh.GetManagerPlugins(deps.KubeMode, deps.ResourcePrefix))))
+	mux.Handle("POST /api/v1/managers/{name}/plugins/install", mw.RequireAuthz(authpkg.ActionUpdate, "manager", nameFn)(http.HandlerFunc(rh.InstallManagerPlugin(deps.KubeMode, deps.ResourcePrefix))))
 
 	// --- Loop control plane (#1402: pause state lives in the project meta) ---
 	// Pause/resume project the source into the project's loop.pause_sources;
@@ -311,6 +354,17 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// uniform 503 in kube mode, embedded only. ---
 	mux.Handle("GET /api/v1/workers/{name}/mcp", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(rh.WorkerMCP(deps.KubeMode, deps.ContainerPrefix)))
 
+	// --- Millforge module index (read-only proxy; module-update UI) ---
+	mfh := NewMillforgeIndexHandler()
+	mux.Handle("GET /api/v1/millforge/index",
+		mw.RequireAuthz(authpkg.ActionGet, "status", nil)(http.HandlerFunc(mfh.GetIndex)))
+
+	// --- Worker plugin install (module-update UI) ---
+	// Module install is a deployment operation: use the dedicated "module"
+	// resource kind so only admin/manager pass (unknown kinds are denied for
+	// humans, team leaders and workers by the authorizer). Using ActionUpdate
+	// on "worker" would silently grant L2 humans a new code-install path.
+	mux.Handle("POST /api/v1/workers/{name}/plugins/install", mw.RequireAuthz(authpkg.ActionUpdate, "module", nameFn)(http.HandlerFunc(rh.InstallWorkerPlugin(deps.KubeMode, deps.ContainerPrefix, deps.ResourcePrefix))))
 	// --- Worker plugin registry (the worker's installed qwenpaw plugins;
 	// read-only registry, embedded-only — the qwenpaw runtime guard and
 	// the W8 team boundary live in the handler). ---
@@ -339,9 +393,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// standing authorizer's worker-scoped policy (ActionGet/ActionUpdate)
 	// plus the handler's W8 team scope, embedded-mode gate, and the
 	// leader-read-only rule.
-	runtimeReg := runtimeconfig.NewRegistry()
-	runtimeReg.Register(openclaw.New())
-	// P8b: runtimeReg.Register(hermes.New())
+	runtimeReg := newRuntimeRegistry()
 	mch := NewMemberConfigHandler(deps.Client, deps.Namespace, deps.KubeMode, auditClient, deps.Backend, deps.OSS, runtimeReg, deps.DefaultWorkerRuntime)
 	mux.Handle("GET /api/runtimes/{runtime}/surface", mw.Authenticate(http.HandlerFunc(mch.getSurface)))
 	mux.Handle("GET /api/members/{name}/config", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(mch.getConfig)))

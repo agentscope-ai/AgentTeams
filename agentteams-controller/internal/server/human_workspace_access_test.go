@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -358,7 +359,7 @@ func TestHumanFiles_WorkspaceAccessMatrix(t *testing.T) {
 			// 13. Team.spec.admin grants NOTHING: administering a team is
 			//    not a source of file-area access (explicit negative).
 			name: "team admin grants nothing",
-			spec:  v1beta1.HumanSpec{DisplayName: "Alice"},
+			spec: v1beta1.HumanSpec{DisplayName: "Alice"},
 			teams: func() []*v1beta1.Team {
 				tc := wsTeam("team-c")
 				tc.Spec.Admin = &v1beta1.TeamAdminSpec{Name: "alice"}
@@ -707,5 +708,81 @@ func TestHumanFiles_TeamWriteAuditAttribution(t *testing.T) {
 	}
 	if got := detailField(t, writeLine, "path"); got != "files/report/q3.txt" {
 		t.Fatalf("path = %v, want files/report/q3.txt", got)
+	}
+}
+
+// Recursive listing must not expose denied files through either entries or
+// the pagination cursor, and walking every page must retain readable files.
+func TestWorkspaceAccessRecursivePaginationHidesRestrictedNames(t *testing.T) {
+	h, store := newWorkspaceAccessRig(t, v1beta1.HumanSpec{
+		AccessibleTeams: []string{"team-a"},
+		WorkspaceAccess: &v1beta1.HumanWorkspaceAccess{Restrictions: []v1beta1.HumanWorkspaceAccessRule{wsRule("team-a", "none", "files/private/**")}},
+	}, wsTeam("team-a"))
+	for _, name := range []string{"private/a.txt", "private/b.txt", "public/a.txt", "public/b.txt"} {
+		wsSeed(t, store, name, "owned data")
+	}
+	seen := map[string]bool{}
+	cursor := ""
+	for page := 0; page < 6; page++ {
+		req := hfReq(t, http.MethodGet, "alice", "", wsWorker("team-a", "worker-a"), nil)
+		query := req.URL.Query()
+		query.Set("recursive", "1")
+		query.Set("limit", "1")
+		if cursor != "" {
+			query.Set("cursor", cursor)
+		}
+		req.URL.RawQuery = query.Encode()
+		rec := httptest.NewRecorder()
+		h.listFiles(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), "private") {
+			t.Fatalf("restricted name exposed: %s", rec.Body.String())
+		}
+		var body humanFileRecursiveResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range body.Entries {
+			if seen[entry.Path] {
+				t.Fatalf("duplicate %s", entry.Path)
+			}
+			seen[entry.Path] = true
+		}
+		if body.NextKey == nil {
+			break
+		}
+		if *body.NextKey == cursor {
+			t.Fatal("cursor did not advance")
+		}
+		cursor = *body.NextKey
+	}
+	if !seen["files/public/a.txt"] || !seen["files/public/b.txt"] || len(seen) != 2 {
+		t.Fatalf("readable files lost: %v", seen)
+	}
+}
+
+func TestWorkspaceAccessDirectUploadRequiresWriteAtIssueAndCommit(t *testing.T) {
+	for _, mode := range []string{"read", "none"} {
+		t.Run(mode, func(t *testing.T) {
+			h, _ := newWorkspaceAccessRig(t, v1beta1.HumanSpec{AccessibleTeams: []string{"team-a"}, WorkspaceAccess: &v1beta1.HumanWorkspaceAccess{Restrictions: []v1beta1.HumanWorkspaceAccessRule{wsRule("team-a", mode, "files/notes/**")}}}, wsTeam("team-a"))
+			want := http.StatusForbidden
+			if mode == "none" {
+				want = http.StatusNotFound
+			}
+			for _, commit := range []bool{false, true} {
+				req := hfReq(t, http.MethodPost, "alice", "notes/n.txt", wsWorker("team-a", "worker-a"), nil)
+				rec := httptest.NewRecorder()
+				if commit {
+					h.commitPresignedFile(rec, req, "notes/n.txt")
+				} else {
+					h.presignUploadFile(rec, req, "notes/n.txt")
+				}
+				if rec.Code != want {
+					t.Fatalf("commit=%v status=%d want=%d: %s", commit, rec.Code, want, rec.Body.String())
+				}
+			}
+		})
 	}
 }

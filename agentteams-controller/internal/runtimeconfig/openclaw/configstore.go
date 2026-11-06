@@ -21,21 +21,14 @@ import (
 // execTimeout bounds every single container exec performed by the manager.
 const execTimeout = 30 * time.Second
 
-// ExecBackend is the container exec capability the write path needs
-// (backend.WorkerExecBackend; embedded docker mode only).
-type ExecBackend interface {
-	Exec(ctx context.Context, name string, command []string, timeout time.Duration) (stdout, stderr string, exitCode int, err error)
-	WriteFile(ctx context.Context, name, path, content string) error
-}
-
-// KeyStore is the object-storage capability for desired state + snapshots
-// (oss.StorageClient satisfies it). Keys are relative to the storage
-// prefix, same convention as the deployer's agents/{worker}/openclaw.json.
-type KeyStore interface {
-	PutObject(ctx context.Context, key string, data []byte) error
-	GetObject(ctx context.Context, key string) ([]byte, error)
-	Stat(ctx context.Context, key string) error
-}
+// ExecBackend and KeyStore are the shared write-plane capabilities,
+// defined in internal/runtimeconfig (hermes' config manager talks to the
+// worker through the same interfaces). The aliases keep the openclaw
+// call sites unchanged.
+type (
+	ExecBackend = runtimeconfig.ExecBackend
+	KeyStore    = runtimeconfig.KeyStore
+)
 
 // Errors the server layer maps to HTTP statuses:
 //
@@ -86,11 +79,10 @@ func (e *ConfigFileMissingError) Error() string {
 
 // UnsupportedKey is a submitted key the write skipped, with the reason.
 // Credential invariants: an unresolvable env ref is skipped and reported —
-// it is NEVER downgraded to a plaintext value.
-type UnsupportedKey struct {
-	Key    string `json:"key"`
-	Reason string `json:"reason"`
-}
+// it is NEVER downgraded to a plaintext value. The definition lives in
+// internal/runtimeconfig (shared response shape); the alias keeps the
+// openclaw call sites unchanged.
+type UnsupportedKey = runtimeconfig.UnsupportedKey
 
 // DesiredState is the controller's last requested configuration, persisted
 // under agents/{worker}/config/desired.json. It carries the pre-write
@@ -111,50 +103,25 @@ type DesiredState struct {
 	Content       map[string]any `json:"content"`               // full desired document
 }
 
-// Applied-state vocabulary (design §4.3). Reconcile is fail-closed
-// (§5.2): a write is "applied" only when the worker's gateway reports a
-// config it actually applied that moved since the pre-write baseline, and
-// a reconcile that cannot be completed is "pending" — never "applied".
+// Applied-state vocabulary (design §4.3), shared with the other runtimes'
+// managers via internal/runtimeconfig. Reconcile is fail-closed (§5.2): a
+// write is "applied" only when the worker's gateway reports a config it
+// actually applied that moved since the pre-write baseline, and a reconcile
+// that cannot be completed is "pending" — never "applied".
 const (
-	StateApplied            = "applied"
-	StatePending            = "pending"
-	StateUnapplied          = "unapplied"
-	StateAppliedButInactive = "applied-but-inactive"
+	StateApplied            = runtimeconfig.StateApplied
+	StatePending            = runtimeconfig.StatePending
+	StateUnapplied          = runtimeconfig.StateUnapplied
+	StateAppliedButInactive = runtimeconfig.StateAppliedButInactive
 )
 
-// ConfigState is the GET /config projection.
-type ConfigState struct {
-	Runtime string         `json:"runtime"`
-	Rev     string         `json:"rev"` // sha256 hex of the current on-disk bytes (optimistic-lock token)
-	Values  map[string]any `json:"values"`
-	// Applied is the reconcile verdict: applied | pending | unapplied |
-	// applied-but-inactive (State* constants).
-	Applied string `json:"applied"`
-	// PendingRestart lists the applies=restart keys of the last
-	// controller write. The frontend shows the "restart required" banner
-	// from it; the controller never restarts the worker itself.
-	PendingRestart []string `json:"pendingRestart"`
-	// Inactive lists written channel ids whose channel plugin is not
-	// loaded (or has no plugin at all): the config is applied to the file
-	// but inert at runtime — the "applied-but-inactive" state (§8.4).
-	Inactive []string `json:"inactive,omitempty"`
-}
-
-// WriteResult is the PUT/rollback response.
-type WriteResult struct {
-	Runtime string `json:"runtime"`
-	Rev     string `json:"rev"` // sha256 hex of the new on-disk bytes
-	// Applied is the post-write reconcile verdict (State* constants):
-	// "applied" when the gateway's applied hash moved within the poll
-	// window, "pending" when it has not (or could not be observed).
-	Applied        string           `json:"applied"`
-	PendingRestart []string         `json:"pendingRestart"`
-	Inactive       []string         `json:"inactive,omitempty"`
-	Unsupported    []UnsupportedKey `json:"unsupported,omitempty"`
-	// Snapshot is the storage key of the pre-write snapshot:
-	// rollback = POST .../config/rollback?rev=<pre-write rev>.
-	Snapshot string `json:"snapshot"`
-}
+// ConfigState and WriteResult are the shared config-plane response shapes
+// (internal/runtimeconfig), so the server layer can treat every runtime's
+// manager uniformly. The aliases keep the openclaw call sites unchanged.
+type (
+	ConfigState = runtimeconfig.ConfigState
+	WriteResult = runtimeconfig.WriteResult
+)
 
 // Reconcile timing. The gateway's file watch applies a changed
 // openclaw.json within well under a second in practice; the window is a
@@ -180,6 +147,11 @@ type ConfigManager struct {
 	reconcileInterval time.Duration
 	reconcileGrace    time.Duration
 }
+
+// ConfigManager satisfies the shared config-plane contract: the server
+// layer routes a worker to its runtime's Manager without depending on the
+// concrete type.
+var _ runtimeconfig.Manager = (*ConfigManager)(nil)
 
 // Option tunes reconcile timing (tests use millisecond values).
 type Option func(*ConfigManager)

@@ -3,9 +3,13 @@ package oss
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 )
@@ -324,6 +328,89 @@ func TestPutObjectIfMatchStrict_ErrorMapping(t *testing.T) {
 				t.Fatalf("err=%v, want the SDK error propagated verbatim", err)
 			}
 		})
+	}
+}
+
+// TestPutObjectIfNoneMatchStrict_ErrorMapping pins the create-if-absent
+// strict method's error contract: an existing object (a concurrent create
+// landed in between) -> ErrPreconditionFailed (the caller re-reads and
+// converges on the now-versioned record), NotImplemented/501 ->
+// ErrConditionalUnsupported (fail closed — a check-then-create would reopen
+// the create/cancel race), anything else propagates verbatim.
+func TestPutObjectIfNoneMatchStrict_ErrorMapping(t *testing.T) {
+	cases := []struct {
+		name   string
+		sdkErr error
+		want   error
+	}{
+		{"precondition-failed", minio.ErrorResponse{Code: "PreconditionFailed", StatusCode: 412}, ErrPreconditionFailed},
+		{"code-412", minio.ErrorResponse{Code: "412", StatusCode: 412}, ErrPreconditionFailed},
+		{"not-implemented", minio.ErrorResponse{Code: "NotImplemented", StatusCode: 501}, ErrConditionalUnsupported},
+		{"code-501", minio.ErrorResponse{Code: "501", StatusCode: 501}, ErrConditionalUnsupported},
+		{"other-error-propagates", errors.New("sdk unavailable"), nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewMinIOClient(Config{Endpoint: "https://oss.example.com", AccessKey: "ak", SecretKey: "sk"})
+			c.sdkPutIfNoneMatch = func(ctx context.Context, key string, data []byte) error {
+				return tc.sdkErr
+			}
+			err := c.PutObjectIfNoneMatchStrict(t.Context(), "k", []byte("data"))
+			if tc.want != nil {
+				if !errors.Is(err, tc.want) {
+					t.Fatalf("err=%v, want %v", err, tc.want)
+				}
+				return
+			}
+			if !errors.Is(err, tc.sdkErr) {
+				t.Fatalf("err=%v, want the SDK error propagated verbatim", err)
+			}
+		})
+	}
+}
+
+// TestPresignUploadSignsTheBucketRelativeKey pins the object name the browser
+// is authorised to write: the SDK selects the bucket itself, so signing
+// fullPath (mc alias/bucket prefix) made the upload land at
+// agentteams/agentteams-storage/<key> while commit read <key> — the real
+// RustFS run answered 204 on the POST and 404 object_missing on commit.
+func TestPresignUploadSignsTheBucketRelativeKey(t *testing.T) {
+	// minio-go resolves the bucket location before signing a POST policy;
+	// a local stub keeps the test offline while still exercising the real
+	// presigner.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?>`+
+			`<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/">us-east-1</LocationConstraint>`)
+	}))
+	defer srv.Close()
+	c := NewMinIOClient(Config{
+		Endpoint:       srv.URL,
+		PublicEndpoint: srv.URL,
+		AccessKey:      "ak",
+		SecretKey:      "sk",
+		Bucket:         "agentteams-storage",
+		StoragePrefix:  "agentteams/agentteams-storage",
+	})
+	key := "humans/alice/.uploads/sess-1/race.bin"
+	method, url, fields, err := c.PresignUpload(context.Background(), key, 1<<20, "application/octet-stream", "", time.Minute)
+	if err != nil {
+		t.Fatalf("presign: %v", err)
+	}
+	switch method {
+	case "POST":
+		if got := fields["key"]; got != key {
+			t.Fatalf("signed POST key = %q, want the bucket-relative %q", got, key)
+		}
+	case "PUT":
+		if !strings.HasSuffix(url, "/agentteams-storage/"+key) {
+			t.Fatalf("presigned PUT %q does not address bucket/relative-key", url)
+		}
+		if strings.Contains(url, "agentteams-storage/agentteams/agentteams-storage/") {
+			t.Fatalf("presigned PUT %q carries the mc storage prefix inside the bucket", url)
+		}
+	default:
+		t.Fatalf("unexpected method %q", method)
 	}
 }
 

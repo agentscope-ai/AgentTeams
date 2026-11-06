@@ -273,7 +273,7 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 			gatewayURL = d.runtimeProjection.AIGatewayURL
 		}
 		desired.Model = &memberRuntimeConfigModel{
-			ProviderID: "agentteams-gateway",
+			ProviderID: providerIDFromSpec(req.Spec.ModelProvider),
 			Model:      req.Spec.Model,
 			GatewayURL: gatewayURL,
 			GatewayKey: strings.TrimSpace(req.GatewayKey),
@@ -286,7 +286,7 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 	// startup/recreation, not only through the controller hot apply.
 	if req.SubagentModel != "" {
 		desired.SubagentModel = &memberRuntimeConfigModel{
-			ProviderID: "agentteams-gateway",
+			ProviderID: providerIDFromSpec(req.Spec.ModelProvider),
 			Model:      req.SubagentModel,
 		}
 	}
@@ -382,6 +382,15 @@ func runtimeSkillNames(spec v1beta1.WorkerSpec) []string {
 
 func isNativeConfigModel(model string) bool {
 	return strings.EqualFold(strings.TrimSpace(model), nativeConfigModel)
+}
+
+// providerIDFromSpec resolves the gateway provider serving this member's
+// models; empty keeps the built-in gateway provider.
+func providerIDFromSpec(name string) string {
+	if v := strings.TrimSpace(name); v != "" {
+		return v
+	}
+	return "agentteams-gateway"
 }
 
 func memberRuntimeConfigChannelsFromSpec(spec v1beta1.WorkerSpec) (*memberRuntimeConfigChannels, error) {

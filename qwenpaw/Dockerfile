@@ -24,7 +24,7 @@ FROM ${HIGRESS_REGISTRY}/higress/python:3.11-slim
 ARG APT_MIRROR=
 ARG PIP_INDEX_URL=https://pypi.org/simple/
 ARG PIP_TIMEOUT=300
-ARG QWENPAW_PIP_SPEC=qwenpaw==2.2.1
+ARG QWENPAW_PIP_SPEC=qwenpaw==2.2.2.post1
 ARG NPM_REGISTRY=https://registry.npmjs.org/
 
 RUN if [ -n "${APT_MIRROR}" ]; then \
@@ -159,11 +159,13 @@ COPY dist/adapters/qwenpaw/teamharness-qwenpaw.zip /opt/agentteams/plugins/teamh
 COPY dist/adapters/qwenpaw/workerflow-qwenpaw.zip /opt/agentteams/plugins/workerflow-qwenpaw.zip
 COPY plugins/agentteams-matrix-channel/ /opt/agentteams/plugins/agentteams-matrix-channel/
 COPY plugins/agentteams-upgrade/ /opt/agentteams/plugins/agentteams-upgrade/
+COPY plugins/qwen-code-bridge/ /opt/agentteams/plugins/qwen-code-bridge/
 COPY qwenpaw/scripts/install-builtin-qwenpaw-plugins.py /tmp/install-builtin-qwenpaw-plugins.py
 RUN /opt/venv/qwenpaw/bin/python /tmp/install-builtin-qwenpaw-plugins.py \
         --working-dir /opt/agentteams/qwenpaw-builtin \
         /opt/agentteams/plugins/agentteams-matrix-channel \
         /opt/agentteams/plugins/agentteams-upgrade \
+        /opt/agentteams/plugins/qwen-code-bridge \
         /opt/agentteams/plugins/teamharness-qwenpaw.zip \
         /opt/agentteams/plugins/workerflow-qwenpaw.zip \
     && rm -f /tmp/install-builtin-qwenpaw-plugins.py
@@ -183,7 +185,7 @@ RUN chmod +x /opt/agentteams/scripts/lib/mc-wrapper.sh && \
 # QwenPaw 2.2.1 reload must not overwrite a concurrent policy update.
 # The patch is also KEPT in the image (not /tmp): the in-place runtime upgrade
 # orchestrator re-applies it after an S3 package swap (the pristine wheel does
-# not carry the fix). The build-time run below applies it for the 2.2.1 image.
+# not carry the fix). The build-time run below applies it for the 2.2.2.post1 image.
 COPY qwenpaw/scripts/patch-qwenpaw-driver-policy-reload.py /opt/agentteams/scripts/patch-qwenpaw-driver-policy-reload.py
 COPY qwenpaw/scripts/patch-qwenpaw-matrix-cron-final.py /opt/agentteams/scripts/patch-qwenpaw-matrix-cron-final.py
 # In-place runtime upgrade: two-phase orchestrator + checker CLI, kept next to

@@ -1,0 +1,173 @@
+{
+  "version": "1.0.0",
+  "status": "defined-not-enforced",
+  "description": "Durability level of every writing tool/action of the TeamHarness MCP. Data only. Every current write is level 'sync': an immediate atomic replace inside the call (_write_json -> _atomic_write_text: same-dir tempfile + fsync + os.replace). No async/background writer and no exit-time flush exist, so 'async' and 'exit' have no current instances.",
+  "levels": [
+    "sync",
+    "async",
+    "exit"
+  ],
+  "level_meaning": {
+    "sync": "written synchronously inside the call, before the response is returned",
+    "async": "handed to a background writer (none today)",
+    "exit": "flushed on process exit (none today)"
+  },
+  "write_actions": [
+    {
+      "tool": "projectflow",
+      "action": "create_project",
+      "level": "sync"
+    },
+    {
+      "tool": "projectflow",
+      "action": "create_quick_project",
+      "level": "sync"
+    },
+    {
+      "tool": "projectflow",
+      "action": "accept_task_result",
+      "level": "sync"
+    },
+    {
+      "tool": "projectflow",
+      "action": "mark_requester_report_sent",
+      "level": "sync"
+    },
+    {
+      "tool": "projectflow",
+      "action": "plan_dag",
+      "level": "sync"
+    },
+    {
+      "tool": "projectflow",
+      "action": "plan_loop",
+      "level": "sync"
+    },
+    {
+      "tool": "projectflow",
+      "action": "record_loop_iteration",
+      "level": "sync"
+    },
+    {
+      "tool": "projectflow",
+      "action": "pause_project",
+      "level": "sync"
+    },
+    {
+      "tool": "projectflow",
+      "action": "resume_project",
+      "level": "sync"
+    },
+    {
+      "tool": "projectflow",
+      "action": "complete_project",
+      "level": "sync"
+    },
+    {
+      "tool": "taskflow",
+      "action": "delegate_task",
+      "level": "sync"
+    },
+    {
+      "tool": "taskflow",
+      "action": "ack_task",
+      "level": "sync"
+    },
+    {
+      "tool": "taskflow",
+      "action": "submit_task",
+      "level": "sync"
+    },
+    {
+      "tool": "taskflow",
+      "action": "report_progress",
+      "level": "sync"
+    },
+    {
+      "tool": "taskflow",
+      "action": "request_attention",
+      "level": "sync"
+    },
+    {
+      "tool": "taskflow",
+      "action": "cancel_task",
+      "level": "sync"
+    },
+    {
+      "tool": "roomflow",
+      "action": "create_task_room",
+      "level": "sync"
+    },
+    {
+      "tool": "roomflow",
+      "action": "archive_room",
+      "level": "sync"
+    },
+    {
+      "tool": "message",
+      "action": "send",
+      "level": "sync"
+    },
+    {
+      "tool": "artifact",
+      "action": "publish_file",
+      "level": "sync"
+    },
+    {
+      "tool": "filesync",
+      "action": "push",
+      "level": "sync"
+    },
+    {
+      "tool": "filesync",
+      "action": "pull",
+      "level": "sync"
+    }
+  ],
+  "read_only_actions": [
+    {
+      "tool": "health"
+    },
+    {
+      "tool": "roomflow",
+      "action": "list_rooms"
+    },
+    {
+      "tool": "roomflow",
+      "action": "describe_room"
+    },
+    {
+      "tool": "filesync",
+      "action": "list"
+    },
+    {
+      "tool": "filesync",
+      "action": "stat"
+    },
+    {
+      "tool": "projectflow",
+      "action": "resolve_project"
+    },
+    {
+      "tool": "projectflow",
+      "action": "list_events"
+    },
+    {
+      "tool": "projectflow",
+      "action": "ready_nodes"
+    },
+    {
+      "tool": "projectflow",
+      "action": "ready_loop_nodes"
+    },
+    {
+      "tool": "taskflow",
+      "action": "check_task"
+    }
+  ],
+  "notes": [
+    "projectflow replan_project is listed in _PROJECTFLOW_MUTATING_ACTIONS but has no Python dispatch branch (the Go/CoPaw native route performs the replan), so it is absent from write_actions",
+    "roomflow / message / artifact writes are remote (Matrix API) writes performed synchronously inside the call; filesync pull is a local write of the authoritative remote state; local state writes use the atomic replace described in 'description'",
+    "read-type actions may still refresh local cache through a pull; that cache refresh is not a state mutation"
+  ]
+}

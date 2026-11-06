@@ -125,6 +125,7 @@ def _prepare(
     _write_task(workspace, TASK_ID, meta)
 
     monkeypatch.setattr(server, "_pull_project", lambda *a, **k: True)
+    monkeypatch.setattr(server, "_pull_task", lambda *a, **k: True)
     monkeypatch.setattr(server, "_sync_task", lambda *a, **k: True)
     membership: dict[str, set[str]] = {"in_room": {leader, *humans}}
 

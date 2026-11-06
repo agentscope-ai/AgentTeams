@@ -658,7 +658,8 @@ func TestModelAccess_ManagerOwnerView(t *testing.T) {
 // TestModelAccess_LeaderViews: team leaders are not grant-bound. Own team:
 // canEdit mirrors the leader worker-write rule (true, routed via admin in
 // this release) and the leader NEVER sees the owner's grant rows. Cross
-// team: the write rule denies — canEdit=false + no_write_access.
+// team: out of read scope — 404 before anything is serialized (the earlier
+// "200 + locked view" leaked the target team/runtime/current model).
 func TestModelAccess_LeaderViews(t *testing.T) {
 	ownerGrant := &v1beta1.ModelAccessSpec{Scopes: []v1beta1.ModelAccessScope{{
 		Role: "worker",
@@ -706,27 +707,107 @@ func TestModelAccess_LeaderViews(t *testing.T) {
 		t.Errorf("own-team leader leaked grant rows: %s", rec.Body.String())
 	}
 
-	// Cross team: the write rule denies.
+	// Cross team: out of read scope — 404, and nothing about the target
+	// leaks (team, runtime, current model/provider/subagent).
 	otherLead := &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "beta-lead", Team: "beta"}
 	rec = httptest.NewRecorder()
 	h.GetModelAccess(rec, maReq(t, "/api/v1/model-access?worker=w1", otherLead))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-team leader: expected 404 (read scope), got %d: %s", rec.Code, rec.Body.String())
+	}
+	for _, leak := range []string{"alpha", "qwen3.6-27b", "owner-m", "openclaw"} {
+		if strings.Contains(rec.Body.String(), leak) {
+			t.Errorf("cross-team leader leaked %q: %s", leak, rec.Body.String())
+		}
+	}
+}
+
+// TestModelAccess_WorkerSelfScope: a worker reads only its own preview; any
+// other target is 404 (same anti-probing rule as the human/leader legs).
+func TestModelAccess_WorkerSelfScope(t *testing.T) {
+	h := maRig(t,
+		maTeam("alpha", v1beta1.TeamWorkerRef{Name: "w1", Role: "worker"}),
+		maTeam("beta", v1beta1.TeamWorkerRef{Name: "w2", Role: "worker"}),
+		maWorker("w1", "qwen3.6-27b", "", "", "openclaw"),
+		maWorker("w2", "other-model", "", "", "openclaw"),
+	)
+	self := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "w1", WorkerName: "w1"}
+	rec := httptest.NewRecorder()
+	h.GetModelAccess(rec, maReq(t, "/api/v1/model-access?worker=w1", self))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("cross-team leader: expected 200 (denied view), got %d: %s", rec.Code, rec.Body.String())
+		t.Fatalf("worker self: expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	var cross modelAccessWorkerResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &cross); err != nil {
-		t.Fatalf("cross-team unmarshal: %v", err)
+	var got modelAccessWorkerResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("self unmarshal: %v", err)
 	}
-	if !cross.Locked {
-		t.Errorf("cross-team locked = false, want true")
+	if got.Team != "alpha" || got.Current.Model != "qwen3.6-27b" {
+		t.Errorf("self view = team %q current %+v", got.Team, got.Current)
 	}
-	if cross.Capabilities.Main.CanEdit || cross.Capabilities.Main.Reason != "no_write_access" {
-		t.Errorf("cross-team main = %+v, want canEdit=false no_write_access", cross.Capabilities.Main)
+
+	// Another worker in another team: 404, nothing leaks.
+	rec = httptest.NewRecorder()
+	h.GetModelAccess(rec, maReq(t, "/api/v1/model-access?worker=w2", self))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unrelated worker: expected 404, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if cross.Capabilities.CodingCli["qwen-code"].CanEdit || cross.Capabilities.CodingCli["qoder"].CanEdit {
-		t.Errorf("cross-team CLI = %+v, want all closed", cross.Capabilities.CodingCli)
+	if strings.Contains(rec.Body.String(), "other-model") {
+		t.Errorf("unrelated worker target leaked: %s", rec.Body.String())
 	}
-	if len(cross.Surfaces.Main.Entries) != 0 || strings.Contains(rec.Body.String(), "owner-m") {
-		t.Errorf("cross-team leader leaked grant rows: %s", rec.Body.String())
+}
+
+// maStaticAuth authenticates every request as one fixed identity so the real
+// route + authorizer chain can be exercised without tokens.
+type maStaticAuth struct{ id *authpkg.CallerIdentity }
+
+func (s *maStaticAuth) Authenticate(context.Context, string) (*authpkg.CallerIdentity, error) {
+	return s.id, nil
+}
+
+// TestModelAccessMiddleware_ScopedReads drives GET /api/v1/model-access
+// through NewHTTPServer's mux (real RequireAuthz + authorizer + handler):
+// a cross-team leader and an unrelated worker must both be hidden as 404,
+// while the own-team leader and the worker reading itself get their preview.
+func TestModelAccessMiddleware_ScopedReads(t *testing.T) {
+	cases := []struct {
+		name   string
+		caller *authpkg.CallerIdentity
+		worker string
+		want   int
+	}{
+		{"own-team leader", &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "alpha-lead", Team: "alpha", WorkerName: "alpha-lead"}, "w1", http.StatusOK},
+		{"cross-team leader", &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "beta-lead", Team: "beta", WorkerName: "beta-lead"}, "w1", http.StatusNotFound},
+		{"worker self", &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "w1", WorkerName: "w1"}, "w1", http.StatusOK},
+		{"unrelated worker", &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "w2", WorkerName: "w2"}, "w1", http.StatusNotFound},
+		{"human owner", &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"alpha"}}, "w1", http.StatusOK},
+		{"human other team", &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "bob", Teams: []string{"beta"}}, "w1", http.StatusNotFound},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := maRig(t,
+				maTeam("alpha", v1beta1.TeamWorkerRef{Name: "w1", Role: "worker"}),
+				maTeam("beta", v1beta1.TeamWorkerRef{Name: "w2", Role: "worker"}),
+				maWorker("w1", "qwen3.6-27b", "", "", "openclaw"),
+				maWorker("w2", "other-model", "", "", "openclaw"),
+				maHuman("alice", []string{"alpha"}, []string{"w1"}, nil),
+				maHuman("bob", []string{"beta"}, nil, nil),
+			)
+			mw := authpkg.NewMiddleware(&maStaticAuth{id: tc.caller}, nil, authpkg.NewAuthorizer(), h.client, h.namespace)
+			srv := NewHTTPServer(":0", ServerDeps{Client: h.client, Namespace: h.namespace, AuthMw: mw})
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/model-access?worker="+tc.worker, nil)
+			req.Header.Set("Authorization", "Bearer test")
+			rec := httptest.NewRecorder()
+			srv.Mux.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("%s: status=%d want %d body=%s", tc.name, rec.Code, tc.want, rec.Body.String())
+			}
+			if tc.want == http.StatusNotFound {
+				for _, leak := range []string{"qwen3.6-27b", "other-model", `"team":"alpha"`} {
+					if strings.Contains(rec.Body.String(), leak) {
+						t.Errorf("%s: leaked %q in %s", tc.name, leak, rec.Body.String())
+					}
+				}
+			}
+		})
 	}
 }

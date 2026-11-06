@@ -154,7 +154,8 @@ func (h *ResourceHandler) writeNoParamModelAccess(ctx context.Context, w http.Re
 }
 
 // writeWorkerModelAccess resolves the worker's team/role and the effective
-// grant FROM THE CALLER'S PERSPECTIVE: admin/manager preview the worker
+// grant FROM THE CALLER'S PERSPECTIVE (out-of-scope callers are 404 before
+// anything is serialized): admin/manager preview the worker
 // owner's grant (the resource view), a human previews their OWN grant table,
 // and a team leader / worker previews no grant (they carry no human grant
 // table). canEdit additionally reflects whether this caller can write the
@@ -213,11 +214,24 @@ func (h *ResourceHandler) writeWorkerModelAccess(ctx context.Context, w http.Res
 		role = memberships[0].role
 	}
 
-	// W8 anti-probing: a human sees only workers in their accessibleTeams
-	// (or explicitly assigned to them). 404, never 403.
-	if caller.Role == authpkg.RoleHuman && !caller.WorkerReadable(team, workerName) {
-		httputil.WriteError(w, http.StatusNotFound, "worker not found")
-		return
+	// W8 anti-probing read scope, applied before any preview is serialized:
+	//   - human: workers in their accessibleTeams (or explicitly assigned);
+	//   - team leader: its own team only — the same boundary the worker GET
+	//     entry applies (WorkerReadable reduces to TeamMatches for an
+	//     SA-based leader);
+	//   - worker: itself only.
+	// 404, never 403, so a scoped caller cannot probe a target by name.
+	switch caller.Role {
+	case authpkg.RoleHuman, authpkg.RoleTeamLeader:
+		if !caller.WorkerReadable(team, workerName) {
+			httputil.WriteError(w, http.StatusNotFound, "worker not found")
+			return
+		}
+	case authpkg.RoleWorker:
+		if caller.WorkerName != workerName {
+			httputil.WriteError(w, http.StatusNotFound, "worker not found")
+			return
+		}
 	}
 
 	// Caller-perspective grant resolution. A name-based owner lookup

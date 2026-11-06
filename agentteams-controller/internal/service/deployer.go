@@ -795,7 +795,10 @@ func (d *Deployer) InjectChannelPolicy(ctx context.Context, req InjectChannelPol
 		return nil
 	}
 	agentPrefix := fmt.Sprintf("agents/%s", req.WorkerName)
-	existing, _ := d.oss.GetObject(ctx, agentPrefix+"/openclaw.json")
+	existing, err := d.oss.GetObject(ctx, agentPrefix+"/openclaw.json")
+	if err != nil {
+		return fmt.Errorf("read existing Worker channel config: %w", err)
+	}
 	updated := agentconfig.InjectChannelPolicy(existing, req.GroupAllowFrom, req.DMAllowFrom)
 	return d.oss.PutObject(ctx, agentPrefix+"/openclaw.json", updated)
 }

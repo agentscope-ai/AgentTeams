@@ -208,6 +208,26 @@ func (m *Memory) PutObjectIfMatchStrict(ctx context.Context, key string, data []
 	return m.PutObjectIfMatch(ctx, key, data, matchETag)
 }
 
+// PutObjectIfNoneMatchStrict is the strict create-if-absent write (see
+// MinIOClient.PutObjectIfNoneMatchStrict): the object is created only when
+// it does not exist; an existing object returns oss.ErrPreconditionFailed
+// and is left untouched — a concurrent create that landed in between the
+// caller's absence probe and the write must surface as a conflict, never
+// as a clobber.
+func (m *Memory) PutObjectIfNoneMatchStrict(_ context.Context, key string, data []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.objects[key]; ok {
+		return oss.ErrPreconditionFailed
+	}
+	buf := make([]byte, len(data))
+	copy(buf, data)
+	m.objects[key] = buf
+	m.modTime = m.modTime.Add(time.Second)
+	m.next++
+	return nil
+}
+
 // DeleteObject removes the object stored under key. Deleting a missing key
 // is a no-op.
 func (m *Memory) DeleteObject(_ context.Context, key string) error {

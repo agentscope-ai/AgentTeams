@@ -168,9 +168,12 @@ def _install(server: Any, monkeypatch: pytest.MonkeyPatch, storage: McLikeStorag
     # controller, so the endpoint is modelled against the same in-memory
     # remote the filesync fake serves: a commit is a put that bumps the
     # remote version and returns the new etag (no peer writes in these
-    # scenarios, so no If-Match check is needed).
+    # scenarios, so no If-Match check is needed). The
+    # if_none_match=create-if-absent flag (first creation, absent remote
+    # object) follows the same fake: a put of an absent key IS the create.
     def fake_commit(
-        task_id: str, meta: dict[str, Any], etag: str, team: str = ""
+        task_id: str, meta: dict[str, Any], etag: str, team: str = "",
+        if_none_match: bool = False,
     ) -> dict[str, Any]:
         new_etag = storage.put(
             f"shared/tasks/{task_id}/meta.json",

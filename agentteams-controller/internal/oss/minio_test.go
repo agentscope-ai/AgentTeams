@@ -331,6 +331,44 @@ func TestPutObjectIfMatchStrict_ErrorMapping(t *testing.T) {
 	}
 }
 
+// TestPutObjectIfNoneMatchStrict_ErrorMapping pins the create-if-absent
+// strict method's error contract: an existing object (a concurrent create
+// landed in between) -> ErrPreconditionFailed (the caller re-reads and
+// converges on the now-versioned record), NotImplemented/501 ->
+// ErrConditionalUnsupported (fail closed — a check-then-create would reopen
+// the create/cancel race), anything else propagates verbatim.
+func TestPutObjectIfNoneMatchStrict_ErrorMapping(t *testing.T) {
+	cases := []struct {
+		name   string
+		sdkErr error
+		want   error
+	}{
+		{"precondition-failed", minio.ErrorResponse{Code: "PreconditionFailed", StatusCode: 412}, ErrPreconditionFailed},
+		{"code-412", minio.ErrorResponse{Code: "412", StatusCode: 412}, ErrPreconditionFailed},
+		{"not-implemented", minio.ErrorResponse{Code: "NotImplemented", StatusCode: 501}, ErrConditionalUnsupported},
+		{"code-501", minio.ErrorResponse{Code: "501", StatusCode: 501}, ErrConditionalUnsupported},
+		{"other-error-propagates", errors.New("sdk unavailable"), nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewMinIOClient(Config{Endpoint: "https://oss.example.com", AccessKey: "ak", SecretKey: "sk"})
+			c.sdkPutIfNoneMatch = func(ctx context.Context, key string, data []byte) error {
+				return tc.sdkErr
+			}
+			err := c.PutObjectIfNoneMatchStrict(t.Context(), "k", []byte("data"))
+			if tc.want != nil {
+				if !errors.Is(err, tc.want) {
+					t.Fatalf("err=%v, want %v", err, tc.want)
+				}
+				return
+			}
+			if !errors.Is(err, tc.sdkErr) {
+				t.Fatalf("err=%v, want the SDK error propagated verbatim", err)
+			}
+		})
+	}
+}
+
 // TestPresignUploadSignsTheBucketRelativeKey pins the object name the browser
 // is authorised to write: the SDK selects the bucket itself, so signing
 // fullPath (mc alias/bucket prefix) made the upload land at

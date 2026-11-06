@@ -4640,6 +4640,10 @@ CREDEOF
             _ctrl_env_args+=(-e "${_ctrl_env_prefix}CMS_WORKSPACE=${AGENTTEAMS_CMS_WORKSPACE}")
         fi
 
+        # The Controller advertises its own in-network URL to the Manager and
+        # Workers it provisions; the image default (127.0.0.1) only resolves
+        # inside the Controller container itself.
+        _ctrl_env_args+=(-e "${_ctrl_env_prefix}CONTROLLER_URL=http://agentteams-controller:8090")
         # Presigned download origin (#1501): every URL handed to a client
         # carries this host, so it must be reachable from the CALLER's
         # browser. The embedded Controller runs on a bridge network and

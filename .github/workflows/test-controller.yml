@@ -114,6 +114,7 @@ jobs:
           python -m pytest plugins/tests/teamharness/test_attention_schema.py -q
           PYTHONPATH="${GITHUB_WORKSPACE}/manager/src/agentteams_manager" \
             python -m pytest manager/src/agentteams_manager/agentteams_manager/tests/ -q
+          python -m pytest plugins/tests/teamharness/test_task_meta_commit.py -q
           ruby plugins/tests/teamharness/mcp/tools/test-taskflow.rb
           ruby plugins/tests/teamharness/mcp/tools/test-transition-table.rb
 

@@ -15,6 +15,7 @@ run later in the same process.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -90,6 +91,39 @@ class SmokePluginLoaderTest(unittest.TestCase):
                     "--expect-failure",
                 ),
                 0,
+            )
+
+    def test_smoke_never_touches_the_callers_runtime(self):
+        """QwenPaw bootstraps persisted state at import: the harness must
+        redirect it into the scratch working dir, never the caller's
+        QWENPAW_WORKING_DIR/HOME (the L3 leak this pins)."""
+        with tempfile.TemporaryDirectory(prefix="smoke-caller-") as tmp:
+            caller = Path(tmp) / "caller-runtime"
+            caller.mkdir()
+            (caller / ".env").write_text("CALLER=1\n", encoding="utf-8")
+            before = sorted(p.name for p in caller.iterdir())
+            scratch = Path(tmp) / "scratch"
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--working-dir",
+                    str(scratch),
+                ],
+                capture_output=True,
+                text=True,
+                env={**os.environ, "QWENPAW_WORKING_DIR": str(caller), "HOME": str(caller)},
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            after = sorted(p.name for p in caller.iterdir())
+            self.assertEqual(
+                after,
+                before,
+                "the smoke bootstrapped QwenPaw against the caller's runtime",
+            )
+            self.assertTrue(
+                (scratch / ".qwenpaw_restore.lock").exists(),
+                "the runtime bootstrap should land inside the scratch working dir",
             )
 
     def test_missing_manifest_is_usage_error(self):

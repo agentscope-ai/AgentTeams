@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
+import os
 import json
 import logging
 import shutil
@@ -53,14 +55,39 @@ def prepare_plugins_root(plugin_dir: Path, working_dir: Path) -> Path:
     return plugins_root
 
 
-def load_plugins(plugins_root: Path, expected_id: str) -> Dict:
-    """Run the real loader against *plugins_root* and return its records."""
-    from qwenpaw.plugins.loader import PluginLoader
+@contextlib.contextmanager
+def scratch_runtime(working_dir: Path):
+    """Point QwenPaw's persisted-state bootstrap at the scratch tree.
 
-    loader = PluginLoader([plugins_root])
-    # Pass explicit configs to bypass load_config(): the smoke must not
-    # read or create any user configuration.
-    return asyncio.run(loader.load_all_plugins(configs={expected_id: {}}))
+    The import chain reads ``QWENPAW_WORKING_DIR`` / ``HOME`` while it
+    bootstraps, so importing first would write ``.qwenpaw_restore.lock`` and
+    friends into the caller's runtime — the exact leak the loader smoke must
+    not have. The previous values are restored afterwards so an in-process
+    caller keeps its environment.
+    """
+    keys = ("QWENPAW_WORKING_DIR", "HOME")
+    previous = {key: os.environ.get(key) for key in keys}
+    os.environ["QWENPAW_WORKING_DIR"] = str(working_dir)
+    os.environ["HOME"] = str(working_dir)
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def load_plugins(plugins_root: Path, expected_id: str, working_dir: Path) -> Dict:
+    """Run the real loader against *plugins_root* and return its records."""
+    with scratch_runtime(working_dir):
+        from qwenpaw.plugins.loader import PluginLoader
+
+        loader = PluginLoader([plugins_root])
+        # Pass explicit configs to bypass load_config(): the smoke must not
+        # read or create any user configuration.
+        return asyncio.run(loader.load_all_plugins(configs={expected_id: {}}))
 
 
 def smoke(
@@ -82,7 +109,7 @@ def smoke(
     if not expected_id:
         raise SmokeError(f"plugin.json in {plugin_dir} has no 'id'")
     plugins_root = prepare_plugins_root(plugin_dir, working_dir)
-    records = load_plugins(plugins_root, expected_id)
+    records = load_plugins(plugins_root, expected_id, working_dir)
     return expected_id, records.get(expected_id)
 
 

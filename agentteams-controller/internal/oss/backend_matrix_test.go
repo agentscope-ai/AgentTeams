@@ -40,6 +40,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/minio/minio-go/v7"
 )
 
 // backendEnv is the resolved matrix configuration.
@@ -356,11 +358,14 @@ func TestMatrix_PresignUpload(t *testing.T) {
 	}
 }
 
-// TestMatrix_DeletePrefix pins the directory-sweep contract: DeletePrefix
-// deletes exactly the object at the prefix key and everything under it
-// (tombstone marker objects included), a sibling that merely shares the
-// prefix string survives, a trailing-slash prefix sweeps the same scope,
-// and a second sweep of the now-empty prefix is a clean no-op.
+// TestMatrix_DeletePrefix pins the directory-sweep contract: the bare
+// form of DeletePrefix deletes exactly the object at the prefix key and
+// everything under it (tombstone marker objects included), a sibling that
+// merely shares the prefix string survives, and a second sweep of the
+// now-empty prefix is a clean no-op. The trailing-slash form declares the
+// directory boundary: it sweeps the same children and leaves the bare key
+// itself alone — the property the restricted-credential cleanup paths
+// (worker cleanup, the human trash purge) depend on.
 func TestMatrix_DeletePrefix(t *testing.T) {
 	env := requireBackend(t)
 	c, root := newMatrixClient(t, env, "dp")
@@ -422,11 +427,14 @@ func TestMatrix_DeletePrefix(t *testing.T) {
 		t.Fatalf("sibling vanished after no-op sweep: Stat(%s) = %v", target+"-sibling/keep", err)
 	}
 
-	// Trailing slash sweeps the same directory scope: the same seeds —
-	// plus the marker object at the bare key — and the same survivors.
+	// The trailing-slash form declares the boundary: it sweeps exactly
+	// what lies under the prefix and never touches the bare key, whose
+	// deletion a restricted-credential policy (the directory's keys only)
+	// rejects. The same seeds — including the marker object at the bare
+	// key, which must now survive — and the same sibling survivor.
 	target2 := root + "z"
 	for _, k := range []string{
-		target2, // the object whose key is exactly the target
+		target2, // the object whose key is exactly the target: outside the declared boundary
 		target2 + "/1",
 		target2 + "/y/2",
 		target2 + "-sibling/keep",
@@ -438,14 +446,225 @@ func TestMatrix_DeletePrefix(t *testing.T) {
 	if err := c.DeletePrefix(ctx, target2+"/"); err != nil {
 		t.Fatalf("DeletePrefix (trailing slash): %v", err)
 	}
-	for _, k := range []string{target2, target2 + "/1", target2 + "/y/2"} {
+	for _, k := range []string{target2 + "/1", target2 + "/y/2"} {
 		if err := c.Stat(ctx, k); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("Stat(%s) after trailing-slash sweep = %v, want ErrNotExist", k, err)
 		}
 	}
 	assertScopeEmpty(target2 + "/")
+	// The bare key is the boundary the caller declared: it survives.
+	if err := c.Stat(ctx, target2); err != nil {
+		t.Fatalf("bare key vanished: Stat(%s) = %v, want the declared boundary untouched", target2, err)
+	}
 	if err := c.Stat(ctx, target2+"-sibling/keep"); err != nil {
 		t.Fatalf("sibling vanished: Stat(%s) = %v", target2+"-sibling/keep", err)
+	}
+}
+
+// restrictedDeleteStore is the fake-side stand-in for an S3 store behind
+// a credential policy: the list seam answers a recursive, prefix-filtered
+// view of the key set, and the remove seams consult the gate before
+// deleting — a rejected key answers AccessDenied, exactly as the
+// restricted-credential deployment answers (worker cleanup and the human
+// trash purge run on credentials scoped to their directory). Every delete
+// attempt is recorded in order, so a delete of a key outside the declared
+// boundary is visible even in the form where the storage would have
+// answered AccessDenied and stopped the sweep.
+type restrictedDeleteStore struct {
+	keys map[string]bool
+	// gate answers the AccessDenied error for a key the credential may
+	// not delete; nil grants full access.
+	gate func(key string) error
+	// singleDelete is the audit of DeleteObject requests, in order.
+	singleDelete []string
+	// multiDelete is the audit of RemoveObjects batches, in order.
+	multiDelete [][]string
+}
+
+// install wires the store behind the client's SDK seams.
+func (s *restrictedDeleteStore) install(c *MinIOClient) {
+	c.sdkListObjects = func(_ context.Context, _ string, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo {
+		ch := make(chan minio.ObjectInfo)
+		go func() {
+			defer close(ch)
+			for key := range s.keys {
+				if strings.HasPrefix(key, opts.Prefix) {
+					ch <- minio.ObjectInfo{Key: key}
+				}
+			}
+		}()
+		return ch
+	}
+	c.sdkRemoveObject = func(_ context.Context, _ string, key string) error {
+		s.singleDelete = append(s.singleDelete, key)
+		if s.gate != nil {
+			if err := s.gate(key); err != nil {
+				return err
+			}
+		}
+		delete(s.keys, key)
+		return nil
+	}
+	c.sdkRemoveObjects = func(_ context.Context, _ string, batch []string, _ minio.RemoveObjectsOptions) <-chan minio.RemoveObjectError {
+		s.multiDelete = append(s.multiDelete, append([]string(nil), batch...))
+		ch := make(chan minio.RemoveObjectError, len(batch))
+		for _, key := range batch {
+			if s.gate != nil {
+				if err := s.gate(key); err != nil {
+					ch <- minio.RemoveObjectError{ObjectName: key, Err: err}
+					continue
+				}
+			}
+			delete(s.keys, key)
+			ch <- minio.RemoveObjectError{ObjectName: key}
+		}
+		close(ch)
+		return ch
+	}
+}
+
+// deletedKeys returns the audit of every delete request, in order.
+func (s *restrictedDeleteStore) deletedKeys() []string {
+	var out []string
+	out = append(out, s.singleDelete...)
+	for _, batch := range s.multiDelete {
+		out = append(out, batch...)
+	}
+	return out
+}
+
+// TestDeletePrefix_RestrictedCredential is the regression pin for the
+// caller-declared boundary under the production credential shape: the
+// sweep callers (worker cleanup, the human trash purge) pass
+// trailing-slash prefixes on a credential whose policy allows only the
+// directory's keys, so the sweep must never issue a delete of the bare
+// key. The pre-fix form issued a DeleteObject on the bare key before the
+// scan; the storage answered AccessDenied and the sweep died before
+// deleting a single child. If the marker-key step regresses onto the
+// trailing-slash path, this test fails both on the AccessDenied the
+// sweep surfaces and on the bare-key request in the audit.
+func TestDeletePrefix_RestrictedCredential(t *testing.T) {
+	store := &restrictedDeleteStore{
+		keys: map[string]bool{
+			"scope/target":     true, // outside "scope/target/*": exists, must never be deleted
+			"scope/target/a":   true,
+			"scope/target/b/c": true,
+		},
+		gate: func(key string) error {
+			if strings.HasPrefix(key, "scope/target/") {
+				return nil
+			}
+			return minio.ErrorResponse{Code: "AccessDenied", StatusCode: http.StatusForbidden, Message: "Access Denied"}
+		},
+	}
+	c := NewMinIOClient(Config{Endpoint: "http://127.0.0.1:9000", Bucket: "test"})
+	store.install(c)
+
+	if err := c.DeletePrefix(context.Background(), "scope/target/"); err != nil {
+		t.Fatalf("DeletePrefix (restricted credential, trailing slash) = %v, want nil (the policy allows the directory's keys)", err)
+	}
+
+	// The audit: every delete request stays inside the policy scope —
+	// the bare key in particular.
+	for _, key := range store.deletedKeys() {
+		if !strings.HasPrefix(key, "scope/target/") {
+			t.Fatalf("delete request %q left the declared scope (the policy allows scope/target/* only); requests: %v", key, store.deletedKeys())
+		}
+	}
+	// The sweep covered the directory's children; the bare key survives.
+	for _, key := range []string{"scope/target/a", "scope/target/b/c"} {
+		if store.keys[key] {
+			t.Fatalf("%s still present after the sweep; deletes: %v", key, store.deletedKeys())
+		}
+	}
+	if !store.keys["scope/target"] {
+		t.Fatal("the bare key scope/target was deleted although the prefix declared the boundary with a trailing slash")
+	}
+}
+
+// TestDeletePrefix_BarePrefixSweepsMarkerAndScope is the CI-side pin of
+// the bare-form contract the real-backend matrix pins: without a trailing
+// slash the sweep also removes the object at the exact key (a marker
+// object, if any) and everything under the directory scope, and never
+// touches a sibling that merely shares the prefix string.
+func TestDeletePrefix_BarePrefixSweepsMarkerAndScope(t *testing.T) {
+	store := &restrictedDeleteStore{
+		keys: map[string]bool{
+			"x":              true, // the object whose key is exactly the prefix
+			"x/1":            true,
+			"x/y/2":          true,
+			"x-sibling/keep": true, // shares the string prefix, not a subdirectory → must survive
+		},
+	}
+	c := NewMinIOClient(Config{Endpoint: "http://127.0.0.1:9000", Bucket: "test"})
+	store.install(c)
+
+	if err := c.DeletePrefix(context.Background(), "x"); err != nil {
+		t.Fatalf("DeletePrefix (bare prefix): %v", err)
+	}
+
+	for _, key := range []string{"x", "x/1", "x/y/2"} {
+		if store.keys[key] {
+			t.Fatalf("%s still present after the sweep; deletes: %v", key, store.deletedKeys())
+		}
+	}
+	if !store.keys["x-sibling/keep"] {
+		t.Fatal("x-sibling/keep vanished although it is outside the x/ scope")
+	}
+	// The marker key went through the single-delete path; the children
+	// through the multi-delete path.
+	if len(store.singleDelete) != 1 || store.singleDelete[0] != "x" {
+		t.Fatalf("marker-key deletes = %v, want exactly [x]", store.singleDelete)
+	}
+	var multi []string
+	for _, batch := range store.multiDelete {
+		multi = append(multi, batch...)
+	}
+	sort.Strings(multi)
+	if strings.Join(multi, ",") != "x/1,x/y/2" {
+		t.Fatalf("multi-delete keys = %v, want [x/1 x/y/2]", multi)
+	}
+}
+
+// TestDeletePrefix_TrailingSlashBoundary pins the boundary semantics on a
+// full-access store: DeletePrefix("x/") sweeps exactly what lies under
+// "x/" and never issues a delete of the bare key "x". Full access
+// matters: a regressed marker-key step would otherwise succeed silently
+// and only the store's key state would show it — the audit of delete
+// requests is the assertion, and the regression shows up as a delete of
+// "x" in it.
+func TestDeletePrefix_TrailingSlashBoundary(t *testing.T) {
+	store := &restrictedDeleteStore{
+		keys: map[string]bool{
+			"x":              true, // the object whose key is exactly the directory name
+			"x/1":            true,
+			"x/y/2":          true,
+			"x-sibling/keep": true,
+		},
+	}
+	c := NewMinIOClient(Config{Endpoint: "http://127.0.0.1:9000", Bucket: "test"})
+	store.install(c)
+
+	if err := c.DeletePrefix(context.Background(), "x/"); err != nil {
+		t.Fatalf("DeletePrefix (trailing slash): %v", err)
+	}
+
+	// No delete request may touch the bare key — not even with a
+	// credential that would have accepted it.
+	for _, key := range store.deletedKeys() {
+		if !strings.HasPrefix(key, "x/") {
+			t.Fatalf("delete request %q left the declared x/ boundary (the bare key x must never be deleted); requests: %v", key, store.deletedKeys())
+		}
+	}
+	for _, key := range []string{"x/1", "x/y/2"} {
+		if store.keys[key] {
+			t.Fatalf("%s still present after the sweep; deletes: %v", key, store.deletedKeys())
+		}
+	}
+	for _, key := range []string{"x", "x-sibling/keep"} {
+		if !store.keys[key] {
+			t.Fatalf("%s vanished although it is outside the x/ boundary", key)
+		}
 	}
 }
 

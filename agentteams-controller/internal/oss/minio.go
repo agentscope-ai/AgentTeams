@@ -3,7 +3,6 @@ package oss
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,14 +18,17 @@ import (
 	"github.com/minio/minio-go/v7"
 )
 
-// MinIOClient implements StorageClient. The object hot path (put / get /
-// stat / delete / one-level list) talks to the S3 API directly through
-// minio-go: one cached client per credential identity, bytes streamed
-// straight to the wire — no temp file, no process spawn, no extra copy per
-// call. The mc CLI stays where the paths we use have no SDK equivalent:
-// bucket creation (EnsureBucket), tree mirroring (Mirror), bulk prefix
-// removal (DeletePrefix) and presigned download URLs (PresignGet, #1501 —
-// mc share download computes the V4 signature for the public alias).
+// MinIOClient implements StorageClient. The object path (put / get / stat /
+// delete / list, recursive prefix deletion, bucket creation and presigned
+// URLs) talks to the S3 API directly through minio-go: one cached client per
+// credential identity, bytes streamed straight to the wire — no temp file,
+// no process spawn, no extra copy per call. The S3-only contract means the
+// object path works on any S3-compatible backend (MinIO is the default
+// deployment; RustFS is the migration target): no mc subprocess, no
+// MinIO-specific headers and no MinIO-specific error-code assumptions. The
+// mc CLI is an optional management tool, kept only where the S3 API has no
+// equivalent — tree mirroring with deletion (Mirror) and user/policy admin
+// (MinIOAdminClient) — never a runtime requirement of the object path.
 //
 // The client supports two credential modes:
 //
@@ -40,9 +42,6 @@ type MinIOClient struct {
 	config     Config
 	credSource CredentialSource
 	aliasReady bool
-	// publicAliasReady tracks the one-time `mc alias set` of the presign
-	// alias (the caller-reachable public endpoint).
-	publicAliasReady bool
 	// sdk caches the minio-go client for the internal endpoint (see
 	// s3Client); a fresh cache per client so a WithCredentialSource clone
 	// never signs with the original client's credential profile.
@@ -57,17 +56,23 @@ type MinIOClient struct {
 	// task-meta first creation; nil uses the real minio-go path.
 	sdkPutIfNoneMatch func(ctx context.Context, key string, data []byte) error
 	// sdkListObjects overrides the SDK ListObjects channel for tests; nil
-	// uses the real minio-go path. It is the seam for both listing walks
-	// (ListObjectsDetailed and ListObjectsRecursive) and receives the exact
-	// bucket and options the production path builds, so a coordinate bug
-	// (a request prefix wrapped with the mc StoragePrefix) surfaces as an
-	// empty walk against an S3-faithful store.
+	// uses the real minio-go path. It is the seam for every listing walk
+	// (ListObjectsDetailed, ListObjectsRecursive and DeletePrefix's sweep
+	// list) and receives the exact bucket and options the production path
+	// builds, so a coordinate bug (a request prefix wrapped with the mc
+	// StoragePrefix) surfaces as an empty walk against an S3-faithful store.
 	sdkListObjects func(ctx context.Context, bucket string, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo
+	// sdkRemoveObjects overrides the SDK RemoveObjects channel for tests;
+	// nil uses the real minio-go path. It is the seam for DeletePrefix's
+	// multi-delete batches and receives the exact bucket and key batch the
+	// production path deletes (the real path converts the batch to the
+	// SDK's ObjectInfo input channel).
+	sdkRemoveObjects func(ctx context.Context, bucket string, objects []string, opts minio.RemoveObjectsOptions) <-chan minio.RemoveObjectError
 }
 
 // NewMinIOClient creates a StorageClient. Object I/O goes through the
-// minio-go SDK (s3Client); the mc CLI serves the management paths listed
-// on the type.
+// minio-go SDK (s3Client); the mc CLI is only for the management paths
+// listed on the type.
 func NewMinIOClient(cfg Config) *MinIOClient {
 	if cfg.MCBinary == "" {
 		cfg.MCBinary = "mc"
@@ -88,7 +93,6 @@ func (c *MinIOClient) WithCredentialSource(src CredentialSource) *MinIOClient {
 	clone := *c
 	clone.credSource = src
 	clone.aliasReady = false
-	clone.publicAliasReady = false
 	clone.sdk = &s3Client{} // the clone signs as a different identity
 	return &clone
 }
@@ -110,37 +114,8 @@ func (c *MinIOClient) ensureAlias(ctx context.Context) error {
 	return nil
 }
 
-// ensurePublicAlias registers the presign alias — `mc alias set` against
-// the caller-reachable public endpoint with the same storage credentials —
-// once per client. The alias is the only difference between the internal
-// and the presign view of the storage; mc resolves the URL's host from the
-// alias's endpoint when signing. Dynamic mode has no persistent alias:
-// runMCOnAlias injects MC_HOST_<publicAlias> per call instead.
-func (c *MinIOClient) ensurePublicAlias(ctx context.Context) error {
-	if c.credSource != nil {
-		return nil
-	}
-	if c.publicAliasReady || c.config.PublicEndpoint == "" {
-		return nil
-	}
-	_, err := c.runMC(ctx, "alias", "set", c.config.PublicAlias, c.config.PublicEndpoint, c.config.AccessKey, c.config.SecretKey)
-	if err != nil {
-		return fmt.Errorf("mc alias set %s: %w", c.config.PublicAlias, err)
-	}
-	c.publicAliasReady = true
-	return nil
-}
-
 func (c *MinIOClient) fullPath(key string) string {
 	return c.config.StoragePrefix + "/" + strings.TrimPrefix(key, "/")
-}
-
-// publicFullPath renders the mc path for the presign alias: the public
-// alias + the same bucket. It must not reuse StoragePrefix, whose first
-// segment IS the main alias in every deployment (the presign alias differs
-// from it).
-func (c *MinIOClient) publicFullPath(key string) string {
-	return c.config.PublicAlias + "/" + c.config.Bucket + "/" + strings.TrimPrefix(key, "/")
 }
 
 // PutObjectIfMatch performs a conditional write: the object is only replaced
@@ -487,22 +462,22 @@ func (c *MinIOClient) GetObject(ctx context.Context, key string) ([]byte, error)
 }
 
 // PresignGet mints a presigned download URL for the object at key that
-// stays valid for ttl (#1475 PR-4, #1501). It shells out to
-// `mc share download --expire <ttl> --json <publicFullPath>` against the
-// PUBLIC alias and returns the URL from the `share` field: the mc CLI
-// computes the S3 V4 signature locally from the alias credentials, so
-// neither the object bytes nor the credentials ever leave the process.
+// stays valid for ttl (#1475 PR-4, #1501). The minio-go SDK computes the
+// S3 V4 signature locally from the credential triple resolved at that
+// moment and returns the signed URL: neither the object bytes nor the
+// credentials ever leave the process, and no mc process is spawned on the
+// per-request path (the mc share download era is over).
 //
 // The URL is signed for the public endpoint's origin, so its host is the
 // caller-reachable host. The Host participates in the S3 V4 signature,
-// which is exactly why the public alias exists: a URL minted for the
+// which is exactly why the public endpoint exists: a URL minted for the
 // internal endpoint cannot be rewritten to a public hostname afterwards —
 // storage would answer SignatureDoesNotMatch. The URL grants anonymous
 // read access to exactly that object until it expires.
 //
 // When Config.PublicEndpoint is empty there is no caller-reachable origin
-// to sign for: PresignGet returns ErrPresignUnsupported WITHOUT invoking
-// mc, so the API reports the capability boundary explicitly (501
+// to sign for: PresignGet returns ErrPresignUnsupported WITHOUT touching
+// storage, so the API reports the capability boundary explicitly (501
 // presign_unsupported) instead of leaking an unusable URL.
 func (c *MinIOClient) PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error) {
 	if ttl <= 0 {
@@ -511,23 +486,22 @@ func (c *MinIOClient) PresignGet(ctx context.Context, key string, ttl time.Durat
 	if c.config.PublicEndpoint == "" {
 		return "", ErrPresignUnsupported
 	}
-	if err := c.ensurePublicAlias(ctx); err != nil {
-		return "", err
-	}
-	out, err := c.runMCOnAlias(ctx, c.config.PublicAlias, "share", "download", "--expire", ttl.String(), "--json", c.publicFullPath(key))
+	// A fresh one-shot client per issuance (see newPublicSDKClient): the
+	// signature must carry the credential identity resolved at this moment.
+	sdk, err := c.newPublicSDKClient()
 	if err != nil {
 		return "", err
 	}
-	var msg struct {
-		Share string `json:"share"`
+	// The SDK selects the bucket itself, so the signed object name is the
+	// bucket-relative key — signing fullPath (mc alias/bucket prefix) would
+	// mint a URL for the wrong object, as it did for PresignUpload. No
+	// extra query params: the plain object download is the only shape the
+	// API hands to callers.
+	u, err := sdk.PresignedGetObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), ttl, nil)
+	if err != nil {
+		return "", err
 	}
-	if err := json.Unmarshal([]byte(out), &msg); err != nil {
-		return "", fmt.Errorf("parse mc share download --json: %w", err)
-	}
-	if msg.Share == "" {
-		return "", errors.New("mc share download returned an empty share URL")
-	}
-	return msg.Share, nil
+	return u.String(), nil
 }
 
 func (c *MinIOClient) Stat(ctx context.Context, key string) error {
@@ -614,16 +588,63 @@ func (c *MinIOClient) Mirror(ctx context.Context, src, dst string, opts MirrorOp
 	return err
 }
 
-// DeletePrefix keeps the mc CLI: the SDK equivalent is ListObjects plus
-// one RemoveObject per key (N+1 requests), while `mc rm --recursive
-// --force` is a single atomic batch call. It is a low-frequency
-// cleanup/rollback operation, never hot-path I/O.
+// DeletePrefix removes every object under prefix through the S3 API: a
+// recursive list (the SDK channel pages through the storage's
+// continuation tokens) followed by DeleteObjects multi-delete in batches
+// of at most 1000 keys (the S3 per-call limit). S3 has no recursive
+// delete, and the `mc rm --recursive --force` call was dropped because the
+// mc CLI must not sit on the object path — agent deletion (deployer) and
+// the human-file trash purge run this. Keys are matched as raw S3
+// prefixes, exactly as the mc call matched them: everything under
+// prefix, tombstone marker objects included. A prefix with no objects is
+// a no-op; per-key delete errors are aggregated into the returned error
+// so a partial sweep is never reported as a clean one.
 func (c *MinIOClient) DeletePrefix(ctx context.Context, prefix string) error {
-	if err := c.ensureAlias(ctx); err != nil {
+	sdk, err := c.sdkClient()
+	if err != nil {
 		return err
 	}
-	_, err := c.runMC(ctx, "rm", "--recursive", "--force", c.fullPath(prefix))
-	return err
+	// Bucket-relative coordinates: the bucket rides on the SDK call, and
+	// fullPath's mc alias/bucket wrapper is not part of any bucket key.
+	p := strings.TrimPrefix(prefix, "/")
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var ch <-chan minio.ObjectInfo
+	if list := c.sdkListObjects; list != nil {
+		ch = list(ctx, c.config.Bucket, minio.ListObjectsOptions{Prefix: p, Recursive: true})
+	} else {
+		ch = sdk.ListObjects(ctx, c.config.Bucket, minio.ListObjectsOptions{Prefix: p, Recursive: true})
+	}
+	keys := make([]string, 0)
+	for o := range ch {
+		if o.Err != nil {
+			return fmt.Errorf("delete prefix %q: list objects: %w", prefix, o.Err)
+		}
+		keys = append(keys, o.Key)
+	}
+	var errs []error
+	const maxBatch = 1000
+	for start := 0; start < len(keys); start += maxBatch {
+		end := min(start+maxBatch, len(keys))
+		batch := keys[start:end]
+		var resCh <-chan minio.RemoveObjectError
+		if remove := c.sdkRemoveObjects; remove != nil {
+			resCh = remove(ctx, c.config.Bucket, batch, minio.RemoveObjectsOptions{})
+		} else {
+			objects := make(chan minio.ObjectInfo, len(batch))
+			for _, k := range batch {
+				objects <- minio.ObjectInfo{Key: k}
+			}
+			close(objects)
+			resCh = sdk.RemoveObjects(ctx, c.config.Bucket, objects, minio.RemoveObjectsOptions{})
+		}
+		for r := range resCh {
+			if r.Err != nil {
+				errs = append(errs, fmt.Errorf("delete %s: %w", r.ObjectName, r.Err))
+			}
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (c *MinIOClient) ListObjects(ctx context.Context, prefix string) ([]string, error) {
@@ -788,16 +809,40 @@ func (c *MinIOClient) ListObjectsRecursive(ctx context.Context, prefix, startAft
 }
 
 // EnsureBucket creates the configured bucket if it does not already
-// exist. It keeps the mc CLI on purpose: this runs once at controller
-// startup (not per request), and `mc mb --ignore-existing` is the
-// idempotent form already in place.
+// exist, through the S3 MakeBucket API (this runs once at controller
+// startup, not per request). An already-existing bucket is treated as
+// success — the idempotent form of the `mc mb --ignore-existing` flag it
+// replaced — because the controller may run against a bucket pre-created
+// by the operator or by a previous controller generation.
 func (c *MinIOClient) EnsureBucket(ctx context.Context) error {
-	if err := c.ensureAlias(ctx); err != nil {
+	sdk, err := c.sdkClient()
+	if err != nil {
 		return err
 	}
-	target := c.config.Alias + "/" + c.config.Bucket
-	_, err := c.runMC(ctx, "mb", target, "--ignore-existing")
+	err = sdk.MakeBucket(ctx, c.config.Bucket, minio.MakeBucketOptions{})
+	if err == nil {
+		return nil
+	}
+	if isBucketAlreadyExists(err) {
+		return nil
+	}
 	return err
+}
+
+// isBucketAlreadyExists reports whether a MakeBucket error means the
+// bucket already exists. The provider codes differ between backends
+// (S3/MinIO answer BucketAlreadyOwnedByYou or BucketAlreadyExists; a
+// backend without a standard code answers a bare conflict), so the check
+// covers the codes plus the 409 status — the same tolerance
+// `mc mb --ignore-existing` had, and free of any MinIO-specific
+// assumption.
+func isBucketAlreadyExists(err error) bool {
+	var resp minio.ErrorResponse
+	if !errors.As(err, &resp) {
+		return false
+	}
+	return resp.Code == "BucketAlreadyOwnedByYou" || resp.Code == "BucketAlreadyExists" ||
+		resp.StatusCode == http.StatusConflict
 }
 
 func (c *MinIOClient) runMC(ctx context.Context, args ...string) (string, error) {
@@ -805,9 +850,8 @@ func (c *MinIOClient) runMC(ctx context.Context, args ...string) (string, error)
 }
 
 // runMCOnAlias is runMC bound to a specific alias. In dynamic-credential
-// mode the MC_HOST_<alias> env var is built from that alias's OWN endpoint
-// (endpointForAlias), so the presign alias signs against the public
-// endpoint while every other command stays on the internal one.
+// mode the MC_HOST_<alias> env var is built from that alias's endpoint
+// (endpointForAlias) instead of a persistent alias file.
 func (c *MinIOClient) runMCOnAlias(ctx context.Context, alias string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, c.config.MCBinary, args...)
 	var stdout, stderr bytes.Buffer

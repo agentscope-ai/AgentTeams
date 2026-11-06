@@ -147,6 +147,11 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// non-access callers get 404 (no existence probing) and partial-access
 	// callers get 403 on admin-only operations.
 	hfh := NewHumanFilesHandler(deps.Client, deps.Namespace, deps.OSS, auditClient)
+	// The files root is its own exact route (registered before the
+	// wildcard, which outranks it and also suppresses the wildcard's
+	// auto-redirect of the bare path): it serves the root directory
+	// listing and the recursive flat listing (?recursive=1).
+	mux.Handle("GET /api/v1/humans/{name}/files", mw.Authenticate(http.HandlerFunc(hfh.listFiles)))
 	mux.Handle("GET /api/v1/humans/{name}/files/{path...}", mw.Authenticate(http.HandlerFunc(hfh.getFile)))
 	mux.Handle("PUT /api/v1/humans/{name}/files/{path...}", mw.Authenticate(http.HandlerFunc(hfh.putFile)))
 	mux.Handle("DELETE /api/v1/humans/{name}/files/{path...}", mw.Authenticate(http.HandlerFunc(hfh.deleteFile)))

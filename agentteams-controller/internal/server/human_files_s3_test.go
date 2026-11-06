@@ -930,3 +930,150 @@ func TestHumanFiles_S3PresignUnconfiguredEndpoint(t *testing.T) {
 		t.Fatalf("streamed GET after 501: got %d %q, want 200 %q", get.Code, get.Body.String(), content)
 	}
 }
+
+// TestHumanFiles_S3RecursiveListWalk walks a real S3-compatible backend
+// (RustFS in CI) through the recursive listing end to end. The coordinate
+// contract under test — Prefix/StartAfter/nextKey as bucket-relative keys
+// — is invisible to the in-memory fake, which never runs the SDK
+// coordinate lift, so this native regression is the one that reproduces
+// the production symptom (a populated humans/alice/files/ answering
+// {"entries":[]} on RustFS 1.0.4) and pins the page contract against a
+// real store: the multi-page walk (union and order), the cursor resume
+// (no key twice, none skipped), a legitimate empty file, and the hidden
+// shapes (the tombstone and the .sync/.control objects) staying out of
+// entries.
+//
+// Skipped unless HUMAN_FILES_S3_ENDPOINT is set (the same gate as
+// TestHumanFiles_S3Lifecycle; the CI job selects it with -run
+// 'TestHumanFiles_S3').
+func TestHumanFiles_S3RecursiveListWalk(t *testing.T) {
+	endpoint := os.Getenv("HUMAN_FILES_S3_ENDPOINT")
+	if endpoint == "" {
+		t.Skip("set HUMAN_FILES_S3_ENDPOINT/HUMAN_FILES_S3_ACCESS_KEY/HUMAN_FILES_S3_SECRET_KEY/HUMAN_FILES_S3_BUCKET to run the native recursive walk")
+	}
+	access := os.Getenv("HUMAN_FILES_S3_ACCESS_KEY")
+	secret := os.Getenv("HUMAN_FILES_S3_SECRET_KEY")
+	bucket := os.Getenv("HUMAN_FILES_S3_BUCKET")
+	if access == "" || secret == "" || bucket == "" {
+		t.Fatal("HUMAN_FILES_S3_ACCESS_KEY, HUMAN_FILES_S3_SECRET_KEY and HUMAN_FILES_S3_BUCKET are required")
+	}
+
+	alias := "humanfilestest"
+	client := oss.NewMinIOClient(oss.Config{
+		Endpoint:      endpoint,
+		AccessKey:     access,
+		SecretKey:     secret,
+		Alias:         alias,
+		Bucket:        bucket,
+		StoragePrefix: alias + "/" + bucket,
+	})
+	ctx := context.Background()
+
+	// The S3 tests in this package share one bucket and human; start from
+	// a clean area so the walk sees exactly this test's objects (the
+	// in-memory cursor test starts the same way, from an empty store).
+	if err := client.DeletePrefix(ctx, humanFilesPrefix("alice")); err != nil {
+		t.Fatalf("wipe the test area: %v", err)
+	}
+
+	h, _, _ := newHumanFilesRig(t)
+	h.oss = client
+
+	for _, put := range []struct {
+		path    string
+		content string
+	}{
+		{"a.txt", "hello"},               // 5 bytes
+		{"docs/b.txt", "world!"},         // 6
+		{"docs/nested/c.txt", "x"},       // 1
+		{"x/y/z/deep.txt", "0123456789"}, // 10, four levels deep
+		{"empty.txt", ""},                // 0, a legitimate empty file
+	} {
+		if rec := hfPutFile(t, h, "alice", put.path, hfSelf(), put.content); rec.Code != http.StatusOK {
+			t.Fatalf("seed %s: %d %s", put.path, rec.Code, rec.Body.String())
+		}
+	}
+	// gone.txt is soft-deleted: on the native backend the tombstone is a
+	// zero-byte object whose marker lives in the S3 Content-Type header.
+	if rec := hfPutFile(t, h, "alice", "gone.txt", hfSelf(), "doomed"); rec.Code != http.StatusOK {
+		t.Fatalf("seed gone: %d", rec.Code)
+	}
+	del := httptest.NewRecorder()
+	h.deleteFile(del, hfReq(t, http.MethodDelete, "alice", "gone.txt", hfSelf(), nil))
+	if del.Code != http.StatusOK {
+		t.Fatalf("delete gone: %d %s", del.Code, del.Body.String())
+	}
+	// Out-of-band shapes the files API cannot create; the flat listing
+	// must filter them the way validateHumanFilePath rejects them.
+	for _, key := range []string{
+		"humans/alice/files/.keep",
+		"humans/alice/files/.sync/state.json",
+		"humans/alice/files/.control/quota.json",
+	} {
+		if err := client.PutObject(ctx, key, []byte("x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// limit=2 pages the raw keys — hidden objects consume page slots, so
+	// one page yields no visible entries at all. Each page re-enters the
+	// handler with the previous page's nextKey as ?cursor=, the
+	// resume-after-interruption path: no key twice, none skipped.
+	var all []humanFileRecursiveEntry
+	seen := map[string]bool{}
+	cursor := ""
+	for page := 0; page < 32; page++ {
+		q := "recursive=1&limit=2"
+		if cursor != "" {
+			q += "&cursor=" + url.QueryEscape(cursor)
+		}
+		rec := httptest.NewRecorder()
+		h.listFiles(rec, hfRecursiveReq(t, "alice", hfSelf(), q))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("page %d: %d %s", page, rec.Code, rec.Body.String())
+		}
+		var resp humanFileRecursiveResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("page %d decode: %v", page, err)
+		}
+		if len(resp.Entries) > 2 {
+			t.Fatalf("page %d: %d entries, want at most limit 2: %+v", page, len(resp.Entries), resp.Entries)
+		}
+		for _, e := range resp.Entries {
+			if seen[e.Path] {
+				t.Fatalf("path %q appeared on two pages (cursor gap or overlap)", e.Path)
+			}
+			seen[e.Path] = true
+			all = append(all, e)
+		}
+		if resp.NextKey == nil {
+			break
+		}
+		if !strings.HasPrefix(*resp.NextKey, humanFilesPrefix("alice")) {
+			t.Fatalf("page %d: cursor %q is not a full key under the area (bucket-relative, no alias/bucket wrapper)", page, *resp.NextKey)
+		}
+		cursor = *resp.NextKey
+	}
+
+	want := []struct {
+		path string
+		size int64
+	}{
+		{"files/a.txt", 5},
+		{"files/docs/b.txt", 6},
+		{"files/docs/nested/c.txt", 1},
+		{"files/empty.txt", 0},
+		{"files/x/y/z/deep.txt", 10},
+	}
+	if len(all) != len(want) {
+		t.Fatalf("walk collected %d entries, want %d (an empty walk is the unfixed coordinate bug): %+v", len(all), len(want), all)
+	}
+	for i, w := range want {
+		if all[i].Path != w.path {
+			t.Fatalf("walk order = %+v, entry %d is %q, want %q (pages must stay in global key order)", all, i, all[i].Path, w.path)
+		}
+		if all[i].Size != w.size {
+			t.Fatalf("entry %q: Size = %d, want %d (the empty file stays, the tombstone does not)", all[i].Path, all[i].Size, w.size)
+		}
+	}
+}

@@ -49,6 +49,12 @@ type MinIOClient struct {
 	// sdkPutIfNoneMatch overrides the SDK create-if-absent write used by the
 	// task-meta first creation; nil uses the real minio-go path.
 	sdkPutIfNoneMatch func(ctx context.Context, key string, data []byte) error
+	// sdkListObjects overrides the SDK ListObjects channel for tests; nil
+	// uses the real minio-go path. It receives the exact bucket and options
+	// the production path builds, so a coordinate bug (a request prefix
+	// wrapped with the mc StoragePrefix) surfaces as an empty walk against
+	// an S3-faithful store.
+	sdkListObjects func(ctx context.Context, bucket string, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo
 }
 
 // NewMinIOClient creates a StorageClient backed by the mc CLI.
@@ -690,6 +696,90 @@ func (c *MinIOClient) ListObjectsDetailed(ctx context.Context, prefix string) ([
 	return c.parseMCFind(out, prefix)
 }
 
+// ListObjectsRecursive walks every object under prefix at all levels, one
+// page at a time. It drives the SDK ListObjects channel with Recursive and
+// StartAfter instead of the mc CLI: the cursor (StartAfter) and the page
+// bound (MaxKeys) are storage parameters, so a page is one storage request
+// and the cursor is the last returned key — re-passing it as startAfter
+// walks the prefix with no gaps and no duplicates. (The mc CLI has no
+// StartAfter equivalent; mc ls --recursive cannot be paged.)
+//
+// prefix and startAfter are storage-relative keys (the same key space as
+// the rest of StorageClient). The SDK lists bucket keys and receives the
+// bucket separately, so both are passed as bucket-relative coordinates:
+// wrapping them with fullPath would lift them into the mc alias/bucket
+// path no bucket key carries, and the walk would come up empty on a real
+// backend. Entries are returned with Name relative to prefix (the same
+// contract as ListObjectsDetailed), and nextKey is the storage-relative
+// key of the last returned entry — empty when the prefix is exhausted, so
+// the caller can pass it back verbatim as ?cursor=.
+func (c *MinIOClient) ListObjectsRecursive(ctx context.Context, prefix, startAfter string, limit int) ([]ObjectInfo, string, error) {
+	if limit <= 0 {
+		return nil, "", fmt.Errorf("recursive list limit must be positive, got %d", limit)
+	}
+	// Bucket-relative coordinates: the bucket rides on the SDK call, and
+	// fullPath's mc alias/bucket wrapper is not part of any bucket key.
+	p := strings.TrimPrefix(prefix, "/")
+	opts := minio.ListObjectsOptions{
+		Prefix:    p,
+		Recursive: true,
+		MaxKeys:   limit,
+	}
+	if startAfter != "" {
+		opts.StartAfter = strings.TrimPrefix(startAfter, "/")
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	var ch <-chan minio.ObjectInfo
+	if list := c.sdkListObjects; list != nil {
+		ch = list(ctx, c.config.Bucket, opts)
+	} else {
+		sdk, err := c.sdkClient()
+		if err != nil {
+			cancel()
+			return nil, "", err
+		}
+		ch = sdk.ListObjects(ctx, c.config.Bucket, opts)
+	}
+	// The SDK may still be sending when this page reaches its limit.
+	// Cancel and drain its terminal error so its producer can exit.
+	defer func() {
+		cancel()
+		for range ch {
+		}
+	}()
+	infos := make([]ObjectInfo, 0, limit)
+	lastKey := ""
+	for o := range ch {
+		if o.Err != nil {
+			return nil, "", fmt.Errorf("list objects (recursive): %w", o.Err)
+		}
+		rel := strings.TrimPrefix(o.Key, p)
+		if rel == "" {
+			continue // the prefix marker object itself (e.g. "files/")
+		}
+		infos = append(infos, ObjectInfo{
+			Name:      rel,
+			Size:      o.Size,
+			ETag:      o.ETag,
+			UpdatedAt: o.LastModified.UTC().Format(time.RFC3339),
+		})
+		// o.Key is already bucket-relative — the same coordinate the
+		// cursor resumes from and the key the caller stats or gets.
+		lastKey = o.Key
+		if len(infos) == limit {
+			break
+		}
+	}
+	nextKey := ""
+	// A full page always yields its last key as the cursor: the caller
+	// resumes strictly after it and gets an empty page when exhausted
+	// (the same contract the fake and the handler tests pin).
+	if len(infos) == limit {
+		nextKey = lastKey
+	}
+	return infos, nextKey, nil
+}
+
 // lsFormatProbe caches the answer of the one-time `mc ls --json` capability
 // probe for the life of the client.
 type lsFormatProbe struct {
@@ -750,9 +840,10 @@ func isMCUnknownFlag(err error) bool {
 //     undercount the quota exactly the way the old space-truncating parser
 //     did.
 //
-// size and etag are intentionally not read: ObjectInfo is unchanged and
-// callers stat each key for the exact bytes. Extracted so the contract is
-// testable without the mc binary.
+// size and etag are carried on direct file entries (directory entries —
+// real or synthesized from a nested key — always report 0/"" so they never
+// inherit a nested object's numbers). Extracted so the contract is testable
+// without the mc binary.
 // parseMCLsJSON parses `mc ls --json`. The structured field is "key" (the full
 // path, e.g. "bucket/alice/dir with space/f.txt"); "title" only exists in some
 // mc builds and was read here, which yielded empty names and silently dropped
@@ -798,6 +889,8 @@ func parseMCLsJSON(out, prefix string) ([]ObjectInfo, error) {
 			Key      string `json:"key"`
 			Title    string `json:"title"`
 			Modified string `json:"modified"`
+			Size     int64  `json:"size"`
+			ETag     string `json:"etag"`
 		}
 		if err := json.Unmarshal([]byte(line), &entry); err != nil {
 			return nil, fmt.Errorf("parse mc ls --json line %q: %w", line, err)
@@ -835,7 +928,15 @@ func parseMCLsJSON(out, prefix string) ([]ObjectInfo, error) {
 		if t, perr := time.Parse(time.RFC3339Nano, entry.Modified); perr == nil {
 			updated = t.UTC().Format(time.RFC3339) // callers expect RFC3339 UTC
 		}
-		infos = append(infos, ObjectInfo{Name: name, UpdatedAt: updated})
+		// Only a direct file entry (no slash left in the name) carries the
+		// object's own size/etag; a directory entry — real or synthesized
+		// from a nested key — must not inherit a nested object's numbers.
+		var size int64
+		etag := ""
+		if !strings.ContainsRune(name, '/') {
+			size, etag = entry.Size, entry.ETag
+		}
+		infos = append(infos, ObjectInfo{Name: name, UpdatedAt: updated, Size: size, ETag: etag})
 	}
 	return infos, nil
 }

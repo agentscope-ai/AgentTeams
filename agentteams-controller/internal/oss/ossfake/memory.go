@@ -36,6 +36,9 @@ type Memory struct {
 
 	// StrictUnsupported makes PutObjectIfMatchStrict answer 501, for tests.
 	StrictUnsupported atomic.Bool
+	// StatMetaCalls counts StatMeta invocations so tests can assert that
+	// the list paths no longer stat every file (only zero-byte candidates).
+	StatMetaCalls atomic.Int64
 }
 
 // md5Hex returns the lowercase MD5 hex digest of data (MinIO single-part
@@ -137,6 +140,7 @@ func (m *Memory) LastWriteTime() time.Time {
 // so a content-changing concurrent write also changes the ETag. Returns
 // os.ErrNotExist when the key is missing.
 func (m *Memory) StatMeta(_ context.Context, key string) (oss.ObjectMeta, error) {
+	m.StatMetaCalls.Add(1)
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	data, ok := m.objects[key]
@@ -339,9 +343,59 @@ func (m *Memory) ListObjectsDetailed(_ context.Context, prefix string) ([]oss.Ob
 	updatedAt := m.modTime.UTC().Format(time.RFC3339)
 	infos := make([]oss.ObjectInfo, 0, len(keys))
 	for _, key := range keys {
-		infos = append(infos, oss.ObjectInfo{Name: strings.TrimPrefix(key, prefix), UpdatedAt: updatedAt})
+		infos = append(infos, oss.ObjectInfo{
+			Name:      strings.TrimPrefix(key, prefix),
+			UpdatedAt: updatedAt,
+			Size:      int64(len(m.objects[key])),
+			ETag:      md5Hex(m.objects[key]),
+		})
 	}
 	return infos, nil
+}
+
+// ListObjectsRecursive lists every object under prefix at all levels,
+// lexicographically by full key, with the production client's page
+// contract (S3 ListObjectsV2 semantics): startAfter restricts the page to
+// keys strictly greater than it, limit bounds the page, and the returned
+// cursor is the last key of the page ("" when the listing is exhausted).
+func (m *Memory) ListObjectsRecursive(_ context.Context, prefix, startAfter string, limit int) ([]oss.ObjectInfo, string, error) {
+	if limit <= 0 {
+		return nil, "", fmt.Errorf("recursive list limit must be positive, got %d", limit)
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	keys := make([]string, 0)
+	for key := range m.objects {
+		if strings.HasPrefix(key, prefix) && key > startAfter {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	// page is the slice to return; keep limit intact: the cursor rule below
+	// depends on whether the page filled the caller's bound.
+	page := limit
+	if page > len(keys) {
+		page = len(keys)
+	}
+	updatedAt := m.modTime.UTC().Format(time.RFC3339)
+	infos := make([]oss.ObjectInfo, 0, page)
+	for _, key := range keys[:page] {
+		infos = append(infos, oss.ObjectInfo{
+			Name:      strings.TrimPrefix(key, prefix),
+			UpdatedAt: updatedAt,
+			Size:      int64(len(m.objects[key])),
+			ETag:      md5Hex(m.objects[key]),
+		})
+	}
+	nextKey := ""
+	// A full page always yields its last key as the cursor: the caller
+	// resumes strictly after it and gets an empty page when exhausted.
+	// A short page means the walk is over, so no cursor is returned (the
+	// handler surfaces that as nextKey: null).
+	if page > 0 && page == limit {
+		nextKey = keys[page-1]
+	}
+	return infos, nextKey, nil
 }
 
 // DeletePrefix removes every object whose key starts with prefix.
@@ -389,6 +443,11 @@ func NewNoPresign(store oss.StorageClient) *NoPresign {
 // ListObjectsDetailed forwards to the wrapped client.
 func (n *NoPresign) ListObjectsDetailed(ctx context.Context, prefix string) ([]oss.ObjectInfo, error) {
 	return n.inner.ListObjectsDetailed(ctx, prefix)
+}
+
+// ListObjectsRecursive forwards to the wrapped client.
+func (n *NoPresign) ListObjectsRecursive(ctx context.Context, prefix, startAfter string, limit int) ([]oss.ObjectInfo, string, error) {
+	return n.inner.ListObjectsRecursive(ctx, prefix, startAfter, limit)
 }
 
 // PutObject forwards to the wrapped client.

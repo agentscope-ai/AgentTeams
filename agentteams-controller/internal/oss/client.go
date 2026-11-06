@@ -47,6 +47,14 @@ type ObjectInfo struct {
 	// UpdatedAt is RFC3339 UTC, or "" when the backend does not expose
 	// (or the parser cannot decode) a timestamp.
 	UpdatedAt string
+	// Size is the object's byte count as reported by the listing; 0 when
+	// the backend does not report it. A Size of 0 is ambiguous (a
+	// genuinely empty object is also 0), so callers that must
+	// distinguish use StatMeta.
+	Size int64
+	// ETag is the object's version identifier as reported by the
+	// listing; "" when the backend does not report one.
+	ETag string
 }
 
 type StorageClient interface {
@@ -55,6 +63,19 @@ type StorageClient interface {
 	// a date). Unparseable dates degrade to UpdatedAt == "" — a listing must
 	// never fail because of timestamp parsing.
 	ListObjectsDetailed(ctx context.Context, prefix string) ([]ObjectInfo, error)
+
+	// ListObjectsRecursive lists every object under prefix at all levels
+	// (no common-prefix folding), sorted lexicographically by full key.
+	// startAfter restricts the page to keys strictly greater than the given
+	// full key ("" for the first page) — pass the previous page's cursor
+	// back to walk the prefix without gaps or duplicates. limit must be > 0
+	// and bounds the page.
+	//
+	// It returns the page's entries (Name relative to prefix, the same
+	// contract as ListObjectsDetailed) and the cursor for the next page —
+	// the last key returned by the store, or "" when the listing is
+	// exhausted.
+	ListObjectsRecursive(ctx context.Context, prefix, startAfter string, limit int) ([]ObjectInfo, string, error)
 
 	// PutObject writes data to the given key path.
 	// Key is relative to the configured storage prefix.

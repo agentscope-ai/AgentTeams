@@ -14,6 +14,7 @@ set -e
 
 # Source shared environment bootstrap (provides ensure_mc_credentials in cloud mode)
 source /opt/agentteams/scripts/lib/agentteams-env.sh 2>/dev/null || true
+export AGENTTEAMS_OTEL_RUNTIME=hermes
 
 WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"
 # Align with the openclaw worker layout: HOME == workspace == MinIO mirror root.
@@ -148,7 +149,7 @@ fi
 # Pass observability env through to hermes-agent. Hermes uses standard OTel
 # environment variables, so no per-app bootstrap file is required.
 CMS_TRACES_ENABLED="$(echo "${AGENTTEAMS_CMS_TRACES_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')"
-if [ "${CMS_TRACES_ENABLED}" = "true" ]; then
+if [ "${CMS_TRACES_ENABLED}" = "true" ] && ! _agentteams_truthy "${AGENTTEAMS_OTEL_ENABLED:-false}"; then
     export OTEL_EXPORTER_OTLP_ENDPOINT="${AGENTTEAMS_CMS_ENDPOINT}"
     export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
     export OTEL_EXPORTER_OTLP_HEADERS="x-arms-license-key=${AGENTTEAMS_CMS_LICENSE_KEY},x-arms-project=${AGENTTEAMS_CMS_PROJECT},x-cms-workspace=${AGENTTEAMS_CMS_WORKSPACE}"

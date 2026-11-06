@@ -173,6 +173,9 @@ RUN /opt/venv/qwenpaw/bin/python /tmp/install-builtin-qwenpaw-plugins.py \
 COPY --chmod=755 qwenpaw/scripts/qwenpaw-worker-entrypoint.sh /opt/agentteams/scripts/qwenpaw-worker-entrypoint.sh
 COPY --chmod=755 qwenpaw/scripts/qwenpaw-teamharness-plugin-reload.sh /opt/agentteams/scripts/qwenpaw-teamharness-plugin-reload.sh
 COPY --from=shared . /opt/agentteams/scripts/lib/
+COPY plugins/teamharness/adapters/qwenpaw/task_trace.py /opt/agentteams/scripts/lib/telemetry/at_task_trace.py
+RUN /opt/venv/qwenpaw/bin/pip install --index-url "${PIP_INDEX_URL}" \
+    -r /opt/agentteams/scripts/lib/telemetry/requirements.txt
 
 # mc wrapper: auto-refreshes STS credentials before every mc invocation.
 RUN chmod +x /opt/agentteams/scripts/lib/mc-wrapper.sh && \

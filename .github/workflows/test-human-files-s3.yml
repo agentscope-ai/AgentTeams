@@ -59,8 +59,21 @@ jobs:
 
       - name: Create bucket
         run: |
-          mc alias set s3 http://127.0.0.1:9000 minioadmin minioadmin
-          mc mb s3/human-files-test
+          # /minio/health/live answers before RustFS can serve requests: observed
+          # readiness phases include "waiting for startup_finalization" and
+          # "waiting for iam". Chasing phases means the job breaks again on the
+          # next one, so retry the operations the job actually needs instead --
+          # alias set is idempotent and bucket creation is --ignore-existing.
+          deadline=$((SECONDS + 180))
+          until mc alias set s3 http://127.0.0.1:9000 minioadmin minioadmin \
+                && mc mb --ignore-existing s3/human-files-test; do
+            if [ "${SECONDS}" -ge "${deadline}" ]; then
+              echo "RustFS did not serve the setup calls within 180s" >&2
+              docker logs rustfs || true
+              exit 1
+            fi
+            sleep 2
+          done
 
       # Both the normal handler lifecycle and the provider fallback (conditional
       # PUT answered with 501) run against the same backend, because the
@@ -88,3 +101,64 @@ jobs:
           # the presign anonymous-download / capability-boundary pair.
           go test ./internal/server -run 'TestHumanFiles_S3' -count=1 -v
           go test ./internal/oss -run TestS3FallbackLifecycle -count=1 -v
+
+  # The sync protocol regression (#1414 P3): independent HTTP clients with
+  # real bearer tokens over the sync endpoints, against the same kind of
+  # backend production runs. It gets its own RustFS + bucket so it can run
+  # in parallel with the lifecycle job.
+  sync-protocol:
+    name: sync protocol (RustFS)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agentteams-controller/go.mod
+          cache-dependency-path: agentteams-controller/go.sum
+
+      - name: Install mc
+        run: |
+          curl -fsSL -o /usr/local/bin/mc \
+            "https://github.com/minio/mc/releases/download/RELEASE.2025-08-13T08-35-41Z/mc.linux-amd64.RELEASE.2025-08-13T08-35-41Z"
+          chmod +x /usr/local/bin/mc
+          mc --version
+
+      - name: Start RustFS 1.0.4
+        run: |
+          # Same rationale as the lifecycle job: the image runs as a
+          # non-root user, so the bind directories must be runner-writable.
+          mkdir -p .rustfs-data .rustfs-logs
+          chmod 777 .rustfs-data .rustfs-logs
+          docker run -d --name rustfs \
+            -p 9000:9000 -p 9001:9001 \
+            -e RUSTFS_ACCESS_KEY=minioadmin \
+            -e RUSTFS_SECRET_KEY=minioadmin \
+            -e RUSTFS_VOLUMES=/data \
+            -v "$PWD/.rustfs-data:/data" \
+            -v "$PWD/.rustfs-logs:/logs" \
+            rustfs/rustfs:1.0.4
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs rustfs || true
+          exit 1
+
+      - name: Create bucket
+        run: |
+          mc alias set s3 http://127.0.0.1:9000 minioadmin minioadmin
+          mc mb --ignore-existing s3/human-sync-protocol-test
+
+      - name: Sync protocol regression
+        working-directory: agentteams-controller
+        env:
+          AGENTTEAMS_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+          AGENTTEAMS_TEST_S3_ACCESS_KEY: minioadmin
+          AGENTTEAMS_TEST_S3_SECRET_KEY: minioadmin
+          AGENTTEAMS_TEST_S3_BUCKET: human-sync-protocol-test
+        run: |
+          go test ./internal/server -run 'TestHumanFileSyncProtocol' -count=1 -v

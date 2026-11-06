@@ -834,6 +834,11 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 		if err := p.matrix.JoinRoom(ctx, teamRoom.RoomID, req.TeamAdminActorToken); err != nil {
 			return nil, fmt.Errorf("team admin join team room: %w", err)
 		}
+		if !teamRoom.Created {
+			if err := p.ensureExistingRoomTeamAdminPower(ctx, teamRoom.RoomID, teamAdminID, req); err != nil {
+				return nil, err
+			}
+		}
 		if err := p.ReconcileRoomMembershipWithActorToken(ctx, teamRoom.RoomID, teamDesired, req.TeamAdminActorToken, req.TeamAdminActorName); err != nil {
 			return nil, fmt.Errorf("reconcile team room membership as team admin: %w", err)
 		}
@@ -889,6 +894,11 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 		if err := p.ensureTeamAdminJoinedLeaderDM(ctx, leaderDMRoom.RoomID, teamAdminID, req.TeamAdminActorToken, req.LeaderCredentialName, req.LeaderName, req.TeamName, leaderDMRoom.Created); err != nil {
 			return nil, err
 		}
+		if !leaderDMRoom.Created {
+			if err := p.ensureExistingRoomTeamAdminPower(ctx, leaderDMRoom.RoomID, teamAdminID, req); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	leaderDMInviteToken := ""
@@ -926,6 +936,29 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 		TeamRoomID:     teamRoom.RoomID,
 		LeaderDMRoomID: leaderDMRoom.RoomID,
 	}, nil
+}
+
+// Alias resolution does not apply CreateRoom's power-level overrides to an
+// existing room. Use its leader to grant the configured admin power before
+// switching membership and metadata writes to the new admin's token.
+func (p *Provisioner) ensureExistingRoomTeamAdminPower(ctx context.Context, roomID, teamAdminID string, req TeamRoomRequest) error {
+	state, err := p.matrix.GetRoomState(ctx, roomID, "m.room.power_levels", "", req.TeamAdminActorToken)
+	if err != nil {
+		return fmt.Errorf("read team admin power in %s: %w", roomID, err)
+	}
+	if users, ok := state["users"].(map[string]interface{}); ok {
+		if level, ok := users[teamAdminID].(float64); ok && level >= 100 {
+			return nil
+		}
+	}
+	token, err := p.leaderInviteToken(ctx, req.LeaderCredentialName, req.LeaderName, req.TeamName)
+	if err != nil {
+		return fmt.Errorf("load leader token to grant team admin power: %w", err)
+	}
+	if err := p.matrix.JoinRoom(ctx, roomID, token); err != nil {
+		return fmt.Errorf("leader join room to grant team admin power: %w", err)
+	}
+	return p.EnsureRoomPowerLevel(ctx, roomID, teamAdminID, 100, token, "")
 }
 
 func (p *Provisioner) ensureTeamAdminJoinedLeaderDM(ctx context.Context, roomID, teamAdminID, teamAdminToken, leaderCredentialName, leaderName, teamName string, created bool) error {

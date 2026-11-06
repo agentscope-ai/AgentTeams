@@ -86,6 +86,21 @@ well. Without anything to remove the uninstall is a no-op, so re-running
 is safe. If the contract changed between install and uninstall, only the
 new contract's keys are removed.
 
+## Drop ledger (TODO — OpenClaw runtime side)
+
+The QwenPaw and Hermes adapters record every silent drop (mention-gated
+chatter, NO_REPLY, self-trigger suppression, failed sends, missing
+configuration) into `<workspace>/shared/matrix/drops.jsonl` through
+`core.outcomes.record_drop` (vocabulary `core.outcomes.DROP_REASONS`).
+This adapter is a pure config projector: the drops happen in the OpenClaw
+runtime (the TypeScript matrix extension), not in this repo. **TODO:**
+the OpenClaw side must call the same reason vocabulary
+(`not_mentioned`, `no_reply`, `ping_pong`, `room_send_failed`,
+`matrix_env_missing`, `allowlist`) into a ledger of the same format so
+the three runtimes stay comparable; the shared codes
+(`matrix_env_missing`, `room_send_failed`) must stay verbatim identical
+to the TeamHarness side.
+
 ## Requirements
 
 bash, python3 with pyyaml (to read the contract). No runtime binary, no

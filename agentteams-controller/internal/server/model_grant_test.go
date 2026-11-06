@@ -233,3 +233,33 @@ func TestModelGrantAnnotation_DedupeAndCap(t *testing.T) {
 		t.Errorf("malformed annotation = %v, want empty", got)
 	}
 }
+
+// TestRevocationContract_AnnotationAndCurrentSurvive pins the revocation
+// contract: revoking the Human's explicit scope removes explicit rows
+// immediately, but the L1-issued historical annotation and the worker's
+// current value stay selectable. "Keep running the current value" and
+// "re-select a value L1 previously granted" are the same grant source
+// (the annotation), distinct from the revoked explicit scope; a value that
+// was never granted is denied.
+func TestRevocationContract_AnnotationAndCurrentSurvive(t *testing.T) {
+	w := &v1beta1.Worker{}
+	w.Spec.Model = "m-current"
+	w.Spec.ModelProvider = "gw"
+	w.Annotations = map[string]string{
+		modelGrantAnnotation: `[{"provider":"gw","model":"m-old"}]`,
+	}
+
+	s, err := buildModelGrantSet(nil, nil, w)
+	if err != nil {
+		t.Fatalf("buildModelGrantSet: %v", err)
+	}
+	if !grantAllows(s.main, "gw", "m-current") {
+		t.Errorf("current value must stay selectable after revocation")
+	}
+	if !grantAllows(s.main, "gw", "m-old") {
+		t.Errorf("L1-issued annotation must stay selectable after revocation")
+	}
+	if grantAllows(s.main, "gw", "m-never-granted") {
+		t.Errorf("a value that was never granted must be denied")
+	}
+}

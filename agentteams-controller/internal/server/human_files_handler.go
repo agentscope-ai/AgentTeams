@@ -36,10 +36,10 @@ import (
 const defaultHumanFileMaxBytes = 64 << 20 // 64 MiB
 
 // defaultHumanFilePresignMaxBytes is the per-file size limit for direct
-// (presigned) uploads, overridable via HUMAN_FILE_PRESIGN_MAX_BYTES. It is
-// far larger than the in-body PUT limit because the bytes never cross the
-// controller.
-const defaultHumanFilePresignMaxBytes = 5 << 30 // 5 GiB
+// (presigned) uploads in 1.2.6. Commit still buffers the staged content in
+// the controller, so HUMAN_FILE_PRESIGN_MAX_BYTES may lower this limit but
+// cannot raise it until bounded streaming commits are implemented.
+const defaultHumanFilePresignMaxBytes = defaultHumanFileMaxBytes // 64 MiB
 
 // defaultHumanPresignTTL is the lifetime of an issued presigned URL when
 // the caller does not pass ?ttl=.
@@ -95,7 +95,7 @@ func NewHumanFilesHandler(k8sClient client.Client, namespace string, sc oss.Stor
 		}
 	}
 	if v := os.Getenv("HUMAN_FILE_PRESIGN_MAX_BYTES"); v != "" {
-		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 && n <= defaultHumanFilePresignMaxBytes {
 			h.presignMaxBytes = n
 		} else {
 			logEnvWarn("HUMAN_FILE_PRESIGN_MAX_BYTES", v)

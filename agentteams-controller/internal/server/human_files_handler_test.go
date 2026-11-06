@@ -3558,7 +3558,7 @@ func TestHumanFiles_PresignIssue(t *testing.T) {
 	ctx := context.Background()
 
 	// Default TTL: the URL targets the STAGING area (never the final
-	// path), the 5 GiB default cap, and an expiry about five minutes out.
+	// path), the 64 MiB release cap, and an expiry about five minutes out.
 	rec := hfPostFile(t, hfh, "alice", "big.bin", hfSelf(), "presign=1")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("presign: %d %s", rec.Code, rec.Body.String())

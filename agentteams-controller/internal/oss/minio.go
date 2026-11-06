@@ -33,14 +33,28 @@ type MinIOClient struct {
 	config     Config
 	credSource CredentialSource
 	aliasReady bool
+	// publicAliasReady tracks the one-time `mc alias set` of the presign
+	// alias (the caller-reachable public endpoint).
+	publicAliasReady bool
 	// lsFormatProbe caches the one-time capability probe of the mc binary
 	// (see lsJSONAvailable); a pointer so the WithCredentialSource shallow
 	// clone shares the cached answer for the same binary.
 	lsFormatProbe *lsFormatProbe
 	// sdkPutIfMatch overrides the SDK conditional write for tests; nil uses
 	// the real minio-go path.
-	sdkPutIfMatch  func(ctx context.Context, key string, data []byte, matchETag string) error
+	sdkPutIfMatch func(ctx context.Context, key string, data []byte, matchETag string) error
+	// sdkPutIfAbsent overrides the SDK create-if-absent write used by the
+	// human-file paths (main); nil uses the real minio-go path.
 	sdkPutIfAbsent func(ctx context.Context, key string, data []byte) error
+	// sdkPutIfNoneMatch overrides the SDK create-if-absent write used by the
+	// task-meta first creation; nil uses the real minio-go path.
+	sdkPutIfNoneMatch func(ctx context.Context, key string, data []byte) error
+	// sdkListObjects overrides the SDK ListObjects channel for tests; nil
+	// uses the real minio-go path. It receives the exact bucket and options
+	// the production path builds, so a coordinate bug (a request prefix
+	// wrapped with the mc StoragePrefix) surfaces as an empty walk against
+	// an S3-faithful store.
+	sdkListObjects func(ctx context.Context, bucket string, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo
 }
 
 // NewMinIOClient creates a StorageClient backed by the mc CLI.
@@ -50,6 +64,9 @@ func NewMinIOClient(cfg Config) *MinIOClient {
 	}
 	if cfg.Alias == "" {
 		cfg.Alias = "agentteams"
+	}
+	if cfg.PublicAlias == "" {
+		cfg.PublicAlias = "agentteams-public"
 	}
 	return &MinIOClient{config: cfg, lsFormatProbe: &lsFormatProbe{}}
 }
@@ -61,6 +78,7 @@ func (c *MinIOClient) WithCredentialSource(src CredentialSource) *MinIOClient {
 	clone := *c
 	clone.credSource = src
 	clone.aliasReady = false
+	clone.publicAliasReady = false
 	return &clone
 }
 
@@ -81,8 +99,37 @@ func (c *MinIOClient) ensureAlias(ctx context.Context) error {
 	return nil
 }
 
+// ensurePublicAlias registers the presign alias — `mc alias set` against
+// the caller-reachable public endpoint with the same storage credentials —
+// once per client. The alias is the only difference between the internal
+// and the presign view of the storage; mc resolves the URL's host from the
+// alias's endpoint when signing. Dynamic mode has no persistent alias:
+// runMCOnAlias injects MC_HOST_<publicAlias> per call instead.
+func (c *MinIOClient) ensurePublicAlias(ctx context.Context) error {
+	if c.credSource != nil {
+		return nil
+	}
+	if c.publicAliasReady || c.config.PublicEndpoint == "" {
+		return nil
+	}
+	_, err := c.runMC(ctx, "alias", "set", c.config.PublicAlias, c.config.PublicEndpoint, c.config.AccessKey, c.config.SecretKey)
+	if err != nil {
+		return fmt.Errorf("mc alias set %s: %w", c.config.PublicAlias, err)
+	}
+	c.publicAliasReady = true
+	return nil
+}
+
 func (c *MinIOClient) fullPath(key string) string {
 	return c.config.StoragePrefix + "/" + strings.TrimPrefix(key, "/")
+}
+
+// publicFullPath renders the mc path for the presign alias: the public
+// alias + the same bucket. It must not reuse StoragePrefix, whose first
+// segment IS the main alias in every deployment (the presign alias differs
+// from it).
+func (c *MinIOClient) publicFullPath(key string) string {
+	return c.config.PublicAlias + "/" + c.config.Bucket + "/" + strings.TrimPrefix(key, "/")
 }
 
 // PutObjectIfMatch performs a conditional write: the object is only replaced
@@ -201,6 +248,35 @@ func (c *MinIOClient) PutObjectIfMatchStrict(ctx context.Context, key string, da
 	return err
 }
 
+// PutObjectIfNoneMatchStrict is the create-if-absent (If-None-Match: *)
+// variant of PutObjectIfMatchStrict: the object is created only when it
+// does not exist, and an existing object (a concurrent create landed in
+// between) surfaces as ErrPreconditionFailed. A provider that cannot
+// honor If-None-Match (NotImplemented/501) surfaces as
+// ErrConditionalUnsupported — with NO write performed — so the
+// create-if-absent callers (the task meta first creation) fail closed
+// exactly like the If-Match strict path: a check-then-create would
+// reopen exactly the create/cancel race this method exists to close.
+func (c *MinIOClient) PutObjectIfNoneMatchStrict(ctx context.Context, key string, data []byte) error {
+	put := c.sdkPutIfNoneMatch
+	if put == nil {
+		put = c.sdkPutObjectIfNoneMatch
+	}
+	err := put(ctx, key, data)
+	if err == nil {
+		return nil
+	}
+
+	var resp minio.ErrorResponse
+	if errors.As(err, &resp) && (resp.Code == "PreconditionFailed" || resp.Code == "412") {
+		return ErrPreconditionFailed
+	}
+	if errors.As(err, &resp) && (resp.Code == "NotImplemented" || resp.Code == "501") {
+		return ErrConditionalUnsupported
+	}
+	return err
+}
+
 // ossFallbackWrite is the OSS degradation for providers without If-Match
 // (Alibaba Cloud OSS returns NotImplemented). It re-checks the read-bound
 // ETag immediately before a plain PutObject: an observed conflict is
@@ -241,6 +317,21 @@ func (c *MinIOClient) sdkPutObjectIfMatch(ctx context.Context, key string, data 
 	return err
 }
 
+// sdkPutObjectIfNoneMatch is the MinIO SDK create-if-absent write
+// (If-None-Match: *). It is a separate function so tests can swap the
+// transport via sdkPutIfNoneMatch.
+func (c *MinIOClient) sdkPutObjectIfNoneMatch(ctx context.Context, key string, data []byte) error {
+	sdk, err := c.sdkClient()
+	if err != nil {
+		return err
+	}
+	reader := bytes.NewReader(data)
+	opts := minio.PutObjectOptions{ContentType: "application/json"}
+	opts.SetMatchETagExcept("*")
+	_, err = sdk.PutObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), reader, int64(len(data)), opts)
+	return err
+}
+
 // sdkClient lazily builds a minio-go client for conditional writes. The
 // regular read/write path stays on the mc CLI (mirror semantics, alias
 // handling, dynamic STS credentials); only If-Match writes need the SDK.
@@ -274,6 +365,62 @@ func (c *MinIOClient) sdkClient() (*minio.Client, error) {
 		Secure: secure,
 	})
 }
+
+// PresignUpload implements PresignUploader. The POST policy form is
+// preferred: its conditions carry the content-length bound (the presign
+// limit) and the content type, so an oversized upload is rejected by the
+// provider itself. When the provider cannot build or sign a POST policy the
+// call degrades to a presigned PUT — the bound and the digest are then
+// enforced by the commit endpoint, which re-checks size and sha256 before
+// accounting. (A POST policy condition cannot bind the sha256 portably, so
+// the digest never appears in the signed form; commit is its enforcer.)
+func (c *MinIOClient) PresignUpload(ctx context.Context, key string, maxBytes int64, contentType, sha256Hex string, ttl time.Duration) (string, string, map[string]string, error) {
+	if c.config.PublicEndpoint == "" {
+		return "", "", nil, ErrPresignUnsupported
+	}
+	// Sign for the caller-reachable origin. Rewriting the signed URL's
+	// host later would invalidate its signature; internal I/O keeps Endpoint.
+	public := *c
+	public.config.Endpoint = c.config.PublicEndpoint
+	sdk, err := public.sdkClient()
+	if err != nil {
+		return "", "", nil, err
+	}
+	// The SDK selects the bucket itself, so the signed object name is the
+	// bucket-relative key — fullPath (mc alias/bucket prefix) only applies
+	// to mc invocations. Signing fullPath made the browser upload land under
+	// agentteams/agentteams-storage/<key> while commit read <key>, which the
+	// real RustFS surfaced as 404 object_missing after a 204 upload.
+	object := strings.TrimPrefix(key, "/")
+	policy := minio.NewPostPolicy()
+	perr := policy.SetBucket(c.config.Bucket)
+	if perr == nil {
+		perr = policy.SetKey(object)
+	}
+	if perr == nil {
+		perr = policy.SetExpires(time.Now().UTC().Add(ttl))
+	}
+	if perr == nil {
+		perr = policy.SetContentLengthRange(0, maxBytes)
+	}
+	if perr == nil && contentType != "" {
+		perr = policy.SetContentType(contentType)
+	}
+	if perr == nil {
+		if u, form, serr := sdk.PresignedPostPolicy(ctx, policy); serr == nil {
+			return "POST", u.String(), form, nil
+		}
+	}
+	// The policy could not be built or signed; fall back to a presigned PUT
+	// (whose error is what is returned when that fails too).
+	u, perr := sdk.PresignedPutObject(ctx, c.config.Bucket, object, ttl)
+	if perr != nil {
+		return "", "", nil, perr
+	}
+	return "PUT", u.String(), nil, nil
+}
+
+var _ PresignUploader = (*MinIOClient)(nil)
 
 func (c *MinIOClient) PutObject(ctx context.Context, key string, data []byte) error {
 	if err := c.ensureAlias(ctx); err != nil {
@@ -339,6 +486,50 @@ func (c *MinIOClient) GetObject(ctx context.Context, key string) ([]byte, error)
 		return nil, err
 	}
 	return []byte(out), nil
+}
+
+// PresignGet mints a presigned download URL for the object at key that
+// stays valid for ttl (#1475 PR-4, #1501). It shells out to
+// `mc share download --expire <ttl> --json <publicFullPath>` against the
+// PUBLIC alias and returns the URL from the `share` field: the mc CLI
+// computes the S3 V4 signature locally from the alias credentials, so
+// neither the object bytes nor the credentials ever leave the process.
+//
+// The URL is signed for the public endpoint's origin, so its host is the
+// caller-reachable host. The Host participates in the S3 V4 signature,
+// which is exactly why the public alias exists: a URL minted for the
+// internal endpoint cannot be rewritten to a public hostname afterwards —
+// storage would answer SignatureDoesNotMatch. The URL grants anonymous
+// read access to exactly that object until it expires.
+//
+// When Config.PublicEndpoint is empty there is no caller-reachable origin
+// to sign for: PresignGet returns ErrPresignUnsupported WITHOUT invoking
+// mc, so the API reports the capability boundary explicitly (501
+// presign_unsupported) instead of leaking an unusable URL.
+func (c *MinIOClient) PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	if ttl <= 0 {
+		return "", fmt.Errorf("presign ttl must be positive, got %s", ttl)
+	}
+	if c.config.PublicEndpoint == "" {
+		return "", ErrPresignUnsupported
+	}
+	if err := c.ensurePublicAlias(ctx); err != nil {
+		return "", err
+	}
+	out, err := c.runMCOnAlias(ctx, c.config.PublicAlias, "share", "download", "--expire", ttl.String(), "--json", c.publicFullPath(key))
+	if err != nil {
+		return "", err
+	}
+	var msg struct {
+		Share string `json:"share"`
+	}
+	if err := json.Unmarshal([]byte(out), &msg); err != nil {
+		return "", fmt.Errorf("parse mc share download --json: %w", err)
+	}
+	if msg.Share == "" {
+		return "", errors.New("mc share download returned an empty share URL")
+	}
+	return msg.Share, nil
 }
 
 func (c *MinIOClient) Stat(ctx context.Context, key string) error {
@@ -505,6 +696,90 @@ func (c *MinIOClient) ListObjectsDetailed(ctx context.Context, prefix string) ([
 	return c.parseMCFind(out, prefix)
 }
 
+// ListObjectsRecursive walks every object under prefix at all levels, one
+// page at a time. It drives the SDK ListObjects channel with Recursive and
+// StartAfter instead of the mc CLI: the cursor (StartAfter) and the page
+// bound (MaxKeys) are storage parameters, so a page is one storage request
+// and the cursor is the last returned key — re-passing it as startAfter
+// walks the prefix with no gaps and no duplicates. (The mc CLI has no
+// StartAfter equivalent; mc ls --recursive cannot be paged.)
+//
+// prefix and startAfter are storage-relative keys (the same key space as
+// the rest of StorageClient). The SDK lists bucket keys and receives the
+// bucket separately, so both are passed as bucket-relative coordinates:
+// wrapping them with fullPath would lift them into the mc alias/bucket
+// path no bucket key carries, and the walk would come up empty on a real
+// backend. Entries are returned with Name relative to prefix (the same
+// contract as ListObjectsDetailed), and nextKey is the storage-relative
+// key of the last returned entry — empty when the prefix is exhausted, so
+// the caller can pass it back verbatim as ?cursor=.
+func (c *MinIOClient) ListObjectsRecursive(ctx context.Context, prefix, startAfter string, limit int) ([]ObjectInfo, string, error) {
+	if limit <= 0 {
+		return nil, "", fmt.Errorf("recursive list limit must be positive, got %d", limit)
+	}
+	// Bucket-relative coordinates: the bucket rides on the SDK call, and
+	// fullPath's mc alias/bucket wrapper is not part of any bucket key.
+	p := strings.TrimPrefix(prefix, "/")
+	opts := minio.ListObjectsOptions{
+		Prefix:    p,
+		Recursive: true,
+		MaxKeys:   limit,
+	}
+	if startAfter != "" {
+		opts.StartAfter = strings.TrimPrefix(startAfter, "/")
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	var ch <-chan minio.ObjectInfo
+	if list := c.sdkListObjects; list != nil {
+		ch = list(ctx, c.config.Bucket, opts)
+	} else {
+		sdk, err := c.sdkClient()
+		if err != nil {
+			cancel()
+			return nil, "", err
+		}
+		ch = sdk.ListObjects(ctx, c.config.Bucket, opts)
+	}
+	// The SDK may still be sending when this page reaches its limit.
+	// Cancel and drain its terminal error so its producer can exit.
+	defer func() {
+		cancel()
+		for range ch {
+		}
+	}()
+	infos := make([]ObjectInfo, 0, limit)
+	lastKey := ""
+	for o := range ch {
+		if o.Err != nil {
+			return nil, "", fmt.Errorf("list objects (recursive): %w", o.Err)
+		}
+		rel := strings.TrimPrefix(o.Key, p)
+		if rel == "" {
+			continue // the prefix marker object itself (e.g. "files/")
+		}
+		infos = append(infos, ObjectInfo{
+			Name:      rel,
+			Size:      o.Size,
+			ETag:      o.ETag,
+			UpdatedAt: o.LastModified.UTC().Format(time.RFC3339),
+		})
+		// o.Key is already bucket-relative — the same coordinate the
+		// cursor resumes from and the key the caller stats or gets.
+		lastKey = o.Key
+		if len(infos) == limit {
+			break
+		}
+	}
+	nextKey := ""
+	// A full page always yields its last key as the cursor: the caller
+	// resumes strictly after it and gets an empty page when exhausted
+	// (the same contract the fake and the handler tests pin).
+	if len(infos) == limit {
+		nextKey = lastKey
+	}
+	return infos, nextKey, nil
+}
+
 // lsFormatProbe caches the answer of the one-time `mc ls --json` capability
 // probe for the life of the client.
 type lsFormatProbe struct {
@@ -565,9 +840,10 @@ func isMCUnknownFlag(err error) bool {
 //     undercount the quota exactly the way the old space-truncating parser
 //     did.
 //
-// size and etag are intentionally not read: ObjectInfo is unchanged and
-// callers stat each key for the exact bytes. Extracted so the contract is
-// testable without the mc binary.
+// size and etag are carried on direct file entries (directory entries —
+// real or synthesized from a nested key — always report 0/"" so they never
+// inherit a nested object's numbers). Extracted so the contract is testable
+// without the mc binary.
 // parseMCLsJSON parses `mc ls --json`. The structured field is "key" (the full
 // path, e.g. "bucket/alice/dir with space/f.txt"); "title" only exists in some
 // mc builds and was read here, which yielded empty names and silently dropped
@@ -613,6 +889,8 @@ func parseMCLsJSON(out, prefix string) ([]ObjectInfo, error) {
 			Key      string `json:"key"`
 			Title    string `json:"title"`
 			Modified string `json:"modified"`
+			Size     int64  `json:"size"`
+			ETag     string `json:"etag"`
 		}
 		if err := json.Unmarshal([]byte(line), &entry); err != nil {
 			return nil, fmt.Errorf("parse mc ls --json line %q: %w", line, err)
@@ -650,7 +928,15 @@ func parseMCLsJSON(out, prefix string) ([]ObjectInfo, error) {
 		if t, perr := time.Parse(time.RFC3339Nano, entry.Modified); perr == nil {
 			updated = t.UTC().Format(time.RFC3339) // callers expect RFC3339 UTC
 		}
-		infos = append(infos, ObjectInfo{Name: name, UpdatedAt: updated})
+		// Only a direct file entry (no slash left in the name) carries the
+		// object's own size/etag; a directory entry — real or synthesized
+		// from a nested key — must not inherit a nested object's numbers.
+		var size int64
+		etag := ""
+		if !strings.ContainsRune(name, '/') {
+			size, etag = entry.Size, entry.ETag
+		}
+		infos = append(infos, ObjectInfo{Name: name, UpdatedAt: updated, Size: size, ETag: etag})
 	}
 	return infos, nil
 }
@@ -719,24 +1005,25 @@ func (c *MinIOClient) EnsureBucket(ctx context.Context) error {
 }
 
 func (c *MinIOClient) runMC(ctx context.Context, args ...string) (string, error) {
-	return c.runMCWithInput(ctx, nil, args...)
+	return c.runMCOnAlias(ctx, c.config.Alias, args...)
 }
 
-func (c *MinIOClient) runMCWithInput(ctx context.Context, stdin []byte, args ...string) (string, error) {
+// runMCOnAlias is runMC bound to a specific alias. In dynamic-credential
+// mode the MC_HOST_<alias> env var is built from that alias's OWN endpoint
+// (endpointForAlias), so the presign alias signs against the public
+// endpoint while every other command stays on the internal one.
+func (c *MinIOClient) runMCOnAlias(ctx context.Context, alias string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, c.config.MCBinary, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if stdin != nil {
-		cmd.Stdin = bytes.NewReader(stdin)
-	}
 
 	if c.credSource != nil {
 		creds, err := c.credSource.Resolve(ctx)
 		if err != nil {
 			return "", fmt.Errorf("resolve oss credentials: %w", err)
 		}
-		hostEnv, herr := buildMCHostEnv(c.config.Alias, c.config.Endpoint, creds)
+		hostEnv, herr := buildMCHostEnv(alias, c.endpointForAlias(alias), creds)
 		if herr != nil {
 			return "", herr
 		}
@@ -748,6 +1035,16 @@ func (c *MinIOClient) runMCWithInput(ctx context.Context, stdin []byte, args ...
 			strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.String(), nil
+}
+
+// endpointForAlias resolves the endpoint an alias binds to: the presign
+// alias is the caller-reachable public endpoint, every other alias the
+// internal one.
+func (c *MinIOClient) endpointForAlias(alias string) string {
+	if alias == c.config.PublicAlias {
+		return c.config.PublicEndpoint
+	}
+	return c.config.Endpoint
 }
 
 // buildMCHostEnv renders a single MC_HOST_<alias>=<scheme>://<ak>:<sk>[:<token>]@<host>

@@ -583,6 +583,28 @@ SMTP 通过以下环境变量配置（在 Manager 容器中）：
 - 创建 L3 Human 前，目标 Worker 必须已存在
 - 修改 permissionLevel 会触发全量重算 groupAllowFrom
 
+### 文件区下载（预签名 URL）
+
+每个 Human 的文件区支持两种下载模式：
+
+| 模式 | 请求 | 行为 |
+|------|------|------|
+| 流式（始终可用） | `GET /api/v1/humans/{name}/files/{path}` | Controller 通过自身 API 响应流式返回对象 |
+| 预签名（可选开启） | `GET .../files/{path}?presign=1` | Controller 返回一个限时 URL；客户端**直接从存储**下载对象，不经过 Controller |
+
+**启用预签名下载。** 将 `AGENTTEAMS_FS_PUBLIC_ENDPOINT`（Helm：`storage.publicEndpoint`）设置为**客户端可达**的存储源——所有返回 URL 中的 host 就是该值本身。请指向 MinIO/RustFS 的公网地址，通常是代理 S3 endpoint 的 Ingress 或专用域名（如 `https://files.example.com`），并确保该源提供与 `AGENTTEAMS_FS_ENDPOINT` 相同的 bucket。内嵌安装**不会**把存储端口发布到宿主机（Controller 容器只暴露 8080/8001/8088），因此预签名默认**关闭**：请把 `AGENTTEAMS_FS_PUBLIC_ENDPOINT` 设为浏览器真正可达的存储源（额外发布端口或 Ingress），否则继续使用流式 GET。
+
+**未配置公网端点时**，预签名处于关闭状态，`?presign=1` 会返回：
+
+```
+501 Not Implemented
+{"error":"presign_unsupported","reason":"storage endpoint is not caller-reachable; set AGENTTEAMS_FS_PUBLIC_ENDPOINT or use the streamed GET"}
+```
+
+客户端应将其视为能力信号，回退到同一路径的流式 GET——该模式与存储是否可达无关，始终可用。
+
+**预签名 URL 语义。** 返回的 URL 是匿名的（无需凭据）、有效期为 `AGENTTEAMS_PRESIGN_TTL`（Go duration，默认 5 分钟，最长 60 分钟），并且绑定到公网端点的 host：S3 V4 签名覆盖了 `Host` 头，因此必须按原样获取该 URL——改写主机名（即使是同一 host 的别名）会导致存储以 `403 SignatureDoesNotMatch` 拒绝请求。
+
 ## Human 文件同步（服务端半边）
 
 1.2.6 交付的是按人文件同步协议的**服务端半边**（#1414 P3）。Controller 暴露按人的同步 manifest，供同步客户端读写；**同步由客户端驱动**——本地扫描、字节传输、冲突解决全部发生在客户端。服务端只存 manifest，从不合并。

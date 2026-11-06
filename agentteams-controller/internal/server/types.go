@@ -464,13 +464,14 @@ type TeamListResponse struct {
 // --- Human API types ---
 
 type CreateHumanRequest struct {
-	Name              string   `json:"name"`
-	DisplayName       string   `json:"displayName"`
-	Email             string   `json:"email,omitempty"`
-	PermissionLevel   int      `json:"permissionLevel"`
-	AccessibleTeams   []string `json:"accessibleTeams,omitempty"`
-	AccessibleWorkers []string `json:"accessibleWorkers,omitempty"`
-	Note              string   `json:"note,omitempty"`
+	Name              string                   `json:"name"`
+	DisplayName       string                   `json:"displayName"`
+	Email             string                   `json:"email,omitempty"`
+	PermissionLevel   int                      `json:"permissionLevel"`
+	AccessibleTeams   []string                 `json:"accessibleTeams,omitempty"`
+	AccessibleWorkers []string                 `json:"accessibleWorkers,omitempty"`
+	Note              string                   `json:"note,omitempty"`
+	ModelAccess       *v1beta1.ModelAccessSpec `json:"modelAccess,omitempty"`
 }
 
 // UpdateHumanRequest is the merge-patch body of PUT /api/v1/humans/{name}.
@@ -488,6 +489,10 @@ type UpdateHumanRequest struct {
 	// AccessibleTeams: absent = unchanged, explicit list = replaces,
 	// empty list = clears. Unknown values are rejected (400).
 	Capabilities *[]string `json:"capabilities,omitempty"`
+	// ModelAccess has the same semantics: absent = unchanged, present =
+	// replace the whole grant table (an empty object clears all grants,
+	// locking every surface).
+	ModelAccess *v1beta1.ModelAccessSpec `json:"modelAccess,omitempty"`
 	// WorkspaceAccess follows the same merge-patch semantics as
 	// Capabilities: absent (or null) = unchanged, present object =
 	// replace, an empty object clears both lists. Invalid paths/modes
@@ -496,24 +501,47 @@ type UpdateHumanRequest struct {
 }
 
 type HumanResponse struct {
-	Name              string   `json:"name"`
-	Phase             string   `json:"phase"`
-	DisplayName       string   `json:"displayName"`
-	Email             string   `json:"email,omitempty"`
-	PermissionLevel   int      `json:"permissionLevel"`
-	AccessibleTeams   []string `json:"accessibleTeams,omitempty"`
-	AccessibleWorkers []string `json:"accessibleWorkers,omitempty"`
-	Capabilities      []string `json:"capabilities,omitempty"`
-	Note              string   `json:"note,omitempty"`
-	MatrixUserID      string   `json:"matrixUserID,omitempty"`
-	InitialPassword   string   `json:"initialPassword,omitempty"`
-	Rooms             []string `json:"rooms,omitempty"`
-	Message           string   `json:"message,omitempty"`
+	Name              string                   `json:"name"`
+	Phase             string                   `json:"phase"`
+	DisplayName       string                   `json:"displayName"`
+	Email             string                   `json:"email,omitempty"`
+	PermissionLevel   int                      `json:"permissionLevel"`
+	AccessibleTeams   []string                 `json:"accessibleTeams,omitempty"`
+	AccessibleWorkers []string                 `json:"accessibleWorkers,omitempty"`
+	Capabilities      []string                 `json:"capabilities,omitempty"`
+	Note              string                   `json:"note,omitempty"`
+	MatrixUserID      string                   `json:"matrixUserID,omitempty"`
+	InitialPassword   string                   `json:"initialPassword,omitempty"`
+	Rooms             []string                 `json:"rooms,omitempty"`
+	Message           string                   `json:"message,omitempty"`
+	ModelAccess       *v1beta1.ModelAccessSpec `json:"modelAccess,omitempty"`
 }
 
 type HumanListResponse struct {
 	Humans []HumanResponse `json:"humans"`
 	Total  int             `json:"total"`
+}
+
+// ModelAccessTableRequest is the writable body of a table.
+type ModelAccessTableRequest struct {
+	Name      string                      `json:"name"`
+	Main      *v1beta1.ModelAccessSurface `json:"main,omitempty"`
+	Spawn     *v1beta1.ModelAccessSurface `json:"spawn,omitempty"`
+	CodingCli []v1beta1.ModelAccessCli    `json:"codingCli,omitempty"`
+}
+
+// ModelAccessTableResponse is the read shape of a table.
+type ModelAccessTableResponse struct {
+	Name      string                      `json:"name"`
+	Main      *v1beta1.ModelAccessSurface `json:"main,omitempty"`
+	Spawn     *v1beta1.ModelAccessSurface `json:"spawn,omitempty"`
+	CodingCli []v1beta1.ModelAccessCli    `json:"codingCli,omitempty"`
+}
+
+// ModelAccessTableListResponse is the read shape of GET /api/v1/model-access-tables.
+type ModelAccessTableListResponse struct {
+	Tables []ModelAccessTableResponse `json:"tables"`
+	Total  int                        `json:"total"`
 }
 
 // --- Manager API types ---
@@ -552,13 +580,13 @@ type UpdateManagerRequest struct {
 }
 
 type ManagerResponse struct {
-	Name    string `json:"name"`
-	Phase   string `json:"phase"`
-	State   string `json:"state,omitempty"` // desired lifecycle state
-	Model   string `json:"model,omitempty"`
+	Name  string `json:"name"`
+	Phase string `json:"phase"`
+	State string `json:"state,omitempty"` // desired lifecycle state
+	Model string `json:"model,omitempty"`
 	// ModelProvider mirrors ManagerSpec.ModelProvider (APIG Model API name).
 	ModelProvider string `json:"modelProvider,omitempty"`
-	Runtime string `json:"runtime,omitempty"`
+	Runtime       string `json:"runtime,omitempty"`
 	// RuntimeDeprecated marks legacy runtimes that are upgrade-compat
 	// only (CoPaw): new creation is rejected; migrate to QwenPaw.
 	RuntimeDeprecated bool   `json:"runtimeDeprecated,omitempty"`

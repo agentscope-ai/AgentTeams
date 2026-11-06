@@ -709,6 +709,10 @@ type HumanSpec struct {
 	// before writes and trash restores (413 quota_exceeded); usage is
 	// computed live, never persisted.
 	WorkspaceQuotaBytes *int64 `json:"workspaceQuotaBytes,omitempty"`
+	// ModelAccess is the per-human model-grant table. Absent means every
+	// model surface is locked (fail-closed).
+	ModelAccess *ModelAccessSpec `json:"modelAccess,omitempty"`
+
 	// WorkspaceAccess holds per-team access rules for this human's file
 	// area (#1414 P2). The default set — accessibleTeams plus every team
 	// that lists the human in spec.humanMembers (its Leader and Worker
@@ -785,6 +789,76 @@ type HumanList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Human `json:"items"`
+}
+
+// ModelAccessSpec is a list of role-scoped model grants. There is no team
+// dimension: a grant follows the human across every accessible team, and the
+// role is resolved from the target worker's TeamWorkerRef.Role.
+type ModelAccessSpec struct {
+	Scopes []ModelAccessScope `json:"scopes,omitempty"`
+}
+
+// ModelAccessScope grants one role either a shared table (Table) or an
+// inline set of surfaces — never both.
+type ModelAccessScope struct {
+	// Role is team_leader, worker, "*" or empty ("*" and empty both mean
+	// "every role"; an explicit role block wins over the blanket).
+	Role string `json:"role,omitempty"`
+	// Table names a ModelAccessTable in the same namespace.
+	Table string `json:"table,omitempty"`
+
+	Main      *ModelAccessSurface `json:"main,omitempty"`
+	Spawn     *ModelAccessSurface `json:"spawn,omitempty"`
+	CodingCli []ModelAccessCli    `json:"codingCli,omitempty"`
+}
+
+// ModelAccessSurface is the allowed (provider, model) table of one surface.
+type ModelAccessSurface struct {
+	Entries []ModelAccessEntry `json:"entries,omitempty"`
+	// Inherit allows the value to stay empty: spawn inherits the primary
+	// model, a coding CLI follows the worker's spawn model.
+	Inherit *bool `json:"inherit,omitempty"`
+}
+
+// ModelAccessCli is one coding CLI's table.
+type ModelAccessCli struct {
+	CLI     string             `json:"cli"`
+	Entries []ModelAccessEntry `json:"entries,omitempty"`
+	Inherit *bool              `json:"inherit,omitempty"`
+}
+
+// ModelAccessEntry is one row: the provider that serves the model, plus the
+// model name (a Higress route alias).
+type ModelAccessEntry struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+// ModelAccessTable is a reusable grant set shared by many humans.
+type ModelAccessTable struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec ModelAccessTableSpec `json:"spec,omitempty"`
+}
+
+// ModelAccessTableSpec mirrors the inline surfaces of a scope.
+type ModelAccessTableSpec struct {
+	Main      *ModelAccessSurface `json:"main,omitempty"`
+	Spawn     *ModelAccessSurface `json:"spawn,omitempty"`
+	CodingCli []ModelAccessCli    `json:"codingCli,omitempty"`
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+// ModelAccessTableList is the list type for the table CRD.
+type ModelAccessTableList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+
+	Items []ModelAccessTable `json:"items"`
 }
 
 // +genclient

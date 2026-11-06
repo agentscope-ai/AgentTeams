@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -34,6 +35,20 @@ import (
 // (#1414 P1), overridable via the HUMAN_FILE_MAX_BYTES environment variable.
 const defaultHumanFileMaxBytes = 64 << 20 // 64 MiB
 
+// defaultHumanFilePresignMaxBytes is the per-file size limit for direct
+// (presigned) uploads in 1.2.6. Commit still buffers the staged content in
+// the controller, so HUMAN_FILE_PRESIGN_MAX_BYTES may lower this limit but
+// cannot raise it until bounded streaming commits are implemented.
+const defaultHumanFilePresignMaxBytes = defaultHumanFileMaxBytes // 64 MiB
+
+// defaultHumanPresignTTL is the lifetime of an issued presigned URL when
+// the caller does not pass ?ttl=.
+const defaultHumanPresignTTL = 5 * time.Minute
+
+// maxHumanPresignTTL caps the lifetime a caller may request: a longer-lived
+// URL is a wider tampering window, not a convenience.
+const maxHumanPresignTTL = 60 * time.Minute
+
 // humanFilesHandler serves the per-human file area API (#1414 P1): file
 // read / list / write / soft-delete under files/<username>/files/, and the
 // recycle bin under files/<username>/.trash/.
@@ -51,9 +66,16 @@ type humanFilesHandler struct {
 	oss          oss.StorageClient
 	auditClient  *audit.Client
 	maxFileBytes int64
+	// presignMaxBytes caps direct (presigned) uploads; the gate is checked
+	// at commit against the bytes that actually landed.
+	presignMaxBytes int64
 	// pathLockTTL is the per-path lease lifetime; tests shorten it to exercise
 	// expiry deterministically.
 	pathLockTTL time.Duration
+	// presignTTL is the presigned-URL lifetime for ?presign=1 (#1475 PR-4),
+	// from AGENTTEAMS_PRESIGN_TTL (Go duration) clamped to
+	// maxHumanPresignTTL.
+	presignTTL time.Duration
 }
 
 // NewHumanFilesHandler constructs the handler. The per-file size limit is
@@ -61,18 +83,40 @@ type humanFilesHandler struct {
 // back to the 64 MiB default.
 func NewHumanFilesHandler(k8sClient client.Client, namespace string, sc oss.StorageClient, ac *audit.Client) *humanFilesHandler {
 	h := &humanFilesHandler{
-		client:       k8sClient,
-		namespace:    namespace,
-		oss:          sc,
-		auditClient:  ac,
-		maxFileBytes: defaultHumanFileMaxBytes,
-		pathLockTTL:  humanPathLockTTL,
+		client:          k8sClient,
+		namespace:       namespace,
+		oss:             sc,
+		auditClient:     ac,
+		maxFileBytes:    defaultHumanFileMaxBytes,
+		presignMaxBytes: defaultHumanFilePresignMaxBytes,
+		pathLockTTL:     humanPathLockTTL,
+		presignTTL:      defaultHumanPresignTTL,
 	}
 	if v := os.Getenv("HUMAN_FILE_MAX_BYTES"); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
 			h.maxFileBytes = n
 		} else {
 			logEnvWarn("HUMAN_FILE_MAX_BYTES", v)
+		}
+	}
+	if v := os.Getenv("HUMAN_FILE_PRESIGN_MAX_BYTES"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 && n <= defaultHumanFilePresignMaxBytes {
+			h.presignMaxBytes = n
+		} else {
+			logEnvWarn("HUMAN_FILE_PRESIGN_MAX_BYTES", v)
+		}
+	}
+	// AGENTTEAMS_PRESIGN_TTL is a Go duration ("5m", "30m", "1h"). An unset,
+	// unparseable, or non-positive value falls back to the default; a valid
+	// value above the cap is clamped to it.
+	if v := os.Getenv("AGENTTEAMS_PRESIGN_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err != nil || d <= 0 {
+			logEnvWarn("AGENTTEAMS_PRESIGN_TTL", v)
+		} else {
+			if d > maxHumanPresignTTL {
+				d = maxHumanPresignTTL
+			}
+			h.presignTTL = d
 		}
 	}
 	return h
@@ -87,6 +131,21 @@ func logEnvWarn(name, value string) {
 	_ = value
 }
 
+// presignGetter is the capability the ?presign=1 path needs from the
+// storage backend (#1475 PR-4). It is a separate capability, not part of
+// oss.StorageClient, so backends without presign support (in-memory test
+// fakes, a future direct-S3 client) keep serving the non-presign routes
+// unchanged; the presign route then fails closed with 500.
+type presignGetter interface {
+	PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error)
+}
+
+// isPresignRequest reports whether a files GET asked for a presigned
+// download URL instead of the file bytes (#1475 PR-4).
+func isPresignRequest(r *http.Request) bool {
+	return r.URL.Query().Get("presign") == "1"
+}
+
 // --- Storage layout -------------------------------------------------------
 //
 // The human file area lives under the bucket root, parallel to agents/ and
@@ -96,12 +155,23 @@ func logEnvWarn(name, value string) {
 //	humans/<username>/.trash/<id>/     recycle bin entries (this API)
 //	    ├── meta.json                  original path, deleted-at, caller, size
 //	    └── content                    the deleted file's bytes
+//	humans/<username>/.uploads/<session>/<rel>
+//	                                 staging objects for direct uploads
+//	                                 (this API): invisible to the file API
+//	                                 and the quota, published to files/
+//	                                 only by a successful commit
 //
 // memory/ and digest/ are intentionally not part of P1.
+//
+// .uploads/ and .trash/ are hidden area prefixes: the file API serves and
+// lists only files/, and the quota walks only files/ plus .trash/, so both
+// stay out of ordinary reads, listings, and usage accounting by
+// construction.
 
-func humanAreaPrefix(username string) string  { return "humans/" + username + "/" }
-func humanFilesPrefix(username string) string { return humanAreaPrefix(username) + "files/" }
-func humanTrashPrefix(username string) string { return humanAreaPrefix(username) + ".trash/" }
+func humanAreaPrefix(username string) string    { return "humans/" + username + "/" }
+func humanFilesPrefix(username string) string   { return humanAreaPrefix(username) + "files/" }
+func humanTrashPrefix(username string) string   { return humanAreaPrefix(username) + ".trash/" }
+func humanUploadsPrefix(username string) string { return humanAreaPrefix(username) + ".uploads/" }
 
 // trashID form: <UTC yyyymmddThhmmssZ>-<8 hex>, e.g.
 // 20261024T123045Z-abcd1234.
@@ -320,11 +390,47 @@ type humanFileCodedError struct {
 	Message string `json:"message"`
 }
 
+// humanFilePresignResponse is the ?presign=1 GET body (#1475 PR-4): a
+// short-lived anonymous download URL plus the content-bound metadata the
+// caller needs. The storage credentials used to sign the URL are never
+// part of the response.
+type humanFilePresignResponse struct {
+	URL       string `json:"url"`
+	ETag      string `json:"etag"`
+	Size      int64  `json:"size"`
+	ExpiresAt string `json:"expiresAt"`
+}
+
+// humanFilePresignUnsupportedResponse is the explicit capability boundary
+// for ?presign=1 (#1501): the deployment has no caller-reachable storage
+// origin (AGENTTEAMS_FS_PUBLIC_ENDPOINT unset), so no URL is minted — a
+// URL signed for the internal endpoint is unusable from the caller. The
+// stable error code lets clients detect the boundary and fall back to the
+// streamed GET on the same path.
+type humanFilePresignUnsupportedResponse struct {
+	Error  string `json:"error"`
+	Reason string `json:"reason"`
+}
+
 func writeHumanFileCodedError(w http.ResponseWriter, status int, code, message string) {
 	httputil.WriteJSON(w, status, humanFileCodedError{Code: code, Message: message})
 }
 
 // --- Helpers ----------------------------------------------------------------
+
+// humanFileDetail renders the audit Detail field: a controlled JSON
+// summary of non-secret request attributes.
+func humanFileDetail(kv ...any) string {
+	m := make(map[string]any, len(kv)/2)
+	for i := 0; i+1 < len(kv); i += 2 {
+		m[fmt.Sprint(kv[i])] = kv[i+1]
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
 
 // recordAudit appends an audit event for an authorized operation. The
 // Detail always carries the write attribution (#1414 P2): onBehalfOf names
@@ -336,8 +442,17 @@ func (h *humanFilesHandler) recordAudit(ctx context.Context, a *humanFileAccess,
 		return
 	}
 	m := make(map[string]any, len(kv)/2+2)
-	for i := 0; i+1 < len(kv); i += 2 {
-		m[fmt.Sprint(kv[i])] = kv[i+1]
+	if len(kv) == 1 {
+		// Callers may pass an already-rendered detail object (the variadic
+		// humanFileDetail form used by the presign paths); merge it instead
+		// of treating it as an unpaired key.
+		if rendered, ok := kv[0].(string); ok && rendered != "" {
+			_ = json.Unmarshal([]byte(rendered), &m)
+		}
+	} else {
+		for i := 0; i+1 < len(kv); i += 2 {
+			m[fmt.Sprint(kv[i])] = kv[i+1]
+		}
 	}
 	m["onBehalfOf"] = a.human.Spec.EffectiveUsername(a.human.Name)
 	if a.team != "" {
@@ -456,13 +571,24 @@ func isHumanFileTombstone(meta oss.ObjectMeta) bool {
 // getFile handles GET /api/v1/humans/{name}/files/{path...}. When the path
 // is empty (the files root), ends with "/", or ?list=1 is present the
 // directory at that path is listed; otherwise the single file is streamed
-// back with its ETag.
+// back with its ETag — or, with ?presign=1, a short-lived presigned
+// download URL is returned instead of the bytes (#1475 PR-4).
 func (h *humanFilesHandler) getFile(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	rawPath := r.PathValue("path")
 
 	a, status, msg := h.authorizeHumanFile(r.Context(), name, rawPath, false, false)
 	if a == nil {
+		if status == http.StatusNotFound && isPresignRequest(r) {
+			// A presign denial is an explicit 403, not a 404 (#1475 PR-4):
+			// minting a temporary URL is a security-relevant operation. The
+			// 403 is uniform across "human not found", "caller has no
+			// access", and "no caller identity", so it still cannot be used
+			// to probe which humans exist; only genuine lookup faults (500)
+			// pass through unchanged.
+			httputil.WriteError(w, http.StatusForbidden, "presign not allowed")
+			return
+		}
 		httputil.WriteError(w, status, msg)
 		return
 	}
@@ -483,6 +609,10 @@ func (h *humanFilesHandler) readSingleFile(w http.ResponseWriter, r *http.Reques
 	}
 	if rel == "" {
 		httputil.WriteError(w, http.StatusBadRequest, "path is required to read a file; use a trailing / or ?list=1 to list a directory")
+		return
+	}
+	if isPresignRequest(r) {
+		h.presignFile(w, r, a, username, rel)
 		return
 	}
 	ctx := r.Context()
@@ -506,6 +636,66 @@ func (h *humanFilesHandler) readSingleFile(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Type", contentTypeForName(rel))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
+}
+
+// presignFile handles GET .../files/{path}?presign=1 (#1475 PR-4): it mints
+// a short-lived presigned download URL so the bytes travel directly between
+// the caller and storage instead of through the controller. Authorization
+// already happened in getFile with the same access matrix as a plain read;
+// this method checks existence and the tombstone marker, mints the URL, and
+// records the issuance in the audit trail. The object content is never read
+// and the signing credentials are never part of the response.
+//
+// When the deployment has no caller-reachable storage origin
+// (AGENTTEAMS_FS_PUBLIC_ENDPOINT unset, #1501) no URL is minted: the
+// response is 501 with a stable {"error":"presign_unsupported"} body so
+// clients detect the capability boundary and fall back to the streamed GET
+// on the same path.
+func (h *humanFilesHandler) presignFile(w http.ResponseWriter, r *http.Request, a *humanFileAccess, username, rel string) {
+	ctx := r.Context()
+	key := humanFilesPrefix(username) + rel
+
+	meta, err := h.oss.StatMeta(ctx, key)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			httputil.WriteError(w, http.StatusNotFound, "file not found")
+			return
+		}
+		httputil.WriteError(w, http.StatusInternalServerError, "stat file failed")
+		return
+	}
+	if isHumanFileTombstone(meta) {
+		httputil.WriteError(w, http.StatusNotFound, "file not found")
+		return
+	}
+
+	presigner, ok := h.oss.(presignGetter)
+	if !ok {
+		httputil.WriteError(w, http.StatusInternalServerError, "presign failed")
+		return
+	}
+	ttl := h.presignTTL
+	downloadURL, err := presigner.PresignGet(ctx, key, ttl)
+	if err != nil {
+		if errors.Is(err, oss.ErrPresignUnsupported) {
+			httputil.WriteJSON(w, http.StatusNotImplemented, humanFilePresignUnsupportedResponse{
+				Error:  "presign_unsupported",
+				Reason: "storage endpoint is not caller-reachable; set AGENTTEAMS_FS_PUBLIC_ENDPOINT or use the streamed GET",
+			})
+			return
+		}
+		httputil.WriteError(w, http.StatusInternalServerError, "presign failed")
+		return
+	}
+	expiresAt := time.Now().UTC().Add(ttl)
+	h.recordAudit(ctx, a, "human_file_presign",
+		humanFileDetail("path", "files/"+rel, "ttl", ttl.String(), "expiresAt", expiresAt.Format(time.RFC3339)))
+	httputil.WriteJSON(w, http.StatusOK, humanFilePresignResponse{
+		URL:       downloadURL,
+		ETag:      meta.ETag,
+		Size:      meta.Size,
+		ExpiresAt: expiresAt.Format(time.RFC3339),
+	})
 }
 
 // listDirectory lists the first level of the directory at rawPath
@@ -563,8 +753,17 @@ func (h *humanFilesHandler) listDirectory(w http.ResponseWriter, r *http.Request
 		}
 		e.Type = "file"
 		e.UpdatedAt = info.UpdatedAt
-		// ListObjectsDetailed does not carry sizes; resolve each file's
-		// exact byte count (the same source the quota accounting uses).
+		if info.Size > 0 {
+			// The listing already carries the exact byte count; a
+			// non-empty body can never be a tombstone, so no stat.
+			e.Size = info.Size
+			continue
+		}
+		// A zero-byte entry is either a legitimate empty file or a
+		// deletion tombstone (an empty object with the marker content
+		// type); only this shape needs the stat. On the `mc find`
+		// fallback (no sizes reported) every file takes this path,
+		// which is exactly the pre-P4a behavior.
 		if meta, merr := h.oss.StatMeta(ctx, prefix+rel); merr == nil {
 			if isHumanFileTombstone(meta) {
 				delete(entries, base) // soft-deleted: not part of the listing
@@ -586,6 +785,161 @@ func (h *humanFilesHandler) listDirectory(w http.ResponseWriter, r *http.Request
 		respPath += dir + "/"
 	}
 	httputil.WriteJSON(w, http.StatusOK, humanFileListResponse{Path: respPath, Entries: out})
+}
+
+// --- GET files root (directory or recursive flat listing) -------------------
+
+// listFiles handles GET /api/v1/humans/{name}/files — the exact route for
+// the files root. The {path...} wildcard route cannot serve the bare root
+// without a redirect, so the root gets its own pattern; without
+// ?recursive=1 the behavior is exactly listDirectory of the root, and with
+// it the whole area is walked flat with key-cursor pagination.
+func (h *humanFilesHandler) listFiles(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, "", false, false)
+	if a == nil {
+		httputil.WriteError(w, status, msg)
+		return
+	}
+	username := a.human.Spec.EffectiveUsername(a.human.Name)
+	if r.URL.Query().Get("recursive") == "1" {
+		h.listRecursiveFiles(w, r, a, username)
+		return
+	}
+	h.listDirectory(w, r, a, username, "")
+}
+
+// humanFileRecursiveEntry is one entry of the recursive (flat) listing: a
+// file at any depth, addressed relative to the files/ root.
+type humanFileRecursiveEntry struct {
+	Path      string `json:"path"` // "files/<rel>"
+	Size      int64  `json:"size"`
+	ETag      string `json:"etag,omitempty"`
+	UpdatedAt string `json:"updatedAt,omitempty"`
+}
+
+// humanFileRecursiveResponse is the recursive listing body. NextKey is the
+// key cursor for the next page — pass it back as ?cursor= — and is nil
+// when the listing is exhausted. It is deliberately named nextKey (not
+// cursor/nextCursor): cursor-shaped fields are reserved for the
+// incremental delta sync's sequence cursors.
+type humanFileRecursiveResponse struct {
+	Entries []humanFileRecursiveEntry `json:"entries"`
+	NextKey *string                   `json:"nextKey"`
+}
+
+// Bounds for the recursive listing's page size.
+const (
+	defaultHumanFileListLimit = 1000
+	maxHumanFileListLimit     = 10000
+)
+
+// clampHumanFileListLimit parses and bounds the recursive listing's limit
+// parameter: empty → default, non-integer or < 1 → error, above the cap →
+// clamped to maxHumanFileListLimit.
+func clampHumanFileListLimit(v string) (int, error) {
+	if v == "" {
+		return defaultHumanFileListLimit, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, fmt.Errorf("limit must be an integer, got %q", v)
+	}
+	if n < 1 {
+		return 0, fmt.Errorf("limit must be a positive integer, got %d", n)
+	}
+	if n > maxHumanFileListLimit {
+		n = maxHumanFileListLimit
+	}
+	return n, nil
+}
+
+// isReservedHumanFileSegment reports whether rel lives under one of the
+// reserved top-level names (recycle bin, sync state, control state). The
+// files API cannot create such paths, but out-of-band writes can; the
+// recursive listing filters them the way validateHumanFilePath rejects
+// them.
+func isReservedHumanFileSegment(rel string) bool {
+	seg := rel
+	if i := strings.IndexByte(rel, '/'); i >= 0 {
+		seg = rel[:i]
+	}
+	for _, reserved := range reservedHumanFilePrefixes {
+		if seg == reserved {
+			return true
+		}
+	}
+	return false
+}
+
+// listRecursiveFiles serves the recursive flat listing of the whole files/
+// area: every file at every depth in one sorted stream (no synthesized
+// directory entries), paged by limit (default 1000, cap 10000) and walked
+// with a key cursor — the previous page's nextKey is passed back as
+// ?cursor= and the store skips keys up to and including it, so pages are
+// contiguous (no key twice, none skipped). Tombstones (soft-deleted paths
+// are empty objects with the marker content type) are excluded by statting
+// zero-byte entries only.
+func (h *humanFilesHandler) listRecursiveFiles(w http.ResponseWriter, r *http.Request, a *humanFileAccess, username string) {
+	q := r.URL.Query()
+	limit, err := clampHumanFileListLimit(q.Get("limit"))
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// The cursor is the previous page's nextKey: a full storage key under
+	// this area's files/ prefix, generated by the store and passed back
+	// verbatim as the StartAfter bound. Re-asserting the caller's prefix
+	// keeps a forged cursor from reaching another human's area (and the
+	// store itself rejects a StartAfter outside its Prefix).
+	startAfter := ""
+	if cur := q.Get("cursor"); cur != "" {
+		if !strings.HasPrefix(cur, humanFilesPrefix(username)) {
+			httputil.WriteError(w, http.StatusBadRequest, "invalid cursor: not a key inside this file area")
+			return
+		}
+		startAfter = cur
+	}
+	ctx := r.Context()
+	prefix := humanFilesPrefix(username)
+	infos, nextKey, err := h.oss.ListObjectsRecursive(ctx, prefix, startAfter, limit)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "list files failed")
+		return
+	}
+	entries := make([]humanFileRecursiveEntry, 0, len(infos))
+	for _, info := range infos {
+		rel := info.Name
+		if rel == "" || rel == ".keep" || strings.HasSuffix(rel, "/.keep") || strings.HasSuffix(rel, "/") {
+			continue // prefix marker, .keep marker object, directory marker
+		}
+		if isReservedHumanFileSegment(rel) {
+			continue // .trash / .sync / .control written out of band
+		}
+		if info.Size == 0 {
+			// A zero-byte entry is either a legitimate empty file or a
+			// deletion tombstone; only this shape needs the stat. A stat
+			// that fails for any other reason keeps the entry: the client
+			// reconciles against the manifest, and a false absence is how
+			// a listing would trigger a spurious local delete.
+			meta, merr := h.oss.StatMeta(ctx, prefix+rel)
+			if merr == nil && isHumanFileTombstone(meta) {
+				continue // soft-deleted: absent from the flat list
+			}
+		}
+		entries = append(entries, humanFileRecursiveEntry{
+			Path:      "files/" + rel,
+			Size:      info.Size,
+			ETag:      info.ETag,
+			UpdatedAt: info.UpdatedAt,
+		})
+	}
+	resp := humanFileRecursiveResponse{Entries: entries}
+	if nextKey != "" {
+		resp.NextKey = &nextKey
+	}
+	httputil.WriteJSON(w, http.StatusOK, resp)
 }
 
 // --- PUT files ---------------------------------------------------------------
@@ -1499,4 +1853,586 @@ func (h *humanFilesHandler) putQuota(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteJSON(w, http.StatusOK, map[string]any{"quotaBytes": body.QuotaBytes})
 		return
 	}
+}
+
+// --- Presigned (direct) uploads, #P4a ---------------------------------------
+//
+// Large files bypass the controller's request body: the API issues a
+// short-lived direct upload URL (presign), the client uploads straight to
+// the object store, and a follow-up commit performs server-side
+// verification, quota accounting, and the publish.
+//
+// The presigned URL targets a STAGING key, not the final path:
+//
+//	humans/<username>/.uploads/<session>/<rel>
+//
+// so the upload is invisible to ordinary GET/list (which serve only files/)
+// and to the quota (which walks only files/ plus .trash/) until a commit
+// explicitly publishes it. A commit that is rejected — or never made —
+// leaves the bytes in the staging area only: the previously live file is
+// untouched.
+//
+// The per-human state object under .control/ (outside the walked prefixes)
+// binds the session to the target path:
+//
+//	humans/<username>/.control/presign-commits.json
+//
+//   - presign records {Session} for the rel: only the session this API
+//     signed is committable, and only to the path it was signed for;
+//   - commit verifies the staged object (size gate, declared sha256) and
+//     publishes its content-bound snapshot to the final path under the
+//     same per-path lease and quota reservation/commit as the in-body PUT;
+//   - a commit with no in-flight session whose final object still carries
+//     the last published ETag is a retry: idempotent 200, no re-charge.
+//
+// Cleanup of uncommitted staging objects is a TTL, not an in-repo task:
+// the objects are orphaned and invisible, and an operator-configured
+// bucket lifecycle expiration on humans/*/.uploads/ reclaims them (the
+// presign TTL bounds when new bytes can still land). No background job is
+// introduced by this API.
+
+// humanPresignResponse is the presign (issue) body: the direct upload
+// recipe for the client and the limit the upload must respect.
+type humanPresignResponse struct {
+	Method    string            `json:"method"`
+	URL       string            `json:"url"`
+	Fields    map[string]string `json:"fields"`
+	ExpiresAt string            `json:"expiresAt"`
+	MaxBytes  int64             `json:"maxBytes"`
+}
+
+// humanPresignCommitResponse is the commit body.
+type humanPresignCommitResponse struct {
+	Path string `json:"path"`
+	Size int64  `json:"size"`
+	ETag string `json:"etag"`
+}
+
+// humanPresignStatePath is the per-human state object recording, for each
+// path, which direct upload session is in flight and which version a commit
+// last published — see the section comment.
+const humanPresignStatePath = ".control/presign-commits.json"
+
+func humanPresignStateKey(username string) string {
+	return humanAreaPrefix(username) + humanPresignStatePath
+}
+
+// presignCommitEntry is the per-path state of the direct upload flow.
+type presignCommitEntry struct {
+	// Session is the staging session of the in-flight direct upload: the
+	// bytes land at .uploads/<Session>/<rel> and reach the final path only
+	// through a successful commit of that session. Empty when no upload is
+	// in flight.
+	Session string `json:"session,omitempty"`
+	// Committed is the ETag of the version a commit last published to the
+	// final path ("" when none). A commit with no in-flight session whose
+	// final object still carries it is a retry: idempotent 200, no
+	// re-charge.
+	Committed string `json:"committed,omitempty"`
+}
+
+// presignCommitState is the whole per-human state object.
+type presignCommitState struct {
+	Commits map[string]presignCommitEntry `json:"commits"`
+}
+
+// newUploadSessionID builds a staging session id in the same shape as a
+// trash id (sortable, unique within the same second).
+func newUploadSessionID() (string, error) {
+	return newTrashID()
+}
+
+// parseHumanPresignTTL decodes ?ttl=<seconds>: empty uses the default, and a
+// value above maxHumanPresignTTL is rejected (a longer URL is a wider
+// tampering window, not a convenience).
+func parseHumanPresignTTL(v string) (time.Duration, error) {
+	if v == "" {
+		return defaultHumanPresignTTL, nil
+	}
+	seconds, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || seconds <= 0 {
+		return 0, fmt.Errorf("ttl must be a positive integer number of seconds")
+	}
+	ttl := time.Duration(seconds) * time.Second
+	if ttl > maxHumanPresignTTL {
+		return 0, fmt.Errorf("ttl must not exceed %s", maxHumanPresignTTL)
+	}
+	return ttl, nil
+}
+
+// parseHumanPresignSHA256 decodes ?sha256=<hex>; empty means the caller made
+// no digest promise (the commit then skips content verification).
+func parseHumanPresignSHA256(v string) (string, error) {
+	if v == "" {
+		return "", nil
+	}
+	d := strings.ToLower(strings.TrimSpace(v))
+	if _, err := hex.DecodeString(d); err != nil || len(d) != 64 {
+		return "", fmt.Errorf("sha256 must be a 64-character hex digest")
+	}
+	return d, nil
+}
+
+// readPresignCommitState returns the per-human commit state bound to the
+// ETag it was read at. os.ErrNotExist means no state yet (the zero value is
+// the answer). The bytes must be bound to the ETag exactly like the quota
+// ledger: a CAS on an unverified version would clobber a concurrent
+// commit's baseline.
+func (h *humanFilesHandler) readPresignCommitState(ctx context.Context, username string) (presignCommitState, string, error) {
+	key := humanPresignStateKey(username)
+	for attempt := 0; attempt < humanQuotaLedgerRetries; attempt++ {
+		data, err := h.oss.GetObject(ctx, key)
+		if err != nil {
+			return presignCommitState{}, "", err
+		}
+		var state presignCommitState
+		if err := json.Unmarshal(data, &state); err != nil {
+			return presignCommitState{}, "", fmt.Errorf("decode presign commit state: %w", err)
+		}
+		meta, err := h.oss.StatMeta(ctx, key)
+		if err != nil {
+			return presignCommitState{}, "", err
+		}
+		if meta.ETag == "" {
+			return presignCommitState{}, "", fmt.Errorf("presign commit state has no ETag")
+		}
+		if !quotaLedgerETagMatches(data, meta.ETag) {
+			continue // bytes and ETag from different versions; re-snapshot
+		}
+		return state, meta.ETag, nil
+	}
+	return presignCommitState{}, "", fmt.Errorf("presign commit state changed while taking a consistent snapshot")
+}
+
+// writePresignCommitState applies mutate to the latest state under a strict
+// CAS loop (If-None-Match create when the state does not exist yet). mutate
+// must be idempotent: it re-runs on every lost race.
+func (h *humanFilesHandler) writePresignCommitState(ctx context.Context, username string, mutate func(*presignCommitState)) error {
+	key := humanPresignStateKey(username)
+	for attempt := 0; attempt < humanQuotaLedgerRetries; attempt++ {
+		state, etag, err := h.readPresignCommitState(ctx, username)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if state.Commits == nil {
+			state.Commits = make(map[string]presignCommitEntry)
+		}
+		mutate(&state)
+		payload, merr := json.Marshal(state)
+		if merr != nil {
+			return merr
+		}
+		var werr error
+		if etag == "" {
+			werr = h.oss.PutObjectIfAbsent(ctx, key, payload)
+		} else {
+			werr = strictPut(ctx, h.oss, key, payload, etag)
+		}
+		switch {
+		case werr == nil:
+			return nil
+		case errors.Is(werr, oss.ErrPreconditionFailed):
+			continue // concurrent writer; re-snapshot and re-apply
+		default:
+			return werr
+		}
+	}
+	return fmt.Errorf("presign commit state write did not converge")
+}
+
+// postFile handles POST /api/v1/humans/{name}/files/{path...}: the presign
+// issuer (?presign=1) and the direct-upload commit (a path ending in
+// "/commit"). Go's ServeMux requires the wildcard to be the final segment
+// of a pattern, so the two forms share one route and dispatch here.
+func (h *humanFilesHandler) postFile(w http.ResponseWriter, r *http.Request) {
+	rawPath := r.PathValue("path")
+	switch {
+	case r.URL.Query().Get("presign") == "1":
+		h.presignUploadFile(w, r, rawPath)
+	case strings.HasSuffix(rawPath, "/commit"):
+		h.commitPresignedFile(w, r, strings.TrimSuffix(rawPath, "/commit"))
+	default:
+		httputil.WriteError(w, http.StatusNotFound, "unknown files POST")
+	}
+}
+
+// presignFile handles POST .../files/{path...}?presign=1: it issues a
+// short-lived direct upload URL for the file at the path.
+//
+// Quota pre-check: an area at its full quota cannot absorb any upload, so
+// no URL is issued (413). The real enforcement still happens at commit,
+// against the bytes that actually landed.
+//
+// The capability check (oss.PresignUploader) fails closed: a backend that
+// cannot issue direct upload URLs answers 500 presign_unsupported rather
+// than degrading.
+func (h *humanFilesHandler) presignUploadFile(w http.ResponseWriter, r *http.Request, rawPath string) {
+	name := r.PathValue("name")
+	if strings.HasSuffix(rawPath, "/") {
+		httputil.WriteError(w, http.StatusBadRequest, "path must name a file")
+		return
+	}
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, rawPath, true, false)
+	if a == nil {
+		httputil.WriteError(w, status, msg)
+		return
+	}
+	ctx := r.Context()
+	username := a.human.Spec.EffectiveUsername(a.human.Name)
+	rel, err := validateHumanFilePath(rawPath)
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if rel == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	ttl, err := parseHumanPresignTTL(r.URL.Query().Get("ttl"))
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	sha256Hex, err := parseHumanPresignSHA256(r.URL.Query().Get("sha256"))
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Quota pre-check (fail closed): an area at its full quota issues no
+	// URL. A missing ledger means the usage comes from the live walk; any
+	// other ledger fault is a 500 — issuing a URL against an unverifiable
+	// ledger would open a bypass.
+	if quota := a.human.Spec.WorkspaceQuotaBytes; quota != nil {
+		var used int64
+		switch ledger, _, lerr := h.readQuotaLedger(ctx, username); {
+		case lerr == nil:
+			used = ledger.UsedBytes
+		case errors.Is(lerr, os.ErrNotExist):
+			used, err = h.usedBytes(ctx, username)
+			if err != nil {
+				httputil.WriteError(w, http.StatusInternalServerError, "compute usage failed")
+				return
+			}
+		default:
+			httputil.WriteError(w, http.StatusInternalServerError, "read quota ledger failed")
+			return
+		}
+		if used >= *quota {
+			writeHumanFileCodedError(w, http.StatusRequestEntityTooLarge, "quota_exceeded",
+				fmt.Sprintf("workspace quota of %d bytes is exhausted (%d in use); no upload URL is issued",
+					*quota, used))
+			return
+		}
+	}
+	up, ok := h.oss.(oss.PresignUploader)
+	if !ok {
+		writeHumanFileCodedError(w, http.StatusInternalServerError, "presign_unsupported",
+			"the object store backend cannot issue direct upload URLs")
+		return
+	}
+	// The URL targets a staging key, not the final path: bytes the client
+	// uploads land in the hidden .uploads/ area, where they are invisible to
+	// the file API and the quota until a commit publishes them. A presign
+	// for a path supersedes any earlier in-flight session for it (its
+	// staging object is simply orphaned and ages out with the staging TTL).
+	session, err := newUploadSessionID()
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "generate upload session failed")
+		return
+	}
+	stageKey := humanUploadsPrefix(username) + session + "/" + rel
+	method, url, fields, err := up.PresignUpload(ctx, stageKey, h.presignMaxBytes, contentTypeForName(rel), sha256Hex, ttl)
+	if err != nil {
+		if errors.Is(err, oss.ErrPresignUnsupported) {
+			writeHumanFileCodedError(w, http.StatusNotImplemented, "presign_unsupported",
+				"configure AGENTTEAMS_FS_PUBLIC_ENDPOINT for direct uploads or use the existing file PUT")
+			return
+		}
+		httputil.WriteError(w, http.StatusInternalServerError, "issue presigned upload failed")
+		return
+	}
+	if fields == nil {
+		fields = map[string]string{}
+	}
+	if err := h.writePresignCommitState(ctx, username, func(s *presignCommitState) {
+		// Keep Committed: the last published version is still the last
+		// published one while a new upload is in flight, and the retry
+		// check at commit compares against it.
+		prev := s.Commits[rel]
+		s.Commits[rel] = presignCommitEntry{Session: session, Committed: prev.Committed}
+	}); err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "record presign session failed")
+		return
+	}
+	h.recordAudit(ctx, a, "human_file_presign_issue",
+		humanFileDetail("path", "files/"+rel, "session", session, "maxBytes", h.presignMaxBytes, "ttlSeconds", int64(ttl.Seconds())))
+	httputil.WriteJSON(w, http.StatusOK, humanPresignResponse{
+		Method:    method,
+		URL:       url,
+		Fields:    fields,
+		ExpiresAt: time.Now().UTC().Add(ttl).Format(time.RFC3339),
+		MaxBytes:  h.presignMaxBytes,
+	})
+}
+
+// commitPresignedFile handles POST .../files/{rel}/commit: the server-side
+// half of a direct upload. The object already exists (the client uploaded
+// straight to the staging key); this request verifies the staged object,
+// books the quota charge, and publishes the bytes to the final path.
+//
+// Rejection and skip are both invisible: a rejected (or never made) commit
+// leaves the bytes at the staging key only — invisible to GET/list and the
+// quota, and the previously live file is never touched, because the
+// publish happens after every check and under the same per-path lease the
+// in-body PUT uses.
+func (h *humanFilesHandler) commitPresignedFile(w http.ResponseWriter, r *http.Request, rawPath string) {
+	name := r.PathValue("name")
+	if strings.HasSuffix(rawPath, "/") {
+		httputil.WriteError(w, http.StatusBadRequest, "path must name a file")
+		return
+	}
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, rawPath, true, false)
+	if a == nil {
+		httputil.WriteError(w, status, msg)
+		return
+	}
+	ctx := r.Context()
+	username := a.human.Spec.EffectiveUsername(a.human.Name)
+	rel, err := validateHumanFilePath(rawPath)
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if rel == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	key := humanFilesPrefix(username) + rel
+	state, _, serr := h.readPresignCommitState(ctx, username)
+	if serr != nil && !errors.Is(serr, os.ErrNotExist) {
+		httputil.WriteError(w, http.StatusInternalServerError, "read presign commit state failed")
+		return
+	}
+	entry := state.Commits[rel]
+	// Session binding: only the session this API signed for this exact
+	// path is committable, and only to that path.
+	if entry.Session == "" {
+		// No in-flight upload: a commit can only be a retry of one that
+		// already published.
+		if entry.Committed == "" {
+			writeHumanFileCodedError(w, http.StatusNotFound, "object_missing",
+				"no direct upload was signed for this path; issue a presign first")
+			return
+		}
+		h.finishCommittedRetry(w, r, a, username, rel, key, entry.Committed)
+		return
+	}
+	stageKey := humanUploadsPrefix(username) + entry.Session + "/" + rel
+	meta, merr := h.oss.StatMeta(ctx, stageKey)
+	switch {
+	case errors.Is(merr, os.ErrNotExist):
+		writeHumanFileCodedError(w, http.StatusNotFound, "object_missing",
+			"no object at this path; the direct upload has not landed")
+		return
+	case merr != nil:
+		httputil.WriteError(w, http.StatusInternalServerError, "stat file failed")
+		return
+	}
+	// Hard size gate: an over-limit upload is rejected, not accounted. The
+	// staged object is kept (it is invisible to the file API and ages out
+	// with the staging TTL); the live file is untouched.
+	if meta.Size > h.presignMaxBytes {
+		writeHumanFileCodedError(w, http.StatusRequestEntityTooLarge, "size_exceeded",
+			fmt.Sprintf("file size %d exceeds the %d byte direct upload limit", meta.Size, h.presignMaxBytes))
+		h.recordAudit(ctx, a, "human_file_presign_commit_rejected",
+			humanFileDetail("path", "files/"+rel, "size", meta.Size, "reason", "size_exceeded"))
+		return
+	}
+	// The per-path lease serializes the publish against in-API writers on
+	// the same rel (the same protection putFile uses): while it is held,
+	// the live file cannot be half-written or deleted out from under the
+	// publish.
+	lock, err := h.acquireHumanPathLock(ctx, username, rel, h.pathLockTTL)
+	if err != nil {
+		if errors.Is(err, errHumanPathBusy) {
+			writeHumanFileCodedError(w, http.StatusConflict, "file_busy",
+				"another operation is in flight on this file; retry shortly")
+			return
+		}
+		if errors.Is(err, oss.ErrConditionalUnsupported) {
+			writeHumanFileCodedError(w, http.StatusServiceUnavailable, "conditional_write_unsupported",
+				"storage provider does not support conditional writes; the path lease cannot be taken (fail closed)")
+			return
+		}
+		httputil.WriteError(w, http.StatusInternalServerError, "acquire path lease failed")
+		return
+	}
+	defer lock.Release(ctx)
+	// Re-check the session under the lease: the pre-lease read and the
+	// publish are not one transaction. A concurrent commit of the same
+	// session may have settled in between (publish, staging delete,
+	// session clear), and a newer presign supersedes this session.
+	freshState, _, fserr := h.readPresignCommitState(ctx, username)
+	if fserr != nil && !errors.Is(fserr, os.ErrNotExist) {
+		httputil.WriteError(w, http.StatusInternalServerError, "read presign commit state failed")
+		return
+	}
+	fresh := freshState.Commits[rel]
+	if fresh.Session != entry.Session {
+		if fresh.Session == "" {
+			// Settled by a concurrent commit of this session: answer the
+			// same way a plain retry would.
+			h.finishCommittedRetry(w, r, a, username, rel, key, fresh.Committed)
+			return
+		}
+		writeHumanFileCodedError(w, http.StatusConflict, "version_conflict",
+			"a newer upload was signed for this path; this session is stale")
+		return
+	}
+	// Content-bound snapshot of the staged bytes: the size we gate and the
+	// ETag we report describe exactly the bytes we publish.
+	data, _, err := h.readFileSnapshot(ctx, stageKey)
+	if err != nil {
+		writeHumanFileSnapshotError(w, err)
+		return
+	}
+	// The client may re-upload to the staging key while the presigned URL
+	// is still valid, so the gate runs on the snapshot, not the earlier
+	// stat.
+	if int64(len(data)) > h.presignMaxBytes {
+		writeHumanFileCodedError(w, http.StatusRequestEntityTooLarge, "size_exceeded",
+			fmt.Sprintf("file size %d exceeds the %d byte direct upload limit", len(data), h.presignMaxBytes))
+		h.recordAudit(ctx, a, "human_file_presign_commit_rejected",
+			humanFileDetail("path", "files/"+rel, "size", len(data), "reason", "size_exceeded"))
+		return
+	}
+	// Content verification: the sha256 the caller passes is checked against
+	// the exact bytes about to be published. The ETag is deliberately NOT
+	// used as a digest (multipart etags are not content hashes).
+	if want := r.URL.Query().Get("sha256"); want != "" {
+		digest, perr := parseHumanPresignSHA256(want)
+		if perr != nil {
+			httputil.WriteError(w, http.StatusBadRequest, perr.Error())
+			return
+		}
+		sum := sha256.Sum256(data)
+		if hex.EncodeToString(sum[:]) != digest {
+			writeHumanFileCodedError(w, http.StatusConflict, "checksum_mismatch",
+				"the staged content does not match the declared sha256; the upload was rejected")
+			h.recordAudit(ctx, a, "human_file_presign_commit_rejected",
+				humanFileDetail("path", "files/"+rel, "size", len(data), "reason", "checksum_mismatch"))
+			return
+		}
+	}
+	// Delta baseline: the version actually being replaced, statted under
+	// the lease (the same source putFile uses; a missing or tombstoned
+	// target is a fresh object charged in full).
+	var oldSize int64
+	if fmeta, ferr := h.oss.StatMeta(ctx, key); ferr == nil {
+		if !isHumanFileTombstone(fmeta) {
+			oldSize = fmeta.Size
+		}
+	} else if !errors.Is(ferr, os.ErrNotExist) {
+		httputil.WriteError(w, http.StatusInternalServerError, "stat file failed")
+		return
+	}
+	token, status, msg := h.reserveQuota(ctx, a, username, rel, oldSize, int64(len(data)))
+	if status != 0 {
+		switch status {
+		case http.StatusRequestEntityTooLarge:
+			writeHumanFileCodedError(w, status, "quota_exceeded", msg)
+		case http.StatusServiceUnavailable:
+			writeHumanFileCodedError(w, status, "conditional_write_unsupported", msg)
+		default:
+			httputil.WriteError(w, status, msg)
+		}
+		return
+	}
+	// Release the reservation only while the publish has not landed: after
+	// the write, the bytes are real and an outstanding reservation is a
+	// conservative overstatement the next sync corrects (I4).
+	committed := false
+	if token != "" {
+		defer func() {
+			if !committed {
+				h.releaseQuota(ctx, username, rel, token)
+			}
+		}()
+	}
+	// Fence: an expired holder whose lease was taken over must not keep
+	// mutating the file.
+	if verr := lock.Verify(ctx); verr != nil {
+		writeHumanFileCodedError(w, http.StatusConflict, "lease_lost",
+			"the path lease was taken over by another operation; nothing was written")
+		return
+	}
+	// Publish: the same write path putFile uses without If-Match. Under
+	// the lease the target cannot change in-API, so a plain put is safe;
+	// the confirm snapshot below re-verifies the bytes that landed.
+	if err := h.oss.PutObject(ctx, key, data); err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "write file failed")
+		return
+	}
+	committed = true
+	h.commitQuota(ctx, username, rel, token)
+	snapData, finalMeta, cerr := h.readFileSnapshot(ctx, key)
+	if cerr != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "confirm file write failed")
+		return
+	}
+	if !bytes.Equal(snapData, data) {
+		writeHumanFileCodedError(w, http.StatusConflict, "version_conflict",
+			"the stored content does not match the bytes we wrote")
+		return
+	}
+	// The staging object has served its purpose; removal is best effort —
+	// a failure leaves an orphan that ages out with the staging TTL.
+	_ = h.oss.DeleteObject(ctx, stageKey)
+	// Remember the published version: retries are no-ops and a follow-up
+	// presign keeps it as the Committed baseline.
+	if err := h.writePresignCommitState(ctx, username, func(s *presignCommitState) {
+		// The publish happened under the path lease, but a presign issued
+		// while it was in flight is recorded outside that lease: overwriting
+		// the entry unconditionally would erase that newer session and make
+		// its commit look like a retry of ours (200 while GET still serves
+		// our bytes). Advance the Committed baseline, keep the newer session.
+		current := s.Commits[rel]
+		if current.Session != "" && current.Session != entry.Session {
+			current.Committed = finalMeta.ETag
+			s.Commits[rel] = current
+			return
+		}
+		s.Commits[rel] = presignCommitEntry{Committed: finalMeta.ETag}
+	}); err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "record presign commit failed")
+		return
+	}
+	h.recordAudit(ctx, a, "human_file_presign_commit",
+		humanFileDetail("path", "files/"+rel, "size", len(data), "oldSize", oldSize, "etag", finalMeta.ETag))
+	httputil.WriteJSON(w, http.StatusOK, humanPresignCommitResponse{
+		Path: "files/" + rel,
+		Size: int64(len(data)),
+		ETag: finalMeta.ETag,
+	})
+}
+
+// finishCommittedRetry answers a commit whose session is already settled:
+// idempotent 200 (no re-charge) while the final object is still the version
+// the original commit published, 409 once that version is gone or replaced
+// (a retry of a lost response must not re-publish or re-charge).
+func (h *humanFilesHandler) finishCommittedRetry(w http.ResponseWriter, r *http.Request, a *humanFileAccess, username, rel, key, committedETag string) {
+	ctx := r.Context()
+	meta, merr := h.oss.StatMeta(ctx, key)
+	if merr == nil && !isHumanFileTombstone(meta) && strings.EqualFold(meta.ETag, committedETag) {
+		h.recordAudit(ctx, a, "human_file_presign_commit_idempotent",
+			humanFileDetail("path", "files/"+rel, "size", meta.Size, "etag", meta.ETag))
+		httputil.WriteJSON(w, http.StatusOK, humanPresignCommitResponse{
+			Path: "files/" + rel,
+			Size: meta.Size,
+			ETag: meta.ETag,
+		})
+		return
+	}
+	writeHumanFileCodedError(w, http.StatusConflict, "version_conflict",
+		"the committed version is no longer at this path; issue a presign to upload again")
 }

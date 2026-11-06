@@ -4,6 +4,12 @@ AgentTeams 采用 Kubernetes CRD 风格的声明式 YAML 配置来管理平台�
 
 ## 核心概念
 
+### 资源操作权限
+
+平台 Admin 与 Manager 负责全局部署资源管理。Team Leader 负责团队任务协调，并可读取本团队 Worker 状态；不能创建、修改、删除部署资源，也不能替其他 Worker 执行唤醒、休眠或 ensure-ready。Worker 不可用时，Leader 应向 Manager 或平台 Admin 报告任务阻塞，重新查询确认就绪后再分配任务。
+
+任务与项目协调协议、Leader 运行时自身的 ready 上报及凭据刷新继续保留。真人用户已有的团队自助权限不变；这里限制的是 Leader 服务身份，不是所有能访问团队的真人。
+
 ### 组织架构
 
 AgentTeams 采用三层组织架构，映射企业真实团队结构：
@@ -215,8 +221,10 @@ spec:
 | 角色 | 范围 | 字段 |
 |------|------|------|
 | admin / manager | 任意 Worker | 全部字段 |
-| 团队 Leader | 本团队 Worker | 全部字段 |
+| 团队 Leader | 本团队 Worker | 只读（`403`） |
 | L2 人类用户（`permissionLevel: 2`） | 仅 `accessibleTeams` 内的 Worker | `skills` |
+
+Team Leader 在该端点为只读：Worker 配置写入仅限 Admin/Manager（#1536）。
 
 L2 人类用户可自主管理所协调 Worker 的内置技能分配，无需升级到 admin。`remoteSkills` 与 `mcpServers` 暂不开放给 L2：MCP 路径存在网关消费者密钥泄露风险（生成器会把 `Authorization: Bearer <gatewayKey>` 附加到每个 MCP 条目的 URL 上），因此这两个字段对 L2 调用方返回 `400`，直到提权能力设计落地（见 L2 权限设计 issue #1220）。其余字段——`model`、`image`、`soul`、`agents`、`runtime`、`package`、`expose`、`channelPolicy`、`resources`、`containerManaged`、`state`——仍属团队所有者的权限范围；body 触碰即 `400` 拒绝。越权 Worker（跨团队或独立）对 L2 用户读写均不可见（`404`），端点保持防探测。设计细节见 [L2 Human Worker-Scoped Write](../design/l2-worker-scoped-write.md)。
 

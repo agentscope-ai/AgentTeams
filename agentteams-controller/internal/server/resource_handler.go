@@ -2010,8 +2010,9 @@ func (h *ResourceHandler) findTeamForMember(ctx context.Context, name string) (s
 }
 
 // checkScopedWorkerUpdate enforces the scoped write boundary on worker
-// updates for L2 humans and team leaders (#1220 §5/§9, B2). Both roles may
-// touch only the non-sensitive surfaces: skills (public-catalog assignment)
+// updates for L2 humans (#1220 §5/§9, B2). Team leaders cannot write resource
+// configuration, including when this handler is used without middleware.
+// L2 humans may touch only the non-sensitive surfaces: skills (public-catalog assignment)
 // and mcpServers — the gateway credential is attached at generation time
 // only to entries on the trusted AI gateway host (GenerateMcporterConfig,
 // #1220 §7), so an external URL no longer receives the key and writing
@@ -2043,6 +2044,9 @@ func (h *ResourceHandler) checkScopedWorkerUpdate(ctx context.Context, caller *a
 	// it cannot see and learn which team owns them (W8).
 	if !caller.TeamMatches(team.Name) {
 		return http.StatusNotFound, "worker: not found"
+	}
+	if caller.Role == authpkg.RoleTeamLeader {
+		return http.StatusForbidden, "team leaders cannot update Worker resources; ask Manager or platform Admin"
 	}
 	var forbidden []string
 	if req.WorkerName != "" {

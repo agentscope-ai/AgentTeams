@@ -359,10 +359,16 @@ func (a *Authorizer) authorizeTeamLeaderWorkerAction(caller *CallerIdentity, req
 		return a.requireSameTeam(caller, req)
 	case ActionList:
 		return nil // handler filters by team
-	case ActionCreate, ActionUpdate:
+	case ActionStatus:
 		return a.requireSameTeam(caller, req)
-	case ActionWake, ActionSleep, ActionEnsureReady, ActionReady, ActionStatus:
-		return a.requireSameTeam(caller, req)
+	case ActionReady:
+		// A Leader is also a Worker runtime and must report its own startup.
+		// This is not authority to change another Worker's lifecycle.
+		if req.ResourceName == "" {
+			return deny(caller, req)
+		}
+		return a.requireSelf(caller, req)
+	// Deployment resource writes and lifecycle control belong to Admin/Manager.
 	// ActionWorkerApproval, ActionRuntimeConfig and ActionWorkerTools
 	// deliberately fall through to deny: team leaders are READ-ONLY for
 	// worker approval, running-config, and tool settings (mirrors the

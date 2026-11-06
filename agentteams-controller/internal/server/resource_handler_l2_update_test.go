@@ -259,22 +259,28 @@ func TestUpdateWorker_AdminFullUpdateUnchanged(t *testing.T) {
 	}
 }
 
-// B2 (#1220 §5): team leaders are scoped to the SAME non-sensitive
-// whitelist as L2 humans. The old behavior (leader full-field update,
-// including model/image/env) is the bearer-leak residual path this closes.
-func TestUpdateWorker_TeamLeaderInScopeScopedFieldsAllowed(t *testing.T) {
+// Leaders coordinate tasks; even non-sensitive resource configuration is
+// outside their authority. Human self-service remains covered above.
+func TestUpdateWorker_TeamLeaderInScopeScopedFieldsForbidden(t *testing.T) {
 	handler, _ := newL2UpdateRig(t)
 	caller := &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team"}
 
 	body := `{"skills":["file-sync"],"mcpServers":[{"name":"fetch","url":"https://gw.example.com/mcp"}]}`
 	rec := l2UpdateRequest(t, handler, "alpha-dev", body, caller)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 for scoped fields, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for leader resource writes, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var stored v1beta1.Worker
+	if err := handler.client.Get(context.Background(), types.NamespacedName{Name: "alpha-dev", Namespace: "default"}, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Spec.Skills) != 0 || len(stored.Spec.McpServers) != 0 {
+		t.Fatal("forbidden resource update changed stored configuration")
 	}
 }
 
 // B2 red proof: a leader writing owner-domain fields (model, state) was 200
-// before this change and must be 400 now.
+// before the field whitelist and must now be forbidden for leaders entirely.
 func TestUpdateWorker_TeamLeaderOwnerDomainRejected(t *testing.T) {
 	handler, _ := newL2UpdateRig(t)
 	caller := &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team"}
@@ -285,8 +291,8 @@ func TestUpdateWorker_TeamLeaderOwnerDomainRejected(t *testing.T) {
 		`{"image":"reg.example/qwenpaw:latest"}`,
 	} {
 		rec := l2UpdateRequest(t, handler, "alpha-dev", body, caller)
-		if rec.Code != http.StatusBadRequest {
-			t.Errorf("%s: expected 400, got %d: %s", body, rec.Code, rec.Body.String())
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("%s: expected 403, got %d: %s", body, rec.Code, rec.Body.String())
 		}
 	}
 }
@@ -301,11 +307,8 @@ func TestUpdateWorker_TeamLeaderRemoteSkillsForbidden(t *testing.T) {
 
 	rec := l2UpdateRequest(t, handler, "alpha-dev",
 		`{"remoteSkills":[{"source":"nacos","skills":[{"name":"web-research"}]}]}`, caller)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if !bytes.Contains(rec.Body.Bytes(), []byte("remoteSkills")) {
-		t.Errorf("error should name the field, got: %s", rec.Body.String())
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

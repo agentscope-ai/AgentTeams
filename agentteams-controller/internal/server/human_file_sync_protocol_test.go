@@ -310,6 +310,7 @@ func TestHumanFileSyncProtocol(t *testing.T) {
 		t.Fatalf("GET ETag = %q, want the write response etag %q", hdr.Get("ETag"), p1.ETag)
 	}
 	var sm storedManifest
+	sm = storedManifest{}
 	if err := json.Unmarshal(body, &sm); err != nil {
 		t.Fatalf("manifest decode: %v: %s", err, body)
 	}
@@ -355,6 +356,7 @@ func TestHumanFileSyncProtocol(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("GET manifest after retry: got %d, want 200: %s", code, body)
 	}
+	sm = storedManifest{}
 	if err := json.Unmarshal(body, &sm); err != nil {
 		t.Fatalf("manifest decode: %v: %s", err, body)
 	}
@@ -379,6 +381,7 @@ func TestHumanFileSyncProtocol(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("GET manifest after delete: got %d, want 200: %s", code, body)
 	}
+	sm = storedManifest{}
 	if err := json.Unmarshal(body, &sm); err != nil {
 		t.Fatalf("manifest decode: %v: %s", err, body)
 	}
@@ -417,6 +420,7 @@ func TestHumanFileSyncProtocol(t *testing.T) {
 	if hdr.Get("ETag") != p4.ETag {
 		t.Fatalf("final GET ETag = %q, want the last write's etag %q", hdr.Get("ETag"), p4.ETag)
 	}
+	sm = storedManifest{}
 	if err := json.Unmarshal(body, &sm); err != nil {
 		t.Fatalf("manifest decode: %v: %s", err, body)
 	}

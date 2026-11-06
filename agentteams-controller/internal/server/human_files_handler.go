@@ -611,8 +611,17 @@ func (h *humanFilesHandler) listDirectory(w http.ResponseWriter, r *http.Request
 		}
 		e.Type = "file"
 		e.UpdatedAt = info.UpdatedAt
-		// ListObjectsDetailed does not carry sizes; resolve each file's
-		// exact byte count (the same source the quota accounting uses).
+		if info.Size > 0 {
+			// The listing already carries the exact byte count; a
+			// non-empty body can never be a tombstone, so no stat.
+			e.Size = info.Size
+			continue
+		}
+		// A zero-byte entry is either a legitimate empty file or a
+		// deletion tombstone (an empty object with the marker content
+		// type); only this shape needs the stat. On the `mc find`
+		// fallback (no sizes reported) every file takes this path,
+		// which is exactly the pre-P4a behavior.
 		if meta, merr := h.oss.StatMeta(ctx, prefix+rel); merr == nil {
 			if isHumanFileTombstone(meta) {
 				delete(entries, base) // soft-deleted: not part of the listing
@@ -634,6 +643,161 @@ func (h *humanFilesHandler) listDirectory(w http.ResponseWriter, r *http.Request
 		respPath += dir + "/"
 	}
 	httputil.WriteJSON(w, http.StatusOK, humanFileListResponse{Path: respPath, Entries: out})
+}
+
+// --- GET files root (directory or recursive flat listing) -------------------
+
+// listFiles handles GET /api/v1/humans/{name}/files — the exact route for
+// the files root. The {path...} wildcard route cannot serve the bare root
+// without a redirect, so the root gets its own pattern; without
+// ?recursive=1 the behavior is exactly listDirectory of the root, and with
+// it the whole area is walked flat with key-cursor pagination.
+func (h *humanFilesHandler) listFiles(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
+	if a == nil {
+		httputil.WriteError(w, status, msg)
+		return
+	}
+	username := a.human.Spec.EffectiveUsername(a.human.Name)
+	if r.URL.Query().Get("recursive") == "1" {
+		h.listRecursiveFiles(w, r, a, username)
+		return
+	}
+	h.listDirectory(w, r, a, username, "")
+}
+
+// humanFileRecursiveEntry is one entry of the recursive (flat) listing: a
+// file at any depth, addressed relative to the files/ root.
+type humanFileRecursiveEntry struct {
+	Path      string `json:"path"` // "files/<rel>"
+	Size      int64  `json:"size"`
+	ETag      string `json:"etag,omitempty"`
+	UpdatedAt string `json:"updatedAt,omitempty"`
+}
+
+// humanFileRecursiveResponse is the recursive listing body. NextKey is the
+// key cursor for the next page — pass it back as ?cursor= — and is nil
+// when the listing is exhausted. It is deliberately named nextKey (not
+// cursor/nextCursor): cursor-shaped fields are reserved for the
+// incremental delta sync's sequence cursors.
+type humanFileRecursiveResponse struct {
+	Entries []humanFileRecursiveEntry `json:"entries"`
+	NextKey *string                   `json:"nextKey"`
+}
+
+// Bounds for the recursive listing's page size.
+const (
+	defaultHumanFileListLimit = 1000
+	maxHumanFileListLimit     = 10000
+)
+
+// clampHumanFileListLimit parses and bounds the recursive listing's limit
+// parameter: empty → default, non-integer or < 1 → error, above the cap →
+// clamped to maxHumanFileListLimit.
+func clampHumanFileListLimit(v string) (int, error) {
+	if v == "" {
+		return defaultHumanFileListLimit, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, fmt.Errorf("limit must be an integer, got %q", v)
+	}
+	if n < 1 {
+		return 0, fmt.Errorf("limit must be a positive integer, got %d", n)
+	}
+	if n > maxHumanFileListLimit {
+		n = maxHumanFileListLimit
+	}
+	return n, nil
+}
+
+// isReservedHumanFileSegment reports whether rel lives under one of the
+// reserved top-level names (recycle bin, sync state, control state). The
+// files API cannot create such paths, but out-of-band writes can; the
+// recursive listing filters them the way validateHumanFilePath rejects
+// them.
+func isReservedHumanFileSegment(rel string) bool {
+	seg := rel
+	if i := strings.IndexByte(rel, '/'); i >= 0 {
+		seg = rel[:i]
+	}
+	for _, reserved := range reservedHumanFilePrefixes {
+		if seg == reserved {
+			return true
+		}
+	}
+	return false
+}
+
+// listRecursiveFiles serves the recursive flat listing of the whole files/
+// area: every file at every depth in one sorted stream (no synthesized
+// directory entries), paged by limit (default 1000, cap 10000) and walked
+// with a key cursor — the previous page's nextKey is passed back as
+// ?cursor= and the store skips keys up to and including it, so pages are
+// contiguous (no key twice, none skipped). Tombstones (soft-deleted paths
+// are empty objects with the marker content type) are excluded by statting
+// zero-byte entries only.
+func (h *humanFilesHandler) listRecursiveFiles(w http.ResponseWriter, r *http.Request, a *humanFileAccess, username string) {
+	q := r.URL.Query()
+	limit, err := clampHumanFileListLimit(q.Get("limit"))
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// The cursor is the previous page's nextKey: a full storage key under
+	// this area's files/ prefix, generated by the store and passed back
+	// verbatim as the StartAfter bound. Re-asserting the caller's prefix
+	// keeps a forged cursor from reaching another human's area (and the
+	// store itself rejects a StartAfter outside its Prefix).
+	startAfter := ""
+	if cur := q.Get("cursor"); cur != "" {
+		if !strings.HasPrefix(cur, humanFilesPrefix(username)) {
+			httputil.WriteError(w, http.StatusBadRequest, "invalid cursor: not a key inside this file area")
+			return
+		}
+		startAfter = cur
+	}
+	ctx := r.Context()
+	prefix := humanFilesPrefix(username)
+	infos, nextKey, err := h.oss.ListObjectsRecursive(ctx, prefix, startAfter, limit)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "list files failed")
+		return
+	}
+	entries := make([]humanFileRecursiveEntry, 0, len(infos))
+	for _, info := range infos {
+		rel := info.Name
+		if rel == "" || rel == ".keep" || strings.HasSuffix(rel, "/.keep") || strings.HasSuffix(rel, "/") {
+			continue // prefix marker, .keep marker object, directory marker
+		}
+		if isReservedHumanFileSegment(rel) {
+			continue // .trash / .sync / .control written out of band
+		}
+		if info.Size == 0 {
+			// A zero-byte entry is either a legitimate empty file or a
+			// deletion tombstone; only this shape needs the stat. A stat
+			// that fails for any other reason keeps the entry: the client
+			// reconciles against the manifest, and a false absence is how
+			// a listing would trigger a spurious local delete.
+			meta, merr := h.oss.StatMeta(ctx, prefix+rel)
+			if merr == nil && isHumanFileTombstone(meta) {
+				continue // soft-deleted: absent from the flat list
+			}
+		}
+		entries = append(entries, humanFileRecursiveEntry{
+			Path:      "files/" + rel,
+			Size:      info.Size,
+			ETag:      info.ETag,
+			UpdatedAt: info.UpdatedAt,
+		})
+	}
+	resp := humanFileRecursiveResponse{Entries: entries}
+	if nextKey != "" {
+		resp.NextKey = &nextKey
+	}
+	httputil.WriteJSON(w, http.StatusOK, resp)
 }
 
 // --- PUT files ---------------------------------------------------------------

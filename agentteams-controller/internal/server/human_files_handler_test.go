@@ -2976,6 +2976,10 @@ func (s *stallRestoreTargetOSS) ListObjectsDetailed(ctx context.Context, prefix 
 	return s.inner.ListObjectsDetailed(ctx, prefix)
 }
 
+func (s *stallRestoreTargetOSS) ListObjectsRecursive(ctx context.Context, prefix, startAfter string, limit int) ([]oss.ObjectInfo, string, error) {
+	return s.inner.ListObjectsRecursive(ctx, prefix, startAfter, limit)
+}
+
 func (s *stallRestoreTargetOSS) PutObject(ctx context.Context, key string, data []byte) error {
 	return s.inner.PutObject(ctx, key, data)
 }
@@ -3179,6 +3183,10 @@ func (s *stallPurgeContentStatOSS) PutObjectIfMatchStrict(ctx context.Context, k
 
 func (s *stallPurgeContentStatOSS) ListObjectsDetailed(ctx context.Context, prefix string) ([]oss.ObjectInfo, error) {
 	return s.inner.ListObjectsDetailed(ctx, prefix)
+}
+
+func (s *stallPurgeContentStatOSS) ListObjectsRecursive(ctx context.Context, prefix, startAfter string, limit int) ([]oss.ObjectInfo, string, error) {
+	return s.inner.ListObjectsRecursive(ctx, prefix, startAfter, limit)
 }
 
 func (s *stallPurgeContentStatOSS) PutObject(ctx context.Context, key string, data []byte) error {
@@ -4053,6 +4061,10 @@ func (s *stallCommitPublishOSS) ListObjectsDetailed(ctx context.Context, prefix 
 	return s.inner.ListObjectsDetailed(ctx, prefix)
 }
 
+func (s *stallCommitPublishOSS) ListObjectsRecursive(ctx context.Context, prefix, startAfter string, limit int) ([]oss.ObjectInfo, string, error) {
+	return s.inner.ListObjectsRecursive(ctx, prefix, startAfter, limit)
+}
+
 func (s *stallCommitPublishOSS) PutObjectIfMatch(ctx context.Context, key string, data []byte, matchETag string) error {
 	return s.inner.PutObjectIfMatch(ctx, key, data, matchETag)
 }
@@ -4302,5 +4314,344 @@ func TestHumanFiles_PresignCommitKeepsNewerSession(t *testing.T) {
 	live := hfGetLive(t, h, "alice", "race.bin")
 	if live.Code != http.StatusOK || live.Body.String() != "content-from-B" {
 		t.Fatalf("live file = %d %q, want B's content", live.Code, live.Body.String())
+	}
+}
+
+// --- Recursive flat listing (P4a PR-A) ----------------------------------------
+
+// hfRecursiveReq builds a request against the files root (the exact
+// GET .../files route) with a query string, mirroring hfTrashReq.
+func hfRecursiveReq(t *testing.T, name string, caller *authpkg.CallerIdentity, query string) *http.Request {
+	t.Helper()
+	req := hfReq(t, http.MethodGet, name, "", caller, nil)
+	if query != "" {
+		req.URL.RawQuery = query
+	}
+	return req
+}
+
+// seedRecursiveArea fills alice's area with a multi-level tree plus every
+// shape a flat listing must hide: a .keep marker, a tombstone, a
+// legitimate empty file, and out-of-band reserved-prefix objects.
+func seedRecursiveArea(t *testing.T, h *humanFilesHandler, store *ossfake.Memory) {
+	t.Helper()
+	ctx := context.Background()
+	for _, put := range []struct{ path, content string }{
+		{"a.txt", "hello"},               // 5 bytes
+		{"docs/b.txt", "world!"},         // 6
+		{"docs/nested/c.txt", "x"},       // 1
+		{"x/y/z/deep.txt", "0123456789"}, // 10, four levels deep
+		{"empty.txt", ""},                // 0, a legitimate empty file
+	} {
+		if rec := hfPutFile(t, h, "alice", put.path, hfAdmin(), put.content); rec.Code != http.StatusOK {
+			t.Fatalf("seed %s: %d %s", put.path, rec.Code, rec.Body.String())
+		}
+	}
+	// gone.txt is soft-deleted: it becomes a zero-byte tombstone.
+	if rec := hfPutFile(t, h, "alice", "gone.txt", hfAdmin(), "doomed"); rec.Code != http.StatusOK {
+		t.Fatalf("seed gone: %d", rec.Code)
+	}
+	del := httptest.NewRecorder()
+	h.deleteFile(del, hfReq(t, http.MethodDelete, "alice", "gone.txt", hfAdmin(), nil))
+	if del.Code != http.StatusOK {
+		t.Fatalf("delete gone: %d %s", del.Code, del.Body.String())
+	}
+	// Out-of-band shapes the files API cannot create; the flat listing
+	// must filter them the way validateHumanFilePath rejects them.
+	for _, key := range []string{
+		"humans/alice/files/.keep",
+		"humans/alice/files/docs/.keep",
+		"humans/alice/files/docs/nested/.keep",
+		"humans/alice/files/.sync/state.json",
+		"humans/alice/files/.control/quota.json",
+		"humans/alice/files/.trash/rogue.txt",
+	} {
+		if err := store.PutObject(ctx, key, []byte("x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestHumanFiles_RecursiveListFlatAndSorted walks the seeded area in one
+// page and checks the contract: every file at every depth in one sorted
+// flat stream, sizes and ETags straight from the listing, "files/"-
+// addressed paths, and none of the hidden shapes (.keep, .sync/.control/
+// .trash, the tombstone) leaking through.
+func TestHumanFiles_RecursiveListFlatAndSorted(t *testing.T) {
+	h, store, _ := newHumanFilesRig(t)
+	seedRecursiveArea(t, h, store)
+
+	before := store.StatMetaCalls.Load()
+	rec := httptest.NewRecorder()
+	h.listFiles(rec, hfRecursiveReq(t, "alice", hfSelf(), "recursive=1"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("recursive list: %d %s", rec.Code, rec.Body.String())
+	}
+	var resp humanFileRecursiveResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	want := []struct {
+		path string
+		size int64
+		etag string
+	}{
+		{"files/a.txt", 5, md5Hex([]byte("hello"))},
+		{"files/docs/b.txt", 6, md5Hex([]byte("world!"))},
+		{"files/docs/nested/c.txt", 1, md5Hex([]byte("x"))},
+		{"files/empty.txt", 0, md5Hex(nil)},
+		{"files/x/y/z/deep.txt", 10, md5Hex([]byte("0123456789"))},
+	}
+	if len(resp.Entries) != len(want) {
+		t.Fatalf("entries = %+v, want %d entries (hidden shapes leaked?)", resp.Entries, len(want))
+	}
+	for i, w := range want {
+		e := resp.Entries[i]
+		if e.Path != w.path {
+			t.Fatalf("entries[%d].Path = %q, want %q (sorted flat order): %+v", i, e.Path, w.path, resp.Entries)
+		}
+		if e.Size != w.size {
+			t.Fatalf("entries[%d].Size = %d, want %d", i, e.Size, w.size)
+		}
+		if e.ETag != w.etag {
+			t.Fatalf("entries[%d].ETag = %q, want %q", i, e.ETag, w.etag)
+		}
+	}
+	if resp.NextKey != nil {
+		t.Fatalf("NextKey = %q, want nil (single page)", *resp.NextKey)
+	}
+	// T3: only the zero-byte entries took a stat — the tombstone
+	// (excluded) and the legitimate empty file (kept).
+	if stats := store.StatMetaCalls.Load() - before; stats != 2 {
+		t.Fatalf("StatMeta calls during the list = %d, want 2 (zero-byte entries only)", stats)
+	}
+}
+
+// TestHumanFiles_RecursiveListCursorPagination walks the seeded area with
+// limit=2 and checks the cursor contract: NextKey is the last full key of
+// the page, passing it back as ?cursor= keeps the walk contiguous (the
+// union is the full sorted flat list, no key twice, none skipped), and
+// NextKey is nil only when the walk is exhausted. Page sizes are bounded
+// by limit, not equal to it: the store pages raw keys, so hidden objects
+// (tombstones, .keep, the reserved prefixes) consume page slots and can
+// shrink a page to zero entries.
+func TestHumanFiles_RecursiveListCursorPagination(t *testing.T) {
+	h, store, _ := newHumanFilesRig(t)
+	seedRecursiveArea(t, h, store)
+
+	var all []humanFileRecursiveEntry
+	seen := map[string]bool{}
+	cursor := ""
+	for page := 0; page < 20; page++ {
+		q := "recursive=1&limit=2"
+		if cursor != "" {
+			q += "&cursor=" + url.QueryEscape(cursor)
+		}
+		rec := httptest.NewRecorder()
+		h.listFiles(rec, hfRecursiveReq(t, "alice", hfSelf(), q))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("page %d: %d %s", page, rec.Code, rec.Body.String())
+		}
+		var resp humanFileRecursiveResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("page %d decode: %v", page, err)
+		}
+		if len(resp.Entries) > 2 {
+			t.Fatalf("page %d: %d entries, want at most limit 2: %+v", page, len(resp.Entries), resp.Entries)
+		}
+		for _, e := range resp.Entries {
+			if seen[e.Path] {
+				t.Fatalf("path %q appeared on two pages (cursor gap or overlap)", e.Path)
+			}
+			seen[e.Path] = true
+			all = append(all, e)
+		}
+		if resp.NextKey == nil {
+			break
+		}
+		if !strings.HasPrefix(*resp.NextKey, "humans/alice/files/") {
+			t.Fatalf("page %d: cursor %q is not a full key under the area", page, *resp.NextKey)
+		}
+		cursor = *resp.NextKey
+	}
+	want := []string{
+		"files/a.txt", "files/docs/b.txt", "files/docs/nested/c.txt",
+		"files/empty.txt", "files/x/y/z/deep.txt",
+	}
+	if len(all) != len(want) {
+		t.Fatalf("walk collected %d entries, want %d: %+v", len(all), len(want), all)
+	}
+	for i, w := range want {
+		if all[i].Path != w {
+			t.Fatalf("walk order = %+v, entry %d is %q, want %q (pages must stay in global key order)", all, i, all[i].Path, w)
+		}
+	}
+}
+
+// TestHumanFiles_RecursiveListLimitBounds pins the limit parameter's
+// bounds: the unit table for the clamp plus the handler-level outcome of
+// an over-cap limit (clamped, not rejected).
+func TestHumanFiles_RecursiveListLimitBounds(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want int
+		ok   bool
+	}{
+		{"", 1000, true},
+		{"1", 1, true},
+		{"1000", 1000, true},
+		{"10000", 10000, true},
+		{"10001", 10000, true},
+		{"999999", 10000, true},
+		{"0", 0, false},
+		{"-1", 0, false},
+		{"abc", 0, false},
+	} {
+		n, err := clampHumanFileListLimit(tc.in)
+		if (err == nil) != tc.ok {
+			t.Fatalf("clamp(%q) err = %v, want ok=%v", tc.in, err, tc.ok)
+		}
+		if tc.ok && n != tc.want {
+			t.Fatalf("clamp(%q) = %d, want %d", tc.in, n, tc.want)
+		}
+	}
+
+	// Handler level: an over-cap limit is clamped, not 400.
+	h, store, _ := newHumanFilesRig(t)
+	seedRecursiveArea(t, h, store)
+	rec := httptest.NewRecorder()
+	h.listFiles(rec, hfRecursiveReq(t, "alice", hfSelf(), "recursive=1&limit=999999"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("limit=999999: got %d, want 200 (clamped to 10000): %s", rec.Code, rec.Body.String())
+	}
+	var resp humanFileRecursiveResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Entries) != 5 || resp.NextKey != nil {
+		t.Fatalf("clamped walk = %d entries, nextKey=%v, want all 5 and nil", len(resp.Entries), resp.NextKey)
+	}
+}
+
+// TestHumanFiles_RecursiveListTombstoneExcluded checks the soft-delete
+// contract from the flat view: a deleted path is absent while a
+// legitimate empty file at the same size stays.
+func TestHumanFiles_RecursiveListTombstoneExcluded(t *testing.T) {
+	h, _, _ := newHumanFilesRig(t)
+	if rec := hfPutFile(t, h, "alice", "gone.txt", hfSelf(), "doomed"); rec.Code != http.StatusOK {
+		t.Fatalf("put: %d", rec.Code)
+	}
+	if rec := hfPutFile(t, h, "alice", "empty.txt", hfSelf(), ""); rec.Code != http.StatusOK {
+		t.Fatalf("put empty: %d", rec.Code)
+	}
+	del := httptest.NewRecorder()
+	h.deleteFile(del, hfReq(t, http.MethodDelete, "alice", "gone.txt", hfSelf(), nil))
+	if del.Code != http.StatusOK {
+		t.Fatalf("delete: %d %s", del.Code, del.Body.String())
+	}
+
+	rec := httptest.NewRecorder()
+	h.listFiles(rec, hfRecursiveReq(t, "alice", hfSelf(), "recursive=1"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("recursive list: %d %s", rec.Code, rec.Body.String())
+	}
+	var resp humanFileRecursiveResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	paths := make([]string, 0, len(resp.Entries))
+	for _, e := range resp.Entries {
+		paths = append(paths, e.Path)
+	}
+	if len(paths) != 1 || paths[0] != "files/empty.txt" {
+		t.Fatalf("entries = %v, want only files/empty.txt (the tombstone must be absent)", paths)
+	}
+}
+
+// TestHumanFiles_RecursiveListPermissions reuses the P2 matrix on the new
+// route: non-access callers get the same 404 as a non-existent human,
+// area-access callers get 200.
+func TestHumanFiles_RecursiveListPermissions(t *testing.T) {
+	h, _, _ := newHumanFilesRig(t)
+	if rec := hfPutFile(t, h, "alice", "a.txt", hfSelf(), "secret"); rec.Code != http.StatusOK {
+		t.Fatalf("seed: %d", rec.Code)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		caller *authpkg.CallerIdentity
+	}{
+		{"another human", hfBob()},
+		{"human with username mismatch", hfCaller(authpkg.RoleHuman, "carol")},
+		{"team leader", hfLeader()},
+		{"worker", hfWorker()},
+		{"unauthenticated (no identity in context)", nil},
+	} {
+		rec := httptest.NewRecorder()
+		h.listFiles(rec, hfRecursiveReq(t, "alice", tc.caller, "recursive=1"))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s: got %d, want 404: %s", tc.name, rec.Code, rec.Body.String())
+		}
+	}
+
+	// Existence probing: bob's response must be identical to the response
+	// for a non-existent human.
+	r1 := httptest.NewRecorder()
+	h.listFiles(r1, hfRecursiveReq(t, "alice", hfBob(), "recursive=1"))
+	r2 := httptest.NewRecorder()
+	h.listFiles(r2, hfRecursiveReq(t, "ghost", hfBob(), "recursive=1"))
+	if r1.Code != r2.Code || r1.Body.String() != r2.Body.String() {
+		t.Fatalf("probe leak: existing=%d %q vs missing=%d %q",
+			r1.Code, r1.Body.String(), r2.Code, r2.Body.String())
+	}
+
+	for _, caller := range []*authpkg.CallerIdentity{hfSelf(), hfAdmin(), hfManager()} {
+		rec := httptest.NewRecorder()
+		h.listFiles(rec, hfRecursiveReq(t, "alice", caller, "recursive=1"))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: got %d, want 200: %s", caller.Username, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// TestHumanFiles_ListNoPerFileStat is the mutation gate for the list-size
+// refactor: a one-level listing must take no stat for files whose size the
+// listing already carries — only the zero-byte entries (the tombstone
+// check) may stat. Restoring the per-file stat must turn this test red.
+func TestHumanFiles_ListNoPerFileStat(t *testing.T) {
+	h, store, _ := newHumanFilesRig(t)
+	for _, put := range []struct{ path, content string }{
+		{"a.txt", "hello"},       // 5
+		{"docs/b.txt", "world!"}, // 6, one level down
+		{"sub/x.txt", "y"},       // 1, one level down
+		{"empty.txt", ""},        // 0 → the only stat-eligible entry
+	} {
+		if rec := hfPutFile(t, h, "alice", put.path, hfAdmin(), put.content); rec.Code != http.StatusOK {
+			t.Fatalf("seed %s: %d %s", put.path, rec.Code, rec.Body.String())
+		}
+	}
+
+	before := store.StatMetaCalls.Load()
+	rec := httptest.NewRecorder()
+	h.getFile(rec, hfReq(t, http.MethodGet, "alice", "", hfSelf(), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list root: %d %s", rec.Code, rec.Body.String())
+	}
+	var root humanFileListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &root); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	sizes := map[string]int64{}
+	for _, e := range root.Entries {
+		sizes[e.Name] = e.Size
+	}
+	// The sizes must still be exact (a.txt 5, empty.txt 0) — the
+	// listing carried them; only empty.txt (zero-byte, tombstone check)
+	// took a stat.
+	if sizes["a.txt"] != 5 || sizes["empty.txt"] != 0 || sizes["docs"] != 0 {
+		t.Fatalf("entry sizes = %v, want a.txt 5 / empty.txt 0 / docs 0", sizes)
+	}
+	if stats := store.StatMetaCalls.Load() - before; stats != 1 {
+		t.Fatalf("StatMeta calls during the list = %d, want 1 (only the zero-byte entry)", stats)
 	}
 }

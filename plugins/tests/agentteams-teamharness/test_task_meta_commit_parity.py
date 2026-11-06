@@ -103,8 +103,32 @@ def test_bundle_fails_closed_on_a_permanent_refusal(server: Any, tmp_path: Path,
     _load_legacy_tests().test_sync_task_fails_closed_on_a_permanent_refusal(server, tmp_path, monkeypatch)
 
 
-def test_bundle_first_push_includes_meta(server: Any, tmp_path: Path, monkeypatch: Any) -> None:
-    _load_legacy_tests().test_sync_task_first_push_includes_meta(server, tmp_path, monkeypatch)
+def test_bundle_first_push_commits_create_if_absent(server: Any, tmp_path: Path, monkeypatch: Any) -> None:
+    _load_legacy_tests().test_sync_task_first_push_commits_create_if_absent(server, tmp_path, monkeypatch)
+
+
+def test_bundle_create_cancel_interleaving_keeps_cancellation(server: Any, tmp_path: Path, monkeypatch: Any) -> None:
+    _load_legacy_tests().test_sync_task_create_cancel_interleaving_keeps_cancellation(server, tmp_path, monkeypatch)
+
+
+def test_bundle_fails_closed_when_endpoint_missing(
+    server: Any, tmp_path: Path, monkeypatch: Any, capfd: Any
+) -> None:
+    _load_legacy_tests().test_sync_task_fails_closed_when_endpoint_missing(
+        server, tmp_path, monkeypatch, capfd
+    )
+
+
+def test_bundle_sync_task_fails_closed_when_controller_url_unset(
+    server: Any, tmp_path: Path, monkeypatch: Any, capfd: Any
+) -> None:
+    _load_legacy_tests().test_sync_task_fails_closed_when_controller_url_unset(
+        server, tmp_path, monkeypatch, capfd
+    )
+
+
+def test_bundle_commit_task_meta_maps_old_controller_responses(server: Any, monkeypatch: Any) -> None:
+    _load_legacy_tests().test_commit_task_meta_maps_old_controller_responses(server, monkeypatch)
 
 
 def test_bundle_fails_closed_when_the_version_read_fails(server: Any, tmp_path: Path, monkeypatch: Any) -> None:

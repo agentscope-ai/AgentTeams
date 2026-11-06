@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "AgentTeams Plugin",
-  "description": "A plugin manifest in either the TeamHarness surface form (prompts/skills/mcp/adapters) or the entry form (a runtime entry point, e.g. qwen-code-bridge). Mirrors the two branches of plugins/scripts/validate-plugin.rb.",
+  "description": "A plugin manifest in the TeamHarness surface, runtime entry, or runtime-neutral bundle form. Mirrors plugins/scripts/validate-plugin.rb.",
   "type": "object",
   "oneOf": [
     {
@@ -216,6 +216,13 @@
             }
           }
         }
+      },
+      "not": {
+        "required": [
+          "prompts",
+          "skills",
+          "mcp"
+        ]
       }
     }
   ],

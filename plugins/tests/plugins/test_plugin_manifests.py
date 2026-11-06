@@ -274,6 +274,12 @@ def test_bridge_manifest_validates_against_entry_schema() -> None:
     jsonschema.validate(instance=_load(BRIDGE_MANIFEST), schema=entry)
 
 
+@pytest.mark.parametrize("path", _manifest_paths(), ids=lambda path: path.parent.name)
+def test_manifest_matches_exactly_one_schema_form(path: Path) -> None:
+    jsonschema = pytest.importorskip("jsonschema")
+    jsonschema.Draft202012Validator(_load_schema()).validate(_load(path))
+
+
 def test_teamharness_manifest_still_teamharness_form() -> None:
     """Golden: the TeamHarness manifest keeps its prompts/skills/mcp form."""
     manifest = _load(TEAMHARNESS_MANIFEST)

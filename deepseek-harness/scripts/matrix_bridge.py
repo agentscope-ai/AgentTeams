@@ -438,6 +438,7 @@ def main() -> int:
                     flush=True,
                 )
             payload = client.sync(since, 30_000)
+            client.fill_timeline_gaps(payload, since, room_types)
             batch_complete = True
             for event in matrix_events(payload, room_types, own_user_id, agent_user_ids):
                 if state.is_completed(event["event_id"]):

@@ -1588,7 +1588,7 @@ func TestHumanFiles_QuotaSamePathReplacementReservations(t *testing.T) {
 	if a1 == nil {
 		t.Fatalf("authorize h1: %d %s", status, msg)
 	}
-	token1, status, msg := h1.reserveQuota(req1.Context(), a1, "alice", "first.txt", 10, 1)
+	token1, status, _, msg := h1.reserveQuota(req1.Context(), a1, "alice", "first.txt", 10, 1)
 	if status != 0 || token1 == "" {
 		t.Fatalf("first reservation: status=%d token=%q msg=%s", status, token1, msg)
 	}
@@ -1598,7 +1598,7 @@ func TestHumanFiles_QuotaSamePathReplacementReservations(t *testing.T) {
 	if a2 == nil {
 		t.Fatalf("authorize h2: %d %s", status, msg)
 	}
-	token2, status, msg := h2.reserveQuota(req2.Context(), a2, "alice", "first.txt", 10, 1)
+	token2, status, _, msg := h2.reserveQuota(req2.Context(), a2, "alice", "first.txt", 10, 1)
 	if status != 0 || token2 == "" {
 		t.Fatalf("second reservation: status=%d token=%q msg=%s", status, token2, msg)
 	}
@@ -1647,11 +1647,11 @@ func TestHumanFiles_QuotaSamePathReplacementCommitOrder(t *testing.T) {
 	if a == nil {
 		t.Fatalf("authorize: %d %s", status, msg)
 	}
-	token1, status, msg := h.reserveQuota(req.Context(), a, "alice", "first.txt", 10, 5)
+	token1, status, _, msg := h.reserveQuota(req.Context(), a, "alice", "first.txt", 10, 5)
 	if status != 0 {
 		t.Fatalf("first reserve: %d %s", status, msg)
 	}
-	token2, status, msg := h.reserveQuota(req.Context(), a, "alice", "first.txt", 10, 1)
+	token2, status, _, msg := h.reserveQuota(req.Context(), a, "alice", "first.txt", 10, 1)
 	if status != 0 {
 		t.Fatalf("second reserve: %d %s", status, msg)
 	}
@@ -1687,7 +1687,7 @@ func TestHumanFiles_QuotaSetPreservesInFlightReservation(t *testing.T) {
 	if access == nil {
 		t.Fatalf("authorize: %d %s", status, msg)
 	}
-	token, status, msg := h1.reserveQuota(req.Context(), access, "alice", "a.txt", 0, 6)
+	token, status, _, msg := h1.reserveQuota(req.Context(), access, "alice", "a.txt", 0, 6)
 	if status != 0 || token == "" {
 		t.Fatalf("reserve: status=%d token=%q msg=%s", status, token, msg)
 	}
@@ -1882,7 +1882,7 @@ func TestHumanFiles_QuotaLargerOlderOutstandingReplacementStaysAccounted(t *test
 	if a1 == nil {
 		t.Fatalf("authorize h1: %d %s", status, msg)
 	}
-	token1, status, msg := h1.reserveQuota(req1.Context(), a1, "alice", "first.txt", 1, 10)
+	token1, status, _, msg := h1.reserveQuota(req1.Context(), a1, "alice", "first.txt", 1, 10)
 	if status != 0 || token1 == "" {
 		t.Fatalf("A reservation: status=%d token=%q msg=%s", status, token1, msg)
 	}
@@ -1893,7 +1893,7 @@ func TestHumanFiles_QuotaLargerOlderOutstandingReplacementStaysAccounted(t *test
 	if a2 == nil {
 		t.Fatalf("authorize h2: %d %s", status, msg)
 	}
-	token2, status, msg := h2.reserveQuota(req2.Context(), a2, "alice", "first.txt", 1, 1)
+	token2, status, _, msg := h2.reserveQuota(req2.Context(), a2, "alice", "first.txt", 1, 1)
 	if status != 0 || token2 == "" {
 		t.Fatalf("B reservation: status=%d token=%q msg=%s", status, token2, msg)
 	}
@@ -1999,7 +1999,7 @@ func TestHumanFiles_QuotaReverseInterleavedCommitStaysAccounted(t *testing.T) {
 	if a1 == nil {
 		t.Fatalf("authorize h1: %d %s", status, msg)
 	}
-	token1, status, msg := h1.reserveQuota(req1.Context(), a1, "alice", "first.txt", 1, 10)
+	token1, status, _, msg := h1.reserveQuota(req1.Context(), a1, "alice", "first.txt", 1, 10)
 	if status != 0 || token1 == "" {
 		t.Fatalf("A reservation: status=%d token=%q msg=%s", status, token1, msg)
 	}
@@ -2009,7 +2009,7 @@ func TestHumanFiles_QuotaReverseInterleavedCommitStaysAccounted(t *testing.T) {
 	if a2 == nil {
 		t.Fatalf("authorize h2: %d %s", status, msg)
 	}
-	token2, status, msg := h2.reserveQuota(req2.Context(), a2, "alice", "first.txt", 1, 1)
+	token2, status, _, msg := h2.reserveQuota(req2.Context(), a2, "alice", "first.txt", 1, 1)
 	if status != 0 || token2 == "" {
 		t.Fatalf("B reservation: status=%d token=%q msg=%s", status, token2, msg)
 	}
@@ -2065,7 +2065,7 @@ func TestHumanFiles_QuotaLostTokenFallback(t *testing.T) {
 	if a == nil {
 		t.Fatalf("authorize: %d %s", status, msg)
 	}
-	token, status, msg := h.reserveQuota(req.Context(), a, "alice", "a.txt", 0, 6)
+	token, status, _, msg := h.reserveQuota(req.Context(), a, "alice", "a.txt", 0, 6)
 	if status != 0 || token == "" {
 		t.Fatalf("reserve: status=%d token=%q msg=%s", status, token, msg)
 	}
@@ -2209,7 +2209,7 @@ func TestHumanFiles_QuotaStatFaultDoesNotDropInFlightCharge(t *testing.T) {
 	if access == nil {
 		t.Fatalf("authorize: %d %s", status, msg)
 	}
-	token, status, msg := h1.reserveQuota(req.Context(), access, "alice", "first.txt", 0, 6)
+	token, status, _, msg := h1.reserveQuota(req.Context(), access, "alice", "first.txt", 0, 6)
 	if status != 0 || token == "" {
 		t.Fatalf("reserve: status=%d token=%q msg=%s", status, token, msg)
 	}

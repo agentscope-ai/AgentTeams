@@ -258,7 +258,7 @@ func TestMatrix_PresignGet(t *testing.T) {
 	if u.Scheme != endpoint.Scheme || u.Host != endpoint.Host {
 		t.Fatalf("presigned origin = %s://%s, want the configured %s://%s", u.Scheme, u.Host, endpoint.Scheme, endpoint.Host)
 	}
-	if u.Path != "/" + env.bucket + "/" + key {
+	if u.Path != "/"+env.bucket+"/"+key {
 		t.Fatalf("presigned path = %q, want /%s/%s", u.Path, env.bucket, key)
 	}
 	q := u.Query()
@@ -715,10 +715,18 @@ func TestMatrix_ConditionalPut(t *testing.T) {
 	}
 }
 
-// TestMatrix_ErrorMapping pins the S3-only error normalization: a missing
-// object and a missing bucket both surface as os.ErrNotExist — the
-// client keys off the 404 status, never a MinIO-specific error code (the
-// backend may answer object_missing or NoSuchKey).
+// TestMatrix_ErrorMapping pins the S3-only error normalization.
+//
+// A missing object surfaces as os.ErrNotExist (the backend may answer
+// object_missing or NoSuchKey; the key is the missing-object codes, not the
+// bare 404 status).
+//
+// A missing bucket must NOT: a wrong bucket name, a deleted bucket or an IAM
+// mistake also answers 404, and mapping that to os.ErrNotExist would turn a
+// deployment error into a missing-file signal — the delete-propagation
+// failure mode the sync client must never act on. All three ghost-bucket
+// operations must therefore return a non-nil error that is not
+// os.ErrNotExist.
 func TestMatrix_ErrorMapping(t *testing.T) {
 	env := requireBackend(t)
 	c, root := newMatrixClient(t, env, "err")
@@ -741,15 +749,15 @@ func TestMatrix_ErrorMapping(t *testing.T) {
 		t.Fatalf("DeleteObject(missing key) = %v, want nil (S3 deletes are idempotent)", err)
 	}
 
-	// A request against a bucket that does not exist is also a
-	// normalized not-found, not a backend-specific error code.
+	// A request against a bucket that does not exist must stay an error: the
+	// client may not report a missing file for a bucket-level 404.
 	ghost := NewMinIOClient(Config{
-		Endpoint:       env.endpoint,
-		AccessKey:      env.ak,
-		SecretKey:      env.sk,
-		Bucket:         fmt.Sprintf("no-such-%s-%d", env.kind, time.Now().UnixNano()),
-		StoragePrefix:  "",
-		Alias:          "matrix-" + env.kind + "-ghost",
+		Endpoint:      env.endpoint,
+		AccessKey:     env.ak,
+		SecretKey:     env.sk,
+		Bucket:        fmt.Sprintf("no-such-%s-%d", env.kind, time.Now().UnixNano()),
+		StoragePrefix: "",
+		Alias:         "matrix-" + env.kind + "-ghost",
 	})
 	for name, op := range map[string]func() error{
 		"GetObject(ghost bucket)": func() error { _, err := ghost.GetObject(ctx, "a/b"); return err },
@@ -757,8 +765,11 @@ func TestMatrix_ErrorMapping(t *testing.T) {
 		"StatMeta(ghost bucket)":  func() error { _, err := ghost.StatMeta(ctx, "a/b"); return err },
 	} {
 		err := op()
-		if !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("%s = %v, want ErrNotExist (kind=%s)", name, err, env.kind)
+		if err == nil {
+			t.Fatalf("%s = nil, want a bucket-level error (kind=%s)", name, env.kind)
+		}
+		if errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s = %v, want a non-not-found error: a missing bucket must not read as a missing object (kind=%s)", name, err, env.kind)
 		}
 	}
 }

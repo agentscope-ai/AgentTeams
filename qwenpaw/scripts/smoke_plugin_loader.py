@@ -65,9 +65,10 @@ def scratch_runtime(working_dir: Path):
     not have. The previous values are restored afterwards so an in-process
     caller keeps its environment.
     """
-    keys = ("QWENPAW_WORKING_DIR", "HOME")
+    keys = ("QWENPAW_WORKING_DIR", "QWENPAW_SECRET_DIR", "HOME")
     previous = {key: os.environ.get(key) for key in keys}
     os.environ["QWENPAW_WORKING_DIR"] = str(working_dir)
+    os.environ["QWENPAW_SECRET_DIR"] = str(working_dir / ".secrets")
     os.environ["HOME"] = str(working_dir)
     try:
         yield

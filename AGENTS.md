@@ -292,13 +292,14 @@ Retries are always bounded and deduplicated, and an exhausted retry is
 
 ### Rule 4 — Timeout gate: every long operation has an explicit bound
 
-Nothing waits indefinitely: Matrix sync is capped at 30 s; the typing
+Use explicit bounds for long operations: Matrix sync defaults to 30 s
+(the configured sync timeout can override it); the typing
 indicator runs a 30 s server timeout with 25 s renewal and a 120 s
 maximum duration; the LLM stream times out at 300 s by default
-(override with `AGENTTEAMS_LLM_STREAM_TIMEOUT_S`). Two bounds are
-deliberately **required, not defaulted**: a task deadline
-(`timeoutAt`) is caller-set, and a loop's `maxIterations` has no
-default — a loop must declare its size.
+(override with `AGENTTEAMS_LLM_STREAM_TIMEOUT_S`). A task attention
+deadline (`timeoutAt`) is optional and caller-set; an omitted deadline
+does not expire automatically. A loop's `maxIterations` is required and
+has no default — a loop must declare its size.
 
 ### Rule 5 — Budget gate: tier defaults, flag don't truncate
 
@@ -318,10 +319,10 @@ entries, task audit history the last 50.
 | Human touch | `request_attention` options ≤ 10 when provided (unique string ids); `ask_user` loop decision parks the loop in `waiting_user` | malformed requests rejected; open request must not be self-resolved | `plugins/teamharness/mcp/lifecycle/taskflow.py`, `plugins/teamharness/mcp/project/flow.py` |
 | Retry — Matrix room send | 3 retries; backoff 1.0 s × 2^attempt + 0–0.5 s jitter; `retry_after_ms` preferred; 5xx/429/network only; single `tx_id` | exhaustion logs an error and fails (raises or returns the error) | `plugins/agentteams-matrix-channel/agentteams_matrix/channel.py` |
 | Retry — shared-storage sync | 3 attempts (backoffs 0.1 s, 0.25 s); metadata read 3 attempts | exhaustion raises; never a silent success | `plugins/teamharness/mcp/artifact/sync.py` |
-| Timeout — Matrix sync | 30 s | sync step fails | `plugins/agentteams-matrix-channel/agentteams_matrix/channel.py` |
+| Timeout — Matrix sync | 30 s default; configurable | sync request uses the configured timeout | `plugins/agentteams-matrix-channel/agentteams_matrix/channel.py` |
 | Timeout — typing indicator | 30 s server; 25 s renewal; 120 s max duration | indicator dropped | `plugins/agentteams-matrix-channel/agentteams_matrix/channel.py` |
 | Timeout — LLM stream | 300 s (`AGENTTEAMS_LLM_STREAM_TIMEOUT_S`) | stream aborted | `manager/scripts/init/start-qwenpaw-manager.sh` |
-| Timeout — task deadline | no default; caller sets `timeoutAt` | task expires at the set deadline | `plugins/teamharness/mcp/lifecycle/taskflow.py` |
+| Timeout — task attention deadline | optional; no default; caller sets `timeoutAt` | attention becomes overdue only when a deadline was provided | `plugins/teamharness/mcp/lifecycle/taskflow.py` |
 | Budget — loop iterations | simple 3 / standard 5 / full 10; explicit `iteration_budget` wins; no tier = no budget | `over_budget` flagged, work not truncated | `plugins/teamharness/mcp/common/constants.py`, `plugins/teamharness/mcp/project/flow.py` |
 | Budget — loop provenance | last 5 entries | oldest entries dropped | `plugins/teamharness/mcp/common/constants.py` |
 | Budget — task audit history | last 50 entries | oldest entries dropped | `plugins/teamharness/mcp/common/constants.py` |

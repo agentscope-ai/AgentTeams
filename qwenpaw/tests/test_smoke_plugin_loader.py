@@ -140,6 +140,27 @@ class SmokePluginLoaderTest(unittest.TestCase):
                 2,
             )
 
+    def test_smoke_does_not_load_callers_secret_environment(self):
+        with tempfile.TemporaryDirectory(prefix="smoke-secret-") as tmp:
+            root = Path(tmp)
+            secret = root / "caller-secret"
+            secret.mkdir()
+            (secret / "envs.json").write_text('{"AGENTTEAMS_TEST_CALLER_SECRET":"fixture-only"}')
+            code = (
+                "import os, runpy, sys; "
+                "smoke = runpy.run_path(sys.argv[1]); "
+                "rc = smoke['main'](['--working-dir', sys.argv[2]]); "
+                "assert rc == 0; "
+                "assert 'AGENTTEAMS_TEST_CALLER_SECRET' not in os.environ, 'caller secret loaded'; "
+                "assert os.environ['QWENPAW_SECRET_DIR'] == sys.argv[3], 'caller environment not restored'"
+            )
+            proc = subprocess.run(
+                [sys.executable, "-c", code, str(SCRIPT), str(root / "scratch"), str(secret)],
+                capture_output=True, text=True,
+                env={**os.environ, "QWENPAW_SECRET_DIR": str(secret)},
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

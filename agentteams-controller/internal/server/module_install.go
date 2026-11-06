@@ -1,6 +1,7 @@
 package server
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -205,7 +206,7 @@ func (m *moduleInstaller) downloadArtifact(ctx context.Context, u, wantSHA strin
 }
 
 // uploadPlugin pushes the verified bytes to a qwenpaw app and hot-loads them.
-func (m *moduleInstaller) uploadPlugin(ctx context.Context, base, filename string, data []byte) (bool, int, string) {
+func (m *moduleInstaller) uploadPlugin(ctx context.Context, base, filename, pluginID, version string, data []byte) (bool, int, string) {
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
 	part, err := w.CreateFormFile("file", filename)
@@ -233,7 +234,9 @@ func (m *moduleInstaller) uploadPlugin(ctx context.Context, base, filename strin
 		return false, http.StatusBadGateway, "qwenpaw plugin upload failed"
 	}
 	var out struct {
-		Loaded bool `json:"loaded"`
+		ID      string `json:"id"`
+		Version string `json:"version"`
+		Loaded  bool   `json:"loaded"`
 	}
 	if err := json.Unmarshal(body, &out); err != nil {
 		return false, http.StatusBadGateway, "qwenpaw plugin upload returned an invalid response"
@@ -241,7 +244,51 @@ func (m *moduleInstaller) uploadPlugin(ctx context.Context, base, filename strin
 	if !out.Loaded {
 		return false, http.StatusBadGateway, "qwenpaw installed the plugin but did not load it"
 	}
+	if out.ID != pluginID || out.Version != version {
+		return false, http.StatusBadGateway, "qwenpaw loaded a different plugin or version"
+	}
 	return true, http.StatusOK, ""
+}
+
+// Check the same manifest location QwenPaw loads, before any runtime code runs.
+// A valid checksum binds bytes to the index, but not the package's identity.
+func validateModuleArtifact(data []byte, pluginID, version string) error {
+	z, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return fmt.Errorf("module artifact is not a valid zip")
+	}
+	var roots, wrapped []*zip.File
+	for _, f := range z.File {
+		if f.Name == "plugin.json" {
+			roots = append(roots, f)
+		} else if parts := strings.Split(f.Name, "/"); len(parts) == 2 && parts[0] != "" && parts[1] == "plugin.json" {
+			wrapped = append(wrapped, f)
+		}
+	}
+	manifests := roots
+	if len(manifests) == 0 {
+		manifests = wrapped
+	}
+	if len(manifests) != 1 || manifests[0].UncompressedSize64 > 1<<20 {
+		return fmt.Errorf("module artifact requires one bounded plugin manifest")
+	}
+	r, err := manifests[0].Open()
+	if err != nil {
+		return fmt.Errorf("module artifact manifest unreadable")
+	}
+	defer r.Close()
+	body, err := io.ReadAll(io.LimitReader(r, (1<<20)+1))
+	var manifest struct {
+		ID      string `json:"id"`
+		Version string `json:"version"`
+	}
+	if err != nil || len(body) > 1<<20 || json.Unmarshal(body, &manifest) != nil {
+		return fmt.Errorf("module artifact manifest invalid")
+	}
+	if manifest.ID != pluginID || manifest.Version != version {
+		return fmt.Errorf("module artifact plugin identity/version does not match the index")
+	}
+	return nil
 }
 
 // previousVersion reads the target's installed version for the module.
@@ -331,13 +378,16 @@ func (m *moduleInstaller) prepareArtifact(ctx context.Context, module string, bo
 	if data == nil {
 		return "", "", "", nil, status, msg
 	}
+	if err := validateModuleArtifact(data, pluginID, version); err != nil {
+		return "", "", "", nil, http.StatusBadGateway, err.Error()
+	}
 	return version, name, pluginID, data, http.StatusOK, ""
 }
 
 // installPrepared pushes already-verified bytes to one target.
-func (m *moduleInstaller) installPrepared(ctx context.Context, base, pluginID, name string, data []byte) (bool, string, int, string) {
+func (m *moduleInstaller) installPrepared(ctx context.Context, base, pluginID, version, name string, data []byte) (bool, string, int, string) {
 	prev := m.previousVersion(ctx, base, pluginID)
-	loaded, status, msg := m.uploadPlugin(ctx, base, name, data)
+	loaded, status, msg := m.uploadPlugin(ctx, base, name, pluginID, version, data)
 	if status != http.StatusOK {
 		return false, prev, status, msg
 	}
@@ -349,11 +399,11 @@ func (m *moduleInstaller) installPrepared(ctx context.Context, base, pluginID, n
 
 // installOne performs the shared single-target pipeline.
 func (m *moduleInstaller) installOne(ctx context.Context, base, module string, body moduleInstallRequest) (bool, string, int, string) {
-	_, name, pluginID, data, status, msg := m.prepareArtifact(ctx, module, body)
+	version, name, pluginID, data, status, msg := m.prepareArtifact(ctx, module, body)
 	if data == nil {
 		return false, "", status, msg
 	}
-	return m.installPrepared(ctx, base, pluginID, name, data)
+	return m.installPrepared(ctx, base, pluginID, version, name, data)
 }
 
 func equalHex(a, b string) bool {
@@ -570,7 +620,7 @@ func (m *moduleInstaller) installTeam(ctx context.Context, team *v1beta1.Team, m
 			return updated, map[string]string{"worker": member.Name, "error": "worker runtime is not qwenpaw"}, version, pluginID, http.StatusBadRequest, "worker runtime is not qwenpaw"
 		}
 		base := m.workerBaseURL(worker.Spec.EffectiveWorkerName(worker.Name), worker.Spec.Env)
-		_, _, status, msg := m.installPrepared(ctx, base, pluginID, name, data)
+		_, _, status, msg := m.installPrepared(ctx, base, pluginID, version, name, data)
 		if status != http.StatusOK {
 			return updated, map[string]string{"worker": member.Name, "error": msg}, version, pluginID, status, msg
 		}

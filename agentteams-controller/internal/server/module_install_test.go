@@ -35,7 +35,7 @@ func testInstaller(artifact []byte, sha string) (*moduleInstaller, *http.Client)
 		case r.Method == http.MethodGet && r.URL.Path == "/api/plugins":
 			return testResp(200, `[{"id":"teamharness","version":"0.0.9","loaded":true}]`), nil
 		case r.Method == http.MethodPost && r.URL.Path == "/api/plugins/upload":
-			return testResp(200, `{"installed":true,"loaded":true}`), nil
+			return testResp(200, `{"id":"teamharness","version":"0.1.0","loaded":true}`), nil
 		default:
 			return testResp(404, "not found"), nil
 		}
@@ -50,7 +50,7 @@ func testInstaller(artifact []byte, sha string) (*moduleInstaller, *http.Client)
 }
 
 func TestInstallOneSuccess(t *testing.T) {
-	artifact := []byte("zip-bytes")
+	artifact := moduleIdentityZip(t, "teamharness", "0.1.0")
 	sum := sha256.Sum256(artifact)
 	m, _ := testInstaller(artifact, hex.EncodeToString(sum[:]))
 	loaded, prev, status, msg := m.installOne(context.Background(), "http://worker.test", "teamharness", moduleInstallRequest{
@@ -63,7 +63,7 @@ func TestInstallOneSuccess(t *testing.T) {
 }
 
 func TestInstallOneSHAConflict(t *testing.T) {
-	artifact := []byte("zip-bytes")
+	artifact := moduleIdentityZip(t, "teamharness", "0.1.0")
 	sum := sha256.Sum256(artifact)
 	m, _ := testInstaller(artifact, hex.EncodeToString(sum[:]))
 	_, _, status, _ := m.installOne(context.Background(), "http://worker.test", "teamharness", moduleInstallRequest{
@@ -76,7 +76,7 @@ func TestInstallOneSHAConflict(t *testing.T) {
 }
 
 func TestInstallOneArtifactMismatch(t *testing.T) {
-	artifact := []byte("zip-bytes")
+	artifact := moduleIdentityZip(t, "teamharness", "0.1.0")
 	wrong := sha256.Sum256([]byte("other"))
 	m, _ := testInstaller(artifact, hex.EncodeToString(wrong[:]))
 	_, _, status, _ := m.installOne(context.Background(), "http://worker.test", "teamharness", moduleInstallRequest{
@@ -133,7 +133,7 @@ func TestInstallRoutesKubeMode(t *testing.T) {
 }
 
 func TestInstallOneChannelMismatch(t *testing.T) {
-	artifact := []byte("zip-bytes")
+	artifact := moduleIdentityZip(t, "teamharness", "0.1.0")
 	sum := sha256.Sum256(artifact)
 	m, _ := testInstaller(artifact, hex.EncodeToString(sum[:]))
 	_, _, status, _ := m.installOne(context.Background(), "http://worker.test", "teamharness", moduleInstallRequest{
@@ -162,7 +162,7 @@ func TestInstallTeamStopsOnRuntimeMismatch(t *testing.T) {
 	w2.Spec.Runtime = "openclaw"
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(w1, w2).Build()
 
-	artifact := []byte("zip-bytes")
+	artifact := moduleIdentityZip(t, "teamharness", "0.1.0")
 	sum := sha256.Sum256(artifact)
 	m, _ := testInstaller(artifact, hex.EncodeToString(sum[:]))
 	m.rh = &ResourceHandler{client: cl, namespace: "default"}
@@ -177,7 +177,7 @@ func TestInstallTeamStopsOnRuntimeMismatch(t *testing.T) {
 }
 
 func TestInstallOneRejectsDotDotModule(t *testing.T) {
-	artifact := []byte("zip-bytes")
+	artifact := moduleIdentityZip(t, "teamharness", "0.1.0")
 	sum := sha256.Sum256(artifact)
 	m, _ := testInstaller(artifact, hex.EncodeToString(sum[:]))
 	_, _, status, _ := m.installOne(context.Background(), "http://worker.test", "..", moduleInstallRequest{
@@ -227,7 +227,7 @@ func TestIndexArtifactPrefersZip(t *testing.T) {
 }
 
 func TestInstallOneUsesIndexPluginID(t *testing.T) {
-	artifact := []byte("zip-bytes")
+	artifact := moduleIdentityZip(t, "agentteams-matrix-channel", "0.1.0")
 	sum := sha256.Sum256(artifact)
 	index := fmt.Sprintf(`{"schema":1,"channel":"beta","modules":{"agentteams-matrix":{"latest":"0.1.0","pluginId":"agentteams-matrix-channel","kind":"bundle","versions":{"0.1.0":{"artifacts":[{"name":"agentteams-matrix-channel-0.1.0.zip","sha256":"%s"}]}}}}}`, hex.EncodeToString(sum[:]))
 	c := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
@@ -239,7 +239,7 @@ func TestInstallOneUsesIndexPluginID(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/plugins":
 			return testResp(200, `[{"id":"agentteams-matrix-channel","version":"0.0.9","loaded":true}]`), nil
 		case r.Method == http.MethodPost && r.URL.Path == "/api/plugins/upload":
-			return testResp(200, `{"installed":true,"loaded":true}`), nil
+			return testResp(200, `{"id":"agentteams-matrix-channel","version":"0.1.0","loaded":true}`), nil
 		default:
 			return testResp(404, "not found"), nil
 		}
@@ -254,7 +254,7 @@ func TestInstallOneUsesIndexPluginID(t *testing.T) {
 }
 
 func TestInstallOneFailsWhenNotLoaded(t *testing.T) {
-	artifact := []byte("zip-bytes")
+	artifact := moduleIdentityZip(t, "teamharness", "0.1.0")
 	sum := sha256.Sum256(artifact)
 	index := fmt.Sprintf(`{"schema":1,"channel":"beta","modules":{"teamharness":{"latest":"0.1.0","versions":{"0.1.0":{"artifacts":[{"name":"teamharness-0.1.0-qwenpaw.zip","sha256":"%s"}]}}}}}`, hex.EncodeToString(sum[:]))
 	c := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {

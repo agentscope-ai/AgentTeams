@@ -195,6 +195,24 @@ def test_mention_only_in_hidden_part_still_in_m_mentions(
     assert sent["content"]["m.mentions"] == {"user_ids": [LEADER]}
 
 
+@pytest.mark.parametrize("operation", ["mkdir", "write_text"])
+def test_report_write_failure_returns_tool_error_without_sending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    capture = _prepare(tmp_path, monkeypatch)
+    text = "\n".join(f"line {i}" for i in range(8))
+
+    def fail_write(*args: Any, **kwargs: Any) -> None:
+        raise PermissionError("report directory is not writable")
+
+    monkeypatch.setattr(Path, operation, fail_write)
+    sent = _send(tmp_path, text)
+
+    assert sent["ok"] is False
+    assert "report" in sent["error"]
+    assert capture is not None and capture.requests == []
+
+
 def test_no_workspace_passes_through_unchanged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

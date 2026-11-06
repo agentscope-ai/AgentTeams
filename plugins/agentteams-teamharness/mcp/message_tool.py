@@ -480,9 +480,12 @@ def message(arguments: dict[str, Any], deps: MessageToolDeps) -> dict[str, Any]:
         return {"ok": False, "tool": "message", "error": "AGENTTEAMS_MATRIX_URL and AGENTTEAMS_WORKER_MATRIX_TOKEN are required"}
 
     if report_path is not None:
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_body = message_text if message_text.endswith("\n") else message_text + "\n"
-        report_path.write_text(report_body, encoding="utf-8")
+        try:
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_body = message_text if message_text.endswith("\n") else message_text + "\n"
+            report_path.write_text(report_body, encoding="utf-8")
+        except OSError as exc:
+            return {"ok": False, "tool": "message", "error": f"full report could not be written: {exc}"}
 
     room_id = urllib.parse.quote(target_id, safe="")
     txn_id = f"teamharness-{os.getpid()}-{int(time.time() * 1000)}"

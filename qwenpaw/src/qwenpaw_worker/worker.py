@@ -958,7 +958,7 @@ class Worker:
                     f"qwenpaw app exited before API readiness: {self._process.returncode}",
                 )
             try:
-                await asyncio.to_thread(self.api_client.require_version, "2.2.1")
+                await asyncio.to_thread(self.api_client.require_version, "2.2.2.post1")
                 # Version readiness precedes the agent's MCP migration. Wait
                 # before changing agent.json to avoid invalidating its snapshot.
                 await asyncio.to_thread(

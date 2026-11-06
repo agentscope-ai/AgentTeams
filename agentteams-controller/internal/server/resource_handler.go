@@ -273,13 +273,39 @@ func (h *ResourceHandler) GetWorker(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteError(w, http.StatusNotFound, "get worker: not found")
 }
 
-// teamMemberHit is one entry of ListWorkers' per-request team index: the
-// first team (in list order) that references a worker, and that worker's
-// member ref within it — findTeamMember's first-hit result, precomputed
-// from a single Team list (issue #1475).
+// teamMemberHit is one entry of the per-request team index built by
+// teamMemberIndex: the first team (in list order) that references a
+// worker, and that worker's member ref within it — findTeamMember's
+// first-hit result, precomputed from a single Team list (issue #1475).
 type teamMemberHit struct {
 	team   *v1beta1.Team
 	member string
+}
+
+// teamMemberIndex builds the per-request workerName -> first team hit index from
+// a single Team list (issue #1475). findTeamMember re-lists every Team CR per
+// worker, so any list endpoint must index once instead. Empty workerNames
+// returns an empty map without a List call, matching the per-worker lookups'
+// old call pattern exactly. First team in list order referencing a worker
+// wins, matching findTeamMember's first-hit traversal.
+func teamMemberIndex(ctx context.Context, c client.Client, namespace string, workerNames []string) (map[string]teamMemberHit, error) {
+	if len(workerNames) == 0 {
+		return map[string]teamMemberHit{}, nil
+	}
+	var teams v1beta1.TeamList
+	if err := c.List(ctx, &teams, client.InNamespace(namespace)); err != nil {
+		return nil, err
+	}
+	index := make(map[string]teamMemberHit, len(teams.Items))
+	for i := range teams.Items {
+		team := &teams.Items[i]
+		for _, ref := range team.Spec.WorkerMembers {
+			if _, seen := index[ref.Name]; !seen {
+				index[ref.Name] = teamMemberHit{team: team, member: ref.Name}
+			}
+		}
+	}
+	return index, nil
 }
 
 // workerFields is the parsed ?fields= selection of GET /api/v1/workers
@@ -366,27 +392,15 @@ func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Index team membership once per request instead of once per worker
-	// (issue #1475: findTeamMember re-listed every Team CR per worker, so
-	// an N-worker list cost 1 WorkerList + N TeamList round-trips). The
-	// first team in list order referencing a worker wins, matching
-	// findTeamMember's first-hit traversal. An empty worker list skips the
-	// Team list entirely, exactly as the per-worker lookups did.
-	var teams v1beta1.TeamList
-	var teamIndex map[string]teamMemberHit
-	if len(list.Items) > 0 {
-		if err := h.client.List(r.Context(), &teams, client.InNamespace(h.namespace)); err != nil {
-			writeK8sError(w, "list workers: lookup team member", err)
-			return
-		}
-		teamIndex = make(map[string]teamMemberHit, len(teams.Items))
-		for i := range teams.Items {
-			team := &teams.Items[i]
-			for _, ref := range team.Spec.WorkerMembers {
-				if _, seen := teamIndex[ref.Name]; !seen {
-					teamIndex[ref.Name] = teamMemberHit{team: team, member: ref.Name}
-				}
-			}
-		}
+	// (issue #1475) — see teamMemberIndex for the semantics.
+	workerNames := make([]string, 0, len(list.Items))
+	for i := range list.Items {
+		workerNames = append(workerNames, list.Items[i].Name)
+	}
+	teamIndex, err := teamMemberIndex(r.Context(), h.client, h.namespace, workerNames)
+	if err != nil {
+		writeK8sError(w, "list workers: lookup team member", err)
+		return
 	}
 	for i := range list.Items {
 		resp := workerToResponse(&list.Items[i])
@@ -967,6 +981,12 @@ func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if req.WorkspaceAccess != nil {
+			if err := validateHumanWorkspaceAccess(req.WorkspaceAccess); err != nil {
+				httputil.WriteError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
 
 		if req.DisplayName != nil {
 			human.Spec.DisplayName = *req.DisplayName
@@ -992,6 +1012,13 @@ func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
 			// Full replace (merge-patch): a present table — including an
 			// empty object — replaces the whole grant table.
 			human.Spec.ModelAccess = req.ModelAccess
+		}
+		if req.WorkspaceAccess != nil {
+			// Merge-patch semantics like Capabilities: a present object
+			// replaces the whole object (an empty object clears both
+			// lists); absent or null leaves the spec unchanged.
+			// Validation above already rejected invalid rules.
+			human.Spec.WorkspaceAccess = req.WorkspaceAccess
 		}
 		if req.Note != nil {
 			human.Spec.Note = *req.Note
@@ -1807,18 +1834,18 @@ func teamToResponse(t *v1beta1.Team) TeamResponse {
 
 func managerToResponse(m *v1beta1.Manager) ManagerResponse {
 	resp := ManagerResponse{
-		Name:         m.Name,
-		Phase:        m.Status.Phase,
-		State:        m.Spec.DesiredState(),
-		Model:        m.Spec.Model,
+		Name:          m.Name,
+		Phase:         m.Status.Phase,
+		State:         m.Spec.DesiredState(),
+		Model:         m.Spec.Model,
 		ModelProvider: m.Spec.ModelProvider,
-		Runtime:      m.Spec.Runtime,
-		Image:        m.Spec.Image,
-		MatrixUserID: m.Status.MatrixUserID,
-		RoomID:       m.Status.RoomID,
-		Version:      m.Status.Version,
-		Message:      m.Status.Message,
-		WelcomeSent:  m.Status.WelcomeSent,
+		Runtime:       m.Spec.Runtime,
+		Image:         m.Spec.Image,
+		MatrixUserID:  m.Status.MatrixUserID,
+		RoomID:        m.Status.RoomID,
+		Version:       m.Status.Version,
+		Message:       m.Status.Message,
+		WelcomeSent:   m.Status.WelcomeSent,
 	}
 	resp.RuntimeDeprecated = strings.EqualFold(m.Spec.Runtime, backend.RuntimeCopaw)
 	if resp.Phase == "" {

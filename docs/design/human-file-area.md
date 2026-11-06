@@ -1,6 +1,6 @@
 # Per-Human File Area, Recycle Bin, and Workspace Quota
 
-Status: implemented (P1 of #1414)
+Status: implemented (P1 + P2 of #1414)
 APIs: `GET /api/v1/humans/{name}/files` (root listing, `?recursive=1` flat listing), `GET/PUT/DELETE /api/v1/humans/{name}/files/{path...}`, `GET /api/v1/humans/{name}/trash`, `POST /api/v1/humans/{name}/trash/{id}/restore`, `DELETE /api/v1/humans/{name}/trash/{id}`, `GET/PUT /api/v1/humans/{name}/quota`
 
 ## Scope
@@ -12,10 +12,34 @@ recycle bin and an optional workspace quota:
   (read / list / write / soft-delete), the trash (list / restore / purge),
   path validation, a per-file size limit, and an optional workspace quota
   (`workspaceQuotaBytes`).
-- **Out of scope (later phases):** team default authorization and
-  `workspaceAccess` (P2), file sync / carriers / `file_sync` (P3), agent
-  attribution and UI (P4). In P1 the area is reachable by the human
-  themself, admins, and managers only.
+- **In scope (P2):** team-scoped `workspaceAccess` grants and
+  restrictions (see “Workspace access policy” below).
+- **Out of scope (later phases):** file sync / carriers / `file_sync`
+  (P3), agent attribution and UI (P4).
+
+
+## Workspace access policy (P2)
+
+Access to `files/**` is decided by the caller's team membership plus the
+Human's `spec.workspaceAccess`; the policy is explicit and deny-wins:
+
+- **Default teams** (no `workspaceAccess` needed): `spec.accessibleTeams`
+  ∪ every team whose `spec.humanMembers` lists this human (its Leader and
+  Worker service accounts). A default team has **readwrite** on `files/**`.
+  This is deliberate: a person's work area is shared with the teams they
+  already belong to, not only granted ad hoc.
+- **Grants** extend access to teams outside the default set; **restrictions**
+  narrow a default team's access.
+- **Restrictions are a global deny:** a matching `none` restriction on any
+  of the caller's teams denies the path even if another team (default or
+  granted) would allow it; a `read` restriction caps it at read. This
+  closes the “restriction in one team does not deny access via another”
+  gap.
+- `memory/**` and `digest/**` are never addressable through the files API
+  and cannot be granted.
+- When the human is removed from a team (or the grant is revoked), that
+  team's contribution disappears on the next authorization pass; there is
+  no cached allow.
 
 ## Storage layout
 

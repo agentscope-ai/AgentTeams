@@ -28,6 +28,12 @@ Dir.mktmpdir("teamharness-message-") do |_dir|
     sys.path.insert(0, str(pathlib.Path("#{mcp_dir}")))
     from server import call_tool, list_tools
 
+    # TH-11: the multi-line dryRun assertions below intentionally run
+    # without a resolvable workspace (report truncation must pass the
+    # message through unchanged); make the inherited env deterministic.
+    for _env_key in ("TEAMHARNESS_SHARED_DIR", "AGENTTEAMS_SHARED_DIR", "QWENPAW_WORKING_DIR", "COPAW_WORKING_DIR"):
+        os.environ.pop(_env_key, None)
+
     captured = {}
 
     class Handler(http.server.BaseHTTPRequestHandler):

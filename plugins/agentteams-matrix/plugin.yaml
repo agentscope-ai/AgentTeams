@@ -1,0 +1,24 @@
+apiVersion: agentteams.agentteam/v1alpha1
+kind: AgentTeamPlugin
+metadata:
+  name: agentteams-matrix
+  version: 0.1.0
+requires:
+  agentteams: ">=1.2.6"
+  contracts: "1"
+  tool_schema: "1"
+adapters:
+  - id: qwenpaw
+    path: adapters/qwenpaw
+  - id: openclaw
+    path: adapters/openclaw
+  - id: hermes
+    path: adapters/hermes
+package:
+  include:
+    - plugin.json
+    - contract.yaml
+    - core
+    - adapters
+    - scripts
+    - DEDUPE.md

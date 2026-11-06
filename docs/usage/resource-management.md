@@ -4,6 +4,12 @@ AgentTeams uses Kubernetes CRD-style declarative YAML to manage platform resourc
 
 ## Core Concepts
 
+### Resource authority
+
+Platform Admin and Manager own global deployment resource management. A Team Leader coordinates tasks and reads its team's Worker status, but cannot create, update, or delete deployment resources or wake, sleep, or ensure-ready another Worker. If a Worker is unavailable, the Leader reports the blocked task to Manager or platform Admin and waits for a fresh ready status before assigning work.
+
+Task/project coordination and the Leader runtime's own readiness report and credential refresh remain available. Existing human self-service permissions are unchanged; this boundary applies to the Leader service identity, not every human who can access a team.
+
 ### Organization Structure
 
 AgentTeams uses a three-tier organization that maps to real enterprise team structures:

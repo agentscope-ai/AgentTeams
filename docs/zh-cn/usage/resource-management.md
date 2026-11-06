@@ -4,6 +4,12 @@ AgentTeams 采用 Kubernetes CRD 风格的声明式 YAML 配置来管理平台�
 
 ## 核心概念
 
+### 资源操作权限
+
+平台 Admin 与 Manager 负责全局部署资源管理。Team Leader 负责团队任务协调，并可读取本团队 Worker 状态；不能创建、修改、删除部署资源，也不能替其他 Worker 执行唤醒、休眠或 ensure-ready。Worker 不可用时，Leader 应向 Manager 或平台 Admin 报告任务阻塞，重新查询确认就绪后再分配任务。
+
+任务与项目协调协议、Leader 运行时自身的 ready 上报及凭据刷新继续保留。真人用户已有的团队自助权限不变；这里限制的是 Leader 服务身份，不是所有能访问团队的真人。
+
 ### 组织架构
 
 AgentTeams 采用三层组织架构，映射企业真实团队结构：

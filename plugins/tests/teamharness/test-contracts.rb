@@ -52,6 +52,13 @@ doc = read(boundary_doc)
 end
 
 assert_file(runtime_design_doc)
+
+# Builtin Leader guidance must agree with Controller resource authorization.
+leader_root = repo_root / "manager/agent/team-leader-agent"
+leader_guidance = [leader_root / "AGENTS.md", leader_root / "HEARTBEAT.md", leader_root / "skills/organization/SKILL.md"].map { |path| read(path) }.join("\n")
+assert(!leader_guidance.match?(/^\s*agt worker (wake|sleep|ensure-ready)\b/), "Leader guidance must not prescribe resource lifecycle writes")
+assert(leader_guidance.include?("Manager or platform Admin"), "Leader runtime blockers must name the resource authority")
+
 runtime_design = read(runtime_design_doc)
 assert(runtime_design.include?("submission_id") && runtime_design.include?("submitted_at") && runtime_design.include?("不透明、不可变提交身份"), "runtime design must define opaque immutable submission identity")
 assert(runtime_design.include?("teamharness.task-result.v1") && runtime_design.include?("canonical_json"), "runtime design must define the cross-runtime result digest domain and canonical payload")

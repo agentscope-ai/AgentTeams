@@ -43,12 +43,10 @@ import (
 // resolvedBy stays display provenance: the consumer never decides on it,
 // and a record without the server markers is not an approval (fail closed).
 //
-// The handler never touches decision_status: the stall-driven "frozen"
-// state is released by the consumer DERIVING it from this marked resolved
-// approval record (the taskflow frozen-unfreeze guard), so writing the
-// record shape correctly is this side's whole obligation. The consumer-side
-// combined test (frozen task + this record shape -> r1 acceptance +
-// unfreeze) lands with #1506.
+// The strict write also clears tracked stall state and records the trusted
+// blocked/frozen-to-open transition. An optional expectedEventId binds the
+// answer to the displayed question on each retry; stale views return 409.
+// Legacy clients without that precondition keep their existing behavior.
 //
 // The validation order is fixed (spec):
 //
@@ -76,9 +74,10 @@ const (
 )
 
 type resolveAttentionRequest struct {
-	Resolution string          `json:"resolution"`
-	Comment    string          `json:"comment"`
-	Evidence   json.RawMessage `json:"evidence"`
+	ExpectedEventID string          `json:"expectedEventId"`
+	Resolution      string          `json:"resolution"`
+	Comment         string          `json:"comment"`
+	Evidence        json.RawMessage `json:"evidence"`
 }
 
 type resolveAttentionResponse struct {
@@ -257,6 +256,18 @@ func (h *ProjectHandler) ResolveAttention(w http.ResponseWriter, r *http.Request
 		if valErr != nil {
 			writeResolveError(w, valErr.status, valErr.code, valErr.msg)
 			return
+		}
+		// Bind the displayed question on every CAS attempt, including replay.
+		// Legacy clients may omit this optional precondition.
+		if req.ExpectedEventID != "" {
+			target := record
+			if idempotent != nil {
+				target = idempotent
+			}
+			if str(target["eventId"]) != req.ExpectedEventID {
+				writeResolveError(w, http.StatusConflict, "attention_changed", "attention request changed; refresh before answering")
+				return
+			}
 		}
 		if idempotent != nil {
 			// 7) exact re-submit of the last resolution: 200 with the

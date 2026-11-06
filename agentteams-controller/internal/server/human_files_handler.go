@@ -144,7 +144,22 @@ type humanFileAccess struct {
 	// team is the caller's team that produced the winning effectiveMode
 	// ("" for admin/manager/self), recorded in the audit Detail for write
 	// attribution.
-	team string
+	team         string
+	callerTeams  []string
+	defaultTeams map[string]struct{}
+}
+
+// canReadPath reuses the request's resolved membership for each listed
+// object, so a readable parent cannot disclose a restricted descendant.
+func (a *humanFileAccess) canReadPath(rel string) bool {
+	if a.isAdmin || a.isManager || a.isSelf {
+		return true
+	}
+	if _, err := validateHumanFilePath(rel); err != nil {
+		return false
+	}
+	mode, _ := humanWorkspaceEffectiveMode(&a.human.Spec, a.callerTeams, a.defaultTeams, rel)
+	return mode != humanWorkspaceModeNone
 }
 
 // authorizeHumanFile resolves access to the file area of the Human CR
@@ -223,7 +238,7 @@ func (h *humanFilesHandler) authorizeHumanFile(ctx context.Context, name, path s
 	if isWrite && mode != humanWorkspaceModeReadWrite {
 		return nil, http.StatusForbidden, "write access required"
 	}
-	return &humanFileAccess{human: &human, caller: caller, effectiveMode: mode, team: team}, 0, ""
+	return &humanFileAccess{human: &human, caller: caller, effectiveMode: mode, team: team, callerTeams: teams, defaultTeams: defaultTeams}, 0, ""
 }
 
 // callerTeamSet returns the teams the caller identity carries. Team
@@ -516,6 +531,13 @@ func (h *humanFilesHandler) listDirectory(w http.ResponseWriter, r *http.Request
 	for _, info := range infos {
 		rel := info.Name
 		if rel == "" {
+			continue
+		}
+		fullPath := rel
+		if dir != "" {
+			fullPath = dir + "/" + rel
+		}
+		if !a.canReadPath(strings.TrimSuffix(fullPath, "/")) {
 			continue
 		}
 		base, isDir := rel, false
@@ -944,6 +966,12 @@ func (h *humanFilesHandler) listTrash(w http.ResponseWriter, r *http.Request) {
 			var m trashMeta
 			if json.Unmarshal(data, &m) == nil {
 				e.Path, e.Size, e.DeletedAt, e.Caller, e.Role = m.Path, m.Size, m.DeletedAt, m.Caller, m.Role
+			}
+		}
+		if !a.isAdmin && !a.isManager && !a.isSelf {
+			rel, ok := strings.CutPrefix(e.Path, "files/")
+			if !ok || rel == "" || !a.canReadPath(rel) {
+				continue
 			}
 		}
 		out = append(out, e)

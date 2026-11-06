@@ -375,7 +375,7 @@ func (h *humanFilesHandler) putSyncManifest(w http.ResponseWriter, r *http.Reque
 		etag = md5Hex(out) // single-part content hash: the ETag of exactly these bytes
 	}
 	h.recordAudit(ctx, a, "human_manifest_write",
-		humanFileDetail("entries", len(manifest.Entries), "tombstones", len(manifest.Tombstones), "generation", manifest.Generation, "etag", etag))
+		"entries", len(manifest.Entries), "tombstones", len(manifest.Tombstones), "generation", manifest.Generation, "etag", etag)
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"etag":       etag,
 		"generation": manifest.Generation,

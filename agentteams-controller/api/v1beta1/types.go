@@ -202,8 +202,8 @@ type WorkerSpec struct {
 	// worker value wins over the team default (TeamSpec.LlmStream*).
 	// Consumed by QwenPaw >= 2.2.1 (envs hot-apply API); older runtimes
 	// ignore them.
-	LlmStreamFirstContentTimeout string                     `json:"llmStreamFirstContentTimeout,omitempty"`
-	LlmStreamIdleTimeout         string                     `json:"llmStreamIdleTimeout,omitempty"`
+	LlmStreamFirstContentTimeout string `json:"llmStreamFirstContentTimeout,omitempty"`
+	LlmStreamIdleTimeout         string `json:"llmStreamIdleTimeout,omitempty"`
 	// Llm* tuning knobs are the QwenPaw startup-only LLM settings
 	// (QWENPAW_LLM_MAX_RETRIES and friends). The controller projects the
 	// effective value (worker over team default) into the worker container
@@ -214,29 +214,29 @@ type WorkerSpec struct {
 	// float); invalid values are skipped with a log, never breaking the
 	// container. All eight default to empty = "do not set the env" (the
 	// QwenPaw registry default then applies: 3/1/10/10/600/5/1/300).
-	LlmMaxRetries       string `json:"llmMaxRetries,omitempty"`
-	LlmBackoffBase      string `json:"llmBackoffBase,omitempty"`
-	LlmBackoffCap       string `json:"llmBackoffCap,omitempty"`
-	LlmMaxConcurrent    string `json:"llmMaxConcurrent,omitempty"`
-	LlmMaxQpm           string `json:"llmMaxQpm,omitempty"`
-	LlmRateLimitPause   string `json:"llmRateLimitPause,omitempty"`
-	LlmRateLimitJitter  string `json:"llmRateLimitJitter,omitempty"`
-	LlmAcquireTimeout   string `json:"llmAcquireTimeout,omitempty"`
-	Runtime             string `json:"runtime,omitempty"`    // openclaw | copaw | hermes | qwenpaw | deepseek-harness (default: openclaw)
-	Image                        string                     `json:"image,omitempty"`      // custom Docker image
-	WorkerName                   string                     `json:"workerName,omitempty"` // business/runtime identity (Matrix localpart, OSS path key)
-	Identity                     string                     `json:"identity,omitempty"`
-	Soul                         string                     `json:"soul,omitempty"`
-	Agents                       string                     `json:"agents,omitempty"`
-	Skills                       []string                   `json:"skills,omitempty"`       // built-in skills only
-	RemoteSkills                 []RemoteSkillSource        `json:"remoteSkills,omitempty"` // remote skills from source registries
-	McpServers                   []MCPServer                `json:"mcpServers,omitempty"`
-	Package                      string                     `json:"package,omitempty"` // file://, http(s)://, or nacos://[user:pass@]host:port/...; optional ?authType=nacos|sts-agentteams|none
-	Expose                       []ExposePort               `json:"expose,omitempty"`  // ports to expose via Higress gateway
-	ChannelPolicy                *ChannelPolicySpec         `json:"channelPolicy,omitempty"`
-	Channels                     *ChannelsSpec              `json:"channels,omitempty"`
-	Resources                    *AgentResourceRequirements `json:"resources,omitempty"`
-	IdleTimeout                  string                     `json:"idleTimeout,omitempty"`
+	LlmMaxRetries      string                     `json:"llmMaxRetries,omitempty"`
+	LlmBackoffBase     string                     `json:"llmBackoffBase,omitempty"`
+	LlmBackoffCap      string                     `json:"llmBackoffCap,omitempty"`
+	LlmMaxConcurrent   string                     `json:"llmMaxConcurrent,omitempty"`
+	LlmMaxQpm          string                     `json:"llmMaxQpm,omitempty"`
+	LlmRateLimitPause  string                     `json:"llmRateLimitPause,omitempty"`
+	LlmRateLimitJitter string                     `json:"llmRateLimitJitter,omitempty"`
+	LlmAcquireTimeout  string                     `json:"llmAcquireTimeout,omitempty"`
+	Runtime            string                     `json:"runtime,omitempty"`    // openclaw | copaw | hermes | qwenpaw | deepseek-harness (default: openclaw)
+	Image              string                     `json:"image,omitempty"`      // custom Docker image
+	WorkerName         string                     `json:"workerName,omitempty"` // business/runtime identity (Matrix localpart, OSS path key)
+	Identity           string                     `json:"identity,omitempty"`
+	Soul               string                     `json:"soul,omitempty"`
+	Agents             string                     `json:"agents,omitempty"`
+	Skills             []string                   `json:"skills,omitempty"`       // built-in skills only
+	RemoteSkills       []RemoteSkillSource        `json:"remoteSkills,omitempty"` // remote skills from source registries
+	McpServers         []MCPServer                `json:"mcpServers,omitempty"`
+	Package            string                     `json:"package,omitempty"` // file://, http(s)://, or nacos://[user:pass@]host:port/...; optional ?authType=nacos|sts-agentteams|none
+	Expose             []ExposePort               `json:"expose,omitempty"`  // ports to expose via Higress gateway
+	ChannelPolicy      *ChannelPolicySpec         `json:"channelPolicy,omitempty"`
+	Channels           *ChannelsSpec              `json:"channels,omitempty"`
+	Resources          *AgentResourceRequirements `json:"resources,omitempty"`
+	IdleTimeout        string                     `json:"idleTimeout,omitempty"`
 
 	// ContainerManaged indicates whether the controller should manage
 	// container lifecycle for this worker. When false, container
@@ -712,6 +712,51 @@ type HumanSpec struct {
 	// ModelAccess is the per-human model-grant table. Absent means every
 	// model surface is locked (fail-closed).
 	ModelAccess *ModelAccessSpec `json:"modelAccess,omitempty"`
+
+	// WorkspaceAccess holds per-team access rules for this human's file
+	// area (#1414 P2). The default set — accessibleTeams plus every team
+	// that lists the human in spec.humanMembers (its Leader and Worker
+	// SAs) — has readwrite on files/**; Team.spec.admin grants nothing.
+	// Grants extend non-member teams, restrictions narrow default teams,
+	// and a restriction always wins over a grant (fail closed).
+	// memory/** and digest/** are never addressable through the files API
+	// and cannot be granted.
+	WorkspaceAccess *HumanWorkspaceAccess `json:"workspaceAccess,omitempty"`
+}
+
+// HumanWorkspaceAccessRule is one per-team rule of HumanWorkspaceAccess
+// (#1414 P2). Grant rules use mode read|readwrite; restriction rules use
+// none|read (the per-list mode set is enforced by the human-update API,
+// which rejects mismatches with 400). Paths are glob patterns under
+// files/ where "*" matches exactly one segment and "**" matches zero or
+// more whole segments.
+type HumanWorkspaceAccessRule struct {
+	// Team is the metadata.name of the Team CR this rule applies to.
+	// +kubebuilder:validation:MinLength=1
+	Team string `json:"team"`
+	// Paths are the files/ glob patterns this rule covers.
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=16
+	Paths []string `json:"paths"`
+	// Mode is the access level the rule sets: read|readwrite in grants,
+	// none|read in restrictions. The CRD-level enum is the union of both
+	// sets because one struct serves both lists.
+	// +kubebuilder:validation:Enum=none;read;readwrite
+	Mode string `json:"mode"`
+}
+
+// HumanWorkspaceAccess is the per-team workspace access configuration of a
+// human's file area (#1414 P2). At most one rule per team within a list;
+// the same team may appear in both lists, in which case the restriction
+// wins (fail closed).
+type HumanWorkspaceAccess struct {
+	// Grants add access for teams outside the default set.
+	// +kubebuilder:validation:MaxItems=32
+	Grants []HumanWorkspaceAccessRule `json:"grants,omitempty"`
+	// Restrictions narrow the default readwrite of a default team to read
+	// or none.
+	// +kubebuilder:validation:MaxItems=32
+	Restrictions []HumanWorkspaceAccessRule `json:"restrictions,omitempty"`
 }
 
 type IdentitySourceSpec struct {
@@ -758,7 +803,7 @@ type ModelAccessSpec struct {
 type ModelAccessScope struct {
 	// Role is team_leader, worker, "*" or empty ("*" and empty both mean
 	// "every role"; an explicit role block wins over the blanket).
-	Role  string `json:"role,omitempty"`
+	Role string `json:"role,omitempty"`
 	// Table names a ModelAccessTable in the same namespace.
 	Table string `json:"table,omitempty"`
 

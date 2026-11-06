@@ -150,8 +150,19 @@ jobs:
 
       - name: Create bucket
         run: |
-          mc alias set s3 http://127.0.0.1:9000 minioadmin minioadmin
-          mc mb --ignore-existing s3/human-sync-protocol-test
+          # A healthy HTTP endpoint does not mean RustFS can serve S3 setup
+          # calls yet. Use the same bounded, idempotent readiness check as the
+          # lifecycle job before starting the sync protocol regression.
+          deadline=$((SECONDS + 180))
+          until mc alias set s3 http://127.0.0.1:9000 minioadmin minioadmin \
+                && mc mb --ignore-existing s3/human-sync-protocol-test; do
+            if [ "${SECONDS}" -ge "${deadline}" ]; then
+              echo "RustFS did not serve the setup calls within 180s" >&2
+              docker logs rustfs || true
+              exit 1
+            fi
+            sleep 2
+          done
 
       - name: Sync protocol regression
         working-directory: agentteams-controller

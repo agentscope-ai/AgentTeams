@@ -273,13 +273,39 @@ func (h *ResourceHandler) GetWorker(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteError(w, http.StatusNotFound, "get worker: not found")
 }
 
-// teamMemberHit is one entry of ListWorkers' per-request team index: the
-// first team (in list order) that references a worker, and that worker's
-// member ref within it — findTeamMember's first-hit result, precomputed
-// from a single Team list (issue #1475).
+// teamMemberHit is one entry of the per-request team index built by
+// teamMemberIndex: the first team (in list order) that references a
+// worker, and that worker's member ref within it — findTeamMember's
+// first-hit result, precomputed from a single Team list (issue #1475).
 type teamMemberHit struct {
 	team   *v1beta1.Team
 	member string
+}
+
+// teamMemberIndex builds the per-request workerName -> first team hit index from
+// a single Team list (issue #1475). findTeamMember re-lists every Team CR per
+// worker, so any list endpoint must index once instead. Empty workerNames
+// returns an empty map without a List call, matching the per-worker lookups'
+// old call pattern exactly. First team in list order referencing a worker
+// wins, matching findTeamMember's first-hit traversal.
+func teamMemberIndex(ctx context.Context, c client.Client, namespace string, workerNames []string) (map[string]teamMemberHit, error) {
+	if len(workerNames) == 0 {
+		return map[string]teamMemberHit{}, nil
+	}
+	var teams v1beta1.TeamList
+	if err := c.List(ctx, &teams, client.InNamespace(namespace)); err != nil {
+		return nil, err
+	}
+	index := make(map[string]teamMemberHit, len(teams.Items))
+	for i := range teams.Items {
+		team := &teams.Items[i]
+		for _, ref := range team.Spec.WorkerMembers {
+			if _, seen := index[ref.Name]; !seen {
+				index[ref.Name] = teamMemberHit{team: team, member: ref.Name}
+			}
+		}
+	}
+	return index, nil
 }
 
 // workerFields is the parsed ?fields= selection of GET /api/v1/workers
@@ -347,6 +373,79 @@ func projectWorkerListRow(resp WorkerResponse, views workerFields) any {
 	}
 }
 
+// listFields is the parsed ?fields= selection of GET /api/v1/teams and
+// GET /api/v1/humans (issue #1475): which projection each list row
+// carries.
+type listFields int
+
+const (
+	// listFieldsAll is the default: the full response, serialized
+	// byte-identically to the pre-projection implementation.
+	listFieldsAll listFields = iota
+	listFieldsSummary
+)
+
+// parseTeamListFields parses the ?fields= query parameter of
+// GET /api/v1/teams (issue #1475). It is fail-closed on purpose: an
+// unknown token is a 400 before any cluster access, so a typo cannot
+// silently change the payload.
+func parseTeamListFields(raw string) (listFields, error) {
+	return parseSummaryListFields(raw)
+}
+
+// parseHumanListFields parses the ?fields= query parameter of
+// GET /api/v1/humans (issue #1475). Same fail-closed contract as
+// parseTeamListFields.
+func parseHumanListFields(raw string) (listFields, error) {
+	return parseSummaryListFields(raw)
+}
+
+// parseSummaryListFields is the shared parser behind parseTeamListFields
+// and parseHumanListFields. An empty value (or only empty tokens) selects
+// the default full response; otherwise the value must be "summary" (the
+// stable list-card fields) or "all" (the default full response). Token
+// order and duplicates do not matter; "all" cannot be combined with a
+// subset (same fail-closed stance as parseWorkerListFields).
+func parseSummaryListFields(raw string) (listFields, error) {
+	const valid = "summary, all"
+	summary, all := false, false
+	for _, token := range strings.Split(raw, ",") {
+		token = strings.TrimSpace(token)
+		switch token {
+		case "":
+		case "summary":
+			summary = true
+		case "all":
+			all = true
+		default:
+			return 0, fmt.Errorf("invalid fields value %q: valid values are %s", token, valid)
+		}
+	}
+	if all && summary {
+		return 0, fmt.Errorf("invalid fields value: %q cannot be combined with other values; valid values are %s", "all", valid)
+	}
+	if summary {
+		return listFieldsSummary, nil
+	}
+	return listFieldsAll, nil
+}
+
+// projectTeamListRow reduces one team list row to the requested view.
+func projectTeamListRow(resp TeamResponse, views listFields) any {
+	if views == listFieldsSummary {
+		return resp.SummaryView()
+	}
+	return resp
+}
+
+// projectHumanListRow reduces one human list row to the requested view.
+func projectHumanListRow(resp HumanResponse, views listFields) any {
+	if views == listFieldsSummary {
+		return resp.SummaryView()
+	}
+	return resp
+}
+
 func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 	caller := authpkg.CallerFromContext(r.Context())
 	teamFilter := r.URL.Query().Get("team")
@@ -366,27 +465,15 @@ func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Index team membership once per request instead of once per worker
-	// (issue #1475: findTeamMember re-listed every Team CR per worker, so
-	// an N-worker list cost 1 WorkerList + N TeamList round-trips). The
-	// first team in list order referencing a worker wins, matching
-	// findTeamMember's first-hit traversal. An empty worker list skips the
-	// Team list entirely, exactly as the per-worker lookups did.
-	var teams v1beta1.TeamList
-	var teamIndex map[string]teamMemberHit
-	if len(list.Items) > 0 {
-		if err := h.client.List(r.Context(), &teams, client.InNamespace(h.namespace)); err != nil {
-			writeK8sError(w, "list workers: lookup team member", err)
-			return
-		}
-		teamIndex = make(map[string]teamMemberHit, len(teams.Items))
-		for i := range teams.Items {
-			team := &teams.Items[i]
-			for _, ref := range team.Spec.WorkerMembers {
-				if _, seen := teamIndex[ref.Name]; !seen {
-					teamIndex[ref.Name] = teamMemberHit{team: team, member: ref.Name}
-				}
-			}
-		}
+	// (issue #1475) — see teamMemberIndex for the semantics.
+	workerNames := make([]string, 0, len(list.Items))
+	for i := range list.Items {
+		workerNames = append(workerNames, list.Items[i].Name)
+	}
+	teamIndex, err := teamMemberIndex(r.Context(), h.client, h.namespace, workerNames)
+	if err != nil {
+		writeK8sError(w, "list workers: lookup team member", err)
+		return
 	}
 	for i := range list.Items {
 		resp := workerToResponse(&list.Items[i])
@@ -707,6 +794,15 @@ func (h *ResourceHandler) GetTeam(w http.ResponseWriter, r *http.Request) {
 
 func (h *ResourceHandler) ListTeams(w http.ResponseWriter, r *http.Request) {
 	caller := authpkg.CallerFromContext(r.Context())
+	// fields selects a slim projection of each list row (issue #1475);
+	// parsed before any cluster access (fail-closed 400). Absent (or
+	// "all") keeps the default full response byte-identical.
+	fieldViews, err := parseTeamListFields(r.URL.Query().Get("fields"))
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	var list v1beta1.TeamList
 	if err := h.client.List(r.Context(), &list, client.InNamespace(h.namespace)); err != nil {
 		writeK8sError(w, "list teams", err)
@@ -723,7 +819,17 @@ func (h *ResourceHandler) ListTeams(w http.ResponseWriter, r *http.Request) {
 		teams = append(teams, teamToResponse(&list.Items[i]))
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, TeamListResponse{Teams: teams, Total: len(teams)})
+	if fieldViews == listFieldsAll {
+		httputil.WriteJSON(w, http.StatusOK, TeamListResponse{Teams: teams, Total: len(teams)})
+		return
+	}
+	// Projected rows share the envelope shape (teams/total) but carry
+	// only the requested view per row.
+	projected := make([]any, 0, len(teams))
+	for i := range teams {
+		projected = append(projected, projectTeamListRow(teams[i], fieldViews))
+	}
+	httputil.WriteJSON(w, http.StatusOK, teamListProjection{Teams: projected, Total: len(teams)})
 }
 
 func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
@@ -967,6 +1073,12 @@ func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if req.WorkspaceAccess != nil {
+			if err := validateHumanWorkspaceAccess(req.WorkspaceAccess); err != nil {
+				httputil.WriteError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
 
 		if req.DisplayName != nil {
 			human.Spec.DisplayName = *req.DisplayName
@@ -992,6 +1104,13 @@ func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
 			// Full replace (merge-patch): a present table — including an
 			// empty object — replaces the whole grant table.
 			human.Spec.ModelAccess = req.ModelAccess
+		}
+		if req.WorkspaceAccess != nil {
+			// Merge-patch semantics like Capabilities: a present object
+			// replaces the whole object (an empty object clears both
+			// lists); absent or null leaves the spec unchanged.
+			// Validation above already rejected invalid rules.
+			human.Spec.WorkspaceAccess = req.WorkspaceAccess
 		}
 		if req.Note != nil {
 			human.Spec.Note = *req.Note
@@ -1434,6 +1553,15 @@ func (h *ResourceHandler) auditModelAccessChange(ctx context.Context, name strin
 }
 
 func (h *ResourceHandler) ListHumans(w http.ResponseWriter, r *http.Request) {
+	// fields selects a slim projection of each list row (issue #1475);
+	// parsed before any cluster access (fail-closed 400). Absent (or
+	// "all") keeps the default full response byte-identical.
+	fieldViews, err := parseHumanListFields(r.URL.Query().Get("fields"))
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	var list v1beta1.HumanList
 	if err := h.client.List(r.Context(), &list, client.InNamespace(h.namespace)); err != nil {
 		writeK8sError(w, "list humans", err)
@@ -1442,10 +1570,20 @@ func (h *ResourceHandler) ListHumans(w http.ResponseWriter, r *http.Request) {
 
 	humans := make([]HumanResponse, 0, len(list.Items))
 	for i := range list.Items {
-		humans = append(humans, humanToResponse(&list.Items[i]))
+		humans = append(humans, humanListToResponse(&list.Items[i]))
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, HumanListResponse{Humans: humans, Total: len(humans)})
+	if fieldViews == listFieldsAll {
+		httputil.WriteJSON(w, http.StatusOK, HumanListResponse{Humans: humans, Total: len(humans)})
+		return
+	}
+	// Projected rows share the envelope shape (humans/total) but carry
+	// only the requested view per row.
+	projected := make([]any, 0, len(humans))
+	for i := range humans {
+		projected = append(projected, projectHumanListRow(humans[i], fieldViews))
+	}
+	httputil.WriteJSON(w, http.StatusOK, humanListProjection{Humans: projected, Total: len(humans)})
 }
 
 func (h *ResourceHandler) DeleteHuman(w http.ResponseWriter, r *http.Request) {
@@ -1807,18 +1945,18 @@ func teamToResponse(t *v1beta1.Team) TeamResponse {
 
 func managerToResponse(m *v1beta1.Manager) ManagerResponse {
 	resp := ManagerResponse{
-		Name:         m.Name,
-		Phase:        m.Status.Phase,
-		State:        m.Spec.DesiredState(),
-		Model:        m.Spec.Model,
+		Name:          m.Name,
+		Phase:         m.Status.Phase,
+		State:         m.Spec.DesiredState(),
+		Model:         m.Spec.Model,
 		ModelProvider: m.Spec.ModelProvider,
-		Runtime:      m.Spec.Runtime,
-		Image:        m.Spec.Image,
-		MatrixUserID: m.Status.MatrixUserID,
-		RoomID:       m.Status.RoomID,
-		Version:      m.Status.Version,
-		Message:      m.Status.Message,
-		WelcomeSent:  m.Status.WelcomeSent,
+		Runtime:       m.Spec.Runtime,
+		Image:         m.Spec.Image,
+		MatrixUserID:  m.Status.MatrixUserID,
+		RoomID:        m.Status.RoomID,
+		Version:       m.Status.Version,
+		Message:       m.Status.Message,
+		WelcomeSent:   m.Status.WelcomeSent,
 	}
 	resp.RuntimeDeprecated = strings.EqualFold(m.Spec.Runtime, backend.RuntimeCopaw)
 	if resp.Phase == "" {
@@ -1847,6 +1985,17 @@ func humanToResponse(h *v1beta1.Human) HumanResponse {
 	if resp.Phase == "" {
 		resp.Phase = "Pending"
 	}
+	return resp
+}
+
+// humanListToResponse renders a human for a LIST body: identical to
+// humanToResponse except initialPassword, which no list response carries
+// (issue #1475: the one-shot provisioning credential must not ride along
+// on every enumeration). The detail endpoints keep returning it via
+// humanToResponse.
+func humanListToResponse(h *v1beta1.Human) HumanResponse {
+	resp := humanToResponse(h)
+	resp.InitialPassword = ""
 	return resp
 }
 

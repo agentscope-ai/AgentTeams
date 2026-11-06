@@ -1,19 +1,230 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "AgentTeams TeamHarness Plugin",
+  "title": "AgentTeams Plugin",
+  "description": "A plugin manifest in the TeamHarness surface, runtime entry, or runtime-neutral bundle form. Mirrors plugins/scripts/validate-plugin.rb.",
   "type": "object",
-  "required": ["apiVersion", "kind", "metadata", "prompts", "skills", "mcp", "adapters", "package"],
-  "properties": {
-    "apiVersion": { "const": "agentteams.agentteam/v1alpha1" },
-    "kind": { "const": "AgentTeamPlugin" },
-    "metadata": {
+  "oneOf": [
+    {
+      "title": "surface",
+      "description": "TeamHarness-style plugin: a prompts/skills/mcp/adapters surface instead of a runtime entry point.",
       "type": "object",
-      "required": ["name", "version"],
+      "required": [
+        "apiVersion",
+        "kind",
+        "metadata",
+        "prompts",
+        "skills",
+        "mcp",
+        "adapters",
+        "package"
+      ],
       "properties": {
-        "name": { "type": "string" },
-        "version": { "type": "string" }
+        "apiVersion": {
+          "const": "agentteams.agentteam/v1alpha1"
+        },
+        "kind": {
+          "const": "AgentTeamPlugin"
+        },
+        "metadata": {
+          "type": "object",
+          "required": [
+            "name",
+            "version"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    {
+      "title": "entry",
+      "description": "Entry-form plugin (qwen-code-bridge): a runtime entry point instead of the TeamHarness surface.",
+      "type": "object",
+      "required": [
+        "apiVersion",
+        "kind",
+        "metadata",
+        "runtime",
+        "entry",
+        "requires",
+        "package"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "agentteams.agentteam/v1alpha1"
+        },
+        "kind": {
+          "const": "AgentTeamPlugin"
+        },
+        "metadata": {
+          "type": "object",
+          "required": [
+            "name",
+            "version"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          }
+        },
+        "runtime": {
+          "type": "string",
+          "minLength": 1
+        },
+        "entry": {
+          "type": "object",
+          "required": [
+            "backend",
+            "frontend"
+          ],
+          "properties": {
+            "backend": {
+              "type": "string",
+              "minLength": 1
+            },
+            "frontend": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "requires": {
+          "type": "object",
+          "required": [
+            "qwenpaw"
+          ],
+          "properties": {
+            "qwenpaw": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "package": {
+          "type": "object",
+          "required": [
+            "include"
+          ],
+          "properties": {
+            "include": {
+              "type": "array"
+            }
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    {
+      "title": "bundle",
+      "description": "Bundle-form plugin (agentteams-matrix): runtime adapters over a runtime-neutral contract.",
+      "type": "object",
+      "required": [
+        "apiVersion",
+        "kind",
+        "metadata",
+        "requires",
+        "adapters",
+        "package"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "agentteams.agentteam/v1alpha1"
+        },
+        "kind": {
+          "const": "AgentTeamPlugin"
+        },
+        "metadata": {
+          "type": "object",
+          "required": [
+            "name",
+            "version"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          }
+        },
+        "requires": {
+          "type": "object",
+          "required": [
+            "agentteams",
+            "contracts",
+            "tool_schema"
+          ],
+          "properties": {
+            "agentteams": {
+              "type": "string",
+              "minLength": 1
+            },
+            "contracts": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tool_schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "adapters": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "path"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "package": {
+          "type": "object",
+          "required": [
+            "include"
+          ],
+          "properties": {
+            "include": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "not": {
+        "required": [
+          "prompts",
+          "skills",
+          "mcp"
+        ]
       }
     }
-  },
+  ],
   "additionalProperties": true
 }

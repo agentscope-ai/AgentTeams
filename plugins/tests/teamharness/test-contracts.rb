@@ -336,3 +336,20 @@ combined = plugin_files.map { |path| read(path) }.join("\n")
 end
 
 puts "ok: teamharness contracts"
+
+# The two shipped bundle trees must stay byte-identical for team skills.
+def tree_files(root)
+  Dir.glob((root / "**/*").to_s)
+     .select { |path| File.file?(path) }
+     .map { |path| Pathname.new(path).relative_path_from(root).to_s }
+     .sort
+end
+
+team_tree = repo_root / "plugins/teamharness/skills/team"
+agentteams_tree = repo_root / "plugins/agentteams-teamharness/skills/team"
+left = tree_files(team_tree)
+right = tree_files(agentteams_tree)
+assert(left == right, "team skill trees diverge: #{(left - right).inspect} / #{(right - left).inspect}")
+left.each do |rel|
+  assert(read(team_tree / rel) == read(agentteams_tree / rel), "team skill twin differs: #{rel}")
+end

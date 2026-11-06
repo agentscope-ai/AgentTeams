@@ -221,8 +221,10 @@ spec:
 | 角色 | 范围 | 字段 |
 |------|------|------|
 | admin / manager | 任意 Worker | 全部字段 |
-| 团队 Leader | 本团队 Worker | 全部字段 |
+| 团队 Leader | 本团队 Worker | 只读（`403`） |
 | L2 人类用户（`permissionLevel: 2`） | 仅 `accessibleTeams` 内的 Worker | `skills` |
+
+Team Leader 在该端点为只读：Worker 配置写入仅限 Admin/Manager（#1536）。
 
 L2 人类用户可自主管理所协调 Worker 的内置技能分配，无需升级到 admin。`remoteSkills` 与 `mcpServers` 暂不开放给 L2：MCP 路径存在网关消费者密钥泄露风险（生成器会把 `Authorization: Bearer <gatewayKey>` 附加到每个 MCP 条目的 URL 上），因此这两个字段对 L2 调用方返回 `400`，直到提权能力设计落地（见 L2 权限设计 issue #1220）。其余字段——`model`、`image`、`soul`、`agents`、`runtime`、`package`、`expose`、`channelPolicy`、`resources`、`containerManaged`、`state`——仍属团队所有者的权限范围；body 触碰即 `400` 拒绝。越权 Worker（跨团队或独立）对 L2 用户读写均不可见（`404`），端点保持防探测。设计细节见 [L2 Human Worker-Scoped Write](../design/l2-worker-scoped-write.md)。
 

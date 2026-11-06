@@ -237,8 +237,10 @@ When the Controller receives a Worker resource, it executes:
 | Role | Scope | Fields |
 |------|-------|--------|
 | admin / manager | any worker | all fields |
-| team leader | workers in their team | all fields |
+| team leader | own-team workers (read only) | none — every field is `403` |
 | L2 human (`permissionLevel: 2`) | workers in `accessibleTeams` only | `skills` |
+
+Team leaders are read-only on this endpoint: worker configuration writes are reserved for Admin/Manager (#1536).
 
 L2 humans manage the built-in skill assignments of the workers they coordinate without escalating to the admin. `remoteSkills` and `mcpServers` are not L2-writable yet: the MCP path can exfiltrate the gateway consumer key (the generator attaches `Authorization: Bearer <gatewayKey>` to every MCP entry), so both fields return `400` for L2 callers until the elevated-capability design lands (see the L2 permission design issue #1220). Other fields — `model`, `image`, `soul`, `agents`, `runtime`, `package`, `expose`, `channelPolicy`, `resources`, `containerManaged`, `state` — stay in the team owner's domain; a body that touches them is rejected with `400`. Out-of-scope workers (cross-team or standalone) are invisible to L2 humans on both read and update (`404`), keeping the endpoint probe-resistant. See [L2 Human Worker-Scoped Write](../design/l2-worker-scoped-write.md).
 

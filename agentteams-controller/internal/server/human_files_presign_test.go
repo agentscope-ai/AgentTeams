@@ -114,6 +114,13 @@ func presignStatS3Server(t *testing.T) *httptest.Server {
 			_, _ = w.Write([]byte(`<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></LocationConstraint>`))
 			return
 		}
+		if r.URL.Path == "/agentteams-storage" || r.URL.Path == "/agentteams-storage/" {
+			// The bucket exists; only the key is missing below. BucketExists
+			// probes HEAD /<bucket>, and the handler must read a key 404 as a
+			// missing file rather than a gone bucket.
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		if r.URL.Path == "/agentteams-storage/humans/alice/files/a.txt" {
 			w.Header().Set("ETag", `"`+fakePresignETag+`"`)
 			w.Header().Set("Content-Type", "text/plain")

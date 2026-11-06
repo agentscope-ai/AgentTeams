@@ -25,6 +25,13 @@ func statS3Server(t *testing.T, missing bool) *httptest.Server {
 			_, _ = w.Write([]byte(`<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></LocationConstraint>`))
 			return
 		}
+		if isBucketRequest(r) {
+			// The bucket itself exists: BucketExists issues HEAD /<bucket>
+			// and must answer 200, otherwise an object 404 cannot be told
+			// apart from a deleted bucket.
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		if missing {
 			// A 404 with the NoSuchKey error body: the SDK maps it to
 			// minio.ErrorResponse{Code:"NoSuchKey", StatusCode:404}.
@@ -176,5 +183,63 @@ func TestIsSDKNotFoundRejectsBucketErrors(t *testing.T) {
 				t.Fatalf("isSDKNotFound(%v) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+// isBucketRequest reports a bucket-level request (HEAD /<bucket>), the
+// existence probe minio-go's BucketExists performs.
+func isBucketRequest(r *http.Request) bool {
+	return r.URL.Path == "/bucket" || r.URL.Path == "/bucket/"
+}
+
+// bucketGoneS3Server models the case minio-go hides: the bucket was deleted
+// out of band, so the object HEAD answers 404 NoSuchKey (the SDK rewrites the
+// bucket-level 404) while a bucket HEAD still reports NoSuchBucket.
+func bucketGoneS3Server(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("location") {
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = w.Write([]byte(`<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></LocationConstraint>`))
+			return
+		}
+		if isBucketRequest(r) {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`<Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist.</Message></Error>`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`<Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message></Error>`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestKeyScopedCallsNeverReportAGoneBucketAsNotExist(t *testing.T) {
+	c := statClient(bucketGoneS3Server(t))
+	ctx := context.Background()
+
+	err := c.Stat(ctx, "humans/alice/files/a.txt")
+	if err == nil || errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Stat = %v, want a non-not-exist bucket error", err)
+	}
+	if !errors.Is(err, ErrStorageBucketUnavailable) {
+		t.Fatalf("Stat = %v, want ErrStorageBucketUnavailable", err)
+	}
+
+	_, err = c.StatMeta(ctx, "humans/alice/files/a.txt")
+	if err == nil || errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("StatMeta = %v, want a non-not-exist bucket error", err)
+	}
+	if !errors.Is(err, ErrStorageBucketUnavailable) {
+		t.Fatalf("StatMeta = %v, want ErrStorageBucketUnavailable", err)
+	}
+
+	_, err = c.GetObject(ctx, "humans/alice/files/a.txt")
+	if err == nil || errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("GetObject = %v, want a non-not-exist bucket error", err)
+	}
+	if !errors.Is(err, ErrStorageBucketUnavailable) {
+		t.Fatalf("GetObject = %v, want ErrStorageBucketUnavailable", err)
 	}
 }

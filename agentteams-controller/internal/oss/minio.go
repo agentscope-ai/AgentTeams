@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/minio/minio-go/v7"
@@ -73,6 +74,15 @@ type MinIOClient struct {
 	// and for DeletePrefix's marker-key step, and receives the exact
 	// bucket and key the production path deletes.
 	sdkRemoveObject func(ctx context.Context, bucket, key string) error
+	// bucketProbe caches a positive bucket-existence answer. A 404 on a
+	// key-scoped call is ambiguous (minio-go reports NoSuchKey for a HEAD on
+	// a missing bucket too), so the client confirms the bucket exists before
+	// returning os.ErrNotExist. Only a positive answer is cached, for
+	// bucketProbeTTL, so a bucket deleted out of band stops being "present"
+	// within that window at the latest; misses are never cached. A pointer so
+	// WithCredentialSource can hand the clone its own state instead of
+	// copying a mutex.
+	bucketProbe *bucketProbeState
 }
 
 // NewMinIOClient creates a StorageClient. Object I/O goes through the
@@ -88,7 +98,7 @@ func NewMinIOClient(cfg Config) *MinIOClient {
 	if cfg.PublicAlias == "" {
 		cfg.PublicAlias = "agentteams-public"
 	}
-	return &MinIOClient{config: cfg, sdk: &s3Client{}}
+	return &MinIOClient{config: cfg, sdk: &s3Client{}, bucketProbe: &bucketProbeState{}}
 }
 
 // WithCredentialSource returns a copy of the client that fetches credentials
@@ -99,6 +109,7 @@ func (c *MinIOClient) WithCredentialSource(src CredentialSource) *MinIOClient {
 	clone.credSource = src
 	clone.aliasReady = false
 	clone.sdk = &s3Client{} // the clone signs as a different identity
+	clone.bucketProbe = &bucketProbeState{}
 	return &clone
 }
 
@@ -349,6 +360,105 @@ func isSDKNotFound(err error) bool {
 	return resp.StatusCode == http.StatusNotFound && resp.Code == ""
 }
 
+// bucketProbeTTL bounds how long a positive bucket-existence answer is
+// reused. Object 404s are common on the sync path (a manifest that does not
+// exist yet), so probing on every one would add a HEAD round-trip each time;
+// reusing the answer for a short window keeps that flat while still noticing
+// an out-of-band deletion quickly.
+const bucketProbeTTL = 30 * time.Second
+
+// bucketProbeState holds the positive bucket-existence cache; one per client
+// (clones get their own so a credential identity change re-probes).
+type bucketProbeState struct {
+	mu      sync.Mutex
+	okUntil time.Time
+}
+
+// isSDKBucketGone reports the codes a bucket-level 404 carries.
+func isSDKBucketGone(err error) bool {
+	var resp minio.ErrorResponse
+	if !errors.As(err, &resp) {
+		return false
+	}
+	switch resp.Code {
+	case "NoSuchBucket", "NoSuchUpload", "NoSuchVersion":
+		return true
+	}
+	return false
+}
+
+// classifyKeyError normalizes the error of a key-scoped call.
+//
+// A not-found answer is not proof that the object is gone: minio-go maps a
+// 404 on HEAD to NoSuchKey even when the bucket itself disappeared (an
+// out-of-band deletion leaves the cached client's location table intact, so
+// the request still reaches the store and gets the bucket-level 404). Probing
+// bucket existence before returning os.ErrNotExist keeps a storage failure
+// from reading as a deleted file — the same class of bug as D1's outage
+// handling.
+func (c *MinIOClient) classifyKeyError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if isSDKBucketGone(err) {
+		c.forgetBucketProbe()
+		return err // bucket-level codes stay errors, never os.ErrNotExist
+	}
+	if !isSDKNotFound(err) {
+		return err
+	}
+	ok, perr := c.bucketAvailable(ctx)
+	if perr != nil {
+		// Cannot prove the bucket exists → surface the probe failure rather
+		// than claim the object is missing.
+		return perr
+	}
+	if !ok {
+		c.forgetBucketProbe()
+		return fmt.Errorf("%w: %s", ErrStorageBucketUnavailable, c.config.Bucket)
+	}
+	return os.ErrNotExist
+}
+
+// bucketAvailable reports whether the configured bucket still exists,
+// reusing a recent positive answer for bucketProbeTTL.
+func (c *MinIOClient) bucketAvailable(ctx context.Context) (bool, error) {
+	if c.bucketProbe == nil {
+		c.bucketProbe = &bucketProbeState{}
+	}
+	c.bucketProbe.mu.Lock()
+	fresh := time.Now().Before(c.bucketProbe.okUntil)
+	c.bucketProbe.mu.Unlock()
+	if fresh {
+		return true, nil
+	}
+	sdk, err := c.sdkClient()
+	if err != nil {
+		return false, err
+	}
+	ok, err := sdk.BucketExists(ctx, c.config.Bucket)
+	if err != nil {
+		return false, fmt.Errorf("oss: bucket probe: %w", err)
+	}
+	if ok {
+		c.bucketProbe.mu.Lock()
+		c.bucketProbe.okUntil = time.Now().Add(bucketProbeTTL)
+		c.bucketProbe.mu.Unlock()
+	}
+	return ok, nil
+}
+
+// forgetBucketProbe drops the cached positive answer so the next ambiguous
+// 404 probes the store again.
+func (c *MinIOClient) forgetBucketProbe() {
+	if c.bucketProbe == nil {
+		return
+	}
+	c.bucketProbe.mu.Lock()
+	c.bucketProbe.okUntil = time.Time{}
+	c.bucketProbe.mu.Unlock()
+}
+
 // PresignUpload implements PresignUploader. The POST policy form is
 // preferred: its conditions carry the content-length bound (the presign
 // limit) and the content type, so an oversized upload is rejected by the
@@ -463,18 +573,12 @@ func (c *MinIOClient) GetObject(ctx context.Context, key string) ([]byte, error)
 	// the 404 error there, not from the open.
 	obj, err := sdk.GetObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), minio.GetObjectOptions{})
 	if err != nil {
-		if isSDKNotFound(err) {
-			return nil, os.ErrNotExist
-		}
-		return nil, err
+		return nil, c.classifyKeyError(ctx, err)
 	}
 	defer obj.Close()
 	data, err := io.ReadAll(obj)
 	if err != nil {
-		if isSDKNotFound(err) {
-			return nil, os.ErrNotExist
-		}
-		return nil, err
+		return nil, c.classifyKeyError(ctx, err)
 	}
 	return data, nil
 }
@@ -529,10 +633,7 @@ func (c *MinIOClient) Stat(ctx context.Context, key string) error {
 	}
 	_, err = sdk.StatObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), minio.StatObjectOptions{})
 	if err != nil {
-		if isSDKNotFound(err) {
-			return os.ErrNotExist
-		}
-		return err
+		return c.classifyKeyError(ctx, err)
 	}
 	return nil
 }
@@ -549,10 +650,7 @@ func (c *MinIOClient) StatMeta(ctx context.Context, key string) (ObjectMeta, err
 	}
 	info, err := sdk.StatObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), minio.StatObjectOptions{})
 	if err != nil {
-		if isSDKNotFound(err) {
-			return ObjectMeta{}, os.ErrNotExist
-		}
-		return ObjectMeta{}, err
+		return ObjectMeta{}, c.classifyKeyError(ctx, err)
 	}
 	// The SDK strips S3's ETag quotes (the mc stat --json output was
 	// already unquoted), so the two paths hand the caller the same form.

@@ -42,6 +42,7 @@ import (
 	"time"
 
 	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
 // backendEnv is the resolved matrix configuration.
@@ -770,6 +771,80 @@ func TestMatrix_ErrorMapping(t *testing.T) {
 		}
 		if errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("%s = %v, want a non-not-found error: a missing bucket must not read as a missing object (kind=%s)", name, err, env.kind)
+		}
+	}
+}
+
+// matrixRawSDK returns an independent SDK client with its own location
+// cache: mutations made through it are "out of band" from the client under
+// test, which is the case the location-cache bug needed.
+func matrixRawSDK(t *testing.T, env backendEnv) *minio.Client {
+	t.Helper()
+	u, err := url.Parse(env.endpoint)
+	if err != nil {
+		t.Fatalf("parse endpoint %q: %v", env.endpoint, err)
+	}
+	cli, err := minio.New(u.Host, &minio.Options{
+		Creds:  credentials.NewStaticV4(env.ak, env.sk, ""),
+		Secure: u.Scheme == "https",
+	})
+	if err != nil {
+		t.Fatalf("build raw SDK client: %v", err)
+	}
+	return cli
+}
+
+// TestMatrix_BucketDeletedOutOfBand pins the case a same-instance delete
+// cannot reach: another client deletes the bucket, the warmed client's
+// location cache stays intact, and minio-go turns its HEAD 404 into
+// NoSuchKey. Stat, StatMeta and GetObject must not report a missing object —
+// that would read as a deletion to the sync client.
+func TestMatrix_BucketDeletedOutOfBand(t *testing.T) {
+	env := requireBackend(t)
+	ctx := t.Context()
+	admin := matrixRawSDK(t, env)
+
+	bucket := fmt.Sprintf("ghost-%s-%d", env.kind, time.Now().UnixNano())
+	if err := admin.MakeBucket(ctx, bucket, minio.MakeBucketOptions{}); err != nil {
+		t.Skipf("matrix credential cannot create buckets (%v); the ghost-bucket loop covers the read-only case", err)
+	}
+	t.Cleanup(func() {
+		_ = admin.RemoveBucket(context.WithoutCancel(ctx), bucket)
+	})
+
+	warm := NewMinIOClient(Config{
+		Endpoint:      env.endpoint,
+		AccessKey:     env.ak,
+		SecretKey:     env.sk,
+		Bucket:        bucket,
+		StoragePrefix: "",
+		Alias:         "matrix-" + env.kind + "-warm",
+	})
+	if err := warm.PutObject(ctx, "a/b", []byte("x")); err != nil {
+		t.Fatalf("warm PutObject: %v", err)
+	}
+	if err := warm.DeleteObject(ctx, "a/b"); err != nil {
+		t.Fatalf("warm DeleteObject: %v", err)
+	}
+	// The independent client removes the bucket; `warm` keeps its cache.
+	if err := admin.RemoveBucket(ctx, bucket); err != nil {
+		t.Fatalf("remove bucket via the independent client: %v", err)
+	}
+
+	for name, op := range map[string]func() error{
+		"Stat(out-of-band deleted bucket)":     func() error { return warm.Stat(ctx, "a/b") },
+		"StatMeta(out-of-band deleted bucket)": func() error { _, err := warm.StatMeta(ctx, "a/b"); return err },
+		"GetObject(out-of-band deleted bucket)": func() error {
+			_, err := warm.GetObject(ctx, "a/b")
+			return err
+		},
+	} {
+		err := op()
+		if err == nil {
+			t.Fatalf("%s = nil, want a bucket-level error (kind=%s)", name, env.kind)
+		}
+		if errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s = %v, want a non-not-found error: a deleted bucket must not read as a missing object (kind=%s)", name, err, env.kind)
 		}
 	}
 }

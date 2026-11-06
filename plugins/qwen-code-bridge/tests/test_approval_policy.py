@@ -118,9 +118,9 @@ def test_receipt_records_decision(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_compound_semicolon_allow():
+def test_compound_semicolon_deny():
     d = approval.decide("shell", {"command": "pwd; python3 -c 'print(123)'"}, [ROOT])
-    assert d["behavior"] == "allow"
+    assert d["behavior"] == "deny"
 
 
 def test_cat_outside_root_deny():
@@ -140,7 +140,7 @@ def test_cwd_outside_root_deny():
 
 def test_compound_and_deny():
     d = approval.decide("shell", {"command": "echo hi && rm -rf x"}, [ROOT])
-    assert d["behavior"] == "deny" and d["rule"] == "exec-denied"
+    assert d["behavior"] == "deny" and d["rule"] == "exec-compound"
 
 
 def test_command_substitution_dollar_paren_deny():
@@ -170,9 +170,9 @@ def test_dquote_command_substitution_embedded_deny():
     assert d["behavior"] == "deny" and d["rule"] == "exec-substitution"
 
 
-def test_dquote_param_expansion_allow():
+def test_dquote_param_expansion_deny():
     d = approval.decide("shell", {"command": 'git commit -m "${HOME}"'}, [ROOT])
-    assert d["behavior"] == "allow"
+    assert d["behavior"] == "deny"
 
 
 def test_dquote_command_substitution_echo_deny():
@@ -195,28 +195,33 @@ def test_dquote_escaped_backtick_allow():
     assert d["behavior"] == "allow"
 
 
-def test_python_interpreter_allow():
+def test_python_interpreter_deny():
     d = approval.decide("shell", {"command": "python3 -c 1"}, [ROOT])
-    assert d["behavior"] == "allow"
+    assert d["behavior"] == "deny"
     d = approval.decide("shell", {"command": "python3 -m pytest -q"}, [ROOT])
+    assert d["behavior"] == "deny"
+
+
+def test_shell_builtin_cd_inside_root_allow(tmp_path):
+    d = approval.decide("shell", {"command": "cd .", "cwd": str(tmp_path)}, [str(tmp_path)])
     assert d["behavior"] == "allow"
 
 
-def test_shell_builtins_cd_inside_root_allow():
-    d = approval.decide("shell", {"command": "cd .worktrees && ls -la", "cwd": ROOT}, [ROOT])
-    assert d["behavior"] == "allow"
+def test_shell_builtin_compounds_deny():
+    d = approval.decide("shell", {"command": "cd .worktrees && ls -la"}, [ROOT])
+    assert d["behavior"] == "deny"
     d = approval.decide("shell", {"command": "export FOO=1; echo done"}, [ROOT])
-    assert d["behavior"] == "allow"
+    assert d["behavior"] == "deny"
 
 
 def test_shell_builtin_cd_outside_root_deny():
-    d = approval.decide("shell", {"command": "cd /etc && ls"}, [ROOT])
+    d = approval.decide("shell", {"command": "cd /etc"}, [ROOT])
     assert d["behavior"] == "deny" and d["rule"] == "outside-root"
 
 
 def test_bash_c_deny():
     d = approval.decide("shell", {"command": "bash -c 'ls'"}, [ROOT])
-    assert d["behavior"] == "deny" and d["rule"] == "exec-inline-shell"
+    assert d["behavior"] == "deny" and d["rule"] == "exec-denied"
 
 
 def test_sed_inplace_deny():

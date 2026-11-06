@@ -145,6 +145,24 @@ def test_distinct_rule_denials_delivered_without_flipping_sent() -> None:
     assert set(_task()["denial_wakes"]) == {"exec-compound", "outside-root"}
 
 
+def test_coexisting_denials_and_terminal_deliver_once() -> None:
+    injected: list = []
+    svc = _svc()
+    _write_task()
+    _wire_real_callbacks()
+    _note_denial(svc, "exec-compound", "run_shell_command")
+    _note_denial(svc, "outside-root", "cat")
+    wake_queue.enqueue({"task_id": TASK, "text": "terminal-complete", "session_id": ORIGIN})
+    assert len(wake_queue.load()) == 3
+    assert len({r.get("event_id") for r in wake_queue.load() if r.get("kind") == "denial"}) == 2
+    stats = _drain(injected)
+    assert stats == {"sent": 3, "failed": 0, "dropped": 0, "busy": 0}
+    assert len(injected) == 3
+    assert injected[-1]["text"] == "terminal-complete"
+    assert _task()["wake_status"] == "sent"
+    assert not wake_queue.load()
+
+
 def test_third_distinct_rule_denial_still_delivered() -> None:
     """After two delivered denials, a third distinct rule still lands:
     proof the sent marker (which denials never set) cannot suppress it."""

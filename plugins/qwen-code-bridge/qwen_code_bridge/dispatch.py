@@ -545,14 +545,15 @@ def _queue_wake(
     session_id: str,
     error: str,
     kind: str = "terminal",
+    event_id: str = "",
 ) -> None:
     """Persist one wake into the durable queue (shared by both call sites).
 
-    ``kind`` is the record's identity: ``"terminal"`` (the task finished —
+    ``kind`` distinguishes ``"terminal"`` (the task finished —
     the record owns the task file's ``wake_status``) or ``"denial"`` (a
     one-shot mid-run notice — the per-rule ``denial_wakes`` cooldown is its
-    only dedupe).  Records written before this field existed read back as
-    ``"terminal"``.
+    only dedupe). ``event_id`` distinguishes separate denial observations.
+    Records written before ``kind`` existed read back as ``"terminal"``.
     """
     # A task whose wake was already delivered must never be queued again: the
     # durable retry would re-inject the same text (the duplicate-wake reports).
@@ -562,6 +563,7 @@ def _queue_wake(
         {
             "task_id": str(task.get("task_id") or ""),
             "kind": kind,
+            "event_id": event_id,
             "text": text,
             "session_id": session_id,
             "chat_id": str(task.get("chat_id") or ""),
@@ -963,7 +965,10 @@ class DispatchService:
                 f"[bridge] approval denied: {rule} — {reason}"
                 f"（task {task_id}, tool {tool}）"
             )
-            _queue_wake(task, wake, origin, text, sid, "", kind="denial")
+            _queue_wake(
+                task, wake, origin, text, sid, "", kind="denial",
+                event_id=f"{rule}:{now}",
+            )
             wakes[rule] = now
             self._update_task(task_id, {"denial_wakes": wakes})
         except Exception:
@@ -1156,6 +1161,10 @@ class DispatchService:
             return task
         if state != "running":
             return task
+        if task.get("terminating") and (
+            time.time() - _parse_epoch(task.get("updated_at"))
+        ) < STALE_FRESH_SECONDS:
+            return task  # The watchdog still owns the authoritative exit code.
         if _timeout_evidence(task) and not self._pid_alive(task.get("pid")):
             # Budget spent and no live child: the watchdog that should
             # have written `timeout` is gone. Decidable terminal state

@@ -537,7 +537,9 @@ async def web_status() -> dict:
         except Exception:
             binary = ""
     binary = binary or "qwen"
-    if not (os.path.isabs(binary) and os.path.exists(binary)) and shutil.which(binary) is None:
+    if not serve_url() and not (
+        os.path.isabs(binary) and os.path.exists(binary)
+    ) and shutil.which(binary) is None:
         return {
             "reachable": False,
             "url": "",

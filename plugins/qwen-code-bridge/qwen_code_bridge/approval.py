@@ -27,7 +27,7 @@ Shell policy (fail closed, #1411):
    (``; & | < >`` backtick ``$( `` ``${ `` newline ``(){} ``) denies the
    command outright (``exec-compound``).  Inside single quotes such
    characters are data, but double quotes still perform command
-   substitution — backtick and ``$( ``/``${ `` are denied inside double
+   substitution — unescaped ``$`` and backticks are denied inside double
    quotes too (``git commit -m "fix: a;b"`` is fine).
 2. ``shlex.split`` must succeed (``exec-parse`` otherwise) and
    ``argv[0]`` must be a whitelisted program.
@@ -60,7 +60,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shlex
 from pathlib import Path
 from typing import Any, Iterable
@@ -119,7 +118,8 @@ _PAREN_CHARS = frozenset("(){}")
 #: interpreters, network tools, and destructive file utilities.
 #: ``python*`` is matched by prefix (``python``/``python2``/``python3.x``).
 _DENY_PROGRAMS = frozenset({
-    "zsh", "dash", "ash", "ksh", "fish",
+    "sh", "bash", "zsh", "dash", "ash", "ksh", "fish",
+    "node", "ruby",
     "perl", "php",
     "env", "xargs", "sudo", "su", "ssh", "scp",
     "curl", "wget", "awk", "gawk", "mawk", "busybox",
@@ -142,10 +142,7 @@ _ALLOW_PROGRAMS = frozenset({
     "cat", "head", "tail", "wc", "ls", "grep", "rg", "find",
     "pwd", "sort", "uniq", "cut", "tr", "diff", "date", "jq", "yq",
     "echo", "printf", "true", "false", "test", "basename", "dirname", "tee",
-    # dev toolchain (2026-11-05: the worker runs the repo's own gates)
-    "pytest", "python", "python3", "go", "gofmt", "ruby",
-    "node", "npm", "npx", "pnpm", "yarn", "make",
-    "bash", "sh",
+    "pytest",
 })
 
 #: Programs whose *arguments are a program*: they can execute commands or
@@ -215,8 +212,8 @@ def _command_from_input(tool_input: Any) -> str:
 
 def _has_command_substitution(command: str) -> bool:
     """True if the command performs command substitution (backticks or
-    ``$(...)``) outside single quotes. ``${VAR}`` / ``$VAR`` are plain
-    variable expansion and stay allowed.
+    ``$(...)``) outside single quotes. Variable expansion is rejected by
+    the separate compound-command guard.
     """
     quote: str | None = None
     i, n = 0, len(command)
@@ -256,66 +253,50 @@ def _has_command_substitution(command: str) -> bool:
     return False
 
 
-#: Redirection operators (optionally fd-prefixed) and their targets.
-_REDIRECT_RE = re.compile(r"(?P<fd>\d?)&?>>?\s*(?P<target>[^\s;&|<>]+)|(?P<in><)\s*(?P<in_target>[^\s;&|<>]+)")
+def _has_compound_outside_quotes(command: str) -> bool:
+    """True if a shell metacharacter appears outside quotes/escapes.
 
-
-def _split_compound(command: str) -> list[list[str]]:
-    """Split a shell command into simple commands on ``&&``/``||``/``;``/
-    ``|`` (outside quotes) and strip redirections into their targets.
-
-    Returns the argv lists; redirection targets are validated by the
-    caller via ``_redirect_targets``.  Raises ``ValueError`` when the
-    command cannot be tokenized.
+    Tracks single/double quotes and backslash escapes the way the shell
+    would (in double quotes a backslash only escapes ``$`"\\``).
+    Double quotes still expand variables and commands; single quotes do
+    not. Unescaped ``$`` and backticks therefore require review too.
     """
-    lex = shlex.shlex(command, posix=True, punctuation_chars=True)
-    lex.whitespace_split = True
-    tokens = list(lex)
-    segments: list[list[str]] = []
-    current: list[str] = []
-    for token in tokens:
-        if token in ("&&", "||", ";", "|", "&"):
-            if current:
-                segments.append(current)
-            current = []
+    quote: str | None = None
+    i, n = 0, len(command)
+    while i < n:
+        ch = command[i]
+        if quote == "'":
+            if ch == "'":
+                quote = None
+            i += 1
+        elif quote == '"':
+            if ch == "\\" and i + 1 < n and command[i + 1] in "$`\"\\":
+                i += 2
+            elif ch == '"':
+                quote = None
+                i += 1
+            elif ch == "`":
+                return True
+            elif ch == "$":
+                return True
+            else:
+                i += 1
         else:
-            current.append(token)
-    if current:
-        segments.append(current)
-    return segments
-
-
-def _redirect_targets(command: str) -> list[str]:
-    """Paths a command redirects into/from (validated by the caller)."""
-    targets: list[str] = []
-    for match in _REDIRECT_RE.finditer(command):
-        value = match.group("target") or match.group("in_target")
-        if value:
-            targets.append(value)
-    return targets
-
-
-def _strip_redirects(argv: list[str]) -> list[str]:
-    """Drop redirection operators and their targets from one simple
-    command so the per-program operand checks only see real arguments.
-    """
-    out: list[str] = []
-    skip_next = False
-    for token in argv:
-        if skip_next:
-            skip_next = False
-            continue
-        if token in (">", ">>", "<", "2>", "2>>", "1>", "1>>"):
-            skip_next = True
-            continue
-        if token.startswith((">", ">>", "<")) and len(token) > 1:
-            # ``>file`` / ``2>file`` / ``>>file`` attached form
-            continue
-        if re.fullmatch(r"\d?>>?&\d", token):
-            # fd duplication (``2>&1``): not a file operand
-            continue
-        out.append(token)
-    return out
+            if ch == "\\":
+                i += 2
+            elif ch == "'":
+                quote = "'"
+                i += 1
+            elif ch == '"':
+                quote = '"'
+                i += 1
+            elif ch in _COMPOUND_CHARS or ch in _PAREN_CHARS:
+                return True
+            elif ch == "$":
+                return True
+            else:
+                i += 1
+    return False
 
 
 def _git_verdict(args: list[str]) -> tuple[str, str, str] | None:
@@ -449,16 +430,7 @@ def _classify_argv(
                     target,
                 )
         return _result(RISK_ALLOW, "exec-allow", "shell builtin allowed", prog)
-    if prog in ("bash", "sh") and any(
-        a in ("-c", "-lc", "-ic", "-ec", "-xc", "--command") for a in argv[1:]
-    ):
-        return _result(
-            RISK_DENY,
-            "exec-inline-shell",
-            "inline shell code (-c) is not auto-approved; run a script file instead",
-            argv[0],
-        )
-    if prog in _DENY_PROGRAMS:
+    if prog in _DENY_PROGRAMS or prog.startswith("python"):
         return _result(
             RISK_DENY,
             "exec-denied",
@@ -611,15 +583,7 @@ def _classify_argv(
 
 
 def _classify_shell(tool_input: Any, root_list: list[str]) -> dict[str, Any]:
-    """Fail-closed shell policy (see module docstring).
-
-    Compound commands are allowed as long as **every** simple command and
-    every redirection target passes the same program/path policy: pipes,
-    ``&&``, ``||`` and ``;`` are normal in a coding loop (``go test ... |
-    tail``, ``pytest && git status``).  Command substitution (backticks,
-    ``$(...)``) stays denied because it hides a nested command from the
-    static check.
-    """
+    """Validate one literal command; dynamic shell evaluation fails closed."""
     command = _command_from_input(tool_input).strip()
     if not command:
         return _result(RISK_ESCALATE, "exec-empty", "empty command", command)
@@ -630,13 +594,19 @@ def _classify_shell(tool_input: Any, root_list: list[str]) -> dict[str, Any]:
             "command substitution (backticks / $(...)) is not allowed",
             command[:200],
         )
+    if _has_compound_outside_quotes(command):
+        return _result(
+            RISK_DENY, "exec-compound",
+            "compound commands and variable expansion require explicit review",
+            command[:200],
+        )
     try:
-        segments = _split_compound(command)
+        argv = shlex.split(command)
     except ValueError:
         return _result(
             RISK_DENY, "exec-parse", "command could not be tokenized", command[:200]
         )
-    if not segments:
+    if not argv:
         return _result(RISK_DENY, "exec-parse", "command has no argv", command[:200])
 
     cwd_input: str | None = None
@@ -657,38 +627,7 @@ def _classify_shell(tool_input: Any, root_list: list[str]) -> dict[str, Any]:
                 cwd_input,
             )
 
-    base_dir = cwd_input or (root_list[0] if root_list else os.getcwd())
-    for target in _redirect_targets(command):
-        if target in ("/dev/null", "/dev/stdout", "/dev/stderr"):
-            continue
-        if _looks_secret(target):
-            return _result(
-                RISK_DENY,
-                "secret-path",
-                "refuses to redirect into credential-like files",
-                target,
-            )
-        if not _inside(os.path.join(base_dir, os.path.expanduser(target)), root_list):
-            return _result(
-                RISK_DENY,
-                "outside-root",
-                "redirection target is outside the run root",
-                target,
-            )
-
-    for segment in segments:
-        argv = _strip_redirects(segment)
-        if not argv:
-            continue
-        verdict = _classify_argv(argv, cwd_input, root_list, command)
-        if verdict["risk"] != RISK_ALLOW:
-            return verdict
-    return _result(
-        RISK_ALLOW,
-        "exec-allow",
-        "command passed the shell policy",
-        command[:200],
-    )
+    return _classify_argv(argv, cwd_input, root_list, command)
 
 
 def classify_tool(

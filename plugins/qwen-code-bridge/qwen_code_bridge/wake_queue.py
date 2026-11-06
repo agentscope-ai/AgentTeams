@@ -12,7 +12,7 @@ an accident (2026-10-25 incident: five terminal wakes dropped).
 Design
 ------
 * Every failed wake is **persisted** to ``<state>/wake-queue.json``
-  (atomic tmp+rename), deduplicated by ``task_id``.
+  (atomic tmp+rename), deduplicated by task, kind and event identity.
 * A background loop drains due records with exponential backoff
   (5s → 10min cap) for real send failures.  A busy chat — the
   ``/status`` probe or a 409 — simply means "not idle yet": the wake
@@ -47,6 +47,7 @@ a dispatch or a request.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -113,8 +114,18 @@ def _save(records: list[dict[str, Any]]) -> None:
     os.replace(tmp, path)
 
 
+def _identity(record: dict[str, Any]) -> tuple[str, str, str]:
+    kind = str(record.get("kind") or "terminal")
+    event = ""
+    if kind != "terminal":
+        event = str(record.get("event_id") or hashlib.sha256(
+            str(record.get("text") or "").encode("utf-8")
+        ).hexdigest())
+    return str(record.get("task_id") or ""), kind, event
+
+
 def enqueue(record: dict[str, Any]) -> None:
-    """Persist a failed wake (dedup by task_id) and make sure the loop runs."""
+    """Persist a failed wake, deduplicating only the same logical event."""
     task_id = str(record.get("task_id") or "").strip()
     if not task_id:
         return
@@ -122,7 +133,7 @@ def enqueue(record: dict[str, Any]) -> None:
         now = time.time()
         records = load()
         existing = next(
-            (r for r in records if r.get("task_id") == task_id), None
+            (r for r in records if _identity(r) == _identity(record)), None
         )
         if existing is None:
             existing = {
@@ -150,13 +161,13 @@ def enqueue(record: dict[str, Any]) -> None:
 
 
 def discard(task_id: str) -> None:
-    """Drop a queued wake (e.g. an inline retry finally succeeded)."""
+    """Drop this task's terminal wake after an inline delivery succeeds."""
     try:
         tid = str(task_id or "").strip()
         if not tid:
             return
         records = load()
-        kept = [r for r in records if r.get("task_id") != tid]
+        kept = [r for r in records if _identity(r) != (tid, "terminal", "")]
         if len(kept) != len(records):
             _save(kept)
     except Exception as exc:
@@ -211,8 +222,8 @@ def _due(now: float) -> list[dict[str, Any]]:
     ]
 
 
-def _remove(task_id: str) -> None:
-    _save([r for r in load() if r.get("task_id") != task_id])
+def _remove(record: dict[str, Any]) -> None:
+    _save([r for r in load() if _identity(r) != _identity(record)])
 
 
 def _reschedule_busy(record: dict[str, Any], now: float) -> None:
@@ -222,7 +233,7 @@ def _reschedule_busy(record: dict[str, Any], now: float) -> None:
     record["last_busy_at"] = now
     records = load()
     for idx, item in enumerate(records):
-        if item.get("task_id") == record.get("task_id"):
+        if _identity(item) == _identity(record):
             records[idx] = record
             break
     else:
@@ -239,7 +250,7 @@ def _reschedule(record: dict[str, Any], now: float, error: str) -> None:
     record["last_attempt_at"] = now
     records = load()
     for idx, item in enumerate(records):
-        if item.get("task_id") == record.get("task_id"):
+        if _identity(item) == _identity(record):
             records[idx] = record
             break
     else:
@@ -274,7 +285,7 @@ async def drain_once(
             if check_delivered is not None:
                 try:
                     if check_delivered(task_id, kind):
-                        _remove(task_id)
+                        _remove(record)
                         stats["dropped"] += 1
                         logger.info(
                             "wake dropped (already delivered): task=%s", task_id
@@ -283,7 +294,7 @@ async def drain_once(
                 except Exception:
                     pass  # a broken check must not stop delivery
             if int(record.get("attempts") or 0) >= MAX_ATTEMPTS:
-                _remove(task_id)
+                _remove(record)
                 stats["dropped"] += 1
                 logger.warning(
                     "wake dropped after %s attempts: task=%s", MAX_ATTEMPTS, task_id
@@ -291,7 +302,7 @@ async def drain_once(
                 continue
             created = float(record.get("created_at") or 0.0)
             if created and now - created > MAX_AGE_S:
-                _remove(task_id)
+                _remove(record)
                 stats["dropped"] += 1
                 logger.warning("wake dropped after 24h: task=%s", task_id)
                 continue
@@ -343,7 +354,7 @@ async def drain_once(
                     str(exc)[:120],
                 )
             else:
-                _remove(task_id)
+                _remove(record)
                 stats["sent"] += 1
                 logger.info("wake delivered from queue: task=%s", task_id)
                 if _on_delivered is not None:

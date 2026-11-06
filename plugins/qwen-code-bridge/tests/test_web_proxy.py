@@ -65,8 +65,9 @@ def test_status_reports_unreachable(monkeypatch, client) -> None:
     assert "error" in data
 
 
-def test_status_ok(upstream, client) -> None:
+def test_status_ok(upstream, client, monkeypatch) -> None:
     # the fake upstream answers any path, including /health
+    monkeypatch.setattr(web.shutil, "which", lambda binary: None)
     data = client.get("/api/qwen-code-bridge/web/status").json()
     assert data["reachable"] is True
     assert data["status_code"] == 200

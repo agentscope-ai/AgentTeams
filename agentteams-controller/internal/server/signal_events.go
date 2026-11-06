@@ -66,6 +66,11 @@ var signalEmitters = map[string]signalEmitter{
 	"ReplanProject":   {SourceEvent: "project_replanned", EventType: "SIG-DECISION", Origin: "decision_lock", Level: "warn"},
 	"CancelTask":      {SourceEvent: "task_cancelled", EventType: "SIG-DECISION", Origin: "decision_lock", Level: "error"},
 	"CompleteProject": {SourceEvent: "project_completed", EventType: "SIG-COMPLETE", Origin: "submit", Level: "info"},
+	// Attention overdue sweep (#1394 S1): the read path emits the
+	// event for an item whose deadline has passed, so the stream stays
+	// complete without a background writer. The contract row owns the
+	// emitter (replacing the #1394:S2 placeholder) and pins level=error.
+	"AttentionOverdueSweep": {SourceEvent: "attention_overdue", EventType: "SIG-ATTENTION", Origin: "attention_overdue", Level: "error"},
 }
 
 // signalEventID = "ev_" + first 16 hex of sha256(teamID|projectID|taskID|

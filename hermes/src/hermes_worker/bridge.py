@@ -487,6 +487,29 @@ def bridge_openclaw_to_hermes(
             logging_cfg = {}
         existing_yaml["logging"] = {**logging_cfg, **logging_block}
 
+    # The AgentTeams Matrix overlay ships as a user plugin.  Hermes only
+    # loads non-bundled plugins listed under ``plugins.enabled``; add ours
+    # without dropping any other user-selected plugin.  Also clear a stale
+    # disable entry so a previous manual toggle cannot silently fall back to
+    # the stock adapter and lose the Worker policy hooks.
+    plugins = existing_yaml.setdefault("plugins", {})
+    if not isinstance(plugins, dict):
+        plugins = {}
+        existing_yaml["plugins"] = plugins
+    enabled_plugins = plugins.get("enabled")
+    if not isinstance(enabled_plugins, list):
+        enabled_plugins = []
+    if "platforms/matrix" not in enabled_plugins:
+        enabled_plugins.append("platforms/matrix")
+    plugins["enabled"] = enabled_plugins
+    disabled_plugins = plugins.get("disabled")
+    if isinstance(disabled_plugins, list):
+        plugins["disabled"] = [
+            name
+            for name in disabled_plugins
+            if name not in {"platforms/matrix", "matrix-platform"}
+        ]
+
     platforms = existing_yaml.setdefault("platforms", {})
     if not isinstance(platforms, dict):
         platforms = {}

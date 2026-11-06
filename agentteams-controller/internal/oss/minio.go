@@ -6,28 +6,36 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"mime"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
-	"time"
 )
 
-// MinIOClient implements StorageClient using the mc (MinIO Client) CLI.
-// This provides zero-migration-risk compatibility with the existing shell scripts
-// while hiding the mc implementation detail behind the StorageClient interface.
+// MinIOClient implements StorageClient. The object hot path (put / get /
+// stat / delete / one-level list) talks to the S3 API directly through
+// minio-go: one cached client per credential identity, bytes streamed
+// straight to the wire — no temp file, no process spawn, no extra copy per
+// call. The mc CLI stays where the paths we use have no SDK equivalent:
+// bucket creation (EnsureBucket), tree mirroring (Mirror), bulk prefix
+// removal (DeletePrefix) and presigned download URLs (PresignGet, #1501 —
+// mc share download computes the V4 signature for the public alias).
 //
 // The client supports two credential modes:
 //
-//   - Static (default): AccessKey/SecretKey from Config are installed once via
-//     `mc alias set` and reused for every subsequent command.
-//   - Dynamic (credSource != nil): the client skips persistent alias setup and
-//     instead exports MC_HOST_<alias> on every invocation, populated from
-//     CredentialSource.Resolve. This mode is what the external-OSS deployment
-//     uses to feed STS triples from the credential-provider sidecar.
+//   - Static (default): AccessKey/SecretKey from Config sign every request.
+//   - Dynamic (credSource != nil): CredentialSource.Resolve is consulted on
+//     every call and the cached SDK client is rebuilt when the resolved
+//     triple changes (STS rotation). This mode is what the external-OSS
+//     deployment uses to feed STS triples from the credential-provider
+//     sidecar; the mc-backed paths export MC_HOST_<alias> per invocation.
 type MinIOClient struct {
 	config     Config
 	credSource CredentialSource
@@ -35,6 +43,10 @@ type MinIOClient struct {
 	// publicAliasReady tracks the one-time `mc alias set` of the presign
 	// alias (the caller-reachable public endpoint).
 	publicAliasReady bool
+	// sdk caches the minio-go client for the internal endpoint (see
+	// s3Client); a fresh cache per client so a WithCredentialSource clone
+	// never signs with the original client's credential profile.
+	sdk *s3Client
 	// sdkPutIfMatch overrides the SDK conditional write for tests; nil uses
 	// the real minio-go path.
 	sdkPutIfMatch func(ctx context.Context, key string, data []byte, matchETag string) error
@@ -45,14 +57,17 @@ type MinIOClient struct {
 	// task-meta first creation; nil uses the real minio-go path.
 	sdkPutIfNoneMatch func(ctx context.Context, key string, data []byte) error
 	// sdkListObjects overrides the SDK ListObjects channel for tests; nil
-	// uses the real minio-go path. It receives the exact bucket and options
-	// the production path builds, so a coordinate bug (a request prefix
-	// wrapped with the mc StoragePrefix) surfaces as an empty walk against
-	// an S3-faithful store.
+	// uses the real minio-go path. It is the seam for both listing walks
+	// (ListObjectsDetailed and ListObjectsRecursive) and receives the exact
+	// bucket and options the production path builds, so a coordinate bug
+	// (a request prefix wrapped with the mc StoragePrefix) surfaces as an
+	// empty walk against an S3-faithful store.
 	sdkListObjects func(ctx context.Context, bucket string, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo
 }
 
-// NewMinIOClient creates a StorageClient backed by the mc CLI.
+// NewMinIOClient creates a StorageClient. Object I/O goes through the
+// minio-go SDK (s3Client); the mc CLI serves the management paths listed
+// on the type.
 func NewMinIOClient(cfg Config) *MinIOClient {
 	if cfg.MCBinary == "" {
 		cfg.MCBinary = "mc"
@@ -63,17 +78,18 @@ func NewMinIOClient(cfg Config) *MinIOClient {
 	if cfg.PublicAlias == "" {
 		cfg.PublicAlias = "agentteams-public"
 	}
-	return &MinIOClient{config: cfg}
+	return &MinIOClient{config: cfg, sdk: &s3Client{}}
 }
 
 // WithCredentialSource returns a copy of the client that fetches credentials
-// dynamically on every mc invocation. Intended for external-OSS deployments
-// where STS tokens expire periodically.
+// dynamically on every call. Intended for external-OSS deployments where
+// STS tokens expire periodically.
 func (c *MinIOClient) WithCredentialSource(src CredentialSource) *MinIOClient {
 	clone := *c
 	clone.credSource = src
 	clone.aliasReady = false
 	clone.publicAliasReady = false
+	clone.sdk = &s3Client{} // the clone signs as a different identity
 	return &clone
 }
 
@@ -327,38 +343,17 @@ func (c *MinIOClient) sdkPutObjectIfNoneMatch(ctx context.Context, key string, d
 	return err
 }
 
-// sdkClient lazily builds a minio-go client for conditional writes. The
-// regular read/write path stays on the mc CLI (mirror semantics, alias
-// handling, dynamic STS credentials); only If-Match writes need the SDK.
-func (c *MinIOClient) sdkClient() (*minio.Client, error) {
-	// Preserve the endpoint scheme for TLS selection: https:// → Secure,
-	// anything else → plain. The endpoint stays intact (host[:port]).
-	endpoint := c.config.Endpoint
-	secure := false
-	if strings.HasPrefix(endpoint, "https://") {
-		secure = true
+// isSDKNotFound reports whether an SDK error means "the object does not
+// exist": a 404 carrying the S3 NoSuchKey code, or a 404 without a
+// parseable code (backends answer some not-found requests with an empty
+// body). This is the SDK equivalent of the mc "Object does not exist"
+// string match the CLI path used to do.
+func isSDKNotFound(err error) bool {
+	var resp minio.ErrorResponse
+	if !errors.As(err, &resp) {
+		return false
 	}
-	endpoint = strings.TrimPrefix(endpoint, "https://")
-	endpoint = strings.TrimPrefix(endpoint, "http://")
-
-	// Dynamic STS credentials win over the static pair (external OSS /
-	// refreshable tokens); the static pair is the embedded-MinIO default.
-	// A credential-resolution failure is returned, never silently replaced
-	// by the static pair (which would be the wrong identity for STS-based
-	// deployments).
-	accessKey, secretKey, token := c.config.AccessKey, c.config.SecretKey, ""
-	if c.credSource != nil {
-		creds, err := c.credSource.Resolve(context.Background())
-		if err != nil {
-			return nil, fmt.Errorf("resolve dynamic oss credentials: %w", err)
-		}
-		accessKey, secretKey, token = creds.AccessKeyID, creds.AccessKeySecret, creds.SecurityToken
-	}
-
-	return minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(accessKey, secretKey, token),
-		Secure: secure,
-	})
+	return resp.Code == "NoSuchKey" || resp.Code == "NotFound" || resp.StatusCode == http.StatusNotFound
 }
 
 // PresignUpload implements PresignUploader. The POST policy form is
@@ -375,9 +370,9 @@ func (c *MinIOClient) PresignUpload(ctx context.Context, key string, maxBytes in
 	}
 	// Sign for the caller-reachable origin. Rewriting the signed URL's
 	// host later would invalidate its signature; internal I/O keeps Endpoint.
-	public := *c
-	public.config.Endpoint = c.config.PublicEndpoint
-	sdk, err := public.sdkClient()
+	// A fresh one-shot client per issuance (see newPublicSDKClient): the
+	// signature must carry the credential identity resolved at this moment.
+	sdk, err := c.newPublicSDKClient()
 	if err != nil {
 		return "", "", nil, err
 	}
@@ -417,70 +412,78 @@ func (c *MinIOClient) PresignUpload(ctx context.Context, key string, maxBytes in
 
 var _ PresignUploader = (*MinIOClient)(nil)
 
-func (c *MinIOClient) PutObject(ctx context.Context, key string, data []byte) error {
-	if err := c.ensureAlias(ctx); err != nil {
+// putStream is the SDK put shared by the hot-path writes: the bytes are
+// streamed straight to the provider (one PUT, no temp file, no process
+// spawn). contentType is sent verbatim as the object's Content-Type.
+func (c *MinIOClient) putStream(ctx context.Context, key string, r io.Reader, size int64, contentType string) error {
+	sdk, err := c.sdkClient()
+	if err != nil {
 		return err
 	}
-	tmpFile, err := os.CreateTemp("", "agentteams-oss-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
-	}
-	defer os.Remove(tmpFile.Name())
-
-	if _, err := tmpFile.Write(data); err != nil {
-		tmpFile.Close()
-		return fmt.Errorf("write temp file: %w", err)
-	}
-	tmpFile.Close()
-
-	return c.PutFile(ctx, tmpFile.Name(), key)
+	_, err = sdk.PutObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), r, size, minio.PutObjectOptions{ContentType: contentType})
+	return err
 }
 
-// PutObjectWithType writes data with an explicit content type. mc infers the
-// type from the temp file's extension otherwise (application/octet-stream), so
-// the fallback path would lose a tombstone marker without this.
+func (c *MinIOClient) PutObject(ctx context.Context, key string, data []byte) error {
+	// The mc path stored application/octet-stream (the temp file's .tmp
+	// extension maps to nothing better); keep the stored type identical.
+	return c.putStream(ctx, key, bytes.NewReader(data), int64(len(data)), "application/octet-stream")
+}
+
+// PutObjectWithType writes data with an explicit content type (sent as the
+// object's Content-Type header). An empty type degrades to PutObject, which
+// stores application/octet-stream — the same default mc fell back to, so
+// callers that must carry a marker (deletion tombstones) set one.
 func (c *MinIOClient) PutObjectWithType(ctx context.Context, key string, data []byte, contentType string) error {
 	if contentType == "" {
 		return c.PutObject(ctx, key, data)
 	}
-	if err := c.ensureAlias(ctx); err != nil {
-		return err
-	}
-	tmpFile, err := os.CreateTemp("", "agentteams-oss-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
-	}
-	defer os.Remove(tmpFile.Name())
-	if _, err := tmpFile.Write(data); err != nil {
-		tmpFile.Close()
-		return fmt.Errorf("write temp file: %w", err)
-	}
-	tmpFile.Close()
-	_, err = c.runMC(ctx, "cp", "--attr", "Content-Type="+contentType, tmpFile.Name(), c.fullPath(key))
-	return err
+	return c.putStream(ctx, key, bytes.NewReader(data), int64(len(data)), contentType)
 }
 
+// PutFile streams the local file to key. The content type is inferred from
+// the local path's extension exactly the way mc cp did (mime lookup,
+// application/octet-stream when the extension is unknown).
 func (c *MinIOClient) PutFile(ctx context.Context, localPath, key string) error {
-	if err := c.ensureAlias(ctx); err != nil {
+	f, err := os.Open(localPath)
+	if err != nil {
 		return err
 	}
-	_, err := c.runMC(ctx, "cp", localPath, c.fullPath(key))
-	return err
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	contentType := mime.TypeByExtension(filepath.Ext(localPath))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	return c.putStream(ctx, key, f, fi.Size(), contentType)
 }
 
 func (c *MinIOClient) GetObject(ctx context.Context, key string) ([]byte, error) {
-	if err := c.ensureAlias(ctx); err != nil {
+	sdk, err := c.sdkClient()
+	if err != nil {
 		return nil, err
 	}
-	out, err := c.runMC(ctx, "cat", c.fullPath(key))
+	// minio-go issues the GET on the first read: a missing key surfaces as
+	// the 404 error there, not from the open.
+	obj, err := sdk.GetObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), minio.GetObjectOptions{})
 	if err != nil {
-		if strings.Contains(err.Error(), "Object does not exist") ||
-			strings.Contains(err.Error(), "exit status") {
+		if isSDKNotFound(err) {
 			return nil, os.ErrNotExist
 		}
 		return nil, err
 	}
-	return []byte(out), nil
+	defer obj.Close()
+	data, err := io.ReadAll(obj)
+	if err != nil {
+		if isSDKNotFound(err) {
+			return nil, os.ErrNotExist
+		}
+		return nil, err
+	}
+	return data, nil
 }
 
 // PresignGet mints a presigned download URL for the object at key that
@@ -528,13 +531,13 @@ func (c *MinIOClient) PresignGet(ctx context.Context, key string, ttl time.Durat
 }
 
 func (c *MinIOClient) Stat(ctx context.Context, key string) error {
-	if err := c.ensureAlias(ctx); err != nil {
+	sdk, err := c.sdkClient()
+	if err != nil {
 		return err
 	}
-	_, err := c.runMC(ctx, "stat", c.fullPath(key))
+	_, err = sdk.StatObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), minio.StatObjectOptions{})
 	if err != nil {
-		if strings.Contains(err.Error(), "Object does not exist") ||
-			strings.Contains(err.Error(), "exit status") {
+		if isSDKNotFound(err) {
 			return os.ErrNotExist
 		}
 		return err
@@ -542,85 +545,49 @@ func (c *MinIOClient) Stat(ctx context.Context, key string) error {
 	return nil
 }
 
-// StatMeta returns the object's size and last-modified time by invoking
-// `mc stat --json <fullpath>` and parsing the lastModified field. The last
-// modified time is second-precision (MinIO), which is sufficient for the
-// low-frequency human-intervention optimistic lock (W-PR-2): the check
-// catches "Controller read then Worker pushed before the write".
+// StatMeta returns the object's size, last-modified time, ETag and content
+// type by reading the S3 response headers of a HEAD request. The last
+// modified time is second-precision (the HTTP header), which is sufficient
+// for the low-frequency human-intervention optimistic lock (W-PR-2): the
+// check catches "Controller read then Worker pushed before the write".
 func (c *MinIOClient) StatMeta(ctx context.Context, key string) (ObjectMeta, error) {
-	if err := c.ensureAlias(ctx); err != nil {
+	sdk, err := c.sdkClient()
+	if err != nil {
 		return ObjectMeta{}, err
 	}
-	out, err := c.runMC(ctx, "stat", "--json", c.fullPath(key))
+	info, err := sdk.StatObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), minio.StatObjectOptions{})
 	if err != nil {
-		if strings.Contains(err.Error(), "Object does not exist") ||
-			strings.Contains(err.Error(), "exit status") {
+		if isSDKNotFound(err) {
 			return ObjectMeta{}, os.ErrNotExist
 		}
 		return ObjectMeta{}, err
 	}
-	// mc stat --json has no top-level content type: S3 response headers land
-	// in the canonicalized `metadata` map (Content-Type, X-Amz-Meta-*, ...).
-	// The top-level field is accepted as a fallback so a future/other client
-	// shape still works.
-	return parseMCStatJSON(out)
-}
-
-// parseMCStatJSON decodes `mc stat --json` into ObjectMeta. Extracted so the
-// parsing contract (metadata map vs. top-level field) is testable without the
-// mc binary.
-func parseMCStatJSON(out string) (ObjectMeta, error) {
-	var info struct {
-		LastModified string            `json:"lastModified"`
-		Size         int64             `json:"size"`
-		ETag         string            `json:"etag"`
-		ContentType  string            `json:"contentType"`
-		Metadata     map[string]string `json:"metadata"`
-	}
-	if err := json.Unmarshal([]byte(out), &info); err != nil {
-		return ObjectMeta{}, fmt.Errorf("parse mc stat --json: %w", err)
-	}
-	modTime, err := time.Parse(time.RFC3339, info.LastModified)
-	if err != nil {
-		return ObjectMeta{}, fmt.Errorf("parse lastModified %q: %w", info.LastModified, err)
-	}
-	contentType := info.ContentType
-	if contentType == "" {
-		contentType = contentTypeFromMCMetadata(info.Metadata)
-	}
-	return ObjectMeta{Size: info.Size, ModTime: modTime, ETag: info.ETag, ContentType: contentType}, nil
-}
-
-// contentTypeFromMCMetadata reads Content-Type out of mc's metadata map. S3
-// clients canonicalize header names, but the map is decoded from JSON, so the
-// lookup is case-insensitive and also accepts the lower-case and
-// X-Amz-Meta-Content-Type spellings some backends emit. RustFS serves the same
-// S3 headers, so the same lookup applies there.
-func contentTypeFromMCMetadata(metadata map[string]string) string {
-	if len(metadata) == 0 {
-		return ""
-	}
-	clean := make(map[string]string, len(metadata))
-	for key, value := range metadata {
-		clean[strings.ToLower(strings.TrimSpace(key))] = strings.TrimSpace(value)
-	}
-	// Precedence is explicit so a map iteration order cannot change the result.
-	for _, key := range []string{"content-type", "x-amz-meta-content-type"} {
-		if value := clean[key]; value != "" {
-			return value
-		}
-	}
-	return ""
+	// The SDK strips S3's ETag quotes (the mc stat --json output was
+	// already unquoted), so the two paths hand the caller the same form.
+	return ObjectMeta{
+		Size:        info.Size,
+		ModTime:     info.LastModified,
+		ETag:        info.ETag,
+		ContentType: info.ContentType,
+	}, nil
 }
 
 func (c *MinIOClient) DeleteObject(ctx context.Context, key string) error {
-	if err := c.ensureAlias(ctx); err != nil {
+	sdk, err := c.sdkClient()
+	if err != nil {
 		return err
 	}
-	_, err := c.runMC(ctx, "rm", c.fullPath(key))
-	return err
+	// S3 DeleteObject answers 204 even for a missing key, so this is
+	// idempotent where `mc rm` errored on a missing object. Every caller
+	// uses deletion for cleanup/rollback (errors are ignored), which the
+	// idempotent form suits; none depends on the missing-key error.
+	return sdk.RemoveObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), minio.RemoveObjectOptions{})
 }
 
+// Mirror keeps the mc CLI: there is no minio-go equivalent of
+// `mc mirror --remove` (reconcile src into dst while deleting dst's
+// surplus objects), and skill sync is a low-frequency management
+// operation, not hot-path I/O.
 func (c *MinIOClient) Mirror(ctx context.Context, src, dst string, opts MirrorOptions) error {
 	if err := c.ensureAlias(ctx); err != nil {
 		return err
@@ -647,6 +614,10 @@ func (c *MinIOClient) Mirror(ctx context.Context, src, dst string, opts MirrorOp
 	return err
 }
 
+// DeletePrefix keeps the mc CLI: the SDK equivalent is ListObjects plus
+// one RemoveObject per key (N+1 requests), while `mc rm --recursive
+// --force` is a single atomic batch call. It is a low-frequency
+// cleanup/rollback operation, never hot-path I/O.
 func (c *MinIOClient) DeletePrefix(ctx context.Context, prefix string) error {
 	if err := c.ensureAlias(ctx); err != nil {
 		return err
@@ -667,6 +638,14 @@ func (c *MinIOClient) ListObjects(ctx context.Context, prefix string) ([]string,
 	return names, nil
 }
 
+// ListObjectsDetailed returns the one-level view of prefix: direct
+// children by name (spaces intact) and nested subtrees as "dir/" entries,
+// in the storage's lexicographic order. It asks the storage API for the
+// one-level view directly — a non-recursive listing, which the S3
+// delimiter answer serves as direct-child objects plus common prefixes —
+// so there is no local synthesis of directory entries and no text parsing
+// that could truncate a name (the mc era split the human-readable form on
+// spaces and had to bolt on the JSON/find fallbacks).
 func (c *MinIOClient) ListObjectsDetailed(ctx context.Context, prefix string) ([]ObjectInfo, error) {
 	// One-level listing through the SDK, the same path ListObjectsRecursive
 	// already uses. The mc fallbacks this replaces depended on the binary:
@@ -808,6 +787,10 @@ func (c *MinIOClient) ListObjectsRecursive(ctx context.Context, prefix, startAft
 	return infos, nextKey, nil
 }
 
+// EnsureBucket creates the configured bucket if it does not already
+// exist. It keeps the mc CLI on purpose: this runs once at controller
+// startup (not per request), and `mc mb --ignore-existing` is the
+// idempotent form already in place.
 func (c *MinIOClient) EnsureBucket(ctx context.Context) error {
 	if err := c.ensureAlias(ctx); err != nil {
 		return err

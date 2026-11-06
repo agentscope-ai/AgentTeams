@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -96,10 +97,40 @@ func writeFakeMCServer(t *testing.T, dir string) string {
 	return scriptPath
 }
 
+// presignStatS3Server is the minimal S3 surface the presign path's SDK
+// stat performs: the one-time signed location lookup plus a HEAD that
+// serves the canned file (etag/size/content type) and 404s every other
+// key. Only the stat moved to the SDK with the hot-path change; PresignGet
+// still mints its URL through the fake mc's `share download`.
+func presignStatS3Server(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("location") {
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = w.Write([]byte(`<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></LocationConstraint>`))
+			return
+		}
+		if r.URL.Path == "/agentteams-storage/humans/alice/files/a.txt" {
+			w.Header().Set("ETag", `"`+fakePresignETag+`"`)
+			w.Header().Set("Content-Type", "text/plain")
+			w.Header().Set("Content-Length", strconv.Itoa(fakePresignSize))
+			w.Header().Set("Last-Modified", "Sat, 31 Oct 2026 12:00:00 GMT")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`<Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message></Error>`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 // newHumanPresignRig builds the handler against a fake k8s client (humans
-// alice and bob), a real MinIOClient whose MCBinary is the fake mc script,
-// and a live audit client on a separate in-memory store. It returns the
-// handler, the audit store, and the fake-mc temp dir (marker / args log).
+// alice and bob), a real MinIOClient whose MCBinary is the fake mc script
+// (for the still-mc PresignGet) and whose Endpoint is a minimal S3 fake
+// (for the SDK stat), and a live audit client on a separate in-memory
+// store. It returns the handler, the audit store, and the fake-mc temp dir
+// (marker / args log).
 func newHumanPresignRig(t *testing.T) (*humanFilesHandler, *ossfake.Memory, string) {
 	return newHumanPresignRigWithPublic(t, "http://fake-pub:9000")
 }
@@ -126,6 +157,7 @@ func newHumanPresignRigWithPublic(t *testing.T, publicEndpoint string) (*humanFi
 	dir := t.TempDir()
 	sc := oss.NewMinIOClient(oss.Config{
 		MCBinary:       writeFakeMCServer(t, dir),
+		Endpoint:       presignStatS3Server(t).URL,
 		Alias:          "agentteams",
 		StoragePrefix:  "agentteams/agentteams-storage",
 		Bucket:         "agentteams-storage",

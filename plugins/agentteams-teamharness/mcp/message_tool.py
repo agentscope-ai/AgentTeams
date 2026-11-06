@@ -15,6 +15,9 @@ import urllib.parse
 import urllib.request
 
 from mcp.common.paths import _optional_workspace_dir
+from mcp.common import refs
+
+_filesync = refs.proxy("_filesync")
 
 
 SELF_TRIGGER_MESSAGE_TYPES = {"PROJECT_REQUESTED"}
@@ -413,7 +416,7 @@ def message(arguments: dict[str, Any], deps: MessageToolDeps) -> dict[str, Any]:
             workspace_dir = _optional_workspace_dir(arguments)
             if workspace_dir is not None:
                 digest = hashlib.sha256(f"{target_id}\0{message_text}".encode("utf-8")).hexdigest()[:16]
-                report_relpath = f"shared/reports/report-{digest}.md"
+                report_relpath = f"shared/reports/{digest}/report.md"
                 report_path = workspace_dir / report_relpath
                 send_text = "\n".join(lines[:5]) + f"\n…中间 {len(lines) - 5} 行见 {report_relpath}"
     content = deps.matrix_content(send_text, mentions)
@@ -486,6 +489,11 @@ def message(arguments: dict[str, Any], deps: MessageToolDeps) -> dict[str, Any]:
             report_path.write_text(report_body, encoding="utf-8")
         except OSError as exc:
             return {"ok": False, "tool": "message", "error": f"full report could not be written: {exc}"}
+        for sync_action in ("push", "stat"):
+            sync_args = dict(arguments)
+            sync_args.update(action=sync_action, path=base["fullReportPath"])
+            if not _filesync(sync_args).get("ok"):
+                return {"ok": False, "tool": "message", "error": "full report could not be published to shared storage"}
 
     room_id = urllib.parse.quote(target_id, safe="")
     txn_id = f"teamharness-{os.getpid()}-{int(time.time() * 1000)}"

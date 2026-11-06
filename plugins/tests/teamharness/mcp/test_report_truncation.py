@@ -2,7 +2,7 @@
 """TH-11: report bodies sent through the message tool are capped at 5 lines.
 
 - a body longer than 5 lines is truncated to the first 5 lines plus a
-  pointer line ``…中间 N 行见 shared/reports/report-<digest>.md``;
+  pointer line ``…中间 N 行见 shared/reports/<digest>/report.md``;
 - the full text is written to that path only when the message is
   actually sent (a dryRun shows the exact pointer without writing);
 - the @target survives the truncation: mentions are computed on the
@@ -65,7 +65,7 @@ class _SendCapture:
 
 def _report_relpath(text: str) -> str:
     digest = hashlib.sha256(f"{ROOM}\0{text}".encode("utf-8")).hexdigest()[:16]
-    return f"shared/reports/report-{digest}.md"
+    return f"shared/reports/{digest}/report.md"
 
 
 def _pointer(text: str) -> str:
@@ -86,6 +86,16 @@ def _prepare(
         monkeypatch.setenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "test-token")
         capture = _SendCapture()
         monkeypatch.setattr(server.urllib.request, "urlopen", capture.urlopen)
+        remote = tmp_path / "remote-shared"
+
+        def filesync(arguments: dict[str, Any]) -> dict[str, Any]:
+            target = remote / arguments["path"]
+            if arguments["action"] == "push":
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((tmp_path / arguments["path"]).read_bytes())
+            return {"ok": target.is_file()}
+
+        monkeypatch.setattr(server, "_filesync", filesync)
     monkeypatch.setattr(
         server.message,
         "_record_matrix_outbound_to_session",
@@ -211,6 +221,64 @@ def test_report_write_failure_returns_tool_error_without_sending(
     assert sent["ok"] is False
     assert "report" in sent["error"]
     assert capture is not None and capture.requests == []
+
+
+def test_report_is_published_before_notification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capture = _prepare(tmp_path, monkeypatch)
+    assert capture is not None
+    remote = tmp_path / "remote-shared"
+    receiver = tmp_path / "receiver"
+    calls = []
+
+    def filesync(arguments: dict[str, Any]) -> dict[str, Any]:
+        action, rel = arguments["action"], arguments["path"]
+        calls.append(action)
+        assert not capture.requests, "notification preceded shared publication"
+        target = remote / rel
+        if action == "push":
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((tmp_path / rel).read_bytes())
+            return {"ok": True}
+        assert action == "stat"
+        return {"ok": target.is_file()}
+
+    monkeypatch.setattr(server, "_filesync", filesync)
+    text = "\n".join(f"line {i}" for i in range(8))
+    sent = _send(tmp_path, text)
+    assert sent["ok"] is True
+    assert calls == ["push", "stat"]
+    rel = sent["fullReportPath"]
+    (receiver / rel).parent.mkdir(parents=True, exist_ok=True)
+    (receiver / rel).write_bytes((remote / rel).read_bytes())
+    assert (receiver / rel).read_text() == text + "\n"
+    assert len(capture.requests) == 1
+
+
+@pytest.mark.parametrize("failed_action", ["push", "stat"])
+def test_report_publication_failure_does_not_send_pointer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_action: str
+) -> None:
+    capture = _prepare(tmp_path, monkeypatch)
+    assert capture is not None
+    monkeypatch.setattr(server, "_filesync", lambda args: {"ok": args["action"] != failed_action})
+    sent = _send(tmp_path, "\n".join(f"line {i}" for i in range(8)))
+    assert sent["ok"] is False
+    assert "report" in sent["error"]
+    assert not capture.requests
+
+
+def test_report_filesync_push_uses_single_file_copy(tmp_path: Path) -> None:
+    report = tmp_path / "shared/reports/test/report.md"
+    report.parent.mkdir(parents=True)
+    report.write_text("full report\n")
+    result = server._filesync({
+        "action": "push", "path": "shared/reports/test/report.md",
+        "workspaceDir": str(tmp_path), "storage": {"sharedPrefix": "test/shared"}, "dryRun": True,
+    })
+    assert result["ok"] is True
+    assert result["command"] == ["mc", "cp", str(report), "test/shared/reports/test/report.md"]
 
 
 def test_no_workspace_passes_through_unchanged(

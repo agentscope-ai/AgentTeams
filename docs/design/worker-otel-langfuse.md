@@ -65,7 +65,11 @@ flowchart LR
 
 用量来自实际响应 usage，缺失显示未上报；费用只使用 Langfuse 已知模型计价，空计价明细显示“未计价”，不把零汇总值视为免费。
 
-列表/详情 BFF 均要求管理员 level 3，固定服务端地址、禁止重定向、限制超时，不向浏览器暴露项目密钥或上游原文错误。未实现租户访问范围前不向普通用户开放。
+Team 和 Worker 下拉选项使用当前登录凭据查询 Controller，复用 Controller 的 accessibleTeams / accessibleWorkers 关系。选择 Team 后只展示其中可访问的 Worker；“全部”也仅指当前账号的范围。列表、详情、上游跳转和会话导出逐次校验同一权限范围，手填 Worker、Team、Session 或 Trace ID 不能绕过。
+
+BFF 将授权 Worker 过滤下推给 Langfuse，再校验每条 Trace 的 Worker 和当时的 Team 归属，完成过滤后才计算分页和总数。归属缺失、Worker 已删除或归属与当前 Team 不一致的历史数据不向该资源范围放行。Controller 无法确认权限时查询失败，不回退到整个 Langfuse 项目；普通账号的会话缺失时也不允许代理降级使用管理员 SA。
+
+Langfuse 项目及密钥必须按 Controller 部署/组织隔离，不同组织不可共用项目后仅依靠同名 Worker/Team 标签划分权限。这里复用现有 Controller 的资源关系，不引入新的组织模型。服务端地址固定，禁止浏览器改选 Controller 后套用当前 Langfuse 密钥；禁止重定向、限制超时，不向浏览器暴露项目密钥或上游原文错误。普通账号不返回 Langfuse 项目直达链接。
 
 ## 内容与可靠性边界
 

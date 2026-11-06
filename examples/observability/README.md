@@ -11,7 +11,9 @@ AT 与 Dashboard 均使用本地分支 codex/worker-otel-langfuse-demo，工作�
 
 在 Dashboard 选择 trace-qwenpaw 或 trace-hermes，打开执行记录，点“查看整个会话”，逐轮查看模型、工具、错误和 Matrix 回复。点击“查看上游 Worker Trace”回到交接源；“导出会话 JSON”读取所有分页和每轮 observations。Task 为 matrix-qwenpaw-acceptance / matrix-hermes-acceptance，Project 为 tracing-demo，Team 为 tracing-team。
 
-Dashboard 使用正式“控制台 → 治理 → Tracing”同一组件和管理员 BFF。独立入口由 AGENTTEAMS_TRACING_DEMO=true 启用；演示仅绑定 localhost，使用本地开发身份，仅持有这个隔离 Langfuse 项目密钥。
+Dashboard 使用正式“控制台 → 治理 → Tracing”同一组件和资源权限 BFF。正式登录后，Team/Worker 下拉和列表、详情、导出使用当前账号经 Controller 确认的访问范围，选择 Team 后 Worker 联动过滤。
+
+独立入口由 AGENTTEAMS_TRACING_DEMO=true 启用；演示仅绑定 localhost，使用本地开发身份，仅持有这个隔离 Langfuse 项目密钥。本机没有真实组织账号/Controller，因此启动脚本显式配置 AGENTTEAMS_TRACING_DEMO_SCOPE，只允许 tracing-team 的 trace-qwenpaw / trace-hermes，不以 Langfuse 历史记录推导账号权限。该演示清单仅在演示开关和 AUTH_DISABLED 同时开启、身份为本地管理员时使用；正式账号必须查询 Controller。
 
 ## 本次覆盖
 
@@ -91,4 +93,4 @@ SDK 依赖固定在 shared/lib/telemetry/requirements.txt。完整构建走 Make
 
 已验证的层次包括：Python 与 Matrix 通道回归、Dashboard API/组件交互、会话分页导出、类型检查、lint、标准生产构建、两种标准 Worker 入口与真实模型/工具、Langfuse/Dashboard 回读。故障夹具能保留 HTTP 429 和随后 200 的两个请求。
 
-当前 Work 设置禁用本地浏览器自动化，未完成浏览器视觉验收；已做组件交互与实际页面/API HTTP 检查。没有推送分支、发布镜像或改动现有 AT 部署。
+已完成本机浏览器视觉验收；权限测试覆盖两个账号的 Controller 凭据、资源下拉联动、越权筛选/详情和受限会话分页。未使用真实组织账号进行线上验收。没有推送分支、发布镜像或改动现有 AT 部署。

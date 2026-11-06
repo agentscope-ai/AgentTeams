@@ -1,6 +1,7 @@
 import sys
 import tempfile
 import unittest
+import urllib.parse
 from pathlib import Path
 from unittest.mock import patch
 
@@ -24,6 +25,62 @@ from matrix_bridge import (  # noqa: E402
     text_events,
     visible_matrix_user_ids,
 )
+
+
+class LimitedTimelineTest(unittest.TestCase):
+    @staticmethod
+    def event(event_id):
+        return {
+            "event_id": event_id,
+            "sender": "@admin:matrix.local",
+            "type": "m.room.message",
+            "content": {"msgtype": "m.text", "body": event_id},
+        }
+
+    def test_backfills_limited_timeline_in_order_across_empty_pages(self):
+        room_id = "!watched:matrix.local"
+        timeline = {"limited": True, "prev_batch": "end/+", "events": [self.event("$latest")]}
+        payload = {"rooms": {"join": {
+            room_id: {"timeline": timeline},
+            "!unwatched:matrix.local": {"timeline": {"limited": True, "events": []}},
+        }}}
+        client = MatrixClient("http://matrix.local", "token")
+        pages = [
+            {"chunk": [self.event("$older")], "end": "middle/+"},
+            {"chunk": [], "end": "last/+"},
+            {"chunk": [self.event("$newer"), self.event("$latest")]},
+        ]
+        with patch.object(client, "request", side_effect=pages) as request:
+            client.fill_timeline_gaps(payload, "start/+", {room_id: "personal"})
+
+        self.assertEqual(
+            [item["event_id"] for item in text_events(payload, {room_id: "personal"}, "@worker:matrix.local")],
+            ["$older", "$newer", "$latest"],
+        )
+        self.assertEqual(request.call_count, 3)
+        for call, start in zip(request.call_args_list, ["start/+", "middle/+", "last/+"]):
+            method, path = call.args
+            parsed = urllib.parse.urlsplit(path)
+            self.assertEqual(method, "GET")
+            self.assertIn(urllib.parse.quote(room_id, safe=""), parsed.path)
+            self.assertEqual(
+                urllib.parse.parse_qs(parsed.query),
+                {"from": [start], "to": ["end/+"], "dir": ["f"], "limit": ["100"]},
+            )
+
+    def test_missing_boundary_and_repeated_page_token_do_not_consume_timeline(self):
+        room_id = "!watched:matrix.local"
+        timeline = {"limited": True, "events": [self.event("$latest")]}
+        payload = {"rooms": {"join": {room_id: {"timeline": timeline}}}}
+        client = MatrixClient("http://matrix.local", "token")
+        with self.assertRaisesRegex(RuntimeError, "prev_batch"):
+            client.fill_timeline_gaps(payload, "start", {room_id: "personal"})
+
+        timeline["prev_batch"] = "end"
+        with patch.object(client, "request", return_value={"chunk": [self.event("$older")], "end": "start"}):
+            with self.assertRaisesRegex(RuntimeError, "pagination"):
+                client.fill_timeline_gaps(payload, "start", {room_id: "personal"})
+        self.assertEqual(timeline["events"], [self.event("$latest")])
 
 
 class TextEventsTest(unittest.TestCase):

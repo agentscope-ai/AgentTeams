@@ -399,7 +399,7 @@ jobs:
           python -m pip install \
             'pytest>=8.3,<10' \
             'PyYAML>=6.0,<7' \
-            'jsonschema>=4,<5'
+            'jsonschema>=4.20,<5'
 
       - name: Run plugin release contract tests
         run: |

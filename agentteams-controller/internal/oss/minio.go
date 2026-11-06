@@ -317,6 +317,62 @@ func (c *MinIOClient) sdkClient() (*minio.Client, error) {
 	})
 }
 
+// PresignUpload implements PresignUploader. The POST policy form is
+// preferred: its conditions carry the content-length bound (the presign
+// limit) and the content type, so an oversized upload is rejected by the
+// provider itself. When the provider cannot build or sign a POST policy the
+// call degrades to a presigned PUT — the bound and the digest are then
+// enforced by the commit endpoint, which re-checks size and sha256 before
+// accounting. (A POST policy condition cannot bind the sha256 portably, so
+// the digest never appears in the signed form; commit is its enforcer.)
+func (c *MinIOClient) PresignUpload(ctx context.Context, key string, maxBytes int64, contentType, sha256Hex string, ttl time.Duration) (string, string, map[string]string, error) {
+	if c.config.PublicEndpoint == "" {
+		return "", "", nil, ErrPresignUnsupported
+	}
+	// Sign for the caller-reachable origin. Rewriting the signed URL's
+	// host later would invalidate its signature; internal I/O keeps Endpoint.
+	public := *c
+	public.config.Endpoint = c.config.PublicEndpoint
+	sdk, err := public.sdkClient()
+	if err != nil {
+		return "", "", nil, err
+	}
+	// The SDK selects the bucket itself, so the signed object name is the
+	// bucket-relative key — fullPath (mc alias/bucket prefix) only applies
+	// to mc invocations. Signing fullPath made the browser upload land under
+	// agentteams/agentteams-storage/<key> while commit read <key>, which the
+	// real RustFS surfaced as 404 object_missing after a 204 upload.
+	object := strings.TrimPrefix(key, "/")
+	policy := minio.NewPostPolicy()
+	perr := policy.SetBucket(c.config.Bucket)
+	if perr == nil {
+		perr = policy.SetKey(object)
+	}
+	if perr == nil {
+		perr = policy.SetExpires(time.Now().UTC().Add(ttl))
+	}
+	if perr == nil {
+		perr = policy.SetContentLengthRange(0, maxBytes)
+	}
+	if perr == nil && contentType != "" {
+		perr = policy.SetContentType(contentType)
+	}
+	if perr == nil {
+		if u, form, serr := sdk.PresignedPostPolicy(ctx, policy); serr == nil {
+			return "POST", u.String(), form, nil
+		}
+	}
+	// The policy could not be built or signed; fall back to a presigned PUT
+	// (whose error is what is returned when that fails too).
+	u, perr := sdk.PresignedPutObject(ctx, c.config.Bucket, object, ttl)
+	if perr != nil {
+		return "", "", nil, perr
+	}
+	return "PUT", u.String(), nil, nil
+}
+
+var _ PresignUploader = (*MinIOClient)(nil)
+
 func (c *MinIOClient) PutObject(ctx context.Context, key string, data []byte) error {
 	if err := c.ensureAlias(ctx); err != nil {
 		return err

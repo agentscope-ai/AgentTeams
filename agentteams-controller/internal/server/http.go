@@ -155,6 +155,12 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/humans/{name}/files/{path...}", mw.Authenticate(http.HandlerFunc(hfh.getFile)))
 	mux.Handle("PUT /api/v1/humans/{name}/files/{path...}", mw.Authenticate(http.HandlerFunc(hfh.putFile)))
 	mux.Handle("DELETE /api/v1/humans/{name}/files/{path...}", mw.Authenticate(http.HandlerFunc(hfh.deleteFile)))
+	// Presigned (direct) uploads, #P4a. One POST route serves both the
+	// issuer (?presign=1) and the accounting commit (a path ending in
+	// "/commit"): Go's ServeMux requires the wildcard to be the final
+	// pattern segment, so .../files/{path...}/commit cannot be registered
+	// alongside — postFile dispatches between the two forms.
+	mux.Handle("POST /api/v1/humans/{name}/files/{path...}", mw.Authenticate(http.HandlerFunc(hfh.postFile)))
 	mux.Handle("GET /api/v1/humans/{name}/trash", mw.Authenticate(http.HandlerFunc(hfh.listTrash)))
 	mux.Handle("POST /api/v1/humans/{name}/trash/{id}/restore", mw.Authenticate(http.HandlerFunc(hfh.restoreTrash)))
 	mux.Handle("DELETE /api/v1/humans/{name}/trash/{id}", mw.Authenticate(http.HandlerFunc(hfh.purgeTrash)))

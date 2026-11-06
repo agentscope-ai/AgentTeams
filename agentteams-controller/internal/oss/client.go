@@ -126,6 +126,12 @@ type StorageClient interface {
 	DeletePrefix(ctx context.Context, prefix string) error
 }
 
+// PresignUploader is implemented by backends that can hand out a direct
+// upload URL. Absence of the capability is a 500 fail-closed at the API.
+type PresignUploader interface {
+	PresignUpload(ctx context.Context, key string, maxBytes int64, contentType, sha256Hex string, ttl time.Duration) (method string, url string, fields map[string]string, err error)
+}
+
 // BucketManager is implemented by StorageClient backends that can create buckets.
 // In incluster mode with external OSS, the bucket is pre-created, so this is a no-op.
 type BucketManager interface {

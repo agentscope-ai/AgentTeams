@@ -532,11 +532,16 @@ type UpdateHumanRequest struct {
 	// Capabilities follows the same merge-patch semantics as
 	// AccessibleTeams: absent = unchanged, explicit list = replaces,
 	// empty list = clears. Unknown values are rejected (400).
+	Capabilities *[]string `json:"capabilities,omitempty"`
 	// ModelAccess has the same semantics: absent = unchanged, present =
 	// replace the whole grant table (an empty object clears all grants,
 	// locking every surface).
-	Capabilities *[]string                `json:"capabilities,omitempty"`
-	ModelAccess  *v1beta1.ModelAccessSpec `json:"modelAccess,omitempty"`
+	ModelAccess *v1beta1.ModelAccessSpec `json:"modelAccess,omitempty"`
+	// WorkspaceAccess follows the same merge-patch semantics as
+	// Capabilities: absent (or null) = unchanged, present object =
+	// replace, an empty object clears both lists. Invalid paths/modes
+	// or duplicate teams are rejected (400).
+	WorkspaceAccess *v1beta1.HumanWorkspaceAccess `json:"workspaceAccess,omitempty"`
 }
 
 type HumanResponse struct {

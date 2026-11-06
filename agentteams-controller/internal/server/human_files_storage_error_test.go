@@ -177,6 +177,15 @@ func wireS3Server(t *testing.T, mode string) *httptest.Server {
 			_, _ = w.Write([]byte(`<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></LocationConstraint>`))
 			return
 		}
+		// The key-scoped classifier probes bucket existence before it
+		// trusts a NoSuchKey answer. This canned endpoint must model a
+		// live bucket for that probe while still answering NoSuchKey for
+		// the object itself; otherwise the probe's 404 would (correctly)
+		// read as a deleted bucket.
+		if mode == "nosuchkey" && r.Method == http.MethodHead && strings.Trim(r.URL.Path, "/") == "bucket" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		switch mode {
 		case "500":
 			w.WriteHeader(http.StatusInternalServerError)

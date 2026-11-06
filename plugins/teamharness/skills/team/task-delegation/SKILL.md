@@ -72,7 +72,7 @@ Call `taskflow` with `role: "leader"` and pass `payload` as an object:
     "projectId": "demo-project-001",
     "taskId": "demo-project-001-01",
     "roomId": "room:!task-room:matrix.local",
-    "spec": "# Task demo-project-001-01\n\n## Context\nExplain why this task exists.\n\n## Expected Result\nCreate deliverables under shared/tasks/demo-project-001-01/ and submit a result with STATUS, SUMMARY, and DELIVERABLES.\n\n## Acceptance Criteria\n- The result addresses the task scope.\n- Deliverables are listed in result.md.\n\n## Completion Report\nAfter `taskflow submit_task` returns `ok: true`, reply in the current Task room and mention the exact Leader Matrix user from this task context:\n\n<Leader Matrix user> TASK_COMPLETED: demo-project-001-01 - Result: shared/tasks/demo-project-001-01/result.md\n\nDo not use `NO_REPLY` after a successful task submission.\n"
+    "spec": "# Task demo-project-001-01\n\n## Context\nExplain why this task exists.\n\n## Expected Result\nCreate deliverables under shared/tasks/demo-project-001-01/ and submit a result with STATUS, SUMMARY, DELIVERABLES, and 3-5 short CONCLUSIONS (one line each).\n\n## Acceptance Criteria\n- The result addresses the task scope.\n- Deliverables are listed in result.md.\n\n## Completion Report\nAfter `taskflow submit_task` returns `ok: true`, reply in the current Task room and mention the exact Leader Matrix user from this task context:\n\n<Leader Matrix user> TASK_COMPLETED: demo-project-001-01 - Result: shared/tasks/demo-project-001-01/result.md\n\nDo not use `NO_REPLY` after a successful task submission.\n"
   }
 }
 ```
@@ -107,6 +107,11 @@ Do not use `NO_REPLY` after a successful task submission.
 
 If the project node already contains a custom completion line, preserve it and
 still make the Leader mention requirement explicit.
+
+Also make the conclusions requirement explicit in the spec: the Worker's
+`submit_task` payload must include 3-5 short one-line `conclusions` (see
+`teamharness-task-execution`); the completion event carries them in a
+`- Conclusions:` block.
 
 ## Assignment Message
 

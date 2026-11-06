@@ -194,6 +194,9 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/projects/{id}/signal-events", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectSignalEvents)))
 	// Attention read surface (workbench decision modal; answers go to the room).
 	mux.Handle("GET /api/v1/projects/{id}/attention", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectAttention)))
+	// Team-level attention inbox (#1394 S1): one read for the whole
+	// team, so the dashboard inbox does not fan out one request per project.
+	mux.Handle("GET /api/v1/teams/{name}/attention", mw.RequireAuthz(authpkg.ActionGet, "team", nameFn)(http.HandlerFunc(projh.GetTeamAttention)))
 	mux.Handle("GET /api/v1/projects/{id}/history/{timestamp}", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectHistorySnapshot)))
 
 	// --- Coding runs (read-only coding-CLI transcript visibility, D12 路 A;

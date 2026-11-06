@@ -339,9 +339,101 @@ func (m *Memory) DeletePrefix(_ context.Context, prefix string) error {
 // EnsureBucket is a no-op for the in-memory fake.
 func (m *Memory) EnsureBucket(_ context.Context) error { return nil }
 
+// PresignUpload implements oss.PresignUploader: a deterministic presigned
+// PUT URL keyed by the object path, so tests can assert the issued shape
+// without a real provider.
+func (m *Memory) PresignUpload(_ context.Context, key string, maxBytes int64, contentType, sha256Hex string, ttl time.Duration) (string, string, map[string]string, error) {
+	return "PUT", "https://fake.example/" + key, nil, nil
+}
+
 // Ensure Memory satisfies the interface at compile time.
 var _ oss.StorageClient = (*Memory)(nil)
 var _ oss.BucketManager = (*Memory)(nil)
+var _ oss.PresignUploader = (*Memory)(nil)
+
+// NoPresign wraps a StorageClient and strips the PresignUploader
+// capability, for tests that exercise the API's 500 fail-closed answer
+// against a backend that cannot issue direct upload URLs. It forwards
+// every StorageClient method verbatim; only PresignUpload is deliberately
+// absent.
+type NoPresign struct {
+	inner oss.StorageClient
+}
+
+// NewNoPresign wraps store so the type assertion to oss.PresignUploader
+// fails in the handler.
+func NewNoPresign(store oss.StorageClient) *NoPresign {
+	return &NoPresign{inner: store}
+}
+
+// ListObjectsDetailed forwards to the wrapped client.
+func (n *NoPresign) ListObjectsDetailed(ctx context.Context, prefix string) ([]oss.ObjectInfo, error) {
+	return n.inner.ListObjectsDetailed(ctx, prefix)
+}
+
+// PutObject forwards to the wrapped client.
+func (n *NoPresign) PutObject(ctx context.Context, key string, data []byte) error {
+	return n.inner.PutObject(ctx, key, data)
+}
+
+// PutObjectIfMatch forwards to the wrapped client.
+func (n *NoPresign) PutObjectIfMatch(ctx context.Context, key string, data []byte, matchETag string) error {
+	return n.inner.PutObjectIfMatch(ctx, key, data, matchETag)
+}
+
+// PutObjectIfMatchWithType forwards to the wrapped client.
+func (n *NoPresign) PutObjectIfMatchWithType(ctx context.Context, key string, data []byte, contentType, matchETag string) error {
+	return n.inner.PutObjectIfMatchWithType(ctx, key, data, contentType, matchETag)
+}
+
+// PutObjectIfAbsent forwards to the wrapped client.
+func (n *NoPresign) PutObjectIfAbsent(ctx context.Context, key string, data []byte) error {
+	return n.inner.PutObjectIfAbsent(ctx, key, data)
+}
+
+// PutFile forwards to the wrapped client.
+func (n *NoPresign) PutFile(ctx context.Context, localPath, key string) error {
+	return n.inner.PutFile(ctx, localPath, key)
+}
+
+// GetObject forwards to the wrapped client.
+func (n *NoPresign) GetObject(ctx context.Context, key string) ([]byte, error) {
+	return n.inner.GetObject(ctx, key)
+}
+
+// Stat forwards to the wrapped client.
+func (n *NoPresign) Stat(ctx context.Context, key string) error {
+	return n.inner.Stat(ctx, key)
+}
+
+// StatMeta forwards to the wrapped client.
+func (n *NoPresign) StatMeta(ctx context.Context, key string) (oss.ObjectMeta, error) {
+	return n.inner.StatMeta(ctx, key)
+}
+
+// DeleteObject forwards to the wrapped client.
+func (n *NoPresign) DeleteObject(ctx context.Context, key string) error {
+	return n.inner.DeleteObject(ctx, key)
+}
+
+// Mirror forwards to the wrapped client.
+func (n *NoPresign) Mirror(ctx context.Context, src, dst string, opts oss.MirrorOptions) error {
+	return n.inner.Mirror(ctx, src, dst, opts)
+}
+
+// ListObjects forwards to the wrapped client.
+func (n *NoPresign) ListObjects(ctx context.Context, prefix string) ([]string, error) {
+	return n.inner.ListObjects(ctx, prefix)
+}
+
+// DeletePrefix forwards to the wrapped client.
+func (n *NoPresign) DeletePrefix(ctx context.Context, prefix string) error {
+	return n.inner.DeletePrefix(ctx, prefix)
+}
+
+// Ensure NoPresign still satisfies the base client (it must NOT satisfy
+// oss.PresignUploader — that is the whole point of the wrapper).
+var _ oss.StorageClient = (*NoPresign)(nil)
 
 // ErrNotExist is re-exported for tests that want to match against the exact
 // sentinel returned by GetObject/Stat without importing "os".

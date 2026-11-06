@@ -31,3 +31,17 @@ python3 -m pytest plugins/tests/agentteams-matrix-channel/test_consume_error.py 
 python3 -m pytest plugins/tests/agentteams-matrix-channel/test_show_thinking_gate.py -q
 python3 -m pytest plugins/tests/agentteams-matrix-channel/test_send_gate_retrigger_placeholder.py -q
 python3 -m pytest plugins/tests/agentteams-matrix-channel/test_send_gate_retrigger_relevance.py -q
+
+# Runtime adapter bundles (P0): agentteams-matrix + agentteams-teamharness
+bash -n plugins/agentteams-matrix/scripts/install.sh
+bash -n plugins/agentteams-matrix/scripts/uninstall.sh
+bash -n plugins/agentteams-matrix/adapters/qwenpaw/install.sh
+bash -n plugins/agentteams-matrix/adapters/qwenpaw/uninstall.sh
+bash -n plugins/agentteams-teamharness/scripts/install.sh
+bash -n plugins/agentteams-teamharness/scripts/uninstall.sh
+bash -n plugins/agentteams-teamharness/adapters/qwenpaw/install.sh
+bash -n plugins/agentteams-teamharness/adapters/qwenpaw/uninstall.sh
+ruby plugins/scripts/validate-plugin.rb plugins/agentteams-teamharness/plugin.yaml
+OUT_DIR="$(mktemp -d)" ruby plugins/scripts/package-plugin.rb plugins/agentteams-teamharness/plugin.yaml >/dev/null
+python3 -m pytest plugins/tests/agentteams-matrix/golden -q
+python3 -m pytest plugins/tests/agentteams-teamharness/golden -q

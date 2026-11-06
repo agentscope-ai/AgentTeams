@@ -41,6 +41,8 @@ assert_not_contains "startup no longer creates Worker CRs during recovery" \
     'worker_backend_create' "${startup_source}"
 assert_not_contains "startup no longer enumerates Workers for recovery" \
     'Recreate Worker containers as needed after Manager restart.' "${startup_source}"
+assert_not_contains "startup does not overwrite local Manager config from storage" \
+    'manager/openclaw.json" /root/manager-workspace/openclaw.json' "${startup_source}"
 
 if bash -n "${STARTUP_SCRIPT}"; then
     pass "startup script has valid Bash syntax"

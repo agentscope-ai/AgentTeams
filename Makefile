@@ -136,8 +136,9 @@ build-openclaw-base: ## Build OpenClaw base image
 
 # build targets use the locally-built openclaw-base; push targets use the registry image
 # OPENCLAW_BASE_VERSION controls which base image tag manager/worker builds depend on.
-# Default: latest (for standalone builds). Override to use a versioned base (e.g. in build-all).
-OPENCLAW_BASE_VERSION ?= 20260423-8359cbc
+# Single source of truth: hack/versions.env (OPENCLAW_BASE_TAG, derived from the
+# OpenClaw pin). Override on the command line to use a different base.
+OPENCLAW_BASE_VERSION ?= $(shell sed -n 's/^OPENCLAW_BASE_TAG=//p' hack/versions.env)
 OPENCLAW_BASE_BUILD_ARG = --build-arg OPENCLAW_BASE_IMAGE=$(OPENCLAW_BASE_IMAGE):$(OPENCLAW_BASE_VERSION)
 OPENCLAW_BASE_PUSH_ARG  = --build-arg OPENCLAW_BASE_IMAGE=$(OPENCLAW_BASE_IMAGE):$(OPENCLAW_BASE_VERSION)
 
@@ -548,6 +549,7 @@ push-native-deepseek-harness-worker: build-deepseek-harness-worker ## Push nativ
 # Wait for Manager services to be ready (used internally by test target)
 # Uses docker exec to check health inside container (works regardless of port mappings)
 # Usage: make wait-ready [CONTAINER=name]
+.PHONY: verify-bundle
 .PHONY: wait-ready
 wait-ready:
 	@echo "==> Waiting for Manager services to be ready (container: $(or $(CONTAINER),agentteams-controller))..."
@@ -748,6 +750,20 @@ replay-log: ## View the latest replay conversation log
 verify: ## Run post-install verification against the running Manager container
 	@bash ./install/agentteams-verify.sh $(or $(CONTAINER),agentteams-controller)
 
+BUNDLE ?=
+RUNTIME ?=
+
+verify-bundle: ## Bundle L3/L4 conformance: isolated install/load/uninstall, upgrade + rollback (P-b/P-c); narrow with BUNDLE=matrix|teamharness and RUNTIME=<adapter>
+	@set -e; \
+	case "$(BUNDLE)" in \
+	  ""|all) paths="plugins/tests/agentteams-matrix/test_matrix_bundle_lifecycle.py plugins/tests/teamharness/test_teamharness_bundle_lifecycle.py" ;; \
+	  matrix|agentteams-matrix) paths="plugins/tests/agentteams-matrix/test_matrix_bundle_lifecycle.py" ;; \
+	  teamharness|agentteams-teamharness) paths="plugins/tests/teamharness/test_teamharness_bundle_lifecycle.py" ;; \
+	  *) echo "unknown BUNDLE=$(BUNDLE) (use matrix, teamharness or empty)" >&2; exit 2 ;; \
+	esac; \
+	echo "==> Bundle lifecycle conformance (L3 isolation + L4 upgrade/rollback)"; \
+	python3 -m pytest -q $$paths $(if $(RUNTIME),-k $(RUNTIME))
+
 # ---------- Dev utils ----------
 
 status: ## Show status of Manager and all Worker containers
@@ -799,6 +815,10 @@ sync-crds: ## Sync CRDs from agentteams-controller/config/crd/ to helm/agentteam
 	@echo "==> Syncing CRDs to Helm chart..."
 	@cp agentteams-controller/config/crd/*.yaml helm/agentteams/crds/
 	@echo "==> CRDs synced"
+
+check-node-pins: ## Verify Node.js 24.22.1 pins across images
+	bash hack/check-node-pins.sh
+	bash hack/tests/test-node-version-guard.sh
 
 check-crd-sync: ## Verify CRDs are in sync between controller and Helm chart
 	@if ! diff -r agentteams-controller/config/crd/ helm/agentteams/crds/ >/dev/null 2>&1; then \

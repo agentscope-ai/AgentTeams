@@ -68,9 +68,9 @@ Use the runner's own init frame (`-o json` prints a `tools` array and `permissio
 
 **Updates.** Re-run the npm install command to upgrade in place, or use the runner's built-in `qwen update` self-update command (see `qwen update --help` for its channel behavior). Either way, re-run `verify-coding-cli.sh` afterwards (upgrade discipline above).
 
-**Runner notes (Qwen Code / OpenCode).** Headless invocations used by `run-coding-cli.sh`: `qwen --yolo "<prompt>"` and `opencode run --auto --dir <workspace> "<prompt>"`. Config surfaces: `~/.qwen` (`settings.json` `security.auth`, or provider env) and `~/.config/opencode` plus `~/.local/share/opencode/auth.json` (credentials stored by `opencode auth login`) or provider env. Both runners were verified with a headless round trip before inclusion. Qwen Code has **no fixed pin**: deployments choose their own npm channel tag (Section below, stable by default); `0.25.1` is the most recent field-verified reference (2026-10-11, Pi arm64/node 24 LTS end-to-end), `0.25.0` the previous one. Re-run `verify-coding-cli.sh` whenever the version actually used changes. **Version behavior note (0.25.1, field-verified by request capture):** the built-in default model changed to `qwen3.7-max`; a settings file carrying only `security.auth` (plus even an explicit `model.name`) still produced requests for `qwen3.7-max`. On a custom OpenAI-compatible gateway that does not serve that model this surfaces as `API Error: 403 (no body)`. Managed deployments: pass `-m <model>` per run (or the `--model` flag of `run-coding-cli.sh`) rather than relying on a settings-level default. **Platform note (16K-page arm64, e.g. Raspberry Pi 5, kernel `PAGESIZE=16384`):** the vendored ripgrep arm64 binary crashes on startup (`jemalloc: Unsupported system page size`, core dump); `qwen` logs it and falls back to the built-in grep, so runs complete — expect the stderr noise and core files, and do not treat them as run failures. Upstream issue pending.
+**Runner notes (Qwen Code / OpenCode).** Headless invocations used by `run-coding-cli.sh`: `qwen --yolo "<prompt>"` and `opencode run --auto --dir <workspace> "<prompt>"`. Config surfaces: `~/.qwen` (`settings.json` `security.auth`, or provider env) and `~/.config/opencode` plus `~/.local/share/opencode/auth.json` (credentials stored by `opencode auth login`) or provider env. Both runners were verified with a headless round trip before inclusion. Qwen Code has **no fixed pin**: deployments choose their own npm channel tag (Section below, stable by default); `0.25.1` is the most recent field-verified reference (2026-10-11, Pi arm64/node 24 LTS end-to-end), `0.25.0` the previous one. Re-run `verify-coding-cli.sh` whenever the version actually used changes. **Drift boundary note (settled 2026-10-30):** the 2026-10-19 premise that `0.25.1` and earlier kept the native `--json-file` file semantics is settled by real-CLI measurement (headless one-shot, `qwen -m qwen3.6-27b-fp8 --json-file <abs path> "Reply OK"`, isolated HOME with a working `~/.qwen/settings.json`): **no published qwen writes the native `--json-file` file** — `0.24.7`, `0.25.0`, `0.25.1` and `0.25.2` all exit 0 and produce no file (`--yolo` and `-o json` change nothing), matching the already-known `0.25.3` and `0.26.3`; `0.25.1`/`0.25.2` `--help` already describe `--json-file` as dual output (TUI renders on stdout, JSON events to the file) that never lands headless. The wrapper's capture branch (the `-o json` stdout event array) is therefore the **default for every version**, and the native pass-through is reachable **only** through an explicit `CODING_CLI_JSON_BOUNDARY` override pinning an older CLI — an escape hatch with no supported version, whose post-run assertion fails loudly (`JSON-FILE-DRIFT`) when the file does not land. The legacy cassette baseline is recorded as `unsupported` with this evidence (`tests/cassettes/qwen-json-file-legacy.meta.json`); the modern baseline replays PASS on `0.26.3` against this head. **Version behavior note (0.25.1, field-verified by request capture):** the built-in default model changed to `qwen3.7-max`; a settings file carrying only `security.auth` (plus even an explicit `model.name`) still produced requests for `qwen3.7-max`. On a custom OpenAI-compatible gateway that does not serve that model this surfaces as `API Error: 403 (no body)`. Managed deployments: pass `-m <model>` per run (or the `--model` flag of `run-coding-cli.sh`) rather than relying on a settings-level default. **Platform note (16K-page arm64, e.g. Raspberry Pi 5, kernel `PAGESIZE=16384`):** the vendored ripgrep arm64 binary crashes on startup (`jemalloc: Unsupported system page size`, core dump); `qwen` logs it and falls back to the built-in grep, so runs complete — expect the stderr noise and core files, and do not treat them as run failures. Upstream issue pending.
 
-- --json-file <path> — optional structured output: the final result JSON is written to <path> for machine audit; default off, raw stream still tees to the run log (the audit source of truth when the flag is absent).
+- --json-file <path> — optional structured output; the wrapper's contract: when the run ends, a parseable JSON audit file exists at <path>. The mechanism: **the wrapper itself captures the `-o json` stdout event array into <path> (stderr is diverted to the run log to keep the file pure JSON) — the default for every version** (measured 2026-10-30 with the real CLI: no published qwen, `0.24.7`-`0.26.3`, writes the native `--json-file` file in headless one-shot mode, so there is no version the pass-through serves); a post-run assertion proves the capture is non-empty and parseable before it is moved onto <path> (an empty or unparseable capture fails the run loudly, `JSON-FILE-DRIFT` / `JSON-CAPTURE-FAILED`, instead of recording ok). The native pass-through exists **only** behind an explicit `CODING_CLI_JSON_BOUNDARY` override (detected qwen version vs the override, `sort -V`; detection failure with the override set also lands there) pinning an older CLI — an escape hatch with no supported version, whose post-run assertion fails loudly when the file does not land. A pre-existing non-regular target (FIFO/device) is refused before the run on both branches (regular file paths only). Default off, raw stream still tees to the run log (the audit source of truth when the flag is absent); with the flag, the run log also carries the captured JSON array plus one structured branch-record line per json run.
 
 **Version channels and upgrades (Qwen Code).** qwen-code iterates fast (several hundred npm versions published) and ships three channels as dist-tags: `latest` (stable), `nightly` (dated + commit, published daily), and `preview`. Install or upgrade with npm (Node.js **24 LTS** — floor 22.20+ / 24.5+, OpenSSL 3.5 generation; see the Node-generation note in the install matrix), choosing the channel per the user's preference — stable by default, nightly only when the user explicitly wants newer behavior:
 
@@ -93,7 +93,7 @@ npm and the release assets cover Linux x64/arm64, macOS x64/arm64, and Windows. 
 
 **Node generation matters on restrictive links.** The npm package runs on Node.js; early Node 22.x (22.0–22.19) bundles OpenSSL 3.0, whose TLS client fingerprint is reset by some middle boxes, while Node 22.20+, 24.5+ and 26 bundle OpenSSL 3.5 and pass. **Use Node 24 LTS as the target** — Node 25 is EOL (2026-06), do not provision it; the 22-series needs 22.20+, the 24-series 24.5+. Field-verified 2026-10 (the cctechstudio WAN line RSTs the 3.0 generation but not 3.5). The filter matches the full ClientHello fingerprint (stack + ALPN + extensions), not the OpenSSL version alone: in the same environment an h2-enabled curl was reset while a Node runtime — and even a plain `openssl s_client` — connected. If in doubt, verify with the runtime that will actually make the connection, and check the Node/OpenSSL generation first (`node -p "process.versions.openssl"`).
 
-**Model configuration.** `qwen` authenticates from `~/.qwen/settings.json` — `security.auth` with `selectedType` (`openai` / `openai-responses` / `anthropic` / `qwen-oauth` / `gemini` / `vertex-ai`) plus `apiKey` and, for OpenAI-compatible endpoints, `baseUrl` — the form headless delegation uses on self-hosted or gateway-backed deployments (or the `OPENAI_API_KEY` environment variable). The interactive `qwen auth` flow was removed in 0.25.0, so file/env configuration is the only path; `--auth-type <type>` selects the scheme per run. Any OpenAI-compatible endpoint is a valid `baseUrl` — including a **transparent local proxy**, which is the standard lever for keeping the model plane working behind a restrictive link. Per-run overrides: `-m <model>` to pick a model and `-o text|json|stream-json` for machine-readable output.
+**Model configuration.** `qwen` authenticates from `~/.qwen/settings.json` — `security.auth` with `selectedType` (`openai` / `openai-responses` / `anthropic` / `qwen-oauth` / `gemini` / `vertex-ai`) plus `apiKey` and, for OpenAI-compatible endpoints, `baseUrl` — the form headless delegation uses on self-hosted or gateway-backed deployments (or the `OPENAI_API_KEY` environment variable). The interactive `qwen auth` flow was removed in 0.25.0, so file/env configuration is the only path; `--auth-type <type>` selects the scheme per run. Any OpenAI-compatible endpoint is a valid `baseUrl` — including a **transparent local proxy**, which is the standard lever for keeping the model plane working behind a restrictive link. Per-run overrides: `-m <model>` to pick a model and `-o text|json|stream-json` for machine-readable output. Note (measured 2026-10-30): no published qwen (`0.24.7`-`0.26.3`, headless one-shot) writes the native `--json-file` file, so the wrapper no longer passes it through at all by default (it captures the `-o json` stdout instead; the pass-through exists only behind an explicit `CODING_CLI_JSON_BOUNDARY` override — see the `--json-file` flag row above).
 
 **Restricted-network note.** If installing or reaching the model endpoint fails with connection resets while plain `curl` from the same machine succeeds, suspect middle-box filtering by TLS-stack fingerprint rather than a plain outage; running a current Node (OpenSSL 3.5 generation) or routing the model plane through the local proxy above is the working fix. (Field-verified 2026-10; see #1340 notes 4/5 for the full deployment matrix.)
 
@@ -167,73 +167,106 @@ If a Manager/Leader runs the CLI **on behalf of** a Worker, it must return the
 `report_progress` / `submit_task` for its own task. This keeps the workflow
 view = the existing task's status + history (dispatch/completed/blocked/cancelled).
 
-## Persistence and re-install after worker recreation
+## Persistence: installs go to the runtime's persisted home
 
-The CLI binary and its `npm install -g` payload live in the worker container's
-**ephemeral layer** (the image layer at `$npm prefix`, e.g. `/usr/local/lib/node_modules`) —
-**not** in the persistent agent home. A worker **recreation** (image upgrade, a spec
-change, or any controller-driven container rebuild, e.g. an LLM-runtime parameter
-change) wipes that layer, so the CLI disappears even though the delegation config
-and the auth settings survive:
+Coding CLIs are **not installed by default** and the worker image does not bake
+them in. The management tab / API installs on demand:
 
-- `~/coding-cli-config.json` is in the delegating agent's own home → it survives.
-- The CLI binary (npm -g) is in the **image layer** → it does **not** survive.
-- `~/.qwen/settings.json` (auth) sits in the worker's **agent home** — a persistent
-  host bind (embedded) / volume (k8s) that a recreation re-binds, so the file
-  **survives a same-worker recreation**. Field-verified 2026-10-11 on the Pi
-  embedded stack: after recreation the probe still reported
-  `auth.configured:true, method:settings` and a re-installed CLI ran without
-  re-applying auth. The caveat: the install surface does not force a MinIO push,
-  so a **fresh** home (new container identity, restored from object storage into
-  an empty home) starts without it — the settings probe is the arbiter either
-  way.
+```
+POST /api/v1/workers/{name}/coding-cli/{cli}/install   {"action":"install","version":"latest"}
+```
 
-Consequence: after any worker recreation, re-run the install endpoint
-(`POST /api/v1/workers/{name}/coding-cli/{cli}/install`) before delegating again,
-then **probe** the settings — if the auth is gone, re-apply it via the settings
-endpoint. `run-coding-cli.sh`
-fails fast with an actionable re-install message (exit `125`) if the configured
-binary is missing on PATH, so a wiped install is self-diagnosing rather than a
-confusing mid-run "command not found".
+`npm install -g --prefix "$CLI_HOME/.coding-cli"` — no version pin: the tab/API
+passes a dist-tag (`latest`, `beta`, …) or an explicit version; upgrades use the
+same route.
 
-**Scope note — the managed install surface is worker-scoped.** The
-`/api/v1/workers/{name}/coding-cli/…` endpoints (install / settings / probe)
-manage CLIs **inside worker containers only**. When the delegating agent is a
-Manager or a team Leader, the CLI must already be present in *that* agent's own
-container (platform image or a manual `npm install -g` by the operator) — there
-is no managed install surface for non-worker agents yet (Phase 1 scope, tracked
-as a follow-up). Worker-side delegation via the endpoints above is unaffected.
+**What is `CLI_HOME`?** It is the runtime's *persisted* home:
 
-## Step 1: First-Time Detection (before assigning a coding task)
+| runtime | CLI_HOME | why |
+|---|---|---|
+| **QwenPaw** | `$QWENPAW_WORKING_DIR` (default `/app/working`) | QwenPaw only persists its three mounted dirs: `/app/working` (data), `/app/working.backups`, `/app/working.secret`; `$HOME` (`/root/...`) is wiped on recreation. |
+| **OpenClaw / Hermes** | `$HOME` (`/root/agentteams-fs/agents/<name>`) | the worker entrypoint mirrors HOME to MinIO; `.coding-cli` is not excluded, so it survives recreation. |
 
-Run when `~/coding-cli-config.json` does not exist — **or after any worker
-recreation** (the detect step re-establishes what is actually on PATH):
+`run-coding-cli.sh` and `detect-available-cli.sh` resolve the same home
+(`QWENPAW_WORKING_DIR` first, then `$HOME`), prepend
+`${AGENTTEAMS_CODING_CLI_PREFIX:-$CLI_HOME/.coding-cli}/bin` to PATH, and set
+HOME to `QWENPAW_WORKING_DIR` for the CLI on QwenPaw (with `GIT_CONFIG_GLOBAL`
+preserved). The controller probe/settings use the same effective home. A missing
+binary still exits `125` with an actionable message.
+---
+
+## Step 1: First-Time Detection and Explicit Enablement
+
+Run this in the **delegating agent's own environment** (Manager, team Leader, or
+authorized Worker running this skill) when `~/coding-cli-config.json` is missing,
+after that agent's home was recreated/restored, or when the available CLI set may
+have changed. It is **not** the Worker install surface: installing a CLI through
+the management tab / `POST /api/v1/workers/{name}/coding-cli/{cli}/install`
+puts the binary in a **Worker** container; it does not create this file and does
+not enable delegation for the agent running this skill.
 
 ```bash
 bash /opt/agentteams/agent/skills/coding-cli-management/scripts/detect-available-cli.sh
 ```
 
-**If no CLIs are available** (`available` array is empty):
+**If no CLIs are available** (`available` array is empty), record an explicit
+decline and continue with normal task assignment (the Worker codes on its own):
+
 ```bash
-echo '{"enabled":false,"cli":null,"confirmed_at":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}' \
-  > ~/coding-cli-config.json
+tmp="$(mktemp)"
+printf '%s\n' '{"enabled":false,"cli":null,"confirmed_at":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}' > "$tmp"
+mv "$tmp" ~/coding-cli-config.json
 ```
-Proceed with normal task assignment (Worker codes on their own).
 
-**If CLIs are available**, ask the admin via the primary channel or Matrix DM — **in the language the admin used**:
-> I found the following AI coding CLI tools available: [list]. Would you like to enable CLI delegation mode? Workers will generate coding prompts, and I'll use the CLI tool to make the code changes. Note: the CLI runs unattended — `qwen --yolo` auto-approves all tool calls, `opencode --auto` still enforces explicit deny rules, and `qodercli --yolo` silently becomes read-only unless the workspace is trusted; the workspace and the timeout are not permission boundaries. On a local or shared machine, consider the sandbox tier for Qwen Code (`--sandbox`, Docker-backed, off by default) and turn/wall budgets; on OpenCode there is no native sandbox, so prefer an isolated execution environment or tight deny rules. Reply with the tool name (claude/gemini/qodercli/qwen/opencode) to enable, or 'no' to have workers code on their own.
+**If CLIs are available**, ask the admin through the primary channel or Matrix
+DM — in the language the admin used — and wait for an explicit choice:
 
-On admin reply:
+> I found these AI coding CLI tools available in my environment: [list]. Do you
+> want CLI delegation enabled? Workers will generate coding prompts and I will
+> run the CLI to make the changes. The CLI runs unattended: `qwen --yolo`
+> approves all tool calls, `opencode --auto` still enforces explicit deny rules,
+> and `qodercli --yolo` becomes read-only unless the workspace is trusted; the
+> workspace and timeout are not permission boundaries. See the Execution
+> boundary section for sandbox, approval-tier and budget options. Reply with the
+> tool name (claude/gemini/qodercli/qwen/opencode) to enable, or "no" to have
+> Workers code on their own.
+
+On an explicit reply:
+
 - Tool name (`claude` / `gemini` / `qodercli` / `qwen` / `opencode`):
+
   ```bash
-  echo '{"enabled":true,"cli":"<chosen-tool>","confirmed_at":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}' \
-    > ~/coding-cli-config.json
+  tmp="$(mktemp)"
+  printf '%s\n' '{"enabled":true,"cli":"<chosen-tool>","confirmed_at":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}' > "$tmp"
+  mv "$tmp" ~/coding-cli-config.json
   ```
-- `"no"` or decline:
+
+- `"no"` or any decline:
+
   ```bash
-  echo '{"enabled":false,"cli":null,"confirmed_at":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}' \
-    > ~/coding-cli-config.json
+  tmp="$(mktemp)"
+  printf '%s\n' '{"enabled":false,"cli":null,"confirmed_at":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}' > "$tmp"
+  mv "$tmp" ~/coding-cli-config.json
   ```
+
+**No automatic enablement.** Availability or a successful Worker-side install is
+not consent; only the admin's explicit choice above writes `enabled: true`.
+Any future UI/API that enables delegation must write this same file
+(`enabled`, `cli`, `confirmed_at`) in the delegating agent's home; installing a
+CLI in a Worker is a different operation and is not a substitute.
+
+**Delegating-agent scope.** The managed
+`/api/v1/workers/{name}/coding-cli/...` endpoints (install / settings / probe)
+manage CLIs **inside Worker containers only**. When this skill runs in a Manager
+or team Leader, the CLI must already be present in that agent's own container
+(platform image or a manual install by the operator); there is no managed
+install surface for non-Worker agents yet. Worker-side delegation through the
+endpoints above is unaffected.
+
+**Re-run detection** when the file is missing, after the delegating agent's home
+is recreated/restored, or when the CLI set changes. Worker recreation no longer
+wipes an install made through the persisted-home flow, but the delegation config
+still lives in the delegating agent's own home and must exist before Step 2.
 
 ---
 

@@ -15,7 +15,11 @@ from typing import Any
 # note): mcp/ on sys.path keeps one module identity in both load modes.
 from mcp.common import refs
 from mcp.common.config import _runtime_team_name
-from mcp.common.constants import TERMINAL_TASK_STATUSES
+from mcp.common.constants import (
+    LOOP_BUDGET_BY_TIER,
+    LOOP_PROVENANCE_LIMIT,
+    TERMINAL_TASK_STATUSES,
+)
 from mcp.common.errors import (
     _persisted_state_failure_result,
     _pull_failed_response,
@@ -35,6 +39,9 @@ from mcp.common.payload import (
 )
 from mcp.common.paths import _project_dir, _project_state_path, _task_dir, _task_state_path
 from mcp.artifact.publish import _attachment_parent_event_id
+from mcp.artifact.sync import _load_authoritative_task_optional
+from mcp.common.config import _protocol_enforce_enabled
+from mcp.lifecycle.review import ProtocolGuardError, _protocol_guard_for_accept
 from mcp.lifecycle.signal_events import _emit_signal_event, _list_events, _project_audit_seq
 # taskflow keeps NO module-level import of this module (its 9 flow names
 # are refs proxies), so this direction of the pair is cycle-free.
@@ -44,6 +51,7 @@ from mcp.room.notify import _send_project_completion_notification
 from mcp.room.rooms import _runtime_team_room_id
 from mcp.transport.route import _normalize_reply_route, _reply_route_from_requester
 from .state import (
+    _loop_pause_state,
     _mark_requester_report_sent,
     _normalize_tasks,
     _project_id_from_payload,
@@ -69,6 +77,36 @@ _sync_task = refs.proxy("_sync_task")
 _write_json = refs.proxy("_write_json")
 _write_project_plan = refs.proxy("_write_project_plan")
 _write_task = refs.proxy("_write_task")
+
+
+# Loop budget ledger (project["loop"]["budget"]). No budget by default:
+# iteration_budget stays None unless the project explicitly declares a
+# recognized tier or iteration_budget - an explicit project
+# iteration_budget wins over the tier mapping. Over budget the loop is
+# flagged (over_budget + provenance), not truncated. iterations_used is
+# a view of len(loop["iterations"]) recomputed on every record, so it is
+# never initialized from the previous budget here (tokens_used is the
+# only field carried over).
+def _loop_budget(project: dict[str, Any], previous_budget: Any) -> dict[str, Any]:
+    tier = str(project.get("tier") or "").strip().lower()
+    tier = tier if tier in LOOP_BUDGET_BY_TIER else None
+    budget = {
+        "tier": tier,
+        "iteration_budget": LOOP_BUDGET_BY_TIER[tier] if tier else None,
+        "iterations_used": 0,
+        "tokens_used": 0,
+        "over_budget": False,
+    }
+    explicit = project.get("iteration_budget")
+    if explicit is not None:
+        budget["iteration_budget"] = _non_negative_int(explicit, "iteration_budget")
+    if isinstance(previous_budget, dict):
+        budget["tokens_used"] = _non_negative_int(previous_budget.get("tokens_used") or 0, "tokens_used")
+    budget["over_budget"] = (
+        budget["iteration_budget"] is not None
+        and budget["iterations_used"] > budget["iteration_budget"]
+    )
+    return budget
 
 
 def _source_room_id_from_payload(payload: dict[str, Any], reply_route: dict[str, str] | None = None) -> str:
@@ -194,6 +232,24 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
     if not project:
         raise ValueError("project not found")
     task_meta = _read_json(_task_state_path(arguments, task_id))
+    # W2 round 10 (#1467): resolve the authoritative task INDEPENDENTLY of
+    # the local cache. Round 9 pulled only when a local copy existed, so a
+    # fresh Leader workspace skipped the pull — and every acceptance gate
+    # below — while the task existed in shared storage: an r1 task with no
+    # review and no human approval was accepted with nodeStatus completed
+    # while the Task stayed submitted (the maintainer's round-10 repro).
+    # A failed pull still fails closed; a genuinely absent task keeps the
+    # legacy no-task path ONLY while protocol enforcement is off — under
+    # enforcement the acceptance must not bypass the gates.
+    authoritative = _load_authoritative_task_optional(arguments, task_id)
+    if authoritative is not None:
+        task_meta = authoritative
+    elif _protocol_enforce_enabled():
+        raise ProtocolGuardError(
+            "task_not_found",
+            "accept_task_result requires an authoritative task record while "
+            "protocol enforcement is enabled",
+        )
     task_project_id = _first_text(task_meta.get("project_id"), task_meta.get("projectId"))
     if task_project_id and task_project_id != project_id:
         raise ValueError("task does not belong to project")
@@ -243,11 +299,16 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
                 )
             legacy_identity_persisted = True
     result_status_value = payload.get("resultStatus") or payload.get("result_status")
+    accepted = _payload_bool(payload.get("accepted"), True)
     if task_meta:
         persisted_result_status = str(task_meta.get("result_status") or "")
         if str(result_status_value or "SUCCESS").strip() != persisted_result_status:
             raise ValueError("resultStatus does not match the submitted task result")
-    accepted = _payload_bool(payload.get("accepted"), True)
+        # W2 protocol gates (protocol.enforce switch, default off): a
+        # missing / non-passing review record or a missing r1 approval
+        # record refuses a POSITIVE acceptance (error_code surface); a
+        # rejection / return-for-revision (accepted=False) is never gated.
+        _protocol_guard_for_accept(task_meta, accepted)
     node_status = _accepted_node_status(result_status_value)
     if not accepted and node_status == "completed":
         result_status_value = "REVISION_NEEDED"
@@ -733,6 +794,9 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project_id = _safe_id(payload.get("projectId") or payload.get("project_id"), "projectId")
             state_path = _project_state_path(arguments, project_id)
             project = _read_json(state_path, {"project_id": project_id, "title": project_id, "status": "active", "tasks": []})
+            paused, pause_sources = _loop_pause_state(project)
+            if paused:
+                raise ValueError(f"project is paused (sources: {', '.join(pause_sources)})")
             previous_loop = project.get("loop") if isinstance(project.get("loop"), dict) else {}
             previous_tasks = {
                 task.get("task_id"): task
@@ -777,6 +841,14 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 loop["task_id"] = task_id
             if loop_id:
                 loop["loop_id"] = loop_id
+            # Budget + iteration ledger start fresh on (re)plan:
+            # iterations_used is len(loop["iterations"]) recomputed on
+            # every record, so no stale counter survives a re-plan
+            # (pre-ledger history kept above is re-absorbed by
+            # record_loop_iteration).
+            loop["budget"] = _loop_budget(project, None)
+            loop["iterations"] = {}
+            loop["provenance"] = []
             if not loop["goal"]:
                 raise ValueError("goal is required")
             if not loop["stop_condition"]:
@@ -820,6 +892,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project = _read_json(_project_state_path(arguments, project_id))
             if not project:
                 raise ValueError("project not found")
+            paused, pause_sources = _loop_pause_state(project)
             return {
                 "ok": True,
                 "tool": "projectflow",
@@ -827,6 +900,8 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "project": project,
                 "loop": project.get("loop", {}),
                 "readyLoopNodes": _ready_loop_nodes(project),
+                "paused": paused,
+                "pauseSources": pause_sources,
             }
 
         if action == "record_loop_iteration":
@@ -837,11 +912,79 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             loop = project.get("loop") if isinstance(project.get("loop"), dict) else {}
             if not loop:
                 raise ValueError(f"project has no loop plan: {project_id}")
+            paused, pause_sources = _loop_pause_state(project)
             iteration = _positive_int(payload.get("iteration"), "iteration")
             max_iterations = _positive_int(loop.get("max_iterations"), "maxIterations")
             if iteration > max_iterations:
                 raise ValueError("iteration cannot exceed maxIterations")
             decision = _safe_loop_decision(payload.get("decision"))
+            summary = str(payload.get("summary") or "").strip()
+            next_action = str(payload.get("nextAction") or payload.get("next_action") or "").strip()
+            # Iteration ledger: one entry per distinct iteration id.
+            # Loops recorded before the ledger existed (or re-planned with
+            # the ledger reset while history was kept) rebuild it from
+            # history: same id collapses to the last entry, revision
+            # counts the occurrences. iterations_used is
+            # len(iterations) recomputed on every write below, which
+            # self-heals the historical double count.
+            history = loop.get("history") if isinstance(loop.get("history"), list) else []
+            iterations = loop.get("iterations")
+            if not isinstance(iterations, dict) or (not iterations and history):
+                counts: dict[str, int] = {}
+                iterations = {}
+                for entry in history:
+                    if not isinstance(entry, dict):
+                        continue
+                    entry_iteration = entry.get("iteration")
+                    if not isinstance(entry_iteration, int) or isinstance(entry_iteration, bool):
+                        continue
+                    key = str(entry_iteration)
+                    counts[key] = counts.get(key, 0) + 1
+                    iterations[key] = {
+                        "decision": str(entry.get("decision") or ""),
+                        "summary": str(entry.get("summary") or ""),
+                        "next_action": str(entry.get("next_action") or ""),
+                        "revision": counts[key] - 1,
+                        "first_at": None,
+                        "updated_at": None,
+                    }
+                loop["iterations"] = iterations
+            current_iteration = _non_negative_int(loop.get("current_iteration") or 0, "currentIteration")
+            if iteration < current_iteration and str(iteration) not in iterations:
+                raise ValueError("iteration_below_current")
+            rec = iterations.get(str(iteration))
+            if rec is None:
+                now = _utc_timestamp()
+                rec = {
+                    "decision": decision,
+                    "summary": summary,
+                    "next_action": next_action,
+                    "revision": 0,
+                    "first_at": now,
+                    "updated_at": now,
+                }
+                iterations[str(iteration)] = rec
+                loop["current_iteration"] = max(current_iteration, iteration)
+            elif rec["decision"] == decision and rec["summary"] == summary and rec["next_action"] == next_action:
+                # Idempotent retry of the same operation: no state change,
+                # no history/provenance entry, no signal, no disk write.
+                return {
+                    "ok": True,
+                    "idempotent": True,
+                    "revision": rec["revision"],
+                    "project": project,
+                    "loop": loop,
+                    "readyLoopNodes": _ready_loop_nodes(project),
+                }
+            else:
+                # Revision: the same iteration was re-decided. The ledger
+                # entry (and only it) advances; the distinct-iteration
+                # count stays len(iterations).
+                rec["decision"] = decision
+                rec["summary"] = summary
+                rec["next_action"] = next_action
+                rec["revision"] = _non_negative_int(rec.get("revision") or 0, "revision") + 1
+                rec["updated_at"] = _utc_timestamp()
             loop["status"] = {
                 "continue": "running",
                 "replan": "running",
@@ -849,15 +992,39 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "stop_success": "completed",
                 "stop_blocked": "blocked",
             }[decision]
-            loop["current_iteration"] = max(_non_negative_int(loop.get("current_iteration") or 0, "currentIteration"), iteration)
-            history = loop.get("history", []) if isinstance(loop.get("history"), list) else []
+            # Budget ledger: iterations_used is a view of the distinct
+            # iteration ledger, recomputed on every write. No budget
+            # (iteration_budget None): usage still accumulates and
+            # over_budget stays False.
+            budget = loop.get("budget")
+            if not isinstance(budget, dict):
+                budget = _loop_budget(project, budget)
+            iterations_used = len(iterations)
+            tokens_used = _non_negative_int(budget.get("tokens_used") or 0, "tokens_used")
+            iteration_budget = budget.get("iteration_budget")
+            if iteration_budget is not None:
+                iteration_budget = _non_negative_int(iteration_budget, "iteration_budget")
+            budget["iterations_used"] = iterations_used
+            budget["tokens_used"] = tokens_used
+            budget["over_budget"] = iteration_budget is not None and iterations_used > iteration_budget
+            loop["budget"] = budget
             history.append({
                 "iteration": iteration,
                 "decision": decision,
-                "summary": str(payload.get("summary") or "").strip(),
-                "next_action": str(payload.get("nextAction") or payload.get("next_action") or "").strip(),
+                "summary": summary,
+                "next_action": next_action,
+                "revision": rec["revision"],
             })
             loop["history"] = history
+            provenance = loop.get("provenance") if isinstance(loop.get("provenance"), list) else []
+            provenance.append({
+                "iteration": iteration,
+                "revision": rec["revision"],
+                "iterations_used": iterations_used,
+                "iteration_budget": iteration_budget,
+                "over_budget": budget["over_budget"],
+            })
+            loop["provenance"] = provenance[-LOOP_PROVENANCE_LIMIT:]
             project["plan_type"] = "loop"
             project["loop"] = loop
             project_dir = _project_dir(arguments, project_id)
@@ -880,6 +1047,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 payload={
                     "project_id": project_id,
                     "iteration": iteration,
+                    "revision": rec["revision"],
                     "decision": decision,
                     "loop_status": loop.get("status"),
                 },
@@ -911,7 +1079,13 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "action": action,
                 "project": project,
                 "loop": loop,
-                "readyLoopNodes": _ready_loop_nodes(project),
+                # Paused: the iteration still lands (in-flight work may
+                # finish), but nothing is released downstream and no next
+                # round opens — readyLoopNodes stays empty until the Go API
+                # clears loop.pause_sources.
+                "readyLoopNodes": [] if paused else _ready_loop_nodes(project),
+                "paused": paused,
+                "pauseSources": pause_sources,
                 "notificationNeeded": _notification_needed(
                     action, project, summary=f"record_loop_iteration: iteration {iteration} -> {decision}",
                 ),
@@ -960,7 +1134,22 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             # and returns a retryable failure — the leader is never woken
             # by a completion whose state it cannot read, and no
             # projectCompletionEventId is recorded without durable state.
-            synced = _sync_project(arguments, project_id)
+            #
+            # authored_status: only the two deliberate FORWARD transitions
+            # may move the Controller-owned status — pause_project escalates
+            # to paused, complete_project lands the terminal state. An
+            # ordinary progress sync (and resume_project, which only clears
+            # the local legacy status: an agent cannot release a durable
+            # pause) never authors it, so a cache pulled before an admin
+            # resume cannot write the old ``paused`` back (#1402 round 14).
+            authored_status = None
+            if action == "pause_project":
+                authored_status = "paused"
+            elif action == "complete_project":
+                authored_status = "completed"
+            synced = _sync_project(
+                arguments, project_id, authored_status=authored_status
+            )
             if action == "complete_project" and not synced:
                 return {
                     "ok": False,
@@ -1013,6 +1202,14 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 )
             result["notificationNeeded"] = _notification_needed(action, project)
             return result
+    except ProtocolGuardError as exc:
+        return {
+            "ok": False,
+            "tool": "projectflow",
+            "action": action,
+            "error_code": exc.error_code,
+            "message": exc.message,
+        }
     except ValueError as exc:
         return {"ok": False, "tool": "projectflow", "action": action, "error": str(exc)}
 

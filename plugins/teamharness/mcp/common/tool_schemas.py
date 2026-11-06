@@ -235,8 +235,8 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "filesync": {
         "description": (
-            "Explicitly list, stat, pull, or push TeamHarness shared artifacts "
-            "under shared/ or read-only global-shared. "
+            "Explicitly list, stat, pull, push, or cat TeamHarness shared "
+            "artifacts under shared/ or read-only global-shared. "
             "Use this for deliberate shared file operations, not periodic "
             "workspace sync or runtime package updates."
         ),
@@ -245,8 +245,11 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["list", "stat", "pull", "push"],
-                    "description": "Shared artifact operation to perform.",
+                    "enum": ["list", "stat", "pull", "push", "cat"],
+                    "description": (
+                        "Shared artifact operation to perform. cat reads one "
+                        "remote object (content) without touching local state."
+                    ),
                 },
                 "path": {
                     "type": "string",
@@ -488,6 +491,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                         "cancel_task",
                         "report_progress",
                         "request_attention",
+                        "review_task",
                     ],
                     "description": (
                         "Task lifecycle operation. report_progress records a "
@@ -497,7 +501,22 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                         "escalation / other) out of the group chat while the task "
                         "is still in flight. Pass payload.resolved=true to close "
                         "the open record of that kind (no new ping); the call is "
-                        "rejected when no record of that kind exists."
+                        "rejected when no record of that kind exists. "
+                        "review_task records a critic/leader review (verdict: "
+                        "pass / fail, optional note and scorecard) on a "
+                        "submitted task; the reviewer must differ from the "
+                        "submitting identity. With the protocol.enforce switch "
+                        "on, delegate_task requires payload.decisionClass "
+                        "(r1..r6) and unanswered attention re-requests stall "
+                        "the task (2 -> decision_status blocked, 3 -> frozen; "
+                        "only a resolved approval record unfreezes a frozen "
+                        "task). Operator contract: closing a kind=approval "
+                        "record (and unfreezing a frozen task) requires a "
+                        "trusted human runtime role (AGENTTEAMS_AGENT_ROLE=human "
+                        "or member.role=human in the runtime config); a caller "
+                        "without a trusted role is denied by design — payload "
+                        "role / channel / decider / evidence strings are "
+                        "provenance, never authority."
                     ),
                 },
                 "projectId": {
@@ -544,6 +563,10 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "assignedTo": {
                     "type": "string",
                     "description": "Worker Matrix id or stable member name assigned to delegate_task.",
+                },
+                "decisionClass": {
+                    "type": "string",
+                    "description": "Delegate_task decision class r1..r6 (contracts/decision-classes.json); required while the protocol.enforce switch is on.",
                 },
                 "workspaceDir": {
                     "type": "string",

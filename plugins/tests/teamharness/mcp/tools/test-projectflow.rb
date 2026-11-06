@@ -23,6 +23,13 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
   (bin_dir / "mc").write(<<~SH)
     #!/usr/bin/env bash
     printf '%s\\n' "$*" >> "#{log_path}"
+    # Stale-overwrite guard probes single-file pushes with mc stat --json
+    # before mc cp; the emulated remote is always fresh here, so the probe
+    # reports 'object does not exist' and the push proceeds.
+    if [ "$1" = "stat" ] && [ "$2" = "--json" ]; then
+      printf '%s\\n' '{"status":"error","error":"object does not exist"}'
+      exit 1
+    fi
   SH
   (bin_dir / "mc").chmod(0o755)
 

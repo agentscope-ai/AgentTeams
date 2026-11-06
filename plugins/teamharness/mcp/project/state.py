@@ -220,7 +220,20 @@ def _ready_nodes(project: dict[str, Any]) -> list[dict[str, Any]]:
     return ready
 
 
+def _loop_pause_state(project: dict[str, Any]) -> tuple[bool, list[str]]:
+    """Return (paused, sources). loop.pause_sources plus legacy status=paused."""
+    loop = project.get("loop") if isinstance(project.get("loop"), dict) else {}
+    raw_sources = loop.get("pause_sources")
+    raw_sources = raw_sources if isinstance(raw_sources, list) else []
+    sources = {str(source).strip().lower() for source in raw_sources if str(source).strip()}
+    if project.get("status") == "paused":
+        sources.add("project")
+    return bool(sources), sorted(sources)
+
+
 def _ready_loop_nodes(project: dict[str, Any]) -> list[dict[str, Any]]:
+    if _loop_pause_state(project)[0]:
+        return []
     if str(project.get("status") or "active") != "active":
         return []
     loop = project.get("loop")

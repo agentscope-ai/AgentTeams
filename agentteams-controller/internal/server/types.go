@@ -96,6 +96,10 @@ type WorkerResponse struct {
 	ContainerManaged bool              `json:"containerManaged"`
 	State            string            `json:"state,omitempty"` // desired lifecycle state
 	Model            string            `json:"model,omitempty"`
+	// ModelProvider is the worker's LLM provider (WorkerSpec.ModelProvider,
+	// an APIG Model API name). The model alias alone does not select the
+	// upstream when the deployment has several Higress providers.
+	ModelProvider string `json:"modelProvider,omitempty"`
 	// SubagentModel is the model used by spawned subagents ("" = inherit
 	// the worker's primary model). See WorkerSpec.SubagentModel.
 	SubagentModel string `json:"subagentModel,omitempty"`
@@ -147,6 +151,228 @@ type ExposedPortInfo struct {
 type WorkerListResponse struct {
 	Workers []WorkerResponse `json:"workers"`
 	Total   int              `json:"total"`
+}
+
+// workerListProjection is the GET /api/v1/workers envelope for a ?fields=
+// projection: the same workers/total wrapping as WorkerListResponse, with
+// each row already reduced to the requested view (WorkerSpecView,
+// WorkerStatusView, or WorkerSpecStatusView).
+type workerListProjection struct {
+	Workers []any `json:"workers"`
+	Total   int   `json:"total"`
+}
+
+// --- Worker list projection views (GET /api/v1/workers?fields=...) ---
+//
+// The views project a WorkerResponse down to a stable subset of its fields
+// for list consumers that do not need the full payload. Each view is a
+// struct (never a map) whose fields follow WorkerResponse's order, so the
+// JSON encoding is byte-stable — issue #1475's ETag work hashes these
+// projections.
+//
+// Split (issue #1475):
+//   - spec:   stable configuration — identity, model and LLM tuning,
+//     runtime, package, exposed ports, team membership. Excludes prompt
+//     bodies and full configuration (soul/agents/env/skills/mcpServers/
+//     channelPolicy) and every status field.
+//   - status: volatile runtime state — phase, container state, heartbeat
+//     and task fields.
+//   - all:    the full WorkerResponse (the default; not a projection).
+//
+// Identity contract (issue #1477): every view carries the worker's stable
+// identity — name (the CR name, always present) plus workerName (the
+// display name, when set). List rows are keyed by name; a consumer must
+// never correlate rows by position in the list, because workers can be
+// created, deleted, or reordered between two list calls.
+//
+// team and role belong to both views: a membership change is a spec change
+// as well.
+
+// WorkerSpecView is the fields=spec projection of a worker.
+type WorkerSpecView struct {
+	Name                         string            `json:"name"`
+	WorkerName                   string            `json:"workerName,omitempty"`
+	ContainerManaged             bool              `json:"containerManaged"`
+	State                        string            `json:"state,omitempty"`
+	Model                        string            `json:"model,omitempty"`
+	SubagentModel                string            `json:"subagentModel,omitempty"`
+	LlmStreamFirstContentTimeout string            `json:"llmStreamFirstContentTimeout,omitempty"`
+	LlmStreamIdleTimeout         string            `json:"llmStreamIdleTimeout,omitempty"`
+	LlmMaxRetries                string            `json:"llmMaxRetries,omitempty"`
+	LlmBackoffBase               string            `json:"llmBackoffBase,omitempty"`
+	LlmBackoffCap                string            `json:"llmBackoffCap,omitempty"`
+	LlmMaxConcurrent             string            `json:"llmMaxConcurrent,omitempty"`
+	LlmMaxQpm                    string            `json:"llmMaxQpm,omitempty"`
+	LlmRateLimitPause            string            `json:"llmRateLimitPause,omitempty"`
+	LlmRateLimitJitter           string            `json:"llmRateLimitJitter,omitempty"`
+	LlmAcquireTimeout            string            `json:"llmAcquireTimeout,omitempty"`
+	Runtime                      string            `json:"runtime,omitempty"`
+	RuntimeDeprecated            bool              `json:"runtimeDeprecated,omitempty"`
+	Image                        string            `json:"image,omitempty"`
+	Identity                     string            `json:"identity,omitempty"`
+	Package                      string            `json:"package,omitempty"`
+	BackendRuntime               string            `json:"backendRuntime,omitempty"`
+	MatrixUserID                 string            `json:"matrixUserID,omitempty"`
+	RoomID                       string            `json:"roomID,omitempty"`
+	ExposedPorts                 []ExposedPortInfo `json:"exposedPorts,omitempty"`
+	Team                         string            `json:"team,omitempty"`
+	Role                         string            `json:"role,omitempty"`
+}
+
+// WorkerStatusView is the fields=status projection of a worker. Like every
+// other view it carries the stable identity (name/workerName), so a status
+// row can be keyed by name instead of by its position in the list
+// (issue #1477).
+type WorkerStatusView struct {
+	Name             string `json:"name"`
+	WorkerName       string `json:"workerName,omitempty"`
+	Phase            string `json:"phase"`
+	ContainerState   string `json:"containerState,omitempty"`
+	Message          string `json:"message,omitempty"`
+	LastActiveAt     string `json:"lastActiveAt,omitempty"`
+	AgentStatus      string `json:"agentStatus,omitempty"`
+	RunningTaskCount *int   `json:"runningTaskCount,omitempty"`
+	LastRunAt        string `json:"lastRunAt,omitempty"`
+	LastFinishAt     string `json:"lastFinishAt,omitempty"`
+	Team             string `json:"team,omitempty"`
+	Role             string `json:"role,omitempty"`
+}
+
+// WorkerSpecStatusView is the fields=spec,status projection: the union of
+// WorkerSpecView and WorkerStatusView in WorkerResponse field order.
+type WorkerSpecStatusView struct {
+	Name                         string            `json:"name"`
+	WorkerName                   string            `json:"workerName,omitempty"`
+	Phase                        string            `json:"phase"`
+	ContainerManaged             bool              `json:"containerManaged"`
+	State                        string            `json:"state,omitempty"`
+	Model                        string            `json:"model,omitempty"`
+	SubagentModel                string            `json:"subagentModel,omitempty"`
+	LlmStreamFirstContentTimeout string            `json:"llmStreamFirstContentTimeout,omitempty"`
+	LlmStreamIdleTimeout         string            `json:"llmStreamIdleTimeout,omitempty"`
+	LlmMaxRetries                string            `json:"llmMaxRetries,omitempty"`
+	LlmBackoffBase               string            `json:"llmBackoffBase,omitempty"`
+	LlmBackoffCap                string            `json:"llmBackoffCap,omitempty"`
+	LlmMaxConcurrent             string            `json:"llmMaxConcurrent,omitempty"`
+	LlmMaxQpm                    string            `json:"llmMaxQpm,omitempty"`
+	LlmRateLimitPause            string            `json:"llmRateLimitPause,omitempty"`
+	LlmRateLimitJitter           string            `json:"llmRateLimitJitter,omitempty"`
+	LlmAcquireTimeout            string            `json:"llmAcquireTimeout,omitempty"`
+	Runtime                      string            `json:"runtime,omitempty"`
+	RuntimeDeprecated            bool              `json:"runtimeDeprecated,omitempty"`
+	Image                        string            `json:"image,omitempty"`
+	Identity                     string            `json:"identity,omitempty"`
+	Package                      string            `json:"package,omitempty"`
+	BackendRuntime               string            `json:"backendRuntime,omitempty"`
+	ContainerState               string            `json:"containerState,omitempty"`
+	MatrixUserID                 string            `json:"matrixUserID,omitempty"`
+	RoomID                       string            `json:"roomID,omitempty"`
+	Message                      string            `json:"message,omitempty"`
+	LastActiveAt                 string            `json:"lastActiveAt,omitempty"`
+	AgentStatus                  string            `json:"agentStatus,omitempty"`
+	RunningTaskCount             *int              `json:"runningTaskCount,omitempty"`
+	LastRunAt                    string            `json:"lastRunAt,omitempty"`
+	LastFinishAt                 string            `json:"lastFinishAt,omitempty"`
+	ExposedPorts                 []ExposedPortInfo `json:"exposedPorts,omitempty"`
+	Team                         string            `json:"team,omitempty"`
+	Role                         string            `json:"role,omitempty"`
+}
+
+// SpecView projects a full worker response down to its stable
+// configuration fields (GET /api/v1/workers?fields=spec).
+func (r WorkerResponse) SpecView() WorkerSpecView {
+	return WorkerSpecView{
+		Name:                         r.Name,
+		WorkerName:                   r.WorkerName,
+		ContainerManaged:             r.ContainerManaged,
+		State:                        r.State,
+		Model:                        r.Model,
+		SubagentModel:                r.SubagentModel,
+		LlmStreamFirstContentTimeout: r.LlmStreamFirstContentTimeout,
+		LlmStreamIdleTimeout:         r.LlmStreamIdleTimeout,
+		LlmMaxRetries:                r.LlmMaxRetries,
+		LlmBackoffBase:               r.LlmBackoffBase,
+		LlmBackoffCap:                r.LlmBackoffCap,
+		LlmMaxConcurrent:             r.LlmMaxConcurrent,
+		LlmMaxQpm:                    r.LlmMaxQpm,
+		LlmRateLimitPause:            r.LlmRateLimitPause,
+		LlmRateLimitJitter:           r.LlmRateLimitJitter,
+		LlmAcquireTimeout:            r.LlmAcquireTimeout,
+		Runtime:                      r.Runtime,
+		RuntimeDeprecated:            r.RuntimeDeprecated,
+		Image:                        r.Image,
+		Identity:                     r.Identity,
+		Package:                      r.Package,
+		BackendRuntime:               r.BackendRuntime,
+		MatrixUserID:                 r.MatrixUserID,
+		RoomID:                       r.RoomID,
+		ExposedPorts:                 r.ExposedPorts,
+		Team:                         r.Team,
+		Role:                         r.Role,
+	}
+}
+
+// StatusView projects a full worker response down to its volatile runtime
+// fields (GET /api/v1/workers?fields=status). The identity fields are part
+// of the projection: the status view must stay keyable by name
+// (issue #1477).
+func (r WorkerResponse) StatusView() WorkerStatusView {
+	return WorkerStatusView{
+		Name:             r.Name,
+		WorkerName:       r.WorkerName,
+		Phase:            r.Phase,
+		ContainerState:   r.ContainerState,
+		Message:          r.Message,
+		LastActiveAt:     r.LastActiveAt,
+		AgentStatus:      r.AgentStatus,
+		RunningTaskCount: r.RunningTaskCount,
+		LastRunAt:        r.LastRunAt,
+		LastFinishAt:     r.LastFinishAt,
+		Team:             r.Team,
+		Role:             r.Role,
+	}
+}
+
+// SpecStatusView projects a full worker response down to the spec+status
+// union (GET /api/v1/workers?fields=spec,status).
+func (r WorkerResponse) SpecStatusView() WorkerSpecStatusView {
+	return WorkerSpecStatusView{
+		Name:                         r.Name,
+		WorkerName:                   r.WorkerName,
+		Phase:                        r.Phase,
+		ContainerManaged:             r.ContainerManaged,
+		State:                        r.State,
+		Model:                        r.Model,
+		SubagentModel:                r.SubagentModel,
+		LlmStreamFirstContentTimeout: r.LlmStreamFirstContentTimeout,
+		LlmStreamIdleTimeout:         r.LlmStreamIdleTimeout,
+		LlmMaxRetries:                r.LlmMaxRetries,
+		LlmBackoffBase:               r.LlmBackoffBase,
+		LlmBackoffCap:                r.LlmBackoffCap,
+		LlmMaxConcurrent:             r.LlmMaxConcurrent,
+		LlmMaxQpm:                    r.LlmMaxQpm,
+		LlmRateLimitPause:            r.LlmRateLimitPause,
+		LlmRateLimitJitter:           r.LlmRateLimitJitter,
+		LlmAcquireTimeout:            r.LlmAcquireTimeout,
+		Runtime:                      r.Runtime,
+		RuntimeDeprecated:            r.RuntimeDeprecated,
+		Image:                        r.Image,
+		Identity:                     r.Identity,
+		Package:                      r.Package,
+		BackendRuntime:               r.BackendRuntime,
+		ContainerState:               r.ContainerState,
+		MatrixUserID:                 r.MatrixUserID,
+		RoomID:                       r.RoomID,
+		Message:                      r.Message,
+		LastActiveAt:                 r.LastActiveAt,
+		AgentStatus:                  r.AgentStatus,
+		RunningTaskCount:             r.RunningTaskCount,
+		LastRunAt:                    r.LastRunAt,
+		LastFinishAt:                 r.LastFinishAt,
+		ExposedPorts:                 r.ExposedPorts,
+		Team:                         r.Team,
+		Role:                         r.Role,
+	}
 }
 
 // --- Team API types ---
@@ -238,13 +464,14 @@ type TeamListResponse struct {
 // --- Human API types ---
 
 type CreateHumanRequest struct {
-	Name              string   `json:"name"`
-	DisplayName       string   `json:"displayName"`
-	Email             string   `json:"email,omitempty"`
-	PermissionLevel   int      `json:"permissionLevel"`
-	AccessibleTeams   []string `json:"accessibleTeams,omitempty"`
-	AccessibleWorkers []string `json:"accessibleWorkers,omitempty"`
-	Note              string   `json:"note,omitempty"`
+	Name              string                   `json:"name"`
+	DisplayName       string                   `json:"displayName"`
+	Email             string                   `json:"email,omitempty"`
+	PermissionLevel   int                      `json:"permissionLevel"`
+	AccessibleTeams   []string                 `json:"accessibleTeams,omitempty"`
+	AccessibleWorkers []string                 `json:"accessibleWorkers,omitempty"`
+	Note              string                   `json:"note,omitempty"`
+	ModelAccess       *v1beta1.ModelAccessSpec `json:"modelAccess,omitempty"`
 }
 
 // UpdateHumanRequest is the merge-patch body of PUT /api/v1/humans/{name}.
@@ -262,27 +489,59 @@ type UpdateHumanRequest struct {
 	// AccessibleTeams: absent = unchanged, explicit list = replaces,
 	// empty list = clears. Unknown values are rejected (400).
 	Capabilities *[]string `json:"capabilities,omitempty"`
+	// ModelAccess has the same semantics: absent = unchanged, present =
+	// replace the whole grant table (an empty object clears all grants,
+	// locking every surface).
+	ModelAccess *v1beta1.ModelAccessSpec `json:"modelAccess,omitempty"`
+	// WorkspaceAccess follows the same merge-patch semantics as
+	// Capabilities: absent (or null) = unchanged, present object =
+	// replace, an empty object clears both lists. Invalid paths/modes
+	// or duplicate teams are rejected (400).
+	WorkspaceAccess *v1beta1.HumanWorkspaceAccess `json:"workspaceAccess,omitempty"`
 }
 
 type HumanResponse struct {
-	Name              string   `json:"name"`
-	Phase             string   `json:"phase"`
-	DisplayName       string   `json:"displayName"`
-	Email             string   `json:"email,omitempty"`
-	PermissionLevel   int      `json:"permissionLevel"`
-	AccessibleTeams   []string `json:"accessibleTeams,omitempty"`
-	AccessibleWorkers []string `json:"accessibleWorkers,omitempty"`
-	Capabilities      []string `json:"capabilities,omitempty"`
-	Note              string   `json:"note,omitempty"`
-	MatrixUserID      string   `json:"matrixUserID,omitempty"`
-	InitialPassword   string   `json:"initialPassword,omitempty"`
-	Rooms             []string `json:"rooms,omitempty"`
-	Message           string   `json:"message,omitempty"`
+	Name              string                   `json:"name"`
+	Phase             string                   `json:"phase"`
+	DisplayName       string                   `json:"displayName"`
+	Email             string                   `json:"email,omitempty"`
+	PermissionLevel   int                      `json:"permissionLevel"`
+	AccessibleTeams   []string                 `json:"accessibleTeams,omitempty"`
+	AccessibleWorkers []string                 `json:"accessibleWorkers,omitempty"`
+	Capabilities      []string                 `json:"capabilities,omitempty"`
+	Note              string                   `json:"note,omitempty"`
+	MatrixUserID      string                   `json:"matrixUserID,omitempty"`
+	InitialPassword   string                   `json:"initialPassword,omitempty"`
+	Rooms             []string                 `json:"rooms,omitempty"`
+	Message           string                   `json:"message,omitempty"`
+	ModelAccess       *v1beta1.ModelAccessSpec `json:"modelAccess,omitempty"`
 }
 
 type HumanListResponse struct {
 	Humans []HumanResponse `json:"humans"`
 	Total  int             `json:"total"`
+}
+
+// ModelAccessTableRequest is the writable body of a table.
+type ModelAccessTableRequest struct {
+	Name      string                      `json:"name"`
+	Main      *v1beta1.ModelAccessSurface `json:"main,omitempty"`
+	Spawn     *v1beta1.ModelAccessSurface `json:"spawn,omitempty"`
+	CodingCli []v1beta1.ModelAccessCli    `json:"codingCli,omitempty"`
+}
+
+// ModelAccessTableResponse is the read shape of a table.
+type ModelAccessTableResponse struct {
+	Name      string                      `json:"name"`
+	Main      *v1beta1.ModelAccessSurface `json:"main,omitempty"`
+	Spawn     *v1beta1.ModelAccessSurface `json:"spawn,omitempty"`
+	CodingCli []v1beta1.ModelAccessCli    `json:"codingCli,omitempty"`
+}
+
+// ModelAccessTableListResponse is the read shape of GET /api/v1/model-access-tables.
+type ModelAccessTableListResponse struct {
+	Tables []ModelAccessTableResponse `json:"tables"`
+	Total  int                        `json:"total"`
 }
 
 // --- Manager API types ---
@@ -321,11 +580,13 @@ type UpdateManagerRequest struct {
 }
 
 type ManagerResponse struct {
-	Name    string `json:"name"`
-	Phase   string `json:"phase"`
-	State   string `json:"state,omitempty"` // desired lifecycle state
-	Model   string `json:"model,omitempty"`
-	Runtime string `json:"runtime,omitempty"`
+	Name  string `json:"name"`
+	Phase string `json:"phase"`
+	State string `json:"state,omitempty"` // desired lifecycle state
+	Model string `json:"model,omitempty"`
+	// ModelProvider mirrors ManagerSpec.ModelProvider (APIG Model API name).
+	ModelProvider string `json:"modelProvider,omitempty"`
+	Runtime       string `json:"runtime,omitempty"`
 	// RuntimeDeprecated marks legacy runtimes that are upgrade-compat
 	// only (CoPaw): new creation is rejected; migrate to QwenPaw.
 	RuntimeDeprecated bool   `json:"runtimeDeprecated,omitempty"`

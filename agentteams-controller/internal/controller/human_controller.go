@@ -30,6 +30,9 @@ type HumanReconciler struct {
 	client.Client
 
 	Provisioner service.HumanProvisioner
+	// Deployer creates the per-human file area (humans/<username>/files,
+	// .trash) idempotently. Optional: nil skips the storage phase (tests).
+	Deployer service.HumanDeployer
 }
 
 func (r *HumanReconciler) Reconcile(ctx context.Context, req reconcile.Request) (retres reconcile.Result, reterr error) {
@@ -102,10 +105,12 @@ func (r *HumanReconciler) Reconcile(ctx context.Context, req reconcile.Request) 
 }
 
 // reconcileHumanNormal runs the declarative convergence loop. Phases in
-// order: infrastructure (Matrix account), then rooms (membership). Only
-// infrastructure is fatal; room reconciliation logs errors but never returns
-// them, so a transient Matrix hiccup
-// on room invite/kick does not block the next reconcile.
+// order: infrastructure (Matrix account), then the per-human file area
+// (object storage), then rooms (membership). Only infrastructure is fatal;
+// the storage phase logs errors but never returns them (same non-fatal
+// contract as team shared storage) and requeues sooner on failure, so a
+// transient storage hiccup does not block Matrix user/room sync; room
+// reconciliation likewise never returns errors.
 func (r *HumanReconciler) reconcileHumanNormal(ctx context.Context, s *humanScope) (reconcile.Result, error) {
 	if err := r.resolveHumanScope(s); err != nil {
 		s.human.Status.Phase = "Degraded"
@@ -120,9 +125,19 @@ func (r *HumanReconciler) reconcileHumanNormal(ctx context.Context, s *humanScop
 		}
 		return reconcile.Result{RequeueAfter: reconcileInterval}, err
 	}
+
+	requeueAfter := reconcileInterval
+	if r.Deployer != nil {
+		if err := r.Deployer.EnsureHumanStorage(ctx, s.human); err != nil {
+			log.FromContext(ctx).Error(err, "human file area init failed (non-fatal)",
+				"name", s.human.Name)
+			requeueAfter = reconcileRetryDelay
+		}
+	}
+
 	r.reconcileHumanRooms(ctx, s)
 
-	return reconcile.Result{RequeueAfter: reconcileInterval}, nil
+	return reconcile.Result{RequeueAfter: requeueAfter}, nil
 }
 
 func (r *HumanReconciler) resolveHumanScope(s *humanScope) error {

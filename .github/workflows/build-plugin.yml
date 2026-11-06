@@ -1,6 +1,6 @@
 # Release any yaml-manifest plugin. Tag convention: <metadata.name>-v<semver>;
-# a plugin rename only shifts the matching tag prefix (TeamHarness ->
-# millforge-teamharness-v*) without editing this file. Tag parsing and the
+# the tag prefix always follows metadata.name, so a manifest rename (if one
+# ever happens) shifts the prefix without editing this file. Tag parsing and the
 # tag/manifest version integrity check both live in
 # plugins/scripts/resolve-plugin-release.sh (pre-release accepted, build
 # metadata rejected, exact string equality).

@@ -61,7 +61,7 @@ func TestCodingCliConcurrentSettingsConflictAndRetry(t *testing.T) {
 	var reads atomic.Int32
 	exec.respond = func(cmd []string) (string, string, int, error) {
 		if strings.Contains(cmd[2], "cat ") {
-			if strings.Contains(cmd[2], ".qwen/settings.json") {
+			if strings.Contains(shellPathArg(cmd), ".qwen/settings.json") {
 				current, _ := exec.written(settingsPath)
 				if reads.Add(1) == 1 {
 					close(firstRead)
@@ -176,9 +176,9 @@ func TestCodingCliOpenCodeSettingsAuthRoundTrip(t *testing.T) {
 			switch {
 			case strings.Contains(cmd[2], "printf %s"):
 				return "/root", "", 0, nil
-			case strings.Contains(cmd[2], "test -f ~/.config/opencode/opencode.json"):
+			case strings.Contains(cmd[2], "test -f ") && strings.Contains(shellPathArg(cmd), ".config/opencode/opencode.json"):
 				return "", "", 0, nil
-			case strings.Contains(cmd[2], "cat ~/.config/opencode/opencode.json"):
+			case strings.Contains(cmd[2], "cat ") && strings.Contains(shellPathArg(cmd), ".config/opencode/opencode.json"):
 				data, _ := exec.written(path)
 				return data, "", 0, nil
 			}

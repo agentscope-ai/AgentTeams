@@ -50,7 +50,7 @@ The AI route `default-ai-route` (path prefix `/v1`, upstream selected by
 
 ```
 POST /v1/chat/completions   # chat completions (streaming supported)
-POST /v1/embeddings         # embeddings (used by memorySearch when configured)
+POST /v1/embeddings         # embeddings (used by memory.search when configured)
 ```
 
 `GET /v1/models` is not a full OpenAI models-list endpoint in Higress; the

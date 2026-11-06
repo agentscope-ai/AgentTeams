@@ -6,12 +6,12 @@
 #
 # Build args:
 #   HIGRESS_REGISTRY           - base image registry (default: cn-hangzhou)
-#   OPENCLAW_BASE_IMAGE        - openclaw-base image (default: agentteams/openclaw-base:20260423-8359cbc)
+#   OPENCLAW_BASE_IMAGE        - openclaw-base image (default: agentteams/openclaw-base:2026.10.9-node24.22.1)
 #   OPENCLAW_CMS_PLUGIN_URL    - observability plugin tarball URL (bundled unconditionally)
 # ============================================================
 
 ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
-ARG OPENCLAW_BASE_IMAGE=agentteams/openclaw-base:20260423-8359cbc
+ARG OPENCLAW_BASE_IMAGE=agentteams/openclaw-base:2026.10.9-node24.22.1
 ARG AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest
 
 # ============ Stage 1: mc (MinIO Client) ============

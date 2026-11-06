@@ -26,8 +26,13 @@ import (
 
 // WorkerDeployRequest describes a worker config deployment (create or update).
 type WorkerDeployRequest struct {
-	Name string
-	Spec v1beta1.WorkerSpec
+	// ReconcileChannelPolicy reconciles controller-owned Human entries in
+	// standalone allowlists while preserving independently configured entries.
+	// Team-owned overlays retain the existing preservation behavior.
+	HumanMatrixIDs         []string
+	ReconcileChannelPolicy bool
+	Name                   string
+	Spec                   v1beta1.WorkerSpec
 	// SubagentModel is the resolved subagent model for this worker
 	// (explicit spec value or the team default, resolved by the caller).
 	// Non-empty values take precedence over Spec.SubagentModel.
@@ -359,6 +364,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 		MatrixToken:       req.MatrixToken,
 		GatewayKey:        req.GatewayKey,
 		ModelName:         req.Spec.Model,
+		ModelProvider:     req.Spec.ModelProvider,
 		SubagentModelName: resolvedSubagentModel(req),
 		AIGatewayURL:      req.AIGatewayURL,
 		TeamLeaderName:    req.TeamLeaderName,
@@ -377,12 +383,24 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	// already written a team-mode channel policy. Requiring IsUpdate would let
 	// that first standalone Worker pass clobber the Team overlay.
 	openclawKey := agentPrefix + "/openclaw.json"
+	generatedJSON := configJSON
 	var existingJSON []byte
 	if existingJSON, err = d.oss.GetObject(ctx, openclawKey); err == nil && len(existingJSON) > 0 {
 		if merged, mergeErr := mergeUserPluginConfig(configJSON, existingJSON); mergeErr != nil {
 			logger.Error(mergeErr, "plugin config merge failed, using generated config")
 		} else {
 			configJSON = merged
+		}
+	}
+
+	var finishHumanAccess func() error
+	if req.ReconcileChannelPolicy {
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("read existing Worker channel policy: %w", err)
+		}
+		configJSON, finishHumanAccess, err = d.reconcileHumanChannelAccess(ctx, req, generatedJSON, configJSON, existingJSON)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -415,6 +433,12 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 			"team", req.TeamName,
 			"isUpdate", req.IsUpdate,
 		)
+	}
+
+	if finishHumanAccess != nil {
+		if err := finishHumanAccess(); err != nil {
+			return fmt.Errorf("commit Human allowlist ownership: %w", err)
+		}
 	}
 
 	// --- SOUL.md (seed-only) ---
@@ -1507,6 +1531,22 @@ func (d *Deployer) ensureDirectoryObject(ctx context.Context, key string) error 
 	return d.oss.PutObject(ctx, key+".agentteams-keep", []byte(""))
 }
 
+// EnsureHumanStorage creates the per-human file area (#1414 P1) under
+// humans/<username>/: a files/ directory (the human's working files,
+// served by the human-file API) and a .trash/ directory (soft-deleted
+// files). Idempotent — marker objects are re-put on every reconcile.
+// memory/ and digest/ are deliberately NOT created in P1.
+func (d *Deployer) EnsureHumanStorage(ctx context.Context, human *v1beta1.Human) error {
+	username := human.Spec.EffectiveUsername(human.Name)
+	prefix := fmt.Sprintf("humans/%s/", username)
+	for _, subdir := range []string{"files/", ".trash/"} {
+		if err := d.oss.PutObject(ctx, prefix+subdir+".keep", []byte("")); err != nil {
+			return fmt.Errorf("create %s%s: %w", prefix, subdir, err)
+		}
+	}
+	return nil
+}
+
 // --- Manager Config Deployment ---
 
 // ManagerDeployRequest describes a Manager config deployment (create or update).
@@ -1542,12 +1582,13 @@ func (d *Deployer) DeployManagerConfig(ctx context.Context, req ManagerDeployReq
 	// silently never sees admin messages. See commit 3f8f84b which fixed this
 	// originally before the controller refactor accidentally reverted it.
 	configJSON, err := d.agentConfig.GenerateOpenClawConfig(agentconfig.WorkerConfigRequest{
-		WorkerName:   "manager",
-		MatrixToken:  req.MatrixToken,
-		GatewayKey:   req.GatewayKey,
-		ModelName:    req.Spec.Model,
-		AIGatewayURL: req.AIGatewayURL,
-		Runtime:      req.Spec.Runtime,
+		WorkerName:    "manager",
+		MatrixToken:   req.MatrixToken,
+		GatewayKey:    req.GatewayKey,
+		ModelName:     req.Spec.Model,
+		ModelProvider: req.Spec.ModelProvider,
+		AIGatewayURL:  req.AIGatewayURL,
+		Runtime:       req.Spec.Runtime,
 	})
 	if err != nil {
 		return fmt.Errorf("config generation failed: %w", err)

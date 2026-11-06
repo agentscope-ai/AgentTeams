@@ -250,6 +250,14 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 		mctx.ModelProviderInfo = info
 	}
 	configContext := mctx
+	if !inTeam {
+		grants, err := humanWorkerGrants(ctx, r.Client, w.Namespace)
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+		configContext.HumanMatrixIDs = grants[w.Name]
+		configContext.Spec = withHumanWorkerGrants(configContext.Spec, grants[w.Name])
+	}
 	if inTeam && teamRole == RoleTeamLeader {
 		configContext.Role = RoleTeamLeader
 	}
@@ -386,6 +394,13 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	// in-memory config until it is dialed. Best-effort — a failed dial
 	// leaves the annotation unset and the periodic reconcile retries.
 	r.applySubagentModelHot(ctx, w, effectiveSpec, configContext, state)
+
+	// Hot-apply the primary model as well: `model` is excluded from the
+	// container-recreation hash (config-only), so without this dial a running
+	// qwenpaw process kept the old in-memory model until a restart. Uses the
+	// same model-settings endpoint (mutates agent.json + schedules an
+	// in-process agent reload).
+	r.applyActiveModelHot(ctx, w, effectiveSpec, state)
 
 	// Hot-apply changed LLM stream timeouts to the running worker process
 	// via the QwenPaw envs API (the runtime re-reads the envs on every
@@ -889,6 +904,10 @@ func computeWorkerPhase(w *v1beta1.Worker, containerState string, reconcileErr e
 func (r *WorkerReconciler) SetupWithManager(mgr ctrl.Manager) (controller.Controller, error) {
 	bldr := ctrl.NewControllerManagedBy(mgr).
 		For(&v1beta1.Worker{})
+
+	// Enqueue every visible Worker on Human changes, including revocations:
+	// the new Human object alone no longer names a removed grant.
+	bldr = bldr.Watches(&v1beta1.Human{}, handler.EnqueueRequestsFromMapFunc(r.humanToWorkerRequests))
 
 	if r.Backend != nil {
 		ctx := context.Background()

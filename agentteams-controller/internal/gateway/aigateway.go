@@ -283,7 +283,7 @@ func (a *AIGatewayClient) EnsureServiceSource(_ context.Context, _, _ string, _ 
 	return ErrUnsupportedOp
 }
 
-func (a *AIGatewayClient) EnsureStaticServiceSource(_ context.Context, _, _ string, _ int) error {
+func (a *AIGatewayClient) EnsureStaticServiceSource(_ context.Context, _, _ string, _ int, _ string) error {
 	return ErrUnsupportedOp
 }
 

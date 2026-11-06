@@ -44,7 +44,7 @@ from agentteams_manager.bridge import (
 # ---------------------------------------------------------------------------
 
 def _make_openclaw_cfg(**memory_search_overrides):
-    """Helper to build an openclaw config with optional memorySearch overrides."""
+    """Helper to build an openclaw config with optional memory.search overrides."""
     base = {
         "channels": {
             "matrix": {
@@ -65,7 +65,7 @@ def _make_openclaw_cfg(**memory_search_overrides):
         "agents": {"defaults": {"model": {"primary": "gw/qwen3.5-plus"}}},
     }
     if memory_search_overrides is not None:
-        base["agents"]["defaults"]["memorySearch"] = {
+        base["memory"] = {"search": {
             "provider": "openai",
             "model": "text-embedding-v4",
             "remote": {
@@ -73,7 +73,7 @@ def _make_openclaw_cfg(**memory_search_overrides):
                 "apiKey": "key123",
             },
             **memory_search_overrides,
-        }
+        }}
     return base
 
 

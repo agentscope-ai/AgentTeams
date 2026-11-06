@@ -67,3 +67,6 @@ htmlcov/
 
 # Local build artifacts
 /agentteams-controller/agt
+
+# dev build artifacts
+build-manifest.json

@@ -361,8 +361,9 @@ podman run -d --name agentteams-manager \
 
 OpenClaw 需要 **Node.js >= 22**（内部使用的 `--disable-warning` 标志需要 Node.js 21.3+）。Manager 镜像基于 `openclaw-base` 构建，该基础镜像已包含 Node.js 24。Worker Dockerfile 从构建阶段复制 Node.js 24。
 
-- **Manager**：Node 24 由 `openclaw-base` 提供（基础镜像已内置）。
-- **Worker**：从构建阶段复制的 Node 24 二进制文件替换了 Ubuntu 24.04 apt 的 Node.js 18.x（后者不支持 `--disable-warning`）。
+- **Manager**：最新 Node 24 LTS（floor 24.22.1）由 `openclaw-base` 提供（构建时解析并校验 SHA）。
+- **Node 覆盖**：`NODE_VERSION` 只能在 24.x 内选补丁（≥24.22.1）；major 固定为 24，即使传 `NODE_MAJOR=24`，25.x/26.x 也会被拒绝。
+- **Worker**：从构建阶段复制的最新 Node 24 LTS（floor 24.22.1）二进制文件替换了 Ubuntu 24.04 apt 的 Node.js 18.x（后者不支持 `--disable-warning`）。
 
 ### Higress AI Provider API
 

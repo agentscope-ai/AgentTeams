@@ -118,7 +118,7 @@ mkdir -p "${OUTPUT_DIR}"
 
 envsubst < /opt/agentteams/agent/skills/worker-management/references/worker-openclaw.json.tmpl > "${OUTPUT_DIR}/openclaw.json"
 
-# Post-envsubst injection: memorySearch + custom model (single jq pass when possible)
+# Post-envsubst injection: memory.search + custom model (single jq pass when possible)
 if ! jq -e --arg model "${MODEL_NAME}" '.models.providers["agentteams-gateway"].models | map(.id) | index($model)' "${OUTPUT_DIR}/openclaw.json" > /dev/null 2>&1; then
     log "Custom model '${MODEL_NAME}' not in built-in list, injecting into worker config..."
     jq --arg emb_model "${AGENTTEAMS_EMBEDDING_MODEL}" \
@@ -130,16 +130,17 @@ if ! jq -e --arg model "${MODEL_NAME}" '.models.providers["agentteams-gateway"].
        --argjson reasoning "${MODEL_REASONING}" \
        --argjson input "${INPUT}" \
        '
-        (if $emb_model != "" then .agents.defaults.memorySearch = {"provider":"openai","model":$emb_model,"remote":{"baseUrl":($aigw + "/v1"),"apiKey":$key}} else . end)
+        (if $emb_model != "" then .memory.search = {"provider":"openai","model":$emb_model,"remote":{"baseUrl":($aigw + "/v1"),"apiKey":$key}} else . end)
         | .models.providers["agentteams-gateway"].models += [{"id": $model, "name": $model, "reasoning": $reasoning, "contextWindow": $ctx, "maxTokens": $max, "input": $input}]
         | .agents.defaults.models += {("agentteams-gateway/" + $model): {"alias": $model}}
+        | if .agents.defaults.modelPolicy.allow != null then .agents.defaults.modelPolicy.allow = ((.agents.defaults.modelPolicy.allow + ["agentteams-gateway/" + $model]) | unique) else . end
        ' "${OUTPUT_DIR}/openclaw.json" > "${OUTPUT_DIR}/openclaw.json.tmp" && \
         mv "${OUTPUT_DIR}/openclaw.json.tmp" "${OUTPUT_DIR}/openclaw.json"
 elif [ -n "${AGENTTEAMS_EMBEDDING_MODEL}" ]; then
     jq --arg emb_model "${AGENTTEAMS_EMBEDDING_MODEL}" \
        --arg aigw "${AGENTTEAMS_AI_GATEWAY_URL}" \
        --arg key "${WORKER_GATEWAY_KEY}" \
-       '.agents.defaults.memorySearch = {"provider":"openai","model":$emb_model,"remote":{"baseUrl":($aigw + "/v1"),"apiKey":$key}}' \
+       '.memory.search = {"provider":"openai","model":$emb_model,"remote":{"baseUrl":($aigw + "/v1"),"apiKey":$key}}' \
        "${OUTPUT_DIR}/openclaw.json" > "${OUTPUT_DIR}/openclaw.json.tmp" && \
         mv "${OUTPUT_DIR}/openclaw.json.tmp" "${OUTPUT_DIR}/openclaw.json"
 fi

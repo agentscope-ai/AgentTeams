@@ -18,6 +18,13 @@ on:
       - 'openhuman/scripts/openhuman-worker-entrypoint.sh'
       - 'tests/check-agentteams-rename-defaults.sh'
       - 'tests/check-installer-pre-1.2-env-compat.sh'
+      - 'tests/check-installer-controller-url.sh'
+      - 'tests/check-installer-presign-endpoint.sh'
+      - 'tests/check-installer-wasm-registry.sh'
+      - 'tests/check-installer-wasm-registry.ps1'
+      - 'tests/check-custom-llm-endpoint.sh'
+      - 'tests/check-custom-llm-endpoint.ps1'
+      - 'manager/scripts/init/setup-higress.sh'
       - 'tests/check-installer-username-validation.sh'
       - 'tests/check-installer-username-validation.ps1'
       - 'tests/check-installer-env-data-dir-readback.sh'
@@ -35,8 +42,14 @@ on:
       - 'tests/check-helm-agentteams.sh'
       - 'tests/check-copaw-helm-upgrade-gate.sh'
       - 'tests/copaw-helm-upgrade-gate.sh'
+      - 'tests/test-29-legacy-copaw-upgrade.sh'
+      - 'tests/lib/test29-evidence.sh'
+      - 'tests/check-test29-evidence-redaction.sh'
+      - 'tests/check-test29-readiness.sh'
+      - 'tests/lib/test29-readiness.sh'
       - 'hack/local-k8s-up.sh'
       - 'tests/check-create-project-grant-admin.sh'
+      - 'tests/check-create-project-team.sh'
       - 'manager/agent/skills/project-management/**'
       - 'manager/agent/skills/coding-cli-management/**'
       - 'manager/agent/worker-skills/coding-cli/**'
@@ -45,6 +58,9 @@ on:
       - 'tests/check-coding-cli-runs-metadata.sh'
       - 'manager/scripts/init/start-manager-agent.sh'
       - 'manager/tests/test-manager-startup-recovery.sh'
+      - 'tests/check-docs-zh-parity.sh'
+      - 'docs/usage/**'
+      - 'docs/zh-cn/usage/**'
   workflow_dispatch: ~
 
 jobs:
@@ -59,6 +75,25 @@ jobs:
 
       - name: Check pre-v1.2 installer compatibility
         run: bash tests/check-installer-pre-1.2-env-compat.sh
+
+      - name: Check installer controller URL contract
+        run: bash tests/check-installer-controller-url.sh
+      - name: Check installer presign endpoint contract
+        run: bash tests/check-installer-presign-endpoint.sh
+
+      - name: Check Bash installer WASM registry
+        run: bash tests/check-installer-wasm-registry.sh
+
+      - name: Check PowerShell installer WASM registry
+        shell: pwsh
+        run: ./tests/check-installer-wasm-registry.ps1
+
+      - name: Check Shell custom LLM endpoints
+        run: bash tests/check-custom-llm-endpoint.sh
+
+      - name: Check PowerShell custom LLM endpoints
+        shell: pwsh
+        run: ./tests/check-custom-llm-endpoint.ps1
 
       - name: Check Bash installer username validation
         run: bash tests/check-installer-username-validation.sh
@@ -106,6 +141,9 @@ jobs:
       - name: Check create-project grant-admin wiring
         run: bash tests/check-create-project-grant-admin.sh
 
+      - name: Check create-project --team roster and join reporting
+        run: bash tests/check-create-project-team.sh
+
       - name: Check coding-cli Qoder PAT and .processing guard
         run: bash tests/check-coding-cli-qoder-pat-processing.sh
 
@@ -114,6 +152,12 @@ jobs:
 
       - name: Check CoPaw upgrade gate failure modes
         run: bash tests/check-copaw-helm-upgrade-gate.sh
+
+      - name: Check test-29 failure evidence redaction
+        run: bash tests/check-test29-evidence-redaction.sh
+
+      - name: Check test-29 readiness gate (room change resets stability)
+        run: bash tests/check-test29-readiness.sh
 
       - name: Check Manager startup Worker recovery ownership
         run: bash manager/tests/test-manager-startup-recovery.sh
@@ -135,3 +179,16 @@ jobs:
       - name: Template dry-run
         run: |
           bash tests/check-helm-agentteams.sh
+
+  docs-zh-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check zh-cn docs parity self-test (missing counterpart fails, complete pairing passes)
+        run: bash tests/check-docs-zh-parity.sh --self-test
+
+      - name: Check zh-cn docs parity on the repository tree
+        run: bash tests/check-docs-zh-parity.sh

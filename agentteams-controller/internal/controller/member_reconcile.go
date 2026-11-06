@@ -172,7 +172,8 @@ type MemberContext struct {
 	// Resources overrides the backend worker resource defaults. The compact
 	// Worker API uses one cpu/memory value for both requests and limits; this
 	// field carries the backend-expanded form.
-	Resources *backend.ResourceRequirements
+	HumanMatrixIDs []string
+	Resources      *backend.ResourceRequirements
 
 	// BackendRuntime is the desired backend type from spec.backendRuntime.
 	// Empty means default ("pod").
@@ -464,16 +465,18 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 	// Subagent model: explicit worker value wins; otherwise inherit the
 	// team-wide default (read-time merge — no spec writes, no second writer).
 	if err := d.Deployer.DeployWorkerConfig(ctx, service.WorkerDeployRequest{
-		Name:           m.RuntimeName,
-		Spec:           m.Spec,
-		SubagentModel:  resolveSubagentModel(m.Spec.SubagentModel, m.TeamSubagentModel),
-		Role:           m.Role.String(),
-		MatrixToken:    state.ProvResult.MatrixToken,
-		GatewayKey:     state.ProvResult.GatewayKey,
-		MatrixPassword: state.ProvResult.MatrixPassword,
-		McpServers:     m.Spec.McpServers,
-		IsUpdate:       m.IsUpdate,
-		AIGatewayURL:   aiGatewayURL,
+		Name:                   m.RuntimeName,
+		Spec:                   m.Spec,
+		SubagentModel:          resolveSubagentModel(m.Spec.SubagentModel, m.TeamSubagentModel),
+		Role:                   m.Role.String(),
+		MatrixToken:            state.ProvResult.MatrixToken,
+		GatewayKey:             state.ProvResult.GatewayKey,
+		MatrixPassword:         state.ProvResult.MatrixPassword,
+		McpServers:             m.Spec.McpServers,
+		IsUpdate:               m.IsUpdate,
+		ReconcileChannelPolicy: m.TeamName == "",
+		HumanMatrixIDs:         m.HumanMatrixIDs,
+		AIGatewayURL:           aiGatewayURL,
 	}); err != nil {
 		return fmt.Errorf("deploy worker config: %w", err)
 	}

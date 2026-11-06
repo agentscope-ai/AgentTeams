@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -134,6 +136,36 @@ func withCaller(req *http.Request, c *authpkg.CallerIdentity) *http.Request {
 func putProject(store *ossfake.Memory, key string, meta map[string]any) {
 	data, _ := json.Marshal(meta)
 	_ = store.PutObject(context.Background(), key, data)
+}
+
+// canonicalProjectMetaNoAudit normalizes raw project meta JSON to the
+// struct's canonical serialization (so map-seeded fixtures compare against
+// handler-written state without empty-field artifacts such as team_id/mode/
+// assigned_to), then strips the dual-ledger audit fields
+// (controlActions / controlActionsTruncatedCount). The remaining bytes are
+// compared for byte-equality by the caller: every business field is still
+// asserted, the exemption covers only the audit ledger.
+func canonicalProjectMetaNoAudit(t *testing.T, data []byte) []byte {
+	t.Helper()
+	var m projectMeta
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("canonicalProjectMetaNoAudit: unmarshal: %v (data=%s)", err, data)
+	}
+	canonical, err := json.Marshal(&m)
+	if err != nil {
+		t.Fatalf("canonicalProjectMetaNoAudit: marshal: %v", err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(canonical, &fields); err != nil {
+		t.Fatalf("canonicalProjectMetaNoAudit: re-unmarshal: %v", err)
+	}
+	delete(fields, "controlActions")
+	delete(fields, "controlActionsTruncatedCount")
+	out, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatalf("canonicalProjectMetaNoAudit: final marshal: %v", err)
+	}
+	return out
 }
 
 func team(name string) *v1beta1.Team {
@@ -3354,7 +3386,7 @@ func TestReplanProject_CannotReopenCancellationDecision(t *testing.T) {
 		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
 	}
 	after, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
-	if string(after) != string(before) {
+	if string(canonicalProjectMetaNoAudit(t, after)) != string(canonicalProjectMetaNoAudit(t, before)) {
 		t.Fatalf("reopen attempt changed project: %s", after)
 	}
 }
@@ -3381,7 +3413,7 @@ func TestReplanProject_CannotRemoveCancellationDecision(t *testing.T) {
 		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
 	}
 	after, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
-	if string(after) != string(before) {
+	if string(canonicalProjectMetaNoAudit(t, after)) != string(canonicalProjectMetaNoAudit(t, before)) {
 		t.Fatalf("remove attempt changed project: %s", after)
 	}
 }
@@ -3745,7 +3777,7 @@ func TestCancelTask_SubmissionFence(t *testing.T) {
 			}
 			afterProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
 			afterTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
-			if string(afterProject) != string(beforeProject) || string(afterTask) != string(beforeTask) {
+			if string(canonicalProjectMetaNoAudit(t, afterProject)) != string(canonicalProjectMetaNoAudit(t, beforeProject)) || string(afterTask) != string(beforeTask) {
 				t.Fatalf("submission fence changed state: project=%s task=%s", afterProject, afterTask)
 			}
 		})
@@ -3778,7 +3810,7 @@ func TestCancelTask_LegacyRejectsUnknownSubmissionID(t *testing.T) {
 	}
 	afterProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
 	afterTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
-	if string(afterProject) != string(beforeProject) || string(afterTask) != string(beforeTask) {
+	if string(canonicalProjectMetaNoAudit(t, afterProject)) != string(canonicalProjectMetaNoAudit(t, beforeProject)) || string(afterTask) != string(beforeTask) {
 		t.Fatalf("unknown legacy identity changed state: project=%s task=%s", afterProject, afterTask)
 	}
 }
@@ -3841,7 +3873,7 @@ func TestCancelTask_RepeatedDecisionIsIdempotentAndConflictingPayloadIsRejected(
 		}
 		afterProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
 		afterTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
-		if string(afterProject) != string(firstProject) || string(afterTask) != string(firstTask) {
+		if string(canonicalProjectMetaNoAudit(t, afterProject)) != string(canonicalProjectMetaNoAudit(t, firstProject)) || string(afterTask) != string(firstTask) {
 			t.Fatalf("conflicting retry changed state: project=%s task=%s", afterProject, afterTask)
 		}
 	}
@@ -3876,7 +3908,7 @@ func TestCancelTask_TaskMetaTerminalDecisionCannotBeOverwritten(t *testing.T) {
 	}
 	afterProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
 	afterTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
-	if string(afterProject) != string(beforeProject) || string(afterTask) != string(beforeTask) {
+	if string(canonicalProjectMetaNoAudit(t, afterProject)) != string(canonicalProjectMetaNoAudit(t, beforeProject)) || string(afterTask) != string(beforeTask) {
 		t.Fatalf("terminal task decision changed: project=%s task=%s", afterProject, afterTask)
 	}
 }
@@ -3908,7 +3940,7 @@ func TestCancelTask_RejectsTaskMetaOwnedByAnotherProject(t *testing.T) {
 	}
 	afterProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
 	afterTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
-	if string(afterProject) != string(beforeProject) || string(afterTask) != string(beforeTask) {
+	if string(canonicalProjectMetaNoAudit(t, afterProject)) != string(canonicalProjectMetaNoAudit(t, beforeProject)) || string(afterTask) != string(beforeTask) {
 		t.Fatalf("ownership mismatch changed state: project=%s task=%s", afterProject, afterTask)
 	}
 }
@@ -3987,7 +4019,7 @@ func TestCancelTask_InvalidReplacementID400(t *testing.T) {
 			}
 			afterProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
 			afterTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
-			if string(afterProject) != string(beforeProject) || string(afterTask) != string(beforeTask) {
+			if string(canonicalProjectMetaNoAudit(t, afterProject)) != string(canonicalProjectMetaNoAudit(t, beforeProject)) || string(afterTask) != string(beforeTask) {
 				t.Fatalf("invalid replacement changed state: project=%s task=%s", afterProject, afterTask)
 			}
 		})
@@ -4096,6 +4128,10 @@ func (c *conflictInjectingOSS) ListObjectsDetailed(ctx context.Context, prefix s
 	return c.mcLike.ListObjectsDetailed(ctx, prefix)
 }
 
+func (c *conflictInjectingOSS) ListObjectsRecursive(ctx context.Context, prefix, startAfter string, limit int) ([]oss.ObjectInfo, string, error) {
+	return c.mcLike.ListObjectsRecursive(ctx, prefix, startAfter, limit)
+}
+
 func (c *conflictInjectingOSS) GetObject(ctx context.Context, key string) ([]byte, error) {
 	data, err := c.mcLike.GetObject(ctx, key)
 	c.getCalls++
@@ -4108,6 +4144,10 @@ func (c *conflictInjectingOSS) GetObject(ctx context.Context, key string) ([]byt
 
 func (c *conflictInjectingOSS) PutObject(ctx context.Context, key string, data []byte) error {
 	return c.mcLike.PutObject(ctx, key, data)
+}
+
+func (c *conflictInjectingOSS) PutObjectIfAbsent(ctx context.Context, key string, data []byte) error {
+	return c.mcLike.PutObjectIfAbsent(ctx, key, data)
 }
 
 // PutObjectIfMatch simulates the conditional write. When injectOnStat has
@@ -4123,6 +4163,21 @@ func (c *conflictInjectingOSS) PutObjectIfMatch(ctx context.Context, key string,
 		return oss.ErrPreconditionFailed
 	}
 	return c.mcLike.PutObject(ctx, key, data)
+}
+
+func (c *conflictInjectingOSS) PutObjectIfMatchWithType(ctx context.Context, key string, data []byte, contentType, matchETag string) error {
+	cur, err := c.mcLike.StatMeta(ctx, key)
+	if err != nil {
+		return err
+	}
+	if cur.ETag != matchETag {
+		return oss.ErrPreconditionFailed
+	}
+	return c.mcLike.PutObjectIfMatchWithType(ctx, key, data, contentType, matchETag)
+}
+
+func (c *conflictInjectingOSS) PutObjectIfMatchStrict(ctx context.Context, key string, data []byte, matchETag string) error {
+	return c.PutObjectIfMatch(ctx, key, data, matchETag)
 }
 
 func (c *conflictInjectingOSS) Stat(ctx context.Context, key string) error {
@@ -4319,6 +4374,10 @@ func (f *snapshotFailGet) GetObject(ctx context.Context, key string) ([]byte, er
 	return nil, errors.New("get failed")
 }
 
+func (w *snapshotFailGet) PutObjectIfMatchWithType(ctx context.Context, key string, data []byte, contentType, matchETag string) error {
+	return w.StorageClient.PutObjectIfMatchWithType(ctx, key, data, contentType, matchETag)
+}
+
 func TestCreateProject_NoSnapshot(t *testing.T) {
 	store := ossfake.NewMemory()
 	h := newSnapshotTestHandler(t, store, team("alpha-team"))
@@ -4448,6 +4507,17 @@ type failTaskPutOSS struct {
 	oss.StorageClient
 	failPrefix string
 	failures   int
+}
+
+func (f *failTaskPutOSS) PutObjectIfMatchWithType(ctx context.Context, key string, data []byte, contentType, matchETag string) error {
+	return f.StorageClient.PutObjectIfMatchWithType(ctx, key, data, contentType, matchETag)
+}
+
+// PutObjectIfMatchStrict forwards to the wrapped store so the strict
+// conditional-write path (writeProjectMeta, persistControlActionAudit)
+// stays transparent; only PutObject carries the injected failure.
+func (f *failTaskPutOSS) PutObjectIfMatchStrict(ctx context.Context, key string, data []byte, matchETag string) error {
+	return f.StorageClient.(strictConditionalWriter).PutObjectIfMatchStrict(ctx, key, data, matchETag)
 }
 
 func (f *failTaskPutOSS) PutObject(ctx context.Context, key string, data []byte) error {
@@ -6241,7 +6311,7 @@ func TestWorkflowStrongRereadFailureNotStrong(t *testing.T) {
 		getCounts:   getCounts,
 		advanceKey:  metaKey,
 		advanceData: v2,
-		advanceAt:   1, // advance invalidates the held snapshot → re-read ...
+		advanceAt:   1,    // advance invalidates the held snapshot → re-read ...
 		failReGet:   true, // ... which then fails
 	})
 
@@ -6286,7 +6356,7 @@ func TestWorkflowStrongRereadRacesAdvance(t *testing.T) {
 		getCounts:       getCounts,
 		advanceKey:      metaKey,
 		advanceData:     v2,
-		advanceAt:       1, // first advance: invalidates the held snapshot → re-read
+		advanceAt:       1,    // first advance: invalidates the held snapshot → re-read
 		races:           true, // second advance: lands after the re-read GetObject
 		advanceDataRace: v3,
 	})
@@ -6308,5 +6378,464 @@ func TestWorkflowStrongRereadRacesAdvance(t *testing.T) {
 	}
 	if got := rec.Header().Get("X-Consistency"); got != "" {
 		t.Fatalf("X-Consistency = %q, want empty (an advance racing the re-read must withdraw the claim)", got)
+	}
+}
+
+// TestGetProjectEvents_CursorBoundToKind: cursors are bound to the feed
+// they were issued from via the anchor's kind field. Same-feed paging
+// keeps working (and the issued cursor carries the feed's kind);
+// cross-feed reuse is rejected with 400 cursor_kind_mismatch in both
+// directions; a cursor issued before the kind field existed (format
+// upgrade) stays valid on the default feed but is rejected on the
+// control-action feed.
+func TestGetProjectEvents_CursorBoundToKind(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}},
+		},
+		"controlActions": []map[string]any{
+			{"action_id": "a1", "project_id": "p1", "action": "pause", "actor": "admin", "role": "admin", "at": "2026-09-09T09:00:00Z", "reason": "checkpoint", "result": "ok"},
+			{"action_id": "a2", "project_id": "p1", "action": "resume", "actor": "admin", "role": "admin", "at": "2026-09-09T09:00:01Z", "reason": "continue", "result": "ok"},
+		},
+	})
+	putTaskMeta(store, "", "t1", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "in_progress",
+		"history": []map[string]any{
+			{"ts": "2026-09-09T10:00:00Z", "from": "planned", "to": "prepared", "action": "delegate_task", "actor": "leader:default"},
+			{"ts": "2026-09-09T10:00:01Z", "from": "prepared", "to": "assigned", "action": "delegate_task", "actor": "leader:default"},
+		},
+	})
+	h := newProjectTestHandler(t, store)
+
+	decodeCursor := func(cursor string) eventsCursorAnchor {
+		b, err := base64.RawURLEncoding.DecodeString(cursor)
+		if err != nil {
+			t.Fatalf("decode cursor: %v (cursor=%s)", err, cursor)
+		}
+		var a eventsCursorAnchor
+		if err := json.Unmarshal(b, &a); err != nil {
+			t.Fatalf("decode anchor: %v (cursor=%s)", err, cursor)
+		}
+		return a
+	}
+	wantMismatch := func(q string) {
+		rec := doGetProjectEvents(t, h, q)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: status=%d body=%s, want 400", q, rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), "cursor_kind_mismatch") {
+			t.Fatalf("%s: body=%s, want cursor_kind_mismatch", q, rec.Body.String())
+		}
+	}
+
+	// 1. Same kind (control_action): paging works, and the issued
+	//    cursor carries the feed's kind.
+	resp := decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?kind=control_action&limit=1"))
+	if resp.CursorExpired || len(resp.Events) != 1 || resp.NextCursor == "" {
+		t.Fatalf("ctrl page1=%+v, want 1 control event + cursor", resp)
+	}
+	if resp.Events[0].Action != "control.pause" || resp.Events[0].Actor != "admin" {
+		t.Fatalf("ctrl page1[0]=%+v, want admin control.pause", resp.Events[0])
+	}
+	ctrlCursor := resp.NextCursor
+	if a := decodeCursor(ctrlCursor); a.Kind != "control_action" {
+		t.Fatalf("issued ctrl cursor kind=%q, want control_action", a.Kind)
+	}
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?kind=control_action&limit=1&cursor="+ctrlCursor))
+	if resp.CursorExpired || len(resp.Events) != 1 || resp.NextCursor != "" || resp.Events[0].Action != "control.resume" {
+		t.Fatalf("ctrl page2=%+v, want control.resume + exhausted cursor", resp)
+	}
+
+	// 2. Cross-feed: a control_action cursor on the default feed.
+	wantMismatch("/api/v1/projects/p1/events?cursor=" + ctrlCursor)
+
+	// 3. Cross-feed, the other way: a default-feed cursor on the
+	//    control-action feed (its kind decodes to empty).
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=1"))
+	if resp.CursorExpired || len(resp.Events) != 1 || resp.NextCursor == "" {
+		t.Fatalf("default page1=%+v, want 1 event + cursor", resp)
+	}
+	if a := decodeCursor(resp.NextCursor); a.Kind != "" {
+		t.Fatalf("issued default cursor kind=%q, want empty (default feed)", a.Kind)
+	}
+	wantMismatch("/api/v1/projects/p1/events?kind=control_action&cursor=" + resp.NextCursor)
+
+	// 4. Pre-kind (old format) cursor — no kind field: rejected for a
+	//    non-empty kind, still admitted on the default feed (the format
+	//    upgrade is one-way).
+	old := base64.RawURLEncoding.EncodeToString([]byte(`{"v":1,"ts":"2026-09-09T09:00:00Z","task_id":"","seq":0}`))
+	wantMismatch("/api/v1/projects/p1/events?kind=control_action&cursor=" + old)
+	rec := doGetProjectEvents(t, h, "/api/v1/projects/p1/events?cursor="+old)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("old cursor on default feed status=%d body=%s, want 200 (kind check passed)", rec.Code, rec.Body.String())
+	}
+}
+
+// =====================================================================
+// #1402: project writes must preserve the loop pause veto
+// =====================================================================
+
+// vetoLoopMeta is the loop block the #1402 tests seed: the human veto
+// (pause_sources) plus an unknown forward-compat key — both must survive
+// every project write (the defect class: the next field added to the loop
+// block must not be silently dropped by a project write).
+func vetoLoopMeta() map[string]any {
+	return map[string]any{
+		"goal":              "g",
+		"stop_condition":    "s",
+		"current_iteration": 1,
+		"max_iterations":    5,
+		"status":            "running",
+		"pause_sources":     []string{"user"},
+		"x_future":          "keep-me",
+	}
+}
+
+// storedLoop reads back the persisted project meta and returns its loop block.
+func storedLoop(t *testing.T, store *ossfake.Memory, key string) map[string]any {
+	t.Helper()
+	data, err := store.GetObject(context.Background(), key)
+	if err != nil {
+		t.Fatalf("read back %s: %v", key, err)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(data, &meta); err != nil {
+		t.Fatalf("decode %s: %v", key, err)
+	}
+	loop, ok := meta["loop"].(map[string]any)
+	if !ok {
+		t.Fatalf("stored meta has no loop block: %s", data)
+	}
+	return loop
+}
+
+func assertLoopVetoIntact(t *testing.T, loop map[string]any) {
+	t.Helper()
+	sources, ok := loop["pause_sources"].([]any)
+	if !ok || len(sources) != 1 || sources[0] != "user" {
+		t.Fatalf("pause_sources=%v, want [user] (veto dropped by project write)", loop["pause_sources"])
+	}
+	if loop["x_future"] != "keep-me" {
+		t.Fatalf("x_future=%v, want keep-me (unknown loop key dropped by project write)", loop["x_future"])
+	}
+}
+
+func sameSet(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	g := append([]string(nil), got...)
+	w := append([]string(nil), want...)
+	sort.Strings(g)
+	sort.Strings(w)
+	for i := range g {
+		if g[i] != w[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestResumeProjectPreservesLoopPauseSources is the maintainer's #1402
+// reproduction: a paused project seeded with loop.pause_sources=["user"]
+// is resumed by a Manager. The project becomes active, but the veto must
+// survive the write — pre-fix, the typed loopMeta dropped pause_sources,
+// so the worker-side _loop_pause_state saw (False, []) and dispatch
+// proceeded, bypassing the admin-only user release.
+func TestResumeProjectPreservesLoopPauseSources(t *testing.T) {
+	key := "teams/alpha-team/shared/projects/p1/meta.json"
+	store := ossfake.NewMemory()
+	putProject(store, key, map[string]any{
+		"project_id": "p1", "title": "P1", "status": "paused", "plan_type": "loop", "team_id": "alpha-team",
+		"tasks": []map[string]any{},
+		"loop":  vetoLoopMeta(),
+	})
+	h := newProjectTestHandler(t, store, team("alpha-team"))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/resume", nil)
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "manager"})
+	rec := httptest.NewRecorder()
+	h.ResumeProject(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var wf workflowResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &wf); err != nil {
+		t.Fatalf("decode workflow response: %v", err)
+	}
+	if wf.Status != "active" {
+		t.Fatalf("status=%q, want active", wf.Status)
+	}
+	assertLoopVetoIntact(t, storedLoop(t, store, key))
+}
+
+// TestStoredMetaKeepsTheVetoForThePythonGate feeds the exact bytes the
+// controller persists through the real worker-side gate (_loop_pause_state
+// in plugins/teamharness/mcp/project/state.py) — the component that
+// actually blocks dispatch. It runs the maintainer's reproduction command
+// against the seed and the post-resume stored bytes:
+//
+//	python3 -c "import json,sys; sys.path.insert(0,'plugins/teamharness/mcp'); \
+//	  from project.state import _loop_pause_state; \
+//	  print(_loop_pause_state(json.load(open(sys.argv[1]))))" <meta.json>
+//
+// The seed (status=paused + user veto) yields (True, ['project', 'user'])
+// — the maintainer's tuple. The post-resume bytes (status=active + user
+// veto) must yield (True, ['user']): still paused for dispatch, veto
+// intact. Pre-fix, the same post-resume bytes yielded (False, []) — the
+// bypass.
+func TestStoredMetaKeepsTheVetoForThePythonGate(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 not available; the worker-side gate check needs the interpreter")
+	}
+	root := findRepoRoot(t)
+
+	gate := func(data []byte) (bool, []string) {
+		t.Helper()
+		tmp := filepath.Join(t.TempDir(), "meta.json")
+		if err := os.WriteFile(tmp, data, 0o644); err != nil {
+			t.Fatalf("write temp meta: %v", err)
+		}
+		cmd := exec.Command(python, "-c",
+			"import json,sys; sys.path.insert(0,'plugins/teamharness'); sys.path.insert(0,'plugins/teamharness/mcp'); from project.state import _loop_pause_state; print(_loop_pause_state(json.load(open(sys.argv[1]))))",
+			tmp)
+		cmd.Dir = root
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("worker-side gate failed: %v\n%s", err, out)
+		}
+		return parseLoopPauseState(t, string(out))
+	}
+
+	key := "teams/alpha-team/shared/projects/p1/meta.json"
+	store := ossfake.NewMemory()
+	putProject(store, key, map[string]any{
+		"project_id": "p1", "title": "P1", "status": "paused", "plan_type": "loop", "team_id": "alpha-team",
+		"tasks": []map[string]any{},
+		"loop":  vetoLoopMeta(),
+	})
+	h := newProjectTestHandler(t, store, team("alpha-team"))
+
+	seed, err := store.GetObject(context.Background(), key)
+	if err != nil {
+		t.Fatalf("read seed: %v", err)
+	}
+	if paused, sources := gate(seed); !paused || !sameSet(sources, []string{"project", "user"}) {
+		t.Fatalf("seed gate=(%v, %v), want (True, {project user}) order-insensitive", paused, sources)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/resume", nil)
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "manager"})
+	rec := httptest.NewRecorder()
+	h.ResumeProject(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("resume status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+
+	after, err := store.GetObject(context.Background(), key)
+	if err != nil {
+		t.Fatalf("read post-resume meta: %v", err)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(after, &meta); err != nil {
+		t.Fatalf("decode post-resume meta: %v", err)
+	}
+	if meta["status"] != "active" {
+		t.Fatalf("post-resume status=%v, want active", meta["status"])
+	}
+	if paused, sources := gate(after); !paused || !sameSet(sources, []string{"user"}) {
+		t.Fatalf("post-resume gate=(%v, %v), want (True, [user]) — the veto must survive the project resume", paused, sources)
+	}
+}
+
+// findRepoRoot walks up from the test working directory to the repository
+// root (the directory containing plugins/teamharness/mcp/project/state.py).
+func findRepoRoot(t *testing.T) string {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	dir := wd
+	for {
+		candidate := filepath.Join(dir, "plugins", "teamharness", "mcp", "project", "state.py")
+		if _, err := os.Stat(candidate); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Skipf("cannot locate plugins/teamharness/mcp/project/state.py above %s", wd)
+		}
+		dir = parent
+	}
+}
+
+// parseLoopPauseState parses the gate's printed tuple, e.g.
+// "(True, ['project', 'user'])", into (paused, sources). The sources
+// comparison is order-insensitive (sameSet on the caller side).
+func parseLoopPauseState(t *testing.T, out string) (bool, []string) {
+	t.Helper()
+	trimmed := strings.TrimSpace(out)
+	if !strings.HasPrefix(trimmed, "(") || !strings.HasSuffix(trimmed, ")") {
+		t.Fatalf("unexpected gate output: %q", out)
+	}
+	inner := trimmed[1 : len(trimmed)-1]
+	parts := strings.SplitN(inner, ",", 2)
+	if len(parts) != 2 {
+		t.Fatalf("unexpected gate output: %q", out)
+	}
+	paused := strings.TrimSpace(parts[0]) == "True"
+	list := strings.TrimSpace(parts[1])
+	if !strings.HasPrefix(list, "[") || !strings.HasSuffix(list, "]") {
+		t.Fatalf("unexpected gate output: %q", out)
+	}
+	inside := strings.TrimSpace(list[1 : len(list)-1])
+	var sources []string
+	if inside != "" {
+		for _, s := range strings.Split(inside, ",") {
+			if s = strings.Trim(strings.TrimSpace(s), "'\""); s != "" {
+				sources = append(sources, s)
+			}
+		}
+	}
+	return paused, sources
+}
+
+// TestProjectWritePathsPreserveUnknownLoopKeys walks the project write
+// paths that touch a loop project (named per row) and asserts the loop
+// block survives with the veto and the unknown key intact. The replan row
+// documents that a REJECTED loop replan (409 by design) also writes its
+// audit entry without clobbering the loop block.
+func TestProjectWritePathsPreserveUnknownLoopKeys(t *testing.T) {
+	cases := []struct {
+		name             string
+		seedStatus       string
+		body             string
+		withLoopTasks    bool
+		wantCode         int
+		wantProjectState string
+	}{
+		{name: "pause", seedStatus: "active", wantCode: http.StatusOK, wantProjectState: "paused"},
+		{name: "resume", seedStatus: "paused", wantCode: http.StatusOK, wantProjectState: "active"},
+		{name: "complete", seedStatus: "active", withLoopTasks: true, wantCode: http.StatusOK, wantProjectState: "completed"},
+		{name: "replan", seedStatus: "active",
+			body:             `{"tasks":[{"taskId":"x","title":"X","assignedTo":"@w1"}]}`,
+			wantCode:         http.StatusConflict, // loop replan is rejected by design
+			wantProjectState: "active",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			key := "teams/alpha-team/shared/projects/p1/meta.json"
+			store := ossfake.NewMemory()
+			loop := vetoLoopMeta()
+			if tc.withLoopTasks {
+				// complete requires every loop task to be terminal
+				loop["tasks"] = []map[string]any{
+					{"task_id": "A", "title": "A", "assigned_to": "@w1", "depends_on": []string{}, "status": "completed"},
+				}
+			}
+			putProject(store, key, map[string]any{
+				"project_id": "p1", "title": "P1", "status": tc.seedStatus, "plan_type": "loop", "team_id": "alpha-team",
+				"tasks": []map[string]any{},
+				"loop":  loop,
+			})
+			h := newProjectTestHandler(t, store, team("alpha-team"))
+
+			path := map[string]string{"pause": "/pause", "resume": "/resume", "complete": "/complete", "replan": "/replan"}[tc.name]
+			var reqBody io.Reader
+			if tc.body != "" {
+				reqBody = strings.NewReader(tc.body)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1"+path, reqBody)
+			req.SetPathValue("id", "p1")
+			req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+			rec := httptest.NewRecorder()
+			switch tc.name {
+			case "pause":
+				h.PauseProject(rec, req)
+			case "resume":
+				h.ResumeProject(rec, req)
+			case "complete":
+				h.CompleteProject(rec, req)
+			case "replan":
+				h.ReplanProject(rec, req)
+			}
+			if rec.Code != tc.wantCode {
+				t.Fatalf("%s: status=%d body=%s, want %d", tc.name, rec.Code, rec.Body.String(), tc.wantCode)
+			}
+			loopBlock := storedLoop(t, store, key)
+			assertLoopVetoIntact(t, loopBlock)
+			data, err := store.GetObject(context.Background(), key)
+			if err != nil {
+				t.Fatalf("read back: %v", err)
+			}
+			var meta map[string]any
+			_ = json.Unmarshal(data, &meta)
+			if meta["status"] != tc.wantProjectState {
+				t.Fatalf("%s: project status=%v, want %s", tc.name, meta["status"], tc.wantProjectState)
+			}
+		})
+	}
+}
+
+// TestWorkflowNextEmptyWhileLoopVetoHeld guards the buildWorkflow side of
+// #1402: while the loop holds a pause source, next must be empty even on
+// an active project — mirroring _ready_loop_nodes, which checks the pause
+// state before computing ready nodes (the e2e assertion a fresh-process
+// delegate sees next == [] while blocked).
+func TestWorkflowNextEmptyWhileLoopVetoHeld(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		loop map[string]any
+		want []string
+	}{
+		{
+			name: "veto held",
+			loop: map[string]any{
+				"goal": "g", "stop_condition": "s", "current_iteration": 1, "max_iterations": 5, "status": "running",
+				"pause_sources": []string{"user"},
+				"tasks":         []map[string]any{{"task_id": "A", "title": "A", "assigned_to": "@w1", "depends_on": []string{}, "status": "planned"}},
+			},
+			want: nil,
+		},
+		{
+			name: "no veto (control)",
+			loop: map[string]any{
+				"goal": "g", "stop_condition": "s", "current_iteration": 1, "max_iterations": 5, "status": "running",
+				"tasks": []map[string]any{{"task_id": "A", "title": "A", "assigned_to": "@w1", "depends_on": []string{}, "status": "planned"}},
+			},
+			want: []string{"A"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := ossfake.NewMemory()
+			putProject(store, "shared/projects/p1/meta.json", map[string]any{
+				"project_id": "p1", "title": "P", "status": "active", "plan_type": "loop",
+				"tasks": []map[string]any{},
+				"loop":  tc.loop,
+			})
+			h := newProjectTestHandler(t, store)
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/workflow", nil)
+			req.SetPathValue("id", "p1")
+			req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+			rec := httptest.NewRecorder()
+			h.GetProjectWorkflow(rec, req)
+
+			var wf workflowResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &wf); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if !sameSet(wf.Next, tc.want) {
+				t.Fatalf("next=%v, want %v", wf.Next, tc.want)
+			}
+		})
 	}
 }

@@ -1,5 +1,7 @@
 # 本机 Worker 完整会话 Tracing 演示
 
+已增加可选 [AgentLoop 上报、查询与隔离验收](agentloop.md)。可单独使用 AgentLoop，也可由 Collector 同时上报两个平台；云上入库和评估仍需目标端点验收。
+
 AT 与 Dashboard 均使用本地分支 codex/worker-otel-langfuse-demo，工作树分别为 output/otel-langfuse-demo/core 和 output/otel-langfuse-demo/dashboard。[技术方案](../../docs/design/worker-otel-langfuse.md)说明了原生采集点、扩展契约和覆盖边界。
 
 ## 演收入口

@@ -1,4 +1,6 @@
-# Worker 会话追踪：OpenTelemetry → Langfuse → Dashboard
+# Worker 会话追踪：OpenTelemetry → Langfuse / AgentLoop → Dashboard
+
+AgentLoop 增量接入复用本方案的采集和权限契约，具体配置、原始 Trace 数据源定位、标准字段、协议验收及云上验证边界见 [AgentLoop 接入说明](../../examples/observability/agentloop.md)。
 
 ## 目标与选型
 

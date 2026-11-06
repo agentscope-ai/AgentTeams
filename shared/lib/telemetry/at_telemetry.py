@@ -23,7 +23,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
 _correlation = ContextVar("at_trace_correlation", default={})
 _model_request = ContextVar("at_model_request", default=None)
 _provider = None
-_secret_key = re.compile(r"(?:api[_-]?key|secret|password|authorization|access[_-]?token|gateway[_-]?key|credential|OTEL_EXPORTER_OTLP(?:_TRACES)?_HEADERS)", re.I)
+_secret_key = re.compile(r"(?:api[_-]?key|secret|password|authorization|access[_-]?token|gateway[_-]?key|credential|license[_-]?key|security[_-]?token|OTEL_EXPORTER_OTLP(?:_TRACES)?_HEADERS)", re.I)
 _limit = 256 * 1024
 
 
@@ -77,6 +77,63 @@ def capture(value):
             "preview": encoded[:_limit].decode("utf-8", errors="ignore")}
 
 
+def genai_messages(value, role):
+    """Keep native message parts; normalize text/chat SDK payloads for GenAI backends."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            pass
+    if isinstance(value, dict):
+        value = value.get("messages", value.get("input", value))
+    messages = value if isinstance(value, list) else [value]
+    result = []
+    for message in messages:
+        if isinstance(message, dict) and isinstance(message.get("parts"), list):
+            result.append(message)
+        else:
+            content = message.get("content", message) if isinstance(message, dict) else message
+            parts = content if isinstance(content, list) else [{"type": "text", "content": content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)}]
+            parts = [{"type": "text", "content": part["text"]} if isinstance(part, dict) and part.get("type") == "text" and "text" in part and "content" not in part else part for part in parts]
+            result.append({"role": message.get("role", role) if isinstance(message, dict) else role, "parts": parts})
+    return result
+
+
+def genai_attributes(attrs, name):
+    """Add backend-neutral semantics once, retaining the Langfuse compatibility fields."""
+    attrs = dict(attrs)
+    kind = str(attrs.get("langfuse.observation.type", "")).lower()
+    operation_name = attrs.get("gen_ai.operation.name")
+    provider = attrs.get("gen_ai.provider.name") or attrs.get("gen_ai.system")
+    if provider:
+        attrs.setdefault("gen_ai.provider.name", provider)
+        attrs.setdefault("gen_ai.system", provider)
+    if name == "worker.turn":
+        attrs.update({"gen_ai.span.kind": "ENTRY", "gen_ai.operation.name": "enter"})
+    elif kind == "generation" or operation_name == "chat":
+        attrs.setdefault("gen_ai.span.kind", "LLM")
+        attrs.setdefault("gen_ai.operation.name", "chat")
+    elif kind == "tool" or operation_name == "execute_tool":
+        attrs.setdefault("gen_ai.span.kind", "TOOL")
+        attrs.setdefault("gen_ai.operation.name", "execute_tool")
+    elif kind == "agent" or operation_name == "invoke_agent":
+        attrs.setdefault("gen_ai.span.kind", "AGENT")
+        attrs.setdefault("gen_ai.operation.name", "invoke_agent")
+    for source, target in (("agentteams.session.id", "gen_ai.session.id"), ("agentteams.turn.id", "gen_ai.turn.id"),
+                           ("agentteams.worker.name", "gen_ai.agent.id"), ("agentteams.worker.name", "gen_ai.agent.name")):
+        if source in attrs:
+            attrs.setdefault(target, attrs[source])
+    if attrs.get("gen_ai.span.kind") == "TOOL":
+        for label, target in (("input", "gen_ai.tool.call.arguments"), ("output", "gen_ai.tool.call.result")):
+            if f"langfuse.observation.{label}" in attrs:
+                attrs.setdefault(target, attrs[f"langfuse.observation.{label}"])
+    elif attrs.get("gen_ai.span.kind") in ("ENTRY", "AGENT", "LLM"):
+        for label, role in (("input", "user"), ("output", "assistant")):
+            if f"langfuse.observation.{label}" in attrs:
+                attrs.setdefault(f"gen_ai.{label}.messages", json.dumps(genai_messages(attrs[f"langfuse.observation.{label}"], role), ensure_ascii=False))
+    return attrs
+
+
 class SanitizingExporter(SpanExporter):
     """Normalize native semantic conventions and redact before leaving the process."""
 
@@ -86,7 +143,7 @@ class SanitizingExporter(SpanExporter):
     def export(self, spans):
         clean = []
         for span in spans:
-            attrs = dict(span.attributes or {})
+            attrs = genai_attributes(span.attributes or {}, span.name)
             status = span.status
             if span.events:
                 attrs["langfuse.observation.metadata.events"] = json.dumps([

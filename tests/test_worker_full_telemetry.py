@@ -176,6 +176,36 @@ def test_export_normalizes_returned_tool_error_and_redacts(monkeypatch):
     assert "gen_ai.input.messages" not in exporter.get_finished_spans()[-1].attributes
 
 
+def test_agentloop_semantics_preserve_langfuse_io_and_content_controls(monkeypatch):
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(telemetry.SanitizingExporter(exporter)))
+    tracer = provider.get_tracer("test")
+    monkeypatch.setenv("AGENTLOOP_LICENSE_KEY", "private-license-key")
+    attrs = {"agentteams.session.id": "worker:session", "agentteams.turn.id": "turn",
+             "agentteams.worker.name": "worker", "langfuse.observation.type": "agent"}
+    with tracer.start_as_current_span("worker.turn", attributes=attrs) as span:
+        telemetry.set_io(span, input={"messages": [{"role": "user", "content": "hello private-license-key"}]}, output="done")
+    root = exporter.get_finished_spans()[-1].attributes
+    assert root["gen_ai.span.kind"] == "ENTRY"
+    assert root["gen_ai.operation.name"] == "enter"
+    assert root["gen_ai.session.id"] == "worker:session" and root["gen_ai.turn.id"] == "turn"
+    assert json.loads(root["gen_ai.input.messages"])[0]["parts"][0]["content"] == "hello [REDACTED]"
+    assert "langfuse.observation.input" in root
+    assert telemetry.genai_messages([{"role": "user", "content": [{"type": "text", "text": "native text"}]}], "user")[0]["parts"] == [{"type": "text", "content": "native text"}]
+    assert telemetry.genai_attributes({"gen_ai.system": "openai"}, "chat")["gen_ai.provider.name"] == "openai"
+    with tracer.start_as_current_span("tool read", attributes={"gen_ai.operation.name": "execute_tool"}) as span:
+        telemetry.set_io(span, input={"path": "demo"}, output={"error": "missing file"})
+    tool = exporter.get_finished_spans()[-1]
+    assert tool.attributes["gen_ai.span.kind"] == "TOOL"
+    assert json.loads(tool.attributes["gen_ai.tool.call.arguments"]) == {"path": "demo"}
+    assert tool.status.status_code.name == "ERROR"
+    monkeypatch.setenv("AGENTTEAMS_OTEL_CAPTURE_CONTENT", "false")
+    with tracer.start_as_current_span("worker.turn", attributes={**attrs, "langfuse.observation.input": "private", "gen_ai.input.messages": "private"}):
+        pass
+    assert not any(key.endswith((".input", ".messages")) for key in exporter.get_finished_spans()[-1].attributes)
+
+
 def test_turns_do_not_inherit_long_lived_matrix_consumer_trace(monkeypatch):
     from at_runtime_adapters import start_turn
     provider = TracerProvider()

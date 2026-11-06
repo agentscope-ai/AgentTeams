@@ -36,6 +36,9 @@ type Memory struct {
 
 	// StrictUnsupported makes PutObjectIfMatchStrict answer 501, for tests.
 	StrictUnsupported atomic.Bool
+	// StatMetaCalls counts StatMeta invocations so tests can assert that
+	// the list paths no longer stat every file (only zero-byte candidates).
+	StatMetaCalls atomic.Int64
 }
 
 // md5Hex returns the lowercase MD5 hex digest of data (MinIO single-part
@@ -137,6 +140,7 @@ func (m *Memory) LastWriteTime() time.Time {
 // so a content-changing concurrent write also changes the ETag. Returns
 // os.ErrNotExist when the key is missing.
 func (m *Memory) StatMeta(_ context.Context, key string) (oss.ObjectMeta, error) {
+	m.StatMetaCalls.Add(1)
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	data, ok := m.objects[key]
@@ -339,9 +343,59 @@ func (m *Memory) ListObjectsDetailed(_ context.Context, prefix string) ([]oss.Ob
 	updatedAt := m.modTime.UTC().Format(time.RFC3339)
 	infos := make([]oss.ObjectInfo, 0, len(keys))
 	for _, key := range keys {
-		infos = append(infos, oss.ObjectInfo{Name: strings.TrimPrefix(key, prefix), UpdatedAt: updatedAt})
+		infos = append(infos, oss.ObjectInfo{
+			Name:      strings.TrimPrefix(key, prefix),
+			UpdatedAt: updatedAt,
+			Size:      int64(len(m.objects[key])),
+			ETag:      md5Hex(m.objects[key]),
+		})
 	}
 	return infos, nil
+}
+
+// ListObjectsRecursive lists every object under prefix at all levels,
+// lexicographically by full key, with the production client's page
+// contract (S3 ListObjectsV2 semantics): startAfter restricts the page to
+// keys strictly greater than it, limit bounds the page, and the returned
+// cursor is the last key of the page ("" when the listing is exhausted).
+func (m *Memory) ListObjectsRecursive(_ context.Context, prefix, startAfter string, limit int) ([]oss.ObjectInfo, string, error) {
+	if limit <= 0 {
+		return nil, "", fmt.Errorf("recursive list limit must be positive, got %d", limit)
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	keys := make([]string, 0)
+	for key := range m.objects {
+		if strings.HasPrefix(key, prefix) && key > startAfter {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	// page is the slice to return; keep limit intact: the cursor rule below
+	// depends on whether the page filled the caller's bound.
+	page := limit
+	if page > len(keys) {
+		page = len(keys)
+	}
+	updatedAt := m.modTime.UTC().Format(time.RFC3339)
+	infos := make([]oss.ObjectInfo, 0, page)
+	for _, key := range keys[:page] {
+		infos = append(infos, oss.ObjectInfo{
+			Name:      strings.TrimPrefix(key, prefix),
+			UpdatedAt: updatedAt,
+			Size:      int64(len(m.objects[key])),
+			ETag:      md5Hex(m.objects[key]),
+		})
+	}
+	nextKey := ""
+	// A full page always yields its last key as the cursor: the caller
+	// resumes strictly after it and gets an empty page when exhausted.
+	// A short page means the walk is over, so no cursor is returned (the
+	// handler surfaces that as nextKey: null).
+	if page > 0 && page == limit {
+		nextKey = keys[page-1]
+	}
+	return infos, nextKey, nil
 }
 
 // DeletePrefix removes every object whose key starts with prefix.
@@ -359,9 +413,106 @@ func (m *Memory) DeletePrefix(_ context.Context, prefix string) error {
 // EnsureBucket is a no-op for the in-memory fake.
 func (m *Memory) EnsureBucket(_ context.Context) error { return nil }
 
+// PresignUpload implements oss.PresignUploader: a deterministic presigned
+// PUT URL keyed by the object path, so tests can assert the issued shape
+// without a real provider.
+func (m *Memory) PresignUpload(_ context.Context, key string, maxBytes int64, contentType, sha256Hex string, ttl time.Duration) (string, string, map[string]string, error) {
+	return "PUT", "https://fake.example/" + key, nil, nil
+}
+
 // Ensure Memory satisfies the interface at compile time.
 var _ oss.StorageClient = (*Memory)(nil)
 var _ oss.BucketManager = (*Memory)(nil)
+var _ oss.PresignUploader = (*Memory)(nil)
+
+// NoPresign wraps a StorageClient and strips the PresignUploader
+// capability, for tests that exercise the API's 500 fail-closed answer
+// against a backend that cannot issue direct upload URLs. It forwards
+// every StorageClient method verbatim; only PresignUpload is deliberately
+// absent.
+type NoPresign struct {
+	inner oss.StorageClient
+}
+
+// NewNoPresign wraps store so the type assertion to oss.PresignUploader
+// fails in the handler.
+func NewNoPresign(store oss.StorageClient) *NoPresign {
+	return &NoPresign{inner: store}
+}
+
+// ListObjectsDetailed forwards to the wrapped client.
+func (n *NoPresign) ListObjectsDetailed(ctx context.Context, prefix string) ([]oss.ObjectInfo, error) {
+	return n.inner.ListObjectsDetailed(ctx, prefix)
+}
+
+// ListObjectsRecursive forwards to the wrapped client.
+func (n *NoPresign) ListObjectsRecursive(ctx context.Context, prefix, startAfter string, limit int) ([]oss.ObjectInfo, string, error) {
+	return n.inner.ListObjectsRecursive(ctx, prefix, startAfter, limit)
+}
+
+// PutObject forwards to the wrapped client.
+func (n *NoPresign) PutObject(ctx context.Context, key string, data []byte) error {
+	return n.inner.PutObject(ctx, key, data)
+}
+
+// PutObjectIfMatch forwards to the wrapped client.
+func (n *NoPresign) PutObjectIfMatch(ctx context.Context, key string, data []byte, matchETag string) error {
+	return n.inner.PutObjectIfMatch(ctx, key, data, matchETag)
+}
+
+// PutObjectIfMatchWithType forwards to the wrapped client.
+func (n *NoPresign) PutObjectIfMatchWithType(ctx context.Context, key string, data []byte, contentType, matchETag string) error {
+	return n.inner.PutObjectIfMatchWithType(ctx, key, data, contentType, matchETag)
+}
+
+// PutObjectIfAbsent forwards to the wrapped client.
+func (n *NoPresign) PutObjectIfAbsent(ctx context.Context, key string, data []byte) error {
+	return n.inner.PutObjectIfAbsent(ctx, key, data)
+}
+
+// PutFile forwards to the wrapped client.
+func (n *NoPresign) PutFile(ctx context.Context, localPath, key string) error {
+	return n.inner.PutFile(ctx, localPath, key)
+}
+
+// GetObject forwards to the wrapped client.
+func (n *NoPresign) GetObject(ctx context.Context, key string) ([]byte, error) {
+	return n.inner.GetObject(ctx, key)
+}
+
+// Stat forwards to the wrapped client.
+func (n *NoPresign) Stat(ctx context.Context, key string) error {
+	return n.inner.Stat(ctx, key)
+}
+
+// StatMeta forwards to the wrapped client.
+func (n *NoPresign) StatMeta(ctx context.Context, key string) (oss.ObjectMeta, error) {
+	return n.inner.StatMeta(ctx, key)
+}
+
+// DeleteObject forwards to the wrapped client.
+func (n *NoPresign) DeleteObject(ctx context.Context, key string) error {
+	return n.inner.DeleteObject(ctx, key)
+}
+
+// Mirror forwards to the wrapped client.
+func (n *NoPresign) Mirror(ctx context.Context, src, dst string, opts oss.MirrorOptions) error {
+	return n.inner.Mirror(ctx, src, dst, opts)
+}
+
+// ListObjects forwards to the wrapped client.
+func (n *NoPresign) ListObjects(ctx context.Context, prefix string) ([]string, error) {
+	return n.inner.ListObjects(ctx, prefix)
+}
+
+// DeletePrefix forwards to the wrapped client.
+func (n *NoPresign) DeletePrefix(ctx context.Context, prefix string) error {
+	return n.inner.DeletePrefix(ctx, prefix)
+}
+
+// Ensure NoPresign still satisfies the base client (it must NOT satisfy
+// oss.PresignUploader — that is the whole point of the wrapper).
+var _ oss.StorageClient = (*NoPresign)(nil)
 
 // ErrNotExist is re-exported for tests that want to match against the exact
 // sentinel returned by GetObject/Stat without importing "os".

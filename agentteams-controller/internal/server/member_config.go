@@ -33,6 +33,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
@@ -41,6 +42,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/runtimeconfig"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/runtimeconfig/hermes"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/runtimeconfig/openclaw"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -57,12 +59,13 @@ type MemberConfigHandler struct {
 	// execBackend resolves the worker's exec-capable backend (docker in
 	// embedded mode). Injectable for tests; default reads from the
 	// backend registry.
-	execBackend func(ctx context.Context, name string) (openclaw.ExecBackend, error)
+	execBackend func(ctx context.Context, name string) (runtimeconfig.ExecBackend, error)
 
-	store           openclaw.KeyStore
+	store           runtimeconfig.KeyStore
 	reg             *runtimeconfig.Registry
 	defaultRuntime  string
 	openclawAdapter *openclaw.Adapter
+	hermesAdapter   *hermes.Adapter
 
 	// nativeConfigPolicy is the model-access policy seam for native config
 	// writes (wired by PR-B). nil = not wired yet (current behaviour).
@@ -70,10 +73,10 @@ type MemberConfigHandler struct {
 }
 
 // NewMemberConfigHandler creates the handler. runtimes is the registry of
-// compiled-in runtime adapters (openclaw in P8a; hermes joins in P8b); the
-// openclaw entry doubles as the concrete write-plane adapter for workers
-// whose resolved runtime is openclaw.
-func NewMemberConfigHandler(c client.Client, namespace, kubeMode string, ac *audit.Client, reg *backend.Registry, store openclaw.KeyStore, runtimes *runtimeconfig.Registry, defaultRuntime string) *MemberConfigHandler {
+// compiled-in runtime adapters (openclaw and hermes); each registered
+// adapter doubles as the concrete write-plane adapter for workers whose
+// resolved runtime is that adapter's.
+func NewMemberConfigHandler(c client.Client, namespace, kubeMode string, ac *audit.Client, reg *backend.Registry, store runtimeconfig.KeyStore, runtimes *runtimeconfig.Registry, defaultRuntime string) *MemberConfigHandler {
 	h := &MemberConfigHandler{
 		client:         c,
 		namespace:      namespace,
@@ -88,7 +91,12 @@ func NewMemberConfigHandler(c client.Client, namespace, kubeMode string, ac *aud
 			h.openclawAdapter = ad
 		}
 	}
-	h.execBackend = func(ctx context.Context, _ string) (openclaw.ExecBackend, error) {
+	if a, ok := runtimes.Lookup("hermes"); ok {
+		if ad, ok := a.(*hermes.Adapter); ok {
+			h.hermesAdapter = ad
+		}
+	}
+	h.execBackend = func(ctx context.Context, _ string) (runtimeconfig.ExecBackend, error) {
 		if reg == nil {
 			return nil, errors.New("no worker backend available")
 		}
@@ -96,7 +104,7 @@ func NewMemberConfigHandler(c client.Client, namespace, kubeMode string, ac *aud
 		if b == nil {
 			return nil, errors.New("no worker backend available")
 		}
-		eb, ok := b.(openclaw.ExecBackend)
+		eb, ok := b.(runtimeconfig.ExecBackend)
 		if !ok {
 			return nil, fmt.Errorf("worker backend %q does not support container exec", b.Name())
 		}
@@ -110,7 +118,7 @@ func NewMemberConfigHandler(c client.Client, namespace, kubeMode string, ac *aud
 // memberScope validates the worker name, enforces embedded mode and team
 // scope, and resolves the exec-capable backend. Mirrors codingCliScope:
 // hidden resources are 404, never 403 (W8).
-func (h *MemberConfigHandler) memberScope(w http.ResponseWriter, r *http.Request, name string) (v1beta1.Worker, openclaw.ExecBackend, bool) {
+func (h *MemberConfigHandler) memberScope(w http.ResponseWriter, r *http.Request, name string) (v1beta1.Worker, runtimeconfig.ExecBackend, bool) {
 	var worker v1beta1.Worker
 	if name == "" || !workerNamePattern.MatchString(name) {
 		httputil.WriteError(w, http.StatusBadRequest, "worker name is required and must be a valid DNS label")
@@ -166,24 +174,39 @@ func (h *MemberConfigHandler) memberScope(w http.ResponseWriter, r *http.Request
 // spec.runtime means the install default, normally openclaw — the same
 // helper worker_controller uses, so a legacy worker whose container
 // actually runs openclaw stays configurable) and returns the config
-// manager for the registered adapter. A resolved runtime with no
-// registered surface is 409 runtime_unknown with the supported list —
-// never a fallback adapter (writing to the wrong runtime is worse than
-// refusing).
-func (h *MemberConfigHandler) managerFor(w http.ResponseWriter, runtime string, eb openclaw.ExecBackend) *openclaw.ConfigManager {
-	openclawRuntime := ""
+// manager of the registered adapter for that runtime. A resolved runtime
+// with no wired manager is 409 runtime_unknown with the list of runtimes
+// this handler actually serves — never a fallback adapter (writing to the
+// wrong runtime is worse than refusing).
+func (h *MemberConfigHandler) managerFor(w http.ResponseWriter, runtime string, eb runtimeconfig.ExecBackend) runtimeconfig.Manager {
+	switch {
+	case h.openclawAdapter != nil && runtime == h.openclawAdapter.Surface().Runtime:
+		return openclaw.NewConfigManager(h.openclawAdapter, eb, h.store)
+	case h.hermesAdapter != nil && runtime == h.hermesAdapter.Surface().Runtime:
+		return hermes.NewConfigManager(h.hermesAdapter, eb, h.store)
+	}
+	httputil.WriteJSON(w, http.StatusConflict, map[string]any{
+		"error":     "runtime_unknown",
+		"runtime":   runtime,
+		"supported": h.supportedRuntimes(),
+	})
+	return nil
+}
+
+// supportedRuntimes lists exactly the runtimes this handler can construct
+// a config manager for. A 409 runtime_unknown response must offer what
+// the write plane accepts — no more (the maintainer's original bug:
+// hermes was listed while managerFor refused it) and no less.
+func (h *MemberConfigHandler) supportedRuntimes() []string {
+	var out []string
 	if h.openclawAdapter != nil {
-		openclawRuntime = h.openclawAdapter.Surface().Runtime
+		out = append(out, h.openclawAdapter.Surface().Runtime)
 	}
-	if runtime != openclawRuntime {
-		httputil.WriteJSON(w, http.StatusConflict, map[string]any{
-			"error":     "runtime_unknown",
-			"runtime":   runtime,
-			"supported": h.reg.Runtimes(),
-		})
-		return nil
+	if h.hermesAdapter != nil {
+		out = append(out, h.hermesAdapter.Surface().Runtime)
 	}
-	return openclaw.NewConfigManager(h.openclawAdapter, eb, h.store)
+	sort.Strings(out)
+	return out
 }
 
 // --- surface ---------------------------------------------------------------
@@ -365,12 +388,16 @@ func (e *NativeConfigPolicyError) Error() string { return e.Code + ": " + e.Mess
 // success).
 func writeConfigStoreError(w http.ResponseWriter, op string, err error) {
 	var (
-		missing *openclaw.ConfigFileMissingError
-		stale   *openclaw.StaleRevisionError
-		unknown *openclaw.UnknownFieldsError
-		nokeys  *openclaw.NoWritableKeysError
-		runtime *openclaw.UnknownRuntimeError
-		verr    *openclaw.ValidationError
+		missing  *openclaw.ConfigFileMissingError
+		stale    *openclaw.StaleRevisionError
+		hStale   *hermes.StaleRevisionError
+		unknown  *openclaw.UnknownFieldsError
+		hUnknown *hermes.UnknownFieldsError
+		nokeys   *openclaw.NoWritableKeysError
+		hNoKeys  *hermes.NoWritableKeysError
+		runtime  *openclaw.UnknownRuntimeError
+		verr     *openclaw.ValidationError
+		hVerr    *hermes.ValidationError
 	)
 	switch {
 	case errors.As(err, &missing):
@@ -381,21 +408,43 @@ func writeConfigStoreError(w http.ResponseWriter, op string, err error) {
 			"current":  stale.Current,
 			"expected": stale.Expected,
 		})
+	case errors.As(err, &hStale):
+		httputil.WriteJSON(w, http.StatusConflict, map[string]any{
+			"error":    "stale_rev",
+			"current":  hStale.Current,
+			"expected": hStale.Expected,
+		})
 	case errors.As(err, &unknown):
 		httputil.WriteJSON(w, http.StatusUnprocessableEntity, map[string]any{
 			"error":  "unknown_field",
 			"fields": unknown.Fields,
+		})
+	case errors.As(err, &hUnknown):
+		httputil.WriteJSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"error":  "unknown_field",
+			"fields": hUnknown.Fields,
 		})
 	case errors.As(err, &nokeys):
 		httputil.WriteJSON(w, http.StatusUnprocessableEntity, map[string]any{
 			"error":       "no_writable_keys",
 			"unsupported": nokeys.Unsupported,
 		})
+	case errors.As(err, &hNoKeys):
+		httputil.WriteJSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"error":       "no_writable_keys",
+			"unsupported": hNoKeys.Unsupported,
+		})
 	case errors.As(err, &verr):
 		httputil.WriteJSON(w, http.StatusUnprocessableEntity, map[string]any{
 			"error":  "invalid_value",
 			"key":    verr.Key,
 			"detail": verr.Err.Error(),
+		})
+	case errors.As(err, &hVerr):
+		httputil.WriteJSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"error":  "invalid_value",
+			"key":    hVerr.Key,
+			"detail": hVerr.Err.Error(),
 		})
 	case errors.As(err, &runtime):
 		httputil.WriteJSON(w, http.StatusConflict, map[string]any{

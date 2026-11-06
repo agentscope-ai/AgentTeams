@@ -153,6 +153,18 @@ def test_missing_expected_file_halts(tmp_path):
     assert "gitconfig" in out and "missing" in out
 
 
+def test_missing_shim_halts_without_repair(tmp_path):
+    env, ws = _setup(tmp_path)
+    iso = _iso(tmp_path, env)
+    shim = iso / "bin" / "agentteams-sync"
+    shim.unlink()
+    proc = _setup_again(tmp_path, env, ws)
+    assert proc.returncode != 0
+    assert "bin/agentteams-sync" in proc.stdout + proc.stderr
+    assert "missing" in proc.stdout + proc.stderr
+    assert not shim.exists()
+
+
 def test_foreign_content_halts(tmp_path):
     env, ws = _setup(tmp_path)
     iso = _iso(tmp_path, env)

@@ -100,6 +100,7 @@ worker_isolation_check() {
                 fi
                 ;;
             gitconfig)
+                found=1
                 _worker_isolation_check_file "$entry" "gitconfig" || return 1
                 ;;
             *)

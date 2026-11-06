@@ -374,8 +374,17 @@ def _request_attention(
     resolved_via: str | None = None,
     resolved_by: str | None = None,
     resolve_evidence: dict[str, Any] | None = None,
+    options: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {"taskId": TASK_ID, "kind": kind, "question": question}
+    # #1506: a new decision raise needs options while the protocol switch is
+    # on. These parity chains exercise the stall/freeze state machine, not
+    # the options guard itself, so give them the canonical option set unless
+    # the caller is resolving an existing record (explicit resolve is exempt).
+    if kind == "decision" and options is None and not resolved:
+        options = [{"id": "approve", "label": "Approve"}, {"id": "reject", "label": "Reject"}]
+    if options is not None:
+        payload["options"] = options
     if resolved is not None:
         payload["resolved"] = resolved
     if resolved_via is not None:

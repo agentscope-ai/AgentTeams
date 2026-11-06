@@ -598,6 +598,7 @@ Response `200 OK`:
   "items": [
     {
       "taskId": "t1",
+      "eventId": "$matrix-event-id",
       "teamId": "biz-team",
       "projectId": "demo-project-001",
       "kind": "approval",
@@ -627,7 +628,7 @@ Response body:
 | Field | Meaning |
 |:--|:--|
 | `team_id` | The team name from the URL (the CR name). |
-| `items` | Inbox rows, sorted by urgency: `status=overdue` by `timeoutAt` ascending, every other status by `requestedAt` descending (stable tie-breakers: task id, kind, question). Row fields follow the workbench contract (camelCase); `resolvedVia` / `resolvedBy` / `resolvedAt` / `resolution` are `null` until the record is resolved, and `notified` is `null` when the record has no `notification_log`. |
+| `items` | Inbox rows, sorted by urgency: `status=overdue` by `timeoutAt` ascending, every other status by `requestedAt` descending (stable tie-breakers: task id, kind, question). Row fields follow the workbench contract (camelCase); `eventId` is the Matrix event id of the room message that raised the record (`null` when the notification was withheld), `resolvedVia` / `resolvedBy` / `resolvedAt` / `resolution` are `null` until the record is resolved, and `notified` is `null` when the record has no `notification_log`. |
 | `count` | `len(items)` — the rows actually returned, not the rows that matched the filter. |
 | `truncated` | `true` when the filter matched more rows than `limit` and `items` was cut to the first `limit` rows. Always present. |
 
@@ -636,13 +637,14 @@ Response headers (each absent when its condition does not hold):
 | Header | Meaning |
 |:--|:--|
 | `X-Attention-Truncated: 1` | Set iff `truncated` is `true` — the inbox holds more matching rows than were returned. |
-| `X-Attention-Skipped: N` | `N` of the team's projects were skipped because a project `meta.json` or one of its task metas could not be read or parsed. Counts degraded projects only — never truncated rows. |
+| `X-Attention-Skipped: N` | `N` of the team's projects were **degraded**: a project `meta.json`, or one of its task metas, could not be read or parsed. A degraded project still contributes the rows of its healthy tasks — only the unreadable task's rows are missing. Counts degraded projects only (once per project) — never truncated rows. |
 
 The three signals are independent, so a caller can tell the three
 looks-alike states apart: `count=0` + `truncated=false` is a genuinely
 empty inbox; `count=limit` + `truncated=true` is a limited (but healthy)
-inbox; `X-Attention-Skipped > 0` marks a degraded read in which the
-skipped projects contributed nothing.
+inbox; `X-Attention-Skipped > 0` marks a degraded read: the affected tasks
+contributed no rows, while the rest of those projects' healthy tasks are
+still returned (a degraded project is not excluded wholesale).
 
 Read order and what `limit` costs: the read lists the team's projects,
 then reads every project meta and every task meta of the team; only then
@@ -660,7 +662,7 @@ objects, keys relative to the configured storage prefix:
 |:--|:--|:--|
 | Team project list | `teams/{team}/shared/projects/` | The request's one list call; direct children are the team's project directories. |
 | Project meta | `teams/{team}/shared/projects/{project_id}/meta.json` | One read per listed project: identity plus the graph task list (`tasks`, or `loop.tasks` for loop plans). |
-| Task meta | `teams/{team}/shared/tasks/{task_id}/meta.json` | One read per graph task; its `attention` array is the inbox source. A missing object contributes nothing; an unreadable or unparsable one skips its project (counted in `X-Attention-Skipped`). |
+| Task meta | `teams/{team}/shared/tasks/{task_id}/meta.json` | One read per graph task; its `attention` array is the inbox source. A missing object contributes nothing; an unreadable or unparsable one drops that task's rows and marks its project degraded (counted once in `X-Attention-Skipped`); the project's other tasks still contribute. |
 | Overdue signal event | `teams/{team}/shared/events/{team_id}/ev_*.json` | The only write of the read: a pending item past its `timeoutAt` gets one idempotent `attention_overdue` signal event; a failed event write never fails the read. |
 
 Two naming subtleties, both handled by the read:
@@ -674,18 +676,21 @@ Two naming subtleties, both handled by the read:
 
 ### Record identity and the DB migration boundary
 
-An attention record is identified by `(project, eventId)`: the project it
-belongs to plus the Matrix event id of the room message that raised it
-(`eventId` is written into the record when the notification is sent; a
-record whose notification was withheld carries none). That pair is the
-stable identity the API and the dashboard rely on for dedupe and
-"already answered" state. If attention state moves from these `meta.json`
-objects into a database in the future, `(project, eventId)` — and the whole
-surface above it (endpoint, query parameters, row fields, the two headers)
-— is the boundary that stays unchanged. **This change is not that
-migration**; it only pins the current layout, the truncation semantics,
-and the read-cost evidence so a later migration has a documented contract
-to move against.
+An attention record's identity is `(project, eventId)`: the project it
+belongs to plus the Matrix event id of the room message that raised it.
+`eventId` is written into the record when the notification is sent and is
+**returned on the row** (see the `items` fields above), so two records that
+differ only in that id never serialize identically. A record whose
+notification was withheld carries no `eventId`; until one is sent, dedupe
+must fall back to `(project, taskId, kind, requestedAt)`.
+
+**Future work, not a delivered guarantee:** if attention state moves from
+these `meta.json` objects into a database later, `(project, eventId)` — and
+the surface above it (endpoint, query parameters, row fields, the two
+headers) — is the boundary intended to stay unchanged. That migration does
+not exist today; this section pins the current layout, the truncation
+semantics and the read-cost evidence so a later migration has a documented
+contract to move against.
 
 ### Current read cost (measured)
 

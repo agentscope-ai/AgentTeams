@@ -66,7 +66,13 @@ type teamAttentionOption struct {
 // teamAttentionRow is one inbox row (the frontend consumes this shape
 // verbatim — #1394 S1). Pointer fields serialize as null when absent.
 type teamAttentionRow struct {
-	TaskID      string                 `json:"taskId"`
+	TaskID string `json:"taskId"`
+	// EventID is the Matrix event id of the room message that raised the
+	// record (null when the notification was withheld). It is part of the
+	// row so (project, eventId) — the identity the docs promise — is
+	// visible to the API/dashboard consumer: two records that differ only
+	// in the stored event id must not serialize identically.
+	EventID     *string                `json:"eventId"`
 	TeamID      string                 `json:"teamId"`
 	ProjectID   string                 `json:"projectId"`
 	Kind        string                 `json:"kind"`
@@ -383,6 +389,7 @@ func (h *ProjectHandler) readTaskAttentionRows(ctx context.Context, proj teamAtt
 		overdue := !resolved && attentionOverdue(timeoutAt, now)
 		row := teamAttentionRow{
 			TaskID:      node.TaskID,
+			EventID:     optionalString(m["eventId"]),
 			TeamID:      proj.meta.TeamID,
 			ProjectID:   proj.meta.ProjectID,
 			Kind:        str(m["kind"]),

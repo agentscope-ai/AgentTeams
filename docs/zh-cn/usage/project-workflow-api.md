@@ -290,6 +290,7 @@ GET /api/v1/projects/{id}/tasks/{taskId}?team=alpha-team
   "items": [
     {
       "taskId": "t1",
+      "eventId": "$matrix-event-id",
       "teamId": "biz-team",
       "projectId": "demo-project-001",
       "kind": "approval",
@@ -319,7 +320,7 @@ GET /api/v1/projects/{id}/tasks/{taskId}?team=alpha-team
 | 字段 | 含义 |
 |:--|:--|
 | `team_id` | URL 中的团队名（CR 名）。 |
-| `items` | 收件箱行，按紧迫度排序：`status=overdue` 按 `timeoutAt` 升序，其他状态按 `requestedAt` 降序（同值稳定 tie-break：task id、kind、question）。行字段遵循 workbench 契约（camelCase）；`resolvedVia` / `resolvedBy` / `resolvedAt` / `resolution` 在记录解决前为 `null`，记录没有 `notification_log` 时 `notified` 为 `null`。 |
+| `items` | 收件箱行，按紧迫度排序：`status=overdue` 按 `timeoutAt` 升序，其他状态按 `requestedAt` 降序（同值稳定 tie-break：task id、kind、question）。行字段遵循 workbench 契约（camelCase）；`eventId` 是提出该记录的 Matrix 房间消息 id（通知被搁置时为 `null`），`resolvedVia` / `resolvedBy` / `resolvedAt` / `resolution` 在记录解决前为 `null`，记录没有 `notification_log` 时 `notified` 为 `null`。 |
 | `count` | `len(items)`——实际返回的行数，不是匹配过滤条件的行数。 |
 | `truncated` | 匹配行数超过 `limit`、`items` 被截到前 `limit` 行时为 `true`。恒存在。 |
 
@@ -328,11 +329,11 @@ GET /api/v1/projects/{id}/tasks/{taskId}?team=alpha-team
 | 响应头 | 含义 |
 |:--|:--|
 | `X-Attention-Truncated: 1` | 仅当 `truncated` 为 `true` 时设置——收件箱里还有未返回的匹配行。 |
-| `X-Attention-Skipped: N` | 该团队有 `N` 个项目因项目 `meta.json` 或某个 task meta 读取/解析失败而被跳过。只计降级项目，绝不包含被截断的行。 |
+| `X-Attention-Skipped: N` | 该团队有 `N` 个项目**降级**：某项目的 `meta.json` 或其中一个 task meta 读取/解析失败。降级项目仍会贡献其健康任务的行——只缺不可读那条任务的行。按项目计一次，绝不包含被截断的行。 |
 
 三个信号相互独立，调用者据此区分三种易混状态：`count=0` + `truncated=false`
 是真空收件箱；`count=limit` + `truncated=true` 是被截断（但读取健康）的
-收件箱；`X-Attention-Skipped > 0` 表示降级读取，被跳过的项目没有贡献任何行。
+收件箱；`X-Attention-Skipped > 0` 表示降级读取：受影响的任务没有贡献行，而同一项目中其余健康任务的行仍会返回（降级项目不会被整项目排除）。
 
 读取顺序与 `limit` 的成本：读取先列出团队的项目，再读该团队每个项目
 meta 和每个 task meta，之后才过滤、排序并按 `limit` 截断。**`limit`
@@ -348,7 +349,7 @@ meta 和每个 task meta，之后才过滤、排序并按 `limit` 截断。**`li
 |:--|:--|:--|
 | 团队项目列表 | `teams/{team}/shared/projects/` | 本请求唯一一次 list 调用；直接子项是团队的项目目录。 |
 | 项目 meta | `teams/{team}/shared/projects/{project_id}/meta.json` | 每个列出的项目读一次：身份 + 图任务列表（`tasks`，loop 计划为 `loop.tasks`）。 |
-| 任务 meta | `teams/{team}/shared/tasks/{task_id}/meta.json` | 每个图任务读一次；其中的 `attention` 数组即收件箱数据源。对象缺失不贡献任何行；不可读/不可解析则跳过其项目（计入 `X-Attention-Skipped`）。 |
+| 任务 meta | `teams/{team}/shared/tasks/{task_id}/meta.json` | 每个图任务读一次；其中的 `attention` 数组即收件箱数据源。对象缺失不贡献任何行；不可读/不可解析则丢弃该任务的行并把其项目标记为降级（计入 `X-Attention-Skipped`，按项目计一次）；项目内其它任务仍贡献行。 |
 | 超时信号事件 | `teams/{team}/shared/events/{team_id}/ev_*.json` | 本读取唯一的写入：对已过 `timeoutAt` 的未决条目写一个幂等的 `attention_overdue` 信号事件；事件写失败不会使读取失败。 |
 
 两个命名细节（读取端都已处理）：
@@ -361,14 +362,17 @@ meta 和每个 task meta，之后才过滤、排序并按 `limit` 截断。**`li
 
 ### 记录身份与 DB 迁移边界
 
-一条 attention 记录由 `(project, eventId)` 标识：所属项目，加上提出该
-问题的房间消息的 Matrix event id（`eventId` 在通知成功发送后写入记录；
-通知被搁置的记录没有 eventId）。这对身份是 API 与 dashboard 做去重和
-"已回答"状态所依赖的稳定身份。将来即使 attention 状态从这些
-`meta.json` 对象迁入数据库，`(project, eventId)`——及其上方的整个接口
-（端点、查询参数、行字段、两个响应头）——是保持不变的边界。**本变更
-不是那次迁移**；它只钉死当前布局、截断语义与读取成本证据，让后续
-迁移有一份文档化的契约可对照。
+一条 attention 记录的身份是 `(project, eventId)`：所属项目，加上提出该
+问题的房间消息的 Matrix event id。`eventId` 在通知成功发送后写入记录，并
+**随行一起返回**（见上文 `items` 字段），因此两条仅 event id 不同的记录
+不会序列化成相同的行。通知被搁置的记录没有 `eventId`；在补发之前，去重
+需回退到 `(project, taskId, kind, requestedAt)`。
+
+**未来方案，不是已交付的保证**：若日后 attention 状态从这些 `meta.json`
+对象迁入数据库，`(project, eventId)`——及其上方的整个接口（端点、查询
+参数、行字段、两个响应头）——是预期保持不变的边界。该迁移目前并不存在；
+本节只钉死当前布局、截断语义与读取成本证据，让后续迁移有一份可对照的
+文档化契约。
 
 ### 当前读取成本（实测）
 

@@ -739,7 +739,7 @@ func BenchmarkGetTeamAttention(b *testing.B) {
 			got, wantGets, projectMetas, taskMetas)
 	}
 	var resp struct {
-		Count     int `json:"count"`
+		Count     int  `json:"count"`
 		Truncated bool `json:"truncated"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
@@ -747,5 +747,76 @@ func BenchmarkGetTeamAttention(b *testing.B) {
 	}
 	if resp.Count != teamAttentionDefaultLimit || !resp.Truncated {
 		b.Fatalf("bench response: count=%d truncated=%v, want %d/true", resp.Count, resp.Truncated, teamAttentionDefaultLimit)
+	}
+}
+
+// TestGetTeamAttention_RowIdentityDistinguishesEventID pins the identity the
+// docs promise: (project, eventId) must be visible on the row, so two
+// otherwise identical records that differ only in the stored Matrix event id
+// serialize differently. Without the field the rows were byte-identical and a
+// consumer deduping by identity collapsed them.
+func TestGetTeamAttention_RowIdentityDistinguishesEventID(t *testing.T) {
+	store := ossfake.NewMemory()
+	seedTeamAttentionProject(store, "alpha-team", "p1", []string{"t1"}, "alpha-team")
+	base := map[string]any{
+		"kind": "decision", "question": "same question", "attempt": 1,
+		"requestedAt": "2026-11-02T09:00:00Z", "resolved": false,
+	}
+	first := map[string]any{}
+	for k, v := range base {
+		first[k] = v
+	}
+	first["eventId"] = "$matrix-event-a"
+	second := map[string]any{}
+	for k, v := range base {
+		second[k] = v
+	}
+	second["eventId"] = "$matrix-event-b"
+	putTaskAttention(store, "alpha-team", "t1", map[string]any{"attention": []any{first, second}})
+	h := newTeamAttentionHandler(t, &mcLikeOSS{Memory: store}, team("alpha-team"))
+
+	resp := decodeTeamAttention(t, getTeamAttention(t, h, "alpha-team", ""))
+	if resp.Count != 2 {
+		t.Fatalf("rows = %d, want 2", resp.Count)
+	}
+	seen := map[string]bool{}
+	for _, row := range resp.Items {
+		if row.EventID == nil || *row.EventID == "" {
+			t.Fatalf("row %+v carries no eventId", row)
+		}
+		seen[*row.EventID] = true
+	}
+	if !seen["$matrix-event-a"] || !seen["$matrix-event-b"] {
+		t.Fatalf("event ids = %v, want both stored ids", seen)
+	}
+}
+
+// TestGetTeamAttention_PartialTaskDecodeKeepsHealthyRows pins the degradation
+// contract the docs now state: one unparsable task meta marks its project
+// degraded (counted once in X-Attention-Skipped) but the project's healthy
+// tasks still contribute rows — the project is not excluded wholesale.
+func TestGetTeamAttention_PartialTaskDecodeKeepsHealthyRows(t *testing.T) {
+	store := ossfake.NewMemory()
+	seedTeamAttentionProject(store, "alpha-team", "p1", []string{"t1", "t2"}, "alpha-team")
+	putTaskAttention(store, "alpha-team", "t1", map[string]any{
+		"attention": []any{map[string]any{"kind": "decision", "question": "healthy?", "attempt": 1,
+			"requestedAt": "2026-11-02T09:00:00Z", "resolved": false}},
+	})
+	_ = store.PutObject(t.Context(), "teams/alpha-team/shared/tasks/t2/meta.json", []byte("{not json"))
+	h := newTeamAttentionHandler(t, &mcLikeOSS{Memory: store}, team("alpha-team"))
+
+	rec := getTeamAttention(t, h, "alpha-team", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("degraded project must not fail the read: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("X-Attention-Skipped"); got != "1" {
+		t.Fatalf("X-Attention-Skipped = %q, want 1 (one degraded project)", got)
+	}
+	resp := decodeTeamAttention(t, rec)
+	if resp.Count != 1 || len(resp.Items) != 1 {
+		t.Fatalf("healthy rows from the degraded project must survive: %+v", resp.Items)
+	}
+	if resp.Items[0].TaskID != "t1" {
+		t.Fatalf("kept row = %q, want t1", resp.Items[0].TaskID)
 	}
 }

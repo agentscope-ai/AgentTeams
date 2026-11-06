@@ -129,6 +129,14 @@ _DENY_PROGRAMS = frozenset({
 
 #: argv[0] programs auto-approved inside the run roots (read-only file
 #: inspection and the test runner).  ``git`` is validated separately.
+#: Shell builtins the coding loop leans on. ``cd`` is validated like a
+#: path operand (it must stay inside the run root); the others cannot touch
+#: the filesystem on their own.
+_ALLOW_BUILTINS = frozenset({
+    "cd", "export", "set", "unset", "readonly", "local", "true", "false",
+    "test", "printf", "echo", "umask", "wait", "shift", ":", "sleep",
+})
+
 _ALLOW_PROGRAMS = frozenset({
     # read-only inspection
     "cat", "head", "tail", "wc", "ls", "grep", "rg", "find",
@@ -429,6 +437,18 @@ def _classify_argv(
     """Policy for one simple command: program allowlist, git verdict and
     the shared operand/path guards."""
     prog = os.path.basename(argv[0])
+    if prog in _ALLOW_BUILTINS:
+        if prog == "cd":
+            base = cwd_input or (root_list[0] if root_list else os.getcwd())
+            target = argv[1] if len(argv) > 1 else base
+            if not _inside(os.path.join(base, os.path.expanduser(target)), root_list):
+                return _result(
+                    RISK_DENY,
+                    "outside-root",
+                    "cd target is outside the run root",
+                    target,
+                )
+        return _result(RISK_ALLOW, "exec-allow", "shell builtin allowed", prog)
     if prog in ("bash", "sh") and any(
         a in ("-c", "-lc", "-ic", "-ec", "-xc", "--command") for a in argv[1:]
     ):

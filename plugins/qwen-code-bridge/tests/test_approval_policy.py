@@ -202,6 +202,18 @@ def test_python_interpreter_allow():
     assert d["behavior"] == "allow"
 
 
+def test_shell_builtins_cd_inside_root_allow():
+    d = approval.decide("shell", {"command": "cd .worktrees && ls -la", "cwd": ROOT}, [ROOT])
+    assert d["behavior"] == "allow"
+    d = approval.decide("shell", {"command": "export FOO=1; echo done"}, [ROOT])
+    assert d["behavior"] == "allow"
+
+
+def test_shell_builtin_cd_outside_root_deny():
+    d = approval.decide("shell", {"command": "cd /etc && ls"}, [ROOT])
+    assert d["behavior"] == "deny" and d["rule"] == "outside-root"
+
+
 def test_bash_c_deny():
     d = approval.decide("shell", {"command": "bash -c 'ls'"}, [ROOT])
     assert d["behavior"] == "deny" and d["rule"] == "exec-inline-shell"

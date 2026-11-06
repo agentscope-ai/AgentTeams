@@ -99,6 +99,12 @@ spec:
               value: {{ .Values.storage.provider | quote }}
             - name: AGENTTEAMS_FS_ENDPOINT
               value: {{ include "agentteams.storage.endpoint" . | quote }}
+            {{- if .Values.storage.publicEndpoint }}
+            # Caller-reachable origin for presigned download URLs (#1501);
+            # unset → ?presign=1 answers 501 presign_unsupported.
+            - name: AGENTTEAMS_FS_PUBLIC_ENDPOINT
+              value: {{ .Values.storage.publicEndpoint | quote }}
+            {{- end }}
             - name: AGENTTEAMS_FS_BUCKET
               value: {{ include "agentteams.storage.bucket" . | quote }}
             {{- if eq .Values.storage.provider "minio" }}

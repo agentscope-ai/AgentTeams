@@ -146,6 +146,43 @@ jobs:
         run: |
           python -m pytest plugins/tests/agentteams-matrix-channel/test_fake_completion_marker.py -q
 
+  plugin-loader-smoke:
+    # Keyless smoke of the real QwenPaw plugin loader: install the
+    # runtime from public PyPI on a standard runner (no secrets, no
+    # external build machine) and drive PluginLoader against the
+    # shipped matrix-channel package. The negative-control step proves
+    # the smoke is red-reproducible: a deliberately broken package
+    # must be rejected, and if it ever loads cleanly this job fails.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install QwenPaw runtime and smoke dependencies
+        run: |
+          python -m pip install \
+            'qwenpaw==2.2.1' \
+            'matrix-nio>=0.25,<0.27' \
+            'pytest>=8.3,<10'
+
+      - name: Smoke-load the real matrix-channel package (green path)
+        run: python qwenpaw/scripts/smoke_plugin_loader.py
+
+      - name: Prove a broken package turns the smoke red
+        run: |
+          BROKEN_ROOT="$(mktemp -d)"
+          cp -r plugins/agentteams-matrix-channel \
+            "$BROKEN_ROOT/agentteams-matrix-channel"
+          printf '\nraise RuntimeError("intentionally broken smoke package")\n' \
+            >> "$BROKEN_ROOT/agentteams-matrix-channel/plugin.py"
+          python qwenpaw/scripts/smoke_plugin_loader.py \
+            --plugin-dir "$BROKEN_ROOT/agentteams-matrix-channel" \
+            --expect-failure
+
   matrix-channel-consume-error:
     runs-on: ubuntu-latest
     timeout-minutes: 10

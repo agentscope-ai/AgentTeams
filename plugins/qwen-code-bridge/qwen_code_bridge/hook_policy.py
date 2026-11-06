@@ -132,6 +132,7 @@ def _write_receipt(payload: dict, decision: dict) -> None:
 def evaluate(payload: dict) -> dict:
     """One hook call → one PreToolUse output.  Raises on faults."""
     from qwen_code_bridge import approval
+    from qwen_code_bridge.interaction import INTERACTION_TOOLS
 
     roots = _load_roots()
     if not roots:
@@ -147,8 +148,11 @@ def evaluate(payload: dict) -> dict:
             },
         )
         return _output("deny", "hook-config", reason)
+    tool_name = str(payload.get("tool_name") or "")
+    if tool_name in INTERACTION_TOOLS:
+        return _output("ask", "human-interaction", "defer to host interaction")
     decision = approval.decide(
-        str(payload.get("tool_name") or ""),
+        tool_name,
         _tool_input_for_policy(payload),
         roots=roots,
     )

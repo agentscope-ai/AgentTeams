@@ -95,9 +95,9 @@ print('yes' if any(p.get('id')=='qwen-code-bridge' and p.get('loaded') for p in 
   [ "$WEB" = "200" ] || fail=1
   say "   native web shell: HTTP $WEB"
 
-  BASE=$(curl -s --max-time 10 "$APP/api/qwen-code-bridge/web/" | grep -c '__QWEN_DAEMON_BASE__' || true)
+  BASE=$(curl -s --max-time 10 "$APP/api/qwen-code-bridge/web/" | grep -Ec '__QWEN_DAEMON_BASE__|var B="/api/qwen-code-bridge/web";' || true)
   [ "${BASE:-0}" -ge 1 ] || fail=1
-  say "   daemon-base injection: $BASE"
+  say "   daemon routing injection: $BASE"
 
   SESS=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
     "$APP/api/qwen-code-bridge/web/workspaces//tmp/sessions")

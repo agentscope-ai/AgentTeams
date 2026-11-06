@@ -1313,6 +1313,7 @@ def test_notify_target_routing(monkeypatch):
     monkeypatch.delenv(notify.NOTIFY_ENV, raising=False)
     assert notify.notify_target({"channel": "console"}) == "inbox"
     assert notify.notify_target({"channel": "matrix"}) == "room"
+    assert notify.notify_target({"channel": "agentteams_matrix"}) == "room"
     monkeypatch.setenv(notify.NOTIFY_ENV, "inbox")
     assert notify.notify_target({"channel": "matrix"}) == "inbox"
     monkeypatch.setenv(notify.NOTIFY_ENV, "room")
@@ -1594,3 +1595,65 @@ async def test_control_response_deny_not_allow(tmp_path):
         assert dq_deny_resp["behavior"] == "deny"
         assert "exec-substitution" in dq_deny_resp["message"]
         assert dq_allow_resp["behavior"] == "allow"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["room", "inbox"])
+async def test_room_notification_keeps_host_event_loop_responsive(monkeypatch, target):
+    import asyncio
+    from qwen_code_bridge import notify
+
+    loop = asyncio.get_running_loop()
+
+    async def host_request():
+        await asyncio.sleep(0)
+        return True
+
+    def send_room(**kwargs):
+        future = asyncio.run_coroutine_threadsafe(host_request(), loop)
+        try:
+            return future.result(timeout=0.2)
+        except TimeoutError:
+            future.cancel()
+            return False
+
+    async def no_inbox(**kwargs):
+        return False
+
+    monkeypatch.setenv(notify.NOTIFY_ENV, target)
+    monkeypatch.setattr(notify, "notify_room", send_room)
+    monkeypatch.setattr(notify, "notify_inbox", no_inbox)
+    surface = await notify.notify_human(
+        task={"origin": {"session_id": "matrix:!owned:invalid", "channel": "agentteams_matrix"},
+              "wake": {"base_url": "http://owned.invalid"}},
+        title="Owned question", body="Choose an option",
+    )
+    assert surface == "room"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", [{}, {"session_id": "matrix:!owned:invalid"}])
+async def test_human_notification_uses_wake_channel_fallback(monkeypatch, origin):
+    from qwen_code_bridge import notify
+
+    received = []
+
+    def send_room(**kwargs):
+        received.append(kwargs)
+        return True
+
+    async def inbox(**kwargs):
+        return True
+
+    monkeypatch.delenv(notify.NOTIFY_ENV, raising=False)
+    monkeypatch.setattr(notify, "notify_room", send_room)
+    monkeypatch.setattr(notify, "notify_inbox", inbox)
+    surface = await notify.notify_human(
+        task={"origin": origin, "wake": {
+            "session_id": "matrix:!owned:invalid", "channel": "agentteams_matrix",
+            "base_url": "http://owned.invalid",
+        }},
+        title="Owned question", body="Choose an option",
+    )
+    assert surface == "room"
+    assert received[0]["channel"] == "agentteams_matrix"

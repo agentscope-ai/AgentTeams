@@ -20,6 +20,7 @@ approval/control flow it belongs to.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import urllib.request
@@ -39,7 +40,7 @@ def notify_target(origin: dict[str, Any] | None = None) -> str:
     if forced in (TARGET_INBOX, TARGET_ROOM):
         return forced
     channel = str((origin or {}).get("channel") or "").strip().lower()
-    return TARGET_ROOM if channel == "matrix" else TARGET_INBOX
+    return TARGET_ROOM if channel in ("matrix", "agentteams_matrix") else TARGET_INBOX
 
 
 async def notify_inbox(
@@ -124,9 +125,10 @@ async def notify_human(
     base_url = str(wake.get("base_url") or "")
     task_id = str(task.get("task_id") or "")
 
-    target = notify_target(origin)
+    target = notify_target({"channel": channel})
     if target == TARGET_ROOM:
-        ok = notify_room(
+        ok = await asyncio.to_thread(
+            notify_room,
             base_url=base_url,
             agent_id=agent_id,
             channel=channel,
@@ -147,7 +149,8 @@ async def notify_human(
     # Inbox unavailable (e.g. host module missing in a bare test env):
     # fall back to the room if we have a target, else give up quietly.
     if session_id and base_url:
-        ok = notify_room(
+        ok = await asyncio.to_thread(
+            notify_room,
             base_url=base_url,
             agent_id=agent_id,
             channel=channel,

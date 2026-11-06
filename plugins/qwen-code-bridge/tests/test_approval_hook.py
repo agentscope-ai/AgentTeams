@@ -415,3 +415,16 @@ def test_malformed_entries_preserved(tmp_path):
     assert pre[0] == {"matcher": "*", "hooks": "not-a-list"}
     assert pre[1] == "stray-entry"
     assert len(_managed_hooks(_load(qdir))) == 1
+
+
+def test_human_interaction_is_deferred_to_host(tmp_path):
+    for name in ("ask_user_question", "propose_goal"):
+        payload = {
+            "hook_event_name": "PreToolUse",
+            "cwd": str(tmp_path),
+            "tool_name": name,
+            "tool_input": {"questions": [{"question": "Choose an option"}]},
+        }
+        out = _run_hook(payload, roots=[str(tmp_path)])
+        assert _decision(out) == "ask"
+        assert _decision(_run_hook(payload, roots=None)) == "deny"

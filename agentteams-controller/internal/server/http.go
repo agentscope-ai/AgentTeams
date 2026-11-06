@@ -132,6 +132,9 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/teams/{name}", mw.RequireAuthz(authpkg.ActionGet, "team", nameFn)(http.HandlerFunc(rh.GetTeam)))
 	mux.Handle("PUT /api/v1/teams/{name}", mw.RequireAuthz(authpkg.ActionUpdate, "team", nameFn)(http.HandlerFunc(rh.UpdateTeam)))
 	mux.Handle("DELETE /api/v1/teams/{name}", mw.RequireAuthz(authpkg.ActionDelete, "team", nameFn)(http.HandlerFunc(rh.DeleteTeam)))
+	// --- Team module aggregation (read-only; module-update UI) ---
+	mux.Handle("GET /api/v1/teams/{name}/modules", mw.RequireAuthz(authpkg.ActionGet, "team", nameFn)(http.HandlerFunc(rh.GetTeamModules(deps.KubeMode, deps.ContainerPrefix))))
+	mux.Handle("POST /api/v1/teams/{name}/modules/{module}/install", mw.RequireAuthz(authpkg.ActionUpdate, "team", nameFn)(http.HandlerFunc(rh.InstallTeamModule(deps.KubeMode, deps.ContainerPrefix, deps.ResourcePrefix))))
 
 	// Humans
 	mux.Handle("POST /api/v1/humans", mw.RequireAuthz(authpkg.ActionCreate, "human", nil)(http.HandlerFunc(rh.CreateHuman)))
@@ -194,6 +197,9 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/managers/{name}", mw.RequireAuthz(authpkg.ActionGet, "manager", nameFn)(http.HandlerFunc(rh.GetManager)))
 	mux.Handle("PUT /api/v1/managers/{name}", mw.RequireAuthz(authpkg.ActionUpdate, "manager", nameFn)(http.HandlerFunc(rh.UpdateManager)))
 	mux.Handle("DELETE /api/v1/managers/{name}", mw.RequireAuthz(authpkg.ActionDelete, "manager", nameFn)(http.HandlerFunc(rh.DeleteManager)))
+	// --- Manager plugin registry (read-only; module-update UI) ---
+	mux.Handle("GET /api/v1/managers/{name}/plugins", mw.RequireAuthz(authpkg.ActionGet, "manager", nameFn)(http.HandlerFunc(rh.GetManagerPlugins(deps.KubeMode, deps.ResourcePrefix))))
+	mux.Handle("POST /api/v1/managers/{name}/plugins/install", mw.RequireAuthz(authpkg.ActionUpdate, "manager", nameFn)(http.HandlerFunc(rh.InstallManagerPlugin(deps.KubeMode, deps.ResourcePrefix))))
 
 	// --- Loop control plane (#1402: pause state lives in the project meta) ---
 	// Pause/resume project the source into the project's loop.pause_sources;
@@ -348,6 +354,17 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// uniform 503 in kube mode, embedded only. ---
 	mux.Handle("GET /api/v1/workers/{name}/mcp", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(rh.WorkerMCP(deps.KubeMode, deps.ContainerPrefix)))
 
+	// --- Millforge module index (read-only proxy; module-update UI) ---
+	mfh := NewMillforgeIndexHandler()
+	mux.Handle("GET /api/v1/millforge/index",
+		mw.RequireAuthz(authpkg.ActionGet, "status", nil)(http.HandlerFunc(mfh.GetIndex)))
+
+	// --- Worker plugin install (module-update UI) ---
+	// Module install is a deployment operation: use the dedicated "module"
+	// resource kind so only admin/manager pass (unknown kinds are denied for
+	// humans, team leaders and workers by the authorizer). Using ActionUpdate
+	// on "worker" would silently grant L2 humans a new code-install path.
+	mux.Handle("POST /api/v1/workers/{name}/plugins/install", mw.RequireAuthz(authpkg.ActionUpdate, "module", nameFn)(http.HandlerFunc(rh.InstallWorkerPlugin(deps.KubeMode, deps.ContainerPrefix, deps.ResourcePrefix))))
 	// --- Worker plugin registry (the worker's installed qwenpaw plugins;
 	// read-only registry, embedded-only — the qwenpaw runtime guard and
 	// the W8 team boundary live in the handler). ---

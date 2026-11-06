@@ -1,0 +1,71 @@
+{
+  "version": "1.0.0",
+  "status": "defined-not-enforced",
+  "description": "Six decision classes (r1..r6) for the TeamHarness decision surface. Data only - no runtime code references this file. Class boundaries are derived from the decision points that exist in mcp/server.py @ d8332e0a; the per-class recommended_action is a W1 proposal chosen from the fixed vocabulary and is not enforced anywhere.",
+  "actions_vocabulary": [
+    "require_human",
+    "require_review",
+    "require_lease",
+    "void_lease",
+    "audit_only"
+  ],
+  "classes": [
+    {
+      "id": "r1",
+      "name": "task_result_acceptance",
+      "description": "The trusted Leader accepts or rejects a submitted task result (projectflow accept_task_result). Fenced by the task's submission identity: submissionId must match the current submission, and the persisted task result digest must match its structured result; a mismatched fence is refused. Result status must match what was submitted.",
+      "decision_points": [
+        "projectflow.accept_task_result"
+      ],
+      "recommended_action": "require_review"
+    },
+    {
+      "id": "r2",
+      "name": "task_cancellation",
+      "description": "Cancelling a task (taskflow cancel_task): leader role, explicit reason, submission fence for already-submitted tasks, durable cancellation fields (cancel_reason, replacement_task_id, cancelled_at), and an idempotent committed-cancellation retry path (cancelled + cancelled_at + matching reason stays ok).",
+      "decision_points": [
+        "taskflow.cancel_task"
+      ],
+      "recommended_action": "require_human"
+    },
+    {
+      "id": "r3",
+      "name": "reassignment",
+      "description": "Re-delegating a task to a DIFFERENT assignee is a new delegation attempt, not a retry of a lost one: the per-attempt nonce and Matrix transaction id (delegate-{task_id}-{nonce}, pre-minted and persisted before send) rotate on re-delegation (including A->B->A), while a retry of the same attempt reuses the recorded identity and dedupes.",
+      "decision_points": [
+        "taskflow.delegate_task"
+      ],
+      "recommended_action": "void_lease"
+    },
+    {
+      "id": "r4",
+      "name": "loop_review_verdict",
+      "description": "The per-iteration review verdict of a Loop project: the record_loop_iteration review variant (emitter 'record_loop_iteration:review', event SIG-VERDICT, origin critic_verdict) decides whether the loop continues with the next iteration or stops.",
+      "decision_points": [
+        "projectflow.record_loop_iteration"
+      ],
+      "recommended_action": "require_review"
+    },
+    {
+      "id": "r5",
+      "name": "project_lifecycle",
+      "description": "Project-level control decisions: pause_project / resume_project / complete_project - the Go Controller intervention family (event SIG-DECISION, origin decision_lock). Mutating actions refuse to continue on stale local state after a failed authoritative pull so a Controller pause/resume/replan is never clobbered; complete_project is idempotent and withholds the PROJECT_COMPLETED notification when the shared-storage sync fails.",
+      "decision_points": [
+        "projectflow.pause_project",
+        "projectflow.resume_project",
+        "projectflow.complete_project"
+      ],
+      "recommended_action": "require_lease"
+    },
+    {
+      "id": "r6",
+      "name": "attention_escalation",
+      "description": "Raising a blocker or question to the leader and human members via taskflow request_attention with kind one of approval, decision, escalation, other (Matrix transaction attention-{task_id}-{kind}-{attempt}); the recorded event id is reused on an exact retry.",
+      "decision_points": [
+        "taskflow.request_attention"
+      ],
+      "recommended_action": "require_human",
+      "note": "kind=other is informational and maps to audit_only (no decision required)"
+    }
+  ]
+}

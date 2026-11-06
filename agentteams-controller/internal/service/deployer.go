@@ -364,6 +364,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 		MatrixToken:       req.MatrixToken,
 		GatewayKey:        req.GatewayKey,
 		ModelName:         req.Spec.Model,
+		ModelProvider:     req.Spec.ModelProvider,
 		SubagentModelName: resolvedSubagentModel(req),
 		AIGatewayURL:      req.AIGatewayURL,
 		TeamLeaderName:    req.TeamLeaderName,
@@ -1581,12 +1582,13 @@ func (d *Deployer) DeployManagerConfig(ctx context.Context, req ManagerDeployReq
 	// silently never sees admin messages. See commit 3f8f84b which fixed this
 	// originally before the controller refactor accidentally reverted it.
 	configJSON, err := d.agentConfig.GenerateOpenClawConfig(agentconfig.WorkerConfigRequest{
-		WorkerName:   "manager",
-		MatrixToken:  req.MatrixToken,
-		GatewayKey:   req.GatewayKey,
-		ModelName:    req.Spec.Model,
-		AIGatewayURL: req.AIGatewayURL,
-		Runtime:      req.Spec.Runtime,
+		WorkerName:    "manager",
+		MatrixToken:   req.MatrixToken,
+		GatewayKey:    req.GatewayKey,
+		ModelName:     req.Spec.Model,
+		ModelProvider: req.Spec.ModelProvider,
+		AIGatewayURL:  req.AIGatewayURL,
+		Runtime:       req.Spec.Runtime,
 	})
 	if err != nil {
 		return fmt.Errorf("config generation failed: %w", err)

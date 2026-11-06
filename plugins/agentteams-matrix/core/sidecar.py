@@ -50,6 +50,7 @@ import os
 import socket
 import stat
 import threading
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Union
@@ -645,9 +646,14 @@ class SidecarServer:
         # of the protocol error the client must see (one agent = one
         # connection, fail closed with the reason).
         try:
-            conn.settimeout(REJECT_DRAIN_TIMEOUT)
-            while conn.recv(4096):
-                pass
+            deadline = time.monotonic() + REJECT_DRAIN_TIMEOUT
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                conn.settimeout(remaining)
+                if not conn.recv(4096):
+                    break
         except OSError:
             pass
         try:

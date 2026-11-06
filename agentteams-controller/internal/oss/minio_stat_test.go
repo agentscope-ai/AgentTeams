@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/minio/minio-go/v7"
 )
 
 // statS3Server stands up the minimal S3 surface the SDK stat/read path
@@ -151,5 +153,28 @@ func TestGetObjectRequestsAreURLPercentEncoded(t *testing.T) {
 	}
 	if strings.Contains(gotURI, " ") {
 		t.Fatalf("request URI = %q, must not carry a literal space", gotURI)
+	}
+}
+
+func TestIsSDKNotFoundRejectsBucketErrors(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"no such key", minio.ErrorResponse{Code: "NoSuchKey", StatusCode: 404}, true},
+		{"no such object", minio.ErrorResponse{Code: "NoSuchObject", StatusCode: 404}, true},
+		{"not found code", minio.ErrorResponse{Code: "NotFound", StatusCode: 404}, true},
+		{"head missing key (empty code)", minio.ErrorResponse{StatusCode: 404}, true},
+		{"no such bucket", minio.ErrorResponse{Code: "NoSuchBucket", StatusCode: 404}, false},
+		{"no such upload", minio.ErrorResponse{Code: "NoSuchUpload", StatusCode: 404}, false},
+		{"connection error", errors.New("dial tcp: connection refused"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isSDKNotFound(tc.err); got != tc.want {
+				t.Fatalf("isSDKNotFound(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
 	}
 }

@@ -333,7 +333,20 @@ func isSDKNotFound(err error) bool {
 	if !errors.As(err, &resp) {
 		return false
 	}
-	return resp.Code == "NoSuchKey" || resp.Code == "NotFound" || resp.StatusCode == http.StatusNotFound
+	// Only a missing *object* is a not-found. A 404 for the bucket (wrong
+	// bucket name, missing bucket, IAM misconfiguration) must stay an error:
+	// mapping it to os.ErrNotExist would turn a deployment mistake into a
+	// delete-propagation event for the sync client (the D1 failure mode).
+	switch resp.Code {
+	case "NoSuchBucket", "NoSuchUpload", "NoSuchVersion":
+		return false
+	}
+	if resp.Code == "NoSuchKey" || resp.Code == "NoSuchObject" || resp.Code == "NotFound" {
+		return true
+	}
+	// HEAD answers a missing key with an empty body, so the SDK reports 404
+	// without a code; that shape still means "object missing".
+	return resp.StatusCode == http.StatusNotFound && resp.Code == ""
 }
 
 // PresignUpload implements PresignUploader. The POST policy form is

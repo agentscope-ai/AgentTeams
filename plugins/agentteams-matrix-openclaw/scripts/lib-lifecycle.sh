@@ -100,13 +100,14 @@ lifecycle_build_release() {
   (cd "$PLUGIN_ROOT" && npm install --no-audit --no-fund && npm run build) >&2 \
     || lifecycle_fail "npm install/build failed in ${PLUGIN_ROOT}"
 
-  if [ -d "$release_dir" ]; then
-    release_dir="${RELEASES_DIR}/${version}.$(date -u +%Y%m%dT%H%M%SZ)"
+  mkdir -p "$RELEASES_DIR"
+  if [ "$mode" = "fresh" ] || [ -e "$release_dir" ]; then
+    release_dir="$(mktemp -d "${RELEASES_DIR}/${version}.XXXXXX")"
+  else
+    mkdir "$release_dir"
   fi
 
   lifecycle_log "Materializing release directory: ${release_dir}"
-  rm -rf "$release_dir"
-  mkdir -p "$release_dir"
   cp -a "${PLUGIN_ROOT}/package.json" "$release_dir/"
   cp -a "${PLUGIN_ROOT}/openclaw.plugin.json" "$release_dir/"
   cp -a "${PLUGIN_ROOT}/README.md" "$release_dir/"

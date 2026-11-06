@@ -20,6 +20,9 @@
  */
 
 import { pathToFileURL } from "node:url";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
@@ -125,6 +128,7 @@ function makeRuntime(overrides: {
   sessionKey?: string;
   runImpl?: (params: unknown) => Promise<unknown>;
   deliverPayloads?: { text?: string }[];
+  saveMediaBufferImpl?: (...args: any[]) => Promise<any>;
 } = {}) {
   const agentId = overrides.agentId ?? "test-agent";
   const sessionKey = overrides.sessionKey ?? "agentteams-matrix:default:group:!room:example.org";
@@ -135,6 +139,13 @@ function makeRuntime(overrides: {
 
   const runtime = {
     channel: {
+      media: {
+        async saveMediaBuffer(...args: any[]) {
+          calls.push({ op: "saveMediaBuffer", args });
+          if (!overrides.saveMediaBufferImpl) throw new Error("unexpected media save");
+          return overrides.saveMediaBufferImpl(...args);
+        },
+      },
       routing: {
         resolveAgentRoute(args: unknown) {
           calls.push({ op: "resolveAgentRoute", args });
@@ -295,14 +306,28 @@ describe("agentteams-matrix inbound dispatch", () => {
     assert.equal(client.sent[0].reply_to, "$evt-1");
   });
 
-  it("carries inbound media refs into the turn context so image attachments reach the model", async () => {
+  it("stages sidecar bytes in the SDK media store before building preflight and turn facts", async () => {
     // #1470: an image event used to reach the model as a bare file name —
     // resolveTurn built a text-only context and dropped frame.media. The
     // refs now map onto the SDK's inbound media facts (url/contentType/
     // fileName/sizeBytes/messageId), which is the path the core hydrates
     // the bytes through.
+    const dir = mkdtempSync(join(tmpdir(), "agentteams-inbound-media-"));
+    const inputPath = join(dir, "sidecar-cache.png");
+    const storedPath = join(dir, "openclaw-inbound.png");
+    const bytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB", "base64");
+    writeFileSync(inputPath, bytes);
     const client = new FakeSidecarClient();
-    const { runtime, turns, calls } = makeRuntime();
+    const { runtime, turns, calls } = makeRuntime({
+      saveMediaBufferImpl: async (buffer, contentType, subdir, maxBytes, fileName) => {
+        assert.deepEqual(buffer, bytes);
+        assert.equal(contentType, "image/png");
+        assert.equal(subdir, "inbound");
+        assert.equal(maxBytes, 32 * 1024 * 1024);
+        assert.equal(fileName, "reviewer-media-probe.png");
+        return { id: "stored", path: storedPath, size: bytes.length, contentType };
+      },
+    });
     const plugin = makePlugin(client, runtime);
     await startAccount(plugin, CFG);
 
@@ -315,27 +340,28 @@ describe("agentteams-matrix inbound dispatch", () => {
           mxc_uri: "mxc://matrix.example.org/AbCdEf123",
           mime_type: "image/png",
           file_name: "reviewer-media-probe.png",
-          size: 8446,
+          size: bytes.length,
           // The sidecar downloaded the bytes; this is what the SDK reads.
-          local_path: "/var/lib/agentteams/media/inbound/$evt-image-0-reviewer-media-probe.png",
+          local_path: inputPath,
         },
       ],
     }));
     await waitTick();
 
     assert.equal(turns.length, 1);
+    assert.equal(calls.filter((c) => c.op === "saveMediaBuffer").length, 1);
     const imageCtx = turns[0].ctxPayload as Record<string, any>;
     assert.deepEqual(imageCtx.media, [
       {
-        path: "/var/lib/agentteams/media/inbound/$evt-image-0-reviewer-media-probe.png",
+        path: storedPath,
         // The SDK's legacy projection keeps `url`; a local copy is projected
         // as a file:// URL so MediaUrl stays readable (mxc:// is not).
         url: pathToFileURL(
-          "/var/lib/agentteams/media/inbound/$evt-image-0-reviewer-media-probe.png",
+          storedPath,
         ).href,
         contentType: "image/png",
         fileName: "reviewer-media-probe.png",
-        sizeBytes: 8446,
+        sizeBytes: bytes.length,
         messageId: "$evt-image",
       },
     ]);
@@ -354,7 +380,7 @@ describe("agentteams-matrix inbound dispatch", () => {
     assert.equal(preflight.media.length, 1);
     assert.equal(
       preflight.media[0].path,
-      "/var/lib/agentteams/media/inbound/$evt-image-0-reviewer-media-probe.png",
+      storedPath,
     );
 
     // A text-only frame must not fabricate a media fact.
@@ -363,6 +389,31 @@ describe("agentteams-matrix inbound dispatch", () => {
     assert.equal(turns.length, 2);
     const textCtx = turns[1].ctxPayload as Record<string, any>;
     assert.deepEqual(textCtx.media, []);
+    assert.equal(calls.filter((c) => c.op === "saveMediaBuffer").length, 1);
+  });
+
+  it("keeps the text turn when SDK media staging fails", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "agentteams-media-failure-"));
+    const inputPath = join(dir, "sidecar-cache.png");
+    writeFileSync(inputPath, "fixture");
+    const client = new FakeSidecarClient();
+    const warnings: string[] = [];
+    const { runtime, turns, calls } = makeRuntime({
+      saveMediaBufferImpl: async () => { throw new Error("store unavailable"); },
+    });
+    const plugin = makePlugin(client, runtime, { log: { warn: (text) => warnings.push(text) } });
+    await startAccount(plugin, CFG);
+    client.emit("inbound", makeFrame({
+      text: "keep this caption",
+      media: [{ mxc_uri: "mxc://example.org/image", local_path: inputPath }],
+    }));
+    await waitFor(() => turns.length === 1);
+    assert.equal(calls.filter((c) => c.op === "saveMediaBuffer").length, 1);
+    assert.match(warnings[0]!, /store unavailable/);
+    assert.equal(turns[0].ctxPayload.message.bodyForAgent, "keep this caption");
+    assert.equal(turns[0].ctxPayload.media[0].path, undefined);
+    assert.equal(turns[0].ctxPayload.media[0].url, "mxc://example.org/image");
+    assert.equal(client.sent.length, 1);
   });
 
   it("sends nothing when the turn delivers an empty text", async () => {

@@ -47,6 +47,7 @@
  */
 
 import { pathToFileURL } from "node:url";
+import { readFile } from "node:fs/promises";
 import type {
   ChannelPlugin,
   OpenClawConfig,
@@ -220,30 +221,48 @@ function inboundSourceModality(
   return undefined;
 }
 
-function inboundMediaFacts(frame: SidecarInboundFrame): Array<{
+async function inboundMediaFacts(
+  frame: SidecarInboundFrame,
+  runtime: OpenClawMatrixRuntime,
+  log: OpenClawMatrixLogger,
+): Promise<Array<{
   path?: string;
   url: string;
   contentType?: string;
   fileName?: string;
   sizeBytes?: number;
   messageId: string;
-}> {
-  return (frame.media ?? []).map((ref) => ({
-    // The SDK hydrates a media fact only from something it can read on
-    // disk (`path`, `file:`, or `media://inbound/<id>`); an `mxc://` URL
-    // alone is treated as an unsupported scheme and dropped. The sidecar
-    // therefore downloads the bytes and hands us `local_path`, which is
-    // what actually produces the image block in the model request.
-    ...(ref.local_path ? { path: ref.local_path } : {}),
-    // The SDK's legacy projection derives MediaUrl from `url ?? path`; a
-    // bare mxc URI there is unreadable, so a local copy is projected as a
-    // file:// URL (canonical facts still resolve through `path`).
-    url: ref.local_path ? localFileUrl(ref.local_path) : ref.mxc_uri,
-    contentType: ref.mime_type,
-    fileName: ref.file_name,
-    sizeBytes: ref.size,
-    messageId: frame.event_id,
-  }));
+}>> {
+  const facts = [];
+  for (const ref of frame.media ?? []) {
+    let path: string | undefined;
+    let contentType = ref.mime_type;
+    let sizeBytes = ref.size;
+    if (ref.local_path) {
+      try {
+        // Sidecar downloads are capped at 32 MiB. Stage them through the
+        // SDK so model hydration can read the managed inbound media root.
+        const saved = await runtime.channel.media.saveMediaBuffer(
+          await readFile(ref.local_path), ref.mime_type, "inbound",
+          32 * 1024 * 1024, ref.file_name,
+        );
+        path = saved.path;
+        contentType = saved.contentType ?? contentType;
+        sizeBytes = saved.size;
+      } catch (err) {
+        log.warn?.(`media staging failed for ${frame.event_id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    facts.push({
+      ...(path ? { path } : {}),
+      url: path ? localFileUrl(path) : ref.mxc_uri,
+      contentType,
+      fileName: ref.file_name,
+      sizeBytes,
+      messageId: frame.event_id,
+    });
+  }
+  return facts;
 }
 
 export function normalizeInboundFrame(
@@ -329,6 +348,7 @@ export function createOpenClawMatrixPlugin(
       peer: { kind: "group", id: frame.room_id },
     });
 
+    const media = await inboundMediaFacts(frame, rt, log);
     const params: ChannelInboundEventRunnerParams<SidecarInboundFrame> = {
       channel: CHANNEL_ID,
       accountId: account.accountId,
@@ -345,7 +365,7 @@ export function createOpenClawMatrixPlugin(
         // The turn's media facts belong on the documented preflight surface
         // as well: admission/history code reads them there before resolveTurn
         // runs, and a channel that advertises media must not leave it empty.
-        preflight: () => ({ media: inboundMediaFacts(frame) }),
+        preflight: () => ({ media }),
         resolveTurn: (input) => {
           const ctxPayload = rt.channel.inbound.buildContext({
             channel: CHANNEL_ID,
@@ -371,7 +391,7 @@ export function createOpenClawMatrixPlugin(
                 ? { sourceModality: inboundSourceModality(frame) }
                 : {},
             },
-            media: inboundMediaFacts(frame),
+            media,
             extra: {
               ThreadRoot: frame.thread_root ?? undefined,
               Mentions: frame.mentions,

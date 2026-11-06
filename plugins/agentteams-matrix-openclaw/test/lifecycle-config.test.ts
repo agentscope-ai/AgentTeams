@@ -364,3 +364,47 @@ esac
     assert.ok(!existsSync(previous));
   });
 });
+
+
+describe("release preservation", () => {
+  it("keeps distinct rollback releases for two fresh builds in the same second", () => {
+    const dir = mkdtempSync(join(tmpdir(), "agentteams-release-"));
+    const source = join(dir, "source");
+    const state = join(dir, "state");
+    for (const path of ["dist/src", "src", "scripts", "node_modules"]) {
+      mkdirSync(join(source, path), { recursive: true });
+    }
+    writeFileSync(join(source, "package.json"), '{"version":"0.1.0"}');
+    writeFileSync(join(source, "openclaw.plugin.json"), "{}");
+    writeFileSync(join(source, "README.md"), "fixture");
+    writeFileSync(join(source, "dist/src/index.js"), "fixture");
+    const initial = join(state, "releases", "0.1.0", "dist", "src");
+    mkdirSync(initial, { recursive: true });
+    writeFileSync(join(initial, "index.js"), "original");
+    const output = execFileSync("bash", ["-c", `
+      set -euo pipefail
+      source "$LIFECYCLE_LIB"
+      PLUGIN_ROOT="$FIXTURE_SOURCE"
+      npm() { :; }
+      date() { printf '20261106T000000Z\\n'; }
+      first="$(lifecycle_build_release fresh)"
+      printf 'preserve active' > "$first/sentinel"
+      second="$(lifecycle_build_release fresh)"
+      printf '%s\\n' "$first" "$second"
+    `], {
+      env: {
+        ...process.env,
+        HOME: join(dir, "home"),
+        LIFECYCLE_LIB: LIB,
+        FIXTURE_SOURCE: source,
+        AGENTTEAMS_OPENCLAW_STATE_DIR: state,
+      },
+      encoding: "utf-8",
+    });
+    const [first, second] = output.trim().split("\n");
+    assert.notEqual(first, second);
+    assert.equal(readFileSync(join(first!, "sentinel"), "utf-8"), "preserve active");
+    assert.equal(readFileSync(join(initial, "index.js"), "utf-8"), "original");
+    assert.ok(existsSync(join(second!, "dist/src/index.js")));
+  });
+});

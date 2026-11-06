@@ -47,8 +47,10 @@ model would receive no image block even though the channel advertises
 `capabilities.media`. The sidecar therefore downloads every inbound media
 reference (`sidecar/media.py`, Matrix client media endpoint, `Bearer` with the
 agent's token), writes it to `<state dir>/media/inbound/` (0600), and adds
-`local_path` + `local_size` to the frame. The plugin maps that onto the SDK's
-inbound media fact `path`, which is the field the pipeline actually reads.
+`local_path` + `local_size` to the frame. The plugin stages those bytes through
+`runtime.channel.media.saveMediaBuffer` into OpenClaw's managed inbound store,
+then uses the returned path for both preflight and turn media facts. The sidecar
+cache itself is outside OpenClaw's permitted media roots.
 
 The download is best-effort: a failure logs and the frame is forwarded with the
 reference only (text handling is unaffected). Outbound media is unchanged, and

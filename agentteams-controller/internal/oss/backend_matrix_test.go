@@ -826,7 +826,13 @@ func TestMatrix_BucketDeletedOutOfBand(t *testing.T) {
 	if err := warm.DeleteObject(ctx, "a/b"); err != nil {
 		t.Fatalf("warm DeleteObject: %v", err)
 	}
-	// The independent client removes the bucket; `warm` keeps its cache.
+	// A genuine missing-key lookup while the bucket still exists. This is
+	// the step that used to warm the positive bucket cache and let a bucket
+	// deleted a moment later keep looking present.
+	if err := warm.Stat(ctx, "a/never-there"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Stat(missing key) = %v, want os.ErrNotExist while the bucket exists", err)
+	}
+	// The independent client removes the bucket; `warm` sees it disappear.
 	if err := admin.RemoveBucket(ctx, bucket); err != nil {
 		t.Fatalf("remove bucket via the independent client: %v", err)
 	}

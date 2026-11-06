@@ -13,7 +13,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/minio/minio-go/v7"
@@ -74,15 +73,6 @@ type MinIOClient struct {
 	// and for DeletePrefix's marker-key step, and receives the exact
 	// bucket and key the production path deletes.
 	sdkRemoveObject func(ctx context.Context, bucket, key string) error
-	// bucketProbe caches a positive bucket-existence answer. A 404 on a
-	// key-scoped call is ambiguous (minio-go reports NoSuchKey for a HEAD on
-	// a missing bucket too), so the client confirms the bucket exists before
-	// returning os.ErrNotExist. Only a positive answer is cached, for
-	// bucketProbeTTL, so a bucket deleted out of band stops being "present"
-	// within that window at the latest; misses are never cached. A pointer so
-	// WithCredentialSource can hand the clone its own state instead of
-	// copying a mutex.
-	bucketProbe *bucketProbeState
 }
 
 // NewMinIOClient creates a StorageClient. Object I/O goes through the
@@ -98,7 +88,7 @@ func NewMinIOClient(cfg Config) *MinIOClient {
 	if cfg.PublicAlias == "" {
 		cfg.PublicAlias = "agentteams-public"
 	}
-	return &MinIOClient{config: cfg, sdk: &s3Client{}, bucketProbe: &bucketProbeState{}}
+	return &MinIOClient{config: cfg, sdk: &s3Client{}}
 }
 
 // WithCredentialSource returns a copy of the client that fetches credentials
@@ -109,7 +99,6 @@ func (c *MinIOClient) WithCredentialSource(src CredentialSource) *MinIOClient {
 	clone.credSource = src
 	clone.aliasReady = false
 	clone.sdk = &s3Client{} // the clone signs as a different identity
-	clone.bucketProbe = &bucketProbeState{}
 	return &clone
 }
 
@@ -360,20 +349,6 @@ func isSDKNotFound(err error) bool {
 	return resp.StatusCode == http.StatusNotFound && resp.Code == ""
 }
 
-// bucketProbeTTL bounds how long a positive bucket-existence answer is
-// reused. Object 404s are common on the sync path (a manifest that does not
-// exist yet), so probing on every one would add a HEAD round-trip each time;
-// reusing the answer for a short window keeps that flat while still noticing
-// an out-of-band deletion quickly.
-const bucketProbeTTL = 30 * time.Second
-
-// bucketProbeState holds the positive bucket-existence cache; one per client
-// (clones get their own so a credential identity change re-probes).
-type bucketProbeState struct {
-	mu      sync.Mutex
-	okUntil time.Time
-}
-
 // isSDKBucketGone reports the codes a bucket-level 404 carries.
 func isSDKBucketGone(err error) bool {
 	var resp minio.ErrorResponse
@@ -401,7 +376,6 @@ func (c *MinIOClient) classifyKeyError(ctx context.Context, err error) error {
 		return nil
 	}
 	if isSDKBucketGone(err) {
-		c.forgetBucketProbe()
 		return err // bucket-level codes stay errors, never os.ErrNotExist
 	}
 	if !isSDKNotFound(err) {
@@ -414,24 +388,21 @@ func (c *MinIOClient) classifyKeyError(ctx context.Context, err error) error {
 		return perr
 	}
 	if !ok {
-		c.forgetBucketProbe()
 		return fmt.Errorf("%w: %s", ErrStorageBucketUnavailable, c.config.Bucket)
 	}
 	return os.ErrNotExist
 }
 
-// bucketAvailable reports whether the configured bucket still exists,
-// reusing a recent positive answer for bucketProbeTTL.
+// bucketAvailable reports whether the configured bucket still exists.
+//
+// There is deliberately no cache: a positive answer is only true at the
+// moment it was observed. A cached "present" is exactly what made an
+// out-of-band deletion read as a missing file in the first place — the
+// ordinary not-found check on a genuinely absent key would warm the cache,
+// and a bucket deleted a second later would still be reported as present.
+// Each ambiguous 404 therefore pays one HEAD; correctness over a saved
+// round-trip on an error path.
 func (c *MinIOClient) bucketAvailable(ctx context.Context) (bool, error) {
-	if c.bucketProbe == nil {
-		c.bucketProbe = &bucketProbeState{}
-	}
-	c.bucketProbe.mu.Lock()
-	fresh := time.Now().Before(c.bucketProbe.okUntil)
-	c.bucketProbe.mu.Unlock()
-	if fresh {
-		return true, nil
-	}
 	sdk, err := c.sdkClient()
 	if err != nil {
 		return false, err
@@ -440,23 +411,7 @@ func (c *MinIOClient) bucketAvailable(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("oss: bucket probe: %w", err)
 	}
-	if ok {
-		c.bucketProbe.mu.Lock()
-		c.bucketProbe.okUntil = time.Now().Add(bucketProbeTTL)
-		c.bucketProbe.mu.Unlock()
-	}
 	return ok, nil
-}
-
-// forgetBucketProbe drops the cached positive answer so the next ambiguous
-// 404 probes the store again.
-func (c *MinIOClient) forgetBucketProbe() {
-	if c.bucketProbe == nil {
-		return
-	}
-	c.bucketProbe.mu.Lock()
-	c.bucketProbe.okUntil = time.Time{}
-	c.bucketProbe.mu.Unlock()
 }
 
 // PresignUpload implements PresignUploader. The POST policy form is

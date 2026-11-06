@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -241,5 +242,73 @@ func TestKeyScopedCallsNeverReportAGoneBucketAsNotExist(t *testing.T) {
 	}
 	if !errors.Is(err, ErrStorageBucketUnavailable) {
 		t.Fatalf("GetObject = %v, want ErrStorageBucketUnavailable", err)
+	}
+}
+
+// flipBucketS3Server answers a missing key with NoSuchKey and flips to a
+// gone bucket on demand: the sequence the positive-cache bug needed is
+// "missing key while the bucket exists, then the bucket disappears".
+type flipBucketS3Server struct {
+	srv  *httptest.Server
+	gone atomic.Bool
+}
+
+func newFlipBucketS3Server(t *testing.T) *flipBucketS3Server {
+	t.Helper()
+	f := &flipBucketS3Server{}
+	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("location") {
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = w.Write([]byte(`<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></LocationConstraint>`))
+			return
+		}
+		if isBucketRequest(r) {
+			if f.gone.Load() {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`<Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist.</Message></Error>`))
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`<Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message></Error>`))
+	}))
+	t.Cleanup(f.srv.Close)
+	return f
+}
+
+// TestBucketProbeIsNotCached pins the failure mode a positive cache creates:
+// a normal missing-key lookup must not leave behind an answer that keeps a
+// deleted bucket looking present.
+func TestBucketProbeIsNotCached(t *testing.T) {
+	flip := newFlipBucketS3Server(t)
+	c := statClient(flip.srv)
+	ctx := context.Background()
+
+	// 1) Ordinary not-found while the bucket exists: a missing file.
+	if err := c.Stat(ctx, "humans/alice/files/nope.txt"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Stat(missing key, bucket present) = %v, want os.ErrNotExist", err)
+	}
+
+	// 2) The bucket disappears without this client doing anything.
+	flip.gone.Store(true)
+
+	// 3) The same key must now report the bucket, not a missing file.
+	for name, op := range map[string]func() error{
+		"Stat":     func() error { return c.Stat(ctx, "humans/alice/files/nope.txt") },
+		"StatMeta": func() error { _, err := c.StatMeta(ctx, "humans/alice/files/nope.txt"); return err },
+		"GetObject": func() error {
+			_, err := c.GetObject(ctx, "humans/alice/files/nope.txt")
+			return err
+		},
+	} {
+		err := op()
+		if err == nil || errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s after the bucket vanished = %v, want a non-not-exist bucket error", name, err)
+		}
+		if !errors.Is(err, ErrStorageBucketUnavailable) {
+			t.Fatalf("%s after the bucket vanished = %v, want ErrStorageBucketUnavailable", name, err)
+		}
 	}
 }

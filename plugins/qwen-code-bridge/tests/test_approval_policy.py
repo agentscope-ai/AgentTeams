@@ -64,13 +64,13 @@ def test_exec_curl_deny():
 
 
 def test_exec_unknown_escalate_deny_fail_closed():
-    d = approval.decide("shell", {"command": "make deploy-prod"}, [ROOT])
+    d = approval.decide("shell", {"command": "terraform plan"}, [ROOT])
     assert d["behavior"] == "deny" and d["requires_human"] is True
 
 
 def test_exec_unknown_escalate_allow_override():
     d = approval.decide(
-        "shell", {"command": "make deploy-prod"}, [ROOT], escalate_behavior="allow"
+        "shell", {"command": "terraform plan"}, [ROOT], escalate_behavior="allow"
     )
     assert d["behavior"] == "allow"
 
@@ -118,13 +118,9 @@ def test_receipt_records_decision(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_compound_semicolon_deny():
-    d = approval.decide(
-        "shell",
-        {"command": "pwd; python3 -c 'print(123)'", "cwd": "/outside"},
-        [ROOT],
-    )
-    assert d["behavior"] == "deny" and d["rule"] == "exec-compound"
+def test_compound_semicolon_allow():
+    d = approval.decide("shell", {"command": "pwd; python3 -c 'print(123)'"}, [ROOT])
+    assert d["behavior"] == "allow"
 
 
 def test_cat_outside_root_deny():
@@ -144,44 +140,44 @@ def test_cwd_outside_root_deny():
 
 def test_compound_and_deny():
     d = approval.decide("shell", {"command": "echo hi && rm -rf x"}, [ROOT])
-    assert d["behavior"] == "deny" and d["rule"] == "exec-compound"
+    assert d["behavior"] == "deny" and d["rule"] == "exec-denied"
 
 
 def test_command_substitution_dollar_paren_deny():
     d = approval.decide("shell", {"command": "cat $(echo /etc/passwd)"}, [ROOT])
-    assert d["behavior"] == "deny" and d["rule"] == "exec-compound"
+    assert d["behavior"] == "deny" and d["rule"] == "exec-substitution"
 
 
 def test_backtick_deny():
     d = approval.decide("shell", {"command": "echo `id`"}, [ROOT])
-    assert d["behavior"] == "deny" and d["rule"] == "exec-compound"
+    assert d["behavior"] == "deny" and d["rule"] == "exec-substitution"
 
 
 def test_dquote_command_substitution_paren_deny():
     d = approval.decide("shell", {"command": 'git commit -m "$(id)"'}, [ROOT])
-    assert d["behavior"] == "deny" and d["rule"] == "exec-compound"
+    assert d["behavior"] == "deny" and d["rule"] == "exec-substitution"
 
 
 def test_dquote_command_substitution_backtick_deny():
     d = approval.decide("shell", {"command": 'git commit -m "`id`"'}, [ROOT])
-    assert d["behavior"] == "deny" and d["rule"] == "exec-compound"
+    assert d["behavior"] == "deny" and d["rule"] == "exec-substitution"
 
 
 def test_dquote_command_substitution_embedded_deny():
     d = approval.decide(
         "shell", {"command": 'git commit -m "prefix $(id) suffix"'}, [ROOT]
     )
-    assert d["behavior"] == "deny" and d["rule"] == "exec-compound"
+    assert d["behavior"] == "deny" and d["rule"] == "exec-substitution"
 
 
-def test_dquote_param_expansion_deny():
+def test_dquote_param_expansion_allow():
     d = approval.decide("shell", {"command": 'git commit -m "${HOME}"'}, [ROOT])
-    assert d["behavior"] == "deny" and d["rule"] == "exec-compound"
+    assert d["behavior"] == "allow"
 
 
 def test_dquote_command_substitution_echo_deny():
     d = approval.decide("shell", {"command": 'echo "a$(date)b"'}, [ROOT])
-    assert d["behavior"] == "deny" and d["rule"] == "exec-compound"
+    assert d["behavior"] == "deny" and d["rule"] == "exec-substitution"
 
 
 def test_squote_command_substitution_allow():
@@ -199,14 +195,16 @@ def test_dquote_escaped_backtick_allow():
     assert d["behavior"] == "allow"
 
 
-def test_python_interpreter_deny():
+def test_python_interpreter_allow():
     d = approval.decide("shell", {"command": "python3 -c 1"}, [ROOT])
-    assert d["behavior"] == "deny" and d["rule"] == "exec-denied"
+    assert d["behavior"] == "allow"
+    d = approval.decide("shell", {"command": "python3 -m pytest -q"}, [ROOT])
+    assert d["behavior"] == "allow"
 
 
 def test_bash_c_deny():
     d = approval.decide("shell", {"command": "bash -c 'ls'"}, [ROOT])
-    assert d["behavior"] == "deny" and d["rule"] == "exec-denied"
+    assert d["behavior"] == "deny" and d["rule"] == "exec-inline-shell"
 
 
 def test_sed_inplace_deny():

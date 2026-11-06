@@ -1592,5 +1592,5 @@ async def test_control_response_deny_not_allow(tmp_path):
         assert deny_resp["message"]
         assert allow_resp["behavior"] == "allow"
         assert dq_deny_resp["behavior"] == "deny"
-        assert "exec-compound" in dq_deny_resp["message"]
+        assert "exec-substitution" in dq_deny_resp["message"]
         assert dq_allow_resp["behavior"] == "allow"

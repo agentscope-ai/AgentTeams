@@ -61,14 +61,23 @@ def _shell_payload(command, cwd):
     }
 
 
-# 1. compound shell command → deny (exec-compound)
-def test_exec_compound_deny(tmp_path):
+# 1. compound shell command → allow when every segment passes the policy
+def test_exec_compound_allow(tmp_path):
     out = _run_hook(
         _shell_payload("pwd; python3 -c 'print(1)'", tmp_path),
         roots=[str(tmp_path)],
     )
+    assert _decision(out) == "allow"
+
+
+# 1b. a compound whose segment is denied still denies (per-segment check)
+def test_exec_compound_denied_segment(tmp_path):
+    out = _run_hook(
+        _shell_payload("pwd && rm -rf x", tmp_path),
+        roots=[str(tmp_path)],
+    )
     assert _decision(out) == "deny"
-    assert "exec-compound" in _reason(out)
+    assert "exec-denied" in _reason(out)
 
 
 # 2. read outside the run root → deny (outside-root)

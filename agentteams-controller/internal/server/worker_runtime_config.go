@@ -468,8 +468,9 @@ func (h *RuntimeConfigHandler) Handle(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("ETag", contentETag(respBody))
 		}
 		if success && sub == "runtime-config" && r.Method == http.MethodPut {
-			// New current version: ETag of the merged config we wrote.
-			w.Header().Set("ETag", contentETag(body))
+			// The runtime normalizes the submitted config; its returned
+			// representation is the version a subsequent GET will read.
+			w.Header().Set("ETag", contentETag(respBody))
 		}
 		if ct := resp.Header.Get("Content-Type"); ct != "" {
 			w.Header().Set("Content-Type", ct)

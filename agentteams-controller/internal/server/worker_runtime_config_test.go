@@ -183,6 +183,46 @@ func TestRuntimeConfig_L2PutWhitelistAllowed(t *testing.T) {
 	}
 }
 
+// A native-style response keeps its own field order; the returned ETag
+// must remain usable for the next write without an intervening GET.
+func TestRuntimeConfig_PutETagSupportsConsecutiveNativeStyleWrites(t *testing.T) {
+	current := `{"max_iters":100,"llm_retry_enabled":true}`
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			var submitted map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&submitted); err != nil {
+				t.Errorf("decode submitted config: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			// Native QwenPaw returns its typed model representation rather
+			// than the controller's map serialization of the submitted body.
+			current = fmt.Sprintf(`{"max_iters":%d,"llm_retry_enabled":true}`, int(submitted["max_iters"].(float64)))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(current))
+	}))
+	defer upstream.Close()
+	h := newTestRuntimeConfigHandler(t, "embedded", upstream, nil,
+		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
+	read := httptest.NewRecorder()
+	h.Handle(read, rcAdminCaller(rcRequest(http.MethodGet, "daily-carol", "runtime-config", nil)))
+	etag := read.Header().Get("ETag")
+	for _, value := range []int{101, 102} {
+		req := rcAdminCaller(rcRequest(http.MethodPut, "daily-carol", "runtime-config", []byte(fmt.Sprintf(`{"max_iters":%d}`, value))))
+		req.Header.Set("If-Match", etag)
+		write := httptest.NewRecorder()
+		h.Handle(write, req)
+		if write.Code != http.StatusOK {
+			t.Fatalf("consecutive PUT status=%d, want 200", write.Code)
+		}
+		etag = write.Header().Get("ETag")
+		if etag != contentETag(write.Body.Bytes()) {
+			t.Fatalf("PUT ETag=%q does not describe the current native response", etag)
+		}
+	}
+}
+
 // TestRuntimeConfig_PutNoOpSkipsWrite: a PUT whose submitted values equal
 // the persisted ones performs exactly one upstream call (the GET) and
 // returns the current config as 200 — no redundant worker write.

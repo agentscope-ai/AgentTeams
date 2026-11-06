@@ -358,7 +358,9 @@ func TestStorageFault_ListingIs503(t *testing.T) {
 }
 
 // TestStorageFault_RecursiveListingIs503: the recursive flat listing
-// answers 503 when its walk faults.
+// answers 503 when its walk faults. The root's ?recursive=1 listing is
+// served by listFiles (the GET .../files route), not getFile — getFile
+// treats the empty path as a plain directory listing.
 func TestStorageFault_RecursiveListingIs503(t *testing.T) {
 	hfh, store, _ := newHumanFilesRig(t)
 	hfh.oss = newFaultOSS(t, store, "", "ListObjectsRecursive")
@@ -366,7 +368,7 @@ func TestStorageFault_RecursiveListingIs503(t *testing.T) {
 	req := hfReq(t, http.MethodGet, "alice", "", hfSelf(), nil)
 	req.URL.RawQuery = "recursive=1"
 	rec := httptest.NewRecorder()
-	hfh.getFile(rec, req)
+	hfh.listFiles(rec, req)
 	assertStorageUnavailable(t, rec, "recursive listing")
 }
 

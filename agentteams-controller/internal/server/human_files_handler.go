@@ -1927,6 +1927,17 @@ func (h *humanFilesHandler) commitPresignedFile(w http.ResponseWriter, r *http.R
 	// Remember the published version: retries are no-ops and a follow-up
 	// presign keeps it as the Committed baseline.
 	if err := h.writePresignCommitState(ctx, username, func(s *presignCommitState) {
+		// The publish happened under the path lease, but a presign issued
+		// while it was in flight is recorded outside that lease: overwriting
+		// the entry unconditionally would erase that newer session and make
+		// its commit look like a retry of ours (200 while GET still serves
+		// our bytes). Advance the Committed baseline, keep the newer session.
+		current := s.Commits[rel]
+		if current.Session != "" && current.Session != entry.Session {
+			current.Committed = finalMeta.ETag
+			s.Commits[rel] = current
+			return
+		}
 		s.Commits[rel] = presignCommitEntry{Committed: finalMeta.ETag}
 	}); err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "record presign commit failed")

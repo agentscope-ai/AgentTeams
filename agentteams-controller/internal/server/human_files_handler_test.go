@@ -4213,3 +4213,94 @@ func TestHumanFiles_PresignCommitPublishVsConcurrentMutation(t *testing.T) {
 		})
 	}
 }
+
+// TestHumanFiles_PresignCommitKeepsNewerSession is the maintainer's overlap
+// regression: pause commit A before it publishes, issue and upload B to the
+// same path, then finish A. The settlement must advance the Committed
+// baseline without erasing B's session — otherwise B's commit is answered as
+// an A retry (200) while GET keeps serving A's bytes.
+func TestHumanFiles_PresignCommitKeepsNewerSession(t *testing.T) {
+	base := ossfake.NewMemory()
+	stalled := &stallCommitPublishOSS{
+		inner:   base,
+		key:     "humans/alice/files/race.bin",
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	_, _, k8s := newHumanFilesRig(t)
+	h := NewHumanFilesHandler(k8s, "default", stalled, audit.NewClient(base))
+	ctx := context.Background()
+
+	if rec := hfPutQuota(t, h, "alice", hfAdmin(), `{"quotaBytes":1000}`); rec.Code != http.StatusOK {
+		t.Fatalf("put quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPutFile(t, h, "alice", "race.bin", hfSelf(), "old"); rec.Code != http.StatusOK {
+		t.Fatalf("seed: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Session A: sign, stage its bytes.
+	prA := hfPresign(t, h, "alice", "race.bin", "presign=1")
+	stageA := hfStagingKey(t, &prA)
+	if err := base.PutObject(ctx, stageA, []byte("content-from-A")); err != nil {
+		t.Fatal(err)
+	}
+
+	stalled.armed = true
+	type commitResult struct {
+		code int
+		body humanPresignCommitResponse
+	}
+	commitA := make(chan commitResult, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		h.postFile(rec, hfReq(t, http.MethodPost, "alice", "race.bin/commit", hfSelf(), nil))
+		var body humanPresignCommitResponse
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		commitA <- commitResult{rec.Code, body}
+	}()
+	select {
+	case <-stalled.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("commit A never reached the publish write")
+	}
+
+	// While A holds the lease mid-publish, the client signs and uploads B to
+	// the same path: the newer session must survive A's settlement.
+	prB := hfPresign(t, h, "alice", "race.bin", "presign=1")
+	stageB := hfStagingKey(t, &prB)
+	if stageA == stageB {
+		t.Fatalf("the second presign reused A's staging key %q", stageA)
+	}
+	if err := base.PutObject(ctx, stageB, []byte("content-from-B")); err != nil {
+		t.Fatal(err)
+	}
+	close(stalled.release)
+
+	resA := <-commitA
+	if resA.code != http.StatusOK {
+		t.Fatalf("commit A: %d", resA.code)
+	}
+
+	state, _, err := h.readPresignCommitState(ctx, "alice")
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	entry := state.Commits["race.bin"]
+	if entry.Session == "" {
+		t.Fatal("settlement erased the newer (B) session")
+	}
+	if entry.Session == "" || entry.Committed != resA.body.ETag {
+		t.Fatalf("settled entry = %+v, want the B session with A's etag as the committed baseline", entry)
+	}
+
+	// B's commit must publish B, not be answered as an A retry.
+	recB := httptest.NewRecorder()
+	h.postFile(recB, hfReq(t, http.MethodPost, "alice", "race.bin/commit", hfSelf(), nil))
+	if recB.Code != http.StatusOK {
+		t.Fatalf("commit B: %d %s", recB.Code, recB.Body.String())
+	}
+	live := hfGetLive(t, h, "alice", "race.bin")
+	if live.Code != http.StatusOK || live.Body.String() != "content-from-B" {
+		t.Fatalf("live file = %d %q, want B's content", live.Code, live.Body.String())
+	}
+}

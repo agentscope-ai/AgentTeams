@@ -288,7 +288,12 @@ func (c *MinIOClient) PresignUpload(ctx context.Context, key string, maxBytes in
 	if err != nil {
 		return "", "", nil, err
 	}
-	object := strings.TrimPrefix(c.fullPath(key), "/")
+	// The SDK selects the bucket itself, so the signed object name is the
+	// bucket-relative key — fullPath (mc alias/bucket prefix) only applies
+	// to mc invocations. Signing fullPath made the browser upload land under
+	// agentteams/agentteams-storage/<key> while commit read <key>, which the
+	// real RustFS surfaced as 404 object_missing after a 204 upload.
+	object := strings.TrimPrefix(key, "/")
 	policy := minio.NewPostPolicy()
 	perr := policy.SetBucket(c.config.Bucket)
 	if perr == nil {

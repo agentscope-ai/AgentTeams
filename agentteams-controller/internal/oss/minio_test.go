@@ -347,11 +347,12 @@ func TestPresignUploadSignsTheBucketRelativeKey(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := NewMinIOClient(Config{
-		Endpoint:      srv.URL,
-		AccessKey:     "ak",
-		SecretKey:     "sk",
-		Bucket:        "agentteams-storage",
-		StoragePrefix: "agentteams/agentteams-storage",
+		Endpoint:       srv.URL,
+		PublicEndpoint: srv.URL,
+		AccessKey:      "ak",
+		SecretKey:      "sk",
+		Bucket:         "agentteams-storage",
+		StoragePrefix:  "agentteams/agentteams-storage",
 	})
 	key := "humans/alice/.uploads/sess-1/race.bin"
 	method, url, fields, err := c.PresignUpload(context.Background(), key, 1<<20, "application/octet-stream", "", time.Minute)

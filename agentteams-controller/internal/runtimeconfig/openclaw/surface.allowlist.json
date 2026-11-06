@@ -1,0 +1,19 @@
+{
+  "allowlist": [
+    {"key": "$schema", "reason": "JSON Schema 指针, 非运行时配置, 由 CLI 写入固定值"},
+    {"key": "meta", "reason": "CLI 内部迁移/记账状态 (lastTouchedVersion/migrations), 非用户可配置"},
+    {"key": "wizard", "reason": "setup wizard 内部状态 (lastRunAt/accessMode/securityAcknowledgedAt 等), 非运行时配置"},
+    {"key": "channels", "reason": "channels 为 passthrough: 频道插件 (matrix/whatsapp/googlechat/nostr 等) 自带键不可静态枚举; 公共策略键已以 channels.*/channels.defaults.* 声明; 频道凭据键 (如 matrix.accessToken) 写入时必须以 SecretRef 传递"},
+    {"key": "tools.web.search", "reason": "provider 选项为开放 catchall (legacy provider 键被 validator 拒绝), 静态键已声明"},
+    {"key": "mcp.servers", "reason": "服务器 schema 带开放 catchall, 服务器/插件专属选项不可静态枚举, 静态键已以通配字段声明"},
+    {"key": "talk.providers", "reason": "厂商选项开放 catchall (voice/transport 等), 仅 apiKey 已声明"},
+    {"key": "tts.providers", "reason": "厂商选项开放 catchall, 仅 apiKey 已声明"},
+    {"key": "tts.personas", "reason": "persona 字段开放 catchall (name/description/model/voice 等)"},
+    {"key": "broadcast", "reason": "peer-id → agents 映射为开放键集, 仅 strategy 已声明"},
+    {"key": "hooks.internal.entries", "reason": "每个内部 hook 的配置为 passthrough (enabled+env+任意附加项), 节点已声明"},
+    {"key": "browser.profiles", "reason": "每 profile 开放 catchall 附加选项, 静态键已以通配字段声明"},
+    {"key": "secrets.providers", "reason": "provider 实例 id 为动态键, 快照无法静态枚举; 实例字段已以通配字段声明"},
+    {"key": "accessGroups.*", "reason": "组 id 为动态键, 快照无法静态枚举; 组字段已以通配字段声明"},
+    {"key": "storage.locations.*", "reason": "location id 为动态键, 快照无法静态枚举; location 字段已以通配字段声明"}
+  ]
+}

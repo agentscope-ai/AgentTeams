@@ -30,6 +30,14 @@ var ErrPreconditionFailed = errors.New("oss: precondition failed (etag mismatch)
 // safety must fail closed on this error.
 var ErrConditionalUnsupported = errors.New("oss: backend cannot provide conditional writes")
 
+// ErrPresignUnsupported is returned by PresignGet when the deployment has
+// no caller-reachable storage origin (Config.PublicEndpoint is empty). No
+// URL is minted: a URL signed for the internal endpoint is unusable from
+// the caller because the Host participates in the S3 V4 signature. Callers
+// map it to an explicit capability response (501 presign_unsupported) and
+// fall back to the streamed GET.
+var ErrPresignUnsupported = errors.New("oss: presign unsupported (storage endpoint is not caller-reachable)")
+
 // StorageClient abstracts object storage operations.
 // Implementations: MinIOClient (mc CLI), future S3Client (aws-sdk-go).
 // ObjectInfo is a listing entry with the last-updated timestamp when the

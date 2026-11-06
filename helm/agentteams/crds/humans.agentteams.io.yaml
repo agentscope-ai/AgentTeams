@@ -60,7 +60,7 @@ spec:
                   type: array
                   items:
                     type: string
-                  description: "Named sensitive-surface privileges beyond the L2 baseline (five-value set: full_access, channel_secrets, external_sources, approval_policy, secret_reveal; docs/design/capability-foundation.md). Team leaders never hold capabilities"
+                  description: "Named sensitive-surface privileges beyond the L2 baseline (six-value set: full_access, channel_secrets, external_sources, approval_policy, secret_reveal, file_sync; docs/design/capability-foundation.md). Team leaders never hold capabilities"
                 workspaceQuotaBytes:
                   type: integer
                   format: int64

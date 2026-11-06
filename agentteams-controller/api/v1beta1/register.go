@@ -28,6 +28,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&ManagerList{},
 		&Loop{},
 		&LoopList{},
+		&ModelAccessTable{},
+		&ModelAccessTableList{},
 	)
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil

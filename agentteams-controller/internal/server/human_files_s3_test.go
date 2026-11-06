@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -686,6 +688,249 @@ func TestHumanFiles_S3PurgeAfterLeaseExpiryQuotaRace(t *testing.T) {
 	}
 }
 
+// swapLoopbackHost returns the loopback twin of host (127.0.0.1 <->
+// localhost, port preserved): a DIFFERENT Host header value that resolves
+// to the same server — the input the host-in-signature reverse proof needs.
+func swapLoopbackHost(host string) string {
+	h, port, err := net.SplitHostPort(host)
+	if err != nil {
+		return ""
+	}
+	switch h {
+	case "127.0.0.1":
+		return "localhost:" + port
+	case "localhost":
+		return "127.0.0.1:" + port
+	}
+	return ""
+}
+
+// TestHumanFiles_S3PresignAnonymousDownload is the end-to-end regression
+// for #1501 against a real S3-compatible backend: the presigned URL is
+// minted for the caller-reachable public endpoint (its host is that
+// origin, never the internal one), an anonymous GET with no credentials
+// returns the exact bytes and the stored object's ETag, the same path
+// without the signature is denied, and — the reverse proof that the Host
+// header participates in the S3 V4 signature — the identical URL served
+// from a different, equally reachable host is rejected. A short TTL
+// (2s) proves the URL actually expires: 200 before, 403 after.
+//
+// Skipped unless HUMAN_FILES_S3_ENDPOINT and HUMAN_FILES_S3_PUBLIC_ENDPOINT
+// are set (the CI job starts RustFS and points the public endpoint at the
+// same instance, which the test process can reach).
+func TestHumanFiles_S3PresignAnonymousDownload(t *testing.T) {
+	endpoint := os.Getenv("HUMAN_FILES_S3_ENDPOINT")
+	publicEndpoint := os.Getenv("HUMAN_FILES_S3_PUBLIC_ENDPOINT")
+	if endpoint == "" || publicEndpoint == "" {
+		t.Skip("set HUMAN_FILES_S3_ENDPOINT and HUMAN_FILES_S3_PUBLIC_ENDPOINT (plus ACCESS_KEY/SECRET_KEY/BUCKET) to run the native presign anonymous-download regression")
+	}
+	access := os.Getenv("HUMAN_FILES_S3_ACCESS_KEY")
+	secret := os.Getenv("HUMAN_FILES_S3_SECRET_KEY")
+	bucket := os.Getenv("HUMAN_FILES_S3_BUCKET")
+	if access == "" || secret == "" || bucket == "" {
+		t.Fatal("HUMAN_FILES_S3_ACCESS_KEY, HUMAN_FILES_S3_SECRET_KEY and HUMAN_FILES_S3_BUCKET are required")
+	}
+
+	alias := "humanfilestest"
+	client := oss.NewMinIOClient(oss.Config{
+		Endpoint:       endpoint,
+		AccessKey:      access,
+		SecretKey:      secret,
+		Alias:          alias,
+		Bucket:         bucket,
+		StoragePrefix:  alias + "/" + bucket,
+		PublicEndpoint: publicEndpoint,
+	})
+	ctx := context.Background()
+
+	// The other S3 regressions share this bucket and human; start from a
+	// clean area and leave it clean.
+	_ = client.DeletePrefix(ctx, humanFilesPrefix("alice"))
+	_ = client.DeletePrefix(ctx, humanTrashPrefix("alice"))
+	_ = client.DeleteObject(ctx, humanQuotaLedgerKey("alice"))
+	defer func() {
+		_ = client.DeletePrefix(ctx, humanFilesPrefix("alice"))
+		_ = client.DeletePrefix(ctx, humanTrashPrefix("alice"))
+		_ = client.DeleteObject(ctx, humanQuotaLedgerKey("alice"))
+	}()
+
+	// The short TTL drives the expiry check; the handler reads it at
+	// construction time.
+	t.Setenv("AGENTTEAMS_PRESIGN_TTL", "2s")
+	h, _, _ := newHumanFilesRig(t)
+	h.oss = client
+
+	content := "presigned-bytes-for-1501"
+	if rec := hfPutFile(t, h, "alice", "presign.txt", hfSelf(), content); rec.Code != http.StatusOK {
+		t.Fatalf("put: %d %s", rec.Code, rec.Body.String())
+	}
+
+	presign := httptest.NewRecorder()
+	h.getFile(presign, presignReq(t, "alice", "presign.txt", hfSelf()))
+	if presign.Code != http.StatusOK {
+		t.Fatalf("presign: %d %s", presign.Code, presign.Body.String())
+	}
+	var pr humanFilePresignResponse
+	if err := json.Unmarshal(presign.Body.Bytes(), &pr); err != nil {
+		t.Fatalf("presign response: %v: %s", err, presign.Body.String())
+	}
+	if pr.URL == "" {
+		t.Fatalf("presign response carries no URL: %s", presign.Body.String())
+	}
+	u, err := url.Parse(pr.URL)
+	if err != nil {
+		t.Fatalf("parse presigned URL %q: %v", pr.URL, err)
+	}
+
+	// The URL's host is the caller-reachable public endpoint, never the
+	// internal one (which the caller cannot resolve).
+	pub, err := url.Parse(publicEndpoint)
+	if err != nil {
+		t.Fatalf("parse public endpoint %q: %v", publicEndpoint, err)
+	}
+	if u.Host != pub.Host {
+		t.Fatalf("presigned URL host = %q, want the public endpoint host %q", u.Host, pub.Host)
+	}
+	if ep, err := url.Parse(endpoint); err == nil && u.Host == ep.Host {
+		t.Fatalf("presigned URL host %q is the internal endpoint host — the URL is unusable from the caller", u.Host)
+	}
+
+	anonGet := func(raw string) (int, []byte, string) {
+		resp, err := http.Get(raw)
+		if err != nil {
+			t.Fatalf("anonymous GET %s: %v", raw, err)
+		}
+		defer resp.Body.Close()
+		body, rerr := io.ReadAll(resp.Body)
+		if rerr != nil {
+			t.Fatalf("read anonymous GET body from %s: %v", raw, rerr)
+		}
+		return resp.StatusCode, body, resp.Header.Get("ETag")
+	}
+
+	// 1) Anonymous GET (no credentials) on the signed URL: 200 with the
+	// exact bytes and the stored object's ETag (S3 quotes header ETags).
+	code, body, etag := anonGet(pr.URL)
+	if code != http.StatusOK {
+		t.Fatalf("anonymous GET on signed URL: got %d, want 200: %s", code, body)
+	}
+	if string(body) != content {
+		t.Fatalf("anonymous GET bytes = %q, want %q", body, content)
+	}
+	if pr.ETag == "" {
+		t.Fatal("presign response carries no etag to verify against")
+	}
+	if got := strings.Trim(etag, "\""); got != pr.ETag {
+		t.Fatalf("anonymous GET etag = %q, want %q", etag, pr.ETag)
+	}
+
+	// 2) The same path WITHOUT the signature: anonymous access to the
+	// private bucket is denied.
+	unsigned := *u
+	unsigned.RawQuery = ""
+	code, _, _ = anonGet(unsigned.String())
+	if code != http.StatusForbidden {
+		t.Fatalf("unsigned GET: got %d, want 403", code)
+	}
+
+	// 3) Host-in-signature reverse proof, while the URL is still valid:
+	// the identical URL served from the loopback twin host (a different
+	// Host header, same server) must be rejected — if the Host were not
+	// part of the signed canonical request, it would return 200.
+	if other := swapLoopbackHost(u.Host); other != "" {
+		hijacked := *u
+		hijacked.Host = other
+		code, body, _ = anonGet(hijacked.String())
+		if code == http.StatusOK {
+			t.Fatalf("host-rewritten URL (host %q -> %q) was served 200: the Host header must be part of the signature: %s", u.Host, other, body)
+		}
+		if code != http.StatusForbidden {
+			t.Fatalf("host-rewritten URL: got %d, want 403: %s", code, body)
+		}
+	} else {
+		t.Logf("public endpoint host %q has no loopback twin; skipping the host-in-signature reverse proof", u.Host)
+	}
+
+	// 4) The 2s TTL has now elapsed: the same URL is rejected.
+	time.Sleep(2800 * time.Millisecond)
+	code, body, _ = anonGet(pr.URL)
+	if code != http.StatusForbidden {
+		t.Fatalf("expired URL: got %d, want 403: %s", code, body)
+	}
+}
+
+// TestHumanFiles_S3PresignUnconfiguredEndpoint is the capability boundary
+// against a real backend (#1501): with no caller-reachable public
+// endpoint configured, ?presign=1 answers 501 with the stable
+// presign_unsupported code instead of minting a URL the caller cannot
+// reach — and the ordinary streamed GET on the same path keeps working,
+// which is the documented client fallback.
+//
+// Skipped unless HUMAN_FILES_S3_ENDPOINT is set (the same gate as the
+// other S3 tests; the CI job selects it with -run 'TestHumanFiles_S3').
+func TestHumanFiles_S3PresignUnconfiguredEndpoint(t *testing.T) {
+	endpoint := os.Getenv("HUMAN_FILES_S3_ENDPOINT")
+	if endpoint == "" {
+		t.Skip("set HUMAN_FILES_S3_ENDPOINT/HUMAN_FILES_S3_ACCESS_KEY/HUMAN_FILES_S3_SECRET_KEY/HUMAN_FILES_S3_BUCKET to run the native presign capability-boundary regression")
+	}
+	access := os.Getenv("HUMAN_FILES_S3_ACCESS_KEY")
+	secret := os.Getenv("HUMAN_FILES_S3_SECRET_KEY")
+	bucket := os.Getenv("HUMAN_FILES_S3_BUCKET")
+	if access == "" || secret == "" || bucket == "" {
+		t.Fatal("HUMAN_FILES_S3_ACCESS_KEY, HUMAN_FILES_S3_SECRET_KEY and HUMAN_FILES_S3_BUCKET are required")
+	}
+
+	alias := "humanfilestest"
+	client := oss.NewMinIOClient(oss.Config{
+		Endpoint:      endpoint,
+		AccessKey:     access,
+		SecretKey:     secret,
+		Alias:         alias,
+		Bucket:        bucket,
+		StoragePrefix: alias + "/" + bucket,
+		// PublicEndpoint intentionally empty: the unconfigured case.
+	})
+	ctx := context.Background()
+
+	_ = client.DeletePrefix(ctx, humanFilesPrefix("alice"))
+	_ = client.DeletePrefix(ctx, humanTrashPrefix("alice"))
+	_ = client.DeleteObject(ctx, humanQuotaLedgerKey("alice"))
+	defer func() {
+		_ = client.DeletePrefix(ctx, humanFilesPrefix("alice"))
+		_ = client.DeletePrefix(ctx, humanTrashPrefix("alice"))
+		_ = client.DeleteObject(ctx, humanQuotaLedgerKey("alice"))
+	}()
+
+	h, _, _ := newHumanFilesRig(t)
+	h.oss = client
+
+	content := "streamed-fallback-bytes"
+	if rec := hfPutFile(t, h, "alice", "fallback.txt", hfSelf(), content); rec.Code != http.StatusOK {
+		t.Fatalf("put: %d %s", rec.Code, rec.Body.String())
+	}
+
+	presign := httptest.NewRecorder()
+	h.getFile(presign, presignReq(t, "alice", "fallback.txt", hfSelf()))
+	if presign.Code != http.StatusNotImplemented {
+		t.Fatalf("unconfigured presign: got %d, want 501: %s", presign.Code, presign.Body.String())
+	}
+	var boundary humanFilePresignUnsupportedResponse
+	if err := json.Unmarshal(presign.Body.Bytes(), &boundary); err != nil {
+		t.Fatalf("decode 501 body: %v: %s", err, presign.Body.String())
+	}
+	if boundary.Error != "presign_unsupported" {
+		t.Fatalf("error = %q, want presign_unsupported: %s", boundary.Error, presign.Body.String())
+	}
+
+	// The fallback the 501 points at: the streamed GET on the same path
+	// still returns the bytes.
+	get := httptest.NewRecorder()
+	h.getFile(get, hfReq(t, http.MethodGet, "alice", "fallback.txt", hfSelf(), nil))
+	if get.Code != http.StatusOK || get.Body.String() != content {
+		t.Fatalf("streamed GET after 501: got %d %q, want 200 %q", get.Code, get.Body.String(), content)
+	}
+}
+
 // TestHumanFiles_S3RecursiveListWalk walks a real S3-compatible backend
 // (RustFS in CI) through the recursive listing end to end. The coordinate
 // contract under test — Prefix/StartAfter/nextKey as bucket-relative keys
@@ -738,7 +983,7 @@ func TestHumanFiles_S3RecursiveListWalk(t *testing.T) {
 		path    string
 		content string
 	}{
-		{"a.txt", "hello"},              // 5 bytes
+		{"a.txt", "hello"},               // 5 bytes
 		{"docs/b.txt", "world!"},         // 6
 		{"docs/nested/c.txt", "x"},       // 1
 		{"x/y/z/deep.txt", "0123456789"}, // 10, four levels deep

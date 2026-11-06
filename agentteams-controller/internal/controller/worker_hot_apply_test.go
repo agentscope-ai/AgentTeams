@@ -26,7 +26,7 @@ func TestPatchSubagentModel(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if err := patchSubagentModel(context.Background(), srv.URL, "default", "qwen3.6-flash"); err != nil {
+	if err := patchSubagentModel(context.Background(), srv.URL, "default", "agentteams-gateway", "qwen3.6-flash"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if gotMethod != http.MethodPatch || gotPath != "/api/agents/default/model-settings" {
@@ -57,7 +57,7 @@ func TestPatchSubagentModelClearSendsNull(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if err := patchSubagentModel(context.Background(), srv.URL, "default", ""); err != nil {
+	if err := patchSubagentModel(context.Background(), srv.URL, "default", "agentteams-gateway", ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	var payload map[string]json.RawMessage
@@ -80,7 +80,7 @@ func TestPatchSubagentModelNon2xx(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := patchSubagentModel(context.Background(), srv.URL, "default", "x")
+	err := patchSubagentModel(context.Background(), srv.URL, "default", "agentteams-gateway", "x")
 	if err == nil {
 		t.Fatal("expected error on 500, got nil")
 	}
@@ -221,5 +221,87 @@ func TestApplySubagentModelHotResolvesTeamDefault(t *testing.T) {
 		MemberContext{TeamSubagentModel: "team-default-model"}, state)
 	if !strings.Contains(gotBody, `"model":"worker-explicit"`) {
 		t.Fatalf("worker explicit not dialed: %s", gotBody)
+	}
+}
+
+// Both native model APIs must carry the configured provider_id.
+func TestHotApplyProviderProjection(t *testing.T) {
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		if len(b) > 0 {
+			bodies = append(bodies, string(b))
+		}
+		w.WriteHeader(http.StatusOK)
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"active_llm":{"provider_id":"custom-gw","model":"qwen3.6-plus"}}`))
+		}
+	}))
+	defer srv.Close()
+
+	scheme := newControllerTestScheme(t)
+	w := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"}}
+	r := &WorkerReconciler{
+		Client:              fake.NewClientBuilder().WithScheme(scheme).WithObjects(w.DeepCopy()).Build(),
+		KubeMode:            "embedded",
+		subagentModelURLFor: func(*v1beta1.Worker, v1beta1.WorkerSpec) string { return srv.URL },
+	}
+	state := &MemberState{ContainerState: "running"}
+	spec := v1beta1.WorkerSpec{
+		Model:         "qwen3.6-plus",
+		SubagentModel: "qwen3.6-flash",
+		ModelProvider: "custom-gw",
+	}
+
+	r.applySubagentModelHot(context.Background(), w, spec, MemberContext{}, state)
+	r.applyActiveModelHot(context.Background(), w, spec, state)
+
+	if len(bodies) != 2 {
+		t.Fatalf("dials = %d, want 2: %v", len(bodies), bodies)
+	}
+	for _, body := range bodies {
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(body), &payload); err != nil {
+			t.Fatalf("body not JSON: %v (%s)", err, body)
+		}
+		switch {
+		case payload["subagent_model"] != nil:
+			slot, _ := payload["subagent_model"].(map[string]any)
+			if slot["provider_id"] != "custom-gw" {
+				t.Errorf("subagent_model.provider_id = %v, want custom-gw", slot["provider_id"])
+			}
+		case payload["scope"] == "agent":
+			if payload["provider_id"] != "custom-gw" || payload["agent_id"] != "default" {
+				t.Errorf("wrong primary model scope/provider: %v", payload)
+			}
+		default:
+			t.Fatalf("unexpected model-settings payload: %s", body)
+		}
+	}
+}
+
+// patchSubagentModel must send the providerID it is given, verbatim.
+func TestPatchSubagentModelSendsProviderVerbatim(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	if err := patchSubagentModel(context.Background(), srv.URL, "default", "custom-gw", "qwen3.6-flash"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(gotBody), &payload); err != nil {
+		t.Fatalf("body not JSON: %v (%s)", err, gotBody)
+	}
+	slot, ok := payload["subagent_model"].(map[string]any)
+	if !ok {
+		t.Fatalf("subagent_model not an object: %s", gotBody)
+	}
+	if slot["provider_id"] != "custom-gw" || slot["model"] != "qwen3.6-flash" {
+		t.Fatalf("unexpected slot: %v", slot)
 	}
 }

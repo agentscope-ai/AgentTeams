@@ -10,9 +10,12 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/credentials"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/matrix"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/proxy"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/runtimeconfig"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/runtimeconfig/openclaw"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/skillscan"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -75,8 +78,10 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.HandleFunc("GET /healthz", sh.Healthz)
 
 	// --- Status endpoints (authenticated, any role) ---
+	// /status is a live metrics view and stays unprotected; /version is a
+	// stable deployment descriptor, so it gets ETag/304 (issue #1475 PR-3).
 	mux.Handle("GET /api/v1/status", mw.RequireAuthz(authpkg.ActionGet, "status", nil)(http.HandlerFunc(sh.ClusterStatus)))
-	mux.Handle("GET /api/v1/version", mw.Authenticate(http.HandlerFunc(sh.Version)))
+	mux.Handle("GET /api/v1/version", mw.Authenticate(httputil.ETagMiddleware(http.HandlerFunc(sh.Version))))
 
 	// --- Declarative resource CRUD ---
 	// One shared audit client: resource mutations (human updates, capability
@@ -90,13 +95,18 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 
 	// Workers
 	mux.Handle("POST /api/v1/workers", mw.RequireAuthz(authpkg.ActionCreate, "worker", nil)(http.HandlerFunc(rh.CreateWorker)))
-	mux.Handle("GET /api/v1/workers", mw.RequireAuthz(authpkg.ActionList, "worker", nil)(http.HandlerFunc(rh.ListWorkers)))
+	// ETag/304 applies only when the request selects the stable spec
+	// projection (fields=spec); volatile views (status / spec+status / the
+	// default all view) must never be cached (issue #1475 PR-3).
+	mux.Handle("GET /api/v1/workers", mw.RequireAuthz(authpkg.ActionList, "worker", nil)(specViewETag(http.HandlerFunc(rh.ListWorkers))))
 	mux.Handle("GET /api/v1/workers/{name}", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(rh.GetWorker)))
 	mux.Handle("PUT /api/v1/workers/{name}", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(rh.UpdateWorker)))
 	mux.Handle("DELETE /api/v1/workers/{name}", mw.RequireAuthz(authpkg.ActionDelete, "worker", nameFn)(http.HandlerFunc(rh.DeleteWorker)))
 	// Deployment-level MCP catalog: shared registry (object storage) x
 	// per-worker spec.mcpServers, read-only, L1/L2 readable (issue #1248).
-	mux.Handle("GET /api/v1/mcp-servers", mw.RequireAuthz(authpkg.ActionList, "mcp-server", nil)(http.HandlerFunc(rh.ListMCPServers)))
+	// The catalog is spec-derived (shared registry x spec.mcpServers):
+	// stable while specs are, so it is ETag/304-protected (#1475 PR-3).
+	mux.Handle("GET /api/v1/mcp-servers", mw.RequireAuthz(authpkg.ActionList, "mcp-server", nil)(httputil.ETagMiddleware(http.HandlerFunc(rh.ListMCPServers))))
 
 	probe := &workerGatewayProbe{client: deps.Client, namespace: deps.Namespace, gatewayURL: deps.GatewayURL}
 	if deps.Provisioner != nil {
@@ -118,6 +128,20 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("PUT /api/v1/humans/{name}", mw.RequireAuthz(authpkg.ActionUpdate, "human", nameFn)(http.HandlerFunc(rh.UpdateHuman)))
 	mux.Handle("DELETE /api/v1/humans/{name}", mw.RequireAuthz(authpkg.ActionDelete, "human", nameFn)(http.HandlerFunc(rh.DeleteHuman)))
 
+	// ModelAccessTable (PR-A1a): shared model-grant tables. Humans are
+	// denied by the authorizer default branch (403); admin/manager full.
+	mux.Handle("GET /api/v1/model-access-tables", mw.RequireAuthz(authpkg.ActionList, "model-access-table", nil)(http.HandlerFunc(rh.ListModelAccessTables)))
+	mux.Handle("POST /api/v1/model-access-tables", mw.RequireAuthz(authpkg.ActionCreate, "model-access-table", nil)(http.HandlerFunc(rh.CreateModelAccessTable)))
+	mux.Handle("GET /api/v1/model-access-tables/{name}", mw.RequireAuthz(authpkg.ActionGet, "model-access-table", nameFn)(http.HandlerFunc(rh.GetModelAccessTable)))
+	mux.Handle("PUT /api/v1/model-access-tables/{name}", mw.RequireAuthz(authpkg.ActionUpdate, "model-access-table", nameFn)(http.HandlerFunc(rh.UpdateModelAccessTable)))
+	mux.Handle("DELETE /api/v1/model-access-tables/{name}", mw.RequireAuthz(authpkg.ActionDelete, "model-access-table", nameFn)(http.HandlerFunc(rh.DeleteModelAccessTable)))
+	// The preview's read scope is enforced in the handler, not by the
+	// middleware: the authorizer resolves worker targets to 403 for the
+	// leader/worker legs, and this surface must hide out-of-scope targets as
+	// 404 (anti-probing). The handler applies the same boundary the worker
+	// GET entry uses: leader same-team, worker self, human accessibleTeams.
+	mux.Handle("GET /api/v1/model-access", mw.RequireAuthz(authpkg.ActionGet, "worker", nil)(http.HandlerFunc(rh.GetModelAccess)))
+
 	// Human file area (#1414 P1): per-human working files + recycle bin.
 	// Auth-only middleware: the handler performs its own authorization so
 	// non-access callers get 404 (no existence probing) and partial-access
@@ -136,6 +160,15 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("DELETE /api/v1/humans/{name}/trash/{id}", mw.Authenticate(http.HandlerFunc(hfh.purgeTrash)))
 	mux.Handle("GET /api/v1/humans/{name}/quota", mw.Authenticate(http.HandlerFunc(hfh.getQuota)))
 	mux.Handle("PUT /api/v1/humans/{name}/quota", mw.Authenticate(http.HandlerFunc(hfh.putQuota)))
+
+	// Human sync state (#1414 P3): per-human sync manifest + status. The
+	// .sync/ prefix is reserved by the file API (validateHumanFilePath),
+	// so these endpoints are the manifest's only address. Same auth-only
+	// middleware as the file area: the handler authorizes (file_sync
+	// capability) and answers 404 for non-access callers.
+	mux.Handle("GET /api/v1/humans/{name}/sync/manifest", mw.Authenticate(http.HandlerFunc(hfh.getSyncManifest)))
+	mux.Handle("PUT /api/v1/humans/{name}/sync/manifest", mw.Authenticate(http.HandlerFunc(hfh.putSyncManifest)))
+	mux.Handle("GET /api/v1/humans/{name}/sync/status", mw.Authenticate(http.HandlerFunc(hfh.getSyncStatus)))
 
 	// Managers
 	mux.Handle("POST /api/v1/managers", mw.RequireAuthz(authpkg.ActionCreate, "manager", nil)(http.HandlerFunc(rh.CreateManager)))
@@ -163,8 +196,10 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/packages", mw.RequireAuthz(authpkg.ActionCreate, "worker", nil)(http.HandlerFunc(ph.Upload)))
 
 	// --- Imperative lifecycle ---
-	lh := NewLifecycleHandler(deps.Client, deps.Backend, deps.Namespace)
+	lh := NewLifecycleHandler(deps.Client, deps.Backend, deps.Namespace, deps.ResourcePrefix)
 	mux.Handle("POST /api/v1/workers/{name}/wake", mw.RequireAuthz(authpkg.ActionWake, "worker", nameFn)(http.HandlerFunc(lh.Wake)))
+	mux.Handle("POST /api/v1/workers/{name}/restart", mw.RequireAuthz(authpkg.ActionWake, "worker", nameFn)(http.HandlerFunc(lh.Restart)))
+	mux.Handle("POST /api/v1/managers/{name}/restart", mw.RequireAuthz(authpkg.ActionUpdate, "manager", nameFn)(http.HandlerFunc(lh.RestartManager)))
 	mux.Handle("POST /api/v1/workers/{name}/sleep", mw.RequireAuthz(authpkg.ActionSleep, "worker", nameFn)(http.HandlerFunc(lh.Sleep)))
 	mux.Handle("POST /api/v1/workers/{name}/ensure-ready", mw.RequireAuthz(authpkg.ActionEnsureReady, "worker", nameFn)(http.HandlerFunc(lh.EnsureReady)))
 	mux.Handle("POST /api/v1/workers/{name}/ready", mw.RequireAuthz(authpkg.ActionReady, "worker", nameFn)(http.HandlerFunc(lh.Ready)))
@@ -187,6 +222,9 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/projects/{id}/signal-events", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectSignalEvents)))
 	// Attention read surface (workbench decision modal; answers go to the room).
 	mux.Handle("GET /api/v1/projects/{id}/attention", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectAttention)))
+	// Team-level attention inbox (#1394 S1): one read for the whole
+	// team, so the dashboard inbox does not fan out one request per project.
+	mux.Handle("GET /api/v1/teams/{name}/attention", mw.RequireAuthz(authpkg.ActionGet, "team", nameFn)(http.HandlerFunc(projh.GetTeamAttention)))
 	mux.Handle("GET /api/v1/projects/{id}/history/{timestamp}", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectHistorySnapshot)))
 
 	// --- Coding runs (read-only coding-CLI transcript visibility, D12 路 A;
@@ -256,7 +294,10 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// across upload scan ① and assign-time scan ②).
 	skh := NewSkillsHandler(deps.WorkerAgentDir, deps.PluginDir, deps.OSS, deps.Client, deps.Namespace, deps.SkillScanner)
 
-	mux.Handle("GET /api/v1/skills", mw.RequireAuthz(authpkg.ActionList, "skills", nil)(http.HandlerFunc(skh.ListSkills)))
+	// ListSkills is a bounded JSON catalog: ETag/304-protected (#1475
+	// PR-3). The {name}/download route streams a file and must never be
+	// buffered.
+	mux.Handle("GET /api/v1/skills", mw.RequireAuthz(authpkg.ActionList, "skills", nil)(httputil.ETagMiddleware(http.HandlerFunc(skh.ListSkills))))
 	mux.Handle("GET /api/v1/skills/{name}/download", mw.RequireAuthz(authpkg.ActionList, "skills", nil)(http.HandlerFunc(skh.DownloadSkill)))
 	mux.Handle("POST /api/v1/skills", mw.RequireAuthz(authpkg.ActionSkillPublish, "skills", nil)(http.HandlerFunc(skh.UploadSkill)))
 
@@ -289,6 +330,13 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// uniform 503 in kube mode, embedded only. ---
 	mux.Handle("GET /api/v1/workers/{name}/mcp", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(rh.WorkerMCP(deps.KubeMode, deps.ContainerPrefix)))
 
+	// --- Worker plugin registry (the worker's installed qwenpaw plugins;
+	// read-only registry, embedded-only — the qwenpaw runtime guard and
+	// the W8 team boundary live in the handler). ---
+	mux.Handle("GET /api/v1/workers/{name}/plugins",
+		mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(
+			http.HandlerFunc(rh.WorkerPlugins(deps.KubeMode, deps.ContainerPrefix))))
+
 	// --- Worker coding CLIs (qwen-code / opencode / qoder; controller-side
 	// management via container exec — runtime-agnostic, works for any
 	// current runtime without worker-side cooperation or a QwenPaw
@@ -301,6 +349,23 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("PUT /api/v1/workers/{name}/coding-cli/{cli}/settings", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(cci.putCliSettings)))
 	mux.Handle("POST /api/v1/workers/{name}/coding-cli/{cli}/install", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(cci.startInstall)))
 	mux.Handle("GET /api/v1/workers/{name}/coding-cli/{cli}/install/{task_id}", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(cci.getInstallStatus)))
+
+	// --- Per-runtime member config surface (P8: each runtime's OWN native
+	// config schema; the controller only routes/permits/persists desired
+	// state, never translates fields; see member_config.go) ---
+	// The surface route is a runtime-level static resource: login only, no
+	// team scope, strongly cached with an ETag. The member routes carry the
+	// standing authorizer's worker-scoped policy (ActionGet/ActionUpdate)
+	// plus the handler's W8 team scope, embedded-mode gate, and the
+	// leader-read-only rule.
+	runtimeReg := runtimeconfig.NewRegistry()
+	runtimeReg.Register(openclaw.New())
+	// P8b: runtimeReg.Register(hermes.New())
+	mch := NewMemberConfigHandler(deps.Client, deps.Namespace, deps.KubeMode, auditClient, deps.Backend, deps.OSS, runtimeReg, deps.DefaultWorkerRuntime)
+	mux.Handle("GET /api/runtimes/{runtime}/surface", mw.Authenticate(http.HandlerFunc(mch.getSurface)))
+	mux.Handle("GET /api/members/{name}/config", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(mch.getConfig)))
+	mux.Handle("PUT /api/members/{name}/config", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(mch.putConfig)))
+	mux.Handle("POST /api/members/{name}/config/rollback", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(mch.rollbackConfig)))
 
 	// W-PR-2: human intervention + lifecycle (write endpoints). All writes go
 	// through RequireAuthz ActionUpdate + "project" so the authorizer's
@@ -335,7 +400,9 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/gateway/consumers", mw.RequireAuthz(authpkg.ActionCreate, "gateway", nil)(http.HandlerFunc(gh.CreateConsumer)))
 	mux.Handle("POST /api/v1/gateway/consumers/{id}/bind", mw.RequireAuthz(authpkg.ActionUpdate, "gateway", nil)(http.HandlerFunc(gh.BindConsumer)))
 	mux.Handle("DELETE /api/v1/gateway/consumers/{id}", mw.RequireAuthz(authpkg.ActionDelete, "gateway", nil)(http.HandlerFunc(gh.DeleteConsumer)))
-	mux.Handle("GET /api/v1/gateway/ai-routes", mw.RequireAuthz(authpkg.ActionGet, "gateway", nil)(http.HandlerFunc(gh.ListAIRoutes)))
+	// The route catalog is a stable gateway configuration view:
+	// ETag/304-protected (#1475 PR-3).
+	mux.Handle("GET /api/v1/gateway/ai-routes", mw.RequireAuthz(authpkg.ActionGet, "gateway", nil)(httputil.ETagMiddleware(http.HandlerFunc(gh.ListAIRoutes))))
 
 	// --- Credentials ---
 	// STS is self-scoped: no {name} in path; handler uses CallerIdentity to scope the issued token.
@@ -376,4 +443,24 @@ func (s *HTTPServer) Start() error {
 // to finish or ctx to be cancelled. Idempotent.
 func (s *HTTPServer) Shutdown(ctx context.Context) error {
 	return s.server.Shutdown(ctx)
+}
+
+// specViewETag applies the ETag/304 middleware to a worker list handler
+// only for the stable spec projection (issue #1475 PR-3): the request must
+// select exactly the spec view (fields=spec). Views containing status
+// (status, spec+status) and the default all view are poll-volatile and
+// must never carry an ETag; an invalid fields value falls through so the
+// handler returns its own 400. Kinds whose spec projection does not exist
+// yet (teams / humans / managers) are not wrapped at all: a bare
+// ?fields=spec there is ignored by the handler, so the response is the
+// full view — ETag-ing it would be the "ETag on all" semantic error.
+func specViewETag(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		views, err := parseWorkerListFields(r.URL.Query().Get("fields"))
+		if err == nil && views == workerFieldsSpec {
+			httputil.ETagMiddleware(next).ServeHTTP(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

@@ -3549,6 +3549,13 @@ _start_dashboard() {
             env_args+=(-e AGENTTEAMS_FS_ENDPOINT="http://${CTRL_CONTAINER}:9000")
         fi
 
+        # Presigned download origin (#1501): pass through the controller's
+        # value verbatim — unlike AGENTTEAMS_FS_ENDPOINT it must stay
+        # host-reachable (the caller's browser is the consumer), so the
+        # container-name rewrite above does NOT apply.
+        local fs_public_endpoint; fs_public_endpoint=$(_env AGENTTEAMS_FS_PUBLIC_ENDPOINT)
+        [ -n "${fs_public_endpoint}" ] && env_args+=(-e AGENTTEAMS_FS_PUBLIC_ENDPOINT="${fs_public_endpoint}")
+
         local fs_bucket; fs_bucket=$(_env AGENTTEAMS_FS_BUCKET)
         [ -z "${fs_bucket}" ] && fs_bucket=$(_env AGENTTEAMS_MINIO_BUCKET)
         [ -n "${fs_bucket}" ] && env_args+=(-e AGENTTEAMS_FS_BUCKET="${fs_bucket}")
@@ -4631,6 +4638,16 @@ CREDEOF
         fi
         if [ -n "${AGENTTEAMS_CMS_WORKSPACE:-}" ]; then
             _ctrl_env_args+=(-e "${_ctrl_env_prefix}CMS_WORKSPACE=${AGENTTEAMS_CMS_WORKSPACE}")
+        fi
+
+        # Presigned download origin (#1501): every URL handed to a client
+        # carries this host, so it must be reachable from the CALLER's
+        # browser. The embedded Controller runs on a bridge network and
+        # publishes only 8080/8001/8088 — the in-container 127.0.0.1:9000 is
+        # not a browser endpoint, so presign stays disabled (501) unless the
+        # operator supplies a reachable origin.
+        if [ -n "${AGENTTEAMS_FS_PUBLIC_ENDPOINT:-}" ]; then
+            _ctrl_env_args+=(-e "${_ctrl_env_prefix}FS_PUBLIC_ENDPOINT=${AGENTTEAMS_FS_PUBLIC_ENDPOINT}")
         fi
 
         # shellcheck disable=SC2086

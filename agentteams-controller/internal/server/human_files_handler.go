@@ -34,6 +34,13 @@ import (
 // (#1414 P1), overridable via the HUMAN_FILE_MAX_BYTES environment variable.
 const defaultHumanFileMaxBytes = 64 << 20 // 64 MiB
 
+// defaultHumanPresignTTL is the presigned-URL lifetime for ?presign=1
+// (#1475 PR-4) when AGENTTEAMS_PRESIGN_TTL is unset or invalid.
+const defaultHumanPresignTTL = 5 * time.Minute
+
+// maxHumanPresignTTL bounds the operator-configurable presign lifetime.
+const maxHumanPresignTTL = 60 * time.Minute
+
 // humanFilesHandler serves the per-human file area API (#1414 P1): file
 // read / list / write / soft-delete under files/<username>/files/, and the
 // recycle bin under files/<username>/.trash/.
@@ -54,6 +61,10 @@ type humanFilesHandler struct {
 	// pathLockTTL is the per-path lease lifetime; tests shorten it to exercise
 	// expiry deterministically.
 	pathLockTTL time.Duration
+	// presignTTL is the presigned-URL lifetime for ?presign=1 (#1475 PR-4),
+	// from AGENTTEAMS_PRESIGN_TTL (Go duration) clamped to
+	// maxHumanPresignTTL.
+	presignTTL time.Duration
 }
 
 // NewHumanFilesHandler constructs the handler. The per-file size limit is
@@ -67,12 +78,26 @@ func NewHumanFilesHandler(k8sClient client.Client, namespace string, sc oss.Stor
 		auditClient:  ac,
 		maxFileBytes: defaultHumanFileMaxBytes,
 		pathLockTTL:  humanPathLockTTL,
+		presignTTL:   defaultHumanPresignTTL,
 	}
 	if v := os.Getenv("HUMAN_FILE_MAX_BYTES"); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
 			h.maxFileBytes = n
 		} else {
 			logEnvWarn("HUMAN_FILE_MAX_BYTES", v)
+		}
+	}
+	// AGENTTEAMS_PRESIGN_TTL is a Go duration ("5m", "30m", "1h"). An unset,
+	// unparseable, or non-positive value falls back to the default; a valid
+	// value above the cap is clamped to it.
+	if v := os.Getenv("AGENTTEAMS_PRESIGN_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err != nil || d <= 0 {
+			logEnvWarn("AGENTTEAMS_PRESIGN_TTL", v)
+		} else {
+			if d > maxHumanPresignTTL {
+				d = maxHumanPresignTTL
+			}
+			h.presignTTL = d
 		}
 	}
 	return h
@@ -85,6 +110,21 @@ func logEnvWarn(name, value string) {
 	// default, which is safe.
 	_ = name
 	_ = value
+}
+
+// presignGetter is the capability the ?presign=1 path needs from the
+// storage backend (#1475 PR-4). It is a separate capability, not part of
+// oss.StorageClient, so backends without presign support (in-memory test
+// fakes, a future direct-S3 client) keep serving the non-presign routes
+// unchanged; the presign route then fails closed with 500.
+type presignGetter interface {
+	PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error)
+}
+
+// isPresignRequest reports whether a files GET asked for a presigned
+// download URL instead of the file bytes (#1475 PR-4).
+func isPresignRequest(r *http.Request) bool {
+	return r.URL.Query().Get("presign") == "1"
 }
 
 // --- Storage layout -------------------------------------------------------
@@ -209,6 +249,28 @@ type trashEntry struct {
 type humanFileCodedError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+}
+
+// humanFilePresignResponse is the ?presign=1 GET body (#1475 PR-4): a
+// short-lived anonymous download URL plus the content-bound metadata the
+// caller needs. The storage credentials used to sign the URL are never
+// part of the response.
+type humanFilePresignResponse struct {
+	URL       string `json:"url"`
+	ETag      string `json:"etag"`
+	Size      int64  `json:"size"`
+	ExpiresAt string `json:"expiresAt"`
+}
+
+// humanFilePresignUnsupportedResponse is the explicit capability boundary
+// for ?presign=1 (#1501): the deployment has no caller-reachable storage
+// origin (AGENTTEAMS_FS_PUBLIC_ENDPOINT unset), so no URL is minted — a
+// URL signed for the internal endpoint is unusable from the caller. The
+// stable error code lets clients detect the boundary and fall back to the
+// streamed GET on the same path.
+type humanFilePresignUnsupportedResponse struct {
+	Error  string `json:"error"`
+	Reason string `json:"reason"`
 }
 
 func writeHumanFileCodedError(w http.ResponseWriter, status int, code, message string) {
@@ -344,13 +406,24 @@ func isHumanFileTombstone(meta oss.ObjectMeta) bool {
 // getFile handles GET /api/v1/humans/{name}/files/{path...}. When the path
 // is empty (the files root), ends with "/", or ?list=1 is present the
 // directory at that path is listed; otherwise the single file is streamed
-// back with its ETag.
+// back with its ETag — or, with ?presign=1, a short-lived presigned
+// download URL is returned instead of the bytes (#1475 PR-4).
 func (h *humanFilesHandler) getFile(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	rawPath := r.PathValue("path")
 
 	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
 	if a == nil {
+		if status == http.StatusNotFound && isPresignRequest(r) {
+			// A presign denial is an explicit 403, not a 404 (#1475 PR-4):
+			// minting a temporary URL is a security-relevant operation. The
+			// 403 is uniform across "human not found", "caller has no
+			// access", and "no caller identity", so it still cannot be used
+			// to probe which humans exist; only genuine lookup faults (500)
+			// pass through unchanged.
+			httputil.WriteError(w, http.StatusForbidden, "presign not allowed")
+			return
+		}
 		httputil.WriteError(w, status, msg)
 		return
 	}
@@ -371,6 +444,10 @@ func (h *humanFilesHandler) readSingleFile(w http.ResponseWriter, r *http.Reques
 	}
 	if rel == "" {
 		httputil.WriteError(w, http.StatusBadRequest, "path is required to read a file; use a trailing / or ?list=1 to list a directory")
+		return
+	}
+	if isPresignRequest(r) {
+		h.presignFile(w, r, a, username, rel)
 		return
 	}
 	ctx := r.Context()
@@ -394,6 +471,66 @@ func (h *humanFilesHandler) readSingleFile(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Type", contentTypeForName(rel))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
+}
+
+// presignFile handles GET .../files/{path}?presign=1 (#1475 PR-4): it mints
+// a short-lived presigned download URL so the bytes travel directly between
+// the caller and storage instead of through the controller. Authorization
+// already happened in getFile with the same access matrix as a plain read;
+// this method checks existence and the tombstone marker, mints the URL, and
+// records the issuance in the audit trail. The object content is never read
+// and the signing credentials are never part of the response.
+//
+// When the deployment has no caller-reachable storage origin
+// (AGENTTEAMS_FS_PUBLIC_ENDPOINT unset, #1501) no URL is minted: the
+// response is 501 with a stable {"error":"presign_unsupported"} body so
+// clients detect the capability boundary and fall back to the streamed GET
+// on the same path.
+func (h *humanFilesHandler) presignFile(w http.ResponseWriter, r *http.Request, a *humanFileAccess, username, rel string) {
+	ctx := r.Context()
+	key := humanFilesPrefix(username) + rel
+
+	meta, err := h.oss.StatMeta(ctx, key)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			httputil.WriteError(w, http.StatusNotFound, "file not found")
+			return
+		}
+		httputil.WriteError(w, http.StatusInternalServerError, "stat file failed")
+		return
+	}
+	if isHumanFileTombstone(meta) {
+		httputil.WriteError(w, http.StatusNotFound, "file not found")
+		return
+	}
+
+	presigner, ok := h.oss.(presignGetter)
+	if !ok {
+		httputil.WriteError(w, http.StatusInternalServerError, "presign failed")
+		return
+	}
+	ttl := h.presignTTL
+	downloadURL, err := presigner.PresignGet(ctx, key, ttl)
+	if err != nil {
+		if errors.Is(err, oss.ErrPresignUnsupported) {
+			httputil.WriteJSON(w, http.StatusNotImplemented, humanFilePresignUnsupportedResponse{
+				Error:  "presign_unsupported",
+				Reason: "storage endpoint is not caller-reachable; set AGENTTEAMS_FS_PUBLIC_ENDPOINT or use the streamed GET",
+			})
+			return
+		}
+		httputil.WriteError(w, http.StatusInternalServerError, "presign failed")
+		return
+	}
+	expiresAt := time.Now().UTC().Add(ttl)
+	h.recordAudit(ctx, a, "human_file_presign",
+		humanFileDetail("path", "files/"+rel, "ttl", ttl.String(), "expiresAt", expiresAt.Format(time.RFC3339)))
+	httputil.WriteJSON(w, http.StatusOK, humanFilePresignResponse{
+		URL:       downloadURL,
+		ETag:      meta.ETag,
+		Size:      meta.Size,
+		ExpiresAt: expiresAt.Format(time.RFC3339),
+	})
 }
 
 // listDirectory lists the first level of the directory at rawPath
@@ -602,7 +739,7 @@ func (h *humanFilesHandler) listRecursiveFiles(w http.ResponseWriter, r *http.Re
 	entries := make([]humanFileRecursiveEntry, 0, len(infos))
 	for _, info := range infos {
 		rel := info.Name
-		if rel == "" || rel == ".keep" || strings.HasSuffix(rel, "/") {
+		if rel == "" || rel == ".keep" || strings.HasSuffix(rel, "/.keep") || strings.HasSuffix(rel, "/") {
 			continue // prefix marker, .keep marker object, directory marker
 		}
 		if isReservedHumanFileSegment(rel) {

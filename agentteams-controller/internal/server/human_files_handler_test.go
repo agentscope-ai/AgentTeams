@@ -3493,7 +3493,7 @@ func seedRecursiveArea(t *testing.T, h *humanFilesHandler, store *ossfake.Memory
 	t.Helper()
 	ctx := context.Background()
 	for _, put := range []struct{ path, content string }{
-		{"a.txt", "hello"},              // 5 bytes
+		{"a.txt", "hello"},               // 5 bytes
 		{"docs/b.txt", "world!"},         // 6
 		{"docs/nested/c.txt", "x"},       // 1
 		{"x/y/z/deep.txt", "0123456789"}, // 10, four levels deep
@@ -3516,6 +3516,8 @@ func seedRecursiveArea(t *testing.T, h *humanFilesHandler, store *ossfake.Memory
 	// must filter them the way validateHumanFilePath rejects them.
 	for _, key := range []string{
 		"humans/alice/files/.keep",
+		"humans/alice/files/docs/.keep",
+		"humans/alice/files/docs/nested/.keep",
 		"humans/alice/files/.sync/state.json",
 		"humans/alice/files/.control/quota.json",
 		"humans/alice/files/.trash/rogue.txt",

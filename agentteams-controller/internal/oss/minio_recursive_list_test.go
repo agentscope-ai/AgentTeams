@@ -143,3 +143,43 @@ func TestMinIOListObjectsRecursiveBucketRelative(t *testing.T) {
 		t.Fatalf("request 2: StartAfter = %q, want the previous page's cursor %q", seen[2].startAfter, want)
 	}
 }
+
+// The SDK channel can have buffered objects when a page ends. Cancellation
+// must also drain its terminal error so the producer can finish.
+func TestMinIOListObjectsRecursiveStopsProducerAtPageLimit(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	var output chan minio.ObjectInfo
+	c := NewMinIOClient(Config{Bucket: "review"})
+	c.sdkListObjects = func(ctx context.Context, _ string, _ minio.ListObjectsOptions) <-chan minio.ObjectInfo {
+		output = make(chan minio.ObjectInfo, 1)
+		go func() {
+			defer close(done)
+			defer close(output)
+			for _, key := range []string{"files/a", "files/b", "files/c", "files/d"} {
+				select {
+				case <-ctx.Done():
+					output <- minio.ObjectInfo{Err: ctx.Err()}
+					return
+				case output <- minio.ObjectInfo{Key: key}:
+				}
+			}
+		}()
+		return output
+	}
+	t.Cleanup(func() {
+		cancel()
+		for range output {
+		}
+	})
+	infos, next, err := c.ListObjectsRecursive(ctx, "files/", "", 1)
+	if err != nil || len(infos) != 1 || next != "files/a" {
+		t.Fatalf("page=%+v next=%q err=%v", infos, next, err)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("SDK list producer is still blocked after the page returned")
+	}
+}

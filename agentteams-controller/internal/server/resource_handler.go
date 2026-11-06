@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -1304,17 +1305,14 @@ func modelAccessSummary(spec *v1beta1.ModelAccessSpec) string {
 
 // auditModelAccessChange records a model-grant change on both audit layers.
 // Before/After carry the compact per-scope summaries; a no-op rewrite
-// (identical summaries) emits no event. Audit failures never break the
+// (identical policy) emits no event. Audit failures never break the
 // update: the audit client logs durable-layer errors internally.
 func (h *ResourceHandler) auditModelAccessChange(ctx context.Context, name string, caller *authpkg.CallerIdentity, before, after *v1beta1.ModelAccessSpec) {
-	if h.audit == nil || caller == nil {
+	if h.audit == nil || caller == nil || reflect.DeepEqual(before, after) {
 		return
 	}
 	beforeSummary := modelAccessSummary(before)
 	afterSummary := modelAccessSummary(after)
-	if beforeSummary == afterSummary {
-		return
-	}
 	h.audit.Record(ctx, audit.Event{
 		Who: caller.Username, Role: caller.Role, Target: name,
 		Action: "model_access_update",

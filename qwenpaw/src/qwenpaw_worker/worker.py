@@ -243,6 +243,49 @@ class Worker:
                 await self._process.wait()
                 logger.warning("qwenpaw app killed after stop timeout component=worker worker=%s", self.config.worker_name)
         self._process = None
+        if self.sync is not None:
+            # #1391: durability barrier — the app is already stopped, so
+            # this is the last chance to push pending local changes before
+            # the container exits instead of waiting on the 5s push loop.
+            # #1500: hard outer bound on top of flush's own 30s deadline.
+            # asyncio.to_thread cannot be cancelled, so the process-level
+            # timeouts inside flush are what actually bound the upload;
+            # this wait_for only guards a worker thread that stalls for a
+            # reason flush cannot see.
+            stage_started = self._log_worker_stage_begin(
+                "flush_on_shutdown", timeout_seconds=30
+            )
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(self.sync.flush, 30), timeout=35
+                )
+                if result.get("ok"):
+                    self._log_worker_stage_complete(
+                        "flush_on_shutdown",
+                        stage_started,
+                        ok=result.get("ok"),
+                        uploaded=len(result.get("uploaded") or []),
+                        pending=result.get("pending"),
+                        conflicts=result.get("conflicts"),
+                        timedOut=result.get("timedOut"),
+                    )
+                else:
+                    logger.warning(
+                        "shutdown flush incomplete component=worker "
+                        "stage=flush_on_shutdown worker=%s duration_ms=%s "
+                        "ok=%s uploaded=%s pending=%s conflicts=%s timedOut=%s",
+                        self.config.worker_name,
+                        _duration_ms(stage_started),
+                        result.get("ok"),
+                        len(result.get("uploaded") or []),
+                        result.get("pending"),
+                        result.get("conflicts"),
+                        result.get("timedOut"),
+                    )
+            except asyncio.TimeoutError as exc:
+                self._log_worker_stage_failed("flush_on_shutdown", stage_started, exc)
+            except Exception as exc:
+                self._log_worker_stage_failed("flush_on_shutdown", stage_started, exc)
         logger.info("qwenpaw worker stopped component=worker worker=%s", self.config.worker_name)
 
     def _log_worker_stage_begin(self, stage: str, **fields: object) -> float:
@@ -651,6 +694,10 @@ class Worker:
         )
         self._prepare_builtin_plugin("teamharness", builtin_root / "teamharness")
         self._prepare_builtin_plugin("workerflow", builtin_root / "workerflow")
+        self._prepare_builtin_plugin(
+            "qwen-code-bridge",
+            builtin_root / "qwen-code-bridge",
+        )
 
     def _builtin_qwenpaw_plugins_dir(self) -> Path:
         configured = os.getenv("AGENTTEAMS_BUILTIN_QWENPAW_PLUGINS_DIR", "").strip()
@@ -958,7 +1005,7 @@ class Worker:
                     f"qwenpaw app exited before API readiness: {self._process.returncode}",
                 )
             try:
-                await asyncio.to_thread(self.api_client.require_version, "2.2.1")
+                await asyncio.to_thread(self.api_client.require_version, "2.2.2.post1")
                 # Version readiness precedes the agent's MCP migration. Wait
                 # before changing agent.json to avoid invalidating its snapshot.
                 await asyncio.to_thread(

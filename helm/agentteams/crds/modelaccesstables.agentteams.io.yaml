@@ -1,0 +1,72 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: modelaccesstables.agentteams.io
+spec:
+  group: agentteams.io
+  versions:
+    - name: v1beta1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              description: "Reusable (provider, model) grant set shared by many humans via Human.spec.modelAccess.scopes[].table"
+              properties:
+                main:
+                  type: object
+                  properties:
+                    entries:
+                      type: array
+                      maxItems: 200
+                      items:
+                        type: object
+                        required: [provider, model]
+                        properties:
+                          provider: {type: string, minLength: 1, maxLength: 253}
+                          model: {type: string, minLength: 1, maxLength: 253}
+                    inherit: {type: boolean}
+                spawn:
+                  type: object
+                  properties:
+                    entries:
+                      type: array
+                      maxItems: 200
+                      items:
+                        type: object
+                        required: [provider, model]
+                        properties:
+                          provider: {type: string, minLength: 1, maxLength: 253}
+                          model: {type: string, minLength: 1, maxLength: 253}
+                    inherit: {type: boolean}
+                codingCli:
+                  type: array
+                  maxItems: 3
+                  items:
+                    type: object
+                    required: [cli]
+                    properties:
+                      cli: {type: string, enum: ["qwen-code", "opencode", "qoder"]}
+                      entries:
+                        type: array
+                        maxItems: 200
+                        items:
+                          type: object
+                          required: [provider, model]
+                          properties:
+                            provider: {type: string, minLength: 1, maxLength: 253}
+                            model: {type: string, minLength: 1, maxLength: 253}
+                      inherit: {type: boolean}
+      additionalPrinterColumns:
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+  scope: Namespaced
+  names:
+    plural: modelaccesstables
+    singular: modelaccesstable
+    kind: ModelAccessTable
+    shortNames: [mat]

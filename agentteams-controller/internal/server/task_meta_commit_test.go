@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -100,6 +101,23 @@ func putTaskMetaRequest(t *testing.T, h *ProjectHandler, taskID, ifMatch, body s
 	if ifMatch != "" {
 		req.Header.Set("If-Match", ifMatch)
 	}
+	req = withCaller(req, caller)
+	rec := httptest.NewRecorder()
+	h.PutTaskMeta(rec, req)
+	return rec
+}
+
+// putTaskMetaCreateRequest is the create-if-absent variant (If-None-Match: *);
+// team optionally adds the ?team= qualifier.
+func putTaskMetaCreateRequest(t *testing.T, h *ProjectHandler, taskID, team, body string, caller *authpkg.CallerIdentity) *httptest.ResponseRecorder {
+	t.Helper()
+	path := "/api/v1/tasks/" + taskID + "/meta"
+	if team != "" {
+		path += "?team=" + team
+	}
+	req := httptest.NewRequest(http.MethodPut, path, strings.NewReader(body))
+	req.SetPathValue("id", taskID)
+	req.Header.Set("If-None-Match", "*")
 	req = withCaller(req, caller)
 	rec := httptest.NewRecorder()
 	h.PutTaskMeta(rec, req)
@@ -357,6 +375,29 @@ func TestPutTaskMeta_HTTPChainRegistersRouteAndWorkerWrites(t *testing.T) {
 	srv.Mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("PUT /api/v1/tasks/t1 -> %d, want 404/405 (no generic task write)", rec.Code)
+	}
+
+	// The create path (If-None-Match: *) runs through the same chain: the
+	// first creation of a task meta is conditional too.
+	createBody := taskMetaBody(map[string]any{
+		"task_id":    "t2",
+		"project_id": "p1",
+		"status":     "in_progress",
+	})
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/tasks/t2/meta?team=alpha-team", strings.NewReader(createBody))
+	req.Header.Set("Authorization", "Bearer sa-token")
+	req.Header.Set("If-None-Match", "*")
+	rec = httptest.NewRecorder()
+	srv.Mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create status=%d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	stored, err = store.GetObject(context.Background(), "teams/alpha-team/shared/tasks/t2/meta.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stored) != createBody {
+		t.Fatalf("stored create body=%s, want verbatim %s", stored, createBody)
 	}
 }
 
@@ -1299,6 +1340,179 @@ func TestPutTaskMeta_LeaderDecisionClassAliasVocabulary(t *testing.T) {
 			t.Fatalf("%s: stored meta changed after the refused commit:\nbefore=%s\nafter =%s",
 				tc.name, original, after)
 		}
+	}
+}
+
+// =====================================================================
+// #1498 — create-if-absent (If-None-Match: *) on the task-meta commit
+// =====================================================================
+
+// #1498: the first creation is the conditional-commit story with
+// If-None-Match: * — a concurrent create + cancellation landing between the
+// caller's absence read and the write must surface as a 409 (the caller
+// re-reads and converges on the now-versioned record), never as a clobber.
+func TestPutTaskMetaCreateIfAbsent_SucceedsWhenAbsent(t *testing.T) {
+	store := ossfake.NewMemory()
+	h := newProjectTestHandler(t, store, team("alpha-team"))
+
+	rec := putTaskMetaCreateRequest(t, h, "t1", "alpha-team", taskMetaBody(taskMeta(nil)), nil)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		ETag string `json:"etag"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp.ETag == "" {
+		t.Fatalf("response=%s, want a committed etag", rec.Body.String())
+	}
+	committed, err := store.StatMeta(context.Background(), taskMetaKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.ETag != committed.ETag {
+		t.Fatalf("committed etag=%s, want %s (the version a later If-Match commit must match)", committed.ETag, resp.ETag)
+	}
+	stored, err := store.GetObject(context.Background(), taskMetaKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stored) != taskMetaBody(taskMeta(nil)) {
+		t.Fatalf("stored=%s, want the create body verbatim", stored)
+	}
+}
+
+func TestPutTaskMetaCreateIfAbsent_ConflictsWhenPresent(t *testing.T) {
+	store := ossfake.NewMemory()
+	// A concurrent writer created the task (and cancelled it) before this
+	// caller's create lands — exactly the #1498 interleaving.
+	concurrent := taskMeta(map[string]any{"status": "cancelled", "cancel_reason": "operator stop"})
+	putTask(store, taskMetaKey, concurrent)
+	before, err := store.GetObject(context.Background(), taskMetaKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newProjectTestHandler(t, store, team("alpha-team"))
+
+	rec := putTaskMetaCreateRequest(t, h, "t1", "alpha-team", taskMetaBody(taskMeta(map[string]any{"progress": "mine"})), nil)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp.Code != "conflict" {
+		t.Fatalf("409 body=%s, want code=conflict", rec.Body.String())
+	}
+	after, err := store.GetObject(context.Background(), taskMetaKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("the concurrent record was clobbered by the create: %s", after)
+	}
+}
+
+func TestPutTaskMetaCreateIfAbsent_RequiresCanonicalStatus(t *testing.T) {
+	bodies := []string{
+		`{"task_id": "t1"}`,                          // missing status
+		`{"task_id": "t1", "Status": "in_progress"}`, // case alias
+		`{"task_id": "t1", "status": "running"}`,     // noncanonical
+	}
+	for _, body := range bodies {
+		store := ossfake.NewMemory()
+		h := newProjectTestHandler(t, store, team("alpha-team"))
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/tasks/t1/meta?team=alpha-team", strings.NewReader(body))
+		req.SetPathValue("id", "t1")
+		req.Header.Set("If-None-Match", "*")
+		rec := httptest.NewRecorder()
+		h.PutTaskMeta(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %s -> %d, want 400; body=%s", body, rec.Code, rec.Body.String())
+		}
+		if _, err := store.StatMeta(context.Background(), taskMetaKey); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("body %s must not write: %v", body, err)
+		}
+	}
+}
+
+func TestPutTaskMetaCreateIfAbsent_RejectsBothHeaders(t *testing.T) {
+	store := ossfake.NewMemory()
+	h := newProjectTestHandler(t, store, team("alpha-team"))
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/tasks/t1/meta?team=alpha-team", strings.NewReader(taskMetaBody(taskMeta(nil))))
+	req.SetPathValue("id", "t1")
+	req.Header.Set("If-Match", "etag-1")
+	req.Header.Set("If-None-Match", "*")
+	rec := httptest.NewRecorder()
+	h.PutTaskMeta(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400 (exactly one conditional header); body=%s", rec.Code, rec.Body.String())
+	}
+	if _, err := store.StatMeta(context.Background(), taskMetaKey); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected request must not write: %v", err)
+	}
+}
+
+func TestPutTaskMetaCreateIfAbsent_RejectsNonStarETag(t *testing.T) {
+	store := ossfake.NewMemory()
+	h := newProjectTestHandler(t, store, team("alpha-team"))
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/tasks/t1/meta?team=alpha-team", strings.NewReader(taskMetaBody(taskMeta(nil))))
+	req.SetPathValue("id", "t1")
+	req.Header.Set("If-None-Match", "etag-1")
+	rec := httptest.NewRecorder()
+	h.PutTaskMeta(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400 (literal * only); body=%s", rec.Code, rec.Body.String())
+	}
+	if _, err := store.StatMeta(context.Background(), taskMetaKey); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected request must not write: %v", err)
+	}
+}
+
+func TestPutTaskMetaCreateIfAbsent_UnknownTeamIs404(t *testing.T) {
+	store := ossfake.NewMemory()
+	h := newProjectTestHandler(t, store, team("alpha-team"))
+
+	rec := putTaskMetaCreateRequest(t, h, "t1", "ghost-team", taskMetaBody(taskMeta(nil)), nil)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404 (no such team prefix); body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPutTaskMetaCreateIfAbsent_WorkerTeamScope(t *testing.T) {
+	alpha := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "alpha-dev", Team: "alpha-team"}
+	beta := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "beta-dev", Team: "beta-team"}
+
+	store := ossfake.NewMemory()
+	h := newProjectTestHandler(t, store, team("alpha-team"))
+	rec := putTaskMetaCreateRequest(t, h, "t1", "alpha-team", taskMetaBody(taskMeta(nil)), alpha)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("own-team create -> %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if _, err := store.StatMeta(context.Background(), taskMetaKey); err != nil {
+		t.Fatalf("own-team create did not store under the team prefix: %v", err)
+	}
+
+	store = ossfake.NewMemory()
+	h = newProjectTestHandler(t, store, team("alpha-team"))
+	rec = putTaskMetaCreateRequest(t, h, "t1", "alpha-team", taskMetaBody(taskMeta(nil)), beta)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("cross-team create -> %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+	if _, err := store.StatMeta(context.Background(), taskMetaKey); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cross-team create must not write: %v", err)
+	}
+
+	// Without the ?team= qualifier the create targets the global scope,
+	// which is not the worker's own team — refused, same rule as the update
+	// path's worker boundary.
+	store = ossfake.NewMemory()
+	h = newProjectTestHandler(t, store, team("alpha-team"))
+	rec = putTaskMetaCreateRequest(t, h, "t1", "", taskMetaBody(taskMeta(nil)), alpha)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("unqualified create -> %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 }
 

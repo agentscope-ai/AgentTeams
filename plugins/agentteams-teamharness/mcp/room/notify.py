@@ -283,6 +283,7 @@ def _send_task_completion_notification(
     humans: list[str] | None = None,
     event_token: str = "",
     txn_prefix: str = "submit",
+    conclusions: list[str] | None = None,
 ) -> dict[str, Any]:
     """Send the automatic Worker completion notification for submit_task.
 
@@ -305,6 +306,12 @@ def _send_task_completion_notification(
     status, and the recorded event id is reused on an exact retry, so
     the event is sent exactly once (the durable-continuation digest
     fence rejects a resubmission with a changed result).
+
+    When ``conclusions`` (TH-9 completion-report conclusions) is a
+    non-empty list, a ``- Conclusions:`` block (numbered entries, capped
+    at 5 with a pointer to the task meta for the rest) is appended AFTER
+    the status/result/worker lines; an empty or absent list leaves the
+    text byte-identical to the legacy contract.
     """
     homeserver = os.getenv("AGENTTEAMS_MATRIX_URL", "").rstrip("/")
     token = os.getenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "")
@@ -348,6 +355,20 @@ def _send_task_completion_notification(
         # The Result line names the file; keep the short summary preview
         # as the detail line (legacy contract, leader-side prompts read it).
         notification_text += f"\n{summary_preview}"
+    if conclusions:
+        # Conclusions block (TH-9): appended only when non-empty so a
+        # conclusions-less submission keeps the legacy byte-exact text.
+        # The notification caps at 5; the full list stays on the task
+        # meta (the pointer names it).
+        lines = ["- Conclusions:"]
+        for index, conclusion in enumerate(conclusions[:5], 1):
+            lines.append(f"  {index}. {conclusion}")
+        hidden = len(conclusions) - 5
+        if hidden > 0:
+            lines.append(
+                f"  …{hidden} more conclusions in shared/tasks/{task_id}/meta.json"
+            )
+        notification_text += "\n" + "\n".join(lines)
     mentions = [leader]
     for human in humans or []:
         if human and human != leader and human not in mentions:
@@ -586,6 +607,16 @@ def _task_completion_notification(
             "skipped": True,
             "error": str(membership.get("error") or "room membership check failed"),
         }
+    # TH-9: the completion report's conclusions persist on the task meta
+    # (digest-excluded); render them in the event when present. A
+    # conclusions-less submission passes an empty list and keeps the
+    # legacy byte-exact text.
+    raw_conclusions = task.get("conclusions")
+    conclusions = [
+        str(item)
+        for item in (raw_conclusions if isinstance(raw_conclusions, list) else [])
+        if str(item or "").strip()
+    ]
     notification = _send_task_completion_notification(
         room_id=room_id,
         task_id=task_id,
@@ -595,6 +626,7 @@ def _task_completion_notification(
         worker=str(task.get("assigned_to") or ""),
         result_path=str(task.get("result_path") or ""),
         humans=_team_human_matrix_ids(),
+        conclusions=conclusions or None,
     )
     if notification.get("sent"):
         # If the persist below fails, the event id is lost but the

@@ -134,12 +134,27 @@ Submit with `taskflow`:
     "taskId": "demo-project-001-01",
     "status": "SUCCESS",
     "summary": "Completed the assigned work.",
+    "conclusions": [
+      "The deliverable is at shared/tasks/demo-project-001-01/workspace/output.md.",
+      "Acceptance criteria 1-3 all pass.",
+      "No follow-up work remains."
+    ],
     "deliverables": [
       "shared/tasks/demo-project-001-01/workspace/output.md"
     ]
   }
 }
 ```
+
+The `conclusions` array is part of the completion report: 3-5 short
+one-line strings stating what was done, what was verified, and what (if
+anything) is left open. Fewer than 3 comes back as a warning on the tool
+result (and is rejected outright when the runtime runs with
+`AGENTTEAMS_TASK_CONCLUSIONS_STRICT` on); more than 5 are all recorded in
+the task meta, but the completion event shows only the first 5 with a
+pointer to the meta file. Conclusions are not part of the submission
+digest, so an exact retry of status/summary/deliverables may still carry
+a repaired list.
 
 Use one of:
 
@@ -210,6 +225,13 @@ The event first line carries one token per result status (code-generated):
 @leader-user:matrix.local TASK_BLOCKED: demo-project-001-01 - <short blocker summary>
 @leader-user:matrix.local TASK_INTERRUPTED: demo-project-001-01 - <summary>
 ```
+
+When the submission carried `conclusions`, the event appends a
+`- Conclusions:` block (numbered one-line entries, first 5 only, then a
+pointer to `shared/tasks/{task-id}/meta.json` when more were recorded)
+after the Worker/Status lines. The first line and the Result/Worker/Status
+lines stay the contract above; a submission without conclusions keeps the
+event byte-identical to the legacy format.
 
 If the task spec gives an exact completion line, the code event keeps that
 line format; a short human-readable summary message may still follow in the

@@ -364,6 +364,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 		MatrixToken:       req.MatrixToken,
 		GatewayKey:        req.GatewayKey,
 		ModelName:         req.Spec.Model,
+		ModelProvider:     req.Spec.ModelProvider,
 		SubagentModelName: resolvedSubagentModel(req),
 		AIGatewayURL:      req.AIGatewayURL,
 		TeamLeaderName:    req.TeamLeaderName,
@@ -794,7 +795,10 @@ func (d *Deployer) InjectChannelPolicy(ctx context.Context, req InjectChannelPol
 		return nil
 	}
 	agentPrefix := fmt.Sprintf("agents/%s", req.WorkerName)
-	existing, _ := d.oss.GetObject(ctx, agentPrefix+"/openclaw.json")
+	existing, err := d.oss.GetObject(ctx, agentPrefix+"/openclaw.json")
+	if err != nil {
+		return fmt.Errorf("read existing Worker channel config: %w", err)
+	}
 	updated := agentconfig.InjectChannelPolicy(existing, req.GroupAllowFrom, req.DMAllowFrom)
 	return d.oss.PutObject(ctx, agentPrefix+"/openclaw.json", updated)
 }
@@ -1581,12 +1585,13 @@ func (d *Deployer) DeployManagerConfig(ctx context.Context, req ManagerDeployReq
 	// silently never sees admin messages. See commit 3f8f84b which fixed this
 	// originally before the controller refactor accidentally reverted it.
 	configJSON, err := d.agentConfig.GenerateOpenClawConfig(agentconfig.WorkerConfigRequest{
-		WorkerName:   "manager",
-		MatrixToken:  req.MatrixToken,
-		GatewayKey:   req.GatewayKey,
-		ModelName:    req.Spec.Model,
-		AIGatewayURL: req.AIGatewayURL,
-		Runtime:      req.Spec.Runtime,
+		WorkerName:    "manager",
+		MatrixToken:   req.MatrixToken,
+		GatewayKey:    req.GatewayKey,
+		ModelName:     req.Spec.Model,
+		ModelProvider: req.Spec.ModelProvider,
+		AIGatewayURL:  req.AIGatewayURL,
+		Runtime:       req.Spec.Runtime,
 	})
 	if err != nil {
 		return fmt.Errorf("config generation failed: %w", err)

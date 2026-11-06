@@ -96,6 +96,40 @@ _TASKFLOW_MUTATING_ACTIONS = frozenset({
     "review_task",
 })
 
+# Completion-report conclusions (TH-9): submit_task carries a 3-5 item
+# conclusions array. Fewer than 3 is a warning by default and a rejection
+# when AGENTTEAMS_TASK_CONCLUSIONS_STRICT is on; more than 5 are all
+# persisted, but the completion notification caps at 5 and points to the
+# task meta for the rest. Conclusions are deliberately EXCLUDED from the
+# result digest: reworded conclusions do not change the submission
+# identity, so an exact retry of the digest inputs may still carry a
+# repaired list.
+_MIN_CONCLUSIONS = 3
+_MAX_CONCLUSIONS = 5
+
+
+def _conclusions_strict_mode() -> bool:
+    return os.getenv("AGENTTEAMS_TASK_CONCLUSIONS_STRICT", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _normalize_conclusions(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError("conclusions must be a list of strings")
+    normalized: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        if len(text) > 500:
+            text = text[:500] + "..."
+        normalized.append(text)
+    return normalized
+
 
 def _load_task(arguments: dict[str, Any], task_id: str) -> dict[str, Any]:
     task = _read_json(_task_state_path(arguments, task_id))
@@ -786,6 +820,34 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(deliverables, list):
                 raise ValueError("deliverables must be a list")
             deliverables = _validate_task_deliverables(task_id, deliverables)
+            # TH-9: the completion report must carry a 3-5 item conclusions
+            # array. Normalize before the strict check so whitespace-only
+            # items cannot dodge it; the rejection happens before any write
+            # (the resubmit path only writes during its backfill/repair).
+            if "conclusions" in payload:
+                conclusions = _normalize_conclusions(payload["conclusions"])
+            else:
+                conclusions = None
+            if _conclusions_strict_mode() and (
+                conclusions is None or len(conclusions) < _MIN_CONCLUSIONS
+            ):
+                raise ValueError(
+                    "submit_task requires 3-5 completion-report conclusions "
+                    f"(got {0 if conclusions is None else len(conclusions)}); "
+                    "AGENTTEAMS_TASK_CONCLUSIONS_STRICT is on"
+                )
+            conclusions_warnings: list[str] = []
+            if conclusions is None or len(conclusions) < _MIN_CONCLUSIONS:
+                conclusions_warnings.append(
+                    "completion report should include 3-5 conclusions; "
+                    f"got {0 if conclusions is None else len(conclusions)}"
+                )
+            if conclusions and len(conclusions) > _MAX_CONCLUSIONS:
+                conclusions_warnings.append(
+                    f"completion report carries {len(conclusions)} conclusions; "
+                    "the notification shows the first 5 and points to "
+                    f"shared/tasks/{task_id}/meta.json for the rest"
+                )
             submitted_result = {
                 "status": status,
                 "summary": summary,
@@ -809,6 +871,22 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     raise ValueError("legacy submitted task has no submission identity and cannot be resubmitted")
                 if not task.get("result_digest"):
                     task["result_digest"] = persisted_digest
+                    try:
+                        _write_task(arguments, task)
+                    except OSError as exc:
+                        return _persisted_state_failure_result(
+                            tool="taskflow",
+                            action=action,
+                            error=exc,
+                            task=task,
+                        )
+                # Conclusions are digest-excluded, so a retry may repair or
+                # reword them without conflicting with the fence: persist
+                # the latest provided list, no write when unchanged.
+                if conclusions is not None and conclusions != (
+                    task.get("conclusions") or []
+                ):
+                    task["conclusions"] = conclusions
                     try:
                         _write_task(arguments, task)
                     except OSError as exc:
@@ -880,6 +958,8 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                         summary=f"submit_task: {task_id} ({status})",
                     ),
                 }
+                if conclusions_warnings:
+                    result["warnings"] = conclusions_warnings
                 if not synced:
                     return _sync_failure_result(result, "submit_task")
                 result["notification"] = _task_completion_notification(
@@ -936,6 +1016,8 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             else:
                 result_path_extra = {}
                 task.pop("result_path", None)
+            if conclusions is not None:
+                result_path_extra["conclusions"] = conclusions
             # W2: record the submitting actor identity (role:account) so
             # review_task can enforce reviewer != submitted_by, plus its
             # provenance (runtime / payload) so a trusted member
@@ -1031,6 +1113,8 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     summary=f"submit_task: {task_id} ({status})",
                 ),
             }
+            if conclusions_warnings:
+                result["warnings"] = conclusions_warnings
             if not synced:
                 return _sync_failure_result(result, "submit_task")
             result["notification"] = _task_completion_notification(

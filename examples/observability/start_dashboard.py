@@ -24,8 +24,8 @@ def main():
         "AGENTTEAMS_AUTH_DISABLED": "true",
         "AGENTTEAMS_TRACING_DEMO_SCOPE": json.dumps({
             "teams": [{"name": "tracing-team", "label": "tracing-team"}],
-            "workers": [{"name": name, "team": "tracing-team"}
-                        for name in ("trace-qwenpaw", "trace-hermes")],
+            "workers": [{"name": name, "team": "tracing-team", "runtime": runtime}
+                        for name, runtime in (("trace-qwenpaw", "qwenpaw"), ("trace-hermes", "hermes"))],
         }),
         "DASHBOARD_CONFIG_FILE": "/data/config.json",
         "DASHBOARD_BUILD_ID": (source / ".next" / "BUILD_ID").read_text().strip(),

@@ -11,7 +11,7 @@ AT 与 Dashboard 均使用本地分支 codex/worker-otel-langfuse-demo，工作�
 
 在 Dashboard 选择 trace-qwenpaw 或 trace-hermes，打开执行记录，点“查看整个会话”，逐轮查看模型、工具、错误和 Matrix 回复。点击“查看上游 Worker Trace”回到交接源；“导出会话 JSON”读取所有分页和每轮 observations。Task 为 matrix-qwenpaw-acceptance / matrix-hermes-acceptance，Project 为 tracing-demo，Team 为 tracing-team。
 
-Dashboard 使用正式“控制台 → 治理 → Tracing”同一组件和资源权限 BFF。正式登录后，Team/Worker 下拉和列表、详情、导出使用当前账号经 Controller 确认的访问范围，选择 Team 后 Worker 联动过滤。
+Dashboard 使用正式“控制台 → 治理 → Tracing”同一组件和资源权限 BFF。正式登录后，Team/Worker 下拉和列表、详情、导出使用当前账号经 Controller 确认的访问范围，选择 Team 后 Worker 联动过滤。选择 Worker 后按其配置自动带出并锁定运行时；取消 Worker 选择后恢复手动运行时筛选。
 
 独立入口由 AGENTTEAMS_TRACING_DEMO=true 启用；演示仅绑定 localhost，使用本地开发身份，仅持有这个隔离 Langfuse 项目密钥。本机没有真实组织账号/Controller，因此启动脚本显式配置 AGENTTEAMS_TRACING_DEMO_SCOPE，只允许 tracing-team 的 trace-qwenpaw / trace-hermes，不以 Langfuse 历史记录推导账号权限。该演示清单仅在演示开关和 AUTH_DISABLED 同时开启、身份为本地管理员时使用；正式账号必须查询 Controller。
 

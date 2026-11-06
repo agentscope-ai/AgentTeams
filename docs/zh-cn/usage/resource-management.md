@@ -592,7 +592,7 @@ SMTP 通过以下环境变量配置（在 Manager 容器中）：
 | 流式（始终可用） | `GET /api/v1/humans/{name}/files/{path}` | Controller 通过自身 API 响应流式返回对象 |
 | 预签名（可选开启） | `GET .../files/{path}?presign=1` | Controller 返回一个限时 URL；客户端**直接从存储**下载对象，不经过 Controller |
 
-**启用预签名下载。** 将 `AGENTTEAMS_FS_PUBLIC_ENDPOINT`（Helm：`storage.publicEndpoint`）设置为**客户端可达**的存储源——所有返回 URL 中的 host 就是该值本身。请指向 MinIO/RustFS 的公网地址，通常是代理 S3 endpoint 的 Ingress 或专用域名（如 `https://files.example.com`），并确保该源提供与 `AGENTTEAMS_FS_ENDPOINT` 相同的 bucket。内嵌 Docker Compose 安装将 MinIO 发布到宿主机的 `127.0.0.1:9000`；安装脚本会自动同步该值。
+**启用预签名下载。** 将 `AGENTTEAMS_FS_PUBLIC_ENDPOINT`（Helm：`storage.publicEndpoint`）设置为**客户端可达**的存储源——所有返回 URL 中的 host 就是该值本身。请指向 MinIO/RustFS 的公网地址，通常是代理 S3 endpoint 的 Ingress 或专用域名（如 `https://files.example.com`），并确保该源提供与 `AGENTTEAMS_FS_ENDPOINT` 相同的 bucket。内嵌安装**不会**把存储端口发布到宿主机（Controller 容器只暴露 8080/8001/8088），因此预签名默认**关闭**：请把 `AGENTTEAMS_FS_PUBLIC_ENDPOINT` 设为浏览器真正可达的存储源（额外发布端口或 Ingress），否则继续使用流式 GET。
 
 **未配置公网端点时**，预签名处于关闭状态，`?presign=1` 会返回：
 

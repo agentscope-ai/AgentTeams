@@ -3239,11 +3239,6 @@ function Install-Manager {
             "-e", "AGENTTEAMS_MINIO_BUCKET=agentteams-storage",
             "-e", "AGENTTEAMS_STORAGE_PREFIX=agentteams/agentteams-storage",
             "-e", "AGENTTEAMS_FS_ENDPOINT=http://127.0.0.1:9000",
-            # Presigned download origin (#1501): the embedded in-container
-            # MinIO is published to the host at 127.0.0.1:9000 — the origin
-            # the caller's browser can reach — so presign works out of the
-            # box in embedded mode.
-            "-e", "AGENTTEAMS_FS_PUBLIC_ENDPOINT=http://127.0.0.1:9000",
             "-e", "AGENTTEAMS_AI_GATEWAY_URL=http://$aigwDomain",
             "-e", "AGENTTEAMS_CONTROLLER_URL=http://agentteams-controller:8090",
             "-e", "AGENTTEAMS_DOCKER_NETWORK=agentteams-net",
@@ -3252,6 +3247,15 @@ function Install-Manager {
             "-e", "AGENTTEAMS_MANAGER_ENABLED=true",
             "-e", "AGENTTEAMS_PORT_MANAGER_CONSOLE=$($config.PORT_MANAGER_CONSOLE)"
         )
+
+        # Presigned download origin (#1501): every URL handed to a client
+        # carries this host, so it must be reachable from the CALLER's
+        # browser. The embedded Controller publishes only 8080/8001/8088,
+        # so the in-container 127.0.0.1:9000 is not a browser endpoint —
+        # presign stays disabled (501) unless the operator supplies one.
+        if ($env:AGENTTEAMS_FS_PUBLIC_ENDPOINT) {
+            $ctrlArgs += @("-e", "AGENTTEAMS_FS_PUBLIC_ENDPOINT=$($env:AGENTTEAMS_FS_PUBLIC_ENDPOINT)")
+        }
 
         if ($script:AGENTTEAMS_TIMEZONE) {
             $ctrlArgs += @("-e", "TZ=$($script:AGENTTEAMS_TIMEZONE)")

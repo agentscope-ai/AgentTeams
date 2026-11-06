@@ -4539,11 +4539,6 @@ CREDEOF
             -e "${_ctrl_env_prefix}MINIO_BUCKET=agentteams-storage"
             -e "${_ctrl_env_prefix}STORAGE_PREFIX=${_storage_prefix}"
             -e "${_ctrl_env_prefix}FS_ENDPOINT=http://127.0.0.1:9000"
-            # Presigned download origin (#1501): the embedded in-container
-            # MinIO is published to the host at 127.0.0.1:9000, which is
-            # exactly the origin the caller's browser can reach, so presign
-            # is supported out of the box in embedded mode.
-            -e "${_ctrl_env_prefix}FS_PUBLIC_ENDPOINT=http://127.0.0.1:9000"
             -e "${_ctrl_env_prefix}AI_GATEWAY_URL=${_ai_gateway_url}"
             -e "${_ctrl_env_prefix}CONTROLLER_URL=http://agentteams-controller:8090"
             -e "${_ctrl_env_prefix}DOCKER_NETWORK=agentteams-net"
@@ -4643,6 +4638,16 @@ CREDEOF
         fi
         if [ -n "${AGENTTEAMS_CMS_WORKSPACE:-}" ]; then
             _ctrl_env_args+=(-e "${_ctrl_env_prefix}CMS_WORKSPACE=${AGENTTEAMS_CMS_WORKSPACE}")
+        fi
+
+        # Presigned download origin (#1501): every URL handed to a client
+        # carries this host, so it must be reachable from the CALLER's
+        # browser. The embedded Controller runs on a bridge network and
+        # publishes only 8080/8001/8088 — the in-container 127.0.0.1:9000 is
+        # not a browser endpoint, so presign stays disabled (501) unless the
+        # operator supplies a reachable origin.
+        if [ -n "${AGENTTEAMS_FS_PUBLIC_ENDPOINT:-}" ]; then
+            _ctrl_env_args+=(-e "${_ctrl_env_prefix}FS_PUBLIC_ENDPOINT=${AGENTTEAMS_FS_PUBLIC_ENDPOINT}")
         fi
 
         # shellcheck disable=SC2086

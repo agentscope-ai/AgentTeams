@@ -150,10 +150,10 @@ func (h *RuntimeConfigHandler) workerLock(name string) *sync.Mutex {
 	return l.(*sync.Mutex)
 }
 
-// etagMatches reports whether the If-Match header matches the current
+// ifMatchMatches reports whether the If-Match header matches the current
 // content ETag. Quotes around the token are optional; "*" is deliberately
 // NOT accepted — this endpoint never blind-writes.
-func etagMatches(ifMatch, etag string) bool {
+func ifMatchMatches(ifMatch, etag string) bool {
 	token := strings.TrimSpace(ifMatch)
 	token = strings.Trim(token, `"`)
 	return token != "" && token == etag
@@ -554,7 +554,7 @@ func (h *RuntimeConfigHandler) mergeRuntimeConfig(r *http.Request, worker *v1bet
 	// 2. Optimistic concurrency: the ETag the client read must match the
 	//    version we just fetched. A mismatch is a conflict — never a
 	//    blind overwrite (the client re-reads, merges and retries).
-	if !etagMatches(ifMatch, curETag) {
+	if !ifMatchMatches(ifMatch, curETag) {
 		curBytes, _ := json.Marshal(current)
 		return nil, curBytes, curETag, true, nil
 	}

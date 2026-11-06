@@ -28,6 +28,7 @@ package oss
 
 import (
 	"bytes"
+	"context"
 	"crypto/md5"
 	"errors"
 	"fmt"
@@ -80,8 +81,7 @@ func requireBackend(t *testing.T) backendEnv {
 // newMatrixClient builds the client under test: object traffic is
 // confined to a unique per-test prefix inside the configured bucket and
 // swept again through DeletePrefix on cleanup (DeletePrefix is itself
-// under test, so a failed sweep shows up in the log, not as leftover
-// state on the next run).
+// under test, so a failed sweep fails the test, not just the log).
 func newMatrixClient(t *testing.T, env backendEnv, sub string) (*MinIOClient, string) {
 	t.Helper()
 	root := fmt.Sprintf("oss-matrix/%s-%d/%s/", env.kind, time.Now().UnixNano(), sub)
@@ -95,8 +95,12 @@ func newMatrixClient(t *testing.T, env backendEnv, sub string) (*MinIOClient, st
 		PublicEndpoint: env.endpoint,
 	})
 	t.Cleanup(func() {
-		if err := c.DeletePrefix(t.Context(), root); err != nil {
-			t.Logf("matrix cleanup DeletePrefix(%s): %v", root, err)
+		// t.Context() is already canceled when Cleanup runs; sweep on a
+		// separate bounded context instead.
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if err := c.DeletePrefix(ctx, root); err != nil {
+			t.Errorf("matrix cleanup DeletePrefix(%s): %v", root, err)
 		}
 	})
 	return c, root
@@ -352,20 +356,35 @@ func TestMatrix_PresignUpload(t *testing.T) {
 	}
 }
 
-// TestMatrix_DeletePrefix pins the recursive-sweep contract: every object
-// under the prefix is gone (tombstone marker objects included), a sibling
-// prefix sharing the prefix string survives, and a second sweep of the
-// now-empty prefix is a clean no-op.
+// TestMatrix_DeletePrefix pins the directory-sweep contract: DeletePrefix
+// deletes exactly the object at the prefix key and everything under it
+// (tombstone marker objects included), a sibling that merely shares the
+// prefix string survives, a trailing-slash prefix sweeps the same scope,
+// and a second sweep of the now-empty prefix is a clean no-op.
 func TestMatrix_DeletePrefix(t *testing.T) {
 	env := requireBackend(t)
 	c, root := newMatrixClient(t, env, "dp")
 	ctx := t.Context()
 
+	// assertScopeEmpty walks the directory scope (boundary slash
+	// included) and fails if anything is left under it. It runs in the
+	// test body, where t.Context() is still live — the separate-context
+	// fix applies to t.Cleanup only.
+	assertScopeEmpty := func(scope string) {
+		page, cursor, err := c.ListObjectsRecursive(ctx, scope, "", 100)
+		if err != nil {
+			t.Fatalf("walk of %s after sweep: %v", scope, err)
+		}
+		if len(page) != 0 || cursor != "" {
+			t.Fatalf("walk of %s after sweep = %+v cursor %q, want empty", scope, page, cursor)
+		}
+	}
+
 	target := root + "x"
 	for _, k := range []string{
 		target + "/1",
 		target + "/y/2",
-		root + "dps/sibling",
+		target + "-sibling/keep", // shares the string prefix, not a subdirectory → must survive
 	} {
 		if err := c.PutObject(ctx, k, []byte("v")); err != nil {
 			t.Fatalf("seed %s: %v", k, err)
@@ -381,28 +400,52 @@ func TestMatrix_DeletePrefix(t *testing.T) {
 		t.Fatalf("DeletePrefix: %v", err)
 	}
 
-	// Everything under the target is gone.
-	page, cursor, err := c.ListObjectsRecursive(ctx, target, "", 100)
-	if err != nil {
-		t.Fatalf("post-delete walk: %v", err)
-	}
-	if len(page) != 0 || cursor != "" {
-		t.Fatalf("post-delete walk = %+v cursor %q, want empty", page, cursor)
-	}
+	// Everything at and under the target is gone.
 	for _, k := range []string{target + "/1", target + "/y/2", target + "/tombstone"} {
 		if err := c.Stat(ctx, k); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("Stat(%s) after sweep = %v, want ErrNotExist", k, err)
 		}
 	}
+	assertScopeEmpty(target + "/")
 
 	// A sibling that merely shares the prefix string survives.
-	if err := c.Stat(ctx, root+"dps/sibling"); err != nil {
-		t.Fatalf("sibling vanished: Stat(%s) = %v", root+"dps/sibling", err)
+	if err := c.Stat(ctx, target+"-sibling/keep"); err != nil {
+		t.Fatalf("sibling vanished: Stat(%s) = %v", target+"-sibling/keep", err)
 	}
 
 	// Sweeping an already-empty prefix is a no-op.
 	if err := c.DeletePrefix(ctx, target); err != nil {
 		t.Fatalf("second DeletePrefix: %v", err)
+	}
+	assertScopeEmpty(target + "/")
+	if err := c.Stat(ctx, target+"-sibling/keep"); err != nil {
+		t.Fatalf("sibling vanished after no-op sweep: Stat(%s) = %v", target+"-sibling/keep", err)
+	}
+
+	// Trailing slash sweeps the same directory scope: the same seeds —
+	// plus the marker object at the bare key — and the same survivors.
+	target2 := root + "z"
+	for _, k := range []string{
+		target2, // the object whose key is exactly the target
+		target2 + "/1",
+		target2 + "/y/2",
+		target2 + "-sibling/keep",
+	} {
+		if err := c.PutObject(ctx, k, []byte("v")); err != nil {
+			t.Fatalf("seed %s: %v", k, err)
+		}
+	}
+	if err := c.DeletePrefix(ctx, target2+"/"); err != nil {
+		t.Fatalf("DeletePrefix (trailing slash): %v", err)
+	}
+	for _, k := range []string{target2, target2 + "/1", target2 + "/y/2"} {
+		if err := c.Stat(ctx, k); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("Stat(%s) after trailing-slash sweep = %v, want ErrNotExist", k, err)
+		}
+	}
+	assertScopeEmpty(target2 + "/")
+	if err := c.Stat(ctx, target2+"-sibling/keep"); err != nil {
+		t.Fatalf("sibling vanished: Stat(%s) = %v", target2+"-sibling/keep", err)
 	}
 }
 

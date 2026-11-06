@@ -588,17 +588,26 @@ func (c *MinIOClient) Mirror(ctx context.Context, src, dst string, opts MirrorOp
 	return err
 }
 
-// DeletePrefix removes every object under prefix through the S3 API: a
-// recursive list (the SDK channel pages through the storage's
-// continuation tokens) followed by DeleteObjects multi-delete in batches
+// DeletePrefix removes every object at or under prefix through the S3
+// API: the object whose key is exactly the normalized prefix (a marker
+// object, if any) followed by a recursive list (the SDK channel pages
+// through the storage's continuation tokens) of everything under the
+// normalized prefix plus "/", and DeleteObjects multi-delete in batches
 // of at most 1000 keys (the S3 per-call limit). S3 has no recursive
 // delete, and the `mc rm --recursive --force` call was dropped because the
 // mc CLI must not sit on the object path — agent deletion (deployer) and
-// the human-file trash purge run this. Keys are matched as raw S3
-// prefixes, exactly as the mc call matched them: everything under
-// prefix, tombstone marker objects included. A prefix with no objects is
-// a no-op; per-key delete errors are aggregated into the returned error
-// so a partial sweep is never reported as a clean one.
+// the human-file trash purge run this.
+//
+// prefix is matched as a directory scope, not a raw string prefix:
+// DeletePrefix("a/b") deletes exactly "a/b" and everything under
+// "a/b/", and never touches "a/b-sibling/*". The raw-prefix form the mc
+// call matched with would have swept siblings that merely share the
+// prefix string (a "a/b-sibling/x" key starts with "a/b"), silently
+// deleting unrelated data. The scope is the same for "a/b" and "a/b/"; a
+// prefix that normalizes to the bucket root ("" or "/") keeps the raw
+// behavior — the whole bucket is swept. A prefix with no objects is a
+// no-op; per-key delete errors are aggregated into the returned error so
+// a partial sweep is never reported as a clean one.
 func (c *MinIOClient) DeletePrefix(ctx context.Context, prefix string) error {
 	sdk, err := c.sdkClient()
 	if err != nil {
@@ -607,6 +616,20 @@ func (c *MinIOClient) DeletePrefix(ctx context.Context, prefix string) error {
 	// Bucket-relative coordinates: the bucket rides on the SDK call, and
 	// fullPath's mc alias/bucket wrapper is not part of any bucket key.
 	p := strings.TrimPrefix(prefix, "/")
+	// Directory scope: the sweep covers the marker object at the
+	// normalized prefix itself, then everything under it. A raw string
+	// prefix would also match siblings that merely share the string
+	// ("a/b-sibling/x" starts with "a/b") and delete them.
+	norm := strings.TrimSuffix(p, "/")
+	if norm != "" {
+		// S3 DeleteObject answers 204 for a missing key, so a plain
+		// not-found never surfaces here; a remaining error is a real
+		// failure the sweep must not paper over.
+		if err := c.DeleteObject(ctx, norm); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("delete prefix %q: remove marker object %q: %w", prefix, norm, err)
+		}
+		p = norm + "/"
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var ch <-chan minio.ObjectInfo

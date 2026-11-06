@@ -142,6 +142,15 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/humans/{name}/quota", mw.Authenticate(http.HandlerFunc(hfh.getQuota)))
 	mux.Handle("PUT /api/v1/humans/{name}/quota", mw.Authenticate(http.HandlerFunc(hfh.putQuota)))
 
+	// Human sync state (#1414 P3): per-human sync manifest + status. The
+	// .sync/ prefix is reserved by the file API (validateHumanFilePath),
+	// so these endpoints are the manifest's only address. Same auth-only
+	// middleware as the file area: the handler authorizes (file_sync
+	// capability) and answers 404 for non-access callers.
+	mux.Handle("GET /api/v1/humans/{name}/sync/manifest", mw.Authenticate(http.HandlerFunc(hfh.getSyncManifest)))
+	mux.Handle("PUT /api/v1/humans/{name}/sync/manifest", mw.Authenticate(http.HandlerFunc(hfh.putSyncManifest)))
+	mux.Handle("GET /api/v1/humans/{name}/sync/status", mw.Authenticate(http.HandlerFunc(hfh.getSyncStatus)))
+
 	// Managers
 	mux.Handle("POST /api/v1/managers", mw.RequireAuthz(authpkg.ActionCreate, "manager", nil)(http.HandlerFunc(rh.CreateManager)))
 	mux.Handle("GET /api/v1/managers", mw.RequireAuthz(authpkg.ActionList, "manager", nil)(http.HandlerFunc(rh.ListManagers)))

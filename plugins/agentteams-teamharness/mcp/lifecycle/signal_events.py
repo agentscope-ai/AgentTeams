@@ -39,6 +39,7 @@ _SIGNAL_EMITTERS: dict[str, tuple[str, str, str]] = {
     "record_loop_iteration": ("loop_iteration_finished", "SIG-DECISION", "decision_lock"),
     "record_loop_iteration:review": ("loop_review_verdict", "SIG-VERDICT", "critic_verdict"),
     "illegal_transition_rejected": ("mismatch_recorded", "SIG-MISMATCH", "mismatch_recorded"),
+    "attention_raised": ("attention_raised", "SIG-ATTENTION", "attention_raised"),
 }
 
 
@@ -120,6 +121,7 @@ def _emit_signal_event(
     ref: str = "",
     ref_bytes: bytes = b"",
     payload: dict[str, Any] | None = None,
+    attempt: int = 0,
     audit_seq: int = 0,
     discriminator: str = "",
 ) -> bool:
@@ -131,6 +133,22 @@ def _emit_signal_event(
     land on the same object key, which is then skipped. The local write is
     followed by a best-effort single-file mirror push (failure warn-only,
     the local object stays). Returns True when the object was written.
+
+    ref_bytes is the caller-chosen identity of the logical operation: for
+    state-committing emitters it is normally the post-write state bytes,
+    but whatever it is, it must be stable across retries of the same
+    operation. py:attention_raised passes the raised record's stable
+    identity (creation-time fields, canonical JSON) instead of the
+    post-write meta bytes — the S4a notification-outcome write rewrites
+    the record's meta after the emit, so post-write bytes would hash
+    differently on a retry of the pending record and break dedupe
+    (#1506).
+
+    attempt (contract id_rule v1.2) is the caller's attempt counter for
+    the logical operation — for attention records it is the raised
+    record's attempt, so a same-payload retry of the reused record
+    re-lands on the same event id while a fresh raise of the same kind
+    gets a distinct one; 0 for emitters with no attempt of their own.
 
     audit_seq (contract id_rule v1.2) is the project's persisted
     committed-operation revision — the operation instance identity that
@@ -162,7 +180,7 @@ def _emit_signal_event(
             source_event,
             iteration_index,
             fingerprint,
-            0,
+            attempt,
             audit_seq,
             discriminator,
         )

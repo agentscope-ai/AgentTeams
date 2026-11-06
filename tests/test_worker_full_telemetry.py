@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import sys
 from pathlib import Path
@@ -10,6 +11,21 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 import at_telemetry as telemetry
+
+
+def test_otlp_auth_credentials_are_redacted_even_when_decoded_from_headers(monkeypatch):
+    from urllib.parse import quote
+    secret = "sk-private-tracing-project"
+    credential = base64.b64encode(("pk-project:" + secret).encode()).decode()
+    headers = "Authorization=" + quote("Basic " + credential) + ",x-langfuse-ingestion-version=4"
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_HEADERS", headers)
+    source = {"tool_output": f"headers={headers}; decoded=Basic {credential}; secret={secret}",
+              "OTEL_EXPORTER_OTLP_TRACES_HEADERS": headers}
+    cleaned = json.dumps(telemetry.sanitize(source))
+    assert secret not in cleaned
+    assert credential not in cleaned
+    assert headers not in cleaned
+    assert source["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] == headers
 
 
 def test_sanitize_structured_content_and_boundaries(monkeypatch):

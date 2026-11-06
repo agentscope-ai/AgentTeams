@@ -31,10 +31,14 @@ def main():
         "DASHBOARD_BUILD_ID": (source / ".next" / "BUILD_ID").read_text().strip(),
         "HOSTNAME": "0.0.0.0", "PORT": "3000",
     }
+    volume = "at-tracing-demo_dashboard-config"
+    subprocess.run(["docker", "run", "--rm", "--network", "none", "--user", "0:0", "--entrypoint", "sh",
+                    "-v", f"{volume}:/data", args.image, "-c", "chown 1001:1001 /data"],
+                   check=True, stdout=subprocess.DEVNULL)
     command = ["docker", "run", "-d", "--name", "at-tracing-demo-dashboard",
                "--restart", "unless-stopped", "--network", "at-tracing-demo_default",
                "-p", "127.0.0.1:13003:3000", "-v", f"{source}:/app:ro",
-               "--tmpfs", "/data:uid=1001,gid=1001,mode=0700"]
+               "-v", f"{volume}:/data"]
     for key, value in env.items():
         command.extend(["-e", f"{key}={value}"])
     command.extend([args.image, "node", "server.js"])

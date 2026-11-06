@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 from contextvars import ContextVar
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -10,6 +11,7 @@ import os
 import re
 import time
 import uuid
+from urllib.parse import unquote
 
 from opentelemetry import baggage, context, trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -21,7 +23,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
 _correlation = ContextVar("at_trace_correlation", default={})
 _model_request = ContextVar("at_model_request", default=None)
 _provider = None
-_secret_key = re.compile(r"(?:api[_-]?key|secret|password|authorization|access[_-]?token|gateway[_-]?key|credential)", re.I)
+_secret_key = re.compile(r"(?:api[_-]?key|secret|password|authorization|access[_-]?token|gateway[_-]?key|credential|OTEL_EXPORTER_OTLP(?:_TRACES)?_HEADERS)", re.I)
 _limit = 256 * 1024
 
 
@@ -43,6 +45,21 @@ def sanitize(value):
         for key, secret in os.environ.items():
             if _secret_key.search(key) and len(secret) >= 8:
                 value = value.replace(secret, "[REDACTED]")
+                if key in ("OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_TRACES_HEADERS"):
+                    for header in secret.split(","):
+                        name, _, encoded = header.partition("=")
+                        if not _secret_key.search(name):
+                            continue
+                        decoded = unquote(encoded)
+                        credentials = [decoded, decoded.partition(" ")[2]]
+                        if decoded.lower().startswith("basic "):
+                            try:
+                                credentials.append(base64.b64decode(decoded[6:]).decode().partition(":")[2])
+                            except (ValueError, UnicodeError):
+                                pass
+                        for credential in credentials:
+                            if len(credential) >= 8:
+                                value = value.replace(credential, "[REDACTED]")
         value = re.sub(r"(?i)Bearer\s+[^\s\"',]+", "Bearer [REDACTED]", value)
         return re.sub(r"(?i)((?:api[_-]?key|password|secret|access_token)\s*[=:]\s*)[^\s\"',;&]+", r"\1[REDACTED]", value)
     if value is None or isinstance(value, (int, float, bool)):
@@ -274,6 +291,7 @@ def configure():
             "service.name": os.getenv("OTEL_SERVICE_NAME", "agentteams-worker"),
             "agentteams.worker.name": os.getenv("AGENTTEAMS_WORKER_NAME", "unknown"),
             "agentteams.runtime": os.getenv("AGENTTEAMS_OTEL_RUNTIME", "python"),
+            "agentteams.telemetry.config_revision": os.getenv("AGENTTEAMS_OTEL_CONFIG_REVISION", ""),
         })
         provider = TracerProvider(resource=resource, span_limits=SpanLimits(max_attributes=4096))
         provider.add_span_processor(BatchSpanProcessor(SanitizingExporter(OTLPSpanExporter())))

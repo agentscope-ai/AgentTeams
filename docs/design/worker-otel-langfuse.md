@@ -2,7 +2,9 @@
 
 ## 目标与选型
 
-从一个 Worker 会话回看每轮请求、模型上下文、工具执行、异常和消息交接，定位链路问题，并为后续 Team 协作质量分析保留数据。采用 **运行时原生钩子 → 共享 OTel 适配层 → Collector → Langfuse v3 → Dashboard BFF**。Worker 不依赖 Langfuse SDK、不携带项目密钥。
+从一个 Worker 会话回看每轮请求、模型上下文、工具执行、异常和消息交接，定位链路问题，并为后续 Team 协作质量分析保留数据。采用 **运行时原生钩子 → 共享 OTel 适配层 → OTLP/HTTP → Langfuse v3 → Dashboard BFF**。可观测默认关闭，AT 可先独立启动；Worker 不依赖 Langfuse SDK。
+
+默认通过标准 OTLP 直连 Langfuse，管理员在 Dashboard 保存配置并应用到所选 Worker，即可下发采集开关、地址和认证头。项目密钥保存在 Dashboard 服务端私有文件，直连时进入所选 Worker 的环境变量，读取配置 API 不返回密钥。已有 Collector 的环境可选择继续经 Collector 上报，Worker 只接收 Collector 的地址和认证头，Langfuse 出口仍由 Collector 管理。
 
 网关 LLM 日志无法覆盖本地工具和会话；各运行时直接使用 Langfuse SDK 会分散字段规则和凭证。共享层负责身份、内容处理、协议和查询，运行时只适配执行边界。本次实现 QwenPaw 和 Hermes；其他运行时未实现，不以环境变量配置代替原生验收。
 
@@ -75,11 +77,19 @@ Langfuse 项目及密钥必须按 Controller 部署/组织隔离，不同组织�
 
 启用通用开关时默认采集内容，AGENTTEAMS_OTEL_CAPTURE_CONTENT=false 关闭输入输出字段。写入和导出时脱敏结构化凭证键、Bearer token 和进程中已知密钥环境变量值。单字段 256 KiB 上限，超限保留 truncated、原长度、SHA-256 和预览；采集失败记录 capture_error，不能打断业务。
 
-Collector 使用内存保护、批处理、重试和独立持久卷队列。它保护已接收的待发送数据，不能承诺 SDK 未导出的内存数据、未结束 span、进程强杀、磁盘满、后端拒绝绝不丢失。运行时已截断的工具输出和模型未返回的内部推理无法恢复。
+演示 Collector 使用内存保护、批处理、重试和独立持久卷队列。它保护已接收的待发送数据，不能承诺 SDK 未导出的内存数据、未结束 span、进程强杀、磁盘满、后端拒绝绝不丢失。直连模式只具备 Worker SDK 的批处理和重试，没有 Collector 的持久队列。运行时已截断的工具输出和模型未返回的内部推理无法恢复。
 
 本地验证使用独立 Matrix、账号、存储桶、Langfuse。经用户授权仅复用原 AT 模型配置，通过固定接口和指定模型的代理访问；Worker 不接入原 AT 网络，原模型密钥仅保留在代理中，其他 API 路径被拒绝。
 
 ## 配置与扩展契约
+
+管理员打开 Dashboard 的 Tracing → 可观测配置，选择是否采集、内容开关、Langfuse 地址和项目密钥，测试连接后保存。保存到 Dashboard 数据卷内的 observability.json，文件权限 0600，使用临时文件原子替换；每次读取使用最新配置，无需重启 Dashboard。Secret Key 和 Collector Headers 为只写字段，留空保留原值。
+
+保存后勾选 Worker 并应用。BFF 使用当前账号凭据重新确认资源权限，读取 Worker 详情后仅合并采集环境变量，保留其他环境变量。配置版本变化时拒绝陈旧应用请求。托管 Worker 的 spec.env 变化由现有 Controller 触发容器重建；接口只报告下发结果，不将其等同于进程就绪或 Trace 已入库。非托管 Worker、未适配运行时及不支持环境变量编辑的旧 Controller 不报成功。
+
+测试连接验证 Dashboard 到 Langfuse 的项目认证，以及到选定 OTLP 接收端的空批次请求；不生成伪造模型 span，不代表 Worker 网络已经可达。完整验收仍需在重建后运行真实任务并从 Langfuse 回读。关闭采集后再次应用到 Worker 才生效，历史记录仍可查询。
+
+已有 Collector 时也可直接使用 Worker CR 的标准环境变量：
 
 ~~~yaml
 spec:
@@ -90,7 +100,7 @@ spec:
     OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf"
 ~~~
 
-复用 Worker CR 的 spec.env，不新增 tokenUsage 状态字段。Collector 地址必须从 Worker 网络可达。关闭通用开关并重启 Worker 即回到原启动路径。
+复用 Worker CR 的 spec.env，不新增 tokenUsage 状态字段。接收端地址必须从 Worker 网络可达。关闭通用开关并重建 Worker 即回到原启动路径。认证头及其解码后的 Basic 凭据均参与采集内容脱敏。
 
 | Runtime | 本次范围 | 扩展/升级验证 |
 | --- | --- | --- |

@@ -46,6 +46,14 @@ jobs:
             bash plugins/scripts/resolve-plugin-release.sh --plugin "$PLUGIN_INPUT" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install manifest validation dependencies
+        run: python -m pip install 'PyYAML>=6.0,<7' 'jsonschema>=4,<5'
+
       - name: Validate plugin manifest
         run: ruby plugins/scripts/validate-plugin.rb "${{ steps.resolve.outputs.manifest }}"
 
@@ -74,6 +82,14 @@ jobs:
         with:
           ruby-version: '3.3'
           bundler: none
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install manifest validation dependencies
+        run: python -m pip install 'PyYAML>=6.0,<7' 'jsonschema>=4,<5'
 
       - name: Validate plugin manifest
         run: ruby plugins/scripts/validate-plugin.rb plugins/qwen-code-bridge/plugin.yaml

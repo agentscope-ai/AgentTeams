@@ -98,12 +98,23 @@ end
 # The bundle tar.gz is runtime-neutral; the QwenPaw-installable artifact is
 # produced by the adapter build script (plugin id + adapter payload + core).
 adapter_build = plugin_root / "adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb"
+artifact_paths = [out_path.to_s]
 if adapter_build.file?
-  stdout, stderr, status = Open3.capture3(
-    { "OUT_DIR" => out_dir.to_s },
-    "ruby", adapter_build.to_s
-  )
-  abort("qwenpaw adapter build failed: #{stderr}#{stdout}") unless status.success?
+  # Only collect files produced by this build, even when OUT_DIR is reused.
+  Dir.mktmpdir("qwenpaw-artifacts-") do |tmp|
+    stdout, stderr, status = Open3.capture3(
+      { "OUT_DIR" => tmp },
+      "ruby", adapter_build.to_s
+    )
+    abort("qwenpaw adapter build failed: #{stderr}#{stdout}") unless status.success?
+    archives = Dir.glob(File.join(tmp, "*.zip")).sort
+    abort("qwenpaw adapter build produced no ZIP") if archives.empty?
+    archives.each do |path|
+      target = out_dir / File.basename(path)
+      FileUtils.cp(path, target)
+      artifact_paths << target.to_s
+    end
+  end
 end
 
 commit = begin
@@ -113,9 +124,7 @@ rescue StandardError
   ""
 end
 
-artifacts = Dir.glob((out_dir / "*").to_s).sort.select do |path|
-  File.file?(path) && (path.end_with?(".tar.gz") || path.end_with?(".zip"))
-end.map do |path|
+artifacts = artifact_paths.sort.map do |path|
   { name: File.basename(path), sha256: Digest::SHA256.file(path).hexdigest }
 end
 

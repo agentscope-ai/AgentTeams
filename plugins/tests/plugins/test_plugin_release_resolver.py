@@ -83,6 +83,7 @@ def _build_full_plugin(root: Path, version: str) -> Path:
     # schema lookup is plugins/<...>/../schemas -> root/plugins/schemas.
     (root / "plugins" / "schemas").mkdir(parents=True, exist_ok=True)
     (root / "plugins" / "schemas" / "plugin.schema.json").write_text("{}", encoding="utf-8")
+    (root / "plugins" / "schemas" / "bundle.schema.json").write_text("{}", encoding="utf-8")
     (plugin / "plugin.yaml").write_text(
         FULL_MANIFEST.format(version=version), encoding="utf-8"
     )

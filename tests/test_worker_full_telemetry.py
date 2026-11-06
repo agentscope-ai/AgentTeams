@@ -1,6 +1,8 @@
 import asyncio
 import base64
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -11,6 +13,40 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 import at_telemetry as telemetry
+
+
+def test_adapter_installation_failure_is_reported_without_breaking_import(monkeypatch):
+    import at_runtime_adapters as adapters
+    monkeypatch.setattr(adapters, '_adapter_errors', [])
+    monkeypatch.setattr(adapters.wrapt, 'register_post_import_hook', lambda callback, name: callback(object()))
+    def incompatible(module):
+        raise AttributeError('changed framework API')
+    adapters.register_hook(incompatible, 'framework.module')
+    assert adapters._adapter_errors == ['Telemetry adapter framework.module failed: AttributeError']
+
+
+def test_agentscope_middleware_import_order_does_not_break_worker_startup(tmp_path):
+    package = tmp_path / 'agentscope'
+    (package / 'middleware').mkdir(parents=True)
+    (package / 'agent').mkdir()
+    (package / '__init__.py').write_text('from . import middleware\n')
+    (package / 'middleware/__init__.py').write_text('from ._tracing import TracingMiddleware\n')
+    (package / 'middleware/_tracing.py').write_text('from ..agent._agent import Agent\nclass TracingMiddleware: pass\n')
+    (package / 'agent/__init__.py').write_text('from ._agent import Agent\n')
+    (package / 'agent/_agent.py').write_text('class Agent:\n    def __init__(self, middlewares=None): self.middlewares = middlewares\n    async def reply(self): pass\n')
+    environment = {**os.environ, 'AGENTTEAMS_OTEL_ENABLED': 'true', 'AGENTTEAMS_OTEL_RUNTIME': 'qwenpaw',
+                   'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'shared/lib/telemetry') + os.pathsep + str(tmp_path)}
+    result = subprocess.run([sys.executable, '-c', 'from agentscope.agent import Agent; from agentscope.middleware import TracingMiddleware; assert isinstance(Agent().middlewares[0], TracingMiddleware)'],
+                            env=environment, capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+
+
+def test_startup_allows_runtime_to_configure_logging():
+    environment = {**os.environ, 'AGENTTEAMS_OTEL_ENABLED': 'true', 'AGENTTEAMS_OTEL_RUNTIME': 'qwenpaw',
+                   'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'shared/lib/telemetry')}
+    result = subprocess.run([sys.executable, '-c', 'import logging; logging.basicConfig(level=logging.INFO); assert logging.getLogger().level == logging.INFO; import at_telemetry; at_telemetry.capture_logs(); at_telemetry.capture_logs(); assert sum(isinstance(h, at_telemetry.TraceLogHandler) for h in logging.getLogger().handlers) == 1'],
+                            env=environment, capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
 
 
 def test_otlp_auth_credentials_are_redacted_even_when_decoded_from_headers(monkeypatch):

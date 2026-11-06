@@ -54,6 +54,7 @@ def bind(fields):
 
 
 def start_turn(fields, request):
+    telemetry.capture_logs()
     links = []
     upstream = fields.get("agentteams.upstream.trace_id")
     if upstream:
@@ -292,15 +293,32 @@ def openai_content(module):
     wrapt.wrap_function_wrapper(module, "AsyncCompletions.create", async_create)
 
 
+def agentscope_ready(_module):
+    # Middleware 2.0.10 imports Agent while it is still initializing. Wait
+    # for the package to finish before importing and installing middleware.
+    agentscope(importlib.import_module("agentscope.agent._agent"))
+
+
+def register_hook(callback, name):
+    def ready(module):
+        try:
+            callback(module)
+        except Exception as error:
+            message = f"Telemetry adapter {name} failed: {type(error).__name__}"
+            _adapter_errors.append(message)
+            logging.getLogger("agentteams.telemetry").error(message)
+    wrapt.register_post_import_hook(ready, name)
+
+
 def install():
     runtime = os.getenv("AGENTTEAMS_OTEL_RUNTIME")
     if runtime == "qwenpaw":
-        wrapt.register_post_import_hook(agentscope, "agentscope.agent._agent")
-        wrapt.register_post_import_hook(qwenpaw_runtime, "qwenpaw.runtime.runtime")
+        register_hook(agentscope_ready, "agentscope")
+        register_hook(qwenpaw_runtime, "qwenpaw.runtime.runtime")
     elif runtime == "hermes":
-        wrapt.register_post_import_hook(hermes_turn, "agent.turn_facade")
-        wrapt.register_post_import_hook(hermes_tools, "agent.tool_executor")
-        wrapt.register_post_import_hook(openai_content, "openai.resources.chat.completions")
-    wrapt.register_post_import_hook(httpx, "httpx")
+        register_hook(hermes_turn, "agent.turn_facade")
+        register_hook(hermes_tools, "agent.tool_executor")
+        register_hook(openai_content, "openai.resources.chat.completions")
+    register_hook(httpx, "httpx")
     from at_trace_transport import install as install_transport
     install_transport()

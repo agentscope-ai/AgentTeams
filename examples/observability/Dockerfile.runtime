@@ -3,6 +3,17 @@ ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 ARG VENV_PATH
 ARG RUNTIME
+ARG RUNTIME_PIP_SPEC=
+RUN if [ -n "${RUNTIME_PIP_SPEC}" ]; then ${VENV_PATH}/bin/pip install --index-url https://pypi.org/simple "${RUNTIME_PIP_SPEC}"; fi
+COPY ${RUNTIME}/src/ /tmp/runtime-overlay/
+RUN ${VENV_PATH}/bin/python - <<'PY'
+import shutil
+import sysconfig
+from pathlib import Path
+for package in Path('/tmp/runtime-overlay').iterdir():
+    if package.is_dir():
+        shutil.copytree(package, Path(sysconfig.get_paths()['purelib']) / package.name, dirs_exist_ok=True)
+PY
 COPY shared/lib/ /opt/agentteams/scripts/lib/
 COPY plugins/teamharness/adapters/qwenpaw/task_trace.py /opt/agentteams/scripts/lib/telemetry/at_task_trace.py
 COPY plugins/agentteams-matrix-channel/ /opt/agentteams/qwenpaw-builtin/plugins/agentteams-matrix-channel/

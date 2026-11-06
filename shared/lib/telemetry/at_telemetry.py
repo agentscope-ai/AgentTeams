@@ -302,7 +302,6 @@ def configure():
         OpenAIInstrumentor().instrument()
     from at_runtime_adapters import install
     install()
-    logging.getLogger().addHandler(TraceLogHandler())
     _provider = provider
     return provider
 
@@ -310,6 +309,7 @@ def configure():
 @contextmanager
 def operation(name, *, task_id="", room_id="", project_id="", attributes=None):
     """Wrap your native turn/tool hook; async tasks keep separate context."""
+    capture_logs()
     fields = dict(_correlation.get())
     for label, value in (("task", task_id), ("room", room_id), ("project", project_id)):
         if value:
@@ -339,6 +339,14 @@ def set_io(span, *, input=None, output=None):
 
 def flush():
     return _provider.force_flush(timeout_millis=10000) if _provider else True
+
+
+def capture_logs():
+    # Register after runtime startup so logging.basicConfig still configures
+    # the application's own output and level.
+    root = logging.getLogger()
+    if not any(isinstance(handler, TraceLogHandler) for handler in root.handlers):
+        root.addHandler(TraceLogHandler())
 
 
 class TraceLogHandler(logging.Handler):

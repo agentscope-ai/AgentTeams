@@ -1,9 +1,10 @@
 """Demo-only allowlisted model proxy; no access to other AT API paths."""
 
-from http.client import HTTPConnection
+from http.client import HTTPConnection, HTTPSConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
+from urllib.parse import urlparse
 
 
 class Proxy(BaseHTTPRequestHandler):
@@ -28,10 +29,11 @@ class Proxy(BaseHTTPRequestHandler):
         body = self.rfile.read(size) if size else None
         if body and json.loads(body).get("model") != os.environ["AUTHORIZED_MODEL"]:
             self.send_error(403); return
-        connection = HTTPConnection("host.docker.internal", 18080, timeout=300)
+        upstream = urlparse(os.getenv("AUTHORIZED_MODEL_BASE_URL", "http://host.docker.internal:18080/v1"))
+        connection = (HTTPSConnection if upstream.scheme == "https" else HTTPConnection)(upstream.hostname, upstream.port, timeout=300)
         try:
-            connection.request(self.command, self.path, body=body, headers={
-                "Host": "aigw-local.agentteams.io", "Content-Type": "application/json",
+            connection.request(self.command, upstream.path.rstrip('/') + self.path.removeprefix('/v1'), body=body, headers={
+                "Host": os.getenv("AUTHORIZED_MODEL_HOST") or (upstream.netloc if os.getenv("AUTHORIZED_MODEL_BASE_URL") else "aigw-local.agentteams.io"), "Content-Type": "application/json",
                 "Authorization": "Bearer " + os.environ["AUTHORIZED_MODEL_KEY"],
             })
             response = connection.getresponse()

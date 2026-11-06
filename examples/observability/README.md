@@ -13,7 +13,7 @@ AT 与 Dashboard 均使用本地分支 codex/worker-otel-langfuse-demo，工作�
 
 Dashboard 使用正式“控制台 → 治理 → Tracing”同一组件和资源权限 BFF。正式登录后，Team/Worker 下拉和列表、详情、导出使用当前账号经 Controller 确认的访问范围，选择 Team 后 Worker 联动过滤。选择 Worker 后按其配置自动带出并锁定运行时；取消 Worker 选择后恢复手动运行时筛选。
 
-Tracing 顶部的“可观测配置”仅管理员可见。可先启动 AT，再填写 Langfuse 地址/项目密钥，选择直连或已有 Collector，测试、保存并应用到指定 Worker。保存无需重启 Dashboard；托管 Worker 配置下发后由 Controller 重建。默认关闭，历史数据查询不受采集开关影响。配置和密钥保存在独立 at-tracing-demo_dashboard-config 卷中，重建 Dashboard 后仍保留，密钥不会由配置读取接口返回。
+Tracing 顶部的“可观测配置”仅管理员可见。可先启动 AT，再填写 Langfuse 地址/项目查询密钥和已部署的 Collector 地址/采集凭证，测试、保存并应用到指定 Worker。保存无需重启 Dashboard；运行中的托管 Worker 由 Controller 重建，休眠中的下次启动生效。默认关闭，历史数据查询不受采集开关影响。配置和密钥保存在独立 at-tracing-demo_dashboard-config 卷中，重建 Dashboard 后仍保留，密钥不会由配置读取接口返回。Worker 只接收 Collector 配置，Langfuse 查询密钥保留在 Dashboard。
 
 独立入口由 AGENTTEAMS_TRACING_DEMO=true 启用；演示仅绑定 localhost，使用本地开发身份，仅持有这个隔离 Langfuse 项目密钥。本机没有真实组织账号/Controller，因此启动脚本显式配置 AGENTTEAMS_TRACING_DEMO_SCOPE，只允许 tracing-team 的 trace-qwenpaw / trace-hermes，不以 Langfuse 历史记录推导账号权限。该演示清单仅在演示开关和 AUTH_DISABLED 同时开启、身份为本地管理员时使用；正式账号必须查询 Controller。
 
@@ -29,7 +29,7 @@ Tracing 顶部的“可观测配置”仅管理员可见。可先启动 AT，再
 | 任务 | 复用 TeamHarness 唯一匹配规则，歧义或缺失原因保留，不猜任务 |
 | 运行诊断 | 版本、采集策略、警告/错误事件、取消、父子关系、耗时与用量 |
 
-本次真实模型为用户授权复用的 qwen3.6-plus。Worker、Matrix、存储和 Langfuse 均独立；Worker 只连接 at-tracing-demo_default。原模型密钥仅放在受限代理中，代理只开放指定模型接口，不能访问 AT 其他 API。直连模式的 Langfuse 演示项目密钥可下发到本次 Worker，Collector 模式则保留在 Collector。
+本次真实模型为用户授权复用的 qwen3.6-plus。Worker、Matrix、存储和 Langfuse 均独立；Worker 只连接 at-tracing-demo_default。原模型密钥仅放在受限代理中，代理只开放指定模型接口，不能访问 AT 其他 API。Langfuse 写入密钥保留在 Collector，查询密钥保留在 Dashboard。
 
 完整采集有明确边界：单字段 256 KiB 超限标记长度/哈希/预览；脱敏凭证；不能恢复运行时已经截断的输出或模型未返回的内部推理。Collector 持久队列保护已接收数据，SDK 未导出/未结束 span 和强杀不能承诺不丢。OpenClaw、DSH、OpenHuman 尚未完成本分支适配。不同架构/历史上下文的示例不能直接当作 runtime 性能排名。
 
@@ -57,6 +57,17 @@ python3 examples/observability/verify_full.py --run morning-demo
 verify_full.py 检查两个 runtime 的独立轮次、session、Task、模型/工具输入输出、usage、模型 response ID 去重、span 父子关系、发送/重触发、跨 Worker 链接，以及 Dashboard 回读一致性。产物写入 output/observability-demo/full-session-acceptance.json 和 full-session-readback.json。
 
 另有 full_session_demo.py / run_live_acceptance.py 用于不经过 Matrix 的原生循环验证；旧 runtime_demo.py / run_workers.sh / verify.py 仅作协议烟测，其 fixture usage 来自测试响应。429 夹具故障注入设置 DEMO_FAIL_FIRST_REQUEST=429，可验证失败请求与成功重试，不能当作线上限流事件。
+
+首次创建真实模型代理前，显式设置 DEMO_MODEL_API_KEY、DEMO_MODEL 和 DEMO_MODEL_BASE_URL（例如 https://api.example.com/v1）；仅在网关要求时设置 DEMO_MODEL_HOST。脚本不再从其他 AT 容器读取模型凭证。已有隔离代理可直接复用，不打印密钥。
+
+后置配置验收使用已准备好的两个隔离 Worker 和生产构建 Dashboard：
+
+~~~bash
+python3 examples/observability/configuration_acceptance.py \
+  --worker-tag local-20261106164000-config --keep
+~~~
+
+该脚本在 localhost:13004 启动独立 Dashboard，验证无配置启动、测试连接、私有保存、重启持久化、两种运行时关闭/开启/再关闭后的真实回复及 Trace 回读。Controller HTTP API 是只允许重建这两个隔离容器的夹具；它不代表真实 Controller 部署端到端验收。Controller 原生环境变量合并和 spec 变更重建逻辑需另跑 Go 回归。结果写入 output/observability-demo/configuration-acceptance.json，--keep 保留进程供浏览器演示。
 
 ## 启停与镜像
 
@@ -95,4 +106,4 @@ SDK 依赖固定在 shared/lib/telemetry/requirements.txt。完整构建走 Make
 
 已验证的层次包括：Python 与 Matrix 通道回归、Dashboard API/组件交互、会话分页导出、类型检查、lint、标准生产构建、两种标准 Worker 入口与真实模型/工具、Langfuse/Dashboard 回读。故障夹具能保留 HTTP 429 和随后 200 的两个请求。
 
-已完成本机浏览器视觉验收；权限测试覆盖两个账号的 Controller 凭据、资源下拉联动、越权筛选/详情和受限会话分页。未使用真实组织账号进行线上验收。没有推送分支、发布镜像或改动现有 AT 部署。
+已完成本机浏览器视觉验收；权限测试覆盖两个账号的 Controller 凭据、资源下拉联动、越权筛选/详情和受限会话分页。未使用真实组织账号进行线上验收，未发布镜像或改动现有 AT 部署。

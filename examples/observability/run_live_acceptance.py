@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -12,26 +13,28 @@ def docker(*args):
 
 
 def authorized_model():
-    source = json.loads(docker("inspect", "atlocal-20261104-worker-smoke"))[0]
-    source_env = dict(item.split("=", 1) for item in source["Config"]["Env"])
-    key = source_env["AGENTTEAMS_WORKER_GATEWAY_KEY"]
-    model = json.loads(docker("exec", "atlocal-20261104-worker-smoke", "/opt/venv/qwenpaw/bin/python", "-c",
-        "import json; print(json.dumps(json.load(open('/root/agentteams-fs/agents/smoke/.qwenpaw/workspaces/default/agent.json'))['active_model']))"))["model"]
+    key, model = os.getenv("DEMO_MODEL_API_KEY"), os.getenv("DEMO_MODEL")
+    if not key or not model:
+        raise RuntimeError("Set DEMO_MODEL_API_KEY and DEMO_MODEL for a model you are authorized to use")
     return key, model
 
 
 def isolated_model():
-    key, model = authorized_model()
     name = "at-tracing-model-proxy"
     exists = subprocess.run(["docker", "inspect", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
     if not exists:
+        key, model = authorized_model()
         script = Path(__file__).resolve().parent / "model_proxy.py"
         with tempfile.NamedTemporaryFile(mode="w", prefix="at-proxy-", suffix=".env") as file:
-            file.write(f"AUTHORIZED_MODEL={model}\nAUTHORIZED_MODEL_KEY={key}\n"); file.flush()
+            file.write(f"AUTHORIZED_MODEL={model}\nAUTHORIZED_MODEL_KEY={key}\n"
+                       f"AUTHORIZED_MODEL_BASE_URL={os.getenv('DEMO_MODEL_BASE_URL', 'http://host.docker.internal:18080/v1')}\n"
+                       f"AUTHORIZED_MODEL_HOST={os.getenv('DEMO_MODEL_HOST', '' if os.getenv('DEMO_MODEL_BASE_URL') else 'aigw-local.agentteams.io')}\n"); file.flush()
             docker("run", "-d", "--name", name, "--restart", "unless-stopped", "--network", "at-tracing-demo_default",
                 "--env-file", file.name, "-v", f"{script}:/demo/model_proxy.py:ro", "--entrypoint", "/opt/venv/qwenpaw/bin/python",
                 "agentteams/qwenpaw-worker:local-20261106003000-otel", "/demo/model_proxy.py")
     else:
+        proxy = json.loads(docker("inspect", name))[0]
+        model = dict(item.split("=", 1) for item in proxy["Config"]["Env"])["AUTHORIZED_MODEL"]
         docker("start", name)
     return "http://at-tracing-model-proxy:8080/v1", "at-isolated-model-proxy", model
 

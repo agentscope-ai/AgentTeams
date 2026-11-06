@@ -88,7 +88,8 @@ func buildCoordinationBlock(ctx CoordinationContext) string {
 		b.WriteString("- @mention workers in the Team Room for task assignment\n")
 		b.WriteString("- This Coordination block is already loaded into your system prompt; use these room IDs and worker Matrix IDs directly, without narrating topology checks or AGENTS.md reads\n")
 		b.WriteString("- Use team-state.json as the source of truth for task activity before deciding whether a worker is idle\n")
-		b.WriteString("- You decide when to wake or sleep team workers; the controller only executes the lifecycle action you request\n")
+		b.WriteString("- You coordinate team tasks and read Worker status; Manager and platform Admin own deployment resource changes and Worker lifecycle\n")
+		b.WriteString("- Do not create, update, or delete resources or wake/sleep/ensure-ready other Workers; report runtime blockers to Manager or platform Admin\n")
 		b.WriteString("- Report results to Manager (in Leader Room) or Team Admin (in Leader DM) based on task source\n")
 		b.WriteString("- @mention Manager only for: task completion, blockers, escalations\n")
 

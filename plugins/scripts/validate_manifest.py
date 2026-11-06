@@ -44,7 +44,18 @@ def schema_file_for(manifest: object) -> str:
 
 def format_error(error) -> str:
     path = ".".join(str(part) for part in error.absolute_path)
-    return f"{path}: {error.message}" if path else error.message
+    message = error.message
+    # A oneOf failure alone ("is not valid under any of the given schemas")
+    # hides which requirement each branch wanted; append each branch's own
+    # error so the message names the missing keys (e.g. prompts).
+    branches = getattr(error, "context", None) or []
+    if branches:
+        details = []
+        for branch in branches:
+            sub_path = ".".join(str(part) for part in branch.absolute_path)
+            details.append(f"{sub_path}: {branch.message}" if sub_path else branch.message)
+        message = f"{message} ({'; '.join(details)})"
+    return f"{path}: {message}" if path else message
 
 
 def validate_manifest(manifest: dict, schemas_dir: Path) -> tuple[str, list[str]]:

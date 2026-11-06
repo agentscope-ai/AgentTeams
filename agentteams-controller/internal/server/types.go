@@ -488,11 +488,16 @@ type UpdateHumanRequest struct {
 	// Capabilities follows the same merge-patch semantics as
 	// AccessibleTeams: absent = unchanged, explicit list = replaces,
 	// empty list = clears. Unknown values are rejected (400).
+	Capabilities *[]string `json:"capabilities,omitempty"`
 	// ModelAccess has the same semantics: absent = unchanged, present =
 	// replace the whole grant table (an empty object clears all grants,
 	// locking every surface).
-	Capabilities *[]string                `json:"capabilities,omitempty"`
-	ModelAccess  *v1beta1.ModelAccessSpec `json:"modelAccess,omitempty"`
+	ModelAccess *v1beta1.ModelAccessSpec `json:"modelAccess,omitempty"`
+	// WorkspaceAccess follows the same merge-patch semantics as
+	// Capabilities: absent (or null) = unchanged, present object =
+	// replace, an empty object clears both lists. Invalid paths/modes
+	// or duplicate teams are rejected (400).
+	WorkspaceAccess *v1beta1.HumanWorkspaceAccess `json:"workspaceAccess,omitempty"`
 }
 
 type HumanResponse struct {
@@ -575,13 +580,13 @@ type UpdateManagerRequest struct {
 }
 
 type ManagerResponse struct {
-	Name    string `json:"name"`
-	Phase   string `json:"phase"`
-	State   string `json:"state,omitempty"` // desired lifecycle state
-	Model   string `json:"model,omitempty"`
+	Name  string `json:"name"`
+	Phase string `json:"phase"`
+	State string `json:"state,omitempty"` // desired lifecycle state
+	Model string `json:"model,omitempty"`
 	// ModelProvider mirrors ManagerSpec.ModelProvider (APIG Model API name).
 	ModelProvider string `json:"modelProvider,omitempty"`
-	Runtime string `json:"runtime,omitempty"`
+	Runtime       string `json:"runtime,omitempty"`
 	// RuntimeDeprecated marks legacy runtimes that are upgrade-compat
 	// only (CoPaw): new creation is rejected; migrate to QwenPaw.
 	RuntimeDeprecated bool   `json:"runtimeDeprecated,omitempty"`

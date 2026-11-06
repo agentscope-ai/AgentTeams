@@ -116,6 +116,8 @@ Controller 是平台层，Worker 是你按需实例化的执行单元；Leader �
 - 隔离：任何 agent（含 Manager）都不被授予 `humans/*` 的存储访问；作用域由 API 强制，非成员团队返回 404。
 - 删除进入**远端回收站**（可恢复，默认保留 30 天）；同步按设备开启，并只作用于用户选中的文件夹。
 
+默认访问跟成员关系走：该人的默认集合（`accessibleTeams` ∪ 在 `humanMembers` 中列出该人的团队）对 `files/**` 可读写，`workspaceAccess` 的 grants 再把访问扩展到所命名的团队。restriction 是**全局拒绝**，不是逐团队收窄：调用方任一所属团队对某路径的 restriction 都对调用方的全部团队生效（deny-wins），另一个团队的成员身份或 grant 无法覆盖它。每次写入按产生该有效访问的团队审计归属——被 restriction 压低时记 restriction 所在团队。`memory/`、`digest/` 与控制前缀 `.control/`、`.sync/`、`.trash/` 永远不可授权。
+
 ## 常见问题
 
 **只有一个人时，需要选一种部署模式吗？**

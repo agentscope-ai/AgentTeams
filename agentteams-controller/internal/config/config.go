@@ -801,6 +801,11 @@ func (c *Config) OSSConfig() oss.Config {
 		Endpoint:      normalizeMinIOS3Endpoint(endpoint),
 		AccessKey:     accessKey,
 		SecretKey:     secretKey,
+		// Caller-reachable origin for presigned downloads (#1501). It is an
+		// operator-explicit external URL (ingress/domain), so it is used as
+		// given — the internal-endpoint S3-port normalization must NOT
+		// apply to it. Empty keeps presign disabled (501 presign_unsupported).
+		PublicEndpoint: strings.TrimSpace(os.Getenv("AGENTTEAMS_FS_PUBLIC_ENDPOINT")),
 	}
 }
 

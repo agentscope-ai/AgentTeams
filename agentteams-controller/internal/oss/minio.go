@@ -33,6 +33,9 @@ type MinIOClient struct {
 	config     Config
 	credSource CredentialSource
 	aliasReady bool
+	// publicAliasReady tracks the one-time `mc alias set` of the presign
+	// alias (the caller-reachable public endpoint).
+	publicAliasReady bool
 	// lsFormatProbe caches the one-time capability probe of the mc binary
 	// (see lsJSONAvailable); a pointer so the WithCredentialSource shallow
 	// clone shares the cached answer for the same binary.
@@ -51,6 +54,9 @@ func NewMinIOClient(cfg Config) *MinIOClient {
 	if cfg.Alias == "" {
 		cfg.Alias = "agentteams"
 	}
+	if cfg.PublicAlias == "" {
+		cfg.PublicAlias = "agentteams-public"
+	}
 	return &MinIOClient{config: cfg, lsFormatProbe: &lsFormatProbe{}}
 }
 
@@ -61,6 +67,7 @@ func (c *MinIOClient) WithCredentialSource(src CredentialSource) *MinIOClient {
 	clone := *c
 	clone.credSource = src
 	clone.aliasReady = false
+	clone.publicAliasReady = false
 	return &clone
 }
 
@@ -81,8 +88,37 @@ func (c *MinIOClient) ensureAlias(ctx context.Context) error {
 	return nil
 }
 
+// ensurePublicAlias registers the presign alias — `mc alias set` against
+// the caller-reachable public endpoint with the same storage credentials —
+// once per client. The alias is the only difference between the internal
+// and the presign view of the storage; mc resolves the URL's host from the
+// alias's endpoint when signing. Dynamic mode has no persistent alias:
+// runMCOnAlias injects MC_HOST_<publicAlias> per call instead.
+func (c *MinIOClient) ensurePublicAlias(ctx context.Context) error {
+	if c.credSource != nil {
+		return nil
+	}
+	if c.publicAliasReady || c.config.PublicEndpoint == "" {
+		return nil
+	}
+	_, err := c.runMC(ctx, "alias", "set", c.config.PublicAlias, c.config.PublicEndpoint, c.config.AccessKey, c.config.SecretKey)
+	if err != nil {
+		return fmt.Errorf("mc alias set %s: %w", c.config.PublicAlias, err)
+	}
+	c.publicAliasReady = true
+	return nil
+}
+
 func (c *MinIOClient) fullPath(key string) string {
 	return c.config.StoragePrefix + "/" + strings.TrimPrefix(key, "/")
+}
+
+// publicFullPath renders the mc path for the presign alias: the public
+// alias + the same bucket. It must not reuse StoragePrefix, whose first
+// segment IS the main alias in every deployment (the presign alias differs
+// from it).
+func (c *MinIOClient) publicFullPath(key string) string {
+	return c.config.PublicAlias + "/" + c.config.Bucket + "/" + strings.TrimPrefix(key, "/")
 }
 
 // PutObjectIfMatch performs a conditional write: the object is only replaced
@@ -339,6 +375,50 @@ func (c *MinIOClient) GetObject(ctx context.Context, key string) ([]byte, error)
 		return nil, err
 	}
 	return []byte(out), nil
+}
+
+// PresignGet mints a presigned download URL for the object at key that
+// stays valid for ttl (#1475 PR-4, #1501). It shells out to
+// `mc share download --expire <ttl> --json <publicFullPath>` against the
+// PUBLIC alias and returns the URL from the `share` field: the mc CLI
+// computes the S3 V4 signature locally from the alias credentials, so
+// neither the object bytes nor the credentials ever leave the process.
+//
+// The URL is signed for the public endpoint's origin, so its host is the
+// caller-reachable host. The Host participates in the S3 V4 signature,
+// which is exactly why the public alias exists: a URL minted for the
+// internal endpoint cannot be rewritten to a public hostname afterwards —
+// storage would answer SignatureDoesNotMatch. The URL grants anonymous
+// read access to exactly that object until it expires.
+//
+// When Config.PublicEndpoint is empty there is no caller-reachable origin
+// to sign for: PresignGet returns ErrPresignUnsupported WITHOUT invoking
+// mc, so the API reports the capability boundary explicitly (501
+// presign_unsupported) instead of leaking an unusable URL.
+func (c *MinIOClient) PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	if ttl <= 0 {
+		return "", fmt.Errorf("presign ttl must be positive, got %s", ttl)
+	}
+	if c.config.PublicEndpoint == "" {
+		return "", ErrPresignUnsupported
+	}
+	if err := c.ensurePublicAlias(ctx); err != nil {
+		return "", err
+	}
+	out, err := c.runMCOnAlias(ctx, c.config.PublicAlias, "share", "download", "--expire", ttl.String(), "--json", c.publicFullPath(key))
+	if err != nil {
+		return "", err
+	}
+	var msg struct {
+		Share string `json:"share"`
+	}
+	if err := json.Unmarshal([]byte(out), &msg); err != nil {
+		return "", fmt.Errorf("parse mc share download --json: %w", err)
+	}
+	if msg.Share == "" {
+		return "", errors.New("mc share download returned an empty share URL")
+	}
+	return msg.Share, nil
 }
 
 func (c *MinIOClient) Stat(ctx context.Context, key string) error {
@@ -719,24 +799,25 @@ func (c *MinIOClient) EnsureBucket(ctx context.Context) error {
 }
 
 func (c *MinIOClient) runMC(ctx context.Context, args ...string) (string, error) {
-	return c.runMCWithInput(ctx, nil, args...)
+	return c.runMCOnAlias(ctx, c.config.Alias, args...)
 }
 
-func (c *MinIOClient) runMCWithInput(ctx context.Context, stdin []byte, args ...string) (string, error) {
+// runMCOnAlias is runMC bound to a specific alias. In dynamic-credential
+// mode the MC_HOST_<alias> env var is built from that alias's OWN endpoint
+// (endpointForAlias), so the presign alias signs against the public
+// endpoint while every other command stays on the internal one.
+func (c *MinIOClient) runMCOnAlias(ctx context.Context, alias string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, c.config.MCBinary, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if stdin != nil {
-		cmd.Stdin = bytes.NewReader(stdin)
-	}
 
 	if c.credSource != nil {
 		creds, err := c.credSource.Resolve(ctx)
 		if err != nil {
 			return "", fmt.Errorf("resolve oss credentials: %w", err)
 		}
-		hostEnv, herr := buildMCHostEnv(c.config.Alias, c.config.Endpoint, creds)
+		hostEnv, herr := buildMCHostEnv(alias, c.endpointForAlias(alias), creds)
 		if herr != nil {
 			return "", herr
 		}
@@ -748,6 +829,16 @@ func (c *MinIOClient) runMCWithInput(ctx context.Context, stdin []byte, args ...
 			strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.String(), nil
+}
+
+// endpointForAlias resolves the endpoint an alias binds to: the presign
+// alias is the caller-reachable public endpoint, every other alias the
+// internal one.
+func (c *MinIOClient) endpointForAlias(alias string) string {
+	if alias == c.config.PublicAlias {
+		return c.config.PublicEndpoint
+	}
+	return c.config.Endpoint
 }
 
 // buildMCHostEnv renders a single MC_HOST_<alias>=<scheme>://<ak>:<sk>[:<token>]@<host>

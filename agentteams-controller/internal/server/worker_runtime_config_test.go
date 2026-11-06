@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
@@ -158,8 +160,10 @@ func TestRuntimeConfig_L2PutWhitelistAllowed(t *testing.T) {
 	h := newTestRuntimeConfigHandler(t, "embedded", upstream, nil,
 		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
 	body := []byte(`{"max_iters":10}`)
+	req := rcRequest(http.MethodPut, "daily-carol", "runtime-config", body)
+	req.Header.Set("If-Match", contentETag([]byte(current)))
 	rec := httptest.NewRecorder()
-	h.Handle(rec, rcL2Caller(rcRequest(http.MethodPut, "daily-carol", "runtime-config", body)))
+	h.Handle(rec, rcL2Caller(req))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s, want 200 for whitelisted L2 write", rec.Code, rec.Body.String())
@@ -179,6 +183,46 @@ func TestRuntimeConfig_L2PutWhitelistAllowed(t *testing.T) {
 	}
 }
 
+// A native-style response keeps its own field order; the returned ETag
+// must remain usable for the next write without an intervening GET.
+func TestRuntimeConfig_PutETagSupportsConsecutiveNativeStyleWrites(t *testing.T) {
+	current := `{"max_iters":100,"llm_retry_enabled":true}`
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			var submitted map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&submitted); err != nil {
+				t.Errorf("decode submitted config: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			// Native QwenPaw returns its typed model representation rather
+			// than the controller's map serialization of the submitted body.
+			current = fmt.Sprintf(`{"max_iters":%d,"llm_retry_enabled":true}`, int(submitted["max_iters"].(float64)))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(current))
+	}))
+	defer upstream.Close()
+	h := newTestRuntimeConfigHandler(t, "embedded", upstream, nil,
+		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
+	read := httptest.NewRecorder()
+	h.Handle(read, rcAdminCaller(rcRequest(http.MethodGet, "daily-carol", "runtime-config", nil)))
+	etag := read.Header().Get("ETag")
+	for _, value := range []int{101, 102} {
+		req := rcAdminCaller(rcRequest(http.MethodPut, "daily-carol", "runtime-config", []byte(fmt.Sprintf(`{"max_iters":%d}`, value))))
+		req.Header.Set("If-Match", etag)
+		write := httptest.NewRecorder()
+		h.Handle(write, req)
+		if write.Code != http.StatusOK {
+			t.Fatalf("consecutive PUT status=%d, want 200", write.Code)
+		}
+		etag = write.Header().Get("ETag")
+		if etag != contentETag(write.Body.Bytes()) {
+			t.Fatalf("PUT ETag=%q does not describe the current native response", etag)
+		}
+	}
+}
+
 // TestRuntimeConfig_PutNoOpSkipsWrite: a PUT whose submitted values equal
 // the persisted ones performs exactly one upstream call (the GET) and
 // returns the current config as 200 — no redundant worker write.
@@ -194,8 +238,10 @@ func TestRuntimeConfig_PutNoOpSkipsWrite(t *testing.T) {
 
 	h := newTestRuntimeConfigHandler(t, "embedded", upstream, nil,
 		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
+	req := rcRequest(http.MethodPut, "daily-carol", "runtime-config", []byte(`{"max_iters":100}`))
+	req.Header.Set("If-Match", contentETag([]byte(current)))
 	rec := httptest.NewRecorder()
-	h.Handle(rec, rcAdminCaller(rcRequest(http.MethodPut, "daily-carol", "runtime-config", []byte(`{"max_iters":100}`))))
+	h.Handle(rec, rcAdminCaller(req))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s, want 200 no-op", rec.Code, rec.Body.String())
@@ -518,6 +564,7 @@ func TestRuntimeConfig_LoopSectionChangeNotifies(t *testing.T) {
 	h := newTestRuntimeConfigHandler(t, "embedded", upstream, fn,
 		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
 	req := rcRequest(http.MethodPut, "daily-carol", "runtime-config", []byte(`{"loop":{"enabled":true}}`))
+	req.Header.Set("If-Match", contentETag([]byte(current)))
 	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"team-a"}})
 	rec := httptest.NewRecorder()
 	h.Handle(rec, req)
@@ -555,6 +602,7 @@ func TestRuntimeConfig_NonLoopChangeNoNotify(t *testing.T) {
 	h := newTestRuntimeConfigHandler(t, "embedded", upstream, fn,
 		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
 	req := rcRequest(http.MethodPut, "daily-carol", "runtime-config", []byte(`{"max_iters":50}`))
+	req.Header.Set("If-Match", contentETag([]byte(current)))
 	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"team-a"}})
 	rec := httptest.NewRecorder()
 	h.Handle(rec, req)
@@ -582,6 +630,7 @@ func TestRuntimeConfig_LoopNoChangeNoNotify(t *testing.T) {
 	h := newTestRuntimeConfigHandler(t, "embedded", upstream, fn,
 		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
 	req := rcRequest(http.MethodPut, "daily-carol", "runtime-config", []byte(`{"loop":{"enabled":true}}`))
+	req.Header.Set("If-Match", contentETag([]byte(current)))
 	rec := httptest.NewRecorder()
 	h.Handle(rec, rcAdminCaller(req))
 
@@ -653,5 +702,231 @@ func TestRuntimeConfig_UnknownQueryRejected(t *testing.T) {
 	h.Handle(rec2, rcAdminCaller(req2))
 	if rec2.Code != http.StatusBadRequest {
 		t.Fatalf("non-status route: status=%d, want 400", rec2.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Optimistic concurrency (MX-7): ETag on GET, If-Match required on PUT,
+// 409 (with the current version) on a stale write, exactly-one-wins under
+// concurrency, and a successful re-read-and-retry.
+// ---------------------------------------------------------------------------
+
+// rcStatefulUpstream serves a mutable running-config: GET returns the
+// current bytes; PUT replaces them (mutex-protected). The returned
+// accessor snapshots the state for assertions.
+func rcStatefulUpstream(t *testing.T, initial string) (*httptest.Server, func() []byte) {
+	t.Helper()
+	var mu sync.Mutex
+	state := []byte(initial)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			_, _ = w.Write(state)
+		case http.MethodPut:
+			b, _ := io.ReadAll(r.Body)
+			state = b
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		}
+	}))
+	current := func() []byte {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]byte(nil), state...)
+	}
+	return srv, current
+}
+
+// rcConflictBody parses a 409 runtime-config response (code/message/
+// etag/current) — the shape a client uses to re-read, merge and retry.
+type rcConflictBody struct {
+	Code    string          `json:"code"`
+	Message string          `json:"message"`
+	ETag    string          `json:"etag"`
+	Current json.RawMessage `json:"current"`
+}
+
+// TestRuntimeConfig_GetReturnsETag: a successful GET exposes the content
+// ETag that conditional PUTs must present via If-Match.
+func TestRuntimeConfig_GetReturnsETag(t *testing.T) {
+	const payload = `{"max_iters":15,"loop":{"enabled":true}}`
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(payload))
+	}))
+	defer upstream.Close()
+
+	h := newTestRuntimeConfigHandler(t, "embedded", upstream, nil,
+		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
+	rec := httptest.NewRecorder()
+	h.Handle(rec, rcAdminCaller(rcRequest(http.MethodGet, "daily-carol", "runtime-config", nil)))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("ETag"); got != contentETag([]byte(payload)) {
+		t.Fatalf("ETag=%q, want the content ETag of the payload", got)
+	}
+}
+
+// TestRuntimeConfig_PutMissingIfMatch428: a PUT without If-Match is
+// rejected before any upstream call (this endpoint never blind-writes).
+func TestRuntimeConfig_PutMissingIfMatch428(t *testing.T) {
+	calls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer upstream.Close()
+
+	h := newTestRuntimeConfigHandler(t, "embedded", upstream, nil,
+		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
+	rec := httptest.NewRecorder()
+	h.Handle(rec, rcAdminCaller(rcRequest(http.MethodPut, "daily-carol", "runtime-config", []byte(`{"max_iters":50}`))))
+
+	if rec.Code != http.StatusPreconditionRequired {
+		t.Fatalf("status=%d body=%s, want 428 without If-Match", rec.Code, rec.Body.String())
+	}
+	if !containsAll(rec.Body.String(), "If-Match") {
+		t.Fatalf("body=%s, want the If-Match guidance", rec.Body.String())
+	}
+	if calls != 0 {
+		t.Fatalf("upstream calls=%d, want 0 (no blind write)", calls)
+	}
+}
+
+// TestRuntimeConfig_PutStaleIfMatch409: a PUT whose If-Match does not
+// match the current config is rejected 409 with NO upstream write, and
+// the 409 carries the current version (etag + body) for the re-read.
+func TestRuntimeConfig_PutStaleIfMatch409(t *testing.T) {
+	const v1 = `{"max_iters":100,"loop":{"enabled":true}}`
+	upstream, current := rcStatefulUpstream(t, v1)
+	defer upstream.Close()
+
+	h := newTestRuntimeConfigHandler(t, "embedded", upstream, nil,
+		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
+	req := rcRequest(http.MethodPut, "daily-carol", "runtime-config", []byte(`{"max_iters":50}`))
+	req.Header.Set("If-Match", `"stale-etag"`) // quoted, deliberately wrong
+	rec := httptest.NewRecorder()
+	h.Handle(rec, rcAdminCaller(req))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s, want 409", rec.Code, rec.Body.String())
+	}
+	var cf rcConflictBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &cf); err != nil {
+		t.Fatalf("409 body not JSON: %v (%s)", err, rec.Body.String())
+	}
+	if cf.Code != "conflict" {
+		t.Fatalf("code=%q, want conflict", cf.Code)
+	}
+	if cf.ETag != contentETag([]byte(v1)) {
+		t.Fatalf("409 etag=%q, want the current version's etag", cf.ETag)
+	}
+	if !containsAll(cf.Message, "re-read") {
+		t.Fatalf("message=%q, want the re-read guidance", cf.Message)
+	}
+	var cur map[string]interface{}
+	if err := json.Unmarshal(cf.Current, &cur); err != nil {
+		t.Fatalf("current not JSON: %v", err)
+	}
+	if cur["loop"] == nil {
+		t.Fatalf("current=%s, want the full current config", cf.Current)
+	}
+	if !bytes.Equal(current(), []byte(v1)) {
+		t.Fatalf("upstream state changed on a rejected write: %s", current())
+	}
+}
+
+// TestRuntimeConfig_ConcurrentPutExactlyOneWins: two concurrent PUTs
+// carrying the same If-Match produce exactly one success and one 409 —
+// the per-worker lock makes the read-check-merge-write span atomic. The
+// 409 carries the new version, and a retry with it succeeds.
+func TestRuntimeConfig_ConcurrentPutExactlyOneWins(t *testing.T) {
+	const initial = `{"max_iters":100,"loop":{"enabled":true}}`
+	initialETag := contentETag([]byte(initial))
+	upstream, current := rcStatefulUpstream(t, initial)
+	defer upstream.Close()
+
+	h := newTestRuntimeConfigHandler(t, "embedded", upstream, nil,
+		rcWorker("daily-carol", "qwenpaw"), rcTeamWithLeader("team-a", "team-a-lead", "daily-carol"))
+
+	type putResult struct {
+		code int
+		body []byte
+	}
+	results := make(chan putResult, 2)
+	submissions := []string{`{"max_iters":50}`, `{"max_iters":70}`}
+	var wg sync.WaitGroup
+	for _, sub := range submissions {
+		wg.Add(1)
+		go func(sub string) {
+			defer wg.Done()
+			req := rcRequest(http.MethodPut, "daily-carol", "runtime-config", []byte(sub))
+			req.Header.Set("If-Match", initialETag)
+			rec := httptest.NewRecorder()
+			h.Handle(rec, rcAdminCaller(req))
+			results <- putResult{rec.Code, rec.Body.Bytes()}
+		}(sub)
+	}
+	wg.Wait()
+	close(results)
+
+	var ok, conflict int
+	var conflictBody []byte
+	for res := range results {
+		switch res.code {
+		case http.StatusOK:
+			ok++
+		case http.StatusConflict:
+			conflict++
+			conflictBody = res.body
+		default:
+			t.Fatalf("unexpected status=%d body=%s, want one 200 and one 409", res.code, res.body)
+		}
+	}
+	if ok != 1 || conflict != 1 {
+		t.Fatalf("results: ok=%d conflict=%d, want exactly one of each", ok, conflict)
+	}
+
+	var cf rcConflictBody
+	if err := json.Unmarshal(conflictBody, &cf); err != nil {
+		t.Fatalf("409 body not JSON: %v (%s)", err, conflictBody)
+	}
+	if cf.Code != "conflict" || cf.ETag == "" || len(cf.Current) == 0 {
+		t.Fatalf("409 must carry code conflict + etag + current, got %s", conflictBody)
+	}
+	if !containsAll(cf.Message, "re-read") {
+		t.Fatalf("409 message=%q, want the re-read guidance", cf.Message)
+	}
+
+	// The losing value is the one NOT present in the 409's current.
+	var cur map[string]interface{}
+	if err := json.Unmarshal(cf.Current, &cur); err != nil {
+		t.Fatalf("409 current not JSON: %v", err)
+	}
+	loser := float64(50)
+	if v, isNum := cur["max_iters"].(float64); isNum && v == 50 {
+		loser = 70
+	}
+
+	// Re-read-and-retry: the loser's write succeeds against the version
+	// the 409 reported.
+	retryBody := fmt.Sprintf(`{"max_iters":%d}`, int(loser))
+	req := rcRequest(http.MethodPut, "daily-carol", "runtime-config", []byte(retryBody))
+	req.Header.Set("If-Match", cf.ETag)
+	rec := httptest.NewRecorder()
+	h.Handle(rec, rcAdminCaller(req))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("retry after re-read: status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var final map[string]interface{}
+	if err := json.Unmarshal(current(), &final); err != nil {
+		t.Fatalf("final state not JSON: %v", err)
+	}
+	if final["max_iters"] != loser {
+		t.Fatalf("final max_iters=%v, want %v (the retried write applied)", final["max_iters"], loser)
 	}
 }

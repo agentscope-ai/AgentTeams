@@ -11,6 +11,7 @@ source /opt/agentteams/scripts/lib/agentteams-env.sh
 source /opt/agentteams/scripts/lib/merge-openclaw-config.sh
 source /opt/agentteams/scripts/lib/migrate-openclaw-config.sh
 source /opt/agentteams/scripts/lib/worker-file-sync.sh
+source /opt/agentteams/scripts/lib/worker-isolation.sh
 
 WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"
 FS_ENDPOINT="${AGENTTEAMS_FS_ENDPOINT:-}"
@@ -168,12 +169,19 @@ if [ -f "${WORKSPACE}/skills-lock.json" ] && [ -z "$(ls -A ${WORKSPACE}/skills 2
     cd "${WORKSPACE}" && skills experimental_install -y 2>/dev/null || log "Warning: skills restore failed, will need to reinstall"
 fi
 
-# Ensure agentteams-sync is functional
-# Use /bin/sh to invoke the script so it works even without +x permission
-# (MinIO object storage does not preserve Unix permission bits)
-printf '#!/bin/bash\nexec /bin/sh "%s/skills/file-sync/scripts/agentteams-sync.sh" "$@"\n' \
-    "${WORKSPACE}" > /usr/local/bin/agentteams-sync
-chmod +x /usr/local/bin/agentteams-sync
+# Worker isolation bundle (M7): whole-bundle replacement of the shim +
+# gitconfig under ${AGENTTEAMS_ISOLATION_DIR:-/root/.agentteams}, with a
+# pre-write integrity self-check — a foreign or incomplete bundle halts
+# startup with an explicit error instead of being silently repaired.
+if ! worker_isolation_setup "${WORKSPACE}"; then
+    log "ERROR: worker isolation bundle check failed; refusing to start (see [worker-isolation] errors above)"
+    exit 1
+fi
+# Point git at the bundle gitconfig and scrub the inherited git env.
+worker_isolation_env
+# Stable PATH entry for the shim (re-linked on every start; the shim
+# execs via /bin/sh so a lost exec bit on the workspace copy is harmless).
+ln -sfn "$(worker_isolation_dir)/bin/agentteams-sync" /usr/local/bin/agentteams-sync
 
 # Defensive symlink: /opt/agentteams/agent/skills -> actual skills directory
 mkdir -p /opt/agentteams/agent

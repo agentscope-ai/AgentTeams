@@ -81,6 +81,7 @@ from .sidecar import (
     SidecarNotConnectedError,
     SidecarProtocolError,
     SidecarServer,
+    capability_supported,
     decode_line,
     encode_frame,
     frame_to_inbound,
@@ -91,6 +92,7 @@ from .sidecar import (
     make_inbound,
     make_outbound,
     make_typing,
+    parse_capabilities,
 )
 from .state import (
     CoreLockedError,
@@ -136,6 +138,7 @@ __all__ = [
     "SessionStore",
     "SingleWriterLock",
     "StateLayout",
+    "capability_supported",
     "crypto_available",
     "decode_line",
     "detect_crypto_backend",
@@ -155,6 +158,7 @@ __all__ = [
     "make_typing",
     "mxc_to_http",
     "outbox_marker",
+    "parse_capabilities",
     "probe_olm",
     "read_drops",
     "record_drop",

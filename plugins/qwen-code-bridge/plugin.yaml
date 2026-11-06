@@ -1,0 +1,23 @@
+apiVersion: agentteams.agentteam/v1alpha1
+kind: AgentTeamPlugin
+metadata:
+  name: qwen-code-bridge
+  version: 0.3.0
+runtime: qwenpaw
+entry:
+  backend: plugin.py
+  frontend: frontend/index.js
+requires:
+  qwenpaw: ">=2.2.0 <2.3.0"
+  qwen-code-cli: "0.26.x"
+package:
+  include:
+    - plugin.json
+    - plugin.yaml
+    - plugin.py
+    - qwen_code_bridge
+    - frontend
+    - web-shell
+    - scripts
+    - README.md
+    - CHANGELOG.md

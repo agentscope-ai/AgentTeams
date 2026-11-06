@@ -127,6 +127,36 @@ func (c *APIClient) DoJSON(method, path string, body, result interface{}) error 
 	return nil
 }
 
+// DoRaw sends a request, checks for 2xx, and returns the response body
+// verbatim. Use it for -o json output: re-emitting the server's bytes
+// keeps every field of the requested view, which a decode-into-struct
+// round-trip would silently drop or invent.
+func (c *APIClient) DoRaw(method, path string) ([]byte, error) {
+	resp, err := c.Do(method, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		msg := strings.TrimSpace(string(respBody))
+		// Try to extract "error" field from JSON error response
+		var errResp struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(respBody, &errResp) == nil && errResp.Error != "" {
+			msg = errResp.Error
+		}
+		return nil, &APIError{StatusCode: resp.StatusCode, Message: msg}
+	}
+	return respBody, nil
+}
+
 // DoMultipart uploads a file via multipart/form-data.
 // fieldName is the form field name for the file (e.g. "file").
 // Extra string key-value pairs are sent as form fields.

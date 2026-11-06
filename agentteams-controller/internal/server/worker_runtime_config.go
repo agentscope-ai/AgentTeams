@@ -75,6 +75,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
@@ -137,6 +138,25 @@ type RuntimeConfigHandler struct {
 	matrix loopNotifier
 	// workerBaseURL resolves a worker name to its qwenpaw app base URL.
 	workerBaseURL func(name string, env map[string]string) string
+	// workerLocks serialises the read-check-merge-write flow per worker
+	// (optimistic concurrency, MX-7): name -> *sync.Mutex.
+	workerLocks sync.Map
+}
+
+// workerLock returns (creating on demand) the per-worker mutex that makes
+// the ETag check and the upstream PUT one atomic step per worker.
+func (h *RuntimeConfigHandler) workerLock(name string) *sync.Mutex {
+	l, _ := h.workerLocks.LoadOrStore(name, &sync.Mutex{})
+	return l.(*sync.Mutex)
+}
+
+// ifMatchMatches reports whether the If-Match header matches the current
+// content ETag. Quotes around the token are optional; "*" is deliberately
+// NOT accepted — this endpoint never blind-writes.
+func ifMatchMatches(ifMatch, etag string) bool {
+	token := strings.TrimSpace(ifMatch)
+	token = strings.Trim(token, `"`)
+	return token != "" && token == etag
 }
 
 // NewRuntimeConfigHandler creates the handler with default embedded-mode
@@ -363,15 +383,47 @@ func (h *RuntimeConfigHandler) Handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		loopSubmitted = submittedMap["loop"] != nil
-		merged, current, err := h.mergeRuntimeConfig(r, &worker, body)
+
+		// Optimistic concurrency (MX-7): the client must present the ETag
+		// of the config it read (If-Match); a stale or missing ETag is a
+		// conflict, never a blind overwrite (mirrors commitProjectMeta).
+		ifMatch := r.Header.Get("If-Match")
+		if strings.TrimSpace(ifMatch) == "" {
+			httputil.WriteError(w, http.StatusPreconditionRequired,
+				"If-Match is required: read the current config via GET and pass its ETag; this endpoint never blind-writes")
+			return
+		}
+
+		// Serialise read-check-merge-write per worker (the lock is held
+		// through the upstream PUT below) so two concurrent writers
+		// cannot both pass the ETag check against the same version.
+		lock := h.workerLock(name)
+		lock.Lock()
+		defer lock.Unlock()
+
+		merged, current, curETag, conflict, err := h.mergeRuntimeConfig(r, &worker, body, ifMatch)
 		if err != nil {
 			httputil.WriteError(w, http.StatusBadGateway, err.Error())
 			return
 		}
+		if conflict {
+			// The config changed since the client's read: return 409 with
+			// the current version (etag + current body) so the client can
+			// re-read, merge and retry.
+			httputil.WriteJSON(w, http.StatusConflict, map[string]interface{}{
+				"code":    "conflict",
+				"message": "runtime-config changed since the read; re-read, merge and retry",
+				"etag":    curETag,
+				"current": json.RawMessage(current),
+			})
+			return
+		}
 		if merged == nil {
 			// Idempotent no-op: the update changes nothing. Return the
-			// current config as 200 without touching the worker.
+			// current config as 200 (with its ETag) without touching the
+			// worker.
 			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("ETag", curETag)
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(current)
 			return
@@ -409,6 +461,16 @@ func (h *RuntimeConfigHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		}
 		if success && sub == "runtime-config" && r.Method == http.MethodPut && loopSubmitted {
 			h.notifyLoopChange(r.Context(), name, "loop 配置（running-config）", "修改", teamObj)
+		}
+		if success && sub == "runtime-config" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+			// Optimistic-concurrency token (MX-7): the same content hash
+			// the PUT flow checks If-Match against.
+			w.Header().Set("ETag", contentETag(respBody))
+		}
+		if success && sub == "runtime-config" && r.Method == http.MethodPut {
+			// The runtime normalizes the submitted config; its returned
+			// representation is the version a subsequent GET will read.
+			w.Header().Set("ETag", contentETag(respBody))
 		}
 		if ct := resp.Header.Get("Content-Type"); ct != "" {
 			w.Header().Set("Content-Type", ct)
@@ -456,35 +518,53 @@ func (h *RuntimeConfigHandler) doUpstream(r *http.Request, target, method string
 	return resp, respBody, nil
 }
 
-// mergeRuntimeConfig performs the read-merge-write flow for a PUT
-// runtime-config: fetch the current running-config, merge the submitted
-// top-level keys onto it, and — only when something changed — write the
-// merged whole object back (the upstream PUT replaces the entire running
-// section; a bare forward of a partial body would clobber unrelated
-// settings). It returns the body to forward; a nil return with a nil error
-// is the idempotent no-op (caller returns the current config as 200).
-func (h *RuntimeConfigHandler) mergeRuntimeConfig(r *http.Request, worker *v1beta1.Worker, submitted []byte) ([]byte, []byte, error) {
+// mergeRuntimeConfig performs the read-check-merge flow for a PUT
+// runtime-config: fetch the current running-config, verify the caller's
+// If-Match against its content ETag (optimistic concurrency, MX-7), and
+// merge the submitted top-level keys onto it (the upstream PUT replaces
+// the entire running section; a bare forward of a partial body would
+// clobber unrelated settings).
+//
+// The caller MUST hold h.workerLock(worker.Name) for the whole
+// read-check-merge-PUT span, so the version checked here is still current
+// when the merged body is written.
+//
+// Returns (merged, current, currentETag, conflict, err): a non-nil
+// merged is the body to forward; merged == nil with conflict == false is
+// the idempotent no-op (caller returns current as 200 + ETag); conflict
+// is true when If-Match did not match (caller returns 409 with current
+// and currentETag so the client can re-read, merge and retry).
+func (h *RuntimeConfigHandler) mergeRuntimeConfig(r *http.Request, worker *v1beta1.Worker, submitted []byte, ifMatch string) ([]byte, []byte, string, bool, error) {
 	baseURL := h.workerBaseURL(worker.Name, worker.Spec.Env) + "/api/" + upstreamSub("runtime-config")
 
 	// 1. Read the current running-config.
 	curResp, curBody, err := h.doUpstream(r, baseURL, http.MethodGet, nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read current runtime-config: unreachable")
+		return nil, nil, "", false, fmt.Errorf("read current runtime-config: unreachable")
 	}
 	defer curResp.Body.Close()
 	if curResp.StatusCode != http.StatusOK {
-		return nil, nil, fmt.Errorf("read current runtime-config: upstream status %d", curResp.StatusCode)
+		return nil, nil, "", false, fmt.Errorf("read current runtime-config: upstream status %d", curResp.StatusCode)
 	}
 	var current map[string]interface{}
 	if err := json.Unmarshal(curBody, &current); err != nil || current == nil {
-		return nil, nil, fmt.Errorf("read current runtime-config: response is not a JSON object")
+		return nil, nil, "", false, fmt.Errorf("read current runtime-config: response is not a JSON object")
+	}
+	curETag := contentETag(curBody)
+
+	// 2. Optimistic concurrency: the ETag the client read must match the
+	//    version we just fetched. A mismatch is a conflict — never a
+	//    blind overwrite (the client re-reads, merges and retries).
+	if !ifMatchMatches(ifMatch, curETag) {
+		curBytes, _ := json.Marshal(current)
+		return nil, curBytes, curETag, true, nil
 	}
 
-	// 2. Merge: submitted top-level keys replace their current values;
+	// 3. Merge: submitted top-level keys replace their current values;
 	//    absent keys are preserved.
 	var submittedMap map[string]interface{}
 	if err := json.Unmarshal(submitted, &submittedMap); err != nil {
-		return nil, nil, fmt.Errorf("parse submitted update: not a JSON object")
+		return nil, nil, "", false, fmt.Errorf("parse submitted update: not a JSON object")
 	}
 	merged := make(map[string]interface{}, len(current)+len(submittedMap))
 	for k, v := range current {
@@ -497,9 +577,9 @@ func (h *RuntimeConfigHandler) mergeRuntimeConfig(r *http.Request, worker *v1bet
 	curBytes, _ := json.Marshal(current)
 	mergedBytes, _ := json.Marshal(merged)
 	if bytes.Equal(curBytes, mergedBytes) {
-		return nil, curBytes, nil // no-op: nothing changed
+		return nil, curBytes, curETag, false, nil // no-op: nothing changed
 	}
-	return mergedBytes, curBytes, nil
+	return mergedBytes, curBytes, curETag, false, nil
 }
 
 // notifyLoopChange alerts the worker's team room about a loop change (a

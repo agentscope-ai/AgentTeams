@@ -4,13 +4,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 import os
 import time
+from pathlib import Path
 from typing import Any, Callable
 import urllib.error
 import urllib.parse
 import urllib.request
+
+from mcp.common.paths import _optional_workspace_dir
+from mcp.common import refs
+
+_filesync = refs.proxy("_filesync")
 
 
 SELF_TRIGGER_MESSAGE_TYPES = {"PROJECT_REQUESTED"}
@@ -394,7 +401,25 @@ def message(arguments: dict[str, Any], deps: MessageToolDeps) -> dict[str, Any]:
     if blocked:
         return {"ok": False, "tool": "message", "error": blocked}
 
-    content = deps.matrix_content(message_text, mentions)
+    # TH-11: report bodies are capped at 5 lines in the room. A longer
+    # body is truncated to the first 5 lines plus a pointer to the full
+    # text under shared/reports/ (written only when the message is
+    # actually sent, so a dryRun already shows the exact pointer).
+    # Mentions were computed above on the full text, so the @target
+    # survives the truncation via m.mentions. Self-trigger types
+    # (PROJECT_REQUESTED) keep their exact body contract.
+    send_text = message_text
+    report_path: Path | None = None
+    if _message_type(arguments) not in SELF_TRIGGER_MESSAGE_TYPES:
+        lines = message_text.splitlines()
+        if len(lines) > 5:
+            workspace_dir = _optional_workspace_dir(arguments)
+            if workspace_dir is not None:
+                digest = hashlib.sha256(f"{target_id}\0{message_text}".encode("utf-8")).hexdigest()[:16]
+                report_relpath = f"shared/reports/{digest}/report.md"
+                report_path = workspace_dir / report_relpath
+                send_text = "\n".join(lines[:5]) + f"\n…中间 {len(lines) - 5} 行见 {report_relpath}"
+    content = deps.matrix_content(send_text, mentions)
     trigger = _self_trigger_intent(arguments, route, channel=channel, target_id=target_id)
     if _message_type(arguments) in SELF_TRIGGER_MESSAGE_TYPES and trigger is None:
         return {
@@ -442,6 +467,12 @@ def message(arguments: dict[str, Any], deps: MessageToolDeps) -> dict[str, Any]:
     }
     if trigger is not None:
         base["trigger"] = trigger
+    if report_path is not None:
+        base["fullReportPath"] = str(report_path.relative_to(workspace_dir).as_posix())
+        base["warning"] = (
+            "report body exceeds 5 lines; the room message carries the "
+            "first 5 lines plus a pointer to the full report"
+        )
     if arguments.get("dryRun"):
         base["dryRun"] = True
         return base
@@ -450,6 +481,19 @@ def message(arguments: dict[str, Any], deps: MessageToolDeps) -> dict[str, Any]:
     token = os.getenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "")
     if not homeserver or not token:
         return {"ok": False, "tool": "message", "error": "AGENTTEAMS_MATRIX_URL and AGENTTEAMS_WORKER_MATRIX_TOKEN are required"}
+
+    if report_path is not None:
+        try:
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_body = message_text if message_text.endswith("\n") else message_text + "\n"
+            report_path.write_text(report_body, encoding="utf-8")
+        except OSError as exc:
+            return {"ok": False, "tool": "message", "error": f"full report could not be written: {exc}"}
+        for sync_action in ("push", "stat"):
+            sync_args = dict(arguments)
+            sync_args.update(action=sync_action, path=base["fullReportPath"])
+            if not _filesync(sync_args).get("ok"):
+                return {"ok": False, "tool": "message", "error": "full report could not be published to shared storage"}
 
     room_id = urllib.parse.quote(target_id, safe="")
     txn_id = f"teamharness-{os.getpid()}-{int(time.time() * 1000)}"
@@ -488,5 +532,5 @@ def message(arguments: dict[str, Any], deps: MessageToolDeps) -> dict[str, Any]:
         )
     except Exception:
         base["sessionRecorded"] = False
-        base["warning"] = "message sent, but local session record failed"
+        base.setdefault("warning", "message sent, but local session record failed")
     return base

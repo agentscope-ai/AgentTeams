@@ -116,6 +116,8 @@ These follow the person, not the Manager:
 - Isolation: no agent — including the Manager — is granted storage access to `humans/*`; scope is enforced by the API, and non-member teams get 404.
 - Deletions go to a **remote recycle bin** (restorable, default retention 30 days); sync is switched on per device and scoped to the folders the user selects.
 
+Default access follows membership: teams in the person's default set (`accessibleTeams` ∪ the teams that list them in `humanMembers`) have readwrite on `files/**`, and `workspaceAccess` grants extend access to the teams they name. Restrictions are a **global deny**, not a per-team narrowing: a restriction from any of the caller's teams applies to the path across all of the caller's teams (deny-wins), so membership in another team or a grant in another team cannot override it. Each write is audited to the team that produced the effective access — the restriction's team when a restriction lowered the mode. `memory/`, `digest/`, and the control prefixes `.control/`, `.sync/`, `.trash/` can never be granted.
+
 ## FAQ
 
 **Do I choose a deployment mode for one person?**

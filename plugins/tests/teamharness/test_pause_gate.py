@@ -324,9 +324,16 @@ class FakeProjectStorage:
         return {"ok": True}
 
     def commit_task(
-        self, task_id: str, meta: dict[str, Any], etag: str, team: str = ""
+        self,
+        task_id: str,
+        meta: dict[str, Any],
+        etag: str | None,
+        team: str = "",
+        if_none_match: bool = False,
     ) -> dict[str, Any]:
-        """The fake ``_commit_task_meta``: a strict CAS on the task object."""
+        """The fake ``_commit_task_meta``: a strict CAS on the task object
+        (create-if-absent when ``if_none_match``: an existing object is a
+        conflict, an absent one is created)."""
         path = f"shared/tasks/{task_id}/meta.json"
         self.commit_calls += 1
         self.commits.append((task_id, dict(meta)))
@@ -900,7 +907,13 @@ def test_pause_between_pull_and_submit_survives_write_back(
 
     assert submit["ok"] is True
     assert submit["task"]["status"] == "submitted"
-    assert storage.commit_calls == 1
+    # Two commits: the create-if-absent task meta (its first write-back —
+    # the P1 shape, conditional since #1498 instead of an unguarded push)
+    # and the project meta (the #1402 conditional commit under the pause
+    # merge).
+    assert storage.commit_calls == 2
+    task_meta = storage.remote["shared/tasks/pg-9-inflight/meta.json"]
+    assert task_meta["status"] == "submitted"
     final = storage.remote["shared/projects/pg-9/meta.json"]
     assert final["status"] == "paused"
     loop = final["loop"]
@@ -1039,7 +1052,10 @@ def test_submit_without_pause_keeps_worker_fields(
     assert loop["tasks"][0]["status"] == "submitted"
     assert loop["tasks"][0]["assigned_to"] == WORKER
     assert final["title"] == "Pause gate pg-12"
-    assert storage.commit_calls == 1
+    # Two commits: the create-if-absent task meta (its first write-back)
+    # and the project meta.
+    assert storage.commit_calls == 2
+    assert storage.remote["shared/tasks/pg-12-inflight/meta.json"]["status"] == "submitted"
     # The verify step re-read the live ETag after the commit (the removed
     # early-return pin): at least the commit's If-Match read plus the
     # verify re-read, never just the commit's.
@@ -1173,10 +1189,12 @@ def test_pause_between_body_read_and_etag_is_caught_by_versioned_read(
 
     assert submit["ok"] is True
     assert submit["task"]["status"] == "submitted"
-    # One commit: the pause was merged into the FIRST conditional commit
-    # (via the re-read), not lost to a stale body committed under a
-    # fresh ETag — and not papered over by a 409 retry.
-    assert storage.commit_calls == 1
+    # Two commits: the create-if-absent task meta (its first write-back)
+    # plus ONE project commit — the pause was merged into the first
+    # project conditional commit (via the re-read), not lost to a stale
+    # body committed under a fresh ETag, and not papered over by a 409
+    # retry.
+    assert storage.commit_calls == 2
     final = storage.remote["shared/projects/pg-15/meta.json"]
     assert final["status"] == "paused"
     loop = final["loop"]

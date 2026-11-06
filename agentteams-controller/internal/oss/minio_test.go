@@ -3,16 +3,48 @@ package oss
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/minio/minio-go/v7"
 )
+
+func TestGetObjectWithETag_UsesSameGETResponse(t *testing.T) {
+	const payload = `{"attention":[]}`
+	gets, heads := 0, 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := r.URL.Query()["location"]; ok {
+			fmt.Fprint(w, `<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/">us-east-1</LocationConstraint>`)
+			return
+		}
+		if r.Method == http.MethodHead {
+			heads++
+		}
+		if r.Method == http.MethodGet {
+			gets++
+		}
+		w.Header().Set("ETag", `"opaque-multipart-version-1"`)
+		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+		w.Header().Set("Last-Modified", "Fri, 06 Nov 2026 16:00:00 GMT")
+		fmt.Fprint(w, payload)
+	}))
+	defer srv.Close()
+	c := NewMinIOClient(Config{Endpoint: srv.URL, AccessKey: "owned", SecretKey: "owned", Bucket: "test"})
+	data, etag, err := c.GetObjectWithETag(t.Context(), "tasks/t1/meta.json")
+	if err != nil || string(data) != payload || etag != "opaque-multipart-version-1" {
+		t.Fatalf("read = %q, %q, %v", data, etag, err)
+	}
+	if gets != 1 || heads != 0 {
+		t.Fatalf("GET=%d HEAD=%d; bytes and version must come from one response", gets, heads)
+	}
+}
 
 func TestBuildMCHostEnv_FullURL(t *testing.T) {
 	got, err := buildMCHostEnv("agentteams", "https://oss-cn-hangzhou.aliyuncs.com", Credentials{

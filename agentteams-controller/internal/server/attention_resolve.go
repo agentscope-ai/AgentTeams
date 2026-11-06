@@ -193,7 +193,7 @@ func (h *ProjectHandler) ResolveAttention(w http.ResponseWriter, r *http.Request
 		return
 	}
 	taskKey := taskMetaKeys(taskID, match.team)[0]
-	data, err := h.oss.GetObject(r.Context(), taskKey)
+	data, etag, err := h.readAttentionTaskVersion(r.Context(), taskKey)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			writeResolveError(w, http.StatusNotFound, "not_found", "task not found")
@@ -202,7 +202,7 @@ func (h *ProjectHandler) ResolveAttention(w http.ResponseWriter, r *http.Request
 		writeK8sError(w, "resolve attention: read task meta", err)
 		return
 	}
-	taskData, etag, err := parseTaskMetaVersioned(data)
+	taskData, _, err := parseTaskMetaVersioned(data)
 	if err != nil {
 		writeResolveError(w, http.StatusNotFound, "not_found", "task not found")
 		return
@@ -238,7 +238,7 @@ func (h *ProjectHandler) ResolveAttention(w http.ResponseWriter, r *http.Request
 	// the attention inside the window).
 	for attempt := 0; attempt < attentionResolveMaxAttempts; attempt++ {
 		if attempt > 0 {
-			data, err = h.oss.GetObject(r.Context(), taskKey)
+			data, etag, err = h.readAttentionTaskVersion(r.Context(), taskKey)
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
 					writeResolveError(w, http.StatusNotFound, "not_found", "task not found")
@@ -247,7 +247,7 @@ func (h *ProjectHandler) ResolveAttention(w http.ResponseWriter, r *http.Request
 				writeK8sError(w, "resolve attention: re-read task meta", err)
 				return
 			}
-			taskData, etag, err = parseTaskMetaVersioned(data)
+			taskData, _, err = parseTaskMetaVersioned(data)
 			if err != nil {
 				writeResolveError(w, http.StatusNotFound, "not_found", "task not found")
 				return
@@ -509,9 +509,22 @@ func (h *ProjectHandler) resolveAttentionNotify(ctx context.Context, roomID, ans
 	}
 }
 
-// parseTaskMetaVersioned decodes one task meta read and returns it with the
-// ETag of the exact bytes read (contentETag — the version the conditional
-// write binds to).
+func (h *ProjectHandler) readAttentionTaskVersion(ctx context.Context, key string) ([]byte, string, error) {
+	if reader, ok := h.oss.(interface {
+		GetObjectWithETag(context.Context, string) ([]byte, string, error)
+	}); ok {
+		return reader.GetObjectWithETag(ctx, key)
+	}
+	// In-memory/test stores retain their content-MD5 version contract.
+	data, err := h.oss.GetObject(ctx, key)
+	if err != nil {
+		return nil, "", err
+	}
+	return data, contentETag(data), nil
+}
+
+// parseTaskMetaVersioned retains the content-MD5 contract of test stores.
+// Production S3 reads use readAttentionTaskVersion's provider ETag.
 func parseTaskMetaVersioned(data []byte) (map[string]any, string, error) {
 	var raw map[string]any
 	if err := json.Unmarshal(data, &raw); err != nil {

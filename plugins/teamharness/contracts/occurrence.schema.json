@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://millforge.dev/schemas/occurrence.schema.json",
+  "title": "Loop occurrence",
+  "type": "object",
+  "required": ["schema", "occurrence_id", "loop_id", "window_start", "window_end", "scheduled_for", "fired_at"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": 1},
+    "occurrence_id": {"type": "string", "description": "unique; dedupe key = (loop_id, window_start)"},
+    "loop_id": {"type": "string"},
+    "task_id": {"type": "string"},
+    "window_start": {"type": "string", "format": "date-time"},
+    "window_end": {"type": "string", "format": "date-time"},
+    "scheduled_for": {"type": "string", "format": "date-time"},
+    "fired_at": {"type": "string", "format": "date-time"},
+    "anchor": {"type": "string", "format": "date-time", "description": "committed anchor; next window = anchor + interval, never now + interval"},
+    "attempt": {"type": "integer", "minimum": 1},
+    "misfire": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "late_by_seconds": {"type": "integer", "minimum": 0},
+        "policy": {"const": "once"},
+        "grace_seconds": {"type": "integer", "default": 600}
+      }
+    },
+    "outcome": {"enum": ["pending", "delivered", "missed", "skipped"]}
+  }
+}

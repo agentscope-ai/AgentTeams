@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://millforge.dev/schemas/looprunner-manifest.schema.json",
+  "title": "Loop Runner manifest",
+  "type": "object",
+  "required": ["schema", "id", "version", "protocol_version", "kind", "entrypoint", "capabilities", "requires"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": 1},
+    "id": {"const": "looprunner"},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$"},
+    "protocol_version": {"type": "string", "pattern": "^[0-9]+$"},
+    "kind": {"const": "runner"},
+    "entrypoint": {
+      "type": "object",
+      "required": ["command"],
+      "additionalProperties": false,
+      "properties": {
+        "command": {"type": "string"},
+        "args": {"type": "array", "items": {"type": "string"}, "default": []}
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"repository": {"type": "string"}, "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+    },
+    "capabilities": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": {"enum": ["occurrence", "iteration_lease", "kick", "wait_for_change", "misfire_once"]}
+    },
+    "requires": {
+      "type": "object",
+      "required": ["agentteams", "contracts"],
+      "additionalProperties": false,
+      "properties": {
+        "agentteams": {"type": "string"},
+        "contracts": {"type": "string"},
+        "tool_schema": {"type": "string"},
+        "millforge": {"type": "string"}
+      }
+    },
+    "endpoints": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "health": {"type": "string"},
+        "handshake": {"type": "string"}
+      }
+    },
+    "compat": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"min_controller": {"type": "string"}, "max_controller": {"type": "string"}}
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"commit": {"type": "string"}, "digest": {"type": "string"}}
+    }
+  }
+}

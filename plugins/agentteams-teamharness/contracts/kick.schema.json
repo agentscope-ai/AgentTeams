@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://millforge.dev/schemas/kick.schema.json",
+  "title": "Loop kick",
+  "type": "object",
+  "required": ["schema", "kick_id", "loop_id", "iteration_id", "target", "origin", "idempotency_key"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": 1},
+    "kick_id": {"type": "string"},
+    "loop_id": {"type": "string"},
+    "iteration_id": {"type": "string", "description": "idempotency key = iteration_id"},
+    "target": {
+      "type": "object", "required": ["kind", "ref"], "additionalProperties": false,
+      "properties": {
+        "kind": {"enum": ["task", "room", "session"]},
+        "ref": {"type": "string"}
+      }
+    },
+    "origin": {"type": "string", "description": "signal origin (see signal-mapping.json)"},
+    "idempotency_key": {"type": "string"},
+    "deadline": {"type": "string", "format": "date-time"},
+    "attempt": {"type": "integer", "minimum": 1},
+    "delivery_state": {"enum": ["pending", "delivered", "unknown", "failed"]},
+    "note": {"type": "string", "description": "unknown is terminal: never replayed"}
+  }
+}

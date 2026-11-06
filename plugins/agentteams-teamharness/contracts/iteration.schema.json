@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://millforge.dev/schemas/iteration.schema.json",
+  "title": "Loop iteration",
+  "type": "object",
+  "required": ["schema", "iteration_id", "loop_id", "occurrence_id", "lease", "started_at", "budget"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": 1},
+    "iteration_id": {"type": "string"},
+    "loop_id": {"type": "string"},
+    "occurrence_id": {"type": "string"},
+    "lease": {
+      "type": "object", "required": ["id", "holder", "expires_at"], "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string"},
+        "holder": {"type": "string", "description": "runner instance id; single-writer proof"},
+        "expires_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "started_at": {"type": "string", "format": "date-time"},
+    "finished_at": {"type": ["string", "null"], "format": "date-time"},
+    "outcome": {"enum": ["running", "succeeded", "failed", "timed_out", "abandoned", "wait_human"]},
+    "budget": {
+      "type": "object", "required": ["used", "max"], "additionalProperties": false,
+      "properties": {
+        "used": {"type": "integer", "minimum": 0},
+        "max": {"type": ["integer", "null"], "minimum": 0},
+        "human_touch_used": {"type": "integer", "minimum": 0},
+        "human_touch_max": {"type": ["integer", "null"], "minimum": 0}
+      }
+    },
+    "task_ref": {"type": "string"},
+    "decision_ref": {"type": "string", "description": "terminal decision record (10-LOOP 五要件)"},
+    "reason": {"type": "string"}
+  }
+}

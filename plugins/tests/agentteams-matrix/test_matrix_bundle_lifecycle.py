@@ -64,7 +64,7 @@ def _import_installed_channel(plugin_dir: Path, env: dict) -> None:
     anything else — including a missing payload module — fails the test.
     """
     imported = subprocess.run(
-        [sys.executable, "-c", "import agentteams_matrix.channel"],
+        [sys.executable, "-c", "import agentteams_matrix.channel, os; assert 'AGENTTEAMS_TEST_CALLER_SECRET' not in os.environ, 'caller secret loaded by isolated plugin'"],
         cwd=str(plugin_dir),
         env={**env, "PYTHONPATH": str(plugin_dir)},
         text=True,
@@ -132,7 +132,11 @@ def _assert_marker_matches_tree(marker_path: Path, plugin_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 # L3 — isolated install / load / uninstall, one test per adapter
 # ---------------------------------------------------------------------------
-def test_l3_qwenpaw_install_load_uninstall(tmp_path: Path) -> None:
+def test_l3_qwenpaw_install_load_uninstall(tmp_path: Path, monkeypatch) -> None:
+    caller_secret = tmp_path / "caller-secret"
+    caller_secret.mkdir()
+    (caller_secret / "envs.json").write_text('{"AGENTTEAMS_TEST_CALLER_SECRET":"fixture-only"}')
+    monkeypatch.setenv("QWENPAW_SECRET_DIR", str(caller_secret))
     home = tmp_path / "home"
     home.mkdir()
     bin_dir = tmp_path / "bin"

@@ -967,6 +967,12 @@ func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if req.WorkspaceAccess != nil {
+			if err := validateHumanWorkspaceAccess(req.WorkspaceAccess); err != nil {
+				httputil.WriteError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
 
 		if req.DisplayName != nil {
 			human.Spec.DisplayName = *req.DisplayName
@@ -992,6 +998,13 @@ func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
 			// Full replace (merge-patch): a present table — including an
 			// empty object — replaces the whole grant table.
 			human.Spec.ModelAccess = req.ModelAccess
+		}
+		if req.WorkspaceAccess != nil {
+			// Merge-patch semantics like Capabilities: a present object
+			// replaces the whole object (an empty object clears both
+			// lists); absent or null leaves the spec unchanged.
+			// Validation above already rejected invalid rules.
+			human.Spec.WorkspaceAccess = req.WorkspaceAccess
 		}
 		if req.Note != nil {
 			human.Spec.Note = *req.Note
@@ -1807,18 +1820,18 @@ func teamToResponse(t *v1beta1.Team) TeamResponse {
 
 func managerToResponse(m *v1beta1.Manager) ManagerResponse {
 	resp := ManagerResponse{
-		Name:         m.Name,
-		Phase:        m.Status.Phase,
-		State:        m.Spec.DesiredState(),
-		Model:        m.Spec.Model,
+		Name:          m.Name,
+		Phase:         m.Status.Phase,
+		State:         m.Spec.DesiredState(),
+		Model:         m.Spec.Model,
 		ModelProvider: m.Spec.ModelProvider,
-		Runtime:      m.Spec.Runtime,
-		Image:        m.Spec.Image,
-		MatrixUserID: m.Status.MatrixUserID,
-		RoomID:       m.Status.RoomID,
-		Version:      m.Status.Version,
-		Message:      m.Status.Message,
-		WelcomeSent:  m.Status.WelcomeSent,
+		Runtime:       m.Spec.Runtime,
+		Image:         m.Spec.Image,
+		MatrixUserID:  m.Status.MatrixUserID,
+		RoomID:        m.Status.RoomID,
+		Version:       m.Status.Version,
+		Message:       m.Status.Message,
+		WelcomeSent:   m.Status.WelcomeSent,
 	}
 	resp.RuntimeDeprecated = strings.EqualFold(m.Spec.Runtime, backend.RuntimeCopaw)
 	if resp.Phase == "" {

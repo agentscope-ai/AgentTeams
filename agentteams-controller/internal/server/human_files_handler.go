@@ -207,21 +207,58 @@ type humanFileAccess struct {
 	isAdmin   bool
 	isManager bool
 	isSelf    bool
+	// effectiveMode is the caller's resolved mode on the authorized path
+	// (none/read/readwrite; readwrite for admin/manager/self). Write
+	// operations (put/delete/restore) require readwrite.
+	effectiveMode string
+	// team is the caller's team that produced the winning effectiveMode
+	// ("" for admin/manager/self), recorded in the audit Detail for write
+	// attribution.
+	team         string
+	callerTeams  []string
+	defaultTeams map[string]struct{}
+}
+
+// canReadPath reuses the request's resolved membership for each listed
+// object, so a readable parent cannot disclose a restricted descendant.
+func (a *humanFileAccess) canReadPath(rel string) bool {
+	if a.isAdmin || a.isManager || a.isSelf {
+		return true
+	}
+	if _, err := validateHumanFilePath(rel); err != nil {
+		return false
+	}
+	mode, _ := humanWorkspaceEffectiveMode(&a.human.Spec, a.callerTeams, a.defaultTeams, rel)
+	return mode != humanWorkspaceModeNone
 }
 
 // authorizeHumanFile resolves access to the file area of the Human CR
-// named name. Access matrix (P1):
+// named name. Access matrix (P1 + P2 workspace access):
 //
 //   - RoleAdmin: full access (read, write, trash restore, purge, quota)
 //   - RoleManager: read, write, trash restore (any human's area)
 //   - the human themself (RoleHuman whose Username equals the area's
 //     EffectiveUsername): read and write their own area
-//   - everyone else (other humans, team leaders, workers): 404 — the
-//     same response as a non-existent Human, to avoid existence probing
+//   - team leaders / workers / other humans: per-team rules — default
+//     access follows membership: a caller team in the human's default set
+//     (spec.accessibleTeams ∪ teams that list the human in
+//     spec.humanMembers) has readwrite on files/**;
+//     spec.workspaceAccess grants raise the mode for the teams they name,
+//     and restrictions are a global deny: a restriction from any of the
+//     caller's teams applies across all of the caller's teams (deny-wins,
+//     fail closed), so a second, unrestricted team cannot override it. A
+//     caller whose teams grant no access at all receives 404 — the same
+//     response as a non-existent Human, to avoid existence probing.
 //
-// adminOnly additionally requires RoleAdmin (purge), denying with 403
-// when the caller has area access but lacks the role.
-func (h *humanFilesHandler) authorizeHumanFile(ctx context.Context, name string, adminOnly bool) (*humanFileAccess, int, string) {
+// path is the files-relative path being authorized ("" = the files root,
+// used by area-level endpoints). isWrite marks mutating operations; a
+// readwrite requirement is denied with 403 (area access, no write grant).
+// adminOnly additionally requires RoleAdmin (purge, quota set), denying
+// with 403 when the caller has area access but lacks the role.
+//
+// A Team CR's spec.admin field is deliberately NOT a source of access:
+// team administration never implies file-area rights.
+func (h *humanFilesHandler) authorizeHumanFile(ctx context.Context, name, path string, isWrite, adminOnly bool) (*humanFileAccess, int, string) {
 	var human v1beta1.Human
 	if err := h.client.Get(ctx, client.ObjectKey{Name: name, Namespace: h.namespace}, &human); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -238,13 +275,85 @@ func (h *humanFilesHandler) authorizeHumanFile(ctx context.Context, name string,
 	isAdmin := caller.Role == authpkg.RoleAdmin
 	isManager := caller.Role == authpkg.RoleManager
 	isSelf := caller.Role == authpkg.RoleHuman && caller.Username == human.Spec.EffectiveUsername(human.Name)
-	if !isAdmin && !isManager && !isSelf {
+	if isAdmin || isManager || isSelf {
+		if adminOnly && !isAdmin {
+			return nil, http.StatusForbidden, "admin role required"
+		}
+		return &humanFileAccess{
+			human:         &human,
+			caller:        caller,
+			isAdmin:       isAdmin,
+			isManager:     isManager,
+			isSelf:        isSelf,
+			effectiveMode: humanWorkspaceModeReadWrite,
+		}, 0, ""
+	}
+	// Team-scoped caller (leader, worker, or a human addressed through a
+	// team identity). With no caller teams there is nothing to match.
+	teams := callerTeamSet(caller)
+	if len(teams) == 0 {
 		return nil, http.StatusNotFound, "human not found"
 	}
-	if adminOnly && !isAdmin {
+	defaultTeams, err := h.defaultTeams(ctx, &human)
+	if err != nil {
+		return nil, http.StatusInternalServerError, "team lookup failed"
+	}
+	mode, team := humanWorkspaceEffectiveMode(&human.Spec, teams, defaultTeams, path)
+	if mode == humanWorkspaceModeNone {
+		return nil, http.StatusNotFound, "human not found"
+	}
+	if adminOnly {
 		return nil, http.StatusForbidden, "admin role required"
 	}
-	return &humanFileAccess{human: &human, caller: caller, isAdmin: isAdmin, isManager: isManager, isSelf: isSelf}, 0, ""
+	if isWrite && mode != humanWorkspaceModeReadWrite {
+		return nil, http.StatusForbidden, "write access required"
+	}
+	return &humanFileAccess{human: &human, caller: caller, effectiveMode: mode, team: team, callerTeams: teams, defaultTeams: defaultTeams}, 0, ""
+}
+
+// callerTeamSet returns the teams the caller identity carries. Team
+// leaders and workers are bound to their single Team; a human addressed
+// through a team identity carries the Teams set from its Human CR.
+// Roles with no team scoping return nil.
+func callerTeamSet(caller *authpkg.CallerIdentity) []string {
+	switch caller.Role {
+	case authpkg.RoleTeamLeader, authpkg.RoleWorker:
+		if caller.Team != "" {
+			return []string{caller.Team}
+		}
+	case authpkg.RoleHuman:
+		if len(caller.Teams) > 0 {
+			return caller.Teams
+		}
+	}
+	return nil
+}
+
+// defaultTeams computes the human's default team set:
+// spec.accessibleTeams ∪ { team names that list the human in
+// spec.humanMembers }. Teams in this set give the team's leaders and
+// workers readwrite on files/** unless narrowed by a restriction.
+func (h *humanFilesHandler) defaultTeams(ctx context.Context, human *v1beta1.Human) (map[string]struct{}, error) {
+	sets := make(map[string]struct{})
+	for _, t := range human.Spec.AccessibleTeams {
+		if t != "" {
+			sets[t] = struct{}{}
+		}
+	}
+	var teams v1beta1.TeamList
+	if err := h.client.List(ctx, &teams, client.InNamespace(h.namespace)); err != nil {
+		return nil, err
+	}
+	for i := range teams.Items {
+		t := &teams.Items[i]
+		for _, m := range t.Spec.HumanMembers {
+			if m.Name == human.Name {
+				sets[t.Name] = struct{}{}
+				break
+			}
+		}
+	}
+	return sets, nil
 }
 
 // --- Wire-level shapes ----------------------------------------------------
@@ -323,9 +432,35 @@ func humanFileDetail(kv ...any) string {
 	return string(b)
 }
 
-func (h *humanFilesHandler) recordAudit(ctx context.Context, a *humanFileAccess, action string, detail string) {
+// recordAudit appends an audit event for an authorized operation. The
+// Detail always carries the write attribution (#1414 P2): onBehalfOf names
+// the human whose area was touched, and team names the caller's team when
+// the access came from a team identity (leader/worker/human team identity);
+// kv adds the operation-specific attributes as key/value pairs.
+func (h *humanFilesHandler) recordAudit(ctx context.Context, a *humanFileAccess, action string, kv ...any) {
 	if h.auditClient == nil {
 		return
+	}
+	m := make(map[string]any, len(kv)/2+2)
+	if len(kv) == 1 {
+		// Callers may pass an already-rendered detail object (the variadic
+		// humanFileDetail form used by the presign paths); merge it instead
+		// of treating it as an unpaired key.
+		if rendered, ok := kv[0].(string); ok && rendered != "" {
+			_ = json.Unmarshal([]byte(rendered), &m)
+		}
+	} else {
+		for i := 0; i+1 < len(kv); i += 2 {
+			m[fmt.Sprint(kv[i])] = kv[i+1]
+		}
+	}
+	m["onBehalfOf"] = a.human.Spec.EffectiveUsername(a.human.Name)
+	if a.team != "" {
+		m["team"] = a.team
+	}
+	var detail string
+	if b, err := json.Marshal(m); err == nil {
+		detail = string(b)
 	}
 	h.auditClient.Record(ctx, audit.Event{
 		Who:    a.caller.Username,
@@ -442,7 +577,7 @@ func (h *humanFilesHandler) getFile(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	rawPath := r.PathValue("path")
 
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, rawPath, false, false)
 	if a == nil {
 		if status == http.StatusNotFound && isPresignRequest(r) {
 			// A presign denial is an explicit 403, not a 404 (#1475 PR-4):
@@ -554,7 +689,7 @@ func (h *humanFilesHandler) presignFile(w http.ResponseWriter, r *http.Request, 
 	}
 	expiresAt := time.Now().UTC().Add(ttl)
 	h.recordAudit(ctx, a, "human_file_presign",
-		humanFileDetail("path", "files/"+rel, "ttl", ttl.String(), "expiresAt", expiresAt.Format(time.RFC3339)))
+		"path", "files/"+rel, "ttl", ttl.String(), "expiresAt", expiresAt.Format(time.RFC3339))
 	httputil.WriteJSON(w, http.StatusOK, humanFilePresignResponse{
 		URL:       downloadURL,
 		ETag:      meta.ETag,
@@ -586,6 +721,13 @@ func (h *humanFilesHandler) listDirectory(w http.ResponseWriter, r *http.Request
 	for _, info := range infos {
 		rel := info.Name
 		if rel == "" {
+			continue
+		}
+		fullPath := rel
+		if dir != "" {
+			fullPath = dir + "/" + rel
+		}
+		if !a.canReadPath(strings.TrimSuffix(fullPath, "/")) {
 			continue
 		}
 		base, isDir := rel, false
@@ -655,7 +797,7 @@ func (h *humanFilesHandler) listDirectory(w http.ResponseWriter, r *http.Request
 func (h *humanFilesHandler) listFiles(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, "", false, false)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -761,43 +903,56 @@ func (h *humanFilesHandler) listRecursiveFiles(w http.ResponseWriter, r *http.Re
 	}
 	ctx := r.Context()
 	prefix := humanFilesPrefix(username)
-	infos, nextKey, err := h.oss.ListObjectsRecursive(ctx, prefix, startAfter, limit)
-	if err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, "list files failed")
+	for {
+		infos, nextKey, err := h.oss.ListObjectsRecursive(ctx, prefix, startAfter, limit)
+		if err != nil {
+			httputil.WriteError(w, http.StatusInternalServerError, "list files failed")
+			return
+		}
+		entries := make([]humanFileRecursiveEntry, 0, len(infos))
+		for _, info := range infos {
+			rel := info.Name
+			if rel == "" || rel == ".keep" || strings.HasSuffix(rel, "/.keep") || strings.HasSuffix(rel, "/") {
+				continue // prefix marker, .keep marker object, directory marker
+			}
+			if isReservedHumanFileSegment(rel) {
+				continue // .trash / .sync / .control written out of band
+			}
+			if !a.canReadPath(rel) {
+				continue
+			}
+			if info.Size == 0 {
+				// A zero-byte entry is either a legitimate empty file or a
+				// deletion tombstone; only this shape needs the stat. A stat
+				// that fails for any other reason keeps the entry: the client
+				// reconciles against the manifest, and a false absence is how
+				// a listing would trigger a spurious local delete.
+				meta, merr := h.oss.StatMeta(ctx, prefix+rel)
+				if merr == nil && isHumanFileTombstone(meta) {
+					continue // soft-deleted: absent from the flat list
+				}
+			}
+			entries = append(entries, humanFileRecursiveEntry{
+				Path:      "files/" + rel,
+				Size:      info.Size,
+				ETag:      info.ETag,
+				UpdatedAt: info.UpdatedAt,
+			})
+		}
+		// Skip pages containing only hidden paths without exposing their keys.
+		if len(entries) == 0 && nextKey != "" {
+			startAfter = nextKey
+			continue
+		}
+		resp := humanFileRecursiveResponse{Entries: entries}
+		if nextKey != "" {
+			// Only a readable path may appear in the client-visible cursor.
+			cursor := prefix + strings.TrimPrefix(entries[len(entries)-1].Path, "files/")
+			resp.NextKey = &cursor
+		}
+		httputil.WriteJSON(w, http.StatusOK, resp)
 		return
 	}
-	entries := make([]humanFileRecursiveEntry, 0, len(infos))
-	for _, info := range infos {
-		rel := info.Name
-		if rel == "" || rel == ".keep" || strings.HasSuffix(rel, "/.keep") || strings.HasSuffix(rel, "/") {
-			continue // prefix marker, .keep marker object, directory marker
-		}
-		if isReservedHumanFileSegment(rel) {
-			continue // .trash / .sync / .control written out of band
-		}
-		if info.Size == 0 {
-			// A zero-byte entry is either a legitimate empty file or a
-			// deletion tombstone; only this shape needs the stat. A stat
-			// that fails for any other reason keeps the entry: the client
-			// reconciles against the manifest, and a false absence is how
-			// a listing would trigger a spurious local delete.
-			meta, merr := h.oss.StatMeta(ctx, prefix+rel)
-			if merr == nil && isHumanFileTombstone(meta) {
-				continue // soft-deleted: absent from the flat list
-			}
-		}
-		entries = append(entries, humanFileRecursiveEntry{
-			Path:      "files/" + rel,
-			Size:      info.Size,
-			ETag:      info.ETag,
-			UpdatedAt: info.UpdatedAt,
-		})
-	}
-	resp := humanFileRecursiveResponse{Entries: entries}
-	if nextKey != "" {
-		resp.NextKey = &nextKey
-	}
-	httputil.WriteJSON(w, http.StatusOK, resp)
 }
 
 // --- PUT files ---------------------------------------------------------------
@@ -812,7 +967,7 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, "cannot write a directory; name the file explicitly")
 		return
 	}
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, rawPath, true, false)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -885,7 +1040,7 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 			// unguarded (fail closed, #1426 P1).
 			writeHumanFileCodedError(w, status, "conditional_write_unsupported", msg)
 			h.recordAudit(ctx, a, "human_file_write_blocked",
-				humanFileDetail("path", "files/"+rel, "size", len(data), "reason", "conditional_write_unsupported"))
+				"path", "files/"+rel, "size", len(data), "reason", "conditional_write_unsupported")
 		default:
 			httputil.WriteError(w, status, msg)
 		}
@@ -979,7 +1134,7 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 	}
 	etag := snapMeta.ETag
 	h.recordAudit(ctx, a, "human_file_write",
-		humanFileDetail("path", "files/"+rel, "size", len(data), "etag", etag))
+		"path", "files/"+rel, "size", len(data), "etag", etag)
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"path": "files/" + rel,
 		"size": len(data),
@@ -999,7 +1154,7 @@ func (h *humanFilesHandler) deleteFile(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, "directory deletion is not supported; delete files individually")
 		return
 	}
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, rawPath, true, false)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -1133,7 +1288,7 @@ func (h *humanFilesHandler) deleteFile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	h.recordAudit(ctx, a, "human_file_delete",
-		humanFileDetail("path", "files/"+rel, "size", len(data), "trashId", trashID))
+		"path", "files/"+rel, "size", len(data), "trashId", trashID)
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"trashId": trashID})
 }
 
@@ -1143,7 +1298,7 @@ func (h *humanFilesHandler) deleteFile(w http.ResponseWriter, r *http.Request) {
 // first (the trash id is time-prefixed).
 func (h *humanFilesHandler) listTrash(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, "", false, false)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -1180,6 +1335,12 @@ func (h *humanFilesHandler) listTrash(w http.ResponseWriter, r *http.Request) {
 				e.Path, e.Size, e.DeletedAt, e.Caller, e.Role = m.Path, m.Size, m.DeletedAt, m.Caller, m.Role
 			}
 		}
+		if !a.isAdmin && !a.isManager && !a.isSelf {
+			rel, ok := strings.CutPrefix(e.Path, "files/")
+			if !ok || rel == "" || !a.canReadPath(rel) {
+				continue
+			}
+		}
 		out = append(out, e)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID > out[j].ID })
@@ -1197,7 +1358,7 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 		httputil.WriteError(w, http.StatusBadRequest, "invalid trash id")
 		return
 	}
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, "", false, false)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -1260,6 +1421,23 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "trash metadata path is invalid: "+err.Error())
 		return
+	}
+	// A restore rewrites the original path, so the caller must hold
+	// readwrite on that specific path. The area-level check above ran on
+	// the root; the path-specific mode is what a grant/restriction
+	// actually decided for this rel (a read grant may allow listing the
+	// trash but never putting bytes back).
+	if !a.isAdmin && !a.isManager && !a.isSelf {
+		defaultTeams, terr := h.defaultTeams(ctx, a.human)
+		if terr != nil {
+			httputil.WriteError(w, http.StatusInternalServerError, "team lookup failed")
+			return
+		}
+		mode, _ := humanWorkspaceEffectiveMode(&a.human.Spec, callerTeamSet(a.caller), defaultTeams, rel)
+		if mode != humanWorkspaceModeReadWrite {
+			httputil.WriteError(w, http.StatusForbidden, "write access required")
+			return
+		}
 	}
 
 	override := r.URL.Query().Get("overwrite") == "1"
@@ -1420,7 +1598,7 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	h.recordAudit(ctx, a, "human_trash_restore",
-		humanFileDetail("path", "files/"+rel, "size", len(content), "trashId", id, "overwrite", override))
+		"path", "files/"+rel, "size", len(content), "trashId", id, "overwrite", override)
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"path": "files/" + rel,
 		"size": len(content),
@@ -1437,7 +1615,7 @@ func (h *humanFilesHandler) purgeTrash(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid trash id")
 		return
 	}
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, true)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, "", false, true)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -1526,7 +1704,7 @@ func (h *humanFilesHandler) purgeTrash(w http.ResponseWriter, r *http.Request) {
 			"human", username, "trashId", id, "size", m.Size)
 	}
 	h.recordAudit(ctx, a, "human_trash_purge",
-		humanFileDetail("path", m.Path, "size", m.Size, "trashId", id))
+		"path", m.Path, "size", m.Size, "trashId", id)
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"purged": id})
 }
 
@@ -1616,7 +1794,7 @@ func (h *humanFilesHandler) usedBytes(ctx context.Context, username string) (int
 // and its configured quota (null = unlimited).
 func (h *humanFilesHandler) getQuota(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, "", false, false)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -1638,7 +1816,7 @@ func (h *humanFilesHandler) getQuota(w http.ResponseWriter, r *http.Request) {
 // (unlimited).
 func (h *humanFilesHandler) putQuota(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, true)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, "", false, true)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -1684,7 +1862,7 @@ func (h *humanFilesHandler) putQuota(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		h.recordAudit(ctx, a, "human_quota_set", humanFileDetail("quotaBytes", body.QuotaBytes))
+		h.recordAudit(ctx, a, "human_quota_set", "quotaBytes", body.QuotaBytes)
 		httputil.WriteJSON(w, http.StatusOK, map[string]any{"quotaBytes": body.QuotaBytes})
 		return
 	}
@@ -1907,7 +2085,7 @@ func (h *humanFilesHandler) presignUploadFile(w http.ResponseWriter, r *http.Req
 		httputil.WriteError(w, http.StatusBadRequest, "path must name a file")
 		return
 	}
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, rawPath, true, false)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -2000,7 +2178,7 @@ func (h *humanFilesHandler) presignUploadFile(w http.ResponseWriter, r *http.Req
 		return
 	}
 	h.recordAudit(ctx, a, "human_file_presign_issue",
-		humanFileDetail("path", "files/"+rel, "session", session, "maxBytes", h.presignMaxBytes, "ttlSeconds", int64(ttl.Seconds())))
+		"path", "files/"+rel, "session", session, "maxBytes", h.presignMaxBytes, "ttlSeconds", int64(ttl.Seconds()))
 	httputil.WriteJSON(w, http.StatusOK, humanPresignResponse{
 		Method:    method,
 		URL:       url,
@@ -2026,7 +2204,7 @@ func (h *humanFilesHandler) commitPresignedFile(w http.ResponseWriter, r *http.R
 		httputil.WriteError(w, http.StatusBadRequest, "path must name a file")
 		return
 	}
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, rawPath, true, false)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -2080,7 +2258,7 @@ func (h *humanFilesHandler) commitPresignedFile(w http.ResponseWriter, r *http.R
 		writeHumanFileCodedError(w, http.StatusRequestEntityTooLarge, "size_exceeded",
 			fmt.Sprintf("file size %d exceeds the %d byte direct upload limit", meta.Size, h.presignMaxBytes))
 		h.recordAudit(ctx, a, "human_file_presign_commit_rejected",
-			humanFileDetail("path", "files/"+rel, "size", meta.Size, "reason", "size_exceeded"))
+			"path", "files/"+rel, "size", meta.Size, "reason", "size_exceeded")
 		return
 	}
 	// The per-path lease serializes the publish against in-API writers on
@@ -2138,7 +2316,7 @@ func (h *humanFilesHandler) commitPresignedFile(w http.ResponseWriter, r *http.R
 		writeHumanFileCodedError(w, http.StatusRequestEntityTooLarge, "size_exceeded",
 			fmt.Sprintf("file size %d exceeds the %d byte direct upload limit", len(data), h.presignMaxBytes))
 		h.recordAudit(ctx, a, "human_file_presign_commit_rejected",
-			humanFileDetail("path", "files/"+rel, "size", len(data), "reason", "size_exceeded"))
+			"path", "files/"+rel, "size", len(data), "reason", "size_exceeded")
 		return
 	}
 	// Content verification: the sha256 the caller passes is checked against
@@ -2155,7 +2333,7 @@ func (h *humanFilesHandler) commitPresignedFile(w http.ResponseWriter, r *http.R
 			writeHumanFileCodedError(w, http.StatusConflict, "checksum_mismatch",
 				"the staged content does not match the declared sha256; the upload was rejected")
 			h.recordAudit(ctx, a, "human_file_presign_commit_rejected",
-				humanFileDetail("path", "files/"+rel, "size", len(data), "reason", "checksum_mismatch"))
+				"path", "files/"+rel, "size", len(data), "reason", "checksum_mismatch")
 			return
 		}
 	}
@@ -2243,7 +2421,7 @@ func (h *humanFilesHandler) commitPresignedFile(w http.ResponseWriter, r *http.R
 		return
 	}
 	h.recordAudit(ctx, a, "human_file_presign_commit",
-		humanFileDetail("path", "files/"+rel, "size", len(data), "oldSize", oldSize, "etag", finalMeta.ETag))
+		"path", "files/"+rel, "size", len(data), "oldSize", oldSize, "etag", finalMeta.ETag)
 	httputil.WriteJSON(w, http.StatusOK, humanPresignCommitResponse{
 		Path: "files/" + rel,
 		Size: int64(len(data)),
@@ -2260,7 +2438,7 @@ func (h *humanFilesHandler) finishCommittedRetry(w http.ResponseWriter, r *http.
 	meta, merr := h.oss.StatMeta(ctx, key)
 	if merr == nil && !isHumanFileTombstone(meta) && strings.EqualFold(meta.ETag, committedETag) {
 		h.recordAudit(ctx, a, "human_file_presign_commit_idempotent",
-			humanFileDetail("path", "files/"+rel, "size", meta.Size, "etag", meta.ETag))
+			"path", "files/"+rel, "size", meta.Size, "etag", meta.ETag)
 		httputil.WriteJSON(w, http.StatusOK, humanPresignCommitResponse{
 			Path: "files/" + rel,
 			Size: meta.Size,

@@ -315,14 +315,14 @@ func (in *HumanSpec) DeepCopyInto(out *HumanSpec) {
 		*out = new(int64)
 		**out = **in
 	}
-	if in.WorkspaceAccess != nil {
-		in, out := &in.WorkspaceAccess, &out.WorkspaceAccess
-		*out = new(HumanWorkspaceAccess)
-		(*in).DeepCopyInto(*out)
-	}
 	if in.ModelAccess != nil {
 		in, out := &in.ModelAccess, &out.ModelAccess
 		*out = new(ModelAccessSpec)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.WorkspaceAccess != nil {
+		in, out := &in.WorkspaceAccess, &out.WorkspaceAccess
+		*out = new(HumanWorkspaceAccess)
 		(*in).DeepCopyInto(*out)
 	}
 }

@@ -957,12 +957,6 @@ func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if req.WorkspaceAccess != nil {
-			if err := validateHumanWorkspaceAccess(req.WorkspaceAccess); err != nil {
-				httputil.WriteError(w, http.StatusBadRequest, err.Error())
-				return
-			}
-		}
 		if req.ModelAccess != nil {
 			if err := h.validateModelAccess(ctx, req.ModelAccess); err != nil {
 				if errors.Is(err, errDanglingReference) || errors.Is(err, errInvalidModelAccess) {
@@ -970,6 +964,12 @@ func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				writeK8sError(w, "validate model access", err)
+				return
+			}
+		}
+		if req.WorkspaceAccess != nil {
+			if err := validateHumanWorkspaceAccess(req.WorkspaceAccess); err != nil {
+				httputil.WriteError(w, http.StatusBadRequest, err.Error())
 				return
 			}
 		}
@@ -994,17 +994,17 @@ func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
 			// already rejected values outside the closed set.
 			human.Spec.Capabilities = authpkg.NormalizeCapabilities(*req.Capabilities)
 		}
+		if req.ModelAccess != nil {
+			// Full replace (merge-patch): a present table — including an
+			// empty object — replaces the whole grant table.
+			human.Spec.ModelAccess = req.ModelAccess
+		}
 		if req.WorkspaceAccess != nil {
 			// Merge-patch semantics like Capabilities: a present object
 			// replaces the whole object (an empty object clears both
 			// lists); absent or null leaves the spec unchanged.
 			// Validation above already rejected invalid rules.
 			human.Spec.WorkspaceAccess = req.WorkspaceAccess
-		}
-		if req.ModelAccess != nil {
-			// Full replace (merge-patch): a present table — including an
-			// empty object — replaces the whole grant table.
-			human.Spec.ModelAccess = req.ModelAccess
 		}
 		if req.Note != nil {
 			human.Spec.Note = *req.Note

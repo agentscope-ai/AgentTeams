@@ -709,6 +709,10 @@ type HumanSpec struct {
 	// before writes and trash restores (413 quota_exceeded); usage is
 	// computed live, never persisted.
 	WorkspaceQuotaBytes *int64 `json:"workspaceQuotaBytes,omitempty"`
+	// ModelAccess is the per-human model-grant table. Absent means every
+	// model surface is locked (fail-closed).
+	ModelAccess *ModelAccessSpec `json:"modelAccess,omitempty"`
+
 	// WorkspaceAccess holds per-team access rules for this human's file
 	// area (#1414 P2). The default set — accessibleTeams plus every team
 	// that lists the human in spec.humanMembers (its Leader and Worker
@@ -718,9 +722,6 @@ type HumanSpec struct {
 	// memory/** and digest/** are never addressable through the files API
 	// and cannot be granted.
 	WorkspaceAccess *HumanWorkspaceAccess `json:"workspaceAccess,omitempty"`
-	// ModelAccess is the per-human model-grant table. Absent means every
-	// model surface is locked (fail-closed).
-	ModelAccess *ModelAccessSpec `json:"modelAccess,omitempty"`
 }
 
 // HumanWorkspaceAccessRule is one per-team rule of HumanWorkspaceAccess

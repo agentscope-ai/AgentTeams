@@ -418,6 +418,20 @@ func writeHumanFileCodedError(w http.ResponseWriter, status int, code, message s
 
 // --- Helpers ----------------------------------------------------------------
 
+// humanFileDetail renders the audit Detail field: a controlled JSON
+// summary of non-secret request attributes.
+func humanFileDetail(kv ...any) string {
+	m := make(map[string]any, len(kv)/2)
+	for i := 0; i+1 < len(kv); i += 2 {
+		m[fmt.Sprint(kv[i])] = kv[i+1]
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
 // recordAudit appends an audit event for an authorized operation. The
 // Detail always carries the write attribution (#1414 P2): onBehalfOf names
 // the human whose area was touched, and team names the caller's team when
@@ -428,8 +442,17 @@ func (h *humanFilesHandler) recordAudit(ctx context.Context, a *humanFileAccess,
 		return
 	}
 	m := make(map[string]any, len(kv)/2+2)
-	for i := 0; i+1 < len(kv); i += 2 {
-		m[fmt.Sprint(kv[i])] = kv[i+1]
+	if len(kv) == 1 {
+		// Callers may pass an already-rendered detail object (the variadic
+		// humanFileDetail form used by the presign paths); merge it instead
+		// of treating it as an unpaired key.
+		if rendered, ok := kv[0].(string); ok && rendered != "" {
+			_ = json.Unmarshal([]byte(rendered), &m)
+		}
+	} else {
+		for i := 0; i+1 < len(kv); i += 2 {
+			m[fmt.Sprint(kv[i])] = kv[i+1]
+		}
 	}
 	m["onBehalfOf"] = a.human.Spec.EffectiveUsername(a.human.Name)
 	if a.team != "" {

@@ -60,19 +60,26 @@ func TestHumanFiles_GetClosesRangedReader(t *testing.T) {
 // lazyFaultReader succeeds at OpenRange and fails on the first Read,
 // exactly like a lazy minio-go object when S3 answers 503 to the GET.
 type lazyFaultReader struct {
-	err error
+	err    error
+	closed *int
 }
 
 func (r *lazyFaultReader) Read([]byte) (int, error) { return 0, r.err }
-func (r *lazyFaultReader) Close() error             { return nil }
+func (r *lazyFaultReader) Close() error {
+	*r.closed++
+	return nil
+}
 
 type lazyFaultOSS struct {
 	*ossfake.Memory
-	err error
+	err    error
+	opens  int
+	closes int
 }
 
 func (l *lazyFaultOSS) OpenRange(context.Context, string, int64, int64, string) (io.ReadCloser, error) {
-	return &lazyFaultReader{err: l.err}, nil
+	l.opens++
+	return &lazyFaultReader{err: l.err, closed: &l.closes}, nil
 }
 
 func TestHumanFiles_LazyRangeReadFaultIs503(t *testing.T) {
@@ -80,7 +87,8 @@ func TestHumanFiles_LazyRangeReadFaultIs503(t *testing.T) {
 	if rec := hfPutFile(t, hfh, "alice", "lazy.txt", hfSelf(), "lazy"); rec.Code != http.StatusOK {
 		t.Fatalf("seed: %d %s", rec.Code, rec.Body.String())
 	}
-	hfh.oss = &lazyFaultOSS{Memory: store, err: oss.ErrStorageUnavailable}
+	fault := &lazyFaultOSS{Memory: store, err: oss.ErrStorageUnavailable}
+	hfh.oss = fault
 
 	rec := hfGetFile(t, hfh, "alice", "lazy.txt", http.MethodGet, hfSelf(), nil)
 	if rec.Code != http.StatusServiceUnavailable {
@@ -89,6 +97,49 @@ func TestHumanFiles_LazyRangeReadFaultIs503(t *testing.T) {
 	if got := strings.TrimSpace(rec.Body.String()); got != `{"error":"storage_unavailable"}` {
 		t.Fatalf("body = %q", got)
 	}
+	if fault.opens != 1 || fault.closes != 1 {
+		t.Fatalf("failed Prime lifecycle: opens=%d closes=%d, want 1/1", fault.opens, fault.closes)
+	}
+}
+
+// The retry loop builds a fresh seeker per attempt; each failed attempt
+// owns a stream, so close() must run before the retry or the error return.
+func TestHumanFiles_PrimeRetryExhaustionClosesEveryAttempt(t *testing.T) {
+	hfh, store, _ := newHumanFilesRig(t)
+	if rec := hfPutFile(t, hfh, "alice", "retry.txt", hfSelf(), "retry"); rec.Code != http.StatusOK {
+		t.Fatalf("seed: %d %s", rec.Code, rec.Body.String())
+	}
+	fault := &preconditionOSS{Memory: store}
+	hfh.oss = fault
+
+	rec := hfGetFile(t, hfh, "alice", "retry.txt", http.MethodGet, hfSelf(), nil)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GET: got %d %s, want 503 snapshot_unstable", rec.Code, rec.Body.String())
+	}
+	if want := humanFilePrimeRetries + 1; fault.opens != want || fault.closes != want {
+		t.Fatalf("retry lifecycle: opens=%d closes=%d, want %d/%d", fault.opens, fault.closes, want, want)
+	}
+}
+
+type preconditionReader struct {
+	closed *int
+}
+
+func (r *preconditionReader) Read([]byte) (int, error) { return 0, oss.ErrPreconditionFailed }
+func (r *preconditionReader) Close() error {
+	*r.closed++
+	return nil
+}
+
+type preconditionOSS struct {
+	*ossfake.Memory
+	opens  int
+	closes int
+}
+
+func (p *preconditionOSS) OpenRange(context.Context, string, int64, int64, string) (io.ReadCloser, error) {
+	p.opens++
+	return &preconditionReader{closed: &p.closes}, nil
 }
 
 // manifestRaceOSS injects a competing manifest version on the first GET

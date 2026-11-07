@@ -237,6 +237,10 @@ func (h *humanFilesHandler) openForRead(ctx context.Context, r *http.Request, ke
 		if perr == nil {
 			return rep, seeker, false, nil
 		}
+		// Prime opened a stream on this attempt. Close it before the
+		// error return or the next retry; the caller's defer only sees a
+		// successfully returned seeker.
+		_ = seeker.Close()
 		if !errors.Is(perr, oss.ErrPreconditionFailed) && !errors.Is(perr, oss.ErrRangeNotSatisfiable) {
 			return fileRepresentation{}, nil, false, perr
 		}

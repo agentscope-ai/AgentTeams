@@ -202,7 +202,7 @@ func TestHumanFiles_GetIfRange(t *testing.T) {
 
 	// Current etag (quoted, strong): the range is honored.
 	rec := hfGetFile(t, hfh, "alice", "note.txt", http.MethodGet, hfSelf(),
-		map[string]string{"Range": "bytes=0-3", "If-Range": `"` + etagV2 + `"`)})
+		map[string]string{"Range": "bytes=0-3", "If-Range": `"` + etagV2 + `"`})
 	if rec.Code != http.StatusPartialContent || rec.Body.String() != "v2 l" {
 		t.Fatalf("fresh etag: got %d %q, want 206 %q", rec.Code, rec.Body.String(), "v2 l")
 	}
@@ -210,14 +210,14 @@ func TestHumanFiles_GetIfRange(t *testing.T) {
 	// The weak form of the same validator is NOT strong-equal: the range
 	// is ignored and the full current body answers (RFC 9110 §13.2.3).
 	rec = hfGetFile(t, hfh, "alice", "note.txt", http.MethodGet, hfSelf(),
-		map[string]string{"Range": "bytes=0-3", "If-Range": `W/"` + etagV2 + `"`)})
+		map[string]string{"Range": "bytes=0-3", "If-Range": `W/"` + etagV2 + `"`})
 	if rec.Code != http.StatusOK || rec.Body.String() != fullV2 {
 		t.Fatalf("weak etag: got %d %q, want 200 %q", rec.Code, rec.Body.String(), fullV2)
 	}
 
 	// A stale etag: the range is ignored, full current body.
 	rec = hfGetFile(t, hfh, "alice", "note.txt", http.MethodGet, hfSelf(),
-		map[string]string{"Range": "bytes=0-3", "If-Range": `"` + etagV1 + `"`)})
+		map[string]string{"Range": "bytes=0-3", "If-Range": `"` + etagV1 + `"`})
 	if rec.Code != http.StatusOK || rec.Body.String() != fullV2 {
 		t.Fatalf("stale etag: got %d %q, want 200 %q", rec.Code, rec.Body.String(), fullV2)
 	}
@@ -227,7 +227,7 @@ func TestHumanFiles_GetIfRange(t *testing.T) {
 	// honors the range; a date before it (past) means the object changed
 	// after the client saw it, so the full body answers.
 	lt := store.LastWriteTime()
-	hdrDate := func(d time.Time) string { return d.UTC().Format(time.RFC1123) }
+	hdrDate := func(d time.Time) string { return d.UTC().Format(http.TimeFormat) }
 
 	rec = hfGetFile(t, hfh, "alice", "note.txt", http.MethodGet, hfSelf(),
 		map[string]string{"Range": "bytes=0-3", "If-Range": hdrDate(lt.Add(time.Hour))})
@@ -257,7 +257,7 @@ func TestHumanFiles_GetIfRangeNotTruncating(t *testing.T) {
 	}
 
 	rec := hfGetFile(t, hfh, "alice", "note.txt", http.MethodGet, hfSelf(),
-		map[string]string{"Range": "bytes=0-99", "If-Range": `"` + etagV1 + `"`)})
+		map[string]string{"Range": "bytes=0-99", "If-Range": `"` + etagV1 + `"`})
 	if rec.Code != http.StatusOK || rec.Body.String() != v2 {
 		t.Fatalf("stale If-Range: got %d (len %d), want 200 with the full 30-byte v2 body", rec.Code, rec.Body.Len())
 	}
@@ -379,7 +379,7 @@ func TestHumanFiles_PutQuotedIfMatch(t *testing.T) {
 
 	// A client echoing the QUOTED ETag it received from GET must not 412.
 	v2 := "second version"
-	rec := hfPutFileWithMatch(t, hfh, "alice", "note.txt", hfSelf(), v2, map[string]string{"If-Match": `"` + etagV1 + `"`)})
+	rec := hfPutFileWithMatch(t, hfh, "alice", "note.txt", hfSelf(), v2, map[string]string{"If-Match": `"` + etagV1 + `"`})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("quoted If-Match: got %d, want 200: %s", rec.Code, rec.Body.String())
 	}
@@ -393,7 +393,7 @@ func TestHumanFiles_PutQuotedIfMatch(t *testing.T) {
 	}
 
 	// A stale (quoted) validator still 412s.
-	rec = hfPutFileWithMatch(t, hfh, "alice", "note.txt", hfSelf(), v1, map[string]string{"If-Match": `"` + etagV1 + `"`)})
+	rec = hfPutFileWithMatch(t, hfh, "alice", "note.txt", hfSelf(), v1, map[string]string{"If-Match": `"` + etagV1 + `"`})
 	if rec.Code != http.StatusPreconditionFailed {
 		t.Fatalf("stale quoted If-Match: got %d, want 412: %s", rec.Code, rec.Body.String())
 	}

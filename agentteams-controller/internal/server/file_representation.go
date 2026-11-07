@@ -201,13 +201,23 @@ func (h *humanFilesHandler) openForRead(ctx context.Context, r *http.Request, ke
 		}
 		// If-Range against the fresh validator: a mismatch answers the
 		// full current body, so drop the range before the content is
-		// served (http.ServeContent would otherwise re-evaluate it with
-		// a string comparison against the response ETag).
-		if hasRange && ifRange != "" && !httputil.IfRangeApplies(ifRange, rep.etag, rep.modTime) {
-			r.Header.Del("Range")
-			r.Header.Del("If-Range")
-			hasRange = false
+		// served. On a match the range is kept, but If-Range itself must
+		// still be removed: ServeContent sees our quoted response ETag
+		// and would compare the If-Range value against that ETag as a
+		// token, ignoring the HTTP-date form. The decision has already
+		// been made here against the stored validator.
+		if hasRange && ifRange != "" {
+			if !httputil.IfRangeApplies(ifRange, rep.etag, rep.modTime) {
+				r.Header.Del("Range")
+				r.Header.Del("If-Range")
+				hasRange = false
+			} else {
+				r.Header.Del("If-Range")
+			}
 		}
+		// If-None-Match was evaluated against the fresh validator above;
+		// never let ServeContent re-evaluate it against the quoted header.
+		r.Header.Del("If-None-Match")
 
 		seeker := newObjectSeeker(h, ctx, key, rep)
 		// Every GET with a body primes its first stream before the 200

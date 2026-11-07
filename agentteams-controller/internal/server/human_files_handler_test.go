@@ -2295,6 +2295,22 @@ func (c *concurrentPutOSS) GetObject(ctx context.Context, key string) ([]byte, e
 	return c.Memory.GetObject(ctx, key)
 }
 
+// OpenRange is the GET path's primitive now: a ranged/full read is opened
+// against the snapshot ETag before any byte is served. Inject the competing
+// put here, then let the fake enforce the ETag match, so the handler must
+// re-stat and serve the new version (rather than mixing A's bytes with B's
+// validator). The legacy GetObject override above remains for PUT's
+// read-modify-write path.
+func (c *concurrentPutOSS) OpenRange(ctx context.Context, key string, start, length int64, matchETag string) (io.ReadCloser, error) {
+	if !c.used && key == c.key {
+		c.used = true
+		if err := c.Memory.PutObject(ctx, c.key, c.injected); err != nil {
+			return nil, err
+		}
+	}
+	return c.Memory.OpenRange(ctx, key, start, length, matchETag)
+}
+
 // multipartETagOSS reports one key's ETag in multipart form (md5-N), which
 // cannot be verified against the body locally and forces the double-read
 // consistency fallback in readFileSnapshot.

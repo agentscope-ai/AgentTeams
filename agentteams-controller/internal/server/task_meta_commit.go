@@ -292,13 +292,9 @@ func (h *ProjectHandler) GetTaskMeta(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "read task meta: "+err.Error())
 		return
 	}
-	etag := ""
-	if st, serr := h.oss.StatMeta(r.Context(), key); serr == nil {
-		etag = st.ETag
-	}
-	if etag == "" {
-		etag = contentETag(data)
-	}
+	// Bind the version to these bytes; a later StatMeta can observe a
+	// concurrent write and incorrectly authorize committing the old body.
+	etag := contentETag(data)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("ETag", etag)
 	w.WriteHeader(http.StatusOK)

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // Per-human sync state endpoints (#1414 P3, server half; the client sync
@@ -189,6 +191,125 @@ func storedSyncGeneration(data []byte) int64 {
 		return 0
 	}
 	return m.Generation
+}
+
+// The manifest's server-owned summary is also written into the object's
+// small S3 user metadata on every accepted write, so a status read
+// answers from one StatMeta without downloading the manifest body. The
+// metadata is a summary cache of the body, never the source of truth:
+// the body stays authoritative, and a status read falls back to it
+// whenever the metadata is absent or unparseable.
+const (
+	syncMetaEntriesKey    = "agentteams-sync-entries"
+	syncMetaTombstonesKey = "agentteams-sync-tombstones"
+	syncMetaGenerationKey = "agentteams-sync-generation"
+	syncMetaUpdatedAtKey  = "agentteams-sync-updated-at"
+	syncMetaUpdatedByKey  = "agentteams-sync-updated-by"
+)
+
+// syncMetaMaxBytes caps the total metadata size. S3's hard limit is
+// 2 KiB; over-cap manifests are written without metadata (logged, plain
+// write, never an error) and the status read falls back to the body.
+const syncMetaMaxBytes = 1 << 10
+
+// syncManifestMetadata renders the manifest's server-owned summary into
+// the object's user metadata (counters as decimal strings, updatedAt /
+// updatedBy verbatim).
+func syncManifestMetadata(m syncManifest) map[string]string {
+	return map[string]string{
+		syncMetaEntriesKey:    strconv.Itoa(len(m.Entries)),
+		syncMetaTombstonesKey: strconv.Itoa(len(m.Tombstones)),
+		syncMetaGenerationKey: strconv.FormatInt(m.Generation, 10),
+		syncMetaUpdatedAtKey:  m.UpdatedAt,
+		syncMetaUpdatedByKey:  m.UpdatedBy,
+	}
+}
+
+// syncMetaTotalBytes is the wire weight of a metadata map: the sum of
+// key + value + one separator per pair.
+func syncMetaTotalBytes(metadata map[string]string) int {
+	total := 0
+	for k, v := range metadata {
+		total += len(k) + len(v) + 1
+	}
+	return total
+}
+
+// syncStatusFromMetadata builds the status from a stored object's user
+// metadata. ok is true only when all five summary items are present and
+// the counters parse as non-negative integers; anything else (a
+// pre-metadata object, a partial map, corrupt values) means the caller
+// falls back to the manifest body.
+func syncStatusFromMetadata(userMetadata map[string]string) (syncStatus, bool) {
+	var status syncStatus
+	values := map[string]string{
+		syncMetaEntriesKey:    userMetadata[syncMetaEntriesKey],
+		syncMetaTombstonesKey: userMetadata[syncMetaTombstonesKey],
+		syncMetaGenerationKey: userMetadata[syncMetaGenerationKey],
+		syncMetaUpdatedAtKey:  userMetadata[syncMetaUpdatedAtKey],
+		syncMetaUpdatedByKey:  userMetadata[syncMetaUpdatedByKey],
+	}
+	for key, value := range values {
+		if value == "" {
+			return syncStatus{}, false
+		}
+		switch key {
+		case syncMetaEntriesKey, syncMetaTombstonesKey, syncMetaGenerationKey:
+			n, err := strconv.Atoi(value)
+			if err != nil || n < 0 {
+				return syncStatus{}, false
+			}
+			switch key {
+			case syncMetaEntriesKey:
+				status.Entries = n
+			case syncMetaTombstonesKey:
+				status.Tombstones = n
+			default:
+				status.Generation = int64(n)
+			}
+		case syncMetaUpdatedAtKey:
+			status.UpdatedAt = value
+		default:
+			status.UpdatedBy = value
+		}
+	}
+	return status, true
+}
+
+// writeSyncManifest performs the manifest's conditional write. When the
+// storage client supports it (ConditionalMetadataWriter) and the summary
+// fits under the cap, the write carries the user metadata in the same
+// PUT as the body, so a status read can answer from a StatMeta. A
+// metadata write failure that is not a conflict degrades to the plain
+// conditional write (logged; the status read falls back to the body and
+// the next successful write re-stores the metadata). A conflict and a
+// cancelled context are never retried through the plain path: the
+// former must surface to the caller, the latter must not write past the
+// deadline.
+func (h *humanFilesHandler) writeSyncManifest(ctx context.Context, key string, out []byte, ifMatch string, manifest syncManifest) error {
+	// Clients echo the quoted ETag from GET; storage takes the bare value.
+	ifMatch = httputil.BareETag(ifMatch)
+	metadata := syncManifestMetadata(manifest)
+	if writer, ok := h.oss.(oss.ConditionalMetadataWriter); ok && syncMetaTotalBytes(metadata) < syncMetaMaxBytes {
+		var werr error
+		if ifMatch != "" {
+			werr = writer.PutObjectIfMatchWithMetadata(ctx, key, out, "application/json", ifMatch, metadata)
+		} else {
+			werr = writer.PutObjectIfAbsentWithMetadata(ctx, key, out, "application/json", metadata)
+		}
+		if werr == nil {
+			return nil
+		}
+		if errors.Is(werr, oss.ErrPreconditionFailed) || ctx.Err() != nil {
+			return werr
+		}
+		log.FromContext(ctx).Info("sync manifest metadata write failed; falling back to a plain conditional write",
+			"key", key, "error", werr.Error())
+	}
+	if ifMatch != "" {
+		return h.oss.PutObjectIfMatch(ctx, key, out, ifMatch)
+	}
+	return h.oss.PutObjectIfAbsent(ctx, key, out)
 }
 
 // getSyncManifest handles GET /api/v1/humans/{name}/sync/manifest. The
@@ -397,14 +518,7 @@ func (h *humanFilesHandler) putSyncManifest(w http.ResponseWriter, r *http.Reque
 			"the path lease was taken over by another operation; nothing was written")
 		return
 	}
-	var werr error
-	if ifMatch != "" {
-		// Storage takes the bare validator: the client may echo the
-		// quoted ETag straight back from a GET (normalized once).
-		werr = h.oss.PutObjectIfMatch(ctx, key, out, httputil.BareETag(ifMatch))
-	} else {
-		werr = h.oss.PutObjectIfAbsent(ctx, key, out)
-	}
+	werr := h.writeSyncManifest(ctx, key, out, httputil.BareETag(ifMatch), manifest)
 	if werr != nil {
 		if errors.Is(werr, oss.ErrPreconditionFailed) {
 			if ifMatch != "" {
@@ -443,6 +557,14 @@ func (h *humanFilesHandler) putSyncManifest(w http.ResponseWriter, r *http.Reque
 // getSyncStatus handles GET /api/v1/humans/{name}/sync/status: the stored
 // manifest's summary (entry/tombstone counts, generation, last update).
 // A missing manifest is a zero summary with 200, not an error.
+//
+// The summary lives in the manifest object's user metadata, written in
+// the same PUT as the body: the happy path answers from exactly one
+// StatMeta without downloading the manifest body. When the metadata is
+// absent or unparseable (a pre-metadata object, a plain-write fallback,
+// a backend without user metadata), the read falls back to the body —
+// read-only, no write-back: a read must not mutate the object (and
+// would race its ETag); the next accepted write re-stores the metadata.
 func (h *humanFilesHandler) getSyncStatus(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	a, status, msg := h.authorizeHumanSync(r.Context(), name)
@@ -452,6 +574,24 @@ func (h *humanFilesHandler) getSyncStatus(w http.ResponseWriter, r *http.Request
 	}
 	ctx := r.Context()
 	key := humanSyncManifestKey(a.human.Spec.EffectiveUsername(a.human.Name))
+	meta, err := h.oss.StatMeta(ctx, key)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			httputil.WriteJSON(w, http.StatusOK, syncStatus{})
+			return
+		}
+		if errors.Is(err, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
+		httputil.WriteError(w, http.StatusInternalServerError, "stat manifest failed")
+		return
+	}
+	if s, ok := syncStatusFromMetadata(meta.UserMetadata); ok {
+		httputil.WriteJSON(w, http.StatusOK, s)
+		return
+	}
+	// The metadata is absent or unparseable: fall back to the body.
 	data, err := h.oss.GetObject(ctx, key)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

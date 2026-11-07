@@ -15,6 +15,21 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 import at_telemetry as telemetry
 
 
+def test_team_identity_follows_projected_runtime_across_reassignment(tmp_path, monkeypatch):
+    import at_runtime_adapters as adapters
+    runtime = tmp_path / 'runtime.yaml'
+    monkeypatch.setenv('TEAMHARNESS_RUNTIME_CONFIG', str(runtime))
+    monkeypatch.setenv('AGENTTEAMS_TEAM_NAME', 'stale-team')
+    runtime.write_text('team:\n  name: first-team\nmember:\n  role: worker\n')
+    fields = adapters.enrich_task({}, None)
+    assert fields['agentteams.team.id'] == 'first-team'
+    runtime.write_text('team:\n  name: second-team\nmember:\n  role: worker\n')
+    fields = adapters.enrich_task(fields, None)
+    assert fields['agentteams.team.id'] == 'second-team'
+    runtime.write_text('member:\n  role: standalone\n')
+    assert 'agentteams.team.id' not in adapters.enrich_task(fields, None)
+
+
 def test_adapter_installation_failure_is_reported_without_breaking_import(monkeypatch):
     import at_runtime_adapters as adapters
     monkeypatch.setattr(adapters, '_adapter_errors', [])

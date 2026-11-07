@@ -1769,10 +1769,10 @@ async def test_heartbeat_probe_loop_delegates_to_heartbeat_module(
 ) -> None:
     config = _config(tmp_path)
     worker = Worker(config)
-    calls: list[tuple[str, int]] = []
+    calls: list[tuple[str, int, Path]] = []
 
-    async def fake_loop(heartbeat, *, worker_name, port):
-        calls.append((worker_name, port))
+    async def fake_loop(heartbeat, *, worker_name, port, token_usage_path=None):
+        calls.append((worker_name, port, token_usage_path))
         heartbeat.update("ready", "qwenpaw ready")
         raise asyncio.CancelledError
 
@@ -1783,7 +1783,7 @@ async def test_heartbeat_probe_loop_delegates_to_heartbeat_module(
     data = json.loads((config.qwenpaw_working_dir / "heartbeat.json").read_text(encoding="utf-8"))
     assert data["status"] == "ready"
     assert data["message"] == "qwenpaw ready"
-    assert calls == [("worker-a-cr", config.console_port)]
+    assert calls == [("worker-a-cr", config.console_port, config.qwenpaw_working_dir / "token_usage.json")]
 
 
 def test_api_readiness_waits_for_default_agent_startup(tmp_path, monkeypatch):

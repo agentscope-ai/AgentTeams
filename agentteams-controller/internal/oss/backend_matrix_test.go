@@ -434,12 +434,16 @@ func TestMatrix_DeletePrefix(t *testing.T) {
 	// rejects. The same seeds — including the marker object at the bare
 	// key, which must now survive — and the same sibling survivor.
 	target2 := root + "z"
-	for _, k := range []string{
-		target2, // the object whose key is exactly the target: outside the declared boundary
-		target2 + "/1",
-		target2 + "/y/2",
-		target2 + "-sibling/keep",
-	} {
+	// MinIO accepts a bare object and descendants with the same name but
+	// hides those descendants from S3 listing. The old mc implementation
+	// has the same limitation. Test ordinary directory cleanup on both
+	// backends; the coexisting-marker boundary is supported by RustFS.
+	coexistingMarker := env.kind != "minio"
+	seeds := []string{target2 + "/1", target2 + "/y/2", target2 + "-sibling/keep"}
+	if coexistingMarker {
+		seeds = append(seeds, target2)
+	}
+	for _, k := range seeds {
 		if err := c.PutObject(ctx, k, []byte("v")); err != nil {
 			t.Fatalf("seed %s: %v", k, err)
 		}
@@ -454,8 +458,10 @@ func TestMatrix_DeletePrefix(t *testing.T) {
 	}
 	assertScopeEmpty(target2 + "/")
 	// The bare key is the boundary the caller declared: it survives.
-	if err := c.Stat(ctx, target2); err != nil {
-		t.Fatalf("bare key vanished: Stat(%s) = %v, want the declared boundary untouched", target2, err)
+	if coexistingMarker {
+		if err := c.Stat(ctx, target2); err != nil {
+			t.Fatalf("bare key vanished: Stat(%s) = %v, want the declared boundary untouched", target2, err)
+		}
 	}
 	if err := c.Stat(ctx, target2+"-sibling/keep"); err != nil {
 		t.Fatalf("sibling vanished: Stat(%s) = %v", target2+"-sibling/keep", err)

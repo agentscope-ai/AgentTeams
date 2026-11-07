@@ -24,7 +24,7 @@ from mcp.common.errors import (
 from mcp.common.identity import _canonical_account, _canonical_assignee
 from mcp.common.io import _read_json, _safe_read_bytes, _utc_timestamp
 from mcp.common.payload import _first_text, _payload, _safe_id
-from mcp.common.paths import _project_state_path, _task_dir, _task_state_path
+from mcp.common.paths import _project_state_path, _task_dir, _task_state_path, _workspace_dir
 from mcp.artifact.publish import (
     _attachment_parent_event_id,
     _normalize_workspace_artifact_path,
@@ -34,6 +34,7 @@ from mcp.artifact.sync import _load_authoritative_task, _load_authoritative_task
 from mcp.project.state import _loop_pause_state
 from mcp.room.matrix import _team_human_matrix_ids, _team_leader_matrix_id
 from mcp.room.notify import _send_attention_notification, _task_completion_notification
+from .policy_effects import policy_fingerprint
 from .review import (
     ProtocolGuardError,
     _account_of,
@@ -137,6 +138,36 @@ def _load_task(arguments: dict[str, Any], task_id: str) -> dict[str, Any]:
     if not task.get("task_id") and task.get("taskId"):
         task["task_id"] = str(task["taskId"])
     return task
+
+
+def _revalidate_dispatch_mandate(
+    arguments: dict[str, Any], task: dict[str, Any], task_id: str
+) -> None:
+    """TH-21: revalidate the recorded dispatch mandate before a resume.
+
+    Raises ``policy_changed`` when the workspace governance state moved
+    after dispatch (recorded ``dispatch.policy_version`` != current
+    fingerprint) — the recorded mandate no longer covers this run and the
+    task must be re-dispatched under the current policy. Records without a
+    dispatch mandate, or with the version-0 pre-fence baseline, keep the
+    legacy behavior and are never rejected.
+    """
+    dispatch = task.get("dispatch")
+    if not isinstance(dispatch, dict):
+        return
+    try:
+        recorded = int(dispatch.get("policy_version") or 0)
+    except (TypeError, ValueError):
+        recorded = 0
+    if recorded <= 0:
+        return
+    current = policy_fingerprint(_workspace_dir(arguments))
+    if current != recorded:
+        raise ValueError(
+            f"policy_changed: the governance policy moved since dispatch "
+            f"(recorded policy_version {recorded}, current {current}); "
+            f"re-dispatch {task_id} (delegate_task) under the current policy"
+        )
 
 
 def _project_task_for_meta(arguments: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
@@ -507,6 +538,24 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 task["assigned_to"] = assigned_to
             if source_room_id:
                 task["source_room_id"] = source_room_id
+            # TH-21 mandate quadruple: anchor this dispatch decision to the
+            # governance state in effect right now (policy_version), with
+            # the basis (which flow made the call), the actor, and the
+            # scope. ack_task revalidates the version on the
+            # assigned -> in_progress resume, so a governance change after
+            # dispatch forces a re-dispatch instead of a silent resume.
+            # A re-delegate re-anchors the mandate under the policy that
+            # is in effect when the re-dispatch happens.
+            task["dispatch"] = {
+                "policy_version": policy_fingerprint(_workspace_dir(arguments)),
+                "basis": "taskflow.delegate_task",
+                "actor": _transition_actor(arguments),
+                "scope": {
+                    "task_id": task_id,
+                    "project_id": project_id,
+                    "assigned_to": assigned_to or "",
+                },
+            }
             if not _delegate_from:
                 # Creation is recorded with from="planned" (the project-node
                 # view at this moment); prepared -> prepared retries are
@@ -729,6 +778,11 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                         arguments=arguments,
                         task_id=task_id,
                     )
+                if _ack_from == "assigned":
+                    # TH-21: assigned -> in_progress is the resume point;
+                    # a re-ack of an already in_progress task stays an
+                    # idempotent no-op and skips the revalidation.
+                    _revalidate_dispatch_mandate(arguments, task, task_id)
                 _transition_task(
                     arguments,
                     task,

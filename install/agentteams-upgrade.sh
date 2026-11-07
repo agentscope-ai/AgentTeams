@@ -1415,6 +1415,7 @@ cmd_controller() {
     fi
 
     local create_log="${BACKUP_DIR}/controller-create.log"
+    mkdir -p "$(dirname "${create_log}")" 2>/dev/null || true
     if ! "${DOCKER_CMD}" create "${RUN_ARGS[@]}" >"${create_log}" 2>&1; then
         cat "${create_log}" >&2
         "${DOCKER_CMD}" rename "${OLD_NAME}" "${CONTROLLER_NAME}" >/dev/null 2>&1 || true

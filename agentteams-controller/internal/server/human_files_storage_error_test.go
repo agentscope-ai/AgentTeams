@@ -410,6 +410,13 @@ func TestStorageFault_TrashMetaReadIs503(t *testing.T) {
 		t.Fatalf("decode delete: %v", err)
 	}
 
+	// The listing caches entries in the index, so drop it first: this is
+	// the pre-index shape (an entry no index covers), whose summary comes
+	// from the per-entry meta read this test faults.
+	if err := store.DeleteObject(context.Background(), humanTrashIndexKey("alice")); err != nil {
+		t.Fatalf("drop trash index: %v", err)
+	}
+
 	// Fault only the per-entry meta read; the trash listing itself stays up.
 	hfh.oss = newFaultOSS(t, store, humanTrashPrefix("alice")+delResp.TrashID+"/meta.json", "GetObject")
 	if _, err := hfh.oss.ListObjectsDetailed(context.Background(), humanTrashPrefix("alice")); err != nil {

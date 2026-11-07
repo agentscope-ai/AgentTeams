@@ -209,6 +209,114 @@ type trashMeta struct {
 	ContentType string `json:"contentType,omitempty"`
 }
 
+// humanTrashIndexPath is the per-human trash listing index: the summary of
+// every live trash entry, keyed by id. It exists because a listing reports
+// object names, sizes, and timestamps but never an entry's path or caller —
+// the summary fields only meta.json carries. One index read per listing
+// replaces one meta.json read per entry.
+//
+// It lives under .control/ (controller-owned state, outside the quota's
+// files/ + .trash/ walk, so a listing never moves usage) and it is a
+// cache: meta.json stays authoritative, so a missing, stale, or corrupt
+// index costs a meta.json read for the ids it does not cover.
+const humanTrashIndexPath = ".control/trash-index.json"
+
+// humanTrashIndexVersion is the only accepted index schema version; an
+// older or unknown version reads as an absent index (rebuilt on demand).
+const humanTrashIndexVersion = 1
+
+func humanTrashIndexKey(username string) string {
+	return humanAreaPrefix(username) + humanTrashIndexPath
+}
+
+// humanTrashIndex is the stored index body.
+type humanTrashIndex struct {
+	Version int                  `json:"version"`
+	Entries map[string]trashMeta `json:"entries"`
+}
+
+// liveTrashIDs folds a .trash/ listing into the set of live entry ids.
+// Listing rows that are not a valid entry id (the index object itself, or
+// a stray key from an out-of-band write) are ignored.
+func liveTrashIDs(infos []oss.ObjectInfo) map[string]struct{} {
+	ids := make(map[string]struct{})
+	for _, info := range infos {
+		rel := strings.TrimSuffix(info.Name, "/")
+		if rel == "" {
+			continue
+		}
+		id := rel
+		if i := strings.IndexByte(rel, '/'); i >= 0 {
+			id = rel[:i]
+		}
+		if !trashIDRegex.MatchString(id) {
+			continue
+		}
+		ids[id] = struct{}{}
+	}
+	return ids
+}
+
+// readTrashIndex returns the cached summaries for one human. A missing
+// index reads as empty; so does a body that does not parse or carries
+// another schema version (both are rebuilt by the caller). A storage
+// fault is returned so the listing can answer 503 instead of treating an
+// unreadable index as an empty one.
+func (h *humanFilesHandler) readTrashIndex(ctx context.Context, username string) (map[string]trashMeta, error) {
+	data, err := h.oss.GetObject(ctx, humanTrashIndexKey(username))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var idx humanTrashIndex
+	if err := json.Unmarshal(data, &idx); err != nil || idx.Version != humanTrashIndexVersion {
+		return nil, nil
+	}
+	if idx.Entries == nil {
+		return map[string]trashMeta{}, nil
+	}
+	return idx.Entries, nil
+}
+
+// writeTrashIndex stores the summaries for exactly the ids it is given,
+// so a rewrite also drops entries that left the trash.
+func (h *humanFilesHandler) writeTrashIndex(ctx context.Context, username string, entries map[string]trashMeta) error {
+	data, err := json.Marshal(humanTrashIndex{Version: humanTrashIndexVersion, Entries: entries})
+	if err != nil {
+		return err
+	}
+	return h.oss.PutObject(ctx, humanTrashIndexKey(username), data)
+}
+
+// upsertTrashIndexEntry records one new trash entry in the index,
+// best-effort: the entry's meta.json is already stored, so a failed index
+// write only costs the next listing one meta.json read. Summaries whose
+// ids are no longer in the trash are dropped in the same write, which is
+// how restores and purges prune the index.
+func (h *humanFilesHandler) upsertTrashIndexEntry(ctx context.Context, username, id string, m trashMeta) {
+	entries, err := h.readTrashIndex(ctx, username)
+	if err != nil {
+		return // an unreadable index is rebuilt by the next listing
+	}
+	if entries == nil {
+		entries = make(map[string]trashMeta, 1)
+	}
+	infos, err := h.oss.ListObjectsDetailed(ctx, humanTrashPrefix(username))
+	if err != nil {
+		return
+	}
+	live := liveTrashIDs(infos)
+	for cachedID := range entries {
+		if _, ok := live[cachedID]; !ok {
+			delete(entries, cachedID)
+		}
+	}
+	entries[id] = m
+	_ = h.writeTrashIndex(ctx, username, entries)
+}
+
 // humanFileAccess is the resolved authorization result for one request
 // against a human's file area.
 type humanFileAccess struct {
@@ -1435,6 +1543,9 @@ func (h *humanFilesHandler) deleteFile(w http.ResponseWriter, r *http.Request) {
 	}
 	h.recordAudit(ctx, a, "human_file_delete",
 		"path", "files/"+rel, "size", len(data), "trashId", trashID)
+	// Cache the entry just archived for the trash listing (best-effort;
+	// meta.json stays authoritative).
+	h.upsertTrashIndexEntry(ctx, username, trashID, m)
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"trashId": trashID})
 }
 
@@ -1442,6 +1553,15 @@ func (h *humanFilesHandler) deleteFile(w http.ResponseWriter, r *http.Request) {
 
 // listTrash handles GET /api/v1/humans/{name}/trash. Entries are newest
 // first (the trash id is time-prefixed).
+//
+// The whole recycle bin is enumerated by one listing, and the summaries
+// come from the per-human index: one listing plus one index read answers
+// any number of entries. Ids the index does not cover (a deployment
+// upgraded from before the index existed, or a delete whose best-effort
+// index write failed) are resolved individually from their meta.json and
+// folded back into the index, so the next listing is covered again. A
+// meta.json read that fails for a reason other than availability leaves
+// that entry with empty fields — the pre-index degradation, per item.
 func (h *humanFilesHandler) listTrash(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	a, status, msg := h.authorizeHumanFile(r.Context(), name, "", false, false)
@@ -1457,38 +1577,62 @@ func (h *humanFilesHandler) listTrash(w http.ResponseWriter, r *http.Request) {
 		writeStorageError(w, err, "list trash failed", "list trash failed")
 		return
 	}
-	ids := make(map[string]struct{})
-	for _, info := range infos {
-		rel := strings.TrimSuffix(info.Name, "/")
-		if rel == "" {
-			continue
+	ids := liveTrashIDs(infos)
+	cached, err := h.readTrashIndex(ctx, username)
+	if err != nil {
+		if errors.Is(err, oss.ErrStorageUnavailable) {
+			// A listing whose entries cannot be verified answers the
+			// availability fault, not a 200 with empty fields.
+			writeStorageUnavailable(w)
+			return
 		}
-		id := rel
-		if i := strings.IndexByte(rel, '/'); i >= 0 {
-			id = rel[:i]
-		}
-		if !trashIDRegex.MatchString(id) {
-			continue
-		}
-		ids[id] = struct{}{}
+		cached = nil // any other index fault degrades to per-entry reads
 	}
-	out := make([]trashEntry, 0, len(ids))
+	metas := make(map[string]trashMeta, len(ids))
+	missing := make([]string, 0, len(ids))
 	for id := range ids {
-		e := trashEntry{ID: id}
+		if m, ok := cached[id]; ok {
+			metas[id] = m
+			continue
+		}
+		missing = append(missing, id)
+	}
+	sort.Strings(missing) // deterministic read order for a deterministic response
+	resolved := 0
+	for _, id := range missing {
 		data, gerr := h.oss.GetObject(ctx, prefix+id+"/meta.json")
 		if gerr != nil {
 			if errors.Is(gerr, oss.ErrStorageUnavailable) {
-				// A listing whose entries cannot be verified answers
-				// the availability fault, not a 200 with empty fields.
 				writeStorageUnavailable(w)
 				return
 			}
-			// Any other read error keeps the entry with empty fields.
-		} else {
-			var m trashMeta
-			if json.Unmarshal(data, &m) == nil {
-				e.Path, e.Size, e.DeletedAt, e.Caller, e.Role = m.Path, m.Size, m.DeletedAt, m.Caller, m.Role
-			}
+			// Any other read error keeps the entry with empty fields and
+			// out of the index, so a later listing retries it.
+			continue
+		}
+		var m trashMeta
+		if json.Unmarshal(data, &m) != nil {
+			continue
+		}
+		metas[id] = m
+		resolved++
+	}
+	if resolved > 0 {
+		// Best-effort refill: the entries above are already resolved, and
+		// only the ids in this listing are stored (the write prunes any
+		// summary whose entry has left the trash).
+		_ = h.writeTrashIndex(ctx, username, metas)
+	}
+	out := make([]trashEntry, 0, len(ids))
+	for id := range ids {
+		m := metas[id]
+		e := trashEntry{
+			ID:        id,
+			Path:      m.Path,
+			Size:      m.Size,
+			DeletedAt: m.DeletedAt,
+			Caller:    m.Caller,
+			Role:      m.Role,
 		}
 		if !a.isAdmin && !a.isManager && !a.isSelf {
 			rel, ok := strings.CutPrefix(e.Path, "files/")

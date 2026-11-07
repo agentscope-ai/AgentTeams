@@ -3201,10 +3201,7 @@ func (h *ProjectHandler) GetProjectMeta(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "read project meta: "+err.Error())
 		return
 	}
-	etag := pwc.etag
-	if etag == "" {
-		etag = contentETag(data)
-	}
+	etag := contentETag(data)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("ETag", etag)
 	w.WriteHeader(http.StatusOK)

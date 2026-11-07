@@ -195,7 +195,7 @@ func TestBackendConfigsDefaultToIndependentDeepSeekHarnessVersion(t *testing.T) 
 		"k8s":     cfg.K8sConfig().DeepSeekHarnessWorkerImage,
 		"sandbox": cfg.SandboxConfig().DeepSeekHarnessWorkerImage,
 	} {
-		if want := "agentteams/agentteams-deepseek-harness-worker:v0.1.0"; got != want {
+		if want := "agentteams/agentteams-deepseek-harness-worker:v0.1.1"; got != want {
 			t.Fatalf("%s DeepSeekHarnessWorkerImage = %q, want %q", name, got, want)
 		}
 	}

@@ -21,7 +21,7 @@
 # ---------- Configuration ----------
 
 VERSION        ?= latest
-DEEPSEEK_HARNESS_WORKER_VERSION ?= v0.1.0
+DEEPSEEK_HARNESS_WORKER_VERSION ?= v0.1.1
 REGISTRY       ?= higress-registry.cn-hangzhou.cr.aliyuncs.com
 REPO           ?= agentteams
 
@@ -914,11 +914,11 @@ help: ## Show this help
 # Variables:
 #   DASHBOARD_CONTEXT   Path to dashboard source tree (default: ../agentteams-dashboard)
 #   DASHBOARD_IMAGE     Override dashboard image (derived from DASHBOARD_VERSION by default)
-#   DASHBOARD_VERSION   Dashboard version tag (default: v1.3.1)
+#   DASHBOARD_VERSION   Dashboard version tag (default: v1.4.0)
 #   AGENTTEAMS_PORT_DASHBOARD   Dashboard host port (default: 13000)
 
 DASHBOARD_CONTEXT ?= ../agentteams-dashboard
-DASHBOARD_VERSION ?= v1.3.1
+DASHBOARD_VERSION ?= v1.4.0
 DASHBOARD_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-dashboard:$(DASHBOARD_VERSION)
 AGENTTEAMS_PORT_DASHBOARD ?= 13000
 

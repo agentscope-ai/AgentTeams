@@ -335,7 +335,7 @@ worker:
       tag: ""                 # defaults to global.imageTag
     deepseekHarness:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-deepseek-harness-worker
-      tag: "v0.1.0"           # experimental; released independently from global.imageTag
+      tag: "v0.1.1"           # experimental; released independently from global.imageTag
   defaultRuntime: "openclaw"
   resources:
     requests:

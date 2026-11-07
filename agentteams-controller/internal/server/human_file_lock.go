@@ -254,6 +254,12 @@ func (l *humanPathLock) Verify(ctx context.Context) error {
 	}
 	current, etag, err := l.h.readHumanPathLease(ctx, l.key)
 	if err != nil {
+		if errors.Is(err, oss.ErrStorageUnavailable) {
+			// The fence read itself failed because the store did not
+			// answer: report the availability fault, not a takeover (the
+			// holder may still own the lease).
+			return err
+		}
 		return errHumanPathLeaseLost
 	}
 	if current.Owner != l.owner || etag != l.etag {

@@ -50,6 +50,15 @@ var ErrPresignUnsupported = errors.New("oss: presign unsupported (storage endpoi
 // normalizing to os.ErrNotExist.
 var ErrStorageBucketUnavailable = errors.New("oss: bucket unavailable")
 
+// ErrStorageUnavailable reports that the object store could not answer at
+// all: the request never received a semantic response (connection
+// refused/reset/EOF, a transport timeout, or an HTTP 5xx / RequestTimeout
+// error body). The object's state is unknown, so callers must answer
+// "retry later" (HTTP 503 storage_unavailable), never "absent" (404 — a
+// sync client would delete its local copy, the D1 failure mode). It wraps
+// the underlying error with %w, keeping it reachable via errors.As.
+var ErrStorageUnavailable = errors.New("oss: storage unavailable")
+
 // StorageClient abstracts object storage operations.
 // Implementations: MinIOClient (mc CLI), future S3Client (aws-sdk-go).
 // ObjectInfo is a listing entry with the last-updated timestamp when the

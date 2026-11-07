@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -171,7 +172,10 @@ func (c *MinIOClient) PutObjectIfMatchWithType(ctx context.Context, key string, 
 		// file and makes an ordinary restore answer path_conflict.
 		return ossFallbackWrite(ctx, key, data, matchETag, contentType, c.StatMeta, c.PutObjectWithType)
 	}
-	return err
+	// A fault that survived both semantic checks (a 5xx body, a dead
+	// connection, ...) is a store-availability fault, not a write failure
+	// the caller should treat as terminal.
+	return classifySDKError(err)
 }
 
 // PutObjectIfAbsent creates an object only when the key does not exist.
@@ -193,7 +197,7 @@ func (c *MinIOClient) PutObjectIfAbsent(ctx context.Context, key string, data []
 	if errors.As(err, &resp) && (resp.Code == "PreconditionFailed" || resp.Code == "412") {
 		return ErrPreconditionFailed
 	}
-	return err
+	return classifySDKError(err)
 }
 
 // sdkPutObjectIfAbsent is the MinIO SDK If-None-Match:* write.
@@ -236,7 +240,7 @@ func (c *MinIOClient) PutObjectIfMatchStrict(ctx context.Context, key string, da
 	if errors.As(err, &resp) && (resp.Code == "NotImplemented" || resp.Code == "501") {
 		return ErrConditionalUnsupported
 	}
-	return err
+	return classifySDKError(err)
 }
 
 // PutObjectIfNoneMatchStrict is the create-if-absent (If-None-Match: *)
@@ -265,7 +269,7 @@ func (c *MinIOClient) PutObjectIfNoneMatchStrict(ctx context.Context, key string
 	if errors.As(err, &resp) && (resp.Code == "NotImplemented" || resp.Code == "501") {
 		return ErrConditionalUnsupported
 	}
-	return err
+	return classifySDKError(err)
 }
 
 // ossFallbackWrite is the OSS degradation for providers without If-Match
@@ -370,22 +374,24 @@ func isSDKBucketGone(err error) bool {
 // the request still reaches the store and gets the bucket-level 404). Probing
 // bucket existence before returning os.ErrNotExist keeps a storage failure
 // from reading as a deleted file — the same class of bug as D1's outage
-// handling.
+// handling. Every other error goes through classifySDKError, so a transport
+// fault is a retryable ErrStorageUnavailable, never a raw 500.
 func (c *MinIOClient) classifyKeyError(ctx context.Context, key string, err error) error {
-	if err == nil {
-		return nil
+	if err == nil || errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrStorageUnavailable) || errors.Is(err, ErrStorageBucketUnavailable) {
+		return err
 	}
 	if isSDKBucketGone(err) {
 		return err // bucket-level codes stay errors, never os.ErrNotExist
 	}
 	if !isSDKNotFound(err) {
-		return err
+		return classifySDKError(err)
 	}
 	ok, perr := c.bucketAvailable(ctx, key)
 	if perr != nil {
 		// Cannot prove the bucket exists → surface the probe failure rather
-		// than claim the object is missing.
-		return perr
+		// than claim the object is missing. classifySDKError keeps a probe
+		// transport fault retryable (503) and a semantic fault a 500.
+		return classifySDKError(perr)
 	}
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrStorageBucketUnavailable, c.config.Bucket)
@@ -433,6 +439,65 @@ func (c *MinIOClient) bucketAvailable(ctx context.Context, key string) (bool, er
 		return true, nil
 	}
 	return ok, nil
+}
+
+// classifySDKError is the single non-key-scoped error-classification gate
+// the S3 object path runs every error through before it returns to a caller
+// (PR-0). Missing-object normalization is NOT done here: only a key-scoped
+// caller can prove an object is absent, and it must first prove the bucket
+// still exists (classifyKeyError). This gate sorts the remaining answers:
+//
+//   - store unavailable (HTTP 5xx, RequestTimeout, or a transport failure
+//     that never reached a semantic answer: refused/reset/closed
+//     connections, EOF mid-body, timeouts) -> ErrStorageUnavailable wrapped
+//     with %w, the "503 storage_unavailable, retry later" signal;
+//   - everything else (404s from bucket-level/config faults, 403
+//     AccessDenied, InvalidAccessKeyId, ...) -> the error unchanged: a
+//     deployment fault is a 500, never a 404 (absence) or a 503 (retry).
+//
+// The classification is idempotent: an already-classified error (nil,
+// os.ErrNotExist, ErrStorageUnavailable, ErrStorageBucketUnavailable)
+// passes through unchanged.
+func classifySDKError(err error) error {
+	if err == nil || errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrStorageUnavailable) || errors.Is(err, ErrStorageBucketUnavailable) {
+		return err
+	}
+	var resp minio.ErrorResponse
+	if errors.As(err, &resp) {
+		// A 5xx body (InternalError, ServiceUnavailable, ...) or the S3
+		// RequestTimeout code (400) is the store admitting it could not
+		// serve the request. Everything else the SDK hands us as an
+		// ErrorResponse is a semantic 4xx answer (NoSuchBucket, AccessDenied,
+		// InvalidAccessKeyId, ...) and passes through unchanged.
+		if resp.StatusCode >= http.StatusInternalServerError || resp.Code == "RequestTimeout" {
+			return fmt.Errorf("%w: %w", ErrStorageUnavailable, err)
+		}
+		return err
+	}
+	if isTransportUnavailable(err) {
+		return fmt.Errorf("%w: %w", ErrStorageUnavailable, err)
+	}
+	return err
+}
+
+// isTransportUnavailable reports whether err is a network-layer failure:
+// the request or its body never received a semantic answer. net/http wraps
+// every connection-level fault (dial refused, reset or close mid-response,
+// DNS) in a *url.Error — a net.Error that reports Timeout()==false — so any
+// net.Error in the chain means the store never answered. A context deadline
+// is matched by identity as well: the bare sentinel carries no transport
+// type of its own, and from the caller's view a deadline means the store
+// did not answer in time, so the API layer answers 503.
+func isTransportUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	return errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, net.ErrClosed)
 }
 
 // PresignUpload implements PresignUploader. The POST policy form is
@@ -500,7 +565,7 @@ func (c *MinIOClient) putStream(ctx context.Context, key string, r io.Reader, si
 		return err
 	}
 	_, err = sdk.PutObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), r, size, minio.PutObjectOptions{ContentType: contentType})
-	return err
+	return classifySDKError(err)
 }
 
 func (c *MinIOClient) PutObject(ctx context.Context, key string, data []byte) error {
@@ -650,7 +715,7 @@ func (c *MinIOClient) DeleteObject(ctx context.Context, key string) error {
 	// idempotent where `mc rm` errored on a missing object. Every caller
 	// uses deletion for cleanup/rollback (errors are ignored), which the
 	// idempotent form suits; none depends on the missing-key error.
-	return sdk.RemoveObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), minio.RemoveObjectOptions{})
+	return classifySDKError(sdk.RemoveObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), minio.RemoveObjectOptions{}))
 }
 
 // Mirror keeps the mc CLI: there is no minio-go equivalent of
@@ -754,7 +819,7 @@ func (c *MinIOClient) DeletePrefix(ctx context.Context, prefix string) error {
 	keys := make([]string, 0)
 	for o := range ch {
 		if o.Err != nil {
-			return fmt.Errorf("delete prefix %q: list objects: %w", prefix, o.Err)
+			return fmt.Errorf("delete prefix %q: list objects: %w", prefix, classifySDKError(o.Err))
 		}
 		keys = append(keys, o.Key)
 	}
@@ -776,7 +841,7 @@ func (c *MinIOClient) DeletePrefix(ctx context.Context, prefix string) error {
 		}
 		for r := range resCh {
 			if r.Err != nil {
-				errs = append(errs, fmt.Errorf("delete %s: %w", r.ObjectName, r.Err))
+				errs = append(errs, fmt.Errorf("delete %s: %w", r.ObjectName, classifySDKError(r.Err)))
 			}
 		}
 	}
@@ -845,7 +910,7 @@ func (c *MinIOClient) ListObjectsDetailed(ctx context.Context, prefix string) ([
 	var out []ObjectInfo
 	for o := range ch {
 		if o.Err != nil {
-			return nil, fmt.Errorf("list objects: %w", o.Err)
+			return nil, fmt.Errorf("list objects: %w", classifySDKError(o.Err))
 		}
 		rel := strings.TrimPrefix(o.Key, p)
 		if rel == "" {
@@ -915,7 +980,7 @@ func (c *MinIOClient) ListObjectsRecursive(ctx context.Context, prefix, startAft
 	lastKey := ""
 	for o := range ch {
 		if o.Err != nil {
-			return nil, "", fmt.Errorf("list objects (recursive): %w", o.Err)
+			return nil, "", fmt.Errorf("list objects (recursive): %w", classifySDKError(o.Err))
 		}
 		rel := strings.TrimPrefix(o.Key, p)
 		if rel == "" {

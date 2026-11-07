@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -345,7 +347,7 @@ func (h *humanFilesHandler) fileChanges(w http.ResponseWriter, r *http.Request) 
 	if id != "" {
 		minID, found, err := h.humanChangesMinID(ctx, prefix)
 		if err != nil {
-			httputil.WriteError(w, http.StatusInternalServerError, "list change log failed")
+			writeStorageError(w, err, "list change log failed", "list change log failed")
 			return
 		}
 		if !found {
@@ -372,7 +374,7 @@ func (h *humanFilesHandler) fileChanges(w http.ResponseWriter, r *http.Request) 
 	for len(items)+len(deleted) < limit && !stop {
 		infos, next, err := h.oss.ListObjectsRecursive(ctx, prefix, startAfter, limit)
 		if err != nil {
-			httputil.WriteError(w, http.StatusInternalServerError, "list change log failed")
+			writeStorageError(w, err, "list change log failed", "list change log failed")
 			return
 		}
 		for i := range infos {
@@ -382,6 +384,10 @@ func (h *humanFilesHandler) fileChanges(w http.ResponseWriter, r *http.Request) 
 			}
 			data, gerr := h.oss.GetObject(ctx, prefix+infos[i].Name)
 			if gerr != nil {
+				if errors.Is(gerr, oss.ErrStorageUnavailable) {
+					writeStorageUnavailable(w)
+					return
+				}
 				// A read fault (or a retention-prune race) stops the walk
 				// here: advancing the cursor past this entry would turn a
 				// transient fault into a permanent miss. The next poll

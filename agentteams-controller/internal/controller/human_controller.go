@@ -99,6 +99,9 @@ func (r *HumanReconciler) Reconcile(ctx context.Context, req reconcile.Request) 
 		if err := r.Patch(ctx, &human, client.MergeFrom(base)); err != nil {
 			return reconcile.Result{}, err
 		}
+		// Keep the finalizer's resourceVersion change out of the deferred
+		// status patch, so concurrent spec edits cannot lose new credentials.
+		patchBase = client.MergeFrom(human.DeepCopy())
 	}
 
 	return r.reconcileHumanNormal(ctx, s)

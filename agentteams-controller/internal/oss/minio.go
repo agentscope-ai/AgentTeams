@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -466,6 +467,37 @@ func (c *MinIOClient) PutFile(ctx context.Context, localPath, key string) error 
 	}
 	_, err := c.runMC(ctx, "cp", localPath, c.fullPath(key))
 	return err
+}
+
+// GetObjectWithETag binds the body and the provider's opaque ETag to the
+// same GET response. Multipart and encrypted objects need not have MD5 ETags.
+func (c *MinIOClient) GetObjectWithETag(ctx context.Context, key string) ([]byte, string, error) {
+	sdk, err := c.sdkClient()
+	if err != nil {
+		return nil, "", err
+	}
+	object, err := sdk.GetObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), minio.GetObjectOptions{})
+	if err != nil {
+		return nil, "", err
+	}
+	defer object.Close()
+	data, err := io.ReadAll(object)
+	if err != nil {
+		if minio.ToErrorResponse(err).Code == "NoSuchKey" {
+			return nil, "", os.ErrNotExist
+		}
+		return nil, "", err
+	}
+	// After reading, Stat returns the info cached from that GET, without
+	// a separate HEAD whose version could race with the body.
+	info, err := object.Stat()
+	if err != nil {
+		return nil, "", err
+	}
+	if info.ETag == "" {
+		return nil, "", fmt.Errorf("object GET returned no ETag")
+	}
+	return data, info.ETag, nil
 }
 
 func (c *MinIOClient) GetObject(ctx context.Context, key string) ([]byte, error) {

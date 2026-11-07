@@ -137,6 +137,10 @@ def _has_approval_record(task: dict[str, Any], submitter_account: str = "") -> b
             continue
         if not record.get("resolved"):
             continue
+        # A structured answer closes the prompt even when the human declines.
+        # Legacy IM closes have no resolution field and retain their contract.
+        if "resolution" in record and record["resolution"] != "approve":
+            continue
         if record.get("resolvedRole") != "human":
             continue
         if str(record.get("resolvedVia") or "") not in _HUMAN_RESOLVE_CHANNELS:

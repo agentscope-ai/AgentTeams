@@ -426,6 +426,11 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/projects/{id}/resume", mw.RequireAuthz(authpkg.ActionUpdate, "project", projectNameFn)(http.HandlerFunc(projh.ResumeProject)))
 	mux.Handle("POST /api/v1/projects/{id}/replan", mw.RequireAuthz(authpkg.ActionUpdate, "project", projectNameFn)(http.HandlerFunc(projh.ReplanProject)))
 	mux.Handle("POST /api/v1/projects/{id}/tasks/{taskId}/cancel", mw.RequireAuthz(authpkg.ActionUpdate, "project", projectTaskNameFn)(http.HandlerFunc(projh.CancelTask)))
+	// TH-4: the dashboard attention resolve (write counterpart of the
+	// GET /projects/{id}/attention read surface). Human-only by design: the
+	// authorizer keeps workers out at "project"+ActionUpdate, and the handler
+	// re-checks the team's human roster (403 not_a_human_member).
+	mux.Handle("POST /api/v1/projects/{id}/attention/{taskId}/resolve", mw.RequireAuthz(authpkg.ActionUpdate, "project", projectTaskNameFn)(http.HandlerFunc(projh.ResolveAttention)))
 	mux.Handle("POST /api/v1/projects/{id}/complete", mw.RequireAuthz(authpkg.ActionUpdate, "project", projectNameFn)(http.HandlerFunc(projh.CompleteProject)))
 	// Conditional project meta commit (#1402): the worker sync path commits
 	// the full meta.json against a strict If-Match CAS. The resource kind is

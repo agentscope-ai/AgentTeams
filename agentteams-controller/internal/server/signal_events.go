@@ -58,14 +58,15 @@ type signalEmitter struct {
 	Level       string // contract levels[] value (contract cross-check only)
 }
 
-// signalEmitters — the five Go write endpoints (#1172). source_event values
-// must match the contract rows' source_events (the id_rule hash input).
+// signalEmitters — the Go write endpoints and overdue sweep. source_event
+// values must match the contract rows' source_events (the id_rule hash input).
 var signalEmitters = map[string]signalEmitter{
-	"PauseProject":    {SourceEvent: "project_paused", EventType: "SIG-DECISION", Origin: "decision_lock", Level: "warn"},
-	"ResumeProject":   {SourceEvent: "project_resumed", EventType: "SIG-DECISION", Origin: "decision_reopen", Level: "info"},
-	"ReplanProject":   {SourceEvent: "project_replanned", EventType: "SIG-DECISION", Origin: "decision_lock", Level: "warn"},
-	"CancelTask":      {SourceEvent: "task_cancelled", EventType: "SIG-DECISION", Origin: "decision_lock", Level: "error"},
-	"CompleteProject": {SourceEvent: "project_completed", EventType: "SIG-COMPLETE", Origin: "submit", Level: "info"},
+	"PauseProject":     {SourceEvent: "project_paused", EventType: "SIG-DECISION", Origin: "decision_lock", Level: "warn"},
+	"ResumeProject":    {SourceEvent: "project_resumed", EventType: "SIG-DECISION", Origin: "decision_reopen", Level: "info"},
+	"ReplanProject":    {SourceEvent: "project_replanned", EventType: "SIG-DECISION", Origin: "decision_lock", Level: "warn"},
+	"CancelTask":       {SourceEvent: "task_cancelled", EventType: "SIG-DECISION", Origin: "decision_lock", Level: "error"},
+	"CompleteProject":  {SourceEvent: "project_completed", EventType: "SIG-COMPLETE", Origin: "submit", Level: "info"},
+	"ResolveAttention": {SourceEvent: "attention_resolved", EventType: "SIG-ATTENTION", Origin: "attention_resolved", Level: "info"},
 	// Attention overdue sweep (#1394 S1): the read path emits the
 	// event for an item whose deadline has passed, so the stream stays
 	// complete without a background writer. The contract row owns the
@@ -119,11 +120,18 @@ func signalEventKey(team, teamID, eventID string) string {
 // by the attempt that committed the project write (its convergence retry
 // emits with the read value, not a fresh increment).
 func (h *ProjectHandler) emitSignalEvent(ctx context.Context, em signalEmitter, team, teamID, projectID, taskID string, iteration *int, ref string, refBytes []byte, payload map[string]any, auditSeq int) {
+	h.emitSignalEventID(ctx, em, team, teamID, projectID, taskID, iteration, ref, refBytes, payload, auditSeq)
+}
+
+// emitSignalEventID is the emit implementation; it returns the deterministic
+// event id so the caller can report it (the TH-4 resolve response carries
+// the id the S2 consumer dedupes on).
+func (h *ProjectHandler) emitSignalEventID(ctx context.Context, em signalEmitter, team, teamID, projectID, taskID string, iteration *int, ref string, refBytes []byte, payload map[string]any, auditSeq int) string {
 	fingerprint := sha256.Sum256(refBytes)
 	eventID := signalEventID(teamID, projectID, taskID, "", em.EventType, em.SourceEvent, iteration, hex.EncodeToString(fingerprint[:]), 0, auditSeq)
 	key := signalEventKey(team, teamID, eventID)
 	if _, err := h.oss.GetObject(ctx, key); err == nil {
-		return // already emitted — idempotent re-emit, keep the original
+		return eventID // already emitted — idempotent re-emit, keep the original
 	} else if !errors.Is(err, os.ErrNotExist) {
 		log.FromContext(ctx).V(1).Info("signal event dedup check failed; proceeding with write", "key", key, "error", err.Error())
 	}
@@ -143,11 +151,12 @@ func (h *ProjectHandler) emitSignalEvent(ctx context.Context, em signalEmitter, 
 	data, err := json.Marshal(ev)
 	if err != nil {
 		log.FromContext(ctx).V(1).Info("signal event marshal failed (best-effort, dropped)", "key", key, "error", err.Error())
-		return
+		return eventID
 	}
 	if err := h.oss.PutObject(ctx, key, data); err != nil {
 		log.FromContext(ctx).V(1).Info("signal event emit failed (best-effort, dropped)", "key", key, "error", err.Error())
 	}
+	return eventID
 }
 
 // teamID resolves the event path's {team_id} segment: the stamped project

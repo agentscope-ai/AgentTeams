@@ -371,7 +371,7 @@ func isSDKBucketGone(err error) bool {
 // bucket existence before returning os.ErrNotExist keeps a storage failure
 // from reading as a deleted file — the same class of bug as D1's outage
 // handling.
-func (c *MinIOClient) classifyKeyError(ctx context.Context, err error) error {
+func (c *MinIOClient) classifyKeyError(ctx context.Context, key string, err error) error {
 	if err == nil {
 		return nil
 	}
@@ -381,7 +381,7 @@ func (c *MinIOClient) classifyKeyError(ctx context.Context, err error) error {
 	if !isSDKNotFound(err) {
 		return err
 	}
-	ok, perr := c.bucketAvailable(ctx)
+	ok, perr := c.bucketAvailable(ctx, key)
 	if perr != nil {
 		// Cannot prove the bucket exists → surface the probe failure rather
 		// than claim the object is missing.
@@ -402,14 +402,35 @@ func (c *MinIOClient) classifyKeyError(ctx context.Context, err error) error {
 // and a bucket deleted a second later would still be reported as present.
 // Each ambiguous 404 therefore pays one HEAD; correctness over a saved
 // round-trip on an error path.
-func (c *MinIOClient) bucketAvailable(ctx context.Context) (bool, error) {
+func (c *MinIOClient) bucketAvailable(ctx context.Context, key string) (bool, error) {
 	sdk, err := c.sdkClient()
 	if err != nil {
 		return false, err
 	}
 	ok, err := sdk.BucketExists(ctx, c.config.Bucket)
 	if err != nil {
-		return false, fmt.Errorf("oss: bucket probe: %w", err)
+		var response minio.ErrorResponse
+		if !errors.As(err, &response) || response.StatusCode != http.StatusForbidden {
+			return false, fmt.Errorf("oss: bucket probe: %w", err)
+		}
+		// Prefix-scoped STS may list this key's scope while bucket HEAD is
+		// forbidden. A successful scoped listing proves the bucket exists
+		// without requiring broader permissions; any probe failure stays
+		// an error, never a missing-object answer.
+		probeCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		for object := range sdk.ListObjects(probeCtx, c.config.Bucket, minio.ListObjectsOptions{
+			Prefix: strings.TrimPrefix(key, "/"), Recursive: true, MaxKeys: 1,
+		}) {
+			if object.Err != nil {
+				return false, fmt.Errorf("oss: scoped bucket probe: %w", object.Err)
+			}
+			return true, nil
+		}
+		if err := probeCtx.Err(); err != nil {
+			return false, fmt.Errorf("oss: scoped bucket probe: %w", err)
+		}
+		return true, nil
 	}
 	return ok, nil
 }
@@ -528,12 +549,12 @@ func (c *MinIOClient) GetObject(ctx context.Context, key string) ([]byte, error)
 	// the 404 error there, not from the open.
 	obj, err := sdk.GetObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), minio.GetObjectOptions{})
 	if err != nil {
-		return nil, c.classifyKeyError(ctx, err)
+		return nil, c.classifyKeyError(ctx, key, err)
 	}
 	defer obj.Close()
 	data, err := io.ReadAll(obj)
 	if err != nil {
-		return nil, c.classifyKeyError(ctx, err)
+		return nil, c.classifyKeyError(ctx, key, err)
 	}
 	return data, nil
 }
@@ -588,7 +609,7 @@ func (c *MinIOClient) Stat(ctx context.Context, key string) error {
 	}
 	_, err = sdk.StatObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), minio.StatObjectOptions{})
 	if err != nil {
-		return c.classifyKeyError(ctx, err)
+		return c.classifyKeyError(ctx, key, err)
 	}
 	return nil
 }
@@ -605,7 +626,7 @@ func (c *MinIOClient) StatMeta(ctx context.Context, key string) (ObjectMeta, err
 	}
 	info, err := sdk.StatObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), minio.StatObjectOptions{})
 	if err != nil {
-		return ObjectMeta{}, c.classifyKeyError(ctx, err)
+		return ObjectMeta{}, c.classifyKeyError(ctx, key, err)
 	}
 	// The SDK strips S3's ETag quotes (the mc stat --json output was
 	// already unquoted), so the two paths hand the caller the same form.

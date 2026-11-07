@@ -72,11 +72,12 @@ its prefix-scoped permissions.
 
 ### Error normalization
 
-Every read/stat path maps a 404 (any code, including empty-body 404s some
-backends answer) to `os.ErrNotExist`. Callers see only the sentinels from
-client.go: `os.ErrNotExist`, `ErrPreconditionFailed`, `ErrConditionalUnsupported`,
-`ErrPresignUnsupported`. No MinIO-specific error string or code may leak past
-this package.
+An object 404 becomes `os.ErrNotExist` only after proving the bucket is
+available. Missing buckets and authorization failures remain errors. When
+prefix-scoped STS forbids bucket HEAD, a successful listing restricted to
+the same object-key prefix can establish bucket availability instead; a
+failed scoped probe never becomes a missing-object answer. Object-level
+access denial itself is never converted through this fallback.
 
 ## Real-backend matrix
 

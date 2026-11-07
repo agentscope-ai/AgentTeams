@@ -2,6 +2,10 @@ package oss
 
 import (
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,13 +13,13 @@ import (
 	"time"
 )
 
-// fakePresignMCScript is a POSIX sh stand-in for the mc CLI (#1475 PR-4,
-// #1501): every invocation is recorded (marker file + args log) and the
-// canned JSON from FAKE_MC_SHARE_JSON / FAKE_MC_STAT_JSON is replayed.
-// `alias set` (the one-time public-alias registration for presign) is a
-// no-op success. FAKE_MC_FAIL=1 makes the `share` command fail with the
-// S3 object-not-found error, so the alias setup still succeeds and the
-// test isolates the `share download` path.
+// fakePresignMCScript is a POSIX sh stand-in for the mc CLI on the presign
+// path: every invocation is recorded (marker file + args log), `alias set`
+// succeeds (the historical one-time alias registration), and ANY other
+// command fails loudly. The point of the canary is the S3-only contract:
+// a regression of PresignGet (or any other object-path method that shares
+// this client fixture) back to mc must fail these tests, not silently
+// spawn a process.
 const fakePresignMCScript = `#!/bin/sh
 if [ -n "$FAKE_MC_MARKER" ]; then
   echo fake-mc-called > "$FAKE_MC_MARKER"
@@ -27,179 +31,212 @@ case "$1" in
   alias)
     echo "Added fake-alias successfully."
     ;;
-  share)
-    if [ "$FAKE_MC_FAIL" = "1" ]; then
-      echo "error: Object does not exist (fake mc)" >&2
-      exit 1
-    fi
-    cat "$FAKE_MC_SHARE_JSON"
-    ;;
-  stat)
-    cat "$FAKE_MC_STAT_JSON"
-    ;;
   *)
-    echo "fake mc: unhandled command: $1" >&2
+    echo "fake mc: the object path must not invoke mc ($1)" >&2
     exit 1
     ;;
 esac
 `
 
-// fakePresignShareJSON is the canned `mc share download --json` output. The
-// URL host is the public (caller-reachable) endpoint, NOT the internal one —
-// that is the whole point of #1501: the returned URL's host must be the
-// origin the caller can reach, and the path is <bucket>/<key> (the alias is
-// not part of the HTTP URL).
-const fakePresignShareJSON = `{"status":"success","share":"http://fake-pub:9000/agentteams-storage/humans/alice/files/a.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=300&X-Amz-Signature=fake"}`
-
-// writeFakeMC writes the fake mc script and the canned JSON into dir, wires
-// the FAKE_MC_* environment variables, and returns the script path.
-func writeFakeMC(t *testing.T, dir, shareJSON, statJSON string) string {
+// writeFakeMC writes the fake mc script into dir, wires the FAKE_MC_*
+// environment variables, and returns the script path.
+func writeFakeMC(t *testing.T, dir string) string {
 	t.Helper()
 	scriptPath := filepath.Join(dir, "fake-mc")
 	if err := os.WriteFile(scriptPath, []byte(fakePresignMCScript), 0o755); err != nil {
 		t.Fatalf("write fake mc: %v", err)
 	}
-	sharePath := filepath.Join(dir, "share.json")
-	if err := os.WriteFile(sharePath, []byte(shareJSON), 0o600); err != nil {
-		t.Fatalf("write share json: %v", err)
-	}
-	statPath := filepath.Join(dir, "stat.json")
-	if err := os.WriteFile(statPath, []byte(statJSON), 0o600); err != nil {
-		t.Fatalf("write stat json: %v", err)
-	}
-	t.Setenv("FAKE_MC_SHARE_JSON", sharePath)
-	t.Setenv("FAKE_MC_STAT_JSON", statPath)
 	t.Setenv("FAKE_MC_MARKER", filepath.Join(dir, "mc-marker"))
 	t.Setenv("FAKE_MC_ARGS_LOG", filepath.Join(dir, "mc-args.log"))
 	return scriptPath
 }
 
-// newPresignTestClient builds a MinIOClient around the fake mc with a
-// configured caller-reachable public endpoint (so PresignGet actually
-// signs). The internal Endpoint is empty on purpose: the main alias
-// (ensureAlias) is a no-op, so the tests isolate the public-alias presign
-// path from internal-alias setup.
-func newPresignTestClient(t *testing.T, dir, shareJSON string) *MinIOClient {
+// assertMCNeverCalled fails the test when the fake mc was invoked — the
+// object path (presign included) must not spawn mc.
+func assertMCNeverCalled(t *testing.T, dir string) {
+	t.Helper()
+	if _, err := os.Stat(filepath.Join(dir, "mc-marker")); err == nil {
+		if args, aerr := os.ReadFile(filepath.Join(dir, "mc-args.log")); aerr == nil {
+			t.Fatalf("fake mc was invoked on the object path: %q", strings.TrimSpace(string(args)))
+		}
+		t.Fatal("fake mc was invoked on the object path")
+	}
+}
+
+// newPublicPresignOrigin stands in for the caller-reachable public
+// storage endpoint. minio-go resolves the SigV4 region with a bucket
+// location lookup against the origin at presign time, so the origin must
+// be dialable; the stub answers that one-time lookup and nothing else.
+func newPublicPresignOrigin(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, `<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/">us-east-1</LocationConstraint>`)
+	}))
+}
+
+// newPresignTestClient builds a MinIOClient around the fake mc whose
+// caller-reachable public endpoint is the given live origin (so
+// PresignGet actually signs). The internal Endpoint is empty on purpose:
+// the main alias (ensureAlias) is a no-op, so the tests isolate the
+// presign path from internal-alias setup.
+func newPresignTestClient(t *testing.T, dir, publicEndpoint string) *MinIOClient {
 	t.Helper()
 	return NewMinIOClient(Config{
-		MCBinary:       writeFakeMC(t, dir, shareJSON, `{}`),
+		MCBinary:       writeFakeMC(t, dir),
 		Alias:          "agentteams",
 		StoragePrefix:  "agentteams/agentteams-storage",
 		Bucket:         "agentteams-storage",
-		PublicEndpoint: "http://fake-pub:9000",
+		PublicEndpoint: publicEndpoint,
 		PublicAlias:    "agentteams-public",
 		AccessKey:      "ak",
 		SecretKey:      "sk",
 	})
 }
 
-func TestPresignGet_ParsesShareURL(t *testing.T) {
+// TestPresignGet_SignsThePublicOrigin pins the S3-SDK contract that
+// replaced `mc share download`: the URL's host is the caller-reachable
+// public endpoint, the path is /<bucket>/<key> (the alias is not part of
+// the HTTP URL), the signature is SigV4, and no mc process is involved.
+func TestPresignGet_SignsThePublicOrigin(t *testing.T) {
+	public := newPublicPresignOrigin(t)
+	defer public.Close()
 	dir := t.TempDir()
-	c := newPresignTestClient(t, dir, fakePresignShareJSON)
+	c := newPresignTestClient(t, dir, public.URL)
 
-	url, err := c.PresignGet(t.Context(), "humans/alice/files/a.txt", 5*time.Minute)
+	got, err := c.PresignGet(t.Context(), "humans/alice/files/a.txt", 5*time.Minute)
 	if err != nil {
 		t.Fatalf("PresignGet: %v", err)
 	}
-	wantURL := "http://fake-pub:9000/agentteams-storage/humans/alice/files/a.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=300&X-Amz-Signature=fake"
-	if url != wantURL {
-		t.Fatalf("url = %q, want %q", url, wantURL)
+	u, perr := url.Parse(got)
+	if perr != nil {
+		t.Fatalf("parse presigned URL %q: %v", got, perr)
 	}
-
-	// The first mc invocation registers the public alias; the second is
-	// exactly `share download --expire <ttl> --json <publicAlias>/<bucket>/<key>`
-	// — the share path is bound to the public alias, never the main one.
-	args, err := os.ReadFile(filepath.Join(dir, "mc-args.log"))
-	if err != nil {
-		t.Fatalf("read args log: %v", err)
+	wantOrigin, _ := url.Parse(public.URL)
+	if u.Scheme != wantOrigin.Scheme || u.Host != wantOrigin.Host {
+		t.Fatalf("presigned URL origin = %s://%s, want the caller-reachable public origin %s://%s",
+			u.Scheme, u.Host, wantOrigin.Scheme, wantOrigin.Host)
 	}
-	wantArgs := "alias set agentteams-public http://fake-pub:9000 ak sk\n" +
-		"share download --expire 5m0s --json agentteams-public/agentteams-storage/humans/alice/files/a.txt\n"
-	if string(args) != wantArgs {
-		t.Fatalf("args = %q, want %q", string(args), wantArgs)
+	if u.Path != "/agentteams-storage/humans/alice/files/a.txt" {
+		t.Fatalf("presigned URL path = %q, want /<bucket>/<key>", u.Path)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "mc-marker")); err != nil {
-		t.Fatalf("fake mc was not invoked: %v", err)
+	q := u.Query()
+	if q.Get("X-Amz-Algorithm") != "AWS4-HMAC-SHA256" {
+		t.Fatalf("X-Amz-Algorithm = %q, want AWS4-HMAC-SHA256", q.Get("X-Amz-Algorithm"))
 	}
+	if q.Get("X-Amz-Expires") != "300" {
+		t.Fatalf("X-Amz-Expires = %q, want 300", q.Get("X-Amz-Expires"))
+	}
+	if q.Get("X-Amz-Signature") == "" {
+		t.Fatal("presigned URL carries no X-Amz-Signature")
+	}
+	if !strings.Contains(q.Get("X-Amz-Credential"), "ak/") {
+		t.Fatalf("X-Amz-Credential = %q, want the configured access key", q.Get("X-Amz-Credential"))
+	}
+	assertMCNeverCalled(t, dir)
 }
 
-func TestPresignGet_TTLFormattedForMC(t *testing.T) {
+// TestPresignGet_TTLBindsTheExpiry pins that the ttl the caller passes is
+// the expiry the provider enforces (mc used --expire <ttl.String()>; the
+// SDK takes the duration directly).
+func TestPresignGet_TTLBindsTheExpiry(t *testing.T) {
+	public := newPublicPresignOrigin(t)
+	defer public.Close()
 	dir := t.TempDir()
-	c := newPresignTestClient(t, dir, fakePresignShareJSON)
+	c := newPresignTestClient(t, dir, public.URL)
 
-	if _, err := c.PresignGet(t.Context(), "humans/alice/files/a.txt", 90*time.Second); err != nil {
+	got, err := c.PresignGet(t.Context(), "humans/alice/files/a.txt", 90*time.Second)
+	if err != nil {
 		t.Fatalf("PresignGet: %v", err)
 	}
-	args, err := os.ReadFile(filepath.Join(dir, "mc-args.log"))
-	if err != nil {
-		t.Fatalf("read args log: %v", err)
+	u, perr := url.Parse(got)
+	if perr != nil {
+		t.Fatalf("parse presigned URL %q: %v", got, perr)
 	}
-	if !strings.Contains(string(args), "--expire 1m30s") {
-		t.Fatalf("args = %q, want --expire 1m30s", string(args))
+	if q := u.Query().Get("X-Amz-Expires"); q != "90" {
+		t.Fatalf("X-Amz-Expires = %q, want 90", q)
 	}
+	assertMCNeverCalled(t, dir)
 }
 
-func TestPresignGet_MCFailure(t *testing.T) {
-	dir := t.TempDir()
-	c := newPresignTestClient(t, dir, fakePresignShareJSON)
-	t.Setenv("FAKE_MC_FAIL", "1")
-
-	if _, err := c.PresignGet(t.Context(), "humans/alice/files/a.txt", 5*time.Minute); err == nil {
-		t.Fatal("PresignGet: want error when mc fails, got nil")
-	}
-}
-
-func TestPresignGet_InvalidJSON(t *testing.T) {
-	dir := t.TempDir()
-	c := newPresignTestClient(t, dir, `not json`)
-
-	_, err := c.PresignGet(t.Context(), "humans/alice/files/a.txt", 5*time.Minute)
-	if err == nil || !strings.Contains(err.Error(), "parse mc share download") {
-		t.Fatalf("err = %v, want a parse error", err)
-	}
-}
-
-func TestPresignGet_EmptyShare(t *testing.T) {
-	dir := t.TempDir()
-	c := newPresignTestClient(t, dir, `{"status":"success"}`)
-
-	_, err := c.PresignGet(t.Context(), "humans/alice/files/a.txt", 5*time.Minute)
-	if err == nil || !strings.Contains(err.Error(), "empty share URL") {
-		t.Fatalf("err = %v, want an empty-share error", err)
-	}
-}
-
+// TestPresignGet_NonPositiveTTL pins the validation boundary: a
+// non-positive ttl is rejected before anything is signed, and no mc (and
+// no storage) is touched.
 func TestPresignGet_NonPositiveTTL(t *testing.T) {
 	dir := t.TempDir()
-	c := newPresignTestClient(t, dir, fakePresignShareJSON)
+	c := NewMinIOClient(Config{
+		MCBinary:       writeFakeMC(t, dir),
+		Alias:          "agentteams",
+		StoragePrefix:  "agentteams/agentteams-storage",
+		Bucket:         "agentteams-storage",
+		PublicEndpoint: "http://127.0.0.1:1",
+		AccessKey:      "ak",
+		SecretKey:      "sk",
+	})
 
 	if _, err := c.PresignGet(t.Context(), "humans/alice/files/a.txt", 0); err == nil {
 		t.Fatal("PresignGet(ttl=0): want error, got nil")
 	}
-	if _, err := os.Stat(filepath.Join(dir, "mc-marker")); err == nil {
-		t.Fatal("fake mc must not be invoked for a non-positive ttl")
-	}
+	assertMCNeverCalled(t, dir)
 }
 
 // TestPresignGet_UnconfiguredPublicEndpoint is the capability boundary
 // (#1501): with no caller-reachable public endpoint the client must NOT
-// mint a URL — it returns ErrPresignUnsupported without invoking mc at all
-// (a URL signed for the internal endpoint is unusable from the caller).
+// mint a URL — it returns ErrPresignUnsupported without touching storage
+// or mc (a URL signed for the internal endpoint is unusable from the
+// caller).
 func TestPresignGet_UnconfiguredPublicEndpoint(t *testing.T) {
 	dir := t.TempDir()
 	c := NewMinIOClient(Config{
-		MCBinary:      writeFakeMC(t, dir, fakePresignShareJSON, `{}`),
+		MCBinary:      writeFakeMC(t, dir),
 		Alias:         "agentteams",
 		StoragePrefix: "agentteams/agentteams-storage",
 		Bucket:        "agentteams-storage",
 		// PublicEndpoint intentionally left empty.
+		AccessKey:     "ak",
+		SecretKey:     "sk",
 	})
 
 	_, err := c.PresignGet(t.Context(), "humans/alice/files/a.txt", 5*time.Minute)
 	if !errors.Is(err, ErrPresignUnsupported) {
 		t.Fatalf("err = %v, want ErrPresignUnsupported", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "mc-marker")); err == nil {
-		t.Fatal("fake mc must not be invoked when the public endpoint is unconfigured")
+	assertMCNeverCalled(t, dir)
+}
+
+// TestPresignGet_SignsCurrentIdentityForDynamicCredentials pins that a
+// dynamic-credential client signs each issuance with the identity
+// resolved at that moment — the mc path did this through per-call
+// MC_HOST_* env vars, the SDK path through newPublicSDKClient.
+func TestPresignGet_SignsCurrentIdentityForDynamicCredentials(t *testing.T) {
+	public := newPublicPresignOrigin(t)
+	defer public.Close()
+
+	creds := &uploadCredentials{}
+	c := NewMinIOClient(Config{
+		Endpoint:       "http://internal.invalid:9000",
+		PublicEndpoint: public.URL,
+		AccessKey:      "static",
+		SecretKey:      "static",
+		Bucket:         "bucket",
+	}).WithCredentialSource(creds)
+	key := "humans/alice/files/a.txt"
+
+	first, err := c.PresignGet(t.Context(), key, time.Minute)
+	if err != nil {
+		t.Fatalf("presign 1: %v", err)
+	}
+	second, err := c.PresignGet(t.Context(), key, time.Minute)
+	if err != nil {
+		t.Fatalf("presign 2: %v", err)
+	}
+	if u1, _ := url.Parse(first); !strings.Contains(u1.Query().Get("X-Amz-Credential"), "temporary1/") {
+		t.Fatalf("issuance 1 X-Amz-Credential = %q, want the first temporary identity", u1.Query().Get("X-Amz-Credential"))
+	}
+	if u2, _ := url.Parse(second); !strings.Contains(u2.Query().Get("X-Amz-Credential"), "temporary2/") {
+		t.Fatalf("issuance 2 X-Amz-Credential = %q, want the rotated temporary identity", u2.Query().Get("X-Amz-Credential"))
+	}
+	if creds.calls < 2 {
+		t.Fatalf("credentials resolved %d times, want one per issuance", creds.calls)
 	}
 }

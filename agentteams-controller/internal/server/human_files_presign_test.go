@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,9 +25,10 @@ import (
 // --- Fake mc rig -----------------------------------------------------------
 //
 // The presign path is tested against the real MinIOClient with a fake mc
-// binary injected via Config.MCBinary (#1475 PR-4): the script records every
-// invocation (marker + args log) and replays canned JSON, so the tests prove
-// both the issued URL and that mc is never reached on a denied request.
+// binary injected via Config.MCBinary: the script records every invocation
+// (marker + args log) and fails loudly on any non-alias command, so the
+// tests prove the issued URL is SDK-minted and that mc is never reached —
+// neither on a successful issuance nor on a denied request.
 
 // fakeMCScript is the POSIX sh stand-in for mc; duplicated from the oss
 // package's tests because the two packages cannot share unexported helpers.
@@ -96,18 +99,61 @@ func writeFakeMCServer(t *testing.T, dir string) string {
 	return scriptPath
 }
 
+// presignStatS3Server is the minimal S3 surface the presign path performs:
+// the bucket location lookup the SDK runs when minting a presigned URL
+// (SigV4 binds the region), plus a HEAD that serves the canned file
+// (etag/size/content type) and 404s every other key. The same server acts
+// as the internal endpoint AND the caller-reachable public origin, because
+// the SDK mints the URL by dialing the public origin at issuance — a
+// configured rig's public endpoint must be dialable.
+func presignStatS3Server(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("location") {
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = w.Write([]byte(`<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></LocationConstraint>`))
+			return
+		}
+		if r.URL.Path == "/agentteams-storage" || r.URL.Path == "/agentteams-storage/" {
+			// The bucket exists; only the key is missing below. BucketExists
+			// probes HEAD /<bucket>, and the handler must read a key 404 as a
+			// missing file rather than a gone bucket.
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Path == "/agentteams-storage/humans/alice/files/a.txt" {
+			w.Header().Set("ETag", `"`+fakePresignETag+`"`)
+			w.Header().Set("Content-Type", "text/plain")
+			w.Header().Set("Content-Length", strconv.Itoa(fakePresignSize))
+			w.Header().Set("Last-Modified", "Sat, 31 Oct 2026 12:00:00 GMT")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`<Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message></Error>`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 // newHumanPresignRig builds the handler against a fake k8s client (humans
-// alice and bob), a real MinIOClient whose MCBinary is the fake mc script,
-// and a live audit client on a separate in-memory store. It returns the
-// handler, the audit store, and the fake-mc temp dir (marker / args log).
+// alice and bob), a real MinIOClient whose MCBinary is the fake mc canary
+// (must never be invoked) and whose internal endpoint and public origin
+// are both a minimal S3 fake, and a live audit client on a separate
+// in-memory store. It returns the handler, the audit store, and the
+// fake-mc temp dir (marker / args log).
 func newHumanPresignRig(t *testing.T) (*humanFilesHandler, *ossfake.Memory, string) {
-	return newHumanPresignRigWithPublic(t, "http://fake-pub:9000")
+	// Any non-empty value: the rig uses its live S3 fake as the
+	// caller-reachable public origin (see newHumanPresignRigWithPublic).
+	return newHumanPresignRigWithPublic(t, "live")
 }
 
 // newHumanPresignRigWithPublic is the same rig with an explicit
 // caller-reachable public endpoint (#1501); "" models the unconfigured
 // capability boundary where presign must answer 501 instead of minting a
-// URL.
+// URL. A configured rig's public endpoint is replaced by the live S3
+// fake's URL: the SDK mints the presigned URL by dialing the public
+// origin (the SigV4 region lookup), so the origin must be reachable.
 func newHumanPresignRigWithPublic(t *testing.T, publicEndpoint string) (*humanFilesHandler, *ossfake.Memory, string) {
 	t.Helper()
 	scheme := newServerTestScheme(t)
@@ -124,8 +170,13 @@ func newHumanPresignRigWithPublic(t *testing.T, publicEndpoint string) (*humanFi
 		WithObjects(alice, bob).
 		Build()
 	dir := t.TempDir()
+	endpoint := presignStatS3Server(t)
+	if publicEndpoint != "" {
+		publicEndpoint = endpoint.URL
+	}
 	sc := oss.NewMinIOClient(oss.Config{
 		MCBinary:       writeFakeMCServer(t, dir),
+		Endpoint:       endpoint.URL,
 		Alias:          "agentteams",
 		StoragePrefix:  "agentteams/agentteams-storage",
 		Bucket:         "agentteams-storage",
@@ -174,8 +225,29 @@ func TestHumanFiles_PresignIssuesURL(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode: %v: %s", err, rec.Body.String())
 	}
-	if body.URL != fakePresignURL {
-		t.Fatalf("url = %q, want %q", body.URL, fakePresignURL)
+	// The URL is SDK-minted SigV4 for exactly this object: the bucket/key
+	// path, the default 5m expiry, and a real signature. (The host is the
+	// rig's live public origin; the oss package's presign tests pin the
+	// host contract against a named endpoint.)
+	u, perr := url.Parse(body.URL)
+	if perr != nil {
+		t.Fatalf("parse url %q: %v", body.URL, perr)
+	}
+	if u.Path != "/agentteams-storage/humans/alice/files/a.txt" {
+		t.Fatalf("url path = %q, want /agentteams-storage/humans/alice/files/a.txt", u.Path)
+	}
+	q := u.Query()
+	if q.Get("X-Amz-Algorithm") != "AWS4-HMAC-SHA256" {
+		t.Fatalf("X-Amz-Algorithm = %q, want AWS4-HMAC-SHA256", q.Get("X-Amz-Algorithm"))
+	}
+	if q.Get("X-Amz-Expires") != "300" {
+		t.Fatalf("X-Amz-Expires = %q, want 300 (the default 5m TTL)", q.Get("X-Amz-Expires"))
+	}
+	if q.Get("X-Amz-Signature") == "" {
+		t.Fatal("issued URL carries no X-Amz-Signature")
+	}
+	if !strings.Contains(q.Get("X-Amz-Credential"), "test-access-key/") {
+		t.Fatalf("X-Amz-Credential = %q, want the configured access key", q.Get("X-Amz-Credential"))
 	}
 	if body.ETag != fakePresignETag {
 		t.Fatalf("etag = %q, want %q", body.ETag, fakePresignETag)
@@ -192,11 +264,13 @@ func TestHumanFiles_PresignIssuesURL(t *testing.T) {
 	if !exp.After(t0.Add(4*time.Minute)) || !exp.Before(t0.Add(6*time.Minute)) {
 		t.Fatalf("expiresAt = %v, want ~%v+5m", exp, t0)
 	}
-	// The signing credentials must never leak into the response.
-	for _, secret := range []string{"test-access-key", "test-secret-key"} {
-		if strings.Contains(rec.Body.String(), secret) {
-			t.Fatalf("response leaks credential %q: %s", secret, rec.Body.String())
-		}
+	// The SECRET must never leak into the response. (The access key ID
+	// does appear in X-Amz-Credential — that is part of the SigV4
+	// presigned-URL format and public by design, exactly as in the mc
+	// share era; the security is the signature, computable only by the
+	// holder of the secret.)
+	if strings.Contains(rec.Body.String(), "test-secret-key") {
+		t.Fatalf("response leaks the secret key: %s", rec.Body.String())
 	}
 
 	// Audit: exactly one line with who/path/ttl/expiresAt.
@@ -218,19 +292,12 @@ func TestHumanFiles_PresignIssuesURL(t *testing.T) {
 		t.Fatalf("detail expiresAt = %v, want %v", v, body.ExpiresAt)
 	}
 
-	// The configured TTL must actually reach mc, and — the core of #1501 —
-	// the share path must be bound to the public alias (the
-	// caller-reachable origin), while the one-time alias registration
-	// points at that public endpoint.
-	args, err := os.ReadFile(filepath.Join(dir, "mc-args.log"))
-	if err != nil {
-		t.Fatalf("read args log: %v", err)
-	}
-	if want := "alias set agentteams-public http://fake-pub:9000 test-access-key test-secret-key"; !strings.Contains(string(args), want) {
-		t.Fatalf("args = %q, want it to contain the public-alias registration %q", string(args), want)
-	}
-	if want := "share download --expire 5m0s --json agentteams-public/agentteams-storage/humans/alice/files/a.txt"; !strings.Contains(string(args), want) {
-		t.Fatalf("args = %q, want it to contain %q", string(args), want)
+	// The S3-only contract: the URL was minted by the SDK against the
+	// caller-reachable public origin, so mc was never spawned (the fake-mc
+	// canary records any invocation).
+	if _, err := os.Stat(filepath.Join(dir, "mc-marker")); err == nil {
+		args, _ := os.ReadFile(filepath.Join(dir, "mc-args.log"))
+		t.Fatalf("fake mc was invoked on the presign path: %q", string(args))
 	}
 }
 
@@ -283,7 +350,10 @@ func TestHumanFiles_PresignUnknownHuman_Denied(t *testing.T) {
 // audited or issued.
 func TestHumanFiles_PresignMissingFile(t *testing.T) {
 	t.Setenv("AGENTTEAMS_PRESIGN_TTL", "")
-	t.Setenv("FAKE_MC_FAIL", "1") // every mc call fails: the stat never succeeds
+	// Belt and braces: mc would fail loudly if it were invoked at all —
+	// the stat itself now runs through the SDK against the S3 fake, which
+	// 404s every key but the canned file.
+	t.Setenv("FAKE_MC_FAIL", "1")
 	hfh, store, _ := newHumanPresignRig(t)
 
 	rec := httptest.NewRecorder()
@@ -322,7 +392,8 @@ func TestHumanFiles_PresignTTLConfig(t *testing.T) {
 	}
 }
 
-// A valid override must reach the mc invocation, not just the handler field.
+// A valid override must reach the issued URL's expiry, not just the
+// handler field.
 func TestHumanFiles_PresignTTLOverrideReachesMC(t *testing.T) {
 	t.Setenv("AGENTTEAMS_PRESIGN_TTL", "10m")
 	hfh, _, dir := newHumanPresignRig(t)
@@ -332,12 +403,20 @@ func TestHumanFiles_PresignTTLOverrideReachesMC(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("presign: %d %s", rec.Code, rec.Body.String())
 	}
-	args, err := os.ReadFile(filepath.Join(dir, "mc-args.log"))
-	if err != nil {
-		t.Fatalf("read args log: %v", err)
+	var body humanFilePresignResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v: %s", err, rec.Body.String())
 	}
-	if !strings.Contains(string(args), "--expire 10m0s") {
-		t.Fatalf("args = %q, want --expire 10m0s", string(args))
+	u, perr := url.Parse(body.URL)
+	if perr != nil {
+		t.Fatalf("parse url %q: %v", body.URL, perr)
+	}
+	if q := u.Query().Get("X-Amz-Expires"); q != "600" {
+		t.Fatalf("X-Amz-Expires = %q, want 600 (the 10m override must reach the signer)", q)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "mc-marker")); err == nil {
+		args, _ := os.ReadFile(filepath.Join(dir, "mc-args.log"))
+		t.Fatalf("fake mc was invoked on the presign path: %q", string(args))
 	}
 }
 

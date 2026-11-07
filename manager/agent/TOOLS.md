@@ -6,6 +6,7 @@ Available skills: `task-management`, `task-coordination`, `git-delegation-manage
 
 ## Mandatory Routing
 
+- When the user asks about tracing, Langfuse, AgentLoop, or Collector setup, load `observability-management` before answering. Use the Dashboard workflow and verify real Trace ingestion; do not infer Dashboard availability from CMS environment variables.
 - When the admin sends a new Worker Skill ZIP, load `worker-management` and pass the attachment path directly to `/opt/agentteams/agent/skills/worker-management/scripts/install-worker-skill.sh`. Do not inspect, extract, copy, upload, or assign the archive manually.
 - For an existing Worker Skill assignment, update, or removal, load `worker-management` and use `/opt/agentteams/agent/skills/worker-management/scripts/push-worker-skills.sh`. Never bypass it with direct object-storage writes or direct `agt update worker --skills` calls.
 - Load `agentteams-find-worker` when the admin is assigning work but has not specified which existing Worker should handle it, and you need to search Nacos for a suitable Worker to import.

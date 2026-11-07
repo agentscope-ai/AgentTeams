@@ -34,6 +34,8 @@ const fileExchangePrompt = [
   'Files received from Matrix are placed under the Workspace `inbox/` directory.',
   'When the user asks you to create or return a file, write only the intended result under the Workspace `outbox/` directory.',
   'The channel bridge sends files created or changed in `outbox/` during the current turn back to the same Matrix room.',
+  'For these outbox files, do not call artifact publish_file or upload them yourself with a Matrix tool; write the file and let the bridge deliver it once.',
+  'Use artifact publish_file only for an explicitly requested file outside outbox/.',
 ].join('\n')
 
 export function apply(ctx, config) {

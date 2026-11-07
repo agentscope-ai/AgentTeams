@@ -187,6 +187,24 @@ def _submission_result(task: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _completion_artifact_registered(arguments: dict[str, Any], task_id: str) -> bool:
+    """C-1: a completed task counts only if a real artifact was registered.
+
+    "Registered" means the task's result artifact exists in the workspace
+    (`shared/tasks/<task_id>/result.md`) or the task record carries a
+    structured result with a non-empty deliverables list. The status alone
+    is not evidence of delivery — that is exactly the fake-completion
+    loophole this gate removes.
+    """
+    if (_task_dir(arguments, task_id) / "result.md").is_file():
+        return True
+    task_meta = _read_json(_task_state_path(arguments, task_id))
+    if not isinstance(task_meta, dict) or not task_meta:
+        return False
+    result, _errors = _task_result_from_meta(task_meta)
+    return bool(result.get("deliverables"))
+
+
 def _task_result_digest(result: dict[str, Any]) -> str:
     """Return the cross-runtime identity of a structured task result."""
     deliverables = result.get("deliverables")
@@ -1107,19 +1125,45 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     tasks = loop.get("tasks", []) if isinstance(loop.get("tasks"), list) else []
                 else:
                     tasks = project.get("tasks", []) if isinstance(project.get("tasks"), list) else []
-                non_terminal = []
-                for task in tasks:
-                    if not isinstance(task, dict):
-                        non_terminal.append("<unknown> (invalid)")
-                        continue
-                    status = str(task.get("status") or "")
-                    if status not in TERMINAL_TASK_STATUSES:
-                        non_terminal.append(f"{task.get('task_id') or '<unknown>'} ({status or 'unknown'})")
-                if non_terminal:
-                    raise ValueError(
-                        "complete_project requires every project task to be terminal; "
-                        f"not terminal: {', '.join(non_terminal)}"
-                    )
+                if str(project.get("plan_type") or "dag") == "loop":
+                    # C-1 scope: the artifact gate targets delivery (DAG)
+                    # projects. A loop completes one iteration at a time and
+                    # `revision` is a legitimate iteration end, so the loop
+                    # path keeps the terminal-state gate until the
+                    # iteration-aware rule is designed (tracked as C-1b).
+                    non_terminal = []
+                    for task in tasks:
+                        if not isinstance(task, dict):
+                            non_terminal.append("<unknown> (invalid)")
+                            continue
+                        status = str(task.get("status") or "")
+                        if status not in TERMINAL_TASK_STATUSES:
+                            non_terminal.append(
+                                f"{task.get('task_id') or '<unknown>'} ({status or 'unknown'})"
+                            )
+                    if non_terminal:
+                        raise ValueError(
+                            "complete_project requires every project task to be terminal; "
+                            f"not terminal: {', '.join(non_terminal)}"
+                        )
+                else:
+                    problems: list[str] = []
+                    for task in tasks:
+                        if not isinstance(task, dict):
+                            problems.append("<unknown> (invalid)")
+                            continue
+                        task_id = str(task.get("task_id") or task.get("taskId") or "<unknown>")
+                        status = str(task.get("status") or "")
+                        if status != "completed":
+                            problems.append(f"{task_id} (status={status or 'unknown'})")
+                            continue
+                        if not _completion_artifact_registered(arguments, task_id):
+                            problems.append(f"{task_id} (artifact=missing)")
+                    if problems:
+                        raise ValueError(
+                            "complete_project requires every task to be completed and "
+                            "artifact-registered; missing: " + ", ".join(problems)
+                        )
                 project["status"] = "completed"
                 if loop:
                     loop["status"] = "completed"

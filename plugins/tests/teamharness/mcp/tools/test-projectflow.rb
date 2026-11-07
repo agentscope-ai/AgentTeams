@@ -243,6 +243,9 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
     })
     if not matrix_plan.get("ok"):
         raise AssertionError(f"matrix project plan_dag failed: {matrix_plan!r}")
+    matrix_task_result = pathlib.Path("#{workspace}") / "shared/tasks/matrix-dm-project-01/result.md"
+    matrix_task_result.parent.mkdir(parents=True, exist_ok=True)
+    matrix_task_result.write_text("# Matrix DM task result\\n\\nDeliverable.\\n", encoding="utf-8")
     project_result_path = pathlib.Path("#{workspace}") / "shared/projects/matrix-dm-project/result.md"
     project_result_path.parent.mkdir(parents=True, exist_ok=True)
     project_result_path.write_text("# Matrix DM Project Result\\n\\nReady for requester.\\n", encoding="utf-8")
@@ -734,7 +737,7 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
         "action": "complete_project",
         "payload": {"projectId": "daily-plan-2026-06-03"},
     })
-    if incomplete.get("ok") or "t-001 (planned)" not in incomplete.get("error", "") or "t-002 (planned)" not in incomplete.get("error", ""):
+    if incomplete.get("ok") or "t-001 (status=planned)" not in incomplete.get("error", "") or "t-002 (status=planned)" not in incomplete.get("error", ""):
         raise AssertionError(f"complete_project should reject non-terminal tasks: {incomplete!r}")
     incomplete_state = json.loads((pathlib.Path("#{workspace}") / "shared/projects/daily-plan-2026-06-03/meta.json").read_text(encoding="utf-8"))
     if incomplete_state.get("status") != "active":
@@ -757,13 +760,41 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
                     "title": "Summarize",
                     "assignedTo": "@worker-b:example.test",
                     "dependsOn": ["t-001"],
-                    "status": "cancelled",
+                    "status": "completed",
                 },
             ],
         },
     })
     if not terminal_plan.get("ok"):
         raise AssertionError(f"terminal plan_dag failed: {terminal_plan!r}")
+    for completed_task_id in ("t-001", "t-002"):
+        task_result = pathlib.Path("#{workspace}") / f"shared/tasks/{completed_task_id}/result.md"
+        task_result.parent.mkdir(parents=True, exist_ok=True)
+        task_result.write_text(f"# {completed_task_id} result\\n", encoding="utf-8")
+
+    # C-1 negative case: a cancelled task must never masquerade as a
+    # successful delivery (the TC-05 shape the completion gate removed).
+    cancelled_plan = payload({
+        "action": "plan_dag",
+        "payload": {
+            "projectId": "cancelled-gate-project",
+            "tasks": [{
+                "taskId": "cg-001",
+                "title": "Cancelled work",
+                "assignedTo": "@worker-a:example.test",
+                "dependsOn": [],
+                "status": "cancelled",
+            }],
+        },
+    })
+    if not cancelled_plan.get("ok"):
+        raise AssertionError(f"cancelled gate plan_dag failed: {cancelled_plan!r}")
+    cancelled_complete = payload({
+        "action": "complete_project",
+        "payload": {"projectId": "cancelled-gate-project"},
+    })
+    if cancelled_complete.get("ok") or "status=cancelled" not in cancelled_complete.get("error", ""):
+        raise AssertionError(f"complete_project must reject a cancelled task: {cancelled_complete!r}")
 
     completed = payload({
         "action": "complete_project",

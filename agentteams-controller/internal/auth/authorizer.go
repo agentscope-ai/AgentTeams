@@ -135,6 +135,9 @@ func (a *Authorizer) authorizeHuman(caller *CallerIdentity, req AuthzRequest) er
 		// within their accessibleTeams scope. The middleware cannot resolve
 		// project/task -> team (empty ResourceTeam short-circuits
 		// requireSameTeam); the handler is the real team boundary.
+		if req.Action == ActionGet {
+			return nil // record handlers filter scoped reads, as for project Get
+		}
 		if req.Action == ActionUpdate {
 			return a.requireSameTeam(caller, req)
 		}
@@ -323,7 +326,7 @@ func (a *Authorizer) authorizeTeamLeader(caller *CallerIdentity, req AuthzReques
 		// cannot resolve project/task -> team (empty ResourceTeam
 		// short-circuits requireSameTeam); the handler enforces team
 		// equality after resolving the record.
-		if req.Action == ActionUpdate {
+		if req.Action == ActionGet || req.Action == ActionUpdate {
 			return a.requireSameTeam(caller, req)
 		}
 		return deny(caller, req)

@@ -3187,6 +3187,27 @@ func pauseSourcesContain(sources []string, source string) bool {
 // Idempotency is intrinsic to If-Match: re-sending the same body against
 // the same version succeeds once; the second attempt sees the new ETag and
 // fails with 409 until it re-reads.
+// GetProjectMeta serves GET /api/v1/projects/{id}/meta: the stored meta.json
+// verbatim plus its ETag — the read half of the conditional commit pair
+// (PutProjectMeta requires that ETag as If-Match). Access rules are the same
+// as every other project read (W4: scoped callers see 404, never 403).
+func (h *ProjectHandler) GetProjectMeta(w http.ResponseWriter, r *http.Request) {
+	pwc, failed := h.readProjectWriteContext(w, r)
+	if failed {
+		return
+	}
+	data, err := h.oss.GetObject(r.Context(), pwc.key)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "read project meta: "+err.Error())
+		return
+	}
+	etag := contentETag(data)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("ETag", etag)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
 func (h *ProjectHandler) PutProjectMeta(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("id")
 	if projectID == "" {

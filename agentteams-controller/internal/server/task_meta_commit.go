@@ -272,6 +272,35 @@ func candidateTeam(prefix string) string {
 	return trimmed
 }
 
+// GetTaskMeta serves GET /api/v1/tasks/{id}/meta: the stored task meta.json
+// verbatim plus its ETag — the read half of the conditional commit pair
+// (PutTaskMeta requires that ETag as If-Match, or If-None-Match:* to create).
+// Task ids are project-scoped in the runtime and stored per team, so an id
+// present in two teams is 409 with the ?team= hint (same rule as the commit).
+func (h *ProjectHandler) GetTaskMeta(w http.ResponseWriter, r *http.Request) {
+	taskID := strings.TrimSpace(r.PathValue("id"))
+	if taskID == "" {
+		writeError(w, http.StatusBadRequest, "task id is required")
+		return
+	}
+	key, _, ok := h.resolveTaskMetaCommitKey(w, r, taskID)
+	if !ok {
+		return
+	}
+	data, err := h.oss.GetObject(r.Context(), key)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "read task meta: "+err.Error())
+		return
+	}
+	// Bind the version to these bytes; a later StatMeta can observe a
+	// concurrent write and incorrectly authorize committing the old body.
+	etag := contentETag(data)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("ETag", etag)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
 // PutTaskMeta conditionally commits a task's full meta.json against the
 // version the caller read (#1471) — or creates it on the first creation
 // (create-if-absent, If-None-Match: *). See the file header for why.

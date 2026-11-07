@@ -167,6 +167,20 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// auto-redirect of the bare path): it serves the root directory
 	// listing and the recursive flat listing (?recursive=1).
 	mux.Handle("GET /api/v1/humans/{name}/files", mw.Authenticate(http.HandlerFunc(hfh.listFiles)))
+	// Incremental change feed: the literal pattern outranks the {path...}
+	// wildcard below, so a file literally named "changes" at the area root
+	// is served only through the feed route (GET-shadowed) — the same
+	// tradeoff the exact files-root route makes against the wildcard.
+	mux.Handle("GET /api/v1/humans/{name}/files/changes", mw.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Only an explicit cursor selects the delta API. Without it,
+		// preserve reads of the existing file named "changes".
+		if !r.URL.Query().Has("since") {
+			r.SetPathValue("path", "changes")
+			hfh.getFile(w, r)
+			return
+		}
+		hfh.fileChanges(w, r)
+	})))
 	mux.Handle("GET /api/v1/humans/{name}/files/{path...}", mw.Authenticate(http.HandlerFunc(hfh.getFile)))
 	mux.Handle("PUT /api/v1/humans/{name}/files/{path...}", mw.Authenticate(http.HandlerFunc(hfh.putFile)))
 	mux.Handle("DELETE /api/v1/humans/{name}/files/{path...}", mw.Authenticate(http.HandlerFunc(hfh.deleteFile)))
@@ -418,6 +432,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// the dedicated "project-meta" — NOT "project" — so the authorizer can
 	// grant workers exactly this one write without opening
 	// pause/resume/replan/complete/cancel (see authorizeWorker).
+	mux.Handle("GET /api/v1/projects/{id}/meta", mw.RequireAuthz(authpkg.ActionGet, "project-meta", projectNameFn)(http.HandlerFunc(projh.GetProjectMeta)))
 	mux.Handle("PUT /api/v1/projects/{id}/meta", mw.RequireAuthz(authpkg.ActionUpdate, "project-meta", projectNameFn)(http.HandlerFunc(projh.PutProjectMeta)))
 
 	// Task meta conditional commit (#1471, follow-up to #1402): the task-level
@@ -426,6 +441,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// enforces the team boundary (the middleware cannot resolve task -> team)
 	// and refuses to release the Controller's cancellation.
 	taskNameFn := func(r *http.Request) string { return r.PathValue("id") }
+	mux.Handle("GET /api/v1/tasks/{id}/meta", mw.RequireAuthz(authpkg.ActionGet, "task-meta", taskNameFn)(http.HandlerFunc(projh.GetTaskMeta)))
 	mux.Handle("PUT /api/v1/tasks/{id}/meta", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.PutTaskMeta)))
 
 	// --- Gateway ---

@@ -329,9 +329,8 @@ func TestHumanFileChanges_RetentionCountCap(t *testing.T) {
 	}
 }
 
-// TestHumanFileChanges_RestoreAndPurgeSurface: restore and purge entries
-// surface like put and delete — restore in items, the original files/
-// path in deleted for both delete and purge.
+// TestHumanFileChanges_RestoreAndPurgeSurface: restore surfaces in items,
+// while purging trash does not repeat a live-file deletion.
 func TestHumanFileChanges_RestoreAndPurgeSurface(t *testing.T) {
 	hfh, _, _ := newHumanFilesRig(t)
 	if rec := hfPutFile(t, hfh, "alice", "a.md", hfSelf(), "v1-content"); rec.Code != http.StatusOK {
@@ -378,10 +377,9 @@ func TestHumanFileChanges_RestoreAndPurgeSurface(t *testing.T) {
 	if body.Items[0].Path != "files/a.md" || body.Items[1].Path != "files/a.md" {
 		t.Fatalf("item paths must be the files/ path: %+v", body.Items)
 	}
-	// Two deletes and one purge, in that order: each delete and the
-	// purge surface the original files/ path.
-	if len(body.Deleted) != 3 {
-		t.Fatalf("deleted must be the two deletes plus the purge: %v", body.Deleted)
+	// Only the two soft deletes affect the live files/ path.
+	if len(body.Deleted) != 2 {
+		t.Fatalf("deleted must contain only the two soft deletes: %v", body.Deleted)
 	}
 	for _, p := range body.Deleted {
 		if p != "files/a.md" {

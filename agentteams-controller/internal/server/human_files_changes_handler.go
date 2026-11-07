@@ -52,8 +52,10 @@ import (
 //   - No changes after the cursor -> 200 with empty items/deleted and the
 //     cursor returned verbatim (the client's steady-state zero-byte poll).
 //   - put/restore entries surface in items (ascending change order) with
-//     the file's current size and etag; delete/purge entries surface as
-//     paths in deleted (ascending change order). A path may appear in
+//     the file's current size and etag; delete entries surface as paths
+//     in deleted (ascending change order). Purging a trash entry only
+//     advances the cursor: it does not delete the live files/ path, which
+//     may have been recreated since the soft delete. A path may appear in
 //     both within one page (a delete followed by a recreate); the feed is
 //     a log, not a state, and the client protocol applies it.
 //   - changeID = 20 zero-padded UnixNano digits + 6 random hex digits:
@@ -302,7 +304,8 @@ func (h *humanFilesHandler) humanChangesLatest(ctx context.Context, prefix strin
 // Authorization reuses the read-file matrix through the area root
 // (self/manager/admin, plus the team-grant resolution a root listing
 // gets): callers without access receive the same indistinguishable 404 as
-// every other file-area read, so the feed cannot probe for humans.
+// every other file-area read, so the feed cannot probe for humans. Each
+// entry also checks descendant access, as a root listing does.
 func (h *humanFilesHandler) fileChanges(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	a, status, msg := h.authorizeHumanFile(r.Context(), name, "", false, false)
@@ -390,10 +393,15 @@ func (h *humanFilesHandler) fileChanges(w http.ResponseWriter, r *http.Request) 
 			if json.Unmarshal(data, &e) != nil {
 				continue // corrupt content is permanent; skip it, cursor advances
 			}
+			rel, isFile := strings.CutPrefix(e.Path, "files/")
+			if !isFile || !a.canReadPath(rel) {
+				lastID = eid
+				continue
+			}
 			switch e.Op {
 			case "put", "restore":
 				items = append(items, humanFileChangeItem{Path: e.Path, Size: e.Size, ETag: e.ETag, Op: e.Op})
-			case "delete", "purge":
+			case "delete":
 				if e.Path != "" {
 					deleted = append(deleted, e.Path)
 				}

@@ -92,6 +92,7 @@ def _send_delegate_notification(
     assignee: str,
     spec: str,
     txn: str | None = None,
+    recovery_note: str = "",
 ) -> dict[str, Any]:
     """Send the automatic Worker assignment notification for delegate_task.
 
@@ -106,6 +107,10 @@ def _send_delegate_notification(
     new delegation attempt (a different assignee, including A->B->A) rotates
     the nonce, so its notification is never swallowed by a stale id. When
     ``txn`` is omitted, a fresh id is generated for this send only.
+    ``recovery_note`` (the delegate_task restart-recovery note) is appended
+    verbatim AFTER the spec preview: it is not subject to the 500-char
+    preview truncation, and the success result reports
+    ``recoveryNote: true`` when it was included.
     Returns the Matrix ``eventId`` on success.
     """
     homeserver = os.getenv("AGENTTEAMS_MATRIX_URL", "").rstrip("/")
@@ -129,6 +134,11 @@ def _send_delegate_notification(
         f"{assignee} You are assigned task **{task_id}**: {title}\n\n"
         f"{spec_preview}"
     )
+    if recovery_note:
+        # Appended after the preview so the 500-char spec-preview contract
+        # above is computed over the spec alone (the note is never
+        # truncated by it).
+        notification_text += f"\n\n{recovery_note}"
     mentions = [assignee]
     content = _matrix_content(notification_text, mentions)
 
@@ -160,6 +170,7 @@ def _send_delegate_notification(
             "eventId": event_id,
             "roomId": matrix_room_id,
             "assignee": assignee,
+            "recoveryNote": bool(recovery_note),
         }
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:200]

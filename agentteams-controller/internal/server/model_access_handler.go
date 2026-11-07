@@ -273,6 +273,14 @@ func (h *ResourceHandler) writeWorkerModelAccess(ctx context.Context, w http.Res
 		writeAccess = caller.TeamMatches(team)
 	}
 
+	// Implicit-annotation cap: an over-cap annotation is a 409 with the
+	// count, never a silently truncated view. The projection itself keeps
+	// the established (pre-#1514) read contract: rows come from the
+	// resolved grant table, not from the merged enforcement set.
+	if _, err := buildModelGrantSet(scope, tableSpec, &worker); err != nil {
+		writeGrantResolutionError(w, "resolve model access", err)
+		return
+	}
 	eff := authpkg.Resolve(scope, tableSpec)
 
 	// Caller-view gate: a surface the write entry does not authorize for

@@ -139,9 +139,10 @@ const (
 // pre-write snapshots in object storage. All reconcile outcomes are
 // fail-closed: any read/verify failure is an error, never "applied".
 type ConfigManager struct {
-	adapter *Adapter
-	exec    ExecBackend
-	store   KeyStore
+	validateChange runtimeconfig.ChangeValidator
+	adapter        *Adapter
+	exec           ExecBackend
+	store          KeyStore
 
 	reconcileWindow   time.Duration
 	reconcileInterval time.Duration
@@ -152,6 +153,11 @@ type ConfigManager struct {
 // layer routes a worker to its runtime's Manager without depending on the
 // concrete type.
 var _ runtimeconfig.Manager = (*ConfigManager)(nil)
+
+// SetChangeValidator binds request authorization before this manager is used.
+func (m *ConfigManager) SetChangeValidator(validate runtimeconfig.ChangeValidator) {
+	m.validateChange = validate
+}
 
 // Option tunes reconcile timing (tests use millisecond values).
 type Option func(*ConfigManager)
@@ -743,6 +749,12 @@ func (m *ConfigManager) Write(ctx context.Context, worker string, values map[str
 	}
 
 	newDoc := deepMerge(current, pruned)
+	if m.validateChange != nil {
+		if err := m.validateChange(ctx, current, newDoc); err != nil {
+			return WriteResult{}, err
+		}
+	}
+
 	newContent, err := json.MarshalIndent(newDoc, "", "  ")
 	if err != nil {
 		return WriteResult{}, fmt.Errorf("encode config: %w", err)
@@ -966,6 +978,17 @@ func (m *ConfigManager) Rollback(ctx context.Context, worker, rev string) (Write
 	curRaw, err := m.readConfigFile(ctx, worker, path)
 	if err != nil {
 		return WriteResult{}, err
+	}
+	if m.validateChange != nil {
+		current := map[string]any{}
+		if len(curRaw) > 0 {
+			// An invalid current file remains recoverable by a policy that
+			// permits recovery; policies requiring current values fail closed.
+			current, _ = parseConfigDoc(curRaw)
+		}
+		if err := m.validateChange(ctx, current, doc); err != nil {
+			return WriteResult{}, err
+		}
 	}
 	curRev := revOf(curRaw)
 	// A rollback to the current state is a no-op (still verified +

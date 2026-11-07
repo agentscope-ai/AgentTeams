@@ -75,6 +75,10 @@ type KeyStore interface {
 	Stat(ctx context.Context, key string) error
 }
 
+// ChangeValidator checks exact native documents inside the worker mutation lock.
+// A nil current document means the current file could not be parsed.
+type ChangeValidator func(context.Context, map[string]any, map[string]any) error
+
 // Manager is the per-runtime native member-config read/write plane. A
 // runtime's config manager reads and writes the worker's own native config
 // file (embedded docker mode only) with optimistic locking by on-disk
@@ -82,6 +86,7 @@ type KeyStore interface {
 // reconcile semantics. The server layer never translates fields between
 // runtimes; it only routes a worker to the manager of its resolved runtime.
 type Manager interface {
+	SetChangeValidator(ChangeValidator)
 	// Runtime is the runtime id this manager reads and writes.
 	Runtime() string
 	// Read returns the current config state (GET /config projection).

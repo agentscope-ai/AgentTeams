@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Independent DeepSeek Harness runtime version (e.g. v0.1.0)'
+        description: 'Independent DeepSeek Harness runtime version (e.g. v0.1.1)'
         required: true
         type: string
-        default: 'v0.1.0'
+        default: 'v0.1.1'
   push:
     branches:
       - main

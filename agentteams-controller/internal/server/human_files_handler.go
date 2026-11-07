@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
@@ -76,6 +77,13 @@ type humanFilesHandler struct {
 	// from AGENTTEAMS_PRESIGN_TTL (Go duration) clamped to
 	// maxHumanPresignTTL.
 	presignTTL time.Duration
+	// changesPruneInterval gates the per-human change-log retention
+	// sweep; tests set it to 0 to prune on every append.
+	changesPruneInterval time.Duration
+	// changesPruneMu guards changesPruneAt, the last retention sweep per
+	// human (username -> wall-clock time).
+	changesPruneMu sync.Mutex
+	changesPruneAt map[string]time.Time
 }
 
 // NewHumanFilesHandler constructs the handler. The per-file size limit is
@@ -91,6 +99,8 @@ func NewHumanFilesHandler(k8sClient client.Client, namespace string, sc oss.Stor
 		presignMaxBytes: defaultHumanFilePresignMaxBytes,
 		pathLockTTL:     humanPathLockTTL,
 		presignTTL:      defaultHumanPresignTTL,
+		changesPruneInterval: humanChangePruneInterval,
+		changesPruneAt:         make(map[string]time.Time),
 	}
 	if v := os.Getenv("HUMAN_FILE_MAX_BYTES"); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
@@ -1133,6 +1143,12 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	etag := snapMeta.ETag
+	h.appendHumanChange(ctx, username, humanChangeEntry{
+		Op:   "put",
+		Path: "files/" + rel,
+		Size: int64(len(data)),
+		ETag: etag,
+	})
 	h.recordAudit(ctx, a, "human_file_write",
 		"path", "files/"+rel, "size", len(data), "etag", etag)
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
@@ -1286,6 +1302,15 @@ func (h *humanFilesHandler) deleteFile(w http.ResponseWriter, r *http.Request) {
 				"remove original failed; the file is preserved in the trash and may still be readable")
 			return
 		}
+		// Only this request's own successful soft delete is recorded: the
+		// ErrNotExist fall-through above means a concurrent delete won and
+		// recorded its own entry.
+		h.appendHumanChange(ctx, username, humanChangeEntry{
+			Op:   "delete",
+			Path: "files/" + rel,
+			Size: int64(len(data)),
+			ETag: snapMeta.ETag,
+		})
 	}
 	h.recordAudit(ctx, a, "human_file_delete",
 		"path", "files/"+rel, "size", len(data), "trashId", trashID)
@@ -1597,6 +1622,12 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 				"human", username, "trashId", id, "size", existingSize)
 		}
 	}
+	h.appendHumanChange(ctx, username, humanChangeEntry{
+		Op:   "restore",
+		Path: "files/" + rel,
+		Size: int64(len(content)),
+		ETag: md5Hex(content),
+	})
 	h.recordAudit(ctx, a, "human_trash_restore",
 		"path", "files/"+rel, "size", len(content), "trashId", id, "overwrite", override)
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
@@ -1702,6 +1733,15 @@ func (h *humanFilesHandler) purgeTrash(w http.ResponseWriter, r *http.Request) {
 	} else {
 		log.FromContext(ctx).Info("warning: trash purge deleted the entry but lost the entry lease before the ledger release; the bytes stay counted (conservative overstate)",
 			"human", username, "trashId", id, "size", m.Size)
+	}
+	// A degenerate entry without a recorded path is not surfaced in the
+	// change feed; the purge itself (and its audit) still happens.
+	if m.Path != "" {
+		h.appendHumanChange(ctx, username, humanChangeEntry{
+			Op:   "purge",
+			Path: m.Path,
+			Size: m.Size,
+		})
 	}
 	h.recordAudit(ctx, a, "human_trash_purge",
 		"path", m.Path, "size", m.Size, "trashId", id)

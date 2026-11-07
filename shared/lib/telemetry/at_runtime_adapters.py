@@ -28,8 +28,18 @@ def task_resolver():
 def enrich_task(fields, workspace):
     fields = dict(fields)
     team = os.getenv("AGENTTEAMS_TEAM_NAME")
+    runtime_path = os.getenv("TEAMHARNESS_RUNTIME_CONFIG")
+    if runtime_path:
+        # Team membership is hot-updated in runtime.yaml, not container env.
+        import yaml
+        try:
+            runtime = yaml.safe_load(Path(runtime_path).read_text()) or {}
+            team = (runtime.get("team") or {}).get("name")
+            fields.pop("agentteams.team.id", None)
+        except (OSError, yaml.YAMLError):
+            pass
     if team:
-        fields.setdefault("agentteams.team.id", team)
+        fields["agentteams.team.id"] = team
     if workspace and not fields.get("agentteams.task.id"):
         resolver = task_resolver()
         found = resolver(Path(workspace), room_id=fields.get("agentteams.room.id", "")) if resolver else {}

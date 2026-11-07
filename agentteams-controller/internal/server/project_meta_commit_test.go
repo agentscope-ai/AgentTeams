@@ -365,10 +365,10 @@ func TestPutProjectMeta_BackendWithoutStrictWrites503(t *testing.T) {
 	}
 }
 
-// TestHTTPServer_RegistersProjectMetaCommitRoute proves the route is wired
+// TestHTTPServer_RegistersProjectMetaCommitRoute proves the routes are wired
 // into the real Mux: a PUT without If-Match reaches the handler (428, not
-// 404) and a GET on the same path is a method mismatch (405, not 404) —
-// the pattern binds PUT only.
+// 404), and GET reaches its (read) handler instead of a method mismatch —
+// the meta path now carries the read half of the CAS pair as well.
 func TestHTTPServer_RegistersProjectMetaCommitRoute(t *testing.T) {
 	store := ossfake.NewMemory()
 	putProject(store, "teams/alpha-team/shared/projects/p1/meta.json", map[string]any{
@@ -393,8 +393,12 @@ func TestHTTPServer_RegistersProjectMetaCommitRoute(t *testing.T) {
 	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/meta", nil)
 	rec2 := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(rec2, req2)
-	if rec2.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("GET meta status=%d, want 405 (PUT-only binding); body=%s", rec2.Code, rec2.Body.String())
+	// GET is a real route now: it must reach the read handler. mux's own
+	// "404 page not found" means the route is absent; the handler's JSON
+	// 404 ("project not found", no team CRs in this fixture) proves wiring.
+	if rec2.Code == http.StatusMethodNotAllowed ||
+		(rec2.Code == http.StatusNotFound && !strings.Contains(rec2.Body.String(), "project not found")) {
+		t.Fatalf("GET meta status=%d, want the read handler reached; body=%s", rec2.Code, rec2.Body.String())
 	}
 }
 

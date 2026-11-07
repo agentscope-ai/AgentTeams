@@ -211,6 +211,21 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/loops/{name}/pause", mw.RequireAuthz(authpkg.ActionUpdate, "loop", loopNameFn)(http.HandlerFunc(looph.PauseLoop)))
 	mux.Handle("POST /api/v1/loops/{name}/resume", mw.RequireAuthz(authpkg.ActionUpdate, "loop", loopNameFn)(http.HandlerFunc(looph.ResumeLoop)))
 
+	// --- Loop Runner API surface (1.2.6 reserved: frozen shapes, in-memory
+	// state, no runner execution — see loop_runner_api.go) ---
+	// Loop-scoped routes use the same "loop" kind as pause/resume; the
+	// handler re-checks team scope (the middleware cannot resolve
+	// loop -> team).
+	lra := NewLoopRunnerAPI(deps.Client, deps.Namespace)
+	mux.Handle("GET /api/v1/loops/{name}/occurrences", mw.RequireAuthz(authpkg.ActionGet, "loop", loopNameFn)(http.HandlerFunc(lra.ListOccurrences)))
+	mux.Handle("POST /api/v1/loops/{name}/kick", mw.RequireAuthz(authpkg.ActionUpdate, "loop", loopNameFn)(http.HandlerFunc(lra.Kick)))
+	mux.Handle("POST /api/v1/loops/{name}/lease", mw.RequireAuthz(authpkg.ActionUpdate, "loop", loopNameFn)(http.HandlerFunc(lra.AcquireLease)))
+	// Internal machine-to-machine endpoint (no user-auth middleware, same
+	// pattern as the appservice transaction routes): the handshake's
+	// triple check (protocol window, manifest digest, capability floor)
+	// IS the authentication boundary.
+	mux.Handle("POST /internal/runner/handshake", http.HandlerFunc(lra.Handshake))
+
 	// --- Audit (read-only view of the durable audit store, #1220 §8) ---
 	audh := NewAuditHandler(deps.OSS)
 	mux.Handle("GET /api/v1/audit", mw.RequireAuthz(authpkg.ActionGet, "audit", nil)(http.HandlerFunc(audh.List)))

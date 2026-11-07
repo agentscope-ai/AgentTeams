@@ -1037,6 +1037,34 @@ type LoopStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// ObservedGeneration is the metadata.generation last reconciled.
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// Runner is the observed loop-runner lifecycle for this loop
+	// (1.2.6 reserved surface; nil until a runner is wired). Like every
+	// other LoopStatus field it is a read-only projection — it carries
+	// no desired state.
+	Runner *RunnerStatus `json:"runner,omitempty"`
+}
+
+// RunnerState constants define the observed runner lifecycle projected
+// into LoopStatus.Runner (1.2.6 reserved surface).
+const (
+	RunnerStateAbsent      = "absent"      // no runner installed or handshaken
+	RunnerStateHandshaking = "handshaking" // a handshake is in flight
+	RunnerStateActive      = "active"      // handshake accepted, lease valid
+	RunnerStateDegraded    = "degraded"    // liveness lease lapsed; loop fell back to its built-in ticker
+)
+
+// RunnerStatus is the controller-side observation of the loop runner
+// for a Loop. It is a read-only projection derived from the runner
+// lifecycle (installation record, handshake result, liveness lease);
+// the loop keeps its built-in ticker behavior whenever the runner is
+// absent or degraded, so the field never gates scheduling on its own.
+type RunnerStatus struct {
+	// State is the observed runner lifecycle state: absent /
+	// handshaking / active / degraded.
+	State string `json:"state"`
+	// ObservedProtocol is the protocol_version of the last accepted
+	// handshake; empty when the runner never handshaken.
+	ObservedProtocol string `json:"observedProtocol,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

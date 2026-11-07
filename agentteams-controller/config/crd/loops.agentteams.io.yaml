@@ -99,6 +99,17 @@ spec:
                 observedGeneration:
                   type: integer
                   format: int64
+                runner:
+                  type: object
+                  description: Observed loop runner state; absent means the built-in ticker drives the loop.
+                  properties:
+                    state:
+                      type: string
+                      enum: [absent, handshaking, active, degraded]
+                      description: Observed runner lifecycle state.
+                    observedProtocol:
+                      type: string
+                      description: Protocol version of the last accepted handshake; empty when never handshaken.
       subresources:
         status: {}
       additionalPrinterColumns:

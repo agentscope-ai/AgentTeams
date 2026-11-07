@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"sync"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -36,10 +35,6 @@ type MinIOClient struct {
 	// publicAliasReady tracks the one-time `mc alias set` of the presign
 	// alias (the caller-reachable public endpoint).
 	publicAliasReady bool
-	// lsFormatProbe caches the one-time capability probe of the mc binary
-	// (see lsJSONAvailable); a pointer so the WithCredentialSource shallow
-	// clone shares the cached answer for the same binary.
-	lsFormatProbe *lsFormatProbe
 	// sdkPutIfMatch overrides the SDK conditional write for tests; nil uses
 	// the real minio-go path.
 	sdkPutIfMatch func(ctx context.Context, key string, data []byte, matchETag string) error
@@ -68,7 +63,7 @@ func NewMinIOClient(cfg Config) *MinIOClient {
 	if cfg.PublicAlias == "" {
 		cfg.PublicAlias = "agentteams-public"
 	}
-	return &MinIOClient{config: cfg, lsFormatProbe: &lsFormatProbe{}}
+	return &MinIOClient{config: cfg}
 }
 
 // WithCredentialSource returns a copy of the client that fetches credentials
@@ -673,27 +668,60 @@ func (c *MinIOClient) ListObjects(ctx context.Context, prefix string) ([]string,
 }
 
 func (c *MinIOClient) ListObjectsDetailed(ctx context.Context, prefix string) ([]ObjectInfo, error) {
-	if err := c.ensureAlias(ctx); err != nil {
-		return nil, err
+	// One-level listing through the SDK, the same path ListObjectsRecursive
+	// already uses. The mc fallbacks this replaces depended on the binary:
+	// `mc ls --json` carries `modified`, but when that flag or alias probe
+	// failed the code fell back to `mc find`, which has no timestamp column —
+	// so directory listings silently lost their modification times and the
+	// UI dropped its time column. Driving the SDK keeps names, sizes, ETags
+	// and timestamps intact regardless of the mc build.
+	//
+	// Keys stay prefix-relative and directory entries keep their trailing
+	// slash: the handler synthesises directories from any name containing a
+	// slash, so both shapes must be preserved.
+	p := strings.TrimPrefix(strings.TrimPrefix(prefix, "/"), c.config.StoragePrefix+"/")
+	// A delimiter listing needs a directory boundary: without the trailing
+	// slash S3 treats the prefix as a plain string prefix, so "scope/target"
+	// also matches "scope/target-sibling" and returns it as a child. Every
+	// caller of this method passes a directory, so normalise the boundary and
+	// trim returned keys against the same form.
+	if p != "" && !strings.HasSuffix(p, "/") {
+		p += "/"
 	}
-	// The human-readable `mc ls` form is space-split and would truncate
-	// object names that contain spaces ("meeting notes.txt" ->
-	// "notes.txt"), silently dropping those bytes from quota accounting.
-	// `mc ls --json` carries the full name intact; mc binaries that predate
-	// the flag fall back to `mc find`, which also prints one full path per
-	// line and never splits names on spaces.
-	if c.lsJSONAvailable(ctx) {
-		out, err := c.runMC(ctx, "ls", "--json", c.fullPath(prefix))
+	opts := minio.ListObjectsOptions{Prefix: p, Recursive: false}
+	ctx, cancel := context.WithCancel(ctx)
+	var ch <-chan minio.ObjectInfo
+	if list := c.sdkListObjects; list != nil {
+		ch = list(ctx, c.config.Bucket, opts)
+	} else {
+		sdk, err := c.sdkClient()
 		if err != nil {
+			cancel()
 			return nil, err
 		}
-		return parseMCLsJSON(out, prefix)
+		ch = sdk.ListObjects(ctx, c.config.Bucket, opts)
 	}
-	out, err := c.runMC(ctx, "find", c.fullPath(prefix))
-	if err != nil {
-		return nil, err
+	defer func() {
+		cancel()
+		for range ch {
+		}
+	}()
+	var out []ObjectInfo
+	for o := range ch {
+		if o.Err != nil {
+			return nil, fmt.Errorf("list objects: %w", o.Err)
+		}
+		rel := strings.TrimPrefix(o.Key, p)
+		if rel == "" {
+			continue // the prefix marker itself (e.g. "files/")
+		}
+		info := ObjectInfo{Name: rel, Size: o.Size, ETag: o.ETag}
+		if !o.LastModified.IsZero() {
+			info.UpdatedAt = o.LastModified.UTC().Format(time.RFC3339)
+		}
+		out = append(out, info)
 	}
-	return c.parseMCFind(out, prefix)
+	return out, nil
 }
 
 // ListObjectsRecursive walks every object under prefix at all levels, one
@@ -780,221 +808,6 @@ func (c *MinIOClient) ListObjectsRecursive(ctx context.Context, prefix, startAft
 	return infos, nextKey, nil
 }
 
-// lsFormatProbe caches the answer of the one-time `mc ls --json` capability
-// probe for the life of the client.
-type lsFormatProbe struct {
-	mu     sync.Mutex
-	probed bool
-	jsonOK bool
-}
-
-// lsJSONAvailable reports whether the configured mc binary understands
-// `mc ls --json`, probing once and caching the definitive answer. The probe
-// lists the bucket root: a modern mc (>= RELEASE.2025-08-13) answers with
-// NDJSON (the content is irrelevant), an mc that predates the flag exits
-// non-zero with an unknown-flag error. A probe that fails for any other
-// reason (network, credentials) is not cached, so the next listing re-probes;
-// this listing degrades to the `mc find` fallback, which fails for the same
-// root cause — a listing never succeeds against a half-verified store.
-func (c *MinIOClient) lsJSONAvailable(ctx context.Context) bool {
-	p := c.lsFormatProbe
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.probed {
-		return p.jsonOK
-	}
-	_, err := c.runMC(ctx, "ls", "--json", c.config.StoragePrefix)
-	if err == nil {
-		p.probed, p.jsonOK = true, true
-		return true
-	}
-	// Cache only the definitive "this binary has no such flag" answer; a
-	// transient probe failure must not lock the client into the
-	// timestamp-less fallback for the rest of the process.
-	if isMCUnknownFlag(err) {
-		p.probed, p.jsonOK = true, false
-	}
-	return false
-}
-
-// isMCUnknownFlag reports whether a runMC error is mc's unknown-flag
-// rejection, the definitive signal that the binary predates the flag.
-func isMCUnknownFlag(err error) bool {
-	return err != nil && strings.Contains(strings.ToLower(err.Error()), "unknown flag")
-}
-
-// parseMCLsJSON decodes `mc ls --json` (mc RELEASE.2025-08-13) NDJSON into
-// one ObjectInfo per line:
-//
-//	{"type":"file","size":6,"title":"meeting notes.txt","modified":"2026-11-01T02:33:00.000Z","etag":"..."}
-//	{"type":"dir","size":0,"title":"my dir/","modified":"..."}
-//
-// Parsing contract (every ListObjectsDetailed consumer relies on it):
-//
-//   - Name is the one-level relative name from `title`, spaces preserved;
-//     directories carry a trailing slash (added when mc omits it), files
-//     never do;
-//   - UpdatedAt is `modified` as RFC3339 UTC, or "" when it cannot be
-//     parsed (timestamp drift must never fail a listing);
-//   - a single malformed line is an error: a silently skipped line would
-//     undercount the quota exactly the way the old space-truncating parser
-//     did.
-//
-// size and etag are carried on direct file entries (directory entries —
-// real or synthesized from a nested key — always report 0/"" so they never
-// inherit a nested object's numbers). Extracted so the contract is testable
-// without the mc binary.
-// parseMCLsJSON parses `mc ls --json`. The structured field is "key" (the full
-// path, e.g. "bucket/alice/dir with space/f.txt"); "title" only exists in some
-// mc builds and was read here, which yielded empty names and silently dropped
-// every object from quota accounting. Names are returned relative to prefix,
-// like parseMCFind, because callers build keys as prefix+name.
-// listingRelName maps a listing entry to a name relative to prefix.
-// Listings arrive in three shapes - bucket-absolute ("bucket/a/b/x"),
-// bucket-relative ("a/b/x") and, for some fixtures, already relative ("x") -
-// so the prefix is located as a path segment instead of being trimmed blindly.
-// A zero-byte empty string with ok=false means the entry is outside the prefix.
-func listingRelName(key, prefix string) (string, bool) {
-	trimmed := strings.Trim(prefix, "/")
-	if trimmed == "" {
-		return strings.TrimPrefix(key, "/"), true
-	}
-	needle := trimmed + "/"
-	if i := strings.Index(key, needle); i >= 0 && (i == 0 || key[i-1] == '/') {
-		return key[i+len(needle):], true
-	}
-	// A listing may already be relative to the requested path (mc omits the
-	// prefix it was given). Keeping the name as-is is the only shape that does
-	// not silently drop the entry; an absolute key that merely lacks the prefix
-	// is handled by the caller's stat check.
-	return key, true
-}
-
-// parseMCLsJSON parses `mc ls --json`. The structured field is "key" (the full
-// path, e.g. "bucket/alice/dir with space/f.txt"); "title" only exists in some
-// mc builds and was the field read here before, which yielded empty names and
-// silently dropped every object from quota accounting. Names are returned
-// relative to prefix, one directory level at a time, exactly like parseMCFind,
-// so callers can rebuild a key as prefix+name.
-func parseMCLsJSON(out, prefix string) ([]ObjectInfo, error) {
-	var infos []ObjectInfo
-	seen := make(map[string]struct{})
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		var entry struct {
-			Type     string `json:"type"`
-			Key      string `json:"key"`
-			Title    string `json:"title"`
-			Modified string `json:"modified"`
-			Size     int64  `json:"size"`
-			ETag     string `json:"etag"`
-		}
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
-			return nil, fmt.Errorf("parse mc ls --json line %q: %w", line, err)
-		}
-		key := entry.Key
-		if key == "" {
-			key = entry.Title // older mc builds only emit the path as title
-		}
-		if key == "" {
-			continue
-		}
-		rel, ok := listingRelName(key, prefix)
-		if !ok || rel == "" {
-			continue
-		}
-		// Normalise the shape: a listing entry may carry a trailing slash from
-		// the backend, so strip it first, then collapse anything nested to its
-		// first directory segment. Files never end in "/", directories always do.
-		// Both real backends report a directory as a key ending in "/" - MinIO
-		// and RustFS 1.0.4 do not always set type:"dir" (they emit type:"file"
-		// with size 0), so the trailing slash is the authority, not `type`.
-		isDir := entry.Type == "dir" || strings.HasSuffix(rel, "/")
-		rel = strings.TrimSuffix(rel, "/")
-		name := rel
-		if k := strings.IndexByte(rel, '/'); k > 0 && !isDir {
-			name = rel[:k] + "/" // nested key: synthesize its directory entry
-		} else if isDir {
-			name = rel + "/"
-		}
-		if _, dup := seen[name]; dup {
-			continue
-		}
-		seen[name] = struct{}{}
-		updated := ""
-		if t, perr := time.Parse(time.RFC3339Nano, entry.Modified); perr == nil {
-			updated = t.UTC().Format(time.RFC3339) // callers expect RFC3339 UTC
-		}
-		// Only a direct file entry (no slash left in the name) carries the
-		// object's own size/etag; a directory entry — real or synthesized
-		// from a nested key — must not inherit a nested object's numbers.
-		var size int64
-		etag := ""
-		if !strings.ContainsRune(name, '/') {
-			size, etag = entry.Size, entry.ETag
-		}
-		infos = append(infos, ObjectInfo{Name: name, UpdatedAt: updated, Size: size, ETag: etag})
-	}
-	return infos, nil
-}
-
-// parseMCFind decodes `mc find <path>` output into one-level ObjectInfos.
-// `mc find` is the fallback for mc binaries that predate `mc ls --json`
-// (see lsJSONAvailable): it prints one full object path per line — no human
-// columns to split — so names with spaces survive verbatim. The walk is
-// recursive (every nested key appears once), so the one-level view — file
-// names plus synthesized "dir" entries for nested prefixes — is rebuilt
-// from each key's first path segment. mc find carries no modification time,
-// so UpdatedAt stays "" (the same degradation parseMCLsJSON applies to an
-// unparseable timestamp).
-//
-// The printed path carries some leading context in front of the listing
-// prefix — the alias/bucket form, the bare bucket form, or no prefix at
-// all, depending on the mc version — so the longest known form is stripped
-// before taking the first segment.
-func (c *MinIOClient) parseMCFind(out string, prefix string) ([]ObjectInfo, error) {
-	trimmed := strings.Trim(prefix, "/")
-	candidates := []string{
-		strings.TrimSuffix(c.fullPath(prefix), "/") + "/",
-		c.config.Bucket + "/" + trimmed + "/",
-	}
-	if trimmed != "" {
-		candidates = append(candidates, trimmed+"/")
-	}
-	seen := make(map[string]struct{})
-	var infos []ObjectInfo
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		rel := line
-		for _, strip := range candidates {
-			if strings.HasPrefix(line, strip) {
-				rel = line[len(strip):]
-				break
-			}
-		}
-		if rel == "" {
-			continue
-		}
-		name := rel
-		if i := strings.IndexByte(rel, '/'); i >= 0 {
-			name = rel[:i] + "/" // nested key: synthesize its directory entry
-		}
-		if _, ok := seen[name]; ok {
-			continue
-		}
-		seen[name] = struct{}{}
-		infos = append(infos, ObjectInfo{Name: name})
-	}
-	return infos, nil
-}
-
-// EnsureBucket creates the configured bucket if it does not already exist.
 func (c *MinIOClient) EnsureBucket(ctx context.Context) error {
 	if err := c.ensureAlias(ctx); err != nil {
 		return err

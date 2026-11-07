@@ -17,27 +17,12 @@ import (
 
 // --- Model grant enforcement (PR-B1) ---
 //
-// Two mechanisms, one matching rule:
-//   - implicit grants: the worker annotation agentteams.io/model-grants,
-//     maintained by L1 model writes only ("create = authorize", §2.1);
-//   - effective set per surface: explicit table rows ∪ implicit grants ∪
-//     the worker's current value (§2.2). The current value is what makes
-//     "lock ≠ unavailable" true: an identical value is always writable.
-//
-// Size bound (modelGrantMax = 32): it applies to the implicit annotation
-// ONLY. The explicit table rows (up to 200 per surface, validated at
-// write time) and the worker's current value are legitimate CRD data and
-// are never truncated — the effective set keeps every validated row, so
-// a legitimate grant can never degrade into model_not_allowed. An
-// annotation that exceeds the cap fails closed (error code
-// model_grant_overflow, count in the message) on both the preview
-// (GET /api/v1/model-access) and the write paths — a row is never
-// silently dropped.
-//
-// grantAllows is the single matching predicate used by every write check
-// and by no other component: an entry matches when the model is equal and
-// at least one side's provider is empty (provider-agnostic row);
-// otherwise both provider and model must be equal.
+// Explicit caller grants plus current values authorize selections. The worker's
+// L1-issued annotation records history only: removing an explicit grant must
+// not leave a historical selection usable through that annotation.
+// The current value stays available, so revocation never stops a running model.
+// modelGrantMax bounds annotation history; validated explicit rows are not capped
+// by it. The preview and write paths share the same effective-set builder.
 
 // modelGrantAnnotation is the per-worker implicit grant list. Value: a JSON
 // array of {"provider","model"} pairs (provider may be "" = unspecified).
@@ -172,12 +157,12 @@ func (h *ResourceHandler) appendModelGrant(ctx context.Context, worker *v1beta1.
 
 // modelGrantCLISet is one coding CLI's effective grant set.
 type modelGrantCLISet struct {
-	entries []v1beta1.ModelAccessEntry // explicit ∪ implicit (no current value)
+	entries []v1beta1.ModelAccessEntry // explicit (CLI unchanged-value checks are separate)
 	inherit bool                       // the CLI grant's inherit flag
 }
 
 // modelGrantSet is one caller's effective grant set for one worker:
-// explicit table rows ∪ implicit grants ∪ current values, merged per
+// explicit table rows ∪ current values, merged per
 // surface (§2.2). scope/tableSpec are carried for authpkg.Resolve so the
 // caller-side capabilities (canEdit/inherit/reason) stay evaluator-driven.
 type modelGrantSet struct {
@@ -194,7 +179,7 @@ func (s *modelGrantSet) cliSet(id string) modelGrantCLISet {
 }
 
 // buildModelGrantSet merges the explicit grant (the selected scope plus the
-// resolved table) with the worker's implicit grants and current model
+// resolved table) with the worker's current model
 // values into the per-surface effective sets. A dangling table reference
 // (scope.Table set, tableSpec nil) degrades to no explicit rows. It
 // returns an error only when the implicit annotation exceeds
@@ -221,7 +206,6 @@ func buildModelGrantSet(scope *v1beta1.ModelAccessScope, tableSpec *v1beta1.Mode
 			clis = scope.CodingCli
 		}
 	}
-	implicit := readModelGrants(worker)
 
 	// The current value only joins the set when it exists: an empty model
 	// (or subagent model) is the absence of a value, not a ("","") pair.
@@ -237,8 +221,8 @@ func buildModelGrantSet(scope *v1beta1.ModelAccessScope, tableSpec *v1beta1.Mode
 	s := &modelGrantSet{
 		scope:     scope,
 		tableSpec: tableSpec,
-		main:      mergeGrantEntries(mainSurfEntries(mainSurf), implicit, currentMain),
-		spawn:     mergeGrantEntries(spawnSurfEntries(spawnSurf), implicit, currentSpawn),
+		main:      mergeGrantEntries(mainSurfEntries(mainSurf), currentMain),
+		spawn:     mergeGrantEntries(spawnSurfEntries(spawnSurf), currentSpawn),
 		cli:       map[string]modelGrantCLISet{},
 	}
 	s.spawnInherit = spawnSurf != nil && spawnSurf.Inherit != nil && *spawnSurf.Inherit
@@ -247,7 +231,7 @@ func buildModelGrantSet(scope *v1beta1.ModelAccessScope, tableSpec *v1beta1.Mode
 			continue
 		}
 		s.cli[c.CLI] = modelGrantCLISet{
-			entries: mergeGrantEntries(c.Entries, implicit),
+			entries: mergeGrantEntries(c.Entries),
 			inherit: c.Inherit != nil && *c.Inherit,
 		}
 	}
@@ -345,19 +329,27 @@ func (h *ResourceHandler) checkHumanModelUpdate(ctx context.Context, caller *aut
 		if req.Model != "" {
 			model = req.Model
 		}
-		if !grantAllows(set.main, provider, model) {
+		if !grantAllows(set.main, modelGrantProviderOr(provider), model) {
 			return http.StatusForbidden, "model_not_allowed: " + provider + "/" + model
 		}
 	}
-	if req.SubagentModel != nil && *req.SubagentModel != worker.Spec.SubagentModel {
-		if *req.SubagentModel == "" {
+	spawn := worker.Spec.SubagentModel
+	if req.SubagentModel != nil {
+		spawn = *req.SubagentModel
+	}
+	if spawn != worker.Spec.SubagentModel || (providerChanged && spawn != "") {
+		if spawn == "" {
 			if !set.spawnInherit {
 				return http.StatusForbidden, "inherit_not_granted: spawn"
 			}
 			return 0, ""
 		}
-		if !grantAllows(set.spawn, worker.Spec.ModelProvider, *req.SubagentModel) {
-			return http.StatusForbidden, "model_not_allowed: " + *req.SubagentModel
+		provider := worker.Spec.ModelProvider
+		if req.ModelProvider != "" {
+			provider = req.ModelProvider
+		}
+		if !grantAllows(set.spawn, modelGrantProviderOr(provider), spawn) {
+			return http.StatusForbidden, "model_not_allowed: " + spawn
 		}
 	}
 	return 0, ""

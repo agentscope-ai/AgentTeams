@@ -1,6 +1,6 @@
 ---
 name: organization
-description: Use before any Leader action that depends on current team topology, worker list, worker phase, runtime, room ID, Matrix ID, Team Admin, human identity, or lifecycle state. Always use this skill when assigning tasks, sending cross-room messages, recovering projects, handling heartbeat, waking/sleeping workers, or when any worker/room/identity value might be stale.
+description: Use before any Leader action that depends on current team topology, worker list, worker phase, runtime, room ID, Matrix ID, Team Admin, human identity, or lifecycle state. Use when assigning tasks, sending cross-room messages, recovering projects, handling heartbeat, or reporting runtime blockers.
 ---
 
 # Organization
@@ -35,12 +35,6 @@ Use the Team Room ID for normal task assignment notifications. Worker room IDs a
 
 ## Lifecycle
 
-Use lifecycle commands only after checking active project and task files.
-
-```bash
-agt worker ensure-ready --name <worker-name> --team "$TEAM_CR"
-agt worker wake --name <worker-name> --team "$TEAM_CR"
-agt worker sleep --name <worker-name> --team "$TEAM_CR"
-```
+You may query Worker runtime status, but Manager and platform Admin own lifecycle changes. If a Worker is sleeping, stopped, or unavailable, report the blocked task and Worker identity to Manager or platform Admin. Do not call wake, sleep, or ensure-ready yourself, and do not ask a Worker to perform the resource change. Continue assignment only after a fresh status query confirms the Worker is ready.
 
 If CLI output is missing a required room ID or Matrix ID, stop and report a metadata problem. Do not guess.

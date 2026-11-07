@@ -694,6 +694,10 @@ class Worker:
         )
         self._prepare_builtin_plugin("teamharness", builtin_root / "teamharness")
         self._prepare_builtin_plugin("workerflow", builtin_root / "workerflow")
+        self._prepare_builtin_plugin(
+            "qwen-code-bridge",
+            builtin_root / "qwen-code-bridge",
+        )
 
     def _builtin_qwenpaw_plugins_dir(self) -> Path:
         configured = os.getenv("AGENTTEAMS_BUILTIN_QWENPAW_PLUGINS_DIR", "").strip()
@@ -1036,6 +1040,9 @@ class Worker:
                         "AGENTTEAMS_WORKER_ROLE",
                         "AGENTTEAMS_AGENT_ROLE",
                         "AGENTTEAMS_WORKER_NAME",
+                        "AGENTTEAMS_CONTROLLER_URL",
+                        "AGENTTEAMS_AUTH_TOKEN",
+                        "AGENTTEAMS_AUTH_TOKEN_FILE",
                         "AGENTTEAMS_STORAGE_PREFIX",
                         "AGENTTEAMS_SHARED_STORAGE_PREFIX",
                         "AGENTTEAMS_FS_BUCKET",

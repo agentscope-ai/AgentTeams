@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
@@ -76,6 +77,13 @@ type humanFilesHandler struct {
 	// from AGENTTEAMS_PRESIGN_TTL (Go duration) clamped to
 	// maxHumanPresignTTL.
 	presignTTL time.Duration
+	// changesPruneInterval gates the per-human change-log retention
+	// sweep; tests set it to 0 to prune on every append.
+	changesPruneInterval time.Duration
+	// changesPruneMu guards changesPruneAt, the last retention sweep per
+	// human (username -> wall-clock time).
+	changesPruneMu sync.Mutex
+	changesPruneAt map[string]time.Time
 }
 
 // NewHumanFilesHandler constructs the handler. The per-file size limit is
@@ -91,6 +99,8 @@ func NewHumanFilesHandler(k8sClient client.Client, namespace string, sc oss.Stor
 		presignMaxBytes: defaultHumanFilePresignMaxBytes,
 		pathLockTTL:     humanPathLockTTL,
 		presignTTL:      defaultHumanPresignTTL,
+		changesPruneInterval: humanChangePruneInterval,
+		changesPruneAt:         make(map[string]time.Time),
 	}
 	if v := os.Getenv("HUMAN_FILE_MAX_BYTES"); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
@@ -207,21 +217,58 @@ type humanFileAccess struct {
 	isAdmin   bool
 	isManager bool
 	isSelf    bool
+	// effectiveMode is the caller's resolved mode on the authorized path
+	// (none/read/readwrite; readwrite for admin/manager/self). Write
+	// operations (put/delete/restore) require readwrite.
+	effectiveMode string
+	// team is the caller's team that produced the winning effectiveMode
+	// ("" for admin/manager/self), recorded in the audit Detail for write
+	// attribution.
+	team         string
+	callerTeams  []string
+	defaultTeams map[string]struct{}
+}
+
+// canReadPath reuses the request's resolved membership for each listed
+// object, so a readable parent cannot disclose a restricted descendant.
+func (a *humanFileAccess) canReadPath(rel string) bool {
+	if a.isAdmin || a.isManager || a.isSelf {
+		return true
+	}
+	if _, err := validateHumanFilePath(rel); err != nil {
+		return false
+	}
+	mode, _ := humanWorkspaceEffectiveMode(&a.human.Spec, a.callerTeams, a.defaultTeams, rel)
+	return mode != humanWorkspaceModeNone
 }
 
 // authorizeHumanFile resolves access to the file area of the Human CR
-// named name. Access matrix (P1):
+// named name. Access matrix (P1 + P2 workspace access):
 //
 //   - RoleAdmin: full access (read, write, trash restore, purge, quota)
 //   - RoleManager: read, write, trash restore (any human's area)
 //   - the human themself (RoleHuman whose Username equals the area's
 //     EffectiveUsername): read and write their own area
-//   - everyone else (other humans, team leaders, workers): 404 — the
-//     same response as a non-existent Human, to avoid existence probing
+//   - team leaders / workers / other humans: per-team rules — default
+//     access follows membership: a caller team in the human's default set
+//     (spec.accessibleTeams ∪ teams that list the human in
+//     spec.humanMembers) has readwrite on files/**;
+//     spec.workspaceAccess grants raise the mode for the teams they name,
+//     and restrictions are a global deny: a restriction from any of the
+//     caller's teams applies across all of the caller's teams (deny-wins,
+//     fail closed), so a second, unrestricted team cannot override it. A
+//     caller whose teams grant no access at all receives 404 — the same
+//     response as a non-existent Human, to avoid existence probing.
 //
-// adminOnly additionally requires RoleAdmin (purge), denying with 403
-// when the caller has area access but lacks the role.
-func (h *humanFilesHandler) authorizeHumanFile(ctx context.Context, name string, adminOnly bool) (*humanFileAccess, int, string) {
+// path is the files-relative path being authorized ("" = the files root,
+// used by area-level endpoints). isWrite marks mutating operations; a
+// readwrite requirement is denied with 403 (area access, no write grant).
+// adminOnly additionally requires RoleAdmin (purge, quota set), denying
+// with 403 when the caller has area access but lacks the role.
+//
+// A Team CR's spec.admin field is deliberately NOT a source of access:
+// team administration never implies file-area rights.
+func (h *humanFilesHandler) authorizeHumanFile(ctx context.Context, name, path string, isWrite, adminOnly bool) (*humanFileAccess, int, string) {
 	var human v1beta1.Human
 	if err := h.client.Get(ctx, client.ObjectKey{Name: name, Namespace: h.namespace}, &human); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -238,13 +285,85 @@ func (h *humanFilesHandler) authorizeHumanFile(ctx context.Context, name string,
 	isAdmin := caller.Role == authpkg.RoleAdmin
 	isManager := caller.Role == authpkg.RoleManager
 	isSelf := caller.Role == authpkg.RoleHuman && caller.Username == human.Spec.EffectiveUsername(human.Name)
-	if !isAdmin && !isManager && !isSelf {
+	if isAdmin || isManager || isSelf {
+		if adminOnly && !isAdmin {
+			return nil, http.StatusForbidden, "admin role required"
+		}
+		return &humanFileAccess{
+			human:         &human,
+			caller:        caller,
+			isAdmin:       isAdmin,
+			isManager:     isManager,
+			isSelf:        isSelf,
+			effectiveMode: humanWorkspaceModeReadWrite,
+		}, 0, ""
+	}
+	// Team-scoped caller (leader, worker, or a human addressed through a
+	// team identity). With no caller teams there is nothing to match.
+	teams := callerTeamSet(caller)
+	if len(teams) == 0 {
 		return nil, http.StatusNotFound, "human not found"
 	}
-	if adminOnly && !isAdmin {
+	defaultTeams, err := h.defaultTeams(ctx, &human)
+	if err != nil {
+		return nil, http.StatusInternalServerError, "team lookup failed"
+	}
+	mode, team := humanWorkspaceEffectiveMode(&human.Spec, teams, defaultTeams, path)
+	if mode == humanWorkspaceModeNone {
+		return nil, http.StatusNotFound, "human not found"
+	}
+	if adminOnly {
 		return nil, http.StatusForbidden, "admin role required"
 	}
-	return &humanFileAccess{human: &human, caller: caller, isAdmin: isAdmin, isManager: isManager, isSelf: isSelf}, 0, ""
+	if isWrite && mode != humanWorkspaceModeReadWrite {
+		return nil, http.StatusForbidden, "write access required"
+	}
+	return &humanFileAccess{human: &human, caller: caller, effectiveMode: mode, team: team, callerTeams: teams, defaultTeams: defaultTeams}, 0, ""
+}
+
+// callerTeamSet returns the teams the caller identity carries. Team
+// leaders and workers are bound to their single Team; a human addressed
+// through a team identity carries the Teams set from its Human CR.
+// Roles with no team scoping return nil.
+func callerTeamSet(caller *authpkg.CallerIdentity) []string {
+	switch caller.Role {
+	case authpkg.RoleTeamLeader, authpkg.RoleWorker:
+		if caller.Team != "" {
+			return []string{caller.Team}
+		}
+	case authpkg.RoleHuman:
+		if len(caller.Teams) > 0 {
+			return caller.Teams
+		}
+	}
+	return nil
+}
+
+// defaultTeams computes the human's default team set:
+// spec.accessibleTeams ∪ { team names that list the human in
+// spec.humanMembers }. Teams in this set give the team's leaders and
+// workers readwrite on files/** unless narrowed by a restriction.
+func (h *humanFilesHandler) defaultTeams(ctx context.Context, human *v1beta1.Human) (map[string]struct{}, error) {
+	sets := make(map[string]struct{})
+	for _, t := range human.Spec.AccessibleTeams {
+		if t != "" {
+			sets[t] = struct{}{}
+		}
+	}
+	var teams v1beta1.TeamList
+	if err := h.client.List(ctx, &teams, client.InNamespace(h.namespace)); err != nil {
+		return nil, err
+	}
+	for i := range teams.Items {
+		t := &teams.Items[i]
+		for _, m := range t.Spec.HumanMembers {
+			if m.Name == human.Name {
+				sets[t.Name] = struct{}{}
+				break
+			}
+		}
+	}
+	return sets, nil
 }
 
 // --- Wire-level shapes ----------------------------------------------------
@@ -323,9 +442,35 @@ func humanFileDetail(kv ...any) string {
 	return string(b)
 }
 
-func (h *humanFilesHandler) recordAudit(ctx context.Context, a *humanFileAccess, action string, detail string) {
+// recordAudit appends an audit event for an authorized operation. The
+// Detail always carries the write attribution (#1414 P2): onBehalfOf names
+// the human whose area was touched, and team names the caller's team when
+// the access came from a team identity (leader/worker/human team identity);
+// kv adds the operation-specific attributes as key/value pairs.
+func (h *humanFilesHandler) recordAudit(ctx context.Context, a *humanFileAccess, action string, kv ...any) {
 	if h.auditClient == nil {
 		return
+	}
+	m := make(map[string]any, len(kv)/2+2)
+	if len(kv) == 1 {
+		// Callers may pass an already-rendered detail object (the variadic
+		// humanFileDetail form used by the presign paths); merge it instead
+		// of treating it as an unpaired key.
+		if rendered, ok := kv[0].(string); ok && rendered != "" {
+			_ = json.Unmarshal([]byte(rendered), &m)
+		}
+	} else {
+		for i := 0; i+1 < len(kv); i += 2 {
+			m[fmt.Sprint(kv[i])] = kv[i+1]
+		}
+	}
+	m["onBehalfOf"] = a.human.Spec.EffectiveUsername(a.human.Name)
+	if a.team != "" {
+		m["team"] = a.team
+	}
+	var detail string
+	if b, err := json.Marshal(m); err == nil {
+		detail = string(b)
 	}
 	h.auditClient.Record(ctx, audit.Event{
 		Who:    a.caller.Username,
@@ -407,18 +552,48 @@ func (h *humanFilesHandler) readFileSnapshot(ctx context.Context, key string) ([
 
 // writeHumanFileSnapshotError maps a readFileSnapshot failure to its HTTP
 // form: NotExist is a plain 404, an unstable snapshot is 503 with the
-// stable code, anything else is a storage fault.
+// stable code, a store-availability fault is 503 storage_unavailable,
+// anything else a storage 500.
 func writeHumanFileSnapshotError(w http.ResponseWriter, err error) {
-	if errors.Is(err, os.ErrNotExist) {
-		httputil.WriteError(w, http.StatusNotFound, "file not found")
-		return
-	}
 	if errors.Is(err, errHumanFileSnapshotUnstable) {
 		writeHumanFileCodedError(w, http.StatusServiceUnavailable, "snapshot_unstable",
 			"the file changed while it was being read; retry the request")
 		return
 	}
-	httputil.WriteError(w, http.StatusInternalServerError, "read file failed")
+	writeStorageError(w, err, "file not found", "read file failed")
+}
+
+// storageUnavailableBody is the stable body for every store-availability
+// fault in the human files API (D1): the object store did not answer, the
+// object's state is unknown, and the caller must retry — never treat the
+// path as absent.
+type storageUnavailableBody struct {
+	Error string `json:"error"`
+}
+
+// writeStorageUnavailable is the single 503 storage_unavailable emitter
+// for the human files API.
+func writeStorageUnavailable(w http.ResponseWriter) {
+	httputil.WriteJSON(w, http.StatusServiceUnavailable, storageUnavailableBody{Error: "storage_unavailable"})
+}
+
+// writeStorageError is the unified storage-error mapping for the human
+// files API: os.ErrNotExist is a genuine absence (404 notFoundMsg),
+// oss.ErrStorageUnavailable is 503 storage_unavailable, and everything
+// else (auth/config faults like 403 AccessDenied, NoSuchBucket, ...) is a
+// plain 500 otherMsg. The callers check the semantics this mapping must
+// never disturb — tombstone 404, anti-probing 404, If-Match 412,
+// conditional-write 503 — before reaching it.
+func writeStorageError(w http.ResponseWriter, err error, notFoundMsg, otherMsg string) {
+	if errors.Is(err, os.ErrNotExist) {
+		httputil.WriteError(w, http.StatusNotFound, notFoundMsg)
+		return
+	}
+	if errors.Is(err, oss.ErrStorageUnavailable) {
+		writeStorageUnavailable(w)
+		return
+	}
+	httputil.WriteError(w, http.StatusInternalServerError, otherMsg)
 }
 
 // humanFileTombstoneType marks a soft-deleted path. The object carries no
@@ -442,7 +617,7 @@ func (h *humanFilesHandler) getFile(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	rawPath := r.PathValue("path")
 
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, rawPath, false, false)
 	if a == nil {
 		if status == http.StatusNotFound && isPresignRequest(r) {
 			// A presign denial is an explicit 403, not a 404 (#1475 PR-4):
@@ -522,11 +697,7 @@ func (h *humanFilesHandler) presignFile(w http.ResponseWriter, r *http.Request, 
 
 	meta, err := h.oss.StatMeta(ctx, key)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			httputil.WriteError(w, http.StatusNotFound, "file not found")
-			return
-		}
-		httputil.WriteError(w, http.StatusInternalServerError, "stat file failed")
+		writeStorageError(w, err, "file not found", "stat file failed")
 		return
 	}
 	if isHumanFileTombstone(meta) {
@@ -549,12 +720,16 @@ func (h *humanFilesHandler) presignFile(w http.ResponseWriter, r *http.Request, 
 			})
 			return
 		}
+		if errors.Is(err, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "presign failed")
 		return
 	}
 	expiresAt := time.Now().UTC().Add(ttl)
 	h.recordAudit(ctx, a, "human_file_presign",
-		humanFileDetail("path", "files/"+rel, "ttl", ttl.String(), "expiresAt", expiresAt.Format(time.RFC3339)))
+		"path", "files/"+rel, "ttl", ttl.String(), "expiresAt", expiresAt.Format(time.RFC3339))
 	httputil.WriteJSON(w, http.StatusOK, humanFilePresignResponse{
 		URL:       downloadURL,
 		ETag:      meta.ETag,
@@ -579,13 +754,20 @@ func (h *humanFilesHandler) listDirectory(w http.ResponseWriter, r *http.Request
 	}
 	infos, err := h.oss.ListObjectsDetailed(ctx, prefix)
 	if err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, "list directory failed")
+		writeStorageError(w, err, "list directory failed", "list directory failed")
 		return
 	}
 	entries := make(map[string]*humanFileEntry)
 	for _, info := range infos {
 		rel := info.Name
 		if rel == "" {
+			continue
+		}
+		fullPath := rel
+		if dir != "" {
+			fullPath = dir + "/" + rel
+		}
+		if !a.canReadPath(strings.TrimSuffix(fullPath, "/")) {
 			continue
 		}
 		base, isDir := rel, false
@@ -655,7 +837,7 @@ func (h *humanFilesHandler) listDirectory(w http.ResponseWriter, r *http.Request
 func (h *humanFilesHandler) listFiles(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, "", false, false)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -761,43 +943,56 @@ func (h *humanFilesHandler) listRecursiveFiles(w http.ResponseWriter, r *http.Re
 	}
 	ctx := r.Context()
 	prefix := humanFilesPrefix(username)
-	infos, nextKey, err := h.oss.ListObjectsRecursive(ctx, prefix, startAfter, limit)
-	if err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, "list files failed")
+	for {
+		infos, nextKey, err := h.oss.ListObjectsRecursive(ctx, prefix, startAfter, limit)
+		if err != nil {
+			writeStorageError(w, err, "list files failed", "list files failed")
+			return
+		}
+		entries := make([]humanFileRecursiveEntry, 0, len(infos))
+		for _, info := range infos {
+			rel := info.Name
+			if rel == "" || rel == ".keep" || strings.HasSuffix(rel, "/.keep") || strings.HasSuffix(rel, "/") {
+				continue // prefix marker, .keep marker object, directory marker
+			}
+			if isReservedHumanFileSegment(rel) {
+				continue // .trash / .sync / .control written out of band
+			}
+			if !a.canReadPath(rel) {
+				continue
+			}
+			if info.Size == 0 {
+				// A zero-byte entry is either a legitimate empty file or a
+				// deletion tombstone; only this shape needs the stat. A stat
+				// that fails for any other reason keeps the entry: the client
+				// reconciles against the manifest, and a false absence is how
+				// a listing would trigger a spurious local delete.
+				meta, merr := h.oss.StatMeta(ctx, prefix+rel)
+				if merr == nil && isHumanFileTombstone(meta) {
+					continue // soft-deleted: absent from the flat list
+				}
+			}
+			entries = append(entries, humanFileRecursiveEntry{
+				Path:      "files/" + rel,
+				Size:      info.Size,
+				ETag:      info.ETag,
+				UpdatedAt: info.UpdatedAt,
+			})
+		}
+		// Skip pages containing only hidden paths without exposing their keys.
+		if len(entries) == 0 && nextKey != "" {
+			startAfter = nextKey
+			continue
+		}
+		resp := humanFileRecursiveResponse{Entries: entries}
+		if nextKey != "" {
+			// Only a readable path may appear in the client-visible cursor.
+			cursor := prefix + strings.TrimPrefix(entries[len(entries)-1].Path, "files/")
+			resp.NextKey = &cursor
+		}
+		httputil.WriteJSON(w, http.StatusOK, resp)
 		return
 	}
-	entries := make([]humanFileRecursiveEntry, 0, len(infos))
-	for _, info := range infos {
-		rel := info.Name
-		if rel == "" || rel == ".keep" || strings.HasSuffix(rel, "/.keep") || strings.HasSuffix(rel, "/") {
-			continue // prefix marker, .keep marker object, directory marker
-		}
-		if isReservedHumanFileSegment(rel) {
-			continue // .trash / .sync / .control written out of band
-		}
-		if info.Size == 0 {
-			// A zero-byte entry is either a legitimate empty file or a
-			// deletion tombstone; only this shape needs the stat. A stat
-			// that fails for any other reason keeps the entry: the client
-			// reconciles against the manifest, and a false absence is how
-			// a listing would trigger a spurious local delete.
-			meta, merr := h.oss.StatMeta(ctx, prefix+rel)
-			if merr == nil && isHumanFileTombstone(meta) {
-				continue // soft-deleted: absent from the flat list
-			}
-		}
-		entries = append(entries, humanFileRecursiveEntry{
-			Path:      "files/" + rel,
-			Size:      info.Size,
-			ETag:      info.ETag,
-			UpdatedAt: info.UpdatedAt,
-		})
-	}
-	resp := humanFileRecursiveResponse{Entries: entries}
-	if nextKey != "" {
-		resp.NextKey = &nextKey
-	}
-	httputil.WriteJSON(w, http.StatusOK, resp)
 }
 
 // --- PUT files ---------------------------------------------------------------
@@ -812,7 +1007,7 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, "cannot write a directory; name the file explicitly")
 		return
 	}
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, rawPath, true, false)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -843,6 +1038,10 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 				"storage provider does not support conditional writes; the path lease cannot be taken (fail closed)")
 			return
 		}
+		if errors.Is(err, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "acquire path lease failed")
 		return
 	}
@@ -870,22 +1069,29 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 			oldSize = meta.Size
 		}
 	} else if !errors.Is(merr, os.ErrNotExist) {
-		httputil.WriteError(w, http.StatusInternalServerError, "stat file failed")
+		writeStorageError(w, merr, "stat file failed", "stat file failed")
 		return
 	}
-	reservedToken, status, msg := h.reserveQuota(ctx, a, username, rel, oldSize, int64(len(data)))
+	reservedToken, status, code, msg := h.reserveQuota(ctx, a, username, rel, oldSize, int64(len(data)))
 	if status != 0 {
-		switch status {
-		case http.StatusRequestEntityTooLarge:
+		switch {
+		case status == http.StatusRequestEntityTooLarge:
 			writeHumanFileCodedError(w, status, "quota_exceeded", msg)
-		case http.StatusServiceUnavailable:
+		case status == http.StatusServiceUnavailable && code == "storage_unavailable":
+			// The ledger could not be read or written: the store did not
+			// answer, so the write is refused as a retryable 503 — never
+			// a 500 (not retryable by the sync contract) and never a 404.
+			writeStorageUnavailable(w)
+			h.recordAudit(ctx, a, "human_file_write_blocked",
+				"path", "files/"+rel, "size", len(data), "reason", "storage_unavailable")
+		case status == http.StatusServiceUnavailable:
 			// The storage provider rejected the atomic ledger write
 			// (501/NotImplemented): without it the quota cannot be
 			// reserved, so the write is refused rather than applied
 			// unguarded (fail closed, #1426 P1).
 			writeHumanFileCodedError(w, status, "conditional_write_unsupported", msg)
 			h.recordAudit(ctx, a, "human_file_write_blocked",
-				humanFileDetail("path", "files/"+rel, "size", len(data), "reason", "conditional_write_unsupported"))
+				"path", "files/"+rel, "size", len(data), "reason", "conditional_write_unsupported")
 		default:
 			httputil.WriteError(w, status, msg)
 		}
@@ -907,6 +1113,12 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 	// mutating the file. The lease object is CAS-released, never deleted, so
 	// this read can tell "still mine" from "replaced by a successor".
 	if verr := lock.Verify(ctx); verr != nil {
+		if errors.Is(verr, oss.ErrStorageUnavailable) {
+			// The fence read itself failed because the store did not
+			// answer: report the availability fault, not a takeover.
+			writeStorageUnavailable(w)
+			return
+		}
 		writeHumanFileCodedError(w, http.StatusConflict, "lease_lost",
 			"the path lease was taken over by another operation; nothing was written")
 		return
@@ -922,7 +1134,7 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 				"If-Match failed: the file does not exist")
 			return
 		case merr != nil:
-			httputil.WriteError(w, http.StatusInternalServerError, "stat file failed")
+			writeStorageError(w, merr, "stat file failed", "stat file failed")
 			return
 		case isHumanFileTombstone(meta):
 			// A soft delete leaves the path as a zero-byte tombstone,
@@ -948,6 +1160,10 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 					"If-Match failed: the file changed since it was read")
 				return
 			}
+			if errors.Is(err, oss.ErrStorageUnavailable) {
+				writeStorageUnavailable(w)
+				return
+			}
 			httputil.WriteError(w, http.StatusInternalServerError, "write file failed")
 			return
 		}
@@ -955,6 +1171,10 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 		h.commitQuota(ctx, username, rel, reservedToken)
 	} else {
 		if err := h.oss.PutObject(ctx, key, data); err != nil {
+			if errors.Is(err, oss.ErrStorageUnavailable) {
+				writeStorageUnavailable(w)
+				return
+			}
 			httputil.WriteError(w, http.StatusInternalServerError, "write file failed")
 			return
 		}
@@ -969,6 +1189,10 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 	// than an ETag that would silently authorize a future If-Match.
 	snapData, snapMeta, serr := h.readFileSnapshot(ctx, key)
 	if serr != nil {
+		if errors.Is(serr, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "confirm file write failed")
 		return
 	}
@@ -978,8 +1202,14 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	etag := snapMeta.ETag
+	h.appendHumanChange(ctx, username, humanChangeEntry{
+		Op:   "put",
+		Path: "files/" + rel,
+		Size: int64(len(data)),
+		ETag: etag,
+	})
 	h.recordAudit(ctx, a, "human_file_write",
-		humanFileDetail("path", "files/"+rel, "size", len(data), "etag", etag))
+		"path", "files/"+rel, "size", len(data), "etag", etag)
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"path": "files/" + rel,
 		"size": len(data),
@@ -999,7 +1229,7 @@ func (h *humanFilesHandler) deleteFile(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, "directory deletion is not supported; delete files individually")
 		return
 	}
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, rawPath, true, false)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -1028,6 +1258,10 @@ func (h *humanFilesHandler) deleteFile(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, oss.ErrConditionalUnsupported) {
 			writeHumanFileCodedError(w, http.StatusServiceUnavailable, "conditional_write_unsupported",
 				"storage provider does not support conditional writes; the path lease cannot be taken (fail closed)")
+			return
+		}
+		if errors.Is(err, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
 			return
 		}
 		httputil.WriteError(w, http.StatusInternalServerError, "acquire path lease failed")
@@ -1071,11 +1305,19 @@ func (h *humanFilesHandler) deleteFile(w http.ResponseWriter, r *http.Request) {
 	// between leaves the file readable (at worst with a recoverable trash
 	// copy) — never both gone.
 	if err := h.oss.PutObject(ctx, trashPrefix+"meta.json", metaJSON); err != nil {
+		if errors.Is(err, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "write trash metadata failed")
 		return
 	}
 	if err := h.oss.PutObject(ctx, trashPrefix+"content", data); err != nil {
 		_ = h.oss.DeleteObject(ctx, trashPrefix+"meta.json") // roll back the partial entry
+		if errors.Is(err, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "write trash content failed")
 		return
 	}
@@ -1098,6 +1340,10 @@ func (h *humanFilesHandler) deleteFile(w http.ResponseWriter, r *http.Request) {
 	case merr != nil:
 		_ = h.oss.DeleteObject(ctx, trashPrefix+"content")
 		_ = h.oss.DeleteObject(ctx, trashPrefix+"meta.json")
+		if errors.Is(merr, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "stat file failed")
 		return
 	case !strings.EqualFold(fresh.ETag, snapMeta.ETag):
@@ -1110,6 +1356,10 @@ func (h *humanFilesHandler) deleteFile(w http.ResponseWriter, r *http.Request) {
 		if verr := lock.Verify(ctx); verr != nil {
 			_ = h.oss.DeleteObject(ctx, trashPrefix+"content")
 			_ = h.oss.DeleteObject(ctx, trashPrefix+"meta.json")
+			if errors.Is(verr, oss.ErrStorageUnavailable) {
+				writeStorageUnavailable(w)
+				return
+			}
 			writeHumanFileCodedError(w, http.StatusConflict, "lease_lost",
 				"the path lease was taken over by another operation; nothing was deleted")
 			return
@@ -1127,13 +1377,26 @@ func (h *humanFilesHandler) deleteFile(w http.ResponseWriter, r *http.Request) {
 					"the file changed since it was read; nothing was deleted")
 				return
 			}
+			if errors.Is(err, oss.ErrStorageUnavailable) {
+				writeStorageUnavailable(w)
+				return
+			}
 			httputil.WriteError(w, http.StatusInternalServerError,
 				"remove original failed; the file is preserved in the trash and may still be readable")
 			return
 		}
+		// Only this request's own successful soft delete is recorded: the
+		// ErrNotExist fall-through above means a concurrent delete won and
+		// recorded its own entry.
+		h.appendHumanChange(ctx, username, humanChangeEntry{
+			Op:   "delete",
+			Path: "files/" + rel,
+			Size: int64(len(data)),
+			ETag: snapMeta.ETag,
+		})
 	}
 	h.recordAudit(ctx, a, "human_file_delete",
-		humanFileDetail("path", "files/"+rel, "size", len(data), "trashId", trashID))
+		"path", "files/"+rel, "size", len(data), "trashId", trashID)
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"trashId": trashID})
 }
 
@@ -1143,7 +1406,7 @@ func (h *humanFilesHandler) deleteFile(w http.ResponseWriter, r *http.Request) {
 // first (the trash id is time-prefixed).
 func (h *humanFilesHandler) listTrash(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, "", false, false)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -1153,7 +1416,7 @@ func (h *humanFilesHandler) listTrash(w http.ResponseWriter, r *http.Request) {
 	prefix := humanTrashPrefix(username)
 	infos, err := h.oss.ListObjectsDetailed(ctx, prefix)
 	if err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, "list trash failed")
+		writeStorageError(w, err, "list trash failed", "list trash failed")
 		return
 	}
 	ids := make(map[string]struct{})
@@ -1174,10 +1437,25 @@ func (h *humanFilesHandler) listTrash(w http.ResponseWriter, r *http.Request) {
 	out := make([]trashEntry, 0, len(ids))
 	for id := range ids {
 		e := trashEntry{ID: id}
-		if data, gerr := h.oss.GetObject(ctx, prefix+id+"/meta.json"); gerr == nil {
+		data, gerr := h.oss.GetObject(ctx, prefix+id+"/meta.json")
+		if gerr != nil {
+			if errors.Is(gerr, oss.ErrStorageUnavailable) {
+				// A listing whose entries cannot be verified answers
+				// the availability fault, not a 200 with empty fields.
+				writeStorageUnavailable(w)
+				return
+			}
+			// Any other read error keeps the entry with empty fields.
+		} else {
 			var m trashMeta
 			if json.Unmarshal(data, &m) == nil {
 				e.Path, e.Size, e.DeletedAt, e.Caller, e.Role = m.Path, m.Size, m.DeletedAt, m.Caller, m.Role
+			}
+		}
+		if !a.isAdmin && !a.isManager && !a.isSelf {
+			rel, ok := strings.CutPrefix(e.Path, "files/")
+			if !ok || rel == "" || !a.canReadPath(rel) {
+				continue
 			}
 		}
 		out = append(out, e)
@@ -1197,7 +1475,7 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 		httputil.WriteError(w, http.StatusBadRequest, "invalid trash id")
 		return
 	}
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, "", false, false)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -1222,6 +1500,10 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 				"storage provider does not support conditional writes; the trash entry lease cannot be taken (fail closed)")
 			return
 		}
+		if errors.Is(err, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "acquire path lease failed")
 		return
 	}
@@ -1229,11 +1511,7 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 
 	metaData, err := h.oss.GetObject(ctx, trashPrefix+"meta.json")
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			httputil.WriteError(w, http.StatusNotFound, "trash entry not found")
-			return
-		}
-		httputil.WriteError(w, http.StatusInternalServerError, "read trash metadata failed")
+		writeStorageError(w, err, "trash entry not found", "read trash metadata failed")
 		return
 	}
 	var m trashMeta
@@ -1243,11 +1521,7 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 	}
 	content, err := h.oss.GetObject(ctx, trashPrefix+"content")
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			httputil.WriteError(w, http.StatusNotFound, "trash content not found")
-			return
-		}
-		httputil.WriteError(w, http.StatusInternalServerError, "read trash content failed")
+		writeStorageError(w, err, "trash content not found", "read trash content failed")
 		return
 	}
 	// Defense against a tampered meta.json: the recorded path must still
@@ -1260,6 +1534,23 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "trash metadata path is invalid: "+err.Error())
 		return
+	}
+	// A restore rewrites the original path, so the caller must hold
+	// readwrite on that specific path. The area-level check above ran on
+	// the root; the path-specific mode is what a grant/restriction
+	// actually decided for this rel (a read grant may allow listing the
+	// trash but never putting bytes back).
+	if !a.isAdmin && !a.isManager && !a.isSelf {
+		defaultTeams, terr := h.defaultTeams(ctx, a.human)
+		if terr != nil {
+			httputil.WriteError(w, http.StatusInternalServerError, "team lookup failed")
+			return
+		}
+		mode, _ := humanWorkspaceEffectiveMode(&a.human.Spec, callerTeamSet(a.caller), defaultTeams, rel)
+		if mode != humanWorkspaceModeReadWrite {
+			httputil.WriteError(w, http.StatusForbidden, "write access required")
+			return
+		}
 	}
 
 	override := r.URL.Query().Get("overwrite") == "1"
@@ -1280,6 +1571,10 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 		if errors.Is(err, oss.ErrConditionalUnsupported) {
 			writeHumanFileCodedError(w, http.StatusServiceUnavailable, "conditional_write_unsupported",
 				"storage provider does not support conditional writes; the path lease cannot be taken (fail closed)")
+			return
+		}
+		if errors.Is(err, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
 			return
 		}
 		httputil.WriteError(w, http.StatusInternalServerError, "acquire path lease failed")
@@ -1305,6 +1600,10 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 		}
 	case errors.Is(serr, os.ErrNotExist):
 	default:
+		if errors.Is(serr, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "stat restore target failed")
 		return
 	}
@@ -1326,6 +1625,10 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 	// mutating the file. The lease object is CAS-released, never deleted, so
 	// this read can tell "still mine" from "replaced by a successor".
 	if verr := lock.Verify(ctx); verr != nil {
+		if errors.Is(verr, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		writeHumanFileCodedError(w, http.StatusConflict, "lease_lost",
 			"the path lease was taken over by another operation; nothing was written")
 		return
@@ -1342,10 +1645,18 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 				"trash entry is no longer available; retry")
 			return
 		}
+		if errors.Is(serr, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "stat trash entry failed")
 		return
 	}
 	if verr := trashLock.Verify(ctx); verr != nil {
+		if errors.Is(verr, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		writeHumanFileCodedError(w, http.StatusConflict, "lease_lost",
 			"the trash entry lease was taken over by another operation; nothing was written")
 		return
@@ -1368,6 +1679,10 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 					"a file already exists at the restore target")
 				return
 			}
+			if errors.Is(werr, oss.ErrStorageUnavailable) {
+				writeStorageUnavailable(w)
+				return
+			}
 			httputil.WriteError(w, http.StatusInternalServerError, "write restored file failed")
 			return
 		}
@@ -1381,6 +1696,10 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 		case errors.Is(serr, os.ErrNotExist):
 			// Deleted between the stats: recreate as a fresh object.
 		case serr != nil:
+			if errors.Is(serr, oss.ErrStorageUnavailable) {
+				writeStorageUnavailable(w)
+				return
+			}
 			httputil.WriteError(w, http.StatusInternalServerError, "stat restore target failed")
 			return
 		case !strings.EqualFold(fresh.ETag, existingETag):
@@ -1389,6 +1708,10 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		if err := h.oss.PutObject(ctx, target, content); err != nil {
+			if errors.Is(err, oss.ErrStorageUnavailable) {
+				writeStorageUnavailable(w)
+				return
+			}
 			httputil.WriteError(w, http.StatusInternalServerError, "write restored file failed")
 			return
 		}
@@ -1419,8 +1742,14 @@ func (h *humanFilesHandler) restoreTrash(w http.ResponseWriter, r *http.Request)
 				"human", username, "trashId", id, "size", existingSize)
 		}
 	}
+	h.appendHumanChange(ctx, username, humanChangeEntry{
+		Op:   "restore",
+		Path: "files/" + rel,
+		Size: int64(len(content)),
+		ETag: md5Hex(content),
+	})
 	h.recordAudit(ctx, a, "human_trash_restore",
-		humanFileDetail("path", "files/"+rel, "size", len(content), "trashId", id, "overwrite", override))
+		"path", "files/"+rel, "size", len(content), "trashId", id, "overwrite", override)
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"path": "files/" + rel,
 		"size": len(content),
@@ -1437,7 +1766,7 @@ func (h *humanFilesHandler) purgeTrash(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid trash id")
 		return
 	}
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, true)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, "", false, true)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -1462,6 +1791,10 @@ func (h *humanFilesHandler) purgeTrash(w http.ResponseWriter, r *http.Request) {
 				"storage provider does not support conditional writes; the trash entry lease cannot be taken (fail closed)")
 			return
 		}
+		if errors.Is(err, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "acquire path lease failed")
 		return
 	}
@@ -1471,10 +1804,18 @@ func (h *humanFilesHandler) purgeTrash(w http.ResponseWriter, r *http.Request) {
 	if data, err := h.oss.GetObject(ctx, trashPrefix+"meta.json"); err == nil {
 		_ = json.Unmarshal(data, &m)
 	} else if !errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "read trash metadata failed")
 		return
 	}
 	if serr := h.oss.Stat(ctx, trashPrefix+"content"); serr != nil && !errors.Is(serr, os.ErrNotExist) {
+		if errors.Is(serr, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "stat trash entry failed")
 		return
 	}
@@ -1490,6 +1831,10 @@ func (h *humanFilesHandler) purgeTrash(w http.ResponseWriter, r *http.Request) {
 	// be written back; abort without deleting and without touching the
 	// ledger.
 	if verr := trashLock.Verify(ctx); verr != nil {
+		if errors.Is(verr, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		writeHumanFileCodedError(w, http.StatusConflict, "lease_lost",
 			"the trash entry lease was taken over by another operation; nothing was deleted")
 		return
@@ -1503,10 +1848,18 @@ func (h *humanFilesHandler) purgeTrash(w http.ResponseWriter, r *http.Request) {
 				"trash entry is no longer available; retry")
 			return
 		}
+		if errors.Is(serr, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "stat trash entry failed")
 		return
 	}
 	if err := h.oss.DeletePrefix(ctx, trashPrefix); err != nil {
+		if errors.Is(err, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "purge trash entry failed")
 		return
 	}
@@ -1525,8 +1878,17 @@ func (h *humanFilesHandler) purgeTrash(w http.ResponseWriter, r *http.Request) {
 		log.FromContext(ctx).Info("warning: trash purge deleted the entry but lost the entry lease before the ledger release; the bytes stay counted (conservative overstate)",
 			"human", username, "trashId", id, "size", m.Size)
 	}
+	// A degenerate entry without a recorded path is not surfaced in the
+	// change feed; the purge itself (and its audit) still happens.
+	if m.Path != "" {
+		h.appendHumanChange(ctx, username, humanChangeEntry{
+			Op:   "purge",
+			Path: m.Path,
+			Size: m.Size,
+		})
+	}
 	h.recordAudit(ctx, a, "human_trash_purge",
-		humanFileDetail("path", m.Path, "size", m.Size, "trashId", id))
+		"path", m.Path, "size", m.Size, "trashId", id)
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"purged": id})
 }
 
@@ -1616,7 +1978,7 @@ func (h *humanFilesHandler) usedBytes(ctx context.Context, username string) (int
 // and its configured quota (null = unlimited).
 func (h *humanFilesHandler) getQuota(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, "", false, false)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -1624,7 +1986,7 @@ func (h *humanFilesHandler) getQuota(w http.ResponseWriter, r *http.Request) {
 	username := a.human.Spec.EffectiveUsername(a.human.Name)
 	used, err := h.usedBytes(r.Context(), username)
 	if err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, "compute usage failed")
+		writeStorageError(w, err, "compute usage failed", "compute usage failed")
 		return
 	}
 	httputil.WriteJSON(w, http.StatusOK, humanQuotaResponse{
@@ -1638,7 +2000,7 @@ func (h *humanFilesHandler) getQuota(w http.ResponseWriter, r *http.Request) {
 // (unlimited).
 func (h *humanFilesHandler) putQuota(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, true)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, "", false, true)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -1680,11 +2042,15 @@ func (h *humanFilesHandler) putQuota(w http.ResponseWriter, r *http.Request) {
 						"storage provider does not support conditional writes; the quota ledger cannot be reconciled (fail closed)")
 					return
 				}
+				if errors.Is(err, oss.ErrStorageUnavailable) {
+					writeStorageUnavailable(w)
+					return
+				}
 				httputil.WriteError(w, http.StatusInternalServerError, "quota ledger reconciliation failed")
 				return
 			}
 		}
-		h.recordAudit(ctx, a, "human_quota_set", humanFileDetail("quotaBytes", body.QuotaBytes))
+		h.recordAudit(ctx, a, "human_quota_set", "quotaBytes", body.QuotaBytes)
 		httputil.WriteJSON(w, http.StatusOK, map[string]any{"quotaBytes": body.QuotaBytes})
 		return
 	}
@@ -1907,7 +2273,7 @@ func (h *humanFilesHandler) presignUploadFile(w http.ResponseWriter, r *http.Req
 		httputil.WriteError(w, http.StatusBadRequest, "path must name a file")
 		return
 	}
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, rawPath, true, false)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -1945,10 +2311,14 @@ func (h *humanFilesHandler) presignUploadFile(w http.ResponseWriter, r *http.Req
 		case errors.Is(lerr, os.ErrNotExist):
 			used, err = h.usedBytes(ctx, username)
 			if err != nil {
-				httputil.WriteError(w, http.StatusInternalServerError, "compute usage failed")
+				writeStorageError(w, err, "compute usage failed", "compute usage failed")
 				return
 			}
 		default:
+			if errors.Is(lerr, oss.ErrStorageUnavailable) {
+				writeStorageUnavailable(w)
+				return
+			}
 			httputil.WriteError(w, http.StatusInternalServerError, "read quota ledger failed")
 			return
 		}
@@ -1983,6 +2353,10 @@ func (h *humanFilesHandler) presignUploadFile(w http.ResponseWriter, r *http.Req
 				"configure AGENTTEAMS_FS_PUBLIC_ENDPOINT for direct uploads or use the existing file PUT")
 			return
 		}
+		if errors.Is(err, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "issue presigned upload failed")
 		return
 	}
@@ -1996,11 +2370,15 @@ func (h *humanFilesHandler) presignUploadFile(w http.ResponseWriter, r *http.Req
 		prev := s.Commits[rel]
 		s.Commits[rel] = presignCommitEntry{Session: session, Committed: prev.Committed}
 	}); err != nil {
+		if errors.Is(err, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "record presign session failed")
 		return
 	}
 	h.recordAudit(ctx, a, "human_file_presign_issue",
-		humanFileDetail("path", "files/"+rel, "session", session, "maxBytes", h.presignMaxBytes, "ttlSeconds", int64(ttl.Seconds())))
+		"path", "files/"+rel, "session", session, "maxBytes", h.presignMaxBytes, "ttlSeconds", int64(ttl.Seconds()))
 	httputil.WriteJSON(w, http.StatusOK, humanPresignResponse{
 		Method:    method,
 		URL:       url,
@@ -2026,7 +2404,7 @@ func (h *humanFilesHandler) commitPresignedFile(w http.ResponseWriter, r *http.R
 		httputil.WriteError(w, http.StatusBadRequest, "path must name a file")
 		return
 	}
-	a, status, msg := h.authorizeHumanFile(r.Context(), name, false)
+	a, status, msg := h.authorizeHumanFile(r.Context(), name, rawPath, true, false)
 	if a == nil {
 		httputil.WriteError(w, status, msg)
 		return
@@ -2045,6 +2423,10 @@ func (h *humanFilesHandler) commitPresignedFile(w http.ResponseWriter, r *http.R
 	key := humanFilesPrefix(username) + rel
 	state, _, serr := h.readPresignCommitState(ctx, username)
 	if serr != nil && !errors.Is(serr, os.ErrNotExist) {
+		if errors.Is(serr, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "read presign commit state failed")
 		return
 	}
@@ -2070,6 +2452,10 @@ func (h *humanFilesHandler) commitPresignedFile(w http.ResponseWriter, r *http.R
 			"no object at this path; the direct upload has not landed")
 		return
 	case merr != nil:
+		if errors.Is(merr, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "stat file failed")
 		return
 	}
@@ -2080,7 +2466,7 @@ func (h *humanFilesHandler) commitPresignedFile(w http.ResponseWriter, r *http.R
 		writeHumanFileCodedError(w, http.StatusRequestEntityTooLarge, "size_exceeded",
 			fmt.Sprintf("file size %d exceeds the %d byte direct upload limit", meta.Size, h.presignMaxBytes))
 		h.recordAudit(ctx, a, "human_file_presign_commit_rejected",
-			humanFileDetail("path", "files/"+rel, "size", meta.Size, "reason", "size_exceeded"))
+			"path", "files/"+rel, "size", meta.Size, "reason", "size_exceeded")
 		return
 	}
 	// The per-path lease serializes the publish against in-API writers on
@@ -2099,6 +2485,10 @@ func (h *humanFilesHandler) commitPresignedFile(w http.ResponseWriter, r *http.R
 				"storage provider does not support conditional writes; the path lease cannot be taken (fail closed)")
 			return
 		}
+		if errors.Is(err, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "acquire path lease failed")
 		return
 	}
@@ -2109,6 +2499,10 @@ func (h *humanFilesHandler) commitPresignedFile(w http.ResponseWriter, r *http.R
 	// session clear), and a newer presign supersedes this session.
 	freshState, _, fserr := h.readPresignCommitState(ctx, username)
 	if fserr != nil && !errors.Is(fserr, os.ErrNotExist) {
+		if errors.Is(fserr, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "read presign commit state failed")
 		return
 	}
@@ -2138,7 +2532,7 @@ func (h *humanFilesHandler) commitPresignedFile(w http.ResponseWriter, r *http.R
 		writeHumanFileCodedError(w, http.StatusRequestEntityTooLarge, "size_exceeded",
 			fmt.Sprintf("file size %d exceeds the %d byte direct upload limit", len(data), h.presignMaxBytes))
 		h.recordAudit(ctx, a, "human_file_presign_commit_rejected",
-			humanFileDetail("path", "files/"+rel, "size", len(data), "reason", "size_exceeded"))
+			"path", "files/"+rel, "size", len(data), "reason", "size_exceeded")
 		return
 	}
 	// Content verification: the sha256 the caller passes is checked against
@@ -2155,7 +2549,7 @@ func (h *humanFilesHandler) commitPresignedFile(w http.ResponseWriter, r *http.R
 			writeHumanFileCodedError(w, http.StatusConflict, "checksum_mismatch",
 				"the staged content does not match the declared sha256; the upload was rejected")
 			h.recordAudit(ctx, a, "human_file_presign_commit_rejected",
-				humanFileDetail("path", "files/"+rel, "size", len(data), "reason", "checksum_mismatch"))
+				"path", "files/"+rel, "size", len(data), "reason", "checksum_mismatch")
 			return
 		}
 	}
@@ -2168,16 +2562,26 @@ func (h *humanFilesHandler) commitPresignedFile(w http.ResponseWriter, r *http.R
 			oldSize = fmeta.Size
 		}
 	} else if !errors.Is(ferr, os.ErrNotExist) {
+		if errors.Is(ferr, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "stat file failed")
 		return
 	}
-	token, status, msg := h.reserveQuota(ctx, a, username, rel, oldSize, int64(len(data)))
+	token, status, code, msg := h.reserveQuota(ctx, a, username, rel, oldSize, int64(len(data)))
 	if status != 0 {
 		switch status {
 		case http.StatusRequestEntityTooLarge:
 			writeHumanFileCodedError(w, status, "quota_exceeded", msg)
 		case http.StatusServiceUnavailable:
-			writeHumanFileCodedError(w, status, "conditional_write_unsupported", msg)
+			if code == "storage_unavailable" {
+				writeStorageUnavailable(w)
+				h.recordAudit(ctx, a, "human_file_write_blocked",
+					"path", "files/"+rel, "size", int64(len(data)), "reason", "storage_unavailable")
+			} else {
+				writeHumanFileCodedError(w, status, code, msg)
+			}
 		default:
 			httputil.WriteError(w, status, msg)
 		}
@@ -2197,6 +2601,10 @@ func (h *humanFilesHandler) commitPresignedFile(w http.ResponseWriter, r *http.R
 	// Fence: an expired holder whose lease was taken over must not keep
 	// mutating the file.
 	if verr := lock.Verify(ctx); verr != nil {
+		if errors.Is(verr, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		writeHumanFileCodedError(w, http.StatusConflict, "lease_lost",
 			"the path lease was taken over by another operation; nothing was written")
 		return
@@ -2205,6 +2613,10 @@ func (h *humanFilesHandler) commitPresignedFile(w http.ResponseWriter, r *http.R
 	// the lease the target cannot change in-API, so a plain put is safe;
 	// the confirm snapshot below re-verifies the bytes that landed.
 	if err := h.oss.PutObject(ctx, key, data); err != nil {
+		if errors.Is(err, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "write file failed")
 		return
 	}
@@ -2212,6 +2624,10 @@ func (h *humanFilesHandler) commitPresignedFile(w http.ResponseWriter, r *http.R
 	h.commitQuota(ctx, username, rel, token)
 	snapData, finalMeta, cerr := h.readFileSnapshot(ctx, key)
 	if cerr != nil {
+		if errors.Is(cerr, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "confirm file write failed")
 		return
 	}
@@ -2239,11 +2655,18 @@ func (h *humanFilesHandler) commitPresignedFile(w http.ResponseWriter, r *http.R
 		}
 		s.Commits[rel] = presignCommitEntry{Committed: finalMeta.ETag}
 	}); err != nil {
+		if errors.Is(err, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "record presign commit failed")
 		return
 	}
+	h.appendHumanChange(ctx, username, humanChangeEntry{
+		Op: "put", Path: "files/" + rel, Size: finalMeta.Size, ETag: finalMeta.ETag,
+	})
 	h.recordAudit(ctx, a, "human_file_presign_commit",
-		humanFileDetail("path", "files/"+rel, "size", len(data), "oldSize", oldSize, "etag", finalMeta.ETag))
+		"path", "files/"+rel, "size", len(data), "oldSize", oldSize, "etag", finalMeta.ETag)
 	httputil.WriteJSON(w, http.StatusOK, humanPresignCommitResponse{
 		Path: "files/" + rel,
 		Size: int64(len(data)),
@@ -2258,9 +2681,19 @@ func (h *humanFilesHandler) commitPresignedFile(w http.ResponseWriter, r *http.R
 func (h *humanFilesHandler) finishCommittedRetry(w http.ResponseWriter, r *http.Request, a *humanFileAccess, username, rel, key, committedETag string) {
 	ctx := r.Context()
 	meta, merr := h.oss.StatMeta(ctx, key)
+	if merr != nil && !errors.Is(merr, os.ErrNotExist) {
+		// The retry check cannot answer on an unverifiable store: a
+		// storage fault is 503, never the 409 a gone version would give.
+		if errors.Is(merr, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
+		httputil.WriteError(w, http.StatusInternalServerError, "stat file failed")
+		return
+	}
 	if merr == nil && !isHumanFileTombstone(meta) && strings.EqualFold(meta.ETag, committedETag) {
 		h.recordAudit(ctx, a, "human_file_presign_commit_idempotent",
-			humanFileDetail("path", "files/"+rel, "size", meta.Size, "etag", meta.ETag))
+			"path", "files/"+rel, "size", meta.Size, "etag", meta.ETag)
 		httputil.WriteJSON(w, http.StatusOK, humanPresignCommitResponse{
 			Path: "files/" + rel,
 			Size: meta.Size,

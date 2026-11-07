@@ -135,6 +135,9 @@ func (a *Authorizer) authorizeHuman(caller *CallerIdentity, req AuthzRequest) er
 		// within their accessibleTeams scope. The middleware cannot resolve
 		// project/task -> team (empty ResourceTeam short-circuits
 		// requireSameTeam); the handler is the real team boundary.
+		if req.Action == ActionGet {
+			return nil // record handlers filter scoped reads, as for project Get
+		}
 		if req.Action == ActionUpdate {
 			return a.requireSameTeam(caller, req)
 		}
@@ -323,7 +326,7 @@ func (a *Authorizer) authorizeTeamLeader(caller *CallerIdentity, req AuthzReques
 		// cannot resolve project/task -> team (empty ResourceTeam
 		// short-circuits requireSameTeam); the handler enforces team
 		// equality after resolving the record.
-		if req.Action == ActionUpdate {
+		if req.Action == ActionGet || req.Action == ActionUpdate {
 			return a.requireSameTeam(caller, req)
 		}
 		return deny(caller, req)
@@ -359,10 +362,16 @@ func (a *Authorizer) authorizeTeamLeaderWorkerAction(caller *CallerIdentity, req
 		return a.requireSameTeam(caller, req)
 	case ActionList:
 		return nil // handler filters by team
-	case ActionCreate, ActionUpdate:
+	case ActionStatus:
 		return a.requireSameTeam(caller, req)
-	case ActionWake, ActionSleep, ActionEnsureReady, ActionReady, ActionStatus:
-		return a.requireSameTeam(caller, req)
+	case ActionReady:
+		// A Leader is also a Worker runtime and must report its own startup.
+		// This is not authority to change another Worker's lifecycle.
+		if req.ResourceName == "" {
+			return deny(caller, req)
+		}
+		return a.requireSelf(caller, req)
+	// Deployment resource writes and lifecycle control belong to Admin/Manager.
 	// ActionWorkerApproval, ActionRuntimeConfig and ActionWorkerTools
 	// deliberately fall through to deny: team leaders are READ-ONLY for
 	// worker approval, running-config, and tool settings (mirrors the

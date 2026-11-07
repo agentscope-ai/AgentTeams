@@ -292,6 +292,10 @@ func (h *humanFilesHandler) putSyncManifest(w http.ResponseWriter, r *http.Reque
 				"storage provider does not support conditional writes; the path lease cannot be taken (fail closed)")
 			return
 		}
+		if errors.Is(err, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "acquire path lease failed")
 		return
 	}
@@ -307,6 +311,10 @@ func (h *humanFilesHandler) putSyncManifest(w http.ResponseWriter, r *http.Reque
 				"If-Match failed: the manifest does not exist")
 			return
 		case merr != nil:
+			if errors.Is(merr, oss.ErrStorageUnavailable) {
+				writeStorageUnavailable(w)
+				return
+			}
 			httputil.WriteError(w, http.StatusInternalServerError, "stat manifest failed")
 			return
 		case meta.ETag != "" && !strings.EqualFold(strings.Trim(meta.ETag, `"`), ifMatch):
@@ -317,6 +325,10 @@ func (h *humanFilesHandler) putSyncManifest(w http.ResponseWriter, r *http.Reque
 		if old, oerr := h.oss.GetObject(ctx, key); oerr == nil {
 			baseGen = storedSyncGeneration(old)
 		} else if !errors.Is(oerr, os.ErrNotExist) {
+			if errors.Is(oerr, oss.ErrStorageUnavailable) {
+				writeStorageUnavailable(w)
+				return
+			}
 			httputil.WriteError(w, http.StatusInternalServerError, "read manifest failed")
 			return
 		}
@@ -326,6 +338,10 @@ func (h *humanFilesHandler) putSyncManifest(w http.ResponseWriter, r *http.Reque
 				"a manifest already exists; read it and retry with If-Match")
 			return
 		} else if !errors.Is(merr, os.ErrNotExist) {
+			if errors.Is(merr, oss.ErrStorageUnavailable) {
+				writeStorageUnavailable(w)
+				return
+			}
 			httputil.WriteError(w, http.StatusInternalServerError, "stat manifest failed")
 			return
 		}
@@ -342,6 +358,10 @@ func (h *humanFilesHandler) putSyncManifest(w http.ResponseWriter, r *http.Reque
 	// Fence: an expired holder whose lease was taken over must not keep
 	// mutating the manifest.
 	if verr := lock.Verify(ctx); verr != nil {
+		if errors.Is(verr, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		writeHumanFileCodedError(w, http.StatusConflict, "lease_lost",
 			"the path lease was taken over by another operation; nothing was written")
 		return
@@ -363,6 +383,10 @@ func (h *humanFilesHandler) putSyncManifest(w http.ResponseWriter, r *http.Reque
 			}
 			return
 		}
+		if errors.Is(werr, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "write manifest failed")
 		return
 	}
@@ -375,7 +399,7 @@ func (h *humanFilesHandler) putSyncManifest(w http.ResponseWriter, r *http.Reque
 		etag = md5Hex(out) // single-part content hash: the ETag of exactly these bytes
 	}
 	h.recordAudit(ctx, a, "human_manifest_write",
-		humanFileDetail("entries", len(manifest.Entries), "tombstones", len(manifest.Tombstones), "generation", manifest.Generation, "etag", etag))
+		"entries", len(manifest.Entries), "tombstones", len(manifest.Tombstones), "generation", manifest.Generation, "etag", etag)
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"etag":       etag,
 		"generation": manifest.Generation,
@@ -399,6 +423,10 @@ func (h *humanFilesHandler) getSyncStatus(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			httputil.WriteJSON(w, http.StatusOK, syncStatus{})
+			return
+		}
+		if errors.Is(err, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
 			return
 		}
 		httputil.WriteError(w, http.StatusInternalServerError, "read manifest failed")

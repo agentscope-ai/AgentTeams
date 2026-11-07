@@ -195,9 +195,9 @@ func TestBuildModelGrantSet_ImplicitCapFailClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("32 implicit + 33 explicit: unexpected error: %v", err)
 	}
-	// 33 explicit + 32 implicit (no current value: the worker has no model).
-	if len(s.main) != 33+modelGrantMax {
-		t.Fatalf("main = %d entries, want %d", len(s.main), 33+modelGrantMax)
+	// Historical annotation rows are not authorization; retain all 33 explicit rows.
+	if len(s.main) != 33 {
+		t.Fatalf("main = %d entries, want %d", len(s.main), 33)
 	}
 	if !grantAllows(s.main, "p", "m32") {
 		t.Fatalf("m32 lost in the effective set: %v", s.main)
@@ -234,14 +234,9 @@ func TestModelGrantAnnotation_DedupeAndCap(t *testing.T) {
 	}
 }
 
-// TestRevocationContract_AnnotationAndCurrentSurvive pins the revocation
-// contract: revoking the Human's explicit scope removes explicit rows
-// immediately, but the L1-issued historical annotation and the worker's
-// current value stay selectable. "Keep running the current value" and
-// "re-select a value L1 previously granted" are the same grant source
-// (the annotation), distinct from the revoked explicit scope; a value that
-// was never granted is denied.
-func TestRevocationContract_AnnotationAndCurrentSurvive(t *testing.T) {
+// Revocation preserves the active model, but annotation history cannot restore
+// a removed explicit grant.
+func TestRevocationContract_CurrentSurvivesHistoryDoesNot(t *testing.T) {
 	w := &v1beta1.Worker{}
 	w.Spec.Model = "m-current"
 	w.Spec.ModelProvider = "gw"
@@ -256,8 +251,8 @@ func TestRevocationContract_AnnotationAndCurrentSurvive(t *testing.T) {
 	if !grantAllows(s.main, "gw", "m-current") {
 		t.Errorf("current value must stay selectable after revocation")
 	}
-	if !grantAllows(s.main, "gw", "m-old") {
-		t.Errorf("L1-issued annotation must stay selectable after revocation")
+	if grantAllows(s.main, "gw", "m-old") {
+		t.Errorf("historical annotation must not restore a revoked grant")
 	}
 	if grantAllows(s.main, "gw", "m-never-granted") {
 		t.Errorf("a value that was never granted must be denied")

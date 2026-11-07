@@ -38,6 +38,27 @@ var ErrConditionalUnsupported = errors.New("oss: backend cannot provide conditio
 // fall back to the streamed GET.
 var ErrPresignUnsupported = errors.New("oss: presign unsupported (storage endpoint is not caller-reachable)")
 
+// ErrStorageBucketUnavailable reports that the configured bucket is gone:
+// deleted out of band, renamed, or never created. It is deliberately NOT
+// os.ErrNotExist — a storage/deployment failure must never reach callers
+// (or the sync client) as a missing file, which would read as a deletion.
+//
+// The case that forces this distinction is HEAD: minio-go turns any 404 on
+// a HEAD into NoSuchKey, including the one a deleted bucket answers, so the
+// not-found classification alone cannot tell "no such key" from "no such
+// bucket". Key-scoped calls therefore confirm the bucket still exists before
+// normalizing to os.ErrNotExist.
+var ErrStorageBucketUnavailable = errors.New("oss: bucket unavailable")
+
+// ErrStorageUnavailable reports that the object store could not answer at
+// all: the request never received a semantic response (connection
+// refused/reset/EOF, a transport timeout, or an HTTP 5xx / RequestTimeout
+// error body). The object's state is unknown, so callers must answer
+// "retry later" (HTTP 503 storage_unavailable), never "absent" (404 — a
+// sync client would delete its local copy, the D1 failure mode). It wraps
+// the underlying error with %w, keeping it reachable via errors.As.
+var ErrStorageUnavailable = errors.New("oss: storage unavailable")
+
 // StorageClient abstracts object storage operations.
 // Implementations: MinIOClient (mc CLI), future S3Client (aws-sdk-go).
 // ObjectInfo is a listing entry with the last-updated timestamp when the

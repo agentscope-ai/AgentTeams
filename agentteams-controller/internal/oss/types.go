@@ -21,8 +21,10 @@ type Config struct {
 	// means presign is unsupported: PresignGet returns
 	// ErrPresignUnsupported and callers fall back to the streamed GET.
 	PublicEndpoint string
-	// PublicAlias is the mc alias used to sign presigned URLs against
-	// PublicEndpoint, default "agentteams-public".
+	// PublicAlias was the mc alias used to sign presigned URLs against
+	// PublicEndpoint, default "agentteams-public". Retained for config
+	// compatibility only: the SDK now signs presigned URLs directly
+	// against PublicEndpoint and registers no mc alias.
 	PublicAlias string
 }
 

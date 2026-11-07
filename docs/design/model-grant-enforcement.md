@@ -24,13 +24,13 @@ same model name is caught; sending only `modelProvider` answers
 
 ## Effective set
 
-`effective = explicit rows ∪ implicit annotation ∪ current value`
+`effective = explicit rows ∪ current value`
 
 - **Explicit rows** — `Human.spec.modelAccess` scopes, or the referenced
   `ModelAccessTable` (`GET /model-access` resolves them for the caller).
 - **Implicit annotation** — `agentteams.io/model-grants` on the Worker. L1
   appends the chosen pair on create and on every later L1 model write
-  (deduped, ≤ 32 rows). L2 never writes this annotation.
+  (deduped, ≤ 32 rows). This is history, not a selectable grant. L2 never writes it.
 - **Current value** — what the worker runs right now, so an unchanged value
   is never locked out by a grant change.
 
@@ -40,24 +40,33 @@ to 200) are never truncated. An over-cap annotation is a `409`
 
 ## Revocation contract
 
-Revoking a scope removes its explicit rows immediately. It does **not**
-rewrite the implicit annotation: those rows record models L1 previously
-granted, and the current value keeps running. Consequently, after a
-revocation:
+Revoking a scope or deleting its table rows removes authorization for future
+selections immediately. Historical annotation rows do not restore that authority.
+The currently selected value may keep running and may be written back unchanged;
+switching away and then back requires a current explicit grant.
 
-- the current value remains writable (unchanged value);
-- a value present in the L1-issued annotation remains selectable;
-- any other value is denied (`model_not_allowed`), and an unknown provider
-  answers `provider_not_allowed`.
+## Native configuration writes and rollback
 
-Removing a historical value therefore requires an L1 edit that no longer
-selects it (the annotation is append-only history, not a cache of the
-Human's current scopes).
+The production member-config handler installs model authorization on both
+`PUT /api/members/{name}/config` and snapshot rollback. Checks run inside the
+per-worker mutation lock against complete, unredacted current and target native
+documents, before snapshots, desired state or worker files are written.
+
+OpenClaw main/fallback selections use main grants; subagent selections use spawn
+grants. Hermes explicit main/delegation pairs use the corresponding grants.
+Provider definitions, credentials, selection policy and auxiliary/opaque route
+overrides remain L1-owned. Non-model settings and unchanged values remain editable.
+Unresolvable bare/auto selections and Hermes `custom` route aliases return
+`403 model_pair_unresolvable`; a runtime alias is not a verified gateway-provider
+binding. L1 access and Team Leader read-only access are preserved.
+
+Regressions cover distinct Human callers, revoked history, denied writes leaving
+files/snapshots unchanged, and Hermes real temporary-file commands. They do not
+represent a deployed Matrix login or a running model's hot-application.
 
 ## Non-goals (still open, tracked as follow-ups)
 
-- Native runtime-config policy hook (`native_config_*` 403,
-  `model_pair_unresolvable`) — depends on the runtime-config work.
+- Verified runtime-alias/provider bindings for otherwise unresolvable selections.
 - Materialization of grants into runtime files — depends on the restart/
   hot-apply path.
 - Catalog validation / `available` / staleness (A2) and runner default

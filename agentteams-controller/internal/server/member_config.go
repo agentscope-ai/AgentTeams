@@ -68,7 +68,7 @@ type MemberConfigHandler struct {
 	hermesAdapter   *hermes.Adapter
 
 	// nativeConfigPolicy is the model-access policy seam for native config
-	// writes (wired by PR-B). nil = not wired yet (current behaviour).
+	// writes. The production constructor always installs the grant policy.
 	nativeConfigPolicy NativeConfigPolicy
 }
 
@@ -110,6 +110,7 @@ func NewMemberConfigHandler(c client.Client, namespace, kubeMode string, ac *aud
 		}
 		return eb, nil
 	}
+	h.nativeConfigPolicy = h
 	return h
 }
 
@@ -301,26 +302,7 @@ func (h *MemberConfigHandler) putConfig(w http.ResponseWriter, r *http.Request) 
 		httputil.WriteError(w, http.StatusBadRequest, `the "patch" object is required`)
 		return
 	}
-	if h.nativeConfigPolicy != nil {
-		read := func(ctx context.Context) (map[string]any, error) {
-			st, err := mgr.Read(ctx, worker.Name)
-			if err != nil {
-				return nil, err
-			}
-			return st.Values, nil
-		}
-		if err := h.nativeConfigPolicy.CheckNativeWrite(r.Context(), caller, worker.Name, runtime, req.Patch, read); err != nil {
-			var pe *NativeConfigPolicyError
-			if errors.As(err, &pe) {
-				httputil.WriteJSON(w, http.StatusForbidden, map[string]any{
-					"error": pe.Code, "message": pe.Message,
-				})
-				return
-			}
-			httputil.WriteError(w, http.StatusForbidden, err.Error())
-			return
-		}
-	}
+	h.bindNativePolicy(mgr, caller, worker.Name, runtime)
 	res, err := mgr.Write(r.Context(), worker.Name, req.Patch, r.URL.Query().Get("if-rev"))
 	if err != nil {
 		writeConfigStoreError(w, "write worker config", err)
@@ -352,6 +334,7 @@ func (h *MemberConfigHandler) rollbackConfig(w http.ResponseWriter, r *http.Requ
 	if mgr == nil {
 		return
 	}
+	h.bindNativePolicy(mgr, caller, worker.Name, runtime)
 	res, err := mgr.Rollback(r.Context(), worker.Name, rev)
 	if err != nil {
 		writeConfigStoreError(w, "rollback worker config", err)
@@ -365,9 +348,34 @@ func (h *MemberConfigHandler) rollbackConfig(w http.ResponseWriter, r *http.Requ
 
 // --- native config policy seam ------------------------------------------------
 
+// bindNativePolicy runs against the exact current/restored native documents,
+// inside the manager's mutation lock, for both writes and rollback.
+func (h *MemberConfigHandler) bindNativePolicy(mgr runtimeconfig.Manager, caller *authpkg.CallerIdentity, worker, runtime string) {
+	if h.nativeConfigPolicy == nil {
+		return
+	}
+	mgr.SetChangeValidator(func(ctx context.Context, current, next map[string]any) error {
+		read := func(context.Context) (map[string]any, error) {
+			if current == nil {
+				return nil, errors.New("current native configuration cannot be parsed")
+			}
+			return current, nil
+		}
+		err := h.nativeConfigPolicy.CheckNativeWrite(ctx, caller, worker, runtime, next, read)
+		if err == nil {
+			return nil
+		}
+		var pe *NativeConfigPolicyError
+		if errors.As(err, &pe) {
+			return err
+		}
+		return &NativeConfigPolicyError{Code: "native_config_not_allowed", Message: err.Error()}
+	})
+}
+
 // NativeConfigPolicy decides whether a caller may write a runtime's native
-// configuration. Implementations live in the model-access layer; nil means
-// "not wired yet" (current behaviour).
+// configuration. The proposed document and current-value reader refer to
+// the same locked mutation, including rollback. The production constructor installs the model-access policy.
 type NativeConfigPolicy interface {
 	CheckNativeWrite(ctx context.Context, caller *authpkg.CallerIdentity, worker, runtime string,
 		patch map[string]any, readCurrent func(context.Context) (map[string]any, error)) error
@@ -377,6 +385,7 @@ type NativeConfigPolicy interface {
 type NativeConfigPolicyError struct {
 	Code    string
 	Message string
+	Status  int
 }
 
 func (e *NativeConfigPolicyError) Error() string { return e.Code + ": " + e.Message }
@@ -398,8 +407,15 @@ func writeConfigStoreError(w http.ResponseWriter, op string, err error) {
 		runtime  *openclaw.UnknownRuntimeError
 		verr     *openclaw.ValidationError
 		hVerr    *hermes.ValidationError
+		policy   *NativeConfigPolicyError
 	)
 	switch {
+	case errors.As(err, &policy):
+		status := policy.Status
+		if status == 0 {
+			status = http.StatusForbidden
+		}
+		httputil.WriteJSON(w, status, map[string]any{"error": policy.Code, "message": policy.Message})
 	case errors.As(err, &missing):
 		httputil.WriteError(w, http.StatusBadGateway, op+": "+err.Error())
 	case errors.As(err, &stale):

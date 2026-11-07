@@ -90,10 +90,11 @@ type DesiredState struct {
 // config.yaml inside the worker container, with desired state and
 // pre-write snapshots in object storage.
 type ConfigManager struct {
-	adapter *Adapter
-	exec    runtimeconfig.ExecBackend
-	store   runtimeconfig.KeyStore
-	surface runtimeconfig.Surface
+	validateChange runtimeconfig.ChangeValidator
+	adapter        *Adapter
+	exec           runtimeconfig.ExecBackend
+	store          runtimeconfig.KeyStore
+	surface        runtimeconfig.Surface
 }
 
 // NewConfigManager builds the hermes write plane. The adapter's surface
@@ -109,6 +110,11 @@ func NewConfigManager(adapter *Adapter, exec runtimeconfig.ExecBackend, store ru
 }
 
 var _ runtimeconfig.Manager = (*ConfigManager)(nil)
+
+// SetChangeValidator binds request authorization before this manager is used.
+func (m *ConfigManager) SetChangeValidator(validate runtimeconfig.ChangeValidator) {
+	m.validateChange = validate
+}
 
 // Runtime is the runtime id this manager writes.
 func (m *ConfigManager) Runtime() string { return m.surface.Runtime }
@@ -321,6 +327,12 @@ func (m *ConfigManager) Write(ctx context.Context, worker string, values map[str
 		sort.Strings(writtenKeys)
 	}
 
+	if m.validateChange != nil {
+		if err := m.validateChange(ctx, doc, newDoc); err != nil {
+			return runtimeconfig.WriteResult{}, err
+		}
+	}
+
 	newContent, err := yaml.Marshal(newDoc)
 	if err != nil {
 		return runtimeconfig.WriteResult{}, fmt.Errorf("encode config: %w", err)
@@ -408,6 +420,17 @@ func (m *ConfigManager) Rollback(ctx context.Context, worker, rev string) (runti
 	if m.fileExists(ctx, worker, path) {
 		curRaw, err = m.readFile(ctx, worker, path)
 		if err != nil {
+			return runtimeconfig.WriteResult{}, err
+		}
+	}
+	if m.validateChange != nil {
+		current := map[string]any{}
+		if len(curRaw) > 0 {
+			// An invalid current file remains recoverable by a policy that
+			// permits recovery; policies requiring current values fail closed.
+			current, _ = parseYamlDoc(curRaw)
+		}
+		if err := m.validateChange(ctx, current, doc); err != nil {
 			return runtimeconfig.WriteResult{}, err
 		}
 	}

@@ -41,6 +41,8 @@ Manager owns control-plane operations such as creating workers, changing model
 configuration, deploying teams, and managing runtime state. TeamHarness skills
 must not instruct agents to call control-plane APIs.
 
+As Leader, read only the team and Worker metadata needed for task coordination. If a Worker is unavailable or a resource needs changing, report the blocker to Manager or platform Admin. Do not perform the control-plane change yourself or delegate it to a Worker.
+
 ## Safety Boundary
 
 Never write secrets, credentials, tokens, authorization headers, or live runtime

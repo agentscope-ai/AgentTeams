@@ -463,12 +463,16 @@ func objectUserMetadata(info minio.ObjectInfo) map[string]string {
 		}
 		merged[nk] = v
 	}
-	for k, v := range info.Metadata {
+	for k, vals := range info.Metadata {
 		lk := strings.ToLower(k)
 		if !strings.HasPrefix(lk, userMetadataPrefix) {
 			continue
 		}
 		nk := strings.TrimPrefix(lk, userMetadataPrefix)
+		// minio-go exposes the raw response headers as http.Header
+		// (map[string][]string); S3 user metadata is single-valued, but
+		// join defensively instead of discarding extra values.
+		v := strings.Join(vals, ",")
 		if nk == "" || v == "" {
 			continue
 		}

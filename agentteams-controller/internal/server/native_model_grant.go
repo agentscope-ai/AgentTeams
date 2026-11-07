@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"reflect"
@@ -99,16 +100,66 @@ func (h *MemberConfigHandler) CheckNativeWrite(ctx context.Context, caller *auth
 		{false, set.main, false}, {true, set.spawn, set.spawnInherit},
 	} {
 		before, after := nativeHermesPair(current, slot.spawn), nativeHermesPair(next, slot.spawn)
-		// Hermes "custom" is a runtime route alias, not a gateway provider
-		// identity. Without a verified binding it must not match a grant by name.
-		if value, ok := after.(string); ok && !reflect.DeepEqual(before, after) && strings.HasPrefix(value, "custom/") {
-			return &NativeConfigPolicyError{Code: "model_pair_unresolvable", Message: "native custom route needs a verified provider binding"}
+		if reflect.DeepEqual(before, after) {
+			continue
+		}
+		// The Hermes bridge calls its projected gateway route "custom". Resolve
+		// that alias against the controller's original provider configuration.
+		if value, ok := after.(string); ok && strings.HasPrefix(value, "custom/") {
+			provider := h.nativeHermesGatewayProvider(ctx, &worker, next, slot.spawn)
+			if provider == "" {
+				return &NativeConfigPolicyError{Code: "model_pair_unresolvable", Message: "native custom route needs a verified provider binding"}
+			}
+			after = provider + strings.TrimPrefix(value, "custom")
+			if previous, ok := before.(string); ok && strings.HasPrefix(previous, "custom/") {
+				before = provider + strings.TrimPrefix(previous, "custom")
+			}
 		}
 		if err := checkNativeModelSelection(before, after, slot.grants, slot.inherit); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// nativeHermesGatewayProvider accepts only the bridge's unchanged gateway
+// endpoint/credential binding, never a grant whose provider happens to be
+// named "custom". The source is the same per-runtime openclaw.json that the
+// Controller deploys and Hermes converts at startup.
+func (h *MemberConfigHandler) nativeHermesGatewayProvider(ctx context.Context, worker *v1beta1.Worker, doc map[string]any, spawn bool) string {
+	if h.store == nil || nativeGrantPath(doc, "providers.custom") != nil {
+		return ""
+	}
+	provider := strings.TrimSpace(worker.Spec.ModelProvider)
+	if provider == "" {
+		provider = "agentteams-gateway"
+	}
+	data, err := h.store.GetObject(ctx, "agents/"+worker.Spec.EffectiveWorkerName(worker.Name)+"/openclaw.json")
+	var projected map[string]any
+	if err != nil || json.Unmarshal(data, &projected) != nil {
+		return ""
+	}
+	if nativeGrantPath(projected, "agents.defaults.model.primary") != provider+"/"+worker.Spec.Model {
+		return ""
+	}
+	definition, _ := nativeGrantPath(projected, "models.providers").(map[string]any)
+	route, _ := definition[provider].(map[string]any)
+	endpoint, _ := route["baseUrl"].(string)
+	credential, _ := route["apiKey"].(string)
+	nativeEndpoint, _ := nativeGrantPath(doc, "model.base_url").(string)
+	nativeKey, _ := nativeGrantPath(doc, "model.api_key").(string)
+	if spawn {
+		if value, _ := nativeGrantPath(doc, "delegation.base_url").(string); value != "" {
+			nativeEndpoint = value
+		}
+		if value, _ := nativeGrantPath(doc, "delegation.api_key").(string); value != "" {
+			nativeKey = value
+		}
+	}
+	if endpoint == "" || credential == "" || strings.TrimRight(endpoint, "/") != strings.TrimRight(nativeEndpoint, "/") || (nativeKey != "" && nativeKey != credential) {
+		return ""
+	}
+	return provider
 }
 
 func nativeHermesPair(doc map[string]any, spawn bool) any {

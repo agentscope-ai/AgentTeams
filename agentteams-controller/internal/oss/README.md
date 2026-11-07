@@ -56,6 +56,20 @@ differences it has to tolerate:
 | Single-part ETag | MD5 hex | MD5 hex | compared via `canonicalizeETag` (strips quotes, lowercases) |
 | `mc admin` duplicate idempotency | errors on "already exists" (handled) | answers rc=0 silently (RustFS 1.0.3/1.0.4) | the admin client treats both as success; admin output is never parsed as a capability signal |
 
+### MinIO file/directory name collisions
+
+Keep file keys distinct from directory prefixes on MinIO. With both `z`
+and `z/child` stored, MinIO RELEASE.2025-09-07T16-13-09Z can serve the child
+by its exact key while omitting it from recursive S3 listings. Both the
+legacy `mc` implementation and the SDK implementation then leave that
+unlisted child behind during a directory sweep. This migration does not
+repair that existing backend limitation. RustFS 1.0.4 supports this layout.
+
+The backend matrix tests ordinary directory cleanup on both backends and
+coexisting bare-marker preservation on RustFS. The unit tests additionally
+verify that a trailing-slash sweep never deletes the bare key or exceeds
+its prefix-scoped permissions.
+
 ### Error normalization
 
 Every read/stat path maps a 404 (any code, including empty-body 404s some

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"regexp"
 	"testing"
+	"time"
 )
 
 var etagRe = regexp.MustCompile(`^"[0-9a-f]{32}"$`)
@@ -281,5 +282,87 @@ func TestETag_DistinctBodiesDistinctETags(t *testing.T) {
 	}
 	if rec := doETag(sameB, "/x", etagA); rec.Code != http.StatusNotModified {
 		t.Fatalf("shared validator on identical bytes: status = %d, want 304", rec.Code)
+	}
+}
+
+// --- Single-validator helpers (issue #1475 PR-4) -------------------------------
+
+func TestEtagQuoted(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want string
+	}{
+		{in: "", want: ""},
+		{in: "d41d8cd98f00b204e9800998ecf8427e", want: `"d41d8cd98f00b204e9800998ecf8427e"`},
+	} {
+		if got := EtagQuoted(tc.in); got != tc.want {
+			t.Errorf("EtagQuoted(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestBareETag(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "empty", raw: "", want: ""},
+		{name: "quoted", raw: `"abc123"`, want: "abc123"},
+		{name: "bare", raw: "abc123", want: "abc123"},
+		{name: "weak-quoted", raw: `W/"abc123"`, want: "abc123"},
+		{name: "surrounding-spaces", raw: `  "abc123"  `, want: "abc123"},
+		{name: "star", raw: "*", want: "*"},
+	} {
+		if got := BareETag(tc.raw); got != tc.want {
+			t.Errorf("%s: BareETag(%q) = %q, want %q", tc.name, tc.raw, got, tc.want)
+		}
+	}
+}
+
+func TestIfNoneMatchMatches(t *testing.T) {
+	const etag = "abc123"
+	for _, tc := range []struct {
+		name string
+		inm  string
+		want bool
+	}{
+		{name: "empty-header", inm: "", want: false},
+		{name: "quoted-hit", inm: `"abc123"`, want: true},
+		{name: "bare-hit", inm: "abc123", want: true},
+		{name: "weak-hit", inm: `W/"abc123"`, want: true},
+		{name: "star", inm: "*", want: true},
+		{name: "list-hit-second", inm: `"other", "abc123"`, want: true},
+		{name: "list-miss", inm: `"other", "nope"`, want: false},
+		{name: "weak-miss", inm: `W/"other"`, want: false},
+		{name: "different", inm: `"zzz"`, want: false},
+	} {
+		if got := IfNoneMatchMatches(tc.inm, etag); got != tc.want {
+			t.Errorf("%s: IfNoneMatchMatches(%q) = %v, want %v", tc.name, tc.inm, got, tc.want)
+		}
+	}
+}
+
+func TestIfRangeApplies(t *testing.T) {
+	modTime := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name    string
+		ifRange string
+		etag    string
+		want    bool
+	}{
+		{name: "no-if-range", ifRange: "", etag: "abc", want: true},
+		{name: "current-quoted-etag", ifRange: `"abc"`, etag: "abc", want: true},
+		{name: "stale-etag", ifRange: `"old"`, etag: "abc", want: false},
+		{name: "weak-etag-never-matches", ifRange: `W/"abc"`, etag: "abc", want: false},
+		{name: "etag-form-no-validator", ifRange: `"abc"`, etag: "", want: false},
+		{name: "date-future-applies", ifRange: "Sat, 08 Nov 2026 12:00:00 GMT", etag: "", want: true},
+		{name: "date-past-ignored", ifRange: "Sat, 07 Nov 2026 11:00:00 GMT", etag: "", want: false},
+		{name: "date-garbage-ignored", ifRange: "not-a-date", etag: "", want: false},
+		{name: "bare-token-ignored", ifRange: "abc", etag: "abc", want: false},
+	} {
+		if got := IfRangeApplies(tc.ifRange, tc.etag, modTime); got != tc.want {
+			t.Errorf("%s: IfRangeApplies(%q) = %v, want %v", tc.name, tc.ifRange, got, tc.want)
+		}
 	}
 }

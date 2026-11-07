@@ -306,8 +306,9 @@ func TestHumanFileSyncProtocol(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("GET manifest after create: got %d, want 200: %s", code, body)
 	}
-	if hdr.Get("ETag") != p1.ETag {
-		t.Fatalf("GET ETag = %q, want the write response etag %q", hdr.Get("ETag"), p1.ETag)
+	// The response ETag is the quoted wire form of the write's bare etag.
+	if got, want := hdr.Get("ETag"), `"`+p1.ETag+`"`; got != want {
+		t.Fatalf("GET ETag = %q, want the quoted write response etag %q", got, want)
 	}
 	var sm storedManifest
 	sm = storedManifest{}
@@ -417,8 +418,9 @@ func TestHumanFileSyncProtocol(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("GET manifest final: got %d, want 200: %s", code, body)
 	}
-	if hdr.Get("ETag") != p4.ETag {
-		t.Fatalf("final GET ETag = %q, want the last write's etag %q", hdr.Get("ETag"), p4.ETag)
+	// The response ETag is the quoted wire form of the write's bare etag.
+	if got, want := hdr.Get("ETag"), `"`+p4.ETag+`"`; got != want {
+		t.Fatalf("final GET ETag = %q, want the quoted last write's etag %q", got, want)
 	}
 	sm = storedManifest{}
 	if err := json.Unmarshal(body, &sm); err != nil {

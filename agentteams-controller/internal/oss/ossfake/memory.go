@@ -8,8 +8,10 @@
 package ossfake
 
 import (
+	"bytes"
 	"crypto/md5"
 	"encoding/hex"
+	"io"
 	"sync/atomic"
 
 	"context"
@@ -39,6 +41,9 @@ type Memory struct {
 	// StatMetaCalls counts StatMeta invocations so tests can assert that
 	// the list paths no longer stat every file (only zero-byte candidates).
 	StatMetaCalls atomic.Int64
+	// OpenRangeCalls counts OpenRange invocations so tests can assert the
+	// single-range-read cost (one ranged open per requested range).
+	OpenRangeCalls atomic.Int64
 }
 
 // md5Hex returns the lowercase MD5 hex digest of data (MinIO single-part
@@ -132,6 +137,43 @@ func (m *Memory) LastWriteTime() time.Time {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.modTime
+}
+
+// OpenRange returns the bytes of [start, start+length) under key (or
+// [start, end) when length < 0), S3-faithful:
+//
+//   - missing key                      -> os.ErrNotExist;
+//   - matchETag set and not the current MD5 -> oss.ErrPreconditionFailed;
+//   - start >= size (the range cannot fit)  -> oss.ErrRangeNotSatisfiable.
+//
+// The MD5 bound is what lets a stat-then-open caller detect a concurrent
+// writer between its StatMeta and its ranged open, exactly like the
+// provider's If-Match on a Range GET. Every open increments OpenRangeCalls.
+func (m *Memory) OpenRange(_ context.Context, key string, start, length int64, matchETag string) (io.ReadCloser, error) {
+	m.OpenRangeCalls.Add(1)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	data, ok := m.objects[key]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	if matchETag != "" && md5Hex(data) != matchETag {
+		return nil, oss.ErrPreconditionFailed
+	}
+	size := int64(len(data))
+	if start < 0 || start >= size {
+		return nil, oss.ErrRangeNotSatisfiable
+	}
+	end := size
+	if length > 0 {
+		end = start + length
+		if end > size {
+			end = size
+		}
+	}
+	out := make([]byte, end-start)
+	copy(out, data[start:end])
+	return io.NopCloser(bytes.NewReader(out)), nil
 }
 
 // StatMeta returns a monotonic mtime for the object. Writes advance the clock,
@@ -424,6 +466,7 @@ func (m *Memory) PresignUpload(_ context.Context, key string, maxBytes int64, co
 var _ oss.StorageClient = (*Memory)(nil)
 var _ oss.BucketManager = (*Memory)(nil)
 var _ oss.PresignUploader = (*Memory)(nil)
+var _ oss.RangeReader = (*Memory)(nil)
 
 // NoPresign wraps a StorageClient and strips the PresignUploader
 // capability, for tests that exercise the API's 500 fail-closed answer

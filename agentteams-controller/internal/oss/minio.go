@@ -624,6 +624,98 @@ func (c *MinIOClient) GetObject(ctx context.Context, key string) ([]byte, error)
 	return data, nil
 }
 
+// OpenRange implements RangeReader: it opens [start, start+length) of the
+// object (or [start, end) when length < 0) as a streamed S3 Range GET,
+// bound to matchETag through the provider's If-Match so a stat-then-open
+// caller can never read a version it did not stat. minio-go issues the
+// GET eagerly, so the semantic failures surface here, at open time,
+// before any byte is read:
+//
+//   - 412 PreconditionFailed -> ErrPreconditionFailed (the content moved);
+//   - 416 InvalidRange       -> ErrRangeNotSatisfiable (the range no longer
+//     fits the current size);
+//   - 404                     -> os.ErrNotExist via the bucket probe, and
+//     every transport/5xx fault -> the wrapped ErrStorageUnavailable,
+//     exactly as GetObject (a down store is a 503, never an absence).
+func (c *MinIOClient) OpenRange(ctx context.Context, key string, start, length int64, matchETag string) (io.ReadCloser, error) {
+	sdk, err := c.sdkClient()
+	if err != nil {
+		return nil, err
+	}
+	if length == 0 {
+		return io.NopCloser(bytes.NewReader(nil)), nil
+	}
+	opts := minio.GetObjectOptions{}
+	// RangeReader speaks (start, length); minio-go SetRange speaks an
+	// inclusive end offset. Passing length straight through served
+	// bytes=10-19 for a 20-byte window and made suffix/short windows fail.
+	switch {
+	case length < 0:
+		if start > 0 {
+			if serr := opts.SetRange(start, 0); serr != nil { // bytes=start-
+				return nil, serr
+			}
+		}
+	default:
+		end := start + length - 1
+		if end < start || start < 0 {
+			return nil, ErrRangeNotSatisfiable
+		}
+		if serr := opts.SetRange(start, end); serr != nil {
+			return nil, serr
+		}
+	}
+	if matchETag != "" {
+		if serr := opts.SetMatchETag(matchETag); serr != nil {
+			return nil, serr
+		}
+	}
+	obj, err := sdk.GetObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), opts)
+	if err != nil {
+		return nil, c.classifyRangeError(ctx, key, err)
+	}
+	// minio-go opens lazily: the GET happens on the first Read. Wrap the
+	// stream so a 412/416/404/5xx surfaced by that first Read keeps the
+	// same classification as an eager open; callers can then pre-read
+	// before committing response headers.
+	return &classifiedReadCloser{
+		ReadCloser: obj,
+		classify:   func(err error) error { return c.classifyRangeError(ctx, key, err) },
+	}, nil
+}
+
+// classifyRangeError maps range-read failures: a moved snapshot is 412
+// (retry/re-stat), a stale window is 416, and everything else follows the
+// key-scoped storage mapping (bucket probe, 503, 500).
+func (c *MinIOClient) classifyRangeError(ctx context.Context, key string, err error) error {
+	var resp minio.ErrorResponse
+	if errors.As(err, &resp) {
+		switch {
+		case resp.Code == "PreconditionFailed" || resp.Code == "412":
+			return ErrPreconditionFailed
+		case resp.Code == "InvalidRange" || resp.Code == "416" ||
+			resp.StatusCode == http.StatusRequestedRangeNotSatisfiable:
+			return ErrRangeNotSatisfiable
+		}
+	}
+	return c.classifyKeyError(ctx, key, err)
+}
+
+// classifiedReadCloser defers SDK error classification to Read, where a
+// lazy minio-go object actually performs the request.
+type classifiedReadCloser struct {
+	io.ReadCloser
+	classify func(error) error
+}
+
+func (r *classifiedReadCloser) Read(p []byte) (int, error) {
+	n, err := r.ReadCloser.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		err = r.classify(err)
+	}
+	return n, err
+}
+
 // PresignGet mints a presigned download URL for the object at key that
 // stays valid for ttl (#1475 PR-4, #1501). The minio-go SDK computes the
 // S3 V4 signature locally from the credential triple resolved at that

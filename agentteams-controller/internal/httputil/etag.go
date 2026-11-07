@@ -9,12 +9,13 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
-// etagCacheControl is the caching contract for ETag-protected responses
+// ETagCacheControl is the caching contract for ETag-protected responses
 // (issue #1475 PR-3): always revalidate against the origin, and never
 // share the cached representation between users.
-const etagCacheControl = "private, max-age=0, must-revalidate"
+const ETagCacheControl = "private, max-age=0, must-revalidate"
 
 // ETagMiddleware adds a strong ETag to a handler's 200 JSON responses and
 // answers a repeat request that offers the current validator via
@@ -66,8 +67,8 @@ func ETagMiddleware(next http.Handler) http.Handler {
 		h := w.Header()
 		if etag != "" {
 			h.Set("Vary", "Authorization")
-			h.Set("Cache-Control", etagCacheControl)
-			h.Set("ETag", `"`+etag+`"`)
+			h.Set("Cache-Control", ETagCacheControl)
+			h.Set("ETag", EtagQuoted(etag))
 		}
 
 		if etag != "" && ifNoneMatchMatches(r.Header.Get("If-None-Match"), etag) {
@@ -139,12 +140,73 @@ func ifNoneMatchMatches(ifNoneMatch, etag string) bool {
 		if tag == "*" {
 			return true
 		}
-		if strings.HasPrefix(tag, "W/") {
-			tag = strings.TrimPrefix(tag, "W/")
-		}
-		if strings.Trim(tag, `"`) == etag {
+		if BareETag(tag) == etag {
 			return true
 		}
 	}
 	return false
+}
+
+// IfNoneMatchMatches is the exported form of the middleware's weak
+// comparison (RFC 7232 §3.2): the header is a comma-separated tag list,
+// "*" matches any current representation, and a W/"..." validator
+// compares equal to its strong form. etag is the BARE validator (the
+// storage form); the response form is what EtagQuoted renders.
+func IfNoneMatchMatches(ifNoneMatch, etag string) bool {
+	return ifNoneMatchMatches(ifNoneMatch, etag)
+}
+
+// EtagQuoted renders a bare (opaque) ETag in the response form RFC 9110
+// requires: a quoted-string. An empty validator renders as "" (the
+// caller omits the ETag header).
+func EtagQuoted(opaque string) string {
+	if opaque == "" {
+		return ""
+	}
+	return `"` + opaque + `"`
+}
+
+// BareETag normalizes one entity-tag to its bare opaque form: it strips a
+// leading weak prefix (W/) and the surrounding quotes. It is the inverse
+// of EtagQuoted and the normalization every conditional path runs a
+// client-supplied validator through before comparing it or passing it to
+// storage — a client echoing the quoted ETag straight back from a GET
+// must not 412. A multi-tag list comes back with only its outer quotes
+// trimmed, so it can never equal a single bare validator and keeps the
+// pre-existing refusal behavior.
+func BareETag(raw string) string {
+	tag := strings.TrimSpace(raw)
+	if strings.HasPrefix(tag, "W/") {
+		tag = strings.TrimPrefix(tag, "W/")
+	}
+	return strings.Trim(tag, `"`)
+}
+
+// IfRangeApplies evaluates an If-Range header (RFC 9110 §13.2.3) against
+// the representation's bare validator and last-modified time. It answers
+// whether the Range header of the same request should be honored:
+//
+//   - no If-Range: the range applies (there is nothing to check);
+//   - entity-tag form (a quoted tag): STRONG comparison against the
+//     current bare validator — a W/-prefixed tag never matches, so a
+//     range gated on a weak validator is ignored, and so is any range
+//     whose validator the representation does not have;
+//   - HTTP-date form: the range applies only if the representation has
+//     not changed since the date (modTime not after it) — a last
+//     modification after the date means the client's base is stale and
+//     the full current body answers;
+//   - anything else that parses as neither: the range is ignored.
+func IfRangeApplies(ifRange, etag string, modTime time.Time) bool {
+	if ifRange == "" {
+		return true
+	}
+	tag := strings.TrimSpace(ifRange)
+	if strings.HasPrefix(tag, `"`) {
+		return etag != "" && strings.Trim(tag, `"`) == etag
+	}
+	t, err := http.ParseTime(tag)
+	if err != nil {
+		return false
+	}
+	return !modTime.After(t)
 }

@@ -2295,6 +2295,22 @@ func (c *concurrentPutOSS) GetObject(ctx context.Context, key string) ([]byte, e
 	return c.Memory.GetObject(ctx, key)
 }
 
+// OpenRange is the GET path's primitive now: a ranged/full read is opened
+// against the snapshot ETag before any byte is served. Inject the competing
+// put here, then let the fake enforce the ETag match, so the handler must
+// re-stat and serve the new version (rather than mixing A's bytes with B's
+// validator). The legacy GetObject override above remains for PUT's
+// read-modify-write path.
+func (c *concurrentPutOSS) OpenRange(ctx context.Context, key string, start, length int64, matchETag string) (io.ReadCloser, error) {
+	if !c.used && key == c.key {
+		c.used = true
+		if err := c.Memory.PutObject(ctx, c.key, c.injected); err != nil {
+			return nil, err
+		}
+	}
+	return c.Memory.OpenRange(ctx, key, start, length, matchETag)
+}
+
 // multipartETagOSS reports one key's ETag in multipart form (md5-N), which
 // cannot be verified against the body locally and forces the double-read
 // consistency fallback in readFileSnapshot.
@@ -2314,6 +2330,37 @@ func (m *multipartETagOSS) StatMeta(ctx context.Context, key string) (oss.Object
 		}
 	}
 	return meta, nil
+}
+
+// OpenRange keeps the ranged reads consistent with the overridden StatMeta:
+// the wrapper is a RangeReader (via the embedded fake), so the GET path
+// opens the fake's key bound to the ETag the stat reports — and the
+// provider-side If-Match compares the multipart form, which the bare
+// embedded fake cannot emulate (it compares the plain MD5). The slice
+// semantics mirror Memory.OpenRange for every other key.
+func (m *multipartETagOSS) OpenRange(ctx context.Context, key string, start, length int64, matchETag string) (io.ReadCloser, error) {
+	if key != m.key {
+		return m.Memory.OpenRange(ctx, key, start, length, matchETag)
+	}
+	data, err := m.Memory.GetObject(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if matchETag != "" && matchETag != md5Hex(data)+"-3" {
+		return nil, oss.ErrPreconditionFailed
+	}
+	size := int64(len(data))
+	if start < 0 || start >= size {
+		return nil, oss.ErrRangeNotSatisfiable
+	}
+	end := size
+	if length > 0 {
+		end = start + length
+		if end > size {
+			end = size
+		}
+	}
+	return io.NopCloser(bytes.NewReader(data[start:end])), nil
 }
 
 // hfTrashIDs returns the valid trash entry ids currently present for a
@@ -2608,10 +2655,10 @@ func TestHumanFiles_PathLockExpiredLeaseCanBeStolen(t *testing.T) {
 	}
 }
 
-// TestHumanFiles_GetSnapshotHandlesMultipartETag verifies the fallback for
-// ETags that cannot be verified locally (multipart md5-N): the double-read
-// consistency check accepts a stable object and the GET still reports the
-// multipart ETag verbatim.
+// TestHumanFiles_GetSnapshotHandlesMultipartETag verifies the GET path for
+// ETags that cannot be verified locally (multipart md5-N): the stat reports
+// the multipart form, the ranged open binds to that same form, and the
+// GET still reports the multipart ETag verbatim (quoted on the wire).
 func TestHumanFiles_GetSnapshotHandlesMultipartETag(t *testing.T) {
 	base := ossfake.NewMemory()
 	ctx := context.Background()
@@ -2632,8 +2679,8 @@ func TestHumanFiles_GetSnapshotHandlesMultipartETag(t *testing.T) {
 	if !bytes.Equal(rec.Body.Bytes(), content) {
 		t.Fatalf("body = %q, want %q", rec.Body.Bytes(), content)
 	}
-	if got, want := rec.Result().Header.Get("ETag"), md5Hex(content)+"-3"; got != want {
-		t.Fatalf("ETag = %q, want the multipart form %q", got, want)
+	if got, want := rec.Result().Header.Get("ETag"), `"`+md5Hex(content)+`-3"`; got != want {
+		t.Fatalf("ETag = %q, want the quoted multipart form %q", got, want)
 	}
 }
 

@@ -91,16 +91,16 @@ type humanFilesHandler struct {
 // back to the 64 MiB default.
 func NewHumanFilesHandler(k8sClient client.Client, namespace string, sc oss.StorageClient, ac *audit.Client) *humanFilesHandler {
 	h := &humanFilesHandler{
-		client:          k8sClient,
-		namespace:       namespace,
-		oss:             sc,
-		auditClient:     ac,
-		maxFileBytes:    defaultHumanFileMaxBytes,
-		presignMaxBytes: defaultHumanFilePresignMaxBytes,
-		pathLockTTL:     humanPathLockTTL,
-		presignTTL:      defaultHumanPresignTTL,
+		client:               k8sClient,
+		namespace:            namespace,
+		oss:                  sc,
+		auditClient:          ac,
+		maxFileBytes:         defaultHumanFileMaxBytes,
+		presignMaxBytes:      defaultHumanFilePresignMaxBytes,
+		pathLockTTL:          humanPathLockTTL,
+		presignTTL:           defaultHumanPresignTTL,
 		changesPruneInterval: humanChangePruneInterval,
-		changesPruneAt:         make(map[string]time.Time),
+		changesPruneAt:       make(map[string]time.Time),
 	}
 	if v := os.Getenv("HUMAN_FILE_MAX_BYTES"); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
@@ -657,25 +657,52 @@ func (h *humanFilesHandler) readSingleFile(w http.ResponseWriter, r *http.Reques
 	}
 	ctx := r.Context()
 	key := humanFilesPrefix(username) + rel
-	// The bytes and the ETag must come from one consistent snapshot: an
-	// independent GetObject+StatMeta pair could straddle a concurrent PUT
-	// and hand the client "A's bytes + B's ETag", whose If-Match write
-	// would then silently clobber the never-seen B.
-	data, meta, err := h.readFileSnapshot(ctx, key)
+
+	// One StatMeta prices the answer (304 / 416 / 404 need only it); the
+	// bytes stream lazily against the same snapshot, bound to its ETag,
+	// so the GET path never double-reads the object. The consistency the
+	// old snapshot double-read guaranteed (served bytes and served
+	// validator from one version) is carried by the ETag-bound open: a
+	// concurrent writer moves the ETag, the open 412s, and the request
+	// re-stats — or answers 503 snapshot_unstable — never mixed bytes.
+	rep, seeker, notModified, err := h.openForRead(ctx, r, key, rel)
 	if err != nil {
-		writeHumanFileSnapshotError(w, err)
+		h.writeReadError(w, rep, err)
 		return
 	}
-	if isHumanFileTombstone(meta) {
-		httputil.WriteError(w, http.StatusNotFound, "file not found")
+
+	hdr := w.Header()
+	if notModified {
+		// Revalidation hit: the validators of the current
+		// representation, no body (RFC 9110 §15.4.5).
+		if rep.etag != "" {
+			hdr.Set("ETag", httputil.EtagQuoted(rep.etag))
+		}
+		hdr.Set("Cache-Control", httputil.ETagCacheControl)
+		hdr.Set("Vary", "Authorization")
+		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	if meta.ETag != "" {
-		w.Header().Set("ETag", meta.ETag)
+
+	if rep.etag != "" {
+		hdr.Set("ETag", httputil.EtagQuoted(rep.etag))
 	}
-	w.Header().Set("Content-Type", contentTypeForName(rel))
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(data)
+	hdr.Set("Cache-Control", httputil.ETagCacheControl)
+	hdr.Set("Vary", "Authorization")
+	hdr.Set("Accept-Ranges", "bytes")
+	hdr.Set("Content-Type", rep.contentType)
+
+	// ServeContent does not close the reader; release the SDK stream on
+	// success, client disconnect and panic alike.
+	if seeker != nil {
+		defer func() { _ = seeker.Close() }()
+	}
+
+	// ServeContent owns the content from here on (206/416, Content-Range,
+	// Content-Length); If-None-Match and If-Range were resolved — or the
+	// headers stripped — in openForRead, so its internal condition
+	// evaluation never sees them.
+	http.ServeContent(w, r, rel, rep.modTime, seeker)
 }
 
 // presignFile handles GET .../files/{path}?presign=1 (#1475 PR-4): it mints
@@ -1148,13 +1175,24 @@ func (h *humanFilesHandler) putFile(w http.ResponseWriter, r *http.Request) {
 				"If-Match failed: the file does not exist")
 			return
 		case meta.ETag != "":
-			if meta.ETag != match {
+			// Compare the bare form: a client echoing the quoted ETag
+			// straight back from a GET must not 412 (the single
+			// validator source is the storage form, normalized once).
+			if httputil.BareETag(meta.ETag) != httputil.BareETag(match) {
 				writeHumanFileCodedError(w, http.StatusPreconditionFailed, "etag_mismatch",
 					"If-Match failed: the file changed since it was read")
 				return
 			}
 		}
-		if err := h.oss.PutObjectIfMatch(ctx, key, data, match); err != nil {
+		// Pass the storage form down: the object's current ETag when the
+		// backend reports one (exactly what the comparison checked), the
+		// normalized client value otherwise (a backend without ETags
+		// accepts any validator).
+		matchETag := httputil.BareETag(match)
+		if meta.ETag != "" {
+			matchETag = httputil.BareETag(meta.ETag)
+		}
+		if err := h.oss.PutObjectIfMatch(ctx, key, data, matchETag); err != nil {
 			if errors.Is(err, oss.ErrPreconditionFailed) {
 				writeHumanFileCodedError(w, http.StatusPreconditionFailed, "etag_mismatch",
 					"If-Match failed: the file changed since it was read")

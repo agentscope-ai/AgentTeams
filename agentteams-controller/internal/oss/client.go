@@ -18,6 +18,12 @@ type ObjectMeta struct {
 	// does not report one). The file API uses it to mark deleted files with
 	// a tombstone object instead of an unconditional delete.
 	ContentType string
+	// UserMetadata is the object's S3 user metadata, merged from both SDK
+	// shapes (the stripped `UserMetadata` map and the raw `x-amz-meta-*`
+	// headers in `Metadata`) into bare lowercase keys — no `x-amz-meta-`
+	// prefix. Nil when the object carries no user metadata. Callers may
+	// rely on lowercase bare keys.
+	UserMetadata map[string]string
 }
 
 // ErrPreconditionFailed is returned by PutObjectIfMatch when the object's
@@ -188,6 +194,26 @@ type PresignUploader interface {
 // In incluster mode with external OSS, the bucket is pre-created, so this is a no-op.
 type BucketManager interface {
 	EnsureBucket(ctx context.Context) error
+}
+
+// ConditionalMetadataWriter is implemented by backends that can attach S3
+// user metadata to a conditional put in a single operation. Check with a
+// type assertion before calling; clients that do not implement it fall
+// back to the plain conditional writes, which leave the object's existing
+// user metadata untouched.
+type ConditionalMetadataWriter interface {
+	// PutObjectIfMatchWithMetadata writes data under key with contentType
+	// and user metadata only when the stored ETag equals matchETag (a bare
+	// value, never quoted). A failed precondition returns
+	// ErrPreconditionFailed. metadata keys are passed bare (no
+	// x-amz-meta- prefix) and stored lowercase; empty keys or values are
+	// dropped.
+	PutObjectIfMatchWithMetadata(ctx context.Context, key string, data []byte, contentType, matchETag string, metadata map[string]string) error
+	// PutObjectIfAbsentWithMetadata writes data under key with contentType
+	// and user metadata only when no object exists at key. An existing key
+	// returns ErrPreconditionFailed. metadata is handled as in
+	// PutObjectIfMatchWithMetadata.
+	PutObjectIfAbsentWithMetadata(ctx context.Context, key string, data []byte, contentType string, metadata map[string]string) error
 }
 
 // StorageAdminClient handles user and policy management (embedded mode only).

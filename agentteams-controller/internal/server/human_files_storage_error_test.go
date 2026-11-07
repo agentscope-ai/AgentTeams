@@ -131,6 +131,20 @@ func (f *faultOSS) PutObjectIfAbsent(ctx context.Context, key string, data []byt
 	return f.Memory.PutObjectIfAbsent(ctx, key, data)
 }
 
+func (f *faultOSS) PutObjectIfMatchWithMetadata(ctx context.Context, key string, data []byte, contentType, matchETag string, metadata map[string]string) error {
+	if err := f.fault(key, "PutObjectIfMatchWithMetadata"); err != nil {
+		return err
+	}
+	return f.Memory.PutObjectIfMatchWithMetadata(ctx, key, data, contentType, matchETag, metadata)
+}
+
+func (f *faultOSS) PutObjectIfAbsentWithMetadata(ctx context.Context, key string, data []byte, contentType string, metadata map[string]string) error {
+	if err := f.fault(key, "PutObjectIfAbsentWithMetadata"); err != nil {
+		return err
+	}
+	return f.Memory.PutObjectIfAbsentWithMetadata(ctx, key, data, contentType, metadata)
+}
+
 func (f *faultOSS) ListObjectsDetailed(ctx context.Context, prefix string) ([]oss.ObjectInfo, error) {
 	if err := f.fault(prefix, "ListObjectsDetailed"); err != nil {
 		return nil, err
@@ -603,8 +617,10 @@ func TestStorageFault_SyncManifestIs503(t *testing.T) {
 		t.Fatalf("decode first write: %v: %s", err, rec.Body.String())
 	}
 
-	// ...then the store goes down for the conditional write...
-	hfh.oss = newFaultOSS(t, store, humanSyncManifestKey("alice"), "PutObjectIfMatch")
+	// ...then the store goes down for the conditional write. A real
+	// outage faults every write, so both the metadata-carrying PUT and
+	// the plain fallback the handler degrades to are down.
+	hfh.oss = newFaultOSS(t, store, humanSyncManifestKey("alice"), "PutObjectIfMatchWithMetadata", "PutObjectIfMatch")
 	rec = hfPutSync(t, hfh, "alice", alice, syncManifestBody(nil, nil),
 		map[string]string{"If-Match": created.ETag})
 	assertStorageUnavailable(t, rec, "manifest PUT")
@@ -615,6 +631,10 @@ func TestStorageFault_SyncManifestIs503(t *testing.T) {
 	hfh.getSyncManifest(rec, hfSyncReq(t, http.MethodGet, "alice", "manifest", alice, ""))
 	assertStorageUnavailable(t, rec, "manifest GET")
 
+	// The status reads the summary from the object's user metadata, so
+	// its storage call is the StatMeta (with the body read as fallback) —
+	// fault both to model the outage.
+	hfh.oss = newFaultOSS(t, store, humanSyncManifestKey("alice"), "StatMeta", "GetObject")
 	rec = hfGetSyncStatus(t, hfh, "alice", alice)
 	assertStorageUnavailable(t, rec, "sync status")
 }

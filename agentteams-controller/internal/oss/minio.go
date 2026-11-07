@@ -56,6 +56,12 @@ type MinIOClient struct {
 	// sdkPutIfNoneMatch overrides the SDK create-if-absent write used by the
 	// task-meta first creation; nil uses the real minio-go path.
 	sdkPutIfNoneMatch func(ctx context.Context, key string, data []byte) error
+	// sdkPutIfMatchWithMetadata overrides the SDK conditional write with
+	// user metadata for tests; nil uses the real minio-go path.
+	sdkPutIfMatchWithMetadata func(ctx context.Context, key string, data []byte, contentType, matchETag string, metadata map[string]string) error
+	// sdkPutIfAbsentWithMetadata overrides the SDK create-if-absent write
+	// with user metadata for tests; nil uses the real minio-go path.
+	sdkPutIfAbsentWithMetadata func(ctx context.Context, key string, data []byte, contentType string, metadata map[string]string) error
 	// sdkListObjects overrides the SDK ListObjects channel for tests; nil
 	// uses the real minio-go path. It is the seam for every listing walk
 	// (ListObjectsDetailed, ListObjectsRecursive and DeletePrefix's sweep
@@ -327,6 +333,160 @@ func (c *MinIOClient) sdkPutObjectIfNoneMatch(ctx context.Context, key string, d
 	return err
 }
 
+// PutObjectIfMatchWithMetadata is PutObjectIfMatchWithType plus S3 user
+// metadata, attached in the same conditional PUT (a follow-up metadata
+// update would race the ETag and could land out of order with a
+// concurrent write). metadata keys are passed bare (no x-amz-meta-
+// prefix) and are stored lowercase. An ETag mismatch surfaces as
+// ErrPreconditionFailed; the plain-write fallback of PutObjectIfMatch is
+// deliberately NOT replicated here — degrading a metadata write to a
+// plain put would silently drop the metadata the caller asked to store,
+// and the sync-status consumer already falls back to the manifest body
+// when the metadata is absent.
+func (c *MinIOClient) PutObjectIfMatchWithMetadata(ctx context.Context, key string, data []byte, contentType, matchETag string, metadata map[string]string) error {
+	metadata = normalizeUserMetadataKeys(metadata)
+	var err error
+	if put := c.sdkPutIfMatchWithMetadata; put != nil {
+		err = put(ctx, key, data, contentType, matchETag, metadata)
+	} else {
+		err = c.sdkPutObjectIfMatchWithMetadata(ctx, key, data, contentType, matchETag, metadata)
+	}
+	if err == nil {
+		return nil
+	}
+	var resp minio.ErrorResponse
+	if errors.As(err, &resp) && (resp.Code == "PreconditionFailed" || resp.Code == "412") {
+		return ErrPreconditionFailed
+	}
+	return classifySDKError(err)
+}
+
+// PutObjectIfAbsentWithMetadata is PutObjectIfAbsent plus S3 user
+// metadata, attached in the same conditional PUT. An existing key
+// surfaces as ErrPreconditionFailed; metadata keys are handled as in
+// PutObjectIfMatchWithMetadata.
+func (c *MinIOClient) PutObjectIfAbsentWithMetadata(ctx context.Context, key string, data []byte, contentType string, metadata map[string]string) error {
+	metadata = normalizeUserMetadataKeys(metadata)
+	var err error
+	if put := c.sdkPutIfAbsentWithMetadata; put != nil {
+		err = put(ctx, key, data, contentType, metadata)
+	} else {
+		err = c.sdkPutObjectIfAbsentWithMetadata(ctx, key, data, contentType, metadata)
+	}
+	if err == nil {
+		return nil
+	}
+	var resp minio.ErrorResponse
+	if errors.As(err, &resp) && (resp.Code == "PreconditionFailed" || resp.Code == "412") {
+		return ErrPreconditionFailed
+	}
+	return classifySDKError(err)
+}
+
+// sdkPutObjectIfMatchWithMetadata is the MinIO SDK conditional write with
+// user metadata. It is a separate function so tests can swap the
+// transport via sdkPutIfMatchWithMetadata.
+func (c *MinIOClient) sdkPutObjectIfMatchWithMetadata(ctx context.Context, key string, data []byte, contentType, matchETag string, metadata map[string]string) error {
+	sdk, err := c.sdkClient()
+	if err != nil {
+		return err
+	}
+	reader := bytes.NewReader(data)
+	opts := minio.PutObjectOptions{ContentType: contentType, UserMetadata: metadata}
+	opts.SetMatchETag(matchETag)
+	_, err = sdk.PutObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), reader, int64(len(data)), opts)
+	return err
+}
+
+// sdkPutObjectIfAbsentWithMetadata is the MinIO SDK create-if-absent
+// write (If-None-Match: *) with user metadata. It is a separate function
+// so tests can swap the transport via sdkPutIfAbsentWithMetadata.
+func (c *MinIOClient) sdkPutObjectIfAbsentWithMetadata(ctx context.Context, key string, data []byte, contentType string, metadata map[string]string) error {
+	sdk, err := c.sdkClient()
+	if err != nil {
+		return err
+	}
+	reader := bytes.NewReader(data)
+	opts := minio.PutObjectOptions{ContentType: contentType, UserMetadata: metadata}
+	opts.SetMatchETagExcept("*")
+	_, err = sdk.PutObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), reader, int64(len(data)), opts)
+	return err
+}
+
+// userMetadataPrefix is the S3 wire prefix of user metadata keys. It is
+// applied on the wire only: the SDK's PutObjectOptions.UserMetadata
+// prefixes keys with it, and StatObject strips it into ObjectInfo's
+// metadata maps. Callers of this package deal in bare lowercase keys.
+const userMetadataPrefix = "x-amz-meta-"
+
+// normalizeUserMetadataKeys canonicalizes caller-supplied metadata to the
+// bare lowercase key form the store uses: the x-amz-meta- prefix is
+// stripped and keys are lowercased (S3 metadata keys are case-insensitive
+// on read but the wire form varies by backend — MinIO and RustFS were
+// verified to both return lowercase). Empty keys or values are dropped.
+// Returns nil when nothing survives.
+func normalizeUserMetadataKeys(metadata map[string]string) map[string]string {
+	if len(metadata) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(metadata))
+	for k, v := range metadata {
+		nk := stripUserMetadataPrefix(k)
+		if nk == "" || v == "" {
+			continue
+		}
+		out[nk] = v
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// stripUserMetadataPrefix lowercases k and strips the S3 wire prefix.
+func stripUserMetadataPrefix(k string) string {
+	return strings.TrimPrefix(strings.ToLower(k), userMetadataPrefix)
+}
+
+// objectUserMetadata merges the user metadata a StatObject reported in
+// both SDK shapes into bare lowercase keys: info.UserMetadata already
+// carries stripped keys (MinIO form) and wins; entries in info.Metadata
+// (the raw response-header form, `x-amz-meta-*`, as S3 and RustFS
+// populate) fill the gaps. Returns nil when the object has no user
+// metadata.
+func objectUserMetadata(info minio.ObjectInfo) map[string]string {
+	merged := make(map[string]string, len(info.UserMetadata)+len(info.Metadata))
+	for k, v := range info.UserMetadata {
+		nk := stripUserMetadataPrefix(k)
+		if nk == "" || v == "" {
+			continue
+		}
+		merged[nk] = v
+	}
+	for k, vals := range info.Metadata {
+		lk := strings.ToLower(k)
+		if !strings.HasPrefix(lk, userMetadataPrefix) {
+			continue
+		}
+		nk := strings.TrimPrefix(lk, userMetadataPrefix)
+		// minio-go exposes the raw response headers as http.Header
+		// (map[string][]string); S3 user metadata is single-valued, but
+		// join defensively instead of discarding extra values.
+		v := strings.Join(vals, ",")
+		if nk == "" || v == "" {
+			continue
+		}
+		if _, exists := merged[nk]; exists {
+			continue
+		}
+		merged[nk] = v
+	}
+	if len(merged) == 0 {
+		return nil
+	}
+	return merged
+}
+
 // isSDKNotFound reports whether an SDK error means "the object does not
 // exist": a 404 carrying the S3 NoSuchKey code, or a 404 without a
 // parseable code (backends answer some not-found requests with an empty
@@ -555,6 +715,7 @@ func (c *MinIOClient) PresignUpload(ctx context.Context, key string, maxBytes in
 }
 
 var _ PresignUploader = (*MinIOClient)(nil)
+var _ ConditionalMetadataWriter = (*MinIOClient)(nil)
 
 // putStream is the SDK put shared by the hot-path writes: the bytes are
 // streamed straight to the provider (one PUT, no temp file, no process
@@ -787,11 +948,13 @@ func (c *MinIOClient) StatMeta(ctx context.Context, key string) (ObjectMeta, err
 	}
 	// The SDK strips S3's ETag quotes (the mc stat --json output was
 	// already unquoted), so the two paths hand the caller the same form.
+	// User metadata is merged from both SDK shapes (see objectUserMetadata).
 	return ObjectMeta{
-		Size:        info.Size,
-		ModTime:     info.LastModified,
-		ETag:        info.ETag,
-		ContentType: info.ContentType,
+		Size:         info.Size,
+		ModTime:      info.LastModified,
+		ETag:         info.ETag,
+		ContentType:  info.ContentType,
+		UserMetadata: objectUserMetadata(info),
 	}, nil
 }
 

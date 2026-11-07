@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import datetime
 
+import json
+
 import os
 
 import uuid
@@ -1263,6 +1265,39 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             # submit_task: the resolved state must land in shared storage
             # before the caller is told the loop is closed.
             explicit_resolve = bool(payload.get("resolved", False))
+            if (
+                kind == "decision"
+                and _protocol_enforce_enabled()
+                and not explicit_resolve
+                and not attention_options
+            ):
+                # W2 decision answerability: a decision is answerable only
+                # when the record carries the option set a human answer
+                # echoes, so it must arrive at raise time — before any
+                # write, notification or event.
+                #
+                # Pinned contract (#1506; contracts/attention.json
+                # decision_options; docs/design/teamharness/
+                # attention-decision-options-contract.md): the deployment
+                # default is OFF (protocol.enforce defaults to false; the
+                # TEAMHARNESS_PROTOCOL_ENFORCE env wins when set). With
+                # the switch OFF a decision may be raised without options
+                # (pre-W2 behaviour, backward compatible) and is answered
+                # in free text. With the switch ON every NEW decision
+                # raise must carry options[]. The resolved=true close is
+                # exempt in BOTH switch states: it answers the record it
+                # closes, and its options (when present) already live on
+                # that record. Legacy records (unresolved, no options —
+                # raised switch-off or before this guard) are answered in
+                # place with free text (Matrix im_reply/im_command, or the
+                # Dashboard TH-4 resolution), recorded as resolve
+                # provenance; they are never migrated, marked or
+                # options-backfilled.
+                raise ValueError(
+                    "request_attention kind=decision requires options[] "
+                    "(a decision without options cannot be answered); "
+                    "pass at least one {id,label} entry"
+                )
             if explicit_resolve:
                 # Target the most recent unresolved same-kind record. If
                 # every same-kind record is already resolved, re-affirm the
@@ -1580,6 +1615,57 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                             "is recorded — retry request_attention (idempotent)."
                         ),
                     }
+            # S2 signal emission (#1394): SIG-ATTENTION, after the raised
+            # record is committed to shared storage — the new-record
+            # write's sync above, or the pending record's re-sync on a
+            # retry; every sync-failure return happens before this line,
+            # so the raised event follows the write (the same
+            # commit-first policy as SIG-COMPLETE).
+            #
+            # The event id fingerprints the record's STABLE IDENTITY, not
+            # the post-write meta bytes (#1506): the S4a outcome write
+            # below (notification_log, and eventId once the send
+            # succeeds) rewrites the meta file after this emit, so a
+            # same-payload retry of the pending record (no eventId after
+            # a failed first send) would hash a different meta state and
+            # drop a second SIG-ATTENTION object for the same logical
+            # raise. The identity fields are fixed at record creation
+            # and never rewritten — the outcome write only wraps the
+            # record — so the same pending record re-hashes the same id
+            # and _emit_signal_event skips it (one object per raise,
+            # consumer dedupe by event_id), while a fresh raise
+            # (attempt + 1) hashes a distinct id. Canonical JSON
+            # (sorted keys, compact separators, raw unicode) pins the
+            # byte form cross-process.
+            raise_identity = json.dumps(
+                {
+                    "kind": str(record.get("kind") or ""),
+                    "attempt": attempt,
+                    "question": str(record.get("question") or ""),
+                    "options": [dict(o) for o in record.get("options") or []],
+                    "suggested": str(record.get("suggested") or ""),
+                    "timeoutAt": str(record.get("timeoutAt") or ""),
+                    "expiresAt": str(record.get("expiresAt") or ""),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            _emit_signal_event(
+                arguments,
+                "attention_raised",
+                task_id=task_id,
+                project_id=str(task.get("project_id") or ""),
+                ref=f"shared/tasks/{task_id}/meta.json",
+                ref_bytes=raise_identity,
+                attempt=attempt,
+                payload={
+                    "kind": kind,
+                    "attempt": attempt,
+                    "timeoutAt": str(record.get("timeoutAt") or ""),
+                    "status": str(task.get("status") or ""),
+                },
+            )
             # Every skip path carries an explicit delivery receipt
             # (recipients/gaps, NOTIFICATION_GAP_REASONS vocabulary) so
             # the notification_log entry below is never "sent without a

@@ -530,6 +530,7 @@ python scripts/export-debug-log.py --range 1h
 | [docs/zh-cn/design/member-runtime-config-contract.md](docs/zh-cn/design/member-runtime-config-contract.md) | 成员运行时配置契约 |
 | [docs/zh-cn/design/teamharness/boundary-and-contracts.md](docs/zh-cn/design/teamharness/boundary-and-contracts.md) | TeamHarness v0.1 边界与契约 |
 | [docs/zh-cn/design/task-completion-notification.md](docs/zh-cn/design/task-completion-notification.md) | 任务完成通知（submit_task）与生命周期 attention 事件 |
+| [docs/zh-cn/design/storage-external-s3-backend.md](docs/zh-cn/design/storage-external-s3-backend.md) | 外部 S3 兼容存储后端（`provider=s3`）：启用、兼容性、MinIO 迁移与 cutover 操作手册 |
 
 > 注：以下设计文档上游原生即为中文，未建镜像，请直接阅读 `docs/design/` 下的原文：`docs/design/internal/` 全部 5 篇，以及 `docs/design/teamharness/project-task-runtime-design.md`、`docs/design/teamharness/runtime-integration-tdd-plan.md`、`docs/design/teamharness/task-transition-engine.md`。
 

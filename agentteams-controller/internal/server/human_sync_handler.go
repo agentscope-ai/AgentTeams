@@ -194,6 +194,12 @@ func storedSyncGeneration(data []byte) int64 {
 // getSyncManifest handles GET /api/v1/humans/{name}/sync/manifest. The
 // stored manifest is returned verbatim with its ETag (the write base for
 // a subsequent If-Match); a missing manifest is 404.
+//
+// The ETag comes from the stat; the bytes are read only when the
+// caller's If-None-Match does not already match — a revalidation hit is
+// a 304 with no body, priced at the one stat. (A straddle between the
+// stat and the read hands the client a write base one version stale;
+// the next If-Match fails closed with 412, so no write can clobber.)
 func (h *humanFilesHandler) getSyncManifest(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	a, status, msg := h.authorizeHumanSync(r.Context(), name)
@@ -201,20 +207,34 @@ func (h *humanFilesHandler) getSyncManifest(w http.ResponseWriter, r *http.Reque
 		httputil.WriteError(w, status, msg)
 		return
 	}
+	ctx := r.Context()
 	key := humanSyncManifestKey(a.human.Spec.EffectiveUsername(a.human.Name))
-	// The bytes and the ETag must come from one consistent snapshot (the
-	// P1 helper): a bare GetObject+StatMeta pair could straddle a
-	// concurrent write and hand the client a mismatched pair as its
-	// write base.
-	data, meta, err := h.readFileSnapshot(r.Context(), key)
+
+	meta, err := h.oss.StatMeta(ctx, key)
 	if err != nil {
-		writeHumanFileSnapshotError(w, err)
+		writeStorageError(w, err, "manifest not found", "stat manifest failed")
 		return
 	}
-	if meta.ETag != "" {
-		w.Header().Set("ETag", meta.ETag)
+	etag := httputil.BareETag(meta.ETag)
+	hdr := w.Header()
+	if etag != "" {
+		hdr.Set("ETag", httputil.EtagQuoted(etag))
 	}
-	w.Header().Set("Content-Type", "application/json")
+	hdr.Set("Cache-Control", httputil.ETagCacheControl)
+	hdr.Set("Vary", "Authorization")
+	if etag != "" && httputil.IfNoneMatchMatches(r.Header.Get("If-None-Match"), etag) {
+		// Revalidation hit: the validators of the current
+		// representation, no body (RFC 9110 §15.4.5).
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
+	data, err := h.oss.GetObject(ctx, key)
+	if err != nil {
+		writeStorageError(w, err, "manifest not found", "read manifest failed")
+		return
+	}
+	hdr.Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
 }
@@ -317,7 +337,7 @@ func (h *humanFilesHandler) putSyncManifest(w http.ResponseWriter, r *http.Reque
 			}
 			httputil.WriteError(w, http.StatusInternalServerError, "stat manifest failed")
 			return
-		case meta.ETag != "" && !strings.EqualFold(strings.Trim(meta.ETag, `"`), ifMatch):
+		case httputil.BareETag(meta.ETag) != "" && !strings.EqualFold(httputil.BareETag(meta.ETag), httputil.BareETag(ifMatch)):
 			writeHumanFileCodedError(w, http.StatusPreconditionFailed, "etag_mismatch",
 				"If-Match failed: the manifest changed since it was read")
 			return
@@ -368,7 +388,9 @@ func (h *humanFilesHandler) putSyncManifest(w http.ResponseWriter, r *http.Reque
 	}
 	var werr error
 	if ifMatch != "" {
-		werr = h.oss.PutObjectIfMatch(ctx, key, out, ifMatch)
+		// Storage takes the bare validator: the client may echo the
+		// quoted ETag straight back from a GET (normalized once).
+		werr = h.oss.PutObjectIfMatch(ctx, key, out, httputil.BareETag(ifMatch))
 	} else {
 		werr = h.oss.PutObjectIfAbsent(ctx, key, out)
 	}

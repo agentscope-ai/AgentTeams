@@ -3,6 +3,7 @@ package oss
 import (
 	"context"
 	"errors"
+	"io"
 	"time"
 )
 
@@ -58,6 +59,15 @@ var ErrStorageBucketUnavailable = errors.New("oss: bucket unavailable")
 // sync client would delete its local copy, the D1 failure mode). It wraps
 // the underlying error with %w, keeping it reachable via errors.As.
 var ErrStorageUnavailable = errors.New("oss: storage unavailable")
+
+// ErrRangeNotSatisfiable is returned by OpenRange when the requested byte
+// range is not satisfiable against the object's current size (S3 416 /
+// InvalidRange). Unlike ErrPreconditionFailed (the object's content
+// version moved), a 416 means the range no longer fits — typically the
+// object shrank between the caller's stat and the ranged open. Callers
+// that stat-then-open retry against a fresh stat; exhaustion is a
+// stable 503 (snapshot_unstable), never a partial read.
+var ErrRangeNotSatisfiable = errors.New("oss: requested range not satisfiable")
 
 // StorageClient abstracts object storage operations.
 // Implementations: MinIOClient (mc CLI), future S3Client (aws-sdk-go).
@@ -145,6 +155,27 @@ type StorageClient interface {
 
 	// DeletePrefix recursively removes all objects under the given prefix.
 	DeletePrefix(ctx context.Context, prefix string) error
+}
+
+// RangeReader is implemented by StorageClient backends that can open a
+// byte range of an object directly (S3 Range GET). It is a capability,
+// like PresignUploader, not part of StorageClient: a backend without it
+// serves ranged reads by falling back to a full object read, so adding
+// the method here would force every implementation to claim a capability
+// it does not have.
+//
+// OpenRange returns a stream over [start, start+length) of the object —
+// or [start, end-of-object) when length < 0; length 0 is not a valid
+// request — bound to matchETag: the open fails with ErrPreconditionFailed
+// (nothing is read) when the object's current ETag is not matchETag,
+// which is what lets a stat-then-open caller serve one consistent
+// snapshot. matchETag is the BARE validator ("" opens without a content
+// check). A missing key returns os.ErrNotExist (after the usual bucket
+// probe); a range that does not fit the current size returns
+// ErrRangeNotSatisfiable; a store that cannot answer returns the wrapped
+// ErrStorageUnavailable, exactly as GetObject.
+type RangeReader interface {
+	OpenRange(ctx context.Context, key string, start, length int64, matchETag string) (io.ReadCloser, error)
 }
 
 // PresignUploader is implemented by backends that can hand out a direct

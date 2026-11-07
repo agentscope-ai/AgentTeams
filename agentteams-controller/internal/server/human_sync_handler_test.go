@@ -132,8 +132,9 @@ func TestHumanSync_RoundTrip(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("get manifest: %d %s", rec.Code, rec.Body.String())
 	}
-	if got := rec.Header().Get("ETag"); got != etagV1 {
-		t.Fatalf("GET ETag = %q, want %q", got, etagV1)
+	// The response ETag is the quoted form; the write-base JSON etag is bare.
+	if got, want := rec.Header().Get("ETag"), `"`+etagV1+`"`; got != want {
+		t.Fatalf("GET ETag = %q, want the quoted write etag %q", got, want)
 	}
 	stored := hfSyncJSON(t, rec)
 	if stored["version"] != float64(1) || stored["generation"] != float64(1) {

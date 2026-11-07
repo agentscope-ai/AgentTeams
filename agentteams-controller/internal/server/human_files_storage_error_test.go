@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -93,6 +94,13 @@ func (f *faultOSS) GetObject(ctx context.Context, key string) ([]byte, error) {
 		return nil, err
 	}
 	return f.Memory.GetObject(ctx, key)
+}
+
+func (f *faultOSS) OpenRange(ctx context.Context, key string, start, length int64, matchETag string) (io.ReadCloser, error) {
+	if err := f.fault(key, "OpenRange"); err != nil {
+		return nil, err
+	}
+	return f.Memory.OpenRange(ctx, key, start, length, matchETag)
 }
 
 func (f *faultOSS) PutObject(ctx context.Context, key string, data []byte) error {

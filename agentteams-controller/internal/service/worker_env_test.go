@@ -7,6 +7,42 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/config"
 )
 
+// TestWorkerEnvBuilderPropagatesExternalS3Defaults covers the last hop of
+// the installer chain: the controller's external-S3 settings (the values
+// LoadConfig derives from the installer env array) must reach the worker
+// container env unchanged.
+func TestWorkerEnvBuilderPropagatesExternalS3Defaults(t *testing.T) {
+	builder := NewWorkerEnvBuilder(config.WorkerEnvDefaults{
+		MatrixDomain:    "matrix.example.com",
+		FSEndpoint:      "http://s3.external.test:9000",
+		FSBucket:        "review-external-bucket",
+		StoragePrefix:   "agentteams/review-external-bucket",
+		StorageProvider: "s3",
+		ControllerURL:   "http://agentteams-controller:8090",
+		AIGatewayURL:    "http://aigw.example.com:8080",
+		MatrixURL:       "http://matrix.example.com:8080",
+		Runtime:         "docker",
+	})
+
+	env := builder.Build("w1", &WorkerProvisionResult{
+		GatewayKey:    "gateway-key",
+		MatrixToken:   "matrix-token",
+		RoomID:        "!room123:matrix.example.com",
+		MinIOPassword: "secret",
+	})
+
+	for key, want := range map[string]string{
+		"AGENTTEAMS_FS_ENDPOINT":      "http://s3.external.test:9000",
+		"AGENTTEAMS_FS_BUCKET":        "review-external-bucket",
+		"AGENTTEAMS_STORAGE_PREFIX":   "agentteams/review-external-bucket",
+		"AGENTTEAMS_STORAGE_PROVIDER": "s3",
+	} {
+		if got := env[key]; got != want {
+			t.Fatalf("%s = %q, want %q", key, got, want)
+		}
+	}
+}
+
 func TestWorkerEnvBuilderBuildIncludesFinalRuntimeEnv(t *testing.T) {
 	builder := NewWorkerEnvBuilder(config.WorkerEnvDefaults{
 		MatrixDomain:    "matrix.example.com",

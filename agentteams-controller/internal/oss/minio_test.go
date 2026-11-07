@@ -413,3 +413,31 @@ func TestPresignUploadSignsTheBucketRelativeKey(t *testing.T) {
 		t.Fatalf("unexpected method %q", method)
 	}
 }
+
+// TestMinIOClientMCPrefixAndSDKBucketAgree pins the dual-track addressing
+// invariant: mc CLI object paths carry "<alias>/<bucket>/<key>" in
+// StoragePrefix, while minio-go conditional writes address Config.Bucket
+// directly. Both must name the same bucket, otherwise a custom external
+// bucket would split reads/writes across two buckets (the mc track would
+// hit the default bucket, which does not exist).
+func TestMinIOClientMCPrefixAndSDKBucketAgree(t *testing.T) {
+	c := NewMinIOClient(Config{
+		StoragePrefix: "agentteams/review-external-bucket",
+		Bucket:        "review-external-bucket",
+		Endpoint:      "http://s3.external.test:9000",
+		Alias:         "agentteams",
+	})
+	parts := strings.SplitN(c.fullPath("agents/w1/openclaw.json"), "/", 3)
+	if len(parts) != 3 {
+		t.Fatalf("fullPath = %q, want alias/bucket/key shape", c.fullPath("agents/w1/openclaw.json"))
+	}
+	if parts[0] != "agentteams" {
+		t.Fatalf("mc path alias = %q, want agentteams", parts[0])
+	}
+	if parts[1] != c.config.Bucket {
+		t.Fatalf("mc path bucket = %q, want the SDK bucket %q", parts[1], c.config.Bucket)
+	}
+	if parts[2] != "agents/w1/openclaw.json" {
+		t.Fatalf("mc path key = %q, want the object key", parts[2])
+	}
+}

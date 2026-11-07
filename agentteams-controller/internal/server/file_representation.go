@@ -295,6 +295,10 @@ type objectSeeker struct {
 	full []byte
 	br   *bytes.Reader
 
+	// pending holds the byte(s) Prime read to force the lazy SDK GET
+	// before headers; Read hands them out first.
+	pending []byte
+
 	// Test-observable accounting: ranged opens performed, bytes handed
 	// out through Read.
 	opens    int
@@ -323,7 +327,21 @@ func (s *objectSeeker) Prime(start, length int64) error {
 	if start <= 0 && length <= 0 {
 		return nil
 	}
-	return s.openSegment(start, start+length)
+	if err := s.openSegment(start, start+length); err != nil {
+		return err
+	}
+	// sdk.GetObject is lazy: OpenRange has not issued the GET yet. Read
+	// one byte here, before ServeContent commits 200, so a 503/412 on the
+	// actual GET reaches writeReadError instead of becoming an empty 200.
+	buf := make([]byte, 1)
+	n, err := s.seg.Read(buf)
+	if n > 0 {
+		s.pending = append(s.pending, buf[:n]...)
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
 }
 
 // loadEager loads the full snapshot and checks it against the
@@ -378,6 +396,13 @@ func (s *objectSeeker) Read(p []byte) (int, error) {
 		n, err := s.br.Read(p)
 		s.bytesOut += int64(n)
 		return n, err
+	}
+	if len(s.pending) > 0 {
+		n := copy(p, s.pending)
+		s.pending = s.pending[n:]
+		s.off += int64(n)
+		s.bytesOut += int64(n)
+		return n, nil
 	}
 	if s.off >= s.rep.size {
 		return 0, io.EOF

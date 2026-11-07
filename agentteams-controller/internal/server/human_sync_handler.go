@@ -229,10 +229,21 @@ func (h *humanFilesHandler) getSyncManifest(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	data, err := h.oss.GetObject(ctx, key)
+	// A 200 body must carry the validator of the same version. A bare
+	// HEAD then GET lets a concurrent PUT land between them; the old
+	// snapshot read was exactly the guard against that. Keep the 304 fast
+	// path above (stat only), and use the etag-bound snapshot for the
+	// body so bytes and ETag are one pair.
+	data, snap, err := h.readFileSnapshot(ctx, key)
 	if err != nil {
-		writeStorageError(w, err, "manifest not found", "read manifest failed")
+		writeHumanFileSnapshotError(w, err)
 		return
+	}
+	snapETag := httputil.BareETag(snap.ETag)
+	if snapETag != "" {
+		hdr.Set("ETag", httputil.EtagQuoted(snapETag))
+	} else {
+		hdr.Del("ETag")
 	}
 	hdr.Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

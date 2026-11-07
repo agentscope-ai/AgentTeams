@@ -642,9 +642,28 @@ func (c *MinIOClient) OpenRange(ctx context.Context, key string, start, length i
 	if err != nil {
 		return nil, err
 	}
+	if length == 0 {
+		return io.NopCloser(bytes.NewReader(nil)), nil
+	}
 	opts := minio.GetObjectOptions{}
-	if serr := opts.SetRange(start, length); serr != nil {
-		return nil, serr
+	// RangeReader speaks (start, length); minio-go SetRange speaks an
+	// inclusive end offset. Passing length straight through served
+	// bytes=10-19 for a 20-byte window and made suffix/short windows fail.
+	switch {
+	case length < 0:
+		if start > 0 {
+			if serr := opts.SetRange(start, 0); serr != nil { // bytes=start-
+				return nil, serr
+			}
+		}
+	default:
+		end := start + length - 1
+		if end < start || start < 0 {
+			return nil, ErrRangeNotSatisfiable
+		}
+		if serr := opts.SetRange(start, end); serr != nil {
+			return nil, serr
+		}
 	}
 	if matchETag != "" {
 		if serr := opts.SetMatchETag(matchETag); serr != nil {
@@ -653,19 +672,48 @@ func (c *MinIOClient) OpenRange(ctx context.Context, key string, start, length i
 	}
 	obj, err := sdk.GetObject(ctx, c.config.Bucket, strings.TrimPrefix(key, "/"), opts)
 	if err != nil {
-		var resp minio.ErrorResponse
-		if errors.As(err, &resp) {
-			switch {
-			case resp.Code == "PreconditionFailed" || resp.Code == "412":
-				return nil, ErrPreconditionFailed
-			case resp.Code == "InvalidRange" || resp.Code == "416" ||
-				resp.StatusCode == http.StatusRequestedRangeNotSatisfiable:
-				return nil, ErrRangeNotSatisfiable
-			}
-		}
-		return nil, c.classifyKeyError(ctx, key, err)
+		return nil, c.classifyRangeError(ctx, key, err)
 	}
-	return obj, nil
+	// minio-go opens lazily: the GET happens on the first Read. Wrap the
+	// stream so a 412/416/404/5xx surfaced by that first Read keeps the
+	// same classification as an eager open; callers can then pre-read
+	// before committing response headers.
+	return &classifiedReadCloser{
+		ReadCloser: obj,
+		classify:   func(err error) error { return c.classifyRangeError(ctx, key, err) },
+	}, nil
+}
+
+// classifyRangeError maps range-read failures: a moved snapshot is 412
+// (retry/re-stat), a stale window is 416, and everything else follows the
+// key-scoped storage mapping (bucket probe, 503, 500).
+func (c *MinIOClient) classifyRangeError(ctx context.Context, key string, err error) error {
+	var resp minio.ErrorResponse
+	if errors.As(err, &resp) {
+		switch {
+		case resp.Code == "PreconditionFailed" || resp.Code == "412":
+			return ErrPreconditionFailed
+		case resp.Code == "InvalidRange" || resp.Code == "416" ||
+			resp.StatusCode == http.StatusRequestedRangeNotSatisfiable:
+			return ErrRangeNotSatisfiable
+		}
+	}
+	return c.classifyKeyError(ctx, key, err)
+}
+
+// classifiedReadCloser defers SDK error classification to Read, where a
+// lazy minio-go object actually performs the request.
+type classifiedReadCloser struct {
+	io.ReadCloser
+	classify func(error) error
+}
+
+func (r *classifiedReadCloser) Read(p []byte) (int, error) {
+	n, err := r.ReadCloser.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		err = r.classify(err)
+	}
+	return n, err
 }
 
 // PresignGet mints a presigned download URL for the object at key that

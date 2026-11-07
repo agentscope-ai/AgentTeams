@@ -91,16 +91,16 @@ type humanFilesHandler struct {
 // back to the 64 MiB default.
 func NewHumanFilesHandler(k8sClient client.Client, namespace string, sc oss.StorageClient, ac *audit.Client) *humanFilesHandler {
 	h := &humanFilesHandler{
-		client:          k8sClient,
-		namespace:       namespace,
-		oss:             sc,
-		auditClient:     ac,
-		maxFileBytes:    defaultHumanFileMaxBytes,
-		presignMaxBytes: defaultHumanFilePresignMaxBytes,
-		pathLockTTL:     humanPathLockTTL,
-		presignTTL:      defaultHumanPresignTTL,
+		client:               k8sClient,
+		namespace:            namespace,
+		oss:                  sc,
+		auditClient:          ac,
+		maxFileBytes:         defaultHumanFileMaxBytes,
+		presignMaxBytes:      defaultHumanFilePresignMaxBytes,
+		pathLockTTL:          humanPathLockTTL,
+		presignTTL:           defaultHumanPresignTTL,
 		changesPruneInterval: humanChangePruneInterval,
-		changesPruneAt:         make(map[string]time.Time),
+		changesPruneAt:       make(map[string]time.Time),
 	}
 	if v := os.Getenv("HUMAN_FILE_MAX_BYTES"); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
@@ -691,6 +691,12 @@ func (h *humanFilesHandler) readSingleFile(w http.ResponseWriter, r *http.Reques
 	hdr.Set("Vary", "Authorization")
 	hdr.Set("Accept-Ranges", "bytes")
 	hdr.Set("Content-Type", rep.contentType)
+
+	// ServeContent does not close the reader; release the SDK stream on
+	// success, client disconnect and panic alike.
+	if seeker != nil {
+		defer func() { _ = seeker.Close() }()
+	}
 
 	// ServeContent owns the content from here on (206/416, Content-Range,
 	// Content-Length); If-None-Match and If-Range were resolved — or the

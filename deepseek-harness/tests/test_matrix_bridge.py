@@ -1,4 +1,5 @@
 import sys
+import os
 import tempfile
 import unittest
 import urllib.parse
@@ -479,6 +480,21 @@ Node.js v24.22.1
 
 
 class RoomSessionContinuationTest(unittest.TestCase):
+    @patch("matrix_bridge.subprocess.run")
+    def test_each_turn_uses_current_projected_model_and_gateway(self, mocked_run):
+        mocked_run.return_value.returncode = 0
+        mocked_run.return_value.stdout = "answer"
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory) / 'runtime.yaml'
+            for explicit in ('', 'https://api.deepseek.com'):
+                with patch.dict(os.environ, {'TEAMHARNESS_RUNTIME_CONFIG': str(runtime), 'TEAMHARNESS_DSH_MODEL': 'stale-model', 'DEEPSEEK_BASE_URL': explicit, 'AGENTTEAMS_AI_GATEWAY_URL': 'http://fallback'}, clear=True):
+                    for model, gateway in [('first-model', 'http://first-route'), ('second-model', 'http://second-route')]:
+                        runtime.write_text(f'desired:\n  model:\n    model: {model}\n    gatewayUrl: {gateway}\n')
+                        run_dsh('continue', Path(directory), 30, session_id='session-model', resume=True, event_id='$model', attempt=1)
+                        env = mocked_run.call_args.kwargs['env']
+                        self.assertEqual(env['TEAMHARNESS_DSH_MODEL'], model)
+                        self.assertEqual(env['DEEPSEEK_BASE_URL'], explicit or gateway + '/v1')
+
     def test_room_session_is_restored_after_bridge_restart(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "matrix-bridge-state.json"

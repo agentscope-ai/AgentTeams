@@ -113,6 +113,7 @@ def test_lifecycle_script_inventory_is_complete():
     expected = {
         "scripts/install.sh",
         "scripts/uninstall.sh",
+        "scripts/status.sh",
     }
     for runtime in ("qwenpaw", "openclaw", "hermes"):
         expected.add(f"adapters/{runtime}/install.sh")

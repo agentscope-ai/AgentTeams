@@ -59,11 +59,17 @@ with tempfile.TemporaryDirectory() as temp:
             'TEAMHARNESS_DSH_SKILL_ROOT': str(root / 'skills'),
             'TEAMHARNESS_DSH_MODEL': 'deepseek-v4-flash',
             'TEAMHARNESS_PYTHON': '/usr/bin/python3',
+            'TEAMHARNESS_DSH_SESSION_ID': 'session-headless-smoke',
+            'TEAMHARNESS_MATRIX_EVENT_ID': '$headless-smoke-first',
         }
         result = subprocess.run(['agentteams-dsh', 'Reply HEADLESS_SMOKE_OK without tools.'], cwd=workspace, env=env, capture_output=True, text=True, timeout=45)
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == 'HEADLESS_SMOKE_OK', result.stdout
         assert Model.calls >= 1, Model.calls
-        print('Packaged DSH boot, adapter, model call, and response: PASS')
+        env.update({'TEAMHARNESS_DSH_RESUME': 'true', 'TEAMHARNESS_MATRIX_EVENT_ID': '$headless-smoke-second'})
+        resumed = subprocess.run(['agentteams-dsh', 'Reply HEADLESS_SMOKE_OK again without tools.'], cwd=workspace, env=env, capture_output=True, text=True, timeout=45)
+        assert resumed.returncode == 0, resumed.stderr
+        assert resumed.stdout.strip() == 'HEADLESS_SMOKE_OK', resumed.stdout
+        print('Packaged DSH boot, adapter, model call, response, and session resume: PASS')
     finally:
         server.shutdown()

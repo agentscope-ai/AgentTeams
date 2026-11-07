@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from bridge_state import BridgeState
+from runtime_env import desired_model, deepseek_base_url
 from matrix_channel import (
     MatrixClient,
     matrix_events,
@@ -342,6 +343,15 @@ def run_dsh(
     attempt: int,
 ) -> str:
     environment = os.environ.copy()
+    runtime_path = environment.get("TEAMHARNESS_RUNTIME_CONFIG")
+    if runtime_path:
+        model, gateway = desired_model(Path(runtime_path))
+        if model:
+            environment["TEAMHARNESS_DSH_MODEL"] = model
+        environment["DEEPSEEK_BASE_URL"] = deepseek_base_url(
+            environment.get("DEEPSEEK_BASE_URL", ""),
+            environment.get("AGENTTEAMS_AI_GATEWAY_URL", ""), gateway,
+        )
     environment.update(
         {
             "TEAMHARNESS_DSH_SESSION_ID": session_id,

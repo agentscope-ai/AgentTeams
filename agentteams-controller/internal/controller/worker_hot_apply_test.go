@@ -15,6 +15,29 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+func TestDeepSeekHarnessDoesNotDialQwenPawModelAPIs(t *testing.T) {
+	dials := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		dials++
+		w.WriteHeader(http.StatusNotImplemented)
+	}))
+	defer srv.Close()
+	for _, explicit := range []bool{true, false} {
+		spec := v1beta1.WorkerSpec{Model: "deepseek-flash", SubagentModel: "deepseek-v4-pro"}
+		if explicit {
+			spec.Runtime = "deepseek-harness"
+		}
+		r := &WorkerReconciler{KubeMode: "embedded", DefaultRuntime: "deepseek-harness", subagentModelURLFor: func(*v1beta1.Worker, v1beta1.WorkerSpec) string { return srv.URL }}
+		worker := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "dsh"}}
+		state := &MemberState{ContainerState: "running"}
+		r.applyActiveModelHot(context.Background(), worker, spec, state)
+		r.applySubagentModelHot(context.Background(), worker, spec, MemberContext{}, state)
+	}
+	if dials != 0 {
+		t.Fatalf("DSH received %d QwenPaw API calls", dials)
+	}
+}
+
 func TestPatchSubagentModel(t *testing.T) {
 	var gotMethod, gotPath, gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -324,6 +324,9 @@ def dsh_error_detail(stderr: str, returncode: int) -> str:
     for line in lines:
         if line.startswith("Error: dsh:") or line.startswith("dsh:"):
             return line
+    for line in lines:
+        if line.startswith(("Error:", "TypeError:", "SyntaxError:", "ReferenceError:")):
+            return line
     useful = [line for line in lines if not line.startswith("Node.js v") and not line.startswith("command terminated")]
     return useful[-1] if useful else f"exit {returncode}"
 

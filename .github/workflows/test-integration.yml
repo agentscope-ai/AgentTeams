@@ -410,6 +410,13 @@ jobs:
             DOCKER_BUILD_ARGS="--build-arg APT_MIRROR= --build-arg PIP_INDEX_URL=https://pypi.org/simple/" \
             $EXTRA
 
+      - name: Smoke-test packaged DeepSeek Harness
+        if: matrix.target == 'deepseek-harness-worker'
+        run: |
+          docker run --rm --entrypoint python3 \
+            -v "$PWD/deepseek-harness/tests/headless_smoke.py:/tmp/headless_smoke.py:ro" \
+            agentteams/deepseek-harness-worker:latest /tmp/headless_smoke.py
+
       - name: Save image
         run: |
           set -euo pipefail

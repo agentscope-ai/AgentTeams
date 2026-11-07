@@ -23,7 +23,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=mc /usr/bin/mc /usr/local/bin/mc.bin
 COPY shared/lib/ /opt/agentteams/scripts/lib/
 
-RUN npm install --global "pnpm@11.7.0" "@deepseek-ai/dsh@${DSH_VERSION}" \
+COPY deepseek-harness/package.json /opt/agentteams/dsh/package.json
+# Keep rc.2's Cordis services at its tested source snapshot versions.
+# Newer compatible-range packages changed the loader/HMR service APIs.
+RUN npm install --global "pnpm@11.7.0" \
+    && npm install --prefix /opt/agentteams/dsh --omit=dev "@deepseek-ai/dsh@${DSH_VERSION}" \
+    && ln -s /opt/agentteams/dsh/node_modules/.bin/dsh /usr/local/bin/dsh \
     && npm cache clean --force
 
 COPY plugins/teamharness/ /opt/agentteams/plugins/teamharness/

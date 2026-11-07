@@ -181,6 +181,15 @@ Node.js v22.22.3
             "Error: dsh: HTTP_405: DeepSeek API error (HTTP 405)",
         )
 
+    def test_dsh_error_preserves_boot_error_instead_of_stack_frame(self):
+        stderr = """file:///dsh/lib/index.js:1
+Error: plugin tree failed to load
+    at boot (file:///dsh/lib/index.js:2:3)
+    at async file:///dsh/lib/bin.js:133:3
+Node.js v24.22.1
+"""
+        self.assertEqual(dsh_error_detail(stderr, 1), "Error: plugin tree failed to load")
+
     def test_team_agent_reply_is_accepted_only_when_structurally_targeted(self):
         payload = {
             "rooms": {

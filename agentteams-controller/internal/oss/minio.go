@@ -680,6 +680,14 @@ func (c *MinIOClient) ListObjectsDetailed(ctx context.Context, prefix string) ([
 	// slash: the handler synthesises directories from any name containing a
 	// slash, so both shapes must be preserved.
 	p := strings.TrimPrefix(strings.TrimPrefix(prefix, "/"), c.config.StoragePrefix+"/")
+	// A delimiter listing needs a directory boundary: without the trailing
+	// slash S3 treats the prefix as a plain string prefix, so "scope/target"
+	// also matches "scope/target-sibling" and returns it as a child. Every
+	// caller of this method passes a directory, so normalise the boundary and
+	// trim returned keys against the same form.
+	if p != "" && !strings.HasSuffix(p, "/") {
+		p += "/"
+	}
 	opts := minio.ListObjectsOptions{Prefix: p, Recursive: false}
 	ctx, cancel := context.WithCancel(ctx)
 	var ch <-chan minio.ObjectInfo

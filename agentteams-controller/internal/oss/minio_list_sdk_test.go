@@ -49,3 +49,50 @@ func TestListObjectsDetailedKeepsTimestamps(t *testing.T) {
 		t.Fatalf("prefix entry must not invent a timestamp: %+v", infos[1])
 	}
 }
+
+// TestListObjectsDetailedNormalizesDirectoryPrefix pins the delimiter
+// boundary: a bare prefix ("scope/target") must query "scope/target/",
+// otherwise the listing also matches sibling names such as "target-other".
+func TestListObjectsDetailedNormalizesDirectoryPrefix(t *testing.T) {
+	c := NewMinIOClient(Config{Bucket: "b", Endpoint: "http://x", AccessKey: "k", SecretKey: "s"})
+	var got string
+	c.sdkListObjects = func(_ context.Context, _ string, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo {
+		got = opts.Prefix
+		ch := make(chan minio.ObjectInfo, 2)
+		ch <- minio.ObjectInfo{Key: "scope/target/meeting notes.txt", Size: 1}
+		ch <- minio.ObjectInfo{Key: "scope/target/nested/"}
+		close(ch)
+		return ch
+	}
+
+	infos, err := c.ListObjectsDetailed(context.Background(), "scope/target")
+	if err != nil {
+		t.Fatalf("ListObjectsDetailed: %v", err)
+	}
+	if got != "scope/target/" {
+		t.Fatalf("prefix = %q, want scope/target/", got)
+	}
+	if len(infos) != 2 || infos[0].Name != "meeting notes.txt" || infos[1].Name != "nested/" {
+		t.Fatalf("entries = %+v", infos)
+	}
+}
+
+// TestListObjectsDetailedKeepsBucketRootPrefix: an empty prefix must stay
+// empty (no leading slash is invented at the bucket root).
+func TestListObjectsDetailedKeepsBucketRootPrefix(t *testing.T) {
+	c := NewMinIOClient(Config{Bucket: "b", Endpoint: "http://x", AccessKey: "k", SecretKey: "s"})
+	var got string
+	c.sdkListObjects = func(_ context.Context, _ string, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo {
+		got = opts.Prefix
+		ch := make(chan minio.ObjectInfo, 1)
+		ch <- minio.ObjectInfo{Key: "files/a.txt"}
+		close(ch)
+		return ch
+	}
+	if _, err := c.ListObjectsDetailed(context.Background(), ""); err != nil {
+		t.Fatalf("ListObjectsDetailed: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("prefix = %q, want empty", got)
+	}
+}

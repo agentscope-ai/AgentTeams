@@ -31,6 +31,17 @@ RUN npm install --global "pnpm@11.7.0" \
     && ln -s /opt/agentteams/dsh/node_modules/.bin/dsh /usr/local/bin/dsh \
     && npm cache clean --force
 
+# rc.2 overwrites a streamed tool ID with empty continuation deltas. Keep
+# the earlier ID so tool results remain valid when sessions are restored.
+RUN python3 - <<'PY'
+from pathlib import Path
+path = Path('/opt/agentteams/dsh/node_modules/@deepseek-ai/dsh-llm-deepseek/lib/index.js')
+source = path.read_text()
+old = 'if (call.id !== void 0) block.callId = call.id;'
+assert source.count(old) == 1, 'Revalidate the DSH tool-call ID compatibility fix'
+path.write_text(source.replace(old, 'if (call.id) block.callId = call.id;'))
+PY
+
 COPY plugins/teamharness/ /opt/agentteams/plugins/teamharness/
 RUN mkdir -p /opt/agentteams/dsh-template /tmp/adapter-pack \
     && DSH_HOME=/opt/agentteams/dsh-template pnpm --dir /opt/agentteams/plugins/teamharness/adapters/deepseek-harness pack --pack-destination /tmp/adapter-pack \

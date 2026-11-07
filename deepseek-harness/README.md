@@ -2,9 +2,11 @@
 
 This directory packages DeepSeek Harness as an AgentTeams-managed Worker. The Controller still owns the Worker lifecycle and projects `runtime.yaml`; the image translates that contract, including `desired.model.model` and its gateway route, into a DSH profile, listens for Matrix messages, resumes one DSH session per room, and posts text and file results back to the same room.
 
-The image is pinned to `@deepseek-ai/dsh@0.1.1-rc.2` and uses the TeamHarness adapter in `plugins/teamharness/adapters/deepseek-harness` without patching DSH itself. This runtime is experimental until the upstream DSH dependency reaches a stable release and passes the same compatibility suite.
+The image is pinned to `@deepseek-ai/dsh@0.1.1-rc.2` and uses the TeamHarness adapter in `plugins/teamharness/adapters/deepseek-harness`. This runtime is experimental until the upstream DSH dependency reaches a stable release and passes the same compatibility suite.
 
 `package.json` also fixes the Cordis service dependencies to the versions in the tested DSH source snapshot `b150a551b8d465e31e418e1b2eaf5e79bbb7d28e`. The CLI's compatible dependency ranges otherwise install newer service APIs that rc.2 cannot boot. When changing `DSH_VERSION`, revalidate this dependency set with the packaged headless smoke test as well as the live checks below.
+
+The Dockerfile applies one guarded rc.2 compatibility fix: empty tool-call ID continuation fragments must not replace the initial non-empty ID. Without it, a completed tool turn can save an invalid session and fail on the next message. The packaged smoke covers a real read tool, this SSE fragment pattern, and a second process restoring that tool history. A changed upstream implementation fails the build rather than silently skipping the fix.
 
 The current bridge does not support Matrix E2EE. It fails fast with a clear
 error when `AGENTTEAMS_MATRIX_E2EE=1`; use unencrypted Matrix rooms with this

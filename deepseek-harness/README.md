@@ -4,6 +4,8 @@ This directory packages DeepSeek Harness as an AgentTeams-managed Worker. The Co
 
 The image is pinned to `@deepseek-ai/dsh@0.1.1-rc.2` and uses the TeamHarness adapter in `plugins/teamharness/adapters/deepseek-harness` without patching DSH itself. This runtime is experimental until the upstream DSH dependency reaches a stable release and passes the same compatibility suite.
 
+`package.json` also fixes the Cordis service dependencies to the versions in the tested DSH source snapshot `b150a551b8d465e31e418e1b2eaf5e79bbb7d28e`. The CLI's compatible dependency ranges otherwise install newer service APIs that rc.2 cannot boot. When changing `DSH_VERSION`, revalidate this dependency set with the packaged headless smoke test as well as the live checks below.
+
 The current bridge does not support Matrix E2EE. It fails fast with a clear
 error when `AGENTTEAMS_MATRIX_E2EE=1`; use unencrypted Matrix rooms with this
 experimental runtime.
@@ -35,6 +37,7 @@ spec:
 
 The test coverage is split by boundary:
 
+- `docker run --rm --entrypoint python3 -v "$PWD/deepseek-harness/tests/headless_smoke.py:/tmp/headless_smoke.py:ro" <worker-image> /tmp/headless_smoke.py` boots the packaged CLI and adapter against a local model endpoint, without real credentials. CI runs it after building the image to catch incompatible transitive dependencies that a config dump does not exercise.
 - `python -m unittest discover -s deepseek-harness/tests -p "test_*.py"` checks room-scoped session state, text/image/file handling, safe Workspace paths, outbox delivery, event deduplication, retry state, useful error reporting, and gateway URL normalization.
 - `node --test deepseek-harness/tests/*.test.mjs` checks that each execution retry receives a distinct, restart-stable DSH message ID.
 - `plugins/teamharness/adapters/deepseek-harness/smoke.ps1` checks package install/remove, role-specific prompts and Skills, and TeamHarness MCP registration against the pinned DSH checkout.

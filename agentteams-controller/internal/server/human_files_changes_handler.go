@@ -29,7 +29,7 @@ import (
 //
 //	{"op":"put|delete|restore|purge","path":"files/a.md","size":12,"etag":"...","ts":"<RFC3339>"}
 //
-// Write points: putFile (put), deleteFile (delete, recorded only when this
+// Write points: putFile and commitPresignedFile (put), deleteFile (delete, recorded only when this
 // request performed the soft delete), restoreTrash (restore), purgeTrash
 // (purge, restating the original files/ path from the trash metadata;
 // skipped when the metadata carries no path). Appends are best-effort: a
@@ -40,8 +40,9 @@ import (
 // Read contract (GET /api/v1/humans/{name}/files/changes):
 //
 //   - The cursor is opaque to clients: "v1:<change id>". "v1:" (the empty
-//     id) addresses the start of the surviving log. A missing since or one
-//     that does not parse -> 400 {"code":"InvalidCursor"}.
+//     id) addresses the start of the surviving log. An explicit since that does not parse -> 400
+//     {"code":"InvalidCursor"}. Without since, the HTTP route continues to
+//     read the ordinary file named "changes".
 //   - A cursor older than the oldest surviving entry -> 410
 //     {"code":"CursorExpired","latest":"v1:<max surviving id>"} (bare
 //     "v1:" when nothing survives). Retention prunes are always a prefix

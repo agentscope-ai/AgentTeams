@@ -171,7 +171,16 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// wildcard below, so a file literally named "changes" at the area root
 	// is served only through the feed route (GET-shadowed) — the same
 	// tradeoff the exact files-root route makes against the wildcard.
-	mux.Handle("GET /api/v1/humans/{name}/files/changes", mw.Authenticate(http.HandlerFunc(hfh.fileChanges)))
+	mux.Handle("GET /api/v1/humans/{name}/files/changes", mw.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Only an explicit cursor selects the delta API. Without it,
+		// preserve reads of the existing file named "changes".
+		if !r.URL.Query().Has("since") {
+			r.SetPathValue("path", "changes")
+			hfh.getFile(w, r)
+			return
+		}
+		hfh.fileChanges(w, r)
+	})))
 	mux.Handle("GET /api/v1/humans/{name}/files/{path...}", mw.Authenticate(http.HandlerFunc(hfh.getFile)))
 	mux.Handle("PUT /api/v1/humans/{name}/files/{path...}", mw.Authenticate(http.HandlerFunc(hfh.putFile)))
 	mux.Handle("DELETE /api/v1/humans/{name}/files/{path...}", mw.Authenticate(http.HandlerFunc(hfh.deleteFile)))

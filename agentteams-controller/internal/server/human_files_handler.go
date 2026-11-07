@@ -2460,6 +2460,9 @@ func (h *humanFilesHandler) commitPresignedFile(w http.ResponseWriter, r *http.R
 		httputil.WriteError(w, http.StatusInternalServerError, "record presign commit failed")
 		return
 	}
+	h.appendHumanChange(ctx, username, humanChangeEntry{
+		Op: "put", Path: "files/" + rel, Size: finalMeta.Size, ETag: finalMeta.ETag,
+	})
 	h.recordAudit(ctx, a, "human_file_presign_commit",
 		"path", "files/"+rel, "size", len(data), "oldSize", oldSize, "etag", finalMeta.ETag)
 	httputil.WriteJSON(w, http.StatusOK, humanPresignCommitResponse{

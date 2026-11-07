@@ -17,18 +17,24 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 class Model(BaseHTTPRequestHandler):
     calls = 0
     saw_tool_result = False
+    tool_messages = []
+    sent_tool = False
 
     def do_POST(self):
         assert self.path == '/chat/completions', self.path
         request = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         assert request['model'] == 'deepseek-v4-flash', request['model']
         type(self).calls += 1
+        type(self).tool_messages.extend(m for m in request['messages'] if m.get('role') == 'tool')
         if any(m.get('role') == 'tool' and 'tool replay smoke' in json.dumps(m) for m in request['messages']):
             type(self).saw_tool_result = True
         self.send_response(200)
         self.send_header('Content-Type', 'text/event-stream')
         self.end_headers()
-        if type(self).calls == 1:
+        # Auxiliary model calls (for example session titles) have no tools and
+        # may race the agent request. Send the fixture only to the agent.
+        if not type(self).sent_tool and any(t.get('function', {}).get('name') == 'read' for t in request.get('tools', [])):
+            type(self).sent_tool = True
             arguments = json.dumps({'file_path': str(type(self).output_file)})
             for delta, finish in [
                 ({'role': 'assistant', 'tool_calls': [{'index': 0, 'id': 'call-smoke-1', 'type': 'function', 'function': {'name': 'read', 'arguments': arguments}}]}, None),
@@ -79,7 +85,7 @@ with tempfile.TemporaryDirectory() as temp:
         result = subprocess.run(['agentteams-dsh', 'Read smoke.txt, then reply HEADLESS_SMOKE_OK.'], cwd=workspace, env=env, capture_output=True, text=True, timeout=45)
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == 'HEADLESS_SMOKE_OK', result.stdout
-        assert Model.saw_tool_result, 'Model did not receive the real read tool result'
+        assert Model.saw_tool_result, Model.tool_messages
         assert Model.calls >= 1, Model.calls
         env.update({'TEAMHARNESS_DSH_RESUME': 'true', 'TEAMHARNESS_MATRIX_EVENT_ID': '$headless-smoke-second'})
         resumed = subprocess.run(['agentteams-dsh', 'Reply HEADLESS_SMOKE_OK again without tools.'], cwd=workspace, env=env, capture_output=True, text=True, timeout=45)

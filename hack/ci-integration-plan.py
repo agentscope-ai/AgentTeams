@@ -36,7 +36,7 @@ def plan(base, head, event, ref):
                 pass
         if path.startswith('.github/workflows/') or path in {
             'hack/ci-integration-plan.py', 'hack/ci-base-image.py', 'hack/install-mc.py',
-            'tests/test-build-workflows.py', 'tests/test-ci-release-tools.py',
+            'tests/test-build-workflows.py', 'tests/test-ci-release-tools.py', 'tests/check-integration-scheduling.py',
             'tests/test-release-metrics.py', 'tests/test-install-mc.py', 'tests/lib/agent-metrics.sh'}:
             pipeline = True
         else:

@@ -5,9 +5,9 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
-import textwrap
 import unittest
 from unittest.mock import patch
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = (ROOT / '.github/workflows/test-integration.yml').read_text()
@@ -16,8 +16,8 @@ RUNNER = (ROOT / 'tests/run-all-tests.sh').read_text()
 
 class IntegrationSchedulingTest(unittest.TestCase):
     def matrix(self, untrusted=False):
-        step = WORKFLOW.split('      - name: Select integration test matrix\n', 1)[1]
-        script = textwrap.dedent(step.split('        run: |\n', 1)[1].split('\n  deepseek-harness-tests:', 1)[0])
+        steps = yaml.safe_load(WORKFLOW)['jobs']['detect-changes']['steps']
+        script = next(step['run'] for step in steps if step.get('id') == 'test-matrix')
         with tempfile.NamedTemporaryFile() as output:
             subprocess.run(['bash', '-eu', '-c', script], check=True, env={
                 **os.environ, 'GITHUB_OUTPUT': output.name,
@@ -49,7 +49,10 @@ class IntegrationSchedulingTest(unittest.TestCase):
         self.assertFalse(any(entry['shard'] == 'controller-cr-2' for entry in matrix))
         self.assertTrue(any(entry['shard'] == 'qwenpaw-teamharness' for entry in matrix))
         # The legacy upgrade coverage pulls the pinned published image (test-29); no branch build of the CoPaw runtime is needed.
-        targets = re.search(r'target: \[(.*?)\]', WORKFLOW).group(1).split(', ')
+        jobs = yaml.safe_load(WORKFLOW)['jobs']
+        targets = [target for job in jobs.values()
+                   if job.get('uses') == './.github/workflows/build-integration-images.yml'
+                   for target in json.loads(job['with']['targets'])]
         self.assertNotIn('copaw-worker', targets)
 
     def test_fork_keeps_shared_coverage_without_secrets(self):

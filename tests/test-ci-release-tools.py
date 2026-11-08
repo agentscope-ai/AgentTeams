@@ -98,21 +98,63 @@ class BaseProbeTests(unittest.TestCase):
 
 
 class WorkflowPlanTests(unittest.TestCase):
+    def test_build_groups_wait_only_for_actual_dockerfile_dependencies(self):
+        jobs = yaml.safe_load((ROOT / '.github/workflows/test-integration.yml').read_text())['jobs']
+        expected = {
+            'build-images-independent': ({'qwenpaw-worker', 'deepseek-harness-worker'}, {'detect-changes'}),
+            'build-images-controller': ({'embedded', 'manager-qwenpaw', 'hermes-worker'}, {'detect-changes', 'build-base'}),
+            'build-images-openclaw': ({'manager', 'worker'}, {'detect-changes', 'resolve-openclaw-base', 'build-base', 'build-openclaw-base'}),
+        }
+        dockerfiles = {'embedded': 'agentteams-controller/Dockerfile.embedded',
+                      'manager-qwenpaw': 'manager/Dockerfile.qwenpaw', 'hermes-worker': 'hermes/Dockerfile',
+                      'qwenpaw-worker': 'qwenpaw/Dockerfile', 'deepseek-harness-worker': 'deepseek-harness/Dockerfile',
+                      'manager': 'manager/Dockerfile', 'worker': 'worker/Dockerfile'}
+        targets = []
+        for name, (wanted, dependencies) in expected.items():
+            job = jobs[name]
+            self.assertEqual(set(job['needs']), dependencies)
+            self.assertEqual(job['with'].get('controller', False), 'build-base' in dependencies)
+            selected = json.loads(job['with']['targets'])
+            self.assertEqual(set(selected), wanted)
+            targets.extend(selected)
+            for target in selected:
+                dockerfile = (ROOT / dockerfiles[target]).read_text()
+                self.assertEqual('${AGENTTEAMS_CONTROLLER_IMAGE}' in dockerfile, 'build-base' in dependencies, target)
+                self.assertEqual('${OPENCLAW_BASE_IMAGE}' in dockerfile, 'build-openclaw-base' in dependencies, target)
+        self.assertEqual(len(targets), len(set(targets)))
+        self.assertEqual(set(targets), set(dockerfiles))
+        # A failed/stalled registry probe must not become a transitive parent of independent builds.
+        self.assertNotIn('resolve-openclaw-base', jobs['detect-changes'].get('needs', []))
+        self.assertNotIn('decide', {step.get('id') for step in jobs['detect-changes']['steps']})
+
+    def test_test_shards_require_every_image_group_to_succeed(self):
+        jobs = yaml.safe_load((ROOT / '.github/workflows/test-integration.yml').read_text())['jobs']
+        test = jobs['integration-tests']
+        for group in ['build-images-independent', 'build-images-controller', 'build-images-openclaw']:
+            self.assertIn(group, test['needs'])
+            self.assertIn(f"needs.{group}.result == 'success'", test['if'])
+        openclaw = jobs['build-images-openclaw']
+        self.assertIn("needs.resolve-openclaw-base.result == 'success'", openclaw['if'])
+        self.assertIn("needs.build-base.result == 'success'", openclaw['if'])
+        self.assertIn("needs.build-openclaw-base.result == 'skipped'", openclaw['if'])
+
     def test_consumers_build_with_local_shared_or_immutable_published_base(self):
-        workflow = yaml.safe_load((ROOT / '.github/workflows/test-integration.yml').read_text())
-        step = next(step for step in workflow['jobs']['build-images']['steps']
+        workflow = yaml.safe_load((ROOT / '.github/workflows/build-integration-images.yml').read_text())
+        step = next(step for step in workflow['jobs']['build']['steps']
                     if step.get('name') == 'Build image')['run']
         for local in ('true', 'false'):
             for target in ('manager', 'worker'):
                 immutable = 'example/base@sha256:' + '0' * 64
-                script = step.replace('${{ needs.detect-changes.outputs.openclaw_base }}', local)
+                script = step.replace('${{ inputs.local_openclaw_base }}', local)
                 script = script.replace('${{ matrix.target }}', target)
-                script = script.replace('${{ needs.detect-changes.outputs.openclaw_base_ref }}', immutable)
-                script = script.replace('make build-', 'make -n build-')
+                script = script.replace('${{ inputs.published_base_ref }}', immutable)
+                script = script.replace('${{ inputs.controller }}', 'true')
+                script = script.replace('make "${MAKE_ARGS[@]}"', 'make -n "${MAKE_ARGS[@]}"')
                 result = subprocess.run(['bash', '-eu', '-c', script], cwd=ROOT, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 expected = 'agentteams/openclaw-base:latest' if local == 'true' else immutable
                 self.assertIn('OPENCLAW_BASE_IMAGE=' + expected, result.stdout)
+                self.assertNotIn('==> Building agentteams-controller image:', result.stdout)
 
     def test_pipeline_matrix_keeps_three_runtime_controller_checks(self):
         workflow = yaml.safe_load((ROOT / '.github/workflows/test-integration.yml').read_text())

@@ -19,6 +19,7 @@ on:
       - 'openhuman/scripts/openhuman-worker-entrypoint.sh'
       - 'tests/check-agentteams-rename-defaults.sh'
       - 'tests/check-installer-pre-1.2-env-compat.sh'
+      - 'tests/check-installer-token-plan-models.sh'
       - 'tests/check-installer-controller-url.sh'
       - 'tests/check-installer-presign-endpoint.sh'
       - 'tests/check-plugin-release-tag.sh'
@@ -78,6 +79,9 @@ jobs:
 
       - name: Check pre-v1.2 installer compatibility
         run: bash tests/check-installer-pre-1.2-env-compat.sh
+
+      - name: Check installer Token Plan models
+        run: bash tests/check-installer-token-plan-models.sh
 
       - name: Check installer controller URL contract
         run: bash tests/check-installer-controller-url.sh

@@ -237,7 +237,8 @@ def _clean_control_response_text(text: str) -> str:
 
 def _ends_with_no_reply_control(text: str) -> bool:
     """Return true when the final non-empty output line is NO_REPLY."""
-    return bool(text) and text.rstrip().splitlines()[-1].strip() == "NO_REPLY"
+    lines = (text or "").rstrip().splitlines()
+    return bool(lines) and lines[-1].strip() == "NO_REPLY"
 
 
 def _is_teamharness_tool_display(text: str) -> bool:

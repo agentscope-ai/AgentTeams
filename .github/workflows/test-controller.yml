@@ -379,6 +379,37 @@ jobs:
         run: |
           python -m pytest plugins/tests/agentteams-matrix-channel/test_sync_timeout_clamp.py -q -rs
 
+  matrix-channel-no-reply-final-line:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install matrix-channel runtime dependencies
+        run: |
+          python -m pip install \
+            'matrix-nio>=0.25,<0.27' \
+            'qwenpaw>=2.2.1,<2.3' \
+            'pytest>=8.3,<10' \
+            'pytest-asyncio>=0.23,<2'
+
+      - name: Verify matrix-nio is importable (tests must not skip)
+        run: |
+          python - <<'PY'
+          import importlib.metadata as md
+          import nio  # noqa: F401  the suite skips without matrix-nio
+          print("matrix-nio", md.version("matrix-nio"))
+          print("qwenpaw", md.version("qwenpaw"))
+          PY
+
+      - name: Run matrix-channel NO_REPLY final-line regression tests
+        run: |
+          python -m pytest plugins/tests/agentteams-matrix-channel/test_no_reply_final_line.py -q -rs
+
   plugin-release-contract:
     runs-on: ubuntu-latest
     timeout-minutes: 10

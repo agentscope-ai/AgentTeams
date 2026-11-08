@@ -663,11 +663,11 @@ func TestGenerateOpenClawConfig_SubagentModelOmittedWhenEmpty(t *testing.T) {
 	}
 }
 
-// TestGenerateOpenClawConfigCustomProvider pins the provider projection:
-// when the request names a ModelProvider, the generated openclaw.json
-// declares that provider and qualifies every model reference (primary,
-// subagents.model, alias keys) with it.
-func TestGenerateOpenClawConfigCustomProvider(t *testing.T) {
+// TestGenerateOpenClawConfigUsesGatewayProvider pins the runtime projection:
+// ModelProvider is the AI-gateway provider name and must not become the local
+// openclaw provider-block id. Every local model reference uses the constant
+// agentteams-gateway block.
+func TestGenerateOpenClawConfigUsesGatewayProvider(t *testing.T) {
 	g := NewGenerator(Config{
 		MatrixDomain:    "matrix.test:8080",
 		MatrixServerURL: "http://matrix.test:8080",
@@ -679,9 +679,9 @@ func TestGenerateOpenClawConfigCustomProvider(t *testing.T) {
 		WorkerName:        "worker-alice",
 		MatrixToken:       "tok-matrix-alice",
 		GatewayKey:        "tok-gw",
-		ModelProvider:     "custom-gw",
-		ModelName:         "custom-gw/qwen3.6-plus",
-		SubagentModelName: "custom-gw/qwen3.6-flash",
+		ModelProvider:     "deepseek",
+		ModelName:         "qwen3.6-plus",
+		SubagentModelName: "qwen3.6-flash",
 		Runtime:           "qwenpaw",
 	}
 	data, err := g.GenerateOpenClawConfig(req)
@@ -701,37 +701,40 @@ func TestGenerateOpenClawConfigCustomProvider(t *testing.T) {
 	if len(providers) != 1 {
 		t.Fatalf("models.providers has %d entries, want 1: %v", len(providers), providers)
 	}
-	if _, present := providers["custom-gw"]; !present {
-		t.Fatalf("models.providers[custom-gw] missing: %v", providers)
+	if _, present := providers["agentteams-gateway"]; !present {
+		t.Fatalf("models.providers[agentteams-gateway] missing: %v", providers)
+	}
+	if _, present := providers["deepseek"]; present {
+		t.Fatalf("models.providers must not use the gateway provider name as a local id: %v", providers)
 	}
 
 	defaults := config["agents"].(map[string]interface{})["defaults"].(map[string]interface{})
 	modelCfg := defaults["model"].(map[string]interface{})
-	if modelCfg["primary"] != "custom-gw/qwen3.6-plus" {
-		t.Errorf("primary = %v, want custom-gw/qwen3.6-plus", modelCfg["primary"])
+	if modelCfg["primary"] != "agentteams-gateway/qwen3.6-plus" {
+		t.Errorf("primary = %v, want agentteams-gateway/qwen3.6-plus", modelCfg["primary"])
 	}
 	subagents, ok := defaults["subagents"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("agents.defaults.subagents missing: %v", defaults["subagents"])
 	}
-	if subagents["model"] != "custom-gw/qwen3.6-flash" {
-		t.Errorf("subagents.model = %v, want custom-gw/qwen3.6-flash", subagents["model"])
+	if subagents["model"] != "agentteams-gateway/qwen3.6-flash" {
+		t.Errorf("subagents.model = %v, want agentteams-gateway/qwen3.6-flash", subagents["model"])
 	}
 
-	// Every alias key must be qualified with the projected provider.
+	// Every alias key must be qualified with the local gateway provider.
 	aliases, ok := defaults["models"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("agents.defaults.models missing: %v", defaults["models"])
 	}
 	for key := range aliases {
-		if !strings.HasPrefix(key, "custom-gw/") {
-			t.Errorf("alias key %q does not start with custom-gw/", key)
+		if !strings.HasPrefix(key, "agentteams-gateway/") {
+			t.Errorf("alias key %q does not start with agentteams-gateway/", key)
 		}
 	}
-	if _, present := aliases["custom-gw/qwen3.6-plus"]; !present {
-		t.Errorf("alias key custom-gw/qwen3.6-plus missing")
+	if _, present := aliases["agentteams-gateway/qwen3.6-plus"]; !present {
+		t.Errorf("alias key agentteams-gateway/qwen3.6-plus missing")
 	}
-	if _, present := aliases["custom-gw/qwen3.6-flash"]; !present {
-		t.Errorf("alias key custom-gw/qwen3.6-flash missing")
+	if _, present := aliases["agentteams-gateway/qwen3.6-flash"]; !present {
+		t.Errorf("alias key agentteams-gateway/qwen3.6-flash missing")
 	}
 }

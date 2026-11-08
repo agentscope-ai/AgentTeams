@@ -10,17 +10,18 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// TestMemberRuntimeConfigProjectsProvider pins the provider projection in
-// the runtime.yaml document: spec.modelProvider names the gateway provider
-// for both the primary and the subagent model; an empty value keeps the
-// built-in agentteams-gateway provider.
+// TestMemberRuntimeConfigProjectsProvider pins the runtime invariant:
+// spec.modelProvider is the gateway provider name and must not become the
+// runtime providerId. Both custom and empty gateway providers project the
+// constant agentteams-gateway runtime provider.
 func TestMemberRuntimeConfigProjectsProvider(t *testing.T) {
 	cases := []struct {
 		name     string
 		provider string
 		want     string
 	}{
-		{name: "custom provider", provider: "custom-gw", want: "custom-gw"},
+		{name: "custom gateway provider", provider: "custom-gw", want: "agentteams-gateway"},
+		{name: "gateway provider colliding with qwenpaw builtin", provider: "deepseek", want: "agentteams-gateway"},
 		{name: "empty falls back to built-in", provider: "", want: "agentteams-gateway"},
 	}
 	for _, tc := range cases {

@@ -247,7 +247,8 @@ func TestApplySubagentModelHotResolvesTeamDefault(t *testing.T) {
 	}
 }
 
-// Both native model APIs must carry the configured provider_id.
+// Both native model APIs must carry the constant runtime provider_id, not the
+// AI-gateway provider name from spec.modelProvider.
 func TestHotApplyProviderProjection(t *testing.T) {
 	var bodies []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -257,7 +258,7 @@ func TestHotApplyProviderProjection(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 		if r.Method == http.MethodGet {
-			_, _ = w.Write([]byte(`{"active_llm":{"provider_id":"custom-gw","model":"qwen3.6-plus"}}`))
+			_, _ = w.Write([]byte(`{"active_llm":{"provider_id":"agentteams-gateway","model":"qwen3.6-plus"}}`))
 		}
 	}))
 	defer srv.Close()
@@ -290,11 +291,11 @@ func TestHotApplyProviderProjection(t *testing.T) {
 		switch {
 		case payload["subagent_model"] != nil:
 			slot, _ := payload["subagent_model"].(map[string]any)
-			if slot["provider_id"] != "custom-gw" {
-				t.Errorf("subagent_model.provider_id = %v, want custom-gw", slot["provider_id"])
+			if slot["provider_id"] != "agentteams-gateway" {
+				t.Errorf("subagent_model.provider_id = %v, want agentteams-gateway", slot["provider_id"])
 			}
 		case payload["scope"] == "agent":
-			if payload["provider_id"] != "custom-gw" || payload["agent_id"] != "default" {
+			if payload["provider_id"] != "agentteams-gateway" || payload["agent_id"] != "default" {
 				t.Errorf("wrong primary model scope/provider: %v", payload)
 			}
 		default:

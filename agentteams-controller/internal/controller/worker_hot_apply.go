@@ -157,12 +157,11 @@ const subagentConsoleAgentID = "default"
 // (bridge.py writes it into the provider list at startup).
 const subagentModelProviderID = "agentteams-gateway"
 
-// hotApplyProviderID mirrors the model projection: the provider that serves
-// the worker's models, defaulting to the built-in gateway provider.
-func hotApplyProviderID(spec v1beta1.WorkerSpec) string {
-	if v := strings.TrimSpace(spec.ModelProvider); v != "" {
-		return v
-	}
+// hotApplyProviderID returns the runtime provider id for model-settings
+// dials. spec.modelProvider is the AI-gateway provider name used by the
+// controller to resolve the gateway URL; it must not be forwarded as a local
+// runtime provider id (it can collide with QwenPaw built-in provider ids).
+func hotApplyProviderID(_ v1beta1.WorkerSpec) string {
 	return subagentModelProviderID
 }
 

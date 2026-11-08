@@ -22,7 +22,7 @@ func TestActiveModelHotUsesNativeContractAndReadback(t *testing.T) {
 			name = "ignored_write"
 		}
 		t.Run(name, func(t *testing.T) {
-			desired := map[string]string{"provider_id": "custom-gw", "model": "new-model"}
+			desired := map[string]string{"provider_id": "agentteams-gateway", "model": "new-model"}
 			current := map[string]string{"provider_id": "old-gw", "model": "old-model"}
 			writes, reads := 0, 0
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -58,7 +58,7 @@ func TestActiveModelHotUsesNativeContractAndReadback(t *testing.T) {
 			worker := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "native-primary", Namespace: "default"}}
 			k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(worker.DeepCopy()).Build()
 			reconciler := &WorkerReconciler{Client: k8sClient, KubeMode: "embedded", subagentModelURLFor: func(*v1beta1.Worker, v1beta1.WorkerSpec) string { return srv.URL }}
-			reconciler.applyActiveModelHot(context.Background(), worker, v1beta1.WorkerSpec{Model: desired["model"], ModelProvider: desired["provider_id"]}, &MemberState{ContainerState: "running"})
+			reconciler.applyActiveModelHot(context.Background(), worker, v1beta1.WorkerSpec{Model: desired["model"], ModelProvider: "custom-gw"}, &MemberState{ContainerState: "running"})
 			var got v1beta1.Worker
 			if err := k8sClient.Get(context.Background(), types.NamespacedName{Name: worker.Name, Namespace: worker.Namespace}, &got); err != nil {
 				t.Fatal(err)
@@ -85,7 +85,7 @@ func TestActiveModelHotReappliesProviderChange(t *testing.T) {
 		if r.Method == http.MethodPut {
 			writes++
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"active_llm": map[string]string{"provider_id": "new-gw", "model": "same-model"}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"active_llm": map[string]string{"provider_id": "agentteams-gateway", "model": "same-model"}})
 	}))
 	defer srv.Close()
 	worker := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "changed-provider", Namespace: "default", Annotations: map[string]string{annotationActiveModelApplied: "same-model", annotationActiveModelProviderApplied: "old-gw"}}}
@@ -93,8 +93,8 @@ func TestActiveModelHotReappliesProviderChange(t *testing.T) {
 	spec := v1beta1.WorkerSpec{Model: "same-model", ModelProvider: "new-gw"}
 	state := &MemberState{ContainerState: "running"}
 	reconciler.applyActiveModelHot(context.Background(), worker, spec, state)
-	if writes != 1 || worker.Annotations[annotationActiveModelProviderApplied] != "new-gw" {
-		t.Fatalf("provider-only change was not applied: writes=%d annotations=%v", writes, worker.Annotations)
+	if writes != 1 || worker.Annotations[annotationActiveModelProviderApplied] != "agentteams-gateway" {
+		t.Fatalf("legacy provider annotation was not normalized: writes=%d annotations=%v", writes, worker.Annotations)
 	}
 	reconciler.applyActiveModelHot(context.Background(), worker, spec, state)
 	if writes != 1 {
@@ -114,7 +114,7 @@ func TestSubagentModelHotReappliesProviderChange(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
-		if body.SubagentModel.ProviderID != "new-gw" {
+		if body.SubagentModel.ProviderID != "agentteams-gateway" {
 			t.Errorf("wrong provider: %s", body.SubagentModel.ProviderID)
 		}
 		w.WriteHeader(http.StatusOK)

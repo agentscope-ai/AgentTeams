@@ -10,6 +10,7 @@ import socket
 import threading
 
 import pytest
+import core.sidecar as sidecar
 
 from core.interfaces import InboundEvent, MediaRef, OutboundMessage
 from core.sidecar import (
@@ -60,6 +61,38 @@ def _raw_read_line(sock) -> bytes:
             break
         buf += chunk
     return buf.rstrip(b"\n")
+
+
+def test_rejection_drain_has_absolute_deadline(monkeypatch):
+    monkeypatch.setattr(sidecar, "REJECT_DRAIN_TIMEOUT", 0.05)
+    conn, peer = socket.socketpair()
+    stop = threading.Event()
+
+    def keep_writing():
+        try:
+            while not stop.is_set():
+                peer.sendall(b"x")
+                stop.wait(0.005)
+        except OSError:
+            pass
+
+    writer = threading.Thread(target=keep_writing, daemon=True)
+    reject = threading.Thread(
+        target=SidecarServer._reject,
+        args=(conn, "connection_limit", "already connected"),
+        daemon=True,
+    )
+    writer.start()
+    reject.start()
+    try:
+        reject.join(0.5)
+        assert not reject.is_alive(), "a rejected writer must not hold the accept loop"
+    finally:
+        stop.set()
+        peer.close()
+        conn.close()
+        writer.join(1)
+        reject.join(1)
 
 
 # ---------------------------------------------------------------------------

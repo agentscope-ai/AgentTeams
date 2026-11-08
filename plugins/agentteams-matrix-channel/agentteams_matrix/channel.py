@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import html
 import importlib
 import inspect
@@ -18,6 +19,7 @@ import time
 import urllib.parse
 from uuid import uuid4
 from dataclasses import dataclass
+from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -373,6 +375,23 @@ class HistoryEntry:
     sender_id: Optional[str] = None
 
 
+def _with_trace_reply(method):
+    """Restore the request context when a reply is sent after stream yield."""
+    @wraps(method)
+    async def wrapped(self, *args, **kwargs):
+        if os.getenv("AGENTTEAMS_OTEL_ENABLED", "").lower() in ("true", "1"):
+            try:
+                from at_trace_transport import reply_context
+            except ImportError:
+                pass
+            else:
+                meta = kwargs.get("meta") or (args[2] if len(args) > 2 else None)
+                with reply_context(meta):
+                    return await method(self, *args, **kwargs)
+        return await method(self, *args, **kwargs)
+    return wrapped
+
+
 class AgentTeamsMatrixChannel(BaseChannel):
     """QwenPaw channel that connects to a Matrix homeserver via matrix-nio."""
 
@@ -481,6 +500,20 @@ class AgentTeamsMatrixChannel(BaseChannel):
         # Thread tracking (ported from CoPaw overlay)
         self._active_thread_roots: Dict[str, str] = {}
         self._proactive_send_state: Dict[str, Dict[str, Any]] = {}
+
+    async def _access_control_gate(self, payload: Any) -> bool:
+        # Denials are bot notices, not new requests. Keep this metadata local
+        # to the ACL check so allowed messages retain their normal reply type.
+        if isinstance(payload, dict):
+            meta = dict(payload.get("meta") or {})
+            meta[_MATRIX_FORCE_NOTICE_KEY] = True
+            payload = {**payload, "meta": meta}
+        else:
+            payload = copy.copy(payload)
+            meta = dict(getattr(payload, "channel_meta", None) or {})
+            meta[_MATRIX_FORCE_NOTICE_KEY] = True
+            payload.channel_meta = meta
+        return await super()._access_control_gate(payload)
 
     # ------------------------------------------------------------------
     # Debounce key — serialize by room_id (avoid concurrent session access)
@@ -2533,6 +2566,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 "worker_name": worker_name,
                 "event_id": event.event_id,
                 "sender_id": sender_id,
+                "otel_carrier": (event.source.get("content", {}) or {}).get("com.agentteams.trace", {}),
+                "otel_received_at_ns": time.time_ns(),
             },
         }
 
@@ -2951,6 +2986,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 "thread_root_event_id": event.event_id,
                 "sender_id": sender_id,
                 "is_thread_event": is_thread_event,
+                "otel_carrier": (event.source.get("content", {}) or {}).get("com.agentteams.trace", {}),
+                "otel_received_at_ns": time.time_ns(),
             },
         }
         if teamharness_self_trigger is not None:
@@ -3129,6 +3166,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 "thread_root_event_id": event.event_id,
                 "sender_id": sender_id,
                 "is_thread_event": is_thread_event,
+                "otel_carrier": (event.source.get("content", {}) or {}).get("com.agentteams.trace", {}),
+                "otel_received_at_ns": time.time_ns(),
             },
         }
 
@@ -3291,6 +3330,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
     def build_agent_request_from_native(self, native_payload: Any) -> Any:
         parts = native_payload.get("content_parts", [])
         meta = native_payload.get("meta", {})
+        if os.getenv("AGENTTEAMS_OTEL_ENABLED", "").lower() in ("true", "1"):
+            # BaseChannel shallow-copies meta before Runtime.run starts.
+            meta.setdefault("otel_delivery", {})
         sender_id = native_payload.get("sender_id", "")
         room_id = meta.get("room_id", sender_id)
         session_id = f"matrix:{room_id}"
@@ -4421,6 +4463,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         if stream_type == "message":
             send_meta[_MATRIX_STREAMING_FINAL_TEXT_KEY] = text
 
+    @_with_trace_reply
     async def send_event(
         self,
         *,
@@ -4638,6 +4681,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
             or meta_dict.get("event_id"),
             "sender_id": sender_id,
             "send_gate_retrigger": True,
+            "otel_carrier": ((meta_dict.get("otel_delivery") or {}).get("otel_reply") or {}).get("carrier") or meta_dict.get("otel_carrier", {}),
+            "otel_received_at_ns": time.time_ns(),
         }
         # Reuse the in-flight thread-root placeholder: carrying the root id
         # over makes the retriggered turn edit the same message instead of
@@ -4683,6 +4728,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
             await self._send_typing(room_id, True)
             self._enqueue(payload)
 
+    @_with_trace_reply
     async def _on_process_completed(
         self,
         request: Any,
@@ -4691,6 +4737,18 @@ class AgentTeamsMatrixChannel(BaseChannel):
     ) -> None:
         """Edit thread root with final reply, or send directly if no thread."""
         gate_action, gate_new_count = self._evaluate_send_gate(send_meta, to_handle)
+        if os.getenv("AGENTTEAMS_OTEL_ENABLED", "").lower() in ("true", "1"):
+            try:
+                from at_telemetry import operation
+            except ImportError:
+                pass
+            else:
+                with operation("matrix.delivery_decision", attributes={
+                    "agentteams.delivery.action": gate_action,
+                    "agentteams.delivery.new_events": gate_new_count,
+                    "langfuse.observation.level": "WARNING" if gate_action == "retrigger" else "DEFAULT",
+                }):
+                    pass
         if gate_action == "retrigger":
             await self._retrigger_for_new_context(send_meta, to_handle, gate_new_count)
             return
@@ -4967,6 +5025,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
     # Markdown→HTML (formatted_body); m.mentions when meta has sender_id.
     # ------------------------------------------------------------------
 
+    @_with_trace_reply
     async def send(
         self,
         to_handle: str,
@@ -5050,6 +5109,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
     # Outgoing send — media
     # ------------------------------------------------------------------
 
+    @_with_trace_reply
     async def send_media(
         self,
         to_handle: str,

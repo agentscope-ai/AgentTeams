@@ -17,6 +17,7 @@ set -e
 # unchanged.
 ENV_LIB="${AGENTTEAMS_ENV_LIB:-/opt/agentteams/scripts/lib/agentteams-env.sh}"
 source "${ENV_LIB}"
+export AGENTTEAMS_OTEL_RUNTIME=qwenpaw
 
 WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"
 WORKER_CR_NAME="${AGENTTEAMS_WORKER_CR_NAME:-${WORKER_NAME}}"
@@ -78,7 +79,7 @@ export QWENPAW_LLM_STREAM_IDLE_TIMEOUT="${QWENPAW_LLM_STREAM_IDLE_TIMEOUT:-${AGE
 
 # Configure LoongSuite observability plugin if tracing is enabled.
 CMS_TRACES_ENABLED="$(echo "${AGENTTEAMS_CMS_TRACES_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')"
-if [ "${CMS_TRACES_ENABLED}" = "true" ]; then
+if [ "${CMS_TRACES_ENABLED}" = "true" ] && ! _agentteams_truthy "${AGENTTEAMS_OTEL_ENABLED:-false}"; then
     log "Configuring CoPaw CMS plugin..."
     LOONGSUITE_DIR="${HOME}/.loongsuite"
     mkdir -p "${LOONGSUITE_DIR}"

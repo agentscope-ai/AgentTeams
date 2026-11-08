@@ -10,6 +10,7 @@ on:
       - 'Makefile'
       - '.github/workflows/build.yml'
       - '.github/workflows/build-image.yml'
+      - '.github/workflows/build-openclaw-base.yml'
       - '.github/workflows/helm-lint.yml'
       - 'tests/test-build-workflows.py'
       - '.github/workflows/build-rc.yml'
@@ -18,6 +19,10 @@ on:
       - 'openhuman/scripts/openhuman-worker-entrypoint.sh'
       - 'tests/check-agentteams-rename-defaults.sh'
       - 'tests/check-installer-pre-1.2-env-compat.sh'
+      - 'tests/check-installer-controller-url.sh'
+      - 'tests/check-installer-presign-endpoint.sh'
+      - 'tests/check-plugin-release-tag.sh'
+      - 'plugins/scripts/check-release-tag.sh'
       - 'tests/check-installer-wasm-registry.sh'
       - 'tests/check-installer-wasm-registry.ps1'
       - 'tests/check-custom-llm-endpoint.sh'
@@ -47,6 +52,7 @@ on:
       - 'tests/lib/test29-readiness.sh'
       - 'hack/local-k8s-up.sh'
       - 'tests/check-create-project-grant-admin.sh'
+      - 'tests/check-create-project-team.sh'
       - 'manager/agent/skills/project-management/**'
       - 'manager/agent/skills/coding-cli-management/**'
       - 'manager/agent/worker-skills/coding-cli/**'
@@ -72,6 +78,13 @@ jobs:
 
       - name: Check pre-v1.2 installer compatibility
         run: bash tests/check-installer-pre-1.2-env-compat.sh
+
+      - name: Check installer controller URL contract
+        run: bash tests/check-installer-controller-url.sh
+      - name: Check installer presign endpoint contract
+        run: bash tests/check-installer-presign-endpoint.sh
+      - name: Check plugin release tag controls
+        run: bash tests/check-plugin-release-tag.sh
 
       - name: Check Bash installer WASM registry
         run: bash tests/check-installer-wasm-registry.sh
@@ -132,6 +145,9 @@ jobs:
 
       - name: Check create-project grant-admin wiring
         run: bash tests/check-create-project-grant-admin.sh
+
+      - name: Check create-project --team roster and join reporting
+        run: bash tests/check-create-project-team.sh
 
       - name: Check coding-cli Qoder PAT and .processing guard
         run: bash tests/check-coding-cli-qoder-pat-processing.sh

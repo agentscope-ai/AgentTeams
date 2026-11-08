@@ -323,6 +323,26 @@ class FakeProjectStorage:
             return {"ok": True, "exists": path in self.remote}
         return {"ok": True}
 
+    def commit_task(
+        self,
+        task_id: str,
+        meta: dict[str, Any],
+        etag: str | None,
+        team: str = "",
+        if_none_match: bool = False,
+    ) -> dict[str, Any]:
+        """The fake ``_commit_task_meta``: a strict CAS on the task object
+        (create-if-absent when ``if_none_match``: an existing object is a
+        conflict, an absent one is created)."""
+        path = f"shared/tasks/{task_id}/meta.json"
+        self.commit_calls += 1
+        self.commits.append((task_id, dict(meta)))
+        current = self._etag(path)
+        if current is not None and current != etag:
+            return {"ok": False, "conflict": True, "error": "409"}
+        self.remote[path] = dict(meta)
+        return {"ok": True, "etag": self._etag(path)}
+
     def commit(self, project_id: str, meta: dict[str, Any], etag: str) -> dict[str, Any]:
         """The fake ``_commit_project_meta``: a strict CAS against the
         store, in the read -> commit -> verify window order."""
@@ -358,6 +378,18 @@ def _install_sync_fakes(
     controller's conditional commit (module global on server.sync)."""
     monkeypatch.setattr(server, "_filesync", storage)
     monkeypatch.setattr(server.sync, "_commit_project_meta", storage.commit)
+    # The W2 Task guards pull the authoritative task before a cross-actor
+    # write (ack/submit/review). These tests model a task that already
+    # exists in shared storage, so the pull succeeds as a no-op and the
+    # local copy stays authoritative: the pause semantics under test are
+    # the project gate, not the task-read failure path (covered by the
+    # protocol-guard suite).
+    monkeypatch.setattr(server, "_pull_task", lambda arguments, task_id: True)
+    monkeypatch.setattr(server, "_remote_task_absent", lambda arguments, task_id: False)
+    # The task meta commit is the conditional, version-bound path too; the
+    # fake models both endpoints so a delegate/ack/submit in these tests
+    # never reaches the real controller client.
+    monkeypatch.setattr(server.sync, "_commit_task_meta", storage.commit_task)
 
 
 def _loop(
@@ -875,7 +907,13 @@ def test_pause_between_pull_and_submit_survives_write_back(
 
     assert submit["ok"] is True
     assert submit["task"]["status"] == "submitted"
-    assert storage.commit_calls == 1
+    # Two commits: the create-if-absent task meta (its first write-back —
+    # the P1 shape, conditional since #1498 instead of an unguarded push)
+    # and the project meta (the #1402 conditional commit under the pause
+    # merge).
+    assert storage.commit_calls == 2
+    task_meta = storage.remote["shared/tasks/pg-9-inflight/meta.json"]
+    assert task_meta["status"] == "submitted"
     final = storage.remote["shared/projects/pg-9/meta.json"]
     assert final["status"] == "paused"
     loop = final["loop"]
@@ -1014,7 +1052,10 @@ def test_submit_without_pause_keeps_worker_fields(
     assert loop["tasks"][0]["status"] == "submitted"
     assert loop["tasks"][0]["assigned_to"] == WORKER
     assert final["title"] == "Pause gate pg-12"
-    assert storage.commit_calls == 1
+    # Two commits: the create-if-absent task meta (its first write-back)
+    # and the project meta.
+    assert storage.commit_calls == 2
+    assert storage.remote["shared/tasks/pg-12-inflight/meta.json"]["status"] == "submitted"
     # The verify step re-read the live ETag after the commit (the removed
     # early-return pin): at least the commit's If-Match read plus the
     # verify re-read, never just the commit's.
@@ -1148,10 +1189,12 @@ def test_pause_between_body_read_and_etag_is_caught_by_versioned_read(
 
     assert submit["ok"] is True
     assert submit["task"]["status"] == "submitted"
-    # One commit: the pause was merged into the FIRST conditional commit
-    # (via the re-read), not lost to a stale body committed under a
-    # fresh ETag — and not papered over by a 409 retry.
-    assert storage.commit_calls == 1
+    # Two commits: the create-if-absent task meta (its first write-back)
+    # plus ONE project commit — the pause was merged into the first
+    # project conditional commit (via the re-read), not lost to a stale
+    # body committed under a fresh ETag, and not papered over by a 409
+    # retry.
+    assert storage.commit_calls == 2
     final = storage.remote["shared/projects/pg-15/meta.json"]
     assert final["status"] == "paused"
     loop = final["loop"]

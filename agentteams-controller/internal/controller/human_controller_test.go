@@ -86,6 +86,38 @@ func newHuman(name string, spec v1beta1.HumanSpec) *v1beta1.Human {
 	}
 }
 
+func TestHumanReconciler_CreateConcurrentSpecUpdateKeepsInitialPassword(t *testing.T) {
+	rig := newHumanRig(t, newHuman("alice", v1beta1.HumanSpec{PermissionLevel: 3}))
+	rig.prov.AppServiceEnabled = true
+	rig.prov.EnsureHumanUserFn = func(ctx context.Context, name string) (*service.HumanCredentials, error) {
+		var current v1beta1.Human
+		key := types.NamespacedName{Name: name, Namespace: "default"}
+		if err := rig.client.Get(ctx, key, &current); err != nil {
+			return nil, err
+		}
+		// Model an API capability update after the finalizer was written,
+		// while Matrix registration is still in flight.
+		current.Spec.Capabilities = []string{"file_sync"}
+		if err := rig.client.Update(ctx, &current); err != nil {
+			return nil, err
+		}
+		return &service.HumanCredentials{UserID: "@alice:localhost", AccessToken: "token", Password: "initial-password", Created: true}, nil
+	}
+	out, _, err := rig.reconcile("alice")
+	if err != nil {
+		t.Fatalf("create with concurrent capability update: %v", err)
+	}
+	if out.Status.InitialPassword != "initial-password" || out.Status.MatrixUserID != "@alice:localhost" || out.Status.Phase != "Active" {
+		t.Fatalf("initial provisioning status was not preserved")
+	}
+	if len(out.Spec.Capabilities) != 1 || out.Spec.Capabilities[0] != "file_sync" {
+		t.Fatal("status patch overwrote the concurrent spec update")
+	}
+	if len(rig.prov.Calls.EnsureHumanUser) != 1 {
+		t.Fatal("Matrix account was provisioned more than once")
+	}
+}
+
 func newReadyWorker(name, roomID string) *v1beta1.Worker {
 	w := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"}}
 	w.Status.RoomID = roomID

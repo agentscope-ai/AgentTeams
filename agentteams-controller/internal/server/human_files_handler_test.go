@@ -3,6 +3,8 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -163,6 +165,8 @@ func TestValidateHumanFilePath(t *testing.T) {
 		{"reserved .trash exact", ".trash", "", false},
 		{"reserved .sync rejected", ".sync/state.json", "", false},
 		{"reserved .control rejected", ".control/quota.json", "", false},
+		{"reserved .uploads rejected", ".uploads/sess/a.bin", "", false},
+		{"reserved .uploads exact", ".uploads", "", false},
 		{"windows reserved CON", "CON", "", false},
 		{"windows reserved with ext", "con.txt", "", false},
 		{"windows reserved COM1 case-insensitive", "COM1", "", false},
@@ -1580,21 +1584,21 @@ func TestHumanFiles_QuotaSamePathReplacementReservations(t *testing.T) {
 	}
 
 	req1 := hfReq(t, http.MethodPut, "alice", "first.txt", hfSelf(), nil)
-	a1, status, msg := h1.authorizeHumanFile(req1.Context(), "alice", false)
+	a1, status, msg := h1.authorizeHumanFile(req1.Context(), "alice", req1.PathValue("path"), true, false)
 	if a1 == nil {
 		t.Fatalf("authorize h1: %d %s", status, msg)
 	}
-	token1, status, msg := h1.reserveQuota(req1.Context(), a1, "alice", "first.txt", 10, 1)
+	token1, status, _, msg := h1.reserveQuota(req1.Context(), a1, "alice", "first.txt", 10, 1)
 	if status != 0 || token1 == "" {
 		t.Fatalf("first reservation: status=%d token=%q msg=%s", status, token1, msg)
 	}
 
 	req2 := hfReq(t, http.MethodPut, "alice", "first.txt", hfSelf(), nil)
-	a2, status, msg := h2.authorizeHumanFile(req2.Context(), "alice", false)
+	a2, status, msg := h2.authorizeHumanFile(req2.Context(), "alice", req2.PathValue("path"), true, false)
 	if a2 == nil {
 		t.Fatalf("authorize h2: %d %s", status, msg)
 	}
-	token2, status, msg := h2.reserveQuota(req2.Context(), a2, "alice", "first.txt", 10, 1)
+	token2, status, _, msg := h2.reserveQuota(req2.Context(), a2, "alice", "first.txt", 10, 1)
 	if status != 0 || token2 == "" {
 		t.Fatalf("second reservation: status=%d token=%q msg=%s", status, token2, msg)
 	}
@@ -1639,15 +1643,15 @@ func TestHumanFiles_QuotaSamePathReplacementCommitOrder(t *testing.T) {
 		t.Fatalf("seed file: %d %s", rec.Code, rec.Body.String())
 	}
 	req := hfReq(t, http.MethodPut, "alice", "first.txt", hfSelf(), nil)
-	a, status, msg := h.authorizeHumanFile(req.Context(), "alice", false)
+	a, status, msg := h.authorizeHumanFile(req.Context(), "alice", req.PathValue("path"), true, false)
 	if a == nil {
 		t.Fatalf("authorize: %d %s", status, msg)
 	}
-	token1, status, msg := h.reserveQuota(req.Context(), a, "alice", "first.txt", 10, 5)
+	token1, status, _, msg := h.reserveQuota(req.Context(), a, "alice", "first.txt", 10, 5)
 	if status != 0 {
 		t.Fatalf("first reserve: %d %s", status, msg)
 	}
-	token2, status, msg := h.reserveQuota(req.Context(), a, "alice", "first.txt", 10, 1)
+	token2, status, _, msg := h.reserveQuota(req.Context(), a, "alice", "first.txt", 10, 1)
 	if status != 0 {
 		t.Fatalf("second reserve: %d %s", status, msg)
 	}
@@ -1679,11 +1683,11 @@ func TestHumanFiles_QuotaSetPreservesInFlightReservation(t *testing.T) {
 		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
 	}
 	req := hfReq(t, http.MethodPut, "alice", "a.txt", hfSelf(), nil)
-	access, status, msg := h1.authorizeHumanFile(req.Context(), "alice", false)
+	access, status, msg := h1.authorizeHumanFile(req.Context(), "alice", req.PathValue("path"), true, false)
 	if access == nil {
 		t.Fatalf("authorize: %d %s", status, msg)
 	}
-	token, status, msg := h1.reserveQuota(req.Context(), access, "alice", "a.txt", 0, 6)
+	token, status, _, msg := h1.reserveQuota(req.Context(), access, "alice", "a.txt", 0, 6)
 	if status != 0 || token == "" {
 		t.Fatalf("reserve: status=%d token=%q msg=%s", status, token, msg)
 	}
@@ -1874,22 +1878,22 @@ func TestHumanFiles_QuotaLargerOlderOutstandingReplacementStaysAccounted(t *test
 
 	// Handler A reserves 1 -> 10 and stops before the object write.
 	req1 := hfReq(t, http.MethodPut, "alice", "first.txt", hfSelf(), nil)
-	a1, status, msg := h1.authorizeHumanFile(req1.Context(), "alice", false)
+	a1, status, msg := h1.authorizeHumanFile(req1.Context(), "alice", req1.PathValue("path"), true, false)
 	if a1 == nil {
 		t.Fatalf("authorize h1: %d %s", status, msg)
 	}
-	token1, status, msg := h1.reserveQuota(req1.Context(), a1, "alice", "first.txt", 1, 10)
+	token1, status, _, msg := h1.reserveQuota(req1.Context(), a1, "alice", "first.txt", 1, 10)
 	if status != 0 || token1 == "" {
 		t.Fatalf("A reservation: status=%d token=%q msg=%s", status, token1, msg)
 	}
 
 	// Handler B reserves 1 -> 1, lands, and commits.
 	req2 := hfReq(t, http.MethodPut, "alice", "first.txt", hfSelf(), nil)
-	a2, status, msg := h2.authorizeHumanFile(req2.Context(), "alice", false)
+	a2, status, msg := h2.authorizeHumanFile(req2.Context(), "alice", req2.PathValue("path"), true, false)
 	if a2 == nil {
 		t.Fatalf("authorize h2: %d %s", status, msg)
 	}
-	token2, status, msg := h2.reserveQuota(req2.Context(), a2, "alice", "first.txt", 1, 1)
+	token2, status, _, msg := h2.reserveQuota(req2.Context(), a2, "alice", "first.txt", 1, 1)
 	if status != 0 || token2 == "" {
 		t.Fatalf("B reservation: status=%d token=%q msg=%s", status, token2, msg)
 	}
@@ -1991,21 +1995,21 @@ func TestHumanFiles_QuotaReverseInterleavedCommitStaysAccounted(t *testing.T) {
 	}
 
 	req1 := hfReq(t, http.MethodPut, "alice", "first.txt", hfSelf(), nil)
-	a1, status, msg := h1.authorizeHumanFile(req1.Context(), "alice", false)
+	a1, status, msg := h1.authorizeHumanFile(req1.Context(), "alice", req1.PathValue("path"), true, false)
 	if a1 == nil {
 		t.Fatalf("authorize h1: %d %s", status, msg)
 	}
-	token1, status, msg := h1.reserveQuota(req1.Context(), a1, "alice", "first.txt", 1, 10)
+	token1, status, _, msg := h1.reserveQuota(req1.Context(), a1, "alice", "first.txt", 1, 10)
 	if status != 0 || token1 == "" {
 		t.Fatalf("A reservation: status=%d token=%q msg=%s", status, token1, msg)
 	}
 
 	req2 := hfReq(t, http.MethodPut, "alice", "first.txt", hfSelf(), nil)
-	a2, status, msg := h2.authorizeHumanFile(req2.Context(), "alice", false)
+	a2, status, msg := h2.authorizeHumanFile(req2.Context(), "alice", req2.PathValue("path"), true, false)
 	if a2 == nil {
 		t.Fatalf("authorize h2: %d %s", status, msg)
 	}
-	token2, status, msg := h2.reserveQuota(req2.Context(), a2, "alice", "first.txt", 1, 1)
+	token2, status, _, msg := h2.reserveQuota(req2.Context(), a2, "alice", "first.txt", 1, 1)
 	if status != 0 || token2 == "" {
 		t.Fatalf("B reservation: status=%d token=%q msg=%s", status, token2, msg)
 	}
@@ -2057,11 +2061,11 @@ func TestHumanFiles_QuotaLostTokenFallback(t *testing.T) {
 		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
 	}
 	req := hfReq(t, http.MethodPut, "alice", "a.txt", hfSelf(), nil)
-	a, status, msg := h.authorizeHumanFile(req.Context(), "alice", false)
+	a, status, msg := h.authorizeHumanFile(req.Context(), "alice", req.PathValue("path"), true, false)
 	if a == nil {
 		t.Fatalf("authorize: %d %s", status, msg)
 	}
-	token, status, msg := h.reserveQuota(req.Context(), a, "alice", "a.txt", 0, 6)
+	token, status, _, msg := h.reserveQuota(req.Context(), a, "alice", "a.txt", 0, 6)
 	if status != 0 || token == "" {
 		t.Fatalf("reserve: status=%d token=%q msg=%s", status, token, msg)
 	}
@@ -2201,11 +2205,11 @@ func TestHumanFiles_QuotaStatFaultDoesNotDropInFlightCharge(t *testing.T) {
 		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
 	}
 	req := hfReq(t, http.MethodPut, "alice", "first.txt", hfSelf(), nil)
-	access, status, msg := h1.authorizeHumanFile(req.Context(), "alice", false)
+	access, status, msg := h1.authorizeHumanFile(req.Context(), "alice", req.PathValue("path"), true, false)
 	if access == nil {
 		t.Fatalf("authorize: %d %s", status, msg)
 	}
-	token, status, msg := h1.reserveQuota(req.Context(), access, "alice", "first.txt", 0, 6)
+	token, status, _, msg := h1.reserveQuota(req.Context(), access, "alice", "first.txt", 0, 6)
 	if status != 0 || token == "" {
 		t.Fatalf("reserve: status=%d token=%q msg=%s", status, token, msg)
 	}
@@ -2291,6 +2295,22 @@ func (c *concurrentPutOSS) GetObject(ctx context.Context, key string) ([]byte, e
 	return c.Memory.GetObject(ctx, key)
 }
 
+// OpenRange is the GET path's primitive now: a ranged/full read is opened
+// against the snapshot ETag before any byte is served. Inject the competing
+// put here, then let the fake enforce the ETag match, so the handler must
+// re-stat and serve the new version (rather than mixing A's bytes with B's
+// validator). The legacy GetObject override above remains for PUT's
+// read-modify-write path.
+func (c *concurrentPutOSS) OpenRange(ctx context.Context, key string, start, length int64, matchETag string) (io.ReadCloser, error) {
+	if !c.used && key == c.key {
+		c.used = true
+		if err := c.Memory.PutObject(ctx, c.key, c.injected); err != nil {
+			return nil, err
+		}
+	}
+	return c.Memory.OpenRange(ctx, key, start, length, matchETag)
+}
+
 // multipartETagOSS reports one key's ETag in multipart form (md5-N), which
 // cannot be verified against the body locally and forces the double-read
 // consistency fallback in readFileSnapshot.
@@ -2310,6 +2330,37 @@ func (m *multipartETagOSS) StatMeta(ctx context.Context, key string) (oss.Object
 		}
 	}
 	return meta, nil
+}
+
+// OpenRange keeps the ranged reads consistent with the overridden StatMeta:
+// the wrapper is a RangeReader (via the embedded fake), so the GET path
+// opens the fake's key bound to the ETag the stat reports — and the
+// provider-side If-Match compares the multipart form, which the bare
+// embedded fake cannot emulate (it compares the plain MD5). The slice
+// semantics mirror Memory.OpenRange for every other key.
+func (m *multipartETagOSS) OpenRange(ctx context.Context, key string, start, length int64, matchETag string) (io.ReadCloser, error) {
+	if key != m.key {
+		return m.Memory.OpenRange(ctx, key, start, length, matchETag)
+	}
+	data, err := m.Memory.GetObject(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if matchETag != "" && matchETag != md5Hex(data)+"-3" {
+		return nil, oss.ErrPreconditionFailed
+	}
+	size := int64(len(data))
+	if start < 0 || start >= size {
+		return nil, oss.ErrRangeNotSatisfiable
+	}
+	end := size
+	if length > 0 {
+		end = start + length
+		if end > size {
+			end = size
+		}
+	}
+	return io.NopCloser(bytes.NewReader(data[start:end])), nil
 }
 
 // hfTrashIDs returns the valid trash entry ids currently present for a
@@ -2604,10 +2655,10 @@ func TestHumanFiles_PathLockExpiredLeaseCanBeStolen(t *testing.T) {
 	}
 }
 
-// TestHumanFiles_GetSnapshotHandlesMultipartETag verifies the fallback for
-// ETags that cannot be verified locally (multipart md5-N): the double-read
-// consistency check accepts a stable object and the GET still reports the
-// multipart ETag verbatim.
+// TestHumanFiles_GetSnapshotHandlesMultipartETag verifies the GET path for
+// ETags that cannot be verified locally (multipart md5-N): the stat reports
+// the multipart form, the ranged open binds to that same form, and the
+// GET still reports the multipart ETag verbatim (quoted on the wire).
 func TestHumanFiles_GetSnapshotHandlesMultipartETag(t *testing.T) {
 	base := ossfake.NewMemory()
 	ctx := context.Background()
@@ -2628,8 +2679,8 @@ func TestHumanFiles_GetSnapshotHandlesMultipartETag(t *testing.T) {
 	if !bytes.Equal(rec.Body.Bytes(), content) {
 		t.Fatalf("body = %q, want %q", rec.Body.Bytes(), content)
 	}
-	if got, want := rec.Result().Header.Get("ETag"), md5Hex(content)+"-3"; got != want {
-		t.Fatalf("ETag = %q, want the multipart form %q", got, want)
+	if got, want := rec.Result().Header.Get("ETag"), `"`+md5Hex(content)+`-3"`; got != want {
+		t.Fatalf("ETag = %q, want the quoted multipart form %q", got, want)
 	}
 }
 
@@ -2898,7 +2949,7 @@ func TestHumanFiles_TombstoneIsInvisible(t *testing.T) {
 	assertSoftDeleted(t, h, store, "alice", "gone.txt")
 
 	listReq := hfReq(t, http.MethodGet, "alice", "", hfSelf(), nil)
-	access, status, msg := h.authorizeHumanFile(listReq.Context(), "alice", false)
+	access, status, msg := h.authorizeHumanFile(listReq.Context(), "alice", listReq.PathValue("path"), false, false)
 	if access == nil {
 		t.Fatalf("authorize list: %d %s", status, msg)
 	}
@@ -2970,6 +3021,10 @@ func (s *stallRestoreTargetOSS) PutObjectIfMatchStrict(ctx context.Context, key 
 
 func (s *stallRestoreTargetOSS) ListObjectsDetailed(ctx context.Context, prefix string) ([]oss.ObjectInfo, error) {
 	return s.inner.ListObjectsDetailed(ctx, prefix)
+}
+
+func (s *stallRestoreTargetOSS) ListObjectsRecursive(ctx context.Context, prefix, startAfter string, limit int) ([]oss.ObjectInfo, string, error) {
+	return s.inner.ListObjectsRecursive(ctx, prefix, startAfter, limit)
 }
 
 func (s *stallRestoreTargetOSS) PutObject(ctx context.Context, key string, data []byte) error {
@@ -3175,6 +3230,10 @@ func (s *stallPurgeContentStatOSS) PutObjectIfMatchStrict(ctx context.Context, k
 
 func (s *stallPurgeContentStatOSS) ListObjectsDetailed(ctx context.Context, prefix string) ([]oss.ObjectInfo, error) {
 	return s.inner.ListObjectsDetailed(ctx, prefix)
+}
+
+func (s *stallPurgeContentStatOSS) ListObjectsRecursive(ctx context.Context, prefix, startAfter string, limit int) ([]oss.ObjectInfo, string, error) {
+	return s.inner.ListObjectsRecursive(ctx, prefix, startAfter, limit)
 }
 
 func (s *stallPurgeContentStatOSS) PutObject(ctx context.Context, key string, data []byte) error {
@@ -3462,5 +3521,1184 @@ func TestHumanFiles_QuotaUnverifiableUsageFailsClosed(t *testing.T) {
 	}
 	if rec := hfPutFile(t, h2, "alice", "victim.txt", hfSelf(), "012345"); rec.Code != http.StatusOK {
 		t.Fatalf("put after recovery: got %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// --- Presigned (direct) uploads, #P4a ---------------------------------------
+
+// hfPostFile runs a POST through the files dispatcher (postFile),
+// optionally with a query string (presign=1 / ttl / sha256).
+func hfPostFile(t *testing.T, hfh *humanFilesHandler, name, path string, caller *authpkg.CallerIdentity, query string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := hfReq(t, http.MethodPost, name, path, caller, nil)
+	if query != "" {
+		req.URL.RawQuery = query
+	}
+	rec := httptest.NewRecorder()
+	hfh.postFile(rec, req)
+	return rec
+}
+
+// hfGetUsed returns GET /quota's live usedBytes for alice.
+func hfGetUsed(t *testing.T, hfh *humanFilesHandler, name string) int64 {
+	t.Helper()
+	rec := hfGetQuota(t, hfh, name, hfSelf())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get quota: %d %s", rec.Code, rec.Body.String())
+	}
+	var q humanQuotaResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &q); err != nil {
+		t.Fatal(err)
+	}
+	return q.UsedBytes
+}
+
+func TestHumanFiles_PresignAccessControl(t *testing.T) {
+	hfh, _, _ := newHumanFilesRig(t)
+	for _, tc := range []struct {
+		name   string
+		caller *authpkg.CallerIdentity
+	}{
+		{"another human", hfBob()},
+		{"team leader", hfLeader()},
+		{"worker", hfWorker()},
+		{"ghost human", hfCaller(authpkg.RoleHuman, "ghost")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := hfPostFile(t, hfh, "alice", "big.bin", tc.caller, "presign=1")
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("presign: got %d, want 404: %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+// hfPresign issues a presign as the file's owner and decodes the response.
+func hfPresign(t *testing.T, hfh *humanFilesHandler, name, path, query string) humanPresignResponse {
+	t.Helper()
+	rec := hfPostFile(t, hfh, name, path, hfSelf(), query)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("presign: %d %s", rec.Code, rec.Body.String())
+	}
+	var pr humanPresignResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &pr); err != nil {
+		t.Fatal(err)
+	}
+	return pr
+}
+
+// hfStagingKey returns the object key the presigned URL targets: the fake
+// store answers "https://fake.example/<key>", and the key must sit in the
+// hidden .uploads/ area, never in files/.
+func hfStagingKey(t *testing.T, pr *humanPresignResponse) string {
+	t.Helper()
+	key := strings.TrimPrefix(pr.URL, "https://fake.example/")
+	if !strings.HasPrefix(key, "humans/") || !strings.Contains(key, "/.uploads/") {
+		t.Fatalf("presigned url %q does not target the hidden staging area", pr.URL)
+	}
+	return key
+}
+
+// hfGetLive fetches a file through the ordinary GET path and returns the
+// raw response.
+func hfGetLive(t *testing.T, hfh *humanFilesHandler, name, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	hfh.getFile(rec, hfReq(t, http.MethodGet, name, path, hfSelf(), nil))
+	return rec
+}
+
+func TestHumanFiles_PresignIssue(t *testing.T) {
+	hfh, store, _ := newHumanFilesRig(t)
+	ctx := context.Background()
+
+	// Default TTL: the URL targets the STAGING area (never the final
+	// path), the 64 MiB release cap, and an expiry about five minutes out.
+	rec := hfPostFile(t, hfh, "alice", "big.bin", hfSelf(), "presign=1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("presign: %d %s", rec.Code, rec.Body.String())
+	}
+	var pr humanPresignResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &pr); err != nil {
+		t.Fatal(err)
+	}
+	if pr.Method != "PUT" {
+		t.Fatalf("method = %q, want PUT", pr.Method)
+	}
+	stageKey := strings.TrimPrefix(pr.URL, "https://fake.example/")
+	if !strings.HasPrefix(stageKey, "humans/alice/.uploads/") {
+		t.Fatalf("url %q must target the staging area", pr.URL)
+	}
+	if !strings.HasSuffix(stageKey, "/big.bin") {
+		t.Fatalf("url %q must carry the file name", pr.URL)
+	}
+	session := strings.TrimSuffix(strings.TrimPrefix(stageKey, "humans/alice/.uploads/"), "/big.bin")
+	if session == "" || strings.Contains(session, "/") {
+		t.Fatalf("url %q has no opaque session segment", pr.URL)
+	}
+	if pr.MaxBytes != defaultHumanFilePresignMaxBytes {
+		t.Fatalf("maxBytes = %d, want %d", pr.MaxBytes, defaultHumanFilePresignMaxBytes)
+	}
+	if pr.Fields == nil {
+		t.Fatal("fields must be a (possibly empty) object, not null")
+	}
+	expiresAt, err := time.Parse(time.RFC3339, pr.ExpiresAt)
+	if err != nil {
+		t.Fatalf("expiresAt %q is not RFC3339: %v", pr.ExpiresAt, err)
+	}
+	if d := expiresAt.Sub(time.Now().UTC()); d < 4*time.Minute || d > 6*time.Minute {
+		t.Fatalf("default ttl = %v, want ~5m", d)
+	}
+
+	// The issue is recorded so the commit binds to this session; nothing is
+	// published or counted before the commit.
+	state, _, serr := hfh.readPresignCommitState(ctx, "alice")
+	if serr != nil {
+		t.Fatal(serr)
+	}
+	if got := state.Commits["big.bin"].Session; got != session {
+		t.Fatalf("recorded session = %q, want %q", got, session)
+	}
+	if _, err := store.StatMeta(ctx, "humans/alice/files/big.bin"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("no object may exist at the final path before commit: %v", err)
+	}
+	if got := hfGetUsed(t, hfh, "alice"); got != 0 {
+		t.Fatalf("usedBytes = %d, want 0 before commit", got)
+	}
+
+	// A custom ?ttl= is honored within the cap.
+	rec = hfPostFile(t, hfh, "alice", "other.bin", hfSelf(), "presign=1&ttl=120")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("presign ttl=120: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &pr); err != nil {
+		t.Fatal(err)
+	}
+	expiresAt, err = time.Parse(time.RFC3339, pr.ExpiresAt)
+	if err != nil {
+		t.Fatalf("expiresAt %q is not RFC3339: %v", pr.ExpiresAt, err)
+	}
+	if d := expiresAt.Sub(time.Now().UTC()); d < 110*time.Second || d > 130*time.Second {
+		t.Fatalf("requested ttl = %v, want ~2m", d)
+	}
+}
+
+func TestHumanFiles_PresignParamValidation(t *testing.T) {
+	hfh, _, _ := newHumanFilesRig(t)
+	for _, q := range []string{
+		"presign=1&ttl=abc",
+		"presign=1&ttl=0",
+		"presign=1&ttl=-5",
+		"presign=1&ttl=999999", // above the 60m cap
+		"presign=1&sha256=zzz",
+		"presign=1&sha256=" + strings.Repeat("a", 63), // 63 hex chars
+	} {
+		rec := hfPostFile(t, hfh, "alice", "big.bin", hfSelf(), q)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("presign %q: got %d, want 400: %s", q, rec.Code, rec.Body.String())
+		}
+	}
+	// A POST that is neither a presign nor a commit is a 404.
+	if rec := hfPostFile(t, hfh, "alice", "big.bin", hfSelf(), ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("plain POST: got %d, want 404: %s", rec.Code, rec.Body.String())
+	}
+	// A trailing slash names a directory, not a file.
+	if rec := hfPostFile(t, hfh, "alice", "dir/", hfSelf(), "presign=1"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("dir presign: got %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHumanFiles_PresignQuotaFull(t *testing.T) {
+	hfh, _, _ := newHumanFilesRig(t)
+	if rec := hfPutQuota(t, hfh, "alice", hfAdmin(), `{"quotaBytes":10}`); rec.Code != http.StatusOK {
+		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPutFile(t, hfh, "alice", "full.txt", hfSelf(), "0123456789"); rec.Code != http.StatusOK {
+		t.Fatalf("seed: %d %s", rec.Code, rec.Body.String())
+	}
+	// used == quota: no room left, so no URL is issued.
+	rec := hfPostFile(t, hfh, "alice", "more.bin", hfSelf(), "presign=1")
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("presign at quota: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+	var coded humanFileCodedError
+	if err := json.Unmarshal(rec.Body.Bytes(), &coded); err != nil {
+		t.Fatal(err)
+	}
+	if coded.Code != "quota_exceeded" {
+		t.Fatalf("code = %q, want quota_exceeded", coded.Code)
+	}
+}
+
+func TestHumanFiles_PresignUnsupportedStore(t *testing.T) {
+	hfh, store, _ := newHumanFilesRig(t)
+	hfh.oss = ossfake.NewNoPresign(store)
+	rec := hfPostFile(t, hfh, "alice", "big.bin", hfSelf(), "presign=1")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("presign on non-presign store: got %d, want 500: %s", rec.Code, rec.Body.String())
+	}
+	var coded humanFileCodedError
+	if err := json.Unmarshal(rec.Body.Bytes(), &coded); err != nil {
+		t.Fatal(err)
+	}
+	if coded.Code != "presign_unsupported" {
+		t.Fatalf("code = %q, want presign_unsupported", coded.Code)
+	}
+}
+
+func TestHumanFiles_CommitNormalAndIdempotent(t *testing.T) {
+	hfh, store, _ := newHumanFilesRig(t)
+	ctx := context.Background()
+	if rec := hfPutQuota(t, hfh, "alice", hfAdmin(), `{"quotaBytes":100}`); rec.Code != http.StatusOK {
+		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
+	}
+	// Issue, then simulate the client's direct upload landing at the
+	// staging key.
+	pr := hfPresign(t, hfh, "alice", "big.bin", "presign=1")
+	stageKey := hfStagingKey(t, &pr)
+	if err := store.PutObject(ctx, stageKey, []byte(strings.Repeat("x", 40))); err != nil {
+		t.Fatal(err)
+	}
+	// While the bytes sit in staging, the path is invisible: no object at
+	// the final key and no charge.
+	if _, err := store.StatMeta(ctx, "humans/alice/files/big.bin"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("no object may exist at the final path before commit: %v", err)
+	}
+	if got := hfGetLive(t, hfh, "alice", "big.bin"); got.Code != http.StatusNotFound {
+		t.Fatalf("GET before commit: got %d, want 404", got.Code)
+	}
+	if got := hfGetUsed(t, hfh, "alice"); got != 0 {
+		t.Fatalf("usedBytes before commit = %d, want 0", got)
+	}
+	rec := hfPostFile(t, hfh, "alice", "big.bin/commit", hfSelf(), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("commit: %d %s", rec.Code, rec.Body.String())
+	}
+	var cr humanPresignCommitResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &cr); err != nil {
+		t.Fatal(err)
+	}
+	if cr.Path != "files/big.bin" || cr.Size != 40 || cr.ETag == "" {
+		t.Fatalf("commit response = %+v", cr)
+	}
+	// The publish landed, is served by the ordinary GET, and the staging
+	// object is cleaned up.
+	if got := hfGetLive(t, hfh, "alice", "big.bin"); got.Code != http.StatusOK || got.Body.String() != strings.Repeat("x", 40) {
+		t.Fatalf("GET after commit: %d %q", got.Code, got.Body.String())
+	}
+	if _, err := store.StatMeta(ctx, stageKey); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("staging object must be removed after commit: %v", err)
+	}
+	if got := hfGetUsed(t, hfh, "alice"); got != 40 {
+		t.Fatalf("usedBytes after commit = %d, want 40", got)
+	}
+	// A repeated commit of the same version is a no-op: 200 again, and
+	// the charge is not doubled.
+	rec = hfPostFile(t, hfh, "alice", "big.bin/commit", hfSelf(), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("repeat commit: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := hfGetUsed(t, hfh, "alice"); got != 40 {
+		t.Fatalf("usedBytes after repeat commit = %d, want 40", got)
+	}
+	// Pin the idempotent path itself, not just its accounting effect: the
+	// repeat is audited as the idempotent action and the accounting action
+	// appears exactly once (the ledger baseline alone would also keep the
+	// charge flat, which is why this assertion exists).
+	var commits, idempotent int
+	for _, line := range auditEvents(t, store) {
+		switch eventFields(t, line)["action"] {
+		case "human_file_presign_commit":
+			commits++
+		case "human_file_presign_commit_idempotent":
+			idempotent++
+		}
+	}
+	if commits != 1 || idempotent != 1 {
+		t.Fatalf("audit accounting=%d idempotent=%d, want 1 and 1", commits, idempotent)
+	}
+}
+
+func TestHumanFiles_CommitSizeExceededStaysStaged(t *testing.T) {
+	t.Setenv("HUMAN_FILE_PRESIGN_MAX_BYTES", "100")
+	hfh, store, _ := newHumanFilesRig(t)
+	ctx := context.Background()
+
+	pr := hfPresign(t, hfh, "alice", "big.bin", "presign=1")
+	if pr.MaxBytes != 100 {
+		t.Fatalf("maxBytes = %d, want 100 (env override)", pr.MaxBytes)
+	}
+	stageKey := hfStagingKey(t, &pr)
+	// The direct upload lands over the limit.
+	if err := store.PutObject(ctx, stageKey, []byte(strings.Repeat("y", 150))); err != nil {
+		t.Fatal(err)
+	}
+	rec := hfPostFile(t, hfh, "alice", "big.bin/commit", hfSelf(), "")
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("commit over-limit: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+	var coded humanFileCodedError
+	if err := json.Unmarshal(rec.Body.Bytes(), &coded); err != nil {
+		t.Fatal(err)
+	}
+	if coded.Code != "size_exceeded" {
+		t.Fatalf("code = %q, want size_exceeded", coded.Code)
+	}
+	// The rejection is invisible: the staged object is kept (it ages out
+	// with the staging TTL), nothing lands at the final path, and nothing
+	// is accounted.
+	if _, err := store.StatMeta(ctx, stageKey); err != nil {
+		t.Fatalf("staged object must survive a size rejection: %v", err)
+	}
+	if _, err := store.StatMeta(ctx, "humans/alice/files/big.bin"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("no object may land at the final path: %v", err)
+	}
+	if got := hfGetUsed(t, hfh, "alice"); got != 0 {
+		t.Fatalf("usedBytes after rejection = %d, want 0", got)
+	}
+}
+
+func TestHumanFiles_CommitObjectMissing(t *testing.T) {
+	hfh, store, _ := newHumanFilesRig(t)
+	ctx := context.Background()
+	// No presign was ever issued: there is no session to commit.
+	rec := hfPostFile(t, hfh, "alice", "ghost.bin/commit", hfSelf(), "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("commit without presign: got %d, want 404: %s", rec.Code, rec.Body.String())
+	}
+	var coded humanFileCodedError
+	if err := json.Unmarshal(rec.Body.Bytes(), &coded); err != nil {
+		t.Fatal(err)
+	}
+	if coded.Code != "object_missing" {
+		t.Fatalf("code = %q, want object_missing", coded.Code)
+	}
+	// A presign was issued but the upload never landed.
+	pr := hfPresign(t, hfh, "alice", "late.bin", "presign=1")
+	stageKey := hfStagingKey(t, &pr)
+	if _, err := store.StatMeta(ctx, stageKey); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("staging object must not exist before the upload: %v", err)
+	}
+	rec = hfPostFile(t, hfh, "alice", "late.bin/commit", hfSelf(), "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("commit before upload: got %d, want 404: %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &coded); err != nil {
+		t.Fatal(err)
+	}
+	if coded.Code != "object_missing" {
+		t.Fatalf("code = %q, want object_missing", coded.Code)
+	}
+}
+
+func TestHumanFiles_CommitQuotaExceeded(t *testing.T) {
+	hfh, store, _ := newHumanFilesRig(t)
+	ctx := context.Background()
+	if rec := hfPutQuota(t, hfh, "alice", hfAdmin(), `{"quotaBytes":100}`); rec.Code != http.StatusOK {
+		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
+	}
+	pr := hfPresign(t, hfh, "alice", "big.bin", "presign=1")
+	stageKey := hfStagingKey(t, &pr)
+	if err := store.PutObject(ctx, stageKey, []byte(strings.Repeat("z", 150))); err != nil {
+		t.Fatal(err)
+	}
+	rec := hfPostFile(t, hfh, "alice", "big.bin/commit", hfSelf(), "")
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("commit over quota: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+	var coded humanFileCodedError
+	if err := json.Unmarshal(rec.Body.Bytes(), &coded); err != nil {
+		t.Fatal(err)
+	}
+	if coded.Code != "quota_exceeded" {
+		t.Fatalf("code = %q, want quota_exceeded", coded.Code)
+	}
+	// A quota rejection is not a publish: nothing lands at the final path,
+	// the staged object is kept (invisible, ages out with the staging TTL),
+	// and the usage is unchanged.
+	if _, err := store.StatMeta(ctx, "humans/alice/files/big.bin"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("no object may land at the final path: %v", err)
+	}
+	if got := hfGetLive(t, hfh, "alice", "big.bin"); got.Code != http.StatusNotFound {
+		t.Fatalf("GET after rejection: got %d, want 404", got.Code)
+	}
+	if _, err := store.StatMeta(ctx, stageKey); err != nil {
+		t.Fatalf("staged object must survive a quota rejection: %v", err)
+	}
+	if got := hfGetUsed(t, hfh, "alice"); got != 0 {
+		t.Fatalf("usedBytes after rejection = %d, want 0", got)
+	}
+}
+
+func TestHumanFiles_CommitDeltaAccounting(t *testing.T) {
+	hfh, store, _ := newHumanFilesRig(t)
+	ctx := context.Background()
+	// Quota 100 with 10 bytes already used: a replacement with 95 bytes
+	// must be gated on the delta (10 - 10 + 95 = 95 <= 100). Charging the
+	// full new size (10 + 95 = 105 > 100) would wrongly reject it.
+	if rec := hfPutQuota(t, hfh, "alice", hfAdmin(), `{"quotaBytes":100}`); rec.Code != http.StatusOK {
+		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPutFile(t, hfh, "alice", "a.txt", hfSelf(), "0123456789"); rec.Code != http.StatusOK {
+		t.Fatalf("seed: %d %s", rec.Code, rec.Body.String())
+	}
+	pr := hfPresign(t, hfh, "alice", "a.txt", "presign=1")
+	stageKey := hfStagingKey(t, &pr)
+	if err := store.PutObject(ctx, stageKey, []byte(strings.Repeat("r", 95))); err != nil {
+		t.Fatal(err)
+	}
+	// While the replacement sits in staging, the live version is served
+	// byte-for-byte intact and the usage is unchanged.
+	if got := hfGetLive(t, hfh, "alice", "a.txt"); got.Code != http.StatusOK || got.Body.String() != "0123456789" {
+		t.Fatalf("live file while staged: %d %q", got.Code, got.Body.String())
+	}
+	if got := hfGetUsed(t, hfh, "alice"); got != 10 {
+		t.Fatalf("usedBytes while staged = %d, want 10", got)
+	}
+	rec := hfPostFile(t, hfh, "alice", "a.txt/commit", hfSelf(), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delta commit: got %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if got := hfGetUsed(t, hfh, "alice"); got != 95 {
+		t.Fatalf("usedBytes after replacement = %d, want 95", got)
+	}
+	if got := hfGetLive(t, hfh, "alice", "a.txt"); got.Code != http.StatusOK || got.Body.String() != strings.Repeat("r", 95) {
+		t.Fatalf("published file: %d %q", got.Code, got.Body.String())
+	}
+}
+
+func TestHumanFiles_CommitChecksumVerification(t *testing.T) {
+	hfh, store, _ := newHumanFilesRig(t)
+	ctx := context.Background()
+	content := []byte(strings.Repeat("c", 40))
+	sum := sha256.Sum256(content)
+	digest := hex.EncodeToString(sum[:])
+
+	pr := hfPresign(t, hfh, "alice", "bin.dat", "presign=1")
+	stageKey := hfStagingKey(t, &pr)
+	if err := store.PutObject(ctx, stageKey, content); err != nil {
+		t.Fatal(err)
+	}
+	// A digest that does not match the staged bytes: 409; the bytes stay
+	// staged (invisible) and nothing lands at the final path.
+	rec := hfPostFile(t, hfh, "alice", "bin.dat/commit", hfSelf(), "sha256="+strings.Repeat("ab", 32))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("commit with bad digest: got %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	var coded humanFileCodedError
+	if err := json.Unmarshal(rec.Body.Bytes(), &coded); err != nil {
+		t.Fatal(err)
+	}
+	if coded.Code != "checksum_mismatch" {
+		t.Fatalf("code = %q, want checksum_mismatch", coded.Code)
+	}
+	if _, err := store.StatMeta(ctx, stageKey); err != nil {
+		t.Fatalf("staged object must survive a checksum rejection: %v", err)
+	}
+	if _, err := store.StatMeta(ctx, "humans/alice/files/bin.dat"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("no object may land at the final path: %v", err)
+	}
+	// The matching digest publishes and books the charge. The rejected
+	// commit left the session in flight, so the retry commits it.
+	rec = hfPostFile(t, hfh, "alice", "bin.dat/commit", hfSelf(), "sha256="+digest)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("commit with good digest: got %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if got := hfGetUsed(t, hfh, "alice"); got != 40 {
+		t.Fatalf("usedBytes after commit = %d, want 40", got)
+	}
+}
+
+// TestHumanFiles_PresignRejectedCommitKeepsLiveVersion is the maintainer's
+// replacement control: a larger replacement of a live file is staged, the
+// commit is rejected by the quota, and the live version must come back
+// byte-for-byte intact — while the staged bytes stay invisible to GET and
+// list.
+func TestHumanFiles_PresignRejectedCommitKeepsLiveVersion(t *testing.T) {
+	hfh, store, _ := newHumanFilesRig(t)
+	ctx := context.Background()
+	// Quota 10 with 9 bytes used: the presign pre-check still passes (the
+	// area is not yet full), but the 12-byte replacement would bring usage
+	// to 12 > 10, so the commit's quota gate rejects it.
+	if rec := hfPutQuota(t, hfh, "alice", hfAdmin(), `{"quotaBytes":10}`); rec.Code != http.StatusOK {
+		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPutFile(t, hfh, "alice", "a.txt", hfSelf(), "012345678"); rec.Code != http.StatusOK {
+		t.Fatalf("seed: %d %s", rec.Code, rec.Body.String())
+	}
+	pr := hfPresign(t, hfh, "alice", "a.txt", "presign=1")
+	stageKey := hfStagingKey(t, &pr)
+	// A 12-byte replacement staged: old 9, new 12, quota 10 -> rejected.
+	if err := store.PutObject(ctx, stageKey, []byte(strings.Repeat("r", 12))); err != nil {
+		t.Fatal(err)
+	}
+	rec := hfPostFile(t, hfh, "alice", "a.txt/commit", hfSelf(), "")
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("commit: got %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+	var coded humanFileCodedError
+	if err := json.Unmarshal(rec.Body.Bytes(), &coded); err != nil {
+		t.Fatal(err)
+	}
+	if coded.Code != "quota_exceeded" {
+		t.Fatalf("code = %q, want quota_exceeded", coded.Code)
+	}
+	// The live version is served byte-for-byte intact...
+	if got := hfGetLive(t, hfh, "alice", "a.txt"); got.Code != http.StatusOK || got.Body.String() != "012345678" {
+		t.Fatalf("live file after rejection: %d %q", got.Code, got.Body.String())
+	}
+	// ...the listing still shows only the live entry (the staging object
+	// is not a files/ entry), and the usage is unchanged.
+	list := httptest.NewRecorder()
+	hfh.getFile(list, hfReq(t, http.MethodGet, "alice", "", hfSelf(), nil))
+	if list.Code != http.StatusOK {
+		t.Fatalf("list: %d %s", list.Code, list.Body.String())
+	}
+	var lr humanFileListResponse
+	if err := json.Unmarshal(list.Body.Bytes(), &lr); err != nil {
+		t.Fatal(err)
+	}
+	if len(lr.Entries) != 1 || lr.Entries[0].Name != "a.txt" || lr.Entries[0].Size != 9 {
+		t.Fatalf("listing after rejection = %+v, want only a.txt (9)", lr.Entries)
+	}
+	if got := hfGetUsed(t, hfh, "alice"); got != 9 {
+		t.Fatalf("usedBytes after rejection = %d, want 9", got)
+	}
+	// The staged bytes themselves remain reachable only at the staging
+	// key, outside the file API.
+	if data, err := store.GetObject(ctx, stageKey); err != nil || string(data) != strings.Repeat("r", 12) {
+		t.Fatalf("staged object after rejection: %v %q", err, data)
+	}
+}
+
+// stallCommitPublishOSS is a pass-through storage client that blocks the
+// first PutObject for one key until the test releases it. The commit
+// handler makes that call when it publishes the staged bytes — after it
+// has taken the per-path lease, re-checked the session, and reserved the
+// quota — so the blocked window is exactly the lease hold that a
+// concurrent PUT or DELETE on the same path must observe as file_busy.
+type stallCommitPublishOSS struct {
+	inner   oss.StorageClient
+	key     string
+	entered chan struct{}
+	release chan struct{}
+	armed   bool
+}
+
+var _ oss.StorageClient = (*stallCommitPublishOSS)(nil)
+
+func (s *stallCommitPublishOSS) PutObject(ctx context.Context, key string, data []byte) error {
+	if s.armed && key == s.key {
+		s.armed = false
+		close(s.entered)
+		<-s.release
+	}
+	return s.inner.PutObject(ctx, key, data)
+}
+
+func (s *stallCommitPublishOSS) PresignUpload(ctx context.Context, key string, maxBytes int64, contentType, sha256Hex string, ttl time.Duration) (string, string, map[string]string, error) {
+	return s.inner.(oss.PresignUploader).PresignUpload(ctx, key, maxBytes, contentType, sha256Hex, ttl)
+}
+
+func (s *stallCommitPublishOSS) PutObjectIfMatchStrict(ctx context.Context, key string, data []byte, matchETag string) error {
+	return strictPut(ctx, s.inner, key, data, matchETag)
+}
+
+func (s *stallCommitPublishOSS) ListObjectsDetailed(ctx context.Context, prefix string) ([]oss.ObjectInfo, error) {
+	return s.inner.ListObjectsDetailed(ctx, prefix)
+}
+
+func (s *stallCommitPublishOSS) ListObjectsRecursive(ctx context.Context, prefix, startAfter string, limit int) ([]oss.ObjectInfo, string, error) {
+	return s.inner.ListObjectsRecursive(ctx, prefix, startAfter, limit)
+}
+
+func (s *stallCommitPublishOSS) PutObjectIfMatch(ctx context.Context, key string, data []byte, matchETag string) error {
+	return s.inner.PutObjectIfMatch(ctx, key, data, matchETag)
+}
+
+func (s *stallCommitPublishOSS) PutObjectIfMatchWithType(ctx context.Context, key string, data []byte, contentType, matchETag string) error {
+	return s.inner.PutObjectIfMatchWithType(ctx, key, data, contentType, matchETag)
+}
+
+func (s *stallCommitPublishOSS) PutObjectIfAbsent(ctx context.Context, key string, data []byte) error {
+	return s.inner.PutObjectIfAbsent(ctx, key, data)
+}
+
+func (s *stallCommitPublishOSS) PutFile(ctx context.Context, localPath, key string) error {
+	return s.inner.PutFile(ctx, localPath, key)
+}
+
+func (s *stallCommitPublishOSS) GetObject(ctx context.Context, key string) ([]byte, error) {
+	return s.inner.GetObject(ctx, key)
+}
+
+func (s *stallCommitPublishOSS) Stat(ctx context.Context, key string) error {
+	return s.inner.Stat(ctx, key)
+}
+
+func (s *stallCommitPublishOSS) StatMeta(ctx context.Context, key string) (oss.ObjectMeta, error) {
+	return s.inner.StatMeta(ctx, key)
+}
+
+func (s *stallCommitPublishOSS) DeleteObject(ctx context.Context, key string) error {
+	return s.inner.DeleteObject(ctx, key)
+}
+
+func (s *stallCommitPublishOSS) Mirror(ctx context.Context, src, dst string, opts oss.MirrorOptions) error {
+	return s.inner.Mirror(ctx, src, dst, opts)
+}
+
+func (s *stallCommitPublishOSS) ListObjects(ctx context.Context, prefix string) ([]string, error) {
+	return s.inner.ListObjects(ctx, prefix)
+}
+
+func (s *stallCommitPublishOSS) DeletePrefix(ctx context.Context, prefix string) error {
+	return s.inner.DeletePrefix(ctx, prefix)
+}
+
+// TestHumanFiles_PresignCommitPublishVsConcurrentMutation is the
+// maintainer's concurrency control: a commit paused between taking the
+// per-path lease and publishing the staged bytes. A concurrent in-API PUT
+// and DELETE on the same path must each be rejected with file_busy while
+// the publish is held — neither may half-write or delete the live file —
+// and the terminal state after the release is the published bytes, with
+// no stray trash entry and the delta-charged usage.
+func TestHumanFiles_PresignCommitPublishVsConcurrentMutation(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(t *testing.T, h *humanFilesHandler) *httptest.ResponseRecorder
+	}{
+		{"concurrent PUT", func(t *testing.T, h *humanFilesHandler) *httptest.ResponseRecorder {
+			t.Helper()
+			return hfPutFile(t, h, "alice", "race.bin", hfSelf(), "newer-content")
+		}},
+		{"concurrent DELETE", func(t *testing.T, h *humanFilesHandler) *httptest.ResponseRecorder {
+			t.Helper()
+			rec := httptest.NewRecorder()
+			h.deleteFile(rec, hfReq(t, http.MethodDelete, "alice", "race.bin", hfSelf(), nil))
+			return rec
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := ossfake.NewMemory()
+			stalled := &stallCommitPublishOSS{
+				inner:   base,
+				key:     "humans/alice/files/race.bin",
+				entered: make(chan struct{}),
+				release: make(chan struct{}),
+			}
+			_, _, k8s := newHumanFilesRig(t)
+			h := NewHumanFilesHandler(k8s, "default", stalled, audit.NewClient(base))
+			ctx := context.Background()
+
+			if rec := hfPutQuota(t, h, "alice", hfAdmin(), `{"quotaBytes":100}`); rec.Code != http.StatusOK {
+				t.Fatalf("put quota: %d %s", rec.Code, rec.Body.String())
+			}
+			if rec := hfPutFile(t, h, "alice", "race.bin", hfSelf(), "0123456789"); rec.Code != http.StatusOK {
+				t.Fatalf("seed: %d %s", rec.Code, rec.Body.String())
+			}
+			pr := hfPresign(t, h, "alice", "race.bin", "presign=1")
+			stageKey := hfStagingKey(t, &pr)
+			if err := base.PutObject(ctx, stageKey, []byte(strings.Repeat("n", 20))); err != nil {
+				t.Fatal(err)
+			}
+
+			// Start the commit: it stops once it has the lease and is
+			// about to publish the staged bytes.
+			stalled.armed = true
+			type commitResult struct {
+				code int
+				body string
+			}
+			commit := make(chan commitResult, 1)
+			go func() {
+				rec := httptest.NewRecorder()
+				h.postFile(rec, hfReq(t, http.MethodPost, "alice", "race.bin/commit", hfSelf(), nil))
+				commit <- commitResult{rec.Code, rec.Body.String()}
+			}()
+			select {
+			case <-stalled.entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("commit never reached the publish write")
+			}
+
+			// While the commit holds the lease mid-publish, the concurrent
+			// mutation must be rejected instead of applied.
+			rec := tc.mutate(t, h)
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("mutation in the window: got %d, want 409: %s", rec.Code, rec.Body.String())
+			}
+			var coded humanFileCodedError
+			if err := json.Unmarshal(rec.Body.Bytes(), &coded); err != nil {
+				t.Fatal(err)
+			}
+			if coded.Code != "file_busy" {
+				t.Fatalf("mutation code = %q, want file_busy", coded.Code)
+			}
+			// The live file is still the old bytes, and nothing was
+			// archived to the trash.
+			if got := hfGetLive(t, h, "alice", "race.bin"); got.Code != http.StatusOK || got.Body.String() != "0123456789" {
+				t.Fatalf("live file in the window: %d %q", got.Code, got.Body.String())
+			}
+			if ids := hfTrashIDs(t, base, "alice"); len(ids) != 0 {
+				t.Fatalf("trash in the window = %v, want empty", ids)
+			}
+
+			close(stalled.release)
+			select {
+			case res := <-commit:
+				if res.code != http.StatusOK {
+					t.Fatalf("commit: got %d, want 200: %s", res.code, res.body)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("commit did not finish after release")
+			}
+
+			// Terminal state: the staged bytes are live, the seed bytes
+			// are gone, the usage is the new size (delta against the
+			// 10-byte seed), and the staging object is cleaned up.
+			if got := hfGetLive(t, h, "alice", "race.bin"); got.Code != http.StatusOK || got.Body.String() != strings.Repeat("n", 20) {
+				t.Fatalf("published file: %d %q", got.Code, got.Body.String())
+			}
+			if got := hfGetUsed(t, h, "alice"); got != 20 {
+				t.Fatalf("usedBytes = %d, want 20", got)
+			}
+			if _, err := base.StatMeta(ctx, stageKey); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("staging object must be removed after commit: %v", err)
+			}
+			if ids := hfTrashIDs(t, base, "alice"); len(ids) != 0 {
+				t.Fatalf("terminal trash = %v, want empty", ids)
+			}
+		})
+	}
+}
+
+// TestHumanFiles_PresignCommitKeepsNewerSession is the maintainer's overlap
+// regression: pause commit A before it publishes, issue and upload B to the
+// same path, then finish A. The settlement must advance the Committed
+// baseline without erasing B's session — otherwise B's commit is answered as
+// an A retry (200) while GET keeps serving A's bytes.
+func TestHumanFiles_PresignCommitKeepsNewerSession(t *testing.T) {
+	base := ossfake.NewMemory()
+	stalled := &stallCommitPublishOSS{
+		inner:   base,
+		key:     "humans/alice/files/race.bin",
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	_, _, k8s := newHumanFilesRig(t)
+	h := NewHumanFilesHandler(k8s, "default", stalled, audit.NewClient(base))
+	ctx := context.Background()
+
+	if rec := hfPutQuota(t, h, "alice", hfAdmin(), `{"quotaBytes":1000}`); rec.Code != http.StatusOK {
+		t.Fatalf("put quota: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hfPutFile(t, h, "alice", "race.bin", hfSelf(), "old"); rec.Code != http.StatusOK {
+		t.Fatalf("seed: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Session A: sign, stage its bytes.
+	prA := hfPresign(t, h, "alice", "race.bin", "presign=1")
+	stageA := hfStagingKey(t, &prA)
+	if err := base.PutObject(ctx, stageA, []byte("content-from-A")); err != nil {
+		t.Fatal(err)
+	}
+
+	stalled.armed = true
+	type commitResult struct {
+		code int
+		body humanPresignCommitResponse
+	}
+	commitA := make(chan commitResult, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		h.postFile(rec, hfReq(t, http.MethodPost, "alice", "race.bin/commit", hfSelf(), nil))
+		var body humanPresignCommitResponse
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		commitA <- commitResult{rec.Code, body}
+	}()
+	select {
+	case <-stalled.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("commit A never reached the publish write")
+	}
+
+	// While A holds the lease mid-publish, the client signs and uploads B to
+	// the same path: the newer session must survive A's settlement.
+	prB := hfPresign(t, h, "alice", "race.bin", "presign=1")
+	stageB := hfStagingKey(t, &prB)
+	if stageA == stageB {
+		t.Fatalf("the second presign reused A's staging key %q", stageA)
+	}
+	if err := base.PutObject(ctx, stageB, []byte("content-from-B")); err != nil {
+		t.Fatal(err)
+	}
+	close(stalled.release)
+
+	resA := <-commitA
+	if resA.code != http.StatusOK {
+		t.Fatalf("commit A: %d", resA.code)
+	}
+
+	state, _, err := h.readPresignCommitState(ctx, "alice")
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	entry := state.Commits["race.bin"]
+	if entry.Session == "" {
+		t.Fatal("settlement erased the newer (B) session")
+	}
+	if entry.Session == "" || entry.Committed != resA.body.ETag {
+		t.Fatalf("settled entry = %+v, want the B session with A's etag as the committed baseline", entry)
+	}
+
+	// B's commit must publish B, not be answered as an A retry.
+	recB := httptest.NewRecorder()
+	h.postFile(recB, hfReq(t, http.MethodPost, "alice", "race.bin/commit", hfSelf(), nil))
+	if recB.Code != http.StatusOK {
+		t.Fatalf("commit B: %d %s", recB.Code, recB.Body.String())
+	}
+	live := hfGetLive(t, h, "alice", "race.bin")
+	if live.Code != http.StatusOK || live.Body.String() != "content-from-B" {
+		t.Fatalf("live file = %d %q, want B's content", live.Code, live.Body.String())
+	}
+}
+
+// --- Recursive flat listing (P4a PR-A) ----------------------------------------
+
+// hfRecursiveReq builds a request against the files root (the exact
+// GET .../files route) with a query string, mirroring hfTrashReq.
+func hfRecursiveReq(t *testing.T, name string, caller *authpkg.CallerIdentity, query string) *http.Request {
+	t.Helper()
+	req := hfReq(t, http.MethodGet, name, "", caller, nil)
+	if query != "" {
+		req.URL.RawQuery = query
+	}
+	return req
+}
+
+// seedRecursiveArea fills alice's area with a multi-level tree plus every
+// shape a flat listing must hide: a .keep marker, a tombstone, a
+// legitimate empty file, and out-of-band reserved-prefix objects.
+func seedRecursiveArea(t *testing.T, h *humanFilesHandler, store *ossfake.Memory) {
+	t.Helper()
+	ctx := context.Background()
+	for _, put := range []struct{ path, content string }{
+		{"a.txt", "hello"},               // 5 bytes
+		{"docs/b.txt", "world!"},         // 6
+		{"docs/nested/c.txt", "x"},       // 1
+		{"x/y/z/deep.txt", "0123456789"}, // 10, four levels deep
+		{"empty.txt", ""},                // 0, a legitimate empty file
+	} {
+		if rec := hfPutFile(t, h, "alice", put.path, hfAdmin(), put.content); rec.Code != http.StatusOK {
+			t.Fatalf("seed %s: %d %s", put.path, rec.Code, rec.Body.String())
+		}
+	}
+	// gone.txt is soft-deleted: it becomes a zero-byte tombstone.
+	if rec := hfPutFile(t, h, "alice", "gone.txt", hfAdmin(), "doomed"); rec.Code != http.StatusOK {
+		t.Fatalf("seed gone: %d", rec.Code)
+	}
+	del := httptest.NewRecorder()
+	h.deleteFile(del, hfReq(t, http.MethodDelete, "alice", "gone.txt", hfAdmin(), nil))
+	if del.Code != http.StatusOK {
+		t.Fatalf("delete gone: %d %s", del.Code, del.Body.String())
+	}
+	// Out-of-band shapes the files API cannot create; the flat listing
+	// must filter them the way validateHumanFilePath rejects them.
+	for _, key := range []string{
+		"humans/alice/files/.keep",
+		"humans/alice/files/docs/.keep",
+		"humans/alice/files/docs/nested/.keep",
+		"humans/alice/files/.sync/state.json",
+		"humans/alice/files/.control/quota.json",
+		"humans/alice/files/.trash/rogue.txt",
+	} {
+		if err := store.PutObject(ctx, key, []byte("x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestHumanFiles_RecursiveListFlatAndSorted walks the seeded area in one
+// page and checks the contract: every file at every depth in one sorted
+// flat stream, sizes and ETags straight from the listing, "files/"-
+// addressed paths, and none of the hidden shapes (.keep, .sync/.control/
+// .trash, the tombstone) leaking through.
+func TestHumanFiles_RecursiveListFlatAndSorted(t *testing.T) {
+	h, store, _ := newHumanFilesRig(t)
+	seedRecursiveArea(t, h, store)
+
+	before := store.StatMetaCalls.Load()
+	rec := httptest.NewRecorder()
+	h.listFiles(rec, hfRecursiveReq(t, "alice", hfSelf(), "recursive=1"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("recursive list: %d %s", rec.Code, rec.Body.String())
+	}
+	var resp humanFileRecursiveResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	want := []struct {
+		path string
+		size int64
+		etag string
+	}{
+		{"files/a.txt", 5, md5Hex([]byte("hello"))},
+		{"files/docs/b.txt", 6, md5Hex([]byte("world!"))},
+		{"files/docs/nested/c.txt", 1, md5Hex([]byte("x"))},
+		{"files/empty.txt", 0, md5Hex(nil)},
+		{"files/x/y/z/deep.txt", 10, md5Hex([]byte("0123456789"))},
+	}
+	if len(resp.Entries) != len(want) {
+		t.Fatalf("entries = %+v, want %d entries (hidden shapes leaked?)", resp.Entries, len(want))
+	}
+	for i, w := range want {
+		e := resp.Entries[i]
+		if e.Path != w.path {
+			t.Fatalf("entries[%d].Path = %q, want %q (sorted flat order): %+v", i, e.Path, w.path, resp.Entries)
+		}
+		if e.Size != w.size {
+			t.Fatalf("entries[%d].Size = %d, want %d", i, e.Size, w.size)
+		}
+		if e.ETag != w.etag {
+			t.Fatalf("entries[%d].ETag = %q, want %q", i, e.ETag, w.etag)
+		}
+	}
+	if resp.NextKey != nil {
+		t.Fatalf("NextKey = %q, want nil (single page)", *resp.NextKey)
+	}
+	// T3: only the zero-byte entries took a stat — the tombstone
+	// (excluded) and the legitimate empty file (kept).
+	if stats := store.StatMetaCalls.Load() - before; stats != 2 {
+		t.Fatalf("StatMeta calls during the list = %d, want 2 (zero-byte entries only)", stats)
+	}
+}
+
+// TestHumanFiles_RecursiveListCursorPagination walks the seeded area with
+// limit=2 and checks the cursor contract: NextKey is the last full key of
+// the page, passing it back as ?cursor= keeps the walk contiguous (the
+// union is the full sorted flat list, no key twice, none skipped), and
+// NextKey is nil only when the walk is exhausted. Page sizes are bounded
+// by limit, not equal to it: the store pages raw keys, so hidden objects
+// (tombstones, .keep, the reserved prefixes) consume page slots and can
+// shrink a page to zero entries.
+func TestHumanFiles_RecursiveListCursorPagination(t *testing.T) {
+	h, store, _ := newHumanFilesRig(t)
+	seedRecursiveArea(t, h, store)
+
+	var all []humanFileRecursiveEntry
+	seen := map[string]bool{}
+	cursor := ""
+	for page := 0; page < 20; page++ {
+		q := "recursive=1&limit=2"
+		if cursor != "" {
+			q += "&cursor=" + url.QueryEscape(cursor)
+		}
+		rec := httptest.NewRecorder()
+		h.listFiles(rec, hfRecursiveReq(t, "alice", hfSelf(), q))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("page %d: %d %s", page, rec.Code, rec.Body.String())
+		}
+		var resp humanFileRecursiveResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("page %d decode: %v", page, err)
+		}
+		if len(resp.Entries) > 2 {
+			t.Fatalf("page %d: %d entries, want at most limit 2: %+v", page, len(resp.Entries), resp.Entries)
+		}
+		for _, e := range resp.Entries {
+			if seen[e.Path] {
+				t.Fatalf("path %q appeared on two pages (cursor gap or overlap)", e.Path)
+			}
+			seen[e.Path] = true
+			all = append(all, e)
+		}
+		if resp.NextKey == nil {
+			break
+		}
+		if !strings.HasPrefix(*resp.NextKey, "humans/alice/files/") {
+			t.Fatalf("page %d: cursor %q is not a full key under the area", page, *resp.NextKey)
+		}
+		cursor = *resp.NextKey
+	}
+	want := []string{
+		"files/a.txt", "files/docs/b.txt", "files/docs/nested/c.txt",
+		"files/empty.txt", "files/x/y/z/deep.txt",
+	}
+	if len(all) != len(want) {
+		t.Fatalf("walk collected %d entries, want %d: %+v", len(all), len(want), all)
+	}
+	for i, w := range want {
+		if all[i].Path != w {
+			t.Fatalf("walk order = %+v, entry %d is %q, want %q (pages must stay in global key order)", all, i, all[i].Path, w)
+		}
+	}
+}
+
+// TestHumanFiles_RecursiveListLimitBounds pins the limit parameter's
+// bounds: the unit table for the clamp plus the handler-level outcome of
+// an over-cap limit (clamped, not rejected).
+func TestHumanFiles_RecursiveListLimitBounds(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want int
+		ok   bool
+	}{
+		{"", 1000, true},
+		{"1", 1, true},
+		{"1000", 1000, true},
+		{"10000", 10000, true},
+		{"10001", 10000, true},
+		{"999999", 10000, true},
+		{"0", 0, false},
+		{"-1", 0, false},
+		{"abc", 0, false},
+	} {
+		n, err := clampHumanFileListLimit(tc.in)
+		if (err == nil) != tc.ok {
+			t.Fatalf("clamp(%q) err = %v, want ok=%v", tc.in, err, tc.ok)
+		}
+		if tc.ok && n != tc.want {
+			t.Fatalf("clamp(%q) = %d, want %d", tc.in, n, tc.want)
+		}
+	}
+
+	// Handler level: an over-cap limit is clamped, not 400.
+	h, store, _ := newHumanFilesRig(t)
+	seedRecursiveArea(t, h, store)
+	rec := httptest.NewRecorder()
+	h.listFiles(rec, hfRecursiveReq(t, "alice", hfSelf(), "recursive=1&limit=999999"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("limit=999999: got %d, want 200 (clamped to 10000): %s", rec.Code, rec.Body.String())
+	}
+	var resp humanFileRecursiveResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Entries) != 5 || resp.NextKey != nil {
+		t.Fatalf("clamped walk = %d entries, nextKey=%v, want all 5 and nil", len(resp.Entries), resp.NextKey)
+	}
+}
+
+// TestHumanFiles_RecursiveListTombstoneExcluded checks the soft-delete
+// contract from the flat view: a deleted path is absent while a
+// legitimate empty file at the same size stays.
+func TestHumanFiles_RecursiveListTombstoneExcluded(t *testing.T) {
+	h, _, _ := newHumanFilesRig(t)
+	if rec := hfPutFile(t, h, "alice", "gone.txt", hfSelf(), "doomed"); rec.Code != http.StatusOK {
+		t.Fatalf("put: %d", rec.Code)
+	}
+	if rec := hfPutFile(t, h, "alice", "empty.txt", hfSelf(), ""); rec.Code != http.StatusOK {
+		t.Fatalf("put empty: %d", rec.Code)
+	}
+	del := httptest.NewRecorder()
+	h.deleteFile(del, hfReq(t, http.MethodDelete, "alice", "gone.txt", hfSelf(), nil))
+	if del.Code != http.StatusOK {
+		t.Fatalf("delete: %d %s", del.Code, del.Body.String())
+	}
+
+	rec := httptest.NewRecorder()
+	h.listFiles(rec, hfRecursiveReq(t, "alice", hfSelf(), "recursive=1"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("recursive list: %d %s", rec.Code, rec.Body.String())
+	}
+	var resp humanFileRecursiveResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	paths := make([]string, 0, len(resp.Entries))
+	for _, e := range resp.Entries {
+		paths = append(paths, e.Path)
+	}
+	if len(paths) != 1 || paths[0] != "files/empty.txt" {
+		t.Fatalf("entries = %v, want only files/empty.txt (the tombstone must be absent)", paths)
+	}
+}
+
+// TestHumanFiles_RecursiveListPermissions reuses the P2 matrix on the new
+// route: non-access callers get the same 404 as a non-existent human,
+// area-access callers get 200.
+func TestHumanFiles_RecursiveListPermissions(t *testing.T) {
+	h, _, _ := newHumanFilesRig(t)
+	if rec := hfPutFile(t, h, "alice", "a.txt", hfSelf(), "secret"); rec.Code != http.StatusOK {
+		t.Fatalf("seed: %d", rec.Code)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		caller *authpkg.CallerIdentity
+	}{
+		{"another human", hfBob()},
+		{"human with username mismatch", hfCaller(authpkg.RoleHuman, "carol")},
+		{"team leader", hfLeader()},
+		{"worker", hfWorker()},
+		{"unauthenticated (no identity in context)", nil},
+	} {
+		rec := httptest.NewRecorder()
+		h.listFiles(rec, hfRecursiveReq(t, "alice", tc.caller, "recursive=1"))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s: got %d, want 404: %s", tc.name, rec.Code, rec.Body.String())
+		}
+	}
+
+	// Existence probing: bob's response must be identical to the response
+	// for a non-existent human.
+	r1 := httptest.NewRecorder()
+	h.listFiles(r1, hfRecursiveReq(t, "alice", hfBob(), "recursive=1"))
+	r2 := httptest.NewRecorder()
+	h.listFiles(r2, hfRecursiveReq(t, "ghost", hfBob(), "recursive=1"))
+	if r1.Code != r2.Code || r1.Body.String() != r2.Body.String() {
+		t.Fatalf("probe leak: existing=%d %q vs missing=%d %q",
+			r1.Code, r1.Body.String(), r2.Code, r2.Body.String())
+	}
+
+	for _, caller := range []*authpkg.CallerIdentity{hfSelf(), hfAdmin(), hfManager()} {
+		rec := httptest.NewRecorder()
+		h.listFiles(rec, hfRecursiveReq(t, "alice", caller, "recursive=1"))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: got %d, want 200: %s", caller.Username, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// TestHumanFiles_ListNoPerFileStat is the mutation gate for the list-size
+// refactor: a one-level listing must take no stat for files whose size the
+// listing already carries — only the zero-byte entries (the tombstone
+// check) may stat. Restoring the per-file stat must turn this test red.
+func TestHumanFiles_ListNoPerFileStat(t *testing.T) {
+	h, store, _ := newHumanFilesRig(t)
+	for _, put := range []struct{ path, content string }{
+		{"a.txt", "hello"},       // 5
+		{"docs/b.txt", "world!"}, // 6, one level down
+		{"sub/x.txt", "y"},       // 1, one level down
+		{"empty.txt", ""},        // 0 → the only stat-eligible entry
+	} {
+		if rec := hfPutFile(t, h, "alice", put.path, hfAdmin(), put.content); rec.Code != http.StatusOK {
+			t.Fatalf("seed %s: %d %s", put.path, rec.Code, rec.Body.String())
+		}
+	}
+
+	before := store.StatMetaCalls.Load()
+	rec := httptest.NewRecorder()
+	h.getFile(rec, hfReq(t, http.MethodGet, "alice", "", hfSelf(), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list root: %d %s", rec.Code, rec.Body.String())
+	}
+	var root humanFileListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &root); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	sizes := map[string]int64{}
+	for _, e := range root.Entries {
+		sizes[e.Name] = e.Size
+	}
+	// The sizes must still be exact (a.txt 5, empty.txt 0) — the
+	// listing carried them; only empty.txt (zero-byte, tombstone check)
+	// took a stat.
+	if sizes["a.txt"] != 5 || sizes["empty.txt"] != 0 || sizes["docs"] != 0 {
+		t.Fatalf("entry sizes = %v, want a.txt 5 / empty.txt 0 / docs 0", sizes)
+	}
+	if stats := store.StatMetaCalls.Load() - before; stats != 1 {
+		t.Fatalf("StatMeta calls during the list = %d, want 1 (only the zero-byte entry)", stats)
 	}
 }

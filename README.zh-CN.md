@@ -501,6 +501,7 @@ python scripts/export-debug-log.py --range 1h
 | [docs/zh-cn/usage/import-worker.md](docs/zh-cn/usage/import-worker.md) | 导入 Worker 指南 |
 | [docs/zh-cn/usage/resource-management.md](docs/zh-cn/usage/resource-management.md) | 声明式资源管理（Worker / Team / Human YAML）、模板市场与 API 参考 |
 | [docs/zh-cn/usage/project-workflow-api.md](docs/zh-cn/usage/project-workflow-api.md) | 项目 / 工作流查看 API |
+| [docs/zh-cn/usage/module-update.md](docs/zh-cn/usage/module-update.md) | 模块更新与分发：Millforge 三通道、发布索引与 `channels.json` 契约、worker / team / manager 三平面安装（[English](docs/usage/module-update.md)） |
 | [docs/zh-cn/usage/higress-gateway-api.md](docs/zh-cn/usage/higress-gateway-api.md) | Higress 网关 API 参考（LLM / MCP / 暴露端口 / Console） |
 | [docs/zh-cn/usage/integrations/dingtalk.md](docs/zh-cn/usage/integrations/dingtalk.md) | AgentTeams/OpenClaw 钉钉机器人配置教程 |
 | [docs/zh-cn/usage/integrations/cms.md](docs/zh-cn/usage/integrations/cms.md) | 接入阿里云云监控 CMS 2.0 |

@@ -1,0 +1,48 @@
+{
+  "id": "agentteams-matrix",
+  "name": "AgentTeams Matrix",
+  "version": "0.1.0",
+  "description": "Matrix channel bridged by the AgentTeams sidecar",
+  "categories": ["channels"],
+  "channels": ["agentteams-matrix"],
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  },
+  "channelConfigs": {
+    "agentteams-matrix": {
+      "label": "AgentTeams Matrix",
+      "description": "Matrix channel bridged by the AgentTeams Python sidecar",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "socketPath": { "type": "string", "minLength": 1 },
+          "agent": { "type": "string", "minLength": 1 },
+          "protocolVersion": { "type": "integer", "minimum": 1, "default": 1 }
+        },
+        "required": ["socketPath", "agent"]
+      },
+      "uiHints": {
+        "socketPath": {
+          "label": "Sidecar socket",
+          "help": "Path of the AgentTeams Matrix sidecar Unix socket.",
+          "placeholder": "/run/agentteams/matrix.sock"
+        },
+        "agent": {
+          "label": "Agent name",
+          "help": "Agent name advertised in the sidecar hello handshake."
+        },
+        "protocolVersion": {
+          "label": "Protocol version",
+          "help": "Sidecar protocol version (1).",
+          "advanced": true
+        }
+      }
+    }
+  }
+}

@@ -281,7 +281,11 @@ jobs:
       needs.build-base.result == 'success' &&
       (needs.build-openclaw-base.result == 'success' || needs.build-openclaw-base.result == 'skipped')
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 20 was enough only when openclaw-base came from a freshly built artifact
+    # (main runs: ~12.5 min end-to-end). With openclaw_base == false the build
+    # step bootstraps the base locally, which adds ~9 min; with the disk
+    # reclamation step that lands at ~21.5 min. Keep headroom for that path.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -290,6 +294,23 @@ jobs:
         # (agentteams-copaw-worker) instead.
         target: [embedded, manager, manager-qwenpaw, worker, qwenpaw-worker, hermes-worker, deepseek-harness-worker]
     steps:
+      # The manager target exports openclaw-base + controller + manager layers in
+      # one tar; on a stock runner that export hit ENOSPC ("no space left on
+      # device"), so reclaim the preinstalled toolchains first.
+      - name: Free Up Disk Space
+        # Only the manager target exports a tar large enough to hit ENOSPC on a
+        # stock runner; the other six targets never did, and this step costs
+        # ~2m50s of the job budget.
+        if: matrix.target == 'manager'
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -389,17 +410,35 @@ jobs:
             DOCKER_BUILD_ARGS="--build-arg APT_MIRROR= --build-arg PIP_INDEX_URL=https://pypi.org/simple/" \
             $EXTRA
 
+      - name: Smoke-test packaged DeepSeek Harness
+        if: matrix.target == 'deepseek-harness-worker'
+        run: |
+          docker run --rm --entrypoint python3 \
+            -v "$PWD/deepseek-harness/tests/headless_smoke.py:/tmp/headless_smoke.py:ro" \
+            agentteams/deepseek-harness-worker:latest /tmp/headless_smoke.py
+
       - name: Save image
         run: |
+          set -euo pipefail
           # Exclude already-uploaded base images (controller, openclaw-base) so
           # each per-target tar only contains its own deltas.
-          docker save \
-            $(docker images --format '{{.Repository}}:{{.Tag}}' \
-              | grep -E '^agentteams/' \
-              | grep -v '<none>' \
-              | grep -v 'agentteams-controller' \
-              | grep -v 'openclaw-base') \
-            | gzip > /tmp/agentteams-${{ matrix.target }}.tar.gz
+          images=$(docker images --format '{{.Repository}}:{{.Tag}}' \
+            | grep -E '^agentteams/' \
+            | grep -v '<none>' \
+            | grep -v 'agentteams-controller' \
+            | grep -v 'openclaw-base' || true)
+          if [ -z "${images}" ]; then
+            echo "no agentteams images were built for ${{ matrix.target }}" >&2
+            docker images >&2
+            exit 1
+          fi
+          # pipefail: a failed export (e.g. "no space left on device") must fail
+          # this job instead of publishing a truncated tar, which only shows up
+          # much later as "open .../docker-import-*/repositories: no such file"
+          # in the consumer jobs.
+          docker save ${images} | gzip > /tmp/agentteams-${{ matrix.target }}.tar.gz
+          gzip -t /tmp/agentteams-${{ matrix.target }}.tar.gz
+          ls -l /tmp/agentteams-${{ matrix.target }}.tar.gz
 
       - name: Upload image
         uses: actions/upload-artifact@v4
@@ -451,10 +490,57 @@ jobs:
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
       - name: Download all images
+        id: download-images
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           pattern: image-*
           path: /tmp/images
+
+      # download-artifact can end a large transfer without reporting an error
+      # (a stalled chunk, a runner-side network reset). The truncated tar.gz
+      # then only surfaces much later as an opaque gzip "unexpected end of
+      # file" inside docker load. Verify every archive here, and retry the
+      # whole download once before failing the shard.
+      - name: Verify image archives
+        id: verify-images
+        continue-on-error: true
+        run: |
+          broken=0
+          shopt -s nullglob
+          for f in /tmp/images/image-*/*.tar.gz; do
+            if ! gzip -t "$f"; then
+              echo "::warning file=$f::truncated image archive"
+              broken=1
+            fi
+          done
+          if [ "${broken}" -ne 0 ]; then
+            echo "one or more image archives are truncated" >&2
+            exit 1
+          fi
+
+      - name: Reset the image download directory
+        if: steps.download-images.outcome == 'failure' || steps.verify-images.outcome == 'failure'
+        run: rm -rf /tmp/images && mkdir -p /tmp/images
+
+      - name: Retry the image download once
+        if: steps.download-images.outcome == 'failure' || steps.verify-images.outcome == 'failure'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: image-*
+          path: /tmp/images
+
+      - name: Verify image archives after the retry
+        run: |
+          shopt -s nullglob
+          archives=(/tmp/images/image-*/*.tar.gz)
+          if [ "${#archives[@]}" -eq 0 ]; then
+            echo "no image archives were downloaded" >&2
+            exit 1
+          fi
+          for f in "${archives[@]}"; do
+            gzip -t "$f"
+          done
 
       - name: Load images
         run: |

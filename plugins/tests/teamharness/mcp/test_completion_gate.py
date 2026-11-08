@@ -99,6 +99,7 @@ def gate_side_effects(monkeypatch: pytest.MonkeyPatch) -> None:
     import inside project/flow.py, so it is patched on the flow module
     itself (no real Matrix, no shared storage).
     """
+    monkeypatch.setattr(server, "_pull_task", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(server, "_pull_project", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(server, "_sync_project", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(
@@ -212,3 +213,56 @@ def test_complete_project_still_allows_an_empty_project(tmp_path: Path) -> None:
     assert completed["ok"] is True
     assert completed["project"]["status"] == "completed"
     assert _persisted_project_status(tmp_path) == "completed"
+
+
+@pytest.mark.parametrize("deliverables", [[""], ["  "], ["shared/tasks/unrelated-task/result.md"], ["../../outside.md"]])
+def test_invalid_registered_deliverables_do_not_complete_project(tmp_path, deliverables):
+    task_id = TASK_IDS[0]
+    _write_project(tmp_path, [_task_node(task_id, "completed")])
+    _write_task_meta(tmp_path, task_id, "completed", deliverables=deliverables)
+    project_path = tmp_path / "shared/projects" / PROJECT_ID / "meta.json"
+    before = project_path.read_bytes()
+    rejected = _complete(tmp_path)
+    assert rejected["ok"] is False
+    assert project_path.read_bytes() == before
+
+
+def test_valid_registered_deliverables_can_complete_without_local_result_md(tmp_path):
+    task_id = TASK_IDS[0]
+    _write_project(tmp_path, [_task_node(task_id, "completed")])
+    _write_task_meta(tmp_path, task_id, "completed", deliverables=[f"shared/tasks/{task_id}/report.txt"])
+    assert _complete(tmp_path)["ok"] is True
+
+
+def test_remote_task_registration_is_pulled_before_completion(tmp_path, monkeypatch):
+    task_id = TASK_IDS[0]
+    _write_project(tmp_path, [_task_node(task_id, "completed")])
+    def pull(_arguments, pulled_id):
+        assert pulled_id == task_id
+        _write_task_meta(tmp_path, task_id, "completed", deliverables=[f"shared/tasks/{task_id}/report.txt"])
+        return True
+    monkeypatch.setattr(server, "_pull_task", pull)
+    assert _complete(tmp_path)["ok"] is True
+
+
+def test_failed_task_pull_cannot_use_cached_registration(tmp_path, monkeypatch):
+    task_id = TASK_IDS[0]
+    _write_project(tmp_path, [_task_node(task_id, "completed")])
+    _write_task_meta(tmp_path, task_id, "completed", deliverables=[f"shared/tasks/{task_id}/report.txt"])
+    monkeypatch.setattr(server, "_pull_task", lambda *_: False)
+    monkeypatch.setattr(server, "_filesync", lambda *_: {"ok": False, "error": "storage unavailable"})
+    project_path = tmp_path / "shared/projects" / PROJECT_ID / "meta.json"
+    before = project_path.read_bytes()
+    assert _complete(tmp_path)["ok"] is False
+    assert project_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("status", ["revision", "cancelled"])
+def test_loop_completion_retains_terminal_task_contract(tmp_path: Path, status: str) -> None:
+    _write_project(tmp_path, [])
+    path = tmp_path / "shared/projects" / PROJECT_ID / "meta.json"
+    project = json.loads(path.read_text())
+    project["plan_type"] = "loop"
+    project["loop"] = {"tasks": [_task_node(TASK_IDS[0], status)]}
+    server._write_json(path, project)
+    assert _complete(tmp_path)["ok"] is True

@@ -54,6 +54,16 @@ from .mentions import (
     text_mentions_worker,
     was_mentioned,
 )
+from .outcomes import (
+    DROP_REASONS,
+    DROPS_RELATIVE_PATH,
+    DETAIL_LIMIT,
+    describe_exception,
+    drops_path,
+    read_drops,
+    record_drop,
+    redact_detail,
+)
 from .session import resolve_session_id, to_handle_from_target
 from .sidecar import (
     FRAME_TYPES,
@@ -63,6 +73,7 @@ from .sidecar import (
     SidecarNotConnectedError,
     SidecarProtocolError,
     SidecarServer,
+    capability_supported,
     decode_line,
     encode_frame,
     frame_to_inbound,
@@ -73,6 +84,7 @@ from .sidecar import (
     make_inbound,
     make_outbound,
     make_typing,
+    parse_capabilities,
 )
 from .state import (
     CoreLockedError,
@@ -85,6 +97,9 @@ __all__ = [
     "CRYPTO_BACKENDS",
     "CURRENT_MESSAGE_MARKER",
     "DEFAULT_HISTORY_LIMIT",
+    "DETAIL_LIMIT",
+    "DROP_REASONS",
+    "DROPS_RELATIVE_PATH",
     "HISTORY_CONTEXT_MARKER",
     "INBOUND_KINDS",
     "OUTBOUND_KINDS",
@@ -112,9 +127,12 @@ __all__ = [
     "SessionStore",
     "SingleWriterLock",
     "StateLayout",
+    "capability_supported",
     "crypto_available",
     "decode_line",
     "detect_crypto_backend",
+    "describe_exception",
+    "drops_path",
     "e2ee_store_path",
     "encode_frame",
     "extract_mentions_from_text",
@@ -127,7 +145,11 @@ __all__ = [
     "make_outbound",
     "make_typing",
     "mxc_to_http",
+    "parse_capabilities",
     "probe_olm",
+    "read_drops",
+    "record_drop",
+    "redact_detail",
     "resolve_session_id",
     "strip_mention_prefix",
     "text_mentions_worker",

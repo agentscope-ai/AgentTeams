@@ -4,6 +4,12 @@ AgentTeams 采用 Kubernetes CRD 风格的声明式 YAML 配置来管理平台�
 
 ## 核心概念
 
+### 资源操作权限
+
+平台 Admin 与 Manager 负责全局部署资源管理。Team Leader 负责团队任务协调，并可读取本团队 Worker 状态；不能创建、修改、删除部署资源，也不能替其他 Worker 执行唤醒、休眠或 ensure-ready。Worker 不可用时，Leader 应向 Manager 或平台 Admin 报告任务阻塞，重新查询确认就绪后再分配任务。
+
+任务与项目协调协议、Leader 运行时自身的 ready 上报及凭据刷新继续保留。真人用户已有的团队自助权限不变；这里限制的是 Leader 服务身份，不是所有能访问团队的真人。
+
 ### 组织架构
 
 AgentTeams 采用三层组织架构，映射企业真实团队结构：
@@ -215,8 +221,10 @@ spec:
 | 角色 | 范围 | 字段 |
 |------|------|------|
 | admin / manager | 任意 Worker | 全部字段 |
-| 团队 Leader | 本团队 Worker | 全部字段 |
+| 团队 Leader | 本团队 Worker | 只读（`403`） |
 | L2 人类用户（`permissionLevel: 2`） | 仅 `accessibleTeams` 内的 Worker | `skills` |
+
+Team Leader 在该端点为只读：Worker 配置写入仅限 Admin/Manager（#1536）。
 
 L2 人类用户可自主管理所协调 Worker 的内置技能分配，无需升级到 admin。`remoteSkills` 与 `mcpServers` 暂不开放给 L2：MCP 路径存在网关消费者密钥泄露风险（生成器会把 `Authorization: Bearer <gatewayKey>` 附加到每个 MCP 条目的 URL 上），因此这两个字段对 L2 调用方返回 `400`，直到提权能力设计落地（见 L2 权限设计 issue #1220）。其余字段——`model`、`image`、`soul`、`agents`、`runtime`、`package`、`expose`、`channelPolicy`、`resources`、`containerManaged`、`state`——仍属团队所有者的权限范围；body 触碰即 `400` 拒绝。越权 Worker（跨团队或独立）对 L2 用户读写均不可见（`404`），端点保持防探测。设计细节见 [L2 Human Worker-Scoped Write](../design/l2-worker-scoped-write.md)。
 
@@ -467,7 +475,7 @@ spec:
 | `spec.permissionLevel` | int | 是 | — | 权限级别：1、2 或 3 |
 | `spec.accessibleTeams` | []string | 否 | — | 可访问的 Team 列表（L2 生效） |
 | `spec.accessibleWorkers` | []string | 否 | — | 可访问的独立 Worker 列表（L2/L3 生效） |
-| `spec.capabilities` | []string | 否 | — | L2 基线之外的敏感面特权：`full_access`、`channel_secrets`、`external_sources`、`approval_policy`、`secret_reveal`（见 [capability-foundation](../design/capability-foundation.md)） |
+| `spec.capabilities` | []string | 否 | — | L2 基线之外的敏感面特权：`full_access`、`channel_secrets`、`external_sources`、`approval_policy`、`secret_reveal`、`file_sync`（见 [capability-foundation](../design/capability-foundation.md)；`file_sync` 见下文「Human 文件同步（服务端半边）」一节） |
 | `spec.note` | string | 否 | — | 备注 |
 
 ### 三级权限模型
@@ -582,6 +590,74 @@ SMTP 通过以下环境变量配置（在 Manager 容器中）：
 - 创建 L2 Human 前，目标 Team 必须已存在
 - 创建 L3 Human 前，目标 Worker 必须已存在
 - 修改 permissionLevel 会触发全量重算 groupAllowFrom
+
+### 文件区下载（预签名 URL）
+
+每个 Human 的文件区支持两种下载模式：
+
+| 模式 | 请求 | 行为 |
+|------|------|------|
+| 流式（始终可用） | `GET /api/v1/humans/{name}/files/{path}` | Controller 通过自身 API 响应流式返回对象 |
+| 预签名（可选开启） | `GET .../files/{path}?presign=1` | Controller 返回一个限时 URL；客户端**直接从存储**下载对象，不经过 Controller |
+
+**启用预签名下载。** 将 `AGENTTEAMS_FS_PUBLIC_ENDPOINT`（Helm：`storage.publicEndpoint`）设置为**客户端可达**的存储源——所有返回 URL 中的 host 就是该值本身。请指向 MinIO/RustFS 的公网地址，通常是代理 S3 endpoint 的 Ingress 或专用域名（如 `https://files.example.com`），并确保该源提供与 `AGENTTEAMS_FS_ENDPOINT` 相同的 bucket。内嵌安装**不会**把存储端口发布到宿主机（Controller 容器只暴露 8080/8001/8088），因此预签名默认**关闭**：请把 `AGENTTEAMS_FS_PUBLIC_ENDPOINT` 设为浏览器真正可达的存储源（额外发布端口或 Ingress），否则继续使用流式 GET。
+
+**未配置公网端点时**，预签名处于关闭状态，`?presign=1` 会返回：
+
+```
+501 Not Implemented
+{"error":"presign_unsupported","reason":"storage endpoint is not caller-reachable; set AGENTTEAMS_FS_PUBLIC_ENDPOINT or use the streamed GET"}
+```
+
+客户端应将其视为能力信号，回退到同一路径的流式 GET——该模式与存储是否可达无关，始终可用。
+
+**预签名 URL 语义。** 返回的 URL 是匿名的（无需凭据）、有效期为 `AGENTTEAMS_PRESIGN_TTL`（Go duration，默认 5 分钟，最长 60 分钟），并且绑定到公网端点的 host：S3 V4 签名覆盖了 `Host` 头，因此必须按原样获取该 URL——改写主机名（即使是同一 host 的别名）会导致存储以 `403 SignatureDoesNotMatch` 拒绝请求。
+
+## Human 文件同步（服务端半边）
+
+1.2.6 交付的是按人文件同步协议的**服务端半边**（#1414 P3）。Controller 暴露按人的同步 manifest，供同步客户端读写；**同步由客户端驱动**——本地扫描、字节传输、冲突解决全部发生在客户端。服务端只存 manifest，从不合并。
+
+### 1.2.6 交付内容（仅服务端）
+
+| 端点 | 行为 |
+|------|------|
+| `GET /api/v1/humans/{name}/sync/manifest` | 原样返回存储的 manifest，带 `ETag` 头。首次写入前为 `404`。 |
+| `PUT /api/v1/humans/{name}/sync/manifest` | 只接受条件写：更新用 `If-Match <etag>`，首次写用 `If-None-Match: *`。 |
+| `GET /api/v1/humans/{name}/sync/status` | 条目数 / tombstone 数 / generation / 最近更新。首次写入前返回 `200` + 全 0。 |
+
+manifest 是客户端的同步状态：`entries` 把 `files/**` 路径映射到不透明的每文件记录（服务端原样存储、从不解释），`tombstones` 记录客户端删除的文件。服务端校验 body 为 version 1、路径不越出 `files/**`（`memory/`、`digest/`、`.trash/`、`.sync/` 与路径穿越一律拒绝）、大小不超过 2 MiB，然后把它存到对象存储的 `humans/<u>/.sync/manifest.json`。
+
+**1.2.6 不包含：** 本地目录扫描、文件字节传输、客户端冲突循环。服务端只提供状态与条件写，自己不做任何同步。
+
+### 谁来同步
+
+**1.2.6 不附带同步客户端——只有上面的服务端协议。** 客户端侧规划在 #1414 P4（同步载体：宿主 CLI `agt human files sync`、浏览器 presign 上传、≤5 MiB 的 Matrix 小文件兜底），见 F10 可选文件同步调研。没有承诺发布时间；在客户端落地之前，任何符合下述协议的客户端都可以直接使用。
+
+### 冲突语义（客户端读-改-写）
+
+同步是客户端对着条件 PUT 的「读-改-写」循环：
+
+1. `GET …/sync/manifest` → 当前状态 + `ETag`。
+2. 在本地计算合并后的 manifest——扫描、差集、冲突处置都是客户端的事。
+3. 带 `If-Match: <第 1 步的 etag>` 执行 `PUT …/sync/manifest`。
+4. 收到 `412 etag_mismatch`（读取之后 manifest 已变化；该代码同样覆盖 manifest 尚不存在的情形）→ 回到第 1 步重读并重新合并。重试要设上限；持续冲突时停下来报告，不要静默覆盖。
+5. 收到 `409 manifest_exists`（`If-None-Match: *` 首写撞车）→ 重读后改用 `If-Match`。
+
+服务端从不仲裁冲突，也不返回合并结果：`412` 的 body 只带错误码，客户端需要重读获取当前状态。
+
+`generation` 由**服务端持有**：每次被接受的写入在按人路径租约下自增，两台设备不可能同时读到同一个基线而丢失更新。客户端提交的 `generation`、`updatedAt`、`updatedBy` 会被忽略并由服务端重写。
+
+| 条件 | 响应 |
+|------|------|
+| `If-Match` 过期，或 manifest 尚不存在 | `412 etag_mismatch` |
+| 首写（`If-None-Match: *`）但 manifest 已存在 | `409 manifest_exists` |
+| 未带条件头（或两个都带） | `400 conditional_write_required` |
+| body 超过 2 MiB | `413 manifest_too_large` |
+| version 非法、路径越界、tombstone 格式错误 | `400 invalid_manifest` |
+
+### `file_sync` 能力
+
+给 L2 Human 授予 `spec.capabilities: [file_sync]` 只是为其开通上述三个同步端点。它**不是一个打开即完成双向同步的开关**：没有同步客户端（P4）时这些端点不会被使用；文件本身仍由人类文件区自身的访问与配额规则管辖。团队身份（团队 Leader、Worker）一律不授予同步面——同步是按人的，不是按团队的。
 
 ## Package URI
 

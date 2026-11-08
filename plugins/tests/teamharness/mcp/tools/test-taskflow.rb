@@ -33,6 +33,7 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
   ))
   (remote_task / "spec.md").write("Remote task spec\n")
   bin_dir.mkpath
+  controller_log = root / "controller.log"
   (bin_dir / "mc").write(<<~SH)
     #!/usr/bin/env bash
     printf '%s\\n' "$*" >> "#{log_path}"
@@ -123,6 +124,85 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
             "globalSharedPrefix": "mock/global-shared",
         },
     }
+
+    # The task/project publish now commits meta.json through the Controller's
+    # conditional endpoint and fails closed when it is unavailable. This
+    # harness runs against a fake `mc` (no Controller), so it stands in a
+    # minimal Controller: PUT /api/v1/(tasks|projects)/<id>/meta with
+    # If-None-Match: * or If-Match: <etag>, recording the committed meta so
+    # the publish verification round-trips. The fail-closed contract itself is
+    # covered by plugins/tests/teamharness/test_task_meta_commit.py.
+    import hashlib
+    import re
+    import mcp.artifact.sync as _sync_mod
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    _VIRTUAL_META = {}
+
+    def _fake_snapshot(arguments, meta_path):
+        entry = _VIRTUAL_META.get(meta_path)
+        return (entry[0] if entry else None), None
+
+    def _fake_etag(arguments, meta_path):
+        entry = _VIRTUAL_META.get(meta_path)
+        return (entry[1] if entry else None), None
+
+    def _fake_consistent_read(arguments, meta_path):
+        entry = _VIRTUAL_META.get(meta_path)
+        if entry is None:
+            return None, None, None
+        return entry[0], entry[1], None
+
+    _sync_mod._remote_meta_snapshot = _fake_snapshot
+    _sync_mod._remote_meta_etag = _fake_etag
+    _sync_mod._remote_meta_consistent_read = _fake_consistent_read
+
+    class _MetaController(BaseHTTPRequestHandler):
+        def _send(self, code, payload=None):
+            raw = b"" if payload is None else json.dumps(payload).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            if raw:
+                self.wfile.write(raw)
+
+        def do_PUT(self):  # noqa: N802
+            parsed = urllib.parse.urlparse(self.path)
+            match = re.match(r"^/api/v1/(tasks|projects)/([^/]+)/meta$", parsed.path)
+            if not match:
+                return self._send(404, {"error": "not_found"})
+            kind = match.group(1)
+            item_id = urllib.parse.unquote(match.group(2))
+            meta_path = "shared/" + kind + "/" + item_id + "/meta.json"
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length)
+            current = _VIRTUAL_META.get(meta_path)
+            if self.headers.get("If-None-Match") == "*":
+                if current is not None:
+                    return self._send(409, {"error": "conflict"})
+            else:
+                expect = (self.headers.get("If-Match") or "").strip('"')
+                if current is None:
+                    return self._send(404, {"error": "not_found"})
+                if expect and expect != current[1]:
+                    return self._send(409, {"error": "conflict"})
+            try:
+                parsed_meta = json.loads(raw.decode("utf-8"))
+            except ValueError:
+                return self._send(422, {"error": "invalid_meta"})
+            etag = hashlib.md5(raw).hexdigest()
+            _VIRTUAL_META[meta_path] = (parsed_meta, etag)
+            with open("#{controller_log}", "a") as _fh:
+                _fh.write("PUT " + kind + "/" + item_id + "/meta.json\\n")
+            return self._send(200, {"ok": True, "etag": etag})
+
+        def log_message(self, *args):
+            pass
+
+    _controller = ThreadingHTTPServer(("127.0.0.1", 0), _MetaController)
+    threading.Thread(target=_controller.serve_forever, daemon=True).start()
+    os.environ["AGENTTEAMS_CONTROLLER_URL"] = "http://127.0.0.1:%d" % _controller.server_address[1]
     runtime_config = pathlib.Path("#{root}") / "runtime.yaml"
     runtime_config.write_text(
         "team:\\n"
@@ -2365,15 +2445,19 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
   result = JSON.parse(stdout)
   commands = log_path.read.lines.map(&:strip)
   fail!("delegate_task did not push task dir: #{commands.inspect}") unless commands.include?(
-    "mirror #{workspace}/shared/tasks/t-001/ mock/shared/tasks/t-001/ --overwrite"
+    "mirror #{workspace}/shared/tasks/t-001/ mock/shared/tasks/t-001/ --overwrite --exclude meta.json"
   )
   result_push = "cp #{workspace}/shared/tasks/t-001/result.md mock/shared/tasks/t-001/result.md"
   result_stat = "stat mock/shared/tasks/t-001/result.md"
   analysis_push = "cp #{workspace}/shared/tasks/t-001/workspace/analysis.md mock/shared/tasks/t-001/workspace/analysis.md"
   analysis_stat = "stat mock/shared/tasks/t-001/workspace/analysis.md"
-  meta_commit = "cp #{workspace}/shared/tasks/t-001/meta.json mock/shared/tasks/t-001/meta.json"
-  meta_stat = "stat mock/shared/tasks/t-001/meta.json"
-  ordered_submit_commands = [result_push, result_stat, analysis_push, analysis_stat, meta_commit, meta_stat]
+  fail!("meta.json was pushed unconditionally: #{commands.inspect}") if commands.include?(
+    "cp #{workspace}/shared/tasks/t-001/meta.json mock/shared/tasks/t-001/meta.json"
+  )
+  fail!("submit_task did not commit meta through the controller") unless controller_log.read.include?(
+    "PUT tasks/t-001/meta.json"
+  )
+  ordered_submit_commands = [result_push, result_stat, analysis_push, analysis_stat]
   submit_positions = ordered_submit_commands.map { |command| commands.index(command) }
   unless submit_positions.all? && submit_positions == submit_positions.sort
     fail!("submit_task did not publish result payloads before meta commit: #{commands.inspect}")

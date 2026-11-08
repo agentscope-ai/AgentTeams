@@ -151,7 +151,14 @@ case "$1" in
         fi
         case "$fmt" in
             *"len .HostConfig.PortBindings"*) echo 4 ;;
-            *PortBindings*) printf '8080/tcp 0.0.0.0 18080\n9090/tcp 0.0.0.0 19090\n' ;;
+            *PortBindings*)
+                case "${STUB_SCENARIO:-ok}" in
+                    port_bindings)
+                        printf '8001/tcp||6868\n8080/tcp|0.0.0.0|18080\n8080/tcp|::|18080\n9090/tcp|::|19090\n9000/tcp|::1|19000\n9001/tcp|127.0.0.1|\n'
+                        ;;
+                    *) printf '8080/tcp|0.0.0.0|18080\n9090/tcp|0.0.0.0|19090\n' ;;
+                esac
+                ;;
             *"len .Mounts"*) echo 4 ;;
             *"/data"*) echo "agentteams-data" ;;
             *".Mounts"*) printf 'volume|agentteams-data|/var/lib/docker/volumes/agentteams-data/_data|/data|true|rprivate|local\nbind||/host/config|/config|true|rprivate|\n' ;;
@@ -175,6 +182,10 @@ case "$1" in
         ;;
     exec)
         case "$*" in
+            *'grep -Rhao'*)
+                [ "${STUB_SCENARIO:-ok}" = "wasm_missing" ] && echo 'plugins/review/99.0.0/plugin.wasm'
+                exit 0
+                ;;
             *"printenv AGENTTEAMS_FS_ENDPOINT"*)
                 case "$*" in
                     *"agentteams-manager"*) echo "http://agentteams-controller:9000" ;;
@@ -239,7 +250,11 @@ case "$1" in
         printf '%s\n' "$*" >> "${REC}.create"
         exit 0
         ;;
-    rename|run|rm) exit 0 ;;
+    run)
+        [ "${STUB_SCENARIO:-ok}" = "wasm_missing" ] && exit 1
+        exit 0
+        ;;
+    rename|rm) exit 0 ;;
     ps)
         echo "agentteams-controller"
         case "${STUB_SCENARIO:-ok}" in storage_split|storage_embedded) echo "agentteams-manager" ;; esac
@@ -634,6 +649,25 @@ run_case boundary_true_false controller --yes --prepare-only --controller-image 
 assert_eq "${RC}" "3" "oom true/false rc"
 assert_contains 'boundary mismatch: oom_kill_disable' "${OUT}" "oom true/false mismatch"
 assert_not_contains '^start ' "${REC}" "oom true/false never starts replacement"
+
+# 7.20 preserve every explicit published address, including both dual-stack entries.
+run_case port_bindings controller --yes --prepare-only --controller-image example/controller:new \
+    --env-file "${ENV_FILE}" --backup-dir "${TMP}/ports" --state-file "${TMP}/ports/state.json"
+assert_eq "${RC}" "0" "port bindings prepare rc"
+assert_contains_fixed '-p 6868:8001/tcp ' "${REC}.create" "empty HostIp keeps host port"
+assert_contains_fixed '-p 0.0.0.0:18080:8080/tcp ' "${REC}.create" "explicit IPv4 wildcard preserved"
+assert_contains_fixed '-p [::]:18080:8080/tcp ' "${REC}.create" "dual-stack IPv6 binding preserved"
+assert_contains_fixed '-p [::]:19090:9090/tcp ' "${REC}.create" "IPv6-only wildcard preserved"
+assert_contains_fixed '-p [::1]:19000:9000/tcp ' "${REC}.create" "IPv6 loopback bracketed"
+assert_contains_fixed '-p 127.0.0.1::9001/tcp ' "${REC}.create" "empty host port keeps explicit address"
+
+# Plugin warnings must stay out of the numeric result in normal (non-JSON) mode.
+plugin_result="$(bash -c 'upgrade_script="$1"; set --; export AGENTTEAMS_UPGRADE_FUNCTIONS_ONLY=1; source "${upgrade_script}"; higress_plugin_check' bash "${UPGRADE}" 2> "${TMP}/plugin.err")"
+assert_eq "${plugin_result}" "0" "no target image returns only a number"
+assert_contains 'no target controller image' "${TMP}/plugin.err" "no target image warning"
+plugin_result="$(STUB_SCENARIO=wasm_missing bash -c 'upgrade_script="$1"; set --; export AGENTTEAMS_UPGRADE_FUNCTIONS_ONLY=1; source "${upgrade_script}"; DOCKER_CMD=docker; CONTROLLER_IMAGE=example/controller:new; higress_plugin_check' bash "${UPGRADE}" 2> "${TMP}/plugin.err")"
+assert_eq "${plugin_result}" "1" "missing target plugin returns only a number"
+assert_contains 'missing in target image' "${TMP}/plugin.err" "missing target plugin warning"
 
 # 8. status --json
 run_case ok status --state-file "${TMP}/b5/state.json" --json

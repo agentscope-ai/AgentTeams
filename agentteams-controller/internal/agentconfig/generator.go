@@ -7,6 +7,22 @@ import (
 	"strings"
 )
 
+// gatewayProviderID is the openclaw provider-block id this generator emits.
+// Upstream provider selection happens inside the gateway (Higress AI API +
+// consumer authorization + per-worker IntranetURL baseUrl); the local block id
+// is intentionally constant — a "provider/model" prefix that does not resolve
+// to a block in models.providers fails openclaw config validation.
+const gatewayProviderID = "agentteams-gateway"
+
+// providerFor resolves the provider that serves a worker's models.
+// Empty keeps the built-in gateway provider.
+func providerFor(name string) string {
+	if v := strings.TrimSpace(name); v != "" {
+		return v
+	}
+	return gatewayProviderID
+}
+
 // Generator produces worker runtime configuration files in pure Go.
 type Generator struct {
 	config Config
@@ -25,23 +41,42 @@ func NewGenerator(cfg Config) *Generator {
 
 // GenerateOpenClawConfig produces the openclaw.json content for a worker.
 func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, error) {
+	// Provider projection: the worker's models are qualified with the
+	// provider named by ModelProvider (empty keeps the built-in gateway).
+	pid := providerFor(req.ModelProvider)
+
 	modelName := req.ModelName
 	if modelName == "" {
 		modelName = g.config.DefaultModel
 	}
-	modelName = strings.TrimPrefix(modelName, "agentteams-gateway/")
+	// Strip the effective provider prefix first, then the built-in one, so
+	// values still carrying a legacy agentteams-gateway/ prefix keep working.
+	modelName = strings.TrimPrefix(modelName, pid+"/")
+	modelName = strings.TrimPrefix(modelName, gatewayProviderID+"/")
 
-	// agents.defaults.model block. The subagent entry (QwenPaw >= 2.1.1
-	// native subagent_model) uses the dict form consumed by the worker
-	// bridge overlay; primary keeps the historical "provider/model" string.
+	// agents.defaults.model block. Primary keeps the historical
+	// "provider/model" string.
 	modelCfg := map[string]interface{}{
-		"primary": "agentteams-gateway/" + modelName,
+		"primary": pid + "/" + modelName,
 	}
-	if req.SubagentModelName != "" {
-		modelCfg["subagent"] = map[string]interface{}{
-			"provider_id": "agentteams-gateway",
-			"model":       req.SubagentModelName,
-		}
+
+	// Provider prefix stripped (effective provider, then the built-in for
+	// legacy values): reused for the subagents.model value and to register
+	// the subagent model in the provider catalog and alias table below.
+	// Empty means "unset" — no subagents.model key, no catalog entry.
+	subagentModel := strings.TrimPrefix(req.SubagentModelName, pid+"/")
+	subagentModel = strings.TrimPrefix(subagentModel, gatewayProviderID+"/")
+
+	// The subagent model is written to agents.defaults.subagents.model as a
+	// single "provider/model" string. OpenClaw's zod schema accepts
+	// subagents.model as a string or {primary, fallbacks}; the old
+	// agents.defaults.model.subagent dict (QwenPaw shape) is not a valid
+	// OpenClaw key and would be rejected by strict config validation.
+	subagentsCfg := map[string]interface{}{
+		"maxConcurrent": 8,
+	}
+	if subagentModel != "" {
+		subagentsCfg["model"] = pid + "/" + subagentModel
 	}
 
 	matrixServerURL := g.config.MatrixServerURL
@@ -124,7 +159,7 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 	// mirror that here so the controller-pushed config stays byte-stable across
 	// reconciles. The token doubles as the Control UI / remote auth token, so
 	// reusing GatewayKey is consistent with the manager template.
-	modelAliases := g.allModelAliases(modelName)
+	modelAliases := g.allModelAliases(pid, modelName, subagentModel)
 	modelPolicy := map[string]interface{}{
 		"allow": sortedKeys(modelAliases),
 	}
@@ -153,25 +188,23 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 		"models": map[string]interface{}{
 			"mode": "merge",
 			"providers": map[string]interface{}{
-				"agentteams-gateway": map[string]interface{}{
+				pid: map[string]interface{}{
 					"baseUrl": aiGatewayURL + "/v1",
 					"apiKey":  req.GatewayKey,
 					"api":     "openai-completions",
-					"models":  g.allModelSpecs(modelName),
+					"models":  g.allModelSpecs(modelName, subagentModel),
 				},
 			},
 		},
 		"agents": map[string]interface{}{
 			"defaults": map[string]interface{}{
-				"timeoutSeconds": 1800,
-				"workspace":      "~",
-				"model":          modelCfg,
-				"models":         modelAliases,
-				"modelPolicy":    modelPolicy,
-				"maxConcurrent":  4,
-				"subagents": map[string]interface{}{
-					"maxConcurrent": 8,
-				},
+				"timeoutSeconds":  1800,
+				"workspace":       "~",
+				"model":           modelCfg,
+				"models":          modelAliases,
+				"modelPolicy":     modelPolicy,
+				"maxConcurrent":   4,
+				"subagents":       subagentsCfg,
 				"elevatedDefault": "full",
 			},
 		},
@@ -543,7 +576,7 @@ func containsString(slice []string, s string) bool {
 }
 
 // allModelSpecs returns all known model specs for the openclaw.json models list.
-func (g *Generator) allModelSpecs(selectedModel string) []ModelSpec {
+func (g *Generator) allModelSpecs(selectedModel, subagentModel string) []ModelSpec {
 	allModels := []string{
 		"gpt-5.4", "gpt-5.3-codex", "gpt-5-mini", "gpt-5-nano",
 		"claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5",
@@ -553,7 +586,7 @@ func (g *Generator) allModelSpecs(selectedModel string) []ModelSpec {
 		"MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5",
 	}
 
-	specs := make([]ModelSpec, 0, len(allModels)+1)
+	specs := make([]ModelSpec, 0, len(allModels)+2)
 	seen := make(map[string]bool)
 	for _, name := range allModels {
 		specs = append(specs, g.resolveModelSpec(name))
@@ -562,12 +595,21 @@ func (g *Generator) allModelSpecs(selectedModel string) []ModelSpec {
 	// Add custom model if not in the built-in list
 	if !seen[selectedModel] {
 		specs = append(specs, g.resolveModelSpec(selectedModel))
+		seen[selectedModel] = true
+	}
+	// Register the subagent model too, so agents.defaults.subagents.model never
+	// references a model the provider catalog does not declare.
+	if subagentModel != "" && !seen[subagentModel] {
+		specs = append(specs, g.resolveModelSpec(subagentModel))
 	}
 	return specs
 }
 
-// allModelAliases returns the agents.defaults.models alias map.
-func (g *Generator) allModelAliases(selectedModel string) map[string]interface{} {
+// allModelAliases returns the agents.defaults.models alias map. Keys are
+// qualified with pid — the provider serving this worker's models — so the
+// alias table and the derived modelPolicy allowlist always resolve against
+// the declared models.providers block.
+func (g *Generator) allModelAliases(pid, selectedModel, subagentModel string) map[string]interface{} {
 	allModels := []string{
 		"gpt-5.4", "gpt-5.3-codex", "gpt-5-mini", "gpt-5-nano",
 		"claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5",
@@ -579,11 +621,19 @@ func (g *Generator) allModelAliases(selectedModel string) map[string]interface{}
 
 	aliases := make(map[string]interface{})
 	for _, name := range allModels {
-		aliases["agentteams-gateway/"+name] = map[string]interface{}{"alias": name}
+		aliases[pid+"/"+name] = map[string]interface{}{"alias": name}
 	}
 	// Add custom model if not in the built-in list
-	if _, exists := aliases["agentteams-gateway/"+selectedModel]; !exists {
-		aliases["agentteams-gateway/"+selectedModel] = map[string]interface{}{"alias": selectedModel}
+	if _, exists := aliases[pid+"/"+selectedModel]; !exists {
+		aliases[pid+"/"+selectedModel] = map[string]interface{}{"alias": selectedModel}
+	}
+	// Alias the subagent model as well so it is selectable; the map lookup
+	// dedupes it against the entries above.
+	if subagentModel != "" {
+		subagentKey := pid + "/" + subagentModel
+		if _, exists := aliases[subagentKey]; !exists {
+			aliases[subagentKey] = map[string]interface{}{"alias": subagentModel}
+		}
 	}
 	return aliases
 }

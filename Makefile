@@ -21,7 +21,7 @@
 # ---------- Configuration ----------
 
 VERSION        ?= latest
-DEEPSEEK_HARNESS_WORKER_VERSION ?= v0.1.0
+DEEPSEEK_HARNESS_WORKER_VERSION ?= v0.1.1
 REGISTRY       ?= higress-registry.cn-hangzhou.cr.aliyuncs.com
 REPO           ?= agentteams
 
@@ -109,7 +109,7 @@ LINES          ?= 50
 .PHONY: all build build-openclaw-base build-agentteams-controller build-embedded build-manager build-manager-qwenpaw build-worker build-hermes-worker build-openhuman-worker \
         build-qwenpaw-worker build-deepseek-harness-worker \
         tag push push-openclaw-base push-agentteams-controller push-embedded push-manager push-manager-qwenpaw push-worker push-hermes-worker push-openhuman-worker \
-        push-qwenpaw-worker push-deepseek-harness-worker \
+        push-qwenpaw-worker push-deepseek-harness-worker push-openclaw-base-platform push-openclaw-base-manifest \
         push-native push-native-manager push-native-manager-qwenpaw push-native-worker push-native-hermes-worker push-native-openhuman-worker \
         push-native-qwenpaw-worker push-native-deepseek-harness-worker \
         buildx-setup \
@@ -183,7 +183,7 @@ build-worker: ## Build Worker image
 
 build-hermes-worker: ## Build Hermes Worker image
 	@echo "==> Building Hermes Worker image: $(LOCAL_HERMES_WORKER) (registry: $(HIGRESS_REGISTRY))"
-	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context teamharness_trace=./plugins/teamharness/adapters/qwenpaw $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_HERMES_WORKER) \
 		./hermes/
@@ -279,6 +279,14 @@ else
 		--push \
 		./openclaw-base/
 endif
+
+push-openclaw-base-platform: ## Push one native OpenClaw base platform to a staging tag
+	$(MAKE) push-openclaw-base MULTIARCH_PLATFORMS=linux/$(ARCH) OPENCLAW_BASE_TAG=$(OPENCLAW_BASE_TAG)-$(ARCH) PUSH_LATEST=
+
+push-openclaw-base-manifest: ## Publish the completed OpenClaw base architectures together
+	docker buildx imagetools create -t $(OPENCLAW_BASE_TAG) \
+		$(if $(PUSH_LATEST),-t $(OPENCLAW_BASE_IMAGE):latest) \
+		$(OPENCLAW_BASE_TAG)-amd64 $(OPENCLAW_BASE_TAG)-arm64
 
 push-agentteams-controller: buildx-setup ## Build + push multi-arch agentteams-controller image
 	@echo "==> Building + pushing multi-arch agentteams-controller: $(CONTROLLER_TAG) [$(MULTIARCH_PLATFORMS)]"
@@ -427,7 +435,7 @@ ifeq ($(IS_PODMAN),1)
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
 		echo "  -> Building Hermes Worker for $(plat)..." && \
 		podman build --platform $(plat) \
-			$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+			$(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context teamharness_trace=./plugins/teamharness/adapters/qwenpaw $(DOCKER_BUILD_ARGS) \
 			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 			--manifest $(HERMES_WORKER_TAG) \
 			./hermes/ && ) true
@@ -439,7 +447,7 @@ else
 	docker buildx build \
 		--builder $(BUILDX_BUILDER) \
 		--platform $(MULTIARCH_PLATFORMS) \
-		$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+		$(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context teamharness_trace=./plugins/teamharness/adapters/qwenpaw $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 		-t $(HERMES_WORKER_TAG) \
 		$(if $(PUSH_LATEST),-t $(HERMES_WORKER_IMAGE):latest) \
@@ -549,6 +557,7 @@ push-native-deepseek-harness-worker: build-deepseek-harness-worker ## Push nativ
 # Wait for Manager services to be ready (used internally by test target)
 # Uses docker exec to check health inside container (works regardless of port mappings)
 # Usage: make wait-ready [CONTAINER=name]
+.PHONY: verify-bundle
 .PHONY: wait-ready
 wait-ready:
 	@echo "==> Waiting for Manager services to be ready (container: $(or $(CONTAINER),agentteams-controller))..."
@@ -749,6 +758,20 @@ replay-log: ## View the latest replay conversation log
 verify: ## Run post-install verification against the running Manager container
 	@bash ./install/agentteams-verify.sh $(or $(CONTAINER),agentteams-controller)
 
+BUNDLE ?=
+RUNTIME ?=
+
+verify-bundle: ## Bundle L3/L4 conformance: isolated install/load/uninstall, upgrade + rollback (P-b/P-c); narrow with BUNDLE=matrix|teamharness and RUNTIME=<adapter>
+	@set -e; \
+	case "$(BUNDLE)" in \
+	  ""|all) paths="plugins/tests/agentteams-matrix/test_matrix_bundle_lifecycle.py plugins/tests/teamharness/test_teamharness_bundle_lifecycle.py" ;; \
+	  matrix|agentteams-matrix) paths="plugins/tests/agentteams-matrix/test_matrix_bundle_lifecycle.py" ;; \
+	  teamharness|agentteams-teamharness) paths="plugins/tests/teamharness/test_teamharness_bundle_lifecycle.py" ;; \
+	  *) echo "unknown BUNDLE=$(BUNDLE) (use matrix, teamharness or empty)" >&2; exit 2 ;; \
+	esac; \
+	echo "==> Bundle lifecycle conformance (L3 isolation + L4 upgrade/rollback)"; \
+	python3 -m pytest -q $$paths $(if $(RUNTIME),-k $(RUNTIME))
+
 # ---------- Dev utils ----------
 
 status: ## Show status of Manager and all Worker containers
@@ -899,11 +922,11 @@ help: ## Show this help
 # Variables:
 #   DASHBOARD_CONTEXT   Path to dashboard source tree (default: ../agentteams-dashboard)
 #   DASHBOARD_IMAGE     Override dashboard image (derived from DASHBOARD_VERSION by default)
-#   DASHBOARD_VERSION   Dashboard version tag (default: v1.3.1)
+#   DASHBOARD_VERSION   Dashboard version tag (default: v1.4.0)
 #   AGENTTEAMS_PORT_DASHBOARD   Dashboard host port (default: 13000)
 
 DASHBOARD_CONTEXT ?= ../agentteams-dashboard
-DASHBOARD_VERSION ?= v1.3.1
+DASHBOARD_VERSION ?= v1.4.0
 DASHBOARD_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-dashboard:$(DASHBOARD_VERSION)
 AGENTTEAMS_PORT_DASHBOARD ?= 13000
 

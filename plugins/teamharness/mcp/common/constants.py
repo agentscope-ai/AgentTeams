@@ -1,7 +1,7 @@
 # status/transition constants shared by all fragments (W1-a2: real module)
 from __future__ import annotations
 
-TOOL_NAMES = ["health", "message", "roomflow", "filesync", "artifact", "projectflow", "taskflow"]
+TOOL_NAMES = ["health", "message", "roomflow", "filesync", "artifact", "projectflow", "taskflow", "build_review_context"]
 
 
 MESSAGE_TOOL_BLOCKED_ROLES = {"worker", "remote-member"}
@@ -33,6 +33,23 @@ TRANSITIONS: dict[str, list[str]] = {
 
 
 TASK_HISTORY_LIMIT = 50
+
+# W2 protocol guard (issue #1451 W2): decision-class vocabulary and the
+# decision_status sub-state. The nine runtime states above are untouched;
+# decision_status overlays them as a protocol-layer marker. The
+# vocabulary is mirrored in contracts/decision-classes.json and
+# contracts/attention.json (test_protocol_guard.py asserts the two agree).
+DECISION_CLASS_IDS = ("r1", "r2", "r3", "r4", "r5", "r6")
+DEFAULT_DECISION_CLASS = "r4"
+
+DECISION_STATUS_VALUES = ("open", "blocked", "frozen", "paused", "spec_conflict")
+DEFAULT_DECISION_STATUS = "open"
+
+# Attention stall chain (contracts/attention.json): re-requests of an
+# unanswered attention record bump its stall_count; the task's
+# decision_status escalates when the count reaches these thresholds.
+ATTENTION_STALL_BLOCKED = 2
+ATTENTION_STALL_FROZEN = 3
 
 # TeamHarness loop budget ledger (project["loop"]["budget"]): the
 # tier->iteration-budget mapping (simple=3 / standard=5 / full=10). The

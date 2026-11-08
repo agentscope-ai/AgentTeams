@@ -41,6 +41,7 @@ import (
 	"crypto/rand"
 	"encoding/base32"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -553,6 +554,17 @@ func (h *CodingCliHandler) putCliSettings(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// L1 (admin/manager) writes carry no grant check — the full
+	// provider/config surface stays theirs (PR-B1 §2.3). An L2 human may not
+	// touch provider-defining keys at all: reject before any exec, so the
+	// worker container is never poked for a write that cannot proceed.
+	if caller != nil && caller.Role == authpkg.RoleHuman {
+		if key := codingCliDefinitionKey(spec.ID, incoming); key != "" {
+			httputil.WriteError(w, http.StatusForbidden, "provider_config_l1_only: "+key)
+			return
+		}
+	}
+
 	key := name + "/" + spec.ID
 	h.tasksMu.Lock()
 	if h.settingsBusy[key] {
@@ -594,6 +606,19 @@ func (h *CodingCliHandler) putCliSettings(w http.ResponseWriter, r *http.Request
 		return
 	}
 	merged := codingCliDeepMerge(current, incoming)
+
+	// PR-B1 §2.3: an L2 human's model change is grant-gated on the merged
+	// result (the value actually written), with same-value writes always
+	// allowed. The check runs after the merge and before the exec write.
+	if caller != nil && caller.Role == authpkg.RoleHuman {
+		if changed, next := codingCliModelChange(current, merged); changed {
+			if status, msg := h.checkHumanCLIModel(r, spec.ID, name, next); status != 0 {
+				httputil.WriteError(w, status, msg)
+				return
+			}
+		}
+	}
+
 	// readCliSettings already resolved the effective home, so this is the
 	// exact path the next GET probes.
 	writePath := filePath
@@ -886,6 +911,104 @@ func writeCodingCliJSON(w http.ResponseWriter, status int, v interface{}) {
 // against current: the key is dropped from incoming (so the deep merge
 // keeps the existing value). A sentinel with no existing value is an
 // error — the same contract as the qwenpaw worker-side P1a merge.
+
+// codingCliDefinitionKeys lists the settings keys that define the CLI's
+// provider/endpoint surface (PR-B1 §2.3). L1 owns that surface; an L2 human
+// touching any of these keys gets provider_config_l1_only.
+func codingCliDefinitionKeys(cliID string) []string {
+	switch cliID {
+	case "qwen-code":
+		return []string{"security", "baseUrl", "baseURL", "provider", "providers", "env"}
+	default: // opencode, qoder
+		return []string{"provider", "providers"}
+	}
+}
+
+// codingCliDefinitionKey returns the first provider-defining key present in
+// the incoming patch ("" when the patch touches none of them).
+func codingCliDefinitionKey(cliID string, incoming map[string]interface{}) string {
+	for _, k := range codingCliDefinitionKeys(cliID) {
+		if _, ok := incoming[k]; ok {
+			return k
+		}
+	}
+	return ""
+}
+
+// codingCliModelChange reports whether the merge changed the CLI's model
+// value and, when it did, what the new value is.
+func codingCliModelChange(current, merged map[string]interface{}) (bool, string) {
+	cur, _ := current["model"].(string)
+	next, _ := merged["model"].(string)
+	if cur == next {
+		return false, ""
+	}
+	return true, next
+}
+
+// providerModel splits an opencode "provider/model" value into its parts;
+// every other CLI (and an opencode value without a "/") is a bare model
+// name with an empty provider.
+func providerModel(cliID, value string) (string, string) {
+	if cliID == "opencode" {
+		if i := strings.Index(value, "/"); i >= 0 {
+			return value[:i], value[i+1:]
+		}
+	}
+	return "", value
+}
+
+// checkHumanCLIModel enforces the caller's grant set on an L2 human's
+// coding-CLI model change (PR-B1 §2.3). The effective value is the merged
+// "model" key; an explicit clear ("") needs the CLI grant's inherit flag,
+// and a non-empty value must be admitted by the CLI's effective entries.
+// An over-cap implicit annotation fails closed with 409
+// (model_grant_overflow, count in the message) — the same boundary check
+// the worker-update write path runs. Returns (0, "") when the write is
+// allowed.
+func (h *CodingCliHandler) checkHumanCLIModel(r *http.Request, cliID, workerName, model string) (int, string) {
+	ctx := r.Context()
+	caller := authpkg.CallerFromContext(ctx)
+	teamObj, _, ok, err := findTeamMember(ctx, h.client, h.namespace, workerName)
+	if err != nil {
+		return http.StatusInternalServerError, "lookup worker team: " + err.Error()
+	}
+	teamName := ""
+	role := "worker"
+	if ok {
+		teamName = teamObj.Name
+		role = teamMemberRole(teamObj, workerName)
+	}
+	var worker v1beta1.Worker
+	if err := h.client.Get(ctx, client.ObjectKey{Name: workerName, Namespace: h.namespace}, &worker); err != nil {
+		if apierrors.IsNotFound(err) {
+			return http.StatusNotFound, "worker: not found"
+		}
+		return http.StatusInternalServerError, "get worker: " + err.Error()
+	}
+	set, err := resolveCallerGrant(ctx, h.client, h.namespace, caller, &worker, teamName, role)
+	if err != nil {
+		// An over-cap implicit annotation is worker state to fix (409),
+		// not a server bug: the count stays in the message.
+		if errors.Is(err, errModelGrantOverflow) {
+			return http.StatusConflict, err.Error()
+		}
+		return http.StatusInternalServerError, "resolve model grants: " + err.Error()
+	}
+	grant := set.cliSet(cliID)
+	if model == "" {
+		if !grant.inherit {
+			return http.StatusForbidden, "inherit_not_granted: " + cliID
+		}
+		return 0, ""
+	}
+	provider, modelPart := providerModel(cliID, model)
+	if !grantAllows(grant.entries, provider, modelPart) {
+		return http.StatusForbidden, "model_not_allowed: " + model
+	}
+	return 0, ""
+}
+
 func codingCliApplySentinels(current, incoming map[string]interface{}) error {
 	return codingCliSentinelsAt(current, incoming, "")
 }

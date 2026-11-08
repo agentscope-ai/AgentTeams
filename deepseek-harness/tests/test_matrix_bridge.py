@@ -1,6 +1,8 @@
 import sys
+import os
 import tempfile
 import unittest
+import urllib.parse
 from pathlib import Path
 from unittest.mock import patch
 
@@ -24,6 +26,62 @@ from matrix_bridge import (  # noqa: E402
     text_events,
     visible_matrix_user_ids,
 )
+
+
+class LimitedTimelineTest(unittest.TestCase):
+    @staticmethod
+    def event(event_id):
+        return {
+            "event_id": event_id,
+            "sender": "@admin:matrix.local",
+            "type": "m.room.message",
+            "content": {"msgtype": "m.text", "body": event_id},
+        }
+
+    def test_backfills_limited_timeline_in_order_across_empty_pages(self):
+        room_id = "!watched:matrix.local"
+        timeline = {"limited": True, "prev_batch": "end/+", "events": [self.event("$latest")]}
+        payload = {"rooms": {"join": {
+            room_id: {"timeline": timeline},
+            "!unwatched:matrix.local": {"timeline": {"limited": True, "events": []}},
+        }}}
+        client = MatrixClient("http://matrix.local", "token")
+        pages = [
+            {"chunk": [self.event("$older")], "end": "middle/+"},
+            {"chunk": [], "end": "last/+"},
+            {"chunk": [self.event("$newer"), self.event("$latest")]},
+        ]
+        with patch.object(client, "request", side_effect=pages) as request:
+            client.fill_timeline_gaps(payload, "start/+", {room_id: "personal"})
+
+        self.assertEqual(
+            [item["event_id"] for item in text_events(payload, {room_id: "personal"}, "@worker:matrix.local")],
+            ["$older", "$newer", "$latest"],
+        )
+        self.assertEqual(request.call_count, 3)
+        for call, start in zip(request.call_args_list, ["start/+", "middle/+", "last/+"]):
+            method, path = call.args
+            parsed = urllib.parse.urlsplit(path)
+            self.assertEqual(method, "GET")
+            self.assertIn(urllib.parse.quote(room_id, safe=""), parsed.path)
+            self.assertEqual(
+                urllib.parse.parse_qs(parsed.query),
+                {"from": [start], "to": ["end/+"], "dir": ["f"], "limit": ["100"]},
+            )
+
+    def test_missing_boundary_and_repeated_page_token_do_not_consume_timeline(self):
+        room_id = "!watched:matrix.local"
+        timeline = {"limited": True, "events": [self.event("$latest")]}
+        payload = {"rooms": {"join": {room_id: {"timeline": timeline}}}}
+        client = MatrixClient("http://matrix.local", "token")
+        with self.assertRaisesRegex(RuntimeError, "prev_batch"):
+            client.fill_timeline_gaps(payload, "start", {room_id: "personal"})
+
+        timeline["prev_batch"] = "end"
+        with patch.object(client, "request", return_value={"chunk": [self.event("$older")], "end": "start"}):
+            with self.assertRaisesRegex(RuntimeError, "pagination"):
+                client.fill_timeline_gaps(payload, "start", {room_id: "personal"})
+        self.assertEqual(timeline["events"], [self.event("$latest")])
 
 
 class TextEventsTest(unittest.TestCase):
@@ -123,6 +181,15 @@ Node.js v22.22.3
             dsh_error_detail(stderr, 1),
             "Error: dsh: HTTP_405: DeepSeek API error (HTTP 405)",
         )
+
+    def test_dsh_error_preserves_boot_error_instead_of_stack_frame(self):
+        stderr = """file:///dsh/lib/index.js:1
+Error: plugin tree failed to load
+    at boot (file:///dsh/lib/index.js:2:3)
+    at async file:///dsh/lib/bin.js:133:3
+Node.js v24.22.1
+"""
+        self.assertEqual(dsh_error_detail(stderr, 1), "Error: plugin tree failed to load")
 
     def test_team_agent_reply_is_accepted_only_when_structurally_targeted(self):
         payload = {
@@ -413,6 +480,21 @@ Node.js v22.22.3
 
 
 class RoomSessionContinuationTest(unittest.TestCase):
+    @patch("matrix_bridge.subprocess.run")
+    def test_each_turn_uses_current_projected_model_and_gateway(self, mocked_run):
+        mocked_run.return_value.returncode = 0
+        mocked_run.return_value.stdout = "answer"
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory) / 'runtime.yaml'
+            for explicit in ('', 'https://api.deepseek.com'):
+                with patch.dict(os.environ, {'TEAMHARNESS_RUNTIME_CONFIG': str(runtime), 'TEAMHARNESS_DSH_MODEL': 'stale-model', 'DEEPSEEK_BASE_URL': explicit, 'AGENTTEAMS_AI_GATEWAY_URL': 'http://fallback'}, clear=True):
+                    for model, gateway in [('first-model', 'http://first-route'), ('second-model', 'http://second-route')]:
+                        runtime.write_text(f'desired:\n  model:\n    model: {model}\n    gatewayUrl: {gateway}\n')
+                        run_dsh('continue', Path(directory), 30, session_id='session-model', resume=True, event_id='$model', attempt=1)
+                        env = mocked_run.call_args.kwargs['env']
+                        self.assertEqual(env['TEAMHARNESS_DSH_MODEL'], model)
+                        self.assertEqual(env['DEEPSEEK_BASE_URL'], explicit or gateway + '/v1')
+
     def test_room_session_is_restored_after_bridge_restart(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "matrix-bridge-state.json"

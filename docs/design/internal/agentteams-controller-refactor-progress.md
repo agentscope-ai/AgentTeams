@@ -186,7 +186,7 @@ CLI 已完全重写为 REST API 客户端，不再直接操作 MinIO。所有命
 | Manager 无状态化（state.json → OSS） | ❌ 未实现 | — |
 | Manager CRD 驱动部署 | ✅ 完成 | Manager CRD + ManagerReconciler + 自动创建 Manager 容器 |
 | Team Leader Heartbeat 机制 | ✅ 完成 | `4870b26` — heartbeat、worker idle timeout、sleep lifecycle |
-| Team Leader Worker 生命周期管理 | ✅ 完成 | worker-lifecycle skill + sleep/wake API |
+| Team Leader Worker 生命周期管理 | ⛔ 已收回（#1536） | worker-lifecycle skill + sleep/wake API；资源与生命周期操作改由 Manager 或平台 Admin 负责 |
 | Leader permissions 配置 | ⚠️ 部分完成 | RBAC 中间件已实现 SA 认证 + 角色鉴权 |
 | Quota 检查机制 | ❌ 未实现 | — |
 | CallerIdentity 权限隔离 | ⚠️ 部分完成 | SA Token 认证已实现，细粒度 CallerIdentity 隔离待完善 |

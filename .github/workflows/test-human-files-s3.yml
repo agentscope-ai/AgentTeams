@@ -24,10 +24,11 @@ jobs:
       # the regression must exercise the same client. The MinIO project has
       # archived its downloads page; the release asset is still published.
       - name: Install mc
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          curl -fsSL -o /usr/local/bin/mc \
-            "https://github.com/minio/mc/releases/download/RELEASE.2025-08-13T08-35-41Z/mc.linux-amd64.RELEASE.2025-08-13T08-35-41Z"
-          chmod +x /usr/local/bin/mc
+          python3 hack/install-mc.py "$RUNNER_TEMP/mc"
+          sudo install -m 755 "$RUNNER_TEMP/mc" /usr/local/bin/mc
           mc --version
 
       # RustFS is the 1.2.6 default backend, so the native regression runs
@@ -119,10 +120,11 @@ jobs:
           cache-dependency-path: agentteams-controller/go.sum
 
       - name: Install mc
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          curl -fsSL -o /usr/local/bin/mc \
-            "https://github.com/minio/mc/releases/download/RELEASE.2025-08-13T08-35-41Z/mc.linux-amd64.RELEASE.2025-08-13T08-35-41Z"
-          chmod +x /usr/local/bin/mc
+          python3 hack/install-mc.py "$RUNNER_TEMP/mc"
+          sudo install -m 755 "$RUNNER_TEMP/mc" /usr/local/bin/mc
           mc --version
 
       - name: Start RustFS 1.0.4

@@ -38,7 +38,7 @@ here = os.environ["PYHERE"]
 name = os.environ["PYNAME"]
 out = os.environ["PYZIP"]
 
-EXCLUDE_DIRS = {"__pycache__", "tests", "state"}
+EXCLUDE_DIRS = {"__pycache__", "tests", "state", ".pytest_cache", ".mypy_cache", ".git"}
 EXCLUDE_FILE_SUFFIXES = (".pyc", ".log")
 
 count = 0

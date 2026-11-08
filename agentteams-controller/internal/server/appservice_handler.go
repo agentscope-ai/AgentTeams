@@ -19,6 +19,19 @@ import (
 const roleTeamWorker = "worker"
 const roleTeamLeader = "team_leader"
 
+const (
+	// appserviceDedupTTL is how long a processed mention event stays in the
+	// dedup map. The homeserver re-pushes a failed transaction within its
+	// sending queue's retry window (minutes), so one hour comfortably covers
+	// every realistic redelivery while entries cannot accumulate forever.
+	appserviceDedupTTL = time.Hour
+	// appserviceDedupMaxEntries bounds the dedup map independently of the
+	// TTL: more distinct mention events than this inside a single TTL window
+	// would each cost at most one idempotent re-wake (Running is set only
+	// from Sleeping), never a double-apply.
+	appserviceDedupMaxEntries = 8192
+)
+
 // AppserviceHandler handles Matrix Application Service transaction pushes
 // from the homeserver. Events arrive via HTTP push (PUT /transactions)
 // instead of the controller polling /sync.
@@ -32,7 +45,7 @@ type AppserviceHandler struct {
 	now       func() time.Time
 
 	mu   sync.Mutex
-	seen map[string]struct{} // event dedup: "roomID/eventID/userID"
+	seen map[string]time.Time // event dedup: "roomID/eventID/userID" -> expiry
 }
 
 // NewAppserviceHandler creates a handler for Matrix appservice transaction pushes.
@@ -42,7 +55,7 @@ func NewAppserviceHandler(hsToken string, c client.Client, namespace string) *Ap
 		client:    c,
 		namespace: namespace,
 		now:       time.Now,
-		seen:      make(map[string]struct{}),
+		seen:      make(map[string]time.Time),
 	}
 }
 
@@ -185,7 +198,8 @@ func (h *AppserviceHandler) verifyHSToken(r *http.Request) bool {
 func (h *AppserviceHandler) handleMention(ctx context.Context, roomID, eventID, sender, userID string) error {
 	logger := log.FromContext(ctx).WithName("appservice")
 
-	// Dedup by roomID/eventID/userID.
+	// Dedup by roomID/eventID/userID, with entries expiring after
+	// appserviceDedupTTL (the map is bounded, see markSeen).
 	//
 	// Mark-after-confirm: we record the event as seen only AFTER a
 	// successful wake. Marking before the wake (the historical behavior)
@@ -198,12 +212,14 @@ func (h *AppserviceHandler) handleMention(ctx context.Context, roomID, eventID, 
 	// transaction (its transaction id is derived from the event ids, so the
 	// same events arrive again). Wake is idempotent (Running is set only
 	// from Sleeping, under retry), so a concurrent duplicate push cannot
-	// double-apply the state change.
+	// double-apply the state change — including a duplicate that arrives
+	// after the dedup window and is processed again.
 	key := ""
 	if eventID != "" {
 		key = fmt.Sprintf("%s/%s/%s", roomID, eventID, userID)
+		now := h.now()
 		h.mu.Lock()
-		if _, ok := h.seen[key]; ok {
+		if exp, ok := h.seen[key]; ok && !now.After(exp) {
 			h.mu.Unlock()
 			logger.V(1).Info("mention skipped: duplicate event",
 				"roomID", roomID, "eventID", eventID, "mentionedUser", userID)
@@ -225,10 +241,34 @@ func (h *AppserviceHandler) handleMention(ctx context.Context, roomID, eventID, 
 
 	if key != "" {
 		h.mu.Lock()
-		h.seen[key] = struct{}{}
+		h.markSeen(key, h.now())
 		h.mu.Unlock()
 	}
 	return nil
+}
+
+// markSeen records key as processed until now+appserviceDedupTTL. Expired
+// entries are dropped first so the map cannot grow without bound over the
+// process lifetime: it holds at most appserviceDedupMaxEntries live or
+// expired entries, even under a flood of distinct mention events. If a
+// single TTL window still fills the map past the cap, an arbitrary entry is
+// evicted to keep memory bounded; the only cost is an idempotent re-wake.
+// Callers must hold h.mu.
+func (h *AppserviceHandler) markSeen(key string, now time.Time) {
+	if len(h.seen) >= appserviceDedupMaxEntries {
+		for k, exp := range h.seen {
+			if now.After(exp) {
+				delete(h.seen, k)
+			}
+		}
+		for len(h.seen) >= appserviceDedupMaxEntries {
+			for k := range h.seen {
+				delete(h.seen, k)
+				break
+			}
+		}
+	}
+	h.seen[key] = now.Add(appserviceDedupTTL)
 }
 
 // wakeStandaloneWorker wakes a standalone Worker whose MatrixUserID matches

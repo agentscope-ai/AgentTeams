@@ -6,6 +6,7 @@ Validate public values at render time. Supported combinations:
   gateway.provider=ai-gateway gateway.mode=existing   → external APIG, consumers only
   storage.provider=minio      storage.mode=managed    → deploy MinIO StatefulSet
   storage.provider=oss        storage.mode=existing   → external OSS bucket
+  storage.provider=s3         storage.mode=existing   → external S3 backend (e.g. RustFS)
 */ -}}
 
 {{- $matrixProvider := .Values.matrix.provider | default "" -}}
@@ -52,8 +53,19 @@ Validate public values at render time. Supported combinations:
   {{- if not (.Values.storage.oss.region | default "") -}}
   {{- fail "storage.oss.region is required when storage.provider=oss" -}}
   {{- end -}}
+{{- else if eq $storageProvider "s3" -}}
+  {{- if ne $storageMode "existing" -}}
+  {{- fail (printf "storage.provider=s3 requires storage.mode=existing (got %q)" $storageMode) -}}
+  {{- end -}}
+  {{- if not (.Values.storage.s3.endpoint | default "") -}}
+  {{- fail "storage.s3.endpoint is required when storage.provider=s3" -}}
+  {{- end -}}
+  {{- $s3HasInline := and (.Values.storage.s3.accessKey | default "") (.Values.storage.s3.secretKey | default "") -}}
+  {{- if not (or (.Values.storage.s3.existingSecret | default "") $s3HasInline) -}}
+  {{- fail "storage.provider=s3 requires storage.s3.existingSecret or storage.s3.accessKey + storage.s3.secretKey" -}}
+  {{- end -}}
 {{- else -}}
-{{- fail (printf "unsupported storage.provider %q: expected \"minio\" or \"oss\"" $storageProvider) -}}
+{{- fail (printf "unsupported storage.provider %q: expected \"minio\", \"oss\" or \"s3\"" $storageProvider) -}}
 {{- end -}}
 
 {{- $expectedHigressEnabled := eq (include "agentteams.gateway.higress.enabled" . | trim) "true" -}}

@@ -183,6 +183,28 @@ func (p *Provisioner) KickFromRoom(ctx context.Context, roomID, userID, reason s
 	return p.matrix.KickFromRoom(ctx, roomID, userID, reason)
 }
 
+// KickFromRoomAs is KickFromRoom with an explicit kicker actor ("" =
+// homeserver-admin identity). Authorization failures (kicker not a member
+// of the room, or the target's power level not strictly below the kicker's)
+// are returned as errors for the caller to fall back on.
+func (p *Provisioner) KickFromRoomAs(ctx context.Context, roomID, userID, reason, actorToken string) error {
+	if actorToken == "" {
+		return p.matrix.KickFromRoom(ctx, roomID, userID, reason)
+	}
+	return p.matrix.KickFromRoomWithToken(ctx, roomID, userID, reason, actorToken)
+}
+
+// LeaveRoomAs makes the user identified by userToken leave roomID
+// (self-leave). Always authorized for a joined/invited member, which makes
+// it the fallback when an equal-power kick is rejected by the homeserver.
+// Idempotent: nil when the user is not a member.
+func (p *Provisioner) LeaveRoomAs(ctx context.Context, roomID, userToken string) error {
+	if userToken == "" {
+		return fmt.Errorf("leave room %s: empty user token", roomID)
+	}
+	return p.matrix.LeaveRoom(ctx, roomID, userToken)
+}
+
 // ForceLeaveRoom asks the Tuwunel admin bot to force-leave userID out of
 // roomID. Used by the Human delete flow where the controller no longer
 // holds a valid user token (password may be stale) and must rely on the
@@ -193,11 +215,36 @@ func (p *Provisioner) ForceLeaveRoom(ctx context.Context, userID, roomID string)
 	return p.matrix.AdminCommand(ctx, cmd)
 }
 
+// IsUserInRoom reports whether userID is currently a member of roomID. It
+// queries the room member list with the homeserver-admin token (via
+// observedRoomMembership), so the result is authoritative whether or not the
+// Controller/Manager itself is in the room. Reconcile paths use it to skip a
+// ForceLeaveRoom that is already satisfied (the user is not in the room): the
+// Manager is not supposed to be in a team worker's personal room, so in the
+// steady state it is already out, and the fire-and-forget ForceLeaveRoom
+// re-firing on every reconcile is what floods the admin room (#1079). On a
+// lookup error it conservatively reports true (leave the removal path
+// reachable) so a transient failure does not strand an unwanted member.
+func (p *Provisioner) IsUserInRoom(ctx context.Context, roomID, userID string) (bool, error) {
+	inRoom, _, err := p.observedRoomMembership(ctx, roomID, userID)
+	if err != nil {
+		return true, err
+	}
+	return inRoom, nil
+}
+
 // DeactivateHumanUser disables a Matrix account through the Tuwunel admin bot.
 // Tuwunel owns the exact deactivate/revoke semantics; the controller treats a
 // successful command delivery as the offboard handoff point.
 func (p *Provisioner) DeactivateHumanUser(ctx context.Context, userID string) error {
 	cmd := fmt.Sprintf("!admin users deactivate %s", userID)
 	log.FromContext(ctx).Info("sending tuwunel human deactivate admin command", "user", userID, "command", cmd)
-	return p.matrix.AdminCommand(ctx, cmd)
+	if err := p.matrix.AdminCommand(ctx, cmd); err != nil {
+		return err
+	}
+	// Deactivation kills the account's access tokens: drop any cached one
+	// so a later re-provisioning of the same username re-logins fresh
+	// (and hits orphan recovery if the account is gone).
+	p.matrix.InvalidateUserToken(userID)
+	return nil
 }

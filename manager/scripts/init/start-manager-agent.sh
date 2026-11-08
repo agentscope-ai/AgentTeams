@@ -8,8 +8,15 @@
 #   AGENTTEAMS_MANAGER_RUNTIME=qwenpaw           - QwenPaw 2.0 workspace mode (default)
 #   AGENTTEAMS_MANAGER_RUNTIME=copaw              - Legacy alias, auto-routed to QwenPaw
 #   AGENTTEAMS_MANAGER_RUNTIME=openclaw           - OpenClaw gateway mode
+#
+# OpenClaw version guard (openclaw runtime only; see lib/openclaw-version-guard.sh):
+#   AGENTTEAMS_OPENCLAW_VERSION_GUARD_MODE=fatal|warn - default fatal: a known
+#       mismatch between the installed gateway and the pinned tag refuses to start
+#   AGENTTEAMS_ALLOW_OPENCLAW_VERSION_MISMATCH=1 - equivalent to warn
 
 source /opt/agentteams/scripts/lib/agentteams-env.sh
+. /opt/agentteams/scripts/lib/migrate-openclaw-config.sh
+. /opt/agentteams/scripts/lib/openclaw-version-guard.sh
 
 # ============================================================
 # Runtime selection
@@ -190,6 +197,10 @@ fi
 # Subsequent boots: compare image version; upgrade only if changed
 # ============================================================
 mkdir -p /root/manager-workspace
+# Guarantee the Manager's own tree on the shared FS: on a fresh deployment
+# storage has no agents/manager/ prefix, so the mc mirror never materializes
+# it (Workers get theirs via the controller + their entrypoint's mkdir -p).
+mkdir -p /root/agentteams-fs/agents/manager
 
 IMAGE_VERSION=$(cat /opt/agentteams/agent/.builtin-version 2>/dev/null || echo "unknown")
 INSTALLED_VERSION=$(cat /root/manager-workspace/.builtin-version 2>/dev/null || echo "")
@@ -695,6 +706,7 @@ if [ -f /root/manager-workspace/openclaw.json ]; then
        --arg emb_model "${AGENTTEAMS_EMBEDDING_MODEL}" \
        --arg aigw_domain "${AI_GATEWAY_DOMAIN}" \
        --arg matrix_user_id "@manager:${MATRIX_DOMAIN}" \
+       --arg admin_id "@${AGENTTEAMS_ADMIN_USER:-admin}:${MATRIX_DOMAIN}" \
        --argjson e2ee "${MATRIX_E2EE_ENABLED}" \
        --argjson known_models "${KNOWN_MODELS}" \
        --argjson ctx "${MODEL_CONTEXT_WINDOW}" \
@@ -714,13 +726,17 @@ if [ -f /root/manager-workspace/openclaw.json ]; then
         # Rebuild model aliases from the full models list
         | (.models.providers["agentteams-gateway"].models | map({ ("agentteams-gateway/" + .id): { "alias": .id } }) | add // {}) as $aliases
         | .agents.defaults.models = ((.agents.defaults.models // {}) + $aliases)
+        | if .agents.defaults.models != null and .agents.defaults.modelPolicy == null then .agents.defaults.modelPolicy = {allow: (.agents.defaults.models | keys)} else . end
         | .channels.matrix.accessToken = $token | .channels.matrix.userId = $matrix_user_id | .models.providers["agentteams-gateway"].apiKey = $key
         | ((.hooks.token // "") as $ht | if $ht == $key or $ht == ($key + "-hooks" | @base64) then del(.hooks) else . end)
         | .agents.defaults.model.primary = ("agentteams-gateway/" + $model)
         | .commands.restart = true
         | .gateway.port = 18799
         | .gateway.bind = "lan"
-        | .gateway.controlUi = ((.gateway.controlUi // {}) + {"dangerouslyDisableDeviceAuth": true, "allowInsecureAuth": true, "allowedOrigins": ["*"]})
+        # v2026.10.6 retired both device-auth bypass flags; keep the token
+        # auth/CORS contract instead of re-emitting rejected keys.
+        | .gateway.controlUi = ((.gateway.controlUi // {}) | del(.dangerouslyDisableDeviceAuth, .allowInsecureAuth))
+        | .gateway.controlUi.allowedOrigins //= ["*"]
         | .channels.matrix.encryption = $e2ee
         | .channels.matrix.network = ((.channels.matrix.network // {}) + {"dangerouslyAllowPrivateNetwork": true})
         | .channels.matrix.autoJoin = "always"
@@ -729,13 +745,18 @@ if [ -f /root/manager-workspace/openclaw.json ]; then
         | .tools.exec = ((.tools.exec // {}) + {"host":"gateway","security":"full","ask":"off"})
         | .tools.elevated = (.tools.elevated // {})
         | .tools.elevated.enabled = true
-        | .tools.elevated.allowFrom |= ((. // {}) | .matrix = ["*"])
+        # Replace the historical matrix=["*"] wildcard; keep any operator allowlist.
+        | .tools.elevated.allowFrom |= ((. // {}) |
+            if (.matrix == null or .matrix == [] or ((.matrix // []) | index("*") != null)) then
+              .matrix = [$admin_id]
+            else . end)
         | .agents.defaults.elevatedDefault = "full"
-        # Ensure memorySearch config exists (embedding model for memory) — skip if embedding model is empty
-        | if $emb_model != "" then .agents.defaults.memorySearch //= {"provider":"openai","model":$emb_model,"remote":{"baseUrl":("http://" + $aigw_domain + ":8080/v1"),"apiKey":$key}} else . end
+        # Ensure memory.search exists (embedding model for memory) — skip if empty.
+        | if $emb_model != "" then .memory.search //= {"provider":"openai","model":$emb_model,"remote":{"baseUrl":("http://" + $aigw_domain + ":8080/v1"),"apiKey":$key}} else . end
        ' \
        /root/manager-workspace/openclaw.json > /tmp/openclaw.json.tmp && \
         mv /tmp/openclaw.json.tmp /root/manager-workspace/openclaw.json
+    migrate_openclaw_config /root/manager-workspace/openclaw.json || log "WARNING: openclaw config migration failed"
     # Disable openclaw's observe-recovery mechanism which compares config against
     # a lastKnownGood baseline in config-health.json. When meta is missing from the
     # current file but present in the baseline, observe-recovery restores from .bak,
@@ -753,7 +774,7 @@ if [ -f /root/manager-workspace/openclaw.json ]; then
 else
     log "Manager openclaw.json not found, generating from template..."
     envsubst < /opt/agentteams/configs/manager-openclaw.json.tmpl > /root/manager-workspace/openclaw.json
-    # Post-envsubst injection: memorySearch + custom model (single jq pass when possible)
+    # Post-envsubst injection: memory.search + custom model (single jq pass when possible)
     if ! jq -e --arg model "${MODEL_NAME}" '.models.providers["agentteams-gateway"].models | map(.id) | index($model)' /root/manager-workspace/openclaw.json > /dev/null 2>&1; then
         log "Custom model '${MODEL_NAME}' not in built-in list, injecting into config..."
         jq --arg emb_model "${AGENTTEAMS_EMBEDDING_MODEL}" \
@@ -765,19 +786,21 @@ else
            --argjson reasoning "${MODEL_REASONING}" \
            --argjson input "${MODEL_INPUT}" \
            '
-            (if $emb_model != "" then .agents.defaults.memorySearch = {"provider":"openai","model":$emb_model,"remote":{"baseUrl":("http://" + $aigw_domain + ":8080/v1"),"apiKey":$key}} else . end)
+            (if $emb_model != "" then .memory.search = {"provider":"openai","model":$emb_model,"remote":{"baseUrl":("http://" + $aigw_domain + ":8080/v1"),"apiKey":$key}} else . end)
             | .models.providers["agentteams-gateway"].models += [{"id": $model, "name": $model, "reasoning": $reasoning, "contextWindow": $ctx, "maxTokens": $max, "input": $input}]
             | .agents.defaults.models += {("agentteams-gateway/" + $model): {"alias": $model}}
+            | if .agents.defaults.modelPolicy.allow != null then .agents.defaults.modelPolicy.allow = ((.agents.defaults.modelPolicy.allow + ["agentteams-gateway/" + $model]) | unique) else . end
            ' /root/manager-workspace/openclaw.json > /tmp/openclaw.json.tmp && \
             mv /tmp/openclaw.json.tmp /root/manager-workspace/openclaw.json
     elif [ -n "${AGENTTEAMS_EMBEDDING_MODEL}" ]; then
         jq --arg emb_model "${AGENTTEAMS_EMBEDDING_MODEL}" \
            --arg aigw_domain "${AI_GATEWAY_DOMAIN}" \
            --arg key "${AGENTTEAMS_MANAGER_GATEWAY_KEY}" \
-           '.agents.defaults.memorySearch = {"provider":"openai","model":$emb_model,"remote":{"baseUrl":("http://" + $aigw_domain + ":8080/v1"),"apiKey":$key}}' \
+           '.memory.search = {"provider":"openai","model":$emb_model,"remote":{"baseUrl":("http://" + $aigw_domain + ":8080/v1"),"apiKey":$key}}' \
            /root/manager-workspace/openclaw.json > /tmp/openclaw.json.tmp && \
             mv /tmp/openclaw.json.tmp /root/manager-workspace/openclaw.json
     fi
+    migrate_openclaw_config /root/manager-workspace/openclaw.json || log "WARNING: openclaw config migration failed"
     _written_token=$(jq -r '.channels.matrix.accessToken' /root/manager-workspace/openclaw.json 2>/dev/null)
     log "Matrix token written from template (prefix: ${_written_token:0:10}...)"
 fi
@@ -793,9 +816,10 @@ if [ "${AGENTTEAMS_RUNTIME}" = "aliyun" ] || [ "${AGENTTEAMS_RUNTIME}" = "k8s" ]
         | .models.providers["agentteams-gateway"].apiKey = $key
         | ((.hooks.token // "") as $ht | if $ht == $key or $ht == ($key + "-hooks" | @base64) then del(.hooks) else . end)
         | .commands.restart = false
-        | if .agents.defaults.memorySearch then .agents.defaults.memorySearch.remote.baseUrl = $gateway | .agents.defaults.memorySearch.remote.apiKey = $key else . end' \
+        | if .memory.search then .memory.search.remote.baseUrl = $gateway | .memory.search.remote.apiKey = $key else . end' \
        /root/manager-workspace/openclaw.json > /tmp/openclaw-cloud.json && \
         mv /tmp/openclaw-cloud.json /root/manager-workspace/openclaw.json
+    migrate_openclaw_config /root/manager-workspace/openclaw.json || log "WARNING: openclaw config migration failed"
     log "Cloud/K8s overlay applied"
 fi
 
@@ -914,11 +938,13 @@ if [ "${CMS_TRACES_ENABLED}" = "true" ]; then
 fi
 
 # ============================================================
-# Detect container runtime (for Worker creation)
+# Detect container runtime for explicit Worker management commands.
+# Worker recovery is owned by the controller reconciliation loop; this
+# startup script must not create Worker resources.
 # ============================================================
 source /opt/agentteams/scripts/lib/container-api.sh
 if container_api_available; then
-    log "Container runtime socket detected at ${CONTAINER_SOCKET} — direct Worker creation enabled"
+    log "Container runtime socket detected at ${CONTAINER_SOCKET} — Worker management enabled"
     export AGENTTEAMS_CONTAINER_RUNTIME="socket"
 elif [ "${AGENTTEAMS_RUNTIME}" = "aliyun" ] || [ "${AGENTTEAMS_RUNTIME}" = "k8s" ]; then
     log "Cloud/K8s mode — Workers created via controller API"
@@ -926,61 +952,6 @@ elif [ "${AGENTTEAMS_RUNTIME}" = "aliyun" ] || [ "${AGENTTEAMS_RUNTIME}" = "k8s"
 else
     log "No container runtime found — Worker creation will output install commands"
     export AGENTTEAMS_CONTAINER_RUNTIME="none"
-fi
-
-# ============================================================
-# Recreate Worker containers as needed after Manager restart.
-# Workers are on agentteams-net; Docker DNS resolves *-local.agentteams.io via
-# the Manager's network aliases, so IP changes don't require worker recreation.
-# Only recreate stopped/missing workers.
-# ============================================================
-if container_api_available; then
-    _workers_json=$(agt get workers -o json 2>/dev/null || echo '{"workers":[]}')
-    for _worker_name in $(echo "${_workers_json}" | jq -r '.workers[].name'); do
-            [ -z "${_worker_name}" ] && continue
-
-            _status=$(container_status_worker "${_worker_name}")
-            if [ "${_status}" = "running" ]; then
-                log "Worker running: ${_worker_name}, skipping"
-                continue
-            fi
-            # Container missing or stopped — recreate.
-            log "Worker container ${_status}: ${_worker_name}, recreating..."
-            _creds_file="/data/worker-creds/${_worker_name}.env"
-            if [ -f "${_creds_file}" ]; then
-                source "${_creds_file}"
-                _runtime=$(echo "${_workers_json}" | jq -r --arg w "${_worker_name}" '.workers[] | select(.name == $w) | .runtime // "openclaw"')
-                _recreated=false
-                for _attempt in 1 2 3; do
-                    _env_map=""
-                    _create_body=""
-                    _env_map=$(jq -cn \
-                        --arg name "${_worker_name}" \
-                        --arg fak "${_worker_name}" \
-                        --arg fsk "${WORKER_MINIO_PASSWORD:-}" \
-                        --arg fs_domain "${AGENTTEAMS_FS_DOMAIN:-fs-local.agentteams.io}" \
-                        --arg controller_url "${AGENTTEAMS_CONTROLLER_URL:-}" \
-                        '{
-                            "AGENTTEAMS_WORKER_NAME": $name,
-                            "AGENTTEAMS_FS_ENDPOINT": ("http://" + ($fs_domain | split(":")[0]) + ":9000"),
-                            "AGENTTEAMS_FS_ACCESS_KEY": $fak,
-                            "AGENTTEAMS_FS_SECRET_KEY": $fsk
-                        }
-                        | if $controller_url != "" then . + {"AGENTTEAMS_CONTROLLER_URL": $controller_url} else . end')
-                    _create_body=$(jq -cn --arg name "${_worker_name}" --arg runtime "${_runtime}" --argjson env "${_env_map}" '{name: $name, runtime: $runtime, env: $env}')
-                    worker_backend_create "${_create_body}" > /dev/null 2>&1 && _recreated=true && break
-                    log "  Attempt ${_attempt}/3 failed for ${_worker_name}, retrying in $((5 * _attempt))s..."
-                    sleep $((5 * _attempt))
-                done
-                if [ "${_recreated}" = true ]; then
-                    log "  Recreated ${_runtime} worker: ${_worker_name}"
-                else
-                    log "  ERROR: Failed to recreate ${_worker_name} after 3 attempts"
-                fi
-            else
-                log "  WARNING: No credentials found for ${_worker_name} (${_creds_file} missing), skipping"
-            fi
-    done
 fi
 
 # ============================================================
@@ -1103,7 +1074,9 @@ if [ "${AGENTTEAMS_RUNTIME}" = "aliyun" ]; then
             ensure_mc_credentials 2>/dev/null || true
             mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/" /root/agentteams-fs/shared/ --overwrite --newer-than "1m" 2>/dev/null || true
             mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agents/" /root/agentteams-fs/agents/ --overwrite --newer-than "1m" 2>/dev/null || true
-            mc cp "${AGENTTEAMS_STORAGE_PREFIX}/manager/openclaw.json" /root/manager-workspace/openclaw.json 2>/dev/null || true
+            # Manager openclaw.json is local-only. Pulling it here races the
+            # OpenClaw startup config guard: the copy can change validity
+            # between the guard's two snapshots and force a restart loop.
         done
     ) &
     log "OSS→Local sync started (every 60s, PID: $!)"
@@ -1136,7 +1109,9 @@ if [ "${AGENTTEAMS_RUNTIME}" = "k8s" ]; then
             mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/" /root/agentteams-fs/shared/ --overwrite --newer-than "1m" 2>/dev/null || true
             mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agents/" /root/agentteams-fs/agents/ --overwrite --newer-than "1m" 2>/dev/null || true
             mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agentteams-config/" /root/agentteams-fs/agentteams-config/ --overwrite --newer-than "1m" 2>/dev/null || true
-            mc cp "${AGENTTEAMS_STORAGE_PREFIX}/manager/openclaw.json" /root/manager-workspace/openclaw.json 2>/dev/null || true
+            # Manager openclaw.json is local-only. Pulling it here races the
+            # OpenClaw startup config guard: the copy can change validity
+            # between the guard's two snapshots and force a restart loop.
         done
     ) &
     log "MinIO→Local sync started (every 60s, PID: $!)"
@@ -1168,6 +1143,22 @@ if [ "${MANAGER_RUNTIME}" = "copaw" ] || [ "${MANAGER_RUNTIME}" = "qwenpaw" ]; t
 else
     # ── OpenClaw Runtime ─────────────────────────────────────────────────────
     log "Starting OpenClaw Manager..."
+
+    # #1479: refuse to serve a gateway that drifts from the pinned OpenClaw
+    # tag. The workspace config is rendered against the pin in
+    # hack/versions.env, so a stale base image (the #1460 incident) breaks
+    # version-coupled contracts at runtime. Parse failures never exit —
+    # #1460's 70-restart crash loop came from a startup check that could not
+    # read its own input; only a *known* mismatch in fatal mode stops boot.
+    if [ "${AGENTTEAMS_ALLOW_OPENCLAW_VERSION_MISMATCH:-0}" = "1" ] && [ -z "${AGENTTEAMS_OPENCLAW_VERSION_GUARD_MODE:-}" ]; then
+        _OPENCLAW_GUARD_MODE="warn"
+    else
+        _OPENCLAW_GUARD_MODE="${AGENTTEAMS_OPENCLAW_VERSION_GUARD_MODE:-fatal}"
+    fi
+    if ! openclaw_version_guard "${_OPENCLAW_GUARD_MODE}"; then
+        log "FATAL: refusing to start the gateway: the OpenClaw version does not match the pinned version"
+        exit 1
+    fi
 
     export OPENCLAW_CONFIG_PATH="/root/manager-workspace/openclaw.json"
 

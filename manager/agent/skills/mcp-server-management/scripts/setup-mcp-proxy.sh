@@ -25,11 +25,13 @@
 #   bash setup-mcp-proxy.sh asana https://mcp.asana.com/sse sse --header "X-API-Key: my-key"
 #
 # Prerequisites:
-#   - HIGRESS_COOKIE_FILE env var (session cookie for Higress Console)
+#   - Higress admin credentials, or an existing HIGRESS_COOKIE_FILE session
 #   - AGENTTEAMS_AI_GATEWAY_DOMAIN env var
+#   - HIGRESS_CONSOLE_URL (defaults to http://127.0.0.1:8001)
 
 set -euo pipefail
 source /opt/agentteams/scripts/lib/agentteams-env.sh
+source /opt/agentteams/scripts/lib/gateway-api.sh
 
 # ============================================================
 # Parse arguments
@@ -91,13 +93,10 @@ if [ "${AGENTTEAMS_RUNTIME:-}" = "aliyun" ]; then
     exit 1
 fi
 
-if [ -z "${HIGRESS_COOKIE_FILE:-}" ]; then
-    log "ERROR: HIGRESS_COOKIE_FILE not set"
-    exit 1
-fi
+gateway_ensure_session
 
 AI_GATEWAY_DOMAIN="${AGENTTEAMS_AI_GATEWAY_DOMAIN:-aigw-local.agentteams.io}"
-CONSOLE_URL="http://127.0.0.1:8001"
+CONSOLE_URL="${_HIGRESS_CONSOLE_URL}"
 
 # ============================================================
 # Helper functions (same pattern as setup-mcp-server.sh)
@@ -180,7 +179,7 @@ fi
 log "  Backend: ${URL_PROTO}://${API_DOMAIN}:${URL_PORT}"
 
 SVC_SOURCE_NAME="${SERVER_NAME}-proxy"
-higress_api POST /v1/service-sources "Registering ${SVC_SOURCE_NAME} DNS service source (${API_DOMAIN}:${URL_PORT})" \
+higress_api POST /v1/service-sources "Registering ${SVC_SOURCE_NAME} DNS service source (${URL_PROTO}://${API_DOMAIN}:${URL_PORT})" \
     '{"type":"dns","name":"'"${SVC_SOURCE_NAME}"'","domain":"'"${API_DOMAIN}"'","port":'"${URL_PORT}"',"protocol":"'"${URL_PROTO}"'"}'
 SERVICE_REF='[{"name":"'"${SVC_SOURCE_NAME}"'.dns","port":'"${URL_PORT}"',"weight":100}]'
 
@@ -347,7 +346,9 @@ WORKER_NAMES=$(agt get workers -o json 2>/dev/null | jq -r '.workers[].name' || 
             WORKER_KEY=$(grep '^WORKER_GATEWAY_KEY=' "${WORKER_CREDS}" | sed 's/^WORKER_GATEWAY_KEY="//;s/"$//')
         fi
         if [ -z "${WORKER_KEY}" ]; then
-            log "  WARNING: No gateway key for ${wname} (creds file missing), skipping mcporter update"
+            log "  Applying MCP assignment through your Controller for ${wname}"
+            gateway_configure_worker_mcp "${wname}" "${MCP_SERVER_NAME}" \
+                "${AGENTTEAMS_AI_GATEWAY_URL%/}/mcp-servers/${MCP_SERVER_NAME}/mcp"
             continue
         fi
         mkdir -p "${MCPORTER_DIR}"

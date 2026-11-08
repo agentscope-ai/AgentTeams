@@ -8,7 +8,9 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -340,6 +342,97 @@ func routeMatchesProvider(route map[string]interface{}, provider string) bool {
 	return false
 }
 
+// ListAIRoutes returns the configured AI routes (the authoritative model list
+// for gateway-backed deployments). The console list endpoint returns route
+// names only, so each route is fetched individually for its upstreams and
+// consumer allowlist — the same list-then-get pattern as modifyAIRoutes.
+func (c *HigressClient) ListAIRoutes(ctx context.Context) ([]AIRouteInfo, error) {
+	respBody, statusCode, err := c.doJSON(ctx, http.MethodGet, "/v1/ai/routes", nil)
+	if err != nil {
+		return nil, fmt.Errorf("list AI routes: %w", err)
+	}
+	if statusCode != http.StatusOK {
+		return nil, fmt.Errorf("list AI routes: HTTP %d", statusCode)
+	}
+
+	var listResp struct {
+		Data []struct {
+			Name string `json:"name"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(respBody, &listResp); err != nil {
+		return nil, fmt.Errorf("decode AI routes list: %w", err)
+	}
+
+	routes := make([]AIRouteInfo, 0, len(listResp.Data))
+	for _, entry := range listResp.Data {
+		if entry.Name == "" {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		info, err := c.getAIRoute(ctx, entry.Name)
+		if err != nil {
+			// Fail the whole call rather than return a silently incomplete
+			// catalog: a partial route list would look authoritative.
+			return nil, fmt.Errorf("get AI route %s: %w", entry.Name, err)
+		}
+		routes = append(routes, *info)
+	}
+	return routes, nil
+}
+
+// getAIRoute fetches a single AI route by name and maps it to AIRouteInfo.
+func (c *HigressClient) getAIRoute(ctx context.Context, name string) (*AIRouteInfo, error) {
+	body, sc, err := c.doJSON(ctx, http.MethodGet, "/v1/ai/routes/"+name, nil)
+	if err != nil {
+		return nil, err
+	}
+	if sc != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", sc)
+	}
+
+	var routeResp struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(body, &routeResp); err != nil {
+		return nil, fmt.Errorf("decode route envelope: %w", err)
+	}
+	routeData := routeResp.Data
+	if routeData == nil {
+		routeData = body
+	}
+
+	var route map[string]interface{}
+	if err := json.Unmarshal(routeData, &route); err != nil {
+		return nil, fmt.Errorf("decode route: %w", err)
+	}
+
+	info := &AIRouteInfo{Name: name}
+	if authConfig, ok := route["authConfig"].(map[string]interface{}); ok {
+		info.AllowedConsumers = toStringSlice(authConfig["allowedConsumers"])
+	}
+	if upstreams, ok := route["upstreams"].([]interface{}); ok {
+		for _, u := range upstreams {
+			ups, ok := u.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			provider, _ := ups["provider"].(string)
+			weight := 0
+			if w, ok := ups["weight"].(float64); ok {
+				weight = int(w)
+			}
+			if provider == "" && weight == 0 {
+				continue
+			}
+			info.Upstreams = append(info.Upstreams, AIRouteUpstream{Provider: provider, Weight: weight})
+		}
+	}
+	return info, nil
+}
+
 func (c *HigressClient) ExposePort(ctx context.Context, req PortExposeRequest) error {
 	svcSrc := fmt.Sprintf("worker-%s-%d", req.WorkerName, req.Port)
 	routeN := svcSrc
@@ -384,8 +477,8 @@ func (c *HigressClient) EnsureServiceSource(ctx context.Context, name, domain st
 	return c.ensureServiceSource(ctx, name, domain, port, protocol)
 }
 
-func (c *HigressClient) EnsureStaticServiceSource(ctx context.Context, name, address string, port int) error {
-	return c.ensureStaticServiceSource(ctx, name, address, port)
+func (c *HigressClient) EnsureStaticServiceSource(ctx context.Context, name, address string, port int, protocol string) error {
+	return c.ensureStaticServiceSource(ctx, name, address, port, protocol)
 }
 
 func (c *HigressClient) EnsureRoute(ctx context.Context, name string, domains []string, serviceName string, port int, pathPrefix string) error {
@@ -407,6 +500,10 @@ func (c *HigressClient) EnsureAIProvider(ctx context.Context, req AIProviderRequ
 	if req.Raw != nil {
 		body["rawConfigs"] = req.Raw
 	}
+	if req.Raw != nil && req.Raw["openaiCustomServiceName"] != nil {
+		return c.ensureCustomEndpointResource(ctx, "/v1/ai/providers", req.Name, body)
+	}
+
 	_, sc, err := c.doJSON(ctx, http.MethodPost, "/v1/ai/providers", body)
 	if err != nil {
 		return fmt.Errorf("ensure AI provider %s: %w", req.Name, err)
@@ -677,31 +774,77 @@ func (c *HigressClient) ensureServiceSource(ctx context.Context, name, dnsDomain
 		"properties": map[string]interface{}{},
 		"authN":      map[string]interface{}{"enabled": false},
 	}
-	_, sc, err := c.doJSON(ctx, http.MethodPost, "/v1/service-sources", body)
+	return c.ensureCustomEndpointResource(ctx, "/v1/service-sources", name, body)
+}
+
+// ensureCustomEndpointResource also repairs existing bootstrap configuration.
+func (c *HigressClient) ensureCustomEndpointResource(ctx context.Context, path, name string, body map[string]interface{}) error {
+	_, status, err := c.doJSON(ctx, http.MethodPost, path, body)
 	if err != nil {
-		return fmt.Errorf("ensure service source %s: %w", name, err)
+		return err
 	}
-	if sc != 200 && sc != 201 && sc != 409 {
-		return fmt.Errorf("ensure service source %s: HTTP %d", name, sc)
+	if status == http.StatusOK || status == http.StatusCreated {
+		return nil
+	}
+	if status != http.StatusConflict {
+		return fmt.Errorf("ensure %s/%s: HTTP %d", path, name, status)
+	}
+	resourcePath := path + "/" + url.PathEscape(name)
+	existing, status, err := c.doJSON(ctx, http.MethodGet, resourcePath, nil)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("read %s: HTTP %d", resourcePath, status)
+	}
+	var response struct {
+		Data map[string]interface{} `json:"data"`
+	}
+	if err := json.Unmarshal(existing, &response); err != nil {
+		return err
+	}
+	if response.Data == nil {
+		return fmt.Errorf("read %s: missing resource data", resourcePath)
+	}
+	// Keep other source/provider options; update only bootstrap-owned fields.
+	for key, value := range body {
+		if (key == "properties" || key == "authN") && response.Data[key] != nil {
+			continue
+		}
+		if key == "rawConfigs" {
+			if current, ok := response.Data[key].(map[string]interface{}); ok {
+				for field, updated := range value.(map[string]interface{}) {
+					current[field] = updated
+				}
+				continue
+			}
+		}
+		response.Data[key] = value
+	}
+	_, status, err = c.doJSON(ctx, http.MethodPut, resourcePath, response.Data)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK && status != http.StatusCreated && status != http.StatusNoContent {
+		return fmt.Errorf("update %s: HTTP %d", resourcePath, status)
 	}
 	return nil
 }
 
-func (c *HigressClient) ensureStaticServiceSource(ctx context.Context, name, address string, port int) error {
+func (c *HigressClient) ensureStaticServiceSource(ctx context.Context, name, address string, port int, protocol string) error {
+	if strings.Contains(address, ":") {
+		return fmt.Errorf("Higress Console static service sources do not support IPv6 addresses: %s", address)
+	}
+	if protocol == "" {
+		protocol = "http"
+	}
 	body := map[string]interface{}{
-		"type": "static", "name": name, "domain": fmt.Sprintf("%s:%d", address, port),
-		"port": port, "protocol": "http",
+		"type": "static", "name": name, "domain": net.JoinHostPort(address, strconv.Itoa(port)),
+		"port": port, "protocol": protocol,
 		"properties": map[string]interface{}{},
 		"authN":      map[string]interface{}{"enabled": false},
 	}
-	_, sc, err := c.doJSON(ctx, http.MethodPost, "/v1/service-sources", body)
-	if err != nil {
-		return fmt.Errorf("ensure static service source %s: %w", name, err)
-	}
-	if sc != 200 && sc != 201 && sc != 409 {
-		return fmt.Errorf("ensure static service source %s: HTTP %d", name, sc)
-	}
-	return nil
+	return c.ensureCustomEndpointResource(ctx, "/v1/service-sources", name, body)
 }
 
 func (c *HigressClient) ensureRoute(ctx context.Context, name string, domains []string, serviceName string, port int, pathPrefix string) error {

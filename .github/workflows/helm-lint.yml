@@ -7,15 +7,64 @@ on:
       - 'install/agentteams-install.sh'
       - 'install/agentteams-install.ps1'
       - 'install/agentteams-apply.sh'
+      - 'Makefile'
+      - '.github/workflows/build.yml'
+      - '.github/workflows/build-image.yml'
+      - '.github/workflows/build-openclaw-base.yml'
+      - '.github/workflows/helm-lint.yml'
+      - 'tests/test-build-workflows.py'
+      - '.github/workflows/build-rc.yml'
+      - '.github/workflows/build-deepseek-harness.yml'
+      - '.github/workflows/release.yml'
       - 'openhuman/scripts/openhuman-worker-entrypoint.sh'
       - 'tests/check-agentteams-rename-defaults.sh'
       - 'tests/check-installer-pre-1.2-env-compat.sh'
       - 'tests/check-installer-token-plan-models.sh'
+      - 'tests/check-installer-controller-url.sh'
+      - 'tests/check-installer-presign-endpoint.sh'
+      - 'tests/check-plugin-release-tag.sh'
+      - 'plugins/scripts/check-release-tag.sh'
+      - 'tests/check-installer-wasm-registry.sh'
+      - 'tests/check-installer-wasm-registry.ps1'
+      - 'tests/check-custom-llm-endpoint.sh'
+      - 'tests/check-custom-llm-endpoint.ps1'
+      - 'manager/scripts/init/setup-higress.sh'
+      - 'tests/check-installer-username-validation.sh'
+      - 'tests/check-installer-username-validation.ps1'
+      - 'tests/check-installer-env-data-dir-readback.sh'
+      - 'tests/check-installer-dashboard-session-secret.sh'
       - 'tests/check-installer-embedded-latest-pull.sh'
+      - 'tests/check-installer-auto-version-images.sh'
+      - 'tests/check-teamharness-acceptance-observer.sh'
+      - 'tests/test-26-qwenpaw-teamharness-plugin-mode.sh'
       - 'tests/check-installer-qwenpaw-runtime-options.sh'
+      - 'tests/check-installer-deepseek-harness-runtime-options.sh'
+      - 'tests/check-powershell-deepseek-harness-latest.ps1'
       - 'tests/check-windows-appservice-normalization.ps1'
       - 'tests/check-apply-wrapper-flags.sh'
+      - 'tests/check-mcp-setup-domain-parsing.sh'
       - 'tests/check-helm-agentteams.sh'
+      - 'tests/check-copaw-helm-upgrade-gate.sh'
+      - 'tests/copaw-helm-upgrade-gate.sh'
+      - 'tests/test-29-legacy-copaw-upgrade.sh'
+      - 'tests/lib/test29-evidence.sh'
+      - 'tests/check-test29-evidence-redaction.sh'
+      - 'tests/check-test29-readiness.sh'
+      - 'tests/lib/test29-readiness.sh'
+      - 'hack/local-k8s-up.sh'
+      - 'tests/check-create-project-grant-admin.sh'
+      - 'tests/check-create-project-team.sh'
+      - 'manager/agent/skills/project-management/**'
+      - 'manager/agent/skills/coding-cli-management/**'
+      - 'manager/agent/worker-skills/coding-cli/**'
+      - 'manager/agent/skills/task-coordination/**'
+      - 'tests/check-coding-cli-qoder-pat-processing.sh'
+      - 'tests/check-coding-cli-runs-metadata.sh'
+      - 'manager/scripts/init/start-manager-agent.sh'
+      - 'manager/tests/test-manager-startup-recovery.sh'
+      - 'tests/check-docs-zh-parity.sh'
+      - 'docs/usage/**'
+      - 'docs/zh-cn/usage/**'
   workflow_dispatch: ~
 
 jobs:
@@ -34,11 +83,59 @@ jobs:
       - name: Check installer Token Plan models
         run: bash tests/check-installer-token-plan-models.sh
 
+      - name: Check installer controller URL contract
+        run: bash tests/check-installer-controller-url.sh
+      - name: Check installer presign endpoint contract
+        run: bash tests/check-installer-presign-endpoint.sh
+      - name: Check plugin release tag controls
+        run: bash tests/check-plugin-release-tag.sh
+
+      - name: Check Bash installer WASM registry
+        run: bash tests/check-installer-wasm-registry.sh
+
+      - name: Check PowerShell installer WASM registry
+        shell: pwsh
+        run: ./tests/check-installer-wasm-registry.ps1
+
+      - name: Check Shell custom LLM endpoints
+        run: bash tests/check-custom-llm-endpoint.sh
+
+      - name: Check PowerShell custom LLM endpoints
+        shell: pwsh
+        run: ./tests/check-custom-llm-endpoint.ps1
+
+      - name: Check Bash installer username validation
+        run: bash tests/check-installer-username-validation.sh
+
+      - name: Check PowerShell installer username validation
+        shell: pwsh
+        run: ./tests/check-installer-username-validation.ps1
+
+      - name: Check installer data-dir env readback
+        run: bash tests/check-installer-env-data-dir-readback.sh
+
+      - name: Check installer dashboard session secret
+        run: bash tests/check-installer-dashboard-session-secret.sh
+
       - name: Check embedded latest image pulling
         run: bash tests/check-installer-embedded-latest-pull.sh
 
+      - name: Check automatic installer version and platform selection
+        run: bash tests/check-installer-auto-version-images.sh
+
+      - name: Check TeamHarness acceptance observer
+        run: bash tests/check-teamharness-acceptance-observer.sh
+
+      - name: Check image build and release workflows
+        run: |
+          python3 -m pip install PyYAML==6.0.3
+          python3 tests/test-build-workflows.py
+
       - name: Check QwenPaw installer runtime options
         run: bash tests/check-installer-qwenpaw-runtime-options.sh
+
+      - name: Check DeepSeek Harness installer runtime options
+        run: bash tests/check-installer-deepseek-harness-runtime-options.sh
 
       - name: Check Windows AppService normalization
         shell: pwsh
@@ -46,6 +143,33 @@ jobs:
 
       - name: Check declarative apply wrapper flags
         run: bash tests/check-apply-wrapper-flags.sh
+
+      - name: Check MCP setup script domain parsing
+        run: bash tests/check-mcp-setup-domain-parsing.sh
+
+      - name: Check create-project grant-admin wiring
+        run: bash tests/check-create-project-grant-admin.sh
+
+      - name: Check create-project --team roster and join reporting
+        run: bash tests/check-create-project-team.sh
+
+      - name: Check coding-cli Qoder PAT and .processing guard
+        run: bash tests/check-coding-cli-qoder-pat-processing.sh
+
+      - name: Check coding-cli run outcome metadata (runs.jsonl)
+        run: bash tests/check-coding-cli-runs-metadata.sh
+
+      - name: Check CoPaw upgrade gate failure modes
+        run: bash tests/check-copaw-helm-upgrade-gate.sh
+
+      - name: Check test-29 failure evidence redaction
+        run: bash tests/check-test29-evidence-redaction.sh
+
+      - name: Check test-29 readiness gate (room change resets stability)
+        run: bash tests/check-test29-readiness.sh
+
+      - name: Check Manager startup Worker recovery ownership
+        run: bash manager/tests/test-manager-startup-recovery.sh
 
       - name: Set up Helm
         uses: azure/setup-helm@v4
@@ -64,3 +188,16 @@ jobs:
       - name: Template dry-run
         run: |
           bash tests/check-helm-agentteams.sh
+
+  docs-zh-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check zh-cn docs parity self-test (missing counterpart fails, complete pairing passes)
+        run: bash tests/check-docs-zh-parity.sh --self-test
+
+      - name: Check zh-cn docs parity on the repository tree
+        run: bash tests/check-docs-zh-parity.sh

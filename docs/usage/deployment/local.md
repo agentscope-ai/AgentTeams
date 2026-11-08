@@ -6,6 +6,8 @@ This guide explains how to create and maintain an AgentTeams instance on a singl
 
 If you only want to complete your first task as quickly as possible, start with the [Quickstart](../../quickstart.md). Windows users should follow the separate [Windows Deployment Guide](windows.md).
 
+If an agent helps you set up the instance, follow the [SETUP Playbook](setup-playbook.md): it collects the decisions one question at a time, produces a reviewable plan, and then executes with per-step pre-checks and explicit failure recovery.
+
 ## What local deployment creates
 
 The current local installer uses the embedded architecture by default:
@@ -159,6 +161,8 @@ The English installer provides Alibaba Cloud model service and OpenAI-compatible
   - `qwen`: uses the built-in Alibaba Cloud Model Studio/Qwen integration.
   - `openai-compat`: uses the OpenAI-compatible protocol for services such as OpenAI, Alibaba Cloud Token Plan, DeepSeek, and self-hosted model gateways.
 - `AGENTTEAMS_OPENAI_BASE_URL`: the base endpoint for an OpenAI-compatible API. Enter the service root, not a complete `/chat/completions` request path. It commonly ends in `/v1`. It is normally empty when using the built-in `qwen` integration.
+
+> IPv4 endpoints with an explicit port (for example, `http://192.168.1.10:3000/v1`) use a static Higress service source; domain endpoints retain DNS discovery. HTTP and HTTPS are preserved. The bundled Higress Console does not support static IPv6 sources; use an IPv4 address or a DNS name instead.
 - `AGENTTEAMS_LLM_API_KEY`: the required secret for model access. The installer uses it for connectivity checks and writes it to the local configuration for gateway use.
 - `AGENTTEAMS_DEFAULT_MODEL`: the model ID used by the Manager and new Workers by default. It must exactly match a model name accepted by the provider API. A specific Manager or Worker can override it later.
 - `AGENTTEAMS_EMBEDDING_MODEL`: the model ID used for vectorization in features such as memory retrieval. The installer tries `text-embedding-v4` by default. An empty string disables embeddings. The model must be accessible with the current credentials and corresponding API endpoint.
@@ -291,7 +295,7 @@ The Bash installer enables the Dashboard by default. Manual Setup can configure:
 
 The Dashboard supports only the current embedded controller architecture. The PowerShell installer does not currently install the Dashboard.
 
-When the Dashboard is enabled, you can select a target Worker and upload a Skill ZIP from **技能中心 (Skill Center) → 分发技能 (Distribute Skill)**, or use **Workers → target Worker → 详情 (Details) → 上传技能包 (Upload Skill Package)**. This writes directly to the Worker's persistent Skill directory and attempts to reload the Worker. See [Worker Guide: Distribute through the Dashboard](../worker-guide.md#method-2-distribute-through-the-dashboard) for package rules, reload impact, and verification.
+When the Dashboard is enabled, open **资源中心 (Resource Center) → 市场 (Marketplace)**. If the Skill is not yet in the marketplace, add it with **上传技能 (Upload Skill)**, then click **分发到 Worker (Distribute to Worker)** in the target Skill's row and select one or more Workers. You can also upload a Skill ZIP directly to one Worker through **Workers → target Worker → 详情 (Details) → 上传技能包 (Upload Skill Package)**. Both paths write the complete package to the Worker's persistent Skill directory, update `Worker.spec.skills`, and attempt to reload the Worker. See [Worker Guide: Distribute through the Dashboard](../worker-guide.md#method-2-distribute-through-the-dashboard) for package rules, reload impact, and verification.
 
 ### 14. Matrix E2EE
 

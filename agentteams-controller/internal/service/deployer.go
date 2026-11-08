@@ -3,11 +3,13 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/credprovider"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/executor"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/skillscan"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -23,8 +26,17 @@ import (
 
 // WorkerDeployRequest describes a worker config deployment (create or update).
 type WorkerDeployRequest struct {
-	Name           string
-	Spec           v1beta1.WorkerSpec
+	// ReconcileChannelPolicy reconciles controller-owned Human entries in
+	// standalone allowlists while preserving independently configured entries.
+	// Team-owned overlays retain the existing preservation behavior.
+	HumanMatrixIDs         []string
+	ReconcileChannelPolicy bool
+	Name                   string
+	Spec                   v1beta1.WorkerSpec
+	// SubagentModel is the resolved subagent model for this worker
+	// (explicit spec value or the team default, resolved by the caller).
+	// Non-empty values take precedence over Spec.SubagentModel.
+	SubagentModel  string
 	Role           string // "standalone" | "team_leader" | "worker"
 	TeamName       string
 	TeamLeaderName string
@@ -84,6 +96,12 @@ type MemberRuntimeConfigDeployRequest struct {
 	Role        string
 	Generation  int64
 	Spec        v1beta1.WorkerSpec
+
+	// SubagentModel is the resolved subagent model for this member (an
+	// explicit Worker value wins over the team-wide default; callers pass
+	// the merged result). Empty means no subagent override is declared and
+	// the runtime keeps its current/unset setting.
+	SubagentModel string
 
 	MatrixUserID   string
 	PersonalRoomID string
@@ -196,6 +214,9 @@ type DeployerConfig struct {
 
 	// NacosCredClient is used when remoteSkills use sts-agentteams (see CRD authType).
 	NacosCredClient credprovider.Client
+
+	// SkillScanner runs scan ② for team-layer skill materialization.
+	SkillScanner skillscan.SkillScanner
 }
 
 // Deployer orchestrates configuration deployment for workers: package resolution,
@@ -212,6 +233,10 @@ type Deployer struct {
 	matrixDomain      string
 	runtimeProjection RuntimeProjectionConfig
 	nacosCredClient   credprovider.Client
+	// skillScanner runs scan ② (assign-time content scan, mandatory) for
+	// team-layer skills. nil → every team-skill materialization is refused
+	// (fail closed, surfaced as a Worker warning).
+	skillScanner skillscan.SkillScanner
 }
 
 func NewDeployer(cfg DeployerConfig) *Deployer {
@@ -226,6 +251,7 @@ func NewDeployer(cfg DeployerConfig) *Deployer {
 		matrixDomain:      cfg.MatrixDomain,
 		runtimeProjection: cfg.RuntimeProjection,
 		nacosCredClient:   cfg.NacosCredClient,
+		skillScanner:      cfg.SkillScanner,
 	}
 }
 
@@ -273,6 +299,17 @@ func (d *Deployer) WriteInlineConfigs(name string, spec v1beta1.WorkerSpec) erro
 	}
 	log.Log.Info("inline configs written", "name", name)
 	return nil
+}
+
+// resolvedSubagentModel returns the subagent model to write into
+// openclaw.json: an explicitly resolved value (team default merged in by the
+// caller) wins, falling back to the raw spec field for callers that do not
+// pre-resolve.
+func resolvedSubagentModel(req WorkerDeployRequest) string {
+	if req.SubagentModel != "" {
+		return req.SubagentModel
+	}
+	return req.Spec.SubagentModel
 }
 
 // DeployWorkerConfig generates and pushes all configuration files to OSS:
@@ -323,15 +360,17 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	}
 
 	configJSON, err := d.agentConfig.GenerateOpenClawConfig(agentconfig.WorkerConfigRequest{
-		WorkerName:     req.Name,
-		MatrixToken:    req.MatrixToken,
-		GatewayKey:     req.GatewayKey,
-		ModelName:      req.Spec.Model,
-		AIGatewayURL:   req.AIGatewayURL,
-		TeamLeaderName: req.TeamLeaderName,
-		ChannelPolicy:  channelPolicy,
-		Heartbeat:      req.Heartbeat,
-		Runtime:        req.Spec.Runtime,
+		WorkerName:        req.Name,
+		MatrixToken:       req.MatrixToken,
+		GatewayKey:        req.GatewayKey,
+		ModelName:         req.Spec.Model,
+		ModelProvider:     req.Spec.ModelProvider,
+		SubagentModelName: resolvedSubagentModel(req),
+		AIGatewayURL:      req.AIGatewayURL,
+		TeamLeaderName:    req.TeamLeaderName,
+		ChannelPolicy:     channelPolicy,
+		Heartbeat:         req.Heartbeat,
+		Runtime:           req.Spec.Runtime,
 	})
 	if err != nil {
 		return fmt.Errorf("config generation failed: %w", err)
@@ -343,7 +382,10 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	// seeded before WorkerReconciler's first pass, and TeamReconciler may have
 	// already written a team-mode channel policy. Requiring IsUpdate would let
 	// that first standalone Worker pass clobber the Team overlay.
-	if existingJSON, err := d.oss.GetObject(ctx, agentPrefix+"/openclaw.json"); err == nil && len(existingJSON) > 0 {
+	openclawKey := agentPrefix + "/openclaw.json"
+	generatedJSON := configJSON
+	var existingJSON []byte
+	if existingJSON, err = d.oss.GetObject(ctx, openclawKey); err == nil && len(existingJSON) > 0 {
 		if merged, mergeErr := mergeUserPluginConfig(configJSON, existingJSON); mergeErr != nil {
 			logger.Error(mergeErr, "plugin config merge failed, using generated config")
 		} else {
@@ -351,19 +393,53 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 		}
 	}
 
-	openclawKey := agentPrefix + "/openclaw.json"
-	if err := d.oss.PutObject(ctx, openclawKey, configJSON); err != nil {
-		return fmt.Errorf("config push to storage failed: %w", err)
+	var finishHumanAccess func() error
+	if req.ReconcileChannelPolicy {
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("read existing Worker channel policy: %w", err)
+		}
+		configJSON, finishHumanAccess, err = d.reconcileHumanChannelAccess(ctx, req, generatedJSON, configJSON, existingJSON)
+		if err != nil {
+			return err
+		}
 	}
-	logger.Info("worker openclaw.json pushed to storage",
-		"worker", req.Name,
-		"key", openclawKey,
-		"bytes", len(configJSON),
-		"role", req.Role,
-		"runtime", req.Spec.Runtime,
-		"team", req.TeamName,
-		"isUpdate", req.IsUpdate,
-	)
+
+	// No-op guard: a periodic reconcile that produces semantically
+	// identical config must not rewrite the object. Every rewrite bumps
+	// the object (version/mtime) and wakes the worker-side config
+	// watcher, and the resulting in-place agent reload interrupts
+	// in-flight turns for no change — the "reconcile no-op" defect
+	// (JEV P10: repeated agent.json rewrites correlated with worker
+	// session gaps). The comparison is semantic, not byte-wise: the
+	// plugin merge above re-marshals through freshly allocated maps, so
+	// Go's map-iteration order makes the bytes differ run to run even
+	// when the content is identical.
+	if openclawConfigEqual(configJSON, existingJSON) {
+		logger.V(1).Info("worker openclaw.json unchanged, skipping storage write",
+			"worker", req.Name,
+			"key", openclawKey,
+			"bytes", len(configJSON),
+		)
+	} else {
+		if err := d.oss.PutObject(ctx, openclawKey, configJSON); err != nil {
+			return fmt.Errorf("config push to storage failed: %w", err)
+		}
+		logger.Info("worker openclaw.json pushed to storage",
+			"worker", req.Name,
+			"key", openclawKey,
+			"bytes", len(configJSON),
+			"role", req.Role,
+			"runtime", req.Spec.Runtime,
+			"team", req.TeamName,
+			"isUpdate", req.IsUpdate,
+		)
+	}
+
+	if finishHumanAccess != nil {
+		if err := finishHumanAccess(); err != nil {
+			return fmt.Errorf("commit Human allowlist ownership: %w", err)
+		}
+	}
 
 	// --- SOUL.md (seed-only) ---
 	// Written once on first deploy; never overwritten so the agent owns it
@@ -482,6 +558,16 @@ func (d *Deployer) deployWorkerMcporterConfig(ctx context.Context, agentPrefix, 
 	}
 	if mcporterJSON == nil {
 		return
+	}
+
+	for _, s := range mcpServers {
+		if strings.TrimSpace(s.Name) == "" || strings.TrimSpace(s.URL) == "" {
+			continue
+		}
+		if !d.agentConfig.IsTrustedMCPHost(s.URL) {
+			logger.Info("mcporter entry not on the trusted gateway host; gateway credential not attached",
+				"server", s.Name, "url", s.URL)
+		}
 	}
 
 	mergedJSON, err := d.mergeExistingWorkerMcporterConfig(ctx, agentPrefix, mcporterJSON)
@@ -709,7 +795,10 @@ func (d *Deployer) InjectChannelPolicy(ctx context.Context, req InjectChannelPol
 		return nil
 	}
 	agentPrefix := fmt.Sprintf("agents/%s", req.WorkerName)
-	existing, _ := d.oss.GetObject(ctx, agentPrefix+"/openclaw.json")
+	existing, err := d.oss.GetObject(ctx, agentPrefix+"/openclaw.json")
+	if err != nil {
+		return fmt.Errorf("read existing Worker channel config: %w", err)
+	}
 	updated := agentconfig.InjectChannelPolicy(existing, req.GroupAllowFrom, req.DMAllowFrom)
 	return d.oss.PutObject(ctx, agentPrefix+"/openclaw.json", updated)
 }
@@ -739,25 +828,82 @@ func (d *Deployer) SyncTeamLeaderAssets(ctx context.Context, req SyncTeamLeaderA
 // PushOnDemandSkills pushes on-demand skills to a worker.
 // Built-in skills are pushed via push-worker-skills.sh. Remote skills are
 // fetched from source registries (currently nacos://) and mirrored to OSS.
-func (d *Deployer) PushOnDemandSkills(ctx context.Context, workerName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error {
-	logger := log.FromContext(ctx)
+func (d *Deployer) PushOnDemandSkills(ctx context.Context, workerName, teamName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error {
 	if len(skills) == 0 && len(remoteSkills) == 0 {
 		return nil
 	}
 
 	agentPrefix := fmt.Sprintf("agents/%s", workerName)
+	var remoteWarning error
 	if err := d.pushRemoteSkills(ctx, workerName, agentPrefix, remoteSkills); err != nil {
-		return err
+		remoteNames := remoteSkillNames(remoteSkills)
+		refreshFailure := remoteSkillRefreshFailure(remoteSkills)
+		if len(remoteNames) == 0 {
+			remoteWarning = errors.New(refreshFailure)
+		} else {
+			missing, verifyErr := d.missingWorkerSkills(ctx, workerName, remoteNames)
+			switch {
+			case verifyErr != nil:
+				remoteWarning = fmt.Errorf("%s; could not verify existing Worker copies: %v", refreshFailure, verifyErr)
+			case len(missing) > 0:
+				remoteWarning = fmt.Errorf("%s; Worker copies missing: %s", refreshFailure, strings.Join(missing, ", "))
+			default:
+				remoteWarning = fmt.Errorf("%s; retained existing Worker copies", refreshFailure)
+			}
+		}
 	}
 
-	if len(skills) == 0 || d.executor == nil {
-		return nil
+	if len(skills) == 0 {
+		return remoteWarning
+	}
+
+	// Team layer first (priority: team > builtin): a skill whose SKILL.md
+	// exists under teams/<teamName>/skills/ is materialized by the
+	// controller from the team layer (scan ② mandatory — a blocked or
+	// unavailable scan is NOT copied, surfaced as a warning); everything
+	// else goes through the builtin recovery path below.
+	teamSkills, builtinSkills, err := d.partitionTeamSkills(ctx, teamName, skills)
+	if err != nil {
+		return combineSkillAssignmentErrors(remoteWarning, err)
+	}
+	teamWarning := d.materializeTeamSkills(ctx, workerName, teamName, teamSkills)
+	if len(builtinSkills) == 0 {
+		return combineSkillAssignmentErrors(remoteWarning, teamWarning)
+	}
+	if err := d.recoverDeclaredBuiltinSkills(ctx, workerName, builtinSkills, remoteWarning); err != nil {
+		return combineSkillAssignmentErrors(teamWarning, err)
+	}
+	return combineSkillAssignmentErrors(remoteWarning, teamWarning)
+}
+
+// recoverDeclaredBuiltinSkills runs the builtin-skill recovery flow (the
+// Manager push script, or Worker-copy verification when the script/executor
+// is unavailable). Its returned error already carries remoteWarning (each
+// failure branch combines it).
+func (d *Deployer) recoverDeclaredBuiltinSkills(ctx context.Context, workerName string, skills []string, remoteWarning error) error {
+	logger := log.FromContext(ctx)
+	if d.executor == nil {
+		missing, err := d.missingWorkerSkills(ctx, workerName, skills)
+		if err != nil {
+			return combineSkillAssignmentErrors(remoteWarning, fmt.Errorf("verify declared Worker skills without Manager executor: %w", err))
+		}
+		if len(missing) > 0 {
+			return combineSkillAssignmentErrors(remoteWarning, fmt.Errorf("Manager skill recovery is unavailable and Worker copies are missing: %s", strings.Join(missing, ", ")))
+		}
+		return remoteWarning
 	}
 	scriptPath := "/opt/agentteams/agent/skills/worker-management/scripts/push-worker-skills.sh"
 	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
-		logger.Info("push-worker-skills.sh not found (incluster mode), skipping on-demand skill push",
+		missing, verifyErr := d.missingWorkerSkills(ctx, workerName, skills)
+		if verifyErr != nil {
+			return combineSkillAssignmentErrors(remoteWarning, fmt.Errorf("verify declared Worker skills without Manager push script: %w", verifyErr))
+		}
+		if len(missing) > 0 {
+			return combineSkillAssignmentErrors(remoteWarning, fmt.Errorf("Manager push script is unavailable and Worker copies are missing: %s", strings.Join(missing, ", ")))
+		}
+		logger.Info("push-worker-skills.sh not found; existing Worker copies satisfy the assignments",
 			"worker", workerName, "skills", skills)
-		return nil
+		return remoteWarning
 	}
 	for _, skill := range skills {
 		if _, err := d.executor.RunSimple(
@@ -767,10 +913,284 @@ func (d *Deployer) PushOnDemandSkills(ctx context.Context, workerName string, sk
 			"--skill", skill,
 			"--no-notify",
 		); err != nil {
-			return fmt.Errorf("push skill %q to worker %q: %w", skill, workerName, err)
+			missing, verifyErr := d.missingWorkerSkills(ctx, workerName, []string{skill})
+			if verifyErr != nil {
+				return combineSkillAssignmentErrors(remoteWarning, fmt.Errorf("push skill %q to worker %q: %w (verify existing Worker copy: %v)", skill, workerName, err, verifyErr))
+			}
+			if len(missing) > 0 {
+				return combineSkillAssignmentErrors(remoteWarning, fmt.Errorf("push skill %q to worker %q: %w (Worker copy missing)", skill, workerName, err))
+			}
+			logger.Info("Skill recovery failed but existing Worker copy is intact",
+				"worker", workerName,
+				"skill", skill,
+				"error", err.Error())
 		}
 	}
+	return remoteWarning
+}
+
+// partitionTeamSkills splits declared skills into the team-layer set (a
+// SKILL.md exists under teams/<teamName>/skills/<s>/) and the builtin set.
+// teamName "" (standalone worker / manager) → everything is builtin. A
+// storage error beyond a plain absence is surfaced — a listing outage must
+// not be read as "all builtin".
+func (d *Deployer) partitionTeamSkills(ctx context.Context, teamName string, skills []string) (teamSkills, builtinSkills []string, err error) {
+	if teamName == "" || d.oss == nil {
+		return nil, skills, nil
+	}
+	for _, skill := range skills {
+		key := "teams/" + teamName + "/skills/" + skill + "/SKILL.md"
+		if err := d.oss.Stat(ctx, key); err == nil {
+			teamSkills = append(teamSkills, skill)
+			continue
+		} else if !os.IsNotExist(err) {
+			return nil, nil, fmt.Errorf("check team skill %q in team %q: %w", skill, teamName, err)
+		}
+		builtinSkills = append(builtinSkills, skill)
+	}
+	return teamSkills, builtinSkills, nil
+}
+
+// materializeTeamSkills copies each team-layer skill into the worker's
+// agent directory (the assign-time materialization, scan ②). A failed
+// skill accumulates into the returned warning without stopping the others:
+// one bad skill must not break the worker's remaining assignments.
+func (d *Deployer) materializeTeamSkills(ctx context.Context, workerName, teamName string, skills []string) error {
+	var warning error
+	for _, skill := range skills {
+		if err := d.materializeTeamSkill(ctx, workerName, teamName, skill); err != nil {
+			warning = combineSkillAssignmentErrors(warning, err)
+		}
+	}
+	return warning
+}
+
+// listAllObjects enumerates every object under prefix, returning FULL keys.
+// It follows the production listing contract: ListObjects wraps `mc ls
+// <prefix>`, is non-recursive, and reports names RELATIVE to the requested
+// prefix (directory entries carry a trailing slash). First-level directory
+// entries are descended into recursively; the fake-storage listing reports
+// the whole prefix subtree at once, so results are de-duplicated by full
+// key. Callers must never pass a listed name straight to GetObject — that
+// would read the bucket root instead of the prefixed path.
+func listAllObjects(ctx context.Context, client interface {
+	ListObjects(ctx context.Context, prefix string) ([]string, error)
+}, prefix string) ([]string, error) {
+	names, err := client.ListObjects(ctx, prefix)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool, len(names))
+	var out []string
+	add := func(full string) {
+		if !seen[full] {
+			seen[full] = true
+			out = append(out, full)
+		}
+	}
+	var descend func(p string) error
+	descend = func(p string) error {
+		entries, err := client.ListObjects(ctx, p)
+		if err != nil {
+			return err
+		}
+		for _, name := range entries {
+			if name == "" {
+				continue
+			}
+			full := p + name
+			if strings.HasSuffix(name, "/") {
+				if err := descend(full); err != nil {
+					return err
+				}
+				continue
+			}
+			add(full)
+		}
+		return nil
+	}
+	if err := descend(prefix); err != nil {
+		return nil, err
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// materializeTeamSkill materializes one team skill: download
+// teams/<teamName>/skills/<s>/ → scan ② (MANDATORY — block or unavailable
+// means the skill is NOT copied; the gate does not default open) →
+// exact-copy mirror (Overwrite + Remove) into agents/<worker>/skills/<s>/.
+// Listing follows the production `mc ls` contract (relative names,
+// non-recursive): nested skill files (e.g. scripts/) are enumerated by
+// recursing into first-level directory entries, and every GetObject call
+// gets the full key with the skill prefix re-attached.
+func (d *Deployer) materializeTeamSkill(ctx context.Context, workerName, teamName, skill string) error {
+	logger := log.FromContext(ctx)
+	srcPrefix := "teams/" + teamName + "/skills/" + skill + "/"
+	dstPrefix := fmt.Sprintf("agents/%s/skills/%s/", workerName, skill)
+
+	keys, err := listAllObjects(ctx, d.oss, srcPrefix)
+	if err != nil {
+		return fmt.Errorf("team skill %q (%s): list: %w", skill, teamName, err)
+	}
+	if len(keys) == 0 {
+		return fmt.Errorf("team skill %q (%s): no files found", skill, teamName)
+	}
+
+	// Stage the payload locally (the scan input and the mirror source).
+	stage, err := os.MkdirTemp("", "team-skill-")
+	if err != nil {
+		return fmt.Errorf("team skill %q (%s): stage: %w", skill, teamName, err)
+	}
+	defer os.RemoveAll(stage)
+	files := make(map[string][]byte, len(keys))
+	for _, key := range keys {
+		rel := strings.TrimPrefix(key, srcPrefix)
+		if rel == "" || rel == "." {
+			continue
+		}
+		// listAllObjects already returns full keys; this stays the single
+		// place that pairs a relative path with its storage key.
+		data, err := d.oss.GetObject(ctx, key)
+		if err != nil {
+			return fmt.Errorf("team skill %q (%s): get %q: %w", skill, teamName, rel, err)
+		}
+		full := filepath.Join(stage, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return fmt.Errorf("team skill %q (%s): stage: %w", skill, teamName, err)
+		}
+		if err := os.WriteFile(full, data, 0o644); err != nil {
+			return fmt.Errorf("team skill %q (%s): stage: %w", skill, teamName, err)
+		}
+		files[rel] = data
+	}
+
+	// Scan ② — mandatory.
+	if d.skillScanner == nil {
+		return fmt.Errorf("team skill %q (%s) not materialized: content scan unavailable (no scan backend)", skill, teamName)
+	}
+	verdict, err := d.skillScanner.ScanSkill(ctx, skill, files)
+	if err != nil {
+		return fmt.Errorf("team skill %q (%s) not materialized: content scan unavailable: %v", skill, teamName, err)
+	}
+	if verdict.Status == "block" {
+		return fmt.Errorf("team skill %q (%s) not materialized: content scan blocked: %s", skill, teamName, skillFindingSummary(verdict.Findings))
+	}
+
+	if err := d.oss.Mirror(ctx, stage, dstPrefix, oss.MirrorOptions{Overwrite: true, Remove: true}); err != nil {
+		return fmt.Errorf("team skill %q (%s): mirror: %w", skill, teamName, err)
+	}
+	// Audit seam (PR-A parallel form: structured log line; switches to
+	// audit.Record once the capability foundation lands): what/where/how.
+	logger.Info("team skill materialized at assign",
+		"worker", workerName, "team", teamName, "skill", skill,
+		"scan", verdict.Status, "files", len(files))
 	return nil
+}
+
+// skillFindingSummary compacts scan findings into an error fragment
+// (severity + rule id; never file contents).
+func skillFindingSummary(findings []skillscan.SkillUploadFinding) string {
+	if len(findings) == 0 {
+		return "no findings reported"
+	}
+	parts := make([]string, 0, len(findings))
+	for _, f := range findings {
+		parts = append(parts, f.Severity+":"+f.RuleID)
+	}
+	return strings.Join(parts, ", ")
+}
+
+func combineSkillAssignmentErrors(first, second error) error {
+	if first == nil {
+		return second
+	}
+	if second == nil {
+		return first
+	}
+	return fmt.Errorf("%v; %v", first, second)
+}
+
+func remoteSkillNames(sources []v1beta1.RemoteSkillSource) []string {
+	seen := make(map[string]struct{})
+	names := make([]string, 0)
+	for _, source := range sources {
+		for _, skill := range source.Skills {
+			if skill.Name == "" {
+				continue
+			}
+			if _, ok := seen[skill.Name]; ok {
+				continue
+			}
+			seen[skill.Name] = struct{}{}
+			names = append(names, skill.Name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func remoteSkillRefreshFailure(sources []v1beta1.RemoteSkillSource) string {
+	seen := make(map[string]struct{})
+	requests := make([]string, 0)
+	for _, source := range sources {
+		for _, skill := range source.Skills {
+			name := strings.TrimSpace(skill.Name)
+			if name == "" {
+				continue
+			}
+			description := name
+			switch {
+			case skill.Version != "":
+				description += fmt.Sprintf(" (version=%q)", skill.Version)
+			case skill.Label != "":
+				description += fmt.Sprintf(" (label=%q)", skill.Label)
+			}
+			if _, ok := seen[description]; ok {
+				continue
+			}
+			seen[description] = struct{}{}
+			requests = append(requests, description)
+		}
+	}
+	sort.Strings(requests)
+	if len(requests) == 0 {
+		return "remote Skill refresh failed"
+	}
+	return "remote Skill refresh failed for " + strings.Join(requests, ", ")
+}
+
+func redactRemoteSkillSource(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "<invalid remote source>"
+	}
+	u.User = nil
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
+}
+
+// missingWorkerSkills checks the canonical object-storage contract consumed by
+// every Worker runtime. Runtime-specific workspaces are derived from this
+// prefix by the Worker sync layer and are not authoritative distribution
+// targets.
+func (d *Deployer) missingWorkerSkills(ctx context.Context, workerName string, skills []string) ([]string, error) {
+	if d.oss == nil {
+		return nil, fmt.Errorf("object storage is not configured")
+	}
+	missing := make([]string, 0)
+	for _, skill := range skills {
+		key := fmt.Sprintf("agents/%s/skills/%s/SKILL.md", workerName, skill)
+		if err := d.oss.Stat(ctx, key); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				missing = append(missing, skill)
+				continue
+			}
+			return nil, fmt.Errorf("stat %s: %w", key, err)
+		}
+	}
+	return missing, nil
 }
 
 func (d *Deployer) PrepareWorkerDeps(ctx context.Context, req WorkerDepsPrepareRequest) error {
@@ -941,26 +1361,27 @@ func (d *Deployer) pushRemoteSkills(ctx context.Context, workerName, agentPrefix
 	clients := map[nacosClientKey]*executor.NacosAIClient{}
 
 	for _, source := range remoteSkills {
+		safeSource := redactRemoteSkillSource(source.Source)
 		if len(source.Skills) == 0 {
-			return fmt.Errorf("remoteSkills source %q has empty skills list", source.Source)
+			return fmt.Errorf("remoteSkills source %q has empty skills list", safeSource)
 		}
 		for _, skill := range source.Skills {
 			if strings.TrimSpace(skill.Name) == "" {
-				return fmt.Errorf("remoteSkills source %q has an entry with empty name", source.Source)
+				return fmt.Errorf("remoteSkills source %q has an entry with empty name", safeSource)
 			}
 			if skill.Version != "" && skill.Label != "" {
-				return fmt.Errorf("remote skill %q in source %q cannot set both version and label", skill.Name, source.Source)
+				return fmt.Errorf("remote skill %q in source %q cannot set both version and label", skill.Name, safeSource)
 			}
 		}
 
 		nacosAddr, namespace, err := parseNacosRemoteSource(source.Source)
 		if err != nil {
-			return fmt.Errorf("invalid remoteSkills.source %q: %w", source.Source, err)
+			return fmt.Errorf("invalid remoteSkills.source %q: %w", safeSource, err)
 		}
 
 		authType, err := mapRemoteSkillAuthType(source.AuthType)
 		if err != nil {
-			return fmt.Errorf("invalid remoteSkills.authType for source %q: %w", source.Source, err)
+			return fmt.Errorf("invalid remoteSkills.authType for source %q: %w", safeSource, err)
 		}
 
 		stsResources := remoteSkillSTSResources(source.Skills)
@@ -972,10 +1393,10 @@ func (d *Deployer) pushRemoteSkills(ctx context.Context, workerName, agentPrefix
 		}
 		client, ok := clients[key]
 		if !ok {
-			logger.Info("connecting to nacos", "worker", workerName, "source", source.Source, "authType", authType)
+			logger.Info("connecting to nacos", "worker", workerName, "source", safeSource, "authType", authType)
 			client, err = executor.NewNacosAIClient(ctx, nacosAddr, namespace, authType, d.nacosCredClient, opts...)
 			if err != nil {
-				return fmt.Errorf("connect to nacos source %q: %w", source.Source, err)
+				return fmt.Errorf("connect to nacos source %q: %w", safeSource, err)
 			}
 			clients[key] = client
 		}
@@ -988,11 +1409,11 @@ func (d *Deployer) pushRemoteSkills(ctx context.Context, workerName, agentPrefix
 			defer os.RemoveAll(tmpDir)
 
 			if err := client.GetSkill(ctx, skill.Name, tmpDir, skill.Version, skill.Label); err != nil {
-				return fmt.Errorf("fetch remote skill %q from %q: %w", skill.Name, source.Source, err)
+				return fmt.Errorf("fetch remote skill %q from %q: %w", skill.Name, safeSource, err)
 			}
 			logger.Info("remote skill fetched, mirroring to OSS",
 				"worker", workerName,
-				"source", source.Source,
+				"source", safeSource,
 				"skill", skill.Name,
 				"version", skill.Version,
 				"label", skill.Label)
@@ -1000,11 +1421,11 @@ func (d *Deployer) pushRemoteSkills(ctx context.Context, workerName, agentPrefix
 			src := filepath.Join(tmpDir, skill.Name) + "/"
 			dst := agentPrefix + "/skills/" + skill.Name + "/"
 			if err := d.oss.Mirror(ctx, src, dst, oss.MirrorOptions{Overwrite: true}); err != nil {
-				return fmt.Errorf("mirror remote skill %q from %q to OSS: %w", skill.Name, source.Source, err)
+				return fmt.Errorf("mirror remote skill %q from %q to OSS: %w", skill.Name, safeSource, err)
 			}
 			logger.Info("remote skill pushed",
 				"worker", workerName,
-				"source", source.Source,
+				"source", safeSource,
 				"skill", skill.Name,
 				"version", skill.Version,
 				"label", skill.Label)
@@ -1095,7 +1516,10 @@ func (d *Deployer) EnsureTeamStorage(ctx context.Context, teamName string) error
 	if err := d.ensureDirectoryObject(ctx, prefix+"shared/"); err != nil {
 		return fmt.Errorf("create %sshared/: %w", prefix, err)
 	}
-	for _, subdir := range []string{"shared/tasks/", "shared/projects/", "shared/knowledge/"} {
+	// skills/ is the team-skill layer (catalog ?team= half, materialize-at-
+	// assign source); the .keep makes it explicit in listings. List-on-read
+	// tolerates its absence, so the seed is cosmetic for the API.
+	for _, subdir := range []string{"shared/tasks/", "shared/projects/", "shared/knowledge/", "skills/"} {
 		if err := d.oss.PutObject(ctx, prefix+subdir+".keep", []byte("")); err != nil {
 			return fmt.Errorf("create %s%s: %w", prefix, subdir, err)
 		}
@@ -1108,6 +1532,22 @@ func (d *Deployer) ensureDirectoryObject(ctx context.Context, key string) error 
 		return fmt.Errorf("directory object key must end with /: %q", key)
 	}
 	return d.oss.PutObject(ctx, key+".agentteams-keep", []byte(""))
+}
+
+// EnsureHumanStorage creates the per-human file area (#1414 P1) under
+// humans/<username>/: a files/ directory (the human's working files,
+// served by the human-file API) and a .trash/ directory (soft-deleted
+// files). Idempotent — marker objects are re-put on every reconcile.
+// memory/ and digest/ are deliberately NOT created in P1.
+func (d *Deployer) EnsureHumanStorage(ctx context.Context, human *v1beta1.Human) error {
+	username := human.Spec.EffectiveUsername(human.Name)
+	prefix := fmt.Sprintf("humans/%s/", username)
+	for _, subdir := range []string{"files/", ".trash/"} {
+		if err := d.oss.PutObject(ctx, prefix+subdir+".keep", []byte("")); err != nil {
+			return fmt.Errorf("create %s%s: %w", prefix, subdir, err)
+		}
+	}
+	return nil
 }
 
 // --- Manager Config Deployment ---
@@ -1145,12 +1585,13 @@ func (d *Deployer) DeployManagerConfig(ctx context.Context, req ManagerDeployReq
 	// silently never sees admin messages. See commit 3f8f84b which fixed this
 	// originally before the controller refactor accidentally reverted it.
 	configJSON, err := d.agentConfig.GenerateOpenClawConfig(agentconfig.WorkerConfigRequest{
-		WorkerName:   "manager",
-		MatrixToken:  req.MatrixToken,
-		GatewayKey:   req.GatewayKey,
-		ModelName:    req.Spec.Model,
-		AIGatewayURL: req.AIGatewayURL,
-		Runtime:      req.Spec.Runtime,
+		WorkerName:    "manager",
+		MatrixToken:   req.MatrixToken,
+		GatewayKey:    req.GatewayKey,
+		ModelName:     req.Spec.Model,
+		ModelProvider: req.Spec.ModelProvider,
+		AIGatewayURL:  req.AIGatewayURL,
+		Runtime:       req.Spec.Runtime,
 	})
 	if err != nil {
 		return fmt.Errorf("config generation failed: %w", err)
@@ -1189,6 +1630,15 @@ func (d *Deployer) DeployManagerConfig(ctx context.Context, req ManagerDeployReq
 		if err != nil {
 			logger.Error(err, "mcporter config generation failed (non-fatal)")
 		} else if mcporterJSON != nil {
+			for _, s := range req.McpServers {
+				if strings.TrimSpace(s.Name) == "" || strings.TrimSpace(s.URL) == "" {
+					continue
+				}
+				if !d.agentConfig.IsTrustedMCPHost(s.URL) {
+					logger.Info("mcporter entry not on the trusted gateway host; gateway credential not attached",
+						"server", s.Name, "url", s.URL)
+				}
+			}
 			if err := d.oss.PutObject(ctx, agentPrefix+"/mcporter-servers.json", mcporterJSON); err != nil {
 				logger.Error(err, "mcporter config push failed (non-fatal)")
 			}
@@ -1359,19 +1809,7 @@ func (d *Deployer) pushBuiltinTopLevelFiles(ctx context.Context, workerName, age
 }
 
 func (d *Deployer) builtinAgentDir(role, runtime string) string {
-	baseDir := filepath.Dir(d.workerAgentDir)
-	switch role {
-	case "team_leader":
-		return filepath.Join(baseDir, "team-leader-agent")
-	default:
-		switch runtime {
-		case "copaw":
-			return filepath.Join(baseDir, "copaw-worker-agent")
-		case "hermes":
-			return filepath.Join(baseDir, "hermes-worker-agent")
-		}
-		return d.workerAgentDir
-	}
+	return BuiltinAgentDir(d.workerAgentDir, role, runtime)
 }
 
 // mergeUserPluginConfig preserves user-customized plugin entries from an
@@ -1385,6 +1823,21 @@ func (d *Deployer) builtinAgentDir(role, runtime string) string {
 // overrides these to [leader, admin] for team members. WorkerReconciler is
 // team-agnostic and would otherwise revert them to standalone [manager, admin]
 // on every reconcile, breaking team-scoped task delivery.
+// openclawConfigEqual reports whether two openclaw.json payloads carry the
+// same configuration. The comparison is on unmarshaled values: the storage
+// merge path re-marshals through new maps, so byte order is not stable even
+// for identical content.
+func openclawConfigEqual(a, b []byte) bool {
+	var av, bv interface{}
+	if err := json.Unmarshal(a, &av); err != nil {
+		return false
+	}
+	if err := json.Unmarshal(b, &bv); err != nil {
+		return false
+	}
+	return reflect.DeepEqual(av, bv)
+}
+
 func mergeUserPluginConfig(generatedJSON, existingJSON []byte) ([]byte, error) {
 	var generated, existing map[string]interface{}
 	if err := json.Unmarshal(generatedJSON, &generated); err != nil {

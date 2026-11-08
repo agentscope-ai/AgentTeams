@@ -143,7 +143,14 @@ func TestWorkerTeamNameUsesPersistedMembershipAnnotation(t *testing.T) {
 }
 
 func TestWorkerReconcileDoesNotOverwriteTeamOwnedRuntimeConfig(t *testing.T) {
-	worker := newWorker("leader", v1beta1.WorkerSpec{Runtime: "qwenpaw"})
+	worker := newWorker("leader", v1beta1.WorkerSpec{
+		Runtime: "qwenpaw",
+		Skills:  []string{"team-skill"},
+		RemoteSkills: []v1beta1.RemoteSkillSource{{
+			Source: "nacos://skills.example.com:8848/public",
+			Skills: []v1beta1.RemoteSkill{{Name: "remote-team-skill", Label: "stable"}},
+		}},
+	})
 	team := &v1beta1.Team{
 		ObjectMeta: metav1.ObjectMeta{Name: "team-cr", Namespace: "default"},
 		Spec: v1beta1.TeamSpec{
@@ -154,12 +161,22 @@ func TestWorkerReconcileDoesNotOverwriteTeamOwnedRuntimeConfig(t *testing.T) {
 		},
 	}
 	rig := newWorkerRig(t, worker, team)
+	rig.deployer.PushOnDemandSkillsFn = func(context.Context, string, string, []string, []v1beta1.RemoteSkillSource) error {
+		return errors.New("remote Skill refresh failed for remote-team-skill (label=\"stable\"); retained existing Worker copies")
+	}
 
-	if _, _, err := rig.reconcile("leader"); err != nil {
+	got, _, err := rig.reconcile("leader")
+	if err != nil {
 		t.Fatalf("reconcile referenced Worker: %v", err)
 	}
 	if got := len(rig.deployer.Calls.DeployMemberRuntimeConfig); got != 0 {
 		t.Fatalf("DeployMemberRuntimeConfig calls=%d, want 0 for Team-owned QwenPaw Worker", got)
+	}
+	if _, _, _, pushSkills, _ := rig.deployer.CallCounts(); pushSkills != 1 {
+		t.Fatalf("PushOnDemandSkills calls=%d, want 1 for Team-owned QwenPaw Worker", pushSkills)
+	}
+	if !strings.Contains(got.Status.Message, "retained existing Worker copies") {
+		t.Fatalf("status.message=%q, want non-blocking Skill refresh warning", got.Status.Message)
 	}
 }
 
@@ -213,7 +230,7 @@ func (g *workerTestGateway) UnexposePort(context.Context, gateway.PortExposeRequ
 func (g *workerTestGateway) EnsureServiceSource(context.Context, string, string, int, string) error {
 	return nil
 }
-func (g *workerTestGateway) EnsureStaticServiceSource(context.Context, string, string, int) error {
+func (g *workerTestGateway) EnsureStaticServiceSource(context.Context, string, string, int, string) error {
 	return nil
 }
 func (g *workerTestGateway) EnsureRoute(context.Context, string, []string, string, int, string) error {
@@ -227,6 +244,10 @@ func (g *workerTestGateway) EnsureStreamIdleTimeout(context.Context, int) error 
 func (g *workerTestGateway) EnsureAIRoute(context.Context, gateway.AIRouteRequest) error {
 	return nil
 }
+func (g *workerTestGateway) ListAIRoutes(context.Context) ([]gateway.AIRouteInfo, error) {
+	return nil, nil
+}
+
 func (g *workerTestGateway) ResolveModelProvider(context.Context, string) (*gateway.ModelProviderInfo, error) {
 	return g.modelInfo, g.modelErr
 }
@@ -346,6 +367,64 @@ func TestReconcileManagerAccessRemovesManagerFromTeamWorkerRoom(t *testing.T) {
 		t.Fatalf("ForceLeaveRoom calls=%+v, want Manager removed from Team worker room", got)
 	} else if got[0].UserID != "@manager:matrix.local" || got[0].RoomID != "!room-dev:matrix.local" {
 		t.Fatalf("ForceLeaveRoom call=%+v, want Manager removed from !room-dev:matrix.local", got[0])
+	}
+}
+
+// #1079: the Manager is not supposed to be in a team worker's personal room, so
+// in the steady state it is already out. The reconcile must then skip the
+// force-leave entirely — re-firing a fire-and-forget force-leave on every
+// reconcile is what floods the admin room.
+func TestReconcileManagerAccessSkipsForceLeaveWhenManagerAbsent(t *testing.T) {
+	ctx := context.Background()
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "dev", Namespace: "default"},
+		Status:     v1beta1.WorkerStatus{RoomID: "!room-dev:matrix.local"},
+	}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{WorkerMembers: []v1beta1.TeamWorkerRef{
+			{Name: "lead", Role: RoleTeamLeader.String()},
+			{Name: "dev", Role: RoleTeamWorker.String()},
+		}},
+	}
+	rig := newWorkerRig(t, worker.DeepCopy(), team.DeepCopy())
+	rig.r.ManagerConfig, _ = newTestManagerConfig(t)
+	rig.provisioner.IsUserInRoomFn = func(context.Context, string, string) (bool, error) {
+		return false, nil // Manager already out of the room (steady state)
+	}
+
+	rig.r.reconcileManagerAccess(ctx, worker, MemberContext{RuntimeName: "dev"}, &MemberState{})
+
+	if got := rig.provisioner.Calls.ForceLeaveRoom; len(got) != 0 {
+		t.Fatalf("ForceLeaveRoom calls=%+v, want none (Manager absent, #1079 guard)", got)
+	}
+}
+
+// #1079: when the Manager is actually in the worker's personal room, the
+// reconcile still removes it (the guard only skips the already-satisfied case).
+func TestReconcileManagerAccessForceLeavesWhenManagerPresent(t *testing.T) {
+	ctx := context.Background()
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "dev", Namespace: "default"},
+		Status:     v1beta1.WorkerStatus{RoomID: "!room-dev:matrix.local"},
+	}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{WorkerMembers: []v1beta1.TeamWorkerRef{
+			{Name: "lead", Role: RoleTeamLeader.String()},
+			{Name: "dev", Role: RoleTeamWorker.String()},
+		}},
+	}
+	rig := newWorkerRig(t, worker.DeepCopy(), team.DeepCopy())
+	rig.r.ManagerConfig, _ = newTestManagerConfig(t)
+	rig.provisioner.IsUserInRoomFn = func(context.Context, string, string) (bool, error) {
+		return true, nil // Manager is in the room — removal still happens
+	}
+
+	rig.r.reconcileManagerAccess(ctx, worker, MemberContext{RuntimeName: "dev"}, &MemberState{})
+
+	if got := rig.provisioner.Calls.ForceLeaveRoom; len(got) != 1 {
+		t.Fatalf("ForceLeaveRoom calls=%+v, want Manager removed (Manager present)", got)
 	}
 }
 
@@ -1926,6 +2005,34 @@ func TestWorkerMemberContextQwenPawConfigOnlyChangeDoesNotSetSpecChanged(t *test
 	}
 }
 
+func TestWorkerMemberContextDeepSeekHarnessConfigOnlyChangeDoesNotSetSpecChanged(t *testing.T) {
+	r := &WorkerReconciler{ControllerName: "ctl-x"}
+	baseSpec := v1beta1.WorkerSpec{
+		Runtime: "deepseek-harness",
+		Image:   "agentteams/deepseek-harness-worker:v1",
+		Model:   "deepseek-v4-flash",
+		Package: "nacos://registry/ns/dsh-worker?version=1",
+	}
+
+	w := &v1beta1.Worker{}
+	w.Name = "solo-dsh"
+	w.Generation = 2
+	w.Status.ObservedGeneration = 1
+	w.Status.SpecHash = hashAppliedWorkerSpecForRuntime(baseSpec, "deepseek-harness")
+	w.Spec = baseSpec
+	w.Spec.Model = "deepseek-chat"
+	w.Spec.Package = "nacos://registry/ns/dsh-worker?version=2"
+
+	if mctx := r.workerMemberContext(w); mctx.SpecChanged {
+		t.Fatalf("DeepSeek Harness model/package changes should not recreate container")
+	}
+
+	w.Spec.Image = "agentteams/deepseek-harness-worker:v2"
+	if mctx := r.workerMemberContext(w); !mctx.SpecChanged {
+		t.Fatalf("DeepSeek Harness image change should recreate container")
+	}
+}
+
 func TestWorkerReconcileQwenPawConfigOnlyUpdateWritesRuntimeConfigWithoutRecreate(t *testing.T) {
 	worker := newWorker("solo", v1beta1.WorkerSpec{
 		Runtime:    "qwenpaw",
@@ -2557,5 +2664,30 @@ func TestWorkerReconcile_ModelProviderNotFound_CreateFails(t *testing.T) {
 	}
 	if out.Status.ObservedGeneration != 0 {
 		t.Fatalf("ObservedGeneration should remain 0 on failure, got %d", out.Status.ObservedGeneration)
+	}
+}
+
+func TestOwningTeamSubagentModel(t *testing.T) {
+	t.Parallel()
+	worker := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "worker-a", Namespace: "default"}}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			SubagentModel: "qwen3.5-flash",
+			WorkerMembers: []v1beta1.TeamWorkerRef{{Name: "worker-a", Role: "worker"}},
+		},
+	}
+	stray := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "stray", Namespace: "default"}}
+	c := fake.NewClientBuilder().
+		WithScheme(newWorkerScheme(t)).
+		WithObjects(worker, team, stray).
+		Build()
+	r := &WorkerReconciler{Client: c}
+
+	if got := r.owningTeamSubagentModel(context.Background(), worker); got != "qwen3.5-flash" {
+		t.Errorf("member worker: got %q, want qwen3.5-flash", got)
+	}
+	if got := r.owningTeamSubagentModel(context.Background(), stray); got != "" {
+		t.Errorf("non-member worker: got %q, want empty", got)
 	}
 }

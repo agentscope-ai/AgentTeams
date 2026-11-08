@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import importlib.util
 import json
 import logging
@@ -8,6 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import threading
 import textwrap
 import types
 import zipfile
@@ -935,6 +937,125 @@ def test_builtin_plugin_mcp_is_reconciled_through_api(
     assert expected_storage_env.items() <= created["teamharness"]["env"].items()
 
 
+@pytest.mark.parametrize("token_source", ["file", "env"])
+def test_builtin_mcp_child_can_commit_task_meta(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    token_source: str,
+) -> None:
+    requests = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_PUT(self):
+            body = self.rfile.read(int(self.headers["Content-Length"]))
+            requests.append((self.path, self.headers, json.loads(body)))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"etag":"committed"}')
+
+        def log_message(self, *args):
+            pass
+
+    # MCP's stdio transport inherits a small safe environment, not the
+    # container environment. Exercise the actual commit client in that child.
+    http = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=http.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", f"http://127.0.0.1:{http.server_port}")
+    monkeypatch.delenv("AGENTTEAMS_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("AGENTTEAMS_AUTH_TOKEN_FILE", raising=False)
+    if token_source == "file":
+        token_file = tmp_path / "worker-token"
+        token_file.write_text("fixture-token\n")
+        monkeypatch.setenv("AGENTTEAMS_AUTH_TOKEN_FILE", str(token_file))
+    else:
+        monkeypatch.setenv("AGENTTEAMS_AUTH_TOKEN", "fixture-token")
+    worker = Worker(_config(tmp_path))
+    worker._prepare_env()
+    created = {}
+    worker.api_client = types.SimpleNamespace(
+        list_mcp=lambda: [], create_mcp=lambda key, payload: created.update({key: payload}),
+    )
+    worker._configure_builtin_plugin_mcp_clients()
+    mcp_dir = Path(__file__).resolve().parents[2] / "plugins/teamharness/mcp"
+    script = (
+        f"import sys; sys.path.insert(0, {str(mcp_dir)!r}); import server; "
+        "print(server._commit_task_meta('task-1', {'status':'in_progress'}, 'read-etag', 'team-1'))"
+    )
+    try:
+        child = subprocess.run(
+            [sys.executable, "-c", script],
+            env={"PATH": os.environ.get("PATH", ""), **created["teamharness"]["env"]},
+            capture_output=True, text=True, timeout=20, check=True,
+        )
+        assert "'ok': True" in child.stdout, child.stdout + child.stderr
+        assert len(requests) == 1
+        path, headers, body = requests[0]
+        assert path == "/api/v1/tasks/task-1/meta?team=team-1"
+        assert headers["Authorization"] == "Bearer fixture-token"
+        assert headers["If-Match"] == "read-etag"
+        assert body == {"status": "in_progress"}
+    finally:
+        http.shutdown()
+        thread.join(timeout=5)
+        http.server_close()
+
+
+def test_builtin_plugin_mcp_skips_update_when_payload_is_unchanged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = Worker(_config(tmp_path))
+    worker._prepare_env()
+
+    class Api:
+        def __init__(self) -> None:
+            self.mcp = {
+                "teamharness": {"key": "teamharness"},
+                "workerflow": {"key": "workerflow"},
+            }
+            self.updated: list[str] = []
+
+        def list_mcp(self):
+            return list(self.mcp.values())
+
+        def create_mcp(self, key, payload):
+            self.mcp[key] = {"key": key, **payload}
+
+        def update_mcp(self, key, payload):
+            self.updated.append(key)
+            self.mcp[key] = {"key": key, **payload}
+
+    api = Api()
+    worker.api_client = api
+
+    worker._configure_builtin_plugin_mcp_clients()
+    worker._configure_builtin_plugin_mcp_clients()
+
+    assert api.updated == ["teamharness", "workerflow"]
+
+    worker._configure_builtin_plugin_mcp_clients(force=True)
+
+    assert api.updated == [
+        "teamharness",
+        "workerflow",
+        "teamharness",
+        "workerflow",
+    ]
+
+    monkeypatch.setenv("AGENTTEAMS_WORKER_ROLE", "team_leader")
+    worker._configure_builtin_plugin_mcp_clients()
+
+    assert api.updated == [
+        "teamharness",
+        "workerflow",
+        "teamharness",
+        "workerflow",
+        "teamharness",
+        "workerflow",
+    ]
+
+
 @pytest.mark.anyio
 async def test_builtin_mcp_policy_is_persisted_before_desired_state_reload(
     tmp_path: Path,
@@ -960,6 +1081,9 @@ async def test_builtin_mcp_policy_is_persisted_before_desired_state_reload(
 
         def disable_agent_if_present(self, *_args, **_kwargs):
             return False
+
+        def get_agent_subagent_model(self, *_args, **_kwargs):
+            return None
 
     async def fake_create_subprocess_exec(*_args, **_kwargs):
         return FakeProcess()
@@ -1107,6 +1231,11 @@ async def test_start_uses_image_builtin_plugins_without_runtime_install(
     _write_builtin_plugin(builtin_plugins, "agentteams-matrix-channel", "apply_matrix")
     _write_builtin_plugin(builtin_plugins, "teamharness", "apply_teamharness")
     _write_builtin_plugin(builtin_plugins, "workerflow", "apply_workerflow")
+    _write_builtin_plugin(
+        builtin_plugins,
+        "qwen-code-bridge",
+        "apply_coding_cli",
+    )
     teamharness_zip = _write_plugin_zip(
         tmp_path,
         "teamharness",
@@ -1156,6 +1285,12 @@ async def test_start_uses_image_builtin_plugins_without_runtime_install(
     assert install_commands == []
     assert (config.qwenpaw_working_dir / "plugins" / "teamharness" / "plugin.py").is_file()
     assert (config.qwenpaw_working_dir / "plugins" / "workerflow" / "plugin.py").is_file()
+    assert (
+        config.qwenpaw_working_dir
+        / "plugins"
+        / "qwen-code-bridge"
+        / "plugin.py"
+    ).is_file()
 
 
 def test_install_teamharness_plugin_rejects_zip_path_traversal(tmp_path: Path) -> None:
@@ -1182,6 +1317,11 @@ def test_runtime_adapter_reapplies_builtin_assets_without_runtime_install(
     _write_builtin_plugin(builtin_plugins, "agentteams-matrix-channel", "apply_matrix")
     _write_builtin_plugin(builtin_plugins, "teamharness", "apply_teamharness")
     _write_builtin_plugin(builtin_plugins, "workerflow", "apply_workerflow")
+    _write_builtin_plugin(
+        builtin_plugins,
+        "qwen-code-bridge",
+        "apply_coding_cli",
+    )
     install_commands: list[list[str]] = []
 
     def fake_run(command, check):
@@ -1202,6 +1342,12 @@ def test_runtime_adapter_reapplies_builtin_assets_without_runtime_install(
     assert (config.qwenpaw_working_dir / "plugins" / "agentteams-matrix-channel" / "plugin.py").is_file()
     assert (config.qwenpaw_working_dir / "plugins" / "teamharness" / "plugin.py").is_file()
     assert (config.qwenpaw_working_dir / "plugins" / "workerflow" / "plugin.py").is_file()
+    assert (
+        config.qwenpaw_working_dir
+        / "plugins"
+        / "qwen-code-bridge"
+        / "plugin.py"
+    ).is_file()
 
 
 def test_prepare_builtin_plugin_repairs_partial_target_with_matching_marker(tmp_path: Path) -> None:
@@ -1491,7 +1637,10 @@ def test_hot_update_apply_does_not_replace_qwenpaw_process(tmp_path: Path) -> No
     worker.updater.api_client = type(
         "FakeApi",
         (),
-        {"list_mcp": lambda _self: []},
+        {
+            "list_mcp": lambda _self: [],
+            "get_agent_subagent_model": lambda _self: None,
+        },
     )()
     worker.updater.adapter_apply = lambda: adapter_calls.append("adapter")
     worker.updater.current_config = MemberRuntimeConfig(
@@ -1635,3 +1784,24 @@ async def test_heartbeat_probe_loop_delegates_to_heartbeat_module(
     assert data["status"] == "ready"
     assert data["message"] == "qwenpaw ready"
     assert calls == [("worker-a-cr", config.console_port)]
+
+
+def test_api_readiness_waits_for_default_agent_startup(tmp_path, monkeypatch):
+    worker = Worker(_config(tmp_path))
+    states = iter(['pending', 'starting', 'running'])
+    observed = []
+
+    def request(method, path, *args):
+        if path == '/api/version':
+            # The pin raises the readiness floor to 2.2.2.post1, so the
+            # fake app must report that floor or the readiness gate fails
+            # before the startup-state polling this test is about.
+            return {'version': '2.2.2.post1'}
+        assert (method, path) == ('GET', '/api/agents')
+        state = next(states)
+        observed.append(state)
+        return {'agents': [{'id': 'default', 'startup_status': state}]}
+
+    monkeypatch.setattr(worker.api_client, '_request', request)
+    asyncio.run(worker._wait_for_qwenpaw_api())
+    assert observed == ['pending', 'starting', 'running']

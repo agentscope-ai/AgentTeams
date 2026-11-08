@@ -29,6 +29,8 @@ Run the installer in a terminal:
 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
+When you select **stable** (or omit `AGENTTEAMS_VERSION` in non-interactive mode), the Bash installer checks the selected Manager, embedded controller, all supported Worker images, and the enabled Dashboard against the container engine's architecture before saving configuration. It downloads missing images for reuse during installation. A missing tag or architecture triggers a complete-set check of the bundled fallback (currently `v1.2.3`); connection or authentication errors stop installation. Upgrades never fall back automatically. Explicit versions and `latest` retain their existing behavior. Dashboard and DeepSeek Harness keep their independent image versions.
+
 Follow the prompts:
 
 1. Select English.

@@ -76,6 +76,7 @@ class Worker:
         self.updater = RuntimeUpdater(
             config=config,
             adapter_apply=self._apply_runtime_adapter,
+            adapter_force_apply=self._force_apply_runtime_adapter,
             api_client=self.api_client,
             runtime_reconcile=self._reconcile_runtime_storage,
         )
@@ -86,6 +87,7 @@ class Worker:
         self._stopping = False
         self._workspace_shared_dir: Optional[Path] = None
         self._initial_runtime_config: Optional[MemberRuntimeConfig] = None
+        self._builtin_mcp_payload_identities: dict[str, str] = {}
 
     async def run(self) -> None:
         if not await self.start():
@@ -241,6 +243,49 @@ class Worker:
                 await self._process.wait()
                 logger.warning("qwenpaw app killed after stop timeout component=worker worker=%s", self.config.worker_name)
         self._process = None
+        if self.sync is not None:
+            # #1391: durability barrier — the app is already stopped, so
+            # this is the last chance to push pending local changes before
+            # the container exits instead of waiting on the 5s push loop.
+            # #1500: hard outer bound on top of flush's own 30s deadline.
+            # asyncio.to_thread cannot be cancelled, so the process-level
+            # timeouts inside flush are what actually bound the upload;
+            # this wait_for only guards a worker thread that stalls for a
+            # reason flush cannot see.
+            stage_started = self._log_worker_stage_begin(
+                "flush_on_shutdown", timeout_seconds=30
+            )
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(self.sync.flush, 30), timeout=35
+                )
+                if result.get("ok"):
+                    self._log_worker_stage_complete(
+                        "flush_on_shutdown",
+                        stage_started,
+                        ok=result.get("ok"),
+                        uploaded=len(result.get("uploaded") or []),
+                        pending=result.get("pending"),
+                        conflicts=result.get("conflicts"),
+                        timedOut=result.get("timedOut"),
+                    )
+                else:
+                    logger.warning(
+                        "shutdown flush incomplete component=worker "
+                        "stage=flush_on_shutdown worker=%s duration_ms=%s "
+                        "ok=%s uploaded=%s pending=%s conflicts=%s timedOut=%s",
+                        self.config.worker_name,
+                        _duration_ms(stage_started),
+                        result.get("ok"),
+                        len(result.get("uploaded") or []),
+                        result.get("pending"),
+                        result.get("conflicts"),
+                        result.get("timedOut"),
+                    )
+            except asyncio.TimeoutError as exc:
+                self._log_worker_stage_failed("flush_on_shutdown", stage_started, exc)
+            except Exception as exc:
+                self._log_worker_stage_failed("flush_on_shutdown", stage_started, exc)
         logger.info("qwenpaw worker stopped component=worker worker=%s", self.config.worker_name)
 
     def _log_worker_stage_begin(self, stage: str, **fields: object) -> float:
@@ -629,11 +674,17 @@ class Worker:
                 encoding="utf-8",
             )
 
-    def _apply_runtime_adapter(self) -> None:
+    def _apply_runtime_adapter(self, force: bool = False) -> None:
         self._prepare_default_plugins()
-        self._configure_builtin_plugin_mcp_clients()
+        if force:
+            self._configure_builtin_plugin_mcp_clients(force=True)
+        else:
+            self._configure_builtin_plugin_mcp_clients()
         self._configure_builtin_plugin_mcp_policies()
         self._ensure_session_file_prompt_policy()
+
+    def _force_apply_runtime_adapter(self) -> None:
+        self._apply_runtime_adapter(force=True)
 
     def _prepare_default_plugins(self) -> None:
         builtin_root = self._builtin_qwenpaw_plugins_dir()
@@ -643,6 +694,10 @@ class Worker:
         )
         self._prepare_builtin_plugin("teamharness", builtin_root / "teamharness")
         self._prepare_builtin_plugin("workerflow", builtin_root / "workerflow")
+        self._prepare_builtin_plugin(
+            "qwen-code-bridge",
+            builtin_root / "qwen-code-bridge",
+        )
 
     def _builtin_qwenpaw_plugins_dir(self) -> Path:
         configured = os.getenv("AGENTTEAMS_BUILTIN_QWENPAW_PLUGINS_DIR", "").strip()
@@ -850,10 +905,22 @@ class Worker:
                     "system_prompt_files": ["AGENTS.md", "SOUL.md", "TEAMS.md"],
                 },
             )
-            await asyncio.to_thread(
-                self.api_client.disable_agent_if_present,
-                "QwenPaw_QA_Agent_0.2",
-            )
+            # Disabling the demo agent is cosmetic: toggle returns 409 while
+            # the agent is still loading, and a failed disable only leaves an
+            # idle demo agent — warn and continue instead of crashing.
+            try:
+                await asyncio.to_thread(
+                    self.api_client.disable_agent_if_present,
+                    "QwenPaw_QA_Agent_0.2",
+                )
+            except Exception as exc:
+                logger.warning(
+                    "disable demo agent failed, continuing startup component=worker "
+                    "step=disable_demo_agent worker=%s agent=QwenPaw_QA_Agent_0.2 "
+                    "error_type=%s",
+                    self.config.worker_name,
+                    type(exc).__name__,
+                )
             await asyncio.to_thread(self._configure_builtin_plugin_mcp_clients)
             await asyncio.to_thread(self._configure_builtin_plugin_mcp_policies)
             runtime_config = self._initial_runtime_config or self.updater.load()
@@ -938,14 +1005,19 @@ class Worker:
                     f"qwenpaw app exited before API readiness: {self._process.returncode}",
                 )
             try:
-                await asyncio.to_thread(self.api_client.require_version, "2.0.1")
+                await asyncio.to_thread(self.api_client.require_version, "2.2.2.post1")
+                # Version readiness precedes the agent's MCP migration. Wait
+                # before changing agent.json to avoid invalidating its snapshot.
+                await asyncio.to_thread(
+                    self.api_client.require_agent_running, DEFAULT_AGENT_ID,
+                )
                 return
             except Exception as exc:
                 last_error = exc
                 await asyncio.sleep(0.5)
         raise RuntimeError(f"qwenpaw API did not become ready: {last_error}")
 
-    def _configure_builtin_plugin_mcp_clients(self) -> None:
+    def _configure_builtin_plugin_mcp_clients(self, force: bool = False) -> None:
         existing = {str(item.get("key")) for item in self.api_client.list_mcp()}
         for plugin_id in ("teamharness", "workerflow"):
             plugin_dir = self.config.qwenpaw_working_dir / "plugins" / plugin_id
@@ -968,6 +1040,9 @@ class Worker:
                         "AGENTTEAMS_WORKER_ROLE",
                         "AGENTTEAMS_AGENT_ROLE",
                         "AGENTTEAMS_WORKER_NAME",
+                        "AGENTTEAMS_CONTROLLER_URL",
+                        "AGENTTEAMS_AUTH_TOKEN",
+                        "AGENTTEAMS_AUTH_TOKEN_FILE",
                         "AGENTTEAMS_STORAGE_PREFIX",
                         "AGENTTEAMS_SHARED_STORAGE_PREFIX",
                         "AGENTTEAMS_FS_BUCKET",
@@ -980,10 +1055,27 @@ class Worker:
                 },
                 "cwd": str(asset_dir),
             }
-            if plugin_id in existing:
-                self.api_client.update_mcp(plugin_id, payload)
-            else:
+            identity = self._builtin_mcp_payload_identity(plugin_dir, payload)
+            if plugin_id not in existing:
                 self.api_client.create_mcp(plugin_id, payload)
+            elif force or self._builtin_mcp_payload_identities.get(plugin_id) != identity:
+                self.api_client.update_mcp(plugin_id, payload)
+            self._builtin_mcp_payload_identities[plugin_id] = identity
+
+    def _builtin_mcp_payload_identity(
+        self,
+        plugin_dir: Path,
+        payload: dict[str, object],
+    ) -> str:
+        marker = plugin_dir / BUILTIN_QWENPAW_PLUGIN_MARKER
+        plugin_digest = marker.read_text(encoding="utf-8").strip() if marker.is_file() else ""
+        serialized = json.dumps(
+            {"payload": payload, "pluginDigest": plugin_digest},
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
     def _configure_builtin_plugin_mcp_policies(self) -> None:
         allow_policy = {

@@ -39,6 +39,17 @@ func (r *Registry) DetectWorkerBackend(ctx context.Context) WorkerBackend {
 	return nil
 }
 
+// HasWorkerBackends reports whether any worker backend is registered,
+// regardless of whether it is currently available.
+//
+// DetectWorkerBackend returns nil for two very different situations: no
+// backend is configured at all, or one is configured but unreachable (a
+// missing Docker socket, a daemon ping that fails or times out). Callers
+// that must fail closed use this to tell them apart.
+func (r *Registry) HasWorkerBackends() bool {
+	return len(r.workerBackends) > 0
+}
+
 // FindServiceBackend returns the first available backend that implements
 // ServiceBackend, or nil if none qualifies.
 func (r *Registry) FindServiceBackend(ctx context.Context) ServiceBackend {

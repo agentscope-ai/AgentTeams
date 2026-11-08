@@ -47,6 +47,13 @@ const AnnotationEdgeAppliedUUID = "agentteams.io/edge-applied-uuid"
 // Worker so independent Worker reconciles preserve its scoped team storage access.
 const AnnotationWorkerTeamName = "agentteams.io/team-name"
 
+// AnnotationSubagentModelApplied records the Team.spec.subagentModel value that
+// was last propagated to member workers. The TeamReconciler compares it against
+// the live spec value; on a change it bumps each member Worker's
+// resourceVersion so their config reconciles re-resolve the team default
+// (read-time merge — the Team never writes Worker specs).
+const AnnotationSubagentModelApplied = "agentteams.io/subagent-model-applied"
+
 // AccessEntry declares one cloud-permission grant under a logical
 // service. v1 supported services: "object-storage", "ai-gateway", "ai-registry", "schedulerx3".
 //
@@ -176,23 +183,60 @@ type Worker struct {
 }
 
 type WorkerSpec struct {
-	Model         string                     `json:"model"`
-	ModelProvider string                     `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
-	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | hermes | qwenpaw (default: openclaw)
-	Image         string                     `json:"image,omitempty"`         // custom Docker image
-	WorkerName    string                     `json:"workerName,omitempty"`    // business/runtime identity (Matrix localpart, OSS path key)
-	Identity      string                     `json:"identity,omitempty"`
-	Soul          string                     `json:"soul,omitempty"`
-	Agents        string                     `json:"agents,omitempty"`
-	Skills        []string                   `json:"skills,omitempty"`       // built-in skills only
-	RemoteSkills  []RemoteSkillSource        `json:"remoteSkills,omitempty"` // remote skills from source registries
-	McpServers    []MCPServer                `json:"mcpServers,omitempty"`
-	Package       string                     `json:"package,omitempty"` // file://, http(s)://, or nacos://[user:pass@]host:port/...; optional ?authType=nacos|sts-agentteams|none
-	Expose        []ExposePort               `json:"expose,omitempty"`  // ports to expose via Higress gateway
-	ChannelPolicy *ChannelPolicySpec         `json:"channelPolicy,omitempty"`
-	Channels      *ChannelsSpec              `json:"channels,omitempty"`
-	Resources     *AgentResourceRequirements `json:"resources,omitempty"`
-	IdleTimeout   string                     `json:"idleTimeout,omitempty"`
+	Model         string `json:"model"`
+	ModelProvider string `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
+	// SubagentModel optionally names a (cheaper/faster) model used by
+	// spawned subagents instead of the worker's primary model. It must be
+	// a model id served by the team's AI gateway (free string; the
+	// controller does not validate against any catalog — an unknown model
+	// surfaces as a visible upstream error at spawn time). Consumed by
+	// QwenPaw >= 2.1.1 via the native AgentProfileConfig.subagent_model
+	// field; on older runtimes the field is silently ignored.
+	SubagentModel string `json:"subagentModel,omitempty"`
+	// LlmStreamFirstContentTimeout and LlmStreamIdleTimeout bound a stalled
+	// worker LLM stream, in seconds (e.g. "300", "0.5"). The controller
+	// hot-applies them to the QwenPaw runtime envs
+	// (QWENPAW_LLM_STREAM_FIRST_CONTENT_TIMEOUT /
+	// QWENPAW_LLM_STREAM_IDLE_TIMEOUT), which the runtime re-reads on every
+	// stream — so a change takes effect without a restart. An explicit
+	// worker value wins over the team default (TeamSpec.LlmStream*).
+	// Consumed by QwenPaw >= 2.2.1 (envs hot-apply API); older runtimes
+	// ignore them.
+	LlmStreamFirstContentTimeout string `json:"llmStreamFirstContentTimeout,omitempty"`
+	LlmStreamIdleTimeout         string `json:"llmStreamIdleTimeout,omitempty"`
+	// Llm* tuning knobs are the QwenPaw startup-only LLM settings
+	// (QWENPAW_LLM_MAX_RETRIES and friends). The controller projects the
+	// effective value (worker over team default) into the worker container
+	// environment at (re)creation, so a change takes effect when the
+	// container is recreated (spec-hash driven) — not hot, matching the
+	// QwenPaw registry's startup_only mutability. Values must be
+	// non-negative numbers matching the registry value type (integer or
+	// float); invalid values are skipped with a log, never breaking the
+	// container. All eight default to empty = "do not set the env" (the
+	// QwenPaw registry default then applies: 3/1/10/10/600/5/1/300).
+	LlmMaxRetries      string                     `json:"llmMaxRetries,omitempty"`
+	LlmBackoffBase     string                     `json:"llmBackoffBase,omitempty"`
+	LlmBackoffCap      string                     `json:"llmBackoffCap,omitempty"`
+	LlmMaxConcurrent   string                     `json:"llmMaxConcurrent,omitempty"`
+	LlmMaxQpm          string                     `json:"llmMaxQpm,omitempty"`
+	LlmRateLimitPause  string                     `json:"llmRateLimitPause,omitempty"`
+	LlmRateLimitJitter string                     `json:"llmRateLimitJitter,omitempty"`
+	LlmAcquireTimeout  string                     `json:"llmAcquireTimeout,omitempty"`
+	Runtime            string                     `json:"runtime,omitempty"`    // openclaw | copaw | hermes | qwenpaw | deepseek-harness (default: openclaw)
+	Image              string                     `json:"image,omitempty"`      // custom Docker image
+	WorkerName         string                     `json:"workerName,omitempty"` // business/runtime identity (Matrix localpart, OSS path key)
+	Identity           string                     `json:"identity,omitempty"`
+	Soul               string                     `json:"soul,omitempty"`
+	Agents             string                     `json:"agents,omitempty"`
+	Skills             []string                   `json:"skills,omitempty"`       // built-in skills only
+	RemoteSkills       []RemoteSkillSource        `json:"remoteSkills,omitempty"` // remote skills from source registries
+	McpServers         []MCPServer                `json:"mcpServers,omitempty"`
+	Package            string                     `json:"package,omitempty"` // file://, http(s)://, or nacos://[user:pass@]host:port/...; optional ?authType=nacos|sts-agentteams|none
+	Expose             []ExposePort               `json:"expose,omitempty"`  // ports to expose via Higress gateway
+	ChannelPolicy      *ChannelPolicySpec         `json:"channelPolicy,omitempty"`
+	Channels           *ChannelsSpec              `json:"channels,omitempty"`
+	Resources          *AgentResourceRequirements `json:"resources,omitempty"`
+	IdleTimeout        string                     `json:"idleTimeout,omitempty"`
 
 	// ContainerManaged indicates whether the controller should manage
 	// container lifecycle for this worker. When false, container
@@ -358,6 +402,17 @@ type ChannelPolicySpec struct {
 
 type ChannelsSpec struct {
 	DingTalk *DingTalkChannelSpec `json:"dingtalk,omitempty"`
+	Matrix   *MatrixChannelSpec   `json:"matrix,omitempty"`
+}
+
+// MatrixChannelSpec holds display flags for the worker's Matrix channel.
+// Declarative source of truth for Matrix display flags; runtime channel-API
+// writes are not persisted to the CRD and survive only until this section
+// is set. When the section is present, unset flags default to false
+// (hidden), mirroring DingTalk semantics.
+type MatrixChannelSpec struct {
+	ShowThinking  bool `json:"showThinking,omitempty"`
+	ShowToolCalls bool `json:"showToolCalls,omitempty"`
 }
 
 type DingTalkChannelSpec struct {
@@ -373,16 +428,30 @@ type DingTalkChannelSpec struct {
 }
 
 type WorkerStatus struct {
-	ObservedGeneration int64               `json:"observedGeneration,omitempty"`
-	SpecHash           string              `json:"specHash,omitempty"`
-	Phase              string              `json:"phase,omitempty"` // Pending/Running/Sleeping/Failed
-	MatrixUserID       string              `json:"matrixUserID,omitempty"`
-	RoomID             string              `json:"roomID,omitempty"`
-	ContainerState     string              `json:"containerState,omitempty"`
-	LastHeartbeat      string              `json:"lastHeartbeat,omitempty"`
-	LastActiveAt       string              `json:"lastActiveAt,omitempty"`
-	Message            string              `json:"message,omitempty"`
-	ExposedPorts       []ExposedPortStatus `json:"exposedPorts,omitempty"`
+	ObservedGeneration int64  `json:"observedGeneration,omitempty"`
+	SpecHash           string `json:"specHash,omitempty"`
+	Phase              string `json:"phase,omitempty"` // Pending/Running/Sleeping/Failed
+	MatrixUserID       string `json:"matrixUserID,omitempty"`
+	RoomID             string `json:"roomID,omitempty"`
+	ContainerState     string `json:"containerState,omitempty"`
+	LastHeartbeat      string `json:"lastHeartbeat,omitempty"`
+	LastActiveAt       string `json:"lastActiveAt,omitempty"`
+	// AgentStatus is the worker runtime's task-level state self-reported by
+	// the worker heartbeat. Values: "idle" (no active tasks), "running"
+	// (one or more active tasks), "disabled". Empty when the runtime does
+	// not report it (legacy or non-QwenPaw runtimes).
+	AgentStatus string `json:"agentStatus,omitempty"`
+	// RunningTaskCount is the number of active runtime tasks reported by the
+	// worker heartbeat. Nil when unknown or not reported.
+	RunningTaskCount *int `json:"runningTaskCount,omitempty"`
+	// LastRunAt is the runtime-reported timestamp of the last task start
+	// (RFC3339 UTC, from the QwenPaw agent-status endpoint).
+	LastRunAt string `json:"lastRunAt,omitempty"`
+	// LastFinishAt is the runtime-reported timestamp of the last task finish
+	// (RFC3339 UTC, from the QwenPaw agent-status endpoint).
+	LastFinishAt string              `json:"lastFinishAt,omitempty"`
+	Message      string              `json:"message,omitempty"`
+	ExposedPorts []ExposedPortStatus `json:"exposedPorts,omitempty"`
 
 	// BackendRuntime records the backend type currently used for this worker's container.
 	// Set after successful creation or backend switch.
@@ -442,6 +511,35 @@ type TeamSpec struct {
 	// Worker's openclaw.json and coordination context AGENTS.md.
 	// Example: "30m". Empty means leader heartbeat is disabled.
 	HeartbeatEvery string `json:"heartbeatEvery,omitempty"`
+
+	// SubagentModel is the team-wide default for the model used by spawned
+	// subagents (see WorkerSpec.SubagentModel). A worker's own
+	// subagentModel always takes precedence; members without an explicit
+	// value inherit this default via read-time merge during their config
+	// reconcile. Changing it re-triggers member config reconciles.
+	SubagentModel string `json:"subagentModel,omitempty"`
+
+	// LlmStreamFirstContentTimeout and LlmStreamIdleTimeout are the
+	// team-wide defaults for the worker LLM stream timeouts (see
+	// WorkerSpec.LlmStreamFirstContentTimeout). A worker's own value always
+	// takes precedence; members without an explicit value inherit these via
+	// read-time merge during their config reconcile.
+	LlmStreamFirstContentTimeout string `json:"llmStreamFirstContentTimeout,omitempty"`
+	LlmStreamIdleTimeout         string `json:"llmStreamIdleTimeout,omitempty"`
+
+	// Llm* tuning knobs are the team-wide defaults for the QwenPaw
+	// startup-only LLM settings (see WorkerSpec.LlmMaxRetries and friends).
+	// A worker's own value always takes precedence; members without an
+	// explicit value inherit these defaults into their container environment
+	// at (re)creation.
+	LlmMaxRetries      string `json:"llmMaxRetries,omitempty"`
+	LlmBackoffBase     string `json:"llmBackoffBase,omitempty"`
+	LlmBackoffCap      string `json:"llmBackoffCap,omitempty"`
+	LlmMaxConcurrent   string `json:"llmMaxConcurrent,omitempty"`
+	LlmMaxQpm          string `json:"llmMaxQpm,omitempty"`
+	LlmRateLimitPause  string `json:"llmRateLimitPause,omitempty"`
+	LlmRateLimitJitter string `json:"llmRateLimitJitter,omitempty"`
+	LlmAcquireTimeout  string `json:"llmAcquireTimeout,omitempty"`
 }
 
 // TeamWorkerRef references an existing Worker CR as a team member.
@@ -549,6 +647,11 @@ type TeamMemberStatus struct {
 	Message string `json:"message,omitempty"`
 	// LastActiveAt is the latest runtime-reported business activity time.
 	LastActiveAt string `json:"lastActiveAt,omitempty"`
+	// AgentStatus mirrors the member's Worker.Status.AgentStatus (runtime
+	// task state: "idle" / "running" / "disabled"; empty = not reported).
+	AgentStatus string `json:"agentStatus,omitempty"`
+	// LastFinishAt mirrors the member's Worker.Status.LastFinishAt.
+	LastFinishAt string `json:"lastFinishAt,omitempty"`
 	// LastHeartbeat is the latest heartbeat timestamp for this member.
 	LastHeartbeat string `json:"lastHeartbeat,omitempty"`
 	// ExposedPorts records the ports currently exposed via Higress for this
@@ -585,6 +688,75 @@ type HumanSpec struct {
 	AccessibleWorkers []string            `json:"accessibleWorkers,omitempty"`
 	IdentitySource    *IdentitySourceSpec `json:"identitySource,omitempty"`
 	Note              string              `json:"note,omitempty"`
+	// WorkspaceFileAccess controls what this human may do to the knowledge
+	// base files (workspace-files endpoints) of workers in their own teams:
+	// "read" (the default, including when empty) allows the read endpoints
+	// (tree / file-metadata / file-content / file-download); "readwrite"
+	// additionally allows PUT file-content. Write is an explicit opt-in so
+	// that a controller upgrade cannot silently grant pre-existing humans
+	// the new ability to modify worker knowledge files. Admin (L1) callers
+	// are never restricted, and team leaders always stay read-only on this
+	// API.
+	WorkspaceFileAccess string `json:"workspaceFileAccess,omitempty"`
+	// Capabilities grants named sensitive-surface privileges beyond the L2
+	// baseline (five-value set per docs/design/capability-foundation.md,
+	// #1220 §3). List-shaped so future values are additive; unknown values
+	// are rejected at admission by the human-update API. Team leaders and
+	// other SA-based identities never hold capabilities (#1220 §5).
+	Capabilities []string `json:"capabilities,omitempty"`
+	// WorkspaceQuotaBytes is the total byte budget for this human's file
+	// area (#1414 P1): files/** plus .trash/**. nil = unlimited. Enforced
+	// before writes and trash restores (413 quota_exceeded); usage is
+	// computed live, never persisted.
+	WorkspaceQuotaBytes *int64 `json:"workspaceQuotaBytes,omitempty"`
+	// ModelAccess is the per-human model-grant table. Absent means every
+	// model surface is locked (fail-closed).
+	ModelAccess *ModelAccessSpec `json:"modelAccess,omitempty"`
+
+	// WorkspaceAccess holds per-team access rules for this human's file
+	// area (#1414 P2). The default set — accessibleTeams plus every team
+	// that lists the human in spec.humanMembers (its Leader and Worker
+	// SAs) — has readwrite on files/**; Team.spec.admin grants nothing.
+	// Grants extend non-member teams, restrictions narrow default teams,
+	// and a restriction always wins over a grant (fail closed).
+	// memory/** and digest/** are never addressable through the files API
+	// and cannot be granted.
+	WorkspaceAccess *HumanWorkspaceAccess `json:"workspaceAccess,omitempty"`
+}
+
+// HumanWorkspaceAccessRule is one per-team rule of HumanWorkspaceAccess
+// (#1414 P2). Grant rules use mode read|readwrite; restriction rules use
+// none|read (the per-list mode set is enforced by the human-update API,
+// which rejects mismatches with 400). Paths are glob patterns under
+// files/ where "*" matches exactly one segment and "**" matches zero or
+// more whole segments.
+type HumanWorkspaceAccessRule struct {
+	// Team is the metadata.name of the Team CR this rule applies to.
+	// +kubebuilder:validation:MinLength=1
+	Team string `json:"team"`
+	// Paths are the files/ glob patterns this rule covers.
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=16
+	Paths []string `json:"paths"`
+	// Mode is the access level the rule sets: read|readwrite in grants,
+	// none|read in restrictions. The CRD-level enum is the union of both
+	// sets because one struct serves both lists.
+	// +kubebuilder:validation:Enum=none;read;readwrite
+	Mode string `json:"mode"`
+}
+
+// HumanWorkspaceAccess is the per-team workspace access configuration of a
+// human's file area (#1414 P2). At most one rule per team within a list;
+// the same team may appear in both lists, in which case the restriction
+// wins (fail closed).
+type HumanWorkspaceAccess struct {
+	// Grants add access for teams outside the default set.
+	// +kubebuilder:validation:MaxItems=32
+	Grants []HumanWorkspaceAccessRule `json:"grants,omitempty"`
+	// Restrictions narrow the default readwrite of a default team to read
+	// or none.
+	// +kubebuilder:validation:MaxItems=32
+	Restrictions []HumanWorkspaceAccessRule `json:"restrictions,omitempty"`
 }
 
 type IdentitySourceSpec struct {
@@ -617,6 +789,76 @@ type HumanList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Human `json:"items"`
+}
+
+// ModelAccessSpec is a list of role-scoped model grants. There is no team
+// dimension: a grant follows the human across every accessible team, and the
+// role is resolved from the target worker's TeamWorkerRef.Role.
+type ModelAccessSpec struct {
+	Scopes []ModelAccessScope `json:"scopes,omitempty"`
+}
+
+// ModelAccessScope grants one role either a shared table (Table) or an
+// inline set of surfaces — never both.
+type ModelAccessScope struct {
+	// Role is team_leader, worker, "*" or empty ("*" and empty both mean
+	// "every role"; an explicit role block wins over the blanket).
+	Role string `json:"role,omitempty"`
+	// Table names a ModelAccessTable in the same namespace.
+	Table string `json:"table,omitempty"`
+
+	Main      *ModelAccessSurface `json:"main,omitempty"`
+	Spawn     *ModelAccessSurface `json:"spawn,omitempty"`
+	CodingCli []ModelAccessCli    `json:"codingCli,omitempty"`
+}
+
+// ModelAccessSurface is the allowed (provider, model) table of one surface.
+type ModelAccessSurface struct {
+	Entries []ModelAccessEntry `json:"entries,omitempty"`
+	// Inherit allows the value to stay empty: spawn inherits the primary
+	// model, a coding CLI follows the worker's spawn model.
+	Inherit *bool `json:"inherit,omitempty"`
+}
+
+// ModelAccessCli is one coding CLI's table.
+type ModelAccessCli struct {
+	CLI     string             `json:"cli"`
+	Entries []ModelAccessEntry `json:"entries,omitempty"`
+	Inherit *bool              `json:"inherit,omitempty"`
+}
+
+// ModelAccessEntry is one row: the provider that serves the model, plus the
+// model name (a Higress route alias).
+type ModelAccessEntry struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+// ModelAccessTable is a reusable grant set shared by many humans.
+type ModelAccessTable struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec ModelAccessTableSpec `json:"spec,omitempty"`
+}
+
+// ModelAccessTableSpec mirrors the inline surfaces of a scope.
+type ModelAccessTableSpec struct {
+	Main      *ModelAccessSurface `json:"main,omitempty"`
+	Spawn     *ModelAccessSurface `json:"spawn,omitempty"`
+	CodingCli []ModelAccessCli    `json:"codingCli,omitempty"`
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+// ModelAccessTableList is the list type for the table CRD.
+type ModelAccessTableList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+
+	Items []ModelAccessTable `json:"items"`
 }
 
 // +genclient
@@ -709,4 +951,98 @@ type ManagerList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Manager `json:"items"`
+}
+
+// LoopType constants define how a Loop is triggered.
+const (
+	LoopTypeCron     = "cron"     // schedule is a cron expression
+	LoopTypeInterval = "interval" // schedule is a seconds count
+	LoopTypeEvent    = "event"    // triggered by external events; schedule ignored
+)
+
+// LoopState constants define the observed lifecycle state of a Loop.
+const (
+	LoopStatePending   = "pending"   // accepted, not yet observed by the reconciler
+	LoopStateActive    = "active"    // iterations are being scheduled/executed
+	LoopStatePaused    = "paused"    // mirrors spec.paused while true
+	LoopStateCompleted = "completed" // all iterations finished within maxIterations
+	LoopStateFailed    = "failed"    // a fatal error stopped the loop
+)
+
+// +genclient
+// +kubebuilder:subresource:status
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+// Loop represents a scheduled or event-driven iteration over a task. It is
+// the first-class K8s resource that mirrors the runtime's self-managed loop
+// (plan_loop / record_loop_iteration) so the control plane can observe loop
+// progress via `kubectl get loops`.
+//
+// Writers: Spec is written by users or the controller (desired state);
+// Status is written only by the loop reconciler (an independent goroutine,
+// not a separate controller instance). This type is the resource definition
+// only — the reconciler that fills Status is implemented separately.
+type Loop struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              LoopSpec   `json:"spec"`
+	Status            LoopStatus `json:"status,omitempty"`
+}
+
+type LoopSpec struct {
+	// TaskID is the id of the task this loop iterates over.
+	TaskID string `json:"taskID"`
+	// TeamName is the owning Team. Empty for standalone loops not tied
+	// to a Team.
+	TeamName string `json:"teamName,omitempty"`
+	// LoopType selects the trigger: "cron" (schedule is a cron expression),
+	// "interval" (schedule is a seconds count, e.g. "300"), or "event"
+	// (external wakeups; schedule is ignored).
+	// +kubebuilder:validation:Enum=cron;interval;event
+	LoopType string `json:"loopType"`
+	// Schedule is the trigger expression, interpreted by LoopType: a cron
+	// expression for "cron", a seconds count for "interval", ignored for
+	// "event". Written by the user; validated by the reconciler.
+	Schedule string `json:"schedule,omitempty"`
+	// TimeoutSeconds bounds one iteration. Nil = no per-iteration timeout.
+	TimeoutSeconds *int32 `json:"timeoutSeconds,omitempty"`
+	// MaxIterations caps the total number of iterations. Nil or 0 =
+	// unlimited.
+	MaxIterations *int32 `json:"maxIterations,omitempty"`
+	// Paused is the desired pause state (control-plane action, not a
+	// decision request). While true the reconciler holds the loop at
+	// status.state "paused" and skips scheduled iterations.
+	Paused bool `json:"paused,omitempty"`
+}
+
+// LoopStatus is the observed state of a Loop. Written only by the loop
+// reconciler; every field must be derivable from spec plus runtime
+// observation so the reconciler can mirror it idempotently.
+type LoopStatus struct {
+	// State is the observed lifecycle state: pending / active / paused /
+	// completed / failed.
+	State string `json:"state,omitempty"`
+	// CurrentIteration counts iterations started so far (0 before the
+	// first).
+	CurrentIteration int32 `json:"currentIteration,omitempty"`
+	// NextRunAt is when the next iteration is due, if any.
+	NextRunAt *metav1.Time `json:"nextRunAt,omitempty"`
+	// LastRunAt is when the most recent iteration started.
+	LastRunAt *metav1.Time `json:"lastRunAt,omitempty"`
+	// LastResult carries the terminal result or error message of the last
+	// iteration.
+	LastResult string `json:"lastResult,omitempty"`
+	// Conditions tracks typed loop conditions (e.g. Paused, Completed,
+	// Failed) following metav1.Condition semantics.
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	// ObservedGeneration is the metadata.generation last reconciled.
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+type LoopList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []Loop `json:"items"`
 }

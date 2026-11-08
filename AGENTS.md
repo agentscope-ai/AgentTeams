@@ -12,10 +12,10 @@ AgentTeams is an open-source Agent Teams system that uses IM (Matrix protocol) f
 AgentTeams/
 ├── agentteams-controller/   # Kubernetes operator (Go): reconciles Worker, Manager, Team, Human CRDs
 ├── helm/                # Helm chart (K8s): Higress, Tuwunel, MinIO, controller, Manager CR, defaults
-├── manager/             # Manager images: OpenClaw-based (Dockerfile) and CoPaw-based (Dockerfile.qwenpaw)
+├── manager/             # Manager images: OpenClaw-based (Dockerfile) and QwenPaw-based (Dockerfile.qwenpaw)
 ├── worker/              # OpenClaw Worker image (shared base pattern; runtime also selected at deploy time)
-├── copaw/               # CoPaw Python package source (published as e.g. copaw-worker on PyPI)
 ├── hermes/              # Hermes Python package source (Hermes Matrix worker runtime)
+├── deepseek-harness/    # Experimental headless DeepSeek Harness Worker image and Matrix bridge
 ├── openhuman/           # OpenHuman Worker image: Rust core + native Matrix (channel-matrix feature)
 ├── openclaw-base/       # Base image: Ubuntu + Node.js + bundled agent assets + mcporter
 ├── shared/lib/          # Shared shell libs copied into images (agentteams-env.sh, render-skills.sh, …)
@@ -40,8 +40,9 @@ Logs and local artifacts (for example replay logs) stay out of git via `.gitigno
 | Runtime   | Stack | Role |
 |-----------|--------|------|
 | `openclaw` | Node.js / OpenClaw (default) | Primary worker agent runtime |
-| `copaw`    | Python / AgentScope via CoPaw | Alternative worker runtime |
+| `copaw` (legacy) | Python / AgentScope via CoPaw | Legacy workers only (EOL; do not use for new workers) |
 | `hermes`   | Python / `hermes-worker` package | Alternative worker runtime (Matrix bridge + policies under `hermes/src/`) |
+| `deepseek-harness` | Node.js / DeepSeek Harness | Experimental headless Worker runtime pinned to a tested DSH release |
 
 **Manager runtimes** (container env `AGENTTEAMS_MANAGER_RUNTIME`, CoPaw Manager CR / Helm `manager.runtime` where applicable):
 
@@ -50,7 +51,7 @@ Logs and local artifacts (for example replay logs) stay out of git via `.gitigno
 | `openclaw` | OpenClaw gateway; primary Matrix channel uses the **message** tool pattern (see upstream OpenClaw / AgentTeams manager config). |
 | `qwenpaw` (default) | Python QwenPaw workspace; Matrix traffic uses the **`copaw channels send`** CLI (see `start-qwenpaw-manager.sh`). |
 
-Hermes and OpenHuman are **Worker-only** runtimes in the API and Helm worker defaults; the Manager entrypoint in `start-manager-agent.sh` today starts **openclaw** or **qwenpaw** only.
+Hermes, DeepSeek Harness, and OpenHuman are **Worker-only** runtimes in the API and Helm worker defaults; the Manager entrypoint in `start-manager-agent.sh` today starts **openclaw** or **qwenpaw** only.
 
 **Deployment runtime** (`AGENTTEAMS_RUNTIME`): local embedded stack vs `aliyun` vs `k8s` changes which bootstrap steps run inside the Manager container (for example Matrix registration and Higress setup are skipped or reduced in `k8s` because the controller owns them).
 
@@ -110,7 +111,7 @@ manager/agent/
 
 ### Local full build (from source)
 
-The image dependency chain is: `openclaw-base` → `manager` / `worker`. CoPaw and Hermes worker images and the controller image are additional build targets; see the `Makefile` for current image names.
+The image dependency chain is: `openclaw-base` → `manager` / `worker`. Hermes and DeepSeek Harness worker images and the controller image are additional build targets; see the `Makefile` for current image names.
 
 By default, `OPENCLAW_BASE_IMAGE` points to the remote registry (`higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/openclaw-base`). When building locally from a modified `openclaw-base`, you **must** override it to the local image name so that manager/worker actually use your local base:
 
@@ -118,8 +119,8 @@ By default, `OPENCLAW_BASE_IMAGE` points to the remote registry (`higress-regist
 # Step 1: Build openclaw-base
 make build-openclaw-base
 
-# Step 2: Build manager, worker, copaw-worker using the LOCAL base
-make build-manager build-worker build-copaw-worker \
+# Step 2: Build manager, worker using the LOCAL base
+make build-manager build-worker \
     OPENCLAW_BASE_IMAGE=agentteams/openclaw-base \
     OPENCLAW_BASE_VERSION=latest
 ```
@@ -134,7 +135,7 @@ PROXY_ARGS="--build-arg HTTP_PROXY=http://host.containers.internal:1087 \
     --build-arg http_proxy=http://host.containers.internal:1087 \
     --build-arg https_proxy=http://host.containers.internal:1087"
 
-make build-embedded build-manager build-worker build-copaw-worker DOCKER_BUILD_ARGS="${PROXY_ARGS}"
+make build-embedded build-manager build-worker DOCKER_BUILD_ARGS="${PROXY_ARGS}"
 ```
 
 Note: use `host.containers.internal` for Podman on macOS, `host.docker.internal` for Docker Desktop.
@@ -142,11 +143,11 @@ Note: use `host.containers.internal` for Podman on macOS, `host.docker.internal`
 **China build acceleration (without proxy)**: All Dockerfiles default to official sources. For builds in China without proxy, pass mirror args:
 
 ```bash
-# APT mirror (for Ubuntu/Debian-based images: openclaw-base, copaw, manager-qwenpaw, embedded)
+# APT mirror (for Ubuntu/Debian-based images: openclaw-base, manager-qwenpaw, embedded)
 make build-embedded DOCKER_BUILD_ARGS="--build-arg APT_MIRROR=mirrors.aliyun.com"
 
-# PIP mirror (for Python-based images: copaw, manager-qwenpaw)
-make build-copaw-worker DOCKER_BUILD_ARGS="--build-arg APT_MIRROR=mirrors.aliyun.com --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/"
+# PIP mirror (for Python-based images: manager-qwenpaw)
+make build-manager-qwenpaw DOCKER_BUILD_ARGS="--build-arg APT_MIRROR=mirrors.aliyun.com --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/"
 
 # NPM mirror (for Node.js-based images: openclaw-base)
 make build-openclaw-base DOCKER_BUILD_ARGS="--build-arg APT_MIRROR=mirrors.aliyun.com --build-arg NPM_REGISTRY=https://registry.npmmirror.com/"
@@ -155,7 +156,7 @@ make build-openclaw-base DOCKER_BUILD_ARGS="--build-arg APT_MIRROR=mirrors.aliyu
 ### To modify the Manager container
 
 - [manager/Dockerfile](manager/Dockerfile) — OpenClaw-based Manager (from `openclaw-base`; bundles `agt` CLI from controller image)
-- [manager/Dockerfile.qwenpaw](manager/Dockerfile.qwenpaw) — CoPaw-based Manager (Python venv + CoPaw from PyPI; same agent tree and scripts pattern)
+- [manager/Dockerfile.qwenpaw](manager/Dockerfile.qwenpaw) — QwenPaw-based Manager (Python venv + QwenPaw from PyPI; same agent tree and scripts pattern)
 - [manager/supervisord.conf](manager/supervisord.conf) — process orchestration (local embedded stack)
 - [manager/scripts/init/](manager/scripts/init/) — startup: `start-manager-agent.sh` (runtime + `AGENTTEAMS_RUNTIME`), `upgrade-builtins.sh`, Higress/Matrix bootstrap where applicable
 - [manager/scripts/lib/](manager/scripts/lib/) — shared libraries (`base.sh`, `container-api.sh`, …)
@@ -168,16 +169,14 @@ The Manager **image** is an agent runtime plus scripts; Higress, Tuwunel, MinIO,
 - [worker/Dockerfile](worker/Dockerfile) — build definition (Node.js from build stage / openclaw-base pattern)
 - [worker/scripts/worker-entrypoint.sh](worker/scripts/worker-entrypoint.sh) — startup logic
 
-### To modify the Worker container (CoPaw)
-
-- [copaw/Dockerfile](copaw/Dockerfile) — CoPaw worker image build
-- [copaw/scripts/copaw-worker-entrypoint.sh](copaw/scripts/copaw-worker-entrypoint.sh) — startup logic
-- [copaw/src/copaw_worker/](copaw/src/copaw_worker/) — CoPaw worker Python package
-- [copaw/README.md](copaw/README.md) — PyPI package `copaw-worker` install and CLI overview
-
 ### To modify the Hermes worker runtime
 
 - [hermes/](hermes/) — Python package layout under `hermes/src/` (`hermes_worker`, `hermes_matrix`, CLI)
+
+### To modify the DeepSeek Harness worker runtime
+
+- [deepseek-harness/](deepseek-harness/) — managed image, Matrix bridge, persisted room sessions, and runtime tests
+- [plugins/teamharness/adapters/deepseek-harness/](plugins/teamharness/adapters/deepseek-harness/) — DSH-native TeamHarness adapter and compatibility checks
 
 ### To modify the OpenHuman worker runtime
 
@@ -223,6 +222,7 @@ In `k8s` / `aliyun` modes, Workers are created via the controller API instead of
 | Agent Framework | OpenClaw (fork) | Default Manager/Worker runtime (Node.js gateway + Matrix plugin) |
 | Agent Framework | CoPaw (Python / AgentScope) | Alternative Manager and Worker runtime |
 | Agent Framework | Hermes (`hermes-worker`) | Alternative Python Worker runtime |
+| Agent Framework | DeepSeek Harness (`@deepseek-ai/dsh`) | Experimental headless Worker runtime with room-scoped session continuation |
 | Agent Framework | OpenHuman (`openhuman-core`) | Alternative Rust Worker runtime with native Matrix |
 | MCP CLI | mcporter | Worker calls MCP Server tools via CLI |
 
@@ -236,6 +236,98 @@ Pull requests do not update a shared changelog file. When a release tag is publi
 2. **Centralized file system**: All Agent configs and state stored in MinIO (or cloud object storage). Workers are stateless — destroy and recreate freely.
 3. **Unified credential management**: Worker uses one Consumer key-auth token for both LLM and MCP Server access. Manager controls permissions.
 4. **Skills as documentation**: Each SKILL.md is a self-contained reference that tells the Agent how to use an API or tool.
+
+## Defensive Guardrails
+
+Five numbered rules. Each rule is citable by number (e.g. "guardrail 3") in
+reviews and incidents; the single quota table below lists the default value
+and code source for every gate. Where a limit is "no default", that is the
+defensive choice: the caller must decide explicitly.
+
+### Rule 1 — Token gate: account, never cap
+
+Token usage in a loop is a **passive, monotonically increasing ledger**
+(`tokens_used` in the project's loop budget). It is recorded for
+observability and cost review but never blocks, throttles, or truncates
+work — no token cap exists by design, so a loop cannot be silently
+starved or silently extended on tokens.
+
+### Rule 2 — Human-touch gate: structured requests only
+
+Human attention is structural, not ambient:
+
+- Task level — taskflow `request_attention`: `options` (when provided)
+  is a list of `{id, label}` with **at most 10 entries** and unique
+  non-empty string ids; `suggested` must be one of the provided option
+  ids and is advisory only, never auto-applied; the deadline is
+  `timeoutAt` (ISO 8601, `expiresAt` is a compatibility alias). Per the
+  task-execution skill, decision-type requests should provide options
+  so a human can answer structurally.
+- Loop level — an iteration decided `ask_user` parks the loop in
+  `waiting_user` until a human answers.
+
+While a request is open the agent must not guess or resolve it itself.
+Re-requesting the same kind before it is resolved is idempotent (reuses
+the recorded event, no new room ping); closing requires an existing
+record of that kind plus `resolved: true`, also without a new ping.
+
+### Rule 3 — Retry gate: bounded, idempotent, loud on exhaustion
+
+Retries are always bounded and deduplicated, and an exhausted retry is
+**an error, never a silent success**:
+
+- Matrix room sends retry at most 3 times with exponential backoff
+  (base 1.0 s, doubling, plus 0–0.5 s jitter); the server's
+  `retry_after_ms` is preferred over the computed delay; only 5xx, 429,
+  and network errors are retryable; one `tx_id` is reused across
+  attempts so a retried send cannot duplicate. Exhaustion logs an
+  error and fails (raises, or returns the error response to the
+  caller) — never a silent success.
+- Shared-storage sync uses 3 attempts (backoffs 0.1 s, 0.25 s) for
+  project sync and 3 attempts for metadata reads; project sync returns
+  `False` on exhaustion, while the consistent metadata-read helper reports
+  a read error. Callers must check the failure result.
+- Worker task submissions retry idempotently: resubmitting the exact
+  same status/summary/deliverables reuses the original submission;
+  changing any digest input conflicts and blocks until a Leader
+  decision.
+
+### Rule 4 — Timeout gate: every long operation has an explicit bound
+
+Use explicit bounds for long operations: Matrix sync defaults to 30 s
+(the configured sync timeout can override it); the typing
+indicator runs a 30 s server timeout with 25 s renewal and a 120 s
+maximum duration; the LLM first-content and idle timeouts default to 300 s
+(override with `AGENTTEAMS_LLM_STREAM_TIMEOUT_S`). A task attention
+deadline (`timeoutAt`) is optional and caller-set; an omitted deadline
+does not expire automatically. A loop's `maxIterations` is required and
+has no default — a loop must declare its size.
+
+### Rule 5 — Budget gate: tier defaults, flag don't truncate
+
+Loop iteration budgets default by cost-model tier — `simple` = 3,
+`standard` = 5, `full` = 10 — and an explicit `iteration_budget`
+always wins over the tier mapping. A loop without a declared tier has
+**no budget** (no implicit cap). Crossing the budget **flags** the
+ledger (`over_budget: true`); it never truncates in-flight work.
+Bounded histories keep state small: loop provenance retains the last 5
+entries, task audit history the last 50.
+
+### Quota table (single source of defaults)
+
+| Gate | Default / limit | Behaviour at the limit | Source |
+|------|-----------------|------------------------|--------|
+| Token | no cap; `tokens_used` is a passive ledger | recorded only; never blocks | `plugins/teamharness/mcp/project/flow.py` |
+| Human touch | `request_attention` options ≤ 10 when provided (unique string ids); `ask_user` loop decision parks the loop in `waiting_user` | malformed requests rejected; open request must not be self-resolved | `plugins/teamharness/mcp/lifecycle/taskflow.py`, `plugins/teamharness/mcp/project/flow.py` |
+| Retry — Matrix room send | 3 retries; backoff 1.0 s × 2^attempt + 0–0.5 s jitter; `retry_after_ms` preferred; 5xx/429/network only; single `tx_id` | exhaustion logs an error and fails (raises or returns the error) | `plugins/agentteams-matrix-channel/agentteams_matrix/channel.py` |
+| Retry — shared-storage sync | 3 attempts (backoffs 0.1 s, 0.25 s); metadata read 3 attempts | project sync returns `False`; callers must handle failure | `plugins/teamharness/mcp/artifact/sync.py` |
+| Timeout — Matrix sync | 30 s default; configurable | sync request uses the configured timeout | `plugins/agentteams-matrix-channel/agentteams_matrix/channel.py` |
+| Timeout — typing indicator | 30 s server; 25 s renewal; 120 s max duration | indicator dropped | `plugins/agentteams-matrix-channel/agentteams_matrix/channel.py` |
+| Timeout — LLM first content / idle | 300 s each (`AGENTTEAMS_LLM_STREAM_TIMEOUT_S`) | that wait times out; no total-stream deadline is implied | `manager/scripts/init/start-qwenpaw-manager.sh` |
+| Timeout — task attention deadline | optional; no default; caller sets `timeoutAt` | attention becomes overdue only when a deadline was provided | `plugins/teamharness/mcp/lifecycle/taskflow.py` |
+| Budget — loop iterations | simple 3 / standard 5 / full 10; explicit `iteration_budget` wins; no tier = no budget | `over_budget` flagged, work not truncated | `plugins/teamharness/mcp/common/constants.py`, `plugins/teamharness/mcp/project/flow.py` |
+| Budget — loop provenance | last 5 entries | oldest entries dropped | `plugins/teamharness/mcp/common/constants.py` |
+| Budget — task audit history | last 50 entries | oldest entries dropped | `plugins/teamharness/mcp/common/constants.py` |
 
 ## Agent-Facing Content: Writing Convention
 

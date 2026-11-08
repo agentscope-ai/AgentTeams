@@ -21,16 +21,17 @@
 # ---------- Configuration ----------
 
 VERSION        ?= latest
+DEEPSEEK_HARNESS_WORKER_VERSION ?= v0.1.1
 REGISTRY       ?= higress-registry.cn-hangzhou.cr.aliyuncs.com
 REPO           ?= agentteams
 
 MANAGER_IMAGE        ?= $(REGISTRY)/$(REPO)/agentteams-manager
 MANAGER_QWENPAW_IMAGE  ?= $(REGISTRY)/$(REPO)/agentteams-manager-qwenpaw
 WORKER_IMAGE         ?= $(REGISTRY)/$(REPO)/agentteams-worker
-COPAW_WORKER_IMAGE   ?= $(REGISTRY)/$(REPO)/agentteams-copaw-worker
 HERMES_WORKER_IMAGE  ?= $(REGISTRY)/$(REPO)/agentteams-hermes-worker
 QWENPAW_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-qwenpaw-worker
 OPENHUMAN_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-openhuman-worker
+DEEPSEEK_HARNESS_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-deepseek-harness-worker
 OPENCLAW_BASE_IMAGE  ?= $(REGISTRY)/$(REPO)/openclaw-base
 CONTROLLER_IMAGE     ?= $(REGISTRY)/$(REPO)/agentteams-controller
 EMBEDDED_IMAGE       ?= $(REGISTRY)/$(REPO)/agentteams-embedded
@@ -38,10 +39,10 @@ EMBEDDED_IMAGE       ?= $(REGISTRY)/$(REPO)/agentteams-embedded
 MANAGER_TAG        ?= $(MANAGER_IMAGE):$(VERSION)
 MANAGER_QWENPAW_TAG  ?= $(MANAGER_QWENPAW_IMAGE):$(VERSION)
 WORKER_TAG         ?= $(WORKER_IMAGE):$(VERSION)
-COPAW_WORKER_TAG   ?= $(COPAW_WORKER_IMAGE):$(VERSION)
 HERMES_WORKER_TAG  ?= $(HERMES_WORKER_IMAGE):$(VERSION)
 QWENPAW_WORKER_TAG ?= $(QWENPAW_WORKER_IMAGE):$(VERSION)
 OPENHUMAN_WORKER_TAG ?= $(OPENHUMAN_WORKER_IMAGE):$(VERSION)
+DEEPSEEK_HARNESS_WORKER_TAG ?= $(DEEPSEEK_HARNESS_WORKER_IMAGE):$(DEEPSEEK_HARNESS_WORKER_VERSION)
 OPENCLAW_BASE_TAG  ?= $(OPENCLAW_BASE_IMAGE):$(VERSION)
 CONTROLLER_TAG     ?= $(CONTROLLER_IMAGE):$(VERSION)
 EMBEDDED_TAG       ?= $(EMBEDDED_IMAGE):$(VERSION)
@@ -50,10 +51,10 @@ EMBEDDED_TAG       ?= $(EMBEDDED_IMAGE):$(VERSION)
 LOCAL_MANAGER        = agentteams/manager:$(VERSION)
 LOCAL_MANAGER_QWENPAW  = agentteams/manager-qwenpaw:$(VERSION)
 LOCAL_WORKER         = agentteams/worker-agent:$(VERSION)
-LOCAL_COPAW_WORKER   = agentteams/copaw-worker:$(VERSION)
 LOCAL_HERMES_WORKER  = agentteams/hermes-worker:$(VERSION)
 LOCAL_QWENPAW_WORKER = agentteams/qwenpaw-worker:$(VERSION)
 LOCAL_OPENHUMAN_WORKER = agentteams/openhuman-worker:$(VERSION)
+LOCAL_DEEPSEEK_HARNESS_WORKER = agentteams/deepseek-harness-worker:$(VERSION)
 LOCAL_OPENCLAW_BASE  = agentteams/openclaw-base:$(VERSION)
 LOCAL_CONTROLLER     = agentteams/agentteams-controller:$(VERSION)
 LOCAL_CONTROLLER_BUILD_IMAGE ?= $(LOCAL_CONTROLLER)
@@ -83,9 +84,6 @@ BUILTIN_VERSION_ARG = --build-arg BUILTIN_VERSION=$(VERSION)
 # Named build context for shared libraries (requires BuildKit / Docker 23+)
 SHARED_LIB_CTX = --build-context shared=./shared/lib
 
-# Named build context for local copaw_worker extension
-COPAW_WORKER_CTX = --build-context copaw-worker=./copaw
-
 # Multi-arch build configuration
 # Platforms for multi-arch builds (comma-separated, no spaces)
 MULTIARCH_PLATFORMS ?= linux/amd64,linux/arm64
@@ -108,12 +106,12 @@ LINES          ?= 50
 
 # ---------- Phony targets ----------
 
-.PHONY: all build build-openclaw-base build-agentteams-controller build-embedded build-manager build-manager-qwenpaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker \
-        build-qwenpaw-worker \
-        tag push push-openclaw-base push-agentteams-controller push-embedded push-manager push-manager-qwenpaw push-worker push-copaw-worker push-hermes-worker push-openhuman-worker \
-        push-qwenpaw-worker \
-        push-native push-native-manager push-native-manager-qwenpaw push-native-worker push-native-copaw-worker push-native-hermes-worker push-native-openhuman-worker \
-        push-native-qwenpaw-worker \
+.PHONY: all build build-openclaw-base build-agentteams-controller build-embedded build-manager build-manager-qwenpaw build-worker build-hermes-worker build-openhuman-worker \
+        build-qwenpaw-worker build-deepseek-harness-worker \
+        tag push push-openclaw-base push-agentteams-controller push-embedded push-manager push-manager-qwenpaw push-worker push-hermes-worker push-openhuman-worker \
+        push-qwenpaw-worker push-deepseek-harness-worker push-openclaw-base-platform push-openclaw-base-manifest \
+        push-native push-native-manager push-native-manager-qwenpaw push-native-worker push-native-hermes-worker push-native-openhuman-worker \
+        push-native-qwenpaw-worker push-native-deepseek-harness-worker \
         buildx-setup \
         test test-quick test-installed test-embedded \
         install install-embedded uninstall uninstall-embedded replay replay-log \
@@ -128,7 +126,7 @@ all: build
 
 # ---------- Build ----------
 
-build: build-manager build-manager-qwenpaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker build-qwenpaw-worker build-agentteams-controller ## Build all images (base image pulled from registry, not rebuilt locally)
+build: build-manager build-manager-qwenpaw build-worker build-hermes-worker build-openhuman-worker build-qwenpaw-worker build-agentteams-controller ## Build core images (experimental runtimes have explicit build targets)
 
 build-openclaw-base: ## Build OpenClaw base image
 	@echo "==> Building OpenClaw base image: $(LOCAL_OPENCLAW_BASE) (registry: $(HIGRESS_REGISTRY))"
@@ -138,18 +136,19 @@ build-openclaw-base: ## Build OpenClaw base image
 
 # build targets use the locally-built openclaw-base; push targets use the registry image
 # OPENCLAW_BASE_VERSION controls which base image tag manager/worker builds depend on.
-# Default: latest (for standalone builds). Override to use a versioned base (e.g. in build-all).
-OPENCLAW_BASE_VERSION ?= 20260423-8359cbc
+# Single source of truth: hack/versions.env (OPENCLAW_BASE_TAG, derived from the
+# OpenClaw pin). Override on the command line to use a different base.
+OPENCLAW_BASE_VERSION ?= $(shell sed -n 's/^OPENCLAW_BASE_TAG=//p' hack/versions.env)
 OPENCLAW_BASE_BUILD_ARG = --build-arg OPENCLAW_BASE_IMAGE=$(OPENCLAW_BASE_IMAGE):$(OPENCLAW_BASE_VERSION)
 OPENCLAW_BASE_PUSH_ARG  = --build-arg OPENCLAW_BASE_IMAGE=$(OPENCLAW_BASE_IMAGE):$(OPENCLAW_BASE_VERSION)
 
 build-agentteams-controller: ## Build agentteams-controller image (prerequisite for Manager)
 	@echo "==> Building agentteams-controller image: $(LOCAL_CONTROLLER)"
-	@rm -rf ./agentteams-controller/agent && cp -r ./manager/agent ./agentteams-controller/agent
+	@rm -rf ./agentteams-controller/agent ./agentteams-controller/plugins && cp -r ./manager/agent ./agentteams-controller/agent && cp -r ./plugins ./agentteams-controller/plugins
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 		-t $(LOCAL_CONTROLLER) \
 		./agentteams-controller/
-	@rm -rf ./agentteams-controller/agent
+	@rm -rf ./agentteams-controller/agent ./agentteams-controller/plugins
 
 build-manager: build-agentteams-controller ## Build Manager image (OpenClaw runtime)
 	@echo "==> Building Manager image: $(LOCAL_MANAGER) (registry: $(HIGRESS_REGISTRY))"
@@ -182,16 +181,9 @@ build-worker: ## Build Worker image
 		-t $(LOCAL_WORKER) \
 		./worker/
 
-build-copaw-worker: ## Build CoPaw Worker image
-	@echo "==> Building CoPaw Worker image: $(LOCAL_COPAW_WORKER) (registry: $(HIGRESS_REGISTRY))"
-	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
-		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
-		-t $(LOCAL_COPAW_WORKER) \
-		./copaw/
-
 build-hermes-worker: ## Build Hermes Worker image
 	@echo "==> Building Hermes Worker image: $(LOCAL_HERMES_WORKER) (registry: $(HIGRESS_REGISTRY))"
-	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context teamharness_trace=./plugins/teamharness/adapters/qwenpaw $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_HERMES_WORKER) \
 		./hermes/
@@ -211,19 +203,24 @@ build-qwenpaw-worker: ## Build QwenPaw Worker image
 		-t $(LOCAL_QWENPAW_WORKER) \
 		.
 
+build-deepseek-harness-worker: ## Build DeepSeek Harness Worker image
+	@echo "==> Building DeepSeek Harness Worker image: $(LOCAL_DEEPSEEK_HARNESS_WORKER) (registry: $(HIGRESS_REGISTRY))"
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
+		-f deepseek-harness/Dockerfile \
+		-t $(LOCAL_DEEPSEEK_HARNESS_WORKER) \
+		.
+
 # ---------- Tag ----------
 
 tag: build ## Tag images for registry push
 	docker tag $(LOCAL_MANAGER) $(MANAGER_TAG)
 	docker tag $(LOCAL_WORKER) $(WORKER_TAG)
-	docker tag $(LOCAL_COPAW_WORKER) $(COPAW_WORKER_TAG)
 	docker tag $(LOCAL_HERMES_WORKER) $(HERMES_WORKER_TAG)
 	docker tag $(LOCAL_OPENHUMAN_WORKER) $(OPENHUMAN_WORKER_TAG)
 	docker tag $(LOCAL_QWENPAW_WORKER) $(QWENPAW_WORKER_TAG)
 ifeq ($(PUSH_LATEST),yes)
 	docker tag $(LOCAL_MANAGER) $(MANAGER_IMAGE):latest
 	docker tag $(LOCAL_WORKER) $(WORKER_IMAGE):latest
-	docker tag $(LOCAL_COPAW_WORKER) $(COPAW_WORKER_IMAGE):latest
 	docker tag $(LOCAL_HERMES_WORKER) $(HERMES_WORKER_IMAGE):latest
 	docker tag $(LOCAL_OPENHUMAN_WORKER) $(OPENHUMAN_WORKER_IMAGE):latest
 	docker tag $(LOCAL_QWENPAW_WORKER) $(QWENPAW_WORKER_IMAGE):latest
@@ -255,7 +252,7 @@ else
 	fi
 endif
 
-push: push-manager push-manager-qwenpaw push-worker push-copaw-worker push-hermes-worker push-openhuman-worker push-qwenpaw-worker push-agentteams-controller push-embedded ## Build + push multi-arch images (amd64 + arm64); base image built separately via build-base.yml
+push: push-manager push-manager-qwenpaw push-worker push-hermes-worker push-openhuman-worker push-qwenpaw-worker push-agentteams-controller push-embedded ## Build + push core multi-arch images; experimental runtimes publish independently
 
 push-openclaw-base: buildx-setup ## Build + push multi-arch OpenClaw base image
 	@echo "==> Building + pushing multi-arch OpenClaw base: $(OPENCLAW_BASE_TAG) [$(MULTIARCH_PLATFORMS)]"
@@ -283,9 +280,17 @@ else
 		./openclaw-base/
 endif
 
+push-openclaw-base-platform: ## Push one native OpenClaw base platform to a staging tag
+	$(MAKE) push-openclaw-base MULTIARCH_PLATFORMS=linux/$(ARCH) OPENCLAW_BASE_TAG=$(OPENCLAW_BASE_TAG)-$(ARCH) PUSH_LATEST=
+
+push-openclaw-base-manifest: ## Publish the completed OpenClaw base architectures together
+	docker buildx imagetools create -t $(OPENCLAW_BASE_TAG) \
+		$(if $(PUSH_LATEST),-t $(OPENCLAW_BASE_IMAGE):latest) \
+		$(OPENCLAW_BASE_TAG)-amd64 $(OPENCLAW_BASE_TAG)-arm64
+
 push-agentteams-controller: buildx-setup ## Build + push multi-arch agentteams-controller image
 	@echo "==> Building + pushing multi-arch agentteams-controller: $(CONTROLLER_TAG) [$(MULTIARCH_PLATFORMS)]"
-	@rm -rf ./agentteams-controller/agent && cp -r ./manager/agent ./agentteams-controller/agent
+	@rm -rf ./agentteams-controller/agent ./agentteams-controller/plugins && cp -r ./manager/agent ./agentteams-controller/agent && cp -r ./plugins ./agentteams-controller/plugins
 ifeq ($(IS_PODMAN),1)
 	-podman manifest rm $(CONTROLLER_TAG) 2>/dev/null
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
@@ -308,7 +313,7 @@ else
 		--push \
 		./agentteams-controller/
 endif
-	@rm -rf ./agentteams-controller/agent
+	@rm -rf ./agentteams-controller/agent ./agentteams-controller/plugins
 
 push-embedded: push-agentteams-controller buildx-setup ## Build + push multi-arch embedded all-in-one image
 	@echo "==> Building + pushing multi-arch agentteams-embedded: $(EMBEDDED_TAG) [$(MULTIARCH_PLATFORMS)]"
@@ -371,7 +376,7 @@ push-manager-qwenpaw: buildx-setup ## Build + push multi-arch Manager QwenPaw im
 ifeq ($(IS_PODMAN),1)
 	-podman manifest rm $(MANAGER_QWENPAW_TAG) 2>/dev/null
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
-		echo "  -> Building Manager CoPaw for $(plat)..." && \
+		echo "  -> Building Manager QwenPaw for $(plat)..." && \
 		podman build --platform $(plat) \
 			$(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(DOCKER_BUILD_ARGS) \
 			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
@@ -423,33 +428,6 @@ else
 		./worker/
 endif
 
-push-copaw-worker: buildx-setup ## Build + push multi-arch CoPaw Worker image
-	@echo "==> Building + pushing multi-arch CoPaw Worker: $(COPAW_WORKER_TAG) [$(MULTIARCH_PLATFORMS)]"
-ifeq ($(IS_PODMAN),1)
-	-podman manifest rm $(COPAW_WORKER_TAG) 2>/dev/null
-	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
-		echo "  -> Building CoPaw Worker for $(plat)..." && \
-		podman build --platform $(plat) \
-			$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
-			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
-			--manifest $(COPAW_WORKER_TAG) \
-			./copaw/ && ) true
-	podman manifest push --all $(COPAW_WORKER_TAG) docker://$(COPAW_WORKER_TAG)
-	$(if $(PUSH_LATEST), \
-		podman manifest push --all $(COPAW_WORKER_TAG) docker://$(COPAW_WORKER_IMAGE):latest && \
-		echo "  -> Also pushed :latest tag")
-else
-	docker buildx build \
-		--builder $(BUILDX_BUILDER) \
-		--platform $(MULTIARCH_PLATFORMS) \
-		$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
-		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
-		-t $(COPAW_WORKER_TAG) \
-		$(if $(PUSH_LATEST),-t $(COPAW_WORKER_IMAGE):latest) \
-		--push \
-		./copaw/
-endif
-
 push-hermes-worker: buildx-setup ## Build + push multi-arch Hermes Worker image
 	@echo "==> Building + pushing multi-arch Hermes Worker: $(HERMES_WORKER_TAG) [$(MULTIARCH_PLATFORMS)]"
 ifeq ($(IS_PODMAN),1)
@@ -457,7 +435,7 @@ ifeq ($(IS_PODMAN),1)
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
 		echo "  -> Building Hermes Worker for $(plat)..." && \
 		podman build --platform $(plat) \
-			$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+			$(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context teamharness_trace=./plugins/teamharness/adapters/qwenpaw $(DOCKER_BUILD_ARGS) \
 			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 			--manifest $(HERMES_WORKER_TAG) \
 			./hermes/ && ) true
@@ -469,7 +447,7 @@ else
 	docker buildx build \
 		--builder $(BUILDX_BUILDER) \
 		--platform $(MULTIARCH_PLATFORMS) \
-		$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+		$(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context teamharness_trace=./plugins/teamharness/adapters/qwenpaw $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 		-t $(HERMES_WORKER_TAG) \
 		$(if $(PUSH_LATEST),-t $(HERMES_WORKER_IMAGE):latest) \
@@ -504,6 +482,27 @@ else
 		-f qwenpaw/Dockerfile .
 endif
 
+push-deepseek-harness-worker: buildx-setup ## Build + push multi-arch DeepSeek Harness Worker image
+	@echo "==> Building + pushing multi-arch DeepSeek Harness Worker: $(DEEPSEEK_HARNESS_WORKER_TAG) [$(MULTIARCH_PLATFORMS)]"
+ifeq ($(IS_PODMAN),1)
+	-podman manifest rm $(DEEPSEEK_HARNESS_WORKER_TAG) 2>/dev/null
+	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
+		echo "  -> Building DeepSeek Harness Worker for $(plat)..." && \
+		podman build --platform $(plat) \
+			$(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
+			--manifest $(DEEPSEEK_HARNESS_WORKER_TAG) \
+			-f deepseek-harness/Dockerfile . && ) true
+	podman manifest push --all $(DEEPSEEK_HARNESS_WORKER_TAG) docker://$(DEEPSEEK_HARNESS_WORKER_TAG)
+else
+	docker buildx build \
+		--builder $(BUILDX_BUILDER) \
+		--platform $(MULTIARCH_PLATFORMS) \
+		$(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
+		-t $(DEEPSEEK_HARNESS_WORKER_TAG) \
+		--push \
+		-f deepseek-harness/Dockerfile .
+endif
+
 # ---------- Push native-arch only (dev use) ----------
 # WARNING: Pushing single-arch images will overwrite multi-arch manifests.
 # Only use for local development / testing, never for release.
@@ -514,8 +513,6 @@ push-native: tag ## Push native-arch images (dev only, overwrites multi-arch!)
 	docker push $(MANAGER_TAG)
 	@echo "==> Pushing Worker: $(WORKER_TAG)"
 	docker push $(WORKER_TAG)
-	@echo "==> Pushing CoPaw Worker: $(COPAW_WORKER_TAG)"
-	docker push $(COPAW_WORKER_TAG)
 	@echo "==> Pushing Hermes Worker: $(HERMES_WORKER_TAG)"
 	docker push $(HERMES_WORKER_TAG)
 	@echo "==> Pushing QwenPaw Worker: $(QWENPAW_WORKER_TAG)"
@@ -523,7 +520,6 @@ push-native: tag ## Push native-arch images (dev only, overwrites multi-arch!)
 ifeq ($(PUSH_LATEST),yes)
 	docker push $(MANAGER_IMAGE):latest
 	docker push $(WORKER_IMAGE):latest
-	docker push $(COPAW_WORKER_IMAGE):latest
 	docker push $(HERMES_WORKER_IMAGE):latest
 	docker push $(QWENPAW_WORKER_IMAGE):latest
 endif
@@ -532,17 +528,13 @@ push-native-manager: build-manager ## Push native-arch Manager only (dev)
 	docker tag $(LOCAL_MANAGER) $(MANAGER_TAG)
 	docker push $(MANAGER_TAG)
 
-push-native-manager-qwenpaw: build-manager-qwenpaw ## Push native-arch Manager CoPaw only (dev)
+push-native-manager-qwenpaw: build-manager-qwenpaw ## Push native-arch Manager QwenPaw only (dev)
 	docker tag $(LOCAL_MANAGER_QWENPAW) $(MANAGER_QWENPAW_TAG)
 	docker push $(MANAGER_QWENPAW_TAG)
 
 push-native-worker: build-worker ## Push native-arch Worker only (dev)
 	docker tag $(LOCAL_WORKER) $(WORKER_TAG)
 	docker push $(WORKER_TAG)
-
-push-native-copaw-worker: build-copaw-worker ## Push native-arch CoPaw Worker only (dev)
-	docker tag $(LOCAL_COPAW_WORKER) $(COPAW_WORKER_TAG)
-	docker push $(COPAW_WORKER_TAG)
 
 push-native-hermes-worker: build-hermes-worker ## Push native-arch Hermes Worker only (dev)
 	docker tag $(LOCAL_HERMES_WORKER) $(HERMES_WORKER_TAG)
@@ -556,11 +548,16 @@ push-native-qwenpaw-worker: build-qwenpaw-worker ## Push native-arch QwenPaw Wor
 	docker tag $(LOCAL_QWENPAW_WORKER) $(QWENPAW_WORKER_TAG)
 	docker push $(QWENPAW_WORKER_TAG)
 
+push-native-deepseek-harness-worker: build-deepseek-harness-worker ## Push native-arch DeepSeek Harness Worker only (dev)
+	docker tag $(LOCAL_DEEPSEEK_HARNESS_WORKER) $(DEEPSEEK_HARNESS_WORKER_TAG)
+	docker push $(DEEPSEEK_HARNESS_WORKER_TAG)
+
 # ---------- Test ----------
 
 # Wait for Manager services to be ready (used internally by test target)
 # Uses docker exec to check health inside container (works regardless of port mappings)
 # Usage: make wait-ready [CONTAINER=name]
+.PHONY: verify-bundle
 .PHONY: wait-ready
 wait-ready:
 	@echo "==> Waiting for Manager services to be ready (container: $(or $(CONTAINER),agentteams-controller))..."
@@ -614,7 +611,6 @@ endif
 		AGENTTEAMS_MATRIX_E2EE=0 \
 		AGENTTEAMS_INSTALL_MANAGER_IMAGE=$(LOCAL_MANAGER) \
 		AGENTTEAMS_INSTALL_WORKER_IMAGE=$(LOCAL_WORKER) \
-		AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE=$(LOCAL_COPAW_WORKER) \
 		AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
 		AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
 		AGENTTEAMS_INSTALL_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER) \
@@ -628,7 +624,6 @@ endif
 	AGENTTEAMS_VERSION=$(VERSION) AGENTTEAMS_MOUNT_SOCKET=1 \
 		AGENTTEAMS_INSTALL_MANAGER_IMAGE=$(LOCAL_MANAGER) \
 		AGENTTEAMS_INSTALL_WORKER_IMAGE=$(LOCAL_WORKER) \
-		AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE=$(LOCAL_COPAW_WORKER) \
 		AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
 		AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
 		bash ./install/agentteams-install.sh manager
@@ -673,7 +668,7 @@ uninstall: ## Stop and remove Manager + all Worker containers
 
 install-embedded: ## Install in embedded mode (dual-container: controller + agent)
 ifndef SKIP_BUILD
-	$(MAKE) build-embedded build-manager build-manager-qwenpaw build-worker build-copaw-worker build-qwenpaw-worker build-hermes-worker
+	$(MAKE) build-embedded build-manager build-manager-qwenpaw build-worker build-qwenpaw-worker build-hermes-worker
 endif
 	@echo "==> Installing AgentTeams (embedded mode)..."
 	AGENTTEAMS_NON_INTERACTIVE=1 \
@@ -681,7 +676,6 @@ endif
 		AGENTTEAMS_INSTALL_MANAGER_IMAGE=$(LOCAL_MANAGER) \
 		AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE=$(LOCAL_MANAGER_QWENPAW) \
 		AGENTTEAMS_INSTALL_WORKER_IMAGE=$(LOCAL_WORKER) \
-		AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE=$(LOCAL_COPAW_WORKER) \
 		AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE=$(LOCAL_QWENPAW_WORKER) \
 		AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
 		AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
@@ -764,6 +758,20 @@ replay-log: ## View the latest replay conversation log
 verify: ## Run post-install verification against the running Manager container
 	@bash ./install/agentteams-verify.sh $(or $(CONTAINER),agentteams-controller)
 
+BUNDLE ?=
+RUNTIME ?=
+
+verify-bundle: ## Bundle L3/L4 conformance: isolated install/load/uninstall, upgrade + rollback (P-b/P-c); narrow with BUNDLE=matrix|teamharness and RUNTIME=<adapter>
+	@set -e; \
+	case "$(BUNDLE)" in \
+	  ""|all) paths="plugins/tests/agentteams-matrix/test_matrix_bundle_lifecycle.py plugins/tests/teamharness/test_teamharness_bundle_lifecycle.py" ;; \
+	  matrix|agentteams-matrix) paths="plugins/tests/agentteams-matrix/test_matrix_bundle_lifecycle.py" ;; \
+	  teamharness|agentteams-teamharness) paths="plugins/tests/teamharness/test_teamharness_bundle_lifecycle.py" ;; \
+	  *) echo "unknown BUNDLE=$(BUNDLE) (use matrix, teamharness or empty)" >&2; exit 2 ;; \
+	esac; \
+	echo "==> Bundle lifecycle conformance (L3 isolation + L4 upgrade/rollback)"; \
+	python3 -m pytest -q $$paths $(if $(RUNTIME),-k $(RUNTIME))
+
 # ---------- Dev utils ----------
 
 status: ## Show status of Manager and all Worker containers
@@ -796,7 +804,7 @@ clean: ## Remove local images and test containers
 	@echo "==> Removing local images..."
 	-docker rmi $(LOCAL_MANAGER) 2>/dev/null
 	-docker rmi $(LOCAL_WORKER) 2>/dev/null
-	-docker rmi $(LOCAL_COPAW_WORKER) 2>/dev/null
+	-docker rmi $(LOCAL_DEEPSEEK_HARNESS_WORKER) 2>/dev/null
 	-docker rmi $(LOCAL_OPENCLAW_BASE) 2>/dev/null
 	@echo "==> Clean complete"
 
@@ -815,6 +823,10 @@ sync-crds: ## Sync CRDs from agentteams-controller/config/crd/ to helm/agentteam
 	@echo "==> Syncing CRDs to Helm chart..."
 	@cp agentteams-controller/config/crd/*.yaml helm/agentteams/crds/
 	@echo "==> CRDs synced"
+
+check-node-pins: ## Verify Node.js 24.22.1 pins across images
+	bash hack/check-node-pins.sh
+	bash hack/tests/test-node-version-guard.sh
 
 check-crd-sync: ## Verify CRDs are in sync between controller and Helm chart
 	@if ! diff -r agentteams-controller/config/crd/ helm/agentteams/crds/ >/dev/null 2>&1; then \
@@ -910,11 +922,11 @@ help: ## Show this help
 # Variables:
 #   DASHBOARD_CONTEXT   Path to dashboard source tree (default: ../agentteams-dashboard)
 #   DASHBOARD_IMAGE     Override dashboard image (derived from DASHBOARD_VERSION by default)
-#   DASHBOARD_VERSION   Dashboard version tag (default: v1.2.2)
+#   DASHBOARD_VERSION   Dashboard version tag (default: v1.4.0)
 #   AGENTTEAMS_PORT_DASHBOARD   Dashboard host port (default: 13000)
 
 DASHBOARD_CONTEXT ?= ../agentteams-dashboard
-DASHBOARD_VERSION ?= v1.2.2
+DASHBOARD_VERSION ?= v1.4.0
 DASHBOARD_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-dashboard:$(DASHBOARD_VERSION)
 AGENTTEAMS_PORT_DASHBOARD ?= 13000
 

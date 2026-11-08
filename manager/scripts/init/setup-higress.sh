@@ -200,27 +200,43 @@ if [ -n "${AGENTTEAMS_LLM_API_KEY}" ]; then
             if [ -z "${OPENAI_BASE_URL}" ]; then
                 log "WARNING: AGENTTEAMS_OPENAI_BASE_URL not set, skipping openai-compat provider setup"
             else
-                # Parse domain, port, protocol from base URL
-                OC_PROTO="https"
-                OC_PORT="443"
-                OC_URL_STRIP="${OPENAI_BASE_URL#https://}"
-                OC_URL_STRIP="${OC_URL_STRIP#http://}"
-                echo "${OPENAI_BASE_URL}" | grep -q '^http://' && { OC_PROTO="http"; OC_PORT="80"; }
-                OC_DOMAIN="${OC_URL_STRIP%%/*}"
-                echo "${OC_DOMAIN}" | grep -q ':' && { OC_PORT="${OC_DOMAIN##*:}"; OC_DOMAIN="${OC_DOMAIN%:*}"; }
+                # Split authority without confusing IPv6 colons with a port.
+                OC_PROTO="${OPENAI_BASE_URL%%://*}"
+                OC_PORT=443
+                [ "${OC_PROTO}" = "http" ] && OC_PORT=80
+                OC_URL_STRIP="${OPENAI_BASE_URL#*://}"
+                OC_AUTHORITY="${OC_URL_STRIP%%/*}"
+                OC_PATH="${OC_URL_STRIP#"${OC_AUTHORITY}"}"
+                OC_TYPE=dns
+                if [[ "${OC_AUTHORITY}" == \[* ]]; then
+                    log "ERROR: Higress Console static service sources do not support IPv6 endpoints"
+                    exit 1
+                else
+                    OC_DOMAIN="${OC_AUTHORITY%%:*}"
+                    [[ "${OC_AUTHORITY}" == *:* ]] && OC_PORT="${OC_AUTHORITY##*:}"
+                    OC_HOST="${OC_DOMAIN}"
+                    if [[ "${OC_DOMAIN}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                        OC_TYPE=static
+                    fi
+                fi
+                OC_SERVICE_DOMAIN="${OC_DOMAIN}"
+                [ "${OC_TYPE}" = static ] && OC_SERVICE_DOMAIN="${OC_HOST}:${OC_PORT}"
+                OC_CUSTOM_URL="${OC_PROTO}://${OC_HOST}${OC_PATH}"
 
                 # Service source: GET → PUT if exists, POST if not
                 existing_svc=$(higress_get /v1/service-sources/openai-compat)
-                SVC_BODY='{"type":"dns","name":"openai-compat","port":'"${OC_PORT}"',"protocol":"'"${OC_PROTO}"'","proxyName":"","domain":"'"${OC_DOMAIN}"'"}'
+                SVC_BODY='{"type":"'"${OC_TYPE}"'","name":"openai-compat","port":'"${OC_PORT}"',"protocol":"'"${OC_PROTO}"'","proxyName":"","domain":"'"${OC_SERVICE_DOMAIN}"'"}'
                 if [ -n "${existing_svc}" ]; then
-                    higress_api PUT /v1/service-sources/openai-compat "Updating openai-compat DNS service source" "${SVC_BODY}"
+                    SVC_BODY=$(jq --argjson old "${existing_svc}" '$old.data * . | .version = $old.data.version' <<< "${SVC_BODY}")
+                    higress_api PUT /v1/service-sources/openai-compat "Updating openai-compat service source" "${SVC_BODY}"
                 else
-                    higress_api POST /v1/service-sources "Registering openai-compat DNS service source" "${SVC_BODY}"
+                    higress_api POST /v1/service-sources "Registering openai-compat service source" "${SVC_BODY}"
                 fi
 
-                PROVIDER_BODY='{"type":"openai","name":"openai-compat","tokens":["'"${AGENTTEAMS_LLM_API_KEY}"'"],"version":0,"protocol":"openai/v1","tokenFailoverConfig":{"enabled":false},"rawConfigs":{"openaiCustomUrl":"'"${OPENAI_BASE_URL}"'","openaiCustomServiceName":"openai-compat.dns","openaiCustomServicePort":'"${OC_PORT}"',"agentteamsMode":true}}'
+                PROVIDER_BODY='{"type":"openai","name":"openai-compat","tokens":["'"${AGENTTEAMS_LLM_API_KEY}"'"],"version":0,"protocol":"openai/v1","tokenFailoverConfig":{"enabled":false},"rawConfigs":{"openaiCustomUrl":"'"${OC_CUSTOM_URL}"'","openaiCustomServiceName":"openai-compat.'"${OC_TYPE}"'","openaiCustomServicePort":'"${OC_PORT}"',"agentteamsMode":true}}'
                 existing_provider=$(higress_get /v1/ai/providers/openai-compat)
                 if [ -n "${existing_provider}" ]; then
+                    PROVIDER_BODY=$(jq --argjson old "${existing_provider}" '$old.data * . | .version = $old.data.version' <<< "${PROVIDER_BODY}")
                     higress_api PUT /v1/ai/providers/openai-compat "Updating LLM provider (openai-compat)" "${PROVIDER_BODY}"
                 else
                     higress_api POST /v1/ai/providers "Creating LLM provider (openai-compat)" "${PROVIDER_BODY}"

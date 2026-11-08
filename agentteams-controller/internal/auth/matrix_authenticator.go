@@ -14,7 +14,7 @@ import (
 )
 
 // MatrixWhoami validates a Matrix access token and returns the owning user id
-// (e.g. "@maizong:matrix.local"). Implemented by the tuwunel client.
+// (e.g. "@alice:matrix.local"). Implemented by the tuwunel client.
 type MatrixWhoami interface {
 	Whoami(ctx context.Context, accessToken string) (userID string, err error)
 }
@@ -33,9 +33,10 @@ type MatrixWhoami interface {
 // are coordinating workers and may manage their team's workers; an L2 human is
 // a viewer and must not get worker-management or credential-refresh powers.
 //
-// Human permission levels: 2 = Team (L2, the supported case). Level 1 (admin)
-// and 3 (worker) humans are not resolved here; level-1 humans should use the
-// admin SA and level-3 worker humans are outside the L2 scope.
+// Human permission levels: 2 = Team (L2 — teams + capabilities scope) and
+// 3 = Worker (L3 — read-only scope over the explicitly assigned
+// accessibleWorkers, #1220 §2/Q2). Level 1 (admin) humans are not resolved
+// here; they should use the admin SA.
 type MatrixTokenAuthenticator struct {
 	k8s       client.Client
 	namespace string
@@ -117,18 +118,41 @@ func (a *MatrixTokenAuthenticator) resolveHuman(ctx context.Context, userID stri
 		} else if localpart == "" || h.Spec.EffectiveUsername(h.Name) != localpart {
 			continue
 		}
-		if h.Spec.PermissionLevel != 2 {
-			return nil, fmt.Errorf("human %q is not an L2 (team) user (permissionLevel=%d)", localpart, h.Spec.PermissionLevel)
+		switch h.Spec.PermissionLevel {
+		case 2:
+			teams := make([]string, len(h.Spec.AccessibleTeams))
+			copy(teams, h.Spec.AccessibleTeams)
+			// Capabilities are granted on the Human CR (#1220 §3). Only L2
+			// humans carry them — level-3 humans are rejected to their own
+			// branch below, and SA-based identities never pass through here
+			// (#1220 §5: team leaders never hold capabilities).
+			caps := make([]string, len(h.Spec.Capabilities))
+			copy(caps, h.Spec.Capabilities)
+			return &CallerIdentity{
+				Role:         RoleHuman,
+				Username:     h.Name,
+				Teams:        teams,
+				Capabilities: caps,
+			}, nil
+		case 3:
+			// L3 (worker-scoped, #1220 §2/Q2): read-only access to exactly
+			// the assigned workers. Teams and capabilities are L2 fields
+			// and stay empty for L3 identities, whatever the CR carries —
+			// the level is the discriminator (low-privilege item E: no new
+			// Role value, AccessibleWorkers non-empty marks the L3 read
+			// leg).
+			workers := make([]string, len(h.Spec.AccessibleWorkers))
+			copy(workers, h.Spec.AccessibleWorkers)
+			return &CallerIdentity{
+				Role:              RoleHuman,
+				Username:          h.Name,
+				AccessibleWorkers: workers,
+			}, nil
+		default:
+			return nil, fmt.Errorf("human %q has unsupported permissionLevel %d (2=team, 3=worker)", localpart, h.Spec.PermissionLevel)
 		}
-		teams := make([]string, len(h.Spec.AccessibleTeams))
-		copy(teams, h.Spec.AccessibleTeams)
-		return &CallerIdentity{
-			Role:     RoleHuman,
-			Username: h.Name,
-			Teams:    teams,
-		}, nil
 	}
-	return nil, fmt.Errorf("no L2 human matches matrix user %q", userID)
+	return nil, fmt.Errorf("no human with a supported permission level (2=team, 3=worker) matches matrix user %q", userID)
 }
 
 func (a *MatrixTokenAuthenticator) getFromCache(key [32]byte) *CallerIdentity {
@@ -156,7 +180,7 @@ func (a *MatrixTokenAuthenticator) putToCache(key [32]byte, identity *CallerIden
 }
 
 // localpartFromUserID extracts the localpart from a Matrix user id
-// ("@maizong:matrix.local" → "maizong").
+// ("@alice:matrix.local" → "alice").
 func localpartFromUserID(userID string) string {
 	if !strings.HasPrefix(userID, "@") {
 		return ""

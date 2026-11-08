@@ -3,17 +3,21 @@ package server
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -41,9 +45,10 @@ func newProjectTestScheme(t *testing.T) *runtime.Scheme {
 // in-memory fake, which itself returns full object keys.
 type mcLikeOSS struct {
 	*ossfake.Memory
-	listCalls int
-	failList  bool
-	failGet   bool
+	listCalls      int
+	failList       bool
+	failGet        bool
+	failListPrefix string // when set, only prefixes under it fail the detailed list
 }
 
 func (m *mcLikeOSS) ListObjects(_ context.Context, prefix string) ([]string, error) {
@@ -51,25 +56,53 @@ func (m *mcLikeOSS) ListObjects(_ context.Context, prefix string) ([]string, err
 	if m.failList {
 		return nil, errors.New("oss list failed")
 	}
+	infos, err := m.ListObjectsDetailed(context.Background(), prefix)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(infos))
+	for _, info := range infos {
+		out = append(out, info.Name)
+	}
+	return out, nil
+}
+
+// ListObjectsDetailed groups the fake's flat keys into direct-child directory
+// names (the mc ls directory view) and stamps each with the fake's global
+// write clock.
+func (m *mcLikeOSS) ListObjectsDetailed(_ context.Context, prefix string) ([]oss.ObjectInfo, error) {
+	if m.failList {
+		return nil, errors.New("oss list failed")
+	}
+	if m.failListPrefix != "" && strings.HasPrefix(prefix, m.failListPrefix) {
+		return nil, errors.New("oss list failed (prefix-conditional)")
+	}
 	keys, err := m.Memory.ListObjects(context.Background(), prefix)
 	if err != nil {
 		return nil, err
 	}
 	seen := map[string]bool{}
-	out := make([]string, 0)
+	out := make([]oss.ObjectInfo, 0)
 	for _, k := range keys {
 		rest := strings.TrimPrefix(k, prefix)
 		parts := strings.SplitN(rest, "/", 2)
 		if len(parts) != 2 {
+			// Direct child FILE at this level — real `mc ls <prefix>` lists
+			// files and directories alike (the catalog skips non-dir
+			// entries; the skill-download walk reads them).
+			if rest != "" && !seen[rest] {
+				seen[rest] = true
+				out = append(out, oss.ObjectInfo{Name: rest, UpdatedAt: m.Memory.LastWriteTime().UTC().Format(time.RFC3339)})
+			}
 			continue
 		}
 		dir := parts[0] + "/"
 		if !seen[dir] {
 			seen[dir] = true
-			out = append(out, dir)
+			out = append(out, oss.ObjectInfo{Name: dir, UpdatedAt: m.Memory.LastWriteTime().UTC().Format(time.RFC3339)})
 		}
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 
@@ -103,6 +136,36 @@ func withCaller(req *http.Request, c *authpkg.CallerIdentity) *http.Request {
 func putProject(store *ossfake.Memory, key string, meta map[string]any) {
 	data, _ := json.Marshal(meta)
 	_ = store.PutObject(context.Background(), key, data)
+}
+
+// canonicalProjectMetaNoAudit normalizes raw project meta JSON to the
+// struct's canonical serialization (so map-seeded fixtures compare against
+// handler-written state without empty-field artifacts such as team_id/mode/
+// assigned_to), then strips the dual-ledger audit fields
+// (controlActions / controlActionsTruncatedCount). The remaining bytes are
+// compared for byte-equality by the caller: every business field is still
+// asserted, the exemption covers only the audit ledger.
+func canonicalProjectMetaNoAudit(t *testing.T, data []byte) []byte {
+	t.Helper()
+	var m projectMeta
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("canonicalProjectMetaNoAudit: unmarshal: %v (data=%s)", err, data)
+	}
+	canonical, err := json.Marshal(&m)
+	if err != nil {
+		t.Fatalf("canonicalProjectMetaNoAudit: marshal: %v", err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(canonical, &fields); err != nil {
+		t.Fatalf("canonicalProjectMetaNoAudit: re-unmarshal: %v", err)
+	}
+	delete(fields, "controlActions")
+	delete(fields, "controlActionsTruncatedCount")
+	out, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatalf("canonicalProjectMetaNoAudit: final marshal: %v", err)
+	}
+	return out
 }
 
 func team(name string) *v1beta1.Team {
@@ -540,6 +603,40 @@ func TestListProjects_SortedAndTeamFiltered(t *testing.T) {
 	}
 }
 
+func TestListProjects_UpdatedAtPassthrough(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"updated_at": "2026-09-18T08:30:00Z",
+	})
+	putProject(store, "shared/projects/p2/meta.json", map[string]any{
+		"project_id": "p2", "title": "P2", "status": "active", "plan_type": "dag",
+	})
+	h := newProjectTestHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.ListProjects(rec, req)
+	var resp struct {
+		Projects []map[string]any `json:"projects"`
+		Total    int              `json:"total"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Total != 2 {
+		t.Fatalf("total=%d, want 2", resp.Total)
+	}
+	p1, p2 := resp.Projects[0], resp.Projects[1]
+	if got := p1["updated_at"]; got != "2026-09-18T08:30:00Z" {
+		t.Fatalf("p1 updated_at=%v, want passthrough", got)
+	}
+	if _, ok := p2["updated_at"]; ok {
+		t.Fatalf("p2 should omit updated_at when meta has none: %v", p2)
+	}
+}
+
 func TestGetProjectWorkflow_LoopWaitingUserHasNoNext(t *testing.T) {
 	store := ossfake.NewMemory()
 	putProject(store, "shared/projects/p1/meta.json", map[string]any{
@@ -955,7 +1052,7 @@ func TestListProjects_L2HumanAggregatesTeams(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
 	// L2 human with two accessible teams (Human CR accessibleTeams = CR names).
 	req = withCaller(req, &authpkg.CallerIdentity{
-		Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"alpha-team", "beta-team"},
+		Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"alpha-team", "beta-team"},
 	})
 	rec := httptest.NewRecorder()
 	h.ListProjects(rec, req)
@@ -994,7 +1091,7 @@ func TestGetProjectWorkflow_L2HumanAnyAccessibleTeam(t *testing.T) {
 	})
 	h := newProjectTestHandler(t, store, team("alpha-team"), team("gamma-team"))
 	l2 := &authpkg.CallerIdentity{
-		Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"alpha-team"},
+		Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"alpha-team"},
 	}
 
 	// Accessible team -> OK.
@@ -1132,7 +1229,7 @@ func TestListProjects_L2HumanTeamFilter(t *testing.T) {
 	})
 	h := newProjectTestHandler(t, store, team("alpha-team"), team("beta-team"))
 	l2 := &authpkg.CallerIdentity{
-		Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"alpha-team", "beta-team"},
+		Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"alpha-team", "beta-team"},
 	}
 
 	// Narrow to one accessible team.
@@ -1199,13 +1296,13 @@ func TestProjectHTTP_L2AuthChain(t *testing.T) {
 	})
 	scheme := newProjectTestScheme(t)
 	human := &v1beta1.Human{
-		ObjectMeta: metav1.ObjectMeta{Name: "maizong", Namespace: "default"},
-		Spec:       v1beta1.HumanSpec{Username: "maizong", PermissionLevel: 2, AccessibleTeams: []string{"alpha-team"}},
+		ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
+		Spec:       v1beta1.HumanSpec{Username: "alice", PermissionLevel: 2, AccessibleTeams: []string{"alpha-team"}},
 	}
 	k8s := fake.NewClientBuilder().WithScheme(scheme).
 		WithRuntimeObjects(human, team("alpha-team")).Build()
 
-	matrixAuth := authpkg.NewMatrixTokenAuthenticator(k8s, "default", &staticWhoami{validToken: "matrix-token", userID: "@maizong:matrix.local"})
+	matrixAuth := authpkg.NewMatrixTokenAuthenticator(k8s, "default", &staticWhoami{validToken: "matrix-token", userID: "@alice:matrix.local"})
 	composite := authpkg.NewCompositeAuthenticator(&alwaysFailAuth{}, matrixAuth)
 	enricher := authpkg.NewCREnricher(k8s, "default")
 	mw := authpkg.NewMiddleware(composite, enricher, authpkg.NewAuthorizer(), k8s, "default")
@@ -1287,13 +1384,13 @@ func TestProjectHTTP_L2WriteChain(t *testing.T) {
 	})
 	scheme := newProjectTestScheme(t)
 	human := &v1beta1.Human{
-		ObjectMeta: metav1.ObjectMeta{Name: "maizong", Namespace: "default"},
-		Spec:       v1beta1.HumanSpec{Username: "maizong", PermissionLevel: 2, AccessibleTeams: []string{"alpha-team"}},
+		ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
+		Spec:       v1beta1.HumanSpec{Username: "alice", PermissionLevel: 2, AccessibleTeams: []string{"alpha-team"}},
 	}
 	k8s := fake.NewClientBuilder().WithScheme(scheme).
 		WithRuntimeObjects(human, team("alpha-team"), team("beta-team")).Build()
 
-	matrixAuth := authpkg.NewMatrixTokenAuthenticator(k8s, "default", &staticWhoami{validToken: "matrix-token", userID: "@maizong:matrix.local"})
+	matrixAuth := authpkg.NewMatrixTokenAuthenticator(k8s, "default", &staticWhoami{validToken: "matrix-token", userID: "@alice:matrix.local"})
 	composite := authpkg.NewCompositeAuthenticator(&alwaysFailAuth{}, matrixAuth)
 	enricher := authpkg.NewCREnricher(k8s, "default")
 	mw := authpkg.NewMiddleware(composite, enricher, authpkg.NewAuthorizer(), k8s, "default")
@@ -1317,8 +1414,8 @@ func TestProjectHTTP_L2WriteChain(t *testing.T) {
 	data, _ := store.GetObject(context.Background(), "teams/alpha-team/shared/projects/pa/meta.json")
 	var meta map[string]any
 	_ = json.Unmarshal(data, &meta)
-	if meta["status"] != "paused" || meta["pause_reason"] != "review" || meta["updated_by"] != "maizong (human)" {
-		t.Fatalf("meta after pause=%v, want paused/review/maizong (human)", meta)
+	if meta["status"] != "paused" || meta["pause_reason"] != "review" || meta["updated_by"] != "alice (human)" {
+		t.Fatalf("meta after pause=%v, want paused/review/alice (human)", meta)
 	}
 
 	// Cross-team pause -> 404 (existence hidden through the write path too).
@@ -1398,7 +1495,7 @@ func TestGetProjectWorkflow_PassThroughAuditFields(t *testing.T) {
 	store := ossfake.NewMemory()
 	putProject(store, "shared/projects/audit1/meta.json", map[string]any{
 		"project_id": "audit1", "title": "Audit", "status": "paused", "plan_type": "dag",
-		"updated_by": "luo", "updated_at": "2026-08-12T10:00:00Z", "pause_reason": "hold for review",
+		"updated_by": "carol", "updated_at": "2026-08-12T10:00:00Z", "pause_reason": "hold for review",
 		"tasks": []map[string]any{},
 	})
 	h := newProjectTestHandler(t, store)
@@ -1413,7 +1510,7 @@ func TestGetProjectWorkflow_PassThroughAuditFields(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &wf); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if wf.UpdatedBy != "luo" || wf.UpdatedAt != "2026-08-12T10:00:00Z" || wf.PauseReason != "hold for review" {
+	if wf.UpdatedBy != "carol" || wf.UpdatedAt != "2026-08-12T10:00:00Z" || wf.PauseReason != "hold for review" {
 		t.Fatalf("audit fields not passed through: %+v", wf)
 	}
 }
@@ -1492,6 +1589,7 @@ func TestGetProjectWorkflow_IncludeTasksDetail(t *testing.T) {
 		"task_id":       "t1",
 		"project_id":    "p1",
 		"status":        "completed",
+		"submission_id": "submission-1",
 		"spec_path":     "shared/tasks/t1/spec.md",
 		"assigned_to":   "@w1",
 		"summary":       "Alpha report done",
@@ -1534,6 +1632,9 @@ func TestGetProjectWorkflow_IncludeTasksDetail(t *testing.T) {
 	d1 := byID["t1"]
 	if d1.Summary != "Alpha report done" || d1.ResultStatus != "SUCCESS" || d1.ResultPath != "shared/tasks/t1/result.md" {
 		t.Fatalf("t1 detail wrong: %+v", d1)
+	}
+	if d1.SubmissionID != "submission-1" {
+		t.Fatalf("t1 submission_id=%q, want submission-1", d1.SubmissionID)
 	}
 	if len(d1.Deliverables) != 1 {
 		t.Fatalf("t1 deliverables=%d, want 1", len(d1.Deliverables))
@@ -1906,7 +2007,7 @@ func TestGetTaskArtifact_L2Scoped(t *testing.T) {
 	})
 	putProject(store, "teams/alpha-team/shared/tasks/t1/result.md", map[string]any{"ok": true})
 	// L2 human with alpha-team accessible.
-	l2 := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "sun", Teams: []string{"alpha-team"}}
+	l2 := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "dave", Teams: []string{"alpha-team"}}
 	h := newProjectTestHandler(t, store, team("alpha-team"))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/tasks/t1/artifact", nil)
@@ -1936,7 +2037,7 @@ func TestGetTaskArtifact_L2CrossTeam404(t *testing.T) {
 	})
 	putProject(store, "teams/alpha-team/shared/tasks/t1/result.md", map[string]any{"ok": true})
 	// L2 human controlling only beta-team cannot read alpha-team artifact.
-	l2 := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "ma", Teams: []string{"beta-team"}}
+	l2 := &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "eve", Teams: []string{"beta-team"}}
 	h := newProjectTestHandler(t, store, team("alpha-team"))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/tasks/t1/artifact", nil)
@@ -2247,7 +2348,7 @@ func TestGetProjectSpawns_AggregatesWorkerSpawns(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/spawns", nil)
 	req.SetPathValue("id", "p1")
-	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "luo", Teams: []string{"alpha-team"}})
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "carol", Teams: []string{"alpha-team"}})
 	rec := httptest.NewRecorder()
 	h.GetProjectSpawns(rec, req)
 
@@ -2443,7 +2544,7 @@ func TestGetProjectSpawns_TwoProjectsSameTeamIsolated(t *testing.T) {
 	// p1 sees only its own room's spawn.
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/spawns", nil)
 	req.SetPathValue("id", "p1")
-	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "luo", Teams: []string{"alpha-team"}})
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "carol", Teams: []string{"alpha-team"}})
 	rec := httptest.NewRecorder()
 	h.GetProjectSpawns(rec, req)
 	if rec.Code != http.StatusOK {
@@ -2463,7 +2564,7 @@ func TestGetProjectSpawns_TwoProjectsSameTeamIsolated(t *testing.T) {
 	// p2 sees only its own room's spawn.
 	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p2/spawns", nil)
 	req2.SetPathValue("id", "p2")
-	req2 = withCaller(req2, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "luo", Teams: []string{"alpha-team"}})
+	req2 = withCaller(req2, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "carol", Teams: []string{"alpha-team"}})
 	rec2 := httptest.NewRecorder()
 	h.GetProjectSpawns(rec2, req2)
 	if rec2.Code != http.StatusOK {
@@ -2545,7 +2646,7 @@ func TestGetProjectWorkflow_AmbiguousProjectID(t *testing.T) {
 	// A scoped caller sees only their own team's p1 — no ambiguity.
 	req3 := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/workflow", nil)
 	req3.SetPathValue("id", "p1")
-	req3 = withCaller(req3, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "luo", Teams: []string{"alpha-team"}})
+	req3 = withCaller(req3, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "carol", Teams: []string{"alpha-team"}})
 	rec3 := httptest.NewRecorder()
 	h.GetProjectWorkflow(rec3, req3)
 	if rec3.Code != http.StatusOK {
@@ -2783,7 +2884,7 @@ func spawnMsgEnv(t *testing.T, history []byte) (*ProjectHandler, *ossfake.Memory
 }
 
 func humanCaller() *authpkg.CallerIdentity {
-	return &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "luo", Teams: []string{"alpha-team"}}
+	return &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "carol", Teams: []string{"alpha-team"}}
 }
 
 func TestGetProjectSpawnMessages_ReturnsStreamAndTask(t *testing.T) {
@@ -3123,7 +3224,7 @@ func TestPauseProject_L2CrossTeamDenied(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/pause", nil)
 	req.SetPathValue("id", "p1")
-	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"beta-team"}})
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"beta-team"}})
 	rec := httptest.NewRecorder()
 	h.PauseProject(rec, req)
 
@@ -3143,7 +3244,7 @@ func TestPauseProject_L2SameTeamAllowed(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/pause", nil)
 	req.SetPathValue("id", "p1")
-	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "sunzong", Teams: []string{"alpha-team", "beta-team"}})
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "bob", Teams: []string{"alpha-team", "beta-team"}})
 	rec := httptest.NewRecorder()
 	h.PauseProject(rec, req)
 
@@ -3228,6 +3329,95 @@ func TestReplanProject_PreservesPrevious(t *testing.T) {
 	}
 }
 
+func TestReplanProject_PreservesCancellationDecision(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{{
+			"task_id": "t1", "title": "T1", "status": "cancelled", "depends_on": []string{},
+			"cancellation": map[string]any{
+				"submission_id": "submission-1", "reason": "obsolete", "replacement_task_id": "t2", "cancelled_at": "2026-08-18T00:00:00Z",
+			},
+		}},
+	})
+	h := newProjectTestHandler(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/replan",
+		strings.NewReader(`{"tasks":[{"taskId":"t1","title":"Still cancelled"}]}`))
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.ReplanProject(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	projectData, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	var project map[string]any
+	_ = json.Unmarshal(projectData, &project)
+	tasks, _ := project["tasks"].([]any)
+	node, _ := tasks[0].(map[string]any)
+	decision, _ := node["cancellation"].(map[string]any)
+	if node["status"] != "cancelled" || decision["submission_id"] != "submission-1" ||
+		decision["reason"] != "obsolete" || decision["cancelled_at"] != "2026-08-18T00:00:00Z" {
+		t.Fatalf("replanned node=%v, want preserved cancellation decision", node)
+	}
+}
+
+func TestReplanProject_CannotReopenCancellationDecision(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{{
+			"task_id": "t1", "title": "T1", "status": "cancelled", "depends_on": []string{},
+			"cancellation": map[string]any{
+				"submission_id": "submission-1", "reason": "obsolete", "cancelled_at": "2026-08-18T00:00:00Z",
+			},
+		}},
+	})
+	before, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	h := newProjectTestHandler(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/replan",
+		strings.NewReader(`{"tasks":[{"taskId":"t1","title":"Reopened","status":"planned"}]}`))
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.ReplanProject(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+	after, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	if string(canonicalProjectMetaNoAudit(t, after)) != string(canonicalProjectMetaNoAudit(t, before)) {
+		t.Fatalf("reopen attempt changed project: %s", after)
+	}
+}
+
+func TestReplanProject_CannotRemoveCancellationDecision(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{{
+			"task_id": "t1", "title": "T1", "status": "cancelled", "depends_on": []string{},
+			"cancellation": map[string]any{
+				"submission_id": "submission-1", "reason": "obsolete", "cancelled_at": "2026-08-18T00:00:00Z",
+			},
+		}},
+	})
+	before, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	h := newProjectTestHandler(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/replan", strings.NewReader(`{"tasks":[]}`))
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.ReplanProject(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+	after, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	if string(canonicalProjectMetaNoAudit(t, after)) != string(canonicalProjectMetaNoAudit(t, before)) {
+		t.Fatalf("remove attempt changed project: %s", after)
+	}
+}
+
 func TestReplanProject_DuplicateID400(t *testing.T) {
 	store := ossfake.NewMemory()
 	putProject(store, "shared/projects/p1/meta.json", map[string]any{
@@ -3242,6 +3432,56 @@ func TestReplanProject_DuplicateID400(t *testing.T) {
 	h.ReplanProject(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d, want 400 (duplicate id)", rec.Code)
+	}
+}
+
+// TestReplanProject_UnsafeTaskID400 guards _safe_id parity: the TeamHarness
+// reference rejects task ids outside [A-Za-z0-9][A-Za-z0-9._-]* because ids
+// become TaskMeta object-key segments (shared/tasks/{id}/meta.json).
+func TestReplanProject_UnsafeTaskID400(t *testing.T) {
+	cases := []string{
+		"task with space",
+		"../escape",
+		"t/1",
+		"-leading-dash",
+		".leading-dot",
+		"任务一",
+	}
+	for _, tc := range cases {
+		store := ossfake.NewMemory()
+		putProject(store, "shared/projects/p1/meta.json", map[string]any{
+			"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag", "tasks": []map[string]any{},
+		})
+		h := newProjectTestHandler(t, store)
+		body := `{"tasks":[{"taskId":"` + tc + `","title":"X"}]}`
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/replan", strings.NewReader(body))
+		req.SetPathValue("id", "p1")
+		req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+		rec := httptest.NewRecorder()
+		h.ReplanProject(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("taskId %q: status=%d, want 400 (unsafe id)", tc, rec.Code)
+		}
+	}
+}
+
+// TestReplanProject_SafeTaskIDAccepted guards the positive side of the
+// _safe_id rule: ids mixing letters, digits, dots, dashes and underscores
+// (with a leading alphanumeric) remain valid.
+func TestReplanProject_SafeTaskIDAccepted(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag", "tasks": []map[string]any{},
+	})
+	h := newProjectTestHandler(t, store)
+	body := `{"tasks":[{"taskId":"t-1.x_2","title":"X"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/replan", strings.NewReader(body))
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.ReplanProject(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200 for safe id", rec.Code, rec.Body.String())
 	}
 }
 
@@ -3335,7 +3575,7 @@ func TestCreateProject_Admin(t *testing.T) {
 	store := ossfake.NewMemory()
 	h := newProjectTestHandler(t, store, team("alpha-team"))
 
-	body := `{"title":"New Project","source":"matrix","requester":"@luo:server","team_id":"alpha-team"}`
+	body := `{"title":"New Project","source":"matrix","requester":"@carol:server","team_id":"alpha-team"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects", strings.NewReader(body))
 	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
 	rec := httptest.NewRecorder()
@@ -3373,7 +3613,7 @@ func TestCreateProject_L2CrossTeamDenied(t *testing.T) {
 	// L2 with only beta-team accessible tries to create in alpha-team.
 	body := `{"title":"X","team_id":"alpha-team"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects", strings.NewReader(body))
-	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "maizong", Teams: []string{"beta-team"}})
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleHuman, Username: "alice", Teams: []string{"beta-team"}})
 	rec := httptest.NewRecorder()
 	h.CreateProject(rec, req)
 
@@ -3427,12 +3667,281 @@ func TestCancelTask_ActiveTask(t *testing.T) {
 	if task["status"] != "cancelled" || task["cancel_reason"] != "no longer needed" || task["replacement_task_id"] != "t9" {
 		t.Fatalf("task=%v, want cancelled/reason/t9", task)
 	}
+	cancelledAt, _ := task["cancelled_at"].(string)
+	if strings.TrimSpace(cancelledAt) == "" {
+		t.Fatalf("task=%v, want cancelled_at", task)
+	}
+	if _, ok := task["continuation"]; ok {
+		t.Fatalf("legacy task=%v, must not invent continuation without delivery identity", task)
+	}
 	projData, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
 	var proj map[string]any
 	_ = json.Unmarshal(projData, &proj)
 	tasks := proj["tasks"].([]any)
 	if tasks[0].(map[string]any)["status"] != "cancelled" {
 		t.Fatalf("project node status=%v, want cancelled", tasks[0].(map[string]any)["status"])
+	}
+}
+
+func TestCancelTask_SubmittedContinuationResolves(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "submitted", "depends_on": []string{}},
+		},
+	})
+	putTask(store, "shared/tasks/t1/meta.json", map[string]any{
+		"task_id":       "t1",
+		"project_id":    "p1",
+		"status":        "submitted",
+		"submission_id": "submission-1",
+		"continuation": map[string]any{
+			"status":      "pending",
+			"delivery_id": "delivery-1",
+		},
+	})
+	h := newProjectTestHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel",
+		strings.NewReader(`{"reason":"no longer needed","submissionId":"submission-1"}`))
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.CancelTask(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	taskData, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	var task map[string]any
+	_ = json.Unmarshal(taskData, &task)
+	cancelledAt, _ := task["cancelled_at"].(string)
+	if task["status"] != "cancelled" || strings.TrimSpace(cancelledAt) == "" {
+		t.Fatalf("task=%v, want cancelled with stable cancelled_at", task)
+	}
+	if task["submission_id"] != "submission-1" {
+		t.Fatalf("task=%v, must preserve submission identity", task)
+	}
+	continuation, _ := task["continuation"].(map[string]any)
+	if continuation["status"] != "resolved" || continuation["resolution"] != "cancelled" {
+		t.Fatalf("continuation=%v, want resolved/cancelled", continuation)
+	}
+	if continuation["delivery_id"] != "delivery-1" || continuation["resolved_at"] != cancelledAt {
+		t.Fatalf("continuation=%v, want original delivery id and resolved_at=%s", continuation, cancelledAt)
+	}
+}
+
+func TestCancelTask_SubmissionFence(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		wantStatus int
+	}{
+		{name: "missing", body: `{"reason":"no longer needed"}`, wantStatus: http.StatusConflict},
+		{name: "stale", body: `{"reason":"no longer needed","submissionId":"submission-old"}`, wantStatus: http.StatusConflict},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := ossfake.NewMemory()
+			putProject(store, "shared/projects/p1/meta.json", map[string]any{
+				"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+				"tasks": []map[string]any{
+					{"task_id": "t1", "title": "T1", "status": "submitted", "depends_on": []string{}},
+				},
+			})
+			putTask(store, "shared/tasks/t1/meta.json", map[string]any{
+				"task_id":       "t1",
+				"project_id":    "p1",
+				"status":        "submitted",
+				"submission_id": "submission-current",
+				"continuation": map[string]any{
+					"status":      "pending",
+					"delivery_id": "delivery-1",
+				},
+			})
+			beforeProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+			beforeTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+			h := newProjectTestHandler(t, store)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel", strings.NewReader(tt.body))
+			req.SetPathValue("id", "p1")
+			req.SetPathValue("taskId", "t1")
+			req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+			rec := httptest.NewRecorder()
+			h.CancelTask(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status=%d body=%s, want %d", rec.Code, rec.Body.String(), tt.wantStatus)
+			}
+			afterProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+			afterTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+			if string(canonicalProjectMetaNoAudit(t, afterProject)) != string(canonicalProjectMetaNoAudit(t, beforeProject)) || string(afterTask) != string(beforeTask) {
+				t.Fatalf("submission fence changed state: project=%s task=%s", afterProject, afterTask)
+			}
+		})
+	}
+}
+
+func TestCancelTask_LegacyRejectsUnknownSubmissionID(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}}},
+	})
+	putTask(store, "shared/tasks/t1/meta.json", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "in_progress",
+	})
+	beforeProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	beforeTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	h := newProjectTestHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel",
+		strings.NewReader(`{"reason":"obsolete","submissionId":"invented"}`))
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.CancelTask(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s, want 409", rec.Code, rec.Body.String())
+	}
+	afterProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	afterTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	if string(canonicalProjectMetaNoAudit(t, afterProject)) != string(canonicalProjectMetaNoAudit(t, beforeProject)) || string(afterTask) != string(beforeTask) {
+		t.Fatalf("unknown legacy identity changed state: project=%s task=%s", afterProject, afterTask)
+	}
+}
+
+func TestCancelTask_RepeatedDecisionIsIdempotentAndConflictingPayloadIsRejected(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "submitted", "depends_on": []string{}},
+		},
+	})
+	putTask(store, "shared/tasks/t1/meta.json", map[string]any{
+		"task_id":       "t1",
+		"project_id":    "p1",
+		"status":        "submitted",
+		"submission_id": "submission-1",
+		"continuation": map[string]any{
+			"status":      "pending",
+			"delivery_id": "delivery-1",
+		},
+	})
+	h := newProjectTestHandler(t, store)
+
+	cancel := func(body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel", strings.NewReader(body))
+		req.SetPathValue("id", "p1")
+		req.SetPathValue("taskId", "t1")
+		req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+		rec := httptest.NewRecorder()
+		h.CancelTask(rec, req)
+		return rec
+	}
+
+	body := `{"reason":"superseded","replacementTaskId":"t2","submissionId":"submission-1"}`
+	if rec := cancel(body); rec.Code != http.StatusOK {
+		t.Fatalf("first cancel status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	firstProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	firstTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	if rec := cancel(body); rec.Code != http.StatusOK {
+		t.Fatalf("retry status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	secondProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	secondTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	if string(secondProject) != string(firstProject) || string(secondTask) != string(firstTask) {
+		t.Fatalf("identical retry changed state: project=%s task=%s", secondProject, secondTask)
+	}
+
+	conflicts := []string{
+		`{"reason":"different","replacementTaskId":"t2","submissionId":"submission-1"}`,
+		`{"reason":"superseded","replacementTaskId":"t3","submissionId":"submission-1"}`,
+		`{"reason":"superseded","submissionId":"submission-1"}`,
+	}
+	for _, conflictBody := range conflicts {
+		rec := cancel(conflictBody)
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("conflict body=%s status=%d response=%s", conflictBody, rec.Code, rec.Body.String())
+		}
+		afterProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+		afterTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+		if string(canonicalProjectMetaNoAudit(t, afterProject)) != string(canonicalProjectMetaNoAudit(t, firstProject)) || string(afterTask) != string(firstTask) {
+			t.Fatalf("conflicting retry changed state: project=%s task=%s", afterProject, afterTask)
+		}
+	}
+}
+
+func TestCancelTask_TaskMetaTerminalDecisionCannotBeOverwritten(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "submitted", "depends_on": []string{}},
+		},
+	})
+	putTask(store, "shared/tasks/t1/meta.json", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "completed",
+		"submission_id": "submission-1",
+	})
+	beforeProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	beforeTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	h := newProjectTestHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel",
+		strings.NewReader(`{"reason":"too late","submissionId":"submission-1"}`))
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.CancelTask(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s, want 409", rec.Code, rec.Body.String())
+	}
+	afterProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	afterTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	if string(canonicalProjectMetaNoAudit(t, afterProject)) != string(canonicalProjectMetaNoAudit(t, beforeProject)) || string(afterTask) != string(beforeTask) {
+		t.Fatalf("terminal task decision changed: project=%s task=%s", afterProject, afterTask)
+	}
+}
+
+func TestCancelTask_RejectsTaskMetaOwnedByAnotherProject(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{{"task_id": "t1", "title": "T1", "status": "submitted", "depends_on": []string{}}},
+	})
+	putTask(store, "shared/tasks/t1/meta.json", map[string]any{
+		"task_id": "t1", "project_id": "p2", "status": "submitted", "submission_id": "p2-submission",
+		"continuation": map[string]any{"status": "pending", "delivery_id": "p2-delivery"},
+	})
+	beforeProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	beforeTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	h := newProjectTestHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel",
+		strings.NewReader(`{"reason":"wrong project","submissionId":"p2-submission"}`))
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.CancelTask(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s, want 404", rec.Code, rec.Body.String())
+	}
+	afterProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	afterTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	if string(canonicalProjectMetaNoAudit(t, afterProject)) != string(canonicalProjectMetaNoAudit(t, beforeProject)) || string(afterTask) != string(beforeTask) {
+		t.Fatalf("ownership mismatch changed state: project=%s task=%s", afterProject, afterTask)
 	}
 }
 
@@ -3481,6 +3990,39 @@ func TestCancelTask_NoReason400(t *testing.T) {
 	h.CancelTask(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d, want 400 (reason required)", rec.Code)
+	}
+}
+
+func TestCancelTask_InvalidReplacementID400(t *testing.T) {
+	for _, replacement := range []string{"../t2", "..", ".hidden", "-task", "_task"} {
+		t.Run(replacement, func(t *testing.T) {
+			store := ossfake.NewMemory()
+			putProject(store, "shared/projects/p1/meta.json", map[string]any{
+				"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+				"tasks": []map[string]any{{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}}},
+			})
+			putTask(store, "shared/tasks/t1/meta.json", map[string]any{
+				"task_id": "t1", "project_id": "p1", "status": "in_progress",
+			})
+			beforeProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+			beforeTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+			h := newProjectTestHandler(t, store)
+			body, _ := json.Marshal(map[string]any{"reason": "obsolete", "replacementTaskId": replacement})
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel", strings.NewReader(string(body)))
+			req.SetPathValue("id", "p1")
+			req.SetPathValue("taskId", "t1")
+			req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+			rec := httptest.NewRecorder()
+			h.CancelTask(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+			}
+			afterProject, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+			afterTask, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+			if string(canonicalProjectMetaNoAudit(t, afterProject)) != string(canonicalProjectMetaNoAudit(t, beforeProject)) || string(afterTask) != string(beforeTask) {
+				t.Fatalf("invalid replacement changed state: project=%s task=%s", afterProject, afterTask)
+			}
+		})
 	}
 }
 
@@ -3582,6 +4124,14 @@ func (c *conflictInjectingOSS) ListObjects(ctx context.Context, prefix string) (
 	return c.mcLike.ListObjects(ctx, prefix)
 }
 
+func (c *conflictInjectingOSS) ListObjectsDetailed(ctx context.Context, prefix string) ([]oss.ObjectInfo, error) {
+	return c.mcLike.ListObjectsDetailed(ctx, prefix)
+}
+
+func (c *conflictInjectingOSS) ListObjectsRecursive(ctx context.Context, prefix, startAfter string, limit int) ([]oss.ObjectInfo, string, error) {
+	return c.mcLike.ListObjectsRecursive(ctx, prefix, startAfter, limit)
+}
+
 func (c *conflictInjectingOSS) GetObject(ctx context.Context, key string) ([]byte, error) {
 	data, err := c.mcLike.GetObject(ctx, key)
 	c.getCalls++
@@ -3594,6 +4144,10 @@ func (c *conflictInjectingOSS) GetObject(ctx context.Context, key string) ([]byt
 
 func (c *conflictInjectingOSS) PutObject(ctx context.Context, key string, data []byte) error {
 	return c.mcLike.PutObject(ctx, key, data)
+}
+
+func (c *conflictInjectingOSS) PutObjectIfAbsent(ctx context.Context, key string, data []byte) error {
+	return c.mcLike.PutObjectIfAbsent(ctx, key, data)
 }
 
 // PutObjectIfMatch simulates the conditional write. When injectOnStat has
@@ -3609,6 +4163,21 @@ func (c *conflictInjectingOSS) PutObjectIfMatch(ctx context.Context, key string,
 		return oss.ErrPreconditionFailed
 	}
 	return c.mcLike.PutObject(ctx, key, data)
+}
+
+func (c *conflictInjectingOSS) PutObjectIfMatchWithType(ctx context.Context, key string, data []byte, contentType, matchETag string) error {
+	cur, err := c.mcLike.StatMeta(ctx, key)
+	if err != nil {
+		return err
+	}
+	if cur.ETag != matchETag {
+		return oss.ErrPreconditionFailed
+	}
+	return c.mcLike.PutObjectIfMatchWithType(ctx, key, data, contentType, matchETag)
+}
+
+func (c *conflictInjectingOSS) PutObjectIfMatchStrict(ctx context.Context, key string, data []byte, matchETag string) error {
+	return c.PutObjectIfMatch(ctx, key, data, matchETag)
 }
 
 func (c *conflictInjectingOSS) Stat(ctx context.Context, key string) error {
@@ -3645,6 +4214,18 @@ type bareLikeOSS struct {
 }
 
 func (m *bareLikeOSS) ListObjects(_ context.Context, prefix string) ([]string, error) {
+	infos, err := m.ListObjectsDetailed(context.Background(), prefix)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(infos))
+	for _, info := range infos {
+		out = append(out, info.Name)
+	}
+	return out, nil
+}
+
+func (m *bareLikeOSS) ListObjectsDetailed(_ context.Context, prefix string) ([]oss.ObjectInfo, error) {
 	keys, err := m.Memory.ListObjects(context.Background(), prefix)
 	if err != nil {
 		return nil, err
@@ -3652,7 +4233,7 @@ func (m *bareLikeOSS) ListObjects(_ context.Context, prefix string) ([]string, e
 	// mc ls semantics: direct children only — directory children keep the
 	// trailing slash ("p1/"), file children stay bare ("t1.json").
 	seen := map[string]bool{}
-	out := make([]string, 0)
+	out := make([]oss.ObjectInfo, 0)
 	for _, k := range keys {
 		rest := strings.TrimPrefix(k, prefix)
 		if rest == "" {
@@ -3665,10 +4246,10 @@ func (m *bareLikeOSS) ListObjects(_ context.Context, prefix string) ([]string, e
 		}
 		if !seen[child] {
 			seen[child] = true
-			out = append(out, child)
+			out = append(out, oss.ObjectInfo{Name: child, UpdatedAt: m.Memory.LastWriteTime().UTC().Format(time.RFC3339)})
 		}
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 
@@ -3708,7 +4289,9 @@ func TestWriteProjectMeta_SnapshotsPreviousVersion(t *testing.T) {
 	if len(children) != 1 {
 		t.Fatalf("history entries=%d, want 1", len(children))
 	}
-	snap, err := store.GetObject(context.Background(), children[0])
+	// Listed names are relative to the prefix (mc ls contract) — re-attach
+	// the history prefix for the read.
+	snap, err := store.GetObject(context.Background(), historyPrefixFor(key)+children[0])
 	if err != nil {
 		t.Fatalf("read snapshot: %v", err)
 	}
@@ -3789,6 +4372,10 @@ type snapshotFailGet struct {
 
 func (f *snapshotFailGet) GetObject(ctx context.Context, key string) ([]byte, error) {
 	return nil, errors.New("get failed")
+}
+
+func (w *snapshotFailGet) PutObjectIfMatchWithType(ctx context.Context, key string, data []byte, contentType, matchETag string) error {
+	return w.StorageClient.PutObjectIfMatchWithType(ctx, key, data, contentType, matchETag)
 }
 
 func TestCreateProject_NoSnapshot(t *testing.T) {
@@ -3922,6 +4509,17 @@ type failTaskPutOSS struct {
 	failures   int
 }
 
+func (f *failTaskPutOSS) PutObjectIfMatchWithType(ctx context.Context, key string, data []byte, contentType, matchETag string) error {
+	return f.StorageClient.PutObjectIfMatchWithType(ctx, key, data, contentType, matchETag)
+}
+
+// PutObjectIfMatchStrict forwards to the wrapped store so the strict
+// conditional-write path (writeProjectMeta, persistControlActionAudit)
+// stays transparent; only PutObject carries the injected failure.
+func (f *failTaskPutOSS) PutObjectIfMatchStrict(ctx context.Context, key string, data []byte, matchETag string) error {
+	return f.StorageClient.(strictConditionalWriter).PutObjectIfMatchStrict(ctx, key, data, matchETag)
+}
+
 func (f *failTaskPutOSS) PutObject(ctx context.Context, key string, data []byte) error {
 	if f.failures > 0 && strings.HasPrefix(key, f.failPrefix) {
 		f.failures--
@@ -3990,5 +4588,2254 @@ func TestCancelTask_RetryConvergesBothObjects(t *testing.T) {
 	_ = json.Unmarshal(taskData2, &task2)
 	if task2["status"] != "cancelled" || task2["cancel_reason"] != "obsolete" {
 		t.Fatalf("task=%v, want cancelled + reason after retry", task2)
+	}
+}
+
+// --- workflow ?format=mermaid ---
+
+func TestGetProjectWorkflow_MermaidFormat(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "teams/alpha-team/shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1",
+		"title":      "Alpha Project",
+		"status":     "active",
+		"plan_type":  "dag",
+		"team_id":    "alpha-team",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "Task 1", "assigned_to": "@w1", "depends_on": []string{}, "status": "completed"},
+			{"task_id": "t2", "title": "Task 2", "assigned_to": "@w2", "depends_on": []string{"t1"}, "status": "assigned"},
+			{"task_id": "t3", "title": "Task 3", "assigned_to": "@w3", "depends_on": []string{"t2"}, "status": "planned"},
+		},
+	})
+	h := newProjectTestHandler(t, store, team("alpha-team"))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/workflow?format=mermaid", nil)
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetProjectWorkflow(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Fatalf("content-type=%q, want text/plain", ct)
+	}
+	out := rec.Body.String()
+	if !strings.HasPrefix(out, "flowchart LR") {
+		t.Fatalf("expected flowchart header, got %q", out)
+	}
+	if !strings.Contains(out, `t1["Task 1: completed"]:::completed`) {
+		t.Fatalf("expected t1 with completed class, got %q", out)
+	}
+	// t2 is the only ready node: ready class overrides its delegated class.
+	if !strings.Contains(out, `t2["Task 2: delegated"]:::ready`) {
+		t.Fatalf("expected ready class on t2, got %q", out)
+	}
+	if !strings.Contains(out, `t3["Task 3: pending"]:::pending`) {
+		t.Fatalf("expected t3 with pending class, got %q", out)
+	}
+	if !strings.Contains(out, "t1 --> t2") || !strings.Contains(out, "t2 --> t3") {
+		t.Fatalf("missing edges, got %q", out)
+	}
+	for _, cd := range []string{
+		"classDef ready", "classDef pending", "classDef delegated", "classDef completed", "classDef blocked",
+	} {
+		if !strings.Contains(out, cd) {
+			t.Fatalf("expected %q in output, got %q", cd, out)
+		}
+	}
+}
+
+func TestGetProjectWorkflow_MermaidFormat_Invalid(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P", "status": "active", "plan_type": "dag",
+	})
+	h := newProjectTestHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/workflow?format=bogus", nil)
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetProjectWorkflow(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+}
+
+// --- GET /api/v1/projects/{id}/tasks/{taskId} (node-level inspection) ---
+
+func TestGetTaskInspection(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "teams/alpha-team/shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1",
+		"title":      "Alpha Project",
+		"status":     "active",
+		"plan_type":  "dag",
+		"team_id":    "alpha-team",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "Task 1", "assigned_to": "@w1", "depends_on": []string{}, "status": "completed"},
+			{"task_id": "t2", "title": "Task 2", "assigned_to": "@w2", "depends_on": []string{"t1"}, "status": "assigned"},
+		},
+	})
+	putProject(store, "teams/alpha-team/shared/tasks/t1/meta.json", map[string]any{
+		"task_id":       "t1",
+		"project_id":    "p1",
+		"status":        "completed",
+		"spec_path":     "shared/tasks/t1/spec.md",
+		"assigned_to":   "@w1",
+		"summary":       "Alpha report done",
+		"result_status": "SUCCESS",
+		"result_path":   "shared/tasks/t1/result.md",
+		"history": []any{
+			map[string]any{"ts": "2026-09-05T01:00:00Z", "from": "", "to": "planned", "actor": "manager", "action": "create"},
+			map[string]any{"ts": "2026-09-05T02:00:00Z", "from": "in_progress", "to": "submitted", "actor": "w1", "action": "submit_task"},
+			"malformed entry must be skipped",
+			map[string]any{"note": "no ts and no action — skipped"},
+		},
+	})
+	putProject(store, "teams/alpha-team/shared/tasks/t2/meta.json", map[string]any{
+		"task_id": "t2", "project_id": "p1", "status": "assigned",
+		"spec_path": "shared/tasks/t2/spec.md", "assigned_to": "@w2",
+	})
+	h := newProjectTestHandler(t, store, team("alpha-team"))
+
+	// t1: full detail + parsed history (malformed entries skipped) + trace.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/tasks/t1", nil)
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetTaskInspection(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("t1 status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var insp taskInspection
+	if err := json.Unmarshal(rec.Body.Bytes(), &insp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if insp.TaskID != "t1" || insp.ProjectID != "p1" || insp.Status != "completed" {
+		t.Fatalf("t1 identity wrong: %+v", insp)
+	}
+	if insp.SpecPath != "shared/tasks/t1/spec.md" || insp.Summary != "Alpha report done" ||
+		insp.ResultStatus != "SUCCESS" || insp.ResultPath != "shared/tasks/t1/result.md" {
+		t.Fatalf("t1 detail wrong: %+v", insp)
+	}
+	if len(insp.History) != 2 {
+		t.Fatalf("t1 history=%d, want 2 (malformed entries skipped): %+v", len(insp.History), insp.History)
+	}
+	if insp.History[1].From != "in_progress" || insp.History[1].To != "submitted" ||
+		insp.History[1].Actor != "w1" || insp.History[1].Action != "submit_task" {
+		t.Fatalf("t1 history entry wrong: %+v", insp.History[1])
+	}
+	if len(insp.Dependencies) != 0 {
+		t.Fatalf("t1 dependencies=%v, want empty", insp.Dependencies)
+	}
+	if insp.Trace.ProjectID != "p1" || insp.Trace.TaskID != "t1" {
+		t.Fatalf("t1 trace hint wrong: %+v", insp.Trace)
+	}
+
+	// t2: dependencies exposed from the graph node.
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/tasks/t2", nil)
+	req2.SetPathValue("id", "p1")
+	req2.SetPathValue("taskId", "t2")
+	req2 = withCaller(req2, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec2 := httptest.NewRecorder()
+	h.GetTaskInspection(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("t2 status=%d body=%s", rec2.Code, rec2.Body.String())
+	}
+	var insp2 taskInspection
+	if err := json.Unmarshal(rec2.Body.Bytes(), &insp2); err != nil {
+		t.Fatalf("decode t2: %v", err)
+	}
+	if len(insp2.Dependencies) != 1 || insp2.Dependencies[0] != "t1" {
+		t.Fatalf("t2 dependencies=%v, want [t1]", insp2.Dependencies)
+	}
+	if insp2.Status != "assigned" || insp2.History != nil {
+		t.Fatalf("t2 detail wrong: %+v", insp2)
+	}
+}
+
+func TestGetTaskInspection_SubmissionIDForCancellation(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{{"task_id": "t1", "title": "T1", "status": "submitted", "depends_on": []string{}}},
+	})
+	const submissionID = "opaque/submission:v1"
+	putTask(store, "shared/tasks/t1/meta.json", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "submitted",
+		"submission_id": submissionID,
+		"continuation":  map[string]any{"status": "pending", "delivery_id": "delivery-1"},
+	})
+	h := newProjectTestHandler(t, store)
+	caller := &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/tasks/t1", nil)
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t1")
+	rec := httptest.NewRecorder()
+	h.GetTaskInspection(rec, withCaller(req, caller))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("inspect status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var insp taskInspection
+	if err := json.Unmarshal(rec.Body.Bytes(), &insp); err != nil {
+		t.Fatalf("decode inspection: %v", err)
+	}
+	if insp.SubmissionID != submissionID {
+		t.Fatalf("inspection submission_id=%q, want %q", insp.SubmissionID, submissionID)
+	}
+
+	// A caller inspecting one task can use its opaque identity directly for
+	// a fenced cancellation, without a second workflow-wide detail request.
+	body, err := json.Marshal(map[string]string{"reason": "obsolete", "submissionId": insp.SubmissionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelReq := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel", strings.NewReader(string(body)))
+	cancelReq.SetPathValue("id", "p1")
+	cancelReq.SetPathValue("taskId", "t1")
+	cancelRec := httptest.NewRecorder()
+	h.CancelTask(cancelRec, withCaller(cancelReq, caller))
+	if cancelRec.Code != http.StatusOK {
+		t.Fatalf("cancel status=%d body=%s", cancelRec.Code, cancelRec.Body.String())
+	}
+	taskData, err := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var task map[string]any
+	if err := json.Unmarshal(taskData, &task); err != nil {
+		t.Fatal(err)
+	}
+	continuation, _ := task["continuation"].(map[string]any)
+	if task["status"] != "cancelled" || task["submission_id"] != submissionID || continuation["status"] != "resolved" {
+		t.Fatalf("cancelled task lost its submission fence: %v", task)
+	}
+}
+
+func TestGetTaskInspection_MissingMeta(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "assigned_to": "@w1", "depends_on": []string{}, "status": "in_progress"},
+		},
+	})
+	h := newProjectTestHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/tasks/t1", nil)
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetTaskInspection(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var insp taskInspection
+	if err := json.Unmarshal(rec.Body.Bytes(), &insp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// No TaskMeta: node summary only, status normalized from the graph node.
+	if insp.Status != "in-progress" || insp.SpecPath != "" || insp.Summary != "" {
+		t.Fatalf("expected node summary only, got %+v", insp)
+	}
+	if insp.Trace.TaskID != "t1" {
+		t.Fatalf("trace hint missing: %+v", insp.Trace)
+	}
+}
+
+func TestGetTaskInspection_TaskNotInGraph(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "assigned_to": "@w1", "depends_on": []string{}, "status": "planned"},
+		},
+	})
+	h := newProjectTestHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/tasks/t9", nil)
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t9")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetTaskInspection(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s, want 404", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetTaskInspection_InvalidTaskID(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P", "status": "active", "plan_type": "dag",
+	})
+	h := newProjectTestHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/tasks/bad%21id", nil)
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "bad!id")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetTaskInspection(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetTaskInspection_LoopTask(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1",
+		"title":      "Loop Project",
+		"status":     "active",
+		"plan_type":  "loop",
+		"tasks":      []map[string]any{},
+		"loop": map[string]any{
+			"goal": "g", "stop_condition": "s", "current_iteration": 1, "max_iterations": 5, "status": "running",
+			"tasks": []map[string]any{
+				{"task_id": "l1", "title": "Loop Step 1", "assigned_to": "@w1", "depends_on": []string{}, "status": "completed"},
+				{"task_id": "l2", "title": "Loop Step 2", "assigned_to": "@w2", "depends_on": []string{"l1"}, "status": "assigned"},
+			},
+		},
+	})
+	putProject(store, "shared/tasks/l2/meta.json", map[string]any{
+		"task_id": "l2", "project_id": "p1", "status": "assigned",
+		"spec_path": "shared/tasks/l2/spec.md",
+	})
+	h := newProjectTestHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/tasks/l2", nil)
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "l2")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetTaskInspection(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var insp taskInspection
+	if err := json.Unmarshal(rec.Body.Bytes(), &insp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if insp.TaskID != "l2" || insp.SpecPath != "shared/tasks/l2/spec.md" {
+		t.Fatalf("loop task detail wrong: %+v", insp)
+	}
+	if len(insp.Dependencies) != 1 || insp.Dependencies[0] != "l1" {
+		t.Fatalf("loop task dependencies=%v, want [l1]", insp.Dependencies)
+	}
+}
+
+func TestGetTaskInspection_CrossScopeNoFallback(t *testing.T) {
+	store := ossfake.NewMemory()
+	// Team-owned project; its task meta exists ONLY at the global prefix.
+	// A team project must not leak the global TaskMeta (same rule as
+	// readTasksDetail / includeTasks).
+	putProject(store, "teams/alpha-team/shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1",
+		"title":      "Alpha Project",
+		"status":     "active",
+		"plan_type":  "dag",
+		"team_id":    "alpha-team",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "Task 1", "assigned_to": "@w1", "depends_on": []string{}, "status": "planned"},
+		},
+	})
+	putProject(store, "shared/tasks/t1/meta.json", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "completed",
+		"summary": "should not leak",
+	})
+	h := newProjectTestHandler(t, store, team("alpha-team"))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/tasks/t1", nil)
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetTaskInspection(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var insp taskInspection
+	if err := json.Unmarshal(rec.Body.Bytes(), &insp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if insp.Summary != "" || insp.Status != "pending" {
+		t.Fatalf("global TaskMeta leaked into team project: %+v", insp)
+	}
+}
+
+func TestCancelTask_RetryAfterTaskWriteFailureResolvesContinuation(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{{"task_id": "t1", "title": "T1", "status": "submitted", "depends_on": []string{}}},
+	})
+	putTask(store, "shared/tasks/t1/meta.json", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "submitted",
+		"submission_id": "submission-1",
+		"continuation":  map[string]any{"status": "pending", "delivery_id": "delivery-1"},
+	})
+	body := `{"reason":"obsolete","replacementTaskId":"t2","submissionId":"submission-1"}`
+
+	failFirst := &failTaskPutOSS{StorageClient: &mcLikeOSS{Memory: store}, failPrefix: "shared/tasks/t1/", failures: 1}
+	h := newProjectTestHandlerWithOSS(t, failFirst)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel", strings.NewReader(body))
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.CancelTask(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("first attempt status=%d body=%s, want 500", rec.Code, rec.Body.String())
+	}
+
+	taskData, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	var beforeRetry map[string]any
+	_ = json.Unmarshal(taskData, &beforeRetry)
+	continuation, _ := beforeRetry["continuation"].(map[string]any)
+	if beforeRetry["status"] != "submitted" || continuation["status"] != "pending" {
+		t.Fatalf("task after failed write=%v, want original submitted/pending state", beforeRetry)
+	}
+
+	h2 := newProjectTestHandler(t, store)
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel", strings.NewReader(body))
+	req2.SetPathValue("id", "p1")
+	req2.SetPathValue("taskId", "t1")
+	req2 = withCaller(req2, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec2 := httptest.NewRecorder()
+	h2.CancelTask(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("retry status=%d body=%s, want 200", rec2.Code, rec2.Body.String())
+	}
+
+	taskData, _ = store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	var repaired map[string]any
+	_ = json.Unmarshal(taskData, &repaired)
+	repairedContinuation, _ := repaired["continuation"].(map[string]any)
+	if repaired["status"] != "cancelled" || repaired["cancelled_at"] == "" {
+		t.Fatalf("repaired task=%v, want cancelled with cancelled_at", repaired)
+	}
+	if repairedContinuation["status"] != "resolved" || repairedContinuation["resolution"] != "cancelled" ||
+		repairedContinuation["delivery_id"] != "delivery-1" || repairedContinuation["resolved_at"] == "" {
+		t.Fatalf("repaired continuation=%v", repairedContinuation)
+	}
+}
+
+func TestCancelTask_TaskWriteFailureRejectsConflictingRetry(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{{"task_id": "t1", "title": "T1", "status": "submitted", "depends_on": []string{}}},
+	})
+	putTask(store, "shared/tasks/t1/meta.json", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "submitted",
+		"submission_id": "submission-1",
+		"continuation":  map[string]any{"status": "pending", "delivery_id": "delivery-1"},
+	})
+
+	failFirst := &failTaskPutOSS{StorageClient: &mcLikeOSS{Memory: store}, failPrefix: "shared/tasks/t1/", failures: 1}
+	h := newProjectTestHandlerWithOSS(t, failFirst)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel",
+		strings.NewReader(`{"reason":"first decision","replacementTaskId":"t2","submissionId":"submission-1"}`))
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.CancelTask(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("first attempt status=%d body=%s, want 500", rec.Code, rec.Body.String())
+	}
+	projectData, _ := store.GetObject(context.Background(), "shared/projects/p1/meta.json")
+	var project map[string]any
+	_ = json.Unmarshal(projectData, &project)
+	projectTasks, _ := project["tasks"].([]any)
+	decision, _ := projectTasks[0].(map[string]any)["cancellation"].(map[string]any)
+	if decision["submission_id"] != "submission-1" || decision["reason"] != "first decision" ||
+		decision["replacement_task_id"] != "t2" || decision["cancelled_at"] == "" {
+		t.Fatalf("project cancellation decision=%v", decision)
+	}
+
+	h2 := newProjectTestHandler(t, store)
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel",
+		strings.NewReader(`{"reason":"different decision","replacementTaskId":"t3","submissionId":"submission-1"}`))
+	req2.SetPathValue("id", "p1")
+	req2.SetPathValue("taskId", "t1")
+	req2 = withCaller(req2, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec2 := httptest.NewRecorder()
+	h2.CancelTask(rec2, req2)
+	if rec2.Code != http.StatusConflict {
+		t.Fatalf("conflicting retry status=%d body=%s, want 409", rec2.Code, rec2.Body.String())
+	}
+
+	taskData, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	var task map[string]any
+	_ = json.Unmarshal(taskData, &task)
+	continuation, _ := task["continuation"].(map[string]any)
+	if task["status"] != "submitted" || continuation["status"] != "pending" {
+		t.Fatalf("conflicting retry changed task=%v", task)
+	}
+}
+
+func TestCancelTask_RetryRepairsPreviouslyCancelledPendingContinuation(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{{"task_id": "t1", "title": "T1", "status": "cancelled", "depends_on": []string{}}},
+	})
+	putTask(store, "shared/tasks/t1/meta.json", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "cancelled",
+		"submission_id": "submission-1",
+		"cancel_reason": "obsolete",
+		"continuation":  map[string]any{"status": "pending", "delivery_id": "delivery-1"},
+	})
+	h := newProjectTestHandler(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel",
+		strings.NewReader(`{"reason":"obsolete","submissionId":"submission-1"}`))
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.CancelTask(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	taskData, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	var task map[string]any
+	_ = json.Unmarshal(taskData, &task)
+	continuation, _ := task["continuation"].(map[string]any)
+	if task["cancelled_at"] == "" || continuation["status"] != "resolved" ||
+		continuation["resolution"] != "cancelled" || continuation["delivery_id"] != "delivery-1" {
+		t.Fatalf("repaired task=%v", task)
+	}
+}
+
+func TestCancelTask_RetryRepairsLegacyCancelledTaskWithoutTimestamp(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{{"task_id": "t1", "title": "T1", "status": "cancelled", "depends_on": []string{}}},
+	})
+	putTask(store, "shared/tasks/t1/meta.json", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "cancelled", "cancel_reason": "obsolete",
+	})
+	h := newProjectTestHandler(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel",
+		strings.NewReader(`{"reason":"obsolete"}`))
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.CancelTask(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	taskData, _ := store.GetObject(context.Background(), "shared/tasks/t1/meta.json")
+	var task map[string]any
+	_ = json.Unmarshal(taskData, &task)
+	cancelledAt, _ := task["cancelled_at"].(string)
+	if strings.TrimSpace(cancelledAt) == "" {
+		t.Fatalf("legacy cancelled task=%v, want repaired cancelled_at", task)
+	}
+	if _, ok := task["continuation"]; ok {
+		t.Fatalf("legacy cancelled task=%v, must not invent continuation", task)
+	}
+}
+
+// --- task transition engine (PR: workflow-transition-engine) ---
+
+// TestTaskTransitionsFixture loads the shared golden fixture (the same file
+// the Python write side tests against) and asserts the Go cancel semantics
+// stay in lockstep with it: every non-terminal state may be cancelled, no
+// terminal state has outbound edges, and the terminal set matches.
+func TestTaskTransitionsFixture(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "plugins", "teamharness", "contracts", "task-transitions.json"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	var fixture struct {
+		States      []string            `json:"states"`
+		Terminal    []string            `json:"terminal"`
+		Transitions map[string][]string `json:"transitions"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatalf("decode fixture: %v", err)
+	}
+	stateSet := make(map[string]bool, len(fixture.States))
+	for _, s := range fixture.States {
+		stateSet[s] = true
+	}
+	terminalSet := make(map[string]bool, len(fixture.Terminal))
+	for _, s := range fixture.Terminal {
+		terminalSet[s] = true
+		if !stateSet[s] {
+			t.Fatalf("terminal state %q missing from states", s)
+		}
+	}
+	for src, targets := range fixture.Transitions {
+		if !stateSet[src] {
+			t.Fatalf("unknown source state %q", src)
+		}
+		if terminalSet[src] {
+			t.Fatalf("terminal state %q must have no outbound edges, got %v", src, targets)
+		}
+		for _, dst := range targets {
+			if !stateSet[dst] {
+				t.Fatalf("state %q: unknown target %q", src, dst)
+			}
+		}
+	}
+	// Go's isTerminalTaskStatus must equal the fixture terminal set.
+	for s := range terminalSet {
+		if !isTerminalTaskStatus(s) {
+			t.Fatalf("fixture terminal %q not terminal in Go isTerminalTaskStatus", s)
+		}
+	}
+	for s := range stateSet {
+		if !terminalSet[s] && isTerminalTaskStatus(s) {
+			t.Fatalf("fixture non-terminal %q terminal in Go isTerminalTaskStatus", s)
+		}
+	}
+	// CancelTask accepts exactly the non-terminal states: the fixture must
+	// grant "cancelled" as a target from every non-terminal state.
+	for s := range stateSet {
+		if terminalSet[s] {
+			continue
+		}
+		var cancellable bool
+		for _, dst := range fixture.Transitions[s] {
+			if dst == "cancelled" {
+				cancellable = true
+			}
+		}
+		if !cancellable {
+			t.Fatalf("fixture must allow %q -> cancelled (CancelTask accepts it)", s)
+		}
+	}
+}
+
+func TestTaskDetailHistoryPassthrough(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}},
+			{"task_id": "t2", "title": "T2", "status": "planned", "depends_on": []string{}},
+			{"task_id": "t3", "title": "T3", "status": "in_progress", "depends_on": []string{}},
+		},
+	})
+	putTaskMeta(store, "", "t1", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "in_progress",
+		"history": []map[string]any{
+			{"ts": "2026-09-09T10:00:00Z", "from": "planned", "to": "prepared", "action": "delegate_task", "actor": "leader:default"},
+			{"ts": "2026-09-09T10:00:01Z", "from": "prepared", "to": "assigned", "action": "delegate_task", "actor": "leader:default"},
+			{"ts": "2026-09-09T10:00:05Z", "from": "assigned", "to": "in_progress", "action": "ack_task", "actor": "worker:a"},
+		},
+	})
+	// t2 has no history field at all (meta predates the engine).
+	putTaskMeta(store, "", "t2", map[string]any{
+		"task_id": "t2", "project_id": "p1", "status": "planned",
+	})
+	// t3 carries a mix of one valid and two malformed entries.
+	putTaskMeta(store, "", "t3", map[string]any{
+		"task_id": "t3", "project_id": "p1", "status": "in_progress",
+		"history": []any{
+			"not-an-object",
+			map[string]any{"ts": "2026-09-09T10:01:01Z"},
+			map[string]any{"ts": "2026-09-09T10:01:00Z", "from": "planned", "to": "prepared", "action": "delegate_task", "actor": "leader:default", "note": ""},
+		},
+	})
+	h := newProjectTestHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/workflow?includeTasks=true", nil)
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetProjectWorkflow(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var wf workflowResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &wf); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	byID := map[string]taskDetail{}
+	for _, d := range wf.TasksDetail {
+		byID[d.TaskID] = d
+	}
+	if len(byID["t1"].History) != 3 {
+		t.Fatalf("t1 history=%v, want 3 entries", byID["t1"].History)
+	}
+	first := byID["t1"].History[0]
+	if first.Ts != "2026-09-09T10:00:00Z" || first.From != "planned" || first.To != "prepared" ||
+		first.Action != "delegate_task" || first.Actor != "leader:default" {
+		t.Fatalf("t1 history[0]=%+v", first)
+	}
+	if byID["t2"].History != nil {
+		t.Fatalf("t2 history=%v, want nil (field absent)", byID["t2"].History)
+	}
+	if len(byID["t3"].History) != 1 || byID["t3"].History[0].To != "prepared" {
+		t.Fatalf("t3 history=%v, want only the well-formed entry", byID["t3"].History)
+	}
+}
+
+func putEventsProject(t *testing.T, store *ossfake.Memory) {
+	t.Helper()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}},
+			{"task_id": "t2", "title": "T2", "status": "assigned", "depends_on": []string{}},
+			{"task_id": "t3", "title": "T3", "status": "planned", "depends_on": []string{}},
+		},
+	})
+	putTaskMeta(store, "", "t1", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "in_progress",
+		"history": []map[string]any{
+			{"ts": "2026-09-09T10:00:00Z", "from": "planned", "to": "prepared", "action": "delegate_task", "actor": "leader:default"},
+			{"ts": "2026-09-09T10:00:01Z", "from": "prepared", "to": "assigned", "action": "delegate_task", "actor": "leader:default"},
+			{"ts": "2026-09-09T10:00:05Z", "from": "assigned", "to": "in_progress", "action": "ack_task", "actor": "worker:a", "note": "starting"},
+		},
+	})
+	putTaskMeta(store, "", "t2", map[string]any{
+		"task_id": "t2", "project_id": "p1", "status": "assigned",
+		"history": []map[string]any{
+			{"ts": "2026-09-09T10:00:00Z", "from": "planned", "to": "prepared", "action": "delegate_task", "actor": "leader:default"},
+			{"ts": "2026-09-09T10:00:03Z", "from": "prepared", "to": "assigned", "action": "delegate_task", "actor": "leader:default"},
+		},
+	})
+	// t3 has a meta but no history field: contributes nothing.
+	putTaskMeta(store, "", "t3", map[string]any{
+		"task_id": "t3", "project_id": "p1", "status": "planned",
+	})
+}
+
+func doGetProjectEvents(t *testing.T, h *ProjectHandler, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetProjectEvents(rec, req)
+	return rec
+}
+
+func decodeEvents(t *testing.T, rec *httptest.ResponseRecorder) projectEventsResponse {
+	t.Helper()
+	var resp projectEventsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode events: %v (body=%s)", err, rec.Body.String())
+	}
+	return resp
+}
+
+func TestGetProjectEvents_AggregateSortAndPaginate(t *testing.T) {
+	store := ossfake.NewMemory()
+	putEventsProject(t, store)
+	h := newProjectTestHandler(t, store)
+
+	// limit=2: ascending by ts; the shared 10:00:00 timestamp breaks the
+	// tie by task_id (t1 before t2).
+	rec := doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=2")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	resp := decodeEvents(t, rec)
+	if len(resp.Events) != 2 || resp.NextCursor == "" {
+		t.Fatalf("page1=%+v, want 2 events + opaque cursor", resp)
+	}
+	if resp.Events[0].TaskID != "t1" || resp.Events[0].To != "prepared" {
+		t.Fatalf("page1[0]=%+v, want t1 planned->prepared", resp.Events[0])
+	}
+	if resp.Events[1].TaskID != "t2" || resp.Events[1].To != "prepared" {
+		t.Fatalf("page1[1]=%+v, want t2 planned->prepared (task_id tie-break)", resp.Events[1])
+	}
+	// The cursor is opaque (anchor of the page's last event): the test
+	// passes it back verbatim and never inspects its format.
+	cursor := resp.NextCursor
+
+	// The returned cursor continues exactly where page 1 stopped.
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=2&cursor="+cursor))
+	if len(resp.Events) != 2 || resp.NextCursor == "" {
+		t.Fatalf("page2=%+v, want 2 events + cursor", resp)
+	}
+	if resp.Events[0].TaskID != "t1" || resp.Events[0].To != "assigned" {
+		t.Fatalf("page2[0]=%+v, want t1 prepared->assigned", resp.Events[0])
+	}
+	if resp.Events[1].TaskID != "t2" || resp.Events[1].To != "assigned" {
+		t.Fatalf("page2[1]=%+v, want t2 prepared->assigned", resp.Events[1])
+	}
+	// Re-presenting the same cursor is idempotent: same page again.
+	again := decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=2&cursor="+cursor))
+	if len(again.Events) != 2 || again.Events[0] != resp.Events[0] || again.Events[1] != resp.Events[1] {
+		t.Fatalf("page2 retry=%+v, want identical events", again)
+	}
+
+	// tail page: one event, cursor exhausted, note passthrough.
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=2&cursor="+resp.NextCursor))
+	if len(resp.Events) != 1 || resp.NextCursor != "" {
+		t.Fatalf("page3=%+v, want 1 event + empty cursor", resp)
+	}
+	if resp.Events[0].Actor != "worker:a" || resp.Events[0].Note != "starting" {
+		t.Fatalf("page3[0]=%+v, want actor/note passthrough", resp.Events[0])
+	}
+
+	// whole list in one page: 5 events, no cursor.
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events"))
+	if len(resp.Events) != 5 || resp.NextCursor != "" {
+		t.Fatalf("full=%+v, want all 5 events + empty cursor", resp)
+	}
+
+	// limit is capped at 200, never rejected.
+	rec = doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=999")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("limit=999 status=%d, want capped 200 OK", rec.Code)
+	}
+	for _, bad := range []string{"limit=0", "limit=-1", "limit=abc", "cursor=abc", "cursor=-5", "cursor=99"} {
+		rec = doGetProjectEvents(t, h, "/api/v1/projects/p1/events?"+bad)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s status=%d, want 400", bad, rec.Code)
+		}
+	}
+}
+
+// TestGetProjectEvents_PaginationAcrossHistoryTruncation is the maintainer's
+// reproduction: one task with the full 50-entry retained history, page 1 of
+// 10, then a 51st event is appended and the writer's cap drops the oldest
+// (event 1). The next page must start at event 11 (still retained), not at
+// 12 — and when the anchor itself is eventually truncated away the
+// endpoint reports cursor_expired instead of serving a shifted page.
+func TestGetProjectEvents_PaginationAcrossHistoryTruncation(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}},
+		},
+	})
+	// tsForEvent: second-resolution UTC timestamps, ascending.
+	tsForEvent := func(n int) string {
+		return fmt.Sprintf("2026-09-09T10:%02d:%02dZ", (n-1)/60, (n-1)%60)
+	}
+	progressHistory := func(lo, hi int) []map[string]any {
+		hist := make([]map[string]any, 0, hi-lo+1)
+		for n := lo; n <= hi; n++ {
+			hist = append(hist, map[string]any{
+				"ts": tsForEvent(n), "from": "in_progress", "to": "in_progress",
+				"action": "progress", "actor": "worker:a", "note": fmt.Sprintf("step %d", n),
+			})
+		}
+		return hist
+	}
+	putTaskHistory := func(lo, hi int) {
+		putTaskMeta(store, "", "t1", map[string]any{
+			"task_id": "t1", "project_id": "p1", "status": "in_progress",
+			"history": progressHistory(lo, hi),
+		})
+	}
+
+	putTaskHistory(1, 50) // the writer's 50-entry cap, full
+	h := newProjectTestHandler(t, store)
+
+	// Page 1: events 1-10, cursor anchors event 10.
+	resp := decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=10"))
+	if len(resp.Events) != 10 || resp.NextCursor == "" || resp.CursorExpired {
+		t.Fatalf("page1=%+v, want events 1-10 + cursor", resp)
+	}
+	if resp.Events[9].Note != "step 10" {
+		t.Fatalf("page1 last=%+v, want step 10", resp.Events[9])
+	}
+	cursor := resp.NextCursor
+
+	// Ordinary progress: event 51 appended, cap drops event 1. The client
+	// has already read events 1-10, so nothing unread was lost — the
+	// cursor must simply continue at event 11, not at 12.
+	putTaskHistory(2, 51)
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=10&cursor="+cursor))
+	if resp.CursorExpired || resp.NextCursor == "" {
+		t.Fatalf("page2=%+v, want continuation after truncation", resp)
+	}
+	if len(resp.Events) != 10 || resp.Events[0].Note != "step 11" {
+		t.Fatalf("page2 first=%+v, want step 11 (no silent skip)", resp.Events)
+	}
+	if resp.Events[9].Note != "step 20" {
+		t.Fatalf("page2 last=%+v, want step 20", resp.Events[9])
+	}
+	cursor = resp.NextCursor
+
+	// Another truncation round: 52-61 appended, 2-11 dropped. Anchor
+	// (step 20) still retained -> continues at step 21.
+	putTaskHistory(12, 61)
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=10&cursor="+cursor))
+	if resp.CursorExpired || len(resp.Events) != 10 || resp.Events[0].Note != "step 21" {
+		t.Fatalf("page3=%+v, want step 21..30", resp)
+	}
+	cursor = resp.NextCursor
+
+	// The anchor (step 30) itself is now truncated away: explicit reset
+	// signal, empty page, no shifted events.
+	putTaskHistory(35, 84)
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=10&cursor="+cursor))
+	if !resp.CursorExpired || len(resp.Events) != 0 || resp.NextCursor != "" {
+		t.Fatalf("page4=%+v, want cursor_expired + empty", resp)
+	}
+
+	// After the reset the client starts over: fresh page from the
+	// (now retained) head.
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=10"))
+	if resp.CursorExpired || len(resp.Events) != 10 || resp.Events[0].Note != "step 35" {
+		t.Fatalf("refetch=%+v, want step 35..44", resp)
+	}
+}
+
+// TestGetProjectEvents_PaginationTailGrowthWithoutTruncation: below the
+// writer's 50-entry cap, new events only extend the tail. The cursor must
+// remain valid (no spurious cursor_expired) and continue after the growth.
+func TestGetProjectEvents_PaginationTailGrowthWithoutTruncation(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}},
+		},
+	})
+	tsForEvent := func(n int) string {
+		return fmt.Sprintf("2026-09-09T10:00:%02dZ", n-1)
+	}
+	progressHistory := func(lo, hi int) []map[string]any {
+		hist := make([]map[string]any, 0, hi-lo+1)
+		for n := lo; n <= hi; n++ {
+			hist = append(hist, map[string]any{
+				"ts": tsForEvent(n), "from": "in_progress", "to": "in_progress",
+				"action": "progress", "actor": "worker:a", "note": fmt.Sprintf("step %d", n),
+			})
+		}
+		return hist
+	}
+	putTaskHistory := func(lo, hi int) {
+		putTaskMeta(store, "", "t1", map[string]any{
+			"task_id": "t1", "project_id": "p1", "status": "in_progress",
+			"history": progressHistory(lo, hi),
+		})
+	}
+
+	putTaskHistory(1, 8)
+	h := newProjectTestHandler(t, store)
+	resp := decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=4"))
+	if len(resp.Events) != 4 || resp.NextCursor == "" {
+		t.Fatalf("page1=%+v, want steps 1-4 + cursor", resp)
+	}
+	cursor := resp.NextCursor
+
+	// Two more events land while the client is between page requests
+	// (no cap pressure yet, so the head is untouched).
+	putTaskHistory(1, 10)
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=4&cursor="+cursor))
+	if resp.CursorExpired || len(resp.Events) != 4 || resp.Events[0].Note != "step 5" {
+		t.Fatalf("page2=%+v, want steps 5-8 without expiry", resp)
+	}
+	cursor = resp.NextCursor
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=4&cursor="+cursor))
+	if resp.CursorExpired || len(resp.Events) != 2 || resp.Events[0].Note != "step 9" || resp.NextCursor != "" {
+		t.Fatalf("page3=%+v, want steps 9-10, tail reached", resp)
+	}
+}
+
+// TestGetProjectEvents_DuplicateEntriesPaginateUniquely is the maintainer's
+// second reproduction: three content-identical progress entries (same
+// second, same task, same actor/action/note — the writer permits repeated
+// progress and timestamps are second-resolution) with distinct
+// writer-assigned seq values. Each event must be delivered exactly once:
+// the content anchor located the LAST occurrence and the second page came
+// back empty with cursor_expired=false, silently skipping two events.
+func TestGetProjectEvents_DuplicateEntriesPaginateUniquely(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}},
+		},
+	})
+	// Content-identical entries; only the writer-assigned seq differs.
+	hist := make([]map[string]any, 0, 3)
+	for seq := int64(1); seq <= 3; seq++ {
+		hist = append(hist, map[string]any{
+			"ts": "2026-09-09T10:00:00Z", "from": "in_progress", "to": "in_progress",
+			"action": "progress", "actor": "worker:a", "note": "step done", "seq": seq,
+		})
+	}
+	putTaskMeta(store, "", "t1", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "in_progress",
+		"history": hist,
+	})
+	h := newProjectTestHandler(t, store)
+
+	var got []int64
+	cursor := ""
+	for page := 1; ; page++ {
+		q := "/api/v1/projects/p1/events?limit=1"
+		if cursor != "" {
+			q += "&cursor=" + cursor
+		}
+		resp := decodeEvents(t, doGetProjectEvents(t, h, q))
+		if resp.CursorExpired {
+			t.Fatalf("page%d: unexpected cursor_expired: %+v", page, resp)
+		}
+		if len(resp.Events) != 1 {
+			t.Fatalf("page%d=%+v, want exactly 1 event (no skip, no repeat)", page, resp)
+		}
+		if resp.Events[0].Note != "step done" || resp.Events[0].Ts != "2026-09-09T10:00:00Z" {
+			t.Fatalf("page%d[0]=%+v, want the duplicate progress entry", page, resp.Events[0])
+		}
+		got = append(got, resp.Events[0].Seq)
+		if len(got) > 3 {
+			t.Fatalf("more than 3 pages: %v (repeat or infinite loop)", got)
+		}
+		if resp.NextCursor == "" {
+			break // tail reached
+		}
+		cursor = resp.NextCursor
+	}
+	if len(got) != 3 || got[0] != 1 || got[1] != 2 || got[2] != 3 {
+		t.Fatalf("delivered seqs=%v, want [1 2 3] exactly once each", got)
+	}
+}
+
+// TestGetProjectEvents_DuplicatesAppendedBetweenRequests: while the client
+// is between page requests, two content-identical duplicates are appended
+// (seq 2, 3). The cursor from page 1 must continue exactly at seq 2 and
+// then deliver seq 3 — no skip, no repeat, no spurious expiry.
+func TestGetProjectEvents_DuplicatesAppendedBetweenRequests(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}},
+		},
+	})
+	dupHist := func(hi int64) []map[string]any {
+		hist := make([]map[string]any, 0, hi)
+		for seq := int64(1); seq <= hi; seq++ {
+			hist = append(hist, map[string]any{
+				"ts": "2026-09-09T10:00:00Z", "from": "in_progress", "to": "in_progress",
+				"action": "progress", "actor": "worker:a", "note": "step done", "seq": seq,
+			})
+		}
+		return hist
+	}
+	putTaskMeta(store, "", "t1", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "in_progress",
+		"history": dupHist(2),
+	})
+	h := newProjectTestHandler(t, store)
+
+	// Page 1 of a 2-event list: not the tail, so a cursor is issued.
+	resp := decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=1"))
+	if len(resp.Events) != 1 || resp.Events[0].Seq != 1 || resp.NextCursor == "" {
+		t.Fatalf("page1=%+v, want seq 1 + cursor", resp)
+	}
+	cursor := resp.NextCursor
+
+	// A content-identical duplicate (seq 3) lands while the client is
+	// between requests.
+	putTaskMeta(store, "", "t1", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "in_progress",
+		"history": dupHist(3),
+	})
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=1&cursor="+cursor))
+	if resp.CursorExpired || len(resp.Events) != 1 || resp.Events[0].Seq != 2 || resp.NextCursor == "" {
+		t.Fatalf("page2=%+v, want exactly seq 2 + cursor", resp)
+	}
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=1&cursor="+resp.NextCursor))
+	if resp.CursorExpired || len(resp.Events) != 1 || resp.Events[0].Seq != 3 || resp.NextCursor != "" {
+		t.Fatalf("page3=%+v, want exactly seq 3 (the between-request duplicate) + tail reached", resp)
+	}
+}
+
+// TestGetProjectEvents_LegacyCursorVersionExpires: a well-formed cursor in
+// the pre-seq content-tuple format (no version field) must not be matched
+// ambiguously against seq-less legacy entries — it answers
+// cursor_expired and forces a clean re-fetch instead of guessing an
+// occurrence direction.
+func TestGetProjectEvents_LegacyCursorVersionExpires(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}},
+		},
+	})
+	putTaskMeta(store, "", "t1", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "in_progress",
+		"history": []map[string]any{
+			{"ts": "2026-09-09T10:00:00Z", "from": "planned", "to": "prepared", "action": "delegate_task", "actor": "leader:default"},
+		},
+	})
+	h := newProjectTestHandler(t, store)
+
+	legacy := base64.RawURLEncoding.EncodeToString([]byte(`{"ts":"2026-09-09T10:00:00Z","task_id":"t1","from":"planned","to":"prepared","actor":"leader:default","action":"delegate_task","note":""}`))
+	resp := decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?cursor="+legacy))
+	if !resp.CursorExpired || len(resp.Events) != 0 || resp.NextCursor != "" {
+		t.Fatalf("legacy cursor=%+v, want cursor_expired + empty page", resp)
+	}
+	// After the reset the client re-fetches from the start.
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events"))
+	if resp.CursorExpired || len(resp.Events) != 1 {
+		t.Fatalf("refetch=%+v, want the retained event", resp)
+	}
+}
+
+// TestGetProjectEvents_LegacyDuplicatesStillPaginate: seq-less legacy
+// entries that are content-identical in one second share the identity
+// (ts, task_id, seq=0). Three of them with limit=1 must still paginate
+// to completion: every page delivers exactly one new event, every
+// issued cursor strictly advances (never re-issued), the walk
+// terminates at the tail, and all three duplicates are delivered
+// exactly once — no silent skip, no infinite loop.
+func TestGetProjectEvents_LegacyDuplicatesStillPaginate(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}},
+		},
+	})
+	putTaskMeta(store, "", "t1", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "in_progress",
+		"history": []map[string]any{
+			{"ts": "2026-09-09T10:00:00Z", "from": "in_progress", "to": "in_progress", "action": "progress", "actor": "worker:a", "note": "done"},
+			{"ts": "2026-09-09T10:00:00Z", "from": "in_progress", "to": "in_progress", "action": "progress", "actor": "worker:a", "note": "done"},
+			{"ts": "2026-09-09T10:00:00Z", "from": "in_progress", "to": "in_progress", "action": "progress", "actor": "worker:a", "note": "done"},
+		},
+	})
+	h := newProjectTestHandler(t, store)
+
+	seen := 0
+	cursors := map[string]bool{}
+	cursor := ""
+	for page := 1; page <= 5; page++ {
+		q := "/api/v1/projects/p1/events?limit=1"
+		if cursor != "" {
+			q += "&cursor=" + cursor
+		}
+		resp := decodeEvents(t, doGetProjectEvents(t, h, q))
+		if resp.CursorExpired {
+			t.Fatalf("page%d: unexpected cursor_expired: %+v", page, resp)
+		}
+		if len(resp.Events) != 1 {
+			t.Fatalf("page%d=%+v, want exactly 1 event (no skip, no repeat)", page, resp)
+		}
+		seen++
+		if resp.NextCursor == "" {
+			break // tail reached
+		}
+		if cursors[resp.NextCursor] {
+			t.Fatalf("page%d: non-advancing cursor %q already issued", page, resp.NextCursor)
+		}
+		cursors[resp.NextCursor] = true
+		cursor = resp.NextCursor
+	}
+	if seen != 3 {
+		t.Fatalf("walk stopped after %d events of 3 (infinite loop or silent skip)", seen)
+	}
+}
+
+// TestGetProjectEvents_LegacyDuplicatesSnapshotTruncationExpires: a
+// cursor anchored inside a seq-less duplicate group carries the list
+// length as a snapshot marker. When the writer's cap later truncates
+// the list (oldest first), the occurrence index may no longer name the
+// anchored event, so the endpoint answers cursor_expired — an explicit
+// reset — instead of resuming at a shifted position and silently
+// skipping an unread duplicate.
+func TestGetProjectEvents_LegacyDuplicatesSnapshotTruncationExpires(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}},
+		},
+	})
+	legacyEntry := func() map[string]any {
+		return map[string]any{
+			"ts": "2026-09-09T10:00:00Z", "from": "in_progress", "to": "in_progress",
+			"action": "progress", "actor": "worker:a", "note": "done",
+		}
+	}
+	hist3 := []map[string]any{legacyEntry(), legacyEntry(), legacyEntry()}
+	putTaskMeta(store, "", "t1", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "in_progress",
+		"history": hist3,
+	})
+	h := newProjectTestHandler(t, store)
+
+	// Page 1 of a 3-event list: entry 1 + a snapshot-marked cursor.
+	resp := decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=1"))
+	if resp.CursorExpired || len(resp.Events) != 1 || resp.NextCursor == "" {
+		t.Fatalf("page1=%+v, want 1 event + cursor", resp)
+	}
+	cursor := resp.NextCursor
+
+	// The cap drops the oldest entry while the client is between
+	// requests: the list now holds 2 of the 3 duplicates (len 2 < 3).
+	putTaskMeta(store, "", "t1", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "in_progress",
+		"history": []map[string]any{legacyEntry(), legacyEntry()},
+	})
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=1&cursor="+cursor))
+	if !resp.CursorExpired || len(resp.Events) != 0 || resp.NextCursor != "" {
+		t.Fatalf("page2=%+v, want cursor_expired + empty page (explicit reset)", resp)
+	}
+
+	// After the reset the client re-fetches from the start and still
+	// paginates the retained duplicates to the tail.
+	seen := 0
+	c := ""
+	for page := 1; page <= 5; page++ {
+		q := "/api/v1/projects/p1/events?limit=1"
+		if c != "" {
+			q += "&cursor=" + c
+		}
+		r := decodeEvents(t, doGetProjectEvents(t, h, q))
+		if r.CursorExpired || len(r.Events) != 1 {
+			t.Fatalf("refetch page%d=%+v, want 1 event", page, r)
+		}
+		seen++
+		if r.NextCursor == "" {
+			break
+		}
+		c = r.NextCursor
+	}
+	if seen != 2 {
+		t.Fatalf("refetch delivered %d events, want the 2 retained duplicates", seen)
+	}
+}
+
+func TestGetProjectEvents_EmptyProject(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "planned", "depends_on": []string{}},
+		},
+	})
+	// No task meta at all: the project exists, the timeline is empty.
+	h := newProjectTestHandler(t, store)
+	rec := doGetProjectEvents(t, h, "/api/v1/projects/p1/events")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp projectEventsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Events == nil || len(resp.Events) != 0 || resp.NextCursor != "" {
+		t.Fatalf("resp=%+v, want empty events list", resp)
+	}
+}
+
+func TestGetProjectEvents_UnknownProject404(t *testing.T) {
+	store := ossfake.NewMemory()
+	h := newProjectTestHandler(t, store)
+	rec := doGetProjectEvents(t, h, "/api/v1/projects/missing/events")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404 for unknown project", rec.Code)
+	}
+}
+
+func TestGetProjectEvents_CrossTeamDenied(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "teams/beta-team/shared/projects/p2/meta.json", map[string]any{
+		"project_id": "p2", "title": "Beta", "status": "active", "plan_type": "dag", "team_id": "beta-team",
+	})
+	putTaskMeta(store, "beta-team", "t1", map[string]any{
+		"task_id": "t1", "project_id": "p2", "status": "in_progress",
+		"history": []map[string]any{
+			{"ts": "2026-09-09T10:00:00Z", "from": "planned", "to": "prepared", "action": "delegate_task", "actor": "leader:default"},
+		},
+	})
+	h := newProjectTestHandler(t, store, team("beta-team"))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p2/events", nil)
+	req.SetPathValue("id", "p2")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team"})
+	rec := httptest.NewRecorder()
+	h.GetProjectEvents(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404 for cross-team access (W4: hide existence)", rec.Code)
+	}
+}
+
+func TestGetProjectEvents_CrossScopeNoFallback(t *testing.T) {
+	// A team project whose task meta exists ONLY in the global scope must
+	// not leak it (same rule as readTasksDetail): the timeline stays empty.
+	store := ossfake.NewMemory()
+	putProject(store, "teams/alpha-team/shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "Alpha", "status": "active", "plan_type": "dag", "team_id": "alpha-team",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}},
+		},
+	})
+	putTaskMeta(store, "", "t1", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "in_progress",
+		"history": []map[string]any{
+			{"ts": "2026-09-09T10:00:00Z", "from": "planned", "to": "prepared", "action": "delegate_task", "actor": "leader:default"},
+		},
+	})
+	h := newProjectTestHandler(t, store, team("alpha-team"))
+	rec := doGetProjectEvents(t, h, "/api/v1/projects/p1/events")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	resp := decodeEvents(t, rec)
+	if len(resp.Events) != 0 {
+		t.Fatalf("events=%+v, want none (global-scope meta must not leak into a team project)", resp.Events)
+	}
+}
+
+func TestCancelTask_LeavesHistoryTrace(t *testing.T) {
+	store := ossfake.NewMemory()
+	// Team-scoped project: a team leader of the owning team may cancel it,
+	// and authzActor renders leaders as "username (role)".
+	putProject(store, "teams/alpha-team/shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag", "team_id": "alpha-team",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}},
+		},
+	})
+	putTaskMeta(store, "alpha-team", "t1", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "in_progress",
+		"history": []map[string]any{
+			{"ts": "2026-09-09T10:00:05Z", "from": "assigned", "to": "in_progress", "action": "ack_task", "actor": "worker:a"},
+		},
+	})
+	h := newProjectTestHandler(t, store, team("alpha-team"))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel", strings.NewReader(`{"reason":"scope changed"}`))
+	req.SetPathValue("id", "p1")
+	req.SetPathValue("taskId", "t1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team"})
+	rec := httptest.NewRecorder()
+	h.CancelTask(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	taskData, _ := store.GetObject(context.Background(), "teams/alpha-team/shared/tasks/t1/meta.json")
+	var task map[string]any
+	_ = json.Unmarshal(taskData, &task)
+	hist, _ := task["history"].([]any)
+	if len(hist) != 2 {
+		t.Fatalf("history=%v, want the ack entry + the cancel entry", task["history"])
+	}
+	last, _ := hist[1].(map[string]any)
+	if last["from"] != "in_progress" || last["to"] != "cancelled" || last["action"] != "cancel_task" {
+		t.Fatalf("cancel entry=%v", last)
+	}
+	// Team leader caller: actor is "username (role)".
+	if last["actor"] != "alpha-lead (team-leader)" {
+		t.Fatalf("cancel actor=%v, want authzActor format", last["actor"])
+	}
+	if last["note"] != "scope changed" {
+		t.Fatalf("cancel note=%v, want the reason", last["note"])
+	}
+	cancelledAt, _ := task["cancelled_at"].(string)
+	if last["ts"] != cancelledAt {
+		t.Fatalf("cancel ts=%v, want cancelled_at=%v", last["ts"], cancelledAt)
+	}
+
+	// Retry-convergence: the second cancel must not append a second entry.
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/cancel", strings.NewReader(`{"reason":"scope changed"}`))
+	req2.SetPathValue("id", "p1")
+	req2.SetPathValue("taskId", "t1")
+	req2 = withCaller(req2, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team"})
+	rec2 := httptest.NewRecorder()
+	h.CancelTask(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("retry status=%d body=%s", rec2.Code, rec2.Body.String())
+	}
+	taskData2, _ := store.GetObject(context.Background(), "teams/alpha-team/shared/tasks/t1/meta.json")
+	var task2 map[string]any
+	_ = json.Unmarshal(taskData2, &task2)
+	hist2, _ := task2["history"].([]any)
+	if len(hist2) != 2 {
+		t.Fatalf("history after retry=%v, want unchanged (no no-op entry)", task2["history"])
+	}
+}
+
+// --- INT-8: projection freshness (projection_age_ms / is_stale / ?consistency=strong) ---
+
+// freshnessScriptedOSS wraps mcLikeOSS to (a) override the StatMeta mtime
+// per key, (b) count GetObject calls per key, and (c) push a newer object
+// into the underlying store at a scripted StatMeta call — simulating a
+// filesync mirror advance landing between the two stats of a
+// strong-consistency read so the re-read observes the new version.
+type freshnessScriptedOSS struct {
+	*mcLikeOSS
+	statOverrides map[string]time.Time
+	getCounts     map[string]int
+	advanceKey    string
+	advanceData   []byte
+	advanceAt     int // 1-based: fire on this Nth StatMeta call for advanceKey
+	// races + advanceDataRace model a mirror advance landing between the
+	// re-read GetObject and its verifying stat: after every non-first
+	// successful GetObject of advanceKey, put advanceDataRace (or
+	// advanceData when unset) into the store.
+	races           bool
+	advanceDataRace []byte
+	// failReGet fails the second and subsequent GetObject calls — the
+	// bounded re-read — to model a re-read storage failure.
+	failReGet bool
+}
+
+func (f *freshnessScriptedOSS) GetObject(ctx context.Context, key string) ([]byte, error) {
+	f.getCounts[key]++
+	if f.failReGet && f.getCounts[key] > 1 {
+		return nil, errors.New("oss re-read failed (scripted)")
+	}
+	data, err := f.mcLikeOSS.GetObject(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if f.races && key == f.advanceKey && f.getCounts[key] > 1 {
+		race := f.advanceDataRace
+		if len(race) == 0 {
+			race = f.advanceData
+		}
+		if err := f.Memory.PutObject(ctx, f.advanceKey, race); err != nil {
+			return nil, err
+		}
+	}
+	return data, nil
+}
+
+func (f *freshnessScriptedOSS) StatMeta(ctx context.Context, key string) (oss.ObjectMeta, error) {
+	if key == f.advanceKey && f.advanceAt > 0 {
+		f.advanceAt--
+		if f.advanceAt == 0 {
+			if err := f.Memory.PutObject(ctx, f.advanceKey, f.advanceData); err != nil {
+				return oss.ObjectMeta{}, err
+			}
+		}
+	}
+	if tm, ok := f.statOverrides[key]; ok {
+		base, err := f.Memory.StatMeta(ctx, key)
+		if err != nil {
+			return oss.ObjectMeta{}, err
+		}
+		base.ModTime = tm
+		return base, nil
+	}
+	return f.Memory.StatMeta(ctx, key)
+}
+
+// TestWorkflowProjectionAgePresent covers INT-8 hard gate #13a: the default
+// workflow response carries projection_age_ms (int>=0) and is_stale (bool);
+// with the mirror mtimes 5s in the past the age is ~5000ms and not stale,
+// and the task-meta anchor path is exercised via includeTasks.
+func TestWorkflowProjectionAgePresent(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active",
+		"plan_type": "dag",
+		"tasks":     []any{map[string]any{"task_id": "t1", "status": "planned"}},
+	})
+	putProject(store, "shared/tasks/t1/meta.json", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "planned",
+	})
+	anchor := time.Now().Add(-5 * time.Second)
+	h := newProjectTestHandlerWithOSS(t, &freshnessScriptedOSS{
+		mcLikeOSS: &mcLikeOSS{Memory: store},
+		statOverrides: map[string]time.Time{
+			"shared/projects/p1/meta.json": anchor,
+			"shared/tasks/t1/meta.json":    anchor,
+		},
+		getCounts: map[string]int{},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/workflow?includeTasks=true", nil)
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetProjectWorkflow(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response not JSON: %v", err)
+	}
+	age, ok := body["projection_age_ms"].(float64)
+	if !ok {
+		t.Fatalf("projection_age_ms missing or not a number: %v", body["projection_age_ms"])
+	}
+	if age < 4500 || age > 6000 {
+		t.Fatalf("projection_age_ms = %v, want ~5000 (anchors 5s old)", age)
+	}
+	if stale, _ := body["is_stale"].(bool); stale {
+		t.Fatalf("is_stale = true, want false (age < 30000ms default threshold)")
+	}
+	detail, _ := body["tasks_detail"].([]any)
+	if len(detail) != 1 {
+		t.Fatalf("tasks_detail len = %d, want 1 (task anchor path exercised)", len(detail))
+	}
+}
+
+// TestWorkflowStaleThreshold covers the PROJECTION_STALE_MS env override in
+// both directions: a 60s-old mirror is stale under the 30s default and fresh
+// under a 120s threshold.
+func TestWorkflowStaleThreshold(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+	})
+	old := time.Now().Add(-60 * time.Second)
+	h := newProjectTestHandlerWithOSS(t, &freshnessScriptedOSS{
+		mcLikeOSS:     &mcLikeOSS{Memory: store},
+		statOverrides: map[string]time.Time{"shared/projects/p1/meta.json": old},
+		getCounts:     map[string]int{},
+	})
+
+	mkReq := func() *http.Request {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/workflow", nil)
+		req.SetPathValue("id", "p1")
+		return withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	}
+
+	rec := httptest.NewRecorder()
+	h.GetProjectWorkflow(rec, mkReq())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("default: status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	age, _ := body["projection_age_ms"].(float64)
+	if age < 55000 || age > 70000 {
+		t.Fatalf("projection_age_ms = %v, want ~60000", age)
+	}
+	if stale, _ := body["is_stale"].(bool); !stale {
+		t.Fatalf("is_stale = false under 30s default, want true (age ~60000)")
+	}
+
+	t.Setenv("PROJECTION_STALE_MS", "120000")
+	rec2 := httptest.NewRecorder()
+	h.GetProjectWorkflow(rec2, mkReq())
+	var body2 map[string]any
+	_ = json.Unmarshal(rec2.Body.Bytes(), &body2)
+	if stale, _ := body2["is_stale"].(bool); stale {
+		t.Fatalf("is_stale = true under 120000ms threshold, want false (age ~60000)")
+	}
+}
+
+// TestWorkflowStrongConsistencyReadsLatest covers INT-8 hard gate #13b: with
+// ?consistency=strong, a mirror advance landing between the anchor stat and
+// the re-stat is picked up — the response reflects the new version, carries
+// the X-Consistency: strong header, and the meta object was read twice.
+func TestWorkflowStrongConsistencyReadsLatest(t *testing.T) {
+	store := ossfake.NewMemory()
+	metaKey := "shared/projects/p1/meta.json"
+	v1, _ := json.Marshal(map[string]any{"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag"})
+	v2, _ := json.Marshal(map[string]any{"project_id": "p1", "title": "P1", "status": "paused", "plan_type": "dag"})
+	_ = store.PutObject(context.Background(), metaKey, v1)
+	getCounts := map[string]int{}
+	h := newProjectTestHandlerWithOSS(t, &freshnessScriptedOSS{
+		mcLikeOSS:   &mcLikeOSS{Memory: store},
+		getCounts:   getCounts,
+		advanceKey:  metaKey,
+		advanceData: v2,
+		advanceAt:   2, // stat#1 = anchor; stat#2 = strong re-stat → mirror advances
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/workflow?consistency=strong", nil)
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetProjectWorkflow(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response not JSON: %v", err)
+	}
+	if body["status"] != "paused" {
+		t.Fatalf("status = %v, want \"paused\" (strong read must pick up the advanced mirror)", body["status"])
+	}
+	if got := rec.Header().Get("X-Consistency"); got != "strong" {
+		t.Fatalf("X-Consistency = %q, want \"strong\"", got)
+	}
+	if n := getCounts[metaKey]; n != 2 {
+		t.Fatalf("meta GetObject count = %d, want 2 (double read)", n)
+	}
+}
+
+// TestWorkflowDefaultSingleRead locks the zero-behavior-change gate: without
+// ?consistency the meta object is read exactly once and no X-Consistency
+// header is emitted.
+func TestWorkflowDefaultSingleRead(t *testing.T) {
+	store := ossfake.NewMemory()
+	metaKey := "shared/projects/p1/meta.json"
+	putProject(store, metaKey, map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+	})
+	getCounts := map[string]int{}
+	h := newProjectTestHandlerWithOSS(t, &freshnessScriptedOSS{
+		mcLikeOSS: &mcLikeOSS{Memory: store},
+		getCounts: getCounts,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/workflow", nil)
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetProjectWorkflow(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if n := getCounts[metaKey]; n != 1 {
+		t.Fatalf("meta GetObject count = %d, want 1 (default must not double-read)", n)
+	}
+	if got := rec.Header().Get("X-Consistency"); got != "" {
+		t.Fatalf("X-Consistency = %q, want empty (default path unchanged)", got)
+	}
+}
+
+// TestWorkflowStrongInterleaveBeforeAnchor covers the round-2 advanceAt=1
+// repro: a mirror advance landing BETWEEN the content read (inside
+// resolveProjectMeta) and the anchor stat used to produce a 200 carrying
+// the stale status plus an unverified X-Consistency: strong. The anchor's
+// ETag no longer matches the read bytes, so the handler performs the bounded
+// re-read and sets the strong claim only once the re-read is verified
+// against storage — the response reflects the advanced version.
+func TestWorkflowStrongInterleaveBeforeAnchor(t *testing.T) {
+	store := ossfake.NewMemory()
+	metaKey := "shared/projects/p1/meta.json"
+	v1, _ := json.Marshal(map[string]any{"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag"})
+	v2, _ := json.Marshal(map[string]any{"project_id": "p1", "title": "P1", "status": "paused", "plan_type": "dag"})
+	_ = store.PutObject(context.Background(), metaKey, v1)
+	getCounts := map[string]int{}
+	h := newProjectTestHandlerWithOSS(t, &freshnessScriptedOSS{
+		mcLikeOSS:   &mcLikeOSS{Memory: store},
+		getCounts:   getCounts,
+		advanceKey:  metaKey,
+		advanceData: v2,
+		advanceAt:   1, // mirror advances on the FIRST stat — after the content read
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/workflow?consistency=strong", nil)
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetProjectWorkflow(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response not JSON: %v", err)
+	}
+	if body["status"] != "paused" {
+		t.Fatalf("status = %v, want \"paused\" (stale snapshot must not be served with a strong claim)", body["status"])
+	}
+	if got := rec.Header().Get("X-Consistency"); got != "strong" {
+		t.Fatalf("X-Consistency = %q, want \"strong\" (verified re-read)", got)
+	}
+	if n := getCounts[metaKey]; n != 2 {
+		t.Fatalf("meta GetObject count = %d, want 2 (read + bounded re-read)", n)
+	}
+}
+
+// TestWorkflowDefaultInterleaveBeforeAnchor: the default (non-strong) path's
+// freshness token is bound to the served snapshot too — a superseded anchor
+// triggers the same bounded re-read, so projection_age_ms never describes a
+// newer version than the content served. The no-race default path still
+// reads exactly once (TestWorkflowDefaultSingleRead).
+func TestWorkflowDefaultInterleaveBeforeAnchor(t *testing.T) {
+	store := ossfake.NewMemory()
+	metaKey := "shared/projects/p1/meta.json"
+	v1, _ := json.Marshal(map[string]any{"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag"})
+	v2, _ := json.Marshal(map[string]any{"project_id": "p1", "title": "P1", "status": "paused", "plan_type": "dag"})
+	_ = store.PutObject(context.Background(), metaKey, v1)
+	getCounts := map[string]int{}
+	h := newProjectTestHandlerWithOSS(t, &freshnessScriptedOSS{
+		mcLikeOSS:   &mcLikeOSS{Memory: store},
+		getCounts:   getCounts,
+		advanceKey:  metaKey,
+		advanceData: v2,
+		advanceAt:   1,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/workflow", nil)
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetProjectWorkflow(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response not JSON: %v", err)
+	}
+	if body["status"] != "paused" {
+		t.Fatalf("status = %v, want \"paused\" (superseded snapshot must be re-read)", body["status"])
+	}
+	if got := rec.Header().Get("X-Consistency"); got != "" {
+		t.Fatalf("X-Consistency = %q, want empty (default path never claims consistency)", got)
+	}
+	if n := getCounts[metaKey]; n != 2 {
+		t.Fatalf("meta GetObject count = %d, want 2 (read + bounded re-read)", n)
+	}
+}
+
+// TestWorkflowStrongRereadFailureNotStrong: when the mirror advance
+// invalidates the held snapshot and the bounded re-read FAILS, the response
+// still serves the content at hand (200) but must not claim
+// X-Consistency: strong — an unverified strong claim is exactly what the
+// round-2 review reproduced.
+func TestWorkflowStrongRereadFailureNotStrong(t *testing.T) {
+	store := ossfake.NewMemory()
+	metaKey := "shared/projects/p1/meta.json"
+	v1, _ := json.Marshal(map[string]any{"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag"})
+	v2, _ := json.Marshal(map[string]any{"project_id": "p1", "title": "P1", "status": "paused", "plan_type": "dag"})
+	_ = store.PutObject(context.Background(), metaKey, v1)
+	getCounts := map[string]int{}
+	h := newProjectTestHandlerWithOSS(t, &freshnessScriptedOSS{
+		mcLikeOSS:   &mcLikeOSS{Memory: store},
+		getCounts:   getCounts,
+		advanceKey:  metaKey,
+		advanceData: v2,
+		advanceAt:   1,    // advance invalidates the held snapshot → re-read ...
+		failReGet:   true, // ... which then fails
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/workflow?consistency=strong", nil)
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetProjectWorkflow(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response not JSON: %v", err)
+	}
+	if body["status"] != "active" {
+		t.Fatalf("status = %v, want \"active\" (content at hand is served on re-read failure)", body["status"])
+	}
+	if got := rec.Header().Get("X-Consistency"); got != "" {
+		t.Fatalf("X-Consistency = %q, want empty (a failed re-read must never be reported as strong)", got)
+	}
+	if n := getCounts[metaKey]; n != 2 {
+		t.Fatalf("meta GetObject count = %d, want 2 (read + failed re-read)", n)
+	}
+}
+
+// TestWorkflowStrongRereadRacesAdvance: a second mirror advance landing
+// between the re-read GetObject and its verifying stat is caught by the
+// post-read ETag check. The fresher re-read bytes are served (still better
+// than the superseded snapshot) but the strong claim is withdrawn — no
+// anchor can be bound to the re-read bytes.
+func TestWorkflowStrongRereadRacesAdvance(t *testing.T) {
+	store := ossfake.NewMemory()
+	metaKey := "shared/projects/p1/meta.json"
+	v1, _ := json.Marshal(map[string]any{"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag"})
+	v2, _ := json.Marshal(map[string]any{"project_id": "p1", "title": "P1", "status": "paused", "plan_type": "dag"})
+	v3, _ := json.Marshal(map[string]any{"project_id": "p1", "title": "P1", "status": "cancelled", "plan_type": "dag"})
+	_ = store.PutObject(context.Background(), metaKey, v1)
+	getCounts := map[string]int{}
+	h := newProjectTestHandlerWithOSS(t, &freshnessScriptedOSS{
+		mcLikeOSS:       &mcLikeOSS{Memory: store},
+		getCounts:       getCounts,
+		advanceKey:      metaKey,
+		advanceData:     v2,
+		advanceAt:       1,    // first advance: invalidates the held snapshot → re-read
+		races:           true, // second advance: lands after the re-read GetObject
+		advanceDataRace: v3,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/workflow?consistency=strong", nil)
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+	rec := httptest.NewRecorder()
+	h.GetProjectWorkflow(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response not JSON: %v", err)
+	}
+	if body["status"] != "paused" {
+		t.Fatalf("status = %v, want \"paused\" (v2 re-read bytes served, not the superseded v1)", body["status"])
+	}
+	if got := rec.Header().Get("X-Consistency"); got != "" {
+		t.Fatalf("X-Consistency = %q, want empty (an advance racing the re-read must withdraw the claim)", got)
+	}
+}
+
+// TestGetProjectEvents_CursorBoundToKind: cursors are bound to the feed
+// they were issued from via the anchor's kind field. Same-feed paging
+// keeps working (and the issued cursor carries the feed's kind);
+// cross-feed reuse is rejected with 400 cursor_kind_mismatch in both
+// directions; a cursor issued before the kind field existed (format
+// upgrade) stays valid on the default feed but is rejected on the
+// control-action feed.
+func TestGetProjectEvents_CursorBoundToKind(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "shared/projects/p1/meta.json", map[string]any{
+		"project_id": "p1", "title": "P1", "status": "active", "plan_type": "dag",
+		"tasks": []map[string]any{
+			{"task_id": "t1", "title": "T1", "status": "in_progress", "depends_on": []string{}},
+		},
+		"controlActions": []map[string]any{
+			{"action_id": "a1", "project_id": "p1", "action": "pause", "actor": "admin", "role": "admin", "at": "2026-09-09T09:00:00Z", "reason": "checkpoint", "result": "ok"},
+			{"action_id": "a2", "project_id": "p1", "action": "resume", "actor": "admin", "role": "admin", "at": "2026-09-09T09:00:01Z", "reason": "continue", "result": "ok"},
+		},
+	})
+	putTaskMeta(store, "", "t1", map[string]any{
+		"task_id": "t1", "project_id": "p1", "status": "in_progress",
+		"history": []map[string]any{
+			{"ts": "2026-09-09T10:00:00Z", "from": "planned", "to": "prepared", "action": "delegate_task", "actor": "leader:default"},
+			{"ts": "2026-09-09T10:00:01Z", "from": "prepared", "to": "assigned", "action": "delegate_task", "actor": "leader:default"},
+		},
+	})
+	h := newProjectTestHandler(t, store)
+
+	decodeCursor := func(cursor string) eventsCursorAnchor {
+		b, err := base64.RawURLEncoding.DecodeString(cursor)
+		if err != nil {
+			t.Fatalf("decode cursor: %v (cursor=%s)", err, cursor)
+		}
+		var a eventsCursorAnchor
+		if err := json.Unmarshal(b, &a); err != nil {
+			t.Fatalf("decode anchor: %v (cursor=%s)", err, cursor)
+		}
+		return a
+	}
+	wantMismatch := func(q string) {
+		rec := doGetProjectEvents(t, h, q)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: status=%d body=%s, want 400", q, rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), "cursor_kind_mismatch") {
+			t.Fatalf("%s: body=%s, want cursor_kind_mismatch", q, rec.Body.String())
+		}
+	}
+
+	// 1. Same kind (control_action): paging works, and the issued
+	//    cursor carries the feed's kind.
+	resp := decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?kind=control_action&limit=1"))
+	if resp.CursorExpired || len(resp.Events) != 1 || resp.NextCursor == "" {
+		t.Fatalf("ctrl page1=%+v, want 1 control event + cursor", resp)
+	}
+	if resp.Events[0].Action != "control.pause" || resp.Events[0].Actor != "admin" {
+		t.Fatalf("ctrl page1[0]=%+v, want admin control.pause", resp.Events[0])
+	}
+	ctrlCursor := resp.NextCursor
+	if a := decodeCursor(ctrlCursor); a.Kind != "control_action" {
+		t.Fatalf("issued ctrl cursor kind=%q, want control_action", a.Kind)
+	}
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?kind=control_action&limit=1&cursor="+ctrlCursor))
+	if resp.CursorExpired || len(resp.Events) != 1 || resp.NextCursor != "" || resp.Events[0].Action != "control.resume" {
+		t.Fatalf("ctrl page2=%+v, want control.resume + exhausted cursor", resp)
+	}
+
+	// 2. Cross-feed: a control_action cursor on the default feed.
+	wantMismatch("/api/v1/projects/p1/events?cursor=" + ctrlCursor)
+
+	// 3. Cross-feed, the other way: a default-feed cursor on the
+	//    control-action feed (its kind decodes to empty).
+	resp = decodeEvents(t, doGetProjectEvents(t, h, "/api/v1/projects/p1/events?limit=1"))
+	if resp.CursorExpired || len(resp.Events) != 1 || resp.NextCursor == "" {
+		t.Fatalf("default page1=%+v, want 1 event + cursor", resp)
+	}
+	if a := decodeCursor(resp.NextCursor); a.Kind != "" {
+		t.Fatalf("issued default cursor kind=%q, want empty (default feed)", a.Kind)
+	}
+	wantMismatch("/api/v1/projects/p1/events?kind=control_action&cursor=" + resp.NextCursor)
+
+	// 4. Pre-kind (old format) cursor — no kind field: rejected for a
+	//    non-empty kind, still admitted on the default feed (the format
+	//    upgrade is one-way).
+	old := base64.RawURLEncoding.EncodeToString([]byte(`{"v":1,"ts":"2026-09-09T09:00:00Z","task_id":"","seq":0}`))
+	wantMismatch("/api/v1/projects/p1/events?kind=control_action&cursor=" + old)
+	rec := doGetProjectEvents(t, h, "/api/v1/projects/p1/events?cursor="+old)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("old cursor on default feed status=%d body=%s, want 200 (kind check passed)", rec.Code, rec.Body.String())
+	}
+}
+
+// =====================================================================
+// #1402: project writes must preserve the loop pause veto
+// =====================================================================
+
+// vetoLoopMeta is the loop block the #1402 tests seed: the human veto
+// (pause_sources) plus an unknown forward-compat key — both must survive
+// every project write (the defect class: the next field added to the loop
+// block must not be silently dropped by a project write).
+func vetoLoopMeta() map[string]any {
+	return map[string]any{
+		"goal":              "g",
+		"stop_condition":    "s",
+		"current_iteration": 1,
+		"max_iterations":    5,
+		"status":            "running",
+		"pause_sources":     []string{"user"},
+		"x_future":          "keep-me",
+	}
+}
+
+// storedLoop reads back the persisted project meta and returns its loop block.
+func storedLoop(t *testing.T, store *ossfake.Memory, key string) map[string]any {
+	t.Helper()
+	data, err := store.GetObject(context.Background(), key)
+	if err != nil {
+		t.Fatalf("read back %s: %v", key, err)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(data, &meta); err != nil {
+		t.Fatalf("decode %s: %v", key, err)
+	}
+	loop, ok := meta["loop"].(map[string]any)
+	if !ok {
+		t.Fatalf("stored meta has no loop block: %s", data)
+	}
+	return loop
+}
+
+func assertLoopVetoIntact(t *testing.T, loop map[string]any) {
+	t.Helper()
+	sources, ok := loop["pause_sources"].([]any)
+	if !ok || len(sources) != 1 || sources[0] != "user" {
+		t.Fatalf("pause_sources=%v, want [user] (veto dropped by project write)", loop["pause_sources"])
+	}
+	if loop["x_future"] != "keep-me" {
+		t.Fatalf("x_future=%v, want keep-me (unknown loop key dropped by project write)", loop["x_future"])
+	}
+}
+
+func sameSet(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	g := append([]string(nil), got...)
+	w := append([]string(nil), want...)
+	sort.Strings(g)
+	sort.Strings(w)
+	for i := range g {
+		if g[i] != w[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestResumeProjectPreservesLoopPauseSources is the maintainer's #1402
+// reproduction: a paused project seeded with loop.pause_sources=["user"]
+// is resumed by a Manager. The project becomes active, but the veto must
+// survive the write — pre-fix, the typed loopMeta dropped pause_sources,
+// so the worker-side _loop_pause_state saw (False, []) and dispatch
+// proceeded, bypassing the admin-only user release.
+func TestResumeProjectPreservesLoopPauseSources(t *testing.T) {
+	key := "teams/alpha-team/shared/projects/p1/meta.json"
+	store := ossfake.NewMemory()
+	putProject(store, key, map[string]any{
+		"project_id": "p1", "title": "P1", "status": "paused", "plan_type": "loop", "team_id": "alpha-team",
+		"tasks": []map[string]any{},
+		"loop":  vetoLoopMeta(),
+	})
+	h := newProjectTestHandler(t, store, team("alpha-team"))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/resume", nil)
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "manager"})
+	rec := httptest.NewRecorder()
+	h.ResumeProject(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var wf workflowResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &wf); err != nil {
+		t.Fatalf("decode workflow response: %v", err)
+	}
+	if wf.Status != "active" {
+		t.Fatalf("status=%q, want active", wf.Status)
+	}
+	assertLoopVetoIntact(t, storedLoop(t, store, key))
+}
+
+// TestStoredMetaKeepsTheVetoForThePythonGate feeds the exact bytes the
+// controller persists through the real worker-side gate (_loop_pause_state
+// in plugins/teamharness/mcp/project/state.py) — the component that
+// actually blocks dispatch. It runs the maintainer's reproduction command
+// against the seed and the post-resume stored bytes:
+//
+//	python3 -c "import json,sys; sys.path.insert(0,'plugins/teamharness/mcp'); \
+//	  from project.state import _loop_pause_state; \
+//	  print(_loop_pause_state(json.load(open(sys.argv[1]))))" <meta.json>
+//
+// The seed (status=paused + user veto) yields (True, ['project', 'user'])
+// — the maintainer's tuple. The post-resume bytes (status=active + user
+// veto) must yield (True, ['user']): still paused for dispatch, veto
+// intact. Pre-fix, the same post-resume bytes yielded (False, []) — the
+// bypass.
+func TestStoredMetaKeepsTheVetoForThePythonGate(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 not available; the worker-side gate check needs the interpreter")
+	}
+	root := findRepoRoot(t)
+
+	gate := func(data []byte) (bool, []string) {
+		t.Helper()
+		tmp := filepath.Join(t.TempDir(), "meta.json")
+		if err := os.WriteFile(tmp, data, 0o644); err != nil {
+			t.Fatalf("write temp meta: %v", err)
+		}
+		cmd := exec.Command(python, "-c",
+			"import json,sys; sys.path.insert(0,'plugins/teamharness'); sys.path.insert(0,'plugins/teamharness/mcp'); from project.state import _loop_pause_state; print(_loop_pause_state(json.load(open(sys.argv[1]))))",
+			tmp)
+		cmd.Dir = root
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("worker-side gate failed: %v\n%s", err, out)
+		}
+		return parseLoopPauseState(t, string(out))
+	}
+
+	key := "teams/alpha-team/shared/projects/p1/meta.json"
+	store := ossfake.NewMemory()
+	putProject(store, key, map[string]any{
+		"project_id": "p1", "title": "P1", "status": "paused", "plan_type": "loop", "team_id": "alpha-team",
+		"tasks": []map[string]any{},
+		"loop":  vetoLoopMeta(),
+	})
+	h := newProjectTestHandler(t, store, team("alpha-team"))
+
+	seed, err := store.GetObject(context.Background(), key)
+	if err != nil {
+		t.Fatalf("read seed: %v", err)
+	}
+	if paused, sources := gate(seed); !paused || !sameSet(sources, []string{"project", "user"}) {
+		t.Fatalf("seed gate=(%v, %v), want (True, {project user}) order-insensitive", paused, sources)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/resume", nil)
+	req.SetPathValue("id", "p1")
+	req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "manager"})
+	rec := httptest.NewRecorder()
+	h.ResumeProject(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("resume status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+
+	after, err := store.GetObject(context.Background(), key)
+	if err != nil {
+		t.Fatalf("read post-resume meta: %v", err)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(after, &meta); err != nil {
+		t.Fatalf("decode post-resume meta: %v", err)
+	}
+	if meta["status"] != "active" {
+		t.Fatalf("post-resume status=%v, want active", meta["status"])
+	}
+	if paused, sources := gate(after); !paused || !sameSet(sources, []string{"user"}) {
+		t.Fatalf("post-resume gate=(%v, %v), want (True, [user]) — the veto must survive the project resume", paused, sources)
+	}
+}
+
+// findRepoRoot walks up from the test working directory to the repository
+// root (the directory containing plugins/teamharness/mcp/project/state.py).
+func findRepoRoot(t *testing.T) string {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	dir := wd
+	for {
+		candidate := filepath.Join(dir, "plugins", "teamharness", "mcp", "project", "state.py")
+		if _, err := os.Stat(candidate); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Skipf("cannot locate plugins/teamharness/mcp/project/state.py above %s", wd)
+		}
+		dir = parent
+	}
+}
+
+// parseLoopPauseState parses the gate's printed tuple, e.g.
+// "(True, ['project', 'user'])", into (paused, sources). The sources
+// comparison is order-insensitive (sameSet on the caller side).
+func parseLoopPauseState(t *testing.T, out string) (bool, []string) {
+	t.Helper()
+	trimmed := strings.TrimSpace(out)
+	if !strings.HasPrefix(trimmed, "(") || !strings.HasSuffix(trimmed, ")") {
+		t.Fatalf("unexpected gate output: %q", out)
+	}
+	inner := trimmed[1 : len(trimmed)-1]
+	parts := strings.SplitN(inner, ",", 2)
+	if len(parts) != 2 {
+		t.Fatalf("unexpected gate output: %q", out)
+	}
+	paused := strings.TrimSpace(parts[0]) == "True"
+	list := strings.TrimSpace(parts[1])
+	if !strings.HasPrefix(list, "[") || !strings.HasSuffix(list, "]") {
+		t.Fatalf("unexpected gate output: %q", out)
+	}
+	inside := strings.TrimSpace(list[1 : len(list)-1])
+	var sources []string
+	if inside != "" {
+		for _, s := range strings.Split(inside, ",") {
+			if s = strings.Trim(strings.TrimSpace(s), "'\""); s != "" {
+				sources = append(sources, s)
+			}
+		}
+	}
+	return paused, sources
+}
+
+// TestProjectWritePathsPreserveUnknownLoopKeys walks the project write
+// paths that touch a loop project (named per row) and asserts the loop
+// block survives with the veto and the unknown key intact. The replan row
+// documents that a REJECTED loop replan (409 by design) also writes its
+// audit entry without clobbering the loop block.
+func TestProjectWritePathsPreserveUnknownLoopKeys(t *testing.T) {
+	cases := []struct {
+		name             string
+		seedStatus       string
+		body             string
+		withLoopTasks    bool
+		wantCode         int
+		wantProjectState string
+	}{
+		{name: "pause", seedStatus: "active", wantCode: http.StatusOK, wantProjectState: "paused"},
+		{name: "resume", seedStatus: "paused", wantCode: http.StatusOK, wantProjectState: "active"},
+		{name: "complete", seedStatus: "active", withLoopTasks: true, wantCode: http.StatusOK, wantProjectState: "completed"},
+		{name: "replan", seedStatus: "active",
+			body:             `{"tasks":[{"taskId":"x","title":"X","assignedTo":"@w1"}]}`,
+			wantCode:         http.StatusConflict, // loop replan is rejected by design
+			wantProjectState: "active",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			key := "teams/alpha-team/shared/projects/p1/meta.json"
+			store := ossfake.NewMemory()
+			loop := vetoLoopMeta()
+			if tc.withLoopTasks {
+				// complete requires every loop task to be terminal
+				loop["tasks"] = []map[string]any{
+					{"task_id": "A", "title": "A", "assigned_to": "@w1", "depends_on": []string{}, "status": "completed"},
+				}
+			}
+			putProject(store, key, map[string]any{
+				"project_id": "p1", "title": "P1", "status": tc.seedStatus, "plan_type": "loop", "team_id": "alpha-team",
+				"tasks": []map[string]any{},
+				"loop":  loop,
+			})
+			h := newProjectTestHandler(t, store, team("alpha-team"))
+
+			path := map[string]string{"pause": "/pause", "resume": "/resume", "complete": "/complete", "replan": "/replan"}[tc.name]
+			var reqBody io.Reader
+			if tc.body != "" {
+				reqBody = strings.NewReader(tc.body)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1"+path, reqBody)
+			req.SetPathValue("id", "p1")
+			req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+			rec := httptest.NewRecorder()
+			switch tc.name {
+			case "pause":
+				h.PauseProject(rec, req)
+			case "resume":
+				h.ResumeProject(rec, req)
+			case "complete":
+				h.CompleteProject(rec, req)
+			case "replan":
+				h.ReplanProject(rec, req)
+			}
+			if rec.Code != tc.wantCode {
+				t.Fatalf("%s: status=%d body=%s, want %d", tc.name, rec.Code, rec.Body.String(), tc.wantCode)
+			}
+			loopBlock := storedLoop(t, store, key)
+			assertLoopVetoIntact(t, loopBlock)
+			data, err := store.GetObject(context.Background(), key)
+			if err != nil {
+				t.Fatalf("read back: %v", err)
+			}
+			var meta map[string]any
+			_ = json.Unmarshal(data, &meta)
+			if meta["status"] != tc.wantProjectState {
+				t.Fatalf("%s: project status=%v, want %s", tc.name, meta["status"], tc.wantProjectState)
+			}
+		})
+	}
+}
+
+// TestWorkflowNextEmptyWhileLoopVetoHeld guards the buildWorkflow side of
+// #1402: while the loop holds a pause source, next must be empty even on
+// an active project — mirroring _ready_loop_nodes, which checks the pause
+// state before computing ready nodes (the e2e assertion a fresh-process
+// delegate sees next == [] while blocked).
+func TestWorkflowNextEmptyWhileLoopVetoHeld(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		loop map[string]any
+		want []string
+	}{
+		{
+			name: "veto held",
+			loop: map[string]any{
+				"goal": "g", "stop_condition": "s", "current_iteration": 1, "max_iterations": 5, "status": "running",
+				"pause_sources": []string{"user"},
+				"tasks":         []map[string]any{{"task_id": "A", "title": "A", "assigned_to": "@w1", "depends_on": []string{}, "status": "planned"}},
+			},
+			want: nil,
+		},
+		{
+			name: "no veto (control)",
+			loop: map[string]any{
+				"goal": "g", "stop_condition": "s", "current_iteration": 1, "max_iterations": 5, "status": "running",
+				"tasks": []map[string]any{{"task_id": "A", "title": "A", "assigned_to": "@w1", "depends_on": []string{}, "status": "planned"}},
+			},
+			want: []string{"A"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := ossfake.NewMemory()
+			putProject(store, "shared/projects/p1/meta.json", map[string]any{
+				"project_id": "p1", "title": "P", "status": "active", "plan_type": "loop",
+				"tasks": []map[string]any{},
+				"loop":  tc.loop,
+			})
+			h := newProjectTestHandler(t, store)
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/workflow", nil)
+			req.SetPathValue("id", "p1")
+			req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"})
+			rec := httptest.NewRecorder()
+			h.GetProjectWorkflow(rec, req)
+
+			var wf workflowResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &wf); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if !sameSet(wf.Next, tc.want) {
+				t.Fatalf("next=%v, want %v", wf.Next, tc.want)
+			}
+		})
 	}
 }

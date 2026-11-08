@@ -3,6 +3,12 @@
 #
 # Usage:
 #   create-project.sh --id <PROJECT_ID> --title <TITLE> --workers <w1,w2,...>
+#   create-project.sh --id <PROJECT_ID> --title <TITLE> --team <TEAM> [--workers <w1,...>]
+#
+# --team expands to the Team's leader and all its workers, read from the
+# controller; --workers adds to that (union, each member once). --workers alone
+# is the member list exactly as given, so passing only a leader invites only
+# the leader.
 #
 # Prerequisites:
 #   - Worker SOUL.md files must already exist
@@ -14,18 +20,22 @@ source /opt/agentteams/scripts/lib/agentteams-env.sh
 PROJECT_ID=""
 PROJECT_TITLE=""
 WORKERS_CSV=""
+TEAM_NAME=""
+GRANT_ADMIN_CSV=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --id)      PROJECT_ID="$2"; shift 2 ;;
-        --title)   PROJECT_TITLE="$2"; shift 2 ;;
-        --workers) WORKERS_CSV="$2"; shift 2 ;;
+        --id)          PROJECT_ID="$2"; shift 2 ;;
+        --title)       PROJECT_TITLE="$2"; shift 2 ;;
+        --workers)     WORKERS_CSV="$2"; shift 2 ;;
+        --team)        TEAM_NAME="$2"; shift 2 ;;
+        --grant-admin) GRANT_ADMIN_CSV="$2"; shift 2 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
 
-if [ -z "${PROJECT_ID}" ] || [ -z "${PROJECT_TITLE}" ] || [ -z "${WORKERS_CSV}" ]; then
-    echo "Usage: create-project.sh --id <PROJECT_ID> --title <TITLE> --workers <w1,w2,...>"
+if [ -z "${PROJECT_ID}" ] || [ -z "${PROJECT_TITLE}" ] || { [ -z "${WORKERS_CSV}" ] && [ -z "${TEAM_NAME}" ]; }; then
+    echo "Usage: create-project.sh --id <PROJECT_ID> --title <TITLE> (--workers <w1,w2,...> | --team <TEAM> [--workers <w1,...>]) [--grant-admin <u1,u2,...>]"
     exit 1
 fi
 
@@ -36,6 +46,24 @@ _fail() {
     echo '{"error": "'"$1"'"}'
     exit 1
 }
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=project-members.sh
+source "${SCRIPT_DIR}/project-members.sh"
+
+# Resolve the member list before anything is created: a Team that cannot be
+# read stops here, not after a half-built project.
+if [ -n "${TEAM_NAME}" ]; then
+    TEAM_ROSTER=$(project_team_roster "${TEAM_NAME}" 2>&1) || _fail "${TEAM_ROSTER}"
+    TEAM_CSV=$(project_merge_members "$(printf '%s\n' "${TEAM_ROSTER}" | cut -f1 | paste -sd, -)")
+    log "Team ${TEAM_NAME} roster: ${TEAM_CSV}"
+    [ -z "${WORKERS_CSV}" ] || log "  plus --workers: ${WORKERS_CSV}"
+    WORKERS_CSV=$(project_merge_members "${TEAM_CSV}" "${WORKERS_CSV}")
+else
+    WORKERS_CSV=$(project_merge_members "${WORKERS_CSV}")
+fi
+[ -n "${WORKERS_CSV}" ] || _fail "No project members to invite"
+log "Project members: ${WORKERS_CSV}"
 
 # Ensure Manager Matrix token is available
 SECRETS_FILE="/data/agentteams-secrets.env"
@@ -107,6 +135,7 @@ log "Step 2: Creating Matrix project room..."
 # Build invite list and worker power level overrides (all workers → level 0)
 INVITE_LIST="[\"@${ADMIN_USER}:${MATRIX_DOMAIN}\""
 WORKER_POWER_LEVELS=""
+GRANT_ADMIN_LEVELS=""
 IFS=',' read -ra WORKER_ARR <<< "${WORKERS_CSV}"
 for worker in "${WORKER_ARR[@]}"; do
     worker=$(echo "${worker}" | tr -d ' ')
@@ -114,6 +143,27 @@ for worker in "${WORKER_ARR[@]}"; do
     INVITE_LIST="${INVITE_LIST},\"@${worker}:${MATRIX_DOMAIN}\""
     WORKER_POWER_LEVELS="${WORKER_POWER_LEVELS},\"@${worker}:${MATRIX_DOMAIN}\": 0"
 done
+# --grant-admin: extra users that should co-own the room (level 100) — e.g.
+# human operators who otherwise join at the implicit level 0 and 403 on room
+# operations (rename / invite). Accepts local parts or full Matrix IDs.
+GRANT_ADMIN_IDS=()
+if [ -n "${GRANT_ADMIN_CSV}" ]; then
+    IFS=',' read -ra GRANT_ARR <<< "${GRANT_ADMIN_CSV}"
+    for ga in "${GRANT_ARR[@]}"; do
+        ga=$(echo "${ga}" | tr -d ' ')
+        [ -z "${ga}" ] && continue
+        case "${ga}" in
+            @*:*) grant_id="${ga}" ;;
+            @*)   grant_id="@${ga#@}:${MATRIX_DOMAIN}" ;;
+            *)    grant_id="@${ga}:${MATRIX_DOMAIN}" ;;
+        esac
+        # The grant only takes effect once the user is in the room — invite
+        # them at creation time (a grant without membership is a no-op).
+        INVITE_LIST="${INVITE_LIST},\"${grant_id}\""
+        GRANT_ADMIN_LEVELS="${GRANT_ADMIN_LEVELS},\"${grant_id}\": 100"
+        GRANT_ADMIN_IDS+=("${grant_id}")
+    done
+fi
 INVITE_LIST="${INVITE_LIST}]"
 
 MANAGER_MATRIX_ID="@manager:${MATRIX_DOMAIN}"
@@ -129,7 +179,7 @@ ROOM_RESP=$(curl -sf -X POST ${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/createRo
         "power_level_content_override": {
             "users": {
                 "'"${MANAGER_MATRIX_ID}"'": 100,
-                "'"${ADMIN_MATRIX_ID}"'": 100'"${WORKER_POWER_LEVELS}"'
+                "'"${ADMIN_MATRIX_ID}"'": 100'"${WORKER_POWER_LEVELS}"''"${GRANT_ADMIN_LEVELS}"'
             }
         }
     }' 2>/dev/null) || _fail "Failed to create Matrix project room"
@@ -169,17 +219,73 @@ else
     log "  WARNING: Could not obtain admin token — admin will need to accept invite manually"
 fi
 
+# Per-worker auto-join outcome ledger (#1390). Rows are
+# "<worker>\t<status>\t<detail>" with status one of joined|pending|failed,
+# so the caller can surface a result instead of only a warning.
+WORKER_JOIN_STATUS_ROWS=""
+
+_record_worker_join() { # _record_worker_join <worker> <status> <detail>
+    WORKER_JOIN_STATUS_ROWS="${WORKER_JOIN_STATUS_ROWS}${1}"$'\t'"${2}"$'\t'"${3}"$'\n'
+}
+
+_worker_join_summary() { # prints "joined=N pending=N failed=N"
+    local joined=0 pending=0 failed=0 status
+    while IFS=$'\t' read -r _worker status _detail; do
+        case "${status}" in
+            joined) joined=$((joined + 1)) ;;
+            pending) pending=$((pending + 1)) ;;
+            failed) failed=$((failed + 1)) ;;
+        esac
+    done <<< "${WORKER_JOIN_STATUS_ROWS}"
+    printf 'joined=%s pending=%s failed=%s' "${joined}" "${pending}" "${failed}"
+}
+
+_write_worker_join_status() { # _write_worker_join_status <path>
+    local out="${1:-/tmp/agentteams-project-join-status.json}"
+    local tmp="${out}.tmp"
+    {
+        printf '{\n'
+        printf '  "room_id": %s,\n' "$(printf '%s' "${ROOM_ID}" | jq -R .)"
+        printf '  "generated_at": %s,\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ | jq -R .)"
+        printf '  "summary": %s,\n' "$(_worker_join_summary | jq -R .)"
+        printf '  "workers": [\n'
+        local first=1 worker status detail
+        while IFS=$'\t' read -r worker status detail; do
+            [ -z "${worker}" ] && continue
+            [ "${first}" -eq 1 ] || printf ',\n'
+            first=0
+            printf '    {"worker": %s, "status": %s, "detail": %s}' \
+                "$(printf '%s' "${worker}" | jq -R .)" \
+                "$(printf '%s' "${status}" | jq -R .)" \
+                "$(printf '%s' "${detail}" | jq -R .)"
+        done <<< "${WORKER_JOIN_STATUS_ROWS}"
+        printf '\n  ]\n}\n'
+    } > "${tmp}" && mv "${tmp}" "${out}" && log "  Worker join status written to ${out}"
+}
+
+# Returns 0 = joined, 2 = pending (no credentials/token), 3 = join failed.
+# The ledger above records the detail either way, so the caller can report
+# `joined/pending/failed` instead of relying on a log line alone (#1390).
 _worker_auto_join() {
     local worker="$1"
     local room_id="$2"
-    local creds_file="/data/worker-creds/${worker}.env"
+    # Controller credentials are keyed by the Worker CR; workspace passwords
+    # and Matrix login use its effective runtime name. Explicit --workers keep
+    # their existing runtime-name semantics.
+    local credential_name="${worker}"
+    if [ -n "${TEAM_ROSTER:-}" ]; then
+        credential_name=$(printf '%s\n' "${TEAM_ROSTER}" | awk -F '\t' -v name="${worker}" '$1 == name {print $2; exit}')
+        credential_name="${credential_name:-${worker}}"
+    fi
+    local creds_file="/data/worker-creds/${credential_name}.env"
     local worker_token=""
     local room_enc=""
     local WORKER_PASSWORD=""
     local WORKER_MATRIX_TOKEN=""
 
     if [ -z "${worker}" ] || [ -z "${room_id}" ]; then
-        return 0
+        _record_worker_join "${worker:-?}" "pending" "invalid-arguments"
+        return 2
     fi
 
     if [ -f "${creds_file}" ]; then
@@ -205,35 +311,57 @@ _worker_auto_join() {
 
     if [ -z "${worker_token}" ]; then
         log "  WARNING: Could not obtain Matrix token for worker ${worker} — worker will need to accept project room invite"
-        return 0
+        _record_worker_join "${worker}" "pending" "no-credentials"
+        return 2
     fi
 
     room_enc=$(echo "${room_id}" | sed 's/!/%21/g')
-    if curl -sf -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${room_enc}/join" \
+    local join_http
+    join_http=$(curl -s -o /dev/null -w '%{http_code}' -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${room_enc}/join" \
         -H "Authorization: Bearer ${worker_token}" \
         -H 'Content-Type: application/json' \
-        -d '{}' > /dev/null 2>&1; then
-        log "  Worker ${worker} auto-joined project room"
-    else
-        log "  WARNING: Worker ${worker} failed to auto-join project room"
-    fi
+        -d '{}' 2>/dev/null || true)
+    case "${join_http}" in
+        200|201)
+            log "  Worker ${worker} auto-joined project room"
+            _record_worker_join "${worker}" "joined" "http-${join_http}"
+            return 0
+            ;;
+        *)
+            log "  WARNING: Worker ${worker} failed to auto-join project room (http ${join_http:-no-response})"
+            _record_worker_join "${worker}" "failed" "http-${join_http:-no-response}"
+            return 3
+            ;;
+    esac
 }
 
-_patch_manager_project_room_config() {
-    local config_path="$1"
-    local workers_json=""
-    [ -f "${config_path}" ] || return 0
-
-    workers_json=$(
+# Builds the project-room member list (workers + --grant-admin humans) as a
+# JSON array. Granted humans must be on the allowlists too: in allowlist
+# mode the Manager silently drops messages from users not listed, and the
+# room's human operators are exactly the --grant-admin users.
+_build_project_room_members_json() {
+    {
         for worker in "${WORKER_ARR[@]}"; do
             worker=$(echo "${worker}" | tr -d ' ')
             [ -z "${worker}" ] && continue
             echo "@${worker}:${MATRIX_DOMAIN}"
-        done | jq -R . | jq -s .
-    )
+        done
+        for uid in "${GRANT_ADMIN_IDS[@]}"; do
+            [ -z "${uid}" ] && continue
+            echo "${uid}"
+        done
+    } | jq -R . | jq -s .
+}
 
-    jq --arg room "${ROOM_ID}" --argjson workers "${workers_json}" \
-        ".channels.matrix.groupAllowFrom = ((.channels.matrix.groupAllowFrom // []) + \$workers | unique)
+_patch_manager_project_room_config() {
+    local config_path="$1"
+    local members_json=""
+    [ -f "${config_path}" ] || return 0
+
+    members_json=$(_build_project_room_members_json)
+
+    jq --arg room "${ROOM_ID}" --argjson members "${members_json}" \
+        ".channels.matrix.groupAllowFrom = ((.channels.matrix.groupAllowFrom // []) + \$members | unique)
          | .channels.matrix.groups = (.channels.matrix.groups // {})
          | .channels.matrix.groups[\$room] = {\"allow\": true, \"requireMention\": false, \"autoReply\": true}" \
         "${config_path}" > /tmp/project-manager-config.json
@@ -242,19 +370,13 @@ _patch_manager_project_room_config() {
 
 _patch_copaw_project_room_config() {
     local agent_json="${HOME}/.copaw/workspaces/default/agent.json"
-    local workers_json=""
+    local members_json=""
     [ -f "${agent_json}" ] || return 0
 
-    workers_json=$(
-        for worker in "${WORKER_ARR[@]}"; do
-            worker=$(echo "${worker}" | tr -d ' ')
-            [ -z "${worker}" ] && continue
-            echo "@${worker}:${MATRIX_DOMAIN}"
-        done | jq -R . | jq -s .
-    )
+    members_json=$(_build_project_room_members_json)
 
-    jq --arg room "${ROOM_ID}" --argjson workers "${workers_json}" \
-        ".channels.matrix.group_allow_from = ((.channels.matrix.group_allow_from // []) + \$workers | unique)
+    jq --arg room "${ROOM_ID}" --argjson members "${members_json}" \
+        ".channels.matrix.group_allow_from = ((.channels.matrix.group_allow_from // []) + \$members | unique)
          | .channels.matrix.groups = (.channels.matrix.groups // {})
          | .channels.matrix.groups[\$room] = {\"allow\": true, \"requireMention\": false, \"autoReply\": true}" \
         "${agent_json}" > /tmp/project-copaw-agent.json
@@ -264,8 +386,14 @@ _patch_copaw_project_room_config() {
 for worker in "${WORKER_ARR[@]}"; do
     worker=$(echo "${worker}" | tr -d ' ')
     [ -z "${worker}" ] && continue
-    _worker_auto_join "${worker}" "${ROOM_ID}"
+    # set -e is on: a pending/failed join must not abort room creation, so
+    # the per-worker outcome is recorded and reported instead (#1390).
+    _worker_auto_join "${worker}" "${ROOM_ID}" || true
 done
+if [ -n "${WORKER_JOIN_STATUS_ROWS}" ]; then
+    log "Worker auto-join: $(_worker_join_summary)"
+    _write_worker_join_status "${AGENTTEAMS_JOIN_STATUS_FILE:-/tmp/agentteams-project-join-status.json}"
+fi
 
 # ============================================================
 # Step 3: Add Workers to Manager's groupAllowFrom
@@ -303,12 +431,18 @@ RESULT=$(jq -n \
     --arg room_id "${ROOM_ID}" \
     --arg status "planning" \
     --arg workers "${WORKERS_CSV}" \
+    --arg joined "$(printf '%s' "${WORKER_JOIN_STATUS_ROWS}" | awk -F '\t' '$2 == "joined" {print $1}' | paste -sd, -)" \
+    --arg join_pending "$(printf '%s' "${WORKER_JOIN_STATUS_ROWS}" | awk -F '\t' '$2 == "pending" {print $1}' | paste -sd, -)" \
+    --arg join_failed "$(printf '%s' "${WORKER_JOIN_STATUS_ROWS}" | awk -F '\t' '$2 == "failed" {print $1}' | paste -sd, -)" \
     '{
         project_id: $id,
         title: $title,
         project_room_id: $room_id,
         status: $status,
-        workers: ($workers | split(","))
+        workers: ($workers | split(",")),
+        joined: ($joined | split(",") | map(select(. != ""))),
+        join_pending: ($join_pending | split(",") | map(select(. != ""))),
+        join_failed: ($join_failed | split(",") | map(select(. != "")))
     }')
 
 echo "---RESULT---"

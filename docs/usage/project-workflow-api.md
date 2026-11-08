@@ -74,11 +74,44 @@ Response `200 OK`:
 
 Return the LangGraph-aligned workflow for one project.
 
-Optional query parameter:
+Optional query parameters:
 
 | Parameter | Type | Meaning |
 |:--|:--|:--|
-| `includeTasks` | `bool` | When `true`, also read each task's TaskMeta (`shared/tasks/{id}/meta.json`) and attach a `tasks_detail` array with spec/result/deliverable fields. Default `false` keeps the response lightweight. |
+| `includeTasks` | `bool` | When `true`, also read each task's TaskMeta (`shared/tasks/{id}/meta.json`) and attach a `tasks_detail` array with spec/result/deliverable fields, the opaque `submission_id` fence, and the transition `history` audit trail (omitted for metas that predate it). Default `false` keeps the response lightweight. |
+| `format` | `string` | Response format. Default (absent or empty) returns the JSON snapshot above. `format=mermaid` returns the same snapshot rendered as a Mermaid flowchart (`text/plain`, no `tasks_detail` — rendering needs only nodes/edges/next). Any other value returns `400`. |
+
+Mermaid output (`?format=mermaid`) mirrors LangGraph's `draw_mermaid` helper: each node label is `name: status`, next/ready nodes get the `ready` highlight class, and every other node gets a status class (`pending` / `delegated` / `inProgress` / `completed` / `revision` / `blocked`). All classDefs are emitted so the graph renders standalone. Task titles and ids are user-controlled, so they are sanitized for mermaid safety: newlines become `<br>`, double quotes become `#quot;`, backslashes are dropped, and other control characters become spaces; a task id containing characters outside `[A-Za-z0-9_-]` is mapped to a collision-safe node id (labels keep the original text). A malformed title therefore can never alter the rendered graph structure. Example:
+
+```text
+flowchart LR
+    t1["Task 1: completed"]:::completed
+    t2["Task 2: delegated"]:::ready
+    t1 --> t2
+    classDef ready fill:#d4edda,stroke:#28a745;
+    ...
+```
+
+Each `tasks_detail[]` entry carries `history: []` — the task's auditable
+state transitions recorded by the TeamHarness transition engine, oldest
+first. Entry shape:
+
+```json
+{
+  "ts": "2026-09-09T10:00:05Z",
+  "from": "assigned",
+  "to": "in_progress",
+  "action": "ack_task",
+  "actor": "worker:default",
+  "note": ""
+}
+```
+
+`action` is one of `delegate_task`, `ack_task`, `submit_task`,
+`accept_task_result`, `cancel_task`, `progress`; `actor` is `role:account`
+(MCP transitions) or the authorization actor (controller cancellations).
+The allowed transitions are defined by the shared contract
+`plugins/teamharness/contracts/task-transitions.json`.
 
 Response `200 OK`:
 
@@ -124,6 +157,7 @@ Response `200 OK`:
       "assigned_to": "@w1:matrix.local",
       "summary": "Alpha report done",
       "result_status": "SUCCESS",
+      "submission_id": "submission-123",
       "deliverables": [{"type": "file", "path": "shared/tasks/t1/output.pdf"}],
       "result_path": "shared/tasks/t1/result.md"
     }
@@ -134,7 +168,8 @@ Response `200 OK`:
 `tasks_detail` is only present when `?includeTasks=true`. It surfaces the
 TaskMeta fields that the project-level `nodes[]` summary does not carry:
 `spec_path` (task spec file), `summary` / `result_status` / `result_path`
-(submission result), `deliverables` (artifact list) and `cancel_reason`.
+(submission result), `deliverables` (artifact list), `cancel_reason`, and the
+opaque `submission_id` used to fence accept/cancel decisions.
 TaskMeta is read from the project's owning scope only: team projects read
 `teams/{team}/shared/tasks/{id}/meta.json`, standalone projects read
 `shared/tasks/{id}/meta.json`. There is no cross-scope fallback, and a
@@ -171,6 +206,65 @@ Error responses:
 | `403` | Authenticated but the role cannot read projects at all (e.g. Worker). |
 | `404` | Project not found (no meta.json under any scanned prefix) — **or** the caller is a scoped reader (team leader / L2 human) who does not own the project (existence is hidden to prevent id enumeration). |
 | `500` | K8s or object-store failure. |
+
+### `GET /api/v1/projects/{id}/tasks/{taskId}`
+
+Node-level inspection for one task: aggregates the task's graph node (status,
+assignee, dependencies), its TaskMeta (spec/summary/result/deliverables), the
+append-only transition history, and a trace hint for deep-linking into a
+tracing backend.
+
+```text
+GET /api/v1/projects/{id}/tasks/{taskId}?team=alpha-team
+```
+
+Response `200 OK`:
+
+```json
+{
+  "task_id": "t1",
+  "project_id": "demo-project-001",
+  "status": "in-progress",
+  "spec_path": "shared/tasks/t1/spec.md",
+  "assigned_to": "@w1:matrix.local",
+  "summary": "Alpha report done",
+  "result_status": "SUCCESS",
+  "result_path": "shared/tasks/t1/result.md",
+  "deliverables": [{"type": "file", "path": "shared/tasks/t1/output.pdf"}],
+  "history": [
+    {"ts": "2026-09-05T01:00:00Z", "from": "", "to": "planned", "actor": "manager", "action": "create"},
+    {"ts": "2026-09-05T02:00:00Z", "from": "planned", "to": "in_progress", "actor": "w1", "action": "ack_task"},
+    {"ts": "2026-09-05T03:00:00Z", "from": "in_progress", "to": "submitted", "actor": "w1", "action": "submit_task"}
+  ],
+  "dependencies": [],
+  "trace": {"project_id": "demo-project-001", "task_id": "t1"}
+}
+```
+
+Field notes:
+
+- `submission_id`, when present in TaskMeta, is returned verbatim. Pass it as
+  `submissionId` when cancelling that submission.
+- `status` is the **raw** TaskMeta status when TaskMeta exists (same
+  semantics as `tasks_detail` with `?includeTasks=true`); when TaskMeta is
+  absent it falls back to the normalized graph-node status
+  (`pending | delegated | in-progress | completed | revision | blocked`).
+- `history` is populated by TeamHarness taskflow (and the controller's
+  cancel path) as an append-only audit of accepted transitions, capped at 50
+  entries; it is empty until the workflow transition engine lands
+  (design: agentscope-ai/AgentTeams#1223). Malformed entries are skipped,
+  never an error.
+- `trace` is a tracing-backend filter hint: its `project_id` / `task_id` are
+  the values to match against the span attributes `agentteams.project.id` /
+  `agentteams.task.id`, which worker entry spans already carry. No backend
+  URL is constructed here; the tracing backend is deployment-specific.
+- TaskMeta is read from the project's owning scope only (team prefix first,
+  global prefix only for standalone projects) — the same no-cross-scope
+  fallback rule as `tasks_detail`.
+
+Errors: `400` (missing/invalid task id), `404` (project not found —
+existence-hidden for scoped callers — or task not in this project's graph),
+`500` (storage read failure).
 
 ### `GET /api/v1/projects/{id}/tasks/{taskId}/artifact`
 
@@ -347,6 +441,283 @@ Error responses:
 | `404` | Project not found / caller does not own it (existence hidden) / session not owned by any team worker / `history.db` missing or unreadable. |
 | `500` | K8s or object-store failure. |
 
+### `GET /api/v1/projects/{id}/history`
+
+Returns the project's **intervention timeline** — the pre-intervention
+`meta.json` snapshots written by the lifecycle endpoints (see
+`POST /pause`, `POST /resume`, … below; each intervention snapshots the
+previous state into `history/{unixNano}.json`, retaining the most recent 50).
+
+Query parameters:
+
+| Param | Type | Default | Meaning |
+|:--|:--|:--|:--|
+| `team` | string | — | Optional team qualifier, same semantics as the other read endpoints. |
+
+Response:
+
+```json
+{
+  "project_id": "demo-project-001",
+  "snapshots": [
+    { "timestamp": "1723785123456789012" }
+  ]
+}
+```
+
+- `snapshots` is **newest first**. `timestamp` is the snapshot filename
+  (unix nanoseconds) and is kept as a **string** — 19-digit nanosecond
+  values exceed the JavaScript safe-integer range, so numeric transport
+  would silently lose precision.
+- An empty history returns `200` with `"snapshots": []`.
+
+### `GET /api/v1/projects/{id}/history/{timestamp}`
+
+Returns one snapshot's raw `meta.json` content **verbatim** (same schema as
+`GET /workflow`'s source). `timestamp` must be a 19-digit unixNano value;
+anything else is rejected `400` (this doubles as the traversal guard).
+
+Error responses:
+
+| Code | Meaning |
+|:--|:--|
+| `400` | Missing project id / malformed timestamp. |
+| `403` | Authenticated but the role cannot read projects at all (e.g. Worker). |
+| `404` | Project or snapshot not found / caller does not own it (existence hidden). |
+| `409` | Ambiguous project id across teams; retry with `?team=`. |
+| `500` | K8s or object-store failure. |
+
+### `GET /api/v1/projects/{id}/events`
+
+Returns the project's **task transition timeline** — a read-time
+aggregation of every task's `history` array (the same audit trail
+`?includeTasks=true` exposes per task), merged into one **ascending** list.
+No new storage: the endpoint reads the task metas on demand and does not
+add a write-side hook. Project-level intervention events are **not** part
+of this timeline — use `GET /history` for those; the two are
+complementary.
+
+Query parameters:
+
+| Param | Type | Default | Meaning |
+|:--|:--|:--|:--|
+| `team` | string | — | Optional team qualifier, same semantics as the other read endpoints. |
+| `limit` | int | `50` | Page size. Capped at `200`; values `< 1` are rejected `400`. |
+| `cursor` | string | — | Opaque cursor from a previous page's `next_cursor`; pass it back to continue. Encodes the page's last event identity (ts, task_id, seq), so it stays valid while new events are appended — and even while the per-task 50-entry history cap drops already-read events. For seq-less legacy events that share one second (the same identity), it additionally pins the event's position within that duplicate group, so paging always advances. |
+
+Response:
+
+```json
+{
+  "project_id": "demo-project-001",
+  "events": [
+    {
+      "ts": "2026-09-09T10:00:00Z",
+      "task_id": "t1",
+      "from": "planned",
+      "to": "prepared",
+      "action": "delegate_task",
+      "actor": "leader:default",
+      "seq": 1
+    },
+    {
+      "ts": "2026-09-09T10:00:05Z",
+      "task_id": "t1",
+      "from": "assigned",
+      "to": "in_progress",
+      "action": "ack_task",
+      "actor": "worker:default",
+      "note": "starting",
+      "seq": 2
+    }
+  ],
+  "next_cursor": "eyJ0cyI6IjIwMjYt..."
+}
+```
+
+- `events` is **oldest first**; the shared second-resolution timestamps are
+  tie-broken by `task_id`, and events sharing both keep the writer's append
+  order (`seq`), so paging is deterministic.
+- Every event carries `seq`, the writer-persisted per-task sequence number:
+  the stable event identity. Timestamps are second-resolution and repeated
+  progress entries are allowed, so content alone cannot identify an event.
+- `next_cursor` is empty when the tail was reached; an empty project
+  returns `200` with `"events": []`.
+- `next_cursor` is an opaque, URL-safe string. The client never parses it;
+  it anchors on the page's last event by exact identity (ts, task_id, seq),
+  so appending new events between page requests does not invalidate it and
+  duplicates (same second, same content) are never skipped or repeated. A
+  cursor anchored inside a group of seq-less legacy duplicates (same
+  second, no `seq`) carries the event's occurrence index within the group
+  plus a snapshot of the list length, so paging such groups — including
+  completed read-only histories that will never receive a `seq` backfill —
+  advances exactly one event per page and can never stall.
+- `cursor_expired` is `true` (with `"events": []` and no `next_cursor`)
+  when the cursor's anchor event has been truncated out of the retained
+  per-task history (50 entries, oldest dropped), the snapshot behind a
+  legacy duplicate cursor was truncated (its position in the duplicate
+  group may have shifted), or the cursor predates the sequence format. On
+  that signal the client must discard the cursor and re-fetch from the
+  start; continuing would otherwise skip unread events silently.
+- Task metas are read from the project's owning scope only — no
+  cross-scope fallback (same rule as `tasks_detail`).
+
+Error responses:
+
+| Code | Meaning |
+|:--|:--|
+| `400` | Missing project id / invalid `limit` or `cursor`. |
+| `403` | Authenticated but the role cannot read projects at all (e.g. Worker). |
+| `404` | Project not found / caller does not own it (existence hidden). |
+| `409` | Ambiguous project id across teams; retry with `?team=`. |
+| `500` | K8s or object-store failure. |
+
+## Team attention inbox (read-only)
+
+`GET /api/v1/teams/{name}/attention` aggregates the in-flight human
+questions (approval / decision / escalation) of a team's projects into one
+read — the data source of the dashboard inbox. It reads the same per-task
+`meta.json` objects the project-scoped `GET /api/v1/projects/{id}/attention`
+reads, one level up: every project of the team, then every graph task of
+every project. Auth is team-scoped (same policy as the other team reads):
+a caller who cannot read the team gets a `404` that does not confirm the
+team exists.
+
+Query parameters:
+
+| Param | Type | Default | Meaning |
+|:--|:--|:--|:--|
+| `status` | string | `open` | `open` (pending, not yet overdue) \| `overdue` (pending, past deadline) \| `resolved` \| `all`. Anything else is a `400`. |
+| `limit` | int | `200` | Maximum rows returned. `1..1000`; above `1000` or below `1` is a `400` (never a clamp). |
+
+Response `200 OK`:
+
+```json
+{
+  "team_id": "biz-team",
+  "items": [
+    {
+      "taskId": "t1",
+      "eventId": "$matrix-event-id",
+      "teamId": "biz-team",
+      "projectId": "demo-project-001",
+      "kind": "approval",
+      "question": "Proceed with deploy?",
+      "options": [{ "id": "yes", "label": "Yes", "description": "ship it" }],
+      "requestedAt": "2026-11-02T09:00:00Z",
+      "timeoutAt": "2099-01-01T00:00:00Z",
+      "overdue": false,
+      "resolved": false,
+      "resolvedVia": null,
+      "resolvedBy": null,
+      "resolvedAt": null,
+      "resolution": null,
+      "freeform": false,
+      "notified": null,
+      "roomId": "!room:host",
+      "url": "/projects/demo-project-001/tasks/t1"
+    }
+  ],
+  "count": 1,
+  "truncated": false
+}
+```
+
+Response body:
+
+| Field | Meaning |
+|:--|:--|
+| `team_id` | The team name from the URL (the CR name). |
+| `items` | Inbox rows, sorted by urgency: `status=overdue` by `timeoutAt` ascending, every other status by `requestedAt` descending (stable tie-breakers: task id, kind, question). Row fields follow the workbench contract (camelCase); `eventId` is the Matrix event id of the room message that raised the record (`null` when the notification was withheld), `resolvedVia` / `resolvedBy` / `resolvedAt` / `resolution` are `null` until the record is resolved, and `notified` is `null` when the record has no `notification_log`. |
+| `count` | `len(items)` — the rows actually returned, not the rows that matched the filter. |
+| `truncated` | `true` when the filter matched more rows than `limit` and `items` was cut to the first `limit` rows. Always present. |
+
+Response headers (each absent when its condition does not hold):
+
+| Header | Meaning |
+|:--|:--|
+| `X-Attention-Truncated: 1` | Set iff `truncated` is `true` — the inbox holds more matching rows than were returned. |
+| `X-Attention-Skipped: N` | `N` of the team's projects were **degraded**: a project `meta.json`, or one of its task metas, could not be read or parsed. A degraded project still contributes the rows of its healthy tasks — only the unreadable task's rows are missing. Counts degraded projects only (once per project) — never truncated rows. |
+
+The three signals are independent, so a caller can tell the three
+looks-alike states apart: `count=0` + `truncated=false` is a genuinely
+empty inbox; `count=limit` + `truncated=true` is a limited (but healthy)
+inbox; `X-Attention-Skipped > 0` marks a degraded read: the affected tasks
+contributed no rows, while the rest of those projects' healthy tasks are
+still returned (a degraded project is not excluded wholesale).
+
+Read order and what `limit` costs: the read lists the team's projects,
+then reads every project meta and every task meta of the team; only then
+are the rows filtered, sorted, and capped at `limit`. **`limit` bounds
+the number of returned rows, not the object-store work** — a truncated
+response still paid a full-team read. Stopping the reads early is a
+possible future optimization and is deliberately not done today.
+
+### Storage layout behind the read
+
+All state lives in the configured object store (MinIO or OSS) as JSON
+objects, keys relative to the configured storage prefix:
+
+| Object | Key | Role in the read |
+|:--|:--|:--|
+| Team project list | `teams/{team}/shared/projects/` | The request's one list call; direct children are the team's project directories. |
+| Project meta | `teams/{team}/shared/projects/{project_id}/meta.json` | One read per listed project: identity plus the graph task list (`tasks`, or `loop.tasks` for loop plans). |
+| Task meta | `teams/{team}/shared/tasks/{task_id}/meta.json` | One read per graph task; its `attention` array is the inbox source. A missing object contributes nothing; an unreadable or unparsable one drops that task's rows and marks its project degraded (counted once in `X-Attention-Skipped`); the project's other tasks still contribute. |
+| Overdue signal event | `teams/{team}/shared/events/{team_id}/ev_*.json` | The only write of the read: a pending item past its `timeoutAt` gets one idempotent `attention_overdue` signal event; a failed event write never fails the read. |
+
+Two naming subtleties, both handled by the read:
+
+* When `spec.teamName` overrides the CR name, both
+  `teams/{crName}/shared/projects/` and `teams/{effectiveName}/shared/projects/`
+  are listed and the projects are de-duplicated by `(team_id, project_id)`
+  — workers may resolve either spelling.
+* The team endpoint never lists the global `shared/projects/` prefix:
+  standalone (team-less) projects are out of scope by design.
+
+### Record identity and the DB migration boundary
+
+An attention record's identity is `(project, eventId)`: the project it
+belongs to plus the Matrix event id of the room message that raised it.
+`eventId` is written into the record when the notification is sent and is
+**returned on the row** (see the `items` fields above), so two records that
+differ only in that id never serialize identically. A record whose
+notification was withheld carries no `eventId`; until one is sent, dedupe
+must fall back to `(project, taskId, kind, requestedAt)`.
+
+**Future work, not a delivered guarantee:** if attention state moves from
+these `meta.json` objects into a database later, `(project, eventId)` — and
+the surface above it (endpoint, query parameters, row fields, the two
+headers) — is the boundary intended to stay unchanged. That migration does
+not exist today; this section pins the current layout, the truncation
+semantics and the read-cost evidence so a later migration has a documented
+contract to move against.
+
+### Current read cost (measured)
+
+`BenchmarkGetTeamAttention` (in `agentteams-controller/internal/server`)
+measures the read at a representative large-team scale — 200 projects ×
+10 attention items each (2000 rows, 10× the default `limit` of 200) — and
+asserts the counts below, so a layout change that alters the fan-out
+fails the benchmark instead of regressing silently:
+
+| Operation | Count per request |
+|:--|:--|
+| List calls | 1 (the team project prefix) |
+| Object reads | 2200 — 200 project metas + 2000 task metas |
+| Rows returned | 200 (the default `limit`), `truncated=true` |
+
+The list and object-read counts are deterministic and machine-independent:
+they are measured on the benchmark's fixture scale (200 projects × 10 tasks)
+and asserted against the attention objects the fixture actually places in
+the store, so the count follows the fixture rather than a hand-computed
+product. The wall time per request is machine-dependent and is reported by
+the benchmark run itself (run from the `agentteams-controller` directory):
+
+    go test -run xxx -bench BenchmarkGetTeamAttention -benchtime 1x ./internal/server/
+
+Latency is machine-dependent, so no fixed number is recorded here — the
+gate run's output is the evidence.
+
 ## Project identity & disambiguation
 
 Project ids are only unique within a worker workspace upstream: two teams can
@@ -357,8 +728,9 @@ the identity:
   id under two teams appears twice, disambiguated by `team_id` (a scoped
   caller only sees the entries of their accessible teams).
 - The read endpoints (`workflow`, `tasks/{taskId}/artifact`, `spawns`,
-  `spawns/{sessionId}/messages`) accept an optional `?team=` query parameter
-  that narrows resolution to that team's storage prefix.
+  `spawns/{sessionId}/messages`, `history`, `history/{timestamp}`) accept an
+  optional `?team=` query parameter that narrows resolution to that team's
+  storage prefix.
 - Without `?team=`, if the same project id exists under multiple teams the
   endpoint returns `409 Conflict` (`project id is ambiguous across teams;
   retry with ?team=`) instead of silently resolving to the first match.
@@ -381,12 +753,12 @@ Two bearer-token paths are accepted (composite authenticator):
 
 Authorization matrix:
 
-| Caller | List | Get workflow | Get spawns | Get spawn messages |
-|:--|:--|:--|:--|:--|
-| admin / manager | all teams | any project | any project | any project |
-| team-leader (SA) | own team only | own team only | own team only | own team only |
-| L2 human (Matrix) | all `accessibleTeams` | any accessible team | any accessible team | any accessible team |
-| worker | denied | denied | denied | denied |
+| Caller | List | Get workflow | Get spawns | Get spawn messages | Get history |
+|:--|:--|:--|:--|:--|:--|
+| admin / manager | all teams | any project | any project | any project | any project |
+| team-leader (SA) | own team only | own team only | own team only | own team only | own team only |
+| L2 human (Matrix) | all `accessibleTeams` | any accessible team | any accessible team | any accessible team | any accessible team |
+| worker | denied | denied | denied | denied | denied |
 
 ## `agt` CLI
 
@@ -397,7 +769,18 @@ agt get projects                      # list all
 agt get projects --team biz-team      # filter by team
 agt get projects demo-project-001     # workflow detail
 agt get projects demo-project-001 -o json
-agt get projects demo-project-001 --mermaid   # render DAG as mermaid
+agt get projects demo-project-001 --mermaid   # render DAG as mermaid (status classes)
+```
+
+`--mermaid` uses the same renderer as the API's `?format=mermaid`: next/ready
+nodes are highlighted and every node is colored by status (see the workflow
+endpoint section above).
+
+Node-level inspection has no dedicated CLI verb yet; use the API directly:
+
+```bash
+curl -H "Authorization: Bearer $AGENTTEAMS_AUTH_TOKEN" \
+  "$AGENTTEAMS_API_BASE/api/v1/projects/demo-project-001/tasks/t1"
 ```
 
 The CLI forwards whatever bearer token is configured (`AGENTTEAMS_AUTH_TOKEN`
@@ -431,7 +814,7 @@ Request body:
 {
   "title": "New project",
   "source": "matrix",
-  "requester": "@luo:server",
+  "requester": "@carol:server",
   "team_id": "biz-team",
   "project_id": "optional-custom-id",
   "source_room_id": "!room:server"
@@ -495,16 +878,42 @@ unknown dependencies, and dependency cycles are rejected with `400`.
 Preconditions (`409`): `plan_type` must be `dag` (loop replans go through
 `record_loop_iteration`), status must be `active`, and no task may be
 `in_progress`/`submitted`. Response `200` returns the updated workflow.
+Tasks with a persisted cancellation decision keep that decision when retained
+in a replan. They cannot be reopened or removed and then re-added under the
+same task id; create a new task id for replacement work.
 
 ### `POST /api/v1/projects/{id}/tasks/{taskId}/cancel`
 
-Cancel a single task. Body requires `reason` (and optional
-`replacementTaskId`). The task must be mutable — a terminal task
-(completed/revision/blocked/cancelled) is rejected with `409`. The task's
-`TaskMeta` is stamped `status=cancelled` + `cancel_reason` and the project
-node status is updated. Response `200` returns the updated workflow.
-Errors: `400` missing reason; `404` task not in project / task meta
-missing; `409` terminal task.
+Cancel a single task:
+
+```json
+{
+  "reason": "no longer needed",
+  "replacementTaskId": "replacement-01",
+  "submissionId": "submission-123"
+}
+```
+
+`reason` is required and `replacementTaskId` is optional. `submissionId` is
+conditionally required: when TaskMeta already has `submission_id`, callers
+must send that exact opaque value. Missing, invented, or stale identities are
+rejected before either ProjectMeta or TaskMeta is changed.
+
+On success, the project node and TaskMeta become `cancelled`; TaskMeta records
+stable `cancel_reason` / `replacement_task_id` / `cancelled_at` fields and
+resolves an existing pending continuation as `cancelled` without changing its
+`delivery_id`. Repeating the same cancellation is idempotent. A different
+reason, replacement task, or submission identity conflicts with the committed
+decision. Tasks already `completed`, `revision`, or `blocked` cannot be
+cancelled. Response `200` returns the updated workflow.
+
+The Controller writes a small cancellation decision envelope into the project
+node before writing TaskMeta. If the second write fails, an identical retry can
+finish the TaskMeta/continuation update; a retry with a different reason,
+replacement, or submission identity is rejected.
+
+Errors: `400` missing reason or invalid replacement task id; `404` task not in project / task meta missing;
+`409` terminal task, submission fence failure, or conflicting cancellation.
 
 ### `POST /api/v1/projects/{id}/complete`
 
@@ -552,13 +961,28 @@ agt get projects                      # list all
 agt get projects --team biz-team      # filter by team
 agt get projects demo-project-001     # workflow detail
 agt get projects demo-project-001 -o json
-agt get projects demo-project-001 --mermaid   # render DAG as mermaid
+agt get projects demo-project-001 --include-tasks -o json
+agt get projects demo-project-001 --mermaid   # render DAG as mermaid (status classes)
+```
+
+`--mermaid` uses the same renderer as the API's `?format=mermaid`: next/ready
+nodes are highlighted and every node is colored by status (see the workflow
+endpoint section above).
+
+Node-level inspection has no dedicated CLI verb yet; use the API directly:
+
+```bash
+curl -H "Authorization: Bearer $AGENTTEAMS_AUTH_TOKEN" \
+  "$AGENTTEAMS_API_BASE/api/v1/projects/demo-project-001/tasks/t1"
 ```
 
 The CLI forwards whatever bearer token is configured (`AGENTTEAMS_AUTH_TOKEN`
 or `AGENTTEAMS_AUTH_TOKEN_FILE`) verbatim, so an L2 human can also use it by
 pointing either variable at their own Matrix access token — no separate CLI
 auth mode is needed.
+
+`--include-tasks` requires `-o json`; the default detail view does not render
+raw TaskMeta fields.
 
 ### `agt project` (the lifecycle write API write commands)
 
@@ -570,8 +994,233 @@ agt project create --title "New project" --team biz-team --source matrix
 agt project pause demo-project-001 --reason "customer review"
 agt project resume demo-project-001
 agt project replan demo-project-001 --tasks tasks.json   # JSON array file
-agt project cancel demo-project-001 demo-project-001-01 --reason "no longer needed"
+agt project cancel demo-project-001 demo-project-001-01 \
+  --reason "no longer needed" --submission-id submission-123 --team biz-team
 agt project complete demo-project-001
 ```
 
 The same bearer-token forwarding applies (Matrix token for L2 humans).
+
+## Worker checkpoint endpoints
+
+The Controller proxies two read-only endpoints of each worker's QwenPaw app
+(checkpoint system, QwenPaw ≥ 2.1) so humans and frontends can inspect a
+worker's execution timeline — auto snapshots after every response round plus
+manual `/checkpoint snapshot`, stored in the worker's `checkpoints/shadow.git`.
+
+| Endpoint | Meaning |
+|:--|:--|
+| `GET /api/v1/workers/{name}/checkpoints/graph` | Checkpoint graph (nodes with kind/timestamp/query preview, sessions, summary). Optional `?limit=` (1..1000). |
+| `GET /api/v1/workers/{name}/checkpoints/status` | `auto_enabled`, `has_checkpoints`, `workspace_dir`. |
+
+- **Scope**: same worker read authorization as `GET /api/v1/workers/{name}`
+  — team leaders / L2 humans only see workers in their teams; unknown or
+  out-of-scope workers are hidden as `404`.
+- **Embedded mode only**: the endpoints proxy the worker's qwenpaw app inside
+  the shared docker network. The upstream address is resolved from the
+  effective container prefix (`AGENTTEAMS_PROXY_CONTAINER_PREFIX`, or derived
+  from `AGENTTEAMS_RESOURCE_PREFIX` when auto-prefixing is enabled; empty when
+  disabled — the same value the docker backend uses for container naming) and
+  the effective console port resolved through the same system-wins env chain
+  used at container creation (the system env always defines
+  `AGENTTEAMS_CONSOLE_PORT`, so a conflicting `Worker.spec.env` value is
+  discarded and the container always listens on `8088`). In kube mode
+  they return `503`.
+- **Degradation**: a worker running QwenPaw < 2.1 has no checkpoint router,
+  so the upstream `404` is translated to `502` with
+  `checkpoint API unavailable (requires QwenPaw 2.1)`.
+- Forwarding is fixed-path (graph / status) with a strict query whitelist —
+  not a generic reverse proxy.
+
+Error responses:
+
+| Code | Meaning |
+|:--|:--|
+| `400` | Invalid worker name / unsupported subpath or query parameter / invalid `limit`. |
+| `404` | Worker not found / caller does not own it (existence hidden). |
+| `502` | Worker app unreachable, pre-2.1 checkpoint API, or upstream error. |
+| `503` | Kube mode (no stable worker pod DNS to proxy). |
+
+## Worker knowledge base (workspace files) endpoints
+
+The Controller proxies four endpoints of each worker's QwenPaw app
+(QwenPaw ≥ 2.1) so L2 humans and frontends can inspect — and, where the
+caller's Human CR permits, update — a worker's knowledge base: the
+long-term memory file `MEMORY.md`, the daily note tree `memory/`, and the
+distilled knowledge tree `digest/`.
+
+| Endpoint | Meaning |
+|:--|:--|
+| `GET /api/v1/workers/{name}/workspace-files/tree` | Paginated listing of one knowledge directory: `?path=` (required, `memory` / `digest` or any subpath of them), optional `?cursor=` (opaque) and `?limit=` (1..500). Returns `{directory, entries[], has_more, next_cursor}`. |
+| `GET /api/v1/workers/{name}/workspace-files/file-metadata` | `?path=` (required, an allowed knowledge file): `{etag, modified_at, path, preview_kind, size}`. |
+| `GET /api/v1/workers/{name}/workspace-files/file-content` | `?path=` (required) plus optional `?offset=` (≥0) and `?limit=` (1..1048576): a bounded UTF-8 chunk `{content, eof, next_offset, truncated, etag, ...}` — continue with `offset=next_offset` while `truncated` is true. |
+| `PUT /api/v1/workers/{name}/workspace-files/file-content` | Save one knowledge file: `?path=` (required), body `{"content": "<text>"}` (1 MiB cap, non-empty) and the `If-Match` header (see the concurrency rule below). Returns the new `{etag, path, size}`. |
+| `GET /api/v1/workers/{name}/workspace-files/file-download` | Stream one knowledge file as an attachment: `?path=` (required). Forwards the upstream `Content-Disposition` / `Content-Length` / `ETag` headers. |
+
+- **Scope**: same worker read authorization as `GET /api/v1/workers/{name}`
+  and the checkpoint endpoints — team leaders / L2 humans only see workers
+  in their accessible teams; unknown or out-of-scope workers are hidden as
+  `404`.
+- **Write scope**: `PUT file-content` is allowed for admin/manager (any
+  team); an L2 human may write only workers in their own teams while
+  `Human.spec.workspaceFileAccess` is explicitly `"readwrite"` — the
+  default is `read` (an empty or unset value means read-only), so a
+  controller upgrade cannot silently grant pre-existing humans write
+  access; L1 grants a user write access by setting the field to
+  `readwrite`. Team leaders stay read-only on this API. Cross-team writes
+  hide the worker as `404` (existence must not be probeable); an in-scope
+  caller without write permission gets an explicit `403`.
+- **Concurrency (ETag)**: before a write the proxy probes `file-metadata`.
+  For an existing file the `If-Match` header is mandatory (a worker
+  auto-appends to its memory files, so an unconditional overwrite would be
+  a lost update) and for a new file it must be absent. An upstream ETag
+  mismatch passes through as `409` — reload the file and retry.
+- **Write limits**: the body is capped at 1 MiB (the read chunk cap),
+  `content` must be a non-empty string, and every successful write is
+  audit-logged by the controller (worker, path, caller, byte count).
+- **`workspaceFileAccess` (Human CRD field)**: `read` | `readwrite`
+  (default is `read` when empty — write is an explicit opt-in) — the
+  per-user read/write permission L1 can set on a human's access to team
+  knowledge base files. Settable at human creation (`agt apply`) and
+  through `PUT /api/v1/humans/{name}` (that update API carries the field
+  in its updatable set, shipped with the humans-update PR).
+- **Path allowlist (knowledge boundary)**: only `MEMORY.md`,
+  `memory/**` and `digest/**` are addressable — for reads and writes
+  alike. Every other workspace
+  location — `SOUL.md`, `PROFILE.md`, `TODO.md`, `checkpoints/`, `skills/`,
+  and all dot directories (`.copaw/agent.json` carries the worker's
+  credentials) — is rejected with `400` before the request reaches the
+  worker. Roots match on the exact first segment, so `memories/` and
+  `memoryX/` are not prefixes of `memory/`. File roots are single
+  top-level files: `MEMORY.md` is addressable, but `MEMORY.md/foo` is
+  rejected (`MEMORY.md` is one file, not a directory — nested files must
+  live under `memory/` or `digest/`).
+- **Root pinned**: the QwenPaw `root=workspace` parameter (the agent's own
+  storage root, as opposed to `root=project`, the primary bound project
+  directory) is fixed server-side and is not part of the client query
+  surface.
+- **Embedded mode only**: the endpoints proxy the worker's qwenpaw app
+  inside the shared docker network, using the effective container prefix
+  and the system-wins console port — the same address resolution as the
+  checkpoint endpoints. In kube mode they return `503`.
+- **Version gate (passthrough 404)**: a worker running QwenPaw < 2.1 has no
+  workspace file router, so every request is an upstream `404` passed
+  through verbatim. To distinguish "worker too old" from "file missing",
+  probe `file-metadata?path=MEMORY.md` — that file exists in every
+  initialized QwenPaw workspace, so a `404` there means the worker is
+  pre-2.1 (or its workspace is not initialized) while other `404`s are
+  plain missing files.
+- **Runtime scope**: the endpoints target workers running the QwenPaw app
+  (`qwenpaw` runtime). Workers on other runtimes have no QwenPaw workspace
+  API: when that runtime's app serves the console port the proxy passes its
+  response through verbatim (typically `404`); when nothing listens it
+  returns `502`. The MEMORY.md probe is therefore only meaningful for
+  QwenPaw workers.
+- Forwarding is fixed-path (tree / file-metadata / file-content GET+PUT /
+  file-download) with a strict query whitelist — not a generic reverse
+  proxy. The multipart `file-upload` endpoint and the rest of the
+  workspace API surface remain unreachable.
+
+## Worker tool-approval endpoints
+
+Each QwenPaw worker's agent profile carries a tool-execution security level
+(`approval_level` in the worker's `agent.json`) that decides which tool calls
+run automatically and which pause for a human approval. The Controller
+proxies a minimal read/write surface of the worker's
+`/workspace/running-config` API so L2 humans can manage this level for
+workers in their own teams:
+
+| Endpoint | Meaning |
+|:--|:--|
+| `GET /api/v1/workers/{name}/approval` | Current level: `{"approval_level": "AUTO"}`. |
+| `PUT /api/v1/workers/{name}/approval` | Set the level. Body: `{"approval_level": "STRICT"}`. |
+
+- **Levels**: `STRICT` (every tool call needs approval) / `SMART` (low-risk
+  tools auto-allowed) / `AUTO` (only guarded tools — the upstream default) /
+  `OFF` (guard disabled). Any other value is rejected with `400` before the
+  worker is touched (the upstream model does not validate the value — the
+  proxy is the validation boundary).
+- **OFF is elevated**: `approval_level=OFF` disables Tool Guard entirely, so
+  it is a security-policy operation rather than ordinary configuration.
+  Default L2 humans get `403` on `OFF` — they may switch among the guarded
+  levels (`STRICT`/`SMART`/`AUTO`) only. `OFF` requires the elevated
+  tool-approval capability that the L2 permission design (#1220) defines and
+  admins grant explicitly; admin/manager keep the full range until that
+  capability model lands.
+- **Write scope**: `PUT` is allowed for admin/manager (any team); an L2 human
+  may set only workers in their own teams — cross-team workers hide as `404`
+  (existence is not probeable). Team leaders stay read-only (`403` on `PUT`,
+  the same boundary as the knowledge base write API).
+- **Safe write**: the upstream `PUT /workspace/running-config` persists the
+  *full* running-config object, so the proxy performs GET → change only
+  `approval_level` → PUT the whole object back; every other field round trips
+  verbatim. An upstream `409` (concurrent config change) is passed through so
+  clients retry with a fresh `GET`.
+- **Embedded mode only**: same worker addressing as the checkpoint proxy
+  (effective container prefix + system-wins console port). Kube mode returns
+  `503`.
+- **Degradation**: a worker on a QwenPaw version without the running-config
+  router surfaces the upstream `404` verbatim (version gate).
+- Every successful change is audit-logged (worker, new level, caller, role).
+
+Error responses:
+
+| Code | Meaning |
+|:--|:--|
+| `400` | Invalid worker name / unsupported subpath or query parameter / path outside the knowledge allowlist / out-of-bounds `limit` or `offset` / (write) missing or misplaced `If-Match`, over-size or empty body. |
+| `403` | (write only) in-scope caller without write permission — read-only human or team leader. |
+| `404` | Worker not found or not in the caller's teams (existence hidden); or (passthrough) the file does not exist — see the version-gate probe above. |
+| `409` / `416` | (passthrough) the file changed while being read / while waiting for the write (ETag mismatch — reload and retry) / offset beyond end of file. |
+| `502` | Worker app unreachable, or an upstream error (status echoed in the body). |
+
+| `400` | Invalid worker name / invalid request body / `approval_level` not in the fixed set. |
+| `403` | Team leader attempting `PUT` (read-only) / L2 human setting `OFF` (elevated capability required, #1220). |
+| `404` | Worker not found / caller does not own it (existence hidden) / pre-2.x worker (version gate, passthrough). |
+| `409` | Concurrent upstream config change (retry with a fresh `GET`). |
+| `502` | Worker app unreachable or upstream error. |
+| `503` | Kube mode (no stable worker pod DNS to proxy). |
+
+## Worker tool-settings endpoints
+
+Each QwenPaw worker's agent profile carries a per-tool table
+(`tools.builtin_tools`): which built-in tools are enabled and which execute
+asynchronously. The Controller proxies a minimal read/write surface of the
+worker's `/api/tools` API so L2 humans can manage the tools of workers in
+their own teams — no `docker exec` required.
+
+| Endpoint | Meaning |
+|:--|:--|
+| `GET /api/v1/workers/{name}/tools` | Tool list: `{"tools": [ {name, enabled, description, asyncExecution, icon, requiresConfig}, ... ], "total": N}`. |
+| `PATCH /api/v1/workers/{name}/tools/{tool}` | Declarative update. Body: one or both of `{"enabled": bool, "asyncExecution": bool}`. |
+
+- **Declarative, retry-safe**: the proxy reads the current table first and
+  issues the worker-local mutation only for each field whose requested value
+  differs from the current one (the worker-local toggle endpoint flips state
+  without a body, so a bare forward would double-flip on a retry). A PATCH
+  that changes nothing is a `200` no-op with zero upstream writes.
+- **Concurrent-safe**: because the worker-local enabled mutation is a blind
+  toggle, the read-decide-mutate sequence runs under a per-(worker, tool)
+  lock and the mutation response is verified to carry the requested
+  `enabled` value. Two overlapping `PATCH {"enabled":true}` requests both
+  return `200` and leave the tool enabled (the second observes the first's
+  write and no-ops); a verification mismatch is a `502`, never a false `200`.
+- **State only, never configuration**: the entry exposes
+  `requiresConfig` (a flag) but never the tool's configuration values —
+  they can hold credentials.
+- **Write scope**: `PATCH` is allowed for admin/manager (any worker); an L2
+  human may patch only workers in their own teams — cross-team workers hide
+  as `404` (existence is not probeable). Team leaders stay read-only
+  (`403` on `PATCH`, the same boundary as the approval endpoint).
+- **Unknown field names are rejected** with `400` (fail-closed); the
+  controller-facing names are camelCase (`asyncExecution`, `requiresConfig`).
+- **Runtime-aware**: the tool-settings model is QwenPaw-specific; workers on
+  another runtime surface `400`. **Embedded mode only** (kube mode `503`).
+- **Failure semantics**: unknown worker/tool `404`; upstream error `502`
+  (a QwenPaw build without the `/api/tools` router is a `502` "API
+  unavailable"); a malformed upstream list fails closed with `502` rather
+  than a partial list.
+- **Live effect**: the worker-local mutation saves the agent profile and
+  hot-reloads the agent; the worker's sync loop persists the profile to the
+  shared store.
+- Every successful change is audit-logged (worker, tool, changed fields with
+  old/new values, caller, role).

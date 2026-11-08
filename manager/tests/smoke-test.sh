@@ -21,6 +21,20 @@ check() {
     fi
 }
 
+# Optional checks report state without failing the run: they cover
+# provisioning-dependent artifacts, not service health.
+check_optional() {
+    local name="$1"
+    local cmd="$2"
+
+    if eval "${cmd}" > /dev/null 2>&1; then
+        echo -e "\033[32m[PASS]\033[0m ${name}"
+        PASS=$((PASS + 1))
+    else
+        echo -e "\033[33m[SKIP]\033[0m ${name}"
+    fi
+}
+
 echo "=== AgentTeams Manager Smoke Test ==="
 echo ""
 
@@ -47,8 +61,12 @@ check "Element Web (port 8088)" \
 check "MinIO bucket exists" \
     "mc alias set smoketest http://127.0.0.1:9000 ${AGENTTEAMS_MINIO_USER} ${AGENTTEAMS_MINIO_PASSWORD} && mc ls smoketest/agentteams-storage/"
 
-check "Manager SOUL.md in MinIO" \
-    "mc cat smoketest/agentteams-storage/agents/manager/SOUL.md | head -1"
+# The Manager's SOUL is provisioning-dependent: the controller writes
+# agents/manager/SOUL.md only when the Manager CR carries an inline soul,
+# and the workspace mirror may carry manager/SOUL.md instead. A fresh stack
+# legitimately has neither until provisioning runs, so report, don't fail.
+check_optional "Manager SOUL.md in storage (provisioning-dependent)" \
+    "mc cat smoketest/agentteams-storage/agents/manager/SOUL.md >/dev/null 2>&1 || mc cat smoketest/agentteams-storage/manager/SOUL.md >/dev/null 2>&1"
 
 # Processes
 check "supervisord running" \

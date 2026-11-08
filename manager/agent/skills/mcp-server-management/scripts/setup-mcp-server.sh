@@ -20,7 +20,10 @@
 # Options:
 #   --yaml-file <path>      Path to a user-provided YAML config file. Required when no
 #                           built-in template exists for the given server-name.
-#   --api-domain <domain>   Explicit API domain for DNS service source (e.g., "api.github.com").
+#   --api-domain <domain>   Explicit [http[s]://]host[:port] for your DNS service source.
+#                           Bare hosts (no scheme) default to HTTPS/443, and an explicit
+#                           port defaults to HTTP except on 443/8443 (TLS convention ports);
+#                           prefix http:// or https:// to force a scheme.
 #                           If provided, skips auto-extraction from YAML template.
 #                           Required when the template URLs use variables instead of literal domains.
 #
@@ -32,12 +35,13 @@
 #   bash setup-mcp-server.sh weather "my-key" --yaml-file /tmp/mcp-weather.yaml
 #
 # Prerequisites:
-#   - HIGRESS_COOKIE_FILE env var (session cookie for Higress Console)
+#   - Higress admin credentials, or an existing HIGRESS_COOKIE_FILE session
 #   - AGENTTEAMS_AI_GATEWAY_DOMAIN env var
-#   - Higress Console running at http://127.0.0.1:8001
+#   - HIGRESS_CONSOLE_URL (defaults to http://127.0.0.1:8001)
 
 set -euo pipefail
 source /opt/agentteams/scripts/lib/agentteams-env.sh
+source /opt/agentteams/scripts/lib/gateway-api.sh
 
 # ============================================================
 # Parse arguments
@@ -75,7 +79,7 @@ if [ -z "${SERVER_NAME}" ] || [ -z "${CREDENTIAL_VALUE}" ]; then
     echo "  server-name       e.g., github, weather"
     echo "  credential-value  e.g., ghp_xxx, your-api-key"
     echo "  --yaml-file       Path to user-provided YAML config (required if no built-in template)"
-    echo "  --api-domain      Explicit API domain (e.g., api.github.com)"
+    echo "  --api-domain      API address (e.g., http://tools.example.local:8080)"
     exit 1
 fi
 
@@ -91,10 +95,7 @@ if [ "${AGENTTEAMS_RUNTIME:-}" = "aliyun" ]; then
     exit 1
 fi
 
-if [ -z "${HIGRESS_COOKIE_FILE:-}" ]; then
-    log "ERROR: HIGRESS_COOKIE_FILE not set"
-    exit 1
-fi
+gateway_ensure_session
 
 # Resolve YAML file: --yaml-file > built-in template
 MCP_YAML_FILE=""
@@ -120,7 +121,7 @@ else
 fi
 
 AI_GATEWAY_DOMAIN="${AGENTTEAMS_AI_GATEWAY_DOMAIN:-aigw-local.agentteams.io}"
-CONSOLE_URL="http://127.0.0.1:8001"
+CONSOLE_URL="${_HIGRESS_CONSOLE_URL}"
 
 # Unified credential key — all YAML configs use accessToken in server.config
 CREDENTIAL_KEY="accessToken"
@@ -194,14 +195,79 @@ URL_PROTO="https"
 URL_PORT=443
 
 if [ -n "${EXPLICIT_API_DOMAIN}" ]; then
-    # Use explicit domain provided via --api-domain
     API_DOMAIN="${EXPLICIT_API_DOMAIN}"
-    # Handle explicit port in domain (e.g., api.example.com:8443)
-    if echo "${API_DOMAIN}" | grep -q ':'; then
+    EXPLICIT_SCHEME=""
+    case "${API_DOMAIN}" in
+        http://*)
+            EXPLICIT_SCHEME="http"
+            URL_PROTO="http"
+            URL_PORT=80
+            API_DOMAIN="${API_DOMAIN#http://}"
+            ;;
+        https://*)
+            EXPLICIT_SCHEME="https"
+            API_DOMAIN="${API_DOMAIN#https://}"
+            ;;
+    esac
+    # Accept only a DNS host and optional numeric port, not a URL path or credentials.
+    if [[ ! "${API_DOMAIN}" =~ ^[a-zA-Z0-9.-]+(:[0-9]{1,5})?$ ]]; then
+        log "ERROR: --api-domain must be [http://|https://]host[:port], without a path, query, or credentials."
+        exit 1
+    fi
+    if [[ "${API_DOMAIN}" == *:* ]]; then
         URL_PORT="${API_DOMAIN##*:}"
+        URL_PORT=$((10#${URL_PORT}))
         API_DOMAIN="${API_DOMAIN%:*}"
     fi
-    log "  Using explicit API domain: ${API_DOMAIN}:${URL_PORT}"
+    if [ "${URL_PORT}" -lt 1 ] || [ "${URL_PORT}" -gt 65535 ]; then
+        log "ERROR: --api-domain port must be between 1 and 65535."
+        exit 1
+    fi
+    # A scheme-less host:port registers as https (issue #1284: a plain-HTTP
+    # internal gateway then fails with 503s far from the root cause). Surface
+    # the assumption so the http:// prefix is not a hidden requirement.
+    case "${EXPLICIT_API_DOMAIN}" in
+        http://*|https://*) ;;
+        *)
+            if [[ "${EXPLICIT_API_DOMAIN}" == *:* ]]; then
+                log "  NOTE: no scheme given — registering as ${URL_PROTO}. Add http:// for a plain-HTTP service."
+            fi
+            ;;
+    esac
+    if [[ "${API_DOMAIN}" != *.* ]]; then
+        log "ERROR: --api-domain needs a dotted hostname (got '${EXPLICIT_API_DOMAIN}'), e.g. security-tool.example.local."
+        log "Higress rejects single-label names as a DNS service source. Attach your tool"
+        log "container to agentteams-net with a dotted network alias and pass that alias."
+        exit 1
+    fi
+    # No scheme given: only the TLS convention ports keep the HTTPS default. Any
+    # other explicit port is plain HTTP — Docker-internal tool services listen on
+    # plain HTTP, and defaulting to https there registered a dead *.dns:<port>
+    # service reference that made every tool call fail with 503 (issue #1284).
+    if [ -z "${EXPLICIT_SCHEME}" ]; then
+        case "${URL_PORT}" in
+            443|8443) ;;
+            *)
+                URL_PROTO="http"
+                log "  --api-domain gave no scheme for port ${URL_PORT}; using http:// (prefix https:// for TLS)."
+                ;;
+        esac
+    fi
+    # An explicit scheme is honored as given, but flag the combinations that are
+    # almost always a mistake: they produce a service source the tool service
+    # cannot answer on, and the failure only shows up as 503 on tool calls.
+    if [ "${URL_PROTO}" = "https" ]; then
+        case "${URL_PORT}" in
+            80|8000|8080)
+                log "  WARNING: https:// on port ${URL_PORT} is unusual. If your tool service listens on"
+                log "           plain HTTP, re-run with --api-domain http://${API_DOMAIN}:${URL_PORT}."
+                ;;
+        esac
+    elif [ "${URL_PORT}" = "443" ] || [ "${URL_PORT}" = "8443" ]; then
+        log "  WARNING: http:// on TLS port ${URL_PORT} is unusual. If your tool service expects TLS,"
+        log "           re-run with --api-domain https://${API_DOMAIN}:${URL_PORT}."
+    fi
+    log "  Using explicit API address: ${URL_PROTO}://${API_DOMAIN}:${URL_PORT}"
 else
     # Auto-extract from the first requestTemplate URL in the YAML
     # e.g., "https://api.github.com/repos/..." → domain=api.github.com
@@ -241,7 +307,7 @@ if [ -z "${API_DOMAIN}" ]; then
 fi
 
 SVC_SOURCE_NAME="${SERVER_NAME}-api"
-higress_api POST /v1/service-sources "Registering ${SVC_SOURCE_NAME} DNS service source (${API_DOMAIN}:${URL_PORT})" \
+higress_api POST /v1/service-sources "Registering ${SVC_SOURCE_NAME} DNS service source (${URL_PROTO}://${API_DOMAIN}:${URL_PORT})" \
     '{"type":"dns","name":"'"${SVC_SOURCE_NAME}"'","domain":"'"${API_DOMAIN}"'","port":'"${URL_PORT}"',"protocol":"'"${URL_PROTO}"'"}'
 SERVICE_REF='[{"name":"'"${SVC_SOURCE_NAME}"'.dns","port":'"${URL_PORT}"',"weight":100}]'
 
@@ -345,7 +411,9 @@ WORKER_NAMES=$(agt get workers -o json 2>/dev/null | jq -r '.workers[].name' || 
             WORKER_KEY=$(grep '^WORKER_GATEWAY_KEY=' "${WORKER_CREDS}" | sed 's/^WORKER_GATEWAY_KEY="//;s/"$//')
         fi
         if [ -z "${WORKER_KEY}" ]; then
-            log "  WARNING: No gateway key for ${wname} (creds file missing), skipping mcporter update"
+            log "  Applying MCP assignment through your Controller for ${wname}"
+            gateway_configure_worker_mcp "${wname}" "${MCP_SERVER_NAME}" \
+                "${AGENTTEAMS_AI_GATEWAY_URL%/}/mcp-servers/${MCP_SERVER_NAME}/mcp"
             continue
         fi
         mkdir -p "${MCPORTER_DIR}"

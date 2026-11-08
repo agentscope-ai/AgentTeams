@@ -24,9 +24,15 @@ bash /opt/agentteams/agent/skills/model-switch/scripts/update-manager-model.sh d
 
 1. Strips any `agentteams-gateway/` prefix from the model name
 2. Tests the model via `POST /v1/chat/completions` on the AI Gateway — exits with error if unreachable
-3. If the model is already in the `models` array: switches `agents.defaults.model.primary`
+3. If the model is already in the `models` array: refreshes its `reasoning` / `contextWindow` / `maxTokens` / `input` fields and switches `agents.defaults.model.primary`
 4. If the model is new: adds it to the `models` array and switches primary
 5. Always outputs `RESTART_REQUIRED`
+
+Because step 3 rewrites the model's fields, re-running the script is the way to
+correct an entry that was first written with wrong values — for example a model
+that was added with the 150,000 default because nobody knew its real window:
+run the script again with `--context-window <SIZE>` and the new value lands in
+`openclaw.json`.
 
 ## After running the script
 

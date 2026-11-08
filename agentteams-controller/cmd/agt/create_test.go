@@ -105,6 +105,9 @@ func TestCreateRuntimeHelpKeepsCoPawDuringQwenPawTransition(t *testing.T) {
 			}
 		}
 	}
+	if usage := createWorkerCmd().Flags().Lookup("runtime").Usage; !strings.Contains(usage, "deepseek-harness") {
+		t.Errorf("worker runtime help %q does not include deepseek-harness", usage)
+	}
 }
 
 func TestWaitForWorkerReady(t *testing.T) {

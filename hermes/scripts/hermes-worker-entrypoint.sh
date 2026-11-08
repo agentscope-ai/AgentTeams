@@ -14,6 +14,7 @@ set -e
 
 # Source shared environment bootstrap (provides ensure_mc_credentials in cloud mode)
 source /opt/agentteams/scripts/lib/agentteams-env.sh 2>/dev/null || true
+export AGENTTEAMS_OTEL_RUNTIME=hermes
 
 WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"
 # Align with the openclaw worker layout: HOME == workspace == MinIO mirror root.
@@ -98,6 +99,21 @@ log "  Hermes venv: ${VENV}"
 export HERMES_HOME="${WORKSPACE}/.hermes"
 mkdir -p "${HERMES_HOME}"
 
+# Install the AgentTeams Matrix platform overlay as a user plugin at the
+# bundled plugin's path-derived key (platforms/matrix).  Hermes treats a user
+# copy at that key as the documented override, so this registration replaces
+# the stock adapter.  The image keeps the source under /opt so restarts always
+# refresh the plugin without relying on MinIO state.
+mkdir -p "${HERMES_HOME}/plugins/platforms"
+rm -rf "${HERMES_HOME}/plugins/matrix-platform"
+rm -rf "${HERMES_HOME}/plugins/platforms/matrix"
+if [ -d /opt/agentteams/hermes-plugins/platforms/matrix ]; then
+    cp -a /opt/agentteams/hermes-plugins/platforms/matrix "${HERMES_HOME}/plugins/platforms/matrix"
+    log "Installed AgentTeams Matrix plugin into ${HERMES_HOME}/plugins/platforms/matrix"
+else
+    log "WARNING: AgentTeams Matrix plugin missing from image; using bundled adapter"
+fi
+
 # ── Hermes runtime knobs for autonomous Worker operation ─────────────────────
 # These match hermes-agent's own "container deployment" intent but it does not
 # auto-detect that we're inside the worker pod (hermes only auto-bypasses when
@@ -133,7 +149,7 @@ fi
 # Pass observability env through to hermes-agent. Hermes uses standard OTel
 # environment variables, so no per-app bootstrap file is required.
 CMS_TRACES_ENABLED="$(echo "${AGENTTEAMS_CMS_TRACES_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')"
-if [ "${CMS_TRACES_ENABLED}" = "true" ]; then
+if [ "${CMS_TRACES_ENABLED}" = "true" ] && ! _agentteams_truthy "${AGENTTEAMS_OTEL_ENABLED:-false}"; then
     export OTEL_EXPORTER_OTLP_ENDPOINT="${AGENTTEAMS_CMS_ENDPOINT}"
     export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
     export OTEL_EXPORTER_OTLP_HEADERS="x-arms-license-key=${AGENTTEAMS_CMS_LICENSE_KEY},x-arms-project=${AGENTTEAMS_CMS_PROJECT},x-cms-workspace=${AGENTTEAMS_CMS_WORKSPACE}"

@@ -1,5 +1,5 @@
 #!/bin/bash
-# start-qwenpaw-manager.sh - Start Manager Agent with QwenPaw 2.0 runtime
+# start-qwenpaw-manager.sh - Start Manager Agent with QwenPaw 2.2 runtime
 # Called by start-manager-agent.sh when AGENTTEAMS_MANAGER_RUNTIME=copaw|qwenpaw
 #
 # This script converts an OpenClaw-style workspace to a QwenPaw-style workspace
@@ -15,9 +15,9 @@ OPENCLAW_WORKSPACE="${HOME}"
 QWENPAW_WORKING_DIR="${HOME}/.qwenpaw"
 
 # ============================================================
-# 1. Create CoPaw directory structure
+# 1. Create QwenPaw directory structure
 # ============================================================
-log "Creating CoPaw directory structure..."
+log "Creating QwenPaw directory structure..."
 mkdir -p "${QWENPAW_WORKING_DIR}/custom_channels"
 mkdir -p "${QWENPAW_WORKING_DIR}/.secret"
 
@@ -71,18 +71,18 @@ if [ -f "${QWENPAW_WORKING_DIR}/config.json" ]; then
     fi
 fi
 
-log "Bridging openclaw.json -> CoPaw config (manager)..."
-/opt/venv/qwenpaw/bin/python3 -m copaw_worker.bridge \
+log "Bridging openclaw.json -> QwenPaw config (manager)..."
+/opt/venv/qwenpaw/bin/python3 -m agentteams_manager.bridge \
         --profile manager \
         --openclaw-json "${OPENCLAW_JSON}" \
         --working-dir "${QWENPAW_WORKING_DIR}"
 log "Config bridged from openclaw.json"
 
 # ============================================================
-# 3. Sync prompt files into CoPaw paths
+# 3. Sync prompt files into QwenPaw paths
 # ============================================================
 # Canonical AgentTeams layout is OPENCLAW_WORKSPACE ($HOME): SOUL.md, memory/, skills/ etc.
-# CoPaw reads from QWENPAW_WORKING_DIR/workspaces/default/; we sync into that path only.
+# QwenPaw reads from QWENPAW_WORKING_DIR/workspaces/default/; we sync into that path only.
 # Use cp -u / cp -ru so we never overwrite newer files already in workspaces/default/.
 # ============================================================
 WORKSPACE_DIR="${QWENPAW_WORKING_DIR}/workspaces/default"
@@ -108,7 +108,7 @@ if [ -f "${OPENCLAW_WORKSPACE}/MEMORY.md" ]; then
 fi
 
 # ============================================================
-# 4. Sync memory/ and skills/ (OpenClaw layout -> CoPaw)
+# 4. Sync memory/ and skills/ (OpenClaw layout -> QwenPaw)
 # ============================================================
 log "Syncing memory/ and skills/ (cp -ru: recursive, do not overwrite newer dest)..."
 if [ -d "${OPENCLAW_WORKSPACE}/memory" ]; then
@@ -207,7 +207,7 @@ rm -f "${DM_ROOMS_FILE}" "${DM_ROOMS_FILE}.tmp"
 # Worker does this via api_client.disable_agent_if_present().
 # Manager runs QwenPaw in-process (no API client), so we set
 # enabled=false in config.json's agents.profiles before startup.
-# QwenPaw 2.0 start_all_configured_agents() skips enabled=false agents.
+# QwenPaw 2.2 start_all_configured_agents() skips enabled=false agents.
 CONFIG_JSON="${QWENPAW_WORKING_DIR}/config.json"
 if [ -f "${CONFIG_JSON}" ]; then
     # AgentProfileRef requires id + workspace_dir (both mandatory).
@@ -279,7 +279,7 @@ fi
         _curr_hash=$(md5sum "${OPENCLAW_JSON}" 2>/dev/null | awk '{print $1}')
         if [ -n "${_curr_hash}" ] && [ "${_curr_hash}" != "${_prev_hash}" ]; then
             log "openclaw.json changed, re-bridging..."
-            _bridge_out=$(/opt/venv/qwenpaw/bin/python3 -m copaw_worker.bridge \
+            _bridge_out=$(/opt/venv/qwenpaw/bin/python3 -m agentteams_manager.bridge \
                     --profile manager \
                     --openclaw-json "${OPENCLAW_JSON}" \
                     --working-dir "${QWENPAW_WORKING_DIR}" 2>&1)
@@ -308,7 +308,7 @@ for _plugin_src in /opt/agentteams/plugins/*/; do
     _plugin_name=$(basename "${_plugin_src}")
     if [ -f "${_plugin_src}plugin.json" ]; then
         rm -rf "${PLUGINS_TARGET}/${_plugin_name}"
-        cp -a "${_plugin_src}" "${PLUGINS_TARGET}/${_plugin_name}"
+        cp -a --no-preserve=ownership "${_plugin_src}" "${PLUGINS_TARGET}/${_plugin_name}"
         log "Installed plugin: ${_plugin_name}"
     fi
 done
@@ -319,8 +319,16 @@ export QWENPAW_SECRET_DIR="${QWENPAW_SECRET_DIR:-${QWENPAW_WORKING_DIR}.secret}"
 export QWENPAW_RUNNING_IN_CONTAINER=true
 export QWENPAW_LOG_LEVEL="${COPAW_LOG_LEVEL:-info}"
 
+# LLM stream stall detection (QwenPaw 2.2.0 #7150): aligned with the Worker
+# entrypoint. Upstream default 30s; AgentTeams defaults 300s (8/26
+# QwenPaw001 false-kill precedent, lesson #386). Priority: native
+# QWENPAW_LLM_STREAM_* vars > AGENTTEAMS_LLM_STREAM_TIMEOUT_S > 300.
+AGENTTEAMS_LLM_STREAM_TIMEOUT_S="${AGENTTEAMS_LLM_STREAM_TIMEOUT_S:-300}"
+export QWENPAW_LLM_STREAM_FIRST_CONTENT_TIMEOUT="${QWENPAW_LLM_STREAM_FIRST_CONTENT_TIMEOUT:-${AGENTTEAMS_LLM_STREAM_TIMEOUT_S}}"
+export QWENPAW_LLM_STREAM_IDLE_TIMEOUT="${QWENPAW_LLM_STREAM_IDLE_TIMEOUT:-${AGENTTEAMS_LLM_STREAM_TIMEOUT_S}}"
+
 # YOLO mode: AGENTTEAMS_YOLO=1 → set approval_level=OFF in agent.json
-# (QwenPaw 2.0 equivalent of OpenClaw's tools.exec.ask=off).
+# (QwenPaw 2.2 equivalent of OpenClaw's tools.exec.ask=off).
 # start-manager-agent.sh promotes the yolo-mode marker file to
 # AGENTTEAMS_YOLO=1 before calling this script.
 if [ "${AGENTTEAMS_YOLO:-}" = "1" ] && [ -f "${AGENT_JSON}" ]; then
@@ -329,7 +337,7 @@ if [ "${AGENTTEAMS_YOLO:-}" = "1" ] && [ -f "${AGENT_JSON}" ]; then
     log "YOLO mode: approval_level set to OFF"
 fi
 
-log "Starting QwenPaw 2.0 Manager (app mode)..."
+log "Starting QwenPaw 2.2 Manager (app mode)..."
 
 # Keep canonical Manager skills under $HOME/skills synchronized with the
 # QwenPaw native workspace after startup. QwenPaw does not watch the OpenClaw
@@ -343,5 +351,5 @@ python3 /opt/agentteams/scripts/init/qwenpaw_manager_skill_sync.py \
     --interval "${AGENTTEAMS_QWENPAW_SKILL_SYNC_INTERVAL_SECONDS:-1}" &
 log "QwenPaw Manager skill watcher started (PID: $!)"
 
-# run_copaw_app.py starts qwenpaw app (tools registered via agentteams-manager-tools plugin)
-exec python3 -m copaw_worker.run_copaw_app app --host 0.0.0.0 --port 18799
+# Start the QwenPaw app directly (tools registered via agentteams-manager-tools plugin)
+exec python3 -m qwenpaw app --host 0.0.0.0 --port 18799

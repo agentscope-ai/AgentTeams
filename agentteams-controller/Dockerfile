@@ -9,7 +9,7 @@
 ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
 
 # ============ Stage 1: Build Go binaries ============
-FROM ${HIGRESS_REGISTRY}/higress/golang:1.25-alpine AS builder
+FROM ${HIGRESS_REGISTRY}/higress/golang:1.26-alpine AS builder
 
 ARG GOPROXY=https://goproxy.cn,direct
 ENV GOPROXY=${GOPROXY}
@@ -51,6 +51,7 @@ COPY --from=builder /agt /usr/local/bin/agt
 COPY --from=kube-bin /kube-apiserver /usr/local/bin/kube-apiserver
 COPY config/crd/ /opt/agentteams/config/crd/
 COPY agent/ /opt/agentteams/agent/
+COPY plugins/ /opt/agentteams/plugins/
 
 # Default endpoint + token-file for the bundled `agt` CLI. The controller process mints a
 # long-lived admin SA token at startup (see internal/app.bootstrapAdminCLIToken)

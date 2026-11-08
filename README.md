@@ -20,7 +20,7 @@ AgentTeams does not compete with other Agent runtimes. Instead of implementing A
 
 - 🧬 **Manager-Workers Architecture**: Eliminates the need for human oversight of individual Worker Claws by enabling Agents to manage other Agents.
 
-- 🤝 **Multi-Runtime Collaboration**: OpenClaw, QwenPaw, and Hermes Workers coexist in the same IM room. Use deterministic agents (OpenClaw/QwenPaw) as Leaders to orchestrate tasks, and Hermes Workers for autonomous code execution — each runtime does what it's best at.
+- 🤝 **Multi-Runtime Collaboration**: OpenClaw, QwenPaw, Hermes, and experimental DeepSeek Harness Workers coexist in the same IM room. Use the runtime that best fits each role while keeping collaboration visible in Matrix.
 
 - 📦 **MinIO Shared File System**: Introduces a shared file system for inter-Agent information exchange, significantly reducing token consumption in multi-Agent collaboration scenarios.
 
@@ -31,6 +31,9 @@ AgentTeams does not compete with other Agent runtimes. Instead of implementing A
 
 ## News
 
+- **2026-10-16**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.5) — AgentTeams v1.2.5: strengthens coding-tool delegation, Worker configuration management, and in-place QwenPaw runtime upgrades; ships with Dashboard v1.3.1 by default; and fixes multiple issues in MCP registration, Matrix message collaboration, and Worker recovery.
+- **2026-09-20**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.4) — AgentTeams v1.2.4: adds TeamHarness task state history, progress tracking, and completion notifications; upgrades to QwenPaw 2.2.1 and Dashboard v1.2.4.9; expands team permissions, auditing, and skill management; introduces the experimental DeepSeek Harness Worker; and improves Worker state persistence and installation reliability.
+- **2026-08-22**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.3) — AgentTeams v1.2.3: makes long-running Project workflows visible and controllable through new Controller APIs, `agt` commands, and Dashboard v1.2.4; adds audited human interventions, Project history, and QwenPaw Worker checkpoints; promotes QwenPaw as the recommended local Manager and Worker runtime; and improves Skill recovery, Windows AppService startup, and runtime reliability.
 - **2026-08-08**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.2) — AgentTeams v1.2.2: adds Manager-to-Worker custom Skill delivery with validation, storage upload, `Worker.spec.skills` assignment, and QwenPaw hot refresh and enablement without a restart; hardens Manager and Worker Skill loading; and ensures Team Leaders and Workers explicitly join Team Rooms after invitation.
 - **2026-08-06**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.1) — AgentTeams v1.2.1: unifies the Manager and Worker runtime stack on QwenPaw 2.0.1, publishes the QwenPaw Worker multi-architecture image, strengthens atomic Matrix and TeamHarness task assignment and CoPaw-to-QwenPaw state migration, adds custom model vision and reasoning capability overrides, and improves Worker lifecycle and runtime management reliability.
 - **2026-07-30**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.0) — AgentTeams v1.2.0 (stable): establishes AgentTeams naming and the final Team/Worker resource contracts end to end; adds the optional AgentTeams Dashboard; and improves Worker storage sync, Team routing and lifecycle convergence, installer support for deploying v1.1.2 with its legacy environment and storage contract (earlier releases still require the matching legacy installer), Dashboard reliability, and tooling and diagnostic safety.
@@ -97,7 +100,7 @@ Open http://127.0.0.1:18088 in your browser and log in to Element Web. The Manag
 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 
 # Upgrade to specific version
-AGENTTEAMS_VERSION=v1.2.2 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+AGENTTEAMS_VERSION=v1.2.5 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 ## Uninstall
@@ -183,8 +186,8 @@ helm install agentteams higress.io/agentteams \
 | `preflight.llm.retries` | no | Retry count for transient LLM preflight failures such as rate limits and provider 5xx responses. Defaults to `2` |
 | `preflight.llm.activeDeadlineSeconds` | no | Kubernetes Job active deadline for the preflight hook. Defaults to `120` |
 | `preflight.llm.resources` | no | Optional Kubernetes resource requests/limits for the preflight hook container |
-| `manager.runtime` | no | Manager runtime: OpenClaw uses `openclaw` (default); CoPaw uses `qwenpaw` in the current chart, with `copaw` retained as a compatibility alias. Managers do not support Hermes |
-| `worker.defaultRuntime` | no | The chart provides default image values for `openclaw` (default), `copaw`, `hermes`, and `openhuman`, but the current CRD rejects an explicit `spec.runtime: openhuman`; set `spec.image` explicitly for a QwenPaw Worker |
+| `manager.runtime` | no | Manager runtime: OpenClaw uses `openclaw` (default); CoPaw uses `qwenpaw` in the current chart, with `copaw` retained as a compatibility alias. Managers do not support Hermes or DeepSeek Harness |
+| `worker.defaultRuntime` | no | The chart provides default image values for `openclaw` (default), `copaw`, `hermes`, experimental `deepseek-harness`, and `openhuman`; the current CRD rejects an explicit `spec.runtime: openhuman`, and QwenPaw Workers require an explicit `spec.image` |
 
 Helm installs run an LLM preflight hook by default. The hook sends a minimal OpenAI-compatible `/chat/completions` request using `credentials.llmApiKey`, `credentials.llmBaseUrl`, and `credentials.defaultModel`; invalid keys, unreachable base URLs, unsupported models, quota errors, and provider outages fail the install before the controller starts. To bypass this check for restricted or offline clusters:
 
@@ -365,11 +368,12 @@ No hidden agent-to-agent calls. Everything is visible and intervenable.
 
 ## Multi-Runtime Collaboration
 
-AgentTeams currently provides three main Worker runtime families that can **coexist in the same IM room**, collaborating on tasks together:
+AgentTeams provides multiple Worker runtime families that can **coexist in the same IM room**, collaborating on tasks together:
 
 - **OpenClaw** (Node.js) — General-purpose agent with rich skills ecosystem, ideal for task orchestration and tool calling
 - **QwenPaw** (Python) — Lightweight runtime, suited for browser automation and quick tasks
 - **Hermes** ([hermes-agent](https://github.com/NousResearch/hermes-agent)) — Autonomous coding agent with terminal sandbox, self-improving skills, and persistent memory
+- **DeepSeek Harness** (experimental) — Headless coding agent with room-scoped session continuation, Matrix file exchange, and restart recovery; currently pinned to a tested DSH release candidate
 
 The `copaw` value remains available for compatibility with existing CoPaw Workers; the current CRD accepts both `copaw` and `qwenpaw`. Each runtime excels at different tasks. A common pattern is to use deterministic agents (OpenClaw/QwenPaw) as Leaders to decompose and assign work, and Hermes Workers for autonomous code execution. All runtimes communicate through Matrix rooms—fully visible and fully intervenable.
 
@@ -428,11 +432,17 @@ Browse the [documentation directory](docs/), or start with the overview and quic
 | [docs/quickstart.md](docs/quickstart.md) | Step-by-step guide |
 | [docs/usage/use-cases.md](docs/usage/use-cases.md) | Software delivery, research, content, incident analysis, and long-running project collaboration examples |
 | [docs/usage/deployment/local.md](docs/usage/deployment/local.md) | Local instance creation, installation options, upgrades, and uninstalling |
-| [docs/design/architecture.md](docs/design/architecture.md) | System architecture deep dive |
+| [docs/design/architecture.md](docs/design/architecture.md) | System architecture deep dive (also available in [中文](docs/zh-cn/design/architecture.md)) |
+| [docs/design/k8s-native-orchestration.md](docs/design/k8s-native-orchestration.md) | Kubernetes-native multi-Agent orchestration: CRDs, controller, declarative resources (also available in [中文](docs/zh-cn/design/k8s-native-orchestration.md)) |
 | [docs/usage/manager-guide.md](docs/usage/manager-guide.md) | Manager configuration |
 | [docs/usage/worker-guide.md](docs/usage/worker-guide.md) | Worker deployment |
+| [docs/usage/single-and-multi-user.md](docs/usage/single-and-multi-user.md) | One deployment for one person or many: roles, permission levels, and what changes when you add people (also available in [中文](docs/zh-cn/usage/single-and-multi-user.md)) |
 | [docs/usage/project-workflow-api.md](docs/usage/project-workflow-api.md) | Project / workflow inspection API (also available in [中文](docs/zh-cn/usage/project-workflow-api.md)) |
-| [docs/usage/development.md](docs/usage/development.md) | Contributing and local dev |
+| [docs/usage/module-update.md](docs/usage/module-update.md) | Module update & distribution: Millforge channels, release index, and the three install planes (also available in [中文](docs/zh-cn/usage/module-update.md)) |
+| [docs/usage/higress-gateway-api.md](docs/usage/higress-gateway-api.md) | Higress gateway external API reference (LLM / MCP / exposed ports / Console) (also available in [中文](docs/zh-cn/usage/higress-gateway-api.md)) |
+| [docs/usage/development.md](docs/usage/development.md) | Contributing and local dev (also available in [中文](docs/zh-cn/usage/development.md)) |
+
+The remaining design documents (skill catalog, worker channels/chats APIs, room power levels, capability foundation, human update / audit / AI-routes APIs, L2/L3 scoped access, member runtime config contract, team skills, agent pod template, TeamHarness v0.1 boundary) are indexed in the [中文 documentation table](README.zh-CN.md) — all are also available under `docs/zh-cn/design/`, except a few (`docs/design/internal/`, part of `docs/design/teamharness/`) that are natively written in Chinese upstream.
 
 ## Troubleshooting
 
@@ -440,7 +450,7 @@ Browse the [documentation directory](docs/), or start with the overview and quic
 docker exec -it agentteams-manager cat /var/log/agentteams/manager-agent.log
 ```
 
-See [docs/usage/troubleshooting/faq.md](docs/usage/troubleshooting/faq.md) for common issues.
+See [docs/usage/troubleshooting/faq.md](docs/usage/troubleshooting/faq.md) for common issues (also available in [中文](docs/zh-cn/usage/troubleshooting/faq.md)).
 
 ### Reporting Bugs
 

@@ -548,6 +548,12 @@ func TestSandboxBackend_Create_ImageResolution(t *testing.T) {
 			wantImage: "qwenpaw:v4",
 		},
 		{
+			name:      "deepseek harness runtime",
+			runtime:   RuntimeDeepSeekHarness,
+			config:    SandboxConfig{WorkerImage: "default:latest", DeepSeekHarnessWorkerImage: "deepseek-harness:v5"},
+			wantImage: "deepseek-harness:v5",
+		},
+		{
 			name:      "default worker image",
 			config:    SandboxConfig{WorkerImage: "default/worker:latest"},
 			wantImage: "default/worker:latest",

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentteams-manager"
+version = "1.0.0"
+description = "AgentTeams Manager runtime modules (config bridge, file sync, project/task storage, Manager tools)"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+dependencies = [
+    "PyYAML>=6.0",
+    "markdown-it-py>=3.0",
+    "linkify-it-py>=2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/agentscope-ai/AgentTeams"
+Repository = "https://github.com/agentscope-ai/AgentTeams"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agentteams_manager*"]
+exclude = ["agentteams_manager.tests*"]
+
+[tool.setuptools.package-data]
+agentteams_manager = ["templates/*.json"]

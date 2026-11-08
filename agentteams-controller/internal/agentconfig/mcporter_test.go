@@ -27,7 +27,7 @@ func TestGenerateMcporterConfig_EmptyReturnsNil(t *testing.T) {
 }
 
 func TestGenerateMcporterConfig_SingleServerDefaultsTransportAndInjectsBearer(t *testing.T) {
-	g := NewGenerator(Config{})
+	g := NewGenerator(Config{AIGatewayURL: "https://gw.example.com"})
 	data, err := g.GenerateMcporterConfig("KEY-123", []v1beta1.MCPServer{
 		{Name: "github", URL: "https://gw.example.com/mcp-servers/github/mcp"},
 	})
@@ -110,6 +110,100 @@ func TestGenerateMcporterConfig_AllInvalidReturnsNil(t *testing.T) {
 	}
 	if data != nil {
 		t.Fatalf("expected nil when all entries invalid, got %q", string(data))
+	}
+}
+
+func TestGenerateMcporterConfig_UntrustedHostNoCredential(t *testing.T) {
+	g := NewGenerator(Config{AIGatewayURL: "https://gw.example.com"})
+	data, err := g.GenerateMcporterConfig("KEY-123", []v1beta1.MCPServer{
+		{Name: "github", URL: "https://evil.example.com/mcp-servers/github/mcp"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var decoded map[string]map[string]map[string]interface{}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	srv, ok := decoded["mcpServers"]["github"]
+	if !ok {
+		t.Fatalf("missing github entry: %s", string(data))
+	}
+	if _, ok := srv["headers"]; ok {
+		t.Errorf("untrusted entry must not carry a headers block, got %v", srv["headers"])
+	}
+	if srv["url"] != "https://evil.example.com/mcp-servers/github/mcp" {
+		t.Errorf("url = %v (entry must still be written, only the credential is withheld)", srv["url"])
+	}
+}
+
+func TestGenerateMcporterConfig_GatewayURLUnsetNoCredential(t *testing.T) {
+	// Fail closed: no configured gateway => no entry may receive the key.
+	g := NewGenerator(Config{})
+	data, err := g.GenerateMcporterConfig("KEY-123", []v1beta1.MCPServer{
+		{Name: "github", URL: "https://gw.example.com/mcp"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var decoded map[string]map[string]map[string]interface{}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	srv := decoded["mcpServers"]["github"]
+	if _, ok := srv["headers"]; ok {
+		t.Errorf("no gateway configured: entry must not carry credentials, got %v", srv["headers"])
+	}
+}
+
+func TestGenerateMcporterConfig_TrustedHostPortMismatch(t *testing.T) {
+	// Host:port must match exactly; a different port is a different endpoint.
+	g := NewGenerator(Config{AIGatewayURL: "https://gw.example.com:8443"})
+	data, err := g.GenerateMcporterConfig("K", []v1beta1.MCPServer{
+		{Name: "a", URL: "https://gw.example.com/mcp"},      // wrong port
+		{Name: "b", URL: "https://gw.example.com:8443/mcp"}, // exact match
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var decoded map[string]map[string]map[string]interface{}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	servers := decoded["mcpServers"]
+	if _, ok := servers["a"]["headers"]; ok {
+		t.Errorf("port-mismatched entry must not carry credentials")
+	}
+	if _, ok := servers["b"]["headers"]; !ok {
+		t.Errorf("exact host:port match must carry credentials")
+	}
+}
+
+func TestIsTrustedMCPHost(t *testing.T) {
+	g := NewGenerator(Config{AIGatewayURL: "https://gw.example.com:8443"})
+	cases := []struct {
+		url  string
+		want bool
+	}{
+		{"https://gw.example.com:8443/mcp-servers/github/mcp", true},
+		{"https://gw.example.com:8443", true},
+		{"https://gw.example.com/mcp", false},          // different port
+		{"https://evil.example.com:8443/mcp", false},   // different host
+		{"http://gw.example.com:8443/mcp", true},       // scheme irrelevant, host:port decides
+		{"https://sub.gw.example.com:8443/mcp", false}, // different host
+		{"not a url", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := g.IsTrustedMCPHost(c.url); got != c.want {
+			t.Errorf("IsTrustedMCPHost(%q) = %v, want %v", c.url, got, c.want)
+		}
+	}
+
+	empty := NewGenerator(Config{})
+	if empty.IsTrustedMCPHost("https://gw.example.com:8443/mcp") {
+		t.Errorf("unset gateway URL must trust nothing")
 	}
 }
 

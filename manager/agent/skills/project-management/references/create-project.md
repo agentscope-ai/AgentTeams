@@ -35,6 +35,33 @@ bash /opt/agentteams/agent/skills/project-management/scripts/create-project.sh \
 
 The script handles: directory creation, meta.json, placeholder plan.md, Matrix room creation (with admin + all workers invited), Manager groupAllowFrom update, and MinIO sync.
 
+**Inviting a whole Team (`--team`).** When the project belongs to a Team, pass the Team instead of spelling out its members; you let the script read the leader and every worker from the controller, resolve their Worker CR names to effective runtime identities, and invite each member once:
+
+```bash
+bash /opt/agentteams/agent/skills/project-management/scripts/create-project.sh \
+  --id "${PROJECT_ID}" \
+  --title "<title>" \
+  --team "<TEAM_NAME>"
+```
+
+`--workers` can be added to a `--team` call for extra members (the union is used, each member once). `--workers` on its own is the member list exactly as given: passing only a Team leader invites only the leader. If you cannot read the Team or any referenced Worker, the script stops before creating project files or a room. Your explicit `--workers` entries remain runtime names; they do not expand a leader into its Team.
+
+**Check who actually joined.** Read `workers` (invited), `joined`, `join_pending` (no usable credentials), and `join_failed` (join request failed) in the result JSON. You can inspect per-worker HTTP details in the join status file (`AGENTTEAMS_JOIN_STATUS_FILE`, default `/tmp/agentteams-project-join-status.json`). An invite is not membership: follow up on pending or failed joins before dispatching work.
+
+**Room administration for human operators (`--grant-admin`).** Human users who are not the default admin join the project room at the implicit power level 0 and get 403 on room operations (rename, inviting a colleague). When the project involves additional human operators who must be able to administer the room, pass their Matrix local parts (or full Matrix IDs):
+
+```bash
+bash /opt/agentteams/agent/skills/project-management/scripts/create-project.sh \
+  --id "${PROJECT_ID}" \
+  --title "<title>" \
+  --workers "worker1,worker2,worker3" \
+  --grant-admin "bob"
+```
+
+Each user listed in `--grant-admin` co-owns the project room (power level 100) from creation. Only pass humans who genuinely need room administration; workers are always created at level 0. The granted humans are **also added to the Manager's project-room allowlists** (`groupAllowFrom` / `group_allow_from`) alongside the workers — without this, their `@manager` messages in the project room are silently dropped in allowlist mode.
+
+**Worker auto-join outcome.** The script logs a single aggregated line (`Worker auto-join: joined=N pending=N failed=N`) and writes the per-worker detail to a join status file (`$AGENTTEAMS_JOIN_STATUS_FILE`, default `/tmp/agentteams-project-join-status.json`). `pending` means the worker credentials/token were unavailable (the worker will need to accept the invite from its own client); `failed` carries the Matrix HTTP status (e.g. `http-403`). A pending/failed join does **not** abort project creation — read the join status file (or the log line) and follow up with the affected workers instead of assuming everyone is in the room.
+
 After the script, **fill in the full plan.md** with phases, tasks, and assignments (see `references/plan-format.md` for format).
 
 ## Step 1c: Present plan (and confirm)

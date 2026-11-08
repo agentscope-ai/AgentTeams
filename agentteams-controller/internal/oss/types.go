@@ -11,6 +11,21 @@ type Config struct {
 	SecretKey     string // MinIO root secret key
 	StoragePrefix string // full mc prefix, e.g. "agentteams/agentteams-storage"
 	Bucket        string // bucket name for policy generation, e.g. "agentteams-storage"
+	// PublicEndpoint is the caller-reachable origin of the same storage,
+	// reached by browsers/dashboards instead of the internal Endpoint
+	// (e.g. "https://files.example.com" via an Ingress on the storage
+	// service). Presigned download URLs are signed for THIS origin: the
+	// S3 V4 signature binds the Host header, so a URL minted against the
+	// internal endpoint is unusable from outside the cluster, and the
+	// hostname must never be rewritten after signing. Empty (default)
+	// means presign is unsupported: PresignGet returns
+	// ErrPresignUnsupported and callers fall back to the streamed GET.
+	PublicEndpoint string
+	// PublicAlias was the mc alias used to sign presigned URLs against
+	// PublicEndpoint, default "agentteams-public". Retained for config
+	// compatibility only: the SDK now signs presigned URLs directly
+	// against PublicEndpoint and registers no mc alias.
+	PublicAlias string
 }
 
 // CredentialSource provides per-invocation credentials for object storage.
@@ -40,6 +55,7 @@ type Credentials struct {
 // MirrorOptions controls the behavior of Mirror operations.
 type MirrorOptions struct {
 	Overwrite bool     // overwrite existing files at destination
+	Remove    bool     // delete destination objects with no counterpart at source (mc --remove; exact-copy semantics)
 	Exclude   []string // file patterns to exclude (passed as --exclude flags to mc mirror)
 }
 

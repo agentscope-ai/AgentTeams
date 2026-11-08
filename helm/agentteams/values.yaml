@@ -95,16 +95,39 @@ gateway:
 # provider=oss + mode=existing → external Alibaba Cloud OSS bucket; the
 #   controller obtains STS credentials from agentteams-credential-provider
 #   on every mc invocation and does NOT create buckets/users/policies.
+# provider=s3 + mode=existing → external S3-compatible backend (e.g.
+#   RustFS) with fixed credentials. The backend must expose the
+#   MinIO-compatible admin API: the controller creates the bucket and
+#   manages per-worker users/policies via mc (verified against RustFS
+#   1.0.3; see docs/design/storage-external-s3-backend.md).
 storage:
-  provider: minio             # minio | oss
+  provider: minio             # minio | oss | s3
   mode: managed               # managed | existing
   bucket: "agentteams-storage"
+  # Caller-reachable origin of the same storage, e.g. "https://files.example.com"
+  # (Ingress/LoadBalancer in front of the storage service). Used ONLY to mint
+  # presigned download URLs (?presign=1 on the human file API): the S3 V4
+  # signature binds the Host header, so the URL must be signed for the origin
+  # the caller can reach, not the internal cluster endpoint. Leave empty to
+  # disable presign: ?presign=1 then answers 501 presign_unsupported and
+  # clients fall back to the streamed GET.
+  publicEndpoint: ""
   # Required when provider=oss:
   oss:
     region: ""                # e.g. "cn-hangzhou"
     # Explicit endpoint override. Usually unset — the credential-provider
     # sidecar returns the correct endpoint as part of each STS response.
     endpoint: ""
+  # Required when provider=s3:
+  s3:
+    endpoint: ""              # e.g. "http://rustfs:9000"
+    # Root/admin credentials of the external backend. Provide either
+    # existingSecret (preferred) or inline accessKey/secretKey (dev only).
+    existingSecret: ""        # Secret name holding the keys below
+    accessKey: ""             # inline (dev only; prefer existingSecret)
+    secretKey: ""             # inline (dev only; prefer existingSecret)
+    accessKeySecretKey: "accesskey"
+    secretKeySecretKey: "secretkey"
   minio:
     image:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/minio
@@ -292,14 +315,27 @@ worker:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-worker
       tag: ""                 # defaults to global.imageTag
     copaw:
-      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-copaw-worker
-      tag: ""                 # defaults to global.imageTag
+      # Legacy CoPaw deployments only (issue #1310): new releases must not
+      # inject AGENTTEAMS_COPAW_WORKER_IMAGE, so repository stays empty by
+      # default. Existing CoPaw deployments whose workers carry an empty
+      # spec.image must pin the image their previous chart resolved —
+      # repository AND tag (the old chart default was
+      # higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/
+      # agentteams-copaw-worker plus the release's global image tag) — so a
+      # controller upgrade/recreation keeps pulling it. tag has no global
+      # imageTag fallback: this release no longer builds CoPaw images, so a
+      # changed global tag must not select one (the render fails instead).
+      repository: ""
+      tag: ""
     hermes:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-hermes-worker
       tag: ""                 # defaults to global.imageTag
     openhuman:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-openhuman-worker
       tag: ""                 # defaults to global.imageTag
+    deepseekHarness:
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-deepseek-harness-worker
+      tag: "v0.1.1"           # experimental; released independently from global.imageTag
   defaultRuntime: "openclaw"
   resources:
     requests:
@@ -308,3 +344,12 @@ worker:
     limits:
       cpu: "2"
       memory: 2Gi
+
+# ── Legacy CoPaw upgrade gate (issue #1310) ──────────────────────────────
+# The pre-upgrade hook (templates/hook/legacy-copaw-upgrade-gate.yaml) aborts
+# the upgrade when it would drop a resolved AGENTTEAMS_COPAW_WORKER_IMAGE
+# from a live controller deployment (fail-closed by default). Set force to
+# true only to explicitly ack the drop — e.g. after migrating all CoPaw
+# workers to QwenPaw. `helm upgrade --no-hooks` bypasses the gate entirely.
+copawGate:
+  force: false

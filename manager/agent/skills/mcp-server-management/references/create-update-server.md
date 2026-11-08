@@ -1,6 +1,6 @@
 # Create / Update MCP Server
 
-> **Cloud deployment (SAE) note:** The `setup-mcp-server.sh` script and Higress Console API commands are only available in local deployment mode. In cloud mode (`AGENTTEAMS_RUNTIME=aliyun`), direct admin to the Alibaba Cloud AI Gateway console.
+> **Deployment note:** You can use `setup-mcp-server.sh` with self-hosted Higress, including a separate Console container. Set `HIGRESS_CONSOLE_URL` to its reachable address and supply an existing `HIGRESS_COOKIE_FILE` or your Console admin credentials. In cloud mode (`AGENTTEAMS_RUNTIME=aliyun`), direct admin to the Alibaba Cloud AI Gateway console.
 
 ## Setup Script
 
@@ -14,7 +14,7 @@ bash /opt/agentteams/agent/skills/mcp-server-management/scripts/setup-mcp-server
 | `server-name` | yes | Without `mcp-` prefix (e.g., `github`, `weather`) |
 | `credential-value` | yes | The credential (GitHub PAT, API key, etc.) |
 | `--yaml-file` | no | User-provided YAML config. Required when no built-in template exists |
-| `--api-domain` | no | Explicit API domain. Required when YAML URLs use variables instead of literal domains |
+| `--api-domain` | no | Use `[http://\|https://]host[:port]`. Required when your YAML URLs use variables instead of literal domains |
 
 ### Examples
 
@@ -26,6 +26,32 @@ bash .../setup-mcp-server.sh github "ghp_xxxxxxxxxxxx"
 bash .../setup-mcp-server.sh weather "my-key" \
     --yaml-file /tmp/mcp-weather.yaml --api-domain "api.weather.com"
 ```
+
+### Docker-internal HTTP services
+
+Use an explicit HTTP scheme and your service's listening port:
+
+```bash
+bash .../setup-mcp-server.sh security-tool "your-key" \
+    --yaml-file /tmp/mcp-security-tool.yaml \
+    --api-domain "http://security-tool.example.local:8080"
+```
+
+The scheme prefix is optional. When you omit it, the script keeps the HTTPS
+default for a bare `host` (port 443) and for the TLS convention ports 443/8443,
+and assumes plain HTTP for any other explicit port — Docker-internal tool
+services almost always listen on plain HTTP. It prints the scheme it picked, so
+you can re-run with `https://host:port` if your service does speak TLS. An
+explicit `http://`/`https://` prefix is always honored, with a warning when the
+scheme/port pair looks like a mistake (for example `https://host:8080`).
+
+Attach your tool container to `agentteams-net` with a dotted network alias such as
+`security-tool.example.local`; Higress DNS service-source validation rejects
+single-label names. Use the same reachable address in your YAML request URLs.
+Do not include a path, query, or credentials in `--api-domain`.
+
+When you omit `--api-domain`, you continue to use the scheme and port extracted
+from the first YAML request URL.
 
 ### What the script does
 

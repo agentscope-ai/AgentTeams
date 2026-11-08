@@ -4,6 +4,12 @@ AgentTeams 采用 Kubernetes CRD 风格的声明式 YAML 配置来管理平台�
 
 ## 核心概念
 
+### 资源操作权限
+
+平台 Admin 与 Manager 负责全局部署资源管理。Team Leader 负责团队任务协调，并可读取本团队 Worker 状态；不能创建、修改、删除部署资源，也不能替其他 Worker 执行唤醒、休眠或 ensure-ready。Worker 不可用时，Leader 应向 Manager 或平台 Admin 报告任务阻塞，重新查询确认就绪后再分配任务。
+
+任务与项目协调协议、Leader 运行时自身的 ready 上报及凭据刷新继续保留。真人用户已有的团队自助权限不变；这里限制的是 Leader 服务身份，不是所有能访问团队的真人。
+
 ### 组织架构
 
 AgentTeams 采用三层组织架构，映射企业真实团队结构：
@@ -94,7 +100,7 @@ spec:
 | `spec.identity` | string | 否 | — | Worker 公开身份（OpenClaw：生成 IDENTITY.md；QwenPaw：按实现合并入 SOUL.md） |
 | `spec.soul` | string | 否 | — | Worker 人格与价值观设定，用于生成 SOUL.md |
 | `spec.agents` | string | 否 | — | Agent 行为规则，用于生成 AGENTS.md |
-| `spec.skills` | []string | 否 | — | 分配给 Worker 的 skills，由 Manager 统一校验和分发 |
+| `spec.skills` | []string | 否 | — | 由 Manager、Dashboard 或 API 声明式分配给 Worker 的 Skill 名称 |
 | `spec.mcpServers` | []object | 否 | — | mcporter 可调用的 MCP Server。每项包含：`name`（必填，作为 mcporter-servers.json 中的映射键）、`url`（必填，完整网关端点）和 `transport`（默认 `http`，也可为 `sse`）。Controller 会注入 `Authorization: Bearer <gatewayKey>`；网关侧授权不在本字段范围内。 |
 | `spec.package` | string | 否 | — | 自定义包 URI：`file://`、`http(s)://`、`nacos://`，或上传后由 Controller 解析的 `packages/{name}.zip` |
 | `spec.expose` | []object | 否 | — | 通过 Higress 网关暴露的端口列表（见 [服务发布](#服务发布)） |
@@ -117,7 +123,7 @@ Controller 内部已经包含 OpenHuman 后端和镜像配置，但当前发布�
 
 ### Worker Skills
 
-`spec.skills` 记录由 Manager 或声明式 API 分配给 Worker 的 Skills。被引用的 Skill 可以来自 AgentTeams 的 Worker Skill 库，也可以是放在 `$AGENTTEAMS_WORKSPACE_DIR/worker-skills/<skill-name>/` 下的第三方 Skill。
+`spec.skills` 记录由 Manager、Dashboard 或 API 声明式分配给 Worker 的 Skills。被引用的 Skill 可以来自 AgentTeams 的 Worker Skill 库、放在 `$AGENTTEAMS_WORKSPACE_DIR/worker-skills/<skill-name>/` 下的第三方 Skill，也可以来自 Dashboard 分发的完整包。
 
 对于已有 Worker，可以将完整 Skill 目录放入 Manager 工作空间，也可以直接向 Manager 发送一个包含完整 Skill 根目录的 ZIP 附件，然后通过对话让 Manager 安装：
 
@@ -131,11 +137,40 @@ Manager 会先上传并验证 `SKILL.md`，再更新 `spec.skills`。QwenPaw Wor
 
 > 请检查 Worker `amy-ai` 当前分配的 Skill，并确认其中是否包含 `alert-fusion`。
 
-也可以通过 Dashboard 直接向指定 Worker 分发 Skill ZIP。Dashboard 会校验包内 `SKILL.md` 的 `name` 和 `description`，将完整 Skill 写入 `agents/<worker-name>/skills/<skill-name>/`，并尝试通过休眠、唤醒 Worker 触发重新加载；触发失败时，Worker 最长约 5 分钟内通过周期同步发现新文件。完整操作和 ZIP 约束参见 [Worker 指南：通过 Dashboard 分发](worker-guide.md#方式二通过-dashboard-分发)。
+也可以通过 Dashboard 直接向一个或多个 Worker 分发 Skill ZIP。Dashboard 会校验包内 `SKILL.md` 的 `name` 和 `description`，将完整 Skill 写入 `agents/<worker-name>/skills/<skill-name>/`，更新 `spec.skills`，并尝试重启 Worker 触发重新加载。若重启未确认，文件和声明式分配仍会保留，页面会报告部分失败；后续 Controller reconcile 可以继续使该分配生效，无需重新上传。完整操作和 ZIP 约束参见 [Worker 指南：通过 Dashboard 分发](worker-guide.md#方式二通过-dashboard-分发)。
 
-Dashboard 直接分发维护的是 Worker 对象存储中的实际 Skill 文件，不会更新 `spec.skills`。因此 Dashboard 的“已分发技能”可能多于 `agt get workers <name> -o json | jq '.skills'` 的结果；后者只反映 Manager 或声明式 API 维护的分配记录。
+所有受支持的 Dashboard 分发路径都会更新 `spec.skills`。Controller 后续可能要求 Manager 恢复丢失的声明式 Skill，但 Dashboard 分发的 Skill 不要求 Manager 侧保留源文件：Worker 副本仍然存在时会忽略 Manager 恢复失败；Worker 副本缺失且 Manager 无法恢复时，reconcile 继续执行，并在 Worker 状态中记录非阻塞告警。对于远程 Skill 分配，请求的版本或标签刷新失败时同样不会阻塞 reconcile：已有的规范副本会被保留，Worker 状态会记录经过脱敏的告警，只标明 Skill 及请求的版本或标签，不暴露源地址凭据。
 
 也可以通过 `spec.package` 引入一个包含 `skills/` 目录的 Worker 包。包内 Skills 与按名称分配的 Skills 会合并，互不冲突。
+
+### 技能目录 API
+
+`GET /api/v1/skills` 返回部署中可用技能的只读目录，含三类：
+
+- **`source: "builtin"`**——agent 模板自带的内置技能（取自各 `SKILL.md` frontmatter 的 name + description，`agents` 列出提供该技能的模板，`runtimes` 列出支持的运行时）。模板→运行时的映射取自 deployer 自身的 `BuiltinAgentDir` 选择逻辑，因此目录永远与 Worker 实际接收的内置技能一致、不会漂移。
+- **`source: "plugin"`**——随插件包分发的技能（如 TeamHarness），从各插件包的 `plugin.yaml` 清单发现——与插件构建打进 worker 镜像的同一数据源。条目携带 `plugin` 字段；只读且不可经 `spec.skills` 分配（Worker 有插件即有该技能——无 `runtimes`/`agents`/per-worker 分配字段）。
+- **`source: "shared"`**——Dashboard 技能上传流程暂存到 `agents/global/skills/` 下的技能，可分发到任意 Worker。该前缀是**暂存区而非分发通道**：删除其中某个条目只会把它从目录和 Dashboard 全局区移除，**不会**触碰已分发的 per-worker 副本或既有的 `spec.skills` 分配（无级联）。
+- **`source: "team"`**（仅 `?team=` 时）——该团队自有的技能，位于 `teams/<team>/skills/`，通过 `POST /api/v1/skills` 发布（见下文）。
+
+输出按名称排序；端点只暴露元数据——不读技能正文、不访问注册表、不泄露凭据。条目含 `name`/`description`/`source` 及 `version`/`requirements`（builtin）与 `updated_at`（shared）。不带团队参数时目录**仅 admin（L1）可访问**——非 admin 调用方收到 `400 team scope required`。带 `?team=<name>` 时目录按团队范围读：admin 可读任意团队，L2 人类或 team leader 可读自己所在团队；跨团队或不存在的团队读 `404`（与"团队不存在"不可区分）。设计见 [Skill Catalog API](../design/skill-catalog-api.md) 与 [团队技能](../design/team-skills.md)。
+
+### 团队技能
+
+**团队技能**归属单个团队（存储：`teams/<team>/skills/<name>/`）——介于全部署级技能与 per-worker 副本之间的中间层。发布与指派：
+
+1. **发布**（admin 任意团队；或该团队的 L2 人类仅限本团队）：
+
+   ```sh
+   curl -X POST "$CONTROLLER/api/v1/skills" \
+     -H "Authorization: Bearer $TOKEN" \
+     -F "scope=team" -F "team=marketing" \
+     -F "file=@./marketing-briefing.zip"
+   ```
+
+   ZIP 必须只含**一个顶层目录**（技能根目录，目录名即技能名），其根下必须有 `SKILL.md`，且 frontmatter `name` 与目录名一致。上限 64 MB（ZIP 与解压后均计）。上传会做内容扫描（尽力而为）：命中阻断（CRITICAL/HIGH）返回 `422` 并带 findings；扫描不可用则继续并上报 `scan.status: "skipped"`。重复上传同一技能为**精确替换**（新版删掉的旧文件会被删掉）。`scope=deployment`（仅 admin）改发布到 `agents/global/skills/`。
+2. **指派**：更新 Worker 的 `spec.skills`（API、Dashboard，或经 Manager）。下次 reconcile 时 Controller 会**再次、强制地**扫描该技能（扫描被阻断或不可用则不复制，并在 Worker 状态里记为非阻塞 warning），然后把它拷入 `agents/<worker>/skills/<name>/`；Worker 的同步循环会在同步周期内把它物化进原生工作空间。
+
+team leader 可以浏览本团队目录（`GET /api/v1/skills?team=…`）作为指派面，但**不能发布**；manager 与 worker 主体一律不能发布。同名冲突时**团队层优先于 builtin 库**。完整契约、扫描语义与 k8s 模式限制见 [团队技能设计](../design/team-skills.md)。
 
 ### 带自定义包的 Worker
 
@@ -178,6 +213,20 @@ spec:
 | Failed | 创建或运行失败，查看 `status.message` |
 
 **状态字段（节选）：** `observedGeneration`、`matrixUserID`、`roomID`、`containerState`、`lastHeartbeat`、`message`、`exposedPorts`（暴露端口及域名）。
+
+### Worker 更新权限（按角色）
+
+`PUT /api/v1/workers/{name}` 是合并补丁：body 里出现的字段才会被修改。各角色可更新的范围：
+
+| 角色 | 范围 | 字段 |
+|------|------|------|
+| admin / manager | 任意 Worker | 全部字段 |
+| 团队 Leader | 本团队 Worker | 只读（`403`） |
+| L2 人类用户（`permissionLevel: 2`） | 仅 `accessibleTeams` 内的 Worker | `skills` |
+
+Team Leader 在该端点为只读：Worker 配置写入仅限 Admin/Manager（#1536）。
+
+L2 人类用户可自主管理所协调 Worker 的内置技能分配，无需升级到 admin。`remoteSkills` 与 `mcpServers` 暂不开放给 L2：MCP 路径存在网关消费者密钥泄露风险（生成器会把 `Authorization: Bearer <gatewayKey>` 附加到每个 MCP 条目的 URL 上），因此这两个字段对 L2 调用方返回 `400`，直到提权能力设计落地（见 L2 权限设计 issue #1220）。其余字段——`model`、`image`、`soul`、`agents`、`runtime`、`package`、`expose`、`channelPolicy`、`resources`、`containerManaged`、`state`——仍属团队所有者的权限范围；body 触碰即 `400` 拒绝。越权 Worker（跨团队或独立）对 L2 用户读写均不可见（`404`），端点保持防探测。设计细节见 [L2 Human Worker-Scoped Write](../design/l2-worker-scoped-write.md)。
 
 ## Team
 
@@ -426,6 +475,7 @@ spec:
 | `spec.permissionLevel` | int | 是 | — | 权限级别：1、2 或 3 |
 | `spec.accessibleTeams` | []string | 否 | — | 可访问的 Team 列表（L2 生效） |
 | `spec.accessibleWorkers` | []string | 否 | — | 可访问的独立 Worker 列表（L2/L3 生效） |
+| `spec.capabilities` | []string | 否 | — | L2 基线之外的敏感面特权：`full_access`、`channel_secrets`、`external_sources`、`approval_policy`、`secret_reveal`、`file_sync`（见 [capability-foundation](../design/capability-foundation.md)；`file_sync` 见下文「Human 文件同步（服务端半边）」一节） |
 | `spec.note` | string | 否 | — | 备注 |
 
 ### 三级权限模型
@@ -481,6 +531,17 @@ Human 的权限通过两个机制实现：
 | L2 | 添加到指定 Team 的 Leader + Worker + 指定独立 Worker | 指定 Team Room + Worker Room |
 | L3 | 添加到指定 Worker | 指定 Worker Room |
 
+### Human 更新（API）
+
+`PUT /api/v1/humans/{name}` 更新既有 human 的权限配置。合并补丁语义：body 里出现的字段才变，未出现保持原值，显式空数组清空列表。
+
+- **可更新：** `displayName`、`email`、`permissionLevel`（1/2/3）、`accessibleTeams`、`accessibleWorkers`、`note`。
+- **不可更新：** `name` 与 Matrix 身份（账号重新开通是独立操作）。
+- **校验：** `permissionLevel` 超出 1–3 → `400`；`accessibleTeams` / `accessibleWorkers` 引用不存在的 Team/Worker → `400` 并点名。
+- **鉴权：** 仅 admin / manager。团队 Leader、团队范围人类用户、worker 账号一律拒绝——授权是管理员操作。
+
+更新写入 Human CR，既有的 human reconcile 自动把 Matrix 邀请、房间成员、`groupAllowFrom` 重新同步到新范围。注意：本端点不修改 Matrix 房间 power level——`permissionLevel` 变更立即对 API 鉴权生效，但既有房间的管理权限不因本次更新而改变（房间 power level 的对账是独立的变更，不属于本端点）。
+
 ### Human 创建流程
 
 1. 注册 Matrix 账号（自动生成随机密码）
@@ -529,6 +590,74 @@ SMTP 通过以下环境变量配置（在 Manager 容器中）：
 - 创建 L2 Human 前，目标 Team 必须已存在
 - 创建 L3 Human 前，目标 Worker 必须已存在
 - 修改 permissionLevel 会触发全量重算 groupAllowFrom
+
+### 文件区下载（预签名 URL）
+
+每个 Human 的文件区支持两种下载模式：
+
+| 模式 | 请求 | 行为 |
+|------|------|------|
+| 流式（始终可用） | `GET /api/v1/humans/{name}/files/{path}` | Controller 通过自身 API 响应流式返回对象 |
+| 预签名（可选开启） | `GET .../files/{path}?presign=1` | Controller 返回一个限时 URL；客户端**直接从存储**下载对象，不经过 Controller |
+
+**启用预签名下载。** 将 `AGENTTEAMS_FS_PUBLIC_ENDPOINT`（Helm：`storage.publicEndpoint`）设置为**客户端可达**的存储源——所有返回 URL 中的 host 就是该值本身。请指向 MinIO/RustFS 的公网地址，通常是代理 S3 endpoint 的 Ingress 或专用域名（如 `https://files.example.com`），并确保该源提供与 `AGENTTEAMS_FS_ENDPOINT` 相同的 bucket。内嵌安装**不会**把存储端口发布到宿主机（Controller 容器只暴露 8080/8001/8088），因此预签名默认**关闭**：请把 `AGENTTEAMS_FS_PUBLIC_ENDPOINT` 设为浏览器真正可达的存储源（额外发布端口或 Ingress），否则继续使用流式 GET。
+
+**未配置公网端点时**，预签名处于关闭状态，`?presign=1` 会返回：
+
+```
+501 Not Implemented
+{"error":"presign_unsupported","reason":"storage endpoint is not caller-reachable; set AGENTTEAMS_FS_PUBLIC_ENDPOINT or use the streamed GET"}
+```
+
+客户端应将其视为能力信号，回退到同一路径的流式 GET——该模式与存储是否可达无关，始终可用。
+
+**预签名 URL 语义。** 返回的 URL 是匿名的（无需凭据）、有效期为 `AGENTTEAMS_PRESIGN_TTL`（Go duration，默认 5 分钟，最长 60 分钟），并且绑定到公网端点的 host：S3 V4 签名覆盖了 `Host` 头，因此必须按原样获取该 URL——改写主机名（即使是同一 host 的别名）会导致存储以 `403 SignatureDoesNotMatch` 拒绝请求。
+
+## Human 文件同步（服务端半边）
+
+1.2.6 交付的是按人文件同步协议的**服务端半边**（#1414 P3）。Controller 暴露按人的同步 manifest，供同步客户端读写；**同步由客户端驱动**——本地扫描、字节传输、冲突解决全部发生在客户端。服务端只存 manifest，从不合并。
+
+### 1.2.6 交付内容（仅服务端）
+
+| 端点 | 行为 |
+|------|------|
+| `GET /api/v1/humans/{name}/sync/manifest` | 原样返回存储的 manifest，带 `ETag` 头。首次写入前为 `404`。 |
+| `PUT /api/v1/humans/{name}/sync/manifest` | 只接受条件写：更新用 `If-Match <etag>`，首次写用 `If-None-Match: *`。 |
+| `GET /api/v1/humans/{name}/sync/status` | 条目数 / tombstone 数 / generation / 最近更新。首次写入前返回 `200` + 全 0。 |
+
+manifest 是客户端的同步状态：`entries` 把 `files/**` 路径映射到不透明的每文件记录（服务端原样存储、从不解释），`tombstones` 记录客户端删除的文件。服务端校验 body 为 version 1、路径不越出 `files/**`（`memory/`、`digest/`、`.trash/`、`.sync/` 与路径穿越一律拒绝）、大小不超过 2 MiB，然后把它存到对象存储的 `humans/<u>/.sync/manifest.json`。
+
+**1.2.6 不包含：** 本地目录扫描、文件字节传输、客户端冲突循环。服务端只提供状态与条件写，自己不做任何同步。
+
+### 谁来同步
+
+**1.2.6 不附带同步客户端——只有上面的服务端协议。** 客户端侧规划在 #1414 P4（同步载体：宿主 CLI `agt human files sync`、浏览器 presign 上传、≤5 MiB 的 Matrix 小文件兜底），见 F10 可选文件同步调研。没有承诺发布时间；在客户端落地之前，任何符合下述协议的客户端都可以直接使用。
+
+### 冲突语义（客户端读-改-写）
+
+同步是客户端对着条件 PUT 的「读-改-写」循环：
+
+1. `GET …/sync/manifest` → 当前状态 + `ETag`。
+2. 在本地计算合并后的 manifest——扫描、差集、冲突处置都是客户端的事。
+3. 带 `If-Match: <第 1 步的 etag>` 执行 `PUT …/sync/manifest`。
+4. 收到 `412 etag_mismatch`（读取之后 manifest 已变化；该代码同样覆盖 manifest 尚不存在的情形）→ 回到第 1 步重读并重新合并。重试要设上限；持续冲突时停下来报告，不要静默覆盖。
+5. 收到 `409 manifest_exists`（`If-None-Match: *` 首写撞车）→ 重读后改用 `If-Match`。
+
+服务端从不仲裁冲突，也不返回合并结果：`412` 的 body 只带错误码，客户端需要重读获取当前状态。
+
+`generation` 由**服务端持有**：每次被接受的写入在按人路径租约下自增，两台设备不可能同时读到同一个基线而丢失更新。客户端提交的 `generation`、`updatedAt`、`updatedBy` 会被忽略并由服务端重写。
+
+| 条件 | 响应 |
+|------|------|
+| `If-Match` 过期，或 manifest 尚不存在 | `412 etag_mismatch` |
+| 首写（`If-None-Match: *`）但 manifest 已存在 | `409 manifest_exists` |
+| 未带条件头（或两个都带） | `400 conditional_write_required` |
+| body 超过 2 MiB | `413 manifest_too_large` |
+| version 非法、路径越界、tombstone 格式错误 | `400 invalid_manifest` |
+
+### `file_sync` 能力
+
+给 L2 Human 授予 `spec.capabilities: [file_sync]` 只是为其开通上述三个同步端点。它**不是一个打开即完成双向同步的开关**：没有同步客户端（P4）时这些端点不会被使用；文件本身仍由人类文件区自身的访问与配额规则管辖。团队身份（团队 Leader、Worker）一律不授予同步面——同步是按人的，不是按团队的。
 
 ## Package URI
 
@@ -960,6 +1089,50 @@ agt apply worker --name alice --model qwen3.5-plus
 | `dmDenyExtra` | DM 拒绝列表 |
 
 在 Worker 上设置 `spec.channelPolicy` 实现成员级策略，在 Team 上设置 `spec.channelPolicy` 实现团队级策略。
+
+## Worker 频道配置（代理）
+
+每个 Worker 的 qwenpaw app 暴露频道配置接口（QQ / Matrix / 钉钉 / ...）。Controller 将其代理，管理员与 L2 用户可通过 API 或图形化前端（工作台插件 / dashboard）配置频道，无需在 Worker 容器上开 shell：
+
+```bash
+# 列出某 Worker 的频道配置
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/channels \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+
+# 保存频道（body = 完整频道配置；立即生效，无需重启）
+curl -s -X PUT http://127.0.0.1:8090/api/v1/workers/{name}/channels/qq \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"enabled":true,"app_id":"...","client_secret":"***"}'
+# → 200，body 原样返回，X-AgentTeams-MinIO-Persisted: true|false|skipped
+```
+
+`schemas` 路由返回各频道的表单定义（字段名、类型、label、options），前端据此渲染接入表单，无需 per-channel 代码。`conflict-check` 路由（POST）在保存配置前检测其他 agent 是否持有相同频道凭据——2.2.x worker 上服务端执行；旧版本 worker 会原样返回其自身的 `404`，见到该 404 即隐藏入口（见 `docs/design/worker-channels-api.md` 的版本契约一节）。
+
+| 角色 | 读 | 写（`PUT` / `restart` / `conflict-check`） |
+|------|----|-------------------------|
+| L1（admin / cli token） | 任意 Worker | 任意 Worker |
+| L2（Matrix token） | 本团队 Worker | 本团队 Worker |
+| 团队 Leader | 本团队 Worker | 只读（`403`） |
+
+跨团队访问统一返回 `404`（不泄漏存在性）。仅 `embedded` 模式——kube 模式返回 `503`。完整契约见 [design/worker-channels-api.md](../../design/worker-channels-api.md)。
+
+## Worker 会话可见性（chats 代理）
+
+Worker 的会话历史（qwenpaw *chats*——每个用户/通道一条：Matrix 房间、QQ 私聊、console 会话）可通过三个只读代理路由读取：列出会话、打开完整消息记录、查看某会话的运行状态（`idle` / `running`）。
+
+```bash
+# L2 人类列出本团队某 Worker 的会话
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/chats \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+# 打开一条会话的完整消息记录
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/chats/{chat_id} \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+# 某会话的运行状态（QwenPaw >= 2.2.1；旧版本 404 = 前端隐藏该指示器）
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/chats/{chat_id}/status \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+```
+
+与频道/检查点代理相同的范围模型：L1 任意 Worker，L2 / 团队 Leader 本团队 Worker，跨团队 `404`（不泄漏存在性），仅 `embedded` 模式。只读——无创建/归档/删除路由。消息记录是 Worker 对话上下文的逐字内容，访问受该 Worker 的团队范围约束。完整契约见 [design/worker-chats-api.md](../../design/worker-chats-api.md)。
 
 ## 通信权限矩阵
 

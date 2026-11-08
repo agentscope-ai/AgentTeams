@@ -1,0 +1,26 @@
+# AgentTeams TeamHarness adapter manifest for the Hermes runtime.
+#
+# The top-level fields (name/version/description/author/provides_tools/
+# provides_hooks) are what hermes-agent v2026.4.16 actually reads
+# (hermes_cli/plugins.py loads plugins from ~/.hermes/plugins/<dir>/ with
+# lenient data.get parsing; unknown keys are ignored). The AgentTeams CRD
+# header (apiVersion/kind/metadata) is carried for bundle-tooling identity.
+#
+# kind: mcp declares this adapter's nature (MCP server + skills). There is no
+# `kind` field in the upstream plugin loader — the value is declarative and
+# ignored by hermes.
+apiVersion: agentteams.agentteam/v1alpha1
+kind: mcp
+metadata:
+  name: agentteams-teamharness
+  version: 0.1.0
+name: agentteams-teamharness
+version: 0.1.0
+description: >-
+  AgentTeams TeamHarness runtime plugin for Hermes. register(ctx) registers
+  the bundle's skills; the MCP server itself is projected into
+  mcp_servers.<name> of ~/.hermes/config.yaml by install.sh, because
+  hermes-agent has no MCP registration API on PluginContext.
+author: AgentTeams
+provides_tools: []
+provides_hooks: []

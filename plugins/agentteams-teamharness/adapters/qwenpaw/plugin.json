@@ -1,0 +1,17 @@
+{
+  "id": "teamharness",
+  "name": "TeamHarness",
+  "version": "0.1.0",
+  "type": "general",
+  "description": "AgentTeams TeamHarness runtime plugin for QwenPaw.",
+  "author": "AgentTeams",
+  "entry": {
+    "backend": "plugin.py"
+  },
+  "dependencies": [],
+  "min_version": "2.2.0",
+  "qwenpaw_version": {
+    "min": "2.2.0",
+    "max": "2.3.0"
+  }
+}

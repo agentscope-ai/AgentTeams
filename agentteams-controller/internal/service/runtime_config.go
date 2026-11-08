@@ -68,6 +68,7 @@ type memberRuntimeConfigMatrix struct {
 
 type memberRuntimeConfigDesired struct {
 	Model              *memberRuntimeConfigModel         `json:"model,omitempty"`
+	SubagentModel      *memberRuntimeConfigModel         `json:"subagentModel,omitempty"`
 	AgentPackage       *memberRuntimeConfigAgentPackage  `json:"agentPackage,omitempty"`
 	InlineConfig       *memberRuntimeConfigInlineConfig  `json:"inlineConfig,omitempty"`
 	SkillRegistry      *memberRuntimeConfigSkillRegistry `json:"skillRegistry,omitempty"`
@@ -81,10 +82,11 @@ type memberRuntimeConfigDesired struct {
 }
 
 type memberRuntimeConfigModel struct {
-	ProviderID string `json:"providerId"`
-	Model      string `json:"model"`
-	GatewayURL string `json:"gatewayUrl,omitempty"`
-	GatewayKey string `json:"gatewayKey,omitempty"`
+	ProviderID string   `json:"providerId"`
+	Model      string   `json:"model"`
+	GatewayURL string   `json:"gatewayUrl,omitempty"`
+	GatewayKey string   `json:"gatewayKey,omitempty"`
+	Input      []string `json:"input,omitempty"` // model input modalities, e.g. ["text", "image"]
 }
 
 type memberRuntimeConfigAgentPackage struct {
@@ -105,6 +107,12 @@ type memberRuntimeConfigSkillRegistry struct {
 
 type memberRuntimeConfigChannels struct {
 	DingTalk *memberRuntimeConfigDingTalkChannel `json:"dingtalk,omitempty"`
+	Matrix   *memberRuntimeConfigMatrixChannel   `json:"matrix,omitempty"`
+}
+
+type memberRuntimeConfigMatrixChannel struct {
+	FilterThinking     bool `json:"filter_thinking"`
+	FilterToolMessages bool `json:"filter_tool_messages"`
 }
 
 type memberRuntimeConfigDingTalkChannel struct {
@@ -265,10 +273,21 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 			gatewayURL = d.runtimeProjection.AIGatewayURL
 		}
 		desired.Model = &memberRuntimeConfigModel{
-			ProviderID: "agentteams-gateway",
+			ProviderID: providerIDFromSpec(req.Spec.ModelProvider),
 			Model:      req.Spec.Model,
 			GatewayURL: gatewayURL,
 			GatewayKey: strings.TrimSpace(req.GatewayKey),
+			Input:      d.agentConfig.ResolveModelInput(req.Spec.Model),
+		}
+	}
+	// Subagent model: callers pass the resolved value (worker value wins
+	// over the team default). Mirrors the openclaw.json projection so
+	// runtimes that consume this document apply the override at
+	// startup/recreation, not only through the controller hot apply.
+	if req.SubagentModel != "" {
+		desired.SubagentModel = &memberRuntimeConfigModel{
+			ProviderID: providerIDFromSpec(req.Spec.ModelProvider),
+			Model:      req.SubagentModel,
 		}
 	}
 	if req.Spec.Package != "" {
@@ -365,15 +384,41 @@ func isNativeConfigModel(model string) bool {
 	return strings.EqualFold(strings.TrimSpace(model), nativeConfigModel)
 }
 
+// providerIDFromSpec resolves the gateway provider serving this member's
+// models; empty keeps the built-in gateway provider.
+func providerIDFromSpec(name string) string {
+	if v := strings.TrimSpace(name); v != "" {
+		return v
+	}
+	return "agentteams-gateway"
+}
+
 func memberRuntimeConfigChannelsFromSpec(spec v1beta1.WorkerSpec) (*memberRuntimeConfigChannels, error) {
-	if spec.Channels == nil || spec.Channels.DingTalk == nil {
+	if spec.Channels == nil {
 		return nil, nil
 	}
-	dingtalk, err := memberRuntimeConfigDingTalkFromSpec(spec.Channels.DingTalk)
-	if err != nil {
-		return nil, err
+	channels := &memberRuntimeConfigChannels{}
+	if spec.Channels.DingTalk != nil {
+		dingtalk, err := memberRuntimeConfigDingTalkFromSpec(spec.Channels.DingTalk)
+		if err != nil {
+			return nil, err
+		}
+		channels.DingTalk = dingtalk
 	}
-	return &memberRuntimeConfigChannels{DingTalk: dingtalk}, nil
+	if spec.Channels.Matrix != nil {
+		channels.Matrix = memberRuntimeConfigMatrixFromSpec(spec.Channels.Matrix)
+	}
+	if channels.DingTalk == nil && channels.Matrix == nil {
+		return nil, nil
+	}
+	return channels, nil
+}
+
+func memberRuntimeConfigMatrixFromSpec(spec *v1beta1.MatrixChannelSpec) *memberRuntimeConfigMatrixChannel {
+	return &memberRuntimeConfigMatrixChannel{
+		FilterThinking:     !spec.ShowThinking,
+		FilterToolMessages: !spec.ShowToolCalls,
+	}
 }
 
 func memberRuntimeConfigDingTalkFromSpec(spec *v1beta1.DingTalkChannelSpec) (*memberRuntimeConfigDingTalkChannel, error) {

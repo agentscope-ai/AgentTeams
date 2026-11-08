@@ -1,0 +1,139 @@
+# Pre-upgrade migration gate for legacy CoPaw deployments (issue #1310 /
+# PR #1335).
+#
+# The supported upgrade path is a plain `helm upgrade` of the published
+# chart, so the gate must live in the chart: this pre-upgrade hook runs a
+# short Job in the controller image (which bundles kubectl + POSIX sh) that
+# compares the AGENTTEAMS_COPAW_WORKER_IMAGE the live controller deployment
+# resolves against the image this upgrade renders (GATE_NEW_COPAW_IMAGE).
+# The upgrade aborts (fail-closed) when the env would be dropped without
+# copawGate.force=true, or when the cluster cannot be read at all.
+#
+# Fresh installs are unaffected: pre-upgrade hooks do not run on
+# `helm install`. `helm upgrade --no-hooks` bypasses the gate entirely.
+{{- $gateName := printf "%s-copaw-gate" (include "agentteams.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- $controllerTag := include "agentteams.imageTag" (dict "tag" .Values.controller.image.tag "global" .Values.global "root" $) }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $gateName }}
+  namespace: {{ include "agentteams.namespace" . }}
+  labels:
+    {{- include "agentteams.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: copaw-gate
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $gateName }}
+  namespace: {{ include "agentteams.namespace" . }}
+  labels:
+    {{- include "agentteams.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: copaw-gate
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation
+rules:
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+    verbs:
+      - get
+      - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $gateName }}
+  namespace: {{ include "agentteams.namespace" . }}
+  labels:
+    {{- include "agentteams.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: copaw-gate
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation
+subjects:
+  - kind: ServiceAccount
+    name: {{ $gateName }}
+    namespace: {{ include "agentteams.namespace" . }}
+roleRef:
+  kind: Role
+  name: {{ $gateName }}
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $gateName }}
+  namespace: {{ include "agentteams.namespace" . }}
+  labels:
+    {{- include "agentteams.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: copaw-gate
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation
+data:
+  check.sh: |
+    {{- .Files.Get "files/copaw-gate-check.sh" | nindent 6 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $gateName }}
+  namespace: {{ include "agentteams.namespace" . }}
+  labels:
+    {{- include "agentteams.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: copaw-gate
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 120
+  template:
+    metadata:
+      labels:
+        {{- include "agentteams.commonLabels" . | nindent 8 }}
+        app.kubernetes.io/component: copaw-gate
+    spec:
+      serviceAccountName: {{ $gateName }}
+      restartPolicy: Never
+      containers:
+        - name: gate
+          image: "{{ .Values.controller.image.repository }}:{{ $controllerTag }}"
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - /gate/check.sh
+          env:
+            - name: GATE_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: GATE_NEW_COPAW_IMAGE
+              {{- if .Values.worker.defaultImage.copaw.repository }}
+              value: {{ include "agentteams.worker.copawImage" . | quote }}
+              {{- else }}
+              value: ""
+              {{- end }}
+            - name: GATE_FORCE
+              value: {{ .Values.copawGate.force | default false | quote }}
+          volumeMounts:
+            - name: gate-script
+              mountPath: /gate
+              readOnly: true
+      volumes:
+        - name: gate-script
+          configMap:
+            name: {{ $gateName }}
+            defaultMode: 0555

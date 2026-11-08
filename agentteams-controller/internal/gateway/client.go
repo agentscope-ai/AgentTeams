@@ -34,7 +34,7 @@ type Client interface {
 	EnsureServiceSource(ctx context.Context, name, domain string, port int, protocol string) error
 
 	// EnsureStaticServiceSource registers a static (fixed IP:port) service source.
-	EnsureStaticServiceSource(ctx context.Context, name, address string, port int) error
+	EnsureStaticServiceSource(ctx context.Context, name, address string, port int, protocol string) error
 
 	// EnsureRoute creates a route mapping domains to a backend service.
 	// pathPrefix is the URL prefix to match (e.g. "/" or "/_matrix").
@@ -57,6 +57,14 @@ type Client interface {
 	// its basePath, Intranet subdomain URL, and httpApiId. Only meaningful for
 	// the ai-gateway provider; Higress returns ErrUnsupportedOp.
 	ResolveModelProvider(ctx context.Context, name string) (*ModelProviderInfo, error)
+
+	// ListAIRoutes returns the configured AI routes with their upstreams and
+	// consumer allowlists. Routes are the gateway's /v1 entry points with
+	// consumer authorization — NOT a model list: a route name is not a model
+	// ID, and one route can serve several models (model IDs are defined by
+	// the route's upstream provider). Backends without a route-list API
+	// (ai-gateway) return ErrUnsupportedOp.
+	ListAIRoutes(ctx context.Context) ([]AIRouteInfo, error)
 
 	// Healthy returns nil if the gateway console is reachable and authenticated.
 	Healthy(ctx context.Context) error

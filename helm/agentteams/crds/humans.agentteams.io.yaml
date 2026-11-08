@@ -50,6 +50,131 @@ spec:
                   required: [issuer, subject]
                 note:
                   type: string
+                workspaceFileAccess:
+                  type: string
+                  enum:
+                    - read
+                    - readwrite
+                  description: "Knowledge base file access for this human's own teams: read (default when empty) or readwrite (explicit write opt-in); L1 admin is never restricted, team leaders stay read-only"
+                capabilities:
+                  type: array
+                  items:
+                    type: string
+                  description: "Named sensitive-surface privileges beyond the L2 baseline (six-value set: full_access, channel_secrets, external_sources, approval_policy, secret_reveal, file_sync; docs/design/capability-foundation.md). Team leaders never hold capabilities"
+                workspaceQuotaBytes:
+                  type: integer
+                  format: int64
+                  nullable: true
+                  description: "Total byte budget for the human's file area (files/** plus .trash/**); null/absent = unlimited. Enforced before writes and trash restores; usage is computed live"
+                modelAccess:
+                  description: >-
+                    Per-human model grants. Absent means every model surface is
+                    locked (fail-closed). A scope targets one role and either
+                    references a ModelAccessTable or carries inline surfaces.
+                  type: object
+                  properties:
+                    scopes:
+                      type: array
+                      maxItems: 50
+                      items:
+                        type: object
+                        properties:
+                          role:
+                            type: string
+                            enum: ["", "*", "team_leader", "worker"]
+                          table:
+                            type: string
+                            maxLength: 253
+                          main:
+                            type: object
+                            properties:
+                              entries:
+                                type: array
+                                maxItems: 200
+                                items:
+                                  type: object
+                                  required: [provider, model]
+                                  properties:
+                                    provider: {type: string, minLength: 1, maxLength: 253}
+                                    model: {type: string, minLength: 1, maxLength: 253}
+                              inherit: {type: boolean}
+                          spawn:
+                            type: object
+                            properties:
+                              entries:
+                                type: array
+                                maxItems: 200
+                                items:
+                                  type: object
+                                  required: [provider, model]
+                                  properties:
+                                    provider: {type: string, minLength: 1, maxLength: 253}
+                                    model: {type: string, minLength: 1, maxLength: 253}
+                              inherit: {type: boolean}
+                          codingCli:
+                            type: array
+                            maxItems: 3
+                            items:
+                              type: object
+                              required: [cli]
+                              properties:
+                                cli: {type: string, enum: ["qwen-code", "opencode", "qoder"]}
+                                entries:
+                                  type: array
+                                  maxItems: 200
+                                  items:
+                                    type: object
+                                    required: [provider, model]
+                                    properties:
+                                      provider: {type: string, minLength: 1, maxLength: 253}
+                                      model: {type: string, minLength: 1, maxLength: 253}
+                                inherit: {type: boolean}
+                workspaceAccess:
+                  type: object
+                  description: "Per-team access rules for this human's file area (files/** only; memory/** and digest/** are never addressable): grants add access for teams outside the default set, restrictions narrow the default readwrite of a default team (a restriction always wins, fail closed)"
+                  properties:
+                    grants:
+                      type: array
+                      maxItems: 32
+                      description: "Extra access for teams outside the default set; at most one rule per team"
+                      items:
+                        type: object
+                        required: [team, paths, mode]
+                        properties:
+                          team:
+                            type: string
+                            minLength: 1
+                          paths:
+                            type: array
+                            minItems: 1
+                            maxItems: 16
+                            items:
+                              type: string
+                            description: "Glob paths under files/ (* exactly one segment, ** zero or more whole segments)"
+                          mode:
+                            type: string
+                            enum: [read, readwrite]
+                    restrictions:
+                      type: array
+                      maxItems: 32
+                      description: "Narrow the default readwrite of a default team to read or none; at most one rule per team, takes precedence over grants"
+                      items:
+                        type: object
+                        required: [team, paths, mode]
+                        properties:
+                          team:
+                            type: string
+                            minLength: 1
+                          paths:
+                            type: array
+                            minItems: 1
+                            maxItems: 16
+                            items:
+                              type: string
+                            description: "Glob paths under files/ (* exactly one segment, ** zero or more whole segments)"
+                          mode:
+                            type: string
+                            enum: [none, read]
             status:
               type: object
               properties:

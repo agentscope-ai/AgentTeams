@@ -1,0 +1,46 @@
+{
+  "name": "agentteams-teamharness-dsh",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./context": "./context.js",
+    "./live-probe": "./live-probe.js",
+    "./message-id": "./message-id.js",
+    "./probe": "./probe.js",
+    "./runner": "./runner.js",
+    "./turn": "./turn.js"
+  },
+  "files": [
+    "context.js",
+    "live-probe.js",
+    "message-id.js",
+    "prepare-skills.js",
+    "probe.js",
+    "runner.js",
+    "turn.js",
+    "cordis.patch.yml"
+  ],
+  "dependencies": {
+    "yaml": "^2.8.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-agent": "*",
+    "@deepseek-ai/dsh-llm": "*",
+    "@deepseek-ai/dsh-session": "*",
+    "@deepseek-ai/schemastery": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": { "optional": true },
+    "@deepseek-ai/dsh-agent": { "optional": true },
+    "@deepseek-ai/dsh-llm": { "optional": true },
+    "@deepseek-ai/dsh-session": { "optional": true },
+    "@deepseek-ai/schemastery": { "optional": true }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

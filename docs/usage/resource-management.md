@@ -4,6 +4,12 @@ AgentTeams uses Kubernetes CRD-style declarative YAML to manage platform resourc
 
 ## Core Concepts
 
+### Resource authority
+
+Platform Admin and Manager own global deployment resource management. A Team Leader coordinates tasks and reads its team's Worker status, but cannot create, update, or delete deployment resources or wake, sleep, or ensure-ready another Worker. If a Worker is unavailable, the Leader reports the blocked task to Manager or platform Admin and waits for a fresh ready status before assigning work.
+
+Task/project coordination and the Leader runtime's own readiness report and credential refresh remain available. Existing human self-service permissions are unchanged; this boundary applies to the Leader service identity, not every human who can access a team.
+
 ### Organization Structure
 
 AgentTeams uses a three-tier organization that maps to real enterprise team structures:
@@ -94,7 +100,7 @@ spec:
 | `spec.identity` | string | No | — | Worker public identity (OpenClaw: generates IDENTITY.md; QwenPaw: merged into SOUL.md per controller) |
 | `spec.soul` | string | No | — | Worker personality and values (generates SOUL.md) |
 | `spec.agents` | string | No | — | Agent behavior rules, used to generate AGENTS.md |
-| `spec.skills` | []string | No | — | Assigned Worker skills, distributed and verified by Manager |
+| `spec.skills` | []string | No | — | Skill names declaratively assigned to the Worker through the Manager, Dashboard, or API |
 | `spec.mcpServers` | []object | No | — | MCP servers callable via mcporter. Each item: `name` (required, map key in mcporter-servers.json), `url` (required, full gateway endpoint), `transport` (`http` default or `sse`). The controller injects `Authorization: Bearer <gatewayKey>`; gateway-side authorization is out of scope. |
 | `spec.package` | string | No | — | Custom package URI: `file://`, `http(s)://`, `nacos://`, or controller-resolved `packages/{name}.zip` after upload |
 | `spec.expose` | []object | No | — | Ports to expose via Higress gateway (see [Service Publishing](#service-publishing)) |
@@ -117,7 +123,7 @@ When both are set, inline fields override the corresponding files in the package
 
 ### Worker Skills
 
-`spec.skills` records Skills assigned to a Worker through the Manager or declarative API. A referenced Skill can come from the AgentTeams Worker skill library or from a third-party Skill placed under `$AGENTTEAMS_WORKSPACE_DIR/worker-skills/<skill-name>/`.
+`spec.skills` records Skills declaratively assigned to a Worker through the Manager, Dashboard, or API. A referenced Skill can come from the AgentTeams Worker skill library, from a third-party Skill placed under `$AGENTTEAMS_WORKSPACE_DIR/worker-skills/<skill-name>/`, or from a complete package distributed by the Dashboard.
 
 For an existing Worker, either put the complete Skill directory in the Manager workspace or send the Manager a ZIP attachment containing one complete Skill root. Then ask the Manager to install it:
 
@@ -131,11 +137,56 @@ The assignment can also be checked through conversation instead of a CLI command
 
 > Check the skills assigned to Worker `amy-ai` and confirm whether `alert-fusion` is included.
 
-You can also distribute a Skill ZIP directly to a target Worker through the Dashboard. The Dashboard validates `name` and `description` in `SKILL.md`, writes the complete Skill to `agents/<worker-name>/skills/<skill-name>/`, and attempts to trigger a reload by sleeping and waking the Worker. If that trigger fails, periodic synchronization should discover the new files within about five minutes. See [Worker Guide: Distribute through the Dashboard](worker-guide.md#method-2-distribute-through-the-dashboard) for the complete UI flow and ZIP constraints.
+You can also distribute a Skill ZIP directly to one or more Workers through the Dashboard. The Dashboard validates `name` and `description` in `SKILL.md`, preserves the complete package under `agents/<worker-name>/skills/<skill-name>/`, updates `spec.skills`, and attempts to restart the Worker to trigger a reload. If the restart is not confirmed, the files and declarative assignment remain in place and the UI reports a partial failure; a subsequent Controller reconcile can still make the assignment effective without another upload. See [Worker Guide: Distribute through the Dashboard](worker-guide.md#method-2-distribute-through-the-dashboard) for the complete UI flow and ZIP constraints.
 
-Direct Dashboard distribution manages the actual Skill files in Worker object storage and does not update `spec.skills`. The Dashboard's **已分发技能 (Distributed Skills)** list can therefore contain more entries than `agt get workers <name> -o json | jq '.skills'`; the latter reflects only assignments maintained through the Manager or declarative API.
+All supported Dashboard distribution paths update `spec.skills`. The Controller may ask the Manager to restore a missing declared Skill later, but a Dashboard-distributed Skill does not need a Manager-side source copy. If the Worker copy still exists, Manager recovery failure is ignored. If the Worker copy is missing and the Manager cannot restore it, reconciliation continues and records a non-blocking warning in Worker status. Remote Skill assignments also keep reconciliation non-blocking when a requested version or label cannot be refreshed: an existing canonical copy is retained, and Worker status records a sanitized warning that identifies the Skill and requested version or label without exposing source credentials.
 
 You can also use `spec.package` to provide a Worker package containing a `skills/` directory. Package skills and assigned skills are merged without conflict.
+
+### Skill Catalog API
+
+`GET /api/v1/skills` returns the read-only catalog of skills available in the deployment:
+
+- **`source: "builtin"`** — the skills shipped with the agent templates, with the providing templates listed in `agents` and the supporting runtimes in `runtimes` (derived from the deployer's own template selection, so the catalog never drifts from what workers actually receive).
+- **`source: "plugin"`** — the skills shipped inside plugin packages (e.g. TeamHarness), discovered from each package's `plugin.yaml` manifest — the same source the plugin build packages into the worker images. Entries carry the `plugin` name; they are read-only and non-assignable (a worker has the skill iff it has the plugin — no `runtimes`/`agents`/per-worker assignment field).
+- **`source: "shared"`** — the skills staged under `agents/global/skills/` by the Dashboard's skill-upload flow, available for distribution to any worker. This prefix is a staging area, not a distribution channel: deleting an entry removes it from the catalog and the Dashboard's global area but never touches already-distributed per-worker copies or existing `spec.skills` assignments (no cascade).
+- **`source: "team"`** (only with `?team=`) — the team's own skills under `teams/<team>/skills/`, published through `POST /api/v1/skills` (see below).
+
+Output is sorted by name; the endpoint is metadata-only — no skill content, no registry calls, no credentials. Entries carry `name`/`description`/`source` plus `version`/`requirements` (builtin) and `updated_at` (shared). Without a team parameter the catalog is **admin (L1) only** — non-admin callers receive `400 team scope required`. With `?team=<name>` the catalog is team-scoped: admin reads any team, an L2 human or team leader reads their own team; a cross-team or unknown team reads `404` (indistinguishable from "no such team"). See [Skill Catalog API](../design/skill-catalog-api.md) and [Team Skills](../design/team-skills.md).
+
+### Team Skills
+
+A **team skill** belongs to one team (storage: `teams/<team>/skills/<name>/`) — the middle layer between deployment-wide skills and per-worker copies. Publishing and assigning:
+
+1. **Publish** (admin, any team; or the team's L2 human, own team only):
+
+   ```sh
+   curl -X POST "$CONTROLLER/api/v1/skills" \
+     -H "Authorization: Bearer $TOKEN" \
+     -F "scope=team" -F "team=marketing" \
+     -F "file=@./marketing-briefing.zip"
+   ```
+
+   The zip must contain exactly one top-level directory (the skill root,
+   named like the skill), with `SKILL.md` at its root whose frontmatter
+   `name` equals the directory name. Max 64 MB (zip and uncompressed).
+   The upload is content-scanned (best-effort): a blocked scan returns
+   `422` with the findings; an unavailable scan proceeds and reports
+   `scan.status: "skipped"`. Re-uploading the same skill replaces it
+   exactly (dropped files are deleted). `scope=deployment` (admin only)
+   publishes to `agents/global/skills/` instead.
+2. **Assign**: update the Worker's `spec.skills` (API, Dashboard, or
+   through the Manager). At the next reconcile the Controller scans the
+   skill **again, mandatorily** (a blocked or unavailable scan is not
+   copied and surfaces as a Worker warning), then copies it into
+   `agents/<worker>/skills/<name>/`; the Worker's sync loop materializes
+   it into its native workspace within the sync interval.
+
+Team leaders can browse their team's catalog (`GET /api/v1/skills?team=…`)
+as the assign surface but cannot publish; manager and worker principals
+cannot publish at all. On a name clash the **team layer wins** over the
+builtin library. See [Team Skills design](../design/team-skills.md) for
+the full contract, scan semantics, and the k8s-mode limitation.
 
 ### Worker with Custom Package
 
@@ -178,6 +229,20 @@ When the Controller receives a Worker resource, it executes:
 | Failed | Creation or runtime failure — check `status.message` |
 
 **Status fields (subset):** `status.observedGeneration`, `status.matrixUserID`, `status.roomID`, `status.containerState`, `status.lastHeartbeat`, `status.message`, `status.exposedPorts` (per-port `domain` after expose).
+
+### Worker Updates by Role (API)
+
+`PUT /api/v1/workers/{name}` is a merge-patch: only fields present in the body are changed. What each role may update:
+
+| Role | Scope | Fields |
+|------|-------|--------|
+| admin / manager | any worker | all fields |
+| team leader | own-team workers (read only) | none — every field is `403` |
+| L2 human (`permissionLevel: 2`) | workers in `accessibleTeams` only | `skills` |
+
+Team leaders are read-only on this endpoint: worker configuration writes are reserved for Admin/Manager (#1536).
+
+L2 humans manage the built-in skill assignments of the workers they coordinate without escalating to the admin. `remoteSkills` and `mcpServers` are not L2-writable yet: the MCP path can exfiltrate the gateway consumer key (the generator attaches `Authorization: Bearer <gatewayKey>` to every MCP entry), so both fields return `400` for L2 callers until the elevated-capability design lands (see the L2 permission design issue #1220). Other fields — `model`, `image`, `soul`, `agents`, `runtime`, `package`, `expose`, `channelPolicy`, `resources`, `containerManaged`, `state` — stay in the team owner's domain; a body that touches them is rejected with `400`. Out-of-scope workers (cross-team or standalone) are invisible to L2 humans on both read and update (`404`), keeping the endpoint probe-resistant. See [L2 Human Worker-Scoped Write](../design/l2-worker-scoped-write.md).
 
 ## Team
 
@@ -427,6 +492,7 @@ spec:
 | `spec.permissionLevel` | int | Yes | — | Permission level: 1, 2, or 3 |
 | `spec.accessibleTeams` | []string | No | — | Accessible Team list (effective for L2) |
 | `spec.accessibleWorkers` | []string | No | — | Accessible standalone Worker list (effective for L2/L3) |
+| `spec.capabilities` | []string | No | — | Sensitive-surface privileges beyond the L2 baseline: `full_access`, `channel_secrets`, `external_sources`, `approval_policy`, `secret_reveal`, `file_sync` (see [capability-foundation](../design/capability-foundation.md); `file_sync` is described in [Human file sync (server half)](#human-file-sync-server-half)) |
 | `spec.note` | string | No | — | Notes |
 
 ### Three-Level Permission Model
@@ -482,6 +548,17 @@ Human permissions are enforced through two mechanisms:
 | L2 | Added to specified Teams' Leaders + Workers + specified standalone Workers | Specified Team Rooms + Worker Rooms |
 | L3 | Added to specified Workers | Specified Worker Rooms |
 
+### Human Updates (API)
+
+`PUT /api/v1/humans/{name}` updates an existing human's permission profile. It is a merge-patch: only fields present in the body change; an absent field is kept, and an explicitly empty list clears it.
+
+- **Updatable:** `displayName`, `email`, `permissionLevel` (1/2/3), `accessibleTeams`, `accessibleWorkers`, `note`.
+- **Not updatable:** `name` and the Matrix identity (re-provisioning the account is a separate operation).
+- **Validation:** `permissionLevel` outside 1–3 → `400`; `accessibleTeams` / `accessibleWorkers` referencing missing Teams/Workers → `400` naming the references.
+- **Authorization:** admin / manager only. Team leaders, team-scoped humans, and worker accounts are denied — permission grants are an admin operation.
+
+The update is applied to the Human CR; the existing human reconcile then re-syncs Matrix invitations, room memberships, and `groupAllowFrom` to match the new scope. This endpoint does not change Matrix room power levels: a `permissionLevel` change affects API authorization immediately, but room administration privileges in existing rooms are not altered by the update.
+
 ### Human Creation Flow
 
 1. Register a Matrix account (random password auto-generated)
@@ -530,6 +607,74 @@ If SMTP is not configured or `spec.email` is empty, email sending is skipped wit
 - Target Teams must exist before creating an L2 Human
 - Target Workers must exist before creating an L3 Human
 - Changing permissionLevel triggers a full recalculation of groupAllowFrom
+
+### File Area Downloads (Presigned URLs)
+
+Each Human's file area supports two download modes:
+
+| Mode | Request | Behavior |
+|------|---------|----------|
+| Streamed (always available) | `GET /api/v1/humans/{name}/files/{path}` | The Controller streams the object through its own API response |
+| Presigned (opt-in) | `GET .../files/{path}?presign=1` | The Controller returns a time-limited URL; the client fetches the object **directly from storage** without going through the Controller |
+
+**Enabling presigned downloads.** Set `AGENTTEAMS_FS_PUBLIC_ENDPOINT` (Helm: `storage.publicEndpoint`) to a storage origin that is **reachable from your clients** — the host in every returned URL is exactly this value. Point it at the public address of your MinIO/RustFS, typically an Ingress or a dedicated domain fronting the S3 endpoint (e.g. `https://files.example.com`), and make sure that origin serves the same bucket as `AGENTTEAMS_FS_ENDPOINT`. The embedded install does **not** publish the storage port to the host (the Controller container exposes only 8080/8001/8088), so presigning is **disabled by default** there: set `AGENTTEAMS_FS_PUBLIC_ENDPOINT` to a storage origin your browser can actually reach (an extra published port or an ingress), or keep using the streamed GET.
+
+**When no public endpoint is configured**, presigning is disabled and `?presign=1` answers:
+
+```
+501 Not Implemented
+{"error":"presign_unsupported","reason":"storage endpoint is not caller-reachable; set AGENTTEAMS_FS_PUBLIC_ENDPOINT or use the streamed GET"}
+```
+
+Clients should treat this as a capability signal and fall back to the streamed GET on the same path — that mode works regardless of storage reachability.
+
+**Presigned URL semantics.** A returned URL is anonymous (no credentials needed), valid for `AGENTTEAMS_PRESIGN_TTL` (Go duration, default 5 minutes, max 60 minutes), and bound to the public endpoint's host: the S3 V4 signature covers the `Host` header, so fetch the URL exactly as returned — rewriting the hostname (even to an alias of the same host) makes storage reject it with `403 SignatureDoesNotMatch`.
+
+## Human file sync (server half)
+
+1.2.6 ships the **server half** of the per-human file sync protocol (#1414 P3). The controller exposes a per-human sync manifest that a sync client can read and write; **clients drive the sync** — local scanning, byte transfer, and conflict resolution all happen client-side. The server stores the manifest and never merges it.
+
+### What 1.2.6 delivers (server side only)
+
+| Endpoint | Behavior |
+|----------|----------|
+| `GET /api/v1/humans/{name}/sync/manifest` | The stored manifest verbatim, with an `ETag` header. `404` before the first write. |
+| `PUT /api/v1/humans/{name}/sync/manifest` | Conditional writes only: `If-Match <etag>` for updates, `If-None-Match: *` for the first write. |
+| `GET /api/v1/humans/{name}/sync/status` | Entry/tombstone counts, generation, last update. `200` with a zero summary before the first write. |
+
+The manifest is the client's sync state: `entries` maps `files/**` paths to opaque per-file records (the server stores them verbatim, never interprets them), and `tombstones` records files the client deleted. The server validates that the body is version 1, stays inside `files/**` (`memory/`, `digest/`, `.trash/`, `.sync/`, and path traversal are rejected), and is at most 2 MiB, then stores it at `humans/<u>/.sync/manifest.json` in object storage.
+
+**Not included in 1.2.6:** no local directory scan, no file byte transfer, and no client conflict loop. The server provides the state and the conditional write; it does not sync anything by itself.
+
+### Who does the sync
+
+**No sync client ships with 1.2.6 — only the server-side protocol above.** The client side is planned as #1414 P4 (the sync carriers: a host CLI `agt human files sync`, browser presigned upload, and a Matrix small-file fallback for ≤5 MiB), tracked in the F10 optional file sync research. No release timing is committed; until a client lands, any conforming client can use the protocol below directly.
+
+### Conflict semantics (client read-modify-write)
+
+Sync is a client read-modify-write loop against the conditional PUT:
+
+1. `GET …/sync/manifest` → current state + `ETag`.
+2. Compute the merged manifest locally — scan, diff, and the conflict decision are the client's.
+3. `PUT …/sync/manifest` with `If-Match: <etag from step 1>`.
+4. On `412 etag_mismatch` — the manifest changed since the read (the code also covers a manifest that does not exist yet) — re-read from step 1 and merge again. Bound the retries; if the conflict persists, stop and report instead of overwriting.
+5. On `409 manifest_exists` — a first-write race on `If-None-Match: *` — re-read and switch to `If-Match`.
+
+The server never mediates a conflict and returns no merge result: a `412` body carries only the coded error, so the client re-reads for the current state.
+
+`generation` is **server-owned**: every accepted write bumps it under a per-human path lease, so two devices cannot both read the same base and silently lose an update. Client-supplied `generation`, `updatedAt`, and `updatedBy` are ignored and rewritten by the server.
+
+| Condition | Response |
+|-----------|----------|
+| `If-Match` stale, or the manifest does not exist yet | `412 etag_mismatch` |
+| First write (`If-None-Match: *`) but a manifest already exists | `409 manifest_exists` |
+| No conditional header (or both) | `400 conditional_write_required` |
+| Body over 2 MiB | `413 manifest_too_large` |
+| Invalid version, out-of-scope path, malformed tombstone | `400 invalid_manifest` |
+
+### The `file_sync` capability
+
+Granting `spec.capabilities: [file_sync]` to an L2 human only unlocks the three sync endpoints for that human. It is **not a switch that completes bidirectional sync**: without a sync client (P4) the endpoints stay unused, and the files themselves remain governed by the human file area's own access and quota rules. Team identities (team leaders, workers) are never granted the sync surface — sync is per person, not per team.
 
 ## Package URI
 
@@ -965,6 +1110,69 @@ agt apply worker --name alice --model qwen3.5-plus
 | `dmDenyExtra` | Deny list for DMs |
 
 Set `spec.channelPolicy` on a Worker for per-member policy, and `spec.channelPolicy` on a Team for Team-wide policy.
+
+## Worker channel configuration (proxy)
+
+Each worker's qwenpaw app exposes a channel-configuration API (QQ / Matrix /
+DingTalk / ...). The Controller proxies it so admins and L2 humans configure
+channels through the API or a graphical frontend (workbench plugin /
+dashboard) instead of opening a shell on the worker container:
+
+```bash
+# List a worker's channel configs
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/channels \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+
+# Save a channel (body = the full channel config; takes effect immediately, no restart)
+curl -s -X PUT http://127.0.0.1:8090/api/v1/workers/{name}/channels/qq \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"enabled":true,"app_id":"...","client_secret":"***"}'
+# → 200, body verbatim, X-AgentTeams-MinIO-Persisted: true|false|skipped
+```
+
+The `schemas` route returns per-channel form definitions (field names,
+types, labels, options) so frontends render the connect form without
+per-channel code. The `conflict-check` route (POST) detects other agents
+holding the same channel credentials before you save a config — on a
+2.2.x worker it runs server-side; on an older build the upstream's own
+`404` is returned verbatim, so hide the entry when you see it (see the
+version-contract section of `docs/design/worker-channels-api.md`).
+
+| Role | Read | Write (`PUT` / `restart` / `conflict-check`) |
+|------|------|---------------------------|
+| L1 (admin / cli token) | any worker | any worker |
+| L2 (Matrix token) | own-team workers | own-team workers |
+| Team Leader | own-team workers | read-only (`403`) |
+
+Cross-team access returns `404` uniformly (existence is not probed).
+`embedded` mode only — `503` in kube mode. Full contract:
+[design/worker-channels-api.md](../design/worker-channels-api.md).
+
+## Worker session visibility (chats proxy)
+
+A worker's conversation history (its qwenpaw *chats* — one per
+user/channel: Matrix room, QQ DM, console sessions) is readable through
+three read-only proxy routes: list the sessions, open a transcript, and
+check the run status of one session (`idle` / `running`).
+
+```bash
+# L2 human lists the sessions of a worker in their team
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/chats \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+# full transcript of one session
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/chats/{chat_id} \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+# run status of one session (QwenPaw >= 2.2.1; 404 on older builds = hide the indicator)
+curl -s http://127.0.0.1:8090/api/v1/workers/{name}/chats/{chat_id}/status \
+  -H "Authorization: Bearer $AGENTTEAMS_TOKEN"
+```
+
+Same scope model as the channel and checkpoint proxies: L1 any worker,
+L2 / team leader own-team workers, cross-team `404` (existence not
+probed), `embedded` mode only. Read-only — no create/archive/delete
+route. Transcripts are the worker's conversation context verbatim;
+access is bounded by the worker's team scope. Full contract:
+[design/worker-chats-api.md](../design/worker-chats-api.md).
 
 ## Communication Permission Matrix
 

@@ -178,8 +178,12 @@ app.kubernetes.io/component: {{ .component }}
 {{- printf "%s:%s" .Values.worker.defaultImage.openclaw.repository $tag }}
 {{- end }}
 
+{{/* Legacy CoPaw deployments only: rendered solely when
+    .Values.worker.defaultImage.copaw.repository is set (see
+    values.yaml). New releases leave it empty so no
+    AGENTTEAMS_COPAW_WORKER_IMAGE env is injected at all. */}}
 {{- define "agentteams.worker.copawImage" -}}
-{{- $tag := default (include "agentteams.globalImageTag" .) .Values.worker.defaultImage.copaw.tag }}
+{{- $tag := required "worker.defaultImage.copaw.tag is required for legacy CoPaw deployments: this release no longer builds CoPaw worker images, so the global image tag must not select one" .Values.worker.defaultImage.copaw.tag }}
 {{- printf "%s:%s" .Values.worker.defaultImage.copaw.repository $tag }}
 {{- end }}
 
@@ -191,4 +195,9 @@ app.kubernetes.io/component: {{ .component }}
 {{- define "agentteams.worker.openhumanImage" -}}
 {{- $tag := default (include "agentteams.globalImageTag" .) .Values.worker.defaultImage.openhuman.tag }}
 {{- printf "%s:%s" .Values.worker.defaultImage.openhuman.repository $tag }}
+{{- end }}
+
+{{- define "agentteams.worker.deepseekHarnessImage" -}}
+{{- $tag := required "worker.defaultImage.deepseekHarness.tag is required because DeepSeek Harness releases independently" .Values.worker.defaultImage.deepseekHarness.tag }}
+{{- printf "%s:%s" .Values.worker.defaultImage.deepseekHarness.repository $tag }}
 {{- end }}

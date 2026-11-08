@@ -1,0 +1,20 @@
+name: Check dev build failure handling
+
+on:
+  pull_request:
+    paths:
+      - 'install/dev/**'
+      - '.github/workflows/check-build-main.yml'
+  workflow_dispatch: ~
+
+permissions:
+  contents: read
+
+jobs:
+  build-main-failure:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Regression — build failure aborts before manifest/save/push
+        run: bash install/dev/tests/test-build-main-failure.sh

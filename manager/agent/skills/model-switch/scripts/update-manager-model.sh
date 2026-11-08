@@ -193,13 +193,22 @@ else
         "${CONFIG_FILE}" 2>/dev/null || echo "0")
 
     if [ "${MODEL_EXISTS}" -gt 0 ]; then
+        # Refresh the derived fields on the existing entry as well. Without this,
+        # a --context-window correction for a model that was first added with the
+        # 150000 fallback is silently dropped: the header log reports the new
+        # window while the file keeps the stale one, and the only way out is
+        # editing openclaw.json by hand.
         jq --arg model "${MODEL_NAME}" \
+           --argjson ctx "${CTX}" \
+           --argjson max "${MAX}" \
            --argjson reasoning "${REASONING}" \
-           '(.models.providers["agentteams-gateway"].models[] | select(.id == $model)).reasoning = $reasoning
+           --argjson input "${INPUT}" \
+           '(.models.providers["agentteams-gateway"].models[] | select(.id == $model))
+              |= (.reasoning = $reasoning | .contextWindow = $ctx | .maxTokens = $max | .input = $input)
             | .agents.defaults.model.primary = ("agentteams-gateway/" + $model)
             | .agents.defaults.models["agentteams-gateway/" + $model] = { "alias": $model }' \
            "${CONFIG_FILE}" > "${TMP}" && mv "${TMP}" "${CONFIG_FILE}"
-        log "Done. Model is now: ${MODEL_NAME}"
+        log "Done. Model '${MODEL_NAME}' refreshed (ctx=${CTX}, max=${MAX}, reasoning=${REASONING}, input=${INPUT})."
     else
         jq --arg model "${MODEL_NAME}" \
            --argjson ctx "${CTX}" \

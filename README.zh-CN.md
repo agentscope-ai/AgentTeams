@@ -16,15 +16,16 @@
 
 AgentTeams 不再实现 Agent 运行时本身，而是编排和管理多个 Agent 容器（Manager 和众多 Workers）。
 - 🧑‍💻 **设计了 Manger-Workers 架构**：不用真人去管理每个干活的 Worker Claw，实现由 Agent 管理 Agents。
-- 🤝 **多运行时协作**：OpenClaw、QwenPaw 和 Hermes Worker 在同一个 IM 房间中共存协作。用确定性更高的 Agent（OpenClaw/QwenPaw）做 Leader 编排任务，用 Hermes Worker 执行自主编程——各司其职。
+- 🤝 **多运行时协作**：OpenClaw、QwenPaw、Hermes 和实验性的 DeepSeek Harness Worker 可以在同一个 IM 房间中协作，并通过 Matrix 保持过程可见。
 - 📚 **引入 MinIO 共享文件系统**：用于 Agent 之间的信息共享，大幅降低多 Agent 协作带来的 Token 消耗。
 - ⛑️ **引入 Higress AI Gateway**：流量入口和各类凭证风险降低了，减少了用户对原生龙虾在安全上的顾虑。
 - 🎨 **使用 Element IM 客户端+Tuwunel IM 服务器（均基于 Matrix 实时通信协议）**：节省钉钉、飞书 IM 的接入和企业内的审批成本，方便用户快速体验在 IM 的交互环境中体验模型服务的"爽感"，同时支持以 OpenClaw 原生的方式接入 IM。
 - 🧬 **集成** [AgentLoop](https://www.aliyun.com/product/agentloop?spm=at.readme.0.0.0) ：提供 Agent 全栈观测与审计、Agent 评估与实验、Agent 资产管理与持续优化等能力。
 
-![架构](https://img.alicdn.com/imgextra/i4/O1CN01c1VlDE1zYZ46EW3OA_!!6000000006726-49-tps-9895-8231.webp)
-
 ## 动态
+- **2026-10-16:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.5) — AgentTeams 1.2.5 重点增强编码工具委派、Worker 配置管理和 QwenPaw 运行时升级，默认搭配 Dashboard v1.3.1，并修复 MCP 注册、Matrix 消息协作及 Worker 恢复中的多项问题。
+- **2026-09-20:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.4) — AgentTeams v1.2.4：新增 TeamHarness 任务状态历史、进度跟踪与完成通知；升级至 QwenPaw 2.2.1 和 Dashboard v1.2.4.9；完善团队权限、审计与技能管理；引入实验性 DeepSeek Harness Worker；并改进 Worker 状态持久化与安装可靠性。
+- **2026-08-22:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.3) — AgentTeams v1.2.3：通过新增 Controller API、`agt` 命令和 Dashboard v1.2.4，让长时运行的 Project 工作流可见、可控；新增带审计记录的人工干预、Project 历史和 QwenPaw Worker 检查点；将 QwenPaw 提升为本地 Manager 和 Worker 的推荐默认运行时；并增强 Skill 恢复、Windows AppService 启动及运行可靠性。
 - **2026-08-08:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.2) — AgentTeams v1.2.2：新增 Manager 向 Worker 下发自定义 Skill，支持校验、上传存储、更新 `Worker.spec.skills`，并由 QwenPaw 无需重启即可热刷新和启用；增强 Manager 与 Worker 的 Skill 加载保护；同时确保 Team Leader 和 Worker 在受邀后显式加入 Team Room。
 - **2026-08-06:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.1) — AgentTeams v1.2.1：将 Manager 和 Worker 运行时栈统一到 QwenPaw 2.0.1，正式发布 QwenPaw Worker 多架构镜像，增强 Matrix 与 TeamHarness 任务分配原子性以及 CoPaw 到 QwenPaw 的状态迁移，新增自定义模型视觉与推理能力覆盖，并提升 Worker 生命周期和运行时管理可靠性。
 - **2026-07-30:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.0) — AgentTeams v1.2.0（正式版）：端到端统一 AgentTeams 命名并确立最终的 Team/Worker 资源契约；新增可选的 AgentTeams Dashboard；同时改进 Worker 存储同步、Team 路由与生命周期收敛，安装器可按旧环境变量与存储契约安装 v1.1.2（更早版本仍需使用对应的旧版安装器），并提升 Dashboard 可靠性以及工具和诊断安全性。
@@ -93,7 +94,7 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; 
 
 若测试不成功，您需要检查粘贴的模型 API Key 是否完整或无空格、Base URL 是否包含服务商要求的路径（常见为 `/v1`）、模型 ID 是否正确。再次尝试仍无法通过时，建议向对应模型服务厂商提交服务工单。
 
-第八步：选择网络访问模式。这里我们选择仅本机使用，若允许外部访问，例如和同事建立 Matrix roon，则选择允许外部访问。选择后，按回车键即可，确定端口号、网关主机端口、Higress 控制台主机端口、Maxtrix 域名、Element Web 直接访问的主机端口、文件系统域名等，均采用默认值，无须手动配置。
+第八步：选择网络访问模式。这里我们选择仅本机使用，若允许外部访问，例如和同事建立 Matrix room，则选择允许外部访问。选择后，按回车键即可，确定端口号、网关主机端口、Higress 控制台主机端口、Maxtrix 域名、Element Web 直接访问的主机端口、文件系统域名等，均采用默认值，无须手动配置。
 
 第九步：GitHub 集成、Skills 注册中心、数据持久化、Docker 卷、Manager 工作空间，按回车键即可，均采用默认配置，无须手动配置。
 
@@ -122,7 +123,7 @@ bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main
 若要升级到指定版本，请使用以下命令：
 
 ```bash
-AGENTTEAMS_VERSION=v1.2.2 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+AGENTTEAMS_VERSION=v1.2.5 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 
@@ -209,8 +210,8 @@ helm install agentteams higress.io/agentteams \
 | `preflight.llm.retries` | 可选 | 限流、网络错误和服务商 5xx 等临时错误的重试次数；默认 `2` |
 | `preflight.llm.activeDeadlineSeconds` | 可选 | 探测 Job 的最长运行时间；默认 `120` 秒 |
 | `preflight.llm.resources` | 可选 | 探测容器的 Kubernetes requests/limits |
-| `manager.runtime` | 可选 | Manager Agent 运行时：OpenClaw 使用 `openclaw`（默认）；CoPaw 在当前 Chart 中使用 `qwenpaw`，`copaw` 为兼容别名。Manager 不支持 Hermes |
-| `worker.defaultRuntime` | 可选 | Chart 提供 `openclaw`（默认）、`copaw`、`hermes` 和 `openhuman` 的默认镜像值，但当前 CRD 不接受显式的 `spec.runtime: openhuman`；QwenPaw Worker 需在 `spec.image` 中显式配置镜像 |
+| `manager.runtime` | 可选 | Manager Agent 运行时：OpenClaw 使用 `openclaw`（默认）；CoPaw 在当前 Chart 中使用 `qwenpaw`，`copaw` 为兼容别名。Manager 不支持 Hermes 或 DeepSeek Harness |
+| `worker.defaultRuntime` | 可选 | Chart 提供 `openclaw`（默认）、`copaw`、`hermes`、实验性的 `deepseek-harness` 和 `openhuman` 默认镜像值；当前 CRD 不接受显式的 `spec.runtime: openhuman`，QwenPaw Worker 需在 `spec.image` 中显式配置镜像 |
 
 Helm 默认在安装和升级前执行 LLM 探测，使用 `credentials.llmApiKey`、`credentials.llmBaseUrl` 和 `credentials.defaultModel` 发送一个最小的 OpenAI 兼容请求。无效密钥、无法访问的 Base URL、不支持的模型、额度错误或服务商故障会在 Controller 启动前终止安装。受限或离线集群可以临时关闭：
 
@@ -404,13 +405,14 @@ Alice：前端校验也更新了。
 
 ## 多运行时协作
 
-AgentTeams 目前提供三类主要 Worker 运行时，可以**在同一个 IM 房间中共存协作**：
+AgentTeams 提供多类 Worker 运行时，可以**在同一个 IM 房间中共存协作**：
 
 - **OpenClaw**（Node.js）— 通用 Agent 运行时，拥有丰富的 Skills 生态，擅长任务编排和工具调用
 - **QwenPaw**（Python）— 轻量级运行时，适合浏览器自动化和快速任务
 - **Hermes**（[hermes-agent](https://github.com/NousResearch/hermes-agent)）— 自主编程 Agent，具备终端沙箱、自我进化的 Skill 和持久化记忆
+- **DeepSeek Harness**（实验性）— Headless 编程 Agent，支持按 Matrix 房间续聊、文件往返和重启恢复；当前固定在通过测试的 DSH release candidate
 
-`copaw` 仍作为已有 CoPaw Worker 的兼容 runtime 值保留；当前 CRD 同时接受 `copaw` 和 `qwenpaw`。每种运行时各有擅长。推荐模式：用确定性更高的 Agent（OpenClaw/QwenPaw）做 Leader 负责任务分解和调度，用 Hermes Worker 执行自主编程任务。所有运行时通过 Matrix 房间通信——完全可见、随时可干预。
+`copaw` 仍作为已有 CoPaw Worker 的兼容 runtime 值保留；当前 CRD 同时接受 `copaw` 和 `qwenpaw`。DeepSeek Harness runtime 目前属于实验能力，固定在通过兼容性测试的 DSH release candidate 上，支持按 Matrix 房间续聊、文件往返和重启恢复。所有运行时都通过 Matrix 房间通信——完全可见、随时可干预。
 
 ```bash
 # 原地切换任意 Worker 的运行时
@@ -478,17 +480,59 @@ python scripts/export-debug-log.py --range 1h
 
 浏览 [中文文档目录](docs/zh-cn/)，或从概览和快速入门开始：
 
+### 入门
+
 | | |
 |---|---|
 | [docs/zh-cn/overview.md](docs/zh-cn/overview.md) | 产品概览、核心概念与文档导航 |
 | [docs/zh-cn/quickstart.md](docs/zh-cn/quickstart.md) | 端到端快速入门，含验证检查点 |
-| [docs/zh-cn/usage/use-cases.md](docs/zh-cn/usage/use-cases.md) | 软件交付、研究、内容、故障分析和长期项目协作案例 |
-| [docs/zh-cn/usage/deployment/local.md](docs/zh-cn/usage/deployment/local.md) | 本地实例创建、安装选项、升级与卸载 |
-| [docs/zh-cn/design/architecture.md](docs/zh-cn/design/architecture.md) | 系统架构详解 |
-| [docs/zh-cn/usage/manager-guide.md](docs/zh-cn/usage/manager-guide.md) | Manager 配置与使用 |
-| [docs/zh-cn/usage/worker-guide.md](docs/zh-cn/usage/worker-guide.md) | Worker 部署与故障排查 |
-| [docs/zh-cn/usage/development.md](docs/zh-cn/usage/development.md) | 贡献指南与本地开发 |
+
+### 使用指南（usage/）
+
+| | |
+|---|---|
+| [docs/zh-cn/usage/use-cases.md](docs/zh-cn/usage/use-cases.md) | AgentTeams 使用案例：软件交付、研究、内容、故障分析和长期项目协作 |
+| [docs/zh-cn/usage/deployment/local.md](docs/zh-cn/usage/deployment/local.md) | AgentTeams 本地部署指南：实例创建、安装选项、升级与卸载 |
+| [docs/zh-cn/usage/deployment/kubernetes.md](docs/zh-cn/usage/deployment/kubernetes.md) | Kubernetes 部署指南：集群规划、values 文件、模型服务、持久化、Ingress 与运维 |
+| [docs/zh-cn/usage/deployment/windows.md](docs/zh-cn/usage/deployment/windows.md) | AgentTeams Windows 部署手册 |
+| [docs/zh-cn/usage/manager-guide.md](docs/zh-cn/usage/manager-guide.md) | Manager 使用指南 |
+| [docs/zh-cn/usage/worker-guide.md](docs/zh-cn/usage/worker-guide.md) | Worker 使用指南（含部署与故障排查） |
+| [docs/zh-cn/usage/single-and-multi-user.md](docs/zh-cn/usage/single-and-multi-user.md) | 单人与多人部署：同一套部署模型、角色与权限级别、接入更多人时什么会变（[English](docs/usage/single-and-multi-user.md)） |
+| [docs/zh-cn/usage/import-worker.md](docs/zh-cn/usage/import-worker.md) | 导入 Worker 指南 |
+| [docs/zh-cn/usage/resource-management.md](docs/zh-cn/usage/resource-management.md) | 声明式资源管理（Worker / Team / Human YAML）、模板市场与 API 参考 |
+| [docs/zh-cn/usage/project-workflow-api.md](docs/zh-cn/usage/project-workflow-api.md) | 项目 / 工作流查看 API |
+| [docs/zh-cn/usage/module-update.md](docs/zh-cn/usage/module-update.md) | 模块更新与分发：Millforge 三通道、发布索引与 `channels.json` 契约、worker / team / manager 三平面安装（[English](docs/usage/module-update.md)） |
+| [docs/zh-cn/usage/higress-gateway-api.md](docs/zh-cn/usage/higress-gateway-api.md) | Higress 网关 API 参考（LLM / MCP / 暴露端口 / Console） |
+| [docs/zh-cn/usage/integrations/dingtalk.md](docs/zh-cn/usage/integrations/dingtalk.md) | AgentTeams/OpenClaw 钉钉机器人配置教程 |
+| [docs/zh-cn/usage/integrations/cms.md](docs/zh-cn/usage/integrations/cms.md) | 接入阿里云云监控 CMS 2.0 |
+| [docs/zh-cn/usage/integrations/credagent.md](docs/zh-cn/usage/integrations/credagent.md) | CredAgent 凭证保护配置 |
+| [docs/zh-cn/usage/development.md](docs/zh-cn/usage/development.md) | 开发指南：贡献与本地开发 |
 | [docs/zh-cn/usage/troubleshooting/faq.md](docs/zh-cn/usage/troubleshooting/faq.md) | 常见问题 |
+| [docs/zh-cn/usage/troubleshooting/legacy-faq.md](docs/zh-cn/usage/troubleshooting/legacy-faq.md) | 旧版常见问题 |
+
+### 设计文档（design/）
+
+| | |
+|---|---|
+| [docs/zh-cn/design/architecture.md](docs/zh-cn/design/architecture.md) | AgentTeams 架构说明：系统架构详解 |
+| [docs/zh-cn/design/k8s-native-orchestration.md](docs/zh-cn/design/k8s-native-orchestration.md) | 基于 Kubernetes 原生的多 Agent 协作编排：CRD、控制器、声明式资源 |
+| [docs/zh-cn/design/agent-pod-template.md](docs/zh-cn/design/agent-pod-template.md) | Agent Pod 模板 |
+| [docs/zh-cn/design/team-skills.md](docs/zh-cn/design/team-skills.md) | Team 技能 —— 上传、目录与指派时物化 |
+| [docs/zh-cn/design/skill-catalog-api.md](docs/zh-cn/design/skill-catalog-api.md) | 技能目录 API（`GET /api/v1/skills`） |
+| [docs/zh-cn/design/worker-channels-api.md](docs/zh-cn/design/worker-channels-api.md) | Worker Channels API：通道配置代理端点 |
+| [docs/zh-cn/design/worker-chats-api.md](docs/zh-cn/design/worker-chats-api.md) | Worker Chats API（只读会话可见性） |
+| [docs/zh-cn/design/room-power-levels.md](docs/zh-cn/design/room-power-levels.md) | 人类成员的房间权限级别 |
+| [docs/zh-cn/design/capability-foundation.md](docs/zh-cn/design/capability-foundation.md) | Capability 地基：字段、校验、helper 与双层审计 |
+| [docs/zh-cn/design/humans-update-api.md](docs/zh-cn/design/humans-update-api.md) | Human 更新 API（`PUT /api/v1/humans/{name}`） |
+| [docs/zh-cn/design/audit-events-api.md](docs/zh-cn/design/audit-events-api.md) | 审计事件查询端点（`GET /api/v1/audit`） |
+| [docs/zh-cn/design/ai-routes-list-api.md](docs/zh-cn/design/ai-routes-list-api.md) | AI 路由列表 API |
+| [docs/zh-cn/design/l2-worker-scoped-write.md](docs/zh-cn/design/l2-worker-scoped-write.md) | L2 人类 Worker 范围写 |
+| [docs/zh-cn/design/l3-worker-scoped-read.md](docs/zh-cn/design/l3-worker-scoped-read.md) | L3 Worker 范围读访问 |
+| [docs/zh-cn/design/member-runtime-config-contract.md](docs/zh-cn/design/member-runtime-config-contract.md) | 成员运行时配置契约 |
+| [docs/zh-cn/design/teamharness/boundary-and-contracts.md](docs/zh-cn/design/teamharness/boundary-and-contracts.md) | TeamHarness v0.1 边界与契约 |
+| [docs/zh-cn/design/task-completion-notification.md](docs/zh-cn/design/task-completion-notification.md) | 任务完成通知（submit_task）与生命周期 attention 事件 |
+
+> 注：以下设计文档上游原生即为中文，未建镜像，请直接阅读 `docs/design/` 下的原文：`docs/design/internal/` 全部 5 篇，以及 `docs/design/teamharness/project-task-runtime-design.md`、`docs/design/teamharness/runtime-integration-tdd-plan.md`、`docs/design/teamharness/task-transition-engine.md`。
 
 ## 构建与测试
 

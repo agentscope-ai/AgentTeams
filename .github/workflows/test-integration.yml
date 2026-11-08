@@ -410,6 +410,13 @@ jobs:
             DOCKER_BUILD_ARGS="--build-arg APT_MIRROR= --build-arg PIP_INDEX_URL=https://pypi.org/simple/" \
             $EXTRA
 
+      - name: Smoke-test packaged DeepSeek Harness
+        if: matrix.target == 'deepseek-harness-worker'
+        run: |
+          docker run --rm --entrypoint python3 \
+            -v "$PWD/deepseek-harness/tests/headless_smoke.py:/tmp/headless_smoke.py:ro" \
+            agentteams/deepseek-harness-worker:latest /tmp/headless_smoke.py
+
       - name: Save image
         run: |
           set -euo pipefail
@@ -483,10 +490,57 @@ jobs:
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
       - name: Download all images
+        id: download-images
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           pattern: image-*
           path: /tmp/images
+
+      # download-artifact can end a large transfer without reporting an error
+      # (a stalled chunk, a runner-side network reset). The truncated tar.gz
+      # then only surfaces much later as an opaque gzip "unexpected end of
+      # file" inside docker load. Verify every archive here, and retry the
+      # whole download once before failing the shard.
+      - name: Verify image archives
+        id: verify-images
+        continue-on-error: true
+        run: |
+          broken=0
+          shopt -s nullglob
+          for f in /tmp/images/image-*/*.tar.gz; do
+            if ! gzip -t "$f"; then
+              echo "::warning file=$f::truncated image archive"
+              broken=1
+            fi
+          done
+          if [ "${broken}" -ne 0 ]; then
+            echo "one or more image archives are truncated" >&2
+            exit 1
+          fi
+
+      - name: Reset the image download directory
+        if: steps.download-images.outcome == 'failure' || steps.verify-images.outcome == 'failure'
+        run: rm -rf /tmp/images && mkdir -p /tmp/images
+
+      - name: Retry the image download once
+        if: steps.download-images.outcome == 'failure' || steps.verify-images.outcome == 'failure'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: image-*
+          path: /tmp/images
+
+      - name: Verify image archives after the retry
+        run: |
+          shopt -s nullglob
+          archives=(/tmp/images/image-*/*.tar.gz)
+          if [ "${#archives[@]}" -eq 0 ]; then
+            echo "no image archives were downloaded" >&2
+            exit 1
+          fi
+          for f in "${archives[@]}"; do
+            gzip -t "$f"
+          done
 
       - name: Load images
         run: |

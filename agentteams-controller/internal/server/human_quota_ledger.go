@@ -288,25 +288,33 @@ func (h *humanFilesHandler) ensureQuotaLedger(ctx context.Context, username stri
 // seed-then-reserve two-step would leave the first write's charge on a
 // version no later CAS can reach on a 501 provider, and two concurrent
 // seeders would each pass the quota check against the missing ledger.
-func (h *humanFilesHandler) reserveQuota(ctx context.Context, a *humanFileAccess, username, path string, oldSize, newSize int64) (string, int, string) {
+func (h *humanFilesHandler) reserveQuota(ctx context.Context, a *humanFileAccess, username, path string, oldSize, newSize int64) (string, int, string, string) {
 	quota := a.human.Spec.WorkspaceQuotaBytes
 	key := humanQuotaLedgerKey(username)
 	for attempt := 0; attempt < humanQuotaLedgerRetries; attempt++ {
 		ledger, etag, err := h.readQuotaLedger(ctx, username)
 		switch {
 		case errors.Is(err, oss.ErrConditionalUnsupported):
-			return "", http.StatusServiceUnavailable, conditionalWriteUnsupportedMsg
+			return "", http.StatusServiceUnavailable, "conditional_write_unsupported", conditionalWriteUnsupportedMsg
+		case errors.Is(err, oss.ErrStorageUnavailable):
+			// The ledger could not be read because the store did not
+			// answer: the reservation is refused as a retryable
+			// storage_unavailable, never as a plain 500 or a 404.
+			return "", http.StatusServiceUnavailable, "storage_unavailable", "quota reservation failed"
 		case errors.Is(err, os.ErrNotExist):
 			if quota == nil {
 				// No ledger and no quota: nothing to reserve; a later
 				// re-enable reconciles from live usage.
-				return "", 0, ""
+				return "", 0, "", ""
 			}
 			// Seed the ledger together with this reservation in one atomic
 			// create (see the function doc).
 			used, werr := h.usedBytes(ctx, username)
 			if werr != nil {
-				return "", http.StatusInternalServerError, "quota reservation failed"
+				if errors.Is(werr, oss.ErrStorageUnavailable) {
+					return "", http.StatusServiceUnavailable, "storage_unavailable", "quota reservation failed"
+				}
+				return "", http.StatusInternalServerError, "", "quota reservation failed"
 			}
 			countedNew := oldSize
 			if newSize > countedNew {
@@ -317,7 +325,7 @@ func (h *humanFilesHandler) reserveQuota(ctx context.Context, a *humanFileAccess
 				next = 0
 			}
 			if next > *quota {
-				return "", http.StatusRequestEntityTooLarge, fmt.Sprintf(
+				return "", http.StatusRequestEntityTooLarge, "quota_exceeded", fmt.Sprintf(
 					"workspace quota of %d bytes exceeded (used %d, old %d, new %d)",
 					*quota, used, oldSize, newSize)
 			}
@@ -330,19 +338,24 @@ func (h *humanFilesHandler) reserveQuota(ctx context.Context, a *humanFileAccess
 				}},
 			})
 			if merr != nil {
-				return "", http.StatusInternalServerError, "quota reservation failed"
+				return "", http.StatusInternalServerError, "", "quota reservation failed"
 			}
 			if cerr := h.oss.PutObjectIfAbsent(ctx, key, created); cerr == nil {
-				return token, 0, ""
+				return token, 0, "", ""
 			} else if errors.Is(cerr, oss.ErrPreconditionFailed) {
 				continue // lost the create race; the winner's ledger now exists
 			} else if errors.Is(cerr, oss.ErrConditionalUnsupported) {
-				return "", http.StatusServiceUnavailable, conditionalWriteUnsupportedMsg
+				return "", http.StatusServiceUnavailable, "conditional_write_unsupported", conditionalWriteUnsupportedMsg
+			} else if errors.Is(cerr, oss.ErrStorageUnavailable) {
+				return "", http.StatusServiceUnavailable, "storage_unavailable", "quota reservation failed"
 			} else {
-				return "", http.StatusInternalServerError, "quota reservation failed"
+				return "", http.StatusInternalServerError, "", "quota reservation failed"
 			}
 		case err != nil:
-			return "", http.StatusInternalServerError, "quota reservation failed"
+			if errors.Is(err, oss.ErrStorageUnavailable) {
+				return "", http.StatusServiceUnavailable, "storage_unavailable", "quota reservation failed"
+			}
+			return "", http.StatusInternalServerError, "", "quota reservation failed"
 		}
 		entry := ledger.Paths[path]
 		// With an existing entry the path is already charged at its Counted
@@ -359,7 +372,7 @@ func (h *humanFilesHandler) reserveQuota(ctx context.Context, a *humanFileAccess
 		}
 		next := ledger.UsedBytes - countedOld + countedNew
 		if quota != nil && next > *quota {
-			return "", 413, fmt.Sprintf(
+			return "", 413, "quota_exceeded", fmt.Sprintf(
 				"workspace quota of %d bytes exceeded (used %d, old %d, new %d)",
 				*quota, ledger.UsedBytes, countedOld, newSize,
 			)
@@ -386,20 +399,22 @@ func (h *humanFilesHandler) reserveQuota(ctx context.Context, a *humanFileAccess
 		ledger.UsedBytes = next
 		payload, err := json.Marshal(ledger)
 		if err != nil {
-			return "", http.StatusInternalServerError, "quota reservation failed"
+			return "", http.StatusInternalServerError, "", "quota reservation failed"
 		}
 		switch err := strictPut(ctx, h.oss, key, payload, etag); {
 		case err == nil:
-			return token, 0, ""
+			return token, 0, "", ""
 		case errors.Is(err, oss.ErrPreconditionFailed):
 			// Lost the race; re-snapshot and re-decide on the next loop.
 		case errors.Is(err, oss.ErrConditionalUnsupported):
-			return "", http.StatusServiceUnavailable, conditionalWriteUnsupportedMsg
+			return "", http.StatusServiceUnavailable, "conditional_write_unsupported", conditionalWriteUnsupportedMsg
+		case errors.Is(err, oss.ErrStorageUnavailable):
+			return "", http.StatusServiceUnavailable, "storage_unavailable", "quota reservation failed"
 		default:
-			return "", http.StatusInternalServerError, "quota reservation failed"
+			return "", http.StatusInternalServerError, "", "quota reservation failed"
 		}
 	}
-	return "", http.StatusInternalServerError, "quota reservation did not converge"
+	return "", http.StatusInternalServerError, "", "quota reservation did not converge"
 }
 
 // commitQuota settles a completed reservation. The path's counted size is

@@ -1,6 +1,6 @@
 # 个人文件区、回收站与工作区配额
 
-状态：已实现（#1414 P1）
+状态：已实现（#1414 P1 + P2）
 API：`GET/PUT/DELETE /api/v1/humans/{name}/files/{path...}`、`GET /api/v1/humans/{name}/trash`、`POST /api/v1/humans/{name}/trash/{id}/restore`、`DELETE /api/v1/humans/{name}/trash/{id}`、`GET/PUT /api/v1/humans/{name}/quota`
 
 ## 范围
@@ -8,7 +8,19 @@ API：`GET/PUT/DELETE /api/v1/humans/{name}/files/{path...}`、`GET /api/v1/huma
 P1 为每个 Human 提供私有的、由控制器代理的文件区，含回收站与可选工作区配额：
 
 - **P1 范围内：** 按 Human 划分的存储命名空间、代理文件 API（读 / 列表 / 写 / 软删除）、回收站（列表 / 恢复 / 清空）、路径校验、单文件大小上限，以及可选的工作区配额（`workspaceQuotaBytes`）。
-- **后续阶段（不在本期）：** 团队默认授权与 `workspaceAccess`（P2）、文件同步 / 载体 / `file_sync`（P3）、Agent 归属与 UI（P4）。P1 中文件区仅本人、admin 与 manager 可访问。
+- **P2 范围内：** 按团队的 `workspaceAccess` 授权与限制（见下文「工作区访问策略」）。
+- **后续阶段（不在本期）：** 文件同步 / 载体 / `file_sync`（P3）、Agent 归属与 UI（P4）。
+
+
+## 工作区访问策略（P2）
+
+对 `files/**` 的访问由调用者的团队归属与 Human 的 `spec.workspaceAccess` 共同决定，策略显式且拒绝优先：
+
+- **默认团队**（无需 `workspaceAccess`）：`spec.accessibleTeams` ∪ 所有在 `spec.humanMembers` 中列出该 Human 的团队（其 Leader 与 Worker 服务账号）。默认团队对 `files/**` 拥有**读写**权限——这是有意设计：个人工作区对其已加入的团队开放，而非仅靠临时授权。
+- **Grants** 为非默认团队追加访问；**restrictions** 收窄默认团队的权限。
+- **限制是全局拒绝**：调用者任一团队上匹配的 `none` 限制会拒绝该路径，即使另一团队（默认或授权）允许；`read` 限制把上限压到只读。这堵住了“某团队的限制挡不住经由另一团队获得访问”的缺口。
+- `memory/**` 与 `digest/**` 永不可通过文件 API 访问，也不可授权。
+- Human 被移出团队（或授权被撤销）后，该团队的贡献在下一次鉴权时立即消失，不存在缓存放行。
 
 ## 存储布局
 

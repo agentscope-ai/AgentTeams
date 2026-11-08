@@ -196,7 +196,9 @@ assert_transcript "case3" "${ws3}" "${line}" "is held by"
 
 # --- case 4: cli-missing — the binary is not on PATH -------------------------
 ws4="${TMP}/ws4"; mkdir -p "${ws4}"
-out="$(PATH="/usr/bin:/bin" QWEN_STUB_ARGS="${STUB_ARGS}" \
+no_cli_bin="${TMP}/no-cli-bin"; mkdir -p "${no_cli_bin}"
+ln -s "$(command -v python3)" "${no_cli_bin}/python3"
+out="$(PATH="${no_cli_bin}:/usr/bin:/bin" QWEN_STUB_ARGS="${STUB_ARGS}" \
     CODING_CLI_CONFIG="${TMP}/nonexistent.json" AGENTTEAMS_WORKER_NAME="runner-1" \
     bash "${RUN_SCRIPT}" --cli qwen --workspace "${ws4}" --prompt-file "${prompt}" 2>&1)"
 assert_eq "case4 exit" "$?" "125"

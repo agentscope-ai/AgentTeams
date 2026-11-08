@@ -148,9 +148,8 @@ def _team_member_lookup() -> tuple[dict[str, dict], dict[str, dict]]:
     ``role`` / ``matrixUserId`` / ``name``) plus the ``team.admin``
     entry, recorded with role "admin". ``by_matrix_id`` is keyed by the
     stripped ``@user:server`` id; ``by_name`` by the exact ``name``
-    string (no case or fuzzy matching). A missing roster (not a list or
-    empty) yields two empty dicts so callers skip validation on
-    standalone runs.
+    string (no case or fuzzy matching). Standalone runs return empty
+    lookups; a configured team without a usable roster fails closed.
     """
     by_id: dict[str, dict] = {}
     by_name: dict[str, dict] = {}
@@ -158,6 +157,8 @@ def _team_member_lookup() -> tuple[dict[str, dict], dict[str, dict]]:
     team = _section(config, "team")
     members = team.get("members")
     if not isinstance(members, list) or not members:
+        if team.get("name") or "members" in team:
+            raise ValueError("team roster is unavailable; retry after runtime config is updated")
         return by_id, by_name
     for member in members:
         if not isinstance(member, dict):
@@ -168,7 +169,7 @@ def _team_member_lookup() -> tuple[dict[str, dict], dict[str, dict]]:
         entry = {"matrixUserId": matrix_user_id, "name": name, "role": role}
         if matrix_user_id.startswith("@") and matrix_user_id not in by_id:
             by_id[matrix_user_id] = entry
-        if name and name not in by_name:
+        if name and matrix_user_id.startswith("@") and name not in by_name:
             by_name[name] = entry
     admin = _section(team, "admin")
     admin_mxid = str(admin.get("matrixUserId") or admin.get("matrix_user_id") or "").strip()
@@ -178,6 +179,8 @@ def _team_member_lookup() -> tuple[dict[str, dict], dict[str, dict]]:
             "name": str(admin.get("name") or "").strip(),
             "role": "admin",
         }
+    if not by_id:
+        raise ValueError("team roster has no valid Matrix identities")
     return by_id, by_name
 
 

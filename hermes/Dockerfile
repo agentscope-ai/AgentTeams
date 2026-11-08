@@ -1,7 +1,7 @@
 # ============================================================
 # AgentTeams Hermes Worker Agent - Python-based Container
 # ============================================================
-# Lightweight Python container running hermes-agent v0.10.0 as a
+# Lightweight Python container running hermes-agent v0.22.7 as a
 # AgentTeams Worker. Uses the same MinIO-backed config/sync model as the
 # OpenClaw / CoPaw workers, with hermes-agent providing the agent loop
 # and tools. The Matrix gateway adapter keeps hermes-agent's native
@@ -15,8 +15,8 @@
 #   PIP_INDEX_URL           - PyPI mirror (default: official PyPI)
 #   NPM_REGISTRY            - npm registry (default: official)
 #   HERMES_GIT_REF          - git ref of hermes-agent to install
-#                             (default: v2026.4.16, which is the
-#                             "Hermes Agent v0.10.0" release)
+#                             (default: v0.22.7; keep in sync with
+#                             HERMES_GIT_REF in hack/versions.env)
 #   HERMES_REPO_URL         - hermes-agent git repo URL
 # ============================================================
 
@@ -30,17 +30,22 @@ FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
 FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS agentteams-controller
 
 # ============ Final Image ============
-FROM ${HIGRESS_REGISTRY}/higress/python:3.11-slim
+FROM ${HIGRESS_REGISTRY}/higress/python:3.14-slim
 
 ARG APT_MIRROR=
 ARG PIP_INDEX_URL=https://pypi.org/simple/
+ARG UV_VERSION=0.12.3
 ARG NPM_REGISTRY=https://registry.npmjs.org/
-# v2026.4.16 is the "Hermes Agent v0.10.0 (2026.4.16)" calendar tag
-# (commit 1dd6b5d5 on the upstream repo).
-ARG HERMES_GIT_REF=v2026.4.16
+# Pinned checkout ref. Docker cannot source env files, so this default
+# must stay in sync with HERMES_GIT_REF in hack/versions.env.
+# v0.22.7 accepts Python >=3.11,<3.15, but its core dependencies are
+# marker-gated to python_version >= '3.14' (the upstream lock covers 3.14
+# only; "3.11 is an install bridge, never a runtime"), so the image must
+# run the python:3.14-slim interpreter.
+ARG HERMES_GIT_REF=v0.22.7
 ARG HERMES_REPO_URL=https://github.com/NousResearch/hermes-agent.git
 
-# python:3.11-slim is Debian-based, uses /etc/apt/sources.list.d/debian.sources
+# python:3.14-slim is Debian-based, uses /etc/apt/sources.list.d/debian.sources
 RUN if [ -n "${APT_MIRROR}" ]; then \
         sed -i "s|deb.debian.org|${APT_MIRROR}|g" \
             /etc/apt/sources.list.d/debian.sources 2>/dev/null || true; \
@@ -150,49 +155,51 @@ RUN mkdir -p /tmp/hermes-worker/src/hermes_worker \
 # when only hermes-worker source changes.
 RUN git clone --depth 1 --branch "${HERMES_GIT_REF}" "${HERMES_REPO_URL}" /opt/hermes-src
 
-RUN python -m venv /opt/venv/hermes \
-    && /opt/venv/hermes/bin/pip install --upgrade pip setuptools wheel \
+# uv is the supported installer for hermes-agent: its pyproject pins every
+# direct dependency exactly and resolves two metadata conflicts through
+# [tool.uv] override-dependencies (Pillow 13 vs browser-harness 0.1.13,
+# cryptography vs alibabacloud-tea-openapi). pip cannot apply overrides, so
+# a pip install of the matrix extra fails with ResolutionImpossible on 3.14.
+# The upstream uv.lock covers python 3.14 only and already carries the
+# matrix extra, so --frozen reproduces their vetted resolution. uv is
+# build-only: it is uninstalled at the end of the layer, and its wheel
+# cache is kept out of the image (UV_CACHE_DIR + removal), while pip stays
+# in the app venv for the runtime upgrade path.
+RUN python -m pip install --no-cache-dir \
         --index-url "${PIP_INDEX_URL}" \
         --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
-    && /opt/venv/hermes/bin/pip install --no-cache-dir \
-        --index-url "${PIP_INDEX_URL}" \
-        --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
-        /opt/hermes-src \
-    && /opt/venv/hermes/bin/pip install --no-cache-dir \
-        --index-url "${PIP_INDEX_URL}" \
-        --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
-         "mautrix[encryption]" \
-        "matrix-nio[e2e]>=0.24.0" \
-        "markdown-it-py>=3.0" \
-        "linkify-it-py>=2.0" \
-        "Markdown>=3.6" \
-        "typer>=0.9" \
-        "rich>=13.0" \
-        "httpx>=0.25" \
-        "pyyaml>=6.0" \
-    && /opt/venv/hermes/bin/pip install --no-cache-dir \
-        --index-url "${PIP_INDEX_URL}" \
-        --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
-        /tmp/hermes-worker/
+        "uv==${UV_VERSION}" \
+    && UV_PROJECT_ENVIRONMENT=/opt/venv/hermes \
+       UV_INDEX_URL="${PIP_INDEX_URL}" \
+       UV_CACHE_DIR=/tmp/uv-cache \
+       uv sync --frozen --no-dev --extra matrix \
+           --project /opt/hermes-src \
+           --python /usr/local/bin/python3 \
+    && UV_INDEX_URL="${PIP_INDEX_URL}" \
+       UV_CACHE_DIR=/tmp/uv-cache \
+       uv pip install --python /opt/venv/hermes/bin/python \
+           pip \
+           "typer>=0.9" \
+           /tmp/hermes-worker/ \
+    && rm -rf /tmp/uv-cache \
+    && python -m pip uninstall -y uv
 
 # --- Overlay real hermes-worker source (high-frequency changes) ---
 # This layer is rebuilt on every src/ change but does NOT invalidate the
 # heavy install layers above, saving ~1-2 GB of re-download on typical edits.
 COPY src/ /tmp/hermes-worker/src/
-RUN SITE=/opt/venv/hermes/lib/python3.11/site-packages \
+RUN SITE=/opt/venv/hermes/lib/python3.14/site-packages \
     && cp -a /tmp/hermes-worker/src/hermes_worker/* "$SITE/hermes_worker/" \
     && cp -a /tmp/hermes-worker/src/hermes_matrix/* "$SITE/hermes_matrix/" \
     && rm -rf /tmp/hermes-worker/
 
-# --- Overlay our Matrix shim into hermes-agent's gateway/platforms/ ---
-# Keep hermes-agent's native mautrix transport by renaming its original
-# gateway/platforms/matrix.py to _matrix_native.py, then install a shim at
-# the original import path.  The shim re-exports the native module and swaps
-# in hermes_matrix.adapter.MatrixAdapter, a thin subclass that only adds
-# AgentTeams policy hooks (mentions, allowlists, history, vision gating).
-RUN SITE=/opt/venv/hermes/lib/python3.11/site-packages \
-    && mv "$SITE/gateway/platforms/matrix.py" "$SITE/gateway/platforms/_matrix_native.py" \
-    && cp "$SITE/hermes_matrix/_shim.py" "$SITE/gateway/platforms/matrix.py"
+# --- AgentTeams Matrix platform plugin ---
+# hermes-agent v0.22.7 ships Matrix as plugins/platforms/matrix/ into the
+# plugins/platforms/matrix/ bundled plugin.  The image ships a user plugin
+# under the same path-derived key (platforms/matrix); Hermes gives user
+# plugins precedence, and its register() subclasses the bundled adapter with
+# our policy overlay.
+COPY plugins/ /opt/agentteams/hermes-plugins/
 
 # Symlinks for hermes CLI on PATH (used by entrypoint and skills)
 RUN if [ -f /opt/venv/hermes/bin/hermes ]; then \
@@ -209,6 +216,9 @@ COPY --chmod=755 scripts/hermes-worker-entrypoint.sh /opt/agentteams/scripts/her
 # Shared environment bootstrap and credential management
 # (agentteams-env.sh, oss-credentials.sh) — same named build-context as copaw.
 COPY --from=shared . /opt/agentteams/scripts/lib/
+COPY --from=teamharness_trace task_trace.py /opt/agentteams/scripts/lib/telemetry/at_task_trace.py
+RUN /opt/venv/hermes/bin/pip install --index-url "${PIP_INDEX_URL}" \
+    -r /opt/agentteams/scripts/lib/telemetry/requirements.txt
 
 # mc wrapper: auto-refreshes STS credentials before every mc invocation
 # (no-op in local mode).

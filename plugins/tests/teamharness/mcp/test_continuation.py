@@ -1832,7 +1832,7 @@ def test_submit_pushes_and_verifies_result_payload_before_the_meta_commit_point(
             return {"ok": True}
         return {"ok": True}
 
-    def commit_task(task_id_: str, meta: dict[str, Any], etag: str, team: str = "") -> dict[str, Any]:
+    def commit_task(task_id_: str, meta: dict[str, Any], etag: str, team: str = "", if_none_match: bool = False) -> dict[str, Any]:
         calls.append(("commit", meta_path))
         remote[meta_path] = dict(meta)
         state["etag"] = "v2"
@@ -1989,7 +1989,7 @@ def test_submit_meta_commit_must_be_remotely_verified_before_success(
             return {"ok": True, "content": json.dumps(remote[path])}
         return {"ok": True}
 
-    def commit_task(task_id_: str, meta: dict[str, Any], etag: str, team: str = "") -> dict[str, Any]:
+    def commit_task(task_id_: str, meta: dict[str, Any], etag: str, team: str = "", if_none_match: bool = False) -> dict[str, Any]:
         calls.append(("commit", meta_path))
         if not state["landed"]:
             # Claims success, but the store never receives it: the verify
@@ -2050,7 +2050,7 @@ def test_submit_retry_repairs_interrupted_payload_publish_without_rotating_ident
 
     commits: list[str] = []
 
-    def commit_task(task_id_: str, meta: dict[str, Any], etag: str, team: str = "") -> dict[str, Any]:
+    def commit_task(task_id_: str, meta: dict[str, Any], etag: str, team: str = "", if_none_match: bool = False) -> dict[str, Any]:
         commits.append(etag)
         remote[meta_path] = dict(meta)
         state["etag"] = "v2"

@@ -1,0 +1,133 @@
+name: Build OpenClaw base on native runners
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: higress-registry.cn-hangzhou.cr.aliyuncs.com
+  REPO: agentteams
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      ready: ${{ steps.existing.outputs.ready }}
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+      - name: Check existing multi-architecture image
+        id: existing
+        env:
+          TARGET: openclaw-base
+          VERSION: ${{ inputs.version }}
+        run: |
+          case "$TARGET" in
+            openclaw-base|agentteams-controller) image="$TARGET" ;;
+            *) image="agentteams-${TARGET}" ;;
+          esac
+          ref="${REGISTRY}/${REPO}/${image}:${VERSION}"
+          ready=false
+          error_file="$(mktemp)"
+          trap 'rm -f "$error_file"' EXIT
+          if manifest="$(docker buildx imagetools inspect "$ref" --raw 2>"$error_file")"; then
+            # A successful command must still return a recognizable manifest.
+            # jq -e alone accepts empty stdin, so reject it explicitly.
+            if [[ -z "$manifest" ]]; then
+              echo "ERROR: empty manifest returned for $ref"
+              exit 1
+            fi
+            jq -e 'type == "object" and
+              ((.manifests | type) == "array" or
+               ((.config | type) == "object" and (.layers | type) == "array"))
+            ' >/dev/null <<<"$manifest" || {
+              echo "ERROR: invalid manifest returned for $ref"
+              exit 1
+            }
+            if jq -e '
+              any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "amd64") and
+              any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "arm64")
+            ' >/dev/null <<<"$manifest"; then
+              ready=true
+              echo "Reusing $ref: both required architectures exist; skipping build and push."
+            else
+              echo "Required architectures are incomplete for $ref; building."
+            fi
+          elif [[ "$(cat "$error_file")" == "ERROR: ${ref}: not found" ]]; then
+            echo "Image $ref does not exist; building."
+          else
+            cat "$error_file" >&2
+            echo "ERROR: cannot determine whether $ref exists; refusing to rebuild."
+            exit 1
+          fi
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: check
+    if: needs.check.outputs.ready != 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+      - name: Free runner disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+      - name: Build and push native platform
+        env:
+          VERSION: ${{ inputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          make push-openclaw-base-platform \
+            VERSION="$VERSION" ARCH="$ARCH" \
+            REGISTRY="$REGISTRY" REPO="$REPO" \
+            HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
+            DOCKER_BUILD_ARGS="--build-arg APT_MIRROR= --build-arg PIP_INDEX_URL=https://pypi.org/simple/"
+
+  merge:
+    needs: [check, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+      - name: Publish multi-architecture manifest
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          make push-openclaw-base-manifest VERSION="$VERSION" REGISTRY="$REGISTRY" REPO="$REPO"

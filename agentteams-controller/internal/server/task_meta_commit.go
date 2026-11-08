@@ -35,6 +35,13 @@ import (
 // This endpoint is the task-level counterpart of the project commit: the
 // caller passes the ETag it read, the write is a strict If-Match CAS, and
 // the server refuses to let a commit release the Controller's cancellation.
+//
+// The first creation is the same guarantee with If-None-Match: *
+// (create-if-absent): the object is created only while absent, so a
+// concurrent create + cancellation that lands between the caller's absence
+// read and the write turns the create into a 409 — the caller re-reads the
+// now-versioned record and converges on it — instead of clobbering the
+// cancelled state with an unguarded directory push.
 
 // taskMetaCommitMaxBytes bounds the commit body. A task meta carries the
 // result fence, the continuity block and the capped transition history; it
@@ -265,8 +272,38 @@ func candidateTeam(prefix string) string {
 	return trimmed
 }
 
+// GetTaskMeta serves GET /api/v1/tasks/{id}/meta: the stored task meta.json
+// verbatim plus its ETag — the read half of the conditional commit pair
+// (PutTaskMeta requires that ETag as If-Match, or If-None-Match:* to create).
+// Task ids are project-scoped in the runtime and stored per team, so an id
+// present in two teams is 409 with the ?team= hint (same rule as the commit).
+func (h *ProjectHandler) GetTaskMeta(w http.ResponseWriter, r *http.Request) {
+	taskID := strings.TrimSpace(r.PathValue("id"))
+	if taskID == "" {
+		writeError(w, http.StatusBadRequest, "task id is required")
+		return
+	}
+	key, _, ok := h.resolveTaskMetaCommitKey(w, r, taskID)
+	if !ok {
+		return
+	}
+	data, err := h.oss.GetObject(r.Context(), key)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "read task meta: "+err.Error())
+		return
+	}
+	// Bind the version to these bytes; a later StatMeta can observe a
+	// concurrent write and incorrectly authorize committing the old body.
+	etag := contentETag(data)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("ETag", etag)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
 // PutTaskMeta conditionally commits a task's full meta.json against the
-// version the caller read (#1471). See the file header for why.
+// version the caller read (#1471) — or creates it on the first creation
+// (create-if-absent, If-None-Match: *). See the file header for why.
 func (h *ProjectHandler) PutTaskMeta(w http.ResponseWriter, r *http.Request) {
 	taskID := strings.TrimSpace(r.PathValue("id"))
 	if taskID == "" {
@@ -274,9 +311,19 @@ func (h *ProjectHandler) PutTaskMeta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
-	if ifMatch == "" {
+	ifNoneMatch := strings.TrimSpace(r.Header.Get("If-None-Match"))
+	switch {
+	case ifMatch != "" && ifNoneMatch != "":
+		writeError(w, http.StatusBadRequest,
+			"pass exactly one of If-Match (update) or If-None-Match: * (create-if-absent), not both")
+		return
+	case ifMatch == "" && ifNoneMatch == "":
 		writeError(w, http.StatusPreconditionRequired,
 			"If-Match is required: read the task meta and pass its ETag; this endpoint never blind-writes")
+		return
+	case ifNoneMatch != "" && ifNoneMatch != "*":
+		writeError(w, http.StatusBadRequest,
+			`If-None-Match must be the literal "*" (create-if-absent); a specific ETag is not supported`)
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, taskMetaCommitMaxBytes))
@@ -296,6 +343,10 @@ func (h *ProjectHandler) PutTaskMeta(w http.ResponseWriter, r *http.Request) {
 	}
 	if asObject == nil {
 		writeError(w, http.StatusBadRequest, "task meta commit body must be a JSON object, not null")
+		return
+	}
+	if ifNoneMatch == "*" {
+		h.putTaskMetaCreateIfAbsent(w, r, taskID, body)
 		return
 	}
 
@@ -424,6 +475,133 @@ func (h *ProjectHandler) PutTaskMeta(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, struct {
 		ETag string `json:"etag"`
 	}{ETag: committed.ETag})
+}
+
+// putTaskMetaCreateIfAbsent commits the first creation of the task meta
+// (If-None-Match: *). Unlike the update path it does NOT resolve the key
+// through the stored object — the object is absent by definition, so it
+// resolves the key deterministically from the ?team= qualifier (the
+// worker's own team, or the global scope), validates the body the same
+// way the update path does, and lands the STRICT create-if-absent write:
+// a concurrent create that appears in between turns it into a 409
+// (ErrPreconditionFailed), never a clobber of the concurrent record.
+func (h *ProjectHandler) putTaskMetaCreateIfAbsent(
+	w http.ResponseWriter, r *http.Request, taskID string, body []byte,
+) {
+	ctx := r.Context()
+	caller := authpkg.CallerFromContext(ctx)
+	teamFilter := strings.TrimSpace(r.URL.Query().Get("team"))
+
+	prefixes, crToEffective, err := h.taskMetaPrefixes(ctx)
+	if err != nil {
+		writeK8sError(w, "resolve task prefixes", err)
+		return
+	}
+	var key string
+	if teamFilter != "" {
+		teamPrefix := "teams/" + teamFilter + "/shared/tasks/"
+		inPrefixes := false
+		for _, candidate := range prefixes {
+			if candidate == teamPrefix {
+				inPrefixes = true
+				break
+			}
+		}
+		if !inPrefixes {
+			writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
+		key = teamPrefix + taskID + "/meta.json"
+	} else {
+		key = "shared/tasks/" + taskID + "/meta.json"
+	}
+	team := teamFilter
+
+	// Access boundary (same rules as the update path).
+	if caller != nil {
+		switch caller.Role {
+		case authpkg.RoleWorker:
+			if !caller.TeamMatches(team) {
+				writeError(w, http.StatusForbidden, "worker can only create the meta of a task in its own team")
+				return
+			}
+		case authpkg.RoleTeamLeader, authpkg.RoleHuman:
+			if err := h.checkProjectAccess(caller, team, crToEffective); err != nil {
+				if _, denied := err.(*accessDeniedError); denied {
+					writeError(w, http.StatusNotFound, "task not found")
+					return
+				}
+				writeError(w, http.StatusForbidden, err.Error())
+				return
+			}
+		}
+	}
+
+	bodyStatus, bodyStatusPresent, statusAlias := exactTaskStatus(body)
+	if statusAlias {
+		writeError(w, http.StatusBadRequest,
+			`ambiguous case alias for "status": the runtimes persist and read the exact lowercase key`)
+		return
+	}
+	if !bodyStatusPresent {
+		writeError(w, http.StatusBadRequest,
+			`task meta creation must carry "status": a task meta without one is not a state any runtime can interpret`)
+		return
+	}
+	if !canonicalTaskStatus(bodyStatus) {
+		writeError(w, http.StatusBadRequest,
+			"noncanonical task status "+strconv.Quote(bodyStatus)+
+				": the runtimes compare the exact string, so the stored value would not mean what it spells")
+		return
+	}
+
+	// The object must not exist: an existing record (a concurrent create,
+	// possibly already cancelled) is a conflict — the caller re-reads it
+	// versioned and converges on it.
+	if _, err := h.oss.StatMeta(ctx, key); err == nil {
+		writeMetaConflict(w)
+		return
+	} else if !errors.Is(err, os.ErrNotExist) {
+		writeError(w, http.StatusInternalServerError, "stat task meta: "+err.Error())
+		return
+	}
+
+	// The unified exit is the STRICT create-if-absent write, exactly like
+	// the update path's strict If-Match write: a backend without it is
+	// rejected with 503, never a check-then-create.
+	strict, ok := h.oss.(createIfAbsentWriter)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable,
+			"task meta creation requires a backend with strict create-if-absent writes: "+oss.ErrConditionalUnsupported.Error())
+		return
+	}
+	if err := strict.PutObjectIfNoneMatchStrict(ctx, key, body); err != nil {
+		switch {
+		case errors.Is(err, oss.ErrPreconditionFailed):
+			writeMetaConflict(w)
+		case errors.Is(err, oss.ErrConditionalUnsupported):
+			writeError(w, http.StatusServiceUnavailable,
+				"backend cannot provide create-if-absent writes: "+oss.ErrConditionalUnsupported.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, "create task meta: "+err.Error())
+		}
+		return
+	}
+	committed, err := h.oss.StatMeta(ctx, key)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "stat task meta after create: "+err.Error())
+		return
+	}
+	httputil.WriteJSON(w, http.StatusOK, struct {
+		ETag string `json:"etag"`
+	}{ETag: committed.ETag})
+}
+
+// createIfAbsentWriter is the narrow backend capability the create path
+// needs (same call-site assertion pattern as conditionalWriter: the strict
+// write is intentionally not part of the wide StorageClient interface).
+type createIfAbsentWriter interface {
+	PutObjectIfNoneMatchStrict(ctx context.Context, key string, data []byte) error
 }
 
 // --- W2 decision-authority guard (#1467 P1b) --------------------------------

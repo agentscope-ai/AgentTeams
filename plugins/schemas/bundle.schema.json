@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentTeams Plugin Bundle",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "adapters", "requires", "package"],
+  "properties": {
+    "apiVersion": { "const": "agentteams.agentteam/v1alpha1" },
+    "kind": { "const": "AgentTeamPlugin" },
+    "metadata": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" }
+      }
+    }
+  },
+  "additionalProperties": true
+}

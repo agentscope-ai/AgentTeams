@@ -21,6 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    if: ${{ !startsWith(github.ref_name, 'qwen-code-bridge-v') && !(github.event_name == 'workflow_dispatch' && inputs.plugin == 'plugins/qwen-code-bridge') }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -45,6 +46,14 @@ jobs:
             bash plugins/scripts/resolve-plugin-release.sh --plugin "$PLUGIN_INPUT" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install manifest validation dependencies
+        run: python -m pip install 'PyYAML>=6.0,<7' 'jsonschema>=4,<5'
+
       - name: Validate plugin manifest
         run: ruby plugins/scripts/validate-plugin.rb "${{ steps.resolve.outputs.manifest }}"
 
@@ -57,4 +66,59 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.resolve.outputs.name }}-${{ steps.resolve.outputs.version }}
-          path: dist/*.tar.gz
+          path: dist/*
+
+  bridge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    if: ${{ startsWith(github.ref_name, 'qwen-code-bridge-v') || (github.event_name == 'workflow_dispatch' && inputs.plugin == 'plugins/qwen-code-bridge') }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler: none
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install manifest validation dependencies
+        run: python -m pip install 'PyYAML>=6.0,<7' 'jsonschema>=4,<5'
+
+      - name: Validate plugin manifest
+        run: ruby plugins/scripts/validate-plugin.rb plugins/qwen-code-bridge/plugin.yaml
+
+      - name: Validate release tag against the bridge manifests
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          bash plugins/scripts/check-release-tag.sh \
+            --tag "$TAG_NAME" \
+            --yaml plugins/qwen-code-bridge/plugin.yaml \
+            --json plugins/qwen-code-bridge/plugin.json \
+            --expect-name qwen-code-bridge
+
+      - name: Skip tag validation on manual dispatch
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          echo "manual dispatch: no release tag to validate"
+
+      - name: Package bridge plugin
+        run: sh plugins/qwen-code-bridge/scripts/package.sh dist
+
+      - name: Upload bridge artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen-code-bridge
+          path: |
+            dist/qwen-code-bridge-*.zip
+            dist/sha256sums.txt
+            dist/release-manifest.json

@@ -33,11 +33,7 @@ Check:
 - Worker names, Matrix IDs, and runtime states are known.
 - Any Worker assigned to active `[~]` work is reachable.
 
-If a Worker with active `[~]` work is sleeping, run:
-
-```bash
-agt worker ensure-ready --name <worker> --team <team-name>
-```
+If a Worker with active `[~]` work is sleeping, report the blocked task and required lifecycle action to Manager or platform Admin. Do not run wake, sleep, or ensure-ready yourself. Only report recovery after a fresh status query confirms the Worker is ready.
 
 If required Worker metadata is missing, or the Worker cannot be made reachable, do not guess. Treat it as an anomaly and report it through the communication rules.
 

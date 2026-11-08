@@ -62,7 +62,7 @@ default L2 may not (see the whitelist above).
 | Caller | `PUT /api/v1/workers/{name}` |
 |--------|------------------------------|
 | admin / manager | full update, unchanged |
-| team leader | all workers, all fields, unchanged (the leader path is not team-scoped in the current code) |
+| team leader | read-only — configuration writes are Admin/Manager-only (#1536) |
 | L2 human (default) | in-team workers only; `skills` only (public-catalog assignment); `remoteSkills` / `mcpServers` 400 (elevated capability pending design); `404` standalone and cross-team (probe-resistant), `400` off-whitelist field |
 | worker / other | denied by the authorizer (unchanged) |
 
@@ -75,10 +75,10 @@ an L2 human.
 
 ## Out of scope
 
-- `DELETE`/`POST` for workers (team membership changes stay admin/leader).
+- `DELETE`/`POST` for workers (team membership changes are Admin/Manager-only; team leaders were removed from these paths in #1536).
 - Wake/sleep lifecycle for L2 humans (separate decision).
-- Team-scoping the leader update path (the current code lets a team leader
-  update any worker; pre-existing, out of scope here).
+- ~~Team-scoping the leader update path~~ — resolved by #1536: team leaders
+  no longer update workers at all (`403`).
 - Standalone-worker access via `accessibleWorkers` for **L2** writes
   (L2 humans stay team-scoped; an L2 CR carrying `accessibleWorkers` is
   inert — the field activates solely at `permissionLevel: 3`, where it
@@ -95,6 +95,6 @@ an L2 human.
   in-scope skills update applies (200), credential-bearing surfaces
   (`remoteSkills` / `mcpServers`) 400 for default L2, cross-team 404,
   standalone 404, off-whitelist fields 400 (named), empty body no-op 200,
-  admin full update unchanged, team leader update unchanged, teamless human
+  admin full update unchanged, team leader update forbidden (`403`), teamless human
   hidden (404; the middleware rejects it first), full-request-type
   field-policy probe (every field probed, only `skills` may pass).

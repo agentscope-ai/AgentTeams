@@ -420,3 +420,60 @@ def test_register_delegated_task_preserves_status_and_emits_no_events(
     meta = server._read_json(_task_meta_path(tmp_path))
     assert meta["status"] == "assigned"
     assert _event_count(tmp_path) == events_before == 0
+
+
+@pytest.mark.parametrize("role", ["leader", "human"])
+def test_registration_rejects_non_worker_roles(tmp_path, side_effects, role):
+    _write_project(tmp_path, task_status="assigned")
+    _write_task_meta(tmp_path, _assigned_task_meta())
+    before = _task_meta_path(tmp_path).read_bytes()
+    response = server.call_tool("taskflow", {"role": role, "action": "register_delegated_task",
+        "workspaceDir": str(tmp_path), "payload": {"projectId": PROJECT_ID, "taskId": TASK_ID}})
+    assert json.loads(response["content"][0]["text"])["ok"] is False
+    assert _task_meta_path(tmp_path).read_bytes() == before
+
+
+def test_registration_refuses_stale_cache_after_pull_failure(tmp_path, side_effects, monkeypatch):
+    _write_project(tmp_path, task_status="assigned")
+    _write_task_meta(tmp_path, _assigned_task_meta())
+    before = _task_meta_path(tmp_path).read_bytes()
+    monkeypatch.setattr(server, "_pull_task", lambda *_: False)
+    monkeypatch.setattr(server, "_filesync", lambda *_: {"ok": False, "error": "storage unavailable"})
+    assert _register(tmp_path)["ok"] is False
+    assert _task_meta_path(tmp_path).read_bytes() == before
+
+
+def test_registration_sync_failure_is_not_reported_as_registered(tmp_path, side_effects, monkeypatch):
+    _write_project(tmp_path, task_status="assigned")
+    _write_task_meta(tmp_path, _assigned_task_meta())
+    monkeypatch.setattr(server, "_sync_task", lambda *_a, **_k: False)
+    result = _register(tmp_path)
+    assert result["ok"] is False
+    assert result.get("registered") is not True
+
+
+def test_registration_publishes_to_shared_store(tmp_path, side_effects, monkeypatch):
+    _write_project(tmp_path, task_status="assigned")
+    _write_task_meta(tmp_path, _assigned_task_meta())
+    synced = []
+    monkeypatch.setattr(server, "_sync_task", lambda *a, **k: synced.append((a, k)) or True)
+    assert _register(tmp_path)["ok"] is True
+    assert len(synced) == 1
+
+
+def test_configured_team_with_empty_roster_rejects_recipient(tmp_path, side_effects, monkeypatch):
+    _write_project(tmp_path)
+    config = _write_roster(tmp_path, [])
+    monkeypatch.setenv("TEAMHARNESS_RUNTIME_CONFIG", str(config))
+    assert _delegate(tmp_path, "ghost")["ok"] is False
+    assert not _task_meta_path(tmp_path).exists()
+    assert not side_effects["notify"]
+
+
+def test_unusable_roster_does_not_bypass_recipient_guard(tmp_path, side_effects, monkeypatch):
+    _write_project(tmp_path)
+    config = _write_roster(tmp_path, [{"name": "ghost"}], admin=None)
+    monkeypatch.setenv("TEAMHARNESS_RUNTIME_CONFIG", str(config))
+    assert _delegate(tmp_path, "ghost")["ok"] is False
+    assert not _task_meta_path(tmp_path).exists()
+    assert not side_effects["notify"]

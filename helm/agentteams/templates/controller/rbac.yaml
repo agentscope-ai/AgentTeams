@@ -29,7 +29,7 @@ rules:
     resources: ["events"]
     verbs: ["create", "patch"]
   - apiGroups: ["agentteams.io"]
-    resources: ["workers", "teams", "humans", "managers"]
+    resources: ["workers", "teams", "humans", "managers", "modelaccesstables"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["agentteams.io"]
     resources: ["workers/status", "teams/status", "humans/status", "managers/status"]

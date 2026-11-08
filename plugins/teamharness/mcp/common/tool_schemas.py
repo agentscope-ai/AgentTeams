@@ -1,4 +1,4 @@
-# TOOL_SCHEMAS registration table for the 7 MCP tools (W1-a2: real module)
+# TOOL_SCHEMAS registration table for the 8 MCP tools (W1-a2: real module)
 from __future__ import annotations
 
 from typing import Any
@@ -507,7 +507,8 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                         "of a delegated task (taskId; optional delegationId, "
                         "default delegate-<taskId>; optional projectId): it "
                         "records the delegation link and the ack receipt in the "
-                        "task meta, never changes the task status, and emits no "
+                        "shared task meta before returning success; requires a "
+                        "worker or remote-member role, never changes status, and emits no "
                         "signal event; unknown tasks return reason "
                         "unknown_task. "
                         "review_task records a critic/leader review (verdict: "
@@ -564,6 +565,19 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "description": "Shared deliverable paths included in submit_task.",
                     "items": {"type": "string"},
                 },
+                "conclusions": {
+                    "type": "array",
+                    "description": (
+                        "Completion-report conclusions for submit_task: 3-5 "
+                        "short one-line strings (what was done, verified, or "
+                        "left open). Fewer than 3 warns by default and is "
+                        "rejected when AGENTTEAMS_TASK_CONCLUSIONS_STRICT is "
+                        "on; more than 5 are all recorded on the task meta, "
+                        "but the completion event shows the first 5 with a "
+                        "pointer to shared/tasks/{taskId}/meta.json."
+                    ),
+                    "items": {"type": "string"},
+                },
                 "reason": {
                     "type": "string",
                     "description": "Required cancellation reason for cancel_task.",
@@ -583,6 +597,35 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "workspaceDir": {
                     "type": "string",
                     "description": "Runtime workspace containing shared/tasks.",
+                },
+            },
+            "additionalProperties": True,
+        },
+    },
+    "build_review_context": {
+        "description": (
+            "Assemble the review context for one task: exactly two ref "
+            "classes — S2 signal refs (the closed SIG-* event types "
+            "emitted for this task, read from the local events mirror) "
+            "and artifact refs (the task's deliverables and result_path). "
+            "Group history and chat noise are never included; a task with "
+            "no refs returns an empty set, not an error. Read-only and "
+            "local: this tool never contacts Matrix."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "taskId": {
+                    "type": "string",
+                    "description": "Safe task id used under shared/tasks/{taskId}.",
+                },
+                "team": {
+                    "type": "string",
+                    "description": "Team whose S2 event stream to read (default: the current runtime team).",
+                },
+                "workspaceDir": {
+                    "type": "string",
+                    "description": "Runtime workspace containing shared/; usually inferred.",
                 },
             },
             "additionalProperties": True,

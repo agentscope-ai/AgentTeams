@@ -427,7 +427,7 @@ ifeq ($(IS_PODMAN),1)
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
 		echo "  -> Building Hermes Worker for $(plat)..." && \
 		podman build --platform $(plat) \
-			$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+			$(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context teamharness_trace=./plugins/teamharness/adapters/qwenpaw $(DOCKER_BUILD_ARGS) \
 			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 			--manifest $(HERMES_WORKER_TAG) \
 			./hermes/ && ) true
@@ -439,7 +439,7 @@ else
 	docker buildx build \
 		--builder $(BUILDX_BUILDER) \
 		--platform $(MULTIARCH_PLATFORMS) \
-		$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+		$(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context teamharness_trace=./plugins/teamharness/adapters/qwenpaw $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 		-t $(HERMES_WORKER_TAG) \
 		$(if $(PUSH_LATEST),-t $(HERMES_WORKER_IMAGE):latest) \

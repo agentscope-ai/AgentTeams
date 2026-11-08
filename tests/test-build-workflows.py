@@ -97,6 +97,17 @@ class BuildWorkflowTests(unittest.TestCase):
                 self.assertNotIn('Building + pushing agentteams-controller', result.stdout)
                 self.assertIn('AGENTTEAMS_CONTROLLER_IMAGE=example.test/agentteams/agentteams-controller:v1.2.3', result.stdout)
 
+    def test_hermes_builds_supply_the_trace_context(self):
+        for target, podman in [('build-hermes-worker', '0'),
+                               ('push-hermes-worker', '0'),
+                               ('push-hermes-worker', '1')]:
+            with self.subTest(target=target, podman=podman):
+                result = subprocess.run(['make', '-n', target, 'IS_PODMAN=' + podman],
+                                        cwd=ROOT, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('--build-context teamharness_trace=./plugins/teamharness/adapters/qwenpaw', result.stdout)
+                self.assertTrue((ROOT / 'plugins/teamharness/adapters/qwenpaw/task_trace.py').is_file())
+
     def test_existing_image_skips_only_when_both_architectures_are_verified(self):
         steps = IMAGE['jobs']['build']['steps']
         check = next(s for s in steps if s.get('id') == 'existing')

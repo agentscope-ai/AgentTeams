@@ -1,4 +1,5 @@
 """Release/CI planning and prerequisite checks without Docker or model calls."""
+import gzip
 import json
 import os
 from pathlib import Path
@@ -100,6 +101,73 @@ class BaseProbeTests(unittest.TestCase):
 
 
 class WorkflowPlanTests(unittest.TestCase):
+    def test_runtime_shards_download_consumers_without_the_build_only_base(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/test-integration.yml').read_text())
+        steps = workflow['jobs']['integration-tests']['steps']
+        downloads = [step for step in steps if step.get('uses') == 'actions/download-artifact@v4'
+                     and step.get('with', {}).get('path') == '/tmp/images']
+        self.assertEqual(len(downloads), 2)
+        for step in downloads:
+            self.assertEqual(step['with']['pattern'], 'image-!(openclaw-base)')
+
+    def test_archive_retry_only_rechecks_a_failed_download_or_verification(self):
+        steps = yaml.safe_load((ROOT / '.github/workflows/test-integration.yml').read_text())['jobs']['integration-tests']['steps']
+        retry = next(step for step in steps if step.get('name') == 'Retry the image download once')
+        verify = next(step for step in steps if step.get('name') == 'Verify image archives after the retry')
+        self.assertEqual(verify.get('if'), retry['if'])
+        for failed in ('download-images', 'verify-images'):
+            self.assertIn(f"steps.{failed}.outcome == 'failure'", verify['if'])
+
+    def test_each_archive_verifier_rejects_empty_or_corrupt_downloads(self):
+        steps = yaml.safe_load((ROOT / '.github/workflows/test-integration.yml').read_text())['jobs']['integration-tests']['steps']
+        for step in steps:
+            if step.get('name') not in ('Verify image archives', 'Verify image archives after the retry'):
+                continue
+            for state in ('valid', 'empty', 'corrupt'):
+                with self.subTest(step=step['name'], state=state), tempfile.TemporaryDirectory() as directory:
+                    archive = Path(directory) / 'image-worker/worker.tar.gz'
+                    archive.parent.mkdir()
+                    if state == 'valid':
+                        archive.write_bytes(gzip.compress(b'image fixture'))
+                    elif state == 'corrupt':
+                        archive.write_bytes(b'truncated')
+                    script = step['run'].replace('/tmp/images', directory)
+                    result = subprocess.run(['bash', '-eu', '-c', script], capture_output=True, text=True)
+                    self.assertEqual(result.returncode == 0, state == 'valid', result.stderr)
+
+    def test_matrix_channel_cases_keep_separate_processes_with_two_setups(self):
+        jobs = yaml.safe_load((ROOT / '.github/workflows/test-controller.yml').read_text())['jobs']
+        job = jobs['matrix-channel-regressions']
+        suites = job['strategy']['matrix']['include']
+        self.assertEqual(len(suites), 2)
+        expected = {'consume_error', 'show_thinking_gate', 'send_gate_retrigger_placeholder',
+                    'mention_localpart', 'send_gate_retrigger_relevance', 'retry_classifier',
+                    'sync_timeout_clamp', 'no_reply_final_line'}
+        actual = [case for suite in suites for case in suite['cases'].split()]
+        self.assertEqual(set(actual), expected)
+        self.assertEqual(len(actual), len(expected))
+        steps = job['steps']
+        guard = next(step for step in steps if step.get('name') == 'Verify matrix-nio is importable (tests must not skip)')
+        self.assertIn('import nio', guard['run'])
+        run = next(step for step in steps if step.get('name') == 'Run isolated Matrix regressions')
+        with tempfile.TemporaryDirectory() as directory:
+            calls = Path(directory) / 'calls'
+            stub = Path(directory) / 'python'
+            stub.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$CALLS"\ncase "$*" in *"$FAIL_CASE"*) exit 1;; esac\n')
+            stub.chmod(0o755)
+            for fail in (False, True):
+                calls.write_text('')
+                for suite in suites:
+                    result = subprocess.run(['bash', '-eu', '-c', run['run']], capture_output=True, text=True,
+                        env={**os.environ, 'PATH': directory + ':' + os.environ['PATH'],
+                             'CASES': suite['cases'], 'CALLS': str(calls),
+                             'FAIL_CASE': suite['cases'].split()[0] if fail else 'no-failure'})
+                    self.assertEqual(result.returncode == 0, not fail, result.stderr)
+                # Every case runs even if an earlier pytest process fails.
+                self.assertCountEqual(calls.read_text().splitlines(), [
+                    f'-m pytest plugins/tests/agentteams-matrix-channel/test_{case}.py -q -rs'
+                    for case in expected])
+
     def test_qwenpaw_workflow_contract_agrees_with_build_groups(self):
         contract = runpy.run_path(str(ROOT / 'qwenpaw/tests/test_integration_workflow.py'))
         contract['test_integration_workflow_runs_qwenpaw_like_copaw']()

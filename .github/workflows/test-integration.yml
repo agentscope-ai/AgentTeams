@@ -384,12 +384,14 @@ jobs:
           username: ${{ env.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
-      - name: Download all images
+      # Consumer docker-save archives already include their base layers.
+      # image-openclaw-base is only needed by the image-building jobs.
+      - name: Download runtime images
         id: download-images
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
-          pattern: image-*
+          pattern: image-!(openclaw-base)
           path: /tmp/images
 
       # download-artifact can end a large transfer without reporting an error
@@ -403,7 +405,12 @@ jobs:
         run: |
           broken=0
           shopt -s nullglob
-          for f in /tmp/images/image-*/*.tar.gz; do
+          archives=(/tmp/images/image-*/*.tar.gz)
+          if [ "${#archives[@]}" -eq 0 ]; then
+            echo "no image archives were downloaded" >&2
+            exit 1
+          fi
+          for f in "${archives[@]}"; do
             if ! gzip -t "$f"; then
               echo "::warning file=$f::truncated image archive"
               broken=1
@@ -422,10 +429,11 @@ jobs:
         if: steps.download-images.outcome == 'failure' || steps.verify-images.outcome == 'failure'
         uses: actions/download-artifact@v4
         with:
-          pattern: image-*
+          pattern: image-!(openclaw-base)
           path: /tmp/images
 
       - name: Verify image archives after the retry
+        if: steps.download-images.outcome == 'failure' || steps.verify-images.outcome == 'failure'
         run: |
           shopt -s nullglob
           archives=(/tmp/images/image-*/*.tar.gz)

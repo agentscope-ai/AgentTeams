@@ -36,9 +36,11 @@
 
 ### Changed
 
-- Release/install wording: AT (AgentTeams) = stable channel (source +
-  upstream tag); 千锻 (millforge) = beta channel
-  (`releases/channels.json`); plugin identity and install path unchanged
+- Distribution: the millforge repository hosts the module channels
+  (`alpha` / `beta` / `stable`, index at `releases/<channel>/channels.json`);
+  AgentTeams stays the source of truth. This release ships as millforge
+  **stable 0.3.0** under module key `qwenpaw-qwencode-bridge`
+  (pluginId `qwen-code-bridge`).
 - `requires.qwenpaw` in `plugin.yaml` aligned with `plugin.json`
   (`qwenpaw_version.min/max = 2.2.0/2.3.0`): now `">=2.2.0 <2.3.0"`;
   QwenPaw 2.3 support is pending verification

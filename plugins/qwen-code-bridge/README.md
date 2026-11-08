@@ -4,7 +4,7 @@
 
 - plugin id：`qwen-code-bridge`　后端包：`qwen_code_bridge`　HTTP 前缀：`/api/qwen-code-bridge`
 - 版本矩阵：QwenPaw **2.2.x**（旧插件框架）与 **#7565 新框架**双绿；Qwen Code CLI **0.26.x**（实测 0.26.3，web shell 按同版本重建，见 `web-shell/`）
-- 测试：`252 passed / 1 skipped`（`pytest tests -q`）；发布门 `scripts/verify-bridge.sh`（双框架 + 4 项 live 检查 + evidence JSON）
+- 测试：`304 passed / 1 skipped`（`pytest tests -q`，2026-11-08 实测）；发布门 `scripts/verify-bridge.sh`（双框架 + 4 项 live 检查 + evidence JSON）
 
 ## 目录
 
@@ -26,7 +26,7 @@ qwen-code-bridge/
 ├─ frontend/index.js        # 控制台路由 /qwen-code + core.chat 包装 + 主题同步
 ├─ web-shell/               # 重建 base 版 Qwen Code web shell 的补丁与构建脚本
 ├─ scripts/verify-bridge.sh # 发布门
-└─ tests/                   # 252+1（见上）
+└─ tests/                   # 304+1（见上）
 ```
 
 ## 安装
@@ -70,18 +70,18 @@ curl -X POST 'http://127.0.0.1:8088/api/plugins/upload?force=true' \
 
 | 包 | 大小 | 内容 | 适用 |
 |---|---|---|---|
-| `qwen-code-bridge-0.1.0.zip` | ~74 KB | 插件代码/文档/测试/构建脚本（无 web-shell 产物） | 已自行构建 web shell 的部署 |
-| `qwen-code-bridge-0.1.0-full.zip` | ~5.6 MB | 同上 + `web-shell/dist`（409 文件，原生控制台开箱即用） | 绝大多数部署 |
+| `qwen-code-bridge-<version>.zip` | ~74 KB | 插件代码/文档/测试/构建脚本（无 web-shell 产物） | 已自行构建 web shell 的部署 |
+| `qwen-code-bridge-<version>-full.zip` | ~5.6 MB | 同上 + `web-shell/dist`（409 文件，原生控制台开箱即用） | 绝大多数部署 |
 
 > 上传安装已实测：`loaded=true`，插件目录内含 `web-shell/dist`；`/web/` 200、客户端路由刷新回退正常。
 
-## Update & rollback（热更新与回滚，0.2.0+）
+## Update & rollback（热更新与回滚）
 
 **升级（zip 热更新，无需重建容器）**：
 
 ```bash
 curl -X POST 'http://127.0.0.1:8088/api/plugins/upload?force=true' \
-  -H "X-Agent-Id: $AGENT" -F 'file=@qwen-code-bridge-0.2.0.zip;type=application/zip'
+  -H "X-Agent-Id: $AGENT" -F 'file=@qwen-code-bridge-0.3.0.zip;type=application/zip'   # 换成当前版本
 # 版本核验
 curl -s http://127.0.0.1:8088/api/qwen-code-bridge/version -H "X-Agent-Id: $AGENT"
 ```
@@ -91,7 +91,7 @@ curl -s http://127.0.0.1:8088/api/qwen-code-bridge/version -H "X-Agent-Id: $AGEN
 
 **回滚**：把旧版 zip 再传一次（同命令换旧 zip 即可）。兼容性说明：
 
-- 0.2.0 任务文件是 0.1.0 的**字段超集**（新增 `timeout_s`/`cancel_requested_at`/`signals`/`cancelled_at`），旧版忽略未知字段，回滚无损。
+- 任务文件是**字段超集**演进（0.2.0 相对 0.1.0 新增 `timeout_s`/`cancel_requested_at`/`signals`/`cancelled_at`），旧版忽略未知字段，回滚无损。
 - 唯一例外：升级期间处于 `cancelling` 的在途任务，0.1.0 不识别该状态——但子进程已收到 SIGTERM（grace 后 SIGKILL），会很快自行结束，不会卡死。
 
 **自打包**（产出 `qwen-code-bridge-<version>.zip` + `sha256sums.txt` + `release-manifest.json`，zip 不含 `__pycache__`/`tests`/`state`/`web-shell/dist`/`*.pyc`/`*.log`）：
@@ -103,9 +103,10 @@ sh scripts/package.sh [输出目录]   # 缺省输出到 /tmp
 ## 模块化/发布
 
 - 模块清单 `plugin.yaml`（bridge 形态：`runtime` / `entry` / `package.include`），由 `plugins/scripts/validate-plugin.rb` 校验（含 entry 走 bridge 分支，无 entry 走 TeamHarness 路径）。
-- **AT（AgentTeams）** = 稳定版通道：随源码发布，跟上游 tag。
-- **千锻（millforge）** = beta 通道：走 `releases/channels.json` 拉取发布元数据。
-- 两条通道的插件身份（`qwen-code-bridge`）与安装路径不变（同一 zip 上传/热加载路径）。
+- **源码在 AgentTeams 仓**（本目录）；**分发在千锻（millforge）仓**，模块键 `qwenpaw-qwencode-bridge`，pluginId `qwen-code-bridge`。
+- 千锻分三个通道：`stable` / `beta` / `alpha`，索引在 `releases/<channel>/channels.json`，产物在 `releases/<module>/<version>/`。
+- 当前发布：**stable 0.3.0**（`qwenpaw-qwencode-bridge-0.3.0.zip`，源码提交 `c31dc45df`）；`alpha`/`beta` 已开槽位、暂无版本。
+- 安装/升级走 controller 的模块更新端点，契约见 [`docs/usage/module-update.md`](../../docs/usage/module-update.md)。插件身份（`qwen-code-bridge`）与本地 zip 上传/热加载路径不变。
 
 ### 3) 原生 Web 控制台（可选但推荐）
 
@@ -172,6 +173,29 @@ curl -X POST http://127.0.0.1:8088/api/qwen-code-bridge/dispatch \
 - 超时/异常一律 **deny**（fail-closed）；`yolo` 不做审批，`plan` 只读
 - 终态 3 行摘要（源会话）：状态/轮次/工具/审批数 + 失败原因或"需人工 N 条"
 - 测试：`tests/test_approval_policy.py`（19 例）+ `tests/test_progress.py`（7 例）
+
+## HTTP API（前缀 `/api/qwen-code-bridge`）
+
+| 方法 | 路径 | 说明 |
+|:--|:--|:--|
+| GET | `/version` | 插件版本 + 运行时事实（`plugin`/`started_at`/`python`/`qwen_cli`/`state_dir`） |
+| GET | `` | 路由总览 |
+| GET | `/dispatch` | 任务列表（`?format=table` 出状态表） |
+| POST | `/dispatch` | 派单，`202` 返回 `task_id` |
+| GET | `/dispatch/{task_id}` | 任务详情（状态 / 终态摘要） |
+| GET | `/dispatch/{task_id}/progress` | 进度（turns / elapsed / stalled / phase / last_target） |
+| GET | `/dispatch/{task_id}/log` | 原始日志流 |
+| GET | `/dispatch/{task_id}/pending` | 待人工回答的问题 |
+| POST | `/dispatch/{task_id}/answer` | 回答问题 |
+| POST | `/dispatch/{task_id}/cancel` · `/dispatch/{task_id}/stop` | 取消（SIGTERM→grace→SIGKILL） / 停止 |
+| POST | `/dispatch/cleanup` | 清理已终态任务 |
+| GET | `/dispatch/{task_id}/run` · `/qwen/status` · `/dispatch/{task_id}/qwen-status` | 运行时状态 |
+| GET | `/approvals` | 审批回执审计（`?task_id=&behavior=deny|escalate|allow|all&since=&limit=`，`{approvals,total,truncated}`） |
+| GET | `/chat/{chat_id}` · POST `/sidebar` | 会话侧栏（每单会话分组） |
+| GET/PUT | `/{cli_id}/settings` | 各编码 CLI 设置（`qwen-code` / `opencode` / `qoder`） |
+| POST | `/{cli_id}/install`（`202`）· GET `/{cli_id}/install/{task_id}` | CLI 安装（异步任务） |
+
+> 审批策略即时判定，不存在 pending 态；pending 只用于“需要人回答的问题”（`/dispatch/{task_id}/pending` + `/answer`）。
 
 ## 维护
 

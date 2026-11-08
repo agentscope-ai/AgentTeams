@@ -1,17 +1,48 @@
 # AgentTeams Plugins
 
-This directory contains AgentTeams runtime plugin packages and the local fallback
-CLI for installing them.
+This directory contains every AgentTeams runtime plugin package, the local
+fallback CLI for installing bundles, and the shared manifest schemas/tests.
 
-Stage 2 establishes the TeamHarness plugin package contract. The package is
-installed by the AgentTeams `agentteams` CLI by default, and it is also compatible
-with the LoongSuite/Pilot `plugin-probe` convention for local QwenPaw runtime
-deployment.
+Two distribution paths exist:
 
-Remote-managed local workers use runtime-specific packages under
-`teamharness/remote/`. Claude Code local management assets, worker code, and
-LoongSuite runtime templates live there so they do not mix with the
-runtime-neutral TeamHarness base package.
+* **Image / CLI** — bundles are packed into tarballs and installed by the
+  `agentteams` CLI (fallback) or a runtime adapter; built-in plugins ship inside
+  the controller/worker images.
+* **Module channels (Millforge)** — plugins can also be installed and upgraded on
+  a running deployment from the Millforge release mirror. See
+  [docs/usage/module-update.md](../docs/usage/module-update.md) for the index and
+  install contract.
+
+## Inventory
+
+| Directory | Plugin id | Form | Runtime / entry | How it is installed |
+|:--|:--|:--|:--|:--|
+| `teamharness` | `teamharness` | `AgentTeamPlugin` bundle (surface: prompts / skills / mcp / adapters) | QwenPaw, OpenClaw, Hermes, Claude Code, DeepSeek Harness via `adapters/` | `agentteams plugin install` tarball, bundle `scripts/install.sh`, or Millforge module `teamharness` |
+| `agentteams-teamharness` | `teamharness` | Bundle compatibility copy (byte-identical to `teamharness/`, drift-tested) | same as above | not installed directly — exists so bundle consumers and parity tests can compare both trees |
+| `agentteams-matrix` | `agentteams-matrix` | Bundle (`plugin.json` `type: bundle`) with `adapters/{qwenpaw,openclaw,hermes}` | QwenPaw / OpenClaw / Hermes | bundle `scripts/install.sh --adapter <rt>` or Millforge module `agentteams-matrix` (installs plugin id `agentteams-matrix-channel` on QwenPaw) |
+| `agentteams-matrix-channel` | `agentteams-matrix-channel` | QwenPaw channel plugin (`type: channel`, `entry.backend: plugin.py`) | QwenPaw | written into `<working-dir>/plugins/` by the MX bundle installer (or the Millforge module install) |
+| `agentteams-matrix-openclaw` | `agentteams-matrix-openclaw` | OpenClaw channel plugin (JS plugin + Python sidecar) | OpenClaw | OpenClaw adapter path (`openclaw.plugin.json`, `install.sh`) |
+| `qwen-code-bridge` | `qwen-code-bridge` | QwenPaw plugin (`type: general`) with `entry.backend: plugin.py` + `entry.frontend: frontend/index.js` | QwenPaw 2.2.x | `qwenpaw plugin install` / `POST /api/plugins/upload` / Millforge module `qwenpaw-qwencode-bridge` |
+| `agentteams-manager-tools` | `agentteams-manager-tools` | QwenPaw tool plugin (`type: tool`) | QwenPaw (manager) | shipped in the controller/manager image (`plugins/` → `/opt/agentteams/plugins/`) |
+| `agentteams-upgrade` | `agentteams-upgrade` | QwenPaw general plugin (`type: general`) | QwenPaw | shipped in the controller/manager image |
+| `workerflow` | `workerflow` | `AgentTeamPlugin` (prompts only) | QwenPaw worker | built into the worker image by the Makefile adapter targets |
+| `cli` | `agentteams` | Python CLI (PyPI package) | — | `pip install -e plugins/cli` (or the PyPI release) |
+| `schemas` | — | `plugin.schema.json`, `bundle.schema.json` | — | referenced by validators and tests |
+| `scripts` | — | `validate-plugin.rb`, `package-plugin.rb`, `install-artifact.sh`, `verify-artifact.sh`, `resolve-plugin-release.sh`, `status.sh` | — | build/release tooling |
+| `tests` | — | Shared plugin test suites (manifest, bundle lifecycle, parity, release resolver) | — | `pytest -q plugins/tests` |
+
+## Versioning and release discipline
+
+* Every manifest carries the plugin version (`plugin.yaml` → `metadata.version`,
+  or `plugin.json` → `version`); the CHANGELOG’s top heading must match it — the
+  release gate (`plugins/tests/plugins/test_plugin_manifests.py`) enforces both.
+* Adapter manifests (`adapters/*/plugin.json`, `openclaw.plugin.json`,
+  `adapters/*/plugin.yaml`) carry the **same** version as their bundle when they
+  declare one.
+* Release tags are `<module>-v<semver>`; the tag, the manifest and the Millforge
+  index entry must agree. Pre-releases use `-alpha.N` / `-beta.N` suffixes.
+* `plugins/agentteams-teamharness/` must stay byte-identical to
+  `plugins/teamharness/` (parity gates: drift tests + compatibility-copy tests).
 
 ## Default Path: AgentTeams CLI
 

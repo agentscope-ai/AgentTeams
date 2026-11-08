@@ -317,7 +317,7 @@ wait_gateway() {
 higress_plugin_check() {
     local refs ref path missing=0 image="${CONTROLLER_IMAGE:-}"
     if [ -z "${image}" ]; then
-        warn "no target controller image; cannot check Higress wasm refs"
+        warn "no target controller image; cannot check Higress wasm refs" >&2
         printf '0'
         return
     fi
@@ -326,7 +326,7 @@ higress_plugin_check() {
     # one: the old image naturally has its own (old) plugin versions.
     refs="$("${DOCKER_CMD}" exec "${CONTROLLER_NAME}" sh -c 'grep -Rhao "plugins/[a-z-]*/[0-9.]*/plugin.wasm" /data /etc/istio/proxy 2>/dev/null | sort -u' 2>/dev/null || true)"
     if [ -z "${refs}" ]; then
-        warn "no Higress wasm refs found; pass --higress-backfill-dir when upgrading an existing deployment"
+        warn "no Higress wasm refs found; pass --higress-backfill-dir when upgrading an existing deployment" >&2
         printf '0'
         return
     fi
@@ -334,7 +334,7 @@ higress_plugin_check() {
         path="/usr/share/nginx/html/${ref}"
         if ! "${DOCKER_CMD}" run --rm --network none --entrypoint sh "${image}" -c "test -f '${path}'" >/dev/null 2>&1; then
             missing=$((missing + 1))
-            warn "Higress plugin missing in target image: ${ref}"
+            warn "Higress plugin missing in target image: ${ref}" >&2
         fi
     done
     printf '%s' "${missing}"
@@ -1200,7 +1200,9 @@ build_run_args() {
     # proto). printf + IFS='|' keeps empty fields and exact values.
     while IFS='|' read -r p hostip hostport; do
         [ -n "${p}" ] || continue
-        if [ -n "${hostip}" ] && [ "${hostip}" != "0.0.0.0" ] && [ "${hostip}" != "::" ]; then
+        if [ -n "${hostip}" ]; then
+            # Keep explicit IPv4/IPv6 wildcards and both dual-stack bindings.
+            case "${hostip}" in *:*) hostip="[${hostip}]" ;; esac
             RUN_ARGS+=(-p "${hostip}:${hostport}:${p}")
         elif [ -n "${hostport}" ]; then
             RUN_ARGS+=(-p "${hostport}:${p}")

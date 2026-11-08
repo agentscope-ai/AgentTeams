@@ -33,8 +33,8 @@ def _script_without_preflight() -> str:
 
 @unittest.skipUnless(shutil.which("jq"), "jq is required to patch openclaw.json")
 class UpdateManagerModelTest(unittest.TestCase):
-    def switch(self, model, *extra, existing_model=True):
-        """Run the OpenClaw path of update-manager-model.sh in a temp HOME."""
+    def switch(self, model, *extra, existing_model=True, runtime="openclaw"):
+        """Run the selected standard-config runtime path in a temp HOME."""
         script = _script_without_preflight()
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
@@ -61,14 +61,31 @@ class UpdateManagerModelTest(unittest.TestCase):
 
             env = dict(os.environ)
             env["HOME"] = str(home)
-            env["AGENTTEAMS_MANAGER_RUNTIME"] = "openclaw"
+            env["AGENTTEAMS_MANAGER_RUNTIME"] = runtime
             env.pop("AGENTTEAMS_AI_GATEWAY_URL", None)
             result = subprocess.run(
                 ["bash", "-s", "--", model, *extra],
                 input=script, capture_output=True, text=True, env=env,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            return json.loads(config.read_text()), result.stderr
+            return json.loads(config.read_text()), result.stderr + result.stdout
+
+    def test_qwenpaw_reports_pending_bridge_and_requires_readback(self):
+        config, output = self.switch("my-model", "--context-window", "300000",
+                                     "--no-reasoning", runtime="qwenpaw")
+        self.assertIn("CONFIG_UPDATED", output)
+        self.assertIn("VERIFY_REQUIRED", output)
+        self.assertNotIn("openclaw gateway restart", output)
+        self.assertNotIn("RESTART_REQUIRED", output)
+        self.assertEqual(config["agents"]["defaults"]["model"]["primary"],
+                         "agentteams-gateway/my-model")
+        self.assertEqual(self.entry(config)["contextWindow"], 300000)
+        self.assertFalse(self.entry(config)["reasoning"])
+
+    def test_openclaw_keeps_its_restart_instruction(self):
+        _, output = self.switch("my-model")
+        self.assertIn("RESTART_REQUIRED", output)
+        self.assertIn("openclaw gateway restart", output)
 
     def entry(self, config, model="my-model"):
         models = config["models"]["providers"]["agentteams-gateway"]["models"]

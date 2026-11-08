@@ -26,7 +26,7 @@ bash /opt/agentteams/agent/skills/model-switch/scripts/update-manager-model.sh d
 2. Tests the model via `POST /v1/chat/completions` on the AI Gateway — exits with error if unreachable
 3. If the model is already in the `models` array: refreshes its `reasoning` / `contextWindow` / `maxTokens` / `input` fields and switches `agents.defaults.model.primary`
 4. If the model is new: adds it to the `models` array and switches primary
-5. Always outputs `RESTART_REQUIRED`
+5. Outputs the apply/verification instructions for your Manager runtime
 
 Because step 3 rewrites the model's fields, re-running the script is the way to
 correct an entry that was first written with wrong values — for example a model
@@ -36,7 +36,13 @@ run the script again with `--context-window <SIZE>` and the new value lands in
 
 ## After running the script
 
-The script always outputs `RESTART_REQUIRED`. Run `openclaw gateway restart` to apply the change, then tell the human admin the switch is complete.
+Follow the instructions for your `AGENTTEAMS_MANAGER_RUNTIME`:
+
+- **OpenClaw**: run `openclaw gateway restart`, then verify the active model.
+- **QwenPaw**: the script updates the standard `openclaw.json` consumed by your existing background bridge. Wait for its next watcher cycle (normally within 60 seconds). Read back `active_llm.provider_id` and `active_llm.model` from your native secret `providers.json` (honor `QWENPAW_SECRET_DIR`), and verify your next request uses the requested model before reporting completion. A `CONFIG_UPDATED` message alone confirms the standard file was written. If the native state stays stale, inspect your bridge logs and report the pending apply step.
+- **Legacy CoPaw**: follow the `RESTART_REQUIRED` instruction to restart your CoPaw service.
+
+For QwenPaw, verify context and reasoning settings in your native runtime separately; writing these fields to the standard config does not prove every option is supported or applied.
 
 ## Reasoning control
 
@@ -58,7 +64,7 @@ After the admin confirms the provider and route are configured, you can retry th
 
 ## Important
 
-This skill switches the **primary model** (persisted in `openclaw.json`). After running the script, you must run `openclaw gateway restart` for the change to take effect. The human admin can also use the `/model` slash command to switch the current session's model instantly without restart, but that is non-persistent and only supports pre-configured models.
+You switch your **primary model** persistently through the standard config. Follow your runtime-specific apply and verification steps above. With OpenClaw, the human admin can also use `/model` to switch the current session instantly; that does not persist the primary model and only supports pre-configured models.
 
 ## Switching to an unknown model
 

@@ -620,12 +620,13 @@ jobs:
             'pytest-asyncio>=0.23,<2'
 
       - name: Install mc and kube-apiserver
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           # dl.min.io is gone (410); this is the same mc release the
           # repo-standard S3 backend test pins (test/e2e/external-s3-backend.sh).
-          curl -fSL -o /usr/local/bin/mc \
-            https://github.com/minio/mc/releases/download/RELEASE.2025-08-13T08-35-41Z/mc.linux-amd64.RELEASE.2025-08-13T08-35-41Z
-          sudo chmod +x /usr/local/bin/mc
+          python3 hack/install-mc.py "$RUNNER_TEMP/mc"
+          sudo install -m 755 "$RUNNER_TEMP/mc" /usr/local/bin/mc
           # embedded mode execs kube-apiserver by name; it must be on PATH.
           curl -fSL -o /usr/local/bin/kube-apiserver \
             https://dl.k8s.io/release/v1.31.3/bin/linux/amd64/kube-apiserver

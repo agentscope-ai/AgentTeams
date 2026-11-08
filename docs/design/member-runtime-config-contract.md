@@ -33,6 +33,76 @@ TeamHarness plugin package. TeamHarness plugin is runtime infrastructure; an
 AgentSpec package is the user-deployed agent template and business capability
 bundle.
 
+## Runtime Provider ID Warning
+
+`spec.modelProvider` is the **AI-gateway provider name** (Higress / APIG). It is used
+by the controller to resolve the AI route, gateway base URL and consumer
+authorization. It is **not** a free-form runtime provider id.
+
+Do not pass a QwenPaw built-in provider id into the runtime projection. QwenPaw uses
+the runtime provider id to select its local provider entry. For a built-in provider,
+the entry is restored from QwenPaw's built-in catalog and `freeze_url=True` prevents the
+gateway base URL from being applied; worker startup then fails its base-URL readback.
+The gateway provider name itself is valid and should not be renamed for this reason.
+
+AgentTeams-managed runtimes should use the non-built-in runtime provider id
+`agentteams-gateway`. A gateway provider named `deepseek` may still be selected through
+`spec.modelProvider`; the runtime provider id must remain separate.
+
+### QwenPaw built-in provider ids (v2.2.2.post1)
+
+Source: `qwenpaw/providers/provider_catalog.py` at QwenPaw `v2.2.2.post1`.
+
+`freeze_url=True` — these must never be used as the runtime provider id:
+
+```text
+modelscope
+aliyun-codingplan
+aliyun-codingplan-intl
+aliyun-tokenplan
+aliyun-tokenplan-intl
+zhipu-cn
+zhipu-cn-codingplan
+zhipu-intl
+zhipu-intl-codingplan
+openai
+openai-response
+kilo
+minimax
+minimax-cn
+kimi-cn
+kimi-intl
+kimi-codingplan
+deepseek
+gemini
+openrouter
+siliconflow-cn
+siliconflow-intl
+volcengine-cn
+volcengine-cn-codingplan
+volcengine-cn-agentplan
+mimo-tokenplan
+mimo
+```
+
+`freeze_url=False` — not the hard-freeze set, but still built-in provider ids with
+provider-specific behavior; do not use them as the AgentTeams runtime provider id:
+
+```text
+dashscope
+agentscope-platform
+qwenpaw-local
+opencode
+azure-openai
+anthropic
+ollama
+lmstudio
+```
+
+The safe rule for AgentTeams-managed workers is therefore: **any gateway provider name
+is allowed, but the runtime provider id is always `agentteams-gateway` (or an explicit
+non-built-in runtime id), never a QwenPaw built-in provider id.**
+
 ## Field Contract
 
 ```yaml

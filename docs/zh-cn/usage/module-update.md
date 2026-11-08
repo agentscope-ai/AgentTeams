@@ -118,7 +118,7 @@ controller 侧强制的取数规则：仅允许上述两个 raw 主机、**禁�
 | `pluginId` | 实际安装的 QwenPaw 插件 id；缺省 = 模块名。 |
 | `latest` | 该通道内最高版本；该通道无发布时为 `null`。 |
 | `versions.<v>.artifacts` | `{name, sha256}`，对应 `releases/<module>/<v>/`。**索引里的 sha256 是权威值**，安装器按它校验下载。 |
-| `versions.<v>.requires` | 安装前检查的运行时要求（插件：`qwenpaw` / `qwen-code-cli`；bundle：`agentteams` / `contracts` / `tool_schema`）。 |
+| `versions.<v>.requires` | 运行时要求元数据（插件：`qwenpaw` / `qwen-code-cli`；bundle：`agentteams` / `contracts` / `tool_schema`）。Controller 不强制校验这些索引约束；目标运行时对插件 manifest 的校验是独立环节。 |
 | `versions.<v>.commit` | 构建该产物的源码提交。 |
 | `versions.<v>.deprecated` | `true` = 已停用版本，安装器不应默认选择。 |
 
@@ -163,7 +163,9 @@ controller 侧强制的取数规则：仅允许上述两个 raw 主机、**禁�
 // team
 {"updated": ["worker-a", "worker-b"], "target_version": "0.3.0",
  "module": "qwenpaw-qwencode-bridge", "pluginId": "qwen-code-bridge",
- "members": {"worker-a": "0.3.0", "worker-b": "0.3.0"}, "consistent": true}
+ "members": [{"worker": "worker-a", "version": "0.3.0", "loaded": true},
+             {"worker": "worker-b", "version": "0.3.0", "loaded": true}],
+ "versions": {"0.3.0": 2}, "consistent": true}
 ```
 
 行为：
@@ -219,7 +221,7 @@ curl -s "http://<controller>/api/v1/workers/worker-a/plugins" \
 1. **Kubernetes service-account token**（TokenReview）：admin / manager / worker。
 2. **Matrix access token**（L2 人类）：经 `GET /_matrix/client/v3/account/whoami` 校验；对应 localpart 须映射到 `permissionLevel: 2` 的 `Human` CR。
 
-读操作需要 `get`，安装需要目标资源的 `update`（`module` / `team` / `manager`）。Team Leader 只能装进自己的 team。
+读操作需要 `get`，安装需要目标资源的 `update`（`module` / `team` / `manager`）。这些安装路由允许 Admin 和 Manager 身份调用。Team Leader、Worker 和 L2 人类身份没有这些安装权限，即使目标是自己的 team；有效的 Matrix 令牌本身不授予安装权限。
 
 ## 相关文档
 

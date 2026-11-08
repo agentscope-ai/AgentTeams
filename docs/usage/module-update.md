@@ -135,7 +135,7 @@ Fetch rules enforced by the controller: only the two allowlisted raw hosts,
 | `pluginId` | QwenPaw plugin id actually installed. Omitted = the module name. |
 | `latest` | Highest version in this channel, or `null` when the module has no release in this channel. |
 | `versions.<v>.artifacts` | `{name, sha256}` under `releases/<module>/<v>/`. The sha256 in the index is authoritative — the installer verifies the download against it. |
-| `versions.<v>.requires` | Runtime requirements checked before install (`qwenpaw`, `qwen-code-cli`, or `agentteams` / `contracts` / `tool_schema` for bundles). |
+| `versions.<v>.requires` | Runtime requirement metadata (`qwenpaw`, `qwen-code-cli`, or `agentteams` / `contracts` / `tool_schema` for bundles). The controller does not enforce these index constraints; any target-runtime plugin manifest checks are separate. |
 | `versions.<v>.commit` | Source commit the artifact was built from. |
 | `versions.<v>.deprecated` | `true` marks a version as retired; installers should not pick it by default. |
 
@@ -183,7 +183,9 @@ Responses:
 // team
 {"updated": ["worker-a", "worker-b"], "target_version": "0.3.0",
  "module": "qwenpaw-qwencode-bridge", "pluginId": "qwen-code-bridge",
- "members": {"worker-a": "0.3.0", "worker-b": "0.3.0"}, "consistent": true}
+ "members": [{"worker": "worker-a", "version": "0.3.0", "loaded": true},
+             {"worker": "worker-b", "version": "0.3.0", "loaded": true}],
+ "versions": {"0.3.0": 2}, "consistent": true}
 ```
 
 Behaviour:
@@ -248,8 +250,10 @@ Two bearer-token paths are accepted, matching the rest of the controller API:
    `Human` CR with `permissionLevel: 2`.
 
 Reads require `get`; installs require `update` on the target resource
-(`module`, `team`, or `manager`). Team leaders can only install into their own
-team.
+(`module`, `team`, or `manager`). These install routes allow Admin and Manager
+identities. Team Leader, Worker, and L2 human identities do not have these
+install permissions, even for their own team; a valid Matrix token alone does
+not grant installation access.
 
 ## Related
 

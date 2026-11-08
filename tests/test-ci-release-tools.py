@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import runpy
 import subprocess
 import tempfile
 import unittest
@@ -39,9 +40,10 @@ class PlanTests(unittest.TestCase):
             self.assertTrue(self.plan(path)['run_models'], path)
 
     def test_pipeline_changes_keep_build_and_controller_checks_without_models(self):
-        result = self.plan('.github/workflows/build.yml')
-        self.assertTrue(result['run_builds'])
-        self.assertFalse(result['run_models'])
+        for path in ['.github/workflows/build.yml', 'qwenpaw/tests/test_integration_workflow.py']:
+            result = self.plan(path)
+            self.assertTrue(result['run_builds'])
+            self.assertFalse(result['run_models'])
 
     def test_version_pins_skip_repeated_runtime_builds(self):
         result = self.plan('install/agentteams-install.sh',
@@ -98,6 +100,10 @@ class BaseProbeTests(unittest.TestCase):
 
 
 class WorkflowPlanTests(unittest.TestCase):
+    def test_qwenpaw_workflow_contract_agrees_with_build_groups(self):
+        contract = runpy.run_path(str(ROOT / 'qwenpaw/tests/test_integration_workflow.py'))
+        contract['test_integration_workflow_runs_qwenpaw_like_copaw']()
+
     def test_build_groups_wait_only_for_actual_dockerfile_dependencies(self):
         jobs = yaml.safe_load((ROOT / '.github/workflows/test-integration.yml').read_text())['jobs']
         expected = {

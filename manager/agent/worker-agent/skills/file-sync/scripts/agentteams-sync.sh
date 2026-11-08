@@ -27,22 +27,22 @@ ensure_mc_credentials 2>/dev/null || true
 
 # Download into private staging; remote credentials must never replace your live token.
 LOCAL_OPENCLAW="${WORKSPACE}/openclaw.json"
-STAGING_DIR="$(mktemp -d)"
-MERGED_OPENCLAW=""
-trap 'rm -rf "${STAGING_DIR}"; [ -z "${MERGED_OPENCLAW}" ] || rm -f "${MERGED_OPENCLAW}"' EXIT
+# Existing Worker images already exclude credentials/** from both upload paths.
+# Keep staging on your workspace filesystem so the final rename is atomic.
+mkdir -p "${WORKSPACE}/credentials"
+STAGING_DIR="$(mktemp -d "${WORKSPACE}/credentials/.config-pull.XXXXXX")"
+trap 'rm -rf "${STAGING_DIR}"' EXIT
 trap 'exit 1' HUP INT TERM
 mc cp "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/openclaw.json" "${STAGING_DIR}/openclaw.json"
 
 mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/" "${WORKSPACE}/" --overwrite \
-    --exclude "openclaw.json" --exclude "openclaw.json.sync.*" \
+    --exclude "openclaw.json" --exclude "credentials/**" \
     --exclude ".openclaw/matrix/**" --exclude ".openclaw/canvas/**" 2>&1
 mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/" "${AGENTTEAMS_ROOT}/shared/" --overwrite
 
 # Merge against the current local config, then publish atomically on the same filesystem.
-MERGED_OPENCLAW="$(mktemp "${LOCAL_OPENCLAW}.sync.XXXXXX")"
-merge_openclaw_config "${STAGING_DIR}/openclaw.json" "${LOCAL_OPENCLAW}" "${MERGED_OPENCLAW}"
-mv "${MERGED_OPENCLAW}" "${LOCAL_OPENCLAW}"
-MERGED_OPENCLAW=""
+merge_openclaw_config "${STAGING_DIR}/openclaw.json" "${LOCAL_OPENCLAW}" "${STAGING_DIR}/merged.json"
+mv "${STAGING_DIR}/merged.json" "${LOCAL_OPENCLAW}"
 
 # Mark success only after all pulls and the config merge have succeeded.
 touch "${WORKSPACE}/.last-pull"

@@ -42,7 +42,9 @@ root = pathlib.Path(os.environ['TEST_ROOT'])
 config = root / 'fs/agents/test-worker/openclaw.json'
 if os.environ.get('FAIL_STAGE') == args[0]: sys.exit(7)
 if args[0] == 'cp':
-    shutil.copyfile(root / 'remote/openclaw.json', args[2])
+    destination = pathlib.Path(args[2])
+    assert destination.parent.stat().st_mode & 0o077 == 0
+    shutil.copyfile(root / 'remote/openclaw.json', destination)
 elif args[0] == 'mirror':
     if args[1].endswith('/shared/'):
         if os.environ.get('FAIL_STAGE') == 'shared': sys.exit(9)
@@ -51,10 +53,27 @@ elif args[0] == 'mirror':
         for src in (root / 'remote').iterdir():
             if not any(fnmatch.fnmatch(src.name, pattern) for pattern in excludes):
                 shutil.copyfile(src, pathlib.Path(args[2]) / src.name)
-        if config.exists():
+        if config.exists() and os.environ.get('TEST_NO_INITIAL_CONFIG') != '1':
             assert json.loads(config.read_text())['channels']['matrix']['accessToken'] == 'current-token'
 ''')
         mc.chmod(0o755)
+        # Observe every publication/merge rename using the stable upload rules.
+        # This also covers a skill update on a Worker whose image is still old.
+        mv = self.bin / 'mv'
+        mv.write_text('''#!/usr/bin/env python3
+import os, pathlib, subprocess, sys
+root = pathlib.Path(os.environ['TEST_ROOT'])
+workspace = root / 'fs/agents/test-worker'
+for path in workspace.rglob('*'):
+    if not path.is_file() or 'current-token' not in path.read_text(errors='replace'):
+        continue
+    relative = str(path.relative_to(workspace))
+    eligible = subprocess.run(['bash', '-c', '. "$1"; worker_sync_should_push "$2"',
+        'fixture', str(root / 'lib/worker-file-sync.sh'), relative])
+    assert eligible.returncode != 0, 'credential staging is uploadable: ' + relative
+os.execv('/bin/mv', ['mv', *sys.argv[1:]])
+''')
+        mv.chmod(0o755)
         script = SCRIPT.read_text().replace('/opt/agentteams/scripts/lib', str(self.lib))
         script = script.replace('/root/agentteams-fs', str(self.root / 'fs'))
         script = script.replace('/tmp/openclaw-local-sync.json', str(self.root / 'saved-local.json'))
@@ -74,7 +93,7 @@ elif args[0] == 'mirror':
         self.assertEqual(json.loads(self.config.read_text()), self.local)
         self.assertFalse((self.workspace / '.last-pull').exists())
         self.assertFalse((self.root / 'sync-state/last-successful-push').exists())
-        self.assertEqual(list(self.workspace.glob('openclaw.json.sync.*')), [])
+        self.assertEqual(list(self.workspace.glob('credentials/.config-pull.*')), [])
 
     def test_remote_token_is_never_published_and_manager_fields_still_update(self):
         result = self.run_pull()
@@ -85,7 +104,7 @@ elif args[0] == 'mirror':
         self.assertTrue(merged['tools']['local'])
         self.assertEqual((self.workspace / 'SOUL.md').read_text(), 'updated prompt')
         self.assertTrue((self.workspace / '.last-pull').exists())
-        self.assertEqual(list(self.workspace.glob('openclaw.json.sync.*')), [])
+        self.assertEqual(list(self.workspace.glob('credentials/.config-pull.*')), [])
 
     def test_download_failure_preserves_live_config_and_markers(self):
         self.assert_failed_without_publication(self.run_pull('cp'))
@@ -102,6 +121,7 @@ elif args[0] == 'mirror':
 
     def test_no_local_config_uses_remote_config(self):
         self.config.unlink()
+        self.env['TEST_NO_INITIAL_CONFIG'] = '1'
         result = self.run_pull()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(json.loads(self.config.read_text())['channels']['matrix']['accessToken'], 'expired-token')

@@ -229,7 +229,7 @@ test_scan_failure_does_not_advance_watermark
 test_coding_cli_prefix_is_synced
 
 # Config staging contains credentials and must never enter either upload path.
-if worker_sync_should_push "openclaw.json.sync.fixture"; then
+if worker_sync_should_push "credentials/.config-pull.fixture/merged.json"; then
     fail "temporary config would be uploaded"
 fi
 python3 "${SCRIPT_DIR}/test-worker-config-pull.py"

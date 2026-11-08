@@ -186,6 +186,16 @@ jobs:
           python3 -m unittest discover -s manager/tests -p 'test_mcp*.py' -v
           bash tests/check-mcp-setup-domain-parsing.sh
 
+  worker-file-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Worker config pull and workspace upload
+        run: |
+          bash shared/tests/test-worker-file-sync.sh
+          bash shared/tests/test-merge-openclaw-config.sh
+
   # Step 1a: Build the shared base image (agentteams-controller)
   build-base:
     runs-on: ubuntu-latest

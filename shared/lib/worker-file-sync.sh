@@ -28,7 +28,7 @@ worker_sync_should_push() {
     local relative_path="$1"
 
     case "${relative_path}" in
-        openclaw.json | config/mcporter.json | mcporter-servers.json | \
+        openclaw.json | openclaw.json.sync.* | config/mcporter.json | mcporter-servers.json | \
             credentials/* | .agents/* | .cache/* | .npm/* | .local/* | .mc/* | \
             .last-pull | .openclaw/matrix/* | .openclaw/canvas/* | *.lock)
             return 1
@@ -42,7 +42,7 @@ worker_sync_mirror_all() {
     local remote_prefix="$2"
 
     mc mirror "${workspace}/" "${remote_prefix}/" --overwrite \
-        --exclude "openclaw.json" \
+        --exclude "openclaw.json" --exclude "openclaw.json.sync.*" \
         --exclude "config/mcporter.json" --exclude "mcporter-servers.json" --exclude ".agents/**" \
         --exclude "credentials/**" \
         --exclude ".cache/**" --exclude ".npm/**" \

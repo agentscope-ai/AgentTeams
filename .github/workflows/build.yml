@@ -66,9 +66,8 @@ jobs:
   openclaw-base:
     needs: [prepare]
     if: contains(fromJSON(needs.prepare.outputs.targets), 'openclaw-base')
-    uses: ./.github/workflows/build-image.yml
+    uses: ./.github/workflows/build-openclaw-base.yml
     with:
-      target: openclaw-base
       version: ${{ needs.prepare.outputs.version }}
     secrets: inherit
 

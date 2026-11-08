@@ -109,7 +109,7 @@ LINES          ?= 50
 .PHONY: all build build-openclaw-base build-agentteams-controller build-embedded build-manager build-manager-qwenpaw build-worker build-hermes-worker build-openhuman-worker \
         build-qwenpaw-worker build-deepseek-harness-worker \
         tag push push-openclaw-base push-agentteams-controller push-embedded push-manager push-manager-qwenpaw push-worker push-hermes-worker push-openhuman-worker \
-        push-qwenpaw-worker push-deepseek-harness-worker \
+        push-qwenpaw-worker push-deepseek-harness-worker push-openclaw-base-platform push-openclaw-base-manifest \
         push-native push-native-manager push-native-manager-qwenpaw push-native-worker push-native-hermes-worker push-native-openhuman-worker \
         push-native-qwenpaw-worker push-native-deepseek-harness-worker \
         buildx-setup \
@@ -279,6 +279,14 @@ else
 		--push \
 		./openclaw-base/
 endif
+
+push-openclaw-base-platform: ## Push one native OpenClaw base platform to a staging tag
+	$(MAKE) push-openclaw-base MULTIARCH_PLATFORMS=linux/$(ARCH) OPENCLAW_BASE_TAG=$(OPENCLAW_BASE_TAG)-$(ARCH) PUSH_LATEST=
+
+push-openclaw-base-manifest: ## Publish the completed OpenClaw base architectures together
+	docker buildx imagetools create -t $(OPENCLAW_BASE_TAG) \
+		$(if $(PUSH_LATEST),-t $(OPENCLAW_BASE_IMAGE):latest) \
+		$(OPENCLAW_BASE_TAG)-amd64 $(OPENCLAW_BASE_TAG)-arm64
 
 push-agentteams-controller: buildx-setup ## Build + push multi-arch agentteams-controller image
 	@echo "==> Building + pushing multi-arch agentteams-controller: $(CONTROLLER_TAG) [$(MULTIARCH_PLATFORMS)]"

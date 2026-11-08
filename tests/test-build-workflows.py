@@ -108,6 +108,42 @@ class BuildWorkflowTests(unittest.TestCase):
                 self.assertIn('--build-context teamharness_trace=./plugins/teamharness/adapters/qwenpaw', result.stdout)
                 self.assertTrue((ROOT / 'plugins/teamharness/adapters/qwenpaw/task_trace.py').is_file())
 
+    def test_openclaw_base_builds_on_native_runners(self):
+        self.assertEqual(BUILD['jobs']['openclaw-base']['uses'], './.github/workflows/build-openclaw-base.yml')
+        native = workflow('build-openclaw-base.yml')['jobs']
+        build = native['build']
+        self.assertEqual(build['runs-on'], '${{ matrix.runner }}')
+        self.assertEqual(build['strategy']['matrix']['include'], [
+            {'arch': 'amd64', 'runner': 'ubuntu-24.04'},
+            {'arch': 'arm64', 'runner': 'ubuntu-24.04-arm'},
+        ])
+        self.assertEqual(build['if'], "needs.check.outputs.ready != 'true'")
+        self.assertEqual(native['merge']['needs'], ['check', 'build'])
+        self.assertNotIn('always()', native['merge'].get('if', ''))
+        self.assertNotIn('setup-qemu-action', str(native))
+        original = next(s['run'] for s in IMAGE['jobs']['build']['steps'] if s.get('id') == 'existing')
+        reuse = next(s['run'] for s in native['check']['steps'] if s.get('id') == 'existing')
+        self.assertEqual(reuse, original)
+
+    def test_openclaw_base_staging_tags_preserve_version_and_latest_policy(self):
+        for arch in ['amd64', 'arm64']:
+            result = subprocess.run(['make', '-n', 'push-openclaw-base-platform',
+                                     'IS_PODMAN=0', 'VERSION=v1.2.6', 'ARCH=' + arch],
+                                    cwd=ROOT, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('--platform linux/' + arch, result.stdout)
+            self.assertIn('openclaw-base:v1.2.6-' + arch, result.stdout)
+            self.assertNotIn('-t higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/openclaw-base:latest', result.stdout)
+        for version in ['v1.2.6', 'v1.2.6-rc.1']:
+            result = subprocess.run(['make', '-n', 'push-openclaw-base-manifest',
+                                     'IS_PODMAN=0', 'VERSION=' + version],
+                                    cwd=ROOT, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('docker buildx imagetools create', result.stdout)
+            for arch in ['amd64', 'arm64']:
+                self.assertIn('openclaw-base:' + version + '-' + arch, result.stdout)
+            self.assertEqual('openclaw-base:latest' in result.stdout, version == 'v1.2.6')
+
     def test_existing_image_skips_only_when_both_architectures_are_verified(self):
         steps = IMAGE['jobs']['build']['steps']
         check = next(s for s in steps if s.get('id') == 'existing')

@@ -21,6 +21,74 @@ shared/runtime/members/{memberName}/runtime.yaml
 
 `desired.agentPackage` 是 AgentTeams AgentSpec 包，不是 TeamHarness 插件包。TeamHarness 插件是运行时基础设施；AgentSpec 包是用户部署的 agent 模板与业务能力包。
 
+## 运行时 provider ID 警告
+
+`spec.modelProvider` 是 **AI 网关 provider 名**（Higress / APIG），用于控制器解析
+AI Route、网关 base URL 与 consumer 授权；它**不是**可自由复用的运行时 provider id。
+
+不要把 QwenPaw 内置 provider id 写进运行时投影。QwenPaw 用运行时 provider id 选择
+本地 provider 条目；内置 provider 会从 QwenPaw 内置目录恢复，`freeze_url=True` 会阻止
+写入网关 base URL，worker 启动时 base URL 回读失败。网关 provider 名本身是合法的，
+不应因为这个问题改名。
+
+AgentTeams 管理的运行时统一使用非内置的运行时 provider id `agentteams-gateway`。
+`spec.modelProvider` 仍然可以选名为 `deepseek` 的网关 provider；运行时 provider id
+必须与它分离。
+
+### QwenPaw 内置 provider id（v2.2.2.post1）
+
+来源：QwenPaw `v2.2.2.post1` 的 `qwenpaw/providers/provider_catalog.py`。
+
+`freeze_url=True`——绝不能用作运行时 provider id：
+
+```text
+modelscope
+aliyun-codingplan
+aliyun-codingplan-intl
+aliyun-tokenplan
+aliyun-tokenplan-intl
+zhipu-cn
+zhipu-cn-codingplan
+zhipu-intl
+zhipu-intl-codingplan
+openai
+openai-response
+kilo
+minimax
+minimax-cn
+kimi-cn
+kimi-intl
+kimi-codingplan
+deepseek
+gemini
+openrouter
+siliconflow-cn
+siliconflow-intl
+volcengine-cn
+volcengine-cn-codingplan
+volcengine-cn-agentplan
+mimo-tokenplan
+mimo
+```
+
+`freeze_url=False`——不是硬冻结集合，但仍是带 provider 特定行为的内置 id，
+不要用作 AgentTeams 运行时 provider id：
+
+```text
+dashscope
+agentscope-platform
+qwenpaw-local
+opencode
+azure-openai
+anthropic
+ollama
+lmstudio
+```
+
+因此对 AgentTeams 管理的 worker，安全规则是：**网关 provider 名可以任意；运行时
+provider id 恒为 `agentteams-gateway`（或显式的非内置运行时 id），绝不使用 QwenPaw
+内置 provider id。**
+
 ## 字段契约
 
 ```yaml

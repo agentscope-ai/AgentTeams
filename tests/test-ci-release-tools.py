@@ -133,6 +133,19 @@ class BaseProbeTests(unittest.TestCase):
 
 
 class WorkflowPlanTests(unittest.TestCase):
+    def test_hermes_submodule_updates_trigger_runtime_validation(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/test-integration.yml').read_text())
+        triggers = workflow.get('on', workflow.get(True))
+        for event in ('push', 'pull_request'):
+            self.assertIn('hermes', triggers[event]['paths'])
+            self.assertIn('.gitmodules', triggers[event]['paths'])
+        for name in ('build-image', 'build-integration-images', 'build-rc', 'check-node-pins', 'test-integration'):
+            jobs = yaml.safe_load((ROOT / f'.github/workflows/{name}.yml').read_text())['jobs']
+            for job in jobs.values():
+                for step in job.get('steps', []):
+                    if step.get('uses', '').startswith('actions/checkout@'):
+                        self.assertEqual(step.get('with', {}).get('submodules'), 'recursive', name)
+
     def test_runtime_shards_download_consumers_without_the_build_only_base(self):
         workflow = yaml.safe_load((ROOT / '.github/workflows/test-integration.yml').read_text())
         steps = workflow['jobs']['integration-tests']['steps']

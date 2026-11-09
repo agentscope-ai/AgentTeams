@@ -13,6 +13,22 @@ Guide for contributing to AgentTeams, building images locally, and running tests
 
 See [../../AGENTS.md](../../AGENTS.md) for a comprehensive codebase navigation guide.
 
+## Hermes Harness checkout
+
+Hermes runtime source is maintained in
+[agentteams-harness-hermes](https://github.com/agentteams-group/agentteams-harness-hermes)
+and pinned here as the `hermes/` Git submodule. Initialize it after cloning or
+pulling changes:
+
+```sh
+git submodule update --init --recursive
+```
+
+`make build-hermes-worker` initializes a missing checkout automatically. To
+upgrade Hermes, update the harness first, then bump the submodule commit and
+`HERMES_GIT_REF` in `hack/versions.env` together. Existing image names, Helm and
+installer defaults remain controlled by this repository.
+
 ## Building Images Locally
 
 All builds go through the root `Makefile`:

@@ -86,6 +86,8 @@ jobs:
           swap-storage: true
 
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
         if: steps.existing.outputs.ready != 'true'
       - uses: docker/setup-qemu-action@v3
         if: steps.existing.outputs.ready != 'true'

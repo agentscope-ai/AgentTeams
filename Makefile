@@ -181,6 +181,11 @@ build-worker: ## Build Worker image
 		-t $(LOCAL_WORKER) \
 		./worker/
 
+hermes/Dockerfile:
+	git submodule update --init -- hermes
+
+build-hermes-worker push-hermes-worker: | hermes/Dockerfile
+
 build-hermes-worker: ## Build Hermes Worker image
 	@echo "==> Building Hermes Worker image: $(LOCAL_HERMES_WORKER) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context teamharness_trace=./plugins/teamharness/adapters/qwenpaw $(DOCKER_BUILD_ARGS) \

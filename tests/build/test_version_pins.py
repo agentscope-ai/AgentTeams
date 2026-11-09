@@ -162,7 +162,7 @@ def test_dot_git_is_kept_for_online_upgrade() -> None:
 
 
 # --- Hermes pin (#1472) -----------------------------------------------------
-HERMES_GIT_REF = "v0.22.7"
+HERMES_GIT_REF = "v0.23.0"
 
 # --- QwenPaw pin (#1471) ----------------------------------------------------
 QWENPAW_PIP_SPEC = "qwenpaw==2.2.2.post1"

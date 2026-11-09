@@ -1,0 +1,3 @@
+[submodule "hermes"]
+	path = hermes
+	url = https://github.com/agentteams-group/agentteams-harness-hermes.git

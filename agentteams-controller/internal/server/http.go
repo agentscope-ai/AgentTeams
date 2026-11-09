@@ -19,6 +19,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/runtimeconfig/openclaw"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/skillscan"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/taskforge"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -52,6 +53,12 @@ type ServerDeps struct {
 	DefaultModel         string // install-time model for Worker create requests without a model
 	WorkerAgentDir       string // source of builtin agent templates (skill catalog)
 	PluginDir            string // bundled plugin packages (skill catalog plugin source); empty = no plugin entries
+
+	// TaskForge gateway (1.2.7, task 26 §5.2): nil = gateway OFF (no
+	// taskforge routes registered; those paths 404 exactly as before).
+	// TaskForgeUpstream is the configured URL, kept for status/debug output.
+	TaskForge         *taskforge.Client
+	TaskForgeUpstream string
 }
 
 // HTTPServer serves the unified controller REST API.
@@ -496,6 +503,36 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 		validator := proxy.NewSecurityValidator()
 		proxyHandler := proxy.NewHandler(deps.SocketPath, validator)
 		mux.Handle("/docker/", mw.RequireAuthz(authpkg.ActionGateway, "gateway", nil)(http.StripPrefix("/docker", proxyHandler)))
+	}
+
+	// --- TaskForge gateway (1.2.7, task 26 §5.2) ---
+	// Registered only when deps.TaskForge != nil (AGENTTEAMS_TASKFORGE_URL
+	// set); when off, these 14 paths 404 exactly as before. Fixed-path
+	// forwarding with per-route authz — never a generic reverse proxy
+	// (repository discipline). Design decisions pinned by tests:
+	//   - loops routes reuse the existing "loop" kind (admin/manager only,
+	//     same family as /loops/{name}/pause|resume).
+	//   - events rides the task read scope (ActionList + "task").
+	//   - restore is ActionDelete (delete/restore group in the §5.4
+	//     matrix); claim/submit/accept/reject/cancel ride ActionUpdate.
+	if deps.TaskForge != nil {
+		tfg := newTaskForgeGateway(deps.TaskForge, deps.TaskForgeUpstream)
+		tfIDFn := func(r *http.Request) string { return r.PathValue("id") }
+		tfNameFn := func(r *http.Request) string { return r.PathValue("name") }
+		mux.Handle("POST /api/v1/tasks/{id}/claim", mw.RequireAuthz(authpkg.ActionUpdate, "task", tfIDFn)(http.HandlerFunc(tfg.Forward("/internal/v1/tasks/%s/claim"))))
+		mux.Handle("POST /api/v1/tasks/{id}/submit", mw.RequireAuthz(authpkg.ActionUpdate, "task", tfIDFn)(http.HandlerFunc(tfg.Forward("/internal/v1/tasks/%s/submit"))))
+		mux.Handle("POST /api/v1/tasks/{id}/accept", mw.RequireAuthz(authpkg.ActionUpdate, "task", tfIDFn)(http.HandlerFunc(tfg.Forward("/internal/v1/tasks/%s/accept"))))
+		mux.Handle("POST /api/v1/tasks/{id}/reject", mw.RequireAuthz(authpkg.ActionUpdate, "task", tfIDFn)(http.HandlerFunc(tfg.Forward("/internal/v1/tasks/%s/reject"))))
+		mux.Handle("POST /api/v1/tasks/{id}/cancel", mw.RequireAuthz(authpkg.ActionUpdate, "task", tfIDFn)(http.HandlerFunc(tfg.Forward("/internal/v1/tasks/%s/cancel"))))
+		mux.Handle("POST /api/v1/tasks/{id}/restore", mw.RequireAuthz(authpkg.ActionDelete, "task", tfIDFn)(http.HandlerFunc(tfg.Forward("/internal/v1/tasks/%s/restore"))))
+		mux.Handle("GET /api/v1/tasks/{id}/timeline", mw.RequireAuthz(authpkg.ActionGet, "task", tfIDFn)(http.HandlerFunc(tfg.Forward("/internal/v1/tasks/%s/timeline"))))
+		mux.Handle("GET /api/v1/tasks/{id}/checkpoints", mw.RequireAuthz(authpkg.ActionGet, "checkpoint", tfIDFn)(http.HandlerFunc(tfg.Forward("/internal/v1/tasks/%s/checkpoints"))))
+		mux.Handle("GET /api/v1/tasks/{id}/artifacts", mw.RequireAuthz(authpkg.ActionGet, "task", tfIDFn)(http.HandlerFunc(tfg.Forward("/internal/v1/tasks/%s/artifacts"))))
+		mux.Handle("GET /api/v1/loops", mw.RequireAuthz(authpkg.ActionList, "loop", nil)(http.HandlerFunc(tfg.Forward("/internal/v1/loops"))))
+		mux.Handle("GET /api/v1/loops/{name}", mw.RequireAuthz(authpkg.ActionGet, "loop", tfNameFn)(http.HandlerFunc(tfg.Forward("/internal/v1/loops/%s"))))
+		mux.Handle("GET /api/v1/events", mw.RequireAuthz(authpkg.ActionList, "task", nil)(http.HandlerFunc(tfg.Forward("/internal/v1/events"))))
+		mux.Handle("GET /api/v1/runner-modules/taskforge/status", mw.RequireAuthz(authpkg.ActionGet, "runner-module", nil)(http.HandlerFunc(tfg.StatusHandler)))
+		mux.Handle("POST /api/v1/runner-modules/taskforge/update", mw.RequireAuthz(authpkg.ActionUpdate, "runner-module", nil)(http.HandlerFunc(tfg.Forward("/internal/v1/self/update"))))
 	}
 
 	return s

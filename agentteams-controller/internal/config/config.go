@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
@@ -201,6 +202,13 @@ type Config struct {
 
 	// Pre-resolved worker environment defaults (passed to worker containers)
 	WorkerEnv WorkerEnvDefaults
+
+	// TaskForge gateway (1.2.7): fixed-path forwarder to the TaskForge
+	// runner. TaskForgeURL empty = gateway OFF (no taskforge routes are
+	// registered, binary behaves exactly as before).
+	TaskForgeURL          string        // AGENTTEAMS_TASKFORGE_URL; empty = off
+	TaskForgeClaimsSecret string        // AGENTTEAMS_TASKFORGE_CLAIMS_SECRET; required (>= 16 chars) when URL set
+	TaskForgeTimeout      time.Duration // AGENTTEAMS_TASKFORGE_TIMEOUT; default 10s
 }
 
 // WorkerEnvDefaults holds environment variable defaults injected into worker and manager containers.
@@ -430,6 +438,10 @@ func LoadConfig() *Config {
 			SkillsAPIURL:      envOrDefault("SKILLS_API_URL", os.Getenv("AGENTTEAMS_SKILLS_API_URL")),
 			NacosAuthType:     os.Getenv("NACOS_AUTH_TYPE"),
 		},
+
+		TaskForgeURL:          os.Getenv("AGENTTEAMS_TASKFORGE_URL"),
+		TaskForgeClaimsSecret: os.Getenv("AGENTTEAMS_TASKFORGE_CLAIMS_SECRET"),
+		TaskForgeTimeout:      10 * time.Second,
 	}
 
 	// In embedded mode, services (Tuwunel, MinIO) run inside the controller container.
@@ -465,6 +477,27 @@ func LoadConfig() *Config {
 		}
 		if cfg.MatrixAppServiceHSToken == "" {
 			panic("AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN is required when AppService mode is enabled; run install script or set env var")
+		}
+	}
+
+	// Validate TaskForge gateway configuration (1.2.7) — centralized here
+	// like the AppService tokens above. The gateway is OFF when the URL is
+	// empty; when ON, the URL must parse and use http/https, the claims
+	// secret must be at least 16 chars, and the timeout positive.
+	if raw := os.Getenv("AGENTTEAMS_TASKFORGE_TIMEOUT"); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil || d <= 0 {
+			panic(fmt.Sprintf("invalid AGENTTEAMS_TASKFORGE_TIMEOUT %q: must be a positive duration", raw))
+		}
+		cfg.TaskForgeTimeout = d
+	}
+	if cfg.TaskForgeURL != "" {
+		u, err := url.Parse(cfg.TaskForgeURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			panic(fmt.Sprintf("invalid AGENTTEAMS_TASKFORGE_URL %q: must be an absolute http(s) URL", cfg.TaskForgeURL))
+		}
+		if len(cfg.TaskForgeClaimsSecret) < 16 {
+			panic("AGENTTEAMS_TASKFORGE_CLAIMS_SECRET is required (at least 16 chars) when AGENTTEAMS_TASKFORGE_URL is set")
 		}
 	}
 

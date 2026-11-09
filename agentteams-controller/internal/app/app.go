@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -29,6 +30,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/skillscan"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/store"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/taskforge"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/watcher"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -668,6 +670,20 @@ func (a *App) initReconcilers(_ context.Context) error {
 }
 
 func (a *App) initHTTPServer(_ context.Context) error {
+	// TaskForge gateway (1.2.7, task 26 §6.2): the client exists only when
+	// AGENTTEAMS_TASKFORGE_URL is set; nil keeps the gateway off and the
+	// controller's behavior identical to before. LoadConfig has already
+	// validated URL/secret/timeout (it panics on a bad combo).
+	var tfClient *taskforge.Client
+	var tfUpstream string
+	if a.cfg.TaskForgeURL != "" {
+		base, err := url.Parse(a.cfg.TaskForgeURL)
+		if err != nil {
+			return fmt.Errorf("parse AGENTTEAMS_TASKFORGE_URL: %w", err)
+		}
+		tfClient = taskforge.NewClient(base, a.cfg.TaskForgeClaimsSecret, a.cfg.TaskForgeTimeout)
+		tfUpstream = a.cfg.TaskForgeURL
+	}
 	a.httpServer = server.NewHTTPServer(a.cfg.HTTPAddr, server.ServerDeps{
 		Client:          a.mgr.GetClient(),
 		APIReader:       a.mgr.GetAPIReader(),
@@ -693,6 +709,9 @@ func (a *App) initHTTPServer(_ context.Context) error {
 		WorkerAgentDir:       a.cfg.WorkerAgentDir(),
 		PluginDir:            a.cfg.PluginDir(),
 		SkillScanner:         a.skillScanner,
+
+		TaskForge:         tfClient,
+		TaskForgeUpstream: tfUpstream,
 	})
 	return nil
 }

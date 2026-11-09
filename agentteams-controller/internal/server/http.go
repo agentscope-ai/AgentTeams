@@ -165,8 +165,11 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// The files root is its own exact route (registered before the
 	// wildcard, which outranks it and also suppresses the wildcard's
 	// auto-redirect of the bare path): it serves the root directory
-	// listing and the recursive flat listing (?recursive=1).
-	mux.Handle("GET /api/v1/humans/{name}/files", mw.Authenticate(http.HandlerFunc(hfh.listFiles)))
+	// listing and the recursive flat listing (?recursive=1). Listing-
+	// optimization pipeline: ETag inner (validator
+	// over the uncompressed JSON), gzip outer — every response of this
+	// route is a listing JSON, never file content.
+	mux.Handle("GET /api/v1/humans/{name}/files", mw.Authenticate(httputil.GzipMiddleware(httputil.ETagMiddleware(http.HandlerFunc(hfh.listFiles)))))
 	// Incremental change feed: the literal pattern outranks the {path...}
 	// wildcard below, so a file literally named "changes" at the area root
 	// is served only through the feed route (GET-shadowed) — the same
@@ -190,7 +193,9 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// pattern segment, so .../files/{path...}/commit cannot be registered
 	// alongside — postFile dispatches between the two forms.
 	mux.Handle("POST /api/v1/humans/{name}/files/{path...}", mw.Authenticate(http.HandlerFunc(hfh.postFile)))
-	mux.Handle("GET /api/v1/humans/{name}/trash", mw.Authenticate(http.HandlerFunc(hfh.listTrash)))
+	// The trash listing takes the same listing-optimization pipeline as
+	// the files listings; it is a bounded JSON list.
+	mux.Handle("GET /api/v1/humans/{name}/trash", mw.Authenticate(httputil.GzipMiddleware(httputil.ETagMiddleware(http.HandlerFunc(hfh.listTrash)))))
 	mux.Handle("POST /api/v1/humans/{name}/trash/{id}/restore", mw.Authenticate(http.HandlerFunc(hfh.restoreTrash)))
 	mux.Handle("DELETE /api/v1/humans/{name}/trash/{id}", mw.Authenticate(http.HandlerFunc(hfh.purgeTrash)))
 	mux.Handle("GET /api/v1/humans/{name}/quota", mw.Authenticate(http.HandlerFunc(hfh.getQuota)))
@@ -201,9 +206,14 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// so these endpoints are the manifest's only address. Same auth-only
 	// middleware as the file area: the handler authorizes (file_sync
 	// capability) and answers 404 for non-access callers.
-	mux.Handle("GET /api/v1/humans/{name}/sync/manifest", mw.Authenticate(http.HandlerFunc(hfh.getSyncManifest)))
+	// The manifest keeps its OWN storage-bound ETag inside
+	// getSyncManifest (revalidated with If-None-Match); the generic
+	// ETagMiddleware is deliberately NOT stacked on it — it would re-
+	// validate the serialized JSON and mask the storage validator.
+	// Gzip only: bounded JSON, no body on the 304 the handler answers.
+	mux.Handle("GET /api/v1/humans/{name}/sync/manifest", mw.Authenticate(httputil.GzipMiddleware(http.HandlerFunc(hfh.getSyncManifest))))
 	mux.Handle("PUT /api/v1/humans/{name}/sync/manifest", mw.Authenticate(http.HandlerFunc(hfh.putSyncManifest)))
-	mux.Handle("GET /api/v1/humans/{name}/sync/status", mw.Authenticate(http.HandlerFunc(hfh.getSyncStatus)))
+	mux.Handle("GET /api/v1/humans/{name}/sync/status", mw.Authenticate(httputil.GzipMiddleware(http.HandlerFunc(hfh.getSyncStatus))))
 
 	// Managers
 	mux.Handle("POST /api/v1/managers", mw.RequireAuthz(authpkg.ActionCreate, "manager", nil)(http.HandlerFunc(rh.CreateManager)))

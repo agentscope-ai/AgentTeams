@@ -10,6 +10,8 @@ on:
       - 'manager/agent/skills/coding-cli-management/**'
       - 'manager/tests/test-coding-cli-skill-flow.sh'
       - 'manager/tests/test-openclaw-config-migration.sh'
+      - 'manager/agent/skills/model-switch/**'
+      - 'manager/tests/test_update_manager_model.py'
       - 'manager/configs/**'
       - 'shared/lib/migrate-openclaw-config.sh'
       - '.github/workflows/test-manager.yml'
@@ -23,6 +25,8 @@ on:
       - 'manager/agent/skills/coding-cli-management/**'
       - 'manager/tests/test-coding-cli-skill-flow.sh'
       - 'manager/tests/test-openclaw-config-migration.sh'
+      - 'manager/agent/skills/model-switch/**'
+      - 'manager/tests/test_update_manager_model.py'
       - 'manager/configs/**'
       - 'shared/lib/migrate-openclaw-config.sh'
   workflow_dispatch:
@@ -57,6 +61,9 @@ jobs:
 
       - name: Guard the persisted openclaw.json migration (shell/Python parity)
         run: bash manager/tests/test-openclaw-config-migration.sh
+
+      - name: Guard runtime-specific model switch instructions
+        run: python -m unittest discover -s manager/tests -p 'test_update_manager_model.py' -v
 
       - name: Run agentteams_manager unit tests
         run: |

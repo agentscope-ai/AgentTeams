@@ -49,7 +49,7 @@ type MatrixTokenAuthenticator struct {
 }
 
 type cachedIdentity struct {
-	identity *CallerIdentity
+	userID   string
 	expiry   time.Time
 }
 
@@ -74,7 +74,8 @@ func (a *MatrixTokenAuthenticator) Authenticate(ctx context.Context, token strin
 
 	key := sha256.Sum256([]byte(token))
 	if id := a.getFromCache(key); id != nil {
-		return id, nil
+		// Cache token validation, but resolve mutable permissions on every request.
+		return a.resolveHuman(ctx, id.userID)
 	}
 
 	userID, err := a.whoami.Whoami(ctx, token)
@@ -90,7 +91,7 @@ func (a *MatrixTokenAuthenticator) Authenticate(ctx context.Context, token strin
 		return nil, err
 	}
 
-	a.putToCache(key, identity)
+	a.putToCache(key, userID)
 	return identity, nil
 }
 
@@ -122,6 +123,22 @@ func (a *MatrixTokenAuthenticator) resolveHuman(ctx context.Context, userID stri
 		case 2:
 			teams := make([]string, len(h.Spec.AccessibleTeams))
 			copy(teams, h.Spec.AccessibleTeams)
+			var owned v1beta1.TeamList
+			if err := a.k8s.List(ctx, &owned, client.InNamespace(a.namespace)); err != nil {
+				return nil, fmt.Errorf("list administered teams: %w", err)
+			}
+			for _, team := range owned.Items {
+				if team.Spec.Admin == nil || team.Spec.Admin.Name != h.Name {
+					continue
+				}
+				found := false
+				for _, name := range teams {
+					found = found || name == team.Name
+				}
+				if !found {
+					teams = append(teams, team.Name)
+				}
+			}
 			// Capabilities are granted on the Human CR (#1220 §3). Only L2
 			// humans carry them — level-3 humans are rejected to their own
 			// branch below, and SA-based identities never pass through here
@@ -155,7 +172,7 @@ func (a *MatrixTokenAuthenticator) resolveHuman(ctx context.Context, userID stri
 	return nil, fmt.Errorf("no human with a supported permission level (2=team, 3=worker) matches matrix user %q", userID)
 }
 
-func (a *MatrixTokenAuthenticator) getFromCache(key [32]byte) *CallerIdentity {
+func (a *MatrixTokenAuthenticator) getFromCache(key [32]byte) *cachedIdentity {
 	a.cacheMu.Lock()
 	defer a.cacheMu.Unlock()
 	now := time.Now()
@@ -168,15 +185,15 @@ func (a *MatrixTokenAuthenticator) getFromCache(key [32]byte) *CallerIdentity {
 		}
 	}
 	if v, ok := a.cache[key]; ok && now.Before(v.expiry) {
-		return v.identity
+		return &v
 	}
 	return nil
 }
 
-func (a *MatrixTokenAuthenticator) putToCache(key [32]byte, identity *CallerIdentity) {
+func (a *MatrixTokenAuthenticator) putToCache(key [32]byte, userID string) {
 	a.cacheMu.Lock()
 	defer a.cacheMu.Unlock()
-	a.cache[key] = cachedIdentity{identity: identity, expiry: time.Now().Add(a.cacheTTL)}
+	a.cache[key] = cachedIdentity{userID: userID, expiry: time.Now().Add(a.cacheTTL)}
 }
 
 // localpartFromUserID extracts the localpart from a Matrix user id

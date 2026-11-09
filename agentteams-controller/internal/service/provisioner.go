@@ -842,7 +842,7 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 		if err := p.ReconcileRoomMembershipWithActorToken(ctx, teamRoom.RoomID, teamDesired, req.TeamAdminActorToken, req.TeamAdminActorName); err != nil {
 			return nil, fmt.Errorf("reconcile team room membership as team admin: %w", err)
 		}
-		if teamAdminID != adminMatrixID {
+		if teamAdminID != adminMatrixID && !containsString(teamDesired, adminMatrixID) {
 			if present, _, err := p.observedRoomMembershipWithToken(ctx, teamRoom.RoomID, adminMatrixID, req.TeamAdminActorToken); err != nil {
 				return nil, fmt.Errorf("check global admin team room membership: %w", err)
 			} else if present {

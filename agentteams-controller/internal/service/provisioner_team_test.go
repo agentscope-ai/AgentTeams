@@ -729,6 +729,29 @@ func TestProvisionTeamRoomsInvitesExplicitTeamAdminAndLeavesNewLeaderDM(t *testi
 	}
 }
 
+func TestProvisionTeamRoomsKeepsExplicitGlobalAdminMember(t *testing.T) {
+	matrixClient := newFakeTeamMatrix()
+	matrixClient.tokenUsers["team-admin-token"] = "@alice:localhost"
+	p := NewProvisioner(ProvisionerConfig{Matrix: matrixClient, AdminUser: "admin"})
+	_, err := p.ProvisionTeamRooms(context.Background(), TeamRoomRequest{
+		TeamName: "alpha", LeaderName: "lead",
+		AdminSpec:           &v1beta1.TeamAdminSpec{Name: "alice", MatrixUserID: "@alice:localhost"},
+		HumanMembers:        []v1beta1.TeamMemberSpec{{Name: "admin", MatrixUserID: "@admin:localhost", Role: "coordinator"}},
+		TeamAdminActorToken: "team-admin-token", TeamAdminActorName: "alice",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsString(matrixClient.createRooms[0].Invite, "@admin:localhost") {
+		t.Fatal("explicit global admin not invited")
+	}
+	for _, leave := range matrixClient.leaves {
+		if leave == "!team:localhost" {
+			t.Fatal("explicit global admin removed from team room")
+		}
+	}
+}
+
 func TestProvisionTeamRoomsInvitesCoordinatorMembersLikeTeamAdmin(t *testing.T) {
 	matrixClient := newFakeTeamMatrix()
 	matrixClient.tokenUsers["team-admin-token"] = "@alice:example.com"

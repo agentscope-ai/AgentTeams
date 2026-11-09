@@ -14,12 +14,11 @@ import (
 // to a block in models.providers fails openclaw config validation.
 const gatewayProviderID = "agentteams-gateway"
 
-// providerFor resolves the provider that serves a worker's models.
-// Empty keeps the built-in gateway provider.
-func providerFor(name string) string {
-	if v := strings.TrimSpace(name); v != "" {
-		return v
-	}
+// providerFor returns the local openclaw provider-block id. The gateway
+// provider named by spec.modelProvider is resolved by the controller for the
+// AI route and gateway URL; it is not used as the local block id. Keeping the
+// local id constant avoids collisions with runtime built-in provider ids.
+func providerFor(_ string) string {
 	return gatewayProviderID
 }
 
@@ -41,8 +40,10 @@ func NewGenerator(cfg Config) *Generator {
 
 // GenerateOpenClawConfig produces the openclaw.json content for a worker.
 func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, error) {
-	// Provider projection: the worker's models are qualified with the
-	// provider named by ModelProvider (empty keeps the built-in gateway).
+	// Provider projection: the worker's models are qualified with the local
+	// gateway provider block. ModelProvider remains the AI-gateway provider
+	// name used by the controller to resolve the gateway URL; it is not a
+	// local runtime provider id.
 	pid := providerFor(req.ModelProvider)
 
 	modelName := req.ModelName

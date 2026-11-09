@@ -13,6 +13,13 @@ import (
 const (
 	memberRuntimeConfigKind = "MemberRuntimeConfig"
 	nativeConfigModel       = "native-config"
+	// runtimeGatewayProviderID is the only provider id projected into a
+	// managed member's runtime config. The gateway provider named by
+	// spec.modelProvider is resolved separately for the AI route, gateway
+	// URL and consumer authorization; forwarding that name as a runtime
+	// provider id can collide with a QwenPaw built-in provider (for example
+	// "deepseek") and make the worker fail its base-URL readback.
+	runtimeGatewayProviderID = "agentteams-gateway"
 )
 
 func memberRuntimeConfigObjectKey(runtimeName string) string {
@@ -384,13 +391,14 @@ func isNativeConfigModel(model string) bool {
 	return strings.EqualFold(strings.TrimSpace(model), nativeConfigModel)
 }
 
-// providerIDFromSpec resolves the gateway provider serving this member's
-// models; empty keeps the built-in gateway provider.
-func providerIDFromSpec(name string) string {
-	if v := strings.TrimSpace(name); v != "" {
-		return v
-	}
-	return "agentteams-gateway"
+// providerIDFromSpec returns the runtime provider id projected into the
+// member's runtime config. It is intentionally independent of the gateway
+// provider name: spec.modelProvider is resolved by the controller for the AI
+// route and gateway URL, but the runtime always uses the non-built-in gateway
+// provider entry. This keeps arbitrary gateway provider names (including
+// names that match QwenPaw built-ins) from leaking into the runtime.
+func providerIDFromSpec(_ string) string {
+	return runtimeGatewayProviderID
 }
 
 func memberRuntimeConfigChannelsFromSpec(spec v1beta1.WorkerSpec) (*memberRuntimeConfigChannels, error) {

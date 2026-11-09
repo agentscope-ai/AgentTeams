@@ -47,10 +47,10 @@ __all__ = [
 
 # Endpoint path constants for the TaskForge REST surface. Provisional
 # until the 0.1.0 core/schemas mirror lands (contracts/taskforge/).
-PROJECTS = "/projects"
-TASKS = "/tasks"
-LOOPS = "/loops"
-EVENTS = "/events"
+PROJECTS = "/api/v1/projects"
+TASKS = "/api/v1/tasks"
+LOOPS = "/api/v1/loops"
+EVENTS = "/api/v1/events"
 
 # Diagnostic cap for response bodies carried on TaskForgeError.
 MAX_ERROR_BODY_BYTES = 512
@@ -99,12 +99,12 @@ class TaskForgeConflict(TaskForgeError):
 
 
 def task_action(task_id: str, action: str) -> str:
-    """Path for a task action endpoint: /tasks/<id>/actions/<action>."""
-    return f"{TASKS}/{task_id}/actions/{action}"
+    """Path for a task action endpoint: /api/v1/tasks/<id>/<action>."""
+    return f"{TASKS}/{task_id}/{action}"
 
 
 def task_sub(task_id: str, sub: str) -> str:
-    """Path for a task sub-resource endpoint: /tasks/<id>/<sub>."""
+    """Path for a task sub-resource endpoint: /api/v1/tasks/<id>/<sub>."""
     return f"{TASKS}/{task_id}/{sub}"
 
 
@@ -113,16 +113,23 @@ def _truncate(body: bytes) -> bytes:
 
 
 def _conflict_code(body: bytes) -> str | None:
-    """Extract a string ``code`` field from a (possibly truncated) JSON
-    409 body; None when the body is not a JSON object with one."""
+    """Extract the string conflict code from a (possibly truncated) JSON
+    409 body: the ``error.code`` envelope field first, then a top-level
+    ``code``; None when the body is not a JSON object carrying either."""
     try:
         data = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         return None
-    if isinstance(data, dict):
-        code = data.get("code")
+    if not isinstance(data, dict):
+        return None
+    error = data.get("error")
+    if isinstance(error, dict):
+        code = error.get("code")
         if isinstance(code, str) and code:
             return code
+    code = data.get("code")
+    if isinstance(code, str) and code:
+        return code
     return None
 
 

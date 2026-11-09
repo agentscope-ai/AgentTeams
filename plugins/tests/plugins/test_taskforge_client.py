@@ -90,7 +90,9 @@ class _StubHandler(BaseHTTPRequestHandler):
         if self.path.startswith("/unavailable"):
             self._respond(503, {"error": "maintenance"})
         elif self.path.startswith("/conflict"):
-            self._respond(409, {"code": "etag_mismatch", "message": "stale etag"})
+            self._respond(
+                409, {"error": {"code": "etag_mismatch"}, "message": "stale etag"}
+            )
         else:
             self._respond(201, {"created": True, "path": self.path})
 
@@ -156,7 +158,7 @@ def _snapshot(workdir: Path) -> list[str]:
 def test_get_success_sends_auth_and_request_id(stub):
     client = _client(stub)
     data = client.get(tf.PROJECTS, params={"limit": 2}, request_id="req-123")
-    assert data == {"ok": True, "path": "/projects?limit=2"}
+    assert data == {"ok": True, "path": "/api/v1/projects?limit=2"}
     request = stub.requests[-1]
     assert request["method"] == "GET"
     assert request["headers"].get("Authorization") == "Bearer tok-test"
@@ -178,13 +180,13 @@ def test_get_default_request_id_is_uuid4(stub):
 def test_post_passes_if_match_and_idempotency_key(stub):
     client = _client(stub)
     data = client.post(
-        tf.task_action("t-1", "complete"),
+        tf.task_action("t-1", "submit"),
         payload={"state": "done"},
         if_match='"v7"',
         idempotency_key="idem-1",
     )
     assert data["created"] is True
-    assert data["path"] == "/tasks/t-1/actions/complete"
+    assert data["path"] == "/api/v1/tasks/t-1/submit"
     request = stub.requests[-1]
     assert request["method"] == "POST"
     assert request["headers"].get("If-Match") == '"v7"'

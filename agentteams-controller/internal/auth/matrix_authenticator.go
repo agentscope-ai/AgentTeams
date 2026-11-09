@@ -19,24 +19,9 @@ type MatrixWhoami interface {
 	Whoami(ctx context.Context, accessToken string) (userID string, err error)
 }
 
-// MatrixTokenAuthenticator authenticates a bearer token as a Matrix user and
-// resolves it to an L2 human identity via the Human CR.
-//
-// Chain (direction A2): the caller presents a Matrix access token obtained by
-// logging into the homeserver; we validate it with whoami, map the localpart
-// to a Human CR (username / metadata.name), and build a read-only human
-// identity whose Teams set is the Human's accessibleTeams. This lets an L2
-// user view every team they control with a single token — no per-team SA
-// switching.
-//
-// The identity role is RoleHuman (read-only), NOT RoleTeamLeader: team leaders
-// are coordinating workers and may manage their team's workers; an L2 human is
-// a viewer and must not get worker-management or credential-refresh powers.
-//
-// Human permission levels: 2 = Team (L2 — teams + capabilities scope) and
-// 3 = Worker (L3 — read-only scope over the explicitly assigned
-// accessibleWorkers, #1220 §2/Q2). Level 1 (admin) humans are not resolved
-// here; they should use the admin SA.
+// MatrixTokenAuthenticator validates Matrix identities and resolves current Human
+// permissions: L1 administrator, L2 team scope, and L3 assigned-worker scope.
+// Token validation is cached; mutable Human permissions are resolved per request.
 type MatrixTokenAuthenticator struct {
 	k8s       client.Client
 	namespace string
@@ -119,7 +104,15 @@ func (a *MatrixTokenAuthenticator) resolveHuman(ctx context.Context, userID stri
 		} else if localpart == "" || h.Spec.EffectiveUsername(h.Name) != localpart {
 			continue
 		}
+		if !h.DeletionTimestamp.IsZero() {
+			return nil, fmt.Errorf("human %q is being deleted", h.Name)
+		}
 		switch h.Spec.PermissionLevel {
+		case 1:
+			if h.Status.MatrixUserID == "" {
+				return nil, fmt.Errorf("L1 human %q has no reconciled Matrix identity", h.Name)
+			}
+			return &CallerIdentity{Role: RoleAdmin, Username: h.Name, MatrixUserID: userID, HumanPermissionLevel: 1}, nil
 		case 2:
 			teams := make([]string, len(h.Spec.AccessibleTeams))
 			copy(teams, h.Spec.AccessibleTeams)
@@ -154,10 +147,12 @@ func (a *MatrixTokenAuthenticator) resolveHuman(ctx context.Context, userID stri
 			caps := make([]string, len(h.Spec.Capabilities))
 			copy(caps, h.Spec.Capabilities)
 			return &CallerIdentity{
-				Role:         RoleHuman,
-				Username:     h.Name,
-				Teams:        teams,
-				Capabilities: caps,
+				MatrixUserID:         userID,
+				HumanPermissionLevel: h.Spec.PermissionLevel,
+				Role:                 RoleHuman,
+				Username:             h.Name,
+				Teams:                teams,
+				Capabilities:         caps,
 			}, nil
 		case 3:
 			// L3 (worker-scoped, #1220 §2/Q2): read-only access to exactly
@@ -169,15 +164,17 @@ func (a *MatrixTokenAuthenticator) resolveHuman(ctx context.Context, userID stri
 			workers := make([]string, len(h.Spec.AccessibleWorkers))
 			copy(workers, h.Spec.AccessibleWorkers)
 			return &CallerIdentity{
-				Role:              RoleHuman,
-				Username:          h.Name,
-				AccessibleWorkers: workers,
+				MatrixUserID:         userID,
+				HumanPermissionLevel: h.Spec.PermissionLevel,
+				Role:                 RoleHuman,
+				Username:             h.Name,
+				AccessibleWorkers:    workers,
 			}, nil
 		default:
-			return nil, fmt.Errorf("human %q has unsupported permissionLevel %d (2=team, 3=worker)", localpart, h.Spec.PermissionLevel)
+			return nil, fmt.Errorf("human %q has unsupported permissionLevel %d (1=admin, 2=team, 3=worker)", localpart, h.Spec.PermissionLevel)
 		}
 	}
-	return nil, fmt.Errorf("no human with a supported permission level (2=team, 3=worker) matches matrix user %q", userID)
+	return nil, fmt.Errorf("no human with a supported permission level (1=admin, 2=team, 3=worker) matches matrix user %q", userID)
 }
 
 func (a *MatrixTokenAuthenticator) getFromCache(key [32]byte) *cachedIdentity {

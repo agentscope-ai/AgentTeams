@@ -49,8 +49,8 @@ type MatrixTokenAuthenticator struct {
 }
 
 type cachedIdentity struct {
-	userID   string
-	expiry   time.Time
+	userID string
+	expiry time.Time
 }
 
 // NewMatrixTokenAuthenticator builds an authenticator backed by Matrix whoami
@@ -123,12 +123,20 @@ func (a *MatrixTokenAuthenticator) resolveHuman(ctx context.Context, userID stri
 		case 2:
 			teams := make([]string, len(h.Spec.AccessibleTeams))
 			copy(teams, h.Spec.AccessibleTeams)
-			var owned v1beta1.TeamList
-			if err := a.k8s.List(ctx, &owned, client.InNamespace(a.namespace)); err != nil {
-				return nil, fmt.Errorf("list administered teams: %w", err)
+			var memberships v1beta1.TeamList
+			if err := a.k8s.List(ctx, &memberships, client.InNamespace(a.namespace)); err != nil {
+				return nil, fmt.Errorf("list human teams: %w", err)
 			}
-			for _, team := range owned.Items {
-				if team.Spec.Admin == nil || team.Spec.Admin.Name != h.Name {
+			for _, team := range memberships.Items {
+				member := team.Spec.Admin != nil && team.Spec.Admin.Name == h.Name
+				for _, human := range team.Spec.HumanMembers {
+					if human.MatrixUserID != "" {
+						member = member || human.MatrixUserID == userID
+					} else {
+						member = member || human.Name == h.Name
+					}
+				}
+				if !member {
 					continue
 				}
 				found := false

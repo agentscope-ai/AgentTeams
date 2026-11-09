@@ -48,3 +48,40 @@ func TestTeamAdminScopeRefreshesWithCachedToken(t *testing.T) {
 		t.Fatal("deleted human retained cached access")
 	}
 }
+
+func TestExplicitTeamHumanMembershipRefreshesWithCachedToken(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		member  v1beta1.TeamMemberSpec
+		allowed bool
+	}{
+		{"human-reference", v1beta1.TeamMemberSpec{Name: "alice"}, true},
+		{"matrix-identity", v1beta1.TeamMemberSpec{MatrixUserID: "@alice:matrix.local"}, true},
+		{"different-identity", v1beta1.TeamMemberSpec{Name: "alice", MatrixUserID: "@bob:matrix.local"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			a, whoami := newMatrixAuthTest(t, newHuman("alice", "alice", 2))
+			whoami.userID = "@alice:matrix.local"
+			if _, err := a.Authenticate(ctx, "token"); err != nil {
+				t.Fatal(err)
+			}
+			team := &v1beta1.Team{ObjectMeta: metav1.ObjectMeta{Name: "member-team", Namespace: "default"}, Spec: v1beta1.TeamSpec{Admin: &v1beta1.TeamAdminSpec{Name: "bob"}, HumanMembers: []v1beta1.TeamMemberSpec{tc.member}}}
+			if err := a.k8s.Create(ctx, team); err != nil {
+				t.Fatal(err)
+			}
+			id, err := a.Authenticate(ctx, "token")
+			if err != nil || id.TeamMatches(team.Name) != tc.allowed {
+				t.Fatalf("member scope=%+v err=%v, allowed=%v", id, err, tc.allowed)
+			}
+			team.Spec.HumanMembers = nil
+			if err := a.k8s.Update(ctx, team); err != nil {
+				t.Fatal(err)
+			}
+			id, err = a.Authenticate(ctx, "token")
+			if err != nil || id.TeamMatches(team.Name) {
+				t.Fatalf("revoked member scope=%+v err=%v", id, err)
+			}
+		})
+	}
+}

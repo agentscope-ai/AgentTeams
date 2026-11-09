@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import datetime
 
+import json
+
 import os
+
+import urllib.error
 
 import uuid
 
@@ -21,7 +25,7 @@ from mcp.common.errors import (
     _sync_failure_result,
     _uncommitted_state_failure_result,
 )
-from mcp.common.identity import _canonical_account, _canonical_assignee
+from mcp.common.identity import _canonical_account, _canonical_assignee, _canonical_room_id
 from mcp.common.io import _read_json, _safe_read_bytes, _utc_timestamp
 from mcp.common.payload import _first_text, _payload, _safe_id
 from mcp.common.paths import _project_state_path, _task_dir, _task_state_path
@@ -32,7 +36,11 @@ from mcp.artifact.publish import (
 )
 from mcp.artifact.sync import _load_authoritative_task, _load_authoritative_task_optional
 from mcp.project.state import _loop_pause_state
-from mcp.room.matrix import _team_human_matrix_ids, _team_leader_matrix_id
+from mcp.room.matrix import (
+    _team_human_matrix_ids,
+    _team_leader_matrix_id,
+    _team_member_lookup,
+)
 from mcp.room.notify import _send_attention_notification, _task_completion_notification
 from .review import (
     ProtocolGuardError,
@@ -76,6 +84,7 @@ _send_delegate_notification = refs.proxy("_send_delegate_notification")
 _sync_task = refs.proxy("_sync_task")
 _update_project_task = refs.proxy("_update_project_task")
 _validate_assignee_membership = refs.proxy("_validate_assignee_membership")
+_matrix_room_member_user_ids = refs.proxy("_matrix_room_member_user_ids")
 _write_json = refs.proxy("_write_json")
 _role = refs.proxy("_role")
 _transition_task = refs.proxy("_transition_task")
@@ -87,6 +96,7 @@ _runtime_role = refs.proxy("_runtime_role")
 
 _TASKFLOW_MUTATING_ACTIONS = frozenset({
     "delegate_task",
+    "register_delegated_task",
     "ack_task",
     "submit_task",
     "cancel_task",
@@ -128,6 +138,27 @@ def _normalize_conclusions(value: Any) -> list[str]:
             text = text[:500] + "..."
         normalized.append(text)
     return normalized
+
+
+def _invited_room_user_ids(room_id: str) -> set[str] | None:
+    """Matrix user ids currently invited (not yet joined) to the room.
+
+    Returns None when the room membership state cannot be read
+    (standalone runs without a Matrix environment, transport failure)
+    so the caller keeps the fail-closed unknown-recipient behavior.
+    """
+    try:
+        invited = _matrix_room_member_user_ids(_canonical_room_id(room_id), {"invite"})
+    except (
+        ValueError,
+        urllib.error.HTTPError,
+        urllib.error.URLError,
+        TimeoutError,
+        OSError,
+        json.JSONDecodeError,
+    ):
+        return None
+    return set(invited)
 
 
 def _load_task(arguments: dict[str, Any], task_id: str) -> dict[str, Any]:
@@ -377,6 +408,53 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     if isinstance(item, dict) and item.get("task_id") == task_id:
                         assigned_to = str(item.get("assigned_to") or "").strip()
                         break
+            # Roster gate (C-2): the recipient must resolve against the team
+            # roster BEFORE any write or notification. A short name that
+            # exactly equals a members[].name is resolved to its mxid; any
+            # other unknown recipient fails closed (no case/fuzzy match).
+            # Standalone runs have no roster and keep the legacy
+            # pass-through.
+            # Only a provided recipient is validated; an empty assignee
+            # keeps the legacy "prepare, then fail retryably" path (an
+            # unnotified delegation must leave the task prepared).
+            if assigned_to:
+                by_id, by_name = _team_member_lookup()
+                if by_id or by_name:
+                    matrix_id = assigned_to if assigned_to in by_id else ""
+                    if not matrix_id and assigned_to in by_name:
+                        matrix_id = str(by_name[assigned_to].get("matrixUserId") or "").strip()
+                    if not matrix_id:
+                        # Invited-but-not-joined: the room knows the recipient
+                        # with membership "invite" — same retryable "not a
+                        # joined member" failure as the membership gate below
+                        # (no notification, no assignment) instead of a
+                        # dead-end unknown-recipient error. Anything the room
+                        # does not know about (or a membership lookup that
+                        # failed) keeps the fail-closed unknown-recipient path.
+                        invited = _invited_room_user_ids(room_id)
+                        if invited is not None and assigned_to in invited:
+                            return {
+                                "ok": False,
+                                "tool": "taskflow",
+                                "action": action,
+                                "task": existing_task,
+                                "error": (
+                                    f"assignee {assigned_to} is not a joined "
+                                    f"member of room {_canonical_room_id(room_id)}"
+                                ),
+                                "retryable": True,
+                                "notificationNeeded": _notification_needed(
+                                    "delegate_task",
+                                    project or {"project_id": project_id},
+                                    existing_task,
+                                    summary=f"delegate_task: {task_id} blocked before assignment",
+                                ),
+                            }
+                        available = ", ".join(sorted(by_id)) or "(none)"
+                        raise ValueError(
+                            f"unknown recipient: {assigned_to}; available: {available}"
+                        )
+                    assigned_to = matrix_id
             assignment_mxid = str(assigned_to or "").strip()
 
             # Idempotent retry of a fully assigned task: the automatic
@@ -697,6 +775,50 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     task,
                     summary=f"delegate_task: {task_id} assigned to {assigned_to}",
                 ),
+            }
+        if action == "register_delegated_task":
+            # Runtime-callable receipt registration: start from shared state
+            # and publish the receipt before reporting registration success.
+            if role not in {"worker", "remote-member"}:
+                raise ValueError("register_delegated_task requires worker or remote-member role")
+            task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
+            task = _load_authoritative_task_optional(arguments, task_id)
+            if not task:
+                return {
+                    "ok": False,
+                    "tool": "taskflow",
+                    "action": action,
+                    "reason": "unknown_task",
+                }
+            _require_task_mutable(arguments, task, task_id, action)
+            if not task.get("task_id") and task.get("taskId"):
+                task["task_id"] = str(task["taskId"])
+            delegation_id = str(
+                payload.get("delegationId")
+                or payload.get("delegation_id")
+                or arguments.get("delegationId")
+                or arguments.get("delegation_id")
+                or f"delegate-{task_id}"
+            ).strip() or f"delegate-{task_id}"
+            already_registered = bool(_first_text(task.get("ack_received_at")))
+            if not already_registered:
+                task["delegation_id"] = delegation_id
+            task["ack_received_at"] = _utc_timestamp()
+            _write_task(arguments, task)
+            if not _sync_task(arguments, task_id, exclude=["spec.md", "base/"]):
+                return _sync_failure_result({
+                    "tool": "taskflow",
+                    "action": action,
+                    "taskId": task_id,
+                }, "register_delegated_task")
+            return {
+                "ok": True,
+                "tool": "taskflow",
+                "action": action,
+                "taskId": str(task.get("task_id") or task_id),
+                "registered": True,
+                "ackReceivedAt": task["ack_received_at"],
+                "alreadyRegistered": already_registered,
             }
         if action == "ack_task":
             if role not in {"worker", "remote-member"}:

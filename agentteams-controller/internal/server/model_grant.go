@@ -293,7 +293,7 @@ func resolveCallerGrant(ctx context.Context, c client.Client, namespace string, 
 // an identical value is always allowed ("lock ≠ unavailable"). Returns
 // (0, "") when the update is allowed.
 func (h *ResourceHandler) checkHumanModelUpdate(ctx context.Context, caller *authpkg.CallerIdentity, team *v1beta1.Team, name string, req *UpdateWorkerRequest) (int, string) {
-	if req.Model == "" && req.ModelProvider == "" && req.SubagentModel == nil {
+	if req.Model == "" && req.ModelProvider == nil && req.SubagentModel == nil {
 		return 0, ""
 	}
 	var worker v1beta1.Worker
@@ -304,7 +304,7 @@ func (h *ResourceHandler) checkHumanModelUpdate(ctx context.Context, caller *aut
 		return http.StatusInternalServerError, "get worker: " + err.Error()
 	}
 	// Pair rule: a provider without a model is never a valid update.
-	if req.ModelProvider != "" && req.Model == "" {
+	if req.ModelProvider != nil && req.Model == "" {
 		return http.StatusForbidden, "model_pair_required: provider must be sent with model"
 	}
 	set, err := h.resolveCallerGrant(ctx, caller, &worker, team.Name, teamMemberRole(team, name))
@@ -319,11 +319,11 @@ func (h *ResourceHandler) checkHumanModelUpdate(ctx context.Context, caller *aut
 	// A change of EITHER half of the pair is a pair write: a same-name model
 	// with a different provider must not slip past the grant.
 	modelChanged := req.Model != "" && req.Model != worker.Spec.Model
-	providerChanged := req.ModelProvider != "" && req.ModelProvider != worker.Spec.ModelProvider
+	providerChanged := req.ModelProvider != nil && *req.ModelProvider != worker.Spec.ModelProvider
 	if modelChanged || providerChanged {
 		provider := worker.Spec.ModelProvider
-		if req.ModelProvider != "" {
-			provider = req.ModelProvider
+		if req.ModelProvider != nil {
+			provider = *req.ModelProvider
 		}
 		model := worker.Spec.Model
 		if req.Model != "" {
@@ -345,8 +345,8 @@ func (h *ResourceHandler) checkHumanModelUpdate(ctx context.Context, caller *aut
 			return 0, ""
 		}
 		provider := worker.Spec.ModelProvider
-		if req.ModelProvider != "" {
-			provider = req.ModelProvider
+		if req.ModelProvider != nil {
+			provider = *req.ModelProvider
 		}
 		if !grantAllows(set.spawn, modelGrantProviderOr(provider), spawn) {
 			return http.StatusForbidden, "model_not_allowed: " + spawn

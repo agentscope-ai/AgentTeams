@@ -45,6 +45,8 @@ type CreateWorkerRequest struct {
 	State            *string `json:"state,omitempty"` // desired lifecycle state: Running, Sleeping, Stopped
 }
 
+// UpdateWorkerRequest preserves modelProvider when omitted or null and clears it
+// when an explicit empty string is supplied.
 type UpdateWorkerRequest struct {
 	Env        map[string]string `json:"env,omitempty"`
 	WorkerName string            `json:"workerName,omitempty"`
@@ -65,7 +67,7 @@ type UpdateWorkerRequest struct {
 	LlmRateLimitPause            *string                            `json:"llmRateLimitPause,omitempty"`
 	LlmRateLimitJitter           *string                            `json:"llmRateLimitJitter,omitempty"`
 	LlmAcquireTimeout            *string                            `json:"llmAcquireTimeout,omitempty"`
-	ModelProvider                string                             `json:"modelProvider,omitempty"`
+	ModelProvider                *string                            `json:"modelProvider,omitempty"`
 	Runtime                      string                             `json:"runtime,omitempty"`
 	Image                        string                             `json:"image,omitempty"`
 	Identity                     string                             `json:"identity,omitempty"`

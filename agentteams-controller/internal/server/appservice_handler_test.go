@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -304,6 +305,427 @@ func TestAppserviceWakesTeamReferencesTeamWorkerFromTeamRoom(t *testing.T) {
 	}
 	if updated.Status.LastActiveAt != "2026-05-12T10:20:00Z" {
 		t.Fatalf("lastActiveAt=%q, want updated", updated.Status.LastActiveAt)
+	}
+}
+
+// --- Team Leader Tests (#1442) ---
+
+// TestAppserviceWakesTeamLeaderFromTeamRoom: a sleeping Worker referenced as
+// team_leader must be woken by a mention in the Team room (#1442) — the
+// team-member role filter and the Spec.WorkerMembers lookup both used to
+// exclude leaders, leaving the leader asleep while the transaction returned
+// HTTP 200.
+func TestAppserviceWakesTeamLeaderFromTeamRoom(t *testing.T) {
+	scheme := newAppserviceTestScheme(t)
+	sleeping := "Sleeping"
+	leader := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{State: &sleeping},
+		Status: v1beta1.WorkerStatus{
+			MatrixUserID: "@lead:example.com",
+			RoomID:       "!lead-dm:example.com",
+		},
+	}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: "team_leader"},
+				{Name: "dev", Role: "worker"},
+			},
+		},
+		Status: v1beta1.TeamStatus{
+			TeamRoomID: "!team-room:example.com",
+			Members: []v1beta1.TeamMemberStatus{
+				{
+					Name:         "lead",
+					Role:         "team_leader",
+					MatrixUserID: "@lead:example.com",
+					RoomID:       "!lead-dm:example.com",
+				},
+				{
+					Name:         "dev",
+					Role:         "worker",
+					MatrixUserID: "@dev:example.com",
+					RoomID:       "!dev-dm:example.com",
+				},
+			},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.Worker{}, &v1beta1.Team{}).
+		WithObjects(leader, team).
+		Build()
+
+	handler := NewAppserviceHandler("test-hs-token", k8sClient, "default")
+	handler.now = func() time.Time {
+		t, _ := time.Parse(time.RFC3339, "2026-05-12T10:20:00Z")
+		return t
+	}
+
+	// Mention from the Team room — a sleeping team leader must be woken
+	// like any other member (#1442).
+	body := txnBody(t, []matrixEvent{
+		mentionEvent("!team-room:example.com", "$ev-leader-team-room", "@human:example.com", []string{"@lead:example.com"}),
+	})
+	req := httptest.NewRequest(http.MethodPut, "/_matrix/app/v1/transactions/txn-leader-team-room", body)
+	req.Header.Set("Authorization", "Bearer test-hs-token")
+	rec := httptest.NewRecorder()
+
+	handler.HandleTransactions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var updated v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "lead", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get leader worker: %v", err)
+	}
+	if updated.Spec.DesiredState() != "Running" {
+		t.Fatalf("state=%q, want Running (team leader must be woken by a team-room mention)", updated.Spec.DesiredState())
+	}
+	if updated.Status.LastActiveAt != "2026-05-12T10:20:00Z" {
+		t.Fatalf("lastActiveAt=%q, want updated", updated.Status.LastActiveAt)
+	}
+}
+
+func TestAppserviceWakesTeamLeaderFromLeaderDMRoom(t *testing.T) {
+	scheme := newAppserviceTestScheme(t)
+	sleeping := "Sleeping"
+	leader := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{State: &sleeping},
+		Status: v1beta1.WorkerStatus{
+			MatrixUserID: "@lead:example.com",
+			RoomID:       "!lead-dm:example.com",
+		},
+	}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: "team_leader"},
+				{Name: "dev", Role: "worker"},
+			},
+		},
+		Status: v1beta1.TeamStatus{
+			TeamRoomID: "!team-room:example.com",
+			// Leader↔Admin DM — the room the Team admin mentions the
+			// leader in (distinct from the leader's personal room).
+			LeaderDMRoomID: "!leader-admin-dm:example.com",
+			Members: []v1beta1.TeamMemberStatus{
+				{
+					Name:         "lead",
+					Role:         "team_leader",
+					MatrixUserID: "@lead:example.com",
+					RoomID:       "!lead-dm:example.com",
+				},
+			},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.Worker{}, &v1beta1.Team{}).
+		WithObjects(leader, team).
+		Build()
+
+	handler := NewAppserviceHandler("test-hs-token", k8sClient, "default")
+	handler.now = func() time.Time {
+		t, _ := time.Parse(time.RFC3339, "2026-05-12T10:20:00Z")
+		return t
+	}
+
+	// Mention from the Leader↔Admin DM — the issue's primary repro room.
+	body := txnBody(t, []matrixEvent{
+		mentionEvent("!leader-admin-dm:example.com", "$ev-leader-dm", "@admin:example.com", []string{"@lead:example.com"}),
+	})
+	req := httptest.NewRequest(http.MethodPut, "/_matrix/app/v1/transactions/txn-leader-dm", body)
+	req.Header.Set("Authorization", "Bearer test-hs-token")
+	rec := httptest.NewRecorder()
+
+	handler.HandleTransactions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var updated v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "lead", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get leader worker: %v", err)
+	}
+	if updated.Spec.DesiredState() != "Running" {
+		t.Fatalf("state=%q, want Running (team leader must be woken by a leader-DM mention)", updated.Spec.DesiredState())
+	}
+	if updated.Status.LastActiveAt != "2026-05-12T10:20:00Z" {
+		t.Fatalf("lastActiveAt=%q, want updated", updated.Status.LastActiveAt)
+	}
+}
+
+func TestAppserviceRejectsTeamLeaderFromForeignRoom(t *testing.T) {
+	scheme := newAppserviceTestScheme(t)
+	sleeping := "Sleeping"
+	leader := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{State: &sleeping},
+		Status: v1beta1.WorkerStatus{
+			MatrixUserID: "@lead:example.com",
+			RoomID:       "!lead-dm:example.com",
+		},
+	}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: "team_leader"},
+				{Name: "dev", Role: "worker"},
+			},
+		},
+		Status: v1beta1.TeamStatus{
+			TeamRoomID: "!team-room:example.com",
+			Members: []v1beta1.TeamMemberStatus{
+				{
+					Name:         "lead",
+					Role:         "team_leader",
+					MatrixUserID: "@lead:example.com",
+					RoomID:       "!lead-dm:example.com",
+				},
+			},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.Worker{}, &v1beta1.Team{}).
+		WithObjects(leader, team).
+		Build()
+
+	handler := NewAppserviceHandler("test-hs-token", k8sClient, "default")
+
+	// Mention from an unrelated room — the room boundary must keep
+	// rejecting leader wakes too.
+	body := txnBody(t, []matrixEvent{
+		mentionEvent("!other-team-room:example.com", "$ev-leader-foreign", "@human:example.com", []string{"@lead:example.com"}),
+	})
+	req := httptest.NewRequest(http.MethodPut, "/_matrix/app/v1/transactions/txn-leader-foreign", body)
+	req.Header.Set("Authorization", "Bearer test-hs-token")
+	rec := httptest.NewRecorder()
+
+	handler.HandleTransactions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var updated v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "lead", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get leader worker: %v", err)
+	}
+	if updated.Spec.DesiredState() != "Sleeping" {
+		t.Fatalf("state=%q, want Sleeping (foreign-room leader mention must be rejected)", updated.Spec.DesiredState())
+	}
+}
+
+// TestAppserviceRejectsLeaderForeignRoomWithOnlyLeaderDMKnown: partial
+// status — member.RoomID and TeamRoomID empty while LeaderDMRoomID is
+// already populated — must not fall back to "any room": a mention from an
+// unrelated room still keeps the leader Sleeping. The empty-room fallback
+// is reserved for a member whose known room set is fully empty.
+func TestAppserviceRejectsLeaderForeignRoomWithOnlyLeaderDMKnown(t *testing.T) {
+	scheme := newAppserviceTestScheme(t)
+	sleeping := "Sleeping"
+	leader := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{State: &sleeping},
+		Status: v1beta1.WorkerStatus{
+			MatrixUserID: "@lead:example.com",
+			RoomID:       "!lead-dm:example.com",
+		},
+	}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: "team_leader"},
+			},
+		},
+		Status: v1beta1.TeamStatus{
+			// Partial status: only the Leader↔Admin DM is known so far.
+			LeaderDMRoomID: "!leader-admin-dm:example.com",
+			Members: []v1beta1.TeamMemberStatus{
+				{
+					Name:         "lead",
+					Role:         "team_leader",
+					MatrixUserID: "@lead:example.com",
+					RoomID:       "",
+				},
+			},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.Worker{}, &v1beta1.Team{}).
+		WithObjects(leader, team).
+		Build()
+
+	handler := NewAppserviceHandler("test-hs-token", k8sClient, "default")
+
+	// Mention from an unrelated room — the partially populated room set
+	// (leader DM known) must not widen back to "any room" via the
+	// empty-room bootstrapping fallback.
+	body := txnBody(t, []matrixEvent{
+		mentionEvent("!unrelated-room:example.com", "$ev-leader-partial-foreign", "@human:example.com", []string{"@lead:example.com"}),
+	})
+	req := httptest.NewRequest(http.MethodPut, "/_matrix/app/v1/transactions/txn-leader-partial-foreign", body)
+	req.Header.Set("Authorization", "Bearer test-hs-token")
+	rec := httptest.NewRecorder()
+
+	handler.HandleTransactions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var updated v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "lead", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get leader worker: %v", err)
+	}
+	if updated.Spec.DesiredState() != "Sleeping" {
+		t.Fatalf("state=%q, want Sleeping (unrelated-room mention must not wake a leader whose DM room is already known)", updated.Spec.DesiredState())
+	}
+}
+
+// TestAppserviceWakesLeaderFromLeaderDMOnlyStatus: the positive pairing of
+// the partial-status regression — with member.RoomID and TeamRoomID still
+// empty but LeaderDMRoomID known, a mention in that known Leader↔Admin DM
+// still wakes the sleeping leader.
+func TestAppserviceWakesLeaderFromLeaderDMOnlyStatus(t *testing.T) {
+	scheme := newAppserviceTestScheme(t)
+	sleeping := "Sleeping"
+	leader := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{State: &sleeping},
+		Status: v1beta1.WorkerStatus{
+			MatrixUserID: "@lead:example.com",
+			RoomID:       "!lead-dm:example.com",
+		},
+	}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: "team_leader"},
+			},
+		},
+		Status: v1beta1.TeamStatus{
+			LeaderDMRoomID: "!leader-admin-dm:example.com",
+			Members: []v1beta1.TeamMemberStatus{
+				{
+					Name:         "lead",
+					Role:         "team_leader",
+					MatrixUserID: "@lead:example.com",
+					RoomID:       "",
+				},
+			},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.Worker{}, &v1beta1.Team{}).
+		WithObjects(leader, team).
+		Build()
+
+	handler := NewAppserviceHandler("test-hs-token", k8sClient, "default")
+	handler.now = func() time.Time {
+		t, _ := time.Parse(time.RFC3339, "2026-05-12T10:20:00Z")
+		return t
+	}
+
+	body := txnBody(t, []matrixEvent{
+		mentionEvent("!leader-admin-dm:example.com", "$ev-leader-partial-dm", "@admin:example.com", []string{"@lead:example.com"}),
+	})
+	req := httptest.NewRequest(http.MethodPut, "/_matrix/app/v1/transactions/txn-leader-partial-dm", body)
+	req.Header.Set("Authorization", "Bearer test-hs-token")
+	rec := httptest.NewRecorder()
+
+	handler.HandleTransactions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var updated v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "lead", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get leader worker: %v", err)
+	}
+	if updated.Spec.DesiredState() != "Running" {
+		t.Fatalf("state=%q, want Running (mention in the known Leader DM must wake the leader even while other room fields are unset)", updated.Spec.DesiredState())
+	}
+	if updated.Status.LastActiveAt != "2026-05-12T10:20:00Z" {
+		t.Fatalf("lastActiveAt=%q, want updated", updated.Status.LastActiveAt)
+	}
+}
+
+// TestAppserviceRejectsLeaderMentionWithoutTeamRef: the Spec.WorkerMembers
+// lookup guard must keep applying to leaders — a stale Status.Members entry
+// whose Worker is not (or no longer) a referenced member must not be woken.
+func TestAppserviceRejectsLeaderMentionWithoutTeamRef(t *testing.T) {
+	scheme := newAppserviceTestScheme(t)
+	sleeping := "Sleeping"
+	leader := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{State: &sleeping},
+		Status: v1beta1.WorkerStatus{
+			MatrixUserID: "@lead:example.com",
+			RoomID:       "!lead-dm:example.com",
+		},
+	}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "dev", Role: "worker"},
+			},
+		},
+		Status: v1beta1.TeamStatus{
+			TeamRoomID: "!team-room:example.com",
+			Members: []v1beta1.TeamMemberStatus{
+				{
+					Name:         "lead",
+					Role:         "team_leader",
+					MatrixUserID: "@lead:example.com",
+					RoomID:       "!lead-dm:example.com",
+				},
+			},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.Worker{}, &v1beta1.Team{}).
+		WithObjects(leader, team).
+		Build()
+
+	handler := NewAppserviceHandler("test-hs-token", k8sClient, "default")
+
+	body := txnBody(t, []matrixEvent{
+		mentionEvent("!team-room:example.com", "$ev-leader-no-ref", "@human:example.com", []string{"@lead:example.com"}),
+	})
+	req := httptest.NewRequest(http.MethodPut, "/_matrix/app/v1/transactions/txn-leader-no-ref", body)
+	req.Header.Set("Authorization", "Bearer test-hs-token")
+	rec := httptest.NewRecorder()
+
+	handler.HandleTransactions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var updated v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "lead", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get leader worker: %v", err)
+	}
+	if updated.Spec.DesiredState() != "Sleeping" {
+		t.Fatalf("state=%q, want Sleeping (leader without a Spec.WorkerMembers ref must not be woken)", updated.Spec.DesiredState())
 	}
 }
 
@@ -732,5 +1154,141 @@ func TestAppserviceRetryableFailureBatch(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&alphaUpdates); got != 1 {
 		t.Fatalf("alpha updates=%d, want 1 (successful mention must stay deduplicated on redelivery)", got)
+	}
+}
+
+// TestAppserviceDedupMapBounded: the dedup map must not retain every
+// distinct mention event for the process lifetime. The controller is a
+// long-running process and every mention of a worker/leader adds a
+// roomID/eventID/userID entry; with entries never expiring the map grows
+// without bound (a slow memory leak on any busy deployment). The flood
+// size is the implementation cap (8192, see appservice_handler.go) plus a
+// margin: if the map holds every distinct event, it is unbounded.
+func TestAppserviceDedupMapBounded(t *testing.T) {
+	const appserviceDedupFlood = 8256 // appserviceDedupMaxEntries (8192) + 64
+
+	scheme := newAppserviceTestScheme(t)
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"},
+		// State nil → Running: the wake path is skipped after the first
+		// event, so this test exercises only the dedup bookkeeping.
+		Status: v1beta1.WorkerStatus{
+			MatrixUserID: "@alpha-dev:example.com",
+			RoomID:       "!worker-dm:example.com",
+		},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.Worker{}).
+		WithObjects(worker).
+		Build()
+
+	handler := NewAppserviceHandler("test-hs-token", k8sClient, "default")
+
+	room := "!worker-dm:example.com"
+	events := make([]matrixEvent, 0, appserviceDedupFlood)
+	for i := 0; i < appserviceDedupFlood; i++ {
+		events = append(events, mentionEvent(room, fmt.Sprintf("$flood-%d", i),
+			"@human:example.com", []string{"@alpha-dev:example.com"}))
+	}
+	req := httptest.NewRequest(http.MethodPut, "/_matrix/app/v1/transactions/txn-flood",
+		txnBody(t, events))
+	req.Header.Set("Authorization", "Bearer test-hs-token")
+	rec := httptest.NewRecorder()
+	handler.HandleTransactions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d, want 200", rec.Code)
+	}
+	if got := len(handler.seen); got >= appserviceDedupFlood {
+		t.Fatalf("dedup map holds %d entries after %d distinct events; it must be bounded, not grow with every mention",
+			got, appserviceDedupFlood)
+	}
+}
+
+// TestAppserviceDedupExpiresAfterTTL: dedup must expire. The homeserver
+// re-pushes a failed transaction within its sending queue's retry window
+// (minutes), so remembering an event for an hour covers every realistic
+// redelivery — but a redelivery arriving after the dedup window must be
+// processed again instead of being swallowed forever.
+func TestAppserviceDedupExpiresAfterTTL(t *testing.T) {
+	scheme := newAppserviceTestScheme(t)
+	sleeping := "Sleeping"
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{State: &sleeping},
+		Status: v1beta1.WorkerStatus{
+			MatrixUserID: "@alpha-dev:example.com",
+			RoomID:       "!worker-dm:example.com",
+		},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.Worker{}).
+		WithObjects(worker).
+		Build()
+
+	base := time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)
+	var offset atomic.Int64 // minutes after base
+	handler := NewAppserviceHandler("test-hs-token", k8sClient, "default")
+	handler.now = func() time.Time { return base.Add(time.Duration(offset.Load()) * time.Minute) }
+
+	room := "!worker-dm:example.com"
+	resetToSleeping := func() {
+		var w v1beta1.Worker
+		if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "alpha-dev", Namespace: "default"}, &w); err != nil {
+			t.Fatalf("get worker: %v", err)
+		}
+		w.Spec.State = &sleeping
+		if err := k8sClient.Update(context.Background(), &w); err != nil {
+			t.Fatalf("reset worker: %v", err)
+		}
+	}
+	deliver := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, "/_matrix/app/v1/transactions/txn-ttl",
+			txnBody(t, []matrixEvent{
+				mentionEvent(room, "$ev-ttl", "@human:example.com", []string{"@alpha-dev:example.com"}),
+			}))
+		req.Header.Set("Authorization", "Bearer test-hs-token")
+		rec := httptest.NewRecorder()
+		handler.HandleTransactions(rec, req)
+		return rec
+	}
+	state := func() string {
+		var w v1beta1.Worker
+		if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "alpha-dev", Namespace: "default"}, &w); err != nil {
+			t.Fatalf("get worker: %v", err)
+		}
+		return w.Spec.DesiredState()
+	}
+
+	// First delivery wakes the worker.
+	if rec := deliver(); rec.Code != http.StatusOK {
+		t.Fatalf("first delivery status=%d, want 200", rec.Code)
+	}
+	if got := state(); got != "Running" {
+		t.Fatalf("state=%q after first delivery, want Running", got)
+	}
+
+	// Redelivery 30 minutes later is still inside the dedup window and must
+	// be swallowed (existing behavior, pinned here).
+	resetToSleeping()
+	offset.Store(30)
+	if rec := deliver(); rec.Code != http.StatusOK {
+		t.Fatalf("in-window redelivery status=%d, want 200", rec.Code)
+	}
+	if got := state(); got != "Sleeping" {
+		t.Fatalf("state=%q after in-window redelivery, want Sleeping (still deduplicated)", got)
+	}
+
+	// Redelivery 2 hours later is past the dedup window and must be
+	// processed again: the mention is re-applied and wakes the worker.
+	resetToSleeping()
+	offset.Store(120)
+	if rec := deliver(); rec.Code != http.StatusOK {
+		t.Fatalf("post-window redelivery status=%d, want 200", rec.Code)
+	}
+	if got := state(); got != "Running" {
+		t.Fatalf("state=%q after post-window redelivery, want Running (dedup must expire)", got)
 	}
 }

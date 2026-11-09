@@ -12,7 +12,7 @@ AgentTeams 是一个 **Agent Teams** 平台：**Manager** 负责协调 **Workers
 | **Manager** | 协调型 Agent：通过 Matrix 和 controller API 管理任务、workers、teams、humans、Higress routes/MCP。 | `agentteams-manager`（OpenClaw / Node）或 `agentteams-manager-qwenpaw`（QwenPaw / Python）：基于 **openclaw-base** 或 slim Python，**不包含**完整基础设施栈 |
 | **Worker** | 任务执行容器：每个 worker 一个容器，按需创建；无状态；配置和产物保存在对象存储中。 | `agentteams-worker`、`agentteams-copaw-worker`、`agentteams-qwenpaw-worker`、`agentteams-hermes-worker` 或实验性的 `agentteams-deepseek-harness-worker` |
 
-**openclaw-base** 镜像提供 **Ubuntu 24.04**、**Node.js 22**、**OpenClaw** 和 **mcporter**，供 OpenClaw 形态的 Manager/Worker 镜像复用。它不再包含旧的 all-in-one Higress bundle；AI gateway 运行在**嵌入式 controller** 中，或在 Kubernetes 中作为 **Higress Helm subchart** 运行。
+**openclaw-base** 镜像提供 **Ubuntu 24.04**、**Node.js 24**、**OpenClaw** 和 **mcporter**，供 OpenClaw 形态的 Manager/Worker 镜像复用。它不再包含旧的 all-in-one Higress bundle；AI gateway 运行在**嵌入式 controller** 中，或在 Kubernetes 中作为 **Higress Helm subchart** 运行。
 
 ---
 

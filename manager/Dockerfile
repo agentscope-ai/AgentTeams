@@ -11,7 +11,7 @@
 # ============================================================
 
 ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
-ARG OPENCLAW_BASE_IMAGE=agentteams/openclaw-base:20260423-8359cbc
+ARG OPENCLAW_BASE_IMAGE=agentteams/openclaw-base:2026.10.9-node24.22.1
 ARG AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest
 
 # ============ Stage 1: MinIO Client (mc) ============

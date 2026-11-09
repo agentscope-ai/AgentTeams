@@ -215,6 +215,24 @@ func (p *Provisioner) ForceLeaveRoom(ctx context.Context, userID, roomID string)
 	return p.matrix.AdminCommand(ctx, cmd)
 }
 
+// IsUserInRoom reports whether userID is currently a member of roomID. It
+// queries the room member list with the homeserver-admin token (via
+// observedRoomMembership), so the result is authoritative whether or not the
+// Controller/Manager itself is in the room. Reconcile paths use it to skip a
+// ForceLeaveRoom that is already satisfied (the user is not in the room): the
+// Manager is not supposed to be in a team worker's personal room, so in the
+// steady state it is already out, and the fire-and-forget ForceLeaveRoom
+// re-firing on every reconcile is what floods the admin room (#1079). On a
+// lookup error it conservatively reports true (leave the removal path
+// reachable) so a transient failure does not strand an unwanted member.
+func (p *Provisioner) IsUserInRoom(ctx context.Context, roomID, userID string) (bool, error) {
+	inRoom, _, err := p.observedRoomMembership(ctx, roomID, userID)
+	if err != nil {
+		return true, err
+	}
+	return inRoom, nil
+}
+
 // DeactivateHumanUser disables a Matrix account through the Tuwunel admin bot.
 // Tuwunel owns the exact deactivate/revoke semantics; the controller treats a
 // successful command delivery as the offboard handoff point.

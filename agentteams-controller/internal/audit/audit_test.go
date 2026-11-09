@@ -100,6 +100,10 @@ type conflictOnce struct {
 	fails int
 }
 
+func (c *conflictOnce) PutObjectIfMatchWithType(ctx context.Context, key string, data []byte, contentType, match string) error {
+	return c.PutObjectIfMatch(ctx, key, data, match)
+}
+
 func (c *conflictOnce) PutObjectIfMatch(ctx context.Context, key string, data []byte, match string) error {
 	if c.fails > 0 {
 		c.fails--
@@ -139,6 +143,10 @@ type statInterleaveOnce struct {
 	oss.StorageClient
 	key  string
 	once bool
+}
+
+func (s *statInterleaveOnce) PutObjectIfMatchWithType(ctx context.Context, key string, data []byte, contentType, matchETag string) error {
+	return s.StorageClient.PutObjectIfMatchWithType(ctx, key, data, contentType, matchETag)
 }
 
 func (s *statInterleaveOnce) StatMeta(ctx context.Context, key string) (oss.ObjectMeta, error) {

@@ -169,11 +169,7 @@ func TestAuthorizer_TeamLeaderOwnTeam(t *testing.T) {
 	allowedCases := []AuthzRequest{
 		{Action: ActionGet, ResourceKind: "worker", ResourceName: "alpha-dev", ResourceTeam: "alpha-team"},
 		{Action: ActionReady, ResourceKind: "worker", ResourceName: "alpha-lead", ResourceTeam: "alpha-team"},
-		{Action: ActionCreate, ResourceKind: "worker", ResourceTeam: "alpha-team"},
-		{Action: ActionWake, ResourceKind: "worker", ResourceName: "alpha-dev", ResourceTeam: "alpha-team"},
-		{Action: ActionSleep, ResourceKind: "worker", ResourceName: "alpha-dev", ResourceTeam: "alpha-team"},
-		{Action: ActionEnsureReady, ResourceKind: "worker", ResourceName: "alpha-dev", ResourceTeam: "alpha-team"},
-		{Action: ActionReady, ResourceKind: "worker", ResourceName: "alpha-dev", ResourceTeam: "alpha-team"},
+		{Action: ActionStatus, ResourceKind: "worker", ResourceName: "alpha-dev", ResourceTeam: "alpha-team"},
 		{Action: ActionList, ResourceKind: "worker"},
 		{Action: ActionGet, ResourceKind: "status"},
 	}
@@ -582,6 +578,103 @@ func TestAuthorizer_HumanL3WriteDenied(t *testing.T) {
 	} {
 		if err := az.Authorize(l3, req); err == nil {
 			t.Errorf("L3 human must be denied %s %s (read-only), got nil error", req.Action, req.ResourceKind)
+		}
+	}
+}
+
+// TestAuthorizer_CodingRunsScoped pins the coding-run transcript visibility
+// boundary (GET /api/v1/coding-runs): L2 humans and team leaders READ (the
+// handler enforces the team-scope boundary and hides cross-team as 404 — W8
+// anti-probing); workers are denied (they run the CLIs, they don't read
+// transcripts through the API). This is what the handler's visibleTaskPrefixes
+// L2 logic depends on — without the "coding-runs" case here, L2 callers are
+// denied at the authorizer and never reach the handler.
+func TestAuthorizer_CodingRunsScoped(t *testing.T) {
+	az := NewAuthorizer()
+	for _, caller := range []*CallerIdentity{
+		{Role: RoleHuman, Username: "alice", Teams: []string{"market-team"}},
+		{Role: RoleTeamLeader, Username: "lead", Team: "market-team"},
+	} {
+		for _, a := range []Action{ActionGet, ActionList} {
+			if err := az.Authorize(caller, AuthzRequest{Action: a, ResourceKind: "coding-runs"}); err != nil {
+				t.Errorf("%s %s coding-runs should be allowed, got: %v", caller.Role, a, err)
+			}
+		}
+	}
+	if err := az.Authorize(&CallerIdentity{Role: RoleWorker, Username: "w", WorkerName: "w"},
+		AuthzRequest{Action: ActionGet, ResourceKind: "coding-runs"}); err == nil {
+		t.Errorf("worker should NOT be allowed to read coding-runs")
+	}
+}
+
+// TestAuthorizer_ProjectMetaCommit guards the #1402 conditional commit
+// boundary (PUT /api/v1/projects/{id}/meta, kind "project-meta"):
+// admin/manager always; human and team leader under the same criteria as
+// "project" Update; worker on the single project-kind write opened to it —
+// while "project" Update stays closed to workers (adding a "project" case
+// to authorizeWorker would open pause/resume/replan/complete/cancel).
+func TestAuthorizer_ProjectMetaCommit(t *testing.T) {
+	az := NewAuthorizer()
+	admin := &CallerIdentity{Role: RoleAdmin, Username: "admin"}
+	manager := &CallerIdentity{Role: RoleManager, Username: "manager"}
+	leader := &CallerIdentity{Role: RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team"}
+	human := &CallerIdentity{Role: RoleHuman, Username: "alice", Teams: []string{"alpha-team"}}
+	workerSame := &CallerIdentity{Role: RoleWorker, Username: "alpha-dev", Team: "alpha-team"}
+	workerNone := &CallerIdentity{Role: RoleWorker, Username: "standalone-dev"}
+
+	allowed := []struct {
+		caller *CallerIdentity
+		req    AuthzRequest
+	}{
+		// Admin/manager: full access (top-level switch).
+		{admin, AuthzRequest{Action: ActionUpdate, ResourceKind: "project-meta", ResourceName: "p1"}},
+		{manager, AuthzRequest{Action: ActionUpdate, ResourceKind: "project-meta", ResourceName: "p1"}},
+		// Human / team leader: same criteria as "project" Update. The
+		// middleware cannot resolve project -> team, so the request carries
+		// an empty ResourceTeam and requireSameTeam passes at this layer;
+		// the handler enforces team equality (the real boundary).
+		{human, AuthzRequest{Action: ActionUpdate, ResourceKind: "project-meta", ResourceName: "p1"}},
+		{leader, AuthzRequest{Action: ActionUpdate, ResourceKind: "project-meta", ResourceName: "p1"}},
+		// Worker: the single project-kind write opened to it (#1402).
+		{workerSame, AuthzRequest{Action: ActionUpdate, ResourceKind: "project-meta", ResourceName: "p1"}},
+	}
+	for _, tc := range allowed {
+		if err := az.Authorize(tc.caller, tc.req); err != nil {
+			t.Errorf("%s %s: want project-meta Update allowed, got: %v", tc.caller.Role, tc.caller.Username, err)
+		}
+	}
+
+	denied := []struct {
+		caller *CallerIdentity
+		req    AuthzRequest
+		why    string
+	}{
+		// Team-less worker: requireSameTeam denies.
+		{workerNone, AuthzRequest{Action: ActionUpdate, ResourceKind: "project-meta", ResourceName: "p1"},
+			"teamless worker"},
+		// Cross-team resource (populated ResourceTeam): requireSameTeam
+		// denies whenever the middleware CAN resolve the team.
+		{workerSame, AuthzRequest{Action: ActionUpdate, ResourceKind: "project-meta", ResourceName: "p2", ResourceTeam: "beta-team"},
+			"worker cross-team"},
+		{leader, AuthzRequest{Action: ActionUpdate, ResourceKind: "project-meta", ResourceName: "p2", ResourceTeam: "beta-team"},
+			"leader cross-team"},
+		{human, AuthzRequest{Action: ActionUpdate, ResourceKind: "project-meta", ResourceName: "p2", ResourceTeam: "beta-team"},
+			"human cross-team"},
+		// Non-Update actions on the kind stay closed (the route is PUT only).
+		{workerSame, AuthzRequest{Action: ActionGet, ResourceKind: "project-meta", ResourceName: "p1"},
+			"worker get project-meta"},
+		{leader, AuthzRequest{Action: ActionDelete, ResourceKind: "project-meta", ResourceName: "p1"},
+			"leader delete project-meta"},
+		// REGRESSION NAIL: "project" Update stays closed to workers — this
+		// is pause/resume/replan/complete/cancel.
+		{workerSame, AuthzRequest{Action: ActionUpdate, ResourceKind: "project", ResourceName: "p1"},
+			"worker update project"},
+		{workerNone, AuthzRequest{Action: ActionUpdate, ResourceKind: "project", ResourceName: "p1"},
+			"teamless worker update project"},
+	}
+	for _, tc := range denied {
+		if err := az.Authorize(tc.caller, tc.req); err == nil {
+			t.Errorf("%s: want deny, got allow", tc.why)
 		}
 	}
 }

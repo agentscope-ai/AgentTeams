@@ -24,7 +24,7 @@ FROM ${HIGRESS_REGISTRY}/higress/python:3.11-slim
 ARG APT_MIRROR=
 ARG PIP_INDEX_URL=https://pypi.org/simple/
 ARG PIP_TIMEOUT=300
-ARG QWENPAW_PIP_SPEC=qwenpaw==2.2.1
+ARG QWENPAW_PIP_SPEC=qwenpaw==2.2.2.post1
 ARG NPM_REGISTRY=https://registry.npmjs.org/
 
 RUN if [ -n "${APT_MIRROR}" ]; then \
@@ -36,11 +36,69 @@ RUN if [ -n "${APT_MIRROR}" ]; then \
         git \
         jq \
         libjemalloc2 \
-        nodejs \
-        npm \
         socat \
         tzdata \
     && rm -rf /var/lib/apt/lists/*
+
+# Install the latest Node.js 24 LTS (floor: 24.22.1 for the 2026-10-21 security release).
+# By default the build resolves the latest 24.x LTS from nodejs.org and verifies its SHA-256.
+# For a byte-reproducible build, pass --build-arg NODE_VERSION=24.22.1 (or any 24.x >= floor).
+# NODE_MAJOR is fixed to 24: a 25.x/26.x override is rejected even if NODE_MAJOR=24 is passed.
+# Docker may reuse this layer: use --no-cache for a forced refresh to the latest 24 LTS.
+ARG NODE_MAJOR=24
+ARG NODE_MIN_VERSION=24.22.1
+ARG NODE_VERSION=
+ARG NODE_SHA256=
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates curl xz-utils jq; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) node_arch="x64" ;; \
+      arm64) node_arch="arm64" ;; \
+      *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \
+    esac; \
+    required_major="24"; \
+    if [ "${NODE_MAJOR}" != "${required_major}" ]; then \
+      echo "NODE_MAJOR=${NODE_MAJOR} is not Node ${required_major} LTS; refusing to build" >&2; exit 1; \
+    fi; \
+    case "${NODE_MIN_VERSION}" in 24.*) ;; *) echo "NODE_MIN_VERSION=${NODE_MIN_VERSION} is not Node 24.x" >&2; exit 1 ;; esac; \
+    ver="${NODE_VERSION}"; \
+    if [ -z "$ver" ]; then \
+      ver="$(curl -fsSL https://nodejs.org/dist/index.json | jq -r --arg p "v${NODE_MAJOR}." '[.[] | select(.lts != false) | select(.version | startswith($p))][0].version' | sed 's/^v//')"; \
+    fi; \
+    ver="${ver#v}"; \
+    test -n "$ver"; \
+    case "$ver" in \
+      *[!0-9.]*|*..*|.*|*.) echo "invalid Node version: $ver" >&2; exit 1 ;; \
+    esac; \
+    case "$ver" in \
+      *.*.*) ;; \
+      *) echo "invalid Node version: $ver" >&2; exit 1 ;; \
+    esac; \
+    case "$ver" in \
+      *.*.*.*) echo "invalid Node version: $ver" >&2; exit 1 ;; \
+    esac; \
+    major="${ver%%.*}"; \
+    if [ "$major" != "$required_major" ]; then \
+      echo "Node $ver is not a Node ${required_major}.x release; refusing a non-${required_major} major" >&2; exit 1; \
+    fi; \
+    if [ "$(printf '%s\n%s\n' "$NODE_MIN_VERSION" "$ver" | sort -V | head -n1)" != "$NODE_MIN_VERSION" ]; then \
+      echo "Node $ver is older than required floor $NODE_MIN_VERSION" >&2; exit 1; \
+    fi; \
+    tarball="node-v${ver}-linux-${node_arch}.tar.xz"; \
+    sha="${NODE_SHA256}"; \
+    if [ -z "$sha" ]; then \
+      sha="$(curl -fsSL "https://nodejs.org/dist/v${ver}/SHASUMS256.txt" | awk -v f="$tarball" '$2 == f {print $1}' | head -n1)"; \
+    fi; \
+    test -n "$sha" || { echo "no SHASUMS256.txt entry for ${tarball}" >&2; exit 1; }; \
+    curl -fsSLO "https://nodejs.org/dist/v${ver}/${tarball}"; \
+    echo "${sha}  ${tarball}" | sha256sum -c -; \
+    tar -xJf "$tarball" -C /usr/local --strip-components=1 --no-same-owner; \
+    rm -f "$tarball"; \
+    node -v; npm -v; \
+    test "$(node -v)" = "v${ver}"; \
+    rm -rf /var/lib/apt/lists/*
 
 # jemalloc reduces Python memory fragmentation and matches the CoPaw worker base.
 RUN JEMALLOC=$(find /usr/lib -name 'libjemalloc.so.2' -print -quit) \
@@ -100,10 +158,14 @@ RUN mkdir -p /opt/agentteams/plugins
 COPY dist/adapters/qwenpaw/teamharness-qwenpaw.zip /opt/agentteams/plugins/teamharness-qwenpaw.zip
 COPY dist/adapters/qwenpaw/workerflow-qwenpaw.zip /opt/agentteams/plugins/workerflow-qwenpaw.zip
 COPY plugins/agentteams-matrix-channel/ /opt/agentteams/plugins/agentteams-matrix-channel/
+COPY plugins/agentteams-upgrade/ /opt/agentteams/plugins/agentteams-upgrade/
+COPY plugins/qwen-code-bridge/ /opt/agentteams/plugins/qwen-code-bridge/
 COPY qwenpaw/scripts/install-builtin-qwenpaw-plugins.py /tmp/install-builtin-qwenpaw-plugins.py
 RUN /opt/venv/qwenpaw/bin/python /tmp/install-builtin-qwenpaw-plugins.py \
         --working-dir /opt/agentteams/qwenpaw-builtin \
         /opt/agentteams/plugins/agentteams-matrix-channel \
+        /opt/agentteams/plugins/agentteams-upgrade \
+        /opt/agentteams/plugins/qwen-code-bridge \
         /opt/agentteams/plugins/teamharness-qwenpaw.zip \
         /opt/agentteams/plugins/workerflow-qwenpaw.zip \
     && rm -f /tmp/install-builtin-qwenpaw-plugins.py
@@ -111,6 +173,9 @@ RUN /opt/venv/qwenpaw/bin/python /tmp/install-builtin-qwenpaw-plugins.py \
 COPY --chmod=755 qwenpaw/scripts/qwenpaw-worker-entrypoint.sh /opt/agentteams/scripts/qwenpaw-worker-entrypoint.sh
 COPY --chmod=755 qwenpaw/scripts/qwenpaw-teamharness-plugin-reload.sh /opt/agentteams/scripts/qwenpaw-teamharness-plugin-reload.sh
 COPY --from=shared . /opt/agentteams/scripts/lib/
+COPY plugins/teamharness/adapters/qwenpaw/task_trace.py /opt/agentteams/scripts/lib/telemetry/at_task_trace.py
+RUN /opt/venv/qwenpaw/bin/pip install --index-url "${PIP_INDEX_URL}" \
+    -r /opt/agentteams/scripts/lib/telemetry/requirements.txt
 
 # mc wrapper: auto-refreshes STS credentials before every mc invocation.
 RUN chmod +x /opt/agentteams/scripts/lib/mc-wrapper.sh && \
@@ -121,11 +186,21 @@ RUN chmod +x /opt/agentteams/scripts/lib/mc-wrapper.sh && \
     mkdir -p /root/agentteams-fs/agents
 
 # QwenPaw 2.2.1 reload must not overwrite a concurrent policy update.
-COPY qwenpaw/scripts/patch-qwenpaw-driver-policy-reload.py /tmp/patch-qwenpaw-driver-policy-reload.py
+# The patch is also KEPT in the image (not /tmp): the in-place runtime upgrade
+# orchestrator re-applies it after an S3 package swap (the pristine wheel does
+# not carry the fix). The build-time run below applies it for the 2.2.2.post1 image.
+COPY qwenpaw/scripts/patch-qwenpaw-driver-policy-reload.py /opt/agentteams/scripts/patch-qwenpaw-driver-policy-reload.py
+COPY qwenpaw/scripts/patch-qwenpaw-matrix-cron-final.py /opt/agentteams/scripts/patch-qwenpaw-matrix-cron-final.py
+# In-place runtime upgrade: two-phase orchestrator + checker CLI, kept next to
+# the patch script so the orchestrator's `$(dirname $0)` resolution finds both
+# the patch (re-applied after an S3 package swap) and the checker.
+COPY --chmod=755 qwenpaw/scripts/upgrade_qwenpaw_runtime.sh /opt/agentteams/scripts/upgrade_qwenpaw_runtime.sh
+COPY --chmod=755 qwenpaw/scripts/check_qwenpaw_upgrade.py /opt/agentteams/scripts/check_qwenpaw_upgrade.py
 COPY qwenpaw/tests/check_driver_policy_reload.py /tmp/check_driver_policy_reload.py
-RUN /opt/venv/qwenpaw/bin/python /tmp/patch-qwenpaw-driver-policy-reload.py && \
+RUN /opt/venv/qwenpaw/bin/python /opt/agentteams/scripts/patch-qwenpaw-driver-policy-reload.py && \
+    /opt/venv/qwenpaw/bin/python /opt/agentteams/scripts/patch-qwenpaw-matrix-cron-final.py && \
     /opt/venv/qwenpaw/bin/python /tmp/check_driver_policy_reload.py && \
-    rm /tmp/patch-qwenpaw-driver-policy-reload.py /tmp/check_driver_policy_reload.py
+    rm /tmp/check_driver_policy_reload.py
 
 WORKDIR /root/agentteams-fs/agents
 

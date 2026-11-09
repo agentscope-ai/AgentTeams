@@ -1,8 +1,11 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
@@ -157,5 +160,99 @@ func TestPutManagerConfig_MalformedExistingJSON_FallsBackToGenerated(t *testing.
 	plugins := got["plugins"].(map[string]interface{})
 	if _, ok := plugins["entries"].(map[string]interface{})["memory-core"]; !ok {
 		t.Errorf("expected generated memory-core entry, got: %v", plugins)
+	}
+}
+
+func TestPutManagerConfig_PreservesExistingLocalManagerConfig(t *testing.T) {
+	fake := ossfake.NewMemory()
+	ctx := context.Background()
+	root := t.TempDir()
+	localPath := filepath.Join(root, "manager", "openclaw.json")
+	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
+		t.Fatalf("mkdir local: %v", err)
+	}
+	local := []byte(`{
+  "channels": {"matrix": {"groupAllowFrom": ["@local:agentteams.local"]}},
+  "managerOwned": true
+}`)
+	if err := os.WriteFile(localPath, local, 0600); err != nil {
+		t.Fatalf("seed local: %v", err)
+	}
+
+	lc := NewManagerConfigStore(ManagerConfigStoreConfig{
+		OSS:          fake,
+		MatrixDomain: "agentteams.local",
+		ManagerName:  "manager",
+		AgentFSDir:   root,
+	})
+	generated := []byte(`{"channels":{"matrix":{"groupAllowFrom":["@generated:agentteams.local"]}}}`)
+	if err := lc.PutManagerConfig(generated); err != nil {
+		t.Fatalf("PutManagerConfig: %v", err)
+	}
+
+	gotLocal, err := os.ReadFile(localPath)
+	if err != nil {
+		t.Fatalf("read local: %v", err)
+	}
+	if !bytes.Equal(gotLocal, local) {
+		t.Fatalf("live local config was replaced:\nwant %s\ngot  %s", local, gotLocal)
+	}
+	oss, err := fake.GetObject(ctx, "agents/manager/openclaw.json")
+	if err != nil {
+		t.Fatalf("read OSS: %v", err)
+	}
+	if !bytes.Contains(oss, []byte("@generated:agentteams.local")) {
+		t.Fatalf("OSS config did not receive generated allowlist: %s", oss)
+	}
+}
+
+func TestUpdateManagerGroupAllowFrom_PreservesLocalManagerFields(t *testing.T) {
+	fake := ossfake.NewMemory()
+	ctx := context.Background()
+	root := t.TempDir()
+	localPath := filepath.Join(root, "manager", "openclaw.json")
+	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
+		t.Fatalf("mkdir local: %v", err)
+	}
+	seed := []byte(`{
+  "channels": {"matrix": {"groupAllowFrom": ["@admin:agentteams.local"]}},
+  "managerOwned": {"heartbeat": "keep-me"}
+}`)
+	if err := os.WriteFile(localPath, seed, 0600); err != nil {
+		t.Fatalf("seed local: %v", err)
+	}
+	if err := fake.PutObject(ctx, "agents/manager/openclaw.json", seed); err != nil {
+		t.Fatalf("seed OSS: %v", err)
+	}
+
+	lc := NewManagerConfigStore(ManagerConfigStoreConfig{
+		OSS:          fake,
+		MatrixDomain: "agentteams.local",
+		ManagerName:  "manager",
+		AgentFSDir:   root,
+	})
+	if err := lc.UpdateManagerGroupAllowFrom("@worker:agentteams.local", true); err != nil {
+		t.Fatalf("add allowlist: %v", err)
+	}
+	if err := lc.UpdateManagerGroupAllowFrom("@worker:agentteams.local", false); err != nil {
+		t.Fatalf("remove allowlist: %v", err)
+	}
+
+	data, err := os.ReadFile(localPath)
+	if err != nil {
+		t.Fatalf("read local: %v", err)
+	}
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("parse local: %v", err)
+	}
+	if _, ok := cfg["managerOwned"].(map[string]interface{}); !ok {
+		t.Fatalf("Manager-owned local fields were not preserved: %s", data)
+	}
+	channels := cfg["channels"].(map[string]interface{})
+	matrix := channels["matrix"].(map[string]interface{})
+	allow := matrix["groupAllowFrom"].([]interface{})
+	if len(allow) != 1 || allow[0] != "@admin:agentteams.local" {
+		t.Fatalf("local allowlist not returned to seed state: %v", allow)
 	}
 }

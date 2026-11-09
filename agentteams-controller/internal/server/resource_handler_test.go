@@ -569,6 +569,52 @@ func TestUpdateTeamMembershipAndHeartbeat(t *testing.T) {
 	}
 }
 
+func TestUpdateTeamHumanMembers(t *testing.T) {
+	initial := []v1beta1.TeamMemberSpec{{Name: "alice", Role: "member"}}
+	for _, tc := range []struct {
+		name string
+		body string
+		want []v1beta1.TeamMemberSpec
+	}{
+		{"replace", `{"humanMembers":[{"name":"bob","role":"coordinator"}]}`, []v1beta1.TeamMemberSpec{{Name: "bob", Role: "coordinator"}}},
+		{"role change", `{"humanMembers":[{"name":"alice","role":"coordinator"}]}`, []v1beta1.TeamMemberSpec{{Name: "alice", Role: "coordinator"}}},
+		{"clear", `{"humanMembers":[]}`, nil},
+		{"omitted", `{"heartbeatEvery":"45m"}`, initial},
+		{"null", `{"humanMembers":null}`, initial},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			team := &v1beta1.Team{
+				ObjectMeta: metav1.ObjectMeta{Name: "alpha-team", Namespace: "default"},
+				Spec:       v1beta1.TeamSpec{HumanMembers: initial},
+			}
+			k8s := fake.NewClientBuilder().WithScheme(newServerTestScheme(t)).WithObjects(team).Build()
+			mw := authpkg.NewMiddleware(&alwaysAdminAuth{}, authpkg.NewCREnricher(k8s, "default"), authpkg.NewAuthorizer(), k8s, "default")
+			srv := NewHTTPServer(":0", ServerDeps{Client: k8s, Namespace: "default", AuthMw: mw})
+			req := httptest.NewRequest(http.MethodPut, "/api/v1/teams/alpha-team", strings.NewReader(tc.body))
+			req.Header.Set("Authorization", "Bearer test-token")
+			rec := httptest.NewRecorder()
+			srv.Mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("update status = %d: %s", rec.Code, rec.Body.String())
+			}
+			var stored v1beta1.Team
+			if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(team), &stored); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(stored.Spec.HumanMembers, tc.want) {
+				t.Fatalf("persisted humanMembers = %#v, want %#v", stored.Spec.HumanMembers, tc.want)
+			}
+			var resp TeamResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(resp.HumanMembers, tc.want) {
+				t.Fatalf("response humanMembers = %#v, want %#v", resp.HumanMembers, tc.want)
+			}
+		})
+	}
+}
+
 func TestCreateTeamResponseDerivesNamesFromWorkerReferences(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	leader := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "lead-cr", Namespace: "default"}}
@@ -1594,5 +1640,216 @@ func TestCreateWorkerDefaultModel(t *testing.T) {
 				t.Errorf("persisted model=%q, want %q", worker.Spec.Model, tc.want)
 			}
 		})
+	}
+}
+
+// TestWorkerLlmStreamTimeoutAPIRoundTrip pins the API surface for the
+// LLM stream timeout fields: create carries them, update changes them,
+// and an explicit "" clears them back to unset (pointer semantics).
+func TestWorkerLlmStreamTimeoutAPIRoundTrip(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
+
+	post := func(path string, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader([]byte(body)))
+		rec := httptest.NewRecorder()
+		handler.CreateWorker(rec, req)
+		return rec
+	}
+	put := func(path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, path, bytes.NewReader([]byte(body)))
+		req.SetPathValue("name", "worker-lst")
+		rec := httptest.NewRecorder()
+		handler.UpdateWorker(rec, req)
+		return rec
+	}
+	getSpec := func() v1beta1.WorkerSpec {
+		var w v1beta1.Worker
+		if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "worker-lst", Namespace: "default"}, &w); err != nil {
+			t.Fatalf("get worker: %v", err)
+		}
+		return w.Spec
+	}
+
+	rec := post("/api/v1/workers", `{"name":"worker-lst","llmStreamFirstContentTimeout":"300","llmStreamIdleTimeout":"60"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	spec := getSpec()
+	if spec.LlmStreamFirstContentTimeout != "300" || spec.LlmStreamIdleTimeout != "60" {
+		t.Fatalf("create persisted first=%q idle=%q, want 300/60", spec.LlmStreamFirstContentTimeout, spec.LlmStreamIdleTimeout)
+	}
+
+	// GET response exposes the fields while they are set.
+	greq := httptest.NewRequest(http.MethodGet, "/api/v1/workers/worker-lst", nil)
+	greq.SetPathValue("name", "worker-lst")
+	greq = greq.WithContext(context.WithValue(greq.Context(), authpkg.CallerKeyForTest(), &authpkg.CallerIdentity{Role: authpkg.RoleAdmin}))
+	grec := httptest.NewRecorder()
+	handler.GetWorker(grec, greq)
+	if grec.Code != http.StatusOK {
+		t.Fatalf("get: %d %s", grec.Code, grec.Body.String())
+	}
+	if !bytes.Contains(grec.Body.Bytes(), []byte(`"llmStreamFirstContentTimeout":"300"`)) ||
+		!bytes.Contains(grec.Body.Bytes(), []byte(`"llmStreamIdleTimeout":"60"`)) {
+		t.Fatalf("get response missing llmStream fields: %s", grec.Body.String())
+	}
+
+	// Update: change one side, omit the other (pointer nil = keep).
+	rec = put("/api/v1/workers/worker-lst", `{"llmStreamIdleTimeout":"120"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update: %d %s", rec.Code, rec.Body.String())
+	}
+	spec = getSpec()
+	if spec.LlmStreamFirstContentTimeout != "300" || spec.LlmStreamIdleTimeout != "120" {
+		t.Fatalf("update persisted first=%q idle=%q, want 300/120", spec.LlmStreamFirstContentTimeout, spec.LlmStreamIdleTimeout)
+	}
+
+	// Update: explicit "" clears back to unset.
+	rec = put("/api/v1/workers/worker-lst", `{"llmStreamFirstContentTimeout":"","llmStreamIdleTimeout":""}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear: %d %s", rec.Code, rec.Body.String())
+	}
+	spec = getSpec()
+	if spec.LlmStreamFirstContentTimeout != "" || spec.LlmStreamIdleTimeout != "" {
+		t.Fatalf("clear persisted first=%q idle=%q, want empty/empty", spec.LlmStreamFirstContentTimeout, spec.LlmStreamIdleTimeout)
+	}
+}
+
+// TestWorkerLlmTuningAPIRoundTrip pins the API surface for the startup-only
+// LLM tuning fields: create carries them, update changes one (pointer keep),
+// and an explicit "" clears (pointer semantics).
+func TestWorkerLlmTuningAPIRoundTrip(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "", nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", bytes.NewReader([]byte(
+		`{"name":"worker-lt","llmMaxRetries":"7","llmAcquireTimeout":"180"}`)))
+	handler.CreateWorker(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	var w v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "worker-lt", Namespace: "default"}, &w); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if w.Spec.LlmMaxRetries != "7" || w.Spec.LlmAcquireTimeout != "180" {
+		t.Fatalf("create persisted maxRetries=%q acquireTimeout=%q, want 7/180", w.Spec.LlmMaxRetries, w.Spec.LlmAcquireTimeout)
+	}
+
+	// Update one side, omit the rest (nil = keep).
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/workers/worker-lt", bytes.NewReader([]byte(`{"llmMaxRetries":"9"}`)))
+	req.SetPathValue("name", "worker-lt")
+	handler.UpdateWorker(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "worker-lt", Namespace: "default"}, &w); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if w.Spec.LlmMaxRetries != "9" || w.Spec.LlmAcquireTimeout != "180" {
+		t.Fatalf("update persisted maxRetries=%q acquireTimeout=%q, want 9/180", w.Spec.LlmMaxRetries, w.Spec.LlmAcquireTimeout)
+	}
+
+	// Explicit "" clears.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/workers/worker-lt", bytes.NewReader([]byte(`{"llmMaxRetries":""}`)))
+	req.SetPathValue("name", "worker-lt")
+	handler.UpdateWorker(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "worker-lt", Namespace: "default"}, &w); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if w.Spec.LlmMaxRetries != "" || w.Spec.LlmAcquireTimeout != "180" {
+		t.Fatalf("clear persisted maxRetries=%q acquireTimeout=%q, want empty/180", w.Spec.LlmMaxRetries, w.Spec.LlmAcquireTimeout)
+	}
+}
+
+// --- write-path reference validation: the API server, not the lagging cache ---
+//
+// The manager scopes its Worker/Team/Human informer caches with an
+// agentteams.io/controller label selector, and a cache only holds an object
+// after a watch round-trip. One `agt apply` creates a Worker and then the Team
+// naming it, so a cache-backed existence check can miss a Worker the API
+// server has already accepted — the QwenPaw/Hermes shard's "referenced Worker
+// ... does not exist" 400 (test-19-human-and-team-admin). The validators read
+// references through the direct API reader and re-apply the scope themselves.
+
+func workerWithController(name, controller string) *v1beta1.Worker {
+	labels := map[string]string{}
+	if controller != "" {
+		labels[v1beta1.LabelController] = controller
+	}
+	return &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Labels: labels},
+		Spec:       v1beta1.WorkerSpec{Model: "qwen3.5-plus"},
+	}
+}
+
+const twoMemberTeamBody = `{"name":"alpha-team","workerMembers":[` +
+	`{"name":"alpha-lead","role":"team_leader"},{"name":"alpha-dev","role":"worker"}]}`
+
+func postTeam(t *testing.T, handler *ResourceHandler, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/teams", bytes.NewReader([]byte(body)))
+	rec := httptest.NewRecorder()
+	handler.CreateTeam(rec, req)
+	return rec
+}
+
+func TestCreateTeamSeesWorkerTheCacheHasNotObservedYet(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	// The informer cache is still empty (the Worker was created moments ago)…
+	cached := fake.NewClientBuilder().WithScheme(scheme).Build()
+	// …while the API server, which answered 201 to that create, already has it.
+	direct := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(
+		workerWithController("alpha-lead", ""), workerWithController("alpha-dev", ""),
+	).Build()
+	handler := NewResourceHandler(cached, "default", nil, "", nil).WithAPIReader(direct)
+
+	rec := postTeam(t, handler, twoMemberTeamBody)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("Team create = %d %s, want 201: a Worker the API server has must not read as missing", rec.Code, rec.Body.String())
+	}
+	var team v1beta1.Team
+	if err := cached.Get(context.Background(), client.ObjectKey{Name: "alpha-team", Namespace: "default"}, &team); err != nil {
+		t.Fatalf("get team: %v", err)
+	}
+}
+
+func TestCreateTeamStillRejectsAWorkerMissingEverywhere(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	build := func() client.Client {
+		return fake.NewClientBuilder().WithScheme(scheme).
+			WithRuntimeObjects(workerWithController("alpha-lead", "")).Build()
+	}
+	handler := NewResourceHandler(build(), "default", nil, "", nil).WithAPIReader(build())
+
+	rec := postTeam(t, handler, twoMemberTeamBody)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "referenced Worker alpha-dev does not exist") {
+		t.Fatalf("Team create = %d %s, want 400 naming the missing Worker", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreateTeamRejectsAWorkerOwnedByAnotherControllerInstance(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	// In incluster mode the caches are label-scoped, so another instance's
+	// Worker is invisible to a cached read; the direct read must keep it
+	// invisible rather than accepting a reference this instance cannot manage.
+	cached := fake.NewClientBuilder().WithScheme(scheme).Build()
+	direct := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(
+		workerWithController("alpha-lead", "ctl-a"),
+		workerWithController("alpha-dev", "other-ctl"),
+	).Build()
+	handler := NewResourceHandler(cached, "default", nil, "ctl-a", nil).WithAPIReader(direct)
+
+	rec := postTeam(t, handler, twoMemberTeamBody)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "referenced Worker alpha-dev does not exist") {
+		t.Fatalf("Team create = %d %s, want 400 for the out-of-scope Worker", rec.Code, rec.Body.String())
 	}
 }

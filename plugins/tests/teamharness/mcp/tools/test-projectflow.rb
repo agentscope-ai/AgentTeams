@@ -23,6 +23,13 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
   (bin_dir / "mc").write(<<~SH)
     #!/usr/bin/env bash
     printf '%s\\n' "$*" >> "#{log_path}"
+    # Stale-overwrite guard probes single-file pushes with mc stat --json
+    # before mc cp; the emulated remote is always fresh here, so the probe
+    # reports 'object does not exist' and the push proceeds.
+    if [ "$1" = "stat" ] && [ "$2" = "--json" ]; then
+      printf '%s\\n' '{"status":"error","error":"object does not exist"}'
+      exit 1
+    fi
   SH
   (bin_dir / "mc").chmod(0o755)
 
@@ -110,6 +117,7 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
                 return
             matrix["events"].append({
                 "path": parsed.path,
+                "txn": parsed.path.rsplit("/", 1)[-1],
                 "auth": self.headers.get("Authorization"),
                 "content": json.loads(body.decode("utf-8") or "{}"),
             })
@@ -235,6 +243,9 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
     })
     if not matrix_plan.get("ok"):
         raise AssertionError(f"matrix project plan_dag failed: {matrix_plan!r}")
+    matrix_task_result = pathlib.Path("#{workspace}") / "shared/tasks/matrix-dm-project-01/result.md"
+    matrix_task_result.parent.mkdir(parents=True, exist_ok=True)
+    matrix_task_result.write_text("# Matrix DM task result\\n\\nDeliverable.\\n", encoding="utf-8")
     project_result_path = pathlib.Path("#{workspace}") / "shared/projects/matrix-dm-project/result.md"
     project_result_path.parent.mkdir(parents=True, exist_ok=True)
     project_result_path.write_text("# Matrix DM Project Result\\n\\nReady for requester.\\n", encoding="utf-8")
@@ -265,13 +276,26 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
         raise AssertionError(f"project artifact missing parent event reference: {project_artifact!r}")
     if not matrix["uploads"] or matrix["uploads"][-1].get("filename") != "matrix-dm-project-project-result.md":
         raise AssertionError(f"project result upload missing: {matrix['uploads']!r}")
-    project_file_event = matrix["events"][-1]["content"]
+    project_file_record = matrix["events"][-2]
+    project_file_event = project_file_record["content"]
     if project_file_event.get("msgtype") != "m.file" or project_file_event.get("body") != "matrix-dm-project-project-result.md":
         raise AssertionError(f"project result event mismatch: {project_file_event!r}")
     if project_file_event.get("m.relates_to") != {"rel_type": "com.agentteams.attachment", "event_id": "$project-parent"}:
         raise AssertionError(f"project result event missing attachment relation: {project_file_event!r}")
     if not project_file_event.get("url") or not (project_file_event.get("info") or {}).get("size"):
         raise AssertionError(f"project result event missing file metadata: {project_file_event!r}")
+    # Every publish is followed by an @-summary text event (MSC3952). Here no
+    # sender is resolvable (no room-event lookup), so it is plain text.
+    project_summary_record = matrix["events"][-1]
+    project_summary_event = project_summary_record["content"]
+    if project_summary_event.get("msgtype") != "m.text" or "已发布" not in project_summary_event.get("body", ""):
+        raise AssertionError(f"project result summary event mismatch: {project_summary_event!r}")
+    if "matrix-dm-project-project-result.md" not in project_summary_event.get("body", ""):
+        raise AssertionError(f"project result summary must name the file: {project_summary_event!r}")
+    if "m.mentions" in project_summary_event:
+        raise AssertionError(f"unresolvable sender must not carry m.mentions: {project_summary_event!r}")
+    if project_summary_record["txn"] != project_file_record["txn"] + "-summary":
+        raise AssertionError(f"summary txn must derive from the file txn: {project_summary_record['txn']!r}")
 
     context_project = payload({
         "action": "create_project",
@@ -331,9 +355,11 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
         raise AssertionError(f"context project result was not published: {context_accepted!r}")
     if context_artifacts[0].get("parentEventId") != "$context-project-parent":
         raise AssertionError(f"context project result did not infer parent event: {context_accepted!r}")
-    context_project_file_event = matrix["events"][-1]["content"]
+    context_project_file_event = matrix["events"][-2]["content"]
     if context_project_file_event.get("m.relates_to") != {"rel_type": "com.agentteams.attachment", "event_id": "$context-project-parent"}:
         raise AssertionError(f"context project result event missing attachment relation: {context_project_file_event!r}")
+    if matrix["events"][-1]["content"].get("msgtype") != "m.text":
+        raise AssertionError(f"context project result summary event missing: {matrix['events'][-1]!r}")
 
     deferred_project = payload({
         "action": "create_project",
@@ -416,9 +442,11 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
     artifact_payload = report_artifact.get("artifact") or {}
     if artifact_payload.get("parentEventId") != report["messageId"]:
         raise AssertionError(f"report artifact parent should be report message id: {report_artifact!r}")
-    report_file_event = matrix["events"][-1]["content"]
+    report_file_event = matrix["events"][-2]["content"]
     if report_file_event.get("m.relates_to") != {"rel_type": "com.agentteams.attachment", "event_id": report["messageId"]}:
         raise AssertionError(f"report artifact Matrix relation mismatch: {report_file_event!r}")
+    if matrix["events"][-1]["content"].get("msgtype") != "m.text":
+        raise AssertionError(f"report artifact summary event missing: {matrix['events'][-1]!r}")
 
     duplicate_explicit = payload({
         "action": "create_project",
@@ -709,7 +737,7 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
         "action": "complete_project",
         "payload": {"projectId": "daily-plan-2026-06-03"},
     })
-    if incomplete.get("ok") or "t-001 (planned)" not in incomplete.get("error", "") or "t-002 (planned)" not in incomplete.get("error", ""):
+    if incomplete.get("ok") or "t-001 (status=planned)" not in incomplete.get("error", "") or "t-002 (status=planned)" not in incomplete.get("error", ""):
         raise AssertionError(f"complete_project should reject non-terminal tasks: {incomplete!r}")
     incomplete_state = json.loads((pathlib.Path("#{workspace}") / "shared/projects/daily-plan-2026-06-03/meta.json").read_text(encoding="utf-8"))
     if incomplete_state.get("status") != "active":
@@ -732,13 +760,41 @@ Dir.mktmpdir("teamharness-projectflow-") do |dir|
                     "title": "Summarize",
                     "assignedTo": "@worker-b:example.test",
                     "dependsOn": ["t-001"],
-                    "status": "cancelled",
+                    "status": "completed",
                 },
             ],
         },
     })
     if not terminal_plan.get("ok"):
         raise AssertionError(f"terminal plan_dag failed: {terminal_plan!r}")
+    for completed_task_id in ("t-001", "t-002"):
+        task_result = pathlib.Path("#{workspace}") / f"shared/tasks/{completed_task_id}/result.md"
+        task_result.parent.mkdir(parents=True, exist_ok=True)
+        task_result.write_text(f"# {completed_task_id} result\\n", encoding="utf-8")
+
+    # C-1 negative case: a cancelled task must never masquerade as a
+    # successful delivery (the TC-05 shape the completion gate removed).
+    cancelled_plan = payload({
+        "action": "plan_dag",
+        "payload": {
+            "projectId": "cancelled-gate-project",
+            "tasks": [{
+                "taskId": "cg-001",
+                "title": "Cancelled work",
+                "assignedTo": "@worker-a:example.test",
+                "dependsOn": [],
+                "status": "cancelled",
+            }],
+        },
+    })
+    if not cancelled_plan.get("ok"):
+        raise AssertionError(f"cancelled gate plan_dag failed: {cancelled_plan!r}")
+    cancelled_complete = payload({
+        "action": "complete_project",
+        "payload": {"projectId": "cancelled-gate-project"},
+    })
+    if cancelled_complete.get("ok") or "status=cancelled" not in cancelled_complete.get("error", ""):
+        raise AssertionError(f"complete_project must reject a cancelled task: {cancelled_complete!r}")
 
     completed = payload({
         "action": "complete_project",

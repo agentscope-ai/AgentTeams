@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"math"
 	"os"
 	"path"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -91,6 +93,19 @@ type MemberContext struct {
 	// An explicit Spec.SubagentModel always takes precedence.
 	TeamSubagentModel string
 
+	// TeamLlmStreamFirstContentTimeout / TeamLlmStreamIdleTimeout are the
+	// Team.spec defaults for the worker LLM stream timeouts, resolved by the
+	// owning reconciler (read-time merge input). An explicit Spec.* value
+	// always takes precedence.
+	TeamLlmStreamFirstContentTimeout string
+	TeamLlmStreamIdleTimeout         string
+
+	// TeamLlmTuning holds the Team.spec startup-only LLM tuning defaults
+	// (keyed by the QWENPAW_LLM_* env name), resolved by the owning
+	// reconciler. An explicit Spec.* value always takes precedence; see
+	// resolveLlmTuningEnv for the projection rules.
+	TeamLlmTuning map[string]string
+
 	// Generation / ObservedGeneration are metadata included in logs to aid
 	// debugging. They are NOT used for spec-change detection — callers must
 	// set SpecChanged explicitly (see field doc below).
@@ -157,7 +172,8 @@ type MemberContext struct {
 	// Resources overrides the backend worker resource defaults. The compact
 	// Worker API uses one cpu/memory value for both requests and limits; this
 	// field carries the backend-expanded form.
-	Resources *backend.ResourceRequirements
+	HumanMatrixIDs []string
+	Resources      *backend.ResourceRequirements
 
 	// BackendRuntime is the desired backend type from spec.backendRuntime.
 	// Empty means default ("pod").
@@ -449,16 +465,18 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 	// Subagent model: explicit worker value wins; otherwise inherit the
 	// team-wide default (read-time merge — no spec writes, no second writer).
 	if err := d.Deployer.DeployWorkerConfig(ctx, service.WorkerDeployRequest{
-		Name:           m.RuntimeName,
-		Spec:           m.Spec,
-		SubagentModel:  resolveSubagentModel(m.Spec.SubagentModel, m.TeamSubagentModel),
-		Role:           m.Role.String(),
-		MatrixToken:    state.ProvResult.MatrixToken,
-		GatewayKey:     state.ProvResult.GatewayKey,
-		MatrixPassword: state.ProvResult.MatrixPassword,
-		McpServers:     m.Spec.McpServers,
-		IsUpdate:       m.IsUpdate,
-		AIGatewayURL:   aiGatewayURL,
+		Name:                   m.RuntimeName,
+		Spec:                   m.Spec,
+		SubagentModel:          resolveSubagentModel(m.Spec.SubagentModel, m.TeamSubagentModel),
+		Role:                   m.Role.String(),
+		MatrixToken:            state.ProvResult.MatrixToken,
+		GatewayKey:             state.ProvResult.GatewayKey,
+		MatrixPassword:         state.ProvResult.MatrixPassword,
+		McpServers:             m.Spec.McpServers,
+		IsUpdate:               m.IsUpdate,
+		ReconcileChannelPolicy: m.TeamName == "",
+		HumanMatrixIDs:         m.HumanMatrixIDs,
+		AIGatewayURL:           aiGatewayURL,
 	}); err != nil {
 		return fmt.Errorf("deploy worker config: %w", err)
 	}
@@ -938,8 +956,98 @@ func buildMemberWorkerEnv(ctx context.Context, d MemberDeps, m MemberContext, pr
 		workerEnv["AGENTTEAMS_AI_GATEWAY_URL"] = m.ModelProviderInfo.IntranetURL
 	}
 	workerEnv["AGENTTEAMS_WORKER_ROLE"] = m.Role.String()
+	// Startup-only LLM tuning (QwenPaw registry "startup_only" keys):
+	// projected into the container environment (worker value over team
+	// default). The spec-hash path re-creates the container when the spec
+	// changes, which is how the new values reach the runtime — matching the
+	// registry's non-hot mutability. User spec.env keeps the highest
+	// priority (merged after, below).
+	for k, v := range resolveLlmTuningEnv(m, logger) {
+		workerEnv[k] = v
+	}
 	mergeUserEnv(workerEnv, m.Spec.Env, logger, string(m.Role)+"/"+m.Name)
 	return workerEnv, nil
+}
+
+// llmTuningEnvSpecs lists the QwenPaw startup-only LLM env keys with the
+// registry value type used for validation (mirrors qwenpaw envs/registry.py;
+// when a key is ever promoted to hot_runtime, the hot-apply table in
+// worker_hot_apply_envs.go is the extension point — see that file's docs).
+// get/set expose the WorkerSpec field behind each key so the effective
+// value (worker over team default) is computed in one place, feeding both
+// the container env projection (resolveLlmTuningEnv) and the
+// container-recreation hash (hashSpecWithLlmTuningDefaults).
+var llmTuningEnvSpecs = []struct {
+	envKey   string
+	valueTyp string // "integer" | "float"
+	get      func(v1beta1.WorkerSpec) string
+	set      func(*v1beta1.WorkerSpec, string)
+}{
+	{"QWENPAW_LLM_MAX_RETRIES", "integer",
+		func(s v1beta1.WorkerSpec) string { return s.LlmMaxRetries },
+		func(s *v1beta1.WorkerSpec, v string) { s.LlmMaxRetries = v }},
+	{"QWENPAW_LLM_BACKOFF_BASE", "float",
+		func(s v1beta1.WorkerSpec) string { return s.LlmBackoffBase },
+		func(s *v1beta1.WorkerSpec, v string) { s.LlmBackoffBase = v }},
+	{"QWENPAW_LLM_BACKOFF_CAP", "float",
+		func(s v1beta1.WorkerSpec) string { return s.LlmBackoffCap },
+		func(s *v1beta1.WorkerSpec, v string) { s.LlmBackoffCap = v }},
+	{"QWENPAW_LLM_MAX_CONCURRENT", "integer",
+		func(s v1beta1.WorkerSpec) string { return s.LlmMaxConcurrent },
+		func(s *v1beta1.WorkerSpec, v string) { s.LlmMaxConcurrent = v }},
+	{"QWENPAW_LLM_MAX_QPM", "integer",
+		func(s v1beta1.WorkerSpec) string { return s.LlmMaxQpm },
+		func(s *v1beta1.WorkerSpec, v string) { s.LlmMaxQpm = v }},
+	{"QWENPAW_LLM_RATE_LIMIT_PAUSE", "float",
+		func(s v1beta1.WorkerSpec) string { return s.LlmRateLimitPause },
+		func(s *v1beta1.WorkerSpec, v string) { s.LlmRateLimitPause = v }},
+	{"QWENPAW_LLM_RATE_LIMIT_JITTER", "float",
+		func(s v1beta1.WorkerSpec) string { return s.LlmRateLimitJitter },
+		func(s *v1beta1.WorkerSpec, v string) { s.LlmRateLimitJitter = v }},
+	{"QWENPAW_LLM_ACQUIRE_TIMEOUT", "float",
+		func(s v1beta1.WorkerSpec) string { return s.LlmAcquireTimeout },
+		func(s *v1beta1.WorkerSpec, v string) { s.LlmAcquireTimeout = v }},
+}
+
+// resolveLlmTuningEnv computes the effective startup-only LLM env for the
+// member. Per key an explicit worker value wins over the team default;
+// values are validated against the registry value type (non-negative integer
+// / non-negative finite float); invalid values are skipped with a log so the
+// QwenPaw default applies — best-effort, never blocking the container.
+func resolveLlmTuningEnv(m MemberContext, logger interface {
+	Info(msg string, keysAndValues ...interface{})
+}) map[string]string {
+	out := map[string]string{}
+	for _, spec := range llmTuningEnvSpecs {
+		val := spec.get(m.Spec)
+		if val == "" {
+			val = m.TeamLlmTuning[spec.envKey]
+		}
+		if val == "" {
+			continue
+		}
+		if !validLlmTuningValue(spec.valueTyp, val) {
+			if logger != nil {
+				logger.Info("skipping invalid LLM tuning value (QwenPaw default applies)",
+					"env", spec.envKey, "value", val)
+			}
+			continue
+		}
+		out[spec.envKey] = val
+	}
+	return out
+}
+
+func validLlmTuningValue(valueTyp, val string) bool {
+	switch valueTyp {
+	case "integer":
+		n, err := strconv.Atoi(val)
+		return err == nil && n >= 0
+	case "float":
+		f, err := strconv.ParseFloat(val, 64)
+		return err == nil && f >= 0 && !math.IsInf(f, 0) && !math.IsNaN(f)
+	}
+	return false
 }
 
 func memberUsesSandboxClaim(m MemberContext) bool {

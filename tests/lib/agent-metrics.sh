@@ -1392,7 +1392,22 @@ generate_metrics_summary() {
         fi
     done
 
-    echo "$summary"
+    echo "$summary" | jq --args --argjson expected "$(printf '%s\n' "${test_names[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')" '
+        .data_quality = {
+            expected_tests: ($expected | length),
+            collected_tests: (.tests | length),
+            missing_tests: ($expected - [.tests[].test_name]),
+            tests_without_agents: [.tests[] | select((.agents | length) == 0) | .test_name],
+            tests_with_unsupported_agents: [.tests[] | select(any(.agents[]; .metrics_supported == false)) | .test_name]
+        }
+        | .data_quality.complete = (
+            .data_quality.expected_tests > 0 and
+            .data_quality.collected_tests == .data_quality.expected_tests and
+            (.data_quality.missing_tests | length) == 0 and
+            (.data_quality.tests_without_agents | length) == 0 and
+            (.data_quality.tests_with_unsupported_agents | length) == 0
+        )
+    '
 }
 
 # ============================================================
@@ -1405,6 +1420,18 @@ generate_metrics_summary() {
 compare_metrics_with_baseline() {
     local current="$1"
     local baseline="$2"
+
+    if printf '%s\n%s\n' "$current" "${baseline:-null}" | jq -se '
+        any(.[]; .data_quality.complete == false or
+            ((.tests | type) == "array" and any(.tests[]?; .agents == {})))
+    ' >/dev/null; then
+        echo "$current" | jq '. + {
+            baseline_available: false,
+            comparison_unavailable_reason: "incomplete_metrics",
+            totals: {current: .totals}, by_role: {current: .by_role}
+        }'
+        return 0
+    fi
 
     # If no baseline, return current as-is with no comparison
     if [ -z "$baseline" ] || [ "$baseline" = "null" ] || echo "$baseline" | jq -e '.error' >/dev/null 2>&1; then
@@ -1538,6 +1565,11 @@ generate_comparison_markdown() {
 
     echo "## 📊 CI Metrics Report"
     echo ""
+
+    if [ "$(echo "$comparison" | jq -r '.comparison_unavailable_reason // empty')" = "incomplete_metrics" ]; then
+        echo "> ⚠️ **Metrics incomplete** - Agent observations are missing or unsupported in this run or its baseline. Cost and performance comparison is unavailable; scenario pass/fail results are reported separately."
+        return 0
+    fi
 
     if [ "$baseline_available" = "false" ]; then
         echo "> ℹ️ **No baseline available** - This is the first run or baseline data was not found."

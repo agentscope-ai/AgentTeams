@@ -348,8 +348,8 @@ def test_gate_marker_not_consumed_by_different_mention():
     ch._capture_send_gate_snapshot(meta_a, room)
     ch._clear_history(room)
 
-    # A is still running: room event X lands after A's snapshot.
-    ch._record_history(room, _entry(sender="@c:hs.local", body="X"))
+    # A is still running: a new mention lands after A's snapshot.
+    ch._record_history(room, _entry(sender="@c:hs.local", body="@worker-a X"))
 
     # B's mention turn is enqueued: B's snapshot includes X; the buffer
     # clear here used to consume A's staleness marker.

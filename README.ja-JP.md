@@ -30,6 +30,13 @@
 
 ## ニュース
 
+- **2026-10-16**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.5) — AgentTeams v1.2.5：コーディングツールへの委任、Worker 設定管理、QwenPaw ランタイムのインプレースアップグレードを強化し、Dashboard v1.3.1 をデフォルトで同梱。MCP 登録、Matrix メッセージ連携、Worker 復旧に関する複数の問題を修正。
+- **2026-09-20**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.4) — AgentTeams v1.2.4：TeamHarness のタスク状態履歴、進捗トラッキング、完了通知を追加。QwenPaw 2.2.1 と Dashboard v1.2.4.9 にアップグレードし、チーム権限・監査・スキル管理を拡充、実験的な DeepSeek Harness Worker を導入。Worker の状態永続化とインストールの信頼性を改善。
+- **2026-08-22**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.3) — AgentTeams v1.2.3：新しい Controller API、`agt` コマンド、Dashboard v1.2.4 により、長時間実行される Project ワークフローを可視化・制御可能に。監査記録付きの人による介入、Project 履歴、QwenPaw Worker チェックポイントを追加。QwenPaw をローカル Manager / Worker の推奨ランタイムに昇格し、Skill の復旧、Windows での AppService 起動、ランタイムの信頼性を改善。
+- **2026-08-08**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.2) — AgentTeams v1.2.2：Manager から Worker へのカスタム Skill 配信を追加（検証、ストレージへのアップロード、`Worker.spec.skills` への割り当て、QwenPaw による再起動不要のホットリフレッシュと有効化に対応）。Manager と Worker の Skill 読み込みを堅牢化し、Team Leader と Worker が招待後に Team Room へ明示的に参加するよう改善。
+- **2026-08-06**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.1) — AgentTeams v1.2.1：Manager と Worker のランタイムスタックを QwenPaw 2.0.1 に統一し、QwenPaw Worker のマルチアーキテクチャイメージを公開。Matrix と TeamHarness のタスク割り当てのアトミック性、および CoPaw から QwenPaw への状態移行を強化。カスタムモデルの視覚・推論能力のオーバーライドを追加し、Worker のライフサイクルとランタイム管理の信頼性を向上。
+- **2026-07-30**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.0) — AgentTeams v1.2.0（安定版）：AgentTeams の命名と最終的な Team/Worker リソース契約をエンドツーエンドで確立し、オプションの AgentTeams Dashboard を追加。Worker ストレージ同期、Team ルーティングとライフサイクルの収束を改善し、インストーラーは旧来の環境変数とストレージ契約で v1.1.2 をデプロイ可能に（それ以前のバージョンは対応する旧インストーラーが必要）。Dashboard の信頼性、ツールと診断の安全性も向上。
+- **2026-07-17**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.0-beta.1) — AgentTeams v1.2.0-beta.1（プレリリース）：イメージ、Kubernetes API、Helm、Matrix、ストレージ、ランタイム契約にわたり、旧名称からの公開リネームを完了。プラグインプラットフォーム、TeamHarness と WorkerFlow の統合、Matrix AppService と Human SSO、モデルプロバイダールーティングと LLM プリフライト、より充実したコントローラーのオブザーバビリティを追加。ベータ版のインストールには明示的なオプトインが必要で、安定版のデフォルトは引き続き v1.1.2。
 - **2026-05-27**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.1.2) — AgentTeams v1.1.2：インストーラのデフォルト Worker ランタイムを QwenPaw に変更し keep-all アップグレードフローをサポート、Team に人間コーディネーターを追加し Team Leader の協調ツールを刷新、Nacos リモートスキル対応と `sts-agentteams` / `ai-registry` STS 認証、Worker の CR 名と Runtime 名の分離、コントローラーの reconcile メトリクスと正常終了を追加。
 - **2026-05-07**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.1.1) | [Changelog](changelog/v1.1.1.md) — AgentTeams v1.1.1：Worker/Manager/Team CRD と Team Leader 上の宣言的 MCP（破壊的変更）、CR の `spec.env` カスタム環境変数、Token Plan・Qwen Cloud international・`qwen3.6-plus` モデル、コントローラー RBAC の名前空間スコープ化、Worker パッケージの `SOUL.md` 任意化。
 - **2026-04-24**: [English](blog/agentteams-1.1.0-release.md) | [中文](blog/zh-cn/agentteams-1.1.0-release.md) — AgentTeams v1.1.0：Kubernetes ネイティブコントロールプレーン、Hermes 自律コーディング Agent ランタイム、1.7 GB イメージ縮小、agt CLI がシェルスクリプトに代わる。
@@ -92,7 +99,7 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; 
 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 
 # 特定バージョンにアップグレード
-AGENTTEAMS_VERSION=v1.0.5 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+AGENTTEAMS_VERSION=v1.2.5 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 ## アンインストール

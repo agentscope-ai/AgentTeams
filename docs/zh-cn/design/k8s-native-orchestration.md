@@ -1,84 +1,82 @@
-# AgentTeams: 基于 Kubernetes 原生的多 Agent 协作编排系统
+# AgentTeams: 基于 Kubernetes 原生的多 Agent 协作编排
 
-## 1. 项目定位
+## 1. 定位
 
-AgentTeams 是一个开源的协作式多 Agent 操作系统（Collaborative Multi-Agent OS），为多个 AI Agent 之间的协作提供声明式编排底座。
+AgentTeams 是一个开源的**协作式多 Agent 操作系统**：面向多个 AI Agent 协同工作的声明式编排平面。
 
-与传统的单 Agent 运行时不同，AgentTeams 解决的核心问题是：**当多个自主 Agent 需要像一个真实团队一样协作完成复杂任务时，如何编排它们之间的组织关系、通信权限、任务委派和共享状态？**
+与单 Agent 运行时不同，AgentTeams 回答一个命题：**当自主 Agent 必须在复杂工作上表现得像一个真正的团队时，如何编排组织结构、通信策略、委派与共享状态？**
 
-AgentTeams 借鉴了 Kubernetes 的核心设计哲学——声明式 API、Controller Reconcile Loop、CRD 扩展机制——构建了一套面向 AI Agent 团队的编排控制平面。用户通过 YAML 声明期望的团队结构，Controller 自动完成从基础设施配置到 Agent 间通信拓扑的全部编排工作。
+AgentTeams 借鉴 Kubernetes 的思想——声明式 API、控制器 reconcile 循环、CRD 风格扩展——为 Agent*团队*构建控制平面。你用 YAML 声明期望结构；控制器接线基础设施与通信拓扑。
 
 ## 2. 为什么需要多 Agent 协作编排
 
 ### 2.1 从单 Agent 到 Agent 团队
 
-当前 AI Agent 生态正在经历从"单兵作战"到"团队协作"的演进：
+生态正在从"单兵作战"走向"团队作战"：
 
-| 阶段 | 特征 | 代表方案 |
-|------|------|---------|
-| 单 Agent | 一个 Agent 独立完成任务 | OpenClaw, Cursor, Claude Code |
-| 多 Agent 编排 | 多个 Agent 各自独立运行，统一管理生命周期 | NVIDIA NemoClaw |
-| 多 Agent 协作 | 多个 Agent 组成团队，有组织结构、通信协议、共享状态 | **AgentTeams** |
+| 阶段 | 特征 | 例子 |
+|------|-----------------|----------|
+| 单 Agent | 一个 Agent 独自完成任务 | OpenClaw、Cursor、Claude Code |
+| 多 Agent 编排 | 多个 Agent 独立运行；统一生命周期 | NVIDIA NemoClaw |
+| 多 Agent**协作** | Agent 组成有结构、有协议、有共享状态的团队 | **AgentTeams** |
 
-单 Agent 的能力上限受限于单次对话的上下文窗口和工具集。当任务复杂度超过单 Agent 能力边界时，需要多个 Agent 分工协作。但"多个 Agent 同时运行"和"多个 Agent 协作"是两个本质不同的问题：
+单 Agent 的上限来自上下文与工具。越过那条边界就需要分工——但"多个 Agent 在运行" ≠ "多个 Agent 在协作"：
 
-- **编排（Orchestration）**：管理 Agent 的生命周期、资源分配、安全隔离——解决的是"如何运行多个 Agent"
-- **协作（Collaboration）**：定义 Agent 间的组织关系、通信权限、任务委派、状态共享——解决的是"多个 Agent 如何一起工作"
+- **编排（Orchestration）**：生命周期、资源、隔离——*如何运行*多个 Agent。
+- **协作（Collaboration）**：组织结构、谁可以给谁发消息、委派、共享状态——*它们如何一起工作*。
 
-AgentTeams 聚焦于后者，提供了一套完整的多 Agent 协作编排方案。
+AgentTeams 聚焦协作。
 
 ### 2.2 类比 Kubernetes 的演进路径
 
-这个演进过程与容器编排的历史高度相似：
+| 容器世界 | Agent 世界 | 回答的问题 |
+|----------------|------------|-------------------|
+| Docker | OpenClaw / Claude Code | 如何运行一个隔离单元 |
+| Docker Compose | NemoClaw（单 Agent 沙箱运维） | 如何管理生命周期与配置 |
+| **Kubernetes** | **AgentTeams** | 如何使多个单元组成连贯系统 |
 
-| 容器生态 | Agent 生态 | 解决的问题 |
-|---------|-----------|-----------|
-| Docker（容器运行时） | OpenClaw / Claude Code（Agent 运行时） | 如何运行一个隔离的工作单元 |
-| Docker Compose（单机编排） | NemoClaw（单 Agent 沙箱管理） | 如何管理运行时的生命周期和配置 |
-| **Kubernetes（集群编排）** | **AgentTeams（多 Agent 协作编排）** | 如何让多个工作单元组成一个协调的系统 |
-
-正如 Kubernetes 不替代 Docker，而是在其之上提供编排能力，AgentTeams 也不替代底层 Agent 运行时，而是在其之上提供协作编排能力。
+正如 Kubernetes 构建在 Docker 之上而不替代它，AgentTeams 构建在 Agent 运行时之上，并加上协作编排。
 
 ## 3. 核心架构
 
 ### 3.1 三层组织架构
 
-AgentTeams 采用映射真实企业团队结构的三层组织架构：
+AgentTeams 映射企业式组织结构：
 
 ```
-Admin（人类管理员）
+Admin (human administrator)
   │
-  ├── Manager（AI 协调者，可选部署）
-  │     ├── Team Leader A（特殊 Worker，管理团队内任务调度）
+  ├── Manager (AI coordinator; optional deployment pattern)
+  │     ├── Team Leader A (special Worker; in-team scheduling)
   │     │     ├── Worker A1
   │     │     └── Worker A2
   │     ├── Team Leader B
   │     │     └── Worker B1
-  │     └── Worker C（独立 Worker，不属于任何 Team）
+  │     └── Worker C (standalone Worker, not in a Team)
   │
-  └── Human Users（真人用户，按权限级别接入）
-        ├── Level 1: 等同 Admin，可与所有角色对话
-        ├── Level 2: 可与指定 Team 的 Leader + Workers 对话
-        └── Level 3: 只能与指定 Workers 对话
+  └── Human users (real people, permission tiers)
+        ├── Level 1: Admin-equivalent, can talk to all roles
+        ├── Level 2: Talk to configured Teams’ Leaders + Workers (+ standalone Workers)
+        └── Level 3: Talk only to configured standalone Workers
 ```
 
-关键设计原则：
+设计原则：
 
-- **Team Leader 本质是 Worker**：同样的容器、同样的运行时，只是 SOUL（人格定义）和 Skills 不同——类似 K8s 中 control plane node 和 worker node 运行相同的 kubelet
-- **Manager 不穿透 Team**：Manager 只与 Team Leader 通信，不直接联系团队内 Worker——实现了委派边界，防止 Manager 成为瓶颈
-- **通信权限声明式控制**：通过 `groupAllowFrom` 配置矩阵精确控制每个 Agent 接受谁的消息；必要时用 CRD 字段 **`channelPolicy`**（`groupAllowExtra` / `groupDenyExtra` / `dmAllowExtra` / `dmDenyExtra`）在默认值之上做增减
+- **Team Leader 仍是 Worker**：同一容器/运行时类别；不同的 SOUL 与技能——就像控制面节点与工作节点都运行 kubelet。
+- **Manager 不穿透 Team**：它只与 Team Leader 对话，不与团队内 Worker 对话——委派边界；避免瓶颈。
+- **声明式通信策略**：`groupAllowFrom` 门控 @mention；用 CRD**`channelPolicy`**（`groupAllowExtra` / `groupDenyExtra` / `dmAllowExtra` / `dmDenyExtra`）在默认值之上追加允许或拒绝。
 
-### 3.2 声明式资源模型（CRD 风格）
+### 3.2 声明式资源（CRD 风格）
 
-AgentTeams 定义了四种核心资源类型，全部采用 Kubernetes CRD 风格的声明式 YAML：
+四个核心 kind 共享 `apiVersion: agentteams.io/v1beta1`：
 
 ```
 apiVersion: agentteams.io/v1beta1
 ```
 
-#### Worker — 基本执行单元
+#### Worker — 执行单元
 
-**命名说明：** Python Worker 运行时当前名称为 **QwenPaw**（镜像 `agentteams-copaw-worker`）。早期文档曾使用 **CoPaw**，指同一运行时。
+**命名：** Python Worker 运行时是 **QwenPaw**（镜像 `agentteams-copaw-worker`）。旧材料有时把同一运行时称为 **CoPaw**。
 
 ```yaml
 apiVersion: agentteams.io/v1beta1
@@ -86,25 +84,25 @@ kind: Worker
 metadata:
   name: alice
 spec:
-  model: claude-sonnet-4-6           # 必填：LLM 模型
-  runtime: copaw                     # openclaw | copaw | hermes（Chart 默认镜像映射）
-  skills: [github-operations]        # 平台内置技能
-  mcpServers:                        # 通过 mcporter 调用的 MCP Server
+  model: claude-sonnet-4-6           # required: LLM model
+  runtime: copaw                     # openclaw | copaw | hermes (defaults with chart image mapping)
+  skills: [github-operations]        # platform built-in skills
+  mcpServers:                        # MCP servers callable via mcporter
     - name: github
       url: https://gateway.example.com/mcp-servers/github/mcp
-      transport: http                # "http"（默认）或 "sse"
-  package: file://./alice-pkg.zip    # 可选：file/http(s)/nacos/packages/…
-  soul: |                            # Agent 人格定义
-    你是一个专注于前端开发的工程师...
-  expose:                            # 通过 Gateway 暴露的端口
+      transport: http                # "http" (default) or "sse"
+  package: file://./alice-pkg.zip    # optional: file/http(s)/nacos/packages/…
+  soul: |                            # persona
+    You are a frontend-focused engineer...
+  expose:                            # ports published via Gateway
     - port: 3000
       protocol: http
-  # state: Running                   # 期望生命周期：Running | Sleeping | Stopped
-  # channelPolicy:                   # 可选：在默认 groupAllow/DM 策略上增减允许/拒绝列表
+  # state: Running                   # desired lifecycle: Running | Sleeping | Stopped
+  # channelPolicy:                   # optional: allow/deny extras on group + DM defaults
   #   groupAllowExtra: ["@human:domain"]
 ```
 
-每个 Worker 对应：一个 Docker 容器（或 K8s Pod）+ 一个 Matrix 通信账号 + 一块 MinIO 命名空间 + 一个 Gateway Consumer Token。未指定 `spec.image` 时由环境变量 `AGENTTEAMS_WORKER_IMAGE` / `AGENTTEAMS_COPAW_WORKER_IMAGE` / `AGENTTEAMS_HERMES_WORKER_IMAGE`（或 Chart 默认值）决定默认镜像。
+每个 Worker 映射到：一个 Docker 容器（或 K8s Pod）+ 一个 Matrix 账号 + 一个 MinIO 命名空间 + 一个 Gateway Consumer 令牌。省略 `spec.image` 时，默认值来自 `AGENTTEAMS_WORKER_IMAGE` / `AGENTTEAMS_COPAW_WORKER_IMAGE` / `AGENTTEAMS_HERMES_WORKER_IMAGE`（或 chart 默认值）。
 
 #### Team — 协作单元
 
@@ -114,10 +112,10 @@ kind: Team
 metadata:
   name: frontend-team
 spec:
-  description: "前端开发团队"
-  peerMentions: true                  # 默认 true：团队 Worker 可在群 Room 互相 @mention
-  # channelPolicy: …                  # 可选：团队级通信策略覆盖（字段同 Worker）
-  # admin:                             # 可选：作为团队管理员的 Human 资源
+  description: "Frontend development team"
+  peerMentions: true                  # default true: Workers may @mention each other in team rooms
+  # channelPolicy: …                  # optional team-wide overrides (same shape as Worker)
+  # admin:                             # optional Human resource used as Team Admin
   #   name: pm-zhang
   #   matrixUserId: "@pm:domain"
   heartbeatEvery: 10m
@@ -130,20 +128,18 @@ spec:
       role: worker
 ```
 
-`frontend-lead`、`alice`、`bob` 都是已存在的 Worker CR。它们的模型、
-runtime、skills、MCP、镜像、资源、通信策略和生命周期均保留在
-`Worker.spec`；Team 只持有成员关系与协作上下文。
+`frontend-lead`、`alice` 与 `bob` 是既有 Worker CR。它们的模型、运行时、技能、MCP、镜像、资源、通道策略与生命周期设置都保留在 `Worker.spec`；Team 只持有成员关系与协作上下文。
 
-Team 创建时，Controller 自动编排以下拓扑（若配置了 `spec.admin`，则「Admin」指 **Team Admin**；否则为全局 Admin）：
+创建 Team 时，控制器接线此拓扑（若设置了 `spec.admin`，"Admin" 指 **Team Admin**；否则指**全局 Admin**）：
 
 ```
-Leader Room:  Manager + Global Admin + Leader    ← Manager 仅与 Leader 对接
-Team Room:    Leader + Admin + W1 + W2 + …       ← Manager 不在此 Room（委派边界）
-Worker Room:  Leader + Admin + Worker             ← Leader 与单个成员的私聊
-Leader DM:    Admin ↔ Leader                     ← 团队管理与对齐
+Leader Room:  Manager + Global Admin + Leader    ← Manager talks only to Leader
+Team Room:    Leader + Admin + W1 + W2 + …       ← Manager is NOT here (delegation boundary)
+Worker Room:  Leader + Admin + Worker             ← private Leader↔member channel
+Leader DM:    Admin ↔ Leader                     ← team alignment / management
 ```
 
-关键：**Team Room 不包含 Manager**，任务在团队内由 Leader 分解；全局 Admin / Team Admin 是否进入各 Room 由 Humans 与 `spec.admin` 共同决定。
+**Team Room 排除 Manager**；Leader 在团队内部分解工作。哪些人类加入哪些房间，遵循 Human 权限与 `spec.admin`。
 
 #### Human — 真人用户
 
@@ -151,31 +147,31 @@ Leader DM:    Admin ↔ Leader                     ← 团队管理与对齐
 apiVersion: agentteams.io/v1beta1
 kind: Human
 metadata:
-  name: zhangsan
+  name: john
 spec:
-  displayName: "张三"
-  email: zhangsan@example.com
-  permissionLevel: 2                  # 1=Admin, 2=Team, 3=Worker
+  displayName: "John Doe"
+  email: john@example.com
+  permissionLevel: 2                  # 1=Admin-equiv, 2=Team-scoped, 3=Worker-only
   accessibleTeams: [frontend-team]
   accessibleWorkers: [devops-alice]
 ```
 
-#### Manager — 协调 Agent（CRD）
+#### Manager — 协调器（CR）
 
 ```yaml
 apiVersion: agentteams.io/v1beta1
 kind: Manager
 metadata:
-  name: default                       # 嵌入式部署常见主实例名
+  name: default                       # common name for the primary instance in embedded installs
 spec:
-  model: claude-sonnet-4-6            # 必填
+  model: claude-sonnet-4-6            # required
   runtime: openclaw                   # openclaw | qwenpaw
-  # soul: | …                         # 可选：覆盖 SOUL.md
-  # agents: | …                       # 可选：覆盖 AGENTS.md
+  # soul: | …                         # optional SOUL.md override
+  # agents: | …                       # optional AGENTS.md override
   mcpServers:
     - name: github
       url: https://gateway.example.com/mcp-servers/github/mcp
-  # package: https://…/mgr.zip       # 可选：与 Worker 相同的包 URI 语义
+  # package: https://…/mgr.zip       # optional; same URI semantics as Worker
   config:
     heartbeatInterval: 15m
     workerIdleTimeout: 720m
@@ -183,397 +179,334 @@ spec:
   # state: Running                    # Running | Sleeping | Stopped
 ```
 
-`Manager` 与 `Worker`/`Team`/`Human` 同属 `agentteams.io/v1beta1`，由同一套 Controller Reconcile。**是否依赖「对话式 Manager Agent」取决于你的使用方式**：只用 `agt` CLI / REST API / YAML 编排时，可以不通过聊天入口；默认一键安装仍会拉起 Manager 容器，其期望配置可通过该 CR 声明并持续调和。
+`Manager` 与 `Worker` / `Team` / `Human` 同 API 组/版本，由同一控制器 reconcile。**你"是否"需要与 Manager Agent 对话是用法选择**：CLI / REST / 纯 YAML 工作流绕开对话入口；默认安装仍运行一个 Manager 容器，其期望配置可经此 CR 声明并 reconcile。
 
-**kubectl 短名（安装 CRD 后）**：`wk`、`tm`、`hm`、`mgr`。
+**kubectl 短名**（CRD 安装后）：`wk`、`tm`、`hm`、`mgr`。
 
 ### 3.3 Controller 架构
 
-AgentTeams Controller 采用标准的 Kubernetes Controller 模式。
+AgentTeams 遵循标准 Kubernetes 控制器模式。
 
-**声明式入口说明**：宿主机上的 `install/agentteams-apply.sh` 将 YAML 拷入 Manager 容器并执行 `agt apply -f`。CLI **按 YAML 文档顺序**依次调用 REST API（`POST`/`PUT` `/api/v1/workers|teams|humans|managers`），**不会**自动按依赖拓扑排序；多文档文件中应先写被依赖资源（例如先 `Team` 再引用 `accessibleTeams` 的 `Human`）。当前 CLI **未实现** `--prune` / `--dry-run`（与个别安装脚本注释可能不一致，以 CLI 为准）。
+**声明式 apply**：在宿主机上，`install/agentteams-apply.sh` 把 YAML 拷入 Manager 容器并执行 `agt apply -f`。CLI **按 YAML 文档顺序**发起 REST 调用（`POST`/`PUT` `/api/v1/workers`、`/teams`、`/humans`、`/managers`），**不**对依赖做拓扑排序——被依赖的资源放前面（例如引用 `accessibleTeams` 的 `Human` 之前先放 `Team`）。当前 CLI **未实现 `--prune` 与 `--dry-run`**（可能与某些安装脚本的注释不一致；以 CLI 为准）。
 
 ```
-YAML 资源声明
+Declarative YAML
     ↓ agt apply
-kine (etcd 兼容层, SQLite 后端) / 原生 K8s etcd
-    ↓ Informer Watch
-Controller Runtime
-    ↓ Reconcile Loop
+kine (etcd-compatible, SQLite backend) / native K8s etcd
+    ↓ Informer watch
+controller-runtime
+    ↓ Reconcile loop
 ┌─────────────────────────────────────────────┐
-│  Provisioner（基础设施配置）                   │
-│  - Matrix 账号注册 & Room 创建               │
-│  - MinIO 用户 & Bucket 配置                  │
-│  - Higress Gateway Consumer & Route 配置     │
-│  - K8s ServiceAccount 创建（incluster 模式）  │
+│ Provisioner                                 │
+│ - Matrix registration & rooms               │
+│ - MinIO user & bucket                       │
+│ - Higress Consumer & routes                 │
+│ - K8s ServiceAccount (incluster)            │
 ├─────────────────────────────────────────────┤
-│  Deployer（配置部署）                         │
-│  - Package 解析（file/http(s)/nacos/packages/…） │
-│  - openclaw.json 生成（含通信权限矩阵）        │
-│  - SOUL.md / AGENTS.md / Skills 推送         │
-│  - 容器启动 / Pod 创建                        │
+│ Deployer                                    │
+│ - Package fetch (file/http(s)/nacos/packages/…) │
+│ - openclaw.json (incl. comms matrix)        │
+│ - Push SOUL.md / AGENTS.md / skills         │
+│ - Start container / create Pod              │
 ├─────────────────────────────────────────────┤
-│  Worker Backend 抽象层                        │
-│  - Docker Backend（embedded 模式）            │
-│  - K8s Backend（incluster 模式）              │
-│  - Cloud Backend（云上托管模式）               │
+│ Worker backend abstraction                  │
+│ - Docker (embedded)                         │
+│ - Kubernetes (incluster)                    │
+│ - Cloud-hosted                              │
 └─────────────────────────────────────────────┘
 ```
 
-支持两种部署模式：
+部署模式：
 
-| 模式 | 状态存储 | Worker 运行 | 适用场景 |
-|------|---------|------------|---------|
-| Embedded | kine + SQLite | Docker 容器 | 开发者本地、小团队 |
-| Incluster | K8s 原生 etcd | K8s Pod | 企业级、云上部署 |
+| 模式 | 状态存储 | Worker 运行形态 | 典型用途 |
+|------|-------------|----------------|-------------|
+| Embedded | kine + SQLite | Docker 容器 | 开发 / 小团队 |
+| Incluster | K8s etcd | Pod | 企业 / 云上 |
 
-**Embedded 与 Helm（交付形态）：**
+**Embedded 与 Helm（打包）：**
 
-- **Embedded**：`install/agentteams-install.sh` 拉起 **`agentteams-controller`**（镜像内嵌 Higress、Tuwunel、MinIO、Element Web 与 controller 二进制），再由 controller 在同一 Docker/Podman 宿主机上创建 **`agentteams-manager`** 与各 **Worker** 容器。
-- **Helm / in-cluster**：使用仓库内 [`helm/agentteams`](../../../helm/agentteams) Chart，将网关、Homeserver、存储、**agentteams-controller** 与由 CR 驱动的 Manager/Worker Pod 部署为 Kubernetes 工作负载。CRD 语义与 Embedded 一致，仅后端驱动不同。
+- **Embedded**——`install/agentteams-install.sh` 启动 **`agentteams-controller`**（镜像打包了 Higress、Tuwunel、MinIO、Element Web 与控制器二进制）。随后控制器把 **`agentteams-manager`** 与每个 **Worker** 作为独立容器创建在相同 Docker/Podman 宿主上。
+- **Helm / incluster**——Chart [`helm/agentteams`](../../../helm/agentteams) 把相同逻辑组件以 Kubernetes 工作负载部署（网关、homeserver、存储、controller Deployment，以及由 CR 生成的 Manager/Worker Pod）。CRD 语义与 embedded 一致；只有后端驱动不同。
 
-两种模式共享同一套 Reconciler 逻辑，通过 Worker Backend 抽象层适配不同的基础设施。这与 Kubernetes 通过 CRI/CSI/CNI 抽象底层运行时的设计思路一致。
+两种模式共享 reconciler；后端镜像了 Kubernetes 抽象 CRI/CSI/CNI 的方式。
 
 ### 3.4 通信层：Matrix 协议
 
-AgentTeams 选择 Matrix 作为 Agent 间通信协议，而非自建 RPC 框架：
+AgentTeams 用 Matrix，而不是自研 RPC 总线：
 
-| 选型考量 | Matrix 的优势 |
-|---------|-------------|
-| 透明性 | 所有 Agent 间通信在 Matrix Room 中可见，人类可实时旁观 |
-| Human-in-the-Loop | 人类用户使用同一个 IM 客户端，随时 @mention 任何 Agent 介入 |
-| 去中心化 | Matrix 是去中心化开放协议，无供应商锁定 |
-| 持久化 | 消息天然持久化，提供完整的审计轨迹 |
-| 生态 | Element、FluffyChat 等成熟客户端，移动端零配置接入 |
+| 关注点 | 为什么选 Matrix |
+|---------|------------|
+| 透明性 | Agent 流量在房间里可见；人类可实时旁观 |
+| 人类介入 | 同一 IM 客户端；随时 @mention 任意 Agent |
+| 开放协议 | 联邦设计；更少锁定 |
+| 审计 | 持久历史 |
+| 客户端 | Element、FluffyChat、移动端 |
 
-内置 Tuwunel 作为高性能 Matrix Homeserver，单容器部署，无需外部依赖。
+Tuwunel 作为高性能 homeserver 打包，供单容器安装使用。
 
 ### 3.5 基于 Higress 的 LLM/MCP 安全访问模型
 
-AgentTeams 的安全层由 [Higress](https://github.com/alibaba/higress) 提供——Higress 是一个 **CNCF Sandbox 项目**，基于 Envoy 构建的云原生 AI Gateway，原生支持 LLM 代理、MCP Server 托管和细粒度的消费者鉴权。AgentTeams 与 Higress 的深度集成，使得多 Agent 场景下的 LLM 和 MCP 访问安全成为一等公民。
+安全层是 **[Higress](https://github.com/alibaba/higress)**——一个**CNCF Sandbox** 的基于 Envoy 的 AI 网关，提供 LLM 代理、MCP 托管与按 Consumer 鉴权。与 AgentTeams 结合后，对每个 Agent 的 LLM 与 MCP 访问都可以策略驱动。
 
-#### 核心安全原则：凭证永不下发到 Agent
+#### 核心安全原则：真实密钥绝不下发到 Agent
 
 ```
-Worker（仅持有 Consumer Token: GatewayKey）
+Worker (holds only Consumer Token / GatewayKey)
     → Higress AI Gateway
-        ├── key-auth WASM 插件验证 Consumer Token
-        ├── 检查该 Consumer 是否在目标 Route 的 allowedConsumers 列表中
-        ├── 注入真实凭证（API Key / GitHub PAT / OAuth Token）
-        └── 代理请求到上游服务
-            ├── LLM API（OpenAI / Anthropic / 通义千问 等）
-            ├── MCP Server（GitHub / Jira / 自定义 等）
-            └── 其他外部服务
+        ├── key-auth WASM validates token
+        ├── Consumer must be on Route allowedConsumers
+        ├── inject real credential (API key / PAT / OAuth)
+        └── proxy upstream
+            ├── LLM APIs
+            ├── MCP servers (GitHub, Jira, …)
+            └── other services
 ```
 
-这个模型的核心思想是：**真实凭证只存在于 Gateway 内部，Agent 永远只持有一个可随时吊销的 Consumer Token**。即使 Agent 被攻破，攻击者也无法获取任何外部服务的真实凭证。
+**真实凭据驻留在网关**；Agent 只持有可吊销的 Consumer 令牌。
 
-#### LLM 访问安全
+#### LLM 访问路径
 
-每个 Worker 创建时，Controller 自动完成以下编排：
+对每个 Worker，控制器通常：
 
-1. **生成 Consumer Token**：为 Worker 生成 32 字节随机 GatewayKey，作为唯一身份凭证
-2. **创建 Gateway Consumer**：在 Higress 注册 Consumer（`worker-{name}`），绑定 key-auth BEARER 凭证
-3. **授权 AI Route**：将该 Consumer 添加到所有 AI Route 的 `allowedConsumers` 列表
-
-```
-Worker 发起 LLM 请求:
-    POST http://aigw-local.agentteams.io:8080/v1/chat/completions
-    Authorization: Bearer {GatewayKey}
-        ↓
-Higress Gateway:
-    1. key-auth WASM 插件验证 GatewayKey → 识别为 Consumer "worker-alice"
-    2. 检查 "worker-alice" 是否在该 AI Route 的 allowedConsumers 中
-    3. 替换 Authorization header 为真实 LLM API Key
-    4. 代理请求到上游 LLM Provider
-```
-
-Worker 的 `openclaw.json` 中配置的 API endpoint 指向 Gateway 地址，而非真实的 LLM Provider 地址。Worker 完全不知道真实 API Key 的存在。
-
-#### MCP Server 安全访问
-
-MCP（Model Context Protocol）Server 为 Agent 提供工具调用能力（如 GitHub 操作、数据库查询等）。在多 Agent 场景下，MCP Server 的凭证管理尤为关键——多个 Worker 可能需要访问同一个 GitHub 仓库，但不应该每个 Worker 都持有 GitHub PAT。
-
-AgentTeams 通过 Higress 实现了 MCP Server 的集中托管和安全代理：
+1. 生成 Consumer 令牌（GatewayKey）。
+2. 以 key-auth 在 Higress 注册 `worker-{name}`。
+3. 把该 Consumer 加入 AI Route 的 `allowedConsumers`。
 
 ```
-MCP Server 注册流程:
-    1. 管理员在 Higress 注册 MCP Server（配置真实凭证，如 GitHub PAT）
-    2. Higress 托管 MCP Server，对外暴露标准 MCP 端点
-    3. Controller 将需要访问该 MCP Server 的 Worker Consumer 添加到 allowedConsumers
-    4. 为 Worker 生成 mcporter 配置，指向 Gateway 的 MCP 端点
-
-Worker 调用 MCP 工具:
-    POST http://aigw-local.agentteams.io:8080/mcp-servers/mcp-github/mcp
-    Authorization: Bearer {GatewayKey}
-        ↓
-    Higress Gateway:
-        1. 验证 Consumer Token
-        2. 检查该 Consumer 是否被授权访问 "github" MCP Server
-        3. 注入真实 GitHub PAT
-        4. 代理请求到 MCP Server 实现
+POST http://aigw-local.agentteams.io:8080/v1/chat/completions
+Authorization: Bearer {GatewayKey}
 ```
 
-#### 细粒度权限控制与动态吊销
+Worker 的 `openclaw.json` 指向网关，而非裸 provider URL。
 
-Higress 的 Consumer + allowedConsumers 机制为 AgentTeams 提供了细粒度的权限控制：
-
-| 控制维度 | 实现方式 | 示例 |
-|---------|---------|------|
-| Worker 级 LLM 访问 | AI Route 的 allowedConsumers | Worker A 可用 GPT-4，Worker B 只能用 GPT-3.5 |
-| Worker 级 MCP 访问 | MCP Server 的 allowedConsumers | Worker A 可访问 GitHub，Worker B 不可以 |
-| 动态权限变更 | 修改 allowedConsumers 列表 | Manager 可实时授予/吊销 Worker 的 MCP 访问权 |
-| 即时吊销 | 从 allowedConsumers 移除 | 无需轮换凭证，1-2 秒内生效（WASM 插件热同步） |
-
-这个权限模型类似 K8s 中 ServiceAccount + RBAC 的设计——Pod 通过 ServiceAccount Token 访问 API Server，RBAC 策略控制其可访问的资源范围。在 AgentTeams 中，Consumer Token 是 ServiceAccount Token，allowedConsumers 是 RBAC Policy。
-
-#### 与 NemoClaw 安全模型的对比
-
-| 安全能力 | NemoClaw | AgentTeams + Higress |
-|---------|----------|-----------------|
-| 凭证隔离 | ✅ OpenShell 拦截推理请求，Agent 不见凭证 | ✅ Higress Gateway 代理，Worker 不见凭证 |
-| MCP Server 安全 | ❌ 无 MCP 集中管理 | ✅ Higress 托管 MCP Server，统一鉴权 |
-| 多 Agent 权限差异化 | ❌ 每个 Sandbox 独立配置 | ✅ 同一 Gateway 下细粒度 Consumer 权限 |
-| 动态权限变更 | ❌ 需重建 Sandbox | ✅ 修改 allowedConsumers，秒级生效 |
-| 沙箱级隔离 | ✅ Landlock + seccomp + netns | ⚠️ Docker 容器隔离（可对接 NemoClaw 增强） |
-| 网络策略 | ✅ 细粒度 egress 白名单 | ⚠️ Gateway 路由级控制 |
-
-两者在安全层面同样互补：NemoClaw 擅长单 Agent 的沙箱级隔离（OS 层），Higress 擅长多 Agent 场景下的 API 访问控制和凭证管理（网络层）。
-
-#### 为什么选择 Higress
-
-作为 CNCF Sandbox 项目，Higress 为 AgentTeams 带来了以下关键能力：
-
-- **AI-Native Gateway**：原生支持 LLM 代理（多 Provider 路由、Token 限流、Fallback）和 MCP Server 托管，而非通过通用 API Gateway 的插件机制勉强实现
-- **WASM 插件体系**：key-auth 等安全插件以 WASM 运行，热更新无需重启，权限变更秒级生效
-- **Envoy 内核**：继承 Envoy 的高性能和可观测性，与 CNCF 生态（Prometheus、OpenTelemetry）天然集成
-- **多后端支持**：同时支持 Nacos、K8s Service Discovery、DNS 等服务发现方式，适配 embedded 和 incluster 两种部署模式
-
-### 3.6 共享状态与文件系统
+#### MCP 访问路径
 
 ```
-MinIO (HTTP 对象存储)
-├── agents/                    # 每个 Worker 的配置空间
+POST http://aigw-local.agentteams.io:8080/mcp-servers/mcp-github/mcp
+Authorization: Bearer {GatewayKey}
+```
+
+集中 MCP 注册 + 按 Consumer 的 `allowedConsumers` + 指向网关端点的 mcporter 配置。对外可调用的端点与端口完整列表见 [Higress Gateway API 参考](../../usage/higress-gateway-api.md)。
+
+#### 细粒度控制
+
+| 维度 | 机制 | 例子 |
+|-----------|-----------|---------|
+| 按 Worker 的 LLM | AI Route allowedConsumers | Worker A：GPT-4；Worker B：仅 GPT-3.5 |
+| 按 Worker 的 MCP | MCP allowedConsumers | Worker A：GitHub MCP；Worker B：无 |
+| 运行时变更 | 编辑 allowedConsumers | 吊销而不轮换上游密钥 |
+| 快速吊销 | 从列表移除 | WASM 热重载（约秒级） |
+
+类比 ServiceAccount + RBAC：Consumer 令牌 ≈ SA 令牌；`allowedConsumers` ≈ 策略。
+
+#### 与 NemoClaw 对比（安全角度）
+
+| 能力 | NemoClaw | AgentTeams + Higress |
+|------------|----------|------------------|
+| 凭据隔离 | OpenShell 拦截推理 | 网关代理；Worker 永不看到 API key |
+| MCP 集中化 | 未内置 | Higress 托管 MCP + 统一鉴权 |
+| 按 Agent 差异化 | 按沙箱配置 | 共享网关、按 Consumer 路由 |
+| 动态策略 | 常需重建沙箱 | 编辑 allowedConsumers；快速生效 |
+| OS 沙箱 | Landlock + seccomp + netns | 当前为 Docker（可与 NemoClaw 组合） |
+| 出口策略 | 精细白名单 | 网关路由层 |
+
+互补：NemoClaw 擅长 OS 级单 Agent 隔离；Higress 擅长多 Agent API/MCP 策略。
+
+#### 为什么选 Higress
+
+- AI 原生的网关（多 provider LLM 路由、限流、回退；MCP 托管）。
+- WASM 插件（key-auth 热重载）。
+- Envoy 内核（性能、Prometheus/OTel）。
+- 发现模式（Nacos、K8s、DNS），embedded 与 incluster 皆可。
+
+### 3.6 共享状态与 MinIO
+
+```
+MinIO (S3-compatible)
+├── agents/                    # Per-Agent config space
 │   ├── alice/
-│   │   ├── SOUL.md           # Agent 人格
-│   │   ├── openclaw.json     # 运行时配置
-│   │   └── skills/           # 技能定义
+│   │   ├── SOUL.md
+│   │   ├── openclaw.json
+│   │   └── skills/
 │   └── bob/
-├── shared/                    # 共享空间
-│   ├── tasks/                # 任务规格、元数据、结果
+├── shared/
+│   ├── tasks/
 │   │   └── task-{id}/
-│   │       ├── meta.json     # 任务元数据
-│   │       ├── spec.md       # 任务规格（Manager/Leader 编写）
-│   │       └── result.md     # 任务结果（Worker 编写）
-│   └── knowledge/            # 共享知识库
-└── workers/                   # Worker 工作产物
+│   │       ├── meta.json
+│   │       ├── spec.md       # Manager / Leader
+│   │       └── result.md     # Workers
+│   └── knowledge/
+└── workers/                   # Artifacts
 ```
 
-Worker 是无状态的——所有配置从 MinIO 拉取，可以随时销毁重建而不丢失状态。这与 K8s 中 Pod 无状态 + PV/PVC 持久化的设计理念一致。
+Worker 在容器边缘无状态：配置从对象存储拉取；容器可像背后带共享持久化的无状态 Pod 一样重建。
 
 ## 4. 多 Agent 协作流程
 
-### 4.1 Team 内任务协作
+### 4.1 Team 内部
 
 ```
-Admin: "完成用户登录功能的前后端开发"
+Admin: "Ship login feature front + back"
   ↓
-Manager: 识别任务涉及前端团队，@mention Team Leader
+Manager: routes to frontend team, @mentions Team Leader
   ↓
-Team Leader: 分解任务为子任务
-  ├── 子任务 1: "实现登录 API" → @mention Worker A（后端）
-  ├── 子任务 2: "实现登录页面" → @mention Worker B（前端）
-  └── 子任务 3: "编写集成测试" → 等待 1、2 完成后分配
+Team Leader: splits work
+  ├── Subtask 1: login API → @ Worker A
+  ├── Subtask 2: login UI → @ Worker B
+  └── Subtask 3: integration tests → after 1+2
   ↓
-Worker A: 完成后端 API，在 Team Room 汇报 → @mention Leader
-Worker B: 完成前端页面，在 Team Room 汇报 → @mention Leader
+Workers report in Team Room; Leader aggregates
   ↓
-Team Leader: 确认 1、2 完成，分配子任务 3 → @mention Worker A
+Leader @mentions Manager with summary
   ↓
-Worker A: 完成集成测试，汇报
-  ↓
-Team Leader: 汇总结果，@mention Manager
-  ↓
-Manager: 通知 Admin 任务完成
+Manager notifies Admin
 ```
 
-全程所有对话在 Matrix Room 中可见，Admin 可以随时介入任何环节。
+一切留在 Matrix 房间——Admin 可随时介入。
 
 ### 4.2 Human-in-the-Loop 介入
 
 ```
 [Team Room]
-Leader: @alice 请实现密码强度校验，规则是至少 8 位
-Alice: 收到，开始实现...
+Leader: @alice implement password rules (min 8 chars)
+Alice: On it...
 
-[Admin 在 Team Room 中观察到，认为规则需要调整]
-Admin: @alice 等一下，密码规则改为至少 12 位，必须包含大小写和特殊字符
-Alice: 收到，已更新规则
-Leader: 好的，我更新一下任务规格
+Admin observes and intervenes:
+Admin: @alice hold on—min 12 chars, mixed case + symbols
+Alice: Updated.
+Leader: I'll refresh the task spec.
 ```
 
-没有隐藏的 Agent-to-Agent 调用，所有决策过程透明可审计。
+无隐藏的 Agent 间旁路——按设计可审计。
 
 ## 5. 与 NVIDIA NemoClaw 的对比
 
 ### 5.1 定位差异
 
 | 维度 | NemoClaw | AgentTeams |
-|------|----------|--------|
-| 核心定位 | Agent 运行时安全沙箱 | 多 Agent 协作编排底座 |
-| 解决的问题 | 如何安全地运行单个 Agent | 如何让多个 Agent 组成团队协作 |
-| 架构层次 | 单 Agent per Sandbox | Manager → Team Leader → Workers 三层组织 |
-| Agent 间关系 | 完全隔离，无通信 | 声明式通信权限矩阵，结构化协作 |
-| 状态共享 | 每个 Sandbox 独立工作空间 | MinIO 共享文件系统 + 任务状态流转 |
-| 人类参与 | 单人操作单 Agent | 多人多角色，3 级权限体系 |
-| 配置模型 | Blueprint YAML + 交互式向导 | K8s CRD 风格声明式 YAML + Controller Reconcile |
+|-----------|----------|--------|
+| 焦点 | 单 Agent 沙箱安全 | 多 Agent**协作**编排 |
+| 问题 | 安全地运行一个 Agent | 多个 Agent 组成有结构的团队 |
+| 形态 | 每沙箱一个 Agent | Manager → Leader → Workers |
+| Agent 之间 | 隔离 | 声明式通信矩阵 + 房间 |
+| 共享状态 | 每沙箱工作区 | MinIO + 任务流 |
+| 人类 | 单操作者 | 多角色、三级 Human CRD |
+| 配置 | 蓝图 YAML + 向导 | CRD 风格 YAML + reconcile |
 
-### 5.2 架构对比
+### 5.2 架构速写
 
-**NemoClaw 架构：**
-
-```
-NemoClaw CLI
-    ↓ onboard
-OpenShell Runtime
-    ├── Sandbox A (Agent: OpenClaw)  ← 完全隔离
-    ├── Sandbox B (Agent: Hermes)    ← 完全隔离
-    └── Sandbox C (Agent: OpenClaw)  ← 完全隔离
-    
-    Sandbox 之间：无通信、无共享状态、无协调机
-```
-
-NemoClaw 的核心价值在于安全隔离：Landlock 文件系统隔离、seccomp 系统调用过滤、网络命名空间隔离、凭证路由（Agent 不接触真实 API Key）。每个 Sandbox 是一个独立的安全域，运行一个 Agent 实例。
-
-**AgentTeams 架构：**
+**NemoClaw**
 
 ```
-AgentTeams Controller (Reconcile Loop)
-    ↓ 声明式编排
-┌─────────────────────────────────────────────────┐
-│  通信层 (Matrix Protocol)                        │
-│  ┌─────────┐  ┌──────────┐  ┌──────────────┐   │
-│  │ Manager │←→│ Leader A │←→│ Worker A1/A2 │   │
-│  │         │  └──────────┘  └──────────────┘   │
-│  │         │  ┌──────────┐  ┌──────────────┐   │
-│  │         │←→│ Leader B │←→│ Worker B1    │   │
-│  │         │  └──────────┘  └──────────────┘   │
-│  │         │←→ Worker C (独立)                  │
-│  └─────────┘                                    │
-│  共享状态层 (MinIO)                               │
-│  安全层 (Higress AI Gateway, CNCF Sandbox)        │
-│  人类接入层 (Matrix Rooms, 3 级权限)              │
-└─────────────────────────────────────────────────┘
+NemoClaw CLI → onboard → OpenShell
+    ├── Sandbox A (OpenClaw)
+    ├── Sandbox B (Hermes)
+    └── Sandbox C (OpenClaw)
+No cross-sandbox chat, no shared coordinator.
+```
+
+**AgentTeams**
+
+```
+AgentTeams Controller
+    ↓
+Matrix: Manager ↔ Leaders ↔ Workers; standalone Workers ↔ Manager
+MinIO shared state
+Higress security
+Human tiers in the same rooms
 ```
 
 ### 5.3 能力矩阵
 
 | 能力 | NemoClaw | AgentTeams |
-|------|----------|--------|
-| Agent 生命周期管理 | ✅ Sandbox create/destroy/recover | ✅ Controller Reconcile + 自动容器管理 |
-| 安全沙箱隔离 | ✅ Landlock + seccomp + netns | ⚠️ Docker 容器隔离（可对接 NemoClaw 增强） |
-| LLM 访问安全 | ✅ OpenShell 拦截，Agent 不见凭证 | ✅ Higress (CNCF) Gateway 代理，Consumer Token 鉴权，Worker 不见凭证 |
-| MCP Server 安全 | ❌ 无集中管理 | ✅ Higress 托管 MCP Server，per-Worker allowedConsumers 细粒度授权 |
-| 动态权限管理 | ❌ 需重建 Sandbox | ✅ 修改 allowedConsumers，WASM 插件热同步，秒级生效 |
-| 网络策略 | ✅ 细粒度 egress 控制 + 预设策略 | ⚠️ Gateway 路由级控制 |
-| Agent 间通信 | ❌ 无 | ✅ Matrix 协议，结构化 Room 拓扑 |
-| 任务委派与分解 | ❌ 无 | ✅ Manager → Leader → Worker 三级委派 |
-| 共享状态 | ❌ 每个 Sandbox 独立 | ✅ MinIO 共享文件系统 + 任务状态机 |
-| 团队组织结构 | ❌ 无 | ✅ Team CRD，声明式定义 |
-| 多人协作 | ❌ 单人操作 | ✅ Human CRD，3 级权限 |
-| Human-in-the-Loop | ❌ 仅 CLI 交互 | ✅ Matrix Room 实时旁观与介入 |
-| 声明式配置 | ⚠️ Blueprint YAML（单 Agent） | ✅ K8s CRD 风格（Worker/Team/Human/Manager） |
-| K8s 原生部署 | ❌ | ✅ incluster 模式，Helm 安装 |
-| 多 Agent 运行时 | ✅ OpenClaw, Hermes | ✅ OpenClaw, QwenPaw, Hermes, ZeroClaw, NanoClaw |
+|------------|----------|--------|
+| 生命周期 | 沙箱 CRUD/恢复 | reconcile + 容器/Pod |
+| OS 沙箱 | 强 | Docker（NemoClaw 可选） |
+| LLM 密钥 | OpenShell 拦截 | 网关 + Consumer 令牌 |
+| MCP | 未集中 | Higress MCP + allowedConsumers |
+| 动态策略 | 常重建沙箱 | 编辑 allowedConsumers |
+| Agent 间 | 无 | Matrix + 房间拓扑 |
+| 委派 | 无 | Manager → Leader → Worker |
+| Teams / Humans | 无 | Team + Human CRD |
+| 声明式 | 单 Agent 蓝图 | Worker/Team/Human/Manager |
+| K8s 原生部署 | 否 | incluster + Helm |
+| 运行时 | OpenClaw、Hermes、… | OpenClaw、QwenPaw、Hermes、ZeroClaw*、NanoClaw* |
 
-### 5.4 互补关系与未来集成
+\* 路线图 / 轻量选项（见项目 README）。
 
-NemoClaw 和 AgentTeams 不是竞争关系，而是互补关系——它们解决的是 Agent 生态中不同层次的问题：
+### 5.4 互补的未来
 
 ```
-┌─────────────────────────────────────────────┐
-│  AgentTeams（协作编排层）                         │
-│  组织结构 / 通信权限 / 任务委派 / 共享状态      │
-├─────────────────────────────────────────────┤
-│  NemoClaw（安全运行时层）                      │
-│  沙箱隔离 / 推理路由 / 网络策略 / 凭证管理      │
-├─────────────────────────────────────────────┤
-│  OpenClaw / QwenPaw / Hermes（Agent 运行时）   │
-│  LLM 交互 / 工具调用 / 技能执行                │
-└─────────────────────────────────────────────┘
+┌────────────────────────────────────┐
+│ AgentTeams — collaboration layer        │
+│ org / comms / delegation / state  │
+├────────────────────────────────────┤
+│ NemoClaw — sandbox runtime layer    │
+│ isolation / routing / policy        │
+├────────────────────────────────────┤
+│ OpenClaw / QwenPaw / … — Agent engines│
+└────────────────────────────────────┘
 ```
 
-AgentTeams 的 Worker Backend 抽象层设计使其可以对接不同的底层运行基础设施。未来 AgentTeams 可以支持 NemoClaw 作为 Worker 的底层运行时，将 NemoClaw 的安全沙箱能力与 AgentTeams 的协作编排能力结合：
+Worker 后端未来可以在每个 Worker 之下接入 NemoClaw——AgentTeams 编排团队；NemoClaw 加固每个单元——就像 Kubernetes 与任意 CRI 运行时。
 
-- AgentTeams 负责：团队组织、通信编排、任务委派、共享状态
-- NemoClaw 负责：每个 Worker 的沙箱隔离、推理路由、网络策略
+## 6. 技术栈
 
-这类似于 Kubernetes 通过 CRI 接口对接不同的容器运行时（containerd、CRI-O）——编排层不关心底层运行时的具体实现，只关心工作负载的声明式管理。
+| 组件 | 选型 | 注记 |
+|-------|--------|------|
+| 控制器 | Go + controller-runtime | 标准 kube builder 风格 |
+| 状态 | kine（SQLite）/ etcd | embedded 与 incluster |
+| 通信 | Matrix（Tuwunel） | 自托管 |
+| IM UI | Element Web | 浏览器客户端 |
+| 文件 | MinIO | S3 API |
+| AI 网关 | Higress（CNCF Sandbox） | LLM + MCP + Consumer 鉴权 |
+| 运行时 | OpenClaw、QwenPaw、… | 从重量级到轻量级镜像 |
+| 技能 | skills.sh 生态 | 大型社区目录 |
+| MCP CLI | mcporter | 经网关调用 |
 
-## 6. 技术栈与生态
+## 7. 与 Kubernetes 的对应关系
 
-| 组件 | 技术选型 | 说明 |
-|------|---------|------|
-| Controller | Go + controller-runtime | 标准 K8s Controller 开发模式 |
-| 状态存储 | kine (SQLite) / K8s etcd | embedded 模式用 kine，incluster 用原生 etcd |
-| 通信协议 | Matrix (Tuwunel) | 去中心化开放协议，自托管 |
-| IM 客户端 | Element Web | 零配置浏览器客户端 |
-| 文件存储 | MinIO | S3 兼容对象存储 |
-| AI Gateway | Higress (CNCF Sandbox) | 云原生 AI Gateway，LLM 代理 + MCP Server 托管 + Consumer 鉴权 |
-| Agent 运行时 | OpenClaw, QwenPaw, Hermes 等 | 多种运行时，从 500MB 到 <10MB 内存 |
-| 技能生态 | skills.sh | 80,000+ 社区技能 |
-| MCP 集成 | mcporter | 通过 Gateway 安全调用 MCP Server |
-
-值得注意的是，AgentTeams 的 AI Gateway 组件 Higress 是 **CNCF Sandbox 项目**，MCP Server 托管和 Consumer 鉴权能力由 Higress 原生提供。两个项目的结合体现了云原生生态在 AI Agent 领域的延伸——Higress 解决 Agent 的安全访问问题，AgentTeams 解决 Agent 的协作编排问题。
-
-## 7. 与 Kubernetes 的设计对应关系
-
-AgentTeams 的设计深受 Kubernetes 影响，以下是核心概念的对应关系：
-
-| Kubernetes 概念 | AgentTeams 对应 | 说明 |
-|----------------|------------|------|
-| Pod | Worker | 最小调度单元，无状态，可销毁重建 |
-| Deployment | Team | 管理一组 Worker 的期望状态 |
-| Service | Matrix Room | Worker 间的通信抽象 |
-| ServiceAccount + RBAC | Consumer Token + allowedConsumers | 身份认证与细粒度权限控制 |
-| CRD | Worker/Team/Human/Manager | 声明式资源定义 |
-| CR 短名（kubectl） | `wk` / `tm` / `hm` / `mgr` | 安装 CRD 后可用的资源别名 |
-| Controller + Reconcile Loop | agentteams-controller | 持续将实际状态收敛到期望状态 |
-| kubectl apply | agt apply | 声明式资源管理 CLI（`-f` 为多文档顺序 apply） |
-
-这种设计使得熟悉 Kubernetes 的工程师可以零学习成本理解 AgentTeams 的架构和运维模型。
+| Kubernetes | AgentTeams | 注记 |
+|------------|--------|-------|
+| Pod | Worker | 最小可调度单元；可替换 |
+| Deployment | Team | 一组期望的协作 Worker |
+| Service | Matrix 房间 | 协作"端点"抽象 |
+| SA + RBAC | Consumer + allowedConsumers | 身份 + 细粒度路由 |
+| CRD | Worker/Team/Human/Manager | 声明式 API |
+| CR 短名 | `wk` / `tm` / `hm` / `mgr` | CRD 安装后 |
+| 控制器 | agentteams-controller | reconcile 循环 |
+| kubectl apply | agt apply | `apply -f` 按顺序遍历多文档 YAML |
 
 ## 8. 部署模式
 
-协调循环见 **3.3 节**；本节仅说明**如何安装**。
+见**第 3.3 节**了解控制器如何 reconcile；本节只讲*怎么安装*。
 
-### 8.1 Embedded 模式（开发者 / 小团队）
+### 8.1 Embedded 模式（开发 / 小团队）
 
 ```bash
-# 一键安装，包含所有基础设施
 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
-最低要求：2 CPU + 4 GB RAM + Docker。你会得到 **`agentteams-controller`**（基础设施 + controller）以及独立的 **`agentteams-manager`**；创建 Worker 后会出现更多容器。
+粗略最低配置：2 CPU、4 GB 内存、Docker/Podman。你得到 **`agentteams-controller`**（基础设施 + 控制器）加上独立的 **`agentteams-manager`** 容器；Worker 创建时作为附加容器出现。
 
-### 8.2 In-cluster / Helm 模式（企业级 / 云上部署）
+### 8.2 Incluster / Helm 模式（企业级 / 云上部署）
 
 ```bash
-# 在克隆下来的仓库根目录执行（Chart 位于 helm/agentteams）
+# From repository root (chart lives under helm/agentteams)
 helm install agentteams ./helm/agentteams
 ```
 
-也可在配置好 Helm 仓库后使用发布的 chart 包。Chart 按 `values.yaml` 编排 **agentteams-controller**、网关、Homeserver、存储等；Manager 与 Worker Pod 的 API 与 Embedded 安装一致。
+仓库被加入后，也可以从已发布的 Helm chart 安装。chart 按 `values.yaml` 接线 **`agentteams-controller`**、网关、homeserver 与存储；Manager 与 Worker Pod 遵循与 embedded 安装相同的 CRD API。
 
-## 9. 项目状态与路线图
+## 9. 状态与路线图
 
-- **2026-03-04**: 项目开源，Apache 2.0 协议
-- **已发布**: OpenClaw/QwenPaw 多运行时支持、MCP Server 集成、Team 架构、Human 接入
-- **进行中**: ZeroClaw（Rust 超轻量运行时，3.4MB）、NanoClaw（极简运行时，<4000 LOC）
-- **规划中**: Team 管理中心（可视化 Dashboard）、incluster 模式 Helm Chart、NemoClaw 运行时集成
+- **2026-03-04**：开源，Apache 2.0。
+- **已交付**：OpenClaw/QwenPaw、MCP 集成、Team + Human 模型。
+- **进行中**：ZeroClaw（Rust 超轻量）、NanoClaw（最小 LOC 运行时）——当前状态见 README。
+- **规划中**：团队管理 dashboard、更完整的 incluster/Helm 方案、Worker 之下可选的 NemoClaw 式沙箱。
 
-## 10. 社区与贡献
+## 10. 社区
 
 - GitHub: https://github.com/agentscope-ai/AgentTeams
 - Discord: https://discord.gg/NVjNA4BAVw
-- License: Apache 2.0
+- 许可证：Apache 2.0

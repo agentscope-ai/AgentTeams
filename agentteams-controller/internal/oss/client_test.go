@@ -1,11 +1,52 @@
 package oss
 
 import (
+	"bufio"
+	"bytes"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
+
+// decodeAWSChunked decodes the minimal aws-chunked framing minio-go signs
+// single-part uploads with: "<hex-size>;chunk-signature=...\r\n<data>\r\n"
+// per chunk, ending in a zero-size terminator chunk. Real S3-compatible
+// backends (MinIO, RustFS) decode it transparently — this is the standard
+// S3 streaming signature, not a test artifact.
+func decodeAWSChunked(r io.Reader) ([]byte, error) {
+	br := bufio.NewReader(r)
+	var out []byte
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			return nil, err
+		}
+		sizePart := strings.TrimSpace(line)
+		if i := strings.IndexByte(sizePart, ';'); i >= 0 {
+			sizePart = sizePart[:i]
+		}
+		n, err := strconv.ParseUint(sizePart, 16, 64)
+		if err != nil {
+			return nil, err
+		}
+		if n == 0 {
+			return out, nil
+		}
+		chunk := make([]byte, n)
+		if _, err := io.ReadFull(br, chunk); err != nil {
+			return nil, err
+		}
+		out = append(out, chunk...)
+		if _, err := br.ReadString('\n'); err != nil {
+			return nil, err // the CRLF after the chunk data
+		}
+	}
+}
 
 func TestMinIOClient_FullPath(t *testing.T) {
 	c := NewMinIOClient(Config{
@@ -31,31 +72,62 @@ func TestMinIOClient_FullPathNoLeadingSlash(t *testing.T) {
 	}
 }
 
-func TestMinIOClient_PutObjectUsesCp(t *testing.T) {
-	dir := t.TempDir()
-	argsPath := filepath.Join(dir, "args")
-	mcPath := filepath.Join(dir, "mc")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$MC_ARGS_FILE\"\n"
-	if err := os.WriteFile(mcPath, []byte(script), 0755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("MC_ARGS_FILE", argsPath)
+// TestMinIOClient_PutObjectStreamsToS3 pins the SDK put path: the bytes go
+// straight to a single PUT against the bucket with the mc era's stored
+// content type (application/octet-stream — the temp file's .tmp extension
+// mapped to nothing better). No temp file and no process spawn sit between
+// the caller and the wire; this test is the contract that keeps it that way.
+func TestMinIOClient_PutObjectStreamsToS3(t *testing.T) {
+	const payload = "agentteams-keep" // 15 bytes: hex chunk size 0xf
+	var (
+		putPath    string
+		putCT      string
+		rawPutBody []byte
+		putBody    []byte
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("location") {
+			// The one-time bucket region lookup the SDK makes per client.
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = w.Write([]byte(`<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></LocationConstraint>`))
+			return
+		}
+		if r.Method != http.MethodPut {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		putPath = r.URL.Path
+		putCT = r.Header.Get("Content-Type")
+		rawPutBody, _ = io.ReadAll(r.Body)
+		putBody, _ = decodeAWSChunked(bytes.NewReader(rawPutBody))
+		w.Header().Set("ETag", `"00000000000000000000000000000000"`)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
 
 	c := NewMinIOClient(Config{
-		MCBinary:      mcPath,
-		StoragePrefix: "agentteams/agentteams-storage",
+		Endpoint:  srv.URL,
+		AccessKey: "access-key",
+		SecretKey: "secret-key",
+		Bucket:    "agentteams-storage",
 	})
-	if err := c.PutObject(t.Context(), "agents/worker-1/.agentteams-keep", []byte("")); err != nil {
+	if err := c.PutObject(t.Context(), "agents/worker-1/.agentteams-keep", []byte(payload)); err != nil {
 		t.Fatalf("PutObject failed: %v", err)
 	}
-
-	args, err := os.ReadFile(argsPath)
-	if err != nil {
-		t.Fatal(err)
+	if putPath != "/agentteams-storage/agents/worker-1/.agentteams-keep" {
+		t.Fatalf("PUT path = %q, want the bucket-relative key", putPath)
 	}
-	if got := string(args); !strings.HasPrefix(got, "cp ") ||
-		!strings.HasSuffix(got, " agentteams/agentteams-storage/agents/worker-1/.agentteams-keep\n") {
-		t.Fatalf("mc args = %q, want cp <tmp> agentteams/agentteams-storage/agents/worker-1/.agentteams-keep", args)
+	if putCT != "application/octet-stream" {
+		t.Fatalf("Content-Type = %q, want application/octet-stream (the mc .tmp default)", putCT)
+	}
+	// The SDK signs single-part uploads with the standard S3 streaming
+	// signature: one 0xf chunk carrying the payload, then the terminator.
+	if !strings.HasPrefix(string(rawPutBody), "f;chunk-signature=") {
+		t.Fatalf("raw PUT body = %q, want the aws-chunked single-part framing", rawPutBody)
+	}
+	if string(putBody) != payload {
+		t.Fatalf("decoded PUT body = %q, want the payload verbatim", putBody)
 	}
 }
 

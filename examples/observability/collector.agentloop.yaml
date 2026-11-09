@@ -1,0 +1,39 @@
+# AgentLoop-only destination. Set these values from the target CMS Workspace's
+# OpenTelemetry integration page; keep ingestion credentials in the Collector.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 128
+    spike_limit_mib: 32
+  batch:
+    timeout: 1s
+    send_batch_size: 256
+extensions:
+  file_storage:
+    directory: /var/lib/otelcol
+exporters:
+  otlphttp/agentloop:
+    endpoint: ${env:AGENTLOOP_OTLP_ENDPOINT}
+    headers:
+      x-arms-license-key: ${env:AGENTLOOP_LICENSE_KEY}
+      x-arms-project: ${env:AGENTLOOP_ARMS_PROJECT}
+      x-cms-workspace: ${env:AGENTLOOP_WORKSPACE}
+    sending_queue:
+      enabled: true
+      storage: file_storage
+      queue_size: 1000
+    retry_on_failure:
+      enabled: true
+      max_elapsed_time: 0s
+service:
+  extensions: [file_storage]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/agentloop]

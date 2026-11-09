@@ -24,6 +24,13 @@ Dir.mktmpdir("teamharness-transition-") do |dir|
   (bin_dir / "mc").write(<<~SH)
     #!/usr/bin/env bash
     printf '%s\\n' "$*" >> "#{log_path}"
+    # Stale-overwrite guard probes single-file pushes with mc stat --json
+    # before mc cp; the emulated remote is always fresh here, so the probe
+    # reports 'object does not exist' and the push proceeds.
+    if [ "$1" = "stat" ] && [ "$2" = "--json" ]; then
+      printf '%s\\n' '{"status":"error","error":"object does not exist"}'
+      exit 1
+    fi
     if [ "$1" = "mirror" ]; then
       mkdir -p "$3"
     fi
@@ -48,6 +55,81 @@ Dir.mktmpdir("teamharness-transition-") do |dir|
         _append_transition_history,
         call_tool,
     )
+
+    # Task/project meta now commits through the Controller's conditional
+    # endpoint (fail-closed when absent); this harness runs without a live
+    # Controller, so a minimal in-process stand-in records the commits and the
+    # read helpers see them back. The fail-closed contract itself is covered
+    # by plugins/tests/teamharness/test_task_meta_commit.py.
+    import hashlib
+    import re
+    import mcp.artifact.sync as _sync_mod
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    _VIRTUAL_META = {}
+
+    def _fake_snapshot(arguments, meta_path):
+        entry = _VIRTUAL_META.get(meta_path)
+        return (entry[0] if entry else None), None
+
+    def _fake_etag(arguments, meta_path):
+        entry = _VIRTUAL_META.get(meta_path)
+        return (entry[1] if entry else None), None
+
+    def _fake_consistent_read(arguments, meta_path):
+        entry = _VIRTUAL_META.get(meta_path)
+        if entry is None:
+            return None, None, None
+        return entry[0], entry[1], None
+
+    _sync_mod._remote_meta_snapshot = _fake_snapshot
+    _sync_mod._remote_meta_etag = _fake_etag
+    _sync_mod._remote_meta_consistent_read = _fake_consistent_read
+
+    class _MetaController(BaseHTTPRequestHandler):
+        def _send(self, code, payload=None):
+            raw = b"" if payload is None else json.dumps(payload).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            if raw:
+                self.wfile.write(raw)
+
+        def do_PUT(self):  # noqa: N802
+            parsed = urllib.parse.urlparse(self.path)
+            match = re.match(r"^/api/v1/(tasks|projects)/([^/]+)/meta$", parsed.path)
+            if not match:
+                return self._send(404, {"error": "not_found"})
+            kind = match.group(1)
+            item_id = urllib.parse.unquote(match.group(2))
+            meta_path = "shared/" + kind + "/" + item_id + "/meta.json"
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length)
+            current = _VIRTUAL_META.get(meta_path)
+            if self.headers.get("If-None-Match") == "*":
+                if current is not None:
+                    return self._send(409, {"error": "conflict"})
+            else:
+                expect = (self.headers.get("If-Match") or "").strip('"')
+                if current is None:
+                    return self._send(404, {"error": "not_found"})
+                if expect and expect != current[1]:
+                    return self._send(409, {"error": "conflict"})
+            try:
+                parsed_meta = json.loads(raw.decode("utf-8"))
+            except ValueError:
+                return self._send(422, {"error": "invalid_meta"})
+            etag = hashlib.md5(raw).hexdigest()
+            _VIRTUAL_META[meta_path] = (parsed_meta, etag)
+            return self._send(200, {"ok": True, "etag": etag})
+
+        def log_message(self, *args):
+            pass
+
+    _controller = ThreadingHTTPServer(("127.0.0.1", 0), _MetaController)
+    threading.Thread(target=_controller.serve_forever, daemon=True).start()
+    os.environ["AGENTTEAMS_CONTROLLER_URL"] = "http://127.0.0.1:%d" % _controller.server_address[1]
 
     workspace = pathlib.Path("#{workspace}")
     real_shared = pathlib.Path("#{root}") / "real-shared"
@@ -219,6 +301,21 @@ Dir.mktmpdir("teamharness-transition-") do |dir|
             raise AssertionError(f"{label}: error {err!r} missing {fragment!r}")
         return res
 
+    def must_fail_transition(res, from_status, to_status, fragment, label):
+        """INT-5 round 2: state-guard rejections are structured."""
+        if res.get("ok"):
+            raise AssertionError(f"{label}: expected failure but succeeded: {res!r}")
+        if res.get("error") != "illegal_transition":
+            raise AssertionError(f"{label}: expected illegal_transition: {res!r}")
+        if res.get("from") != from_status or res.get("to") != to_status:
+            raise AssertionError(
+                f"{label}: from/to {res.get('from')!r}->{res.get('to')!r} "
+                f"!= {from_status!r}->{to_status!r}: {res!r}"
+            )
+        if fragment and fragment not in str(res.get("detail", "")):
+            raise AssertionError(f"{label}: detail missing {fragment!r}: {res!r}")
+        return res
+
     def entry(h, i):
         return (h[i]["from"], h[i]["to"], h[i]["action"], h[i].get("actor"))
 
@@ -361,9 +458,9 @@ Dir.mktmpdir("teamharness-transition-") do |dir|
         raise AssertionError(f"delegate without an assignee target must stay retryable: {d!r}")
     if read_meta("t-prep")["status"] != "prepared":
         raise AssertionError("unnotified delegation must leave the task prepared")
-    must_fail(ack("t-prep"), "ack_task: task is 'prepared'", "ack@prepared")
-    must_fail(submit("t-prep"), "submit_task: task is 'prepared'", "submit@prepared")
-    must_fail(progress("t-prep", "x"), "report_progress: task is 'prepared'", "progress@prepared")
+    must_fail_transition(ack("t-prep"), "prepared", "in_progress", "ack_task: task is 'prepared'", "ack@prepared")
+    must_fail_transition(submit("t-prep"), "prepared", "submitted", "submit_task: task is 'prepared'", "submit@prepared")
+    must_fail_transition(progress("t-prep", "x"), "prepared", "prepared", "report_progress: task is 'prepared'", "progress@prepared")
 
     # 3b. in_progress must not be re-delegated (would reset recorded progress).
     new_project("proj-redel", "t-redel")
@@ -444,8 +541,10 @@ Dir.mktmpdir("teamharness-transition-") do |dir|
     })
     if not acc_rev.get("ok") or read_meta("t-rev")["status"] != "revision":
         raise AssertionError(f"revision accept failed: {acc_rev!r}")
-    must_fail(
+    must_fail_transition(
         delegate("proj-rev", "t-rev"),
+        "revision",
+        "assigned",
         "delegate_task cannot update terminal task: revision",
         "redelegate@revision",
     )
@@ -526,7 +625,7 @@ Dir.mktmpdir("teamharness-transition-") do |dir|
     )
 
     # 3f. terminal tasks are frozen.
-    must_fail(
+    must_fail_transition(
         payload("taskflow", {
             "role": "leader",
             "action": "cancel_task",
@@ -534,12 +633,14 @@ Dir.mktmpdir("teamharness-transition-") do |dir|
             # the terminal guard must reject it regardless.
             "payload": {"taskId": "t-happy", "submissionId": sub_id, "reason": "Too late."},
         }),
+        "completed",
+        "cancelled",
         "cannot cancel terminal task",
         "cancel@terminal",
     )
     # Terminal tasks are frozen by the mutability guard before the
     # progress status gate (the terminal check is upstream of it).
-    must_fail(progress("t-happy", "done now"), "report_progress cannot update terminal task", "progress@completed")
+    must_fail_transition(progress("t-happy", "done now"), "completed", "completed", "report_progress cannot update terminal task", "progress@completed")
     must_fail(
         payload("taskflow", {
             "role": "leader",
@@ -580,7 +681,7 @@ Dir.mktmpdir("teamharness-transition-") do |dir|
     last = read_meta("t-redel")["history"][-1]
     if len(last.get("note", "")) != 201 or not last["note"].endswith("\u2026"):
         raise AssertionError(f"truncated note must be 200 chars + ellipsis: {last['note']!r}")
-    must_fail(progress("t-subd", "late"), "report_progress: task is 'submitted'", "progress@submitted")
+    must_fail_transition(progress("t-subd", "late"), "submitted", "submitted", "report_progress: task is 'submitted'", "progress@submitted")
 
     # ==================================================================
     # 6. History cap and no-op semantics (unit level).

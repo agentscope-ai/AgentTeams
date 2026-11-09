@@ -181,9 +181,6 @@ PIP_PACKAGES=()
 NPM_PACKAGES=()
 UNKNOWN_BINARIES=()
 
-# Track sources for each command
-declare -A CMD_SOURCES
-
 while read -r count cmd; do
     [ -z "${cmd}" ] && continue
     # Skip shell builtins and keywords

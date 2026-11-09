@@ -33,6 +33,7 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
   ))
   (remote_task / "spec.md").write("Remote task spec\n")
   bin_dir.mkpath
+  controller_log = root / "controller.log"
   (bin_dir / "mc").write(<<~SH)
     #!/usr/bin/env bash
     printf '%s\\n' "$*" >> "#{log_path}"
@@ -123,6 +124,85 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
             "globalSharedPrefix": "mock/global-shared",
         },
     }
+
+    # The task/project publish now commits meta.json through the Controller's
+    # conditional endpoint and fails closed when it is unavailable. This
+    # harness runs against a fake `mc` (no Controller), so it stands in a
+    # minimal Controller: PUT /api/v1/(tasks|projects)/<id>/meta with
+    # If-None-Match: * or If-Match: <etag>, recording the committed meta so
+    # the publish verification round-trips. The fail-closed contract itself is
+    # covered by plugins/tests/teamharness/test_task_meta_commit.py.
+    import hashlib
+    import re
+    import mcp.artifact.sync as _sync_mod
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    _VIRTUAL_META = {}
+
+    def _fake_snapshot(arguments, meta_path):
+        entry = _VIRTUAL_META.get(meta_path)
+        return (entry[0] if entry else None), None
+
+    def _fake_etag(arguments, meta_path):
+        entry = _VIRTUAL_META.get(meta_path)
+        return (entry[1] if entry else None), None
+
+    def _fake_consistent_read(arguments, meta_path):
+        entry = _VIRTUAL_META.get(meta_path)
+        if entry is None:
+            return None, None, None
+        return entry[0], entry[1], None
+
+    _sync_mod._remote_meta_snapshot = _fake_snapshot
+    _sync_mod._remote_meta_etag = _fake_etag
+    _sync_mod._remote_meta_consistent_read = _fake_consistent_read
+
+    class _MetaController(BaseHTTPRequestHandler):
+        def _send(self, code, payload=None):
+            raw = b"" if payload is None else json.dumps(payload).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            if raw:
+                self.wfile.write(raw)
+
+        def do_PUT(self):  # noqa: N802
+            parsed = urllib.parse.urlparse(self.path)
+            match = re.match(r"^/api/v1/(tasks|projects)/([^/]+)/meta$", parsed.path)
+            if not match:
+                return self._send(404, {"error": "not_found"})
+            kind = match.group(1)
+            item_id = urllib.parse.unquote(match.group(2))
+            meta_path = "shared/" + kind + "/" + item_id + "/meta.json"
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length)
+            current = _VIRTUAL_META.get(meta_path)
+            if self.headers.get("If-None-Match") == "*":
+                if current is not None:
+                    return self._send(409, {"error": "conflict"})
+            else:
+                expect = (self.headers.get("If-Match") or "").strip('"')
+                if current is None:
+                    return self._send(404, {"error": "not_found"})
+                if expect and expect != current[1]:
+                    return self._send(409, {"error": "conflict"})
+            try:
+                parsed_meta = json.loads(raw.decode("utf-8"))
+            except ValueError:
+                return self._send(422, {"error": "invalid_meta"})
+            etag = hashlib.md5(raw).hexdigest()
+            _VIRTUAL_META[meta_path] = (parsed_meta, etag)
+            with open("#{controller_log}", "a") as _fh:
+                _fh.write("PUT " + kind + "/" + item_id + "/meta.json\\n")
+            return self._send(200, {"ok": True, "etag": etag})
+
+        def log_message(self, *args):
+            pass
+
+    _controller = ThreadingHTTPServer(("127.0.0.1", 0), _MetaController)
+    threading.Thread(target=_controller.serve_forever, daemon=True).start()
+    os.environ["AGENTTEAMS_CONTROLLER_URL"] = "http://127.0.0.1:%d" % _controller.server_address[1]
     runtime_config = pathlib.Path("#{root}") / "runtime.yaml"
     runtime_config.write_text(
         "team:\\n"
@@ -1045,7 +1125,13 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
             "spec": "Late delegate should not overwrite a cancelled task.",
         },
     })
-    if late_delegate.get("ok") or "terminal task: cancelled" not in late_delegate.get("error", ""):
+    if (
+        late_delegate.get("ok")
+        or late_delegate.get("error") != "illegal_transition"
+        or late_delegate.get("from") != "cancelled"
+        or late_delegate.get("to") != "assigned"
+        or "terminal state cancelled" not in late_delegate.get("detail", "")
+    ):
         raise AssertionError(f"cancelled task should reject late delegate_task: {late_delegate!r}")
     if old_spec_path.read_text(encoding="utf-8") != old_spec:
         raise AssertionError("late delegate_task should not overwrite spec.md for a cancelled task")
@@ -1054,14 +1140,26 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
         "action": "ack_task",
         "payload": {"taskId": old_task_id},
     })
-    if late_ack.get("ok") or "terminal task: cancelled" not in late_ack.get("error", ""):
+    if (
+        late_ack.get("ok")
+        or late_ack.get("error") != "illegal_transition"
+        or late_ack.get("from") != "cancelled"
+        or late_ack.get("to") != "in_progress"
+        or "terminal state cancelled" not in late_ack.get("detail", "")
+    ):
         raise AssertionError(f"cancelled task should reject late ack_task: {late_ack!r}")
     late_submit = payload("taskflow", {
         "role": "worker",
         "action": "submit_task",
         "payload": {"taskId": old_task_id, "summary": "late result", "deliverables": []},
     })
-    if late_submit.get("ok") or "terminal task: cancelled" not in late_submit.get("error", ""):
+    if (
+        late_submit.get("ok")
+        or late_submit.get("error") != "illegal_transition"
+        or late_submit.get("from") != "cancelled"
+        or late_submit.get("to") != "submitted"
+        or "terminal state cancelled" not in late_submit.get("detail", "")
+    ):
         raise AssertionError(f"cancelled task should reject late submit_task: {late_submit!r}")
     old_meta_path = pathlib.Path("#{workspace}") / f"shared/tasks/{old_task_id}/meta.json"
     old_meta = json.loads(old_meta_path.read_text(encoding="utf-8"))
@@ -1128,7 +1226,13 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
             "spec": "Late delegate should not revive the loop task.",
         },
     })
-    if dag_loop_delegate.get("ok") or "terminal task: cancelled" not in dag_loop_delegate.get("error", ""):
+    if (
+        dag_loop_delegate.get("ok")
+        or dag_loop_delegate.get("error") != "illegal_transition"
+        or dag_loop_delegate.get("from") != "cancelled"
+        or dag_loop_delegate.get("to") != "assigned"
+        or "terminal state cancelled" not in dag_loop_delegate.get("detail", "")
+    ):
         raise AssertionError(f"DAG-to-loop terminal task should reject delegate_task: {dag_loop_delegate!r}")
     dag_loop_after = json.loads(dag_loop_meta_path.read_text(encoding="utf-8"))
     dag_loop_top_nodes = {task["task_id"]: task for task in dag_loop_after.get("tasks", [])}
@@ -1165,7 +1269,13 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
             "reason": "manual_replan",
         },
     })
-    if completed_cancel.get("ok") or "cannot cancel terminal task" not in completed_cancel.get("error", ""):
+    if (
+        completed_cancel.get("ok")
+        or completed_cancel.get("error") != "illegal_transition"
+        or completed_cancel.get("from") != "completed"
+        or completed_cancel.get("to") != "cancelled"
+        or "terminal state completed" not in completed_cancel.get("detail", "")
+    ):
         raise AssertionError(f"completed task should not be silently cancelled: {completed_cancel!r}")
 
     terminal_project_id = "terminal-cancel-project"
@@ -1268,7 +1378,12 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
                 "reason": "manual_replan",
             },
         })
-        if terminal_cancel.get("ok") or "cannot cancel terminal task" not in terminal_cancel.get("error", ""):
+        if (
+            terminal_cancel.get("ok")
+            or terminal_cancel.get("error") != "illegal_transition"
+            or terminal_cancel.get("to") != "cancelled"
+            or "terminal state" not in terminal_cancel.get("detail", "")
+        ):
             raise AssertionError(f"terminal task should not be silently cancelled: {terminal_task_id} {terminal_cancel!r}")
     repeated_cancel = payload("taskflow", {
         "role": "leader",
@@ -1894,6 +2009,334 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
     if len([it for it in (pt_meta3.get("attention") or []) if it.get("kind") == "decision"]) != 1:
         raise AssertionError(f"reuse must not create a second record: {pt_meta3.get('attention')!r}")
 
+    # --- request_attention structured answer payload (#1418): options /
+    #     suggested / expiresAt are written to the meta.json record
+    #     (camelCase, only when provided), suggested must be one of the
+    #     option ids, and the resolved path is unaffected. ---
+    ao_tid = "att-options"
+    _lifecycle_setup(ao_tid)
+    ao1 = payload("taskflow", {
+        "role": "worker",
+        "action": "request_attention",
+        "payload": {
+            "taskId": ao_tid,
+            "kind": "decision",
+            "question": "Storage full - drop or keep?",
+            "options": [
+                {"id": "drop", "label": "Drop the oldest file"},
+                {"id": "keep", "label": "Keep everything"},
+            ],
+            "suggested": "drop",
+            "expiresAt": "2026-10-27T12:00:00Z",
+        },
+    })
+    if not ao1.get("ok"):
+        raise AssertionError(f"request_attention with an option payload must succeed: {ao1!r}")
+    ao_meta = json.loads(
+        (pathlib.Path("#{workspace}") / f"shared/tasks/{ao_tid}/meta.json").read_text(encoding="utf-8")
+    )
+    ao_records = [it for it in (ao_meta.get("attention") or []) if it.get("kind") == "decision"]
+    if len(ao_records) != 1:
+        raise AssertionError(f"expected exactly one decision record: {ao_meta.get('attention')!r}")
+    if ao_records[0].get("options") != [
+        {"id": "drop", "label": "Drop the oldest file"},
+        {"id": "keep", "label": "Keep everything"},
+    ]:
+        raise AssertionError(f"options must be written to the record: {ao_records[0]!r}")
+    if ao_records[0].get("suggested") != "drop":
+        raise AssertionError(f"suggested must be written to the record: {ao_records[0]!r}")
+    if ao_records[0].get("expiresAt") != "2026-10-27T12:00:00Z":
+        raise AssertionError(f"expiresAt must be written verbatim to the record: {ao_records[0]!r}")
+    ao_bad = payload("taskflow", {
+        "role": "worker",
+        "action": "request_attention",
+        "payload": {
+            "taskId": ao_tid,
+            "kind": "escalation",
+            "question": "Storage at capacity.",
+            "options": [{"id": "only", "label": "Only option"}],
+            "suggested": "nope",
+        },
+    })
+    if ao_bad.get("ok") is not False or "suggested" not in str(ao_bad.get("error", "")):
+        raise AssertionError(f"suggested outside the option ids must be rejected: {ao_bad!r}")
+    ao_bad2 = payload("taskflow", {
+        "role": "worker",
+        "action": "request_attention",
+        "payload": {
+            "taskId": ao_tid,
+            "kind": "escalation",
+            "question": "Storage at capacity.",
+            "options": [{"id": "only", "label": ""}],
+        },
+    })
+    if ao_bad2.get("ok") is not False or "options" not in str(ao_bad2.get("error", "")):
+        raise AssertionError(f"an option with an empty label must be rejected: {ao_bad2!r}")
+    ao_bad3 = payload("taskflow", {
+        "role": "worker",
+        "action": "request_attention",
+        "payload": {
+            "taskId": ao_tid,
+            "kind": "escalation",
+            "question": "Storage at capacity.",
+            "options": [{"id": f"o{i}", "label": f"L{i}"} for i in range(11)],
+        },
+    })
+    if ao_bad3.get("ok") is not False or "options" not in str(ao_bad3.get("error", "")):
+        raise AssertionError(f"more than 10 options must be rejected: {ao_bad3!r}")
+    ao_meta_bad = json.loads(
+        (pathlib.Path("#{workspace}") / f"shared/tasks/{ao_tid}/meta.json").read_text(encoding="utf-8")
+    )
+    if [it for it in (ao_meta_bad.get("attention") or []) if it.get("kind") == "escalation"]:
+        raise AssertionError(f"rejected payloads must not record anything: {ao_meta_bad.get('attention')!r}")
+    ao_plain_tid = "att-options-none"
+    _lifecycle_setup(ao_plain_tid)
+    ao2 = payload("taskflow", {
+        "role": "worker",
+        "action": "request_attention",
+        "payload": {"taskId": ao_plain_tid, "kind": "approval", "question": "Ship it?"},
+    })
+    if not ao2.get("ok"):
+        raise AssertionError(f"request_attention without the new fields must still work: {ao2!r}")
+    ao2_meta = json.loads(
+        (pathlib.Path("#{workspace}") / f"shared/tasks/{ao_plain_tid}/meta.json").read_text(encoding="utf-8")
+    )
+    ao2_records = [it for it in (ao2_meta.get("attention") or []) if it.get("kind") == "approval"]
+    if len(ao2_records) != 1:
+        raise AssertionError(f"expected exactly one approval record: {ao2_meta.get('attention')!r}")
+    if "options" in ao2_records[0] or "suggested" in ao2_records[0] or "expiresAt" in ao2_records[0]:
+        raise AssertionError(f"omitted fields must not appear on the record: {ao2_records[0]!r}")
+    ao_close = payload("taskflow", {
+        "role": "worker",
+        "action": "request_attention",
+        "payload": {
+            "taskId": ao_tid,
+            "kind": "decision",
+            "question": "Storage full - drop or keep?",
+            "resolved": True,
+        },
+    })
+    if not ao_close.get("ok") or (ao_close.get("attention") or {}).get("resolved") is not True:
+        raise AssertionError(f"explicit close of the options record must succeed: {ao_close!r}")
+    ao_meta2 = json.loads(
+        (pathlib.Path("#{workspace}") / f"shared/tasks/{ao_tid}/meta.json").read_text(encoding="utf-8")
+    )
+    ao_records2 = [it for it in (ao_meta2.get("attention") or []) if it.get("kind") == "decision"]
+    if len(ao_records2) != 1 or not ao_records2[0].get("resolved"):
+        raise AssertionError(f"the close must resolve exactly the one record: {ao_meta2.get('attention')!r}")
+    if (
+        ao_records2[0].get("options") != [
+            {"id": "drop", "label": "Drop the oldest file"},
+            {"id": "keep", "label": "Keep everything"},
+        ]
+        or ao_records2[0].get("suggested") != "drop"
+        or ao_records2[0].get("expiresAt") != "2026-10-27T12:00:00Z"
+    ):
+        raise AssertionError(f"the close must not alter the structured payload: {ao_records2[0]!r}")
+
+    # --- request_attention validation hardening (#1449): duplicate option
+    #     ids, strict string types for id/label/suggested/expiresAt, and
+    #     the meta-on-disk invariant when validation fails. ---
+    # 1) duplicate option ids must be rejected.
+    nv_dup = payload("taskflow", {
+        "role": "worker",
+        "action": "request_attention",
+        "payload": {
+            "taskId": ao_tid,
+            "kind": "escalation",
+            "question": "Duplicate ids.",
+            "options": [
+                {"id": "same", "label": "Delete"},
+                {"id": "same", "label": "Keep"},
+            ],
+        },
+    })
+    if nv_dup.get("ok") is not False or "unique" not in str(nv_dup.get("error", "")):
+        raise AssertionError(f"duplicate option ids must be rejected: {nv_dup!r}")
+    # 2) strict string types: a numeric id and a boolean label are rejected.
+    nv_id = payload("taskflow", {
+        "role": "worker",
+        "action": "request_attention",
+        "payload": {
+            "taskId": ao_tid,
+            "kind": "escalation",
+            "question": "Numeric id.",
+            "options": [{"id": 1, "label": "Numeric id"}],
+        },
+    })
+    if nv_id.get("ok") is not False or "string" not in str(nv_id.get("error", "")):
+        raise AssertionError(f"a non-string option id must be rejected: {nv_id!r}")
+    nv_label = payload("taskflow", {
+        "role": "worker",
+        "action": "request_attention",
+        "payload": {
+            "taskId": ao_tid,
+            "kind": "escalation",
+            "question": "Boolean label.",
+            "options": [{"id": "bool-label", "label": True}],
+        },
+    })
+    if nv_label.get("ok") is not False or "string" not in str(nv_label.get("error", "")):
+        raise AssertionError(f"a non-string option label must be rejected: {nv_label!r}")
+    # 3) suggested must be one of the option ids, and must be a string;
+    #    expiresAt must be a string too.
+    nv_sug = payload("taskflow", {
+        "role": "worker",
+        "action": "request_attention",
+        "payload": {
+            "taskId": ao_tid,
+            "kind": "escalation",
+            "question": "Suggested elsewhere.",
+            "options": [
+                {"id": "a", "label": "A"},
+                {"id": "b", "label": "B"},
+            ],
+            "suggested": "zzz",
+        },
+    })
+    if nv_sug.get("ok") is not False or "suggested" not in str(nv_sug.get("error", "")):
+        raise AssertionError(f"suggested outside the option ids must be rejected: {nv_sug!r}")
+    nv_sug2 = payload("taskflow", {
+        "role": "worker",
+        "action": "request_attention",
+        "payload": {
+            "taskId": ao_tid,
+            "kind": "escalation",
+            "question": "Numeric suggested.",
+            "options": [{"id": "a", "label": "A"}],
+            "suggested": 1,
+        },
+    })
+    if nv_sug2.get("ok") is not False or "suggested" not in str(nv_sug2.get("error", "")):
+        raise AssertionError(f"a non-string suggested must be rejected: {nv_sug2!r}")
+    nv_exp = payload("taskflow", {
+        "role": "worker",
+        "action": "request_attention",
+        "payload": {
+            "taskId": ao_tid,
+            "kind": "escalation",
+            "question": "Numeric expiry.",
+            "expiresAt": 1730000000,
+        },
+    })
+    if nv_exp.get("ok") is not False or "expiresAt" not in str(nv_exp.get("error", "")):
+        raise AssertionError(f"a non-string expiresAt must be rejected: {nv_exp!r}")
+    # 4) legal options + suggested + expiresAt round-trip into meta.json.
+    nv_ok_tid = "att-options-legal"
+    _lifecycle_setup(nv_ok_tid)
+    nv_ok = payload("taskflow", {
+        "role": "worker",
+        "action": "request_attention",
+        "payload": {
+            "taskId": nv_ok_tid,
+            "kind": "decision",
+            "question": "Ship it or hold?",
+            "options": [
+                {"id": "ship", "label": "Ship it now"},
+                {"id": "hold", "label": "Hold for review"},
+            ],
+            "suggested": "hold",
+            "expiresAt": "2026-10-29T08:00:00Z",
+        },
+    })
+    if not nv_ok.get("ok"):
+        raise AssertionError(f"legal structured fields must be accepted: {nv_ok!r}")
+    nv_ok_meta = json.loads(
+        (pathlib.Path("#{workspace}") / f"shared/tasks/{nv_ok_tid}/meta.json").read_text(encoding="utf-8")
+    )
+    nv_ok_records = [it for it in (nv_ok_meta.get("attention") or []) if it.get("kind") == "decision"]
+    if len(nv_ok_records) != 1:
+        raise AssertionError(f"expected exactly one decision record: {nv_ok_meta.get('attention')!r}")
+    if nv_ok_records[0].get("options") != [
+        {"id": "ship", "label": "Ship it now"},
+        {"id": "hold", "label": "Hold for review"},
+    ]:
+        raise AssertionError(f"options must be written to the record: {nv_ok_records[0]!r}")
+    if nv_ok_records[0].get("suggested") != "hold":
+        raise AssertionError(f"suggested must be written to the record: {nv_ok_records[0]!r}")
+    if nv_ok_records[0].get("expiresAt") != "2026-10-29T08:00:00Z":
+        raise AssertionError(f"expiresAt must be written to the record: {nv_ok_records[0]!r}")
+    # 5) omitted fields keep the legacy record shape (no new keys).
+    nv_plain_tid = "att-options-plain"
+    _lifecycle_setup(nv_plain_tid)
+    nv_plain = payload("taskflow", {
+        "role": "worker",
+        "action": "request_attention",
+        "payload": {"taskId": nv_plain_tid, "kind": "approval", "question": "OK to proceed?"},
+    })
+    if not nv_plain.get("ok"):
+        raise AssertionError(f"request without structured fields must work: {nv_plain!r}")
+    nv_plain_meta = json.loads(
+        (pathlib.Path("#{workspace}") / f"shared/tasks/{nv_plain_tid}/meta.json").read_text(encoding="utf-8")
+    )
+    nv_plain_records = [it for it in (nv_plain_meta.get("attention") or []) if it.get("kind") == "approval"]
+    if len(nv_plain_records) != 1:
+        raise AssertionError(f"expected exactly one approval record: {nv_plain_meta.get('attention')!r}")
+    # notification_log is the S4a outcome entry: it is always present on a
+    # record that went through the notification stage, independent of the
+    # optional S0 fields this shape check guards.
+    legacy_keys = {"kind", "question", "attempt", "requestedAt", "resolved", "eventId", "notification_log"}
+    if not set(nv_plain_records[0].keys()) <= legacy_keys:
+        raise AssertionError(f"omitted fields must keep the legacy record shape: {nv_plain_records[0]!r}")
+    if any(key in nv_plain_records[0] for key in ("options", "suggested", "expiresAt")):
+        raise AssertionError(f"omitted fields must not appear on the record: {nv_plain_records[0]!r}")
+    # 6) more than 10 options are rejected.
+    nv_many = payload("taskflow", {
+        "role": "worker",
+        "action": "request_attention",
+        "payload": {
+            "taskId": ao_tid,
+            "kind": "escalation",
+            "question": "Too many options.",
+            "options": [{"id": f"o{i}", "label": f"L{i}"} for i in range(11)],
+        },
+    })
+    if nv_many.get("ok") is not False or "options" not in str(nv_many.get("error", "")):
+        raise AssertionError(f"more than 10 options must be rejected: {nv_many!r}")
+    # 7) a validation failure must not touch the on-disk meta: the
+    #     attention array is identical across a valid call and a
+    #     rejected call (two-call comparison).
+    nv_fail_tid = "att-options-fail"
+    _lifecycle_setup(nv_fail_tid)
+    nv_first = payload("taskflow", {
+        "role": "worker",
+        "action": "request_attention",
+        "payload": {
+            "taskId": nv_fail_tid,
+            "kind": "decision",
+            "question": "First, valid.",
+            "options": [{"id": "yes", "label": "Yes"}],
+        },
+    })
+    if not nv_first.get("ok"):
+        raise AssertionError(f"the valid first request must succeed: {nv_first!r}")
+    nv_meta_before = json.loads(
+        (pathlib.Path("#{workspace}") / f"shared/tasks/{nv_fail_tid}/meta.json").read_text(encoding="utf-8")
+    )
+    nv_second = payload("taskflow", {
+        "role": "worker",
+        "action": "request_attention",
+        "payload": {
+            "taskId": nv_fail_tid,
+            "kind": "escalation",
+            "question": "Second, invalid.",
+            "options": [
+                {"id": "dup", "label": "One"},
+                {"id": "dup", "label": "Two"},
+            ],
+        },
+    })
+    if nv_second.get("ok") is not False:
+        raise AssertionError(f"the invalid second request must be rejected: {nv_second!r}")
+    nv_meta_after = json.loads(
+        (pathlib.Path("#{workspace}") / f"shared/tasks/{nv_fail_tid}/meta.json").read_text(encoding="utf-8")
+    )
+    if (nv_meta_after.get("attention") or []) != (nv_meta_before.get("attention") or []):
+        raise AssertionError(
+            f"validation failure must not rewrite the attention array: "
+            f"{nv_meta_after.get('attention')!r}"
+        )
+
     # --- complete_project: PROJECT_COMPLETED event + idempotent retry. ---
     comp_tid = "comp-task"
     comp_pid = _lifecycle_setup(comp_tid)
@@ -2002,15 +2445,19 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
   result = JSON.parse(stdout)
   commands = log_path.read.lines.map(&:strip)
   fail!("delegate_task did not push task dir: #{commands.inspect}") unless commands.include?(
-    "mirror #{workspace}/shared/tasks/t-001/ mock/shared/tasks/t-001/ --overwrite"
+    "mirror #{workspace}/shared/tasks/t-001/ mock/shared/tasks/t-001/ --overwrite --exclude meta.json"
   )
   result_push = "cp #{workspace}/shared/tasks/t-001/result.md mock/shared/tasks/t-001/result.md"
   result_stat = "stat mock/shared/tasks/t-001/result.md"
   analysis_push = "cp #{workspace}/shared/tasks/t-001/workspace/analysis.md mock/shared/tasks/t-001/workspace/analysis.md"
   analysis_stat = "stat mock/shared/tasks/t-001/workspace/analysis.md"
-  meta_commit = "cp #{workspace}/shared/tasks/t-001/meta.json mock/shared/tasks/t-001/meta.json"
-  meta_stat = "stat mock/shared/tasks/t-001/meta.json"
-  ordered_submit_commands = [result_push, result_stat, analysis_push, analysis_stat, meta_commit, meta_stat]
+  fail!("meta.json was pushed unconditionally: #{commands.inspect}") if commands.include?(
+    "cp #{workspace}/shared/tasks/t-001/meta.json mock/shared/tasks/t-001/meta.json"
+  )
+  fail!("submit_task did not commit meta through the controller") unless controller_log.read.include?(
+    "PUT tasks/t-001/meta.json"
+  )
+  ordered_submit_commands = [result_push, result_stat, analysis_push, analysis_stat]
   submit_positions = ordered_submit_commands.map { |command| commands.index(command) }
   unless submit_positions.all? && submit_positions == submit_positions.sort
     fail!("submit_task did not publish result payloads before meta commit: #{commands.inspect}")

@@ -7,6 +7,11 @@ on:
       - 'manager/Dockerfile.qwenpaw'
       - 'manager/scripts/init/start-qwenpaw-manager.sh'
       - 'plugins/agentteams-manager-tools/**'
+      - 'manager/agent/skills/coding-cli-management/**'
+      - 'manager/tests/test-coding-cli-skill-flow.sh'
+      - 'manager/tests/test-openclaw-config-migration.sh'
+      - 'manager/configs/**'
+      - 'shared/lib/migrate-openclaw-config.sh'
       - '.github/workflows/test-manager.yml'
   push:
     branches: [main]
@@ -15,6 +20,11 @@ on:
       - 'manager/Dockerfile.qwenpaw'
       - 'manager/scripts/init/start-qwenpaw-manager.sh'
       - 'plugins/agentteams-manager-tools/**'
+      - 'manager/agent/skills/coding-cli-management/**'
+      - 'manager/tests/test-coding-cli-skill-flow.sh'
+      - 'manager/tests/test-openclaw-config-migration.sh'
+      - 'manager/configs/**'
+      - 'shared/lib/migrate-openclaw-config.sh'
   workflow_dispatch:
 
 jobs:
@@ -41,6 +51,12 @@ jobs:
             'linkify-it-py>=2.0' \
             'pytest>=8.3,<10' \
             'pytest-asyncio>=0.23,<2'
+
+      - name: Guard the coding-cli first-use flow
+        run: bash manager/tests/test-coding-cli-skill-flow.sh
+
+      - name: Guard the persisted openclaw.json migration (shell/Python parity)
+        run: bash manager/tests/test-openclaw-config-migration.sh
 
       - name: Run agentteams_manager unit tests
         run: |

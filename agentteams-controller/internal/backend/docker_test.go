@@ -223,6 +223,16 @@ func TestDockerCreateProjectsAuthTokenFileBeforeStart(t *testing.T) {
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(map[string]string{"Id": "worker-id"})
 	})
+	mux.HandleFunc("POST /containers/{id}/exec", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]string{"Id": "exec-id"})
+	})
+	mux.HandleFunc("POST /exec/{id}/start", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("GET /exec/{id}/json", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"Running": false, "ExitCode": 0})
+	})
 	mux.HandleFunc("PUT /containers/{id}/archive", func(w http.ResponseWriter, r *http.Request) {
 		events = append(events, "project")
 		tr := tar.NewReader(r.Body)
@@ -325,6 +335,11 @@ func TestDockerProjectAuthTokenAtomicallyReplacesRunningWorkerFile(t *testing.T)
 	if projectedName != "token.next" || projectedToken != "rotated-token" {
 		t.Fatalf("projected file=%q content=%q", projectedName, projectedToken)
 	}
+	// ProjectAuthToken writes via writeContainerFileWithMode directly
+	// (NOT WriteFile), so no parent mkdir runs — the sequence is
+	// archive PUT (token.next) → mv (exec). The Create path projects the
+	// initial token the same way, before the container starts, where an
+	// exec would 409.
 	if strings.Join(events, ",") != "project-next,create-exec,start-exec,inspect-exec" {
 		t.Fatalf("events=%v", events)
 	}
@@ -784,4 +799,85 @@ func TestBuildCreatePayloadPreservesExplicitPortMappingHostIP(t *testing.T) {
 	if len(specific) != 1 || specific[0].HostIP != "192.0.2.10" || specific[0].HostPort != "9191" {
 		t.Errorf("explicit mapping with specific HostIP changed: %v", specific)
 	}
+}
+
+// TestDockerWriteFileCreatesMissingParentDir pins the G4 fix: Docker's
+// archive upload 404s when the parent directory does not exist yet (first
+// write of e.g. /root/.qwen/settings.json into a fresh worker container —
+// field-verified on the Pi embedded stack, 2026-10-11). The backend must
+// mkdir -p the parent BEFORE the archive PUT.
+func TestDockerWriteFileCreatesMissingParentDir(t *testing.T) {
+	var events []string
+	var execCmds [][]string
+	var projectedName string
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /containers/{id}/exec", func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Cmd []string `json:"Cmd"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode exec payload: %v", err)
+		}
+		execCmds = append(execCmds, payload.Cmd)
+		events = append(events, "exec:"+strings.Join(payload.Cmd, " "))
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]string{"Id": "exec-id"})
+	})
+	mux.HandleFunc("POST /exec/{id}/start", func(w http.ResponseWriter, _ *http.Request) {
+		events = append(events, "start-exec")
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("GET /exec/{id}/json", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"Running": false, "ExitCode": 0})
+	})
+	mux.HandleFunc("PUT /containers/{id}/archive", func(w http.ResponseWriter, r *http.Request) {
+		events = append(events, "archive-put")
+		tr := tar.NewReader(r.Body)
+		hdr, err := tr.Next()
+		if err != nil {
+			t.Fatalf("read archive header: %v", err)
+		}
+		projectedName = hdr.Name
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	b := newTestDockerBackend(t, srv.URL)
+
+	if err := b.WriteFile(context.Background(), "alice", "/root/.qwen/settings.json", `{"a":1}`); err != nil {
+		t.Fatalf("WriteFile with fresh parent dir failed: %v", err)
+	}
+	// mkdir -p must come before the archive PUT, and the PUT must then
+	// carry only the leaf file.
+	wantMkdir := []string{"mkdir", "-p", "/root/.qwen"}
+	if len(execCmds) < 1 || !slicesEqual(execCmds[0], wantMkdir) {
+		t.Fatalf("exec cmds=%v, want first %v", execCmds, wantMkdir)
+	}
+	idxMkdir, idxPut := -1, -1
+	for i, e := range events {
+		if idxMkdir == -1 && strings.HasPrefix(e, "exec:") {
+			idxMkdir = i
+		}
+		if e == "archive-put" {
+			idxPut = i
+		}
+	}
+	if idxMkdir == -1 || idxPut == -1 || idxMkdir > idxPut {
+		t.Fatalf("events=%v, want mkdir before archive-put", events)
+	}
+	if projectedName != "settings.json.next" {
+		t.Fatalf("projected name=%q, want settings.json.next", projectedName)
+	}
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

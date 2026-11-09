@@ -1,0 +1,38 @@
+# Build a small telemetry overlay on a tested Worker image for local demos.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+ARG VENV_PATH
+ARG RUNTIME
+ARG RUNTIME_PIP_SPEC=
+RUN if [ -n "${RUNTIME_PIP_SPEC}" ]; then ${VENV_PATH}/bin/pip install --index-url https://pypi.org/simple "${RUNTIME_PIP_SPEC}"; fi
+COPY ${RUNTIME}/src/ /tmp/runtime-overlay/
+RUN ${VENV_PATH}/bin/python - <<'PY'
+import shutil
+import sysconfig
+from pathlib import Path
+for package in Path('/tmp/runtime-overlay').iterdir():
+    if package.is_dir():
+        shutil.copytree(package, Path(sysconfig.get_paths()['purelib']) / package.name, dirs_exist_ok=True)
+PY
+COPY shared/lib/ /opt/agentteams/scripts/lib/
+COPY plugins/teamharness/adapters/qwenpaw/task_trace.py /opt/agentteams/scripts/lib/telemetry/at_task_trace.py
+COPY plugins/agentteams-matrix-channel/ /opt/agentteams/qwenpaw-builtin/plugins/agentteams-matrix-channel/
+COPY ${RUNTIME}/scripts/${RUNTIME}-worker-entrypoint.sh /opt/agentteams/scripts/${RUNTIME}-worker-entrypoint.sh
+RUN ${VENV_PATH}/bin/python - <<'PY'
+import hashlib
+from pathlib import Path
+root = Path('/opt/agentteams/qwenpaw-builtin/plugins/agentteams-matrix-channel')
+digest = hashlib.sha256()
+for path in sorted(root.rglob('*')):
+    if path.is_file() and path.name != '.agentteams-builtin-plugin.sha256':
+        digest.update(path.relative_to(root).as_posix().encode())
+        digest.update(b'\0')
+        digest.update(path.read_bytes())
+        digest.update(b'\0')
+(root / '.agentteams-builtin-plugin.sha256').write_text(digest.hexdigest() + '\n')
+PY
+RUN ${VENV_PATH}/bin/pip install --index-url https://pypi.org/simple \
+    -r /opt/agentteams/scripts/lib/telemetry/requirements.txt
+RUN chmod +x /opt/agentteams/scripts/${RUNTIME}-worker-entrypoint.sh
+RUN chmod +x /opt/agentteams/scripts/lib/mc-wrapper.sh && test -x /usr/local/bin/mc
+ENV PYTHONPATH=/opt/agentteams/scripts/lib/telemetry

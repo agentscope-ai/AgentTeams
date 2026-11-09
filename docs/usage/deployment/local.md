@@ -6,6 +6,8 @@ This guide explains how to create and maintain an AgentTeams instance on a singl
 
 If you only want to complete your first task as quickly as possible, start with the [Quickstart](../../quickstart.md). Windows users should follow the separate [Windows Deployment Guide](windows.md).
 
+If an agent helps you set up the instance, follow the [SETUP Playbook](setup-playbook.md): it collects the decisions one question at a time, produces a reviewable plan, and then executes with per-step pre-checks and explicit failure recovery.
+
 ## What local deployment creates
 
 The current local installer uses the embedded architecture by default:
@@ -159,6 +161,8 @@ The English installer provides Alibaba Cloud model service and OpenAI-compatible
   - `qwen`: uses the built-in Alibaba Cloud Model Studio/Qwen integration.
   - `openai-compat`: uses the OpenAI-compatible protocol for services such as OpenAI, Alibaba Cloud Token Plan, DeepSeek, and self-hosted model gateways.
 - `AGENTTEAMS_OPENAI_BASE_URL`: the base endpoint for an OpenAI-compatible API. Enter the service root, not a complete `/chat/completions` request path. It commonly ends in `/v1`. It is normally empty when using the built-in `qwen` integration.
+
+> IPv4 endpoints with an explicit port (for example, `http://192.168.1.10:3000/v1`) use a static Higress service source; domain endpoints retain DNS discovery. HTTP and HTTPS are preserved. The bundled Higress Console does not support static IPv6 sources; use an IPv4 address or a DNS name instead.
 - `AGENTTEAMS_LLM_API_KEY`: the required secret for model access. The installer uses it for connectivity checks and writes it to the local configuration for gateway use.
 - `AGENTTEAMS_DEFAULT_MODEL`: the model ID used by the Manager and new Workers by default. It must exactly match a model name accepted by the provider API. A specific Manager or Worker can override it later.
 - `AGENTTEAMS_EMBEDDING_MODEL`: the model ID used for vectorization in features such as memory retrieval. The installer tries `text-embedding-v4` by default. An empty string disables embeddings. The model must be accessible with the current credentials and corresponding API endpoint.

@@ -1,0 +1,183 @@
+---
+name: coding-cli
+description: 将编码工作委托给持有 CLI 的 agent（Manager / Leader / 获授权 Worker）的 AI CLI 工具（Claude Code / Gemini CLI / qodercli / Qwen Code / OpenCode）执行
+assign_when: Worker 需要完成编码任务（写代码、修改代码、重构、修 bug 等），且委托方 agent（Manager / Leader / 获授权 Worker）已启用 Coding CLI 委托模式（spec.md 中包含"## Coding CLI Mode"章节）
+---
+
+# Coding CLI Delegation
+
+When the delegating agent (Manager / Leader / 获授权 Worker) assigns you a task with a "## Coding CLI Mode" section in `spec.md`, you do **not** write the code yourself. Instead, you:
+
+1. Understand the task deeply
+2. Prepare the workspace
+3. Generate a precise coding prompt
+4. Delegate execution to the delegating agent's CLI tool
+5. Review the result
+
+**Operational reference**: [`references/delegation-guidance.md`](references/delegation-guidance.md) — one-shot delegation from the delegator's side: what it is, task-spec discipline, what it does not provide, and where results and logs land. Later capabilities (supervision, steering, approval) are documented in the management-side guidance.
+
+---
+
+## When to Use This Skill
+
+Check `spec.md` for the task. If it contains `## Coding CLI Mode`, use this skill for all code changes.
+
+---
+
+## Step-by-Step Workflow
+
+### 1. Prepare the Workspace
+
+Set up the workspace directory under the shared filesystem:
+
+```bash
+workspace="/root/agentteams-fs/shared/tasks/{task-id}/workspace"
+mkdir -p "$workspace"
+
+# Clone a repo (example)
+git clone <repo-url> "$workspace"
+
+# Or copy existing code
+cp -r /path/to/source "$workspace/"
+```
+
+**Constraint**: The workspace path **must** be under `/root/agentteams-fs/`. The delegating agent accesses the same path via MinIO mirror.
+
+### 2. Push Workspace to MinIO
+
+Before sending the coding-request, push all workspace files so the delegating agent can access them:
+
+```bash
+mc mirror "/root/agentteams-fs/shared/tasks/{task-id}/workspace/" \
+  ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/workspace/
+```
+
+### 2b. Check for Processing Marker
+
+Before modifying the workspace or sending a coding-request, check if the task directory is being processed:
+
+```bash
+# Sync latest state from MinIO
+mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/" \
+  "/root/agentteams-fs/shared/tasks/{task-id}/"
+
+# Check for processing marker
+if [ -f "/root/agentteams-fs/shared/tasks/{task-id}/.processing" ]; then
+    echo "Task directory is being processed. Wait for the delegating agent to complete."
+    # Do NOT send coding-request yet; wait and retry
+fi
+```
+
+If a `.processing` marker exists, wait for the delegating agent to complete their operation before sending your request.
+
+The same marker check is **enforced in code**: `run-coding-cli.sh` exits 125 before invoking a CLI when the **task root** (`--task-dir`, default the workspace's parent) has an active marker that does not match both the caller's `--processor` and non-empty `--run-id`. Your delegating agent creates a fresh run ID with its marker and passes that same ID to the wrapper and marker removal script. A shared name such as `manager` alone does not establish ownership. Active legacy markers without run IDs block execution; expired markers are ignored. Keep checking the marker before sending your request, and do not reuse another operation's run ID. This check does not replace atomic scheduling or provide a permission boundary.
+
+### 3. Generate a High-Quality Prompt
+
+A good prompt includes:
+
+- **Target files**: exact paths and relevant line numbers
+- **Specific changes**: describe *what* to change, not just *why*
+- **Context**: existing code structure, dependencies, interfaces
+- **Acceptance criteria**: how to verify the change is correct
+- **Constraints**: languages, frameworks, style conventions, things NOT to change
+
+**Example of a good prompt:**
+```
+In the file `src/server/handlers/auth.go`, implement the `RefreshToken` function (currently a stub at line 142).
+
+Requirements:
+- Validate the incoming refresh_token from the request body (field name: "refresh_token")
+- Look up the token in the database using `db.FindRefreshToken(ctx, token)` (already imported)
+- If valid, generate a new access token with `auth.GenerateAccessToken(userID)` and return it as JSON: {"access_token": "<token>", "expires_in": 3600}
+- If invalid or expired, return HTTP 401 with body: {"error": "invalid_refresh_token"}
+- Follow the existing error handling pattern used in `LoginHandler` (line 89)
+
+Do not change any other files.
+```
+
+**Signs of a weak prompt** (avoid):
+- "Fix the auth system" (too vague)
+- "Improve performance" (no specific target)
+- "Add tests" (no specification of what to test or where)
+
+### 4. Send `coding-request:` to the delegating agent
+
+Send in your Worker Room (or Project Room, wherever the task was assigned):
+
+```
+@<delegator>:DOMAIN task-{task-id} coding-request:
+workspace: /root/agentteams-fs/shared/tasks/{task-id}/workspace
+---PROMPT---
+{your detailed coding prompt here}
+---END---
+```
+
+Note: `workspace` can be any subdirectory under `/root/agentteams-fs/`, e.g. a cloned git repo:
+```
+workspace: /root/agentteams-fs/shared/tasks/{task-id}/workspace/my-repo
+```
+
+### 5. Wait for the delegating agent's Response
+
+The delegating agent will run the CLI tool and respond with either:
+
+**Success** — `coding-result:`
+```
+@{your-name}:DOMAIN task-{task-id} coding-result:
+CLI 工具已完成编码。请同步工作目录并 review 变更...
+```
+
+**Failure** — `coding-failed:`
+```
+@{your-name}:DOMAIN task-{task-id} coding-failed:
+CLI 工具执行失败...你生成的提示词已保存于：/root/agentteams-fs/shared/tasks/{task-id}/coding-prompts/
+```
+
+### 6a. On `coding-result:`
+
+```bash
+# Sync changes from MinIO
+agentteams-sync
+
+# Review what changed
+cd /root/agentteams-fs/shared/tasks/{task-id}/workspace
+git diff  # if it's a git repo
+# or: check coding-cli-logs/ for CLI output
+```
+
+Review the changes:
+- Verify they match the task requirements
+- Check for obvious errors or unintended modifications
+- Run tests if applicable
+
+Report to the delegating agent:
+```
+@<delegator>:DOMAIN task-{task-id} completed:
+Changes reviewed and verified. {Brief summary of what was implemented.}
+```
+
+### 6b. On `coding-failed:`
+
+Implement the coding task yourself using your normal approach. When done, report:
+```
+@<delegator>:DOMAIN task-{task-id} completed:
+Implemented manually (CLI delegation failed). {Brief summary.}
+```
+
+---
+
+## Multiple Rounds
+
+If one CLI delegation doesn't fully complete the task (e.g., the first run fixed the bug but tests still fail), you can send another `coding-request:` with a follow-up prompt. Sync the workspace first to get the latest state before generating the next prompt.
+
+---
+
+## Tips for Better Prompts
+
+- **Be surgical**: "change line 47 from X to Y" beats "fix the login function"
+- **Provide imports**: if the change requires new imports, specify them
+- **Show the pattern**: reference existing code in the same file as the style guide
+- **Limit scope**: tell the CLI "only modify file X, do not change tests or other files"
+- **Verify command**: include how to check correctness, e.g. "run `go test ./...` to verify"
+

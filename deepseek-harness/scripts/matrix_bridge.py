@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from bridge_state import BridgeState
+from runtime_env import desired_model, deepseek_base_url
 from matrix_channel import (
     MatrixClient,
     matrix_events,
@@ -324,6 +325,9 @@ def dsh_error_detail(stderr: str, returncode: int) -> str:
     for line in lines:
         if line.startswith("Error: dsh:") or line.startswith("dsh:"):
             return line
+    for line in lines:
+        if line.startswith(("Error:", "TypeError:", "SyntaxError:", "ReferenceError:")):
+            return line
     useful = [line for line in lines if not line.startswith("Node.js v") and not line.startswith("command terminated")]
     return useful[-1] if useful else f"exit {returncode}"
 
@@ -339,6 +343,15 @@ def run_dsh(
     attempt: int,
 ) -> str:
     environment = os.environ.copy()
+    runtime_path = environment.get("TEAMHARNESS_RUNTIME_CONFIG")
+    if runtime_path:
+        model, gateway = desired_model(Path(runtime_path))
+        if model:
+            environment["TEAMHARNESS_DSH_MODEL"] = model
+        environment["DEEPSEEK_BASE_URL"] = deepseek_base_url(
+            environment.get("DEEPSEEK_BASE_URL", ""),
+            environment.get("AGENTTEAMS_AI_GATEWAY_URL", ""), gateway,
+        )
     environment.update(
         {
             "TEAMHARNESS_DSH_SESSION_ID": session_id,
@@ -438,6 +451,7 @@ def main() -> int:
                     flush=True,
                 )
             payload = client.sync(since, 30_000)
+            client.fill_timeline_gaps(payload, since, room_types)
             batch_complete = True
             for event in matrix_events(payload, room_types, own_user_id, agent_user_ids):
                 if state.is_completed(event["event_id"]):

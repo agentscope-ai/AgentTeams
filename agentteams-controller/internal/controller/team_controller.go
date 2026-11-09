@@ -283,9 +283,10 @@ func (r *TeamReconciler) handleDelete(ctx context.Context, t *v1beta1.Team) erro
 // ---------------------------------------------------------------------------
 
 type teamWorkerMember struct {
-	ref         v1beta1.TeamWorkerRef
-	worker      v1beta1.Worker
-	runtimeName string
+	humanMatrixIDs []string
+	ref            v1beta1.TeamWorkerRef
+	worker         v1beta1.Worker
+	runtimeName    string
 }
 
 func (r *TeamReconciler) teamMemberRuntime(member teamWorkerMember) string {
@@ -427,6 +428,16 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 		}
 	}
 
+	// Keep direct Human grants in the Team-owned policy projection without
+	// writing derived permissions back into the referenced Worker CRs.
+	grants, err := humanWorkerGrants(ctx, r.Client, t.Namespace)
+	if err != nil {
+		return r.failTeam(ctx, t, patchBase, err.Error())
+	}
+	for i := range members {
+		members[i].humanMatrixIDs = grants[members[i].ref.Name]
+	}
+
 	// Worker coordination context
 	for _, rm := range members {
 		if rm.ref.Name == leaderRef.Name {
@@ -472,13 +483,20 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 		for _, rm := range members {
 			if rm.ref.Name != leaderRef.Name {
 				if rm.worker.Status.RoomID != "" {
-					if err := r.Provisioner.ForceLeaveRoom(
-						ctx,
-						managerMatrixID,
-						rm.worker.Status.RoomID,
-					); err != nil {
-						return r.failTeam(ctx, t, patchBase,
-							fmt.Sprintf("remove Manager from Worker %q personal room: %v", rm.ref.Name, err))
+					// #1079: skip the force-leave when the Manager is already out of
+					// the worker's personal room (the steady state) — re-firing a
+					// fire-and-forget force-leave on every team reconcile floods the
+					// admin room. IsUserInRoom reports true on a lookup error,
+					// keeping the removal (and this failTeam on a real error) reachable.
+					if inRoom, _ := r.Provisioner.IsUserInRoom(ctx, rm.worker.Status.RoomID, managerMatrixID); inRoom {
+						if err := r.Provisioner.ForceLeaveRoom(
+							ctx,
+							managerMatrixID,
+							rm.worker.Status.RoomID,
+						); err != nil {
+							return r.failTeam(ctx, t, patchBase,
+								fmt.Sprintf("remove Manager from Worker %q personal room: %v", rm.ref.Name, err))
+						}
 					}
 				}
 				if err := r.ManagerConfig.UpdateManagerGroupAllowFrom(r.ManagerConfig.MatrixUserID(rm.runtimeName), false); err != nil {
@@ -669,6 +687,7 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 		if backend.UsesMemberRuntimeConfig(runtime) {
 			spec.ChannelPolicy = mergeChannelPolicy(t.Spec.ChannelPolicy, member.worker.Spec.ChannelPolicy)
 		}
+		spec = withHumanWorkerGrants(spec, member.humanMatrixIDs)
 		req := service.MemberRuntimeConfigDeployRequest{
 			Name:              member.ref.Name,
 			RuntimeName:       member.runtimeName,
@@ -921,6 +940,9 @@ func (r *TeamReconciler) teamChannelPolicy(t *v1beta1.Team, members []teamWorker
 		dmAllow = append(dmAllow, leaderMatrixID, systemAdminID)
 		dmAllow = appendResolved(dmAllow, resolve, coordinatorIDs...)
 	}
+
+	groupAllow = append(groupAllow, current.humanMatrixIDs...)
+	dmAllow = append(dmAllow, current.humanMatrixIDs...)
 
 	policy := mergeChannelPolicy(t.Spec.ChannelPolicy, individualTeamChannelPolicy(t, current, role))
 	if policy != nil {
@@ -1398,7 +1420,16 @@ func (r *TeamReconciler) humanToTeamRequests(ctx context.Context, obj client.Obj
 	reqs := make([]reconcile.Request, 0, len(teamList.Items))
 	for i := range teamList.Items {
 		t := &teamList.Items[i]
-		if !containsString(human.Spec.AccessibleTeams, t.Name) {
+		directWorker := false
+		for _, member := range t.Spec.WorkerMembers {
+			if containsString(human.Spec.AccessibleWorkers, member.Name) {
+				directWorker = true
+				break
+			}
+		}
+		// A revoke must also enqueue the old team: updates are mapped for
+		// both old and new Human objects by the controller-runtime handler.
+		if !directWorker && !containsString(human.Spec.AccessibleTeams, t.Name) {
 			explicit := false
 			for _, hm := range t.Spec.HumanMembers {
 				if hm.Name == human.Name {

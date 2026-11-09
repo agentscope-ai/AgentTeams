@@ -54,8 +54,8 @@ type Config struct {
 	AuthTokenExpirationSeconds int64
 
 	// Provider selection (driven by Helm values)
-	GatewayProvider string // "higress" | "ai-gateway"
-	StorageProvider string // "minio"   | "oss"
+	GatewayProvider string // "higress"     | "ai-gateway"
+	StorageProvider string // "minio" | "oss" | "s3"
 
 	// Higress (self-hosted gateway)
 	HigressBaseURL       string
@@ -529,7 +529,7 @@ func (c *Config) DockerConfig() backend.DockerConfig {
 		HermesWorkerImage:          envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-hermes-worker:latest"),
 		OpenHumanWorkerImage:       envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
 		QwenPawWorkerImage:         envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-qwenpaw-worker:latest"),
-		DeepSeekHarnessWorkerImage: envOrDefault("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/agentteams-deepseek-harness-worker:v0.1.0"),
+		DeepSeekHarnessWorkerImage: envOrDefault("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/agentteams-deepseek-harness-worker:v0.1.1"),
 		DefaultNetwork:             envOrDefault("AGENTTEAMS_DOCKER_NETWORK", "agentteams-net"),
 	}
 }
@@ -565,6 +565,15 @@ func (c *Config) UsesExternalOSS() bool {
 	return c.StorageProvider == "oss"
 }
 
+// UsesExternalS3 reports whether the controller should talk to an
+// external S3-compatible backend (e.g. RustFS) with fixed credentials.
+// Unlike external OSS, the backend exposes the MinIO-compatible admin
+// API, so per-worker users/policies are still ensured by the controller
+// via mc (see MinIOAdminClient) — verified against RustFS 1.0.3.
+func (c *Config) UsesExternalS3() bool {
+	return c.StorageProvider == "s3"
+}
+
 func (c *Config) K8sConfig() backend.K8sConfig {
 	return backend.K8sConfig{
 		Namespace:                  c.K8sNamespace,
@@ -573,7 +582,7 @@ func (c *Config) K8sConfig() backend.K8sConfig {
 		HermesWorkerImage:          envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-hermes-worker:latest"),
 		OpenHumanWorkerImage:       envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
 		QwenPawWorkerImage:         envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-qwenpaw-worker:latest"),
-		DeepSeekHarnessWorkerImage: envOrDefault("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/agentteams-deepseek-harness-worker:v0.1.0"),
+		DeepSeekHarnessWorkerImage: envOrDefault("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/agentteams-deepseek-harness-worker:v0.1.1"),
 		WorkerCPU:                  c.K8sWorkerCPU,
 		WorkerMemory:               c.K8sWorkerMemory,
 		ControllerName:             c.ControllerName,
@@ -591,7 +600,7 @@ func (c *Config) SandboxConfig() backend.SandboxConfig {
 		HermesWorkerImage:            envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-hermes-worker:latest"),
 		OpenHumanWorkerImage:         envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
 		QwenPawWorkerImage:           envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-qwenpaw-worker:latest"),
-		DeepSeekHarnessWorkerImage:   envOrDefault("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/agentteams-deepseek-harness-worker:v0.1.0"),
+		DeepSeekHarnessWorkerImage:   envOrDefault("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/agentteams-deepseek-harness-worker:v0.1.1"),
 		WorkerCPU:                    c.K8sWorkerCPU,
 		WorkerMemory:                 c.K8sWorkerMemory,
 		SandboxPrewarmSize:           c.SandboxPrewarmSize,
@@ -792,6 +801,11 @@ func (c *Config) OSSConfig() oss.Config {
 		Endpoint:      normalizeMinIOS3Endpoint(endpoint),
 		AccessKey:     accessKey,
 		SecretKey:     secretKey,
+		// Caller-reachable origin for presigned downloads (#1501). It is an
+		// operator-explicit external URL (ingress/domain), so it is used as
+		// given — the internal-endpoint S3-port normalization must NOT
+		// apply to it. Empty keeps presign disabled (501 presign_unsupported).
+		PublicEndpoint: strings.TrimSpace(os.Getenv("AGENTTEAMS_FS_PUBLIC_ENDPOINT")),
 	}
 }
 

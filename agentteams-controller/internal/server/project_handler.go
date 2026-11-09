@@ -9,11 +9,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -82,6 +84,23 @@ type projectMeta struct {
 	UpdatedBy   string `json:"updated_by,omitempty"`
 	UpdatedAt   string `json:"updated_at,omitempty"`
 	PauseReason string `json:"pause_reason,omitempty"`
+	// AuditSeq is the project's committed-operation revision (id_rule v1.2):
+	// a monotonically increasing counter advanced by markAuditFields on every
+	// committed intervention write. It is the persistent identity of a
+	// committed operation — two distinct operations never share a seq even
+	// when they land in the same wall-clock second and would otherwise write
+	// byte-identical state (same-actor pause→resume→pause with the same
+	// reason). It is hashed into the signal event id, which is what keeps
+	// same-second repeats distinct while a retry of the same operation
+	// (same seq, same bytes) re-lands on the same id. Always serialized (no
+	// omitempty) so the field is a stable part of the stored bytes.
+	AuditSeq int `json:"audit_seq"`
+	// Control-action audit ledger (dual ledger, audit side): one entry per
+	// control action (pause/resume/replan/cancel/complete), ok or error.
+	// Written by the same meta write as the intervention itself; capped at
+	// controlActionsLimit with the dropped count preserved.
+	ControlActions               []controlActionEntry `json:"controlActions,omitempty"`
+	ControlActionsTruncatedCount int                  `json:"controlActionsTruncatedCount,omitempty"`
 }
 
 type projectTaskMeta struct {
@@ -110,8 +129,123 @@ type loopMeta struct {
 	CurrentIteration  int               `json:"current_iteration"`
 	MaxIterations     int               `json:"max_iterations"`
 	Status            string            `json:"status"`
+	PauseSources      []string          `json:"pause_sources,omitempty"`
 	Tasks             []projectTaskMeta `json:"tasks,omitempty"`
 	History           []json.RawMessage `json:"history,omitempty"`
+	// Extra keeps the loop keys this struct does not model. A project
+	// write must round-trip the durable loop block byte-for-byte — the
+	// worker-side pause veto (pause_sources, and any future field) is
+	// owned by the loop endpoints and the worker gate
+	// (_loop_pause_state), so dropping an unmodeled key here would
+	// silently clear state only the worker side understands (#1402).
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// loopModeled is loopMeta without its custom JSON methods, so
+// json.Unmarshal/Marshal on it cannot recurse into them.
+type loopModeled loopMeta
+
+// loopModeledKeys is the set of JSON keys the loopMeta struct models,
+// derived from the struct tags: a field added to the struct must never
+// also survive in Extra (that would emit the key twice), and drift in
+// the other direction would silently drop it.
+var loopModeledKeys = func() map[string]bool {
+	set := make(map[string]bool)
+	typ := reflect.TypeOf(loopMeta{})
+	for i := 0; i < typ.NumField(); i++ {
+		tag := typ.Field(i).Tag.Get("json")
+		if tag == "" || tag == "-" {
+			continue
+		}
+		if name := strings.Split(tag, ",")[0]; name != "" {
+			set[name] = true
+		}
+	}
+	return set
+}()
+
+// UnmarshalJSON decodes the modeled fields and keeps every unmodeled key
+// verbatim in Extra, so project writes preserve the loop block.
+func (m *loopMeta) UnmarshalJSON(data []byte) error {
+	var modeled loopModeled
+	if err := json.Unmarshal(data, &modeled); err != nil {
+		return err
+	}
+	*m = loopMeta(modeled)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	for key, value := range raw {
+		if !loopModeledKeys[key] {
+			if m.Extra == nil {
+				m.Extra = make(map[string]json.RawMessage)
+			}
+			m.Extra[key] = value
+		}
+	}
+	return nil
+}
+
+// MarshalJSON emits the modeled fields (struct order, exactly as before)
+// followed by the Extra keys sorted, with their stored bytes verbatim.
+// With no Extra keys the output is byte-identical to the plain struct
+// marshal, so stored JSON stays byte-stable for unchanged input.
+func (m loopMeta) MarshalJSON() ([]byte, error) {
+	base, err := json.Marshal(loopModeled(m))
+	if err != nil {
+		return nil, err
+	}
+	if len(m.Extra) == 0 {
+		return base, nil
+	}
+	keys := make([]string, 0, len(m.Extra))
+	for key := range m.Extra {
+		if !loopModeledKeys[key] {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	if len(keys) == 0 {
+		return base, nil
+	}
+	// A struct marshal is always an object: append the extra keys before
+	// the closing brace.
+	out := make([]byte, 0, len(base)+16*len(keys))
+	out = append(out, base[:len(base)-1]...)
+	// "{}" is the empty object; any other base already carries fields, so
+	// the first extra key needs a separator.
+	hasBase := len(base) > 2
+	for i, key := range keys {
+		quoted, err := json.Marshal(key)
+		if err != nil {
+			return nil, err
+		}
+		if hasBase || i > 0 {
+			out = append(out, ',')
+		}
+		out = append(out, quoted...)
+		out = append(out, ':')
+		out = append(out, m.Extra[key]...)
+	}
+	out = append(out, '}')
+	return out, nil
+}
+
+// loopPaused reports whether the loop block holds a pause source,
+// mirroring the worker-side _loop_pause_state veto: while any
+// pause_sources entry is non-empty (after trimming), dispatch stays
+// blocked even if the project itself is active.
+func loopPaused(loop *loopMeta) bool {
+	if loop == nil {
+		return false
+	}
+	for _, source := range loop.PauseSources {
+		if strings.TrimSpace(source) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // --- workflow response (LangGraph-aligned) ---
@@ -141,6 +275,14 @@ type workflowResponse struct {
 	UpdatedBy   string `json:"updated_by,omitempty"`
 	UpdatedAt   string `json:"updated_at,omitempty"`
 	PauseReason string `json:"pause_reason,omitempty"`
+
+	// INT-8: projection freshness. The view is computed on demand from the
+	// filesync mirror, so ProjectionAgeMs (now - newest mirror mtime among
+	// the objects actually read) is the observable for mirror lag (#1391).
+	// 0 means no anchor could be read (all stats failed); IsStale compares
+	// the age against env PROJECTION_STALE_MS (default 30000 ms).
+	ProjectionAgeMs int64 `json:"projection_age_ms"`
+	IsStale         bool  `json:"is_stale"`
 }
 
 // workflowValues is the current state summary (LangGraph StateSnapshot.values
@@ -716,10 +858,11 @@ func (h *ProjectHandler) GetProjectWorkflow(w http.ResponseWriter, r *http.Reque
 		writeK8sError(w, "get project workflow", err)
 		return
 	}
-	meta, team, ok := h.resolveSingleProject(w, matches)
+	match, ok := h.resolveSingleProjectMatch(w, matches)
 	if !ok {
 		return
 	}
+	meta, team := match.meta, match.team
 	// W4: hide project existence from scoped callers (L2 / team leader) who
 	// do not own this project. resolveProjectMeta scans all prefixes, so a
 	// cross-team project is found; returning 403 would let callers enumerate
@@ -734,11 +877,10 @@ func (h *ProjectHandler) GetProjectWorkflow(w http.ResponseWriter, r *http.Reque
 		httputil.WriteError(w, http.StatusForbidden, err.Error())
 		return
 	}
-
 	if format == "mermaid" {
 		// Pure rendering of the same snapshot (buildWorkflow); per-task
 		// TaskMeta is not needed, so includeTasks is ignored.
-		resp := h.buildWorkflow(meta, team, false)
+		resp := h.buildWorkflow(meta, team, false, time.Time{})
 		snap := workflow.Snapshot{Next: resp.Next}
 		snap.Nodes = make([]workflow.Node, len(resp.Nodes))
 		for i, n := range resp.Nodes {
@@ -758,13 +900,105 @@ func (h *ProjectHandler) GetProjectWorkflow(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, h.buildWorkflow(meta, team, includeTasks))
+	// INT-8: freshness anchor bound to the snapshot actually read. The
+	// anchor stat samples the mirror AFTER the content read, so
+	// verifyProjectMetaSnapshot checks the object's current ETag against
+	// the read bytes (with one bounded re-read on mismatch) before the
+	// anchor — and anything derived from it, e.g. projection_age_ms — is
+	// used.
+	meta, mtime, servedETag, verified := h.verifyProjectMetaSnapshot(r.Context(), match)
+	resp := h.buildWorkflow(meta, team, includeTasks, mtime)
+	if r.URL.Query().Get("consistency") == "strong" {
+		// Close the bracket: the verifying stat only proves the snapshot
+		// was stable at its instant. When storage has moved on, one
+		// bounded re-read (verifyProjectMetaSnapshot) is attempted and the
+		// bracket checked once more. X-Consistency: strong is set only
+		// when a stat confirms storage still holds the exact bytes being
+		// served — a failed re-read or an advance racing the re-read
+		// serves the content at hand WITHOUT the claim.
+		strong := false
+		for i := 0; i < 2 && !strong && verified; i++ {
+			m2, serr := h.oss.StatMeta(r.Context(), match.key)
+			if serr != nil || m2.ETag != servedETag {
+				meta, mtime, servedETag, verified = h.verifyProjectMetaSnapshot(r.Context(), match)
+				resp = h.buildWorkflow(meta, team, includeTasks, mtime)
+				continue
+			}
+			strong = true
+		}
+		if strong {
+			w.Header().Set("X-Consistency", "strong")
+		}
+	}
+
+	httputil.WriteJSON(w, http.StatusOK, resp)
+}
+
+// verifyProjectMetaSnapshot binds the freshness anchor to the project meta
+// snapshot actually served.
+//
+// The anchor StatMeta samples the mirror AFTER resolveProjectMeta's
+// GetObject. A filesync mirror advance landing in between makes the anchor
+// describe a newer version than the bytes actually read — the round-2
+// advanceAt=1 repro: stale content served with a fresh anchor and, on the
+// ?consistency=strong path, an unverified X-Consistency: strong header.
+//
+// Binding the version token to the read itself: the object's current ETag
+// (content hash — MinIO single-part ETag == MD5 of content, as in the
+// in-memory fake) must equal the ETag computed from the bytes we read
+// (match.etag). When it does not, the held snapshot is superseded and one
+// bounded re-read is attempted under the same verification (the post-read
+// stat's ETag must equal the re-read bytes' own hash). A failed re-read, an
+// unparseable re-read, or an advance racing the re-read serves the content
+// at hand with NO anchor and verified=false: the response degrades rather
+// than claiming freshness it cannot prove — a failed re-read must never be
+// reported as strong. When a backend cannot report an ETag the held
+// snapshot is assumed current (no re-read), but callers must still obtain a
+// positive ETag match before claiming strong consistency.
+//
+// A stat error degrades to "no anchor" and never fails the request
+// (audit.go idiom).
+func (h *ProjectHandler) verifyProjectMetaSnapshot(ctx context.Context, match *projectMatch) (*projectMeta, time.Time, string, bool) {
+	m, serr := h.oss.StatMeta(ctx, match.key)
+	if serr != nil {
+		return match.meta, time.Time{}, match.etag, false
+	}
+	if m.ETag == "" || m.ETag == match.etag {
+		return match.meta, m.ModTime, match.etag, true
+	}
+	// The mirror advanced between the read and the anchor stat: the held
+	// snapshot is superseded. One bounded re-read, verified the same way.
+	data, gerr := h.oss.GetObject(ctx, match.key)
+	if gerr != nil {
+		return match.meta, time.Time{}, match.etag, false
+	}
+	var newMeta projectMeta
+	if uerr := json.Unmarshal(data, &newMeta); uerr != nil {
+		return match.meta, time.Time{}, match.etag, false
+	}
+	if newMeta.TeamID == "" {
+		newMeta.TeamID = match.team
+	}
+	reETag := contentETag(data)
+	m2, serr := h.oss.StatMeta(ctx, match.key)
+	if serr != nil {
+		return &newMeta, time.Time{}, reETag, false
+	}
+	if m2.ETag != "" && m2.ETag != reETag {
+		// An advance raced the re-read: serve the fresher re-read bytes,
+		// but no anchor can be bound to them.
+		return &newMeta, time.Time{}, reETag, false
+	}
+	return &newMeta, m2.ModTime, reETag, true
 }
 
 // buildWorkflow converts project meta into the LangGraph-aligned response.
 // When includeTasks is true it additionally reads per-task TaskMeta from
-// shared storage and attaches tasks_detail.
-func (h *ProjectHandler) buildWorkflow(meta *projectMeta, team string, includeTasks bool) *workflowResponse {
+// shared storage and attaches tasks_detail. projectMtime is the StatMeta
+// mtime of the project meta object backing this read (zero time = no
+// anchor); together with the newest task-meta mtime it drives the
+// projection_age_ms / is_stale response fields.
+func (h *ProjectHandler) buildWorkflow(meta *projectMeta, team string, includeTasks bool, projectMtime time.Time) *workflowResponse {
 	nodes := make([]workflowNode, 0, len(meta.Tasks))
 	edges := make([]workflowEdge, 0)
 	next := make([]string, 0)
@@ -802,6 +1036,13 @@ func (h *ProjectHandler) buildWorkflow(meta *projectMeta, team string, includeTa
 	loopBlocked := false
 	if meta.Loop != nil {
 		if meta.Loop.Status == "completed" || meta.Loop.Status == "blocked" || meta.Loop.Status == "waiting_user" {
+			loopBlocked = true
+		}
+		// The pause veto is independent of the loop status: a loop paused
+		// by a human keeps its "running" status but must not dispatch
+		// until every pause source is released. Mirrors _ready_loop_nodes,
+		// which checks _loop_pause_state before computing ready nodes.
+		if !loopBlocked && loopPaused(meta.Loop) {
 			loopBlocked = true
 		}
 	}
@@ -869,9 +1110,14 @@ func (h *ProjectHandler) buildWorkflow(meta *projectMeta, team string, includeTa
 	// authoritative); per-task read errors are skipped too so one bad task
 	// does not fail the whole workflow response.
 	var tasksDetail []taskDetail
+	var taskMaxMtime time.Time
 	if includeTasks {
-		tasksDetail = h.readTasksDetail(meta, team)
+		tasksDetail, taskMaxMtime = h.readTasksDetail(meta, team)
 	}
+
+	// INT-8: freshness from the mirror mtimes of the objects this view used
+	// (project meta always; task metas when includeTasks).
+	ageMs, isStale := projectionFreshness(projectMtime, taskMaxMtime)
 
 	return &workflowResponse{
 		ProjectID:  meta.ProjectID,
@@ -903,6 +1149,8 @@ func (h *ProjectHandler) buildWorkflow(meta *projectMeta, team string, includeTa
 		UpdatedBy:       meta.UpdatedBy,
 		UpdatedAt:       meta.UpdatedAt,
 		PauseReason:     meta.PauseReason,
+		ProjectionAgeMs: ageMs,
+		IsStale:         isStale,
 	}
 }
 
@@ -914,7 +1162,7 @@ func (h *ProjectHandler) buildWorkflow(meta *projectMeta, team string, includeTa
 // shared/tasks/{id}/meta.json for standalone projects. Reads are concurrent
 // (W7 pattern) so N tasks cost ~ceil(N/8) storage rounds instead of N serial
 // reads.
-func (h *ProjectHandler) readTasksDetail(meta *projectMeta, team string) []taskDetail {
+func (h *ProjectHandler) readTasksDetail(meta *projectMeta, team string) ([]taskDetail, time.Time) {
 	// Collect unique task ids from the graph (project tasks, or loop tasks
 	// for loop plans — same set buildWorkflow renders).
 	graphTasks := meta.Tasks
@@ -931,7 +1179,7 @@ func (h *ProjectHandler) readTasksDetail(meta *projectMeta, team string) []taskD
 		taskIDs = append(taskIDs, t.TaskID)
 	}
 	if len(taskIDs) == 0 {
-		return nil
+		return nil, time.Time{}
 	}
 
 	// Candidate TaskMeta keys: the project's owning scope ONLY, via
@@ -972,6 +1220,7 @@ func (h *ProjectHandler) readTasksDetail(meta *projectMeta, team string) []taskD
 	// because it is listed first; a task published to the global prefix is a
 	// fallback for standalone projects).
 	detailByTask := make(map[string]taskDetail, len(taskIDs))
+	winningKeys := make(map[string]bool, len(taskIDs))
 	for _, res := range results {
 		if len(res.data) == 0 {
 			continue
@@ -1010,6 +1259,7 @@ func (h *ProjectHandler) readTasksDetail(meta *projectMeta, team string) []taskD
 		}
 		detail.History = parseTaskHistory(raw["history"])
 		detailByTask[res.taskID] = detail
+		winningKeys[res.key] = true
 	}
 
 	// Return in graph order for stable output.
@@ -1019,7 +1269,48 @@ func (h *ProjectHandler) readTasksDetail(meta *projectMeta, team string) []taskD
 			out = append(out, d)
 		}
 	}
-	return out
+
+	// INT-8: freshness anchors — best-effort StatMeta on every task meta the
+	// detail actually came from (sequential after the concurrent GetObject
+	// phase; stat errors degrade to the remaining anchors, never fail the
+	// read).
+	var maxMtime time.Time
+	for key := range winningKeys {
+		if m, err := h.oss.StatMeta(context.Background(), key); err == nil && m.ModTime.After(maxMtime) {
+			maxMtime = m.ModTime
+		}
+	}
+	return out, maxMtime
+}
+
+// projectionFreshness derives the workflow response freshness fields from
+// the mirror mtimes of the objects the view was computed from: the newest
+// anchor wins, age is clamped at zero (clock-skew safe), and zero anchors
+// (every stat failed) degrade to (0, false).
+func projectionFreshness(anchors ...time.Time) (int64, bool) {
+	var newest time.Time
+	for _, a := range anchors {
+		if a.After(newest) {
+			newest = a
+		}
+	}
+	if newest.IsZero() {
+		return 0, false
+	}
+	age := time.Since(newest).Milliseconds()
+	if age < 0 {
+		age = 0
+	}
+	return age, age > staleThresholdMs()
+}
+
+// staleThresholdMs reads PROJECTION_STALE_MS (milliseconds); an invalid or
+// non-positive value falls back to the 30s default.
+func staleThresholdMs() int64 {
+	if v, err := strconv.Atoi(os.Getenv("PROJECTION_STALE_MS")); err == nil && v > 0 {
+		return int64(v)
+	}
+	return 30000
 }
 
 // keyForTaskID maps a candidate key back to the task id by extracting the
@@ -2211,6 +2502,14 @@ type projectEventsResponse struct {
 // event. V marks the cursor format; anchors without it (pre-seq
 // content-tuple cursors) are answered with cursor_expired.
 //
+// Kind records the ledger family the cursor was issued from: "" for the
+// default task-transition feed, "control_action" for the audit feed. The
+// two feeds share no positions, so a cursor presented to a feed of a
+// different kind is rejected with 400 cursor_kind_mismatch. Cursors
+// issued before the kind field existed carry no Kind (format upgrade):
+// they stay valid on the default feed and are rejected on the
+// control-action feed.
+//
 // Occ and N only concern seq-less legacy entries, whose identity
 // (ts, task_id, seq=0) is shared by every duplicate written in the same
 // second:
@@ -2227,6 +2526,7 @@ type projectEventsResponse struct {
 // Cursors anchored at a unique identity carry neither field.
 type eventsCursorAnchor struct {
 	V      int    `json:"v"`
+	Kind   string `json:"kind,omitempty"`
 	Ts     string `json:"ts"`
 	TaskID string `json:"task_id"`
 	Seq    int64  `json:"seq"`
@@ -2236,9 +2536,10 @@ type eventsCursorAnchor struct {
 
 const eventsCursorVersion = 1
 
-func anchorOfEvent(e projectEvent, occ, n int64) eventsCursorAnchor {
+func anchorOfEvent(e projectEvent, occ, n int64, kind string) eventsCursorAnchor {
 	return eventsCursorAnchor{
 		V:      eventsCursorVersion,
+		Kind:   kind,
 		Ts:     e.Ts,
 		TaskID: e.TaskID,
 		Seq:    e.Seq,
@@ -2254,7 +2555,7 @@ func anchorOfEvent(e projectEvent, occ, n int64) eventsCursorAnchor {
 // length as a snapshot marker, so the next request resumes exactly past
 // this event — and expires explicitly if the snapshot truncated —
 // instead of issuing a cursor that cannot advance.
-func encodeEventsCursorFor(events []projectEvent, pos int) string {
+func encodeEventsCursorFor(events []projectEvent, pos int, kind string) string {
 	e := events[pos]
 	total, occ := int64(0), int64(0)
 	for i, f := range events {
@@ -2267,15 +2568,15 @@ func encodeEventsCursorFor(events []projectEvent, pos int) string {
 		}
 	}
 	if total <= 1 {
-		return encodeEventsCursor(e, 0, 0)
+		return encodeEventsCursor(e, 0, 0, kind)
 	}
-	return encodeEventsCursor(e, occ, int64(len(events)))
+	return encodeEventsCursor(e, occ, int64(len(events)), kind)
 }
 
 // encodeEventsCursor packs an anchor as an opaque cursor. Raw URL-safe
 // base64 keeps it free to pass as a query parameter unescaped.
-func encodeEventsCursor(e projectEvent, occ, n int64) string {
-	b, err := json.Marshal(anchorOfEvent(e, occ, n))
+func encodeEventsCursor(e projectEvent, occ, n int64, kind string) string {
+	b, err := json.Marshal(anchorOfEvent(e, occ, n, kind))
 	if err != nil {
 		return ""
 	}
@@ -2295,10 +2596,16 @@ func decodeEventsCursor(raw string) (eventsCursorAnchor, bool) {
 	if err := json.Unmarshal(b, &a); err != nil {
 		return eventsCursorAnchor{}, false
 	}
-	// ts + task_id are the minimum identity of a transition; from/to/action
-	// would be empty only for a malformed event that collectProjectEvents
-	// never produces.
-	if a.Ts == "" || a.TaskID == "" || a.Occ < 0 || a.N < 0 {
+	// ts is the minimum identity of a transition. task_id is NOT required:
+	// the control-action feed has no task (events carry task_id ""), and
+	// pre-kind cursors may legitimately omit it. from/to/action would be
+	// empty only for a malformed event that collectProjectEvents never
+	// produces; an unknown kind is rejected because it cannot bind to any
+	// feed.
+	if a.Ts == "" || a.Occ < 0 || a.N < 0 {
+		return eventsCursorAnchor{}, false
+	}
+	if a.Kind != "" && a.Kind != "control_action" {
 		return eventsCursorAnchor{}, false
 	}
 	return a, true
@@ -2315,8 +2622,18 @@ const (
 // meta of the project graph is read (same scope rules as readTasksDetail —
 // the project's owning prefix only, no cross-scope fallback) and its
 // `history` entries are merged into one ascending list. No new storage and
-// no write-side hook. Project-level intervention events are out of scope
-// here; the /history snapshot endpoint covers those.
+// no write-side hook.
+//
+// The kind query parameter selects the ledger family: absent (default)
+// serves the task-transition aggregation exactly as before;
+// "control_action" serves the control-action audit ledger derived from the
+// project meta's controlActions entries (action values "control.pause" /
+// "control.resume" / "control.replan" / "control.cancel" / "control.complete").
+// Any other value is rejected with 400. Cursors are bound to the feed
+// they were issued from via the anchor's kind field: presenting a
+// cursor issued for one feed on the other is rejected with 400
+// cursor_kind_mismatch, and a cursor issued before the kind field
+// existed (no kind) is only valid on the default feed.
 //
 // Auth mirrors GetProjectHistory: cross-team access is hidden as 404.
 func (h *ProjectHandler) GetProjectEvents(w http.ResponseWriter, r *http.Request) {
@@ -2363,6 +2680,15 @@ func (h *ProjectHandler) GetProjectEvents(w http.ResponseWriter, r *http.Request
 	if limit > projectEventsMaxLimit {
 		limit = projectEventsMaxLimit
 	}
+	// kind selects the ledger family; anything but "" / "control_action"
+	// is rejected so a typo cannot silently filter the wrong ledger.
+	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
+	switch kind {
+	case "", "control_action":
+	default:
+		httputil.WriteError(w, http.StatusBadRequest, "kind must be empty or control_action")
+		return
+	}
 	anchor := eventsCursorAnchor{}
 	hasCursor := false
 	if raw := strings.TrimSpace(r.URL.Query().Get("cursor")); raw != "" {
@@ -2371,11 +2697,28 @@ func (h *ProjectHandler) GetProjectEvents(w http.ResponseWriter, r *http.Request
 			httputil.WriteError(w, http.StatusBadRequest, "invalid cursor")
 			return
 		}
+		// Cursors are bound to the feed they were issued from: the anchor
+		// records the issuing kind ("" = default task-transition feed)
+		// and the two feeds share no positions, so a cross-feed cursor
+		// would resume at a meaningless offset. Cursors issued before the
+		// kind field existed carry no Kind (format upgrade); they are
+		// only meaningful for the default feed, so a non-empty kind
+		// rejects them exactly like any other mismatch.
+		if a.Kind != kind {
+			httputil.WriteError(w, http.StatusBadRequest, "cursor_kind_mismatch")
+			return
+		}
 		anchor = a
 		hasCursor = true
 	}
 
 	events := h.collectProjectEvents(r.Context(), match.meta, match.team)
+	if kind == "control_action" {
+		// Audit ledger family: replace the task-transition aggregation with
+		// the control-actions derived from the project meta. The cursor and
+		// pagination machinery below is reused unchanged.
+		events = controlActionEvents(match.meta)
+	}
 	resp := projectEventsResponse{ProjectID: projectID, Events: []projectEvent{}}
 	if hasCursor && anchor.V != eventsCursorVersion {
 		// A pre-seq (content-tuple) cursor has no unambiguous identity
@@ -2408,7 +2751,7 @@ func (h *ProjectHandler) GetProjectEvents(w http.ResponseWriter, r *http.Request
 		}
 		resp.Events = events[offset:pageEnd]
 		if pageEnd < len(events) {
-			resp.NextCursor = encodeEventsCursorFor(events, pageEnd-1)
+			resp.NextCursor = encodeEventsCursorFor(events, pageEnd-1, kind)
 		}
 	}
 	httputil.WriteJSON(w, http.StatusOK, resp)
@@ -2558,6 +2901,34 @@ func (h *ProjectHandler) collectProjectEvents(ctx context.Context, meta *project
 	return events
 }
 
+// controlActionEvents derives the project's control-action audit ledger as
+// projectEvent values for the ?kind=control_action feed. Each entry is
+// project-level (task_id empty, no writer-persisted seq), so cursors
+// anchored inside this feed use the occurrence/snapshot mechanism the
+// feed already provides for seq-less identities.
+func controlActionEvents(meta *projectMeta) []projectEvent {
+	if len(meta.ControlActions) == 0 {
+		return nil
+	}
+	events := make([]projectEvent, 0, len(meta.ControlActions))
+	for _, a := range meta.ControlActions {
+		events = append(events, projectEvent{
+			Ts:     a.At,
+			TaskID: "",
+			Actor:  a.Actor,
+			Action: "control." + a.Action,
+			Note:   a.Reason,
+		})
+	}
+	sort.SliceStable(events, func(i, j int) bool {
+		if events[i].Ts != events[j].Ts {
+			return events[i].Ts < events[j].Ts
+		}
+		return events[i].Action < events[j].Action
+	})
+	return events
+}
+
 // projectHistoryLimit caps the retained meta.json snapshots per project.
 // Snapshots are written on every human intervention (pause/resume/replan/
 // cancel/complete), so the limit bounds storage growth while keeping a
@@ -2627,12 +2998,21 @@ func (h *ProjectHandler) writeProjectMeta(ctx context.Context, w http.ResponseWr
 	h.snapshotProjectMeta(ctx, key)
 
 	if etag != "" {
-		err = h.oss.PutObjectIfMatch(ctx, key, data, etag)
+		// Strict: project meta is critical metadata — a 501 provider must
+		// fail the write closed (503) rather than degrade to the racy
+		// Stat-then-Put, which could clobber a concurrent _sync_project
+		// version (#1426 P1).
+		err = strictPut(ctx, h.oss, key, data, etag)
 		if err == nil {
 			return true
 		}
 		if errors.Is(err, oss.ErrPreconditionFailed) {
 			httputil.WriteError(w, http.StatusConflict, "conflict: project was modified concurrently")
+			return false
+		}
+		if errors.Is(err, oss.ErrConditionalUnsupported) {
+			httputil.WriteError(w, http.StatusServiceUnavailable,
+				"conditional_write_unsupported: storage provider does not support conditional writes")
 			return false
 		}
 		httputil.WriteError(w, http.StatusInternalServerError, "write project meta: "+err.Error())
@@ -2643,6 +3023,420 @@ func (h *ProjectHandler) writeProjectMeta(ctx context.Context, w http.ResponseWr
 		return false
 	}
 	return true
+}
+
+// projectMetaCommitMaxBytes caps the commit body at 1 MiB: a project meta is
+// small by construction, and the cap bounds the request before it reaches
+// storage.
+const projectMetaCommitMaxBytes = 1 << 20
+
+// pauseSourcesField is the exact JSON key the task runtime persists and
+// reads. Go's struct decoding matches JSON names case-insensitively, so a
+// struct-based presence check accepts "PAUSE_SOURCES":["user"] while the
+// runtime reads the exact lowercase key (the round-11 maintainer repro:
+// the check passed and the durable pause stayed cleared). The helpers below
+// therefore parse the object maps and bind to the exact key; a case variant
+// is reported as an ambiguity the caller rejects.
+const pauseSourcesField = "pause_sources"
+
+// exactPauseSources returns the exact-key loop.pause_sources list and
+// whether any case-variant alias of "loop" or "pause_sources" is present.
+// The task runtime reads the exact lowercase keys, so only the exact value
+// decides the durable state; an alias can only shadow it.
+func exactPauseSources(meta []byte) (sources []string, hasAlias bool) {
+	if len(meta) == 0 {
+		return nil, false
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(meta, &top); err != nil {
+		return nil, false
+	}
+	var loopRaw json.RawMessage
+	for key, raw := range top {
+		switch {
+		case key == "loop":
+			loopRaw = raw
+		case strings.EqualFold(key, "loop"):
+			hasAlias = true
+		}
+	}
+	if len(loopRaw) == 0 {
+		return nil, hasAlias
+	}
+	var loop map[string]json.RawMessage
+	if err := json.Unmarshal(loopRaw, &loop); err != nil {
+		return nil, hasAlias
+	}
+	for key, raw := range loop {
+		switch {
+		case key == pauseSourcesField:
+			_ = json.Unmarshal(raw, &sources)
+		case strings.EqualFold(key, pauseSourcesField):
+			hasAlias = true
+		}
+	}
+	return sources, hasAlias
+}
+
+// exactProjectStatus returns the exact-key top-level “status“ and whether
+// the key is present at all. A case-variant alias is reported separately:
+// the handler treats an alias-only status as "no status", the same way the
+// task runtime does (it reads the exact lowercase key).
+func exactProjectStatus(meta []byte) (status string, present bool, hasAlias bool) {
+	if len(meta) == 0 {
+		return "", false, false
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(meta, &top); err != nil {
+		return "", false, false
+	}
+	for key, raw := range top {
+		switch {
+		case key == "status":
+			present = true
+			_ = json.Unmarshal(raw, &status)
+		case strings.EqualFold(key, "status"):
+			hasAlias = true
+		}
+	}
+	return status, present, hasAlias
+}
+
+// canonicalProjectStatuses are the exact project-status values the rest of
+// the system reads: the Controller's own PauseProject / ResumeProject /
+// ReplanProject compare with ==, and the TeamHarness gate treats exactly
+// "paused" as paused and exactly "active" as runnable. The metadata
+// endpoint stores the body byte-for-byte, so any other spelling — " paused ",
+// "PAUSED", "" — would persist a value no reader interprets the way the
+// writer meant (round 15).
+var canonicalProjectStatuses = map[string]struct{}{
+	"active":    {},
+	"paused":    {},
+	"completed": {},
+}
+
+// canonicalProjectStatus reports whether status is one of the exact values
+// above. An empty or padded string is NOT canonical.
+func canonicalProjectStatus(status string) bool {
+	_, ok := canonicalProjectStatuses[status]
+	return ok
+}
+
+// normalizedProjectStatus is the comparison view used by the AUTHORITY
+// decision only (never for what gets stored): legacy data written before
+// the canonical rule may carry " Paused ", and a canonical rewrite of it
+// must not be mistaken for a release attempt.
+func normalizedProjectStatus(status string) string {
+	return strings.ToLower(strings.TrimSpace(status))
+}
+
+// canonicalPauseSource reports whether source is already in the form both
+// readers produce (Go parsePauseSourcesMeta and the Python gate lowercase
+// and trim). A non-canonical entry is an equivalent-but-unstable spelling:
+// the runtime treats it as the canonical source while the control plane
+// compares exactly, so it must not be introduced by a commit.
+func canonicalPauseSource(source string) bool {
+	return source != "" && source == strings.ToLower(strings.TrimSpace(source))
+}
+
+// writeMetaConflict writes the standard 409 body for a stale meta commit:
+// the caller must re-read, merge and retry (#1402).
+func writeMetaConflict(w http.ResponseWriter) {
+	httputil.WriteJSON(w, http.StatusConflict, struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}{Code: "conflict", Message: "project meta changed since the read; re-read, merge and retry"})
+}
+
+// pauseSourcesContain reports whether the exact-key list contains source.
+func pauseSourcesContain(sources []string, source string) bool {
+	for _, entry := range sources {
+		if entry == source {
+			return true
+		}
+	}
+	return false
+}
+
+// PutProjectMeta conditionally commits a project's full meta.json against
+// the version the caller read (the controller-side conditional commit
+// endpoint, #1402). The worker's filesync path used to `mc stat` and then
+// `mc cp` unconditionally: when a Controller handler committed a pause into
+// the meta in between, the blind copy clobbered it (remote
+// pause_sources=[], gate unpaused) while the sync still reported
+// ok=true/synced=true. This endpoint removes the blind write — the commit
+// is a strict If-Match CAS (PutObjectIfMatchStrict) bound to the ETag the
+// caller passes, and a mismatch is a 409 the client must resolve by
+// re-reading, merging and retrying.
+//
+// PUT /api/v1/projects/{id}/meta
+//
+//	Header If-Match: <ETag from the read / previous commit> (required)
+//	Body: the full meta.json as a JSON object (<= 1 MiB), written through
+//	byte-for-byte (no re-marshal, so the stored bytes equal the commit).
+//
+// Responses: 428 missing If-Match · 413 body > 1 MiB · 400 body not a JSON
+// object · 404 unknown project · 403 worker outside its team · 409 ETag
+// mismatch · 503 backend without strict conditional writes ·
+// 200 {"etag": <new ETag of the committed version>}.
+//
+// No history snapshot and no control-action audit entry: this is the
+// worker's high-frequency commit path, and amplifying every commit with
+// extra writes would widen the write storm this endpoint exists to close.
+// The intervention audit trail stays on the lifecycle endpoints.
+// Idempotency is intrinsic to If-Match: re-sending the same body against
+// the same version succeeds once; the second attempt sees the new ETag and
+// fails with 409 until it re-reads.
+// GetProjectMeta serves GET /api/v1/projects/{id}/meta: the stored meta.json
+// verbatim plus its ETag — the read half of the conditional commit pair
+// (PutProjectMeta requires that ETag as If-Match). Access rules are the same
+// as every other project read (W4: scoped callers see 404, never 403).
+func (h *ProjectHandler) GetProjectMeta(w http.ResponseWriter, r *http.Request) {
+	pwc, failed := h.readProjectWriteContext(w, r)
+	if failed {
+		return
+	}
+	data, err := h.oss.GetObject(r.Context(), pwc.key)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "read project meta: "+err.Error())
+		return
+	}
+	etag := contentETag(data)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("ETag", etag)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+func (h *ProjectHandler) PutProjectMeta(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	if projectID == "" {
+		writeError(w, http.StatusBadRequest, "project id is required")
+		return
+	}
+
+	// The commit is conditional by construction: without an If-Match there
+	// is no read version to bind, and this endpoint never blind-writes.
+	ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
+	if ifMatch == "" {
+		writeError(w, http.StatusPreconditionRequired,
+			"If-Match is required: read the meta and pass its ETag; this endpoint never blind-writes")
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, projectMetaCommitMaxBytes))
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "project meta commit body exceeds 1 MiB")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "read project meta commit body: "+err.Error())
+		return
+	}
+	// The body must be a JSON object. The decode is validation only — the
+	// raw bytes are what get written (byte-identical round-trip).
+	var asObject map[string]json.RawMessage
+	if err := json.Unmarshal(body, &asObject); err != nil {
+		writeError(w, http.StatusBadRequest, "project meta commit body must be a JSON object: "+err.Error())
+		return
+	}
+	// A bare JSON null unmarshals into a nil map WITHOUT an error, and the
+	// raw bytes are what get written — a "null" commit would replace the
+	// whole project meta (including the durable loop.pause_sources) with
+	// the literal null. Reject it before the conditional write (#1402
+	// round 9).
+	if asObject == nil {
+		writeError(w, http.StatusBadRequest, "project meta commit body must be a JSON object, not null")
+		return
+	}
+
+	pwc, failed := h.readProjectWriteContext(w, r)
+	if failed {
+		return
+	}
+
+	// Worker team-scope boundary (the real one): the middleware cannot
+	// resolve project -> team (projectNameFn returns only the id), so the
+	// authorizer's requireSameTeam short-circuits on an empty ResourceTeam.
+	// A worker may commit only the meta of a project in its own team; the
+	// global prefix resolves to team "" and is therefore unreachable for
+	// workers. Admin/manager skip (full access); team leaders and L2 humans
+	// were already scoped above by checkProjectAccess (W4: 404, never 403).
+	if caller := authpkg.CallerFromContext(r.Context()); caller != nil && caller.Role == authpkg.RoleWorker {
+		if !caller.TeamMatches(pwc.team) {
+			writeError(w, http.StatusForbidden, "worker can only commit the meta of a project in its own team")
+			return
+		}
+	}
+
+	// The human pause source is server-owned state for EVERY non-admin
+	// caller (#1402 round 10, widened in round 12): If-Match binds the
+	// version, not the field authority. A commit from a worker, manager,
+	// team leader or L2 human that drops loop.pause_sources=["user"] — or
+	// omits the loop object entirely — must not clear a pause the admin
+	// placed; only the admin and the dedicated resume endpoint may. The
+	// earlier worker-only gate left the other three identities able to
+	// clear the veto through the metadata path while ResumeLoop still
+	// returned 403.
+	//
+	// Ordinary task-progress commits keep the source and stay on the
+	// no-extra-read path; only a body that lacks the source pays the read
+	// that decides whether protecting it is required.
+	// Field-authority + canonical-spelling rules for the metadata commit
+	// (#1402 rounds 10-15). The body is stored byte-for-byte, so everything
+	// here must agree with what the READERS do with those bytes:
+	//
+	//   * a case-variant alias of "loop"/"pause_sources"/"status" is
+	//     rejected: the readers only look at the exact lowercase keys, so
+	//     an alias would silently empty the real field (round 11);
+	//   * a non-canonical spelling of a pause-relevant value is rejected
+	//     unless it is a byte-identical echo of what is already stored: a
+	//     padded/cased "status" or a " user " source reads differently in
+	//     the runtime than in this check, which is exactly how a manager
+	//     released a pause by writing " paused " (round 15);
+	//   * non-admin callers may not release the human pause source or a
+	//     stored paused status (rounds 10/14), and escalating to paused
+	//     stays allowed (a pause is fail-closed).
+	caller := authpkg.CallerFromContext(r.Context())
+	isAdmin := caller != nil && caller.Role == authpkg.RoleAdmin
+	bodySources, bodySourcesAlias := exactPauseSources(body)
+	bodyStatus, bodyStatusPresent, bodyStatusAlias := exactProjectStatus(body)
+	if bodySourcesAlias {
+		writeError(w, http.StatusBadRequest,
+			"ambiguous case alias for loop."+pauseSourcesField+
+				": the task runtime persists and reads the exact lowercase key")
+		return
+	}
+	if bodyStatusAlias {
+		writeError(w, http.StatusBadRequest,
+			`ambiguous case alias for "status": the task runtime persists and reads the exact lowercase key`)
+		return
+	}
+	statusCanonical := !bodyStatusPresent || canonicalProjectStatus(bodyStatus)
+	sourcesCanonical := true
+	for _, source := range bodySources {
+		if !canonicalPauseSource(source) {
+			sourcesCanonical = false
+			break
+		}
+	}
+	// The read is needed when a non-admin commit might release a pause,
+	// and whenever a canonicality question must be answered against the
+	// stored bytes (the byte-identical-echo exception).
+	needsRead := !isAdmin &&
+		(!pauseSourcesContain(bodySources, pauseSourceUser) ||
+			normalizedProjectStatus(bodyStatus) != "paused")
+	needsRead = needsRead || !statusCanonical || !sourcesCanonical
+	if needsRead {
+		current, readErr := h.oss.GetObject(r.Context(), pwc.key)
+		switch {
+		case readErr == nil:
+			currentStatus, currentStatusPresent, _ := exactProjectStatus(current)
+			currentSources, _ := exactPauseSources(current)
+			if !statusCanonical {
+				if !(currentStatusPresent && bodyStatus == currentStatus) {
+					writeError(w, http.StatusBadRequest,
+						"noncanonical project status "+strconv.Quote(bodyStatus)+
+							": the runtime compares the exact string, so the stored value would not mean what it spells (use one of active, paused, completed)")
+					return
+				}
+			}
+			if !sourcesCanonical {
+				for _, source := range bodySources {
+					if canonicalPauseSource(source) {
+						continue
+					}
+					if !pauseSourcesContain(currentSources, source) {
+						writeError(w, http.StatusBadRequest,
+							"noncanonical pause source "+strconv.Quote(source)+
+								": the runtime lowercases and trims sources, so this entry would pause the project under a spelling the resume endpoint cannot address")
+						return
+					}
+				}
+			}
+			if !isAdmin {
+				// A stale If-Match is a version conflict, not a permanent
+				// refusal: the client must re-read and merge (which keeps
+				// the server-owned values) and retry. Only a caller bound
+				// to the CURRENT version gets the field-authority 403.
+				stale := ifMatch != pwc.etag
+				if !pauseSourcesContain(bodySources, pauseSourceUser) &&
+					pauseSourcesContain(currentSources, pauseSourceUser) {
+					if stale {
+						writeMetaConflict(w)
+						return
+					}
+					writeError(w, http.StatusForbidden,
+						"the human pause source is server-owned; a meta commit cannot clear it (use the resume endpoint)")
+					return
+				}
+				if normalizedProjectStatus(bodyStatus) != "paused" &&
+					currentStatusPresent && normalizedProjectStatus(currentStatus) == "paused" {
+					if stale {
+						writeMetaConflict(w)
+						return
+					}
+					writeError(w, http.StatusForbidden,
+						"the paused project status is server-owned; a meta commit cannot release it (use the resume endpoint)")
+					return
+				}
+			}
+		case errors.Is(readErr, os.ErrNotExist):
+			// No stored meta yet: there is no pause to protect, and a
+			// non-canonical body has no echo to be identical to.
+			if !statusCanonical || !sourcesCanonical {
+				writeError(w, http.StatusBadRequest,
+					"noncanonical pause value: the runtime compares exact strings, so the stored value would not mean what it spells")
+				return
+			}
+		default:
+			writeError(w, http.StatusInternalServerError,
+				"verify the server-owned pause state: "+readErr.Error())
+			return
+		}
+	}
+
+	// The unified exit is the STRICT conditional write (loop_handler's
+	// conditionalWriter): a backend whose If-Match can degrade to
+	// compare-then-put — or that does not implement it at all — is rejected
+	// with 503, never an unconditional write.
+	strict, ok := h.oss.(conditionalWriter)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable,
+			"project meta commit requires a backend with strict conditional writes: "+oss.ErrConditionalUnsupported.Error())
+		return
+	}
+	if err := strict.PutObjectIfMatchStrict(r.Context(), pwc.key, body, ifMatch); err != nil {
+		switch {
+		case errors.Is(err, oss.ErrPreconditionFailed):
+			// The meta changed since the caller's read: the write did NOT
+			// land. The client re-reads, merges and retries with the new
+			// ETag — this endpoint never guesses.
+			httputil.WriteJSON(w, http.StatusConflict, struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			}{Code: "conflict", Message: "project meta changed since the read; re-read, merge and retry"})
+		case errors.Is(err, oss.ErrConditionalUnsupported):
+			// The backend cannot honor If-Match at all: fail closed.
+			writeError(w, http.StatusServiceUnavailable,
+				"backend cannot provide conditional writes: "+oss.ErrConditionalUnsupported.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, "commit project meta: "+err.Error())
+		}
+		return
+	}
+
+	// Report the ETag of the version that actually landed (re-stat, not
+	// computed): the client binds its next commit to it.
+	committed, err := h.oss.StatMeta(r.Context(), pwc.key)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "stat project meta after commit: "+err.Error())
+		return
+	}
+	httputil.WriteJSON(w, http.StatusOK, struct {
+		ETag string `json:"etag"`
+	}{ETag: committed.ETag})
 }
 
 // interventionNotify sends an admin message to the project's source room so
@@ -2686,10 +3480,18 @@ func contentETag(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// nowFunc is the clock behind utcTimestamp. It is a package-level var (not a
+// let-bound function) so tests can pin it to a fixed instant and exercise
+// operation sequences inside a single wall-clock second deterministically —
+// the id_rule v1.2 regression, where pause→resume→pause within one second
+// must still yield three distinct events because the identity is the
+// committed audit_seq, never the clock.
+var nowFunc = time.Now
+
 // utcTimestamp returns an RFC3339 UTC timestamp for the audit fields
 // (updated_at / created_at).
 func utcTimestamp() string {
-	return time.Now().UTC().Format(time.RFC3339)
+	return nowFunc().UTC().Format(time.RFC3339)
 }
 
 // authzActor returns the human-readable identity of the caller for the audit
@@ -2706,12 +3508,106 @@ func authzActor(caller *authpkg.CallerIdentity) string {
 }
 
 // markAuditFields stamps the human-intervention audit fields on a
-// project before writing it back.
+// project before writing it back. It also advances the project's committed
+// operation revision (AuditSeq) in the same step: the increment only becomes
+// persistent when the caller's conditional write succeeds (the ETag binds it
+// to the read version — a concurrent writer wins, the write 409s, and the
+// in-memory increment is discarded with the meta), so a committed operation
+// always consumes exactly one seq and a failed/retried attempt consumes none.
+// Callers on a convergence path that does NOT commit a project write must not
+// call this — see CancelTask.
 func markAuditFields(meta *projectMeta, actor, reason string) {
 	meta.UpdatedBy = actor
 	meta.UpdatedAt = utcTimestamp()
+	meta.AuditSeq++
 	if reason != "" {
 		meta.PauseReason = reason
+	}
+}
+
+// controlActionEntry is one record in the project's control-action audit
+// ledger (meta.json controlActions). One entry is written per control
+// action — pause/resume/replan/cancel/complete — on both the success and
+// the failure path of the write endpoint.
+type controlActionEntry struct {
+	ActionID  string `json:"action_id"`
+	ProjectID string `json:"project_id"`
+	Action    string `json:"action"` // pause|resume|replan|cancel|complete
+	Actor     string `json:"actor"`
+	Role      string `json:"role"`
+	At        string `json:"at"`
+	Reason    string `json:"reason,omitempty"`
+	Result    string `json:"result"` // ok|error
+}
+
+// controlActionsLimit caps the retained control-action audit entries per
+// project (oldest dropped, count preserved) so a long-running project's
+// meta.json cannot grow unbounded.
+const controlActionsLimit = 200
+
+// appendControlAction records one control action on the project's audit
+// ledger. On the success path the entry rides the same meta write as the
+// intervention (no extra write, no concurrent-overwrite window); overflow
+// past controlActionsLimit drops the oldest entries and accumulates the
+// dropped count in ControlActionsTruncatedCount.
+func appendControlAction(meta *projectMeta, action, actor, role, reason, result string) {
+	meta.ControlActions = append(meta.ControlActions, controlActionEntry{
+		ActionID:  uuid.NewString(),
+		ProjectID: meta.ProjectID,
+		Action:    action,
+		Actor:     actor,
+		Role:      role,
+		At:        utcTimestamp(),
+		Reason:    reason,
+		Result:    result,
+	})
+	if len(meta.ControlActions) > controlActionsLimit {
+		dropped := len(meta.ControlActions) - controlActionsLimit
+		meta.ControlActionsTruncatedCount += dropped
+		meta.ControlActions = meta.ControlActions[dropped:]
+	}
+}
+
+// auditCaller resolves the (actor, role) pair for the control-action audit
+// ledger. The project write endpoints carry no authenticated identity in
+// the current configuration (the authz middleware exists but no auth layer
+// is wired), so an absent caller is attributed to the system with the
+// unauthenticated role; the pair fills in automatically once the auth
+// layer lands.
+func auditCaller(caller *authpkg.CallerIdentity) (actor, role string) {
+	if caller != nil && caller.Username != "" {
+		if caller.Role == "" {
+			return caller.Username, "unauthenticated"
+		}
+		return caller.Username, caller.Role
+	}
+	return "system", "unauthenticated"
+}
+
+// persistControlActionAudit is the best-effort audit write for the failure
+// path: the HTTP error response has already been sent, so the updated meta
+// is pushed directly to storage bound to the resolve-time ETag. A
+// concurrent modification (etag mismatch) or a storage failure drops the
+// entry (logged) — the audit must never mask or replace the primary error
+// response. No history snapshot is taken: the audit write changes no
+// lifecycle state.
+func (h *ProjectHandler) persistControlActionAudit(ctx context.Context, key, etag string, meta *projectMeta) {
+	data, err := json.Marshal(meta)
+	if err != nil {
+		log.FromContext(ctx).Info("control action audit: marshal failed", "key", key, "error", err.Error())
+		return
+	}
+	if etag != "" {
+		// Strict: the audit write re-binds the whole meta to the resolve-time
+		// ETag, so on a 501 provider the degraded Stat-then-Put could clobber
+		// a concurrent meta version. Dropping the audit entry (logged) is the
+		// designed best-effort loss; clobbering meta is not.
+		err = strictPut(ctx, h.oss, key, data, etag)
+	} else {
+		err = h.oss.PutObject(ctx, key, data)
+	}
+	if err != nil {
+		log.FromContext(ctx).Info("control action audit: best-effort write failed", "key", key, "error", err.Error())
 	}
 }
 
@@ -2796,26 +3692,40 @@ func (h *ProjectHandler) PauseProject(w http.ResponseWriter, r *http.Request) {
 	}
 	meta := pwc.meta
 	caller := authpkg.CallerFromContext(r.Context())
+	actor, role := auditCaller(caller)
 	var reqBody struct {
 		Reason string `json:"reason"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&reqBody)
 
-	if meta.Status == "paused" {
+	// Legacy data may carry a padded/cased status (written before the
+	// canonical rule, round 15). The control plane reads it the way the
+	// pause gate does, and both writes below store a canonical value.
+	if normalizedProjectStatus(meta.Status) == "paused" {
 		writeError(w, http.StatusConflict, "project is already paused")
+		appendControlAction(meta, "pause", actor, role, "project is already paused", "error")
+		h.persistControlActionAudit(r.Context(), pwc.key, pwc.etag, meta)
 		return
 	}
 	if meta.Status == "completed" {
 		writeError(w, http.StatusConflict, "cannot pause a completed project")
+		appendControlAction(meta, "pause", actor, role, "cannot pause a completed project", "error")
+		h.persistControlActionAudit(r.Context(), pwc.key, pwc.etag, meta)
 		return
 	}
 	meta.Status = "paused"
 	markAuditFields(meta, authzActor(caller), reqBody.Reason)
+	appendControlAction(meta, "pause", actor, role, reqBody.Reason, "ok")
 	if !h.writeProjectMeta(r.Context(), w, pwc.key, meta, pwc.etag) {
 		return
 	}
+	h.emitSignalEvent(r.Context(), signalEmitters["PauseProject"], pwc.team, signalTeamID(meta, pwc.team), meta.ProjectID, "", nil, pwc.key, refBytes(meta), map[string]any{
+		"project_id": meta.ProjectID,
+		"reason":     reqBody.Reason,
+		"actor":      authzActor(caller),
+	}, meta.AuditSeq)
 	h.interventionNotify(r.Context(), meta, fmt.Sprintf("⏸️ 项目 %s 已被暂停%s", meta.ProjectID, pauseReasonSuffix(reqBody.Reason)))
-	httputil.WriteJSON(w, http.StatusOK, h.buildWorkflow(meta, pwc.team, false))
+	httputil.WriteJSON(w, http.StatusOK, h.buildWorkflow(meta, pwc.team, false, time.Time{}))
 }
 
 // ResumeProject sets a paused project back to active.
@@ -2828,17 +3738,25 @@ func (h *ProjectHandler) ResumeProject(w http.ResponseWriter, r *http.Request) {
 	}
 	meta := pwc.meta
 	caller := authpkg.CallerFromContext(r.Context())
-	if meta.Status != "paused" {
+	actor, role := auditCaller(caller)
+	if normalizedProjectStatus(meta.Status) != "paused" {
 		writeError(w, http.StatusConflict, "project is not paused")
+		appendControlAction(meta, "resume", actor, role, "project is not paused", "error")
+		h.persistControlActionAudit(r.Context(), pwc.key, pwc.etag, meta)
 		return
 	}
 	meta.Status = "active"
 	markAuditFields(meta, authzActor(caller), "")
+	appendControlAction(meta, "resume", actor, role, "", "ok")
 	if !h.writeProjectMeta(r.Context(), w, pwc.key, meta, pwc.etag) {
 		return
 	}
+	h.emitSignalEvent(r.Context(), signalEmitters["ResumeProject"], pwc.team, signalTeamID(meta, pwc.team), meta.ProjectID, "", nil, pwc.key, refBytes(meta), map[string]any{
+		"project_id": meta.ProjectID,
+		"actor":      authzActor(caller),
+	}, meta.AuditSeq)
 	h.interventionNotify(r.Context(), meta, fmt.Sprintf("▶️ 项目 %s 已恢复", meta.ProjectID))
-	httputil.WriteJSON(w, http.StatusOK, h.buildWorkflow(meta, pwc.team, false))
+	httputil.WriteJSON(w, http.StatusOK, h.buildWorkflow(meta, pwc.team, false, time.Time{}))
 }
 
 // pauseReasonSuffix formats an optional pause reason for the notification.
@@ -2871,25 +3789,34 @@ func (h *ProjectHandler) ReplanProject(w http.ResponseWriter, r *http.Request) {
 	}
 	meta := pwc.meta
 	caller := authpkg.CallerFromContext(r.Context())
+	actor, role := auditCaller(caller)
+	replanFail := func(message string) {
+		appendControlAction(meta, "replan", actor, role, message, "error")
+		h.persistControlActionAudit(r.Context(), pwc.key, pwc.etag, meta)
+	}
 	var reqBody struct {
 		Tasks []json.RawMessage `json:"tasks"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		replanFail("invalid request body: " + err.Error())
 		return
 	}
 
 	if meta.PlanType != "" && meta.PlanType != "dag" {
 		writeError(w, http.StatusConflict, "replan is only supported for dag plans")
+		replanFail("replan is only supported for dag plans")
 		return
 	}
 	if meta.Status != "active" {
 		writeError(w, http.StatusConflict, "replan requires an active project")
+		replanFail("replan requires an active project")
 		return
 	}
 	for _, t := range meta.Tasks {
 		if t.Status == "in_progress" || t.Status == "submitted" {
 			writeError(w, http.StatusConflict, "project has in-flight tasks; replan is only safe before execution")
+			replanFail("project has in-flight tasks; replan is only safe before execution")
 			return
 		}
 	}
@@ -2897,6 +3824,7 @@ func (h *ProjectHandler) ReplanProject(w http.ResponseWriter, r *http.Request) {
 		for _, t := range meta.Loop.Tasks {
 			if t.Status == "in_progress" || t.Status == "submitted" {
 				writeError(w, http.StatusConflict, "project has in-flight tasks; replan is only safe before execution")
+				replanFail("project has in-flight tasks; replan is only safe before execution")
 				return
 			}
 		}
@@ -2915,21 +3843,29 @@ func (h *ProjectHandler) ReplanProject(w http.ResponseWriter, r *http.Request) {
 	planned, err := normalizeReplanTasks(reqBody.Tasks, previous)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		replanFail(err.Error())
 		return
 	}
 	if err := validateTaskGraph(planned); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		replanFail(err.Error())
 		return
 	}
 
 	meta.Tasks = planned
 	meta.PlanType = "dag"
 	markAuditFields(meta, authzActor(caller), "")
+	appendControlAction(meta, "replan", actor, role, "", "ok")
 	if !h.writeProjectMeta(r.Context(), w, pwc.key, meta, pwc.etag) {
 		return
 	}
+	h.emitSignalEvent(r.Context(), signalEmitters["ReplanProject"], pwc.team, signalTeamID(meta, pwc.team), meta.ProjectID, "", nil, pwc.key, refBytes(meta), map[string]any{
+		"project_id": meta.ProjectID,
+		"task_count": len(planned),
+		"actor":      authzActor(caller),
+	}, meta.AuditSeq)
 	h.interventionNotify(r.Context(), meta, fmt.Sprintf("📋 项目 %s 已重规划（%d 个任务）", meta.ProjectID, len(planned)))
-	httputil.WriteJSON(w, http.StatusOK, h.buildWorkflow(meta, pwc.team, false))
+	httputil.WriteJSON(w, http.StatusOK, h.buildWorkflow(meta, pwc.team, false, time.Time{}))
 }
 
 // isSafeTaskID mirrors TeamHarness _safe_id ([A-Za-z0-9][A-Za-z0-9._-]*).
@@ -3118,6 +4054,7 @@ func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	caller := authpkg.CallerFromContext(r.Context())
+	actor, role := auditCaller(caller)
 	teamFilter := r.URL.Query().Get("team")
 	prefixes, crToEffective, err := h.teamProjectPrefixes(r.Context())
 	if err != nil {
@@ -3143,12 +4080,18 @@ func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := h.checkProjectAccess(caller, team, crToEffective); err != nil {
+		// Denied access is not audited: the 404/403 must stay side-effect
+		// free (writing the meta would betray the project's existence).
 		if _, ok := err.(*accessDeniedError); ok {
 			writeError(w, http.StatusNotFound, "project not found")
 			return
 		}
 		writeError(w, http.StatusForbidden, err.Error())
 		return
+	}
+	cancelFail := func(message string) {
+		appendControlAction(meta, "cancel", actor, role, message, "error")
+		h.persistControlActionAudit(r.Context(), key, etag, meta)
 	}
 
 	var reqBody struct {
@@ -3160,11 +4103,13 @@ func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	reason := strings.TrimSpace(reqBody.Reason)
 	if reason == "" {
 		writeError(w, http.StatusBadRequest, "reason is required")
+		cancelFail("reason is required")
 		return
 	}
 	replacementTaskID := strings.TrimSpace(reqBody.ReplacementTaskID)
 	if replacementTaskID != "" && !isPlainToken(replacementTaskID) {
 		writeError(w, http.StatusBadRequest, "replacementTaskId must be a plain token (letters, digits, '-', '_', '.')")
+		cancelFail("replacementTaskId must be a plain token (letters, digits, '-', '_', '.')")
 		return
 	}
 
@@ -3187,6 +4132,7 @@ func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if !found {
 		writeError(w, http.StatusNotFound, "task not found in project")
+		cancelFail("task not found in project")
 		return
 	}
 	// A node already cancelled is NOT rejected: it is the retry-convergence
@@ -3194,6 +4140,7 @@ func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	// task-meta write, and the retry re-writes the idempotent task meta.
 	if isTerminalTaskStatus(nodeStatus) && nodeStatus != "cancelled" {
 		writeError(w, http.StatusConflict, "cannot cancel terminal task: "+nodeStatus)
+		cancelFail("cannot cancel terminal task: " + nodeStatus)
 		return
 	}
 
@@ -3202,14 +4149,17 @@ func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	taskData, err := readTaskMetaFirst(h, r.Context(), taskID, team)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "read task meta: "+err.Error())
+		cancelFail("read task meta: " + err.Error())
 		return
 	}
 	if taskData == nil {
 		writeError(w, http.StatusNotFound, "task meta not found")
+		cancelFail("task meta not found")
 		return
 	}
 	if str(taskData["task_id"]) != taskID || str(taskData["project_id"]) != projectID {
 		writeError(w, http.StatusNotFound, "task meta not found")
+		cancelFail("task meta not found (ownership mismatch)")
 		return
 	}
 	persistedSubmissionID, _ := taskData["submission_id"].(string)
@@ -3217,10 +4167,12 @@ func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	requestedSubmissionID := strings.TrimSpace(reqBody.SubmissionID)
 	if persistedSubmissionID != "" && requestedSubmissionID == "" {
 		writeError(w, http.StatusConflict, "submissionId is required for the current task submission")
+		cancelFail("submissionId is required for the current task submission")
 		return
 	}
 	if requestedSubmissionID != "" && requestedSubmissionID != persistedSubmissionID {
 		writeError(w, http.StatusConflict, "submissionId does not match the current task submission")
+		cancelFail("submissionId does not match the current task submission")
 		return
 	}
 	if projectCancellation != nil &&
@@ -3228,12 +4180,14 @@ func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 			strings.TrimSpace(projectCancellation.Reason) != reason ||
 			strings.TrimSpace(projectCancellation.ReplacementTaskID) != replacementTaskID) {
 		writeError(w, http.StatusConflict, "cancel task conflicts with persisted project cancellation")
+		cancelFail("cancel task conflicts with persisted project cancellation")
 		return
 	}
 	taskStatus, _ := taskData["status"].(string)
 	taskStatus = strings.TrimSpace(taskStatus)
 	if isTerminalTaskStatus(taskStatus) && taskStatus != "cancelled" {
 		writeError(w, http.StatusConflict, "cannot cancel terminal task: "+taskStatus)
+		cancelFail("cannot cancel terminal task: " + taskStatus)
 		return
 	}
 	persistedReason, _ := taskData["cancel_reason"].(string)
@@ -3246,18 +4200,20 @@ func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	continuationResolution = strings.TrimSpace(continuationResolution)
 	if hasContinuation && continuationStatus == "resolved" && continuationResolution != "cancelled" {
 		writeError(w, http.StatusConflict, "task continuation already resolved as a different decision")
+		cancelFail("task continuation already resolved as a different decision")
 		return
 	}
 	if taskStatus == "cancelled" && (strings.TrimSpace(persistedReason) != reason ||
 		strings.TrimSpace(persistedReplacementTaskID) != replacementTaskID) {
 		writeError(w, http.StatusConflict, "cancel task conflicts with existing cancellation")
+		cancelFail("cancel task conflicts with existing cancellation")
 		return
 	}
 	fullyResolved := taskStatus == "cancelled" && nodeStatus == "cancelled" &&
 		strings.TrimSpace(persistedCancelledAt) != "" &&
 		(!hasContinuation || (continuationStatus == "resolved" && continuationResolution == "cancelled"))
 	if fullyResolved {
-		httputil.WriteJSON(w, http.StatusOK, h.buildWorkflow(meta, team, false))
+		httputil.WriteJSON(w, http.StatusOK, h.buildWorkflow(meta, team, false, time.Time{}))
 		return
 	}
 	taskData["status"] = "cancelled"
@@ -3340,9 +4296,23 @@ func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	markAuditFields(meta, authzActor(caller), reason)
+	// The audit stamp — including the audit_seq increment — happens only when
+	// THIS request commits the project write. On the retry-convergence path
+	// (project node already cancelled by the first attempt) the intervention
+	// was already committed with the persisted revision; re-stamping here
+	// would advance the in-memory seq for a write that never happens, and the
+	// re-emit would then hash a revision the store never contained, breaking
+	// the same-operation retry idempotency the deterministic id provides.
 	if nodeStatus != "cancelled" {
-		// First attempt: write the project node, then the task meta.
+		// First attempt: stamp the audit fields, write the project node,
+		// then the task meta.
+		markAuditFields(meta, authzActor(caller), reason)
+		// Success audit: on the first attempt the entry rides the project-node
+		// write below. The retry-convergence branch (nodeStatus already
+		// "cancelled") performs no project write — the first attempt already
+		// recorded the entry — so nothing is appended there (same no-op
+		// discipline as the transition history above).
+		appendControlAction(meta, "cancel", actor, role, reason, "ok")
 		if !h.writeProjectMeta(r.Context(), w, key, meta, etag) {
 			return
 		}
@@ -3351,8 +4321,13 @@ func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "write task meta: "+err.Error())
 		return
 	}
+	h.emitSignalEvent(r.Context(), signalEmitters["CancelTask"], team, signalTeamID(meta, team), meta.ProjectID, taskID, nil, taskMetaKeys(taskID, team)[0], taskJSON, map[string]any{
+		"project_id": meta.ProjectID,
+		"reason":     reason,
+		"actor":      authzActor(caller),
+	}, meta.AuditSeq)
 	h.interventionNotify(r.Context(), meta, fmt.Sprintf("🚫 任务 %s 已取消（项目 %s）", taskID, meta.ProjectID))
-	httputil.WriteJSON(w, http.StatusOK, h.buildWorkflow(meta, team, false))
+	httputil.WriteJSON(w, http.StatusOK, h.buildWorkflow(meta, team, false, time.Time{}))
 }
 
 // isTerminalTaskStatus reports whether a project task node status is terminal
@@ -3547,8 +4522,11 @@ func (h *ProjectHandler) CompleteProject(w http.ResponseWriter, r *http.Request)
 	}
 	meta := pwc.meta
 	caller := authpkg.CallerFromContext(r.Context())
+	actor, role := auditCaller(caller)
 	if meta.Status == "completed" {
 		writeError(w, http.StatusConflict, "project is already completed")
+		appendControlAction(meta, "complete", actor, role, "project is already completed", "error")
+		h.persistControlActionAudit(r.Context(), pwc.key, pwc.etag, meta)
 		return
 	}
 	graphTasks := meta.Tasks
@@ -3557,7 +4535,10 @@ func (h *ProjectHandler) CompleteProject(w http.ResponseWriter, r *http.Request)
 	}
 	for _, t := range graphTasks {
 		if !isTerminalTaskStatus(t.Status) {
-			writeError(w, http.StatusConflict, "project has non-terminal tasks (status: "+t.Status+")")
+			message := "project has non-terminal tasks (status: " + t.Status + ")"
+			writeError(w, http.StatusConflict, message)
+			appendControlAction(meta, "complete", actor, role, message, "error")
+			h.persistControlActionAudit(r.Context(), pwc.key, pwc.etag, meta)
 			return
 		}
 	}
@@ -3566,9 +4547,14 @@ func (h *ProjectHandler) CompleteProject(w http.ResponseWriter, r *http.Request)
 		meta.Loop.Status = "completed"
 	}
 	markAuditFields(meta, authzActor(caller), "")
+	appendControlAction(meta, "complete", actor, role, "", "ok")
 	if !h.writeProjectMeta(r.Context(), w, pwc.key, meta, pwc.etag) {
 		return
 	}
+	h.emitSignalEvent(r.Context(), signalEmitters["CompleteProject"], pwc.team, signalTeamID(meta, pwc.team), meta.ProjectID, "", nil, pwc.key, refBytes(meta), map[string]any{
+		"project_id": meta.ProjectID,
+		"actor":      authzActor(caller),
+	}, meta.AuditSeq)
 	h.interventionNotify(r.Context(), meta, fmt.Sprintf("✅ 项目 %s 已完成", meta.ProjectID))
-	httputil.WriteJSON(w, http.StatusOK, h.buildWorkflow(meta, pwc.team, false))
+	httputil.WriteJSON(w, http.StatusOK, h.buildWorkflow(meta, pwc.team, false, time.Time{}))
 }

@@ -48,6 +48,7 @@ type MockProvisioner struct {
 	LeaveRoomAsFn                  func(ctx context.Context, roomID, userToken string) error
 	EnsureRoomPowerLevelFn         func(ctx context.Context, roomID, userID string, level int, actorToken, selfToken string) error
 	ForceLeaveRoomFn               func(ctx context.Context, userID, roomID string) error
+	IsUserInRoomFn                 func(ctx context.Context, roomID, userID string) (bool, error)
 	DeactivateHumanUserFn          func(ctx context.Context, userID string) error
 	ProvisionTeamRoomsFn           func(ctx context.Context, req service.TeamRoomRequest) (*service.TeamRoomResult, error)
 	ArchiveTeamRoomsFn             func(ctx context.Context, req service.TeamRoomArchiveRequest) error
@@ -672,6 +673,18 @@ func (m *MockProvisioner) ForceLeaveRoom(ctx context.Context, userID, roomID str
 		return fn(ctx, userID, roomID)
 	}
 	return nil
+}
+
+func (m *MockProvisioner) IsUserInRoom(ctx context.Context, roomID, userID string) (bool, error) {
+	m.mu.Lock()
+	fn := m.IsUserInRoomFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, roomID, userID)
+	}
+	// Conservative default (mirrors the real implementation's error path):
+	// assume the user is still in the room so the removal path stays reachable.
+	return true, nil
 }
 
 func (m *MockProvisioner) DeactivateHumanUser(ctx context.Context, userID string) error {

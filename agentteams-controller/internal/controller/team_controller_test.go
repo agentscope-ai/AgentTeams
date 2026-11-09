@@ -2142,3 +2142,56 @@ func TestPropagateSubagentModelChange_BumpsMembersOnce(t *testing.T) {
 		t.Fatal("want no propagation when applied == spec")
 	}
 }
+
+// #1079: the Manager is not supposed to be in team worker personal rooms, so in
+// the steady state it is already out. team reconcile (every 5 minutes) must
+// then not re-fire the force-leave — re-firing a fire-and-forget force-leave on
+// every reconcile is what floods the admin room. This is the team-side twin of
+// the WorkerReconciler guard (TestReconcileManagerAccessSkipsForceLeaveWhenManagerAbsent).
+func TestReconcileTeamSkipsManagerForceLeaveWhenManagerAbsent(t *testing.T) {
+	ctx := context.Background()
+	managerConfig, _ := newTestManagerConfig(t)
+	leaderWorker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
+		Status:     v1beta1.WorkerStatus{MatrixUserID: "@lead:matrix.local", RoomID: "!room-lead:matrix.local"},
+	}
+	worker1 := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "dev", Namespace: "default"},
+		Status:     v1beta1.WorkerStatus{MatrixUserID: "@dev:matrix.local", RoomID: "!room-dev:matrix.local"},
+	}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{WorkerMembers: []v1beta1.TeamWorkerRef{
+			{Name: "lead", Role: "team_leader"},
+			{Name: "dev"},
+		}},
+	}
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team.DeepCopy(), leaderWorker.DeepCopy(), worker1.DeepCopy()).
+		WithStatusSubresource(&v1beta1.Team{}).
+		Build()
+	deployer := mocks.NewMockDeployer()
+	provisioner := mocks.NewMockProvisioner()
+	provisioner.MatrixUserIDFn = func(name string) string { return "@" + name + ":matrix.local" }
+	provisioner.IsUserInRoomFn = func(context.Context, string, string) (bool, error) {
+		return false, nil // Manager already out of the worker personal rooms (steady state)
+	}
+	r := &TeamReconciler{
+		Client:        c,
+		Provisioner:   provisioner,
+		Deployer:      deployer,
+		ManagerConfig: managerConfig,
+	}
+
+	if _, err := r.reconcileTeam(ctx, team, client.MergeFrom(team.DeepCopy())); err != nil {
+		t.Fatalf("reconcileTeam: %v", err)
+	}
+	if got := provisioner.Calls.ForceLeaveRoom; len(got) != 0 {
+		t.Fatalf("ForceLeaveRoom calls=%+v, want none (Manager absent, #1079 guard)", got)
+	}
+}

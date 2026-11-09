@@ -17,6 +17,20 @@ import (
 )
 
 const roleTeamWorker = "worker"
+const roleTeamLeader = "team_leader"
+
+const (
+	// appserviceDedupTTL is how long a processed mention event stays in the
+	// dedup map. The homeserver re-pushes a failed transaction within its
+	// sending queue's retry window (minutes), so one hour comfortably covers
+	// every realistic redelivery while entries cannot accumulate forever.
+	appserviceDedupTTL = time.Hour
+	// appserviceDedupMaxEntries bounds the dedup map independently of the
+	// TTL: more distinct mention events than this inside a single TTL window
+	// would each cost at most one idempotent re-wake (Running is set only
+	// from Sleeping), never a double-apply.
+	appserviceDedupMaxEntries = 8192
+)
 
 // AppserviceHandler handles Matrix Application Service transaction pushes
 // from the homeserver. Events arrive via HTTP push (PUT /transactions)
@@ -31,7 +45,7 @@ type AppserviceHandler struct {
 	now       func() time.Time
 
 	mu   sync.Mutex
-	seen map[string]struct{} // event dedup: "roomID/eventID/userID"
+	seen map[string]time.Time // event dedup: "roomID/eventID/userID" -> expiry
 }
 
 // NewAppserviceHandler creates a handler for Matrix appservice transaction pushes.
@@ -41,7 +55,7 @@ func NewAppserviceHandler(hsToken string, c client.Client, namespace string) *Ap
 		client:    c,
 		namespace: namespace,
 		now:       time.Now,
-		seen:      make(map[string]struct{}),
+		seen:      make(map[string]time.Time),
 	}
 }
 
@@ -184,7 +198,8 @@ func (h *AppserviceHandler) verifyHSToken(r *http.Request) bool {
 func (h *AppserviceHandler) handleMention(ctx context.Context, roomID, eventID, sender, userID string) error {
 	logger := log.FromContext(ctx).WithName("appservice")
 
-	// Dedup by roomID/eventID/userID.
+	// Dedup by roomID/eventID/userID, with entries expiring after
+	// appserviceDedupTTL (the map is bounded, see markSeen).
 	//
 	// Mark-after-confirm: we record the event as seen only AFTER a
 	// successful wake. Marking before the wake (the historical behavior)
@@ -197,12 +212,14 @@ func (h *AppserviceHandler) handleMention(ctx context.Context, roomID, eventID, 
 	// transaction (its transaction id is derived from the event ids, so the
 	// same events arrive again). Wake is idempotent (Running is set only
 	// from Sleeping, under retry), so a concurrent duplicate push cannot
-	// double-apply the state change.
+	// double-apply the state change — including a duplicate that arrives
+	// after the dedup window and is processed again.
 	key := ""
 	if eventID != "" {
 		key = fmt.Sprintf("%s/%s/%s", roomID, eventID, userID)
+		now := h.now()
 		h.mu.Lock()
-		if _, ok := h.seen[key]; ok {
+		if exp, ok := h.seen[key]; ok && !now.After(exp) {
 			h.mu.Unlock()
 			logger.V(1).Info("mention skipped: duplicate event",
 				"roomID", roomID, "eventID", eventID, "mentionedUser", userID)
@@ -224,10 +241,34 @@ func (h *AppserviceHandler) handleMention(ctx context.Context, roomID, eventID, 
 
 	if key != "" {
 		h.mu.Lock()
-		h.seen[key] = struct{}{}
+		h.markSeen(key, h.now())
 		h.mu.Unlock()
 	}
 	return nil
+}
+
+// markSeen records key as processed until now+appserviceDedupTTL. Expired
+// entries are dropped first so the map cannot grow without bound over the
+// process lifetime: it holds at most appserviceDedupMaxEntries live or
+// expired entries, even under a flood of distinct mention events. If a
+// single TTL window still fills the map past the cap, an arbitrary entry is
+// evicted to keep memory bounded; the only cost is an idempotent re-wake.
+// Callers must hold h.mu.
+func (h *AppserviceHandler) markSeen(key string, now time.Time) {
+	if len(h.seen) >= appserviceDedupMaxEntries {
+		for k, exp := range h.seen {
+			if now.After(exp) {
+				delete(h.seen, k)
+			}
+		}
+		for len(h.seen) >= appserviceDedupMaxEntries {
+			for k := range h.seen {
+				delete(h.seen, k)
+				break
+			}
+		}
+	}
+	h.seen[key] = now.Add(appserviceDedupTTL)
 }
 
 // wakeStandaloneWorker wakes a standalone Worker whose MatrixUserID matches
@@ -290,10 +331,11 @@ func (h *AppserviceHandler) wakeStandaloneWorker(ctx context.Context, roomID, us
 	return nil
 }
 
-// wakeTeamWorker wakes a team worker whose MatrixUserID matches the mentioned
-// user. Permission boundary: the mention must occur in either the worker's
-// own DM room OR the team's shared room. Mentions from other rooms (e.g.
-// another team's room) are rejected — this prevents cross-team wake.
+// wakeTeamWorker wakes a team member (worker or team leader) whose
+// MatrixUserID matches the mentioned user. Permission boundary: the mention
+// must occur in either the member's own DM room, the team's shared room,
+// or — for the leader — the Leader↔Admin DM room. Mentions from other rooms
+// (e.g. another team's room) are rejected — this prevents cross-team wake.
 func (h *AppserviceHandler) wakeTeamWorker(ctx context.Context, roomID, userID string) error {
 	logger := log.FromContext(ctx).WithName("appservice")
 
@@ -312,16 +354,19 @@ func (h *AppserviceHandler) wakeTeamWorker(ctx context.Context, roomID, userID s
 	)
 	for _, team := range teams.Items {
 		teamRoomID := team.Status.TeamRoomID
+		leaderDMRoomID := team.Status.LeaderDMRoomID
 		for _, member := range team.Status.Members {
-			if member.Role != roleTeamWorker || member.MatrixUserID != userID {
+			isLeader := member.Role == roleTeamLeader
+			if (member.Role != roleTeamWorker && !isLeader) || member.MatrixUserID != userID {
 				continue
 			}
 			matchedUser++
 
 			// === Permission boundary ===
 			// Mention must come from one of:
-			//   1. member.RoomID   — worker's own DM room
+			//   1. member.RoomID   — member's own DM room
 			//   2. teamRoomID      — team's shared room
+			//   3. leaderDMRoomID  — Leader↔Admin DM (leader members only)
 			// Anything else (e.g. another team's room) is rejected.
 			if roomID != "" {
 				allowed := false
@@ -331,8 +376,15 @@ func (h *AppserviceHandler) wakeTeamWorker(ctx context.Context, roomID, userID s
 				if teamRoomID != "" && teamRoomID == roomID {
 					allowed = true
 				}
+				if isLeader && leaderDMRoomID != "" && leaderDMRoomID == roomID {
+					allowed = true
+				}
 				// When both are empty, allow as fallback (bootstrapping).
-				if member.RoomID == "" && teamRoomID == "" {
+				// The fallback is only for a member whose known room set is
+				// fully empty: a leader whose Leader↔Admin DM is already
+				// populated has a partial room set, and the fallback must
+				// not widen that back to "any room".
+				if member.RoomID == "" && teamRoomID == "" && !(isLeader && leaderDMRoomID != "") {
 					allowed = true
 				}
 				if !allowed {
@@ -345,9 +397,9 @@ func (h *AppserviceHandler) wakeTeamWorker(ctx context.Context, roomID, userID s
 				}
 			}
 
-			if !isTeamWorkerRef(&team, member.Name) {
+			if !isTeamMemberRef(&team, member.Name) {
 				noSpec++
-				logger.V(1).Info("mention skipped: team worker ref not found",
+				logger.V(1).Info("mention skipped: team member ref not found",
 					"worker", member.Name, "team", team.Name)
 				continue
 			}
@@ -360,14 +412,14 @@ func (h *AppserviceHandler) wakeTeamWorker(ctx context.Context, roomID, userID s
 			}
 			if worker.Spec.DesiredState() != "Sleeping" {
 				notSleeping++
-				logger.V(1).Info("mention skipped: team worker not Sleeping",
+				logger.V(1).Info("mention skipped: team member not Sleeping",
 					"worker", member.Name, "team", team.Name,
 					"desiredState", worker.Spec.DesiredState())
 				continue
 			}
 			now := h.now().UTC().Format(time.RFC3339)
 			if err := h.setStandaloneWorkerRunning(ctx, member.Name, now); err != nil {
-				logger.Error(err, "set team worker Running failed",
+				logger.Error(err, "set team member Running failed",
 					"team", team.Name, "worker", member.Name, "room", roomID)
 				return err
 			}
@@ -378,7 +430,7 @@ func (h *AppserviceHandler) wakeTeamWorker(ctx context.Context, roomID, userID s
 		}
 	}
 	if matchedUser == 0 {
-		logger.V(1).Info("no team worker matched mention",
+		logger.V(1).Info("no team member matched mention",
 			"mentionedUser", userID, "scannedTeams", len(teams.Items))
 	} else if wokenUp == 0 {
 		logger.V(1).Info("team mention had no effect",
@@ -436,10 +488,12 @@ func (h *AppserviceHandler) setStandaloneWorkerRunning(ctx context.Context, name
 
 // --- Appservice-local helpers ---
 
-func isTeamWorkerRef(team *v1beta1.Team, name string) bool {
+// isTeamMemberRef reports whether name is a referenced member of the team
+// with a wakeable role: "team_leader", "worker", or a legacy empty role.
+func isTeamMemberRef(team *v1beta1.Team, name string) bool {
 	for _, ref := range team.Spec.WorkerMembers {
 		if ref.Name == name {
-			return ref.Role == "" || ref.Role == roleTeamWorker
+			return ref.Role == "" || ref.Role == roleTeamWorker || ref.Role == roleTeamLeader
 		}
 	}
 	return false

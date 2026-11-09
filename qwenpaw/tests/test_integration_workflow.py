@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import yaml
@@ -18,8 +19,10 @@ def test_integration_workflow_runs_qwenpaw_like_copaw() -> None:
     assert "qwenpaw/**" in pull_request_paths
     assert "qwenpaw/**" in push_paths
 
-    build_targets = workflow["jobs"]["build-images"]["strategy"]["matrix"]["target"]
+    independent_build = workflow["jobs"]["build-images-independent"]
+    build_targets = json.loads(independent_build["with"]["targets"])
     assert "qwenpaw-worker" in build_targets
+    assert independent_build["needs"] == ["detect-changes"]
 
     matrix_step = next(
         step

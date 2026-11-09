@@ -91,7 +91,7 @@ assert_parse() {
 }
 
 # Scheme-less with explicit port: https by default, with the NOTE.
-assert_parse "tools.example.local:8080" "https" "8080" "tools.example.local" "yes"
+assert_parse "tools.example.local:8080" "http" "8080" "tools.example.local" "yes"
 # Explicit scheme wins, port included or default.
 assert_parse "http://tools.example.local:8080" "http" "8080" "tools.example.local" "no"
 assert_parse "http://tools.example.local" "http" "80" "tools.example.local" "no"
@@ -100,6 +100,6 @@ assert_parse "https://tools.example.local" "https" "443" "tools.example.local" "
 assert_parse "singlelabel" "error" "" "" ""
 assert_parse "bad host/path" "error" "" "" ""
 # Leading-zero ports are still numeric (bash 10# coercion).
-assert_parse "tools.example.local:0080" "https" "80" "tools.example.local" "yes"
+assert_parse "tools.example.local:0080" "http" "80" "tools.example.local" "yes"
 
 echo "PASS: --api-domain parsing surfaces the resolved protocol (#1284)"

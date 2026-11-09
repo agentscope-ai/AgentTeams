@@ -6,6 +6,8 @@
 
 如果你只想尽快完成第一个任务，请先阅读[快速入门](../../quickstart.md)。Windows 用户请使用独立的 [Windows 部署指南](windows.md)。
 
+如果由 agent 协助完成安装，请遵循 [SETUP 剧本](setup-playbook.md)：它一次只问一个问题收集决策，生成可审阅的计划，再按每步的前置检查与明确的失败恢复执行。
+
 ## 本地部署会创建什么
 
 当前本地安装默认使用 embedded 架构：
@@ -159,6 +161,8 @@ bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main
   - `qwen`：使用阿里云百炼/Qwen 的内置接入方式。
   - `openai-compat`：使用 OpenAI 兼容协议，适用于 OpenAI、百炼 Token Plan、DeepSeek、自建模型网关等服务。
 - `AGENTTEAMS_OPENAI_BASE_URL`：OpenAI 兼容 API 的基础地址。填写服务根路径，不要填写完整的 `/chat/completions` 请求地址；通常以 `/v1` 结尾。使用 `qwen` 内置接入方式时一般留空。
+
+> 带端口的 IPv4 地址（例如 `http://192.168.1.10:3000/v1`）使用 Higress 静态服务源，域名地址仍使用 DNS 发现，HTTP 和 HTTPS 协议保持不变。当前内置 Higress Console 不支持静态 IPv6 服务源，请改用 IPv4 地址或域名。
 - `AGENTTEAMS_LLM_API_KEY`：调用模型服务所需的密钥，是必填敏感信息。安装器用它执行连通性检查，并将其写入本地配置供网关使用。
 - `AGENTTEAMS_DEFAULT_MODEL`：Manager 和新建 Worker 默认使用的模型 ID，必须与服务商 API 接受的模型名称完全一致。之后仍可以为具体 Manager 或 Worker 单独覆盖。
 - `AGENTTEAMS_EMBEDDING_MODEL`：用于记忆检索等向量化场景的模型 ID。默认尝试 `text-embedding-v4`；设置为空字符串表示关闭 Embedding。该模型必须能使用当前凭证和对应 API 地址访问。

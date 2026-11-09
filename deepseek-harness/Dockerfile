@@ -2,9 +2,14 @@ ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
 
 FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
 
-FROM node:22.22-bookworm-slim
+FROM node:24-bookworm-slim
 
 ARG DSH_VERSION=0.1.1-rc.2
+ARG NODE_MIN_VERSION=24.22.1
+# Reject a stale/floating Node or a non-24 major, and enforce the 2026-10-21 floor.
+# The base tag is floating; use docker build --pull to refresh it.
+RUN node -e 'const requiredMajor=24; const [a,b,c]=process.versions.node.split(".").map(Number); const [x,y,z]=process.argv[1].split(".").map(Number); if (a!==requiredMajor || a<x || (a===x&&b<y) || (a===x&&b===y&&c<z)) { console.error(`Node ${process.versions.node} is not Node ${requiredMajor}.x >= ${process.argv[1]}`); process.exit(1) }' "${NODE_MIN_VERSION}"
+
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -18,8 +23,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=mc /usr/bin/mc /usr/local/bin/mc.bin
 COPY shared/lib/ /opt/agentteams/scripts/lib/
 
-RUN npm install --global "pnpm@11.7.0" "@deepseek-ai/dsh@${DSH_VERSION}" \
+COPY deepseek-harness/package.json /opt/agentteams/dsh/package.json
+# Keep rc.2's Cordis services at its tested source snapshot versions.
+# Newer compatible-range packages changed the loader/HMR service APIs.
+RUN npm install --global "pnpm@11.7.0" \
+    && npm install --prefix /opt/agentteams/dsh --omit=dev "@deepseek-ai/dsh@${DSH_VERSION}" \
+    && ln -s /opt/agentteams/dsh/node_modules/.bin/dsh /usr/local/bin/dsh \
     && npm cache clean --force
+
+# rc.2 overwrites a streamed tool ID with empty continuation deltas. Keep
+# the earlier ID so tool results remain valid when sessions are restored.
+RUN python3 - <<'PY'
+from pathlib import Path
+path = Path('/opt/agentteams/dsh/node_modules/@deepseek-ai/dsh-llm-deepseek/lib/index.js')
+source = path.read_text()
+old = 'if (call.id !== void 0) block.callId = call.id;'
+assert source.count(old) == 1, 'Revalidate the DSH tool-call ID compatibility fix'
+path.write_text(source.replace(old, 'if (call.id) block.callId = call.id;'))
+PY
 
 COPY plugins/teamharness/ /opt/agentteams/plugins/teamharness/
 RUN mkdir -p /opt/agentteams/dsh-template /tmp/adapter-pack \

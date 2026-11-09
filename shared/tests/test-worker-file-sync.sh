@@ -211,11 +211,21 @@ test_scan_failure_does_not_advance_watermark() {
     rm -rf "${tmpdir}"
 }
 
+test_coding_cli_prefix_is_synced() {
+    source "${REPO_ROOT}/shared/lib/worker-file-sync.sh"
+    worker_sync_should_push ".coding-cli/bin/qwen" ||
+        fail "the coding-CLI install prefix must be synced to MinIO"
+    if worker_sync_should_push ".npm/_cacache/index-v5/x"; then
+        fail ".npm cache must stay local (not synced)"
+    fi
+}
+
 test_unknown_workspace_file_is_uploaded_once
 test_failed_upload_is_retried
 test_manager_owned_and_local_runtime_files_stay_local
 test_large_change_set_uses_one_mirror
 test_concurrent_remote_pull_does_not_regress_push_watermark
 test_scan_failure_does_not_advance_watermark
+test_coding_cli_prefix_is_synced
 
 echo "PASS: worker file sync"

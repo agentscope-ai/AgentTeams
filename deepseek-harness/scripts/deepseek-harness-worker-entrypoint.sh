@@ -65,7 +65,8 @@ if [ ! -s "${RUNTIME_CONFIG}" ]; then
 fi
 
 export TEAMHARNESS_DSH_MODEL="$(python3 /opt/agentteams/scripts/runtime_env.py model "${RUNTIME_CONFIG}" "${TEAMHARNESS_DSH_MODEL:-deepseek-v4-flash}")"
-export DEEPSEEK_BASE_URL="$(python3 /opt/agentteams/scripts/runtime_env.py base-url "${DEEPSEEK_BASE_URL:-}" "${AGENTTEAMS_AI_GATEWAY_URL:-}" "${RUNTIME_CONFIG}")"
+# Your bridge resolves the current projected gateway per turn; preserve an
+# explicit DEEPSEEK_BASE_URL override instead of freezing the initial route.
 
 mkdir -p "${DSH_HOME}"
 cp -a /opt/agentteams/dsh-template/. "${DSH_HOME}/"

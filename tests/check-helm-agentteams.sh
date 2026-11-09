@@ -172,3 +172,91 @@ if ! grep -Fq "worker.defaultImage.copaw.tag is required" "${drift_err}"; then
 fi
 
 echo "PASS: repository-only CoPaw pin fails the render (no global-tag image drift)"
+
+# ---------------------------------------------------------------------------
+# External S3-compatible storage backend (storage.provider=s3, e.g. RustFS)
+# ---------------------------------------------------------------------------
+# provider=s3 + mode=existing: fixed root credentials, MinIO-compatible
+# admin API — the controller keeps managing per-worker users/policies via
+# mc. The MinIO StatefulSet must NOT render, and no credential-provider
+# sidecar is required (fixed credentials, not STS).
+# ---------------------------------------------------------------------------
+
+S3_ARGS=(
+    "${COMMON_ARGS[@]}"
+    --set storage.provider=s3
+    --set storage.mode=existing
+    --set storage.s3.endpoint=http://rustfs:9000
+)
+s3_render="$(mktemp)"
+trap 'rm -f "${render}" "${copaw_render}" "${upg_render}" "${drift_err}" "${s3_render}"' EXIT
+
+if ! helm template agentteams "${CHART}" "${S3_ARGS[@]}"     --set storage.s3.accessKey=rustfsadmin     --set storage.s3.secretKey=rustfsadmin > "${s3_render}"; then
+    echo "FAIL: helm template (s3 provider, inline credentials) failed"
+    cat "${s3_render}" || true
+    exit 1
+fi
+
+grep -q 'name: AGENTTEAMS_STORAGE_PROVIDER' "${s3_render}"
+grep -q 'value: "s3"' "${s3_render}"
+grep -q 'value: "http://rustfs:9000"' "${s3_render}" || {
+    echo "FAIL: s3 endpoint not rendered into AGENTTEAMS_FS_ENDPOINT"; exit 1;
+}
+grep -qF -- "name: agentteams-s3" "${s3_render}" || {
+    echo "FAIL: inline s3 credentials did not render the chart secret agentteams-s3"; exit 1;
+}
+grep -qF -- "accesskey: \"rustfsadmin\"" "${s3_render}" || {
+    echo "FAIL: s3 access key missing from rendered secret"; exit 1;
+}
+if grep -qE '^kind: StatefulSet' -A3 "${s3_render}" | grep -q minio; then
+    echo "FAIL: MinIO StatefulSet must not render when storage.provider=s3"
+    exit 1
+fi
+if grep -qF "agentteams-credential-provider" "${s3_render}"; then
+    echo "FAIL: s3 provider must not deploy the credential-provider sidecar (fixed credentials)"
+    exit 1
+fi
+echo "PASS: external S3 backend (inline credentials) renders endpoint + secret, no MinIO StatefulSet, no sidecar"
+
+# existingSecret: no chart-rendered secret, deployment references the user secret.
+if ! helm template agentteams "${CHART}" "${S3_ARGS[@]}"     --set storage.s3.existingSecret=my-rustfs-creds     --set storage.s3.accessKeySecretKey=ak     --set storage.s3.secretKeySecretKey=sk > "${s3_render}"; then
+    echo "FAIL: helm template (s3 provider, existingSecret) failed"
+    exit 1
+fi
+grep -qF -- "name: my-rustfs-creds" "${s3_render}" || {
+    echo "FAIL: s3 deployment does not reference the user-supplied existingSecret"; exit 1;
+}
+grep -qF -- "key: ak" "${s3_render}" || {
+    echo "FAIL: custom access key secret key not honoured"; exit 1;
+}
+if grep -qF -- "name: agentteams-s3" "${s3_render}"; then
+    echo "FAIL: chart s3 secret must not render when existingSecret is set"
+    exit 1
+fi
+echo "PASS: external S3 backend honours existingSecret + custom key names"
+
+# Failure modes: missing endpoint / missing credentials / managed mode.
+if helm template agentteams "${CHART}" "${S3_ARGS[@]}"     --set storage.s3.endpoint= 2> "${drift_err}"     --set storage.s3.accessKey=a --set storage.s3.secretKey=b > /dev/null; then
+    echo "FAIL: s3 provider without endpoint must not render"; exit 1
+fi
+grep -qF "storage.s3.endpoint is required" "${drift_err}" || {
+    echo "FAIL: s3 missing-endpoint error is not explicit:"; cat "${drift_err}" || true; exit 1;
+}
+
+if helm template agentteams "${CHART}" "${S3_ARGS[@]}" > /dev/null 2> "${drift_err}"; then
+    echo "FAIL: s3 provider without credentials must not render"; exit 1
+fi
+grep -qF "storage.s3.existingSecret or storage.s3.accessKey" "${drift_err}" || {
+    echo "FAIL: s3 missing-credentials error is not explicit:"; cat "${drift_err}" || true; exit 1;
+}
+
+if helm template agentteams "${CHART}" "${COMMON_ARGS[@]}"     --set storage.provider=s3 --set storage.mode=managed     --set storage.s3.endpoint=http://rustfs:9000     --set storage.s3.accessKey=a --set storage.s3.secretKey=b > /dev/null 2> "${drift_err}"; then
+    echo "FAIL: s3 provider with mode=managed must not render"; exit 1
+fi
+# The explicit failure can surface either from 00-validate (preferred) or
+# from the storage endpoint helper (render order), both are valid guards.
+if ! grep -qE "storage.provider=s3 requires storage.mode=existing|unsupported storage combination s3/managed" "${drift_err}"; then
+    echo "FAIL: s3 mode=managed error is not explicit:"; cat "${drift_err}" || true; exit 1;
+fi
+
+echo "PASS: s3 provider failure modes fail the render with explicit errors"

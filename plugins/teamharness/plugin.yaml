@@ -3,6 +3,10 @@ kind: AgentTeamPlugin
 metadata:
   name: teamharness
   version: 0.1.0
+requires:
+  agentteams: ">=1.2.6"   # minimum compatible core version
+  contracts: "1"          # major version of contracts/*.json
+  tool_schema: "1"        # wire version of the 7 tool/action names; pinned to 1
 prompts:
   team: prompts/team/TEAMS.md
   agent:

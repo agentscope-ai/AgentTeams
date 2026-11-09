@@ -594,6 +594,124 @@ def test_matrix_checkpoint_retains_later_accepted_events_until_their_token(
     assert snapshots[1]["accepted_event_ids"] == []
 
 
+@pytest.mark.parametrize("failure", ["write_failure", "full_ledger"])
+def test_matrix_handoff_survives_ledger_failure_and_replay(tmp_path, failure):
+    channel = _make_inbound_channel()
+    module = sys.modules[channel.__class__.__module__]
+    module.WORKING_DIR = tmp_path
+    channel._callback_tasks = set()
+    channel._room_callback_locks = {}
+    channel._active_sync_callback_futures = []
+    channel._pending_sync_checkpoints = []
+    channel._durable_sync_token = "t0"
+    channel._accepted_event_ids = set()
+    if failure == "full_ledger":
+        channel._accepted_event_ids = {
+            f"$old-{i}" for i in range(4096)
+        }
+    persist = channel._persist_sync_state
+    if failure == "write_failure":
+        channel._persist_sync_state = lambda: False
+    # Keep the token behind an earlier failed event, so this handoff must
+    # remain deduplicated when the homeserver replays the older token.
+    channel._save_sync_token = lambda *_args: False
+    room = _FakeInboundRoom()
+    event = _matrix_event("copywriting-assistant: process this", mentioned=True)
+
+    async def _run():
+        channel._schedule_event_callback(channel._on_room_event, room, event)
+        channel._queue_sync_checkpoint("t1", channel._active_sync_callback_futures)
+        await asyncio.gather(*tuple(channel._callback_tasks))
+        await asyncio.sleep(0)
+        assert len(channel.enqueued) == 1
+        assert event.event_id in channel._accepted_event_ids
+        if failure == "write_failure":
+            with pytest.raises(RuntimeError, match="persist"):
+                await channel._recover_sync_checkpoint()
+            assert channel._checkpoint_recovery_required
+        channel._persist_sync_state = persist
+        assert await channel._recover_sync_checkpoint() == "t0"
+
+        restarted = channel.__class__.__new__(channel.__class__)
+        restarted.enqueued = []
+        restarted._callback_tasks = set()
+        restarted._active_sync_callback_futures = []
+        assert restarted._load_sync_token() == "t0"
+        restarted._schedule_event_callback(restarted._on_room_event, room, event)
+        assert restarted._active_sync_callback_futures[0].result()
+        assert restarted.enqueued == []
+
+    asyncio.run(_run())
+
+
+def test_matrix_recovery_keeps_unrelated_inflight_callback_isolated(tmp_path):
+    module = _load_overlay_module()
+    module.WORKING_DIR = tmp_path
+    channel = module.AgentTeamsMatrixChannel.__new__(module.AgentTeamsMatrixChannel)
+    channel._callback_tasks = set()
+    channel._room_callback_locks = {}
+    channel._active_sync_callback_futures = []
+    channel._pending_sync_checkpoints = []
+    channel._durable_sync_token = "t0"
+    channel._accepted_event_ids = set()
+    channel._checkpoint_recovery_required = True
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = []
+    room = SimpleNamespace(room_id="!slow:hs.local")
+    event = SimpleNamespace(event_id="$slow", sender="@worker:hs.local")
+
+    async def _slow(_room, _event):
+        started.set()
+        await release.wait()
+        calls.append(_event.event_id)
+        channel._mark_event_callback_accepted()
+
+    async def _run():
+        channel._schedule_event_callback(_slow, room, event)
+        acceptance = channel._active_sync_callback_futures[0]
+        await started.wait()
+        try:
+            assert await asyncio.wait_for(channel._recover_sync_checkpoint(), 0.1) == "t0"
+            assert not acceptance.done()
+            assert channel._callback_event_ids[acceptance] == "$slow"
+            channel._active_sync_callback_futures = []
+            channel._schedule_event_callback(_slow, room, event)
+            assert channel._active_sync_callback_futures == [acceptance]
+            channel._queue_sync_checkpoint("t1", channel._active_sync_callback_futures)
+        finally:
+            release.set()
+            await asyncio.gather(*tuple(channel._callback_tasks))
+            await asyncio.sleep(0)
+        assert calls == ["$slow"]
+        assert channel._durable_sync_token == "t1"
+        assert not channel._inflight_callback_futures
+
+    asyncio.run(_run())
+
+
+def test_matrix_callback_timeout_includes_waiting_for_room_lock(monkeypatch):
+    module = _load_overlay_module()
+    monkeypatch.setattr(module, "MATRIX_EVENT_CALLBACK_TIMEOUT_S", 0.01)
+    channel = module.AgentTeamsMatrixChannel.__new__(module.AgentTeamsMatrixChannel)
+    channel._callback_tasks = set()
+    channel._active_sync_callback_futures = []
+    channel._room_callback_locks = {}
+    room = SimpleNamespace(room_id="!busy:hs.local")
+    event = SimpleNamespace(event_id="$queued", sender="@worker:hs.local")
+
+    async def _must_not_run(_room, _event):
+        raise AssertionError("callback ran while the room was locked")
+
+    async def _run():
+        async with channel._get_room_callback_lock(room.room_id):
+            channel._schedule_event_callback(_must_not_run, room, event)
+            await asyncio.wait_for(asyncio.gather(*tuple(channel._callback_tasks)), 0.1)
+            assert channel._active_sync_callback_futures[0].result() is False
+
+    asyncio.run(_run())
+
+
 def _install_module(name: str, **attrs):
     module = types.ModuleType(name)
     module.__dict__.update(attrs)
@@ -734,7 +852,11 @@ async def _noop_prepare(_room_id):
 def _make_thread_channel():
     module = _load_overlay_module()
     channel = module.AgentTeamsMatrixChannel.__new__(module.AgentTeamsMatrixChannel)
+    channel.show_thinking = True
+    channel.show_tool_calls = True
+    channel.show_tool_results = True
     channel._client = _FakeClient()
+    channel.encryption = False
     channel._user_id = "@bot:hs.local"
     channel._active_thread_roots = {}
     channel._send_typing = _noop_typing
@@ -760,8 +882,8 @@ def test_matrix_send_media_adds_attachment_relation(tmp_path) -> None:
     media_path = tmp_path / "report.md"
     media_path.write_text("report\n", encoding="utf-8")
 
-    async def _upload_file(_file_ref):
-        return "mxc://hs.local/report"
+    async def _upload_file(_file_ref, *, encrypt=False):
+        return ("mxc://hs.local/report", None)
 
     async def _flush_pending_thread_parts(_room_id, _meta):
         return None
@@ -793,8 +915,8 @@ def test_matrix_send_media_does_not_inherit_thread_relation(tmp_path) -> None:
     media_path = tmp_path / "report.md"
     media_path.write_text("report\n", encoding="utf-8")
 
-    async def _upload_file(_file_ref):
-        return "mxc://hs.local/report"
+    async def _upload_file(_file_ref, *, encrypt=False):
+        return ("mxc://hs.local/report", None)
 
     channel._upload_file = _upload_file
 
@@ -1214,9 +1336,9 @@ def test_matrix_long_text_uses_media_fallback(tmp_path: Path) -> None:
     channel._workspace_dir = tmp_path
     uploaded = []
 
-    async def _fake_upload(file_ref):
+    async def _fake_upload(file_ref, *, encrypt=False):
         uploaded.append(Path(file_ref))
-        return "mxc://hs.local/full-content"
+        return ("mxc://hs.local/full-content", None)
 
     channel._upload_file = _fake_upload
     long_text = "long-content\n" + ("x" * (module.MATRIX_TEXT_EVENT_SAFE_BYTES + 1000))
@@ -1255,8 +1377,8 @@ def test_matrix_long_text_fallback_summary_stays_under_threshold(tmp_path: Path)
     module, channel = _make_thread_channel()
     channel._workspace_dir = tmp_path
 
-    async def _fake_upload(_file_ref):
-        return None
+    async def _fake_upload(_file_ref, *, encrypt=False):
+        return (None, None)
 
     channel._upload_file = _fake_upload
     long_text = "z" * (module.MATRIX_TEXT_EVENT_SAFE_BYTES * 4)
@@ -1283,9 +1405,9 @@ def test_matrix_long_edit_uses_media_fallback(tmp_path: Path) -> None:
     channel._workspace_dir = tmp_path
     uploaded = []
 
-    async def _fake_upload(file_ref):
+    async def _fake_upload(file_ref, *, encrypt=False):
         uploaded.append(Path(file_ref))
-        return "mxc://hs.local/edited-full-content"
+        return ("mxc://hs.local/edited-full-content", None)
 
     channel._upload_file = _fake_upload
     long_text = "final\n" + ("y" * (module.MATRIX_TEXT_EVENT_SAFE_BYTES + 1000))
@@ -1342,8 +1464,8 @@ def test_matrix_long_edit_fallback_failure_does_not_block_completion_cleanup(
     async def _capture_typing(room_id, typing, **_kwargs):
         typing_events.append((room_id, typing))
 
-    async def _fake_upload(_file_ref):
-        return "mxc://hs.local/edited-full-content"
+    async def _fake_upload(_file_ref, *, encrypt=False):
+        return ("mxc://hs.local/edited-full-content", None)
 
     async def _failing_prepare(room_id):
         if len(channel._client.sent) >= 2:
@@ -1439,6 +1561,9 @@ async def _noop_read_receipt(_room_id, _event_id):
 def _make_inbound_channel(command_registry=True):
     module = _load_overlay_module()
     channel = module.AgentTeamsMatrixChannel.__new__(module.AgentTeamsMatrixChannel)
+    channel.show_thinking = True
+    channel.show_tool_calls = True
+    channel.show_tool_results = True
     channel._user_id = "@copywriting-assistant:hs.local"
     channel._client = _FakeClient()
     channel.dm_disabled = False

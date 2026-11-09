@@ -355,3 +355,25 @@ func TestUpdateHuman_WorkerGetFailureIsServerError(t *testing.T) {
 		t.Errorf("server error should carry the validation op, got: %s", rec.Body.String())
 	}
 }
+
+// The Human update path validates accessibleTeams/accessibleWorkers the same
+// way (a write-path reference check), so it reads through the API reader too:
+// a Team or Worker created moments earlier in the same apply must not read as
+// missing just because the label-scoped informer cache has not caught up.
+func TestUpdateHumanSeesReferencesTheCacheHasNotObservedYet(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	cached := fake.NewClientBuilder().WithScheme(scheme).WithObjects(&v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
+		Spec:       v1beta1.HumanSpec{DisplayName: "Alice", PermissionLevel: 2},
+	}).Build()
+	direct := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(
+		&v1beta1.Team{ObjectMeta: metav1.ObjectMeta{Name: "market-team", Namespace: "default"}},
+		&v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "market-dev", Namespace: "default"}},
+	).Build()
+	handler := NewResourceHandler(cached, "default", nil, "", nil).WithAPIReader(direct)
+
+	rec := putHuman(t, handler, "alice", `{"permissionLevel":2,"accessibleTeams":["market-team"],"accessibleWorkers":["market-dev"]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("human update = %d %s, want 200: just-created references must not read as missing", rec.Code, rec.Body.String())
+	}
+}

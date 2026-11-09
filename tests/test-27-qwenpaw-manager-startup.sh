@@ -26,6 +26,15 @@ if [ "${_MANAGER_RUNTIME}" != "qwenpaw" ] && [ "${_MANAGER_RUNTIME}" != "copaw" 
     exit 0
 fi
 
+# ---- Node.js compatibility for mcporter connection setup ----
+log_section "mcporter Node.js Compatibility"
+
+if docker exec "${_AGENT_CTR}" node -e 'Promise.withResolvers()' >/dev/null 2>&1; then
+    log_pass "Node.js supports mcporter connection setup"
+else
+    log_fail "Node.js supports mcporter connection setup (Promise.withResolvers)"
+fi
+
 # ---- QWENPAW_WORKING_DIR ----
 log_section "QWENPAW_WORKING_DIR"
 

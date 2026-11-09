@@ -146,6 +146,55 @@ class MatrixClient:
             query["since"] = since
         return self.request("GET", f"/_matrix/client/v3/sync?{urllib.parse.urlencode(query)}", timeout=max(10, timeout_ms // 1000 + 10))
 
+    def fill_timeline_gaps(self, payload: dict[str, Any], since: str, room_types: dict[str, str]) -> None:
+        """Fetch events omitted from limited watched-room timelines before advancing the cursor."""
+        joined = payload.get("rooms", {}).get("join", {})
+        if not isinstance(joined, dict):
+            return
+        for room_id, room in joined.items():
+            if room_types.get(room_id) not in {"personal", "team"} or not isinstance(room, dict):
+                continue
+            timeline = room.get("timeline")
+            if not isinstance(timeline, dict) or timeline.get("limited") is not True:
+                continue
+            boundary = timeline.get("prev_batch")
+            events = timeline.get("events")
+            if not isinstance(boundary, str) or not boundary:
+                raise RuntimeError(f"limited Matrix timeline for {room_id} has no prev_batch")
+            if not isinstance(events, list):
+                raise RuntimeError(f"limited Matrix timeline for {room_id} has no events list")
+            room_path = urllib.parse.quote(room_id, safe="")
+            cursor = since
+            seen: set[str] = set()
+            gap: list[dict[str, Any]] = []
+            while cursor != boundary:
+                if not cursor or cursor in seen:
+                    raise RuntimeError(f"Matrix pagination did not advance for {room_id}")
+                seen.add(cursor)
+                query = urllib.parse.urlencode({"from": cursor, "to": boundary, "dir": "f", "limit": 100})
+                page = self.request("GET", f"/_matrix/client/v3/rooms/{room_path}/messages?{query}")
+                chunk = page.get("chunk")
+                if not isinstance(chunk, list):
+                    raise RuntimeError(f"invalid Matrix pagination response for {room_id}")
+                gap.extend(chunk)
+                next_cursor = page.get("end")
+                if next_cursor is None:
+                    break
+                if not isinstance(next_cursor, str):
+                    raise RuntimeError(f"invalid Matrix pagination token for {room_id}")
+                cursor = next_cursor
+            # /sync and /messages can overlap, so retain only the first copy of each event.
+            seen_events: set[str] = set()
+            combined = []
+            for event in gap + events:
+                event_id = event.get("event_id") if isinstance(event, dict) else None
+                if isinstance(event_id, str) and event_id:
+                    if event_id in seen_events:
+                        continue
+                    seen_events.add(event_id)
+                combined.append(event)
+            timeline["events"] = combined
+
     def _download_path(self, mxc_url: str, prefix: str) -> str:
         parsed = urllib.parse.urlsplit(mxc_url)
         if parsed.scheme != "mxc" or not parsed.netloc or not parsed.path.strip("/"):

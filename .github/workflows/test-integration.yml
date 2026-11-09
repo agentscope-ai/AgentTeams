@@ -19,6 +19,10 @@ on:
       - 'plugins/teamharness/adapters/deepseek-harness/**'
       - 'plugins/workerflow/adapters/qwenpaw/**'
       - 'Makefile'
+      - 'hack/versions.env'
+      - 'hack/ci-*.py'
+      - 'hack/install-mc.py'
+      - '.github/workflows/build-integration-images.yml'
       - '.github/workflows/test-integration.yml'
   push:
     branches:
@@ -40,6 +44,10 @@ on:
       - 'plugins/teamharness/adapters/deepseek-harness/**'
       - 'plugins/workerflow/adapters/qwenpaw/**'
       - 'Makefile'
+      - 'hack/versions.env'
+      - 'hack/ci-*.py'
+      - 'hack/install-mc.py'
+      - '.github/workflows/build-integration-images.yml'
   workflow_dispatch:
     inputs:
       test_filter:
@@ -60,6 +68,18 @@ on:
           - qwenpaw
           - hermes
         default: 'both'
+      # Sibling input (declared after worker_runtime is complete). Lets a
+      # maintainer exercise the published-base consumer path on a ref that
+      # does not touch openclaw-base/**, without crafting a PR for it.
+      openclaw_base_override:
+        description: 'auto = use changed inputs/published prerequisite; force_unchanged probes the published base; force_rebuild compiles it once.'
+        required: false
+        type: choice
+        options:
+          - auto
+          - force_unchanged
+          - force_rebuild
+        default: auto
       model:
         description: 'LLM model to use'
         required: false
@@ -84,47 +104,37 @@ env:
   NON_GITHUB_TESTS: "01 02 03 04 05 06 15 17 18 19 20 22 23 24 25 27 28 100"
 
 jobs:
-  # Step 0: Detect which paths changed so we can decide whether to rebuild
-  # the openclaw-base image (slow, ~10min) or reuse the published `:latest`.
-  # On non-PR triggers (push to main, tag, workflow_dispatch) we conservatively
-  # always rebuild so release/baseline runs validate against the current source.
+  # Release tags/manual runs keep full coverage. Pipeline-only diffs keep image
+  # builds and Controller checks; docs/version pins avoid repeated model runs.
   detect-changes:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 5
     outputs:
-      openclaw_base: ${{ steps.decide.outputs.openclaw_base }}
+      base_changed: ${{ steps.plan.outputs.base_changed }}
       test_matrix: ${{ steps.test-matrix.outputs.matrix }}
+      run_builds: ${{ steps.plan.outputs.run_builds }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Detect openclaw-base changes (PR only)
-        id: filter
-        if: github.event_name == 'pull_request'
-        uses: dorny/paths-filter@v3
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          base: ${{ github.event.pull_request.base.sha }}
-          filters: |
-            openclaw_base:
-              - 'openclaw-base/**'
-
-      - name: Decide whether to rebuild openclaw-base
-        id: decide
+      - name: Plan validation from the actual diff
+        id: plan
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "openclaw_base=${{ steps.filter.outputs.openclaw_base }}" >> $GITHUB_OUTPUT
-          else
-            # push to main / tag / workflow_dispatch: always rebuild
-            echo "openclaw_base=true" >> $GITHUB_OUTPUT
-          fi
+          python3 hack/ci-integration-plan.py --base "$BASE_SHA" --head "$HEAD_SHA" \
+            --event "$GITHUB_EVENT_NAME" --ref "$GITHUB_REF" | tee "$RUNNER_TEMP/integration-plan.json"
+          echo "### Integration plan" >> "$GITHUB_STEP_SUMMARY"
+          cat "$RUNNER_TEMP/integration-plan.json" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Select integration test matrix
         id: test-matrix
         env:
           UNTRUSTED_PR: ${{ github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]') }}
+          RUN_MODELS: ${{ steps.plan.outputs.run_models }}
         run: |
           MATRIX='[
             {"shard":"llm-interaction","filter_env":"SHARD_A_TESTS","manager_runtime":"openclaw","worker_runtime":"openclaw","requires_secret":true},
@@ -135,11 +145,55 @@ jobs:
             {"shard":"llm-interaction","filter_env":"SHARD_A_TESTS","manager_runtime":"qwenpaw","worker_runtime":"hermes","requires_secret":true},
             {"shard":"controller-cr","filter_env":"SHARD_C_TESTS","manager_runtime":"qwenpaw","worker_runtime":"hermes","requires_secret":false}
           ]'
-          if [ "$UNTRUSTED_PR" = "true" ]; then
+          if [ "$UNTRUSTED_PR" = "true" ] || [ "${RUN_MODELS:-true}" = false ]; then
             MATRIX=$(echo "$MATRIX" | jq -c '[.[] | select(.requires_secret == false)]')
           fi
           MATRIX=$(echo "$MATRIX" | jq -c '.')
           echo "matrix={\"include\":$MATRIX}" >> "$GITHUB_OUTPUT"
+
+  # Registry/source-base failures affect only OpenClaw consumers.
+  resolve-openclaw-base:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.run_builds == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+    outputs:
+      openclaw_base: ${{ steps.decide.outputs.openclaw_base }}
+      openclaw_base_ref: ${{ steps.decide.outputs.openclaw_base_ref }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        if: env.REGISTRY_USERNAME != ''
+        with:
+          registry: higress-registry.cn-hangzhou.cr.aliyuncs.com
+          username: ${{ env.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Decide whether to rebuild openclaw-base
+        id: decide
+        env:
+          OVERRIDE: ${{ inputs.openclaw_base_override }}
+          BASE_CHANGED: ${{ needs.detect-changes.outputs.base_changed }}
+          RUN_BUILDS: ${{ needs.detect-changes.outputs.run_builds }}
+          UNTRUSTED_PR: ${{ github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]') }}
+        run: |
+          if [ "${OVERRIDE}" = "force_unchanged" ]; then
+            BASE_CHANGED=false
+          fi
+          if [ "$RUN_BUILDS" != true ]; then
+            echo 'openclaw_base=false' >> "$GITHUB_OUTPUT"
+          elif [ "$OVERRIDE" = force_rebuild ] || [ "$BASE_CHANGED" = true ] || \
+               { [ "$UNTRUSTED_PR" = true ] && [ -z "$REGISTRY_USERNAME" ]; }; then
+            echo 'openclaw_base=true' >> "$GITHUB_OUTPUT"
+          else
+            BASE_TAG=$(sed -n 's/^OPENCLAW_BASE_TAG=//p' hack/versions.env)
+            python3 hack/ci-base-image.py \
+              "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/openclaw-base:$BASE_TAG"
+          fi
 
   deepseek-harness-tests:
     runs-on: ubuntu-latest
@@ -149,15 +203,31 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Check integration scheduling
-        run: python3 tests/check-integration-scheduling.py
+        run: |
+          python3 tests/check-integration-scheduling.py
+          python3 tests/test-ci-release-tools.py
+          python3 tests/test-install-mc.py
+          python3 tests/test-release-metrics.py
 
       - name: Run DeepSeek Harness bridge tests
         run: |
           python3 -m unittest discover -s deepseek-harness/tests -p 'test_*.py' -v
           node --test deepseek-harness/tests/*.test.mjs
 
+  mcp-setup-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check MCP setup and Console session handling
+        run: |
+          python3 -m unittest discover -s manager/tests -p 'test_mcp*.py' -v
+          bash tests/check-mcp-setup-domain-parsing.sh
+
   # Step 1a: Build the shared base image (agentteams-controller)
   build-base:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.run_builds == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -187,12 +257,11 @@ jobs:
           path: /tmp/agentteams-controller.tar.gz
           retention-days: 1
 
-  # Step 1b: Build openclaw-base from this PR's source, but only when
-  # openclaw-base/** actually changed. Otherwise downstream builds reuse the
-  # published `:latest` from the registry (default Makefile behaviour).
+  # Step 1b: Compile a changed or genuinely missing prerequisite once.
+  # Otherwise all consumers use the immutable published index resolved above.
   build-openclaw-base:
-    needs: detect-changes
-    if: needs.detect-changes.outputs.openclaw_base == 'true'
+    needs: resolve-openclaw-base
+    if: needs.resolve-openclaw-base.outputs.openclaw_base == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -213,17 +282,16 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build openclaw-base (local tag)
-        run: |
-          # `make build-openclaw-base` always tags as agentteams/openclaw-base:latest
-          # (LOCAL_OPENCLAW_BASE is hardcoded in the Makefile), which is exactly
-          # what downstream build-manager/build-worker jobs consume via the
-          # OPENCLAW_BASE_IMAGE / OPENCLAW_BASE_VERSION overrides.
-          # Override HIGRESS_REGISTRY to the us-west mirror — the default
-          # cn-hangzhou registry is unreachable from GitHub-hosted runners.
-          make build-openclaw-base \
-            HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
-            DOCKER_BUILD_ARGS="--build-arg APT_MIRROR="
-          docker images | grep openclaw-base || true
+        uses: docker/build-push-action@v7
+        with:
+          context: ./openclaw-base
+          load: true
+          tags: agentteams/openclaw-base:latest
+          build-args: |
+            HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com
+            APT_MIRROR=
+          cache-from: type=gha,scope=openclaw-base-amd64
+          cache-to: type=gha,mode=max,scope=openclaw-base-amd64,ignore-error=true,timeout=2m
 
       - name: Save image
         run: |
@@ -236,102 +304,48 @@ jobs:
           path: /tmp/agentteams-openclaw-base.tar.gz
           retention-days: 1
 
-  # Step 2: Build downstream images in parallel (all depend on agentteams-controller;
-  # manager and worker additionally depend on openclaw-base when it was rebuilt).
-  build-images:
-    needs: [detect-changes, build-base, build-openclaw-base]
-    # Run even if build-openclaw-base was skipped (no openclaw-base changes).
+  # Each group waits only for the images its Dockerfiles actually consume.
+  build-images-independent:
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.run_builds == 'true'
+    uses: ./.github/workflows/build-integration-images.yml
+    with:
+      targets: '["qwenpaw-worker", "deepseek-harness-worker"]'
+    secrets: inherit
+
+  build-images-controller:
+    needs: [detect-changes, build-base]
+    if: needs.detect-changes.outputs.run_builds == 'true'
+    uses: ./.github/workflows/build-integration-images.yml
+    with:
+      targets: '["embedded", "manager-qwenpaw", "hermes-worker"]'
+      controller: true
+    secrets: inherit
+
+  build-images-openclaw:
+    needs: [detect-changes, resolve-openclaw-base, build-base, build-openclaw-base]
     if: |
-      always() &&
+      always() && needs.detect-changes.result == 'success' &&
+      needs.detect-changes.outputs.run_builds == 'true' &&
+      needs.resolve-openclaw-base.result == 'success' &&
       needs.build-base.result == 'success' &&
       (needs.build-openclaw-base.result == 'success' || needs.build-openclaw-base.result == 'skipped')
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        # The copaw-worker image is no longer built from the branch: the
-        # legacy-upgrade coverage (test-29) pulls the pinned published image
-        # (agentteams-copaw-worker) instead.
-        target: [embedded, manager, manager-qwenpaw, worker, qwenpaw-worker, hermes-worker, deepseek-harness-worker]
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Download controller image
-        uses: actions/download-artifact@v4
-        with:
-          name: image-controller
-          path: /tmp
-
-      - name: Load controller image
-        run: gunzip -c /tmp/agentteams-controller.tar.gz | docker load
-
-      - name: Download local openclaw-base image
-        if: |
-          needs.detect-changes.outputs.openclaw_base == 'true' &&
-          (matrix.target == 'manager' || matrix.target == 'worker')
-        uses: actions/download-artifact@v4
-        with:
-          name: image-openclaw-base
-          path: /tmp
-
-      - name: Load local openclaw-base image
-        if: |
-          needs.detect-changes.outputs.openclaw_base == 'true' &&
-          (matrix.target == 'manager' || matrix.target == 'worker')
-        run: gunzip -c /tmp/agentteams-openclaw-base.tar.gz | docker load
-
-      - name: Build image
-        run: |
-          # When openclaw-base was rebuilt from this PR's source, point manager
-          # and worker builds at the local image instead of pulling :latest from
-          # the published registry. Other targets (embedded, manager-qwenpaw)
-          # do not depend on openclaw-base so the override is a no-op for them.
-          EXTRA=""
-          if [ "${{ needs.detect-changes.outputs.openclaw_base }}" = "true" ] && \
-             { [ "${{ matrix.target }}" = "manager" ] || [ "${{ matrix.target }}" = "worker" ]; }; then
-            EXTRA="OPENCLAW_BASE_IMAGE=agentteams/openclaw-base OPENCLAW_BASE_VERSION=latest"
-            echo "Using locally-built openclaw-base for ${{ matrix.target }}"
-          elif [ "${{ matrix.target }}" = "manager" ] || [ "${{ matrix.target }}" = "worker" ]; then
-            # The pinned base predates the AgentTeams registry namespace. Keep
-            # using its existing location until a release seeds the new repo.
-            EXTRA="OPENCLAW_BASE_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/openclaw-base OPENCLAW_BASE_VERSION=20260423-8359cbc"
-            echo "Using published migration base for ${{ matrix.target }}"
-          fi
-          # Override HIGRESS_REGISTRY to the us-west mirror — the default
-          # cn-hangzhou registry is unreachable from GitHub-hosted runners.
-          make build-${{ matrix.target }} \
-            HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
-            DOCKER_BUILD_ARGS="--build-arg APT_MIRROR= --build-arg PIP_INDEX_URL=https://pypi.org/simple/" \
-            $EXTRA
-
-      - name: Save image
-        run: |
-          # Exclude already-uploaded base images (controller, openclaw-base) so
-          # each per-target tar only contains its own deltas.
-          docker save \
-            $(docker images --format '{{.Repository}}:{{.Tag}}' \
-              | grep -E '^agentteams/' \
-              | grep -v '<none>' \
-              | grep -v 'agentteams-controller' \
-              | grep -v 'openclaw-base') \
-            | gzip > /tmp/agentteams-${{ matrix.target }}.tar.gz
-
-      - name: Upload image
-        uses: actions/upload-artifact@v4
-        with:
-          name: image-${{ matrix.target }}
-          path: /tmp/agentteams-${{ matrix.target }}.tar.gz
-          retention-days: 1
+    uses: ./.github/workflows/build-integration-images.yml
+    with:
+      targets: '["manager", "worker"]'
+      controller: true
+      local_openclaw_base: ${{ needs.resolve-openclaw-base.outputs.openclaw_base == 'true' }}
+      published_base_ref: ${{ needs.resolve-openclaw-base.outputs.openclaw_base_ref }}
+    secrets: inherit
 
   # Step 3: Run test shards in parallel, each on its own runner with isolated cluster
   integration-tests:
-    needs: [detect-changes, deepseek-harness-tests, build-images]
-    if: always() && needs.detect-changes.result == 'success' && needs.deepseek-harness-tests.result == 'success' && needs.build-images.result == 'success'
+    needs: [detect-changes, deepseek-harness-tests, build-images-independent, build-images-controller, build-images-openclaw]
+    if: |
+      always() && needs.detect-changes.result == 'success' && needs.deepseek-harness-tests.result == 'success' &&
+      needs.build-images-independent.result == 'success' &&
+      needs.build-images-controller.result == 'success' &&
+      needs.build-images-openclaw.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -371,10 +385,57 @@ jobs:
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
       - name: Download all images
+        id: download-images
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           pattern: image-*
           path: /tmp/images
+
+      # download-artifact can end a large transfer without reporting an error
+      # (a stalled chunk, a runner-side network reset). The truncated tar.gz
+      # then only surfaces much later as an opaque gzip "unexpected end of
+      # file" inside docker load. Verify every archive here, and retry the
+      # whole download once before failing the shard.
+      - name: Verify image archives
+        id: verify-images
+        continue-on-error: true
+        run: |
+          broken=0
+          shopt -s nullglob
+          for f in /tmp/images/image-*/*.tar.gz; do
+            if ! gzip -t "$f"; then
+              echo "::warning file=$f::truncated image archive"
+              broken=1
+            fi
+          done
+          if [ "${broken}" -ne 0 ]; then
+            echo "one or more image archives are truncated" >&2
+            exit 1
+          fi
+
+      - name: Reset the image download directory
+        if: steps.download-images.outcome == 'failure' || steps.verify-images.outcome == 'failure'
+        run: rm -rf /tmp/images && mkdir -p /tmp/images
+
+      - name: Retry the image download once
+        if: steps.download-images.outcome == 'failure' || steps.verify-images.outcome == 'failure'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: image-*
+          path: /tmp/images
+
+      - name: Verify image archives after the retry
+        run: |
+          shopt -s nullglob
+          archives=(/tmp/images/image-*/*.tar.gz)
+          if [ "${#archives[@]}" -eq 0 ]; then
+            echo "no image archives were downloaded" >&2
+            exit 1
+          fi
+          for f in "${archives[@]}"; do
+            gzip -t "$f"
+          done
 
       - name: Load images
         run: |
@@ -384,6 +445,17 @@ jobs:
 
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y jq curl unzip
+      - name: Control UI device-identity policy (HTTP/LAN entries)
+        # #1460/#1479: the gateway requires a device identity on the Control UI
+        # handshake. Runs one real gateway from the manager image this shard
+        # already loaded (the manager image is FROM the pinned openclaw-base),
+        # so the probe tests the shipped pairing and needs no extra pull; the
+        # script asserts that gateway version == the pin in hack/versions.env.
+        if: matrix.shard == 'controller-cr' && matrix.manager_runtime == 'openclaw' && matrix.worker_runtime == 'openclaw'
+        env:
+          OPENCLAW_BASE_IMAGE: agentteams/manager:latest
+        run: bash manager/tests/test-control-ui-device-identity.sh
+
 
       - name: Configure registry-dependent coverage
         run: |
@@ -800,6 +872,35 @@ jobs:
       - name: Run the LLM-smoke regression suite (stubbed docker/curl)
         run: bash install/tests/verify-llm-regressions.sh
 
+      - name: Run the OpenClaw version-guard regression (stubbed fs/node)
+        run: bash manager/tests/test-openclaw-version-guard.sh
+
+      - name: Run the Control UI pin-assertion regression (stubbed docker)
+        run: bash manager/tests/test-control-ui-version-assert.sh
+
+  install-upgrade-cli:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the upgrade CLI regression suite (stubbed docker/agt)
+        run: bash install/tests/test-upgrade-cli.sh
+
+      - name: Run the console-approval hint literal-print regression (stubbed docker)
+        # #1460: the upgrade's device-approval hint must print its command
+        # examples literally - backticks in the double-quoted log line would
+        # execute them while printing. Pure bash + stubbed docker, no engine.
+        run: bash install/tests/test-upgrade-console-hint.sh
+
+      - name: Run the live boundary-preservation regression (real engine)
+        run: |
+          if docker info >/dev/null 2>&1; then
+            bash install/tests/test-upgrade-preserve-live.sh
+          else
+            echo "SKIP live boundary test (no docker)"
+          fi
+
 # ============================================================
 # Offline pre-flight suite: qwenpaw upgrade checker (AgentTeams#1341)
 # No Docker or network needed - builds miniature trees and a fake wheel.
@@ -814,5 +915,54 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install the checker's version-parsing dependency
+        # The pre-flight checker imports `packaging` (version comparison); a
+        # bare setup-python runner does not ship it, so install it before the
+        # offline suite runs.
+        run: python3 -m pip install --quiet packaging
+
       - name: Run the offline pre-flight suite
         run: python3 qwenpaw/tests/test_check_qwenpaw_upgrade.py
+
+# ============================================================
+# In-place upgrade orchestrator battery (AgentTeams#1341 lifecycle S3-S6)
+# Fully stubbed (--selftest): no Docker, no network, no package changes.
+# ============================================================
+
+  qwenpaw-runtime-upgrade:
+    runs-on: ubuntu-latest
+    # Every step below carries its own wall-clock bound, so a stall fails AT
+    # that step (exit 124, step named in the log) instead of silently consuming
+    # the job budget: the previous shape had no per-step bound, so a cancelled
+    # run left nothing to point at. The repo-side work measures ~35 s
+    # (selftest) and ~75 s (the 41-test battery) — a healthy run is ~2-3 min;
+    # the job budget covers the three step bounds (150+210+270 = 630 s) plus
+    # checkout / setup-python overhead.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the in-place upgrade battery (stubbed selftest)
+        run: timeout 150 bash qwenpaw/scripts/upgrade_qwenpaw_runtime.sh --selftest
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install the upgrade test-suite dependencies
+        # The plugin tests load the real plugin module (fastapi/pydantic);
+        # the version tests use packaging for PEP440 comparison. Bounded, with
+        # retries, so a registry hiccup surfaces here rather than stalling the
+        # whole job.
+        run: timeout 210 python3 -m pip install --quiet --timeout 20 --retries 2 pytest packaging fastapi pydantic
+
+      - name: Run the upgrade pytest battery (orchestrator / versions / plugin / entrypoint)
+        # Fully stubbed: fake orchestrator hooks, fake worker, no network.
+        # -v names every test as it starts, so a stall points at the test it is
+        # stuck in; --durations surfaces anything unexpectedly slow.
+        run: >
+          timeout 270 python3 -m pytest -v --durations=10
+          qwenpaw/tests/test_upgrade_orchestrator.py
+          qwenpaw/tests/test_upgrade_versions.py
+          qwenpaw/tests/test_upgrade_plugin.py
+          qwenpaw/tests/test_upgrade_entrypoint.py

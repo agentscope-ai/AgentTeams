@@ -1,0 +1,39 @@
+# Runtime-neutral contract for the agentteams-matrix bundle.
+#
+# This contract is the source of truth for the Matrix transport configuration.
+# Runtime adapters project it onto their runtime; they do not re-declare
+# transport behavior. Secret material never appears here: credentials are
+# referenced (access_token_ref) and resolved by the runtime's secret store.
+apiVersion: agentteams/v1alpha1
+kind: RuntimeContract
+metadata:
+  name: agentteams-matrix
+  version: 0.1.0
+matrix:
+  homeserver: https://matrix.agentteams.local
+  user_id: "@agentteams-worker:agentteams.local"
+  access_token_ref: agentteams/matrix/access-token
+  rooms:
+    - "!operations:agentteams.local"
+  allow_from:
+    - "@operator:agentteams.local"
+  group_allow_from:
+    - "@operator:agentteams.local"
+  require_mention: true
+  history_limit: 50
+  history_mode: mention-buffer
+identity:
+  name: agentteams-worker
+  soul_path: SOUL.md
+  agents_path: AGENTS.md
+  display_name: AgentTeams Worker
+skills:
+  roots: []
+mcp:
+  static_representable: true
+  servers: []
+storage:
+  prefix: agentteams/workspaces
+  sync_mode: on-start
+approvals:
+  level: none

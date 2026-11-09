@@ -198,7 +198,7 @@ class PreflightTests(unittest.TestCase):
     def test_gate_mismatch_fails(self):
         qwenpaw = build_repo(self.root)
         code, payload = run_json(self.module, [
-            "--target", "2.2.2", "--qwenpaw-dir", str(qwenpaw),
+            "--target", "2.2.0", "--qwenpaw-dir", str(qwenpaw),
         ])
         self.assertEqual(code, 1)
         gate = check_by_id(payload, "C1")

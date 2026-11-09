@@ -15,14 +15,14 @@ The following contract files will be mirrored from `core/schemas/`:
 
 | File | Covers |
 | --- | --- |
-| `project.json` | Project resource (client constant `PROJECTS`) |
-| `task.json` | Task resource, actions and sub-resources (`TASKS`, `task_action()`, `task_sub()`) |
+| `project.v1.json` | Project resource (client constant `PROJECTS`) |
+| `task.v1.json` | Task resource, actions and sub-resources (`TASKS`, `task_action()`, `task_sub()`) |
 | `loop.json` | Loop resource (client constant `LOOPS`) |
 | `event.json` | Event shape (client constant `EVENTS`) |
 
 The names track the client's intended path layout and are provisional:
 the mirror step copies the authoritative published files as-is, whatever
-their final names are.
+their final names are. Final file names follow the TaskForge 0.1.0 release.
 
 ## Current status
 

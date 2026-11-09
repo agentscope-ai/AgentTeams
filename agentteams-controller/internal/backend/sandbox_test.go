@@ -558,6 +558,12 @@ func TestSandboxBackend_Create_ImageResolution(t *testing.T) {
 			config:    SandboxConfig{WorkerImage: "default/worker:latest"},
 			wantImage: "default/worker:latest",
 		},
+		{
+			name:      "codex runtime",
+			runtime:   RuntimeCodex,
+			config:    SandboxConfig{WorkerImage: "default:latest", CodexWorkerImage: "codex:v1"},
+			wantImage: "codex:v1",
+		},
 	}
 
 	for _, tt := range tests {

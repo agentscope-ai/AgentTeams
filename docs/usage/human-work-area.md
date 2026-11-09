@@ -11,6 +11,13 @@ or file layout to strangers.
 
 ## Root listing
 
+The installation administrator also has a Human work area. Startup and upgrades
+idempotently register its existing Matrix identity as a Human marked with
+`agentteams.io/system-admin=true`. Its password and existing room memberships
+remain managed by the installation; Human reconciliation only initializes its
+file area. Human API responses expose `systemAdmin: true` so user-management
+views can hide this built-in record while personal files remain available.
+
 `GET /api/v1/humans/{name}/files` lists the top level of the area:
 
 ```json

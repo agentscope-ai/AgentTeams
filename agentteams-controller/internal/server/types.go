@@ -545,6 +545,7 @@ type UpdateHumanRequest struct {
 }
 
 type HumanResponse struct {
+	SystemAdmin       bool                     `json:"systemAdmin,omitempty"`
 	Name              string                   `json:"name"`
 	Phase             string                   `json:"phase"`
 	DisplayName       string                   `json:"displayName"`

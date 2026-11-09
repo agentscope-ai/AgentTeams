@@ -1989,6 +1989,7 @@ func managerToResponse(m *v1beta1.Manager) ManagerResponse {
 
 func humanToResponse(h *v1beta1.Human) HumanResponse {
 	resp := HumanResponse{
+		SystemAdmin:       h.Labels[v1beta1.LabelSystemAdmin] == "true",
 		Name:              h.Name,
 		Phase:             h.Status.Phase,
 		DisplayName:       h.Spec.DisplayName,

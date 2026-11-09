@@ -91,8 +91,10 @@ func maskProviderTokens(value interface{}) {
 	case map[string]interface{}:
 		if tokens, ok := v["tokens"].([]interface{}); ok {
 			v["tokenCount"] = len(tokens)
-			delete(v, "tokens")
 		}
+		delete(v, "tokens")
+		// Higress duplicates provider credentials under rawConfigs.apiTokens.
+		delete(v, "apiTokens")
 		for _, item := range v {
 			maskProviderTokens(item)
 		}

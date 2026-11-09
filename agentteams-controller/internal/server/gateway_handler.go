@@ -88,6 +88,12 @@ func (h *GatewayHandler) DeleteConsumer(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Higress refuses to delete a consumer still referenced by AI routes.
+	if err := h.gw.DeauthorizeAIRoutes(r.Context(), consumerName, ""); err != nil {
+		log.Printf("[ERROR] unbind consumer %s before delete: %v", consumerName, err)
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	if err := h.gw.DeleteConsumer(r.Context(), consumerName); err != nil {
 		log.Printf("[ERROR] delete consumer %s: %v", consumerName, err)
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())

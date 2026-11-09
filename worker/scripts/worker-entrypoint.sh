@@ -208,8 +208,8 @@ log "HOME set to ${HOME} (workspace files will be synced to MinIO)"
 #       exclusions, while unknown workspace paths remain synchronizable.
 #     - Avoids mc mirror --watch TOCTOU behavior on atomic file operations.
 #
-#   Remote -> Local: on-demand pull via file-sync skill (triggered by Manager @mention)
-#     + 5-minute fallback pull of Manager-managed paths as safety net
+#   Remote -> Local: changed authorization/config is pulled every 10 seconds;
+#     other files use on-demand file-sync plus a 5-minute bulk fallback.
 #       The fallback refreshes both pull and push markers so freshly-pulled
 #       Manager-managed files do not get pushed back as Worker edits.
 #
@@ -251,10 +251,8 @@ log "Local->Remote change-triggered sync started (PID: $!)"
     done
 ) &
 
-# Remote -> Local: fallback pull of Manager-managed files (safety net, every 5m)
-# Normal operation relies on on-demand pulls via file-sync skill when Manager @mentions.
-# openclaw.json uses local-first merge (see merge-openclaw-config.sh): existing
-# workspace config is the base; MinIO only overlays models, gateway, channels, plugins rules.
+# Remote -> Local: bulk files still use the five-minute fallback; config is
+# handled by the small changed-config loop above.
 (
     while true; do
         sleep 300

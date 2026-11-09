@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PlanTests(unittest.TestCase):
-    def plan(self, path, before='before\n', after='after\n', event='pull_request', ref='refs/heads/test'):
+    def plan(self, path, before='before\n', after='after\n', event='pull_request', ref='refs/heads/test', main_change=None):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
             def git(*args):
@@ -30,8 +30,17 @@ class PlanTests(unittest.TestCase):
             base = git('rev-parse', 'HEAD')
             file.write_text(after)
             git('commit', '-qam', 'change')
+            head = git('rev-parse', 'HEAD')
+            if main_change:
+                git('checkout', '-qb', 'advanced-main', base)
+                changed = repo / main_change[0]
+                changed.parent.mkdir(parents=True, exist_ok=True)
+                changed.write_text(main_change[1])
+                git('add', '.')
+                git('commit', '-qm', 'unrelated main change')
+                base = git('rev-parse', 'HEAD')
             result = subprocess.run(['python3', str(ROOT / 'hack/ci-integration-plan.py'),
-                '--base', base, '--head', 'HEAD', '--event', event, '--ref', ref],
+                '--base', base, '--head', head, '--event', event, '--ref', ref],
                 cwd=repo, capture_output=True, text=True, env={**os.environ, 'GITHUB_OUTPUT': ''})
             self.assertEqual(result.returncode, 0, result.stderr)
             return json.loads(result.stdout)
@@ -63,6 +72,29 @@ class PlanTests(unittest.TestCase):
         self.assertFalse(self.plan('worker/start.sh', event='push')['base_changed'])
         self.assertTrue(self.plan('openclaw-base/Dockerfile', event='push')['base_changed'])
         self.assertTrue(self.plan('hack/versions.env')['base_changed'])
+
+    def test_pr_ignores_unrelated_changes_when_main_advances(self):
+        result = self.plan('.github/workflows/test-controller.yml',
+                           main_change=('openclaw-base/Dockerfile', 'main-only runtime change\n'))
+        self.assertTrue(result['run_builds'])
+        self.assertFalse(result['run_models'])
+        self.assertFalse(result['base_changed'])
+
+    def test_pr_pin_normalization_also_reads_from_the_merge_base(self):
+        result = self.plan('install/agentteams-install.sh',
+            'VERSION=v1.2.5\n', 'VERSION=v1.2.6\n',
+            main_change=('install/agentteams-install.sh', 'VERSION=v1.2.5\nnew_behavior=1\n'))
+        self.assertFalse(result['run_builds'])
+        self.assertFalse(result['run_models'])
+
+    def test_pr_runtime_changes_still_require_models_when_main_advances(self):
+        self.assertTrue(self.plan('worker/start.sh',
+            main_change=('README.md', 'main-only docs\n'))['run_models'])
+
+    def test_unavailable_diff_keeps_full_coverage(self):
+        scope = runpy.run_path(str(ROOT / 'hack/ci-integration-plan.py'))
+        result = scope['plan']('missing-base', 'missing-head', 'pull_request', 'refs/pull/1/merge')
+        self.assertTrue(all(result[key] for key in ('run_builds', 'run_models', 'base_changed')))
 
 
 class BaseProbeTests(unittest.TestCase):

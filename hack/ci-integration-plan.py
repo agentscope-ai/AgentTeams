@@ -15,6 +15,8 @@ def plan(base, head, event, ref):
     if event == 'workflow_dispatch' or ref.startswith('refs/tags/') or not base:
         return {**full, 'reason': 'release/manual or unavailable diff; full coverage'}
     try:
+        if event == 'pull_request':
+            base = git('merge-base', base, head).decode().strip()
         files = git('diff', '--name-only', '--no-renames', '-z', base, head).decode().rstrip('\0').split('\0')
     except subprocess.CalledProcessError:
         return {**full, 'reason': 'diff unavailable; full coverage'}

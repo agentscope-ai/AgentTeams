@@ -9,11 +9,14 @@ A Team consists of 1 Team Leader + N Workers. The Team Leader is a special Worke
 
 ## Quick Create
 
+Before creating a Team, read `references/create-team.md` and confirm its Team Admin. If the requester has not specified one, ask them to choose the current conversation user or another existing Human using the `team-admin` dropdown described there. Wait for their selection; never silently assign Global Admin.
+
 ```bash
 # 1. Create each Worker CR with worker-management, then reference them
 agt create team \
   --name <TEAM_NAME> \
   --leader-name <LEADER_NAME> \
+  --admin <HUMAN_RESOURCE_NAME> \
   --workers <w1>,<w2>
 
 # 2. @mention the Leader in Leader Room to assign task
@@ -33,7 +36,7 @@ If admin asks for CPU or memory requests/limits, update `Worker.spec.resources`.
 - **Team Room includes Team Admin** — it's Leader + Team Admin + all team workers (no Global Admin unless they are Team Admin)
 - **Leader Room is standard 3-party** — Manager + Global Admin + Leader (same as regular worker room)
 - **Leader DM is Team Admin ↔ Leader** — for team-level management
-- **Team Admin defaults to Global Admin** — if `--team-admin` not specified
+- **Choose Team Admin explicitly** — use `agt create team --admin <HUMAN_RESOURCE_NAME>`; the wrapper uses `--team-admin`. Global Admin is only the legacy API fallback, not your choice on the requester's behalf.
 - **Delegated tasks use `--delegated-to-team`** — so heartbeat knows to check with Leader, not workers
 - **Team never owns Worker runtime configuration or lifecycle** — update the referenced Worker CR directly
 

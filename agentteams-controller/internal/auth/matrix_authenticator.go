@@ -49,8 +49,8 @@ type MatrixTokenAuthenticator struct {
 }
 
 type cachedIdentity struct {
-	identity *CallerIdentity
-	expiry   time.Time
+	userID string
+	expiry time.Time
 }
 
 // NewMatrixTokenAuthenticator builds an authenticator backed by Matrix whoami
@@ -74,7 +74,8 @@ func (a *MatrixTokenAuthenticator) Authenticate(ctx context.Context, token strin
 
 	key := sha256.Sum256([]byte(token))
 	if id := a.getFromCache(key); id != nil {
-		return id, nil
+		// Cache token validation, but resolve mutable permissions on every request.
+		return a.resolveHuman(ctx, id.userID)
 	}
 
 	userID, err := a.whoami.Whoami(ctx, token)
@@ -90,7 +91,7 @@ func (a *MatrixTokenAuthenticator) Authenticate(ctx context.Context, token strin
 		return nil, err
 	}
 
-	a.putToCache(key, identity)
+	a.putToCache(key, userID)
 	return identity, nil
 }
 
@@ -122,6 +123,30 @@ func (a *MatrixTokenAuthenticator) resolveHuman(ctx context.Context, userID stri
 		case 2:
 			teams := make([]string, len(h.Spec.AccessibleTeams))
 			copy(teams, h.Spec.AccessibleTeams)
+			var memberships v1beta1.TeamList
+			if err := a.k8s.List(ctx, &memberships, client.InNamespace(a.namespace)); err != nil {
+				return nil, fmt.Errorf("list human teams: %w", err)
+			}
+			for _, team := range memberships.Items {
+				member := team.Spec.Admin != nil && team.Spec.Admin.Name == h.Name
+				for _, human := range team.Spec.HumanMembers {
+					if human.MatrixUserID != "" {
+						member = member || human.MatrixUserID == userID
+					} else {
+						member = member || human.Name == h.Name
+					}
+				}
+				if !member {
+					continue
+				}
+				found := false
+				for _, name := range teams {
+					found = found || name == team.Name
+				}
+				if !found {
+					teams = append(teams, team.Name)
+				}
+			}
 			// Capabilities are granted on the Human CR (#1220 §3). Only L2
 			// humans carry them — level-3 humans are rejected to their own
 			// branch below, and SA-based identities never pass through here
@@ -155,7 +180,7 @@ func (a *MatrixTokenAuthenticator) resolveHuman(ctx context.Context, userID stri
 	return nil, fmt.Errorf("no human with a supported permission level (2=team, 3=worker) matches matrix user %q", userID)
 }
 
-func (a *MatrixTokenAuthenticator) getFromCache(key [32]byte) *CallerIdentity {
+func (a *MatrixTokenAuthenticator) getFromCache(key [32]byte) *cachedIdentity {
 	a.cacheMu.Lock()
 	defer a.cacheMu.Unlock()
 	now := time.Now()
@@ -168,15 +193,15 @@ func (a *MatrixTokenAuthenticator) getFromCache(key [32]byte) *CallerIdentity {
 		}
 	}
 	if v, ok := a.cache[key]; ok && now.Before(v.expiry) {
-		return v.identity
+		return &v
 	}
 	return nil
 }
 
-func (a *MatrixTokenAuthenticator) putToCache(key [32]byte, identity *CallerIdentity) {
+func (a *MatrixTokenAuthenticator) putToCache(key [32]byte, userID string) {
 	a.cacheMu.Lock()
 	defer a.cacheMu.Unlock()
-	a.cache[key] = cachedIdentity{identity: identity, expiry: time.Now().Add(a.cacheTTL)}
+	a.cache[key] = cachedIdentity{userID: userID, expiry: time.Now().Add(a.cacheTTL)}
 }
 
 // localpartFromUserID extracts the localpart from a Matrix user id

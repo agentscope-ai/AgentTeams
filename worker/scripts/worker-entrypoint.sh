@@ -208,8 +208,8 @@ log "HOME set to ${HOME} (workspace files will be synced to MinIO)"
 #       exclusions, while unknown workspace paths remain synchronizable.
 #     - Avoids mc mirror --watch TOCTOU behavior on atomic file operations.
 #
-#   Remote -> Local: on-demand pull via file-sync skill (triggered by Manager @mention)
-#     + 5-minute fallback pull of Manager-managed paths as safety net
+#   Remote -> Local: changed authorization/config is pulled every 10 seconds;
+#     other files use on-demand file-sync plus a 5-minute bulk fallback.
 #       The fallback refreshes both pull and push markers so freshly-pulled
 #       Manager-managed files do not get pushed back as Worker edits.
 #
@@ -229,19 +229,34 @@ worker_sync_init "${WORKER_SYNC_STATE_DIR}" "${PULL_MARKER}"
 ) &
 log "Local->Remote change-triggered sync started (PID: $!)"
 
-# Remote -> Local: fallback pull of Manager-managed files (safety net, every 5m)
-# Normal operation relies on on-demand pulls via file-sync skill when Manager @mentions.
-# openclaw.json uses local-first merge (see merge-openclaw-config.sh): existing
-# workspace config is the base; MinIO only overlays models, gateway, channels, plugins rules.
+# Authorization changes must reach a running Worker without waiting for the
+# bulk workspace fallback. Only fetch the small config and merge when changed;
+# keep the local Matrix token through merge_openclaw_config.
+(
+    while true; do
+        sleep 10
+        ensure_mc_credentials 2>/dev/null || true
+        if mc cp "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/openclaw.json" /tmp/openclaw-policy-remote.json 2>/dev/null; then
+            if ! cmp -s /tmp/openclaw-policy-remote.json /tmp/openclaw-policy-applied.json; then
+                if merge_openclaw_config /tmp/openclaw-policy-remote.json "${WORKSPACE}/openclaw.json"; then
+                    cp /tmp/openclaw-policy-remote.json /tmp/openclaw-policy-applied.json
+                    touch "${PULL_MARKER}"
+                    worker_sync_mark_remote_pull "${WORKER_SYNC_STATE_DIR}"
+                else
+                    log "WARNING: failed to apply remote channel config; will retry"
+                fi
+            fi
+        fi
+        rm -f /tmp/openclaw-policy-remote.json
+    done
+) &
+
+# Remote -> Local: bulk files still use the five-minute fallback; config is
+# handled by the small changed-config loop above.
 (
     while true; do
         sleep 300
         ensure_mc_credentials 2>/dev/null || true
-        mc cp "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/openclaw.json" /tmp/openclaw-remote.json 2>/dev/null || true
-        if ! merge_openclaw_config /tmp/openclaw-remote.json "${WORKSPACE}/openclaw.json"; then
-            log "WARNING: failed to merge remote openclaw.json; keeping local config"
-        fi
-        rm -f /tmp/openclaw-remote.json
         mc cp "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/config/mcporter.json" "${WORKSPACE}/config/mcporter.json" 2>/dev/null || true
         mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/skills/" "${WORKSPACE}/skills/" --overwrite 2>/dev/null || true
         find "${WORKSPACE}/skills" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true

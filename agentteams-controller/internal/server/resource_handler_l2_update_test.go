@@ -151,6 +151,7 @@ func TestL2WorkerUpdateFieldPolicyCoversAllRequestFields(t *testing.T) {
 	grantedModel := map[string]string{
 		"model":         "model_not_allowed",
 		"modelProvider": "model_pair_required",
+		"subagentModel": "model_not_allowed",
 	}
 
 	typ := reflect.TypeOf(UpdateWorkerRequest{})
@@ -179,6 +180,9 @@ func TestL2WorkerUpdateFieldPolicyCoversAllRequestFields(t *testing.T) {
 			probe = fmt.Sprintf(`{"%s":{"CUSTOM":"x"}}`, name)
 		case reflect.Ptr:
 			probe = fmt.Sprintf(`{"%s":{}}`, name)
+			if f.Type.Elem().Kind() == reflect.String {
+				probe = fmt.Sprintf(`{"%s":"x"}`, name)
+			}
 		default:
 			t.Fatalf("field %s: unsupported kind %s for probe", name, f.Type.Kind())
 		}

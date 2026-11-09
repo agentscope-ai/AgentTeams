@@ -601,8 +601,8 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		if req.LlmAcquireTimeout != nil {
 			worker.Spec.LlmAcquireTimeout = *req.LlmAcquireTimeout
 		}
-		if req.ModelProvider != "" {
-			worker.Spec.ModelProvider = req.ModelProvider
+		if req.ModelProvider != nil {
+			worker.Spec.ModelProvider = *req.ModelProvider
 		}
 		if req.WorkerName != "" {
 			worker.Spec.WorkerName = req.WorkerName
@@ -2128,7 +2128,7 @@ func (h *ResourceHandler) checkScopedWorkerUpdate(ctx context.Context, caller *a
 	// modelProvider is grant-gated for L2 humans too (PR-B1 §2.3): it must
 	// travel with model (model_pair_required), so it never lands in this
 	// forbidden list for humans — checkHumanModelUpdate owns both outcomes.
-	if req.ModelProvider != "" && caller.Role != authpkg.RoleHuman {
+	if req.ModelProvider != nil && caller.Role != authpkg.RoleHuman {
 		forbidden = append(forbidden, "modelProvider")
 	}
 	if req.Runtime != "" {

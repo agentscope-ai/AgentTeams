@@ -88,7 +88,47 @@ try:
     browser("open", url, session="task-b")
     assert "session-a" not in browser("eval", "document.cookie", session="task-b")
     assert "session-a" in browser("eval", "document.cookie")
+    baseline_seconds = round(time.monotonic()-started, 3)
+    if os.environ.get("BROWSER_SKILL_EXTENDED") == "1":
+        modern = """<style>
+        body{font:20px sans-serif;margin:36px;background:#eef2f8}
+        .grid{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+        .card{background:white;padding:24px;border-radius:16px;box-shadow:0 8px 24px #ccd3df}
+        .banner{padding:20px;border-radius:12px;color:white;background:linear-gradient(120deg,#194bc7,#9b42bb)}
+        button,select{font:inherit;padding:8px;margin-top:12px}
+        canvas{display:block;margin-top:20px;border:2px solid #194bc7}
+        </style><h1>精简无头 Chromium 渲染验证</h1><div class="grid">
+        <section class="card"><div class="banner">CSS Grid · 渐变 · 中文字体</div>
+        <select id="choice"><option value="alpha">方案 A</option><option value="beta">方案 B</option></select>
+        <button id="async">执行异步操作</button><p id="async-status">等待操作</p></section>
+        <section class="card"><svg width="220" height="80"><rect width="220" height="80" rx="15" fill="#daf0e8"/>
+        <circle cx="45" cy="40" r="24" fill="#13876c"/><text x="85" y="48" font-size="22">SVG 正常</text></svg>
+        <canvas id="canvas" width="260" height="100"></canvas><p id="canvas-status">等待坐标点击</p>
+        </section></div>"""
+        script = "document.body.innerHTML=" + json.dumps(modern) + ";"
+        script += """const c=document.querySelector('#canvas'),ctx=c.getContext('2d');
+        ctx.fillStyle='#194bc7';ctx.fillRect(0,0,260,100);ctx.fillStyle='white';
+        ctx.font='22px sans-serif';ctx.fillText('Canvas 2D 正常',20,60);
+        c.onclick=()=>document.querySelector('#canvas-status').textContent='坐标点击成功';
+        document.querySelector('#async').onclick=()=>setTimeout(()=>{
+        document.querySelector('#async-status').textContent='异步完成：'+document.querySelector('#choice').value},100);
+        'ready'"""
+        browser("eval", script)
+        browser("select", "#choice", "beta")
+        browser("click", "#async")
+        browser("wait", "--fn", "document.querySelector('#async-status').textContent === '异步完成：beta'")
+        assert "异步完成：beta" in browser("get", "text", "#async-status")
+        point = json.loads(browser("eval", """(()=>{const r=document.querySelector('#canvas').getBoundingClientRect();
+        return {x:r.x+r.width/2,y:r.y+r.height/2}})()"""))["data"]["result"]
+        browser("mouse", "move", str(round(point["x"])), str(round(point["y"])))
+        browser("mouse", "down")
+        browser("mouse", "up")
+        assert "坐标点击成功" in browser("get", "text", "#canvas-status")
+        browser("screenshot", str(OUT / "modern-rendering.png"))
+        pixel = json.loads(browser("eval", "Array.from(document.querySelector('#canvas').getContext('2d').getImageData(0,0,1,1).data)"))["data"]["result"]
+        assert pixel == [25, 75, 199, 255], pixel
     summary = {"passed": True, "steps": len(steps), "seconds": round(time.monotonic()-started, 3),
+               "baselineSeconds": baseline_seconds,
                "scope": "CLI in disposable ARM64 QwenPaw Worker container; no live Agent/Matrix task"}
 finally:
     for session in ("task-a", "task-b"):

@@ -124,6 +124,15 @@ The reproducible [POC](../../examples/worker-browser-skill-poc/README.md) packag
 the candidate skill and runs it in a disposable container based on the published
 QwenPaw Worker image. It does not change running Workers or the core image.
 
+The native ARM64 headless follow-up passed 28 controlled-page checks, including
+CSS Grid, SVG, Canvas 2D, async state changes and coordinate clicking.
+After removing downloads and caches, a temporary local image increased by
+270,159,751 bytes (about 258 MiB). The original full-browser dependency estimate
+was about 960 MB. These use different Chromium releases, so this is a footprint
+and sample-compatibility result, not a performance or security equivalence claim.
+Prefer evaluating the headless packaging for the official optional candidate;
+retain the production sandbox and runtime-integration acceptance gates below.
+
 | Check | Required evidence |
 | --- | --- |
 | Optional installation | Original Worker has no browser dependencies; only the disposable selected environment receives them |

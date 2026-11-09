@@ -2,7 +2,8 @@
 set -euo pipefail
 
 CLI=/opt/agentteams/optional/browser-automation/node_modules/.bin/agent-browser
-if [ ! -x "${CLI}" ] || ! command -v chromium >/dev/null; then
+export AGENT_BROWSER_EXECUTABLE_PATH="${AGENT_BROWSER_EXECUTABLE_PATH:-/usr/bin/chromium}"
+if [ ! -x "${CLI}" ] || [ ! -x "${AGENT_BROWSER_EXECUTABLE_PATH}" ]; then
     echo "Browser dependencies are missing. Run this skill's install.sh in your selected Worker container." >&2
     exit 1
 fi
@@ -18,7 +19,6 @@ export AGENT_BROWSER_DOWNLOAD_PATH="${BROWSER_SKILL_STATE}/downloads"
 export AGENT_BROWSER_SCREENSHOT_DIR="${BROWSER_SKILL_STATE}/screenshots"
 export AGENT_BROWSER_CONFIG="${BROWSER_SKILL_STATE}/config.json"
 [ -f "${AGENT_BROWSER_CONFIG}" ] || printf '{}\n' > "${AGENT_BROWSER_CONFIG}"
-export AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 export AGENT_BROWSER_SESSION="${BROWSER_SKILL_SESSION:-browser-poc}"
 case "${AGENT_BROWSER_SESSION}" in
     *[!a-zA-Z0-9_-]*) echo "Use a short alphanumeric task session name." >&2; exit 1 ;;

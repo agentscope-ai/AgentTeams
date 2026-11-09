@@ -13,6 +13,12 @@ This changes only your container: it downloads Chromium, fonts, and the pinned
 CLI. Do not run it on a host machine. If installation is denied or fails,
 report the blocker; do not change permissions or choose another installation.
 
+For the native ARM64 headless POC, use `bash scripts/install-headless.sh`
+instead, then run commands through `bash scripts/headless.sh`. This variant
+uses a fixed headless-shell release and one Simplified Chinese font, and avoids
+installing the full Debian Chromium package. Its dependencies are extracted
+under /tmp; automatic setup after Worker replacement remains unimplemented.
+
 Use `bash scripts/browser.sh --help` for the installed command reference.
 Use `bash scripts/browser.sh skills get core` only if the installed CLI supports it.
 

@@ -119,3 +119,71 @@ Failures and remaining limits:
 - Agent discovery, automatic dependency setup on selection, container-rebuild
   recovery, two independent Worker containers, amd64, other runtimes and
   Kubernetes were not exercised.
+
+## Native ARM64 headless follow-up
+
+The lighter candidate uses agent-browser 0.41.2 with
+@sparticuz/chromium-min 153.0.0 and its ARM64 headless-shell pack. Browser pack
+and Simplified Chinese font inputs are pinned and checked with SHA-256.
+The installer keeps only the current platform's CLI binary and one Chinese
+font, and does not install Debian Chromium or fonts-noto-cjk.
+The npm helper is used for extraction; its Chromium.args defaults are not
+applied. The existing agent-browser launch path is retained.
+
+Reproduce in the same disposable harness:
+
+```bash
+docker build -t agentteams/browser-skill-poc:local examples/worker-browser-skill-poc
+docker run --rm --init --memory 2g --cpus 2 --shm-size 256m \
+  agentteams/browser-skill-poc:local -lc \
+  'bash /poc/browser-automation/scripts/install-headless.sh && \
+   AGENT_BROWSER_EXECUTABLE_PATH=/tmp/chromium \
+   LD_LIBRARY_PATH=/tmp/al2023/lib:/tmp FONTCONFIG_PATH=/tmp/fonts \
+   BROWSER_SKILL_EXTENDED=1 python3 /poc/test_browser.py'
+```
+
+For individual commands after installation, use
+`bash /poc/browser-automation/scripts/headless.sh`.
+The installer accepts BROWSER_SLIM_ARCHIVE / BROWSER_SLIM_FONT for cached
+local inputs, verifies the same digests, and deletes its staging directory.
+Retain third-party licenses when redistributing the resulting environment.
+
+### Measured result
+
+| Check | Full Debian Chromium baseline | Headless follow-up |
+| --- | --- | --- |
+| Browser version | 156.0.8078.79 | 153.0.8010.0 |
+| Dependency footprint | About 845 MB from apt + 115 MiB CLI directory | 270,159,751 bytes clean image increment (about 258 MiB) |
+| Same 16 workflow commands | 8.408 s | 7.077 s |
+| Browser open calls | 3.942 / 3.767 s | 3.407 / 3.226 s |
+| Additional rendering checks | Not run | 12 commands passed; total 28 commands took 7.548 s |
+
+The headless runtime files comprise approximately 190 MiB browser executable,
+24 MiB graphics libraries, 4 MiB bundled runtime libraries, 16 MiB fonts and
+23 MiB CLI/helper installation. These are expanded sizes, not download sizes.
+The browser pack alone is 68,249,600 compressed bytes; font and npm downloads
+are additional.
+
+To measure the actual image change, the test removed input archives, npm cache,
+browser profiles and generated outputs from the disposable container, then
+committed a temporary local image. Base size was 1,937,651,076 bytes; candidate
+size was 2,207,810,827 bytes. The clean image also launched and closed a fresh
+browser from a new container. No image was published or substituted for a live
+Worker.
+
+The original form, Chinese screenshot, upload/download and task-session Cookie
+checks passed. The additional fixture exercised CSS Grid, gradient/shadow
+rendering, SVG, Canvas 2D with an asserted pixel value, asynchronous state
+updates, select input and coordinate-based mouse clicking. Both screenshots
+were visually inspected. With --init, only init and the harness process
+remained after close; no browser or zombie children remained in that check.
+
+The first extended run exposed that pinned CLI 0.41.2 expects integer mouse
+coordinates. Rounding the element center fixed that test and the complete
+28-command run passed. This was a CLI argument compatibility fix.
+
+These are individual local samples across different browser versions, not a
+performance benchmark or proof of equivalence on arbitrary websites.
+The earlier root/no-sandbox limitation remains. Browser dependencies extracted
+under /tmp need a proper lifecycle for tmpfs/container replacement; production
+activation, amd64 and Kubernetes remain unverified.

@@ -113,10 +113,12 @@ func TestDoConnectionFailureIsUnavailable(t *testing.T) {
 }
 
 func TestDoTimeoutIsUnavailable(t *testing.T) {
-	release := make(chan struct{})
-	defer close(release)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-release // hold the request until the client times out
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
 	}))
 	defer upstream.Close()
 	base, _ := url.Parse(upstream.URL)
@@ -126,6 +128,7 @@ func TestDoTimeoutIsUnavailable(t *testing.T) {
 	if _, err := c.Do(context.Background(), cl, http.MethodGet, "/internal/v1/loops", nil, nil); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("err = %v, want ErrUnavailable", err)
 	}
+	upstream.CloseClientConnections()
 }
 
 func TestHealthParsesBody(t *testing.T) {

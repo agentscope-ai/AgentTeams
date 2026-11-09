@@ -1413,11 +1413,10 @@ else
     log_fail "Admin failed to send task to QwenPaw leader"
 fi
 
-# delegate_task renders the Worker runtimeName in the visible notification body;
-# the full Matrix identity is carried by the event routing metadata. Match the
-# assignment phrase plus unique task ID so planning narration cannot satisfy it.
+# Match either the delegate_task notification or the leader's explicit
+# TASK_ASSIGNED reply, together with the unique task ID and Worker identity.
 LEADER_ASSIGNMENT=$(matrix_wait_for_message_containing \
-    "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${LEADER_MXID}" "assigned task.*${TASK_ID}" 480 \
+    "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${LEADER_MXID}" "\(assigned task\|TASK_ASSIGNED:\).*${TASK_ID}" 480 \
     "" "" "" 600 "${LEADER_TASK_BASELINE}" 2>/dev/null || true)
 if echo "${LEADER_ASSIGNMENT}" | grep -Fq "${TASK_ID}" && echo "${LEADER_ASSIGNMENT}" | grep -Fq "${TEST_WORKER}"; then
     log_pass "Leader assigned TeamHarness task to worker in Team Room"

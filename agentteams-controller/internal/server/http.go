@@ -94,6 +94,19 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// stable deployment descriptor, so it gets ETag/304 (issue #1475 PR-3).
 	mux.Handle("GET /api/v1/status", mw.RequireAuthz(authpkg.ActionGet, "status", nil)(http.HandlerFunc(sh.ClusterStatus)))
 	mux.Handle("GET /api/v1/version", mw.Authenticate(httputil.ETagMiddleware(http.HandlerFunc(sh.Version))))
+	mux.Handle("GET /api/v1/me", mw.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		caller := authpkg.CallerFromContext(r.Context())
+		if caller == nil || caller.MatrixUserID == "" {
+			httputil.WriteError(w, http.StatusUnauthorized, "a Human Matrix identity is required")
+			return
+		}
+		level := caller.HumanPermissionLevel
+		teams := caller.Teams
+		if teams == nil {
+			teams = []string{}
+		}
+		httputil.WriteJSON(w, http.StatusOK, map[string]interface{}{"name": caller.Username, "permissionLevel": level, "accessibleTeams": teams, "accessibleWorkers": caller.AccessibleWorkers, "capabilities": caller.Capabilities})
+	})))
 
 	// --- Declarative resource CRUD ---
 	// One shared audit client: resource mutations (human updates, capability
@@ -452,6 +465,15 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// The route catalog is a stable gateway configuration view:
 	// ETag/304-protected (#1475 PR-3).
 	mux.Handle("GET /api/v1/gateway/ai-routes", mw.RequireAuthz(authpkg.ActionGet, "gateway", nil)(httputil.ETagMiddleware(http.HandlerFunc(gh.ListAIRoutes))))
+	for method, action := range map[string]authpkg.Action{"GET": authpkg.ActionGet, "POST": authpkg.ActionCreate, "PUT": authpkg.ActionUpdate, "DELETE": authpkg.ActionDelete} {
+		pattern := method + " /api/v1/gateway/ai/{resource}"
+		if method != "POST" {
+			mux.Handle(pattern+"/{name}", mw.RequireAuthz(action, "gateway", nil)(http.HandlerFunc(gh.ManageAI)))
+		}
+		if method == "GET" || method == "POST" {
+			mux.Handle(pattern, mw.RequireAuthz(action, "gateway", nil)(http.HandlerFunc(gh.ManageAI)))
+		}
+	}
 
 	// --- Credentials ---
 	// STS is self-scoped: no {name} in path; handler uses CallerIdentity to scope the issued token.

@@ -40,10 +40,12 @@ const (
 
 // CallerIdentity represents the authenticated caller.
 type CallerIdentity struct {
-	Role     string   // admin | manager | team-leader | worker
-	Username string   // canonical name (worker name, "manager", or "admin")
-	Team     string   // team name (filled by Enricher, empty for standalone)
-	Teams    []string // multi-team set for L2 humans (Human CR accessibleTeams); empty for SA-based callers
+	MatrixUserID         string   // verified Human Matrix identity
+	HumanPermissionLevel int      // current Human CR level (1=admin, 2=team, 3=worker)
+	Role                 string   // admin | manager | team-leader | worker
+	Username             string   // canonical name (worker name, "manager", or "admin")
+	Team                 string   // team name (filled by Enricher, empty for standalone)
+	Teams                []string // multi-team set for L2 humans (Human CR accessibleTeams); empty for SA-based callers
 	// Capabilities are the granted capability values for L2 humans (Human CR
 	// capabilities, #1220 §3). Never populated for SA-based callers
 	// (admin/manager/leader/worker) — team leaders never hold capabilities

@@ -9,6 +9,7 @@ import (
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -123,11 +124,11 @@ func TestMatrixAuthenticator_UnknownUserDenied(t *testing.T) {
 }
 
 func TestMatrixAuthenticator_UnsupportedLevelDenied(t *testing.T) {
-	auth, fw := newMatrixAuthTest(t, newHuman("carol", "carol", 1))
+	auth, fw := newMatrixAuthTest(t, newHuman("carol", "carol", 4))
 	fw.userID = "@carol:matrix.local"
 
 	if _, err := auth.Authenticate(context.Background(), "matrix-token"); err == nil {
-		t.Fatal("expected error for level-1 human (admin SA territory)")
+		t.Fatal("expected error for unsupported permission level")
 	} else if !strings.Contains(err.Error(), "unsupported permissionLevel") {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -279,5 +280,42 @@ func TestMatrixAuthenticator_SSOHumanMatchesMatrixUserID(t *testing.T) {
 	fw2.userID = "@alice:matrix.local"
 	if _, err := auth2.Authenticate(context.Background(), "matrix-token"); err == nil {
 		t.Fatal("expected error: reconciled SSO human must not match by localpart")
+	}
+}
+
+func TestMatrixAuthenticator_L1Admin(t *testing.T) {
+	human := newHuman("luo", "luo", 1)
+	human.Status.MatrixUserID = "@luo:matrix.local"
+	auth, fw := newMatrixAuthTest(t, human)
+	fw.userID = "@luo:matrix.local"
+	id, err := auth.Authenticate(context.Background(), "matrix-token")
+	if err != nil || id.Role != RoleAdmin || id.Username != "luo" {
+		t.Fatalf("expected named admin identity, got %v, %v", id, err)
+	}
+	h := &v1beta1.Human{}
+	if err := auth.k8s.Get(context.Background(), client.ObjectKey{Name: "luo", Namespace: "default"}, h); err != nil {
+		t.Fatal(err)
+	}
+	h.Spec.PermissionLevel = 2
+	if err := auth.k8s.Update(context.Background(), h); err != nil {
+		t.Fatal(err)
+	}
+	id, err = auth.Authenticate(context.Background(), "matrix-token")
+	if err != nil || id.Role != RoleHuman {
+		t.Fatalf("cached admin survived downgrade: %v, %v", id, err)
+	}
+	if err := auth.k8s.Delete(context.Background(), h); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auth.Authenticate(context.Background(), "matrix-token"); err == nil {
+		t.Fatal("deleted human authenticated")
+	}
+}
+
+func TestMatrixAuthenticator_L1RequiresReconciledIdentity(t *testing.T) {
+	auth, fw := newMatrixAuthTest(t, newHuman("luo", "luo", 1))
+	fw.userID = "@luo:matrix.local"
+	if _, err := auth.Authenticate(context.Background(), "token"); err == nil {
+		t.Fatal("unreconciled L1 identity was trusted by localpart alone")
 	}
 }

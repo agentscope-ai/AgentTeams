@@ -9,6 +9,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = Path(__file__).resolve().parent
+RUNNER = os.environ.get("BROWSER_SKILL_RUNNER", str(ROOT / "browser-automation/scripts/browser.sh"))
 OUT = Path("/tmp/browser-poc-results")
 OUT.mkdir(exist_ok=True)
 PAGE = """<!doctype html><html lang="zh-CN"><meta charset="utf-8">
@@ -48,9 +49,9 @@ steps = []
 def browser(*args, session="task-a", expect=True):
     start = time.monotonic()
     proc = subprocess.run(
-        ["bash", str(ROOT / "browser-automation/scripts/browser.sh"), "--json", *args],
+        ["bash", RUNNER, "--json", *args],
         env={**os.environ, "BROWSER_SKILL_SESSION": session},
-        capture_output=True, text=True, timeout=45,
+        capture_output=True, text=True, timeout=600 if not steps else 45,
     )
     record = {"command": list(args), "session": session, "seconds": round(time.monotonic()-start, 3),
               "code": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}

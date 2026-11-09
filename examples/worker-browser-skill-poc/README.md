@@ -1,30 +1,54 @@
 # Optional browser skill POC
 
 This example evaluates an optional skill on a disposable QwenPaw Worker
-container. It does not change published images, running Workers, the creation
-UI, or the trusted dependency-setup lifecycle.
+container. It does not change published images, running Workers or the creation
+UI. First-use dependency installation is owned by the skill entry point.
 
 See the [proposal](../../docs/design/worker-browser-automation.md) and
 [中文方案](../../docs/zh-cn/design/worker-browser-automation.md).
 
 ## Package and assignment boundary
 
-The skill is `browser-automation/` with SKILL.md and two shell scripts.
+The skill is `browser-automation/` with SKILL.md and supporting shell scripts.
 It has no assign_when rule, so role matching must not select it implicitly.
-The package installs agent-browser 0.41.2 into a dedicated directory and
-Chromium/fonts using Debian packages. The npm version is fixed; Debian package
-versions depend on the configured repository in this POC.
+The current entry point is scripts/headless.sh. It installs pinned
+agent-browser 0.41.2, a headless Chromium pack and one Chinese font on first
+use. The full Debian installer is retained as a comparison fixture.
 
-Existing skill upload/assignment preserves these scripts but does not execute
-install.sh automatically. Production integration still needs a reviewed
-setup/probe/retry step for explicitly selected Workers. The browser files live
-in the selected container; a new/replaced container needs setup again.
+Existing skill upload/assignment preserves these scripts without running them.
+The Worker follows SKILL.md and invokes headless.sh through its shell tool;
+that call installs missing dependencies and continues the original command.
+No Controller install hook or Human-run setup command is part of the normal
+flow. Installed files are container-local and may be discarded on deletion.
 
-This installer requires a root Debian-based Docker Worker container and network
-access. It must not run on a host. Non-root, read-only, offline and Kubernetes
-setups are unverified.
+The current headless candidate is verified only on root ARM64 Docker Workers.
+First use needs network access or cached verified input artifacts. Once ready,
+it skips installation/downloads. It must not run on a host; other platforms
+remain unverified.
 
-## Reproduce
+## Reproduce first-use automatic installation
+
+Build the disposable harness, then run the browser checks directly. Do not run
+an installer first:
+
+```bash
+docker build -t agentteams/browser-skill-poc:local examples/worker-browser-skill-poc
+docker run --rm --init --memory 2g --cpus 2 --shm-size 256m \
+  agentteams/browser-skill-poc:local -lc \
+  'BROWSER_SKILL_RUNNER=/poc/browser-automation/scripts/headless.sh \
+   BROWSER_SKILL_EXTENDED=1 python3 /poc/test_browser.py'
+```
+
+The first browser command gets up to 10 minutes for setup. Setup output goes
+to stderr; the browser's JSON remains on stdout. A versioned readiness marker
+and required-file checks avoid repeated downloads. Concurrent calls serialize
+setup and reuse the first successful installation.
+
+For the isolated two-call bootstrap regression, run
+`python3 /poc/test_bootstrap.py` in a fresh harness container. That test expects
+no existing browser dependencies and checks exactly one installation.
+
+## Original full-browser comparison
 
 From the repository root:
 
@@ -187,3 +211,29 @@ performance benchmark or proof of equivalence on arbitrary websites.
 The earlier root/no-sandbox limitation remains. Browser dependencies extracted
 under /tmp need a proper lifecycle for tmpfs/container replacement; production
 activation, amd64 and Kubernetes remain unverified.
+
+## Lazy setup regression result
+
+Before the entry-point change, two first-use calls both failed with "Browser
+dependencies are missing". After the change, two concurrent calls to
+headless.sh --version in a pristine Worker container succeeded with exactly one
+installation. A subsequent call skipped setup and had no setup output.
+
+The test supplied cached browser/font archives, verified by their pinned
+SHA-256; npm dependencies and the font license were fetched by the installer.
+The 6.1–9.2-second samples are not cold Internet download measurements.
+
+After setup, the container was disconnected from its external Docker network.
+All 28 local browser checks and two close calls passed using headless.sh,
+with no install messages on any ready call. This verifies dependency reuse
+without network access. No Human installation command was used, no Worker
+Dockerfile was modified, and no dependency persistence was added.
+
+Deleting the test container and starting a new one from the same original
+Worker image repeated this check successfully: two concurrent first-use calls,
+one installation, then a warm call with no install output. The installer now
+keeps npm's download cache inside its disposable staging directory, which is
+removed on exit.
+
+This remains a container/CLI regression. It does not prove that a live Agent
+has discovered the assigned skill or executed a Matrix task.

@@ -7,12 +7,25 @@ if [ ! -f /.dockerenv ] || [ "$(id -u)" != 0 ] || [ "$(uname -m)" != aarch64 ]; 
     exit 1
 fi
 exec 9>/tmp/agentteams-browser-skill-install.lock
-flock -n 9 || { echo "Another browser skill installation is running." >&2; exit 1; }
+flock -w 600 9 || { echo "Timed out waiting for browser dependency installation." >&2; exit 1; }
 INSTALL_DIR=/opt/agentteams/optional/browser-automation
+CLI="${INSTALL_DIR}/node_modules/.bin/agent-browser"
+READY_FILE="${INSTALL_DIR}/.headless-ready-0.41.2-153.0.0"
+ready=true
+for file in /tmp/chromium /tmp/al2023/lib/libnss3.so /tmp/fonts/fonts.conf \
+    /tmp/fonts/NotoSansCJKsc-Regular.otf /tmp/libEGL.so /tmp/libGLESv2.so \
+    /tmp/libvk_swiftshader.so /tmp/libvulkan.so.1; do
+    [ -s "${file}" ] || ready=false
+done
+if [ -f "${READY_FILE}" ] && [ -x "${CLI}" ] && [ -x /tmp/chromium ] && "${ready}"; then
+    exit 0
+fi
+rm -f "${READY_FILE}"
+echo "Installing browser dependencies in your Worker container (first use)..." >&2
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "${WORK_DIR}"' EXIT
 mkdir -p "${INSTALL_DIR}"
-npm install --prefix "${INSTALL_DIR}" --save-exact --ignore-scripts \
+npm install --cache "${WORK_DIR}/npm-cache" --prefix "${INSTALL_DIR}" --save-exact --ignore-scripts \
     agent-browser@0.41.2 @sparticuz/chromium-min@153.0.0
 
 if [ -n "${BROWSER_SLIM_ARCHIVE:-}" ]; then
@@ -59,3 +72,4 @@ export LD_LIBRARY_PATH="/tmp/al2023/lib:/tmp${LD_LIBRARY_PATH:+:${LD_LIBRARY_PAT
 export FONTCONFIG_PATH=/tmp/fonts
 /tmp/chromium --version
 "${INSTALL_DIR}/node_modules/.bin/agent-browser" --version
+touch "${READY_FILE}"

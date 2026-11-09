@@ -16,6 +16,13 @@ Its dependency installation runs only inside the selected Worker's execution
 environment. Browser binaries are environment dependencies, not files embedded
 in the skill ZIP. The browser runs in that Worker's container and network.
 
+The base Worker image must remain unchanged. On the first browser task, the
+Worker follows the skill and calls its headless entry point; that entry point
+installs dependencies if needed and continues the requested command. No normal
+Human installation step or Controller installation hook is required.
+Dependency loss when a container is deleted is acceptable: install again on
+the replacement Worker's first browser call.
+
 This replaces the initial proposal of automatically enabling browser capability
 for all supported Workers. Official catalog availability and per-Worker
 activation are separate decisions.
@@ -38,10 +45,10 @@ Source baseline: upstream main `7e9a1c73`, inspected on 2026-11-09.
 | [Builtin selection](../../agentteams-controller/internal/service/builtin_templates.go) | Mandatory templates and catalog availability share selection rules | Do not turn the optional browser package into a mandatory template builtin |
 | [QwenPaw image](../../qwenpaw/Dockerfile) | Does not explicitly provision Chromium or agent-browser | Skill file delivery alone cannot make a browser usable |
 
-The existing ZIP/assignment flow does **not** declare or execute a system-package
-installation lifecycle. Do not describe upload, selected assignment, or API
-enablement as successful browser setup. The POC calls its installer explicitly;
-automatic setup during Worker creation is subsequent integration work.
+The existing ZIP/assignment flow distributes files and does not run arbitrary
+install scripts. Keep that behavior. After skill activation, the Worker invokes
+the skill's entry point using its existing shell tool. The updated candidate
+performs lazy setup there; assignment alone does not download a browser.
 
 ## Alternatives
 
@@ -66,16 +73,15 @@ official candidate.
 2. The user explicitly selects skill names in the current Worker creation form.
    Preserve those names in Worker.spec.skills; do not union in browser defaults.
 3. Materialize selected packages using current upload/assignment ordering.
-4. Add a bounded environment-setup step for the official, reviewed package:
-   verify its identity/version, install its dependencies in the target Worker,
-   then run an executable/launch probe. Reuse the existing execution boundary;
-   do not execute arbitrary uploaded install scripts simply because a ZIP has
-   a scripts directory. This setup hook is proposed, not implemented today.
-5. Refresh/load the selected skill through its runtime adapter. Report separately
-   whether files, dependencies, and runtime activation succeeded. A setup failure
-   remains retryable and must not be displayed as browser-ready.
-6. On Worker replacement, check environment capability and restore the selected
-   dependency version. A cached skill ZIP is not a cached Chromium installation.
+4. Refresh/load the selected skill through the existing runtime adapter. Its
+   instructions direct the Worker to use scripts/headless.sh for browser work.
+5. On the first call, the entry point takes an installation lock, checks the
+   pinned-version readiness marker and runtime files, installs missing
+   dependencies, then runs the original command. Setup logs go to stderr so
+   --json output remains parseable. Concurrent calls share one installation.
+6. Subsequent calls check readiness and skip downloads. If container-local
+   dependencies disappear, repeat setup on the next call. Do not persist the
+   browser environment just to survive container deletion.
 
 Only selected Workers pay the installation cost. Upgrading skill text alone
 does not replace an already running CLI/browser pair: install/probe the selected
@@ -84,10 +90,11 @@ fails, retain the previous working version and report the error. Removing a
 skill prevents subsequent use and closes its sessions; do not automatically
 purge shared system libraries used by another skill.
 
-For read-only root filesystems, non-root images without package-install rights,
-or offline hosts, use a pre-provisioned compatible image/endpoint or report the
-requirement. Do not grant privilege or silently install on the host. The POC's
-root Debian Docker installer is not a production solution for those cases.
+For unsupported architectures, unavailable network or insufficient container
+permissions, report the concrete blocker; the normal flow must not ask a Human
+to preinstall packages. Preserve existing tool authorization. Do not grant
+privilege, install on the host, or enlarge the base image as an automatic
+fallback. The current headless candidate is validated only on root ARM64 Docker.
 
 ## Skill contract and browser execution
 
@@ -97,8 +104,9 @@ runtimes/OS/architectures, and explain actual setup cost and restrictions.
 
 The candidate uses pinned agent-browser plus local Chromium. Native ARM64 needs
 a compatible browser source: the current Chrome for Testing installer does not
-have a Linux ARM64 target. The POC evaluates Debian Chromium; production packages
-and mirrors still need a version/cache policy. Do not assume latest web docs
+have a Linux ARM64 target. The candidate uses the pinned headless-shell pack;
+the full Debian Chromium installer remains a comparison fixture. Production
+packages and mirrors still need a version policy. Do not assume latest web docs
 match the selected npm release; inspect the installed CLI's actual help.
 
 The task loop is: open -> snapshot -> click/fill -> fresh snapshot -> verify.
@@ -141,7 +149,7 @@ retain the production sandbox and runtime-integration acceptance gates below.
 | Session behavior | Two logical task sessions do not share cookies; close releases browser processes |
 | Runtime state | Inspect actual files; profiles/caches/sockets stay outside synchronized HOME |
 | Setup cost | Record downloaded packages, installed size, first launch and operation timings |
-| Product integration, later | Actual creation selector -> trusted setup -> runtime discovery -> real Matrix task; failure/retry and replacement coverage |
+| Product integration, later | Actual creation selector -> runtime discovery -> skill first-use setup -> real Matrix task; failure/retry coverage |
 | Compatibility, later | Docker/Kubernetes, amd64/arm64, QwenPaw/OpenClaw/Hermes with tested sandbox/resource settings |
 
 CLI success in a QwenPaw-derived container is not evidence that the QwenPaw agent
@@ -154,8 +162,8 @@ independent Workers.
 1. Complete and document the disposable-container POC; retain failures and measured
    costs. Select exact supported CLI/browser versions.
 2. Publish the optional package and preserve existing selection/catalog behavior.
-3. Add the reviewed setup/probe/retry lifecycle for selected Workers, including
-   container replacement and version switching.
+3. Validate the skill-owned first-use setup, readiness checks and retry behavior;
+   container replacement simply repeats first-use setup.
 4. Validate runtime activation and real tasks; add installation failure,
    unselected Worker, removal, rollback, and isolation tests.
 5. Update release defaults and user documentation only after that evidence exists.

@@ -488,7 +488,7 @@ func (a *Authorizer) authorizeWorker(caller *CallerIdentity, req AuthzRequest) e
 		}
 		return deny(caller, req)
 
-	case "task", "checkpoint":
+	case "task":
 		// TaskForge task actions (1.2.7, task 26 §5.4): workers may
 		// GET and UPDATE (claim/submit ride on update). Self-ownership
 		// ("仅自己任务") is enforced where the data lives — TaskForge
@@ -500,6 +500,18 @@ func (a *Authorizer) authorizeWorker(caller *CallerIdentity, req AuthzRequest) e
 		// the NEW /api/v1/tasks/{id}/{action} routes only; the legacy
 		// project endpoints stay on "project"/"task-meta" untouched.
 		if req.Action == ActionGet || req.Action == ActionUpdate {
+			return a.requireSameTeam(caller, req)
+		}
+		return deny(caller, req)
+
+	case "checkpoint":
+		// TaskForge checkpoints (1.2.7, task 26 §5.4): workers only READ
+		// checkpoints (ActionGet through requireSameTeam). Checkpoint
+		// records are written by the task system itself, not by workers:
+		// a worker must never create/update/delete checkpoint state even
+		// for its own task, so everything besides ActionGet — including
+		// List and Update — is denied.
+		if req.Action == ActionGet {
 			return a.requireSameTeam(caller, req)
 		}
 		return deny(caller, req)

@@ -1,9 +1,9 @@
 # ============================================================
-# AgentTeams QwenPaw Worker - Python-based Container
+# AgentTeams QwenPaw Harness - Python-based Container
 # ============================================================
-# Lightweight Python container for running QwenPaw-based Worker Agents.
+# Shared Python container for QwenPaw Manager, Leader, and Worker roles.
 # Uses the same MinIO-backed config/sync model as CoPaw workers, but reads
-# controller-projected runtime.yaml as the worker contract.
+# controller-projected runtime.yaml as the role and desired-state contract.
 #
 # Build args:
 #   HIGRESS_REGISTRY  - base image registry for mc (MinIO Client)
@@ -14,9 +14,12 @@
 # ============================================================
 
 ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
+ARG AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest
 
 # ============ Stage 1: mc (MinIO Client) ============
 FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
+
+FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS agentteams-controller
 
 # ============ Final Image ============
 FROM ${HIGRESS_REGISTRY}/higress/python:3.11-slim
@@ -170,6 +173,8 @@ RUN /opt/venv/qwenpaw/bin/python /tmp/install-builtin-qwenpaw-plugins.py \
         /opt/agentteams/plugins/workerflow-qwenpaw.zip \
     && rm -f /tmp/install-builtin-qwenpaw-plugins.py
 
+COPY --from=agentteams-controller /usr/local/bin/agt /usr/local/bin/agt
+COPY manager/scripts/init/qwenpaw_manager_skill_sync.py /opt/agentteams/scripts/qwenpaw_manager_skill_sync.py
 COPY --chmod=755 qwenpaw/scripts/qwenpaw-worker-entrypoint.sh /opt/agentteams/scripts/qwenpaw-worker-entrypoint.sh
 COPY --chmod=755 qwenpaw/scripts/qwenpaw-teamharness-plugin-reload.sh /opt/agentteams/scripts/qwenpaw-teamharness-plugin-reload.sh
 COPY --from=shared . /opt/agentteams/scripts/lib/

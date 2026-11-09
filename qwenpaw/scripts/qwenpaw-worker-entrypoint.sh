@@ -19,6 +19,12 @@ ENV_LIB="${AGENTTEAMS_ENV_LIB:-/opt/agentteams/scripts/lib/agentteams-env.sh}"
 source "${ENV_LIB}"
 export AGENTTEAMS_OTEL_RUNTIME=qwenpaw
 
+AGENT_ROLE="${AGENTTEAMS_AGENT_ROLE:-${AGENTTEAMS_WORKER_ROLE:-worker}}"
+if [ "${AGENT_ROLE}" = "manager" ]; then
+    export AGENTTEAMS_WORKER_NAME="${AGENTTEAMS_WORKER_NAME:-manager}"
+    export AGENTTEAMS_WORKER_CR_NAME="${AGENTTEAMS_MANAGER_NAME:?AGENTTEAMS_MANAGER_NAME is required}"
+    export AGENTTEAMS_WORKER_HOME="${AGENTTEAMS_WORKER_HOME:-/root/manager-workspace}"
+fi
 WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"
 WORKER_CR_NAME="${AGENTTEAMS_WORKER_CR_NAME:-${WORKER_NAME}}"
 # Align with CoPaw/openclaw/hermes: HOME == workspace == MinIO mirror root.
@@ -57,7 +63,7 @@ mkdir -p "${WORKER_HOME}"
 export HOME="${WORKER_HOME}"
 export AGENTTEAMS_WORKER_HOME="${WORKER_HOME}"
 export AGENTTEAMS_AGENT_NAME="${WORKER_NAME}"
-export AGENTTEAMS_AGENT_ROLE="worker"
+export AGENTTEAMS_AGENT_ROLE="${AGENT_ROLE}"
 export AGENTTEAMS_AGENT_HOME="${WORKER_HOME}"
 
 # Set QWENPAW_WORKING_DIR before starting; QwenPaw reads it during config/plugin setup.

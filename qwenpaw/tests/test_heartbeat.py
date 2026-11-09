@@ -75,10 +75,13 @@ def test_qwenpaw_last_active_uses_agent_status_endpoint() -> None:
     assert requests[0]["path"] == "/api/agents/default/agent-status"
 
 
-def test_controller_reporter_posts_ready_with_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("role,resource", [("worker", "workers"), ("manager", "managers")])
+def test_controller_reporter_posts_ready_with_auth(monkeypatch: pytest.MonkeyPatch, role: str, resource: str) -> None:
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", role)
+    path = f"/api/v1/{resource}/worker-a/ready"
     server, requests = _start_server(
         {
-            "POST /api/v1/workers/worker-a/ready": (204, None),
+            f"POST {path}": (204, None),
         }
     )
     monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", f"http://127.0.0.1:{server.server_port}")
@@ -94,7 +97,7 @@ def test_controller_reporter_posts_ready_with_auth(monkeypatch: pytest.MonkeyPat
     request = requests[0]
     headers = {key.lower(): value for key, value in request["headers"].items()}
     assert request["method"] == "POST"
-    assert request["path"] == "/api/v1/workers/worker-a/ready"
+    assert request["path"] == path
     assert headers["authorization"] == "Bearer worker-token"
     assert "x-agentteams-cluster-id" not in headers
     assert json.loads(request["body"]) == {"lastActiveAt": "2026-05-13T00:00:00Z"}

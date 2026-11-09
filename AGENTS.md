@@ -49,15 +49,15 @@ Logs and local artifacts (for example replay logs) stay out of git via `.gitigno
 | Runtime   | Behavior |
 |-----------|-----------|
 | `openclaw` | OpenClaw gateway; primary Matrix channel uses the **message** tool pattern (see upstream OpenClaw / AgentTeams manager config). |
-| `qwenpaw` (default) | Python QwenPaw workspace; Matrix traffic uses the **`copaw channels send`** CLI (see `start-qwenpaw-manager.sh`). |
+| `qwenpaw` (default) | Shared QwenPaw Harness image and `qwenpaw-worker-entrypoint.sh`; `runtime.yaml` selects the Manager role, with TeamHarness communication and `agt` management tools. |
 
-Hermes, DeepSeek Harness, and OpenHuman are **Worker-only** runtimes in the API and Helm worker defaults; the Manager entrypoint in `start-manager-agent.sh` today starts **openclaw** or **qwenpaw** only.
+Hermes, DeepSeek Harness, and OpenHuman have not yet been adapted to the Manager role. OpenClaw retains `start-manager-agent.sh`; QwenPaw Manager, Leader, and Worker share the QwenPaw Harness entrypoint. The legacy Manager selector `copaw` resolves to QwenPaw without changing the CoPaw Worker runtime.
 
 **Deployment runtime** (`AGENTTEAMS_RUNTIME`): local embedded stack vs `aliyun` vs `k8s` changes which bootstrap steps run inside the Manager container (for example Matrix registration and Higress setup are skipped or reduced in `k8s` because the controller owns them).
 
 ## `manager/agent/` layout (built into Manager images)
 
-Agent-facing Markdown and skills under `manager/agent/` are copied to `/opt/agentteams/agent/` in the image and synced into the Manager workspace by `upgrade-builtins.sh`. This tree is the single source of truth for builtin prompts and skills.
+Agent-facing Markdown and skills under `manager/agent/` are copied to `/opt/agentteams/agent/` in legacy Manager images and synced by `upgrade-builtins.sh`. Shared QwenPaw Manager role content lives under `plugins/teamharness/prompts/manager/` and `plugins/teamharness/skills/manager/`.
 
 ```
 manager/agent/
@@ -156,7 +156,7 @@ make build-openclaw-base DOCKER_BUILD_ARGS="--build-arg APT_MIRROR=mirrors.aliyu
 ### To modify the Manager container
 
 - [manager/Dockerfile](manager/Dockerfile) — OpenClaw-based Manager (from `openclaw-base`; bundles `agt` CLI from controller image)
-- [manager/Dockerfile.qwenpaw](manager/Dockerfile.qwenpaw) — QwenPaw-based Manager (Python venv + QwenPaw from PyPI; same agent tree and scripts pattern)
+- [qwenpaw/Dockerfile](qwenpaw/Dockerfile) — shared QwenPaw Harness for Manager, Leader, and Worker; [manager/Dockerfile.qwenpaw](manager/Dockerfile.qwenpaw) only aliases an explicitly supplied Harness image
 - [manager/supervisord.conf](manager/supervisord.conf) — process orchestration (local embedded stack)
 - [manager/scripts/init/](manager/scripts/init/) — startup: `start-manager-agent.sh` (runtime + `AGENTTEAMS_RUNTIME`), `upgrade-builtins.sh`, Higress/Matrix bootstrap where applicable
 - [manager/scripts/lib/](manager/scripts/lib/) — shared libraries (`base.sh`, `container-api.sh`, …)

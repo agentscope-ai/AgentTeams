@@ -60,6 +60,9 @@ func (r *ManagerReconciler) ensureManagerContainerPresent(ctx context.Context, s
 
 	switch result.Status {
 	case backend.StatusRunning, backend.StatusStarting, backend.StatusReady:
+		if result.Status == backend.StatusStarting {
+			m.Status.Ready = false
+		}
 		if !managerRuntimeStale(m.Status.SpecHash, specChanged, false) {
 			m.Status.SpecHash = desiredHash
 			return reconcile.Result{}, nil
@@ -73,6 +76,7 @@ func (r *ManagerReconciler) ensureManagerContainerPresent(ctx context.Context, s
 		return r.createManagerContainer(ctx, s, wb)
 
 	case backend.StatusStopped:
+		m.Status.Ready = false
 		stale := managerRuntimeStale(m.Status.SpecHash, specChanged, true)
 		if !stale {
 			switch wb.Name() {
@@ -117,6 +121,7 @@ func (r *ManagerReconciler) ensureManagerContainerPresent(ctx context.Context, s
 // If remove is false (Sleeping), the container is stopped but kept (Docker)
 // or deleted (K8s, which has no stop-without-delete).
 func (r *ManagerReconciler) ensureManagerContainerAbsent(ctx context.Context, s *managerScope, remove bool) (reconcile.Result, error) {
+	s.manager.Status.Ready = false
 	wb := r.managerBackend(ctx)
 	if wb == nil {
 		return reconcile.Result{}, nil
@@ -141,6 +146,7 @@ func (r *ManagerReconciler) ensureManagerContainerAbsent(ctx context.Context, s 
 // ErrConflict (container already exists) is treated as success for idempotency.
 func (r *ManagerReconciler) createManagerContainer(ctx context.Context, s *managerScope, wb backend.WorkerBackend) (reconcile.Result, error) {
 	m := s.manager
+	m.Status.Ready = false
 	logger := log.FromContext(ctx)
 
 	prov := s.provResult
@@ -159,7 +165,9 @@ func (r *ManagerReconciler) createManagerContainer(ctx context.Context, s *manag
 		}
 	}
 
-	managerEnv := r.EnvBuilder.BuildManager(m.Name, prov, m.Spec)
+	effectiveSpec := m.Spec
+	effectiveSpec.Runtime = resolveManagerRuntime(m.Spec.Runtime, r.DefaultRuntime)
+	managerEnv := r.EnvBuilder.BuildManager(m.Name, prov, effectiveSpec)
 	if s.modelProviderInfo != nil && s.modelProviderInfo.IntranetURL != "" {
 		managerEnv["AGENTTEAMS_AI_GATEWAY_URL"] = s.modelProviderInfo.IntranetURL
 	}
@@ -175,7 +183,7 @@ func (r *ManagerReconciler) createManagerContainer(ctx context.Context, s *manag
 		Name:               m.Name,
 		ContainerName:      containerName,
 		Image:              m.Spec.Image,
-		Runtime:            m.Spec.Runtime,
+		Runtime:            effectiveSpec.Runtime,
 		RuntimeFallback:    r.DefaultRuntime,
 		Env:                managerEnv,
 		ServiceAccountName: saName,
@@ -190,7 +198,7 @@ func (r *ManagerReconciler) createManagerContainer(ctx context.Context, s *manag
 				"app":                   r.ResourcePrefix.ManagerAppLabel(),
 				v1beta1.LabelManager:    m.Name,
 				v1beta1.LabelRole:       "manager",
-				v1beta1.LabelRuntime:    backend.ResolveRuntime(m.Spec.Runtime, r.DefaultRuntime),
+				v1beta1.LabelRuntime:    effectiveSpec.Runtime,
 				v1beta1.LabelController: r.ControllerName,
 			},
 		),

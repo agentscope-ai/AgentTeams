@@ -16,11 +16,20 @@ if not (ASSET_DIR / "plugin.yaml").exists():
 
 
 def _team_prompt(_agent: Any) -> str:
+    if os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager":
+        # The Harness binds the role prompt as MANAGER.md in the native agent.
+        return ""
     path = ASSET_DIR / "prompts" / "team" / "TEAMS.md"
     try:
         return path.read_text(encoding="utf-8").strip()
     except OSError:
         return ""
+
+
+def _skill_dir() -> Path:
+    if os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager":
+        return ASSET_DIR / "skills/manager"
+    return ASSET_DIR / "qwenpaw-skills"
 
 
 def _sanitizer_rules() -> list[str]:
@@ -167,7 +176,7 @@ class TeamHarnessPlugin:
             priority=40,
         )
         api.register_skill_provider(
-            ASSET_DIR / "qwenpaw-skills",
+            _skill_dir(),
             enabled_by_default=True,
             channels=["all"],
         )

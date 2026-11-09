@@ -81,6 +81,7 @@ class Worker:
             runtime_reconcile=self._reconcile_runtime_storage,
         )
         self._process: Optional[asyncio.subprocess.Process] = None
+        self._manager_skill_sync: Optional[asyncio.subprocess.Process] = None
         self._heartbeat_probe_task: Optional[asyncio.Task] = None
         self._push_task: Optional[asyncio.Task] = None
         self._update_task: Optional[asyncio.Task] = None
@@ -232,6 +233,11 @@ class Worker:
                     )
                 setattr(self, attr, None)
                 logger.info("background task stopped component=worker worker=%s task=%s", self.config.worker_name, attr)
+
+        if self._manager_skill_sync is not None and self._manager_skill_sync.returncode is None:
+            self._manager_skill_sync.terminate()
+            await self._manager_skill_sync.wait()
+        self._manager_skill_sync = None
 
         if self._process is not None and self._process.returncode is None:
             self._process.terminate()
@@ -603,6 +609,10 @@ class Worker:
             os.environ.pop("AGENTTEAMS_SHARED_STORAGE_PREFIX", None)
 
     def _reconcile_runtime_storage(self, runtime_config: MemberRuntimeConfig) -> None:
+        if self.config.agent_role == "manager":
+            self.api_client.configure_agent(DEFAULT_AGENT_ID, {
+                "system_prompt_files": self._system_prompt_files(runtime_config),
+            })
         shared_prefix = self._runtime_shared_prefix(runtime_config)
         shared_dir = self._local_shared_dir_for_prefix(shared_prefix)
         if self._workspace_shared_dir is None:
@@ -660,6 +670,14 @@ class Worker:
         os.environ["AGENTTEAMS_AGENT_ROLE"] = role
         os.environ["AGENTTEAMS_WORKER_ROLE"] = role
 
+        # Existing shared tools consume these aliases; resolve their values
+        # through the Controller's credential contract for every role.
+        for target, field in (("AGENTTEAMS_WORKER_MATRIX_TOKEN", "matrixTokenEnv"),
+                              ("AGENTTEAMS_WORKER_GATEWAY_KEY", "gatewayKeyEnv")):
+            source = str(runtime_config.credentials.get(field) or target)
+            if source != target:
+                os.environ[target] = os.getenv(source, "")
+
     def _ensure_session_file_prompt_policy(self) -> None:
         self.config.default_workspace_dir.mkdir(parents=True, exist_ok=True)
         for file_name in ("AGENTS.md", "SOUL.md"):
@@ -688,12 +706,30 @@ class Worker:
 
     def _prepare_default_plugins(self) -> None:
         builtin_root = self._builtin_qwenpaw_plugins_dir()
+        if self.config.agent_role == "manager":
+            # Retire image-owned plugins from the previous Manager launcher.
+            for name in ("agentteams-manager-tools", "workerflow"):
+                self._remove_path(self.config.qwenpaw_working_dir / "plugins" / name)
+            for name in ("SOUL.md", "MEMORY.md"):
+                source = self.config.worker_home / name
+                target = self.config.default_workspace_dir / name
+                if source.is_file() and not target.exists():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, target)
         self._prepare_builtin_plugin(
             "agentteams-matrix-channel",
             builtin_root / "agentteams-matrix-channel",
         )
         self._prepare_builtin_plugin("teamharness", builtin_root / "teamharness")
-        self._prepare_builtin_plugin("workerflow", builtin_root / "workerflow")
+        if self.config.agent_role == "manager":
+            role_dir = self.config.qwenpaw_working_dir / "plugins/teamharness/teamharness/prompts/manager"
+            shutil.copy2(role_dir / "AGENTS.md", self.config.default_workspace_dir / "MANAGER.md")
+            source = role_dir / "HEARTBEAT.md"
+            target = self.config.default_workspace_dir / "HEARTBEAT.md"
+            if not target.exists():
+                shutil.copy2(source, target)
+        if self.config.agent_role != "manager":
+            self._prepare_builtin_plugin("workerflow", builtin_root / "workerflow")
         self._prepare_builtin_plugin(
             "qwen-code-bridge",
             builtin_root / "qwen-code-bridge",
@@ -902,7 +938,7 @@ class Worker:
                     "name": self.config.agent_name,
                     "workspace_dir": str(self.config.default_workspace_dir),
                     "approval_level": "AUTO",
-                    "system_prompt_files": ["AGENTS.md", "SOUL.md", "TEAMS.md"],
+                    "system_prompt_files": self._system_prompt_files(),
                 },
             )
             # Disabling the demo agent is cosmetic: toggle returns 409 while
@@ -972,6 +1008,16 @@ class Worker:
             self.config.worker_name,
         )
         process_started_at = time.monotonic()
+        if self.config.agent_role == "manager":
+            source_dir = self.config.worker_home / "skills"
+            source_dir.mkdir(exist_ok=True)
+            self._manager_skill_sync = await asyncio.create_subprocess_exec(
+                sys.executable, "/opt/agentteams/scripts/qwenpaw_manager_skill_sync.py",
+                "--source-dir", str(source_dir),
+                "--workspace-dir", str(self.config.default_workspace_dir),
+                "--api-url", f"http://127.0.0.1:{self.config.console_port}",
+                "--state-file", str(self.config.qwenpaw_working_dir / "agentteams-manager-skills.json"),
+            )
         self._heartbeat_probe_task = asyncio.create_task(self._heartbeat_probe_loop())
         returncode = await self._process.wait()
         if not self._stopping:
@@ -1019,7 +1065,9 @@ class Worker:
 
     def _configure_builtin_plugin_mcp_clients(self, force: bool = False) -> None:
         existing = {str(item.get("key")) for item in self.api_client.list_mcp()}
-        for plugin_id in ("teamharness", "workerflow"):
+        if self.config.agent_role == "manager" and "workerflow" in existing:
+            self.api_client.delete_mcp("workerflow")
+        for plugin_id in self._builtin_plugin_ids():
             plugin_dir = self.config.qwenpaw_working_dir / "plugins" / plugin_id
             asset_dir = plugin_dir / plugin_id
             payload = {
@@ -1036,6 +1084,7 @@ class Worker:
                         "TEAMHARNESS_SHARED_DIR",
                         "AGENTTEAMS_MATRIX_URL",
                         "AGENTTEAMS_WORKER_MATRIX_TOKEN",
+                        "AGENTTEAMS_MANAGER_MATRIX_TOKEN",
                         "AGENTTEAMS_MATRIX_USER_ID",
                         "AGENTTEAMS_WORKER_ROLE",
                         "AGENTTEAMS_AGENT_ROLE",
@@ -1084,9 +1133,12 @@ class Worker:
             "tool_defaults": [],
             "tool_overrides": [],
         }
-        for plugin_id in ("teamharness", "workerflow"):
+        for plugin_id in self._builtin_plugin_ids():
             self.api_client.wait_for_mcp_tools(plugin_id)
             self.api_client.put_mcp_policy(plugin_id, allow_policy)
+
+    def _builtin_plugin_ids(self) -> tuple[str, ...]:
+        return ("teamharness",) if self.config.agent_role == "manager" else ("teamharness", "workerflow")
 
     async def _heartbeat_probe_loop(self) -> None:
         await run_worker_heartbeat_loop(
@@ -1094,3 +1146,15 @@ class Worker:
             worker_name=self.config.worker_cr_name,
             port=self.config.console_port,
         )
+
+    def _system_prompt_files(self, runtime_config: MemberRuntimeConfig | None = None) -> list[str]:
+        if self.config.agent_role == "manager":
+            # Old Manager AGENTS.md contains runtime-specific CLI instructions.
+            # Bind the role prompt explicitly; do not load legacy instructions.
+            # User package and inline instructions remain separate inputs.
+            files = ["MANAGER.md", "SOUL.md", "TEAMS.md"]
+            config = runtime_config or self._initial_runtime_config
+            if config and (config.inline_config.get("agents") or config.agent_package):
+                files.insert(0, "AGENTS.md")
+            return files
+        return ["AGENTS.md", "SOUL.md", "TEAMS.md"]

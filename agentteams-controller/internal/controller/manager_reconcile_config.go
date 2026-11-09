@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -21,17 +22,25 @@ func (r *ManagerReconciler) reconcileManagerConfig(ctx context.Context, s *manag
 	logger := log.FromContext(ctx)
 	isUpdate := m.Status.Phase != "" && m.Status.Phase != "Pending" && m.Status.Phase != "Failed"
 
-	if err := r.Deployer.DeployPackage(ctx, m.Name, m.Spec.Package, isUpdate); err != nil {
-		return reconcile.Result{}, fmt.Errorf("deploy package: %w", err)
+	runtime := resolveManagerRuntime(m.Spec.Runtime, r.DefaultRuntime)
+	if runtime != backend.RuntimeQwenPaw {
+		if err := r.Deployer.DeployPackage(ctx, m.Name, m.Spec.Package, isUpdate); err != nil {
+			return reconcile.Result{}, fmt.Errorf("deploy package: %w", err)
+		}
 	}
 
 	var aiGatewayURL string
 	if s.modelProviderInfo != nil {
 		aiGatewayURL = s.modelProviderInfo.IntranetURL
 	}
+	spec := m.Spec
+	spec.Runtime = runtime
 	if err := r.Deployer.DeployManagerConfig(ctx, service.ManagerDeployRequest{
 		Name:           m.Name,
-		Spec:           m.Spec,
+		Spec:           spec,
+		Generation:     m.Generation,
+		MatrixUserID:   m.Status.MatrixUserID,
+		RoomID:         m.Status.RoomID,
 		MatrixToken:    s.provResult.MatrixToken,
 		GatewayKey:     s.provResult.GatewayKey,
 		MatrixPassword: s.provResult.MatrixPassword,
@@ -42,8 +51,11 @@ func (r *ManagerReconciler) reconcileManagerConfig(ctx context.Context, s *manag
 		return reconcile.Result{}, fmt.Errorf("deploy manager config: %w", err)
 	}
 
-	if err := r.Deployer.PushOnDemandSkills(ctx, m.Name, "", m.Spec.Skills, nil); err != nil { // manager: no team layer
-
+	skillOwner := m.Name
+	if runtime == backend.RuntimeQwenPaw {
+		skillOwner = "manager"
+	}
+	if err := r.Deployer.PushOnDemandSkills(ctx, skillOwner, "", m.Spec.Skills, nil); err != nil {
 		logger.Info("skill push failed", "error", err)
 	}
 

@@ -160,6 +160,8 @@ spec:
             status:
               type: object
               properties:
+                ready:
+                  type: boolean
                 observedGeneration:
                   type: integer
                   format: int64

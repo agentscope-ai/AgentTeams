@@ -157,14 +157,27 @@ The shipped Worker CRD enum accepts the five values above. The Controller and He
 
 ### Manager runtimes
 
-The shipped **Manager entrypoint** (`start-manager-agent.sh`) selects:
+OpenClaw retains its Manager entrypoint. QwenPaw uses the same Harness image
+and entrypoint for Manager, Leader, and Worker:
 
 | Mode | `AGENTTEAMS_MANAGER_RUNTIME` | Behavior |
 |------|---------------------------|----------|
 | **OpenClaw** | `openclaw` | Node/OpenClaw gateway; Matrix “message tool” style integration; the current Helm chart sets this value explicitly by default |
-| **QwenPaw** | `qwenpaw` | Python QwenPaw workspace; Matrix via **`copaw channels send`** (`start-qwenpaw-manager.sh`); the Manager entrypoint and controller fall back to this value when none is configured |
+| **QwenPaw** | `qwenpaw` | Shared `qwenpaw/Dockerfile` image and `qwenpaw-worker-entrypoint.sh`; Controller-projected `runtime.yaml` selects `manager`, `team_leader`, or `worker`. Manager uses TeamHarness management skills, `agt`, and the shared Matrix tools. |
 
-The local installer still presents **CoPaw** and writes the compatibility value `copaw`; the Manager entrypoint routes it to the QwenPaw implementation. **Hermes** and **DeepSeek Harness** are Worker-only runtimes, and the existing OpenHuman implementation is also Worker-side but remains subject to the CRD limitation above. Manager images today boot **OpenClaw** or **QwenPaw** only (see comments in `start-manager-agent.sh`).
+`make build-manager-qwenpaw` tags the shared QwenPaw image with the legacy
+Manager name; release publishing also aliases that image rather than building
+a separate Manager runtime. `manager/Dockerfile.qwenpaw` is a compatibility
+wrapper requiring an explicit `QWENPAW_HARNESS_IMAGE`. Manager CR `default`
+retains runtime/Matrix identity `manager` and `/root/manager-workspace`.
+Manager credentials and permissions remain separate from Worker credentials.
+Manager readiness is reported to `/api/v1/managers/default/ready`; the
+Controller waits for runtime readiness before sending onboarding.
+
+The local installer's legacy `copaw` Manager selector resolves to the same
+QwenPaw Harness; this does not change the standalone CoPaw Worker runtime. **Hermes**,
+**DeepSeek Harness**, and **OpenHuman** have not yet been migrated to the Manager
+role. Their Manager compatibility is not implied by the QwenPaw migration.
 
 ---
 

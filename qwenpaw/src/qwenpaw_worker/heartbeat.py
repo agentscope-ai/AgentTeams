@@ -150,12 +150,14 @@ class ControllerHeartbeatReporter:
     worker_name: str
     controller_url: str = ""
     token: str = ""
+    resource_kind: str = "workers"
 
     @classmethod
     def from_env(cls, worker_name: str) -> "ControllerHeartbeatReporter":
         return cls(
             worker_name=worker_name,
             controller_url=os.getenv("AGENTTEAMS_CONTROLLER_URL", "").rstrip("/"),
+            resource_kind="managers" if os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager" else "workers",
         )
 
     def enabled(self) -> bool:
@@ -184,7 +186,7 @@ class ControllerHeartbeatReporter:
     ) -> bool:
         if not self.enabled():
             return False
-        path = f"/api/v1/workers/{self.worker_name}/{action}"
+        path = f"/api/v1/{self.resource_kind}/{self.worker_name}/{action}"
         body = None
         headers = {}
         if last_active_at or agent_status:

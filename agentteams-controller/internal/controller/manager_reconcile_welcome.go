@@ -108,6 +108,9 @@ func (r *ManagerReconciler) reconcileManagerWelcome(ctx context.Context, s *mana
 	if m.Status.RoomID == "" {
 		return reconcile.Result{}, nil
 	}
+	if resolveManagerRuntime(m.Spec.Runtime, r.DefaultRuntime) == backend.RuntimeQwenPaw && !m.Status.Ready {
+		return reconcile.Result{RequeueAfter: welcomeRequeueInterval}, nil
+	}
 
 	logger := log.FromContext(ctx)
 

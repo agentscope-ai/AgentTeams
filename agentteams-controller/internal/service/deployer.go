@@ -1555,6 +1555,9 @@ func (d *Deployer) EnsureHumanStorage(ctx context.Context, human *v1beta1.Human)
 // ManagerDeployRequest describes a Manager config deployment (create or update).
 type ManagerDeployRequest struct {
 	Name           string
+	Generation     int64
+	MatrixUserID   string
+	RoomID         string
 	Spec           v1beta1.ManagerSpec
 	MatrixToken    string
 	GatewayKey     string
@@ -1574,6 +1577,10 @@ type ManagerDeployRequest struct {
 // Unlike Worker, AGENTS.md and builtin skills are managed by the Manager container
 // itself (via upgrade-builtins.sh), so we only push runtime-generated files.
 func (d *Deployer) DeployManagerConfig(ctx context.Context, req ManagerDeployRequest) error {
+	if req.Spec.Runtime == "qwenpaw" || req.Spec.Runtime == "copaw" {
+		req.Spec.Runtime = "qwenpaw"
+		return d.deployManagerRuntimeConfig(ctx, req)
+	}
 	logger := log.FromContext(ctx)
 	agentPrefix := fmt.Sprintf("agents/%s", req.Name)
 

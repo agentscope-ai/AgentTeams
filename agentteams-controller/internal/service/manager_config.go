@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"sync"
 
+	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/yaml"
 )
 
 // ManagerConfigStore serializes embedded-mode updates to the Manager Agent's
@@ -128,6 +130,77 @@ func writeManagerLocalConfigAtomic(path string, data []byte) error {
 
 // --- Manager Config ---
 
+// PutManagerRuntimeConfig preserves Controller-managed communication policy
+// across model/package reconciles, using the same lock as membership updates.
+func (l *ManagerConfigStore) PutManagerRuntimeConfig(ctx context.Context, doc memberRuntimeConfigDocument) error {
+	if !l.Enabled() {
+		return fmt.Errorf("manager runtime storage is not configured")
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	key := memberRuntimeConfigObjectKey(l.ManagerName)
+	data, err := l.OSS.GetObject(ctx, key)
+	if err == nil {
+		var previous memberRuntimeConfigDocument
+		if err := yaml.Unmarshal(data, &previous); err != nil {
+			return err
+		}
+		doc.Desired.ChannelPolicy = previous.Desired.ChannelPolicy
+	} else if !os.IsNotExist(err) {
+		return err
+	} else if legacy, err := l.OSS.GetObject(ctx, l.managerAgentPrefix()+"/openclaw.json"); err == nil {
+		var config map[string]interface{}
+		if err := json.Unmarshal(legacy, &config); err != nil {
+			return err
+		}
+		channels, _ := config["channels"].(map[string]interface{})
+		matrix, _ := channels["matrix"].(map[string]interface{})
+		doc.Desired.ChannelPolicy = &v1beta1.ChannelPolicySpec{GroupAllowExtra: extractStringSlice(matrix["groupAllowFrom"])}
+	}
+	if doc.Desired.ChannelPolicy == nil {
+		doc.Desired.ChannelPolicy = &v1beta1.ChannelPolicySpec{}
+	}
+	payload, err := yaml.Marshal(doc)
+	if err != nil {
+		return err
+	}
+	return l.OSS.PutObject(ctx, key, payload)
+}
+
+func (l *ManagerConfigStore) updateManagerRuntimeAllowFrom(ctx context.Context, matrixID string, add bool) (bool, error) {
+	key := memberRuntimeConfigObjectKey(l.ManagerName)
+	data, err := l.OSS.GetObject(ctx, key)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return true, err
+	}
+	var doc memberRuntimeConfigDocument
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return true, err
+	}
+	if doc.Desired.ChannelPolicy == nil {
+		doc.Desired.ChannelPolicy = &v1beta1.ChannelPolicySpec{}
+	}
+	ids := doc.Desired.ChannelPolicy.GroupAllowExtra
+	next := make([]string, 0, len(ids)+1)
+	for _, id := range ids {
+		if id != matrixID {
+			next = append(next, id)
+		}
+	}
+	if add {
+		next = append(next, matrixID)
+	}
+	doc.Desired.ChannelPolicy.GroupAllowExtra = next
+	payload, err := yaml.Marshal(doc)
+	if err != nil {
+		return true, err
+	}
+	return true, l.OSS.PutObject(ctx, key, payload)
+}
+
 // PutManagerConfig writes the Manager's openclaw.json to OSS, merging the
 // new config with any existing groupAllowFrom entries to avoid overwriting
 // additions made by UpdateManagerGroupAllowFrom (e.g. team leader IDs).
@@ -146,6 +219,36 @@ func (l *ManagerConfigStore) PutManagerConfig(configJSON []byte) error {
 	// generated defaults: groupAllowFrom additions plus user-modified plugin
 	// entries (e.g. memory-core dreaming schedule, extra load paths).
 	existingData, err := l.OSS.GetObject(ctx, key)
+	if runtimeData, runtimeErr := l.OSS.GetObject(ctx, memberRuntimeConfigObjectKey(l.ManagerName)); runtimeErr == nil {
+		var doc memberRuntimeConfigDocument
+		if err := yaml.Unmarshal(runtimeData, &doc); err != nil {
+			return err
+		}
+		if doc.Desired.ChannelPolicy != nil {
+			existingCfg := map[string]interface{}{}
+			if len(existingData) > 0 {
+				if err := json.Unmarshal(existingData, &existingCfg); err != nil {
+					return err
+				}
+			}
+			var newCfg map[string]interface{}
+			if err := json.Unmarshal(configJSON, &newCfg); err != nil {
+				return err
+			}
+			// Current Harness membership replaces the stale legacy allow-list.
+			policy := map[string]interface{}{"channels": map[string]interface{}{"matrix": map[string]interface{}{
+				"groupAllowFrom": doc.Desired.ChannelPolicy.GroupAllowExtra,
+			}}}
+			mergeGroupAllowFrom(policy, newCfg)
+			existingCfg["channels"] = newCfg["channels"]
+			existingData, err = json.Marshal(existingCfg)
+			if err != nil {
+				return err
+			}
+		}
+	} else if !os.IsNotExist(runtimeErr) {
+		return runtimeErr
+	}
 	if err == nil && len(existingData) > 0 {
 		var existingCfg map[string]interface{}
 		var newCfg map[string]interface{}
@@ -168,7 +271,10 @@ func (l *ManagerConfigStore) PutManagerConfig(configJSON []byte) error {
 	// First boot may need the generated file on the shared workspace, but an
 	// existing local file is authoritative and must not be replaced here.
 	l.writeManagerLocalConfig(configJSON)
-	return nil
+	// The runtime projection belongs to the shared Harness. Retire it when
+	// switching back to the legacy OpenClaw config so membership writes reach
+	// the active runtime rather than a stale projection.
+	return l.OSS.DeleteObject(ctx, memberRuntimeConfigObjectKey(l.ManagerName))
 }
 
 // mergeGroupAllowFrom copies any extra groupAllowFrom entries from old config
@@ -215,6 +321,9 @@ func (l *ManagerConfigStore) UpdateManagerGroupAllowFrom(workerMatrixID string, 
 	defer l.mu.Unlock()
 
 	ctx := context.Background()
+	if handled, err := l.updateManagerRuntimeAllowFrom(ctx, workerMatrixID, add); handled {
+		return err
+	}
 	key := l.managerAgentPrefix() + "/openclaw.json"
 
 	data, err := l.OSS.GetObject(ctx, key)

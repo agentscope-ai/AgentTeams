@@ -664,6 +664,7 @@ type UpdateManagerRequest struct {
 }
 
 type ManagerResponse struct {
+	Ready bool `json:"ready"`
 	Name  string `json:"name"`
 	Phase string `json:"phase"`
 	State string `json:"state,omitempty"` // desired lifecycle state

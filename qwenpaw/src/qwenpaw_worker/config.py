@@ -81,6 +81,8 @@ class WorkerConfig:
 
     @property
     def worker_home(self) -> Path:
+        if self.agent_role == "manager":
+            return Path(os.environ.get("AGENTTEAMS_WORKER_HOME", "/root/manager-workspace"))
         return self.install_dir / self.worker_name
 
     @property

@@ -158,13 +158,8 @@ build-manager: build-agentteams-controller ## Build Manager image (OpenClaw runt
 		-t $(LOCAL_MANAGER) \
 		.
 
-build-manager-qwenpaw: build-agentteams-controller ## Build Manager QwenPaw image (Python runtime)
-	@echo "==> Building Manager QwenPaw image: $(LOCAL_MANAGER_QWENPAW) (registry: $(HIGRESS_REGISTRY))"
-	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(DOCKER_BUILD_ARGS) \
-		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
-		-f manager/Dockerfile.qwenpaw \
-		-t $(LOCAL_MANAGER_QWENPAW) \
-		.
+build-manager-qwenpaw: build-qwenpaw-worker ## Alias the shared QwenPaw Harness as the legacy Manager image
+	docker tag $(LOCAL_QWENPAW_WORKER) $(LOCAL_MANAGER_QWENPAW)
 
 build-embedded: build-agentteams-controller ## Build embedded all-in-one controller image (infra + controller, no agent)
 	@echo "==> Building embedded image: $(LOCAL_EMBEDDED) (registry: $(HIGRESS_REGISTRY))"
@@ -199,11 +194,12 @@ build-openhuman-worker: ## Build OpenHuman Worker image (Rust + native Matrix)
 		-t $(LOCAL_OPENHUMAN_WORKER) \
 		-f openhuman/Dockerfile .
 
-build-qwenpaw-worker: ## Build QwenPaw Worker image
+build-qwenpaw-worker: build-agentteams-controller ## Build the shared QwenPaw Harness image
 	@echo "==> Building QwenPaw Worker image: $(LOCAL_QWENPAW_WORKER) (registry: $(HIGRESS_REGISTRY))"
 	OUT_DIR=dist/adapters/qwenpaw ruby plugins/teamharness/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/teamharness/plugin.yaml >/dev/null
 	OUT_DIR=dist/adapters/qwenpaw ruby plugins/workerflow/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/workerflow/plugin.yaml >/dev/null
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-f qwenpaw/Dockerfile \
 		-t $(LOCAL_QWENPAW_WORKER) \
 		.
@@ -376,33 +372,17 @@ else
 		.
 endif
 
-push-manager-qwenpaw: buildx-setup ## Build + push multi-arch Manager QwenPaw image
-	@echo "==> Building + pushing multi-arch Manager QwenPaw: $(MANAGER_QWENPAW_TAG) [$(MULTIARCH_PLATFORMS)]"
+push-manager-qwenpaw: push-qwenpaw-worker ## Publish a compatibility tag for the shared QwenPaw Harness
 ifeq ($(IS_PODMAN),1)
 	-podman manifest rm $(MANAGER_QWENPAW_TAG) 2>/dev/null
-	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
-		echo "  -> Building Manager QwenPaw for $(plat)..." && \
-		podman build --platform $(plat) \
-			$(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(DOCKER_BUILD_ARGS) \
-			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
-			-f manager/Dockerfile.qwenpaw \
-			--manifest $(MANAGER_QWENPAW_TAG) \
-			. && ) true
+	podman manifest create $(MANAGER_QWENPAW_TAG) docker://$(QWENPAW_WORKER_TAG)
 	podman manifest push --all $(MANAGER_QWENPAW_TAG) docker://$(MANAGER_QWENPAW_TAG)
 	$(if $(PUSH_LATEST), \
 		podman manifest push --all $(MANAGER_QWENPAW_TAG) docker://$(MANAGER_QWENPAW_IMAGE):latest && \
 		echo "  -> Also pushed :latest tag")
 else
-	docker buildx build \
-		--builder $(BUILDX_BUILDER) \
-		--platform $(MULTIARCH_PLATFORMS) \
-		$(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(DOCKER_BUILD_ARGS) \
-		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
-		-f manager/Dockerfile.qwenpaw \
-		-t $(MANAGER_QWENPAW_TAG) \
-		$(if $(PUSH_LATEST),-t $(MANAGER_QWENPAW_IMAGE):latest) \
-		--push \
-		.
+	docker buildx imagetools create -t $(MANAGER_QWENPAW_TAG) \
+		$(if $(PUSH_LATEST),-t $(MANAGER_QWENPAW_IMAGE):latest) $(QWENPAW_WORKER_TAG)
 endif
 
 push-worker: buildx-setup ## Build + push multi-arch Worker image
@@ -460,7 +440,7 @@ else
 		./hermes/
 endif
 
-push-qwenpaw-worker: buildx-setup ## Build + push multi-arch QwenPaw Worker image
+push-qwenpaw-worker: push-agentteams-controller ## Build + push multi-arch QwenPaw Harness image
 	@echo "==> Building + pushing multi-arch QwenPaw Worker: $(QWENPAW_WORKER_TAG) [$(MULTIARCH_PLATFORMS)]"
 	OUT_DIR=dist/adapters/qwenpaw ruby plugins/teamharness/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/teamharness/plugin.yaml >/dev/null
 	OUT_DIR=dist/adapters/qwenpaw ruby plugins/workerflow/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/workerflow/plugin.yaml >/dev/null
@@ -470,6 +450,7 @@ ifeq ($(IS_PODMAN),1)
 		echo "  -> Building QwenPaw Worker for $(plat)..." && \
 		podman build --platform $(plat) \
 			$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 			--manifest $(QWENPAW_WORKER_TAG) \
 			-f qwenpaw/Dockerfile . && ) true
 	podman manifest push --all $(QWENPAW_WORKER_TAG) docker://$(QWENPAW_WORKER_TAG)
@@ -481,6 +462,7 @@ else
 		--builder $(BUILDX_BUILDER) \
 		--platform $(MULTIARCH_PLATFORMS) \
 		$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 		-t $(QWENPAW_WORKER_TAG) \
 		$(if $(PUSH_LATEST),-t $(QWENPAW_WORKER_IMAGE):latest) \
 		--push \

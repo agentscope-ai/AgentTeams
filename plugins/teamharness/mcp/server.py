@@ -70,6 +70,7 @@ from mcp.transport.message import _message
 # test patch of this module's attribute stays visible at the call site.
 _filesync = refs.proxy("_filesync")
 _write_task = refs.proxy("_write_task")
+from mcp.message_tool import _message_type
 
 
 # Pinned in server.py: test_transition_validation.py statically audits this
@@ -107,6 +108,22 @@ refs.define("_transition_task", _transition_task)
 
 
 def _tool_schema(name: str) -> dict[str, Any]:
+    if name == "message" and _runtime_role() == "manager":
+        return {
+            "name": name,
+            "description": "Send an ordinary Matrix message to another room. Mention the Leader's full Matrix ID when forwarding a project. The sender is your current Manager identity. For the current room, reply directly.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["send"]},
+                    "channel": {"type": "string", "enum": ["matrix"]},
+                    "target": {"type": "string", "description": "Destination as room:!roomId:domain."},
+                    "message": {"type": "string", "description": "Text with the recipient's full Matrix mention, goal, and acceptance criteria."},
+                },
+                "required": ["target", "message"],
+                "additionalProperties": False,
+            },
+        }
     schema = TOOL_SCHEMAS[name]
     return {
         "name": name,
@@ -121,6 +138,16 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> dict[str, A
     args = arguments or {}
     if name not in TOOL_NAMES:
         payload = {"ok": False, "error": "unknown_tool", "tool": name}
+    elif _runtime_role() == "manager" and name not in _visible_tool_names():
+        payload = {
+            "ok": False, "error": "forbidden_tool", "tool": name,
+            "message": "team workflow tools are not available to the Manager role",
+        }
+    elif name == "message" and _runtime_role() == "manager" and _message_type(args) == "PROJECT_REQUESTED":
+        payload = {
+            "ok": False, "error": "forbidden_action", "tool": name,
+            "message": "Manager handoffs must be ordinary cross-agent messages. Omit type, sender, and agentId; mention the Leader's full Matrix ID in message.",
+        }
     elif name == "message" and _message_tool_blocked_for_runtime_role():
         payload = {
             "ok": False,
@@ -207,6 +234,8 @@ def _runtime_identity() -> str:
     return identity.lower()
 
 def _visible_tool_names() -> list[str]:
+    if _runtime_role() == "manager":
+        return [name for name in TOOL_NAMES if name in {"health", "message", "filesync", "artifact"}]
     if _message_tool_blocked_for_runtime_role():
         return [name for name in TOOL_NAMES if name != "message"]
     return list(TOOL_NAMES)

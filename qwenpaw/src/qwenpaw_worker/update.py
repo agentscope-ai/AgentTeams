@@ -2200,6 +2200,8 @@ class RuntimeUpdater:
         team_admin = _string(_section(config.team, "admin").get("matrixUserId"))
         system_admin_user = _string(os.getenv("AGENTTEAMS_ADMIN_USER") or "admin")
         system_admin = self._matrix_id(system_admin_user, domain)
+        if config.member_role == "manager":
+            return [system_admin] if system_admin else []
         admin = team_admin or system_admin
         roster_allow = self._team_roster_group_allow(config, domain, admin)
         if roster_allow:

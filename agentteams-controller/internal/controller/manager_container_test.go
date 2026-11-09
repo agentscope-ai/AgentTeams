@@ -91,7 +91,7 @@ func TestCreateManagerContainer_MergesMetadataAndSpecLabels(t *testing.T) {
 		"tier":                  "spec-tier", // spec beats metadata
 		"agentteams.io/manager": "default",   // system label
 		"agentteams.io/role":    "manager",   // system label
-		"agentteams.io/runtime": "copaw",     // system label
+		"agentteams.io/runtime": "qwenpaw",   // legacy copaw Manager selector resolves to QwenPaw
 		"app":                   "agentteams-manager",
 		v1beta1.LabelController: "real-ctl",
 	}

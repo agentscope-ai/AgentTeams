@@ -929,6 +929,7 @@ type ManagerConfig struct {
 }
 
 type ManagerStatus struct {
+	Ready              bool   `json:"ready,omitempty"`
 	ObservedGeneration int64  `json:"observedGeneration,omitempty"`
 	SpecHash           string `json:"specHash,omitempty"`
 	Phase              string `json:"phase,omitempty"` // Pending/Running/Updating/Failed

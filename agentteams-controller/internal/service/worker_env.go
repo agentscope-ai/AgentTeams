@@ -109,6 +109,14 @@ func (b *WorkerEnvBuilder) BuildManager(managerName string, prov *ManagerProvisi
 	if spec.Runtime != "" {
 		env["AGENTTEAMS_MANAGER_RUNTIME"] = spec.Runtime
 	}
+	if spec.Runtime == "qwenpaw" || spec.Runtime == "copaw" {
+		env["AGENTTEAMS_AGENT_ROLE"] = "manager"
+		env["AGENTTEAMS_WORKER_ROLE"] = "manager"
+		env["AGENTTEAMS_WORKER_NAME"] = "manager"
+		env["AGENTTEAMS_WORKER_CR_NAME"] = managerName
+		env["AGENTTEAMS_WORKER_HOME"] = "/root/manager-workspace"
+		env[WorkerConsolePortEnv] = "18799"
+	}
 	if b.defaults.AdminUser != "" {
 		env["AGENTTEAMS_ADMIN_USER"] = b.defaults.AdminUser
 	}

@@ -26,6 +26,31 @@ func memberRuntimeConfigObjectKey(runtimeName string) string {
 	return fmt.Sprintf("agents/%s/runtime/runtime.yaml", runtimeName)
 }
 
+// Managers use the same desired-state contract as team members. The CR name
+// and Matrix/storage identity remain separate (default versus manager).
+func (d *Deployer) deployManagerRuntimeConfig(ctx context.Context, req ManagerDeployRequest) error {
+	spec := v1beta1.WorkerSpec{
+		Runtime: req.Spec.Runtime, Model: req.Spec.Model, ModelProvider: req.Spec.ModelProvider,
+		Soul: req.Spec.Soul, Agents: req.Spec.Agents, Skills: req.Spec.Skills,
+		McpServers: req.Spec.McpServers, Package: req.Spec.Package, State: req.Spec.State,
+	}
+	doc, err := d.memberRuntimeConfigDocument(MemberRuntimeConfigDeployRequest{
+		Name: req.Name, RuntimeName: "manager", Role: "manager", Spec: spec,
+		Generation: req.Generation, MatrixUserID: req.MatrixUserID,
+		PersonalRoomID: req.RoomID, AIGatewayURL: req.AIGatewayURL,
+	}, "manager")
+	if err != nil {
+		return err
+	}
+	doc.Credentials.MatrixTokenEnv = "AGENTTEAMS_MANAGER_MATRIX_TOKEN"
+	doc.Credentials.GatewayKeyEnv = "AGENTTEAMS_MANAGER_GATEWAY_KEY"
+	store := d.managerConfig
+	if store == nil {
+		store = NewManagerConfigStore(ManagerConfigStoreConfig{OSS: d.oss})
+	}
+	return store.PutManagerRuntimeConfig(ctx, doc)
+}
+
 type memberRuntimeConfigDocument struct {
 	APIVersion        string                                `json:"apiVersion"`
 	Kind              string                                `json:"kind"`

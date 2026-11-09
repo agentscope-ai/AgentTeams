@@ -258,6 +258,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 
 	// --- Imperative lifecycle ---
 	lh := NewLifecycleHandler(deps.Client, deps.Backend, deps.Namespace, deps.ResourcePrefix)
+	mux.Handle("POST /api/v1/managers/{name}/ready", mw.RequireAuthz(authpkg.ActionReady, "manager", nameFn)(http.HandlerFunc(lh.ManagerReady)))
 	mux.Handle("POST /api/v1/workers/{name}/wake", mw.RequireAuthz(authpkg.ActionWake, "worker", nameFn)(http.HandlerFunc(lh.Wake)))
 	mux.Handle("POST /api/v1/workers/{name}/restart", mw.RequireAuthz(authpkg.ActionWake, "worker", nameFn)(http.HandlerFunc(lh.Restart)))
 	mux.Handle("POST /api/v1/managers/{name}/restart", mw.RequireAuthz(authpkg.ActionUpdate, "manager", nameFn)(http.HandlerFunc(lh.RestartManager)))

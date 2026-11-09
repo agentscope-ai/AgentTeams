@@ -8,6 +8,11 @@
 
 ## 根目录列表
 
+安装时的全局管理员同样拥有 Human 个人文件区。启动和升级时会自动补齐已有
+Matrix 管理员的 Human 记录，并标记 `agentteams.io/system-admin=true`。
+补齐过程不重置密码、不改变已有房间成员关系；Human 调谐只初始化个人文件区。
+Human API 返回 `systemAdmin: true`，用户管理列表可隐藏该内置记录，个人文件入口仍然可用。
+
 `GET /api/v1/humans/{name}/files` 列出区域顶层：
 
 ```json

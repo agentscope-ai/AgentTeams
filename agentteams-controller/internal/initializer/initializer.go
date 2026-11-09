@@ -19,6 +19,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // Config holds parameters for cluster initialization.
@@ -75,6 +76,7 @@ func (c Config) managesStorage() bool {
 // initializes storage structure, registers the admin account, sets up gateway
 // routes, and optionally creates the Manager CR.
 type Initializer struct {
+	Client  client.Client
 	OSS     oss.StorageClient
 	Matrix  matrix.Client
 	Gateway gateway.Client
@@ -105,6 +107,9 @@ func (i *Initializer) Run(ctx context.Context) error {
 		return fmt.Errorf("admin registration failed: %w", err)
 	}
 	logger.Info("admin account ready", "user", i.Config.AdminUser)
+	if err := i.ensureAdminHuman(ctx); err != nil {
+		return fmt.Errorf("admin Human registration failed: %w", err)
+	}
 
 	// Register Matrix AppService if enabled (must happen after admin is ready)
 	if i.Config.AppServiceEnabled {

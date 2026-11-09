@@ -19,6 +19,9 @@ const (
 // the same namespace do not reconcile each other's resources.
 const LabelController = "agentteams.io/controller"
 
+// LabelSystemAdmin marks the existing installation administrator's Human.
+const LabelSystemAdmin = "agentteams.io/system-admin"
+
 const (
 	LabelWorker  = "agentteams.io/worker"
 	LabelManager = "agentteams.io/manager"

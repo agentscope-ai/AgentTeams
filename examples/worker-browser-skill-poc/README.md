@@ -235,5 +235,34 @@ one installation, then a warm call with no install output. The installer now
 keeps npm's download cache inside its disposable staging directory, which is
 removed on exit.
 
-This remains a container/CLI regression. It does not prove that a live Agent
-has discovered the assigned skill or executed a Matrix task.
+That regression covers the container/CLI layer. The separate live-Agent
+check below covers skill assignment and execution through Matrix.
+
+## Live Agent check (2026-11-09)
+
+A dedicated local QwenPaw v1.2.6 Worker received the candidate ZIP through
+the Manager's install-worker-skill.sh path. Its native skills API reported
+browser-automation enabled. A Matrix task caused the Agent to load that
+skill and invoke headless.sh without a Human installation command.
+
+The first attempt failed while downloading from GitHub with HTTP 504.
+The installer left no readiness marker. To continue the local check, a
+separate demo HTTP service exposed the same previously verified browser
+and font archives. The Agent downloaded those files, set the installer's
+existing local-cache inputs, and invoked headless.sh again with an npm
+mirror. The installer fetched the remaining dependencies and completed.
+This proves Agent-driven setup with provided caches, not reliable cold
+installation through the default public download sources.
+
+The Agent then opened the Chinese demo page, filled the name field,
+selected the requested option, checked consent and submitted the form.
+It downloaded the sample file, took a screenshot, inspected it and closed
+the browser. The screenshot was independently inspected and displayed
+the expected submitted name, selected option and checked confirmation.
+No Worker image was rebuilt or changed for this check.
+
+The Agent initially tried clicking native select options before consulting
+the CLI reference and using the supported selection operation. Download
+failure recovery also needed a follow-up instruction with the local cache
+location. Public download reliability and autonomous recovery therefore
+remain open acceptance items.

@@ -59,7 +59,7 @@ class BuildWorkflowTests(unittest.TestCase):
         self.assertEqual(selected, {
             'openclaw-base', 'agentteams-controller', 'embedded',
             'manager', 'manager-qwenpaw', 'worker',
-            'hermes-worker', 'qwenpaw-worker',
+            'hermes-worker', 'qwenpaw-worker', 'openhuman-worker',
         })
         self.assertEqual(selected, set(BUILD['jobs']) - {'prepare', 'release'})
         self.assertEqual(set(BUILD['jobs']['release']['needs']), selected | {'prepare'})
@@ -80,6 +80,18 @@ class BuildWorkflowTests(unittest.TestCase):
             with self.subTest(targets=targets, version=version):
                 result, _ = self.resolve(targets, version=version)
                 self.assertNotEqual(result.returncode, 0)
+
+    def test_openhuman_publication_builds_the_installed_image(self):
+        for podman in ['0', '1']:
+            result = subprocess.run(['make', '-n', '-o', 'push-agentteams-controller',
+                                     'push-openhuman-worker', 'IS_PODMAN=' + podman,
+                                     'VERSION=v1.2.7'], cwd=ROOT, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('openhuman/Dockerfile', result.stdout)
+            self.assertIn('agentteams/agentteams-openhuman-worker:v1.2.7', result.stdout)
+        self.assertIn('agentteams-openhuman-worker',
+                      next(s['run'] for s in RELEASE['jobs']['release']['steps']
+                           if s.get('name') == 'Verify versioned multi-architecture images'))
 
     def test_manual_default_version(self):
         result, values = self.resolve(version='')
@@ -217,7 +229,7 @@ class BuildWorkflowTests(unittest.TestCase):
         single = json.dumps({'manifests': [{'platform': {'os': 'linux', 'architecture': 'amd64'}}]})
         with tempfile.TemporaryDirectory() as directory:
             stub = Path(directory) / 'docker'
-            stub.write_text('#!/bin/bash\nprintf "%s\\n" "$4" >> "$IMAGE_LOG"\nif [[ "$4" == *agentteams-hermes-worker:* ]]; then\n  printf "%s" "$LAST_MANIFEST"\n  exit "$LAST_STATUS"\nfi\nprintf "%s" "$MANIFEST"\n')
+            stub.write_text('#!/bin/bash\nprintf "%s\\n" "$4" >> "$IMAGE_LOG"\nif [[ "$4" == *agentteams-openhuman-worker:* ]]; then\n  printf "%s" "$LAST_MANIFEST"\n  exit "$LAST_STATUS"\nfi\nprintf "%s" "$MANIFEST"\n')
             stub.chmod(0o755)
             for manifest, status, success in [(both, '0', True), (single, '0', False), ('', '1', False), ('not-json', '0', False), ('', '0', False)]:
                 with self.subTest(manifest=manifest, status=status):
@@ -230,7 +242,7 @@ class BuildWorkflowTests(unittest.TestCase):
                                                  'MANIFEST': both, 'LAST_MANIFEST': manifest,
                                                  'LAST_STATUS': status, 'IMAGE_LOG': str(log)})
                     self.assertEqual(result.returncode == 0, success, result.stderr)
-                    self.assertEqual(len(set(log.read_text().splitlines())), 8)
+                    self.assertEqual(len(set(log.read_text().splitlines())), 9)
 
 
 if __name__ == '__main__':

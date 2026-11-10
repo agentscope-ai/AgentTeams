@@ -431,6 +431,23 @@ else
 		./hermes/
 endif
 
+push-openhuman-worker: push-agentteams-controller buildx-setup ## Build + push multi-arch OpenHuman Harness image
+ifeq ($(IS_PODMAN),1)
+	-podman manifest rm $(OPENHUMAN_WORKER_TAG) 2>/dev/null
+	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
+		podman build --platform $(plat) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
+			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+			--manifest $(OPENHUMAN_WORKER_TAG) -f openhuman/Dockerfile . && ) true
+	podman manifest push --all $(OPENHUMAN_WORKER_TAG) docker://$(OPENHUMAN_WORKER_TAG)
+	$(if $(PUSH_LATEST),podman manifest push --all $(OPENHUMAN_WORKER_TAG) docker://$(OPENHUMAN_WORKER_IMAGE):latest)
+else
+	docker buildx build --builder $(BUILDX_BUILDER) --platform $(MULTIARCH_PLATFORMS) \
+		$(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+		-t $(OPENHUMAN_WORKER_TAG) $(if $(PUSH_LATEST),-t $(OPENHUMAN_WORKER_IMAGE):latest) \
+		--push -f openhuman/Dockerfile .
+endif
+
 push-qwenpaw-worker: push-agentteams-controller ## Build + push multi-arch QwenPaw Harness image
 	@echo "==> Building + pushing multi-arch QwenPaw Worker: $(QWENPAW_WORKER_TAG) [$(MULTIARCH_PLATFORMS)]"
 	OUT_DIR=dist/adapters/qwenpaw ruby plugins/teamharness/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/teamharness/plugin.yaml >/dev/null

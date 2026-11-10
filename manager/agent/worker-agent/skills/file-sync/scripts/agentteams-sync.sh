@@ -35,9 +35,10 @@ trap 'rm -rf "${STAGING_DIR}"' EXIT
 trap 'exit 1' HUP INT TERM
 mc cp "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/openclaw.json" "${STAGING_DIR}/openclaw.json"
 
+# Keep your live SDK databases and WAL files intact during config refresh.
 mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/" "${WORKSPACE}/" --overwrite \
     --exclude "openclaw.json" --exclude "credentials/**" \
-    --exclude ".openclaw/matrix/**" --exclude ".openclaw/canvas/**" 2>&1
+    --exclude ".openclaw/**" 2>&1
 mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/" "${AGENTTEAMS_ROOT}/shared/" --overwrite
 
 # Merge against the current local config, then publish atomically on the same filesystem.

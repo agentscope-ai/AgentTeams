@@ -39,6 +39,7 @@ on:
       - 'tests/check-installer-dashboard-session-secret.sh'
       - 'tests/check-installer-embedded-latest-pull.sh'
       - 'tests/check-installer-auto-version-images.sh'
+      - 'tests/check-harness-image-names.ps1'
       - 'tests/check-installer-codex-image.sh'
       - 'tests/check-installer-codex-image.ps1'
       - 'tests/check-teamharness-acceptance-observer.sh'
@@ -91,6 +92,7 @@ jobs:
         run: |
           ./install/test-one-click-install.ps1
           ./install/test-upgrade-install.ps1
+          ./tests/check-harness-image-names.ps1
 
       - name: Check Dashboard installation
         run: bash install/agentteams-dashboard-tests.sh

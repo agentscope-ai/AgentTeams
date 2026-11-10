@@ -20,7 +20,7 @@ func isHigressRegistry(image string) bool {
 }
 
 func isLocalImage(image string) bool {
-	// Local images have no dots before the first slash: e.g. "agentteams/worker-agent:latest"
+	// Local images have no dots before the first slash: e.g. "agentteams/agentteams-harness-openclaw:latest"
 	// Registry images have dots: e.g. "registry.example.com/repo/image:tag"
 	slashIdx := strings.Index(image, "/")
 	if slashIdx < 0 {
@@ -169,7 +169,7 @@ func (v *SecurityValidator) isImageAllowed(image string) bool {
 	if isHigressRegistry(image) {
 		return true
 	}
-	// Allow local images (no registry prefix, e.g. "agentteams/worker-agent:latest")
+	// Allow local images (no registry prefix, e.g. "agentteams/agentteams-harness-openclaw:latest")
 	if isLocalImage(image) {
 		return true
 	}

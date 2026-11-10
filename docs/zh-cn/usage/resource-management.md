@@ -707,7 +707,7 @@ Nacos URI 格式：`nacos://[user:pass@]host:port/{namespace}/{agentspec-name}[/
     "suggested_name": "my-worker",
     "model": "qwen3.5-plus",
     "runtime": "openclaw",
-    "base_image": "agentteams/worker-agent:latest",
+    "base_image": "agentteams/agentteams-harness-openclaw:latest",
     "apt_packages": ["ffmpeg"],
     "pip_packages": [],
     "npm_packages": []

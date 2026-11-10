@@ -33,6 +33,7 @@ type WorkerDeployRequest struct {
 	HumanMatrixIDs         []string
 	ReconcileChannelPolicy bool
 	Name                   string
+	PersonalRoomID         string
 	Spec                   v1beta1.WorkerSpec
 	// SubagentModel is the resolved subagent model for this worker
 	// (explicit spec value or the team default, resolved by the caller).
@@ -362,6 +363,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 
 	configJSON, err := d.agentConfig.GenerateOpenClawConfig(agentconfig.WorkerConfigRequest{
 		WorkerName:        req.Name,
+		PersonalRoomID:    req.PersonalRoomID,
 		MatrixToken:       req.MatrixToken,
 		GatewayKey:        req.GatewayKey,
 		ModelName:         req.Spec.Model,

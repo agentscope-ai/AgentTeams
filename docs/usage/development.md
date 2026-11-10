@@ -39,6 +39,24 @@ installer defaults remain controlled by this repository.
 
 ## Building Images Locally
 
+From Core 1.2.7, Harness image repositories use these names:
+
+| Runtime | Image repository basename |
+| --- | --- |
+| OpenClaw | `agentteams-harness-openclaw` |
+| QwenPaw | `agentteams-harness-qwenpaw` |
+| Hermes | `agentteams-harness-hermes` |
+| DeepSeek Harness | `agentteams-harness-deepseek` |
+| OpenHuman | `agentteams-harness-openhuman` |
+| Codex | `agentteams-harness-codex` |
+
+Core local builds use the `agentteams/` prefix. Codex remains in its independent
+repository; DeepSeek and Codex keep independent version tags. Manager roles
+can use the same Harness images; the existing Manager image tags remain
+compatibility aliases. Container names, runtime IDs and image override variables
+are unchanged. Installers retain the original repositories for historical Core
+versions and DeepSeek versions before v0.1.2.
+
 All builds go through the root `Makefile`:
 
 ```bash
@@ -61,10 +79,11 @@ make build-hermes-worker
 make build-deepseek-harness-worker
 
 # Build with a specific version tag
-make build VERSION=0.1.0
+make build VERSION=local-dev
 
 # DeepSeek Harness releases independently from the core VERSION
-make push-deepseek-harness-worker DEEPSEEK_HARNESS_WORKER_VERSION=v0.1.0
+make push-deepseek-harness-worker VERSION=sha-$(git rev-parse --short=12 HEAD) \
+    PUSH_LATEST= DEEPSEEK_HARNESS_WORKER_VERSION=v0.1.2
 
 # Build for a specific platform
 make build DOCKER_PLATFORM=linux/amd64
@@ -358,7 +377,7 @@ The Manager detects the socket at startup and sets `AGENTTEAMS_CONTAINER_RUNTIME
 # Docker
 docker run -d --name agentteams-manager \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -e AGENTTEAMS_WORKER_IMAGE=agentteams/worker-agent:latest \
+  -e AGENTTEAMS_WORKER_IMAGE=agentteams/agentteams-harness-openclaw:latest \
   ... \
   agentteams/manager:latest
 
@@ -366,7 +385,7 @@ docker run -d --name agentteams-manager \
 podman run -d --name agentteams-manager \
   -v /run/podman/podman.sock:/var/run/docker.sock \
   --security-opt label=disable \
-  -e AGENTTEAMS_WORKER_IMAGE=agentteams/worker-agent:latest \
+  -e AGENTTEAMS_WORKER_IMAGE=agentteams/agentteams-harness-openclaw:latest \
   ... \
   agentteams/manager:latest
 ```

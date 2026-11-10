@@ -6,9 +6,8 @@ The container build carries independent version pins, one per runtime:
   release tag the base image installs (via ``npx -y openclaw@<tag>``).
 - ``HERMES_GIT_REF`` in ``hermes/Dockerfile`` — the hermes-agent release
   tag the Hermes worker image checks out.
-- ``QWENPAW_PIP_SPEC`` in ``qwenpaw/Dockerfile`` and
-  ``manager/Dockerfile.qwenpaw`` — the ``qwenpaw==X.Y.Z`` pip spec the
-  QwenPaw runtime images install.
+- ``QWENPAW_PIP_SPEC`` in ``qwenpaw/Dockerfile`` — the ``qwenpaw==X.Y.Z``
+  pip spec shared by the QwenPaw Worker and Manager Harness.
 
 This test file is the single source of truth for all three: it reads
 ``hack/versions.env`` and asserts that the Dockerfiles' ``ARG`` defaults
@@ -172,11 +171,8 @@ QWENPAW_PIP_SPEC = "qwenpaw==2.2.2.post1"
 PIN_TARGETS = {
     "OPENCLAW_TAG": (("openclaw-base/Dockerfile", "OPENCLAW_TAG"),),
     "HERMES_GIT_REF": (("hermes/Dockerfile", "HERMES_GIT_REF"),),
-    # The QwenPaw spec is consumed by two images (worker + Manager), so the
-    # value is a tuple of (dockerfile, ARG) pairs.
     "QWENPAW_PIP_SPEC": (
         ("qwenpaw/Dockerfile", "QWENPAW_PIP_SPEC"),
-        ("manager/Dockerfile.qwenpaw", "QWENPAW_PIP_SPEC"),
     ),
 }
 

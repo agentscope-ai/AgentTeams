@@ -8,7 +8,7 @@ on:
         required: false
         type: string
       targets:
-        description: 'Space-separated list of push targets (default: all). Options: openclaw-base agentteams-controller embedded manager manager-qwenpaw worker hermes-worker qwenpaw-worker'
+        description: 'Space-separated list of push targets (default: all). Options: openclaw-base agentteams-controller embedded manager manager-qwenpaw worker hermes-worker qwenpaw-worker openhuman-worker'
         required: false
         type: string
         default: 'all'
@@ -42,11 +42,12 @@ jobs:
               'openclaw-base': [],
               'agentteams-controller': [],
               'embedded': ['agentteams-controller'],
-              'manager': ['openclaw-base', 'agentteams-controller'],
-              'manager-qwenpaw': ['agentteams-controller'],
+              'manager': ['openclaw-base', 'agentteams-controller', 'worker'],
+              'manager-qwenpaw': ['agentteams-controller', 'qwenpaw-worker'],
               'worker': ['openclaw-base', 'agentteams-controller'],
               'hermes-worker': ['agentteams-controller'],
               'qwenpaw-worker': ['agentteams-controller'],
+              'openhuman-worker': ['agentteams-controller'],
           }
           tagged = os.environ['GITHUB_REF'].startswith('refs/tags/')
           version = os.environ['GITHUB_REF_NAME'] if tagged else os.environ['REQUESTED_VERSION'] or 'latest'
@@ -90,7 +91,7 @@ jobs:
     secrets: inherit
 
   manager:
-    needs: [prepare, openclaw-base, agentteams-controller]
+    needs: [prepare, openclaw-base, agentteams-controller, worker]
     if: contains(fromJSON(needs.prepare.outputs.targets), 'manager')
     uses: ./.github/workflows/build-image.yml
     with:
@@ -99,7 +100,7 @@ jobs:
     secrets: inherit
 
   manager-qwenpaw:
-    needs: [prepare, agentteams-controller]
+    needs: [prepare, agentteams-controller, qwenpaw-worker]
     if: contains(fromJSON(needs.prepare.outputs.targets), 'manager-qwenpaw')
     uses: ./.github/workflows/build-image.yml
     with:
@@ -134,8 +135,17 @@ jobs:
       version: ${{ needs.prepare.outputs.version }}
     secrets: inherit
 
+  openhuman-worker:
+    needs: [prepare, agentteams-controller]
+    if: contains(fromJSON(needs.prepare.outputs.targets), 'openhuman-worker')
+    uses: ./.github/workflows/build-image.yml
+    with:
+      target: openhuman-worker
+      version: ${{ needs.prepare.outputs.version }}
+    secrets: inherit
+
   release:
-    needs: [prepare, openclaw-base, agentteams-controller, embedded, manager, manager-qwenpaw, worker, hermes-worker, qwenpaw-worker]
+    needs: [prepare, openclaw-base, agentteams-controller, embedded, manager, manager-qwenpaw, worker, hermes-worker, qwenpaw-worker, openhuman-worker]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write

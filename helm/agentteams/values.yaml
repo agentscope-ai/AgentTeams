@@ -312,7 +312,7 @@ cms:
 worker:
   defaultImage:
     openclaw:
-      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-worker
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-openclaw
       tag: ""                 # defaults to global.imageTag
     copaw:
       # Legacy CoPaw deployments only (issue #1310): new releases must not
@@ -328,19 +328,19 @@ worker:
       repository: ""
       tag: ""
     hermes:
-      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-hermes-worker
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-hermes
       tag: ""                 # defaults to global.imageTag
     openhuman:
-      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-openhuman-worker
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-openhuman
       tag: ""                 # defaults to global.imageTag
     qwenpaw:
-      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-qwenpaw-worker
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-qwenpaw
       tag: ""
     deepseekHarness:
-      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-deepseek-harness-worker
-      tag: "v0.1.1"           # experimental; released independently from global.imageTag
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-deepseek
+      tag: "v0.1.2"           # experimental; released independently from global.imageTag
     codex:
-      repository: ghcr.io/agentteams-group/agentteams-harness-codex
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex
       tag: "v0.1.0"            # released independently from global.imageTag
   defaultRuntime: "openclaw"
   resources:

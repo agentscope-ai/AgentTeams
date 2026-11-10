@@ -200,6 +200,52 @@ printf '%s' "$AGENTTEAMS_RECOVERED_CONFIG" | grep -q 'AGENTTEAMS_WORKSPACE_DIR=/
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_harness_names_preserve_old_releases_and_explicit_images(self):
+        result = run(functions("_normalize_version", "_ver_lt", "_supports_deepseek_harness", "resolve_image_tags") + """
+set -e
+AGENTTEAMS_REGISTRY=registry.example
+AGENTTEAMS_CODEX_WORKER_VERSION=v0.1.0
+AGENTTEAMS_DEEPSEEK_HARNESS_MIN_VERSION=v1.2.4
+AGENTTEAMS_VERSION=v1.2.6
+AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION=v0.1.1
+resolve_image_tags
+test "$WORKER_IMAGE" = registry.example/agentteams/agentteams-worker:v1.2.6
+test "$QWENPAW_WORKER_IMAGE" = registry.example/agentteams/agentteams-qwenpaw-worker:v1.2.6
+test "$DEEPSEEK_HARNESS_WORKER_IMAGE" = registry.example/agentteams/agentteams-deepseek-harness-worker:v0.1.1
+AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION=v0.1.2
+resolve_image_tags
+test "$DEEPSEEK_HARNESS_WORKER_IMAGE" = registry.example/agentteams/agentteams-deepseek-harness-worker:v0.1.1
+_INSTALL_ENV_KEYS=' AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION '
+resolve_image_tags
+test "$DEEPSEEK_HARNESS_WORKER_IMAGE" = registry.example/agentteams/agentteams-harness-deepseek:v0.1.2
+_INSTALL_ENV_KEYS=' '
+AGENTTEAMS_VERSION=v1.2.7
+AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION=v0.1.2
+resolve_image_tags
+test "$WORKER_IMAGE" = registry.example/agentteams/agentteams-harness-openclaw:v1.2.7
+test "$QWENPAW_WORKER_IMAGE" = registry.example/agentteams/agentteams-harness-qwenpaw:v1.2.7
+test "$HERMES_WORKER_IMAGE" = registry.example/agentteams/agentteams-harness-hermes:v1.2.7
+test "$OPENHUMAN_WORKER_IMAGE" = registry.example/agentteams/agentteams-harness-openhuman:v1.2.7
+test "$DEEPSEEK_HARNESS_WORKER_IMAGE" = registry.example/agentteams/agentteams-harness-deepseek:v0.1.2
+AGENTTEAMS_VERSION=local-pre127
+resolve_image_tags
+test "$WORKER_IMAGE" = registry.example/agentteams/agentteams-harness-openclaw:local-pre127
+AGENTTEAMS_VERSION=v1.2.6
+AGENTTEAMS_INSTALL_WORKER_IMAGE=private.example/agentteams-harness-openclaw:custom
+AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE=private.example/agentteams-harness-qwenpaw:custom
+AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE=private.example/agentteams-harness-hermes:custom
+AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE=private.example/agentteams-harness-openhuman:custom
+AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE=private.example/agentteams-harness-deepseek:custom
+AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION=v0.1.1
+resolve_image_tags
+test "$WORKER_IMAGE" = "$AGENTTEAMS_INSTALL_WORKER_IMAGE"
+test "$QWENPAW_WORKER_IMAGE" = "$AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE"
+test "$HERMES_WORKER_IMAGE" = "$AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE"
+test "$OPENHUMAN_WORKER_IMAGE" = "$AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE"
+test "$DEEPSEEK_HARNESS_WORKER_IMAGE" = "$AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE"
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_dashboard_defaults_advance_but_custom_choices_are_kept(self):
         result = run(functions("prepare_upgrade_dashboard") + """
 set -e

@@ -27,7 +27,7 @@
 #   AGENTTEAMS_DATA_DIR           Docker volume name for persistent data (default: agentteams-data)
 #   AGENTTEAMS_WORKSPACE_DIR      Host directory for manager workspace (default: ~/agentteams-manager)
 #   AGENTTEAMS_VERSION            Image tag          (default: latest)
-#   AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION DeepSeek Harness runtime image tag (default: v0.1.1; independent of AGENTTEAMS_VERSION)
+#   AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION DeepSeek Harness runtime image tag (default: v0.1.2; independent of AGENTTEAMS_VERSION)
 #   AGENTTEAMS_CODEX_WORKER_VERSION Codex runtime image tag (default: v0.1.0; independent of AGENTTEAMS_VERSION)
 #   AGENTTEAMS_REGISTRY           Image registry     (default: auto-detected by timezone)
 #   AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY
@@ -39,6 +39,7 @@
 #   AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE  Override copaw worker image (e.g., local build)
 #   AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE Override qwenpaw worker image (e.g., local build)
 #   AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE Override hermes worker image (e.g., local build)
+#   AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE Override OpenHuman worker image (e.g., local build)
 #   AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE Override experimental DeepSeek Harness worker image
 #   AGENTTEAMS_INSTALL_CODEX_WORKER_IMAGE Override Codex worker image
 #   AGENTTEAMS_PORT_GATEWAY       Host port for Higress gateway (default: 18080)
@@ -77,7 +78,7 @@ foreach ($key in [Environment]::GetEnvironmentVariables('Process').Keys) { $scri
 $script:AGENTTEAMS_VERSION = if ($env:AGENTTEAMS_VERSION) { $env:AGENTTEAMS_VERSION } else { "latest" }
 $script:AGENTTEAMS_KNOWN_STABLE_VERSION = "v1.2.6"
 $script:AGENTTEAMS_DEEPSEEK_HARNESS_MIN_VERSION = "v1.2.4"
-$script:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION = if ($env:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION) { $env:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION } else { "v0.1.1" }
+$script:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION = if ($env:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION) { $env:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION } else { "v0.1.2" }
 $script:AGENTTEAMS_CODEX_WORKER_VERSION = if ($env:AGENTTEAMS_CODEX_WORKER_VERSION) { $env:AGENTTEAMS_CODEX_WORKER_VERSION } else { "v0.1.0" }
 $script:AGENTTEAMS_NON_INTERACTIVE = if ($env:AGENTTEAMS_NON_INTERACTIVE -eq "1" -or $NonInteractive) { $true } else { $false }
 $script:AGENTTEAMS_QUICKSTART = -not $Manual -and $env:AGENTTEAMS_QUICKSTART -ne "0"
@@ -1137,6 +1138,7 @@ AGENTTEAMS_WORKER_IMAGE=$($Config.WORKER_IMAGE)
 AGENTTEAMS_COPAW_WORKER_IMAGE=$($Config.COPAW_WORKER_IMAGE)
 AGENTTEAMS_QWENPAW_WORKER_IMAGE=$($Config.QWENPAW_WORKER_IMAGE)
 AGENTTEAMS_HERMES_WORKER_IMAGE=$($Config.HERMES_WORKER_IMAGE)
+AGENTTEAMS_OPENHUMAN_WORKER_IMAGE=$($Config.OPENHUMAN_WORKER_IMAGE)
 AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE=$($Config.DEEPSEEK_HARNESS_WORKER_IMAGE)
 AGENTTEAMS_CODEX_WORKER_IMAGE=$($Config.CODEX_WORKER_IMAGE)
 
@@ -2710,7 +2712,7 @@ function Install-Manager {
     $script:WORKER_IMAGE = if ($env:AGENTTEAMS_INSTALL_WORKER_IMAGE) {
         $env:AGENTTEAMS_INSTALL_WORKER_IMAGE
     } else {
-        "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-worker:$($script:AGENTTEAMS_VERSION)"
+        "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-harness-openclaw:$($script:AGENTTEAMS_VERSION)"
     }
 
     # CoPaw images are no longer built; only an explicit legacy override is honored.
@@ -2719,19 +2721,19 @@ function Install-Manager {
     $script:QWENPAW_WORKER_IMAGE = if ($env:AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE) {
         $env:AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE
     } else {
-        "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-qwenpaw-worker:$($script:AGENTTEAMS_VERSION)"
+        "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-harness-qwenpaw:$($script:AGENTTEAMS_VERSION)"
     }
 
     $script:HERMES_WORKER_IMAGE = if ($env:AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE) {
         $env:AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE
     } else {
-        "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-hermes-worker:$($script:AGENTTEAMS_VERSION)"
+        "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-harness-hermes:$($script:AGENTTEAMS_VERSION)"
     }
 
     $script:DEEPSEEK_HARNESS_WORKER_IMAGE = if ($env:AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE) {
         $env:AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE
     } elseif (Test-DeepSeekHarnessAvailable) {
-        "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-deepseek-harness-worker:$($script:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION)"
+        "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-harness-deepseek:$($script:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION)"
     } else {
         ""
     }
@@ -2741,10 +2743,30 @@ function Install-Manager {
     } elseif ($env:AGENTTEAMS_CODEX_WORKER_IMAGE) {
         $env:AGENTTEAMS_CODEX_WORKER_IMAGE
     } else {
-        "ghcr.io/agentteams-group/agentteams-harness-codex:$($script:AGENTTEAMS_CODEX_WORKER_VERSION)"
+        "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-harness-codex:$($script:AGENTTEAMS_CODEX_WORKER_VERSION)"
     }
 
     $script:MANAGER_COPAW_IMAGE = $env:AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE
+
+    $script:OPENHUMAN_WORKER_IMAGE = if ($env:AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE) {
+        $env:AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE
+    } else {
+        "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-harness-openhuman:$($script:AGENTTEAMS_VERSION)"
+    }
+    $coreVersionMatch = [regex]::Match($script:AGENTTEAMS_VERSION, '^v?(\d+\.\d+\.\d+)')
+    if ($coreVersionMatch.Success -and [version]$coreVersionMatch.Groups[1].Value -lt [version]'1.2.7') {
+        if (-not $env:AGENTTEAMS_INSTALL_WORKER_IMAGE) { $script:WORKER_IMAGE = $script:WORKER_IMAGE.Replace('agentteams-harness-openclaw', 'agentteams-worker') }
+        if (-not $env:AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE) { $script:QWENPAW_WORKER_IMAGE = $script:QWENPAW_WORKER_IMAGE.Replace('agentteams-harness-qwenpaw', 'agentteams-qwenpaw-worker') }
+        if (-not $env:AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE) { $script:HERMES_WORKER_IMAGE = $script:HERMES_WORKER_IMAGE.Replace('agentteams-harness-hermes', 'agentteams-hermes-worker') }
+        if (-not $env:AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE) { $script:OPENHUMAN_WORKER_IMAGE = $script:OPENHUMAN_WORKER_IMAGE.Replace('agentteams-harness-openhuman', 'agentteams-openhuman-worker') }
+        if (-not $env:AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE -and -not $env:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION -and $script:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION -eq 'v0.1.2') {
+            $script:DEEPSEEK_HARNESS_WORKER_IMAGE = "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-deepseek-harness-worker:v0.1.1"
+        }
+    }
+    $dshVersionMatch = [regex]::Match($script:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION, '^v?(\d+\.\d+\.\d+)')
+    if (-not $env:AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE -and $dshVersionMatch.Success -and [version]$dshVersionMatch.Groups[1].Value -lt [version]'0.1.2') {
+        $script:DEEPSEEK_HARNESS_WORKER_IMAGE = $script:DEEPSEEK_HARNESS_WORKER_IMAGE.Replace('agentteams-harness-deepseek', 'agentteams-deepseek-harness-worker')
+    }
 
     $script:CONTROLLER_IMAGE = if ($env:AGENTTEAMS_INSTALL_CONTROLLER_IMAGE) {
         $env:AGENTTEAMS_INSTALL_CONTROLLER_IMAGE
@@ -2835,6 +2857,7 @@ function Install-Manager {
     $config.WORKER_IMAGE = $script:WORKER_IMAGE
     $config.COPAW_WORKER_IMAGE = $script:COPAW_WORKER_IMAGE
     $config.QWENPAW_WORKER_IMAGE = $script:QWENPAW_WORKER_IMAGE
+    $config.OPENHUMAN_WORKER_IMAGE = $script:OPENHUMAN_WORKER_IMAGE
     $config.HERMES_WORKER_IMAGE = $script:HERMES_WORKER_IMAGE
     $config.DEEPSEEK_HARNESS_WORKER_IMAGE = $script:DEEPSEEK_HARNESS_WORKER_IMAGE
     $config.CODEX_WORKER_IMAGE = $script:CODEX_WORKER_IMAGE
@@ -2926,6 +2949,7 @@ function Install-Manager {
                     -e "AGENTTEAMS_WORKER_IMAGE=$($script:WORKER_IMAGE)" `
                     -e "AGENTTEAMS_COPAW_WORKER_IMAGE=$($script:COPAW_WORKER_IMAGE)" `
                     -e "AGENTTEAMS_QWENPAW_WORKER_IMAGE=$($script:QWENPAW_WORKER_IMAGE)" `
+                    -e "AGENTTEAMS_OPENHUMAN_WORKER_IMAGE=$($script:OPENHUMAN_WORKER_IMAGE)" `
                     -e "AGENTTEAMS_HERMES_WORKER_IMAGE=$($script:HERMES_WORKER_IMAGE)" `
                     -e "AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE=$($script:DEEPSEEK_HARNESS_WORKER_IMAGE)" `
                     -e "AGENTTEAMS_CODEX_WORKER_IMAGE=$($script:CODEX_WORKER_IMAGE)" `
@@ -3248,6 +3272,7 @@ function Install-Manager {
             "-e", "AGENTTEAMS_WORKER_IMAGE=$($script:WORKER_IMAGE)",
             "-e", "AGENTTEAMS_COPAW_WORKER_IMAGE=$($script:COPAW_WORKER_IMAGE)",
             "-e", "AGENTTEAMS_QWENPAW_WORKER_IMAGE=$($script:QWENPAW_WORKER_IMAGE)",
+            "-e", "AGENTTEAMS_OPENHUMAN_WORKER_IMAGE=$($script:OPENHUMAN_WORKER_IMAGE)",
             "-e", "AGENTTEAMS_HERMES_WORKER_IMAGE=$($script:HERMES_WORKER_IMAGE)",
             "-e", "AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE=$($script:DEEPSEEK_HARNESS_WORKER_IMAGE)",
             "-e", "AGENTTEAMS_CODEX_WORKER_IMAGE=$($script:CODEX_WORKER_IMAGE)",
@@ -3626,7 +3651,11 @@ function Install-Worker {
     $workerImage = if ($env:AGENTTEAMS_INSTALL_WORKER_IMAGE) {
         $env:AGENTTEAMS_INSTALL_WORKER_IMAGE
     } else {
-        "$registry/agentteams/agentteams-worker:$($script:AGENTTEAMS_VERSION)"
+        "$registry/agentteams/agentteams-harness-openclaw:$($script:AGENTTEAMS_VERSION)"
+    }
+    $coreVersionMatch = [regex]::Match($script:AGENTTEAMS_VERSION, '^v?(\d+\.\d+\.\d+)')
+    if (-not $env:AGENTTEAMS_INSTALL_WORKER_IMAGE -and $coreVersionMatch.Success -and [version]$coreVersionMatch.Groups[1].Value -lt [version]'1.2.7') {
+        $workerImage = $workerImage.Replace('agentteams-harness-openclaw', 'agentteams-worker')
     }
 
     Write-Log (Get-Msg "worker.starting" -f $Name)

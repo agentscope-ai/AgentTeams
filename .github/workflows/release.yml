@@ -16,8 +16,8 @@ on:
 env:
   REGISTRY: higress-registry.cn-hangzhou.cr.aliyuncs.com
   REPO: agentteams
-  DEEPSEEK_HARNESS_WORKER_VERSION: v0.1.1
-  CODEX_WORKER_IMAGE: ghcr.io/agentteams-group/agentteams-harness-codex:v0.1.0
+  DEEPSEEK_HARNESS_WORKER_VERSION: v0.1.2
+  CODEX_WORKER_IMAGE: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:v0.1.0
 
 jobs:
   release:
@@ -55,8 +55,8 @@ jobs:
           # Keep this list aligned with the release targets in build.yml.
           images=(
             openclaw-base agentteams-controller agentteams-embedded
-            agentteams-manager agentteams-manager-qwenpaw agentteams-worker
-            agentteams-qwenpaw-worker agentteams-hermes-worker
+            agentteams-manager agentteams-manager-qwenpaw agentteams-harness-openclaw
+            agentteams-harness-qwenpaw agentteams-harness-hermes agentteams-harness-openhuman
           )
           for image in "${images[@]}"; do
             ref="${REGISTRY}/${REPO}/${image}:${VERSION}"
@@ -160,13 +160,13 @@ jobs:
           docker pull ${REGISTRY}/${REPO}/agentteams-manager:${VERSION}
 
           # Worker
-          docker pull ${REGISTRY}/${REPO}/agentteams-worker:${VERSION}
+          docker pull ${REGISTRY}/${REPO}/agentteams-harness-openclaw:${VERSION}
 
           # QwenPaw Worker
-          docker pull ${REGISTRY}/${REPO}/agentteams-qwenpaw-worker:${VERSION}
+          docker pull ${REGISTRY}/${REPO}/agentteams-harness-qwenpaw:${VERSION}
 
           # DeepSeek Harness Worker (experimental)
-          docker pull ${REGISTRY}/${REPO}/agentteams-deepseek-harness-worker:${DEEPSEEK_HARNESS_WORKER_VERSION}
+          docker pull ${REGISTRY}/${REPO}/agentteams-harness-deepseek:${DEEPSEEK_HARNESS_WORKER_VERSION}
 
           # Controller (used standalone in k8s; bundled inside agentteams-embedded for docker installs)
           docker pull ${REGISTRY}/${REPO}/agentteams-controller:${VERSION}
@@ -185,7 +185,7 @@ jobs:
 
       - name: Verify and smoke-test DeepSeek Harness runtime image
         run: |
-          IMAGE="${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-deepseek-harness-worker:${{ env.DEEPSEEK_HARNESS_WORKER_VERSION }}"
+          IMAGE="${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-harness-deepseek:${{ env.DEEPSEEK_HARNESS_WORKER_VERSION }}"
           AVAILABLE=false
           for attempt in 1 2 3 4 5; do
             if docker buildx imagetools inspect "${IMAGE}" >/dev/null 2>&1; then

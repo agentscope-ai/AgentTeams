@@ -35,10 +35,11 @@ type HeartbeatConfig struct {
 
 // WorkerConfigRequest describes everything needed to generate a worker's config files.
 type WorkerConfigRequest struct {
-	WorkerName  string // e.g. "worker-alice"
-	MatrixToken string // worker's Matrix access token
-	GatewayKey  string // worker's gateway API key
-	ModelName   string // optional: override default model
+	WorkerName     string // e.g. "worker-alice"
+	PersonalRoomID string // dedicated Worker room; other rooms still require a mention
+	MatrixToken    string // worker's Matrix access token
+	GatewayKey     string // worker's gateway API key
+	ModelName      string // optional: override default model
 	// ModelProvider optionally names the AI gateway provider that serves
 	// ModelName/SubagentModelName. Empty means the built-in gateway
 	// provider (agentteams-gateway).

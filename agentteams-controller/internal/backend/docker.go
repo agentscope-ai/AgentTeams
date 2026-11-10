@@ -739,7 +739,7 @@ func (d *DockerBackend) Status(ctx context.Context, name string) (*WorkerResult,
 func (d *DockerBackend) ensureImage(ctx context.Context, image string) error {
 	// Check if image exists locally
 	// Note: Docker Engine API expects unescaped image names in the path
-	// (e.g. /images/agentteams/worker-agent:latest/json), not PathEscaped.
+	// (e.g. /images/agentteams/agentteams-harness-openclaw:latest/json), not PathEscaped.
 	u := "http://localhost/images/" + image + "/json"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {

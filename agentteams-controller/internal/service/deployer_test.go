@@ -47,9 +47,10 @@ func TestDeployWorkerConfigSeedsLocalFilesWithoutOverwritingRuntimeState(t *test
 		AgentFSDir:  agentFSDir,
 	})
 	err := deployer.DeployWorkerConfig(ctx, WorkerDeployRequest{
-		Name:        "alice",
-		MatrixToken: "matrix-token",
-		GatewayKey:  "gateway-key",
+		Name:           "alice",
+		PersonalRoomID: "!alice:matrix.test",
+		MatrixToken:    "matrix-token",
+		GatewayKey:     "gateway-key",
 	})
 	if err != nil {
 		t.Fatalf("DeployWorkerConfig failed: %v", err)
@@ -77,6 +78,15 @@ func TestDeployWorkerConfigSeedsLocalFilesWithoutOverwritingRuntimeState(t *test
 	}
 	if !strings.Contains(string(got), "gateway-key") {
 		t.Fatalf("openclaw.json was not overwritten by controller config: %s", got)
+	}
+	var config map[string]interface{}
+	if err := json.Unmarshal(got, &config); err != nil {
+		t.Fatal(err)
+	}
+	groups := config["channels"].(map[string]interface{})["matrix"].(map[string]interface{})["groups"].(map[string]interface{})
+	room, ok := groups["!alice:matrix.test"].(map[string]interface{})
+	if !ok || room["requireMention"] != false {
+		t.Fatalf("deployer lost the dedicated room policy: %v", groups)
 	}
 
 	got, err = store.GetObject(ctx, "agents/alice/.agentteams-keep")

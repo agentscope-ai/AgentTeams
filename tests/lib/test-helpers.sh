@@ -897,7 +897,7 @@ start_worker_container() {
         -e "AGENTTEAMS_FS_BUCKET=agentteams-storage" \
         -e "AGENTTEAMS_FS_ACCESS_KEY=${TEST_MINIO_USER}" \
         -e "AGENTTEAMS_FS_SECRET_KEY=${TEST_MINIO_PASSWORD}" \
-        "agentteams/worker-agent:${AGENTTEAMS_VERSION:-latest}" 2>/dev/null
+        "agentteams/agentteams-harness-openclaw:${AGENTTEAMS_VERSION:-latest}" 2>/dev/null
 
     echo "${container_name}"
 }

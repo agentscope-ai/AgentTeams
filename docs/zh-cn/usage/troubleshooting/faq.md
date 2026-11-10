@@ -698,7 +698,7 @@ Manager，这两个值都会启动基于 QwenPaw 的 Python 实现。
 
 对于 Worker，不要只改 runtime 值，应保持 runtime 与镜像配套：已有部署可能把
 `copaw` 映射到 `agentteams-copaw-worker`，新的 QwenPaw 路径则使用
-`agentteams-qwenpaw-worker`。QwenPaw Manager 镜像为 `agentteams-manager-qwenpaw`。
+`agentteams-harness-qwenpaw`。QwenPaw Manager 镜像为 `agentteams-manager-qwenpaw`。
 
 ---
 

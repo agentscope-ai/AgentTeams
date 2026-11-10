@@ -2,9 +2,75 @@ package agentconfig
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 )
+
+func TestOpenClawWorkerShortMention(t *testing.T) {
+	g := NewGenerator(Config{AdminUser: "admin"})
+	data, err := g.GenerateOpenClawConfig(WorkerConfigRequest{WorkerName: "alice.dev"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Messages struct {
+			GroupChat struct {
+				MentionPatterns []string `json:"mentionPatterns"`
+			} `json:"groupChat"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Messages.GroupChat.MentionPatterns) != 1 {
+		t.Fatalf("missing Worker mention pattern: %s", data)
+	}
+	pattern := regexp.MustCompile(cfg.Messages.GroupChat.MentionPatterns[0])
+	for text, want := range map[string]bool{
+		"@alice.dev Task assigned":      true,
+		"Please ask @alice.dev, thanks": true,
+		"@alice.dev":                    true,
+		"@alice.dev，请执行任务":              true,
+		"你好，@alice.dev！":                true,
+		"@alice.dev-other task":         false,
+		"@aliceXdev task":               false,
+		"mail@alice.dev":                false,
+		"@@alice.dev task":              false,
+		"@alice.dev_extra task":         false,
+	} {
+		if got := pattern.MatchString(text); got != want {
+			t.Errorf("mention %q = %v, want %v", text, got, want)
+		}
+	}
+}
+
+func TestOpenClawWorkerDedicatedRoomDoesNotRequireMention(t *testing.T) {
+	g := NewGenerator(Config{MatrixDomain: "matrix.test", AdminUser: "admin"})
+	data, err := g.GenerateOpenClawConfig(WorkerConfigRequest{
+		WorkerName: "alice", PersonalRoomID: "!alice:matrix.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	matrix := cfg["channels"].(map[string]interface{})["matrix"].(map[string]interface{})
+	groups := matrix["groups"].(map[string]interface{})
+	room, ok := groups["!alice:matrix.test"].(map[string]interface{})
+	if !ok || room["requireMention"] != false {
+		t.Fatalf("dedicated room still requires a mention: %v", groups)
+	}
+	if groups["*"].(map[string]interface{})["requireMention"] != true {
+		t.Fatal("shared room mention requirement changed")
+	}
+	allowed := matrix["groupAllowFrom"].([]interface{})
+	if matrix["groupPolicy"] != "allowlist" || len(allowed) != 2 || allowed[0] != "@manager:matrix.test" || allowed[1] != "@admin:matrix.test" {
+		t.Fatalf("sender allowlist changed: %v", allowed)
+	}
+}
 
 func TestGenerateOpenClawConfig_Basic(t *testing.T) {
 	g := NewGenerator(Config{

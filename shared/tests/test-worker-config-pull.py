@@ -50,9 +50,12 @@ elif args[0] == 'mirror':
         if os.environ.get('FAIL_STAGE') == 'shared': sys.exit(9)
     else:
         excludes = [args[i+1] for i, arg in enumerate(args) if arg == '--exclude']
-        for src in (root / 'remote').iterdir():
-            if not any(fnmatch.fnmatch(src.name, pattern) for pattern in excludes):
-                shutil.copyfile(src, pathlib.Path(args[2]) / src.name)
+        for src in (root / 'remote').rglob('*'):
+            relative = str(src.relative_to(root / 'remote'))
+            if src.is_file() and not any(fnmatch.fnmatch(relative, pattern) for pattern in excludes):
+                destination = pathlib.Path(args[2]) / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(src, destination)
         if config.exists() and os.environ.get('TEST_NO_INITIAL_CONFIG') != '1':
             assert json.loads(config.read_text())['channels']['matrix']['accessToken'] == 'current-token'
 ''')
@@ -108,6 +111,23 @@ os.execv('/bin/mv', ['mv', *sys.argv[1:]])
 
     def test_download_failure_preserves_live_config_and_markers(self):
         self.assert_failed_without_publication(self.run_pull('cp'))
+
+    def test_config_pull_preserves_live_openclaw_database_and_sidecars(self):
+        paths = ('.openclaw/state/openclaw.sqlite',
+                 '.openclaw/agents/main/agent/openclaw-agent.sqlite',
+                 '.openclaw/agents/main/agent/openclaw-agent.sqlite-wal',
+                 '.openclaw/agents/main/agent/openclaw-agent.sqlite-shm')
+        for relative in paths:
+            local = self.workspace / relative
+            remote = self.remote / relative
+            local.parent.mkdir(parents=True, exist_ok=True)
+            remote.parent.mkdir(parents=True, exist_ok=True)
+            local.write_bytes(b'live runtime state')
+            remote.write_bytes(b'stale remote backup')
+        result = self.run_pull()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for relative in paths:
+            self.assertEqual((self.workspace / relative).read_bytes(), b'live runtime state', relative)
 
     def test_workspace_mirror_failure_preserves_live_config_and_markers(self):
         self.assert_failed_without_publication(self.run_pull('mirror'))

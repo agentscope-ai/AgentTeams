@@ -554,6 +554,52 @@ class AgentTeamsMatrixChannel(BaseChannel):
             return payload.get("sender_id") or ""
         return getattr(payload, "session_id", "") or ""
 
+    async def _consume_with_tracker(self, request: Any, payload: Any) -> None:
+        # SDK reloads share a TaskTracker, but create separate channel queues.
+        # Keep accepted Matrix deliveries with that agent-scoped tracker so an
+        # old queue's shutdown cannot discard a follow-up or execute it twice.
+        workspace = self._workspace
+        tracker = workspace.task_tracker
+        if not hasattr(tracker, "_agentteams_matrix_deliveries"):
+            tracker._agentteams_matrix_deliveries = {}
+            tracker._agentteams_matrix_delivery_locks = {}
+        deliveries = tracker._agentteams_matrix_deliveries
+        session = (request.session_id, request.user_id)
+        event_id = (request.channel_meta or {}).get("event_id") or str(uuid4())
+        key = (*session, event_id)
+        if key not in deliveries:
+            lock = tracker._agentteams_matrix_delivery_locks.setdefault(session, asyncio.Lock())
+
+            async def deliver() -> None:
+                async with lock:
+                    # Workspace.start() starts channels before the SDK binds
+                    # the manager. A reload candidate must use the committed
+                    # workspace rather than retain its old execution context.
+                    while workspace._manager is None:
+                        await asyncio.sleep(0.01)
+                    manager = workspace._manager
+                    current = manager.get_loaded_agent(workspace.agent_id)
+                    chat = await current.chat_manager.get_or_create_chat(
+                        request.session_id, request.user_id, self.channel,
+                        name=self._extract_chat_name(payload),
+                    )
+                    active = await tracker.snapshot_active_tasks()
+                    if chat.id in active:
+                        await asyncio.gather(asyncio.shield(active[chat.id]), return_exceptions=True)
+                    current = manager.get_loaded_agent(workspace.agent_id)
+                    channel = await current.channel_manager.get_channel(self.channel)
+                    await BaseChannel._consume_with_tracker(channel, request, payload)
+
+            deliveries[key] = asyncio.create_task(deliver())
+            # Retain recent completed IDs for overlapping sync clients only;
+            # pending deliveries must never be evicted.
+            for previous, task in tuple(deliveries.items()):
+                if len(deliveries) <= 256:
+                    break
+                if task.done():
+                    deliveries.pop(previous)
+        await asyncio.shield(deliveries[key])
+
     # ------------------------------------------------------------------
     # Factory — from_config / from_env
     # ------------------------------------------------------------------

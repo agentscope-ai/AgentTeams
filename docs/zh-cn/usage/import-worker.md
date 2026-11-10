@@ -185,7 +185,7 @@ worker-package.zip
     "suggested_name": "my-worker",
     "model": "qwen3.5-plus",
     "runtime": "openclaw",
-    "base_image": "agentteams/worker-agent:latest",
+    "base_image": "agentteams/agentteams-harness-openclaw:latest",
     "apt_packages": ["ffmpeg", "imagemagick"],
     "pip_packages": [],
     "npm_packages": []
@@ -333,7 +333,7 @@ bash agentteams-apply.sh -f worker.yaml
   },
   "worker": {
     "suggested_name": "devops-worker",
-    "base_image": "agentteams/worker-agent:latest",
+    "base_image": "agentteams/agentteams-harness-openclaw:latest",
     "apt_packages": [],
     "pip_packages": [],
     "npm_packages": []

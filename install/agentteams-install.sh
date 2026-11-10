@@ -4095,10 +4095,6 @@ install_manager() {
         fi
     fi
 
-    # Create the data volume (or host bind directory) if missing, and build
-    # the mount args (named volume vs bind path are handled distinctly).
-    prepare_data_volume
-
     # Manager workspace mount (always a host directory, defaulting to ~/agentteams-manager)
     WORKSPACE_MOUNT_ARGS="-v ${AGENTTEAMS_WORKSPACE_DIR}:/root/manager-workspace"
 
@@ -4341,6 +4337,10 @@ EOF
     fi
     chmod 600 "${ENV_FILE}"
     log "$(msg install.config_saved "${ENV_FILE}")"
+
+    # Create the data volume (or host bind directory) if missing, and build
+    # the mount args (named volume vs bind path are handled distinctly).
+    prepare_data_volume
 
     # The controller pulls the selected Worker image when you create a Worker.
 

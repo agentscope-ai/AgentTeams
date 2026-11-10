@@ -11,16 +11,20 @@ class UpgradeInstallTest(unittest.TestCase):
     def test_image_failure_leaves_saved_configuration_untouched(self):
         self.image_phase(fail=True)
 
+    def test_fresh_image_failure_leaves_no_orphan_data_volume(self):
+        self.image_phase(fail=True, fresh=True)
+
     def test_success_backs_up_and_keeps_external_storage_and_extra_settings(self):
         self.image_phase(fail=False)
 
-    def image_phase(self, fail):
+    def image_phase(self, fail, fresh=False):
         start = SOURCE.index('    # Prepare service images before saving settings')
         end = SOURCE.index('    # --- Pre-upgrade: extract Matrix passwords', start)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'manager.env'
             original = 'AGENTTEAMS_ADMIN_PASSWORD=secret#with=equals\nAGENTTEAMS_FS_ENDPOINT=https://storage.example\nAGENTTEAMS_STORAGE_PROVIDER=s3\nAGENTTEAMS_CUSTOM_OPTION=with space#and=equals\n'
-            path.write_text(original)
+            if not fresh:
+                path.write_text(original)
             script = functions('load_upgrade_config') + '\nset -e\n'
             script += 'AGENTTEAMS_ENV_FILE=' + json.dumps(str(path)) + '\n'
             script += '''
@@ -37,7 +41,10 @@ die() { exit 7; }
 sleep() { :; }
 resolve_embedded_image() { AGENTTEAMS_USE_EMBEDDED=1; EMBEDDED_IMAGE=agentteams/embedded:test; }
 manager_image_for_runtime() { echo agentteams/manager:test; }
+prepare_data_volume() { touch "${AGENTTEAMS_ENV_FILE}.storage-prepared"; }
 '''
+            if fresh:
+                script += 'AGENTTEAMS_UPGRADE=0\n'
             script += 'docker() { return ' + ('1' if fail else '0') + '; }\n'
             # Execute the actual image preparation and configuration-writing phase.
             script += 'image_phase() {\n' + SOURCE[start:end] + '\n}\nimage_phase\n'
@@ -45,11 +52,16 @@ manager_image_for_runtime() { echo agentteams/manager:test; }
             backups = list(Path(directory).glob('manager.env.before-upgrade-*'))
             if fail:
                 self.assertEqual(result.returncode, 7, result.stderr)
-                self.assertEqual(path.read_text(), original)
+                if fresh:
+                    self.assertFalse(path.exists())
+                else:
+                    self.assertEqual(path.read_text(), original)
                 self.assertEqual(backups, [])
+                self.assertFalse(Path(str(path) + ".storage-prepared").exists())
             else:
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(len(backups), 1)
+                self.assertTrue(Path(str(path) + ".storage-prepared").exists())
                 self.assertEqual(backups[0].read_text(), original)
                 for line in original.splitlines():
                     self.assertIn(line, path.read_text().splitlines())

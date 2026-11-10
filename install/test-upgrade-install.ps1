@@ -20,6 +20,7 @@ function docker {
         'ps -a' { if (-not $script:orphan) { 'agentteams-controller'; 'agentteams-manager'; 'agentteams-worker-test' }; return }
         'ps --format' { 'agentteams-manager'; 'agentteams-worker-test'; return }
         'volume inspect' { return }
+        'volume ls' { if ($script:failImages) { throw 'Storage must not be created before image preparation' }; return 'original-data' }
         'inspect agentteams-controller' {
             switch ($args[3]) {
                 '{{json .Mounts}}' { return (@(@{Type='volume'; Name=$script:mountedData; Destination='/data'}, @{Type='bind'; Source='/original/work space'; Destination='/root/agentteams-fs/agents/manager'}) | ConvertTo-Json -Compress) }
@@ -101,6 +102,16 @@ try {
     $start = $text.IndexOf('    # Pull images (skip if already exists locally for local build tags).')
     $end = $text.IndexOf('    # --- Pre-upgrade: extract Matrix passwords', $start)
     $imagePhase = $text.Substring($start, $end - $start)
+    Reset-Fixture
+    Remove-Item -LiteralPath $script:AGENTTEAMS_ENV_FILE
+    $config = $script:config
+    $script:AGENTTEAMS_UPGRADE = $false
+    $script:AGENTTEAMS_USE_EMBEDDED = '0'
+    $managerImage = 'agentteams/manager:test'
+    $script:failImages = $true
+    $failed = $false
+    try { Invoke-Expression $imagePhase } catch { if ($_.Exception.Message -ne 'image-failed') { throw }; $failed = $true }
+    if (-not $failed -or (Test-Path $script:AGENTTEAMS_ENV_FILE)) { throw 'A failed first download must leave no new configuration or storage' }
     foreach ($fail in @($true, $false)) {
         Reset-Fixture
         Add-Content -LiteralPath $script:AGENTTEAMS_ENV_FILE -Value 'AGENTTEAMS_FS_ENDPOINT=https://storage.example'
@@ -132,7 +143,7 @@ try {
     $script:UPGRADE_EXISTING_WORKERS = @('agentteams-worker-test')
     # The engine mock rejects stop/rm: normal upgrades must never call them for Workers.
     Invoke-Expression $workerBlock.Extent.Text
-    Write-Host 'PowerShell upgrade tests passed (11 scenarios)'
+    Write-Host 'PowerShell upgrade tests passed (12 scenarios)'
 } finally {
     Remove-Item -LiteralPath $directory -Recurse -Force
 }

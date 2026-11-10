@@ -2956,12 +2956,6 @@ function Install-Manager {
         $dockerArgs += $managerImage
     }
 
-    # Check if the Docker volume exists; create if not (reuse on reinstall) — both modes.
-    $volumeExists = docker volume ls -q 2>$null | Select-String "^$($config.DATA_DIR)$"
-    if (-not $volumeExists) {
-        docker volume create $config.DATA_DIR | Out-Null
-    }
-
     # Pull images (skip if already exists locally for local build tags).
     $LocalImagePattern = "^agentteams/"
     function Test-LocalImage {
@@ -3045,6 +3039,12 @@ function Install-Manager {
             $value = [Environment]::GetEnvironmentVariable($key, 'Process')
             Add-Content -LiteralPath $script:AGENTTEAMS_ENV_FILE -Value "${key}=$value" -Encoding UTF8
         }
+    }
+
+    # Check if the Docker volume exists; create if not (reuse on reinstall) — both modes.
+    $volumeExists = docker volume ls -q 2>$null | Select-String "^$($config.DATA_DIR)$"
+    if (-not $volumeExists) {
+        docker volume create $config.DATA_DIR | Out-Null
     }
 
     # The controller pulls a Worker image when you create that Worker.

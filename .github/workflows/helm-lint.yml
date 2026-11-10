@@ -40,6 +40,7 @@ on:
       - 'tests/check-installer-embedded-latest-pull.sh'
       - 'tests/check-installer-auto-version-images.sh'
       - 'tests/check-harness-image-names.ps1'
+      - 'tests/check-manager-shared-images.sh'
       - 'tests/check-installer-codex-image.sh'
       - 'tests/check-installer-codex-image.ps1'
       - 'tests/check-teamharness-acceptance-observer.sh'
@@ -149,6 +150,9 @@ jobs:
 
       - name: Check automatic installer version and platform selection
         run: bash tests/check-installer-auto-version-images.sh
+
+      - name: Check shared Manager Harness images
+        run: bash tests/check-manager-shared-images.sh
 
       - name: Check TeamHarness acceptance observer
         run: bash tests/check-teamharness-acceptance-observer.sh

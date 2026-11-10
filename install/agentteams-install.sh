@@ -732,8 +732,8 @@ msg() {
         "manager_runtime.qwenpaw.en") text="QwenPaw (recommended)" ;;
         "manager_runtime.copaw.zh") text="CoPaw（旧版本，建议升级为 QwenPaw）" ;;
         "manager_runtime.copaw.en") text="CoPaw (legacy; upgrade to QwenPaw recommended)" ;;
-        "manager_runtime.choice.zh") text="请选择 [1-5]" ;;
-        "manager_runtime.choice.en") text="Enter choice [1-5]" ;;
+        "manager_runtime.choice.zh") text="请选择 [1-2]" ;;
+        "manager_runtime.choice.en") text="Enter choice [1-2]" ;;
         "manager_runtime.selected.zh") text="Manager 运行时: %s" ;;
         "manager_runtime.selected.en") text="Manager runtime: %s" ;;
         "manager_runtime.title_short.zh") text="Manager 运行时" ;;
@@ -1209,6 +1209,7 @@ DEEPSEEK_HARNESS_WORKER_IMAGE="${AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAG
 CONTROLLER_IMAGE="${AGENTTEAMS_INSTALL_CONTROLLER_IMAGE:-}"
 
 resolve_image_tags() {
+    local _shared_manager_images
     AGENTTEAMS_VERSION="$(_normalize_version "${AGENTTEAMS_VERSION}")"
     MANAGER_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-manager:${AGENTTEAMS_VERSION}}"
     MANAGER_QWENPAW_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-manager-qwenpaw:${AGENTTEAMS_VERSION}}"
@@ -1250,6 +1251,14 @@ resolve_image_tags() {
     fi
     if ! _supports_deepseek_harness "${AGENTTEAMS_VERSION}"; then
         DEEPSEEK_HARNESS_WORKER_IMAGE=""
+    fi
+    case "${AGENTTEAMS_VERSION}" in
+        latest|local-*|sha-*) _shared_manager_images=1 ;;
+        *) if _ver_lt "${AGENTTEAMS_VERSION}" v1.2.7; then _shared_manager_images=0; else _shared_manager_images=1; fi ;;
+    esac
+    if [ "${_shared_manager_images}" = 1 ]; then
+        MANAGER_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_IMAGE:-${WORKER_IMAGE}}"
+        MANAGER_QWENPAW_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE:-${QWENPAW_WORKER_IMAGE}}"
     fi
 }
 
@@ -3138,9 +3147,6 @@ step_manager_runtime() {
     echo ""
     echo "  1) $(msg manager_runtime.qwenpaw)"
     echo "  2) $(msg manager_runtime.openclaw)"
-    echo "  3) Hermes"
-    echo "  4) DeepSeek Harness"
-    echo "  5) OpenHuman"
     echo ""
     if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
         AGENTTEAMS_MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}"
@@ -3155,9 +3161,6 @@ step_manager_runtime() {
         if [ -n "${_runtime_choice}" ]; then
             case "${_runtime_choice}" in
                 2) AGENTTEAMS_MANAGER_RUNTIME="openclaw" ;;
-                3) AGENTTEAMS_MANAGER_RUNTIME="hermes" ;;
-                4) AGENTTEAMS_MANAGER_RUNTIME="deepseek-harness" ;;
-                5) AGENTTEAMS_MANAGER_RUNTIME="openhuman" ;;
                 *) AGENTTEAMS_MANAGER_RUNTIME="qwenpaw" ;;
             esac
         fi
@@ -3168,9 +3171,6 @@ step_manager_runtime() {
         _runtime_choice="${_runtime_choice:-1}"
         case "${_runtime_choice}" in
             2) AGENTTEAMS_MANAGER_RUNTIME="openclaw" ;;
-            3) AGENTTEAMS_MANAGER_RUNTIME="hermes" ;;
-            4) AGENTTEAMS_MANAGER_RUNTIME="deepseek-harness" ;;
-            5) AGENTTEAMS_MANAGER_RUNTIME="openhuman" ;;
             *) AGENTTEAMS_MANAGER_RUNTIME="qwenpaw" ;;
         esac
     fi

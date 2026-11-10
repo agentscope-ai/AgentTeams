@@ -55,7 +55,7 @@ jobs:
           # Keep this list aligned with the release targets in build.yml.
           images=(
             openclaw-base agentteams-controller agentteams-embedded
-            agentteams-manager agentteams-manager-qwenpaw agentteams-harness-openclaw
+            agentteams-harness-openclaw
             agentteams-harness-qwenpaw agentteams-harness-hermes agentteams-harness-openhuman
           )
           for image in "${images[@]}"; do
@@ -156,13 +156,10 @@ jobs:
           # Embedded all-in-one (infra + controller; pulled by the installer)
           docker pull ${REGISTRY}/${REPO}/agentteams-embedded:${VERSION}
 
-          # Manager (lightweight; spawned by the embedded controller)
-          docker pull ${REGISTRY}/${REPO}/agentteams-manager:${VERSION}
-
-          # Worker
+          # OpenClaw Harness (Manager, Leader and Worker)
           docker pull ${REGISTRY}/${REPO}/agentteams-harness-openclaw:${VERSION}
 
-          # QwenPaw Worker
+          # QwenPaw Harness (Manager, Leader and Worker)
           docker pull ${REGISTRY}/${REPO}/agentteams-harness-qwenpaw:${VERSION}
 
           # DeepSeek Harness Worker (experimental)

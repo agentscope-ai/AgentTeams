@@ -25,8 +25,8 @@ DEEPSEEK_HARNESS_WORKER_VERSION ?= v0.1.2
 REGISTRY       ?= higress-registry.cn-hangzhou.cr.aliyuncs.com
 REPO           ?= agentteams
 
-MANAGER_IMAGE        ?= $(REGISTRY)/$(REPO)/agentteams-manager
-MANAGER_QWENPAW_IMAGE  ?= $(REGISTRY)/$(REPO)/agentteams-manager-qwenpaw
+MANAGER_IMAGE        ?= $(WORKER_IMAGE)
+MANAGER_QWENPAW_IMAGE  ?= $(QWENPAW_WORKER_IMAGE)
 WORKER_IMAGE         ?= $(REGISTRY)/$(REPO)/agentteams-harness-openclaw
 HERMES_WORKER_IMAGE  ?= $(REGISTRY)/$(REPO)/agentteams-harness-hermes
 QWENPAW_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-harness-qwenpaw
@@ -126,7 +126,7 @@ all: build
 
 # ---------- Build ----------
 
-build: build-manager build-manager-qwenpaw build-worker build-hermes-worker build-openhuman-worker build-qwenpaw-worker build-agentteams-controller ## Build core images (experimental runtimes have explicit build targets)
+build: build-manager build-manager-qwenpaw build-worker build-hermes-worker build-openhuman-worker build-qwenpaw-worker build-agentteams-controller ## Build shared Harness images and local role aliases
 
 build-openclaw-base: ## Build OpenClaw base image
 	@echo "==> Building OpenClaw base image: $(LOCAL_OPENCLAW_BASE) (registry: $(HIGRESS_REGISTRY))"
@@ -257,7 +257,7 @@ else
 	fi
 endif
 
-push: push-manager push-manager-qwenpaw push-worker push-hermes-worker push-openhuman-worker push-qwenpaw-worker push-agentteams-controller push-embedded ## Build + push core multi-arch images; experimental runtimes publish independently
+push: push-worker push-hermes-worker push-openhuman-worker push-qwenpaw-worker push-agentteams-controller push-embedded ## Build + push shared Harness images; experimental runtimes publish independently
 
 push-openclaw-base: buildx-setup ## Build + push multi-arch OpenClaw base image
 	@echo "==> Building + pushing multi-arch OpenClaw base: $(OPENCLAW_BASE_TAG) [$(MULTIARCH_PLATFORMS)]"
@@ -350,31 +350,9 @@ else
 		-f agentteams-controller/Dockerfile.embedded .
 endif
 
-push-manager: push-worker ## Publish a compatibility tag for the shared OpenClaw Harness
-ifeq ($(IS_PODMAN),1)
-	-podman manifest rm $(MANAGER_TAG) 2>/dev/null
-	podman manifest create $(MANAGER_TAG) docker://$(WORKER_TAG)
-	podman manifest push --all $(MANAGER_TAG) docker://$(MANAGER_TAG)
-	$(if $(PUSH_LATEST), \
-		podman manifest push --all $(MANAGER_TAG) docker://$(MANAGER_IMAGE):latest && \
-		echo "  -> Also pushed :latest tag")
-else
-	docker buildx imagetools create -t $(MANAGER_TAG) \
-		$(if $(PUSH_LATEST),-t $(MANAGER_IMAGE):latest) $(WORKER_TAG)
-endif
+push-manager: push-worker ## Compatibility command: publish the shared OpenClaw Harness
 
-push-manager-qwenpaw: push-qwenpaw-worker ## Publish a compatibility tag for the shared QwenPaw Harness
-ifeq ($(IS_PODMAN),1)
-	-podman manifest rm $(MANAGER_QWENPAW_TAG) 2>/dev/null
-	podman manifest create $(MANAGER_QWENPAW_TAG) docker://$(QWENPAW_WORKER_TAG)
-	podman manifest push --all $(MANAGER_QWENPAW_TAG) docker://$(MANAGER_QWENPAW_TAG)
-	$(if $(PUSH_LATEST), \
-		podman manifest push --all $(MANAGER_QWENPAW_TAG) docker://$(MANAGER_QWENPAW_IMAGE):latest && \
-		echo "  -> Also pushed :latest tag")
-else
-	docker buildx imagetools create -t $(MANAGER_QWENPAW_TAG) \
-		$(if $(PUSH_LATEST),-t $(MANAGER_QWENPAW_IMAGE):latest) $(QWENPAW_WORKER_TAG)
-endif
+push-manager-qwenpaw: push-qwenpaw-worker ## Compatibility command: publish the shared QwenPaw Harness
 
 push-worker: push-agentteams-controller ## Build + push multi-arch OpenClaw Harness image
 	@echo "==> Building + pushing multi-arch Worker: $(WORKER_TAG) [$(MULTIARCH_PLATFORMS)]"

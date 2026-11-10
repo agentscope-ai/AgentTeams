@@ -107,10 +107,6 @@ jobs:
           if [[ "$TARGET" != agentteams-controller ]]; then
             args+=(-o push-agentteams-controller)
           fi
-          case "$TARGET" in
-            manager) args+=(-o push-worker) ;;
-            manager-qwenpaw) args+=(-o push-qwenpaw-worker) ;;
-          esac
           make "${args[@]}" "push-${TARGET}" \
             VERSION="$VERSION" \
             OPENCLAW_BASE_VERSION="$VERSION" \

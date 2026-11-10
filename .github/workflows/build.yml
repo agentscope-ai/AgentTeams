@@ -8,7 +8,7 @@ on:
         required: false
         type: string
       targets:
-        description: 'Space-separated list of push targets (default: all). Options: openclaw-base agentteams-controller embedded manager manager-qwenpaw worker hermes-worker qwenpaw-worker openhuman-worker'
+        description: 'Space-separated list of push targets (default: all). Options: openclaw-base agentteams-controller embedded worker hermes-worker qwenpaw-worker openhuman-worker'
         required: false
         type: string
         default: 'all'
@@ -42,8 +42,6 @@ jobs:
               'openclaw-base': [],
               'agentteams-controller': [],
               'embedded': ['agentteams-controller'],
-              'manager': ['openclaw-base', 'agentteams-controller', 'worker'],
-              'manager-qwenpaw': ['agentteams-controller', 'qwenpaw-worker'],
               'worker': ['openclaw-base', 'agentteams-controller'],
               'hermes-worker': ['agentteams-controller'],
               'qwenpaw-worker': ['agentteams-controller'],
@@ -90,24 +88,6 @@ jobs:
       version: ${{ needs.prepare.outputs.version }}
     secrets: inherit
 
-  manager:
-    needs: [prepare, openclaw-base, agentteams-controller, worker]
-    if: contains(fromJSON(needs.prepare.outputs.targets), 'manager')
-    uses: ./.github/workflows/build-image.yml
-    with:
-      target: manager
-      version: ${{ needs.prepare.outputs.version }}
-    secrets: inherit
-
-  manager-qwenpaw:
-    needs: [prepare, agentteams-controller, qwenpaw-worker]
-    if: contains(fromJSON(needs.prepare.outputs.targets), 'manager-qwenpaw')
-    uses: ./.github/workflows/build-image.yml
-    with:
-      target: manager-qwenpaw
-      version: ${{ needs.prepare.outputs.version }}
-    secrets: inherit
-
   worker:
     needs: [prepare, openclaw-base, agentteams-controller]
     if: contains(fromJSON(needs.prepare.outputs.targets), 'worker')
@@ -145,7 +125,7 @@ jobs:
     secrets: inherit
 
   release:
-    needs: [prepare, openclaw-base, agentteams-controller, embedded, manager, manager-qwenpaw, worker, hermes-worker, qwenpaw-worker, openhuman-worker]
+    needs: [prepare, openclaw-base, agentteams-controller, embedded, worker, hermes-worker, qwenpaw-worker, openhuman-worker]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write

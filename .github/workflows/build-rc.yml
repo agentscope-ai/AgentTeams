@@ -85,7 +85,7 @@ jobs:
 
       - name: Build and push multi-arch images
         run: |
-          make push-manager push-manager-qwenpaw push-worker push-hermes-worker push-qwenpaw-worker push-openhuman-worker push-agentteams-controller push-embedded \
+          make push-worker push-hermes-worker push-qwenpaw-worker push-openhuman-worker push-agentteams-controller push-embedded \
             VERSION=${{ inputs.version }} \
             OPENCLAW_BASE_VERSION=${{ inputs.version }} \
             REGISTRY=${{ env.REGISTRY }} \
@@ -96,8 +96,6 @@ jobs:
       - name: Summary
         env:
           BASE_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/openclaw-base
-          MANAGER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-manager
-          MANAGER_QWENPAW_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-manager-qwenpaw
           WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-harness-openclaw
           HERMES_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-harness-hermes
           QWENPAW_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-harness-qwenpaw
@@ -109,8 +107,6 @@ jobs:
           echo "### RC Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Images:**" >> $GITHUB_STEP_SUMMARY
-          echo "- Manager: \`${MANAGER_IMAGE}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Manager QwenPaw: \`${MANAGER_QWENPAW_IMAGE}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Worker: \`${WORKER_IMAGE}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Hermes Worker: \`${HERMES_WORKER_IMAGE}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- QwenPaw Worker: \`${QWENPAW_WORKER_IMAGE}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY

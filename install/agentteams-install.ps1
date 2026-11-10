@@ -2774,6 +2774,11 @@ function Install-Manager {
         "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-controller:$($script:AGENTTEAMS_VERSION)"
     }
 
+    if (-not $coreVersionMatch.Success -or [version]$coreVersionMatch.Groups[1].Value -ge [version]'1.2.7') {
+        if (-not $env:AGENTTEAMS_INSTALL_MANAGER_IMAGE) { $script:MANAGER_IMAGE = $script:WORKER_IMAGE }
+        if (-not $env:AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE) { $script:MANAGER_QWENPAW_IMAGE = $script:QWENPAW_WORKER_IMAGE }
+    }
+
     # Resolve embedded controller image (sets $script:EMBEDDED_IMAGE and
     # $script:AGENTTEAMS_USE_EMBEDDED). Errors out fast if no embedded image is available
     # for the requested version (mirrors the bash installer behavior).

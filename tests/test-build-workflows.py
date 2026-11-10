@@ -21,6 +21,22 @@ RELEASE = workflow('release.yml')
 
 
 class BuildWorkflowTests(unittest.TestCase):
+    def test_worker_consumers_checkout_submodules_and_track_gitlink(self):
+        for name, job_name in [('test-controller.yml', 'matrix-bundle-core'),
+                               ('test-manager.yml', 'manager-tools')]:
+            with self.subTest(workflow=name, job=job_name):
+                self.assertIn('.github/workflows/' + name,
+                              workflow('helm-lint.yml')[True]['pull_request']['paths'])
+                config = workflow(name)
+                checkout = next(step for step in config['jobs'][job_name]['steps']
+                                if step.get('uses', '').startswith('actions/checkout@'))
+                self.assertEqual(checkout.get('with', {}).get('submodules'), 'recursive')
+                for event in ('pull_request', 'push'):
+                    paths = config[True][event]['paths']
+                    self.assertIn('worker', paths)
+                    self.assertIn('.gitmodules', paths)
+                    self.assertIn('.github/workflows/' + name, paths)
+
     def resolve(self, targets='all', tag=False, version='v1.2.3'):
         script = BUILD['jobs']['prepare']['steps'][0]['run']
         with tempfile.TemporaryDirectory() as directory:

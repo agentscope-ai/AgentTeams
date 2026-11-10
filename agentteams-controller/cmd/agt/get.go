@@ -637,8 +637,8 @@ type humanListResp struct {
 }
 
 type managerResp struct {
-	Name         string `json:"name"`
 	Ready        bool   `json:"ready"`
+	Name         string `json:"name"`
 	Phase        string `json:"phase"`
 	Model        string `json:"model,omitempty"`
 	Runtime      string `json:"runtime,omitempty"`

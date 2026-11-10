@@ -24,6 +24,7 @@ type workerGatewayProbe struct {
 	client                client.Client
 	namespace, gatewayURL string
 	key                   func(context.Context, string) (string, error)
+	manager               bool
 }
 
 func (h *workerGatewayProbe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -40,11 +41,30 @@ func (h *workerGatewayProbe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var worker v1beta1.Worker
-	if err := h.client.Get(r.Context(), client.ObjectKey{Name: r.PathValue("name"), Namespace: h.namespace}, &worker); err != nil {
-		writeK8sError(w, "get worker", err)
-		return
+	name := r.PathValue("name")
+	model, provider, consumer := "", "", ""
+	var servers []v1beta1.MCPServer
+	if h.manager {
+		if input.Kind != "model" {
+			httputil.WriteError(w, 400, "manager probes support model only")
+			return
+		}
+		var manager v1beta1.Manager
+		if err := h.client.Get(r.Context(), client.ObjectKey{Name: name, Namespace: h.namespace}, &manager); err != nil {
+			writeK8sError(w, "get manager", err)
+			return
+		}
+		model, provider, consumer = manager.Spec.Model, manager.Spec.ModelProvider, "manager"
+	} else {
+		if err := h.client.Get(r.Context(), client.ObjectKey{Name: name, Namespace: h.namespace}, &worker); err != nil {
+			writeK8sError(w, "get worker", err)
+			return
+		}
+		model, provider = worker.Spec.Model, worker.Spec.ModelProvider
+		consumer = "worker-" + worker.Spec.EffectiveWorkerName(worker.Name)
+		servers = worker.Spec.McpServers
 	}
-	if worker.Spec.ModelProvider != "" {
+	if provider != "" {
 		httputil.WriteError(w, 501, "provider-specific gateway probing is not available; verify using the provider console")
 		return
 	}
@@ -54,13 +74,13 @@ func (h *workerGatewayProbe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	endpoint := strings.TrimRight(h.gatewayURL, "/") + "/v1/chat/completions"
-	if input.Kind == "model" && worker.Spec.Model == "" {
-		httputil.WriteError(w, 409, "save an explicit worker model before probing")
+	if input.Kind == "model" && model == "" {
+		httputil.WriteError(w, 409, "save an explicit model before probing")
 		return
 	}
 	if input.Kind == "mcp" {
 		endpoint = ""
-		for _, srv := range worker.Spec.McpServers {
+		for _, srv := range servers {
 			if srv.Name == input.Server {
 				endpoint = srv.URL
 				break
@@ -73,12 +93,12 @@ func (h *workerGatewayProbe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if h.key == nil {
-		httputil.WriteError(w, 503, "worker credentials unavailable")
+		httputil.WriteError(w, 503, "agent credentials unavailable")
 		return
 	}
-	key, err := h.key(r.Context(), worker.Name)
+	key, err := h.key(r.Context(), name)
 	if err != nil {
-		httputil.WriteError(w, 409, "worker credentials unavailable")
+		httputil.WriteError(w, 409, "agent credentials unavailable")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
@@ -140,7 +160,7 @@ func (h *workerGatewayProbe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var probeErr error
 	if input.Kind == "model" {
 		var raw json.RawMessage
-		raw, probeErr = call(map[string]any{"model": worker.Spec.Model, "messages": []map[string]string{{"role": "user", "content": "Reply OK."}}, "max_tokens": 8, "stream": false})
+		raw, probeErr = call(map[string]any{"model": model, "messages": []map[string]string{{"role": "user", "content": "Reply OK."}}, "max_tokens": 8, "stream": false})
 		if probeErr == nil {
 			var response struct {
 				Choices []json.RawMessage `json:"choices"`
@@ -197,9 +217,9 @@ func (h *workerGatewayProbe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	message := "Worker identity verified through gateway"
+	message := "Agent identity verified through gateway"
 	if probeErr != nil {
 		message = probeErr.Error()
 	}
-	httputil.WriteJSON(w, 200, map[string]any{"success": probeErr == nil, "message": message, "latencyMs": time.Since(started).Milliseconds(), "consumer": "worker-" + worker.Spec.EffectiveWorkerName(worker.Name), "kind": input.Kind})
+	httputil.WriteJSON(w, 200, map[string]any{"success": probeErr == nil, "message": message, "latencyMs": time.Since(started).Milliseconds(), "consumer": consumer, "kind": input.Kind})
 }

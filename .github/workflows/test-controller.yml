@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'agentteams-controller/**'
+      - 'qwenpaw'
       - 'qwenpaw/**'
       - 'manager/src/**'
       - 'plugins/teamharness/**'
@@ -20,6 +21,7 @@ on:
     branches: [main]
     paths:
       - 'agentteams-controller/**'
+      - 'qwenpaw'
       - 'qwenpaw/**'
       - 'manager/src/**'
       - 'plugins/teamharness/**'
@@ -59,6 +61,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - uses: actions/setup-python@v5
         with:
@@ -123,6 +127,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - uses: actions/setup-python@v5
         with:
@@ -157,6 +163,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - uses: actions/setup-python@v5
         with:

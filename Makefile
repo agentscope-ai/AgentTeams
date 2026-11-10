@@ -197,11 +197,10 @@ build-qwenpaw-worker: build-agentteams-controller ## Build the shared QwenPaw Ha
 	@echo "==> Building QwenPaw Worker image: $(LOCAL_QWENPAW_WORKER) (registry: $(HIGRESS_REGISTRY))"
 	OUT_DIR=dist/adapters/qwenpaw ruby plugins/teamharness/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/teamharness/plugin.yaml >/dev/null
 	OUT_DIR=dist/adapters/qwenpaw ruby plugins/workerflow/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/workerflow/plugin.yaml >/dev/null
-	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context agentteams=. $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
-		-f qwenpaw/Dockerfile \
 		-t $(LOCAL_QWENPAW_WORKER) \
-		.
+		./qwenpaw/
 
 build-deepseek-harness-worker: build-agentteams-controller ## Build DeepSeek Harness image
 	@echo "==> Building DeepSeek Harness Worker image: $(LOCAL_DEEPSEEK_HARNESS_WORKER) (registry: $(HIGRESS_REGISTRY))"
@@ -436,10 +435,10 @@ ifeq ($(IS_PODMAN),1)
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
 		echo "  -> Building QwenPaw Worker for $(plat)..." && \
 		podman build --platform $(plat) \
-			$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+			$(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context agentteams=. $(DOCKER_BUILD_ARGS) \
 			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 			--manifest $(QWENPAW_WORKER_TAG) \
-			-f qwenpaw/Dockerfile . && ) true
+			./qwenpaw/ && ) true
 	podman manifest push --all $(QWENPAW_WORKER_TAG) docker://$(QWENPAW_WORKER_TAG)
 	$(if $(PUSH_LATEST), \
 		podman manifest push --all $(QWENPAW_WORKER_TAG) docker://$(QWENPAW_WORKER_IMAGE):latest && \
@@ -448,12 +447,12 @@ else
 	docker buildx build \
 		--builder $(BUILDX_BUILDER) \
 		--platform $(MULTIARCH_PLATFORMS) \
-		$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+		$(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context agentteams=. $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 		-t $(QWENPAW_WORKER_TAG) \
 		$(if $(PUSH_LATEST),-t $(QWENPAW_WORKER_IMAGE):latest) \
 		--push \
-		-f qwenpaw/Dockerfile .
+		./qwenpaw/
 endif
 
 push-deepseek-harness-worker: push-agentteams-controller ## Build + push multi-arch DeepSeek Harness image

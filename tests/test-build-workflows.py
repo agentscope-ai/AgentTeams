@@ -25,6 +25,8 @@ class BuildWorkflowTests(unittest.TestCase):
         for name, job_name in [('test-controller.yml', 'matrix-bundle-core'),
                                ('test-manager.yml', 'manager-tools')]:
             with self.subTest(workflow=name, job=job_name):
+                self.assertIn('.github/workflows/' + name,
+                              workflow('helm-lint.yml')[True]['pull_request']['paths'])
                 config = workflow(name)
                 checkout = next(step for step in config['jobs'][job_name]['steps']
                                 if step.get('uses', '').startswith('actions/checkout@'))

@@ -13,6 +13,8 @@ on:
       - '.github/workflows/build-openclaw-base.yml'
       - '.github/workflows/helm-lint.yml'
       - 'tests/test-build-workflows.py'
+      - '.github/workflows/test-controller.yml'
+      - '.github/workflows/test-manager.yml'
       - '.github/workflows/build-rc.yml'
       - '.github/workflows/build-deepseek-harness.yml'
       - '.github/workflows/release.yml'

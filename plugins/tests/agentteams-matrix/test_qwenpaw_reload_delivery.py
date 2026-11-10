@@ -1,6 +1,7 @@
 """Deliver Matrix follow-ups across overlapping SDK workspace generations."""
 
 import asyncio
+import importlib.util
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,12 +9,21 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-pytest.importorskip("qwenpaw")
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "agentteams-matrix-channel"))
-from agentteams_matrix.channel import AgentTeamsMatrixChannel, BaseChannel
+@pytest.fixture
+def matrix_channel(monkeypatch):
+    pytest.importorskip("qwenpaw.app.channels.base")
+    path = Path(__file__).resolve().parents[2] / "agentteams-matrix-channel/agentteams_matrix/channel.py"
+    # The bundle parity tests also import an older adapter with this package
+    # name. Load the actual image-owned plugin independently of that cache.
+    spec = importlib.util.spec_from_file_location("_reload_delivery_channel", path)
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
+    return module.AgentTeamsMatrixChannel, module.BaseChannel
 
 
-def test_reload_waits_for_old_run_and_dispatches_followup_once(monkeypatch):
+def test_reload_waits_for_old_run_and_dispatches_followup_once(monkeypatch, matrix_channel):
+    AgentTeamsMatrixChannel, BaseChannel = matrix_channel
     async def scenario():
         release = asyncio.Future()
         calls = []
@@ -49,7 +59,8 @@ def test_reload_waits_for_old_run_and_dispatches_followup_once(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_unrelated_rooms_remain_parallel(monkeypatch):
+def test_unrelated_rooms_remain_parallel(monkeypatch, matrix_channel):
+    AgentTeamsMatrixChannel, BaseChannel = matrix_channel
     async def scenario():
         release = asyncio.Event()
         entered = {room: asyncio.Event() for room in ("a", "b")}
@@ -77,7 +88,8 @@ def test_unrelated_rooms_remain_parallel(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_old_queue_cancellation_does_not_drop_accepted_followup(monkeypatch):
+def test_old_queue_cancellation_does_not_drop_accepted_followup(monkeypatch, matrix_channel):
+    AgentTeamsMatrixChannel, BaseChannel = matrix_channel
     async def scenario():
         release = asyncio.Future()
         delivered = asyncio.Event()

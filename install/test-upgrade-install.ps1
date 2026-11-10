@@ -137,13 +137,34 @@ try {
             }
         }
     }
+    Reset-Fixture
+    Load-UpgradeConfig
+    $config = $script:config
+    $original = Get-Content -LiteralPath $script:AGENTTEAMS_ENV_FILE -Raw
+    $script:AGENTTEAMS_UPGRADE = $true
+    $script:failImages = $false
+    function Copy-Item {
+        [CmdletBinding()]
+        param($LiteralPath, $Destination)
+        Microsoft.PowerShell.Utility\Write-Error 'synthetic backup failure'
+    }
+    $failed = $false
+    try {
+        $ErrorActionPreference = 'Continue'
+        try { Invoke-Expression $imagePhase } catch { $failed = $true }
+    } finally {
+        $ErrorActionPreference = 'Stop'
+        Remove-Item Function:Copy-Item
+    }
+    if (-not $failed -or (Get-Content -LiteralPath $script:AGENTTEAMS_ENV_FILE -Raw) -cne $original) { throw 'A failed backup must stop before replacing configuration' }
+
     $workerBlock = $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.IfStatementAst] -and $node.Clauses[0].Item1.Extent.Text -eq '$isOldArch -and $script:UPGRADE_EXISTING_WORKERS' }, $true) | Select-Object -First 1
     if (-not $workerBlock) { throw 'Worker migration block missing' }
     $isOldArch = $false
     $script:UPGRADE_EXISTING_WORKERS = @('agentteams-worker-test')
     # The engine mock rejects stop/rm: normal upgrades must never call them for Workers.
     Invoke-Expression $workerBlock.Extent.Text
-    Write-Host 'PowerShell upgrade tests passed (12 scenarios)'
+    Write-Host 'PowerShell upgrade tests passed (13 scenarios)'
 } finally {
     Remove-Item -LiteralPath $directory -Recurse -Force
 }

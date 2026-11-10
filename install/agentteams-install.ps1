@@ -1175,7 +1175,7 @@ AGENTTEAMS_DASHBOARD_IMAGE=$($Config.DASHBOARD_IMAGE)
 AGENTTEAMS_PORT_DASHBOARD=$($Config.PORT_DASHBOARD)
 "@
 
-    Set-Content -Path $Path -Value $content -Encoding UTF8
+    Set-Content -Path $Path -Value $content -Encoding UTF8 -ErrorAction Stop
     Write-Log (Get-Msg "install.config_saved" -f $Path)
 }
 
@@ -3020,9 +3020,10 @@ function Install-Manager {
     }
 
     # Preserve the original configuration before writing upgrade settings.
+    $backup = $null
     if ($script:AGENTTEAMS_UPGRADE -and (Test-Path $script:AGENTTEAMS_ENV_FILE)) {
         $backup = "$($script:AGENTTEAMS_ENV_FILE).before-upgrade-$(Get-Date -Format yyyyMMddHHmmss)"
-        Copy-Item -LiteralPath $script:AGENTTEAMS_ENV_FILE -Destination $backup
+        Copy-Item -LiteralPath $script:AGENTTEAMS_ENV_FILE -Destination $backup -ErrorAction Stop
         Write-Log "Config backup: $backup"
     }
     # Write env file
@@ -3037,7 +3038,7 @@ function Install-Manager {
             if ($key -notlike 'AGENTTEAMS_*' -and $key -notin @('JVM_ARGS', 'DASHBOARD_SESSION_SECRET')) { continue }
             if ($generated -match "^${key}=") { continue }
             $value = [Environment]::GetEnvironmentVariable($key, 'Process')
-            Add-Content -LiteralPath $script:AGENTTEAMS_ENV_FILE -Value "${key}=$value" -Encoding UTF8
+            Add-Content -LiteralPath $script:AGENTTEAMS_ENV_FILE -Value "${key}=$value" -Encoding UTF8 -ErrorAction Stop
         }
     }
 

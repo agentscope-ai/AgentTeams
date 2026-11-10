@@ -197,10 +197,10 @@ assert_not_empty "${PROJECT_ROOM}" "Project room created by Manager"
 log_info "Project room: ${PROJECT_ROOM}"
 
 case "${TEST_WORKER_RUNTIME}" in
-    openclaw) EXPECTED_WORKER_IMAGE="agentteams/worker-agent:" ;;
+    openclaw) EXPECTED_WORKER_IMAGE="agentteams/agentteams-harness-openclaw:" ;;
     copaw) EXPECTED_WORKER_IMAGE="agentteams/copaw-worker:" ;;
-    hermes) EXPECTED_WORKER_IMAGE="agentteams/hermes-worker:" ;;
-    qwenpaw) EXPECTED_WORKER_IMAGE="agentteams/qwenpaw-worker:" ;;
+    hermes) EXPECTED_WORKER_IMAGE="agentteams/agentteams-harness-hermes:" ;;
+    qwenpaw) EXPECTED_WORKER_IMAGE="agentteams/agentteams-harness-qwenpaw:" ;;
     *) EXPECTED_WORKER_IMAGE="" ;;
 esac
 

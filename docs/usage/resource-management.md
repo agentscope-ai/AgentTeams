@@ -724,7 +724,7 @@ Regardless of URI format, the extracted package follows a unified structure:
     "suggested_name": "my-worker",
     "model": "qwen3.5-plus",
     "runtime": "openclaw",
-    "base_image": "agentteams/worker-agent:latest",
+    "base_image": "agentteams/agentteams-harness-openclaw:latest",
     "apt_packages": ["ffmpeg"],
     "pip_packages": [],
     "npm_packages": []

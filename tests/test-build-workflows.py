@@ -88,10 +88,12 @@ class BuildWorkflowTests(unittest.TestCase):
                                      'VERSION=v1.2.7'], cwd=ROOT, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('openhuman/Dockerfile', result.stdout)
-            self.assertIn('agentteams/agentteams-openhuman-worker:v1.2.7', result.stdout)
-        self.assertIn('agentteams-openhuman-worker',
+            self.assertIn('agentteams/agentteams-harness-openhuman:v1.2.7', result.stdout)
+        self.assertIn('agentteams-harness-openhuman',
                       next(s['run'] for s in RELEASE['jobs']['release']['steps']
                            if s.get('name') == 'Verify versioned multi-architecture images'))
+        rc = workflow('build-rc.yml')['jobs']['build-rc']['steps']
+        self.assertIn('push-openhuman-worker', next(s['run'] for s in rc if s.get('name') == 'Build and push multi-arch images'))
 
     def test_manual_default_version(self):
         result, values = self.resolve(version='')
@@ -229,7 +231,7 @@ class BuildWorkflowTests(unittest.TestCase):
         single = json.dumps({'manifests': [{'platform': {'os': 'linux', 'architecture': 'amd64'}}]})
         with tempfile.TemporaryDirectory() as directory:
             stub = Path(directory) / 'docker'
-            stub.write_text('#!/bin/bash\nprintf "%s\\n" "$4" >> "$IMAGE_LOG"\nif [[ "$4" == *agentteams-openhuman-worker:* ]]; then\n  printf "%s" "$LAST_MANIFEST"\n  exit "$LAST_STATUS"\nfi\nprintf "%s" "$MANIFEST"\n')
+            stub.write_text('#!/bin/bash\nprintf "%s\\n" "$4" >> "$IMAGE_LOG"\nif [[ "$4" == *agentteams-harness-openhuman:* ]]; then\n  printf "%s" "$LAST_MANIFEST"\n  exit "$LAST_STATUS"\nfi\nprintf "%s" "$MANIFEST"\n')
             stub.chmod(0o755)
             for manifest, status, success in [(both, '0', True), (single, '0', False), ('', '1', False), ('not-json', '0', False), ('', '0', False)]:
                 with self.subTest(manifest=manifest, status=status):

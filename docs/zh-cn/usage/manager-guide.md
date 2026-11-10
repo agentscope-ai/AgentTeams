@@ -31,7 +31,7 @@ Manager 通过安装时设置的环境变量进行配置。安装脚本会生成
 | `AGENTTEAMS_PORT_CONSOLE` | 否 | `18001` | Higress 控制台的宿主机端口 |
 | `AGENTTEAMS_PORT_ELEMENT_WEB` | 否 | `18088` | Element Web 直接访问的宿主机端口 |
 | `AGENTTEAMS_GITHUB_TOKEN` | 否 | - | GitHub PAT，用于 MCP Server |
-| `AGENTTEAMS_WORKER_IMAGE` | 否 | `agentteams/worker-agent:latest` | 直接创建 Worker 时使用的 Docker 镜像 |
+| `AGENTTEAMS_WORKER_IMAGE` | 否 | `agentteams/agentteams-harness-openclaw:latest` | 直接创建 Worker 时使用的 Docker 镜像 |
 | `AGENTTEAMS_WORKSPACE_DIR` | 否 | `~/agentteams-manager` | Manager 工作空间的宿主机目录（bind mount 到 `/root/manager-workspace`） |
 | `AGENTTEAMS_DATA_DIR` | 否 | `agentteams-data` | 持久化数据的 Docker 卷名称 |
 | `AGENTTEAMS_MOUNT_SOCKET` | 否 | `1` | 挂载容器运行时 socket 以支持直接创建 Worker |

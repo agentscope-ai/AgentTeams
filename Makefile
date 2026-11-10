@@ -21,17 +21,17 @@
 # ---------- Configuration ----------
 
 VERSION        ?= latest
-DEEPSEEK_HARNESS_WORKER_VERSION ?= v0.1.1
+DEEPSEEK_HARNESS_WORKER_VERSION ?= v0.1.2
 REGISTRY       ?= higress-registry.cn-hangzhou.cr.aliyuncs.com
 REPO           ?= agentteams
 
 MANAGER_IMAGE        ?= $(REGISTRY)/$(REPO)/agentteams-manager
 MANAGER_QWENPAW_IMAGE  ?= $(REGISTRY)/$(REPO)/agentteams-manager-qwenpaw
-WORKER_IMAGE         ?= $(REGISTRY)/$(REPO)/agentteams-worker
-HERMES_WORKER_IMAGE  ?= $(REGISTRY)/$(REPO)/agentteams-hermes-worker
-QWENPAW_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-qwenpaw-worker
-OPENHUMAN_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-openhuman-worker
-DEEPSEEK_HARNESS_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-deepseek-harness-worker
+WORKER_IMAGE         ?= $(REGISTRY)/$(REPO)/agentteams-harness-openclaw
+HERMES_WORKER_IMAGE  ?= $(REGISTRY)/$(REPO)/agentteams-harness-hermes
+QWENPAW_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-harness-qwenpaw
+OPENHUMAN_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-harness-openhuman
+DEEPSEEK_HARNESS_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-harness-deepseek
 OPENCLAW_BASE_IMAGE  ?= $(REGISTRY)/$(REPO)/openclaw-base
 CONTROLLER_IMAGE     ?= $(REGISTRY)/$(REPO)/agentteams-controller
 EMBEDDED_IMAGE       ?= $(REGISTRY)/$(REPO)/agentteams-embedded
@@ -50,11 +50,11 @@ EMBEDDED_TAG       ?= $(EMBEDDED_IMAGE):$(VERSION)
 # Local image names (no registry prefix, used by tests and install script)
 LOCAL_MANAGER        = agentteams/manager:$(VERSION)
 LOCAL_MANAGER_QWENPAW  = agentteams/manager-qwenpaw:$(VERSION)
-LOCAL_WORKER         = agentteams/worker-agent:$(VERSION)
-LOCAL_HERMES_WORKER  = agentteams/hermes-worker:$(VERSION)
-LOCAL_QWENPAW_WORKER = agentteams/qwenpaw-worker:$(VERSION)
-LOCAL_OPENHUMAN_WORKER = agentteams/openhuman-worker:$(VERSION)
-LOCAL_DEEPSEEK_HARNESS_WORKER = agentteams/deepseek-harness-worker:$(VERSION)
+LOCAL_WORKER         = agentteams/agentteams-harness-openclaw:$(VERSION)
+LOCAL_HERMES_WORKER  = agentteams/agentteams-harness-hermes:$(VERSION)
+LOCAL_QWENPAW_WORKER = agentteams/agentteams-harness-qwenpaw:$(VERSION)
+LOCAL_OPENHUMAN_WORKER = agentteams/agentteams-harness-openhuman:$(VERSION)
+LOCAL_DEEPSEEK_HARNESS_WORKER = agentteams/agentteams-harness-deepseek:$(VERSION)
 LOCAL_OPENCLAW_BASE  = agentteams/openclaw-base:$(VERSION)
 LOCAL_CONTROLLER     = agentteams/agentteams-controller:$(VERSION)
 LOCAL_CONTROLLER_BUILD_IMAGE ?= $(LOCAL_CONTROLLER)

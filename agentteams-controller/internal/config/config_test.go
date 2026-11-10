@@ -154,7 +154,7 @@ func TestLoadConfigUsesManagerEnvFallback(t *testing.T) {
 }
 
 func TestBackendConfigsIncludeQwenPawWorkerImage(t *testing.T) {
-	t.Setenv("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/qwenpaw-worker:test")
+	t.Setenv("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-harness-qwenpaw:test")
 
 	cfg := LoadConfig()
 
@@ -163,7 +163,7 @@ func TestBackendConfigsIncludeQwenPawWorkerImage(t *testing.T) {
 		"k8s":     cfg.K8sConfig().QwenPawWorkerImage,
 		"sandbox": cfg.SandboxConfig().QwenPawWorkerImage,
 	} {
-		if want := "agentteams/qwenpaw-worker:test"; got != want {
+		if want := "agentteams/agentteams-harness-qwenpaw:test"; got != want {
 			t.Fatalf("%s QwenPawWorkerImage = %q, want %q", name, got, want)
 		}
 	}
@@ -192,7 +192,7 @@ func TestBackendConfigsResolveCodexWorkerImage(t *testing.T) {
 }
 
 func TestBackendConfigsIncludeDeepSeekHarnessWorkerImage(t *testing.T) {
-	t.Setenv("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/deepseek-harness-worker:test")
+	t.Setenv("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/agentteams-harness-deepseek:test")
 
 	cfg := LoadConfig()
 
@@ -201,7 +201,7 @@ func TestBackendConfigsIncludeDeepSeekHarnessWorkerImage(t *testing.T) {
 		"k8s":     cfg.K8sConfig().DeepSeekHarnessWorkerImage,
 		"sandbox": cfg.SandboxConfig().DeepSeekHarnessWorkerImage,
 	} {
-		if want := "agentteams/deepseek-harness-worker:test"; got != want {
+		if want := "agentteams/agentteams-harness-deepseek:test"; got != want {
 			t.Fatalf("%s DeepSeekHarnessWorkerImage = %q, want %q", name, got, want)
 		}
 	}
@@ -217,7 +217,7 @@ func TestBackendConfigsDefaultToIndependentDeepSeekHarnessVersion(t *testing.T) 
 		"k8s":     cfg.K8sConfig().DeepSeekHarnessWorkerImage,
 		"sandbox": cfg.SandboxConfig().DeepSeekHarnessWorkerImage,
 	} {
-		if want := "agentteams/agentteams-deepseek-harness-worker:v0.1.1"; got != want {
+		if want := "agentteams/agentteams-harness-deepseek:v0.1.2"; got != want {
 			t.Fatalf("%s DeepSeekHarnessWorkerImage = %q, want %q", name, got, want)
 		}
 	}

@@ -33,7 +33,7 @@
 #   AGENTTEAMS_DATA_DIR           Docker volume name for persistent data (default: agentteams-data)
 #   AGENTTEAMS_WORKSPACE_DIR      Host directory for manager workspace (default: ~/agentteams-manager)
 #   AGENTTEAMS_VERSION            Image tag            (default: latest)
-#   AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION DeepSeek Harness runtime image tag (default: v0.1.1; independent of AGENTTEAMS_VERSION)
+#   AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION DeepSeek Harness runtime image tag (default: v0.1.2; independent of AGENTTEAMS_VERSION)
 #   AGENTTEAMS_CODEX_WORKER_VERSION Codex runtime image tag (default: v0.1.0; independent of AGENTTEAMS_VERSION)
 #   AGENTTEAMS_REGISTRY           Image registry       (default: auto-detected by timezone)
 #   AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY
@@ -85,7 +85,7 @@ AGENTTEAMS_KNOWN_STABLE_VERSION="v1.2.6"   # fallback if GitHub API is unreachab
 AGENTTEAMS_FALLBACK_VERSION="${AGENTTEAMS_KNOWN_STABLE_VERSION}"
 AGENTTEAMS_AUTO_VERSION=0
 AGENTTEAMS_DEEPSEEK_HARNESS_MIN_VERSION="v1.2.4"
-AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION="${AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION:-v0.1.1}"
+AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION="${AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION:-v0.1.2}"
 AGENTTEAMS_CODEX_WORKER_VERSION="${AGENTTEAMS_CODEX_WORKER_VERSION:-v0.1.0}"
 
 _normalize_version() {
@@ -1214,13 +1214,32 @@ resolve_image_tags() {
     MANAGER_QWENPAW_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-manager-qwenpaw:${AGENTTEAMS_VERSION}}"
     # CoPaw images are no longer built; only an explicit legacy override is honored.
     MANAGER_COPAW_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE:-}"
-    WORKER_IMAGE="${AGENTTEAMS_INSTALL_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-worker:${AGENTTEAMS_VERSION}}"
+    WORKER_IMAGE="${AGENTTEAMS_INSTALL_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-harness-openclaw:${AGENTTEAMS_VERSION}}"
     COPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-}"
-    QWENPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-qwenpaw-worker:${AGENTTEAMS_VERSION}}"
-    HERMES_WORKER_IMAGE="${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-hermes-worker:${AGENTTEAMS_VERSION}}"
-    OPENHUMAN_WORKER_IMAGE="${AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-openhuman-worker:${AGENTTEAMS_VERSION}}"
-    DEEPSEEK_HARNESS_WORKER_IMAGE="${AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-deepseek-harness-worker:${AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION}}"
+    QWENPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-harness-qwenpaw:${AGENTTEAMS_VERSION}}"
+    HERMES_WORKER_IMAGE="${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-harness-hermes:${AGENTTEAMS_VERSION}}"
+    OPENHUMAN_WORKER_IMAGE="${AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-harness-openhuman:${AGENTTEAMS_VERSION}}"
+    DEEPSEEK_HARNESS_WORKER_IMAGE="${AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-harness-deepseek:${AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION}}"
     CODEX_WORKER_IMAGE="${AGENTTEAMS_INSTALL_CODEX_WORKER_IMAGE:-${AGENTTEAMS_CODEX_WORKER_IMAGE:-ghcr.io/agentteams-group/agentteams-harness-codex:${AGENTTEAMS_CODEX_WORKER_VERSION}}}"
+    # Historical releases keep their original repositories; explicit images stay pinned.
+    case "${AGENTTEAMS_VERSION}" in
+        latest|local-*|sha-*) ;;
+        *) if _ver_lt "${AGENTTEAMS_VERSION}" v1.2.7; then
+            [ -n "${AGENTTEAMS_INSTALL_WORKER_IMAGE:-}" ] || WORKER_IMAGE="${WORKER_IMAGE/agentteams-harness-openclaw/agentteams-worker}"
+            [ -n "${AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE:-}" ] || QWENPAW_WORKER_IMAGE="${QWENPAW_WORKER_IMAGE/agentteams-harness-qwenpaw/agentteams-qwenpaw-worker}"
+            [ -n "${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-}" ] || HERMES_WORKER_IMAGE="${HERMES_WORKER_IMAGE/agentteams-harness-hermes/agentteams-hermes-worker}"
+            [ -n "${AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE:-}" ] || OPENHUMAN_WORKER_IMAGE="${OPENHUMAN_WORKER_IMAGE/agentteams-harness-openhuman/agentteams-openhuman-worker}"
+            if [ -z "${AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE:-}" ] && [ "${AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION}" = v0.1.2 ]; then
+                case "${_INSTALL_ENV_KEYS:- }" in
+                    *' AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION '*) ;;
+                    *) DEEPSEEK_HARNESS_WORKER_IMAGE="${AGENTTEAMS_REGISTRY}/agentteams/agentteams-deepseek-harness-worker:v0.1.1" ;;
+                esac
+            fi
+        fi ;;
+    esac
+    if [ -z "${AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE:-}" ] && _ver_lt "${AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION}" v0.1.2; then
+        DEEPSEEK_HARNESS_WORKER_IMAGE="${DEEPSEEK_HARNESS_WORKER_IMAGE/agentteams-harness-deepseek/agentteams-deepseek-harness-worker}"
+    fi
     EMBEDDED_IMAGE="${AGENTTEAMS_INSTALL_EMBEDDED_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-embedded:${AGENTTEAMS_VERSION}}"
     # CoPaw Worker introduced in v1.0.4; Hermes Worker introduced in v1.1.0
     if [ -z "${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-}" ] && _ver_lt "${AGENTTEAMS_VERSION}" "v1.0.4"; then

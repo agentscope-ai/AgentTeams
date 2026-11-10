@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Independent DeepSeek Harness runtime version (e.g. v0.1.1)'
+        description: 'Independent DeepSeek Harness runtime version (e.g. v0.1.2)'
         required: true
         type: string
-        default: 'v0.1.1'
+        default: 'v0.1.2'
   push:
     branches:
       - main
@@ -103,7 +103,7 @@ jobs:
         env:
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          IMAGE="${REGISTRY}/${REPO}/agentteams-deepseek-harness-worker:${VERSION}"
+          IMAGE="${REGISTRY}/${REPO}/agentteams-harness-deepseek:${VERSION}"
           docker buildx imagetools inspect "${IMAGE}"
           MANIFEST="$(docker buildx imagetools inspect --raw "${IMAGE}")"
           # jq -e alone accepts empty stdin, so reject it explicitly.

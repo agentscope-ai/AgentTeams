@@ -31,7 +31,7 @@ The Manager is configured via environment variables set during installation. The
 | `AGENTTEAMS_PORT_CONSOLE` | No | `18001` | Host port for Higress console |
 | `AGENTTEAMS_PORT_ELEMENT_WEB` | No | `18088` | Host port for Element Web direct access |
 | `AGENTTEAMS_GITHUB_TOKEN` | No | - | GitHub PAT for MCP Server |
-| `AGENTTEAMS_WORKER_IMAGE` | No | `agentteams/worker-agent:latest` | Worker Docker image for direct creation |
+| `AGENTTEAMS_WORKER_IMAGE` | No | `agentteams/agentteams-harness-openclaw:latest` | Worker Docker image for direct creation |
 | `AGENTTEAMS_WORKSPACE_DIR` | No | `~/agentteams-manager` | Host directory for Manager workspace (bind-mounted to `/root/manager-workspace`) |
 | `AGENTTEAMS_DATA_DIR` | No | `agentteams-data` | Docker volume name for persistent data |
 | `AGENTTEAMS_MOUNT_SOCKET` | No | `1` | Mount container runtime socket for direct Worker creation |

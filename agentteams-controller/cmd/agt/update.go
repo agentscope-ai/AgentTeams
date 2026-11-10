@@ -41,7 +41,7 @@ func updateWorkerCmd() *cobra.Command {
 		Long: `Update an existing Worker resource. Only specified fields are changed.
 
   agt update worker --name alice --model claude-sonnet-4-6
-  agt update worker --name alice --image agentteams/agentteams-worker:v1.2.0
+  agt update worker --name alice --image agentteams/agentteams-harness-openclaw:v1.2.0
   agt update worker --name alice --skills github-operations,code-review
   To update CPU/memory resources, use a YAML manifest and pass it with 'agt apply -f worker.yaml'.
   To update mcpServers, use a YAML manifest and pass it with 'agt apply -f worker.yaml'.`,

@@ -8,7 +8,7 @@ on:
         required: false
         type: string
       targets:
-        description: 'Space-separated list of push targets (default: all). Options: openclaw-base agentteams-controller embedded manager manager-qwenpaw worker hermes-worker qwenpaw-worker'
+        description: 'Space-separated list of push targets (default: all). Options: openclaw-base agentteams-controller embedded manager manager-qwenpaw worker hermes-worker qwenpaw-worker openhuman-worker'
         required: false
         type: string
         default: 'all'

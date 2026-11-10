@@ -114,7 +114,7 @@ jobs:
         run: |
           docker run --rm --entrypoint python3 \
             -v "$PWD/deepseek-harness/tests/headless_smoke.py:/tmp/headless_smoke.py:ro" \
-            agentteams/deepseek-harness-worker:latest /tmp/headless_smoke.py
+            agentteams/agentteams-harness-deepseek:latest /tmp/headless_smoke.py
 
       - name: Save image
         run: |

@@ -30,7 +30,7 @@ check_registry() {
     grep -Fxq "AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY=${expected}" "${ENV_FILE}"
     # Execute the embedded Controller's original argument construction.
     local _ctrl_env_prefix=AGENTTEAMS_
-    WORKER_IMAGE="${AGENTTEAMS_REGISTRY}/agentteams/agentteams-worker:test"
+    WORKER_IMAGE="${AGENTTEAMS_REGISTRY}/agentteams/agentteams-harness-openclaw:test"
     eval "${ctrl_block}"
     printf '%s\n' "${_ctrl_env_args[@]}" | grep -Fxq "HIGRESS_ADMIN_WASM_PLUGIN_IMAGE_REGISTRY=${expected}"
     printf '%s\n' "${_ctrl_env_args[@]}" | grep -Fxq "AGENTTEAMS_WORKER_IMAGE=${WORKER_IMAGE}"

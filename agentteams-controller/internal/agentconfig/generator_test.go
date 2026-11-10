@@ -2,9 +2,44 @@ package agentconfig
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 )
+
+func TestOpenClawWorkerShortMention(t *testing.T) {
+	g := NewGenerator(Config{AdminUser: "admin"})
+	data, err := g.GenerateOpenClawConfig(WorkerConfigRequest{WorkerName: "alice.dev"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Messages struct {
+			GroupChat struct {
+				MentionPatterns []string `json:"mentionPatterns"`
+			} `json:"groupChat"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Messages.GroupChat.MentionPatterns) != 1 {
+		t.Fatalf("missing Worker mention pattern: %s", data)
+	}
+	pattern := regexp.MustCompile(cfg.Messages.GroupChat.MentionPatterns[0])
+	for text, want := range map[string]bool{
+		"@alice.dev Task assigned":      true,
+		"Please ask @alice.dev, thanks": true,
+		"@alice.dev":                    true,
+		"@alice.dev-other task":         false,
+		"@aliceXdev task":               false,
+		"mail@alice.dev":                false,
+	} {
+		if got := pattern.MatchString(text); got != want {
+			t.Errorf("mention %q = %v, want %v", text, got, want)
+		}
+	}
+}
 
 func TestGenerateOpenClawConfig_Basic(t *testing.T) {
 	g := NewGenerator(Config{

@@ -3,6 +3,7 @@ package agentconfig
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -195,6 +196,13 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 					"api":     "openai-completions",
 					"models":  g.allModelSpecs(modelName, subagentModel),
 				},
+			},
+		},
+		// Matrix messages sent by agt use plain @name mentions. The SDK
+		// cannot derive these from the Matrix user ID without a pattern.
+		"messages": map[string]interface{}{
+			"groupChat": map[string]interface{}{
+				"mentionPatterns": []string{`(^|\s)@` + regexp.QuoteMeta(req.WorkerName) + `($|[\s:,.!?])`},
 			},
 		},
 		"agents": map[string]interface{}{

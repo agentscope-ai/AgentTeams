@@ -24,7 +24,7 @@ type MockManagerProvisioner struct {
 	DeleteManagerRoomFn           func(ctx context.Context, roomID string) error
 	DeleteManagerRoomAliasFn      func(ctx context.Context, managerName string) error
 	IsManagerJoinedDMFn           func(ctx context.Context, roomID string) (bool, error)
-	IsManagerLLMAuthReadyFn       func(ctx context.Context, gatewayKey string) (bool, error)
+	IsManagerLLMAuthReadyFn       func(ctx context.Context, gatewayKey, model string) (bool, error)
 	SendManagerWelcomeMessageFn   func(ctx context.Context, req service.ManagerWelcomeRequest) error
 
 	Calls struct {
@@ -265,13 +265,13 @@ func (m *MockManagerProvisioner) IsManagerJoinedDM(ctx context.Context, roomID s
 	return true, nil
 }
 
-func (m *MockManagerProvisioner) IsManagerLLMAuthReady(ctx context.Context, gatewayKey string) (bool, error) {
+func (m *MockManagerProvisioner) IsManagerLLMAuthReady(ctx context.Context, gatewayKey, model string) (bool, error) {
 	m.mu.Lock()
 	m.Calls.IsManagerLLMAuthReady = append(m.Calls.IsManagerLLMAuthReady, gatewayKey)
 	fn := m.IsManagerLLMAuthReadyFn
 	m.mu.Unlock()
 	if fn != nil {
-		return fn(ctx, gatewayKey)
+		return fn(ctx, gatewayKey, model)
 	}
 	return true, nil
 }

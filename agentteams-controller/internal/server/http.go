@@ -138,6 +138,13 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 		probe.key = deps.Provisioner.WorkerGatewayKey
 	}
 	mux.Handle("POST /api/v1/workers/{name}/gateway-probe", mw.RequireAuthz(authpkg.ActionUpdate, "gateway", nil)(probe))
+	managerProbe := &workerGatewayProbe{client: deps.Client, namespace: deps.Namespace, gatewayURL: deps.GatewayURL, manager: true}
+	if deps.Provisioner != nil {
+		managerProbe.key = deps.Provisioner.ManagerGatewayKey
+	}
+	mux.Handle("POST /api/v1/managers/{name}/gateway-probe", mw.RequireAuthz(authpkg.ActionUpdate, "gateway", nil)(managerProbe))
+	modelStatus := &managerModelStatus{client: deps.Client, namespace: deps.Namespace, gateway: deps.Gateway}
+	mux.Handle("GET /api/v1/managers/{name}/model-status", mw.RequireAuthz(authpkg.ActionGet, "gateway", nil)(modelStatus))
 
 	// Teams
 	mux.Handle("POST /api/v1/teams", mw.RequireAuthz(authpkg.ActionCreate, "team", nil)(http.HandlerFunc(rh.CreateTeam)))

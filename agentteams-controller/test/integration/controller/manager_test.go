@@ -1110,7 +1110,7 @@ func TestManagerWelcome_LLMAuthNotReady_RequeuesUntilPropagated(t *testing.T) {
 	resetManagerMocks()
 
 	var authChecks atomic.Int32
-	mockMgrProv.IsManagerLLMAuthReadyFn = func(_ context.Context, _ string) (bool, error) {
+	mockMgrProv.IsManagerLLMAuthReadyFn = func(_ context.Context, _, _ string) (bool, error) {
 		n := authChecks.Add(1)
 		return n >= 3, nil
 	}

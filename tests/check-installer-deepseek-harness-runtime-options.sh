@@ -103,6 +103,10 @@ if grep -Fq 'deepseek-harness-worker' "${CORE_BUILD_WORKFLOW}" || grep -Fq 'deep
 fi
 grep -Fq 'make push-deepseek-harness-worker' "${DSH_BUILD_WORKFLOW}" ||
     fail "DeepSeek Harness must have a dedicated image publishing workflow"
+grep -Fq 'VERSION="sha-${GITHUB_SHA:0:12}"' "${DSH_BUILD_WORKFLOW}" ||
+    fail "Independent runtime builds must use a source-specific Controller tag"
+grep -Fq 'PUSH_LATEST=' "${DSH_BUILD_WORKFLOW}" ||
+    fail "Independent runtime builds must not overwrite the Controller latest tag"
 grep -Fq 'DEEPSEEK_HARNESS_WORKER_VERSION: v0.1.1' "${RELEASE_WORKFLOW}" ||
     fail "Release notes must pin the independently published DeepSeek Harness runtime"
 grep -Fq 'docker buildx imagetools inspect' "${RELEASE_WORKFLOW}" ||

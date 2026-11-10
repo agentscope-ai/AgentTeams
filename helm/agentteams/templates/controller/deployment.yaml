@@ -91,7 +91,8 @@ spec:
               value: {{ include "agentteams.worker.openhumanImage" . | quote }}
             - name: AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE
               value: {{ include "agentteams.worker.deepseekHarnessImage" . | quote }}
-            {{- if .Values.worker.defaultImage.codex.repository }}
+            {{- $codexImage := .Values.worker.defaultImage.codex | default dict }}
+            {{- if $codexImage.repository }}
             - name: AGENTTEAMS_CODEX_WORKER_IMAGE
               value: {{ include "agentteams.worker.codexImage" . | quote }}
             {{- end }}

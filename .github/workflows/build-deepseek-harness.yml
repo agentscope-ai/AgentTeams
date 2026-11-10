@@ -92,6 +92,8 @@ jobs:
           RUNTIME_VERSION: ${{ steps.meta.outputs.version }}
         run: |
           make push-deepseek-harness-worker \
+            VERSION="sha-${GITHUB_SHA:0:12}" \
+            PUSH_LATEST= \
             DEEPSEEK_HARNESS_WORKER_VERSION="${RUNTIME_VERSION}" \
             REGISTRY="${REGISTRY}" \
             REPO="${REPO}" \

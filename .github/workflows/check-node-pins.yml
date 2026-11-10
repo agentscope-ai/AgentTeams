@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'hermes'
+      - 'worker'
       - '.gitmodules'
       - '**/Dockerfile'
       - '**/Dockerfile.*'

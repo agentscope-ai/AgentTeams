@@ -177,7 +177,7 @@ The Manager **image** is an agent runtime plus scripts; Higress, Tuwunel, MinIO,
 ### To modify the DeepSeek Harness worker runtime
 
 - [deepseek-harness/](deepseek-harness/) — managed image, Matrix bridge, persisted room sessions, and runtime tests
-- [plugins/teamharness/adapters/deepseek-harness/](plugins/teamharness/adapters/deepseek-harness/) — DSH-native TeamHarness adapter and compatibility checks
+- [deepseek-harness/plugins/teamharness/adapters/deepseek-harness/](deepseek-harness/plugins/teamharness/adapters/deepseek-harness/) — DSH-native TeamHarness adapter and compatibility checks
 
 ### To modify the OpenHuman worker runtime
 

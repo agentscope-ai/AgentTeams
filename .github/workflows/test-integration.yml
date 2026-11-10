@@ -341,8 +341,16 @@ jobs:
     if: needs.detect-changes.outputs.run_builds == 'true'
     uses: ./.github/workflows/build-integration-images.yml
     with:
-      targets: '["qwenpaw-worker", "deepseek-harness-worker", "codex-worker"]'
+      targets: '["qwenpaw-worker", "deepseek-harness-worker"]'
       controller: true
+    secrets: inherit
+
+  build-images-codex:
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.run_builds == 'true'
+    uses: ./.github/workflows/build-integration-images.yml
+    with:
+      targets: '["codex-worker"]'
     secrets: inherit
 
   build-images-controller:
@@ -372,9 +380,10 @@ jobs:
 
   # Step 3: Run test shards in parallel, each on its own runner with isolated cluster
   integration-tests:
-    needs: [detect-changes, deepseek-harness-tests, build-images-independent, build-images-controller, build-images-openclaw]
+    needs: [detect-changes, deepseek-harness-tests, build-images-independent, build-images-controller, build-images-openclaw, build-images-codex]
     if: |
       always() && needs.detect-changes.result == 'success' && needs.deepseek-harness-tests.result == 'success' &&
+      needs.build-images-codex.result == 'success' &&
       needs.build-images-independent.result == 'success' &&
       needs.build-images-controller.result == 'success' &&
       needs.build-images-openclaw.result == 'success'

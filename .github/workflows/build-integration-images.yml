@@ -95,6 +95,7 @@ jobs:
           repository: agentteams-group/agentteams-harness-codex
           ref: 70251686f7df413f3d5d7978490cf16c5a097c25
           path: .ci-codex-harness
+          submodules: recursive
 
       - name: Build Codex Harness image
         if: matrix.target == 'codex-worker'

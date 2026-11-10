@@ -39,8 +39,9 @@ class BuildWorkflowTests(unittest.TestCase):
 
     def test_integration_builds_and_loads_real_codex_runtime(self):
         config = workflow('test-integration.yml')
-        targets = json.loads(config['jobs']['build-images-independent']['with']['targets'])
-        self.assertIn('codex-worker', targets)
+        targets = json.loads(config['jobs']['build-images-codex']['with']['targets'])
+        self.assertEqual(['codex-worker'], targets)
+        self.assertEqual(config['jobs']['build-images-codex']['needs'], ['detect-changes'])
         steps = workflow('build-integration-images.yml')['jobs']['build']['steps']
         checkout = next(s for s in steps if s.get('name') == 'Checkout Codex Harness')
         self.assertEqual(checkout['with']['repository'], 'agentteams-group/agentteams-harness-codex')

@@ -196,4 +196,10 @@ EXPOSE 7788
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -sf http://localhost:7788/health || exit 1
 
+COPY --from=agentteams-controller \
+    /opt/agentteams/agent/skills/worker-management/scripts/install-worker-skill.sh \
+    /opt/agentteams/agent/skills/worker-management/scripts/safe-extract-worker-skill.py \
+    /opt/agentteams/agent/skills/worker-management/scripts/push-worker-skills.sh \
+    /opt/agentteams/agent/skills/worker-management/scripts/
+
 ENTRYPOINT ["/usr/local/bin/openhuman-worker-entrypoint.sh"]

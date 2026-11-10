@@ -47,6 +47,7 @@ const (
 // member_reconcile helpers, not by WorkerReconciler.
 type WorkerReconciler struct {
 	client.Client
+	ObservabilityReader client.Reader
 
 	Provisioner                 service.WorkerProvisioner
 	Deployer                    service.WorkerDeployer
@@ -194,6 +195,7 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	logger := log.FromContext(ctx)
 
 	deps := MemberDeps{
+		ObservabilityReader:         r.ObservabilityReader,
 		Provisioner:                 r.Provisioner,
 		Deployer:                    r.Deployer,
 		Backend:                     r.Backend,
@@ -566,6 +568,7 @@ func (r *WorkerReconciler) reconcileDelete(ctx context.Context, w *v1beta1.Worke
 	}
 
 	deps := MemberDeps{
+		ObservabilityReader:         r.ObservabilityReader,
 		Provisioner:                 r.Provisioner,
 		Deployer:                    r.Deployer,
 		Backend:                     r.Backend,

@@ -20,6 +20,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/matrix"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/observability"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -27,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
@@ -274,6 +276,7 @@ func resolveBackendForMember(registry *backend.Registry, backendRuntime string, 
 // invoke. Both WorkerReconciler and TeamReconciler build a MemberDeps once
 // and pass it through each phase.
 type MemberDeps struct {
+	ObservabilityReader         client.Reader
 	Provisioner                 service.WorkerProvisioner
 	Deployer                    service.WorkerDeployer
 	Backend                     *backend.Registry
@@ -958,6 +961,16 @@ func buildMemberWorkerEnv(ctx context.Context, d MemberDeps, m MemberContext, pr
 	}
 	workerEnv["AGENTTEAMS_WORKER_ROLE"] = m.Role.String()
 	workerEnv["AGENTTEAMS_AGENT_ROLE"] = m.Role.String()
+	runtime := backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime)
+	if d.ObservabilityReader != nil && (runtime == "qwenpaw" || runtime == "hermes") {
+		config, _, err := observability.Read(ctx, d.ObservabilityReader, m.Namespace)
+		if err != nil {
+			return nil, fmt.Errorf("read Worker observability configuration: %w", err)
+		}
+		for key, value := range observability.WorkerEnv(config) {
+			workerEnv[key] = value
+		}
+	}
 	// Startup-only LLM tuning (QwenPaw registry "startup_only" keys):
 	// projected into the container environment (worker value over team
 	// default). The spec-hash path re-creates the container when the spec

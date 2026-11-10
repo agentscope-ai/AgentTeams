@@ -6,7 +6,7 @@ AgentLoop 增量接入复用本方案的采集和权限契约，具体配置、�
 
 从一个 Worker 会话回看每轮请求、模型上下文、工具执行、异常和消息交接，定位链路问题，并为后续 Team 协作质量分析保留数据。采用 **运行时原生钩子 → 共享 OTel 适配层 → OTLP/HTTP → Langfuse v3 → Dashboard BFF**。可观测默认关闭，AT 可先独立启动；Worker 不依赖 Langfuse SDK。
 
-通过标准 OTLP Collector 上报，管理员在 Dashboard 保存配置并应用到所选 Worker，即可下发采集开关、Collector 地址和采集认证头。Langfuse 查询密钥保存在 Dashboard 服务端私有文件，不进入 Worker 环境，读取配置 API 不返回密钥。Collector 需预先部署并配置 Langfuse 出口；生产环境应隔离其网络并使用仅用于采集的凭证，不能将项目查询密钥当作 Collector Headers。
+通过标准 OTLP Collector 上报。管理员在 Dashboard 保存配置，Dashboard 调用 Controller 管理 API；配置及 Langfuse 查询密钥保存在 Controller 数据层的 Secret 中。新建支持的 Worker 时，Controller 自动下发采集开关、Collector 地址和采集认证头；已有 Worker 通过显式应用更新。查询密钥不进入 Worker 环境，读取配置 API 不返回密钥。Collector 需预先部署并配置 Langfuse 出口，不能将项目查询密钥当作 Collector Headers。
 
 网关 LLM 日志无法覆盖本地工具和会话；各运行时直接使用 Langfuse SDK 会分散字段规则和凭证。共享层负责身份、内容处理、协议和查询，运行时只适配执行边界。本次实现 QwenPaw 和 Hermes；其他运行时未实现，不以环境变量配置代替原生验收。
 
@@ -38,7 +38,8 @@ flowchart LR
   A2 --> C
   B --> C
   C --> L[Langfuse v3]
-  D[Dashboard: admin BFF] --> L
+  D[Dashboard BFF / Manager / Leader] --> Q[Controller query API]
+  Q --> L
 ~~~
 
 **一个 session 包含多个 turn trace。** session ID 由 Worker、runtime、真实 runtime session ID 和用户隔离键生成稳定标识。不同 Worker 不会混合；QwenPaw 用户隔离键被保留，Hermes 沿用原生 session 的用户/Room 共享策略。原始 session ID、turn ID 和事件 ID 同时保留。
@@ -71,7 +72,7 @@ flowchart LR
 
 Team 和 Worker 下拉选项使用当前登录凭据查询 Controller，复用 Controller 的 accessibleTeams / accessibleWorkers 关系。选择 Team 后只展示其中可访问的 Worker；“全部”也仅指当前账号的范围。列表、详情、上游跳转和会话导出逐次校验同一权限范围，手填 Worker、Team、Session 或 Trace ID 不能绕过。
 
-BFF 将授权 Worker 过滤下推给 Langfuse，再校验每条 Trace 的 Worker 和当时的 Team 归属，完成过滤后才计算分页和总数。归属缺失、Worker 已删除或归属与当前 Team 不一致的历史数据不向该资源范围放行。Controller 无法确认权限时查询失败，不回退到整个 Langfuse 项目；普通账号的会话缺失时也不允许代理降级使用管理员 SA。
+Controller 将授权 Worker 过滤下推给 Langfuse，再校验每条 Trace 的 Worker 和当时的 Team 归属，完成过滤后才计算分页和总数。归属缺失、Worker 已删除或归属与当前 Team 不一致的历史数据不向该资源范围放行。Controller 无法确认权限时查询失败，不回退到整个 Langfuse 项目；普通账号的会话缺失时也不允许 Dashboard 代理降级使用管理员 SA。
 
 Langfuse 项目及密钥必须按 Controller 部署/组织隔离，不同组织不可共用项目后仅依靠同名 Worker/Team 标签划分权限。这里复用现有 Controller 的资源关系，不引入新的组织模型。服务端地址固定，禁止浏览器改选 Controller 后套用当前 Langfuse 密钥；禁止重定向、限制超时，不向浏览器暴露项目密钥或上游原文错误。普通账号不返回 Langfuse 项目直达链接。
 
@@ -85,11 +86,11 @@ Langfuse 项目及密钥必须按 Controller 部署/组织隔离，不同组织�
 
 ## 配置与扩展契约
 
-管理员打开 Dashboard 的 Tracing → 可观测配置，选择是否采集、内容开关、Langfuse 地址和项目查询密钥、Collector OTLP/HTTP 地址及采集认证头，测试连接后保存。保存到 Dashboard 数据卷内的 observability.json，文件权限 0600，使用临时文件原子替换；每次读取使用最新配置，无需重启 Dashboard。Secret Key 和 Collector Headers 为只写字段，留空保留原值。
+管理员打开 Dashboard 的 Tracing → 可观测配置，选择是否采集、内容开关、Langfuse 地址和项目查询密钥、Collector OTLP/HTTP 地址及采集认证头，测试连接后保存。Dashboard 通过 `/api/v1/observability/config` 读写 Controller 的持久配置，不再保存本地 `observability.json`。Secret Key 和 Collector Headers 为只写字段，留空保留原值；revision 防止覆盖并发保存。
 
-保存后勾选 Worker 并应用。BFF 使用当前账号凭据重新确认资源权限，读取 Worker 详情后仅合并采集环境变量，保留其他环境变量。配置版本变化时拒绝陈旧应用请求。托管 Worker 的 spec.env 变化由现有 Controller 触发运行中容器重建，休眠中的 Worker 下次启动生效；接口只报告下发结果，不将其等同于进程就绪或 Trace 已入库。非托管 Worker、未适配运行时及不支持环境变量编辑的旧 Controller 不报成功。
+新建或重建支持的 Worker 自动读取 Controller 配置。已有 Worker 勾选后通过 `/api/v1/observability/apply` 应用，Controller 仅合并采集环境变量，保留其他环境变量。配置版本变化时拒绝陈旧应用请求。托管 Worker 的 spec.env 变化触发运行中容器重建，休眠中的 Worker 下次启动生效；接口只报告下发结果，不将其等同于进程就绪或 Trace 已入库。
 
-测试连接验证 Dashboard 到 Langfuse 的项目认证，以及到选定 OTLP 接收端的空批次请求；不生成伪造模型 span，不代表 Worker 网络已经可达。完整验收仍需在重建后运行真实任务并从 Langfuse 回读。关闭采集后再次应用到 Worker 才生效，历史记录仍可查询。
+`/api/v1/observability/test` 验证 Controller 到 Langfuse 的项目认证，以及到选定 OTLP 接收端的空批次请求；不生成伪造模型 span，不代表 Worker 网络已经可达。完整验收仍需运行真实任务并从 Langfuse 回读。关闭采集后已有 Worker 再次应用才生效，历史记录仍可查询。任务诊断接口与 Agent 使用方法见 [task-tracing-analysis.md](task-tracing-analysis.md)。
 
 已有 Collector 时也可直接使用 Worker CR 的标准环境变量：
 

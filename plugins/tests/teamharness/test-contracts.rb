@@ -185,6 +185,7 @@ expected_skills = {
     "resource-management" => %w[manager]
   },
   "agent" => {
+    "task-diagnosis" => %w[leader manager],
     "mcporter" => %w[leader worker manager remote-member],
     "find-skills" => %w[leader worker manager remote-member]
   },

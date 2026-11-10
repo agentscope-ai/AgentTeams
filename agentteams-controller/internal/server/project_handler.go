@@ -47,15 +47,16 @@ import (
 // Response schema is aligned with LangGraph Graph.to_json() / StateSnapshot
 // (MIT License, © LangChain, Inc.) — see the workflow API design doc.
 type ProjectHandler struct {
-	client    client.Client
-	namespace string
-	oss       oss.StorageClient
-	matrix    matrix.Client // for intervention notifications; nil to skip
+	client       client.Client
+	configReader client.Reader
+	namespace    string
+	oss          oss.StorageClient
+	matrix       matrix.Client // for intervention notifications; nil to skip
 }
 
 // NewProjectHandler creates a handler reading project state from object storage.
 func NewProjectHandler(c client.Client, namespace string, o oss.StorageClient, m ...matrix.Client) *ProjectHandler {
-	h := &ProjectHandler{client: c, namespace: namespace, oss: o}
+	h := &ProjectHandler{client: c, configReader: c, namespace: namespace, oss: o}
 	if len(m) > 0 {
 		h.matrix = m[0]
 	}
@@ -697,6 +698,15 @@ func (e *accessDeniedError) Error() string { return e.msg }
 
 // GET /api/v1/projects
 func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
+	h.listProjects(w, r, false)
+}
+
+// ListTasks lists graph tasks using the same authoritative project scope.
+func (h *ProjectHandler) ListTasks(w http.ResponseWriter, r *http.Request) {
+	h.listProjects(w, r, true)
+}
+
+func (h *ProjectHandler) listProjects(w http.ResponseWriter, r *http.Request, tasksOnly bool) {
 	caller := authpkg.CallerFromContext(r.Context())
 	teamFilter := r.URL.Query().Get("team")
 
@@ -704,6 +714,11 @@ func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeK8sError(w, "list projects: resolve prefixes", err)
 		return
+	}
+	if tasksOnly {
+		if effective := crToEffective[teamFilter]; effective != "" {
+			teamFilter = effective
+		}
 	}
 
 	type projectSummary struct {
@@ -721,6 +736,8 @@ func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt string `json:"updated_at,omitempty"`
 	}
 	projects := make([]projectSummary, 0)
+	tasks := make([]teamTask, 0)
+	skippedProjects := 0
 	seen := map[string]bool{}
 
 	// Team leaders (legacy single-team SA or L2 human multi-team) only scan
@@ -785,6 +802,7 @@ func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 
 	for _, res := range results {
 		if res.err != nil {
+			skippedProjects++
 			if errors.Is(res.err, os.ErrNotExist) {
 				continue // project dir without meta.json yet; skip, not 500
 			}
@@ -796,9 +814,11 @@ func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 		}
 		var meta projectMeta
 		if err := json.Unmarshal(res.data, &meta); err != nil {
+			skippedProjects++
 			continue // skip malformed meta instead of failing the whole list
 		}
 		if meta.ProjectID == "" {
+			skippedProjects++
 			continue
 		}
 		team := teamFromPrefix(res.prefix)
@@ -818,6 +838,11 @@ func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 		if teamFilter != "" && meta.TeamID != teamFilter {
 			continue
 		}
+		if tasksOnly {
+			for _, task := range projectTraceTasks(&meta) {
+				tasks = append(tasks, teamTask{projectTaskMeta: task, ProjectID: meta.ProjectID, TeamID: meta.TeamID})
+			}
+		}
 		projects = append(projects, projectSummary{
 			ProjectID: meta.ProjectID,
 			Title:     meta.Title,
@@ -831,6 +856,13 @@ func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 
 	// Deterministic ordering across prefixes.
 	sort.Slice(projects, func(i, j int) bool { return projects[i].ProjectID < projects[j].ProjectID })
+	if tasksOnly {
+		sort.Slice(tasks, func(i, j int) bool {
+			return tasks[i].TeamID+"/"+tasks[i].ProjectID+"/"+tasks[i].TaskID < tasks[j].TeamID+"/"+tasks[j].ProjectID+"/"+tasks[j].TaskID
+		})
+		httputil.WriteJSON(w, http.StatusOK, map[string]any{"tasks": tasks, "total": len(tasks), "complete": skippedProjects == 0, "skipped_projects": skippedProjects})
+		return
+	}
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"projects": projects, "total": len(projects)})
 }

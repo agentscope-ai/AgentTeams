@@ -582,6 +582,7 @@ func (a *App) initReconcilers(_ context.Context) error {
 	}
 	if _, err := (&controller.WorkerReconciler{
 		Client:                      a.mgr.GetClient(),
+		ObservabilityReader:         a.mgr.GetAPIReader(),
 		Provisioner:                 a.provisioner,
 		Deployer:                    a.deployer,
 		Backend:                     a.registry,

@@ -21,6 +21,7 @@ exporters:
     endpoint: ${env:LANGFUSE_OTLP_BASE_URL}
     headers:
       Authorization: Basic ${env:LANGFUSE_BASIC_AUTH}
+      x-langfuse-ingestion-version: "4"
     sending_queue:
       enabled: true
       storage: file_storage

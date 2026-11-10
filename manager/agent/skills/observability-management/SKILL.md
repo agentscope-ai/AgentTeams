@@ -3,7 +3,7 @@ name: observability-management
 description: Use when you help a user enable Worker tracing, configure Dashboard observability, connect an OTLP Collector to Langfuse or AgentLoop, inspect traces, or troubleshoot missing spans.
 ---
 
-# Worker Tracing (AgentTeams 1.2.6)
+# Worker Tracing
 
 Use this workflow to guide the user through the AgentTeams Dashboard. You do
 not need CMS or a Jaeger UI to use Dashboard Tracing. Missing CMS environment
@@ -49,7 +49,8 @@ You can check a Worker's runtime and current phase with `agt get workers
    task/model/tool content as well as timing. Let the user choose whether
    that content should be collected.
 5. The user clicks **测试连接**, then **保存配置**. Saving does not restart
-   Dashboard and does not yet enable collection in existing Workers.
+   Dashboard. Your Controller stores the configuration and injects it into
+   newly created supported Workers. Existing Workers require an explicit apply.
 6. Under **应用到 Worker**, the user selects the intended QwenPaw/Hermes
    Workers and clicks **应用到所选 Worker（重建生效）**. Explain before applying
    that running managed containers are rebuilt and current tasks may be
@@ -57,10 +58,10 @@ You can check a Worker's runtime and current phase with `agt get workers
    Check individual apply results and wait for affected Workers to be ready.
 
 Never ask the user to paste credentials into chat. They enter Secret Key and
-Collector Headers in the password fields; query credentials stay on the
-Dashboard server. Do not put Langfuse query credentials into Worker env or
-repeat them in a response. Guide the UI workflow instead of inventing an
-`agt tracing` command or editing Dashboard's private configuration files.
+Collector Headers in the password fields; query credentials stay in your
+Controller's persisted configuration. Do not put Langfuse query credentials
+into Worker env or repeat them in a response. To diagnose a task, load
+`task-diagnosis` and use `agt get tasks` followed by `agt tracing task`.
 
 ## Verify End to End
 

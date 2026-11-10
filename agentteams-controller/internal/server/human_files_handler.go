@@ -292,9 +292,10 @@ func (h *humanFilesHandler) writeTrashIndex(ctx context.Context, username string
 
 // upsertTrashIndexEntry records one new trash entry in the index,
 // best-effort: the entry's meta.json is already stored, so a failed index
-// write only costs the next listing one meta.json read. Summaries whose
-// ids are no longer in the trash are dropped in the same write, which is
-// how restores and purges prune the index.
+// write only costs the next listing one meta.json read. Listings prune
+// stale entries, so deletes need not scan the entire trash to update it.
+// Concurrent cache writes may lose summaries; listings recover missing
+// ids from authoritative meta.json objects.
 func (h *humanFilesHandler) upsertTrashIndexEntry(ctx context.Context, username, id string, m trashMeta) {
 	entries, err := h.readTrashIndex(ctx, username)
 	if err != nil {
@@ -302,16 +303,6 @@ func (h *humanFilesHandler) upsertTrashIndexEntry(ctx context.Context, username,
 	}
 	if entries == nil {
 		entries = make(map[string]trashMeta, 1)
-	}
-	infos, err := h.oss.ListObjectsDetailed(ctx, humanTrashPrefix(username))
-	if err != nil {
-		return
-	}
-	live := liveTrashIDs(infos)
-	for cachedID := range entries {
-		if _, ok := live[cachedID]; !ok {
-			delete(entries, cachedID)
-		}
 	}
 	entries[id] = m
 	_ = h.writeTrashIndex(ctx, username, entries)
@@ -1617,7 +1608,7 @@ func (h *humanFilesHandler) listTrash(w http.ResponseWriter, r *http.Request) {
 		metas[id] = m
 		resolved++
 	}
-	if resolved > 0 {
+	if resolved > 0 || len(cached) != len(metas) {
 		// Best-effort refill: the entries above are already resolved, and
 		// only the ids in this listing are stored (the write prunes any
 		// summary whose entry has left the trash).

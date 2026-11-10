@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -136,6 +137,9 @@ func TestHumanFiles_TrashListIsNotNPlusOne(t *testing.T) {
 	if got := len(hfTrashEntries(t, rec)); got != 3 {
 		t.Fatalf("entries after restore = %d, want 3", got)
 	}
+	if idx, err := hfh.readTrashIndex(ctx, "alice"); err != nil || len(idx) != 3 {
+		t.Fatalf("index after restore listing = %v, err %v; want 3 entries", idx, err)
+	}
 
 	// Cold index (a deployment upgraded from before it existed): the index
 	// read finds nothing and each entry is resolved by its own meta.json
@@ -164,5 +168,118 @@ func TestHumanFiles_TrashListIsNotNPlusOne(t *testing.T) {
 	hfh.listTrash(rec, hfReq(t, http.MethodGet, "alice", "", hfSelf(), nil))
 	if gets := counting.gets.Load(); gets != 1 {
 		t.Fatalf("listing after the refill performed %d object reads, want 1", gets)
+	}
+	for _, e := range hfTrashEntries(t, rec) {
+		purged := httptest.NewRecorder()
+		hfh.purgeTrash(purged, hfTrashReq(t, http.MethodDelete, "alice", e.ID, hfAdmin(), ""))
+		if purged.Code != http.StatusOK {
+			t.Fatalf("purge: %d %s", purged.Code, purged.Body.String())
+		}
+	}
+	rec = httptest.NewRecorder()
+	hfh.listTrash(rec, hfReq(t, http.MethodGet, "alice", "", hfSelf(), nil))
+	if rec.Code != http.StatusOK || len(hfTrashEntries(t, rec)) != 0 {
+		t.Fatalf("empty trash: %d %s", rec.Code, rec.Body.String())
+	}
+	if idx, err := hfh.readTrashIndex(ctx, "alice"); err != nil || len(idx) != 0 {
+		t.Fatalf("empty trash index = %v, err %v", idx, err)
+	}
+}
+
+func TestHumanFiles_TrashIndexRecovery(t *testing.T) {
+	for _, cache := range []string{`{`, `{"version":99,"entries":{}}`, `{"version":1,"entries":{}}`} {
+		t.Run(cache, func(t *testing.T) {
+			hfh, store, _ := newHumanFilesRig(t)
+			ctx := context.Background()
+			id, err := newTrashID()
+			if err != nil {
+				t.Fatal(err)
+			}
+			meta := trashMeta{Path: "files/a.txt", Size: 5, Caller: "alice", Role: "human"}
+			data, err := json.Marshal(meta)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.PutObject(ctx, humanTrashPrefix("alice")+id+"/meta.json", data); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.PutObject(ctx, humanTrashIndexKey("alice"), []byte(cache)); err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			hfh.listTrash(rec, hfReq(t, http.MethodGet, "alice", "", hfSelf(), nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("list: %d %s", rec.Code, rec.Body.String())
+			}
+			entries := hfTrashEntries(t, rec)
+			if len(entries) != 1 || entries[0].Path != meta.Path {
+				t.Fatalf("recovered entries = %+v", entries)
+			}
+			idx, err := hfh.readTrashIndex(ctx, "alice")
+			if err != nil || idx[id].Path != meta.Path {
+				t.Fatalf("recovered index = %v, err %v", idx, err)
+			}
+		})
+	}
+}
+
+type concurrentTrashIndexOSS struct {
+	*ossfake.Memory
+	reads   atomic.Int64
+	arrived chan struct{}
+	release chan struct{}
+}
+
+func (s *concurrentTrashIndexOSS) GetObject(ctx context.Context, key string) ([]byte, error) {
+	data, err := s.Memory.GetObject(ctx, key)
+	if key == humanTrashIndexKey("alice") && s.reads.Add(1) <= 2 {
+		s.arrived <- struct{}{}
+		<-s.release
+	}
+	return data, err
+}
+
+func TestHumanFiles_TrashIndexConcurrentWritesRecover(t *testing.T) {
+	hfh, store, _ := newHumanFilesRig(t)
+	ctx := context.Background()
+	metas := make(map[string]trashMeta)
+	for _, path := range []string{"files/a.txt", "files/b.txt"} {
+		id, err := newTrashID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := trashMeta{Path: path, Size: 5, Caller: "alice", Role: "human"}
+		data, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.PutObject(ctx, humanTrashPrefix("alice")+id+"/meta.json", data); err != nil {
+			t.Fatal(err)
+		}
+		metas[id] = m
+	}
+	s := &concurrentTrashIndexOSS{Memory: store, arrived: make(chan struct{}, 2), release: make(chan struct{})}
+	hfh.oss = s
+	var wg sync.WaitGroup
+	for id, m := range metas {
+		wg.Go(func() { hfh.upsertTrashIndexEntry(ctx, "alice", id, m) })
+	}
+	// Both writers read the absent index before either can publish it.
+	<-s.arrived
+	<-s.arrived
+	close(s.release)
+	wg.Wait()
+	idx, err := hfh.readTrashIndex(ctx, "alice")
+	if err != nil || len(idx) != 1 {
+		t.Fatalf("expected one lost cached summary, got %v, err %v", idx, err)
+	}
+	rec := httptest.NewRecorder()
+	hfh.listTrash(rec, hfReq(t, http.MethodGet, "alice", "", hfSelf(), nil))
+	if rec.Code != http.StatusOK || len(hfTrashEntries(t, rec)) != 2 {
+		t.Fatalf("concurrent-write recovery: %d %s", rec.Code, rec.Body.String())
+	}
+	idx, err = hfh.readTrashIndex(ctx, "alice")
+	if err != nil || len(idx) != 2 {
+		t.Fatalf("recovered index = %v, err %v", idx, err)
 	}
 }

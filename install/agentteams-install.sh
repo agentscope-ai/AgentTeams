@@ -2,14 +2,14 @@
 # agentteams-install.sh - One-click installation for AgentTeams Manager, Worker, and Dashboard
 #
 # Usage:
-#   ./agentteams-install.sh                  # Interactive installation (choose Quick Start or Manual)
+#   ./agentteams-install.sh                  # Start locally and open Dashboard
+#   ./agentteams-install.sh --manual         # Customize installation interactively
 #   ./agentteams-install.sh manager          # Same as above (explicit)
 #   ./agentteams-install.sh worker --name <name> ...  # Worker installation
 #   ./agentteams-install.sh dashboard        # Start/stop agentteams-dashboard (AGENTTEAMS_DASHBOARD=0 to stop)
 #   ./agentteams-install.sh uninstall        # Stop and remove Manager + all Workers
 #
-# NOTE: agentteams-dashboard is currently only supported via the Bash installer.
-#       The PowerShell installer (agentteams-install.ps1) does not yet include dashboard support.
+# Bash and PowerShell installers both start Dashboard by default.
 #
 # Onboarding Modes:
 #   Quick Start  - Fast installation with all default values (recommended)
@@ -24,7 +24,7 @@
 #   AGENTTEAMS_AI_GATEWAY_URL     Higress Gateway data-plane URL for Manager and Worker model requests
 #   AGENTTEAMS_AI_GATEWAY_ADMIN_URL Higress Console URL for Dashboard shared authentication and management
 #   AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS Comma-separated Console proxy allowlist hostnames
-#   AGENTTEAMS_LLM_API_KEY        LLM API key         (required)
+#   AGENTTEAMS_LLM_API_KEY        LLM API key         (optional; configure later in Dashboard)
 #   AGENTTEAMS_ADMIN_USER         Admin username       (default: admin)
 #   AGENTTEAMS_ADMIN_PASSWORD     Admin password       (auto-generated if not set, min 8 chars)
 #   AGENTTEAMS_MATRIX_DOMAIN      Matrix domain        (default: matrix-local.agentteams.io:18080)
@@ -159,6 +159,11 @@ _controller_storage_prefix() {
     fi
 }
 AGENTTEAMS_NON_INTERACTIVE="${AGENTTEAMS_NON_INTERACTIVE:-0}"
+AGENTTEAMS_QUICKSTART="${AGENTTEAMS_QUICKSTART:-1}"
+if [ "${1:-}" = "--manual" ]; then
+    AGENTTEAMS_QUICKSTART=0
+    shift
+fi
 AGENTTEAMS_MOUNT_SOCKET="${AGENTTEAMS_MOUNT_SOCKET:-1}"
 AGENTTEAMS_DOCKER_PROXY="${AGENTTEAMS_DOCKER_PROXY:-1}"
 STEP_RESULT=""  # Used by state machine to signal "back" navigation
@@ -231,7 +236,7 @@ detect_timezone() {
         echo -e "\033[33m[AgentTeams WARNING]\033[0m Could not detect timezone automatically." >&2
         echo -e "\033[33m[AgentTeams]\033[0m Please enter your timezone (e.g., Asia/Shanghai, America/New_York)." >&2
         echo "" >&2
-        if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
+        if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] || [ "${AGENTTEAMS_QUICKSTART}" = "1" ]; then
             tz="Asia/Shanghai"
             log "Using default timezone: ${tz}" >&2
         else
@@ -298,6 +303,18 @@ msg() {
     local lang="${AGENTTEAMS_LANGUAGE:-en}"
     local text=""
     case "${key}.${lang}" in
+        "install.model_later.zh") text="模型尚未配置。启动后可在 Dashboard 中配置 API Key。" ;;
+        "install.model_later.en") text="No model configured yet. Add your API key in Dashboard after startup." ;;
+        "install.password_copied.zh") text="登录密码已复制到剪贴板。粘贴密码后点击登录即可。" ;;
+        "install.password_copied.en") text="Login password copied to clipboard. Paste it in Dashboard and sign in." ;;
+        "install.password_copy_failed.zh") text="无法自动复制密码，请复制下方显示的登录密码。" ;;
+        "install.password_copy_failed.en") text="Could not copy the password automatically. Copy the login password shown below." ;;
+        "install.dashboard_unavailable.zh") text="Dashboard 尚未就绪，请检查 agentteams-dashboard 容器日志后重试。" ;;
+        "install.dashboard_unavailable.en") text="Dashboard is not ready. Check the agentteams-dashboard container logs and retry." ;;
+        "install.runtime_wait.zh") text="请完成容器工具安装并启动。此窗口会等待引擎就绪，然后自动继续（Ctrl+C 取消）。" ;;
+        "install.runtime_wait.en") text="Install and start your container tool. This window will continue when the engine is ready (Ctrl+C to cancel)." ;;
+        "install.runtime_timeout.zh") text="容器引擎仍不可用。启动 OrbStack、Docker Desktop 或 Podman 后重新运行安装命令。" ;;
+        "install.runtime_timeout.en") text="Container engine is still unavailable. Start OrbStack, Docker Desktop or Podman and run this command again." ;;
         # --- Timezone detection messages ---
         "tz.warning.title.zh") text="无法自动检测时区。" ;;
         "tz.warning.title.en") text="Could not detect timezone automatically." ;;
@@ -1237,9 +1254,7 @@ _check_version_images() {
         AGENTTEAMS_VERSION="$1"
         local platform="$2" image status
         resolve_image_tags
-        for image in "${EMBEDDED_IMAGE}" "$(manager_image_for_runtime "${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}")" \
-            "${WORKER_IMAGE}" "${COPAW_WORKER_IMAGE}" "${QWENPAW_WORKER_IMAGE}" \
-            "${HERMES_WORKER_IMAGE}" "${DEEPSEEK_HARNESS_WORKER_IMAGE}"; do
+        for image in "${EMBEDDED_IMAGE}" "$(manager_image_for_runtime "${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}")"; do
             [ -n "${image}" ] || continue
             if _check_install_image "${image}" "${platform}"; then
                 :
@@ -1878,6 +1893,21 @@ detect_lan_ip() {
 # should_skip_step: returns 0 (skip) when the step is irrelevant in current mode
 should_skip_step() {
     local step_fn="$1"
+    # Apply shared upgrade rules before the per-step cases. A broad case here
+    # used to shadow the quick-start rules for encryption, proxy and idle time.
+    if [ "${AGENTTEAMS_UPGRADE:-0}" = "1" ] && [ "${AGENTTEAMS_UPGRADE_KEEP_ALL:-0}" = "1" ]; then
+        case "${step_fn}" in step_lang|step_mode|step_version|step_existing) ;; *) return 0 ;; esac
+    fi
+    if [ "${AGENTTEAMS_QUICKSTART:-0}" = "1" ]; then
+        case "${step_fn}" in
+            step_lang|step_mode|step_version) return 0 ;;
+        esac
+        if [ "${AGENTTEAMS_UPGRADE:-0}" != "1" ]; then
+            case "${step_fn}" in
+                step_manager_runtime|step_runtime|step_network|step_e2ee|step_docker_proxy|step_idle|step_hostshare|step_podman_autostart) return 0 ;;
+            esac
+        fi
+    fi
     case "${step_fn}" in
         step_lang|step_mode)
             [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] && return 0
@@ -1888,10 +1918,6 @@ should_skip_step() {
         step_existing)
             local _env="${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}"
             [ ! -f "${_env}" ] && return 0
-            ;;
-        # Keep-All upgrade mode: skip all config steps (step_volume/step_workspace handled separately)
-        step_llm|step_admin|step_network|step_ports|step_domains|step_github|step_skills|step_runtime|step_manager_runtime|step_dashboard|step_e2ee|step_docker_proxy|step_idle|step_hostshare)
-            [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ "${AGENTTEAMS_UPGRADE_KEEP_ALL}" = "1" ] && return 0
             ;;
         step_volume|step_workspace)
             [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] && return 0
@@ -2225,7 +2251,7 @@ step_existing() {
 
 step_llm() {
     log "$(msg llm.title)"
-    if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
+    if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] || [ "${AGENTTEAMS_QUICKSTART}" = "1" ]; then
         if [ "${AGENTTEAMS_LANGUAGE}" = "zh" ]; then
             AGENTTEAMS_LLM_PROVIDER="${AGENTTEAMS_LLM_PROVIDER:-openai-compat}"
             AGENTTEAMS_DEFAULT_MODEL="${AGENTTEAMS_DEFAULT_MODEL:-qwen3.6-plus}"
@@ -2239,8 +2265,12 @@ step_llm() {
             log "$(msg llm.provider.qwen_default "${AGENTTEAMS_LLM_PROVIDER}")"
         fi
         log "$(msg llm.model.default "${AGENTTEAMS_DEFAULT_MODEL}")"
-        prompt AGENTTEAMS_LLM_API_KEY "$(msg llm.apikey_prompt)" "" "true"
-        AGENTTEAMS_EMBEDDING_MODEL="${AGENTTEAMS_EMBEDDING_MODEL-text-embedding-v4}"
+        AGENTTEAMS_LLM_API_KEY="${AGENTTEAMS_LLM_API_KEY:-}"
+        AGENTTEAMS_EMBEDDING_MODEL="${AGENTTEAMS_EMBEDDING_MODEL-}"
+        if [ -z "${AGENTTEAMS_LLM_API_KEY}" ]; then
+            log "$(msg install.model_later)"
+        fi
+        export AGENTTEAMS_LLM_API_KEY
         export AGENTTEAMS_LLM_PROVIDER AGENTTEAMS_DEFAULT_MODEL AGENTTEAMS_EMBEDDING_MODEL
         [ -n "${AGENTTEAMS_OPENAI_BASE_URL+x}" ] && export AGENTTEAMS_OPENAI_BASE_URL
         return 0
@@ -3397,6 +3427,7 @@ WantedBy=default.target"
 # ============================================================
 
 _start_dashboard() {
+    AGENTTEAMS_DASHBOARD_READY=0
     local CTRL_CONTAINER="agentteams-controller"
     local DASHBOARD_CONTAINER="agentteams-dashboard"
 
@@ -3832,6 +3863,7 @@ _start_dashboard() {
     while [ $waited -lt $max_wait ]; do
         if curl -sf "http://127.0.0.1:${AGENTTEAMS_PORT_DASHBOARD}/" >/dev/null 2>&1; then
             log "Dashboard ready on port ${AGENTTEAMS_PORT_DASHBOARD}"
+            AGENTTEAMS_DASHBOARD_READY=1
             return 0
         fi
         sleep 2
@@ -3857,7 +3889,7 @@ install_manager() {
 
     # Non-interactive fallback: resolve version immediately so image tags are available
     # before the step state machine runs. Interactive mode lets step_version handle it.
-    if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
+    if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] || [ "${AGENTTEAMS_QUICKSTART}" = "1" ]; then
         [ -n "${AGENTTEAMS_VERSION}" ] || AGENTTEAMS_AUTO_VERSION=1
         if [ -z "${AGENTTEAMS_VERSION}" ] || [ "${AGENTTEAMS_VERSION}" = "latest" ]; then
             _refresh_known_stable_version
@@ -3957,6 +3989,7 @@ install_manager() {
     _select_available_auto_version
 
     # Post-machine defaults for any steps that were skipped
+    AGENTTEAMS_LOCAL_ONLY="${AGENTTEAMS_LOCAL_ONLY:-1}"
     local _detected_data_vol
     _detected_data_vol="$(detect_installed_data_volume)"
     if [ -z "${AGENTTEAMS_DATA_DIR:-}" ]; then
@@ -4293,12 +4326,7 @@ EOF
     _selected_manager_image="$(manager_image_for_runtime "${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}")"
     _pull_image "${_selected_manager_image}" "install.image.exists" "install.image.pulling_manager"
 
-    # Pull all worker runtime images (workers may use any runtime regardless of the default)
-    _pull_image "${WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
-    _pull_image "${COPAW_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
-    _pull_image "${QWENPAW_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
-    _pull_image "${HERMES_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
-    _pull_image "${DEEPSEEK_HARNESS_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
+    # The controller pulls the selected Worker image when you create a Worker.
 
     # --- Pre-upgrade: extract Matrix passwords from running old containers ---
     # Only needed when upgrading FROM old architecture (v1.0.9) TO embedded.
@@ -4752,7 +4780,7 @@ CREDEOF
         # where the file may be empty / absent — the loop's silent retry
         # handles that the same way it handles the manager-not-yet-running
         # case below.
-        if ${DOCKER_CMD} exec agentteams-controller sh -c 'command -v agt' >/dev/null 2>&1; then
+        if [ "${AGENTTEAMS_QUICKSTART:-0}" != "1" ] && [ -n "${AGENTTEAMS_LLM_API_KEY:-}" ] && ${DOCKER_CMD} exec agentteams-controller sh -c 'command -v agt' >/dev/null 2>&1; then
             log "$(msg install.welcome_msg.waiting)"
             local _welcome_wait=0
             local _welcome_max="${AGENTTEAMS_WELCOME_TIMEOUT:-300}"
@@ -4888,6 +4916,11 @@ CREDEOF
 
     # ── Start Dashboard (optional) ────────────────────────────────────
     _start_dashboard
+    if [ "${AGENTTEAMS_DASHBOARD_READY:-0}" = "1" ]; then
+        open_dashboard
+    elif [ "${AGENTTEAMS_DASHBOARD:-0}" = "1" ]; then
+        die "$(msg install.dashboard_unavailable)"
+    fi
 
     # Apply Podman autostart if selected and environment matches
     if [ "${DOCKER_CMD}" = "podman" ] && [ "${AGENTTEAMS_PODMAN_AUTOSTART:-0}" = "1" ]; then
@@ -4905,7 +4938,11 @@ CREDEOF
     echo -e "\033[33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
     echo -e "\033[33m  $(msg success.open_url)\033[0m"
     echo -e "\033[33m                                                                                 \033[0m"
-    echo -e "\033[1;36m    http://127.0.0.1:${AGENTTEAMS_PORT_ELEMENT_WEB:-18088}/#/login\033[0m"
+    if [ "${AGENTTEAMS_DASHBOARD_READY:-0}" = "1" ]; then
+        echo -e "\033[1;36m    http://127.0.0.1:${AGENTTEAMS_PORT_DASHBOARD:-13000}/\033[0m"
+    else
+        echo -e "\033[1;36m    http://127.0.0.1:${AGENTTEAMS_PORT_ELEMENT_WEB:-18088}/#/login\033[0m"
+    fi
     echo -e "\033[33m                                                                                 \033[0m"
     echo -e "\033[33m  $(msg success.login_with)\033[0m"
     echo -e "\033[33m    $(msg success.username "${AGENTTEAMS_ADMIN_USER}")\033[0m"
@@ -5271,32 +5308,98 @@ uninstall_agentteams() {
 # ============================================================
 # Check container runtime (docker or podman) and environment
 # ============================================================
+open_url() {
+    if [ "$(uname -s)" = "Darwin" ]; then
+        open "$1" >/dev/null 2>&1
+    elif command -v xdg-open >/dev/null 2>&1; then
+        xdg-open "$1" >/dev/null 2>&1
+    elif command -v wslview >/dev/null 2>&1; then
+        wslview "$1" >/dev/null 2>&1
+    else
+        return 1
+    fi
+}
+
+open_dashboard() {
+    local url="http://127.0.0.1:${AGENTTEAMS_PORT_DASHBOARD:-13000}/"
+    case "${AGENTTEAMS_ADMIN_USER:-admin}" in
+        *[!a-zA-Z0-9_.-]*) ;;
+        *) url="${url}?username=${AGENTTEAMS_ADMIN_USER:-admin}" ;;
+    esac
+    log "Dashboard: ${url}"
+    [ "${AGENTTEAMS_NON_INTERACTIVE:-0}" = "1" ] && return 0
+    [ -n "${SSH_CONNECTION:-}${SSH_TTY:-}" ] && return 0
+    local copied=0
+    if command -v pbcopy >/dev/null 2>&1; then
+        printf '%s' "${AGENTTEAMS_ADMIN_PASSWORD}" | pbcopy && copied=1
+    elif command -v wl-copy >/dev/null 2>&1; then
+        printf '%s' "${AGENTTEAMS_ADMIN_PASSWORD}" | wl-copy && copied=1
+    elif command -v xclip >/dev/null 2>&1; then
+        printf '%s' "${AGENTTEAMS_ADMIN_PASSWORD}" | xclip -selection clipboard && copied=1
+    elif command -v clip.exe >/dev/null 2>&1; then
+        printf '%s' "${AGENTTEAMS_ADMIN_PASSWORD}" | clip.exe && copied=1
+    fi
+    if [ "${copied}" = "1" ]; then
+        log "$(msg install.password_copied)"
+    else
+        log "$(msg install.password_copy_failed)"
+    fi
+    open_url "${url}" || log "$(msg success.open_url) ${url}"
+}
+
+container_runtime_ready() {
+    if command -v docker >/dev/null 2>&1 && docker ps >/dev/null 2>&1; then
+        DOCKER_CMD=docker
+        docker --version 2>/dev/null | grep -qi podman && DOCKER_CMD=podman
+        return 0
+    fi
+    if command -v podman >/dev/null 2>&1 && podman ps >/dev/null 2>&1; then
+        DOCKER_CMD=podman
+        return 0
+    fi
+    return 1
+}
+
 check_container_runtime() {
     # Ensure the rootless environment baseline (XDG_RUNTIME_DIR) is ready before engine detection.
     if [ "$(id -u)" -ne 0 ] && [ -z "${XDG_RUNTIME_DIR:-}" ]; then
         export XDG_RUNTIME_DIR="/run/user/$(id -u)"
     fi
 
-    if command -v docker >/dev/null 2>&1; then
-        DOCKER_CMD="docker"
-        # Check for podman disguised as docker (alias or podman-docker package)
-        if docker --version 2>/dev/null | grep -qi "podman"; then
-            DOCKER_CMD="podman"
+    container_runtime_ready && return 0
+    if [ "${AGENTTEAMS_NON_INTERACTIVE:-0}" = "1" ] || [ "${AGENTTEAMS_COMMAND:-manager}" != "manager" ]; then
+        die "$(msg install.runtime_timeout)"
+    fi
+    local guide="https://docs.docker.com/engine/install/"
+    if [ "$(uname -s)" = "Darwin" ]; then
+        if [ -d /Applications/OrbStack.app ] || [ -d "${HOME}/Applications/OrbStack.app" ]; then
+            open -a OrbStack || true
+        elif [ -d /Applications/Docker.app ] || [ -d "${HOME}/Applications/Docker.app" ]; then
+            open -a Docker || true
+        elif command -v podman >/dev/null 2>&1; then
+            log "podman machine start"
+        else
+            guide="https://orbstack.dev/download"
+            log "OrbStack (macOS): ${guide}"
+            open_url "${guide}" || true
         fi
-    elif command -v podman >/dev/null 2>&1; then
-        DOCKER_CMD="podman"
+        export PATH="${PATH}:${HOME}/.orbstack/bin:${HOME}/.docker/bin:/usr/local/bin:/opt/homebrew/bin"
     else
-        echo -e "\033[31m[AgentTeams ERROR]\033[0m $(msg error.docker_not_found)" >&2
-        exit 1
+        log "Docker Engine: ${guide}"
+        log "Podman: https://podman.io/docs/installation"
+        open_url "${guide}" || true
     fi
-
-    # Unified health check (Validates runtime responsiveness)
-    if ! ${DOCKER_CMD} ps >/dev/null 2>&1; then
-        echo -e "\033[31m[AgentTeams ERROR]\033[0m $(msg error.docker_not_running)" >&2
-        exit 1
-    fi
+    log "$(msg install.runtime_wait)"
+    local waited=0
+    while [ "${waited}" -lt "${AGENTTEAMS_RUNTIME_WAIT_TIMEOUT:-900}" ]; do
+        container_runtime_ready && return 0
+        sleep 3
+        waited=$((waited + 3))
+    done
+    die "$(msg install.runtime_timeout)"
 }
 
+AGENTTEAMS_COMMAND="${1:-manager}"
 check_container_runtime
 
 case "${1:-}" in
@@ -5324,15 +5427,14 @@ case "${1:-}" in
         echo "Usage: $0 [manager|worker [options]|dashboard|uninstall]"
         echo ""
         echo "Commands:"
-        echo "  manager              Interactive Manager installation (default)"
-        echo "                       Choose Quick Start (all defaults) or Manual mode"
+        echo "  manager              Start locally and open Dashboard (default)"
+        echo "  --manual             Customize installation interactively"
         echo "  worker               Worker installation (requires --name and connection params)"
         echo "  dashboard            Start/stop agentteams-dashboard (use with AGENTTEAMS_DASHBOARD=0 to stop)"
         echo "  uninstall            Stop and remove Manager + all Worker containers"
         echo ""
         echo "Quick Start (fastest):"
         echo "  $0"
-        echo "  # Then select '1' for Quick Start mode"
         echo ""
         echo "Non-interactive (for automation):"
         echo "  AGENTTEAMS_NON_INTERACTIVE=1 AGENTTEAMS_LLM_API_KEY=sk-xxx $0"

@@ -4,7 +4,7 @@ One-click installation script for AgentTeams Manager and Worker Agents.
 
 ## Requirements
 
-- **Docker Desktop** (Windows/macOS) or **Docker Engine** (Linux) must be installed and running
+- A running **OrbStack**, **Docker Desktop**, **Docker Engine**, or **Podman**. If no engine is ready, the installer opens the recommended installation guide and waits for you to install/start it before continuing. macOS recommends OrbStack; Windows recommends Docker Desktop.
 - **PowerShell 7+** (Windows only)
 
 ## Quick Start
@@ -25,11 +25,17 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; 
 
 ### Quick Start (Recommended)
 
-Fast installation with Alibaba Cloud Bailian as the default LLM provider. Just provide your API key and go!
+The default command starts the local services and Dashboard without configuration questions. Once Dashboard is ready, the installer copies your generated password to the clipboard and opens the browser. The username is prefilled as `admin`; paste the password and sign in. If the desktop cannot be opened or the clipboard is unavailable, use the address and credentials printed in the terminal.
+
+No model API key is required to install. The Manager conversation guides you to model management when configuration is missing. You can select Worker runtimes and models when creating Workers, and configure embedding when you need it. Worker images are pulled on demand.
+
+To start with a model already configured, export `AGENTTEAMS_LLM_API_KEY` before running the command. Custom endpoints can also set `AGENTTEAMS_LLM_PROVIDER=openai-compat`, `AGENTTEAMS_OPENAI_BASE_URL` and `AGENTTEAMS_DEFAULT_MODEL`. These values are preserved. For unattended automation, set `AGENTTEAMS_NON_INTERACTIVE=1` to suppress browser, clipboard and environment-installation guidance.
 
 ### Manual
 
 Customize each option:
+
+Run `./agentteams-install.sh --manual` or `.\agentteams-install.ps1 -Manual` to use the interactive configuration flow.
 - LLM Provider (Alibaba Cloud Bailian or OpenAI-compatible)
 - Admin credentials
 - Port configuration

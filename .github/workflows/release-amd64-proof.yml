@@ -1,0 +1,105 @@
+name: Release amd64 packaging proof
+
+on:
+  push:
+    branches: [codex/127-amd64-release-proof]
+
+permissions:
+  contents: read
+
+env:
+  CORE_REF: 7ebdb694566608700611c323b2855e47336d62d6
+  CODEX_REF: 70251686f7df413f3d5d7978490cf16c5a097c25
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [codex, openhuman]
+    env:
+      RUNTIME: ${{ matrix.runtime }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CORE_REF }}
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        if: matrix.runtime == 'codex'
+        with:
+          repository: agentteams-group/agentteams-harness-codex
+          ref: ${{ env.CODEX_REF }}
+          path: .release-codex
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        if: matrix.runtime == 'openhuman'
+        with:
+          go-version-file: agentteams-controller/go.mod
+          cache-dependency-path: agentteams-controller/go.sum
+      - uses: docker/setup-buildx-action@v3
+      - name: Prepare native CLI build input
+        if: matrix.runtime == 'openhuman'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/release-cli
+          (cd agentteams-controller && CGO_ENABLED=0 go build -buildvcs=false -o /tmp/release-cli/agt ./cmd/agt/)
+          for helper in install-worker-skill.sh safe-extract-worker-skill.py push-worker-skills.sh; do
+            cp "manager/agent/skills/worker-management/scripts/$helper" /tmp/release-cli/
+          done
+          docker build -t agentteams/release-cli:amd64-proof -f - /tmp/release-cli <<'DOCKERFILE'
+          FROM scratch
+          COPY agt /usr/local/bin/agt
+          COPY install-worker-skill.sh safe-extract-worker-skill.py push-worker-skills.sh /opt/agentteams/agent/skills/worker-management/scripts/
+          DOCKERFILE
+      - name: Build frozen source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          image="agentteams/agentteams-harness-${RUNTIME}:amd64-proof-7ebdb694"
+          if [[ "$RUNTIME" == codex ]]; then
+            docker build --platform linux/amd64 --build-context at=. -t "$image" .release-codex
+          else
+            docker build --platform linux/amd64 \
+              --build-arg HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
+              --build-arg AGENTTEAMS_CONTROLLER_IMAGE=agentteams/release-cli:amd64-proof \
+              -f openhuman/Dockerfile -t "$image" .
+          fi
+      - name: Packaged native smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="agentteams/agentteams-harness-${RUNTIME}:amd64-proof-7ebdb694"
+          test "$(docker image inspect "$image" --format '{{.Architecture}}')" = amd64
+          if [[ "$RUNTIME" == codex ]]; then
+            docker run --rm --entrypoint codex "$image" --version
+            docker run --rm --entrypoint /opt/venv/bin/python "$image" -c 'import agentteams_codex.bridge; import matrix_bridge'
+          else
+            docker run --rm --entrypoint /usr/local/bin/openhuman-core "$image" --help
+            docker run --rm --entrypoint /usr/local/bin/agt.bin "$image" --help
+            docker run --rm --entrypoint sh "$image" -ec '
+              test -x /usr/local/bin/agt.bin
+              grep -q agt.bin /usr/local/bin/agt
+              for helper in install-worker-skill.sh safe-extract-worker-skill.py push-worker-skills.sh; do
+                test -r "/opt/agentteams/agent/skills/worker-management/scripts/$helper"
+              done'
+          fi
+      - name: Save tested artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="agentteams/agentteams-harness-${RUNTIME}:amd64-proof-7ebdb694"
+          docker image inspect "$image" --format '{"imageConfigId":{{json .Id}},"os":{{json .Os}},"architecture":{{json .Architecture}}}' > "/tmp/${RUNTIME}-image-metadata.json"
+          docker save "$image" | gzip -1 > "/tmp/${RUNTIME}-image.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-amd64-${{ matrix.runtime }}-7ebdb694
+          path: |
+            /tmp/${{ matrix.runtime }}-image.tar.gz
+            /tmp/${{ matrix.runtime }}-image-metadata.json
+          compression-level: 0
+          retention-days: 7

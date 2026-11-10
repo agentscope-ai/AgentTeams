@@ -83,7 +83,9 @@ jobs:
             'pytest-asyncio>=0.23,<2'
 
       - name: Run QwenPaw tests against repository source
-        run: python -m pytest qwenpaw/tests -q
+        run: |
+          python -m pytest qwenpaw/tests -q
+          python -m pytest plugins/tests/agentteams-matrix/test_qwenpaw_reload_delivery.py -q
 
   teamharness:
     runs-on: ubuntu-latest

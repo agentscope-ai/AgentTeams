@@ -41,7 +41,7 @@ wait_for_worker_container "alice" 60
 METRICS_BASELINE=$(snapshot_baseline "alice")
 TASK_ID="test03-$(date +%s)-$$"
 matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
-    "Please assign Alice task ${TASK_ID}: Create shared/tasks/${TASK_ID}/README.md for a hello-world project. Include project name, description, usage instructions, and the exact marker ${TASK_ID}. Delegate the work to Alice and mention ${TASK_ID} in your acknowledgement."
+    "Please assign Alice task ${TASK_ID}: Create shared/tasks/${TASK_ID}/README.md for a hello-world project. Include project name, description, usage instructions, and the exact marker ${TASK_ID}. Publish the file with TeamHarness filesync push and verify the remote file before reporting completion. Delegate the work to Alice and mention ${TASK_ID} in your acknowledgement."
 
 log_info "Waiting for Manager to process task..."
 REPLY=$(matrix_wait_for_reply_matching "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" "${TASK_ID}" 180)
